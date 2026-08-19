@@ -1,0 +1,6 @@
+# dsh-tavern bundle 层：`dsh plugin --profile web add dsh-tavern` 安装后，
+# 本补丁被追加进 profile 的 bundle 栈，把 host 侧插件挂进组合树。
+# agent 侧（tavern 预设的 agent.cordis.yml）与 client 侧（dsh.client 声明）由各自机制加载。
+- insert:
+    - id: dsh-tavern
+      name: 'dsh-tavern'

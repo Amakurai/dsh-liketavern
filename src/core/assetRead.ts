@@ -1,0 +1,70 @@
+/**
+ * 工作区资产阅读：路径消毒、可读白名单、预设条目目录。
+ * 只允许角色工作区内的文本文件；WAL 与二进制一律拒绝。
+ */
+import { clipToTokenBudget, estimateTokens } from './tokenize.js'
+import type { PresetEntry, PromptPreset } from './types.js'
+
+export const ASSET_READ_TOKEN_BUDGET = 3000
+export const PRESET_CATALOG_PREVIEW = 80
+
+const TEXT_EXT = /\.(md|json|jsonl|txt)$/i
+
+export function resolveReadableAssetPath(raw: string): { ok: true; path: string } | { ok: false; error: string } {
+  const trimmed = raw.trim()
+  if (!trimmed) return { ok: false, error: '需要 path（工作区相对路径）' }
+  let path = trimmed.replaceAll('\\', '/')
+  while (path.startsWith('./')) path = path.slice(2)
+  if (path.startsWith('/') || /^[A-Za-z]:/.test(path)) return { ok: false, error: '禁止绝对路径' }
+  const parts = path.split('/')
+  if (parts.some((p) => p === '' || p === '..')) return { ok: false, error: '路径不合法' }
+  const lower = path.toLowerCase()
+  if (lower === 'state/wal' || lower.startsWith('state/wal/')) return { ok: false, error: '不读取 WAL 快照' }
+  if (/\.(png|jpe?g|webp|gif|bin)$/i.test(path)) return { ok: false, error: '不读取二进制资源' }
+  if (!TEXT_EXT.test(path)) return { ok: false, error: '只允许 md / json / jsonl / txt' }
+  return { ok: true, path }
+}
+
+export function isPresetCatalogToken(value: string): boolean {
+  const t = value.trim().toLowerCase()
+  return t === '' || t === '*' || t === 'list' || t === 'catalog'
+}
+
+export interface PresetCatalogItem {
+  identifier: string
+  name: string
+  enabled: boolean
+  role: PresetEntry['role']
+  position: PresetEntry['position']
+  marker: boolean
+  markerId: string | null
+  tokens: number
+  preview: string
+}
+
+export function toPresetCatalogItem(entry: PresetEntry): PresetCatalogItem {
+  return {
+    identifier: entry.identifier,
+    name: entry.name,
+    enabled: entry.enabled,
+    role: entry.role,
+    position: entry.position,
+    marker: entry.marker,
+    markerId: entry.markerId ?? null,
+    tokens: estimateTokens(entry.content),
+    preview: entry.content.replace(/\s+/g, ' ').trim().slice(0, PRESET_CATALOG_PREVIEW),
+  }
+}
+
+export function listPresetCatalog(preset: PromptPreset): PresetCatalogItem[] {
+  return preset.entries.map(toPresetCatalogItem)
+}
+
+export function findPresetEntry(preset: PromptPreset, identifier: string): PresetEntry | undefined {
+  const id = identifier.trim()
+  return preset.entries.find((e) => e.identifier === id)
+}
+
+export function clipAssetText(text: string, budget = ASSET_READ_TOKEN_BUDGET): ReturnType<typeof clipToTokenBudget> {
+  return clipToTokenBudget(text, budget)
+}

@@ -1,0 +1,73 @@
+/**
+ * 写入 dsh systemPrompt 段/context 前的纯文本处理。
+ * dsh 会对段文本再做一轮严格 {{variable}} 插值；ST 残留宏必须先中性化。
+ */
+export const UNBOUND_STANDING = [
+  'Tavern 模式已开启，但当前会话尚未绑定角色卡。',
+  '请以普通助手身份简短回应；不要调用 tavern_* 工具。',
+  '用户需要在对话页选择角色卡后，才能开始角色扮演。',
+].join('\n')
+
+/** 稳定段纪律：绑定不变则钉死。工具时机与本轮步骤写在 turn playbook，避免每步打穿 KV。 */
+export const BOUND_DISCIPLINE = [
+  '你正在进行角色扮演。下面是本会话稳定的角色定义与提示词骨架。',
+  '本轮触发的世界书、检索记忆与世界状态在 runtime context 中，会覆盖更早的同名快照；不要把未出现的条目当成事实。',
+  '默认直接以角色身份回复。只在缺设定、或要把本轮已确定的事实写入长期记忆/世界状态时，才使用 tavern_* 工具。',
+  '只在本轮最后一步输出扮演正文；中间步骤不要对用户说话。记忆只记事实、关键事件与关系/状态变化，禁止流水账。',
+  '工具写入的检索层从下一轮更新；同轮会收到写入确认。写完后仍须在本轮输出扮演正文。',
+].join('\n')
+
+/**
+ * 本轮 runtime context 头：随 step 变化，不得写入 standing。
+ * 第一步鼓励「够用就演」；第二步「查/写完就收口」；第三步起强收口——
+ * 多步拖沓时停止再检索/写入，立即落地扮演正文。
+ */
+export function formatTurnPlaybook(step: number): string {
+  const n = Number.isFinite(step) && step > 0 ? Math.floor(step) : 1
+  if (n <= 1) {
+    return [
+      '【本轮】runtime context 已含触发的世界书、检索记忆与世界状态。',
+      '够用就直接以角色身份回复，不要为了再确认而调用工具。',
+      '缺设定再用 tavern_lore_read（先目录，再 uid/关键词取条）/ tavern_memory_search / tavern_asset_read。',
+      '长对话若设定被冲掉，按条补读，不要整本倾倒。每步都会重放本轮世界书/记忆快照。',
+      '本轮确定发生的事实才写入记忆或世界状态；写入从下一轮才注入检索层，同轮会收到写入确认。',
+      '中间步骤不要对用户说话。',
+    ].join('\n')
+  }
+  if (n === 2) {
+    return [
+      `【本轮第 ${n} 步】若已取得设定或已写入记忆/世界状态，现在输出扮演正文，不要等待下一轮注入。`,
+      '仍缺关键设定或长上下文遗忘时，用工具按条补读；不要对用户解释工具过程。',
+    ].join('\n')
+  }
+  return [
+    `【本轮第 ${n} 步】本轮已进行 ${n} 步：停止再检索或写入，把已知信息视为足够，现在必须输出扮演正文。`,
+    '只有完全缺少让回复成立的关键设定时，才允许再用工具按条补读一次；不要对用户解释工具过程。',
+  ].join('\n')
+}
+
+/**
+ * dsh 每步把 runtime context 追加成 user 消息，前缀固定为此句。
+ * 不能当 {{lastusermessage}}，也不能拿去扫世界书。
+ */
+export function isRuntimeContextSnapshot(text: string): boolean {
+  return text.startsWith('Current runtime context.') || text.startsWith('Current runtime context:')
+}
+
+/** 同轮工具写入后经 agent.inject 的确认；不当作用户台词，也不扫世界书。 */
+export const TURN_WRITE_ACK_PREFIX = '【Tavern 同轮写入】'
+
+export function isTurnWriteAck(text: string): boolean {
+  return text.startsWith(TURN_WRITE_ACK_PREFIX)
+}
+
+/** 组装/世界书扫描应跳过的合成 user 文本。 */
+export function isSyntheticUserText(text: string): boolean {
+  return isRuntimeContextSnapshot(text) || isTurnWriteAck(text)
+}
+
+/** 把残留 `{{…}}` 换成全角花括号，避免 dsh section 插值把 ST 宏当成变量抛错。 */
+export function neutralizeDshMustache(text: string): string {
+  if (!text.includes('{{') && !text.includes('}}')) return text
+  return text.replaceAll('{{', '｛｛').replaceAll('}}', '｝｝')
+}

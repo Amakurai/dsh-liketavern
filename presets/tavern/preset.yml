@@ -1,0 +1,3 @@
+name: Tavern 模式
+description: 角色扮演模式：SillyTavern 角色卡、世界书、预设、人设与正则，运行在 dsh agent 运行时之上（多步思考 + 分层记忆 + 楼层事务）。
+order: 10

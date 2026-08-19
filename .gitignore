@@ -1,0 +1,54 @@
+node_modules/
+*.log
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# 编辑器与本机覆盖，不进仓库
+.idea/
+.vscode/
+*.local
+.env
+.env.*
+
+# 本机包链接与包管理器缓存，不进 git
+/vendor/
+.npm/
+.npm-cache/
+*.tgz
+
+# 测试 / 构建缓存（lib/ 是交付物，刻意保留）
+coverage/
+.vitest/
+*.tsbuildinfo
+
+# 运行期数据在 $DSH_HOME/dsh-tavern，不要拷进仓库。
+# 下面这些目录和扩展名是为了拦住误放进来的角色卡、世界书、人设和会话绑定。
+/data/
+/local/
+/assets/
+/memory/
+/state/
+/dsh-tavern/
+/.dsh/
+/cards/
+/imports/
+/characters/
+/library/
+/personas/
+/sessions/
+/regex/
+/test/fixtures/
+/card.json
+/character-book.json
+/journal.md
+/index.json
+*.jsonl
+*.sqlite
+*.sqlite3
+*.db
+*.png
+*.webp
+*.jpg
+*.jpeg
+*.gif

@@ -1,0 +1,9 @@
+# 本地开发覆盖层：dsh web --patch ./cordis.dev.yml
+# 通过 junction 以包名挂载（首次使用先执行，把 <本仓库> 换成你的仓库绝对路径）：
+#   cmd //c "mklink /J %USERPROFILE%\.dsh\profiles\node_modules\dsh-tavern <本仓库>"
+# 这样 host 入口（package main → lib/index.js）与 client bundle 发现
+# （require.resolve('dsh-tavern/package.json') → dsh.client 声明 → exports["./client"]）都走通。
+# 改动源码后重新 npm run build 即可。
+- insert:
+    - id: dsh-tavern
+      name: 'dsh-tavern'

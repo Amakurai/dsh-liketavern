@@ -1,4 +1,4 @@
-# dsh-liketarven
+# dsh-liketavern
 
 English: [README.en.md](./README.en.md)
 
@@ -78,19 +78,19 @@ src/
 ## 安装
 
 ```bash
-dsh plugin --profile web add github:Amakurai/dsh-liketarven
+dsh plugin --profile web add github:Amakurai/dsh-liketavern
 ```
 
 更新：
 
 ```bash
-dsh plugin --profile web update dsh-liketarven
+dsh plugin --profile web update dsh-liketavern
 ```
 
 卸载（不删 `$DSH_HOME/dsh-tavern/` 里的数据）：
 
 ```bash
-dsh plugin --profile web remove dsh-liketarven
+dsh plugin --profile web remove dsh-liketavern
 ```
 
 改完重启 `dsh web`。
@@ -98,7 +98,7 @@ dsh plugin --profile web remove dsh-liketarven
 从源码开发：
 
 ```bash
-cmd //c "mklink /J %USERPROFILE%\.dsh\profiles\node_modules\dsh-liketarven <本仓库>"
+cmd //c "mklink /J %USERPROFILE%\.dsh\profiles\node_modules\dsh-liketavern <本仓库>"
 npm install
 npm run build
 npm run dev          # dsh web --patch ./cordis.dev.yml

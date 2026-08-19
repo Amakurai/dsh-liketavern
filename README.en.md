@@ -1,4 +1,4 @@
-# dsh-liketarven
+# dsh-liketavern
 
 Chinese: [README.md](./README.md)
 
@@ -78,19 +78,19 @@ Host constraints: the session log cannot be spliced, so @D and author’s notes 
 ## Install
 
 ```bash
-dsh plugin --profile web add github:Amakurai/dsh-liketarven
+dsh plugin --profile web add github:Amakurai/dsh-liketavern
 ```
 
 Update:
 
 ```bash
-dsh plugin --profile web update dsh-liketarven
+dsh plugin --profile web update dsh-liketavern
 ```
 
 Uninstall (does not delete `$DSH_HOME/dsh-tavern/`):
 
 ```bash
-dsh plugin --profile web remove dsh-liketarven
+dsh plugin --profile web remove dsh-liketavern
 ```
 
 Restart `dsh web` afterwards.
@@ -98,7 +98,7 @@ Restart `dsh web` afterwards.
 From source:
 
 ```bash
-cmd //c "mklink /J %USERPROFILE%\.dsh\profiles\node_modules\dsh-liketarven <this-repo>"
+cmd //c "mklink /J %USERPROFILE%\.dsh\profiles\node_modules\dsh-liketavern <this-repo>"
 npm install
 npm run build
 npm run dev          # dsh web --patch ./cordis.dev.yml

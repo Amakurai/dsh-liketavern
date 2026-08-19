@@ -1,11 +1,11 @@
 {
-  "name": "dsh-liketarven",
+  "name": "dsh-liketavern",
   "version": "0.1.0",
   "description": "Tavern mode for dsh web — SillyTavern character cards, prompt presets, lorebooks, personas and regex on the dsh agent runtime.",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Amakurai/dsh-liketarven.git"
+    "url": "git+https://github.com/Amakurai/dsh-liketavern.git"
   },
   "type": "module",
   "main": "lib/index.js",

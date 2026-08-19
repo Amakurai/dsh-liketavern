@@ -130,7 +130,7 @@ const METHODS: Record<string, { req: z.ZodTypeAny; value: z.ZodTypeAny; summary:
 
 function descriptor(method: string, def: (typeof METHODS)[string]) {
   return {
-    id: `dsh-liketarven#tavern/${method}`,
+    id: `dsh-liketavern#tavern/${method}`,
     service: 'tavern',
     namespace: 'tavern',
     method,
@@ -140,10 +140,10 @@ function descriptor(method: string, def: (typeof METHODS)[string]) {
         name: 'request',
         wire: 'request',
         source: 'json' as const,
-        codec: { mode: 'strict' as const, typeSymbol: `dsh-liketarven/types#${method}Request`, schema: def.req },
+        codec: { mode: 'strict' as const, typeSymbol: `dsh-liketavern/types#${method}Request`, schema: def.req },
       },
     ],
-    result: { mode: 'strict' as const, typeSymbol: `dsh-liketarven/types#${method}Result`, schema: def.value },
+    result: { mode: 'strict' as const, typeSymbol: `dsh-liketavern/types#${method}Result`, schema: def.value },
   }
 }
 
@@ -151,7 +151,7 @@ const descriptors = Object.entries(METHODS).map(([method, def]) => descriptor(me
 
 /** host 侧贡献：注册进 ctx.typert（gateway 以 strict codec 校验出入参）。 */
 export const TYPERT_HOST = {
-  package: 'dsh-liketarven',
+  package: 'dsh-liketavern',
   face: 'host' as const,
   schemas: [] as unknown[],
   invocations: descriptors,
@@ -181,6 +181,6 @@ export const TYPERT_HOST = {
 
 /** client 侧贡献：ctx.remote.$mount(TYPERT_REMOTE) 后以 ctx.remote.tavern.<method>(request) 调用。 */
 export const TYPERT_REMOTE = {
-  package: 'dsh-liketarven',
+  package: 'dsh-liketavern',
   descriptors,
 }

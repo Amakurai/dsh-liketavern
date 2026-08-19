@@ -1,5 +1,5 @@
 /**
- * dsh-tavern host 入口。
+ * dsh-liketarven host 入口。
  * 职责：注册设置命名空间、初始化数据目录、安装 agent 预设、提供 tavern 服务、
  * 注册 typert remote 描述符、维护楼层 WAL 与每 turn 缓存（session/event 监听）。
  */
@@ -16,7 +16,7 @@ import { TavernState } from './node/state.js'
 import { isTavernRuntimeSession } from './node/tavernSession.js'
 import { TYPERT_HOST } from './remote.js'
 
-export const name = 'dsh-tavern'
+export const name = 'dsh-liketarven'
 export const inject = ['settings', 'sessions', 'agents', 'typert', 'workspaceRegistry', 'agentPresets']
 
 /** 从消息内容块中提取纯文本（非 text 块忽略）。 */

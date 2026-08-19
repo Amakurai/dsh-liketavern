@@ -38,7 +38,7 @@ const result = await build({
 const code = result.outputFiles[0].text
 
 const banner = `window.__ModuleLoader__.load({
-  id: "dsh-tavern",
+  id: "dsh-liketarven",
   factory: (require) => {
     var module = { exports: {} };
     var exports = module.exports;
@@ -55,7 +55,7 @@ await writeFile(out, banner + code + footer, 'utf8')
 
 // 简单自检：产物必须包含 ModuleLoader 包裹与三个导出（ESM 输入经 __export 导出）。
 const written = await readFile(out, 'utf8')
-for (const needle of ['window.__ModuleLoader__.load', '"dsh-tavern"', 'apply: () =>', 'inject: () =>', 'name: () =>', 'return module.exports']) {
+for (const needle of ['window.__ModuleLoader__.load', '"dsh-liketarven"', 'apply: () =>', 'inject: () =>', 'name: () =>', 'return module.exports']) {
   if (!written.includes(needle)) throw new Error(`build-client: 产物缺少 ${needle}`)
 }
 console.log(`build-client: wrote ${out} (${(written.length / 1024).toFixed(1)} KiB)`)

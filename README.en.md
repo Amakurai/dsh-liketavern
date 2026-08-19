@@ -1,4 +1,4 @@
-# dsh-tavern
+# dsh-liketarven
 
 Chinese: [README.md](./README.md)
 
@@ -77,17 +77,19 @@ Host constraints: the session log cannot be spliced, so @D and author’s notes 
 
 ## Install
 
+`lib/` is committed, so a GitHub install does not need build-script permission.
+
 ```bash
-dsh plugin add dsh-tavern
+dsh plugin --profile web add github:Amakurai/dsh-liketarven
 ```
 
 From source:
 
 ```bash
-cmd //c "mklink /J %USERPROFILE%\.dsh\profiles\node_modules\dsh-tavern <this-repo>"
+cmd //c "mklink /J %USERPROFILE%\.dsh\profiles\node_modules\dsh-liketarven <this-repo>"
 npm install
 npm run build
 npm run dev          # dsh web --patch ./cordis.dev.yml
 ```
 
-`lib/` is a deliverable. Rebuild after changing `src/`. `npm test` imports `src/` directly and does not need a prior build.
+`npm test` imports `src/` directly and does not need a prior build. Rebuild after changing `src/`.

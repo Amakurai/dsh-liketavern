@@ -1,4 +1,4 @@
-# dsh-tavern
+# dsh-liketarven
 
 English: [README.en.md](./README.en.md)
 
@@ -77,17 +77,19 @@ src/
 
 ## 安装
 
+`lib/` 已入库，从 GitHub 安装不必授权构建脚本。
+
 ```bash
-dsh plugin add dsh-tavern
+dsh plugin --profile web add github:Amakurai/dsh-liketarven
 ```
 
-从源码：
+从源码开发：
 
 ```bash
-cmd //c "mklink /J %USERPROFILE%\.dsh\profiles\node_modules\dsh-tavern <本仓库>"
+cmd //c "mklink /J %USERPROFILE%\.dsh\profiles\node_modules\dsh-liketarven <本仓库>"
 npm install
 npm run build
 npm run dev          # dsh web --patch ./cordis.dev.yml
 ```
 
-`lib/` 是交付物。改 `src/` 后重新 build。`npm test` 直接跑 `src/`，不必先构建。
+`npm test` 直接跑 `src/`，不必先构建。改 `src/` 后重新 `npm run build`。

@@ -4,7 +4,7 @@
 
 ## 这是什么
 
-dsh-tavern 是 DeepSeek Harness（dsh）插件，把 `dsh web` 做成 SillyTavern 式的角色扮演前端。角色卡（V1/V2/V3，PNG/JSON）、提示词预设、世界书、人设、正则、BM25 长期记忆、世界状态变化层，以及可回滚的楼层操作，都建在 dsh 的 agent 运行时上，而不是另起一套发信通道。
+dsh-liketarven 是 DeepSeek Harness（dsh）插件，把 `dsh web` 做成 SillyTavern 式的角色扮演前端。角色卡（V1/V2/V3，PNG/JSON）、提示词预设、世界书、人设、正则、BM25 长期记忆、世界状态变化层，以及可回滚的楼层操作，都建在 dsh 的 agent 运行时上，而不是另起一套发信通道。
 
 和 SillyTavern 最不一样的四件事，改代码时请按这个想：
 
@@ -193,4 +193,4 @@ agent 预设目录 `$DSH_HOME/.agent-presets/tavern/` 由插件托管，升级�
 ## 部署
 
 - 交付：`package.json` 声明 `dsh.bundle.patch = cordis.patch.yml` 与 `dsh.client`（platform web、inject `@deepseek-ai/dsh-client-runtime`）。`npm pack` 白名单只含 `lib/`、`cordis.patch.yml`、`presets/` 和 README；发布前必须通过 `npm pack --dry-run`。
-- 安装：`dsh plugin add dsh-tavern`（内部走 profile 下的 pnpm）。开发用 Windows junction 把仓库挂进 `~/.dsh/profiles/node_modules/dsh-tavern`，再 `npm run dev`。
+- 安装：`dsh plugin --profile web add github:Amakurai/dsh-liketarven`（内部走 profile 下的 pnpm）。开发用 Windows junction 把仓库挂进 `~/.dsh/profiles/node_modules/dsh-liketarven`，再 `npm run dev`。

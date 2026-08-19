@@ -77,11 +77,23 @@ Host constraints: the session log cannot be spliced, so @D and author’s notes 
 
 ## Install
 
-`lib/` is committed, so a GitHub install does not need build-script permission.
-
 ```bash
 dsh plugin --profile web add github:Amakurai/dsh-liketarven
 ```
+
+Update:
+
+```bash
+dsh plugin --profile web update dsh-liketarven
+```
+
+Uninstall (does not delete `$DSH_HOME/dsh-tavern/`):
+
+```bash
+dsh plugin --profile web remove dsh-liketarven
+```
+
+Restart `dsh web` afterwards.
 
 From source:
 
@@ -92,4 +104,4 @@ npm run build
 npm run dev          # dsh web --patch ./cordis.dev.yml
 ```
 
-`npm test` imports `src/` directly and does not need a prior build. Rebuild after changing `src/`.
+`npm test` imports `src/` directly. Rebuild after changing `src/`.

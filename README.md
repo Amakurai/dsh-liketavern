@@ -77,11 +77,23 @@ src/
 
 ## 安装
 
-`lib/` 已入库，从 GitHub 安装不必授权构建脚本。
-
 ```bash
 dsh plugin --profile web add github:Amakurai/dsh-liketarven
 ```
+
+更新：
+
+```bash
+dsh plugin --profile web update dsh-liketarven
+```
+
+卸载（不删 `$DSH_HOME/dsh-tavern/` 里的数据）：
+
+```bash
+dsh plugin --profile web remove dsh-liketarven
+```
+
+改完重启 `dsh web`。
 
 从源码开发：
 
@@ -92,4 +104,4 @@ npm run build
 npm run dev          # dsh web --patch ./cordis.dev.yml
 ```
 
-`npm test` 直接跑 `src/`，不必先构建。改 `src/` 后重新 `npm run build`。
+`npm test` 直接跑 `src/`。改 `src/` 后重新 `npm run build`。

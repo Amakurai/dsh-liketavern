@@ -42,7 +42,8 @@ const WorldInfoSchema = z.object({
   matchWholeWords: z.boolean().default(DEFAULT_WI_SETTINGS.matchWholeWords),
   includeNames: z.boolean().default(DEFAULT_WI_SETTINGS.includeNames),
   overflowWarning: z.boolean().default(DEFAULT_WI_SETTINGS.overflowWarning),
-  characterStrategy: z.union([z.const(0), z.const(1), z.const(2)]).default(DEFAULT_WI_SETTINGS.characterStrategy),
+    characterStrategy: z.union([z.const(0), z.const(1), z.const(2)]).default(DEFAULT_WI_SETTINGS.characterStrategy),
+    useGroupScoring: z.boolean().default(DEFAULT_WI_SETTINGS.useGroupScoring),
 }).default({ ...DEFAULT_WI_SETTINGS })
 
 const SessionDefaultsSchema = z.object({

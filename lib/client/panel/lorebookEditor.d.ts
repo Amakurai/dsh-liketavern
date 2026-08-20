@@ -7,6 +7,10 @@ export type LorebookTarget = {
     kind: 'character';
     cardId: string;
     name: string;
+} | {
+    kind: 'chat';
+    cardId: string;
+    name: string;
 };
 export declare function LorebookEditor(props: {
     target: LorebookTarget;

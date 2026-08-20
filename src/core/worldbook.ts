@@ -4,6 +4,9 @@
  *   键与扫描文本中的 `{{user}}`/`{{char}}` 先展开再匹配（对齐 ST substituteParams）。
  * - 次级键：AND ANY / AND ALL / NOT ANY / NOT ALL（selectiveLogic 0/3/2/1）。
  * - 触发策略：🔵 constant、🟢 关键词；🔗 向量匹配不做（由记忆 BM25 层承担，见 README）。
+ * - 条目级 scanDepth：null 跟随全局；0 = 该条关键词不扫消息（常驻/递归/sticky 仍可活）。
+ * - inclusion group：同组只留一条。sticky 延续占用组；否则 groupOverride 优先，
+ *   再按 useGroupScoring（命中键数）或 groupWeight 加权随机。
  * - 递归扫描：excludeRecursion（不可被递归激活）/ preventRecursion（激活后不触发他人）/
  *   delayUntilRecursion（递归层级门槛，0=首轮即可）；maxRecursionSteps 0=仅受预算限制、1=关闭。
  * - 定时效果：sticky / cooldown / delay，按评估轮（每次引擎调用 = 一轮）推进；
@@ -46,7 +49,13 @@ function compileKey(
   if (literal) {
     try {
       const re = new RegExp(literal[1]!, literal[2] ?? '')
-      return (text) => re.test(text)
+      // `g`/`y` 正则的 test() 会保留 lastIndex。世界书会对同一条键
+      // 连续扫描多个消息/名称变体，若不复位，命中结果会在奇偶次调用间
+      // 交替漏掉。每次判断都从头开始，保持条目匹配的纯函数语义。
+      return (text) => {
+        re.lastIndex = 0
+        return re.test(text)
+      }
     } catch {
       return null // 非法正则键视为永不命中
     }
@@ -125,6 +134,92 @@ function matchEntry(
   return ok ? matched : null
 }
 
+function textsAtDepth(
+  cache: Map<number, string[]>,
+  messages: readonly ChatMessage[],
+  depth: number,
+  includeNames: boolean,
+  macroCtx?: Pick<MacroContext, 'char' | 'user'>,
+): string[] {
+  if (depth <= 0) return []
+  const cached = cache.get(depth)
+  if (cached) return cached
+  const texts = scanTexts(messages.slice(-depth), includeNames, macroCtx)
+  cache.set(depth, texts)
+  return texts
+}
+
+/** 同组只留一条：sticky 延续占用组；否则 override → 计分 / 加权随机。 */
+function applyInclusionGroups(
+  activated: Candidate[],
+  settings: WorldInfoGlobalSettings,
+  random: () => number,
+  log: WILogEntry[],
+): Candidate[] {
+  const ungrouped: Candidate[] = []
+  const byGroup = new Map<string, Candidate[]>()
+  for (const candidate of activated) {
+    const name = candidate.entry.group.trim()
+    if (!name) {
+      ungrouped.push(candidate)
+      continue
+    }
+    const members = byGroup.get(name) ?? []
+    members.push(candidate)
+    byGroup.set(name, members)
+  }
+  const kept: Candidate[] = [...ungrouped]
+  for (const [group, members] of byGroup) {
+    if (members.length === 1) {
+      kept.push(members[0]!)
+      continue
+    }
+    const sticky = members.filter((m) => m.via === 'sticky')
+    if (sticky.length > 0) {
+      kept.push(...sticky)
+      for (const member of members) {
+        if (member.via !== 'sticky') {
+          log.push({ kind: 'group-skip', entryKey: member.entry.key, detail: `组「${group}」由 sticky 延续占用` })
+        }
+      }
+      continue
+    }
+    const overrides = members.filter((m) => m.entry.groupOverride)
+    const pool = overrides.length > 0 ? overrides : members
+    const winner = settings.useGroupScoring ? pickGroupByScore(pool) : pickGroupWeighted(pool, random)
+    kept.push(winner)
+    for (const member of members) {
+      if (member.entry.key === winner.entry.key) continue
+      log.push({ kind: 'group-skip', entryKey: member.entry.key, detail: `组「${group}」已选 ${winner.entry.key}` })
+    }
+  }
+  return kept
+}
+
+function pickGroupByScore(pool: Candidate[]): Candidate {
+  return pool.reduce((best, candidate) => {
+    const bestScore = best.matchedKeys.length
+    const score = candidate.matchedKeys.length
+    if (score !== bestScore) return score > bestScore ? candidate : best
+    if (candidate.entry.groupWeight !== best.entry.groupWeight) {
+      return candidate.entry.groupWeight > best.entry.groupWeight ? candidate : best
+    }
+    return candidate.entry.key.localeCompare(best.entry.key) < 0 ? candidate : best
+  })
+}
+
+function pickGroupWeighted(pool: Candidate[], random: () => number): Candidate {
+  const weights = pool.map((c) => Math.max(0, c.entry.groupWeight))
+  const total = weights.reduce((sum, weight) => sum + weight, 0)
+  if (total <= 0) return pool[0]!
+  let cursor = random() * total
+  for (let i = 0; i < pool.length; i++) {
+    cursor -= weights[i]!
+    if (cursor < 0) return pool[i]!
+  }
+  return pool[pool.length - 1]!
+}
+
 /** 多来源合并排序权重：tier 小者先插入（越远离上下文末端）。 */
 function sourceTier(entry: WorldInfoEntry, strategy: 0 | 1 | 2): number {
   switch (entry.source) {
@@ -168,9 +263,8 @@ export function evaluateWorldInfo(input: WIEngineInput): WIEngineResult {
     return true
   })
 
-  // 扫描文本：scanDepth 0 = 只扫递归与常驻（对齐 ST world_info_depth 0）
-  const scanMessages = settings.scanDepth > 0 ? input.messages.slice(-settings.scanDepth) : []
-  const baseTexts = scanTexts(scanMessages, settings.includeNames, input.macroCtx)
+  // 扫描文本：全局/条目 scanDepth 0 = 该条关键词不扫消息（常驻与递归仍可活）
+  const depthTexts = new Map<number, string[]>()
 
   const activated: Candidate[] = []
   const activatedKeys = new Set<string>()
@@ -230,7 +324,11 @@ export function evaluateWorldInfo(input: WIEngineInput): WIEngineResult {
         continue
       }
       if (entry.keys.length === 0) continue
-      const matched = matchEntry(entry, texts, settings, input.macroCtx)
+      const scanTextsForEntry =
+        level === 0
+          ? textsAtDepth(depthTexts, input.messages, entry.scanDepth ?? settings.scanDepth, settings.includeNames, input.macroCtx)
+          : texts
+      const matched = matchEntry(entry, scanTextsForEntry, settings, input.macroCtx)
       if (matched === null) continue
       if (tryActivate(entry, matched, level === 0 ? 'keyword' : 'recursion', level)) {
         fresh.push(activated[activated.length - 1]!)
@@ -239,9 +337,9 @@ export function evaluateWorldInfo(input: WIEngineInput): WIEngineResult {
     return fresh
   }
 
-  // ── 第 0 层：直接扫描 ────────────────────────────────────────────────────
+  // ── 第 0 层：直接扫描（每条用自己的 scanDepth） ─────────────────────────
   let level = 0
-  recursionQueue = evaluate(baseTexts, 0)
+  recursionQueue = evaluate([], 0)
 
   // ── 递归扫描：新激活条目的内容成为下一轮扫描输入 ─────────────────────────
   const maxSteps = settings.maxRecursionSteps // 0=不限（受条目数与预算收敛）；1=关闭
@@ -276,6 +374,8 @@ export function evaluateWorldInfo(input: WIEngineInput): WIEngineResult {
     else timer.cooldownLeft[key] = left
   }
 
+  const grouped = applyInclusionGroups(activated, settings, random, log)
+
   // ── 预算截断：constant 优先 → order 从大到小 → 直接命中优先于递归 ─────────
   const rawLimit =
     settings.tokenBudget > 0
@@ -284,7 +384,7 @@ export function evaluateWorldInfo(input: WIEngineInput): WIEngineResult {
   // reservedTokens 是世界书之外已经占用的上下文；固定预算与百分比预算都必须扣减，
   // 否则聊天越长，实际请求越容易超出二者声明的上限。
   const limit = Math.max(0, rawLimit - Math.max(0, input.reservedTokens))
-  const sorted = [...activated].sort((a, b) => {
+  const sorted = [...grouped].sort((a, b) => {
     const ac = a.entry.constant ? 0 : 1
     const bc = b.entry.constant ? 0 : 1
     if (ac !== bc) return ac - bc

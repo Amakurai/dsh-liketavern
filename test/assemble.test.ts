@@ -54,6 +54,7 @@ function makeCard(overrides: Partial<CharacterCard> = {}): CharacterCard {
     extensions: {},
     pngBytes: null,
     raw: null,
+    depthPrompt: null,
     ...overrides,
   }
 }
@@ -89,6 +90,8 @@ function makeWiEntry(partial: Partial<WorldInfoEntry> & { key: string }): WorldI
     delay: null,
     ignoreBudget: false,
     group: '',
+    groupWeight: 100,
+    groupOverride: false,
     automationId: '',
     ...partial,
   }
@@ -697,5 +700,23 @@ describe('prompt 作用域正则', () => {
     const b = assemblePrompt(makeInput({ history: next, regexRules: [wrap] }))
     expect(a.standing).toBe(b.standing)
     expect(contents(b.history)).toEqual(['旧的', '回', '新的', '又回', '<最新互动>\n下一句\n</最新互动>'])
+  })
+})
+
+describe('depth_prompt / 作者注释 / 角色笔记', () => {
+  it('depth_prompt 预览插历史且并入 turnContext，不进 standing', () => {
+    const card = makeCard({ depthPrompt: { prompt: 'DP-{{char}}', depth: 1, role: 'system' } })
+    const res = assemblePrompt(makeInput({ card }))
+    expect(contents(res.messages)).toContain('DP-Alice')
+    expect(res.turnContext).toContain('DP-Alice')
+    expect(res.standing).not.toContain('DP-Alice')
+  })
+
+  it('会话作者注释与角色笔记进 turn 不进 standing', () => {
+    const res = assemblePrompt(makeInput({ authorNote: 'AN-{{user}}', journalText: 'J-note' }))
+    expect(res.turnContext).toContain('【作者注释】AN-Bob')
+    expect(res.turnContext).toContain('【角色笔记】J-note')
+    expect(res.standing).not.toContain('作者注释')
+    expect(res.standing).not.toContain('角色笔记')
   })
 })

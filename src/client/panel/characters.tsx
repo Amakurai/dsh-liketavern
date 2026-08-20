@@ -3,10 +3,10 @@
  * 列表行走 Avatar + 尾部详情/删除 IconBtn；导入/删除等瞬时反馈走 useToast，上下文错误用 Err。
  * 交互卡预览保留 CSP meta 注入 + sandbox iframe（无 allow-same-origin），不得放宽。
  */
-import { useState } from 'react'
-import { Button, IconSearchOutline16, IconTrashOutline16, IconUserOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
+import { useEffect, useState } from 'react'
+import { Button, IconDownloadOutline16, IconSearchOutline16, IconTrashOutline16, IconUserOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { CharacterDetail, CharacterInspect, CharacterSummary, TavernRemote } from '../types.js'
-import { Avatar, Btn, ConfirmDialog, Dialog, Err, FileBtn, IconBtn, Muted, Section, Skeleton, errOf, fileToBase64, useLoader, useToast } from '../util.js'
+import { Avatar, Btn, ConfirmDialog, Dialog, Err, Field, FileBtn, IconBtn, Muted, NumInput, Section, Select, Skeleton, downloadBase64, downloadJson, errOf, fileToBase64, useLoader, useToast } from '../util.js'
 
 const CSP_META =
   '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; script-src \'unsafe-inline\'; style-src \'unsafe-inline\'">'
@@ -28,9 +28,9 @@ function CardAvatar(props: { remote: TavernRemote; cardId: string; name: string;
   return <Avatar url={url} name={props.name} size={props.size} />
 }
 
-function CharacterDetailDialog(props: { remote: TavernRemote; cardId: string; onClose: () => void }) {
+function CharacterDetailDialog(props: { remote: TavernRemote; cardId: string; onClose: () => void; onSaved: () => void }) {
   const { remote, cardId } = props
-  const { state } = useLoader(
+  const { state, reload } = useLoader(
     async () => {
       const r = await remote.getCharacterDetail({ cardId })
       return r
@@ -38,10 +38,68 @@ function CharacterDetailDialog(props: { remote: TavernRemote; cardId: string; on
     [cardId],
   )
   const [cardOpen, setCardOpen] = useState(false)
-  const detail: CharacterDetail | null = state.status === 'ready' ? state.value : null
+  const [draft, setDraft] = useState<CharacterDetail | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const toast = useToast()
+  const loaded: CharacterDetail | null = state.status === 'ready' ? state.value : null
+  const detail = draft ?? loaded
+  useEffect(() => {
+    if (loaded) setDraft(loaded)
+  }, [loaded])
+
+  const set = (patch: Partial<CharacterDetail>) => setDraft(detail ? { ...detail, ...patch } : detail)
   const interactiveHtml = typeof detail?.extensions?.interactiveHtml === 'string' ? (detail.extensions.interactiveHtml as string) : null
+
+  const save = async () => {
+    if (!detail) return
+    if (!detail.name.trim()) {
+      setError('角色名不能为空')
+      return
+    }
+    setBusy(true)
+    setError(null)
+    const r = await remote.saveCharacter({
+      cardId,
+      name: detail.name,
+      description: detail.description,
+      personality: detail.personality,
+      scenario: detail.scenario,
+      firstMes: detail.firstMes,
+      alternateGreetings: detail.alternateGreetings,
+      mesExample: detail.mesExample,
+      systemPrompt: detail.systemPrompt,
+      postHistoryInstructions: detail.postHistoryInstructions,
+      creatorNotes: detail.creatorNotes,
+      creator: detail.creator,
+      characterVersion: detail.characterVersion,
+      tags: detail.tags,
+      depthPrompt: detail.depthPrompt ?? null,
+    })
+    setBusy(false)
+    const err = errOf(r)
+    if (err) setError(err)
+    else {
+      toast.show(`已保存「${detail.name}」`)
+      reload()
+      props.onSaved()
+    }
+  }
+
+  const exportCard = async (kind: 'json' | 'png') => {
+    const r = await remote.exportCharacter({ cardId })
+    if (!r.ok) {
+      setError(r.error.message)
+      return
+    }
+    if (kind === 'json') downloadJson(`${r.value.name}.json`, r.value.json)
+    else downloadBase64(`${r.value.name}.png`, r.value.pngBase64, 'image/png')
+    toast.show(kind === 'json' ? '已导出 JSON' : '已导出 PNG')
+  }
+
   return (
-    <Dialog open width="md" title={`角色详情：${detail?.name ?? cardId}`} onClose={props.onClose}>
+    <Dialog open width="lg" title={`编辑角色：${detail?.name ?? cardId}`} onClose={props.onClose}>
+      {toast.node}
       {state.status === 'loading' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           <Skeleton height={48} />
@@ -51,43 +109,108 @@ function CharacterDetailDialog(props: { remote: TavernRemote; cardId: string; on
       )}
       {state.status === 'error' && <Err message={state.message} />}
       {detail && (
-        <div className="dsh-tavern-scroll" style={{ maxHeight: '60vh', overflow: 'auto', fontSize: 13 }}>
+        <div className="dsh-tavern-scroll" style={{ maxHeight: '65vh', overflow: 'auto', fontSize: 13 }}>
           <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 10 }}>
             <CardAvatar remote={remote} cardId={cardId} name={detail.name} size={48} />
-            <div>
-              <div style={{ fontWeight: 600 }}>{detail.name}</div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <Field label="显示名（不会改工作区 ID）">
+                <input className="dsh-tavern-input" style={{ width: '100%' }} value={detail.name} onChange={(e) => set({ name: e.target.value })} />
+              </Field>
               <Muted>
                 {detail.spec} · v{detail.characterVersion || '?'} · {detail.creator || '未知作者'}
-                {detail.hasCharacterBook ? ` · 内嵌世界书${detail.characterBookName ? `「${detail.characterBookName}」` : ''}${typeof detail.characterBookEntryCount === 'number' ? ` ${detail.characterBookEntryCount} 条` : ''}` : ''}
+                {detail.hasCharacterBook ? ` · 内嵌世界书${detail.characterBookName ? `「${detail.characterBookName}」` : ''}` : ''}
               </Muted>
             </div>
           </div>
-          {detail.tags.length > 0 && <div style={{ marginBottom: 8 }}><Muted>标签：{detail.tags.join('、')}</Muted></div>}
           {(
             [
-              ['描述', detail.description],
-              ['性格', detail.personality],
-              ['场景', detail.scenario],
-              ['开场白', detail.firstMes],
-              ...detail.alternateGreetings.map((g, i) => [`开场白变体 ${i + 1}`, g] as const),
-              ['对话示例', detail.mesExample],
-              ['系统提示', detail.systemPrompt],
-              ['历史后指令', detail.postHistoryInstructions],
-              ['作者备注', detail.creatorNotes],
-            ] as [string, string][]
-          )
-            .filter(([, v]) => v)
-            .map(([k, v]) => (
-              <div key={k} style={{ marginBottom: 8 }}>
-                <div style={{ fontWeight: 600, fontSize: 12, opacity: 0.8 }}>{k}</div>
-                <pre className="dsh-tavern-scroll" style={{ whiteSpace: 'pre-wrap', margin: '4px 0', fontSize: 12, maxHeight: 160, overflow: 'auto' }}>{v}</pre>
-              </div>
-            ))}
-          {interactiveHtml !== null && (
-            <div style={{ marginTop: 8 }}>
-              <Btn onClick={() => setCardOpen(true)}>打开交互卡</Btn>
+              ['description', '描述', detail.description],
+              ['personality', '性格', detail.personality],
+              ['scenario', '场景', detail.scenario],
+              ['firstMes', '开场白', detail.firstMes],
+              ['mesExample', '对话示例', detail.mesExample],
+              ['systemPrompt', '系统提示', detail.systemPrompt],
+              ['postHistoryInstructions', '历史后指令', detail.postHistoryInstructions],
+              ['creatorNotes', '作者备注', detail.creatorNotes],
+            ] as const
+          ).map(([key, label, value]) => (
+            <div key={key} className="dsh-tavern-field" style={{ marginBottom: 8 }}>
+              <span className="dsh-tavern-fieldLabel">{label}</span>
+              <textarea
+                className="dsh-tavern-input dsh-tavern-textarea"
+                style={{ minHeight: key === 'description' || key === 'firstMes' ? 88 : 64 }}
+                value={value}
+                onChange={(e) => set({ [key]: e.target.value } as Partial<CharacterDetail>)}
+              />
             </div>
-          )}
+          ))}
+          <div className="dsh-tavern-field" style={{ marginBottom: 8 }}>
+            <span className="dsh-tavern-fieldLabel">开场白变体（每行一条）</span>
+            <textarea
+              className="dsh-tavern-input dsh-tavern-textarea"
+              style={{ minHeight: 72 }}
+              value={detail.alternateGreetings.join('\n')}
+              onChange={(e) => set({ alternateGreetings: e.target.value.split('\n') })}
+            />
+          </div>
+          <div className="dsh-tavern-fieldRow">
+            <Field label="作者">
+              <input className="dsh-tavern-input" value={detail.creator} onChange={(e) => set({ creator: e.target.value })} />
+            </Field>
+            <Field label="版本">
+              <input className="dsh-tavern-input" value={detail.characterVersion} onChange={(e) => set({ characterVersion: e.target.value })} />
+            </Field>
+          </div>
+          <Field label="标签（逗号分隔）">
+            <input
+              className="dsh-tavern-input"
+              style={{ width: '100%' }}
+              value={detail.tags.join(', ')}
+              onChange={(e) => set({ tags: e.target.value.split(/[，,]/).map((s: string) => s.trim()).filter(Boolean) })}
+            />
+          </Field>
+          <div className="dsh-tavern-field" style={{ marginTop: 8 }}>
+            <span className="dsh-tavern-fieldLabel">depth_prompt（预览按深度插位，live 并入本轮 turn）</span>
+            <textarea
+              className="dsh-tavern-input dsh-tavern-textarea"
+              style={{ minHeight: 64 }}
+              value={detail.depthPrompt?.prompt ?? ''}
+              onChange={(e) =>
+                set({
+                  depthPrompt: e.target.value.trim()
+                    ? { prompt: e.target.value, depth: detail.depthPrompt?.depth ?? 4, role: detail.depthPrompt?.role ?? 'system' }
+                    : null,
+                })
+              }
+            />
+            {detail.depthPrompt ? (
+              <div className="dsh-tavern-fieldRow" style={{ marginTop: 6 }}>
+                <Field label="深度">
+                  <NumInput value={detail.depthPrompt.depth} onChange={(depth) => set({ depthPrompt: { ...detail.depthPrompt!, depth: Math.max(0, Math.round(depth)) } })} />
+                </Field>
+                <Field label="角色">
+                  <Select
+                    value={detail.depthPrompt.role}
+                    onChange={(role) => set({ depthPrompt: { ...detail.depthPrompt!, role: role as 'system' | 'user' | 'assistant' } })}
+                    options={[
+                      { value: 'system', label: 'system' },
+                      { value: 'user', label: 'user' },
+                      { value: 'assistant', label: 'assistant' },
+                    ]}
+                  />
+                </Field>
+              </div>
+            ) : null}
+          </div>
+          <Err message={error} />
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
+            <Btn primary disabled={busy} onClick={() => void save()}>保存</Btn>
+            <Btn disabled={busy} onClick={() => void exportCard('json')}>导出 JSON</Btn>
+            <IconBtn label="导出 PNG" onClick={() => void exportCard('png')}>
+              <IconDownloadOutline16 />
+            </IconBtn>
+            {interactiveHtml !== null && <Btn onClick={() => setCardOpen(true)}>打开交互卡</Btn>}
+          </div>
         </div>
       )}
       {cardOpen && interactiveHtml !== null && (
@@ -112,6 +235,8 @@ export function CharactersSection(props: { remote: TavernRemote }) {
   const [detailId, setDetailId] = useState<string | null>(null)
   const [pending, setPending] = useState<{ name: string; dataBase64: string; preview: CharacterInspect } | null>(null)
   const [toDelete, setToDelete] = useState<CharacterSummary | null>(null)
+  const [creating, setCreating] = useState(false)
+  const [newName, setNewName] = useState('')
   const toast = useToast()
 
   const doImport = async (name: string, dataBase64: string, importWorldBook: boolean) => {
@@ -175,12 +300,13 @@ export function CharactersSection(props: { remote: TavernRemote }) {
 
   const items = state.status === 'ready' ? state.value.items : []
   return (
-    <Section title="角色卡" description="导入 SillyTavern PNG / JSON。删除会清掉该卡工作区，以及仍指向它的会话绑定。">
+    <Section title="角色卡" description="导入或新建角色卡。点进卡片可编辑正文并导出 PNG/JSON。删除会清掉该卡工作区，以及仍指向它的会话绑定。">
       {toast.node}
       <div className="dsh-tavern-toolbar">
         <FileBtn accept=".png,.json" disabled={busy} onFile={(file) => void onImportFile(file)}>
           导入 PNG / JSON
         </FileBtn>
+        <Btn size="md" disabled={busy} onClick={() => setCreating(true)}>新建空白卡</Btn>
         <Btn size="md" onClick={reload} disabled={busy}>刷新</Btn>
       </div>
       {state.status === 'loading' && (
@@ -198,7 +324,7 @@ export function CharactersSection(props: { remote: TavernRemote }) {
             <IconUserOutline16 size={32} />
           </div>
           <div className="dsh-tavern-emptyTitle">还没有角色卡</div>
-          <div className="dsh-tavern-emptyDesc">导入一张 SillyTavern 角色卡（PNG 或 JSON）开始。</div>
+          <div className="dsh-tavern-emptyDesc">导入一张 SillyTavern 角色卡，或新建空白卡。</div>
         </div>
       )}
       <div className="dsh-tavern-list">
@@ -216,7 +342,7 @@ export function CharactersSection(props: { remote: TavernRemote }) {
                 <Muted>无内嵌世界书</Muted>
               )}
             </span>
-            <IconBtn label="查看详情" onClick={() => setDetailId(item.cardId)}>
+            <IconBtn label="编辑角色" onClick={() => setDetailId(item.cardId)}>
               <IconSearchOutline16 />
             </IconBtn>
             <IconBtn label="删除" danger disabled={busy} onClick={() => setToDelete(item)}>
@@ -225,7 +351,14 @@ export function CharactersSection(props: { remote: TavernRemote }) {
           </div>
         ))}
       </div>
-      {detailId && <CharacterDetailDialog remote={remote} cardId={detailId} onClose={() => setDetailId(null)} />}
+      {detailId && (
+        <CharacterDetailDialog
+          remote={remote}
+          cardId={detailId}
+          onClose={() => setDetailId(null)}
+          onSaved={reload}
+        />
+      )}
       {pending && (
         <Dialog
           open
@@ -258,6 +391,48 @@ export function CharactersSection(props: { remote: TavernRemote }) {
         onCancel={() => setToDelete(null)}
         onConfirm={() => void onDelete()}
       />
+      <Dialog
+        open={creating}
+        title="新建空白角色卡"
+        description="先建一张只有名字和默认开场白的卡，再点进去填描述。"
+        onClose={() => setCreating(false)}
+        footer={
+          <div className="dsh-tavern-modalActions">
+            <Btn size="md" onClick={() => setCreating(false)}>取消</Btn>
+            <Btn
+              primary
+              size="md"
+              disabled={busy || !newName.trim()}
+              onClick={() => {
+                void (async () => {
+                  setBusy(true)
+                  const r = await remote.createCharacter({ name: newName.trim() })
+                  setBusy(false)
+                  const err = errOf(r)
+                  if (err) setError(err)
+                  else {
+                    toast.show(`已创建「${r.ok ? r.value.name : newName}」`)
+                    setCreating(false)
+                    setNewName('')
+                    reload()
+                    if (r.ok) setDetailId(r.value.cardId)
+                  }
+                })()
+              }}
+            >
+              创建
+            </Btn>
+          </div>
+        }
+      >
+        <input
+          className="dsh-tavern-input"
+          style={{ width: '100%', height: 36, borderRadius: 8, padding: '0 10px', fontSize: 13, boxSizing: 'border-box' }}
+          value={newName}
+          placeholder="角色名"
+          onChange={(e) => setNewName(e.target.value)}
+        />
+      </Dialog>
     </Section>
   )
 }

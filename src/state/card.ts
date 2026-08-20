@@ -1,11 +1,12 @@
 /**
  * SillyTavern 角色卡解析。
- * 支持 PNG 内嵌 tEXt 块（关键字 chara / ccv3）与纯 JSON 卡，统一归一化为 CharacterCard。
- * 零第三方依赖：PNG chunk 遍历手写实现，不校验 CRC；zTXt/iTXt 压缩块不支持。
+ * 支持 PNG 内嵌 tEXt / zTXt / iTXt（关键字 chara / ccv3）与纯 JSON 卡，统一归一化为 CharacterCard。
+ * 零第三方依赖：PNG chunk 遍历手写实现；读取不校验 CRC，写出时补 CRC 以便其它工具能打开。
  */
 
 import { Buffer } from 'node:buffer'
-import type { CardRegexScript, CharacterCard, LorebookFile } from '../core/types.js'
+import { inflateSync } from 'node:zlib'
+import type { CardRegexScript, CharacterCard, ChatRole, DepthPrompt, LorebookFile } from '../core/types.js'
 
 /** 角色卡解析失败时抛出，消息使用中文。 */
 export class CardParseError extends Error {
@@ -150,6 +151,28 @@ function pickCharacterBook(json: Record<string, unknown>, data: Record<string, u
   return null
 }
 
+function parseDepthPrompt(ext: Record<string, unknown>): DepthPrompt | null {
+  const raw = ext.depth_prompt
+  if (!isRecord(raw)) return null
+  const prompt = toStr(raw.prompt)
+  if (!prompt.trim()) return null
+  const depth = toNum(raw.depth, 4)
+  const roleRaw = raw.role
+  let role: ChatRole = 'system'
+  if (roleRaw === 'user' || roleRaw === 1 || roleRaw === '1') role = 'user'
+  else if (roleRaw === 'assistant' || roleRaw === 2 || roleRaw === '2') role = 'assistant'
+  return { prompt, depth: Math.max(0, Math.round(depth)), role }
+}
+
+function toNum(value: unknown, fallback: number): number {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string' && value.trim() !== '') {
+    const n = Number(value)
+    if (Number.isFinite(n)) return n
+  }
+  return fallback
+}
+
 function normalizeCardInternal(
   json: unknown,
   pngBytes: Uint8Array | null,
@@ -189,14 +212,15 @@ function normalizeCardInternal(
     characterBook: pickCharacterBook(json, data),
     regexScripts: pickRegexScripts(json, data),
     extensions,
+    depthPrompt: parseDepthPrompt(extensions),
     pngBytes,
     raw: json,
   }
 }
 
 /**
- * 解析 PNG 角色卡：遍历 chunk 找 tEXt（关键字 chara 或 ccv3，同时存在时优先 ccv3），
- * 其 text 为 Base64 编码的 UTF-8 JSON。不校验 CRC，遇 IEND 停止。
+ * 解析 PNG 角色卡：遍历 chunk 找 tEXt / zTXt / iTXt（关键字 chara 或 ccv3，同时存在时优先 ccv3），
+ * 其 text 为 Base64 编码的 UTF-8 JSON。读取不校验 CRC，遇 IEND 停止。
  */
 export function parsePngCard(bytes: Uint8Array): CharacterCard {
   if (
@@ -210,6 +234,12 @@ export function parsePngCard(bytes: Uint8Array): CharacterCard {
   let charaText: string | null = null
   let ccv3Text: string | null = null
 
+  const take = (keyword: string, text: string | null): void => {
+    if (text === null || text === '') return
+    if (keyword === 'ccv3' && ccv3Text === null) ccv3Text = text
+    else if (keyword === 'chara' && charaText === null) charaText = text
+  }
+
   while (offset + 8 <= bytes.length) {
     const length = new DataView(bytes.buffer, bytes.byteOffset + offset, 4).getUint32(0)
     const type = Buffer.from(bytes.subarray(offset + 4, offset + 8)).toString('latin1')
@@ -217,17 +247,17 @@ export function parsePngCard(bytes: Uint8Array): CharacterCard {
     if (length > bytes.length - dataStart - 4) {
       throw new CardParseError(`PNG 块 ${type} 长度畸形或文件被截断`)
     }
+    const data = bytes.subarray(dataStart, dataStart + length)
 
     if (type === 'tEXt') {
-      // data = keyword(Latin-1) + 0x00 + text；无分隔符的畸形块跳过。
-      const data = bytes.subarray(dataStart, dataStart + length)
-      const sep = data.indexOf(0x00)
-      if (sep >= 0) {
-        const keyword = Buffer.from(data.subarray(0, sep)).toString('latin1')
-        const text = Buffer.from(data.subarray(sep + 1)).toString('latin1')
-        if (keyword === 'ccv3' && ccv3Text === null) ccv3Text = text
-        else if (keyword === 'chara' && charaText === null) charaText = text
-      }
+      const parsed = parsePngTextChunk(data, 'tEXt')
+      if (parsed) take(parsed.keyword, parsed.text)
+    } else if (type === 'zTXt') {
+      const parsed = parsePngTextChunk(data, 'zTXt')
+      if (parsed) take(parsed.keyword, parsed.text)
+    } else if (type === 'iTXt') {
+      const parsed = parsePngTextChunk(data, 'iTXt')
+      if (parsed) take(parsed.keyword, parsed.text)
     }
 
     if (type === 'IEND') break
@@ -236,9 +266,7 @@ export function parsePngCard(bytes: Uint8Array): CharacterCard {
 
   const text = ccv3Text ?? charaText
   if (text === null) {
-    throw new CardParseError(
-      'PNG 中未找到角色卡数据（tEXt 关键字 chara/ccv3）；zTXt/iTXt 压缩块暂不支持',
-    )
+    throw new CardParseError('PNG 中未找到角色卡数据（tEXt/zTXt/iTXt 关键字 chara/ccv3）')
   }
 
   let json: unknown
@@ -249,6 +277,235 @@ export function parsePngCard(bytes: Uint8Array): CharacterCard {
   }
 
   return normalizeCardInternal(json, bytes, ccv3Text !== null ? 'chara_card_v3' : null)
+}
+
+function parsePngTextChunk(data: Uint8Array, type: 'tEXt' | 'zTXt' | 'iTXt'): { keyword: string; text: string } | null {
+  const sep = data.indexOf(0x00)
+  if (sep < 0) return null
+  const keyword = Buffer.from(data.subarray(0, sep)).toString('latin1')
+  if (keyword !== 'chara' && keyword !== 'ccv3') return null
+  try {
+    if (type === 'tEXt') {
+      return { keyword, text: Buffer.from(data.subarray(sep + 1)).toString('latin1') }
+    }
+    if (type === 'zTXt') {
+      // keyword \0 compression_method compressed
+      if (sep + 2 > data.length) return null
+      const method = data[sep + 1]
+      if (method !== 0) return null
+      const inflated = inflateSync(Buffer.from(data.subarray(sep + 2)))
+      return { keyword, text: inflated.toString('latin1') }
+    }
+    // iTXt: keyword \0 compression_flag \0 compression_method \0 language \0 translated \0 text
+    let cursor = sep + 1
+    if (cursor + 2 > data.length) return null
+    const compressed = data[cursor] === 1
+    const method = data[cursor + 1]
+    cursor += 2
+    const langEnd = data.indexOf(0x00, cursor)
+    if (langEnd < 0) return null
+    cursor = langEnd + 1
+    const transEnd = data.indexOf(0x00, cursor)
+    if (transEnd < 0) return null
+    const payload = data.subarray(transEnd + 1)
+    if (compressed) {
+      if (method !== 0) return null
+      const inflated = inflateSync(Buffer.from(payload))
+      return { keyword, text: inflated.toString('utf8') }
+    }
+    return { keyword, text: Buffer.from(payload).toString('utf8') }
+  } catch {
+    return null
+  }
+}
+
+/** 1×1 透明 PNG，无原图时用来嵌卡。 */
+const BLANK_PNG = Buffer.from(
+  '89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000a49444154789c63000100000500010d0a2db40000000049454e44ae426082',
+  'hex',
+)
+
+function crc32(bytes: Uint8Array): number {
+  let crc = 0xffffffff
+  for (const b of bytes) {
+    crc ^= b
+    for (let i = 0; i < 8; i++) crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0)
+  }
+  return (crc ^ 0xffffffff) >>> 0
+}
+
+function pngChunk(type: string, data: Uint8Array): Uint8Array {
+  const header = new Uint8Array(8)
+  new DataView(header.buffer).setUint32(0, data.length)
+  for (let i = 0; i < 4; i++) header[4 + i] = type.charCodeAt(i)
+  const crcInput = new Uint8Array(4 + data.length)
+  crcInput.set(header.subarray(4, 8), 0)
+  crcInput.set(data, 4)
+  const crc = new Uint8Array(4)
+  new DataView(crc.buffer).setUint32(0, crc32(crcInput))
+  const out = new Uint8Array(12 + data.length)
+  out.set(header, 0)
+  out.set(data, 8)
+  out.set(crc, 8 + data.length)
+  return out
+}
+
+function isCardKeywordChunk(type: string, data: Uint8Array): boolean {
+  if (type !== 'tEXt' && type !== 'zTXt' && type !== 'iTXt') return false
+  const sep = data.indexOf(0x00)
+  if (sep < 0) return false
+  const keyword = Buffer.from(data.subarray(0, sep)).toString('latin1')
+  return keyword === 'chara' || keyword === 'ccv3'
+}
+
+function textChunkBytes(keyword: string, b64: string): Uint8Array {
+  return pngChunk('tEXt', Buffer.from(`${keyword}\0${b64}`, 'latin1'))
+}
+
+/** 把角色卡 JSON 嵌进 PNG（去掉旧 chara/ccv3 块，在 IEND 前写入 tEXt）。无原图则用 1×1 占位图。 */
+export function embedCardInPng(pngBytes: Uint8Array | null, json: unknown, spec: CharacterCard['spec']): Uint8Array {
+  const source = pngBytes && pngBytes.length >= PNG_SIGNATURE.length ? pngBytes : BLANK_PNG
+  if (!PNG_SIGNATURE.every((b, i) => source[i] === b)) {
+    throw new CardParseError('不是有效的 PNG 文件：文件签名不匹配')
+  }
+  const b64 = Buffer.from(JSON.stringify(json), 'utf-8').toString('base64')
+  const extras: Uint8Array[] = [textChunkBytes('chara', b64)]
+  if (spec === 'chara_card_v3') extras.push(textChunkBytes('ccv3', b64))
+
+  const kept: Uint8Array[] = [source.subarray(0, PNG_SIGNATURE.length)]
+  let offset = PNG_SIGNATURE.length
+  while (offset + 8 <= source.length) {
+    const length = new DataView(source.buffer, source.byteOffset + offset, 4).getUint32(0)
+    const type = Buffer.from(source.subarray(offset + 4, offset + 8)).toString('latin1')
+    const dataStart = offset + 8
+    if (length > source.length - dataStart - 4) break
+    const data = source.subarray(dataStart, dataStart + length)
+    const chunkEnd = dataStart + length + 4
+    if (type === 'IEND') {
+      for (const extra of extras) kept.push(extra)
+      kept.push(source.subarray(offset, chunkEnd))
+      break
+    }
+    if (!isCardKeywordChunk(type, data)) kept.push(source.subarray(offset, chunkEnd))
+    offset = chunkEnd
+  }
+  const out = new Uint8Array(kept.reduce((n, p) => n + p.length, 0))
+  let at = 0
+  for (const part of kept) {
+    out.set(part, at)
+    at += part.length
+  }
+  return out
+}
+
+/** 导出 SillyTavern 角色卡 JSON（V2 data 包装；V3 保持 spec）。 */
+export function cardToStJson(card: CharacterCard): unknown {
+  const extensions: Record<string, unknown> = { ...card.extensions }
+  if (card.depthPrompt) {
+    extensions.depth_prompt = {
+      prompt: card.depthPrompt.prompt,
+      depth: card.depthPrompt.depth,
+      role: card.depthPrompt.role,
+    }
+  } else {
+    delete extensions.depth_prompt
+  }
+  const data: Record<string, unknown> = {
+    name: card.name,
+    description: card.description,
+    personality: card.personality,
+    scenario: card.scenario,
+    first_mes: card.firstMes,
+    alternate_greetings: card.alternateGreetings,
+    mes_example: card.mesExample,
+    system_prompt: card.systemPrompt,
+    post_history_instructions: card.postHistoryInstructions,
+    creator_notes: card.creatorNotes,
+    creator: card.creator,
+    character_version: card.characterVersion,
+    tags: card.tags,
+    extensions,
+  }
+  if (card.characterBook && card.characterBook.entries.length > 0) {
+    data.character_book = card.characterBook.raw ?? {
+      name: card.characterBook.name ?? card.name,
+      entries: card.characterBook.entries,
+    }
+  }
+  if (card.regexScripts.length > 0) data.regex_scripts = card.regexScripts
+  const spec = card.spec === 'chara_card_v1' || card.spec === 'unknown' ? 'chara_card_v2' : card.spec
+  return {
+    spec,
+    spec_version: spec === 'chara_card_v3' ? '3.0' : '2.0',
+    data,
+  }
+}
+
+/** 从编辑字段合成一张卡（保留内嵌书、正则、头像字节与 spec）。 */
+export function applyCharacterPatch(
+  card: CharacterCard,
+  patch: Partial<
+    Pick<
+      CharacterCard,
+      | 'name'
+      | 'description'
+      | 'personality'
+      | 'scenario'
+      | 'firstMes'
+      | 'alternateGreetings'
+      | 'mesExample'
+      | 'systemPrompt'
+      | 'postHistoryInstructions'
+      | 'creatorNotes'
+      | 'creator'
+      | 'characterVersion'
+      | 'tags'
+      | 'depthPrompt'
+    >
+  >,
+): CharacterCard {
+  const next: CharacterCard = { ...card, ...patch }
+  const extensions: Record<string, unknown> = { ...next.extensions }
+  if (next.depthPrompt) {
+    extensions.depth_prompt = {
+      prompt: next.depthPrompt.prompt,
+      depth: next.depthPrompt.depth,
+      role: next.depthPrompt.role,
+    }
+  } else {
+    delete extensions.depth_prompt
+  }
+  next.extensions = extensions
+  next.raw = cardToStJson(next)
+  return next
+}
+
+export function createBlankCard(name: string): CharacterCard {
+  const trimmed = name.trim() || '新角色'
+  return normalizeCardInternal(
+    {
+      spec: 'chara_card_v2',
+      spec_version: '2.0',
+      data: {
+        name: trimmed,
+        description: '',
+        personality: '',
+        scenario: '',
+        first_mes: `你好，我是${trimmed}。`,
+        alternate_greetings: [],
+        mes_example: '',
+        system_prompt: '',
+        post_history_instructions: '',
+        creator_notes: '',
+        creator: '',
+        character_version: '1',
+        tags: [],
+        extensions: {},
+      },
+    },
+    null,
+    null,
+  )
 }
 
 /** 解析 JSON 角色卡（.json 导入），无 PNG 字节。 */

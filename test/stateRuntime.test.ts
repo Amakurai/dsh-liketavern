@@ -80,6 +80,7 @@ function makeCard(overrides: Partial<CharacterCard> = {}): CharacterCard {
     extensions: {},
     pngBytes: null,
     raw: {},
+    depthPrompt: null,
     ...overrides,
   }
 }
@@ -123,12 +124,21 @@ describe('resolveModelInfoCached', () => {
 })
 
 describe('standingRevTags', () => {
-  it('形状：绑定预设 + 全局世界书按序 + 主世界书（库书优先，否则卡内嵌书）', () => {
-    expect(state.standingRevTags(makeBinding())).toEqual(['preset:p1=0', 'lore:g1=0', 'charlore:c1=0'])
+  it('形状：绑定预设 + 全局世界书按序 + 主世界书 + 卡修订 + 会话世界书', () => {
+    expect(state.standingRevTags(makeBinding())).toEqual([
+      'preset:p1=0',
+      'lore:g1=0',
+      'charlore:c1=0',
+      'card:c1=0',
+      'chatlore:c1=0',
+    ])
     expect(state.standingRevTags(makeBinding({ presetId: null, lorebookIds: [], characterLorebookId: 'lib1' }))).toEqual([
       'preset:=0',
       'lore:lib1=0',
+      'card:c1=0',
+      'chatlore:c1=0',
     ])
+    expect(state.standingRevTags(makeBinding(), { personaLorebookId: 'pbook' })).toContain('lore:pbook=0')
   })
 
   it('savePreset / deletePreset bump 预设修订号', async () => {
@@ -152,6 +162,17 @@ describe('standingRevTags', () => {
     expect(state.standingRevTags(binding)).toContain(`charlore:${cardId}=0`)
     await state.saveCharacterLorebook(cardId, { entries: [{ keys: ['剑'], content: '断剑重铸' }] })
     expect(state.standingRevTags(binding)).toContain(`charlore:${cardId}=1`)
+  })
+
+  it('saveCharacter / saveChatLorebook bump 卡与会话世界书修订号', async () => {
+    const { cardId } = await importCard(join(root, 'characters'), makeCard())
+    const binding = makeBinding({ cardId })
+    expect(state.standingRevTags(binding)).toContain(`card:${cardId}=0`)
+    expect(state.standingRevTags(binding)).toContain(`chatlore:${cardId}=0`)
+    await state.saveCharacter(cardId, { description: '新描述' })
+    expect(state.standingRevTags(binding)).toContain(`card:${cardId}=1`)
+    await state.saveChatLorebook(cardId, { entries: { '1': { key: ['门'], content: '门后' } } })
+    expect(state.standingRevTags(binding)).toContain(`chatlore:${cardId}=1`)
   })
 })
 

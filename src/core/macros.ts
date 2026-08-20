@@ -11,6 +11,7 @@
  * - `{{setvar::name::value}}` / `{{getvar::name}}`：一次组装内的变量表
  *   （setlocalvar/setglobalvar 视为 setvar；get* 同 getvar。不落盘。）
  * - `{{lastusermessage}}` / `{{lastMessage}}`：最近一条用户消息
+ * - `{{random::A::B}}` / `{{pick::A,B}}` / `{{random:1,10}}`：掷骰（本轮宏，禁止进 standing）
  *
  * 这是组装前预处理：setvar 条目展开后变空，不进模型；getvar 处变成真正的写作规则。
  * 不是把 ST 宏引擎原样扔给模型。
@@ -52,6 +53,47 @@ function splitOnce(rest: string): [string, string] {
   return [rest.slice(0, i), rest.slice(i + 2)]
 }
 
+/** 同一种子每次调用生成独立流；同一 turn 多步组装应各拿一份新流。 */
+export function createTurnRandom(seed: number): () => number {
+  let a = seed >>> 0
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0
+    let t = a
+    t = Math.imul(t ^ (t >>> 15), t | 1)
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+}
+
+export function hashToSeed(text: string): number {
+  let h = 2166136261
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i)
+    h = Math.imul(h, 16777619)
+  }
+  return h >>> 0
+}
+
+function rollChoice(options: string[], random: () => number): string {
+  if (options.length === 0) return ''
+  if (options.length === 2 && options.every((o) => /^-?\d+$/.test(o))) {
+    const a = Number(options[0])
+    const b = Number(options[1])
+    const lo = Math.min(a, b)
+    const hi = Math.max(a, b)
+    return String(lo + Math.floor(random() * (hi - lo + 1)))
+  }
+  return options[Math.min(options.length - 1, Math.floor(random() * options.length))]!
+}
+
+function parseChoiceMacro(inner: string): string[] | null {
+  const match = /^(random|pick)\s*(::|:)\s*(.*)$/i.exec(inner.trim())
+  if (!match) return null
+  const rest = match[3] ?? ''
+  const parts = rest.includes('::') ? rest.split('::') : rest.split(',')
+  return parts.map((s) => s.trim()).filter(Boolean)
+}
+
 function isGetVar(inner: string): boolean {
   return /^(getvar|getlocalvar|getglobalvar)\s*::/i.test(inner.trim())
 }
@@ -67,6 +109,9 @@ function applyCommand(inner: string, ctx: MacroContext, clock: Record<string, st
     return ctx.lastUserMessage ?? ''
   }
   if (lower.startsWith('//')) return ''
+
+  const choices = parseChoiceMacro(raw)
+  if (choices) return rollChoice(choices, ctx.random ?? Math.random)
 
   if (lower.startsWith('outlet::')) {
     const outletName = raw.slice('outlet::'.length).trim()
@@ -161,7 +206,7 @@ export function listMacros(text: string): string[] {
 
 /** 条目是否含本轮才稳定的宏（应进 turnContext，避免打穿 standing KV）。 */
 export function hasTurnLocalMacros(text: string): boolean {
-  return /\{\{\s*(outlet::|lastusermessage|lastmessage|last_user_message|time|date|datetime|weekday)/i.test(text)
+  return /\{\{\s*(outlet::|lastusermessage|lastmessage|last_user_message|time|date|datetime|weekday|random\s*:|pick\s*:)/i.test(text)
 }
 
 /** SillyTavern EJS / STscript。本插件不执行，原文注入只会污染上下文。 */

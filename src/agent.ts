@@ -114,7 +114,7 @@ export function apply(ctx: Context): void {
           standingFingerprint(
             binding,
             { name: pipeline.userName, description: pipeline.personaDescription },
-            state.standingRevTags(binding),
+            state.standingRevTags(binding, { personaLorebookId: pipeline.personaLorebookId }),
           ),
           standing,
         ),

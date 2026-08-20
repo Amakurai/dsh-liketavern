@@ -118,6 +118,8 @@ export class WorldDeltaStore {
         delay: null,
         ignoreBudget: false,
         group: '',
+        groupWeight: 100,
+        groupOverride: false,
         automationId: '',
         deltaType: delta.type,
         deltaRef: delta.ref,

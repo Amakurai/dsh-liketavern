@@ -13,6 +13,10 @@ export interface AssembleInput {
     memories: string[];
     /** 生效中的世界状态变化层（调用方过滤 revoked/expires）。 */
     worldDeltas: WorldDelta[];
+    /** 会话作者注释（进 turn，不进 standing）。 */
+    authorNote?: string;
+    /** 角色笔记 journal.md（进 turn；调用方已按预算裁过）。 */
+    journalText?: string;
     macroCtx: MacroContext;
     regexRules: RegexRule[];
     estimateTokens: (text: string) => number;

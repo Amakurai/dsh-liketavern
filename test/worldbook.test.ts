@@ -1,6 +1,7 @@
 /**
  * 世界书触发引擎单测。
- * 覆盖：明文/正则键、{{user}}/{{char}} 身份宏、大小写与整词（全局与条目级）、scanDepth、selective 四逻辑、
+ * 覆盖：明文/正则键、{{user}}/{{char}} 身份宏、大小写与整词（全局与条目级）、scanDepth（全局与条目级）、
+ * inclusion group（一组一条、sticky 占用、override、计分/加权）、selective 四逻辑、
  * constant、probability、递归（excludeRecursion/preventRecursion/delayUntilRecursion/
  * maxRecursionSteps）、定时（sticky/cooldown/delay，跨轮回传 timerState）、
  * 预算截断（优先级/ignoreBudget/overflowWarning）、位置分桶、多来源排序、includeNames。
@@ -60,6 +61,8 @@ function makeEntry(partial: Partial<WorldInfoEntry> & { key: string }): WorldInf
     delay: null,
     ignoreBudget: false,
     group: '',
+    groupWeight: 100,
+    groupOverride: false,
     automationId: '',
     ...partial,
   }
@@ -167,6 +170,16 @@ describe('触发键匹配', () => {
     expect(activatedKeys(res).sort()).toEqual(['a', 'b'])
   })
 
+  it('/regex/g 键在多个扫描文本间不会因 lastIndex 漏命中', () => {
+    const res = run({
+      entries: [makeEntry({ key: 'global-regex', keys: ['/apple/g'] })],
+      // includeNames=true 会为带名字的消息生成三种文本，足以暴露
+      // RegExp.test() 未复位时的交替漏匹配。
+      messages: [userMsg('apple apple', 'Bob')],
+    })
+    expect(activatedKeys(res)).toEqual(['global-regex'])
+  })
+
   it('非法正则键视为永不命中且不抛错', () => {
     const res = run({ entries: [makeEntry({ key: 'e', keys: ['/(unclosed/'] })], messages: [userMsg('anything')] })
     expect(activatedKeys(res)).toEqual([])
@@ -212,6 +225,14 @@ describe('scanDepth', () => {
   it('只扫最近 N 条：N=2 时最旧一条不在窗口内', () => {
     expect(activatedKeys(run({ entries: [entry], messages, settings: makeSettings({ scanDepth: 2 }) }))).toEqual([])
     expect(activatedKeys(run({ entries: [entry], messages, settings: makeSettings({ scanDepth: 3 }) }))).toEqual(['e'])
+  })
+
+  it('条目级 scanDepth 覆盖全局：1 只扫最近一条，0 不扫消息', () => {
+    const messages = [userMsg('apple'), userMsg('nothing'), userMsg('nothing')]
+    const global = makeSettings({ scanDepth: 3 })
+    expect(activatedKeys(run({ entries: [makeEntry({ key: 'shallow', keys: ['apple'], scanDepth: 1 })], messages, settings: global }))).toEqual([])
+    expect(activatedKeys(run({ entries: [makeEntry({ key: 'follow', keys: ['apple'] })], messages, settings: global }))).toEqual(['follow'])
+    expect(activatedKeys(run({ entries: [makeEntry({ key: 'zero', keys: ['apple'], scanDepth: 0 })], messages: [userMsg('apple')], settings: global }))).toEqual([])
   })
 
   it('scanDepth=0：关键词条目不命中，但 constant 仍激活', () => {
@@ -620,5 +641,55 @@ describe('其他行为', () => {
     const timerState: WITimerState = { stickyLeft: {}, cooldownLeft: {} }
     run({ entries, messages: [userMsg('apple')], timerState })
     expect(timerState).toEqual({ stickyLeft: {}, cooldownLeft: {} })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// inclusion group
+// ---------------------------------------------------------------------------
+
+describe('inclusion group', () => {
+  it('同组只留一条；权重随机：0 取第一条，接近 1 取第二条', () => {
+    const entries = [
+      makeEntry({ key: 'a', keys: ['x'], group: 'g', groupWeight: 100 }),
+      makeEntry({ key: 'b', keys: ['x'], group: 'g', groupWeight: 100 }),
+    ]
+    expect(activatedKeys(run({ entries, messages: [userMsg('x')], random: () => 0 }))).toEqual(['a'])
+    expect(activatedKeys(run({ entries, messages: [userMsg('x')], random: () => 0.99 }))).toEqual(['b'])
+    expect(logsOf(run({ entries, messages: [userMsg('x')], random: () => 0 }), 'group-skip').map((l) => l.entryKey)).toEqual(['b'])
+  })
+
+  it('groupOverride 压过同组无 override 的条目', () => {
+    const entries = [
+      makeEntry({ key: 'a', keys: ['x'], group: 'g', groupWeight: 100 }),
+      makeEntry({ key: 'b', keys: ['x'], group: 'g', groupWeight: 1, groupOverride: true }),
+    ]
+    expect(activatedKeys(run({ entries, messages: [userMsg('x')], random: () => 0 }))).toEqual(['b'])
+  })
+
+  it('useGroupScoring 按命中键数挑选，不看随机', () => {
+    const entries = [
+      makeEntry({ key: 'a', keys: ['x'], group: 'g' }),
+      makeEntry({ key: 'b', keys: ['x', 'y'], group: 'g' }),
+    ]
+    const res = run({
+      entries,
+      messages: [userMsg('x y')],
+      settings: makeSettings({ useGroupScoring: true }),
+      random: () => 0,
+    })
+    expect(activatedKeys(res)).toEqual(['b'])
+  })
+
+  it('sticky 延续占用组，同组新命中记 group-skip', () => {
+    const entries = [
+      makeEntry({ key: 'a', keys: ['apple'], group: 'g', sticky: 2 }),
+      makeEntry({ key: 'b', keys: ['banana'], group: 'g' }),
+    ]
+    const results = runChain(entries, ['apple', 'banana'])
+    expect(activatedKeys(results[0]!)).toEqual(['a'])
+    expect(activatedKeys(results[1]!)).toEqual(['a'])
+    expect(results[1]!.activated[0]!.via).toBe('sticky')
+    expect(logsOf(results[1]!, 'group-skip').map((l) => l.entryKey)).toEqual(['b'])
   })
 })

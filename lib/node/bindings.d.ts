@@ -20,6 +20,10 @@ export interface SessionBinding {
     interactiveCards: boolean | null;
     /** 开场白 swipe 下标（0 = first_mes，1.. = alternate_greetings）。 */
     greetingIndex: number;
+    /** 会话作者注释，每轮进 turnContext。 */
+    authorNote?: string;
+    /** 是否把角色工作区 journal.md 注入本轮 turn。 */
+    injectJournal?: boolean;
     /** fork 祖先及各自被继承的最大 turn；旧绑定可缺，视为无祖先。 */
     walLineage?: WalLineageEntry[];
     createdAt: string;

@@ -11,6 +11,7 @@
  * - `{{setvar::name::value}}` / `{{getvar::name}}`：一次组装内的变量表
  *   （setlocalvar/setglobalvar 视为 setvar；get* 同 getvar。不落盘。）
  * - `{{lastusermessage}}` / `{{lastMessage}}`：最近一条用户消息
+ * - `{{random::A::B}}` / `{{pick::A,B}}` / `{{random:1,10}}`：掷骰（本轮宏，禁止进 standing）
  *
  * 这是组装前预处理：setvar 条目展开后变空，不进模型；getvar 处变成真正的写作规则。
  * 不是把 ST 宏引擎原样扔给模型。
@@ -19,6 +20,9 @@
  */
 import type { MacroContext } from './types.js';
 export type { MacroContext };
+/** 同一种子每次调用生成独立流；同一 turn 多步组装应各拿一份新流。 */
+export declare function createTurnRandom(seed: number): () => number;
+export declare function hashToSeed(text: string): number;
 /**
  * 展开 text 中的宏。outlet 替换结果不二次扫描（SillyTavern：禁止嵌套 outlet）。
  * setvar/getvar 经 MacroContext.store 在一次组装内跨条目共享。

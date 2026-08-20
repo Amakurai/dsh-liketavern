@@ -66,6 +66,7 @@ function entrySub(entry: WorldInfoEntry): string {
   if (entry.keys.length > 0) bits.push(entry.keys.slice(0, 4).join(', '))
   bits.push(`顺序 ${entry.order}`)
   if (entry.constant) bits.push('常驻')
+  if (entry.group.trim()) bits.push(`组 ${entry.group.trim()}`)
   return bits.join('  ·  ')
 }
 
@@ -106,6 +107,8 @@ function newEntry(source: WISource, sourceRef: string): WorldInfoEntry {
     delay: null,
     ignoreBudget: false,
     group: '',
+    groupWeight: 100,
+    groupOverride: false,
     automationId: '',
   }
 }
@@ -113,6 +116,19 @@ function newEntry(source: WISource, sourceRef: string): WorldInfoEntry {
 export type LorebookTarget =
   | { kind: 'library'; name: string }
   | { kind: 'character'; cardId: string; name: string }
+  | { kind: 'chat'; cardId: string; name: string }
+
+function sourceOf(target: LorebookTarget): { source: WISource; sourceRef: string } {
+  if (target.kind === 'library') return { source: 'global', sourceRef: target.name }
+  if (target.kind === 'chat') return { source: 'chat', sourceRef: 'chat-lorebook' }
+  return { source: 'character', sourceRef: target.cardId }
+}
+
+function targetKindLabel(kind: LorebookTarget['kind']): string {
+  if (kind === 'character') return '角色卡内嵌'
+  if (kind === 'chat') return '本会话世界书'
+  return '世界书库'
+}
 
 export function LorebookEditor(props: {
   target: LorebookTarget
@@ -122,8 +138,7 @@ export function LorebookEditor(props: {
   save: (json: unknown) => Promise<Envelope<unknown>>
 }) {
   const { target } = props
-  const source: WISource = target.kind === 'library' ? 'global' : 'character'
-  const sourceRef = target.kind === 'library' ? target.name : target.cardId
+  const { source, sourceRef } = sourceOf(target)
   const [entries, setEntries] = useState<WorldInfoEntry[]>(() => props.entries.map((e) => ({ ...e })))
   const [dirty, setDirty] = useState(false)
   const [query, setQuery] = useState('')
@@ -211,14 +226,14 @@ export function LorebookEditor(props: {
     <div>
       <div className="dsh-tavern-toolbar">
         <Btn size="md" onClick={askClose}>
-          返回列表
+          {target.kind === 'chat' ? '关闭' : '返回列表'}
         </Btn>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div className="dsh-tavern-cardName" style={{ fontSize: 15 }}>
             {target.name}
           </div>
           <Muted>
-            {target.kind === 'character' ? '角色卡内嵌' : '世界书库'} · {entries.length} 条 · 启用 {enabledCount}
+            {targetKindLabel(target.kind)} · {entries.length} 条 · 启用 {enabledCount}
             {constantCount > 0 ? ` · 常驻 ${constantCount}` : ''}
             {dirty ? ' · 未保存' : ''}
           </Muted>
@@ -482,7 +497,7 @@ function EntryForm(props: {
       ) : null}
 
       <Btn size="sm" onClick={() => props.onAdvanced(!props.advanced)}>
-        {props.advanced ? '收起更多选项' : '更多选项（概率 / 递归 / 定时）'}
+        {props.advanced ? '收起更多选项' : '更多选项（概率 / 递归 / 定时 / 分组）'}
       </Btn>
       {props.advanced ? (
         <>
@@ -552,6 +567,16 @@ function EntryForm(props: {
                 value={entry.group}
                 onChange={(e) => set({ group: e.target.value })}
               />
+            </label>
+            <label className="dsh-tavern-field">
+              <span className="dsh-tavern-fieldLabel">组权重</span>
+              <NumInput value={entry.groupWeight} onChange={(groupWeight) => set({ groupWeight: Math.max(0, Math.round(groupWeight)) })} />
+            </label>
+          </div>
+          <div className="dsh-tavern-inlineChecks">
+            <label>
+              <Toggle checked={entry.groupOverride} onChange={(groupOverride) => set({ groupOverride })} />
+              组内优先（覆盖同组其它条目）
             </label>
           </div>
         </>

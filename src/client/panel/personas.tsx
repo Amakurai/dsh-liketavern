@@ -6,11 +6,12 @@ import { useState } from 'react'
 import { IconEditOutline16, IconTrashOutline16, IconUserOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { Persona, TavernRemote } from '../types.js'
 import { EMPTY_SESSION_DEFAULTS } from '../types.js'
-import { Btn, ConfirmDialog, Err, Field, IconBtn, Section, Skeleton, clickableProps, errOf, useLoader, useToast } from '../util.js'
+import { Btn, ConfirmDialog, Err, Field, IconBtn, Muted, Section, Select, Skeleton, clickableProps, errOf, useLoader, useToast } from '../util.js'
 
 export function PersonasSection(props: { remote: TavernRemote }) {
   const { remote } = props
   const { state, reload } = useLoader(() => remote.listPersonas({}), [])
+  const lore = useLoader(() => remote.listLorebooks({}), [])
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [editing, setEditing] = useState<Persona | null>(null)
@@ -49,7 +50,7 @@ export function PersonasSection(props: { remote: TavernRemote }) {
   }
 
   const createNew = () => {
-    setEditing({ id: `persona-${Date.now().toString(36)}`, name: '', description: '', avatar: null })
+    setEditing({ id: `persona-${Date.now().toString(36)}`, name: '', description: '', avatar: null, lorebookId: null })
   }
 
   const setAsDefault = async (id: string) => {
@@ -97,6 +98,7 @@ export function PersonasSection(props: { remote: TavernRemote }) {
               <div className="dsh-tavern-cardName">{p.name}</div>
             </div>
             <p className="dsh-tavern-cardDesc">{p.description.trim() || '还没有填写人设描述。'}</p>
+            {p.lorebookId ? <Muted>人设世界书 {p.lorebookId}</Muted> : null}
             <div className="dsh-tavern-cardFoot">
               <IconBtn label="编辑" onClick={() => setEditing({ ...p })}>
                 <IconEditOutline16 />
@@ -131,6 +133,17 @@ export function PersonasSection(props: { remote: TavernRemote }) {
               onChange={(e) => setEditing({ ...editing, description: e.target.value })}
             />
           </div>
+          <Field label="人设世界书">
+            <Select
+              width="100%"
+              value={editing.lorebookId ?? ''}
+              onChange={(v) => setEditing({ ...editing, lorebookId: v || null })}
+              options={[
+                { value: '', label: '（无）' },
+                ...(lore.state.status === 'ready' ? lore.state.value.items.map((n) => ({ value: n, label: n })) : []),
+              ]}
+            />
+          </Field>
           <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
             <Btn disabled={busy} onClick={() => void save()} primary>保存</Btn>
             <Btn onClick={() => setEditing(null)}>关闭</Btn>

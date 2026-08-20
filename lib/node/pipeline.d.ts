@@ -39,6 +39,12 @@ export interface PipelineResult {
     /** 当前 {{user}} 展示名；改名后须打穿 standing 钉死。 */
     userName: string;
     personaDescription: string;
+    personaLorebookId: string | null;
+    wiBudget: {
+        limit: number;
+        used: number;
+        overflowed: boolean;
+    };
 }
 /** deriveMessages 拍平：只取 text 块拼成纯文本；空消息丢弃。 */
 export declare function flattenMessages(messages: readonly Message[], charName: string, userName: string): ChatMessage[];

@@ -1,5 +1,6 @@
 import type { LlmResolvedModelInfo, LlmRuntime } from '@deepseek-ai/dsh-llm';
 import { type MemoryEntry, type PromptPreset, type RegexRule, type WIEngineResult, type WITimerState, type WorldDelta, type WorldInfoEntry } from '../core/types.js';
+import { applyCharacterPatch } from '../state/card.js';
 import { MemoryStore } from '../state/memory.js';
 import { Wal } from '../state/wal.js';
 import { WorldDeltaStore } from '../state/worlddelta.js';
@@ -15,6 +16,8 @@ export interface Persona {
     description: string;
     /** 头像文件名（personas/<id>.png），无则 null。 */
     avatar: string | null;
+    /** 挂接的世界书库文件名；空/缺省 = 无人设书。 */
+    lorebookId?: string | null;
 }
 interface WorkspaceHandle {
     fs: WorkspaceFs;
@@ -94,6 +97,20 @@ export declare class TavernState {
         name: string;
         entryCount: number;
     }>;
+    saveCharacter(cardId: string, patch: Parameters<typeof applyCharacterPatch>[1]): Promise<{
+        cardId: string;
+        name: string;
+    }>;
+    createCharacter(name: string): Promise<CharacterWorkspace>;
+    exportCharacter(cardId: string): Promise<{
+        json: unknown;
+        pngBase64: string;
+        name: string;
+    }>;
+    getJournal(cardId: string): Promise<string>;
+    saveJournal(cardId: string, text: string): Promise<void>;
+    getChatLorebook(cardId: string): Promise<unknown>;
+    saveChatLorebook(cardId: string, json: unknown): Promise<void>;
     listLorebooks(): Promise<string[]>;
     /** 读取世界书原始 JSON（供设置面板编辑）；不存在或损坏返回 null。 */
     loadLorebookJson(name: string): Promise<unknown | null>;
@@ -136,7 +153,9 @@ export declare class TavernState {
      * standing 指纹的资产修订标记（稳定顺序）：绑定预设 + 全局世界书 + 主世界书（库书或卡内嵌书）。
      * 编辑/删除经本类写方法 bump；运行期绕开 TavernState 手改文件不捕获（standingPins 进程内，重启即清）。
      */
-    standingRevTags(binding: SessionBinding): string[];
+    standingRevTags(binding: SessionBinding, extra?: {
+        personaLorebookId?: string | null;
+    }): string[];
     /**
      * 模型元数据解析缓存：同 provider+model 复用一次解析结果（含 reasoning 档与上下文窗口）。
      * 失败不缓存（删掉条目让下次重试）；signal 只作用于首次真实解析。

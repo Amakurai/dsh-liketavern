@@ -109,8 +109,62 @@ export class TavernService extends TypertRemoteService {
       characterBookName: card.characterBook?.name ?? null,
       characterBookEntryCount: card.characterBook?.entries.length ?? 0,
       hasAvatar: await handle.fs.exists('card.png'),
-      /** 卡扩展字段（交互卡 interactiveHtml 等由 client 自行判读）。 */
+      depthPrompt: card.depthPrompt,
       extensions: card.extensions,
+    }
+  }
+
+  async saveCharacter(request: {
+    cardId: string
+    name?: string
+    description?: string
+    personality?: string
+    scenario?: string
+    firstMes?: string
+    alternateGreetings?: string[]
+    mesExample?: string
+    systemPrompt?: string
+    postHistoryInstructions?: string
+    creatorNotes?: string
+    creator?: string
+    characterVersion?: string
+    tags?: string[]
+    depthPrompt?: { prompt: string; depth: number; role: 'system' | 'user' | 'assistant' } | null
+  }): Promise<unknown> {
+    try {
+      return await this.state.saveCharacter(request.cardId, {
+        name: request.name,
+        description: request.description,
+        personality: request.personality,
+        scenario: request.scenario,
+        firstMes: request.firstMes,
+        alternateGreetings: request.alternateGreetings,
+        mesExample: request.mesExample,
+        systemPrompt: request.systemPrompt,
+        postHistoryInstructions: request.postHistoryInstructions,
+        creatorNotes: request.creatorNotes,
+        creator: request.creator,
+        characterVersion: request.characterVersion,
+        tags: request.tags,
+        depthPrompt: request.depthPrompt,
+      })
+    } catch (error) {
+      throw new FloorError('invalid-card', error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  async createCharacter(request: { name: string }): Promise<unknown> {
+    const name = request.name?.trim()
+    if (!name) throw new FloorError('invalid-card', '角色名不能为空')
+    const ws = await this.state.createCharacter(name)
+    return { cardId: ws.cardId, name: ws.card.name }
+  }
+
+  async exportCharacter(request: { cardId: string }): Promise<unknown> {
+    try {
+      return await this.state.exportCharacter(request.cardId)
+    } catch (error) {
+      throw new FloorError('card-not-found', error instanceof Error ? error.message : String(error))
     }
   }
 
@@ -190,6 +244,37 @@ export class TavernService extends TypertRemoteService {
   async deleteEmbeddedLorebook(request: { cardId: string }): Promise<unknown> {
     await this.state.deleteCharacterLorebook(request.cardId)
     return { deleted: true }
+  }
+
+  async getChatLorebook(request: { cardId: string }): Promise<unknown> {
+    if ((await this.state.loadCharacter(request.cardId)) === null) {
+      throw new FloorError('card-not-found', `角色 ${request.cardId} 不存在`)
+    }
+    const json = await this.state.getChatLorebook(request.cardId)
+    return { json }
+  }
+
+  async saveChatLorebook(request: { cardId: string; json: unknown }): Promise<unknown> {
+    if ((await this.state.loadCharacter(request.cardId)) === null) {
+      throw new FloorError('card-not-found', `角色 ${request.cardId} 不存在`)
+    }
+    await this.state.saveChatLorebook(request.cardId, request.json)
+    return { saved: true }
+  }
+
+  async getJournal(request: { cardId: string }): Promise<unknown> {
+    if ((await this.state.loadCharacter(request.cardId)) === null) {
+      throw new FloorError('card-not-found', `角色 ${request.cardId} 不存在`)
+    }
+    return { text: await this.state.getJournal(request.cardId) }
+  }
+
+  async saveJournal(request: { cardId: string; text: string }): Promise<unknown> {
+    if ((await this.state.loadCharacter(request.cardId)) === null) {
+      throw new FloorError('card-not-found', `角色 ${request.cardId} 不存在`)
+    }
+    await this.state.saveJournal(request.cardId, request.text ?? '')
+    return { saved: true }
   }
 
   // ── 人设 ─────────────────────────────────────────────────────────────────
@@ -415,6 +500,32 @@ export class TavernService extends TypertRemoteService {
     return { revoked: await ws.deltas.revoke(request.id) }
   }
 
+  async addWorldDelta(request: {
+    cardId: string
+    type: 'add' | 'update' | 'invalidate'
+    content: string
+    ref?: string | null
+    keys?: string[]
+    order?: number
+  }): Promise<unknown> {
+    if (!request.content?.trim()) throw new FloorError('invalid-delta', '世界状态内容不能为空')
+    if ((await this.state.loadCharacter(request.cardId)) === null) {
+      throw new FloorError('card-not-found', `角色 ${request.cardId} 不存在`)
+    }
+    const ws = await this.state.workspace(request.cardId)
+    const delta = await ws.deltas.append({
+      type: request.type,
+      ref: request.ref ?? null,
+      content: request.content.trim(),
+      keys: request.keys ?? [],
+      order: request.order ?? 100,
+      sourceRange: 'manual',
+      expires: null,
+    })
+    await rebuildIndex(ws.fs, estimateTokens)
+    return { id: delta.id }
+  }
+
   async exportMergedLorebook(request: { cardId: string }): Promise<unknown> {
     const charWs = await this.state.loadCharacter(request.cardId)
     if (!charWs) throw new FloorError('card-not-found', `角色 ${request.cardId} 不存在`)
@@ -438,7 +549,15 @@ export class TavernService extends TypertRemoteService {
     const llm = this.ctx.get('llm') as LlmRuntime | undefined
     const result = await runTavernPipeline({ state: this.state, sessionId: request.sessionId, agent, llm, mode: 'preview' })
     if (!result) throw new FloorError('no-binding', '当前会话未绑定 Tavern 角色卡')
-    return { system: result.system, messages: result.messages, logLines: result.logLines }
+    return {
+      standing: result.standing,
+      turnContext: result.turnContext,
+      system: result.system,
+      messages: result.messages,
+      logLines: result.logLines,
+      worldInfoBudget: result.wiBudget,
+      assembleBudget: result.assembled.stats,
+    }
   }
 
   async getAvatar(request: { cardId: string }): Promise<unknown> {

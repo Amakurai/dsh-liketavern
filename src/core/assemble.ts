@@ -58,6 +58,10 @@ export interface AssembleInput {
   memories: string[]
   /** 生效中的世界状态变化层（调用方过滤 revoked/expires）。 */
   worldDeltas: WorldDelta[]
+  /** 会话作者注释（进 turn，不进 standing）。 */
+  authorNote?: string
+  /** 角色笔记 journal.md（进 turn；调用方已按预算裁过）。 */
+  journalText?: string
   macroCtx: MacroContext
   regexRules: RegexRule[]
   estimateTokens: (text: string) => number
@@ -409,9 +413,28 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
       content,
     })
   }
+  const depthPrompt = input.card?.depthPrompt
+  if (depthPrompt?.prompt.trim()) {
+    if (!skipScript('角色 depth_prompt', depthPrompt.prompt)) {
+      const content = expandTurn(depthPrompt.prompt).trim()
+      if (content) {
+        markTurn(content)
+        depthInjections.push({
+          depth: depthPrompt.depth,
+          order: 0,
+          role: depthPrompt.role,
+          content,
+        })
+      }
+    }
+  }
   // AN bottom：全序列最末；AN top：历史之前
   const anTop = wiText(WIPosition.AuthorNoteTop)
   if (anTop) beforeHistory.push(trackedMessage('system', markTurn(anTop), worldInfoPromptMessages))
+  const sessionNote = input.authorNote?.trim() ? expandTurn(input.authorNote).trim() : ''
+  if (sessionNote) beforeHistory.push(trackedMessage('system', markTurn(`【作者注释】${sessionNote}`), worldInfoPromptMessages))
+  const journalNote = input.journalText?.trim() ? expandTurn(input.journalText).trim() : ''
+  if (journalNote) beforeHistory.push(trackedMessage('system', markTurn(`【角色笔记】${journalNote}`), worldInfoPromptMessages))
   const anBottom = wiText(WIPosition.AuthorNoteBottom)
   const anBottomMessage = anBottom
     ? trackedMessage('system', markTurn(anBottom), worldInfoPromptMessages)
@@ -484,7 +507,12 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
   // ── 8. dsh 通道：standing（稳定前缀）与 turnContext（本轮触发层）分开 ──
   const outsideHistory = [...beforeHistory, ...tail]
   const standing = joinPromptParts(outsideHistory.filter((m) => !turnContents.has(m.content)).map((m) => m.content))
-  const turnContext = joinPromptParts(outsideHistory.filter((m) => turnContents.has(m.content)).map((m) => m.content))
+  // 插进历史中间的 @D / depth_prompt / in-chat 预览能看到；live 不能改日志，并入 turn 尾。
+  const splicedLive = depthInjections.filter((d) => d.depth !== 0).map((d) => d.content)
+  const turnContext = joinPromptParts([
+    ...outsideHistory.filter((m) => turnContents.has(m.content)).map((m) => m.content),
+    ...splicedLive,
+  ])
   const system = joinPromptParts([standing, turnContext])
 
   return {

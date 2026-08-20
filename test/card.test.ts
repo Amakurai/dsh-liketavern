@@ -1,12 +1,17 @@
 /**
- * 角色卡解析单测：手工构造最小 PNG（签名 + IHDR + tEXt + IEND），
- * chunk 长度字段按实填写，CRC 填 0（解析器不校验）。
+ * 角色卡解析单测：手工构造最小 PNG（签名 + IHDR + tEXt/zTXt/iTXt + IEND），
+ * chunk 长度字段按实填写，CRC 填 0（解析器不校验）。覆盖 depth_prompt、空白卡与 PNG 往返导出。
  */
 
 import { Buffer } from 'node:buffer'
+import { deflateSync } from 'node:zlib'
 import { describe, expect, it } from 'vitest'
 import {
   CardParseError,
+  applyCharacterPatch,
+  cardToStJson,
+  createBlankCard,
+  embedCardInPng,
   extractGreetingImages,
   parseJsonCard,
   parsePngCard,
@@ -131,9 +136,37 @@ describe('parsePngCard', () => {
     expect(() => parsePngCard(new Uint8Array([1, 2, 3, 4]))).toThrow(/PNG/)
   })
 
-  it('无 chara/ccv3 块的 PNG 报错并说明不支持 zTXt/iTXt', () => {
+  it('无 chara/ccv3 块的 PNG 报错', () => {
     expect(() => parsePngCard(buildPng([IHDR]))).toThrow(CardParseError)
-    expect(() => parsePngCard(buildPng([IHDR]))).toThrow(/zTXt/)
+    expect(() => parsePngCard(buildPng([IHDR]))).toThrow(/chara/)
+  })
+
+  it('解析 zTXt 压缩块', () => {
+    const b64 = Buffer.from(JSON.stringify(V2_JSON), 'utf-8').toString('base64')
+    const compressed = deflateSync(Buffer.from(b64, 'latin1'))
+    const data = Buffer.concat([Buffer.from('chara\0\0', 'latin1'), compressed])
+    const card = parsePngCard(buildPng([IHDR, { type: 'zTXt', data }]))
+    expect(card.name).toBe('艾莉丝')
+  })
+
+  it('解析未压缩 iTXt 块', () => {
+    const b64 = Buffer.from(JSON.stringify(V2_JSON), 'utf-8').toString('base64')
+    const data = Buffer.concat([
+      Buffer.from('chara\0', 'latin1'),
+      Buffer.from([0, 0]),
+      Buffer.from('\0\0', 'latin1'),
+      Buffer.from(b64, 'utf8'),
+    ])
+    const card = parsePngCard(buildPng([IHDR, { type: 'iTXt', data }]))
+    expect(card.name).toBe('艾莉丝')
+  })
+
+  it('embedCardInPng 后再 parsePngCard 还原', () => {
+    const json = cardToStJson(parseJsonCard(V2_JSON))
+    const png = embedCardInPng(null, json, 'chara_card_v2')
+    const card = parsePngCard(png)
+    expect(card.name).toBe('艾莉丝')
+    expect(card.description).toBe('一位旅人')
   })
 
   it('防御畸形 chunk 长度（截断）', () => {
@@ -263,5 +296,27 @@ describe('parseJsonCard / normalizeCard', () => {
     expect(card.name).toBe('42')
     expect(card.description).toBe('{"nested":true}')
     expect(card.personality).toBe('')
+  })
+
+  it('解析 extensions.depth_prompt', () => {
+    const card = parseJsonCard({
+      spec: 'chara_card_v2',
+      data: { name: 'x', extensions: { depth_prompt: { prompt: 'DEPTH', depth: 2, role: 'user' } } },
+    })
+    expect(card.depthPrompt).toEqual({ prompt: 'DEPTH', depth: 2, role: 'user' })
+  })
+
+  it('createBlankCard / applyCharacterPatch 保留 cardId 无关字段并写出 depth_prompt', () => {
+    const blank = createBlankCard('旅人')
+    expect(blank.name).toBe('旅人')
+    expect(blank.firstMes).toContain('旅人')
+    const patched = applyCharacterPatch(blank, {
+      description: '描述',
+      depthPrompt: { prompt: 'DP', depth: 3, role: 'system' },
+    })
+    expect(patched.description).toBe('描述')
+    expect(patched.depthPrompt).toEqual({ prompt: 'DP', depth: 3, role: 'system' })
+    const json = cardToStJson(patched) as { data: { extensions: { depth_prompt: unknown } } }
+    expect(json.data.extensions.depth_prompt).toEqual({ prompt: 'DP', depth: 3, role: 'system' })
   })
 })

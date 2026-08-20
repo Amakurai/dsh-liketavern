@@ -17,13 +17,9 @@ import { resolveSessionPreset, type AgentPresets } from '@deepseek-ai/dsh-agent-
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import { join } from 'node:path'
-import {
-  greetingFloorState,
-  isGreetingOnlyBlank,
-  pickGreetingText,
-  sessionHasUserMessage,
-  TAVERN_GREETING_SOURCE,
-} from '../core/greetingLog.js'
+import { greetingFloorState, isGreetingOnlyBlank, pickGreetingText, sessionHasUserMessage, TAVERN_GREETING_SOURCE } from '../core/greetingLog.js'
+import { expandMacros } from '../core/macros.js'
+import { DEFAULT_USER_NAME } from '../core/persona.js'
 import { greetingMessage, greetingTurnEvents } from './greetingSeed.js'
 import { isTavernRuntimeSession } from './tavernSession.js'
 import type { SessionBinding, WalLineageEntry } from './bindings.js'
@@ -516,6 +512,15 @@ export async function greetingVariants(state: TavernState, cardId: string): Prom
   return [ws.card.firstMes, ...ws.card.alternateGreetings]
 }
 
+async function expandGreeting(state: TavernState, binding: SessionBinding, text: string): Promise<string> {
+  const ws = await state.loadCharacter(binding.cardId)
+  const persona = await state.resolvePersona(binding.personaId)
+  return expandMacros(text, {
+    char: ws?.card.name ?? 'Assistant',
+    user: persona?.name ?? DEFAULT_USER_NAME,
+  })
+}
+
 /** agent-loop 的 lastTurn 只在构造时从日志读取；补 turn 后把 idle 相位对齐，避免下一句抢号。 */
 function syncIdleAgentLastTurn(ctx: Context | undefined, sessionId: string): void {
   const agent = (ctx as { agents?: { get(id: string): unknown } } | undefined)?.agents?.get(sessionId)
@@ -569,8 +574,9 @@ export async function enterGreetingConversation({ ctx, state }: FloorDeps, sessi
   }
   if (session.events.some((e) => e.type === 'turn/start')) return false
   const variants = await greetingVariants(state, binding.cardId)
-  const text = pickGreetingText(variants, binding.greetingIndex)
-  if (!text) return false
+  const raw = pickGreetingText(variants, binding.greetingIndex)
+  if (!raw) return false
+  const text = await expandGreeting(state, binding, raw)
   session.append('turn/start', { turn: 1 })
   session.append('step/start', { turn: 1, step: 1 })
   session.append(
@@ -595,8 +601,9 @@ export async function ensureGreeting({ ctx, state }: FloorDeps, sessionId: strin
   if (!session || !isTavernRuntimeSession(ctx, session)) return false
   if (session.events.some((e) => e.type === 'assistant/message')) return false
   const variants = await greetingVariants(state, binding.cardId)
-  const text = pickGreetingText(variants, binding.greetingIndex)
-  if (!text) return false
+  const raw = pickGreetingText(variants, binding.greetingIndex)
+  if (!raw) return false
+  const text = await expandGreeting(state, binding, raw)
   session.append('assistant/message', { turn: 0, step: 0, message: greetingMessage(text) }, { surfaceOp: 'append', sourceEventSeqs: [] })
   return true
 }
@@ -618,8 +625,9 @@ export async function swipeGreeting({ ctx, state }: FloorDeps, sessionId: string
   if (sessionHasUserMessage(source.events)) {
     throw new FloorError('has-turns', '对话已开始，不能再 swipe 开场白（请用回退/重新生成）')
   }
-  const text = pickGreetingText(variants, next)
-  if (!text) throw new FloorError('empty-greeting', '当前这条开场白为空')
+  const raw = pickGreetingText(variants, next)
+  if (!raw) throw new FloorError('empty-greeting', '当前这条开场白为空')
+  const text = await expandGreeting(state, binding, raw)
 
   const childId = await forkChildSession(ctx, source, greetingTurnEvents(text))
   await state.saveBinding({ ...binding, sessionId: childId, greetingIndex: next })

@@ -3,7 +3,7 @@
  * 记忆/世界状态切换用 chip 段控；条目为 .dsh-tavern-memo 卡片（meta 行 + 正文 + IconBtn 操作）。
  * 压缩/导出等瞬时反馈走 useToast，上下文错误用 Err。
  */
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { IconEditOutline16, IconTrashOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { MemoryEntry, WorldDelta } from '../../core/types.js'
 import type { TavernRemote } from '../types.js'
@@ -63,18 +63,27 @@ export function MemorySection(props: { remote: TavernRemote }) {
   const { remote } = props
   const chars = useLoader(() => remote.listCharacters({}), [])
   const [cardId, setCardId] = useState('')
-  const [tab, setTab] = useState<'memory' | 'delta'>('memory')
+  const [tab, setTab] = useState<'memory' | 'delta' | 'journal'>('memory')
   const [error, setError] = useState<string | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [newBody, setNewBody] = useState('')
+  const [journalText, setJournalText] = useState('')
+  const [deltaType, setDeltaType] = useState<'add' | 'update' | 'invalidate'>('add')
+  const [deltaContent, setDeltaContent] = useState('')
+  const [deltaRef, setDeltaRef] = useState('')
+  const [deltaKeys, setDeltaKeys] = useState('')
   const toast = useToast()
 
   const memories = useLoader(() => remote.getMemories({ cardId }), [cardId], cardId !== '')
   const deltas = useLoader(() => remote.getWorldDeltas({ cardId }), [cardId], cardId !== '')
+  const journal = useLoader(() => remote.getJournal({ cardId }), [cardId], cardId !== '')
 
   const charItems = chars.state.status === 'ready' ? chars.state.value.items : []
   const memoryItems = memories.state.status === 'ready' ? memories.state.value.items : []
   const deltaItems = deltas.state.status === 'ready' ? deltas.state.value.items : []
+  useEffect(() => {
+    if (journal.state.status === 'ready') setJournalText(journal.state.value.text)
+  }, [journal.state])
 
   const addMemory = async () => {
     const r = await remote.saveMemory({ cardId, body: newBody.trim() })
@@ -121,8 +130,37 @@ export function MemorySection(props: { remote: TavernRemote }) {
     }
   }
 
+  const saveJournal = async () => {
+    const r = await remote.saveJournal({ cardId, text: journalText })
+    const err = errOf(r)
+    if (err) setError(err)
+    else {
+      toast.show('已保存角色笔记')
+      journal.reload()
+    }
+  }
+
+  const addDelta = async () => {
+    const r = await remote.addWorldDelta({
+      cardId,
+      type: deltaType,
+      content: deltaContent.trim(),
+      ref: deltaRef.trim() || null,
+      keys: splitList(deltaKeys),
+    })
+    const err = errOf(r)
+    if (err) setError(err)
+    else {
+      toast.show(`已新增世界状态 #${r.ok ? r.value.id : ''}`)
+      setDeltaContent('')
+      setDeltaRef('')
+      setDeltaKeys('')
+      deltas.reload()
+    }
+  }
+
   return (
-    <Section title="记忆与世界状态" description="按角色查看和编辑长期记忆、世界状态变化层。">
+    <Section title="记忆与世界状态" description="按角色查看和编辑长期记忆、世界状态变化层、角色笔记 journal.md。">
       {toast.node}
       <SettingsRow title="角色" description="选择要查看的角色卡工作区。">
         <Select
@@ -142,6 +180,9 @@ export function MemorySection(props: { remote: TavernRemote }) {
               </button>
               <button type="button" className="dsh-tavern-chip" data-active={tab === 'delta' ? 'true' : 'false'} onClick={() => setTab('delta')}>
                 世界状态（{deltaItems.length}）
+              </button>
+              <button type="button" className="dsh-tavern-chip" data-active={tab === 'journal' ? 'true' : 'false'} onClick={() => setTab('journal')}>
+                角色笔记
               </button>
             </div>
             <span style={{ flex: 1 }} />
@@ -232,6 +273,59 @@ export function MemorySection(props: { remote: TavernRemote }) {
                 </div>
               ))}
               {deltaItems.length === 0 && deltas.state.status === 'ready' && <Muted>暂无世界状态变化。</Muted>}
+              <div className="dsh-tavern-memo">
+                <div className="dsh-tavern-fieldRow">
+                  <label className="dsh-tavern-field">
+                    <span className="dsh-tavern-fieldLabel">类型</span>
+                    <Select
+                      size="md"
+                      value={deltaType}
+                      onChange={(v) => setDeltaType(v as 'add' | 'update' | 'invalidate')}
+                      options={[
+                        { value: 'add', label: '新增' },
+                        { value: 'update', label: '更新' },
+                        { value: 'invalidate', label: '作废' },
+                      ]}
+                    />
+                  </label>
+                  {(deltaType === 'update' || deltaType === 'invalidate') && (
+                    <label className="dsh-tavern-field">
+                      <span className="dsh-tavern-fieldLabel">原条目 uid</span>
+                      <input className="dsh-tavern-input" value={deltaRef} onChange={(e) => setDeltaRef(e.target.value)} />
+                    </label>
+                  )}
+                </div>
+                <textarea
+                  className="dsh-tavern-input dsh-tavern-textarea"
+                  style={{ minHeight: 60, marginTop: 8 }}
+                  placeholder="世界状态正文…"
+                  value={deltaContent}
+                  onChange={(e) => setDeltaContent(e.target.value)}
+                />
+                <label className="dsh-tavern-field" style={{ marginTop: 8 }}>
+                  <span className="dsh-tavern-fieldLabel">触发键（逗号分隔，可空）</span>
+                  <input className="dsh-tavern-input" value={deltaKeys} onChange={(e) => setDeltaKeys(e.target.value)} />
+                </label>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
+                  <Btn primary disabled={!deltaContent.trim()} onClick={() => void addDelta()}>添加世界状态</Btn>
+                </div>
+              </div>
+            </div>
+          )}
+          {tab === 'journal' && (
+            <div className="dsh-tavern-list">
+              {journal.state.status === 'loading' && <Skeleton height={120} />}
+              {journal.state.status === 'error' && <Err message={journal.state.message} />}
+              <Muted>写在角色工作区 journal.md。会话芯片打开「注入角色笔记」后才会进本轮 turn。</Muted>
+              <textarea
+                className="dsh-tavern-input dsh-tavern-textarea"
+                style={{ minHeight: 180 }}
+                value={journalText}
+                onChange={(e) => setJournalText(e.target.value)}
+              />
+              <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                <Btn primary onClick={() => void saveJournal()}>保存笔记</Btn>
+              </div>
             </div>
           )}
         </>

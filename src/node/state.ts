@@ -8,7 +8,7 @@ import type { LlmResolvedModelInfo, LlmRuntime } from '@deepseek-ai/dsh-llm'
 import { estimateTokens } from '../core/tokenize.js'
 import { EMPTY_TIMER_STATE, type CharacterCard, type MemoryEntry, type PromptPreset, type RegexRule, type WIEngineResult, type WITimerState, type WorldDelta, type WorldInfoEntry } from '../core/types.js'
 import { compileCardRegexScripts, compilePresetRegexScripts } from '../core/regex.js'
-import { normalizeBook, parseJsonCard, parsePngCard, regexScriptsOf } from '../state/card.js'
+import { normalizeBook, parseJsonCard, parsePngCard, regexScriptsOf, applyCharacterPatch, cardToStJson, createBlankCard, embedCardInPng } from '../state/card.js'
 import { parseLorebook } from '../state/lorebook.js'
 import { MemoryStore } from '../state/memory.js'
 import { Wal } from '../state/wal.js'
@@ -36,6 +36,8 @@ export interface Persona {
   description: string
   /** 头像文件名（personas/<id>.png），无则 null。 */
   avatar: string | null
+  /** 挂接的世界书库文件名；空/缺省 = 无人设书。 */
+  lorebookId?: string | null
 }
 
 interface WorkspaceHandle {
@@ -217,6 +219,69 @@ export class TavernState {
     await handle.fs.writeText('card.json', JSON.stringify(cardJson, null, 2) + '\n')
     this.bumpAssetRev(`charlore:${cardId}`)
     return { name: book.name ?? charWs.card.name, entryCount: book.entries.length }
+  }
+
+  async saveCharacter(
+    cardId: string,
+    patch: Parameters<typeof applyCharacterPatch>[1],
+  ): Promise<{ cardId: string; name: string }> {
+    const charWs = await this.loadCharacter(cardId)
+    if (!charWs) throw new Error(`角色 ${cardId} 不存在`)
+    if (patch.name !== undefined && !patch.name.trim()) throw new Error('角色名不能为空')
+    const next = applyCharacterPatch(charWs.card, patch)
+    const handle = await this.workspace(cardId)
+    const { pngBytes: _png, ...cardJson } = next
+    await handle.fs.writeText('card.json', JSON.stringify(cardJson, null, 2) + '\n')
+    this.bumpAssetRev(`card:${cardId}`)
+    return { cardId, name: next.name }
+  }
+
+  async createCharacter(name: string): Promise<CharacterWorkspace> {
+    const card = createBlankCard(name)
+    const ws = await importCardToWorkspace(this.paths.characters, card)
+    const handle = await this.workspace(ws.cardId)
+    await rebuildIndex(handle.fs, estimateTokens)
+    this.bumpAssetRev(`card:${ws.cardId}`)
+    return ws
+  }
+
+  async exportCharacter(cardId: string): Promise<{ json: unknown; pngBase64: string; name: string }> {
+    const charWs = await this.loadCharacter(cardId)
+    if (!charWs) throw new Error(`角色 ${cardId} 不存在`)
+    const json = cardToStJson(charWs.card)
+    const handle = await this.workspace(cardId)
+    const png = await handle.fs.readBytes('card.png')
+    const embedded = embedCardInPng(png, json, charWs.card.spec)
+    return { json, pngBase64: Buffer.from(embedded).toString('base64'), name: charWs.card.name }
+  }
+
+  async getJournal(cardId: string): Promise<string> {
+    const handle = await this.workspace(cardId)
+    return (await handle.fs.readText('journal.md')) ?? ''
+  }
+
+  async saveJournal(cardId: string, text: string): Promise<void> {
+    const handle = await this.workspace(cardId)
+    await handle.fs.writeText('journal.md', text)
+    await rebuildIndex(handle.fs, estimateTokens)
+  }
+
+  async getChatLorebook(cardId: string): Promise<unknown> {
+    const handle = await this.workspace(cardId)
+    const raw = await handle.fs.readText('assets/chat-lorebook.json')
+    if (raw === null) return { entries: {} }
+    try {
+      return JSON.parse(raw) as unknown
+    } catch {
+      return { entries: {} }
+    }
+  }
+
+  async saveChatLorebook(cardId: string, json: unknown): Promise<void> {
+    parseLorebook(json, { source: 'chat', sourceRef: 'chat-lorebook' })
+    const handle = await this.workspace(cardId)
+    await handle.fs.writeText('assets/chat-lorebook.json', JSON.stringify(json, null, 2) + '\n')
+    this.bumpAssetRev(`chatlore:${cardId}`)
   }
 
   // ── 世界书库 ─────────────────────────────────────────────────────────────
@@ -442,7 +507,7 @@ export class TavernState {
    * standing 指纹的资产修订标记（稳定顺序）：绑定预设 + 全局世界书 + 主世界书（库书或卡内嵌书）。
    * 编辑/删除经本类写方法 bump；运行期绕开 TavernState 手改文件不捕获（standingPins 进程内，重启即清）。
    */
-  standingRevTags(binding: SessionBinding): string[] {
+  standingRevTags(binding: SessionBinding, extra?: { personaLorebookId?: string | null }): string[] {
     const presetKey = `preset:${binding.presetId ?? ''}`
     const tags = [`${presetKey}=${this.assetRevs.get(presetKey) ?? 0}`]
     for (const id of binding.lorebookIds) {
@@ -451,6 +516,12 @@ export class TavernState {
     }
     const charKey = binding.characterLorebookId ? `lore:${binding.characterLorebookId}` : `charlore:${binding.cardId}`
     tags.push(`${charKey}=${this.assetRevs.get(charKey) ?? 0}`)
+    tags.push(`card:${binding.cardId}=${this.assetRevs.get(`card:${binding.cardId}`) ?? 0}`)
+    tags.push(`chatlore:${binding.cardId}=${this.assetRevs.get(`chatlore:${binding.cardId}`) ?? 0}`)
+    if (extra?.personaLorebookId) {
+      const key = `lore:${extra.personaLorebookId}`
+      tags.push(`${key}=${this.assetRevs.get(key) ?? 0}`)
+    }
     return tags
   }
 

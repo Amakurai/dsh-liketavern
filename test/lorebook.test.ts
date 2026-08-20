@@ -37,6 +37,8 @@ const NATIVE_MAP = {
       cooldown: null,
       delay: 0,
       group: 'g1',
+      groupWeight: 80,
+      groupOverride: true,
       automationId: 'auto1',
     },
     '7': {
@@ -83,6 +85,8 @@ describe('parseLorebook：原生 WI 对象 map', () => {
     expect(e.sticky).toBe(2)
     expect(e.delay).toBe(0)
     expect(e.group).toBe('g1')
+    expect(e.groupWeight).toBe(80)
+    expect(e.groupOverride).toBe(true)
     expect(e.automationId).toBe('auto1')
   })
 
@@ -148,6 +152,8 @@ describe('parseLorebook：character_book 条目', () => {
           cooldown: 1,
           delay: 0,
           group: 'g',
+          group_weight: 40,
+          group_override: true,
           automation_id: 'a',
           ignore_budget: true,
         },
@@ -180,6 +186,8 @@ describe('parseLorebook：character_book 条目', () => {
     expect(e.sticky).toBe(3)
     expect(e.cooldown).toBe(1)
     expect(e.group).toBe('g')
+    expect(e.groupWeight).toBe(40)
+    expect(e.groupOverride).toBe(true)
     expect(e.automationId).toBe('a')
     expect(e.ignoreBudget).toBe(true)
     expect(e.selective).toBe(true)
@@ -219,7 +227,11 @@ describe('exportLorebook：ST 原生形态与往返', () => {
     expect(e0.disable).toBe(false)
     expect(e0.scanDepth).toBeNull()
     expect(e0.selectiveLogic).toBe(2)
+    expect(e0.groupWeight).toBe(80)
+    expect(e0.groupOverride).toBe(true)
     expect(exported.entries['7']!.disable).toBe(true)
+    expect(exported.entries['7']!.groupWeight).toBe(100)
+    expect(exported.entries['7']!.groupOverride).toBe(false)
   })
 
   it('parse(export(parse(x))) 深相等（往返无损）', () => {

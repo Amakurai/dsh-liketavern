@@ -18,6 +18,11 @@ export interface MacroContext {
     /** 额外变量（如 time/date 已由调用方给定时）。 */
     vars?: Readonly<Record<string, string>>;
     /**
+     * {{random}} / {{pick}} 的随机源。缺省 Math.random。
+     * 同一 turn 多步组装应传入同一种子生成的新流，避免每步重抽。
+     */
+    random?: () => number;
+    /**
      * 会话级变量表（{{setvar}}/{{getvar}}）。一次 assemble 内共享、可变。
      * 未提供时 expandMacros 自建临时表（单次调用内 set+get 仍生效）。
      */
@@ -139,8 +144,12 @@ export interface WorldInfoEntry {
     delay: number | null;
     /** 预算耗尽时不被丢弃（对齐 SillyTavern ignoreBudget）。 */
     ignoreBudget: boolean;
-    /** 二期字段，保留但引擎不消费。 */
+    /** 同组只活一条（空串 = 不分组）。sticky 延续占用组时，同组新命中被丢掉。 */
     group: string;
+    /** 组内加权随机的权重；默认 100。 */
+    groupWeight: number;
+    /** 组内优先：本条命中时压过同组无 override 的条目。 */
+    groupOverride: boolean;
     automationId: string;
     /** delta 层专有：变化类型与指向原书条目的 uid。 */
     deltaType?: 'update' | 'add' | 'invalidate';
@@ -165,6 +174,8 @@ export interface WorldInfoGlobalSettings {
     overflowWarning: boolean;
     /** 多来源合并策略：0=Sorted Evenly 1=Character Lore First 2=Global Lore First（出厂默认 1，对齐源码）。 */
     characterStrategy: 0 | 1 | 2;
+    /** 同组按命中键数挑选（否则按 groupWeight 加权随机）。 */
+    useGroupScoring: boolean;
 }
 export declare const DEFAULT_WI_SETTINGS: WorldInfoGlobalSettings;
 /** 定时效果状态（随会话持久化；swipe/回退时经事务层回滚）。 */
@@ -183,7 +194,7 @@ export interface WIActivation {
     recursionLevel: number;
 }
 export interface WILogEntry {
-    kind: 'activated' | 'probability-skip' | 'budget-trim' | 'cooldown-skip' | 'delay-skip' | 'disabled' | 'recursion-stop' | 'budget-overflow';
+    kind: 'activated' | 'probability-skip' | 'budget-trim' | 'cooldown-skip' | 'delay-skip' | 'disabled' | 'recursion-stop' | 'budget-overflow' | 'group-skip';
     entryKey: string;
     detail: string;
 }
@@ -279,9 +290,20 @@ export interface CharacterCard {
     characterBook: LorebookFile | null;
     regexScripts: CardRegexScript[];
     extensions: Record<string, unknown>;
+    /**
+     * 角色卡 extensions.depth_prompt：按 depth 插入历史（预览按 ST 插位；
+     * live 不能改会话日志，并入 turnContext）。
+     */
+    depthPrompt: DepthPrompt | null;
     /** 解析自 PNG 时为提取出的原始 PNG 字节（头像来源），JSON 导入时为 null。 */
     pngBytes: Uint8Array | null;
     raw: unknown;
+}
+/** V2 卡 extensions.depth_prompt。 */
+export interface DepthPrompt {
+    prompt: string;
+    depth: number;
+    role: ChatRole;
 }
 export interface MemoryEntry {
     id: string;

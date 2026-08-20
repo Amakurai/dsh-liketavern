@@ -32,6 +32,36 @@ const METHODS: Record<string, { req: z.ZodTypeAny; value: z.ZodTypeAny; summary:
   },
   deleteCharacter: { req: z.object({ ...cardIdField }), value: anyValue, summary: '删除角色卡工作区' },
   getCharacterDetail: { req: z.object({ ...cardIdField }), value: anyValue, summary: '角色卡详情（归一化卡 + 开场白列表）' },
+  saveCharacter: {
+    req: z.object({
+      ...cardIdField,
+      name: z.string().optional(),
+      description: z.string().optional(),
+      personality: z.string().optional(),
+      scenario: z.string().optional(),
+      firstMes: z.string().optional(),
+      alternateGreetings: z.array(z.string()).optional(),
+      mesExample: z.string().optional(),
+      systemPrompt: z.string().optional(),
+      postHistoryInstructions: z.string().optional(),
+      creatorNotes: z.string().optional(),
+      creator: z.string().optional(),
+      characterVersion: z.string().optional(),
+      tags: z.array(z.string()).optional(),
+      depthPrompt: z
+        .object({
+          prompt: z.string(),
+          depth: z.number(),
+          role: z.enum(['system', 'user', 'assistant']),
+        })
+        .nullable()
+        .optional(),
+    }),
+    value: anyValue,
+    summary: '保存角色卡正文（不改 cardId）',
+  },
+  createCharacter: { req: z.object({ name: z.string().min(1) }), value: anyValue, summary: '新建空白角色卡' },
+  exportCharacter: { req: z.object({ ...cardIdField }), value: anyValue, summary: '导出角色卡 JSON 与 PNG' },
   // 预设
   listPresets: { req: z.object({}), value: anyValue, summary: '列出提示词预设' },
   importPreset: { req: z.object({ name: z.string().min(1), json: anyValue }), value: anyValue, summary: '导入 SillyTavern 预设 JSON' },
@@ -51,6 +81,10 @@ const METHODS: Record<string, { req: z.ZodTypeAny; value: z.ZodTypeAny; summary:
     summary: '保存角色卡内嵌世界书',
   },
   deleteEmbeddedLorebook: { req: z.object({ ...cardIdField }), value: anyValue, summary: '删除角色卡内嵌世界书（保留角色卡）' },
+  getChatLorebook: { req: z.object({ ...cardIdField }), value: anyValue, summary: '读取会话世界书' },
+  saveChatLorebook: { req: z.object({ ...cardIdField, json: anyValue }), value: anyValue, summary: '保存会话世界书' },
+  getJournal: { req: z.object({ ...cardIdField }), value: anyValue, summary: '读取角色笔记 journal.md' },
+  saveJournal: { req: z.object({ ...cardIdField, text: z.string() }), value: anyValue, summary: '保存角色笔记 journal.md' },
   // 人设
   listPersonas: { req: z.object({}), value: anyValue, summary: '列出人设' },
   savePersona: { req: z.object({ persona: anyValue }), value: anyValue, summary: '保存人设' },
@@ -118,6 +152,18 @@ const METHODS: Record<string, { req: z.ZodTypeAny; value: z.ZodTypeAny; summary:
   // 世界状态
   getWorldDeltas: { req: z.object({ ...cardIdField }), value: anyValue, summary: '列出世界状态变化层' },
   revokeWorldDelta: { req: z.object({ ...cardIdField, id: z.string().min(1) }), value: anyValue, summary: '撤销一条变化' },
+  addWorldDelta: {
+    req: z.object({
+      ...cardIdField,
+      type: z.enum(['add', 'update', 'invalidate']),
+      content: z.string().min(1),
+      ref: z.string().nullable().optional(),
+      keys: z.array(z.string()).optional(),
+      order: z.number().optional(),
+    }),
+    value: anyValue,
+    summary: '手动新增一条世界状态',
+  },
   exportMergedLorebook: { req: z.object({ ...cardIdField }), value: anyValue, summary: '导出合并变化层后的世界书' },
   // 调试
   getTriggerLog: { req: z.object({ ...sessionIdField }), value: anyValue, summary: '最近一次组装的触发日志' },

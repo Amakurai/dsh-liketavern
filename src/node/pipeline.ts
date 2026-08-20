@@ -11,8 +11,9 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { LlmRuntime, Message } from '@deepseek-ai/dsh-llm'
 import { assemblePrompt, defaultPreset, type AssembledPrompt } from '../core/assemble.js'
 import { isSyntheticUserText } from '../core/dshPrompt.js'
+import { createTurnRandom, hashToSeed } from '../core/macros.js'
 import { memorySearchOptions, selectMemoryBodies } from '../core/memoryRetrieval.js'
-import { estimateTokens } from '../core/tokenize.js'
+import { clipToTokenBudget, estimateTokens } from '../core/tokenize.js'
 import type { ChatMessage, MacroContext, WIEngineResult, WorldDelta, WorldInfoEntry } from '../core/types.js'
 import { EMPTY_TIMER_STATE } from '../core/types.js'
 import { evaluateWorldInfo } from '../core/worldbook.js'
@@ -51,6 +52,8 @@ export interface PipelineResult {
   /** 当前 {{user}} 展示名；改名后须打穿 standing 钉死。 */
   userName: string
   personaDescription: string
+  personaLorebookId: string | null
+  wiBudget: { limit: number; used: number; overflowed: boolean }
 }
 
 /** deriveMessages 拍平：只取 text 块拼成纯文本；空消息丢弃。 */
@@ -105,6 +108,11 @@ export async function loadBoundLoreEntries(state: TavernState, binding: NonNulla
       // 坏文件跳过
     }
   }
+  // 人设世界书
+  const persona = await state.resolvePersona(binding.personaId)
+  if (persona?.lorebookId) {
+    groups.push(await state.loadLorebookEntries(persona.lorebookId, 'persona'))
+  }
 
   const base = groups.flat()
   // 变化层：ref 的 order 解析先查 character 条目，再查其余
@@ -146,11 +154,16 @@ export async function runTavernPipeline(input: PipelineInput): Promise<PipelineR
     ...pendingFresh.map((content) => ({ role: 'user' as const, content, name: userName })),
   ]
   const lastUserMessage = pendingFresh.at(-1) ?? [...history].reverse().find((m) => m.role === 'user')?.content ?? ''
-  const macroCtx: MacroContext = { char: card.name, user: userName, lastUserMessage }
-
   const config = state.config
   const contextWindow = await resolveContextWindow(input)
   const turn = state.currentTurns.get(sessionId) ?? -1
+  const turnSeed = hashToSeed(`${sessionId}:${turn}`)
+  const macroCtx: MacroContext = {
+    char: card.name,
+    user: userName,
+    lastUserMessage,
+    random: createTurnRandom(turnSeed ^ 0x9e3779b9),
+  }
 
   // ── WI / 记忆 / 变化层：每 turn 评估一次并缓存 ──
   let wi: WIEngineResult
@@ -172,6 +185,7 @@ export async function runTavernPipeline(input: PipelineInput): Promise<PipelineR
       contextWindowTokens: contextWindow,
       reservedTokens,
       estimateTokens,
+      random: createTurnRandom(turnSeed),
       macroCtx: { char: card.name, user: userName },
     })
     if (input.mode === 'live') {
@@ -194,6 +208,12 @@ export async function runTavernPipeline(input: PipelineInput): Promise<PipelineR
     state.wiCache.set(sessionId, { turn, wi, memories, deltas })
   }
 
+  let journalText = ''
+  if (binding.injectJournal) {
+    const rawJournal = await ws.fs.readText('journal.md')
+    if (rawJournal?.trim()) journalText = clipToTokenBudget(rawJournal, 800).text
+  }
+
   const assembled = assemblePrompt({
     preset,
     card,
@@ -202,6 +222,8 @@ export async function runTavernPipeline(input: PipelineInput): Promise<PipelineR
     wi,
     memories,
     worldDeltas: deltas,
+    authorNote: binding.authorNote ?? '',
+    journalText,
     macroCtx,
     regexRules: await state.rulesFor(binding),
     estimateTokens,
@@ -223,6 +245,8 @@ export async function runTavernPipeline(input: PipelineInput): Promise<PipelineR
     logLines,
     userName,
     personaDescription: persona?.description ?? '',
+    personaLorebookId: persona?.lorebookId ?? null,
+    wiBudget: wi.budget,
   }
 }
 

@@ -39,6 +39,33 @@ export declare class TavernService extends TypertRemoteService {
     getCharacterDetail(request: {
         cardId: string;
     }): Promise<unknown>;
+    saveCharacter(request: {
+        cardId: string;
+        name?: string;
+        description?: string;
+        personality?: string;
+        scenario?: string;
+        firstMes?: string;
+        alternateGreetings?: string[];
+        mesExample?: string;
+        systemPrompt?: string;
+        postHistoryInstructions?: string;
+        creatorNotes?: string;
+        creator?: string;
+        characterVersion?: string;
+        tags?: string[];
+        depthPrompt?: {
+            prompt: string;
+            depth: number;
+            role: 'system' | 'user' | 'assistant';
+        } | null;
+    }): Promise<unknown>;
+    createCharacter(request: {
+        name: string;
+    }): Promise<unknown>;
+    exportCharacter(request: {
+        cardId: string;
+    }): Promise<unknown>;
     listPresets(_request: Record<string, never>): Promise<unknown>;
     importPreset(request: {
         name: string;
@@ -77,6 +104,20 @@ export declare class TavernService extends TypertRemoteService {
     }): Promise<unknown>;
     deleteEmbeddedLorebook(request: {
         cardId: string;
+    }): Promise<unknown>;
+    getChatLorebook(request: {
+        cardId: string;
+    }): Promise<unknown>;
+    saveChatLorebook(request: {
+        cardId: string;
+        json: unknown;
+    }): Promise<unknown>;
+    getJournal(request: {
+        cardId: string;
+    }): Promise<unknown>;
+    saveJournal(request: {
+        cardId: string;
+        text: string;
     }): Promise<unknown>;
     listPersonas(_request: Record<string, never>): Promise<unknown>;
     savePersona(request: {
@@ -154,6 +195,14 @@ export declare class TavernService extends TypertRemoteService {
     revokeWorldDelta(request: {
         cardId: string;
         id: string;
+    }): Promise<unknown>;
+    addWorldDelta(request: {
+        cardId: string;
+        type: 'add' | 'update' | 'invalidate';
+        content: string;
+        ref?: string | null;
+        keys?: string[];
+        order?: number;
     }): Promise<unknown>;
     exportMergedLorebook(request: {
         cardId: string;

@@ -66,9 +66,11 @@ src/
 | --- | --- |
 | V2 核心字段（description / personality / scenario / first_mes / alternate_greetings / mes_example / system_prompt / post_history_instructions） | 参与组装 |
 | creator_notes / tags / creator / character_version | 只展示 |
-| character_book、regex_scripts、世界书 entries | 导入并实现引擎；group / automation_id 保留不消费 |
+| character_book、regex_scripts、世界书 entries | 导入并实现引擎；inclusion group 一组只活一条；automation_id 保留不消费 |
+| `extensions.depth_prompt` | 预览按深度插历史；live 并入本轮 turn |
+| PNG tEXt / zTXt / iTXt（chara / ccv3） | 导入；导出写 tEXt |
 | 向量匹配 | 不做，语义召回走记忆层 BM25 |
-| `{{char}}` / `{{user}}` / `{{outlet}}` / `{{trim}}` / `{{time}}` 等 | 组装时展开 |
+| `{{char}}` / `{{user}}` / `{{outlet}}` / `{{trim}}` / `{{time}}` / `{{random}}` / `{{pick}}` | 组装时展开（random/pick 本轮复用掷骰，不进 standing） |
 | `{{setvar}}` / `{{getvar}}` / `{{//}}` | 组装内预处理，不落盘，没有 if / dice / STscript |
 | temperature / maxTokens / stop / reasoningEffort | 透传（思考关 → `off`） |
 | top_p / presence_penalty / frequency_penalty | 平台送不到模型 |

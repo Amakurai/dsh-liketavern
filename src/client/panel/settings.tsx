@@ -21,6 +21,7 @@ export function SettingsSection(props: { remote: TavernRemote }) {
   const toDraft = (settings: TavernSettings): TavernSettings => ({
     ...structuredClone(settings),
     defaults: { ...EMPTY_SESSION_DEFAULTS, ...settings.defaults },
+    worldInfo: { ...settings.worldInfo, useGroupScoring: settings.worldInfo.useGroupScoring ?? false },
   })
 
   useEffect(() => {
@@ -220,6 +221,7 @@ export function SettingsSection(props: { remote: TavernRemote }) {
             ['matchWholeWords', '整词匹配', '对中文不友好，建议关闭。'],
             ['includeNames', '扫描计入消息名前缀', ''],
             ['overflowWarning', '预算溢出告警', ''],
+            ['useGroupScoring', '组内按命中键数挑选', '开启后同组按命中关键词数选一条；关闭则按组权重随机。'],
           ] as const
         ).map(([key, title, description]) => (
           <SettingsRow key={key} title={title} description={description || undefined}>

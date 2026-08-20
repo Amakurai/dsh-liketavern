@@ -144,6 +144,8 @@ function parseNativeEntry(
     delay: toNumOrNull(raw.delay),
     ignoreBudget: toBool(raw.ignoreBudget, false),
     group: toStr(raw.group),
+    groupWeight: toNum(raw.groupWeight, 100),
+    groupOverride: toBool(raw.groupOverride, false),
     automationId: toStr(raw.automationId),
   }
 }
@@ -198,6 +200,8 @@ function parseCharacterBookEntry(
     delay: toNumOrNull(ext.delay),
     ignoreBudget: toBool(ext.ignore_budget, false),
     group: toStr(ext.group),
+    groupWeight: toNum(ext.group_weight !== undefined ? ext.group_weight : ext.groupWeight, 100),
+    groupOverride: toBool(ext.group_override !== undefined ? ext.group_override : ext.groupOverride, false),
     automationId: toStr(ext.automation_id),
   }
 }
@@ -291,6 +295,8 @@ export function exportLorebook(entries: WorldInfoEntry[], name: string): unknown
       delay: e.delay,
       ignoreBudget: e.ignoreBudget,
       group: e.group,
+      groupWeight: e.groupWeight,
+      groupOverride: e.groupOverride,
       automationId: e.automationId,
     }
   }
@@ -353,6 +359,8 @@ export function mergeDeltasForExport(originals: WorldInfoEntry[], deltas: WorldD
         delay: null,
         ignoreBudget: false,
         group: '',
+        groupWeight: 100,
+        groupOverride: false,
         automationId: '',
       }
       result.push(entry)

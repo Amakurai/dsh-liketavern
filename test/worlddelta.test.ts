@@ -148,6 +148,8 @@ describe('WorldDeltaStore', () => {
       ignoreBudget: false,
       group: '',
       automationId: '',
+      groupWeight: 100,
+      groupOverride: false,
       comment: '变化层 add',
       deltaType: 'add',
       deltaRef: null,

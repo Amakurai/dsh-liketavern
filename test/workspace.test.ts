@@ -56,6 +56,7 @@ function makeCard(overrides: Partial<CharacterCard> = {}): CharacterCard {
     extensions: {},
     pngBytes: new Uint8Array([1, 2, 3, 254, 255]),
     raw: { spec: 'chara_card_v2', data: { name: '测试角色 Test' } },
+    depthPrompt: null,
     ...overrides,
   }
 }

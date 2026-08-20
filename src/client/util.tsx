@@ -444,6 +444,19 @@ export function downloadJson(filename: string, json: unknown): void {
   setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
+export function downloadBase64(filename: string, base64: string, mime: string): void {
+  const binary = atob(base64)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+  const blob = new Blob([bytes], { type: mime })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
 /** primitives Modal 的薄封装（统一中文关闭文案）；width 档：sm 380（默认）/ md 480 / lg 680。 */
 export function Dialog(props: {
   open: boolean

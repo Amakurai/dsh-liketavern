@@ -46,6 +46,8 @@ function makeEntry(partial: Partial<WorldInfoEntry> & { key: string }): WorldInf
     delay: null,
     ignoreBudget: false,
     group: '',
+    groupWeight: 100,
+    groupOverride: false,
     automationId: '',
     ...partial,
   }

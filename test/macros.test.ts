@@ -2,10 +2,10 @@
  * 宏展开器单测。
  * 覆盖：角色/用户宏（含大小写不敏感）、身份宏（展示/扫描用）、outlet 命中/未命中/不嵌套、{{trim}} 移除、
  * time/date 经 vars 覆盖、未知宏保留原样、{{setvar}}/{{getvar}}/{{//}} 预处理、
- * 由内向外展开嵌套宏。
+ * {{random}}/{{pick}} 本轮掷骰、由内向外展开嵌套宏。
  */
 import { describe, expect, it, vi } from 'vitest'
-import { expandIdentityMacros, expandMacros, hasUnevaluatedScript, type MacroContext } from '../src/core/macros.js'
+import { expandIdentityMacros, expandMacros, hasTurnLocalMacros, hasUnevaluatedScript, createTurnRandom, type MacroContext } from '../src/core/macros.js'
 
 const ctx: MacroContext = { char: 'Alice', user: 'Bob' }
 
@@ -138,5 +138,33 @@ describe('hasUnevaluatedScript', () => {
   it('识别 EJS 开标签，不误伤普通百分号', () => {
     expect(hasUnevaluatedScript('<%_ const s = getvar("stat_data") _%>')).toBe(true)
     expect(hasUnevaluatedScript('成功率 80%')).toBe(false)
+  })
+})
+
+describe('random / pick', () => {
+  it('{{random::A::B}} 与 {{pick::X,Y}} 用传入 random 选一项', () => {
+    let i = 0
+    const seq = [0, 0.99]
+    const c: MacroContext = { ...ctx, random: () => seq[i++]! }
+    expect(expandMacros('{{random::A::B}}', c)).toBe('A')
+    expect(expandMacros('{{pick::X,Y}}', c)).toBe('Y')
+  })
+
+  it('{{random:1,10}} 数值闭区间', () => {
+    expect(expandMacros('{{random:1,10}}', { ...ctx, random: () => 0 })).toBe('1')
+    expect(expandMacros('{{random:1,10}}', { ...ctx, random: () => 0.99 })).toBe('10')
+  })
+
+  it('同一种子两份流各自从同样起点掷', () => {
+    const left = expandMacros('{{pick::X,Y,Z}} {{pick::X,Y,Z}}', { ...ctx, random: createTurnRandom(42) })
+    const right = expandMacros('{{pick::X,Y,Z}} {{pick::X,Y,Z}}', { ...ctx, random: createTurnRandom(42) })
+    expect(left).toBe(right)
+    expect(left).toMatch(/^(X|Y|Z) (X|Y|Z)$/)
+  })
+
+  it('hasTurnLocalMacros 识别 random/pick，不把 {{char}} 当本轮宏', () => {
+    expect(hasTurnLocalMacros('{{random::A::B}}')).toBe(true)
+    expect(hasTurnLocalMacros('{{pick::A,B}}')).toBe(true)
+    expect(hasTurnLocalMacros('{{char}} 在场')).toBe(false)
   })
 })

@@ -7,9 +7,12 @@ import { BINDING_CHANGED_EVENT } from './actions.js'
 import { isTavernSession, type UseSessions } from './mode.js'
 import { openChildSession } from './openChild.js'
 import { TavernSeatChip } from './seatChip.js'
+import type { WorldInfoEntry } from '../core/types.js'
+import { parseLorebook } from '../state/lorebook.js'
+import { LorebookEditor } from './panel/lorebookEditor.js'
 import type { CharacterSummary, Persona, PresetSummary, SessionBinding, TavernRemote, TavernSettings } from './types.js'
 import { EMPTY_SESSION_DEFAULTS } from './types.js'
-import { Btn, ConfirmDialog, Dialog, Err, Field, Muted, Select, Skeleton, errOf, useLoader, useToast } from './util.js'
+import { Btn, ConfirmDialog, Dialog, Err, Field, Muted, Select, Skeleton, Toggle, errOf, useLoader, useToast } from './util.js'
 
 export function defaultBinding(sessionId: string, cardId: string, defaults?: TavernSettings['defaults']): SessionBinding {
   const d = defaults ?? EMPTY_SESSION_DEFAULTS
@@ -22,19 +25,80 @@ export function defaultBinding(sessionId: string, cardId: string, defaults?: Tav
     characterLorebookId: d.characterLorebookId || null,
     interactiveCards: null,
     greetingIndex: 0,
+    authorNote: '',
+    injectJournal: false,
     createdAt: new Date().toISOString(),
   }
 }
 
 export async function bindingFromDefaults(remote: TavernRemote, sessionId: string, cardId: string): Promise<SessionBinding> {
   const r = await remote.getSettings({})
-  return defaultBinding(sessionId, cardId, r.ok ? r.value.settings.defaults : undefined)
+  // 读取设置失败时不能静默套用空默认值，否则一次暂时性的 RPC 故障会覆盖用户原有的绑定配置。
+  if (!r.ok) throw new Error(r.error.message)
+  return defaultBinding(sessionId, cardId, r.value.settings.defaults)
 }
 
 function PreDialog(props: { title: string; text: string; onClose: () => void }) {
   return (
     <Dialog open title={props.title} onClose={props.onClose} width="lg">
       <pre className="dsh-tavern-modalPre">{props.text}</pre>
+    </Dialog>
+  )
+}
+
+type PromptPreview = {
+  standing: string
+  turnContext: string
+  system: string
+  messages: unknown[]
+  logLines: string[]
+  worldInfoBudget: { limit: number; used: number; overflowed: boolean }
+  assembleBudget: { tokensBefore: number; tokensAfter: number; trimmedSections: string[] }
+}
+
+function PromptPreviewDialog(props: { data: PromptPreview; onClose: () => void }) {
+  const { data } = props
+  const [tab, setTab] = useState<'standing' | 'turn' | 'full' | 'log'>('standing')
+  const wi = data.worldInfoBudget
+  const assemble = data.assembleBudget
+  const body =
+    tab === 'standing'
+      ? data.standing || '（空）'
+      : tab === 'turn'
+        ? data.turnContext || '（空）'
+        : tab === 'log'
+          ? data.logLines.join('\n') || '（无触发日志）'
+          : `=== system ===\n${data.system}\n\n=== messages ===\n${data.messages.map((m) => JSON.stringify(m)).join('\n\n')}`
+  return (
+    <Dialog open title="提示词预览" onClose={props.onClose} width="lg">
+      <Muted>
+        世界书预算 {wi.used}/{wi.limit}
+        {wi.overflowed ? ' · 已溢出' : ''}
+        {' · '}
+        组装 {assemble.tokensAfter}/{assemble.tokensBefore} token
+        {assemble.trimmedSections.length > 0 ? ` · 裁剪 ${assemble.trimmedSections.join('、')}` : ''}
+      </Muted>
+      <div className="dsh-tavern-filters" style={{ margin: '8px 0' }}>
+        {(
+          [
+            ['standing', 'standing'],
+            ['turn', '本轮 turn'],
+            ['full', '完整序列'],
+            ['log', '触发日志'],
+          ] as const
+        ).map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            className="dsh-tavern-chip"
+            data-active={tab === id ? 'true' : 'false'}
+            onClick={() => setTab(id)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      <pre className="dsh-tavern-modalPre">{body}</pre>
     </Dialog>
   )
 }
@@ -82,6 +146,8 @@ export function TavernHeaderChip(props: {
   const [error, setError] = useState<string | null>(null)
   const toast = useToast()
   const [view, setView] = useState<{ title: string; text: string } | null>(null)
+  const [previewData, setPreviewData] = useState<PromptPreview | null>(null)
+  const [chatLore, setChatLore] = useState<{ cardId: string; entries: WorldInfoEntry[] } | null>(null)
   const [confirmUnbind, setConfirmUnbind] = useState(false)
   const [unbindBusy, setUnbindBusy] = useState(false)
   /** 无绑定时选择角色会异步读取 defaults；序号保证只有最后一次选择能落到草稿。 */
@@ -206,12 +272,25 @@ export function TavernHeaderChip(props: {
   const preview = async () => {
     const r = await remote.previewPrompt({ sessionId })
     if (!r.ok) return setError(r.error.message)
-    const { system, messages, logLines } = r.value
-    const body = messages.map((m) => JSON.stringify(m)).join('\n\n')
-    setView({
-      title: '提示词预览',
-      text: `=== system ===\n${system}\n\n=== messages ===\n${body}\n\n=== 触发日志 ===\n${logLines.join('\n')}`,
-    })
+    setPreviewData(r.value)
+  }
+
+  const openChatLore = async () => {
+    const cardId = draft?.cardId
+    if (!cardId) return
+    const r = await remote.getChatLorebook({ cardId })
+    if (!r.ok) {
+      setError(r.error.message)
+      return
+    }
+    try {
+      setChatLore({
+        cardId,
+        entries: parseLorebook(r.value.json, { source: 'chat', sourceRef: 'chat-lorebook' }),
+      })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    }
   }
 
   return (
@@ -311,8 +390,27 @@ export function TavernHeaderChip(props: {
                     ))}
                     {lists.lorebooks.length === 0 && <Muted>库中暂无世界书</Muted>}
                   </div>
+                  <div className="dsh-tavern-field" style={{ marginBottom: 8 }}>
+                    <span className="dsh-tavern-fieldLabel">作者注释（本会话，进本轮 turn）</span>
+                    <textarea
+                      className="dsh-tavern-input dsh-tavern-textarea"
+                      style={{ minHeight: 64 }}
+                      value={draft.authorNote ?? ''}
+                      onChange={(e) => setDraft({ ...draft, authorNote: e.target.value })}
+                    />
+                  </div>
+                  <div className="dsh-tavern-inlineChecks" style={{ marginBottom: 8 }}>
+                    <label>
+                      <Toggle
+                        checked={draft.injectJournal === true}
+                        onChange={(injectJournal) => setDraft({ ...draft, injectJournal })}
+                      />
+                      注入角色笔记 journal.md
+                    </label>
+                  </div>
                   <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
                     <Btn primary onClick={() => void saveBinding()}>保存绑定</Btn>
+                    <Btn onClick={() => void openChatLore()}>编辑本会话世界书</Btn>
                     {binding ? (
                       <Btn
                         danger
@@ -339,6 +437,21 @@ export function TavernHeaderChip(props: {
       </Dialog>
       {toast.node}
       {view && <PreDialog title={view.title} text={view.text} onClose={() => setView(null)} />}
+      {previewData && <PromptPreviewDialog data={previewData} onClose={() => setPreviewData(null)} />}
+      {chatLore && (
+        <Dialog open width="lg" title="本会话世界书" onClose={() => setChatLore(null)}>
+          <LorebookEditor
+            target={{ kind: 'chat', cardId: chatLore.cardId, name: '本会话世界书' }}
+            entries={chatLore.entries}
+            onClose={() => setChatLore(null)}
+            onSaved={() => {
+              toast.show('已保存本会话世界书')
+              setChatLore(null)
+            }}
+            save={(json) => remote.saveChatLorebook({ cardId: chatLore.cardId, json })}
+          />
+        </Dialog>
+      )}
       <ConfirmDialog
         open={confirmUnbind}
         title="解除角色绑定？"

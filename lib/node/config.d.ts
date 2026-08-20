@@ -47,6 +47,7 @@ export declare const TavernConfigSchema: z<Schemastery.ObjectS<{
         includeNames: z<boolean, boolean>;
         overflowWarning: z<boolean, boolean>;
         characterStrategy: z<0 | 1 | 2, 0 | 1 | 2>;
+        useGroupScoring: z<boolean, boolean>;
     }>, Schemastery.ObjectT<{
         scanDepth: z<number, number>;
         contextPercent: z<number, number>;
@@ -59,6 +60,7 @@ export declare const TavernConfigSchema: z<Schemastery.ObjectS<{
         includeNames: z<boolean, boolean>;
         overflowWarning: z<boolean, boolean>;
         characterStrategy: z<0 | 1 | 2, 0 | 1 | 2>;
+        useGroupScoring: z<boolean, boolean>;
     }>>;
     memory: z<Schemastery.ObjectS<{
         /** 每角色记忆条数上限，超出触发压缩。 */
@@ -164,6 +166,7 @@ export declare const TavernConfigSchema: z<Schemastery.ObjectS<{
         includeNames: z<boolean, boolean>;
         overflowWarning: z<boolean, boolean>;
         characterStrategy: z<0 | 1 | 2, 0 | 1 | 2>;
+        useGroupScoring: z<boolean, boolean>;
     }>, Schemastery.ObjectT<{
         scanDepth: z<number, number>;
         contextPercent: z<number, number>;
@@ -176,6 +179,7 @@ export declare const TavernConfigSchema: z<Schemastery.ObjectS<{
         includeNames: z<boolean, boolean>;
         overflowWarning: z<boolean, boolean>;
         characterStrategy: z<0 | 1 | 2, 0 | 1 | 2>;
+        useGroupScoring: z<boolean, boolean>;
     }>>;
     memory: z<Schemastery.ObjectS<{
         /** 每角色记忆条数上限，超出触发压缩。 */

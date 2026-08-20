@@ -66,9 +66,11 @@ Model tools (off by default): `tavern_memory_search` / `write` / `update`, `tave
 | --- | --- |
 | V2 core fields (description / personality / scenario / first_mes / alternate_greetings / mes_example / system_prompt / post_history_instructions) | Assembled |
 | creator_notes / tags / creator / character_version | Display only |
-| character_book, regex_scripts, World Info entries | Imported; engine implemented; group / automation_id stored unused |
+| character_book, regex_scripts, World Info entries | Imported; engine implemented; inclusion groups keep one entry; automation_id stored unused |
+| `extensions.depth_prompt` | Preview splices by depth; live joins this turn's context |
+| PNG tEXt / zTXt / iTXt (`chara` / `ccv3`) | Import; export writes tEXt |
 | Vector matching | Not implemented; semantic recall is BM25 memory |
-| `{{char}}` / `{{user}}` / `{{outlet}}` / `{{trim}}` / `{{time}}` | Expanded at assemble time |
+| `{{char}}` / `{{user}}` / `{{outlet}}` / `{{trim}}` / `{{time}}` / `{{random}}` / `{{pick}}` | Expanded at assemble time (`random`/`pick` are turn-local, not in standing) |
 | `{{setvar}}` / `{{getvar}}` / `{{//}}` | Preprocessed, not persisted. No if / dice / STscript |
 | temperature / maxTokens / stop / reasoningEffort | Passed through (thinking off → `off`) |
 | top_p / presence_penalty / frequency_penalty | Not delivered by the platform |

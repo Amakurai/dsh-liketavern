@@ -164,6 +164,16 @@ function parseDepthPrompt(ext: Record<string, unknown>): DepthPrompt | null {
   return { prompt, depth: Math.max(0, Math.round(depth)), role }
 }
 
+/** 工作区 card.json 是归一化卡；旧文件可能只有 extensions.depth_prompt。 */
+export function hydrateStoredCard(record: Record<string, unknown>): CharacterCard {
+  const card = { ...record, pngBytes: null } as unknown as CharacterCard
+  if (!card.depthPrompt) {
+    const ext = isRecord(card.extensions) ? card.extensions : {}
+    card.depthPrompt = parseDepthPrompt(ext)
+  }
+  return card
+}
+
 function toNum(value: unknown, fallback: number): number {
   if (typeof value === 'number' && Number.isFinite(value)) return value
   if (typeof value === 'string' && value.trim() !== '') {

@@ -375,6 +375,13 @@ export function evaluateWorldInfo(input: WIEngineInput): WIEngineResult {
   }
 
   const grouped = applyInclusionGroups(activated, settings, random, log)
+  const keptKeys = new Set(grouped.map((c) => c.entry.key))
+  for (const candidate of activated) {
+    if (keptKeys.has(candidate.entry.key)) continue
+    // 落选条目本轮才写入的 sticky/cooldown 必须清掉，否则下一轮会经 sticky 占组。
+    if (!stickyKeysAtStart.has(candidate.entry.key)) delete timer.stickyLeft[candidate.entry.key]
+    if (!cooldownKeysAtStart.has(candidate.entry.key)) delete timer.cooldownLeft[candidate.entry.key]
+  }
 
   // ── 预算截断：constant 优先 → order 从大到小 → 直接命中优先于递归 ─────────
   const rawLimit =

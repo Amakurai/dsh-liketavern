@@ -74,9 +74,9 @@ export function hashToSeed(text: string): number {
   return h >>> 0
 }
 
-function rollChoice(options: string[], random: () => number): string {
+function rollChoice(options: string[], random: () => number, numericRange: boolean): string {
   if (options.length === 0) return ''
-  if (options.length === 2 && options.every((o) => /^-?\d+$/.test(o))) {
+  if (numericRange && options.length === 2 && options.every((o) => /^-?\d+$/.test(o))) {
     const a = Number(options[0])
     const b = Number(options[1])
     const lo = Math.min(a, b)
@@ -86,12 +86,13 @@ function rollChoice(options: string[], random: () => number): string {
   return options[Math.min(options.length - 1, Math.floor(random() * options.length))]!
 }
 
-function parseChoiceMacro(inner: string): string[] | null {
+function parseChoiceMacro(inner: string): { kind: 'random' | 'pick'; options: string[] } | null {
   const match = /^(random|pick)\s*(::|:)\s*(.*)$/i.exec(inner.trim())
   if (!match) return null
+  const kind = match[1]!.toLowerCase() === 'pick' ? 'pick' : 'random'
   const rest = match[3] ?? ''
   const parts = rest.includes('::') ? rest.split('::') : rest.split(',')
-  return parts.map((s) => s.trim()).filter(Boolean)
+  return { kind, options: parts.map((s) => s.trim()).filter(Boolean) }
 }
 
 function isGetVar(inner: string): boolean {
@@ -111,7 +112,7 @@ function applyCommand(inner: string, ctx: MacroContext, clock: Record<string, st
   if (lower.startsWith('//')) return ''
 
   const choices = parseChoiceMacro(raw)
-  if (choices) return rollChoice(choices, ctx.random ?? Math.random)
+  if (choices) return rollChoice(choices.options, ctx.random ?? Math.random, choices.kind === 'random')
 
   if (lower.startsWith('outlet::')) {
     const outletName = raw.slice('outlet::'.length).trim()

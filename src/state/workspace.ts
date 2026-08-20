@@ -12,7 +12,7 @@ import { rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { compileCardRegexScripts } from '../core/regex.js'
 import type { CharacterCard } from '../core/types.js'
-import { normalizeBook } from './card.js'
+import { hydrateStoredCard, normalizeBook } from './card.js'
 import { WorkspaceFs } from './workspaceFs.js'
 
 export interface CharacterWorkspace {
@@ -178,7 +178,7 @@ export async function loadCharacter(dataRoot: string, cardId: string): Promise<C
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null
   const record = parsed as Record<string, unknown>
   // pngBytes 不持久化于 card.json（头像字节在 card.png），读回恒为 null
-  const card = { ...record, pngBytes: null } as unknown as CharacterCard
+  const card = hydrateStoredCard(record)
   // 旧导入或 card.json 缺 characterBook 时，从落盘的内嵌书补回
   if (!Array.isArray(card.characterBook?.entries) || card.characterBook.entries.length === 0) {
     const bookText = await fs.readText('assets/character-book.json')

@@ -205,6 +205,16 @@ describe('list/load/delete', () => {
     expect(await loadCharacter(charactersDir, 'bad')).toBeNull()
   })
 
+  it('loadCharacter 从 extensions.depth_prompt 补回 depthPrompt（旧 card.json）', async () => {
+    const ws = await importCard(charactersDir, makeCard())
+    const cardJson = await readJson(join(ws.root, 'card.json'))
+    delete cardJson.depthPrompt
+    cardJson.extensions = { depth_prompt: { prompt: '旧深度提示', depth: 2, role: 'user' } }
+    await writeFile(join(ws.root, 'card.json'), JSON.stringify(cardJson))
+    const loaded = await loadCharacter(charactersDir, ws.cardId)
+    expect(loaded!.card.depthPrompt).toEqual({ prompt: '旧深度提示', depth: 2, role: 'user' })
+  })
+
   it('card.json 缺 characterBook 时从 assets/character-book.json 补回', async () => {
     const ws = await importCard(charactersDir, makeCard())
     const cardJson = await readJson(join(ws.root, 'card.json'))

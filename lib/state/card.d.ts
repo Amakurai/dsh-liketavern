@@ -17,6 +17,8 @@ export declare function normalizeBook(value: unknown): LorebookFile | null;
 export declare function pickRegexScripts(json: Record<string, unknown>, data: Record<string, unknown>): CardRegexScript[];
 /** 已落盘的归一化卡也可能 regexScripts 为空，从 raw / extensions 补回。 */
 export declare function regexScriptsOf(card: CharacterCard): CardRegexScript[];
+/** 工作区 card.json 是归一化卡；旧文件可能只有 extensions.depth_prompt。 */
+export declare function hydrateStoredCard(record: Record<string, unknown>): CharacterCard;
 /**
  * 解析 PNG 角色卡：遍历 chunk 找 tEXt / zTXt / iTXt（关键字 chara 或 ccv3，同时存在时优先 ccv3），
  * 其 text 为 Base64 编码的 UTF-8 JSON。读取不校验 CRC，遇 IEND 停止。

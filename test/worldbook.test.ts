@@ -692,4 +692,16 @@ describe('inclusion group', () => {
     expect(results[1]!.activated[0]!.via).toBe('sticky')
     expect(logsOf(results[1]!, 'group-skip').map((l) => l.entryKey)).toEqual(['b'])
   })
+
+  it('同组落选条目不写入 sticky/cooldown，避免下一轮占组', () => {
+    const entries = [
+      makeEntry({ key: 'a', keys: ['x'], group: 'g', sticky: 2, cooldown: 3 }),
+      makeEntry({ key: 'b', keys: ['x'], group: 'g', sticky: 2, cooldown: 3 }),
+    ]
+    const res = run({ entries, messages: [userMsg('x')], random: () => 0 })
+    expect(activatedKeys(res)).toEqual(['a'])
+    expect(res.timerState.stickyLeft['a']).toBe(2)
+    expect(res.timerState.stickyLeft['b']).toBeUndefined()
+    expect(res.timerState.cooldownLeft['b']).toBeUndefined()
+  })
 })

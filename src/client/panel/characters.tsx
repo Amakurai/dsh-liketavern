@@ -66,7 +66,7 @@ function CharacterDetailDialog(props: { remote: TavernRemote; cardId: string; on
       personality: detail.personality,
       scenario: detail.scenario,
       firstMes: detail.firstMes,
-      alternateGreetings: detail.alternateGreetings,
+      alternateGreetings: detail.alternateGreetings.map((s) => s.trim()).filter(Boolean),
       mesExample: detail.mesExample,
       systemPrompt: detail.systemPrompt,
       postHistoryInstructions: detail.postHistoryInstructions,

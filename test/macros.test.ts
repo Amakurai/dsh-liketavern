@@ -150,9 +150,10 @@ describe('random / pick', () => {
     expect(expandMacros('{{pick::X,Y}}', c)).toBe('Y')
   })
 
-  it('{{random:1,10}} 数值闭区间', () => {
+  it('{{random:1,10}} 数值闭区间；{{pick:1,3}} 只在两项里抽，不当成 1..3', () => {
     expect(expandMacros('{{random:1,10}}', { ...ctx, random: () => 0 })).toBe('1')
     expect(expandMacros('{{random:1,10}}', { ...ctx, random: () => 0.99 })).toBe('10')
+    expect(expandMacros('{{pick:1,3}}', { ...ctx, random: () => 0.5 })).toBe('3')
   })
 
   it('同一种子两份流各自从同样起点掷', () => {

@@ -1,114 +1,91 @@
 # dsh-liketavern
 
-Chinese: [README.md](./README.md)
+[中文](./README.md) | English
 
-A dsh plugin that turns `dsh web` into a SillyTavern-style roleplay frontend: character cards, prompt presets, lorebooks, personas, regex, plus BM25 long-term memory, a world-state delta layer, and roll-backable floors (regenerate / rollback / edit). Everything sits on dsh’s agent runtime. There is no separate send path.
+A DeepSeek Harness (dsh) plugin that turns `dsh web` into a SillyTavern-style roleplay frontend.
 
-Requires dsh `0.1.0-rc.6` (same version as `@deepseek-ai/*`) and Node 24. Runtime data lives in `$DSH_HOME/dsh-tavern/`.
+Character cards (V1/V2/V3, PNG/JSON), prompt presets, lorebooks (world info), personas, regex scripts, BM25 long-term memory, a world-state delta layer, and rollback-able floor operations — all built on the dsh agent runtime instead of a separate message channel.
 
-## Differences from SillyTavern
+## Features
 
-1. **Assets are files.** Imported cards, books, and presets land in a workspace. The agent reads entries on demand instead of stuffing the whole bible into system every turn.
-2. **Multi-step loop.** A reply may retrieve, write memory, or update world state, and only then produce the spoken text. The default is still to roleplay directly.
-3. **Floors roll back.** Memory / world-state / timer writes for a floor go through a WAL and replay in reverse. dsh cannot delete session logs, so floor actions fork a child session.
-4. **Prompts use the dsh waterfall.** Stable section `tavern:standing` plus per-turn runtime context `tavern:turn`. No `complete` section over the tool prefix, and no frontend-assembled live payload.
+- **Character cards**: import/export SillyTavern V1/V2/V3 cards (PNG-embedded or JSON), multiple greetings with swipe, embedded character lorebooks, regex scripts (`regex_scripts`), and interactive cards (HTML covers) rendered in a sandboxed iframe.
+- **Prompt presets**: import ST preset JSON, assembled with Prompt Manager semantics; prompts go through dsh's system-prompt waterfall (stable sections + per-turn runtime context) — never assembled and sent from the frontend.
+- **Lorebooks**: global / character / session scopes, keyword triggering and constant entries; a "delta layer" lets the story add, update, and invalidate world-state facts.
+- **Long-term memory**: BM25 retrieval with time decay; the model can read/write it via tools, with automatic asynchronous compression during idle time when over capacity.
+- **Personas**: `{{user}}` default name and description injection.
+- **Floor transactions**: writes (memory, world state) go through a WAL (floor number + sequence); regenerate / roll back / edit = fork prefix + reverse WAL replay + continue in a child session. Branches forked at the same floor get ‹ n/m › sibling navigation.
+- **Impersonate / continue**: impersonation results are copied to the clipboard; continuing a floor doesn't touch history and just follows up.
+- **Model tools (7)**: memory search / write / update, per-entry lorebook read, world-state update, asset list / read — available to the multi-step agent loop on demand.
 
-## Layout
+## Requirements
 
-TypeScript ESM, a cordis plugin, three sides:
+- Node.js ≥ 24
+- dsh CLI `0.1.0-rc.6` installed, with `dsh web` run at least once (the first run initializes the `web` profile)
+- `pnpm` on PATH (`dsh plugin` manages profile plugin dependencies through pnpm internally)
 
-| Side | Entry | Role |
-| --- | --- | --- |
-| host | `src/index.ts` | settings namespace, data dirs, agent preset, `TavernService`, typert remote, floor WAL |
-| agent | `src/agent.ts` | standing / turn assembly, sampling and `reasoningEffort`, seven model tools, idle memory compression |
-| client | `src/client/` | settings panel, session chip, new-session hero, assistant actions and layout |
+## Installation
 
-host ↔ client contract is `src/remote.ts`. Runtime dependency is `zod` only; `@deepseek-ai/*` comes from the dsh host.
-
-```
-src/
-├── core/     pure functions: assemble, World Info, regex, macros, BM25, standing pin
-├── state/    file storage (cards / books / presets / memory / WAL / workspace)
-├── node/     host orchestration
-├── client/   React UI
-├── agent.ts  agent side
-└── remote.ts typert contract
-```
-
-## What it does
-
-- **Cards**: PNG (`tEXt` / `chara`, ccv3 first) or JSON, V1/V2/V3. Embedded lore and regex stored with the card. One workspace per card; the UI uses `card.name`.
-- **Presets**: Prompt Manager semantics. Character definition, enabled skeleton, and constant lore go into standing; keyword lore and memory go into turn. Missing `agentMemory` / `worldState` markers are inserted at runtime.
-- **World Info**: plain/regex keys, selective, recursion, sticky/cooldown/delay, probability, budget, seven insertion positions. Misses are read with `tavern_lore_read`.
-- **Regex**: input/output/prompt × assemble/send/render. Display-oriented card scripts on by default; preset scripts follow `disabled`.
-- **Memory**: BM25 + time decay, write-time dedup, idle compression of the oldest batch when over capacity.
-- **World state**: add / update / invalidate as a lorebook delta. Undo one entry, or export a new book; originals are not rewritten.
-- **Floors**: regenerate, edit user message, rollback. Prefix fork + WAL rollback + continue in the child.
-- **Covers**: HTML extracted by output/render regex draws in a `sandbox="allow-scripts"` iframe. CSP denies external scripts and fetch by default.
-
-## Prompt channels
-
-`assemblePrompt` still builds the full ST sequence for preview. The live call uses two dsh channels:
-
-| Channel | Lands in | Contents | Stability |
-| --- | --- | --- | --- |
-| standing | system section `tavern:standing` (order 210, after tool instructions) | discipline, character definition, preset skeleton, constant lore | pinned per session while the binding is unchanged |
-| turn | runtime context `tavern:turn` | playbook, keyword lore, memory, world-state, author’s note, turn macros | changes every step |
-| messages | preview only | full ST sequence, including @D insertion | live requests cannot splice the session log |
-
-`{{setvar}}` / `{{getvar}}` expand before assemble. The clock is frozen in standing. World Info and memory are evaluated once per turn; later steps still replay that snapshot.
-
-Model tools (off by default): `tavern_memory_search` / `write` / `update`, `tavern_lore_read`, `tavern_worldstate_update`, `tavern_asset_list` / `read`.
-
-## Compatibility
-
-| ST | This plugin |
-| --- | --- |
-| V2 core fields (description / personality / scenario / first_mes / alternate_greetings / mes_example / system_prompt / post_history_instructions) | Assembled |
-| creator_notes / tags / creator / character_version | Display only |
-| character_book, regex_scripts, World Info entries | Imported; engine implemented; inclusion groups keep one entry; automation_id stored unused |
-| `extensions.depth_prompt` | Preview splices by depth; live joins this turn's context |
-| PNG tEXt / zTXt / iTXt (`chara` / `ccv3`) | Import; export writes tEXt |
-| Vector matching | Not implemented; semantic recall is BM25 memory |
-| `{{char}}` / `{{user}}` / `{{outlet}}` / `{{trim}}` / `{{time}}` / `{{random}}` / `{{pick}}` | Expanded at assemble time (`random`/`pick` are turn-local, not in standing) |
-| `{{description}}` / `{{personality}}` / `{{scenario}}` / `{{persona}}` / `{{charFirstMessage}}` / `{{lastCharMessage}}` | Expanded at assemble time (`lastCharMessage` is turn-local, not in standing) |
-| `{{original}}` in card system_prompt / post_history_instructions | Expands to the preset's main / jailbreak content; slot `forbid_overrides=true` blocks the card override |
-| Preset entry `injection_trigger` | Filtered by generation type (only `normal` exists today; continue/impersonate etc. never match) |
-| Preset entry `forbid_overrides` / `extension` | Preserved across import/export |
-| Regex `trimStrings` / `trimStringsRegex` | Removed from captured group values before substitution (ST only implements trimStrings; trimStringsRegex is completed with the same semantics) |
-| `{{setvar}}` / `{{getvar}}` / `{{//}}` | Preprocessed, not persisted. No if / dice / STscript |
-| temperature / maxTokens / stop / reasoningEffort | Passed through (thinking off → `off`) |
-| top_p / presence_penalty / frequency_penalty | Not delivered by the platform |
-
-Host constraints: the session log cannot be spliced, so @D and author’s notes join the end of system in the live request; floor actions can only fork, not rewrite the source log; concurrent writes to the same card interleave.
-
-## Install
+The plugin is installed into a profile as a **bundle**. The package declares `dsh.bundle.patch` in `package.json`, so `dsh` automatically appends its patch layer to the profile's bundle list.
 
 ```bash
 dsh plugin --profile web add github:Amakurai/dsh-liketavern
+dsh web   # restart to take effect
 ```
 
-Update:
+Verify the installation:
 
 ```bash
-dsh plugin --profile web update dsh-liketavern
+dsh plugin --profile web list --depth 0
 ```
 
-Uninstall (does not delete `$DSH_HOME/dsh-tavern/`):
+Two notes (per the official docs, [Packaging and installing plugins](https://deepseek-harness.github.io/deepseek-harness/develop/basic/publish)):
+
+- **Git installs pull source, not build artifacts** — pnpm won't run your `build` for you. This repository deliberately commits the built `lib/` output, so installing straight from GitHub works and needs no pnpm `allowBuilds` authorization. Pinning a commit (`github:Amakurai/dsh-liketavern#<sha>`) is recommended so later pushes can't silently change what runs.
+- A tarball also works: the author runs `npm pack` (its `prepack` builds first), and the user runs `dsh plugin --profile web add ./dsh-liketavern-0.1.0.tgz`.
+
+Version compatibility: this package pins dsh `0.1.0-rc.6` via peerDependencies. dsh is in pre-release — after upgrading dsh, install the plugin version built for it.
+
+Runtime data (cards, memories, session bindings) lives in `$DSH_HOME/dsh-tavern/`, outside this repository.
+
+## Usage
+
+1. In dsh web, create a new session, pick "Tavern mode" in the hero area, and select a character card to bind.
+2. Manage cards, presets, lorebooks, personas, regex rules, and sampling parameters in the `dsh-tavern` settings section.
+3. In conversation, any assistant floor can be regenerated, edited, rolled back, continued, or answered by AI impersonation.
+
+## Development
 
 ```bash
-dsh plugin --profile web remove dsh-liketavern
+npm install        # install dev dependencies (public npm, exact versions)
+npm run build      # tsc compiles src/ → lib/, then esbuild bundles the client
+npm test           # vitest run: 32 files, ~360 cases
+npm run dev        # dsh web --patch ./cordis.dev.yml (requires the junction below)
 ```
 
-Restart `dsh web` afterwards.
+Local debugging: on Windows, junction this repo into `~/.dsh/profiles/node_modules/dsh-liketavern`, then run `npm run dev`.
 
-From source:
+Notes:
 
-```bash
-cmd //c "mklink /J %USERPROFILE%\.dsh\profiles\node_modules\dsh-liketavern <this-repo>"
-npm install
-npm run build
-npm run dev          # dsh web --patch ./cordis.dev.yml
+- `lib/` is a deliverable and is committed on purpose; rerun `npm run build` after changing code.
+- Never commit real character cards, runtime JSON, images, sessions, or memories to Git; tests use hand-written factory data.
+
+## Code layout
+
+```
+src/
+├── core/     pure-function layer (no I/O, fully unit-testable): assembly, lorebook
+│             triggering, regex, macros, BM25, tokenization, etc.
+├── state/    storage layer (file I/O into $DSH_HOME/dsh-tavern/): cards / presets /
+│             lorebooks / memory / WAL / workspace
+├── node/     host runtime: config, service, pipeline, floors, tools, memory maintenance
+├── client/   browser React UI (settings panels, action bar, chips, hero area, card rendering)
+├── index.ts  host entry
+├── agent.ts  agent-side entry (system-prompt assembly, sampling merge, tool registration)
+└── remote.ts typert RPC contract
 ```
 
-`npm test` imports `src/` directly. Rebuild after changing `src/`.
+In-repo development conventions are documented in [AGENTS.md](./AGENTS.md).
+
+## License
+
+MIT

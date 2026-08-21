@@ -15,6 +15,8 @@ dsh-liketavern 是 DeepSeek Harness（dsh）插件，把 `dsh web` 做成 SillyT
 
 实测环境：dsh `0.1.0-rc.6`（`@deepseek-ai/*` 同版本），Node 24，Windows。
 
+**查平台行为先看官方文档**：<https://deepseek-harness.github.io/deepseek-harness/>（上手：[guide/quickstart](https://deepseek-harness.github.io/deepseek-harness/guide/quickstart)；插件开发：[develop/basic](https://deepseek-harness.github.io/deepseek-harness/develop/basic/)，含打包安装、profile/bundle、patch 层顺序）。涉及宿主机制（slot、profile、patch、typert、system-prompt 瀑布等）的判断以官网文档和宿主源码为准，不要凭记忆猜。
+
 运行期角色卡、记忆、会话绑定在 `$DSH_HOME/dsh-tavern/`，不在本仓库。不要为了方便调试把真实卡拷进 git。测试用手写工厂数据。
 
 ## 技术栈与三面运行

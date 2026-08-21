@@ -192,7 +192,7 @@ export interface TavernRemote {
   getGreetingSwipe(req: { sessionId: string; messageId: string }): Promise<
     Envelope<{ swipe: { index: number; total: number } | null; isGreeting?: boolean; started?: boolean }>
   >
-  swipeGreeting(req: { sessionId: string; index: number }): Promise<Envelope<{ childSessionId: string; index: number }>>
+  swipeGreeting(req: { sessionId: string; index: number }): Promise<Envelope<{ childSessionId: string; index: number; title?: string }>>
   renderOutputText(req: { sessionId: string; text: string }): Promise<
     Envelope<{
       text: string
@@ -205,10 +205,17 @@ export interface TavernRemote {
       canSwipeGreeting?: boolean
     }>
   >
-  regenerate(req: { sessionId: string; messageId?: string }): Promise<Envelope<{ childSessionId: string }>>
-  rollbackToFloor(req: { sessionId: string; messageId: string }): Promise<Envelope<{ childSessionId: string }>>
+  regenerate(req: { sessionId: string; messageId?: string }): Promise<Envelope<{ childSessionId: string; title?: string }>>
+  rollbackToFloor(req: { sessionId: string; messageId: string }): Promise<Envelope<{ childSessionId: string; title?: string }>>
   getFloorUserMessage(req: { sessionId: string; messageId: string }): Promise<Envelope<{ turn: number; text: string }>>
-  editUserMessage(req: { sessionId: string; messageId: string; text: string }): Promise<Envelope<{ childSessionId: string }>>
+  editUserMessage(req: { sessionId: string; messageId: string; text: string }): Promise<Envelope<{ childSessionId: string; title?: string }>>
+  getFloorAssistantMessage(req: { sessionId: string; messageId: string }): Promise<Envelope<{ turn: number; text: string }>>
+  editAssistantMessage(req: { sessionId: string; messageId: string; text: string }): Promise<Envelope<{ childSessionId: string; title?: string }>>
+  continueFloor(req: { sessionId: string; messageId: string }): Promise<Envelope<{ continued: boolean }>>
+  getFloorSiblings(req: { sessionId: string; messageId: string }): Promise<
+    Envelope<{ swipe: { turn: number; index: number; total: number; siblings: string[] } | null }>
+  >
+  impersonate(req: { sessionId: string }): Promise<Envelope<{ text: string }>>
   getMemories(req: { cardId: string }): Promise<Envelope<{ items: MemoryEntry[] }>>
   saveMemory(req: { cardId: string; id?: string; body: string; tags?: string[]; keys?: string[] }): Promise<Envelope<{ id: string }>>
   deleteMemory(req: { cardId: string; id: string }): Promise<Envelope<{ deleted: boolean }>>
@@ -267,6 +274,9 @@ export interface ClientContext {
       }
       subscribe(fn: () => void): () => void
     }
+    /** 宿主 ISessions 的命名路径（scope → sessionOf → rename）；旧宿主缺省时跳过改名。 */
+    scope?(id: string): unknown
+    sessionOf?(ctx: unknown): { rename(title: string): Promise<unknown> } | undefined
   }
   /** 工作区运行时：startSession 即侧边栏「新对话」动作（复用/创建空白会话并打开）。 */
   workspaces: { startSession(workspaceId?: string): void }

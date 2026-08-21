@@ -76,6 +76,7 @@ export function SettingsSection(props: { remote: TavernRemote }) {
 
   const setSampling = (patch: Partial<TavernSettings['sampling']>) => setDraft({ ...draft, sampling: { ...draft.sampling, ...patch } })
   const setWorldInfo = (patch: Partial<TavernSettings['worldInfo']>) => setDraft({ ...draft, worldInfo: { ...draft.worldInfo, ...patch } })
+  const setMemory = (patch: Partial<TavernSettings['memory']>) => setDraft({ ...draft, memory: { ...draft.memory, ...patch } })
   const setDefaults = (patch: Partial<TavernSettings['defaults']>) => setDraft({ ...draft, defaults: { ...draft.defaults, ...patch } })
 
   return (
@@ -231,6 +232,39 @@ export function SettingsSection(props: { remote: TavernRemote }) {
         <div style={{ padding: '12px 0 4px' }}>
           <Btn disabled={busy} onClick={() => void save({ worldInfo: draft.worldInfo }, '已保存世界书设置')} primary size="md">
             保存世界书设置
+          </Btn>
+        </div>
+      </Section>
+
+      <div className="dsh-tavern-groupHead">记忆</div>
+      <Section title="记忆设置" description="BM25 长期记忆的容量、检索与压缩参数，对所有角色生效。">
+        <SettingsRow title="条数上限 maxEntries" description="每角色记忆条数上限，超出后在 turn 结束空闲时异步压缩最旧批次。最小 1。">
+          <NumInput value={draft.memory.maxEntries} onChange={(v) => setMemory({ maxEntries: Math.max(1, Math.round(v)) })} />
+        </SettingsRow>
+        <SettingsRow title="token 上限 maxTokens" description="每角色记忆的估算 token 上限，超出同样触发压缩。">
+          <NumInput value={draft.memory.maxTokens} onChange={(v) => setMemory({ maxTokens: Math.max(0, Math.round(v)) })} />
+        </SettingsRow>
+        <SettingsRow title="检索条数 retrievalTopK" description="每轮 BM25 检索注入 runtime context 的记忆条数；0 = 不注入。">
+          <NumInput value={draft.memory.retrievalTopK} onChange={(v) => setMemory({ retrievalTopK: Math.max(0, Math.round(v)) })} />
+        </SettingsRow>
+        <SettingsRow title="检索预算 retrievalTokenBudget" description="每轮检索注入的估算 token 预算。">
+          <NumInput value={draft.memory.retrievalTokenBudget} onChange={(v) => setMemory({ retrievalTokenBudget: Math.max(0, Math.round(v)) })} />
+        </SettingsRow>
+        <SettingsRow title="时间衰减半衰期（天）" description="检索打分时旧记忆按半衰期降权；0 = 不衰减。">
+          <NumInput value={draft.memory.halfLifeDays} onChange={(v) => setMemory({ halfLifeDays: Math.max(0, v) })} />
+        </SettingsRow>
+        <SettingsRow title="去重阈值 dedupScore" description="写入记忆的相似度阈值（BM25 分），达到则视为重复不写入；越高越不容易判重。">
+          <NumInput value={draft.memory.dedupScore} onChange={(v) => setMemory({ dedupScore: Math.max(0, v) })} />
+        </SettingsRow>
+        <SettingsRow title="压缩批次 compressBatch" description="每次压缩合并的最旧条数。最小 2。">
+          <NumInput value={draft.memory.compressBatch} onChange={(v) => setMemory({ compressBatch: Math.max(2, Math.round(v)) })} />
+        </SettingsRow>
+        <SettingsRow title="检索取词 queryMessages" description="BM25 检索的 query 取最近 N 条消息。最小 1。">
+          <NumInput value={draft.memory.queryMessages} onChange={(v) => setMemory({ queryMessages: Math.max(1, Math.round(v)) })} />
+        </SettingsRow>
+        <div style={{ padding: '12px 0 4px' }}>
+          <Btn disabled={busy} onClick={() => void save({ memory: draft.memory }, '已保存记忆设置')} primary size="md">
+            保存记忆设置
           </Btn>
         </div>
       </Section>

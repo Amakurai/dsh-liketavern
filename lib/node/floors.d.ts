@@ -1,7 +1,8 @@
 import type { Context } from '@deepseek-ai/cordis';
 import type { Agent, AgentOptions } from '@deepseek-ai/dsh-agent';
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session';
-import type { SessionBinding } from './bindings.js';
+import { type SiblingSwipe } from '../core/siblings.js';
+import { type SessionBinding } from './bindings.js';
 import type { TavernState } from './state.js';
 export interface FloorDeps {
     ctx: Context;
@@ -38,22 +39,46 @@ export declare function floorNamesForLineageRollback(floors: readonly string[], 
 export declare function timerOwnerAtTurn(binding: Pick<SessionBinding, 'walLineage'>, currentSessionId: string, boundaryTurn: number): string;
 /** seed 中最大的 turn/start；空前缀表示没有继承源会话楼层。 */
 export declare function inheritedThroughTurn(seed: readonly SessionEvent[]): number | null;
+/** 分支操作结果：子会话 id + 建议标题（客户端经 sessions.rename 落到会话列表）。 */
+export interface ForkResult {
+    childSessionId: string;
+    /** 分支会话的可读标题，如「角色名 · 从第 3 层重生成」。 */
+    title: string;
+}
 /** 重新生成：回滚目标楼层并重跑。messageId 指定楼层（assistant 消息 id），缺省取最后一个已关闭 turn。进行中的 turn 拒绝。 */
-export declare function regenerate({ ctx, state }: FloorDeps, sessionId: string, messageId?: string): Promise<{
-    childSessionId: string;
-}>;
+export declare function regenerate({ ctx, state }: FloorDeps, sessionId: string, messageId?: string): Promise<ForkResult>;
 /** 回退到指定楼层：保留该楼层（含）之前的全部内容，丢弃其后的楼层；不自动续跑。 */
-export declare function rollbackToFloor({ ctx, state }: FloorDeps, sessionId: string, messageId: string): Promise<{
-    childSessionId: string;
-}>;
+export declare function rollbackToFloor({ ctx, state }: FloorDeps, sessionId: string, messageId: string): Promise<ForkResult>;
 /** 读取指定楼层的首条用户消息（编辑对话框预填用）。 */
 export declare function getFloorUserMessage({ ctx }: FloorDeps, sessionId: string, messageId: string): Promise<{
     turn: number;
     text: string;
 }>;
 /** 编辑指定楼层的用户消息：回退到该楼层前并以新文本重跑。 */
-export declare function editUserMessage(deps: FloorDeps, sessionId: string, messageId: string, newText: string): Promise<{
-    childSessionId: string;
+export declare function editUserMessage(deps: FloorDeps, sessionId: string, messageId: string, newText: string): Promise<ForkResult>;
+/**
+ * 把 seed 里指定 assistant 消息的正文替换为编辑后文本（新消息 id，保留原模型 source）。
+ * 事件本体深冻，这里浅拷一层换 data.message；找不到返回 null。
+ */
+export declare function withEditedAssistantMessage(events: readonly SessionEvent[], messageId: string, newText: string): SessionEvent[] | null;
+/** 读取指定楼层 assistant 消息的正文（编辑对话框预填用）。 */
+export declare function getFloorAssistantMessage({ ctx }: FloorDeps, sessionId: string, messageId: string): Promise<{
+    turn: number;
+    text: string;
+}>;
+/**
+ * 编辑指定楼层的 assistant 正文：fork 到该楼层结束（seed 内替换该条消息），
+ * 回滚其后楼层，不自动续跑——编辑 AI 台词后通常由用户自己接话。
+ */
+export declare function editAssistantMessage(deps: FloorDeps, sessionId: string, messageId: string, newText: string): Promise<ForkResult>;
+/**
+ * 楼层继续：最后一条 assistant 回复被截断（或用户认为不完整）时，不产生新的用户台词，
+ * 直接以一条合成指令（CONTINUE_INSTRUCTION_PREFIX，isSyntheticUserText 过滤）驱动画前会话续写。
+ * 续写不改历史，因此不 fork、不回滚 WAL；续写轮自身是正常 turn（楼层 WAL 照常 beginFloor）。
+ * 只允许续最后一个已关闭 turn 的楼层，避免在历史中间续出分叉语义。
+ */
+export declare function continueFloor({ ctx, state }: FloorDeps, sessionId: string, messageId: string): Promise<{
+    continued: boolean;
 }>;
 /** 角色的全部开场白变体（0 = first_mes）。 */
 export declare function greetingVariants(state: TavernState, cardId: string): Promise<string[]>;
@@ -71,6 +96,17 @@ export declare function getGreetingSwipe({ ctx, state }: FloorDeps, sessionId: s
     } | null;
     isGreeting: boolean;
     started: boolean;
+}>;
+/**
+ * 同一楼层分支会话的兄弟导航（ST 式 ‹ n/m ›）：读取 siblings.json 索引，
+ * 按存在性过滤已删除/悬空的分支（live 会话直接算数；离线的以绑定文件是否还在为准——
+ * dsh 不向插件暴露历史会话目录，绑定文件是插件侧最可靠的存在性信号；删卡/解绑会清绑定）。
+ * 剪枝有变化就顺手落盘。非 Tavern / 未绑定 / 无兄弟记录一律软返回 swipe=null。
+ */
+export declare function getFloorSiblings({ ctx, state }: FloorDeps, sessionId: string, messageId: string): Promise<{
+    swipe: (SiblingSwipe & {
+        turn: number;
+    }) | null;
 }>;
 /**
  * 选卡进入对话：把开场白写进一轮完整 turn（start/step/message/end），
@@ -91,4 +127,5 @@ export declare function ensureGreeting({ ctx, state }: FloorDeps, sessionId: str
 export declare function swipeGreeting({ ctx, state }: FloorDeps, sessionId: string, index: number): Promise<{
     childSessionId: string;
     index: number;
+    title: string;
 }>;

@@ -21,7 +21,7 @@ import type { TavernService } from './node/service.js'
 import type { TavernState } from './node/state.js'
 import { registerTavernTools } from './node/tools.js'
 import { mergeTavernCallConfig, pickReasoningEffort } from './core/callConfig.js'
-import { BOUND_DISCIPLINE, UNBOUND_STANDING, formatTurnPlaybook, neutralizeDshMustache } from './core/dshPrompt.js'
+import { BOUND_DISCIPLINE, UNBOUND_STANDING, formatTurnPlaybook, isContinueInstruction, neutralizeDshMustache } from './core/dshPrompt.js'
 import { standingFingerprint } from './core/standingPin.js'
 import type { SamplingSettings } from './core/types.js'
 
@@ -100,7 +100,10 @@ export function apply(ctx: Context): void {
       return result
     }
     try {
-      const pipeline = await runTavernPipeline({ state, sessionId: agent.id, agent, llm, mode: 'live' })
+      // 本轮是续写轮（continueFloor 的合成指令在 pendingInputs 里，turn/end 才清）时
+      // 按 continue 场景组装：injection_trigger 过滤不同，standing 按场景分别钉死。
+      const generationType = (state.pendingInputs.get(agent.id) ?? []).some(isContinueInstruction) ? 'continue' : 'normal'
+      const pipeline = await runTavernPipeline({ state, sessionId: agent.id, agent, llm, mode: 'live', generationType })
       if (!pipeline) {
         applyStanding(result, UNBOUND_STANDING)
         applyTurnContext(result, '')
@@ -111,10 +114,12 @@ export function apply(ctx: Context): void {
         result,
         state.pinStanding(
           agent.id,
+          generationType,
           standingFingerprint(
             binding,
             { name: pipeline.userName, description: pipeline.personaDescription },
             state.standingRevTags(binding, { personaLorebookId: pipeline.personaLorebookId }),
+            generationType,
           ),
           standing,
         ),

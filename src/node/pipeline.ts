@@ -34,6 +34,11 @@ export interface PipelineInput {
   mode: 'live' | 'preview'
   /** preview 且无 live agent 时的历史（纯文本）。 */
   historyOverride?: ChatMessage[]
+  /**
+   * ST 生成场景（injection_trigger 评估），缺省 'normal'。
+   * 续写轮由 agent 面探测合成续写指令后传 'continue'；impersonate 传 'impersonate'。
+   */
+  generationType?: string
 }
 
 export interface PipelineResult {
@@ -145,10 +150,12 @@ export async function runTavernPipeline(input: PipelineInput): Promise<PipelineR
     : (input.historyOverride ?? [])
   const history = rawHistory.filter((m) => !(m.role === 'user' && isSyntheticUserText(m.content)))
 
-  // 待入日志的本轮输入：去重（与历史末条相同则视为已入日志）
+  // 待入日志的本轮输入：去重（与历史末条相同则视为已入日志）。
+  // 合成 user 文本（runtime context 快照、同轮写入确认、续写指令）不经 inbox 也进不了
+  // {{lastusermessage}} 与世界书扫描——它们不是用户台词。
   const pending = state.pendingInputs.get(sessionId) ?? []
   const lastContent = history.at(-1)?.content
-  const pendingFresh = pending.filter((t) => t !== lastContent)
+  const pendingFresh = pending.filter((t) => t !== lastContent && !isSyntheticUserText(t))
   const scanMessages: ChatMessage[] = [
     ...history,
     ...pendingFresh.map((content) => ({ role: 'user' as const, content, name: userName })),
@@ -226,6 +233,8 @@ export async function runTavernPipeline(input: PipelineInput): Promise<PipelineR
     journalText,
     macroCtx,
     regexRules: await state.rulesFor(binding),
+    // ST injection_trigger 评估用：当前正常发信是 normal；continue/impersonate 经 PipelineInput 传入。
+    generationType: input.generationType ?? 'normal',
     estimateTokens,
     budget: {
       maxTokens: contextWindow,

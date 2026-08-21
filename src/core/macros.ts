@@ -4,6 +4,9 @@
  * 支持清单：
  * - `{{char}}` / `{{charname}}`：角色名
  * - `{{user}}` / `{{username}}`：用户人设名
+ * - `{{description}}` / `{{personality}}` / `{{scenario}}`：角色卡字段
+ * - `{{persona}}`：当前用户人设描述
+ * - `{{charFirstMessage}}` / `{{firstMessage}}`：角色开场白（ST 拼写为 charFirstMessage）
  * - `{{outlet::Name}}`：世界书 Outlet；未匹配为空串。替换结果不再扫描（禁止嵌套 outlet）
  * - `{{time}}` / `{{date}}` / `{{datetime}}` / `{{weekday}}`：当前时间（可经 vars 覆盖）
  * - `{{trim}}` / `{{noop}}`：删除
@@ -11,6 +14,7 @@
  * - `{{setvar::name::value}}` / `{{getvar::name}}`：一次组装内的变量表
  *   （setlocalvar/setglobalvar 视为 setvar；get* 同 getvar。不落盘。）
  * - `{{lastusermessage}}` / `{{lastMessage}}`：最近一条用户消息
+ * - `{{lastCharMessage}}`：最近一条 assistant 消息（本轮宏，禁止进 standing）
  * - `{{random::A::B}}` / `{{pick::A,B}}` / `{{random:1,10}}`：掷骰（本轮宏，禁止进 standing）
  *
  * 这是组装前预处理：setvar 条目展开后变空，不进模型；getvar 处变成真正的写作规则。
@@ -105,9 +109,17 @@ function applyCommand(inner: string, ctx: MacroContext, clock: Record<string, st
 
   if (lower === 'char' || lower === 'charname') return ctx.char
   if (lower === 'user' || lower === 'username') return ctx.user
+  if (lower === 'description') return ctx.description ?? ''
+  if (lower === 'personality') return ctx.personality ?? ''
+  if (lower === 'scenario') return ctx.scenario ?? ''
+  if (lower === 'persona') return ctx.persona ?? ''
+  if (lower === 'charfirstmessage' || lower === 'firstmessage') return ctx.firstMessage ?? ''
   if (lower === 'trim' || lower === 'noop' || lower === 'newline') return lower === 'newline' ? '\n' : ''
   if (lower === 'lastusermessage' || lower === 'lastmessage' || lower === 'last_user_message') {
     return ctx.lastUserMessage ?? ''
+  }
+  if (lower === 'lastcharmessage' || lower === 'last_char_message') {
+    return ctx.lastCharMessage ?? ''
   }
   if (lower.startsWith('//')) return ''
 
@@ -207,7 +219,7 @@ export function listMacros(text: string): string[] {
 
 /** 条目是否含本轮才稳定的宏（应进 turnContext，避免打穿 standing KV）。 */
 export function hasTurnLocalMacros(text: string): boolean {
-  return /\{\{\s*(outlet::|lastusermessage|lastmessage|last_user_message|time|date|datetime|weekday|random\s*:|pick\s*:)/i.test(text)
+  return /\{\{\s*(outlet::|lastusermessage|lastmessage|last_user_message|lastcharmessage|last_char_message|time|date|datetime|weekday|random\s*:|pick\s*:)/i.test(text)
 }
 
 /** SillyTavern EJS / STscript。本插件不执行，原文注入只会污染上下文。 */

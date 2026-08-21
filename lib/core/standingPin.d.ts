@@ -6,8 +6,16 @@
  * 指纹第三段是资产修订号（`key=rev`）：编辑/删除预设与世界书经 TavernState 写方法 bump，
  * 下一轮指纹变化即重算 standing 并重新钉死——内容变更打穿一次 KV 是必要代价，
  * 平时仍字节稳定。运行期绕开 TavernState 手改文件不捕获（pins 进程内，重启即清）。
+ *
+ * 钉死粒度 = 会话 × 生成场景（standingPinKey）：injection_trigger 过滤使 normal / continue
+ * 骨架可能不同，场景并入指纹且各自占一个钉位——同一会话内场景交替时各自复用本场景首次
+ * 钉死的字节，既不互相覆盖重算，也不会让 continue 轮拿到 normal 轮钉死的文本。
  */
-export declare const STANDING_PIN_VERSION = 4;
+export declare const STANDING_PIN_VERSION = 6;
+/** 场景值归一化：空/缺省视为 normal（与 assemble.ts 的 generationType 缺省一致）。 */
+export declare function normalizeGenerationType(generationType?: string): string;
+/** 钉死键：会话 × 生成场景。 */
+export declare function standingPinKey(sessionId: string, generationType?: string): string;
 export declare function standingFingerprint(binding: {
     cardId: string;
     presetId: string | null;
@@ -17,7 +25,9 @@ export declare function standingFingerprint(binding: {
     description?: string;
 }, 
 /** 资产修订号标记（如 `preset:foo=2`），调用方按稳定顺序给出。 */
-revs?: readonly string[]): string;
+revs?: readonly string[], 
+/** ST 生成场景；改变序列内容（injection_trigger），必须并入指纹。 */
+generationType?: string): string;
 export interface StandingPin {
     fingerprint: string;
     text: string;

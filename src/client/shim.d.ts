@@ -61,6 +61,7 @@ declare module '@deepseek-ai/dsh-client-ui-primitives' {
   export const Tooltip: any
   export const IconBranchOutline16: any
   export const IconEditOutline16: any
+  export const IconListPenOutline16: any
   export const IconRefreshOutline16: any
   export const IconLoadingOutline16: any
   export const IconTrashOutline16: any

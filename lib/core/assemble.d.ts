@@ -19,6 +19,12 @@ export interface AssembleInput {
     journalText?: string;
     macroCtx: MacroContext;
     regexRules: RegexRule[];
+    /**
+     * ST 生成场景（injection_trigger 评估）：normal / continue / impersonate / …。
+     * live 轮由 agent 面按 pendingInputs 判定（续写指令 → continue）；impersonate 走 preview。
+     * 场景改变序列内容，已并入 standing 钉死指纹与钉位（standingPin.ts，粒度 = 会话 × 场景）。
+     */
+    generationType?: string;
     estimateTokens: (text: string) => number;
     /** 总预算：maxTokens = 上下文窗口；reserveForOutput = 为输出保留。 */
     budget: {

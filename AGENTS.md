@@ -34,7 +34,7 @@ live 路径不把整包 ST 预设塞进 system。`assemblePrompt` 按 Prompt Man
 
 | 通道 | dsh 落点 | 内容 | 稳定性 |
 | --- | --- | --- | --- |
-| standing | system 段 `tavern:standing`（order 210，工具说明 100–199 之后） | `BOUND_DISCIPLINE` + 角色定义 + 预设骨架 + 常驻世界书 | 绑定不变则按会话钉死字节（`STANDING_PIN_VERSION` + 卡/预设/人设指纹 + 资产修订号）。纪律或段布局变了必须递增版本，否则进程内旧钉死会挡住新文案。编辑/删除预设与世界书经 `TavernState` 写方法 bump 修订号（`standingRevTags`）。绕开 TavernState 手改文件不会被捕获。 |
+| standing | system 段 `tavern:standing`（order 210，工具说明 100–199 之后） | `BOUND_DISCIPLINE` + 角色定义 + 预设骨架 + 常驻世界书 | 绑定不变则按会话 × 生成场景钉死字节（`STANDING_PIN_VERSION` + generationType + 卡/预设/人设指纹 + 资产修订号）。纪律或段布局变了必须递增版本，否则进程内旧钉死会挡住新文案。编辑/删除预设与世界书经 `TavernState` 写方法 bump 修订号（`standingRevTags`）。绕开 TavernState 手改文件不会被捕获。 |
 | turn | runtime context `tavern:turn` | `formatTurnPlaybook(step)` + 关键词世界书/记忆/变化层/AN/本轮宏 | 每步会变。dsh 追加成 user 快照（`Current runtime context.`），盖住更早的同名快照。 |
 | messages | 仅「预览提示词」 | 完整 ST 序列（含 @D 真实插历史位置） | live 请求插不进会话日志中间；排查以预览为准。 |
 
@@ -69,7 +69,7 @@ live 路径不把整包 ST 预设塞进 system。`assemblePrompt` 按 Prompt Man
 ```bash
 npm install        # dsh 开发依赖从公开 npm 安装
 npm run build      # tsc -p tsconfig.json（产出 lib/ 含 .d.ts）+ node scripts/build-client.mjs
-npm test           # vitest run：31 个文件、约 350 例
+npm test           # vitest run：32 个文件、约 360 例
 npm run dev        # dsh web --patch ./cordis.dev.yml（需先建 junction，见 README）
 ```
 
@@ -102,13 +102,16 @@ src/
 │   ├── displaySanitize.ts  展示向收起机读标签
 │   ├── bm25.ts             BM25 + 时间衰减
 │   ├── binding.ts          陈旧会话绑定回收
+│   ├── siblings.ts         分支兄弟索引（同父同层 fork 成组、位次、悬空剪枝）
 │   └── cardFrame.ts        交互卡 srcDoc：CSP + ST stub + postMessage
 ├── state/      存储层（文件 I/O，落 $DSH_HOME/dsh-tavern/）
 │   ├── card.ts / lorebook.ts / presetStore.ts / memory.ts / worlddelta.ts
+│   ├── siblings.ts         分支兄弟索引存储（siblings.json；导航元数据，不记 WAL）
 │   ├── workspace.ts / workspaceFs.ts / wal.ts
 ├── node/       host 运行时
 │   ├── config.ts / paths.ts / state.ts / service.ts / pipeline.ts
 │   ├── floors.ts / greetingSeed.ts / tavernSession.ts / tools.ts
+│   ├── impersonate.ts  AI 代答用户：带外一次性 LLM 调用，不开 turn 不记 WAL
 │   ├── memoryMaintenance.ts / bindings.ts / presetInstall.ts
 ├── client/     浏览器 UI
 │   ├── index.tsx / mode.ts / chip.tsx / hero.tsx / seatWatch.ts / seatChip.tsx
@@ -121,7 +124,7 @@ src/
 └── remote.ts   typert 契约
 ```
 
-对应测试在 `test/`（31 个文件）：core/state 纯逻辑，加上 binding、cardFrame、workspace、floorsForkOptions、greetingSeed、stateRuntime、openChild 等。host 事件与 client UI 不测。
+对应测试在 `test/`（32 个文件）：core/state 纯逻辑，加上 binding、cardFrame、workspace、floorsForkOptions、greetingSeed、stateRuntime、openChild、siblings 等。host 事件与 client UI 不测。
 
 ## 代码风格
 
@@ -147,8 +150,8 @@ src/
 
 1. 采样只透传 `temperature` / `maxTokens` / `stop`，以及模型公布的 `reasoningEffort`（Tavern「深度思考」关 → `off`）。`top_p` 和 penalty 到不了模型，设置面板仅作记录。
 2. @D 与作者注释在实际请求中并入 system 尾部。预览才是完整 ST 序列（不含 live playbook）。
-3. 会话日志不可删。重新生成/回退/编辑 = fork 前缀 + WAL 回滚 + 子会话续跑，成功后 UI 打开分支会话。
-4. 操作条 slot 只在 assistant 消息上。「编辑用户消息」挂在 assistant 楼层。
+3. 会话日志不可删。重新生成/回退/编辑 = fork 前缀 + WAL 回滚 + 子会话续跑，成功后 UI 打开分支会话，并用宿主 `ISessions` 的 `scope → sessionOf → rename` 把 host 给的分支标题写进会话列表（旧宿主缺这条路径则跳过）。编辑 assistant 正文只换 seed 里的该条消息、不续跑。例外：续写（`continueFloor`）不改历史，不 fork，直接 followup 合成指令。同一父会话 + 同一楼层 fork 出的分支互为兄弟：forkAt 记 `siblings.json`，操作条给 ‹ n/m › 兄弟导航（`getFloorSiblings`，读时按 live/绑定文件过滤已删分支）。
+4. 操作条 slot 只在 assistant 消息上。「编辑用户消息」/续写/代答都挂在 assistant 楼层。dsh 输入区没有插件可写 API，impersonate 结果只能复制到剪贴板。
 5. 同一角色卡多会话并发写入会交错（工作区与 WAL 以卡为单位共享）。这是已知边界，不要去「修」。
 6. 角色选择和开场白预览只在 agent 预设为 `tavern`（`src/client/mode.ts`）时显示。
 
@@ -165,7 +168,7 @@ src/
 9. **`{{setvar}}` / `{{getvar}}` 是组装前预处理**，不是扔给模型。一次 `assemblePrompt` 共享 `Map` store；set 条目展开后变空并省略；后写覆盖先写。`{{lastusermessage}}` / `{{outlet}}` / 时钟进 `turnContext`，不要为了「完整 ST」把它们写进 `tavern:standing`。不落盘，不做 if/dice/STscript。预设内嵌 `regex_scripts` 随预设导入（`compilePresetRegexScripts`，跟脚本 `disabled` 走）。UI 开关直接改写预设文件的 `disabled`。常驻世界书（constant、无本轮宏）进 standing。
 10. **不要把整包 ST 改成 `complete` 段。** standing 放在工具说明之后（order 210），工具前缀才能命中 DeepSeek KV。turn playbook / 本轮世界书/记忆只能进 `tavern:turn`。
 11. **不要整本倾倒世界书，也不要在 step>1 跳过组装。** `tavern_lore_read` 先目录再 uid/query；`tavern_asset_read` 按文件或预设条目读。step>1 仍组装，是为了长上下文下重放本轮快照。
-12. **同轮写入确认不可当用户台词。** `TURN_WRITE_ACK_PREFIX`（`【Tavern 同轮写入】`）必须继续被 `isSyntheticUserText` 过滤。不要为了「立刻进检索层」同轮重跑 `evaluateWorldInfo`。
+12. **同轮写入确认与续写指令不可当用户台词。** `TURN_WRITE_ACK_PREFIX`（`【Tavern 同轮写入】`）和 `CONTINUE_INSTRUCTION_PREFIX`（`【Tavern 续写】`）必须继续被 `isSyntheticUserText` 过滤（含 pendingInputs 进 scanMessages 前）。不要为了「立刻进检索层」同轮重跑 `evaluateWorldInfo`。
 
 ## 安全
 
@@ -181,6 +184,7 @@ $DSH_HOME/dsh-tavern/
 │                            # state/（world-delta.jsonl、wi-timers/、wal/）、journal.md、index.json
 ├── library/lorebooks/  library/presets/
 ├── personas/  regex/rules.json
+├── siblings.json            # 分支兄弟索引（楼层 fork 的 ‹ n/m › 导航）
 └── sessions/<sessionId>.json
 ```
 

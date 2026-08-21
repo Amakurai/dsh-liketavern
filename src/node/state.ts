@@ -25,7 +25,7 @@ import {
 import { WorkspaceFs } from '../state/workspaceFs.js'
 import { resolveStaleBinding } from '../core/binding.js'
 import { pickPersona } from '../core/persona.js'
-import { pinStandingText, type StandingPin } from '../core/standingPin.js'
+import { pinStandingText, standingPinKey, type StandingPin } from '../core/standingPin.js'
 import { clearBindingsForCard, deleteBinding, loadBinding, saveBinding, type SessionBinding } from './bindings.js'
 import type { TavernConfig } from './config.js'
 import { ensurePaths, type TavernPaths } from './paths.js'
@@ -58,7 +58,7 @@ export class TavernState {
   readonly wiCache = new Map<string, { turn: number; wi: WIEngineResult; memories: string[]; deltas: WorldDelta[] }>()
   /** 已入 inbox 尚未入日志的用户输入文本（agent/inbox/inserted 维护；turn/end 清除）。 */
   readonly pendingInputs = new Map<string, string[]>()
-  /** 会话 standing 钉死（绑定指纹不变则复用第一次写入的字节）。 */
+  /** 会话 standing 钉死（键 = 会话 × 生成场景；绑定指纹不变则复用第一次写入的字节）。 */
   readonly standingPins = new Map<string, StandingPin>()
   /** standing 依赖资产的进程内修订号：经本类写方法编辑/删除即 bump，standing 指纹随内容变化失效重算。 */
   private readonly assetRevs = new Map<string, number>()
@@ -476,7 +476,7 @@ export class TavernState {
     const characters = await this.listCharacters()
     const resolved = resolveStaleBinding(parsed, characters)
     if (!resolved) {
-      this.standingPins.delete(sessionId)
+      this.clearStandingPins(sessionId)
       await deleteBinding(this.paths, sessionId)
       return null
     }
@@ -494,9 +494,17 @@ export class TavernState {
     return saveBinding(this.paths, { ...binding, cardName: ws?.card.name ?? binding.cardName })
   }
 
-  /** 绑定不变时复用第一次 standing，避免组装抖动打穿 KV。 */
-  pinStanding(sessionId: string, fingerprint: string, computed: string): string {
-    return pinStandingText(this.standingPins, sessionId, fingerprint, computed)
+  /** 绑定不变时复用第一次 standing，避免组装抖动打穿 KV。钉位按会话 × 生成场景（standingPinKey）。 */
+  pinStanding(sessionId: string, generationType: string, fingerprint: string, computed: string): string {
+    return pinStandingText(this.standingPins, standingPinKey(sessionId, generationType), fingerprint, computed)
+  }
+
+  /** 清掉会话全部场景的 standing 钉位（换绑/回收绑定时）。 */
+  private clearStandingPins(sessionId: string): void {
+    const prefix = `${sessionId}\0`
+    for (const key of [...this.standingPins.keys()]) {
+      if (key.startsWith(prefix)) this.standingPins.delete(key)
+    }
   }
 
   private bumpAssetRev(key: string): void {
@@ -543,7 +551,7 @@ export class TavernState {
 
   /** 清掉会话绑定文件；空白新对话复用旧会话时用来去掉上次留下的角色卡。 */
   async clearBinding(sessionId: string): Promise<void> {
-    this.standingPins.delete(sessionId)
+    this.clearStandingPins(sessionId)
     await deleteBinding(this.paths, sessionId)
   }
 

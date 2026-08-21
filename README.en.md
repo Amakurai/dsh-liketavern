@@ -71,6 +71,11 @@ Model tools (off by default): `tavern_memory_search` / `write` / `update`, `tave
 | PNG tEXt / zTXt / iTXt (`chara` / `ccv3`) | Import; export writes tEXt |
 | Vector matching | Not implemented; semantic recall is BM25 memory |
 | `{{char}}` / `{{user}}` / `{{outlet}}` / `{{trim}}` / `{{time}}` / `{{random}}` / `{{pick}}` | Expanded at assemble time (`random`/`pick` are turn-local, not in standing) |
+| `{{description}}` / `{{personality}}` / `{{scenario}}` / `{{persona}}` / `{{charFirstMessage}}` / `{{lastCharMessage}}` | Expanded at assemble time (`lastCharMessage` is turn-local, not in standing) |
+| `{{original}}` in card system_prompt / post_history_instructions | Expands to the preset's main / jailbreak content; slot `forbid_overrides=true` blocks the card override |
+| Preset entry `injection_trigger` | Filtered by generation type (only `normal` exists today; continue/impersonate etc. never match) |
+| Preset entry `forbid_overrides` / `extension` | Preserved across import/export |
+| Regex `trimStrings` / `trimStringsRegex` | Removed from captured group values before substitution (ST only implements trimStrings; trimStringsRegex is completed with the same semantics) |
 | `{{setvar}}` / `{{getvar}}` / `{{//}}` | Preprocessed, not persisted. No if / dice / STscript |
 | temperature / maxTokens / stop / reasoningEffort | Passed through (thinking off → `off`) |
 | top_p / presence_penalty / frequency_penalty | Not delivered by the platform |

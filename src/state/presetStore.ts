@@ -7,6 +7,9 @@
  * 一份只含内建槽位的 100000 骨架——导入必须优先 100001，不能取数组第一项。
  * 未列入所选 order 的库条目关闭并附在栈末，记一条摘要（不逐条 warning）。
  * 无 prompt_order 时全部启用。relative 条目的 order 取自栈序；in-chat 仍用 injection_order。
+ * `forbid_overrides` / `extension` / `injection_trigger` 归一化进 PresetEntry
+ * （forbidOverrides / extension / injectionTrigger），导出时带回；
+ * 运行时语义见 assemble（forbid_overrides 拒绝卡级覆盖、injection_trigger 按生成场景过滤）。
  * `extensions.regex_scripts` 原样挂到 PromptPreset.regexScripts（编译在 rulesFor）。
  */
 import type { CardRegexScript, ChatRole, PresetEntry, PromptPreset } from '../core/types.js'
@@ -16,13 +19,6 @@ export interface ParseStPresetResult {
   preset: PromptPreset
   warnings: string[]
 }
-
-/** 无法映射到 PromptPreset 的 ST 字段（有意义地出现时各记一条 warning）。 */
-const UNMAPPED_FIELDS: Array<{ field: string; note: string }> = [
-  { field: 'forbid_overrides', note: '禁止覆盖' },
-  { field: 'injection_trigger', note: '注入触发条件' },
-  { field: 'extension', note: '扩展标记' },
-]
 
 /** 导出时 prompt_order 的 character_id（对齐 SillyTavern Chat Completion dummy）。 */
 const EXPORT_CHARACTER_ID = 100001
@@ -105,15 +101,6 @@ function pickPromptOrder(promptOrder: unknown): OrderItem[] | null {
   return blocks.reduce((best, cur) => (cur.items.length > best.items.length ? cur : best)).items
 }
 
-function unmappedFieldPresent(rawPrompts: unknown[], field: string): boolean {
-  return rawPrompts.some((raw) => {
-    if (!isRecord(raw) || !(field in raw)) return false
-    const value = raw[field]
-    if (field === 'injection_trigger') return Array.isArray(value) && value.length > 0
-    return toBool(value, false)
-  })
-}
-
 function collectPromptEmbeddedRegex(rawPrompts: unknown[]): CardRegexScript[] {
   const out: CardRegexScript[] = []
   for (const raw of rawPrompts) {
@@ -156,6 +143,13 @@ function parsePromptEntry(raw: Record<string, unknown>, index: number, warnings:
     marker,
   }
   if (marker) entry.markerId = identifier
+  // ST 三个原忽略字段：归一化进条目，导出时带回
+  if (toBool(raw.forbid_overrides, false)) entry.forbidOverrides = true
+  if (toBool(raw.extension, false)) entry.extension = true
+  if (Array.isArray(raw.injection_trigger)) {
+    const triggers = raw.injection_trigger.map((t) => toStr(t).trim().toLowerCase()).filter((t) => t !== '')
+    if (triggers.length > 0) entry.injectionTrigger = triggers
+  }
   return entry
 }
 
@@ -168,7 +162,7 @@ function assignRelativeOrder(entries: PresetEntry[]): void {
 
 /**
  * 解析 ST 预设 JSON。缺 prompts 数组时抛中文错误；
- * 无法映射的字段与条目不中断导入，记入 warnings。
+ * 无法映射的条目不中断导入，记入 warnings。
  */
 export function parseStPreset(json: unknown): ParseStPresetResult {
   if (!isRecord(json)) throw new Error('预设文件不是有效的 JSON 对象')
@@ -222,12 +216,6 @@ export function parseStPreset(json: unknown): ParseStPresetResult {
     }
   }
 
-  for (const { field, note } of UNMAPPED_FIELDS) {
-    if (unmappedFieldPresent(rawPrompts, field)) {
-      warnings.push(`字段 ${field}（${note}）暂不支持，导入时已忽略`)
-    }
-  }
-
   const preset: PromptPreset = {
     name: toStr(json.name) || '未命名预设',
     identifier: toStr(json.identifier) || toStr(json.name) || 'imported-preset',
@@ -255,6 +243,9 @@ export function exportStPreset(preset: PromptPreset): unknown {
     injection_position: e.position === 'in-chat' ? 1 : 0,
     injection_depth: e.depth,
     injection_order: e.order,
+    ...(e.forbidOverrides ? { forbid_overrides: true } : {}),
+    ...(e.extension ? { extension: true } : {}),
+    ...(e.injectionTrigger && e.injectionTrigger.length > 0 ? { injection_trigger: [...e.injectionTrigger] } : {}),
   }))
   const order = preset.entries.map((e) => ({ identifier: e.identifier, enabled: e.enabled }))
   const exported: Record<string, unknown> = {

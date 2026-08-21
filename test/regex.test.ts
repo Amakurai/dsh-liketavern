@@ -215,6 +215,74 @@ describe('规则容错', () => {
   })
 })
 
+describe('trimStrings / trimStringsRegex（ST 语义：从代入的捕获组值里删除）', () => {
+  it('trimStrings 从 $1 组值里删字面串；替换结果其余部分不动', () => {
+    const res = run('秘密[foo]尾巴[foo]', [
+      makeRule({ id: 'r', find: '/秘密\\[(.*?)\\]/', replace: '<$1>', trimStrings: ['foo'] }),
+    ])
+    // 组值 'foo' 被删空；「尾巴[foo]」不在捕获组里，保留
+    expect(res.text).toBe('<>尾巴[foo]')
+    expect(res.applied).toEqual(['r'])
+  })
+
+  it('trimStrings 作用于 {{match}}（$0 整体匹配）', () => {
+    const res = run('ab[noise]cd', [
+      makeRule({ id: 'r', find: '/\\[noise\\]/', replace: '<{{match}}>', trimStrings: ['[', ']'] }),
+    ])
+    // $0 = '[noise]'，trims 删掉方括号后代入
+    expect(res.text).toBe('ab<noise>cd')
+  })
+
+  it('trimStrings 先宏展开再删（{{char}}）', () => {
+    const res = run('Alice 说 AliceAlice 走了', [
+      makeRule({ id: 'r', find: '/Alice 说 (.*?) 走了/', replace: '$1', trimStrings: ['{{char}}'] }),
+    ])
+    expect(res.text).toBe('')
+  })
+
+  it('trimStringsRegex 从组值里删正则命中片段，缺省全局', () => {
+    const res = run('数据 hp12mp34', [
+      makeRule({ id: 'r', find: '/数据 (\\w+)/', replace: '[$1]', trimStringsRegex: ['\\d+'] }),
+    ])
+    expect(res.text).toBe('[hpmp]')
+  })
+
+  it('trimStringsRegex 支持 /pattern/flags 形式', () => {
+    const res = run('x AB ab', [
+      makeRule({ id: 'r', find: '/x (\\w+ \\w+)/', replace: '$1', trimStringsRegex: ['/ab/i'] }),
+    ])
+    expect(res.text).toBe(' ')
+  })
+
+  it('find 未命中时 trim 不影响文本', () => {
+    const res = run('foo bar', [makeRule({ id: 'r', find: 'zzz', replace: '$0', trimStrings: ['foo'] })])
+    expect(res.text).toBe('foo bar')
+    expect(res.applied).toEqual([])
+  })
+
+  it('非法 trimStringsRegex 记 errors，整条规则失败但不中断后续规则', () => {
+    const res = run('cat', [
+      makeRule({ id: 'bad-trim', find: 'cat', replace: '[$0]', trimStringsRegex: ['/(unclosed/'] }),
+      makeRule({ id: 'good', find: 'cat', replace: 'dog' }),
+    ])
+    expect(res.errors).toHaveLength(1)
+    expect(res.errors[0]!.ruleId).toBe('bad-trim')
+    expect(res.text).toBe('dog')
+  })
+
+  it('compileRegexScripts 透传 trimStrings / trimStringsRegex 并过滤空串', () => {
+    const rules = compilePresetRegexScripts(
+      [{ findRegex: 'a', replaceString: 'b', trimStrings: ['x', ''], trimStringsRegex: ['\\d+'] }],
+      'p',
+    )
+    expect(rules[0]!.trimStrings).toEqual(['x'])
+    expect(rules[0]!.trimStringsRegex).toEqual(['\\d+'])
+    const bare = compilePresetRegexScripts([{ findRegex: 'a', replaceString: 'b' }], 'p')
+    expect(bare[0]!.trimStrings).toBeUndefined()
+    expect(bare[0]!.trimStringsRegex).toBeUndefined()
+  })
+})
+
 describe('compileCardRegexScripts', () => {
   const base: CardRegexScript = { findRegex: 'cat', replaceString: 'dog' }
 

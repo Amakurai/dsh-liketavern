@@ -41,6 +41,16 @@ const ROLE_OPTIONS = [
   { value: '2', label: 'assistant' },
 ]
 
+/** 条目级布尔覆盖（boolean | null）的三态选项：null = 跟随全局设置。 */
+const TRI_STATE_OPTIONS = [
+  { value: '', label: '跟随全局' },
+  { value: 'true', label: '开' },
+  { value: 'false', label: '关' },
+]
+
+const triValue = (v: boolean | null): string => (v === null ? '' : String(v))
+const triFrom = (v: string): boolean | null => (v === '' ? null : v === 'true')
+
 type FilterId = 'all' | 'on' | 'off' | 'constant'
 
 function splitKeys(text: string): string[] {
@@ -497,7 +507,7 @@ function EntryForm(props: {
       ) : null}
 
       <Btn size="sm" onClick={() => props.onAdvanced(!props.advanced)}>
-        {props.advanced ? '收起更多选项' : '更多选项（概率 / 递归 / 定时 / 分组）'}
+        {props.advanced ? '收起更多选项' : '更多选项（匹配 / 概率 / 递归 / 定时 / 分组）'}
       </Btn>
       {props.advanced ? (
         <>
@@ -558,6 +568,14 @@ function EntryForm(props: {
             <label className="dsh-tavern-field">
               <span className="dsh-tavern-fieldLabel">扫描深度（空=跟随全局）</span>
               <NullableNumInput value={entry.scanDepth} onChange={(scanDepth) => set({ scanDepth })} />
+            </label>
+            <label className="dsh-tavern-field">
+              <span className="dsh-tavern-fieldLabel">区分大小写</span>
+              <Select size="md" value={triValue(entry.caseSensitive)} onChange={(v) => set({ caseSensitive: triFrom(v) })} options={TRI_STATE_OPTIONS} />
+            </label>
+            <label className="dsh-tavern-field">
+              <span className="dsh-tavern-fieldLabel">整词匹配</span>
+              <Select size="md" value={triValue(entry.matchWholeWords)} onChange={(v) => set({ matchWholeWords: triFrom(v) })} options={TRI_STATE_OPTIONS} />
             </label>
             <label className="dsh-tavern-field">
               <span className="dsh-tavern-fieldLabel">分组</span>

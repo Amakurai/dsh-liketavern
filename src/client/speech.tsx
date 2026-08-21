@@ -7,10 +7,10 @@
  * 正则若只把标记换成 HTML，iframe 下面仍渲染剩余正文。
  */
 import { useEffect, useRef, useState } from 'react'
-import { MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconCopyOutline16, MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives'
 import { buildCardSrcDoc, parseCardBridgeMessage } from '../core/cardFrame.js'
 import { stripDisplayMeta } from '../core/displaySanitize.js'
-import { Avatar, useLoader } from './util.js'
+import { Avatar, IconBtn, useLoader, useToast } from './util.js'
 import type { TavernRemote } from './types.js'
 import './styles.js'
 
@@ -94,6 +94,33 @@ export function SpeechBubble(props: {
   const greetingIndex = rendered.state.status === 'ready' ? rendered.state.value.greetingIndex ?? 0 : 0
   const canSwipe =
     rendered.state.status === 'ready' ? rendered.state.value.canSwipeGreeting !== false : false
+  const toast = useToast()
+
+  /** 复制纯文本：优先 navigator.clipboard，沙盒/权限被拒时回退 execCommand。 */
+  const onCopy = async () => {
+    const plain = text || stripDisplayMeta(rawText)
+    const fallback = () => {
+      try {
+        const ta = document.createElement('textarea')
+        ta.value = plain
+        ta.style.position = 'fixed'
+        ta.style.opacity = '0'
+        document.body.appendChild(ta)
+        ta.select()
+        const ok = document.execCommand('copy')
+        ta.remove()
+        toast.show(ok ? '已复制消息文本' : '复制失败')
+      } catch {
+        toast.show('复制失败')
+      }
+    }
+    try {
+      await navigator.clipboard.writeText(plain)
+      toast.show('已复制消息文本')
+    } catch {
+      fallback()
+    }
+  }
   const frames = htmls.map((html, i) => {
     const srcDoc = buildCardSrcDoc(html, { greetings, greetingIndex, connectHosts: whitelist })
     const widget = htmls.length > 1 ? i > 0 : Boolean(text)
@@ -116,6 +143,12 @@ export function SpeechBubble(props: {
         {frames}
         {(frames.length === 0 || text) && <MarkdownText text={text || ' '} streaming={Boolean(streaming)} />}
       </div>
+      <div className="dsh-tavern-speechCopy">
+        <IconBtn label="复制消息文本" onClick={() => void onCopy()}>
+          <IconCopyOutline16 />
+        </IconBtn>
+      </div>
+      {toast.node}
     </div>
   )
 }

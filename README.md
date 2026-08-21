@@ -71,6 +71,11 @@ src/
 | PNG tEXt / zTXt / iTXt（chara / ccv3） | 导入；导出写 tEXt |
 | 向量匹配 | 不做，语义召回走记忆层 BM25 |
 | `{{char}}` / `{{user}}` / `{{outlet}}` / `{{trim}}` / `{{time}}` / `{{random}}` / `{{pick}}` | 组装时展开（random/pick 本轮复用掷骰，不进 standing） |
+| `{{description}}` / `{{personality}}` / `{{scenario}}` / `{{persona}}` / `{{charFirstMessage}}` / `{{lastCharMessage}}` | 组装时展开（lastCharMessage 本轮宏，不进 standing） |
+| 卡级 system_prompt / post_history_instructions 里的 `{{original}}` | 展开为预设 main / jailbreak 原文；槽位 `forbid_overrides=true` 时卡级覆盖不注入 |
+| 预设条目 `injection_trigger` | 按生成场景过滤（当前只有 normal；continue/impersonate 等一律不匹配） |
+| 预设条目 `forbid_overrides` / `extension` | 导入导出往返保留 |
+| 正则 `trimStrings` / `trimStringsRegex` | 替换代入捕获组前从组值里删除（ST 只实现 trimStrings；trimStringsRegex 按同位置补全） |
 | `{{setvar}}` / `{{getvar}}` / `{{//}}` | 组装内预处理，不落盘，没有 if / dice / STscript |
 | temperature / maxTokens / stop / reasoningEffort | 透传（思考关 → `off`） |
 | top_p / presence_penalty / frequency_penalty | 平台送不到模型 |

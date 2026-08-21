@@ -3,6 +3,10 @@
  * - find 允许 `/pattern/flags` 形式；裸源码 = 区分大小写、只替换首个匹配。
  * - replace 支持 $1..$9 / $<name> 捕获组、`{{match}}`（等价 $&）与 {{char}}/{{user}} 宏。
  * - find 中宏展开由规则 substituteRegex 控制：0=不展开 1=原样代入 2=转义代入。
+ * - trimStrings / trimStringsRegex：对齐 ST——替换代入捕获组（含 {{match}}/$0）前，
+ *   从组值里删掉这些字面串/正则片段（先宏展开）。ST 现行引擎只实现 trimStrings；
+ *   trimStringsRegex 由本插件按同位置语义补全（缺省全局匹配）。
+ *   带 trim 的规则改走函数式手工代入（ST 同款，支持 $0），其余规则仍用原生 replace。
  *
  * 规则作用于三种文本（scope）与三个时机（timing）的组合点：
  * - 用户输入 input：发送前（send）
@@ -54,6 +58,52 @@ function compile(rule: RegexRule, macroCtx: MacroContext): RegExp {
   return new RegExp(source, flags)
 }
 
+function hasTrims(rule: RegexRule): boolean {
+  return (rule.trimStrings?.length ?? 0) > 0 || (rule.trimStringsRegex?.length ?? 0) > 0
+}
+
+/** 编译 trimStringsRegex 条目：允许 /pattern/flags，缺省补 g（trim 通常要全删）。 */
+function compileTrimRegex(source: string): RegExp {
+  const literal = REGEX_LITERAL_RE.exec(source)
+  if (literal) {
+    const flags = literal[2] ?? ''
+    return new RegExp(literal[1]!, flags.includes('g') ? flags : `${flags}g`)
+  }
+  return new RegExp(source, 'g')
+}
+
+/** ST filterString：从捕获组值里删掉 trimStrings（字面，先宏展开）与 trimStringsRegex 命中片段。 */
+function filterCapturedGroup(value: string, rule: RegexRule, trimRes: readonly RegExp[], macroCtx: MacroContext): string {
+  let out = value
+  for (const trim of rule.trimStrings ?? []) {
+    if (!trim) continue
+    const expanded = expandMacros(trim, macroCtx)
+    if (expanded) out = out.replaceAll(expanded, '')
+  }
+  for (const re of trimRes) {
+    re.lastIndex = 0
+    out = out.replace(re, '')
+  }
+  return out
+}
+
+/** 带 trim 的规则走 ST 同款手工代入：$0/$1..$N/$<name>，代入前先过滤组值。 */
+function replaceWithGroupTrim(text: string, re: RegExp, template: string, rule: RegexRule, trimRes: readonly RegExp[], macroCtx: MacroContext): string {
+  const tpl = template.replaceAll('{{match}}', '$0')
+  return text.replace(re, (...args: unknown[]) => {
+    const maybeGroups = args[args.length - 1]
+    const groups =
+      typeof maybeGroups === 'object' && maybeGroups !== null ? (maybeGroups as Record<string, string>) : undefined
+    return tpl.replace(/\$(\d+)|\$<([^>]+)>/g, (_m, num: string | undefined, name: string | undefined) => {
+      let value: string | undefined
+      if (num !== undefined) value = args[Number(num)] as string | undefined
+      else if (name && groups) value = groups[name]
+      if (!value) return '' // 未命中的组（含可选组）代入空串，对齐 ST
+      return filterCapturedGroup(value, rule, trimRes, macroCtx)
+    })
+  })
+}
+
 /** 顺序应用规则；单条规则编译/执行失败不中断后续规则，记入 errors。 */
 export function applyRegexRules(
   text: string,
@@ -72,8 +122,18 @@ export function applyRegexRules(
       // replace 先宏展开（对齐 ST：substituteParams 后再 replace），捕获组由原生 replace 处理。
       // 注意：String.replace 不认识 $0（会输出字面量），整体匹配须用 $&；
       // 且 replaceAll 的替换串里 $& 也有特殊含义，故用函数形式写入字面 '$&'。
-      const replacement = expandMacros(rule.replace, macroCtx).replaceAll('{{match}}', () => '$&')
-      const next = out.replace(re, replacement)
+      const replacement = expandMacros(rule.replace, macroCtx)
+      let next: string
+      if (hasTrims(rule)) {
+        const trimRes: RegExp[] = []
+        for (const source of rule.trimStringsRegex ?? []) {
+          if (!source) continue
+          trimRes.push(compileTrimRegex(source))
+        }
+        next = replaceWithGroupTrim(out, re, replacement, rule, trimRes, macroCtx)
+      } else {
+        next = out.replace(re, replacement.replaceAll('{{match}}', () => '$&'))
+      }
       if (next !== out) applied.push(rule.id)
       out = next
     } catch (error) {
@@ -207,6 +267,12 @@ export function compileRegexScripts(
       substituteRegex: substitute === 0 || substitute === 2 ? substitute : 1,
       source,
       ...(roleList.length > 0 ? { roles: roleList } : {}),
+      ...(script.trimStrings?.some((s) => s.length > 0)
+        ? { trimStrings: script.trimStrings.filter((s) => s.length > 0) }
+        : {}),
+      ...(script.trimStringsRegex?.some((s) => s.length > 0)
+        ? { trimStringsRegex: script.trimStringsRegex.filter((s) => s.length > 0) }
+        : {}),
     })
   })
   return rules

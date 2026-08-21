@@ -19,6 +19,9 @@ export declare function isRuntimeContextSnapshot(text: string): boolean;
 /** 同轮工具写入后经 agent.inject 的确认；不当作用户台词，也不扫世界书。 */
 export declare const TURN_WRITE_ACK_PREFIX = "\u3010Tavern \u540C\u8F6E\u5199\u5165\u3011";
 export declare function isTurnWriteAck(text: string): boolean;
+/** 楼层续写指令（continueFloor followup 进日志）；不当作用户台词，也不扫世界书。 */
+export declare const CONTINUE_INSTRUCTION_PREFIX = "\u3010Tavern \u7EED\u5199\u3011";
+export declare function isContinueInstruction(text: string): boolean;
 /** 组装/世界书扫描应跳过的合成 user 文本。 */
 export declare function isSyntheticUserText(text: string): boolean;
 /** 把残留 `{{…}}` 换成全角花括号，避免 dsh section 插值把 ST 宏当成变量抛错。 */

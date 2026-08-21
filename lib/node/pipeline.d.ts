@@ -22,6 +22,11 @@ export interface PipelineInput {
     mode: 'live' | 'preview';
     /** preview 且无 live agent 时的历史（纯文本）。 */
     historyOverride?: ChatMessage[];
+    /**
+     * ST 生成场景（injection_trigger 评估），缺省 'normal'。
+     * 续写轮由 agent 面探测合成续写指令后传 'continue'；impersonate 传 'impersonate'。
+     */
+    generationType?: string;
 }
 export interface PipelineResult {
     /** 角色定义 + 预设骨架（写入 system 段，绑定不变则字节级稳定）。 */

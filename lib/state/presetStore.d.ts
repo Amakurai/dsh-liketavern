@@ -7,6 +7,9 @@
  * 一份只含内建槽位的 100000 骨架——导入必须优先 100001，不能取数组第一项。
  * 未列入所选 order 的库条目关闭并附在栈末，记一条摘要（不逐条 warning）。
  * 无 prompt_order 时全部启用。relative 条目的 order 取自栈序；in-chat 仍用 injection_order。
+ * `forbid_overrides` / `extension` / `injection_trigger` 归一化进 PresetEntry
+ * （forbidOverrides / extension / injectionTrigger），导出时带回；
+ * 运行时语义见 assemble（forbid_overrides 拒绝卡级覆盖、injection_trigger 按生成场景过滤）。
  * `extensions.regex_scripts` 原样挂到 PromptPreset.regexScripts（编译在 rulesFor）。
  */
 import type { PromptPreset } from '../core/types.js';
@@ -16,7 +19,7 @@ export interface ParseStPresetResult {
 }
 /**
  * 解析 ST 预设 JSON。缺 prompts 数组时抛中文错误；
- * 无法映射的字段与条目不中断导入，记入 warnings。
+ * 无法映射的条目不中断导入，记入 warnings。
  */
 export declare function parseStPreset(json: unknown): ParseStPresetResult;
 /** 导出为 ST 形态：prompts + 单个 prompt_order（character_id 100001）。 */

@@ -8,7 +8,10 @@
  * 预设 prompt 正则只包最新用户句、常驻世界书进 standing、EJS 脚本跳过注入、
  * 本轮 setvar 不泄漏进 standing getvar、runtime context 快照不当成 lastUserMessage、
  * prompt 正则的纯函数性、历史 {{user}}/{{char}} 展开、第三方预设缺少私有 marker 时的动态层兜底、
- * 世界状态按 keys 触发且不与世界书位置重复注入。
+ * 世界状态按 keys 触发且不与世界书位置重复注入、in-chat 内容 marker 按 depth 注入、
+ * {{original}} 引用预设 main/jailbreak 原文、forbid_overrides 拒绝卡级覆盖、
+ * injection_trigger 按生成场景过滤、卡字段宏（description/scenario/persona/charFirstMessage）、
+ * {{lastCharMessage}} 进 turn 不打穿 standing。
  */
 import { describe, expect, it } from 'vitest'
 import { assemblePrompt, defaultPreset, splitExampleMessages, type AssembleInput } from '../src/core/assemble.js'
@@ -208,7 +211,7 @@ describe('relative 骨架与 marker 替换', () => {
     expect(cs).toEqual([MAIN_EXPANDED, 'PERSONA', 'h0', 'h1', 'JB'])
   })
 
-  it('未知 markerId 记 unknown-marker 日志（relative 与 in-chat 两种）', () => {
+  it('未知 markerId 记 unknown-marker 日志；in-chat 的 chatHistory marker 记 dropped-marker-content', () => {
     const preset = defaultPreset()
     preset.entries.push(
       presetEntry({ identifier: 'bogus', marker: true, markerId: 'not-a-marker', order: 95 }),
@@ -217,7 +220,39 @@ describe('relative 骨架与 marker 替换', () => {
     const res = assemblePrompt(makeInput({ preset }))
     const kinds = res.log.filter((l) => l.kind === 'unknown-marker').map((l) => l.detail)
     expect(kinds).toContain('not-a-marker')
-    expect(kinds.some((d) => d.includes('in-chat 位置不支持 marker'))).toBe(true)
+    // ST 里 chatHistory 只按栈位锚定，in-chat 深度无意义 → 跳过并记日志
+    const dropped = res.log.filter((l) => l.kind === 'dropped-marker-content').map((l) => l.detail)
+    expect(dropped.some((d) => d.includes('in-chat 位置的 chatHistory marker 无深度锚定语义'))).toBe(true)
+  })
+
+  it('in-chat 内容 marker 按 depth 注入解析内容（ST：系统提示继承 marker 的 injection_*）', () => {
+    const preset = defaultPreset()
+    // 拿掉 relative 的 scenario marker，改放一个 in-chat 版（depth 1 = 最后一条之前）
+    preset.entries = preset.entries.filter((e) => e.markerId !== Marker.Scenario)
+    preset.entries.push(
+      presetEntry({ identifier: 'scenario-in-chat', marker: true, markerId: Marker.Scenario, position: 'in-chat', depth: 1, role: 'user' }),
+    )
+    const res = assemblePrompt(makeInput({ preset }))
+    const cs = contents(res.messages)
+    expect(cs.filter((c) => c === 'SCEN')).toHaveLength(1) // 不与 relative 重复
+    const scenIdx = cs.indexOf('SCEN')
+    expect(scenIdx).toBe(cs.indexOf('h1') - 1) // depth 1：最后一条历史之前
+    expect(res.messages[scenIdx]!.role).toBe('user') // 继承条目 role
+  })
+
+  it('in-chat 的 chatHistory marker 不再锚定历史时，历史仍附在骨架之后', () => {
+    const preset = defaultPreset()
+    const jb = preset.entries.find((e) => e.identifier === 'jailbreak')
+    if (jb) jb.content = 'JB'
+    preset.entries = preset.entries.filter((e) => e.markerId !== Marker.ChatHistory)
+    preset.entries.push(
+      presetEntry({ identifier: 'history-in-chat', marker: true, markerId: Marker.ChatHistory, position: 'in-chat', depth: 1 }),
+    )
+    const res = assemblePrompt(makeInput({ preset }))
+    const cs = contents(res.messages)
+    // 无 relative chatHistory 锚点：历史追加在整个骨架（含 jailbreak）之后
+    expect(cs.indexOf('h0')).toBeGreaterThan(cs.indexOf(MAIN_EXPANDED))
+    expect(cs.indexOf('h0')).toBeGreaterThan(cs.indexOf('JB'))
   })
 
   it('未支持宏记 unknown-macro，同一宏多次出现只记一次', () => {
@@ -718,5 +753,165 @@ describe('depth_prompt / 作者注释 / 角色笔记', () => {
     expect(res.turnContext).toContain('【角色笔记】J-note')
     expect(res.standing).not.toContain('作者注释')
     expect(res.standing).not.toContain('角色笔记')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// {{original}} 与 forbid_overrides
+// ---------------------------------------------------------------------------
+
+describe('{{original}} 与 forbid_overrides', () => {
+  it('卡级 system_prompt 里的 {{original}} 展开为预设 main 原文（含宏展开）', () => {
+    const card = makeCard({ systemPrompt: 'OVERRIDE <<{{original}}>>' })
+    const res = assemblePrompt(makeInput({ card }))
+    expect(contents(res.messages)[0]).toBe(`OVERRIDE <<${MAIN_EXPANDED}>>`)
+    // 预设 main 条目本身仍在序列里
+    expect(contents(res.messages)).toContain(MAIN_EXPANDED)
+  })
+
+  it('卡级 post_history_instructions 里的 {{original}} 展开为预设 jailbreak 原文', () => {
+    const card = makeCard({ postHistoryInstructions: 'PHI [{{original}}]' })
+    const res = assemblePrompt(makeInput({ card }))
+    expect(contents(res.messages)).toContain('PHI [JB]')
+  })
+
+  it('预设缺 main 槽位时 {{original}} 为空串，不当成未知宏', () => {
+    const preset: PromptPreset = {
+      name: 'no-main',
+      identifier: 'no-main',
+      entries: [presetEntry({ identifier: 'history', marker: true, markerId: Marker.ChatHistory, order: 10 })],
+    }
+    const card = makeCard({ systemPrompt: 'X{{original}}Y' })
+    const res = assemblePrompt(makeInput({ preset, card }))
+    expect(contents(res.messages)[0]).toBe('XY')
+    expect(res.log.filter((l) => l.kind === 'unknown-macro')).toHaveLength(0)
+  })
+
+  it('{{original}} 不泄漏到预设条目：骨架里的 {{original}} 仍是未知宏', () => {
+    const preset = defaultPreset()
+    preset.entries.push(presetEntry({ identifier: 'uses-original', content: '{{original}}', order: 95 }))
+    const res = assemblePrompt(makeInput({ preset }))
+    expect(res.log.filter((l) => l.kind === 'unknown-macro').map((l) => l.detail)).toContain('{{original}}')
+  })
+
+  it('main 槽位 forbid_overrides=true 时拒绝卡级 system_prompt', () => {
+    const preset = defaultPreset()
+    const main = preset.entries.find((e) => e.identifier === 'main')!
+    main.forbidOverrides = true
+    const res = assemblePrompt(makeInput({ preset }))
+    expect(contents(res.messages)).not.toContain('SYS Alice')
+    expect(contents(res.messages)).toContain(MAIN_EXPANDED)
+  })
+
+  it('jailbreak 槽位 forbid_overrides=true 时拒绝卡级 post_history_instructions', () => {
+    const preset = defaultPreset()
+    const jb = preset.entries.find((e) => e.identifier === 'jailbreak')!
+    jb.content = 'JB'
+    jb.forbidOverrides = true
+    const res = assemblePrompt(makeInput({ preset }))
+    expect(contents(res.messages)).not.toContain('POST-HIST')
+    expect(contents(res.messages)).toContain('JB')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// injection_trigger（生成场景过滤）
+// ---------------------------------------------------------------------------
+
+describe('injection_trigger', () => {
+  const triggerPreset = (): PromptPreset => {
+    const preset = defaultPreset()
+    const jb = preset.entries.find((e) => e.identifier === 'jailbreak')
+    if (jb) jb.content = 'JB'
+    preset.entries.push(
+      presetEntry({ identifier: 'normal-only', content: 'NORMAL-ONLY', order: 95, injectionTrigger: ['normal'] }),
+      presetEntry({ identifier: 'continue-only', content: 'CONTINUE-ONLY', order: 96, injectionTrigger: ['continue'] }),
+      presetEntry({
+        identifier: 'impersonate-in-chat',
+        content: 'IMP-ONLY',
+        position: 'in-chat',
+        depth: 0,
+        order: 1,
+        injectionTrigger: ['impersonate'],
+      }),
+    )
+    return preset
+  }
+
+  it('默认 normal 场景：只纳入空/含 normal 的条目', () => {
+    const res = assemblePrompt(makeInput({ preset: triggerPreset() }))
+    const cs = contents(res.messages)
+    expect(cs).toContain('NORMAL-ONLY')
+    expect(cs).not.toContain('CONTINUE-ONLY')
+    expect(cs).not.toContain('IMP-ONLY')
+  })
+
+  it('generationType=continue：continue 条目纳入，normal-only 排除', () => {
+    const res = assemblePrompt(makeInput({ preset: triggerPreset(), generationType: 'continue' }))
+    const cs = contents(res.messages)
+    expect(cs).not.toContain('NORMAL-ONLY')
+    expect(cs).toContain('CONTINUE-ONLY')
+  })
+
+  it('generationType=impersonate：impersonate 条目纳入，normal-only / continue-only 排除', () => {
+    const res = assemblePrompt(makeInput({ preset: triggerPreset(), generationType: 'impersonate' }))
+    const cs = contents(res.messages)
+    expect(cs).not.toContain('NORMAL-ONLY')
+    expect(cs).not.toContain('CONTINUE-ONLY')
+    expect(cs).toContain('IMP-ONLY')
+  })
+
+  it('触发过滤同样作用于 marker 条目（缺席时走兜底注入）', () => {
+    const preset: PromptPreset = {
+      name: 'trigger-marker',
+      identifier: 'trigger-marker',
+      entries: [
+        presetEntry({ identifier: 'main', content: 'MAIN', order: 10 }),
+        presetEntry({ identifier: 'mem', marker: true, markerId: Marker.AgentMemory, order: 15, injectionTrigger: ['impersonate'] }),
+        presetEntry({ identifier: 'history', marker: true, markerId: Marker.ChatHistory, order: 20 }),
+      ],
+    }
+    const res = assemblePrompt(makeInput({ preset, memories: ['MEM-A'] }))
+    // agentMemory marker 被触发过滤排除 → 兜底自动注入仍生效
+    expect(contents(res.messages)).toContain('MEM-A')
+    expect(res.log.some((l) => l.kind === 'auto-marker' && l.detail.includes('agentMemory'))).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 卡字段 / 人设 / 消息宏
+// ---------------------------------------------------------------------------
+
+describe('卡字段与消息宏', () => {
+  it('预设条目里的 {{description}}/{{personality}}/{{scenario}}/{{persona}}/{{charFirstMessage}} 展开', () => {
+    const preset = defaultPreset()
+    preset.entries.push(
+      presetEntry({
+        identifier: 'fields',
+        content: '{{description}} | {{personality}} | {{scenario}} | {{persona}} | {{charFirstMessage}}',
+        order: 95,
+      }),
+    )
+    const res = assemblePrompt(makeInput({ preset }))
+    // 卡字段宏稳定 → 进 standing
+    expect(res.standing).toContain('DESC Bob | PERS | SCEN | PERSONA | FIRST')
+  })
+
+  it('{{lastCharMessage}} 取最近 assistant 消息并进 turnContext，standing 字节不变', () => {
+    const preset = defaultPreset()
+    preset.entries.push(
+      presetEntry({ identifier: 'recap', content: '<前情>{{lastCharMessage}}</前情>', order: 95 }),
+    )
+    const a = assemblePrompt(
+      makeInput({ preset, history: [{ role: 'user', content: 'u1' }, { role: 'assistant', content: '回复甲' }] }),
+    )
+    const b = assemblePrompt(
+      makeInput({ preset, history: [{ role: 'user', content: 'u1' }, { role: 'assistant', content: '回复乙' }] }),
+    )
+    expect(a.turnContext).toContain('<前情>回复甲</前情>')
+    expect(b.turnContext).toContain('<前情>回复乙</前情>')
+    expect(a.standing).toBe(b.standing)
+    expect(a.standing).not.toContain('回复甲')
+    expect(a.standing).not.toContain('前情')
   })
 })

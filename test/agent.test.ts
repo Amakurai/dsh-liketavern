@@ -2,7 +2,7 @@
  * dsh 段文本中性化、未绑卡 standing、纪律与本轮 playbook。
  */
 import { describe, expect, it } from 'vitest'
-import { BOUND_DISCIPLINE, TURN_WRITE_ACK_PREFIX, UNBOUND_STANDING, formatTurnPlaybook, isSyntheticUserText, neutralizeDshMustache } from '../src/core/dshPrompt.js'
+import { BOUND_DISCIPLINE, CONTINUE_INSTRUCTION_PREFIX, TURN_WRITE_ACK_PREFIX, UNBOUND_STANDING, formatTurnPlaybook, isSyntheticUserText, neutralizeDshMustache } from '../src/core/dshPrompt.js'
 
 describe('neutralizeDshMustache', () => {
   it('把残留 ST 宏改成全角花括号，避免 dsh section 插值抛错', () => {
@@ -48,9 +48,10 @@ describe('formatTurnPlaybook', () => {
 })
 
 describe('isSyntheticUserText', () => {
-  it('识别 runtime context 与同轮写入确认', () => {
+  it('识别 runtime context、同轮写入确认与续写指令', () => {
     expect(isSyntheticUserText('Current runtime context. x')).toBe(true)
     expect(isSyntheticUserText(`${TURN_WRITE_ACK_PREFIX}记忆 id=1 已落盘。`)).toBe(true)
+    expect(isSyntheticUserText(`${CONTINUE_INSTRUCTION_PREFIX}上一条角色回复可能被截断。`)).toBe(true)
     expect(isSyntheticUserText('你好')).toBe(false)
   })
 })

@@ -1,7 +1,8 @@
 /**
  * SillyTavern 预设（presetStore）单元测试。
  * 覆盖：全字段解析（role/system_prompt/injection_*）、prompt_order 优先 100001、
- * 未列出库条目摘要 warning、无 prompt_order 默认全开、未映射字段仅在有意义时 warning、
+ * 未列出库条目摘要 warning、无 prompt_order 默认全开、
+ * forbid_overrides / extension / injection_trigger 归一化保留并随导出带回、
  * 缺 prompts 抛错、栈序写入 relative.order、往返导出。
  */
 import { describe, expect, it } from 'vitest'
@@ -91,29 +92,41 @@ describe('parseStPreset', () => {
     expect(jb.depth).toBe(2)
     expect(jb.order).toBe(90) // in-chat 仍用 injection_order
     expect(jb.enabled).toBe(true)
+    expect(jb.injectionTrigger).toEqual(['key']) // 归一化保留（小写）
 
     const aux = preset.entries[3]!
     expect(aux.role).toBe('assistant')
     expect(aux.enabled).toBe(false) // 未列出 → 禁用
     expect(aux.order).toBe(40) // 附在栈末的 relative 序
+    expect(aux.extension).toBe(true) // 扩展标记往返保留
+
+    // forbid_overrides: false 是默认值，不进内部模型
+    expect(main.forbidOverrides).toBeUndefined()
   })
 
-  it('warnings：未列出条目一条摘要 + 有意义的未映射字段（空 forbid_overrides 不计）', () => {
+  it('forbid_overrides / injection_trigger / extension 不再告警，归一化进条目', () => {
+    const { preset, warnings } = parseStPreset({
+      prompts: [
+        { identifier: 'main', content: 'x', forbid_overrides: true },
+        { identifier: 'jb', content: 'y', injection_trigger: ['Normal', 'continue'] },
+      ],
+      prompt_order: [
+        { character_id: 100001, order: [{ identifier: 'main', enabled: true }, { identifier: 'jb', enabled: true }] },
+      ],
+    })
+    expect(warnings).toEqual([])
+    expect(preset.entries[0]!.forbidOverrides).toBe(true)
+    expect(preset.entries[1]!.injectionTrigger).toEqual(['normal', 'continue']) // trim + 小写归一化
+  })
+
+  it('warnings：未列出条目一条摘要；三字段已归一化不再告警', () => {
     const { warnings } = parseStPreset(ST_PRESET)
     expect(warnings.some((w) => w.includes('1 条') && w.includes('prompt_order'))).toBe(true)
     expect(warnings.some((w) => w.includes('forbid_overrides'))).toBe(false)
-    expect(warnings.some((w) => w.includes('injection_trigger'))).toBe(true)
-    expect(warnings.some((w) => w.includes('extension'))).toBe(true)
-    expect(warnings).toHaveLength(3)
+    expect(warnings.some((w) => w.includes('injection_trigger'))).toBe(false)
+    expect(warnings.some((w) => w.includes('extension'))).toBe(false)
+    expect(warnings).toHaveLength(1)
     expect(warnings.every((w) => !w.includes('"aux"'))).toBe(true)
-  })
-
-  it('forbid_overrides=true 才记未映射 warning', () => {
-    const { warnings } = parseStPreset({
-      prompts: [{ identifier: 'main', content: 'x', forbid_overrides: true }],
-      prompt_order: [{ character_id: 100001, order: [{ identifier: 'main', enabled: true }] }],
-    })
-    expect(warnings.some((w) => w.includes('forbid_overrides'))).toBe(true)
   })
 
   it('无 prompt_order → 全部 enabled=true 且无相关 warning', () => {
@@ -209,9 +222,12 @@ describe('exportStPreset 与往返', () => {
     expect(jb.injection_depth).toBe(2)
     expect(jb.injection_order).toBe(90)
     expect(jb.system_prompt).toBe(false)
+    expect(jb.injection_trigger).toEqual(['key']) // 导出带回
     expect(exported.prompts[0]!.system_prompt).toBe(true)
+    expect(exported.prompts[0]!.forbid_overrides).toBeUndefined() // 默认值不导出
     expect(exported.prompts[1]!.marker).toBe(true)
     expect(exported.prompts[0]!.injection_order).toBe(10)
+    expect(exported.prompts[3]!.extension).toBe(true) // 扩展标记导出带回
   })
 
   it('往返：parse(export(parse(x))) 条目深相等且无 warning', () => {

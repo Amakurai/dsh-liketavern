@@ -12,7 +12,9 @@ import {
   inheritedThroughTurn,
   sessionPrefixEvents,
   timerOwnerAtTurn,
+  withEditedAssistantMessage,
 } from '../src/node/floors.js'
+import { createAssistantMessage } from '@deepseek-ai/dsh-llm'
 
 function sessionOf(opts: {
   header?: { provider?: string; model?: string; maxTokens?: number }
@@ -123,6 +125,46 @@ describe('inheritedThroughTurn', () => {
     ] as SessionEvent[]
     expect(inheritedThroughTurn(events)).toBe(10)
     expect(inheritedThroughTurn([])).toBeNull()
+  })
+})
+
+describe('withEditedAssistantMessage', () => {
+  const message = createAssistantMessage({
+    content: [{ type: 'text', text: '旧台词' }],
+    source: { provider: 'deepseek', model: 'deepseek-chat' },
+  })
+  const events = [
+    { type: 'turn/start', seq: 0, time: 0, data: { turn: 1 } },
+    {
+      type: 'assistant/message',
+      seq: 1,
+      time: 0,
+      data: { turn: 1, step: 1, message },
+      surfaceOp: 'append',
+      sourceEventSeqs: [],
+    },
+    { type: 'turn/end', seq: 2, time: 0, data: { turn: 1, reason: { kind: 'completed' } } },
+  ] as unknown as SessionEvent[]
+
+  it('替换指定消息的正文，保留 seq/surfaceOp/turn 与模型 source', () => {
+    const out = withEditedAssistantMessage(events, message.id, '新台词')!
+    expect(out).toHaveLength(3)
+    const replaced = out[1]!
+    expect(replaced.seq).toBe(1)
+    expect(replaced.type).toBe('assistant/message')
+    expect((replaced as { surfaceOp?: string }).surfaceOp).toBe('append')
+    const data = replaced.data as { turn: number; message: { content: { type: string; text?: string }[]; source: { provider: string; model: string } } }
+    expect(data.turn).toBe(1)
+    expect(data.message.content).toEqual([{ type: 'text', text: '新台词' }])
+    expect(data.message.source).toMatchObject({ provider: 'deepseek', model: 'deepseek-chat' })
+    // 其余事件原样保留（同一引用）
+    expect(out[0]).toBe(events[0])
+    expect(out[2]).toBe(events[2])
+  })
+
+  it('找不到消息返回 null，不改原数组', () => {
+    expect(withEditedAssistantMessage(events, 'missing-id', 'x')).toBeNull()
+    expect((events[1]!.data as { message: { content: { text?: string }[] } }).message.content[0]!.text).toBe('旧台词')
   })
 })
 

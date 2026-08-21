@@ -150,6 +150,11 @@ export declare class TavernService extends TypertRemoteService {
         sessionId: string;
         messageId: string;
     }): Promise<unknown>;
+    /** 分支兄弟导航是只读查询：等排队中的楼层任务落定即可，不进串行队列。 */
+    getFloorSiblings(request: {
+        sessionId: string;
+        messageId: string;
+    }): Promise<unknown>;
     renderOutputText(request: {
         sessionId: string;
         text: string;
@@ -170,6 +175,23 @@ export declare class TavernService extends TypertRemoteService {
         sessionId: string;
         messageId: string;
         text: string;
+    }): Promise<unknown>;
+    getFloorAssistantMessage(request: {
+        sessionId: string;
+        messageId: string;
+    }): Promise<unknown>;
+    editAssistantMessage(request: {
+        sessionId: string;
+        messageId: string;
+        text: string;
+    }): Promise<unknown>;
+    continueFloor(request: {
+        sessionId: string;
+        messageId: string;
+    }): Promise<unknown>;
+    /** impersonate 是带外一次性调用，不进会话串行队列（不改会话状态）。 */
+    impersonate(request: {
+        sessionId: string;
     }): Promise<unknown>;
     getMemories(request: {
         cardId: string;

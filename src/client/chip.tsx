@@ -236,7 +236,7 @@ export function TavernHeaderChip(props: {
     const next = ((binding.greetingIndex + delta) % total + total) % total
     const r = await remote.swipeGreeting({ sessionId, index: next })
     if (!r.ok) setError(r.error.message)
-    else await openChildSession(sessions, r.value.childSessionId)
+    else await openChildSession(sessions, r.value.childSessionId, r.value.title)
   }
 
   const unbind = async () => {

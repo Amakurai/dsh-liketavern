@@ -2,20 +2,24 @@
  * assistant 消息操作条（slot conversation.chat.assistant-actions，session 作用域）。
  *
  * 视觉对齐 dsh 原生 IconActions（28px 图标钮 + Tooltip）。
- * 整组用 margin-left:auto 靠右，开场白 swipe（‹ n/m ›）在这一侧。
+ * 整组用 margin-left:auto 靠右，开场白 swipe 与分支兄弟导航（‹ n/m ›）在这一侧。
  * 行为：
  * - 仅在 Tavern 模式且已绑定角色卡时渲染（普通 dsh 会话不出现任何 Tavern 按钮）；
  * - 开场白楼层只给 swipe（对话开始后连 swipe 也收起），不提供重新生成/编辑；
- * - 三个楼层操作均按「这一层」生效（slot owner 提供 messageId，host 端据此定位楼层）；
- * - 成功后自动 sessions.open(分支子会话)，续跑的流式过程在分支里原生可见。
+ * - 非开场白楼层若同层有分支（regenerate/编辑/回退 fork 出的兄弟会话），
+ *   显示 ‹ n/m › 兄弟导航，点击经 openChildSession 跳转对应分支会话；
+ * - 重新生成/回退/编辑均按「这一层」生效（slot owner 提供 messageId，host 端据此定位楼层）；
+ *   成功后自动 sessions.open(分支子会话) 并把 host 给的分支标题 rename 进会话列表；
+ * - 续写（continue）不 fork：host 校验只能续最后一层，续跑流式在当前会话原生可见；
+ * - 代答（impersonate）生成用户台词，dsh 输入区没有插件可写 API，结果复制到剪贴板。
  */
 import { useEffect, useState } from 'react'
-import { IconBranchOutline16, IconChevronLeftOutline14, IconChevronRightOutline14, IconEditOutline16, IconLoadingOutline16, IconRefreshOutline16, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconBranchOutline16, IconChevronLeftOutline14, IconChevronRightOutline14, IconEditOutline16, IconListPenOutline16, IconLoadingOutline16, IconPlayOutline16, IconRefreshOutline16, IconUserOutline16, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ReactNode } from 'react'
 import { isTavernSession, type UseSessions } from './mode.js'
 import { openChildSession } from './openChild.js'
 import type { Envelope, TavernRemote } from './types.js'
-import { Btn, Dialog, Err, textarea, useLoader } from './util.js'
+import { Btn, Dialog, Err, textarea, useLoader, useToast } from './util.js'
 import './styles.js'
 
 function IconAction(props: { label: string; disabled?: boolean; busy?: boolean; onClick: () => void; children: ReactNode }) {
@@ -36,6 +40,9 @@ function IconAction(props: { label: string; disabled?: boolean; busy?: boolean; 
 
 /** 绑定变更广播（chip 保存绑定后 dispatch，操作条据此显隐）。 */
 export const BINDING_CHANGED_EVENT = 'dsh-tavern:binding-changed'
+
+/** 分支变更广播（fork 操作成功后以源会话 id dispatch，兄弟导航据此重拉）。 */
+export const BRANCH_CHANGED_EVENT = 'dsh-tavern:branch-changed'
 
 /** 查询会话是否已绑定角色卡；null = 尚未加载完成（先不渲染，避免闪烁）。非 Tavern 不打 remote。 */
 function useTavernBound(remote: TavernRemote, sessionId: string, enabled: boolean): boolean | null {
@@ -77,7 +84,20 @@ export interface FloorActionsProps {
   useSessions?: UseSessions
 }
 
-type FloorOperation = 'regenerate' | 'rollback' | 'load-edit' | 'submit-edit' | 'swipe-prev' | 'swipe-next' | null
+type FloorOperation =
+  | 'regenerate'
+  | 'rollback'
+  | 'load-edit'
+  | 'submit-edit'
+  | 'load-edit-ai'
+  | 'submit-edit-ai'
+  | 'continue'
+  | 'impersonate'
+  | 'swipe-prev'
+  | 'swipe-next'
+  | 'branch-prev'
+  | 'branch-next'
+  | null
 
 export function TavernFloorActions(props: FloorActionsProps) {
   const { remote, sessionId, sessions, messageId } = props
@@ -87,8 +107,18 @@ export function TavernFloorActions(props: FloorActionsProps) {
   const [failure, setFailure] = useState<string | null>(null)
   const [editFailure, setEditFailure] = useState<string | null>(null)
   const [edit, setEdit] = useState<{ turn: number; text: string } | null>(null)
+  const [editAiFailure, setEditAiFailure] = useState<string | null>(null)
+  const [editAi, setEditAi] = useState<{ turn: number; text: string } | null>(null)
+  /** 剪贴板不可用时展示的代答结果（用户手动复制）。 */
+  const [impersonated, setImpersonated] = useState<string | null>(null)
+  const toast = useToast()
   const swipeLoader = useLoader(
     () => remote.getGreetingSwipe({ sessionId, messageId: messageId! }),
+    [sessionId, messageId],
+    bound === true && Boolean(messageId),
+  )
+  const siblingLoader = useLoader(
+    () => remote.getFloorSiblings({ sessionId, messageId: messageId! }),
     [sessionId, messageId],
     bound === true && Boolean(messageId),
   )
@@ -97,8 +127,15 @@ export function TavernFloorActions(props: FloorActionsProps) {
     const onChanged = (event: Event) => {
       if ((event as CustomEvent<string>).detail === sessionId) swipeLoader.reload()
     }
+    const onBranchChanged = (event: Event) => {
+      if ((event as CustomEvent<string>).detail === sessionId) siblingLoader.reload()
+    }
     window.addEventListener(BINDING_CHANGED_EVENT, onChanged)
-    return () => window.removeEventListener(BINDING_CHANGED_EVENT, onChanged)
+    window.addEventListener(BRANCH_CHANGED_EVENT, onBranchChanged)
+    return () => {
+      window.removeEventListener(BINDING_CHANGED_EVENT, onChanged)
+      window.removeEventListener(BRANCH_CHANGED_EVENT, onBranchChanged)
+    }
     // reload 随 loader render 更新；事件回调只需跟会话、消息和启用状态重挂。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bound, messageId, sessionId])
@@ -106,18 +143,25 @@ export function TavernFloorActions(props: FloorActionsProps) {
   const swipe = greetState?.swipe ?? null
   const isGreeting = greetState?.isGreeting === true
   const started = greetState?.started === true
+  const siblingSwipe = siblingLoader.state.status === 'ready' ? siblingLoader.state.value.swipe : null
 
-  /** 跑一个产生分支会话的操作；成功后直接跳转到分支（续跑过程在分支里原生流式可见）。 */
+  /** 跑一个产生分支会话的操作；成功后直接跳转到分支（续跑过程在分支里原生流式可见），并写入分支标题。 */
   const run = async (
-    kind: Exclude<FloorOperation, 'load-edit' | 'submit-edit' | null>,
-    op: () => Promise<Envelope<{ childSessionId: string }>>,
+    kind: Exclude<
+      FloorOperation,
+      'load-edit' | 'submit-edit' | 'load-edit-ai' | 'submit-edit-ai' | 'continue' | 'impersonate' | 'branch-prev' | 'branch-next' | null
+    >,
+    op: () => Promise<Envelope<{ childSessionId: string; title?: string }>>,
   ) => {
     setOperation(kind)
     setFailure(null)
     try {
       const r = await op()
-      if (r.ok) await openChildSession(sessions, r.value.childSessionId)
-      else setFailure(r.error.message)
+      if (r.ok) {
+        // 源会话的兄弟导航（若仍挂载）据此重拉索引
+        window.dispatchEvent(new CustomEvent(BRANCH_CHANGED_EVENT, { detail: sessionId }))
+        await openChildSession(sessions, r.value.childSessionId, r.value.title)
+      } else setFailure(r.error.message)
     } catch (e) {
       setFailure(e instanceof Error ? e.message : String(e))
     } finally {
@@ -134,6 +178,21 @@ export function TavernFloorActions(props: FloorActionsProps) {
     if (!swipe || busy) return
     const next = ((swipe.index + delta) % swipe.total + swipe.total) % swipe.total
     void run(delta < 0 ? 'swipe-prev' : 'swipe-next', () => remote.swipeGreeting({ sessionId, index: next }))
+  }
+
+  /** 兄弟分支切换：跳转打开同一楼层另一版回复所在的会话（复用 fork 的 refresh+open 路径）。 */
+  const onBranch = (delta: number) => {
+    const nav = siblingSwipe
+    if (!nav || nav.total < 2 || busy) return
+    const target = nav.siblings[(nav.index + delta + nav.total) % nav.total]
+    if (!target || target === sessionId) return
+    setOperation(delta < 0 ? 'branch-prev' : 'branch-next')
+    void openChildSession(sessions, target)
+      .catch(() => {
+        toast.show('这个分支会话不存在或已被删除')
+        siblingLoader.reload()
+      })
+      .finally(() => setOperation(null))
   }
 
   const onEdit = async () => {
@@ -160,7 +219,8 @@ export function TavernFloorActions(props: FloorActionsProps) {
       const r = await remote.editUserMessage({ sessionId, messageId, text: draft.text })
       if (r.ok) {
         setEdit(null)
-        await openChildSession(sessions, r.value.childSessionId)
+        window.dispatchEvent(new CustomEvent(BRANCH_CHANGED_EVENT, { detail: sessionId }))
+        await openChildSession(sessions, r.value.childSessionId, r.value.title)
       } else {
         setEditFailure(r.error.message)
       }
@@ -171,8 +231,94 @@ export function TavernFloorActions(props: FloorActionsProps) {
     }
   }
 
+  /** 续写最后一层：不 fork，host 驱动画前会话，流式在当前会话出现。 */
+  const onContinue = async () => {
+    setOperation('continue')
+    setFailure(null)
+    try {
+      const r = await remote.continueFloor({ sessionId, messageId })
+      if (!r.ok) setFailure(r.error.message)
+    } catch (e) {
+      setFailure(e instanceof Error ? e.message : String(e))
+    } finally {
+      setOperation(null)
+    }
+  }
+
+  const onEditAi = async () => {
+    setOperation('load-edit-ai')
+    setFailure(null)
+    setEditAiFailure(null)
+    try {
+      const r = await remote.getFloorAssistantMessage({ sessionId, messageId })
+      if (r.ok) setEditAi({ turn: r.value.turn, text: r.value.text })
+      else setFailure(r.error.message)
+    } catch (e) {
+      setFailure(e instanceof Error ? e.message : String(e))
+    } finally {
+      setOperation(null)
+    }
+  }
+
+  const submitEditAi = async () => {
+    const draft = editAi
+    if (!draft) return
+    setOperation('submit-edit-ai')
+    setEditAiFailure(null)
+    try {
+      const r = await remote.editAssistantMessage({ sessionId, messageId, text: draft.text })
+      if (r.ok) {
+        setEditAi(null)
+        window.dispatchEvent(new CustomEvent(BRANCH_CHANGED_EVENT, { detail: sessionId }))
+        await openChildSession(sessions, r.value.childSessionId, r.value.title)
+      } else {
+        setEditAiFailure(r.error.message)
+      }
+    } catch (e) {
+      setEditAiFailure(e instanceof Error ? e.message : String(e))
+    } finally {
+      setOperation(null)
+    }
+  }
+
+  /** AI 代答用户：结果复制进剪贴板（dsh 输入区没有插件可写 API）；剪贴板不可用时弹窗展示。 */
+  const onImpersonate = async () => {
+    setOperation('impersonate')
+    setFailure(null)
+    try {
+      const r = await remote.impersonate({ sessionId })
+      if (!r.ok) {
+        setFailure(r.error.message)
+        return
+      }
+      try {
+        await navigator.clipboard.writeText(r.value.text)
+        toast.show('用户台词已生成并复制到剪贴板，粘贴到输入框后发送')
+      } catch {
+        setImpersonated(r.value.text)
+      }
+    } catch (e) {
+      setFailure(e instanceof Error ? e.message : String(e))
+    } finally {
+      setOperation(null)
+    }
+  }
+
   return (
     <span className="dsh-tavern-actionGroup">
+      {!isGreeting && siblingSwipe && siblingSwipe.total > 1 && (
+        <>
+          <IconAction label="上一个分支（同一楼层的另一版回复）" disabled={busy} busy={operation === 'branch-prev'} onClick={() => onBranch(-1)}>
+            <IconChevronLeftOutline14 />
+          </IconAction>
+          <span className="dsh-tavern-swipeIdx" title={`第 ${siblingSwipe.turn} 层有 ${siblingSwipe.total} 个分支`}>
+            {siblingSwipe.index + 1}/{siblingSwipe.total}
+          </span>
+          <IconAction label="下一个分支（同一楼层的另一版回复）" disabled={busy} busy={operation === 'branch-next'} onClick={() => onBranch(1)}>
+            <IconChevronRightOutline14 />
+          </IconAction>
+        </>
+      )}
       {swipe && (
         <>
           <IconAction label="上一条开场白" disabled={busy} busy={operation === 'swipe-prev'} onClick={() => onSwipe(-1)}>
@@ -192,10 +338,23 @@ export function TavernFloorActions(props: FloorActionsProps) {
         </IconAction>
       )}
       {!isGreeting && (
+        <IconAction label="续写这一层（接着被截断的回复写）" disabled={busy} busy={operation === 'continue'} onClick={() => void onContinue()}>
+          <IconPlayOutline16 />
+        </IconAction>
+      )}
+      {!isGreeting && (
         <IconAction label="编辑这一层的用户消息" disabled={busy} busy={operation === 'load-edit'} onClick={() => void onEdit()}>
           <IconEditOutline16 />
         </IconAction>
       )}
+      {!isGreeting && (
+        <IconAction label="编辑这一层的回复（不重跑）" disabled={busy} busy={operation === 'load-edit-ai'} onClick={() => void onEditAi()}>
+          <IconListPenOutline16 />
+        </IconAction>
+      )}
+      <IconAction label="AI 代答用户（生成我的台词，复制到剪贴板）" disabled={busy} busy={operation === 'impersonate'} onClick={() => void onImpersonate()}>
+        <IconUserOutline16 />
+      </IconAction>
       {(!isGreeting || started) && (
         <IconAction label="回退到这一层（丢弃其后楼层）" disabled={busy} busy={operation === 'rollback'} onClick={onRollback}>
           <IconBranchOutline16 />
@@ -222,6 +381,29 @@ export function TavernFloorActions(props: FloorActionsProps) {
           </div>
         </Dialog>
       )}
+      {editAi !== null && (
+        <Dialog open title={`编辑第 ${editAi.turn} 层的回复`} onClose={() => { if (!busy) setEditAi(null) }}>
+          <textarea
+            style={{ ...textarea, minHeight: 160 }}
+            value={editAi.text}
+            onChange={(e) => setEditAi({ ...editAi, text: e.target.value })}
+          />
+          <Err message={editAiFailure} />
+          <div style={{ display: 'flex', gap: 8, marginTop: 10, justifyContent: 'flex-end' }}>
+            <Btn disabled={busy} onClick={() => setEditAi(null)}>取消</Btn>
+            <Btn disabled={busy || !editAi.text.trim()} onClick={() => void submitEditAi()}>
+              {operation === 'submit-edit-ai' ? '保存中…' : '保存（不重跑）'}
+            </Btn>
+          </div>
+        </Dialog>
+      )}
+      {impersonated !== null && (
+        <Dialog open title="AI 代答的用户台词" onClose={() => setImpersonated(null)}>
+          <textarea readOnly style={{ ...textarea, minHeight: 120 }} value={impersonated} />
+          <div style={{ marginTop: 8, fontSize: 12, opacity: 0.8 }}>剪贴板不可用，请手动复制后粘贴到输入框。</div>
+        </Dialog>
+      )}
+      {toast.node}
     </span>
   )
 }

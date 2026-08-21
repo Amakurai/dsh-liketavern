@@ -22,7 +22,8 @@ import { rebuildIndex } from '../state/workspace.js'
 import type { SessionBinding } from './bindings.js'
 import type { TavernConfigRaw } from './config.js'
 import { parseJsonCard, parsePngCard } from '../state/card.js'
-import { FloorError, editUserMessage, enterGreetingConversation, getFloorUserMessage, getGreetingSwipe, regenerate, rollbackToFloor, swipeGreeting } from './floors.js'
+import { FloorError, continueFloor, editAssistantMessage, editUserMessage, enterGreetingConversation, getFloorAssistantMessage, getFloorSiblings, getFloorUserMessage, getGreetingSwipe, regenerate, rollbackToFloor, swipeGreeting } from './floors.js'
+import { impersonate } from './impersonate.js'
 import { runTavernPipeline } from './pipeline.js'
 import type { Persona, TavernState } from './state.js'
 
@@ -370,6 +371,12 @@ export class TavernService extends TypertRemoteService {
     return getGreetingSwipe(this.floorDeps(), request.sessionId, request.messageId)
   }
 
+  /** 分支兄弟导航是只读查询：等排队中的楼层任务落定即可，不进串行队列。 */
+  async getFloorSiblings(request: { sessionId: string; messageId: string }): Promise<unknown> {
+    await this.state.waitForSessionTasks(request.sessionId)
+    return getFloorSiblings(this.floorDeps(), request.sessionId, request.messageId)
+  }
+
   async renderOutputText(request: { sessionId: string; text: string }): Promise<unknown> {
     const text = request.text ?? ''
     const settings = this.settingsScope.get()
@@ -438,6 +445,28 @@ export class TavernService extends TypertRemoteService {
     return this.state.enqueueSessionTask(request.sessionId, () =>
       editUserMessage(this.floorDeps(), request.sessionId, request.messageId, request.text),
     )
+  }
+
+  async getFloorAssistantMessage(request: { sessionId: string; messageId: string }): Promise<unknown> {
+    await this.state.waitForSessionTasks(request.sessionId)
+    return getFloorAssistantMessage(this.floorDeps(), request.sessionId, request.messageId)
+  }
+
+  editAssistantMessage(request: { sessionId: string; messageId: string; text: string }): Promise<unknown> {
+    return this.state.enqueueSessionTask(request.sessionId, () =>
+      editAssistantMessage(this.floorDeps(), request.sessionId, request.messageId, request.text),
+    )
+  }
+
+  continueFloor(request: { sessionId: string; messageId: string }): Promise<unknown> {
+    return this.state.enqueueSessionTask(request.sessionId, () =>
+      continueFloor(this.floorDeps(), request.sessionId, request.messageId),
+    )
+  }
+
+  /** impersonate 是带外一次性调用，不进会话串行队列（不改会话状态）。 */
+  impersonate(request: { sessionId: string }): Promise<unknown> {
+    return impersonate({ ctx: this.ctx, state: this.state }, request.sessionId)
   }
 
   // ── 记忆 ─────────────────────────────────────────────────────────────────

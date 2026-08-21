@@ -1,8 +1,9 @@
 /**
  * standing 会话钉死：指纹不变复用第一次文本；换卡/预设/人设才接受新值。
+ * 生成场景（generationType）并入指纹与钉位：同一会话 normal/continue 交替时各自复用首次字节。
  */
 import { describe, expect, it } from 'vitest'
-import { STANDING_PIN_VERSION, pinStandingText, standingFingerprint } from '../src/core/standingPin.js'
+import { STANDING_PIN_VERSION, pinStandingText, standingFingerprint, standingPinKey } from '../src/core/standingPin.js'
 import { isRuntimeContextSnapshot } from '../src/core/dshPrompt.js'
 
 describe('standingFingerprint', () => {
@@ -37,6 +38,15 @@ describe('standingFingerprint', () => {
     // 缺省 revs 与空数组一致（兼容旧调用方）
     expect(standingFingerprint(a)).toBe(standingFingerprint(a, undefined, []))
   })
+
+  it('生成场景并入指纹：normal / continue / impersonate 互不相同，缺省 = normal', () => {
+    const a = { cardId: 'c1', presetId: 'p1', personaId: null as string | null }
+    expect(standingFingerprint(a)).toBe(standingFingerprint(a, undefined, [], 'normal'))
+    expect(standingFingerprint(a, undefined, [], 'normal')).not.toBe(standingFingerprint(a, undefined, [], 'continue'))
+    expect(standingFingerprint(a, undefined, [], 'continue')).not.toBe(standingFingerprint(a, undefined, [], 'impersonate'))
+    // 场景值大小写/空白归一化（与 assemble 的 toLowerCase 一致）
+    expect(standingFingerprint(a, undefined, [], ' Continue ')).toBe(standingFingerprint(a, undefined, [], 'continue'))
+  })
 })
 
 describe('pinStandingText', () => {
@@ -58,6 +68,21 @@ describe('pinStandingText', () => {
     pinStandingText(pins, 's1', 'fp', 'A')
     expect(pinStandingText(pins, 's2', 'fp', 'B')).toBe('B')
     expect(pinStandingText(pins, 's1', 'fp', 'Z')).toBe('A')
+  })
+
+  it('同会话分场景钉死：normal 与 continue 交替时各自复用首次字节', () => {
+    const pins = new Map()
+    const normalKey = standingPinKey('s1', 'normal')
+    const continueKey = standingPinKey('s1', 'continue')
+    expect(normalKey).not.toBe(continueKey)
+    expect(pinStandingText(pins, normalKey, 'fp-n', 'NORMAL-1')).toBe('NORMAL-1')
+    expect(pinStandingText(pins, continueKey, 'fp-c', 'CONT-1')).toBe('CONT-1')
+    // 交替回到 normal：拿到的是 normal 轮钉死的字节，不是 continue 轮的，也不重算
+    expect(pinStandingText(pins, normalKey, 'fp-n', 'NORMAL-2')).toBe('NORMAL-1')
+    expect(pinStandingText(pins, continueKey, 'fp-c', 'CONT-2')).toBe('CONT-1')
+    // 同场景下指纹变化（编辑预设等）仍重算重钉
+    expect(pinStandingText(pins, normalKey, 'fp-n2', 'NORMAL-3')).toBe('NORMAL-3')
+    expect(pinStandingText(pins, continueKey, 'fp-c', 'CONT-3')).toBe('CONT-1')
   })
 })
 

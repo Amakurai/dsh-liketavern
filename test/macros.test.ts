@@ -97,6 +97,53 @@ describe('未知宏', () => {
   })
 })
 
+describe('卡字段与人设宏', () => {
+  const rich: MacroContext = {
+    ...ctx,
+    description: 'DESC {{user}}',
+    personality: 'PERS',
+    scenario: 'SCEN',
+    persona: 'PERSONA-DESC',
+    firstMessage: 'FIRST {{char}}',
+    lastCharMessage: 'LAST-CHAR',
+  }
+
+  it('{{description}}/{{personality}}/{{scenario}} 取卡字段，内嵌宏随多轮展开', () => {
+    expect(expandMacros('{{description}}|{{personality}}|{{scenario}}', rich)).toBe('DESC Bob|PERS|SCEN')
+  })
+
+  it('{{persona}} 取当前用户人设描述；{{charFirstMessage}} 取开场白', () => {
+    expect(expandMacros('{{persona}}', rich)).toBe('PERSONA-DESC')
+    expect(expandMacros('{{charFirstMessage}}', rich)).toBe('FIRST Alice')
+    // 兼容社区写法 {{firstMessage}}（ST 拼写为 charFirstMessage）
+    expect(expandMacros('{{firstMessage}}', rich)).toBe('FIRST Alice')
+  })
+
+  it('字段缺省为空串，不当成未知宏', () => {
+    const onUnknown = vi.fn()
+    const c: MacroContext = { ...ctx, onUnknown }
+    expect(expandMacros('{{description}}{{persona}}{{firstMessage}}', c)).toBe('')
+    expect(onUnknown).not.toHaveBeenCalled()
+  })
+
+  it('大小写不敏感：{{Description}}/{{LastCharMessage}}', () => {
+    expect(expandMacros('{{Description}}/{{LastCharMessage}}', rich)).toBe('DESC Bob/LAST-CHAR')
+  })
+})
+
+describe('lastCharMessage', () => {
+  it('{{lastCharMessage}} 取 ctx.lastCharMessage', () => {
+    const c: MacroContext = { ...ctx, lastCharMessage: '上一条回复' }
+    expect(expandMacros('<前情>{{lastCharMessage}}</前情>', c)).toBe('<前情>上一条回复</前情>')
+  })
+
+  it('hasTurnLocalMacros 识别 lastCharMessage，不把卡字段宏当本轮宏', () => {
+    expect(hasTurnLocalMacros('{{lastCharMessage}}')).toBe(true)
+    expect(hasTurnLocalMacros('{{last_char_message}}')).toBe(true)
+    expect(hasTurnLocalMacros('{{description}} {{persona}} {{charFirstMessage}}')).toBe(false)
+  })
+})
+
 describe('setvar / getvar / 注释', () => {
   it('同一次调用内 set 后 get', () => {
     const c: MacroContext = { ...ctx, store: new Map() }

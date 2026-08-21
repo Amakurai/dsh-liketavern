@@ -276,8 +276,12 @@ const STYLE = `
 .dsh-tavern-memoActions{display:flex;align-items:center;gap:4px}
 
 /* ========== 聊天发言条 ========== */
-.dsh-tavern-speech{display:flex;gap:12px;align-items:flex-start;width:100%;min-width:0;
+.dsh-tavern-speech{display:flex;gap:12px;align-items:flex-start;width:100%;min-width:0;position:relative;
   color:var(--dsw-alias-label-primary, inherit)}
+/* 气泡右上角复制钮：默认收起，hover / 键盘聚焦时浮现 */
+.dsh-tavern-speechCopy{position:absolute;top:-2px;right:0;opacity:0;
+  transition:opacity var(--ds-transition-duration-fast, .1s) var(--ds-ease-in-out, ease)}
+.dsh-tavern-speech:hover .dsh-tavern-speechCopy,.dsh-tavern-speech:focus-within .dsh-tavern-speechCopy{opacity:1}
 .dsh-tavern-speechAvatar{border:1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.2));box-sizing:border-box}
 .dsh-tavern-speechBody{min-width:0;flex:1;display:flex;flex-direction:column;gap:4px}
 .dsh-tavern-speechName{font-size:13px;font-weight:500;line-height:20px;color:var(--dsw-alias-label-secondary, inherit)}

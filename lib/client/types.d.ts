@@ -354,6 +354,7 @@ export interface TavernRemote {
     }): Promise<Envelope<{
         childSessionId: string;
         index: number;
+        title?: string;
     }>>;
     renderOutputText(req: {
         sessionId: string;
@@ -373,12 +374,14 @@ export interface TavernRemote {
         messageId?: string;
     }): Promise<Envelope<{
         childSessionId: string;
+        title?: string;
     }>>;
     rollbackToFloor(req: {
         sessionId: string;
         messageId: string;
     }): Promise<Envelope<{
         childSessionId: string;
+        title?: string;
     }>>;
     getFloorUserMessage(req: {
         sessionId: string;
@@ -393,6 +396,44 @@ export interface TavernRemote {
         text: string;
     }): Promise<Envelope<{
         childSessionId: string;
+        title?: string;
+    }>>;
+    getFloorAssistantMessage(req: {
+        sessionId: string;
+        messageId: string;
+    }): Promise<Envelope<{
+        turn: number;
+        text: string;
+    }>>;
+    editAssistantMessage(req: {
+        sessionId: string;
+        messageId: string;
+        text: string;
+    }): Promise<Envelope<{
+        childSessionId: string;
+        title?: string;
+    }>>;
+    continueFloor(req: {
+        sessionId: string;
+        messageId: string;
+    }): Promise<Envelope<{
+        continued: boolean;
+    }>>;
+    getFloorSiblings(req: {
+        sessionId: string;
+        messageId: string;
+    }): Promise<Envelope<{
+        swipe: {
+            turn: number;
+            index: number;
+            total: number;
+            siblings: string[];
+        } | null;
+    }>>;
+    impersonate(req: {
+        sessionId: string;
+    }): Promise<Envelope<{
+        text: string;
     }>>;
     getMemories(req: {
         cardId: string;
@@ -513,6 +554,11 @@ export interface ClientContext {
             };
             subscribe(fn: () => void): () => void;
         };
+        /** 宿主 ISessions 的命名路径（scope → sessionOf → rename）；旧宿主缺省时跳过改名。 */
+        scope?(id: string): unknown;
+        sessionOf?(ctx: unknown): {
+            rename(title: string): Promise<unknown>;
+        } | undefined;
     };
     /** 工作区运行时：startSession 即侧边栏「新对话」动作（复用/创建空白会话并打开）。 */
     workspaces: {

@@ -61,9 +61,16 @@ export function isTurnWriteAck(text: string): boolean {
   return text.startsWith(TURN_WRITE_ACK_PREFIX)
 }
 
+/** 楼层续写指令（continueFloor followup 进日志）；不当作用户台词，也不扫世界书。 */
+export const CONTINUE_INSTRUCTION_PREFIX = '【Tavern 续写】'
+
+export function isContinueInstruction(text: string): boolean {
+  return text.startsWith(CONTINUE_INSTRUCTION_PREFIX)
+}
+
 /** 组装/世界书扫描应跳过的合成 user 文本。 */
 export function isSyntheticUserText(text: string): boolean {
-  return isRuntimeContextSnapshot(text) || isTurnWriteAck(text)
+  return isRuntimeContextSnapshot(text) || isTurnWriteAck(text) || isContinueInstruction(text)
 }
 
 /** 把残留 `{{…}}` 换成全角花括号，避免 dsh section 插值把 ST 宏当成变量抛错。 */

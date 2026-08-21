@@ -29,6 +29,18 @@ export interface MacroContext {
     store?: Map<string, string>;
     /** {{lastusermessage}} / {{lastMessage}}；缺省空串。 */
     lastUserMessage?: string;
+    /** {{lastCharMessage}}：最近一条 assistant 消息；本轮宏，standing 上下文恒为空。 */
+    lastCharMessage?: string;
+    /** {{description}}：角色描述；缺省空串。 */
+    description?: string;
+    /** {{personality}}：角色性格；缺省空串。 */
+    personality?: string;
+    /** {{scenario}}：角色场景；缺省空串。 */
+    scenario?: string;
+    /** {{persona}}：当前用户人设描述；缺省空串。 */
+    persona?: string;
+    /** {{charFirstMessage}} / {{firstMessage}}：角色开场白；缺省空串。 */
+    firstMessage?: string;
     /** 收到未支持宏时回调（用于记日志）；未提供则静默保留原文。 */
     onUnknown?: (name: string) => void;
 }
@@ -58,6 +70,16 @@ export interface RegexRule {
      * 由 ST placement 推导：1 USER_INPUT → user，2 AI_OUTPUT → assistant。
      */
     roles?: ChatRole[];
+    /**
+     * ST trimStrings：替换代入捕获组（含 $0/{{match}}）前，从组值里删掉的字面字符串（先宏展开）。
+     * 对齐 ST 现行引擎：trim 作用于捕获组值，不是替换后的整体结果。
+     */
+    trimStrings?: string[];
+    /**
+     * ST 预设/卡里出现但 ST 引擎未实现的 trimStringsRegex：按 trimStrings 同位置补全——
+     * 从捕获组值里删掉这些正则（缺省全局）命中的片段。
+     */
+    trimStringsRegex?: string[];
 }
 /** SillyTavern 角色卡内嵌 regex_scripts 的原始形状（导入时归一化为 RegexRule）。 */
 export interface CardRegexScript {
@@ -259,6 +281,18 @@ export interface PresetEntry {
     marker: boolean;
     /** marker=true 时的占位标识；内建 Marker 之外的值渲染为空串并记日志。 */
     markerId?: string;
+    /**
+     * ST forbid_overrides：main/jailbreak 槽位为 true 时拒绝卡级
+     * system_prompt / post_history_instructions 覆盖（不注入卡级覆盖）。
+     */
+    forbidOverrides?: boolean;
+    /** ST extension 标记：仅随导入/导出往返保留，无运行时语义。 */
+    extension?: boolean;
+    /**
+     * ST injection_trigger：触发场景白名单（normal / continue / impersonate / swipe / regenerate / quiet）。
+     * 空或缺省 = 全部场景；当前只产生 normal 场景，其余值一律不匹配（条目被排除）。
+     */
+    injectionTrigger?: string[];
 }
 export interface PromptPreset {
     name: string;

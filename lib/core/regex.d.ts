@@ -64,7 +64,7 @@ export declare function compileCardRegexScripts(scripts: readonly CardRegexScrip
 export declare function compilePresetRegexScripts(scripts: readonly CardRegexScript[], presetId: string): RegexRule[];
 /**
  * 正则替换后的展示文本常是「整页 HTML 封面」或「小部件 HTML + 后面的正文」。
- * 只把 HTML 文档抽进 iframe，围栏外 / </html> 之后的文字留给 Markdown，否则切条目会只剩前端。
+ * HTML 文档和小部件片段抽进 iframe；围栏外 / </html> 之前的协议标签与之后的文字留给 Markdown。
  */
 export declare function splitRenderedHtml(text: string): {
     html: string | null;

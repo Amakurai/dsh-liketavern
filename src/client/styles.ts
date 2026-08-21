@@ -133,7 +133,7 @@ const STYLE = `
 
 /* ========== 控件 ========== */
 .dsh-tavern-file{display:inline-flex}
-.dsh-tavern-select{display:block;width:100%;min-width:0}
+.dsh-tavern-select{display:block;width:100%;min-width:0;max-width:100%}
 .dsh-tavern-select > span{display:block;width:100%}
 /* 36px 胶囊选择器（对齐通用设置的 .selector） */
 .dsh-tavern-pillSelect{display:inline-flex;align-items:center;justify-content:space-between;gap:12px;
@@ -234,9 +234,12 @@ const STYLE = `
 .dsh-tavern-collapseInner{overflow:hidden;min-height:0}
 
 /* ========== 表单 ========== */
-.dsh-tavern-field{display:flex;flex-direction:column;gap:6px;min-width:0}
+.dsh-tavern-field{display:flex;flex-direction:column;gap:6px;min-width:0;margin-bottom:10px}
 .dsh-tavern-fieldLabel{font-size:12px;font-weight:500;color:var(--dsw-alias-label-secondary, inherit)}
+.dsh-tavern-field .dsh-tavern-input,.dsh-tavern-field .dsh-tavern-select,.dsh-tavern-field textarea{
+  width:100%;min-width:0;max-width:100%;box-sizing:border-box}
 .dsh-tavern-fieldRow{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}
+.dsh-tavern-fieldRow .dsh-tavern-field{margin-bottom:0}
 .dsh-tavern-inlineChecks{display:flex;flex-wrap:wrap;gap:12px 16px;font-size:13px;color:var(--dsw-alias-label-primary, inherit)}
 .dsh-tavern-inlineChecks label{display:inline-flex;align-items:center;gap:8px;cursor:pointer}
 .dsh-tavern-pager{display:flex;align-items:center;justify-content:center;gap:12px;padding:4px 0}
@@ -245,9 +248,12 @@ const STYLE = `
 
 /* ========== 弹窗 ========== */
 .dsh-tavern-modalActions{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap}
-.dsh-tavern-modal-md{width:min(480px, calc(100vw - 48px))}
-.dsh-tavern-modal-lg{width:min(680px, calc(100vw - 48px))}
+.dsh-tavern-modal-md{width:min(520px, calc(100vw - 32px));max-width:100%}
+.dsh-tavern-modal-lg{width:min(680px, calc(100vw - 32px));max-width:100%}
+.dsh-tavern-modalBody{min-width:0;max-height:min(70vh, 640px);overflow:auto}
 .dsh-tavern-modalPre{white-space:pre-wrap;font-size:12px;line-height:18px;max-height:60vh;overflow:auto;margin:0}
+.dsh-tavern-binding{display:flex;flex-direction:column;gap:2px;min-width:0}
+.dsh-tavern-bindingActions{display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;align-items:center}
 
 /* ========== 文本反馈 ========== */
 .dsh-tavern-errText{color:var(--dsw-alias-state-error-primary, #ec1313);font-size:12px;line-height:18px;margin:6px 0}
@@ -285,10 +291,10 @@ const STYLE = `
 .dsh-tavern-speechAvatar{border:1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.2));box-sizing:border-box}
 .dsh-tavern-speechBody{min-width:0;flex:1;display:flex;flex-direction:column;gap:4px}
 .dsh-tavern-speechName{font-size:13px;font-weight:500;line-height:20px;color:var(--dsw-alias-label-secondary, inherit)}
-.dsh-tavern-speechHtml{width:100%;min-height:420px;height:min(72vh,880px);
+.dsh-tavern-speechHtml{width:100%;min-height:280px;height:min(72vh,880px);overflow:auto;
   border:1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.25));border-radius:16px;
   background:var(--dsw-alias-bg-base, #111);display:block;box-shadow:var(--dsw-shadow-lv1, 0 2px 4px rgba(0,0,0,.05))}
-.dsh-tavern-speechHtml.is-widget{min-height:0;height:280px;background:transparent;border:none;box-shadow:none}
+.dsh-tavern-speechHtml.is-widget{min-height:0;height:280px;overflow:auto;background:transparent;border:none;box-shadow:none}
 .dsh-tavern-reason{margin:0 0 8px;font-size:13px;color:var(--dsw-alias-label-secondary, inherit);min-width:0}
 .dsh-tavern-reason>summary{cursor:pointer;user-select:none;list-style:none;padding:4px 0;border-radius:6px;
   transition:color var(--ds-transition-duration-fast, .1s) var(--ds-ease-in-out, ease)}

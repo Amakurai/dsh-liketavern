@@ -311,8 +311,8 @@ export function TavernHeaderChip(props: {
         hasPopup="dialog"
         onClick={() => setOpen(!open)}
       />
-      <Dialog open={open} title="Tavern 绑定" onClose={() => setOpen(false)} width="md">
-          <div className="dsh-tavern-ui">
+      <Dialog open={open} title="Tavern 绑定" onClose={() => setOpen(false)} width="lg">
+          <div className="dsh-tavern-binding">
           <Err message={error} />
           {!lists && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -379,34 +379,34 @@ export function TavernHeaderChip(props: {
                       ]}
                     />
                   </Field>
-                  <div style={{ fontSize: 12, margin: '6px 0 2px', opacity: 0.8 }}>全局世界书（多选）</div>
-                  <div className="dsh-tavern-checkList dsh-tavern-scroll" style={{ maxHeight: 100, overflow: 'auto', marginBottom: 8 }}>
-                    {lists.lorebooks.map((n) => (
-                      <label key={n}>
-                        <input
-                          type="checkbox"
-                          checked={draft.lorebookIds.includes(n)}
-                          onChange={(e) =>
-                            setDraft({
-                              ...draft,
-                              lorebookIds: e.target.checked ? [...draft.lorebookIds, n] : draft.lorebookIds.filter((x) => x !== n),
-                            })
-                          }
-                        />
-                        {n}
-                      </label>
-                    ))}
-                    {lists.lorebooks.length === 0 && <Muted>库中暂无世界书</Muted>}
-                  </div>
-                  <div className="dsh-tavern-field" style={{ marginBottom: 8 }}>
-                    <span className="dsh-tavern-fieldLabel">作者注释（本会话，进本轮 turn）</span>
+                  <Field label="全局世界书（多选）">
+                    <div className="dsh-tavern-checkList dsh-tavern-scroll" style={{ maxHeight: 120, overflow: 'auto' }}>
+                      {lists.lorebooks.map((n) => (
+                        <label key={n}>
+                          <input
+                            type="checkbox"
+                            checked={draft.lorebookIds.includes(n)}
+                            onChange={(e) =>
+                              setDraft({
+                                ...draft,
+                                lorebookIds: e.target.checked ? [...draft.lorebookIds, n] : draft.lorebookIds.filter((x) => x !== n),
+                              })
+                            }
+                          />
+                          {n}
+                        </label>
+                      ))}
+                      {lists.lorebooks.length === 0 && <Muted>库中暂无世界书</Muted>}
+                    </div>
+                  </Field>
+                  <Field label="作者注释（本会话，进本轮 turn）">
                     <textarea
                       className="dsh-tavern-input dsh-tavern-textarea"
                       style={{ minHeight: 64 }}
                       value={draft.authorNote ?? ''}
                       onChange={(e) => setDraft({ ...draft, authorNote: e.target.value })}
                     />
-                  </div>
+                  </Field>
                   <div className="dsh-tavern-inlineChecks" style={{ marginBottom: 8 }}>
                     <label>
                       <Toggle
@@ -416,7 +416,7 @@ export function TavernHeaderChip(props: {
                       注入角色笔记 journal.md
                     </label>
                   </div>
-                  <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
+                  <div className="dsh-tavern-bindingActions">
                     <Btn primary onClick={() => void saveBinding()}>保存绑定</Btn>
                     <Btn onClick={() => void openChatLore()}>编辑本会话世界书</Btn>
                     {binding ? (
@@ -432,7 +432,7 @@ export function TavernHeaderChip(props: {
                   </div>
                 </>
               )}
-              <div style={{ borderTop: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.25))', paddingTop: 8, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+              <div className="dsh-tavern-bindingActions" style={{ borderTop: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.25))', paddingTop: 8 }}>
                 <Btn disabled={!binding} onClick={() => void insertGreeting()}>插入开场白</Btn>
                 <Btn disabled={!binding || !canSwipeGreeting} onClick={() => void swipeBy(-1)}>上一条开场白</Btn>
                 <Btn disabled={!binding || !canSwipeGreeting} onClick={() => void swipeBy(1)}>下一条开场白</Btn>

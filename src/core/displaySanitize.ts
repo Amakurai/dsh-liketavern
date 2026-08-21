@@ -16,6 +16,13 @@ export const DISPLAY_META_TAGS = [
   'StatusPlaceHolderImpl',
 ] as const
 
+/**
+ * 社区卡常用的机读协议标签（customize_HCI / now_plot / world_status）。
+ * 下划线名或 PascalCase；不碰 div/p/span 等 HTML。
+ */
+const PROTOCOL_TAG_RE =
+  /<\/?(?:[A-Za-z][\w]*_[A-Za-z0-9_]+|[A-Z][A-Za-z0-9]*[A-Z][A-Za-z0-9]*)\b[^>]*\/?>/g
+
 function isCoverHtml(text: string): boolean {
   return /<!DOCTYPE\s+html/i.test(text) || /<html[\s>]/i.test(text) || /<body[\s>]/i.test(text)
 }
@@ -70,6 +77,11 @@ function tidy(text: string): string {
   return text.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim()
 }
 
+/** 收起未转换成 HTML 的协议开闭标签，留下内部正文。 */
+function stripProtocolTags(text: string): string {
+  return text.replace(PROTOCOL_TAG_RE, '')
+}
+
 function stripHtmlComments(text: string): string {
   return text.replace(/<!--[\s\S]*?-->/g, '')
 }
@@ -78,7 +90,9 @@ function stripHtmlComments(text: string): string {
 export function stripDisplayMeta(text: string): string {
   if (!text) return text
   if (isCoverHtml(text)) return text
-  return tidy(stripWidgetTail(stripUnclosedMeta(stripClosedAndEmpty(stripHtmlComments(text)))))
+  return tidy(
+    stripProtocolTags(stripWidgetTail(stripUnclosedMeta(stripClosedAndEmpty(stripHtmlComments(text))))),
+  )
 }
 
 /**

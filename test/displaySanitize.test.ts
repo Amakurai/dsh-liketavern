@@ -1,5 +1,6 @@
 /**
- * 展示层机读标签收起：UpdateVariable / JSONPatch / 流式未闭合尾巴，不误伤普通正文。
+ * 展示层机读标签收起：UpdateVariable / JSONPatch / 流式未闭合尾巴 / 协议标签
+ *（customize_HCI、now_plot 等），不误伤普通正文与 HTML。
  */
 import { describe, expect, it } from 'vitest'
 import { presentRenderedOutput, stripDisplayMeta } from '../src/core/displaySanitize.js'
@@ -70,5 +71,32 @@ describe('stripDisplayMeta', () => {
 
   it('收起 HTML 注释', () => {
     expect(stripDisplayMeta('<!--meta: 0,4,3,6,7,16 -->\n可见正文。')).toBe('可见正文。')
+  })
+
+  it('收起未转换的协议标签，留下内部正文', () => {
+    const raw = `<customize_HCI> <now_plot> <world_situation> <world_status>
+时空设定
+</world_status> </world_situation>
+<now_main_plot>
+"台词。"
+</now_main_plot>`
+    const shown = stripDisplayMeta(raw)
+    expect(shown).not.toContain('customize_HCI')
+    expect(shown).not.toContain('now_plot')
+    expect(shown).not.toContain('world_status')
+    expect(shown).toContain('时空设定')
+    expect(shown).toContain('"台词。"')
+  })
+
+  it('不把普通 HTML 标签当协议标签收起', () => {
+    expect(stripDisplayMeta('他说 <div class="note">旁白</div> 完。')).toBe('他说 <div class="note">旁白</div> 完。')
+  })
+
+  it('style 小部件进 htmls，前面的协议标签从正文收起', () => {
+    const rendered = '<customize_HCI><style>.x{}</style><div class="x">ui</div>\n可见正文。'
+    const shown = presentRenderedOutput(rendered, true)
+    expect(shown.html).toContain('<style>')
+    expect(shown.text).toBe('可见正文。')
+    expect(shown.text).not.toContain('customize_HCI')
   })
 })

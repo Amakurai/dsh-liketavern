@@ -47,8 +47,8 @@ function SpeechHtmlFrame(props: {
     frameH != null
       ? { height: frameH, minHeight: 0, overflow: 'hidden' as const }
       : props.widget
-        ? { height: 280, minHeight: 0 }
-        : undefined
+        ? { height: 280, minHeight: 0, overflow: 'auto' as const }
+        : { overflow: 'auto' as const }
 
   return (
     <iframe

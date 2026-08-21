@@ -309,8 +309,8 @@ export function SettingsRow(props: { title: string; description?: string; stacke
 
 export function Field(props: { label: string; children?: ReactNode }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, marginBottom: 6, flexWrap: 'wrap', minWidth: 0 }}>
-      <span style={{ minWidth: 88, color: 'var(--dsw-alias-label-secondary, inherit)', opacity: 0.9 }}>{props.label}</span>
+    <div className="dsh-tavern-field">
+      <span className="dsh-tavern-fieldLabel">{props.label}</span>
       {props.children}
     </div>
   )
@@ -477,7 +477,7 @@ export function Dialog(props: {
       footer={props.footer}
       contentClassName={props.width === 'md' ? 'dsh-tavern-modal-md' : props.width === 'lg' ? 'dsh-tavern-modal-lg' : undefined}
     >
-      <div className="dsh-tavern-ui">{props.children}</div>
+      <div className="dsh-tavern-ui dsh-tavern-modalBody">{props.children}</div>
     </Modal>
   )
 }

@@ -37,6 +37,16 @@ describe('buildCardSrcDoc', () => {
     expect(doc).toContain('connect-src https: http:')
     expect(doc).toContain("script-src 'unsafe-inline' https: http:")
   })
+
+  it('无 html 根的片段包成文档，并拦截 document.write', () => {
+    const doc = buildCardSrcDoc('<style>.x{}</style><div class="x">hi</div>', { greetings: [], greetingIndex: 0 })
+    expect(doc).toContain('<html>')
+    expect(doc).toContain('<body>')
+    expect(doc).toContain('<style>.x{}</style>')
+    expect(doc).toContain('data-dsh-tavern-bridge')
+    expect(doc).toContain('document.write')
+    expect(doc).toContain('injectBridge')
+  })
 })
 
 describe('tavernCardBridgeScript', () => {

@@ -3,7 +3,8 @@
  * 覆盖：裸 find 语义（区分大小写、只替换首个）、/pattern/flags 字面形式、
  * 替换串 $1/$<name>/{{match}}/宏展开、find 中宏的 substituteRegex 0/1/2、
  * minDepth/maxDepth 深度过滤、规则编译失败容错、compileCardRegexScripts /
- * compilePresetRegexScripts 归一化、消息角色过滤、封面 HTML 与正文拆分。
+ * compilePresetRegexScripts 归一化、消息角色过滤、封面 HTML 与正文拆分
+ *（含无 doctype 的 style 片段、卡内 markdownOnly+promptOnly 仍启用展示向）。
  */
 import { describe, expect, it } from 'vitest'
 import {
@@ -339,6 +340,25 @@ describe('compileCardRegexScripts', () => {
     expect(off[0]!.enabled).toBe(false)
   })
 
+  it('卡内 markdownOnly+promptOnly 仍启用展示向，不把封面正则整条关掉', () => {
+    const rules = compileCardRegexScripts(
+      [{ findRegex: '<widget>', replaceString: '<style></style><div>ui</div>', placement: [2], markdownOnly: true, promptOnly: true }],
+      'c',
+    )
+    expect(rules).toHaveLength(1)
+    expect(rules[0]!.enabled).toBe(true)
+    expect(rules[0]!.scopes).toEqual(['output'])
+    expect(rules[0]!.timing).toEqual(['render'])
+  })
+
+  it('卡内 placement 同时含输入和输出时只启用展示向', () => {
+    const rules = compileCardRegexScripts([{ findRegex: 'a', replaceString: 'b', placement: [1, 2] }], 'c')
+    expect(rules[0]!.enabled).toBe(true)
+    expect(rules[0]!.scopes).toEqual(['output'])
+    expect(rules[0]!.timing).toEqual(['render'])
+    expect(rules[0]!.roles).toEqual(['assistant'])
+  })
+
   it('substituteRegex 透传：0/2 保留，其余归一为 1', () => {
     const rules = compileCardRegexScripts(
       [
@@ -445,6 +465,18 @@ describe('extractRenderedHtml', () => {
   it('普通开场白返回 null', () => {
     expect(extractRenderedHtml('你好，旅人。')).toBeNull()
   })
+
+  it('无 doctype 的 style+div 小部件也抽进 html', () => {
+    const html = extractRenderedHtml('<style>.x{color:red}</style><div class="x">封面</div>')
+    expect(html).toContain('<style>')
+    expect(html).toContain('封面')
+  })
+
+  it('```html 围栏里无 doctype 的片段也抽出', () => {
+    const html = extractRenderedHtml('```html\n<style>.a{}</style><div>player</div>\n```\n后面正文')
+    expect(html).toContain('<style>')
+    expect(html).toContain('player')
+  })
 })
 
 describe('splitRenderedHtml', () => {
@@ -463,6 +495,20 @@ describe('splitRenderedHtml', () => {
     const split = splitRenderedHtml('<!DOCTYPE html><html><body>ui</body></html>\n正文还在')
     expect(split.html).toContain('<body>ui</body>')
     expect(split.rest).toBe('正文还在')
+  })
+
+  it('协议标签在 HTML 小部件之前时进 rest，不挡抽取', () => {
+    const split = splitRenderedHtml('<customize_HCI><now_plot><style>.w{}</style><div class="w">world</div>')
+    expect(split.html).toContain('<style>')
+    expect(split.html).toContain('world')
+    expect(split.rest).toContain('customize_HCI')
+  })
+
+  it('小部件后面的正文拆进 rest', () => {
+    const split = splitRenderedHtml('<style>.x{}</style><div class="x">ui</div>\n可见正文')
+    expect(split.html).toContain('<style>')
+    expect(split.html).not.toContain('可见正文')
+    expect(split.rest).toBe('可见正文')
   })
 
   it('整页封面没有 rest', () => {

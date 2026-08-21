@@ -40,8 +40,9 @@ dsh plugin --profile web list --depth 0
 
 两点说明（对应官方文档[打包与安装插件](https://deepseek-harness.github.io/deepseek-harness/develop/basic/publish)）：
 
-- **git 安装拉的是源码而非构建产物**，pnpm 不会替你跑 `build`。本仓库把构建产物 `lib/` 刻意入库，因此从 GitHub 直接安装即可用，也不需要 pnpm 的 `allowBuilds` 构建授权。建议锁定 commit（`github:Amakurai/dsh-liketavern#<sha>`），避免后续推送悄悄改变实际运行的内容。
-- 也可以走 tarball：作者侧 `npm pack`（`prepack` 会先构建），用户侧 `dsh plugin --profile web add ./dsh-liketavern-0.1.0.tgz`。
+- **git 安装拉的是源码而非构建产物**，pnpm 不会替你跑 `build`。本仓库把构建产物 `lib/` 刻意入库，因此从 GitHub 直接安装即可用。建议锁定 commit（`github:Amakurai/dsh-liketavern#<sha>`），避免后续推送悄悄改变实际运行的内容。
+- **安装面刻意做小**：运行时依赖只有 `zod`，`@deepseek-ai/*` 全部是 peer 依赖、由 profile 里已安装的 dsh 宿主满足。安装本插件不会拉取宿主本体及其原生依赖（`node-pty` 等），因此正常不会触发 pnpm 的构建脚本拦截（`ERR_PNPM_IGNORED_BUILDS`）。万一遇到，那是 profile 里 dsh 自身依赖的一次性授权：按 dsh 报错提示把包名加进 `~/.dsh/profiles/web/pnpm-workspace.yaml` 的 `allowBuilds`，重跑安装命令即可。
+- 也可以走 tarball：作者侧 `npm pack`（`prepack` 会先构建），用户侧 `dsh plugin --profile web add ./dsh-liketavern-0.1.1.tgz`。
 
 版本兼容：本包以 peerDependency 锁 dsh `0.1.1-rc.2`；dsh 处于预发布阶段，升级 dsh 后需同步换装适配的插件版本。
 

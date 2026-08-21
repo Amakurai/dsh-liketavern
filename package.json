@@ -54,7 +54,6 @@
     "dev": "dsh web --patch ./cordis.dev.yml"
   },
   "dependencies": {
-    "@deepseek-ai/dsh": "^0.1.1-rc.2",
     "zod": "^4.4.3"
   },
   "peerDependencies": {
@@ -88,6 +87,7 @@
     "@deepseek-ai/cordis": "4.0.1",
     "@deepseek-ai/cordis-plugin-include": "1.0.6",
     "@deepseek-ai/cordis-plugin-loader": "1.0.2",
+    "@deepseek-ai/dsh": "0.1.1-rc.2",
     "@deepseek-ai/dsh-agent": "0.1.1-rc.2",
     "@deepseek-ai/dsh-agent-presets": "0.1.1-rc.2",
     "@deepseek-ai/dsh-atomic-write": "0.1.1-rc.2",

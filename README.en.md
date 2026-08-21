@@ -40,8 +40,9 @@ dsh plugin --profile web list --depth 0
 
 Two notes (per the official docs, [Packaging and installing plugins](https://deepseek-harness.github.io/deepseek-harness/develop/basic/publish)):
 
-- **Git installs pull source, not build artifacts** — pnpm won't run your `build` for you. This repository deliberately commits the built `lib/` output, so installing straight from GitHub works and needs no pnpm `allowBuilds` authorization. Pinning a commit (`github:Amakurai/dsh-liketavern#<sha>`) is recommended so later pushes can't silently change what runs.
-- A tarball also works: the author runs `npm pack` (its `prepack` builds first), and the user runs `dsh plugin --profile web add ./dsh-liketavern-0.1.0.tgz`.
+- **Git installs pull source, not build artifacts** — pnpm won't run your `build` for you. This repository deliberately commits the built `lib/` output, so installing straight from GitHub works. Pinning a commit (`github:Amakurai/dsh-liketavern#<sha>`) is recommended so later pushes can't silently change what runs.
+- **The install surface is deliberately tiny**: the only runtime dependency is `zod`; all `@deepseek-ai/*` packages are peer dependencies satisfied by the dsh host already in the profile. Installing this plugin does not pull the dsh host tree or its native dependencies (`node-pty` and friends), so it should not trip pnpm's build-script blocking (`ERR_PNPM_IGNORED_BUILDS`). If you still hit it, that's a one-time authorization for dsh's own dependencies in the profile: add the printed package names under `allowBuilds` in `~/.dsh/profiles/web/pnpm-workspace.yaml` as the dsh error suggests, then re-run the install.
+- A tarball also works: the author runs `npm pack` (its `prepack` builds first), and the user runs `dsh plugin --profile web add ./dsh-liketavern-0.1.1.tgz`.
 
 Version compatibility: this package pins dsh `0.1.1-rc.2` via peerDependencies. dsh is in pre-release — after upgrading dsh, install the plugin version built for it.
 

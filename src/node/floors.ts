@@ -552,12 +552,14 @@ export function withEditedAssistantMessage(
   )
   if (index === -1) return null
   const event = events[index]!
-  const data = event.data as { turn: number; step: number; message: AssistantMessage; usage?: unknown }
+  const data = event.data as { turn: number; step: number; message: AssistantMessage; usage?: unknown; interrupted?: true }
   const message = createAssistantMessage({
     content: [{ type: 'text', text: newText }],
     source: { provider: data.message.source.provider, model: data.message.source.model },
   })
-  const replaced = { ...event, data: { ...data, message } } as SessionEvent
+  // 编辑生成的是完整新正文，中断标记（宿主 rc.2 起 interrupted: true）不应带进分支 seed。
+  const { interrupted: _dropped, ...rest } = data
+  const replaced = { ...event, data: { ...rest, message } } as SessionEvent
   return [...events.slice(0, index), replaced, ...events.slice(index + 1)]
 }
 

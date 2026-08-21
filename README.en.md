@@ -20,7 +20,7 @@ Character cards (V1/V2/V3, PNG/JSON), prompt presets, lorebooks (world info), pe
 ## Requirements
 
 - Node.js ≥ 24
-- dsh CLI `0.1.0-rc.6` installed, with `dsh web` run at least once (the first run initializes the `web` profile)
+- dsh CLI `0.1.1-rc.2` installed, with `dsh web` run at least once (the first run initializes the `web` profile)
 - `pnpm` on PATH (`dsh plugin` manages profile plugin dependencies through pnpm internally)
 
 ## Installation
@@ -43,7 +43,7 @@ Two notes (per the official docs, [Packaging and installing plugins](https://dee
 - **Git installs pull source, not build artifacts** — pnpm won't run your `build` for you. This repository deliberately commits the built `lib/` output, so installing straight from GitHub works and needs no pnpm `allowBuilds` authorization. Pinning a commit (`github:Amakurai/dsh-liketavern#<sha>`) is recommended so later pushes can't silently change what runs.
 - A tarball also works: the author runs `npm pack` (its `prepack` builds first), and the user runs `dsh plugin --profile web add ./dsh-liketavern-0.1.0.tgz`.
 
-Version compatibility: this package pins dsh `0.1.0-rc.6` via peerDependencies. dsh is in pre-release — after upgrading dsh, install the plugin version built for it.
+Version compatibility: this package pins dsh `0.1.1-rc.2` via peerDependencies. dsh is in pre-release — after upgrading dsh, install the plugin version built for it.
 
 Runtime data (cards, memories, session bindings) lives in `$DSH_HOME/dsh-tavern/`, outside this repository.
 

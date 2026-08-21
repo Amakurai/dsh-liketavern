@@ -9,6 +9,7 @@ import { Btn, Err, Muted, NumInput, Section, Select, SettingsRow, Skeleton, Togg
 export function SettingsSection(props: { remote: TavernRemote }) {
   const { remote } = props
   const { state, reload } = useLoader(() => remote.getSettings({}), [])
+  const dataInfo = useLoader(() => remote.getDataInfo({}), [])
   const presets = useLoader(() => remote.listPresets({}), [])
   const lore = useLoader(() => remote.listLorebooks({}), [])
   const personas = useLoader(() => remote.listPersonas({}), [])
@@ -168,11 +169,17 @@ export function SettingsSection(props: { remote: TavernRemote }) {
         <SettingsRow title="frequencyPenalty">
           <NumInput step="0.1" value={draft.sampling.frequencyPenalty} onChange={(v) => setSampling({ frequencyPenalty: v })} />
         </SettingsRow>
-        <SettingsRow title="深度思考" description="关闭：对当前模型写入 off（若公布该档）。开启：保留会话已选档位，否则用模型默认。部署把 thinking 锁成 disabled 时无法打开。thinking 模式下温度不生效。">
-          <Toggle
-            checked={draft.sampling.thinking === 'enabled'}
-            onChange={(on) => setSampling({ thinking: on ? 'enabled' : 'disabled' })}
-            title="启用 thinking"
+        <SettingsRow title="深度思考" description="关闭：对当前模型写入 off（若公布该档）。低/高：模型公布该档时显式指定，否则回退自动。自动：保留会话已选档位，否则用模型默认。部署把 thinking 锁成 disabled 时无法打开。thinking 模式下温度不生效。">
+          <Select
+            size="md"
+            value={draft.sampling.thinking}
+            onChange={(v) => setSampling({ thinking: v as TavernSettings['sampling']['thinking'] })}
+            options={[
+              { value: 'disabled', label: '关闭' },
+              { value: 'enabled', label: '自动' },
+              { value: 'low', label: '低' },
+              { value: 'high', label: '高' },
+            ]}
           />
         </SettingsRow>
         <SettingsRow title="停止序列" description="每行一个。" stacked>
@@ -309,6 +316,10 @@ export function SettingsSection(props: { remote: TavernRemote }) {
             保存交互卡设置
           </Btn>
         </div>
+      </Section>
+
+      <Section title="数据目录" description="角色卡、世界书、预设、人设、记忆与会话绑定都落在这个目录，可直接查看备份。">
+        <Muted><span style={{ wordBreak: 'break-all' }}>{dataInfo.state.status === 'ready' ? dataInfo.state.value.dataHome : '…'}</span></Muted>
       </Section>
 
       <Err message={error} />

@@ -56,6 +56,12 @@ type PromptPreview = {
   assembleBudget: { tokensBefore: number; tokensAfter: number; trimmedSections: string[] }
 }
 
+/** 千位缩写（12.3k）；null 显示 ?。 */
+function fmtTokens(n: number | null): string {
+  if (n === null) return '?'
+  return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n)
+}
+
 function PromptPreviewDialog(props: { data: PromptPreview; onClose: () => void }) {
   const { data } = props
   const [tab, setTab] = useState<'standing' | 'turn' | 'full' | 'log'>('standing')
@@ -141,6 +147,8 @@ export function TavernHeaderChip(props: {
   const listedName = binding ? listed.find((c) => c.cardId === binding.cardId)?.name : undefined
 
   const [open, setOpen] = useState(false)
+  const usageLoader = useLoader(() => remote.getContextUsage({ sessionId }), [sessionId, open], tavern && open)
+  const usage = usageLoader.state.status === 'ready' ? usageLoader.state.value.usage : null
   const [lists, setLists] = useState<Lists | null>(null)
   const [draft, setDraft] = useState<SessionBinding | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -431,6 +439,17 @@ export function TavernHeaderChip(props: {
                 <Btn onClick={() => void showTriggerLog()}>触发日志</Btn>
                 <Btn onClick={() => void preview()}>预览提示词</Btn>
               </div>
+              {usage && (
+                <Muted>
+                  上下文：
+                  {usage.contextWindow !== null && usage.pressureTokens !== null
+                    ? `${fmtTokens(usage.pressureTokens)} / ${fmtTokens(usage.contextWindow)}（${usage.percent ?? '?'}%）`
+                    : `约 ${fmtTokens(usage.surfaceTokens)} token`}
+                  {usage.messageTokens !== null
+                    ? ` · 系统 ${fmtTokens(usage.systemTokens)} · 工具 ${fmtTokens(usage.toolsTokens)} · 消息 ${fmtTokens(usage.messageTokens)}`
+                    : ''}
+                </Muted>
+              )}
             </>
           )}
           </div>

@@ -589,6 +589,45 @@ export class TavernService extends TypertRemoteService {
     }
   }
 
+  /**
+   * 上下文占用（宿主 rc.2 起 sessionProjections.stateOf 只读 token-meter 投影）。
+   * 会话不在线、宿主未挂投影或尚无数据时 usage=null，调用方按未知处理。
+   */
+  getContextUsage(request: { sessionId: string }): unknown {
+    const session = this.ctx.sessions.get(request.sessionId as Session['id'])
+    if (!session) return { usage: null }
+    const projections = this.ctx.get('sessionProjections') as
+      | { stateOf?(s: Session, key: string): unknown }
+      | undefined
+    const pressure = projections?.stateOf?.(session, 'contextPressure') as
+      | { contextWindow?: number; pressureTokens?: number; surfaceTokens?: number }
+      | undefined
+    if (!pressure || typeof pressure.surfaceTokens !== 'number') return { usage: null }
+    const breakdown = projections?.stateOf?.(session, 'contextBreakdown') as
+      | { systemTokens?: number; toolsTokens?: number; messageTokens?: number }
+      | undefined
+    const percent =
+      typeof pressure.pressureTokens === 'number' && typeof pressure.contextWindow === 'number' && pressure.contextWindow > 0
+        ? Math.round((pressure.pressureTokens / pressure.contextWindow) * 100)
+        : null
+    return {
+      usage: {
+        surfaceTokens: pressure.surfaceTokens,
+        pressureTokens: pressure.pressureTokens ?? null,
+        contextWindow: pressure.contextWindow ?? null,
+        percent,
+        systemTokens: breakdown?.systemTokens ?? null,
+        toolsTokens: breakdown?.toolsTokens ?? null,
+        messageTokens: breakdown?.messageTokens ?? null,
+      },
+    }
+  }
+
+  /** Tavern 数据目录（$DSH_HOME/dsh-tavern），设置面板展示用。 */
+  getDataInfo(_request: Record<string, never>): unknown {
+    return { dataHome: this.state.paths.root }
+  }
+
   async getAvatar(request: { cardId: string }): Promise<unknown> {
     const charWs = await this.state.loadCharacter(request.cardId)
     if (!charWs) return { dataUrl: null }

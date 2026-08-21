@@ -13,9 +13,11 @@ dsh-liketavern 是 DeepSeek Harness（dsh）插件，把 `dsh web` 做成 SillyT
 3. **楼层事务**。用户对某一层触发的写入（记忆、世界状态、定时器）必须能撤销。工作区写入走 WAL（楼层号 + 序号），回退就是逆序回放。例外：记忆超容量时的异步压缩在 idle 期 `runMaintenance` 执行，`floor=null` 不记 WAL，回退不会撤压缩——那是无损整理，不增删剧情事实。
 4. **不复制 ST 的一次性输入**。提示词走 dsh 的 system-prompt 组装瀑布（稳定段 + runtime context）。不要在前端拼包直发，也绝不要用 `complete` 段盖掉工具前缀。
 
-实测环境：dsh `0.1.0-rc.6`（`@deepseek-ai/*` 同版本），Node 24，Windows。
+实测环境：dsh `0.1.1-rc.2`（`@deepseek-ai/*` 同版本），Node 24，Windows。
 
 **查平台行为先看官方文档**：<https://deepseek-harness.github.io/deepseek-harness/>（上手：[guide/quickstart](https://deepseek-harness.github.io/deepseek-harness/guide/quickstart)；插件开发：[develop/basic](https://deepseek-harness.github.io/deepseek-harness/develop/basic/)，含打包安装、profile/bundle、patch 层顺序）。涉及宿主机制（slot、profile、patch、typert、system-prompt 瀑布等）的判断以官网文档和宿主源码为准，不要凭记忆猜。
+
+**查宿主源码看 npm 包**：`@deepseek-ai/dsh` 及其依赖（`dsh-agent`、`dsh-session`、`dsh-system-prompt` 等）在 devDependencies 里锁定精确版本，`npm install` 后直接读 `node_modules/@deepseek-ai/dsh/` 和兄弟包里的 `lib/` 与 `.d.ts`。本地没装时看 npm registry 的 Code 页：<https://www.npmjs.com/package/@deepseek-ai/dsh?activeTab=code>，依赖包同站换包名。注意 `@deepseek-ai/dsh` 本体版本与 peer 包版本可能不同，先看 `node_modules/.../package.json` 确认实际版本再读代码。
 
 运行期角色卡、记忆、会话绑定在 `$DSH_HOME/dsh-tavern/`，不在本仓库。不要为了方便调试把真实卡拷进 git。测试用手写工厂数据。
 
@@ -25,10 +27,10 @@ dsh-liketavern 是 DeepSeek Harness（dsh）插件，把 `dsh web` 做成 SillyT
 - 宿主是 dsh（cordis 容器），分三面：
   - **host**（`src/index.ts`）：注册设置命名空间 `dsh-tavern`、初始化数据目录、安装 agent 预设、提供 `tavern` 服务（`TavernService`）、注册 typert remote、听 `session/event` 维护楼层 WAL 和每 turn/step 缓存。
   - **agent**（`src/agent.ts`）：由插件安装的 `tavern` 预设挂载（`presets/tavern/agent.cordis.yml`，启动时替换 `__AGENT_MODULE__`）。在 `system-prompt/assemble` 写入稳定段 `tavern:standing` 和 runtime context `tavern:turn`；`agent/pre-step` 记 step；`agent/request` 合入采样，并把 thinking 映射成 `reasoningEffort`（模型元数据经 `resolveModelInfoCached` 进程内缓存）；注册 7 个模型工具；`agent/status` 转入 idle 时 `runMaintenance` 做记忆压缩。
-  - **client**（`src/client/`）：浏览器 React UI。五块 slot：设置 `settings.section`、助手操作条 `conversation.chat.assistant-actions`、会话头芯片 `conversation.session.header.actions`、新会话英雄区 `conversation.input.dock`、助手排版 `conversation.chat.node`（`assistant-step`，priority -1）。经 `ctx.remote.$mount(TYPERT_REMOTE)` 挂 remote，调用时用 `ctx.get('remote.tavern')`。
+  - **client**（`src/client/`）：浏览器 React UI。五块 slot：设置 `settings.section`、助手操作条 `conversation.chat.assistant-actions`、会话头芯片 `conversation.session.header.actions`、新会话英雄区 `conversation.input.dock`、助手排版 `conversation.chat.node`（`assistant-step`，priority -1）。经 `ctx.remote.$mount(TYPERT_REMOTE)` 挂 remote，调用时用 `ctx.get('remote.tavern')`。rc.2 起 chat.node 的 owner props 不再给 `loadImage`，图片走 `renderMessageImages({ images, align })`；`fileMentions` 是 owner 函数，要像原生 AssistantNodeView 那样用 turn-tail owner 解析后再传给 MarkdownText。
 - host 和 client 用 typert RPC，契约在 `src/remote.ts`（`METHODS` 表 → 描述符）。方法返回裸业务值，失败抛错。`{ ok, value | error }` 信封由 gateway 生成，service 层不要再包一层。
 - 运行时依赖只有 `zod`。直接使用的 `@deepseek-ai/*` 以 peerDependency 声明，由 dsh 宿主提供；开发依赖使用公开 npm 的精确版本。禁止 `file:`、本机绝对路径、junction 或符号链接依赖。host/client bundle 里平台模块一律 external。
-- 设置用 schemastery（`src/node/config.ts`），命名空间 `dsh-tavern`，用户覆盖在 `~/.dsh/settings.yaml`，`applies: 'live'`。包括采样（含 thinking）、世界书全局、记忆、新会话默认绑定 `defaults`、`interactiveCards`、`cardNetworkWhitelist`、`cascadeDeleteEmbeddedBook`（删卡时是否连同内嵌世界书，默认开；关掉则删卡前把内嵌书抢救到世界书库）。
+- 设置用 schemastery（`src/node/config.ts`），命名空间 `dsh-tavern`，用户覆盖在 `~/.dsh/settings.yaml`，`applies: 'live'`。包括采样（含 thinking 档位）、世界书全局、记忆、新会话默认绑定 `defaults`、`interactiveCards`、`cardNetworkWhitelist`、`cascadeDeleteEmbeddedBook`（删卡时是否连同内嵌世界书，默认开；关掉则删卡前把内嵌书抢救到世界书库）。rc.2 起 web 设置 RPC 的命名空间白名单已移除，宿主通用设置文档页也能看到/改 `dsh-tavern` 的键——这是宿主行为，插件面板仍是主入口，不要为此改面板。
 
 ## 提示词通道与 agent 循环
 
@@ -49,7 +51,7 @@ live 路径不把整包 ST 预设塞进 system。`assemblePrompt` 按 Prompt Man
 - 工具写入不重评世界书（避免 sticky/cooldown 同轮连 tick）。检索层下一 turn 才更新。写成功后 `agent.inject` 一条 `【Tavern 同轮写入】…`（`form: 'notice'`），下一步看得到。
 - 合成 user 文本（runtime context 快照、同轮写入确认）走 `isSyntheticUserText`：不当 `{{lastusermessage}}`，不扫世界书，不计入正则 depth。
 
-采样 / thinking：`agent/request` 透传 `temperature` / `maxTokens` / `stop`，并按当前模型公布的 reasoning 档写 `reasoningEffort`（关 → `off`；开 → 保留会话已选的非 off 档，否则模型默认）。只发送适配器公布的 id。部署把 `llm-deepseek.thinking` 锁成 `disabled` 时，插件无法强行打开。
+采样 / thinking：`agent/request` 透传 `temperature` / `maxTokens` / `stop`，并按当前模型公布的 reasoning 档写 `reasoningEffort`（disabled → `off`；low/high → 公布才显式指定，否则回退自动；enabled → 保留会话已选的非 off 档，否则模型默认）。只发送适配器公布的 id。部署把 `llm-deepseek.thinking` 锁成 `disabled` 时，插件无法强行打开。
 
 ## 模型工具（7 个）
 
@@ -150,9 +152,9 @@ src/
 
 ## 平台限制（改之前看 README 同名一节）
 
-1. 采样只透传 `temperature` / `maxTokens` / `stop`，以及模型公布的 `reasoningEffort`（Tavern「深度思考」关 → `off`）。`top_p` 和 penalty 到不了模型，设置面板仅作记录。
+1. 采样只透传 `temperature` / `maxTokens` / `stop`，以及模型公布的 `reasoningEffort`（Tavern「深度思考」关 → `off`；低/高档仅在模型公布时显式指定）。`top_p` 和 penalty 到不了模型，设置面板仅作记录。
 2. @D 与作者注释在实际请求中并入 system 尾部。预览才是完整 ST 序列（不含 live playbook）。
-3. 会话日志不可删。重新生成/回退/编辑 = fork 前缀 + WAL 回滚 + 子会话续跑，成功后 UI 打开分支会话，并用宿主 `ISessions` 的 `scope → sessionOf → rename` 把 host 给的分支标题写进会话列表（旧宿主缺这条路径则跳过）。编辑 assistant 正文只换 seed 里的该条消息、不续跑。例外：续写（`continueFloor`）不改历史，不 fork，直接 followup 合成指令。同一父会话 + 同一楼层 fork 出的分支互为兄弟：forkAt 记 `siblings.json`，操作条给 ‹ n/m › 兄弟导航（`getFloorSiblings`，读时按 live/绑定文件过滤已删分支）。
+3. 会话日志不可删。重新生成/回退/编辑 = fork 前缀 + WAL 回滚 + 子会话续跑，成功后 UI 打开分支会话，并用宿主 `ISessions` 的 `scope → sessionOf → rename` 把 host 给的分支标题写进会话列表（旧宿主缺这条路径则跳过）。编辑 assistant 正文只换 seed 里的该条消息、不续跑。例外：续写（`continueFloor`）不改历史，不 fork，直接 followup 合成指令。同一父会话 + 同一楼层 fork 出的分支互为兄弟：forkAt 记 `siblings.json`，操作条给 ‹ n/m › 兄弟导航（`getFloorSiblings`，读时按 live/绑定文件过滤已删分支）。rc.2 起会话头另有宿主原生面包屑（按 fork 时写入的 `meta.parentSession` 算世系，`conversation.session.header.lineage` 由 subagent 插件占位渲染）：那是会话级世系，与楼层级 ‹ n/m › 互补，不要去替换那个 slot。
 4. 操作条 slot 只在 assistant 消息上。「编辑用户消息」/续写/代答都挂在 assistant 楼层。dsh 输入区没有插件可写 API，impersonate 结果只能复制到剪贴板。
 5. 同一角色卡多会话并发写入会交错（工作区与 WAL 以卡为单位共享）。这是已知边界，不要去「修」。
 6. 角色选择和开场白预览只在 agent 预设为 `tavern`（`src/client/mode.ts`）时显示。

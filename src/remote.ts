@@ -202,6 +202,12 @@ const METHODS: Record<string, { req: z.ZodTypeAny; value: z.ZodTypeAny; summary:
   // 调试
   getTriggerLog: { req: z.object({ ...sessionIdField }), value: anyValue, summary: '最近一次组装的触发日志' },
   previewPrompt: { req: z.object({ ...sessionIdField }), value: anyValue, summary: '预览完整提示词序列' },
+  getContextUsage: {
+    req: z.object({ ...sessionIdField }),
+    value: anyValue,
+    summary: '读取会话上下文占用（token-meter 投影；宿主未挂投影时 usage=null）',
+  },
+  getDataInfo: { req: z.object({}), value: anyValue, summary: 'Tavern 数据目录路径' },
   getAvatar: { req: z.object({ ...cardIdField }), value: anyValue, summary: '角色头像 dataURL' },
   // 设置（采样参数与世界书全局设置等，落 dsh 设置命名空间 dsh-tavern）
   getSettings: { req: z.object({}), value: anyValue, summary: '读取 Tavern 设置' },

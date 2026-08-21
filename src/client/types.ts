@@ -89,7 +89,7 @@ export interface TavernSettings {
     stop: string[]
     presencePenalty: number
     frequencyPenalty: number
-    thinking: 'enabled' | 'disabled'
+    thinking: 'enabled' | 'disabled' | 'low' | 'high'
   }
   worldInfo: {
     scanDepth: number
@@ -232,6 +232,21 @@ export interface TavernRemote {
   }): Promise<Envelope<{ id: string }>>
   exportMergedLorebook(req: { cardId: string }): Promise<Envelope<{ json: unknown }>>
   getTriggerLog(req: { sessionId: string }): Promise<Envelope<{ log: { at: string; lines: string[] } | null }>>
+  /** 上下文占用（token-meter 投影）；宿主未挂投影/会话不在线时 usage=null。 */
+  getContextUsage(req: { sessionId: string }): Promise<
+    Envelope<{
+      usage: {
+        surfaceTokens: number
+        pressureTokens: number | null
+        contextWindow: number | null
+        percent: number | null
+        systemTokens: number | null
+        toolsTokens: number | null
+        messageTokens: number | null
+      } | null
+    }>
+  >
+  getDataInfo(req: Record<string, never>): Promise<Envelope<{ dataHome: string }>>
   previewPrompt(req: { sessionId: string }): Promise<
     Envelope<{
       standing: string

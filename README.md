@@ -20,7 +20,7 @@ DeepSeek Harness（dsh）插件，把 `dsh web` 变成 SillyTavern 式的角色�
 ## 要求
 
 - Node.js ≥ 24
-- 已安装 dsh CLI（`0.1.0-rc.6`），并跑过一次 `dsh web`（首次运行会初始化 `web` profile）
+- 已安装 dsh CLI（`0.1.1-rc.2`），并跑过一次 `dsh web`（首次运行会初始化 `web` profile）
 - PATH 中有 `pnpm`（`dsh plugin` 命令内部经 pnpm 管理 profile 的插件依赖）
 
 ## 安装
@@ -43,7 +43,7 @@ dsh plugin --profile web list --depth 0
 - **git 安装拉的是源码而非构建产物**，pnpm 不会替你跑 `build`。本仓库把构建产物 `lib/` 刻意入库，因此从 GitHub 直接安装即可用，也不需要 pnpm 的 `allowBuilds` 构建授权。建议锁定 commit（`github:Amakurai/dsh-liketavern#<sha>`），避免后续推送悄悄改变实际运行的内容。
 - 也可以走 tarball：作者侧 `npm pack`（`prepack` 会先构建），用户侧 `dsh plugin --profile web add ./dsh-liketavern-0.1.0.tgz`。
 
-版本兼容：本包以 peerDependency 锁 dsh `0.1.0-rc.6`；dsh 处于预发布阶段，升级 dsh 后需同步换装适配的插件版本。
+版本兼容：本包以 peerDependency 锁 dsh `0.1.1-rc.2`；dsh 处于预发布阶段，升级 dsh 后需同步换装适配的插件版本。
 
 运行时数据（角色卡、记忆、会话绑定等）落在 `$DSH_HOME/dsh-tavern/`，与本仓库无关。
 

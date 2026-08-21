@@ -5,7 +5,8 @@
  * 本组件只在当前会话为 Tavern 时才会被登记（见 client/index.tsx）。若仍被挂到
  * 非 Tavern 会话上（切换瞬间），立刻交回空树之外的原生 Markdown 回退，避免挡住 dsh。
  */
-import { ImageGallery } from '@deepseek-ai/dsh-client-ui-attachment'
+import { Fragment, useMemo } from 'react'
+import type { ReactNode } from 'react'
 import { JsonBlock, MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives'
 import { stripDisplayMeta } from '../core/displaySanitize.js'
 import { isTavernSession, type UseSessions } from './mode.js'
@@ -22,11 +23,25 @@ interface AssistantBlock {
 }
 
 interface AssistantNode {
+  location?: { kind?: string; turn?: { status?: string } }
   data: {
     status: string
     blocks: AssistantBlock[]
-    finalNode?: unknown
+    finalNode?: { seq?: number }
   }
+}
+
+/** 宿主 owner props 里的图片渲染器（rc.2 起替代 loadImage，见 conversation.chat.node 契约）。 */
+type RenderMessageImages = (owner: {
+  images: readonly { attachment: unknown }[]
+  align: 'start' | 'end'
+}) => ReactNode
+
+/** fileMentions 的入参（宿主 AssistantNodeView 同款：turn-tail owner）。 */
+interface TurnTailOwner {
+  turn: { status?: string }
+  seq: number
+  openFile?: (path: string) => void
 }
 
 function ReasoningFold(props: { text: string; streaming?: boolean }) {
@@ -45,11 +60,13 @@ export function TavernAssistantNode(props: {
   sessions?: { open(id: string): void; refresh?: () => Promise<void> }
   useSessions?: UseSessions
   node: AssistantNode
-  loadImage?: (attachment: unknown) => Promise<string>
-  fileMentions?: unknown
+  renderMessageImages?: RenderMessageImages
+  useTurnData?: (key: string) => unknown
+  openFile?: (path: string) => void
+  fileMentions?: (owner: TurnTailOwner) => unknown
   t?: (key: string, vars?: Record<string, unknown>) => string
 }) {
-  const { remote, sessionId, sessions, node, loadImage, t } = props
+  const { remote, sessionId, sessions, node, t } = props
   const tavern = isTavernSession(props.useSessions, sessionId)
   const bindingLoader = useLoader(() => remote.getSessionBinding({ sessionId }), [sessionId], tavern)
   const binding = bindingLoader.state.status === 'ready' ? bindingLoader.state.value.binding : null
@@ -101,15 +118,30 @@ export function TavernAssistantNode(props: {
 
 function NativeAssistantFallback(props: {
   node: AssistantNode
-  loadImage?: (attachment: unknown) => Promise<string>
-  fileMentions?: unknown
+  renderMessageImages?: RenderMessageImages
+  useTurnData?: (key: string) => unknown
+  openFile?: (path: string) => void
+  fileMentions?: (owner: TurnTailOwner) => unknown
   t?: (key: string, vars?: Record<string, unknown>) => string
   streaming: boolean
   interrupted: boolean
   stripMeta?: boolean
 }) {
-  const { node, loadImage, fileMentions, t, streaming, interrupted, stripMeta } = props
-  const imageLoader = loadImage ?? (() => Promise.reject(new Error(t?.('image.serviceUnavailable') ?? 'no image loader')))
+  const { node, renderMessageImages, useTurnData, openFile, fileMentions, t, streaming, interrupted, stripMeta } = props
+  // fileMentions 是宿主 owner 函数，需按原生 AssistantNodeView 的方式用
+  // turn-tail owner 解析成 mentions 再交给 MarkdownText（旧版直接透传函数本体，等于没配）。
+  const turn = node.location?.kind === 'turn' || node.location?.kind === 'step' ? node.location.turn : undefined
+  const tail = useTurnData?.('turn-tail') as { closing?: { finalNode?: { seq?: number } } } | undefined
+  const finalSeq = node.data.finalNode?.seq
+  const mentionOwner = useMemo<TurnTailOwner | undefined>(() => {
+    if (!turn || turn.status !== 'closed' || finalSeq === undefined) return undefined
+    if (tail?.closing?.finalNode?.seq !== finalSeq) return undefined
+    return { turn, seq: finalSeq, openFile }
+  }, [turn, tail, finalSeq, openFile])
+  const mentions = useMemo(
+    () => (mentionOwner && fileMentions ? fileMentions(mentionOwner) : undefined),
+    [fileMentions, mentionOwner],
+  )
   const rendered: unknown[] = []
   const blocks = node.data.blocks
   for (let i = 0; i < blocks.length; i++) {
@@ -118,7 +150,7 @@ function NativeAssistantFallback(props: {
     if (block.kind === 'text') {
       const shown = stripMeta ? stripDisplayMeta(block.text ?? '') : (block.text ?? '')
       rendered.push(
-        <MarkdownText key={i} text={shown} streaming={streaming} fileMentions={fileMentions} />,
+        <MarkdownText key={i} text={shown} streaming={streaming} fileMentions={mentions} />,
       )
     } else if (block.kind === 'reasoning') {
       if (stripMeta) continue
@@ -136,14 +168,13 @@ function NativeAssistantFallback(props: {
         group.push(next)
         i += 1
       }
-      rendered.push(
-        <ImageGallery
-          key={i}
-          images={group}
-          load={imageLoader}
-          align="start"
-        />,
-      )
+      if (renderMessageImages) {
+        rendered.push(
+          <Fragment key={i}>
+            {renderMessageImages({ images: group.map(({ attachment }) => ({ attachment })), align: 'start' })}
+          </Fragment>,
+        )
+      }
     } else if (block.kind === 'tool-call') {
       continue
     } else {

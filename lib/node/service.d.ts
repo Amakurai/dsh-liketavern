@@ -235,6 +235,15 @@ export declare class TavernService extends TypertRemoteService {
     previewPrompt(request: {
         sessionId: string;
     }): Promise<unknown>;
+    /**
+     * 上下文占用（宿主 rc.2 起 sessionProjections.stateOf 只读 token-meter 投影）。
+     * 会话不在线、宿主未挂投影或尚无数据时 usage=null，调用方按未知处理。
+     */
+    getContextUsage(request: {
+        sessionId: string;
+    }): unknown;
+    /** Tavern 数据目录（$DSH_HOME/dsh-tavern），设置面板展示用。 */
+    getDataInfo(_request: Record<string, never>): unknown;
     getAvatar(request: {
         cardId: string;
     }): Promise<unknown>;

@@ -16,6 +16,7 @@ declare module 'react' {
   export function useMemo<T>(factory: () => T, deps: readonly unknown[]): T
   export function useCallback<T>(fn: T, deps: readonly unknown[]): T
   export function useRef<T>(initial: T): { current: T }
+  export const Fragment: any
   const defaultExport: any
   export default defaultExport
 }
@@ -77,9 +78,4 @@ declare module '@deepseek-ai/dsh-client-ui-primitives' {
   export const IconPlayOutline16: any
   export const MarkdownText: any
   export const JsonBlock: any
-}
-
-declare module '@deepseek-ai/dsh-client-ui-attachment' {
-  export const ImageGallery: any
-  export const MessageImage: any
 }

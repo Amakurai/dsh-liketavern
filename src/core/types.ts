@@ -462,8 +462,12 @@ export interface SamplingSettings {
   stop: string[]
   presencePenalty: number
   frequencyPenalty: number
-  /** thinking 开关；绑定会话经 agent/request 映射为模型公布的 reasoningEffort。 */
-  thinking: 'enabled' | 'disabled'
+  /**
+   * thinking 档位；绑定会话经 agent/request 映射为模型公布的 reasoningEffort。
+   * disabled → off；low/high → 模型公布该档时显式指定，未公布回退自动；
+   * enabled → 自动（保留会话已选档，否则模型默认）。
+   */
+  thinking: 'enabled' | 'disabled' | 'low' | 'high'
 }
 
 export const DEFAULT_SAMPLING: SamplingSettings = {

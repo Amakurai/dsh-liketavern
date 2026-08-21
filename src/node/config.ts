@@ -19,8 +19,8 @@ const SamplingSchema = z.object({
   /** DeepSeek 官方已废弃（传入无效），仅作记录。 */
   presencePenalty: z.number().min(-2).max(2).default(DEFAULT_SAMPLING.presencePenalty),
   frequencyPenalty: z.number().min(-2).max(2).default(DEFAULT_SAMPLING.frequencyPenalty),
-  /** thinking 开关；绑定会话时按模型公布的 reasoning 档写入 reasoningEffort（关→off）。 */
-  thinking: z.union([z.const('enabled'), z.const('disabled')]).default(DEFAULT_SAMPLING.thinking),
+  /** thinking 档位；绑定会话时按模型公布的 reasoning 档写入 reasoningEffort（disabled→off，low/high→公布才显式指定）。 */
+  thinking: z.union([z.const('enabled'), z.const('disabled'), z.const('low'), z.const('high')]).default(DEFAULT_SAMPLING.thinking),
 }).default({
   temperature: DEFAULT_SAMPLING.temperature,
   topP: DEFAULT_SAMPLING.topP,

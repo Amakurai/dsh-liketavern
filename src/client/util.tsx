@@ -467,6 +467,10 @@ export function Dialog(props: {
   width?: 'sm' | 'md' | 'lg'
   children?: ReactNode
 }) {
+  // Modal 的 dialog 本体不限高，超高内容会把整个弹窗顶出视口。
+  // 滚动区放在 content 层（Modal 注释里指定的 scrollable content region）并钉死
+  // max-height，保证任何视口高度下弹窗底部都不被裁。
+  const widthClass = props.width === 'md' ? 'dsh-tavern-modal-md' : props.width === 'lg' ? 'dsh-tavern-modal-lg' : ''
   return (
     <Modal
       open={props.open}
@@ -475,7 +479,7 @@ export function Dialog(props: {
       description={props.description}
       closeLabel="关闭"
       footer={props.footer}
-      contentClassName={props.width === 'md' ? 'dsh-tavern-modal-md' : props.width === 'lg' ? 'dsh-tavern-modal-lg' : undefined}
+      contentClassName={`dsh-tavern-modalContent${widthClass ? ` ${widthClass}` : ''}`}
     >
       <div className="dsh-tavern-ui dsh-tavern-modalBody">{props.children}</div>
     </Modal>

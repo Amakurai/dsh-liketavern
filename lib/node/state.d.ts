@@ -38,6 +38,11 @@ export declare class TavernState {
     /** 当前 turn 内的 step（pre-step / step/start 维护；turn 开始时为 1）。 */
     readonly currentSteps: Map<string, number>;
     /**
+     * 步骤收口通知去重标记（sessionId → `turn:nextStep`）：工具执行时注入的【Tavern 步骤】
+     * 通知按下一步号去重，防并行工具调用重复注入；turn/end 清除。
+     */
+    readonly stepNoticeMarks: Map<string, string>;
+    /**
      * 会话 → 本轮 beginFloor 实际开在哪个 cardId 上（turn/start 记，turn/end 取走）。
      * 不变式：楼层必须由开层那张卡提交。turn 中途换绑/解绑后当前绑定已经是另一张卡，
      * 若按当前绑定提交，开层那张卡的 WorkspaceFs.floor 会永远悬着，之后的非会话写入被误记 WAL。
@@ -56,7 +61,15 @@ export declare class TavernState {
     readonly standingPins: Map<string, StandingPin>;
     /** standing 依赖资产的进程内修订号：经本类写方法编辑/删除即 bump，standing 指纹随内容变化失效重算。 */
     private readonly assetRevs;
-    /** 模型元数据进程内缓存：resolveModelInfo 每步被调（reasoningEffort / 上下文窗口），适配器目录运行期不变。 */
+    /**
+     * 库资产解析缓存（热路径读盘放大治理）：key 与 assetRevs 的修订号键对应，
+     * 写方法 bump 修订号时 tag 变化即失效。绕开 TavernState 手改文件不会被捕获
+     * （与 standing 钉死同一语义，重启即清）。返回值视为只读，调用方不得原地修改。
+     */
+    private readonly presetCache;
+    private readonly loreCache;
+    private readonly cardCache;
+    /** 模型元数据进程内缓存：resolveModelInfo 每步被调（reasoningEffort / 上下文窗口），带 TTL 防配置热更后拿到旧值。 */
     private readonly modelInfoCache;
     /** 待异步压缩的角色工作区（memory_write 超容量时标记；idle 期 runMaintenance 消费，见 memoryMaintenance.ts）。 */
     readonly pendingMemoryCompress: Set<string>;
@@ -157,6 +170,12 @@ export declare class TavernState {
     saveBinding(binding: SessionBinding): Promise<void>;
     /** 绑定不变时复用第一次 standing，避免组装抖动打穿 KV。钉位按会话 × 生成场景（standingPinKey）。 */
     pinStanding(sessionId: string, generationType: string, fingerprint: string, computed: string): string;
+    /**
+     * 组装失败兜底用：只读地取本会话同场景已钉死的 standing，且仅当钉位属于同一张卡才返回。
+     * 宁可穿旧同卡钉位也不回退 UNBOUND_STANDING——换段文案会把整个 system 前缀打穿成 0% 缓存。
+     * 指纹第三段是 cardId（standingFingerprint 布局），\0 分隔不会出现在字段值里。
+     */
+    peekStanding(sessionId: string, generationType: string, cardId: string): string | undefined;
     /** 清掉会话全部场景的 standing 钉位（换绑/回收绑定时）。 */
     private clearStandingPins;
     private bumpAssetRev;
@@ -170,8 +189,9 @@ export declare class TavernState {
         personaLorebookId?: string | null;
     }): string[];
     /**
-     * 模型元数据解析缓存：同 provider+model 复用一次解析结果（含 reasoning 档与上下文窗口）。
-     * 失败不缓存（删掉条目让下次重试）；signal 只作用于首次真实解析。
+     * 模型元数据解析缓存：同 provider+model 复用一次解析结果（含 reasoning 档与上下文窗口），
+     * TTL 过期重解析（provider 配置热更后不再拿旧窗口）。失败不缓存（删掉条目让下次重试）；
+     * signal 只作用于首次真实解析。
      */
     resolveModelInfoCached(llm: LlmRuntime, provider: string, model: string, signal?: AbortSignal): Promise<LlmResolvedModelInfo>;
     /** 清掉会话绑定文件；空白新对话复用旧会话时用来去掉上次留下的角色卡。 */

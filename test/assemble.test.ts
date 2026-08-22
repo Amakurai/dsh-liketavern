@@ -28,6 +28,7 @@ import {
   type RegexRule,
   type WIActivation,
   type WIEngineResult,
+  type WITruncatedEntry,
   type WorldDelta,
   type WorldInfoEntry,
 } from '../src/core/types.js'
@@ -105,6 +106,7 @@ const act = (entry: WorldInfoEntry): WIActivation => ({ entry, matchedKeys: [], 
 function wiOf(
   byPosition: Partial<Record<WIPosition, WIActivation[]>>,
   outlets: Record<string, WIActivation[]> = {},
+  truncated: WITruncatedEntry[] = [],
 ): WIEngineResult {
   return {
     activated: [],
@@ -112,6 +114,7 @@ function wiOf(
     outlets,
     log: [],
     budget: { limit: 0, used: 0, overflowed: false },
+    truncated,
     timerState: EMPTY_TIMER_STATE,
   }
 }
@@ -320,6 +323,32 @@ describe('relative 骨架与 marker 替换', () => {
     expect(res.turnContext).toContain('【当前状态·更新】城门已经关闭')
     expect(res.turnContext).toContain('【当前状态·已失效】旧宵禁规则不再有效')
     expect(res.turnContext).not.toContain('密室里有宝箱')
+  })
+
+  it('世界书截断清单：进 turnContext 尾部给模型按条补读，不进 standing，且只出现一次', () => {
+    const wi = wiOf({}, {}, [
+      { uid: 'u1', key: 'global:book:u1', label: '城门设定' },
+      { uid: 'u2', key: 'global:book:u2', label: 'u2' }, // label 退化为 uid 时不重复堆砌
+    ])
+    const res = assemblePrompt(makeInput({ wi }))
+    expect(res.turnContext).toContain('本轮世界书有 2 条命中但因预算未注入')
+    expect(res.turnContext).toContain('u1「城门设定」')
+    expect(res.turnContext).toContain('tavern_lore_read')
+    expect(res.turnContext).not.toContain('u2「u2」')
+    expect(res.standing).not.toContain('预算未注入')
+    expect(res.messages.filter((m) => m.content.includes('预算未注入'))).toHaveLength(1)
+  })
+
+  it('截断清单超过 8 条时折叠为「等 N 条」，无截断则无提示', () => {
+    const many = Array.from({ length: 10 }, (_, i) => ({ uid: `u${i}`, key: `k${i}`, label: `条目${i}` }))
+    const res = assemblePrompt(makeInput({ wi: wiOf({}, {}, many) }))
+    expect(res.turnContext).toContain('本轮世界书有 10 条命中但因预算未注入')
+    expect(res.turnContext).toContain('等 2 条')
+    expect(res.turnContext).toContain('u7「条目7」')
+    expect(res.turnContext).not.toContain('u8「条目8」')
+
+    const clean = assemblePrompt(makeInput({ wi: wiOf({}) }))
+    expect(clean.turnContext).not.toContain('预算未注入')
   })
 
   it('兜底动态层变化不改变 standing 字节', () => {
@@ -696,9 +725,9 @@ describe('prompt 作用域正则', () => {
   it('规则编译失败记入 regex-error 日志且不中断组装', () => {
     const bad: RegexRule = { ...rule, id: 'bad', find: '/(unclosed/gi' }
     const res = assemblePrompt(makeInput({ regexRules: [bad] }))
-    // 默认输入有两条历史消息，规则对每条各失败一次
+    // 规则在消息循环外预编译一次：失败只报一次（不再逐消息重复）
     const errors = res.log.filter((l) => l.kind === 'regex-error').map((l) => l.detail)
-    expect(errors).toHaveLength(2)
+    expect(errors).toHaveLength(1)
     expect(errors.every((d) => d.startsWith('bad:'))).toBe(true)
     expect(res.messages.length).toBeGreaterThan(0)
   })

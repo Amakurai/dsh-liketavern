@@ -3,7 +3,7 @@
  * 职责：
  * 1. 注册稳定 system 段 `tavern:standing` 与本轮 runtime context `tavern:turn`。
  *    已绑定：standing = 角色定义 + 预设骨架（冻结时钟，按会话钉死字节）；
- *    turn = 步骤 playbook + 世界书/记忆/变化层。
+ *    turn = 固定 playbook（不随 step 变，宿主按字节去重不重复追加）+ 世界书/记忆/变化层。
  *    未绑定：standing 固定短文案（不删段，避免段布局抖动打穿 KV），turn 为空。
  *    standing 段 order=210，排在工具说明（100–199）之后：即使骨架仍有残余抖动，
  *    稳定的工具说明仍能命中 DeepSeek 前缀缓存。绝不把整包 ST 预设改成 complete 段。
@@ -21,7 +21,7 @@ import type { TavernService } from './node/service.js'
 import type { TavernState } from './node/state.js'
 import { registerTavernTools } from './node/tools.js'
 import { mergeTavernCallConfig, resolveTavernReasoningEffort, type AdvertisedReasoningInfo } from './core/callConfig.js'
-import { BOUND_DISCIPLINE, UNBOUND_STANDING, formatTurnPlaybook, isContinueInstruction, neutralizeDshMustache } from './core/dshPrompt.js'
+import { BOUND_DISCIPLINE, TURN_PLAYBOOK, UNBOUND_STANDING, isContinueInstruction, neutralizeDshMustache } from './core/dshPrompt.js'
 import { standingFingerprint } from './core/standingPin.js'
 import type { SamplingSettings } from './core/types.js'
 
@@ -91,10 +91,11 @@ export function apply(ctx: Context): void {
       applyTurnContext(result, '')
       return result
     }
+    // 本轮是续写轮（continueFloor 的合成指令在 pendingInputs 里，turn/end 才清）时
+    // 按 continue 场景组装：injection_trigger 过滤不同，standing 按场景分别钉死。
+    // 提前到 try 外：组装失败时 catch 兜底还要按同一场景找钉位。
+    const generationType = (state.pendingInputs.get(agent.id) ?? []).some(isContinueInstruction) ? 'continue' : 'normal'
     try {
-      // 本轮是续写轮（continueFloor 的合成指令在 pendingInputs 里，turn/end 才清）时
-      // 按 continue 场景组装：injection_trigger 过滤不同，standing 按场景分别钉死。
-      const generationType = (state.pendingInputs.get(agent.id) ?? []).some(isContinueInstruction) ? 'continue' : 'normal'
       const pipeline = await runTavernPipeline({ state, sessionId: agent.id, agent, llm, mode: 'live', generationType })
       if (!pipeline) {
         applyStanding(result, UNBOUND_STANDING)
@@ -116,11 +117,14 @@ export function apply(ctx: Context): void {
           standing,
         ),
       )
-      const playbook = formatTurnPlaybook(state.currentSteps.get(agent.id) ?? 1)
-      applyTurnContext(result, neutralizeDshMustache(joinPromptParts([playbook, pipeline.turnContext])))
+      // playbook 固定不随 step 变化：宿主对 runtime context 快照按字节去重，
+      // 同轮后续步骤的快照一个字节都不变 ⇒ 不再重复追加，前缀缓存全保。
+      applyTurnContext(result, neutralizeDshMustache(joinPromptParts([TURN_PLAYBOOK, pipeline.turnContext])))
     } catch (error) {
-      ctx.logger.warn(`dsh-tavern: 提示词组装失败（保持未绑定短文案）：${error instanceof Error ? error.message : String(error)}`)
-      applyStanding(result, UNBOUND_STANDING)
+      ctx.logger.warn(`dsh-tavern: 提示词组装失败：${error instanceof Error ? error.message : String(error)}`)
+      // 瞬时故障（磁盘抖动/单文件损坏）不该打穿整段前缀缓存、也不该让本轮扮演突然掉到
+      // 未绑定文案：有同卡钉位就穿钉位（可能略旧但字节稳定）；换卡后对不上钉位才回退未绑定。
+      applyStanding(result, state.peekStanding(agent.id, generationType, binding.cardId) ?? UNBOUND_STANDING)
       applyTurnContext(result, '')
     }
     return result

@@ -39,17 +39,20 @@ live 路径不把整包 ST 预设塞进 system。`assemblePrompt` 按 Prompt Man
 | 通道 | dsh 落点 | 内容 | 稳定性 |
 | --- | --- | --- | --- |
 | standing | system 段 `tavern:standing`（order 210，工具说明 100–199 之后） | `BOUND_DISCIPLINE` + 角色定义 + 预设骨架 + 常驻世界书 | 绑定不变则按会话 × 生成场景钉死字节（`STANDING_PIN_VERSION` + generationType + 卡/预设/人设指纹 + 资产修订号）。纪律或段布局变了必须递增版本，否则进程内旧钉死会挡住新文案。编辑/删除预设与世界书经 `TavernState` 写方法 bump 修订号（`standingRevTags`）。绕开 TavernState 手改文件不会被捕获。 |
-| turn | runtime context `tavern:turn` | `formatTurnPlaybook(step)` + 关键词世界书/记忆/变化层/AN/本轮宏 | 每步会变。dsh 追加成 user 快照（`Current runtime context.`），盖住更早的同名快照。 |
+| turn | runtime context `tavern:turn` | 固定 `TURN_PLAYBOOK`（不随 step 变）+ 关键词世界书/记忆/变化层/AN/本轮宏 | dsh 追加成 user 快照（`Current runtime context.`），盖住更早的同名快照；宿主对快照按字节去重——同轮后续步骤快照不变则不再追加（多步零快照开销）。步骤收口压力走 `【Tavern 步骤】` inject（见下）。 |
 | messages | 仅「预览提示词」 | 完整 ST 序列（含 @D 真实插历史位置） | live 请求插不进会话日志中间；排查以预览为准。 |
 
 时钟在 standing 里冻结。残留 `{{…}}` 写入 dsh 段前要 `neutralizeDshMustache`。未绑卡时不要删掉 `tavern:standing` 段，只换成 `UNBOUND_STANDING` 短文案，避免段布局抖动打穿 KV。
 
+turn 层预算（`core/turnBudget.ts`）：runtime context 快照对新请求永远是**未缓存前缀**（DeepSeek 前缀缓存只认追加点之前的字节），快照里的大体量内容 = 每轮全价重付。因此世界书层用固定 `tokenBudget`（默认 3000，绝对上限，不随历史长度/窗口缩水；百分比路径折算基数 clamp 到 128K，防 1M 窗口把 25% 放大成 25 万），且只计搭快照通道的条目——落 standing 的常驻（constant 且无本轮宏，`isStandingSafeEntry`，引擎与渲染共用）豁免计费；被裁条目进 `truncated`、快照尾部附 uid 清单（封顶 8 条），模型按条 `tavern_lore_read` 补读，硬顶是分页不是丢信息。变化层按 `WORLD_DELTA_TURN_BUDGET`（1500）从最新往旧装载，预算只计本轮实际渲染的条目（无键常驻 + 已命中，判定共用 `isDeltaRenderedInTurn`），更旧的丢给 `tavern_lore_read(source=delta)` 补读；记忆（1200）与 journal（800）各自有顶。被裁不要心疼——工具按条补读是设计内路径。触发日志里有 `[turn:tail]` 行可直接观测每轮尾巴体积。
+
 多步循环，不要为了省 I/O 跳过每步组装：
 
 - 世界书和记忆检索每 turn 只评估一次（定时器以消息数为单位，同轮复用 `wiCache`）。
-- 每步仍跑 `runTavernPipeline`，把本轮快照重放进 `tavern:turn`。长上下文会忘，靠最新 runtime context 加按条工具补读。
+- 每步仍跑 `runTavernPipeline`，把本轮快照重放进 `tavern:turn`。playbook 固定后同轮快照字节不变，宿主去重不再追加；长上下文会忘，靠最新 runtime context 加按条工具补读。
 - 工具写入不重评世界书（避免 sticky/cooldown 同轮连 tick）。检索层下一 turn 才更新。写成功后 `agent.inject` 一条 `【Tavern 同轮写入】…`（`form: 'notice'`），下一步看得到。
-- 合成 user 文本（runtime context 快照、同轮写入确认）走 `isSyntheticUserText`：不当 `{{lastusermessage}}`，不扫世界书，不计入正则 depth。
+- 步骤收口通知（`formatTurnStepNotice`，按 `turn:nextStep` 去重）只能在工具执行时注入（`node/tools.ts` 的 `maybeInjectStepNotice`，7 个工具全覆盖）。不要在 `agent/pre-step` 里 inject：注入要等下一步 preStep 才被认领（晚一步），且 turn 结束判定会把未消费的 nextStep 输入当成续步理由，强行多拉一步产生孤儿通知。
+- 合成 user 文本（runtime context 快照、同轮写入确认、步骤收口通知）走 `isSyntheticUserText`：不当 `{{lastusermessage}}`，不扫世界书，不计入正则 depth。
 
 采样 / thinking：`agent/request` 透传 `temperature` / `maxTokens` / `stop`，并按当前模型公布的 reasoning 档写 `reasoningEffort`（disabled → `off`；low/high → 公布才显式指定，否则回退自动；enabled → 保留会话已选的非 off 档，否则模型默认）。只发送适配器公布的 id。部署把 `llm-deepseek.thinking` 锁成 `disabled` 时，插件无法强行打开。
 
@@ -97,6 +100,7 @@ src/
 │   ├── macros.ts           ST 宏（setvar/getvar 是组装前预处理）
 │   ├── tokenize.ts         分词、token 估算、clipToTokenBudget
 │   ├── memoryRetrieval.ts  记忆检索结果的时间衰减与预算挑选
+│   ├── turnBudget.ts       turn 层预算：WI 百分比基数 clamp、变化层按预算保最新
 │   ├── loreQuery.ts        世界书目录 / 按条筛选
 │   ├── assetRead.ts        工作区路径消毒与预设条目目录
 │   ├── callConfig.ts       采样合入 + reasoningEffort 挑选
@@ -200,7 +204,7 @@ src/
 9. **`{{setvar}}` / `{{getvar}}` 是组装前预处理**，不是扔给模型。一次 `assemblePrompt` 共享 `Map` store；set 条目展开后变空并省略；后写覆盖先写。`{{lastusermessage}}` / `{{outlet}}` / 时钟进 `turnContext`，不要为了「完整 ST」把它们写进 `tavern:standing`。不落盘，不做 if/dice/STscript。预设内嵌 `regex_scripts` 随预设导入（`compilePresetRegexScripts`，跟脚本 `disabled` 走）。UI 开关直接改写预设文件的 `disabled`。常驻世界书（constant、无本轮宏）进 standing。
 10. **不要把整包 ST 改成 `complete` 段。** standing 放在工具说明之后（order 210），工具前缀才能命中 DeepSeek KV。turn playbook / 本轮世界书/记忆只能进 `tavern:turn`。
 11. **不要整本倾倒世界书，也不要在 step>1 跳过组装。** `tavern_lore_read` 先目录再 uid/query；`tavern_asset_read` 按文件或预设条目读。step>1 仍组装，是为了长上下文下重放本轮快照。
-12. **同轮写入确认与续写指令不可当用户台词。** `TURN_WRITE_ACK_PREFIX`（`【Tavern 同轮写入】`）和 `CONTINUE_INSTRUCTION_PREFIX`（`【Tavern 续写】`）必须继续被 `isSyntheticUserText` 过滤（含 pendingInputs 进 scanMessages 前）。不要为了「立刻进检索层」同轮重跑 `evaluateWorldInfo`。
+12. **同轮写入确认与续写指令不可当用户台词。** `TURN_WRITE_ACK_PREFIX`（`【Tavern 同轮写入】`）、`CONTINUE_INSTRUCTION_PREFIX`（`【Tavern 续写】`）和 `TURN_STEP_NOTICE_PREFIX`（`【Tavern 步骤】`）必须继续被 `isSyntheticUserText` 过滤（含 pendingInputs 进 scanMessages 前）。不要为了「立刻进检索层」同轮重跑 `evaluateWorldInfo`。
 
 ## 安全
 
@@ -219,6 +223,8 @@ $DSH_HOME/dsh-tavern/
 ├── siblings.json            # 分支兄弟索引（楼层 fork 的 ‹ n/m › 导航）
 └── sessions/<sessionId>.json
 ```
+
+库资产（预设 / 世界书 / 角色卡）的解析结果有进程内 rev-keyed 缓存：经 `TavernState` 写方法编辑会 bump 修订号并失效缓存；绕开 `TavernState` 手改文件同样不被捕获（与 standing 钉死同一语义，重启即清）。`loadBinding` 走快路径——cardId 仍存在时不做全库扫描，只有卡失效才全量接回。
 
 `cardId` 是目录名，不是 UI 标题。`sessions/*.json` 以卡为单位引用该 ID；卡删掉后必须清绑定或按名字接回新目录。
 

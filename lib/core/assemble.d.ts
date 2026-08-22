@@ -56,6 +56,11 @@ export interface AssembledPrompt {
 }
 /** mes_example 按 <START> 切块（对齐 SillyTavern）。 */
 export declare function splitExampleMessages(mesExample: string): string[];
+/**
+ * 变化层条目本轮是否进快照渲染：无 keys = 常驻事实；有 keys = 本轮被 WI 引擎命中才注入。
+ * 本函数由 assemble（渲染过滤）与 pipeline（进快照预算裁剪）共用，两处判定不得漂移。
+ */
+export declare function isDeltaRenderedInTurn(delta: WorldDelta, activatedDeltaIds: ReadonlySet<string>): boolean;
 export declare function assemblePrompt(input: AssembleInput): AssembledPrompt;
 /** 导出一个最小可用预设（ST 默认骨架 + 本插件 marker）。 */
 export declare function defaultPreset(): PromptPreset;

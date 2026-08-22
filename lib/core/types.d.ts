@@ -180,9 +180,14 @@ export interface WorldInfoEntry {
 export interface WorldInfoGlobalSettings {
     /** 扫描深度：从最近 N 条消息内匹配触发键；0 = 只扫递归注入与常驻（对齐 SillyTavern）。 */
     scanDepth: number;
-    /** Context 预算百分比（相对模型上下文窗口）。 */
+    /** Context 预算百分比（相对模型上下文窗口，折算基数 clamp 到 128K 量级，见 turnBudget.ts）。 */
     contextPercent: number;
-    /** 固定 token 预算；> 0 时优先于 contextPercent（对齐 SillyTavern budget_cap）。 */
+    /**
+     * 固定 token 预算；> 0 时为本轮世界书层的绝对上限（优先于 contextPercent，不随历史
+     * 长度/窗口缩水）。默认非 0：命中内容走 runtime context 快照，对新请求永远是未缓存
+     * 前缀，必须有不随 1M 级窗口膨胀的硬顶；被裁条目由 tavern_lore_read 按条补读。
+     * 只计搭快照通道的条目：落 standing 的常驻（constant 且无本轮宏）豁免计费。
+     */
     tokenBudget: number;
     recursiveScan: boolean;
     /** 最大扫描轮数：0 = 不限（仅受预算限制）；1 = 关闭递归；n = 总扫描轮数（含首轮）。 */
@@ -237,6 +242,13 @@ export interface WIEngineInput {
     /** 展开键与扫描文本中的 {{user}}/{{char}}。缺省按字面匹配。 */
     macroCtx?: Pick<MacroContext, 'char' | 'user'>;
 }
+/** 本轮命中但因 turn 层预算未注入的条目指针：渲染侧在快照尾部附清单，模型可按 uid 补读。 */
+export interface WITruncatedEntry {
+    uid: string;
+    key: string;
+    /** 注释或首个触发键，供模型判断相关性。 */
+    label: string;
+}
 export interface WIEngineResult {
     activated: WIActivation[];
     /** position → 激活条目（已按 order 升序；渲染侧按「越大越靠近上下文末端」落位）。 */
@@ -244,11 +256,17 @@ export interface WIEngineResult {
     /** outlet 名 → 激活条目。 */
     outlets: Record<string, WIActivation[]>;
     log: WILogEntry[];
+    /**
+     * turn 层预算：只计搭 runtime-context 快照通道的条目；落 standing 的常驻条目
+     * （constant 且无本轮宏）豁免计费——它们走钉死的 system 段，命中前缀缓存。
+     */
     budget: {
         limit: number;
         used: number;
         overflowed: boolean;
     };
+    /** 命中但因预算未注入的条目（不进 activated；快照尾部附清单，见 assemble.ts）。 */
+    truncated: WITruncatedEntry[];
     /** 本轮评估后的新定时状态（调用方必须经事务层持久化）。 */
     timerState: WITimerState;
 }

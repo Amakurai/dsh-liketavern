@@ -47,6 +47,7 @@ async function onTurnEnd(state: TavernState, sessionId: string): Promise<void> {
   state.openFloors.delete(sessionId)
   state.currentTurns.delete(sessionId)
   state.currentSteps.delete(sessionId)
+  state.stepNoticeMarks.delete(sessionId)
   state.wiCache.delete(sessionId)
   state.pendingInputs.delete(sessionId)
   if (!cardId) return

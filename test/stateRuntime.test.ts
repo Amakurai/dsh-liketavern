@@ -4,8 +4,11 @@
  * - resolveModelInfoCached：同 provider+model 复用一次解析、不同模型各自解析、失败不缓存；
  * - standingRevTags：绑定 → 修订标记形状；savePreset/deletePreset/saveLorebook/deleteLorebook/
  *   saveCharacterLorebook 等写方法 bump 对应修订号（standing 指纹随资产内容失效重算）；
- *   末尾 config 标记随 worldInfo / sampling.maxTokens 变化，与 standing 无关的设置键不动它；
+ *   末尾 config 标记只随真正决定 standing 字节的键变化（characterStrategy / useGroupScoring /
+ *   sampling.maxTokens），只影响 turn 层的键（tokenBudget / scanDepth 等）不动它；
+ * - peekStanding：组装失败兜底只读同卡同场景的钉位，异卡/异场景/异会话一律不命中；
  * - 库资产文件名净化：写盘 id、删除路径与修订号键共用一个 id（原始名带空格也能失效钉死）；
+ * - 库资产解析缓存（rev-keyed）：写方法 bump 后读到新值，损坏的预设文件回退 null 不抛错；
  * - loadBinding 自愈的读-改-写竞态：落盘前复读，磁盘已被换卡覆盖则丢弃本次自愈；
  * - workspace：拒绝会把工作区根移出 characters/ 的非法 cardId；
  * - 会话副作用队列：同会话严格串行、不同会话互不阻塞、失败后仍可继续；
@@ -17,6 +20,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { LlmResolvedModelInfo, LlmRuntime } from '@deepseek-ai/dsh-llm'
+import { standingFingerprint } from '../src/core/standingPin.js'
 import type { CharacterCard, PromptPreset } from '../src/core/types.js'
 import { loadBinding, saveBinding, type SessionBinding } from '../src/node/bindings.js'
 import { resolveConfig } from '../src/node/config.js'
@@ -143,20 +147,28 @@ describe('standingRevTags', () => {
     expect(state.standingRevTags(makeBinding(), { personaLorebookId: 'pbook' })).toContain('lore:pbook=0')
   })
 
-  it('设置进指纹：worldInfo / sampling.maxTokens 变则 config 标记变，无关键不变', () => {
+  it('设置进指纹：只有决定 standing 字节的键变则 config 标记变，turn 层键不变', () => {
     let raw: Record<string, unknown> = {}
     const live = new TavernState(paths, () => resolveConfig(raw))
     const base = configTag(live.standingRevTags(makeBinding()))
 
-    // worldInfo 决定哪些 constant 条目进常驻段，必须打穿钉死
-    raw = { worldInfo: { tokenBudget: 999 } }
+    // characterStrategy 决定多来源条目（含 standing 侧常驻）的落位顺序，必须打穿钉死
+    raw = { worldInfo: { characterStrategy: 2 } }
+    expect(configTag(live.standingRevTags(makeBinding()))).not.toBe(base)
+
+    // useGroupScoring 决定 inclusion group 里哪条常驻条目胜出，同样必须打穿
+    raw = { worldInfo: { useGroupScoring: true } }
     expect(configTag(live.standingRevTags(makeBinding()))).not.toBe(base)
 
     // maxTokens 决定 trimNonHistory 的裁剪线，同样必须打穿
     raw = { sampling: { maxTokens: 4096 } }
     expect(configTag(live.standingRevTags(makeBinding()))).not.toBe(base)
 
-    // 与 standing 无关的键不能白白打断 KV 前缀缓存
+    // tokenBudget / scanDepth 只影响 turn 层触发与计费，不能白白打断 KV 前缀缓存
+    raw = { worldInfo: { tokenBudget: 999, scanDepth: 8 } }
+    expect(configTag(live.standingRevTags(makeBinding()))).toBe(base)
+
+    // 与 standing 无关的键也不能打穿
     raw = { interactiveCards: false, triggerLogMax: 50 }
     expect(configTag(live.standingRevTags(makeBinding()))).toBe(base)
   })
@@ -201,6 +213,31 @@ describe('standingRevTags', () => {
     expect(state.standingRevTags(makeBinding({ presetId: '我的 预设' }))[0]).toBe('preset:我的_预设=1')
   })
 
+  it('库资产解析缓存：写方法后读到新值，绕开写方法的损坏文件不返回旧值以外的东西', async () => {
+    const preset = { name: 'v1', identifier: 'cache-test', entries: [] } as PromptPreset
+    await state.savePreset(preset)
+    expect((await state.loadPreset('cache-test'))?.name).toBe('v1')
+    // savePreset bump 修订号 → 缓存失效，读到新值
+    await state.savePreset({ ...preset, name: 'v2' })
+    expect((await state.loadPreset('cache-test'))?.name).toBe('v2')
+
+    // 损坏的预设文件：loadPreset 回退 null（调用方落到默认预设），而不是抛错打崩组装管线
+    const fsRaw = await import('node:fs/promises')
+    await fsRaw.writeFile(join(root, 'library', 'presets', 'broken.json'), '{broken', 'utf8')
+    expect(await state.loadPreset('broken')).toBeNull()
+  })
+
+  it('角色卡解析缓存：saveCharacter / saveCharacterLorebook 后读到新内容', async () => {
+    const { cardId } = await importCard(join(root, 'characters'), makeCard())
+    expect((await state.loadCharacter(cardId))?.card.description).toBe('描述')
+    await state.saveCharacter(cardId, { description: '新描述' })
+    expect((await state.loadCharacter(cardId))?.card.description).toBe('新描述')
+    await state.saveCharacterLorebook(cardId, { entries: [{ keys: ['剑'], content: '断剑' }] })
+    const card = (await state.loadCharacter(cardId))?.card
+    expect(card?.characterBook?.entries).toHaveLength(1)
+    expect(card?.description).toBe('新描述')
+  })
+
   it('saveCharacterLorebook bump 卡内嵌书修订号', async () => {
     const { cardId } = await importCard(join(root, 'characters'), makeCard())
     const binding = makeBinding({ cardId })
@@ -218,6 +255,20 @@ describe('standingRevTags', () => {
     expect(state.standingRevTags(binding)).toContain(`card:${cardId}=1`)
     await state.saveChatLorebook(cardId, { entries: { '1': { key: ['门'], content: '门后' } } })
     expect(state.standingRevTags(binding)).toContain(`chatlore:${cardId}=1`)
+  })
+})
+
+describe('peekStanding', () => {
+  it('组装失败兜底：只读同卡同场景的钉位，异卡/异场景/异会话一律不命中', () => {
+    // 指纹第三段是 cardId（standingFingerprint 布局）；makeBinding 默认 cardId 'c1'
+    const fp = standingFingerprint(makeBinding())
+    state.pinStanding('s1', 'normal', fp, 'BYTES')
+    expect(state.peekStanding('s1', 'normal', 'c1')).toBe('BYTES')
+    expect(state.peekStanding('s1', 'normal', 'c2')).toBeUndefined()
+    expect(state.peekStanding('s1', 'continue', 'c1')).toBeUndefined()
+    expect(state.peekStanding('s2', 'normal', 'c1')).toBeUndefined()
+    // 没钉过的会话直接 undefined
+    expect(state.peekStanding('s9', 'normal', 'c1')).toBeUndefined()
   })
 })
 

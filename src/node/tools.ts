@@ -5,6 +5,8 @@
  * WI/记忆检索按 turn 缓存（pipeline.ts），工具写入不重评世界书定时器——这是有意的。
  * 写入成功后经 agent.inject 发一条同轮确认（不当作用户台词、不扫世界书），
  * 下一步看得到，检索层仍从下一 turn 起生效。
+ * 工具执行（含读工具）还会按 turn:nextStep 去重注入【Tavern 步骤】收口通知：
+ * turn playbook 是固定文本（吃宿主快照去重），多步压力改由这条 inject 承载。
  * 记忆超容量压缩不在工具内同步执行：只标记 state.pendingMemoryCompress，
  * turn 结束后由 memoryMaintenance.ts 的 runMaintenance 合并（不记 WAL，不回滚）。
  * 所有读工具的结果都有条数与 token 预算上限（检索/目录一律截断并报告 omitted/truncated），
@@ -22,7 +24,7 @@ import {
   resolveReadableAssetPath,
 } from '../core/assetRead.js'
 import { defaultPreset } from '../core/assemble.js'
-import { TURN_WRITE_ACK_PREFIX, neutralizeDshMustache } from '../core/dshPrompt.js'
+import { TURN_WRITE_ACK_PREFIX, formatTurnStepNotice, neutralizeDshMustache } from '../core/dshPrompt.js'
 import { memorySearchOptions } from '../core/memoryRetrieval.js'
 import {
   LORE_CATALOG_MAX,
@@ -57,15 +59,27 @@ function text(value: ToolResultValue): { type: 'text'; text: string }[] {
   return [{ type: 'text', text: JSON.stringify(value, null, 2) }]
 }
 
-async function resolveCtx(state: TavernState, exec: ToolRunContext): Promise<ToolCtx | { error: string }> {
+async function resolveCtx(
+  state: TavernState,
+  exec: ToolRunContext,
+  options?: { requireOpenFloor?: boolean },
+): Promise<ToolCtx | { error: string }> {
   const agent = exec.agent
   if (!agent) return { error: 'no-agent：该工具只能在 Tavern 会话中使用' }
   const sessionId = agent.id
   // 确保 turn/start 已经 beginFloor；否则本 step 的工具写入会逃出楼层事务。
   await state.waitForSessionTasks(sessionId)
+  // 写工具的事务性校验：beginFloor 失败时 host 只 warn（见 index.ts），turn 照常运行，
+  // 但那之后的所有写入都不记 WAL、无法回滚——宁可在这里报错让模型稍后重试，
+  // 也不要静默产生一个回退边界错乱的楼层。waitForSessionTasks 之后 openFloors 必然已定。
+  if (options?.requireOpenFloor && !state.openFloors.has(sessionId)) {
+    return { error: 'floor-not-open：本层写入事务未开启（楼层 beginFloor 失败或 turn 未开始），已拒绝写入以保住可回滚性；请稍后重试或告知用户' }
+  }
   const binding = await state.loadBinding(sessionId)
   if (!binding) return { error: 'no-binding：当前会话未绑定 Tavern 角色卡' }
   const ws = await state.workspace(binding.cardId)
+  // 7 个工具（含读工具）的统一收口通知注入点：走到这里说明本轮确实在做多步。
+  maybeInjectStepNotice(state, exec)
   return { binding, ws, sessionId }
 }
 
@@ -77,6 +91,36 @@ function injectWriteAck(exec: ToolRunContext, detail: string): void {
       createUserMessage({
         content: [{ type: 'text', text: neutralizeDshMustache(`${TURN_WRITE_ACK_PREFIX}${detail}`) }],
         source: { kind: 'plugin', plugin: 'dsh-tavern', form: 'notice', summary: '同轮写入确认' },
+      }),
+    )
+  } catch {
+    // 注入失败不阻断工具结果
+  }
+}
+
+/**
+ * 工具执行时顺便注入步骤收口通知（【Tavern 步骤】）：turn playbook 已改成固定文本以吃满
+ * 宿主 runtime context 快照去重，「第几步该收口」的压力只能从 playbook 挪到这条 inject。
+ * 只能在工具执行里注入——pre-step 里 inject 要等下一步 preStep 才被认领（晚一步），
+ * 且 turn 结束判定会把它当未消费的 nextStep 输入、强行多拉一步产生孤儿通知。
+ * 按 turn:nextStep 去重；check-and-set 之间无 await，并行工具调用不会重复注入。
+ */
+function maybeInjectStepNotice(state: TavernState, exec: ToolRunContext): void {
+  const agent = exec.agent
+  if (!agent) return
+  const sessionId = agent.id
+  const turn = state.currentTurns.get(sessionId)
+  const step = state.currentSteps.get(sessionId)
+  if (turn === undefined || step === undefined) return
+  const nextStep = step + 1
+  const mark = `${turn}:${nextStep}`
+  if (state.stepNoticeMarks.get(sessionId) === mark) return
+  state.stepNoticeMarks.set(sessionId, mark)
+  try {
+    agent.inject(
+      createUserMessage({
+        content: [{ type: 'text', text: neutralizeDshMustache(formatTurnStepNotice(nextStep)) }],
+        source: { kind: 'plugin', plugin: 'dsh-tavern', form: 'notice', summary: '多步收口提示' },
       }),
     )
   } catch {
@@ -182,7 +226,7 @@ export function registerTavernTools(ctx: Context, state: TavernState): void {
         render: (_args, value) => text(value as ToolResultValue),
       },
       async execute(args, exec): Promise<JsonValue> {
-        const resolved = await resolveCtx(state, exec)
+        const resolved = await resolveCtx(state, exec, { requireOpenFloor: true })
         if ('error' in resolved) return { ok: false, error: resolved.error }
         const { ws } = resolved
         const config = state.config.memory
@@ -235,7 +279,7 @@ export function registerTavernTools(ctx: Context, state: TavernState): void {
         render: (_args, value) => text(value as ToolResultValue),
       },
       async execute(args, exec): Promise<JsonValue> {
-        const resolved = await resolveCtx(state, exec)
+        const resolved = await resolveCtx(state, exec, { requireOpenFloor: true })
         if ('error' in resolved) return { ok: false, error: resolved.error }
         const entry = await resolved.ws.memory.update(args.id, { body: args.body, tags: args.tags, keys: args.keys })
         if (!entry) return { ok: false, error: `not-found：记忆 ${args.id} 不存在` }
@@ -319,7 +363,7 @@ export function registerTavernTools(ctx: Context, state: TavernState): void {
         render: (_args, value) => text(value as ToolResultValue),
       },
       async execute(args, exec): Promise<JsonValue> {
-        const resolved = await resolveCtx(state, exec)
+        const resolved = await resolveCtx(state, exec, { requireOpenFloor: true })
         if ('error' in resolved) return { ok: false, error: resolved.error }
         if ((args.type === 'update' || args.type === 'invalidate') && !args.ref) {
           return { ok: false, error: `invalid-args：type=${args.type} 需要提供 ref` }

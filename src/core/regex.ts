@@ -161,8 +161,56 @@ export function applyRegexRules(
 }
 
 /**
+ * 预编译规则（消息循环外准备一次，全部消息复用）：applyRegexToMessages 对每条消息
+ * 重复应用同一批规则，逐消息重建 RegExp 是纯浪费，编译（含 find 宏展开、trim 正则构造）下沉到批级。
+ * 但替换串的宏展开必须留在按消息进行：{{random}}/{{pick}} 每次代入都要重新掷骰（ST 语义），
+ * 且本轮随机流（macroCtx.random）的消费次数要与逐消息展开一致，否则同次组装里后续的
+ * {{random}} 取值全部平移。find 里的宏只展开一次——模式里放随机宏会让规则逐消息变意，
+ * 属病态用法，不为它放弃编译复用。
+ * 编译失败的规则记入 error，应用时跳过并计入 errors（每批只报一次，不再逐消息重复）。
+ */
+interface PreparedRule {
+  rule: RegexRule
+  error?: string
+  re?: RegExp
+  /** 仅带 trim 的规则存在：预编译的 trimStringsRegex。 */
+  trimRes?: RegExp[]
+}
+
+function prepareRegexRule(rule: RegexRule, macroCtx: MacroContext): PreparedRule {
+  try {
+    const re = compile(rule, macroCtx)
+    if (hasTrims(rule)) {
+      const trimRes: RegExp[] = []
+      for (const source of rule.trimStringsRegex ?? []) {
+        if (!source) continue
+        trimRes.push(compileTrimRegex(source))
+      }
+      return { rule, re, trimRes }
+    }
+    return { rule, re }
+  } catch (error) {
+    return { rule, error: error instanceof Error ? error.message : String(error) }
+  }
+}
+
+/** 应用一条预编译规则（编译失败的规则原样返回）；替换串宏展开随消息进行，与 applyRegexRules 同语义。 */
+function applyPreparedRule(text: string, p: PreparedRule, macroCtx: MacroContext): string {
+  if (p.error !== undefined || !p.re) return text
+  if (p.trimRes) {
+    // 手工代入路径全程是回调返回值（字面量），宏值里的 `$` 不会被再解释，故不翻倍。
+    const replacement = expandMacros(p.rule.replace, macroCtx)
+    return replaceWithGroupTrim(text, p.re, replacement, p.rule, p.trimRes, macroCtx)
+  }
+  const replacement = expandMacros(p.rule.replace, macroCtx, undefined, escapeReplacementDollars)
+  return text.replace(p.re, replacement.replaceAll('{{match}}', () => '$&'))
+}
+
+/**
  * 对消息数组按深度应用规则。depth 从 0（最新真实消息）计，跳过 dsh runtime-context 快照；
  * 规则的 minDepth/maxDepth（null = 不限）过滤作用区间。返回新数组。
+ * RegExp 编译只做一次（prepareRegexRule），全部消息复用；替换串宏展开仍逐消息
+ * （{{random}}/{{pick}} 每次代入重新掷骰）；depth/role 过滤按消息进行。
  */
 export function applyRegexToMessages(
   messages: readonly ChatMessage[],
@@ -172,6 +220,12 @@ export function applyRegexToMessages(
 ): { messages: ChatMessage[]; applied: string[]; errors: RegexApplyResult['errors'] } {
   const applied: string[] = []
   const errors: RegexApplyResult['errors'] = []
+  const prepared = rules
+    .filter((r) => r.enabled && r.scopes.includes(filter.scope) && r.timing.includes(filter.timing))
+    .map((r) => prepareRegexRule(r, macroCtx))
+  for (const p of prepared) {
+    if (p.error !== undefined) errors.push({ ruleId: p.rule.id, message: p.error })
+  }
   const n = messages.length
   const depths: Array<number | null> = Array.from({ length: n }, () => null)
   let depthFromEnd = 0
@@ -186,20 +240,30 @@ export function applyRegexToMessages(
     if (depth == null) return msg
     if (filter.scope === 'input' && msg.role !== 'user') return msg
     if (filter.scope === 'output' && msg.role !== 'assistant') return msg
-    const scoped = rules.filter(
-      (r) =>
-        r.enabled &&
-        r.scopes.includes(filter.scope) &&
-        r.timing.includes(filter.timing) &&
-        (r.minDepth === null || depth >= r.minDepth) &&
-        (r.maxDepth === null || depth <= r.maxDepth) &&
-        (r.roles == null || r.roles.length === 0 || r.roles.includes(msg.role)),
+    const scoped = prepared.filter(
+      (p) =>
+        p.error === undefined &&
+        (p.rule.minDepth === null || depth >= p.rule.minDepth) &&
+        (p.rule.maxDepth === null || depth <= p.rule.maxDepth) &&
+        (p.rule.roles == null || p.rule.roles.length === 0 || p.rule.roles.includes(msg.role)),
     )
     if (scoped.length === 0) return msg
-    const res = applyRegexRules(msg.content, scoped, filter, macroCtx)
-    applied.push(...res.applied)
-    errors.push(...res.errors)
-    return res.text === msg.content ? msg : { ...msg, content: res.text }
+    let content = msg.content
+    for (const p of scoped) {
+      let next: string
+      try {
+        next = applyPreparedRule(content, p, macroCtx)
+      } catch (error) {
+        // 单条规则执行失败不中断后续规则，记入 errors（与 applyRegexRules 同语义）。
+        errors.push({ ruleId: p.rule.id, message: error instanceof Error ? error.message : String(error) })
+        continue
+      }
+      if (next !== content) {
+        applied.push(p.rule.id)
+        content = next
+      }
+    }
+    return content === msg.content ? msg : { ...msg, content }
   })
   return { messages: out, applied, errors }
 }

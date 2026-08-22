@@ -40,6 +40,7 @@
 import { isSyntheticUserText } from './dshPrompt.js'
 import { expandIdentityMacros, expandMacros, hasTurnLocalMacros, hasUnevaluatedScript, type MacroContext } from './macros.js'
 import { applyRegexToMessages } from './regex.js'
+import { isStandingSafeEntry } from './worldbook.js'
 import {
   Marker,
   WIPosition,
@@ -132,6 +133,9 @@ interface DepthInjection {
 
 const CLOCK_FROZEN = { time: '', date: '', datetime: '', weekday: '' } as const
 
+/** 快照尾部「命中但未注入」清单最多列出的条数（超出折叠为「等 N 条」）。 */
+const WI_TRUNCATED_HINT_MAX = 8
+
 function joinPromptParts(parts: string[]): string {
   return parts.filter((p) => p.trim().length > 0).join('\n\n')
 }
@@ -154,6 +158,14 @@ function lastRealCharMessage(history: ChatMessage[]): string {
     if (m.role === 'assistant') return m.content
   }
   return ''
+}
+
+/**
+ * 变化层条目本轮是否进快照渲染：无 keys = 常驻事实；有 keys = 本轮被 WI 引擎命中才注入。
+ * 本函数由 assemble（渲染过滤）与 pipeline（进快照预算裁剪）共用，两处判定不得漂移。
+ */
+export function isDeltaRenderedInTurn(delta: WorldDelta, activatedDeltaIds: ReadonlySet<string>): boolean {
+  return delta.keys.length === 0 || activatedDeltaIds.has(delta.id)
 }
 
 export function assemblePrompt(input: AssembleInput): AssembledPrompt {
@@ -272,7 +284,8 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
       // delta 内容由 worldState marker 统一落位；这里仍保留它参与引擎匹配/递归的结果。
       if (a.entry.source === 'delta') continue
       if (skipScript(`世界书「${a.entry.key}」`, a.entry.content)) continue
-      const standingSafe = a.entry.constant && !hasTurnLocalMacros(a.entry.content)
+      // standing/turn 分流与引擎的预算豁免共用同一判定（isStandingSafeEntry），不得漂移。
+      const standingSafe = isStandingSafeEntry(a.entry)
       const text = (standingSafe ? expandStanding(a.entry.content) : expandTurn(a.entry.content)).trim()
       if (!text) continue
       if (standingSafe) standingParts.push(text)
@@ -304,8 +317,7 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
   }
   const deltaText = joinContents(
     input.worldDeltas
-      // 无 keys 的状态是常驻事实；有 keys 的状态只在本轮由 WI 引擎命中后注入。
-      .filter((delta) => delta.keys.length === 0 || activatedDeltaIds.has(delta.id))
+      .filter((delta) => isDeltaRenderedInTurn(delta, activatedDeltaIds))
       .map((delta) => expandTurn(formatDelta(delta))),
   )
   const memoryText = joinContents(input.memories.map((m) => expandTurn(m)))
@@ -510,6 +522,17 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
 
   if (skippedScripts.size > 0) {
     const note = `（已跳过 ${skippedScripts.size} 条未展开的脚本条目；需要设定细节时用 tavern_lore_read 按 uid/关键词取条。）`
+    afterHistory.push({ role: 'system', content: markTurn(note) })
+  }
+
+  // 世界书预算截断对模型可见：硬顶从「静默丢信息」变成「分页」——被裁条目以 uid 清单
+  // 进快照尾部（turn 侧，体量小且只有发生截断时才出现），模型可按条 lore_read 补读。
+  const truncated = wi?.truncated ?? []
+  if (truncated.length > 0) {
+    const shown = truncated.slice(0, WI_TRUNCATED_HINT_MAX)
+    const list = shown.map((t) => (t.label === t.uid ? t.uid : `${t.uid}「${t.label}」`)).join('、')
+    const rest = truncated.length - shown.length
+    const note = `（本轮世界书有 ${truncated.length} 条命中但因预算未注入：${list}${rest > 0 ? ` 等 ${rest} 条` : ''}；需要正文用 tavern_lore_read 按 uid 取条。）`
     afterHistory.push({ role: 'system', content: markTurn(note) })
   }
 

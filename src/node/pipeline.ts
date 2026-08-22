@@ -10,7 +10,7 @@
  */
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { LlmRuntime, Message } from '@deepseek-ai/dsh-llm'
-import { assemblePrompt, defaultPreset, type AssembledPrompt } from '../core/assemble.js'
+import { assemblePrompt, defaultPreset, isDeltaRenderedInTurn, type AssembledPrompt } from '../core/assemble.js'
 import { isSyntheticUserText } from '../core/dshPrompt.js'
 import { createTurnRandom, hashToSeed } from '../core/macros.js'
 import { memorySearchOptions, selectMemoryBodies } from '../core/memoryRetrieval.js'
@@ -18,6 +18,7 @@ import { clipToTokenBudget, estimateTokens } from '../core/tokenize.js'
 import type { ChatMessage, MacroContext, WIEngineResult, WorldDelta, WorldInfoEntry } from '../core/types.js'
 import { EMPTY_TIMER_STATE } from '../core/types.js'
 import { evaluateWorldInfo } from '../core/worldbook.js'
+import { clipWorldDeltasForTurn } from '../core/turnBudget.js'
 import { DEFAULT_USER_NAME } from '../core/persona.js'
 import { parseLorebook } from '../state/lorebook.js'
 import type { TavernState } from './state.js'
@@ -228,6 +229,19 @@ export async function runTavernPipeline(input: PipelineInput): Promise<PipelineR
     if (rawJournal?.trim()) journalText = clipToTokenBudget(rawJournal, 800).text
   }
 
+  // 变化层进快照前按预算裁剪：预算只覆盖真正会渲染的条目（无键常驻 + 本轮被引擎命中的
+  // 有键条目，判定与 assemble 共用 isDeltaRenderedInTurn），未命中的有键变化不占快照预算。
+  // 从最新往旧保留（WORLD_DELTA_TURN_BUDGET），更旧的不随快照每轮重付，
+  // 模型可经 tavern_lore_read(source=delta) 按条补读。
+  // 引擎触发改用全量 delta（上面 evaluateWorldInfo 的 entries），裁剪只影响展示层。
+  const activatedDeltaIds = new Set(
+    wi.activated.filter((a) => a.entry.source === 'delta').map((a) => a.entry.uid),
+  )
+  const deltaClip = clipWorldDeltasForTurn(
+    deltas.filter((d) => isDeltaRenderedInTurn(d, activatedDeltaIds)),
+    estimateTokens,
+  )
+
   const assembled = assemblePrompt({
     preset,
     card,
@@ -235,7 +249,7 @@ export async function runTavernPipeline(input: PipelineInput): Promise<PipelineR
     history: scanMessages,
     wi,
     memories,
-    worldDeltas: deltas,
+    worldDeltas: deltaClip.kept,
     authorNote: binding.authorNote ?? '',
     journalText,
     macroCtx,
@@ -250,6 +264,11 @@ export async function runTavernPipeline(input: PipelineInput): Promise<PipelineR
   })
 
   const logLines = formatLogs(wi, assembled)
+  // turn 尾巴体积(缓存观测):快照对新请求永远是未缓存前缀,体积即每轮全价重付的量。
+  logLines.push(`[turn:tail] turnContext≈${estimateTokens(assembled.turnContext)} tokens`)
+  if (deltaClip.dropped > 0) {
+    logLines.push(`[turn:tail] 变化层超预算裁掉 ${deltaClip.dropped} 条（tavern_lore_read source=delta 可补读）`)
+  }
   state.recordTriggerLog(sessionId, logLines)
   return {
     standing: assembled.standing,
@@ -272,6 +291,9 @@ function formatLogs(wi: WIEngineResult, assembled: AssembledPrompt): string[] {
     lines.push(`[wi:${entry.kind}] ${entry.entryKey} — ${entry.detail}`)
   }
   lines.push(`[wi:budget] limit=${wi.budget.limit} used=${wi.budget.used}${wi.budget.overflowed ? '（溢出）' : ''}`)
+  if (wi.truncated.length > 0) {
+    lines.push(`[wi:truncated] ${wi.truncated.length} 条命中但因预算未注入（快照尾部已附 uid 清单）`)
+  }
   for (const entry of assembled.log) {
     lines.push(`[assemble:${entry.kind}] ${entry.detail}`)
   }

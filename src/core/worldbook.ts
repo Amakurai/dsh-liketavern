@@ -12,15 +12,19 @@
  *   1=关闭、n=总扫描轮数（含首轮）。
  * - 定时效果：sticky / cooldown / delay，按评估轮（每次引擎调用 = 一轮）推进；
  *   swipe/重新生成/回退的回滚由事务层负责（plan 3.11），引擎本身无副作用。
- * - 预算：Context % 或固定 token；截断优先级：constant 优先 → order 从大到小 → 直接命中优先于递归命中；
- *   ignoreBudget 条目豁免。
+ * - 预算：固定 token 为本轮世界书层的绝对上限；Context % 按窗口折算（基数 clamp 到
+ *   128K 量级，见 turnBudget.ts）并扣减 reservedTokens；截断优先级：constant 优先 → order 从大到小 → 直接命中优先于递归命中；
+ *   ignoreBudget 条目豁免。落 standing 的常驻条目（constant 且无本轮宏，isStandingSafeEntry）
+ *   豁免计费——它们走钉死的 system 段、命中前缀缓存，不占未缓存尾巴；被裁条目进
+ *   truncated 清单，渲染侧在快照尾部附 uid 供模型按条补读。
  * - 多来源合并：Chat > Persona > Character/Global（strategy: 0 evenly / 1 character_first / 2 global_first），
  *   delta 变化层与 character 同级（紧随原书条目之后，由渲染侧标注「当前状态」）。
  * - 已知偏差：inclusion group 在全部递归跑完之后才裁决，故落选条目的正文已经参与过递归扫描——
  *   它自己不会被注入，却仍决定了别人是否被激活。对齐 ST 需在首次激活时就定组内胜者并缓存，
  *   那会改变 random() 的消费顺序（进而改动既有加权随机结果），本轮不动。
  */
-import { expandIdentityMacros } from './macros.js'
+import { expandIdentityMacros, hasTurnLocalMacros } from './macros.js'
+import { WI_PERCENT_WINDOW_BASE } from './turnBudget.js'
 import {
   DEFAULT_WI_SETTINGS,
   WIPosition,
@@ -32,11 +36,21 @@ import {
   type WIEngineResult,
   type WILogEntry,
   type WITimerState,
+  type WITruncatedEntry,
   type WorldInfoEntry,
   type WorldInfoGlobalSettings,
 } from './types.js'
 
 const REGEX_KEY_RE = /^\/(.*)\/([a-z]*)$/s
+
+/**
+ * 条目是否落 standing 侧（缓存安全）：constant 且无本轮宏。与 assemble 的渲染分流
+ * 共用同一判定，两处不得漂移。standing 侧条目豁免 turn 层预算（走钉死的 system 段，
+ * 命中前缀缓存；体积由 assemble 的总窗口预算兜底）。
+ */
+export function isStandingSafeEntry(entry: WorldInfoEntry): boolean {
+  return entry.constant && !hasTurnLocalMacros(entry.content)
+}
 
 function ident(text: string, ctx?: Pick<MacroContext, 'char' | 'user'>): string {
   return ctx ? expandIdentityMacros(text, ctx) : text
@@ -104,37 +118,54 @@ interface Candidate {
   recursionLevel: number
 }
 
-function matchEntry(
+/**
+ * 预编译条目：主/次级键各编译一次。evaluateWorldInfo 内 settings 与 macroCtx 固定，
+ * 而递归扫描会对每条 entry 重复求值——不预编译的话每轮递归都重建全部键的 RegExp
+ * （几千键的社区书 × 递归轮数是可感知的 CPU 开销）。
+ */
+interface CompiledEntry {
+  entry: WorldInfoEntry
+  /** 编译成功的主键（raw 保留用于 matchedKeys 日志）。 */
+  primary: Array<{ raw: string; test: (text: string) => boolean }>
+  /** 编译成功的次级键（AndAll/NotAll 的分母与原语义一致：编译失败的键不计数）。 */
+  secondary: Array<(text: string) => boolean>
+}
+
+function compileEntry(
   entry: WorldInfoEntry,
-  texts: readonly string[],
   settings: WorldInfoGlobalSettings,
   macroCtx?: Pick<MacroContext, 'char' | 'user'>,
-): string[] | null {
+): CompiledEntry {
   const opts = {
     caseSensitive: entry.caseSensitive ?? settings.caseSensitive,
     matchWholeWords: entry.matchWholeWords ?? settings.matchWholeWords,
   }
   const primary = entry.keys
     .map((k) => ({ raw: k, test: compileKey(ident(k, macroCtx), opts) }))
-    .filter((k) => k.test !== null)
-  const matched: string[] = []
-  for (const k of primary) {
-    if (texts.some((t) => k.test!(t))) matched.push(k.raw)
-  }
-  if (matched.length === 0) return null
-  if (!entry.selective || entry.secondaryKeys.length === 0) return matched
+    .filter((k): k is { raw: string; test: (text: string) => boolean } => k.test !== null)
   const secondary = entry.secondaryKeys
     .map((k) => compileKey(ident(k, macroCtx), opts))
-    .filter((t): t is NonNullable<typeof t> => t !== null)
-  const hits = secondary.filter((test) => texts.some((t) => test(t))).length
+    .filter((t): t is (text: string) => boolean => t !== null)
+  return { entry, primary, secondary }
+}
+
+function matchCompiled(c: CompiledEntry, texts: readonly string[]): string[] | null {
+  const matched: string[] = []
+  for (const k of c.primary) {
+    if (texts.some((t) => k.test(t))) matched.push(k.raw)
+  }
+  if (matched.length === 0) return null
+  const entry = c.entry
+  if (!entry.selective || entry.secondaryKeys.length === 0) return matched
+  const hits = c.secondary.filter((test) => texts.some((t) => test(t))).length
   const ok =
     entry.selectiveLogic === WISelectiveLogic.AndAny
       ? hits > 0
       : entry.selectiveLogic === WISelectiveLogic.AndAll
-        ? hits === secondary.length
+        ? hits === c.secondary.length
         : entry.selectiveLogic === WISelectiveLogic.NotAny
           ? hits === 0
-          : hits < secondary.length // NotAll
+          : hits < c.secondary.length // NotAll
   return ok ? matched : null
 }
 
@@ -266,6 +297,8 @@ export function evaluateWorldInfo(input: WIEngineInput): WIEngineResult {
     }
     return true
   })
+  // 键预编译一次，全部递归轮复用（compileEntry 不消费 random，加权随机的消费顺序不受影响）。
+  const compiled = entries.map((entry) => compileEntry(entry, settings, input.macroCtx))
 
   // 扫描文本：全局/条目 scanDepth 0 = 该条关键词不扫消息（常驻与递归仍可活）
   const depthTexts = new Map<number, string[]>()
@@ -301,7 +334,8 @@ export function evaluateWorldInfo(input: WIEngineInput): WIEngineResult {
 
   const evaluate = (texts: readonly string[], level: number): Candidate[] => {
     const fresh: Candidate[] = []
-    for (const entry of entries) {
+    for (const c of compiled) {
+      const entry = c.entry
       if (activatedKeys.has(entry.key)) continue
       // 递归门槛
       if (level > 0 && entry.excludeRecursion) continue
@@ -332,7 +366,7 @@ export function evaluateWorldInfo(input: WIEngineInput): WIEngineResult {
         level === 0
           ? textsAtDepth(depthTexts, input.messages, entry.scanDepth ?? settings.scanDepth, settings.includeNames, input.macroCtx)
           : texts
-      const matched = matchEntry(entry, scanTextsForEntry, settings, input.macroCtx)
+      const matched = matchCompiled(c, scanTextsForEntry)
       if (matched === null) continue
       if (tryActivate(entry, matched, level === 0 ? 'keyword' : 'recursion', level)) {
         fresh.push(activated[activated.length - 1]!)
@@ -380,13 +414,19 @@ export function evaluateWorldInfo(input: WIEngineInput): WIEngineResult {
   const grouped = applyInclusionGroups(activated, settings, random, log)
 
   // ── 预算截断：constant 优先 → order 从大到小 → 直接命中优先于递归 ─────────
-  const rawLimit =
-    settings.tokenBudget > 0
-      ? settings.tokenBudget
-      : Math.floor((input.contextWindowTokens * settings.contextPercent) / 100)
-  // reservedTokens 是世界书之外已经占用的上下文；固定预算与百分比预算都必须扣减，
-  // 否则聊天越长，实际请求越容易超出二者声明的上限。
-  const limit = Math.max(0, rawLimit - Math.max(0, input.reservedTokens))
+  // 固定 tokenBudget 是本轮世界书层的绝对上限：命中内容走 runtime context 快照，
+  // 快照对新请求永远是未缓存前缀，每轮全价重付——必须有不随窗口缩水的硬顶。
+  // 百分比预算保留「与其他内容分摊窗口」的 ST 语义（扣减 reservedTokens），
+  // 但折算基数 clamp 到 WI_PERCENT_WINDOW_BASE：1M 窗口模型下 25% = 25 万 token
+  // 形同虚设，实测能让单轮快照膨胀到 ~37k 字符。
+  // 预算只约束搭快照通道的条目：standing 侧常驻豁免（见循环内注释）；被裁条目进
+  // truncated，由渲染侧在快照尾部附 uid 清单（assemble.ts），模型可按条补读。
+  const percentLimit = Math.max(
+    0,
+    Math.floor((Math.min(input.contextWindowTokens, WI_PERCENT_WINDOW_BASE) * settings.contextPercent) / 100) -
+      Math.max(0, input.reservedTokens),
+  )
+  const limit = settings.tokenBudget > 0 ? settings.tokenBudget : percentLimit
   const sorted = [...grouped].sort((a, b) => {
     const ac = a.entry.constant ? 0 : 1
     const bc = b.entry.constant ? 0 : 1
@@ -398,12 +438,24 @@ export function evaluateWorldInfo(input: WIEngineInput): WIEngineResult {
     return a.entry.key.localeCompare(b.entry.key)
   })
   const kept: Candidate[] = []
+  const truncated: WITruncatedEntry[] = []
   let used = 0
   let overflowed = false
   for (const c of sorted) {
+    // 落 standing 的常驻条目豁免计费：它们走钉死的 system 段、命中前缀缓存，
+    // 不随快照每轮重付；体积由 assemble 的总窗口预算兜底（trimmedSections）。
+    if (isStandingSafeEntry(c.entry)) {
+      kept.push(c)
+      continue
+    }
     const cost = input.estimateTokens(c.entry.content)
     if (!c.entry.ignoreBudget && used + cost > limit) {
       overflowed = true
+      truncated.push({
+        uid: c.entry.uid,
+        key: c.entry.key,
+        label: c.entry.comment || c.entry.keys[0] || c.entry.uid,
+      })
       log.push({ kind: 'budget-trim', entryKey: c.entry.key, detail: `需要 ${cost} tokens，剩余 ${limit - used}` })
       continue
     }
@@ -457,6 +509,7 @@ export function evaluateWorldInfo(input: WIEngineInput): WIEngineResult {
     outlets,
     log,
     budget: { limit, used, overflowed },
+    truncated,
     timerState: timer,
   }
 }

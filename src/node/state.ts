@@ -40,6 +40,13 @@ export interface Persona {
   lorebookId?: string | null
 }
 
+/** 模型元数据缓存 TTL：适配器目录运行期通常不变，但 provider 配置可能热更，过期重解析。 */
+const MODEL_INFO_TTL_MS = 5 * 60 * 1000
+/** 触发日志保留的会话数上限（会话关闭无清理事件，防长驻进程无界增长）。 */
+const TRIGGER_LOG_SESSIONS_MAX = 64
+/** standing 钉位条数上限（淘汰只会导致重算一次 standing，无正确性影响）。 */
+const STANDING_PINS_MAX = 256
+
 interface WorkspaceHandle {
   fs: WorkspaceFs
   wal: Wal
@@ -55,6 +62,11 @@ export class TavernState {
   /** 当前 turn 内的 step（pre-step / step/start 维护；turn 开始时为 1）。 */
   readonly currentSteps = new Map<string, number>()
   /**
+   * 步骤收口通知去重标记（sessionId → `turn:nextStep`）：工具执行时注入的【Tavern 步骤】
+   * 通知按下一步号去重，防并行工具调用重复注入；turn/end 清除。
+   */
+  readonly stepNoticeMarks = new Map<string, string>()
+  /**
    * 会话 → 本轮 beginFloor 实际开在哪个 cardId 上（turn/start 记，turn/end 取走）。
    * 不变式：楼层必须由开层那张卡提交。turn 中途换绑/解绑后当前绑定已经是另一张卡，
    * 若按当前绑定提交，开层那张卡的 WorkspaceFs.floor 会永远悬着，之后的非会话写入被误记 WAL。
@@ -68,8 +80,16 @@ export class TavernState {
   readonly standingPins = new Map<string, StandingPin>()
   /** standing 依赖资产的进程内修订号：经本类写方法编辑/删除即 bump，standing 指纹随内容变化失效重算。 */
   private readonly assetRevs = new Map<string, number>()
-  /** 模型元数据进程内缓存：resolveModelInfo 每步被调（reasoningEffort / 上下文窗口），适配器目录运行期不变。 */
-  private readonly modelInfoCache = new Map<string, Promise<LlmResolvedModelInfo>>()
+  /**
+   * 库资产解析缓存（热路径读盘放大治理）：key 与 assetRevs 的修订号键对应，
+   * 写方法 bump 修订号时 tag 变化即失效。绕开 TavernState 手改文件不会被捕获
+   * （与 standing 钉死同一语义，重启即清）。返回值视为只读，调用方不得原地修改。
+   */
+  private readonly presetCache = new Map<string, { rev: number; value: PromptPreset | null }>()
+  private readonly loreCache = new Map<string, { rev: number; value: WorldInfoEntry[] }>()
+  private readonly cardCache = new Map<string, { tag: string; value: CharacterWorkspace | null }>()
+  /** 模型元数据进程内缓存：resolveModelInfo 每步被调（reasoningEffort / 上下文窗口），带 TTL 防配置热更后拿到旧值。 */
+  private readonly modelInfoCache = new Map<string, { at: number; promise: Promise<LlmResolvedModelInfo> }>()
   /** 待异步压缩的角色工作区（memory_write 超容量时标记；idle 期 runMaintenance 消费，见 memoryMaintenance.ts）。 */
   readonly pendingMemoryCompress = new Set<string>()
   /**
@@ -135,7 +155,14 @@ export class TavernState {
   }
 
   async loadCharacter(cardId: string): Promise<CharacterWorkspace | null> {
-    return loadCharacter(this.paths.characters, cardId)
+    // 解析缓存：card.json 的全部写路径（saveCharacter / saveCharacterLorebook /
+    // deleteCharacterLorebook）都 bump card:/charlore: 修订号，tag 变化即失效重读。
+    const tag = `${this.assetRevs.get(`card:${cardId}`) ?? 0}:${this.assetRevs.get(`charlore:${cardId}`) ?? 0}`
+    const cached = this.cardCache.get(cardId)
+    if (cached && cached.tag === tag) return cached.value
+    const value = await loadCharacter(this.paths.characters, cardId)
+    this.cardCache.set(cardId, { tag, value })
+    return value
   }
 
   /** 删除角色卡工作区、清掉指向它的会话绑定，并逐出缓存句柄。cascadeDeleteEmbeddedBook=false 时先把内嵌书抢救到世界书库。 */
@@ -151,6 +178,7 @@ export class TavernState {
     await deleteCharacterFromDisk(this.paths.characters, cardId)
     await clearBindingsForCard(this.paths, cardId)
     this.workspaces.delete(cardId)
+    this.cardCache.delete(cardId)
     return { salvagedLorebook }
   }
 
@@ -311,10 +339,17 @@ export class TavernState {
 
   async loadLorebookEntries(name: string, source: WorldInfoEntry['source']): Promise<WorldInfoEntry[]> {
     const id = this.assetFileId(name)
+    // rev-keyed 解析缓存（source 参与归一化，一并进 key）；归一化抛错不缓存，行为与直读一致。
+    const cacheKey = `${id}\0${source}`
+    const rev = this.assetRevs.get(`lore:${id}`) ?? 0
+    const cached = this.loreCache.get(cacheKey)
+    if (cached && cached.rev === rev) return cached.value
     const fs = await this.rootFs()
     const raw = await fs.readText(`library/lorebooks/${id}.json`)
     if (raw === null) return []
-    return parseLorebook(JSON.parse(raw), { source, sourceRef: id })
+    const value = parseLorebook(JSON.parse(raw), { source, sourceRef: id })
+    this.loreCache.set(cacheKey, { rev, value })
+    return value
   }
 
   /** 落盘并 bump 修订号，返回磁盘上的 id：调用方（服务层/客户端）之后要按这个 id 打开，不能用原始名。 */
@@ -355,9 +390,24 @@ export class TavernState {
   }
 
   async loadPreset(id: string): Promise<PromptPreset | null> {
+    // rev-keyed 解析缓存。解析失败按 null 缓存并回退默认预设——
+    // 损坏的预设文件不该打崩每一步组装（对比 loadLorebookJson / listPersonas 的同类容错）。
+    const key = this.assetFileId(id)
+    const rev = this.assetRevs.get(`preset:${key}`) ?? 0
+    const cached = this.presetCache.get(key)
+    if (cached && cached.rev === rev) return cached.value
     const fs = await this.rootFs()
-    const raw = await fs.readText(`library/presets/${this.assetFileId(id)}.json`)
-    return raw === null ? null : (JSON.parse(raw) as PromptPreset)
+    const raw = await fs.readText(`library/presets/${key}.json`)
+    let value: PromptPreset | null = null
+    if (raw !== null) {
+      try {
+        value = JSON.parse(raw) as PromptPreset
+      } catch {
+        value = null
+      }
+    }
+    this.presetCache.set(key, { rev, value })
+    return value
   }
 
   /** 落盘并 bump 修订号，返回磁盘上的 id（identifier 含非法字符时与 preset.identifier 不同）。 */
@@ -452,14 +502,19 @@ export class TavernState {
     const ws = await this.workspace(binding.cardId)
     const raw = await ws.fs.readText('assets/regex-scripts.json')
     let cardRules: RegexRule[] = []
+    // 解析成功（含空数组）即为确定结论：导入时无条件落盘该文件，`[]` 表示该卡确认无正则，
+    // 直接短路。只有文件缺失/损坏（旧导入）才走卡内重编译兜底——否则无正则的卡
+    // （大多数）每次组装、每次渲染都要全量读卡重编译一遍，永不收敛。
+    let resolved = false
     if (raw !== null) {
       try {
         cardRules = JSON.parse(raw) as RegexRule[]
+        resolved = Array.isArray(cardRules)
       } catch {
-        cardRules = []
+        // 损坏走兜底
       }
     }
-    if (cardRules.length === 0) {
+    if (!resolved) {
       const loaded = await this.loadCharacter(binding.cardId)
       if (loaded) {
         cardRules = compileCardRegexScripts(regexScriptsOf(loaded.card), binding.cardId)
@@ -488,8 +543,14 @@ export class TavernState {
   async loadBinding(sessionId: string): Promise<SessionBinding | null> {
     const parsed = await loadBinding(this.paths, sessionId)
     if (!parsed) return null
-    const characters = await this.listCharacters()
-    const resolved = resolveStaleBinding(parsed, characters)
+    // 快路径：cardId 对应工作区仍在时直接用（resolveStaleBinding 对在册卡只做 cardName 同步），
+    // 不必每次读绑定都全库扫描角色目录。只有 cardId 失效（卡被删）才需要全量列表做接回。
+    const live = await this.loadCharacter(parsed.cardId)
+    const resolved = live
+      ? parsed.cardName === live.card.name
+        ? parsed
+        : { ...parsed, cardName: live.card.name }
+      : resolveStaleBinding(parsed, await this.listCharacters())
     if (!resolved) {
       this.clearStandingPins(sessionId)
       await deleteBinding(this.paths, sessionId)
@@ -518,7 +579,25 @@ export class TavernState {
 
   /** 绑定不变时复用第一次 standing，避免组装抖动打穿 KV。钉位按会话 × 生成场景（standingPinKey）。 */
   pinStanding(sessionId: string, generationType: string, fingerprint: string, computed: string): string {
-    return pinStandingText(this.standingPins, standingPinKey(sessionId, generationType), fingerprint, computed)
+    // 钉位表防泄漏：会话关闭没有事件可清，超上限时淘汰最旧条目
+    // （被淘汰只是重算一次 standing，无正确性影响）。
+    const key = standingPinKey(sessionId, generationType)
+    if (this.standingPins.size >= STANDING_PINS_MAX && !this.standingPins.has(key)) {
+      const oldest = this.standingPins.keys().next().value
+      if (oldest !== undefined) this.standingPins.delete(oldest)
+    }
+    return pinStandingText(this.standingPins, key, fingerprint, computed)
+  }
+
+  /**
+   * 组装失败兜底用：只读地取本会话同场景已钉死的 standing，且仅当钉位属于同一张卡才返回。
+   * 宁可穿旧同卡钉位也不回退 UNBOUND_STANDING——换段文案会把整个 system 前缀打穿成 0% 缓存。
+   * 指纹第三段是 cardId（standingFingerprint 布局），\0 分隔不会出现在字段值里。
+   */
+  peekStanding(sessionId: string, generationType: string, cardId: string): string | undefined {
+    const pin = this.standingPins.get(standingPinKey(sessionId, generationType))
+    if (!pin) return undefined
+    return pin.fingerprint.split('\0')[2] === cardId ? pin.text : undefined
   }
 
   /** 清掉会话全部场景的 standing 钉位（换绑/回收绑定时）。 */
@@ -557,25 +636,36 @@ export class TavernState {
       tags.push(`${key}=${this.assetRevs.get(key) ?? 0}`)
     }
     // 设置也进指纹，否则改了设置整个进程生命周期都到不了模型（没有任何写方法会 bump 修订号）。
-    // 只取真正决定 standing 字节的两项：worldInfo 决定哪些 constant 条目进常驻段，
-    // sampling.maxTokens 决定 trimNonHistory 的裁剪线。整份 config 不能进——
-    // interactiveCards / triggerLogMax 之类跟 standing 无关，改一次白白打断一次 KV 前缀缓存。
-    tags.push(`config=${stableFingerprintHash({ wi: this.config.worldInfo, out: this.config.sampling.maxTokens })}`)
+    // 只取真正决定 standing 字节的键：
+    // - characterStrategy 决定多来源条目（含 standing 侧常驻）的落位顺序；
+    // - useGroupScoring 决定 inclusion group 里哪条常驻条目胜出；
+    // - sampling.maxTokens 决定 trimNonHistory 的裁剪线。
+    // 其余世界书键（scanDepth / tokenBudget / contextPercent / 递归 / 大小写等）只影响 turn 层
+    // 触发与计费——常驻条目激活不靠键、且豁免预算后不再被截断，改这些键不许白白打穿前缀缓存。
+    // 注意：新增会影响 standing 字节的设置键时必须加进这里，否则改动永远到不了模型。
+    tags.push(
+      `config=${stableFingerprintHash({
+        wiStrategy: this.config.worldInfo.characterStrategy,
+        wiScoring: this.config.worldInfo.useGroupScoring,
+        out: this.config.sampling.maxTokens,
+      })}`,
+    )
     return tags
   }
 
   /**
-   * 模型元数据解析缓存：同 provider+model 复用一次解析结果（含 reasoning 档与上下文窗口）。
-   * 失败不缓存（删掉条目让下次重试）；signal 只作用于首次真实解析。
+   * 模型元数据解析缓存：同 provider+model 复用一次解析结果（含 reasoning 档与上下文窗口），
+   * TTL 过期重解析（provider 配置热更后不再拿旧窗口）。失败不缓存（删掉条目让下次重试）；
+   * signal 只作用于首次真实解析。
    */
   resolveModelInfoCached(llm: LlmRuntime, provider: string, model: string, signal?: AbortSignal): Promise<LlmResolvedModelInfo> {
     const key = `${provider}\0${model}`
     const cached = this.modelInfoCache.get(key)
-    if (cached) return cached
+    if (cached && Date.now() - cached.at < MODEL_INFO_TTL_MS) return cached.promise
     const promise = llm.resolveModelInfo(provider, model, signal)
-    this.modelInfoCache.set(key, promise)
+    this.modelInfoCache.set(key, { at: Date.now(), promise })
     promise.catch(() => {
-      if (this.modelInfoCache.get(key) === promise) this.modelInfoCache.delete(key)
+      if (this.modelInfoCache.get(key)?.promise === promise) this.modelInfoCache.delete(key)
     })
     return promise
   }
@@ -607,6 +697,11 @@ export class TavernState {
   // ── 触发日志（内存态，最近一次组装的明细） ────────────────────────────────
 
   recordTriggerLog(sessionId: string, lines: string[]): void {
+    // 会话数上限：与 standingPins 同理防无界增长，淘汰最旧会话的日志。
+    if (this.triggerLogs.size >= TRIGGER_LOG_SESSIONS_MAX && !this.triggerLogs.has(sessionId)) {
+      const oldest = this.triggerLogs.keys().next().value
+      if (oldest !== undefined) this.triggerLogs.delete(oldest)
+    }
     const max = this.config.triggerLogMax
     this.triggerLogs.set(sessionId, { at: new Date().toISOString(), lines: lines.slice(0, max) })
   }

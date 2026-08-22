@@ -3,7 +3,7 @@
  * 职责：
  * 1. 注册稳定 system 段 `tavern:standing` 与本轮 runtime context `tavern:turn`。
  *    已绑定：standing = 角色定义 + 预设骨架（冻结时钟，按会话钉死字节）；
- *    turn = 步骤 playbook + 世界书/记忆/变化层。
+ *    turn = 固定 playbook（不随 step 变，宿主按字节去重不重复追加）+ 世界书/记忆/变化层。
  *    未绑定：standing 固定短文案（不删段，避免段布局抖动打穿 KV），turn 为空。
  *    standing 段 order=210，排在工具说明（100–199）之后：即使骨架仍有残余抖动，
  *    稳定的工具说明仍能命中 DeepSeek 前缀缓存。绝不把整包 ST 预设改成 complete 段。

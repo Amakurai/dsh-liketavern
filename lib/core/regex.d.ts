@@ -40,6 +40,8 @@ export declare function applyRegexRules(text: string, rules: readonly RegexRule[
 /**
  * 对消息数组按深度应用规则。depth 从 0（最新真实消息）计，跳过 dsh runtime-context 快照；
  * 规则的 minDepth/maxDepth（null = 不限）过滤作用区间。返回新数组。
+ * RegExp 编译只做一次（prepareRegexRule），全部消息复用；替换串宏展开仍逐消息
+ * （{{random}}/{{pick}} 每次代入重新掷骰）；depth/role 过滤按消息进行。
  */
 export declare function applyRegexToMessages(messages: readonly ChatMessage[], rules: readonly RegexRule[], filter: RegexFilter, macroCtx: MacroContext): {
     messages: ChatMessage[];

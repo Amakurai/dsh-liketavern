@@ -241,6 +241,26 @@ describe('深度过滤（applyRegexToMessages，depth 0 = 数组末尾）', () =
   })
 })
 
+describe('批级预编译（RegExp 编译一次，替换串宏展开仍逐消息）', () => {
+  it('{{random}} 在替换串里逐消息重新掷骰（ST 语义），随机流消费次数与逐消息展开一致', () => {
+    const messages: ChatMessage[] = [
+      { role: 'user', content: 'cat' },
+      { role: 'assistant', content: 'cat' },
+    ]
+    // 确定性随机流：{{random:1,10}} = 1 + floor(r * 10)，0 → 1，0.9 → 10
+    const rolls = [0, 0.9]
+    const ctx: MacroContext = { ...CTX, random: () => rolls.shift() ?? 0 }
+    const res = applyRegexToMessages(
+      messages,
+      [makeRule({ id: 'r', find: 'cat', replace: '{{random:1,10}}' })],
+      FILTER,
+      ctx,
+    )
+    // 两条消息各掷一次、拿到流里连续两个值；批级只展开一次的话两条会相同
+    expect(res.messages.map((m) => m.content)).toEqual(['1', '10'])
+  })
+})
+
 describe('规则容错', () => {
   it('单条规则编译失败不中断后续规则，记入 errors', () => {
     const res = run('cat', [

@@ -143,17 +143,20 @@ export class MemoryStore {
 
   /** 解析 memory/*.md（不含 archive/），坏文件容错跳过；按 created 升序（并列按 id 字典序）。 */
   async list(): Promise<MemoryEntry[]> {
-    const entries: MemoryEntry[] = []
-    for (const file of await this.fs.list(MEMORY_DIR)) {
-      if (!file.endsWith('.md') || file.startsWith(ARCHIVE_PREFIX)) continue
-      const text = await this.fs.readText(`${MEMORY_DIR}/${file}`)
-      if (text === null) continue
-      try {
-        entries.push(parseMemory(file, text))
-      } catch {
-        // 坏文件跳过
-      }
-    }
+    // 并行读取：记忆库上限几百条，串行 await 会让每次检索/写入前的全量 list 线性放大 I/O 等待。
+    const files = (await this.fs.list(MEMORY_DIR)).filter((f) => f.endsWith('.md') && !f.startsWith(ARCHIVE_PREFIX))
+    const parsed = await Promise.all(
+      files.map(async (file) => {
+        const text = await this.fs.readText(`${MEMORY_DIR}/${file}`)
+        if (text === null) return null
+        try {
+          return parseMemory(file, text)
+        } catch {
+          return null // 坏文件跳过
+        }
+      }),
+    )
+    const entries = parsed.filter((e): e is MemoryEntry => e !== null)
     entries.sort((a, b) =>
       a.created < b.created ? -1 : a.created > b.created ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
     )

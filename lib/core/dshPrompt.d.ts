@@ -3,14 +3,24 @@
  * dsh 会对段文本再做一轮严格 {{variable}} 插值；ST 残留宏必须先中性化。
  */
 export declare const UNBOUND_STANDING: string;
-/** 稳定段纪律：绑定不变则钉死。工具时机与本轮步骤写在 turn playbook，避免每步打穿 KV。 */
+/** 稳定段纪律：绑定不变则钉死。工具时机写在固定的 turn playbook，步骤收口走 inject 通知，避免每步打穿 KV。 */
 export declare const BOUND_DISCIPLINE: string;
 /**
- * 本轮 runtime context 头：随 step 变化，不得写入 standing。
- * 第一步鼓励「够用就演」；第二步「查/写完就收口」；第三步起强收口——
- * 多步拖沓时停止再检索/写入，立即落地扮演正文。
+ * 本轮 runtime context 头：**内容固定，不随 step 变化**。宿主对快照按字节去重——
+ * 文本不变则不再追加新消息，多步 turn 的后续步骤因此零快照开销（前缀缓存全保）。
+ * 步骤收口压力改走【Tavern 步骤】inject 通知（node/tools.ts），不要在这里放任何
+ * 每步/每轮易变的内容（步骤号、时钟、随机宏均属此类）。
  */
-export declare function formatTurnPlaybook(step: number): string;
+export declare const TURN_PLAYBOOK: string;
+/** 多步收口通知（agent.inject，form: notice）；不当作用户台词，也不扫世界书。 */
+export declare const TURN_STEP_NOTICE_PREFIX = "\u3010Tavern \u6B65\u9AA4\u3011";
+export declare function isTurnStepNotice(text: string): boolean;
+/**
+ * 多步收口通知文本：第 2 步软收口「查/写完就落地」；第 3 步起强收口——
+ * 停止再检索/写入，立即输出扮演正文。经 inject 进 next-step inbox（下一步开头可见），
+ * 不落快照以免破坏宿主按字节去重。
+ */
+export declare function formatTurnStepNotice(step: number): string;
 /**
  * dsh 每步把 runtime context 追加成 user 消息，前缀固定为此句。
  * 不能当 {{lastusermessage}}，也不能拿去扫世界书。

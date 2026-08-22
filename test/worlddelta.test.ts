@@ -1,7 +1,7 @@
 /**
  * 世界状态变化层存储（WorldDeltaStore）单元测试。
- * 覆盖：append 递增 id（4 位补零）、list 过滤 revoked/过期（注入 now）、revoke 行内标记、
- * toEngineEntries 的 order 紧随 ref、三种 type 的 content 标注、空 keys 不命中（constant=false）。
+ * 覆盖：append 生成不依赖行数的唯一 id、并发 append 经互斥队列不丢行、list 过滤 revoked/过期（注入 now）、
+ * revoke 行内标记、toEngineEntries 的 order 紧随 ref、三种 type 的 content 标注、空 keys 不命中（constant=false）。
  */
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -27,7 +27,7 @@ afterEach(async () => {
 const base = { ref: null, keys: ['x'], order: 42, sourceRange: 'msg#1-2', expires: null }
 
 describe('WorldDeltaStore', () => {
-  it('append 递增 id（d-0001 起，4 位补零），ts 默认当前 ISO 可覆盖', async () => {
+  it('append 生成不依赖行数的唯一 id，ts 默认当前 ISO 可覆盖', async () => {
     const d1 = await store.append({ ...base, type: 'add', content: '新增设定' })
     const d2 = await store.append({
       ...base,
@@ -36,8 +36,9 @@ describe('WorldDeltaStore', () => {
       content: '变化后',
       ts: '2026-08-01T00:00:00.000Z',
     })
-    expect(d1.id).toBe('d-0001')
-    expect(d2.id).toBe('d-0002')
+    // id = d-<36 进制毫秒>-<随机 hex>：WAL 回滚把 jsonl 恢复到更短状态后也不复用旧 id
+    expect(d1.id).toMatch(/^d-[0-9a-z]+-[0-9a-f]{6}$/)
+    expect(d2.id).not.toBe(d1.id)
     expect(Date.parse(d1.ts)).not.toBeNaN()
     expect(d2.ts).toBe('2026-08-01T00:00:00.000Z')
     const raw = await fs.readText('state/world-delta.jsonl')
@@ -83,6 +84,18 @@ describe('WorldDeltaStore', () => {
     expect(lines).toHaveLength(1) // 行仍在，仅打标记
     expect((JSON.parse(lines[0]!) as Record<string, unknown>).revoked).toBe(true)
     expect((await store.list({ includeRevoked: true }))[0]!.revoked).toBe(true)
+  })
+
+  it('并发 append 经互斥队列串行化，不互相覆盖丢行', async () => {
+    // 读改写若不串行化，两个并发 append 各自读到 0 行、各写 1 行，最终只剩 1 行
+    const results = await Promise.all(
+      Array.from({ length: 8 }, (_, i) => store.append({ ...base, type: 'add', content: `并发变化 ${i}` })),
+    )
+    const ids = new Set(results.map((d) => d.id))
+    expect(ids.size).toBe(8)
+    const listed = await store.list({ includeRevoked: true })
+    expect(listed).toHaveLength(8)
+    expect(new Set(listed.map((d) => d.id)).size).toBe(8)
   })
 
   it('toEngineEntries：order 紧随 ref（resolveRefOrder → 100 时为 100.5）', async () => {

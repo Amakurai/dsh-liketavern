@@ -27,7 +27,7 @@ import { DEFAULT_USER_NAME } from '../core/persona.js'
 import { greetingMessage, greetingTurnEvents } from './greetingSeed.js'
 import { isTavernRuntimeSession } from './tavernSession.js'
 import { pruneSiblingForks, siblingSwipe, type SiblingSwipe } from '../core/siblings.js'
-import { appendSiblingFork, loadSiblingForks, saveSiblingForks } from '../state/siblings.js'
+import { appendSiblingFork, loadSiblingForks, mutateSiblingForks } from '../state/siblings.js'
 import { loadBinding, type SessionBinding, type WalLineageEntry } from './bindings.js'
 import type { TavernState } from './state.js'
 
@@ -741,15 +741,16 @@ export async function getFloorSiblings(
     }
   }
   const exists = (id: string) => existing.has(id)
-  const pruned = pruneSiblingForks(forks, exists)
-  if (pruned.changed) {
-    try {
-      await saveSiblingForks(state.paths.root, pruned.forks)
-    } catch {
-      // 落盘失败不影响本次查询；下次读取再剪
-    }
+  // 剪枝落盘走互斥读改写：与其它会话的 fork 登记（appendSiblingFork）并发时不互相覆盖。
+  try {
+    await mutateSiblingForks(state.paths.root, (current) => {
+      const pruned = pruneSiblingForks(current, exists)
+      return pruned.changed ? pruned.forks : current
+    })
+  } catch {
+    // 落盘失败不影响本次查询；下次读取再剪
   }
-  const swipe = siblingSwipe(pruned.forks, sessionId, turn, exists)
+  const swipe = siblingSwipe(pruneSiblingForks(forks, exists).forks, sessionId, turn, exists)
   if (!swipe) return none
   return { swipe: { turn, ...swipe } }
 }

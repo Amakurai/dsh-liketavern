@@ -4,7 +4,9 @@
  * inclusion group（一组一条、sticky 占用、override、计分/加权）、selective 四逻辑、
  * constant、probability、递归（excludeRecursion/preventRecursion/delayUntilRecursion/
  * maxRecursionSteps）、定时（sticky/cooldown/delay，跨轮回传 timerState）、
- * 预算截断（优先级/ignoreBudget/overflowWarning）、位置分桶、多来源排序、includeNames。
+ * 预算截断（优先级/ignoreBudget/overflowWarning；固定预算为绝对上限、百分比按 128K 基数
+ * 折算并扣减 reservedTokens；standing 侧常驻豁免计费，被裁条目进 truncated 清单）、
+ * 位置分桶、多来源排序、includeNames。
  *
  * 定时语义约定（types.ts）：sticky=N = 激活后再保持 N 轮；cooldown=N = 激活后 N 轮内不再触发。
  */
@@ -420,18 +422,66 @@ describe('定时效果', () => {
 describe('预算截断', () => {
   const budget = (tokenBudget: number) => makeSettings({ tokenBudget })
 
-  it('constant 优先于关键词条目保留，被裁条目记 budget-trim', () => {
+  it('计费的 constant（含本轮宏）优先于关键词条目保留，被裁条目记 budget-trim 并进 truncated', () => {
     const res = run({
       entries: [
         makeEntry({ key: 'kw', keys: ['apple'], order: 999 }),
-        makeEntry({ key: 'const', constant: true, order: 10 }),
+        // {{time}} 是本轮宏：这条 constant 落 turn 侧、仍参与预算排序
+        makeEntry({ key: 'const', constant: true, content: '{{time}}', order: 10 }),
       ],
       messages: [userMsg('apple')],
       settings: budget(15), // 每条 10 tokens，只放得下一条
     })
     expect(activatedKeys(res)).toEqual(['const'])
     expect(logsOf(res, 'budget-trim').map((l) => l.entryKey)).toEqual(['kw'])
+    expect(res.truncated.map((t) => t.key)).toEqual(['kw'])
     expect(res.budget).toEqual({ limit: 15, used: 10, overflowed: true })
+  })
+
+  it('落 standing 的常驻条目（constant 且无本轮宏）豁免 turn 层预算', () => {
+    const res = run({
+      entries: [
+        // 5000 tokens 的常驻条目：豁免计费（走钉死的 standing 段），不挤占触发层额度
+        makeEntry({ key: 'const', constant: true, content: 'x'.repeat(5000) }),
+        makeEntry({ key: 'kw', keys: ['apple'], content: 'y'.repeat(10) }),
+      ],
+      messages: [userMsg('apple')],
+      settings: budget(15),
+      estimateTokens: (t) => t.length,
+    })
+    expect(activatedKeys(res).sort()).toEqual(['const', 'kw'])
+    expect(res.budget).toEqual({ limit: 15, used: 10, overflowed: false })
+    expect(res.truncated).toEqual([])
+  })
+
+  it('含本轮宏的 constant 不豁免：超预算被裁且进 truncated', () => {
+    const res = run({
+      entries: [
+        makeEntry({ key: 'safe', constant: true, content: 's'.repeat(5000) }),
+        makeEntry({ key: 'macro', constant: true, content: `{{time}}${'m'.repeat(20)}` }),
+      ],
+      settings: budget(15),
+      estimateTokens: (t) => t.length,
+    })
+    expect(activatedKeys(res)).toEqual(['safe'])
+    expect(res.truncated.map((t) => t.key)).toEqual(['macro'])
+    expect(res.budget.overflowed).toBe(true)
+  })
+
+  it('truncated 的 label 依次取 注释 > 首个触发键 > uid', () => {
+    const res = run({
+      entries: [
+        makeEntry({ key: 'e1', keys: ['apple'], comment: '城门设定', order: 100 }),
+        makeEntry({ key: 'e2', keys: ['apple'], order: 200 }),
+        // 无注释无键仍计费的条目：含本轮宏的 constant，label 回退到 uid（= key）
+        makeEntry({ key: 'e3', constant: true, content: '{{time}}', order: 50 }),
+      ],
+      messages: [userMsg('apple')],
+      settings: budget(5), // 全部裁掉
+    })
+    // 排序：constant 优先，再 order 降序 → e3、e2、e1
+    expect(res.truncated.map((t) => t.label)).toEqual(['e3', 'apple', '城门设定'])
+    expect(res.truncated.map((t) => t.uid)).toEqual(['e3', 'e2', 'e1'])
   })
 
   it('同类条目按 order 降序保留', () => {
@@ -460,30 +510,34 @@ describe('预算截断', () => {
     expect(logsOf(res, 'budget-trim').map((l) => l.entryKey)).toEqual(['rec'])
   })
 
-  it('ignoreBudget 条目豁免截断', () => {
+  it('ignoreBudget 条目豁免截断（但仍计入 used）', () => {
     const res = run({
       entries: [
-        makeEntry({ key: 'const', constant: true, order: 200 }),
+        makeEntry({ key: 'plain', keys: ['apple'], order: 200 }),
         makeEntry({ key: 'free', keys: ['apple'], order: 100, ignoreBudget: true }),
       ],
       messages: [userMsg('apple')],
       settings: budget(15),
     })
-    expect(activatedKeys(res).sort()).toEqual(['const', 'free'])
+    expect(activatedKeys(res).sort()).toEqual(['free', 'plain'])
     expect(logsOf(res, 'budget-trim')).toEqual([])
+    expect(res.truncated).toEqual([])
     expect(res.budget.used).toBe(20)
     expect(res.budget.overflowed).toBe(false)
   })
 
   it('overflowWarning 开启且发生截断时记 budget-overflow', () => {
     const res = run({
-      entries: [makeEntry({ key: 'a', constant: true, order: 200 }), makeEntry({ key: 'b', constant: true, order: 100 })],
+      entries: [makeEntry({ key: 'a', keys: ['apple'], order: 200 }), makeEntry({ key: 'b', keys: ['apple'], order: 100 })],
+      messages: [userMsg('apple')],
       settings: budget(15),
     })
     expect(logsOf(res, 'budget-overflow')).toHaveLength(1)
+    expect(res.truncated.map((t) => t.key)).toEqual(['b'])
     // 关闭告警则无 budget-overflow（截断日志仍在）
     const res2 = run({
-      entries: [makeEntry({ key: 'a', constant: true, order: 200 }), makeEntry({ key: 'b', constant: true, order: 100 })],
+      entries: [makeEntry({ key: 'a', keys: ['apple'], order: 200 }), makeEntry({ key: 'b', keys: ['apple'], order: 100 })],
+      messages: [userMsg('apple')],
       settings: makeSettings({ tokenBudget: 15, overflowWarning: false }),
     })
     expect(logsOf(res2, 'budget-overflow')).toEqual([])
@@ -492,7 +546,8 @@ describe('预算截断', () => {
 
   it('tokenBudget=0 时按 contextPercent 折算预算', () => {
     const res = run({
-      entries: [makeEntry({ key: 'a', constant: true }), makeEntry({ key: 'b', constant: true })],
+      entries: [makeEntry({ key: 'a', keys: ['apple'] }), makeEntry({ key: 'b', keys: ['apple'] })],
+      messages: [userMsg('apple')],
       contextWindowTokens: 80,
       settings: makeSettings({ tokenBudget: 0, contextPercent: 25 }), // limit = 20
     })
@@ -500,30 +555,45 @@ describe('预算截断', () => {
     expect(activatedKeys(res).sort()).toEqual(['a', 'b'])
   })
 
-  it('reservedTokens 同时从百分比预算和显式固定预算中扣减，且下限为 0', () => {
-    const entries = [makeEntry({ key: 'a', constant: true })]
+  it('reservedTokens 只从百分比预算扣减；固定预算是绝对上限，不随历史缩水', () => {
+    const entries = [makeEntry({ key: 'a', keys: ['apple'] })]
     const percent = run({
       entries,
+      messages: [userMsg('apple')],
       contextWindowTokens: 80,
       reservedTokens: 12,
       settings: makeSettings({ tokenBudget: 0, contextPercent: 25 }),
     })
     const fixed = run({
       entries,
+      messages: [userMsg('apple')],
       reservedTokens: 12,
       settings: makeSettings({ tokenBudget: 15 }),
     })
-    const exhausted = run({
+    const fixedLongChat = run({
       entries,
+      messages: [userMsg('apple')],
       reservedTokens: 999,
       settings: makeSettings({ tokenBudget: 15 }),
     })
 
     expect(percent.budget.limit).toBe(8)
-    expect(fixed.budget.limit).toBe(3)
-    expect(exhausted.budget.limit).toBe(0)
+    expect(fixed.budget.limit).toBe(15)
+    expect(fixedLongChat.budget.limit).toBe(15)
     expect(activatedKeys(percent)).toEqual([])
-    expect(activatedKeys(fixed)).toEqual([])
+    expect(percent.truncated.map((t) => t.key)).toEqual(['a'])
+    // 固定预算不再被历史吃掉：长会话里世界书层仍保得住
+    expect(activatedKeys(fixedLongChat)).toEqual(['a'])
+  })
+
+  it('百分比预算的折算基数 clamp 到 128K：1M 窗口不会把预算放大成 25 万', () => {
+    const res = run({
+      entries: [makeEntry({ key: 'a', constant: true })],
+      contextWindowTokens: 1_000_000,
+      settings: makeSettings({ tokenBudget: 0, contextPercent: 25 }),
+    })
+    // floor(131072 * 25%) = 32768，而不是 250000
+    expect(res.budget.limit).toBe(32768)
   })
 })
 
@@ -729,7 +799,8 @@ describe('未注入条目的定时状态回滚', () => {
   it('被预算截断的条目不写入 sticky/cooldown（否则下一轮免概率回来占组）', () => {
     const res = run({
       entries: [
-        makeEntry({ key: 'win', constant: true, order: 200, sticky: 3, cooldown: 5 }),
+        // {{time}} 让这条 constant 落 turn 侧参与计费（无本轮宏的 constant 已豁免预算）
+        makeEntry({ key: 'win', constant: true, content: '{{time}}', order: 200, sticky: 3, cooldown: 5 }),
         makeEntry({ key: 'trimmed', keys: ['apple'], order: 100, sticky: 3, cooldown: 5 }),
       ],
       messages: [userMsg('apple')],
@@ -747,7 +818,7 @@ describe('未注入条目的定时状态回滚', () => {
     const entries = [
       makeEntry({ key: 'trimmed', keys: ['apple'], order: 100, sticky: 3 }),
       makeEntry({ key: 'sibling', keys: ['apple'], order: 100, group: 'g' }),
-      makeEntry({ key: 'win', constant: true, order: 200 }),
+      makeEntry({ key: 'win', constant: true, content: '{{time}}', order: 200 }),
     ]
     const results = runChain(entries, ['apple', 'apple'], { settings: makeSettings({ tokenBudget: 15 }) })
     expect(activatedKeys(results[0]!)).toEqual(['win'])

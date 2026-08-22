@@ -19,7 +19,7 @@ import type { ReactNode } from 'react'
 import { isTavernSession, type UseSessions } from './mode.js'
 import { openChildSession } from './openChild.js'
 import type { Envelope, TavernRemote } from './types.js'
-import { Btn, Dialog, Err, textarea, useLoader, useToast } from './util.js'
+import { Btn, Dialog, Err, useLoader, useToast } from './util.js'
 import './styles.js'
 
 function IconAction(props: { label: string; disabled?: boolean; busy?: boolean; onClick: () => void; children: ReactNode }) {
@@ -317,6 +317,7 @@ export function TavernFloorActions(props: FloorActionsProps) {
           <IconAction label="下一个分支（同一楼层的另一版回复）" disabled={busy} busy={operation === 'branch-next'} onClick={() => onBranch(1)}>
             <IconChevronRightOutline14 />
           </IconAction>
+          <span className="dsh-tavern-actionDivider" />
         </>
       )}
       {swipe && (
@@ -330,6 +331,7 @@ export function TavernFloorActions(props: FloorActionsProps) {
           <IconAction label="下一条开场白" disabled={busy} busy={operation === 'swipe-next'} onClick={() => onSwipe(1)}>
             <IconChevronRightOutline14 />
           </IconAction>
+          <span className="dsh-tavern-actionDivider" />
         </>
       )}
       {!isGreeting && (
@@ -368,7 +370,8 @@ export function TavernFloorActions(props: FloorActionsProps) {
       {edit !== null && (
         <Dialog open title={`编辑第 ${edit.turn} 层的用户消息`} onClose={() => { if (!busy) setEdit(null) }}>
           <textarea
-            style={{ ...textarea, minHeight: 120 }}
+            className="dsh-tavern-input dsh-tavern-textarea"
+            style={{ minHeight: 120 }}
             value={edit.text}
             onChange={(e) => setEdit({ ...edit, text: e.target.value })}
           />
@@ -384,7 +387,8 @@ export function TavernFloorActions(props: FloorActionsProps) {
       {editAi !== null && (
         <Dialog open title={`编辑第 ${editAi.turn} 层的回复`} onClose={() => { if (!busy) setEditAi(null) }}>
           <textarea
-            style={{ ...textarea, minHeight: 160 }}
+            className="dsh-tavern-input dsh-tavern-textarea"
+            style={{ minHeight: 160 }}
             value={editAi.text}
             onChange={(e) => setEditAi({ ...editAi, text: e.target.value })}
           />
@@ -399,7 +403,7 @@ export function TavernFloorActions(props: FloorActionsProps) {
       )}
       {impersonated !== null && (
         <Dialog open title="AI 代答的用户台词" onClose={() => setImpersonated(null)}>
-          <textarea readOnly style={{ ...textarea, minHeight: 120 }} value={impersonated} />
+          <textarea readOnly className="dsh-tavern-input dsh-tavern-textarea" style={{ minHeight: 120 }} value={impersonated} />
           <div style={{ marginTop: 8, fontSize: 12, opacity: 0.8 }}>剪贴板不可用，请手动复制后粘贴到输入框。</div>
         </Dialog>
       )}

@@ -12,7 +12,8 @@ import { parseLorebook } from '../state/lorebook.js'
 import { LorebookEditor } from './panel/lorebookEditor.js'
 import type { CharacterSummary, Persona, PresetSummary, SessionBinding, TavernRemote, TavernSettings } from './types.js'
 import { EMPTY_SESSION_DEFAULTS } from './types.js'
-import { Btn, ConfirmDialog, Dialog, Err, Field, Muted, Select, Skeleton, Toggle, errOf, useLoader, useToast } from './util.js'
+import { IconCopyOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Btn, CheckChips, ConfirmDialog, Dialog, Err, Field, IconBtn, Muted, Select, Skeleton, Toggle, errOf, useLoader, useToast } from './util.js'
 
 export function defaultBinding(sessionId: string, cardId: string, defaults?: TavernSettings['defaults']): SessionBinding {
   const d = defaults ?? EMPTY_SESSION_DEFAULTS
@@ -65,6 +66,7 @@ function fmtTokens(n: number | null): string {
 function PromptPreviewDialog(props: { data: PromptPreview; onClose: () => void }) {
   const { data } = props
   const [tab, setTab] = useState<'standing' | 'turn' | 'full' | 'log'>('standing')
+  const toast = useToast()
   const wi = data.worldInfoBudget
   const assemble = data.assembleBudget
   const body =
@@ -75,6 +77,14 @@ function PromptPreviewDialog(props: { data: PromptPreview; onClose: () => void }
         : tab === 'log'
           ? data.logLines.join('\n') || '（无触发日志）'
           : `=== system ===\n${data.system}\n\n=== messages ===\n${data.messages.map((m) => JSON.stringify(m)).join('\n\n')}`
+  const copyBody = async () => {
+    try {
+      await navigator.clipboard.writeText(body)
+      toast.show('已复制当前视图内容')
+    } catch {
+      toast.show('复制失败')
+    }
+  }
   return (
     <Dialog open title="提示词预览" onClose={props.onClose} width="lg">
       <Muted>
@@ -103,8 +113,13 @@ function PromptPreviewDialog(props: { data: PromptPreview; onClose: () => void }
             {label}
           </button>
         ))}
+        <span style={{ flex: 1 }} />
+        <IconBtn label="复制当前视图" onClick={() => void copyBody()}>
+          <IconCopyOutline16 />
+        </IconBtn>
       </div>
       <pre className="dsh-tavern-modalPre">{body}</pre>
+      {toast.node}
     </Dialog>
   )
 }
@@ -311,117 +326,109 @@ export function TavernHeaderChip(props: {
         hasPopup="dialog"
         onClick={() => setOpen(!open)}
       />
-      <Dialog open={open} title="Tavern 绑定" onClose={() => setOpen(false)} width="lg">
+      <Dialog open={open} title="Tavern 绑定" onClose={() => setOpen(false)} width="xl">
           <div className="dsh-tavern-binding">
           <Err message={error} />
           {!lists && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <Skeleton height={18} />
-              <Skeleton height={18} />
+            <div className="dsh-tavern-panelCard">
+              <Skeleton height={14} width="24%" />
+              <Skeleton height={38} radius={18} />
+              <Skeleton height={38} radius={18} />
+              <Skeleton height={38} radius={18} />
             </div>
           )}
           {lists && (
             <>
-              <Field label="角色">
-                <Select
-                  width="100%"
-                  value={draft?.cardId ?? ''}
-                  onChange={(cardId) => {
-                    if (!cardId) return
-                    const request = ++characterRequest.current
-                    if (draft) {
-                      const picked = lists.characters.find((c) => c.cardId === cardId)
-                      setDraft({ ...draft, cardId, cardName: picked?.name ?? draft.cardName })
-                    } else {
-                      void bindingFromDefaults(remote, sessionId, cardId).then((next) => {
-                        if (characterRequest.current !== request) return
-                        const picked = lists.characters.find((c) => c.cardId === cardId)
-                        setDraft({ ...next, cardName: picked?.name })
-                      }).catch((cause) => {
-                        if (characterRequest.current === request) {
-                          setError(cause instanceof Error ? cause.message : String(cause))
-                        }
-                      })
-                    }
-                  }}
-                  options={[
-                    { value: '', label: '（选择角色）' },
-                    ...lists.characters.map((c) => ({ value: c.cardId, label: c.name })),
-                  ]}
-                />
-              </Field>
-              {draft && (
+              {draft ? (
                 <>
-                  <Field label="预设">
-                    <Select
-                      width="100%"
-                      value={draft.presetId ?? ''}
-                      onChange={(v) => setDraft({ ...draft, presetId: v || null })}
-                      options={[{ value: '', label: '（内建默认）' }, ...lists.presets.map((p) => ({ value: p.id, label: p.regexCount > 0 ? `${p.name}（${p.regexCount} 条正则）` : p.name }))]}
-                    />
-                  </Field>
-                  <Field label="人设">
-                    <Select
-                      width="100%"
-                      value={draft.personaId ?? ''}
-                      onChange={(v) => setDraft({ ...draft, personaId: v || null })}
-                      options={[{ value: '', label: '（无）' }, ...lists.personas.map((p) => ({ value: p.id, label: p.name }))]}
-                    />
-                  </Field>
-                  <Field label="主世界书">
-                    <Select
-                      width="100%"
-                      value={draft.characterLorebookId ?? ''}
-                      onChange={(v) => setDraft({ ...draft, characterLorebookId: v || null })}
-                      options={[
-                        { value: '', label: embeddedBookLabel },
-                        ...lists.lorebooks.map((n) => ({ value: n, label: n })),
-                      ]}
-                    />
-                  </Field>
-                  <Field label="全局世界书（多选）">
-                    <div className="dsh-tavern-checkList dsh-tavern-scroll" style={{ maxHeight: 120, overflow: 'auto' }}>
-                      {lists.lorebooks.map((n) => (
-                        <label key={n}>
-                          <input
-                            type="checkbox"
-                            checked={draft.lorebookIds.includes(n)}
-                            onChange={(e) =>
-                              setDraft({
-                                ...draft,
-                                lorebookIds: e.target.checked ? [...draft.lorebookIds, n] : draft.lorebookIds.filter((x) => x !== n),
-                              })
-                            }
-                          />
-                          {n}
-                        </label>
-                      ))}
-                      {lists.lorebooks.length === 0 && <Muted>库中暂无世界书</Muted>}
-                    </div>
-                  </Field>
-                  <Field label="作者注释（本会话，进本轮 turn）">
-                    <textarea
-                      className="dsh-tavern-input dsh-tavern-textarea"
-                      style={{ minHeight: 64 }}
-                      value={draft.authorNote ?? ''}
-                      onChange={(e) => setDraft({ ...draft, authorNote: e.target.value })}
-                    />
-                  </Field>
-                  <div className="dsh-tavern-inlineChecks" style={{ marginBottom: 8 }}>
-                    <label>
-                      <Toggle
-                        checked={draft.injectJournal === true}
-                        onChange={(injectJournal) => setDraft({ ...draft, injectJournal })}
+                  <div className="dsh-tavern-panelCard">
+                    <div className="dsh-tavern-groupHead">绑定</div>
+                    <Field label="角色">
+                      <Select
+                        width="100%"
+                        value={draft.cardId}
+                        onChange={(cardId) => {
+                          if (!cardId) return
+                          const picked = lists.characters.find((c) => c.cardId === cardId)
+                          setDraft({ ...draft, cardId, cardName: picked?.name ?? draft.cardName })
+                        }}
+                        options={[
+                          { value: '', label: '（选择角色）' },
+                          ...lists.characters.map((c) => ({ value: c.cardId, label: c.name })),
+                        ]}
                       />
-                      注入角色笔记 journal.md
-                    </label>
+                    </Field>
+                    <Field label="预设">
+                      <Select
+                        width="100%"
+                        value={draft.presetId ?? ''}
+                        onChange={(v) => setDraft({ ...draft, presetId: v || null })}
+                        options={[{ value: '', label: '（内建默认）' }, ...lists.presets.map((p) => ({ value: p.id, label: p.regexCount > 0 ? `${p.name}（${p.regexCount} 条正则）` : p.name }))]}
+                      />
+                    </Field>
+                    <Field label="人设">
+                      <Select
+                        width="100%"
+                        value={draft.personaId ?? ''}
+                        onChange={(v) => setDraft({ ...draft, personaId: v || null })}
+                        options={[{ value: '', label: '（无）' }, ...lists.personas.map((p) => ({ value: p.id, label: p.name }))]}
+                      />
+                    </Field>
                   </div>
-                  <div className="dsh-tavern-bindingActions">
-                    <Btn primary onClick={() => void saveBinding()}>保存绑定</Btn>
-                    <Btn onClick={() => void openChatLore()}>编辑本会话世界书</Btn>
+
+                  <div className="dsh-tavern-panelCard">
+                    <div className="dsh-tavern-groupHead">世界书</div>
+                    <Field label="主世界书">
+                      <Select
+                        width="100%"
+                        value={draft.characterLorebookId ?? ''}
+                        onChange={(v) => setDraft({ ...draft, characterLorebookId: v || null })}
+                        options={[
+                          { value: '', label: embeddedBookLabel },
+                          ...lists.lorebooks.map((n) => ({ value: n, label: n })),
+                        ]}
+                      />
+                    </Field>
+                    <Field label="全局世界书（多选）">
+                      {lists.lorebooks.length === 0 ? (
+                        <Muted>库中暂无世界书</Muted>
+                      ) : (
+                        <CheckChips
+                          ariaLabel="全局世界书"
+                          options={lists.lorebooks.map((n) => ({ value: n, label: n }))}
+                          selected={draft.lorebookIds}
+                          onChange={(lorebookIds) => setDraft({ ...draft, lorebookIds })}
+                        />
+                      )}
+                    </Field>
+                  </div>
+
+                  <div className="dsh-tavern-panelCard">
+                    <div className="dsh-tavern-groupHead">本轮注入</div>
+                    <Field label="作者注释（本会话，进本轮 turn）">
+                      <textarea
+                        className="dsh-tavern-input dsh-tavern-textarea"
+                        style={{ minHeight: 96 }}
+                        value={draft.authorNote ?? ''}
+                        onChange={(e) => setDraft({ ...draft, authorNote: e.target.value })}
+                      />
+                    </Field>
+                    <div className="dsh-tavern-inlineChecks">
+                      <label>
+                        <Toggle
+                          checked={draft.injectJournal === true}
+                          onChange={(injectJournal) => setDraft({ ...draft, injectJournal })}
+                        />
+                        注入角色笔记 journal.md
+                      </label>
+                    </div>
+                  </div>
+
+                  <div className="dsh-tavern-footActions">
                     {binding ? (
                       <Btn
                         danger
+                        size="md"
                         onClick={() => {
                           setConfirmUnbind(true)
                         }}
@@ -429,26 +436,79 @@ export function TavernHeaderChip(props: {
                         解除绑定
                       </Btn>
                     ) : null}
+                    <span className="dsh-tavern-footSpacer" />
+                    <Btn size="md" onClick={() => void openChatLore()}>编辑本会话世界书</Btn>
+                    <Btn primary size="md" onClick={() => void saveBinding()}>保存绑定</Btn>
                   </div>
                 </>
+              ) : (
+                <div className="dsh-tavern-panelCard">
+                  <div className="dsh-tavern-groupHead">绑定</div>
+                  <Field label="角色">
+                    <Select
+                      width="100%"
+                      value=""
+                      onChange={(cardId) => {
+                        if (!cardId) return
+                        const request = ++characterRequest.current
+                        void bindingFromDefaults(remote, sessionId, cardId).then((next) => {
+                          if (characterRequest.current !== request) return
+                          const picked = lists.characters.find((c) => c.cardId === cardId)
+                          setDraft({ ...next, cardName: picked?.name })
+                        }).catch((cause) => {
+                          if (characterRequest.current === request) {
+                            setError(cause instanceof Error ? cause.message : String(cause))
+                          }
+                        })
+                      }}
+                      options={[
+                        { value: '', label: '（选择角色）' },
+                        ...lists.characters.map((c) => ({ value: c.cardId, label: c.name })),
+                      ]}
+                    />
+                  </Field>
+                </div>
               )}
-              <div className="dsh-tavern-bindingActions" style={{ borderTop: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.25))', paddingTop: 8 }}>
-                <Btn disabled={!binding} onClick={() => void insertGreeting()}>插入开场白</Btn>
-                <Btn disabled={!binding || !canSwipeGreeting} onClick={() => void swipeBy(-1)}>上一条开场白</Btn>
-                <Btn disabled={!binding || !canSwipeGreeting} onClick={() => void swipeBy(1)}>下一条开场白</Btn>
-                <Btn onClick={() => void showTriggerLog()}>触发日志</Btn>
-                <Btn onClick={() => void preview()}>预览提示词</Btn>
+
+              <div className="dsh-tavern-panelCard">
+                <div className="dsh-tavern-groupHead">开场白与调试</div>
+                <div className="dsh-tavern-bindingActions">
+                  <Btn disabled={!binding} onClick={() => void insertGreeting()}>插入开场白</Btn>
+                  <Btn disabled={!binding || !canSwipeGreeting} onClick={() => void swipeBy(-1)}>上一条开场白</Btn>
+                  <Btn disabled={!binding || !canSwipeGreeting} onClick={() => void swipeBy(1)}>下一条开场白</Btn>
+                  <Btn onClick={() => void showTriggerLog()}>触发日志</Btn>
+                  <Btn onClick={() => void preview()}>预览提示词</Btn>
+                </div>
               </div>
+
               {usage && (
-                <Muted>
-                  上下文：
-                  {usage.contextWindow !== null && usage.pressureTokens !== null
-                    ? `${fmtTokens(usage.pressureTokens)} / ${fmtTokens(usage.contextWindow)}（${usage.percent ?? '?'}%）`
-                    : `约 ${fmtTokens(usage.surfaceTokens)} token`}
-                  {usage.messageTokens !== null
-                    ? ` · 系统 ${fmtTokens(usage.systemTokens)} · 工具 ${fmtTokens(usage.toolsTokens)} · 消息 ${fmtTokens(usage.messageTokens)}`
-                    : ''}
-                </Muted>
+                <div className="dsh-tavern-usageBar">
+                  {typeof usage.percent === 'number' && (
+                    <div
+                      className="dsh-tavern-meter"
+                      role="progressbar"
+                      aria-label="上下文占用"
+                      aria-valuenow={Math.round(usage.percent)}
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                    >
+                      <span
+                        className="dsh-tavern-meterFill"
+                        data-warn={usage.percent >= 90 ? 'true' : 'false'}
+                        style={{ width: `${Math.min(100, Math.max(0, usage.percent))}%` }}
+                      />
+                    </div>
+                  )}
+                  <Muted>
+                    上下文：
+                    {usage.contextWindow !== null && usage.pressureTokens !== null
+                      ? `${fmtTokens(usage.pressureTokens)} / ${fmtTokens(usage.contextWindow)}（${usage.percent ?? '?'}%）`
+                      : `约 ${fmtTokens(usage.surfaceTokens)} token`}
+                    {usage.messageTokens !== null
+                      ? ` · 系统 ${fmtTokens(usage.systemTokens)} · 工具 ${fmtTokens(usage.toolsTokens)} · 消息 ${fmtTokens(usage.messageTokens)}`
+                      : ''}
+                  </Muted>
+                </div>
               )}
             </>
           )}
@@ -458,7 +518,7 @@ export function TavernHeaderChip(props: {
       {view && <PreDialog title={view.title} text={view.text} onClose={() => setView(null)} />}
       {previewData && <PromptPreviewDialog data={previewData} onClose={() => setPreviewData(null)} />}
       {chatLore && (
-        <Dialog open width="lg" title="本会话世界书" onClose={() => setChatLore(null)}>
+        <Dialog open width="xl" title="本会话世界书" onClose={() => setChatLore(null)}>
           <LorebookEditor
             target={{ kind: 'chat', cardId: chatLore.cardId, name: '本会话世界书' }}
             entries={chatLore.entries}

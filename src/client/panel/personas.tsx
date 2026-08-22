@@ -6,7 +6,7 @@ import { useState } from 'react'
 import { IconEditOutline16, IconTrashOutline16, IconUserOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { Persona, TavernRemote } from '../types.js'
 import { EMPTY_SESSION_DEFAULTS } from '../types.js'
-import { Btn, ConfirmDialog, Err, Field, IconBtn, Muted, Section, Select, Skeleton, clickableProps, errOf, runAsync, useLoader, useToast } from '../util.js'
+import { Avatar, Badge, Btn, ConfirmDialog, Err, Field, IconBtn, SearchEmpty, SearchInput, Section, Select, Skeleton, clickableProps, errOf, runAsync, useLoader, useToast } from '../util.js'
 
 export function PersonasSection(props: { remote: TavernRemote }) {
   const { remote } = props
@@ -16,9 +16,12 @@ export function PersonasSection(props: { remote: TavernRemote }) {
   const [busy, setBusy] = useState(false)
   const [editing, setEditing] = useState<Persona | null>(null)
   const [toDelete, setToDelete] = useState<Persona | null>(null)
+  const [query, setQuery] = useState('')
   const toast = useToast()
 
   const items = state.status === 'ready' ? state.value.items : []
+  const q = query.trim().toLowerCase()
+  const filtered = q === '' ? items : items.filter((p) => p.name.toLowerCase().includes(q) || p.description.toLowerCase().includes(q))
 
   const save = async () => {
     if (!editing) return
@@ -72,12 +75,15 @@ export function PersonasSection(props: { remote: TavernRemote }) {
       <div className="dsh-tavern-toolbar">
         <Btn size="md" onClick={createNew}>新建人设</Btn>
         <Btn size="md" onClick={reload} disabled={busy}>刷新</Btn>
+        {items.length >= 5 && (
+          <SearchInput label="搜索人设" value={query} onChange={setQuery} placeholder="搜索人设名 / 描述" width={220} />
+        )}
       </div>
       {state.status === 'loading' && (
-        <div className="dsh-tavern-cards">
-          <Skeleton height={96} />
-          <Skeleton height={96} />
-          <Skeleton height={96} />
+        <div className="dsh-tavern-list">
+          <Skeleton height={62} radius={14} />
+          <Skeleton height={62} radius={14} />
+          <Skeleton height={62} radius={14} />
         </div>
       )}
       {state.status === 'error' && <Err message={state.message} />}
@@ -91,15 +97,21 @@ export function PersonasSection(props: { remote: TavernRemote }) {
           <div className="dsh-tavern-emptyDesc">新建一条人设，对话里的 {'{{user}}'} 就会换成它。</div>
         </div>
       )}
-      <div className="dsh-tavern-cards" style={{ marginBottom: 12 }}>
-        {items.map((p) => (
-          <article key={p.id} className="dsh-tavern-card is-clickable" {...clickableProps(() => setEditing({ ...p }))}>
-            <div className="dsh-tavern-cardHead">
-              <div className="dsh-tavern-cardName">{p.name}</div>
+      {q !== '' && filtered.length === 0 && state.status === 'ready' && (
+        <SearchEmpty what="人设" query={query.trim()} onClear={() => setQuery('')} />
+      )}
+      <div className="dsh-tavern-list" style={{ marginBottom: 12 }}>
+        {filtered.map((p) => (
+          <div key={p.id} className="dsh-tavern-tile" {...clickableProps(() => setEditing({ ...p }))}>
+            <Avatar url={p.avatar} name={p.name} size={38} />
+            <div className="dsh-tavern-tileMain">
+              <div className="dsh-tavern-tileTitleRow">
+                <span className="dsh-tavern-tileName">{p.name}</span>
+                {p.lorebookId ? <Badge>{p.lorebookId}</Badge> : null}
+              </div>
+              <span className="dsh-tavern-tileSub">{p.description.trim() || '还没有填写人设描述。'}</span>
             </div>
-            <p className="dsh-tavern-cardDesc">{p.description.trim() || '还没有填写人设描述。'}</p>
-            {p.lorebookId ? <Muted>人设世界书 {p.lorebookId}</Muted> : null}
-            <div className="dsh-tavern-cardFoot">
+            <div className="dsh-tavern-tileActions">
               <IconBtn label="编辑" onClick={() => setEditing({ ...p })}>
                 <IconEditOutline16 />
               </IconBtn>
@@ -108,7 +120,7 @@ export function PersonasSection(props: { remote: TavernRemote }) {
                 <IconTrashOutline16 />
               </IconBtn>
             </div>
-          </article>
+          </div>
         ))}
       </div>
       <ConfirmDialog

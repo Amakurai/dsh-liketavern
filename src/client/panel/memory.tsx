@@ -7,7 +7,9 @@ import { useEffect, useState } from 'react'
 import { IconEditOutline16, IconTrashOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { MemoryEntry, WorldDelta } from '../../core/types.js'
 import type { TavernRemote } from '../types.js'
-import { Btn, Err, IconBtn, Muted, Section, Select, SettingsRow, Skeleton, downloadJson, errOf, runAsync, useLoader, useToast } from '../util.js'
+import { Badge, Btn, Err, IconBtn, Muted, Section, Select, SettingsRow, Skeleton, downloadJson, errOf, runAsync, useLoader, useToast } from '../util.js'
+
+const DELTA_TYPE_LABEL: Record<WorldDelta['type'], string> = { add: '新增', update: '更新', invalidate: '作废' }
 
 function splitList(text: string): string[] {
   return text
@@ -203,15 +205,21 @@ export function MemorySection(props: { remote: TavernRemote }) {
                 </>
               )}
               {memories.state.status === 'error' && <Err message={memories.state.message} />}
-              {memoryItems.length === 0 && memories.state.status === 'ready' && <Muted>暂无记忆。让模型用 tavern_memory_write 写入，或在下方手动添加。</Muted>}
+              {memoryItems.length === 0 && memories.state.status === 'ready' && (
+                <div className="dsh-tavern-empty is-compact">
+                  <div className="dsh-tavern-emptyTitle">暂无记忆</div>
+                  <div className="dsh-tavern-emptyDesc">让模型用 tavern_memory_write 写入，或在下方手动添加。</div>
+                </div>
+              )}
               {memoryItems.map((m) => (
                 <div key={m.id} className="dsh-tavern-memo">
                   <div className="dsh-tavern-memoHead">
-                    <span className="dsh-tavern-memoMeta">
-                      {m.id} · {m.updated}
-                      {m.archived ? ' · 已归档' : ''}
-                      {m.tags.length > 0 ? ` · 标签 ${m.tags.join('、')}` : ''}
-                    </span>
+                    <Badge>{m.id}</Badge>
+                    {m.archived ? <Badge>已归档</Badge> : null}
+                    {m.tags.map((tag) => (
+                      <Badge key={tag}>{tag}</Badge>
+                    ))}
+                    <span className="dsh-tavern-memoMeta">{m.updated}</span>
                     <span className="dsh-tavern-memoActions">
                       <IconBtn label={editingId === m.id ? '收起编辑' : '编辑'} onClick={() => setEditingId(editingId === m.id ? null : m.id)}>
                         <IconEditOutline16 />
@@ -235,7 +243,7 @@ export function MemorySection(props: { remote: TavernRemote }) {
                   )}
                 </div>
               ))}
-              <div className="dsh-tavern-memo">
+              <div className="dsh-tavern-memo is-compose">
                 <textarea
                   className="dsh-tavern-input dsh-tavern-textarea"
                   style={{ minHeight: 60 }}
@@ -260,13 +268,13 @@ export function MemorySection(props: { remote: TavernRemote }) {
               )}
               {deltas.state.status === 'error' && <Err message={deltas.state.message} />}
               {deltaItems.map((d: WorldDelta) => (
-                <div key={d.id} className="dsh-tavern-memo">
+                <div key={d.id} className={`dsh-tavern-memo${d.revoked ? ' is-revoked' : ''}`}>
                   <div className="dsh-tavern-memoHead">
-                    <span className="dsh-tavern-memoMeta">
-                      #{d.id} · {d.type}
-                      {d.ref ? ` → ${d.ref}` : ''} · {d.ts}
-                      {d.revoked ? ' · 已撤销' : ''}
-                    </span>
+                    <Badge>#{d.id}</Badge>
+                    <Badge danger={d.type === 'invalidate'}>{DELTA_TYPE_LABEL[d.type]}</Badge>
+                    {d.ref ? <Badge>→ {d.ref}</Badge> : null}
+                    {d.revoked ? <Badge danger>已撤销</Badge> : null}
+                    <span className="dsh-tavern-memoMeta">{d.ts}</span>
                     {!d.revoked && (
                       <span className="dsh-tavern-memoActions">
                         <Btn size="sm" onClick={() => void revoke(d.id)}>撤销</Btn>
@@ -276,8 +284,13 @@ export function MemorySection(props: { remote: TavernRemote }) {
                   <pre className="dsh-tavern-memoBody dsh-tavern-scroll">{d.content}</pre>
                 </div>
               ))}
-              {deltaItems.length === 0 && deltas.state.status === 'ready' && <Muted>暂无世界状态变化。</Muted>}
-              <div className="dsh-tavern-memo">
+              {deltaItems.length === 0 && deltas.state.status === 'ready' && (
+                <div className="dsh-tavern-empty is-compact">
+                  <div className="dsh-tavern-emptyTitle">暂无世界状态变化</div>
+                  <div className="dsh-tavern-emptyDesc">模型经 tavern_worldstate_update 写入，或在下方手动添加。</div>
+                </div>
+              )}
+              <div className="dsh-tavern-memo is-compose">
                 <div className="dsh-tavern-fieldRow">
                   <label className="dsh-tavern-field">
                     <span className="dsh-tavern-fieldLabel">类型</span>

@@ -17,7 +17,7 @@ import { bindingFromDefaults } from './chip.js'
 import { isTavernSession, type UseSessions } from './mode.js'
 import { TavernSeatChip } from './seatChip.js'
 import type { CharacterDetail, CharacterSummary, SessionBinding, TavernRemote } from './types.js'
-import { Avatar, Btn, errOf, useLoader } from './util.js'
+import { Avatar, Btn, errOf, Skeleton, useLoader } from './util.js'
 import { expandIdentityMacros } from '../core/macros.js'
 import { DEFAULT_USER_NAME } from '../core/persona.js'
 import './styles.js'
@@ -191,11 +191,18 @@ export function TavernHeroCharacter(props: {
   const chipLabel = binding ? (detail?.name ?? selected?.name ?? '角色') : '选择角色卡'
   const variants = detail ? greetingVariants(detail) : []
   const greetingIndex = binding?.greetingIndex ?? 0
-  const greetingText = expandIdentityMacros(
-    variants[greetingIndex] ?? variants[0] ?? '',
-    { char: detail?.name ?? chipLabel, user: userName },
-  )
+  const greetingText = detail
+    ? expandIdentityMacros(
+        variants[greetingIndex] ?? variants[0] ?? '',
+        { char: detail?.name ?? chipLabel, user: userName },
+      )
+    : ''
   const hasAnyGreeting = variants.some((v) => v.trim() !== '')
+  // 头像旁的元信息行：作者 / 版本 / 前三个标签，有才显示。
+  const metaParts: string[] = []
+  if (detail?.creator) metaParts.push(`作者 ${detail.creator}`)
+  if (detail?.characterVersion) metaParts.push(`v${detail.characterVersion}`)
+  if (detail && detail.tags.length > 0) metaParts.push(detail.tags.slice(0, 3).join(' · '))
 
   const pickCharacter = async (cardId: string) => {
     if (!cardId || busy) return
@@ -307,7 +314,19 @@ export function TavernHeroCharacter(props: {
     <div ref={dockRef} data-tavern-hero-root="" className="dsh-tavern-ui">
       {chipHost ? createPortal(chip, chipHost) : chip}
       {error && <div className="dsh-tavern-hero-error">{error}</div>}
-      {binding && (
+      {binding && detailLoader.state.status === 'loading' && (
+        <div className="dsh-tavern-hero-preview" aria-busy="true">
+          <div className="dsh-tavern-hero-previewHead">
+            <Skeleton width={28} height={28} radius={999} />
+            <Skeleton width={140} height={14} />
+          </div>
+          <Skeleton height={14} style={{ marginTop: 14 }} />
+          <Skeleton height={14} width="72%" style={{ marginTop: 8 }} />
+          <Skeleton height={14} width="48%" style={{ marginTop: 8 }} />
+          <Skeleton height={32} width={104} radius={18} style={{ marginTop: 14 }} />
+        </div>
+      )}
+      {binding && detailLoader.state.status !== 'loading' && (
         <div
           className="dsh-tavern-hero-preview dsh-tavern-rise"
           tabIndex={variants.length > 1 ? 0 : undefined}
@@ -324,45 +343,51 @@ export function TavernHeroCharacter(props: {
           }}
         >
           <div className="dsh-tavern-hero-previewHead">
-            <Avatar url={avatar} name={chipLabel} size={20} />
-            <div className="dsh-tavern-hero-previewName">{chipLabel}</div>
+            <Avatar url={avatar} name={chipLabel} size={40} className="dsh-tavern-speechAvatar" />
+            <div className="dsh-tavern-hero-previewHeadText">
+              <div className="dsh-tavern-hero-previewName">{chipLabel}</div>
+              {metaParts.length > 0 && <div className="dsh-tavern-hero-previewMeta">{metaParts.join(' · ')}</div>}
+            </div>
           </div>
-          {greetingText ? (
-            <div className="dsh-tavern-hero-previewText">{greetingText}</div>
+          {detailLoader.state.status === 'error' ? (
+            <div className="dsh-tavern-hero-previewText">角色详情加载失败。可重新选择角色，或直接在下方输入。</div>
+          ) : greetingText ? (
+            <div className="dsh-tavern-hero-quote">{greetingText}</div>
           ) : hasAnyGreeting ? (
             <div className="dsh-tavern-hero-previewText">当前这条开场白为空，可切换变体。</div>
           ) : (
             <div className="dsh-tavern-hero-previewText">该角色没有开场白。可以直接在下方输入。</div>
           )}
-          {variants.length > 1 && (
-            <div className="dsh-tavern-hero-swipe">
-              <button
-                type="button"
-                className="dsh-tavern-hero-swipeBtn"
-                disabled={busy}
-                title="上一条开场白"
-                onClick={() => void swipe(-1)}
-              >
-                <IconChevronLeftOutline14 />
-              </button>
-              <span className="dsh-tavern-hero-swipeIdx">
-                {greetingIndex + 1}/{variants.length}
-              </span>
-              <button
-                type="button"
-                className="dsh-tavern-hero-swipeBtn"
-                disabled={busy}
-                title="下一条开场白"
-                onClick={() => void swipe(1)}
-              >
-                <IconChevronRightOutline14 />
-              </button>
-            </div>
-          )}
           <div className="dsh-tavern-hero-actions">
             <Btn primary size="md" disabled={busy} onClick={() => void startConversation()}>
               开始对话
             </Btn>
+            {variants.length > 1 && (
+              <div className="dsh-tavern-hero-swipe">
+                <button
+                  type="button"
+                  className="dsh-tavern-hero-swipeBtn"
+                  disabled={busy}
+                  title="上一条开场白"
+                  onClick={() => void swipe(-1)}
+                >
+                  <IconChevronLeftOutline14 />
+                </button>
+                <span className="dsh-tavern-hero-swipeIdx">
+                  {greetingIndex + 1}/{variants.length}
+                </span>
+                <button
+                  type="button"
+                  className="dsh-tavern-hero-swipeBtn"
+                  disabled={busy}
+                  title="下一条开场白"
+                  onClick={() => void swipe(1)}
+                >
+                  <IconChevronRightOutline14 />
+                </button>
+                <span className="dsh-tavern-hero-swipeHint">← → 切换</span>
+              </div>
+            )}
           </div>
         </div>
       )}

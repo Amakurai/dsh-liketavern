@@ -3,9 +3,10 @@
  * find/replace 等代码向输入用 code 字体类；保存反馈走 useToast，上下文错误用 Err。
  */
 import { useEffect, useState } from 'react'
+import { IconTrashOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PromptPreset, RegexRule, RegexScope, RegexTiming } from '../../core/types.js'
 import type { TavernRemote } from '../types.js'
-import { Btn, Err, Field, Muted, NullableNumInput, RegexScriptRow, Section, Select, Skeleton, Toggle, errOf, runAsync, useLoader, useToast } from '../util.js'
+import { Badge, Btn, CheckChips, Err, Field, IconBtn, Muted, NullableNumInput, RegexScriptRow, Section, Select, Skeleton, Toggle, errOf, runAsync, useLoader, useToast } from '../util.js'
 
 const SCOPES: { value: RegexScope; label: string }[] = [
   { value: 'input', label: '用户输入' },
@@ -17,6 +18,7 @@ const TIMINGS: { value: RegexTiming; label: string }[] = [
   { value: 'send', label: '发送前' },
   { value: 'render', label: '渲染前' },
 ]
+const SOURCE_LABEL: Record<RegexRule['source'], string> = { user: '用户', card: '角色卡', preset: '预设' }
 
 function newRule(): RegexRule {
   return {
@@ -34,10 +36,6 @@ function newRule(): RegexRule {
   }
 }
 
-function toggle<T>(list: T[], v: T): T[] {
-  return list.includes(v) ? list.filter((x) => x !== v) : [...list, v]
-}
-
 function RuleEditor(props: { rule: RegexRule; onChange: (r: RegexRule) => void; onDelete: () => void }) {
   const { rule } = props
   const set = (patch: Partial<RegexRule>) => props.onChange({ ...rule, ...patch })
@@ -46,8 +44,10 @@ function RuleEditor(props: { rule: RegexRule; onChange: (r: RegexRule) => void; 
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '10px 12px 6px' }}>
         <Toggle checked={rule.enabled} onChange={(enabled) => set({ enabled })} title={rule.enabled ? '关闭此规则' : '启用此规则'} />
         <input className="dsh-tavern-input" style={{ flex: 1 }} value={rule.name} onChange={(e) => set({ name: e.target.value })} />
-        <Muted>{rule.source === 'user' ? '用户' : rule.source === 'card' ? '角色卡' : '预设'}</Muted>
-        <Btn danger onClick={props.onDelete}>删除</Btn>
+        <Badge>{SOURCE_LABEL[rule.source]}</Badge>
+        <IconBtn label="删除规则" danger onClick={props.onDelete}>
+          <IconTrashOutline16 />
+        </IconBtn>
       </div>
       <div style={{ padding: '0 12px 12px' }}>
       <Field label="查找 (find)">
@@ -55,23 +55,25 @@ function RuleEditor(props: { rule: RegexRule; onChange: (r: RegexRule) => void; 
       </Field>
       <div className="dsh-tavern-fieldLabel" style={{ margin: '4px 0' }}>替换 (replace)</div>
       <textarea className="dsh-tavern-input dsh-tavern-textarea dsh-tavern-codeFont" style={{ minHeight: 40 }} value={rule.replace} onChange={(e) => set({ replace: e.target.value })} />
-      <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: 12, margin: '6px 0' }}>
-        <span>
-          作用域：
-          {SCOPES.map((s) => (
-            <label key={s.value} style={{ marginLeft: 8 }}>
-              <input type="checkbox" checked={rule.scopes.includes(s.value)} onChange={() => set({ scopes: toggle(rule.scopes, s.value) })} /> {s.label}
-            </label>
-          ))}
-        </span>
-        <span>
-          时机：
-          {TIMINGS.map((t) => (
-            <label key={t.value} style={{ marginLeft: 8 }}>
-              <input type="checkbox" checked={rule.timing.includes(t.value)} onChange={() => set({ timing: toggle(rule.timing, t.value) })} /> {t.label}
-            </label>
-          ))}
-        </span>
+      <div className="dsh-tavern-fieldRow" style={{ margin: '8px 0 4px' }}>
+        <div className="dsh-tavern-field">
+          <span className="dsh-tavern-fieldLabel">作用域</span>
+          <CheckChips
+            ariaLabel="作用域"
+            options={SCOPES}
+            selected={rule.scopes}
+            onChange={(scopes) => set({ scopes: scopes as RegexScope[] })}
+          />
+        </div>
+        <div className="dsh-tavern-field">
+          <span className="dsh-tavern-fieldLabel">时机</span>
+          <CheckChips
+            ariaLabel="时机"
+            options={TIMINGS}
+            selected={rule.timing}
+            onChange={(timing) => set({ timing: timing as RegexTiming[] })}
+          />
+        </div>
       </div>
       <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: 12, alignItems: 'center' }}>
         <label>
@@ -191,7 +193,12 @@ export function RegexSection(props: { remote: TavernRemote }) {
               onDelete={() => setRules(current.filter((_, j) => j !== i))}
             />
           ))}
-          {current.length === 0 && <Muted>暂无规则。</Muted>}
+          {current.length === 0 && (
+            <div className="dsh-tavern-empty is-compact">
+              <div className="dsh-tavern-emptyTitle">暂无自定义规则</div>
+              <div className="dsh-tavern-emptyDesc">点「新建规则」添加展示或入模的改写规则。</div>
+            </div>
+          )}
           <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
             <Btn onClick={() => setRules([...current, newRule()])}>新建规则</Btn>
             <Btn disabled={busy} onClick={() => void save(current)} primary>保存全部</Btn>

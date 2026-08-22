@@ -4,7 +4,7 @@
  * 原生 select 的 option 弹层用 Menu 实现（避开 Windows 系统白底白字）。
  */
 import { useCallback, useEffect, useState } from 'react'
-import { Button, IconChevronDownOutline14, IconUserOutline16, Menu, Modal, Toast, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, IconChevronDownOutline14, IconSearchOutline16, IconUserOutline16, Menu, Modal, Toast, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { CSSProperties, ReactNode } from 'react'
 import type { CardRegexScript } from '../core/types.js'
 import type { Envelope } from './types.js'
@@ -199,8 +199,9 @@ export function Tabs(props: { items: TabItem[]; value: string; onChange: (id: st
   )
 }
 
-export function Badge(props: { accent?: boolean; children?: ReactNode }) {
-  return <span className={`dsh-tavern-badge${props.accent ? ' is-accent' : ''}`}>{props.children}</span>
+export function Badge(props: { accent?: boolean; danger?: boolean; children?: ReactNode }) {
+  const cls = props.accent ? ' is-accent' : props.danger ? ' is-danger' : ''
+  return <span className={`dsh-tavern-badge${cls}`}>{props.children}</span>
 }
 
 /**
@@ -312,6 +313,73 @@ export function Field(props: { label: string; children?: ReactNode }) {
     <div className="dsh-tavern-field">
       <span className="dsh-tavern-fieldLabel">{props.label}</span>
       {props.children}
+    </div>
+  )
+}
+
+/** 列表搜索框（36px 胶囊 + 前导图标），配合面板里的关键字过滤。 */
+export function SearchInput(props: {
+  label: string
+  value: string
+  onChange: (value: string) => void
+  placeholder?: string
+  width?: number | string
+}) {
+  return (
+    <div className="dsh-tavern-search" role="search" style={{ width: props.width ?? 220 }}>
+      <span className="dsh-tavern-searchIcon">
+        <IconSearchOutline16 />
+      </span>
+      <input
+        type="text"
+        aria-label={props.label}
+        placeholder={props.placeholder ?? '搜索…'}
+        value={props.value}
+        onChange={(e) => props.onChange(e.target.value)}
+      />
+    </div>
+  )
+}
+
+/** 列表搜索的空结果态：与各面板空态同一套样式，附「清空搜索」动作。 */
+export function SearchEmpty(props: { what: string; query: string; onClear: () => void }) {
+  return (
+    <div className="dsh-tavern-empty">
+      <div className="dsh-tavern-emptyTitle">没有匹配的{props.what}</div>
+      <div className="dsh-tavern-emptyDesc">
+        「{props.query}」没有命中任何条目，可换个关键词或
+        <button type="button" className="dsh-tavern-linkBtn" onClick={props.onClear}>
+          清空搜索
+        </button>
+      </div>
+    </div>
+  )
+}
+
+/** 多选 chip 组（替代复选框列表）：点击把选项切进/切出 selected，选中带对勾前缀。 */
+export function CheckChips(props: {
+  options: { value: string; label: string }[]
+  selected: readonly string[]
+  onChange: (next: string[]) => void
+  ariaLabel?: string
+}) {
+  return (
+    <div className="dsh-tavern-filters" role="group" aria-label={props.ariaLabel}>
+      {props.options.map((o) => {
+        const on = props.selected.includes(o.value)
+        return (
+          <button
+            key={o.value}
+            type="button"
+            className="dsh-tavern-chip is-check"
+            data-active={on ? 'true' : 'false'}
+            aria-pressed={on}
+            onClick={() => props.onChange(on ? props.selected.filter((v) => v !== o.value) : [...props.selected, o.value])}
+          >
+            {o.label}
+          </button>
+        )
+      })}
     </div>
   )
 }
@@ -479,20 +547,27 @@ export function downloadBase64(filename: string, base64: string, mime: string): 
   setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
-/** primitives Modal 的薄封装（统一中文关闭文案）；width 档：sm 380（默认）/ md 480 / lg 680。 */
+/** primitives Modal 的薄封装（统一中文关闭文案）；width 档：sm 380（默认）/ md 480 / lg 680 / xl 880。 */
 export function Dialog(props: {
   open: boolean
   title: string
   description?: string
   onClose: () => void
   footer?: ReactNode
-  width?: 'sm' | 'md' | 'lg'
+  width?: 'sm' | 'md' | 'lg' | 'xl'
   children?: ReactNode
 }) {
   // Modal 的 dialog 本体不限高，超高内容会把整个弹窗顶出视口。
   // 滚动区放在 content 层（Modal 注释里指定的 scrollable content region）并钉死
   // max-height，保证任何视口高度下弹窗底部都不被裁。
-  const widthClass = props.width === 'md' ? 'dsh-tavern-modal-md' : props.width === 'lg' ? 'dsh-tavern-modal-lg' : ''
+  const widthClass =
+    props.width === 'md'
+      ? 'dsh-tavern-modal-md'
+      : props.width === 'lg'
+        ? 'dsh-tavern-modal-lg'
+        : props.width === 'xl'
+          ? 'dsh-tavern-modal-xl'
+          : ''
   return (
     <Modal
       open={props.open}

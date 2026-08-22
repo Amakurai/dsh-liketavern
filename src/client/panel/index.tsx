@@ -22,12 +22,22 @@ const TABS = [
 
 type TabId = (typeof TABS)[number]['id']
 
+/** 面板重挂（切走再切回设置页）后停在用户上次看的页签。 */
+let lastTab: TabId | undefined
+
 export function TavernPanel(props: { remote: TavernRemote }) {
   const { remote } = props
-  const [tab, setTab] = useState<TabId>('characters')
+  const [tab, setTab] = useState<TabId>(lastTab ?? 'characters')
   return (
     <div className="dsh-tavern-ui dsh-tavern-panel" style={{ width: '100%', maxWidth: '100%', fontSize: 14, boxSizing: 'border-box' }}>
-      <Tabs items={[...TABS]} value={tab} onChange={(id) => setTab(id as TabId)} />
+      <Tabs
+        items={[...TABS]}
+        value={tab}
+        onChange={(id) => {
+          lastTab = id as TabId
+          setTab(id as TabId)
+        }}
+      />
       {tab === 'characters' && <CharactersSection remote={remote} />}
       {tab === 'presets' && <PresetsSection remote={remote} />}
       {tab === 'lorebooks' && <LorebooksSection remote={remote} />}

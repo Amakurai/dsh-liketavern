@@ -4,7 +4,7 @@
  */
 import { useEffect, useState } from 'react'
 import { EMPTY_SESSION_DEFAULTS, type PresetSummary, type TavernRemote, type TavernSettings } from '../types.js'
-import { Btn, Err, Muted, NumInput, Section, Select, SettingsRow, Skeleton, Toggle, runAsync, textarea, useLoader, useToast } from '../util.js'
+import { Btn, CheckChips, Err, Muted, NumInput, Section, Select, SettingsRow, Skeleton, Toggle, runAsync, useLoader, useToast } from '../util.js'
 
 export function SettingsSection(props: { remote: TavernRemote }) {
   const { remote } = props
@@ -114,22 +114,12 @@ export function SettingsSection(props: { remote: TavernRemote }) {
           {lorebooks.length === 0 ? (
             <Muted>库中暂无独立世界书。可在「世界书」页导入，或使用角色卡内嵌书。</Muted>
           ) : (
-            <div className="dsh-tavern-checkList">
-              {lorebooks.map((n) => (
-                <label key={n}>
-                  <input
-                    type="checkbox"
-                    checked={draft.defaults.lorebookIds.includes(n)}
-                    onChange={(e) =>
-                      setDefaults({
-                        lorebookIds: e.target.checked ? [...draft.defaults.lorebookIds, n] : draft.defaults.lorebookIds.filter((x) => x !== n),
-                      })
-                    }
-                  />
-                  {n}
-                </label>
-              ))}
-            </div>
+            <CheckChips
+              ariaLabel="全局世界书"
+              options={lorebooks.map((n) => ({ value: n, label: n }))}
+              selected={draft.defaults.lorebookIds}
+              onChange={(lorebookIds) => setDefaults({ lorebookIds })}
+            />
           )}
         </SettingsRow>
         <div style={{ padding: '12px 0 4px' }}>
@@ -183,7 +173,8 @@ export function SettingsSection(props: { remote: TavernRemote }) {
         </SettingsRow>
         <SettingsRow title="停止序列" description="每行一个。" stacked>
           <textarea
-            style={{ ...textarea, minHeight: 64 }}
+            className="dsh-tavern-input dsh-tavern-textarea dsh-tavern-codeFont"
+            style={{ minHeight: 64 }}
             value={draft.sampling.stop.join('\n')}
             onChange={(e) => setSampling({ stop: e.target.value.split('\n').map((s: string) => s.trim()).filter(Boolean) })}
           />
@@ -200,10 +191,10 @@ export function SettingsSection(props: { remote: TavernRemote }) {
         <SettingsRow title="扫描深度 scanDepth">
           <NumInput value={draft.worldInfo.scanDepth} onChange={(v) => setWorldInfo({ scanDepth: Math.max(0, Math.round(v)) })} />
         </SettingsRow>
-        <SettingsRow title="预算百分比 contextPercent">
+        <SettingsRow title="预算百分比 contextPercent" description="仅当固定预算为 0 时生效；按窗口折算（基数上限 128K），并随历史长度扣减。">
           <NumInput value={draft.worldInfo.contextPercent} onChange={(v) => setWorldInfo({ contextPercent: v })} />
         </SettingsRow>
-        <SettingsRow title="固定 token 预算">
+        <SettingsRow title="固定 token 预算" description="本轮世界书层的绝对上限（默认 3000，优先于百分比）。命中内容每轮走 runtime context 快照、无法命中前缀缓存，请保持克制；被裁条目可用 tavern_lore_read 按条补读。">
           <NumInput value={draft.worldInfo.tokenBudget} onChange={(v) => setWorldInfo({ tokenBudget: Math.max(0, Math.round(v)) })} />
         </SettingsRow>
         <SettingsRow title="最大扫描轮数" description="含首轮：1 = 关闭递归，2 = 首轮加一轮递归，0 = 不限（仅受预算约束）。">
@@ -289,7 +280,8 @@ export function SettingsSection(props: { remote: TavernRemote }) {
           stacked
         >
           <textarea
-            style={{ ...textarea, minHeight: 64 }}
+            className="dsh-tavern-input dsh-tavern-textarea dsh-tavern-codeFont"
+            style={{ minHeight: 64 }}
             value={draft.cardNetworkWhitelist.join('\n')}
             onChange={(e) =>
               setDraft({ ...draft, cardNetworkWhitelist: e.target.value.split('\n').map((s: string) => s.trim()).filter(Boolean) })

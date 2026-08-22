@@ -3,10 +3,10 @@
  * 卡片可键盘触发（clickableProps）；保存/导入/设默认等瞬时反馈走 useToast，上下文错误用 Err。
  */
 import { useState } from 'react'
-import { IconDownloadOutline16, IconEditOutline16, IconFolderOpenOutline16, IconTrashOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconDownloadOutline16, IconEditOutline16, IconFolderOpenOutline16, IconListPenOutline16, IconTrashOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { CardRegexScript, ChatRole, PresetEntry, PromptPreset } from '../../core/types.js'
 import { EMPTY_SESSION_DEFAULTS, type PresetSummary, type TavernRemote } from '../types.js'
-import { Badge, Btn, ConfirmDialog, Err, Field, FileBtn, IconBtn, Muted, NumInput, RegexScriptRow, Section, Select, Skeleton, Toggle, clickableProps, downloadJson, errOf, readJsonFile, runAsync, useLoader, useToast } from '../util.js'
+import { Badge, Btn, ConfirmDialog, Err, Field, FileBtn, IconBtn, Muted, NumInput, RegexScriptRow, SearchEmpty, SearchInput, Section, Select, Skeleton, Toggle, clickableProps, downloadJson, errOf, readJsonFile, runAsync, useLoader, useToast } from '../util.js'
 
 function newEntry(order: number): PresetEntry {
   return {
@@ -101,9 +101,12 @@ export function PresetsSection(props: { remote: TavernRemote }) {
   const [busy, setBusy] = useState(false)
   const [editing, setEditing] = useState<PromptPreset | null>(null)
   const [toDelete, setToDelete] = useState<string | null>(null)
+  const [query, setQuery] = useState('')
   const toast = useToast()
 
   const items: PresetSummary[] = state.status === 'ready' ? state.value.items : []
+  const q = query.trim().toLowerCase()
+  const filtered = q === '' ? items : items.filter((p) => p.name.toLowerCase().includes(q) || p.id.toLowerCase().includes(q))
 
   const open = async (id: string) => {
     setError(null)
@@ -221,12 +224,15 @@ export function PresetsSection(props: { remote: TavernRemote }) {
         </FileBtn>
         <Btn size="md" onClick={createNew}>新建预设</Btn>
         <Btn size="md" onClick={reload} disabled={busy}>刷新</Btn>
+        {items.length >= 5 && (
+          <SearchInput label="搜索预设" value={query} onChange={setQuery} placeholder="搜索预设名 / 标识" width={220} />
+        )}
       </div>
       {state.status === 'loading' && (
-        <div className="dsh-tavern-cards">
-          <Skeleton height={96} />
-          <Skeleton height={96} />
-          <Skeleton height={96} />
+        <div className="dsh-tavern-list">
+          <Skeleton height={62} radius={14} />
+          <Skeleton height={62} radius={14} />
+          <Skeleton height={62} radius={14} />
         </div>
       )}
       {state.status === 'error' && <Err message={state.message} />}
@@ -240,17 +246,23 @@ export function PresetsSection(props: { remote: TavernRemote }) {
           <div className="dsh-tavern-emptyDesc">未绑定时使用内建默认预设；也可以导入 SillyTavern 预设 JSON。</div>
         </div>
       )}
-      <div className="dsh-tavern-cards" style={{ marginBottom: 12 }}>
-        {items.map((item) => (
-          <article key={item.id} className="dsh-tavern-card is-clickable" {...clickableProps(() => void open(item.id))}>
-            <div className="dsh-tavern-cardHead">
-              <div className="dsh-tavern-cardName">{item.name}</div>
-              <Badge>预设</Badge>
-              {item.regexCount > 0 ? <Badge>{item.regexCount} 条正则</Badge> : null}
+      {q !== '' && filtered.length === 0 && state.status === 'ready' && (
+        <SearchEmpty what="预设" query={query.trim()} onClear={() => setQuery('')} />
+      )}
+      <div className="dsh-tavern-list" style={{ marginBottom: 12 }}>
+        {filtered.map((item) => (
+          <div key={item.id} className="dsh-tavern-tile" {...clickableProps(() => void open(item.id))}>
+            <span className="dsh-tavern-tileIcon">
+              <IconListPenOutline16 size={18} />
+            </span>
+            <div className="dsh-tavern-tileMain">
+              <div className="dsh-tavern-tileTitleRow">
+                <span className="dsh-tavern-tileName">{item.name}</span>
+                {item.regexCount > 0 ? <Badge>{item.regexCount} 条正则</Badge> : null}
+              </div>
+              <span className="dsh-tavern-tileSub">{item.id}</span>
             </div>
-            <p className="dsh-tavern-cardDesc">点开后可开关条目。正则随预设导入，不在此编辑。</p>
-            <div className="dsh-tavern-cardFoot">
-              <span className="dsh-tavern-cardMeta">{item.id}</span>
+            <div className="dsh-tavern-tileActions">
               <IconBtn label="编辑" onClick={() => void open(item.id)}>
                 <IconEditOutline16 />
               </IconBtn>
@@ -262,7 +274,7 @@ export function PresetsSection(props: { remote: TavernRemote }) {
                 <IconTrashOutline16 />
               </IconBtn>
             </div>
-          </article>
+          </div>
         ))}
       </div>
       <ConfirmDialog

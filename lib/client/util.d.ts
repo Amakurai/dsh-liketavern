@@ -56,6 +56,7 @@ export declare function Tabs(props: {
 }): any;
 export declare function Badge(props: {
     accent?: boolean;
+    danger?: boolean;
     children?: ReactNode;
 }): any;
 /**
@@ -92,6 +93,30 @@ export declare function SettingsRow(props: {
 export declare function Field(props: {
     label: string;
     children?: ReactNode;
+}): any;
+/** 列表搜索框（36px 胶囊 + 前导图标），配合面板里的关键字过滤。 */
+export declare function SearchInput(props: {
+    label: string;
+    value: string;
+    onChange: (value: string) => void;
+    placeholder?: string;
+    width?: number | string;
+}): any;
+/** 列表搜索的空结果态：与各面板空态同一套样式，附「清空搜索」动作。 */
+export declare function SearchEmpty(props: {
+    what: string;
+    query: string;
+    onClear: () => void;
+}): any;
+/** 多选 chip 组（替代复选框列表）：点击把选项切进/切出 selected，选中带对勾前缀。 */
+export declare function CheckChips(props: {
+    options: {
+        value: string;
+        label: string;
+    }[];
+    selected: readonly string[];
+    onChange: (next: string[]) => void;
+    ariaLabel?: string;
 }): any;
 export declare function Err(props: {
     message: string | null;
@@ -157,14 +182,14 @@ export declare function fileToBase64(file: File): Promise<string>;
 export declare function readJsonFile(file: File): Promise<unknown>;
 export declare function downloadJson(filename: string, json: unknown): void;
 export declare function downloadBase64(filename: string, base64: string, mime: string): void;
-/** primitives Modal 的薄封装（统一中文关闭文案）；width 档：sm 380（默认）/ md 480 / lg 680。 */
+/** primitives Modal 的薄封装（统一中文关闭文案）；width 档：sm 380（默认）/ md 480 / lg 680 / xl 880。 */
 export declare function Dialog(props: {
     open: boolean;
     title: string;
     description?: string;
     onClose: () => void;
     footer?: ReactNode;
-    width?: 'sm' | 'md' | 'lg';
+    width?: 'sm' | 'md' | 'lg' | 'xl';
     children?: ReactNode;
 }): any;
 export declare function ConfirmDialog(props: {

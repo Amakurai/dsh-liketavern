@@ -108,7 +108,7 @@ export function TavernAssistantNode(props: {
             })
           }}
         />
-        {interrupted && <div style={{ opacity: 0.7, fontSize: 13 }}>{t?.('message.stopped') ?? '已停止'}</div>}
+        {interrupted && <div className="dsh-tavern-notice">{t?.('message.stopped') ?? '已停止'}</div>}
       </div>
     )
   }

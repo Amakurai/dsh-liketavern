@@ -243,11 +243,13 @@ export function LorebookEditor(props: {
           <div className="dsh-tavern-cardName" style={{ fontSize: 15 }}>
             {target.name}
           </div>
-          <Muted>
-            {targetKindLabel(target.kind)} · {entries.length} 条 · 启用 {enabledCount}
-            {constantCount > 0 ? ` · 常驻 ${constantCount}` : ''}
-            {dirty ? ' · 未保存' : ''}
-          </Muted>
+          <div className="dsh-tavern-editorMeta">
+            <Muted>
+              {targetKindLabel(target.kind)} · {entries.length} 条 · 启用 {enabledCount}
+              {constantCount > 0 ? ` · 常驻 ${constantCount}` : ''}
+            </Muted>
+            {dirty ? <Badge accent>未保存</Badge> : null}
+          </div>
         </div>
         <Btn size="md" onClick={addEntry}>
           新建条目

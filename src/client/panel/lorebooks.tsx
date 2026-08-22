@@ -7,7 +7,7 @@ import { IconDownloadOutline16, IconEditOutline16, IconFolderOpenOutline16, Icon
 import type { WorldInfoEntry } from '../../core/types.js'
 import { parseLorebook } from '../../state/lorebook.js'
 import type { CharacterSummary, TavernRemote } from '../types.js'
-import { Badge, Btn, ConfirmDialog, Dialog, Err, FileBtn, IconBtn, Section, Skeleton, clickableProps, downloadJson, errOf, readJsonFile, runAsync, useLoader, useToast } from '../util.js'
+import { Badge, Btn, ConfirmDialog, Dialog, Err, FileBtn, IconBtn, SearchEmpty, SearchInput, Section, Skeleton, clickableProps, downloadJson, errOf, readJsonFile, runAsync, useLoader, useToast } from '../util.js'
 import { LorebookEditor, type LorebookTarget } from './lorebookEditor.js'
 
 type Opened = { target: LorebookTarget; entries: WorldInfoEntry[] }
@@ -29,6 +29,13 @@ export function LorebooksSection(props: { remote: TavernRemote }) {
   const names = state.status === 'ready' ? state.value.items : []
   const charItems: CharacterSummary[] = chars.state.status === 'ready' ? chars.state.value.items : []
   const charBooks = charItems.filter((c) => c.hasCharacterBook)
+  // 关键词同时过滤「角色卡内嵌」与「世界书库」两组；书多到要滚动找时才出搜索框。
+  const [query, setQuery] = useState('')
+  const q = query.trim().toLowerCase()
+  const matchBook = (label: string) => q === '' || label.toLowerCase().includes(q)
+  const shownCharBooks = q === '' ? charBooks : charBooks.filter((c) => matchBook(c.characterBookName || c.name) || c.name.toLowerCase().includes(q))
+  const shownNames = q === '' ? names : names.filter(matchBook)
+  const totalBooks = charBooks.length + names.length
 
   const openLibrary = async (name: string) => {
     setError(null)
@@ -186,36 +193,45 @@ export function LorebooksSection(props: { remote: TavernRemote }) {
         >
           刷新
         </Btn>
+        {totalBooks >= 5 && (
+          <SearchInput label="搜索世界书" value={query} onChange={setQuery} placeholder="搜索书名 / 角色名" width={220} />
+        )}
       </div>
       {(state.status === 'loading' || opening) && (
-        <div className="dsh-tavern-cards">
-          <Skeleton height={96} />
-          <Skeleton height={96} />
-          <Skeleton height={96} />
+        <div className="dsh-tavern-list">
+          <Skeleton height={62} radius={14} />
+          <Skeleton height={62} radius={14} />
+          <Skeleton height={62} radius={14} />
         </div>
       )}
       {state.status === 'error' && <Err message={state.message} />}
       <Err message={error} />
+      {q !== '' && shownCharBooks.length === 0 && shownNames.length === 0 && state.status === 'ready' && chars.state.status === 'ready' && (
+        <SearchEmpty what="世界书" query={query.trim()} onClear={() => setQuery('')} />
+      )}
 
-      {charBooks.length > 0 && (
+      {shownCharBooks.length > 0 && (
         <>
           <div className="dsh-tavern-groupHead">角色卡内嵌</div>
-          <div className="dsh-tavern-cards">
-            {charBooks.map((item) => (
-              <article
-                key={item.cardId}
-                className="dsh-tavern-card is-clickable"
-                {...clickableProps(() => void openCharacter(item))}
-              >
-                <div className="dsh-tavern-cardHead">
-                  <div className="dsh-tavern-cardName">{item.characterBookName || item.name}</div>
-                  <Badge>内嵌</Badge>
-                </div>
-                <p className="dsh-tavern-cardDesc">来自角色「{item.name}」。点开后按条目开关与编辑。</p>
-                <div className="dsh-tavern-cardFoot">
-                  <span className="dsh-tavern-cardMeta">
-                    {typeof item.characterBookEntryCount === 'number' ? `${item.characterBookEntryCount} 条` : '条目'}
+          <div className="dsh-tavern-list">
+            {shownCharBooks.map((item) => (
+              <div key={item.cardId} className="dsh-tavern-tile" {...clickableProps(() => void openCharacter(item))}>
+                <span className="dsh-tavern-tileIcon">
+                  <IconFolderOpenOutline16 size={18} />
+                </span>
+                <div className="dsh-tavern-tileMain">
+                  <div className="dsh-tavern-tileTitleRow">
+                    <span className="dsh-tavern-tileName">{item.characterBookName || item.name}</span>
+                    <Badge>内嵌</Badge>
+                  </div>
+                  <span className="dsh-tavern-tileSub">
+                    来自角色「{item.name}」
+                    {typeof item.characterBookEntryCount === 'number' && item.characterBookEntryCount > 0
+                      ? ` · ${item.characterBookEntryCount} 条`
+                      : ''}
                   </span>
+                </div>
+                <div className="dsh-tavern-tileActions">
                   <IconBtn label="编辑条目" onClick={() => void openCharacter(item)}>
                     <IconEditOutline16 />
                   </IconBtn>
@@ -223,34 +239,40 @@ export function LorebooksSection(props: { remote: TavernRemote }) {
                     <IconTrashOutline16 />
                   </IconBtn>
                 </div>
-              </article>
+              </div>
             ))}
           </div>
         </>
       )}
 
       <div className="dsh-tavern-groupHead">世界书库</div>
-      {names.length === 0 && state.status === 'ready' ? (
-        <div className="dsh-tavern-empty">
-          <div className="dsh-tavern-emptyIcon">
-            <IconFolderOpenOutline16 size={32} />
+      {shownNames.length === 0 && state.status === 'ready' ? (
+        q === '' ? (
+          <div className="dsh-tavern-empty">
+            <div className="dsh-tavern-emptyIcon">
+              <IconFolderOpenOutline16 size={32} />
+            </div>
+            <div className="dsh-tavern-emptyTitle">暂无独立世界书</div>
+            <div className="dsh-tavern-emptyDesc">
+              {charBooks.length > 0 ? '卡内嵌书见上方分组。' : '导入角色卡或 JSON，也可以新建一本空书。'}
+            </div>
           </div>
-          <div className="dsh-tavern-emptyTitle">暂无独立世界书</div>
-          <div className="dsh-tavern-emptyDesc">
-            {charBooks.length > 0 ? '卡内嵌书见上方分组。' : '导入角色卡或 JSON，也可以新建一本空书。'}
-          </div>
-        </div>
+        ) : null
       ) : (
-        <div className="dsh-tavern-cards">
-          {names.map((name) => (
-            <article key={name} className="dsh-tavern-card is-clickable" {...clickableProps(() => void openLibrary(name))}>
-              <div className="dsh-tavern-cardHead">
-                <div className="dsh-tavern-cardName">{name}</div>
-                <Badge>库</Badge>
+        <div className="dsh-tavern-list">
+          {shownNames.map((name) => (
+            <div key={name} className="dsh-tavern-tile" {...clickableProps(() => void openLibrary(name))}>
+              <span className="dsh-tavern-tileIcon">
+                <IconFolderOpenOutline16 size={18} />
+              </span>
+              <div className="dsh-tavern-tileMain">
+                <div className="dsh-tavern-tileTitleRow">
+                  <span className="dsh-tavern-tileName">{name}</span>
+                  <Badge>库</Badge>
+                </div>
+                <span className="dsh-tavern-tileSub">独立世界书文件 · JSON</span>
               </div>
-              <p className="dsh-tavern-cardDesc">独立世界书文件。点开后按条目管理启用状态与内容。</p>
-              <div className="dsh-tavern-cardFoot">
-                <span className="dsh-tavern-cardMeta">{name}</span>
+              <div className="dsh-tavern-tileActions">
                 <IconBtn label="编辑条目" onClick={() => void openLibrary(name)}>
                   <IconEditOutline16 />
                 </IconBtn>
@@ -261,7 +283,7 @@ export function LorebooksSection(props: { remote: TavernRemote }) {
                   <IconTrashOutline16 />
                 </IconBtn>
               </div>
-            </article>
+            </div>
           ))}
         </div>
       )}

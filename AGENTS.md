@@ -38,7 +38,7 @@ live 路径不把整包 ST 预设塞进 system。`assemblePrompt` 按 Prompt Man
 
 | 通道 | dsh 落点 | 内容 | 稳定性 |
 | --- | --- | --- | --- |
-| standing | system 段 `tavern:standing`（order 210，工具说明 100–199 之后） | `BOUND_DISCIPLINE` + 角色定义 + 预设骨架 + 常驻世界书 | 绑定不变则按会话 × 生成场景钉死字节（`STANDING_PIN_VERSION` + generationType + 卡/预设/人设指纹 + 资产修订号）。纪律或段布局变了必须递增版本，否则进程内旧钉死会挡住新文案。编辑/删除预设与世界书经 `TavernState` 写方法 bump 修订号（`standingRevTags`）。绕开 TavernState 手改文件不会被捕获。 |
+| standing | system 段 `tavern:standing`（order 210，工具说明 100–199 之后） | `BOUND_DISCIPLINE` + 角色定义 + 预设骨架 + 常驻世界书 + 静态深度注入（无本轮宏的 in-chat 条目 / depth_prompt） | 绑定不变则按会话 × 生成场景钉死字节（`STANDING_PIN_VERSION` + generationType + 卡/预设/人设指纹 + 资产修订号）。纪律或段布局变了必须递增版本，否则进程内旧钉死会挡住新文案。编辑/删除预设与世界书经 `TavernState` 写方法 bump 修订号（`standingRevTags`）。绕开 TavernState 手改文件不会被捕获。 |
 | turn | runtime context `tavern:turn` | 固定 `TURN_PLAYBOOK`（不随 step 变）+ 关键词世界书/记忆/变化层/AN/本轮宏 | dsh 追加成 user 快照（`Current runtime context.`），盖住更早的同名快照；宿主对快照按字节去重——同轮后续步骤快照不变则不再追加（多步零快照开销）。步骤收口压力走 `【Tavern 步骤】` inject（见下）。 |
 | messages | 仅「预览提示词」 | 完整 ST 序列（含 @D 真实插历史位置） | live 请求插不进会话日志中间；排查以预览为准。 |
 
@@ -160,7 +160,7 @@ src/
 ## 平台限制（开发者视角；用户向简版见 README「平台限制」一节）
 
 1. 采样只透传 `temperature` / `maxTokens` / `stop`，以及模型公布的 `reasoningEffort`（Tavern「深度思考」关 → `off`；低/高档仅在模型公布时显式指定）。`top_p` 和 penalty 到不了模型，设置面板仅作记录。
-2. @D 与作者注释在实际请求中并入 system 尾部。预览才是完整 ST 序列（不含 live playbook）。
+2. 深度注入（@D / depth_prompt / 预设 in-chat）在实际请求中插不进会话日志中间：触发型（含本轮宏）并入 turn 快照尾部，静态的并入 standing（system 段内，钉死）。预览才是完整 ST 序列（不含 live playbook）。
 3. 会话日志不可删。重新生成/回退/编辑 = fork 前缀 + WAL 回滚 + 子会话续跑，成功后 UI 打开分支会话，并用宿主 `ISessions` 的 `scope → sessionOf → rename` 把 host 给的分支标题写进会话列表（旧宿主缺这条路径则跳过）。编辑 assistant 正文只换 seed 里的该条消息、不续跑。例外：续写（`continueFloor`）不改历史，不 fork，直接 followup 合成指令。同一父会话 + 同一楼层 fork 出的分支互为兄弟：forkAt 记 `siblings.json`，操作条给 ‹ n/m › 兄弟导航（`getFloorSiblings`，读时按 live/绑定文件过滤已删分支）。rc.2 起会话头另有宿主原生面包屑（按 fork 时写入的 `meta.parentSession` 算世系，`conversation.session.header.lineage` 由 subagent 插件占位渲染）：那是会话级世系，与楼层级 ‹ n/m › 互补，不要去替换那个 slot。
 4. 操作条 slot 只在 assistant 消息上。「编辑用户消息」/续写/代答都挂在 assistant 楼层。dsh 输入区没有插件可写 API，impersonate 结果只能复制到剪贴板。
 5. 同一角色卡多会话并发写入会交错（工作区与 WAL 以卡为单位共享）。这是已知边界，不要去「修」。

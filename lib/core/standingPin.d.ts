@@ -13,7 +13,7 @@
  * 骨架可能不同，场景并入指纹且各自占一个钉位——同一会话内场景交替时各自复用本场景首次
  * 钉死的字节，既不互相覆盖重算，也不会让 continue 轮拿到 normal 轮钉死的文本。
  */
-export declare const STANDING_PIN_VERSION = 6;
+export declare const STANDING_PIN_VERSION = 7;
 /** 场景值归一化：空/缺省视为 normal（与 assemble.ts 的 generationType 缺省一致）。 */
 export declare function normalizeGenerationType(generationType?: string): string;
 /** 钉死键：会话 × 生成场景。 */

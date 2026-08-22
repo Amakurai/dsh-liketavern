@@ -31,8 +31,8 @@
  *
  * 输出三通道（dsh 不复制 ST「每轮整包塞进 system」）：
  * - `messages`：SillyTavern 语义全量序列（预览/调试）。
- * - `standing`：缓存稳定前缀——角色定义 + 预设骨架 + 常驻世界书（无脚本/记忆/时钟）。
- * - `turnContext`：本轮才变的触发层——关键词世界书、记忆、变化层、AN、本轮宏。
+ * - `standing`：缓存稳定前缀——角色定义 + 预设骨架 + 常驻世界书 + 静态深度注入（无脚本/记忆/时钟）。
+ * - `turnContext`：本轮才变的触发层——关键词世界书、记忆、变化层、AN、本轮宏、触发型 @D。
  * - `system`：standing + turnContext 的合并（预览/兼容旧调用方）。
  * live 路径把 standing 写入 system 段（order 210，在工具说明之后）、
  * turnContext 写入 runtime context；standing 再按会话指纹钉死字节。
@@ -129,6 +129,8 @@ interface DepthInjection {
   order: number
   role: ChatRole
   content: string
+  /** 本轮才变（触发型世界书/含本轮宏）= true；静态内容 = false（live 侧进 standing 钉死）。 */
+  turn: boolean
 }
 
 const CLOCK_FROZEN = { time: '', date: '', datetime: '', weekday: '' } as const
@@ -250,10 +252,14 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
     return out
   }
   const expandTurn = (text: string) => expandMacros(text, macroCtx)
-  const turnContents = new Set<string>()
-  const markTurn = (content: string) => {
-    if (content.trim()) turnContents.add(content)
-    return content
+  /**
+   * turn 侧消息按对象身份追踪，不按内容字节：两条展开后同字节的消息若分属 standing/turn，
+   * 按字节匹配会把 standing 那条误踢进每轮重付的 turn 层（前缀缓存白丢）。
+   */
+  const turnMessages = new Set<ChatMessage>()
+  const asTurn = <T extends ChatMessage>(message: T): T => {
+    if (message.content.trim()) turnMessages.add(message)
+    return message
   }
   const skippedScripts = new Set<string>()
   const memoryPromptMessages = new Set<ChatMessage>()
@@ -297,7 +303,7 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
     const { standing, turn } = wiChunks(pos)
     const out: ChatMessage[] = []
     if (standing) out.push(trackedMessage(role, standing, worldInfoPromptMessages))
-    if (turn) out.push(trackedMessage(role, markTurn(turn), worldInfoPromptMessages))
+    if (turn) out.push(asTurn(trackedMessage(role, turn, worldInfoPromptMessages)))
     return out
   }
   const wiText = (pos: WIPosition): string => {
@@ -321,8 +327,7 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
       .map((delta) => expandTurn(formatDelta(delta))),
   )
   const memoryText = joinContents(input.memories.map((m) => expandTurn(m)))
-  if (deltaText) markTurn(deltaText)
-  if (memoryText) markTurn(memoryText)
+  // 记忆/变化层永远进 turn：在创建消息处（markerContent / insertFallbackMarkers）按对象标记。
 
   const markerContent = (id: string, role: ChatRole): ChatMessage[] | null => {
     switch (id) {
@@ -351,10 +356,10 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
         const after = wiChunks(WIPosition.AfterExampleMessages)
         const out: ChatMessage[] = []
         if (before.standing) out.push(trackedMessage(role, before.standing, worldInfoPromptMessages))
-        if (before.turn) out.push(trackedMessage(role, markTurn(before.turn), worldInfoPromptMessages))
+        if (before.turn) out.push(asTurn(trackedMessage(role, before.turn, worldInfoPromptMessages)))
         out.push(...blocks.map((b) => trackedMessage(role, expandStanding(b), examplePromptMessages)))
         if (after.standing) out.push(trackedMessage(role, after.standing, worldInfoPromptMessages))
-        if (after.turn) out.push(trackedMessage(role, markTurn(after.turn), worldInfoPromptMessages))
+        if (after.turn) out.push(asTurn(trackedMessage(role, after.turn, worldInfoPromptMessages)))
         return out
       }
       case Marker.PersonaDescription:
@@ -362,9 +367,9 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
           ? [trackedMessage(role, expandStanding(input.personaDescription), characterDefinitionMessages)]
           : []
       case Marker.AgentMemory:
-        return memoryText ? [trackedMessage(role, memoryText, memoryPromptMessages)] : []
+        return memoryText ? [asTurn(trackedMessage(role, memoryText, memoryPromptMessages))] : []
       case Marker.WorldState:
-        return deltaText ? [trackedMessage(role, deltaText, worldStatePromptMessages)] : []
+        return deltaText ? [asTurn(trackedMessage(role, deltaText, worldStatePromptMessages))] : []
       default:
         log.push({ kind: 'unknown-marker', detail: id })
         return []
@@ -401,11 +406,11 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
     if (insertedFallbackMarkers) return
     insertedFallbackMarkers = true
     if (memoryText && !presentMarkerIds.has(Marker.AgentMemory)) {
-      beforeHistory.push(trackedMessage('system', memoryText, memoryPromptMessages))
+      beforeHistory.push(asTurn(trackedMessage('system', memoryText, memoryPromptMessages)))
       log.push({ kind: 'auto-marker', detail: '预设缺少 agentMemory marker，已在 chatHistory 前自动注入检索记忆' })
     }
     if (deltaText && !presentMarkerIds.has(Marker.WorldState)) {
-      beforeHistory.push(trackedMessage('system', deltaText, worldStatePromptMessages))
+      beforeHistory.push(asTurn(trackedMessage('system', deltaText, worldStatePromptMessages)))
       log.push({ kind: 'auto-marker', detail: '预设缺少 worldState marker，已在 chatHistory 前自动注入世界状态' })
     }
   }
@@ -426,8 +431,9 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
     const turnLocal = hasTurnLocalMacros(entry.content)
     const text = (turnLocal ? expandTurn(entry.content) : expandStanding(entry.content)).trim()
     if (!text) continue // setvar/注释/trim 预处理后为空，不进模型
-    if (turnLocal) markTurn(text)
-    bucket.push({ role: entry.role, content: text })
+    const message: ChatMessage = { role: entry.role, content: text }
+    if (turnLocal) turnMessages.add(message)
+    bucket.push(message)
   }
   // 没有 chatHistory marker 时，组装器仍会在骨架后追加历史；动态私有层紧贴该边界。
   if (!seenHistory) insertFallbackMarkers()
@@ -466,10 +472,11 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
         continue
       }
       // 其余内容 marker：对齐 ST「系统提示合并时继承 marker 的 injection_*」，解析内容按 depth 注入。
+      // 每条解析结果的 turn 归属随 markerContent 创建时的标记走（静态 marker 内容 = 静态注入）。
       const resolved = markerContent(id, entry.role)
       if (resolved === null || resolved.length === 0) continue
       for (const m of resolved) {
-        depthInjections.push({ depth: entry.depth, order: entry.order, role: m.role, content: m.content })
+        depthInjections.push({ depth: entry.depth, order: entry.order, role: m.role, content: m.content, turn: turnMessages.has(m) })
       }
       continue
     }
@@ -478,51 +485,52 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
     const turnLocal = hasTurnLocalMacros(entry.content)
     const content = (turnLocal ? expandTurn(entry.content) : expandStanding(entry.content)).trim()
     if (!content) continue
-    if (turnLocal) markTurn(content)
-    depthInjections.push({ depth: entry.depth, order: entry.order, role: entry.role, content })
+    depthInjections.push({ depth: entry.depth, order: entry.order, role: entry.role, content, turn: turnLocal })
   }
   for (const a of wiAt(WIPosition.AtDepth)) {
     if (skipScript(`世界书 @D「${a.entry.key}」`, a.entry.content)) continue
     const content = expandTurn(a.entry.content).trim()
     if (!content) continue
-    markTurn(content)
     depthInjections.push({
       depth: a.entry.depth,
       order: a.entry.order,
       role: WI_ROLE_MAP[a.entry.role],
       content,
+      turn: true, // 触发型世界书本轮命中才注入，永远进 turn
     })
   }
   const depthPrompt = input.card?.depthPrompt
   if (depthPrompt?.prompt.trim()) {
     if (!skipScript('角色 depth_prompt', depthPrompt.prompt)) {
-      const content = expandTurn(depthPrompt.prompt).trim()
+      // 静态 depth_prompt（无本轮宏）进 standing 钉死，不再每轮全价重付。
+      const turnLocal = hasTurnLocalMacros(depthPrompt.prompt)
+      const content = (turnLocal ? expandTurn(depthPrompt.prompt) : expandStanding(depthPrompt.prompt)).trim()
       if (content) {
-        markTurn(content)
         depthInjections.push({
           depth: depthPrompt.depth,
           order: 0,
           role: depthPrompt.role,
           content,
+          turn: turnLocal,
         })
       }
     }
   }
   // AN bottom：全序列最末；AN top：历史之前
   const anTop = wiText(WIPosition.AuthorNoteTop)
-  if (anTop) beforeHistory.push(trackedMessage('system', markTurn(anTop), worldInfoPromptMessages))
+  if (anTop) beforeHistory.push(asTurn(trackedMessage('system', anTop, worldInfoPromptMessages)))
   const sessionNote = input.authorNote?.trim() ? expandTurn(input.authorNote).trim() : ''
-  if (sessionNote) beforeHistory.push(trackedMessage('system', markTurn(`【作者注释】${sessionNote}`), worldInfoPromptMessages))
+  if (sessionNote) beforeHistory.push(asTurn(trackedMessage('system', `【作者注释】${sessionNote}`, worldInfoPromptMessages)))
   const journalNote = input.journalText?.trim() ? expandTurn(input.journalText).trim() : ''
-  if (journalNote) beforeHistory.push(trackedMessage('system', markTurn(`【角色笔记】${journalNote}`), worldInfoPromptMessages))
+  if (journalNote) beforeHistory.push(asTurn(trackedMessage('system', `【角色笔记】${journalNote}`, worldInfoPromptMessages)))
   const anBottom = wiText(WIPosition.AuthorNoteBottom)
   const anBottomMessage = anBottom
-    ? trackedMessage('system', markTurn(anBottom), worldInfoPromptMessages)
+    ? asTurn(trackedMessage('system', anBottom, worldInfoPromptMessages))
     : null
 
   if (skippedScripts.size > 0) {
     const note = `（已跳过 ${skippedScripts.size} 条未展开的脚本条目；需要设定细节时用 tavern_lore_read 按 uid/关键词取条。）`
-    afterHistory.push({ role: 'system', content: markTurn(note) })
+    afterHistory.push(asTurn({ role: 'system', content: note }))
   }
 
   // 世界书预算截断对模型可见：硬顶从「静默丢信息」变成「分页」——被裁条目以 uid 清单
@@ -533,7 +541,7 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
     const list = shown.map((t) => (t.label === t.uid ? t.uid : `${t.uid}「${t.label}」`)).join('、')
     const rest = truncated.length - shown.length
     const note = `（本轮世界书有 ${truncated.length} 条命中但因预算未注入：${list}${rest > 0 ? ` 等 ${rest} 条` : ''}；需要正文用 tavern_lore_read 按 uid 取条。）`
-    afterHistory.push({ role: 'system', content: markTurn(note) })
+    afterHistory.push(asTurn({ role: 'system', content: note }))
   }
 
   // ── 6. 历史内插入（深 depth 先插，同 depth order 升序） ─────────────────
@@ -552,7 +560,12 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
 
   // ── 7. 全量序列与预算裁剪（历史最后裁） ──────────────────────────────────
   const tail: ChatMessage[] = [
-    ...depth0.map((d) => ({ role: d.role, content: d.content })),
+    ...depth0.map((d) => {
+      const message: ChatMessage = { role: d.role, content: d.content }
+      // tail 是新建对象，turn 归属从注入记录显式转标记（身份追踪见 turnMessages）。
+      if (d.turn) turnMessages.add(message)
+      return message
+    }),
     ...(anBottomMessage ? [anBottomMessage] : []),
     ...afterHistory,
   ]
@@ -597,12 +610,18 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
 
   // ── 8. dsh 通道：standing（稳定前缀）与 turnContext（本轮触发层）分开 ──
   const outsideHistory = [...beforeHistory, ...tail]
-  const standing = joinPromptParts(outsideHistory.filter((m) => !turnContents.has(m.content)).map((m) => m.content))
-  // 插进历史中间的 @D / depth_prompt / in-chat 预览能看到；live 不能改日志，并入 turn 尾。
-  const splicedLive = depthInjections.filter((d) => d.depth !== 0).map((d) => d.content)
+  // 插进历史中间的注入（@D / depth_prompt / 预设 in-chat）预览能看到；live 不能改日志，
+  // 静态的（无本轮宏）并入 standing 钉死——字节稳定、命中前缀缓存，不再每轮全价重付；
+  // 本轮才变的并入 turn 尾。
+  const splicedStanding = depthInjections.filter((d) => d.depth !== 0 && !d.turn).map((d) => d.content)
+  const splicedTurn = depthInjections.filter((d) => d.depth !== 0 && d.turn).map((d) => d.content)
+  const standing = joinPromptParts([
+    ...outsideHistory.filter((m) => !turnMessages.has(m)).map((m) => m.content),
+    ...splicedStanding,
+  ])
   const turnContext = joinPromptParts([
-    ...outsideHistory.filter((m) => turnContents.has(m.content)).map((m) => m.content),
-    ...splicedLive,
+    ...outsideHistory.filter((m) => turnMessages.has(m)).map((m) => m.content),
+    ...splicedTurn,
   ])
   const system = joinPromptParts([standing, turnContext])
 

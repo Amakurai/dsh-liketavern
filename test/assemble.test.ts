@@ -11,7 +11,8 @@
  * 世界状态按 keys 触发且不与世界书位置重复注入、in-chat 内容 marker 按 depth 注入、
  * {{original}} 引用预设 main/jailbreak 原文、forbid_overrides 拒绝卡级覆盖、
  * injection_trigger 按生成场景过滤、卡字段宏（description/scenario/persona/charFirstMessage）、
- * {{lastCharMessage}} 进 turn 不打穿 standing。
+ * {{lastCharMessage}} 进 turn 不打穿 standing、静态深度注入（in-chat/depth_prompt）进 standing
+ * 而含本轮宏的进 turnContext、standing/turn 同字节内容按消息身份互不误踢。
  */
 import { describe, expect, it } from 'vitest'
 import { assemblePrompt, defaultPreset, splitExampleMessages, type AssembleInput } from '../src/core/assemble.js'
@@ -436,6 +437,56 @@ describe('深度注入', () => {
     expect(res.messages.some((message) => message.content === '')).toBe(false)
   })
 
+  it('静态 in-chat 条目进 standing 钉死，不再每轮进 turnContext 全价重付', () => {
+    const preset = defaultPreset()
+    preset.entries.push(presetEntry({ identifier: 'inj-static', position: 'in-chat', depth: 1, order: 10, content: 'STATIC-INJ' }))
+    const res = assemblePrompt(makeInput({ preset }))
+    // 预览仍在历史中间的 depth 位置
+    const cs = contents(res.messages)
+    expect(cs.indexOf('STATIC-INJ')).toBe(cs.indexOf('h1') - 1)
+    // live 通道：静态内容并入 standing（缓存稳定前缀），不占每轮重付的 turn 尾
+    expect(res.standing).toContain('STATIC-INJ')
+    expect(res.turnContext).not.toContain('STATIC-INJ')
+  })
+
+  it('含本轮宏的 in-chat 条目仍进 turnContext，不进 standing', () => {
+    const preset = defaultPreset()
+    preset.entries.push(presetEntry({ identifier: 'inj-turn', position: 'in-chat', depth: 1, order: 10, content: 'TURN-INJ {{lastusermessage}}' }))
+    const res = assemblePrompt(makeInput({ preset }))
+    expect(res.turnContext).toContain('TURN-INJ h0')
+    expect(res.standing).not.toContain('TURN-INJ')
+  })
+
+  it('静态 depth_prompt 进 standing；含本轮宏的 depth_prompt 进 turnContext', () => {
+    const staticCard = makeCard({ depthPrompt: { prompt: 'DP-STATIC', depth: 2, role: 'system' } })
+    const a = assemblePrompt(makeInput({ card: staticCard }))
+    expect(a.standing).toContain('DP-STATIC')
+    expect(a.turnContext).not.toContain('DP-STATIC')
+
+    const turnCard = makeCard({ depthPrompt: { prompt: 'DP-TURN {{time}}', depth: 2, role: 'system' } })
+    const b = assemblePrompt(makeInput({ card: turnCard }))
+    expect(b.turnContext).toContain('DP-TURN')
+    expect(b.standing).not.toContain('DP-TURN')
+  })
+
+  it('in-chat 内容 marker 的静态解析内容随 marker 归属进 standing', () => {
+    const preset = defaultPreset()
+    preset.entries = preset.entries.filter((e) => e.markerId !== Marker.Scenario)
+    preset.entries.push(presetEntry({ identifier: 'scen-inchat', marker: true, markerId: Marker.Scenario, position: 'in-chat', depth: 1 }))
+    const res = assemblePrompt(makeInput({ preset }))
+    expect(res.standing).toContain('SCEN')
+    expect(res.turnContext).not.toContain('SCEN')
+  })
+
+  it('standing 与 turn 同字节内容不互相误踢（turn 按消息对象身份追踪）', () => {
+    // 静态骨架条目与本轮检索记忆恰好同文：按字节匹配会把 standing 那条误踢进 turn
+    const preset = defaultPreset()
+    preset.entries.push(presetEntry({ identifier: 'dup', content: 'SAME-TEXT', order: 95 }))
+    const res = assemblePrompt(makeInput({ preset, memories: ['SAME-TEXT'] }))
+    expect(res.standing).toContain('SAME-TEXT')
+    expect(res.turnContext).toContain('SAME-TEXT')
+  })
+
   it('outlet 内容经 {{outlet::Name}} 注入并展开', () => {
     const wi = wiOf({}, { stats: [act(makeWiEntry({ key: 'o', content: 'HP 10 {{char}}' }))] })
     const preset = defaultPreset()
@@ -768,12 +819,12 @@ describe('prompt 作用域正则', () => {
 })
 
 describe('depth_prompt / 作者注释 / 角色笔记', () => {
-  it('depth_prompt 预览插历史且并入 turnContext，不进 standing', () => {
+  it('静态 depth_prompt 预览插历史且并入 standing 钉死，不进 turnContext', () => {
     const card = makeCard({ depthPrompt: { prompt: 'DP-{{char}}', depth: 1, role: 'system' } })
     const res = assemblePrompt(makeInput({ card }))
     expect(contents(res.messages)).toContain('DP-Alice')
-    expect(res.turnContext).toContain('DP-Alice')
-    expect(res.standing).not.toContain('DP-Alice')
+    expect(res.standing).toContain('DP-Alice')
+    expect(res.turnContext).not.toContain('DP-Alice')
   })
 
   it('会话作者注释与角色笔记进 turn 不进 standing', () => {

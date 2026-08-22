@@ -4,6 +4,8 @@
 
 ## 未发布
 
+- 缓存：提示词组装分流修正——静态深度注入（无本轮宏的预设 in-chat 条目、卡 depth_prompt）不再无条件并入 turn 快照每轮全价重付，改并入 standing 随会话钉死（`STANDING_PIN_VERSION` 6 → 7）；触发型 @D 世界书与含本轮宏的注入保持 turn 侧不变。standing/turn 分流改为按消息对象身份追踪，两条展开后同字节的内容不再互相误踢。
+
 - 缓存：多步 turn 的 runtime context 快照零重付——turn playbook 从按步变化的 `formatTurnPlaybook(step)` 改为固定文本 `TURN_PLAYBOOK`，宿主对快照按字节去重，同轮后续步骤不再重复追加（此前每步打飞去重、整份快照逐步全价重付）。「第几步该收口」的压力改由工具执行时注入的 `【Tavern 步骤】` 通知承载（按 `turn:nextStep` 去重，2 步软收口、3 步起强收口）。standing 指纹的设置标记收窄到真正决定 standing 字节的三个键（characterStrategy / useGroupScoring / maxTokens）：调 tokenBudget、scanDepth 等 turn 层设置不再白白打穿整段 standing 前缀缓存。组装失败兜底优先穿同卡已钉死的 standing（`peekStanding`），瞬时故障不再回退未绑定文案把 system 前缀打穿成 0%。
 
 - 缓存：turn 层预算收紧，直击 DeepSeek 前缀缓存命中率——runtime context 快照对新请求永远是未缓存前缀，大体量世界书/变化层搭快照通道即每轮全价重付（实测单轮快照可达 ~37k 字符）。世界书固定 `tokenBudget` 默认 0 → 3000 且改为**绝对上限**（不再随历史长度扣减归零），但只计搭快照通道的条目：落 standing 的常驻（constant 且无本轮宏）豁免计费；百分比预算折算基数 clamp 到 128K（1M 窗口模型不再把 25% 放大成 25 万 token）；被裁世界书条目不再静默丢弃——快照尾部附 uid 清单（封顶 8 条），模型可经 `tavern_lore_read` 按条补读。变化层按 1500 token 从最新往旧装载（预算只计实际进快照的常驻/已命中条目，未命中的带键变化不占额度），更旧的经 `tavern_lore_read(source=delta)` 补读；触发日志新增 `[turn:tail]` 行可观测每轮尾巴体积。

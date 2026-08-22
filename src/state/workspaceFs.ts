@@ -32,6 +32,12 @@ export class WorkspaceFs {
   }
 
   private abs(relPath: string): string {
+    // 段级消毒：任何 '..' 段一律拒绝。只看根目录前缀挡不住
+    // 'personas/../regex/rules.json' 这类「不出根但跨子树」的越权——人设/世界书/预设 id
+    // 经 RPC 直达存储层时可能带 '..'，把包容性做成 fs 的性质，而不是指望每个调用方各自消毒。
+    if (relPath.split(/[/\\]/).some((seg) => seg === '..')) {
+      throw new Error(`工作区路径越界: ${relPath}`)
+    }
     const abs = normalize(join(this.root, relPath))
     if (abs !== this.root && !abs.startsWith(this.root + sep)) {
       throw new Error(`工作区路径越界: ${relPath}`)

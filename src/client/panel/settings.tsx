@@ -4,7 +4,7 @@
  */
 import { useEffect, useState } from 'react'
 import { EMPTY_SESSION_DEFAULTS, type PresetSummary, type TavernRemote, type TavernSettings } from '../types.js'
-import { Btn, Err, Muted, NumInput, Section, Select, SettingsRow, Skeleton, Toggle, textarea, useLoader, useToast } from '../util.js'
+import { Btn, Err, Muted, NumInput, Section, Select, SettingsRow, Skeleton, Toggle, runAsync, textarea, useLoader, useToast } from '../util.js'
 
 export function SettingsSection(props: { remote: TavernRemote }) {
   const { remote } = props
@@ -30,13 +30,13 @@ export function SettingsSection(props: { remote: TavernRemote }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state])
 
-  const save = async (patch: Record<string, unknown>, toastText: string) => {
-    setBusy(true)
-    setError(null)
-    const r = await remote.updateSettings({ patch })
-    setBusy(false)
-    if (!r.ok) setError(r.error.message)
-    else {
+  const save = (patch: Record<string, unknown>, toastText: string) =>
+    runAsync(setBusy, setError, async () => {
+      const r = await remote.updateSettings({ patch })
+      if (!r.ok) {
+        setError(r.error.message)
+        return
+      }
       const saved = toDraft(r.value.settings)
       // 一页有多个独立保存区：只用服务端返回值刷新本次保存的键，保留其它区尚未保存的草稿。
       setDraft((current) => {
@@ -48,8 +48,7 @@ export function SettingsSection(props: { remote: TavernRemote }) {
         return next
       })
       toast.show(toastText)
-    }
-  }
+    })
 
   if (state.status === 'loading')
     return (
@@ -207,7 +206,7 @@ export function SettingsSection(props: { remote: TavernRemote }) {
         <SettingsRow title="固定 token 预算">
           <NumInput value={draft.worldInfo.tokenBudget} onChange={(v) => setWorldInfo({ tokenBudget: Math.max(0, Math.round(v)) })} />
         </SettingsRow>
-        <SettingsRow title="最大递归步数">
+        <SettingsRow title="最大扫描轮数" description="含首轮：1 = 关闭递归，2 = 首轮加一轮递归，0 = 不限（仅受预算约束）。">
           <NumInput value={draft.worldInfo.maxRecursionSteps} onChange={(v) => setWorldInfo({ maxRecursionSteps: Math.max(0, Math.round(v)) })} />
         </SettingsRow>
         <SettingsRow title="合并策略">

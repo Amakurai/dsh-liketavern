@@ -1,5 +1,7 @@
 /**
  * 工作区资产路径消毒与预设目录。
+ * 覆盖：文本路径白名单、越界/绝对路径/WAL/二进制拒绝、'.' 段折叠后再判定 WAL、
+ * 预设目录令牌与按 identifier 取条目。
  */
 import { describe, expect, it } from 'vitest'
 import {
@@ -23,6 +25,20 @@ describe('resolveReadableAssetPath', () => {
     expect(resolveReadableAssetPath('/etc/passwd').ok).toBe(false)
     expect(resolveReadableAssetPath('state/wal/1.json').ok).toBe(false)
     expect(resolveReadableAssetPath('card.png').ok).toBe(false)
+  })
+
+  it("'.' 段折叠后再判定 WAL，绕不过前缀检查", () => {
+    // WorkspaceFs.abs 会把 '.' 段折掉，若判定发生在折叠前，WAL 快照就会被读回给模型
+    expect(resolveReadableAssetPath('state/./wal/x.jsonl').ok).toBe(false)
+    expect(resolveReadableAssetPath('./state/./wal/meta.json').ok).toBe(false)
+    expect(resolveReadableAssetPath('state/wal/./x.jsonl').ok).toBe(false)
+    expect(resolveReadableAssetPath('state\\.\\wal\\x.jsonl').ok).toBe(false)
+    // 合法路径返回折叠后的规范形式
+    expect(resolveReadableAssetPath('./memory/a.md')).toEqual({ ok: true, path: 'memory/a.md' })
+    expect(resolveReadableAssetPath('memory/./sub/a.md')).toEqual({ ok: true, path: 'memory/sub/a.md' })
+    // 折叠后为空的纯 '.' 路径不合法
+    expect(resolveReadableAssetPath('.').ok).toBe(false)
+    expect(resolveReadableAssetPath('./.').ok).toBe(false)
   })
 })
 

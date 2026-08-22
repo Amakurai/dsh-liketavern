@@ -4,6 +4,9 @@
  * - resolveModelInfoCached：同 provider+model 复用一次解析、不同模型各自解析、失败不缓存；
  * - standingRevTags：绑定 → 修订标记形状；savePreset/deletePreset/saveLorebook/deleteLorebook/
  *   saveCharacterLorebook 等写方法 bump 对应修订号（standing 指纹随资产内容失效重算）；
+ *   末尾 config 标记随 worldInfo / sampling.maxTokens 变化，与 standing 无关的设置键不动它；
+ * - 库资产文件名净化：写盘 id、删除路径与修订号键共用一个 id（原始名带空格也能失效钉死）；
+ * - loadBinding 自愈的读-改-写竞态：落盘前复读，磁盘已被换卡覆盖则丢弃本次自愈；
  * - workspace：拒绝会把工作区根移出 characters/ 的非法 cardId；
  * - 会话副作用队列：同会话严格串行、不同会话互不阻塞、失败后仍可继续；
  * - compressOldestMemories：idle 期异步压缩——最旧批次合并为一条并归档、
@@ -15,7 +18,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { LlmResolvedModelInfo, LlmRuntime } from '@deepseek-ai/dsh-llm'
 import type { CharacterCard, PromptPreset } from '../src/core/types.js'
-import type { SessionBinding } from '../src/node/bindings.js'
+import { loadBinding, saveBinding, type SessionBinding } from '../src/node/bindings.js'
 import { resolveConfig } from '../src/node/config.js'
 import { compressOldestMemories } from '../src/node/memoryMaintenance.js'
 import type { TavernPaths } from '../src/node/paths.js'
@@ -23,11 +26,12 @@ import { TavernState } from '../src/node/state.js'
 import { importCard } from '../src/state/workspace.js'
 
 let root: string
+let paths: TavernPaths
 let state: TavernState
 
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'state-runtime-test-'))
-  const paths: TavernPaths = {
+  paths = {
     root,
     characters: join(root, 'characters'),
     lorebooks: join(root, 'library', 'lorebooks'),
@@ -37,6 +41,7 @@ beforeEach(async () => {
     sessions: join(root, 'sessions'),
   }
   state = new TavernState(paths, () => resolveConfig({}))
+  await state.init()
 })
 
 afterEach(async () => {
@@ -124,21 +129,36 @@ describe('resolveModelInfoCached', () => {
 })
 
 describe('standingRevTags', () => {
-  it('形状：绑定预设 + 全局世界书按序 + 主世界书 + 卡修订 + 会话世界书', () => {
-    expect(state.standingRevTags(makeBinding())).toEqual([
-      'preset:p1=0',
-      'lore:g1=0',
-      'charlore:c1=0',
-      'card:c1=0',
-      'chatlore:c1=0',
-    ])
-    expect(state.standingRevTags(makeBinding({ presetId: null, lorebookIds: [], characterLorebookId: 'lib1' }))).toEqual([
-      'preset:=0',
-      'lore:lib1=0',
-      'card:c1=0',
-      'chatlore:c1=0',
-    ])
+  /** 资产标记（末尾 config 标记单独断言）。 */
+  const assetTags = (tags: string[]) => tags.slice(0, -1)
+  const configTag = (tags: string[]) => tags[tags.length - 1]
+
+  it('形状：绑定预设 + 全局世界书按序 + 主世界书 + 卡修订 + 会话世界书 + config', () => {
+    const tags = state.standingRevTags(makeBinding())
+    expect(assetTags(tags)).toEqual(['preset:p1=0', 'lore:g1=0', 'charlore:c1=0', 'card:c1=0', 'chatlore:c1=0'])
+    expect(configTag(tags)).toMatch(/^config=[0-9a-f]{8}$/)
+    expect(
+      assetTags(state.standingRevTags(makeBinding({ presetId: null, lorebookIds: [], characterLorebookId: 'lib1' }))),
+    ).toEqual(['preset:=0', 'lore:lib1=0', 'card:c1=0', 'chatlore:c1=0'])
     expect(state.standingRevTags(makeBinding(), { personaLorebookId: 'pbook' })).toContain('lore:pbook=0')
+  })
+
+  it('设置进指纹：worldInfo / sampling.maxTokens 变则 config 标记变，无关键不变', () => {
+    let raw: Record<string, unknown> = {}
+    const live = new TavernState(paths, () => resolveConfig(raw))
+    const base = configTag(live.standingRevTags(makeBinding()))
+
+    // worldInfo 决定哪些 constant 条目进常驻段，必须打穿钉死
+    raw = { worldInfo: { tokenBudget: 999 } }
+    expect(configTag(live.standingRevTags(makeBinding()))).not.toBe(base)
+
+    // maxTokens 决定 trimNonHistory 的裁剪线，同样必须打穿
+    raw = { sampling: { maxTokens: 4096 } }
+    expect(configTag(live.standingRevTags(makeBinding()))).not.toBe(base)
+
+    // 与 standing 无关的键不能白白打断 KV 前缀缓存
+    raw = { interactiveCards: false, triggerLogMax: 50 }
+    expect(configTag(live.standingRevTags(makeBinding()))).toBe(base)
   })
 
   it('savePreset / deletePreset bump 预设修订号', async () => {
@@ -154,6 +174,31 @@ describe('standingRevTags', () => {
     expect(state.standingRevTags(makeBinding())[1]).toBe('lore:g1=1')
     await state.deleteLorebook('g1')
     expect(state.standingRevTags(makeBinding())[1]).toBe('lore:g1=2')
+  })
+
+  it('文件名净化：写盘 id、修订号键与删除路径一致，绑定持净化名也能失效钉死', async () => {
+    const binding = makeBinding({ lorebookIds: ['主线_设定'] })
+    expect(state.standingRevTags(binding)[1]).toBe('lore:主线_设定=0')
+
+    // 服务层要拿到净化后的 id，客户端打开的目标才和磁盘一致
+    expect(await state.saveLorebook('主线 设定', { entries: [] })).toBe('主线_设定')
+    expect(await state.listLorebooks()).toEqual(['主线_设定'])
+    expect(state.standingRevTags(binding)[1]).toBe('lore:主线_设定=1')
+
+    // 按原始名删除也要命中净化后的那个文件
+    await state.deleteLorebook('主线 设定')
+    expect(await state.listLorebooks()).toEqual([])
+    expect(state.standingRevTags(binding)[1]).toBe('lore:主线_设定=2')
+  })
+
+  it('预设 identifier 净化后同样对得上（保存 → 读取 → 修订号）', async () => {
+    const preset = { name: '预设', identifier: '我的 预设', entries: [] } as PromptPreset
+    expect(await state.savePreset(preset)).toBe('我的_预设')
+    expect(await state.listPresets()).toEqual(['我的_预设'])
+    // 原始名与净化名都能读到同一份，修订号键也是同一个
+    expect((await state.loadPreset('我的 预设'))?.name).toBe('预设')
+    expect((await state.loadPreset('我的_预设'))?.name).toBe('预设')
+    expect(state.standingRevTags(makeBinding({ presetId: '我的 预设' }))[0]).toBe('preset:我的_预设=1')
   })
 
   it('saveCharacterLorebook bump 卡内嵌书修订号', async () => {
@@ -173,6 +218,34 @@ describe('standingRevTags', () => {
     expect(state.standingRevTags(binding)).toContain(`card:${cardId}=1`)
     await state.saveChatLorebook(cardId, { entries: { '1': { key: ['门'], content: '门后' } } })
     expect(state.standingRevTags(binding)).toContain(`chatlore:${cardId}=1`)
+  })
+})
+
+describe('loadBinding 自愈', () => {
+  it('磁盘未变时按名字接回新工作区并落盘', async () => {
+    const a = await importCard(paths.characters, makeCard({ name: '甲' }))
+    await saveBinding(paths, makeBinding({ cardId: 'gone', cardName: '甲' }))
+
+    expect((await state.loadBinding('s1'))?.cardId).toBe(a.cardId)
+    expect((await loadBinding(paths, 's1'))?.cardId).toBe(a.cardId)
+  })
+
+  it('自愈期间用户换了卡：复读发现磁盘已变，丢弃本次自愈不覆盖', async () => {
+    const a = await importCard(paths.characters, makeCard({ name: '甲' }))
+    const b = await importCard(paths.characters, makeCard({ name: '乙' }))
+    await saveBinding(paths, makeBinding({ cardId: 'gone', cardName: '甲' }))
+
+    // loadBinding 是热路径读，不走 enqueueSessionTask：在它 await 期间模拟用户改绑到乙
+    const spy = vi.spyOn(state, 'listCharacters').mockImplementation(async () => {
+      spy.mockRestore()
+      await saveBinding(paths, makeBinding({ cardId: b.cardId, cardName: '乙' }))
+      return state.listCharacters()
+    })
+
+    // 本次调用仍返回自己算出的结果（调用方拿到的是它读到的那份的自愈值）
+    expect((await state.loadBinding('s1'))?.cardId).toBe(a.cardId)
+    // 但磁盘上用户刚选的乙没有被悄悄覆盖回甲
+    expect((await loadBinding(paths, 's1'))?.cardId).toBe(b.cardId)
   })
 })
 

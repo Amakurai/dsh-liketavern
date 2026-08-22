@@ -146,6 +146,13 @@ export declare function useLoader<T>(load: () => Promise<Envelope<T>>, deps?: re
 };
 /** 信封 → 错误消息（ok 时返回 null）。 */
 export declare function errOf(r: Envelope<unknown>): string | null;
+/**
+ * 面板写操作的统一外壳：置 busy → 清旧错 → 跑 fn，成功失败都在 finally 解锁。
+ * typert 在传输失败和入参 zod 严格校验不过时是 reject，不是错误信封，
+ * 而按钮上的 `onClick={() => void save()}` 会把这个 reject 吞掉；
+ * 传输层 reject 也必须解锁按钮，否则 busy 永远为 true、保存按钮再也点不动，草稿全丢。
+ */
+export declare function runAsync(setBusy: (busy: boolean) => void, setError: (message: string | null) => void, fn: () => Promise<void>): Promise<void>;
 export declare function fileToBase64(file: File): Promise<string>;
 export declare function readJsonFile(file: File): Promise<unknown>;
 export declare function downloadJson(filename: string, json: unknown): void;

@@ -7,7 +7,7 @@ import { IconDownloadOutline16, IconEditOutline16, IconFolderOpenOutline16, Icon
 import type { WorldInfoEntry } from '../../core/types.js'
 import { parseLorebook } from '../../state/lorebook.js'
 import type { CharacterSummary, TavernRemote } from '../types.js'
-import { Badge, Btn, ConfirmDialog, Dialog, Err, FileBtn, IconBtn, Section, Skeleton, clickableProps, downloadJson, errOf, readJsonFile, useLoader, useToast } from '../util.js'
+import { Badge, Btn, ConfirmDialog, Dialog, Err, FileBtn, IconBtn, Section, Skeleton, clickableProps, downloadJson, errOf, readJsonFile, runAsync, useLoader, useToast } from '../util.js'
 import { LorebookEditor, type LorebookTarget } from './lorebookEditor.js'
 
 type Opened = { target: LorebookTarget; entries: WorldInfoEntry[] }
@@ -127,17 +127,17 @@ export function LorebooksSection(props: { remote: TavernRemote }) {
       setError('请填写世界书名称')
       return
     }
-    setBusy(true)
-    setError(null)
-    const r = await remote.importLorebook({ name, json: { entries: {} } })
-    setBusy(false)
-    if (!r.ok) setError(r.error.message)
-    else {
+    await runAsync(setBusy, setError, async () => {
+      const r = await remote.importLorebook({ name, json: { entries: {} } })
+      if (!r.ok) {
+        setError(r.error.message)
+        return
+      }
       setCreating(false)
       setNewName('')
       reload()
       await openLibrary(r.value.name)
-    }
+    })
   }
 
   if (opened) {

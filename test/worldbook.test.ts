@@ -346,6 +346,21 @@ describe('递归扫描', () => {
     expect(activatedKeys(res)).toEqual(['A'])
   })
 
+  it('maxRecursionSteps 计的是总扫描轮数（含首轮）：2 只跑一轮递归，3 才跑到第二层', () => {
+    // A(apple) → 内容含 banana → B；B 内容含 cherry → C
+    const chainB = makeEntry({ ...b, content: 'cherry tart' })
+    const c = makeEntry({ key: 'C', keys: ['cherry'] })
+    const entries = [a, chainB, c]
+    const two = run({ entries, messages: [userMsg('apple')], settings: makeSettings({ maxRecursionSteps: 2 }) })
+    expect(activatedKeys(two).sort()).toEqual(['A', 'B'])
+    const three = run({ entries, messages: [userMsg('apple')], settings: makeSettings({ maxRecursionSteps: 3 }) })
+    expect(activatedKeys(three).sort()).toEqual(['A', 'B', 'C'])
+    expect(three.activated.find((x) => x.entry.key === 'C')!.recursionLevel).toBe(2)
+    // 0 = 不限，同样跑满整条链
+    const unlimited = run({ entries, messages: [userMsg('apple')], settings: makeSettings({ maxRecursionSteps: 0 }) })
+    expect(activatedKeys(unlimited).sort()).toEqual(['A', 'B', 'C'])
+  })
+
   it('recursiveScan=false 同样关闭递归', () => {
     const res = run({ entries: [a, b], messages: [userMsg('apple')], settings: makeSettings({ recursiveScan: false }) })
     expect(activatedKeys(res)).toEqual(['A'])
@@ -703,5 +718,49 @@ describe('inclusion group', () => {
     expect(res.timerState.stickyLeft['a']).toBe(2)
     expect(res.timerState.stickyLeft['b']).toBeUndefined()
     expect(res.timerState.cooldownLeft['b']).toBeUndefined()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 落选回滚（未注入条目不得留下定时状态）
+// ---------------------------------------------------------------------------
+
+describe('未注入条目的定时状态回滚', () => {
+  it('被预算截断的条目不写入 sticky/cooldown（否则下一轮免概率回来占组）', () => {
+    const res = run({
+      entries: [
+        makeEntry({ key: 'win', constant: true, order: 200, sticky: 3, cooldown: 5 }),
+        makeEntry({ key: 'trimmed', keys: ['apple'], order: 100, sticky: 3, cooldown: 5 }),
+      ],
+      messages: [userMsg('apple')],
+      settings: makeSettings({ tokenBudget: 15 }), // 每条 10 tokens，只放得下一条
+    })
+    expect(activatedKeys(res)).toEqual(['win'])
+    expect(logsOf(res, 'budget-trim').map((l) => l.entryKey)).toEqual(['trimmed'])
+    expect(res.timerState.stickyLeft['win']).toBe(3)
+    expect(res.timerState.cooldownLeft['win']).toBe(8)
+    expect(res.timerState.stickyLeft['trimmed']).toBeUndefined()
+    expect(res.timerState.cooldownLeft['trimmed']).toBeUndefined()
+  })
+
+  it('被截断的条目下一轮不经 sticky 复活，同组兄弟仍可竞争', () => {
+    const entries = [
+      makeEntry({ key: 'trimmed', keys: ['apple'], order: 100, sticky: 3 }),
+      makeEntry({ key: 'sibling', keys: ['apple'], order: 100, group: 'g' }),
+      makeEntry({ key: 'win', constant: true, order: 200 }),
+    ]
+    const results = runChain(entries, ['apple', 'apple'], { settings: makeSettings({ tokenBudget: 15 }) })
+    expect(activatedKeys(results[0]!)).toEqual(['win'])
+    expect(activatedKeys(results[1]!)).toEqual(['win'])
+    expect(results[1]!.log.some((l) => l.entryKey === 'trimmed' && l.kind === 'activated' && l.detail.includes('via=sticky'))).toBe(false)
+  })
+
+  it('无出口的 outlet 条目不写入 sticky/cooldown', () => {
+    const res = run({
+      entries: [makeEntry({ key: 'dropped', constant: true, position: WIPosition.Outlet, outletName: '', sticky: 3, cooldown: 5 })],
+    })
+    expect(activatedKeys(res)).toEqual([])
+    expect(res.timerState.stickyLeft['dropped']).toBeUndefined()
+    expect(res.timerState.cooldownLeft['dropped']).toBeUndefined()
   })
 })

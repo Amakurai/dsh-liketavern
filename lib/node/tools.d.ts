@@ -7,6 +7,8 @@
  * 下一步看得到，检索层仍从下一 turn 起生效。
  * 记忆超容量压缩不在工具内同步执行：只标记 state.pendingMemoryCompress，
  * turn 结束后由 memoryMaintenance.ts 的 runMaintenance 合并（不记 WAL，不回滚）。
+ * 所有读工具的结果都有条数与 token 预算上限（检索/目录一律截断并报告 omitted/truncated），
+ * 不把整库正文或整棵工作区目录灌进上下文。
  */
 import type { Context } from '@deepseek-ai/cordis';
 import type { TavernState } from './state.js';

@@ -7,7 +7,7 @@ import { useEffect, useState } from 'react'
 import { IconEditOutline16, IconTrashOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { MemoryEntry, WorldDelta } from '../../core/types.js'
 import type { TavernRemote } from '../types.js'
-import { Btn, Err, IconBtn, Muted, Section, Select, SettingsRow, Skeleton, downloadJson, errOf, useLoader, useToast } from '../util.js'
+import { Btn, Err, IconBtn, Muted, Section, Select, SettingsRow, Skeleton, downloadJson, errOf, runAsync, useLoader, useToast } from '../util.js'
 
 function splitList(text: string): string[] {
   return text
@@ -23,20 +23,19 @@ function MemoryEditor(props: { remote: TavernRemote; cardId: string; entry: Memo
   const [keys, setKeys] = useState(entry.keys.join(', '))
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  const save = async () => {
-    setBusy(true)
-    const r = await props.remote.saveMemory({
-      cardId: props.cardId,
-      id: entry.id,
-      body,
-      tags: splitList(tags),
-      keys: splitList(keys),
+  const save = () =>
+    runAsync(setBusy, setError, async () => {
+      const r = await props.remote.saveMemory({
+        cardId: props.cardId,
+        id: entry.id,
+        body,
+        tags: splitList(tags),
+        keys: splitList(keys),
+      })
+      const err = errOf(r)
+      if (err) setError(err)
+      else props.onDone()
     })
-    setBusy(false)
-    const err = errOf(r)
-    if (err) setError(err)
-    else props.onDone()
-  }
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 }}>
       <textarea className="dsh-tavern-input dsh-tavern-textarea" value={body} onChange={(e) => setBody(e.target.value)} />
@@ -81,6 +80,11 @@ export function MemorySection(props: { remote: TavernRemote }) {
   const charItems = chars.state.status === 'ready' ? chars.state.value.items : []
   const memoryItems = memories.state.status === 'ready' ? memories.state.value.items : []
   const deltaItems = deltas.state.status === 'ready' ? deltas.state.value.items : []
+  // journalText 只在查询 ready 时回填，切卡瞬间它还是上一张卡的正文；
+  // 此时 cardId 已指向新卡，不清空就会被「保存笔记」原样写进新卡的 journal.md（覆盖丢数据）。
+  useEffect(() => {
+    setJournalText('')
+  }, [cardId])
   useEffect(() => {
     if (journal.state.status === 'ready') setJournalText(journal.state.value.text)
   }, [journal.state])
@@ -314,17 +318,22 @@ export function MemorySection(props: { remote: TavernRemote }) {
           )}
           {tab === 'journal' && (
             <div className="dsh-tavern-list">
-              {journal.state.status === 'loading' && <Skeleton height={120} />}
-              {journal.state.status === 'error' && <Err message={journal.state.message} />}
               <Muted>写在角色工作区 journal.md。会话芯片打开「注入角色笔记」后才会进本轮 turn。</Muted>
-              <textarea
-                className="dsh-tavern-input dsh-tavern-textarea"
-                style={{ minHeight: 180 }}
-                value={journalText}
-                onChange={(e) => setJournalText(e.target.value)}
-              />
+              {/* 加载期只出骨架：输入框和骨架并排渲染的话，正文还是上一张卡的，保存就会覆盖当前卡。 */}
+              {journal.state.status === 'ready' ? (
+                <textarea
+                  className="dsh-tavern-input dsh-tavern-textarea"
+                  style={{ minHeight: 180 }}
+                  value={journalText}
+                  onChange={(e) => setJournalText(e.target.value)}
+                />
+              ) : journal.state.status === 'error' ? (
+                <Err message={journal.state.message} />
+              ) : (
+                <Skeleton height={180} />
+              )}
               <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                <Btn primary onClick={() => void saveJournal()}>保存笔记</Btn>
+                <Btn primary disabled={journal.state.status !== 'ready' || !cardId} onClick={() => void saveJournal()}>保存笔记</Btn>
               </div>
             </div>
           )}

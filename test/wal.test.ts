@@ -2,15 +2,34 @@
  * 事务层（WAL）单元测试。
  * 覆盖：begin→record→commit 磁盘形态、同层快照去重、单楼层回滚（改/删/最初内容）、
  * 多楼层逆序撤销（含 session turn 的 t1/t2/t10 数字排序）、回滚目录保留与
- * listFloors 标记、重复回滚抛错、prune 过期清理。
+ * listFloors 标记、重复回滚抛错、prune 过期清理、appendFile 失败后重试仍留下 before 镜像。
  */
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { floorNamesForLineageRollback, floorNamesForRollback } from '../src/node/floors.js'
 import { Wal } from '../src/state/wal.js'
 import { WorkspaceFs } from '../src/state/workspaceFs.js'
+
+/** 注入式磁盘故障开关：置 true 后下一次 appendFile 抛错并自动复位。 */
+const diskFault = vi.hoisted(() => ({ failNextAppend: false }))
+
+// 只包 appendFile，其余 node:fs/promises 导出照原样透传（测试自身也要用 mkdtemp/readFile 等）
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>()
+  return {
+    ...actual,
+    default: actual,
+    appendFile: async (...args: Parameters<typeof actual.appendFile>) => {
+      if (diskFault.failNextAppend) {
+        diskFault.failNextAppend = false
+        throw new Error('appendFile 失败（测试注入）')
+      }
+      return actual.appendFile(...args)
+    },
+  }
+})
 
 let root: string
 let workspace: string
@@ -26,6 +45,7 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  diskFault.failNextAppend = false
   await rm(root, { recursive: true, force: true })
 })
 
@@ -254,6 +274,26 @@ describe('Wal', () => {
 
     // 默认 7 天：recent 不到期，不删
     expect(await wal.prune({})).toBe(0)
+  })
+
+  it('record 落盘失败不污染内存状态：重试仍写下 before 镜像，回滚可还原', async () => {
+    await writeFile(join(workspace, 'mem.md'), 'v1')
+    await wal.beginFloor('f1')
+
+    diskFault.failNextAppend = true
+    await expect(wal.record('f1', 'mem.md', 'v1')).rejects.toThrow(/测试注入/)
+
+    // 重试同一路径：不能被「同层同路径只留首次快照」的快路径吞掉
+    await wal.record('f1', 'mem.md', 'v1')
+    await writeFile(join(workspace, 'mem.md'), 'v2')
+
+    // seq 也不能因失败的那次而跳号
+    expect(await readLines(join(walDir, 'f1', 'records.jsonl'))).toEqual([
+      { seq: 1, path: 'mem.md', before: 'v1' },
+    ])
+
+    await wal.rollbackFloor('f1', workspace)
+    expect(await readFile(join(workspace, 'mem.md'), 'utf8')).toBe('v1')
   })
 
   it('WorkspaceFs 无当前楼层时写入不走 WAL，不抛 non-floor', async () => {

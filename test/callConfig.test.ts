@@ -1,9 +1,10 @@
 /**
  * 采样合入与 reasoningEffort 挑选：只发送模型公布的档位；关 thinking 不瞎填；
- * 显式 low/high 档只在模型公布时采用，否则回退自动。
+ * 显式 low/high 档只在模型公布时采用，否则回退自动；
+ * 三级回退（resolveTavernReasoningEffort）：公布档 → deepseek-official 关思考兜底 → 无公布信息自动挑选。
  */
 import { describe, expect, it } from 'vitest'
-import { mergeTavernCallConfig, pickReasoningEffort } from '../src/core/callConfig.js'
+import { mergeTavernCallConfig, pickReasoningEffort, resolveTavernReasoningEffort } from '../src/core/callConfig.js'
 import { DEFAULT_SAMPLING } from '../src/core/types.js'
 
 const DEEPSEEK = [{ id: 'off' }, { id: 'high' }, { id: 'max' }]
@@ -45,6 +46,32 @@ describe('pickReasoningEffort', () => {
     // 解析失败（ids 为空）时显式档位不可验证，回退自动
     expect(pickReasoningEffort('low', undefined, undefined, 'max')).toBe('max')
     expect(pickReasoningEffort('low', undefined, undefined, undefined)).toBeUndefined()
+  })
+})
+
+describe('resolveTavernReasoningEffort', () => {
+  it('模型公布了档位时与 pickReasoningEffort 一致', () => {
+    const info = { efforts: DEEPSEEK, defaultEffort: 'high' }
+    expect(resolveTavernReasoningEffort('disabled', info, 'max', 'deepseek-official')).toBe('off')
+    expect(resolveTavernReasoningEffort('enabled', info, 'max', 'deepseek-official')).toBe('max')
+    expect(resolveTavernReasoningEffort('high', { efforts: DEEPSEEK_V4 }, 'max', 'other')).toBe('high')
+  })
+
+  it('元数据解析失败（无公布信息）时 deepseek-official 关思考仍落成 off', () => {
+    expect(resolveTavernReasoningEffort('disabled', undefined, 'max', 'deepseek-official')).toBe('off')
+    // 模型公布了档位但没有 off 档，同样兜底
+    expect(resolveTavernReasoningEffort('disabled', { efforts: [{ id: 'high' }] }, 'max', 'deepseek-official')).toBe('off')
+  })
+
+  it('非 deepseek-official 关思考时不瞎填', () => {
+    expect(resolveTavernReasoningEffort('disabled', undefined, 'max', 'some-provider')).toBeUndefined()
+    expect(resolveTavernReasoningEffort('disabled', undefined, 'max', undefined)).toBeUndefined()
+  })
+
+  it('开启档位在无公布信息时沿用当前非 off 档；off 当前档不沿用', () => {
+    expect(resolveTavernReasoningEffort('enabled', undefined, 'max', 'deepseek-official')).toBe('max')
+    expect(resolveTavernReasoningEffort('enabled', undefined, 'off', 'deepseek-official')).toBeUndefined()
+    expect(resolveTavernReasoningEffort('enabled', undefined, undefined, 'deepseek-official')).toBeUndefined()
   })
 })
 

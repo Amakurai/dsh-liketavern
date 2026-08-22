@@ -28,7 +28,7 @@ dsh-liketavern 是 DeepSeek Harness（dsh）插件，把 `dsh web` 做成 SillyT
   - **host**（`src/index.ts`）：注册设置命名空间 `dsh-tavern`、初始化数据目录、安装 agent 预设、提供 `tavern` 服务（`TavernService`）、注册 typert remote、听 `session/event` 维护楼层 WAL 和每 turn/step 缓存。
   - **agent**（`src/agent.ts`）：由插件安装的 `tavern` 预设挂载（`presets/tavern/agent.cordis.yml`，启动时替换 `__AGENT_MODULE__`）。在 `system-prompt/assemble` 写入稳定段 `tavern:standing` 和 runtime context `tavern:turn`；`agent/pre-step` 记 step；`agent/request` 合入采样，并把 thinking 映射成 `reasoningEffort`（模型元数据经 `resolveModelInfoCached` 进程内缓存）；注册 7 个模型工具；`agent/status` 转入 idle 时 `runMaintenance` 做记忆压缩。
   - **client**（`src/client/`）：浏览器 React UI。五块 slot：设置 `settings.section`、助手操作条 `conversation.chat.assistant-actions`、会话头芯片 `conversation.session.header.actions`、新会话英雄区 `conversation.input.dock`、助手排版 `conversation.chat.node`（`assistant-step`，priority -1）。经 `ctx.remote.$mount(TYPERT_REMOTE)` 挂 remote，调用时用 `ctx.get('remote.tavern')`。rc.2 起 chat.node 的 owner props 不再给 `loadImage`，图片走 `renderMessageImages({ images, align })`；`fileMentions` 是 owner 函数，要像原生 AssistantNodeView 那样用 turn-tail owner 解析后再传给 MarkdownText。
-- host 和 client 用 typert RPC，契约在 `src/remote.ts`（`METHODS` 表 → 描述符）。方法返回裸业务值，失败抛错。`{ ok, value | error }` 信封由 gateway 生成，service 层不要再包一层。
+- host 和 client 用 typert RPC，契约在 `src/remote.ts`（`METHODS` 表 → 描述符）。方法返回裸业务值，失败抛错。`{ ok, value | error }` 信封由 gateway 生成，service 层不要再包一层。加删改一个方法要同步三处：`src/remote.ts` 的 `METHODS`、`src/node/service.ts` 的实现、`src/client/types.ts` 的 `TavernRemote`——最后这个是手工维护的契约镜像，漏改就编译不过。
 - 运行时依赖只有 `zod`。直接使用的 `@deepseek-ai/*` 以 peerDependency 声明，由 dsh 宿主提供；开发依赖使用公开 npm 的精确版本。禁止 `file:`、本机绝对路径、junction 或符号链接依赖。host/client bundle 里平台模块一律 external。
 - 设置用 schemastery（`src/node/config.ts`），命名空间 `dsh-tavern`，用户覆盖在 `~/.dsh/settings.yaml`，`applies: 'live'`。包括采样（含 thinking 档位）、世界书全局、记忆、新会话默认绑定 `defaults`、`interactiveCards`、`cardNetworkWhitelist`、`cascadeDeleteEmbeddedBook`（删卡时是否连同内嵌世界书，默认开；关掉则删卡前把内嵌书抢救到世界书库）。rc.2 起 web 设置 RPC 的命名空间白名单已移除，宿主通用设置文档页也能看到/改 `dsh-tavern` 的键——这是宿主行为，插件面板仍是主入口，不要为此改面板。
 
@@ -73,7 +73,7 @@ live 路径不把整包 ST 预设塞进 system。`assemblePrompt` 按 Prompt Man
 ```bash
 npm install        # dsh 开发依赖从公开 npm 安装
 npm run build      # tsc -p tsconfig.json（产出 lib/ 含 .d.ts）+ node scripts/build-client.mjs
-npm test           # vitest run：32 个文件、约 360 例
+npm test           # vitest run：33 个文件、约 460 例（例数随改动浮动，不是精确值）
 npm run dev        # dsh web --patch ./cordis.dev.yml（需先建 junction，见 README）
 ```
 
@@ -120,7 +120,8 @@ src/
 ├── client/     浏览器 UI
 │   ├── index.tsx / mode.ts / chip.tsx / hero.tsx / seatWatch.ts / seatChip.tsx
 │   ├── speech.tsx / assistant.tsx / actions.tsx / openChild.ts
-│   ├── util.tsx / styles.ts / locales.ts
+│   ├── util.tsx / styles.ts / locales.ts / types.ts
+│       types.ts = TavernRemote 契约镜像（改 remote.ts / service.ts 必须同步）
 │   └── panel/  设置子面板：characters / presets / lorebooks / lorebookEditor /
 │               personas / regex / memory / settings
 ├── index.ts    host 入口
@@ -128,7 +129,7 @@ src/
 └── remote.ts   typert 契约
 ```
 
-对应测试在 `test/`（32 个文件）：core/state 纯逻辑，加上 binding、cardFrame、workspace、floorsForkOptions、greetingSeed、stateRuntime、openChild、siblings 等。host 事件与 client UI 不测。
+对应测试在 `test/`（33 个文件，约 460 例）：core/state 纯逻辑，加上 binding、cardFrame、workspace、floorsForkOptions、greetingSeed、stateRuntime、openChild、siblings、presetInstall 等。host 事件与 client UI 不测。
 
 ## 代码风格
 
@@ -200,5 +201,5 @@ agent 预设目录 `$DSH_HOME/.agent-presets/tavern/` 由插件托管，升级�
 
 ## 部署
 
-- 交付：`package.json` 声明 `dsh.bundle.patch = cordis.patch.yml` 与 `dsh.client`（platform web、inject `@deepseek-ai/dsh-client-runtime`）。`npm pack` 白名单只含 `lib/`、`cordis.patch.yml`、`presets/` 和 README；发布前必须通过 `npm pack --dry-run`。
+- 交付：`package.json` 声明 `dsh.bundle.patch = cordis.patch.yml` 与 `dsh.client`（platform web、inject `@deepseek-ai/dsh-client-runtime`）。`npm pack` 白名单只含 `lib/`、`cordis.patch.yml`、`presets/`、README（中英两份）和 LICENSE；发布前必须通过 `npm pack --dry-run`。
 - 安装：`dsh plugin --profile web add github:Amakurai/dsh-liketavern`（内部走 profile 下的 pnpm）。开发用 Windows junction 把仓库挂进 `~/.dsh/profiles/node_modules/dsh-liketavern`，再 `npm run dev`。

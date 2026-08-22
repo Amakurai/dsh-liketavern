@@ -2,7 +2,7 @@
  * 宏展开器单测。
  * 覆盖：角色/用户宏（含大小写不敏感）、身份宏（展示/扫描用）、outlet 命中/未命中/不嵌套、{{trim}} 移除、
  * time/date 经 vars 覆盖、未知宏保留原样、{{setvar}}/{{getvar}}/{{//}} 预处理、
- * {{random}}/{{pick}} 本轮掷骰、由内向外展开嵌套宏。
+ * {{random}}/{{pick}} 本轮掷骰、由内向外展开嵌套宏、postProcess 只加工宏解析值。
  */
 import { describe, expect, it, vi } from 'vitest'
 import { expandIdentityMacros, expandMacros, hasTurnLocalMacros, hasUnevaluatedScript, createTurnRandom, type MacroContext } from '../src/core/macros.js'
@@ -178,6 +178,25 @@ describe('setvar / getvar / 注释', () => {
   it('{{lastusermessage}} 取 ctx.lastUserMessage', () => {
     const c: MacroContext = { ...ctx, lastUserMessage: '你好' }
     expect(expandMacros('<最新互动>\n{{lastusermessage}}\n</最新互动>', c)).toBe('<最新互动>\n你好\n</最新互动>')
+  })
+})
+
+describe('postProcess', () => {
+  it('只加工宏解析出来的值，模板原文不动', () => {
+    expect(expandMacros('X {{char}}-{{user}} Y', ctx, undefined, (v) => `<${v}>`)).toBe('X <Alice>-<Bob> Y')
+  })
+
+  it('未知宏与未提供 postProcess 时行为不变', () => {
+    expect(expandMacros('{{foo}}', ctx, undefined, (v) => `<${v}>`)).toBe('{{foo}}')
+    expect(expandMacros('{{char}}', ctx)).toBe('Alice')
+  })
+
+  it('正则转义用法：getvar 值里的元字符逐值转义（对齐 substituteRegex=2）', () => {
+    const c: MacroContext = { ...ctx, store: new Map([['topic', 'C++ (advanced)']]) }
+    const escape = (v: string) => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const source = expandMacros('^{{getvar::topic}}$', c, undefined, escape)
+    expect(source).toBe('^C\\+\\+ \\(advanced\\)$')
+    expect(new RegExp(source).test('C++ (advanced)')).toBe(true)
   })
 })
 

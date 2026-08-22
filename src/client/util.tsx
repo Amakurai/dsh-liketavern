@@ -418,6 +418,28 @@ export function errOf(r: Envelope<unknown>): string | null {
   return r.ok ? null : r.error.message
 }
 
+/**
+ * 面板写操作的统一外壳：置 busy → 清旧错 → 跑 fn，成功失败都在 finally 解锁。
+ * typert 在传输失败和入参 zod 严格校验不过时是 reject，不是错误信封，
+ * 而按钮上的 `onClick={() => void save()}` 会把这个 reject 吞掉；
+ * 传输层 reject 也必须解锁按钮，否则 busy 永远为 true、保存按钮再也点不动，草稿全丢。
+ */
+export async function runAsync(
+  setBusy: (busy: boolean) => void,
+  setError: (message: string | null) => void,
+  fn: () => Promise<void>,
+): Promise<void> {
+  setBusy(true)
+  setError(null)
+  try {
+    await fn()
+  } catch (e) {
+    setError(e instanceof Error ? e.message : String(e))
+  } finally {
+    setBusy(false)
+  }
+}
+
 export function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()

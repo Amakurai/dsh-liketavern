@@ -21,6 +21,9 @@
  * 不是把 ST 宏引擎原样扔给模型。
  *
  * 未支持的宏保留原样并回调 onUnknown。
+ *
+ * `postProcess` 逐个加工「宏解析出来的值」（对齐 ST substituteParamsExtended 的 postProcessFn）：
+ * 正则 find 的转义代入、正则 replace 的 `$` 保护都靠它，宏之外的原文不受影响。
  */
 import type { MacroContext } from './types.js';
 export type { MacroContext };
@@ -30,8 +33,11 @@ export declare function hashToSeed(text: string): number;
 /**
  * 展开 text 中的宏。outlet 替换结果不二次扫描（SillyTavern：禁止嵌套 outlet）。
  * setvar/getvar 经 MacroContext.store 在一次组装内跨条目共享。
+ *
+ * postProcess 只作用于每个宏解析出来的值（不碰模板里的原文），调用方用它做
+ * 正则转义或 `$` 保护。now 保持第三位，老调用方（只传 text/ctx 或再带 now）不受影响。
  */
-export declare function expandMacros(text: string, ctx: MacroContext, now?: Date): string;
+export declare function expandMacros(text: string, ctx: MacroContext, now?: Date, postProcess?: (value: string) => string): string;
 /**
  * 只展开身份宏。用于开场白展示、世界书扫描、入模历史——这些地方不该跑 setvar/时钟。
  * `{{user}}` 变成当前人设名，才能和世界书键互相命中。

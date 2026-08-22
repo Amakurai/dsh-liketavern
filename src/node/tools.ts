@@ -7,6 +7,8 @@
  * 下一步看得到，检索层仍从下一 turn 起生效。
  * 记忆超容量压缩不在工具内同步执行：只标记 state.pendingMemoryCompress，
  * turn 结束后由 memoryMaintenance.ts 的 runMaintenance 合并（不记 WAL，不回滚）。
+ * 所有读工具的结果都有条数与 token 预算上限（检索/目录一律截断并报告 omitted/truncated），
+ * 不把整库正文或整棵工作区目录灌进上下文。
  */
 import type { Context } from '@deepseek-ai/cordis'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
@@ -30,12 +32,18 @@ import {
   toLoreCatalogItem,
   type LoreReadQuery,
 } from '../core/loreQuery.js'
-import { estimateTokens } from '../core/tokenize.js'
+import { clipToTokenBudget, estimateTokens } from '../core/tokenize.js'
+import type { MemoryEntry } from '../core/types.js'
 import { rebuildIndex } from '../state/workspace.js'
 import type { WorkspaceFs } from '../state/workspaceFs.js'
 import type { SessionBinding } from './bindings.js'
 import { loadBoundLoreEntries } from './pipeline.js'
 import type { TavernState } from './state.js'
+
+/** 记忆检索一次返回的条数上限：对齐 tavern_lore_read 的 LORE_READ_MAX_TOPK，模型给的 topK 再大也不放行。 */
+const MEMORY_SEARCH_MAX_TOPK = 20
+/** 资产目录条数上限：对齐世界书目录的 LORE_CATALOG_MAX，工作区文件多了也不整棵树倾倒。 */
+const ASSET_CATALOG_MAX = 200
 
 interface ToolCtx {
   binding: SessionBinding
@@ -80,6 +88,50 @@ function asOptionalString(value: unknown): string | undefined {
   return typeof value === 'string' ? value : typeof value === 'number' && Number.isFinite(value) ? String(value) : undefined
 }
 
+/** 对齐 clampLoreTopK：非法/非正数回退设置值，再统一压到 MEMORY_SEARCH_MAX_TOPK。 */
+function clampMemoryTopK(value: unknown, fallback: number): number {
+  const raw = typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : Math.floor(fallback)
+  return Math.max(0, Math.min(MEMORY_SEARCH_MAX_TOPK, raw))
+}
+
+/** 记忆检索命中：正文在预算内裁剪，超预算的只留元数据（id 仍能用 tavern_asset_read 读 memory/<id>.md）。 */
+interface MemoryHitItem {
+  id: string
+  score: number
+  tags: string[]
+  keys: string[]
+  body: string
+  truncated: boolean
+  omitted?: boolean
+}
+
+/**
+ * 对齐 clipLoreContents：按相关性顺序装入 token 预算，超预算的条目不再给正文。
+ * 记忆库上限 200 条 / 20000 token，没有预算的话一次检索就能把整库灌进上下文。
+ */
+function clipMemoryHits(
+  hits: readonly { entry: MemoryEntry; score: number }[],
+  budget: number,
+): { results: MemoryHitItem[]; tokensUsed: number; omitted: number } {
+  const limit = Math.max(0, Math.floor(budget))
+  const results: MemoryHitItem[] = []
+  let used = 0
+  let omitted = 0
+  for (const hit of hits) {
+    const meta = { id: hit.entry.id, score: hit.score, tags: hit.entry.tags, keys: hit.entry.keys }
+    const remain = limit - used
+    if (remain <= 0) {
+      omitted += 1
+      results.push({ ...meta, body: '', truncated: true, omitted: true })
+      continue
+    }
+    const clipped = clipToTokenBudget(hit.entry.body, remain)
+    results.push({ ...meta, body: clipped.text, truncated: clipped.truncated })
+    used += clipped.tokens
+  }
+  return { results, tokensUsed: used, omitted }
+}
+
 export function registerTavernTools(ctx: Context, state: TavernState): void {
   // ── tavern_memory_search ────────────────────────────────────────────────
   ctx.tools.register(
@@ -88,7 +140,7 @@ export function registerTavernTools(ctx: Context, state: TavernState): void {
       description: '检索当前角色的长期记忆（BM25）。仅当 runtime context 里的记忆不够、需要核对更早事实时调用；不要每轮例行检索。',
       parameters: {
         query: { type: 'string', required: true, description: '检索查询（自然语言或关键词）' },
-        topK: { type: 'number', description: '返回条数上限（默认跟随设置）' },
+        topK: { type: 'number', description: `返回条数上限（默认跟随设置，最大 ${MEMORY_SEARCH_MAX_TOPK}）` },
       },
       output: {
         schema: { type: 'json' },
@@ -97,14 +149,19 @@ export function registerTavernTools(ctx: Context, state: TavernState): void {
       async execute(args, exec): Promise<JsonValue> {
         const resolved = await resolveCtx(state, exec)
         if ('error' in resolved) return { ok: false, error: resolved.error }
-        const topK = typeof args.topK === 'number' && args.topK > 0 ? Math.floor(args.topK) : state.config.memory.retrievalTopK
-        const hits = await resolved.ws.memory.search(
-          args.query,
-          memorySearchOptions(topK, state.config.memory.halfLifeDays),
-        )
+        const config = state.config.memory
+        const topK = clampMemoryTopK(args.topK, config.retrievalTopK)
+        const hits = await resolved.ws.memory.search(args.query, memorySearchOptions(topK, config.halfLifeDays))
+        const clipped = clipMemoryHits(hits, config.retrievalTokenBudget)
         return {
           ok: true,
-          results: hits.map((h) => ({ id: h.entry.id, score: h.score, tags: h.entry.tags, keys: h.entry.keys, body: h.entry.body })),
+          count: hits.length,
+          tokensUsed: clipped.tokensUsed,
+          omitted: clipped.omitted,
+          results: clipped.results as unknown as JsonValue,
+          ...(clipped.omitted > 0
+            ? { hint: '超出 token 预算的条目只给了 id/标签/关键词；确需正文用 tavern_asset_read({ path: "memory/<id>.md" }) 按条读。' }
+            : {}),
         }
       },
     }),
@@ -290,7 +347,7 @@ export function registerTavernTools(ctx: Context, state: TavernState): void {
   ctx.tools.register(
     defineTool({
       name: 'tavern_asset_list',
-      description: '列出当前角色工作区资产摘要、绑定预设条目目录。读取正文用 tavern_asset_read（path 或 preset）。不要每轮例行调用。',
+      description: '列出当前角色工作区可读文本资产、绑定预设条目目录（与 tavern_asset_read 的白名单一致，不含 WAL/图片）。读取正文用 tavern_asset_read（path 或 preset）。不要每轮例行调用。',
       parameters: {},
       output: {
         schema: { type: 'json' },
@@ -304,11 +361,16 @@ export function registerTavernTools(ctx: Context, state: TavernState): void {
         const index = (raw === null ? null : JSON.parse(raw)) as JsonValue
         const memStats = await ws.memory.stats()
         const preset = (binding.presetId ? await state.loadPreset(binding.presetId) : null) ?? defaultPreset()
+        // 目录必须与 tavern_asset_read 的可读白名单一致：同一个 resolveReadableAssetPath 过滤，
+        // 否则会向模型广告 state/wal/*、回滚残留目录、card.png 这些 asset_read 一律拒绝的路径。
+        const readable = (await ws.fs.list()).filter((p) => resolveReadableAssetPath(p).ok)
         return {
           ok: true,
           index,
           memory: memStats,
-          files: await ws.fs.list(),
+          files: readable.slice(0, ASSET_CATALOG_MAX),
+          fileCount: readable.length,
+          filesTruncated: readable.length > ASSET_CATALOG_MAX,
           preset: { id: preset.identifier, name: preset.name, entries: listPresetCatalog(preset) },
           hint: '读文件：tavern_asset_read({ path: "journal.md" })；读预设：tavern_asset_read({ preset: "identifier 或 list" })',
         } as unknown as JsonValue

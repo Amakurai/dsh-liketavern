@@ -20,7 +20,7 @@ import { registerMemoryMaintenance } from './node/memoryMaintenance.js'
 import type { TavernService } from './node/service.js'
 import type { TavernState } from './node/state.js'
 import { registerTavernTools } from './node/tools.js'
-import { mergeTavernCallConfig, pickReasoningEffort } from './core/callConfig.js'
+import { mergeTavernCallConfig, resolveTavernReasoningEffort, type AdvertisedReasoningInfo } from './core/callConfig.js'
 import { BOUND_DISCIPLINE, UNBOUND_STANDING, formatTurnPlaybook, isContinueInstruction, neutralizeDshMustache } from './core/dshPrompt.js'
 import { standingFingerprint } from './core/standingPin.js'
 import type { SamplingSettings } from './core/types.js'
@@ -48,31 +48,23 @@ function joinPromptParts(parts: string[]): string {
   return parts.filter((p) => p.trim().length > 0).join('\n\n')
 }
 
-/** 只发送适配器公布的档位；deepseek-official 在解析失败时仍可关 thinking。 */
-async function resolveTavernReasoningEffort(
+/** 解析模型公布的 reasoning 档；无 llm 或解析失败一律返回 undefined，回退交给 resolveTavernReasoningEffort。 */
+async function resolveRequestReasoningEffort(
   state: TavernState,
   llm: LlmRuntime | undefined,
   config: LlmCallConfig,
   sampling: SamplingSettings,
   signal: AbortSignal,
 ): Promise<string | undefined> {
-  const current = config.reasoningEffort
+  let reasoning: AdvertisedReasoningInfo | undefined
   if (llm) {
     try {
-      const info = await state.resolveModelInfoCached(llm, config.provider, config.model, signal)
-      const picked = pickReasoningEffort(
-        sampling.thinking,
-        info.reasoning?.efforts,
-        info.reasoning?.defaultEffort,
-        current,
-      )
-      if (picked !== undefined) return picked
+      reasoning = (await state.resolveModelInfoCached(llm, config.provider, config.model, signal)).reasoning
     } catch {
       // 解析失败不阻断采样合入
     }
   }
-  if (sampling.thinking === 'disabled' && config.provider === 'deepseek-official') return 'off'
-  return pickReasoningEffort(sampling.thinking, undefined, undefined, current)
+  return resolveTavernReasoningEffort(sampling.thinking, reasoning, config.reasoningEffort, config.provider)
 }
 
 export function apply(ctx: Context): void {
@@ -139,7 +131,7 @@ export function apply(ctx: Context): void {
     const binding = await state.loadBinding(payload.agent.id)
     if (!binding) return config
     const sampling = state.config.sampling
-    const reasoningEffort = await resolveTavernReasoningEffort(state, llm, config, sampling, payload.signal)
+    const reasoningEffort = await resolveRequestReasoningEffort(state, llm, config, sampling, payload.signal)
     const merged = mergeTavernCallConfig(config, sampling, reasoningEffort)
     return reasoningEffort === undefined ? merged : { ...merged, reasoningEffort: ReasoningEffortId(reasoningEffort) }
   })

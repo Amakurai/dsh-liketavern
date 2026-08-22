@@ -37,6 +37,12 @@ export declare class TavernState {
     readonly currentTurns: Map<string, number>;
     /** 当前 turn 内的 step（pre-step / step/start 维护；turn 开始时为 1）。 */
     readonly currentSteps: Map<string, number>;
+    /**
+     * 会话 → 本轮 beginFloor 实际开在哪个 cardId 上（turn/start 记，turn/end 取走）。
+     * 不变式：楼层必须由开层那张卡提交。turn 中途换绑/解绑后当前绑定已经是另一张卡，
+     * 若按当前绑定提交，开层那张卡的 WorkspaceFs.floor 会永远悬着，之后的非会话写入被误记 WAL。
+     */
+    readonly openFloors: Map<string, string>;
     /** 每 turn 一次的 WI/记忆/变化层评估缓存（turn/end 清除）。 */
     readonly wiCache: Map<string, {
         turn: number;
@@ -115,7 +121,8 @@ export declare class TavernState {
     /** 读取世界书原始 JSON（供设置面板编辑）；不存在或损坏返回 null。 */
     loadLorebookJson(name: string): Promise<unknown | null>;
     loadLorebookEntries(name: string, source: WorldInfoEntry['source']): Promise<WorldInfoEntry[]>;
-    saveLorebook(name: string, json: unknown): Promise<void>;
+    /** 落盘并 bump 修订号，返回磁盘上的 id：调用方（服务层/客户端）之后要按这个 id 打开，不能用原始名。 */
+    saveLorebook(name: string, json: unknown): Promise<string>;
     deleteLorebook(name: string): Promise<void>;
     listPresets(): Promise<string[]>;
     listPresetSummaries(): Promise<Array<{
@@ -124,7 +131,8 @@ export declare class TavernState {
         regexCount: number;
     }>>;
     loadPreset(id: string): Promise<PromptPreset | null>;
-    savePreset(preset: PromptPreset): Promise<void>;
+    /** 落盘并 bump 修订号，返回磁盘上的 id（identifier 含非法字符时与 preset.identifier 不同）。 */
+    savePreset(preset: PromptPreset): Promise<string>;
     deletePreset(id: string): Promise<void>;
     listPersonas(): Promise<Persona[]>;
     loadPersona(id: string | null): Promise<Persona | null>;
@@ -133,7 +141,8 @@ export declare class TavernState {
      * 只建了人设、没在芯片/默认页勾选时，{{user}} 仍应展开成人设名而不是 User。
      */
     resolvePersona(personaId: string | null): Promise<Persona | null>;
-    savePersona(persona: Persona): Promise<void>;
+    /** 落盘并返回磁盘上的 id；id 被净化过时连同 JSON 里的 id 一起改写，避免文件名和内容各说各话。 */
+    savePersona(persona: Persona): Promise<string>;
     deletePersona(id: string): Promise<void>;
     listRegexRules(): Promise<RegexRule[]>;
     saveRegexRules(rules: RegexRule[]): Promise<void>;
@@ -152,8 +161,10 @@ export declare class TavernState {
     private clearStandingPins;
     private bumpAssetRev;
     /**
-     * standing 指纹的资产修订标记（稳定顺序）：绑定预设 + 全局世界书 + 主世界书（库书或卡内嵌书）。
+     * standing 指纹的资产修订标记（稳定顺序）：绑定预设 + 全局世界书 + 主世界书（库书或卡内嵌书）
+     * + 卡 + 会话书 + 人设书，末尾再加一个 config 标记。
      * 编辑/删除经本类写方法 bump；运行期绕开 TavernState 手改文件不捕获（standingPins 进程内，重启即清）。
+     * 资产键一律走 assetFileId：绑定里可能存着原始名，与写方法 bump 的键必须是同一个。
      */
     standingRevTags(binding: SessionBinding, extra?: {
         personaLorebookId?: string | null;
@@ -168,6 +179,13 @@ export declare class TavernState {
     loadTimers(cardId: string, sessionId: string): Promise<WITimerState>;
     saveTimers(cardId: string, sessionId: string, state: WITimerState): Promise<void>;
     recordTriggerLog(sessionId: string, lines: string[]): void;
+    /**
+     * 库资产（世界书 / 预设 / 人设）显示名 → 磁盘文件 id。
+     * 写盘路径、删除路径、读取路径和修订号键必须共用这一个 id：
+     * 曾经出现过「按净化名写文件、按原始名 bump 修订号」，绑定里存的是净化名，
+     * standing 指纹于是一直读一个没人 bump 的键，编辑世界书后钉死永不失效。
+     */
+    private assetFileId;
     private rootFsPromise;
     /** 数据目录根的 WorkspaceFs（library/personas/regex 等，非角色工作区，无 WAL）。 */
     private rootFs;

@@ -2,7 +2,7 @@
  * 角色工作区（workspace）单元测试。
  * 使用真实临时目录（WorkspaceFs wal 传 null）。
  * 覆盖：importCard 目录结构与文件内容、list/load/delete、cardId 路径边界、坏目录容错、
- * rebuildIndex 摘要与注入式 token 估算。
+ * rebuildIndex 摘要与注入式 token 估算、WorkspaceFs 的 '..' 段级越界拒绝。
  */
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -242,6 +242,29 @@ describe('list/load/delete', () => {
     await expect(deleteCharacter(charactersDir, '.')).rejects.toThrow(/非法的角色 ID/)
     expect(await pathExists(charactersDir)).toBe(true)
     expect(await pathExists(ws.root)).toBe(true)
+  })
+})
+
+describe('WorkspaceFs 路径边界', () => {
+  it('拒绝任何 .. 段：出根与跨子树都不放行，正常嵌套路径不受影响', async () => {
+    const ws = await importCard(charactersDir, makeCard())
+    const fs = new WorkspaceFs(ws.root, null)
+
+    // 出根
+    await expect(fs.writeText('a/../../x.json', '{}')).rejects.toThrow(/工作区路径越界/)
+    await expect(fs.readText('../card.json')).rejects.toThrow(/工作区路径越界/)
+    // 不出根但跨子树：只看根目录前缀会放行，段级判定必须拦住
+    await expect(fs.writeText('a/../b.json', '{}')).rejects.toThrow(/工作区路径越界/)
+    await expect(fs.writeText('personas/../regex/rules.json', '[]')).rejects.toThrow(/工作区路径越界/)
+    await expect(fs.delete('memory/../journal.md')).rejects.toThrow(/工作区路径越界/)
+    // Windows 反斜杠同样按段拆
+    await expect(fs.writeText('a\\..\\b.json', '{}')).rejects.toThrow(/工作区路径越界/)
+    expect(await pathExists(join(ws.root, 'b.json'))).toBe(false)
+
+    await fs.writeText('memory/deep/ok.md', '内容')
+    expect(await readFile(join(ws.root, 'memory', 'deep', 'ok.md'), 'utf8')).toBe('内容')
+    expect(await fs.readText('memory/deep/ok.md')).toBe('内容')
+    expect(await fs.list('memory')).toContain('deep/ok.md')
   })
 })
 

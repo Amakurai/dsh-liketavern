@@ -5,7 +5,7 @@
 import { useEffect, useState } from 'react'
 import type { PromptPreset, RegexRule, RegexScope, RegexTiming } from '../../core/types.js'
 import type { TavernRemote } from '../types.js'
-import { Btn, Err, Field, Muted, NullableNumInput, RegexScriptRow, Section, Select, Skeleton, Toggle, errOf, useLoader, useToast } from '../util.js'
+import { Btn, Err, Field, Muted, NullableNumInput, RegexScriptRow, Section, Select, Skeleton, Toggle, errOf, runAsync, useLoader, useToast } from '../util.js'
 
 const SCOPES: { value: RegexScope; label: string }[] = [
   { value: 'input', label: '用户输入' },
@@ -153,14 +153,13 @@ export function RegexSection(props: { remote: TavernRemote }) {
     }
   }
 
-  const save = async (next: RegexRule[]) => {
-    setBusy(true)
-    const r = await remote.saveRegexRules({ rules: next })
-    setBusy(false)
-    const err = errOf(r)
-    if (err) setError(err)
-    else toast.show(`已保存 ${next.length} 条规则`)
-  }
+  const save = (next: RegexRule[]) =>
+    runAsync(setBusy, setError, async () => {
+      const r = await remote.saveRegexRules({ rules: next })
+      const err = errOf(r)
+      if (err) setError(err)
+      else toast.show(`已保存 ${next.length} 条规则`)
+    })
 
   const current = rules ?? []
   return (

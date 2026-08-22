@@ -12,7 +12,7 @@ import {
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { WIPosition, WIRole, WISelectiveLogic, WISource, WorldInfoEntry } from '../../core/types.js'
 import { exportLorebook } from '../../state/lorebook.js'
-import { Badge, Btn, ConfirmDialog, Err, IconBtn, Muted, NumInput, NullableNumInput, Select, Toggle, errOf } from '../util.js'
+import { Badge, Btn, ConfirmDialog, Err, IconBtn, Muted, NumInput, NullableNumInput, Select, Toggle, errOf, runAsync } from '../util.js'
 import type { Envelope } from '../types.js'
 
 const PAGE_SIZE = 40
@@ -188,22 +188,23 @@ export function LorebookEditor(props: {
   const enabledCount = entries.filter((e) => e.enabled).length
   const constantCount = entries.filter((e) => e.constant).length
 
-  const save = async () => {
-    setBusy(true)
-    setError(null)
-    const json =
-      target.kind === 'character'
-        ? { name: target.name, ...(exportLorebook(entries, target.name) as object) }
-        : exportLorebook(entries, target.name)
-    const r = await props.save(json)
-    setBusy(false)
-    const err = errOf(r)
-    if (err) setError(err)
-    else {
-      setDirty(false)
-      props.onSaved()
-    }
-  }
+  // 整段包进 runAsync：typert 传输失败或入参严格校验不过时是 reject 而非错误信封，
+  // 传输层 reject 也必须解锁按钮——否则 busy 卡死，两个「保存」都点不动，
+  // 编辑器里这一批未写回的条目全部作废。
+  const save = () =>
+    runAsync(setBusy, setError, async () => {
+      const json =
+        target.kind === 'character'
+          ? { name: target.name, ...(exportLorebook(entries, target.name) as object) }
+          : exportLorebook(entries, target.name)
+      const r = await props.save(json)
+      const err = errOf(r)
+      if (err) setError(err)
+      else {
+        setDirty(false)
+        props.onSaved()
+      }
+    })
 
   const addEntry = () => {
     const created = newEntry(source, sourceRef)

@@ -1,9 +1,11 @@
 /**
  * 正则引擎单测。
  * 覆盖：裸 find 语义（区分大小写、只替换首个）、/pattern/flags 字面形式、
- * 替换串 $1/$<name>/{{match}}/宏展开、find 中宏的 substituteRegex 0/1/2、
- * minDepth/maxDepth 深度过滤、规则编译失败容错、compileCardRegexScripts /
- * compilePresetRegexScripts 归一化、消息角色过滤、封面 HTML 与正文拆分
+ * 替换串 $1/$<name>/{{match}}/宏展开（含宏值里的 $ 保护）、find 中宏的 substituteRegex 0/1/2
+ *（转义在展开后逐值进行，覆盖 getvar/persona 等非 char/user 宏）、
+ * minDepth/maxDepth 深度过滤、规则编译失败容错、trim 路径的越界 $N 与 '0'/'' 组值、
+ * compileCardRegexScripts / compilePresetRegexScripts 归一化（含 md/po 改写 scopes 后 roles 复核）、
+ * 消息角色过滤、封面 HTML 与正文拆分
  *（含无 doctype 的 style 片段、卡内 markdownOnly+promptOnly 仍启用展示向）。
  */
 import { describe, expect, it } from 'vitest'
@@ -80,6 +82,22 @@ describe('替换串', () => {
     expect(res.text).toBe('hi Alice & Bob')
   })
 
+  it('宏值里的 $& / $1 / $$ 是字面文本，不被 String.replace 再解释一次', () => {
+    const res = run('NAME', [makeRule({ id: 'r', find: 'NAME', replace: '{{user}}' })], {
+      ...CTX,
+      user: 'Cash$$Money $& $1',
+    })
+    expect(res.text).toBe('Cash$$Money $& $1')
+  })
+
+  it('宏值里的 $& 与 {{match}} 各归各：{{match}} 仍是整体匹配', () => {
+    const res = run('a cat b', [makeRule({ id: 'r', find: 'cat', replace: '<{{match}}|{{user}}>' })], {
+      ...CTX,
+      user: '$&',
+    })
+    expect(res.text).toBe('a <cat|$&> b')
+  })
+
   it('先展开身份宏再匹配：开场白里的 {{user}} 才能被人设名命中', () => {
     const named = expandIdentityMacros('{{user}}，你好。', CTX)
     const res = applyRegexRules(
@@ -115,6 +133,36 @@ describe('find 中宏展开（substituteRegex）', () => {
       char: 'A.B',
     })
     expect(res.text).toBe('AXB and X')
+  })
+
+  it('2 = 转义代入对 char/user 以外的宏同样生效（{{getvar}} 带元字符不再编译失败）', () => {
+    const ctx: MacroContext = { ...CTX, store: new Map([['topic', 'C++ (advanced)']]) }
+    const res = run(
+      '课程 C++ (advanced) 结束',
+      [makeRule({ id: 'r', find: '{{getvar::topic}}', replace: 'X', substituteRegex: 2 })],
+      ctx,
+    )
+    expect(res.text).toBe('课程 X 结束')
+    expect(res.errors).toEqual([])
+  })
+
+  it('2 = 转义代入：{{persona}} 里的 .* 不再匹配一切', () => {
+    const ctx: MacroContext = { ...CTX, persona: '.*' }
+    const res = run('随便什么 .* 文本', [
+      makeRule({ id: 'r', find: '{{persona}}', replace: '<X>', substituteRegex: 2 }),
+    ], ctx)
+    expect(res.text).toBe('随便什么 <X> 文本')
+  })
+
+  it('1 = 原样代入时元字符仍按正则语义生效（记录未转义路径的差异）', () => {
+    const ctx: MacroContext = { ...CTX, store: new Map([['topic', 'C++ (advanced)']]) }
+    const res = run(
+      '课程 C++ (advanced) 结束',
+      [makeRule({ id: 'r', find: '{{getvar::topic}}', replace: 'X', substituteRegex: 1 })],
+      ctx,
+    )
+    expect(res.text).toBe('课程 C++ (advanced) 结束')
+    expect(res.errors).toHaveLength(1)
   })
 })
 
@@ -261,6 +309,27 @@ describe('trimStrings / trimStringsRegex（ST 语义：从代入的捕获组值�
     expect(res.applied).toEqual([])
   })
 
+  it('越界的 $N 原样输出（对齐原生 replace），不泄露 offset 与整段原文', () => {
+    const res = run('a [foo] b', [
+      makeRule({ id: 'r', find: '/\\[(\\w+)\\]/g', replace: '[$1|$2|$3]', trimStrings: ['zzz'] }),
+    ])
+    // $2 是 offset、$3 是整段原文；越界 $N 必须留字面量
+    expect(res.text).toBe('a [foo|$2|$3] b')
+    expect(res.errors).toEqual([])
+  })
+
+  it("组值 '0' / 空串不被当成未命中：零值统计不会消失", () => {
+    const res = run('HP:0', [makeRule({ id: 'r', find: '/HP:(\\d+)/', replace: 'HP=$1', trimStrings: ['x'] })])
+    expect(res.text).toBe('HP=0')
+    const empty = run('[]尾', [makeRule({ id: 'e', find: '/\\[(\\w*)\\]/', replace: '<$1>', trimStrings: ['x'] })])
+    expect(empty.text).toBe('<>尾')
+  })
+
+  it('未参与匹配的可选组仍代入空串', () => {
+    const res = run('ab', [makeRule({ id: 'r', find: '/a(x)?b/', replace: '<$1>', trimStrings: ['x'] })])
+    expect(res.text).toBe('<>')
+  })
+
   it('非法 trimStringsRegex 记 errors，整条规则失败但不中断后续规则', () => {
     const res = run('cat', [
       makeRule({ id: 'bad-trim', find: 'cat', replace: '[$0]', trimStringsRegex: ['/(unclosed/'] }),
@@ -317,6 +386,20 @@ describe('compileCardRegexScripts', () => {
     expect(rules).toHaveLength(1)
     expect(rules[0]!.scopes).toEqual(['output'])
     expect(rules[0]!.timing).toEqual(['render'])
+  })
+
+  it('markdownOnly 把 placement:[1] 的 roles 从 user 复核成 assistant，规则不再永不命中', () => {
+    const rules = compileCardRegexScripts([{ ...base, placement: [1], markdownOnly: true }], 'c')
+    expect(rules[0]!.scopes).toEqual(['output'])
+    expect(rules[0]!.roles).toEqual(['assistant'])
+    const res = applyRegexToMessages(
+      [{ role: 'assistant', content: 'cat' }],
+      rules,
+      { scope: 'output', timing: 'render' },
+      CTX,
+    )
+    expect(res.messages.map((m) => m.content)).toEqual(['dog'])
+    expect(res.applied).toEqual([rules[0]!.id])
   })
 
   it('promptOnly 覆盖为 prompt 作用域（assemble + send）', () => {

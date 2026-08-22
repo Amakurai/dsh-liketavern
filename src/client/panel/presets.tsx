@@ -6,7 +6,7 @@ import { useState } from 'react'
 import { IconDownloadOutline16, IconEditOutline16, IconFolderOpenOutline16, IconTrashOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { CardRegexScript, ChatRole, PresetEntry, PromptPreset } from '../../core/types.js'
 import { EMPTY_SESSION_DEFAULTS, type PresetSummary, type TavernRemote } from '../types.js'
-import { Badge, Btn, ConfirmDialog, Err, Field, FileBtn, IconBtn, Muted, NumInput, RegexScriptRow, Section, Select, Skeleton, Toggle, clickableProps, downloadJson, errOf, readJsonFile, useLoader, useToast } from '../util.js'
+import { Badge, Btn, ConfirmDialog, Err, Field, FileBtn, IconBtn, Muted, NumInput, RegexScriptRow, Section, Select, Skeleton, Toggle, clickableProps, downloadJson, errOf, readJsonFile, runAsync, useLoader, useToast } from '../util.js'
 
 function newEntry(order: number): PresetEntry {
   return {
@@ -114,15 +114,15 @@ export function PresetsSection(props: { remote: TavernRemote }) {
 
   const save = async () => {
     if (!editing) return
-    setBusy(true)
-    const r = await remote.savePreset({ preset: editing })
-    setBusy(false)
-    const err = errOf(r)
-    if (err) setError(err)
-    else {
-      toast.show(`已保存预设 ${editing.name}`)
-      reload()
-    }
+    await runAsync(setBusy, setError, async () => {
+      const r = await remote.savePreset({ preset: editing })
+      const err = errOf(r)
+      if (err) setError(err)
+      else {
+        toast.show(`已保存预设 ${editing.name}`)
+        reload()
+      }
+    })
   }
 
   const remove = async () => {

@@ -6,7 +6,7 @@
 import { useEffect, useState } from 'react'
 import { Button, IconDownloadOutline16, IconSearchOutline16, IconTrashOutline16, IconUserOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { CharacterDetail, CharacterInspect, CharacterSummary, TavernRemote } from '../types.js'
-import { Avatar, Btn, ConfirmDialog, Dialog, Err, Field, FileBtn, IconBtn, Muted, NumInput, Section, Select, Skeleton, downloadBase64, downloadJson, errOf, fileToBase64, useLoader, useToast } from '../util.js'
+import { Avatar, Btn, ConfirmDialog, Dialog, Err, Field, FileBtn, IconBtn, Muted, NumInput, Section, Select, Skeleton, downloadBase64, downloadJson, errOf, fileToBase64, runAsync, useLoader, useToast } from '../util.js'
 
 const CSP_META =
   '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; script-src \'unsafe-inline\'; style-src \'unsafe-inline\'">'
@@ -57,33 +57,32 @@ function CharacterDetailDialog(props: { remote: TavernRemote; cardId: string; on
       setError('角色名不能为空')
       return
     }
-    setBusy(true)
-    setError(null)
-    const r = await remote.saveCharacter({
-      cardId,
-      name: detail.name,
-      description: detail.description,
-      personality: detail.personality,
-      scenario: detail.scenario,
-      firstMes: detail.firstMes,
-      alternateGreetings: detail.alternateGreetings.map((s) => s.trim()).filter(Boolean),
-      mesExample: detail.mesExample,
-      systemPrompt: detail.systemPrompt,
-      postHistoryInstructions: detail.postHistoryInstructions,
-      creatorNotes: detail.creatorNotes,
-      creator: detail.creator,
-      characterVersion: detail.characterVersion,
-      tags: detail.tags,
-      depthPrompt: detail.depthPrompt ?? null,
+    await runAsync(setBusy, setError, async () => {
+      const r = await remote.saveCharacter({
+        cardId,
+        name: detail.name,
+        description: detail.description,
+        personality: detail.personality,
+        scenario: detail.scenario,
+        firstMes: detail.firstMes,
+        alternateGreetings: detail.alternateGreetings.map((s) => s.trim()).filter(Boolean),
+        mesExample: detail.mesExample,
+        systemPrompt: detail.systemPrompt,
+        postHistoryInstructions: detail.postHistoryInstructions,
+        creatorNotes: detail.creatorNotes,
+        creator: detail.creator,
+        characterVersion: detail.characterVersion,
+        tags: detail.tags,
+        depthPrompt: detail.depthPrompt ?? null,
+      })
+      const err = errOf(r)
+      if (err) setError(err)
+      else {
+        toast.show(`已保存「${detail.name}」`)
+        reload()
+        props.onSaved()
+      }
     })
-    setBusy(false)
-    const err = errOf(r)
-    if (err) setError(err)
-    else {
-      toast.show(`已保存「${detail.name}」`)
-      reload()
-      props.onSaved()
-    }
   }
 
   const exportCard = async (kind: 'json' | 'png') => {
@@ -282,20 +281,20 @@ export function CharactersSection(props: { remote: TavernRemote }) {
 
   const onDelete = async () => {
     if (!toDelete) return
-    setBusy(true)
-    const r = await remote.deleteCharacter({ cardId: toDelete.cardId })
-    setBusy(false)
-    const err = errOf(r)
-    if (err) setError(err)
-    else {
-      toast.show(
-        r.ok && r.value.salvagedLorebook
-          ? `已删除「${toDelete.name}」，内嵌世界书已保留到世界书库：${r.value.salvagedLorebook}`
-          : `已删除「${toDelete.name}」`,
-      )
-      setToDelete(null)
-      reload()
-    }
+    await runAsync(setBusy, setError, async () => {
+      const r = await remote.deleteCharacter({ cardId: toDelete.cardId })
+      const err = errOf(r)
+      if (err) setError(err)
+      else {
+        toast.show(
+          r.ok && r.value.salvagedLorebook
+            ? `已删除「${toDelete.name}」，内嵌世界书已保留到世界书库：${r.value.salvagedLorebook}`
+            : `已删除「${toDelete.name}」`,
+        )
+        setToDelete(null)
+        reload()
+      }
+    })
   }
 
   const items = state.status === 'ready' ? state.value.items : []
@@ -404,10 +403,8 @@ export function CharactersSection(props: { remote: TavernRemote }) {
               size="md"
               disabled={busy || !newName.trim()}
               onClick={() => {
-                void (async () => {
-                  setBusy(true)
+                void runAsync(setBusy, setError, async () => {
                   const r = await remote.createCharacter({ name: newName.trim() })
-                  setBusy(false)
                   const err = errOf(r)
                   if (err) setError(err)
                   else {
@@ -417,7 +414,7 @@ export function CharactersSection(props: { remote: TavernRemote }) {
                     reload()
                     if (r.ok) setDetailId(r.value.cardId)
                   }
-                })()
+                })
               }}
             >
               创建

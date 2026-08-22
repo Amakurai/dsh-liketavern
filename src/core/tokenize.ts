@@ -13,22 +13,50 @@ function isCjkCode(code: number): boolean {
 }
 
 /**
- * 切分单元：一段连续 CJK 表意文字，或一个 ASCII 词。
- * ASCII 词以字母/数字为主体，允许内部含 `_`、`-` 连写（如 `foo_bar`、`long-term`）。
- * 其余标点、空白一律跳过；CJK 与拉丁混排时各自成段，边界处不跨语言组词。
+ * 需要 bigram 切分的文字：CJK 表意 + 假名（平/片假名 U+3040–U+30FF）+
+ * 片假名音标扩展（U+31F0–U+31FF）+ 谚文音节（U+AC00–U+D7A3）。
+ * 这些文字不靠空格分词，整段取词不可行，统一走滑窗 bigram。
+ * 刻意与 isCjkCode 分开：token 估算（estimateTokens）的口径不随分词口径变。
  */
-const SEGMENT_RE = /[\u3400-\u4dbf\u4e00-\u9fff]+|[a-zA-Z0-9]+(?:[_-][a-zA-Z0-9]+)*/gu
+function isBigramScript(code: number): boolean {
+  return (
+    isCjkCode(code) ||
+    (code >= 0x3040 && code <= 0x30ff) ||
+    (code >= 0x31f0 && code <= 0x31ff) ||
+    (code >= 0xac00 && code <= 0xd7a3)
+  )
+}
+
+/** 与 isBigramScript 一一对应的字符类；改一处必须同步改另一处。 */
+const BIGRAM_CLASS = '\\u3400-\\u4dbf\\u4e00-\\u9fff\\u3040-\\u30ff\\u31f0-\\u31ff\\uac00-\\ud7a3'
+
+/**
+ * 单个词字符：任意 Unicode 字母/数字，但要排除 bigram 文字。
+ * `\p{L}` 也匹配表意字与假名，不排除的话「我喜欢apple派」会把「派」并进 `apple`。
+ * 必须整体包在非捕获组里，否则后面的 `+` 只作用于字符类，前瞻只在词首生效一次。
+ */
+const WORD_CHAR = `(?:(?![${BIGRAM_CLASS}])[\\p{L}\\p{N}])`
+
+/**
+ * 切分单元：一段连续 bigram 文字（CJK/假名/谚文），或一个 Unicode 词。
+ * bigram 分支必须排在前面：`\p{L}` 覆盖表意字，词分支在前会把整段中文吞成一个词。
+ * 词以字母/数字为主体，涵盖拉丁扩展、西里尔、希腊等（`café`、`Привет`），
+ * 允许内部含 `_`、`-` 连写（如 `foo_bar`、`long-term`）。
+ * 其余标点、空白一律跳过；不同文字混排时各自成段，边界处不跨语言组词。
+ */
+const SEGMENT_RE = new RegExp(`[${BIGRAM_CLASS}]+|${WORD_CHAR}+(?:[_-]${WORD_CHAR}+)*`, 'gu')
 
 /**
  * 检索分词。
- * - CJK 段切滑窗 bigram：「我喜欢你」→ ['我喜', '喜欢', '欢你']；单字不成词（返回空）。
- * - ASCII 词整词保留并转小写。
+ * - bigram 文字段切滑窗 bigram：「我喜欢你」→ ['我喜', '喜欢', '欢你']；单字不成词（返回空）。
+ *   假名、谚文同理：「안녕하세요」→ ['안녕', '녕하', '하세', '세요']。
+ * - 其余词整词保留并转小写：`Café` → `café`，`Привет` → `привет`。
  */
 export function tokenize(text: string): string[] {
   const tokens: string[] = []
   for (const match of text.matchAll(SEGMENT_RE)) {
     const seg = match[0]
-    if (isCjkCode(seg.charCodeAt(0))) {
+    if (isBigramScript(seg.charCodeAt(0))) {
       for (let i = 0; i + 2 <= seg.length; i++) {
         tokens.push(seg.slice(i, i + 2))
       }
@@ -45,7 +73,7 @@ export function tokenize(text: string): string[] {
 
 /**
  * 确定性粗估 token 数：CJK 字符每个计 1，其余字符累计后 ÷4 向上取整，两部分相加。
- * 只用于预算分配，不追求与具体模型 tokenizer 对齐。
+ * 只用于预算分配，不追求与具体模型 tokenizer 对齐；口径固定，不跟随分词的 bigram 文字范围。
  */
 export function estimateTokens(text: string): number {
   let cjk = 0

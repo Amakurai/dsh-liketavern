@@ -21,6 +21,9 @@
  * 不是把 ST 宏引擎原样扔给模型。
  *
  * 未支持的宏保留原样并回调 onUnknown。
+ *
+ * `postProcess` 逐个加工「宏解析出来的值」（对齐 ST substituteParamsExtended 的 postProcessFn）：
+ * 正则 find 的转义代入、正则 replace 的 `$` 保护都靠它，宏之外的原文不受影响。
  */
 import type { MacroContext } from './types.js'
 
@@ -164,8 +167,16 @@ function applyCommand(inner: string, ctx: MacroContext, clock: Record<string, st
 /**
  * 展开 text 中的宏。outlet 替换结果不二次扫描（SillyTavern：禁止嵌套 outlet）。
  * setvar/getvar 经 MacroContext.store 在一次组装内跨条目共享。
+ *
+ * postProcess 只作用于每个宏解析出来的值（不碰模板里的原文），调用方用它做
+ * 正则转义或 `$` 保护。now 保持第三位，老调用方（只传 text/ctx 或再带 now）不受影响。
  */
-export function expandMacros(text: string, ctx: MacroContext, now: Date = new Date()): string {
+export function expandMacros(
+  text: string,
+  ctx: MacroContext,
+  now: Date = new Date(),
+  postProcess?: (value: string) => string,
+): string {
   if (!text.includes('{{')) return text
   const clock = { ...defaultVars(now), ...ctx.vars }
   let current = text
@@ -174,7 +185,7 @@ export function expandMacros(text: string, ctx: MacroContext, now: Date = new Da
     current = current.replace(MACRO_RE, (raw, inner: string) => {
       if (skipGet && isGetVar(inner)) return raw
       const applied = applyCommand(inner, ctx, clock)
-      if (applied !== undefined) return applied
+      if (applied !== undefined) return postProcess ? postProcess(applied) : applied
       unknowns?.push(inner.trim())
       return raw
     })

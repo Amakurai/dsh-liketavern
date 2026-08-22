@@ -4,6 +4,7 @@
  * 世界书引擎按「每 turn 只评估一次」使用（定时器以消息数为单位，多步 turn 内复用缓存），
  * 只有每轮首次评估（live 模式）才持久化新的定时状态——经 WorkspaceFs 写入，
  * 因而落入当前楼层 WAL，可随回退/swipe 回滚。
+ * preview（预览提示词 / 代答）用空定时器评估，既不读也不写该缓存，见下方 cacheable。
  * 每步仍重新组装 standing/turn：长上下文下靠最新 runtime context 快照重放本轮世界书/记忆，
  * 遗忘则按条用工具补读，而不是跳过组装。
  */
@@ -173,10 +174,16 @@ export async function runTavernPipeline(input: PipelineInput): Promise<PipelineR
   }
 
   // ── WI / 记忆 / 变化层：每 turn 评估一次并缓存 ──
+  // 缓存只服务「live 且已知 turn 号」的评估：
+  // preview（预览提示词 / 代答）用空定时器评估，既不能复用本轮 live 的结果，也绝不能写进缓存——
+  // 否则本 turn 的 live 评估会沿用这份无定时器的结果，sticky/cooldown 被免定时器地决定且永不落盘。
+  // 且 idle 时 turn 恒为 -1，各次预览之间也不该互相复用（绑定/世界书/记忆随时可能被编辑）。
+  // 代价是每次预览/代答多评估一次世界书——正确且便宜。
+  const cacheable = input.mode === 'live' && turn >= 0
   let wi: WIEngineResult
   let memories: string[]
   let deltas: WorldDelta[]
-  const cached = state.wiCache.get(sessionId)
+  const cached = cacheable ? state.wiCache.get(sessionId) : undefined
   if (cached && cached.turn === turn) {
     ;({ wi, memories, deltas } = cached)
   } else {
@@ -212,7 +219,7 @@ export async function runTavernPipeline(input: PipelineInput): Promise<PipelineR
       memories = selectMemoryBodies(hits, config.memory.retrievalTokenBudget)
     }
 
-    state.wiCache.set(sessionId, { turn, wi, memories, deltas })
+    if (cacheable) state.wiCache.set(sessionId, { turn, wi, memories, deltas })
   }
 
   let journalText = ''

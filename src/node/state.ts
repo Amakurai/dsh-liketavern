@@ -25,7 +25,7 @@ import {
 import { WorkspaceFs } from '../state/workspaceFs.js'
 import { resolveStaleBinding } from '../core/binding.js'
 import { pickPersona } from '../core/persona.js'
-import { pinStandingText, standingPinKey, type StandingPin } from '../core/standingPin.js'
+import { pinStandingText, stableFingerprintHash, standingPinKey, type StandingPin } from '../core/standingPin.js'
 import { clearBindingsForCard, deleteBinding, loadBinding, saveBinding, type SessionBinding } from './bindings.js'
 import type { TavernConfig } from './config.js'
 import { ensurePaths, type TavernPaths } from './paths.js'
@@ -54,6 +54,12 @@ export class TavernState {
   readonly currentTurns = new Map<string, number>()
   /** 当前 turn 内的 step（pre-step / step/start 维护；turn 开始时为 1）。 */
   readonly currentSteps = new Map<string, number>()
+  /**
+   * 会话 → 本轮 beginFloor 实际开在哪个 cardId 上（turn/start 记，turn/end 取走）。
+   * 不变式：楼层必须由开层那张卡提交。turn 中途换绑/解绑后当前绑定已经是另一张卡，
+   * 若按当前绑定提交，开层那张卡的 WorkspaceFs.floor 会永远悬着，之后的非会话写入被误记 WAL。
+   */
+  readonly openFloors = new Map<string, string>()
   /** 每 turn 一次的 WI/记忆/变化层评估缓存（turn/end 清除）。 */
   readonly wiCache = new Map<string, { turn: number; wi: WIEngineResult; memories: string[]; deltas: WorldDelta[] }>()
   /** 已入 inbox 尚未入日志的用户输入文本（agent/inbox/inserted 维护；turn/end 清除）。 */
@@ -138,8 +144,8 @@ export class TavernState {
     if (!this.config.cascadeDeleteEmbeddedBook) {
       const book = await this.loadCharacterLorebookRaw(cardId)
       if (book) {
-        salvagedLorebook = await this.salvageLorebookName(book.name)
-        await this.saveLorebook(salvagedLorebook, book.json)
+        // 以 saveLorebook 落盘后的实际 id 为准，UI 打开的目标才和磁盘一致。
+        salvagedLorebook = await this.saveLorebook(await this.salvageLorebookName(book.name), book.json)
       }
     }
     await deleteCharacterFromDisk(this.paths.characters, cardId)
@@ -150,8 +156,7 @@ export class TavernState {
 
   /** 抢救内嵌书到世界书库时的去重文件名（与 saveLorebook 同一套净化规则）。 */
   private async salvageLorebookName(base: string): Promise<string> {
-    const sanitize = (s: string) => s.replace(/[^A-Za-z0-9_一-鿿.-]/g, '_')
-    const clean = sanitize(base.trim() || 'embedded-book')
+    const clean = this.assetFileId(base.trim() || 'embedded-book')
     const existing = new Set(await this.listLorebooks())
     if (!existing.has(clean)) return clean
     for (let i = 2; i < 100; i++) {
@@ -293,9 +298,9 @@ export class TavernState {
 
   /** 读取世界书原始 JSON（供设置面板编辑）；不存在或损坏返回 null。 */
   async loadLorebookJson(name: string): Promise<unknown | null> {
-    const safe = name.replace(/[^A-Za-z0-9_一-鿿.-]/g, '_')
+    const id = this.assetFileId(name)
     const fs = await this.rootFs()
-    const raw = await fs.readText(`library/lorebooks/${safe}.json`)
+    const raw = await fs.readText(`library/lorebooks/${id}.json`)
     if (raw === null) return null
     try {
       return JSON.parse(raw) as unknown
@@ -305,23 +310,27 @@ export class TavernState {
   }
 
   async loadLorebookEntries(name: string, source: WorldInfoEntry['source']): Promise<WorldInfoEntry[]> {
+    const id = this.assetFileId(name)
     const fs = await this.rootFs()
-    const raw = await fs.readText(`library/lorebooks/${name}.json`)
+    const raw = await fs.readText(`library/lorebooks/${id}.json`)
     if (raw === null) return []
-    return parseLorebook(JSON.parse(raw), { source, sourceRef: name })
+    return parseLorebook(JSON.parse(raw), { source, sourceRef: id })
   }
 
-  async saveLorebook(name: string, json: unknown): Promise<void> {
-    const safe = name.replace(/[^A-Za-z0-9_一-鿿.-]/g, '_')
+  /** 落盘并 bump 修订号，返回磁盘上的 id：调用方（服务层/客户端）之后要按这个 id 打开，不能用原始名。 */
+  async saveLorebook(name: string, json: unknown): Promise<string> {
+    const id = this.assetFileId(name)
     const fs = await this.rootFs()
-    await fs.writeText(`library/lorebooks/${safe}.json`, JSON.stringify(json, null, 2) + '\n')
-    this.bumpAssetRev(`lore:${name}`)
+    await fs.writeText(`library/lorebooks/${id}.json`, JSON.stringify(json, null, 2) + '\n')
+    this.bumpAssetRev(`lore:${id}`)
+    return id
   }
 
   async deleteLorebook(name: string): Promise<void> {
+    const id = this.assetFileId(name)
     const fs = await this.rootFs()
-    await fs.delete(`library/lorebooks/${name}.json`)
-    this.bumpAssetRev(`lore:${name}`)
+    await fs.delete(`library/lorebooks/${id}.json`)
+    this.bumpAssetRev(`lore:${id}`)
   }
 
   // ── 预设库 ────────────────────────────────────────────────────────────────
@@ -347,21 +356,24 @@ export class TavernState {
 
   async loadPreset(id: string): Promise<PromptPreset | null> {
     const fs = await this.rootFs()
-    const raw = await fs.readText(`library/presets/${id}.json`)
+    const raw = await fs.readText(`library/presets/${this.assetFileId(id)}.json`)
     return raw === null ? null : (JSON.parse(raw) as PromptPreset)
   }
 
-  async savePreset(preset: PromptPreset): Promise<void> {
-    const safe = preset.identifier.replace(/[^A-Za-z0-9_一-鿿.-]/g, '_')
+  /** 落盘并 bump 修订号，返回磁盘上的 id（identifier 含非法字符时与 preset.identifier 不同）。 */
+  async savePreset(preset: PromptPreset): Promise<string> {
+    const id = this.assetFileId(preset.identifier)
     const fs = await this.rootFs()
-    await fs.writeText(`library/presets/${safe}.json`, JSON.stringify(preset, null, 2) + '\n')
-    this.bumpAssetRev(`preset:${preset.identifier}`)
+    await fs.writeText(`library/presets/${id}.json`, JSON.stringify(preset, null, 2) + '\n')
+    this.bumpAssetRev(`preset:${id}`)
+    return id
   }
 
   async deletePreset(id: string): Promise<void> {
+    const safe = this.assetFileId(id)
     const fs = await this.rootFs()
-    await fs.delete(`library/presets/${id}.json`)
-    this.bumpAssetRev(`preset:${id}`)
+    await fs.delete(`library/presets/${safe}.json`)
+    this.bumpAssetRev(`preset:${safe}`)
   }
 
   // ── 人设 ─────────────────────────────────────────────────────────────────
@@ -383,7 +395,7 @@ export class TavernState {
   async loadPersona(id: string | null): Promise<Persona | null> {
     if (!id) return null
     const fs = await this.rootFs()
-    const raw = await fs.readText(`personas/${id}.json`)
+    const raw = await fs.readText(`personas/${this.assetFileId(id)}.json`)
     if (raw === null) return null
     try {
       return JSON.parse(raw) as Persona
@@ -403,14 +415,17 @@ export class TavernState {
     return pickPersona(null, null, await this.listPersonas())
   }
 
-  async savePersona(persona: Persona): Promise<void> {
+  /** 落盘并返回磁盘上的 id；id 被净化过时连同 JSON 里的 id 一起改写，避免文件名和内容各说各话。 */
+  async savePersona(persona: Persona): Promise<string> {
+    const id = this.assetFileId(persona.id)
     const fs = await this.rootFs()
-    await fs.writeText(`personas/${persona.id}.json`, JSON.stringify(persona, null, 2) + '\n')
+    await fs.writeText(`personas/${id}.json`, JSON.stringify({ ...persona, id }, null, 2) + '\n')
+    return id
   }
 
   async deletePersona(id: string): Promise<void> {
     const fs = await this.rootFs()
-    await fs.delete(`personas/${id}.json`)
+    await fs.delete(`personas/${this.assetFileId(id)}.json`)
   }
 
   // ── 全局正则 ──────────────────────────────────────────────────────────────
@@ -484,7 +499,14 @@ export class TavernState {
     const personaId = persona?.id ?? null
     const next = personaId !== resolved.personaId ? { ...resolved, personaId } : resolved
     if (next.cardId !== parsed.cardId || next.cardName !== parsed.cardName || next.personaId !== parsed.personaId) {
-      await saveBinding(this.paths, next)
+      // 自愈是读路径上的写：loadBinding 是热路径且不走 enqueueSessionTask，
+      // 从 loadBinding 读到落盘之间用户可能已经换了卡。落盘前复读一次比对，
+      // 只有磁盘仍是我们读到的那份才写回；否则丢弃本次自愈（下次读会重新算），
+      // 免得在途自愈把用户刚选的角色悄悄覆盖回旧绑定。
+      const current = await loadBinding(this.paths, sessionId)
+      if (current && current.cardId === parsed.cardId && current.personaId === parsed.personaId) {
+        await saveBinding(this.paths, next)
+      }
     }
     return next
   }
@@ -512,24 +534,33 @@ export class TavernState {
   }
 
   /**
-   * standing 指纹的资产修订标记（稳定顺序）：绑定预设 + 全局世界书 + 主世界书（库书或卡内嵌书）。
+   * standing 指纹的资产修订标记（稳定顺序）：绑定预设 + 全局世界书 + 主世界书（库书或卡内嵌书）
+   * + 卡 + 会话书 + 人设书，末尾再加一个 config 标记。
    * 编辑/删除经本类写方法 bump；运行期绕开 TavernState 手改文件不捕获（standingPins 进程内，重启即清）。
+   * 资产键一律走 assetFileId：绑定里可能存着原始名，与写方法 bump 的键必须是同一个。
    */
   standingRevTags(binding: SessionBinding, extra?: { personaLorebookId?: string | null }): string[] {
-    const presetKey = `preset:${binding.presetId ?? ''}`
+    const presetKey = `preset:${this.assetFileId(binding.presetId ?? '')}`
     const tags = [`${presetKey}=${this.assetRevs.get(presetKey) ?? 0}`]
     for (const id of binding.lorebookIds) {
-      const key = `lore:${id}`
+      const key = `lore:${this.assetFileId(id)}`
       tags.push(`${key}=${this.assetRevs.get(key) ?? 0}`)
     }
-    const charKey = binding.characterLorebookId ? `lore:${binding.characterLorebookId}` : `charlore:${binding.cardId}`
+    const charKey = binding.characterLorebookId
+      ? `lore:${this.assetFileId(binding.characterLorebookId)}`
+      : `charlore:${binding.cardId}`
     tags.push(`${charKey}=${this.assetRevs.get(charKey) ?? 0}`)
     tags.push(`card:${binding.cardId}=${this.assetRevs.get(`card:${binding.cardId}`) ?? 0}`)
     tags.push(`chatlore:${binding.cardId}=${this.assetRevs.get(`chatlore:${binding.cardId}`) ?? 0}`)
     if (extra?.personaLorebookId) {
-      const key = `lore:${extra.personaLorebookId}`
+      const key = `lore:${this.assetFileId(extra.personaLorebookId)}`
       tags.push(`${key}=${this.assetRevs.get(key) ?? 0}`)
     }
+    // 设置也进指纹，否则改了设置整个进程生命周期都到不了模型（没有任何写方法会 bump 修订号）。
+    // 只取真正决定 standing 字节的两项：worldInfo 决定哪些 constant 条目进常驻段，
+    // sampling.maxTokens 决定 trimNonHistory 的裁剪线。整份 config 不能进——
+    // interactiveCards / triggerLogMax 之类跟 standing 无关，改一次白白打断一次 KV 前缀缓存。
+    tags.push(`config=${stableFingerprintHash({ wi: this.config.worldInfo, out: this.config.sampling.maxTokens })}`)
     return tags
   }
 
@@ -581,6 +612,16 @@ export class TavernState {
   }
 
   // ── 内部 ─────────────────────────────────────────────────────────────────
+
+  /**
+   * 库资产（世界书 / 预设 / 人设）显示名 → 磁盘文件 id。
+   * 写盘路径、删除路径、读取路径和修订号键必须共用这一个 id：
+   * 曾经出现过「按净化名写文件、按原始名 bump 修订号」，绑定里存的是净化名，
+   * standing 指纹于是一直读一个没人 bump 的键，编辑世界书后钉死永不失效。
+   */
+  private assetFileId(name: string): string {
+    return name.replace(/[^A-Za-z0-9_一-鿿.-]/g, '_')
+  }
 
   private rootFsPromise: Promise<WorkspaceFs> | null = null
   /** 数据目录根的 WorkspaceFs（library/personas/regex 等，非角色工作区，无 WAL）。 */

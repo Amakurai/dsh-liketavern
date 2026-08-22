@@ -17,7 +17,7 @@ import {
   type StreamChunk,
 } from '@deepseek-ai/dsh-llm'
 import type { Session } from '@deepseek-ai/dsh-session'
-import { pickReasoningEffort } from '../core/callConfig.js'
+import { resolveTavernReasoningEffort, type AdvertisedReasoningInfo } from '../core/callConfig.js'
 import { FloorError, forkAgentOptions } from './floors.js'
 import { runTavernPipeline } from './pipeline.js'
 import { isTavernRuntimeSession } from './tavernSession.js'
@@ -71,13 +71,18 @@ export async function impersonate({ ctx, state }: ImpersonateDeps, sessionId: st
   if (!pipeline) throw new FloorError('no-card', '角色卡不存在或绑定已失效')
 
   const sampling = state.config.sampling
-  let reasoningEffort: string | undefined
+  // 深度思考的三级挑选与 live 请求共用 resolveTavernReasoningEffort（core/callConfig）：
+  // 关键是 deepseek-official 在元数据解析失败时也要能关掉 thinking——代答曾漏掉这层兜底。
+  let reasoning: AdvertisedReasoningInfo | undefined
   try {
-    const info = await state.resolveModelInfoCached(llm, provider, model)
-    reasoningEffort = pickReasoningEffort(sampling.thinking, info.reasoning?.efforts, info.reasoning?.defaultEffort, undefined)
+    reasoning = (await state.resolveModelInfoCached(llm, provider, model)).reasoning
   } catch {
-    // 模型元数据解析失败不阻断代答；reasoningEffort 留空走模型默认
+    // 模型元数据解析失败不阻断代答；按「无公布档」回退
   }
+  // 「当前档」取会话最近一次 request header 里的档位：与 agent/request 看到的 config.reasoningEffort
+  // 同源（forkAgentOptions 的路由也读这里），enabled 档才不会和 live 行为分叉。
+  const currentEffort = session.requestHeader()?.config.reasoningEffort
+  const reasoningEffort = resolveTavernReasoningEffort(sampling.thinking, reasoning, currentEffort, provider)
 
   const messages: Message[] = pipeline.history.map((m) =>
     m.role === 'assistant'

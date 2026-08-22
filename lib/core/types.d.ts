@@ -185,7 +185,7 @@ export interface WorldInfoGlobalSettings {
     /** 固定 token 预算；> 0 时优先于 contextPercent（对齐 SillyTavern budget_cap）。 */
     tokenBudget: number;
     recursiveScan: boolean;
-    /** 最大递归步数：0 = 仅受预算限制；1 = 关闭递归；n = 最大递归层数（对齐 SillyTavern）。 */
+    /** 最大扫描轮数：0 = 不限（仅受预算限制）；1 = 关闭递归；n = 总扫描轮数（含首轮）。 */
     maxRecursionSteps: number;
     caseSensitive: boolean;
     /** 整词匹配。SillyTavern 出厂默认 true，但对中文匹配不友好——本插件默认 false 并在 UI 提示。 */

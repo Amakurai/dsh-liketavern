@@ -34,17 +34,29 @@ async function onTurnStart(state: TavernState, sessionId: string, turn: number):
   state.currentSteps.set(sessionId, 1)
   const ws = await state.workspace(binding.cardId)
   await ws.fs.beginFloor(`${sessionId}#t${turn}`)
+  // 记下楼层开在哪张卡上：turn/end 必须按这张卡提交，不能重新读绑定。
+  state.openFloors.set(sessionId, binding.cardId)
 }
 
 async function onTurnEnd(state: TavernState, sessionId: string): Promise<void> {
-  const binding = await state.loadBinding(sessionId)
+  // 不变式：谁 beginFloor 谁 commitFloor。用户中途换绑/解绑时当前绑定已经指向别的卡，
+  // 按当前绑定提交会把开层那张卡的 floor 永远留在 `${sessionId}#tN`：之后设置面板编辑、
+  // runMaintenance 等非会话写入都会被误记进这个悬空楼层（违反 AGENTS.md「非会话写入不记 WAL」），
+  // 且同名楼层再 beginFloor 会抛「已存在且未提交」。
+  const cardId = state.openFloors.get(sessionId)
+  state.openFloors.delete(sessionId)
   state.currentTurns.delete(sessionId)
   state.currentSteps.delete(sessionId)
   state.wiCache.delete(sessionId)
   state.pendingInputs.delete(sessionId)
-  if (!binding) return
-  const ws = await state.workspace(binding.cardId)
-  await ws.fs.commitFloor()
+  if (!cardId) return
+  const ws = await state.workspace(cardId)
+  try {
+    await ws.fs.commitFloor()
+  } finally {
+    // 提交失败也要摘掉楼层上下文，否则同样留下悬空 floor。
+    ws.fs.setFloor(null)
+  }
 }
 
 export async function apply(ctx: Context): Promise<void> {

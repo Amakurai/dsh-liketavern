@@ -2,7 +2,10 @@
  * 正则引擎（纯函数），语义对齐 SillyTavern 正则扩展：
  * - find 允许 `/pattern/flags` 形式；裸源码 = 区分大小写、只替换首个匹配。
  * - replace 支持 $1..$9 / $<name> 捕获组、`{{match}}`（等价 $&）与 {{char}}/{{user}} 宏。
- * - find 中宏展开由规则 substituteRegex 控制：0=不展开 1=原样代入 2=转义代入。
+ * - find 中宏展开由规则 substituteRegex 控制：0=不展开 1=原样代入 2=转义代入
+ *   （转义在展开之后逐个宏值做，否则 {{description}}/{{getvar}} 会把裸元字符注进 pattern）。
+ * - replace 里宏展开出来的值会把 `$` 翻倍：宏值中的 `$&`/`$1` 是字面文本，
+ *   不该被 String.replace 再解释一次（`{{match}}` 是唯一例外，见下）。
  * - trimStrings / trimStringsRegex：对齐 ST——替换代入捕获组（含 {{match}}/$0）前，
  *   从组值里删掉这些字面串/正则片段（先宏展开）。ST 现行引擎只实现 trimStrings；
  *   trimStringsRegex 由本插件按同位置语义补全（缺省全局匹配）。
@@ -49,6 +52,7 @@ export declare function applyRegexToMessages(messages: readonly ChatMessage[], r
  * placement：1 USER_INPUT → input/send + 仅 user；2 AI_OUTPUT → output/render + 仅 assistant；
  * 5 WORLD_INFO → prompt/assemble。其余 placement 忽略。
  * markdownOnly → 仅展示；promptOnly → 仅入模；两者同时勾选 → 展示 + 入模（社区预设常用）。
+ * md/po 改写 scopes 后 roles 会跟着复核，绝不留下 scopes 与 roles 互斥的死规则。
  *
  * 启用策略：
  * - card：展示向默认开，改 prompt/input 默认关（避免导入即改写发给模型的文本）

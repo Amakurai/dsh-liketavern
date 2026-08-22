@@ -13,11 +13,14 @@ const TEXT_EXT = /\.(md|json|jsonl|txt)$/i
 export function resolveReadableAssetPath(raw: string): { ok: true; path: string } | { ok: false; error: string } {
   const trimmed = raw.trim()
   if (!trimmed) return { ok: false, error: '需要 path（工作区相对路径）' }
-  let path = trimmed.replaceAll('\\', '/')
-  while (path.startsWith('./')) path = path.slice(2)
-  if (path.startsWith('/') || /^[A-Za-z]:/.test(path)) return { ok: false, error: '禁止绝对路径' }
-  const parts = path.split('/')
+  const slashed = trimmed.replaceAll('\\', '/')
+  if (slashed.startsWith('/') || /^[A-Za-z]:/.test(slashed)) return { ok: false, error: '禁止绝对路径' }
+  const parts = slashed.split('/')
   if (parts.some((p) => p === '' || p === '..')) return { ok: false, error: '路径不合法' }
+  // 先归一化再判定：'.' 段必须在 WAL 前缀比对之前折掉，且返回的 path 用折叠后的规范形式。
+  // 否则 'state/./wal/x.jsonl' 能绕过下面的前缀检查，而 WorkspaceFs.abs 又会把它还原成 WAL 路径。
+  const path = parts.filter((p) => p !== '.').join('/')
+  if (!path) return { ok: false, error: '路径不合法' }
   const lower = path.toLowerCase()
   if (lower === 'state/wal' || lower.startsWith('state/wal/')) return { ok: false, error: '不读取 WAL 快照' }
   if (/\.(png|jpe?g|webp|gif|bin)$/i.test(path)) return { ok: false, error: '不读取二进制资源' }

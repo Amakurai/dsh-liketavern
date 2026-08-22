@@ -6,7 +6,7 @@ import { useState } from 'react'
 import { IconEditOutline16, IconTrashOutline16, IconUserOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { Persona, TavernRemote } from '../types.js'
 import { EMPTY_SESSION_DEFAULTS } from '../types.js'
-import { Btn, ConfirmDialog, Err, Field, IconBtn, Muted, Section, Select, Skeleton, clickableProps, errOf, useLoader, useToast } from '../util.js'
+import { Btn, ConfirmDialog, Err, Field, IconBtn, Muted, Section, Select, Skeleton, clickableProps, errOf, runAsync, useLoader, useToast } from '../util.js'
 
 export function PersonasSection(props: { remote: TavernRemote }) {
   const { remote } = props
@@ -26,15 +26,15 @@ export function PersonasSection(props: { remote: TavernRemote }) {
       setError('人设名称不能为空')
       return
     }
-    setBusy(true)
-    const r = await remote.savePersona({ persona: editing })
-    setBusy(false)
-    const err = errOf(r)
-    if (err) setError(err)
-    else {
-      toast.show(`已保存人设 ${editing.name}`)
-      reload()
-    }
+    await runAsync(setBusy, setError, async () => {
+      const r = await remote.savePersona({ persona: editing })
+      const err = errOf(r)
+      if (err) setError(err)
+      else {
+        toast.show(`已保存人设 ${editing.name}`)
+        reload()
+      }
+    })
   }
 
   const remove = async () => {

@@ -44,7 +44,7 @@ dsh plugin --profile web list --depth 0
 - **安装面刻意做小**：运行时依赖只有 `zod`，`@deepseek-ai/*` 全部是 peer 依赖、由 profile 里已安装的 dsh 宿主满足。安装本插件不会拉取宿主本体及其原生依赖（`node-pty` 等），因此正常不会触发 pnpm 的构建脚本拦截（`ERR_PNPM_IGNORED_BUILDS`）。万一遇到，那是 profile 里 dsh 自身依赖的一次性授权：按 dsh 报错提示把包名加进 `~/.dsh/profiles/web/pnpm-workspace.yaml` 的 `allowBuilds`，重跑安装命令即可。
 - 也可以走 tarball：作者侧 `npm pack`（`prepack` 会先构建），用户侧 `dsh plugin --profile web add ./dsh-liketavern-0.1.1.tgz`。
 
-版本兼容：本包以 peerDependency 锁 dsh `0.1.1-rc.2`；dsh 处于预发布阶段，升级 dsh 后需同步换装适配的插件版本。
+版本兼容：本包以 peerDependency 锁 dsh `0.1.1-rc.2`；dsh 处于预发布阶段，升级 dsh 后需同步换装适配的插件版本。版本对应关系见 [CHANGELOG.md](./CHANGELOG.md)。
 
 运行时数据（角色卡、记忆、会话绑定等）落在 `$DSH_HOME/dsh-tavern/`，与本仓库无关。
 
@@ -54,16 +54,37 @@ dsh plugin --profile web list --depth 0
 2. 在设置面板的 `dsh-tavern` 命名空间下管理角色卡、预设、世界书、人设、正则与采样参数。
 3. 对话中可对任意 assistant 楼层重新生成、编辑、回退、续写或让 AI 代答。
 
+## 平台限制
+
+受 dsh 宿主当前能力所限，以下行为与 SillyTavern 原版不同，属已知边界而非 bug：
+
+- **采样参数**：只有 `temperature`、`maxTokens`、`stop` 与按模型公布的「深度思考」档位会真正送达模型；`top_p` 与惩罚系数在面板中仅作记录，不生效。
+- **提示词位置**：@D（深度注入）与作者注释在实际请求中并入 system 尾部，不会插入历史消息中间；「预览提示词」里看到的才是完整 ST 序列。
+- **会话日志不可删**：重新生成 / 回退 / 编辑楼层会 fork 出分支会话并在其中续跑，原会话完整保留在会话列表里；同层分支可用操作条上的 ‹ n/m › 导航。
+- **AI 代答**：宿主输入区没有插件可写的 API，代答结果只能复制到剪贴板后手动粘贴。
+- **同一角色卡多会话并发**：工作区与 WAL 以卡为单位共享，多会话并发写入可能交错。
+
 ## 开发
 
 ```bash
 npm install        # 安装开发依赖（公开 npm，精确版本）
 npm run build      # tsc 编译 src/ → lib/，再由 esbuild 打 client 单文件 bundle
-npm test           # vitest run：32 个文件、约 360 例
-npm run dev        # dsh web --patch ./cordis.dev.yml（需先建 junction，见下）
+npm test           # vitest run（例数随改动浮动，不写死在这里）
+npm run dev        # dsh web --patch ./cordis.dev.yml（需先把仓库挂进 profile，见下）
 ```
 
-本地调试：用 Windows junction 把仓库挂进 `~/.dsh/profiles/node_modules/dsh-liketavern`，然后 `npm run dev`。
+本地调试：把仓库挂进 profile 的 `node_modules`（需先跑过一次 `dsh web` 使 profile 初始化），然后 `npm run dev`。Windows 用 junction，macOS / Linux 用 symlink：
+
+```powershell
+# Windows（PowerShell）
+New-Item -ItemType Junction -Path "$env:USERPROFILE\.dsh\profiles\node_modules\dsh-liketavern" -Target "C:\path\to\dsh-liketavern"
+```
+
+```bash
+# macOS / Linux（在仓库根目录执行）
+mkdir -p ~/.dsh/profiles/node_modules
+ln -s "$(pwd)" ~/.dsh/profiles/node_modules/dsh-liketavern
+```
 
 注意：
 

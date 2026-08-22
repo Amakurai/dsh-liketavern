@@ -13,7 +13,7 @@ dsh-liketavern 是 DeepSeek Harness（dsh）插件，把 `dsh web` 做成 SillyT
 3. **楼层事务**。用户对某一层触发的写入（记忆、世界状态、定时器）必须能撤销。工作区写入走 WAL（楼层号 + 序号），回退就是逆序回放。例外：记忆超容量时的异步压缩在 idle 期 `runMaintenance` 执行，`floor=null` 不记 WAL，回退不会撤压缩——那是无损整理，不增删剧情事实。
 4. **不复制 ST 的一次性输入**。提示词走 dsh 的 system-prompt 组装瀑布（稳定段 + runtime context）。不要在前端拼包直发，也绝不要用 `complete` 段盖掉工具前缀。
 
-实测环境：dsh `0.1.1-rc.2`（`@deepseek-ai/*` 同版本），Node 24，Windows。
+实测环境：dsh `0.1.1-rc.2`（`@deepseek-ai/*` 同版本），Node 24，Windows（CI 在 ubuntu 上跑 build/test）。依赖 rc.2 特有宿主行为的地方集中列在「宿主版本注记与升级」一节。
 
 **查平台行为先看官方文档**：<https://deepseek-harness.github.io/deepseek-harness/>（上手：[guide/quickstart](https://deepseek-harness.github.io/deepseek-harness/guide/quickstart)；插件开发：[develop/basic](https://deepseek-harness.github.io/deepseek-harness/develop/basic/)，含打包安装、profile/bundle、patch 层顺序）。涉及宿主机制（slot、profile、patch、typert、system-prompt 瀑布等）的判断以官网文档和宿主源码为准，不要凭记忆猜。
 
@@ -80,6 +80,8 @@ npm run dev        # dsh web --patch ./cordis.dev.yml（需先建 junction，见
 构建是两段式：先 `tsc` 把 `src/` 编到 `lib/`（含 `lib/client/index.js`），再由 `scripts/build-client.mjs` 用 esbuild 打成单文件 CJS bundle `lib/client.js`，外包 `window.__ModuleLoader__.load` 注册壳。宿主提供的 react、cordis、dsh-client-* 保持 external。产物带自检。
 
 `lib/` 是交付物，刻意入库，`.gitignore` 不要忽略它。改代码后必须重新 `npm run build`。角色卡、运行期 JSON、图片、会话、记忆和本机 `file:` 依赖不能进入 Git 或 npm 包。
+
+CI（`.github/workflows/ci.yml`）：push / PR 在 ubuntu + Node 24 跑 `npm ci` → build → test，然后 `git diff --exit-code lib/` 校验入库产物与源码构建一致（忘跑 build 就提交会被拦下），最后 `npm pack --dry-run` 校验白名单。行尾靠 `.gitattributes`（`* text=auto`）保证 Linux 上校验可复现。
 
 没有独立的 vitest/tsc lint 配置。测试用 vitest 默认约定，直接 `import` `src/`，不必先构建。
 
@@ -151,7 +153,7 @@ src/
 - 覆盖重点是确定性纯逻辑：世界书触发全矩阵、宏、正则、BM25、预设/卡/世界书归一化、WAL 回滚、工作区、`resolveStaleBinding`、交互卡 CSP/ST stub、standing 钉死、lore 按条筛选、资产路径消毒、reasoningEffort 挑选、合成 user 文本。host 事件与 client UI 不测。
 - 不要把真实角色卡、世界书导出或会话绑定放进 `test/`。
 
-## 平台限制（改之前看 README 同名一节）
+## 平台限制（开发者视角；用户向简版见 README「平台限制」一节）
 
 1. 采样只透传 `temperature` / `maxTokens` / `stop`，以及模型公布的 `reasoningEffort`（Tavern「深度思考」关 → `off`；低/高档仅在模型公布时显式指定）。`top_p` 和 penalty 到不了模型，设置面板仅作记录。
 2. @D 与作者注释在实际请求中并入 system 尾部。预览才是完整 ST 序列（不含 live playbook）。
@@ -159,6 +161,31 @@ src/
 4. 操作条 slot 只在 assistant 消息上。「编辑用户消息」/续写/代答都挂在 assistant 楼层。dsh 输入区没有插件可写 API，impersonate 结果只能复制到剪贴板。
 5. 同一角色卡多会话并发写入会交错（工作区与 WAL 以卡为单位共享）。这是已知边界，不要去「修」。
 6. 角色选择和开场白预览只在 agent 预设为 `tavern`（`src/client/mode.ts`）时显示。
+
+## 常用改动 checklist
+
+- **加/改 remote 方法**：三处同步——`src/remote.ts` 的 `METHODS`、`src/node/service.ts` 实现、`src/client/types.ts` 契约镜像（漏改编译不过，这是设计好的保险）。返回裸业务值、失败抛错，信封由 gateway 生成。
+- **加模型工具**：在 `src/node/tools.ts` 注册，工具描述里写清「默认直接扮演，只在缺设定/遗忘/落盘时调」的分寸；工作区路径必须过 `WorkspaceFs` + `resolveReadableAssetPath`；写工具成功后 `agent.inject` 同轮确认；同步更新本文「模型工具」表。
+- **加设置项**：`src/node/config.ts`（schemastery，`applies: 'live'`）+ `src/client/panel/settings.tsx`（`SettingsRow`：标题 + 说明 + 右侧 36px 胶囊，宽控件 `stacked`）+ `settings.section` 的 slot label 进 `locales.ts`。默认值有跨层引用时放 `src/core/types.ts`。
+- **加/改 UI**：样式只进 `src/client/styles.ts`；交互组件走 `dsh-client-ui-primitives`（封装在 `util.tsx`）；禁止原生 `<select>` 与 `window.confirm`。
+- **改 standing 纪律文案或段布局**：递增 `STANDING_PIN_VERSION`（`src/core/standingPin.ts`），否则进程内旧钉死会挡住新文案。
+- **任何 `src/` 改动**：先 `npm run build` 再提交，CI 会用 `git diff --exit-code lib/` 拦下过期产物。
+
+## 宿主版本注记与升级（当前 dsh 0.1.1-rc.2）
+
+以下行为绑定 rc.2，升级宿主时逐条复查；成立与否以官方文档和宿主源码为准，不要凭记忆猜：
+
+1. chat.node 的 owner props 不再提供 `loadImage`，图片走 `renderMessageImages({ images, align })`；`fileMentions` 是 owner 函数（详见「技术栈与三面运行」client 条）。
+2. web 设置 RPC 的命名空间白名单已移除，宿主通用设置页也能看到/改 `dsh-tavern` 的键——宿主行为，不要为此改插件面板（详见「设置」段）。
+3. 会话头有宿主原生面包屑（按 `meta.parentSession` 算世系，`conversation.session.header.lineage` 由 subagent 插件占位渲染），与楼层级 ‹ n/m › 互补，不要替换那个 slot（详见「平台限制」第 3 条）。
+
+升级 dsh 的检查清单：
+
+- `package.json` 三处版本同步：`peerDependencies`、`overrides`、`devDependencies`（全部精确版本，不带 `^`）。
+- 逐条复查上面三条注记在新宿主上是否仍成立，失效的改掉并从本节删除。
+- 对照官方文档的 breaking changes：slot、profile/bundle、patch 层顺序、system-prompt 瀑布、agent 事件。
+- `npm install` → `npm run build` → `npm test` → `npm pack --dry-run`。
+- 在 `CHANGELOG.md` 记一行适配的 dsh 版本。
 
 ## 动手前必知（近期踩过，不要回退）
 
@@ -201,5 +228,5 @@ agent 预设目录 `$DSH_HOME/.agent-presets/tavern/` 由插件托管，升级�
 
 ## 部署
 
-- 交付：`package.json` 声明 `dsh.bundle.patch = cordis.patch.yml` 与 `dsh.client`（platform web、inject `@deepseek-ai/dsh-client-runtime`）。`npm pack` 白名单只含 `lib/`、`cordis.patch.yml`、`presets/`、README（中英两份）和 LICENSE；发布前必须通过 `npm pack --dry-run`。
-- 安装：`dsh plugin --profile web add github:Amakurai/dsh-liketavern`（内部走 profile 下的 pnpm）。开发用 Windows junction 把仓库挂进 `~/.dsh/profiles/node_modules/dsh-liketavern`，再 `npm run dev`。
+- 交付：`package.json` 声明 `dsh.bundle.patch = cordis.patch.yml` 与 `dsh.client`（platform web、inject `@deepseek-ai/dsh-client-runtime`）。`npm pack` 白名单只含 `lib/`、`cordis.patch.yml`、`presets/`、README（中英两份）、CHANGELOG.md 和 LICENSE；发布前必须通过 `npm pack --dry-run`。版本与 dsh 的对应关系记在 `CHANGELOG.md`。
+- 安装：`dsh plugin --profile web add github:Amakurai/dsh-liketavern`（内部走 profile 下的 pnpm）。开发把仓库挂进 `~/.dsh/profiles/node_modules/dsh-liketavern` 再 `npm run dev`——Windows 用 junction，macOS/Linux 用 symlink（命令见 README 开发节）。

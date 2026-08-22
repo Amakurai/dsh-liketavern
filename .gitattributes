@@ -1,0 +1,3 @@
+# 文本文件入库一律归一化为 LF，保证 Linux CI 上「重建 lib/ 后 git diff 校验产物一致性」可复现。
+* text=auto
+*.png binary

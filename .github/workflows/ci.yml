@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 构建（tsc + client bundle）
+        run: npm run build
+
+      - name: 测试
+        run: npm test
+
+      # lib/ 刻意入库，GitHub/git 安装路径的用户拿到的就是这份产物。
+      # 提交前忘了 npm run build 的话，这里会拦下来。
+      - name: 校验 lib/ 与提交一致
+        run: git diff --exit-code --stat -- lib/
+
+      - name: 校验 npm pack 白名单
+        run: npm pack --dry-run

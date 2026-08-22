@@ -44,7 +44,7 @@ Two notes (per the official docs, [Packaging and installing plugins](https://dee
 - **The install surface is deliberately tiny**: the only runtime dependency is `zod`; all `@deepseek-ai/*` packages are peer dependencies satisfied by the dsh host already in the profile. Installing this plugin does not pull the dsh host tree or its native dependencies (`node-pty` and friends), so it should not trip pnpm's build-script blocking (`ERR_PNPM_IGNORED_BUILDS`). If you still hit it, that's a one-time authorization for dsh's own dependencies in the profile: add the printed package names under `allowBuilds` in `~/.dsh/profiles/web/pnpm-workspace.yaml` as the dsh error suggests, then re-run the install.
 - A tarball also works: the author runs `npm pack` (its `prepack` builds first), and the user runs `dsh plugin --profile web add ./dsh-liketavern-0.1.1.tgz`.
 
-Version compatibility: this package pins dsh `0.1.1-rc.2` via peerDependencies. dsh is in pre-release — after upgrading dsh, install the plugin version built for it.
+Version compatibility: this package pins dsh `0.1.1-rc.2` via peerDependencies. dsh is in pre-release — after upgrading dsh, install the plugin version built for it. See [CHANGELOG.md](./CHANGELOG.md) for the version mapping.
 
 Runtime data (cards, memories, session bindings) lives in `$DSH_HOME/dsh-tavern/`, outside this repository.
 
@@ -54,16 +54,37 @@ Runtime data (cards, memories, session bindings) lives in `$DSH_HOME/dsh-tavern/
 2. Manage cards, presets, lorebooks, personas, regex rules, and sampling parameters in the `dsh-tavern` settings section.
 3. In conversation, any assistant floor can be regenerated, edited, rolled back, continued, or answered by AI impersonation.
 
+## Platform limitations
+
+Due to current dsh host capabilities, the following differs from vanilla SillyTavern. These are known boundaries, not bugs:
+
+- **Sampling parameters**: only `temperature`, `maxTokens`, `stop`, and the "deep thinking" levels published by the current model actually reach the model; `top_p` and penalty coefficients are recorded in the panel but have no effect.
+- **Prompt placement**: @D (depth injection) and author's notes are merged into the tail of the system prompt in real requests, not inserted into the middle of chat history; only "preview prompt" shows the full ST sequence.
+- **The session log cannot be deleted**: regenerating / rolling back / editing a floor forks a branch session and continues there, while the original session stays intact in the session list; sibling branches forked at the same floor are navigable via ‹ n/m › on the action bar.
+- **AI impersonation**: the host input area has no plugin-writable API, so impersonation results can only be copied to the clipboard and pasted manually.
+- **Multiple sessions on the same card**: the workspace and WAL are shared per card, so concurrent writes across sessions may interleave.
+
 ## Development
 
 ```bash
 npm install        # install dev dependencies (public npm, exact versions)
 npm run build      # tsc compiles src/ → lib/, then esbuild bundles the client
-npm test           # vitest run: 32 files, ~360 cases
-npm run dev        # dsh web --patch ./cordis.dev.yml (requires the junction below)
+npm test           # vitest run (case count drifts with changes; not pinned here)
+npm run dev        # dsh web --patch ./cordis.dev.yml (requires linking the repo into the profile, below)
 ```
 
-Local debugging: on Windows, junction this repo into `~/.dsh/profiles/node_modules/dsh-liketavern`, then run `npm run dev`.
+Local debugging: link this repo into the profile's `node_modules` (run `dsh web` once first to initialize the profile), then `npm run dev`. Use a junction on Windows, a symlink on macOS / Linux:
+
+```powershell
+# Windows (PowerShell)
+New-Item -ItemType Junction -Path "$env:USERPROFILE\.dsh\profiles\node_modules\dsh-liketavern" -Target "C:\path\to\dsh-liketavern"
+```
+
+```bash
+# macOS / Linux (run from the repo root)
+mkdir -p ~/.dsh/profiles/node_modules
+ln -s "$(pwd)" ~/.dsh/profiles/node_modules/dsh-liketavern
+```
 
 Notes:
 

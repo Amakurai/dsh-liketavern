@@ -72,8 +72,16 @@ export class TavernState {
    * 若按当前绑定提交，开层那张卡的 WorkspaceFs.floor 会永远悬着，之后的非会话写入被误记 WAL。
    */
   readonly openFloors = new Map<string, string>()
-  /** 每 turn 一次的 WI/记忆/变化层评估缓存（turn/end 清除）。 */
-  readonly wiCache = new Map<string, { turn: number; wi: WIEngineResult; memories: string[]; deltas: WorldDelta[] }>()
+  /**
+   * 每 turn 一次的 WI/记忆/变化层评估缓存（turn/end 清除）。
+   * lastCharMessage / journalText 同轮冻结：第 1 步之后 history 会多出 assistant 文本、
+   * journal.md 可能被面板编辑，二者若随步变化会让含 {{lastcharmessage}} 的 turn 侧条目
+   * 或 journal 段字节漂移，宿主快照按字节去重即失效——同轮后续步复用第 1 步的值。
+   */
+  readonly wiCache = new Map<
+    string,
+    { turn: number; wi: WIEngineResult; memories: string[]; deltas: WorldDelta[]; lastCharMessage: string; journalText: string }
+  >()
   /** 已入 inbox 尚未入日志的用户输入文本（agent/inbox/inserted 维护；turn/end 清除）。 */
   readonly pendingInputs = new Map<string, string[]>()
   /** 会话 standing 钉死（键 = 会话 × 生成场景；绑定指纹不变则复用第一次写入的字节）。 */
@@ -577,8 +585,11 @@ export class TavernState {
     return saveBinding(this.paths, { ...binding, cardName: ws?.card.name ?? binding.cardName })
   }
 
-  /** 绑定不变时复用第一次 standing，避免组装抖动打穿 KV。钉位按会话 × 生成场景（standingPinKey）。 */
-  pinStanding(sessionId: string, generationType: string, fingerprint: string, computed: string): string {
+  /**
+   * 绑定不变时复用第一次 standing，避免组装抖动打穿 KV。钉位按会话 × 生成场景（standingPinKey）。
+   * 返回 `reused` 供调用方记观测日志（[standing:pin] hit/recompute）。
+   */
+  pinStanding(sessionId: string, generationType: string, fingerprint: string, computed: string): { text: string; reused: boolean } {
     // 钉位表防泄漏：会话关闭没有事件可清，超上限时淘汰最旧条目
     // （被淘汰只是重算一次 standing，无正确性影响）。
     const key = standingPinKey(sessionId, generationType)
@@ -586,7 +597,8 @@ export class TavernState {
       const oldest = this.standingPins.keys().next().value
       if (oldest !== undefined) this.standingPins.delete(oldest)
     }
-    return pinStandingText(this.standingPins, key, fingerprint, computed)
+    const reused = this.standingPins.get(key)?.fingerprint === fingerprint
+    return { text: pinStandingText(this.standingPins, key, fingerprint, computed), reused }
   }
 
   /**

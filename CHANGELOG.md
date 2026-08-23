@@ -4,6 +4,14 @@
 
 ## 未发布
 
+- 思考：「深度思考」新增「最高」档（DeepSeek 适配器的 `max` effort，模型公布该档时显式指定）；设置面板说明补充——「自动」档会落在模型默认档，思考可能很短，要更充分的思考选高/最高。turn playbook 强化「按条查证再动笔」：回复涉及人物关系、地点、规则、既有事件等设定而快照未覆盖时，先用工具查证，不要凭印象编造。
+
+- 测试：新增缓存字节稳定性守卫（`test/pipelineCache.test.ts`，对应 Reasonix 的 cache-guard 思路）——连续两轮 standing 必须逐字节一致、同轮多步快照必须逐字节一致、standing-safe 常驻条目端到端恒定注入、钉位复用/失效行为，防止后续改动把前缀缓存打退化。
+
+- 缓存：standing-safe 常驻世界书条目（constant 且无本轮宏）不再掷概率、恒定注入——钉死机制本就把掷骰冻结成「每会话一次」，而 swipe/重新生成 fork 出的子会话换种子重掷会与父会话 standing 字节漂移、打穿整个 system 前缀缓存；改后 standing 只取决于资产内容，跨会话/跨分支字节确定（`STANDING_PIN_VERSION` 7 → 8，因下方分段标签改变 standing 布局）。同轮宏输入冻结：`{{lastcharmessage}}` 与 journal 文本随 `wiCache` 按 turn 缓存，第 1 步之后 history 增长或 journal 中途编辑不再改变同轮快照字节（宿主去重 100% 生效，附带省掉每步一次 journal 读盘）。触发日志新增 `[standing:pin]` 行观测 standing 钉位命中/重算。
+
+- 提示词：世界书固定 `tokenBudget` 默认 3000 → 8192（仍是绝对上限、优先于百分比），多命中条目不再轻易被裁进 uid 清单等模型补读；世界书与检索记忆段落在 standing/快照里加来源标签（`【世界书·常驻】` / `【世界书·本轮触发】` / `【检索记忆】`），裸文本拼接不再让模型把设定事实当普通叙述滑过（作者注释保持无标签原文）。
+
 - 缓存：提示词组装分流修正——静态深度注入（无本轮宏的预设 in-chat 条目、卡 depth_prompt）不再无条件并入 turn 快照每轮全价重付，改并入 standing 随会话钉死（`STANDING_PIN_VERSION` 6 → 7）；触发型 @D 世界书与含本轮宏的注入保持 turn 侧不变。standing/turn 分流改为按消息对象身份追踪，两条展开后同字节的内容不再互相误踢。
 
 - 缓存：多步 turn 的 runtime context 快照零重付——turn playbook 从按步变化的 `formatTurnPlaybook(step)` 改为固定文本 `TURN_PLAYBOOK`，宿主对快照按字节去重，同轮后续步骤不再重复追加（此前每步打飞去重、整份快照逐步全价重付）。「第几步该收口」的压力改由工具执行时注入的 `【Tavern 步骤】` 通知承载（按 `turn:nextStep` 去重，2 步软收口、3 步起强收口）。standing 指纹的设置标记收窄到真正决定 standing 字节的三个键（characterStrategy / useGroupScoring / maxTokens）：调 tokenBudget、scanDepth 等 turn 层设置不再白白打穿整段 standing 前缀缓存。组装失败兜底优先穿同卡已钉死的 standing（`peekStanding`），瞬时故障不再回退未绑定文案把 system 前缀打穿成 0%。

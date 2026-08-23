@@ -12,7 +12,8 @@
  * {{original}} 引用预设 main/jailbreak 原文、forbid_overrides 拒绝卡级覆盖、
  * injection_trigger 按生成场景过滤、卡字段宏（description/scenario/persona/charFirstMessage）、
  * {{lastCharMessage}} 进 turn 不打穿 standing、静态深度注入（in-chat/depth_prompt）进 standing
- * 而含本轮宏的进 turnContext、standing/turn 同字节内容按消息身份互不误踢。
+ * 而含本轮宏的进 turnContext、standing/turn 同字节内容按消息身份互不误踢、
+ * 世界书/记忆段落带来源标签（【世界书·常驻】/【世界书·本轮触发】/【检索记忆】）。
  */
 import { describe, expect, it } from 'vitest'
 import { assemblePrompt, defaultPreset, splitExampleMessages, type AssembleInput } from '../src/core/assemble.js'
@@ -181,14 +182,14 @@ describe('relative 骨架与 marker 替换', () => {
     expect(contents(res.messages)).toEqual([
       'SYS Alice', // 卡片 system_prompt 最前
       MAIN_EXPANDED, // main
-      'WIB', // worldInfoBefore
+      '【世界书·本轮触发】\nWIB', // worldInfoBefore（带来源标签）
       'PERSONA', // personaDescription
       'DESC Bob', // charDescription（宏已展开）
       'PERS', // charPersonality
       'SCEN', // scenario
-      'MEM Bob', // agentMemory
+      '【检索记忆】\nMEM Bob', // agentMemory（带来源标签）
       'DELTA Alice', // worldState
-      'WIA', // worldInfoAfter
+      '【世界书·本轮触发】\nWIA', // worldInfoAfter（带来源标签）
       EXAMPLE_1, // dialogueExamples 两块
       EXAMPLE_2,
       'h0', // chatHistory
@@ -285,7 +286,7 @@ describe('relative 骨架与 marker 替换', () => {
     const delta = { id: 'd1', ts: '', type: 'add' as const, ref: null, content: 'STATE-A', keys: [], order: 100, sourceRange: '', expires: null }
     const res = assemblePrompt(makeInput({ preset, memories: ['MEM-A'], worldDeltas: [delta] }))
 
-    expect(contents(res.messages)).toEqual(['SYS Alice', 'MAIN', 'MEM-A', 'STATE-A', 'h0', 'h1', 'TAIL', 'POST-HIST'])
+    expect(contents(res.messages)).toEqual(['SYS Alice', 'MAIN', '【检索记忆】\nMEM-A', 'STATE-A', 'h0', 'h1', 'TAIL', 'POST-HIST'])
     expect(res.turnContext).toContain('MEM-A')
     expect(res.turnContext).toContain('STATE-A')
     expect(res.log.filter((entry) => entry.kind === 'auto-marker')).toHaveLength(2)
@@ -293,7 +294,7 @@ describe('relative 骨架与 marker 替换', () => {
 
   it('显式私有 marker 保持权威，不会产生兜底重复注入', () => {
     const res = assemblePrompt(makeInput({ memories: ['ONLY-MEM'] }))
-    expect(contents(res.messages).filter((content) => content === 'ONLY-MEM')).toHaveLength(1)
+    expect(contents(res.messages).filter((content) => content === '【检索记忆】\nONLY-MEM')).toHaveLength(1)
     expect(res.log.some((entry) => entry.kind === 'auto-marker')).toBe(false)
   })
 
@@ -521,11 +522,11 @@ describe('预算裁剪', () => {
   const memory = 'M'.repeat(30) // 30 tokens
 
   it('记忆先于历史被裁；历史从最旧开始裁且保留最新用户消息；trimmedSections 记录', () => {
-    // tokensBefore = 1(main) + 30(mem) + 50(history) = 81；预算 31
+    // tokensBefore = 1(main) + 37(mem + 【检索记忆】标签) + 50(history) = 88；预算 31
     const res = assemblePrompt(
       makeInput({ preset: budgetPreset, card: null, personaDescription: '', memories: [memory], history, budget: { maxTokens: 31, reserveForOutput: 0 } }),
     )
-    expect(res.stats.tokensBefore).toBe(81)
+    expect(res.stats.tokensBefore).toBe(88)
     expect(res.stats.trimmedSections).toEqual(['agentMemory', 'history', 'history'])
     expect(contents(res.messages)).not.toContain(memory)
     // 最旧两条被裁，最新用户消息保留
@@ -658,6 +659,10 @@ describe('system 输出', () => {
     const b = assemblePrompt(makeInput({ wi: wiOf({ [WIPosition.BeforeCharDefs]: [constant, script, hitB] }) }))
     expect(a.standing).toBe(b.standing)
     expect(a.standing).toContain('CONST-LORE')
+    // 来源标签：standing 侧常驻 vs turn 侧本轮触发
+    expect(a.standing).toContain('【世界书·常驻】')
+    expect(a.turnContext).toContain('【世界书·本轮触发】')
+    expect(a.standing).not.toContain('【世界书·本轮触发】')
     expect(a.standing).not.toContain('HIT-A')
     expect(a.standing).not.toContain('beginners_guide')
     expect(a.standing).not.toContain('<%')
@@ -953,7 +958,7 @@ describe('injection_trigger', () => {
     }
     const res = assemblePrompt(makeInput({ preset, memories: ['MEM-A'] }))
     // agentMemory marker 被触发过滤排除 → 兜底自动注入仍生效
-    expect(contents(res.messages)).toContain('MEM-A')
+    expect(contents(res.messages)).toContain('【检索记忆】\nMEM-A')
     expect(res.log.some((l) => l.kind === 'auto-marker' && l.detail.includes('agentMemory'))).toBe(true)
   })
 })

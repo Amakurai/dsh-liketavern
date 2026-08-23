@@ -44,17 +44,17 @@ live 路径不把整包 ST 预设塞进 system。`assemblePrompt` 按 Prompt Man
 
 时钟在 standing 里冻结。残留 `{{…}}` 写入 dsh 段前要 `neutralizeDshMustache`。未绑卡时不要删掉 `tavern:standing` 段，只换成 `UNBOUND_STANDING` 短文案，避免段布局抖动打穿 KV。
 
-turn 层预算（`core/turnBudget.ts`）：runtime context 快照对新请求永远是**未缓存前缀**（DeepSeek 前缀缓存只认追加点之前的字节），快照里的大体量内容 = 每轮全价重付。因此世界书层用固定 `tokenBudget`（默认 3000，绝对上限，不随历史长度/窗口缩水；百分比路径折算基数 clamp 到 128K，防 1M 窗口把 25% 放大成 25 万），且只计搭快照通道的条目——落 standing 的常驻（constant 且无本轮宏，`isStandingSafeEntry`，引擎与渲染共用）豁免计费；被裁条目进 `truncated`、快照尾部附 uid 清单（封顶 8 条），模型按条 `tavern_lore_read` 补读，硬顶是分页不是丢信息。变化层按 `WORLD_DELTA_TURN_BUDGET`（1500）从最新往旧装载，预算只计本轮实际渲染的条目（无键常驻 + 已命中，判定共用 `isDeltaRenderedInTurn`），更旧的丢给 `tavern_lore_read(source=delta)` 补读；记忆（1200）与 journal（800）各自有顶。被裁不要心疼——工具按条补读是设计内路径。触发日志里有 `[turn:tail]` 行可直接观测每轮尾巴体积。
+turn 层预算（`core/turnBudget.ts`）：runtime context 快照对新请求永远是**未缓存前缀**（DeepSeek 前缀缓存只认追加点之前的字节），快照里的大体量内容 = 每轮全价重付。因此世界书层用固定 `tokenBudget`（默认 8192，绝对上限，不随历史长度/窗口缩水；百分比路径折算基数 clamp 到 128K，防 1M 窗口把 25% 放大成 25 万），且只计搭快照通道的条目——落 standing 的常驻（constant 且无本轮宏，`isStandingSafeEntry`，引擎与渲染共用）豁免计费，也豁免概率掷骰（恒定注入：掷骰本就被钉死冻结成每会话一次，fork 分支换种子重掷只会打穿整个 system 前缀缓存）。被裁条目进 `truncated`、快照尾部附 uid 清单（封顶 8 条），模型按条 `tavern_lore_read` 补读，硬顶是分页不是丢信息。世界书与记忆段落落消息时带来源标签（standing 侧 `【世界书·常驻】`、turn 侧 `【世界书·本轮触发】`、记忆 `【检索记忆】`；AN 走 `wiText` 不加标签），否则裸文本拼接模型难以识别为设定事实。变化层按 `WORLD_DELTA_TURN_BUDGET`（1500）从最新往旧装载，预算只计本轮实际渲染的条目（无键常驻 + 已命中，判定共用 `isDeltaRenderedInTurn`），更旧的丢给 `tavern_lore_read(source=delta)` 补读；记忆（1200）与 journal（800）各自有顶。被裁不要心疼——工具按条补读是设计内路径。触发日志里 `[turn:tail]` 行观测每轮尾巴体积、`[standing:pin]` 行观测 standing 钉位命中/重算。
 
 多步循环，不要为了省 I/O 跳过每步组装：
 
-- 世界书和记忆检索每 turn 只评估一次（定时器以消息数为单位，同轮复用 `wiCache`）。
+- 世界书和记忆检索每 turn 只评估一次（定时器以消息数为单位，同轮复用 `wiCache`；`lastCharMessage` 与 `journalText` 也随 `wiCache` 同轮冻结——history 增长或 journal 中途编辑不得改变同轮快照字节，否则宿主按字节去重失效）。
 - 每步仍跑 `runTavernPipeline`，把本轮快照重放进 `tavern:turn`。playbook 固定后同轮快照字节不变，宿主去重不再追加；长上下文会忘，靠最新 runtime context 加按条工具补读。
 - 工具写入不重评世界书（避免 sticky/cooldown 同轮连 tick）。检索层下一 turn 才更新。写成功后 `agent.inject` 一条 `【Tavern 同轮写入】…`（`form: 'notice'`），下一步看得到。
 - 步骤收口通知（`formatTurnStepNotice`，按 `turn:nextStep` 去重）只能在工具执行时注入（`node/tools.ts` 的 `maybeInjectStepNotice`，7 个工具全覆盖）。不要在 `agent/pre-step` 里 inject：注入要等下一步 preStep 才被认领（晚一步），且 turn 结束判定会把未消费的 nextStep 输入当成续步理由，强行多拉一步产生孤儿通知。
 - 合成 user 文本（runtime context 快照、同轮写入确认、步骤收口通知）走 `isSyntheticUserText`：不当 `{{lastusermessage}}`，不扫世界书，不计入正则 depth。
 
-采样 / thinking：`agent/request` 透传 `temperature` / `maxTokens` / `stop`，并按当前模型公布的 reasoning 档写 `reasoningEffort`（disabled → `off`；low/high → 公布才显式指定，否则回退自动；enabled → 保留会话已选的非 off 档，否则模型默认）。只发送适配器公布的 id。部署把 `llm-deepseek.thinking` 锁成 `disabled` 时，插件无法强行打开。
+采样 / thinking：`agent/request` 透传 `temperature` / `maxTokens` / `stop`，并按当前模型公布的 reasoning 档写 `reasoningEffort`（disabled → `off`；low/high/max → 公布才显式指定，否则回退自动；enabled → 保留会话已选的非 off 档，否则模型默认——默认档的思考可能很短，要长思考引导用户选 high/max）。只发送适配器公布的 id。部署把 `llm-deepseek.thinking` 锁成 `disabled` 时，插件无法强行打开。
 
 ## 模型工具（7 个）
 
@@ -159,7 +159,7 @@ src/
 
 ## 平台限制（开发者视角；用户向简版见 README「平台限制」一节）
 
-1. 采样只透传 `temperature` / `maxTokens` / `stop`，以及模型公布的 `reasoningEffort`（Tavern「深度思考」关 → `off`；低/高档仅在模型公布时显式指定）。`top_p` 和 penalty 到不了模型，设置面板仅作记录。
+1. 采样只透传 `temperature` / `maxTokens` / `stop`，以及模型公布的 `reasoningEffort`（Tavern「深度思考」关 → `off`；低/高/最高档仅在模型公布时显式指定）。`top_p` 和 penalty 到不了模型，设置面板仅作记录。
 2. 深度注入（@D / depth_prompt / 预设 in-chat）在实际请求中插不进会话日志中间：触发型（含本轮宏）并入 turn 快照尾部，静态的并入 standing（system 段内，钉死）。预览才是完整 ST 序列（不含 live playbook）。
 3. 会话日志不可删。重新生成/回退/编辑 = fork 前缀 + WAL 回滚 + 子会话续跑，成功后 UI 打开分支会话，并用宿主 `ISessions` 的 `scope → sessionOf → rename` 把 host 给的分支标题写进会话列表（旧宿主缺这条路径则跳过）。编辑 assistant 正文只换 seed 里的该条消息、不续跑。例外：续写（`continueFloor`）不改历史，不 fork，直接 followup 合成指令。同一父会话 + 同一楼层 fork 出的分支互为兄弟：forkAt 记 `siblings.json`，操作条给 ‹ n/m › 兄弟导航（`getFloorSiblings`，读时按 live/绑定文件过滤已删分支）。rc.2 起会话头另有宿主原生面包屑（按 fork 时写入的 `meta.parentSession` 算世系，`conversation.session.header.lineage` 由 subagent 插件占位渲染）：那是会话级世系，与楼层级 ‹ n/m › 互补，不要去替换那个 slot。
 4. 操作条 slot 只在 assistant 消息上。「编辑用户消息」/续写/代答都挂在 assistant 楼层。dsh 输入区没有插件可写 API，impersonate 结果只能复制到剪贴板。

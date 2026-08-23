@@ -184,9 +184,13 @@ export async function runTavernPipeline(input: PipelineInput): Promise<PipelineR
   let wi: WIEngineResult
   let memories: string[]
   let deltas: WorldDelta[]
+  let lastCharMessage: string
+  let journalText: string
   const cached = cacheable ? state.wiCache.get(sessionId) : undefined
   if (cached && cached.turn === turn) {
-    ;({ wi, memories, deltas } = cached)
+    // 同轮后续步：lastCharMessage / journalText 一并复用——history 增长（assistant 文本）
+    // 与 journal 中途编辑不得改变快照字节，否则宿主按字节去重失效、每步多付一份快照。
+    ;({ wi, memories, deltas, lastCharMessage, journalText } = cached)
   } else {
     const { entries, deltas: liveDeltas } = await loadBoundLoreEntries(state, binding)
     deltas = liveDeltas
@@ -220,13 +224,16 @@ export async function runTavernPipeline(input: PipelineInput): Promise<PipelineR
       memories = selectMemoryBodies(hits, config.memory.retrievalTokenBudget)
     }
 
-    if (cacheable) state.wiCache.set(sessionId, { turn, wi, memories, deltas })
-  }
+    // 同轮冻结的宏输入：第 1 步取当前 history 的最近 assistant 正文（{{lastcharmessage}} 用），
+    // 后续步 history 增长也不变；journal 同理只在本轮首次评估读一次盘。
+    lastCharMessage = [...history].reverse().find((m) => m.role === 'assistant')?.content ?? ''
+    journalText = ''
+    if (binding.injectJournal) {
+      const rawJournal = await ws.fs.readText('journal.md')
+      if (rawJournal?.trim()) journalText = clipToTokenBudget(rawJournal, 800).text
+    }
 
-  let journalText = ''
-  if (binding.injectJournal) {
-    const rawJournal = await ws.fs.readText('journal.md')
-    if (rawJournal?.trim()) journalText = clipToTokenBudget(rawJournal, 800).text
+    if (cacheable) state.wiCache.set(sessionId, { turn, wi, memories, deltas, lastCharMessage, journalText })
   }
 
   // 变化层进快照前按预算裁剪：预算只覆盖真正会渲染的条目（无键常驻 + 本轮被引擎命中的
@@ -252,7 +259,8 @@ export async function runTavernPipeline(input: PipelineInput): Promise<PipelineR
     worldDeltas: deltaClip.kept,
     authorNote: binding.authorNote ?? '',
     journalText,
-    macroCtx,
+    // 显式冻结 lastCharMessage（同轮复用缓存值），不让 assemble 回退到随 history 增长的现算值。
+    macroCtx: { ...macroCtx, lastCharMessage },
     regexRules: await state.rulesFor(binding),
     // ST injection_trigger 评估用：当前正常发信是 normal；continue/impersonate 经 PipelineInput 传入。
     generationType: input.generationType ?? 'normal',

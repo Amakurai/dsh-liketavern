@@ -103,20 +103,24 @@ export function apply(ctx: Context): void {
         return result
       }
       const standing = neutralizeDshMustache([BOUND_DISCIPLINE, pipeline.standing].filter((p) => p.trim()).join('\n\n'))
-      applyStanding(
-        result,
-        state.pinStanding(
-          agent.id,
+      const pin = state.pinStanding(
+        agent.id,
+        generationType,
+        standingFingerprint(
+          binding,
+          { name: pipeline.userName, description: pipeline.personaDescription },
+          state.standingRevTags(binding, { personaLorebookId: pipeline.personaLorebookId }),
           generationType,
-          standingFingerprint(
-            binding,
-            { name: pipeline.userName, description: pipeline.personaDescription },
-            state.standingRevTags(binding, { personaLorebookId: pipeline.personaLorebookId }),
-            generationType,
-          ),
-          standing,
         ),
+        standing,
       )
+      applyStanding(result, pin.text)
+      // 缓存观测：standing 是否复用钉位（recompute = 指纹变化重算并重钉，本轮前缀缓存打穿一次）。
+      // recordTriggerLog 是整体覆盖写，必须把 pipeline 的明细行一并带上。
+      state.recordTriggerLog(agent.id, [
+        ...pipeline.logLines,
+        `[standing:pin] ${pin.reused ? 'hit' : 'recompute（指纹变化，已重新钉死）'}`,
+      ])
       // playbook 固定不随 step 变化：宿主对 runtime context 快照按字节去重，
       // 同轮后续步骤的快照一个字节都不变 ⇒ 不再重复追加，前缀缓存全保。
       applyTurnContext(result, neutralizeDshMustache(joinPromptParts([TURN_PLAYBOOK, pipeline.turnContext])))

@@ -48,12 +48,19 @@ export declare class TavernState {
      * 若按当前绑定提交，开层那张卡的 WorkspaceFs.floor 会永远悬着，之后的非会话写入被误记 WAL。
      */
     readonly openFloors: Map<string, string>;
-    /** 每 turn 一次的 WI/记忆/变化层评估缓存（turn/end 清除）。 */
+    /**
+     * 每 turn 一次的 WI/记忆/变化层评估缓存（turn/end 清除）。
+     * lastCharMessage / journalText 同轮冻结：第 1 步之后 history 会多出 assistant 文本、
+     * journal.md 可能被面板编辑，二者若随步变化会让含 {{lastcharmessage}} 的 turn 侧条目
+     * 或 journal 段字节漂移，宿主快照按字节去重即失效——同轮后续步复用第 1 步的值。
+     */
     readonly wiCache: Map<string, {
         turn: number;
         wi: WIEngineResult;
         memories: string[];
         deltas: WorldDelta[];
+        lastCharMessage: string;
+        journalText: string;
     }>;
     /** 已入 inbox 尚未入日志的用户输入文本（agent/inbox/inserted 维护；turn/end 清除）。 */
     readonly pendingInputs: Map<string, string[]>;
@@ -168,8 +175,14 @@ export declare class TavernState {
      */
     loadBinding(sessionId: string): Promise<SessionBinding | null>;
     saveBinding(binding: SessionBinding): Promise<void>;
-    /** 绑定不变时复用第一次 standing，避免组装抖动打穿 KV。钉位按会话 × 生成场景（standingPinKey）。 */
-    pinStanding(sessionId: string, generationType: string, fingerprint: string, computed: string): string;
+    /**
+     * 绑定不变时复用第一次 standing，避免组装抖动打穿 KV。钉位按会话 × 生成场景（standingPinKey）。
+     * 返回 `reused` 供调用方记观测日志（[standing:pin] hit/recompute）。
+     */
+    pinStanding(sessionId: string, generationType: string, fingerprint: string, computed: string): {
+        text: string;
+        reused: boolean;
+    };
     /**
      * 组装失败兜底用：只读地取本会话同场景已钉死的 standing，且仅当钉位属于同一张卡才返回。
      * 宁可穿旧同卡钉位也不回退 UNBOUND_STANDING——换段文案会把整个 system 前缀打穿成 0% 缓存。

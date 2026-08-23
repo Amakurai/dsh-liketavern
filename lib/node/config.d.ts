@@ -18,8 +18,8 @@ export declare const TavernConfigSchema: z<Schemastery.ObjectS<{
         /** DeepSeek 官方已废弃（传入无效），仅作记录。 */
         presencePenalty: z<number, number>;
         frequencyPenalty: z<number, number>;
-        /** thinking 档位；绑定会话时按模型公布的 reasoning 档写入 reasoningEffort（disabled→off，low/high→公布才显式指定）。 */
-        thinking: z<"disabled" | "enabled" | "low" | "high", "disabled" | "enabled" | "low" | "high">;
+        /** thinking 档位；绑定会话时按模型公布的 reasoning 档写入 reasoningEffort（disabled→off，low/high/max→公布才显式指定）。 */
+        thinking: z<"disabled" | "enabled" | "low" | "high" | "max", "disabled" | "enabled" | "low" | "high" | "max">;
     }>, Schemastery.ObjectT<{
         /** 0–2，默认 1（DeepSeek 官方）。thinking 模式下不生效。 */
         temperature: z<number, number>;
@@ -32,8 +32,8 @@ export declare const TavernConfigSchema: z<Schemastery.ObjectS<{
         /** DeepSeek 官方已废弃（传入无效），仅作记录。 */
         presencePenalty: z<number, number>;
         frequencyPenalty: z<number, number>;
-        /** thinking 档位；绑定会话时按模型公布的 reasoning 档写入 reasoningEffort（disabled→off，low/high→公布才显式指定）。 */
-        thinking: z<"disabled" | "enabled" | "low" | "high", "disabled" | "enabled" | "low" | "high">;
+        /** thinking 档位；绑定会话时按模型公布的 reasoning 档写入 reasoningEffort（disabled→off，low/high/max→公布才显式指定）。 */
+        thinking: z<"disabled" | "enabled" | "low" | "high" | "max", "disabled" | "enabled" | "low" | "high" | "max">;
     }>>;
     worldInfo: z<Schemastery.ObjectS<{
         scanDepth: z<number, number>;
@@ -137,8 +137,8 @@ export declare const TavernConfigSchema: z<Schemastery.ObjectS<{
         /** DeepSeek 官方已废弃（传入无效），仅作记录。 */
         presencePenalty: z<number, number>;
         frequencyPenalty: z<number, number>;
-        /** thinking 档位；绑定会话时按模型公布的 reasoning 档写入 reasoningEffort（disabled→off，low/high→公布才显式指定）。 */
-        thinking: z<"disabled" | "enabled" | "low" | "high", "disabled" | "enabled" | "low" | "high">;
+        /** thinking 档位；绑定会话时按模型公布的 reasoning 档写入 reasoningEffort（disabled→off，low/high/max→公布才显式指定）。 */
+        thinking: z<"disabled" | "enabled" | "low" | "high" | "max", "disabled" | "enabled" | "low" | "high" | "max">;
     }>, Schemastery.ObjectT<{
         /** 0–2，默认 1（DeepSeek 官方）。thinking 模式下不生效。 */
         temperature: z<number, number>;
@@ -151,8 +151,8 @@ export declare const TavernConfigSchema: z<Schemastery.ObjectS<{
         /** DeepSeek 官方已废弃（传入无效），仅作记录。 */
         presencePenalty: z<number, number>;
         frequencyPenalty: z<number, number>;
-        /** thinking 档位；绑定会话时按模型公布的 reasoning 档写入 reasoningEffort（disabled→off，low/high→公布才显式指定）。 */
-        thinking: z<"disabled" | "enabled" | "low" | "high", "disabled" | "enabled" | "low" | "high">;
+        /** thinking 档位；绑定会话时按模型公布的 reasoning 档写入 reasoningEffort（disabled→off，low/high/max→公布才显式指定）。 */
+        thinking: z<"disabled" | "enabled" | "low" | "high" | "max", "disabled" | "enabled" | "low" | "high" | "max">;
     }>>;
     worldInfo: z<Schemastery.ObjectS<{
         scanDepth: z<number, number>;

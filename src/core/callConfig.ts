@@ -27,7 +27,7 @@ const DEEPSEEK_OFFICIAL_PROVIDER = 'deepseek-official'
 /**
  * 按 Tavern「深度思考」设置挑选 reasoningEffort。
  * disabled → 公布的 off 档（没有则 undefined，调用方不得瞎填）；
- * low/high → 模型公布了该档则显式指定，否则回退自动；
+ * low/high/max → 模型公布了该档则显式指定，否则回退自动；
  * enabled → 自动：保留会话已选的非 off 档，否则模型默认，否则第一个非 off 档。
  */
 export function pickReasoningEffort(
@@ -43,7 +43,7 @@ export function pickReasoningEffort(
     return ids.find((id) => isOffEffort(id))
   }
 
-  if ((thinking === 'low' || thinking === 'high') && ids.includes(thinking)) return thinking
+  if ((thinking === 'low' || thinking === 'high' || thinking === 'max') && ids.includes(thinking)) return thinking
 
   if (current && !isOffEffort(current) && advertised(current)) return current
   if (defaultEffort && !isOffEffort(defaultEffort) && advertised(defaultEffort)) return defaultEffort

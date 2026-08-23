@@ -2,7 +2,8 @@
  * 世界书触发引擎单测。
  * 覆盖：明文/正则键、{{user}}/{{char}} 身份宏、大小写与整词（全局与条目级）、scanDepth（全局与条目级）、
  * inclusion group（一组一条、sticky 占用、override、计分/加权）、selective 四逻辑、
- * constant、probability、递归（excludeRecursion/preventRecursion/delayUntilRecursion/
+ * constant、probability（standing-safe 常驻条目豁免掷骰、恒定注入；含本轮宏的 constant 不豁免）、
+ * 递归（excludeRecursion/preventRecursion/delayUntilRecursion/
  * maxRecursionSteps）、定时（sticky/cooldown/delay，跨轮回传 timerState）、
  * 预算截断（优先级/ignoreBudget/overflowWarning；固定预算为绝对上限、百分比按 128K 基数
  * 折算并扣减 reservedTokens；standing 侧常驻豁免计费，被裁条目进 truncated 清单）、
@@ -303,6 +304,26 @@ describe('constant 与 probability', () => {
       random: () => 0.99,
     })
     expect(activatedKeys(res)).toEqual(['e'])
+  })
+
+  it('standing-safe 常驻条目豁免概率：probability=0 也恒定激活（standing 跨会话字节确定）', () => {
+    // constant 且无本轮宏 → 落 standing 钉死段；掷骰早已被钉死冻结成「每会话一次」，
+    // 而 fork 分支换种子重掷会打穿整个 system 前缀缓存——改为恒定注入。
+    const res = run({
+      entries: [makeEntry({ key: 'c', constant: true, useProbability: true, probability: 0, content: 'CONST' })],
+      random: () => 0.99,
+    })
+    expect(activatedKeys(res)).toEqual(['c'])
+    expect(logsOf(res, 'probability-skip')).toEqual([])
+  })
+
+  it('含本轮宏的 constant 条目不豁免（落 turn 层）：仍按概率掷骰', () => {
+    const res = run({
+      entries: [makeEntry({ key: 'c', constant: true, useProbability: true, probability: 0, content: '看 {{lastusermessage}}' })],
+      random: () => 0.99,
+    })
+    expect(activatedKeys(res)).toEqual([])
+    expect(logsOf(res, 'probability-skip').map((l) => l.entryKey)).toEqual(['c'])
   })
 })
 

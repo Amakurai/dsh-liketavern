@@ -89,7 +89,7 @@ export interface TavernSettings {
     stop: string[]
     presencePenalty: number
     frequencyPenalty: number
-    thinking: 'enabled' | 'disabled' | 'low' | 'high'
+    thinking: 'enabled' | 'disabled' | 'low' | 'high' | 'max'
   }
   worldInfo: {
     scanDepth: number

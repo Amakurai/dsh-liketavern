@@ -403,9 +403,9 @@ export interface SamplingSettings {
     frequencyPenalty: number;
     /**
      * thinking 档位；绑定会话经 agent/request 映射为模型公布的 reasoningEffort。
-     * disabled → off；low/high → 模型公布该档时显式指定，未公布回退自动；
-     * enabled → 自动（保留会话已选档，否则模型默认）。
+     * disabled → off；low/high/max → 模型公布该档时显式指定，未公布回退自动；
+     * enabled → 自动（保留会话已选档，否则模型默认——注意模型默认档可能很短，要长思考选 high/max）。
      */
-    thinking: 'enabled' | 'disabled' | 'low' | 'high';
+    thinking: 'enabled' | 'disabled' | 'low' | 'high' | 'max';
 }
 export declare const DEFAULT_SAMPLING: SamplingSettings;

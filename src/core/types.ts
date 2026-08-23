@@ -232,7 +232,7 @@ export interface WorldInfoGlobalSettings {
 export const DEFAULT_WI_SETTINGS: WorldInfoGlobalSettings = {
   scanDepth: 2,
   contextPercent: 25,
-  tokenBudget: 3000,
+  tokenBudget: 8192,
   recursiveScan: true,
   maxRecursionSteps: 0,
   caseSensitive: false,
@@ -483,10 +483,10 @@ export interface SamplingSettings {
   frequencyPenalty: number
   /**
    * thinking 档位；绑定会话经 agent/request 映射为模型公布的 reasoningEffort。
-   * disabled → off；low/high → 模型公布该档时显式指定，未公布回退自动；
-   * enabled → 自动（保留会话已选档，否则模型默认）。
+   * disabled → off；low/high/max → 模型公布该档时显式指定，未公布回退自动；
+   * enabled → 自动（保留会话已选档，否则模型默认——注意模型默认档可能很短，要长思考选 high/max）。
    */
-  thinking: 'enabled' | 'disabled' | 'low' | 'high'
+  thinking: 'enabled' | 'disabled' | 'low' | 'high' | 'max'
 }
 
 export const DEFAULT_SAMPLING: SamplingSettings = {

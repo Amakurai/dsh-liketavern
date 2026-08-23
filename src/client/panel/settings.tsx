@@ -158,7 +158,7 @@ export function SettingsSection(props: { remote: TavernRemote }) {
         <SettingsRow title="frequencyPenalty">
           <NumInput step="0.1" value={draft.sampling.frequencyPenalty} onChange={(v) => setSampling({ frequencyPenalty: v })} />
         </SettingsRow>
-        <SettingsRow title="深度思考" description="关闭：对当前模型写入 off（若公布该档）。低/高：模型公布该档时显式指定，否则回退自动。自动：保留会话已选档位，否则用模型默认。部署把 thinking 锁成 disabled 时无法打开。thinking 模式下温度不生效。">
+        <SettingsRow title="深度思考" description="关闭：对当前模型写入 off（若公布该档）。低/高/最高：模型公布该档时显式指定，否则回退自动。自动：保留会话已选档位，否则用模型默认——注意模型默认档的思考可能很短，想要更充分的思考请选高/最高。部署把 thinking 锁成 disabled 时无法打开。thinking 模式下温度不生效。">
           <Select
             size="md"
             value={draft.sampling.thinking}
@@ -168,6 +168,7 @@ export function SettingsSection(props: { remote: TavernRemote }) {
               { value: 'enabled', label: '自动' },
               { value: 'low', label: '低' },
               { value: 'high', label: '高' },
+              { value: 'max', label: '最高' },
             ]}
           />
         </SettingsRow>
@@ -194,7 +195,7 @@ export function SettingsSection(props: { remote: TavernRemote }) {
         <SettingsRow title="预算百分比 contextPercent" description="仅当固定预算为 0 时生效；按窗口折算（基数上限 128K），并随历史长度扣减。">
           <NumInput value={draft.worldInfo.contextPercent} onChange={(v) => setWorldInfo({ contextPercent: v })} />
         </SettingsRow>
-        <SettingsRow title="固定 token 预算" description="本轮世界书层的绝对上限（默认 3000，优先于百分比）。命中内容每轮走 runtime context 快照、无法命中前缀缓存，请保持克制；被裁条目可用 tavern_lore_read 按条补读。">
+        <SettingsRow title="固定 token 预算" description="本轮世界书层的绝对上限（默认 8192，优先于百分比）。命中内容每轮走 runtime context 快照、无法命中前缀缓存；被裁条目可用 tavern_lore_read 按条补读。">
           <NumInput value={draft.worldInfo.tokenBudget} onChange={(v) => setWorldInfo({ tokenBudget: Math.max(0, Math.round(v)) })} />
         </SettingsRow>
         <SettingsRow title="最大扫描轮数" description="含首轮：1 = 关闭递归，2 = 首轮加一轮递归，0 = 不限（仅受预算约束）。">

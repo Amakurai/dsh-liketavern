@@ -1,6 +1,6 @@
 /**
  * 采样合入与 reasoningEffort 挑选：只发送模型公布的档位；关 thinking 不瞎填；
- * 显式 low/high 档只在模型公布时采用，否则回退自动；
+ * 显式 low/high/max 档只在模型公布时采用，否则回退自动；
  * 三级回退（resolveTavernReasoningEffort）：公布档 → deepseek-official 关思考兜底 → 无公布信息自动挑选。
  */
 import { describe, expect, it } from 'vitest'
@@ -34,9 +34,10 @@ describe('pickReasoningEffort', () => {
     expect(pickReasoningEffort('enabled', undefined, undefined, 'off')).toBeUndefined()
   })
 
-  it('显式 low/high：模型公布该档时采用，即使会话当前是别的档', () => {
+  it('显式 low/high/max：模型公布该档时采用，即使会话当前是别的档', () => {
     expect(pickReasoningEffort('low', DEEPSEEK_V4, 'high', 'max')).toBe('low')
     expect(pickReasoningEffort('high', DEEPSEEK_V4, 'low', 'max')).toBe('high')
+    expect(pickReasoningEffort('max', DEEPSEEK_V4, 'low', 'high')).toBe('max')
   })
 
   it('显式档位未被公布时回退自动；无公布档信息时不瞎填', () => {

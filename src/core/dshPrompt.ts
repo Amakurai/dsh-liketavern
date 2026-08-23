@@ -25,9 +25,9 @@ export const BOUND_DISCIPLINE = [
  */
 export const TURN_PLAYBOOK = [
   '【本轮】runtime context 已含触发的世界书、检索记忆与世界状态；同轮后续步骤不重复追加，上方快照即为本轮最新。',
-  '够用就直接以角色身份回复，不要为了再确认而调用工具。',
-  '缺设定再用 tavern_lore_read（先目录，再 uid/关键词取条）/ tavern_memory_search / tavern_asset_read。',
-  '长对话若设定被冲掉，按条补读，不要整本倾倒。',
+  '快照内的设定够用就直接以角色身份回复，不要为了再确认而调用工具。',
+  '回复若涉及人物关系、地点、规则、既有事件等设定，而快照未覆盖或你不确定：先用 tavern_lore_read（先目录，再 uid/关键词取条）/ tavern_memory_search / tavern_asset_read 按条查证再动笔，不要凭印象编造。',
+  '长对话若设定被冲掉，同样按条补读，不要整本倾倒。',
   '本轮确定发生的事实才写入记忆或世界状态；写入从下一轮才注入检索层，同轮会收到写入确认。',
   '中间步骤不要对用户说话；需要收口时会收到【Tavern 步骤】通知，照做即可。',
 ].join('\n')

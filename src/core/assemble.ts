@@ -282,6 +282,13 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
   }
 
   const wiAt = (pos: WIPosition): WIActivation[] => wi?.byPosition[pos] ?? []
+  /**
+   * 世界书/记忆在 standing 与快照里默认是裸文本拼接，模型难以识别为「设定事实」。
+   * 落消息时统一加来源标签（AN 走 wiText 不加，保留作者注释原始语义与尾部注意力位置）。
+   */
+  const WI_LABEL_STANDING = '【世界书·常驻】'
+  const WI_LABEL_TURN = '【世界书·本轮触发】'
+  const labelWi = (text: string, standingSide: boolean): string => `${standingSide ? WI_LABEL_STANDING : WI_LABEL_TURN}\n${text}`
   /** 常驻无脚本进 standing；关键词命中进 turn；EJS 丢弃。 */
   const wiChunks = (pos: WIPosition): { standing: string; turn: string } => {
     const standingParts: string[] = []
@@ -302,8 +309,8 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
   const wiMessages = (pos: WIPosition, role: ChatRole): ChatMessage[] => {
     const { standing, turn } = wiChunks(pos)
     const out: ChatMessage[] = []
-    if (standing) out.push(trackedMessage(role, standing, worldInfoPromptMessages))
-    if (turn) out.push(asTurn(trackedMessage(role, turn, worldInfoPromptMessages)))
+    if (standing) out.push(trackedMessage(role, labelWi(standing, true), worldInfoPromptMessages))
+    if (turn) out.push(asTurn(trackedMessage(role, labelWi(turn, false), worldInfoPromptMessages)))
     return out
   }
   const wiText = (pos: WIPosition): string => {
@@ -326,7 +333,9 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
       .filter((delta) => isDeltaRenderedInTurn(delta, activatedDeltaIds))
       .map((delta) => expandTurn(formatDelta(delta))),
   )
-  const memoryText = joinContents(input.memories.map((m) => expandTurn(m)))
+  const memoryBodies = joinContents(input.memories.map((m) => expandTurn(m)))
+  // 检索记忆同样加来源标签（与世界书标签同一目的：让模型识别为事实层而非叙述）。
+  const memoryText = memoryBodies ? `【检索记忆】\n${memoryBodies}` : ''
   // 记忆/变化层永远进 turn：在创建消息处（markerContent / insertFallbackMarkers）按对象标记。
 
   const markerContent = (id: string, role: ChatRole): ChatMessage[] | null => {
@@ -355,11 +364,11 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
         const before = wiChunks(WIPosition.BeforeExampleMessages)
         const after = wiChunks(WIPosition.AfterExampleMessages)
         const out: ChatMessage[] = []
-        if (before.standing) out.push(trackedMessage(role, before.standing, worldInfoPromptMessages))
-        if (before.turn) out.push(asTurn(trackedMessage(role, before.turn, worldInfoPromptMessages)))
+        if (before.standing) out.push(trackedMessage(role, labelWi(before.standing, true), worldInfoPromptMessages))
+        if (before.turn) out.push(asTurn(trackedMessage(role, labelWi(before.turn, false), worldInfoPromptMessages)))
         out.push(...blocks.map((b) => trackedMessage(role, expandStanding(b), examplePromptMessages)))
-        if (after.standing) out.push(trackedMessage(role, after.standing, worldInfoPromptMessages))
-        if (after.turn) out.push(asTurn(trackedMessage(role, after.turn, worldInfoPromptMessages)))
+        if (after.standing) out.push(trackedMessage(role, labelWi(after.standing, true), worldInfoPromptMessages))
+        if (after.turn) out.push(asTurn(trackedMessage(role, labelWi(after.turn, false), worldInfoPromptMessages)))
         return out
       }
       case Marker.PersonaDescription:

@@ -24,8 +24,9 @@ export function resolveStaleBinding<T extends StaleBindingRef>(binding: T, chara
     if (live && binding.cardName !== live.name) return { ...binding, cardName: live.name }
     return binding
   }
-  const byName = binding.cardName ? characters.find((c) => c.name === binding.cardName) : undefined
-  if (byName) return { ...binding, cardId: byName.cardId, cardName: byName.name }
+  // 按名接回只允许唯一命中：库里有多张同名卡时 find 会静默接错（工作区/记忆/WAL 都按 cardId）。
+  const byName = binding.cardName ? characters.filter((c) => c.name === binding.cardName) : []
+  if (byName.length === 1) return { ...binding, cardId: byName[0]!.cardId, cardName: byName[0]!.name }
   if (characters.length === 1) {
     const only = characters[0]!
     return { ...binding, cardId: only.cardId, cardName: only.name }

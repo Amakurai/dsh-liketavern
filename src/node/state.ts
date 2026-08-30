@@ -206,11 +206,11 @@ export class TavernState {
   async deleteCharacterLorebook(cardId: string): Promise<void> {
     const charWs = await this.loadCharacter(cardId)
     if (!charWs) throw new Error(`角色 ${cardId} 不存在`)
-    const handle = await this.workspace(cardId)
-    await handle.fs.delete('assets/character-book.json')
+    const fs = this.plainFs(cardId)
+    await fs.delete('assets/character-book.json')
     const cardJson: Record<string, unknown> = { ...charWs.card, characterBook: null }
     delete cardJson.pngBytes
-    await handle.fs.writeText('card.json', JSON.stringify(cardJson, null, 2) + '\n')
+    await fs.writeText('card.json', JSON.stringify(cardJson, null, 2) + '\n')
     this.bumpAssetRev(`charlore:${cardId}`)
   }
 
@@ -218,8 +218,7 @@ export class TavernState {
   async importCharacter(fileName: string, bytes: Uint8Array, opts?: { importWorldBook?: boolean }): Promise<CharacterWorkspace> {
     const card: CharacterCard = /\.png$/i.test(fileName) ? parsePngCard(bytes) : parseJsonCard(JSON.parse(new TextDecoder().decode(bytes)))
     const ws = await importCardToWorkspace(this.paths.characters, card, opts)
-    const handle = await this.workspace(ws.cardId)
-    await rebuildIndex(handle.fs, estimateTokens)
+    await rebuildIndex(this.plainFs(ws.cardId), estimateTokens)
     return ws
   }
 
@@ -253,11 +252,11 @@ export class TavernState {
     if (!book || book.entries.length === 0) throw new Error('内嵌世界书缺少条目')
     const charWs = await this.loadCharacter(cardId)
     if (!charWs) throw new Error(`角色 ${cardId} 不存在`)
-    const handle = await this.workspace(cardId)
-    await handle.fs.writeText('assets/character-book.json', JSON.stringify(json, null, 2) + '\n')
+    const fs = this.plainFs(cardId)
+    await fs.writeText('assets/character-book.json', JSON.stringify(json, null, 2) + '\n')
     const cardJson: Record<string, unknown> = { ...charWs.card, characterBook: book }
     delete cardJson.pngBytes
-    await handle.fs.writeText('card.json', JSON.stringify(cardJson, null, 2) + '\n')
+    await fs.writeText('card.json', JSON.stringify(cardJson, null, 2) + '\n')
     this.bumpAssetRev(`charlore:${cardId}`)
     return { name: book.name ?? charWs.card.name, entryCount: book.entries.length }
   }
@@ -270,9 +269,8 @@ export class TavernState {
     if (!charWs) throw new Error(`角色 ${cardId} 不存在`)
     if (patch.name !== undefined && !patch.name.trim()) throw new Error('角色名不能为空')
     const next = applyCharacterPatch(charWs.card, patch)
-    const handle = await this.workspace(cardId)
     const { pngBytes: _png, ...cardJson } = next
-    await handle.fs.writeText('card.json', JSON.stringify(cardJson, null, 2) + '\n')
+    await this.plainFs(cardId).writeText('card.json', JSON.stringify(cardJson, null, 2) + '\n')
     this.bumpAssetRev(`card:${cardId}`)
     return { cardId, name: next.name }
   }
@@ -280,8 +278,7 @@ export class TavernState {
   async createCharacter(name: string): Promise<CharacterWorkspace> {
     const card = createBlankCard(name)
     const ws = await importCardToWorkspace(this.paths.characters, card)
-    const handle = await this.workspace(ws.cardId)
-    await rebuildIndex(handle.fs, estimateTokens)
+    await rebuildIndex(this.plainFs(ws.cardId), estimateTokens)
     this.bumpAssetRev(`card:${ws.cardId}`)
     return ws
   }
@@ -302,9 +299,9 @@ export class TavernState {
   }
 
   async saveJournal(cardId: string, text: string): Promise<void> {
-    const handle = await this.workspace(cardId)
-    await handle.fs.writeText('journal.md', text)
-    await rebuildIndex(handle.fs, estimateTokens)
+    const fs = this.plainFs(cardId)
+    await fs.writeText('journal.md', text)
+    await rebuildIndex(fs, estimateTokens)
   }
 
   async getChatLorebook(cardId: string): Promise<unknown> {
@@ -320,8 +317,7 @@ export class TavernState {
 
   async saveChatLorebook(cardId: string, json: unknown): Promise<void> {
     parseLorebook(json, { source: 'chat', sourceRef: 'chat-lorebook' })
-    const handle = await this.workspace(cardId)
-    await handle.fs.writeText('assets/chat-lorebook.json', JSON.stringify(json, null, 2) + '\n')
+    await this.plainFs(cardId).writeText('assets/chat-lorebook.json', JSON.stringify(json, null, 2) + '\n')
     this.bumpAssetRev(`chatlore:${cardId}`)
   }
 
@@ -735,6 +731,17 @@ export class TavernState {
   private rootFs(): Promise<WorkspaceFs> {
     this.rootFsPromise ??= Promise.resolve(new WorkspaceFs(this.paths.root, null))
     return this.rootFsPromise
+  }
+
+  /**
+   * 面板/服务层非会话写入专用的角色工作区文件面：floor 恒为 null，绝不记 WAL。
+   * 共享句柄 workspace(cardId).fs 的 floor 在 turn/start～turn/end 之间非 null，
+   * 生成进行中用户在面板的编辑若复用它，会被记进当前楼层 WAL，回退楼层时把编辑静默改回旧值。
+   * turn 流程内的工具写路径仍走共享句柄（快照必须进 WAL），这里只供非会话写路径使用。
+   */
+  private plainFs(cardId: string): WorkspaceFs {
+    assertValidCardId(cardId)
+    return new WorkspaceFs(join(this.paths.characters, cardId), null)
   }
 }
 

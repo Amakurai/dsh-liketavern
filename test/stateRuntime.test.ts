@@ -13,9 +13,13 @@
  * - workspace：拒绝会把工作区根移出 characters/ 的非法 cardId；
  * - 会话副作用队列：同会话严格串行、不同会话互不阻塞、失败后仍可继续；
  * - compressOldestMemories：idle 期异步压缩——最旧批次合并为一条并归档、
- *   无模型/空批次/合并失败均不动记忆库。
+ *   无模型/空批次/合并失败均不动记忆库；先落合并条目再归档——write 失败时批次原样
+ *   保留可重试，archive 失败时新旧并存不丢事实（archive 恢复后重试可收敛）；
+ * - 面板/服务层写路径（saveJournal/saveCharacter/saveCharacterLorebook/deleteCharacterLorebook/
+ *   saveChatLorebook）：turn 进行中（共享句柄 floor 非 null）也不记 WAL，
+ *   回退楼层不会把用户编辑改回旧值；turn 内共享句柄的工具写入仍记 WAL（对照）。
  */
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -394,5 +398,78 @@ describe('compressOldestMemories', () => {
     } as unknown as LlmRuntime
     expect(await compressOldestMemories(state, broken, cardId, 'p', 'm')).toBeNull()
     expect((await ws.memory.stats()).count).toBe(1)
+  })
+
+  it('合并条目落盘失败时抛错，批次不归档、可原样重试（不丢事实）', async () => {
+    const { cardId } = await importCard(join(root, 'characters'), makeCard())
+    const ws = await state.workspace(cardId)
+    await ws.memory.write({ body: '旧记忆一' })
+    await ws.memory.write({ body: '旧记忆二' })
+
+    const spy = vi.spyOn(ws.memory, 'write').mockRejectedValue(new Error('disk full'))
+    await expect(
+      compressOldestMemories(state, mockStreamLlm('合并结果'), cardId, 'p', 'm'),
+    ).rejects.toThrow('disk full')
+    spy.mockRestore()
+
+    // 批次仍在活跃库、没有被归档，下次压缩原样重试（同刻写入次序不定，排序后比较）
+    expect((await ws.memory.oldest(10)).map((e) => e.body).sort()).toEqual(['旧记忆一', '旧记忆二'])
+  })
+
+  it('归档失败时合并条目已落盘，新旧并存不丢事实；archive 恢复后重试收敛', async () => {
+    const { cardId } = await importCard(join(root, 'characters'), makeCard())
+    const ws = await state.workspace(cardId)
+    await ws.memory.write({ body: '旧记忆一' })
+    await ws.memory.write({ body: '旧记忆二' })
+
+    const spy = vi.spyOn(ws.memory, 'archive').mockRejectedValue(new Error('io error'))
+    await expect(
+      compressOldestMemories(state, mockStreamLlm('合并结果'), cardId, 'p', 'm'),
+    ).rejects.toThrow('io error')
+    spy.mockRestore()
+
+    // 最坏情形：新（合并条目）旧（批次残余）并存
+    expect((await ws.memory.oldest(10)).map((e) => e.body).sort()).toEqual(['合并结果', '旧记忆一', '旧记忆二'])
+
+    // 重试把最旧批次（含上次积压的合并条目）再合并归档一次，收敛为一条，不丢事实
+    const retry = await compressOldestMemories(state, mockStreamLlm('再次合并'), cardId, 'p', 'm')
+    expect(retry).toEqual({ merged: '再次合并', archived: 3 })
+    expect((await ws.memory.stats()).count).toBe(1)
+  })
+})
+
+describe('面板写路径不记 WAL', () => {
+  it('turn 进行中（共享句柄 floor 非 null）面板编辑不写入楼层快照，回退不改回', async () => {
+    const { cardId } = await importCard(paths.characters, makeCard())
+    const ws = await state.workspace(cardId)
+    // 模拟 turn/start～turn/end 之间：共享句柄 floor 非 null（onTurnStart 的 beginFloor）
+    await ws.fs.beginFloor('s1#t1')
+
+    await state.saveJournal(cardId, '面板编辑后的日志')
+    await state.saveCharacter(cardId, { description: '新描述' })
+    await state.saveCharacterLorebook(cardId, { entries: [{ keys: ['剑'], content: '断剑' }] })
+    await state.saveChatLorebook(cardId, { entries: { '1': { key: ['门'], content: '门后' } } })
+    await state.deleteCharacterLorebook(cardId)
+
+    // 用户编辑照常落盘
+    expect(await state.getJournal(cardId)).toBe('面板编辑后的日志')
+    // 但 state/wal/ 下没有任何新快照（floor 非 null 时一旦误记 WAL，record 会 append 出 records.jsonl）
+    const walDir = join(root, 'characters', cardId, 'state', 'wal')
+    await expect(readFile(join(walDir, 's1_t1', 'records.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+
+    // 提交并回滚该楼层：无记录可回放，面板编辑原样保留
+    await ws.fs.commitFloor()
+    expect(await ws.wal.rollbackFloor('s1#t1', join(root, 'characters', cardId))).toEqual([])
+    expect(await state.getJournal(cardId)).toBe('面板编辑后的日志')
+  })
+
+  it('对照：turn 内经共享句柄的工具写入仍记 WAL', async () => {
+    const { cardId } = await importCard(paths.characters, makeCard())
+    const ws = await state.workspace(cardId)
+    await ws.fs.beginFloor('s1#t1')
+    await ws.fs.writeText('journal.md', '工具写入')
+    await ws.fs.commitFloor()
+    const records = await readFile(join(root, 'characters', cardId, 'state', 'wal', 's1_t1', 'records.jsonl'), 'utf8')
+    expect(records.trim().split('\n')).toHaveLength(1)
   })
 })

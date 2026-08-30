@@ -43,4 +43,13 @@ describe('resolveStaleBinding', () => {
     ).toBeNull()
     expect(resolveStaleBinding(binding, [])).toBeNull()
   })
+
+  it('库里有多张同名卡时不按名接回（工作区/记忆/WAL 都按 cardId，接错会静默串卡）', () => {
+    expect(
+      resolveStaleBinding(binding, [
+        { cardId: '测试角色-a1b2c3d4', name: '测试角色' },
+        { cardId: '测试角色-e5f6a7b8', name: '测试角色' },
+      ]),
+    ).toBeNull()
+  })
 })

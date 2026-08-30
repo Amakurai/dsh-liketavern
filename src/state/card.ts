@@ -384,6 +384,7 @@ export function embedCardInPng(pngBytes: Uint8Array | null, json: unknown, spec:
 
   const kept: Uint8Array[] = [source.subarray(0, PNG_SIGNATURE.length)]
   let offset = PNG_SIGNATURE.length
+  let sawIend = false
   while (offset + 8 <= source.length) {
     const length = new DataView(source.buffer, source.byteOffset + offset, 4).getUint32(0)
     const type = Buffer.from(source.subarray(offset + 4, offset + 8)).toString('latin1')
@@ -394,11 +395,15 @@ export function embedCardInPng(pngBytes: Uint8Array | null, json: unknown, spec:
     if (type === 'IEND') {
       for (const extra of extras) kept.push(extra)
       kept.push(source.subarray(offset, chunkEnd))
+      sawIend = true
       break
     }
     if (!isCardKeywordChunk(type, data)) kept.push(source.subarray(offset, chunkEnd))
     offset = chunkEnd
   }
+  // 源 PNG 在 chara 块后被截断时 parsePngCard 不报错（不要求 IEND），但导出若就此拼接，
+  // 产出的是无卡数据也无 IEND 的废图。未遇 IEND 一律拒绝，让调用方看到明确错误。
+  if (!sawIend) throw new CardParseError('PNG 缺少 IEND 块：文件被截断，无法嵌入角色卡数据')
   const out = new Uint8Array(kept.reduce((n, p) => n + p.length, 0))
   let at = 0
   for (const part of kept) {

@@ -6,7 +6,7 @@ import { useState } from 'react'
 import { IconDownloadOutline16, IconEditOutline16, IconFolderOpenOutline16, IconListPenOutline16, IconTrashOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { CardRegexScript, ChatRole, PresetEntry, PromptPreset } from '../../core/types.js'
 import { EMPTY_SESSION_DEFAULTS, type PresetSummary, type TavernRemote } from '../types.js'
-import { Badge, Btn, ConfirmDialog, Err, Field, FileBtn, IconBtn, Muted, NumInput, RegexScriptRow, SearchEmpty, SearchInput, Section, Select, Skeleton, Toggle, clickableProps, downloadJson, errOf, readJsonFile, runAsync, useLoader, useToast } from '../util.js'
+import { Badge, Btn, ConfirmDialog, Err, Field, FileBtn, IconBtn, Muted, NumInput, RegexScriptRow, SaveBar, SearchEmpty, SearchInput, Section, Select, Skeleton, Toggle, clickableProps, downloadJson, errOf, readJsonFile, runAsync, useLoader, useToast } from '../util.js'
 
 function newEntry(order: number): PresetEntry {
   return {
@@ -46,7 +46,7 @@ function EntryEditor(props: { entry: PresetEntry; onChange: (e: PresetEntry) => 
   const set = (patch: Partial<PresetEntry>) => props.onChange({ ...entry, ...patch })
   return (
     <div className="dsh-tavern-entry">
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', padding: '10px 12px 6px' }}>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', padding: '12px 16px 8px' }}>
         <Toggle checked={entry.enabled} onChange={(enabled) => set({ enabled })} title={entry.enabled ? '关闭此条目' : '启用此条目'} />
         <input className="dsh-tavern-input" style={{ width: 160 }} value={entry.name} placeholder="名称" onChange={(e) => set({ name: e.target.value })} />
         <Select
@@ -86,7 +86,7 @@ function EntryEditor(props: { entry: PresetEntry; onChange: (e: PresetEntry) => 
         </IconBtn>
       </div>
       {!entry.marker && (
-        <div style={{ padding: '0 12px 12px' }}>
+        <div style={{ padding: '2px 16px 14px' }}>
           <textarea className="dsh-tavern-input dsh-tavern-textarea" style={{ minHeight: 60 }} value={entry.content} placeholder="内容" onChange={(e) => set({ content: e.target.value })} />
         </div>
       )}
@@ -230,9 +230,9 @@ export function PresetsSection(props: { remote: TavernRemote }) {
       </div>
       {state.status === 'loading' && (
         <div className="dsh-tavern-list">
-          <Skeleton height={62} radius={14} />
-          <Skeleton height={62} radius={14} />
-          <Skeleton height={62} radius={14} />
+          <Skeleton height={70} radius={16} />
+          <Skeleton height={70} radius={16} />
+          <Skeleton height={70} radius={16} />
         </div>
       )}
       {state.status === 'error' && <Err message={state.message} />}
@@ -310,11 +310,11 @@ export function PresetsSection(props: { remote: TavernRemote }) {
               />
             ))}
           </div>
-          <div style={{ display: 'flex', gap: 8 }}>
+          <SaveBar>
             <Btn onClick={() => setEditing({ ...editing, entries: [...editing.entries, newEntry(editing.entries.length * 100 + 100)] })}>添加条目</Btn>
             <Btn disabled={busy} onClick={() => void save()} primary>保存预设</Btn>
             <Btn onClick={() => setEditing(null)}>关闭</Btn>
-          </div>
+          </SaveBar>
         </div>
       )}
     </Section>

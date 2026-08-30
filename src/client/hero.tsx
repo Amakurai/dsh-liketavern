@@ -148,6 +148,8 @@ export function TavernHeroCharacter(props: {
         }
         window.dispatchEvent(new CustomEvent(BINDING_CHANGED_EVENT, { detail: sessionId }))
         bindingLoader.reload()
+      } catch (cause) {
+        setError(cause instanceof Error ? cause.message : String(cause))
       } finally {
         clearing.current = false
       }
@@ -249,6 +251,8 @@ export function TavernHeroCharacter(props: {
       else if (entered.ok && !entered.value.created) {
         setError('未能写入开场白。会话里已有内容时请直接继续对话。')
       }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
     } finally {
       setBusy(false)
     }
@@ -267,6 +271,8 @@ export function TavernHeroCharacter(props: {
         window.dispatchEvent(new CustomEvent(BINDING_CHANGED_EVENT, { detail: sessionId }))
         bindingLoader.reload()
       }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
     } finally {
       setBusy(false)
     }

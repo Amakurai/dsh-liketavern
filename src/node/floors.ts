@@ -330,6 +330,26 @@ async function copyTimers(
   await state.saveTimers(cardId, toSession, timers)
 }
 
+/**
+ * 子会话的 WAL 世系：在祖先条目后追加源会话边界。
+ * 保留的祖先条目必须 clamp 到新 seed 实际继承的边界——回退 fork 只继承 throughTurn
+ * 之前的楼层，不 clamp 会让 timerOwnerAtTurn 用陈旧边界命中未继承的祖先定时器。
+ * throughTurn === null（空 seed，未继承任何楼层）时祖先内容同样未继承，整条世系丢弃。
+ */
+export function childWalLineage(
+  binding: Pick<SessionBinding, 'walLineage'>,
+  sourceId: string,
+  throughTurn: number | null,
+): WalLineageEntry[] {
+  if (throughTurn === null) return []
+  return [
+    ...(binding.walLineage ?? [])
+      .filter((entry) => entry.sessionId !== sourceId)
+      .map((entry) => ({ ...entry, throughTurn: Math.min(entry.throughTurn, throughTurn) })),
+    { sessionId: sourceId, throughTurn },
+  ]
+}
+
 /** seed 中最大的 turn/start；空前缀表示没有继承源会话楼层。 */
 export function inheritedThroughTurn(seed: readonly SessionEvent[]): number | null {
   let max: number | null = null
@@ -389,10 +409,7 @@ async function forkAt(
   const seed = options?.seedOverride ?? sessionPrefixEvents(source, boundary)
   const childId = await forkChildSession(ctx, source, seed)
   const throughTurn = inheritedThroughTurn(seed)
-  const walLineage = [
-    ...(binding.walLineage ?? []).filter((entry) => entry.sessionId !== source.id),
-    ...(throughTurn === null ? [] : [{ sessionId: source.id, throughTurn }]),
-  ]
+  const walLineage = childWalLineage(binding, source.id, throughTurn)
   try {
     await state.saveBinding({
       ...binding,
@@ -527,6 +544,7 @@ export async function editUserMessage(
   const seq = turnStartSeq(source.events, turn)
   if (seq === null) throw new FloorError('no-turn', `会话中没有 turn ${turn}`)
   if (!firstUserMessageOf(source.events, turn)) throw new FloorError('no-user-message', `turn ${turn} 内没有用户消息可编辑`)
+  if (!newText.trim()) throw new FloorError('empty-text', '编辑后的正文不能为空')
 
   const loadedBinding = await state.loadBinding(sessionId)
   const binding = loadedBinding ? inferLiveWalLineage(ctx, source, loadedBinding) : null
@@ -828,6 +846,17 @@ export async function swipeGreeting({ ctx, state }: FloorDeps, sessionId: string
   const text = await expandGreeting(state, binding, raw)
 
   const childId = await forkChildSession(ctx, source, greetingTurnEvents(text))
-  await state.saveBinding({ ...binding, sessionId: childId, greetingIndex: next })
+  try {
+    await state.saveBinding({ ...binding, sessionId: childId, greetingIndex: next })
+  } catch (error) {
+    // 与 forkAt 相同兜底：绑定保存失败时清理孤儿子会话，不留 detach 遗漏的分支。
+    const workspace = (ctx.get('workspaceRegistry') as WorkspaceRegistryLike | undefined)
+      ?.list()
+      .find((item) => item.sessionIds.includes(childId))
+    await workspace?.detachSession?.(childId).catch(() => {})
+    const child = ctx.agents.get(childId as Session['id']) as (Agent & { dispose?: () => Promise<void> }) | undefined
+    await child?.dispose?.().catch(() => {})
+    throw new FloorError('binding-save-failed', `保存分支绑定失败：${error instanceof Error ? error.message : String(error)}`)
+  }
   return { childSessionId: childId, index: next, title: await branchTitle(state, binding, `开场白 ${next + 1}/${variants.length}`) }
 }

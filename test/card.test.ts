@@ -1,6 +1,7 @@
 /**
  * 角色卡解析单测：手工构造最小 PNG（签名 + IHDR + tEXt/zTXt/iTXt + IEND），
- * chunk 长度字段按实填写，CRC 填 0（解析器不校验）。覆盖 depth_prompt、空白卡与 PNG 往返导出。
+ * chunk 长度字段按实填写，CRC 填 0（解析器不校验）。覆盖 depth_prompt、空白卡、
+ * PNG 往返导出与导出侧截断拒绝（源图缺 IEND 时 embedCardInPng 抛错）。
  */
 
 import { Buffer } from 'node:buffer'
@@ -167,6 +168,15 @@ describe('parsePngCard', () => {
     const card = parsePngCard(png)
     expect(card.name).toBe('艾莉丝')
     expect(card.description).toBe('一位旅人')
+  })
+
+  it('源 PNG 缺 IEND（截断）时 embedCardInPng 抛 CardParseError，不产出废图', () => {
+    // parsePngCard 不要求 IEND：chara 块后被截断的卡仍可导入
+    const truncated = buildPng([IHDR, textChunk('chara', { name: 'x' })]).slice(0, -12)
+    expect(parsePngCard(truncated).name).toBe('x')
+    // 但导出必须拒绝：否则循环静默 break，产出无卡数据也无 IEND 的废图且无任何提示
+    expect(() => embedCardInPng(truncated, { name: 'x' }, 'chara_card_v2')).toThrow(CardParseError)
+    expect(() => embedCardInPng(truncated, { name: 'x' }, 'chara_card_v2')).toThrow(/IEND/)
   })
 
   it('防御畸形 chunk 长度（截断）', () => {

@@ -179,7 +179,7 @@ export function MemorySection(props: { remote: TavernRemote }) {
       <Err message={error} />
       {cardId && (
         <>
-          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, margin: '8px 0' }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10, margin: '10px 0 14px' }}>
             <div className="dsh-tavern-filters">
               <button type="button" className="dsh-tavern-chip" data-active={tab === 'memory' ? 'true' : 'false'} onClick={() => setTab('memory')}>
                 记忆（{memoryItems.length}）

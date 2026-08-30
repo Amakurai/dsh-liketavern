@@ -94,7 +94,7 @@ function PromptPreviewDialog(props: { data: PromptPreview; onClose: () => void }
         组装 {assemble.tokensAfter}/{assemble.tokensBefore} token
         {assemble.trimmedSections.length > 0 ? ` · 裁剪 ${assemble.trimmedSections.join('、')}` : ''}
       </Muted>
-      <div className="dsh-tavern-filters" style={{ margin: '8px 0' }}>
+      <div className="dsh-tavern-filters" style={{ margin: '10px 0 12px' }}>
         {(
           [
             ['standing', 'standing'],
@@ -182,23 +182,28 @@ export function TavernHeaderChip(props: {
     let alive = true
     setError(null)
     void (async () => {
-      const [chars, presets, personas, lorebooks] = await Promise.all([
-        remote.listCharacters({}),
-        remote.listPresets({}),
-        remote.listPersonas({}),
-        remote.listLorebooks({}),
-      ])
-      if (!alive) return
-      if (!chars.ok) return setError(chars.error.message)
-      if (!presets.ok) return setError(presets.error.message)
-      if (!personas.ok) return setError(personas.error.message)
-      if (!lorebooks.ok) return setError(lorebooks.error.message)
-      setLists({
-        characters: chars.value.items,
-        presets: presets.value.items,
-        personas: personas.value.items,
-        lorebooks: lorebooks.value.items,
-      })
+      try {
+        const [chars, presets, personas, lorebooks] = await Promise.all([
+          remote.listCharacters({}),
+          remote.listPresets({}),
+          remote.listPersonas({}),
+          remote.listLorebooks({}),
+        ])
+        if (!alive) return
+        if (!chars.ok) return setError(chars.error.message)
+        if (!presets.ok) return setError(presets.error.message)
+        if (!personas.ok) return setError(personas.error.message)
+        if (!lorebooks.ok) return setError(lorebooks.error.message)
+        setLists({
+          characters: chars.value.items,
+          presets: presets.value.items,
+          personas: personas.value.items,
+          lorebooks: lorebooks.value.items,
+        })
+      } catch (cause) {
+        // RPC 传输/校验失败是 reject 而非错误信封；不兜会停在骨架屏
+        if (alive) setError(cause instanceof Error ? cause.message : String(cause))
+      }
     })()
     return () => {
       alive = false
@@ -259,7 +264,12 @@ export function TavernHeaderChip(props: {
     const next = ((binding.greetingIndex + delta) % total + total) % total
     const r = await remote.swipeGreeting({ sessionId, index: next })
     if (!r.ok) setError(r.error.message)
-    else await openChildSession(sessions, r.value.childSessionId, r.value.title)
+    else {
+      // 二次打开可能因会话尚未登记而抛错；分支已建好，toast 提示即可
+      await openChildSession(sessions, r.value.childSessionId, r.value.title).catch(() => {
+        toast.show('分支会话已创建，请在会话列表中打开')
+      })
+    }
   }
 
   const unbind = async () => {

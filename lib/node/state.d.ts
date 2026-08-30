@@ -222,5 +222,12 @@ export declare class TavernState {
     private rootFsPromise;
     /** 数据目录根的 WorkspaceFs（library/personas/regex 等，非角色工作区，无 WAL）。 */
     private rootFs;
+    /**
+     * 面板/服务层非会话写入专用的角色工作区文件面：floor 恒为 null，绝不记 WAL。
+     * 共享句柄 workspace(cardId).fs 的 floor 在 turn/start～turn/end 之间非 null，
+     * 生成进行中用户在面板的编辑若复用它，会被记进当前楼层 WAL，回退楼层时把编辑静默改回旧值。
+     * turn 流程内的工具写路径仍走共享句柄（快照必须进 WAL），这里只供非会话写路径使用。
+     */
+    private plainFs;
 }
 export type { MemoryEntry, WorldDelta };

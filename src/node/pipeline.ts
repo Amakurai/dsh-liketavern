@@ -152,12 +152,21 @@ export async function runTavernPipeline(input: PipelineInput): Promise<PipelineR
     : (input.historyOverride ?? [])
   const history = rawHistory.filter((m) => !(m.role === 'user' && isSyntheticUserText(m.content)))
 
-  // 待入日志的本轮输入：去重（与历史末条相同则视为已入日志）。
-  // 合成 user 文本（runtime context 快照、同轮写入确认、续写指令）不经 inbox 也进不了
-  // {{lastusermessage}} 与世界书扫描——它们不是用户台词。
-  const pending = state.pendingInputs.get(sessionId) ?? []
-  const lastContent = history.at(-1)?.content
-  const pendingFresh = pending.filter((t) => t !== lastContent && !isSyntheticUserText(t))
+  // 待入日志的本轮输入：去重（已入日志的不再追加）。同轮第 2 步起 history 末条已是
+  // assistant，只比末条会把已入日志的输入重复追加到扫描尾部——pending 按插入顺序落在
+  // history 尾部，取尾部最多 pending 条数的 user 消息逐条抵消（同文本连发也只抵消
+  // 已入日志的条数）。合成 user 文本（runtime context 快照、同轮写入确认、续写指令）
+  // 不经 inbox 也进不了 {{lastusermessage}} 与世界书扫描——它们不是用户台词。
+  const pending = (state.pendingInputs.get(sessionId) ?? []).filter((t) => !isSyntheticUserText(t))
+  const pendingFresh = [...pending]
+  let scannedUsers = 0
+  for (let i = history.length - 1; i >= 0 && pendingFresh.length > 0 && scannedUsers < pending.length; i--) {
+    const message = history[i]!
+    if (message.role !== 'user') continue
+    scannedUsers++
+    const at = pendingFresh.lastIndexOf(message.content)
+    if (at >= 0) pendingFresh.splice(at, 1)
+  }
   const scanMessages: ChatMessage[] = [
     ...history,
     ...pendingFresh.map((content) => ({ role: 'user' as const, content, name: userName })),

@@ -21,8 +21,12 @@ function escapeScriptJson(value: unknown): string {
   return JSON.stringify(value).replace(/</g, '\\u003c').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029')
 }
 
+// 白名单条目的合法形态：主机名[:端口]，或带 https?:// 前缀。含引号/空白等字符的条目会
+// 截断 meta content 属性注入 HTML、或让整条 CSP 失效，一律丢弃。
+const CSP_HOST_RE = /^(?:https?:\/\/)?[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(?::\d{1,5})?$/i
+
 function cspContent(connectHosts: string[]): string {
-  const raw = connectHosts.map((h) => h.trim()).filter(Boolean)
+  const raw = connectHosts.map((h) => h.trim()).filter((h) => h === '*' || CSP_HOST_RE.test(h))
   // `*` = 全部放行（一劳永逸开关）：connect-src/script-src 放开到 https/http。
   // iframe 无 allow-same-origin（opaque origin），卡内脚本仍够不到主窗口。
   const allowAll = raw.includes('*')

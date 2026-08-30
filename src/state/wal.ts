@@ -160,7 +160,13 @@ export class Wal {
     const records: RecordLine[] = []
     for (const line of text.split('\n')) {
       if (!line.trim()) continue
-      records.push(JSON.parse(line) as RecordLine)
+      // 单行损坏跳过（与 readMeta 的容忍同一标准）：整体抛错会让 doRollbackAfter
+      // 中断在该楼层，后续楼层全不回滚，工作区停在半回滚状态。
+      try {
+        records.push(JSON.parse(line) as RecordLine)
+      } catch {
+        // 坏行跳过
+      }
     }
     return records
   }

@@ -199,9 +199,9 @@ export function LorebooksSection(props: { remote: TavernRemote }) {
       </div>
       {(state.status === 'loading' || opening) && (
         <div className="dsh-tavern-list">
-          <Skeleton height={62} radius={14} />
-          <Skeleton height={62} radius={14} />
-          <Skeleton height={62} radius={14} />
+          <Skeleton height={70} radius={16} />
+          <Skeleton height={70} radius={16} />
+          <Skeleton height={70} radius={16} />
         </div>
       )}
       {state.status === 'error' && <Err message={state.message} />}

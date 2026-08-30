@@ -2,14 +2,6 @@ import type { CSSProperties, ReactNode } from 'react';
 import type { CardRegexScript } from '../core/types.js';
 import type { Envelope } from './types.js';
 import './styles.js';
-/** 旧内联按钮样式（少量组合用）；新按钮请走 Btn。 */
-export declare const btn: CSSProperties;
-/** 旧内联输入框样式；新代码优先用 className="dsh-tavern-input"。 */
-export declare const input: CSSProperties;
-/** 代码向多行框（正则 find/replace 等），用宿主 code 字体。 */
-export declare const textarea: CSSProperties;
-/** 给人看的正文框（世界书条目内容等），不用等宽字体。 */
-export declare const textareaPlain: CSSProperties;
 export declare function Btn(props: {
     onClick: () => void;
     disabled?: boolean;
@@ -48,11 +40,16 @@ export interface TabItem {
     id: string;
     label: string;
 }
-/** 对齐插件设置页的下划线页签。 */
+/** 分段控件式页签（pill track，区别于宿主通用设置的下划线页签）；size="sm" 用于页内第二级导航。 */
 export declare function Tabs(props: {
     items: TabItem[];
     value: string;
     onChange: (id: string) => void;
+    size?: 'md' | 'sm';
+}): any;
+/** 分组保存行：与上方表单一条淡分隔，主操作左齐。 */
+export declare function SaveBar(props: {
+    children?: ReactNode;
 }): any;
 export declare function Badge(props: {
     accent?: boolean;

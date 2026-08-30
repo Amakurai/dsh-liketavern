@@ -1,11 +1,17 @@
 /**
  * 楼层 fork 的 agentOptions：子会话必须带上 provider/model，
  * 否则 system-prompt 插值 {{model}} 会在重新生成时抛无值错误。
+ * 另覆盖：childWalLineage 祖先边界 clamp、sessionPrefixEvents、回滚楼层名、
+ * inheritedThroughTurn、withEditedAssistantMessage、timerOwnerAtTurn、
+ * editUserMessage 空文本拒绝（与 editAssistantMessage 同口径）。
  */
 import { describe, expect, it } from 'vitest'
+import type { Context } from '@deepseek-ai/cordis'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import { TAVERN_GREETING_SOURCE } from '../src/core/greetingLog.js'
 import {
+  childWalLineage,
+  editUserMessage,
   floorNamesForLineageRollback,
   floorNamesForRollback,
   forkAgentOptions,
@@ -13,8 +19,9 @@ import {
   sessionPrefixEvents,
   timerOwnerAtTurn,
   withEditedAssistantMessage,
+  type FloorDeps,
 } from '../src/node/floors.js'
-import { createAssistantMessage } from '@deepseek-ai/dsh-llm'
+import { createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
 
 function sessionOf(opts: {
   header?: { provider?: string; model?: string; maxTokens?: number }
@@ -175,5 +182,75 @@ describe('timerOwnerAtTurn', () => {
     expect(timerOwnerAtTurn(binding, 'current', 1)).toBe('root')
     expect(timerOwnerAtTurn(binding, 'current', 3)).toBe('child')
     expect(timerOwnerAtTurn(binding, 'current', 5)).toBe('current')
+  })
+})
+
+describe('childWalLineage', () => {
+  it('在祖先条目后追加源会话边界', () => {
+    expect(childWalLineage({ walLineage: [{ sessionId: 'root', throughTurn: 2 }] }, 'parent', 4)).toEqual([
+      { sessionId: 'root', throughTurn: 2 },
+      { sessionId: 'parent', throughTurn: 4 },
+    ])
+  })
+
+  it('回退 fork 时祖先边界 clamp 到新 seed 实际继承的边界', () => {
+    // A(turn1-10) 在 turn5 重生成得 B（[{A,4}]），B 回退到 turn3 得 C：C 只继承了 A 的 turn1-3。
+    expect(childWalLineage({ walLineage: [{ sessionId: 'A', throughTurn: 4 }] }, 'B', 3)).toEqual([
+      { sessionId: 'A', throughTurn: 3 },
+      { sessionId: 'B', throughTurn: 3 },
+    ])
+  })
+
+  it('空 seed（throughTurn=null）丢弃全部祖先条目', () => {
+    expect(childWalLineage({ walLineage: [{ sessionId: 'A', throughTurn: 4 }] }, 'B', null)).toEqual([])
+  })
+
+  it('世系里已有源会话条目时替换而非重复', () => {
+    expect(
+      childWalLineage(
+        { walLineage: [{ sessionId: 'A', throughTurn: 4 }, { sessionId: 'B', throughTurn: 2 }] },
+        'B',
+        3,
+      ),
+    ).toEqual([
+      { sessionId: 'A', throughTurn: 3 },
+      { sessionId: 'B', throughTurn: 3 },
+    ])
+  })
+
+  it('无既有世系时只有源会话条目', () => {
+    expect(childWalLineage({}, 'A', 2)).toEqual([{ sessionId: 'A', throughTurn: 2 }])
+  })
+})
+
+describe('editUserMessage 空文本', () => {
+  const message = createAssistantMessage({
+    content: [{ type: 'text', text: '旧台词' }],
+    source: { provider: 'deepseek', model: 'deepseek-chat' },
+  })
+  const events = [
+    { type: 'turn/start', seq: 0, time: 0, data: { turn: 1 } },
+    {
+      type: 'user/message',
+      seq: 1,
+      time: 0,
+      data: createUserMessage({ content: [{ type: 'text', text: '你好' }], source: { kind: 'user' } }),
+    },
+    { type: 'assistant/message', seq: 2, time: 0, data: { turn: 1, step: 1, message } },
+    { type: 'turn/end', seq: 3, time: 0, data: { turn: 1, reason: { kind: 'completed' } } },
+  ] as unknown as SessionEvent[]
+  const session = { id: 'session-x', header: { agentPreset: 'tavern' }, events } as unknown as Session
+  const deps = {
+    ctx: {
+      sessions: { get: (id: string) => (id === session.id ? session : undefined) },
+      agents: { get: () => undefined },
+      get: () => undefined,
+    } as unknown as Context,
+    state: {},
+  } as unknown as FloorDeps
+
+  it('拒绝空串与纯空白文本（empty-text），在 fork 之前抛错', async () => {
+    await expect(editUserMessage(deps, session.id, message.id, '')).rejects.toMatchObject({ code: 'empty-text' })
+    await expect(editUserMessage(deps, session.id, message.id, '   ')).rejects.toMatchObject({ code: 'empty-text' })
   })
 })

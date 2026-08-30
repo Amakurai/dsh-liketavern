@@ -1,13 +1,14 @@
 /**
  * 记忆存储（MemoryStore）单元测试。
- * 覆盖：write/get/list 往返（frontmatter 字段完整）、overLength 软提示、update 合并/替换 tags/keys、
+ * 覆盖：write/get/list 往返（frontmatter 字段完整）、同毫秒连写 id 不碰撞（随机 6 hex）、
+ * overLength 软提示、update 合并/替换 tags/keys、
  * delete、archive 移动、findSimilar 命中相似条目、search 时间衰减（注入 now）、
  * stats token 累加、oldest 顺序、坏文件容错、serialize/parse 往返。
  */
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { estimateTokens } from '../src/core/tokenize.js'
 import { MemoryStore, parseMemory, serializeMemory } from '../src/state/memory.js'
 import { WorkspaceFs } from '../src/state/workspaceFs.js'
@@ -39,7 +40,7 @@ describe('MemoryStore', () => {
       keys: ['艾琳', '桥头'],
       sourceRange: 'msg#12-18',
     })
-    expect(entry.id).toMatch(/^m-[a-z0-9]+-[a-z0-9]{2}$/)
+    expect(entry.id).toMatch(/^m-[a-z0-9]+-[0-9a-f]{6}$/)
     expect(entry.file).toBe(`${entry.id}.md`)
     expect(entry.archived).toBe(false)
     expect(entry.overLength).toBe(false)
@@ -69,6 +70,20 @@ describe('MemoryStore', () => {
     })
     // list 往返：仅一条且内容一致
     expect(await store.list()).toEqual([got])
+  })
+
+  it('同一毫秒连写两条：随机段足够宽，id 不碰撞、互不覆盖', async () => {
+    // 旧实现随机段只有 2 位 base36，同毫秒仅 1296 种取值，同轮连写碰撞会静默覆盖
+    const spy = vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000)
+    try {
+      const a = await store.write({ body: '第一条' })
+      const b = await store.write({ body: '第二条' })
+      expect(a.id).not.toBe(b.id)
+      expect((await store.get(a.id))?.body).toBe('第一条')
+      expect((await store.get(b.id))?.body).toBe('第二条')
+    } finally {
+      spy.mockRestore()
+    }
   })
 
   it('正文超过 200 字时软提示 overLength（不拒绝，仍落盘）', async () => {

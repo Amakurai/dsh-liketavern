@@ -139,7 +139,8 @@ function applyCommand(inner: string, ctx: MacroContext, clock: Record<string, st
 
   const eq = lower.indexOf('::')
   if (eq <= 0) return undefined
-  const cmd = lower.slice(0, eq)
+  // 宏名与 :: 之间允许空格（isGetVar 同规则）：不 trim 会让 {{getvar ::x}} 在正式趟漏解析。
+  const cmd = lower.slice(0, eq).trim()
   const rest = raw.slice(eq + 2)
 
   if (cmd === 'setvar' || cmd === 'setlocalvar' || cmd === 'setglobalvar') {

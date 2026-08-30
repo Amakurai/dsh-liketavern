@@ -78,7 +78,7 @@ function CharacterCard(props: {
 /** 详情弹窗里的「标签 + 多行框」单元，配合 groupHead 分组使用。 */
 function LabeledArea(props: { label: string; value: string; minHeight?: number; onChange: (value: string) => void }) {
   return (
-    <div className="dsh-tavern-field" style={{ marginBottom: 8 }}>
+    <div className="dsh-tavern-field">
       <span className="dsh-tavern-fieldLabel">{props.label}</span>
       <textarea
         className="dsh-tavern-input dsh-tavern-textarea"
@@ -171,9 +171,9 @@ function CharacterDetailDialog(props: { remote: TavernRemote; cardId: string; on
       {state.status === 'error' && <Err message={state.message} />}
       {detail && (
         <div className="dsh-tavern-dialogStack dsh-tavern-scroll" style={{ maxHeight: '65vh', overflow: 'auto', fontSize: 13 }}>
-          <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 10 }}>
-            <CardAvatar remote={remote} cardId={cardId} name={detail.name} size={48} />
-            <div style={{ flex: 1, minWidth: 0 }}>
+          <div className="dsh-tavern-panelCard" style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
+            <CardAvatar remote={remote} cardId={cardId} name={detail.name} size={52} />
+            <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
               <Field label="显示名（不会改工作区 ID）">
                 <input className="dsh-tavern-input" style={{ width: '100%' }} value={detail.name} onChange={(e) => set({ name: e.target.value })} />
               </Field>
@@ -394,9 +394,9 @@ export function CharactersSection(props: { remote: TavernRemote }) {
       </div>
       {state.status === 'loading' && (
         <div className="dsh-tavern-charGrid">
-          <Skeleton height={186} radius={16} />
-          <Skeleton height={186} radius={16} />
-          <Skeleton height={186} radius={16} />
+          <Skeleton height={198} radius={18} />
+          <Skeleton height={198} radius={18} />
+          <Skeleton height={198} radius={18} />
         </div>
       )}
       {state.status === 'error' && <Err message={state.message} />}

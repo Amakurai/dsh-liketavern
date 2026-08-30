@@ -38,6 +38,18 @@ describe('buildCardSrcDoc', () => {
     expect(doc).toContain("script-src 'unsafe-inline' https: http:")
   })
 
+  it('非法白名单条目被丢弃：含引号/空白的注入尝试不进 CSP', () => {
+    const doc = buildCardSrcDoc('<html><head></head><body></body></html>', {
+      greetings: [],
+      greetingIndex: 0,
+      connectHosts: ['good.com', 'ok.dev:8443', 'https://fine.net', 'evil.com"><script>alert(1)</script>', 'not a host', 'ftp://bad.scheme'],
+    })
+    expect(doc).toContain('connect-src https://good.com https://ok.dev:8443 https://fine.net')
+    expect(doc).not.toContain('evil.com')
+    expect(doc).not.toContain('not a host')
+    expect(doc).not.toContain('ftp://')
+  })
+
   it('无 html 根的片段包成文档，并拦截 document.write', () => {
     const doc = buildCardSrcDoc('<style>.x{}</style><div class="x">hi</div>', { greetings: [], greetingIndex: 0 })
     expect(doc).toContain('<html>')

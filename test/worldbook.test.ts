@@ -5,6 +5,7 @@
  * constant、probability（standing-safe 常驻条目豁免掷骰、恒定注入；含本轮宏的 constant 不豁免）、
  * 递归（excludeRecursion/preventRecursion/delayUntilRecursion/
  * maxRecursionSteps）、定时（sticky/cooldown/delay，跨轮回传 timerState）、
+ * 落选回滚（未注入条目清本轮写入的 sticky/cooldown；sticky 延续条目被预算裁掉也清 stickyLeft、保留 cooldown）、
  * 预算截断（优先级/ignoreBudget/overflowWarning；固定预算为绝对上限、百分比按 128K 基数
  * 折算并扣减 reservedTokens；standing 侧常驻豁免计费，被裁条目进 truncated 清单）、
  * 位置分桶、多来源排序、includeNames。
@@ -854,5 +855,49 @@ describe('未注入条目的定时状态回滚', () => {
     expect(activatedKeys(res)).toEqual([])
     expect(res.timerState.stickyLeft['dropped']).toBeUndefined()
     expect(res.timerState.cooldownLeft['dropped']).toBeUndefined()
+  })
+
+  it('sticky 延续条目本轮被预算裁掉时清 stickyLeft（cooldown 保留），下一轮同组兄弟可竞争', () => {
+    const entries = [
+      makeEntry({ key: 'a', keys: ['apple'], group: 'g', sticky: 3, cooldown: 5, order: 100 }),
+      makeEntry({ key: 'b', keys: ['banana'], group: 'g', order: 100 }),
+      // {{time}} 让这条 constant 落 turn 侧参与计费，order 大在预算排序里先占额度
+      makeEntry({ key: 'win', constant: true, content: '{{time}}', order: 200 }),
+    ]
+    let timerState: WITimerState = EMPTY_TIMER_STATE
+    const runRound = (text: string, tokenBudget: number): WIEngineResult => {
+      const res = evaluateWorldInfo({
+        entries,
+        messages: [userMsg(text)],
+        settings: makeSettings({ tokenBudget }),
+        timerState,
+        contextWindowTokens: 1000,
+        reservedTokens: 0,
+        estimateTokens: () => 10,
+        random: () => 0.5,
+      })
+      timerState = res.timerState
+      return res
+    }
+
+    // 第 1 轮：a 命中注入，sticky=3 写入（cooldown 串联为 5+3=8）
+    const r1 = runRound('apple', 100)
+    expect(activatedKeys(r1)).toEqual(['a', 'win'])
+    expect(r1.timerState.stickyLeft['a']).toBe(3)
+
+    // 第 2 轮：a 经 via='sticky' 免概率回归并占住组（b 记 group-skip），但被预算裁掉。
+    // 计时是第 1 轮写入的，仍必须清 stickyLeft；cooldown 保留（轮末 8→7）。
+    const r2 = runRound('banana', 15)
+    expect(activatedKeys(r2)).toEqual(['win'])
+    expect(logsOf(r2, 'group-skip').map((l) => l.entryKey)).toEqual(['b'])
+    expect(logsOf(r2, 'budget-trim').map((l) => l.entryKey)).toEqual(['a'])
+    expect(r2.timerState.stickyLeft['a']).toBeUndefined()
+    expect(r2.timerState.cooldownLeft['a']).toBe(7)
+
+    // 第 3 轮：a 不再 sticky 复活（cooldown 仍在，记 cooldown-skip；win 的正文触发一层递归故记两次），同组 b 正常命中注入
+    const r3 = runRound('banana', 100)
+    expect(activatedKeys(r3)).toEqual(['b', 'win'])
+    expect(logsOf(r3, 'cooldown-skip').some((l) => l.entryKey === 'a')).toBe(true)
+    expect(r3.log.some((l) => l.entryKey === 'a' && l.kind === 'activated' && l.detail.includes('via=sticky'))).toBe(false)
   })
 })

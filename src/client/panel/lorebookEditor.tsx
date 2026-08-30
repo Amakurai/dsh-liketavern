@@ -260,7 +260,7 @@ export function LorebookEditor(props: {
       </div>
       <Err message={error} />
 
-      <div className="dsh-tavern-search" style={{ margin: '8px 0' }}>
+      <div className="dsh-tavern-search" style={{ margin: '10px 0 12px' }}>
         <span className="dsh-tavern-searchIcon">
           <IconSearchOutline16 />
         </span>

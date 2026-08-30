@@ -402,7 +402,16 @@ export function registerTavernTools(ctx: Context, state: TavernState): void {
         if ('error' in resolved) return { ok: false, error: resolved.error }
         const { binding, ws } = resolved
         const raw = await ws.fs.readText('index.json')
-        const index = (raw === null ? null : JSON.parse(raw)) as JsonValue
+        // 坏文件（写盘截断等）按 index: null 返回，与 loadPreset / getChatLorebook 等
+        // 读取路径同一容错——索引只是目录提示，不该让工具每次必抛。
+        let index: JsonValue = null
+        if (raw !== null) {
+          try {
+            index = JSON.parse(raw) as JsonValue
+          } catch {
+            // 损坏按无索引处理
+          }
+        }
         const memStats = await ws.memory.stats()
         const preset = (binding.presetId ? await state.loadPreset(binding.presetId) : null) ?? defaultPreset()
         // 目录必须与 tavern_asset_read 的可读白名单一致：同一个 resolveReadableAssetPath 过滤，

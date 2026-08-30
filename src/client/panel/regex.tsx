@@ -6,7 +6,7 @@ import { useEffect, useState } from 'react'
 import { IconTrashOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PromptPreset, RegexRule, RegexScope, RegexTiming } from '../../core/types.js'
 import type { TavernRemote } from '../types.js'
-import { Badge, Btn, CheckChips, Err, Field, IconBtn, Muted, NullableNumInput, RegexScriptRow, Section, Select, Skeleton, Toggle, errOf, runAsync, useLoader, useToast } from '../util.js'
+import { Badge, Btn, CheckChips, Err, Field, IconBtn, Muted, NullableNumInput, RegexScriptRow, SaveBar, Section, Select, Skeleton, Toggle, errOf, runAsync, useLoader, useToast } from '../util.js'
 
 const SCOPES: { value: RegexScope; label: string }[] = [
   { value: 'input', label: '用户输入' },
@@ -41,7 +41,7 @@ function RuleEditor(props: { rule: RegexRule; onChange: (r: RegexRule) => void; 
   const set = (patch: Partial<RegexRule>) => props.onChange({ ...rule, ...patch })
   return (
     <div className="dsh-tavern-entry" style={{ marginBottom: 8 }}>
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '10px 12px 6px' }}>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '12px 16px 8px' }}>
         <Toggle checked={rule.enabled} onChange={(enabled) => set({ enabled })} title={rule.enabled ? '关闭此规则' : '启用此规则'} />
         <input className="dsh-tavern-input" style={{ flex: 1 }} value={rule.name} onChange={(e) => set({ name: e.target.value })} />
         <Badge>{SOURCE_LABEL[rule.source]}</Badge>
@@ -49,7 +49,7 @@ function RuleEditor(props: { rule: RegexRule; onChange: (r: RegexRule) => void; 
           <IconTrashOutline16 />
         </IconBtn>
       </div>
-      <div style={{ padding: '0 12px 12px' }}>
+      <div style={{ padding: '2px 16px 14px' }}>
       <Field label="查找 (find)">
         <input className="dsh-tavern-input dsh-tavern-codeFont" style={{ flex: 1 }} value={rule.find} onChange={(e) => set({ find: e.target.value })} />
       </Field>
@@ -199,7 +199,7 @@ export function RegexSection(props: { remote: TavernRemote }) {
               <div className="dsh-tavern-emptyDesc">点「新建规则」添加展示或入模的改写规则。</div>
             </div>
           )}
-          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+          <SaveBar>
             <Btn onClick={() => setRules([...current, newRule()])}>新建规则</Btn>
             <Btn disabled={busy} onClick={() => void save(current)} primary>保存全部</Btn>
             <Btn
@@ -210,7 +210,7 @@ export function RegexSection(props: { remote: TavernRemote }) {
             >
               放弃更改并刷新
             </Btn>
-          </div>
+          </SaveBar>
         </>
       )}
 

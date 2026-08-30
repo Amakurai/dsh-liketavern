@@ -376,7 +376,7 @@ export function TavernFloorActions(props: FloorActionsProps) {
             onChange={(e) => setEdit({ ...edit, text: e.target.value })}
           />
           <Err message={editFailure} />
-          <div style={{ display: 'flex', gap: 8, marginTop: 10, justifyContent: 'flex-end' }}>
+          <div className="dsh-tavern-modalActions" style={{ marginTop: 12 }}>
             <Btn disabled={busy} onClick={() => setEdit(null)}>取消</Btn>
             <Btn disabled={busy || !edit.text.trim()} onClick={() => void submitEdit()}>
               {operation === 'submit-edit' ? '保存中…' : '保存并重跑'}
@@ -393,7 +393,7 @@ export function TavernFloorActions(props: FloorActionsProps) {
             onChange={(e) => setEditAi({ ...editAi, text: e.target.value })}
           />
           <Err message={editAiFailure} />
-          <div style={{ display: 'flex', gap: 8, marginTop: 10, justifyContent: 'flex-end' }}>
+          <div className="dsh-tavern-modalActions" style={{ marginTop: 12 }}>
             <Btn disabled={busy} onClick={() => setEditAi(null)}>取消</Btn>
             <Btn disabled={busy || !editAi.text.trim()} onClick={() => void submitEditAi()}>
               {operation === 'submit-edit-ai' ? '保存中…' : '保存（不重跑）'}

@@ -6,6 +6,7 @@
  * （keys 权重 ×2 已在索引侧内建），search 支持半衰期时间衰减（ts 取 updated）。
  */
 
+import { randomBytes } from 'node:crypto'
 import { Bm25Index } from '../core/bm25.js'
 import { estimateTokens } from '../core/tokenize.js'
 import type { MemoryEntry } from '../core/types.js'
@@ -182,7 +183,9 @@ export class MemoryStore {
     sourceRange?: string
   }): Promise<MemoryWriteResult> {
     const now = new Date().toISOString()
-    const id = `m-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 4).padEnd(2, '0')}`
+    // id = `m-<36 进制毫秒>-<随机 6 hex>`（对齐 worlddelta）：同毫秒只留 2 位 base36
+    // 会碰撞静默覆盖（同轮连写两条记忆不罕见），随机段必须够宽。
+    const id = `m-${Date.now().toString(36)}-${randomBytes(3).toString('hex')}`
     const meta: MemoryMeta = {
       created: now,
       updated: now,

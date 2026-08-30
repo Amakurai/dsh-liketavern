@@ -2,7 +2,7 @@ import type { Context } from '@deepseek-ai/cordis';
 import type { Agent, AgentOptions } from '@deepseek-ai/dsh-agent';
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session';
 import { type SiblingSwipe } from '../core/siblings.js';
-import { type SessionBinding } from './bindings.js';
+import { type SessionBinding, type WalLineageEntry } from './bindings.js';
 import type { TavernState } from './state.js';
 export interface FloorDeps {
     ctx: Context;
@@ -37,6 +37,13 @@ export declare function floorNamesForRollback(floors: readonly string[], session
 export declare function floorNamesForLineageRollback(floors: readonly string[], binding: Pick<SessionBinding, 'walLineage'>, sessionId: string, fromTurn: number): string[];
 /** 回退边界属于哪个会话；walLineage 按根祖先 → 直接父会话排列。 */
 export declare function timerOwnerAtTurn(binding: Pick<SessionBinding, 'walLineage'>, currentSessionId: string, boundaryTurn: number): string;
+/**
+ * 子会话的 WAL 世系：在祖先条目后追加源会话边界。
+ * 保留的祖先条目必须 clamp 到新 seed 实际继承的边界——回退 fork 只继承 throughTurn
+ * 之前的楼层，不 clamp 会让 timerOwnerAtTurn 用陈旧边界命中未继承的祖先定时器。
+ * throughTurn === null（空 seed，未继承任何楼层）时祖先内容同样未继承，整条世系丢弃。
+ */
+export declare function childWalLineage(binding: Pick<SessionBinding, 'walLineage'>, sourceId: string, throughTurn: number | null): WalLineageEntry[];
 /** seed 中最大的 turn/start；空前缀表示没有继承源会话楼层。 */
 export declare function inheritedThroughTurn(seed: readonly SessionEvent[]): number | null;
 /** 分支操作结果：子会话 id + 建议标题（客户端经 sessions.rename 落到会话列表）。 */

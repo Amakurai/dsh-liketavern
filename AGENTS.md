@@ -84,7 +84,7 @@ npm run dev        # dsh web --patch ./cordis.dev.yml（需先建 junction，见
 
 `lib/` 是交付物，刻意入库，`.gitignore` 不要忽略它。改代码后必须重新 `npm run build`。角色卡、运行期 JSON、图片、会话、记忆和本机 `file:` 依赖不能进入 Git 或 npm 包。
 
-CI（`.github/workflows/ci.yml`）：push / PR 在 ubuntu + Node 24 跑 `npm ci` → build → test，然后 `git diff --exit-code lib/` 校验入库产物与源码构建一致（忘跑 build 就提交会被拦下），最后 `npm pack --dry-run` 校验白名单。行尾靠 `.gitattributes`（`* text=auto`）保证 Linux 上校验可复现。
+CI（`.github/workflows/ci.yml`）：push / PR 在 ubuntu + Node 24 跑 `npm ci` → build → test，然后 `git diff --exit-code lib/` 校验入库产物与源码构建一致（忘跑 build 就提交会被拦下），再加 `git status --porcelain -- lib/` 拦未跟踪的新产物（diff 看不见 untracked），最后解析 `npm pack --dry-run --json` 的 files 列表断言白名单（必含 `lib/index.js` 等交付物、不得含 `src/`/`test/`/`node_modules/`；裸 `--dry-run` 只打印不失败，没有校验效力）。行尾靠 `.gitattributes`（`* text=auto`）保证 Linux 上校验可复现。
 
 没有独立的 vitest/tsc lint 配置。测试用 vitest 默认约定，直接 `import` `src/`，不必先构建。
 
@@ -129,7 +129,7 @@ src/
 │   ├── util.tsx / styles.ts / locales.ts / types.ts
 │       types.ts = TavernRemote 契约镜像（改 remote.ts / service.ts 必须同步）
 │   └── panel/  设置子面板：characters / presets / lorebooks / lorebookEditor /
-│               personas / regex / memory / settings
+│               personas / regex / memory / settings（内分五个子组，二级 pill 导航）
 ├── index.ts    host 入口
 ├── agent.ts    agent 面入口
 └── remote.ts   typert 契约
@@ -145,7 +145,7 @@ src/
 - cordis 插件：导出 `name` / `inject` / `apply(ctx)`。经 `ctx` 注册的会自动清理；需手动清理的用 `ctx.effect()`。
 - 分层：`core/` 不 import `node:fs`；I/O 只在 `state/`；编排只在 `node/`。client 不直连平台内部 API，只走 typert remote。
 - client 不能 `inject: ['remote.tavern']`（`$mount` 在 apply 内自装，声明会死锁）。用 `ctx.get('remote.tavern')`，不要写 `ctx.remote.tavern`（追踪代理会按 inject 检查）。
-- UI 对齐 dsh 原生：按钮、菜单、弹窗、通知走 `@deepseek-ai/dsh-client-ui-primitives`（封装见 `src/client/util.tsx`）。禁止原生 `<select>`（Windows 上 option 白底白字）。样式只进 `src/client/styles.ts`。颜色只用真实存在的 `--dsw-*` 令牌，不要引用悬空变量（例如 `--dsw-alias-error`、`bg-elevated`、`fill-tertiary`）。动效用 `--ds-ease-in-out` 加 0.1/0.2/0.3s，并遵守 `prefers-reduced-motion`。设置行 = 标题 + 说明 + 右侧 36px 胶囊（`SettingsRow`，宽控件用 `stacked`）。确认用 `ConfirmDialog`，不用 `window.confirm`；瞬时反馈用 `useToast`；加载用 `Skeleton`；头像用 `Avatar`；可点卡片用 `clickableProps`。
+- UI 对齐 dsh 原生：按钮、菜单、弹窗、通知走 `@deepseek-ai/dsh-client-ui-primitives`（封装见 `src/client/util.tsx`）。禁止原生 `<select>`（Windows 上 option 白底白字）。样式只进 `src/client/styles.ts`。颜色只用真实存在的 `--dsw-*` 令牌，不要引用悬空变量（例如 `--dsw-alias-error`、`bg-elevated`、`fill-tertiary`）；Tavern 自己的品牌层只用 `styles.ts` 顶部定义的 `--tavern-accent-*` 青碧变量（开关开启态、分组刻度、选中底色、图标座），不要在组件里发明新色值。动效用 `--ds-ease-in-out` 加 0.1/0.2/0.3s，并遵守 `prefers-reduced-motion`。页签导航用分段控件 `Tabs`（pill track；`size="sm"` 是页内第二级，如「设置」页的五个子组），不是宿主的下划线页签。设置行 = 标题 + 说明 + 右侧 36px 胶囊（`SettingsRow`，宽控件用 `stacked`）；一组表单的保存按钮放 `SaveBar`（与上方一条淡分隔）。确认用 `ConfirmDialog`，不用 `window.confirm`；瞬时反馈用 `useToast`；加载用 `Skeleton`；头像用 `Avatar`；可点卡片用 `clickableProps`。
 - 展示名永远用 `card.name`。不要把工作区文件夹 `cardId`（净化名 + 8 位 hash）当成角色名。头像走 `getAvatar({ cardId })` 的 PNG dataURL。
 - `settings.section` 的 slot label 走 `locales.ts`；面板和对话 UI 目前直接写中文，不要半中半英。
 
@@ -170,7 +170,7 @@ src/
 
 - **加/改 remote 方法**：三处同步——`src/remote.ts` 的 `METHODS`、`src/node/service.ts` 实现、`src/client/types.ts` 契约镜像（漏改编译不过，这是设计好的保险）。返回裸业务值、失败抛错，信封由 gateway 生成。
 - **加模型工具**：在 `src/node/tools.ts` 注册，工具描述里写清「默认直接扮演，只在缺设定/遗忘/落盘时调」的分寸；工作区路径必须过 `WorkspaceFs` + `resolveReadableAssetPath`；写工具成功后 `agent.inject` 同轮确认；同步更新本文「模型工具」表。
-- **加设置项**：`src/node/config.ts`（schemastery，`applies: 'live'`）+ `src/client/panel/settings.tsx`（`SettingsRow`：标题 + 说明 + 右侧 36px 胶囊，宽控件 `stacked`）+ `settings.section` 的 slot label 进 `locales.ts`。默认值有跨层引用时放 `src/core/types.ts`。
+- **加设置项**：`src/node/config.ts`（schemastery，`applies: 'live'`）+ `src/client/panel/settings.tsx`（放进五个子组之一：默认配置 / 采样与思考 / 世界书引擎 / 记忆 / 卡片与数据；行用 `SettingsRow`：标题 + 说明 + 右侧 36px 胶囊，宽控件 `stacked`，组尾保存按钮走 `SaveBar`）+ `settings.section` 的 slot label 进 `locales.ts`。默认值有跨层引用时放 `src/core/types.ts`。
 - **加/改 UI**：样式只进 `src/client/styles.ts`；交互组件走 `dsh-client-ui-primitives`（封装在 `util.tsx`）；禁止原生 `<select>` 与 `window.confirm`。
 - **改 standing 纪律文案或段布局**：递增 `STANDING_PIN_VERSION`（`src/core/standingPin.ts`），否则进程内旧钉死会挡住新文案。
 - **任何 `src/` 改动**：先 `npm run build` 再提交，CI 会用 `git diff --exit-code lib/` 拦下过期产物。
@@ -199,7 +199,7 @@ src/
 4. **封面 HTML**（output/render 正则把标记换成整页 HTML）：`SpeechBubble` 用 `sandbox="allow-scripts"` iframe。`regex_scripts` 常在 V3 `extensions` 里，展示向规则默认启用（`disabled: true` 才关）。抽 HTML 见 `extractRenderedHtml`（含 text 代码围栏）。
 5. **封面外网图默认放行**。CSP 在 `src/core/cardFrame.ts`：`img-src` / `font-src` 允许 https/http/data；`connect-src` 默认 `'none'`。`cardNetworkWhitelist` 放宽脚本 fetch 与外部脚本（`*` = 全部放行）。不要改回「白名单为空则禁止一切图片」。
 6. **交互卡里切 swipe 的按钮必须真的能点**，不要改成纯文档说明。注入 ST / JS-Slash-Runner stub，经 `postMessage`（`source: 'dsh-tavern-card'`）只允许 `swipeGreeting`。禁止 `allow-same-origin`，禁止通用主窗口桥。
-7. **非会话写入不记 WAL**。导入/设置改文件时 `WorkspaceFs` 的 floor 为 `null`，跳过快照。不要复活名为 `non-floor` 的 WAL 单元。
+7. **非会话写入不记 WAL**。导入/设置改文件时 `WorkspaceFs` 的 floor 为 `null`，跳过快照。注意每卡共享句柄 `workspace(cardId).fs` 的 floor 在 turn/start～turn/end 之间**非 null**：面板/服务层写方法（state.ts 的 saveJournal/saveCharacter/saveCharacterLorebook/deleteCharacterLorebook/saveChatLorebook 与导入建索引）一律走 `plainFs`（floor 恒 null 的新文件面），复用共享句柄会把生成进行中的用户编辑误记进当前楼层 WAL，回退时静默改回旧值；turn 流程内的工具写路径才走共享句柄。不要复活名为 `non-floor` 的 WAL 单元。
 8. **新对话不自动选卡**。`settings.defaults` 只在用户点选角色时套用。`hero.tsx` 不得根据 `defaults.cardId` 自动绑定，也不得在已有绑定上自动 `ensureGreeting`。空白 Tavern 会话若仍带着上次留下的绑定文件，英雄区应清掉。楼层 fork 必须走 `agents.create`（id 前缀 `session-`）+ `workspace.attachSession`，禁止 `ctx.sessions.fork` 或 `tavern-` 前缀。create 必须带父会话的 `agentOptions`（provider/model，优先 `requestHeader`），否则子会话立刻 followup 时 `deployment:persona` 的 `{{model}}` 无值。开场白 swipe 要把新 turn 放进 create 的 seed。客户端 `refresh` 列表后再 `open` 子会话（`openChild.ts`）。无会话 hero 上选「Tavern 模式」时，宿主只暂存选择，`seatWatch.ts` 会代为 `workspaces.startSession()`——不要删这个补偿。
 9. **`{{setvar}}` / `{{getvar}}` 是组装前预处理**，不是扔给模型。一次 `assemblePrompt` 共享 `Map` store；set 条目展开后变空并省略；后写覆盖先写。`{{lastusermessage}}` / `{{outlet}}` / 时钟进 `turnContext`，不要为了「完整 ST」把它们写进 `tavern:standing`。不落盘，不做 if/dice/STscript。预设内嵌 `regex_scripts` 随预设导入（`compilePresetRegexScripts`，跟脚本 `disabled` 走）。UI 开关直接改写预设文件的 `disabled`。常驻世界书（constant、无本轮宏）进 standing。
 10. **不要把整包 ST 改成 `complete` 段。** standing 放在工具说明之后（order 210），工具前缀才能命中 DeepSeek KV。turn playbook / 本轮世界书/记忆只能进 `tavern:turn`。

@@ -2,7 +2,25 @@
 
 本插件与 dsh 宿主版本一一绑定（peerDependency 锁定精确版本），升级 dsh 前请先确认有适配的插件版本。
 
-## 未发布
+## 0.1.2（2026-08-30）
+
+适配 dsh `0.1.1-rc.2`。
+
+- 界面：设置面板内分五个子组（默认配置 / 采样与思考 / 世界书引擎 / 记忆 / 卡片与数据），页内第二级 pill 导航 + 分组刻度，每组表单独立 SaveBar 保存；Tavern 品牌层统一 `--tavern-accent-*` 青碧变量（开关开启态、选中底色、图标座）。
+
+- 修复（世界书）：sticky 延续条目被 token 预算裁掉后定时器漏清，下一轮免概率回归并无条件占住 inclusion group、饿死同组兄弟；延续期落选现在同样清 stickyLeft（cooldown 保留）。
+- 修复（宏）：`{{getvar ::x}}`（宏名与 `::` 间带空格）解析失败、原文带双花括号漏进 prompt；命令名判定与 isGetVar 口径对齐。
+- 修复（绑定回收）：库中有多张同名卡时按名接回可能接错卡（工作区/记忆/WAL 静默串卡）；现在仅唯一命中时接回，否则视为未绑定。
+- 修复（交互卡）：`cardNetworkWhitelist` 条目未校验直接拼进 CSP meta，含引号可截断属性注入；非法条目现在直接丢弃。
+- 修复（WAL）：生成进行中经面板编辑 journal/卡/世界书会被误记进当前楼层 WAL，回退楼层时把用户编辑静默改回旧值；面板/服务层写路径改走 floor 恒 null 的文件面（`plainFs`）。
+- 修复（楼层 fork）：祖先 walLineage 的 throughTurn 未按新 seed 截断，跨多代 fork 会把错误的定时器状态复制给子会话；现在 clamp 到实际继承边界，空 seed 丢弃祖先世系。swipeGreeting 补 saveBinding 失败的子会话清理。editUserMessage 拒绝空文本（schema + 代码双重，对齐 editAssistantMessage）。
+- 修复（记忆）：压缩先归档后落盘，落盘失败丢整批事实且清标记永不重试；改为先落盘后归档，失败可重试、最坏新旧并存不丢事实。记忆 id 同毫秒碰撞会静默覆盖，随机段加长到 6 位 hex。
+- 修复（导出）：截断 PNG（无 IEND）导出时静默产出废图，现在抛 `CardParseError` 提示。
+- 修复（WAL 回放）：records.jsonl 单行损坏中断整个多楼层回滚，改为坏行跳过（与 readMeta 容忍标准一致）。
+- 修复（工具）：`tavern_asset_list` 对损坏的 index.json 无容错、每次必抛；坏文件按 `index: null` 返回。
+- 修复（管线）：同轮第 2 步起已入日志的用户消息在触发日志/预览里重复；turn/start 时无绑定、中途才绑定的会话每步重评世界书定时器（违反每 turn 只评估一次），现在无绑定也记 turn 号。
+- 修复（界面）：封面 HTML 内 swipe 按钮的分支跳转漏传标题（分支会话标题不进会话列表）；角色选择面板加载与英雄区多处异步操作缺 catch，RPC 失败停在骨架屏/无任何提示。
+- CI：lib/ 产物一致性校验拦不住未跟踪的新产物（补 `git status --porcelain`）；`npm pack --dry-run` 改为解析 `--json` files 列表断言白名单（裸 dry-run 只打印不失败，无校验效力）。
 
 - 思考：「深度思考」新增「最高」档（DeepSeek 适配器的 `max` effort，模型公布该档时显式指定）；设置面板说明补充——「自动」档会落在模型默认档，思考可能很短，要更充分的思考选高/最高。turn playbook 强化「按条查证再动笔」：回复涉及人物关系、地点、规则、既有事件等设定而快照未覆盖时，先用工具查证，不要凭印象编造。
 

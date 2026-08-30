@@ -102,7 +102,7 @@ export function TavernAssistantNode(props: {
           onSwipeGreeting={(index) => {
             if (!sessions) return
             void remote.swipeGreeting({ sessionId, index }).then((r) => {
-              if (r.ok) return openChildSession(sessions, r.value.childSessionId)
+              if (r.ok) return openChildSession(sessions, r.value.childSessionId, r.value.title)
             }).catch(() => {
               // 对话已开始等错误：封面按钮无独立报错条，忽略以免未处理 rejection。
             })

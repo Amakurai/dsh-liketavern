@@ -1,4 +1,7 @@
-/** 设置面板入口：7 页签拆分各分区，视觉对齐插件 / Agent 预设。「默认绑定」已并入「设置」页。 */
+/**
+ * 设置面板入口：7 页签拆分各分区。导航是 Tavern 自己的分段控件（pill track），
+ * 切页带 fade-up 过场；「默认绑定」已并入「设置」页，设置页内再分子导航。
+ */
 import { useState } from 'react'
 import type { TavernRemote } from '../types.js'
 import { Tabs } from '../util.js'
@@ -38,13 +41,16 @@ export function TavernPanel(props: { remote: TavernRemote }) {
           setTab(id as TabId)
         }}
       />
-      {tab === 'characters' && <CharactersSection remote={remote} />}
-      {tab === 'presets' && <PresetsSection remote={remote} />}
-      {tab === 'lorebooks' && <LorebooksSection remote={remote} />}
-      {tab === 'personas' && <PersonasSection remote={remote} />}
-      {tab === 'regex' && <RegexSection remote={remote} />}
-      {tab === 'memory' && <MemorySection remote={remote} />}
-      {tab === 'sampling' && <SettingsSection remote={remote} />}
+      {/* key=tab 让切页重新挂载并播 fade-up；各页签原本就不跨页保留本地状态 */}
+      <div key={tab} className="dsh-tavern-rise">
+        {tab === 'characters' && <CharactersSection remote={remote} />}
+        {tab === 'presets' && <PresetsSection remote={remote} />}
+        {tab === 'lorebooks' && <LorebooksSection remote={remote} />}
+        {tab === 'personas' && <PersonasSection remote={remote} />}
+        {tab === 'regex' && <RegexSection remote={remote} />}
+        {tab === 'memory' && <MemorySection remote={remote} />}
+        {tab === 'sampling' && <SettingsSection remote={remote} />}
+      </div>
     </div>
   )
 }

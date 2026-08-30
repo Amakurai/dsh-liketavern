@@ -30,5 +30,36 @@ jobs:
       - name: 校验 lib/ 与提交一致
         run: git diff --exit-code --stat -- lib/
 
+      # git diff 拦不住未跟踪的新产物（新增 src 文件但漏提交其 lib/ 编译产物），
+      # 这里用 porcelain 兜底：lib/ 下有任何未跟踪/未暂存改动即失败。
+      - name: 校验 lib/ 无未跟踪产物
+        run: |
+          status=$(git status --porcelain -- lib/)
+          if [ -n "$status" ]; then
+            echo "lib/ 存在未跟踪或未提交的产物："
+            echo "$status"
+            exit 1
+          fi
+
+      # npm pack --dry-run 只打印清单、永远 exit 0，必须解析 files 列表做断言。
       - name: 校验 npm pack 白名单
-        run: npm pack --dry-run
+        run: |
+          node -e '
+          const { execFileSync } = require("node:child_process");
+          const npm = process.platform === "win32" ? "npm.cmd" : "npm";
+          // Windows 上 Node 禁止无 shell 拉起 .cmd，runner（ubuntu）直接 exec
+          const out = execFileSync(npm, ["pack", "--dry-run", "--json"], { encoding: "utf8", shell: process.platform === "win32" });
+          // prepack 钩子的构建日志会先混进 stdout，从首个以 [ 开头的行截取 JSON
+          const json = out.slice(out.search(/^\[/m));
+          const files = JSON.parse(json)[0].files.map((f) => f.path);
+          const required = ["lib/index.js", "lib/client.js", "cordis.patch.yml", "presets/tavern/agent.cordis.yml", "README.md", "README.en.md", "CHANGELOG.md", "LICENSE"];
+          const missing = required.filter((p) => !files.includes(p));
+          const forbidden = files.filter((p) => /^(src|test|node_modules)\//.test(p));
+          if (missing.length || forbidden.length) {
+            console.error("npm pack 白名单校验失败");
+            if (missing.length) console.error("缺失文件: " + missing.join(", "));
+            if (forbidden.length) console.error("越界文件: " + forbidden.join(", "));
+            process.exit(1);
+          }
+          console.log("npm pack 白名单校验通过，共 " + files.length + " 个文件");
+          '

@@ -170,6 +170,13 @@ describe('setvar / getvar / 注释', () => {
     expect(onUnknown).not.toHaveBeenCalled()
   })
 
+  it('宏名与 :: 之间允许空格：{{setvar ::x::v}} / {{getvar ::x}} 不漏进 prompt', () => {
+    const onUnknown = vi.fn()
+    const c: MacroContext = { ...ctx, store: new Map(), onUnknown }
+    expect(expandMacros('{{setvar ::topic::雨}}读{{getvar ::topic}}', c)).toBe('读雨')
+    expect(onUnknown).not.toHaveBeenCalled()
+  })
+
   it('由内向外展开：setvar 值里的 {{char}}', () => {
     const c: MacroContext = { ...ctx, store: new Map() }
     expect(expandMacros('{{setvar::who::{{char}}}}{{getvar::who}}', c)).toBe('Alice')

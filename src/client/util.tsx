@@ -1,6 +1,6 @@
 /**
  * 共享 UI 工具：对齐 dsh 原语（Button / Menu / Modal / Tooltip / Toast）+ 加载 Hook + 文件/下载助手。
- * 样式集中在 ./styles.js（模块加载即注入）；颜色一律走宿主 --dsw-* 令牌。
+ * 样式集中在 ./styles.js（模块加载即注入）；颜色一律走宿主 --dsw-* 令牌 + Tavern 青碧 accent。
  * 原生 select 的 option 弹层用 Menu 实现（避开 Windows 系统白底白字）。
  */
 import { useCallback, useEffect, useState } from 'react'
@@ -9,47 +9,6 @@ import type { CSSProperties, ReactNode } from 'react'
 import type { CardRegexScript } from '../core/types.js'
 import type { Envelope } from './types.js'
 import './styles.js'
-
-/** 旧内联按钮样式（少量组合用）；新按钮请走 Btn。 */
-export const btn: CSSProperties = {
-  cursor: 'pointer',
-  border: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.35))',
-  background: 'var(--dsw-alias-button-ghost-active-fill, transparent)',
-  color: 'var(--dsw-alias-label-primary, inherit)',
-  borderRadius: 8,
-  padding: '3px 10px',
-  fontSize: 12,
-}
-
-/** 旧内联输入框样式；新代码优先用 className="dsh-tavern-input"。 */
-export const input: CSSProperties = {
-  border: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.3))',
-  background: 'var(--dsw-alias-bg-layer-2, transparent)',
-  color: 'var(--dsw-alias-label-primary, inherit)',
-  borderRadius: 8,
-  padding: '3px 8px',
-  fontSize: 12,
-  colorScheme: 'inherit',
-}
-
-/** 代码向多行框（正则 find/replace 等），用宿主 code 字体。 */
-export const textarea: CSSProperties = {
-  ...input,
-  width: '100%',
-  boxSizing: 'border-box',
-  resize: 'vertical',
-  fontFamily: "var(--ds-font-family-code, 'SF Mono', Consolas, monospace)",
-}
-
-/** 给人看的正文框（世界书条目内容等），不用等宽字体。 */
-export const textareaPlain: CSSProperties = {
-  ...textarea,
-  fontFamily: 'inherit',
-  fontSize: 13,
-  lineHeight: '20px',
-  minHeight: 120,
-  padding: '8px 10px',
-}
 
 export function Btn(props: {
   onClick: () => void
@@ -166,8 +125,12 @@ export function FileBtn(props: {
 export function Section(props: { title?: string; description?: string; children?: ReactNode }) {
   return (
     <section className="dsh-tavern-section">
-      {props.title ? <h3 className="dsh-tavern-pageTitle">{props.title}</h3> : null}
-      {props.description ? <p className="dsh-tavern-pageIntro">{props.description}</p> : null}
+      {props.title || props.description ? (
+        <header className="dsh-tavern-pageHead">
+          {props.title ? <h3 className="dsh-tavern-pageTitle">{props.title}</h3> : null}
+          {props.description ? <p className="dsh-tavern-pageIntro">{props.description}</p> : null}
+        </header>
+      ) : null}
       {props.children}
     </section>
   )
@@ -178,16 +141,16 @@ export interface TabItem {
   label: string
 }
 
-/** 对齐插件设置页的下划线页签。 */
-export function Tabs(props: { items: TabItem[]; value: string; onChange: (id: string) => void }) {
+/** 分段控件式页签（pill track，区别于宿主通用设置的下划线页签）；size="sm" 用于页内第二级导航。 */
+export function Tabs(props: { items: TabItem[]; value: string; onChange: (id: string) => void; size?: 'md' | 'sm' }) {
   return (
-    <div className="dsh-tavern-tabs" role="tablist">
+    <div className={`dsh-tavern-navPills${props.size === 'sm' ? ' is-sub' : ''}`} role="tablist">
       {props.items.map((item) => (
         <button
           key={item.id}
           type="button"
           role="tab"
-          className="dsh-tavern-tab"
+          className="dsh-tavern-navPill"
           data-active={props.value === item.id ? 'true' : 'false'}
           aria-selected={props.value === item.id}
           onClick={() => props.onChange(item.id)}
@@ -197,6 +160,11 @@ export function Tabs(props: { items: TabItem[]; value: string; onChange: (id: st
       ))}
     </div>
   )
+}
+
+/** 分组保存行：与上方表单一条淡分隔，主操作左齐。 */
+export function SaveBar(props: { children?: ReactNode }) {
+  return <div className="dsh-tavern-saveBar">{props.children}</div>
 }
 
 export function Badge(props: { accent?: boolean; danger?: boolean; children?: ReactNode }) {

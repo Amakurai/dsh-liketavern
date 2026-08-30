@@ -6,7 +6,7 @@ import { useState } from 'react'
 import { IconEditOutline16, IconTrashOutline16, IconUserOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { Persona, TavernRemote } from '../types.js'
 import { EMPTY_SESSION_DEFAULTS } from '../types.js'
-import { Avatar, Badge, Btn, ConfirmDialog, Err, Field, IconBtn, SearchEmpty, SearchInput, Section, Select, Skeleton, clickableProps, errOf, runAsync, useLoader, useToast } from '../util.js'
+import { Avatar, Badge, Btn, ConfirmDialog, Err, Field, IconBtn, SaveBar, SearchEmpty, SearchInput, Section, Select, Skeleton, clickableProps, errOf, runAsync, useLoader, useToast } from '../util.js'
 
 export function PersonasSection(props: { remote: TavernRemote }) {
   const { remote } = props
@@ -81,9 +81,9 @@ export function PersonasSection(props: { remote: TavernRemote }) {
       </div>
       {state.status === 'loading' && (
         <div className="dsh-tavern-list">
-          <Skeleton height={62} radius={14} />
-          <Skeleton height={62} radius={14} />
-          <Skeleton height={62} radius={14} />
+          <Skeleton height={70} radius={16} />
+          <Skeleton height={70} radius={16} />
+          <Skeleton height={70} radius={16} />
         </div>
       )}
       {state.status === 'error' && <Err message={state.message} />}
@@ -156,10 +156,10 @@ export function PersonasSection(props: { remote: TavernRemote }) {
               ]}
             />
           </Field>
-          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+          <SaveBar>
             <Btn disabled={busy} onClick={() => void save()} primary>保存</Btn>
             <Btn onClick={() => setEditing(null)}>关闭</Btn>
-          </div>
+          </SaveBar>
         </div>
       )}
     </Section>

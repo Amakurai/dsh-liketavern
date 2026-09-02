@@ -10,6 +10,7 @@ import { useEffect, useRef, useState } from 'react'
 import { IconCopyOutline16, MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives'
 import { buildCardSrcDoc, parseCardBridgeMessage } from '../core/cardFrame.js'
 import { stripDisplayMeta } from '../core/displaySanitize.js'
+import { useT } from './i18n.js'
 import { Avatar, IconBtn, useLoader, useToast } from './util.js'
 import type { TavernRemote } from './types.js'
 import './styles.js'
@@ -72,6 +73,7 @@ export function SpeechBubble(props: {
   onSwipeGreeting?: (index: number) => void
 }) {
   const { remote, sessionId, cardId, name, rawText, streaming, onSwipeGreeting } = props
+  const t = useT()
   const avatar = useLoader(() => remote.getAvatar({ cardId }), [cardId], Boolean(cardId))
   const rendered = useLoader(
     () => remote.renderOutputText({ sessionId, text: rawText }),
@@ -109,14 +111,14 @@ export function SpeechBubble(props: {
         ta.select()
         const ok = document.execCommand('copy')
         ta.remove()
-        toast.show(ok ? '已复制消息文本' : '复制失败')
+        toast.show(ok ? t('speech.copied') : t('speech.copyFailed'))
       } catch {
-        toast.show('复制失败')
+        toast.show(t('speech.copyFailed'))
       }
     }
     try {
       await navigator.clipboard.writeText(plain)
-      toast.show('已复制消息文本')
+      toast.show(t('speech.copied'))
     } catch {
       fallback()
     }
@@ -144,7 +146,7 @@ export function SpeechBubble(props: {
         {(frames.length === 0 || text) && <MarkdownText text={text || ' '} streaming={Boolean(streaming)} />}
       </div>
       <div className="dsh-tavern-speechCopy">
-        <IconBtn label="复制消息文本" onClick={() => void onCopy()}>
+        <IconBtn label={t('speech.copy')} onClick={() => void onCopy()}>
           <IconCopyOutline16 />
         </IconBtn>
       </div>

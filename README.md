@@ -54,6 +54,8 @@ dsh plugin --profile web list --depth 0
 2. 在设置面板的 `dsh-tavern` 命名空间下管理角色卡、预设、世界书、人设、正则与采样参数。
 3. 对话中可对任意 assistant 楼层重新生成、编辑、回退、续写或让 AI 代答。
 
+插件界面默认英文；如需中文，在 Tavern 设置页「界面 / Interface」子组切换「界面语言 / Language」，立即生效并自动保存（只影响本插件 UI，不影响宿主界面）。
+
 ## 平台限制
 
 受 dsh 宿主当前能力所限，以下行为与 SillyTavern 原版不同，属已知边界而非 bug：

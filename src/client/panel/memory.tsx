@@ -6,10 +6,12 @@
 import { useEffect, useState } from 'react'
 import { IconEditOutline16, IconTrashOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { MemoryEntry, WorldDelta } from '../../core/types.js'
+import { useT } from '../i18n.js'
 import type { TavernRemote } from '../types.js'
 import { Badge, Btn, Err, IconBtn, Muted, Section, Select, SettingsRow, Skeleton, downloadJson, errOf, runAsync, useLoader, useToast } from '../util.js'
 
-const DELTA_TYPE_LABEL: Record<WorldDelta['type'], string> = { add: '新增', update: '更新', invalidate: '作废' }
+/** 变化层类型徽标/选项对应的 i18n 键；渲染处经 t() 取文案。 */
+const DELTA_TYPE_KEY: Record<WorldDelta['type'], string> = { add: 'memory.deltaType.add', update: 'memory.deltaType.update', invalidate: 'memory.deltaType.invalidate' }
 
 function splitList(text: string): string[] {
   return text
@@ -20,6 +22,7 @@ function splitList(text: string): string[] {
 
 function MemoryEditor(props: { remote: TavernRemote; cardId: string; entry: MemoryEntry; onDone: () => void }) {
   const { entry } = props
+  const t = useT()
   const [body, setBody] = useState(entry.body)
   const [tags, setTags] = useState(entry.tags.join(', '))
   const [keys, setKeys] = useState(entry.keys.join(', '))
@@ -43,18 +46,18 @@ function MemoryEditor(props: { remote: TavernRemote; cardId: string; entry: Memo
       <textarea className="dsh-tavern-input dsh-tavern-textarea" value={body} onChange={(e) => setBody(e.target.value)} />
       <div className="dsh-tavern-fieldRow">
         <label className="dsh-tavern-field">
-          <span className="dsh-tavern-fieldLabel">标签</span>
+          <span className="dsh-tavern-fieldLabel">{t('memory.tags')}</span>
           <input className="dsh-tavern-input" value={tags} onChange={(e) => setTags(e.target.value)} />
         </label>
         <label className="dsh-tavern-field">
-          <span className="dsh-tavern-fieldLabel">检索键</span>
+          <span className="dsh-tavern-fieldLabel">{t('memory.keys')}</span>
           <input className="dsh-tavern-input" value={keys} onChange={(e) => setKeys(e.target.value)} />
         </label>
       </div>
       <Err message={error} />
       <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-        <Btn onClick={props.onDone}>取消</Btn>
-        <Btn primary disabled={busy || !body.trim()} onClick={() => void save()}>保存</Btn>
+        <Btn onClick={props.onDone}>{t('action.cancel')}</Btn>
+        <Btn primary disabled={busy || !body.trim()} onClick={() => void save()}>{t('action.save')}</Btn>
       </div>
     </div>
   )
@@ -62,6 +65,7 @@ function MemoryEditor(props: { remote: TavernRemote; cardId: string; entry: Memo
 
 export function MemorySection(props: { remote: TavernRemote }) {
   const { remote } = props
+  const t = useT()
   const chars = useLoader(() => remote.listCharacters({}), [])
   const [cardId, setCardId] = useState('')
   const [tab, setTab] = useState<'memory' | 'delta' | 'journal'>('memory')
@@ -112,7 +116,7 @@ export function MemorySection(props: { remote: TavernRemote }) {
     const r = await remote.compressMemories({ cardId })
     if (!r.ok) setError(r.error.message)
     else {
-      toast.show(r.value.merged > 0 ? `已无损归并最旧 ${r.value.merged} 条记忆（原文仍可恢复）` : '记忆不足两条，无需归并')
+      toast.show(r.value.merged > 0 ? t('memory.compressed', { count: r.value.merged }) : t('memory.compressNoop'))
       memories.reload()
     }
   }
@@ -122,7 +126,7 @@ export function MemorySection(props: { remote: TavernRemote }) {
     const err = errOf(r)
     if (err) setError(err)
     else {
-      toast.show(`已撤销世界状态 #${id}`)
+      toast.show(t('memory.revokeDone', { id }))
       deltas.reload()
     }
   }
@@ -132,7 +136,7 @@ export function MemorySection(props: { remote: TavernRemote }) {
     if (!r.ok) setError(r.error.message)
     else {
       downloadJson(`lorebook-merged-${cardId}.json`, r.value.json)
-      toast.show('已导出合并后的世界书')
+      toast.show(t('memory.bookExported'))
     }
   }
 
@@ -141,7 +145,7 @@ export function MemorySection(props: { remote: TavernRemote }) {
     const err = errOf(r)
     if (err) setError(err)
     else {
-      toast.show('已保存角色笔记')
+      toast.show(t('memory.journalSaved'))
       journal.reload()
     }
   }
@@ -157,7 +161,7 @@ export function MemorySection(props: { remote: TavernRemote }) {
     const err = errOf(r)
     if (err) setError(err)
     else {
-      toast.show(`已新增世界状态 #${r.ok ? r.value.id : ''}`)
+      toast.show(t('memory.deltaAdded', { id: r.ok ? r.value.id : '' }))
       setDeltaContent('')
       setDeltaRef('')
       setDeltaKeys('')
@@ -166,14 +170,14 @@ export function MemorySection(props: { remote: TavernRemote }) {
   }
 
   return (
-    <Section title="记忆与世界状态" description="按角色查看和编辑长期记忆、世界状态变化层、角色笔记 journal.md。">
+    <Section title={t('section.memory')} description={t('memory.desc')}>
       {toast.node}
-      <SettingsRow title="角色" description="选择要查看的角色卡工作区。">
+      <SettingsRow title={t('memory.character')} description={t('memory.characterDesc')}>
         <Select
           size="md"
           value={cardId}
           onChange={setCardId}
-          options={[{ value: '', label: '（选择角色）' }, ...charItems.map((c) => ({ value: c.cardId, label: c.name }))]}
+          options={[{ value: '', label: t('memory.pickCharacter') }, ...charItems.map((c) => ({ value: c.cardId, label: c.name }))]}
         />
       </SettingsRow>
       <Err message={error} />
@@ -182,18 +186,18 @@ export function MemorySection(props: { remote: TavernRemote }) {
           <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10, margin: '10px 0 14px' }}>
             <div className="dsh-tavern-filters">
               <button type="button" className="dsh-tavern-chip" data-active={tab === 'memory' ? 'true' : 'false'} onClick={() => setTab('memory')}>
-                记忆（{memoryItems.length}）
+                {t('memory.tab.memory', { count: memoryItems.length })}
               </button>
               <button type="button" className="dsh-tavern-chip" data-active={tab === 'delta' ? 'true' : 'false'} onClick={() => setTab('delta')}>
-                世界状态（{deltaItems.length}）
+                {t('memory.tab.delta', { count: deltaItems.length })}
               </button>
               <button type="button" className="dsh-tavern-chip" data-active={tab === 'journal' ? 'true' : 'false'} onClick={() => setTab('journal')}>
-                角色笔记
+                {t('memory.tab.journal')}
               </button>
             </div>
             <span style={{ flex: 1 }} />
-            {tab === 'memory' && <Btn onClick={() => void compress()}>归并最旧一批</Btn>}
-            {tab === 'delta' && <Btn onClick={() => void exportBook()}>导出合并后的世界书</Btn>}
+            {tab === 'memory' && <Btn onClick={() => void compress()}>{t('memory.compressOldest')}</Btn>}
+            {tab === 'delta' && <Btn onClick={() => void exportBook()}>{t('memory.exportBook')}</Btn>}
           </div>
           {tab === 'memory' && (
             <div className="dsh-tavern-list">
@@ -207,24 +211,24 @@ export function MemorySection(props: { remote: TavernRemote }) {
               {memories.state.status === 'error' && <Err message={memories.state.message} />}
               {memoryItems.length === 0 && memories.state.status === 'ready' && (
                 <div className="dsh-tavern-empty is-compact">
-                  <div className="dsh-tavern-emptyTitle">暂无记忆</div>
-                  <div className="dsh-tavern-emptyDesc">让模型用 tavern_memory_write 写入，或在下方手动添加。</div>
+                  <div className="dsh-tavern-emptyTitle">{t('memory.emptyMemories')}</div>
+                  <div className="dsh-tavern-emptyDesc">{t('memory.emptyMemoriesDesc')}</div>
                 </div>
               )}
               {memoryItems.map((m) => (
                 <div key={m.id} className="dsh-tavern-memo">
                   <div className="dsh-tavern-memoHead">
                     <Badge>{m.id}</Badge>
-                    {m.archived ? <Badge>已归档</Badge> : null}
+                    {m.archived ? <Badge>{t('memory.archived')}</Badge> : null}
                     {m.tags.map((tag) => (
                       <Badge key={tag}>{tag}</Badge>
                     ))}
                     <span className="dsh-tavern-memoMeta">{m.updated}</span>
                     <span className="dsh-tavern-memoActions">
-                      <IconBtn label={editingId === m.id ? '收起编辑' : '编辑'} onClick={() => setEditingId(editingId === m.id ? null : m.id)}>
+                      <IconBtn label={editingId === m.id ? t('memory.collapseEdit') : t('action.edit')} onClick={() => setEditingId(editingId === m.id ? null : m.id)}>
                         <IconEditOutline16 />
                       </IconBtn>
-                      <IconBtn label="删除记忆" danger onClick={() => void deleteMemory(m.id)}>
+                      <IconBtn label={t('memory.deleteEntry')} danger onClick={() => void deleteMemory(m.id)}>
                         <IconTrashOutline16 />
                       </IconBtn>
                     </span>
@@ -247,12 +251,12 @@ export function MemorySection(props: { remote: TavernRemote }) {
                 <textarea
                   className="dsh-tavern-input dsh-tavern-textarea"
                   style={{ minHeight: 60 }}
-                  placeholder="新增记忆…"
+                  placeholder={t('memory.newPlaceholder')}
                   value={newBody}
                   onChange={(e) => setNewBody(e.target.value)}
                 />
                 <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                  <Btn primary disabled={!newBody.trim()} onClick={() => void addMemory()}>添加记忆</Btn>
+                  <Btn primary disabled={!newBody.trim()} onClick={() => void addMemory()}>{t('memory.addEntry')}</Btn>
                 </div>
               </div>
             </div>
@@ -271,13 +275,13 @@ export function MemorySection(props: { remote: TavernRemote }) {
                 <div key={d.id} className={`dsh-tavern-memo${d.revoked ? ' is-revoked' : ''}`}>
                   <div className="dsh-tavern-memoHead">
                     <Badge>#{d.id}</Badge>
-                    <Badge danger={d.type === 'invalidate'}>{DELTA_TYPE_LABEL[d.type]}</Badge>
+                    <Badge danger={d.type === 'invalidate'}>{t(DELTA_TYPE_KEY[d.type])}</Badge>
                     {d.ref ? <Badge>→ {d.ref}</Badge> : null}
-                    {d.revoked ? <Badge danger>已撤销</Badge> : null}
+                    {d.revoked ? <Badge danger>{t('memory.revoked')}</Badge> : null}
                     <span className="dsh-tavern-memoMeta">{d.ts}</span>
                     {!d.revoked && (
                       <span className="dsh-tavern-memoActions">
-                        <Btn size="sm" onClick={() => void revoke(d.id)}>撤销</Btn>
+                        <Btn size="sm" onClick={() => void revoke(d.id)}>{t('memory.revoke')}</Btn>
                       </span>
                     )}
                   </div>
@@ -286,28 +290,28 @@ export function MemorySection(props: { remote: TavernRemote }) {
               ))}
               {deltaItems.length === 0 && deltas.state.status === 'ready' && (
                 <div className="dsh-tavern-empty is-compact">
-                  <div className="dsh-tavern-emptyTitle">暂无世界状态变化</div>
-                  <div className="dsh-tavern-emptyDesc">模型经 tavern_worldstate_update 写入，或在下方手动添加。</div>
+                  <div className="dsh-tavern-emptyTitle">{t('memory.emptyDeltas')}</div>
+                  <div className="dsh-tavern-emptyDesc">{t('memory.emptyDeltasDesc')}</div>
                 </div>
               )}
               <div className="dsh-tavern-memo is-compose">
                 <div className="dsh-tavern-fieldRow">
                   <label className="dsh-tavern-field">
-                    <span className="dsh-tavern-fieldLabel">类型</span>
+                    <span className="dsh-tavern-fieldLabel">{t('memory.deltaType')}</span>
                     <Select
                       size="md"
                       value={deltaType}
                       onChange={(v) => setDeltaType(v as 'add' | 'update' | 'invalidate')}
                       options={[
-                        { value: 'add', label: '新增' },
-                        { value: 'update', label: '更新' },
-                        { value: 'invalidate', label: '作废' },
+                        { value: 'add', label: t(DELTA_TYPE_KEY.add) },
+                        { value: 'update', label: t(DELTA_TYPE_KEY.update) },
+                        { value: 'invalidate', label: t(DELTA_TYPE_KEY.invalidate) },
                       ]}
                     />
                   </label>
                   {(deltaType === 'update' || deltaType === 'invalidate') && (
                     <label className="dsh-tavern-field">
-                      <span className="dsh-tavern-fieldLabel">原条目 uid</span>
+                      <span className="dsh-tavern-fieldLabel">{t('memory.deltaRef')}</span>
                       <input className="dsh-tavern-input" value={deltaRef} onChange={(e) => setDeltaRef(e.target.value)} />
                     </label>
                   )}
@@ -315,23 +319,23 @@ export function MemorySection(props: { remote: TavernRemote }) {
                 <textarea
                   className="dsh-tavern-input dsh-tavern-textarea"
                   style={{ minHeight: 60, marginTop: 8 }}
-                  placeholder="世界状态正文…"
+                  placeholder={t('memory.deltaBodyPlaceholder')}
                   value={deltaContent}
                   onChange={(e) => setDeltaContent(e.target.value)}
                 />
                 <label className="dsh-tavern-field" style={{ marginTop: 8 }}>
-                  <span className="dsh-tavern-fieldLabel">触发键（逗号分隔，可空）</span>
+                  <span className="dsh-tavern-fieldLabel">{t('memory.deltaKeys')}</span>
                   <input className="dsh-tavern-input" value={deltaKeys} onChange={(e) => setDeltaKeys(e.target.value)} />
                 </label>
                 <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
-                  <Btn primary disabled={!deltaContent.trim()} onClick={() => void addDelta()}>添加世界状态</Btn>
+                  <Btn primary disabled={!deltaContent.trim()} onClick={() => void addDelta()}>{t('memory.addDelta')}</Btn>
                 </div>
               </div>
             </div>
           )}
           {tab === 'journal' && (
             <div className="dsh-tavern-list">
-              <Muted>写在角色工作区 journal.md。会话芯片打开「注入角色笔记」后才会进本轮 turn。</Muted>
+              <Muted>{t('memory.journalHint')}</Muted>
               {/* 加载期只出骨架：输入框和骨架并排渲染的话，正文还是上一张卡的，保存就会覆盖当前卡。 */}
               {journal.state.status === 'ready' ? (
                 <textarea
@@ -346,7 +350,7 @@ export function MemorySection(props: { remote: TavernRemote }) {
                 <Skeleton height={180} />
               )}
               <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                <Btn primary disabled={journal.state.status !== 'ready' || !cardId} onClick={() => void saveJournal()}>保存笔记</Btn>
+                <Btn primary disabled={journal.state.status !== 'ready' || !cardId} onClick={() => void saveJournal()}>{t('memory.saveJournal')}</Btn>
               </div>
             </div>
           )}

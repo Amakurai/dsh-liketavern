@@ -1,18 +1,21 @@
 /**
- * 设置面板分区：二级子导航拆成五组——默认配置 / 采样与思考 / 世界书引擎 / 记忆 / 卡片与数据。
+ * 设置面板分区：二级子导航拆成六组——界面 / 默认配置 / 采样与思考 / 世界书引擎 / 记忆 / 卡片与数据。
  * 每组一个 Section（页面头 + 设置行 + 自己的 SaveBar），一次只看一组，不再一页堆到底。
  * 排版对齐通用设置：标题 + 说明 + 右侧 36px 胶囊控件；瞬时保存反馈走 useToast，上下文错误用 Err。
+ * 「界面」组只有语言一项：选择即写设置并 setTavernLocale 立即生效，不走 SaveBar。
  */
 import { useEffect, useState } from 'react'
+import { setTavernLocale, useT } from '../i18n.js'
 import { EMPTY_SESSION_DEFAULTS, type PresetSummary, type TavernRemote, type TavernSettings } from '../types.js'
 import { Btn, CheckChips, Err, Muted, NumInput, SaveBar, Section, Select, SettingsRow, Skeleton, Tabs, Toggle, runAsync, useLoader, useToast } from '../util.js'
 
 const SUBS = [
-  { id: 'defaults', label: '默认配置' },
-  { id: 'sampling', label: '采样与思考' },
-  { id: 'worldinfo', label: '世界书引擎' },
-  { id: 'memory', label: '记忆' },
-  { id: 'cards', label: '卡片与数据' },
+  { id: 'interface', labelKey: 'settings.sub.interface' },
+  { id: 'defaults', labelKey: 'settings.sub.defaults' },
+  { id: 'sampling', labelKey: 'settings.sub.sampling' },
+  { id: 'worldinfo', labelKey: 'settings.sub.worldinfo' },
+  { id: 'memory', labelKey: 'settings.sub.memory' },
+  { id: 'cards', labelKey: 'settings.sub.cards' },
 ] as const
 
 type SubId = (typeof SUBS)[number]['id']
@@ -22,12 +25,13 @@ let lastSub: SubId | undefined
 
 export function SettingsSection(props: { remote: TavernRemote }) {
   const { remote } = props
+  const t = useT()
   const { state, reload } = useLoader(() => remote.getSettings({}), [])
   const dataInfo = useLoader(() => remote.getDataInfo({}), [])
   const presets = useLoader(() => remote.listPresets({}), [])
   const lore = useLoader(() => remote.listLorebooks({}), [])
   const personas = useLoader(() => remote.listPersonas({}), [])
-  const [sub, setSub] = useState<SubId>(lastSub ?? 'defaults')
+  const [sub, setSub] = useState<SubId>(lastSub ?? 'interface')
   const [draft, setDraft] = useState<TavernSettings | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -65,9 +69,25 @@ export function SettingsSection(props: { remote: TavernRemote }) {
       toast.show(toastText)
     })
 
+  /** 语言切换：先本地生效再持久化；保存失败回退界面语言并提示。 */
+  const changeLocale = (locale: 'en' | 'zh') => {
+    if (!draft || locale === draft.locale) return
+    const prev = draft.locale
+    setDraft({ ...draft, locale })
+    setTavernLocale(locale)
+    void runAsync(setBusy, setError, async () => {
+      const r = await remote.updateSettings({ patch: { locale } })
+      if (!r.ok) {
+        setDraft((current) => (current ? { ...current, locale: prev } : current))
+        setTavernLocale(prev)
+        setError(`${t('settings.interface.languageFailed')}: ${r.error.message}`)
+      }
+    })
+  }
+
   if (state.status === 'loading')
     return (
-      <Section title="设置">
+      <Section title={t('settings.title')}>
         <Skeleton height={56} />
         <Skeleton height={56} />
         <Skeleton height={56} />
@@ -75,10 +95,10 @@ export function SettingsSection(props: { remote: TavernRemote }) {
     )
   if (state.status === 'error')
     return (
-      <Section title="设置">
+      <Section title={t('settings.title')}>
         <Err message={state.message} />
         <Btn size="md" onClick={reload}>
-          重试
+          {t('action.retry')}
         </Btn>
       </Section>
     )
@@ -87,7 +107,6 @@ export function SettingsSection(props: { remote: TavernRemote }) {
   const presetItems: PresetSummary[] = presets.state.status === 'ready' ? presets.state.value.items : []
   const lorebooks = lore.state.status === 'ready' ? lore.state.value.items : []
   const personaItems = personas.state.status === 'ready' ? personas.state.value.items : []
-  const embeddedLabel = '（使用所选角色的卡内嵌书 / 无）'
 
   const setSampling = (patch: Partial<TavernSettings['sampling']>) => setDraft({ ...draft, sampling: { ...draft.sampling, ...patch } })
   const setWorldInfo = (patch: Partial<TavernSettings['worldInfo']>) => setDraft({ ...draft, worldInfo: { ...draft.worldInfo, ...patch } })
@@ -99,7 +118,7 @@ export function SettingsSection(props: { remote: TavernRemote }) {
       {toast.node}
       <Tabs
         size="sm"
-        items={[...SUBS]}
+        items={SUBS.map((s) => ({ id: s.id, label: t(s.labelKey) }))}
         value={sub}
         onChange={(id) => {
           lastSub = id as SubId
@@ -108,41 +127,61 @@ export function SettingsSection(props: { remote: TavernRemote }) {
       />
       {/* key=sub 让切组重新挂载并播 fade-up；草稿挂在父组件上，切组不丢未保存编辑 */}
       <div key={sub} className="dsh-tavern-rise">
+        {sub === 'interface' && (
+          <Section title={t('settings.interface.title')} description={t('settings.interface.desc')}>
+            <SettingsRow title={t('settings.interface.language')} description={t('settings.interface.languageDesc')}>
+              {/* 选项用各自语言自描述（宿主 locale 插件同款约定），不随界面语言翻译。 */}
+              <Select
+                size="md"
+                value={draft.locale}
+                onChange={(v) => changeLocale(v === 'zh' ? 'zh' : 'en')}
+                options={[
+                  { value: 'en', label: 'English' },
+                  { value: 'zh', label: '中文' },
+                ]}
+              />
+            </SettingsRow>
+          </Section>
+        )}
+
         {sub === 'defaults' && (
-          <Section title="选卡后的默认配置" description="在新对话里点选任意角色卡后，会套用这里的预设、世界书与人设。新对话不会自动选角色；已打开的会话请用对话页角色芯片修改。">
-            <SettingsRow title="提示词预设" description="当前会话请用对话页角色芯片切换。这里只影响之后点选角色时的默认值。">
+          <Section title={t('settings.defaults.title')} description={t('settings.defaults.desc')}>
+            <SettingsRow title={t('settings.defaults.preset')} description={t('settings.defaults.presetDesc')}>
               <Select
                 size="md"
                 value={draft.defaults.presetId}
                 onChange={(presetId) => setDefaults({ presetId })}
                 options={[
-                  { value: '', label: '（内建默认预设）' },
-                  ...presetItems.map((p) => ({ value: p.id, label: p.regexCount > 0 ? `${p.name}（${p.regexCount} 条正则）` : p.name })),
+                  { value: '', label: t('settings.defaults.builtinPreset') },
+                  ...presetItems.map((p) => ({
+                    value: p.id,
+                    label: p.regexCount > 0 ? t('settings.defaults.presetRegexCount', { name: p.name, count: p.regexCount }) : p.name,
+                  })),
                 ]}
               />
             </SettingsRow>
-            <SettingsRow title="人设" description="用户侧名字（{{user}}）。可空；若库里只有一条人设，未选择时也会自动用那条。">
+            <SettingsRow title={t('settings.defaults.persona')} description={t('settings.defaults.personaDesc')}>
               <Select
                 size="md"
                 value={draft.defaults.personaId}
                 onChange={(personaId) => setDefaults({ personaId })}
-                options={[{ value: '', label: '（无人设）' }, ...personaItems.map((p) => ({ value: p.id, label: p.name }))]}
+                options={[{ value: '', label: t('settings.defaults.noPersona') }, ...personaItems.map((p) => ({ value: p.id, label: p.name }))]}
               />
             </SettingsRow>
-            <SettingsRow title="主世界书" description="Character Lore。不选则使用角色卡内嵌世界书（若导入时保留了）。">
+            <SettingsRow title={t('settings.defaults.mainLore')} description={t('settings.defaults.mainLoreDesc')}>
               <Select
                 size="md"
                 value={draft.defaults.characterLorebookId}
                 onChange={(characterLorebookId) => setDefaults({ characterLorebookId })}
-                options={[{ value: '', label: embeddedLabel }, ...lorebooks.map((n) => ({ value: n, label: n }))]}
+                options={[{ value: '', label: t('settings.defaults.embeddedLore') }, ...lorebooks.map((n) => ({ value: n, label: n }))]}
               />
             </SettingsRow>
-            <SettingsRow title="全局世界书" description="可多选，每轮检索时与主世界书一并扫描。" stacked>
+            <SettingsRow title={t('settings.defaults.globalLore')} description={t('settings.defaults.globalLoreDesc')} stacked>
               {lorebooks.length === 0 ? (
-                <Muted>库中暂无独立世界书。可在「世界书」页导入，或使用角色卡内嵌书。</Muted>
+                <Muted>{t('settings.defaults.noLorebooks')}</Muted>
               ) : (
                 <CheckChips
-                  ariaLabel="全局世界书"
+                  ariaLabel={t('settings.defaults.globalLore')}
                   options={lorebooks.map((n) => ({ value: n, label: n }))}
                   selected={draft.defaults.lorebookIds}
                   onChange={(lorebookIds) => setDefaults({ lorebookIds })}
@@ -150,22 +189,22 @@ export function SettingsSection(props: { remote: TavernRemote }) {
               )}
             </SettingsRow>
             <SaveBar>
-              <Btn primary size="md" disabled={busy} onClick={() => void save({ defaults: draft.defaults }, '已保存选卡后的默认配置')}>
-                保存默认配置
+              <Btn primary size="md" disabled={busy} onClick={() => void save({ defaults: draft.defaults }, t('settings.defaults.saved'))}>
+                {t('settings.defaults.save')}
               </Btn>
             </SaveBar>
           </Section>
         )}
 
         {sub === 'sampling' && (
-          <Section title="采样与思考" description="temperature / maxTokens / stop 会透传到模型；topP 与 penalty 当前平台不生效，仅作记录。">
-            <SettingsRow title="temperature" description="0–2，默认 1。thinking 模式下不生效。">
+          <Section title={t('settings.sampling.title')} description={t('settings.sampling.desc')}>
+            <SettingsRow title="temperature" description={t('settings.sampling.temperatureDesc')}>
               <NumInput step="0.05" value={draft.sampling.temperature} onChange={(v) => setSampling({ temperature: v })} />
             </SettingsRow>
-            <SettingsRow title="topP" description="0–1。当前 dsh 模型服务不透传。">
+            <SettingsRow title="topP" description={t('settings.sampling.topPDesc')}>
               <NumInput step="0.05" value={draft.sampling.topP} onChange={(v) => setSampling({ topP: v })} />
             </SettingsRow>
-            <SettingsRow title="maxTokens" description="单次生成最大 token；0 = 沿用模型默认。">
+            <SettingsRow title="maxTokens" description={t('settings.sampling.maxTokensDesc')}>
               <NumInput value={draft.sampling.maxTokens} onChange={(v) => setSampling({ maxTokens: Math.max(0, Math.round(v)) })} />
             </SettingsRow>
             <SettingsRow title="presencePenalty">
@@ -174,21 +213,21 @@ export function SettingsSection(props: { remote: TavernRemote }) {
             <SettingsRow title="frequencyPenalty">
               <NumInput step="0.1" value={draft.sampling.frequencyPenalty} onChange={(v) => setSampling({ frequencyPenalty: v })} />
             </SettingsRow>
-            <SettingsRow title="深度思考" description="关闭：对当前模型写入 off（若公布该档）。低/高/最高：模型公布该档时显式指定，否则回退自动。自动：保留会话已选档位，否则用模型默认——注意模型默认档的思考可能很短，想要更充分的思考请选高/最高。部署把 thinking 锁成 disabled 时无法打开。thinking 模式下温度不生效。">
+            <SettingsRow title={t('settings.sampling.thinking')} description={t('settings.sampling.thinkingDesc')}>
               <Select
                 size="md"
                 value={draft.sampling.thinking}
                 onChange={(v) => setSampling({ thinking: v as TavernSettings['sampling']['thinking'] })}
                 options={[
-                  { value: 'disabled', label: '关闭' },
-                  { value: 'enabled', label: '自动' },
-                  { value: 'low', label: '低' },
-                  { value: 'high', label: '高' },
-                  { value: 'max', label: '最高' },
+                  { value: 'disabled', label: t('settings.sampling.thinking.disabled') },
+                  { value: 'enabled', label: t('settings.sampling.thinking.enabled') },
+                  { value: 'low', label: t('settings.sampling.thinking.low') },
+                  { value: 'high', label: t('settings.sampling.thinking.high') },
+                  { value: 'max', label: t('settings.sampling.thinking.max') },
                 ]}
               />
             </SettingsRow>
-            <SettingsRow title="停止序列" description="每行一个。" stacked>
+            <SettingsRow title={t('settings.sampling.stop')} description={t('settings.sampling.stopDesc')} stacked>
               <textarea
                 className="dsh-tavern-input dsh-tavern-textarea dsh-tavern-codeFont"
                 style={{ minHeight: 64 }}
@@ -197,28 +236,28 @@ export function SettingsSection(props: { remote: TavernRemote }) {
               />
             </SettingsRow>
             <SaveBar>
-              <Btn disabled={busy} onClick={() => void save({ sampling: draft.sampling }, '已保存采样参数')} primary size="md">
-                保存采样参数
+              <Btn disabled={busy} onClick={() => void save({ sampling: draft.sampling }, t('settings.sampling.saved'))} primary size="md">
+                {t('settings.sampling.save')}
               </Btn>
             </SaveBar>
           </Section>
         )}
 
         {sub === 'worldinfo' && (
-          <Section title="世界书引擎" description="扫描深度、预算与合并策略，对所有会话生效。">
-            <SettingsRow title="扫描深度 scanDepth">
+          <Section title={t('settings.worldinfo.title')} description={t('settings.worldinfo.desc')}>
+            <SettingsRow title={t('settings.worldinfo.scanDepth')}>
               <NumInput value={draft.worldInfo.scanDepth} onChange={(v) => setWorldInfo({ scanDepth: Math.max(0, Math.round(v)) })} />
             </SettingsRow>
-            <SettingsRow title="预算百分比 contextPercent" description="仅当固定预算为 0 时生效；按窗口折算（基数上限 128K），并随历史长度扣减。">
+            <SettingsRow title={t('settings.worldinfo.contextPercent')} description={t('settings.worldinfo.contextPercentDesc')}>
               <NumInput value={draft.worldInfo.contextPercent} onChange={(v) => setWorldInfo({ contextPercent: v })} />
             </SettingsRow>
-            <SettingsRow title="固定 token 预算" description="本轮世界书层的绝对上限（默认 8192，优先于百分比）。命中内容每轮走 runtime context 快照、无法命中前缀缓存；被裁条目可用 tavern_lore_read 按条补读。">
+            <SettingsRow title={t('settings.worldinfo.tokenBudget')} description={t('settings.worldinfo.tokenBudgetDesc')}>
               <NumInput value={draft.worldInfo.tokenBudget} onChange={(v) => setWorldInfo({ tokenBudget: Math.max(0, Math.round(v)) })} />
             </SettingsRow>
-            <SettingsRow title="最大扫描轮数" description="含首轮：1 = 关闭递归，2 = 首轮加一轮递归，0 = 不限（仅受预算约束）。">
+            <SettingsRow title={t('settings.worldinfo.maxRecursionSteps')} description={t('settings.worldinfo.maxRecursionStepsDesc')}>
               <NumInput value={draft.worldInfo.maxRecursionSteps} onChange={(v) => setWorldInfo({ maxRecursionSteps: Math.max(0, Math.round(v)) })} />
             </SettingsRow>
-            <SettingsRow title="合并策略">
+            <SettingsRow title={t('settings.worldinfo.strategy')}>
               <Select
                 size="md"
                 value={String(draft.worldInfo.characterStrategy)}
@@ -232,55 +271,55 @@ export function SettingsSection(props: { remote: TavernRemote }) {
             </SettingsRow>
             {(
               [
-                ['recursiveScan', '递归扫描', '命中条目的内容继续作为关键词扫描。'],
-                ['caseSensitive', '区分大小写', ''],
-                ['matchWholeWords', '整词匹配', '对中文不友好，建议关闭。'],
-                ['includeNames', '扫描计入消息名前缀', ''],
-                ['overflowWarning', '预算溢出告警', ''],
-                ['useGroupScoring', '组内按命中键数挑选', '开启后同组按命中关键词数选一条；关闭则按组权重随机。'],
+                ['recursiveScan', 'settings.worldinfo.recursiveScan', 'settings.worldinfo.recursiveScanDesc'],
+                ['caseSensitive', 'settings.worldinfo.caseSensitive', ''],
+                ['matchWholeWords', 'settings.worldinfo.matchWholeWords', 'settings.worldinfo.matchWholeWordsDesc'],
+                ['includeNames', 'settings.worldinfo.includeNames', ''],
+                ['overflowWarning', 'settings.worldinfo.overflowWarning', ''],
+                ['useGroupScoring', 'settings.worldinfo.useGroupScoring', 'settings.worldinfo.useGroupScoringDesc'],
               ] as const
-            ).map(([key, title, description]) => (
-              <SettingsRow key={key} title={title} description={description || undefined}>
+            ).map(([key, titleKey, descKey]) => (
+              <SettingsRow key={key} title={t(titleKey)} description={descKey ? t(descKey) : undefined}>
                 <Toggle checked={draft.worldInfo[key]} onChange={(on) => setWorldInfo({ [key]: on } as Partial<TavernSettings['worldInfo']>)} />
               </SettingsRow>
             ))}
             <SaveBar>
-              <Btn disabled={busy} onClick={() => void save({ worldInfo: draft.worldInfo }, '已保存世界书设置')} primary size="md">
-                保存世界书设置
+              <Btn disabled={busy} onClick={() => void save({ worldInfo: draft.worldInfo }, t('settings.worldinfo.saved'))} primary size="md">
+                {t('settings.worldinfo.save')}
               </Btn>
             </SaveBar>
           </Section>
         )}
 
         {sub === 'memory' && (
-          <Section title="记忆" description="BM25 长期记忆的容量、检索与压缩参数，对所有角色生效。">
-            <SettingsRow title="条数上限 maxEntries" description="每角色记忆条数上限，超出后在 turn 结束空闲时异步压缩最旧批次。最小 1。">
+          <Section title={t('settings.memory.title')} description={t('settings.memory.desc')}>
+            <SettingsRow title={t('settings.memory.maxEntries')} description={t('settings.memory.maxEntriesDesc')}>
               <NumInput value={draft.memory.maxEntries} onChange={(v) => setMemory({ maxEntries: Math.max(1, Math.round(v)) })} />
             </SettingsRow>
-            <SettingsRow title="token 上限 maxTokens" description="每角色记忆的估算 token 上限，超出同样触发压缩。">
+            <SettingsRow title={t('settings.memory.maxTokens')} description={t('settings.memory.maxTokensDesc')}>
               <NumInput value={draft.memory.maxTokens} onChange={(v) => setMemory({ maxTokens: Math.max(0, Math.round(v)) })} />
             </SettingsRow>
-            <SettingsRow title="检索条数 retrievalTopK" description="每轮 BM25 检索注入 runtime context 的记忆条数；0 = 不注入。">
+            <SettingsRow title={t('settings.memory.retrievalTopK')} description={t('settings.memory.retrievalTopKDesc')}>
               <NumInput value={draft.memory.retrievalTopK} onChange={(v) => setMemory({ retrievalTopK: Math.max(0, Math.round(v)) })} />
             </SettingsRow>
-            <SettingsRow title="检索预算 retrievalTokenBudget" description="每轮检索注入的估算 token 预算。">
+            <SettingsRow title={t('settings.memory.retrievalTokenBudget')} description={t('settings.memory.retrievalTokenBudgetDesc')}>
               <NumInput value={draft.memory.retrievalTokenBudget} onChange={(v) => setMemory({ retrievalTokenBudget: Math.max(0, Math.round(v)) })} />
             </SettingsRow>
-            <SettingsRow title="时间衰减半衰期（天）" description="检索打分时旧记忆按半衰期降权；0 = 不衰减。">
+            <SettingsRow title={t('settings.memory.halfLifeDays')} description={t('settings.memory.halfLifeDaysDesc')}>
               <NumInput value={draft.memory.halfLifeDays} onChange={(v) => setMemory({ halfLifeDays: Math.max(0, v) })} />
             </SettingsRow>
-            <SettingsRow title="去重阈值 dedupScore" description="写入记忆的相似度阈值（BM25 分），达到则视为重复不写入；越高越不容易判重。">
+            <SettingsRow title={t('settings.memory.dedupScore')} description={t('settings.memory.dedupScoreDesc')}>
               <NumInput value={draft.memory.dedupScore} onChange={(v) => setMemory({ dedupScore: Math.max(0, v) })} />
             </SettingsRow>
-            <SettingsRow title="压缩批次 compressBatch" description="每次压缩合并的最旧条数。最小 2。">
+            <SettingsRow title={t('settings.memory.compressBatch')} description={t('settings.memory.compressBatchDesc')}>
               <NumInput value={draft.memory.compressBatch} onChange={(v) => setMemory({ compressBatch: Math.max(2, Math.round(v)) })} />
             </SettingsRow>
-            <SettingsRow title="检索取词 queryMessages" description="BM25 检索的 query 取最近 N 条消息。最小 1。">
+            <SettingsRow title={t('settings.memory.queryMessages')} description={t('settings.memory.queryMessagesDesc')}>
               <NumInput value={draft.memory.queryMessages} onChange={(v) => setMemory({ queryMessages: Math.max(1, Math.round(v)) })} />
             </SettingsRow>
             <SaveBar>
-              <Btn disabled={busy} onClick={() => void save({ memory: draft.memory }, '已保存记忆设置')} primary size="md">
-                保存记忆设置
+              <Btn disabled={busy} onClick={() => void save({ memory: draft.memory }, t('settings.memory.saved'))} primary size="md">
+                {t('settings.memory.save')}
               </Btn>
             </SaveBar>
           </Section>
@@ -288,21 +327,17 @@ export function SettingsSection(props: { remote: TavernRemote }) {
 
         {sub === 'cards' && (
           <>
-            <Section title="角色卡与交互卡" description="删卡连带行为与封面 HTML 的网络放行。封面默认允许加载 https 图片与字体；卡内切开场白走宿主 swipe，不开放主窗口 API。">
-              <SettingsRow title="连同删除内嵌世界书" description="开启：删除角色卡时其内嵌世界书一并删除。关闭：删卡前把内嵌书保留到世界书库（重名自动加序号）。">
+            <Section title={t('settings.cards.title')} description={t('settings.cards.desc')}>
+              <SettingsRow title={t('settings.cards.cascadeDelete')} description={t('settings.cards.cascadeDeleteDesc')}>
                 <Toggle checked={draft.cascadeDeleteEmbeddedBook} onChange={(cascadeDeleteEmbeddedBook) => setDraft({ ...draft, cascadeDeleteEmbeddedBook })} />
               </SettingsRow>
-              <SettingsRow title="交互卡渲染" description="关闭后封面与交互卡一律按纯文本显示。">
+              <SettingsRow title={t('settings.cards.interactiveCards')} description={t('settings.cards.interactiveCardsDesc')}>
                 <Toggle checked={draft.interactiveCards} onChange={(interactiveCards) => setDraft({ ...draft, interactiveCards })} />
               </SettingsRow>
-              <SettingsRow title="触发日志保留条数">
+              <SettingsRow title={t('settings.cards.triggerLogMax')}>
                 <NumInput value={draft.triggerLogMax} onChange={(v) => setDraft({ ...draft, triggerLogMax: Math.max(10, Math.round(v)) })} />
               </SettingsRow>
-              <SettingsRow
-                title="脚本信任的外部域名"
-                description="封面脚本默认不能 fetch/XHR、也不能加载外部脚本；按行填写域名逐个放行，单独一行 * 表示全部放行。图片和字体默认已放行 https。"
-                stacked
-              >
+              <SettingsRow title={t('settings.cards.whitelist')} description={t('settings.cards.whitelistDesc')} stacked>
                 <textarea
                   className="dsh-tavern-input dsh-tavern-textarea dsh-tavern-codeFont"
                   style={{ minHeight: 64 }}
@@ -325,18 +360,18 @@ export function SettingsSection(props: { remote: TavernRemote }) {
                         triggerLogMax: draft.triggerLogMax,
                         cardNetworkWhitelist: draft.cardNetworkWhitelist,
                       },
-                      '已保存卡片设置',
+                      t('settings.cards.saved'),
                     )
                   }
                 >
-                  保存卡片设置
+                  {t('settings.cards.save')}
                 </Btn>
               </SaveBar>
             </Section>
-            <div className="dsh-tavern-groupHead">数据目录</div>
+            <div className="dsh-tavern-groupHead">{t('settings.cards.dataHome')}</div>
             <Muted>
               <span style={{ wordBreak: 'break-all' }}>
-                角色卡、世界书、预设、人设、记忆与会话绑定都落在这个目录，可直接查看备份：
+                {t('settings.cards.dataHomeDesc')}
                 {dataInfo.state.status === 'ready' ? dataInfo.state.value.dataHome : '…'}
               </span>
             </Muted>

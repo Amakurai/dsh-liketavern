@@ -16,6 +16,7 @@
 import { useEffect, useState } from 'react'
 import { IconBranchOutline16, IconChevronLeftOutline14, IconChevronRightOutline14, IconEditOutline16, IconListPenOutline16, IconLoadingOutline16, IconPlayOutline16, IconRefreshOutline16, IconUserOutline16, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ReactNode } from 'react'
+import { useT } from './i18n.js'
 import { isTavernSession, type UseSessions } from './mode.js'
 import { openChildSession } from './openChild.js'
 import type { Envelope, TavernRemote } from './types.js'
@@ -101,6 +102,7 @@ type FloorOperation =
 
 export function TavernFloorActions(props: FloorActionsProps) {
   const { remote, sessionId, sessions, messageId } = props
+  const t = useT()
   const tavern = isTavernSession(props.useSessions, sessionId)
   const bound = useTavernBound(remote, sessionId, tavern)
   const [operation, setOperation] = useState<FloorOperation>(null)
@@ -189,7 +191,7 @@ export function TavernFloorActions(props: FloorActionsProps) {
     setOperation(delta < 0 ? 'branch-prev' : 'branch-next')
     void openChildSession(sessions, target)
       .catch(() => {
-        toast.show('这个分支会话不存在或已被删除')
+        toast.show(t('actions.branchGone'))
         siblingLoader.reload()
       })
       .finally(() => setOperation(null))
@@ -293,7 +295,7 @@ export function TavernFloorActions(props: FloorActionsProps) {
       }
       try {
         await navigator.clipboard.writeText(r.value.text)
-        toast.show('用户台词已生成并复制到剪贴板，粘贴到输入框后发送')
+        toast.show(t('actions.impersonateCopied'))
       } catch {
         setImpersonated(r.value.text)
       }
@@ -308,13 +310,13 @@ export function TavernFloorActions(props: FloorActionsProps) {
     <span className="dsh-tavern-actionGroup">
       {!isGreeting && siblingSwipe && siblingSwipe.total > 1 && (
         <>
-          <IconAction label="上一个分支（同一楼层的另一版回复）" disabled={busy} busy={operation === 'branch-prev'} onClick={() => onBranch(-1)}>
+          <IconAction label={t('actions.branchPrev')} disabled={busy} busy={operation === 'branch-prev'} onClick={() => onBranch(-1)}>
             <IconChevronLeftOutline14 />
           </IconAction>
-          <span className="dsh-tavern-swipeIdx" title={`第 ${siblingSwipe.turn} 层有 ${siblingSwipe.total} 个分支`}>
+          <span className="dsh-tavern-swipeIdx" title={t('actions.branchCount', { turn: siblingSwipe.turn, total: siblingSwipe.total })}>
             {siblingSwipe.index + 1}/{siblingSwipe.total}
           </span>
-          <IconAction label="下一个分支（同一楼层的另一版回复）" disabled={busy} busy={operation === 'branch-next'} onClick={() => onBranch(1)}>
+          <IconAction label={t('actions.branchNext')} disabled={busy} busy={operation === 'branch-next'} onClick={() => onBranch(1)}>
             <IconChevronRightOutline14 />
           </IconAction>
           <span className="dsh-tavern-actionDivider" />
@@ -322,43 +324,43 @@ export function TavernFloorActions(props: FloorActionsProps) {
       )}
       {swipe && (
         <>
-          <IconAction label="上一条开场白" disabled={busy} busy={operation === 'swipe-prev'} onClick={() => onSwipe(-1)}>
+          <IconAction label={t('actions.swipePrev')} disabled={busy} busy={operation === 'swipe-prev'} onClick={() => onSwipe(-1)}>
             <IconChevronLeftOutline14 />
           </IconAction>
           <span className="dsh-tavern-swipeIdx">
             {swipe.index + 1}/{swipe.total}
           </span>
-          <IconAction label="下一条开场白" disabled={busy} busy={operation === 'swipe-next'} onClick={() => onSwipe(1)}>
+          <IconAction label={t('actions.swipeNext')} disabled={busy} busy={operation === 'swipe-next'} onClick={() => onSwipe(1)}>
             <IconChevronRightOutline14 />
           </IconAction>
           <span className="dsh-tavern-actionDivider" />
         </>
       )}
       {!isGreeting && (
-        <IconAction label="重新生成这一层" disabled={busy} busy={operation === 'regenerate'} onClick={onRegenerate}>
+        <IconAction label={t('actions.regenerate')} disabled={busy} busy={operation === 'regenerate'} onClick={onRegenerate}>
           <IconRefreshOutline16 />
         </IconAction>
       )}
       {!isGreeting && (
-        <IconAction label="续写这一层（接着被截断的回复写）" disabled={busy} busy={operation === 'continue'} onClick={() => void onContinue()}>
+        <IconAction label={t('actions.continue')} disabled={busy} busy={operation === 'continue'} onClick={() => void onContinue()}>
           <IconPlayOutline16 />
         </IconAction>
       )}
       {!isGreeting && (
-        <IconAction label="编辑这一层的用户消息" disabled={busy} busy={operation === 'load-edit'} onClick={() => void onEdit()}>
+        <IconAction label={t('actions.editUser')} disabled={busy} busy={operation === 'load-edit'} onClick={() => void onEdit()}>
           <IconEditOutline16 />
         </IconAction>
       )}
       {!isGreeting && (
-        <IconAction label="编辑这一层的回复（不重跑）" disabled={busy} busy={operation === 'load-edit-ai'} onClick={() => void onEditAi()}>
+        <IconAction label={t('actions.editAi')} disabled={busy} busy={operation === 'load-edit-ai'} onClick={() => void onEditAi()}>
           <IconListPenOutline16 />
         </IconAction>
       )}
-      <IconAction label="AI 代答用户（生成我的台词，复制到剪贴板）" disabled={busy} busy={operation === 'impersonate'} onClick={() => void onImpersonate()}>
+      <IconAction label={t('actions.impersonate')} disabled={busy} busy={operation === 'impersonate'} onClick={() => void onImpersonate()}>
         <IconUserOutline16 />
       </IconAction>
       {(!isGreeting || started) && (
-        <IconAction label="回退到这一层（丢弃其后楼层）" disabled={busy} busy={operation === 'rollback'} onClick={onRollback}>
+        <IconAction label={t('actions.rollback')} disabled={busy} busy={operation === 'rollback'} onClick={onRollback}>
           <IconBranchOutline16 />
         </IconAction>
       )}
@@ -368,7 +370,7 @@ export function TavernFloorActions(props: FloorActionsProps) {
         </span>
       )}
       {edit !== null && (
-        <Dialog open title={`编辑第 ${edit.turn} 层的用户消息`} onClose={() => { if (!busy) setEdit(null) }}>
+        <Dialog open title={t('actions.editUserTitle', { turn: edit.turn })} onClose={() => { if (!busy) setEdit(null) }}>
           <textarea
             className="dsh-tavern-input dsh-tavern-textarea"
             style={{ minHeight: 120 }}
@@ -377,15 +379,15 @@ export function TavernFloorActions(props: FloorActionsProps) {
           />
           <Err message={editFailure} />
           <div className="dsh-tavern-modalActions" style={{ marginTop: 12 }}>
-            <Btn disabled={busy} onClick={() => setEdit(null)}>取消</Btn>
+            <Btn disabled={busy} onClick={() => setEdit(null)}>{t('action.cancel')}</Btn>
             <Btn disabled={busy || !edit.text.trim()} onClick={() => void submitEdit()}>
-              {operation === 'submit-edit' ? '保存中…' : '保存并重跑'}
+              {operation === 'submit-edit' ? t('actions.saving') : t('actions.saveRerun')}
             </Btn>
           </div>
         </Dialog>
       )}
       {editAi !== null && (
-        <Dialog open title={`编辑第 ${editAi.turn} 层的回复`} onClose={() => { if (!busy) setEditAi(null) }}>
+        <Dialog open title={t('actions.editAiTitle', { turn: editAi.turn })} onClose={() => { if (!busy) setEditAi(null) }}>
           <textarea
             className="dsh-tavern-input dsh-tavern-textarea"
             style={{ minHeight: 160 }}
@@ -394,17 +396,17 @@ export function TavernFloorActions(props: FloorActionsProps) {
           />
           <Err message={editAiFailure} />
           <div className="dsh-tavern-modalActions" style={{ marginTop: 12 }}>
-            <Btn disabled={busy} onClick={() => setEditAi(null)}>取消</Btn>
+            <Btn disabled={busy} onClick={() => setEditAi(null)}>{t('action.cancel')}</Btn>
             <Btn disabled={busy || !editAi.text.trim()} onClick={() => void submitEditAi()}>
-              {operation === 'submit-edit-ai' ? '保存中…' : '保存（不重跑）'}
+              {operation === 'submit-edit-ai' ? t('actions.saving') : t('actions.saveNoRerun')}
             </Btn>
           </div>
         </Dialog>
       )}
       {impersonated !== null && (
-        <Dialog open title="AI 代答的用户台词" onClose={() => setImpersonated(null)}>
+        <Dialog open title={t('actions.impersonateTitle')} onClose={() => setImpersonated(null)}>
           <textarea readOnly className="dsh-tavern-input dsh-tavern-textarea" style={{ minHeight: 120 }} value={impersonated} />
-          <div style={{ marginTop: 8, fontSize: 12, opacity: 0.8 }}>剪贴板不可用，请手动复制后粘贴到输入框。</div>
+          <div style={{ marginTop: 8, fontSize: 12, opacity: 0.8 }}>{t('actions.clipboardUnavailable')}</div>
         </Dialog>
       )}
       {toast.node}

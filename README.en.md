@@ -54,6 +54,8 @@ Runtime data (cards, memories, session bindings) lives in `$DSH_HOME/dsh-tavern/
 2. Manage cards, presets, lorebooks, personas, regex rules, and sampling parameters in the `dsh-tavern` settings section.
 3. In conversation, any assistant floor can be regenerated, edited, rolled back, continued, or answered by AI impersonation.
 
+The plugin UI is in English by default. To switch to Chinese, open the Tavern settings tab → "Interface" subgroup → "Language"; the change applies immediately and is saved automatically (it only affects this plugin's UI, not the host interface).
+
 ## Platform limitations
 
 Due to current dsh host capabilities, the following differs from vanilla SillyTavern. These are known boundaries, not bugs:

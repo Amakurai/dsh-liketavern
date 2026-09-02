@@ -11,6 +11,7 @@ import { TavernFloorActions } from './actions.js'
 import { TavernAssistantNode } from './assistant.js'
 import { TavernHeaderChip } from './chip.js'
 import { TavernHeroCharacter } from './hero.js'
+import { setTavernLocale } from './i18n.js'
 import { en, zh } from './locales.js'
 import { isCurrentTavernSession } from './mode.js'
 import { TavernPanel } from './panel/index.js'
@@ -29,6 +30,14 @@ export async function apply(ctx: ClientContext) {
   await ctx.remote.$mount(TYPERT_REMOTE)
   const remote = ctx.get('remote.tavern') as TavernRemote
   const sessions = ctx.sessions
+
+  // 界面语言在挂载 slot 前播种（持久化于 dsh-tavern 设置的 locale 键），避免先英文闪一下再切走。
+  try {
+    const result = await remote.getSettings({})
+    if (result.ok) setTavernLocale(result.value.settings.locale === 'zh' ? 'zh' : 'en')
+  } catch {
+    // 读取失败保持默认英文。
+  }
 
   ctx.effect(() => ctx.locale.register('tavern', { zh, en }), 'dsh-tavern: locale')
 

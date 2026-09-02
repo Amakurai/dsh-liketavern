@@ -3,6 +3,7 @@
  * 切页带 fade-up 过场；「默认绑定」已并入「设置」页，设置页内再分子导航。
  */
 import { useState } from 'react'
+import { useT } from '../i18n.js'
 import type { TavernRemote } from '../types.js'
 import { Tabs } from '../util.js'
 import { CharactersSection } from './characters.js'
@@ -14,13 +15,13 @@ import { RegexSection } from './regex.js'
 import { SettingsSection } from './settings.js'
 
 const TABS = [
-  { id: 'characters', label: '角色' },
-  { id: 'presets', label: '预设' },
-  { id: 'lorebooks', label: '世界书' },
-  { id: 'personas', label: '人设' },
-  { id: 'regex', label: '正则' },
-  { id: 'memory', label: '记忆' },
-  { id: 'sampling', label: '设置' },
+  { id: 'characters', labelKey: 'panel.tab.characters' },
+  { id: 'presets', labelKey: 'panel.tab.presets' },
+  { id: 'lorebooks', labelKey: 'panel.tab.lorebooks' },
+  { id: 'personas', labelKey: 'panel.tab.personas' },
+  { id: 'regex', labelKey: 'panel.tab.regex' },
+  { id: 'memory', labelKey: 'panel.tab.memory' },
+  { id: 'sampling', labelKey: 'panel.tab.settings' },
 ] as const
 
 type TabId = (typeof TABS)[number]['id']
@@ -30,11 +31,12 @@ let lastTab: TabId | undefined
 
 export function TavernPanel(props: { remote: TavernRemote }) {
   const { remote } = props
+  const t = useT()
   const [tab, setTab] = useState<TabId>(lastTab ?? 'characters')
   return (
     <div className="dsh-tavern-ui dsh-tavern-panel" style={{ width: '100%', maxWidth: '100%', fontSize: 14, boxSizing: 'border-box' }}>
       <Tabs
-        items={[...TABS]}
+        items={TABS.map((tab_) => ({ id: tab_.id, label: t(tab_.labelKey) }))}
         value={tab}
         onChange={(id) => {
           lastTab = id as TabId

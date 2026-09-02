@@ -4,12 +4,14 @@
  */
 import { useState } from 'react'
 import { IconEditOutline16, IconTrashOutline16, IconUserOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
+import { useT } from '../i18n.js'
 import type { Persona, TavernRemote } from '../types.js'
 import { EMPTY_SESSION_DEFAULTS } from '../types.js'
 import { Avatar, Badge, Btn, ConfirmDialog, Err, Field, IconBtn, SaveBar, SearchEmpty, SearchInput, Section, Select, Skeleton, clickableProps, errOf, runAsync, useLoader, useToast } from '../util.js'
 
 export function PersonasSection(props: { remote: TavernRemote }) {
   const { remote } = props
+  const t = useT()
   const { state, reload } = useLoader(() => remote.listPersonas({}), [])
   const lore = useLoader(() => remote.listLorebooks({}), [])
   const [error, setError] = useState<string | null>(null)
@@ -26,7 +28,7 @@ export function PersonasSection(props: { remote: TavernRemote }) {
   const save = async () => {
     if (!editing) return
     if (!editing.name.trim()) {
-      setError('人设名称不能为空')
+      setError(t('personas.nameRequired'))
       return
     }
     await runAsync(setBusy, setError, async () => {
@@ -34,7 +36,7 @@ export function PersonasSection(props: { remote: TavernRemote }) {
       const err = errOf(r)
       if (err) setError(err)
       else {
-        toast.show(`已保存人设 ${editing.name}`)
+        toast.show(t('personas.saved', { name: editing.name }))
         reload()
       }
     })
@@ -66,17 +68,17 @@ export function PersonasSection(props: { remote: TavernRemote }) {
     const r = await remote.updateSettings({ patch: { defaults } })
     const err = errOf(r)
     if (err) setError(err)
-    else toast.show('已设为新会话默认人设（当前打开的对话请用角色芯片切换）')
+    else toast.show(t('personas.defaultSet'))
   }
 
   return (
-    <Section title="人设" description="用户侧人设，名字会替换 {{user}}。库里只有一条时，未绑人设的会话也会自动用它；多条时请在「设置」页或对话芯片里选择。">
+    <Section title={t('section.personas')} description={t('personas.sectionDesc')}>
       {toast.node}
       <div className="dsh-tavern-toolbar">
-        <Btn size="md" onClick={createNew}>新建人设</Btn>
-        <Btn size="md" onClick={reload} disabled={busy}>刷新</Btn>
+        <Btn size="md" onClick={createNew}>{t('personas.new')}</Btn>
+        <Btn size="md" onClick={reload} disabled={busy}>{t('action.refresh')}</Btn>
         {items.length >= 5 && (
-          <SearchInput label="搜索人设" value={query} onChange={setQuery} placeholder="搜索人设名 / 描述" width={220} />
+          <SearchInput label={t('personas.searchLabel')} value={query} onChange={setQuery} placeholder={t('personas.searchPlaceholder')} width={220} />
         )}
       </div>
       {state.status === 'loading' && (
@@ -93,12 +95,12 @@ export function PersonasSection(props: { remote: TavernRemote }) {
           <div className="dsh-tavern-emptyIcon">
             <IconUserOutline16 size={32} />
           </div>
-          <div className="dsh-tavern-emptyTitle">暂无人设</div>
-          <div className="dsh-tavern-emptyDesc">新建一条人设，对话里的 {'{{user}}'} 就会换成它。</div>
+          <div className="dsh-tavern-emptyTitle">{t('personas.emptyTitle')}</div>
+          <div className="dsh-tavern-emptyDesc">{t('personas.emptyDesc')}</div>
         </div>
       )}
       {q !== '' && filtered.length === 0 && state.status === 'ready' && (
-        <SearchEmpty what="人设" query={query.trim()} onClear={() => setQuery('')} />
+        <SearchEmpty what={t('personas.entity')} query={query.trim()} onClear={() => setQuery('')} />
       )}
       <div className="dsh-tavern-list" style={{ marginBottom: 12 }}>
         {filtered.map((p) => (
@@ -109,14 +111,14 @@ export function PersonasSection(props: { remote: TavernRemote }) {
                 <span className="dsh-tavern-tileName">{p.name}</span>
                 {p.lorebookId ? <Badge>{p.lorebookId}</Badge> : null}
               </div>
-              <span className="dsh-tavern-tileSub">{p.description.trim() || '还没有填写人设描述。'}</span>
+              <span className="dsh-tavern-tileSub">{p.description.trim() || t('personas.noDescription')}</span>
             </div>
             <div className="dsh-tavern-tileActions">
-              <IconBtn label="编辑" onClick={() => setEditing({ ...p })}>
+              <IconBtn label={t('action.edit')} onClick={() => setEditing({ ...p })}>
                 <IconEditOutline16 />
               </IconBtn>
-              <Btn size="sm" onClick={() => void setAsDefault(p.id)}>设为默认</Btn>
-              <IconBtn label="删除人设" danger onClick={() => setToDelete(p)}>
+              <Btn size="sm" onClick={() => void setAsDefault(p.id)}>{t('personas.setDefault')}</Btn>
+              <IconBtn label={t('personas.delete')} danger onClick={() => setToDelete(p)}>
                 <IconTrashOutline16 />
               </IconBtn>
             </div>
@@ -125,40 +127,40 @@ export function PersonasSection(props: { remote: TavernRemote }) {
       </div>
       <ConfirmDialog
         open={toDelete !== null}
-        title="删除人设？"
-        description={toDelete ? `确定删除人设「${toDelete.name}」？` : ''}
-        confirmLabel="删除"
+        title={t('personas.deleteTitle')}
+        description={toDelete ? t('personas.deleteDesc', { name: toDelete.name }) : ''}
+        confirmLabel={t('action.delete')}
         danger
         onCancel={() => setToDelete(null)}
         onConfirm={() => void remove()}
       />
       {editing && (
         <div className="dsh-tavern-card" style={{ marginBottom: 12 }}>
-          <Field label="名称">
+          <Field label={t('personas.field.name')}>
             <input className="dsh-tavern-input" style={{ flex: 1 }} value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} />
           </Field>
           <div className="dsh-tavern-field">
-            <span className="dsh-tavern-fieldLabel">描述</span>
+            <span className="dsh-tavern-fieldLabel">{t('personas.field.description')}</span>
             <textarea
               className="dsh-tavern-input dsh-tavern-textarea"
               value={editing.description}
               onChange={(e) => setEditing({ ...editing, description: e.target.value })}
             />
           </div>
-          <Field label="人设世界书">
+          <Field label={t('personas.field.lorebook')}>
             <Select
               width="100%"
               value={editing.lorebookId ?? ''}
               onChange={(v) => setEditing({ ...editing, lorebookId: v || null })}
               options={[
-                { value: '', label: '（无）' },
+                { value: '', label: t('personas.lorebookNone') },
                 ...(lore.state.status === 'ready' ? lore.state.value.items.map((n) => ({ value: n, label: n })) : []),
               ]}
             />
           </Field>
           <SaveBar>
-            <Btn disabled={busy} onClick={() => void save()} primary>保存</Btn>
-            <Btn onClick={() => setEditing(null)}>关闭</Btn>
+            <Btn disabled={busy} onClick={() => void save()} primary>{t('action.save')}</Btn>
+            <Btn onClick={() => setEditing(null)}>{t('action.close')}</Btn>
           </SaveBar>
         </div>
       )}

@@ -92,6 +92,8 @@ const MemorySchema = z.object({
 })
 
 export const TavernConfigSchema = z.object({
+  /** 前端界面语言（面板/芯片/英雄区/操作条等本插件 UI 文案）；默认英文，设置页可切中文。 */
+  locale: z.union([z.const('en'), z.const('zh')]).default('en'),
   sampling: SamplingSchema,
   worldInfo: WorldInfoSchema,
   memory: MemorySchema,
@@ -117,6 +119,7 @@ export interface TavernSessionDefaults {
 }
 
 export interface TavernConfig {
+  locale: 'en' | 'zh'
   sampling: SamplingSettings
   worldInfo: WorldInfoGlobalSettings
   memory: {
@@ -140,6 +143,7 @@ export interface TavernConfig {
 export function resolveConfig(raw: unknown): TavernConfig {
   const value = (TavernConfigSchema as (input: unknown) => TavernConfigRaw)(raw)
   return {
+    locale: value.locale,
     sampling: {
       ...value.sampling,
       maxTokens: value.sampling.maxTokens > 0 ? value.sampling.maxTokens : null,

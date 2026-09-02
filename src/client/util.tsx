@@ -7,6 +7,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Button, IconChevronDownOutline14, IconSearchOutline16, IconUserOutline16, Menu, Modal, Toast, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { CSSProperties, ReactNode } from 'react'
 import type { CardRegexScript } from '../core/types.js'
+import { useT } from './i18n.js'
 import type { Envelope } from './types.js'
 import './styles.js'
 
@@ -178,15 +179,16 @@ export function Badge(props: { accent?: boolean; danger?: boolean; children?: Re
  */
 export function RegexScriptRow(props: { script: CardRegexScript; index: number; onToggle?: (disabled: boolean) => void }) {
   const { script } = props
+  const t = useT()
   const badges: string[] = []
-  if (script.markdownOnly && script.promptOnly) badges.push('展示 + 入模')
-  else if (script.markdownOnly) badges.push('仅展示')
-  else if (script.promptOnly) badges.push('仅入模')
+  if (script.markdownOnly && script.promptOnly) badges.push(t('util.regexScope.displayAndPrompt'))
+  else if (script.markdownOnly) badges.push(t('util.regexScope.displayOnly'))
+  else if (script.promptOnly) badges.push(t('util.regexScope.promptOnly'))
   else {
     for (const p of script.placement ?? [2]) {
-      if (p === 1) badges.push('用户输入')
-      else if (p === 2) badges.push('AI 输出')
-      else if (p === 5) badges.push('世界书')
+      if (p === 1) badges.push(t('util.regexScope.userInput'))
+      else if (p === 2) badges.push(t('util.regexScope.aiOutput'))
+      else if (p === 5) badges.push(t('util.regexScope.worldInfo'))
     }
   }
   const find = script.findRegex ?? ''
@@ -195,10 +197,10 @@ export function RegexScriptRow(props: { script: CardRegexScript; index: number; 
     <div className="dsh-tavern-memo">
       <div className="dsh-tavern-memoHead">
         {props.onToggle ? (
-          <Toggle checked={enabled} onChange={(on) => props.onToggle!(!on)} title={enabled ? '关闭此正则' : '启用此正则'} />
+          <Toggle checked={enabled} onChange={(on) => props.onToggle!(!on)} title={enabled ? t('util.regex.disable') : t('util.regex.enable')} />
         ) : null}
         <span className="dsh-tavern-memoMeta" style={{ color: 'var(--dsw-alias-label-primary, inherit)', fontWeight: 500 }}>
-          {script.scriptName?.trim() || `预设正则 ${props.index + 1}`}
+          {script.scriptName?.trim() || t('util.regex.unnamed', { index: props.index + 1 })}
         </span>
         {badges.map((label) => (
           <Badge key={label}>{label}</Badge>
@@ -209,7 +211,7 @@ export function RegexScriptRow(props: { script: CardRegexScript; index: number; 
         title={find}
         style={{ fontSize: 12, color: 'var(--dsw-alias-label-tertiary, inherit)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
       >
-        {find || '（无查找式，不会生效）'}
+        {find || t('util.regex.noFind')}
       </div>
     </div>
   )
@@ -293,6 +295,7 @@ export function SearchInput(props: {
   placeholder?: string
   width?: number | string
 }) {
+  const t = useT()
   return (
     <div className="dsh-tavern-search" role="search" style={{ width: props.width ?? 220 }}>
       <span className="dsh-tavern-searchIcon">
@@ -301,7 +304,7 @@ export function SearchInput(props: {
       <input
         type="text"
         aria-label={props.label}
-        placeholder={props.placeholder ?? '搜索…'}
+        placeholder={props.placeholder ?? t('common.searchPlaceholder')}
         value={props.value}
         onChange={(e) => props.onChange(e.target.value)}
       />
@@ -311,13 +314,14 @@ export function SearchInput(props: {
 
 /** 列表搜索的空结果态：与各面板空态同一套样式，附「清空搜索」动作。 */
 export function SearchEmpty(props: { what: string; query: string; onClear: () => void }) {
+  const t = useT()
   return (
     <div className="dsh-tavern-empty">
-      <div className="dsh-tavern-emptyTitle">没有匹配的{props.what}</div>
+      <div className="dsh-tavern-emptyTitle">{t('common.noMatch', { what: props.what })}</div>
       <div className="dsh-tavern-emptyDesc">
-        「{props.query}」没有命中任何条目，可换个关键词或
+        {t('common.noMatchDesc', { query: props.query })}
         <button type="button" className="dsh-tavern-linkBtn" onClick={props.onClear}>
-          清空搜索
+          {t('action.clearSearch')}
         </button>
       </div>
     </div>
@@ -515,7 +519,7 @@ export function downloadBase64(filename: string, base64: string, mime: string): 
   setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
-/** primitives Modal 的薄封装（统一中文关闭文案）；width 档：sm 380（默认）/ md 480 / lg 680 / xl 880。 */
+/** primitives Modal 的薄封装（统一关闭文案）；width 档：sm 380（默认）/ md 480 / lg 680 / xl 880。 */
 export function Dialog(props: {
   open: boolean
   title: string
@@ -525,6 +529,7 @@ export function Dialog(props: {
   width?: 'sm' | 'md' | 'lg' | 'xl'
   children?: ReactNode
 }) {
+  const t = useT()
   // Modal 的 dialog 本体不限高，超高内容会把整个弹窗顶出视口。
   // 滚动区放在 content 层（Modal 注释里指定的 scrollable content region）并钉死
   // max-height，保证任何视口高度下弹窗底部都不被裁。
@@ -542,7 +547,7 @@ export function Dialog(props: {
       onClose={props.onClose}
       title={props.title}
       description={props.description}
-      closeLabel="关闭"
+      closeLabel={t('action.close')}
       footer={props.footer}
       contentClassName={`dsh-tavern-modalContent${widthClass ? ` ${widthClass}` : ''}`}
     >
@@ -561,17 +566,18 @@ export function ConfirmDialog(props: {
   onCancel: () => void
   onConfirm: () => void
 }) {
+  const t = useT()
   return (
     <Modal
       open={props.open}
       onClose={props.onCancel}
       title={props.title}
       description={props.description}
-      closeLabel="取消"
+      closeLabel={t('action.cancel')}
       footer={
         <div className="dsh-tavern-modalActions">
           <Button type="button" variant="outline" size="md" disabled={props.busy} onClick={props.onCancel}>
-            取消
+            {t('action.cancel')}
           </Button>
           <Button
             type="button"
@@ -581,7 +587,7 @@ export function ConfirmDialog(props: {
             onClick={props.onConfirm}
             style={props.danger ? { background: 'var(--dsw-alias-state-error-primary, #ec1313)', borderColor: 'transparent' } : undefined}
           >
-            {props.confirmLabel ?? '确定'}
+            {props.confirmLabel ?? t('action.confirm')}
           </Button>
         </div>
       }
@@ -608,13 +614,14 @@ export function NumInput(props: { value: number; onChange: (v: number) => void; 
 
 /** 可空数字输入（null ↔ 空串）。 */
 export function NullableNumInput(props: { value: number | null; onChange: (v: number | null) => void; width?: number }) {
+  const t = useT()
   return (
     <input
       type="number"
       className="dsh-tavern-input"
       style={{ width: props.width ?? 90 }}
       value={props.value ?? ''}
-      placeholder="不限"
+      placeholder={t('common.unlimited')}
       onChange={(e) => {
         const raw = e.target.value
         if (raw === '') return props.onChange(null)

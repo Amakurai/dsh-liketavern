@@ -1,0 +1,33 @@
+/** 新会话英雄区（hero.tsx）界面文案。zh 为键全集源；en 必须同键齐全（test/i18n.test.ts 校验）。 */
+
+export const zh = {
+  'hero.characterFallback': '角色',
+  'hero.loadingCharacters': '加载角色卡…',
+  'hero.creator': '作者 {name}',
+  'hero.start': '开始对话',
+  'hero.prevGreeting': '上一条开场白',
+  'hero.nextGreeting': '下一条开场白',
+  'hero.swipeHint': '← → 切换',
+  'hero.error.emptyGreetingVariant': '当前开场白为空，请先切换变体',
+  'hero.error.noGreetingInput': '该角色没有开场白，请直接在下方输入',
+  'hero.error.enterFailed': '未能写入开场白。会话里已有内容时请直接继续对话。',
+  'hero.detailLoadFailed': '角色详情加载失败。可重新选择角色，或直接在下方输入。',
+  'hero.emptyVariantHint': '当前这条开场白为空，可切换变体。',
+  'hero.noGreetingHint': '该角色没有开场白。可以直接在下方输入。',
+} as const
+
+export const en: Record<keyof typeof zh, string> = {
+  'hero.characterFallback': 'Character',
+  'hero.loadingCharacters': 'Loading characters…',
+  'hero.creator': 'By {name}',
+  'hero.start': 'Start chat',
+  'hero.prevGreeting': 'Previous greeting',
+  'hero.nextGreeting': 'Next greeting',
+  'hero.swipeHint': '← → to switch',
+  'hero.error.emptyGreetingVariant': 'The current greeting is empty. Switch to another variant first.',
+  'hero.error.noGreetingInput': 'This character has no greeting. Type below to start.',
+  'hero.error.enterFailed': 'Could not insert the greeting. If the conversation already has content, just continue chatting.',
+  'hero.detailLoadFailed': 'Failed to load character details. Pick another character, or type below to start.',
+  'hero.emptyVariantHint': 'This greeting is empty. Switch to another variant.',
+  'hero.noGreetingHint': 'This character has no greeting. You can type below to start.',
+}

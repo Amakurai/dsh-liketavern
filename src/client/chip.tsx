@@ -4,6 +4,7 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import { BINDING_CHANGED_EVENT } from './actions.js'
+import { useT } from './i18n.js'
 import { isTavernSession, type UseSessions } from './mode.js'
 import { openChildSession } from './openChild.js'
 import { TavernSeatChip } from './seatChip.js'
@@ -65,42 +66,45 @@ function fmtTokens(n: number | null): string {
 
 function PromptPreviewDialog(props: { data: PromptPreview; onClose: () => void }) {
   const { data } = props
+  const t = useT()
   const [tab, setTab] = useState<'standing' | 'turn' | 'full' | 'log'>('standing')
   const toast = useToast()
   const wi = data.worldInfoBudget
   const assemble = data.assembleBudget
   const body =
     tab === 'standing'
-      ? data.standing || '（空）'
+      ? data.standing || t('chip.preview.empty')
       : tab === 'turn'
-        ? data.turnContext || '（空）'
+        ? data.turnContext || t('chip.preview.empty')
         : tab === 'log'
-          ? data.logLines.join('\n') || '（无触发日志）'
+          ? data.logLines.join('\n') || t('chip.preview.noLog')
           : `=== system ===\n${data.system}\n\n=== messages ===\n${data.messages.map((m) => JSON.stringify(m)).join('\n\n')}`
   const copyBody = async () => {
     try {
       await navigator.clipboard.writeText(body)
-      toast.show('已复制当前视图内容')
+      toast.show(t('chip.preview.copied'))
     } catch {
-      toast.show('复制失败')
+      toast.show(t('chip.preview.copyFailed'))
     }
   }
   return (
-    <Dialog open title="提示词预览" onClose={props.onClose} width="lg">
+    <Dialog open title={t('chip.preview.title')} onClose={props.onClose} width="lg">
       <Muted>
-        世界书预算 {wi.used}/{wi.limit}
-        {wi.overflowed ? ' · 已溢出' : ''}
+        {t('chip.preview.budget', { used: wi.used, limit: wi.limit })}
+        {wi.overflowed ? ` · ${t('chip.preview.overflowed')}` : ''}
         {' · '}
-        组装 {assemble.tokensAfter}/{assemble.tokensBefore} token
-        {assemble.trimmedSections.length > 0 ? ` · 裁剪 ${assemble.trimmedSections.join('、')}` : ''}
+        {t('chip.preview.assemble', { after: assemble.tokensAfter, before: assemble.tokensBefore })}
+        {assemble.trimmedSections.length > 0
+          ? ` · ${t('chip.preview.trimmed', { sections: assemble.trimmedSections.join(t('chip.preview.listSep')) })}`
+          : ''}
       </Muted>
       <div className="dsh-tavern-filters" style={{ margin: '10px 0 12px' }}>
         {(
           [
             ['standing', 'standing'],
-            ['turn', '本轮 turn'],
-            ['full', '完整序列'],
-            ['log', '触发日志'],
+            ['turn', t('chip.preview.tab.turn')],
+            ['full', t('chip.preview.tab.full')],
+            ['log', t('binding.triggerLog')],
           ] as const
         ).map(([id, label]) => (
           <button
@@ -114,7 +118,7 @@ function PromptPreviewDialog(props: { data: PromptPreview; onClose: () => void }
           </button>
         ))}
         <span style={{ flex: 1 }} />
-        <IconBtn label="复制当前视图" onClick={() => void copyBody()}>
+        <IconBtn label={t('chip.preview.copyView')} onClick={() => void copyBody()}>
           <IconCopyOutline16 />
         </IconBtn>
       </div>
@@ -138,6 +142,7 @@ export function TavernHeaderChip(props: {
   useSessions?: UseSessions
 }) {
   const { remote, sessionId, sessions } = props
+  const t = useT()
   const tavern = isTavernSession(props.useSessions, sessionId)
   const bindingLoader = useLoader(() => remote.getSessionBinding({ sessionId }), [sessionId], tavern)
   const binding = bindingLoader.state.status === 'ready' ? bindingLoader.state.value.binding : null
@@ -227,8 +232,13 @@ export function TavernHeaderChip(props: {
   const avatar = detail.state.status === 'ready' ? detail.state.value.avatar : null
   const selectedChar = lists && draft ? lists.characters.find((c) => c.cardId === draft.cardId) : undefined
   const embeddedBookLabel = selectedChar?.hasCharacterBook
-    ? `${selectedChar.characterBookName || selectedChar.name}（卡内嵌${typeof selectedChar.characterBookEntryCount === 'number' ? ` ${selectedChar.characterBookEntryCount} 条` : ''}）`
-    : '（卡内嵌书 / 无）'
+    ? typeof selectedChar.characterBookEntryCount === 'number'
+      ? t('chip.embeddedBook.withCount', {
+          name: selectedChar.characterBookName || selectedChar.name,
+          count: selectedChar.characterBookEntryCount,
+        })
+      : t('chip.embeddedBook.noCount', { name: selectedChar.characterBookName || selectedChar.name })
+    : t('chip.embeddedBook.none')
 
   const saveBinding = async () => {
     if (!draft) return
@@ -236,7 +246,7 @@ export function TavernHeaderChip(props: {
     const err = errOf(r)
     if (err) setError(err)
     else {
-      toast.show('绑定已保存（对之后的消息生效）')
+      toast.show(t('chip.saved'))
       bindingLoader.reload()
       // 通知操作条等按绑定显隐的组件刷新
       window.dispatchEvent(new CustomEvent(BINDING_CHANGED_EVENT, { detail: sessionId }))
@@ -246,7 +256,7 @@ export function TavernHeaderChip(props: {
   const insertGreeting = async () => {
     const r = await remote.ensureGreeting({ sessionId })
     if (!r.ok) setError(r.error.message)
-    else toast.show(r.value.created ? '已插入开场白' : '会话已有内容，未插入')
+    else toast.show(r.value.created ? t('chip.greeting.inserted') : t('chip.greeting.skipped'))
   }
 
   const swipeBy = async (delta: number) => {
@@ -258,7 +268,7 @@ export function TavernHeaderChip(props: {
     }
     const total = 1 + variants.value.alternateGreetings.length
     if (total < 2) {
-      toast.show('该角色没有额外开场白')
+      toast.show(t('chip.swipe.none'))
       return
     }
     const next = ((binding.greetingIndex + delta) % total + total) % total
@@ -267,7 +277,7 @@ export function TavernHeaderChip(props: {
     else {
       // 二次打开可能因会话尚未登记而抛错；分支已建好，toast 提示即可
       await openChildSession(sessions, r.value.childSessionId, r.value.title).catch(() => {
-        toast.show('分支会话已创建，请在会话列表中打开')
+        toast.show(t('chip.swipe.childCreated'))
       })
     }
   }
@@ -297,8 +307,8 @@ export function TavernHeaderChip(props: {
     if (!r.ok) return setError(r.error.message)
     const log = r.value.log
     setView({
-      title: '触发日志',
-      text: log ? `时间：${log.at}\n\n${log.lines.join('\n')}` : '暂无日志（该会话还没有跑过一次 Tavern 组装）',
+      title: t('binding.triggerLog'),
+      text: log ? `${t('chip.log.time', { at: log.at })}\n\n${log.lines.join('\n')}` : t('chip.log.empty'),
     })
   }
 
@@ -329,14 +339,14 @@ export function TavernHeaderChip(props: {
   return (
     <span className="dsh-tavern-ui" style={{ display: 'inline-flex' }}>
       <TavernSeatChip
-        label={binding ? (name ?? listedName ?? '角色') : '选择角色卡'}
-        title="选择角色卡"
+        label={binding ? (name ?? listedName ?? t('chip.characterFallback')) : t('hero.pickCharacter')}
+        title={t('hero.pickCharacter')}
         avatarUrl={avatar}
         open={open}
         hasPopup="dialog"
         onClick={() => setOpen(!open)}
       />
-      <Dialog open={open} title="Tavern 绑定" onClose={() => setOpen(false)} width="xl">
+      <Dialog open={open} title={t('chip.dialog.title')} onClose={() => setOpen(false)} width="xl">
           <div className="dsh-tavern-binding">
           <Err message={error} />
           {!lists && (
@@ -352,8 +362,8 @@ export function TavernHeaderChip(props: {
               {draft ? (
                 <>
                   <div className="dsh-tavern-panelCard">
-                    <div className="dsh-tavern-groupHead">绑定</div>
-                    <Field label="角色">
+                    <div className="dsh-tavern-groupHead">{t('chip.group.binding')}</div>
+                    <Field label={t('chip.field.character')}>
                       <Select
                         width="100%"
                         value={draft.cardId}
@@ -363,32 +373,32 @@ export function TavernHeaderChip(props: {
                           setDraft({ ...draft, cardId, cardName: picked?.name ?? draft.cardName })
                         }}
                         options={[
-                          { value: '', label: '（选择角色）' },
+                          { value: '', label: t('chip.field.selectCharacter') },
                           ...lists.characters.map((c) => ({ value: c.cardId, label: c.name })),
                         ]}
                       />
                     </Field>
-                    <Field label="预设">
+                    <Field label={t('chip.field.preset')}>
                       <Select
                         width="100%"
                         value={draft.presetId ?? ''}
                         onChange={(v) => setDraft({ ...draft, presetId: v || null })}
-                        options={[{ value: '', label: '（内建默认）' }, ...lists.presets.map((p) => ({ value: p.id, label: p.regexCount > 0 ? `${p.name}（${p.regexCount} 条正则）` : p.name }))]}
+                        options={[{ value: '', label: t('chip.field.builtinPreset') }, ...lists.presets.map((p) => ({ value: p.id, label: p.regexCount > 0 ? t('settings.defaults.presetRegexCount', { name: p.name, count: p.regexCount }) : p.name }))]}
                       />
                     </Field>
-                    <Field label="人设">
+                    <Field label={t('chip.field.persona')}>
                       <Select
                         width="100%"
                         value={draft.personaId ?? ''}
                         onChange={(v) => setDraft({ ...draft, personaId: v || null })}
-                        options={[{ value: '', label: '（无）' }, ...lists.personas.map((p) => ({ value: p.id, label: p.name }))]}
+                        options={[{ value: '', label: t('chip.field.none') }, ...lists.personas.map((p) => ({ value: p.id, label: p.name }))]}
                       />
                     </Field>
                   </div>
 
                   <div className="dsh-tavern-panelCard">
-                    <div className="dsh-tavern-groupHead">世界书</div>
-                    <Field label="主世界书">
+                    <div className="dsh-tavern-groupHead">{t('section.lorebooks')}</div>
+                    <Field label={t('chip.field.mainLore')}>
                       <Select
                         width="100%"
                         value={draft.characterLorebookId ?? ''}
@@ -399,12 +409,12 @@ export function TavernHeaderChip(props: {
                         ]}
                       />
                     </Field>
-                    <Field label="全局世界书（多选）">
+                    <Field label={t('chip.field.globalLore')}>
                       {lists.lorebooks.length === 0 ? (
-                        <Muted>库中暂无世界书</Muted>
+                        <Muted>{t('chip.field.noLorebooks')}</Muted>
                       ) : (
                         <CheckChips
-                          ariaLabel="全局世界书"
+                          ariaLabel={t('chip.field.globalLoreAria')}
                           options={lists.lorebooks.map((n) => ({ value: n, label: n }))}
                           selected={draft.lorebookIds}
                           onChange={(lorebookIds) => setDraft({ ...draft, lorebookIds })}
@@ -414,8 +424,8 @@ export function TavernHeaderChip(props: {
                   </div>
 
                   <div className="dsh-tavern-panelCard">
-                    <div className="dsh-tavern-groupHead">本轮注入</div>
-                    <Field label="作者注释（本会话，进本轮 turn）">
+                    <div className="dsh-tavern-groupHead">{t('chip.group.turnInject')}</div>
+                    <Field label={t('chip.field.authorNote')}>
                       <textarea
                         className="dsh-tavern-input dsh-tavern-textarea"
                         style={{ minHeight: 96 }}
@@ -429,7 +439,7 @@ export function TavernHeaderChip(props: {
                           checked={draft.injectJournal === true}
                           onChange={(injectJournal) => setDraft({ ...draft, injectJournal })}
                         />
-                        注入角色笔记 journal.md
+                        {t('chip.field.injectJournal')}
                       </label>
                     </div>
                   </div>
@@ -443,18 +453,18 @@ export function TavernHeaderChip(props: {
                           setConfirmUnbind(true)
                         }}
                       >
-                        解除绑定
+                        {t('chip.unbind.action')}
                       </Btn>
                     ) : null}
                     <span className="dsh-tavern-footSpacer" />
-                    <Btn size="md" onClick={() => void openChatLore()}>编辑本会话世界书</Btn>
-                    <Btn primary size="md" onClick={() => void saveBinding()}>保存绑定</Btn>
+                    <Btn size="md" onClick={() => void openChatLore()}>{t('chip.chatLore.edit')}</Btn>
+                    <Btn primary size="md" onClick={() => void saveBinding()}>{t('binding.save')}</Btn>
                   </div>
                 </>
               ) : (
                 <div className="dsh-tavern-panelCard">
-                  <div className="dsh-tavern-groupHead">绑定</div>
-                  <Field label="角色">
+                  <div className="dsh-tavern-groupHead">{t('chip.group.binding')}</div>
+                  <Field label={t('chip.field.character')}>
                     <Select
                       width="100%"
                       value=""
@@ -472,7 +482,7 @@ export function TavernHeaderChip(props: {
                         })
                       }}
                       options={[
-                        { value: '', label: '（选择角色）' },
+                        { value: '', label: t('chip.field.selectCharacter') },
                         ...lists.characters.map((c) => ({ value: c.cardId, label: c.name })),
                       ]}
                     />
@@ -481,13 +491,13 @@ export function TavernHeaderChip(props: {
               )}
 
               <div className="dsh-tavern-panelCard">
-                <div className="dsh-tavern-groupHead">开场白与调试</div>
+                <div className="dsh-tavern-groupHead">{t('chip.group.greetingDebug')}</div>
                 <div className="dsh-tavern-bindingActions">
-                  <Btn disabled={!binding} onClick={() => void insertGreeting()}>插入开场白</Btn>
-                  <Btn disabled={!binding || !canSwipeGreeting} onClick={() => void swipeBy(-1)}>上一条开场白</Btn>
-                  <Btn disabled={!binding || !canSwipeGreeting} onClick={() => void swipeBy(1)}>下一条开场白</Btn>
-                  <Btn onClick={() => void showTriggerLog()}>触发日志</Btn>
-                  <Btn onClick={() => void preview()}>预览提示词</Btn>
+                  <Btn disabled={!binding} onClick={() => void insertGreeting()}>{t('binding.greeting')}</Btn>
+                  <Btn disabled={!binding || !canSwipeGreeting} onClick={() => void swipeBy(-1)}>{t('chip.greeting.prev')}</Btn>
+                  <Btn disabled={!binding || !canSwipeGreeting} onClick={() => void swipeBy(1)}>{t('chip.greeting.next')}</Btn>
+                  <Btn onClick={() => void showTriggerLog()}>{t('binding.triggerLog')}</Btn>
+                  <Btn onClick={() => void preview()}>{t('binding.preview')}</Btn>
                 </div>
               </div>
 
@@ -497,7 +507,7 @@ export function TavernHeaderChip(props: {
                     <div
                       className="dsh-tavern-meter"
                       role="progressbar"
-                      aria-label="上下文占用"
+                      aria-label={t('chip.usage.aria')}
                       aria-valuenow={Math.round(usage.percent)}
                       aria-valuemin={0}
                       aria-valuemax={100}
@@ -510,12 +520,12 @@ export function TavernHeaderChip(props: {
                     </div>
                   )}
                   <Muted>
-                    上下文：
+                    {t('chip.usage.label')}
                     {usage.contextWindow !== null && usage.pressureTokens !== null
-                      ? `${fmtTokens(usage.pressureTokens)} / ${fmtTokens(usage.contextWindow)}（${usage.percent ?? '?'}%）`
-                      : `约 ${fmtTokens(usage.surfaceTokens)} token`}
+                      ? t('chip.usage.full', { used: fmtTokens(usage.pressureTokens), window: fmtTokens(usage.contextWindow), percent: usage.percent ?? '?' })
+                      : t('chip.usage.approx', { tokens: fmtTokens(usage.surfaceTokens) })}
                     {usage.messageTokens !== null
-                      ? ` · 系统 ${fmtTokens(usage.systemTokens)} · 工具 ${fmtTokens(usage.toolsTokens)} · 消息 ${fmtTokens(usage.messageTokens)}`
+                      ? ` · ${t('chip.usage.breakdown', { system: fmtTokens(usage.systemTokens), tools: fmtTokens(usage.toolsTokens), messages: fmtTokens(usage.messageTokens) })}`
                       : ''}
                   </Muted>
                 </div>
@@ -528,13 +538,13 @@ export function TavernHeaderChip(props: {
       {view && <PreDialog title={view.title} text={view.text} onClose={() => setView(null)} />}
       {previewData && <PromptPreviewDialog data={previewData} onClose={() => setPreviewData(null)} />}
       {chatLore && (
-        <Dialog open width="xl" title="本会话世界书" onClose={() => setChatLore(null)}>
+        <Dialog open width="xl" title={t('chip.chatLore.title')} onClose={() => setChatLore(null)}>
           <LorebookEditor
-            target={{ kind: 'chat', cardId: chatLore.cardId, name: '本会话世界书' }}
+            target={{ kind: 'chat', cardId: chatLore.cardId, name: t('chip.chatLore.title') }}
             entries={chatLore.entries}
             onClose={() => setChatLore(null)}
             onSaved={() => {
-              toast.show('已保存本会话世界书')
+              toast.show(t('chip.chatLore.saved'))
               setChatLore(null)
             }}
             save={(json) => remote.saveChatLorebook({ cardId: chatLore.cardId, json })}
@@ -543,9 +553,9 @@ export function TavernHeaderChip(props: {
       )}
       <ConfirmDialog
         open={confirmUnbind}
-        title="解除角色绑定？"
-        description="解除后本会话不再使用角色卡，后续回复按普通 Tavern 助手。对话记录不会删除。"
-        confirmLabel="解除绑定"
+        title={t('chip.unbind.title')}
+        description={t('chip.unbind.desc')}
+        confirmLabel={t('chip.unbind.action')}
         danger
         busy={unbindBusy}
         onCancel={() => {

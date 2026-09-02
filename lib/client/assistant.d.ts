@@ -50,6 +50,5 @@ export declare function TavernAssistantNode(props: {
     useTurnData?: (key: string) => unknown;
     openFile?: (path: string) => void;
     fileMentions?: (owner: TurnTailOwner) => unknown;
-    t?: (key: string, vars?: Record<string, unknown>) => string;
 }): any;
 export {};

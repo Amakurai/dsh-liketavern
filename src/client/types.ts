@@ -82,6 +82,8 @@ export interface CharacterInspect {
 
 /** 设置命名空间 dsh-tavern 的原始（schemastery 解析后）形状；maxTokens 为数字，0 = 不限。 */
 export interface TavernSettings {
+  /** 前端界面语言；默认 en，设置页可切 zh。 */
+  locale: 'en' | 'zh'
   sampling: {
     temperature: number
     topP: number

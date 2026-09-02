@@ -6,12 +6,13 @@ import { useState } from 'react'
 import { IconDownloadOutline16, IconEditOutline16, IconFolderOpenOutline16, IconListPenOutline16, IconTrashOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { CardRegexScript, ChatRole, PresetEntry, PromptPreset } from '../../core/types.js'
 import { EMPTY_SESSION_DEFAULTS, type PresetSummary, type TavernRemote } from '../types.js'
+import { t as tBare, useT } from '../i18n.js'
 import { Badge, Btn, ConfirmDialog, Err, Field, FileBtn, IconBtn, Muted, NumInput, RegexScriptRow, SaveBar, SearchEmpty, SearchInput, Section, Select, Skeleton, Toggle, clickableProps, downloadJson, errOf, readJsonFile, runAsync, useLoader, useToast } from '../util.js'
 
 function newEntry(order: number): PresetEntry {
   return {
     identifier: `entry-${Date.now().toString(36)}-${order}`,
-    name: '新条目',
+    name: tBare('presets.newEntryName'),
     enabled: true,
     role: 'system',
     position: 'relative',
@@ -24,9 +25,10 @@ function newEntry(order: number): PresetEntry {
 
 /** 预设内嵌正则列表（开关写进草稿，随「保存预设」落盘；重新导入以文件为准）。 */
 function PresetRegexList(props: { scripts: CardRegexScript[]; onChange: (scripts: CardRegexScript[]) => void }) {
+  const t = useT()
   return (
     <div className="dsh-tavern-field">
-      <span className="dsh-tavern-fieldLabel">随预设导入的正则（{props.scripts.length} 条；开关随「保存预设」生效，重新导入以文件为准）</span>
+      <span className="dsh-tavern-fieldLabel">{t('presets.regexList.label', { count: props.scripts.length })}</span>
       <div className="dsh-tavern-list">
         {props.scripts.map((s, i) => (
           <RegexScriptRow
@@ -43,12 +45,13 @@ function PresetRegexList(props: { scripts: CardRegexScript[]; onChange: (scripts
 
 function EntryEditor(props: { entry: PresetEntry; onChange: (e: PresetEntry) => void; onDelete: () => void }) {
   const { entry } = props
+  const t = useT()
   const set = (patch: Partial<PresetEntry>) => props.onChange({ ...entry, ...patch })
   return (
     <div className="dsh-tavern-entry">
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', padding: '12px 16px 8px' }}>
-        <Toggle checked={entry.enabled} onChange={(enabled) => set({ enabled })} title={entry.enabled ? '关闭此条目' : '启用此条目'} />
-        <input className="dsh-tavern-input" style={{ width: 160 }} value={entry.name} placeholder="名称" onChange={(e) => set({ name: e.target.value })} />
+        <Toggle checked={entry.enabled} onChange={(enabled) => set({ enabled })} title={entry.enabled ? t('presets.entry.disable') : t('presets.entry.enable')} />
+        <input className="dsh-tavern-input" style={{ width: 160 }} value={entry.name} placeholder={t('presets.name')} onChange={(e) => set({ name: e.target.value })} />
         <Select
           value={entry.role}
           onChange={(v) => set({ role: v as ChatRole })}
@@ -68,26 +71,26 @@ function EntryEditor(props: { entry: PresetEntry; onChange: (e: PresetEntry) => 
         />
         {entry.position === 'in-chat' && (
           <label style={{ fontSize: 12 }}>
-            深度 <NumInput value={entry.depth} width={64} onChange={(v) => set({ depth: Math.max(0, Math.round(v)) })} />
+            {t('presets.entry.depth')} <NumInput value={entry.depth} width={64} onChange={(v) => set({ depth: Math.max(0, Math.round(v)) })} />
           </label>
         )}
         <label style={{ fontSize: 12 }}>
-          顺序 <NumInput value={entry.order} width={64} onChange={(v) => set({ order: Math.round(v) })} />
+          {t('presets.entry.order')} <NumInput value={entry.order} width={64} onChange={(v) => set({ order: Math.round(v) })} />
         </label>
         <label style={{ fontSize: 12 }}>
-          <input type="checkbox" checked={entry.marker} onChange={(e) => set({ marker: e.target.checked })} /> 占位符
+          <input type="checkbox" checked={entry.marker} onChange={(e) => set({ marker: e.target.checked })} /> {t('presets.entry.marker')}
         </label>
         {entry.marker && (
           <input className="dsh-tavern-input" style={{ width: 140 }} value={entry.markerId ?? ''} placeholder="markerId" onChange={(e) => set({ markerId: e.target.value })} />
         )}
         <span style={{ flex: 1 }} />
-        <IconBtn label="删除条目" danger onClick={props.onDelete}>
+        <IconBtn label={t('presets.entry.delete')} danger onClick={props.onDelete}>
           <IconTrashOutline16 />
         </IconBtn>
       </div>
       {!entry.marker && (
         <div style={{ padding: '2px 16px 14px' }}>
-          <textarea className="dsh-tavern-input dsh-tavern-textarea" style={{ minHeight: 60 }} value={entry.content} placeholder="内容" onChange={(e) => set({ content: e.target.value })} />
+          <textarea className="dsh-tavern-input dsh-tavern-textarea" style={{ minHeight: 60 }} value={entry.content} placeholder={t('presets.entry.content')} onChange={(e) => set({ content: e.target.value })} />
         </div>
       )}
     </div>
@@ -103,6 +106,7 @@ export function PresetsSection(props: { remote: TavernRemote }) {
   const [toDelete, setToDelete] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const toast = useToast()
+  const t = useT()
 
   const items: PresetSummary[] = state.status === 'ready' ? state.value.items : []
   const q = query.trim().toLowerCase()
@@ -122,7 +126,7 @@ export function PresetsSection(props: { remote: TavernRemote }) {
       const err = errOf(r)
       if (err) setError(err)
       else {
-        toast.show(`已保存预设 ${editing.name}`)
+        toast.show(t('presets.saved', { name: editing.name }))
         reload()
       }
     })
@@ -149,7 +153,11 @@ export function PresetsSection(props: { remote: TavernRemote }) {
       const r = await remote.importPreset({ name, json })
       if (!r.ok) setError(r.error.message)
       else {
-        toast.show(r.value.warnings.length > 0 ? `已导入，警告：${r.value.warnings.map(String).join('；')}` : '已导入预设')
+        toast.show(
+          r.value.warnings.length > 0
+            ? t('presets.importedWarnings', { warnings: r.value.warnings.map(String).join(t('presets.warningSep')) })
+            : t('presets.imported'),
+        )
         reload()
       }
     } catch (err2) {
@@ -169,7 +177,7 @@ export function PresetsSection(props: { remote: TavernRemote }) {
     const r = await remote.updateSettings({ patch: { defaults } })
     const err = errOf(r)
     if (err) setError(err)
-    else toast.show('已设为新会话默认预设（当前打开的对话请用角色芯片切换）')
+    else toast.show(t('presets.setDefaultDone'))
   }
 
   const exportPreset = async (id: string, name: string) => {
@@ -205,7 +213,7 @@ export function PresetsSection(props: { remote: TavernRemote }) {
 
   const createNew = () => {
     const id = `preset-${Date.now().toString(36)}`
-    setEditing({ name: '新预设', identifier: id, entries: [newEntry(100)] })
+    setEditing({ name: t('presets.newPresetName'), identifier: id, entries: [newEntry(100)] })
   }
 
   const setEntry = (index: number, entry: PresetEntry) => {
@@ -216,16 +224,16 @@ export function PresetsSection(props: { remote: TavernRemote }) {
   }
 
   return (
-    <Section title="提示词预设" description="导入 SillyTavern 预设 JSON（含 extensions.regex_scripts）。新会话默认在「设置」页或卡脚「设为默认」；当前对话用角色芯片切换。已在库中的预设需重新导入才会带上正则。">
+    <Section title={t('section.presets')} description={t('presets.section.desc')}>
       {toast.node}
       <div className="dsh-tavern-toolbar">
         <FileBtn accept=".json" disabled={busy} onFile={(file) => void onImportFile(file)}>
-          导入 SillyTavern 预设 JSON
+          {t('presets.importFile')}
         </FileBtn>
-        <Btn size="md" onClick={createNew}>新建预设</Btn>
-        <Btn size="md" onClick={reload} disabled={busy}>刷新</Btn>
+        <Btn size="md" onClick={createNew}>{t('presets.new')}</Btn>
+        <Btn size="md" onClick={reload} disabled={busy}>{t('action.refresh')}</Btn>
         {items.length >= 5 && (
-          <SearchInput label="搜索预设" value={query} onChange={setQuery} placeholder="搜索预设名 / 标识" width={220} />
+          <SearchInput label={t('presets.searchLabel')} value={query} onChange={setQuery} placeholder={t('presets.searchPlaceholder')} width={220} />
         )}
       </div>
       {state.status === 'loading' && (
@@ -242,12 +250,12 @@ export function PresetsSection(props: { remote: TavernRemote }) {
           <div className="dsh-tavern-emptyIcon">
             <IconFolderOpenOutline16 size={32} />
           </div>
-          <div className="dsh-tavern-emptyTitle">暂无预设</div>
-          <div className="dsh-tavern-emptyDesc">未绑定时使用内建默认预设；也可以导入 SillyTavern 预设 JSON。</div>
+          <div className="dsh-tavern-emptyTitle">{t('presets.empty')}</div>
+          <div className="dsh-tavern-emptyDesc">{t('presets.emptyDesc')}</div>
         </div>
       )}
       {q !== '' && filtered.length === 0 && state.status === 'ready' && (
-        <SearchEmpty what="预设" query={query.trim()} onClear={() => setQuery('')} />
+        <SearchEmpty what={t('presets.noun')} query={query.trim()} onClear={() => setQuery('')} />
       )}
       <div className="dsh-tavern-list" style={{ marginBottom: 12 }}>
         {filtered.map((item) => (
@@ -258,19 +266,19 @@ export function PresetsSection(props: { remote: TavernRemote }) {
             <div className="dsh-tavern-tileMain">
               <div className="dsh-tavern-tileTitleRow">
                 <span className="dsh-tavern-tileName">{item.name}</span>
-                {item.regexCount > 0 ? <Badge>{item.regexCount} 条正则</Badge> : null}
+                {item.regexCount > 0 ? <Badge>{t('presets.regexCount', { count: item.regexCount })}</Badge> : null}
               </div>
               <span className="dsh-tavern-tileSub">{item.id}</span>
             </div>
             <div className="dsh-tavern-tileActions">
-              <IconBtn label="编辑" onClick={() => void open(item.id)}>
+              <IconBtn label={t('action.edit')} onClick={() => void open(item.id)}>
                 <IconEditOutline16 />
               </IconBtn>
-              <IconBtn label="导出 JSON" onClick={() => void exportPreset(item.id, item.name)}>
+              <IconBtn label={t('presets.export')} onClick={() => void exportPreset(item.id, item.name)}>
                 <IconDownloadOutline16 />
               </IconBtn>
-              <Btn size="sm" onClick={() => void setAsDefault(item.id)}>设为默认</Btn>
-              <IconBtn label="删除预设" danger onClick={() => setToDelete(item.id)}>
+              <Btn size="sm" onClick={() => void setAsDefault(item.id)}>{t('presets.setAsDefault')}</Btn>
+              <IconBtn label={t('presets.delete')} danger onClick={() => setToDelete(item.id)}>
                 <IconTrashOutline16 />
               </IconBtn>
             </div>
@@ -279,19 +287,19 @@ export function PresetsSection(props: { remote: TavernRemote }) {
       </div>
       <ConfirmDialog
         open={toDelete !== null}
-        title="删除预设？"
-        description={toDelete ? `确定删除预设 ${toDelete}？` : ''}
-        confirmLabel="删除"
+        title={t('presets.deleteTitle')}
+        description={toDelete ? t('presets.deleteDesc', { id: toDelete }) : ''}
+        confirmLabel={t('action.delete')}
         danger
         onCancel={() => setToDelete(null)}
         onConfirm={() => void remove()}
       />
       {editing && (
         <div className="dsh-tavern-card" style={{ marginBottom: 12 }}>
-          <Field label="名称">
+          <Field label={t('presets.name')}>
             <input className="dsh-tavern-input" style={{ flex: 1 }} value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} />
           </Field>
-          <Field label="标识">
+          <Field label={t('presets.identifier')}>
             <Muted>{editing.identifier}</Muted>
           </Field>
           {(editing.regexScripts?.length ?? 0) > 0 && (
@@ -311,9 +319,9 @@ export function PresetsSection(props: { remote: TavernRemote }) {
             ))}
           </div>
           <SaveBar>
-            <Btn onClick={() => setEditing({ ...editing, entries: [...editing.entries, newEntry(editing.entries.length * 100 + 100)] })}>添加条目</Btn>
-            <Btn disabled={busy} onClick={() => void save()} primary>保存预设</Btn>
-            <Btn onClick={() => setEditing(null)}>关闭</Btn>
+            <Btn onClick={() => setEditing({ ...editing, entries: [...editing.entries, newEntry(editing.entries.length * 100 + 100)] })}>{t('presets.addEntry')}</Btn>
+            <Btn disabled={busy} onClick={() => void save()} primary>{t('presets.save')}</Btn>
+            <Btn onClick={() => setEditing(null)}>{t('action.close')}</Btn>
           </SaveBar>
         </div>
       )}

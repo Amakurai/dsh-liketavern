@@ -1,0 +1,37 @@
+/** 世界书面板（panel/lorebooks.tsx）界面文案。zh 为键全集源；en 必须同键齐全。 */
+export declare const zh: {
+    readonly 'lorebooks.listDesc': "库文件与角色卡内嵌书。点开一本书，按条目开关、改关键词和正文。新会话启用哪本，在「设置」页勾选。";
+    readonly 'lorebooks.editorDesc': "按条目开关与编辑。关掉的条目不会再被扫描命中。改完后记得保存。";
+    readonly 'lorebooks.importJson': "导入世界书 JSON";
+    readonly 'lorebooks.newEmpty': "新建空书";
+    readonly 'lorebooks.searchLabel': "搜索世界书";
+    readonly 'lorebooks.searchPlaceholder': "搜索书名 / 角色名";
+    readonly 'lorebooks.groupEmbedded': "角色卡内嵌";
+    readonly 'lorebooks.groupLibrary': "世界书库";
+    readonly 'lorebooks.badgeEmbedded': "内嵌";
+    readonly 'lorebooks.badgeLibrary': "库";
+    readonly 'lorebooks.fromCharacter': "来自角色「{name}」";
+    readonly 'lorebooks.fromCharacterWithCount': "来自角色「{name}」 · {count} 条";
+    readonly 'lorebooks.libraryFileSub': "独立世界书文件 · JSON";
+    readonly 'lorebooks.editEntries': "编辑条目";
+    readonly 'lorebooks.exportJson': "导出 JSON";
+    readonly 'lorebooks.deleteBook': "删除世界书";
+    readonly 'lorebooks.deleteEmbedded': "删除内嵌世界书";
+    readonly 'lorebooks.emptyTitle': "暂无独立世界书";
+    readonly 'lorebooks.emptyDesc': "导入角色卡或 JSON，也可以新建一本空书。";
+    readonly 'lorebooks.emptyDescEmbeddedAbove': "卡内嵌书见上方分组。";
+    readonly 'lorebooks.confirmDeleteTitle': "删除世界书？";
+    readonly 'lorebooks.confirmDeleteDesc': "确定删除世界书 {name}？此操作不能从设置里撤销。";
+    readonly 'lorebooks.confirmDeleteEmbeddedTitle': "删除内嵌世界书？";
+    readonly 'lorebooks.confirmDeleteEmbeddedDesc': "确定删除角色「{name}」的内嵌世界书{book}？角色卡本身保留，此操作不能从设置里撤销。";
+    readonly 'lorebooks.bookNameSuffix': "（{name}）";
+    readonly 'lorebooks.createTitle': "新建世界书";
+    readonly 'lorebooks.createDesc': "先建一本空书，再在条目列表里添加关键词和正文。";
+    readonly 'lorebooks.create': "创建";
+    readonly 'lorebooks.namePlaceholder': "世界书名称";
+    readonly 'lorebooks.nameRequired': "请填写世界书名称";
+    readonly 'lorebooks.imported': "已导入 {name}（{count} 条）";
+    readonly 'lorebooks.saved': "已保存「{name}」";
+    readonly 'lorebooks.embeddedDeleted': "已删除「{name}」的内嵌世界书";
+};
+export declare const en: Record<keyof typeof zh, string>;

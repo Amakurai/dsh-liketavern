@@ -9,6 +9,7 @@ import { Fragment, useMemo } from 'react'
 import type { ReactNode } from 'react'
 import { JsonBlock, MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives'
 import { stripDisplayMeta } from '../core/displaySanitize.js'
+import { useT } from './i18n.js'
 import { isTavernSession, type UseSessions } from './mode.js'
 import { openChildSession } from './openChild.js'
 import { SpeechBubble } from './speech.js'
@@ -45,10 +46,11 @@ interface TurnTailOwner {
 }
 
 function ReasoningFold(props: { text: string; streaming?: boolean }) {
+  const t = useT()
   if (!props.text.trim()) return null
   return (
     <details className="dsh-tavern-reason">
-      <summary>{props.streaming ? '思考中…' : '思考过程'}</summary>
+      <summary>{props.streaming ? t('assistant.thinking') : t('assistant.thought')}</summary>
       <pre>{props.text}</pre>
     </details>
   )
@@ -64,9 +66,9 @@ export function TavernAssistantNode(props: {
   useTurnData?: (key: string) => unknown
   openFile?: (path: string) => void
   fileMentions?: (owner: TurnTailOwner) => unknown
-  t?: (key: string, vars?: Record<string, unknown>) => string
 }) {
-  const { remote, sessionId, sessions, node, t } = props
+  const { remote, sessionId, sessions, node } = props
+  const t = useT()
   const tavern = isTavernSession(props.useSessions, sessionId)
   const bindingLoader = useLoader(() => remote.getSessionBinding({ sessionId }), [sessionId], tavern)
   const binding = bindingLoader.state.status === 'ready' ? bindingLoader.state.value.binding : null
@@ -96,7 +98,7 @@ export function TavernAssistantNode(props: {
           remote={remote}
           sessionId={sessionId}
           cardId={binding.cardId}
-          name={name || '角色'}
+          name={name || t('assistant.characterFallback')}
           rawText={text}
           streaming={streaming}
           onSwipeGreeting={(index) => {
@@ -108,7 +110,7 @@ export function TavernAssistantNode(props: {
             })
           }}
         />
-        {interrupted && <div className="dsh-tavern-notice">{t?.('message.stopped') ?? '已停止'}</div>}
+        {interrupted && <div className="dsh-tavern-notice">{t('assistant.stopped')}</div>}
       </div>
     )
   }
@@ -122,12 +124,12 @@ function NativeAssistantFallback(props: {
   useTurnData?: (key: string) => unknown
   openFile?: (path: string) => void
   fileMentions?: (owner: TurnTailOwner) => unknown
-  t?: (key: string, vars?: Record<string, unknown>) => string
   streaming: boolean
   interrupted: boolean
   stripMeta?: boolean
 }) {
-  const { node, renderMessageImages, useTurnData, openFile, fileMentions, t, streaming, interrupted, stripMeta } = props
+  const { node, renderMessageImages, useTurnData, openFile, fileMentions, streaming, interrupted, stripMeta } = props
+  const t = useT()
   // fileMentions 是宿主 owner 函数，需按原生 AssistantNodeView 的方式用
   // turn-tail owner 解析成 mentions 再交给 MarkdownText（旧版直接透传函数本体，等于没配）。
   const turn = node.location?.kind === 'turn' || node.location?.kind === 'step' ? node.location.turn : undefined
@@ -156,7 +158,7 @@ function NativeAssistantFallback(props: {
       if (stripMeta) continue
       rendered.push(
         <details key={i} className="dsh-tavern-reason">
-          <summary>{streaming ? (t?.('message.thinking') ?? '思考中…') : (t?.('message.thought') ?? '思考过程')}</summary>
+          <summary>{streaming ? t('assistant.thinking') : t('assistant.thought')}</summary>
           <pre>{block.text}</pre>
         </details>,
       )
@@ -178,14 +180,14 @@ function NativeAssistantFallback(props: {
     } else if (block.kind === 'tool-call') {
       continue
     } else {
-      rendered.push(<JsonBlock key={i} label={t?.('message.unknownBlock') ?? '未知块'} payload={block.block} />)
+      rendered.push(<JsonBlock key={i} label={t('assistant.unknownBlock')} payload={block.block} />)
     }
   }
   return (
     <div>
       {stripMeta ? <ReasoningFold text={node.data.blocks.filter((b) => b.kind === 'reasoning').map((b) => b.text ?? '').join('\n\n')} streaming={streaming} /> : null}
       {rendered}
-      {interrupted ? <span>{t?.('message.stopped') ?? '已停止'}</span> : null}
+      {interrupted ? <span>{t('assistant.stopped')}</span> : null}
     </div>
   )
 }

@@ -14,6 +14,7 @@ import {
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { BINDING_CHANGED_EVENT } from './actions.js'
 import { bindingFromDefaults } from './chip.js'
+import { useT } from './i18n.js'
 import { isTavernSession, type UseSessions } from './mode.js'
 import { TavernSeatChip } from './seatChip.js'
 import type { CharacterDetail, CharacterSummary, SessionBinding, TavernRemote } from './types.js'
@@ -75,6 +76,7 @@ export function TavernHeroCharacter(props: {
   useSessions?: UseSessions
 }) {
   const { remote, sessionId, session } = props
+  const t = useT()
   const tavern = isTavernSession(props.useSessions, sessionId)
   const showHero = tavern && session?.blank === true && session.composerPhase === 'blank'
   const dockRef = useRef<HTMLDivElement | null>(null)
@@ -190,7 +192,7 @@ export function TavernHeroCharacter(props: {
   const detail = detailLoader.state.status === 'ready' ? detailLoader.state.value : null
   const avatar = avatarLoader.state.status === 'ready' ? avatarLoader.state.value.dataUrl : null
   const selected = binding ? characters.find((c) => c.cardId === binding.cardId) : undefined
-  const chipLabel = binding ? (detail?.name ?? selected?.name ?? '角色') : '选择角色卡'
+  const chipLabel = binding ? (detail?.name ?? selected?.name ?? t('hero.characterFallback')) : t('hero.pickCharacter')
   const variants = detail ? greetingVariants(detail) : []
   const greetingIndex = binding?.greetingIndex ?? 0
   const greetingText = detail
@@ -202,7 +204,7 @@ export function TavernHeroCharacter(props: {
   const hasAnyGreeting = variants.some((v) => v.trim() !== '')
   // 头像旁的元信息行：作者 / 版本 / 前三个标签，有才显示。
   const metaParts: string[] = []
-  if (detail?.creator) metaParts.push(`作者 ${detail.creator}`)
+  if (detail?.creator) metaParts.push(t('hero.creator', { name: detail.creator }))
   if (detail?.characterVersion) metaParts.push(`v${detail.characterVersion}`)
   if (detail && detail.tags.length > 0) metaParts.push(detail.tags.slice(0, 3).join(' · '))
 
@@ -238,18 +240,18 @@ export function TavernHeroCharacter(props: {
     setError(null)
     try {
       if (!greetingText.trim() && hasAnyGreeting) {
-        setError('当前开场白为空，请先切换变体')
+        setError(t('hero.error.emptyGreetingVariant'))
         return
       }
       if (!greetingText.trim()) {
-        setError('该角色没有开场白，请直接在下方输入')
+        setError(t('hero.error.noGreetingInput'))
         return
       }
       const entered = await remote.ensureGreeting({ sessionId })
       const enterErr = errOf(entered)
       if (enterErr) setError(enterErr)
       else if (entered.ok && !entered.value.created) {
-        setError('未能写入开场白。会话里已有内容时请直接继续对话。')
+        setError(t('hero.error.enterFailed'))
       }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
@@ -299,13 +301,13 @@ export function TavernHeroCharacter(props: {
         }}
         items={
           characters.length === 0
-            ? [{ id: '__empty__', label: charsLoader.state.status === 'loading' ? '加载角色卡…' : '暂无角色卡', disabled: true }]
+            ? [{ id: '__empty__', label: charsLoader.state.status === 'loading' ? t('hero.loadingCharacters') : t('hero.noCharacters'), disabled: true }]
             : characters.map((c) => ({ id: c.cardId, label: c.name }))
         }
         anchor={
           <TavernSeatChip
             label={chipLabel}
-            title="选择角色卡"
+            title={t('hero.pickCharacter')}
             avatarUrl={avatar}
             open={open}
             disabled={busy}
@@ -356,17 +358,17 @@ export function TavernHeroCharacter(props: {
             </div>
           </div>
           {detailLoader.state.status === 'error' ? (
-            <div className="dsh-tavern-hero-previewText">角色详情加载失败。可重新选择角色，或直接在下方输入。</div>
+            <div className="dsh-tavern-hero-previewText">{t('hero.detailLoadFailed')}</div>
           ) : greetingText ? (
             <div className="dsh-tavern-hero-quote">{greetingText}</div>
           ) : hasAnyGreeting ? (
-            <div className="dsh-tavern-hero-previewText">当前这条开场白为空，可切换变体。</div>
+            <div className="dsh-tavern-hero-previewText">{t('hero.emptyVariantHint')}</div>
           ) : (
-            <div className="dsh-tavern-hero-previewText">该角色没有开场白。可以直接在下方输入。</div>
+            <div className="dsh-tavern-hero-previewText">{t('hero.noGreetingHint')}</div>
           )}
           <div className="dsh-tavern-hero-actions">
             <Btn primary size="md" disabled={busy} onClick={() => void startConversation()}>
-              开始对话
+              {t('hero.start')}
             </Btn>
             {variants.length > 1 && (
               <div className="dsh-tavern-hero-swipe">
@@ -374,7 +376,7 @@ export function TavernHeroCharacter(props: {
                   type="button"
                   className="dsh-tavern-hero-swipeBtn"
                   disabled={busy}
-                  title="上一条开场白"
+                  title={t('hero.prevGreeting')}
                   onClick={() => void swipe(-1)}
                 >
                   <IconChevronLeftOutline14 />
@@ -386,12 +388,12 @@ export function TavernHeroCharacter(props: {
                   type="button"
                   className="dsh-tavern-hero-swipeBtn"
                   disabled={busy}
-                  title="下一条开场白"
+                  title={t('hero.nextGreeting')}
                   onClick={() => void swipe(1)}
                 >
                   <IconChevronRightOutline14 />
                 </button>
-                <span className="dsh-tavern-hero-swipeHint">← → 切换</span>
+                <span className="dsh-tavern-hero-swipeHint">{t('hero.swipeHint')}</span>
               </div>
             )}
           </div>

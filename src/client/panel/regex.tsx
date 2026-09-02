@@ -6,24 +6,25 @@ import { useEffect, useState } from 'react'
 import { IconTrashOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PromptPreset, RegexRule, RegexScope, RegexTiming } from '../../core/types.js'
 import type { TavernRemote } from '../types.js'
+import { t as tOnce, useT } from '../i18n.js'
 import { Badge, Btn, CheckChips, Err, Field, IconBtn, Muted, NullableNumInput, RegexScriptRow, SaveBar, Section, Select, Skeleton, Toggle, errOf, runAsync, useLoader, useToast } from '../util.js'
 
-const SCOPES: { value: RegexScope; label: string }[] = [
-  { value: 'input', label: '用户输入' },
-  { value: 'output', label: 'AI 输出' },
-  { value: 'prompt', label: '发送给模型' },
+const SCOPES: { value: RegexScope; labelKey: string }[] = [
+  { value: 'input', labelKey: 'regex.scope.input' },
+  { value: 'output', labelKey: 'regex.scope.output' },
+  { value: 'prompt', labelKey: 'regex.scope.prompt' },
 ]
-const TIMINGS: { value: RegexTiming; label: string }[] = [
-  { value: 'assemble', label: '组装前' },
-  { value: 'send', label: '发送前' },
-  { value: 'render', label: '渲染前' },
+const TIMINGS: { value: RegexTiming; labelKey: string }[] = [
+  { value: 'assemble', labelKey: 'regex.timing.assemble' },
+  { value: 'send', labelKey: 'regex.timing.send' },
+  { value: 'render', labelKey: 'regex.timing.render' },
 ]
-const SOURCE_LABEL: Record<RegexRule['source'], string> = { user: '用户', card: '角色卡', preset: '预设' }
+const SOURCE_LABEL_KEY: Record<RegexRule['source'], string> = { user: 'regex.source.user', card: 'regex.source.card', preset: 'regex.source.preset' }
 
 function newRule(): RegexRule {
   return {
     id: `rule-${Date.now().toString(36)}`,
-    name: '新规则',
+    name: tOnce('regex.newRuleName'),
     find: '',
     replace: '',
     enabled: true,
@@ -37,39 +38,40 @@ function newRule(): RegexRule {
 }
 
 function RuleEditor(props: { rule: RegexRule; onChange: (r: RegexRule) => void; onDelete: () => void }) {
+  const t = useT()
   const { rule } = props
   const set = (patch: Partial<RegexRule>) => props.onChange({ ...rule, ...patch })
   return (
     <div className="dsh-tavern-entry" style={{ marginBottom: 8 }}>
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '12px 16px 8px' }}>
-        <Toggle checked={rule.enabled} onChange={(enabled) => set({ enabled })} title={rule.enabled ? '关闭此规则' : '启用此规则'} />
+        <Toggle checked={rule.enabled} onChange={(enabled) => set({ enabled })} title={rule.enabled ? t('regex.toggleDisable') : t('regex.toggleEnable')} />
         <input className="dsh-tavern-input" style={{ flex: 1 }} value={rule.name} onChange={(e) => set({ name: e.target.value })} />
-        <Badge>{SOURCE_LABEL[rule.source]}</Badge>
-        <IconBtn label="删除规则" danger onClick={props.onDelete}>
+        <Badge>{t(SOURCE_LABEL_KEY[rule.source])}</Badge>
+        <IconBtn label={t('regex.deleteRule')} danger onClick={props.onDelete}>
           <IconTrashOutline16 />
         </IconBtn>
       </div>
       <div style={{ padding: '2px 16px 14px' }}>
-      <Field label="查找 (find)">
+      <Field label={t('regex.find')}>
         <input className="dsh-tavern-input dsh-tavern-codeFont" style={{ flex: 1 }} value={rule.find} onChange={(e) => set({ find: e.target.value })} />
       </Field>
-      <div className="dsh-tavern-fieldLabel" style={{ margin: '4px 0' }}>替换 (replace)</div>
+      <div className="dsh-tavern-fieldLabel" style={{ margin: '4px 0' }}>{t('regex.replace')}</div>
       <textarea className="dsh-tavern-input dsh-tavern-textarea dsh-tavern-codeFont" style={{ minHeight: 40 }} value={rule.replace} onChange={(e) => set({ replace: e.target.value })} />
       <div className="dsh-tavern-fieldRow" style={{ margin: '8px 0 4px' }}>
         <div className="dsh-tavern-field">
-          <span className="dsh-tavern-fieldLabel">作用域</span>
+          <span className="dsh-tavern-fieldLabel">{t('regex.scope')}</span>
           <CheckChips
-            ariaLabel="作用域"
-            options={SCOPES}
+            ariaLabel={t('regex.scope')}
+            options={SCOPES.map((o) => ({ value: o.value, label: t(o.labelKey) }))}
             selected={rule.scopes}
             onChange={(scopes) => set({ scopes: scopes as RegexScope[] })}
           />
         </div>
         <div className="dsh-tavern-field">
-          <span className="dsh-tavern-fieldLabel">时机</span>
+          <span className="dsh-tavern-fieldLabel">{t('regex.timing')}</span>
           <CheckChips
-            ariaLabel="时机"
-            options={TIMINGS}
+            ariaLabel={t('regex.timing')}
+            options={TIMINGS.map((o) => ({ value: o.value, label: t(o.labelKey) }))}
             selected={rule.timing}
             onChange={(timing) => set({ timing: timing as RegexTiming[] })}
           />
@@ -77,20 +79,20 @@ function RuleEditor(props: { rule: RegexRule; onChange: (r: RegexRule) => void; 
       </div>
       <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: 12, alignItems: 'center' }}>
         <label>
-          最小深度 <NullableNumInput value={rule.minDepth} width={64} onChange={(v) => set({ minDepth: v })} />
+          {t('regex.minDepth')} <NullableNumInput value={rule.minDepth} width={64} onChange={(v) => set({ minDepth: v })} />
         </label>
         <label>
-          最大深度 <NullableNumInput value={rule.maxDepth} width={64} onChange={(v) => set({ maxDepth: v })} />
+          {t('regex.maxDepth')} <NullableNumInput value={rule.maxDepth} width={64} onChange={(v) => set({ maxDepth: v })} />
         </label>
         <label>
-          宏展开{' '}
+          {t('regex.macroExpand')}{' '}
           <Select
             value={String(rule.substituteRegex)}
             onChange={(v) => set({ substituteRegex: Number(v) as RegexRule['substituteRegex'] })}
             options={[
-              { value: '0', label: '不展开' },
-              { value: '1', label: '原样代入' },
-              { value: '2', label: '转义代入' },
+              { value: '0', label: t('regex.substitute.none') },
+              { value: '1', label: t('regex.substitute.raw') },
+              { value: '2', label: t('regex.substitute.escaped') },
             ]}
           />
         </label>
@@ -101,6 +103,7 @@ function RuleEditor(props: { rule: RegexRule; onChange: (r: RegexRule) => void; 
 }
 
 export function RegexSection(props: { remote: TavernRemote }) {
+  const t = useT()
   const { remote } = props
   const { state, reload } = useLoader(() => remote.listRegexRules({}), [])
   const [rules, setRules] = useState<RegexRule[] | null>(null)
@@ -150,8 +153,8 @@ export function RegexSection(props: { remote: TavernRemote }) {
       setError(err)
       setPresetDrafts(drafts)
     } else {
-      const name = script.scriptName?.trim() || `预设正则 ${si + 1}`
-      toast.show(disabled ? `已关闭「${name}」` : `已启用「${name}」`)
+      const name = script.scriptName?.trim() || t('util.regex.unnamed', { index: si + 1 })
+      toast.show(disabled ? t('regex.toggledOff', { name }) : t('regex.toggledOn', { name }))
     }
   }
 
@@ -160,15 +163,15 @@ export function RegexSection(props: { remote: TavernRemote }) {
       const r = await remote.saveRegexRules({ rules: next })
       const err = errOf(r)
       if (err) setError(err)
-      else toast.show(`已保存 ${next.length} 条规则`)
+      else toast.show(t('regex.saved', { count: next.length }))
     })
 
   const current = rules ?? []
   return (
-    <Section title="正则脚本">
+    <Section title={t('section.regex')}>
       {toast.node}
       <Muted>
-        对话展示会自动收起 UpdateVariable、JSONPatch 等机读标签，不依赖预设是否带了正则。上方是你额外要改写展示或入模的规则；下方列出预设随带的正则，可直接开关。
+        {t('regex.desc')}
       </Muted>
       {state.status === 'loading' && (
         <>
@@ -195,26 +198,26 @@ export function RegexSection(props: { remote: TavernRemote }) {
           ))}
           {current.length === 0 && (
             <div className="dsh-tavern-empty is-compact">
-              <div className="dsh-tavern-emptyTitle">暂无自定义规则</div>
-              <div className="dsh-tavern-emptyDesc">点「新建规则」添加展示或入模的改写规则。</div>
+              <div className="dsh-tavern-emptyTitle">{t('regex.emptyTitle')}</div>
+              <div className="dsh-tavern-emptyDesc">{t('regex.emptyDesc')}</div>
             </div>
           )}
           <SaveBar>
-            <Btn onClick={() => setRules([...current, newRule()])}>新建规则</Btn>
-            <Btn disabled={busy} onClick={() => void save(current)} primary>保存全部</Btn>
+            <Btn onClick={() => setRules([...current, newRule()])}>{t('regex.new')}</Btn>
+            <Btn disabled={busy} onClick={() => void save(current)} primary>{t('regex.saveAll')}</Btn>
             <Btn
               onClick={() => {
                 setRules(null)
                 reload()
               }}
             >
-              放弃更改并刷新
+              {t('regex.discard')}
             </Btn>
           </SaveBar>
         </>
       )}
 
-      <div className="dsh-tavern-groupHead">预设附带</div>
+      <div className="dsh-tavern-groupHead">{t('regex.presetHead')}</div>
       {presetRegex.state.status === 'loading' && (
         <>
           <Skeleton height={56} />
@@ -223,12 +226,12 @@ export function RegexSection(props: { remote: TavernRemote }) {
       )}
       {presetRegex.state.status === 'error' && <Err message={presetRegex.state.message} />}
       {presetDrafts !== null && presetDrafts.length === 0 && (
-        <Muted>没有预设携带正则。预设 JSON 里 extensions.regex_scripts 会随导入带进来，可在「预设」页查看。</Muted>
+        <Muted>{t('regex.noPresetRegex')}</Muted>
       )}
       {(presetDrafts ?? []).map((preset, pi) => (
         <div key={preset.identifier}>
           <div className="dsh-tavern-fieldLabel" style={{ margin: '12px 0 6px' }}>
-            {preset.name?.trim() || preset.identifier}（{preset.regexScripts!.length} 条）
+            {t('regex.presetCount', { name: preset.name?.trim() || preset.identifier, count: preset.regexScripts!.length })}
           </div>
           <div className="dsh-tavern-list">
             {preset.regexScripts!.map((s, si) => (

@@ -16,6 +16,7 @@ declare module 'react' {
   export function useMemo<T>(factory: () => T, deps: readonly unknown[]): T
   export function useCallback<T>(fn: T, deps: readonly unknown[]): T
   export function useRef<T>(initial: T): { current: T }
+  export function useSyncExternalStore<T>(subscribe: (onStoreChange: () => void) => () => void, getSnapshot: () => T): T
   export const Fragment: any
   const defaultExport: any
   export default defaultExport

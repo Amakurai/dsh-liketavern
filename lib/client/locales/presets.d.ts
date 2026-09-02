@@ -1,0 +1,37 @@
+/** 提示词预设面板（panel/presets.tsx）界面文案。zh 为键全集源；en 必须同键齐全（test/i18n.test.ts 校验）。 */
+export declare const zh: {
+    readonly 'presets.section.desc': "导入 SillyTavern 预设 JSON（含 extensions.regex_scripts）。新会话默认在「设置」页或卡脚「设为默认」；当前对话用角色芯片切换。已在库中的预设需重新导入才会带上正则。";
+    readonly 'presets.importFile': "导入 SillyTavern 预设 JSON";
+    readonly 'presets.new': "新建预设";
+    readonly 'presets.searchLabel': "搜索预设";
+    readonly 'presets.searchPlaceholder': "搜索预设名 / 标识";
+    readonly 'presets.noun': "预设";
+    readonly 'presets.empty': "暂无预设";
+    readonly 'presets.emptyDesc': "未绑定时使用内建默认预设；也可以导入 SillyTavern 预设 JSON。";
+    readonly 'presets.regexCount': "{count} 条正则";
+    readonly 'presets.export': "导出 JSON";
+    readonly 'presets.setAsDefault': "设为默认";
+    readonly 'presets.delete': "删除预设";
+    readonly 'presets.deleteTitle': "删除预设？";
+    readonly 'presets.deleteDesc': "确定删除预设 {id}？";
+    readonly 'presets.saved': "已保存预设 {name}";
+    readonly 'presets.imported': "已导入预设";
+    readonly 'presets.importedWarnings': "已导入，警告：{warnings}";
+    readonly 'presets.warningSep': "；";
+    readonly 'presets.setDefaultDone': "已设为新会话默认预设（当前打开的对话请用角色芯片切换）";
+    readonly 'presets.newPresetName': "新预设";
+    readonly 'presets.name': "名称";
+    readonly 'presets.identifier': "标识";
+    readonly 'presets.addEntry': "添加条目";
+    readonly 'presets.save': "保存预设";
+    readonly 'presets.newEntryName': "新条目";
+    readonly 'presets.entry.disable': "关闭此条目";
+    readonly 'presets.entry.enable': "启用此条目";
+    readonly 'presets.entry.depth': "深度";
+    readonly 'presets.entry.order': "顺序";
+    readonly 'presets.entry.marker': "占位符";
+    readonly 'presets.entry.content': "内容";
+    readonly 'presets.entry.delete': "删除条目";
+    readonly 'presets.regexList.label': "随预设导入的正则（{count} 条；开关随「保存预设」生效，重新导入以文件为准）";
+};
+export declare const en: Record<keyof typeof zh, string>;

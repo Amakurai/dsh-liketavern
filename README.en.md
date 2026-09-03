@@ -1,8 +1,14 @@
+<div align="center">
+
 # dsh-liketavern
+
+**A DeepSeek Harness (dsh) plugin — turns `dsh web` into a SillyTavern-style roleplay frontend**
 
 [中文](./README.md) | English
 
-A DeepSeek Harness (dsh) plugin that turns `dsh web` into a SillyTavern-style roleplay frontend.
+[Features](#features) • [Installation](#installation) • [Usage](#usage) • [Platform Limitations](#platform-limitations) • [Development](#development)
+
+</div>
 
 Character cards (V1/V2/V3, PNG/JSON), prompt presets, lorebooks (world info), personas, regex scripts, BM25 long-term memory, a world-state delta layer, and rollback-able floor operations — all built on the dsh agent runtime instead of a separate message channel.
 

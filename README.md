@@ -1,8 +1,14 @@
+<div align="center">
+
 # dsh-liketavern
+
+**DeepSeek Harness（dsh）插件 —— 把 `dsh web` 变成 SillyTavern 式的角色扮演前端**
 
 中文 | [English](./README.en.md)
 
-DeepSeek Harness（dsh）插件，把 `dsh web` 变成 SillyTavern 式的角色扮演前端。
+[功能](#功能) • [安装](#安装) • [使用](#使用) • [平台限制](#平台限制) • [开发](#开发)
+
+</div>
 
 角色卡（V1/V2/V3，PNG/JSON）、提示词预设、世界书、人设、正则、BM25 长期记忆、世界状态变化层、可回滚的楼层操作——全部建立在 dsh 的 agent 运行时之上，不另起发信通道。
 

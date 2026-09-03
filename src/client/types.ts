@@ -83,7 +83,7 @@ export interface CharacterInspect {
 /** 设置命名空间 dsh-tavern 的原始（schemastery 解析后）形状；maxTokens 为数字，0 = 不限。 */
 export interface TavernSettings {
   /** 前端界面语言；默认 en，设置页可切 zh。 */
-  locale: 'en' | 'zh'
+  locale: 'auto' | 'en' | 'zh'
   sampling: {
     temperature: number
     topP: number
@@ -272,6 +272,9 @@ export interface SlotsLike {
 
 export interface LocaleLike {
   register(ns: string, dicts: { zh: Record<string, string>; en: Record<string, string> }): () => void
+  /** 宿主界面语言快照（0.1.2 的 LocaleRuntime）；auto 档据此跟随。 */
+  getSnapshot?(): { active: string }
+  subscribe?(fn: () => void): () => void
 }
 
 /** 插件入口所见的最小 Context。 */
@@ -283,11 +286,11 @@ export interface ClientContext {
   sessions: {
     open(id: string): void
     refresh?: () => Promise<void>
-    /** 会话列表快照 store（含 current / agentPreset）；seatWatch 与 assistant-step 显隐据此判断。 */
+    /** 会话列表快照 store（含 current；预设 id 在 projectionValues.agentPreset）；seatWatch 与 assistant-step 显隐据此判断。 */
     list: {
       getSnapshot(): {
         current: string | undefined
-        byId: Record<string, { agentPreset?: string } | undefined>
+        byId: Record<string, { projectionValues?: { agentPreset?: string | null } } | undefined>
       }
       subscribe(fn: () => void): () => void
     }
@@ -295,8 +298,8 @@ export interface ClientContext {
     scope?(id: string): unknown
     sessionOf?(ctx: unknown): { rename(title: string): Promise<unknown> } | undefined
   }
-  /** 工作区运行时：startSession 即侧边栏「新对话」动作（复用/创建空白会话并打开）。 */
-  workspaces: { startSession(workspaceId?: string): void }
+  /** 工作区运行时；「新对话」动作 0.1.2 起迁到 uiWorkspace 服务（seatWatch 经 ctx.get 读取）。 */
+  workspaces: { startSession?(workspaceId?: string): void }
   effect(fn: () => void | (() => void), label?: string): void
   /** cordis reflect.get：不做 inject 检查，用于读取自行 $mount 的 remote.<ns> 子服务。 */
   get(name: string): unknown

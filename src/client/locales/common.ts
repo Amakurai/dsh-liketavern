@@ -43,6 +43,9 @@ export const zh = {
   'common.noMatch': '没有匹配的{what}',
   'common.noMatchDesc': '「{query}」没有命中任何条目，可换个关键词或',
   'common.unlimited': '不限',
+  'common.copy': '复制',
+  'common.copied': '已复制',
+  'common.markdownFootnotes': '脚注',
 } as const
 
 export const en: Record<keyof typeof zh, string> = {
@@ -84,4 +87,7 @@ export const en: Record<keyof typeof zh, string> = {
   'common.noMatch': 'No matching {what}',
   'common.noMatchDesc': '"{query}" matched nothing. Try another keyword or',
   'common.unlimited': 'Unlimited',
+  'common.copy': 'Copy',
+  'common.copied': 'Copied',
+  'common.markdownFootnotes': 'Footnotes',
 }

@@ -4,6 +4,8 @@
 
 **A DeepSeek Harness (dsh) plugin — turns `dsh web` into a SillyTavern-style roleplay frontend**
 
+**Built for dsh `0.1.2-rc.1`**
+
 [中文](./README.md) | English
 
 [Features](#features) • [Installation](#installation) • [Usage](#usage) • [Platform Limitations](#platform-limitations) • [Development](#development)
@@ -11,6 +13,8 @@
 </div>
 
 Character cards (V1/V2/V3, PNG/JSON), prompt presets, lorebooks (world info), personas, regex scripts, BM25 long-term memory, a world-state delta layer, and rollback-able floor operations — all built on the dsh agent runtime instead of a separate message channel.
+
+The experience is close to native dsh: prompts flow through the host's system-prompt waterfall (with stable sections aligned to DeepSeek's prefix cache), floor branches are real dsh session forks, and every UI piece hangs on the host's native slots using the same UI primitives and design tokens, with the interface language following the host by default. Session lineage breadcrumbs, workspaces, schedules, and interruption recovery all keep working in Tavern sessions — it feels like a built-in dsh mode rather than a bolted-on frontend.
 
 ## Features
 
@@ -26,7 +30,7 @@ Character cards (V1/V2/V3, PNG/JSON), prompt presets, lorebooks (world info), pe
 ## Requirements
 
 - Node.js ≥ 24
-- dsh CLI `0.1.1-rc.2` installed, with `dsh web` run at least once (the first run initializes the `web` profile)
+- dsh CLI `0.1.2-rc.1` installed, with `dsh web` run at least once (the first run initializes the `web` profile)
 - `pnpm` on PATH (`dsh plugin` manages profile plugin dependencies through pnpm internally)
 
 ## Installation
@@ -50,7 +54,7 @@ Two notes (per the official docs, [Packaging and installing plugins](https://dee
 - **The install surface is deliberately tiny**: the only runtime dependency is `zod`; all `@deepseek-ai/*` packages are peer dependencies satisfied by the dsh host already in the profile. Installing this plugin does not pull the dsh host tree or its native dependencies (`node-pty` and friends), so it should not trip pnpm's build-script blocking (`ERR_PNPM_IGNORED_BUILDS`). If you still hit it, that's a one-time authorization for dsh's own dependencies in the profile: add the printed package names under `allowBuilds` in `~/.dsh/profiles/web/pnpm-workspace.yaml` as the dsh error suggests, then re-run the install.
 - A tarball also works: the author runs `npm pack` (its `prepack` builds first), and the user runs `dsh plugin --profile web add ./dsh-liketavern-0.1.1.tgz`.
 
-Version compatibility: this package pins dsh `0.1.1-rc.2` via peerDependencies. dsh is in pre-release — after upgrading dsh, install the plugin version built for it. See [CHANGELOG.md](./CHANGELOG.md) for the version mapping.
+Version compatibility: this package pins dsh `0.1.2-rc.1` via peerDependencies. dsh is in pre-release — after upgrading dsh, install the plugin version built for it. See [CHANGELOG.md](./CHANGELOG.md) for the version mapping.
 
 Runtime data (cards, memories, session bindings) lives in `$DSH_HOME/dsh-tavern/`, outside this repository.
 

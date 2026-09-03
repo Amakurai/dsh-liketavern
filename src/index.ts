@@ -5,7 +5,6 @@
  */
 import type { Context } from '@deepseek-ai/cordis'
 import type { Session } from '@deepseek-ai/dsh-session'
-import { settingsNamespace } from '@deepseek-ai/dsh-settings'
 import '@deepseek-ai/dsh-typert-registry'
 import { TAVERN_NS, TavernConfigSchema, resolveConfig } from './node/config.js'
 import { ensureGreeting, retireGreetingOnlyBlankSession } from './node/floors.js'
@@ -65,7 +64,7 @@ async function onTurnEnd(state: TavernState, sessionId: string): Promise<void> {
 }
 
 export async function apply(ctx: Context): Promise<void> {
-  const scope = ctx.settings.register(settingsNamespace(TAVERN_NS), TavernConfigSchema, { applies: 'live' })
+  const scope = ctx.settings.register(TAVERN_NS, TavernConfigSchema, { applies: 'live' })
   const state = new TavernState(tavernPaths(), () => resolveConfig(scope.get()))
   await state.init()
 

@@ -323,7 +323,7 @@ export class TavernService extends TypertRemoteService {
 
   async getSessionBinding(request: { sessionId: string }): Promise<unknown> {
     const session = this.ctx.sessions.get(request.sessionId as Session['id'])
-    const canSwipeGreeting = Boolean(session && !session.events.some((e) => e.type === 'user/message'))
+    const canSwipeGreeting = Boolean(session && !session.snapshotEvents().some((e) => e.type === 'user/message'))
     const binding = await this.state.loadBinding(request.sessionId)
     if (!binding) return { binding: null, userName: DEFAULT_USER_NAME, canSwipeGreeting: false }
     const persona = await this.state.resolvePersona(binding.personaId)
@@ -382,7 +382,7 @@ export class TavernService extends TypertRemoteService {
     const settings = this.settingsScope.get()
     const whitelist = [...settings.cardNetworkWhitelist]
     const session = this.ctx.sessions.get(request.sessionId as Session['id'])
-    const canSwipeGreeting = Boolean(session && !session.events.some((e) => e.type === 'user/message'))
+    const canSwipeGreeting = Boolean(session && !session.snapshotEvents().some((e) => e.type === 'user/message'))
     const binding = await this.state.loadBinding(request.sessionId)
     if (!binding) {
       const presented = presentRenderedOutput(text, settings.interactiveCards)

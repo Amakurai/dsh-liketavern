@@ -64,7 +64,12 @@ export function installTavernSeatWatch(ctx: ClientContext): () => void {
       coolingDown = false
     }, 1500)
     try {
-      ctx.workspaces.startSession()
+      // 0.1.2 起「新对话」动作从 ctx.workspaces 迁到 ctx.uiWorkspace（IWorkspaces 已移除
+      // startSession）；旧宿主回退 workspaces。两者都缺席时静默，用户仍可手动点。
+      // 保持方法调用形态（宿主控制器方法依赖 this）。
+      const uiWorkspace = ctx.get('uiWorkspace') as { startSession?: () => void } | undefined
+      if (uiWorkspace && typeof uiWorkspace.startSession === 'function') uiWorkspace.startSession()
+      else ctx.workspaces.startSession?.()
     } catch {
       // 与宿主「新对话」一致：失败静默（无工作区/基线未就绪），用户仍可手动点。
     }

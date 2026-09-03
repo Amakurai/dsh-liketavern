@@ -28,5 +28,5 @@ export function greetingTurnEvents(text: string): SessionEvent[] {
   )
   detached.append('step/end', { turn: 1, step: 1 })
   detached.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
-  return [...detached.events]
+  return [...detached.snapshotEvents()]
 }

@@ -6,8 +6,8 @@ import z from '@deepseek-ai/schemastery';
 import { type SamplingSettings, type WorldInfoGlobalSettings } from '../core/types.js';
 export declare const TAVERN_NS = "dsh-tavern";
 export declare const TavernConfigSchema: z<Schemastery.ObjectS<{
-    /** 前端界面语言（面板/芯片/英雄区/操作条等本插件 UI 文案）；默认英文，设置页可切中文。 */
-    locale: z<"en" | "zh", "en" | "zh">;
+    /** 前端界面语言（面板/芯片/英雄区/操作条等本插件 UI 文案）；auto（默认）跟随宿主界面语言，设置页可锁定中/英。 */
+    locale: z<"auto" | "en" | "zh", "auto" | "en" | "zh">;
     sampling: z<Schemastery.ObjectS<{
         /** 0–2，默认 1（DeepSeek 官方）。thinking 模式下不生效。 */
         temperature: z<number, number>;
@@ -127,8 +127,8 @@ export declare const TavernConfigSchema: z<Schemastery.ObjectS<{
     /** 触发日志保留的最大条数（每会话最近一次组装的明细）。 */
     triggerLogMax: z<number, number>;
 }>, Schemastery.ObjectT<{
-    /** 前端界面语言（面板/芯片/英雄区/操作条等本插件 UI 文案）；默认英文，设置页可切中文。 */
-    locale: z<"en" | "zh", "en" | "zh">;
+    /** 前端界面语言（面板/芯片/英雄区/操作条等本插件 UI 文案）；auto（默认）跟随宿主界面语言，设置页可锁定中/英。 */
+    locale: z<"auto" | "en" | "zh", "auto" | "en" | "zh">;
     sampling: z<Schemastery.ObjectS<{
         /** 0–2，默认 1（DeepSeek 官方）。thinking 模式下不生效。 */
         temperature: z<number, number>;
@@ -257,7 +257,7 @@ export interface TavernSessionDefaults {
     characterLorebookId: string;
 }
 export interface TavernConfig {
-    locale: 'en' | 'zh';
+    locale: 'auto' | 'en' | 'zh';
     sampling: SamplingSettings;
     worldInfo: WorldInfoGlobalSettings;
     memory: {

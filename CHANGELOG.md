@@ -2,6 +2,19 @@
 
 本插件与 dsh 宿主版本一一绑定（peerDependency 锁定精确版本），升级 dsh 前请先确认有适配的插件版本。
 
+## 0.1.5（2026-09-03）
+
+适配 dsh `0.1.2-rc.1`。
+
+- 界面：语言设置新增「跟随宿主」档并设为默认——auto 档按宿主界面语言自动切换中/英文（0.1.2 的 LocaleRuntime 快照 + 订阅），仍可在 Tavern 设置页手动锁定中/英。
+
+- 宿主 API 迁移：`Session.events` 数组属性被按需读取 API 取代，楼层定位/前缀切片/开场白判定全量改走 `snapshotEvents()`；fork 元数据从 `header.seedLength` 改为 `meta.isSeeded` + 顶层 `inheritedEventCount`（与官方 `SessionStore.fork` 同形）；`resolveSessionPreset` 帮手移除，会话预设判定改走官方 `agentPreset` 会话投影（`sessionPresetId`，投影缺席时手动折叠 header + `agent-preset/selected` 兜底）；`settingsNamespace()` 帮手移除（`settings.register` 直接吃字面量）；`JsonValue` 改从 `@deepseek-ai/dsh-util-values` 导入。
+- 界面修复（0.1.2 破坏点）：宿主 `MarkdownText` 的 `labels` 变为必填 prop，缺了渲染代码围栏即崩；对话正文与角色发言条统一经 `useMarkdownLabels()` 传本插件字典（复制/已复制/脚注）。
+- 界面修复：「新对话」动作从 `ctx.workspaces.startSession` 迁到 `ctx.uiWorkspace.startSession`；seatWatch 补偿器双路径兜底，无会话 hero 选「Tavern 模式」自动开会话在新宿主上恢复可用。
+- 界面修复（0.1.2 破坏点，此前导致选卡英雄区/会话芯片/楼层操作条/assistant 排版全部不显示）：会话列表摘要 `SessionSummary` 顶层不再有 `agentPreset` 字段，Tavern 模式判定改读 `projectionValues.agentPreset`（此前恒判为非 Tavern，全部会话面 UI 沉默）；`SessionSnapshot.composerPhase` 移除，英雄区「未动过输入框」判定改用 `blank && !promptAttempted`（原相位机的 blank→engaging 边粘性标记）。
+- 仓库：`dsh.client.inject` 移除（`dsh-client-runtime` 包已删，client bundle 只 require 宿主 seed 词）；client external 清理掉 0.1.2 已不再提供或未引用的三个包。
+- 仓库（dev 环境）：0.1.2 起 dsh 把大量运行时依赖改写成 peer（`legacy-peer-deps` 不会自动安装），devDependencies 补齐七个宿主内部基础包（`dsh-jobs` / `dsh-session-persistence` / `dsh-session-query` / `dsh-util-time` / `dsh-util-workspace-path` / `dsh-hook-protocol` / `dsh-sdk-protocol`），cordis / cordis-plugin-* / schemastery 跟随宿主升到 4.0.2 / 1.0.2·1.0.7·1.0.3 / 3.18.2（peerDependencies 同步）；不补会在宿主 boot 时 `Cannot find package` 失败。
+
 ## 0.1.4（2026-09-03）
 
 适配 dsh `0.1.1-rc.2`。

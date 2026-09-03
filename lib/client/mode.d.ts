@@ -8,7 +8,9 @@ export { TAVERN_AGENT_PRESET };
 export type SessionsListState = {
     current?: string;
     byId: Record<string, {
-        agentPreset?: string;
+        projectionValues?: {
+            agentPreset?: string | null;
+        };
     } | undefined>;
 };
 export type UseSessions = (selector: (state: SessionsListState) => unknown) => unknown;

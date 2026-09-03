@@ -13,7 +13,7 @@ dsh-liketavern 是 DeepSeek Harness（dsh）插件，把 `dsh web` 做成 SillyT
 3. **楼层事务**：某层触发的写入（记忆/世界状态/定时器）走 WAL（楼层号+序号）可逆序回滚。例外：idle 期 `runMaintenance` 的记忆压缩（`floor=null` 不记 WAL）是无损整理，回退不撤。
 4. **不复制 ST 的一次性输入**：提示词走 dsh system-prompt 瀑布（稳定段 + runtime context），不在前端拼包直发，绝不用 `complete` 段盖掉工具前缀。
 
-实测环境：dsh `0.1.1-rc.2`（`@deepseek-ai/*` 同版本）、Node 24、Windows（CI 在 ubuntu）。rc.2 特有宿主行为见「宿主版本注记与升级」。
+实测环境：dsh `0.1.2-rc.1`（`@deepseek-ai/*` 同版本）、Node 24、Windows（CI 在 ubuntu）。本版特有宿主行为见「宿主版本注记与升级」。
 
 - 查平台行为先看官方文档 <https://deepseek-harness.github.io/deepseek-harness/>；宿主机制（slot、profile、patch、typert、system-prompt 瀑布等）以文档和宿主源码为准，不凭记忆猜。
 - 查宿主源码读 `node_modules/@deepseek-ai/*/` 的 `lib/` 与 `.d.ts`（本体与 peer 包版本可能不同，先看各包 `package.json`）。
@@ -25,10 +25,10 @@ dsh-liketavern 是 DeepSeek Harness（dsh）插件，把 `dsh web` 做成 SillyT
 - 宿主是 dsh（cordis 容器），分三面：
   - **host**（`src/index.ts`）：设置命名空间 `dsh-tavern`、数据目录初始化、agent 预设安装、`TavernService`、typert remote 注册、听 `session/event` 维护楼层 WAL 与每 turn/step 缓存。
   - **agent**（`src/agent.ts`）：`system-prompt/assemble` 写稳定段 `tavern:standing` 与 runtime context `tavern:turn`；`agent/pre-step` 记 step；`agent/request` 合采样并把 thinking 映射成 `reasoningEffort`；注册 7 个模型工具；idle 时 `runMaintenance` 压缩记忆。
-  - **client**（`src/client/`）：浏览器 React UI，五块 slot（设置 `settings.section`、助手操作条、会话头芯片、新会话英雄区 `conversation.input.dock`、助手排版 `conversation.chat.node`）。remote 经 `ctx.remote.$mount(TYPERT_REMOTE)` 挂，调用用 `ctx.get('remote.tavern')`。rc.2 起图片走 `renderMessageImages({ images, align })`；`fileMentions` 是 owner 函数，用 turn-tail owner 解析后再传给 MarkdownText。
+  - **client**（`src/client/`）：浏览器 React UI，五块 slot（设置 `settings.section`、助手操作条、会话头芯片、新会话英雄区 `conversation.input.dock`、助手排版 `conversation.chat.node`）。remote 经 `ctx.remote.$mount(TYPERT_REMOTE)` 挂，调用用 `ctx.get('remote.tavern')`。图片走 owner props 的 `renderMessageImages({ images, align })`（0.1.2 起 `loadImage` 不再传给 keyed 渲染器）；`fileMentions` 是 owner 函数，用 turn-tail owner 解析后再传给 MarkdownText；0.1.2 起 MarkdownText 的 `labels` 为必填，经 `useMarkdownLabels()` 取本插件字典。
 - **remote 契约**（`src/remote.ts`）：方法返回裸业务值、失败抛错，`{ ok, value|error }` 信封由 gateway 生成。加删改一个方法必须三处同步：`src/remote.ts` 的 `METHODS`、`src/node/service.ts` 实现、`src/client/types.ts` 的 `TavernRemote` 镜像——漏改就编译不过，这是设计好的保险。
 - 运行时依赖只有 `zod`；`@deepseek-ai/*` 走 peerDependency 由宿主提供；开发依赖用公开 npm 精确版本。禁止 `file:`、本机绝对路径、junction/符号链接依赖。bundle 里平台模块一律 external。
-- 设置用 schemastery（`src/node/config.ts`），命名空间 `dsh-tavern`，`applies: 'live'`。rc.2 起宿主通用设置页也能看到/改这些键（宿主行为），插件面板仍是主入口，不要为此改面板。
+- 设置用 schemastery（`src/node/config.ts`），命名空间 `dsh-tavern`，`applies: 'live'`。宿主通用设置页也能看到/改这些键（宿主行为，rc.2 起、0.1.2 仍无命名空间白名单），插件面板仍是主入口，不要为此改面板。
 
 ## 提示词通道与 agent 循环
 
@@ -132,7 +132,7 @@ src/
 
 1. 采样只透传 `temperature` / `maxTokens` / `stop` 和模型公布的 `reasoningEffort`；`top_p` 与 penalty 到不了模型，设置面板仅作记录。
 2. 深度注入（@D / depth_prompt / 预设 in-chat）插不进会话日志中间：触发型（含本轮宏）并入 turn 快照尾部，静态的并入 standing（钉死）。预览才是完整 ST 序列（不含 live playbook）。
-3. 会话日志不可删。重新生成/回退/编辑 = fork 前缀 + WAL 回滚 + 子会话续跑，成功后 UI 打开分支会话并用宿主 `ISessions` 的 `scope → sessionOf → rename` 写分支标题（旧宿主缺这条路径则跳过）。编辑 assistant 正文只换 seed 里的该条消息、不续跑。例外：续写（`continueFloor`）不改历史不 fork，直接 followup 合成指令。同一父会话 + 同一楼层 fork 出的分支互为兄弟：forkAt 记 `siblings.json`，操作条给 ‹ n/m › 导航（`getFloorSiblings`，读时过滤已删分支）。rc.2 起会话头另有宿主原生面包屑（`meta.parentSession` 世系，`conversation.session.header.lineage`）：会话级世系，与楼层级 ‹ n/m › 互补，不要替换那个 slot。
+3. 会话日志不可删。重新生成/回退/编辑 = fork 前缀 + WAL 回滚 + 子会话续跑，成功后 UI 打开分支会话并用宿主 `ISessions` 的 `scope → sessionOf → rename` 写分支标题（旧宿主缺这条路径则跳过）。编辑 assistant 正文只换 seed 里的该条消息、不续跑。例外：续写（`continueFloor`）不改历史不 fork，直接 followup 合成指令。同一父会话 + 同一楼层 fork 出的分支互为兄弟：forkAt 记 `siblings.json`，操作条给 ‹ n/m › 导航（`getFloorSiblings`，读时过滤已删分支）。会话头另有宿主原生面包屑（`meta.parentSession` 世系，`conversation.session.header.lineage`，0.1.2 occupant 为 client-ui-subagent）：会话级世系，与楼层级 ‹ n/m › 互补，不要替换那个 slot。
 4. 操作条 slot 只在 assistant 消息上，且宿主只对 finalized 消息挂 slot——被中断的楼层天然没有操作条，由 chat.node 侧补挂 `TavernInterruptedFloorActions`（`src/client/actions.tsx` 末尾；兄弟导航/重新生成/回退），这种楼层 messageId 不可用于定位，改为传 `turn`（`resolveFloorTurn`，`src/node/floors.ts`；`regenerate`/`rollbackToFloor`/`getFloorSiblings` 的 remote schema 均带可选 `turn`）。「编辑用户消息」/续写/代答都挂在 assistant 楼层。dsh 输入区没有插件可写 API，impersonate 结果只能复制到剪贴板。
 5. 同一角色卡多会话并发写入会交错（工作区与 WAL 以卡为单位共享）。已知边界，不要去「修」。
 6. 角色选择和开场白预览只在 agent 预设为 `tavern`（`src/client/mode.ts`）时显示。
@@ -146,20 +146,24 @@ src/
 - **改 standing 纪律文案或段布局**：递增 `STANDING_PIN_VERSION`（`src/core/standingPin.ts`）。
 - **任何 `src/` 改动**：先 `npm run build` 再提交，CI 会拦过期产物。
 
-## 宿主版本注记与升级（当前 dsh 0.1.1-rc.2）
+## 宿主版本注记与升级（当前 dsh 0.1.2-rc.1）
 
-以下行为绑定 rc.2，升级宿主时逐条复查（以官方文档和宿主源码为准）：
+以下行为绑定 0.1.2-rc.1，升级宿主时逐条复查（以官方文档和宿主源码为准）：
 
-1. chat.node owner props 的 loadImage/renderMessageImages/fileMentions 变化，见「技术栈与三面运行」client 条。
-2. web 设置 RPC 的命名空间白名单已移除，宿主通用设置页也能看到/改 `dsh-tavern` 的键——宿主行为，不要为此改插件面板。
-3. 会话头宿主原生面包屑（`conversation.session.header.lineage`）与楼层级 ‹ n/m › 互补，不要替换那个 slot。
+1. `Session.events` 数组属性已移除：读全量用 `snapshotEvents()`（下次追加前缓存复用，放心多次调），单条 `eventAt(seq)`，日志长度 `session.seq`。`header.seedLength` 移除：fork 继承前缀长度是 `session.inheritedEventCount`；`agents.create` 的 meta 写 `isSeeded: true` + 顶层 `inheritedEventCount`（与官方 `SessionStore.fork` 同形）。
+2. 会话预设判定：`resolveSessionPreset` 帮手移除，官方路径是 `agentPreset` 会话投影；插件封装在 `sessionPresetId`（投影缺席时手动折叠 header + `agent-preset/selected` 兜底）。
+3. client 侧：「新对话」动作从 `ctx.workspaces.startSession` 迁到 `ctx.uiWorkspace.startSession`（seatWatch 双路径兜底）；`dsh-client-runtime` 包删除，`dsh.client.inject` 不再需要（bundle 只 require seed 词：react 系 / cordis / ui-slots / ui-primitives）；`dsh-client-web-react` / `dsh-client-schema-form` / `dsh-client-ui-attachment` 均不在 seed。chat.node owner props 与 MarkdownText `labels` 变化见「技术栈与三面运行」client 条。界面语言 auto 档经 `ctx.locale.getSnapshot().active` + `subscribe` 跟随宿主（LocaleRuntime）。会话列表摘要 `SessionSummary` 顶层不再有 `agentPreset`，预设 id 只读 `projectionValues.agentPreset`（`src/client/mode.ts`，读错位置会让全部会话面 UI 静默）；`SessionSnapshot` 移除 `composerPhase`，英雄区空会话判定用 `blank && !promptAttempted`。
+4. 杂项迁移：`settingsNamespace()` 帮手移除（`settings.register` 直接吃字面量）；`JsonValue` 从 `dsh-session/types` 挪到 `@deepseek-ai/dsh-util-values`。dsh 把大量运行时依赖改写成了 peer（`dsh-jobs` / `dsh-session-persistence` 等基础包不再自动安装），本仓库 `legacy-peer-deps` 下这些宿主内部包必须显式列进 devDependencies，且 cordis / schemastery 要跟随宿主版本（当前 4.0.2 / 3.18.2）。
+5. web 设置 RPC 无命名空间白名单（rc.2 起，0.1.2 仍成立），宿主通用设置页也能看到/改 `dsh-tavern` 的键——宿主行为，不要为此改插件面板。
+6. 会话头宿主原生面包屑（`conversation.session.header.lineage`）与楼层级 ‹ n/m › 互补，不要替换那个 slot。
 
 升级 dsh 的检查清单：
 
 - `package.json` 三处版本同步：`peerDependencies`、`overrides`、`devDependencies`（全部精确版本，不带 `^`）。
-- 逐条复查上面三条注记在新宿主上是否仍成立，失效的改掉并从本节删除。
-- 对照官方文档的 breaking changes：slot、profile/bundle、patch 层顺序、system-prompt 瀑布、agent 事件。
-- `npm install` → `npm run build` → `npm test` → `npm pack --dry-run`。
+- 逐条复查上面注记在新宿主上是否仍成立，失效的改掉并从本节删除。
+- 对照官方文档的 breaking changes：slot、profile/bundle、patch 层顺序、system-prompt 瀑布、agent 事件、session 读取 API、client seed 模块表。
+- `npm install` → `npm run build` → `npm test` → `npm pack --dry-run`，再 `npm run dev` 实机冒烟（peer 缺失只会在宿主 boot 时暴露）。
+- 扫描宿主包的非可选 peer：缺失的宿主内部包补进 devDependencies；cordis / schemastery 等跟随宿主版本（0.1.2 起宿主大量依赖改写为 peer，`legacy-peer-deps` 不会自动装）。
 - 在 `CHANGELOG.md` 记一行适配的 dsh 版本。
 
 ## 动手前必知（近期踩过，不要回退）

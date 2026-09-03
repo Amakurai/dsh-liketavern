@@ -36,7 +36,7 @@ function sessionOf(opts: {
       opts.header === undefined
         ? undefined
         : { config: { provider: opts.header.provider ?? '', model: opts.header.model ?? '', ...(opts.header.maxTokens !== undefined ? { maxTokens: opts.header.maxTokens } : {}) } },
-    events: opts.events ?? [],
+    snapshotEvents: () => opts.events ?? [],
   } as unknown as Session
 }
 
@@ -88,11 +88,9 @@ describe('forkAgentOptions', () => {
 
 describe('sessionPrefixEvents', () => {
   it('boundary -1（turn/start 在 seq 0）得到空前缀，可重跑第一层', () => {
-    const source = sessionOf({
-      events: [{ type: 'turn/start', seq: 0, time: 0, data: { turn: 1 } } as SessionEvent],
-    })
-    expect(sessionPrefixEvents(source, -1)).toEqual([])
-    expect(sessionPrefixEvents(source, 0)).toHaveLength(1)
+    const events = [{ type: 'turn/start', seq: 0, time: 0, data: { turn: 1 } } as SessionEvent]
+    expect(sessionPrefixEvents(events, -1)).toEqual([])
+    expect(sessionPrefixEvents(events, 0)).toHaveLength(1)
   })
 })
 
@@ -243,7 +241,7 @@ describe('editUserMessage 空文本', () => {
     { type: 'assistant/message', seq: 2, time: 0, data: { turn: 1, step: 1, message } },
     { type: 'turn/end', seq: 3, time: 0, data: { turn: 1, reason: { kind: 'completed' } } },
   ] as unknown as SessionEvent[]
-  const session = { id: 'session-x', header: { agentPreset: 'tavern' }, events } as unknown as Session
+  const session = { id: 'session-x', header: { agentPreset: 'tavern' }, snapshotEvents: () => events } as unknown as Session
   const deps = {
     ctx: {
       sessions: { get: (id: string) => (id === session.id ? session : undefined) },
@@ -279,7 +277,7 @@ describe('resolveFloorTurn（中断楼层按 turn 号定位）', () => {
     expect(resolveFloorTurn(events)).toBeNull()
   })
 
-  const session = { id: 'session-x', header: { agentPreset: 'tavern' }, events } as unknown as Session
+  const session = { id: 'session-x', header: { agentPreset: 'tavern' }, snapshotEvents: () => events } as unknown as Session
   const deps = {
     ctx: {
       sessions: { get: (id: string) => (id === session.id ? session : undefined) },

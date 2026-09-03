@@ -16,16 +16,16 @@
 import { randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent, AgentOptions, CreateAgentOptions } from '@deepseek-ai/dsh-agent'
-import { resolveSessionPreset, type AgentPresets } from '@deepseek-ai/dsh-agent-presets'
+import type { AgentPresets } from '@deepseek-ai/dsh-agent-presets'
 import { createAssistantMessage, createUserMessage, type AssistantMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
-import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
+import { SessionLogOffset, type Session, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { join } from 'node:path'
 import { greetingFloorState, isGreetingOnlyBlank, pickGreetingText, sessionHasUserMessage, TAVERN_GREETING_SOURCE } from '../core/greetingLog.js'
 import { expandMacros } from '../core/macros.js'
 import { CONTINUE_INSTRUCTION_PREFIX } from '../core/dshPrompt.js'
 import { DEFAULT_USER_NAME } from '../core/persona.js'
 import { greetingMessage, greetingTurnEvents } from './greetingSeed.js'
-import { isTavernRuntimeSession } from './tavernSession.js'
+import { isTavernRuntimeSession, sessionPresetId } from './tavernSession.js'
 import { pruneSiblingForks, siblingSwipe, type SiblingSwipe } from '../core/siblings.js'
 import { appendSiblingFork, loadSiblingForks, mutateSiblingForks } from '../state/siblings.js'
 import { loadBinding, type SessionBinding, type WalLineageEntry } from './bindings.js'
@@ -88,8 +88,9 @@ export function forkAgentOptions(parent: Pick<Agent, 'options'> | undefined, sou
     out.maxTokens = logged.maxTokens
   }
   if (!presentRoute(out.provider) || !presentRoute(out.model)) {
-    for (let i = source.events.length - 1; i >= 0; i--) {
-      const event = source.events[i]!
+    const events = source.snapshotEvents()
+    for (let i = events.length - 1; i >= 0; i--) {
+      const event = events[i]!
       if (event.type !== 'assistant/message') continue
       const src = (event.data as { message?: { source?: { provider?: string; model?: string } } }).message?.source
       if (!presentRoute(src?.provider) || !presentRoute(src.model)) continue
@@ -119,8 +120,7 @@ function requireTavernSession(ctx: Context, session: Session): void {
 }
 
 /** 切到 boundaryInclusive（含）为止的前缀；-1 / 空日志得到空数组（重跑第一层时 turn/start 在 seq 0）。 */
-export function sessionPrefixEvents(source: Pick<Session, 'events'>, boundaryInclusive?: number): SessionEvent[] {
-  const events = source.events
+export function sessionPrefixEvents(events: readonly SessionEvent[], boundaryInclusive?: number): SessionEvent[] {
   const cut = boundaryInclusive === undefined ? events.length : Math.max(0, boundaryInclusive + 1)
   return events.slice(0, cut) as SessionEvent[]
 }
@@ -135,24 +135,26 @@ async function forkChildSession(ctx: Context, source: Session, seed: readonly Se
   const childId = newChildId()
   const presets = agentPresetsOf(ctx)
   const parent = ctx.agents.get(source.id)
-  const named =
-    (parent ? presets.composedPreset(parent.ctx) : undefined) ?? resolveSessionPreset(source) ?? 'tavern'
+  const named = (parent ? presets.composedPreset(parent.ctx) : undefined) ?? sessionPresetId(ctx, source) ?? 'tavern'
   let resolvedId = named
   try {
     resolvedId = (await presets.resolve(named)).id
   } catch {
     resolvedId = named
   }
+  // 与官方 SessionStore.fork 相同的元数据形态：meta.isSeeded + 顶层 inheritedEventCount
+  // （0.1.2 起 header 不再带 seedLength，继承前缀长度是 Session 状态而不是普通 header 元数据）。
   const meta = {
     ...(source.header.cwd === undefined ? {} : { cwd: source.header.cwd }),
     parentSession: source.id,
-    seedLength: seed.length,
+    isSeeded: true,
     agentPreset: resolvedId,
   }
   const copied = agentOptionsForCreate(forkAgentOptions(parent, source))
   const options: CreateAgentOptions = {
     sessionId: childId as Session['id'],
     ...(seed.length > 0 ? { seed } : {}),
+    inheritedEventCount: SessionLogOffset(seed.length),
     meta,
     ...(copied ? { agentOptions: copied } : {}),
     setup: async (agentCtx: Context) => {
@@ -373,8 +375,8 @@ export function inheritedThroughTurn(seed: readonly SessionEvent[]): number | nu
 }
 
 /**
- * 兼容上一版本已经存在的分支绑定：从当前 live session 的 durable header 补回祖先边界。
- * 新 fork 会直接持久化 walLineage；这里只在旧绑定缺字段且父会话仍在线时尽力迁移。
+ * 兼容上一版本已经存在的分支绑定：从当前 live session 的继承前缀长度（inheritedEventCount）
+ * 补回祖先边界。新 fork 会直接持久化 walLineage；这里只在旧绑定缺字段且父会话仍在线时尽力迁移。
  */
 function inferLiveWalLineage(ctx: Context, source: Session, binding: SessionBinding): SessionBinding {
   if ((binding.walLineage?.length ?? 0) > 0 || !source.header.parentSession) return binding
@@ -384,8 +386,8 @@ function inferLiveWalLineage(ctx: Context, source: Session, binding: SessionBind
   while (child.header.parentSession && !seen.has(child.header.parentSession)) {
     const parentId = child.header.parentSession
     seen.add(parentId)
-    const seedLength = Number.isSafeInteger(child.header.seedLength) ? child.header.seedLength! : 0
-    const throughTurn = inheritedThroughTurn(child.events.slice(0, seedLength))
+    const seedLength = Number.isSafeInteger(child.inheritedEventCount) ? child.inheritedEventCount : 0
+    const throughTurn = inheritedThroughTurn(child.snapshotEvents().slice(0, seedLength))
     if (throughTurn !== null) reverse.push({ sessionId: parentId, throughTurn })
     const parent = ctx.sessions.get(parentId)
     if (!parent) break
@@ -417,7 +419,7 @@ async function forkAt(
   boundary: number,
   options?: { greetingIndex?: number; seedOverride?: readonly SessionEvent[]; forkTurn?: number },
 ): Promise<string> {
-  const seed = options?.seedOverride ?? sessionPrefixEvents(source, boundary)
+  const seed = options?.seedOverride ?? sessionPrefixEvents(source.snapshotEvents(), boundary)
   const childId = await forkChildSession(ctx, source, seed)
   const throughTurn = inheritedThroughTurn(seed)
   const walLineage = childWalLineage(binding, source.id, throughTurn)
@@ -474,11 +476,11 @@ export async function regenerate({ ctx, state }: FloorDeps, sessionId: string, m
   const source = liveSession(ctx, sessionId)
   if (!source) throw new FloorError('session-not-live', `会话 ${sessionId} 不在线（仅支持当前打开的会话）`)
   requireTavernSession(ctx, source)
-  const { turns, openTurn } = closedTurns(source.events)
+  const { turns, openTurn } = closedTurns(source.snapshotEvents())
   if (openTurn !== null) throw new FloorError('turn-open', `turn ${openTurn} 仍在进行中，请等待完成后再重新生成`)
   let target: number
   if (messageId !== undefined || floorTurn !== undefined) {
-    const turn = resolveFloorTurn(source.events, messageId, floorTurn)
+    const turn = resolveFloorTurn(source.snapshotEvents(), messageId, floorTurn)
     if (turn === null) throw new FloorError('no-message', '这条消息不在当前会话中（可能已过期）')
     if (!turns.includes(turn)) throw new FloorError('turn-open', `turn ${turn} 尚未完结，不能重新生成`)
     target = turn
@@ -487,10 +489,10 @@ export async function regenerate({ ctx, state }: FloorDeps, sessionId: string, m
     if (last === undefined) throw new FloorError('no-turns', '会话还没有可重新生成的楼层')
     target = last
   }
-  const seq = turnStartSeq(source.events, target)
+  const seq = turnStartSeq(source.snapshotEvents(), target)
   // seq 0 合法：turn/start 是日志第一条时，前缀为空（sessionPrefixEvents(..., -1) → []），即重跑第一层。
   if (seq === null) throw new FloorError('bad-boundary', `turn ${target} 的边界不可回退`)
-  const userMessage = firstUserMessageOf(source.events, target)
+  const userMessage = firstUserMessageOf(source.snapshotEvents(), target)
   if (!userMessage) throw new FloorError('no-user-message', `turn ${target} 内找不到用户消息`)
 
   const loadedBinding = await state.loadBinding(sessionId)
@@ -509,11 +511,11 @@ export async function rollbackToFloor({ ctx, state }: FloorDeps, sessionId: stri
   const source = liveSession(ctx, sessionId)
   if (!source) throw new FloorError('session-not-live', `会话 ${sessionId} 不在线`)
   requireTavernSession(ctx, source)
-  const { openTurn } = closedTurns(source.events)
+  const { openTurn } = closedTurns(source.snapshotEvents())
   if (openTurn !== null) throw new FloorError('turn-open', `turn ${openTurn} 仍在进行中`)
-  const turn = resolveFloorTurn(source.events, messageId, floorTurn)
+  const turn = resolveFloorTurn(source.snapshotEvents(), messageId, floorTurn)
   if (turn === null) throw new FloorError('no-message', '这条消息不在当前会话中（可能已过期）')
-  const endSeq = turnEndSeq(source.events, turn)
+  const endSeq = turnEndSeq(source.snapshotEvents(), turn)
   if (endSeq === null) throw new FloorError('turn-open', `turn ${turn} 尚未完结，不能作为回退边界`)
 
   const loadedBinding = await state.loadBinding(sessionId)
@@ -530,9 +532,9 @@ export async function getFloorUserMessage({ ctx }: FloorDeps, sessionId: string,
   const source = liveSession(ctx, sessionId)
   if (!source) throw new FloorError('session-not-live', `会话 ${sessionId} 不在线`)
   requireTavernSession(ctx, source)
-  const turn = turnOfAssistantMessage(source.events, messageId)
+  const turn = turnOfAssistantMessage(source.snapshotEvents(), messageId)
   if (turn === null) throw new FloorError('no-message', '这条消息不在当前会话中（可能已过期）')
-  const userMessage = firstUserMessageOf(source.events, turn)
+  const userMessage = firstUserMessageOf(source.snapshotEvents(), turn)
   if (!userMessage) throw new FloorError('no-user-message', `turn ${turn} 内没有用户消息`)
   return { turn, text: userMessageText(userMessage) }
 }
@@ -548,13 +550,13 @@ export async function editUserMessage(
   const source = liveSession(ctx, sessionId)
   if (!source) throw new FloorError('session-not-live', `会话 ${sessionId} 不在线`)
   requireTavernSession(ctx, source)
-  const { openTurn } = closedTurns(source.events)
+  const { openTurn } = closedTurns(source.snapshotEvents())
   if (openTurn !== null) throw new FloorError('turn-open', `turn ${openTurn} 仍在进行中`)
-  const turn = turnOfAssistantMessage(source.events, messageId)
+  const turn = turnOfAssistantMessage(source.snapshotEvents(), messageId)
   if (turn === null) throw new FloorError('no-message', '这条消息不在当前会话中（可能已过期）')
-  const seq = turnStartSeq(source.events, turn)
+  const seq = turnStartSeq(source.snapshotEvents(), turn)
   if (seq === null) throw new FloorError('no-turn', `会话中没有 turn ${turn}`)
-  if (!firstUserMessageOf(source.events, turn)) throw new FloorError('no-user-message', `turn ${turn} 内没有用户消息可编辑`)
+  if (!firstUserMessageOf(source.snapshotEvents(), turn)) throw new FloorError('no-user-message', `turn ${turn} 内没有用户消息可编辑`)
   if (!newText.trim()) throw new FloorError('empty-text', '编辑后的正文不能为空')
 
   const loadedBinding = await state.loadBinding(sessionId)
@@ -601,9 +603,9 @@ export async function getFloorAssistantMessage(
   const source = liveSession(ctx, sessionId)
   if (!source) throw new FloorError('session-not-live', `会话 ${sessionId} 不在线`)
   requireTavernSession(ctx, source)
-  const turn = turnOfAssistantMessage(source.events, messageId)
+  const turn = turnOfAssistantMessage(source.snapshotEvents(), messageId)
   if (turn === null) throw new FloorError('no-message', '这条消息不在当前会话中（可能已过期）')
-  const hit = source.events.find(
+  const hit = source.snapshotEvents().find(
     (e) => e.type === 'assistant/message' && (e.data as { message?: { id?: string } }).message?.id === messageId,
   )
   const message = (hit?.data as { message?: AssistantMessage } | undefined)?.message
@@ -629,15 +631,15 @@ export async function editAssistantMessage(
   const source = liveSession(ctx, sessionId)
   if (!source) throw new FloorError('session-not-live', `会话 ${sessionId} 不在线`)
   requireTavernSession(ctx, source)
-  const { openTurn } = closedTurns(source.events)
+  const { openTurn } = closedTurns(source.snapshotEvents())
   if (openTurn !== null) throw new FloorError('turn-open', `turn ${openTurn} 仍在进行中`)
-  const turn = turnOfAssistantMessage(source.events, messageId)
+  const turn = turnOfAssistantMessage(source.snapshotEvents(), messageId)
   if (turn === null) throw new FloorError('no-message', '这条消息不在当前会话中（可能已过期）')
-  const endSeq = turnEndSeq(source.events, turn)
+  const endSeq = turnEndSeq(source.snapshotEvents(), turn)
   if (endSeq === null) throw new FloorError('turn-open', `turn ${turn} 尚未完结，不能编辑`)
   if (!newText.trim()) throw new FloorError('empty-text', '编辑后的正文不能为空')
 
-  const seed = withEditedAssistantMessage(sessionPrefixEvents(source, endSeq), messageId, newText)
+  const seed = withEditedAssistantMessage(sessionPrefixEvents(source.snapshotEvents(), endSeq), messageId, newText)
   if (!seed) throw new FloorError('no-message', '这条消息不在当前会话中（可能已过期）')
 
   const loadedBinding = await state.loadBinding(sessionId)
@@ -663,9 +665,9 @@ export async function continueFloor(
   const source = liveSession(ctx, sessionId)
   if (!source) throw new FloorError('session-not-live', `会话 ${sessionId} 不在线（仅支持当前打开的会话）`)
   requireTavernSession(ctx, source)
-  const { turns, openTurn } = closedTurns(source.events)
+  const { turns, openTurn } = closedTurns(source.snapshotEvents())
   if (openTurn !== null) throw new FloorError('turn-open', `turn ${openTurn} 仍在进行中，请等待完成后再续写`)
-  const turn = turnOfAssistantMessage(source.events, messageId)
+  const turn = turnOfAssistantMessage(source.snapshotEvents(), messageId)
   if (turn === null) throw new FloorError('no-message', '这条消息不在当前会话中（可能已过期）')
   const last = turns.at(-1)
   if (last === undefined || turn !== last) throw new FloorError('not-last-floor', '只能续写最后一层回复')
@@ -701,7 +703,7 @@ async function expandGreeting(state: TavernState, binding: SessionBinding, text:
   })
 }
 
-/** agent-loop 的 lastTurn 只在构造时从日志读取；补 turn 后把 idle 相位对齐，避免下一句抢号。 */
+/** agent-loop 的 lastTurn 只在构造时从 turnBoundary 投影读取；补 turn 后把 idle 相位对齐，避免下一句抢号。 */
 function syncIdleAgentLastTurn(ctx: Context | undefined, sessionId: string): void {
   const agent = (ctx as { agents?: { get(id: string): unknown } } | undefined)?.agents?.get(sessionId)
   const phase = (agent as { phase?: { kind?: string; lastTurn?: number } } | undefined)?.phase
@@ -715,7 +717,7 @@ function syncIdleAgentLastTurn(ctx: Context | undefined, sessionId: string): voi
  * agent loop 马上会自己 append turn/start，抢号会把当轮打崩。
  */
 export function retireGreetingOnlyBlankSession(session: Session, ctx?: Context): boolean {
-  if (!isGreetingOnlyBlank(session.events)) return false
+  if (!isGreetingOnlyBlank(session.snapshotEvents())) return false
   session.append('turn/start', { turn: 1 })
   session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
   syncIdleAgentLastTurn(ctx, session.id)
@@ -734,7 +736,7 @@ export async function getGreetingSwipe(
   const session = liveSession(ctx, sessionId)
   if (!session || !isTavernRuntimeSession(ctx, session)) return none
   const variants = await greetingVariants(state, binding.cardId)
-  return greetingFloorState(session.events, messageId, binding.greetingIndex, variants.length)
+  return greetingFloorState(session.snapshotEvents(), messageId, binding.greetingIndex, variants.length)
 }
 
 /**
@@ -754,7 +756,7 @@ export async function getFloorSiblings(
   if (!binding || (messageId === undefined && floorTurn === undefined)) return none
   const session = liveSession(ctx, sessionId)
   if (!session || !isTavernRuntimeSession(ctx, session)) return none
-  const turn = resolveFloorTurn(session.events, messageId, floorTurn)
+  const turn = resolveFloorTurn(session.snapshotEvents(), messageId, floorTurn)
   if (turn === null) return none
 
   const forks = await loadSiblingForks(state.paths.root)
@@ -795,12 +797,12 @@ export async function enterGreetingConversation({ ctx, state }: FloorDeps, sessi
   if (!binding) return false
   const session = liveSession(ctx, sessionId)
   if (!session || !isTavernRuntimeSession(ctx, session)) return false
-  if (sessionHasUserMessage(session.events)) return false
-  if (session.events.some((e) => e.type === 'assistant/message')) {
+  if (sessionHasUserMessage(session.snapshotEvents())) return false
+  if (session.snapshotEvents().some((e) => e.type === 'assistant/message')) {
     retireGreetingOnlyBlankSession(session, ctx)
     return false
   }
-  if (session.events.some((e) => e.type === 'turn/start')) return false
+  if (session.snapshotEvents().some((e) => e.type === 'turn/start')) return false
   const variants = await greetingVariants(state, binding.cardId)
   const raw = pickGreetingText(variants, binding.greetingIndex)
   if (!raw) return false
@@ -827,7 +829,7 @@ export async function ensureGreeting({ ctx, state }: FloorDeps, sessionId: strin
   if (!binding) return false
   const session = liveSession(ctx, sessionId)
   if (!session || !isTavernRuntimeSession(ctx, session)) return false
-  if (session.events.some((e) => e.type === 'assistant/message')) return false
+  if (session.snapshotEvents().some((e) => e.type === 'assistant/message')) return false
   const variants = await greetingVariants(state, binding.cardId)
   const raw = pickGreetingText(variants, binding.greetingIndex)
   if (!raw) return false
@@ -850,7 +852,7 @@ export async function swipeGreeting({ ctx, state }: FloorDeps, sessionId: string
   const variants = await greetingVariants(state, binding.cardId)
   if (variants.length === 0) throw new FloorError('no-greetings', '该角色没有开场白')
   const next = ((index % variants.length) + variants.length) % variants.length
-  if (sessionHasUserMessage(source.events)) {
+  if (sessionHasUserMessage(source.snapshotEvents())) {
     throw new FloorError('has-turns', '对话已开始，不能再 swipe 开场白（请用回退/重新生成）')
   }
   const raw = pickGreetingText(variants, next)

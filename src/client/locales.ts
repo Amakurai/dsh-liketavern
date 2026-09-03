@@ -24,7 +24,10 @@ import * as util from './locales/util.js'
 
 export type TavernLocaleId = 'en' | 'zh'
 
-/** 默认英文；用户可在设置页切中文（持久化在 dsh-tavern 设置的 locale 键）。 */
+/** 语言偏好：auto 跟随宿主界面语言（0.1.2 的 LocaleRuntime），en/zh 锁定。 */
+export type TavernLocalePreference = 'auto' | TavernLocaleId
+
+/** 播种前的初始语言；宿主语言经 setTavernHostLocale 在 apply 早期修正（持久化偏好在 dsh-tavern 设置的 locale 键）。 */
 export const DEFAULT_LOCALE: TavernLocaleId = 'en'
 
 export const zh: Record<string, string> = {

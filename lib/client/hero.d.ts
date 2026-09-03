@@ -3,7 +3,7 @@ import type { TavernRemote } from './types.js';
 import './styles.js';
 interface HeroSession {
     blank?: boolean;
-    composerPhase?: string;
+    promptAttempted?: boolean;
 }
 export declare function TavernHeroCharacter(props: {
     remote: TavernRemote;

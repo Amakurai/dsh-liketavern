@@ -70,7 +70,7 @@ export function SettingsSection(props: { remote: TavernRemote }) {
     })
 
   /** 语言切换：先本地生效再持久化；保存失败回退界面语言并提示。 */
-  const changeLocale = (locale: 'en' | 'zh') => {
+  const changeLocale = (locale: 'auto' | 'en' | 'zh') => {
     if (!draft || locale === draft.locale) return
     const prev = draft.locale
     setDraft({ ...draft, locale })
@@ -130,12 +130,13 @@ export function SettingsSection(props: { remote: TavernRemote }) {
         {sub === 'interface' && (
           <Section title={t('settings.interface.title')} description={t('settings.interface.desc')}>
             <SettingsRow title={t('settings.interface.language')} description={t('settings.interface.languageDesc')}>
-              {/* 选项用各自语言自描述（宿主 locale 插件同款约定），不随界面语言翻译。 */}
+              {/* 中/英选项用各自语言自描述（宿主 locale 插件同款约定），auto 档随界面语言翻译。 */}
               <Select
                 size="md"
                 value={draft.locale}
-                onChange={(v) => changeLocale(v === 'zh' ? 'zh' : 'en')}
+                onChange={(v) => changeLocale(v === 'zh' ? 'zh' : v === 'en' ? 'en' : 'auto')}
                 options={[
+                  { value: 'auto', label: t('settings.interface.localeAuto') },
                   { value: 'en', label: 'English' },
                   { value: 'zh', label: '中文' },
                 ]}

@@ -42,5 +42,8 @@ export declare const zh: {
     readonly 'common.noMatch': "没有匹配的{what}";
     readonly 'common.noMatchDesc': "「{query}」没有命中任何条目，可换个关键词或";
     readonly 'common.unlimited': "不限";
+    readonly 'common.copy': "复制";
+    readonly 'common.copied': "已复制";
+    readonly 'common.markdownFootnotes': "脚注";
 };
 export declare const en: Record<keyof typeof zh, string>;

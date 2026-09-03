@@ -9,14 +9,16 @@ export { TAVERN_AGENT_PRESET }
 
 export type SessionsListState = {
   current?: string
-  byId: Record<string, { agentPreset?: string } | undefined>
+  // 0.1.2 起预设 id 只落在会话投影里（SessionSummary.projectionValues.agentPreset），
+  // 顶层不再有 agentPreset 字段。
+  byId: Record<string, { projectionValues?: { agentPreset?: string | null } } | undefined>
 }
 
 export type UseSessions = (selector: (state: SessionsListState) => unknown) => unknown
 
 export function readAgentPreset(useSessions: UseSessions | undefined, sessionId: string): string | undefined {
   if (!useSessions) return undefined
-  return useSessions((s) => s.byId?.[sessionId]?.agentPreset) as string | undefined
+  return useSessions((s) => s.byId?.[sessionId]?.projectionValues?.agentPreset ?? undefined) as string | undefined
 }
 
 export function isTavernSession(useSessions: UseSessions | undefined, sessionId: string): boolean {
@@ -28,5 +30,5 @@ export function isCurrentTavernSession(list: { getSnapshot(): SessionsListState 
   const snap = list.getSnapshot()
   const id = snap.current
   if (!id) return false
-  return isTavernPresetId(snap.byId?.[id]?.agentPreset)
+  return isTavernPresetId(snap.byId?.[id]?.projectionValues?.agentPreset ?? undefined)
 }

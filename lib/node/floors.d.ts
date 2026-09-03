@@ -1,6 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis';
 import type { Agent, AgentOptions } from '@deepseek-ai/dsh-agent';
-import type { Session, SessionEvent } from '@deepseek-ai/dsh-session';
+import { type Session, type SessionEvent } from '@deepseek-ai/dsh-session';
 import { type SiblingSwipe } from '../core/siblings.js';
 import { type SessionBinding, type WalLineageEntry } from './bindings.js';
 import type { TavernState } from './state.js';
@@ -22,7 +22,7 @@ export declare class FloorError extends Error {
  */
 export declare function forkAgentOptions(parent: Pick<Agent, 'options'> | undefined, source: Session): AgentOptions;
 /** 切到 boundaryInclusive（含）为止的前缀；-1 / 空日志得到空数组（重跑第一层时 turn/start 在 seq 0）。 */
-export declare function sessionPrefixEvents(source: Pick<Session, 'events'>, boundaryInclusive?: number): SessionEvent[];
+export declare function sessionPrefixEvents(events: readonly SessionEvent[], boundaryInclusive?: number): SessionEvent[];
 /**
  * 楼层定位：messageId（assistant 消息 id）优先，其次直接按 turn 号。
  * 被中断的 assistant 消息不进宿主的 assistant-actions slot（非 finalized），

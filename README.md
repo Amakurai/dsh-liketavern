@@ -4,6 +4,8 @@
 
 **DeepSeek Harness（dsh）插件 —— 把 `dsh web` 变成 SillyTavern 式的角色扮演前端**
 
+**适配宿主版本：dsh `0.1.2-rc.1`**
+
 中文 | [English](./README.en.md)
 
 [功能](#功能) • [安装](#安装) • [使用](#使用) • [平台限制](#平台限制) • [开发](#开发)
@@ -11,6 +13,8 @@
 </div>
 
 角色卡（V1/V2/V3，PNG/JSON）、提示词预设、世界书、人设、正则、BM25 长期记忆、世界状态变化层、可回滚的楼层操作——全部建立在 dsh 的 agent 运行时之上，不另起发信通道。
+
+体验上近乎 dsh 原生：提示词走宿主的 system-prompt 瀑布（稳定段对齐 DeepSeek 前缀缓存），楼层分支就是真实的 dsh 会话 fork，界面全部挂在宿主原生 slot 上、复用同一套 UI 原语与设计令牌，界面语言默认跟随宿主。会话世系面包屑、工作区、定时计划、中断恢复等宿主能力在 Tavern 会话里照常工作——更像 dsh 自带的一个模式，而不是外挂的前端。
 
 ## 功能
 
@@ -26,7 +30,7 @@
 ## 要求
 
 - Node.js ≥ 24
-- 已安装 dsh CLI（`0.1.1-rc.2`），并跑过一次 `dsh web`（首次运行会初始化 `web` profile）
+- 已安装 dsh CLI（`0.1.2-rc.1`），并跑过一次 `dsh web`（首次运行会初始化 `web` profile）
 - PATH 中有 `pnpm`（`dsh plugin` 命令内部经 pnpm 管理 profile 的插件依赖）
 
 ## 安装
@@ -50,7 +54,7 @@ dsh plugin --profile web list --depth 0
 - **安装面刻意做小**：运行时依赖只有 `zod`，`@deepseek-ai/*` 全部是 peer 依赖、由 profile 里已安装的 dsh 宿主满足。安装本插件不会拉取宿主本体及其原生依赖（`node-pty` 等），因此正常不会触发 pnpm 的构建脚本拦截（`ERR_PNPM_IGNORED_BUILDS`）。万一遇到，那是 profile 里 dsh 自身依赖的一次性授权：按 dsh 报错提示把包名加进 `~/.dsh/profiles/web/pnpm-workspace.yaml` 的 `allowBuilds`，重跑安装命令即可。
 - 也可以走 tarball：作者侧 `npm pack`（`prepack` 会先构建），用户侧 `dsh plugin --profile web add ./dsh-liketavern-0.1.1.tgz`。
 
-版本兼容：本包以 peerDependency 锁 dsh `0.1.1-rc.2`；dsh 处于预发布阶段，升级 dsh 后需同步换装适配的插件版本。版本对应关系见 [CHANGELOG.md](./CHANGELOG.md)。
+版本兼容：本包以 peerDependency 锁 dsh `0.1.2-rc.1`；dsh 处于预发布阶段，升级 dsh 后需同步换装适配的插件版本。版本对应关系见 [CHANGELOG.md](./CHANGELOG.md)。
 
 运行时数据（角色卡、记忆、会话绑定等）落在 `$DSH_HOME/dsh-tavern/`，与本仓库无关。
 

@@ -65,7 +65,9 @@ function greetingVariants(detail: CharacterDetail): string[] {
 
 interface HeroSession {
   blank?: boolean
-  composerPhase?: string
+  // 0.1.2 起 SessionSnapshot 移除 composerPhase；promptAttempted 是原 blank→engaging
+  // 相位边的粘性标记（首次发送前置位、永不复位），用它表达「还没动过输入框」。
+  promptAttempted?: boolean
 }
 
 export function TavernHeroCharacter(props: {
@@ -78,7 +80,7 @@ export function TavernHeroCharacter(props: {
   const { remote, sessionId, session } = props
   const t = useT()
   const tavern = isTavernSession(props.useSessions, sessionId)
-  const showHero = tavern && session?.blank === true && session.composerPhase === 'blank'
+  const showHero = tavern && session?.blank === true && session.promptAttempted !== true
   const dockRef = useRef<HTMLDivElement | null>(null)
   const [chipHost, setChipHost] = useState<HTMLElement | null>(null)
   const [open, setOpen] = useState(false)

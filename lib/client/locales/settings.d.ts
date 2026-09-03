@@ -11,6 +11,7 @@ export declare const zh: {
     readonly 'settings.interface.desc': "本插件界面的显示偏好，改动立即生效；不影响宿主界面与其它插件。";
     readonly 'settings.interface.language': "界面语言";
     readonly 'settings.interface.languageDesc': "面板、对话芯片、英雄区与操作条等本插件文案的语言；选择后立即生效并自动保存。";
+    readonly 'settings.interface.localeAuto': "跟随宿主语言";
     readonly 'settings.interface.languageFailed': "语言保存失败";
     readonly 'settings.defaults.title': "选卡后的默认配置";
     readonly 'settings.defaults.desc': "在新对话里点选任意角色卡后，会套用这里的预设、世界书与人设。新对话不会自动选角色；已打开的会话请用对话页角色芯片修改。";

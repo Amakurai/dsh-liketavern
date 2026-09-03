@@ -9,7 +9,7 @@ import { Fragment, useMemo } from 'react'
 import type { ReactNode } from 'react'
 import { JsonBlock, MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives'
 import { stripDisplayMeta } from '../core/displaySanitize.js'
-import { useT } from './i18n.js'
+import { useMarkdownLabels, useT } from './i18n.js'
 import { isTavernSession, type UseSessions } from './mode.js'
 import { openChildSession } from './openChild.js'
 import { TavernInterruptedFloorActions } from './actions.js'
@@ -146,6 +146,7 @@ function NativeAssistantFallback(props: {
 }) {
   const { node, renderMessageImages, useTurnData, openFile, fileMentions, streaming, interrupted, stripMeta } = props
   const t = useT()
+  const markdownLabels = useMarkdownLabels()
   // fileMentions 是宿主 owner 函数，需按原生 AssistantNodeView 的方式用
   // turn-tail owner 解析成 mentions 再交给 MarkdownText（旧版直接透传函数本体，等于没配）。
   const turn = node.location?.kind === 'turn' || node.location?.kind === 'step' ? node.location.turn : undefined
@@ -168,7 +169,7 @@ function NativeAssistantFallback(props: {
     if (block.kind === 'text') {
       const shown = stripMeta ? stripDisplayMeta(block.text ?? '') : (block.text ?? '')
       rendered.push(
-        <MarkdownText key={i} text={shown} streaming={streaming} fileMentions={mentions} />,
+        <MarkdownText key={i} text={shown} streaming={streaming} fileMentions={mentions} labels={markdownLabels} />,
       )
     } else if (block.kind === 'reasoning') {
       if (stripMeta) continue

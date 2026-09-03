@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 
-/** 宿主模块表提供的依赖，保持 require 引入。 */
+/** 宿主 seed 模块表提供的依赖，保持 require 引入（0.1.2 的 seed 词：react 系、cordis、ui-slots、ui-primitives、client-store）。 */
 const external = [
   'react',
   'react/jsx-runtime',
@@ -18,10 +18,7 @@ const external = [
   'react-dom/client',
   '@deepseek-ai/cordis',
   '@deepseek-ai/dsh-client-ui-slots',
-  '@deepseek-ai/dsh-client-web-react',
   '@deepseek-ai/dsh-client-ui-primitives',
-  '@deepseek-ai/dsh-client-ui-attachment',
-  '@deepseek-ai/dsh-client-schema-form',
 ]
 
 const result = await build({

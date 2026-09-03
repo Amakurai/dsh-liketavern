@@ -11,7 +11,9 @@
  * - 重新生成/回退/编辑均按「这一层」生效（slot owner 提供 messageId，host 端据此定位楼层）；
  *   成功后自动 sessions.open(分支子会话) 并把 host 给的分支标题 rename 进会话列表；
  * - 续写（continue）不 fork：host 校验只能续最后一层，续跑流式在当前会话原生可见；
- * - 代答（impersonate）生成用户台词，dsh 输入区没有插件可写 API，结果复制到剪贴板。
+ * - 代答（impersonate）生成用户台词，dsh 输入区没有插件可写 API，结果复制到剪贴板；
+ * - 被中断（已停止）的楼层宿主不挂本 slot（只挂 finalized 消息），由 chat.node 渲染侧
+ *   补挂 TavernInterruptedFloorActions（重新生成/回退/兄弟导航，按 turn 号定位）。
  */
 import { useEffect, useState } from 'react'
 import { IconBranchOutline16, IconChevronLeftOutline14, IconChevronRightOutline14, IconEditOutline16, IconListPenOutline16, IconLoadingOutline16, IconPlayOutline16, IconRefreshOutline16, IconUserOutline16, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -408,6 +410,112 @@ export function TavernFloorActions(props: FloorActionsProps) {
           <textarea readOnly className="dsh-tavern-input dsh-tavern-textarea" style={{ minHeight: 120 }} value={impersonated} />
           <div style={{ marginTop: 8, fontSize: 12, opacity: 0.8 }}>{t('actions.clipboardUnavailable')}</div>
         </Dialog>
+      )}
+      {toast.node}
+    </span>
+  )
+}
+
+/**
+ * 被中断（已停止）楼层的最小操作组。
+ * 宿主的 assistant-actions slot 只挂 finalized 消息（"Only finalized messages reach this slot"），
+ * 中断楼层拿不到 slot、没有 messageId 可用，这里由 chat.node 渲染侧按 turn 号补挂：
+ * 重新生成 / 回退 + 同层分支兄弟导航。除此之外不放编辑/续写/代答，保持最小面。
+ */
+export function TavernInterruptedFloorActions(props: {
+  remote: TavernRemote
+  sessionId: string
+  sessions: { open(id: string): void; refresh?: () => Promise<void> }
+  turn: number
+}) {
+  const { remote, sessionId, sessions, turn } = props
+  const t = useT()
+  const toast = useToast()
+  const [operation, setOperation] = useState<'regenerate' | 'rollback' | 'branch-prev' | 'branch-next' | null>(null)
+  const [failure, setFailure] = useState<string | null>(null)
+  const siblingLoader = useLoader(() => remote.getFloorSiblings({ sessionId, turn }), [sessionId, turn])
+  useEffect(() => {
+    const onBranchChanged = (event: Event) => {
+      if ((event as CustomEvent<string>).detail === sessionId) siblingLoader.reload()
+    }
+    window.addEventListener(BRANCH_CHANGED_EVENT, onBranchChanged)
+    return () => window.removeEventListener(BRANCH_CHANGED_EVENT, onBranchChanged)
+    // reload 随 loader render 更新；事件回调只需跟会话重挂。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId])
+  const siblingSwipe = siblingLoader.state.status === 'ready' ? siblingLoader.state.value.swipe : null
+  const busy = operation !== null
+
+  /** 与楼上 run 同一路径：fork 成功后广播分支变更并打开子会话。 */
+  const run = async (
+    kind: 'regenerate' | 'rollback',
+    op: () => Promise<Envelope<{ childSessionId: string; title?: string }>>,
+  ) => {
+    setOperation(kind)
+    setFailure(null)
+    try {
+      const r = await op()
+      if (r.ok) {
+        window.dispatchEvent(new CustomEvent(BRANCH_CHANGED_EVENT, { detail: sessionId }))
+        await openChildSession(sessions, r.value.childSessionId, r.value.title)
+      } else setFailure(r.error.message)
+    } catch (e) {
+      setFailure(e instanceof Error ? e.message : String(e))
+    } finally {
+      setOperation(null)
+    }
+  }
+
+  const onBranch = (delta: number) => {
+    const nav = siblingSwipe
+    if (!nav || nav.total < 2 || busy) return
+    const target = nav.siblings[(nav.index + delta + nav.total) % nav.total]
+    if (!target || target === sessionId) return
+    setOperation(delta < 0 ? 'branch-prev' : 'branch-next')
+    void openChildSession(sessions, target)
+      .catch(() => {
+        toast.show(t('actions.branchGone'))
+        siblingLoader.reload()
+      })
+      .finally(() => setOperation(null))
+  }
+
+  return (
+    <span className="dsh-tavern-actionGroup dsh-tavern-actionGroup-interrupted">
+      {siblingSwipe && siblingSwipe.total > 1 && (
+        <>
+          <IconAction label={t('actions.branchPrev')} disabled={busy} busy={operation === 'branch-prev'} onClick={() => onBranch(-1)}>
+            <IconChevronLeftOutline14 />
+          </IconAction>
+          <span className="dsh-tavern-swipeIdx" title={t('actions.branchCount', { turn: siblingSwipe.turn, total: siblingSwipe.total })}>
+            {siblingSwipe.index + 1}/{siblingSwipe.total}
+          </span>
+          <IconAction label={t('actions.branchNext')} disabled={busy} busy={operation === 'branch-next'} onClick={() => onBranch(1)}>
+            <IconChevronRightOutline14 />
+          </IconAction>
+          <span className="dsh-tavern-actionDivider" />
+        </>
+      )}
+      <IconAction
+        label={t('actions.regenerate')}
+        disabled={busy}
+        busy={operation === 'regenerate'}
+        onClick={() => void run('regenerate', () => remote.regenerate({ sessionId, turn }))}
+      >
+        <IconRefreshOutline16 />
+      </IconAction>
+      <IconAction
+        label={t('actions.rollback')}
+        disabled={busy}
+        busy={operation === 'rollback'}
+        onClick={() => void run('rollback', () => remote.rollbackToFloor({ sessionId, turn }))}
+      >
+        <IconBranchOutline16 />
+      </IconAction>
+      {failure !== null && (
+        <span role="status" style={{ fontSize: 12, color: 'var(--dsw-alias-state-error-primary, #ec1313)', paddingLeft: 4 }}>
+          {failure}
+        </span>
       )}
       {toast.node}
     </span>

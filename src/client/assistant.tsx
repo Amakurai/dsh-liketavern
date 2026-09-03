@@ -12,6 +12,7 @@ import { stripDisplayMeta } from '../core/displaySanitize.js'
 import { useT } from './i18n.js'
 import { isTavernSession, type UseSessions } from './mode.js'
 import { openChildSession } from './openChild.js'
+import { TavernInterruptedFloorActions } from './actions.js'
 import { SpeechBubble } from './speech.js'
 import type { TavernRemote } from './types.js'
 import { useLoader } from './util.js'
@@ -24,7 +25,7 @@ interface AssistantBlock {
 }
 
 interface AssistantNode {
-  location?: { kind?: string; turn?: { status?: string } }
+  location?: { kind?: string; turn?: { status?: string; turn?: number } }
   data: {
     status: string
     blocks: AssistantBlock[]
@@ -90,6 +91,15 @@ export function TavernAssistantNode(props: {
     return <NativeAssistantFallback {...props} streaming={streaming} interrupted={interrupted} />
   }
 
+  // 中断楼层（已停止）的补救操作组：宿主 assistant-actions slot 只挂 finalized 消息，
+  // 这里在节点内按 turn 号补挂重新生成/回退/兄弟导航（见 actions.tsx）。
+  const locationTurn =
+    node.location && (node.location.kind === 'turn' || node.location.kind === 'step') ? node.location.turn?.turn : undefined
+  const interruptedActions =
+    interrupted && binding && typeof locationTurn === 'number' && sessions ? (
+      <TavernInterruptedFloorActions remote={remote} sessionId={sessionId} sessions={sessions} turn={locationTurn} />
+    ) : null
+
   if (binding && text && !hasImages) {
     return (
       <div>
@@ -111,11 +121,17 @@ export function TavernAssistantNode(props: {
           }}
         />
         {interrupted && <div className="dsh-tavern-notice">{t('assistant.stopped')}</div>}
+        {interruptedActions}
       </div>
     )
   }
 
-  return <NativeAssistantFallback {...props} streaming={streaming} interrupted={interrupted} stripMeta />
+  return (
+    <div>
+      <NativeAssistantFallback {...props} streaming={streaming} interrupted={interrupted} stripMeta />
+      {interruptedActions}
+    </div>
+  )
 }
 
 function NativeAssistantFallback(props: {

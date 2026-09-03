@@ -10,6 +10,8 @@ export declare function TavernSeatChip(props: {
     avatarUrl?: string | null;
     open?: boolean;
     disabled?: boolean;
+    /** 绑定/详情加载中：渲染骨架占位，避免标签在「选择角色卡」与角色名之间闪跳。 */
+    loading?: boolean;
     hasPopup?: 'menu' | 'dialog';
     onClick: () => void;
     chevron?: boolean;

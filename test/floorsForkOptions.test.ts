@@ -3,7 +3,8 @@
  * 否则 system-prompt 插值 {{model}} 会在重新生成时抛无值错误。
  * 另覆盖：childWalLineage 祖先边界 clamp、sessionPrefixEvents、回滚楼层名、
  * inheritedThroughTurn、withEditedAssistantMessage、timerOwnerAtTurn、
- * editUserMessage 空文本拒绝（与 editAssistantMessage 同口径）。
+ * editUserMessage 空文本拒绝（与 editAssistantMessage 同口径）、
+ * resolveFloorTurn 的 messageId/turn 双定位（中断楼层操作条按 turn 定位）。
  */
 import { describe, expect, it } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
@@ -16,6 +17,9 @@ import {
   floorNamesForRollback,
   forkAgentOptions,
   inheritedThroughTurn,
+  regenerate,
+  resolveFloorTurn,
+  rollbackToFloor,
   sessionPrefixEvents,
   timerOwnerAtTurn,
   withEditedAssistantMessage,
@@ -252,5 +256,42 @@ describe('editUserMessage 空文本', () => {
   it('拒绝空串与纯空白文本（empty-text），在 fork 之前抛错', async () => {
     await expect(editUserMessage(deps, session.id, message.id, '')).rejects.toMatchObject({ code: 'empty-text' })
     await expect(editUserMessage(deps, session.id, message.id, '   ')).rejects.toMatchObject({ code: 'empty-text' })
+  })
+})
+
+describe('resolveFloorTurn（中断楼层按 turn 号定位）', () => {
+  const events = [
+    { type: 'turn/start', seq: 0, time: 0, data: { turn: 1 } },
+    { type: 'assistant/message', seq: 1, time: 0, data: { turn: 1, step: 1, message: { id: 'm1' } } },
+    { type: 'turn/end', seq: 2, time: 0, data: { turn: 1, reason: { kind: 'completed' } } },
+    { type: 'turn/start', seq: 3, time: 0, data: { turn: 2 } },
+    { type: 'assistant/message', seq: 4, time: 0, data: { turn: 2, step: 1, message: { id: 'm2' } } },
+    { type: 'turn/end', seq: 5, time: 0, data: { turn: 2, reason: { kind: 'interrupted' } } },
+  ] as unknown as SessionEvent[]
+
+  it('messageId 优先，turn 兜底；未知定位返回 null', () => {
+    expect(resolveFloorTurn(events, 'm1', 2)).toBe(1)
+    expect(resolveFloorTurn(events, 'm2')).toBe(2)
+    expect(resolveFloorTurn(events, undefined, 2)).toBe(2)
+    expect(resolveFloorTurn(events, 'missing')).toBeNull()
+    expect(resolveFloorTurn(events, undefined, 3)).toBeNull()
+    expect(resolveFloorTurn(events, undefined, 0)).toBeNull()
+    expect(resolveFloorTurn(events)).toBeNull()
+  })
+
+  const session = { id: 'session-x', header: { agentPreset: 'tavern' }, events } as unknown as Session
+  const deps = {
+    ctx: {
+      sessions: { get: (id: string) => (id === session.id ? session : undefined) },
+      agents: { get: () => undefined },
+      get: () => undefined,
+    } as unknown as Context,
+    state: {},
+  } as unknown as FloorDeps
+
+  it('regenerate / rollbackToFloor 接受 turn 定位；未知 turn 报 no-message', async () => {
+    await expect(regenerate(deps, session.id, undefined, 3)).rejects.toMatchObject({ code: 'no-message' })
+    await expect(rollbackToFloor(deps, session.id, undefined, 3)).rejects.toMatchObject({ code: 'no-message' })
+    await expect(rollbackToFloor(deps, session.id)).rejects.toMatchObject({ code: 'no-message' })
   })
 })

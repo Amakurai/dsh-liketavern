@@ -302,7 +302,14 @@ export function TavernHeroCharacter(props: {
         items={
           characters.length === 0
             ? [{ id: '__empty__', label: charsLoader.state.status === 'loading' ? t('hero.loadingCharacters') : t('hero.noCharacters'), disabled: true }]
-            : characters.map((c) => ({ id: c.cardId, label: c.name }))
+            : characters.map((c) => ({
+                id: c.cardId,
+                label: !c.hasCharacterBook
+                  ? c.name
+                  : typeof c.characterBookEntryCount === 'number' && c.characterBookEntryCount > 0
+                    ? t('hero.pickBook.withCount', { name: c.name, count: c.characterBookEntryCount })
+                    : t('hero.pickBook.noCount', { name: c.name }),
+              }))
         }
         anchor={
           <TavernSeatChip
@@ -310,6 +317,7 @@ export function TavernHeroCharacter(props: {
             title={t('hero.pickCharacter')}
             avatarUrl={avatar}
             open={open}
+            loading={bindingLoader.state.status === 'loading'}
             disabled={busy}
             onClick={() => setOpen((v: boolean) => !v)}
           />

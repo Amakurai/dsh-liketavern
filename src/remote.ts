@@ -113,16 +113,18 @@ const METHODS: Record<string, { req: z.ZodTypeAny; value: z.ZodTypeAny; summary:
     value: anyValue,
     summary: '切换开场白变体（产生子会话）',
   },
-  // 楼层（均按 assistant 消息 id 定位楼层；操作产生分支子会话，client 负责打开）
+  // 楼层（按 assistant 消息 id 定位楼层；被中断的楼层没有 finalized 消息、宿主 slot 不挂，
+  // 操作条由 chat.node 渲染侧补挂并以 turn 定位，故 regenerate/rollbackToFloor/getFloorSiblings
+  // 额外接受 turn 号；操作产生分支子会话，client 负责打开）
   regenerate: {
-    req: z.object({ ...sessionIdField, messageId: z.string().min(1).optional() }),
+    req: z.object({ ...sessionIdField, messageId: z.string().min(1).optional(), turn: z.number().int().min(1).optional() }),
     value: anyValue,
     summary: '重新生成指定楼层（缺省最后一轮），分支会话自动续跑',
   },
   rollbackToFloor: {
-    req: z.object({ ...sessionIdField, ...messageIdField }),
+    req: z.object({ ...sessionIdField, messageId: z.string().min(1).optional(), turn: z.number().int().min(1).optional() }),
     value: anyValue,
-    summary: '回退到指定楼层（保留该层，丢弃其后），不自动续跑',
+    summary: '回退到指定楼层（保留该层，丢弃其后），不自动续跑；messageId 与 turn 至少给其一',
   },
   getFloorUserMessage: {
     req: z.object({ ...sessionIdField, ...messageIdField }),
@@ -150,7 +152,7 @@ const METHODS: Record<string, { req: z.ZodTypeAny; value: z.ZodTypeAny; summary:
     summary: '续写最后一层（被截断的）回复：不 fork，直接驱动画前会话',
   },
   getFloorSiblings: {
-    req: z.object({ ...sessionIdField, ...messageIdField }),
+    req: z.object({ ...sessionIdField, messageId: z.string().min(1).optional(), turn: z.number().int().min(1).optional() }),
     value: z.object({
       swipe: z
         .object({

@@ -153,7 +153,8 @@ export declare class TavernService extends TypertRemoteService {
     /** 分支兄弟导航是只读查询：等排队中的楼层任务落定即可，不进串行队列。 */
     getFloorSiblings(request: {
         sessionId: string;
-        messageId: string;
+        messageId?: string;
+        turn?: number;
     }): Promise<unknown>;
     renderOutputText(request: {
         sessionId: string;
@@ -162,10 +163,12 @@ export declare class TavernService extends TypertRemoteService {
     regenerate(request: {
         sessionId: string;
         messageId?: string;
+        turn?: number;
     }): Promise<unknown>;
     rollbackToFloor(request: {
         sessionId: string;
-        messageId: string;
+        messageId?: string;
+        turn?: number;
     }): Promise<unknown>;
     getFloorUserMessage(request: {
         sessionId: string;

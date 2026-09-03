@@ -14,7 +14,7 @@ import { LorebookEditor } from './panel/lorebookEditor.js'
 import type { CharacterSummary, Persona, PresetSummary, SessionBinding, TavernRemote, TavernSettings } from './types.js'
 import { EMPTY_SESSION_DEFAULTS } from './types.js'
 import { IconCopyOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
-import { Btn, CheckChips, ConfirmDialog, Dialog, Err, Field, IconBtn, Muted, Select, Skeleton, Toggle, errOf, useLoader, useToast } from './util.js'
+import { Btn, CheckChips, ConfirmDialog, Dialog, Err, Field, IconBtn, Muted, Select, Skeleton, Tabs, Toggle, errOf, useLoader, useToast } from './util.js'
 
 export function defaultBinding(sessionId: string, cardId: string, defaults?: TavernSettings['defaults']): SessionBinding {
   const d = defaults ?? EMPTY_SESSION_DEFAULTS
@@ -99,24 +99,17 @@ function PromptPreviewDialog(props: { data: PromptPreview; onClose: () => void }
           : ''}
       </Muted>
       <div className="dsh-tavern-filters" style={{ margin: '10px 0 12px' }}>
-        {(
-          [
-            ['standing', 'standing'],
-            ['turn', t('chip.preview.tab.turn')],
-            ['full', t('chip.preview.tab.full')],
-            ['log', t('binding.triggerLog')],
-          ] as const
-        ).map(([id, label]) => (
-          <button
-            key={id}
-            type="button"
-            className="dsh-tavern-chip"
-            data-active={tab === id ? 'true' : 'false'}
-            onClick={() => setTab(id)}
-          >
-            {label}
-          </button>
-        ))}
+        <Tabs
+          size="sm"
+          value={tab}
+          onChange={(id) => setTab(id as typeof tab)}
+          items={[
+            { id: 'standing', label: 'standing' },
+            { id: 'turn', label: t('chip.preview.tab.turn') },
+            { id: 'full', label: t('chip.preview.tab.full') },
+            { id: 'log', label: t('binding.triggerLog') },
+          ]}
+        />
         <span style={{ flex: 1 }} />
         <IconBtn label={t('chip.preview.copyView')} onClick={() => void copyBody()}>
           <IconCopyOutline16 />
@@ -343,10 +336,38 @@ export function TavernHeaderChip(props: {
         title={t('hero.pickCharacter')}
         avatarUrl={avatar}
         open={open}
+        loading={bindingLoader.state.status === 'loading'}
         hasPopup="dialog"
         onClick={() => setOpen(!open)}
       />
-      <Dialog open={open} title={t('chip.dialog.title')} onClose={() => setOpen(false)} width="xl">
+      <Dialog
+        open={open}
+        title={t('chip.dialog.title')}
+        onClose={() => setOpen(false)}
+        width="xl"
+        footer={
+          draft ? (
+            <div className="dsh-tavern-footActions">
+              {binding ? (
+                <Btn
+                  danger
+                  size="md"
+                  onClick={() => {
+                    setConfirmUnbind(true)
+                  }}
+                >
+                  {t('chip.unbind.action')}
+                </Btn>
+              ) : null}
+              <span className="dsh-tavern-footSpacer" />
+              <span className="dsh-tavern-footGroup">
+                <Btn size="md" onClick={() => void openChatLore()}>{t('chip.chatLore.edit')}</Btn>
+                <Btn primary size="md" onClick={() => void saveBinding()}>{t('binding.save')}</Btn>
+              </span>
+            </div>
+          ) : undefined
+        }
+      >
           <div className="dsh-tavern-binding">
           <Err message={error} />
           {!lists && (
@@ -442,23 +463,6 @@ export function TavernHeaderChip(props: {
                         {t('chip.field.injectJournal')}
                       </label>
                     </div>
-                  </div>
-
-                  <div className="dsh-tavern-footActions">
-                    {binding ? (
-                      <Btn
-                        danger
-                        size="md"
-                        onClick={() => {
-                          setConfirmUnbind(true)
-                        }}
-                      >
-                        {t('chip.unbind.action')}
-                      </Btn>
-                    ) : null}
-                    <span className="dsh-tavern-footSpacer" />
-                    <Btn size="md" onClick={() => void openChatLore()}>{t('chip.chatLore.edit')}</Btn>
-                    <Btn primary size="md" onClick={() => void saveBinding()}>{t('binding.save')}</Btn>
                   </div>
                 </>
               ) : (

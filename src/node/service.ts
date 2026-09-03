@@ -372,9 +372,9 @@ export class TavernService extends TypertRemoteService {
   }
 
   /** 分支兄弟导航是只读查询：等排队中的楼层任务落定即可，不进串行队列。 */
-  async getFloorSiblings(request: { sessionId: string; messageId: string }): Promise<unknown> {
+  async getFloorSiblings(request: { sessionId: string; messageId?: string; turn?: number }): Promise<unknown> {
     await this.state.waitForSessionTasks(request.sessionId)
-    return getFloorSiblings(this.floorDeps(), request.sessionId, request.messageId)
+    return getFloorSiblings(this.floorDeps(), request.sessionId, request.messageId, request.turn)
   }
 
   async renderOutputText(request: { sessionId: string; text: string }): Promise<unknown> {
@@ -424,15 +424,15 @@ export class TavernService extends TypertRemoteService {
     }
   }
 
-  regenerate(request: { sessionId: string; messageId?: string }): Promise<unknown> {
+  regenerate(request: { sessionId: string; messageId?: string; turn?: number }): Promise<unknown> {
     return this.state.enqueueSessionTask(request.sessionId, () =>
-      regenerate(this.floorDeps(), request.sessionId, request.messageId),
+      regenerate(this.floorDeps(), request.sessionId, request.messageId, request.turn),
     )
   }
 
-  rollbackToFloor(request: { sessionId: string; messageId: string }): Promise<unknown> {
+  rollbackToFloor(request: { sessionId: string; messageId?: string; turn?: number }): Promise<unknown> {
     return this.state.enqueueSessionTask(request.sessionId, () =>
-      rollbackToFloor(this.floorDeps(), request.sessionId, request.messageId),
+      rollbackToFloor(this.floorDeps(), request.sessionId, request.messageId, request.turn),
     )
   }
 

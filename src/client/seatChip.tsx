@@ -4,7 +4,7 @@
  */
 import type { ReactNode } from 'react'
 import { IconChevronDownOutline14 } from '@deepseek-ai/dsh-client-ui-primitives'
-import { Avatar } from './util.js'
+import { Avatar, Skeleton } from './util.js'
 import './styles.js'
 
 export function TavernSeatChip(props: {
@@ -13,6 +13,8 @@ export function TavernSeatChip(props: {
   avatarUrl?: string | null
   open?: boolean
   disabled?: boolean
+  /** 绑定/详情加载中：渲染骨架占位，避免标签在「选择角色卡」与角色名之间闪跳。 */
+  loading?: boolean
   hasPopup?: 'menu' | 'dialog'
   onClick: () => void
   chevron?: boolean
@@ -25,13 +27,26 @@ export function TavernSeatChip(props: {
       aria-haspopup={props.hasPopup ?? 'menu'}
       aria-expanded={props.open}
       title={props.title ?? props.label}
-      disabled={props.disabled}
+      disabled={props.disabled || props.loading}
       onClick={props.onClick}
     >
-      <span className="dsh-tavern-seatIcon">
-        <Avatar url={props.avatarUrl} name={props.label} size={16} />
-      </span>
-      <span className="dsh-tavern-seatLabel">{props.label}</span>
+      {props.loading ? (
+        <>
+          <span className="dsh-tavern-seatIcon">
+            <Skeleton width={16} height={16} radius={999} />
+          </span>
+          <span className="dsh-tavern-seatLabel">
+            <Skeleton width={64} height={13} />
+          </span>
+        </>
+      ) : (
+        <>
+          <span className="dsh-tavern-seatIcon">
+            <Avatar url={props.avatarUrl} name={props.label} size={16} />
+          </span>
+          <span className="dsh-tavern-seatLabel">{props.label}</span>
+        </>
+      )}
       {props.chevron !== false ? <IconChevronDownOutline14 className="dsh-tavern-seatChevron" /> : null}
       {props.trailing}
     </button>

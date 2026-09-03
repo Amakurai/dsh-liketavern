@@ -10,5 +10,6 @@ export declare const zh: {
     readonly 'util.regex.enable': "启用此正则";
     readonly 'util.regex.unnamed': "预设正则 {index}";
     readonly 'util.regex.noFind': "（无查找式，不会生效）";
+    readonly 'util.loadTimeout': "加载超时：远程调用一直没有返回。点「刷新」重试；反复出现请重载页面或重启 dsh web。";
 };
 export declare const en: Record<keyof typeof zh, string>;

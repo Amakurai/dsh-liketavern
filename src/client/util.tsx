@@ -428,7 +428,8 @@ export function clickableProps(onClick: () => void) {
 type LoadState<T> = { status: 'idle' } | { status: 'loading' } | { status: 'ready'; value: T } | { status: 'error'; message: string }
 
 /** 拉取一个 remote 读取；reload() 触发重拉；enabled=false 时挂起（idle）。 */
-export function useLoader<T>(load: () => Promise<Envelope<T>>, deps: readonly unknown[] = [], enabled = true) {
+export function useLoader<T>(load: () => Promise<Envelope<T>>, deps: readonly unknown[] = [], enabled = true, timeoutMs = 20_000) {
+  const t = useT()
   const [state, setState] = useState<LoadState<T>>(enabled ? { status: 'loading' } : { status: 'idle' })
   const [seq, setSeq] = useState(0)
   useEffect(() => {
@@ -438,15 +439,24 @@ export function useLoader<T>(load: () => Promise<Envelope<T>>, deps: readonly un
     }
     let alive = true
     setState({ status: 'loading' })
+    // remote 挂起（通道中断/服务无响应）时不能永远停在骨架屏：超时转错误态，面板上有「刷新」可重试；
+    // alive 不提前置 false，迟到的好结果仍会覆盖错误态、自动恢复。
+    const timer = setTimeout(() => {
+      if (alive) setState({ status: 'error', message: t('util.loadTimeout') })
+    }, timeoutMs)
+    const settle = () => clearTimeout(timer)
     load()
       .then((r) => {
+        settle()
         if (alive) setState(r.ok ? { status: 'ready', value: r.value } : { status: 'error', message: r.error.message })
       })
       .catch((e) => {
+        settle()
         if (alive) setState({ status: 'error', message: e instanceof Error ? e.message : String(e) })
       })
     return () => {
       alive = false
+      clearTimeout(timer)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [...deps, seq, enabled])
@@ -549,7 +559,7 @@ export function Dialog(props: {
       description={props.description}
       closeLabel={t('action.close')}
       footer={props.footer}
-      contentClassName={`dsh-tavern-modalContent${widthClass ? ` ${widthClass}` : ''}`}
+      contentClassName={`dsh-tavern-modalContent${widthClass ? ` ${widthClass}` : ''}${props.footer ? ' dsh-tavern-modalHasFooter' : ''}`}
     >
       <div className="dsh-tavern-ui dsh-tavern-modalBody">{props.children}</div>
     </Modal>

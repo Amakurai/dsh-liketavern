@@ -12,6 +12,7 @@ interface AssistantNode {
         kind?: string;
         turn?: {
             status?: string;
+            turn?: number;
         };
     };
     data: {

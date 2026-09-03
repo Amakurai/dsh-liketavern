@@ -205,6 +205,17 @@ function turnOfAssistantMessage(events: readonly SessionEvent[], messageId: stri
   return null
 }
 
+/**
+ * 楼层定位：messageId（assistant 消息 id）优先，其次直接按 turn 号。
+ * 被中断的 assistant 消息不进宿主的 assistant-actions slot（非 finalized），
+ * 中断楼层的操作条由 chat.node 渲染侧按 turn 号定位补挂。
+ */
+export function resolveFloorTurn(events: readonly SessionEvent[], messageId?: string, turn?: number): number | null {
+  if (messageId !== undefined) return turnOfAssistantMessage(events, messageId)
+  if (turn === undefined || !Number.isSafeInteger(turn) || turn < 1) return null
+  return events.some((e) => e.type === 'turn/start' && (e.data as { turn: number }).turn === turn) ? turn : null
+}
+
 /** 用户消息的纯文本（多段 text 拼接）。 */
 function userMessageText(message: UserMessage): string {
   return message.content
@@ -458,16 +469,16 @@ async function resumeAndDrive(ctx: Context, childId: string, message: UserMessag
   return handle.agent
 }
 
-/** 重新生成：回滚目标楼层并重跑。messageId 指定楼层（assistant 消息 id），缺省取最后一个已关闭 turn。进行中的 turn 拒绝。 */
-export async function regenerate({ ctx, state }: FloorDeps, sessionId: string, messageId?: string): Promise<ForkResult> {
+/** 重新生成：回滚目标楼层并重跑。messageId（assistant 消息 id）或 floorTurn 指定楼层，都缺省取最后一个已关闭 turn。进行中的 turn 拒绝。 */
+export async function regenerate({ ctx, state }: FloorDeps, sessionId: string, messageId?: string, floorTurn?: number): Promise<ForkResult> {
   const source = liveSession(ctx, sessionId)
   if (!source) throw new FloorError('session-not-live', `会话 ${sessionId} 不在线（仅支持当前打开的会话）`)
   requireTavernSession(ctx, source)
   const { turns, openTurn } = closedTurns(source.events)
   if (openTurn !== null) throw new FloorError('turn-open', `turn ${openTurn} 仍在进行中，请等待完成后再重新生成`)
   let target: number
-  if (messageId !== undefined) {
-    const turn = turnOfAssistantMessage(source.events, messageId)
+  if (messageId !== undefined || floorTurn !== undefined) {
+    const turn = resolveFloorTurn(source.events, messageId, floorTurn)
     if (turn === null) throw new FloorError('no-message', '这条消息不在当前会话中（可能已过期）')
     if (!turns.includes(turn)) throw new FloorError('turn-open', `turn ${turn} 尚未完结，不能重新生成`)
     target = turn
@@ -493,14 +504,14 @@ export async function regenerate({ ctx, state }: FloorDeps, sessionId: string, m
   return { childSessionId: childId, title: await branchTitle(state, binding, `从第 ${target} 层重生成`) }
 }
 
-/** 回退到指定楼层：保留该楼层（含）之前的全部内容，丢弃其后的楼层；不自动续跑。 */
-export async function rollbackToFloor({ ctx, state }: FloorDeps, sessionId: string, messageId: string): Promise<ForkResult> {
+/** 回退到指定楼层：保留该楼层（含）之前的全部内容，丢弃其后的楼层；不自动续跑。messageId 与 floorTurn 至少给其一。 */
+export async function rollbackToFloor({ ctx, state }: FloorDeps, sessionId: string, messageId?: string, floorTurn?: number): Promise<ForkResult> {
   const source = liveSession(ctx, sessionId)
   if (!source) throw new FloorError('session-not-live', `会话 ${sessionId} 不在线`)
   requireTavernSession(ctx, source)
   const { openTurn } = closedTurns(source.events)
   if (openTurn !== null) throw new FloorError('turn-open', `turn ${openTurn} 仍在进行中`)
-  const turn = turnOfAssistantMessage(source.events, messageId)
+  const turn = resolveFloorTurn(source.events, messageId, floorTurn)
   if (turn === null) throw new FloorError('no-message', '这条消息不在当前会话中（可能已过期）')
   const endSeq = turnEndSeq(source.events, turn)
   if (endSeq === null) throw new FloorError('turn-open', `turn ${turn} 尚未完结，不能作为回退边界`)
@@ -735,14 +746,15 @@ export async function getGreetingSwipe(
 export async function getFloorSiblings(
   { ctx, state }: FloorDeps,
   sessionId: string,
-  messageId: string,
+  messageId?: string,
+  floorTurn?: number,
 ): Promise<{ swipe: (SiblingSwipe & { turn: number }) | null }> {
   const none: { swipe: null } = { swipe: null }
   const binding = await state.loadBinding(sessionId)
-  if (!binding || !messageId) return none
+  if (!binding || (messageId === undefined && floorTurn === undefined)) return none
   const session = liveSession(ctx, sessionId)
   if (!session || !isTavernRuntimeSession(ctx, session)) return none
-  const turn = turnOfAssistantMessage(session.events, messageId)
+  const turn = resolveFloorTurn(session.events, messageId, floorTurn)
   if (turn === null) return none
 
   const forks = await loadSiblingForks(state.paths.root)

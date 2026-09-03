@@ -374,13 +374,15 @@ export interface TavernRemote {
     regenerate(req: {
         sessionId: string;
         messageId?: string;
+        turn?: number;
     }): Promise<Envelope<{
         childSessionId: string;
         title?: string;
     }>>;
     rollbackToFloor(req: {
         sessionId: string;
-        messageId: string;
+        messageId?: string;
+        turn?: number;
     }): Promise<Envelope<{
         childSessionId: string;
         title?: string;
@@ -423,7 +425,8 @@ export interface TavernRemote {
     }>>;
     getFloorSiblings(req: {
         sessionId: string;
-        messageId: string;
+        messageId?: string;
+        turn?: number;
     }): Promise<Envelope<{
         swipe: {
             turn: number;

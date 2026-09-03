@@ -207,14 +207,14 @@ export interface TavernRemote {
       canSwipeGreeting?: boolean
     }>
   >
-  regenerate(req: { sessionId: string; messageId?: string }): Promise<Envelope<{ childSessionId: string; title?: string }>>
-  rollbackToFloor(req: { sessionId: string; messageId: string }): Promise<Envelope<{ childSessionId: string; title?: string }>>
+  regenerate(req: { sessionId: string; messageId?: string; turn?: number }): Promise<Envelope<{ childSessionId: string; title?: string }>>
+  rollbackToFloor(req: { sessionId: string; messageId?: string; turn?: number }): Promise<Envelope<{ childSessionId: string; title?: string }>>
   getFloorUserMessage(req: { sessionId: string; messageId: string }): Promise<Envelope<{ turn: number; text: string }>>
   editUserMessage(req: { sessionId: string; messageId: string; text: string }): Promise<Envelope<{ childSessionId: string; title?: string }>>
   getFloorAssistantMessage(req: { sessionId: string; messageId: string }): Promise<Envelope<{ turn: number; text: string }>>
   editAssistantMessage(req: { sessionId: string; messageId: string; text: string }): Promise<Envelope<{ childSessionId: string; title?: string }>>
   continueFloor(req: { sessionId: string; messageId: string }): Promise<Envelope<{ continued: boolean }>>
-  getFloorSiblings(req: { sessionId: string; messageId: string }): Promise<
+  getFloorSiblings(req: { sessionId: string; messageId?: string; turn?: number }): Promise<
     Envelope<{ swipe: { turn: number; index: number; total: number; siblings: string[] } | null }>
   >
   impersonate(req: { sessionId: string }): Promise<Envelope<{ text: string }>>

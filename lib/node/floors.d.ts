@@ -24,6 +24,12 @@ export declare function forkAgentOptions(parent: Pick<Agent, 'options'> | undefi
 /** 切到 boundaryInclusive（含）为止的前缀；-1 / 空日志得到空数组（重跑第一层时 turn/start 在 seq 0）。 */
 export declare function sessionPrefixEvents(source: Pick<Session, 'events'>, boundaryInclusive?: number): SessionEvent[];
 /**
+ * 楼层定位：messageId（assistant 消息 id）优先，其次直接按 turn 号。
+ * 被中断的 assistant 消息不进宿主的 assistant-actions slot（非 finalized），
+ * 中断楼层的操作条由 chat.node 渲染侧按 turn 号定位补挂。
+ */
+export declare function resolveFloorTurn(events: readonly SessionEvent[], messageId?: string, turn?: number): number | null;
+/**
  * 取指定会话 turn >= fromTurn 的 WAL 楼层。
  *
  * WalManager.rollbackAfter 会在内部按数组逆序回放，因此这里必须按 turn 数字升序传入；
@@ -52,10 +58,10 @@ export interface ForkResult {
     /** 分支会话的可读标题，如「角色名 · 从第 3 层重生成」。 */
     title: string;
 }
-/** 重新生成：回滚目标楼层并重跑。messageId 指定楼层（assistant 消息 id），缺省取最后一个已关闭 turn。进行中的 turn 拒绝。 */
-export declare function regenerate({ ctx, state }: FloorDeps, sessionId: string, messageId?: string): Promise<ForkResult>;
-/** 回退到指定楼层：保留该楼层（含）之前的全部内容，丢弃其后的楼层；不自动续跑。 */
-export declare function rollbackToFloor({ ctx, state }: FloorDeps, sessionId: string, messageId: string): Promise<ForkResult>;
+/** 重新生成：回滚目标楼层并重跑。messageId（assistant 消息 id）或 floorTurn 指定楼层，都缺省取最后一个已关闭 turn。进行中的 turn 拒绝。 */
+export declare function regenerate({ ctx, state }: FloorDeps, sessionId: string, messageId?: string, floorTurn?: number): Promise<ForkResult>;
+/** 回退到指定楼层：保留该楼层（含）之前的全部内容，丢弃其后的楼层；不自动续跑。messageId 与 floorTurn 至少给其一。 */
+export declare function rollbackToFloor({ ctx, state }: FloorDeps, sessionId: string, messageId?: string, floorTurn?: number): Promise<ForkResult>;
 /** 读取指定楼层的首条用户消息（编辑对话框预填用）。 */
 export declare function getFloorUserMessage({ ctx }: FloorDeps, sessionId: string, messageId: string): Promise<{
     turn: number;
@@ -110,7 +116,7 @@ export declare function getGreetingSwipe({ ctx, state }: FloorDeps, sessionId: s
  * dsh 不向插件暴露历史会话目录，绑定文件是插件侧最可靠的存在性信号；删卡/解绑会清绑定）。
  * 剪枝有变化就顺手落盘。非 Tavern / 未绑定 / 无兄弟记录一律软返回 swipe=null。
  */
-export declare function getFloorSiblings({ ctx, state }: FloorDeps, sessionId: string, messageId: string): Promise<{
+export declare function getFloorSiblings({ ctx, state }: FloorDeps, sessionId: string, messageId?: string, floorTurn?: number): Promise<{
     swipe: (SiblingSwipe & {
         turn: number;
     }) | null;

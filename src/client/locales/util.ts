@@ -11,6 +11,7 @@ export const zh = {
   'util.regex.enable': '启用此正则',
   'util.regex.unnamed': '预设正则 {index}',
   'util.regex.noFind': '（无查找式，不会生效）',
+  'util.loadTimeout': '加载超时：远程调用一直没有返回。点「刷新」重试；反复出现请重载页面或重启 dsh web。',
 } as const
 
 export const en: Record<keyof typeof zh, string> = {
@@ -24,4 +25,5 @@ export const en: Record<keyof typeof zh, string> = {
   'util.regex.enable': 'Enable this regex',
   'util.regex.unnamed': 'Preset regex {index}',
   'util.regex.noFind': '(no find pattern; never fires)',
+  'util.loadTimeout': 'Load timed out: the remote call never returned. Click "Refresh" to retry; if it keeps happening, reload the page or restart dsh web.',
 }

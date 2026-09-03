@@ -162,7 +162,7 @@ type LoadState<T> = {
     message: string;
 };
 /** 拉取一个 remote 读取；reload() 触发重拉；enabled=false 时挂起（idle）。 */
-export declare function useLoader<T>(load: () => Promise<Envelope<T>>, deps?: readonly unknown[], enabled?: boolean): {
+export declare function useLoader<T>(load: () => Promise<Envelope<T>>, deps?: readonly unknown[], enabled?: boolean, timeoutMs?: number): {
     state: LoadState<T>;
     reload: () => void;
 };

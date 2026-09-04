@@ -1,14 +1,16 @@
 /**
  * 世界书触发引擎单测。
  * 覆盖：明文/正则键、{{user}}/{{char}} 身份宏、大小写与整词（全局与条目级）、scanDepth（全局与条目级）、
- * inclusion group（一组一条、sticky 占用、override、计分/加权）、selective 四逻辑、
+ * inclusion group（一组一条、sticky 占用、override、计分/加权、落选条目正文不再喂给后续递归轮次、
+ * 递归轮新晋组员可翻盘）、selective 四逻辑、
  * constant、probability（standing-safe 常驻条目豁免掷骰、恒定注入；含本轮宏的 constant 不豁免）、
  * 递归（excludeRecursion/preventRecursion/delayUntilRecursion/
  * maxRecursionSteps）、定时（sticky/cooldown/delay，跨轮回传 timerState）、
  * 落选回滚（未注入条目清本轮写入的 sticky/cooldown；sticky 延续条目被预算裁掉也清 stickyLeft、保留 cooldown）、
  * 预算截断（优先级/ignoreBudget/overflowWarning；固定预算为绝对上限、百分比按 128K 基数
  * 折算并扣减 reservedTokens；standing 侧常驻豁免计费，被裁条目进 truncated 清单）、
- * 位置分桶、多来源排序、includeNames。
+ * 位置分桶、多来源排序、includeNames、
+ * 键安全（超长键与灾难回溯正则键永不命中；绕过归一化的非字符串键塌缩不炸）。
  *
  * 定时语义约定（types.ts）：sticky=N = 激活后再保持 N 轮；cooldown=N = 激活后 N 轮内不再触发。
  */
@@ -811,6 +813,39 @@ describe('inclusion group', () => {
     expect(res.timerState.stickyLeft['b']).toBeUndefined()
     expect(res.timerState.cooldownLeft['b']).toBeUndefined()
   })
+
+  it('落选组员的正文不喂给后续递归轮次（不再让落选者决定别人是否被激活）', () => {
+    // a、b 同组且首轮同时命中；a 胜出后，b 的正文（含 D 的键）不得再进入递归扫描
+    const entries = [
+      makeEntry({ key: 'a', keys: ['apple'], group: 'g', content: 'banana' }),
+      makeEntry({ key: 'b', keys: ['apple'], group: 'g', content: 'cherry' }),
+      makeEntry({ key: 'C', keys: ['banana'] }),
+      makeEntry({ key: 'D', keys: ['cherry'] }),
+    ]
+    const res = run({ entries, messages: [userMsg('apple')], random: () => 0 })
+    // a 胜出 → 其正文触发 C；b 落选 → cherry 不进入递归，D 不激活
+    expect(activatedKeys(res).sort()).toEqual(['C', 'a'])
+    expect(logsOf(res, 'group-skip').map((l) => l.entryKey)).toEqual(['b'])
+    expect(res.log.some((l) => l.entryKey === 'D' && l.kind === 'activated')).toBe(false)
+  })
+
+  it('递归轮新晋组员与现任胜者重新角逐：override 翻盘后，落选的正文不再喂更深层递归', () => {
+    // level 0：X 与 a 激活（a 独占组暂为胜者）；level 1：b 被 X 的正文递归命中，以 override 翻盘；
+    // a 落选后其正文不再喂 level 2；b 作为新胜者正文 date 正常触发 D（level 2）。
+    // C 在 level 1 经当时仍在位的 a 正文激活——裁决发生在每轮扫描之后，属既定时序语义。
+    const entries = [
+      makeEntry({ key: 'X', keys: ['apple'], content: 'banana' }),
+      makeEntry({ key: 'a', keys: ['apple'], group: 'g', content: 'cherry' }),
+      makeEntry({ key: 'b', keys: ['banana'], group: 'g', groupOverride: true, content: 'date' }),
+      makeEntry({ key: 'C', keys: ['cherry'] }),
+      makeEntry({ key: 'D', keys: ['date'] }),
+    ]
+    const res = run({ entries, messages: [userMsg('apple')], random: () => 0 })
+    expect(activatedKeys(res).sort()).toEqual(['C', 'D', 'X', 'b'])
+    expect(logsOf(res, 'group-skip').map((l) => l.entryKey)).toEqual(['a'])
+    expect(res.activated.find((x) => x.entry.key === 'b')!.via).toBe('recursion')
+    expect(res.activated.find((x) => x.entry.key === 'D')!.recursionLevel).toBe(2)
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -899,5 +934,48 @@ describe('未注入条目的定时状态回滚', () => {
     expect(activatedKeys(r3)).toEqual(['b', 'win'])
     expect(logsOf(r3, 'cooldown-skip').some((l) => l.entryKey === 'a')).toBe(true)
     expect(r3.log.some((l) => l.entryKey === 'a' && l.kind === 'activated' && l.detail.includes('via=sticky'))).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 键安全（主事件循环扫描第三方键，防 DoS）
+// ---------------------------------------------------------------------------
+
+describe('键安全', () => {
+  it('超长键（>500 字符）与灾难回溯正则键按「永不命中」处理', () => {
+    const res = run({
+      entries: [
+        makeEntry({ key: 'long', keys: ['x'.repeat(501)] }),
+        makeEntry({ key: 'evil', keys: ['/(a+)+$/'] }),
+      ],
+      messages: [userMsg(`${'x'.repeat(600)} ${'a'.repeat(30)}b`)],
+    })
+    expect(activatedKeys(res)).toEqual([])
+    // 也不该留下任何激活日志
+    expect(res.log.some((l) => l.kind === 'activated')).toBe(false)
+  })
+
+  it('恰好 500 字符的键与合法正则键不受影响', () => {
+    const key500 = 'k'.repeat(500)
+    const res = run({
+      entries: [makeEntry({ key: 'edge', keys: [key500] }), makeEntry({ key: 're', keys: ['/c.t/'] })],
+      messages: [userMsg(`${key500} and a cat`)],
+    })
+    expect(activatedKeys(res).sort()).toEqual(['edge', 're'])
+  })
+
+  it('绕过归一化的调用方传入非字符串键/非数组 keys：塌缩为安全形态，不炸在 .map/.trim', () => {
+    const mixed = makeEntry({ key: 'mixed', keys: ['ok'] })
+    ;(mixed as { keys: unknown }).keys = ['ok', 42, null]
+    expect(activatedKeys(run({ entries: [mixed], messages: [userMsg('ok fine')] }))).toEqual(['mixed'])
+
+    const bad = makeEntry({ key: 'bad', keys: ['ok'] })
+    ;(bad as { keys: unknown }).keys = 'not-an-array'
+    expect(activatedKeys(run({ entries: [bad], messages: [userMsg('ok')] }))).toEqual([])
+
+    const badGroup = makeEntry({ key: 'bg', keys: ['ok'], group: 'g' })
+    ;(badGroup as { group: unknown }).group = 42
+    const res = run({ entries: [badGroup], messages: [userMsg('ok')] })
+    expect(activatedKeys(res)).toEqual(['bg']) // 非字符串 group 视为不分组
   })
 })

@@ -113,10 +113,11 @@ export function PresetsSection(props: { remote: TavernRemote }) {
   const filtered = q === '' ? items : items.filter((p) => p.name.toLowerCase().includes(q) || p.id.toLowerCase().includes(q))
 
   const open = async (id: string) => {
-    setError(null)
-    const r = await remote.getPreset({ id })
-    if (r.ok) setEditing(structuredClone(r.value.preset))
-    else setError(r.error.message)
+    await runAsync(setBusy, setError, async () => {
+      const r = await remote.getPreset({ id })
+      if (r.ok) setEditing(structuredClone(r.value.preset))
+      else setError(r.error.message)
+    })
   }
 
   const save = async () => {
@@ -134,14 +135,16 @@ export function PresetsSection(props: { remote: TavernRemote }) {
 
   const remove = async () => {
     if (!toDelete) return
-    const r = await remote.deletePreset({ id: toDelete })
-    const err = errOf(r)
-    if (err) setError(err)
-    else {
-      if (editing?.identifier === toDelete) setEditing(null)
-      setToDelete(null)
-      reload()
-    }
+    await runAsync(setBusy, setError, async () => {
+      const r = await remote.deletePreset({ id: toDelete })
+      const err = errOf(r)
+      if (err) setError(err)
+      else {
+        if (editing?.identifier === toDelete) setEditing(null)
+        setToDelete(null)
+        reload()
+      }
+    })
   }
 
   const onImportFile = async (file: File) => {
@@ -168,47 +171,51 @@ export function PresetsSection(props: { remote: TavernRemote }) {
   }
 
   const setAsDefault = async (id: string) => {
-    const current = await remote.getSettings({})
-    if (!current.ok) {
-      setError(current.error.message)
-      return
-    }
-    const defaults = { ...EMPTY_SESSION_DEFAULTS, ...current.value.settings.defaults, presetId: id }
-    const r = await remote.updateSettings({ patch: { defaults } })
-    const err = errOf(r)
-    if (err) setError(err)
-    else toast.show(t('presets.setDefaultDone'))
+    await runAsync(setBusy, setError, async () => {
+      const current = await remote.getSettings({})
+      if (!current.ok) {
+        setError(current.error.message)
+        return
+      }
+      const defaults = { ...EMPTY_SESSION_DEFAULTS, ...current.value.settings.defaults, presetId: id }
+      const r = await remote.updateSettings({ patch: { defaults } })
+      const err = errOf(r)
+      if (err) setError(err)
+      else toast.show(t('presets.setDefaultDone'))
+    })
   }
 
   const exportPreset = async (id: string, name: string) => {
-    const r = await remote.getPreset({ id })
-    if (!r.ok) {
-      setError(r.error.message)
-      return
-    }
-    const preset = r.value.preset
-    const prompts = preset.entries.map((e) => ({
-      identifier: e.identifier,
-      name: e.name,
-      role: e.role,
-      content: e.content,
-      marker: e.marker,
-      system_prompt: e.role === 'system',
-      injection_position: e.position === 'in-chat' ? 1 : 0,
-      injection_depth: e.depth,
-      injection_order: e.order,
-    }))
-    const order = preset.entries.map((e) => ({ identifier: e.identifier, enabled: e.enabled }))
-    const json: Record<string, unknown> = {
-      name: preset.name,
-      identifier: preset.identifier,
-      prompts,
-      prompt_order: [{ character_id: 100001, order }],
-    }
-    if (preset.regexScripts && preset.regexScripts.length > 0) {
-      json.extensions = { regex_scripts: preset.regexScripts }
-    }
-    downloadJson(`${name || id}.json`, json)
+    await runAsync(setBusy, setError, async () => {
+      const r = await remote.getPreset({ id })
+      if (!r.ok) {
+        setError(r.error.message)
+        return
+      }
+      const preset = r.value.preset
+      const prompts = preset.entries.map((e) => ({
+        identifier: e.identifier,
+        name: e.name,
+        role: e.role,
+        content: e.content,
+        marker: e.marker,
+        system_prompt: e.role === 'system',
+        injection_position: e.position === 'in-chat' ? 1 : 0,
+        injection_depth: e.depth,
+        injection_order: e.order,
+      }))
+      const order = preset.entries.map((e) => ({ identifier: e.identifier, enabled: e.enabled }))
+      const json: Record<string, unknown> = {
+        name: preset.name,
+        identifier: preset.identifier,
+        prompts,
+        prompt_order: [{ character_id: 100001, order }],
+      }
+      if (preset.regexScripts && preset.regexScripts.length > 0) {
+        json.extensions = { regex_scripts: preset.regexScripts }
+      }
+      downloadJson(`${name || id}.json`, json)
+    })
   }
 
   const createNew = () => {
@@ -274,10 +281,10 @@ export function PresetsSection(props: { remote: TavernRemote }) {
               <IconBtn label={t('action.edit')} onClick={() => void open(item.id)}>
                 <IconEditOutline16 />
               </IconBtn>
-              <IconBtn label={t('presets.export')} onClick={() => void exportPreset(item.id, item.name)}>
+              <IconBtn label={t('presets.export')} disabled={busy} onClick={() => void exportPreset(item.id, item.name)}>
                 <IconDownloadOutline16 />
               </IconBtn>
-              <Btn size="sm" onClick={() => void setAsDefault(item.id)}>{t('presets.setAsDefault')}</Btn>
+              <Btn size="sm" disabled={busy} onClick={() => void setAsDefault(item.id)}>{t('presets.setAsDefault')}</Btn>
               <IconBtn label={t('presets.delete')} danger onClick={() => setToDelete(item.id)}>
                 <IconTrashOutline16 />
               </IconBtn>
@@ -291,6 +298,7 @@ export function PresetsSection(props: { remote: TavernRemote }) {
         description={toDelete ? t('presets.deleteDesc', { id: toDelete }) : ''}
         confirmLabel={t('action.delete')}
         danger
+        busy={busy}
         onCancel={() => setToDelete(null)}
         onConfirm={() => void remove()}
       />

@@ -38,5 +38,6 @@ export declare const zh: {
     readonly 'memory.journalHint': "写在角色工作区 journal.md。会话芯片打开「注入角色笔记」后才会进本轮 turn。";
     readonly 'memory.saveJournal': "保存笔记";
     readonly 'memory.journalSaved': "已保存角色笔记";
+    readonly 'memory.opFailed': "操作失败：{message}";
 };
 export declare const en: Record<keyof typeof zh, string>;

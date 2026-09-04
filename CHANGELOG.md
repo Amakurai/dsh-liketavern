@@ -2,6 +2,19 @@
 
 本插件与 dsh 宿主版本一一绑定（peerDependency 锁定精确版本），升级 dsh 前请先确认有适配的插件版本。
 
+## 0.1.6（2026-09-04）
+
+适配 dsh `0.1.2-rc.1`。
+
+- 修复（楼层 WAL）：同一角色卡多会话并发不再互相污染楼层归属——楼层改为按会话开立（`openFloors` 记 `sessionId → { cardId, floor }`），turn 流程写入走 `WorkspaceFs.withFloor(floor)` 派生实例，共享句柄 floor 恒为 null；生成中途换绑角色卡后写工具按 binding-changed 拒写，不再绕过 WAL。
+- 修复（面板写入）：设置面板的记忆/世界状态编辑（saveMemory/deleteMemory/compressMemories/addWorldDelta/revokeWorldDelta）全部改走 `plainWorkspace`（floor 恒 null），生成期间的面板修改不再被楼层回退静默撤销；手动压缩记忆改为「先写合并条目、后归档原批次」，合并写失败不再整批丢失。
+- 修复（资产 id）：世界书/预设/人设文件名净化增加冲突检测——不同显示名净化到同一 id 时自动追加序号后缀，不再静默覆盖；服务层统一使用存储层返回的实际落盘 id。
+- 安全（第三方资产）：PNG 卡 zTXt/iTXt 解压加输出上限防压缩炸弹，卡文件字节数硬上限；正则规则编译期拒绝超长 pattern 与嵌套量词/交叠分支等灾难性回溯构造；世界书/预设导入加条目数、正文长度、键长度硬限制，字段缺失的畸形数据归一化时即抛错。
+- 修复（世界书）：inclusion group 落选条目不再参与后续轮次的递归触发。
+- 修复（校验）：绑定文件读写全量严格校验（`parseSessionBinding`），坏数据不再落盘；remote 入参 schema 在可精确刻画处收紧；setSessionBinding/savePreset/saveRegexRules 改为整体校验，非法载荷拒绝落盘。
+- 性能：listCharacters 与 tavern_asset_list 不再无界递归遍历 memory/archive/state/wal；客户端绑定/角色详情/头像 RPC 加会话级去重缓存（in-flight 去重 + 短 TTL），getAvatar 服务端加 stat 指纹缓存。
+- 界面：记忆面板及其余子面板的写操作统一走 runAsync 安全外壳——失败 toast 提示、操作中 busy 防连击，不再产生未处理 rejection；交互卡渲染开关优先读会话绑定的 interactiveCards，缺省回落全局设置。
+
 ## 0.1.5（2026-09-03）
 
 适配 dsh `0.1.2-rc.1`。

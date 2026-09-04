@@ -2,7 +2,9 @@
  * 世界书归一化（lorebook）单元测试。
  * 覆盖：原生 WI 对象 map 解析（/regex/ 键、null 跟随全局、selectiveLogic 数值、容错转换）、
  * character_book 条目（extensions 覆盖、before_char/after_char 字符串 position）、
- * 往返导出一致性、mergeDeltasForExport 三种 type 与 revoked/过期忽略。
+ * 往返导出一致性、mergeDeltasForExport 三种 type 与 revoked/过期忽略、
+ * 导入硬上限与错型拒绝（条目数 2000 / 正文 100000 / 键 500；键容器与 content 错型归一化时抛错，
+ * 非对象条目保持静默跳过以兼容旧导入）。
  */
 import { describe, expect, it } from 'vitest'
 import type { WorldDelta } from '../src/core/types.js'
@@ -238,6 +240,55 @@ describe('exportLorebook：ST 原生形态与往返', () => {
     const once = parseLorebook(NATIVE_MAP, { source: 'global', sourceRef: 'b' })
     const twice = parseLorebook(exportLorebook(once, 'b'), { source: 'global', sourceRef: 'b' })
     expect(twice).toEqual(once)
+  })
+})
+
+describe('导入硬上限与错型拒绝（统一拒绝口径，不做静默截断）', () => {
+  const OPTS = { source: 'global', sourceRef: 'b' } as const
+
+  it('条目数超过 2000 拒绝导入（map 与数组形态同口径）', () => {
+    const map: Record<string, unknown> = {}
+    for (let i = 0; i < 2001; i++) map[String(i)] = { key: [`k${i}`], content: 'c' }
+    expect(() => parseLorebook({ entries: map }, OPTS)).toThrow(/条目数 2001 超过上限 2000/)
+    const arr = Array.from({ length: 2001 }, (_, i) => ({ keys: [`k${i}`], content: 'c' }))
+    expect(() => parseLorebook(arr, OPTS)).toThrow(/条目数/)
+    // 恰好 2000 条放行
+    const ok = Array.from({ length: 2000 }, (_, i) => ({ keys: [`k${i}`], content: 'c' }))
+    expect(parseLorebook(ok, OPTS)).toHaveLength(2000)
+  })
+
+  it('单条正文超过 100000 字符拒绝（native 与 character_book 条目同口径）', () => {
+    expect(() => parseLorebook({ entries: [{ key: ['a'], content: 'x'.repeat(100_001) }] }, OPTS)).toThrow(/正文/)
+    expect(() => parseLorebook({ entries: [{ keys: ['a'], content: 'x'.repeat(100_001) }] }, OPTS)).toThrow(/正文/)
+    // 恰好 100000 字符放行
+    const ok = parseLorebook({ entries: [{ keys: ['a'], content: 'x'.repeat(100_000) }] }, OPTS)
+    expect(ok).toHaveLength(1)
+  })
+
+  it('单个触发键超过 500 字符拒绝（主键与次级键同口径）', () => {
+    expect(() => parseLorebook({ entries: [{ keys: ['k'.repeat(501)], content: 'c' }] }, OPTS)).toThrow(/触发键/)
+    expect(() => parseLorebook({ entries: [{ key: ['a'], keysecondary: ['s'.repeat(501)], content: 'c' }] }, OPTS)).toThrow(
+      /触发键/,
+    )
+    // 恰好 500 字符放行
+    const ok = parseLorebook({ entries: [{ keys: ['k'.repeat(500)], content: 'c' }] }, OPTS)
+    expect(ok).toHaveLength(1)
+  })
+
+  it('合法 JSON 但字段错型在归一化时抛错，而不是落盘后在 .includes()/.map() 才炸', () => {
+    // key 给字符串而不是数组：旧口径会被 toStrArr 静默塌缩成 []，现在直接拒绝
+    expect(() => parseLorebook({ entries: [{ key: 'not-array', content: 'c' }] }, OPTS)).toThrow(/不是数组/)
+    expect(() => parseLorebook({ entries: [{ keys: ['a'], secondary_keys: 'x', content: 'c' }] }, OPTS)).toThrow(/不是数组/)
+    // content 是对象：旧口径静默塌缩成 ''，现在拒绝
+    expect(() => parseLorebook({ entries: [{ keys: ['a'], content: { nested: true } }] }, OPTS)).toThrow(
+      /content 不是字符串/,
+    )
+  })
+
+  it('非对象条目保持静默跳过（兼容已在工作区落盘的旧导入文件）', () => {
+    const entries = parseLorebook({ entries: [{ keys: ['a'], content: 'c' }, null, 42, 'junk'] }, OPTS)
+    expect(entries).toHaveLength(1)
+    expect(entries[0]!.keys).toEqual(['a'])
   })
 })
 

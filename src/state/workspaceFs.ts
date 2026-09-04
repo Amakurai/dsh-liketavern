@@ -1,10 +1,15 @@
 /**
  * 工作区事务文件面（WorkspaceFs）。
  *
- * 插件对角色工作区的一切写入都必须经过本类。仅当当前有会话楼层
- * （turn/start 已 beginFloor）时才向 WAL 记录快照，供 roll/回退逆序回放。
- * 导入角色卡、设置面板直接编辑等非会话期写入 floor 为 null：照常落盘、
- * 不记 WAL——否则会因「non-floor 未 begin」抛错，且这类写入也不该随对话回滚。
+ * 插件对角色工作区的一切写入都必须经过本类。仅当实例携带会话楼层时才向 WAL
+ * 记录快照，供 roll/回退逆序回放。导入角色卡、设置面板直接编辑等非会话期写入
+ * floor 为 null：照常落盘、不记 WAL——这类写入不该随对话回滚。
+ *
+ * 楼层隔离模型（问题1修复）：每卡一个共享句柄（TavernState.workspace），其 floor
+ * 恒为 null；会话楼层写入一律走 `withFloor(floor)` 派生的独立实例——同一张卡的
+ * 并发会话各有各的楼层实例，互不覆盖，回滚边界按 `sessionId#tN` 各自回放。
+ * host 在 turn/start 直接 `wal.beginFloor(floor)`，turn/end 按 openFloors 记录的
+ * entry 提交，不再触碰共享句柄的 floor。
  */
 import { Buffer } from 'node:buffer'
 import { mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
@@ -30,7 +35,7 @@ function snapshotOf(bytes: Uint8Array): string {
 }
 
 export class WorkspaceFs {
-  /** 当前楼层；null 表示非会话期写入（不走 WAL）。 */
+  /** 本实例的楼层；null 表示非会话期写入（不走 WAL）。构造后只能经 withFloor 派生改出。 */
   private floor: string | null = null
 
   constructor(
@@ -38,12 +43,28 @@ export class WorkspaceFs {
     private readonly wal: Wal | null,
   ) {}
 
+  /**
+   * 遗留兼容：直接改本实例的 floor。host 路径已改用 withFloor 派生实例 +
+   * wal.beginFloor/commitFloor（见文件头「楼层隔离模型」）；保留仅为既有测试与
+   * 旧调用点不 break，新代码不要再用——共享句柄上的可变 floor 会让同卡并发会话
+   * 互相覆盖楼层上下文。
+   */
   setFloor(floor: string | null): void {
     this.floor = floor
   }
 
   get currentFloor(): string | null {
     return this.floor
+  }
+
+  /**
+   * 派生一个共享 root 与 wal、floor 独立的新实例。会话楼层（含读路径口径统一）
+   * 用它在楼层内读写：快照记进本实例的 floor，不影响共享句柄与其它会话的实例。
+   */
+  withFloor(floor: string | null): WorkspaceFs {
+    const scoped = new WorkspaceFs(this.root, this.wal)
+    scoped.floor = floor
+    return scoped
   }
 
   private abs(relPath: string): string {
@@ -162,9 +183,13 @@ export class WorkspaceFs {
    * 默认递归；`recursive: false` 只列本层文件（跳过子目录，不进去走）——
    * 记忆库那样「本层是热路径、子目录（archive/）只增不查」的场景必须用非递归，
    * 否则每次检索都要把归档整棵走完再丢掉，成本随归档量单调增长。
+   * `skipDir` 在递归遍历遇到目录时回调（相对路径，正斜杠），返回 true 则整棵跳过——
+   * state/wal、memory/archive 这类只增不查的目录应在遍历时直接排除，
+   * 而不是全棵走完再由调用方过滤。
    */
-  async list(prefix = '', options?: { recursive?: boolean }): Promise<string[]> {
+  async list(prefix = '', options?: { recursive?: boolean; skipDir?: (relDir: string) => boolean }): Promise<string[]> {
     const recursive = options?.recursive !== false
+    const skipDir = options?.skipDir
     const base = this.abs(prefix)
     const out: string[] = []
     const walk = async (dir: string, rel: string): Promise<void> => {
@@ -178,7 +203,7 @@ export class WorkspaceFs {
       for (const e of entries) {
         const childRel = rel ? `${rel}/${e.name}` : e.name
         if (e.isDirectory()) {
-          if (recursive) await walk(join(dir, e.name), childRel)
+          if (recursive && !skipDir?.(childRel)) await walk(join(dir, e.name), childRel)
         } else out.push(childRel)
       }
     }
@@ -209,13 +234,16 @@ export class WorkspaceFs {
     return stats.filter((s) => s !== null)
   }
 
-  /** 开始一个楼层事务（WAL 存在时）。 */
+  /**
+   * 遗留兼容：开始一个楼层事务并把本实例的 floor 指过去（WAL 存在时）。
+   * host 路径已改为 `wal.beginFloor(floor)` + `withFloor(floor)` 派生实例；保留仅为既有测试。
+   */
   async beginFloor(floor: string): Promise<void> {
     if (this.wal) await this.wal.beginFloor(floor)
     this.setFloor(floor)
   }
 
-  /** 提交当前楼层并清除楼层上下文。 */
+  /** 遗留兼容：提交本实例当前楼层并清除楼层上下文。host 路径已改为 `wal.commitFloor(floor)`。 */
   async commitFloor(): Promise<void> {
     const floor = this.floor
     if (this.wal && floor && floor !== NON_FLOOR) await this.wal.commitFloor(floor)

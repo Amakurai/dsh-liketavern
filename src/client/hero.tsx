@@ -13,6 +13,7 @@ import {
   Menu,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { BINDING_CHANGED_EVENT } from './actions.js'
+import { cachedAvatar, cachedCharacterDetail, cachedSessionBinding, invalidateSessionBinding } from './cache.js'
 import { bindingFromDefaults } from './chip.js'
 import { useT } from './i18n.js'
 import { isTavernSession, type UseSessions } from './mode.js'
@@ -87,7 +88,7 @@ export function TavernHeroCharacter(props: {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const bindingLoader = useLoader(() => remote.getSessionBinding({ sessionId }), [sessionId], showHero)
+  const bindingLoader = useLoader(() => cachedSessionBinding(remote, sessionId), [sessionId], showHero)
   const binding: SessionBinding | null = bindingLoader.state.status === 'ready' ? bindingLoader.state.value.binding : null
   const userName =
     bindingLoader.state.status === 'ready' ? (bindingLoader.state.value.userName || DEFAULT_USER_NAME) : DEFAULT_USER_NAME
@@ -96,12 +97,12 @@ export function TavernHeroCharacter(props: {
   const characters: CharacterSummary[] = charsLoader.state.status === 'ready' ? charsLoader.state.value.items : []
 
   const detailLoader = useLoader(
-    () => remote.getCharacterDetail({ cardId: binding!.cardId }),
+    () => cachedCharacterDetail(remote, binding!.cardId),
     [binding?.cardId],
     showHero && binding !== null,
   )
   const avatarLoader = useLoader(
-    () => remote.getAvatar({ cardId: binding!.cardId }),
+    () => cachedAvatar(remote, binding!.cardId),
     [binding?.cardId],
     showHero && binding !== null,
   )
@@ -150,6 +151,7 @@ export function TavernHeroCharacter(props: {
           setError(err)
           return
         }
+        invalidateSessionBinding(sessionId)
         window.dispatchEvent(new CustomEvent(BINDING_CHANGED_EVENT, { detail: sessionId }))
         bindingLoader.reload()
       } catch (cause) {
@@ -226,6 +228,7 @@ export function TavernHeroCharacter(props: {
         setError(saveErr)
         return
       }
+      invalidateSessionBinding(sessionId)
       window.dispatchEvent(new CustomEvent(BINDING_CHANGED_EVENT, { detail: sessionId }))
       bindingLoader.reload()
     } catch (cause) {
@@ -272,6 +275,7 @@ export function TavernHeroCharacter(props: {
       const saveErr = errOf(saved)
       if (saveErr) setError(saveErr)
       else {
+        invalidateSessionBinding(sessionId)
         window.dispatchEvent(new CustomEvent(BINDING_CHANGED_EVENT, { detail: sessionId }))
         bindingLoader.reload()
       }

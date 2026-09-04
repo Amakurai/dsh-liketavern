@@ -39,6 +39,70 @@ const TRIGGER_LOG_SESSIONS_MAX = 64
 /** standing 钉位条数上限（淘汰只会导致重算一次 standing，无正确性影响）。 */
 const STANDING_PINS_MAX = 256
 
+/** 从资产 JSON 取非空白字符串字段（非对象/非字符串/空白按缺失返回 null）。 */
+function stringField(json: unknown, key: string): string | null {
+  if (!json || typeof json !== 'object') return null
+  const value = (json as Record<string, unknown>)[key]
+  return typeof value === 'string' && value.trim() ? value : null
+}
+
+/** RegexScope / RegexTiming 的合法取值（types.ts 只导出类型，取值集合在此守住落盘边界）。 */
+const REGEX_SCOPE_VALUES = ['input', 'output', 'prompt'] as const
+const REGEX_TIMING_VALUES = ['assemble', 'send', 'render'] as const
+const CHAT_ROLE_VALUES = ['system', 'user', 'assistant'] as const
+const REGEX_SOURCE_VALUES = ['user', 'card', 'preset'] as const
+
+function isMember(value: unknown, allowed: readonly string[]): boolean {
+  return typeof value === 'string' && allowed.includes(value)
+}
+
+function isStringArray(value: unknown): boolean {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string')
+}
+
+function isDepthBound(value: unknown): boolean {
+  return value === null || (typeof value === 'number' && Number.isFinite(value))
+}
+
+/**
+ * 全局正则规则落盘前的逐条结构校验（问题7修复）：remote 入参是宽松 schema 的任意 JSON，
+ * 字段缺失/类型错误的规则一旦落盘，之后渲染/组装（rule.scopes.includes 等）才抛错。
+ * 非法规则在这里抛错，不写盘。
+ */
+function assertValidRegexRules(rules: RegexRule[]): void {
+  for (const [index, rule] of rules.entries()) {
+    const where = `第 ${index + 1} 条正则规则`
+    if (!rule || typeof rule !== 'object') throw new Error(`${where}不是对象`)
+    const r = rule as unknown as Record<string, unknown>
+    if (typeof r.id !== 'string' || !r.id) throw new Error(`${where}缺少 id`)
+    const label = `${where}（${r.id}）`
+    if (typeof r.name !== 'string') throw new Error(`${label}缺少 name`)
+    if (typeof r.find !== 'string' || !r.find) throw new Error(`${label}的 find 必须是非空字符串`)
+    if (typeof r.replace !== 'string') throw new Error(`${label}的 replace 必须是字符串`)
+    if (typeof r.enabled !== 'boolean') throw new Error(`${label}的 enabled 必须是布尔值`)
+    if (!Array.isArray(r.scopes) || r.scopes.some((s) => !isMember(s, REGEX_SCOPE_VALUES))) {
+      throw new Error(`${label}的 scopes 只能是 input/output/prompt 数组`)
+    }
+    if (!Array.isArray(r.timing) || r.timing.some((t) => !isMember(t, REGEX_TIMING_VALUES))) {
+      throw new Error(`${label}的 timing 只能是 assemble/send/render 数组`)
+    }
+    if (!isDepthBound(r.minDepth) || !isDepthBound(r.maxDepth)) {
+      throw new Error(`${label}的 minDepth/maxDepth 必须是数字或 null`)
+    }
+    if (r.substituteRegex !== 0 && r.substituteRegex !== 1 && r.substituteRegex !== 2) {
+      throw new Error(`${label}的 substituteRegex 只能是 0/1/2`)
+    }
+    if (!isMember(r.source, REGEX_SOURCE_VALUES)) throw new Error(`${label}的 source 只能是 user/card/preset`)
+    if (r.roles !== undefined && (!Array.isArray(r.roles) || r.roles.some((role) => !isMember(role, CHAT_ROLE_VALUES)))) {
+      throw new Error(`${label}的 roles 只能是 system/user/assistant 数组`)
+    }
+    if (r.trimStrings !== undefined && !isStringArray(r.trimStrings)) throw new Error(`${label}的 trimStrings 必须是字符串数组`)
+    if (r.trimStringsRegex !== undefined && !isStringArray(r.trimStringsRegex)) {
+      throw new Error(`${label}的 trimStringsRegex 必须是字符串数组`)
+    }
+  }
+}
+
 interface WorkspaceHandle {
   fs: WorkspaceFs
   wal: Wal
@@ -59,11 +123,14 @@ export class TavernState {
    */
   readonly stepNoticeMarks = new Map<string, string>()
   /**
-   * 会话 → 本轮 beginFloor 实际开在哪个 cardId 上（turn/start 记，turn/end 取走）。
+   * 会话 → 本轮 beginFloor 实际开的楼层（turn/start 记，turn/end 取走）。
+   * 同一张卡的并发会话各有独立楼层（`sessionId#tN`），turn 内写入经
+   * `WorkspaceFs.withFloor(entry.floor)` 派生实例隔离，互不覆盖（问题1修复）。
    * 不变式：楼层必须由开层那张卡提交。turn 中途换绑/解绑后当前绑定已经是另一张卡，
-   * 若按当前绑定提交，开层那张卡的 WorkspaceFs.floor 会永远悬着，之后的非会话写入被误记 WAL。
+   * 若按当前绑定提交，开层那张卡的楼层会永远悬在未提交状态；工具写路径也凭
+   * entry.cardId 与当前绑定比对，不一致即拒绝写入（见 tools.ts resolveCtx）。
    */
-  readonly openFloors = new Map<string, string>()
+  readonly openFloors = new Map<string, { cardId: string; floor: string }>()
   /**
    * 每 turn 一次的 WI/记忆/变化层评估缓存（turn/end 清除）。
    * lastCharMessage / journalText 同轮冻结：第 1 步之后 history 会多出 assistant 文本、
@@ -197,12 +264,48 @@ export class TavernState {
   private async salvageLorebookName(base: string): Promise<string> {
     const clean = this.assetFileId(base.trim() || 'embedded-book')
     const existing = new Set(await this.listLorebooks())
-    if (!existing.has(clean)) return clean
+    return this.probeAvailableAssetId(clean, (id) => Promise.resolve(existing.has(id)))
+  }
+
+  /** 占用探测：base 被占用时顺次试 -2/-3…（至多 99），再不行退回时间戳后缀。 */
+  private async probeAvailableAssetId(base: string, taken: (id: string) => Promise<boolean>): Promise<string> {
+    if (!(await taken(base))) return base
     for (let i = 2; i < 100; i++) {
-      const candidate = `${clean}-${i}`
-      if (!existing.has(candidate)) return candidate
+      const candidate = `${base}-${i}`
+      if (!(await taken(candidate))) return candidate
     }
-    return `${clean}-${Date.now()}`
+    return `${base}-${Date.now()}`
+  }
+
+  /**
+   * assetFileId 多对一净化的冲突检测（问题5修复）：不同显示名可能净化成同一文件 id
+   * （「主线 设定」/「主线?设定」→「主线_设定」），后保存者会静默覆盖前者。
+   * 落盘前若目标 id 文件已存在且文件内资产身份与本次不同（sameAsset 判定），
+   * 另起 -2/-3 后缀，返回实际落盘 id。同身份再保存是编辑（含改名：预设/人设的
+   * 身份是 identifier/id，显示名可改），原 id 照常覆盖。
+   */
+  private async resolveAssetWriteId(
+    fs: WorkspaceFs,
+    dir: string,
+    name: string,
+    sameAsset: (existingIdentity: string) => boolean,
+  ): Promise<string> {
+    const base = this.assetFileId(name)
+    return this.probeAvailableAssetId(base, async (candidate) => {
+      const raw = await fs.readText(`${dir}/${candidate}.json`)
+      if (raw === null) return false
+      let existing: string | null = null
+      try {
+        const json: unknown = JSON.parse(raw)
+        existing = stringField(json, 'identifier') ?? stringField(json, 'id') ?? stringField(json, 'name')
+      } catch {
+        existing = null
+      }
+      // 文件内取不到身份（损坏/缺字段）时以文件 id 兜底：编辑路径回传的 name 就是
+      // 列表给的文件 id，sameAsset 命中即同一资产的再保存；否则按不同资产处理，
+      // 宁可另起 id 也不覆盖无法辨认的既有数据。
+      return !sameAsset(existing ?? candidate)
+    })
   }
 
   /** 删除角色卡内嵌世界书（assets/character-book.json + card.json 的 characterBook 置空）。非楼层写入，不记 WAL。 */
@@ -361,9 +464,17 @@ export class TavernState {
 
   /** 落盘并 bump 修订号，返回磁盘上的 id：调用方（服务层/客户端）之后要按这个 id 打开，不能用原始名。 */
   async saveLorebook(name: string, json: unknown): Promise<string> {
-    const id = this.assetFileId(name)
     const fs = await this.rootFs()
-    await fs.writeText(`library/lorebooks/${id}.json`, JSON.stringify(json, null, 2) + '\n')
+    // 世界书没有独立于显示名的内部 id：身份 = 文件内的 name 字段。json 缺 name 时把传入名
+    // 补进文件（ST 世界书本就有 name 字段）——否则「主线 设定」与「主线?设定」这类净化撞名
+    // 在磁盘上无法区分，同名再保存与撞名冲突必有一个判错。
+    const content =
+      stringField(json, 'name') === null && json !== null && typeof json === 'object' && !Array.isArray(json)
+        ? { ...(json as Record<string, unknown>), name }
+        : json
+    const identity = stringField(content, 'name') ?? name
+    const id = await this.resolveAssetWriteId(fs, 'library/lorebooks', name, (existing) => existing === identity)
+    await fs.writeText(`library/lorebooks/${id}.json`, JSON.stringify(content, null, 2) + '\n')
     this.bumpAssetRev(`lore:${id}`)
     return id
   }
@@ -421,8 +532,9 @@ export class TavernState {
 
   /** 落盘并 bump 修订号，返回磁盘上的 id（identifier 含非法字符时与 preset.identifier 不同）。 */
   async savePreset(preset: PromptPreset): Promise<string> {
-    const id = this.assetFileId(preset.identifier)
     const fs = await this.rootFs()
+    // 预设身份是 identifier（编辑器内不可改，name 可改）：改名是编辑不是冲突。
+    const id = await this.resolveAssetWriteId(fs, 'library/presets', preset.identifier, (existing) => existing === preset.identifier)
     await fs.writeText(`library/presets/${id}.json`, JSON.stringify(preset, null, 2) + '\n')
     this.bumpAssetRev(`preset:${id}`)
     return id
@@ -486,10 +598,13 @@ export class TavernState {
     return pickPersona(null, null, await this.listPersonas())
   }
 
-  /** 落盘并返回磁盘上的 id；id 被净化过时连同 JSON 里的 id 一起改写，避免文件名和内容各说各话。 */
+  /** 落盘并返回磁盘上的 id；id 被净化过（含冲突后缀）时连同 JSON 里的 id 一起改写，避免文件名和内容各说各话。 */
   async savePersona(persona: Persona): Promise<string> {
-    const id = this.assetFileId(persona.id)
     const fs = await this.rootFs()
+    // 人设身份是 id（客户端生成，编辑器内不可改，name 可改）：改名是编辑不是冲突。
+    // 文件内的 id 是落盘时改写过的净化 id，故原始 id 与净化 id 都认作同一资产。
+    const clean = this.assetFileId(persona.id)
+    const id = await this.resolveAssetWriteId(fs, 'personas', persona.id, (existing) => existing === persona.id || existing === clean)
     await fs.writeText(`personas/${id}.json`, JSON.stringify({ ...persona, id }, null, 2) + '\n')
     this.bumpAssetRev(`persona:${id}`)
     return id
@@ -524,6 +639,8 @@ export class TavernState {
   }
 
   async saveRegexRules(rules: RegexRule[]): Promise<void> {
+    // 逐条结构校验：合法 JSON 但字段缺失的规则落盘后会在渲染/组装时才抛错，必须在写盘边界挡下。
+    assertValidRegexRules(rules)
     const fs = await this.rootFs()
     await fs.writeText('regex/rules.json', JSON.stringify(rules, null, 2) + '\n')
     this.bumpAssetRev('regex:global')
@@ -584,6 +701,8 @@ export class TavernState {
       if (loaded) {
         cardRules = compileCardRegexScripts(regexScriptsOf(loaded.card), cardId)
         if (cardRules.length > 0) {
+          // 兜底重编译是派生缓存的物化，不是楼层写入：共享句柄 floor 恒为 null，不记 WAL；
+          // 回滚不会动这个文件（旧版本楼层若记过它，回滚直写磁盘仍由 stat 指纹捕获）。
           await ws.fs.writeText(path, JSON.stringify(cardRules, null, 2) + '\n')
           // 回写改了文件，指纹按新状态重取（仅兜底路径走到，多一次 stat 无所谓）
           const after = await ws.fs.stat(path)
@@ -755,9 +874,12 @@ export class TavernState {
     }
   }
 
-  async saveTimers(cardId: string, sessionId: string, state: WITimerState): Promise<void> {
+  async saveTimers(cardId: string, sessionId: string, state: WITimerState, floor?: string | null): Promise<void> {
     const ws = await this.workspace(cardId)
-    await ws.fs.writeText(`state/wi-timers/${sessionId.replace(/[^A-Za-z0-9_.-]/g, '_')}.json`, JSON.stringify(state, null, 2) + '\n')
+    // turn 流程传入本轮楼层（openFloors entry）→ 定时器随楼层记 WAL、可回滚；
+    // 缺省/null = 非会话写入（fork 复制定时器、楼层未开启的会话），共享句柄 floor 恒 null，不记 WAL。
+    const fs = floor ? ws.fs.withFloor(floor) : ws.fs
+    await fs.writeText(`state/wi-timers/${sessionId.replace(/[^A-Za-z0-9_.-]/g, '_')}.json`, JSON.stringify(state, null, 2) + '\n')
   }
 
   // ── 触发日志（内存态，最近一次组装的明细） ────────────────────────────────
@@ -793,13 +915,23 @@ export class TavernState {
 
   /**
    * 面板/服务层非会话写入专用的角色工作区文件面：floor 恒为 null，绝不记 WAL。
-   * 共享句柄 workspace(cardId).fs 的 floor 在 turn/start～turn/end 之间非 null，
-   * 生成进行中用户在面板的编辑若复用它，会被记进当前楼层 WAL，回退楼层时把编辑静默改回旧值。
-   * turn 流程内的工具写路径仍走共享句柄（快照必须进 WAL），这里只供非会话写路径使用。
+   * 共享句柄 workspace(cardId).fs 不再携带楼层（楼层由 withFloor 派生实例持有），
+   * 生成进行中用户在面板的编辑若复用楼层实例，会被记进当前楼层 WAL，回退楼层时把编辑静默改回旧值。
+   * turn 流程内的工具写路径仍走 withFloor 派生实例（快照必须进 WAL），这里只供非会话写路径使用。
    */
   private plainFs(cardId: string): WorkspaceFs {
     assertValidCardId(cardId)
     return new WorkspaceFs(join(this.paths.characters, cardId), null)
+  }
+
+  /**
+   * 面板/服务层写路径专用的工作区句柄：floor 恒为 null 的文件面（绝不记 WAL），
+   * memory/deltas 建在这个无楼层文件面上。供 service 面板写路径使用；
+   * turn 流程内的写路径仍走 workspace(cardId) + withFloor(openFloors 的 entry.floor)。
+   */
+  async plainWorkspace(cardId: string): Promise<{ fs: WorkspaceFs; memory: MemoryStore; deltas: WorldDeltaStore }> {
+    const fs = this.plainFs(cardId)
+    return { fs, memory: new MemoryStore(fs), deltas: new WorldDeltaStore(fs) }
   }
 }
 

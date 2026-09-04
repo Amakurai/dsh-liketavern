@@ -39,6 +39,7 @@ export const zh = {
   'memory.journalHint': '写在角色工作区 journal.md。会话芯片打开「注入角色笔记」后才会进本轮 turn。',
   'memory.saveJournal': '保存笔记',
   'memory.journalSaved': '已保存角色笔记',
+  'memory.opFailed': '操作失败：{message}',
 } as const
 
 export const en: Record<keyof typeof zh, string> = {
@@ -80,4 +81,5 @@ export const en: Record<keyof typeof zh, string> = {
   'memory.journalHint': 'Written to journal.md in the character workspace. It only enters the current turn when "Inject character journal" is enabled on the session chip.',
   'memory.saveJournal': 'Save journal',
   'memory.journalSaved': 'Character journal saved',
+  'memory.opFailed': 'Operation failed: {message}',
 }

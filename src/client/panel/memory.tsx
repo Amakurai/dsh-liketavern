@@ -70,6 +70,7 @@ export function MemorySection(props: { remote: TavernRemote }) {
   const [cardId, setCardId] = useState('')
   const [tab, setTab] = useState<'memory' | 'delta' | 'journal'>('memory')
   const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [newBody, setNewBody] = useState('')
   const [journalText, setJournalText] = useState('')
@@ -83,6 +84,13 @@ export function MemorySection(props: { remote: TavernRemote }) {
   const deltas = useLoader(() => remote.getWorldDeltas({ cardId }), [cardId], cardId !== '')
   const journal = useLoader(() => remote.getJournal({ cardId }), [cardId], cardId !== '')
 
+  /**
+   * 写操作统一外壳：busy 防连击（快速双击重复创建/并发压缩）；
+   * 错误信封进 Err（上下文），传输/zod 严格校验的 reject 落 toast，不留未处理 rejection。
+   */
+  const op = (fn: () => Promise<void>) =>
+    runAsync(setBusy, setError, fn, (message) => toast.show(t('memory.opFailed', { message })))
+
   const charItems = chars.state.status === 'ready' ? chars.state.value.items : []
   const memoryItems = memories.state.status === 'ready' ? memories.state.value.items : []
   const deltaItems = deltas.state.status === 'ready' ? deltas.state.value.items : []
@@ -95,79 +103,86 @@ export function MemorySection(props: { remote: TavernRemote }) {
     if (journal.state.status === 'ready') setJournalText(journal.state.value.text)
   }, [journal.state])
 
-  const addMemory = async () => {
-    const r = await remote.saveMemory({ cardId, body: newBody.trim() })
-    const err = errOf(r)
-    if (err) setError(err)
-    else {
-      setNewBody('')
-      memories.reload()
-    }
-  }
-
-  const deleteMemory = async (id: string) => {
-    const r = await remote.deleteMemory({ cardId, id })
-    const err = errOf(r)
-    if (err) setError(err)
-    else memories.reload()
-  }
-
-  const compress = async () => {
-    const r = await remote.compressMemories({ cardId })
-    if (!r.ok) setError(r.error.message)
-    else {
-      toast.show(r.value.merged > 0 ? t('memory.compressed', { count: r.value.merged }) : t('memory.compressNoop'))
-      memories.reload()
-    }
-  }
-
-  const revoke = async (id: string) => {
-    const r = await remote.revokeWorldDelta({ cardId, id })
-    const err = errOf(r)
-    if (err) setError(err)
-    else {
-      toast.show(t('memory.revokeDone', { id }))
-      deltas.reload()
-    }
-  }
-
-  const exportBook = async () => {
-    const r = await remote.exportMergedLorebook({ cardId })
-    if (!r.ok) setError(r.error.message)
-    else {
-      downloadJson(`lorebook-merged-${cardId}.json`, r.value.json)
-      toast.show(t('memory.bookExported'))
-    }
-  }
-
-  const saveJournal = async () => {
-    const r = await remote.saveJournal({ cardId, text: journalText })
-    const err = errOf(r)
-    if (err) setError(err)
-    else {
-      toast.show(t('memory.journalSaved'))
-      journal.reload()
-    }
-  }
-
-  const addDelta = async () => {
-    const r = await remote.addWorldDelta({
-      cardId,
-      type: deltaType,
-      content: deltaContent.trim(),
-      ref: deltaRef.trim() || null,
-      keys: splitList(deltaKeys),
+  const addMemory = () =>
+    op(async () => {
+      const r = await remote.saveMemory({ cardId, body: newBody.trim() })
+      const err = errOf(r)
+      if (err) setError(err)
+      else {
+        setNewBody('')
+        memories.reload()
+      }
     })
-    const err = errOf(r)
-    if (err) setError(err)
-    else {
-      toast.show(t('memory.deltaAdded', { id: r.ok ? r.value.id : '' }))
-      setDeltaContent('')
-      setDeltaRef('')
-      setDeltaKeys('')
-      deltas.reload()
-    }
-  }
+
+  const deleteMemory = (id: string) =>
+    op(async () => {
+      const r = await remote.deleteMemory({ cardId, id })
+      const err = errOf(r)
+      if (err) setError(err)
+      else memories.reload()
+    })
+
+  const compress = () =>
+    op(async () => {
+      const r = await remote.compressMemories({ cardId })
+      if (!r.ok) setError(r.error.message)
+      else {
+        toast.show(r.value.merged > 0 ? t('memory.compressed', { count: r.value.merged }) : t('memory.compressNoop'))
+        memories.reload()
+      }
+    })
+
+  const revoke = (id: string) =>
+    op(async () => {
+      const r = await remote.revokeWorldDelta({ cardId, id })
+      const err = errOf(r)
+      if (err) setError(err)
+      else {
+        toast.show(t('memory.revokeDone', { id }))
+        deltas.reload()
+      }
+    })
+
+  const exportBook = () =>
+    op(async () => {
+      const r = await remote.exportMergedLorebook({ cardId })
+      if (!r.ok) setError(r.error.message)
+      else {
+        downloadJson(`lorebook-merged-${cardId}.json`, r.value.json)
+        toast.show(t('memory.bookExported'))
+      }
+    })
+
+  const saveJournal = () =>
+    op(async () => {
+      const r = await remote.saveJournal({ cardId, text: journalText })
+      const err = errOf(r)
+      if (err) setError(err)
+      else {
+        toast.show(t('memory.journalSaved'))
+        journal.reload()
+      }
+    })
+
+  const addDelta = () =>
+    op(async () => {
+      const r = await remote.addWorldDelta({
+        cardId,
+        type: deltaType,
+        content: deltaContent.trim(),
+        ref: deltaRef.trim() || null,
+        keys: splitList(deltaKeys),
+      })
+      const err = errOf(r)
+      if (err) setError(err)
+      else {
+        toast.show(t('memory.deltaAdded', { id: r.ok ? r.value.id : '' }))
+        setDeltaContent('')
+        setDeltaRef('')
+        setDeltaKeys('')
+        deltas.reload()
+      }
+    })
 
   return (
     <Section title={t('section.memory')} description={t('memory.desc')}>
@@ -196,8 +211,8 @@ export function MemorySection(props: { remote: TavernRemote }) {
               </button>
             </div>
             <span style={{ flex: 1 }} />
-            {tab === 'memory' && <Btn onClick={() => void compress()}>{t('memory.compressOldest')}</Btn>}
-            {tab === 'delta' && <Btn onClick={() => void exportBook()}>{t('memory.exportBook')}</Btn>}
+            {tab === 'memory' && <Btn disabled={busy} onClick={() => void compress()}>{t('memory.compressOldest')}</Btn>}
+            {tab === 'delta' && <Btn disabled={busy} onClick={() => void exportBook()}>{t('memory.exportBook')}</Btn>}
           </div>
           {tab === 'memory' && (
             <div className="dsh-tavern-list">
@@ -228,7 +243,7 @@ export function MemorySection(props: { remote: TavernRemote }) {
                       <IconBtn label={editingId === m.id ? t('memory.collapseEdit') : t('action.edit')} onClick={() => setEditingId(editingId === m.id ? null : m.id)}>
                         <IconEditOutline16 />
                       </IconBtn>
-                      <IconBtn label={t('memory.deleteEntry')} danger onClick={() => void deleteMemory(m.id)}>
+                      <IconBtn label={t('memory.deleteEntry')} danger disabled={busy} onClick={() => void deleteMemory(m.id)}>
                         <IconTrashOutline16 />
                       </IconBtn>
                     </span>
@@ -256,7 +271,7 @@ export function MemorySection(props: { remote: TavernRemote }) {
                   onChange={(e) => setNewBody(e.target.value)}
                 />
                 <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                  <Btn primary disabled={!newBody.trim()} onClick={() => void addMemory()}>{t('memory.addEntry')}</Btn>
+                  <Btn primary disabled={busy || !newBody.trim()} onClick={() => void addMemory()}>{t('memory.addEntry')}</Btn>
                 </div>
               </div>
             </div>
@@ -281,7 +296,7 @@ export function MemorySection(props: { remote: TavernRemote }) {
                     <span className="dsh-tavern-memoMeta">{d.ts}</span>
                     {!d.revoked && (
                       <span className="dsh-tavern-memoActions">
-                        <Btn size="sm" onClick={() => void revoke(d.id)}>{t('memory.revoke')}</Btn>
+                        <Btn size="sm" disabled={busy} onClick={() => void revoke(d.id)}>{t('memory.revoke')}</Btn>
                       </span>
                     )}
                   </div>
@@ -328,7 +343,7 @@ export function MemorySection(props: { remote: TavernRemote }) {
                   <input className="dsh-tavern-input" value={deltaKeys} onChange={(e) => setDeltaKeys(e.target.value)} />
                 </label>
                 <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
-                  <Btn primary disabled={!deltaContent.trim()} onClick={() => void addDelta()}>{t('memory.addDelta')}</Btn>
+                  <Btn primary disabled={busy || !deltaContent.trim()} onClick={() => void addDelta()}>{t('memory.addDelta')}</Btn>
                 </div>
               </div>
             </div>
@@ -350,7 +365,7 @@ export function MemorySection(props: { remote: TavernRemote }) {
                 <Skeleton height={180} />
               )}
               <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                <Btn primary disabled={journal.state.status !== 'ready' || !cardId} onClick={() => void saveJournal()}>{t('memory.saveJournal')}</Btn>
+                <Btn primary disabled={busy || journal.state.status !== 'ready' || !cardId} onClick={() => void saveJournal()}>{t('memory.saveJournal')}</Btn>
               </div>
             </div>
           )}

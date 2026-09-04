@@ -2,6 +2,8 @@
  * SillyTavern 角色卡解析。
  * 支持 PNG 内嵌 tEXt / zTXt / iTXt（关键字 chara / ccv3）与纯 JSON 卡，统一归一化为 CharacterCard。
  * 零第三方依赖：PNG chunk 遍历手写实现；读取不校验 CRC，写出时补 CRC 以便其它工具能打开。
+ * 第三方卡文件不可信且全部在主进程同步解析：导入入口设字节数硬上限，
+ * zTXt/iTXt 解压设输出上限（压缩炸弹防御），超限一律抛 CardParseError。
  */
 import type { CardRegexScript, CharacterCard, LorebookFile } from '../core/types.js';
 /** 角色卡解析失败时抛出，消息使用中文。 */

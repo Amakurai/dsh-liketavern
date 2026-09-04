@@ -36,11 +36,17 @@ export declare class TavernState {
      */
     readonly stepNoticeMarks: Map<string, string>;
     /**
-     * 会话 → 本轮 beginFloor 实际开在哪个 cardId 上（turn/start 记，turn/end 取走）。
+     * 会话 → 本轮 beginFloor 实际开的楼层（turn/start 记，turn/end 取走）。
+     * 同一张卡的并发会话各有独立楼层（`sessionId#tN`），turn 内写入经
+     * `WorkspaceFs.withFloor(entry.floor)` 派生实例隔离，互不覆盖（问题1修复）。
      * 不变式：楼层必须由开层那张卡提交。turn 中途换绑/解绑后当前绑定已经是另一张卡，
-     * 若按当前绑定提交，开层那张卡的 WorkspaceFs.floor 会永远悬着，之后的非会话写入被误记 WAL。
+     * 若按当前绑定提交，开层那张卡的楼层会永远悬在未提交状态；工具写路径也凭
+     * entry.cardId 与当前绑定比对，不一致即拒绝写入（见 tools.ts resolveCtx）。
      */
-    readonly openFloors: Map<string, string>;
+    readonly openFloors: Map<string, {
+        cardId: string;
+        floor: string;
+    }>;
     /**
      * 每 turn 一次的 WI/记忆/变化层评估缓存（turn/end 清除）。
      * lastCharMessage / journalText 同轮冻结：第 1 步之后 history 会多出 assistant 文本、
@@ -108,6 +114,16 @@ export declare class TavernState {
     }>;
     /** 抢救内嵌书到世界书库时的去重文件名（与 saveLorebook 同一套净化规则）。 */
     private salvageLorebookName;
+    /** 占用探测：base 被占用时顺次试 -2/-3…（至多 99），再不行退回时间戳后缀。 */
+    private probeAvailableAssetId;
+    /**
+     * assetFileId 多对一净化的冲突检测（问题5修复）：不同显示名可能净化成同一文件 id
+     * （「主线 设定」/「主线?设定」→「主线_设定」），后保存者会静默覆盖前者。
+     * 落盘前若目标 id 文件已存在且文件内资产身份与本次不同（sameAsset 判定），
+     * 另起 -2/-3 后缀，返回实际落盘 id。同身份再保存是编辑（含改名：预设/人设的
+     * 身份是 identifier/id，显示名可改），原 id 照常覆盖。
+     */
+    private resolveAssetWriteId;
     /** 删除角色卡内嵌世界书（assets/character-book.json + card.json 的 characterBook 置空）。非楼层写入，不记 WAL。 */
     deleteCharacterLorebook(cardId: string): Promise<void>;
     /** 导入角色卡（PNG/JSON 字节），落盘工作区并初始化索引。 */
@@ -165,7 +181,7 @@ export declare class TavernState {
      * 只建了人设、没在芯片/默认页勾选时，{{user}} 仍应展开成人设名而不是 User。
      */
     resolvePersona(personaId: string | null): Promise<Persona | null>;
-    /** 落盘并返回磁盘上的 id；id 被净化过时连同 JSON 里的 id 一起改写，避免文件名和内容各说各话。 */
+    /** 落盘并返回磁盘上的 id；id 被净化过（含冲突后缀）时连同 JSON 里的 id 一起改写，避免文件名和内容各说各话。 */
     savePersona(persona: Persona): Promise<string>;
     deletePersona(id: string): Promise<void>;
     listRegexRules(): Promise<RegexRule[]>;
@@ -221,7 +237,7 @@ export declare class TavernState {
     /** 清掉会话绑定文件；空白新对话复用旧会话时用来去掉上次留下的角色卡。 */
     clearBinding(sessionId: string): Promise<void>;
     loadTimers(cardId: string, sessionId: string): Promise<WITimerState>;
-    saveTimers(cardId: string, sessionId: string, state: WITimerState): Promise<void>;
+    saveTimers(cardId: string, sessionId: string, state: WITimerState, floor?: string | null): Promise<void>;
     recordTriggerLog(sessionId: string, lines: string[]): void;
     /**
      * 库资产（世界书 / 预设 / 人设）显示名 → 磁盘文件 id。
@@ -235,10 +251,20 @@ export declare class TavernState {
     private rootFs;
     /**
      * 面板/服务层非会话写入专用的角色工作区文件面：floor 恒为 null，绝不记 WAL。
-     * 共享句柄 workspace(cardId).fs 的 floor 在 turn/start～turn/end 之间非 null，
-     * 生成进行中用户在面板的编辑若复用它，会被记进当前楼层 WAL，回退楼层时把编辑静默改回旧值。
-     * turn 流程内的工具写路径仍走共享句柄（快照必须进 WAL），这里只供非会话写路径使用。
+     * 共享句柄 workspace(cardId).fs 不再携带楼层（楼层由 withFloor 派生实例持有），
+     * 生成进行中用户在面板的编辑若复用楼层实例，会被记进当前楼层 WAL，回退楼层时把编辑静默改回旧值。
+     * turn 流程内的工具写路径仍走 withFloor 派生实例（快照必须进 WAL），这里只供非会话写路径使用。
      */
     private plainFs;
+    /**
+     * 面板/服务层写路径专用的工作区句柄：floor 恒为 null 的文件面（绝不记 WAL），
+     * memory/deltas 建在这个无楼层文件面上。供 service 面板写路径使用；
+     * turn 流程内的写路径仍走 workspace(cardId) + withFloor(openFloors 的 entry.floor)。
+     */
+    plainWorkspace(cardId: string): Promise<{
+        fs: WorkspaceFs;
+        memory: MemoryStore;
+        deltas: WorldDeltaStore;
+    }>;
 }
 export type { MemoryEntry, WorldDelta };

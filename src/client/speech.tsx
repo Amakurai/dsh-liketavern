@@ -10,6 +10,7 @@ import { useEffect, useRef, useState } from 'react'
 import { IconCopyOutline16, MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives'
 import { buildCardSrcDoc, parseCardBridgeMessage } from '../core/cardFrame.js'
 import { stripDisplayMeta } from '../core/displaySanitize.js'
+import { cachedAvatar } from './cache.js'
 import { useT, useMarkdownLabels } from './i18n.js'
 import { Avatar, IconBtn, useLoader, useToast } from './util.js'
 import type { TavernRemote } from './types.js'
@@ -70,20 +71,28 @@ export function SpeechBubble(props: {
   name: string
   rawText: string
   streaming?: boolean
+  /** 会话级交互卡开关（binding.interactiveCards）；null/缺省回落全局设置。 */
+  interactiveCards?: boolean | null
   onSwipeGreeting?: (index: number) => void
 }) {
   const { remote, sessionId, cardId, name, rawText, streaming, onSwipeGreeting } = props
   const t = useT()
   const markdownLabels = useMarkdownLabels()
-  const avatar = useLoader(() => remote.getAvatar({ cardId }), [cardId], Boolean(cardId))
+  // 头像走进程内缓存（key=cardId，TTL 60s）：同一会话的 N 条气泡不再各传一次 dataURL。
+  const avatar = useLoader(() => cachedAvatar(remote, cardId), [cardId], Boolean(cardId))
   const rendered = useLoader(
     () => remote.renderOutputText({ sessionId, text: rawText }),
     [sessionId, rawText],
     Boolean(rawText) && !streaming,
   )
   const avatarUrl = avatar.state.status === 'ready' ? avatar.state.value.dataUrl : null
+  // 交互卡渲染决策：会话绑定有值时优先于全局设置（renderOutputText 回包的
+  // interactiveCards 即全局值）。HTML 抽取在服务端按全局开关做，会话关 → 不渲染
+  // 封面 iframe；正文若已随抽取变空，回退原始文本，对齐全局关闭的「纯文本显示」。
+  const interactive =
+    props.interactiveCards ?? (rendered.state.status === 'ready' ? rendered.state.value.interactiveCards : true)
   const htmls =
-    !streaming && rendered.state.status === 'ready'
+    !streaming && interactive && rendered.state.status === 'ready'
       ? rendered.state.value.htmls && rendered.state.value.htmls.length > 0
         ? rendered.state.value.htmls
         : rendered.state.value.html
@@ -91,7 +100,11 @@ export function SpeechBubble(props: {
           : []
       : []
   const text =
-    !streaming && rendered.state.status === 'ready' ? rendered.state.value.text : stripDisplayMeta(rawText)
+    !streaming && rendered.state.status === 'ready'
+      ? interactive || rendered.state.value.text
+        ? rendered.state.value.text
+        : stripDisplayMeta(rawText)
+      : stripDisplayMeta(rawText)
   const whitelist = rendered.state.status === 'ready' ? rendered.state.value.whitelist : []
   const greetings = rendered.state.status === 'ready' ? rendered.state.value.greetings ?? [] : []
   const greetingIndex = rendered.state.status === 'ready' ? rendered.state.value.greetingIndex ?? 0 : 0

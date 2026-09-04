@@ -317,8 +317,9 @@ async function rollbackFloors(
   // 回滚直接把旧内容写回磁盘，绕过 MemoryStore 的写路径——必须手动作废它的解析/索引缓存，
   // 否则下一轮检索仍会用回滚前的记忆（见 MemoryStore.invalidate 的说明）。
   ws.memory.invalidate()
-  // 同理作废卡级正则缓存：rulesFor 的兜底重编译在 turn 内会写 assets/regex-scripts.json 并记 WAL，
-  // 回滚把文件写回旧值/删回缺失；同尺寸且同 mtime 刻度的极端情形下 stat 指纹兜不住。
+  // 同理作废卡级正则缓存：兜底重编译的写入不记 WAL（共享句柄 floor 恒为 null），但旧版本
+  // 楼层若记录过 assets/regex-scripts.json，回滚仍会把它写回旧值/删回缺失；同尺寸且同
+  // mtime 刻度的极端情形下 stat 指纹兜不住，继续手动作废。
   state.invalidateCardRegex(cardId)
   return [...result.restored, ...result.skipped]
 }
@@ -346,6 +347,7 @@ async function copyTimers(
 ): Promise<void> {
   const owner = timerOwnerAtTurn(binding, currentSessionId, boundaryTurn)
   const timers = await state.loadTimers(cardId, owner)
+  // 非会话写入：fork 时子会话尚未开楼层，saveTimers 缺省 floor=null 不记 WAL。
   await state.saveTimers(cardId, toSession, timers)
 }
 

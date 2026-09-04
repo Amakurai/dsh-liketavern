@@ -3,7 +3,10 @@
  * - 描述符形态：三处同步的方法集齐全、id/service/namespace/method 与 codec 模式正确。
  * - zod/mini 迁移守卫：每个参数 codec 的 schema 必须有可调用的 `.parse`
  *   （gateway 两面都只用这一个方法：client 侧 parseInput、host 侧 decode）。
- * - 校验语义与迁移前一致：非空串、正整数 turn、可选字段缺省放行、枚举与数组类型拒绝错值。
+ * - 校验语义：非空串、正整数 turn、可选字段缺省放行、枚举与数组类型拒绝错值。
+ * - 收紧后的结构化入参（SessionBinding / Persona / RegexRule / saveMemory.id / swipeGreeting.index）：
+ *   缺字段、错类型、坏枚举拒绝，未知字段按 zod strip 丢弃。
+ * - 宽松传输仅留给复杂资产（卡/预设/世界书 JSON、设置补丁），由存储层归一化严格校验。
  * - host / client 两份贡献共享同一批描述符实例。
  */
 import { describe, expect, it } from 'vitest'
@@ -106,10 +109,116 @@ describe('请求 schema 校验（gateway 只调用 .parse）', () => {
     expect(() => codec.schema.parse({ cardId: 'c1', type: 'add', content: '' })).toThrow()
   })
 
-  it('宽松资产字段（json/preset/binding）放行任意 JSON', () => {
-    const codec = requestCodec('saveLorebook')
-    expect(codec.schema.parse({ name: 'book', json: { entries: { 0: { key: ['k'] } } } })).toBeTruthy()
-    expect(codec.schema.parse({ name: 'book', json: null })).toBeTruthy()
+  it('宽松资产字段（预设/世界书 JSON、设置补丁）放行任意 JSON，由存储层归一化严格校验', () => {
+    const lore = requestCodec('saveLorebook')
+    expect(lore.schema.parse({ name: 'book', json: { entries: { 0: { key: ['k'] } } } })).toBeTruthy()
+    expect(lore.schema.parse({ name: 'book', json: null })).toBeTruthy()
+    const preset = requestCodec('importPreset')
+    expect(preset.schema.parse({ name: 'p', json: { anything: true } })).toBeTruthy()
+    const settings = requestCodec('updateSettings')
+    expect(settings.schema.parse({ patch: { worldInfo: { tokenBudget: 1024 } } })).toBeTruthy()
+  })
+
+  it('setSessionBinding 按 SessionBinding 字段全集收紧：缺字段/错类型拒绝，未知字段 strip', () => {
+    const codec = requestCodec('setSessionBinding')
+    const binding = {
+      sessionId: 's1',
+      cardId: 'card-abc12345',
+      presetId: null,
+      personaId: null,
+      lorebookIds: ['book.json'],
+      characterLorebookId: null,
+      interactiveCards: null,
+      greetingIndex: 0,
+      createdAt: '2025-01-01T00:00:00.000Z',
+    }
+    expect(codec.schema.parse({ binding })).toEqual({ binding })
+    // 可选字段与 walLineage 透传；未知字段被 strip（对齐 parseSessionBinding 的丢弃行为）
+    expect(
+      codec.schema.parse({
+        binding: {
+          ...binding,
+          cardName: '角色',
+          authorNote: '笔记',
+          injectJournal: true,
+          interactiveCards: false,
+          walLineage: [{ sessionId: 's0', throughTurn: 2 }],
+          futureField: 1,
+        },
+      }),
+    ).toEqual({
+      binding: {
+        ...binding,
+        cardName: '角色',
+        authorNote: '笔记',
+        injectJournal: true,
+        interactiveCards: false,
+        walLineage: [{ sessionId: 's0', throughTurn: 2 }],
+      },
+    })
+    const { presetId: _presetId, ...missingPresetId } = binding
+    expect(() => codec.schema.parse({ binding: missingPresetId })).toThrow()
+    expect(() => codec.schema.parse({ binding: { ...binding, lorebookIds: 'book.json' } })).toThrow()
+    expect(() => codec.schema.parse({ binding: { ...binding, greetingIndex: -1 } })).toThrow()
+    expect(() => codec.schema.parse({ binding: { ...binding, greetingIndex: 0.5 } })).toThrow()
+    expect(() => codec.schema.parse({ binding: { ...binding, interactiveCards: 'yes' } })).toThrow()
+    expect(() =>
+      codec.schema.parse({ binding: { ...binding, walLineage: [{ sessionId: 's0', throughTurn: -1 }] } }),
+    ).toThrow()
+    expect(() => codec.schema.parse({ binding: null })).toThrow()
+  })
+
+  it('savePersona 按 Persona 形状校验（avatar 可 null，lorebookId 可缺省）', () => {
+    const codec = requestCodec('savePersona')
+    const persona = { id: 'persona-1', name: '旅人', description: '', avatar: null, lorebookId: null }
+    expect(codec.schema.parse({ persona })).toEqual({ persona })
+    const { lorebookId: _lorebookId, ...withoutLorebookId } = persona
+    expect(codec.schema.parse({ persona: withoutLorebookId })).toEqual({ persona: withoutLorebookId })
+    const { avatar: _avatar, ...missingAvatar } = persona
+    expect(() => codec.schema.parse({ persona: missingAvatar })).toThrow()
+    expect(() => codec.schema.parse({ persona: { ...persona, avatar: 1 } })).toThrow()
+    expect(() => codec.schema.parse({ persona: { ...persona, id: '' } })).toThrow()
+  })
+
+  it('saveRegexRules 按 RegexRule 形状校验（枚举/可空深度/0-2 的 substituteRegex）', () => {
+    const codec = requestCodec('saveRegexRules')
+    const rule = {
+      id: 'rule-1',
+      name: 'r',
+      find: 'a',
+      replace: 'b',
+      enabled: true,
+      scopes: ['prompt'],
+      timing: ['send'],
+      minDepth: null,
+      maxDepth: null,
+      substituteRegex: 0,
+      source: 'user',
+    }
+    expect(codec.schema.parse({ rules: [rule] })).toEqual({ rules: [rule] })
+    expect(
+      codec.schema.parse({ rules: [{ ...rule, roles: ['user', 'assistant'], trimStrings: ['x'], trimStringsRegex: ['y'] }] }),
+    ).toBeTruthy()
+    expect(() => codec.schema.parse({ rules: [{ ...rule, scopes: ['bogus'] }] })).toThrow()
+    expect(() => codec.schema.parse({ rules: [{ ...rule, timing: ['bogus'] }] })).toThrow()
+    expect(() => codec.schema.parse({ rules: [{ ...rule, source: 'bogus' }] })).toThrow()
+    expect(() => codec.schema.parse({ rules: [{ ...rule, substituteRegex: 3 }] })).toThrow()
+    expect(() => codec.schema.parse({ rules: [{ ...rule, enabled: 'yes' }] })).toThrow()
+  })
+
+  it('saveMemory 的 id 可缺省但一旦给出必须非空', () => {
+    const codec = requestCodec('saveMemory')
+    expect(codec.schema.parse({ cardId: 'c1', body: 'x' })).toEqual({ cardId: 'c1', body: 'x' })
+    expect(codec.schema.parse({ cardId: 'c1', id: 'm1', body: 'x' })).toBeTruthy()
+    expect(() => codec.schema.parse({ cardId: 'c1', id: '', body: 'x' })).toThrow()
+    expect(() => codec.schema.parse({ cardId: 'c1', body: '' })).toThrow()
+  })
+
+  it('swipeGreeting 的 index 是非负整数', () => {
+    const codec = requestCodec('swipeGreeting')
+    expect(codec.schema.parse({ sessionId: 's1', index: 0 })).toEqual({ sessionId: 's1', index: 0 })
+    expect(() => codec.schema.parse({ sessionId: 's1', index: -1 })).toThrow()
+    expect(() => codec.schema.parse({ sessionId: 's1', index: 1.5 })).toThrow()
   })
 
   it('getFloorSiblings 的结果 schema 校验 swipe 形状', () => {

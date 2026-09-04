@@ -2,6 +2,8 @@
  * SillyTavern 角色卡解析。
  * 支持 PNG 内嵌 tEXt / zTXt / iTXt（关键字 chara / ccv3）与纯 JSON 卡，统一归一化为 CharacterCard。
  * 零第三方依赖：PNG chunk 遍历手写实现；读取不校验 CRC，写出时补 CRC 以便其它工具能打开。
+ * 第三方卡文件不可信且全部在主进程同步解析：导入入口设字节数硬上限，
+ * zTXt/iTXt 解压设输出上限（压缩炸弹防御），超限一律抛 CardParseError。
  */
 
 import { Buffer } from 'node:buffer'
@@ -18,6 +20,22 @@ export class CardParseError extends Error {
 
 /** PNG 文件签名（8 字节固定魔数）。 */
 const PNG_SIGNATURE = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+
+// ---------------------------------------------------------------------------
+// 导入硬上限（常量只在本文件内部消化，不进公共契约）
+// ---------------------------------------------------------------------------
+
+/** PNG 卡文件字节数上限：头像图占体积大头，正常卡 <5MB，32MB 已远超合理范围。 */
+const MAX_CARD_PNG_BYTES = 32 * 1024 * 1024
+
+/** 卡 JSON 文本字符数上限（PNG 内嵌 base64 解码后与独立 JSON 卡共用）：纯文本字段，正常卡 <1MB。 */
+const MAX_CARD_JSON_CHARS = 8 * 1024 * 1024
+
+/**
+ * zTXt/iTXt 解压输出上限：deflate 极端膨胀比约 1000:1，无输出上限时几十 KB 的
+ * 压缩炸弹即可在主进程膨胀出几百 MB、直接耗尽内存。正常卡 JSON（base64 文本）远低于 4MB。
+ */
+const MAX_INFLATE_OUTPUT_BYTES = 4 * 1024 * 1024
 
 type CardSpec = CharacterCard['spec']
 
@@ -233,6 +251,9 @@ function normalizeCardInternal(
  * 其 text 为 Base64 编码的 UTF-8 JSON。读取不校验 CRC，遇 IEND 停止。
  */
 export function parsePngCard(bytes: Uint8Array): CharacterCard {
+  if (bytes.length > MAX_CARD_PNG_BYTES) {
+    throw new CardParseError(`PNG 角色卡超过大小上限（${MAX_CARD_PNG_BYTES / 1024 / 1024}MB）`)
+  }
   if (
     bytes.length < PNG_SIGNATURE.length ||
     !PNG_SIGNATURE.every((b, i) => bytes[i] === b)
@@ -279,14 +300,46 @@ export function parsePngCard(bytes: Uint8Array): CharacterCard {
     throw new CardParseError('PNG 中未找到角色卡数据（tEXt/zTXt/iTXt 关键字 chara/ccv3）')
   }
 
+  let jsonText: string
+  try {
+    jsonText = Buffer.from(text, 'base64').toString('utf-8')
+  } catch {
+    throw new CardParseError('角色卡数据 Base64 解码失败')
+  }
+  if (jsonText.length > MAX_CARD_JSON_CHARS) {
+    throw new CardParseError(`角色卡 JSON 超过大小上限（${MAX_CARD_JSON_CHARS / 1024 / 1024}MB）`)
+  }
   let json: unknown
   try {
-    json = JSON.parse(Buffer.from(text, 'base64').toString('utf-8'))
+    json = JSON.parse(jsonText)
   } catch {
-    throw new CardParseError('角色卡数据 Base64/JSON 解码失败')
+    throw new CardParseError('角色卡数据 JSON 解析失败')
   }
 
   return normalizeCardInternal(json, bytes, ccv3Text !== null ? 'chara_card_v3' : null)
+}
+
+/** 解压超限（输出超 maxOutputLength）判定：Node 抛 ERR_BUFFER_TOO_LARGE，按压缩炸弹处理。 */
+function isInflateOverflow(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false
+  const code = (error as { code?: unknown }).code
+  const message = error instanceof Error ? error.message : ''
+  return code === 'ERR_BUFFER_TOO_LARGE' || message.includes('maxOutputLength')
+}
+
+/**
+ * 带输出上限的解压：超限（疑似压缩炸弹）抛 CardParseError 让导入方看到明确原因；
+ * 其余解压失败（数据损坏）返回 null，与既有「坏块静默跳过」口径一致。
+ */
+function inflateCardText(compressed: Uint8Array): Buffer | null {
+  try {
+    return inflateSync(Buffer.from(compressed), { maxOutputLength: MAX_INFLATE_OUTPUT_BYTES })
+  } catch (error) {
+    if (isInflateOverflow(error)) {
+      throw new CardParseError(`PNG 文本块解压超过 ${MAX_INFLATE_OUTPUT_BYTES / 1024 / 1024}MB 上限，疑似压缩炸弹，已拒绝`)
+    }
+    return null
+  }
 }
 
 function parsePngTextChunk(data: Uint8Array, type: 'tEXt' | 'zTXt' | 'iTXt'): { keyword: string; text: string } | null {
@@ -303,7 +356,8 @@ function parsePngTextChunk(data: Uint8Array, type: 'tEXt' | 'zTXt' | 'iTXt'): { 
       if (sep + 2 > data.length) return null
       const method = data[sep + 1]
       if (method !== 0) return null
-      const inflated = inflateSync(Buffer.from(data.subarray(sep + 2)))
+      const inflated = inflateCardText(data.subarray(sep + 2))
+      if (inflated === null) return null
       return { keyword, text: inflated.toString('latin1') }
     }
     // iTXt: keyword \0 compression_flag \0 compression_method \0 language \0 translated \0 text
@@ -320,11 +374,14 @@ function parsePngTextChunk(data: Uint8Array, type: 'tEXt' | 'zTXt' | 'iTXt'): { 
     const payload = data.subarray(transEnd + 1)
     if (compressed) {
       if (method !== 0) return null
-      const inflated = inflateSync(Buffer.from(payload))
+      const inflated = inflateCardText(payload)
+      if (inflated === null) return null
       return { keyword, text: inflated.toString('utf8') }
     }
     return { keyword, text: Buffer.from(payload).toString('utf8') }
-  } catch {
+  } catch (error) {
+    // 压缩炸弹（CardParseError）向上抛出让导入方看到原因；其余损坏维持静默跳过
+    if (error instanceof CardParseError) throw error
     return null
   }
 }
@@ -525,6 +582,17 @@ export function createBlankCard(name: string): CharacterCard {
 
 /** 解析 JSON 角色卡（.json 导入），无 PNG 字节。 */
 export function parseJsonCard(json: unknown): CharacterCard {
+  // 调用方已完成 JSON.parse（内存账已付），这里补一道体量闸：挡住绕过文件字节检查、
+  // 经 remote 直传的超大对象。序列化长度与源文件字节数同量级，作为字节上限的近似。
+  let size = 0
+  try {
+    size = JSON.stringify(json)?.length ?? 0
+  } catch {
+    throw new CardParseError('角色卡 JSON 无法序列化（含循环引用？）')
+  }
+  if (size > MAX_CARD_JSON_CHARS) {
+    throw new CardParseError(`JSON 角色卡超过大小上限（${MAX_CARD_JSON_CHARS / 1024 / 1024}MB）`)
+  }
   return normalizeCardInternal(json, null, null)
 }
 

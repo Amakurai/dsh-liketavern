@@ -64,6 +64,7 @@ export declare function RegexScriptRow(props: {
     script: CardRegexScript;
     index: number;
     onToggle?: (disabled: boolean) => void;
+    disabled?: boolean;
 }): any;
 /** 条目启用开关（对齐 SillyTavern 的 on/off，视觉走 dsh 胶囊）。 */
 export declare function Toggle(props: {
@@ -173,8 +174,10 @@ export declare function errOf(r: Envelope<unknown>): string | null;
  * typert 在传输失败和入参 zod 严格校验不过时是 reject，不是错误信封，
  * 而按钮上的 `onClick={() => void save()}` 会把这个 reject 吞掉；
  * 传输层 reject 也必须解锁按钮，否则 busy 永远为 true、保存按钮再也点不动，草稿全丢。
+ * onError 传入时，reject 的消息改走 onError（如 toast 瞬时提示），不再写 setError；
+ * fn 内自行 setError 的错误信封不受影响（上下文错误仍走 Err）。
  */
-export declare function runAsync(setBusy: (busy: boolean) => void, setError: (message: string | null) => void, fn: () => Promise<void>): Promise<void>;
+export declare function runAsync(setBusy: (busy: boolean) => void, setError: (message: string | null) => void, fn: () => Promise<void>, onError?: (message: string) => void): Promise<void>;
 export declare function fileToBase64(file: File): Promise<string>;
 export declare function readJsonFile(file: File): Promise<unknown>;
 export declare function downloadJson(filename: string, json: unknown): void;

@@ -177,7 +177,7 @@ export function Badge(props: { accent?: boolean; danger?: boolean; children?: Re
  * 预设/卡内嵌 regex_scripts 的展示行：开关 + 名称 + 作用域徽标 + 查找式。
  * 作用域语义与 core/regex.ts 的 compileRegexScripts 一致；onToggle 传入时显示启用开关。
  */
-export function RegexScriptRow(props: { script: CardRegexScript; index: number; onToggle?: (disabled: boolean) => void }) {
+export function RegexScriptRow(props: { script: CardRegexScript; index: number; onToggle?: (disabled: boolean) => void; disabled?: boolean }) {
   const { script } = props
   const t = useT()
   const badges: string[] = []
@@ -197,7 +197,7 @@ export function RegexScriptRow(props: { script: CardRegexScript; index: number; 
     <div className="dsh-tavern-memo">
       <div className="dsh-tavern-memoHead">
         {props.onToggle ? (
-          <Toggle checked={enabled} onChange={(on) => props.onToggle!(!on)} title={enabled ? t('util.regex.disable') : t('util.regex.enable')} />
+          <Toggle checked={enabled} disabled={props.disabled} onChange={(on) => props.onToggle!(!on)} title={enabled ? t('util.regex.disable') : t('util.regex.enable')} />
         ) : null}
         <span className="dsh-tavern-memoMeta" style={{ color: 'var(--dsw-alias-label-primary, inherit)', fontWeight: 500 }}>
           {script.scriptName?.trim() || t('util.regex.unnamed', { index: props.index + 1 })}
@@ -473,18 +473,23 @@ export function errOf(r: Envelope<unknown>): string | null {
  * typert 在传输失败和入参 zod 严格校验不过时是 reject，不是错误信封，
  * 而按钮上的 `onClick={() => void save()}` 会把这个 reject 吞掉；
  * 传输层 reject 也必须解锁按钮，否则 busy 永远为 true、保存按钮再也点不动，草稿全丢。
+ * onError 传入时，reject 的消息改走 onError（如 toast 瞬时提示），不再写 setError；
+ * fn 内自行 setError 的错误信封不受影响（上下文错误仍走 Err）。
  */
 export async function runAsync(
   setBusy: (busy: boolean) => void,
   setError: (message: string | null) => void,
   fn: () => Promise<void>,
+  onError?: (message: string) => void,
 ): Promise<void> {
   setBusy(true)
   setError(null)
   try {
     await fn()
   } catch (e) {
-    setError(e instanceof Error ? e.message : String(e))
+    const message = e instanceof Error ? e.message : String(e)
+    if (onError) onError(message)
+    else setError(message)
   } finally {
     setBusy(false)
   }

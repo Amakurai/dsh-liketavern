@@ -2,6 +2,7 @@
  * 角色工作区（workspace）单元测试。
  * 使用真实临时目录（WorkspaceFs wal 传 null）。
  * 覆盖：importCard 目录结构与文件内容、list/load/delete、cardId 路径边界、坏目录容错、
+ * listCharacters 只探测 characters/<cardId>/card.json（深层垃圾/散落文件/缺 card.json 不影响列举）、
  * rebuildIndex 摘要与注入式 token 估算、WorkspaceFs 的 '..' 段级越界拒绝。
  */
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
@@ -187,6 +188,33 @@ describe('list/load/delete', () => {
       characterBookEntryCount: 1,
     })
     expect(byName.get('Beta')).toMatchObject({ hasAvatar: false, hasCharacterBook: true })
+  })
+
+  it('只探测 characters/<cardId>/card.json：深层垃圾、嵌套伪卡、散落文件均不影响列举', async () => {
+    const a = await importCard(charactersDir, makeCard({ name: 'Alpha' }))
+    const b = await importCard(charactersDir, makeCard({ name: 'Beta', pngBytes: null }))
+
+    // 卡工作区内堆积的深层数据：记忆归档、WAL 楼层文件
+    await mkdir(join(a.root, 'memory', 'archive', '2025', '01'), { recursive: true })
+    await writeFile(join(a.root, 'memory', 'archive', '2025', '01', 'old.md'), '归档记忆')
+    await mkdir(join(a.root, 'state', 'wal', 'floor-1'), { recursive: true })
+    await writeFile(join(a.root, 'state', 'wal', 'floor-1', '0001.jsonl'), '{}')
+    // 深层伪装卡目录（含 card.json，但不在 characters/ 第一层，不得被列出）
+    await mkdir(join(a.root, 'memory', 'fake-card'), { recursive: true })
+    await writeFile(join(a.root, 'memory', 'fake-card', 'card.json'), JSON.stringify({ name: '幽灵卡' }))
+
+    // characters/ 顶层散落文件与缺 card.json 的目录（其深层 card.json 不得被当成卡）
+    await writeFile(join(charactersDir, 'notes.txt'), '杂物')
+    await mkdir(join(charactersDir, 'orphan', 'deep'), { recursive: true })
+    await writeFile(join(charactersDir, 'orphan', 'deep', 'card.json'), JSON.stringify({ name: '深层伪卡' }))
+
+    const list = await listCharacters(charactersDir)
+    expect(list.map((c) => c.name).sort()).toEqual(['Alpha', 'Beta'])
+    expect(list.map((c) => c.cardId).sort()).toEqual([a.cardId, b.cardId].sort())
+  })
+
+  it('角色库目录不存在时返回空列表', async () => {
+    expect(await listCharacters(join(root, 'never-created'))).toEqual([])
   })
 
   it('loadCharacter 读回卡片（pngBytes 恒为 null），缺失/损坏返回 null', async () => {

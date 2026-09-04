@@ -9,6 +9,7 @@ import { Fragment, useMemo } from 'react'
 import type { ReactNode } from 'react'
 import { JsonBlock, MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives'
 import { stripDisplayMeta } from '../core/displaySanitize.js'
+import { cachedCharacterDetail, cachedSessionBinding } from './cache.js'
 import { useMarkdownLabels, useT } from './i18n.js'
 import { isTavernSession, type UseSessions } from './mode.js'
 import { openChildSession } from './openChild.js'
@@ -71,10 +72,11 @@ export function TavernAssistantNode(props: {
   const { remote, sessionId, sessions, node } = props
   const t = useT()
   const tavern = isTavernSession(props.useSessions, sessionId)
-  const bindingLoader = useLoader(() => remote.getSessionBinding({ sessionId }), [sessionId], tavern)
+  // 绑定/角色详情走进程内缓存（key=sessionId / cardId）：N 个 assistant 节点共享一次 RPC。
+  const bindingLoader = useLoader(() => cachedSessionBinding(remote, sessionId), [sessionId], tavern)
   const binding = bindingLoader.state.status === 'ready' ? bindingLoader.state.value.binding : null
   const detail = useLoader(
-    () => remote.getCharacterDetail({ cardId: binding!.cardId }),
+    () => cachedCharacterDetail(remote, binding!.cardId),
     [binding?.cardId],
     tavern && binding !== null,
   )
@@ -111,6 +113,7 @@ export function TavernAssistantNode(props: {
           name={name || t('assistant.characterFallback')}
           rawText={text}
           streaming={streaming}
+          interactiveCards={binding.interactiveCards}
           onSwipeGreeting={(index) => {
             if (!sessions) return
             void remote.swipeGreeting({ sessionId, index }).then((r) => {

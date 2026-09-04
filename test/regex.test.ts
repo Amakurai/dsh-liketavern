@@ -6,7 +6,9 @@
  * minDepth/maxDepth 深度过滤、规则编译失败容错、trim 路径的越界 $N 与 '0'/'' 组值、
  * compileCardRegexScripts / compilePresetRegexScripts 归一化（含 md/po 改写 scopes 后 roles 复核）、
  * 消息角色过滤、封面 HTML 与正文拆分
- *（含无 doctype 的 style 片段、卡内 markdownOnly+promptOnly 仍启用展示向）。
+ *（含无 doctype 的 style 片段、卡内 markdownOnly+promptOnly 仍启用展示向）、
+ * DoS 防护（超长 pattern、嵌套量词/交叠分支灾难回溯拒绝——含宏展开后才出现构造的情况、
+ * trimStringsRegex 同口径、缺 scopes/timing 的畸形规则跳过并记录）。
  */
 import { describe, expect, it } from 'vitest'
 import {
@@ -281,6 +283,90 @@ describe('规则容错', () => {
     ])
     expect(res.text).toBe('cat')
     expect(res.applied).toEqual([])
+  })
+
+  it('畸形规则（缺 scopes/timing，如手改的 rules.json）跳过并记录，不炸在 .includes()', () => {
+    const broken = { id: 'broken', find: 'cat', replace: 'dog' } as unknown as RegexRule
+    const res = run('cat', [broken, makeRule({ id: 'good', find: 'cat', replace: 'dog' })])
+    expect(res.text).toBe('dog')
+    expect(res.applied).toEqual(['good'])
+    expect(res.errors).toHaveLength(1)
+    expect(res.errors[0]!.ruleId).toBe('broken')
+    expect(res.errors[0]!.message).toContain('结构非法')
+  })
+
+  it('applyRegexToMessages 同样挡畸形规则（连 id 都没有也能记录）', () => {
+    const broken = { find: 'cat' } as unknown as RegexRule
+    const res = applyRegexToMessages(
+      [{ role: 'user', content: 'cat' }],
+      [broken, makeRule({ id: 'good', find: 'cat', replace: 'dog' })],
+      FILTER,
+      CTX,
+    )
+    expect(res.messages.map((m) => m.content)).toEqual(['dog'])
+    expect(res.errors).toHaveLength(1)
+    expect(res.errors[0]!.ruleId).toBe('(未知规则)')
+  })
+})
+
+describe('正则 DoS 防护（规则在主事件循环执行，灾难性回溯会冻结 host）', () => {
+  const EVIL_INPUT = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaab'
+
+  it('嵌套量词 (a+)+ / (a*)* / (a+)* / (\\d{2,})+ 一律拒绝：规则跳过、记 errors、文本不动', () => {
+    for (const find of ['/(a+)+$/', '/(a*)*/', '/(a+)*/', '/(\\d{2,})+$/']) {
+      const res = run(EVIL_INPUT, [makeRule({ id: 'evil', find, replace: 'x' })])
+      expect(res.text).toBe(EVIL_INPUT)
+      expect(res.applied).toEqual([])
+      expect(res.errors).toHaveLength(1)
+      expect(res.errors[0]!.ruleId).toBe('evil')
+      expect(res.errors[0]!.message).toContain('灾难性回溯')
+    }
+  })
+
+  it('多层嵌套 ((a+)+)+ 与交叠分支 (a|a)+ / (a|aa)+ 同样拒绝', () => {
+    for (const find of ['/((a+)+)+$/', '/(a|a)+$/', '/(a|aa)+$/']) {
+      const res = run(EVIL_INPUT, [makeRule({ id: 'evil', find, replace: 'x' })])
+      expect(res.errors).toHaveLength(1)
+      expect(res.errors[0]!.message).toContain('灾难性回溯')
+    }
+  })
+
+  it('超长 pattern（>2000 字符）拒绝', () => {
+    const res = run('cat', [makeRule({ id: 'long', find: `/${'a'.repeat(2001)}/`, replace: 'x' })])
+    expect(res.errors).toHaveLength(1)
+    expect(res.errors[0]!.message).toContain('上限')
+    // 恰好 2000 字符不超上限，可正常编译
+    const ok = run('cat', [makeRule({ id: 'ok', find: `/${'a'.repeat(1999)}c/`, replace: 'x' })])
+    expect(ok.errors).toEqual([])
+  })
+
+  it('宏展开（substituteRegex=1 原样代入）后才出现的灾难构造同样被拒', () => {
+    const ctx: MacroContext = { ...CTX, store: new Map([['p', '(a+)+$']]) }
+    const res = run(EVIL_INPUT, [makeRule({ id: 'macro', find: '/{{getvar::p}}/', replace: 'x', substituteRegex: 1 })], ctx)
+    expect(res.errors).toHaveLength(1)
+    expect(res.errors[0]!.message).toContain('灾难性回溯')
+    expect(res.text).toBe(EVIL_INPUT)
+  })
+
+  it('trimStringsRegex 的灾难构造同口径拒绝（整条规则记 error）', () => {
+    const res = run('cat', [makeRule({ id: 't', find: 'cat', replace: '[$0]', trimStringsRegex: ['(a+)+'] })])
+    expect(res.errors).toHaveLength(1)
+    expect(res.errors[0]!.ruleId).toBe('t')
+    expect(res.text).toBe('cat')
+  })
+
+  it('保守口径不误伤常用构造：无交叠交替 (cat|dog)+、组后 ?、字符类里的量词字符', () => {
+    const alternation = run('catdogcat', [makeRule({ id: 'alt', find: '/(cat|dog)+/g', replace: '<P>' })])
+    expect(alternation.text).toBe('<P>')
+    expect(alternation.errors).toEqual([])
+    // (a+)? 组后仅 ?（至多一次），放行
+    const optional = run('aaab', [makeRule({ id: 'opt', find: '/(a+)?b/', replace: 'x' })])
+    expect(optional.errors).toEqual([])
+    expect(optional.text).toBe('x')
+    // ([+])+ 的 + 在字符类里，是字面量不是嵌套量词
+    const klass = run('a++b', [makeRule({ id: 'cls', find: '/([+])+b/', replace: 'x' })])
+    expect(klass.errors).toEqual([])
+    expect(klass.text).toBe('ax')
   })
 })
 

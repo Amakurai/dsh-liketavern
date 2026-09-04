@@ -50,7 +50,12 @@ export interface ImportCardOptions {
  * journal.md（不存在则建空文件）与初始 index.json。
  */
 export declare function importCard(dataRoot: string, card: CharacterCard, opts?: ImportCardOptions): Promise<CharacterWorkspace>;
-/** 列出全部角色（读各 card.json 的 name 与 card.png 存在性）；损坏目录容错跳过。 */
+/**
+ * 列出全部角色（读各 card.json 的 name 与 card.png 存在性）；损坏目录容错跳过。
+ * 只 readdir characters/ 本层、逐目录读 card.json 探测：卡目录约定为单层
+ * characters/<cardId>/card.json，递归遍历会把每个角色的 memory/archive/、
+ * state/wal/ 整棵走完（数据积累后设置面板打开随之变慢），这里不做任何递归。
+ */
 export declare function listCharacters(dataRoot: string): Promise<CharacterSummary[]>;
 /** 读取角色工作区；card.json 缺失或损坏返回 null。 */
 export declare function loadCharacter(dataRoot: string, cardId: string): Promise<CharacterWorkspace | null>;

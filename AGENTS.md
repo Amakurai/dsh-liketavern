@@ -96,7 +96,8 @@ src/
 │            不记 WAL）/ memoryMaintenance / bindings / presetInstall
 ├── client/  浏览器 UI
 │            index / mode / chip / hero / seatWatch / seatChip / speech / assistant /
-│            actions / openChild / util / styles / i18n（useT/t 语言运行时）/
+│            actions / openChild / util / styles / cache（绑定/详情/头像 RPC 去重缓存）/
+│            i18n（useT/t 语言运行时）/
 │            locales（聚合 client/locales/<module>.ts 字典，zh 为键全集源）/
 │            types（TavernRemote 契约镜像，改 remote/service 必须同步）
 │            └── panel/  设置子面板（characters/presets/lorebooks/lorebookEditor/
@@ -134,7 +135,7 @@ src/
 2. 深度注入（@D / depth_prompt / 预设 in-chat）插不进会话日志中间：触发型（含本轮宏）并入 turn 快照尾部，静态的并入 standing（钉死）。预览才是完整 ST 序列（不含 live playbook）。
 3. 会话日志不可删。重新生成/回退/编辑 = fork 前缀 + WAL 回滚 + 子会话续跑，成功后 UI 打开分支会话并用宿主 `ISessions` 的 `scope → sessionOf → rename` 写分支标题（旧宿主缺这条路径则跳过）。编辑 assistant 正文只换 seed 里的该条消息、不续跑。例外：续写（`continueFloor`）不改历史不 fork，直接 followup 合成指令。同一父会话 + 同一楼层 fork 出的分支互为兄弟：forkAt 记 `siblings.json`，操作条给 ‹ n/m › 导航（`getFloorSiblings`，读时过滤已删分支）。会话头另有宿主原生面包屑（`meta.parentSession` 世系，`conversation.session.header.lineage`，0.1.2 occupant 为 client-ui-subagent）：会话级世系，与楼层级 ‹ n/m › 互补，不要替换那个 slot。
 4. 操作条 slot 只在 assistant 消息上，且宿主只对 finalized 消息挂 slot——被中断的楼层天然没有操作条，由 chat.node 侧补挂 `TavernInterruptedFloorActions`（`src/client/actions.tsx` 末尾；兄弟导航/重新生成/回退），这种楼层 messageId 不可用于定位，改为传 `turn`（`resolveFloorTurn`，`src/node/floors.ts`；`regenerate`/`rollbackToFloor`/`getFloorSiblings` 的 remote schema 均带可选 `turn`）。「编辑用户消息」/续写/代答都挂在 assistant 楼层。dsh 输入区没有插件可写 API，impersonate 结果只能复制到剪贴板。
-5. 同一角色卡多会话并发写入会交错（工作区与 WAL 以卡为单位共享）。已知边界，不要去「修」。
+5. 同一角色卡的多会话并发已按会话隔离楼层：turn/start 直接 `wal.beginFloor(`${sessionId}#t${turn}`)`，`openFloors` 记 `sessionId → { cardId, floor }`，turn 流程写入走 `WorkspaceFs.withFloor(floor)` 派生实例，各会话 WAL 归属互不污染；生成中途换绑后写工具按 binding-changed 拒写。注意 WAL 快照仍以卡为单位落盘，跨会话同时改同一文件时文件内容本身仍会互相覆盖（只是楼层归属不再错）。
 6. 角色选择和开场白预览只在 agent 预设为 `tavern`（`src/client/mode.ts`）时显示。
 
 ## 常用改动 checklist
@@ -174,7 +175,7 @@ src/
 4. **封面 HTML**（output/render 正则把标记换成整页 HTML）：`SpeechBubble` 用 `sandbox="allow-scripts"` iframe。`regex_scripts` 常在 V3 `extensions` 里，展示向规则默认启用（`disabled: true` 才关）。抽 HTML 见 `extractRenderedHtml`（含 text 代码围栏）。
 5. **封面外网图默认放行**。CSP 在 `src/core/cardFrame.ts`：`img-src` / `font-src` 允许 https/http/data；`connect-src` 默认 `'none'`。`cardNetworkWhitelist` 放宽脚本 fetch 与外部脚本（`*` = 全部放行）。不要改回「白名单为空则禁止一切图片」。
 6. **交互卡里切 swipe 的按钮必须真的能点**。注入 ST / JS-Slash-Runner stub，经 `postMessage`（`source: 'dsh-tavern-card'`）只允许 `swipeGreeting`。禁止 `allow-same-origin`，禁止通用主窗口桥。
-7. **非会话写入不记 WAL**。导入/设置改文件时 `WorkspaceFs` 的 floor 为 `null`。但每卡共享句柄 `workspace(cardId).fs` 的 floor 在 turn/start～turn/end 之间**非 null**：面板/服务层写方法（state.ts 的 saveJournal/saveCharacter/saveCharacterLorebook/deleteCharacterLorebook/saveChatLorebook 与导入建索引）一律走 `plainFs`（floor 恒 null），否则生成进行中的用户编辑会被误记进当前楼层 WAL、回退时静默改回旧值；turn 流程内的工具写路径才走共享句柄。不要复活名为 `non-floor` 的 WAL 单元。
+7. **非会话写入不记 WAL**。共享句柄 `workspace(cardId).fs` 的 floor 恒为 `null`：楼层不再挂在共享句柄上，turn 流程的工具/定时器写入走 `withFloor(floor)` 派生实例（快照才进 WAL），面板/服务层写方法（state.ts 的 saveJournal/saveCharacter/saveCharacterLorebook/deleteCharacterLorebook/saveChatLorebook、service.ts 的记忆/世界状态写方法与导入建索引）一律走 `plainFs`/`plainWorkspace`。service.ts 新增面板写路径时必须用 `plainWorkspace`，否则生成进行中的用户编辑会被误记进当前楼层 WAL、回退时静默改回旧值。不要复活名为 `non-floor` 的 WAL 单元，也不要再把 floor 设回共享句柄。
 8. **新对话不自动选卡**。`settings.defaults` 只在用户点选角色时套用。`hero.tsx` 不得按 `defaults.cardId` 自动绑定，也不得在已有绑定上自动 `ensureGreeting`；空白 Tavern 会话若仍带着上次留下的绑定文件，英雄区应清掉。楼层 fork 必须走 `agents.create`（id 前缀 `session-`）+ `workspace.attachSession`，禁止 `ctx.sessions.fork` 或 `tavern-` 前缀。create 必须带父会话 `agentOptions`（provider/model，优先 `requestHeader`），否则子会话立刻 followup 时 `deployment:persona` 的 `{{model}}` 无值。开场白 swipe 把新 turn 放进 create 的 seed。客户端 `refresh` 列表后再 `open` 子会话（`openChild.ts`）。无会话 hero 上选「Tavern 模式」时宿主只暂存选择，`seatWatch.ts` 会代为 `workspaces.startSession()`——不要删这个补偿。
 9. **`{{setvar}}` / `{{getvar}}` 是组装前预处理**，不是扔给模型。一次 `assemblePrompt` 共享 `Map` store；set 条目展开后变空并省略；后写覆盖先写。`{{lastusermessage}}` / `{{outlet}}` / 时钟进 `turnContext`，不要写进 `tavern:standing`。不落盘，不做 if/dice/STscript。预设内嵌 `regex_scripts` 随预设导入（`compilePresetRegexScripts`，跟脚本 `disabled` 走）；UI 开关直接改写预设文件的 `disabled`。常驻世界书（constant、无本轮宏）进 standing。
 10. **不要把整包 ST 改成 `complete` 段。** standing 放在工具说明之后（order 210），工具前缀才能命中 DeepSeek KV。turn playbook / 本轮世界书/记忆只能进 `tavern:turn`。

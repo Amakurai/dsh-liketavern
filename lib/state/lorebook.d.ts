@@ -1,22 +1,18 @@
-/**
- * 世界书 JSON ⇄ 归一化 WorldInfoEntry。
- *
- * 兼容三种输入外形：
- * 1. SillyTavern 原生 World Info 文件：{entries: {"0": {...}}}（对象 map，map 键即 uid）。
- * 2. {entries: [...]}（数组；条目按字段特征逐个判定为原生 WI 或 character_book 形态）。
- * 3. 角色卡 character_book 的条目数组（顶层即数组，或 entries 为数组且条目带 keys/extensions 等特征）。
- *
- * 字段容错：字符串数字转 number、非 boolean 转 boolean；非法 position/selectiveLogic/role 回落默认；
- * 条目级 null（caseSensitive/matchWholeWords/scanDepth/sticky/cooldown/delay）保留 null = 跟随全局。
- */
 import type { WISource, WorldDelta, WorldInfoEntry } from '../core/types.js';
+/** 单文件条目数上限：社区大书在千级，2000 已留足余量。预设（presetStore）同口径复用。 */
+export declare const MAX_LOREBOOK_ENTRIES = 2000;
+/**
+ * 单条正文字符数上限：≈2.5 万 token，超出任何合理条目。
+ * 预设（presetStore）单条 prompt 正文同口径复用。
+ */
+export declare const MAX_LOREBOOK_CONTENT_CHARS = 100000;
 export interface ParseLorebookOptions {
     source: WISource;
     sourceRef: string;
 }
 /**
  * 解析世界书 JSON 为归一化条目数组。
- * 非对象/缺 entries 时抛中文错误；非对象条目静默跳过。
+ * 非对象/缺 entries 时抛中文错误；条目数/正文/键超限或键容器、content 错型同样抛错拒绝导入。
  */
 export declare function parseLorebook(json: unknown, opts: ParseLorebookOptions): WorldInfoEntry[];
 /**

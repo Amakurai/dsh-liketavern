@@ -44,14 +44,16 @@ export function PersonasSection(props: { remote: TavernRemote }) {
 
   const remove = async () => {
     if (!toDelete) return
-    const r = await remote.deletePersona({ id: toDelete.id })
-    const err = errOf(r)
-    if (err) setError(err)
-    else {
-      if (editing?.id === toDelete.id) setEditing(null)
-      setToDelete(null)
-      reload()
-    }
+    await runAsync(setBusy, setError, async () => {
+      const r = await remote.deletePersona({ id: toDelete.id })
+      const err = errOf(r)
+      if (err) setError(err)
+      else {
+        if (editing?.id === toDelete.id) setEditing(null)
+        setToDelete(null)
+        reload()
+      }
+    })
   }
 
   const createNew = () => {
@@ -59,16 +61,18 @@ export function PersonasSection(props: { remote: TavernRemote }) {
   }
 
   const setAsDefault = async (id: string) => {
-    const current = await remote.getSettings({})
-    if (!current.ok) {
-      setError(current.error.message)
-      return
-    }
-    const defaults = { ...EMPTY_SESSION_DEFAULTS, ...current.value.settings.defaults, personaId: id }
-    const r = await remote.updateSettings({ patch: { defaults } })
-    const err = errOf(r)
-    if (err) setError(err)
-    else toast.show(t('personas.defaultSet'))
+    await runAsync(setBusy, setError, async () => {
+      const current = await remote.getSettings({})
+      if (!current.ok) {
+        setError(current.error.message)
+        return
+      }
+      const defaults = { ...EMPTY_SESSION_DEFAULTS, ...current.value.settings.defaults, personaId: id }
+      const r = await remote.updateSettings({ patch: { defaults } })
+      const err = errOf(r)
+      if (err) setError(err)
+      else toast.show(t('personas.defaultSet'))
+    })
   }
 
   return (
@@ -117,7 +121,7 @@ export function PersonasSection(props: { remote: TavernRemote }) {
               <IconBtn label={t('action.edit')} onClick={() => setEditing({ ...p })}>
                 <IconEditOutline16 />
               </IconBtn>
-              <Btn size="sm" onClick={() => void setAsDefault(p.id)}>{t('personas.setDefault')}</Btn>
+              <Btn size="sm" disabled={busy} onClick={() => void setAsDefault(p.id)}>{t('personas.setDefault')}</Btn>
               <IconBtn label={t('personas.delete')} danger onClick={() => setToDelete(p)}>
                 <IconTrashOutline16 />
               </IconBtn>
@@ -131,6 +135,7 @@ export function PersonasSection(props: { remote: TavernRemote }) {
         description={toDelete ? t('personas.deleteDesc', { name: toDelete.name }) : ''}
         confirmLabel={t('action.delete')}
         danger
+        busy={busy}
         onCancel={() => setToDelete(null)}
         onConfirm={() => void remove()}
       />

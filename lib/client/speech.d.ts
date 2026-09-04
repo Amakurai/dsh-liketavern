@@ -7,5 +7,7 @@ export declare function SpeechBubble(props: {
     name: string;
     rawText: string;
     streaming?: boolean;
+    /** 会话级交互卡开关（binding.interactiveCards）；null/缺省回落全局设置。 */
+    interactiveCards?: boolean | null;
     onSwipeGreeting?: (index: number) => void;
 }): any;

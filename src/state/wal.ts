@@ -83,7 +83,11 @@ export class Wal {
   private readonly rootDir: string
   /** 实例内 promise 队列：所有公共方法串行化，保证并发安全。 */
   private queue: Promise<unknown> = Promise.resolve()
-  /** 楼层目录名 → 记录状态（paths 用于同层同路径去重，seq 为已用最大序号）。 */
+  /**
+   * 楼层目录名 → 记录状态（paths 用于同层同路径去重，seq 为已用最大序号）。
+   * 全部公共方法按 floor 参数化、状态按楼层目录分键：多个未提交楼层可以并存
+   * （同一张卡的并发会话各开各的 `sessionId#tN`），本类没有单态「当前楼层」。
+   */
   private readonly states = new Map<string, { paths: Set<string>; seq: number }>()
 
   /** rootDir 为工作区的 state/wal/ 目录；不存在则在首次操作时创建。 */

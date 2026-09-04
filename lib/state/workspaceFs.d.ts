@@ -4,11 +4,22 @@ export declare const NON_FLOOR = "non-floor";
 export declare class WorkspaceFs {
     readonly root: string;
     private readonly wal;
-    /** 当前楼层；null 表示非会话期写入（不走 WAL）。 */
+    /** 本实例的楼层；null 表示非会话期写入（不走 WAL）。构造后只能经 withFloor 派生改出。 */
     private floor;
     constructor(root: string, wal: Wal | null);
+    /**
+     * 遗留兼容：直接改本实例的 floor。host 路径已改用 withFloor 派生实例 +
+     * wal.beginFloor/commitFloor（见文件头「楼层隔离模型」）；保留仅为既有测试与
+     * 旧调用点不 break，新代码不要再用——共享句柄上的可变 floor 会让同卡并发会话
+     * 互相覆盖楼层上下文。
+     */
     setFloor(floor: string | null): void;
     get currentFloor(): string | null;
+    /**
+     * 派生一个共享 root 与 wal、floor 独立的新实例。会话楼层（含读路径口径统一）
+     * 用它在楼层内读写：快照记进本实例的 floor，不影响共享句柄与其它会话的实例。
+     */
+    withFloor(floor: string | null): WorkspaceFs;
     private abs;
     readText(relPath: string): Promise<string | null>;
     /** 判断路径是否存在（文件或目录）。 */
@@ -44,9 +55,13 @@ export declare class WorkspaceFs {
      * 默认递归；`recursive: false` 只列本层文件（跳过子目录，不进去走）——
      * 记忆库那样「本层是热路径、子目录（archive/）只增不查」的场景必须用非递归，
      * 否则每次检索都要把归档整棵走完再丢掉，成本随归档量单调增长。
+     * `skipDir` 在递归遍历遇到目录时回调（相对路径，正斜杠），返回 true 则整棵跳过——
+     * state/wal、memory/archive 这类只增不查的目录应在遍历时直接排除，
+     * 而不是全棵走完再由调用方过滤。
      */
     list(prefix?: string, options?: {
         recursive?: boolean;
+        skipDir?: (relDir: string) => boolean;
     }): Promise<string[]>;
     /**
      * 列出 prefix 本层文件及其 mtime/size（非递归）。
@@ -58,8 +73,11 @@ export declare class WorkspaceFs {
         mtimeMs: number;
         size: number;
     }>>;
-    /** 开始一个楼层事务（WAL 存在时）。 */
+    /**
+     * 遗留兼容：开始一个楼层事务并把本实例的 floor 指过去（WAL 存在时）。
+     * host 路径已改为 `wal.beginFloor(floor)` + `withFloor(floor)` 派生实例；保留仅为既有测试。
+     */
     beginFloor(floor: string): Promise<void>;
-    /** 提交当前楼层并清除楼层上下文。 */
+    /** 遗留兼容：提交本实例当前楼层并清除楼层上下文。host 路径已改为 `wal.commitFloor(floor)`。 */
     commitFloor(): Promise<void>;
 }

@@ -3,7 +3,9 @@
  * 覆盖：全字段解析（role/system_prompt/injection_*）、prompt_order 优先 100001、
  * 未列出库条目摘要 warning、无 prompt_order 默认全开、
  * forbid_overrides / extension / injection_trigger 归一化保留并随导出带回、
- * 缺 prompts 抛错、栈序写入 relative.order、往返导出。
+ * 缺 prompts 抛错、栈序写入 relative.order、往返导出、
+ * 导入硬上限与错型拒绝（条目数 2000 / 正文 100000 / identifier 500、prompt_order 嵌套层级 16，
+ * 与世界书同口径统一拒绝）。
  */
 import { describe, expect, it } from 'vitest'
 import { exportStPreset, parseStPreset } from '../src/state/presetStore.js'
@@ -198,6 +200,46 @@ describe('parseStPreset', () => {
   it('缺 prompts 数组抛中文 Error', () => {
     expect(() => parseStPreset({})).toThrow(/缺少 prompts 数组/)
     expect(() => parseStPreset('nope')).toThrow(/不是有效的 JSON 对象/)
+  })
+})
+
+describe('导入硬上限与错型拒绝（与世界书同口径，统一拒绝）', () => {
+  it('prompts 条目数超过 2000 拒绝导入', () => {
+    const prompts = Array.from({ length: 2001 }, (_, i) => ({ identifier: `p${i}`, content: 'c' }))
+    expect(() => parseStPreset({ prompts })).toThrow(/条目数 2001 超过上限 2000/)
+    // 恰好 2000 条放行
+    const ok = Array.from({ length: 2000 }, (_, i) => ({ identifier: `p${i}`, content: 'c' }))
+    expect(parseStPreset({ prompts: ok }).preset.entries).toHaveLength(2000)
+  })
+
+  it('单条 prompt 正文超过 100000 字符拒绝；identifier 超过 500 字符拒绝', () => {
+    expect(() => parseStPreset({ prompts: [{ identifier: 'a', content: 'x'.repeat(100_001) }] })).toThrow(/正文/)
+    expect(() => parseStPreset({ prompts: [{ identifier: 'i'.repeat(501), content: 'c' }] })).toThrow(/identifier/)
+  })
+
+  it('content 错型（对象/数组）在归一化时抛错，而不是落盘后才炸', () => {
+    expect(() => parseStPreset({ prompts: [{ identifier: 'a', content: { nested: true } }] })).toThrow(
+      /content 不是字符串/,
+    )
+    expect(() => parseStPreset({ prompts: [{ identifier: 'a', content: ['x'] }] })).toThrow(/content 不是字符串/)
+  })
+
+  it('prompt_order 嵌套层级超过 16 拒绝（恶意深嵌套会撑爆调用栈）', () => {
+    let item: Record<string, unknown> = { identifier: 'leaf', enabled: true }
+    for (let i = 0; i < 20; i++) item = { identifier: `f${i}`, enabled: true, items: [item] }
+    expect(() =>
+      parseStPreset({
+        prompts: [{ identifier: 'leaf', content: 'c' }],
+        prompt_order: [{ character_id: 100001, order: [item] }],
+      }),
+    ).toThrow(/嵌套层级/)
+  })
+
+  it('prompt_order 展开项超过 2000 同样拒绝', () => {
+    const flat = Array.from({ length: 2001 }, (_, i) => ({ identifier: `g${i}`, enabled: true }))
+    expect(() =>
+      parseStPreset({ prompts: [{ identifier: 'main', content: 'c' }], prompt_order: [{ character_id: 100001, order: flat }] }),
+    ).toThrow(/prompt_order 条目数/)
   })
 })
 

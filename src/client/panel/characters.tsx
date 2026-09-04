@@ -5,6 +5,7 @@
  */
 import { useEffect, useState } from 'react'
 import { Button, IconDownloadOutline16, IconTrashOutline16, IconUserOutline16, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
+import { cachedAvatar, cachedCharacterDetail, invalidateCharacter } from '../cache.js'
 import { useT } from '../i18n.js'
 import type { CharacterDetail, CharacterInspect, CharacterSummary, TavernRemote } from '../types.js'
 import { Avatar, Btn, ConfirmDialog, Dialog, Err, Field, FileBtn, IconBtn, Muted, NumInput, SearchEmpty, SearchInput, Section, Select, Skeleton, clickableProps, downloadBase64, downloadJson, errOf, fileToBase64, runAsync, useLoader, useToast } from '../util.js'
@@ -22,9 +23,9 @@ function withCsp(html: string): string {
   return CSP_META + html
 }
 
-/** 按 cardId 拉头像 dataURL 的 Avatar 包装（失败时回落首字符/图标）。 */
+/** 按 cardId 拉头像 dataURL 的 Avatar 包装（失败时回落首字符/图标）；头像走进程内缓存。 */
 function CardAvatar(props: { remote: TavernRemote; cardId: string; name: string; size: number }) {
-  const { state } = useLoader(() => props.remote.getAvatar({ cardId: props.cardId }), [props.cardId])
+  const { state } = useLoader(() => cachedAvatar(props.remote, props.cardId), [props.cardId])
   const url = state.status === 'ready' ? state.value.dataUrl : null
   return <Avatar url={url} name={props.name} size={props.size} />
 }
@@ -38,7 +39,7 @@ function CharacterCard(props: {
   onDelete: (item: CharacterSummary) => void
 }) {
   const t = useT()
-  const { state } = useLoader(() => props.remote.getAvatar({ cardId: props.item.cardId }), [props.item.cardId])
+  const { state } = useLoader(() => cachedAvatar(props.remote, props.item.cardId), [props.item.cardId])
   const url = state.status === 'ready' ? state.value.dataUrl : null
   const initial = props.item.name.trim().charAt(0) || '?'
   const book = props.item.characterBookName
@@ -99,10 +100,7 @@ function CharacterDetailDialog(props: { remote: TavernRemote; cardId: string; on
   const { remote, cardId } = props
   const t = useT()
   const { state, reload } = useLoader(
-    async () => {
-      const r = await remote.getCharacterDetail({ cardId })
-      return r
-    },
+    () => cachedCharacterDetail(remote, cardId),
     [cardId],
   )
   const [cardOpen, setCardOpen] = useState(false)
@@ -147,6 +145,8 @@ function CharacterDetailDialog(props: { remote: TavernRemote; cardId: string; on
       if (err) setError(err)
       else {
         toast.show(t('characters.detail.saved', { name: detail.name }))
+        // 先失效详情/头像缓存再 reload，否则详情弹窗与聊天气泡继续吃旧值。
+        invalidateCharacter(cardId)
         reload()
         props.onSaved()
       }
@@ -154,14 +154,16 @@ function CharacterDetailDialog(props: { remote: TavernRemote; cardId: string; on
   }
 
   const exportCard = async (kind: 'json' | 'png') => {
-    const r = await remote.exportCharacter({ cardId })
-    if (!r.ok) {
-      setError(r.error.message)
-      return
-    }
-    if (kind === 'json') downloadJson(`${r.value.name}.json`, r.value.json)
-    else downloadBase64(`${r.value.name}.png`, r.value.pngBase64, 'image/png')
-    toast.show(t('characters.detail.exported', { kind: kind.toUpperCase() }))
+    await runAsync(setBusy, setError, async () => {
+      const r = await remote.exportCharacter({ cardId })
+      if (!r.ok) {
+        setError(r.error.message)
+        return
+      }
+      if (kind === 'json') downloadJson(`${r.value.name}.json`, r.value.json)
+      else downloadBase64(`${r.value.name}.png`, r.value.pngBase64, 'image/png')
+      toast.show(t('characters.detail.exported', { kind: kind.toUpperCase() }))
+    })
   }
 
   return (
@@ -274,7 +276,7 @@ function CharacterDetailDialog(props: { remote: TavernRemote; cardId: string; on
           </div>
           <Err message={error} />
           <div className="dsh-tavern-footActions" style={{ marginTop: 2 }}>
-            <IconBtn label={t('characters.detail.exportPng')} onClick={() => void exportCard('png')}>
+            <IconBtn label={t('characters.detail.exportPng')} disabled={busy} onClick={() => void exportCard('png')}>
               <IconDownloadOutline16 />
             </IconBtn>
             {interactiveHtml !== null && <Btn size="md" onClick={() => setCardOpen(true)}>{t('interactive.open')}</Btn>}
@@ -365,6 +367,7 @@ export function CharactersSection(props: { remote: TavernRemote }) {
             ? t('characters.deletedSalvaged', { name: toDelete.name, book: r.value.salvagedLorebook })
             : t('characters.deleted', { name: toDelete.name }),
         )
+        invalidateCharacter(toDelete.cardId)
         setToDelete(null)
         reload()
       }

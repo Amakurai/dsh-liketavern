@@ -11,8 +11,13 @@
  * （forbidOverrides / extension / injectionTrigger），导出时带回；
  * 运行时语义见 assemble（forbid_overrides 拒绝卡级覆盖、injection_trigger 按生成场景过滤）。
  * `extensions.regex_scripts` 原样挂到 PromptPreset.regexScripts（编译在 rulesFor）。
+ *
+ * 导入硬上限与世界书（lorebook.ts）同口径：条目数 / 单条正文 / identifier 长度超限，
+ * 或 content 字段类型非法，一律在归一化时抛中文错误拒绝导入——统一拒绝口径，不做静默截断。
  */
+import { MAX_WI_KEY_CHARS } from '../core/worldbook.js'
 import type { CardRegexScript, ChatRole, PresetEntry, PromptPreset } from '../core/types.js'
+import { MAX_LOREBOOK_CONTENT_CHARS, MAX_LOREBOOK_ENTRIES } from './lorebook.js'
 import { pickRegexScripts } from './card.js'
 
 export interface ParseStPresetResult {
@@ -69,13 +74,19 @@ function toRole(raw: Record<string, unknown>): ChatRole {
   return 'system'
 }
 
-function flattenOrderItems(items: unknown[]): OrderItem[] {
+/** prompt_order 的 folder 摊平：嵌套层级设硬上限（恶意深嵌套会撑爆调用栈），超限拒绝导入。 */
+const MAX_PROMPT_ORDER_DEPTH = 16
+
+function flattenOrderItems(items: unknown[], depth = 0): OrderItem[] {
+  if (depth > MAX_PROMPT_ORDER_DEPTH) {
+    throw new Error(`prompt_order 嵌套层级超过上限（${MAX_PROMPT_ORDER_DEPTH}），拒绝导入`)
+  }
   const out: OrderItem[] = []
   for (const item of items) {
     if (!isRecord(item)) continue
     const identifier = toStr(item.identifier)
     if (identifier !== '') out.push({ identifier, enabled: toBool(item.enabled, true) })
-    if (Array.isArray(item.items)) out.push(...flattenOrderItems(item.items))
+    if (Array.isArray(item.items)) out.push(...flattenOrderItems(item.items, depth + 1))
   }
   return out
 }
@@ -129,6 +140,13 @@ function parsePromptEntry(raw: Record<string, unknown>, index: number, warnings:
     warnings.push(`prompts[${index}] 缺少 identifier，已跳过`)
     return null
   }
+  // 导入硬上限（与世界书同口径，统一拒绝）：identifier 长度 / content 类型与长度
+  if (identifier.length > MAX_WI_KEY_CHARS) {
+    throw new Error(`预设条目 prompts[${index}] 的 identifier 超过 ${MAX_WI_KEY_CHARS} 字符上限，拒绝导入`)
+  }
+  if (raw.content !== undefined && raw.content !== null && typeof raw.content === 'object') {
+    throw new Error(`预设条目 prompts[${index}]（${identifier}）的 content 不是字符串，拒绝导入`)
+  }
   const marker = toBool(raw.marker, false)
   const position: PresetEntry['position'] = toNum(raw.injection_position, 0) === 1 ? 'in-chat' : 'relative'
   const entry: PresetEntry = {
@@ -141,6 +159,9 @@ function parsePromptEntry(raw: Record<string, unknown>, index: number, warnings:
     order: toNum(raw.injection_order, 100),
     content: toStr(raw.content),
     marker,
+  }
+  if (entry.content.length > MAX_LOREBOOK_CONTENT_CHARS) {
+    throw new Error(`预设条目 prompts[${index}]（${identifier}）的正文超过 ${MAX_LOREBOOK_CONTENT_CHARS} 字符上限，拒绝导入`)
   }
   if (marker) entry.markerId = identifier
   // ST 三个原忽略字段：归一化进条目，导出时带回
@@ -168,6 +189,9 @@ export function parseStPreset(json: unknown): ParseStPresetResult {
   if (!isRecord(json)) throw new Error('预设文件不是有效的 JSON 对象')
   if (!Array.isArray(json.prompts)) throw new Error('预设文件缺少 prompts 数组，无法导入')
   const rawPrompts: unknown[] = json.prompts
+  if (rawPrompts.length > MAX_LOREBOOK_ENTRIES) {
+    throw new Error(`预设条目数 ${rawPrompts.length} 超过上限 ${MAX_LOREBOOK_ENTRIES}，拒绝导入`)
+  }
   const warnings: string[] = []
 
   const byId = new Map<string, PresetEntry>()
@@ -188,6 +212,9 @@ export function parseStPreset(json: unknown): ParseStPresetResult {
   })
 
   const orderList = Array.isArray(json.prompt_order) ? pickPromptOrder(json.prompt_order) : null
+  if (orderList !== null && orderList.length > MAX_LOREBOOK_ENTRIES) {
+    throw new Error(`prompt_order 条目数 ${orderList.length} 超过上限 ${MAX_LOREBOOK_ENTRIES}，拒绝导入`)
+  }
   const entries: PresetEntry[] = []
   const seen = new Set<string>()
 

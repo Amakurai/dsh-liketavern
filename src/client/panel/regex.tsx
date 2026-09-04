@@ -147,15 +147,22 @@ export function RegexSection(props: { remote: TavernRemote }) {
       regexScripts: preset.regexScripts!.map((s, i) => (i === si ? { ...s, disabled } : s)),
     }
     setPresetDrafts(drafts.map((p, i) => (i === pi ? nextPreset : p)))
-    const r = await remote.savePreset({ preset: nextPreset })
-    const err = errOf(r)
-    if (err) {
-      setError(err)
-      setPresetDrafts(drafts)
-    } else {
-      const name = script.scriptName?.trim() || t('util.regex.unnamed', { index: si + 1 })
-      toast.show(disabled ? t('regex.toggledOff', { name }) : t('regex.toggledOn', { name }))
-    }
+    // 乐观开关失败（错误信封或传输 reject）都回滚草稿；reject 经 runAsync 落 setError，
+    // 不留未处理 rejection；busy 期间 RegexScriptRow 开关禁用，防连续切换互相覆盖。
+    await runAsync(setBusy, setError, async () => {
+      const r = await remote.savePreset({ preset: nextPreset }).catch((e: unknown) => {
+        setPresetDrafts(drafts)
+        throw e
+      })
+      const err = errOf(r)
+      if (err) {
+        setError(err)
+        setPresetDrafts(drafts)
+      } else {
+        const name = script.scriptName?.trim() || t('util.regex.unnamed', { index: si + 1 })
+        toast.show(disabled ? t('regex.toggledOff', { name }) : t('regex.toggledOn', { name }))
+      }
+    })
   }
 
   const save = (next: RegexRule[]) =>
@@ -235,7 +242,7 @@ export function RegexSection(props: { remote: TavernRemote }) {
           </div>
           <div className="dsh-tavern-list">
             {preset.regexScripts!.map((s, si) => (
-              <RegexScriptRow key={s.id ?? si} script={s} index={si} onToggle={(disabled) => void togglePresetScript(pi, si, disabled)} />
+              <RegexScriptRow key={s.id ?? si} script={s} index={si} disabled={busy} onToggle={(disabled) => void togglePresetScript(pi, si, disabled)} />
             ))}
           </div>
         </div>

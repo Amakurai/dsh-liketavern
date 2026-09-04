@@ -18,6 +18,12 @@
  *
  * 引擎只返回新字符串/新数组，绝不原地修改——「作用于 prompt 的规则不得改写
  * 会话中存储的原始消息」由调用方据此天然满足。
+ *
+ * 安全闸：规则直接在主事件循环执行，(a+)+$ 类灾难性回溯会冻结整个 host。
+ * 编译前一律过保守静态检查（超长 pattern + 嵌套量词/交叠分支启发式，
+ * 见 findUnsafeRegexConstruct）；被拒绝的规则跳过并把原因记入 errors。
+ * 落盘规则文件（regex/rules.json）可被手改：形状非法（缺 find/scopes/timing）
+ * 的规则同样跳过并记录，绝不让 .includes() 处炸在主循环里。
  */
 import { type MacroContext } from './macros.js';
 import type { CardRegexScript, ChatMessage, RegexRule, RegexScope, RegexTiming } from './types.js';
@@ -35,6 +41,17 @@ export interface RegexApplyResult {
         message: string;
     }>;
 }
+/**
+ * 灾难性回溯启发式（保守口径）：命中的 pattern 在恶意输入上可能指数级回溯、冻结主进程。
+ * 逐个扫描分组（正确跳过转义与字符类），组后紧跟可重复量词时：
+ * - 组内含量词构造 → 嵌套量词，如 (a+)+ / (a*)* / (a{2})+；
+ * - 组内顶层分支重复或互为前缀 → 交叠分支，如 (a|a)+ / (a|aa)+。
+ * 已知误伤面（字符类里的量词字符已排除，但仍偏保守）：(cat|c)+ 这类前缀分支实际线性也会被拒。
+ * 拒绝代价只是该规则跳过并记 error，可接受；放行代价是冻结整个 host，不可接受。
+ * 返回命中构造的片段（写进 error 便于定位），无问题返回 null。
+ * 世界书 /regex/ 键复用同一判定（worldbook.ts 的 compileKey）。
+ */
+export declare function findUnsafeRegexConstruct(source: string): string | null;
 /** 顺序应用规则；单条规则编译/执行失败不中断后续规则，记入 errors。 */
 export declare function applyRegexRules(text: string, rules: readonly RegexRule[], filter: RegexFilter, macroCtx: MacroContext): RegexApplyResult;
 /**

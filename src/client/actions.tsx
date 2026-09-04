@@ -18,6 +18,7 @@
 import { useEffect, useState } from 'react'
 import { IconBranchOutline16, IconChevronLeftOutline14, IconChevronRightOutline14, IconEditOutline16, IconListPenOutline16, IconLoadingOutline16, IconPlayOutline16, IconRefreshOutline16, IconUserOutline16, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ReactNode } from 'react'
+import { cachedSessionBinding } from './cache.js'
 import { useT } from './i18n.js'
 import { isTavernSession, type UseSessions } from './mode.js'
 import { openChildSession } from './openChild.js'
@@ -47,7 +48,7 @@ export const BINDING_CHANGED_EVENT = 'dsh-tavern:binding-changed'
 /** 分支变更广播（fork 操作成功后以源会话 id dispatch，兄弟导航据此重拉）。 */
 export const BRANCH_CHANGED_EVENT = 'dsh-tavern:branch-changed'
 
-/** 查询会话是否已绑定角色卡；null = 尚未加载完成（先不渲染，避免闪烁）。非 Tavern 不打 remote。 */
+/** 查询会话是否已绑定角色卡；null = 尚未加载完成（先不渲染，避免闪烁）。非 Tavern 不打 remote。绑定读进程内缓存：每条 assistant 消息的操作条共享一次 RPC。 */
 function useTavernBound(remote: TavernRemote, sessionId: string, enabled: boolean): boolean | null {
   const [bound, setBound] = useState<boolean | null>(null)
   useEffect(() => {
@@ -57,8 +58,7 @@ function useTavernBound(remote: TavernRemote, sessionId: string, enabled: boolea
     }
     let alive = true
     const load = () =>
-      remote
-        .getSessionBinding({ sessionId })
+      cachedSessionBinding(remote, sessionId)
         .then((r) => {
           if (alive) setBound(r.ok ? r.value.binding !== null : null)
         })

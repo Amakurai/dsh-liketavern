@@ -4,6 +4,7 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import { BINDING_CHANGED_EVENT } from './actions.js'
+import { cachedAvatar, cachedCharacterDetail, cachedSessionBinding, invalidateSessionBinding } from './cache.js'
 import { useT } from './i18n.js'
 import { isTavernSession, type UseSessions } from './mode.js'
 import { openChildSession } from './openChild.js'
@@ -137,13 +138,13 @@ export function TavernHeaderChip(props: {
   const { remote, sessionId, sessions } = props
   const t = useT()
   const tavern = isTavernSession(props.useSessions, sessionId)
-  const bindingLoader = useLoader(() => remote.getSessionBinding({ sessionId }), [sessionId], tavern)
+  const bindingLoader = useLoader(() => cachedSessionBinding(remote, sessionId), [sessionId], tavern)
   const binding = bindingLoader.state.status === 'ready' ? bindingLoader.state.value.binding : null
   const canSwipeGreeting =
     bindingLoader.state.status === 'ready' ? bindingLoader.state.value.canSwipeGreeting !== false : false
   const detail = useLoader(
     async () => {
-      const [d, a] = await Promise.all([remote.getCharacterDetail({ cardId: binding!.cardId }), remote.getAvatar({ cardId: binding!.cardId })])
+      const [d, a] = await Promise.all([cachedCharacterDetail(remote, binding!.cardId), cachedAvatar(remote, binding!.cardId)])
       if (!d.ok) return d
       return { ok: true as const, value: { name: d.value.name, avatar: a.ok ? a.value.dataUrl : null } }
     },
@@ -240,6 +241,8 @@ export function TavernHeaderChip(props: {
     if (err) setError(err)
     else {
       toast.show(t('chip.saved'))
+      // 先失效进程内缓存再 reload/广播，否则重拉吃到旧绑定（见 cache.ts TTL 口径）。
+      invalidateSessionBinding(sessionId)
       bindingLoader.reload()
       // 通知操作条等按绑定显隐的组件刷新
       window.dispatchEvent(new CustomEvent(BINDING_CHANGED_EVENT, { detail: sessionId }))
@@ -254,7 +257,7 @@ export function TavernHeaderChip(props: {
 
   const swipeBy = async (delta: number) => {
     if (!binding) return
-    const variants = await remote.getCharacterDetail({ cardId: binding.cardId })
+    const variants = await cachedCharacterDetail(remote, binding.cardId)
     if (!variants.ok) {
       setError(variants.error.message)
       return
@@ -287,6 +290,7 @@ export function TavernHeaderChip(props: {
       } else {
         setConfirmUnbind(false)
         setOpen(false)
+        invalidateSessionBinding(sessionId)
         bindingLoader.reload()
         window.dispatchEvent(new CustomEvent(BINDING_CHANGED_EVENT, { detail: sessionId }))
       }

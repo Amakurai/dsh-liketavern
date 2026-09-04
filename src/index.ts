@@ -36,31 +36,31 @@ async function onTurnStart(state: TavernState, sessionId: string, turn: number):
   const binding = await state.loadBinding(sessionId)
   if (!binding) return
   const ws = await state.workspace(binding.cardId)
-  await ws.fs.beginFloor(`${sessionId}#t${turn}`)
-  // 记下楼层开在哪张卡上：turn/end 必须按这张卡提交，不能重新读绑定。
-  state.openFloors.set(sessionId, binding.cardId)
+  // 楼层直接开在 WAL 上，不再写共享 WorkspaceFs 的可变 floor：同一张卡的并发会话
+  // 各有各的楼层，turn 内的写入经 withFloor(floor) 派生实例记进各自楼层（见 tools.ts）。
+  const floor = `${sessionId}#t${turn}`
+  await ws.wal.beginFloor(floor)
+  // 记下楼层开在哪张卡上：turn/end 必须按这张卡这个楼层提交，不能重新读绑定；
+  // 工具写路径也凭这条 entry 校验「楼层确实开在当前绑定的卡上」。
+  state.openFloors.set(sessionId, { cardId: binding.cardId, floor })
 }
 
 async function onTurnEnd(state: TavernState, sessionId: string): Promise<void> {
   // 不变式：谁 beginFloor 谁 commitFloor。用户中途换绑/解绑时当前绑定已经指向别的卡，
-  // 按当前绑定提交会把开层那张卡的 floor 永远留在 `${sessionId}#tN`：之后设置面板编辑、
-  // runMaintenance 等非会话写入都会被误记进这个悬空楼层（违反 AGENTS.md「非会话写入不记 WAL」），
-  // 且同名楼层再 beginFloor 会抛「已存在且未提交」。
-  const cardId = state.openFloors.get(sessionId)
+  // 按当前绑定提交会把开层那张卡的楼层永远留在未提交状态：之后同会话同 turn 号再
+  // beginFloor 会抛「已存在且未提交」，该楼层也一直占着 listFloors。
+  const entry = state.openFloors.get(sessionId)
   state.openFloors.delete(sessionId)
   state.currentTurns.delete(sessionId)
   state.currentSteps.delete(sessionId)
   state.stepNoticeMarks.delete(sessionId)
   state.wiCache.delete(sessionId)
   state.pendingInputs.delete(sessionId)
-  if (!cardId) return
-  const ws = await state.workspace(cardId)
-  try {
-    await ws.fs.commitFloor()
-  } finally {
-    // 提交失败也要摘掉楼层上下文，否则同样留下悬空 floor。
-    ws.fs.setFloor(null)
-  }
+  if (!entry) return
+  const ws = await state.workspace(entry.cardId)
+  // 提交失败由调用方 warn；entry 已先摘除，不会留下悬空楼层
+  // （共享 WorkspaceFs 的 floor 恒为 null，没有 setFloor(null) 兜底的需求）。
+  await ws.wal.commitFloor(entry.floor)
 }
 
 export async function apply(ctx: Context): Promise<void> {

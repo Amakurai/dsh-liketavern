@@ -81,34 +81,40 @@ export function LorebooksSection(props: { remote: TavernRemote }) {
 
   const remove = async () => {
     if (!toDelete) return
-    const r = await remote.deleteLorebook({ name: toDelete })
-    const err = errOf(r)
-    if (err) setError(err)
-    else {
-      if (opened?.target.kind === 'library' && opened.target.name === toDelete) setOpened(null)
-      setToDelete(null)
-      reload()
-    }
+    await runAsync(setBusy, setError, async () => {
+      const r = await remote.deleteLorebook({ name: toDelete })
+      const err = errOf(r)
+      if (err) setError(err)
+      else {
+        if (opened?.target.kind === 'library' && opened.target.name === toDelete) setOpened(null)
+        setToDelete(null)
+        reload()
+      }
+    })
   }
 
   /** 删除角色卡内嵌世界书（保留角色卡本身）。 */
   const removeEmbedded = async () => {
     const target = toDeleteEmbedded
     if (!target) return
-    const r = await remote.deleteEmbeddedLorebook({ cardId: target.cardId })
-    const err = errOf(r)
-    if (err) setError(err)
-    else {
-      toast.show(t('lorebooks.embeddedDeleted', { name: target.name }))
-      setToDeleteEmbedded(null)
-      chars.reload()
-    }
+    await runAsync(setBusy, setError, async () => {
+      const r = await remote.deleteEmbeddedLorebook({ cardId: target.cardId })
+      const err = errOf(r)
+      if (err) setError(err)
+      else {
+        toast.show(t('lorebooks.embeddedDeleted', { name: target.name }))
+        setToDeleteEmbedded(null)
+        chars.reload()
+      }
+    })
   }
 
   const exportBook = async (name: string) => {
-    const r = await remote.getLorebook({ name })
-    if (!r.ok) setError(r.error.message)
-    else downloadJson(`${name}.json`, r.value.json)
+    await runAsync(setBusy, setError, async () => {
+      const r = await remote.getLorebook({ name })
+      if (!r.ok) setError(r.error.message)
+      else downloadJson(`${name}.json`, r.value.json)
+    })
   }
 
   const onImportFile = async (file: File) => {
@@ -277,7 +283,7 @@ export function LorebooksSection(props: { remote: TavernRemote }) {
                 <IconBtn label={t('lorebooks.editEntries')} onClick={() => void openLibrary(name)}>
                   <IconEditOutline16 />
                 </IconBtn>
-                <IconBtn label={t('lorebooks.exportJson')} onClick={() => void exportBook(name)}>
+                <IconBtn label={t('lorebooks.exportJson')} disabled={busy} onClick={() => void exportBook(name)}>
                   <IconDownloadOutline16 />
                 </IconBtn>
                 <IconBtn label={t('lorebooks.deleteBook')} danger onClick={() => setToDelete(name)}>
@@ -295,6 +301,7 @@ export function LorebooksSection(props: { remote: TavernRemote }) {
         description={toDelete ? t('lorebooks.confirmDeleteDesc', { name: toDelete }) : ''}
         confirmLabel={t('action.delete')}
         danger
+        busy={busy}
         onCancel={() => setToDelete(null)}
         onConfirm={() => void remove()}
       />
@@ -311,6 +318,7 @@ export function LorebooksSection(props: { remote: TavernRemote }) {
         }
         confirmLabel={t('action.delete')}
         danger
+        busy={busy}
         onCancel={() => setToDeleteEmbedded(null)}
         onConfirm={() => void removeEmbedded()}
       />

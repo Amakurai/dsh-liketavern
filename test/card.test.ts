@@ -1,7 +1,8 @@
 /**
  * 角色卡解析单测：手工构造最小 PNG（签名 + IHDR + tEXt/zTXt/iTXt + IEND），
  * chunk 长度字段按实填写，CRC 填 0（解析器不校验）。覆盖 depth_prompt、空白卡、
- * PNG 往返导出与导出侧截断拒绝（源图缺 IEND 时 embedCardInPng 抛错）。
+ * PNG 往返导出与导出侧截断拒绝（源图缺 IEND 时 embedCardInPng 抛错）、
+ * 导入硬上限（PNG 文件 32MB / 内嵌与独立 JSON 8MB / zTXt+iTXt 解压输出 4MB 压缩炸弹拒绝）。
  */
 
 import { Buffer } from 'node:buffer'
@@ -187,6 +188,50 @@ describe('parsePngCard', () => {
     expect(() => parsePngCard(bad)).toThrow(CardParseError)
     expect(() => parsePngCard(bad)).toThrow(/截断|畸形/)
   })
+
+  it('zTXt 压缩炸弹：解压输出超 4MB 上限抛 CardParseError（5MB 重复字符 deflate 后仅 ~5KB）', () => {
+    const packed = deflateSync(Buffer.alloc(5 * 1024 * 1024, 0x41))
+    expect(packed.length).toBeLessThan(64 * 1024) // 确实压得很小，纯靠解压膨胀
+    const data = Buffer.concat([Buffer.from('chara\0\0', 'latin1'), packed])
+    const png = buildPng([IHDR, { type: 'zTXt', data }])
+    expect(() => parsePngCard(png)).toThrow(CardParseError)
+    expect(() => parsePngCard(png)).toThrow(/压缩炸弹/)
+  })
+
+  it('iTXt 压缩块同样受 4MB 解压上限约束', () => {
+    const packed = deflateSync(Buffer.alloc(5 * 1024 * 1024, 0x61))
+    const data = Buffer.concat([
+      Buffer.from('chara\0', 'latin1'),
+      Buffer.from([1, 0]), // compression_flag=1, compression_method=0
+      Buffer.from('\0\0', 'latin1'), // language \0 translated \0
+      packed,
+    ])
+    const png = buildPng([IHDR, { type: 'iTXt', data }])
+    expect(() => parsePngCard(png)).toThrow(CardParseError)
+    expect(() => parsePngCard(png)).toThrow(/压缩炸弹/)
+  })
+
+  it('上限内的 zTXt 正常解压（不回归既有能力）', () => {
+    const b64 = Buffer.from(JSON.stringify(V2_JSON), 'utf-8').toString('base64')
+    const compressed = deflateSync(Buffer.from(b64, 'latin1'))
+    const data = Buffer.concat([Buffer.from('ccv3\0\0', 'latin1'), compressed])
+    const card = parsePngCard(buildPng([IHDR, { type: 'zTXt', data }]))
+    expect(card.name).toBe('艾莉丝')
+  })
+
+  it('PNG 文件超过 32MB 直接拒绝，不逐 chunk 扫描', () => {
+    const fat: PngChunk = { type: 'IDAT', data: new Uint8Array(33 * 1024 * 1024) }
+    const png = buildPng([IHDR, fat, textChunk('chara', { name: 'x' })])
+    expect(() => parsePngCard(png)).toThrow(CardParseError)
+    expect(() => parsePngCard(png)).toThrow(/32MB/)
+  })
+
+  it('PNG 内嵌 JSON 文本超过 8MB 拒绝（tEXt 不压缩也受文本上限约束）', () => {
+    const bigJson = { name: 'x', description: 'A'.repeat(8 * 1024 * 1024) }
+    const png = buildPng([IHDR, textChunk('chara', bigJson)])
+    expect(() => parsePngCard(png)).toThrow(CardParseError)
+    expect(() => parsePngCard(png)).toThrow(/8MB/)
+  })
 })
 
 describe('parseJsonCard / normalizeCard', () => {
@@ -277,6 +322,12 @@ describe('parseJsonCard / normalizeCard', () => {
   it('缺少 name 报 CardParseError', () => {
     expect(() => parseJsonCard({ description: '无名氏' })).toThrow(CardParseError)
     expect(() => parseJsonCard({ description: '无名氏' })).toThrow(/name/)
+  })
+
+  it('JSON 卡序列化后超过 8MB 拒绝（remote 直传超大对象的兜底闸）', () => {
+    const big = { name: 'x', description: 'A'.repeat(8 * 1024 * 1024) }
+    expect(() => parseJsonCard(big)).toThrow(CardParseError)
+    expect(() => parseJsonCard(big)).toThrow(/8MB/)
   })
 
   it('alternate_greetings 缺失时默认 []', () => {

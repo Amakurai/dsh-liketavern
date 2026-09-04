@@ -8,8 +8,22 @@
  *
  * 字段容错：字符串数字转 number、非 boolean 转 boolean；非法 position/selectiveLogic/role 回落默认；
  * 条目级 null（caseSensitive/matchWholeWords/scanDepth/sticky/cooldown/delay）保留 null = 跟随全局。
+ *
+ * 导入硬上限（第三方资产不可信，合法 JSON 也可能是体量炸弹）：条目数 / 单条正文 / 单键长度
+ * 超限，或键容器、content 字段类型非法（会在下游 .map()/.includes() 处才炸的错型），
+ * 一律在归一化时抛中文错误拒绝导入——统一拒绝口径，不做静默截断（截断会悄悄改写设定）。
  */
+import { MAX_WI_KEY_CHARS } from '../core/worldbook.js'
 import type { WIPosition, WIRole, WISelectiveLogic, WISource, WorldDelta, WorldInfoEntry } from '../core/types.js'
+
+/** 单文件条目数上限：社区大书在千级，2000 已留足余量。预设（presetStore）同口径复用。 */
+export const MAX_LOREBOOK_ENTRIES = 2000
+
+/**
+ * 单条正文字符数上限：≈2.5 万 token，超出任何合理条目。
+ * 预设（presetStore）单条 prompt 正文同口径复用。
+ */
+export const MAX_LOREBOOK_CONTENT_CHARS = 100_000
 
 export interface ParseLorebookOptions {
   source: WISource
@@ -218,7 +232,36 @@ function isCharacterBookEntry(raw: Record<string, unknown>): boolean {
 }
 
 function parseEntry(raw: Record<string, unknown>, uid: string, opts: ParseLorebookOptions): WorldInfoEntry {
-  return isCharacterBookEntry(raw) ? parseCharacterBookEntry(raw, uid, opts) : parseNativeEntry(raw, uid, opts)
+  const entry = isCharacterBookEntry(raw) ? parseCharacterBookEntry(raw, uid, opts) : parseNativeEntry(raw, uid, opts)
+  assertEntryWithinLimits(raw, entry)
+  return entry
+}
+
+/**
+ * 单条硬校验（统一拒绝口径，归一化时抛错，不放到落盘后由下游 .map()/.includes() 踩雷）：
+ * - 键容器（key/keys/keysecondary/secondary_keys）出现但不是数组 → 拒绝（不做「也许是单键」的猜测）；
+ * - content 出现但是对象/数组 → 拒绝（toStr 静默塌缩成 '' 会悄悄丢掉设定）；
+ * - 单键超 MAX_WI_KEY_CHARS / 正文超 MAX_LOREBOOK_CONTENT_CHARS → 拒绝。
+ */
+function assertEntryWithinLimits(raw: Record<string, unknown>, entry: WorldInfoEntry): void {
+  for (const field of ['key', 'keys', 'keysecondary', 'secondary_keys'] as const) {
+    const value = raw[field]
+    if (value !== undefined && value !== null && !Array.isArray(value)) {
+      throw new Error(`世界书条目 ${entry.uid} 的 ${field} 不是数组，拒绝导入`)
+    }
+  }
+  const content = raw.content
+  if (content !== undefined && content !== null && typeof content === 'object') {
+    throw new Error(`世界书条目 ${entry.uid} 的 content 不是字符串，拒绝导入`)
+  }
+  for (const key of [...entry.keys, ...entry.secondaryKeys]) {
+    if (key.length > MAX_WI_KEY_CHARS) {
+      throw new Error(`世界书条目 ${entry.uid} 的触发键超过 ${MAX_WI_KEY_CHARS} 字符上限，拒绝导入`)
+    }
+  }
+  if (entry.content.length > MAX_LOREBOOK_CONTENT_CHARS) {
+    throw new Error(`世界书条目 ${entry.uid} 的正文超过 ${MAX_LOREBOOK_CONTENT_CHARS} 字符上限，拒绝导入`)
+  }
 }
 
 /** uid 解析：map 形态以 map 键为准；数组形态取 uid/id 字段，缺失用数组下标。 */
@@ -227,8 +270,12 @@ function entryUid(raw: Record<string, unknown>, fallback: string): string {
 }
 
 function parseEntryArray(entries: unknown[], opts: ParseLorebookOptions): WorldInfoEntry[] {
+  if (entries.length > MAX_LOREBOOK_ENTRIES) {
+    throw new Error(`世界书条目数 ${entries.length} 超过上限 ${MAX_LOREBOOK_ENTRIES}，拒绝导入`)
+  }
   const out: WorldInfoEntry[] = []
   entries.forEach((value, index) => {
+    // 非对象条目静默跳过（兼容已在工作区落盘的旧导入文件，不让坏条目毁掉整本书）
     if (!isRecord(value)) return
     out.push(parseEntry(value, entryUid(value, String(index)), opts))
   })
@@ -237,7 +284,7 @@ function parseEntryArray(entries: unknown[], opts: ParseLorebookOptions): WorldI
 
 /**
  * 解析世界书 JSON 为归一化条目数组。
- * 非对象/缺 entries 时抛中文错误；非对象条目静默跳过。
+ * 非对象/缺 entries 时抛中文错误；条目数/正文/键超限或键容器、content 错型同样抛错拒绝导入。
  */
 export function parseLorebook(json: unknown, opts: ParseLorebookOptions): WorldInfoEntry[] {
   if (Array.isArray(json)) return parseEntryArray(json, opts)
@@ -245,8 +292,12 @@ export function parseLorebook(json: unknown, opts: ParseLorebookOptions): WorldI
   const rawEntries = json.entries
   if (Array.isArray(rawEntries)) return parseEntryArray(rawEntries, opts)
   if (isRecord(rawEntries)) {
+    const pairs = Object.entries(rawEntries)
+    if (pairs.length > MAX_LOREBOOK_ENTRIES) {
+      throw new Error(`世界书条目数 ${pairs.length} 超过上限 ${MAX_LOREBOOK_ENTRIES}，拒绝导入`)
+    }
     const out: WorldInfoEntry[] = []
-    for (const [mapKey, value] of Object.entries(rawEntries)) {
+    for (const [mapKey, value] of pairs) {
       if (!isRecord(value)) continue
       out.push(parseEntry(value, mapKey, opts))
     }

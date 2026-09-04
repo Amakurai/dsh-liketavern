@@ -11,7 +11,6 @@ import type { Context } from '@deepseek-ai/cordis';
 import type { SettingsScope } from '@deepseek-ai/dsh-settings';
 import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol';
 import type { PromptPreset, RegexRule } from '../core/types.js';
-import type { SessionBinding } from './bindings.js';
 import type { TavernConfigRaw } from './config.js';
 import type { Persona, TavernState } from './state.js';
 import type { TavernMethodResults } from '../remote.js';
@@ -22,6 +21,13 @@ export declare class TavernService extends TypertRemoteService {
     constructor(ctx: Context, 
     /** 运行时中枢（agent 面插件经 ctx.tavern 访问）。 */
     state: TavernState, settingsScope: SettingsScope<TavernConfigRaw>);
+    /**
+     * 头像 dataURL 进程内缓存：getAvatar 每次调用都全文读盘 + Base64 编码整图，
+     * 与会话头/英雄区的渲染频率不匹配。指纹用 WorkspaceFs.stat('card.png') 的
+     * mtimeMs+size——与 state.ts 卡级正则指纹缓存同一思路：一次 stat 不读数据，
+     * 且能捕获绕开写方法直写磁盘的路径（WAL 回滚 / 外部换图）。
+     */
+    private readonly avatarCache;
     getSettings(_request: Record<string, never>): TavernMethodResults['getSettings'];
     updateSettings(request: {
         patch: object;
@@ -137,7 +143,7 @@ export declare class TavernService extends TypertRemoteService {
         sessionId: string;
     }): Promise<TavernMethodResults['getSessionBinding']>;
     setSessionBinding(request: {
-        binding: SessionBinding;
+        binding: unknown;
     }): Promise<TavernMethodResults['setSessionBinding']>;
     clearSessionBinding(request: {
         sessionId: string;

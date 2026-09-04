@@ -14,6 +14,21 @@ import { Wal, WAL_BINARY_MARK } from './wal.js'
 /** 历史占位：旧版曾把非会话写入记入名为 non-floor 的 WAL 单元。现已不再使用。 */
 export const NON_FLOOR = 'non-floor'
 
+/** 严格 UTF-8 解码器：非法字节序列抛错，用于区分文本与二进制快照口径。 */
+const STRICT_UTF8 = new TextDecoder('utf-8', { fatal: true })
+
+/**
+ * 字节 → WAL 快照文本：能严格按 UTF-8 解码的记原文，否则记 base64 + WAL_BINARY_MARK
+ * （与 writeBytes 的记录口径一致，rollback 侧对称解码）。
+ */
+function snapshotOf(bytes: Uint8Array): string {
+  try {
+    return STRICT_UTF8.decode(bytes)
+  } catch {
+    return WAL_BINARY_MARK + Buffer.from(bytes).toString('base64')
+  }
+}
+
 export class WorkspaceFs {
   /** 当前楼层；null 表示非会话期写入（不走 WAL）。 */
   private floor: string | null = null
@@ -65,6 +80,21 @@ export class WorkspaceFs {
     }
   }
 
+  /**
+   * 单文件元信息（mtimeMs/size）；不存在返回 null。
+   * 用途是廉价的「内容是否变过」指纹：一次 stat 不读数据，远便宜于全文读 + 解析，
+   * 且能捕获绕开本类的落盘（WAL 回滚会直接写回文件），比进程内修订号更可靠。
+   */
+  async stat(relPath: string): Promise<{ mtimeMs: number; size: number } | null> {
+    try {
+      const info = await stat(this.abs(relPath))
+      return { mtimeMs: info.mtimeMs, size: info.size }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+      throw error
+    }
+  }
+
   /** 确保目录存在（递归创建）。目录创建幂等且无内容副作用，不纳入 WAL。 */
   async ensureDir(relPath = ''): Promise<void> {
     await mkdir(this.abs(relPath), { recursive: true })
@@ -83,8 +113,11 @@ export class WorkspaceFs {
   /** 事务写入：有当前楼层时先向 WAL 记录 before 快照（同路径只记首次），再落盘。 */
   async writeText(relPath: string, content: string): Promise<void> {
     const abs = this.abs(relPath)
-    const before = await this.readText(relPath)
-    if (this.wal && this.floor) await this.wal.record(this.floor, relPath, before)
+    // before 快照只在有楼层时用得上。非会话写入（面板编辑、索引重建、导入）floor 恒为 null，
+    // 无条件预读会让每次写入都白读一遍全文——读必须留在 if 内。
+    if (this.wal && this.floor) {
+      await this.wal.record(this.floor, relPath, await this.readText(relPath))
+    }
     await mkdir(dirname(abs), { recursive: true })
     await writeFile(abs, content, 'utf8')
   }
@@ -107,16 +140,31 @@ export class WorkspaceFs {
     await writeFile(abs, bytes)
   }
 
-  /** 事务删除（有当前楼层时同样记录快照）。 */
+  /**
+   * 事务删除（有当前楼层时同样记录快照）。
+   * 快照口径必须与 writeBytes 对称：二进制内容（严格 UTF-8 解码失败）记 base64 + WAL_BINARY_MARK，
+   * 否则回滚写回的是有损转码后的字节。无楼层时只需判存在性，不读全文。
+   */
   async delete(relPath: string): Promise<void> {
-    const before = await this.readText(relPath)
-    if (before === null) return
-    if (this.wal && this.floor) await this.wal.record(this.floor, relPath, before)
+    if (!(this.wal && this.floor)) {
+      if (!(await this.exists(relPath))) return
+      await rm(this.abs(relPath), { force: true })
+      return
+    }
+    const bytes = await this.readBytes(relPath)
+    if (bytes === null) return
+    await this.wal.record(this.floor, relPath, snapshotOf(bytes))
     await rm(this.abs(relPath), { force: true })
   }
 
-  /** 列出 prefix 子目录下的文件（相对路径，正斜杠，递归）。 */
-  async list(prefix = ''): Promise<string[]> {
+  /**
+   * 列出 prefix 子目录下的文件（相对路径，正斜杠）。
+   * 默认递归；`recursive: false` 只列本层文件（跳过子目录，不进去走）——
+   * 记忆库那样「本层是热路径、子目录（archive/）只增不查」的场景必须用非递归，
+   * 否则每次检索都要把归档整棵走完再丢掉，成本随归档量单调增长。
+   */
+  async list(prefix = '', options?: { recursive?: boolean }): Promise<string[]> {
+    const recursive = options?.recursive !== false
     const base = this.abs(prefix)
     const out: string[] = []
     const walk = async (dir: string, rel: string): Promise<void> => {
@@ -129,12 +177,36 @@ export class WorkspaceFs {
       }
       for (const e of entries) {
         const childRel = rel ? `${rel}/${e.name}` : e.name
-        if (e.isDirectory()) await walk(join(dir, e.name), childRel)
-        else out.push(childRel)
+        if (e.isDirectory()) {
+          if (recursive) await walk(join(dir, e.name), childRel)
+        } else out.push(childRel)
       }
     }
     await walk(base, '')
     return out.sort()
+  }
+
+  /**
+   * 列出 prefix 本层文件及其 mtime/size（非递归）。
+   * 用途是廉价的「内容是否变过」指纹：N 次 stat 不读数据，远便宜于 N 次全文读 + 解析，
+   * 且能捕获绕开本类的落盘（WAL 回滚会直接写回文件），故比进程内修订号更可靠。
+   */
+  async listStats(prefix = ''): Promise<Array<{ name: string; mtimeMs: number; size: number }>> {
+    const names = await this.list(prefix, { recursive: false })
+    const base = prefix ? `${prefix}/` : ''
+    const stats = await Promise.all(
+      names.map(async (name) => {
+        try {
+          const info = await stat(this.abs(`${base}${name}`))
+          return { name, mtimeMs: info.mtimeMs, size: info.size }
+        } catch (error) {
+          // list 与 stat 之间文件被并发删掉：按不存在处理（与 readText 返回 null 的容错口径一致）。
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+          throw error
+        }
+      }),
+    )
+    return stats.filter((s) => s !== null)
   }
 
   /** 开始一个楼层事务（WAL 存在时）。 */

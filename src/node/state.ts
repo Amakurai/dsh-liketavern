@@ -2,7 +2,6 @@
  * TavernState：host 侧运行时中枢。
  * 聚合数据目录、设置、各资产存储与工作区句柄，供 remote 服务、工具与组装管线共用。
  */
-import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { LlmResolvedModelInfo, LlmRuntime } from '@deepseek-ai/dsh-llm'
 import { estimateTokens } from '../core/tokenize.js'
@@ -24,21 +23,14 @@ import {
 } from '../state/workspace.js'
 import { WorkspaceFs } from '../state/workspaceFs.js'
 import { resolveStaleBinding } from '../core/binding.js'
-import { pickPersona } from '../core/persona.js'
+import { pickPersona, type Persona } from '../core/persona.js'
 import { pinStandingText, stableFingerprintHash, standingPinKey, type StandingPin } from '../core/standingPin.js'
 import { clearBindingsForCard, deleteBinding, loadBinding, saveBinding, type SessionBinding } from './bindings.js'
 import type { TavernConfig } from './config.js'
 import { ensurePaths, type TavernPaths } from './paths.js'
 
-export interface Persona {
-  id: string
-  name: string
-  description: string
-  /** 头像文件名（personas/<id>.png），无则 null。 */
-  avatar: string | null
-  /** 挂接的世界书库文件名；空/缺省 = 无人设书。 */
-  lorebookId?: string | null
-}
+// Persona 是纯数据形状，定义在 core/persona（remote 契约引用），此处 re-export 保持现有 import 不断。
+export type { Persona } from '../core/persona.js'
 
 /** 模型元数据缓存 TTL：适配器目录运行期通常不变，但 provider 配置可能热更，过期重解析。 */
 const MODEL_INFO_TTL_MS = 5 * 60 * 1000
@@ -96,6 +88,17 @@ export class TavernState {
   private readonly presetCache = new Map<string, { rev: number; value: PromptPreset | null }>()
   private readonly loreCache = new Map<string, { rev: number; value: WorldInfoEntry[] }>()
   private readonly cardCache = new Map<string, { tag: string; value: CharacterWorkspace | null }>()
+  private readonly personaCache = new Map<string, { rev: number; value: Persona | null }>()
+  /** 全局正则规则解析缓存（rulesFor 每 step 调一次；saveRegexRules bump `regex:global`）。 */
+  private globalRegexCache: { rev: number; value: RegexRule[] } | null = null
+  /**
+   * 卡级正则解析缓存（assets/regex-scripts.json），按 mtime+size 的 stat 指纹失效。
+   * 为什么不用 assetRevs 修订号：该文件的写入点都绕开本类写方法——导入走 workspace.ts 的
+   * plainFs 直写，楼层 WAL 回滚更是绕过一切写方法把旧内容直接写回磁盘；指纹两条路径都能
+   * 捕获（同 MemoryStore 的指纹缓存思路）。同尺寸且同 mtime 刻度的极端回滚指纹兜不住，
+   * 由 floors.ts 回滚后手动调 invalidateCardRegex 兜底。
+   */
+  private readonly cardRegexCache = new Map<string, { fingerprint: string; value: RegexRule[] }>()
   /** 模型元数据进程内缓存：resolveModelInfo 每步被调（reasoningEffort / 上下文窗口），带 TTL 防配置热更后拿到旧值。 */
   private readonly modelInfoCache = new Map<string, { at: number; promise: Promise<LlmResolvedModelInfo> }>()
   /** 待异步压缩的角色工作区（memory_write 超容量时标记；idle 期 runMaintenance 消费，见 memoryMaintenance.ts）。 */
@@ -381,15 +384,17 @@ export class TavernState {
 
   async listPresetSummaries(): Promise<Array<{ id: string; name: string; regexCount: number }>> {
     const ids = await this.listPresets()
-    const out: Array<{ id: string; name: string; regexCount: number }> = []
-    for (const id of ids) {
-      const preset = await this.loadPreset(id)
-      out.push({
-        id,
-        name: preset?.name?.trim() || id,
-        regexCount: preset?.regexScripts?.length ?? 0,
-      })
-    }
+    // 并行读取：首次进设置面板时全库都没缓存，串行 await 会线性放大 I/O 等待。
+    const out = await Promise.all(
+      ids.map(async (id) => {
+        const preset = await this.loadPreset(id)
+        return {
+          id,
+          name: preset?.name?.trim() || id,
+          regexCount: preset?.regexScripts?.length ?? 0,
+        }
+      }),
+    )
     return out.sort((a, b) => a.name.localeCompare(b.name, 'zh'))
   }
 
@@ -435,27 +440,39 @@ export class TavernState {
   async listPersonas(): Promise<Persona[]> {
     const fs = await this.rootFs()
     const files = (await fs.list('personas')).filter((f) => f.endsWith('.json'))
-    const out: Persona[] = []
-    for (const file of files) {
-      try {
-        out.push(JSON.parse((await fs.readText(`personas/${file}`))!) as Persona)
-      } catch {
-        // 坏文件跳过
-      }
-    }
-    return out.sort((a, b) => a.name.localeCompare(b.name))
+    // 并行读取：人设是设置面板与芯片的高频列表，串行 await 会线性放大 I/O 等待。
+    const parsed = await Promise.all(
+      files.map(async (file) => {
+        try {
+          return JSON.parse((await fs.readText(`personas/${file}`))!) as Persona
+        } catch {
+          return null // 坏文件跳过
+        }
+      }),
+    )
+    return parsed.filter((p): p is Persona => p !== null).sort((a, b) => a.name.localeCompare(b.name))
   }
 
   async loadPersona(id: string | null): Promise<Persona | null> {
     if (!id) return null
+    // rev-keyed 解析缓存：resolvePersona 每 step 会被调两次（loadBinding 自愈 + pipeline），
+    // 每次都读 1–2 个人设文件。写方法 bump `persona:<id>`，绕开本类手改文件不捕获（重启即清）。
+    const key = this.assetFileId(id)
+    const rev = this.assetRevs.get(`persona:${key}`) ?? 0
+    const cached = this.personaCache.get(key)
+    if (cached && cached.rev === rev) return cached.value
     const fs = await this.rootFs()
-    const raw = await fs.readText(`personas/${this.assetFileId(id)}.json`)
-    if (raw === null) return null
-    try {
-      return JSON.parse(raw) as Persona
-    } catch {
-      return null
+    const raw = await fs.readText(`personas/${key}.json`)
+    let value: Persona | null = null
+    if (raw !== null) {
+      try {
+        value = JSON.parse(raw) as Persona
+      } catch {
+        value = null
+      }
     }
+    this.personaCache.set(key, { rev, value })
+    return value
   }
 
   /**
@@ -474,59 +491,49 @@ export class TavernState {
     const id = this.assetFileId(persona.id)
     const fs = await this.rootFs()
     await fs.writeText(`personas/${id}.json`, JSON.stringify({ ...persona, id }, null, 2) + '\n')
+    this.bumpAssetRev(`persona:${id}`)
     return id
   }
 
   async deletePersona(id: string): Promise<void> {
+    const key = this.assetFileId(id)
     const fs = await this.rootFs()
-    await fs.delete(`personas/${this.assetFileId(id)}.json`)
+    await fs.delete(`personas/${key}.json`)
+    this.bumpAssetRev(`persona:${key}`)
   }
 
   // ── 全局正则 ──────────────────────────────────────────────────────────────
 
   async listRegexRules(): Promise<RegexRule[]> {
+    // rev-keyed 解析缓存：rulesFor 每 step 调一次，全局规则文件不该每步重读重解析。
+    const rev = this.assetRevs.get('regex:global') ?? 0
+    if (this.globalRegexCache && this.globalRegexCache.rev === rev) return this.globalRegexCache.value
     const fs = await this.rootFs()
     const raw = await fs.readText('regex/rules.json')
-    if (raw === null) return []
-    try {
-      return JSON.parse(raw) as RegexRule[]
-    } catch {
-      return []
+    let value: RegexRule[] = []
+    if (raw !== null) {
+      try {
+        const parsed = JSON.parse(raw) as RegexRule[]
+        if (Array.isArray(parsed)) value = parsed
+      } catch {
+        value = []
+      }
     }
+    this.globalRegexCache = { rev, value }
+    return value
   }
 
   async saveRegexRules(rules: RegexRule[]): Promise<void> {
     const fs = await this.rootFs()
     await fs.writeText('regex/rules.json', JSON.stringify(rules, null, 2) + '\n')
+    this.bumpAssetRev('regex:global')
   }
 
   /** 某会话生效的全部正则（全局 + 当前角色卡内嵌 + 当前预设内嵌）。 */
   async rulesFor(binding: SessionBinding): Promise<RegexRule[]> {
     const global = await this.listRegexRules()
     const ws = await this.workspace(binding.cardId)
-    const raw = await ws.fs.readText('assets/regex-scripts.json')
-    let cardRules: RegexRule[] = []
-    // 解析成功（含空数组）即为确定结论：导入时无条件落盘该文件，`[]` 表示该卡确认无正则，
-    // 直接短路。只有文件缺失/损坏（旧导入）才走卡内重编译兜底——否则无正则的卡
-    // （大多数）每次组装、每次渲染都要全量读卡重编译一遍，永不收敛。
-    let resolved = false
-    if (raw !== null) {
-      try {
-        cardRules = JSON.parse(raw) as RegexRule[]
-        resolved = Array.isArray(cardRules)
-      } catch {
-        // 损坏走兜底
-      }
-    }
-    if (!resolved) {
-      const loaded = await this.loadCharacter(binding.cardId)
-      if (loaded) {
-        cardRules = compileCardRegexScripts(regexScriptsOf(loaded.card), binding.cardId)
-        if (cardRules.length > 0) {
-          await ws.fs.writeText('assets/regex-scripts.json', JSON.stringify(cardRules, null, 2) + '\n')
-        }
-      }
-    }
+    const cardRules = await this.cardRegexRules(binding.cardId, ws)
     let presetRules: RegexRule[] = []
     if (binding.presetId) {
       const preset = await this.loadPreset(binding.presetId)
@@ -535,6 +542,57 @@ export class TavernState {
       }
     }
     return [...global, ...cardRules, ...presetRules]
+  }
+
+  /** 作废卡级正则缓存：WAL 回滚绕过写路径直写磁盘，由 floors.ts 回滚后调用（见 cardRegexCache）。 */
+  invalidateCardRegex(cardId: string): void {
+    this.cardRegexCache.delete(cardId)
+  }
+
+  /**
+   * 卡级正则（assets/regex-scripts.json）带 stat 指纹缓存的读取。
+   * rulesFor 每 step 调一次；缓存把每步的全文读 + 解析降成一次 stat。
+   */
+  private async cardRegexRules(cardId: string, ws: WorkspaceHandle): Promise<RegexRule[]> {
+    const path = 'assets/regex-scripts.json'
+    const info = await ws.fs.stat(path)
+    let fingerprint = info ? `${info.mtimeMs}:${info.size}` : 'missing'
+    const cached = this.cardRegexCache.get(cardId)
+    if (cached && cached.fingerprint === fingerprint) return cached.value
+    let cardRules: RegexRule[] = []
+    // 解析成功（含空数组）即为确定结论：导入时无条件落盘该文件，`[]` 表示该卡确认无正则，
+    // 直接短路。只有文件缺失/损坏（旧导入）才走卡内重编译兜底——否则无正则的卡
+    // （大多数）每次组装、每次渲染都要全量读卡重编译一遍，永不收敛。编译产物为 `[]` 时
+    // 照旧不写回文件，但同样按 missing 指纹进缓存，兜底重编译每卡只跑一次。
+    let resolved = false
+    if (info) {
+      const raw = await ws.fs.readText(path)
+      if (raw !== null) {
+        try {
+          const parsed: unknown = JSON.parse(raw)
+          if (Array.isArray(parsed)) {
+            cardRules = parsed as RegexRule[]
+            resolved = true
+          }
+        } catch {
+          // 损坏走兜底
+        }
+      }
+    }
+    if (!resolved) {
+      const loaded = await this.loadCharacter(cardId)
+      if (loaded) {
+        cardRules = compileCardRegexScripts(regexScriptsOf(loaded.card), cardId)
+        if (cardRules.length > 0) {
+          await ws.fs.writeText(path, JSON.stringify(cardRules, null, 2) + '\n')
+          // 回写改了文件，指纹按新状态重取（仅兜底路径走到，多一次 stat 无所谓）
+          const after = await ws.fs.stat(path)
+          fingerprint = after ? `${after.mtimeMs}:${after.size}` : 'missing'
+        }
+      }
+    }
+    this.cardRegexCache.set(cardId, { fingerprint, value: cardRules })
+    return cardRules
   }
 
   // ── 会话绑定 ──────────────────────────────────────────────────────────────

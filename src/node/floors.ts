@@ -314,6 +314,12 @@ async function rollbackFloors(
   )
   if (names.length === 0) return []
   const result = await ws.wal.rollbackAfter(names, join(state.paths.characters, cardId))
+  // 回滚直接把旧内容写回磁盘，绕过 MemoryStore 的写路径——必须手动作废它的解析/索引缓存，
+  // 否则下一轮检索仍会用回滚前的记忆（见 MemoryStore.invalidate 的说明）。
+  ws.memory.invalidate()
+  // 同理作废卡级正则缓存：rulesFor 的兜底重编译在 turn 内会写 assets/regex-scripts.json 并记 WAL，
+  // 回滚把文件写回旧值/删回缺失；同尺寸且同 mtime 刻度的极端情形下 stat 指纹兜不住。
+  state.invalidateCardRegex(cardId)
   return [...result.restored, ...result.skipped]
 }
 
@@ -767,11 +773,14 @@ export async function getFloorSiblings(
     ids.add(f.childSessionId)
   }
   const existing = new Set<string>([sessionId])
-  for (const id of ids) {
-    if (ctx.sessions.get(id as Session['id']) !== undefined || (await loadBinding(state.paths, id)) !== null) {
-      existing.add(id)
-    }
-  }
+  // 并行探测存在性：兄弟索引会随分支数增长，串行 await loadBinding 让每次导航查询线性变慢。
+  await Promise.all(
+    [...ids].map(async (id) => {
+      if (ctx.sessions.get(id as Session['id']) !== undefined || (await loadBinding(state.paths, id)) !== null) {
+        existing.add(id)
+      }
+    }),
+  )
   const exists = (id: string) => existing.has(id)
   // 剪枝落盘走互斥读改写：与其它会话的 fork 登记（appendSiblingFork）并发时不互相覆盖。
   try {

@@ -230,9 +230,10 @@ export async function rebuildIndex(
 ): Promise<void> {
   const files: WorkspaceIndexFile[] = []
 
-  const memoryFiles = await fs.list('memory')
+  // 非递归列举：archive/ 不进清单，递归走一遍再丢掉会让每次写入后的重建随归档量变慢。
+  const memoryFiles = await fs.list('memory', { recursive: false })
   for (const rel of memoryFiles) {
-    if (!rel.endsWith('.md') || rel.includes('/')) continue // archive/ 等子目录不进清单
+    if (!rel.endsWith('.md')) continue
     const content = (await fs.readText(`memory/${rel}`)) ?? ''
     files.push({ path: `memory/${rel}`, summary: summarizeMarkdown(content), tokens: estimateTokens(content) })
   }

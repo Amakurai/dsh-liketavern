@@ -9,6 +9,11 @@
  * - peekStanding：组装失败兜底只读同卡同场景的钉位，异卡/异场景/异会话一律不命中；
  * - 库资产文件名净化：写盘 id、删除路径与修订号键共用一个 id（原始名带空格也能失效钉死）；
  * - 库资产解析缓存（rev-keyed）：写方法 bump 后读到新值，损坏的预设文件回退 null 不抛错；
+ * - 人设与全局正则解析缓存（组装热路径每 step 都读）：savePersona/deletePersona/saveRegexRules
+ *   bump 后读到新值，文件名净化与修订号键共用一个 id，损坏文件回退空值不抛错；
+ * - 卡级正则解析缓存（assets/regex-scripts.json，mtime+size stat 指纹）：rulesFor 命中缓存不重读
+ *   文件、绕开写方法的直写经指纹失效、同尺寸覆盖（WAL 回滚）经 invalidateCardRegex 可见、
+ *   文件缺失且卡无正则时兜底重编译只跑一次（不收敛不复发）；
  * - loadBinding 自愈的读-改-写竞态：落盘前复读，磁盘已被换卡覆盖则丢弃本次自愈；
  * - workspace：拒绝会把工作区根移出 characters/ 的非法 cardId；
  * - 会话副作用队列：同会话严格串行、不同会话互不阻塞、失败后仍可继续；
@@ -259,6 +264,103 @@ describe('standingRevTags', () => {
     expect(state.standingRevTags(binding)).toContain(`card:${cardId}=1`)
     await state.saveChatLorebook(cardId, { entries: { '1': { key: ['门'], content: '门后' } } })
     expect(state.standingRevTags(binding)).toContain(`chatlore:${cardId}=1`)
+  })
+
+  it('人设解析缓存：savePersona / deletePersona 后读到新值', async () => {
+    await state.savePersona({ id: 'p1', name: '旅人', description: '风尘仆仆', avatar: null })
+    expect((await state.loadPersona('p1'))?.name).toBe('旅人')
+    // savePersona bump persona:<id> → 缓存失效
+    await state.savePersona({ id: 'p1', name: '游侠', description: '换了名字', avatar: null })
+    expect((await state.loadPersona('p1'))?.name).toBe('游侠')
+    expect((await state.resolvePersona('p1'))?.name).toBe('游侠')
+    await state.deletePersona('p1')
+    expect(await state.loadPersona('p1')).toBeNull()
+  })
+
+  it('人设文件名净化：读写与修订号键共用一个 id', async () => {
+    await state.savePersona({ id: '我的 人设', name: '甲', description: '', avatar: null })
+    // 落盘 id 被净化，按原始名与净化名都能读到（loadPersona 内部走 assetFileId）
+    expect((await state.loadPersona('我的 人设'))?.name).toBe('甲')
+    expect((await state.loadPersona('我的_人设'))?.id).toBe('我的_人设')
+    await state.savePersona({ id: '我的 人设', name: '乙', description: '', avatar: null })
+    expect((await state.loadPersona('我的 人设'))?.name).toBe('乙')
+  })
+
+  it('全局正则解析缓存：saveRegexRules 后读到新规则，损坏文件回退空数组', async () => {
+    expect(await state.listRegexRules()).toEqual([])
+    await state.saveRegexRules([{ id: 'r1', name: '规则一', find: 'a', replace: 'b', scopes: [], timings: [], disabled: false } as never])
+    expect(await state.listRegexRules()).toHaveLength(1)
+    await state.saveRegexRules([])
+    expect(await state.listRegexRules()).toEqual([])
+
+    // 绕开写方法把文件写坏：解析失败回退空数组，不抛错打崩组装
+    const fsRaw = await import('node:fs/promises')
+    await state.saveRegexRules([]) // bump 修订号让缓存失效
+    await fsRaw.writeFile(join(root, 'regex', 'rules.json'), '{broken', 'utf8')
+    expect(await state.listRegexRules()).toEqual([])
+  })
+
+  it('卡级正则解析缓存：缓存命中后 rulesFor 不再重读文件', async () => {
+    const { cardId } = await importCard(join(root, 'characters'), makeCard({
+      regexScripts: [{ scriptName: 's1', findRegex: '/foo/g', replaceString: 'bar', placement: [2] }],
+    }))
+    const binding = makeBinding({ cardId, presetId: null })
+    const first = await state.rulesFor(binding) // 预热缓存
+    expect(first.some((r) => r.source === 'card')).toBe(true)
+
+    const ws = await state.workspace(cardId)
+    const original = ws.fs.readText.bind(ws.fs)
+    let reads = 0
+    const spy = vi.spyOn(ws.fs, 'readText').mockImplementation(async (path: string) => {
+      if (path === 'assets/regex-scripts.json') reads++
+      return original(path)
+    })
+    const again = await state.rulesFor(binding)
+    spy.mockRestore()
+    expect(again).toEqual(first)
+    expect(reads).toBe(0)
+  })
+
+  it('卡级正则缓存：绕开 TavernState 直写文件后指纹失效，读到新值', async () => {
+    const { cardId } = await importCard(join(root, 'characters'), makeCard({
+      regexScripts: [{ scriptName: 's1', findRegex: '/foo/g', replaceString: 'bar', placement: [2] }],
+    }))
+    const binding = makeBinding({ cardId, presetId: null })
+    expect((await state.rulesFor(binding)).some((r) => r.source === 'card')).toBe(true)
+
+    // 导入路径的 plainFs 直写不走本类写方法，靠 stat 指纹（size 变化）捕获
+    const ws = await state.workspace(cardId)
+    await ws.fs.writeText('assets/regex-scripts.json', '[]\n')
+    expect(await state.rulesFor(binding)).toEqual([])
+  })
+
+  it('卡级正则缓存：同尺寸覆盖（模拟 WAL 回滚写回）经 invalidateCardRegex 后可见', async () => {
+    const { cardId } = await importCard(join(root, 'characters'), makeCard({
+      regexScripts: [{ scriptName: 's1', findRegex: '/foo/g', replaceString: 'bar', placement: [2] }],
+    }))
+    const binding = makeBinding({ cardId, presetId: null })
+    await state.rulesFor(binding) // 预热缓存
+
+    // 等长覆盖：size 不变，mtime 可能落在同一刻度内，指纹兜不住，回滚路径靠手动作废
+    const ws = await state.workspace(cardId)
+    const raw = (await ws.fs.readText('assets/regex-scripts.json'))!
+    await ws.fs.writeText('assets/regex-scripts.json', raw.replace('bar', 'baz'))
+    state.invalidateCardRegex(cardId)
+    expect((await state.rulesFor(binding)).some((r) => r.replace === 'baz')).toBe(true)
+  })
+
+  it('卡级正则缓存：文件缺失且卡无正则时兜底重编译只跑一次（不收敛不复发）', async () => {
+    const { cardId } = await importCard(join(root, 'characters'), makeCard()) // regexScripts: []
+    // 删掉编译产物模拟旧导入；兜底重编译出 [] 不写回文件
+    const ws = await state.workspace(cardId)
+    await ws.fs.delete('assets/regex-scripts.json')
+    const binding = makeBinding({ cardId, presetId: null })
+
+    const loadSpy = vi.spyOn(state, 'loadCharacter')
+    expect(await state.rulesFor(binding)).toEqual([])
+    expect(await state.rulesFor(binding)).toEqual([]) // missing 指纹命中缓存，不再读卡重编译
+    expect(loadSpy).toHaveBeenCalledTimes(1)
+    loadSpy.mockRestore()
   })
 })
 

@@ -4,6 +4,8 @@
  * 平台约定：方法返回裸业务值，失败抛错（FloorError.message 原样透出给 client）。
  * { ok, value | error } 信封由 typert gateway（host invokeRpc / client invoke）生成，
  * 这里不要再包一层（双层信封会让 client 的 r.value.xxx 全部读到 undefined）。
+ * 每个方法的返回注解指向 ../remote.ts 的 TavernMethodResults——结果形状的单一来源，
+ * client 镜像（client/types.ts）索引同一张表，两面形状漂移会立刻编译报错。
  */
 import type { Context } from '@deepseek-ai/cordis';
 import type { SettingsScope } from '@deepseek-ai/dsh-settings';
@@ -12,6 +14,7 @@ import type { PromptPreset, RegexRule } from '../core/types.js';
 import type { SessionBinding } from './bindings.js';
 import type { TavernConfigRaw } from './config.js';
 import type { Persona, TavernState } from './state.js';
+import type { TavernMethodResults } from '../remote.js';
 export declare class TavernService extends TypertRemoteService {
     /** 运行时中枢（agent 面插件经 ctx.tavern 访问）。 */
     readonly state: TavernState;
@@ -19,26 +22,26 @@ export declare class TavernService extends TypertRemoteService {
     constructor(ctx: Context, 
     /** 运行时中枢（agent 面插件经 ctx.tavern 访问）。 */
     state: TavernState, settingsScope: SettingsScope<TavernConfigRaw>);
-    getSettings(_request: Record<string, never>): unknown;
+    getSettings(_request: Record<string, never>): TavernMethodResults['getSettings'];
     updateSettings(request: {
         patch: object;
-    }): Promise<unknown>;
-    listCharacters(_request: Record<string, never>): Promise<unknown>;
+    }): Promise<TavernMethodResults['updateSettings']>;
+    listCharacters(_request: Record<string, never>): Promise<TavernMethodResults['listCharacters']>;
     inspectCharacter(request: {
         name: string;
         dataBase64: string;
-    }): Promise<unknown>;
+    }): Promise<TavernMethodResults['inspectCharacter']>;
     importCharacter(request: {
         name: string;
         dataBase64: string;
         importWorldBook?: boolean;
-    }): Promise<unknown>;
+    }): Promise<TavernMethodResults['importCharacter']>;
     deleteCharacter(request: {
         cardId: string;
-    }): Promise<unknown>;
+    }): Promise<TavernMethodResults['deleteCharacter']>;
     getCharacterDetail(request: {
         cardId: string;
-    }): Promise<unknown>;
+    }): Promise<TavernMethodResults['getCharacterDetail']>;
     saveCharacter(request: {
         cardId: string;
         name?: string;
@@ -59,168 +62,168 @@ export declare class TavernService extends TypertRemoteService {
             depth: number;
             role: 'system' | 'user' | 'assistant';
         } | null;
-    }): Promise<unknown>;
+    }): Promise<TavernMethodResults['saveCharacter']>;
     createCharacter(request: {
         name: string;
-    }): Promise<unknown>;
+    }): Promise<TavernMethodResults['createCharacter']>;
     exportCharacter(request: {
         cardId: string;
-    }): Promise<unknown>;
-    listPresets(_request: Record<string, never>): Promise<unknown>;
+    }): Promise<TavernMethodResults['exportCharacter']>;
+    listPresets(_request: Record<string, never>): Promise<TavernMethodResults['listPresets']>;
     importPreset(request: {
         name: string;
         json: unknown;
-    }): Promise<unknown>;
+    }): Promise<TavernMethodResults['importPreset']>;
     savePreset(request: {
         preset: PromptPreset;
-    }): Promise<unknown>;
+    }): Promise<TavernMethodResults['savePreset']>;
     deletePreset(request: {
         id: string;
-    }): Promise<unknown>;
+    }): Promise<TavernMethodResults['deletePreset']>;
     getPreset(request: {
         id: string;
-    }): Promise<unknown>;
-    listLorebooks(_request: Record<string, never>): Promise<unknown>;
+    }): Promise<TavernMethodResults['getPreset']>;
+    listLorebooks(_request: Record<string, never>): Promise<TavernMethodResults['listLorebooks']>;
     getLorebook(request: {
         name: string;
-    }): Promise<unknown>;
+    }): Promise<TavernMethodResults['getLorebook']>;
     importLorebook(request: {
         name: string;
         json: unknown;
-    }): Promise<unknown>;
+    }): Promise<TavernMethodResults['importLorebook']>;
     saveLorebook(request: {
         name: string;
         json: unknown;
-    }): Promise<unknown>;
+    }): Promise<TavernMethodResults['saveLorebook']>;
     deleteLorebook(request: {
         name: string;
-    }): Promise<unknown>;
+    }): Promise<TavernMethodResults['deleteLorebook']>;
     getCharacterLorebook(request: {
         cardId: string;
-    }): Promise<unknown>;
+    }): Promise<TavernMethodResults['getCharacterLorebook']>;
     saveCharacterLorebook(request: {
         cardId: string;
         json: unknown;
-    }): Promise<unknown>;
+    }): Promise<TavernMethodResults['saveCharacterLorebook']>;
     deleteEmbeddedLorebook(request: {
         cardId: string;
-    }): Promise<unknown>;
+    }): Promise<TavernMethodResults['deleteEmbeddedLorebook']>;
     getChatLorebook(request: {
         cardId: string;
-    }): Promise<unknown>;
+    }): Promise<TavernMethodResults['getChatLorebook']>;
     saveChatLorebook(request: {
         cardId: string;
         json: unknown;
-    }): Promise<unknown>;
+    }): Promise<TavernMethodResults['saveChatLorebook']>;
     getJournal(request: {
         cardId: string;
-    }): Promise<unknown>;
+    }): Promise<TavernMethodResults['getJournal']>;
     saveJournal(request: {
         cardId: string;
         text: string;
-    }): Promise<unknown>;
-    listPersonas(_request: Record<string, never>): Promise<unknown>;
+    }): Promise<TavernMethodResults['saveJournal']>;
+    listPersonas(_request: Record<string, never>): Promise<TavernMethodResults['listPersonas']>;
     savePersona(request: {
         persona: Persona;
-    }): Promise<unknown>;
+    }): Promise<TavernMethodResults['savePersona']>;
     deletePersona(request: {
         id: string;
-    }): Promise<unknown>;
-    listRegexRules(_request: Record<string, never>): Promise<unknown>;
+    }): Promise<TavernMethodResults['deletePersona']>;
+    listRegexRules(_request: Record<string, never>): Promise<TavernMethodResults['listRegexRules']>;
     saveRegexRules(request: {
         rules: RegexRule[];
-    }): Promise<unknown>;
+    }): Promise<TavernMethodResults['saveRegexRules']>;
     getSessionBinding(request: {
         sessionId: string;
-    }): Promise<unknown>;
+    }): Promise<TavernMethodResults['getSessionBinding']>;
     setSessionBinding(request: {
         binding: SessionBinding;
-    }): Promise<unknown>;
+    }): Promise<TavernMethodResults['setSessionBinding']>;
     clearSessionBinding(request: {
         sessionId: string;
-    }): Promise<unknown>;
+    }): Promise<TavernMethodResults['clearSessionBinding']>;
     ensureGreeting(request: {
         sessionId: string;
-    }): Promise<unknown>;
+    }): Promise<TavernMethodResults['ensureGreeting']>;
     swipeGreeting(request: {
         sessionId: string;
         index: number;
-    }): Promise<unknown>;
+    }): Promise<TavernMethodResults['swipeGreeting']>;
     getGreetingSwipe(request: {
         sessionId: string;
         messageId: string;
-    }): Promise<unknown>;
+    }): Promise<TavernMethodResults['getGreetingSwipe']>;
     /** 分支兄弟导航是只读查询：等排队中的楼层任务落定即可，不进串行队列。 */
     getFloorSiblings(request: {
         sessionId: string;
         messageId?: string;
         turn?: number;
-    }): Promise<unknown>;
+    }): Promise<TavernMethodResults['getFloorSiblings']>;
     renderOutputText(request: {
         sessionId: string;
         text: string;
-    }): Promise<unknown>;
+    }): Promise<TavernMethodResults['renderOutputText']>;
     regenerate(request: {
         sessionId: string;
         messageId?: string;
         turn?: number;
-    }): Promise<unknown>;
+    }): Promise<TavernMethodResults['regenerate']>;
     rollbackToFloor(request: {
         sessionId: string;
         messageId?: string;
         turn?: number;
-    }): Promise<unknown>;
+    }): Promise<TavernMethodResults['rollbackToFloor']>;
     getFloorUserMessage(request: {
         sessionId: string;
         messageId: string;
-    }): Promise<unknown>;
+    }): Promise<TavernMethodResults['getFloorUserMessage']>;
     editUserMessage(request: {
         sessionId: string;
         messageId: string;
         text: string;
-    }): Promise<unknown>;
+    }): Promise<TavernMethodResults['editUserMessage']>;
     getFloorAssistantMessage(request: {
         sessionId: string;
         messageId: string;
-    }): Promise<unknown>;
+    }): Promise<TavernMethodResults['getFloorAssistantMessage']>;
     editAssistantMessage(request: {
         sessionId: string;
         messageId: string;
         text: string;
-    }): Promise<unknown>;
+    }): Promise<TavernMethodResults['editAssistantMessage']>;
     continueFloor(request: {
         sessionId: string;
         messageId: string;
-    }): Promise<unknown>;
+    }): Promise<TavernMethodResults['continueFloor']>;
     /** impersonate 是带外一次性调用，不进会话串行队列（不改会话状态）。 */
     impersonate(request: {
         sessionId: string;
-    }): Promise<unknown>;
+    }): Promise<TavernMethodResults['impersonate']>;
     getMemories(request: {
         cardId: string;
-    }): Promise<unknown>;
+    }): Promise<TavernMethodResults['getMemories']>;
     saveMemory(request: {
         cardId: string;
         id?: string;
         body: string;
         tags?: string[];
         keys?: string[];
-    }): Promise<unknown>;
+    }): Promise<TavernMethodResults['saveMemory']>;
     deleteMemory(request: {
         cardId: string;
         id: string;
-    }): Promise<unknown>;
+    }): Promise<TavernMethodResults['deleteMemory']>;
     /** 无 LLM 的确定性归并：原文逐条保留，只减少条目数，不宣称减少 token。 */
     compressMemories(request: {
         cardId: string;
-    }): Promise<unknown>;
+    }): Promise<TavernMethodResults['compressMemories']>;
     getWorldDeltas(request: {
         cardId: string;
-    }): Promise<unknown>;
+    }): Promise<TavernMethodResults['getWorldDeltas']>;
     revokeWorldDelta(request: {
         cardId: string;
         id: string;
-    }): Promise<unknown>;
+    }): Promise<TavernMethodResults['revokeWorldDelta']>;
     addWorldDelta(request: {
         cardId: string;
         type: 'add' | 'update' | 'invalidate';
@@ -228,28 +231,28 @@ export declare class TavernService extends TypertRemoteService {
         ref?: string | null;
         keys?: string[];
         order?: number;
-    }): Promise<unknown>;
+    }): Promise<TavernMethodResults['addWorldDelta']>;
     exportMergedLorebook(request: {
         cardId: string;
-    }): Promise<unknown>;
+    }): Promise<TavernMethodResults['exportMergedLorebook']>;
     getTriggerLog(request: {
         sessionId: string;
-    }): unknown;
+    }): TavernMethodResults['getTriggerLog'];
     previewPrompt(request: {
         sessionId: string;
-    }): Promise<unknown>;
+    }): Promise<TavernMethodResults['previewPrompt']>;
     /**
      * 上下文占用（宿主 rc.2 起 sessionProjections.stateOf 只读 token-meter 投影）。
      * 会话不在线、宿主未挂投影或尚无数据时 usage=null，调用方按未知处理。
      */
     getContextUsage(request: {
         sessionId: string;
-    }): unknown;
+    }): TavernMethodResults['getContextUsage'];
     /** Tavern 数据目录（$DSH_HOME/dsh-tavern），设置面板展示用。 */
-    getDataInfo(_request: Record<string, never>): unknown;
+    getDataInfo(_request: Record<string, never>): TavernMethodResults['getDataInfo'];
     getAvatar(request: {
         cardId: string;
-    }): Promise<unknown>;
+    }): Promise<TavernMethodResults['getAvatar']>;
     private floorDeps;
 }
 export declare function createTavernService(ctx: Context, state: TavernState, settingsScope: SettingsScope<TavernConfigRaw>): TavernService;

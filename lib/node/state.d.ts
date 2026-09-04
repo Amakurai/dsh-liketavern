@@ -6,19 +6,12 @@ import { Wal } from '../state/wal.js';
 import { WorldDeltaStore } from '../state/worlddelta.js';
 import { type CharacterWorkspace } from '../state/workspace.js';
 import { WorkspaceFs } from '../state/workspaceFs.js';
+import { type Persona } from '../core/persona.js';
 import { type StandingPin } from '../core/standingPin.js';
 import { type SessionBinding } from './bindings.js';
 import type { TavernConfig } from './config.js';
 import { type TavernPaths } from './paths.js';
-export interface Persona {
-    id: string;
-    name: string;
-    description: string;
-    /** 头像文件名（personas/<id>.png），无则 null。 */
-    avatar: string | null;
-    /** 挂接的世界书库文件名；空/缺省 = 无人设书。 */
-    lorebookId?: string | null;
-}
+export type { Persona } from '../core/persona.js';
 interface WorkspaceHandle {
     fs: WorkspaceFs;
     wal: Wal;
@@ -76,6 +69,17 @@ export declare class TavernState {
     private readonly presetCache;
     private readonly loreCache;
     private readonly cardCache;
+    private readonly personaCache;
+    /** 全局正则规则解析缓存（rulesFor 每 step 调一次；saveRegexRules bump `regex:global`）。 */
+    private globalRegexCache;
+    /**
+     * 卡级正则解析缓存（assets/regex-scripts.json），按 mtime+size 的 stat 指纹失效。
+     * 为什么不用 assetRevs 修订号：该文件的写入点都绕开本类写方法——导入走 workspace.ts 的
+     * plainFs 直写，楼层 WAL 回滚更是绕过一切写方法把旧内容直接写回磁盘；指纹两条路径都能
+     * 捕获（同 MemoryStore 的指纹缓存思路）。同尺寸且同 mtime 刻度的极端回滚指纹兜不住，
+     * 由 floors.ts 回滚后手动调 invalidateCardRegex 兜底。
+     */
+    private readonly cardRegexCache;
     /** 模型元数据进程内缓存：resolveModelInfo 每步被调（reasoningEffort / 上下文窗口），带 TTL 防配置热更后拿到旧值。 */
     private readonly modelInfoCache;
     /** 待异步压缩的角色工作区（memory_write 超容量时标记；idle 期 runMaintenance 消费，见 memoryMaintenance.ts）。 */
@@ -168,6 +172,13 @@ export declare class TavernState {
     saveRegexRules(rules: RegexRule[]): Promise<void>;
     /** 某会话生效的全部正则（全局 + 当前角色卡内嵌 + 当前预设内嵌）。 */
     rulesFor(binding: SessionBinding): Promise<RegexRule[]>;
+    /** 作废卡级正则缓存：WAL 回滚绕过写路径直写磁盘，由 floors.ts 回滚后调用（见 cardRegexCache）。 */
+    invalidateCardRegex(cardId: string): void;
+    /**
+     * 卡级正则（assets/regex-scripts.json）带 stat 指纹缓存的读取。
+     * rulesFor 每 step 调一次；缓存把每步的全文读 + 解析降成一次 stat。
+     */
+    private cardRegexRules;
     /**
      * 读会话绑定；若 cardId 对应工作区已删，按名字或「库里只剩一张卡」改写到新 ID。
      * 人设未绑定时，接到默认页或库里唯一一条，避免 {{user}} 落成 User。

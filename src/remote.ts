@@ -4,112 +4,134 @@
  * 结果 schema 描述裸业务值；{ ok, value | error } 信封是 gateway 传输层约定，
  * 由 host invokeRpc / client invoke 自动生成，这里不能再包。
  * 复杂资产（卡片/预设/世界书 JSON）用宽松 schema，由存储层归一化时严格校验。
+ *
+ * 刻意用 `zod/mini` 而不是经典 `zod`：本模块被 client 入口导入（TYPERT_REMOTE），
+ * 经典 API 会往浏览器 bundle 里塞 ~530 KiB（占产物 59%），mini 只有 ~32 KiB。
+ * gateway 两面都只调 `codec.schema.parse(value)`（client 侧 dsh-api-gateway/lib/client.js
+ * 的 parseInput、host 侧 lib/index.js 的 decode），mini schema 保留 `.parse()`，校验行为不变。
+ * 代价是链式方法要写成顶层函数式：`.min(1)` → `check(minLength(1))`、`.optional()` → `optional(...)`。
  */
-import { z } from 'zod'
+import { array, boolean, enum as enum_, int, minimum, minLength, nullable, number, object, optional, string, unknown } from 'zod/mini'
+import type { ZodMiniType } from 'zod/mini'
+import type { AssembledPrompt } from './core/assemble.js'
+import type { SessionBinding } from './core/binding.js'
+import type { GreetingFloorState } from './core/greetingLog.js'
+import type { Persona } from './core/persona.js'
+import type { SiblingSwipe } from './core/siblings.js'
+import type { CharacterCard, ChatMessage, MemoryEntry, PromptPreset, RegexRule, WIEngineResult, WorldDelta } from './core/types.js'
+import type { TavernConfigRaw } from './node/config.js'
+import type { ForkResult } from './node/floors.js'
+import type { CharacterSummary } from './state/workspace.js'
 
-const anyValue = z.unknown()
-const sessionIdField = { sessionId: z.string().min(1) }
-const cardIdField = { cardId: z.string().min(1) }
-const messageIdField = { messageId: z.string().min(1) }
+/** 非空字符串（原 `z.string().min(1)`）。 */
+const nonEmpty = () => string().check(minLength(1))
+/** 楼层 turn 号：正整数（原 `z.number().int().min(1)`）。 */
+const turnNumber = () => int().check(minimum(1))
+
+const anyValue = unknown()
+const sessionIdField = { sessionId: nonEmpty() }
+const cardIdField = { cardId: nonEmpty() }
+const messageIdField = { messageId: nonEmpty() }
 
 /** method → [request shape, value schema, 简介] */
-const METHODS: Record<string, { req: z.ZodTypeAny; value: z.ZodTypeAny; summary: string }> = {
+const METHODS: Record<string, { req: ZodMiniType; value: ZodMiniType; summary: string }> = {
   // 角色
-  listCharacters: { req: z.object({}), value: anyValue, summary: '列出全部角色卡' },
+  listCharacters: { req: object({}), value: anyValue, summary: '列出全部角色卡' },
   inspectCharacter: {
-    req: z.object({ name: z.string().min(1), dataBase64: z.string().min(1) }),
+    req: object({ name: nonEmpty(), dataBase64: nonEmpty() }),
     value: anyValue,
     summary: '解析角色卡但不落盘（导入前预览内嵌世界书）',
   },
   importCharacter: {
-    req: z.object({
-      name: z.string().min(1),
-      dataBase64: z.string().min(1),
-      importWorldBook: z.boolean().optional(),
+    req: object({
+      name: nonEmpty(),
+      dataBase64: nonEmpty(),
+      importWorldBook: optional(boolean()),
     }),
     value: anyValue,
     summary: '导入角色卡（PNG/JSON，base64）',
   },
-  deleteCharacter: { req: z.object({ ...cardIdField }), value: anyValue, summary: '删除角色卡工作区' },
-  getCharacterDetail: { req: z.object({ ...cardIdField }), value: anyValue, summary: '角色卡详情（归一化卡 + 开场白列表）' },
+  deleteCharacter: { req: object({ ...cardIdField }), value: anyValue, summary: '删除角色卡工作区' },
+  getCharacterDetail: { req: object({ ...cardIdField }), value: anyValue, summary: '角色卡详情（归一化卡 + 开场白列表）' },
   saveCharacter: {
-    req: z.object({
+    req: object({
       ...cardIdField,
-      name: z.string().optional(),
-      description: z.string().optional(),
-      personality: z.string().optional(),
-      scenario: z.string().optional(),
-      firstMes: z.string().optional(),
-      alternateGreetings: z.array(z.string()).optional(),
-      mesExample: z.string().optional(),
-      systemPrompt: z.string().optional(),
-      postHistoryInstructions: z.string().optional(),
-      creatorNotes: z.string().optional(),
-      creator: z.string().optional(),
-      characterVersion: z.string().optional(),
-      tags: z.array(z.string()).optional(),
-      depthPrompt: z
-        .object({
-          prompt: z.string(),
-          depth: z.number(),
-          role: z.enum(['system', 'user', 'assistant']),
-        })
-        .nullable()
-        .optional(),
+      name: optional(string()),
+      description: optional(string()),
+      personality: optional(string()),
+      scenario: optional(string()),
+      firstMes: optional(string()),
+      alternateGreetings: optional(array(string())),
+      mesExample: optional(string()),
+      systemPrompt: optional(string()),
+      postHistoryInstructions: optional(string()),
+      creatorNotes: optional(string()),
+      creator: optional(string()),
+      characterVersion: optional(string()),
+      tags: optional(array(string())),
+      depthPrompt: optional(
+        nullable(
+          object({
+            prompt: string(),
+            depth: number(),
+            role: enum_(['system', 'user', 'assistant']),
+          }),
+        ),
+      ),
     }),
     value: anyValue,
     summary: '保存角色卡正文（不改 cardId）',
   },
-  createCharacter: { req: z.object({ name: z.string().min(1) }), value: anyValue, summary: '新建空白角色卡' },
-  exportCharacter: { req: z.object({ ...cardIdField }), value: anyValue, summary: '导出角色卡 JSON 与 PNG' },
+  createCharacter: { req: object({ name: nonEmpty() }), value: anyValue, summary: '新建空白角色卡' },
+  exportCharacter: { req: object({ ...cardIdField }), value: anyValue, summary: '导出角色卡 JSON 与 PNG' },
   // 预设
-  listPresets: { req: z.object({}), value: anyValue, summary: '列出提示词预设' },
-  importPreset: { req: z.object({ name: z.string().min(1), json: anyValue }), value: anyValue, summary: '导入 SillyTavern 预设 JSON' },
-  savePreset: { req: z.object({ preset: anyValue }), value: anyValue, summary: '保存预设' },
-  deletePreset: { req: z.object({ id: z.string().min(1) }), value: anyValue, summary: '删除预设' },
-  getPreset: { req: z.object({ id: z.string().min(1) }), value: anyValue, summary: '读取预设' },
+  listPresets: { req: object({}), value: anyValue, summary: '列出提示词预设' },
+  importPreset: { req: object({ name: nonEmpty(), json: anyValue }), value: anyValue, summary: '导入 SillyTavern 预设 JSON' },
+  savePreset: { req: object({ preset: anyValue }), value: anyValue, summary: '保存预设' },
+  deletePreset: { req: object({ id: nonEmpty() }), value: anyValue, summary: '删除预设' },
+  getPreset: { req: object({ id: nonEmpty() }), value: anyValue, summary: '读取预设' },
   // 世界书库
-  listLorebooks: { req: z.object({}), value: anyValue, summary: '列出世界书' },
-  getLorebook: { req: z.object({ name: z.string().min(1) }), value: anyValue, summary: '读取世界书原始 JSON' },
-  importLorebook: { req: z.object({ name: z.string().min(1), json: anyValue }), value: anyValue, summary: '导入世界书 JSON' },
-  saveLorebook: { req: z.object({ name: z.string().min(1), json: anyValue }), value: anyValue, summary: '保存世界书 JSON' },
-  deleteLorebook: { req: z.object({ name: z.string().min(1) }), value: anyValue, summary: '删除世界书' },
-  getCharacterLorebook: { req: z.object({ ...cardIdField }), value: anyValue, summary: '读取角色卡内嵌世界书' },
+  listLorebooks: { req: object({}), value: anyValue, summary: '列出世界书' },
+  getLorebook: { req: object({ name: nonEmpty() }), value: anyValue, summary: '读取世界书原始 JSON' },
+  importLorebook: { req: object({ name: nonEmpty(), json: anyValue }), value: anyValue, summary: '导入世界书 JSON' },
+  saveLorebook: { req: object({ name: nonEmpty(), json: anyValue }), value: anyValue, summary: '保存世界书 JSON' },
+  deleteLorebook: { req: object({ name: nonEmpty() }), value: anyValue, summary: '删除世界书' },
+  getCharacterLorebook: { req: object({ ...cardIdField }), value: anyValue, summary: '读取角色卡内嵌世界书' },
   saveCharacterLorebook: {
-    req: z.object({ ...cardIdField, json: anyValue }),
+    req: object({ ...cardIdField, json: anyValue }),
     value: anyValue,
     summary: '保存角色卡内嵌世界书',
   },
-  deleteEmbeddedLorebook: { req: z.object({ ...cardIdField }), value: anyValue, summary: '删除角色卡内嵌世界书（保留角色卡）' },
-  getChatLorebook: { req: z.object({ ...cardIdField }), value: anyValue, summary: '读取会话世界书' },
-  saveChatLorebook: { req: z.object({ ...cardIdField, json: anyValue }), value: anyValue, summary: '保存会话世界书' },
-  getJournal: { req: z.object({ ...cardIdField }), value: anyValue, summary: '读取角色笔记 journal.md' },
-  saveJournal: { req: z.object({ ...cardIdField, text: z.string() }), value: anyValue, summary: '保存角色笔记 journal.md' },
+  deleteEmbeddedLorebook: { req: object({ ...cardIdField }), value: anyValue, summary: '删除角色卡内嵌世界书（保留角色卡）' },
+  getChatLorebook: { req: object({ ...cardIdField }), value: anyValue, summary: '读取会话世界书' },
+  saveChatLorebook: { req: object({ ...cardIdField, json: anyValue }), value: anyValue, summary: '保存会话世界书' },
+  getJournal: { req: object({ ...cardIdField }), value: anyValue, summary: '读取角色笔记 journal.md' },
+  saveJournal: { req: object({ ...cardIdField, text: string() }), value: anyValue, summary: '保存角色笔记 journal.md' },
   // 人设
-  listPersonas: { req: z.object({}), value: anyValue, summary: '列出人设' },
-  savePersona: { req: z.object({ persona: anyValue }), value: anyValue, summary: '保存人设' },
-  deletePersona: { req: z.object({ id: z.string().min(1) }), value: anyValue, summary: '删除人设' },
+  listPersonas: { req: object({}), value: anyValue, summary: '列出人设' },
+  savePersona: { req: object({ persona: anyValue }), value: anyValue, summary: '保存人设' },
+  deletePersona: { req: object({ id: nonEmpty() }), value: anyValue, summary: '删除人设' },
   // 正则
-  listRegexRules: { req: z.object({}), value: anyValue, summary: '列出全局正则规则' },
-  saveRegexRules: { req: z.object({ rules: z.array(anyValue) }), value: anyValue, summary: '保存全局正则规则' },
+  listRegexRules: { req: object({}), value: anyValue, summary: '列出全局正则规则' },
+  saveRegexRules: { req: object({ rules: array(anyValue) }), value: anyValue, summary: '保存全局正则规则' },
   // 会话绑定
-  getSessionBinding: { req: z.object({ ...sessionIdField }), value: anyValue, summary: '读取会话绑定' },
-  setSessionBinding: { req: z.object({ binding: anyValue }), value: anyValue, summary: '保存会话绑定' },
-  clearSessionBinding: { req: z.object({ ...sessionIdField }), value: anyValue, summary: '清除会话角色卡绑定' },
+  getSessionBinding: { req: object({ ...sessionIdField }), value: anyValue, summary: '读取会话绑定' },
+  setSessionBinding: { req: object({ binding: anyValue }), value: anyValue, summary: '保存会话绑定' },
+  clearSessionBinding: { req: object({ ...sessionIdField }), value: anyValue, summary: '清除会话角色卡绑定' },
   // 开场白
-  ensureGreeting: { req: z.object({ ...sessionIdField }), value: anyValue, summary: '确保会话有开场白' },
+  ensureGreeting: { req: object({ ...sessionIdField }), value: anyValue, summary: '确保会话有开场白' },
   getGreetingSwipe: {
-    req: z.object({ ...sessionIdField, ...messageIdField }),
+    req: object({ ...sessionIdField, ...messageIdField }),
     value: anyValue,
     summary: '开场白楼层的 swipe 下标（非开场白返回 null）',
   },
   renderOutputText: {
-    req: z.object({ ...sessionIdField, text: z.string() }),
+    req: object({ ...sessionIdField, text: string() }),
     value: anyValue,
     summary: '对展示文本应用 output/render 正则并抽出 HTML',
   },
   swipeGreeting: {
-    req: z.object({ ...sessionIdField, index: z.number().int() }),
+    req: object({ ...sessionIdField, index: int() }),
     value: anyValue,
     summary: '切换开场白变体（产生子会话）',
   },
@@ -117,103 +139,263 @@ const METHODS: Record<string, { req: z.ZodTypeAny; value: z.ZodTypeAny; summary:
   // 操作条由 chat.node 渲染侧补挂并以 turn 定位，故 regenerate/rollbackToFloor/getFloorSiblings
   // 额外接受 turn 号；操作产生分支子会话，client 负责打开）
   regenerate: {
-    req: z.object({ ...sessionIdField, messageId: z.string().min(1).optional(), turn: z.number().int().min(1).optional() }),
+    req: object({ ...sessionIdField, messageId: optional(nonEmpty()), turn: optional(turnNumber()) }),
     value: anyValue,
     summary: '重新生成指定楼层（缺省最后一轮），分支会话自动续跑',
   },
   rollbackToFloor: {
-    req: z.object({ ...sessionIdField, messageId: z.string().min(1).optional(), turn: z.number().int().min(1).optional() }),
+    req: object({ ...sessionIdField, messageId: optional(nonEmpty()), turn: optional(turnNumber()) }),
     value: anyValue,
     summary: '回退到指定楼层（保留该层，丢弃其后），不自动续跑；messageId 与 turn 至少给其一',
   },
   getFloorUserMessage: {
-    req: z.object({ ...sessionIdField, ...messageIdField }),
+    req: object({ ...sessionIdField, ...messageIdField }),
     value: anyValue,
     summary: '读取指定楼层的首条用户消息（编辑预填用）',
   },
   editUserMessage: {
-    req: z.object({ ...sessionIdField, ...messageIdField, text: z.string().min(1) }),
+    req: object({ ...sessionIdField, ...messageIdField, text: nonEmpty() }),
     value: anyValue,
     summary: '编辑指定楼层的用户消息并重跑（产生子会话）',
   },
   getFloorAssistantMessage: {
-    req: z.object({ ...sessionIdField, ...messageIdField }),
+    req: object({ ...sessionIdField, ...messageIdField }),
     value: anyValue,
     summary: '读取指定楼层的 assistant 正文（编辑预填用）',
   },
   editAssistantMessage: {
-    req: z.object({ ...sessionIdField, ...messageIdField, text: z.string().min(1) }),
+    req: object({ ...sessionIdField, ...messageIdField, text: nonEmpty() }),
     value: anyValue,
     summary: '编辑指定楼层的 assistant 正文（产生子会话，停在编辑后状态）',
   },
   continueFloor: {
-    req: z.object({ ...sessionIdField, ...messageIdField }),
+    req: object({ ...sessionIdField, ...messageIdField }),
     value: anyValue,
     summary: '续写最后一层（被截断的）回复：不 fork，直接驱动画前会话',
   },
   getFloorSiblings: {
-    req: z.object({ ...sessionIdField, messageId: z.string().min(1).optional(), turn: z.number().int().min(1).optional() }),
-    value: z.object({
-      swipe: z
-        .object({
-          turn: z.number().int(),
-          index: z.number().int(),
-          total: z.number().int(),
-          siblings: z.array(z.string()),
-        })
-        .nullable(),
+    req: object({ ...sessionIdField, messageId: optional(nonEmpty()), turn: optional(turnNumber()) }),
+    value: object({
+      swipe: nullable(
+        object({
+          turn: int(),
+          index: int(),
+          total: int(),
+          siblings: array(string()),
+        }),
+      ),
     }),
     summary: '同一楼层分支会话的兄弟导航（‹ n/m ›；无兄弟时 swipe=null）',
   },
   impersonate: {
-    req: z.object({ ...sessionIdField }),
+    req: object({ ...sessionIdField }),
     value: anyValue,
     summary: '以用户身份代写一句台词（不入会话日志，由前端填入输入）',
   },
   // 记忆
-  getMemories: { req: z.object({ ...cardIdField }), value: anyValue, summary: '列出角色记忆' },
+  getMemories: { req: object({ ...cardIdField }), value: anyValue, summary: '列出角色记忆' },
   saveMemory: {
-    req: z.object({
+    req: object({
       ...cardIdField,
-      id: z.string().optional(),
-      body: z.string().min(1),
-      tags: z.array(z.string()).optional(),
-      keys: z.array(z.string()).optional(),
+      id: optional(string()),
+      body: nonEmpty(),
+      tags: optional(array(string())),
+      keys: optional(array(string())),
     }),
     value: anyValue,
     summary: '新增或更新记忆',
   },
-  deleteMemory: { req: z.object({ ...cardIdField, id: z.string().min(1) }), value: anyValue, summary: '删除记忆' },
-  compressMemories: { req: z.object({ ...cardIdField }), value: anyValue, summary: '无损归并最旧一批记忆（减少条目数）' },
+  deleteMemory: { req: object({ ...cardIdField, id: nonEmpty() }), value: anyValue, summary: '删除记忆' },
+  compressMemories: { req: object({ ...cardIdField }), value: anyValue, summary: '无损归并最旧一批记忆（减少条目数）' },
   // 世界状态
-  getWorldDeltas: { req: z.object({ ...cardIdField }), value: anyValue, summary: '列出世界状态变化层' },
-  revokeWorldDelta: { req: z.object({ ...cardIdField, id: z.string().min(1) }), value: anyValue, summary: '撤销一条变化' },
+  getWorldDeltas: { req: object({ ...cardIdField }), value: anyValue, summary: '列出世界状态变化层' },
+  revokeWorldDelta: { req: object({ ...cardIdField, id: nonEmpty() }), value: anyValue, summary: '撤销一条变化' },
   addWorldDelta: {
-    req: z.object({
+    req: object({
       ...cardIdField,
-      type: z.enum(['add', 'update', 'invalidate']),
-      content: z.string().min(1),
-      ref: z.string().nullable().optional(),
-      keys: z.array(z.string()).optional(),
-      order: z.number().optional(),
+      type: enum_(['add', 'update', 'invalidate']),
+      content: nonEmpty(),
+      ref: optional(nullable(string())),
+      keys: optional(array(string())),
+      order: optional(number()),
     }),
     value: anyValue,
     summary: '手动新增一条世界状态',
   },
-  exportMergedLorebook: { req: z.object({ ...cardIdField }), value: anyValue, summary: '导出合并变化层后的世界书' },
+  exportMergedLorebook: { req: object({ ...cardIdField }), value: anyValue, summary: '导出合并变化层后的世界书' },
   // 调试
-  getTriggerLog: { req: z.object({ ...sessionIdField }), value: anyValue, summary: '最近一次组装的触发日志' },
-  previewPrompt: { req: z.object({ ...sessionIdField }), value: anyValue, summary: '预览完整提示词序列' },
+  getTriggerLog: { req: object({ ...sessionIdField }), value: anyValue, summary: '最近一次组装的触发日志' },
+  previewPrompt: { req: object({ ...sessionIdField }), value: anyValue, summary: '预览完整提示词序列' },
   getContextUsage: {
-    req: z.object({ ...sessionIdField }),
+    req: object({ ...sessionIdField }),
     value: anyValue,
     summary: '读取会话上下文占用（token-meter 投影；宿主未挂投影时 usage=null）',
   },
-  getDataInfo: { req: z.object({}), value: anyValue, summary: 'Tavern 数据目录路径' },
-  getAvatar: { req: z.object({ ...cardIdField }), value: anyValue, summary: '角色头像 dataURL' },
+  getDataInfo: { req: object({}), value: anyValue, summary: 'Tavern 数据目录路径' },
+  getAvatar: { req: object({ ...cardIdField }), value: anyValue, summary: '角色头像 dataURL' },
   // 设置（采样参数与世界书全局设置等，落 dsh 设置命名空间 dsh-tavern）
-  getSettings: { req: z.object({}), value: anyValue, summary: '读取 Tavern 设置' },
-  updateSettings: { req: z.object({ patch: anyValue }), value: anyValue, summary: '合并更新 Tavern 设置' },
+  getSettings: { req: object({}), value: anyValue, summary: '读取 Tavern 设置' },
+  updateSettings: { req: object({ patch: anyValue }), value: anyValue, summary: '合并更新 Tavern 设置' },
+}
+
+// ---------------------------------------------------------------------------
+// 结果类型（裸业务值）的单一来源
+// ---------------------------------------------------------------------------
+// service.ts 每个方法的返回注解与 client/types.ts 的 TavernRemote 镜像都索引
+// TavernMethodResults：改任何一面的返回形状，另一面立即编译报错。
+// 上面全是 type-only 引用（core/state/node 的实现类型），不进 client bundle；
+// 形状以 service.ts 的实际 return 为准，这里只写契约不包信封。
+
+/** inspectCharacter 的导入前预览（不落盘）。 */
+export interface CharacterInspect {
+  name: string
+  hasAvatar: boolean
+  hasCharacterBook: boolean
+  characterBookName: string | null
+  entryCount: number
+}
+
+/** getCharacterDetail 的角色卡详情（归一化卡的扁平字段 + 世界书/头像元信息）。 */
+export interface CharacterDetail {
+  cardId: string
+  name: string
+  description: string
+  personality: string
+  scenario: string
+  firstMes: string
+  alternateGreetings: string[]
+  mesExample: string
+  systemPrompt: string
+  postHistoryInstructions: string
+  creatorNotes: string
+  creator: string
+  characterVersion: string
+  tags: string[]
+  spec: CharacterCard['spec']
+  hasCharacterBook: boolean
+  characterBookName: string | null
+  characterBookEntryCount: number
+  hasAvatar: boolean
+  depthPrompt: CharacterCard['depthPrompt']
+  extensions: CharacterCard['extensions']
+}
+
+/** listPresets 的预设摘要。 */
+export interface PresetSummary {
+  id: string
+  name: string
+  regexCount: number
+}
+
+/** renderOutputText：展示文本经 output/render 正则与 HTML 抽取后的形态。 */
+export interface RenderedOutput {
+  text: string
+  html: string | null
+  htmls: string[]
+  interactiveCards: boolean
+  whitelist: string[]
+  greetings: string[]
+  greetingIndex: number
+  canSwipeGreeting: boolean
+}
+
+/** previewPrompt 的完整提示词预览（仅预览通道，live 插不进会话日志中间）。 */
+export interface PromptPreview {
+  standing: string
+  turnContext: string
+  system: string
+  messages: ChatMessage[]
+  logLines: string[]
+  worldInfoBudget: WIEngineResult['budget']
+  assembleBudget: AssembledPrompt['stats']
+}
+
+/** getContextUsage 的 token-meter 投影快照；宿主未挂投影时整体为 null。 */
+export interface ContextUsage {
+  surfaceTokens: number
+  pressureTokens: number | null
+  contextWindow: number | null
+  percent: number | null
+  systemTokens: number | null
+  toolsTokens: number | null
+  messageTokens: number | null
+}
+
+/** 方法名 → 裸业务结果类型。加/改 remote 方法时必须与 METHODS、service 实现、client 镜像同步。 */
+export interface TavernMethodResults {
+  // 角色
+  listCharacters: { items: CharacterSummary[] }
+  inspectCharacter: CharacterInspect
+  importCharacter: { cardId: string; name: string }
+  deleteCharacter: { deleted: boolean; salvagedLorebook: string | null }
+  getCharacterDetail: CharacterDetail
+  saveCharacter: { cardId: string; name: string }
+  createCharacter: { cardId: string; name: string }
+  exportCharacter: { json: unknown; pngBase64: string; name: string }
+  getAvatar: { dataUrl: string | null }
+  // 预设
+  listPresets: { items: PresetSummary[] }
+  importPreset: { id: string; warnings: string[] }
+  savePreset: { id: string }
+  deletePreset: { deleted: boolean }
+  getPreset: { preset: PromptPreset }
+  // 世界书库
+  listLorebooks: { items: string[] }
+  getLorebook: { json: unknown }
+  importLorebook: { name: string; entryCount: number }
+  saveLorebook: { name: string }
+  deleteLorebook: { deleted: boolean }
+  getCharacterLorebook: { name: string; json: unknown; entryCount: number }
+  saveCharacterLorebook: { name: string; entryCount: number }
+  deleteEmbeddedLorebook: { deleted: boolean }
+  getChatLorebook: { json: unknown }
+  saveChatLorebook: { saved: boolean }
+  getJournal: { text: string }
+  saveJournal: { saved: boolean }
+  // 人设
+  listPersonas: { items: Persona[] }
+  savePersona: { id: string }
+  deletePersona: { deleted: boolean }
+  // 正则
+  listRegexRules: { rules: RegexRule[] }
+  saveRegexRules: { count: number }
+  // 会话绑定
+  getSessionBinding: { binding: SessionBinding | null; userName: string; canSwipeGreeting: boolean }
+  setSessionBinding: { saved: boolean }
+  clearSessionBinding: { cleared: boolean }
+  // 开场白
+  ensureGreeting: { created: boolean }
+  getGreetingSwipe: GreetingFloorState
+  renderOutputText: RenderedOutput
+  swipeGreeting: { childSessionId: string; index: number; title: string }
+  // 楼层
+  regenerate: ForkResult
+  rollbackToFloor: ForkResult
+  getFloorUserMessage: { turn: number; text: string }
+  editUserMessage: ForkResult
+  getFloorAssistantMessage: { turn: number; text: string }
+  editAssistantMessage: ForkResult
+  continueFloor: { continued: boolean }
+  getFloorSiblings: { swipe: (SiblingSwipe & { turn: number }) | null }
+  impersonate: { text: string }
+  // 记忆
+  getMemories: { items: MemoryEntry[] }
+  saveMemory: { id: string }
+  deleteMemory: { deleted: boolean }
+  compressMemories: { merged: number }
+  // 世界状态
+  getWorldDeltas: { items: WorldDelta[] }
+  revokeWorldDelta: { revoked: boolean }
+  addWorldDelta: { id: string }
+  exportMergedLorebook: { json: unknown }
+  // 调试
+  getTriggerLog: { log: { at: string; lines: string[] } | null }
+  previewPrompt: PromptPreview
+  getContextUsage: { usage: ContextUsage | null }
+  getDataInfo: { dataHome: string }
+  // 设置
+  getSettings: { settings: TavernConfigRaw }
+  updateSettings: { settings: TavernConfigRaw }
 }
 
 function descriptor(method: string, def: (typeof METHODS)[string]) {

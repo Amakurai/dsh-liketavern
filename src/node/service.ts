@@ -4,6 +4,8 @@
  * 平台约定：方法返回裸业务值，失败抛错（FloorError.message 原样透出给 client）。
  * { ok, value | error } 信封由 typert gateway（host invokeRpc / client invoke）生成，
  * 这里不要再包一层（双层信封会让 client 的 r.value.xxx 全部读到 undefined）。
+ * 每个方法的返回注解指向 ../remote.ts 的 TavernMethodResults——结果形状的单一来源，
+ * client 镜像（client/types.ts）索引同一张表，两面形状漂移会立刻编译报错。
  */
 import type { Context } from '@deepseek-ai/cordis'
 import type { LlmRuntime } from '@deepseek-ai/dsh-llm'
@@ -26,6 +28,7 @@ import { FloorError, continueFloor, editAssistantMessage, editUserMessage, enter
 import { impersonate } from './impersonate.js'
 import { runTavernPipeline } from './pipeline.js'
 import type { Persona, TavernState } from './state.js'
+import type { TavernMethodResults } from '../remote.js'
 
 export class TavernService extends TypertRemoteService {
   constructor(
@@ -39,22 +42,22 @@ export class TavernService extends TypertRemoteService {
 
   // ── 设置 ─────────────────────────────────────────────────────────────────
 
-  getSettings(_request: Record<string, never>): unknown {
+  getSettings(_request: Record<string, never>): TavernMethodResults['getSettings'] {
     return { settings: this.settingsScope.get() }
   }
 
-  async updateSettings(request: { patch: object }): Promise<unknown> {
+  async updateSettings(request: { patch: object }): Promise<TavernMethodResults['updateSettings']> {
     await this.settingsScope.update(request.patch ?? {})
     return { settings: this.settingsScope.get() }
   }
 
   // ── 角色 ─────────────────────────────────────────────────────────────────
 
-  async listCharacters(_request: Record<string, never>): Promise<unknown> {
+  async listCharacters(_request: Record<string, never>): Promise<TavernMethodResults['listCharacters']> {
     return { items: await this.state.listCharacters() }
   }
 
-  async inspectCharacter(request: { name: string; dataBase64: string }): Promise<unknown> {
+  async inspectCharacter(request: { name: string; dataBase64: string }): Promise<TavernMethodResults['inspectCharacter']> {
     try {
       const bytes = Buffer.from(request.dataBase64, 'base64')
       const card = /\.png$/i.test(request.name)
@@ -74,18 +77,18 @@ export class TavernService extends TypertRemoteService {
     }
   }
 
-  async importCharacter(request: { name: string; dataBase64: string; importWorldBook?: boolean }): Promise<unknown> {
+  async importCharacter(request: { name: string; dataBase64: string; importWorldBook?: boolean }): Promise<TavernMethodResults['importCharacter']> {
     const bytes = Buffer.from(request.dataBase64, 'base64')
     const ws = await this.state.importCharacter(request.name, bytes, { importWorldBook: request.importWorldBook !== false })
     return { cardId: ws.cardId, name: ws.card.name }
   }
 
-  async deleteCharacter(request: { cardId: string }): Promise<unknown> {
+  async deleteCharacter(request: { cardId: string }): Promise<TavernMethodResults['deleteCharacter']> {
     const { salvagedLorebook } = await this.state.deleteCharacter(request.cardId)
     return { deleted: true, salvagedLorebook }
   }
 
-  async getCharacterDetail(request: { cardId: string }): Promise<unknown> {
+  async getCharacterDetail(request: { cardId: string }): Promise<TavernMethodResults['getCharacterDetail']> {
     const ws = await this.state.loadCharacter(request.cardId)
     if (!ws) throw new FloorError('card-not-found', `角色 ${request.cardId} 不存在`)
     const handle = await this.state.workspace(request.cardId)
@@ -131,7 +134,7 @@ export class TavernService extends TypertRemoteService {
     characterVersion?: string
     tags?: string[]
     depthPrompt?: { prompt: string; depth: number; role: 'system' | 'user' | 'assistant' } | null
-  }): Promise<unknown> {
+  }): Promise<TavernMethodResults['saveCharacter']> {
     try {
       return await this.state.saveCharacter(request.cardId, {
         name: request.name,
@@ -154,14 +157,14 @@ export class TavernService extends TypertRemoteService {
     }
   }
 
-  async createCharacter(request: { name: string }): Promise<unknown> {
+  async createCharacter(request: { name: string }): Promise<TavernMethodResults['createCharacter']> {
     const name = request.name?.trim()
     if (!name) throw new FloorError('invalid-card', '角色名不能为空')
     const ws = await this.state.createCharacter(name)
     return { cardId: ws.cardId, name: ws.card.name }
   }
 
-  async exportCharacter(request: { cardId: string }): Promise<unknown> {
+  async exportCharacter(request: { cardId: string }): Promise<TavernMethodResults['exportCharacter']> {
     try {
       return await this.state.exportCharacter(request.cardId)
     } catch (error) {
@@ -171,18 +174,18 @@ export class TavernService extends TypertRemoteService {
 
   // ── 预设 ─────────────────────────────────────────────────────────────────
 
-  async listPresets(_request: Record<string, never>): Promise<unknown> {
+  async listPresets(_request: Record<string, never>): Promise<TavernMethodResults['listPresets']> {
     return { items: await this.state.listPresetSummaries() }
   }
 
-  async importPreset(request: { name: string; json: unknown }): Promise<unknown> {
+  async importPreset(request: { name: string; json: unknown }): Promise<TavernMethodResults['importPreset']> {
     const { preset, warnings } = parseStPreset(request.json)
     if (request.name && preset.name === '未命名预设') preset.name = request.name
     await this.state.savePreset(preset)
     return { id: preset.identifier, warnings }
   }
 
-  async savePreset(request: { preset: PromptPreset }): Promise<unknown> {
+  async savePreset(request: { preset: PromptPreset }): Promise<TavernMethodResults['savePreset']> {
     if (!request.preset || typeof request.preset.identifier !== 'string' || !request.preset.identifier) {
       throw new FloorError('invalid-preset', '预设缺少 identifier')
     }
@@ -190,12 +193,12 @@ export class TavernService extends TypertRemoteService {
     return { id: request.preset.identifier }
   }
 
-  async deletePreset(request: { id: string }): Promise<unknown> {
+  async deletePreset(request: { id: string }): Promise<TavernMethodResults['deletePreset']> {
     await this.state.deletePreset(request.id)
     return { deleted: true }
   }
 
-  async getPreset(request: { id: string }): Promise<unknown> {
+  async getPreset(request: { id: string }): Promise<TavernMethodResults['getPreset']> {
     const preset = await this.state.loadPreset(request.id)
     if (!preset) throw new FloorError('preset-not-found', `预设 ${request.id} 不存在`)
     return { preset }
@@ -203,51 +206,51 @@ export class TavernService extends TypertRemoteService {
 
   // ── 世界书库 ──────────────────────────────────────────────────────────────
 
-  async listLorebooks(_request: Record<string, never>): Promise<unknown> {
+  async listLorebooks(_request: Record<string, never>): Promise<TavernMethodResults['listLorebooks']> {
     return { items: await this.state.listLorebooks() }
   }
 
-  async getLorebook(request: { name: string }): Promise<unknown> {
+  async getLorebook(request: { name: string }): Promise<TavernMethodResults['getLorebook']> {
     const json = await this.state.loadLorebookJson(request.name)
     if (json === null) throw new FloorError('lorebook-not-found', `世界书 ${request.name} 不存在`)
     return { json }
   }
 
-  async importLorebook(request: { name: string; json: unknown }): Promise<unknown> {
+  async importLorebook(request: { name: string; json: unknown }): Promise<TavernMethodResults['importLorebook']> {
     // 先归一化验证可读性，再原样落盘
     const entries = parseLorebook(request.json, { source: 'global', sourceRef: request.name })
     await this.state.saveLorebook(request.name, request.json)
     return { name: request.name, entryCount: entries.length }
   }
 
-  async saveLorebook(request: { name: string; json: unknown }): Promise<unknown> {
+  async saveLorebook(request: { name: string; json: unknown }): Promise<TavernMethodResults['saveLorebook']> {
     parseLorebook(request.json, { source: 'global', sourceRef: request.name })
     await this.state.saveLorebook(request.name, request.json)
     return { name: request.name }
   }
 
-  async deleteLorebook(request: { name: string }): Promise<unknown> {
+  async deleteLorebook(request: { name: string }): Promise<TavernMethodResults['deleteLorebook']> {
     await this.state.deleteLorebook(request.name)
     return { deleted: true }
   }
 
-  async getCharacterLorebook(request: { cardId: string }): Promise<unknown> {
+  async getCharacterLorebook(request: { cardId: string }): Promise<TavernMethodResults['getCharacterLorebook']> {
     const book = await this.state.loadCharacterLorebookRaw(request.cardId)
     if (!book) throw new FloorError('lorebook-not-found', `角色 ${request.cardId} 没有内嵌世界书`)
     return book
   }
 
-  async saveCharacterLorebook(request: { cardId: string; json: unknown }): Promise<unknown> {
+  async saveCharacterLorebook(request: { cardId: string; json: unknown }): Promise<TavernMethodResults['saveCharacterLorebook']> {
     parseLorebook(request.json, { source: 'character', sourceRef: request.cardId })
     return this.state.saveCharacterLorebook(request.cardId, request.json)
   }
 
-  async deleteEmbeddedLorebook(request: { cardId: string }): Promise<unknown> {
+  async deleteEmbeddedLorebook(request: { cardId: string }): Promise<TavernMethodResults['deleteEmbeddedLorebook']> {
     await this.state.deleteCharacterLorebook(request.cardId)
     return { deleted: true }
   }
 
-  async getChatLorebook(request: { cardId: string }): Promise<unknown> {
+  async getChatLorebook(request: { cardId: string }): Promise<TavernMethodResults['getChatLorebook']> {
     if ((await this.state.loadCharacter(request.cardId)) === null) {
       throw new FloorError('card-not-found', `角色 ${request.cardId} 不存在`)
     }
@@ -255,7 +258,7 @@ export class TavernService extends TypertRemoteService {
     return { json }
   }
 
-  async saveChatLorebook(request: { cardId: string; json: unknown }): Promise<unknown> {
+  async saveChatLorebook(request: { cardId: string; json: unknown }): Promise<TavernMethodResults['saveChatLorebook']> {
     if ((await this.state.loadCharacter(request.cardId)) === null) {
       throw new FloorError('card-not-found', `角色 ${request.cardId} 不存在`)
     }
@@ -263,14 +266,14 @@ export class TavernService extends TypertRemoteService {
     return { saved: true }
   }
 
-  async getJournal(request: { cardId: string }): Promise<unknown> {
+  async getJournal(request: { cardId: string }): Promise<TavernMethodResults['getJournal']> {
     if ((await this.state.loadCharacter(request.cardId)) === null) {
       throw new FloorError('card-not-found', `角色 ${request.cardId} 不存在`)
     }
     return { text: await this.state.getJournal(request.cardId) }
   }
 
-  async saveJournal(request: { cardId: string; text: string }): Promise<unknown> {
+  async saveJournal(request: { cardId: string; text: string }): Promise<TavernMethodResults['saveJournal']> {
     if ((await this.state.loadCharacter(request.cardId)) === null) {
       throw new FloorError('card-not-found', `角色 ${request.cardId} 不存在`)
     }
@@ -280,11 +283,11 @@ export class TavernService extends TypertRemoteService {
 
   // ── 人设 ─────────────────────────────────────────────────────────────────
 
-  async listPersonas(_request: Record<string, never>): Promise<unknown> {
+  async listPersonas(_request: Record<string, never>): Promise<TavernMethodResults['listPersonas']> {
     return { items: await this.state.listPersonas() }
   }
 
-  async savePersona(request: { persona: Persona }): Promise<unknown> {
+  async savePersona(request: { persona: Persona }): Promise<TavernMethodResults['savePersona']> {
     if (!request.persona?.id) throw new FloorError('invalid-persona', '人设缺少 id')
     await this.state.savePersona(request.persona)
     const settings = this.settingsScope.get()
@@ -296,7 +299,7 @@ export class TavernService extends TypertRemoteService {
     return { id: request.persona.id }
   }
 
-  async deletePersona(request: { id: string }): Promise<unknown> {
+  async deletePersona(request: { id: string }): Promise<TavernMethodResults['deletePersona']> {
     await this.state.deletePersona(request.id)
     const settings = this.settingsScope.get()
     if (settings.defaults?.personaId === request.id) {
@@ -309,11 +312,11 @@ export class TavernService extends TypertRemoteService {
 
   // ── 正则 ─────────────────────────────────────────────────────────────────
 
-  async listRegexRules(_request: Record<string, never>): Promise<unknown> {
+  async listRegexRules(_request: Record<string, never>): Promise<TavernMethodResults['listRegexRules']> {
     return { rules: await this.state.listRegexRules() }
   }
 
-  async saveRegexRules(request: { rules: RegexRule[] }): Promise<unknown> {
+  async saveRegexRules(request: { rules: RegexRule[] }): Promise<TavernMethodResults['saveRegexRules']> {
     const rules = Array.isArray(request.rules) ? request.rules : []
     await this.state.saveRegexRules(rules)
     return { count: rules.length }
@@ -321,7 +324,7 @@ export class TavernService extends TypertRemoteService {
 
   // ── 会话绑定 ──────────────────────────────────────────────────────────────
 
-  async getSessionBinding(request: { sessionId: string }): Promise<unknown> {
+  async getSessionBinding(request: { sessionId: string }): Promise<TavernMethodResults['getSessionBinding']> {
     const session = this.ctx.sessions.get(request.sessionId as Session['id'])
     const canSwipeGreeting = Boolean(session && !session.snapshotEvents().some((e) => e.type === 'user/message'))
     const binding = await this.state.loadBinding(request.sessionId)
@@ -330,7 +333,7 @@ export class TavernService extends TypertRemoteService {
     return { binding, userName: persona?.name ?? DEFAULT_USER_NAME, canSwipeGreeting }
   }
 
-  async setSessionBinding(request: { binding: SessionBinding }): Promise<unknown> {
+  async setSessionBinding(request: { binding: SessionBinding }): Promise<TavernMethodResults['setSessionBinding']> {
     const binding = request.binding
     if (!binding?.sessionId || !binding.cardId) throw new FloorError('invalid-binding', '绑定缺少 sessionId 或 cardId')
     if ((await this.state.loadCharacter(binding.cardId)) === null) {
@@ -347,7 +350,7 @@ export class TavernService extends TypertRemoteService {
     return { saved: true }
   }
 
-  async clearSessionBinding(request: { sessionId: string }): Promise<unknown> {
+  async clearSessionBinding(request: { sessionId: string }): Promise<TavernMethodResults['clearSessionBinding']> {
     if (!request.sessionId) throw new FloorError('invalid-binding', '绑定缺少 sessionId')
     await this.state.clearBinding(request.sessionId)
     return { cleared: true }
@@ -355,29 +358,29 @@ export class TavernService extends TypertRemoteService {
 
   // ── 开场白与楼层 ──────────────────────────────────────────────────────────
 
-  async ensureGreeting(request: { sessionId: string }): Promise<unknown> {
+  async ensureGreeting(request: { sessionId: string }): Promise<TavernMethodResults['ensureGreeting']> {
     return this.state.enqueueSessionTask(request.sessionId, async () => ({
       created: await enterGreetingConversation(this.floorDeps(), request.sessionId),
     }))
   }
 
-  async swipeGreeting(request: { sessionId: string; index: number }): Promise<unknown> {
+  async swipeGreeting(request: { sessionId: string; index: number }): Promise<TavernMethodResults['swipeGreeting']> {
     return this.state.enqueueSessionTask(request.sessionId, () =>
       swipeGreeting(this.floorDeps(), request.sessionId, request.index),
     )
   }
 
-  async getGreetingSwipe(request: { sessionId: string; messageId: string }): Promise<unknown> {
+  async getGreetingSwipe(request: { sessionId: string; messageId: string }): Promise<TavernMethodResults['getGreetingSwipe']> {
     return getGreetingSwipe(this.floorDeps(), request.sessionId, request.messageId)
   }
 
   /** 分支兄弟导航是只读查询：等排队中的楼层任务落定即可，不进串行队列。 */
-  async getFloorSiblings(request: { sessionId: string; messageId?: string; turn?: number }): Promise<unknown> {
+  async getFloorSiblings(request: { sessionId: string; messageId?: string; turn?: number }): Promise<TavernMethodResults['getFloorSiblings']> {
     await this.state.waitForSessionTasks(request.sessionId)
     return getFloorSiblings(this.floorDeps(), request.sessionId, request.messageId, request.turn)
   }
 
-  async renderOutputText(request: { sessionId: string; text: string }): Promise<unknown> {
+  async renderOutputText(request: { sessionId: string; text: string }): Promise<TavernMethodResults['renderOutputText']> {
     const text = request.text ?? ''
     const settings = this.settingsScope.get()
     const whitelist = [...settings.cardNetworkWhitelist]
@@ -424,59 +427,59 @@ export class TavernService extends TypertRemoteService {
     }
   }
 
-  regenerate(request: { sessionId: string; messageId?: string; turn?: number }): Promise<unknown> {
+  regenerate(request: { sessionId: string; messageId?: string; turn?: number }): Promise<TavernMethodResults['regenerate']> {
     return this.state.enqueueSessionTask(request.sessionId, () =>
       regenerate(this.floorDeps(), request.sessionId, request.messageId, request.turn),
     )
   }
 
-  rollbackToFloor(request: { sessionId: string; messageId?: string; turn?: number }): Promise<unknown> {
+  rollbackToFloor(request: { sessionId: string; messageId?: string; turn?: number }): Promise<TavernMethodResults['rollbackToFloor']> {
     return this.state.enqueueSessionTask(request.sessionId, () =>
       rollbackToFloor(this.floorDeps(), request.sessionId, request.messageId, request.turn),
     )
   }
 
-  async getFloorUserMessage(request: { sessionId: string; messageId: string }): Promise<unknown> {
+  async getFloorUserMessage(request: { sessionId: string; messageId: string }): Promise<TavernMethodResults['getFloorUserMessage']> {
     await this.state.waitForSessionTasks(request.sessionId)
     return getFloorUserMessage(this.floorDeps(), request.sessionId, request.messageId)
   }
 
-  editUserMessage(request: { sessionId: string; messageId: string; text: string }): Promise<unknown> {
+  editUserMessage(request: { sessionId: string; messageId: string; text: string }): Promise<TavernMethodResults['editUserMessage']> {
     return this.state.enqueueSessionTask(request.sessionId, () =>
       editUserMessage(this.floorDeps(), request.sessionId, request.messageId, request.text),
     )
   }
 
-  async getFloorAssistantMessage(request: { sessionId: string; messageId: string }): Promise<unknown> {
+  async getFloorAssistantMessage(request: { sessionId: string; messageId: string }): Promise<TavernMethodResults['getFloorAssistantMessage']> {
     await this.state.waitForSessionTasks(request.sessionId)
     return getFloorAssistantMessage(this.floorDeps(), request.sessionId, request.messageId)
   }
 
-  editAssistantMessage(request: { sessionId: string; messageId: string; text: string }): Promise<unknown> {
+  editAssistantMessage(request: { sessionId: string; messageId: string; text: string }): Promise<TavernMethodResults['editAssistantMessage']> {
     return this.state.enqueueSessionTask(request.sessionId, () =>
       editAssistantMessage(this.floorDeps(), request.sessionId, request.messageId, request.text),
     )
   }
 
-  continueFloor(request: { sessionId: string; messageId: string }): Promise<unknown> {
+  continueFloor(request: { sessionId: string; messageId: string }): Promise<TavernMethodResults['continueFloor']> {
     return this.state.enqueueSessionTask(request.sessionId, () =>
       continueFloor(this.floorDeps(), request.sessionId, request.messageId),
     )
   }
 
   /** impersonate 是带外一次性调用，不进会话串行队列（不改会话状态）。 */
-  impersonate(request: { sessionId: string }): Promise<unknown> {
+  impersonate(request: { sessionId: string }): Promise<TavernMethodResults['impersonate']> {
     return impersonate({ ctx: this.ctx, state: this.state }, request.sessionId)
   }
 
   // ── 记忆 ─────────────────────────────────────────────────────────────────
 
-  async getMemories(request: { cardId: string }): Promise<unknown> {
+  async getMemories(request: { cardId: string }): Promise<TavernMethodResults['getMemories']> {
     const ws = await this.state.workspace(request.cardId)
     return { items: await ws.memory.list() }
   }
 
-  async saveMemory(request: { cardId: string; id?: string; body: string; tags?: string[]; keys?: string[] }): Promise<unknown> {
+  async saveMemory(request: { cardId: string; id?: string; body: string; tags?: string[]; keys?: string[] }): Promise<TavernMethodResults['saveMemory']> {
     const ws = await this.state.workspace(request.cardId)
     let entry: MemoryEntry | null
     if (request.id) {
@@ -493,7 +496,7 @@ export class TavernService extends TypertRemoteService {
     return { id: entry.id }
   }
 
-  async deleteMemory(request: { cardId: string; id: string }): Promise<unknown> {
+  async deleteMemory(request: { cardId: string; id: string }): Promise<TavernMethodResults['deleteMemory']> {
     const ws = await this.state.workspace(request.cardId)
     const deleted = await ws.memory.delete(request.id)
     if (deleted) await rebuildIndex(ws.fs, estimateTokens)
@@ -501,7 +504,7 @@ export class TavernService extends TypertRemoteService {
   }
 
   /** 无 LLM 的确定性归并：原文逐条保留，只减少条目数，不宣称减少 token。 */
-  async compressMemories(request: { cardId: string }): Promise<unknown> {
+  async compressMemories(request: { cardId: string }): Promise<TavernMethodResults['compressMemories']> {
     const ws = await this.state.workspace(request.cardId)
     const batch = await ws.memory.oldest(this.state.config.memory.compressBatch)
     if (batch.length < 2) return { merged: 0 }
@@ -519,12 +522,12 @@ export class TavernService extends TypertRemoteService {
 
   // ── 世界状态 ──────────────────────────────────────────────────────────────
 
-  async getWorldDeltas(request: { cardId: string }): Promise<unknown> {
+  async getWorldDeltas(request: { cardId: string }): Promise<TavernMethodResults['getWorldDeltas']> {
     const ws = await this.state.workspace(request.cardId)
     return { items: await ws.deltas.list({ includeRevoked: true }) }
   }
 
-  async revokeWorldDelta(request: { cardId: string; id: string }): Promise<unknown> {
+  async revokeWorldDelta(request: { cardId: string; id: string }): Promise<TavernMethodResults['revokeWorldDelta']> {
     const ws = await this.state.workspace(request.cardId)
     return { revoked: await ws.deltas.revoke(request.id) }
   }
@@ -536,7 +539,7 @@ export class TavernService extends TypertRemoteService {
     ref?: string | null
     keys?: string[]
     order?: number
-  }): Promise<unknown> {
+  }): Promise<TavernMethodResults['addWorldDelta']> {
     if (!request.content?.trim()) throw new FloorError('invalid-delta', '世界状态内容不能为空')
     if ((await this.state.loadCharacter(request.cardId)) === null) {
       throw new FloorError('card-not-found', `角色 ${request.cardId} 不存在`)
@@ -555,7 +558,7 @@ export class TavernService extends TypertRemoteService {
     return { id: delta.id }
   }
 
-  async exportMergedLorebook(request: { cardId: string }): Promise<unknown> {
+  async exportMergedLorebook(request: { cardId: string }): Promise<TavernMethodResults['exportMergedLorebook']> {
     const charWs = await this.state.loadCharacter(request.cardId)
     if (!charWs) throw new FloorError('card-not-found', `角色 ${request.cardId} 不存在`)
     const ws = await this.state.workspace(request.cardId)
@@ -568,11 +571,11 @@ export class TavernService extends TypertRemoteService {
 
   // ── 调试 ─────────────────────────────────────────────────────────────────
 
-  getTriggerLog(request: { sessionId: string }): unknown {
+  getTriggerLog(request: { sessionId: string }): TavernMethodResults['getTriggerLog'] {
     return { log: this.state.triggerLogs.get(request.sessionId) ?? null }
   }
 
-  async previewPrompt(request: { sessionId: string }): Promise<unknown> {
+  async previewPrompt(request: { sessionId: string }): Promise<TavernMethodResults['previewPrompt']> {
     const agent = this.ctx.agents.get(request.sessionId as Session['id'])
     if (!agent) throw new FloorError('session-not-live', `会话 ${request.sessionId} 不在线，无法预览（请先打开该会话）`)
     const llm = this.ctx.get('llm') as LlmRuntime | undefined
@@ -593,7 +596,7 @@ export class TavernService extends TypertRemoteService {
    * 上下文占用（宿主 rc.2 起 sessionProjections.stateOf 只读 token-meter 投影）。
    * 会话不在线、宿主未挂投影或尚无数据时 usage=null，调用方按未知处理。
    */
-  getContextUsage(request: { sessionId: string }): unknown {
+  getContextUsage(request: { sessionId: string }): TavernMethodResults['getContextUsage'] {
     const session = this.ctx.sessions.get(request.sessionId as Session['id'])
     if (!session) return { usage: null }
     const projections = this.ctx.get('sessionProjections') as
@@ -624,11 +627,11 @@ export class TavernService extends TypertRemoteService {
   }
 
   /** Tavern 数据目录（$DSH_HOME/dsh-tavern），设置面板展示用。 */
-  getDataInfo(_request: Record<string, never>): unknown {
+  getDataInfo(_request: Record<string, never>): TavernMethodResults['getDataInfo'] {
     return { dataHome: this.state.paths.root }
   }
 
-  async getAvatar(request: { cardId: string }): Promise<unknown> {
+  async getAvatar(request: { cardId: string }): Promise<TavernMethodResults['getAvatar']> {
     const charWs = await this.state.loadCharacter(request.cardId)
     if (!charWs) return { dataUrl: null }
     const ws = await this.state.workspace(request.cardId)

@@ -362,4 +362,76 @@ describe('Wal', () => {
     expect(new Uint8Array(await readFile(join(workspace, 'avatar.png')))).toEqual(new Uint8Array([0x89, 0x50, 0xff]))
     expect(await exists(join(workspace, 'new.bin'))).toBe(false)
   })
+
+  it('delete 二进制文件的快照与 writeBytes 对称：回滚恢复原字节而非有损转码', async () => {
+    // 非 UTF-8 字节序列（0x89 0x50 0xff 单独出现不是合法 UTF-8）：按文本记快照会被替换成 U+FFFD
+    const original = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0xff, 0xfe, 0x00, 0x01])
+    await new WorkspaceFs(workspace, null).writeBytes('avatar.png', original)
+    const wfs = new WorkspaceFs(workspace, wal)
+    await wfs.beginFloor('f1')
+    await wfs.delete('avatar.png')
+    await wfs.commitFloor()
+    expect(await exists(join(workspace, 'avatar.png'))).toBe(false)
+
+    await wal.rollbackFloor('f1', workspace)
+    expect(new Uint8Array(await readFile(join(workspace, 'avatar.png')))).toEqual(original)
+  })
+
+  it('delete 文本文件仍按原文记快照（回滚恢复内容）', async () => {
+    const wfs = new WorkspaceFs(workspace, wal)
+    await wfs.writeText('journal.md', '第一版正文\n第二行')
+    await wfs.beginFloor('f1')
+    await wfs.delete('journal.md')
+    await wfs.commitFloor()
+    const records = await readLines(join(walDir, 'f1', 'records.jsonl'))
+    expect(records[0]).toMatchObject({ path: 'journal.md', before: '第一版正文\n第二行' })
+
+    await wal.rollbackFloor('f1', workspace)
+    expect(await readFile(join(workspace, 'journal.md'), 'utf8')).toBe('第一版正文\n第二行')
+  })
+
+  it('delete 不存在的文件不记快照（无楼层时也不抛）', async () => {
+    const wfs = new WorkspaceFs(workspace, wal)
+    await wfs.beginFloor('f1')
+    await wfs.delete('missing.md')
+    await wfs.commitFloor()
+    // 没有任何 record，records.jsonl 根本不会被创建
+    expect(await exists(join(walDir, 'f1', 'records.jsonl'))).toBe(false)
+
+    const plain = new WorkspaceFs(workspace, null)
+    await expect(plain.delete('missing.md')).resolves.toBeUndefined()
+  })
+})
+
+describe('WorkspaceFs.list / listStats', () => {
+  it('list 默认递归，recursive: false 只列本层文件', async () => {
+    const fs = new WorkspaceFs(workspace, null)
+    await fs.writeText('memory/a.md', 'a')
+    await fs.writeText('memory/b.md', 'b')
+    await fs.writeText('memory/archive/old.md', 'old')
+
+    expect(await fs.list('memory')).toEqual(['a.md', 'archive/old.md', 'b.md'])
+    expect(await fs.list('memory', { recursive: false })).toEqual(['a.md', 'b.md'])
+  })
+
+  it('listStats 只列本层文件并带 mtime/size；内容变化后指纹随之变化', async () => {
+    const fs = new WorkspaceFs(workspace, null)
+    await fs.writeText('memory/a.md', 'hello')
+    await fs.writeText('memory/archive/old.md', 'old')
+
+    const before = await fs.listStats('memory')
+    expect(before.map((f) => f.name)).toEqual(['a.md'])
+    expect(before[0]!.size).toBe(5)
+    expect(before[0]!.mtimeMs).toBeGreaterThan(0)
+
+    await fs.writeText('memory/a.md', 'hello world')
+    const after = await fs.listStats('memory')
+    expect(after[0]!.size).toBe(11)
+  })
+
+  it('list / listStats 对不存在的目录返回空数组', async () => {
+    const fs = new WorkspaceFs(workspace, null)
+    expect(await fs.list('nope')).toEqual([])
+    expect(await fs.listStats('nope')).toEqual([])
+  })
 })

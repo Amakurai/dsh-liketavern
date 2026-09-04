@@ -1,133 +1,23 @@
 /**
- * client 侧共享类型：remote 方法签名（与 src/remote.ts / src/node/service.ts 对齐）、
- * 以及插件入口所需的最小 cordis Context 形状（宿主经 declaration merging 注入的
- * slots/remote/locale 服务在此以结构化类型描述，避免依赖宿主包的类型）。
+ * client 侧共享类型：remote 方法签名（结果类型一律索引 src/remote.ts 的 TavernMethodResults，
+ * 与 src/node/service.ts 的实现共用单一来源）、以及插件入口所需的最小 cordis Context 形状
+ * （宿主经 declaration merging 注入的 slots/remote/locale 服务在此以结构化类型描述，避免依赖宿主包的类型）。
  */
-import type { MemoryEntry, PromptPreset, RegexRule, WorldDelta } from '../core/types.js'
+import type { PromptPreset, RegexRule } from '../core/types.js'
+import type { Persona } from '../core/persona.js'
+import type { SessionBinding } from '../core/binding.js'
+import type { TavernMethodResults } from '../remote.js'
+
+// 契约共享形状：从唯一定义处 re-export，本文件不再保留手写副本。
+export type { CharacterSummary } from '../state/workspace.js'
+export type { Persona } from '../core/persona.js'
+export type { SessionBinding } from '../core/binding.js'
+export type { CharacterDetail, CharacterInspect, PresetSummary } from '../remote.js'
 
 export type Envelope<T> = { ok: true; value: T } | { ok: false; error: { code: string; message: string } }
 
-export interface CharacterSummary {
-  cardId: string
-  name: string
-  hasAvatar: boolean
-  hasCharacterBook?: boolean
-  characterBookName?: string | null
-  characterBookEntryCount?: number
-}
-
-/** getCharacterDetail 返回（service.ts 的扁平结构 + extensions）。 */
-export interface CharacterDetail {
-  cardId: string
-  name: string
-  description: string
-  personality: string
-  scenario: string
-  firstMes: string
-  alternateGreetings: string[]
-  mesExample: string
-  systemPrompt: string
-  postHistoryInstructions: string
-  creatorNotes: string
-  creator: string
-  characterVersion: string
-  tags: string[]
-  spec: string
-  hasCharacterBook: boolean
-  characterBookName?: string | null
-  characterBookEntryCount?: number
-  hasAvatar: boolean
-  depthPrompt?: { prompt: string; depth: number; role: 'system' | 'user' | 'assistant' } | null
-  extensions?: Record<string, unknown>
-}
-
-export interface PresetSummary {
-  id: string
-  name: string
-  regexCount: number
-}
-
-export interface Persona {
-  id: string
-  name: string
-  description: string
-  avatar: string | null
-  lorebookId?: string | null
-}
-
-export interface SessionBinding {
-  sessionId: string
-  cardId: string
-  cardName?: string
-  presetId: string | null
-  personaId: string | null
-  lorebookIds: string[]
-  characterLorebookId: string | null
-  interactiveCards: boolean | null
-  greetingIndex: number
-  authorNote?: string
-  injectJournal?: boolean
-  /** host 持久化的 fork WAL 祖先边界；客户端原样保留，不提供编辑入口。 */
-  walLineage?: Array<{ sessionId: string; throughTurn: number }>
-  createdAt: string
-}
-
-export interface CharacterInspect {
-  name: string
-  hasAvatar: boolean
-  hasCharacterBook: boolean
-  characterBookName: string | null
-  entryCount: number
-}
-
-/** 设置命名空间 dsh-tavern 的原始（schemastery 解析后）形状；maxTokens 为数字，0 = 不限。 */
-export interface TavernSettings {
-  /** 前端界面语言；默认 en，设置页可切 zh。 */
-  locale: 'auto' | 'en' | 'zh'
-  sampling: {
-    temperature: number
-    topP: number
-    maxTokens: number
-    stop: string[]
-    presencePenalty: number
-    frequencyPenalty: number
-    thinking: 'enabled' | 'disabled' | 'low' | 'high' | 'max'
-  }
-  worldInfo: {
-    scanDepth: number
-    contextPercent: number
-    tokenBudget: number
-    recursiveScan: boolean
-    maxRecursionSteps: number
-    caseSensitive: boolean
-    matchWholeWords: boolean
-    includeNames: boolean
-    overflowWarning: boolean
-    characterStrategy: 0 | 1 | 2
-    useGroupScoring: boolean
-  }
-  memory: {
-    maxEntries: number
-    maxTokens: number
-    retrievalTopK: number
-    retrievalTokenBudget: number
-    halfLifeDays: number
-    dedupScore: number
-    compressBatch: number
-    queryMessages: number
-  }
-  defaults: {
-    cardId: string
-    presetId: string
-    personaId: string
-    lorebookIds: string[]
-    characterLorebookId: string
-  }
-  interactiveCards: boolean
-  cascadeDeleteEmbeddedBook: boolean
-  cardNetworkWhitelist: string[]
-  triggerLogMax: number
-}
+/** 设置命名空间 dsh-tavern 的原始（schemastery 解析后）形状；单一来源是 host 侧 TavernConfigRaw；maxTokens 为数字，0 = 不限。 */
+export type TavernSettings = TavernMethodResults['getSettings']['settings']
 
 export const EMPTY_SESSION_DEFAULTS: TavernSettings['defaults'] = {
   cardId: '',
@@ -137,12 +27,16 @@ export const EMPTY_SESSION_DEFAULTS: TavernSettings['defaults'] = {
   characterLorebookId: '',
 }
 
+/**
+ * remote 调用镜像：请求形状按方法声明（与 remote.ts 的 req schema 对应），
+ * 结果一律索引 TavernMethodResults——service 改返回形状时这里自动跟随，消费点编译报错。
+ */
 export interface TavernRemote {
-  listCharacters(req: Record<string, never>): Promise<Envelope<{ items: CharacterSummary[] }>>
-  inspectCharacter(req: { name: string; dataBase64: string }): Promise<Envelope<CharacterInspect>>
-  importCharacter(req: { name: string; dataBase64: string; importWorldBook?: boolean }): Promise<Envelope<{ cardId: string; name: string }>>
-  deleteCharacter(req: { cardId: string }): Promise<Envelope<{ deleted: boolean; salvagedLorebook: string | null }>>
-  getCharacterDetail(req: { cardId: string }): Promise<Envelope<CharacterDetail>>
+  listCharacters(req: Record<string, never>): Promise<Envelope<TavernMethodResults['listCharacters']>>
+  inspectCharacter(req: { name: string; dataBase64: string }): Promise<Envelope<TavernMethodResults['inspectCharacter']>>
+  importCharacter(req: { name: string; dataBase64: string; importWorldBook?: boolean }): Promise<Envelope<TavernMethodResults['importCharacter']>>
+  deleteCharacter(req: { cardId: string }): Promise<Envelope<TavernMethodResults['deleteCharacter']>>
+  getCharacterDetail(req: { cardId: string }): Promise<Envelope<TavernMethodResults['getCharacterDetail']>>
   saveCharacter(req: {
     cardId: string
     name?: string
@@ -159,71 +53,54 @@ export interface TavernRemote {
     characterVersion?: string
     tags?: string[]
     depthPrompt?: { prompt: string; depth: number; role: 'system' | 'user' | 'assistant' } | null
-  }): Promise<Envelope<{ cardId: string; name: string }>>
-  createCharacter(req: { name: string }): Promise<Envelope<{ cardId: string; name: string }>>
-  exportCharacter(req: { cardId: string }): Promise<Envelope<{ json: unknown; pngBase64: string; name: string }>>
-  getAvatar(req: { cardId: string }): Promise<Envelope<{ dataUrl: string | null }>>
-  listPresets(req: Record<string, never>): Promise<Envelope<{ items: PresetSummary[] }>>
-  getPreset(req: { id: string }): Promise<Envelope<{ preset: PromptPreset }>>
-  savePreset(req: { preset: PromptPreset }): Promise<Envelope<{ id: string }>>
-  deletePreset(req: { id: string }): Promise<Envelope<{ deleted: boolean }>>
-  importPreset(req: { name: string; json: unknown }): Promise<Envelope<{ id: string; warnings: unknown[] }>>
-  listLorebooks(req: Record<string, never>): Promise<Envelope<{ items: string[] }>>
-  getLorebook(req: { name: string }): Promise<Envelope<{ json: unknown }>>
-  importLorebook(req: { name: string; json: unknown }): Promise<Envelope<{ name: string; entryCount: number }>>
-  saveLorebook(req: { name: string; json: unknown }): Promise<Envelope<{ name: string }>>
-  deleteLorebook(req: { name: string }): Promise<Envelope<{ deleted: boolean }>>
-  getCharacterLorebook(req: { cardId: string }): Promise<Envelope<{ name: string; json: unknown; entryCount: number }>>
-  saveCharacterLorebook(req: { cardId: string; json: unknown }): Promise<Envelope<{ name: string; entryCount: number }>>
-  deleteEmbeddedLorebook(req: { cardId: string }): Promise<Envelope<{ deleted: boolean }>>
-  getChatLorebook(req: { cardId: string }): Promise<Envelope<{ json: unknown }>>
-  saveChatLorebook(req: { cardId: string; json: unknown }): Promise<Envelope<{ saved: boolean }>>
-  getJournal(req: { cardId: string }): Promise<Envelope<{ text: string }>>
-  saveJournal(req: { cardId: string; text: string }): Promise<Envelope<{ saved: boolean }>>
-  listPersonas(req: Record<string, never>): Promise<Envelope<{ items: Persona[] }>>
-  savePersona(req: { persona: Persona }): Promise<Envelope<{ id: string }>>
-  deletePersona(req: { id: string }): Promise<Envelope<{ deleted: boolean }>>
-  listRegexRules(req: Record<string, never>): Promise<Envelope<{ rules: RegexRule[] }>>
-  saveRegexRules(req: { rules: RegexRule[] }): Promise<Envelope<{ count: number }>>
-  getSessionBinding(req: { sessionId: string }): Promise<
-    Envelope<{ binding: SessionBinding | null; userName: string; canSwipeGreeting?: boolean }>
-  >
-  setSessionBinding(req: { binding: SessionBinding }): Promise<Envelope<{ saved: boolean }>>
-  clearSessionBinding(req: { sessionId: string }): Promise<Envelope<{ cleared: boolean }>>
-  ensureGreeting(req: { sessionId: string }): Promise<Envelope<{ created: boolean }>>
-  getGreetingSwipe(req: { sessionId: string; messageId: string }): Promise<
-    Envelope<{ swipe: { index: number; total: number } | null; isGreeting?: boolean; started?: boolean }>
-  >
-  swipeGreeting(req: { sessionId: string; index: number }): Promise<Envelope<{ childSessionId: string; index: number; title?: string }>>
-  renderOutputText(req: { sessionId: string; text: string }): Promise<
-    Envelope<{
-      text: string
-      html: string | null
-      htmls?: string[]
-      interactiveCards: boolean
-      whitelist: string[]
-      greetings: string[]
-      greetingIndex: number
-      canSwipeGreeting?: boolean
-    }>
-  >
-  regenerate(req: { sessionId: string; messageId?: string; turn?: number }): Promise<Envelope<{ childSessionId: string; title?: string }>>
-  rollbackToFloor(req: { sessionId: string; messageId?: string; turn?: number }): Promise<Envelope<{ childSessionId: string; title?: string }>>
-  getFloorUserMessage(req: { sessionId: string; messageId: string }): Promise<Envelope<{ turn: number; text: string }>>
-  editUserMessage(req: { sessionId: string; messageId: string; text: string }): Promise<Envelope<{ childSessionId: string; title?: string }>>
-  getFloorAssistantMessage(req: { sessionId: string; messageId: string }): Promise<Envelope<{ turn: number; text: string }>>
-  editAssistantMessage(req: { sessionId: string; messageId: string; text: string }): Promise<Envelope<{ childSessionId: string; title?: string }>>
-  continueFloor(req: { sessionId: string; messageId: string }): Promise<Envelope<{ continued: boolean }>>
-  getFloorSiblings(req: { sessionId: string; messageId?: string; turn?: number }): Promise<
-    Envelope<{ swipe: { turn: number; index: number; total: number; siblings: string[] } | null }>
-  >
-  impersonate(req: { sessionId: string }): Promise<Envelope<{ text: string }>>
-  getMemories(req: { cardId: string }): Promise<Envelope<{ items: MemoryEntry[] }>>
-  saveMemory(req: { cardId: string; id?: string; body: string; tags?: string[]; keys?: string[] }): Promise<Envelope<{ id: string }>>
-  deleteMemory(req: { cardId: string; id: string }): Promise<Envelope<{ deleted: boolean }>>
-  compressMemories(req: { cardId: string }): Promise<Envelope<{ merged: number }>>
-  getWorldDeltas(req: { cardId: string }): Promise<Envelope<{ items: WorldDelta[] }>>
-  revokeWorldDelta(req: { cardId: string; id: string }): Promise<Envelope<{ revoked: boolean }>>
+  }): Promise<Envelope<TavernMethodResults['saveCharacter']>>
+  createCharacter(req: { name: string }): Promise<Envelope<TavernMethodResults['createCharacter']>>
+  exportCharacter(req: { cardId: string }): Promise<Envelope<TavernMethodResults['exportCharacter']>>
+  getAvatar(req: { cardId: string }): Promise<Envelope<TavernMethodResults['getAvatar']>>
+  listPresets(req: Record<string, never>): Promise<Envelope<TavernMethodResults['listPresets']>>
+  getPreset(req: { id: string }): Promise<Envelope<TavernMethodResults['getPreset']>>
+  savePreset(req: { preset: PromptPreset }): Promise<Envelope<TavernMethodResults['savePreset']>>
+  deletePreset(req: { id: string }): Promise<Envelope<TavernMethodResults['deletePreset']>>
+  importPreset(req: { name: string; json: unknown }): Promise<Envelope<TavernMethodResults['importPreset']>>
+  listLorebooks(req: Record<string, never>): Promise<Envelope<TavernMethodResults['listLorebooks']>>
+  getLorebook(req: { name: string }): Promise<Envelope<TavernMethodResults['getLorebook']>>
+  importLorebook(req: { name: string; json: unknown }): Promise<Envelope<TavernMethodResults['importLorebook']>>
+  saveLorebook(req: { name: string; json: unknown }): Promise<Envelope<TavernMethodResults['saveLorebook']>>
+  deleteLorebook(req: { name: string }): Promise<Envelope<TavernMethodResults['deleteLorebook']>>
+  getCharacterLorebook(req: { cardId: string }): Promise<Envelope<TavernMethodResults['getCharacterLorebook']>>
+  saveCharacterLorebook(req: { cardId: string; json: unknown }): Promise<Envelope<TavernMethodResults['saveCharacterLorebook']>>
+  deleteEmbeddedLorebook(req: { cardId: string }): Promise<Envelope<TavernMethodResults['deleteEmbeddedLorebook']>>
+  getChatLorebook(req: { cardId: string }): Promise<Envelope<TavernMethodResults['getChatLorebook']>>
+  saveChatLorebook(req: { cardId: string; json: unknown }): Promise<Envelope<TavernMethodResults['saveChatLorebook']>>
+  getJournal(req: { cardId: string }): Promise<Envelope<TavernMethodResults['getJournal']>>
+  saveJournal(req: { cardId: string; text: string }): Promise<Envelope<TavernMethodResults['saveJournal']>>
+  listPersonas(req: Record<string, never>): Promise<Envelope<TavernMethodResults['listPersonas']>>
+  savePersona(req: { persona: Persona }): Promise<Envelope<TavernMethodResults['savePersona']>>
+  deletePersona(req: { id: string }): Promise<Envelope<TavernMethodResults['deletePersona']>>
+  listRegexRules(req: Record<string, never>): Promise<Envelope<TavernMethodResults['listRegexRules']>>
+  saveRegexRules(req: { rules: RegexRule[] }): Promise<Envelope<TavernMethodResults['saveRegexRules']>>
+  getSessionBinding(req: { sessionId: string }): Promise<Envelope<TavernMethodResults['getSessionBinding']>>
+  setSessionBinding(req: { binding: SessionBinding }): Promise<Envelope<TavernMethodResults['setSessionBinding']>>
+  clearSessionBinding(req: { sessionId: string }): Promise<Envelope<TavernMethodResults['clearSessionBinding']>>
+  ensureGreeting(req: { sessionId: string }): Promise<Envelope<TavernMethodResults['ensureGreeting']>>
+  getGreetingSwipe(req: { sessionId: string; messageId: string }): Promise<Envelope<TavernMethodResults['getGreetingSwipe']>>
+  swipeGreeting(req: { sessionId: string; index: number }): Promise<Envelope<TavernMethodResults['swipeGreeting']>>
+  renderOutputText(req: { sessionId: string; text: string }): Promise<Envelope<TavernMethodResults['renderOutputText']>>
+  regenerate(req: { sessionId: string; messageId?: string; turn?: number }): Promise<Envelope<TavernMethodResults['regenerate']>>
+  rollbackToFloor(req: { sessionId: string; messageId?: string; turn?: number }): Promise<Envelope<TavernMethodResults['rollbackToFloor']>>
+  getFloorUserMessage(req: { sessionId: string; messageId: string }): Promise<Envelope<TavernMethodResults['getFloorUserMessage']>>
+  editUserMessage(req: { sessionId: string; messageId: string; text: string }): Promise<Envelope<TavernMethodResults['editUserMessage']>>
+  getFloorAssistantMessage(req: { sessionId: string; messageId: string }): Promise<Envelope<TavernMethodResults['getFloorAssistantMessage']>>
+  editAssistantMessage(req: { sessionId: string; messageId: string; text: string }): Promise<Envelope<TavernMethodResults['editAssistantMessage']>>
+  continueFloor(req: { sessionId: string; messageId: string }): Promise<Envelope<TavernMethodResults['continueFloor']>>
+  getFloorSiblings(req: { sessionId: string; messageId?: string; turn?: number }): Promise<Envelope<TavernMethodResults['getFloorSiblings']>>
+  impersonate(req: { sessionId: string }): Promise<Envelope<TavernMethodResults['impersonate']>>
+  getMemories(req: { cardId: string }): Promise<Envelope<TavernMethodResults['getMemories']>>
+  saveMemory(req: { cardId: string; id?: string; body: string; tags?: string[]; keys?: string[] }): Promise<Envelope<TavernMethodResults['saveMemory']>>
+  deleteMemory(req: { cardId: string; id: string }): Promise<Envelope<TavernMethodResults['deleteMemory']>>
+  compressMemories(req: { cardId: string }): Promise<Envelope<TavernMethodResults['compressMemories']>>
+  getWorldDeltas(req: { cardId: string }): Promise<Envelope<TavernMethodResults['getWorldDeltas']>>
+  revokeWorldDelta(req: { cardId: string; id: string }): Promise<Envelope<TavernMethodResults['revokeWorldDelta']>>
   addWorldDelta(req: {
     cardId: string
     type: 'add' | 'update' | 'invalidate'
@@ -231,37 +108,15 @@ export interface TavernRemote {
     ref?: string | null
     keys?: string[]
     order?: number
-  }): Promise<Envelope<{ id: string }>>
-  exportMergedLorebook(req: { cardId: string }): Promise<Envelope<{ json: unknown }>>
-  getTriggerLog(req: { sessionId: string }): Promise<Envelope<{ log: { at: string; lines: string[] } | null }>>
+  }): Promise<Envelope<TavernMethodResults['addWorldDelta']>>
+  exportMergedLorebook(req: { cardId: string }): Promise<Envelope<TavernMethodResults['exportMergedLorebook']>>
+  getTriggerLog(req: { sessionId: string }): Promise<Envelope<TavernMethodResults['getTriggerLog']>>
   /** 上下文占用（token-meter 投影）；宿主未挂投影/会话不在线时 usage=null。 */
-  getContextUsage(req: { sessionId: string }): Promise<
-    Envelope<{
-      usage: {
-        surfaceTokens: number
-        pressureTokens: number | null
-        contextWindow: number | null
-        percent: number | null
-        systemTokens: number | null
-        toolsTokens: number | null
-        messageTokens: number | null
-      } | null
-    }>
-  >
-  getDataInfo(req: Record<string, never>): Promise<Envelope<{ dataHome: string }>>
-  previewPrompt(req: { sessionId: string }): Promise<
-    Envelope<{
-      standing: string
-      turnContext: string
-      system: string
-      messages: unknown[]
-      logLines: string[]
-      worldInfoBudget: { limit: number; used: number; overflowed: boolean }
-      assembleBudget: { tokensBefore: number; tokensAfter: number; trimmedSections: string[] }
-    }>
-  >
-  getSettings(req: Record<string, never>): Promise<Envelope<{ settings: TavernSettings }>>
-  updateSettings(req: { patch: Record<string, unknown> }): Promise<Envelope<{ settings: TavernSettings }>>
+  getContextUsage(req: { sessionId: string }): Promise<Envelope<TavernMethodResults['getContextUsage']>>
+  getDataInfo(req: Record<string, never>): Promise<Envelope<TavernMethodResults['getDataInfo']>>
+  previewPrompt(req: { sessionId: string }): Promise<Envelope<TavernMethodResults['previewPrompt']>>
+  getSettings(req: Record<string, never>): Promise<Envelope<TavernMethodResults['getSettings']>>
+  updateSettings(req: { patch: Record<string, unknown> }): Promise<Envelope<TavernMethodResults['updateSettings']>>
 }
 
 export interface SlotsLike {

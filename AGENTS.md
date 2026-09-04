@@ -26,7 +26,7 @@ dsh-liketavern 是 DeepSeek Harness（dsh）插件，把 `dsh web` 做成 SillyT
   - **host**（`src/index.ts`）：设置命名空间 `dsh-tavern`、数据目录初始化、agent 预设安装、`TavernService`、typert remote 注册、听 `session/event` 维护楼层 WAL 与每 turn/step 缓存。
   - **agent**（`src/agent.ts`）：`system-prompt/assemble` 写稳定段 `tavern:standing` 与 runtime context `tavern:turn`；`agent/pre-step` 记 step；`agent/request` 合采样并把 thinking 映射成 `reasoningEffort`；注册 7 个模型工具；idle 时 `runMaintenance` 压缩记忆。
   - **client**（`src/client/`）：浏览器 React UI，五块 slot（设置 `settings.section`、助手操作条、会话头芯片、新会话英雄区 `conversation.input.dock`、助手排版 `conversation.chat.node`）。remote 经 `ctx.remote.$mount(TYPERT_REMOTE)` 挂，调用用 `ctx.get('remote.tavern')`。图片走 owner props 的 `renderMessageImages({ images, align })`（0.1.2 起 `loadImage` 不再传给 keyed 渲染器）；`fileMentions` 是 owner 函数，用 turn-tail owner 解析后再传给 MarkdownText；0.1.2 起 MarkdownText 的 `labels` 为必填，经 `useMarkdownLabels()` 取本插件字典。
-- **remote 契约**（`src/remote.ts`）：方法返回裸业务值、失败抛错，`{ ok, value|error }` 信封由 gateway 生成。加删改一个方法必须三处同步：`src/remote.ts` 的 `METHODS`、`src/node/service.ts` 实现、`src/client/types.ts` 的 `TavernRemote` 镜像——漏改就编译不过，这是设计好的保险。
+- **remote 契约**（`src/remote.ts`）：方法返回裸业务值、失败抛错，`{ ok, value|error }` 信封由 gateway 生成。结果类型的单一来源是同文件的 `TavernMethodResults`（方法名 → 裸业务结果类型）：`src/node/service.ts` 每个方法的返回注解与 `src/client/types.ts` 的 `TavernRemote` 镜像都索引这张表，改任何一面的返回形状，另一面立即编译报错。加删改一个方法必须三处同步：`src/remote.ts` 的 `METHODS` + `TavernMethodResults`、`src/node/service.ts` 实现、`src/client/types.ts` 的 `TavernRemote` 镜像——漏改就编译不过，这是设计好的保险。
 - 运行时依赖只有 `zod`；`@deepseek-ai/*` 走 peerDependency 由宿主提供；开发依赖用公开 npm 精确版本。禁止 `file:`、本机绝对路径、junction/符号链接依赖。bundle 里平台模块一律 external。
 - 设置用 schemastery（`src/node/config.ts`），命名空间 `dsh-tavern`，`applies: 'live'`。宿主通用设置页也能看到/改这些键（宿主行为，rc.2 起、0.1.2 仍无命名空间白名单），插件面板仍是主入口，不要为此改面板。
 
@@ -139,7 +139,7 @@ src/
 
 ## 常用改动 checklist
 
-- **加/改 remote 方法**：三处同步——`src/remote.ts` 的 `METHODS`、`src/node/service.ts` 实现、`src/client/types.ts` 契约镜像。返回裸业务值、失败抛错，信封由 gateway 生成。
+- **加/改 remote 方法**：三处同步——`src/remote.ts` 的 `METHODS`（schema/简介）与 `TavernMethodResults`（裸业务结果类型，契约单一来源）、`src/node/service.ts` 实现（返回注解写 `Promise<TavernMethodResults['<method>']>`）、`src/client/types.ts` 契约镜像（`TavernRemote` 索引同一张表，不手写结果形状）。结果形状以 service 实现为准；改形状后两面编译报错即同步点。返回裸业务值、失败抛错，信封由 gateway 生成。
 - **加模型工具**：在 `src/node/tools.ts` 注册，描述里写清「默认直接扮演，只在缺设定/遗忘/落盘时调」的分寸；路径必须过 `WorkspaceFs` + `resolveReadableAssetPath`；写成功 `agent.inject` 同轮确认；同步更新本文「模型工具」表。
 - **加设置项**：`src/node/config.ts`（schemastery，`applies: 'live'`）+ `src/client/panel/settings.tsx`（六个子组之一）+ slot label 进字典。默认值有跨层引用时放 `src/core/types.ts`。
 - **加/改 UI**：样式只进 `src/client/styles.ts`；交互组件走 `dsh-client-ui-primitives`；文案进 `client/locales/` 字典。

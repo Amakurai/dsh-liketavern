@@ -227,3 +227,95 @@ describe('MemoryStore', () => {
     })
   })
 })
+
+describe('MemoryStore 解析/索引缓存', () => {
+  /** 统计一次调用实际读了多少次记忆正文（缓存命中应为 0）。 */
+  function countReads(): { reads: () => number; restore: () => void } {
+    const original = fs.readText.bind(fs)
+    let reads = 0
+    const spy = vi.spyOn(fs, 'readText').mockImplementation(async (path: string) => {
+      if (path.startsWith('memory/') && !path.startsWith('memory/archive/')) reads++
+      return original(path)
+    })
+    return { reads: () => reads, restore: () => spy.mockRestore() }
+  }
+
+  it('内容未变时 list 复用缓存，不再读盘', async () => {
+    await putMemory('m-1', '2026-08-01T00:00:00.000Z', '艾琳受伤')
+    await putMemory('m-2', '2026-08-02T00:00:00.000Z', '桥头塌了')
+    await store.list() // 预热
+    const probe = countReads()
+    const again = await store.list()
+    probe.restore()
+    expect(again).toHaveLength(2)
+    expect(probe.reads()).toBe(0)
+  })
+
+  it('search 复用同一份索引，不重复读盘与重建', async () => {
+    await putMemory('m-1', '2026-08-01T00:00:00.000Z', '艾琳在桥头受了轻伤')
+    await store.search('艾琳') // 预热
+    const probe = countReads()
+    const hits = await store.search('桥头')
+    probe.restore()
+    expect(hits.map((h) => h.entry.id)).toEqual(['m-1'])
+    expect(probe.reads()).toBe(0)
+  })
+
+  it('write / update / delete / archive 之后缓存立即失效', async () => {
+    const first = await store.write({ body: '艾琳受伤' })
+    expect((await store.list()).map((e) => e.id)).toEqual([first.id])
+
+    const second = await store.write({ body: '桥头塌了' })
+    expect((await store.list()).map((e) => e.id).sort()).toEqual([first.id, second.id].sort())
+
+    await store.update(first.id, { body: '艾琳痊愈了' })
+    expect((await store.get(first.id))?.body).toBe('艾琳痊愈了')
+    expect((await store.list()).find((e) => e.id === first.id)?.body).toBe('艾琳痊愈了')
+    // 索引也必须跟着重建，否则检索仍命中旧正文
+    expect((await store.search('痊愈')).map((h) => h.entry.id)).toEqual([first.id])
+
+    await store.archive([second.id])
+    expect((await store.list()).map((e) => e.id)).toEqual([first.id])
+
+    await store.delete(first.id)
+    expect(await store.list()).toEqual([])
+  })
+
+  it('绕过本类的落盘（模拟 WAL 回滚）经 invalidate 后可见', async () => {
+    const entry = await store.write({ body: '艾琳受伤' })
+    await store.list()
+    // 直接覆盖文件：正文与 frontmatter 长度都不变，mtime 指纹可能兜不住
+    await fs.writeText(
+      `memory/${entry.id}.md`,
+      serializeMemory({ created: entry.created, updated: entry.updated, sourceRange: '', tags: [], keys: [] }, '艾琳无恙'),
+    )
+    store.invalidate()
+    expect((await store.list())[0]?.body).toBe('艾琳无恙')
+    expect((await store.search('无恙')).map((h) => h.entry.id)).toEqual([entry.id])
+  })
+
+  it('绕过本类的落盘（不同长度）无需 invalidate，靠指纹自愈', async () => {
+    const entry = await store.write({ body: '艾琳受伤' })
+    await store.list() // 填缓存
+    // 直接覆盖文件且长度不同：mtime/size 指纹必然变化，不调 invalidate 也应读到新内容
+    await fs.writeText(
+      `memory/${entry.id}.md`,
+      serializeMemory({ created: entry.created, updated: entry.updated, sourceRange: '', tags: [], keys: [] }, '艾琳其实已经痊愈了'),
+    )
+    expect((await store.list())[0]?.body).toBe('艾琳其实已经痊愈了')
+    expect((await store.search('痊愈')).map((h) => h.entry.id)).toEqual([entry.id])
+  })
+
+  it('archive/ 体量不影响活跃条目的列举结果', async () => {
+    const entry = await store.write({ body: '艾琳受伤' })
+    for (let i = 0; i < 5; i++) {
+      await fs.writeText(
+        `memory/archive/old-${i}.md`,
+        serializeMemory({ created: '2026-01-01T00:00:00.000Z', updated: '2026-01-01T00:00:00.000Z', sourceRange: '', tags: [], keys: [] }, `旧记忆 ${i}`),
+      )
+    }
+    store.invalidate()
+    expect((await store.list()).map((e) => e.id)).toEqual([entry.id])
+    expect((await store.stats()).count).toBe(1)
+  })
+})

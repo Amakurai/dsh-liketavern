@@ -39,8 +39,25 @@ export declare function parseMemory(file: string, text: string): MemoryEntry;
 export declare class MemoryStore {
     private readonly fs;
     private readonly similarTopK;
+    /**
+     * 解析结果与 BM25 索引缓存，按目录指纹（文件名 + mtime + size）失效。
+     *
+     * 为什么不用进程内修订号（对比 TavernState 的 presetCache / loreCache）：记忆文件除了本类
+     * 还会被 WAL 回滚直接写回磁盘（楼层回退撤销本轮 memory_write），修订号捕获不到那条路径，
+     * 会让检索一直用回滚前的索引。指纹是 N 次 stat（不读数据），比 N 次全文读 + 分词便宜一个量级。
+     *
+     * 缓存的收益点：一次 memory_write 要连着跑 findSimilar → stats → write，
+     * 一个 turn 里 search 也可能被工具重复调用；没有缓存的话每次都全量重读 + 重建索引。
+     */
+    private cache;
     constructor(fs: WorkspaceFs, options?: MemoryStoreOptions);
     private pathOf;
+    /**
+     * 作废缓存。本类的写路径会自动调用；**楼层 WAL 回滚后调用方必须手动调一次**——
+     * 回滚直接把旧内容写回磁盘，绕过本类，且「撤销一次 update」可能既不改文件大小
+     * 也落在同一个 mtime 刻度内（`updated` 是定长 ISO 串），指纹兜不住这种情况。
+     */
+    invalidate(): void;
     /** 解析 memory/*.md（不含 archive/），坏文件容错跳过；按 created 升序（并列按 id 字典序）。 */
     list(): Promise<MemoryEntry[]>;
     /** 按 id 取单条（不含 archive/）；不存在或坏文件返回 null。 */
@@ -62,7 +79,11 @@ export declare class MemoryStore {
     delete(id: string): Promise<boolean>;
     /** 移入 memory/archive/（读原文件 → 写 archive 路径 → 删原路径，全经 fs）；返回移动条数。 */
     archive(ids: string[]): Promise<number>;
-    /** 以当前活跃记忆构建临时 BM25 索引（记忆规模小，每次重建即可）。 */
+    /**
+     * 以当前活跃记忆构建 BM25 索引。
+     * 与 list 共用指纹缓存：记忆没变过就复用上次的索引，不重读也不重分词
+     * （分词是 CJK bigram，重建成本与库体量成正比，一个 turn 里可能被调多次）。
+     */
     private buildIndex;
     /**
      * 写入前去重检索：query = text + keys，BM25（keys 加权内建），不做时间衰减。

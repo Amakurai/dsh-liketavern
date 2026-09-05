@@ -16,7 +16,7 @@ export interface FloorActionsProps {
     messageId?: string;
     useSessions?: UseSessions;
 }
-export declare function TavernFloorActions(props: FloorActionsProps): any;
+export declare function TavernFloorActions(props: FloorActionsProps): import("react").JSX.Element | null;
 /**
  * 被中断（已停止）楼层的最小操作组。
  * 宿主的 assistant-actions slot 只挂 finalized 消息（"Only finalized messages reach this slot"），
@@ -31,4 +31,4 @@ export declare function TavernInterruptedFloorActions(props: {
         refresh?: () => Promise<void>;
     };
     turn: number;
-}): any;
+}): import("react").JSX.Element;

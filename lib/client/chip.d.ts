@@ -10,4 +10,4 @@ export declare function TavernHeaderChip(props: {
         refresh?: () => Promise<void>;
     };
     useSessions?: UseSessions;
-}): any;
+}): import("react").JSX.Element | null;

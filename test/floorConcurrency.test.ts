@@ -90,16 +90,19 @@ function makeBinding(overrides: Partial<SessionBinding> = {}): SessionBinding {
 
 /** 与 host（index.ts onTurnStart）同形的开层动作：wal.beginFloor + openFloors 记 entry。 */
 async function openFloor(sessionId: string, cardId: string, turn: number): Promise<string> {
-  const ws = await state.workspace(cardId)
+  const binding = await state.loadBinding(sessionId)
+  const storyId = binding?.cardId === cardId ? binding.storyId : undefined
+  const ws = await state.storyWorkspace(cardId, storyId)
   const floor = `${sessionId}#t${turn}`
   await ws.wal.beginFloor(floor)
-  state.openFloors.set(sessionId, { cardId, floor })
+  state.openFloors.set(sessionId, { cardId, storyId, floor })
   return floor
 }
 
 /** WAL 目录名与 sanitizeFloor 同形（# → _）。 */
 function walDirOf(cardId: string, floor: string): string {
-  return join(paths.characters, cardId, 'state', 'wal', floor.replace(/[^A-Za-z0-9_.-]/g, '_'))
+  const storyId = state.openFloors.get(floor.split('#t')[0]!)?.storyId
+  return join(paths.characters, cardId, ...(storyId ? ['stories', storyId] : []), 'state', 'wal', floor.replace(/[^A-Za-z0-9_.-]/g, '_'))
 }
 
 async function recordPaths(cardId: string, floor: string): Promise<string[]> {
@@ -219,7 +222,8 @@ describe('tavern_asset_list 遍历跳过只增不查目录', () => {
   it('files 不含 state/wal 与 memory/archive，其余可读白名单文件仍在', async () => {
     const { cardId } = await importCard(paths.characters, makeCard())
     await saveBinding(paths, makeBinding({ sessionId: 'sess-1', cardId, cardName: '测试角色' }))
-    const ws = await state.workspace(cardId)
+    const binding = await state.loadBinding('sess-1')
+    const ws = await state.storyWorkspace(cardId, binding!.storyId)
     // 只增不查的目录：WAL 楼层（含回滚残留）与记忆归档
     const floor = await openFloor('sess-1', cardId, 1)
     await ws.fs.withFloor(floor).writeText('journal.md', '记进楼层的改写')

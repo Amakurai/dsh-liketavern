@@ -9,7 +9,7 @@ export declare const zh: {
     readonly 'actions.regenerate': "重新生成这一层";
     readonly 'actions.continue': "续写这一层（接着被截断的回复写）";
     readonly 'actions.editUser': "编辑这一层的用户消息";
-    readonly 'actions.editAi': "编辑这一层的回复（不重跑）";
+    readonly 'actions.editAi': "编辑回复并撤销该层旧事实（不重跑）";
     readonly 'actions.impersonate': "AI 代答用户（生成我的台词，复制到剪贴板）";
     readonly 'actions.impersonateCopied': "用户台词已生成并复制到剪贴板，粘贴到输入框后发送";
     readonly 'actions.impersonateTitle': "AI 代答的用户台词";

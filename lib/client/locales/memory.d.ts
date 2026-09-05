@@ -1,5 +1,8 @@
 /** 记忆与世界状态面板（panel/memory.tsx）界面文案。zh 为键全集源；en 必须同键齐全（test/i18n.test.ts 校验）。 */
 export declare const zh: {
+    readonly 'memory.story': "剧情状态";
+    readonly 'memory.storyDesc': "各会话和分支独立保存记忆、变化层与笔记。初始状态只影响以后新建的会话。";
+    readonly 'memory.initialState': "初始状态（新会话模板）";
     readonly 'memory.desc': "按角色查看和编辑长期记忆、世界状态变化层、角色笔记 journal.md。";
     readonly 'memory.character': "角色";
     readonly 'memory.characterDesc': "选择要查看的角色卡工作区。";

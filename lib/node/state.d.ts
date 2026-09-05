@@ -2,6 +2,7 @@ import type { LlmResolvedModelInfo, LlmRuntime } from '@deepseek-ai/dsh-llm';
 import { type MemoryEntry, type PromptPreset, type RegexRule, type WIEngineResult, type WITimerState, type WorldDelta, type WorldInfoEntry } from '../core/types.js';
 import { applyCharacterPatch } from '../state/card.js';
 import { MemoryStore } from '../state/memory.js';
+import type { PipelineResult } from './pipeline.js';
 import { Wal } from '../state/wal.js';
 import { WorldDeltaStore } from '../state/worlddelta.js';
 import { type CharacterWorkspace } from '../state/workspace.js';
@@ -27,6 +28,16 @@ export declare class TavernState {
         lines: string[];
     }>;
     /** 会话当前 turn 号（session/event 的 turn/start 维护；WI/记忆检索按 turn 缓存）。 */
+    readonly requestDiagnostics: Map<string, {
+        text: string;
+        truncated: boolean;
+    }>;
+    readonly turnPlans: Map<string, {
+        turn: number;
+        cardId: string;
+        storyId?: string;
+        result: PipelineResult;
+    }>;
     readonly currentTurns: Map<string, number>;
     /** 当前 turn 内的 step（pre-step / step/start 维护；turn 开始时为 1）。 */
     readonly currentSteps: Map<string, number>;
@@ -45,6 +56,7 @@ export declare class TavernState {
      */
     readonly openFloors: Map<string, {
         cardId: string;
+        storyId?: string;
         floor: string;
     }>;
     /**
@@ -106,6 +118,12 @@ export declare class TavernState {
     /** 等待调用时已经排入该会话的副作用完成。 */
     waitForSessionTasks(sessionId: string): Promise<void>;
     workspace(cardId: string): Promise<WorkspaceHandle>;
+    /** 资产初始状态与独立剧情状态共用文件面；storyId 缺省仅供初始状态面板及旧数据迁移。 */
+    storyWorkspace(cardId: string, storyId?: string): Promise<WorkspaceHandle>;
+    discardUnboundStory(cardId: string, storyId: string, sessionId: string): Promise<void>;
+    listStories(cardId: string): Promise<import("../state/story.js").StorySummary[]>;
+    /** 准备子剧情，在副本内撤销未继承楼层；准备失败不改变源剧情，也不发布半成品。 */
+    forkStory(binding: SessionBinding, sessionId: string, prepare: (fs: WorkspaceFs) => Promise<void>): Promise<string>;
     listCharacters(): Promise<import("../state/workspace.js").CharacterSummary[]>;
     loadCharacter(cardId: string): Promise<CharacterWorkspace | null>;
     /** 删除角色卡工作区、清掉指向它的会话绑定，并逐出缓存句柄。cascadeDeleteEmbeddedBook=false 时先把内嵌书抢救到世界书库。 */
@@ -153,10 +171,10 @@ export declare class TavernState {
         pngBase64: string;
         name: string;
     }>;
-    getJournal(cardId: string): Promise<string>;
-    saveJournal(cardId: string, text: string): Promise<void>;
-    getChatLorebook(cardId: string): Promise<unknown>;
-    saveChatLorebook(cardId: string, json: unknown): Promise<void>;
+    getJournal(cardId: string, storyId?: string): Promise<string>;
+    saveJournal(cardId: string, text: string, storyId?: string): Promise<void>;
+    getChatLorebook(cardId: string, storyId?: string): Promise<unknown>;
+    saveChatLorebook(cardId: string, json: unknown, storyId?: string): Promise<void>;
     listLorebooks(): Promise<string[]>;
     /** 读取世界书原始 JSON（供设置面板编辑）；不存在或损坏返回 null。 */
     loadLorebookJson(name: string): Promise<unknown | null>;
@@ -201,6 +219,7 @@ export declare class TavernState {
      * 回收失败则删除绑定文件并返回 null，避免 UI 把文件夹 ID 当成角色名。
      */
     loadBinding(sessionId: string): Promise<SessionBinding | null>;
+    private loadBindingNow;
     saveBinding(binding: SessionBinding): Promise<void>;
     /**
      * 绑定不变时复用第一次 standing，避免组装抖动打穿 KV。钉位按会话 × 生成场景（standingPinKey）。
@@ -236,8 +255,8 @@ export declare class TavernState {
     resolveModelInfoCached(llm: LlmRuntime, provider: string, model: string, signal?: AbortSignal): Promise<LlmResolvedModelInfo>;
     /** 清掉会话绑定文件；空白新对话复用旧会话时用来去掉上次留下的角色卡。 */
     clearBinding(sessionId: string): Promise<void>;
-    loadTimers(cardId: string, sessionId: string): Promise<WITimerState>;
-    saveTimers(cardId: string, sessionId: string, state: WITimerState, floor?: string | null): Promise<void>;
+    loadTimers(cardId: string, sessionId: string, storyId?: string): Promise<WITimerState>;
+    saveTimers(cardId: string, sessionId: string, state: WITimerState, floor?: string | null, storyId?: string): Promise<void>;
     recordTriggerLog(sessionId: string, lines: string[]): void;
     /**
      * 库资产（世界书 / 预设 / 人设）显示名 → 磁盘文件 id。
@@ -261,7 +280,7 @@ export declare class TavernState {
      * memory/deltas 建在这个无楼层文件面上。供 service 面板写路径使用；
      * turn 流程内的写路径仍走 workspace(cardId) + withFloor(openFloors 的 entry.floor)。
      */
-    plainWorkspace(cardId: string): Promise<{
+    plainWorkspace(cardId: string, storyId?: string): Promise<{
         fs: WorkspaceFs;
         memory: MemoryStore;
         deltas: WorldDeltaStore;

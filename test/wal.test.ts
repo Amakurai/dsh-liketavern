@@ -238,7 +238,7 @@ describe('Wal', () => {
     expect(await exists(join(workspace, 'x.md'))).toBe(false)
   })
 
-  it('records.jsonl 单行损坏跳过：不阻断本楼层其余记录与后续楼层的回滚', async () => {
+  it('整批 WAL 提前校验：任一行损坏均拒绝，所有正文保持不变', async () => {
     await writeFile(join(workspace, 'a.md'), 'v1')
     await wal.beginFloor('f1')
     await wal.record('f1', 'a.md', 'v1')
@@ -254,12 +254,19 @@ describe('Wal', () => {
     const recordsPath = join(walDir, 'f1', 'records.jsonl')
     await writeFile(recordsPath, (await readFile(recordsPath, 'utf8')) + '{"seq":2,"path":"ghost.md",\n', 'utf8')
 
-    // 坏行整体抛错会让 rollbackAfter 中断在 f2，f1 永不回滚，工作区停在半回滚状态
-    const result = await wal.rollbackAfter(['f1', 'f2'], workspace)
-    expect(result.skipped).toEqual([])
-    expect(result.restored).toEqual(['b.md', 'a.md']) // 逆序：f2 → f1（坏行跳过，好记录照放）
-    expect(await readFile(join(workspace, 'a.md'), 'utf8')).toBe('v1')
-    expect(await exists(join(workspace, 'b.md'))).toBe(false)
+    await expect(wal.rollbackAfter(['f1', 'f2'], workspace)).rejects.toThrow('WAL 记录损坏')
+    expect(await readFile(join(workspace, 'a.md'), 'utf8')).toBe('v2')
+    expect(await readFile(join(workspace, 'b.md'), 'utf8')).toBe('created')
+    expect((await wal.listFloors()).every((f) => !f.rolledBack)).toBe(true)
+  })
+
+  it('元数据损坏也必须在整批回滚前拒绝，不静默隐藏楼层', async () => {
+    await wal.beginFloor('f1')
+    await wal.record('f1', 'a.md', null)
+    await writeFile(join(workspace, 'a.md'), '保留')
+    await writeFile(join(walDir, 'f1', 'meta.json'), '{broken')
+    await expect(wal.rollbackAfter(['f1'], workspace)).rejects.toThrow('WAL 元数据损坏')
+    expect(await readFile(join(workspace, 'a.md'), 'utf8')).toBe('保留')
   })
 
   it('已回滚目录保留于磁盘且 listFloors 标记 rolledBack', async () => {

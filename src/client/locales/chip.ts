@@ -1,6 +1,10 @@
 /** 会话头部角色 chip（chip.tsx）界面文案：绑定编辑、开场白、调试与提示词预览。zh 为键全集源；en 必须同键齐全。 */
 
 export const zh = {
+  'chip.preview.actual': '最近宿主请求',
+  'chip.preview.noActual': '尚未捕获请求。先发送一轮消息；重启或缓存淘汰后旧请求不可用。',
+  'chip.preview.actualTruncated': '（请求超过显示上限，内容已截断）',
+  'chip.preview.notice': '最近请求来自宿主 llm/stream 边界（适配器转换前）。其他页签为重新计算的 ST 模拟，深度插入、历史正则与裁剪不能代表实际请求。',
   'chip.characterFallback': '角色',
   'chip.dialog.title': 'Tavern 绑定',
   'chip.group.binding': '绑定',
@@ -53,10 +57,14 @@ export const zh = {
   'chip.preview.trimmed': '裁剪 {sections}',
   'chip.preview.listSep': '、',
   'chip.preview.tab.turn': '本轮 turn',
-  'chip.preview.tab.full': '完整序列',
+  'chip.preview.tab.full': 'ST 模拟序列',
 } as const
 
 export const en: Record<keyof typeof zh, string> = {
+  'chip.preview.actual': 'Last host request',
+  'chip.preview.noActual': 'No request captured. Send a message first; snapshots are unavailable after restart or eviction.',
+  'chip.preview.actualTruncated': '(Request exceeded the display limit and was truncated.)',
+  'chip.preview.notice': 'Last request is observed at llm/stream, before adapter conversion. Other tabs recalculate an ST simulation; depth injection, history regex and trimming do not describe the actual request.',
   'chip.characterFallback': 'Character',
   'chip.dialog.title': 'Tavern binding',
   'chip.group.binding': 'Binding',
@@ -109,5 +117,5 @@ export const en: Record<keyof typeof zh, string> = {
   'chip.preview.trimmed': 'trimmed {sections}',
   'chip.preview.listSep': ', ',
   'chip.preview.tab.turn': 'This turn',
-  'chip.preview.tab.full': 'Full sequence',
+  'chip.preview.tab.full': 'ST simulation',
 }

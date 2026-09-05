@@ -6,9 +6,9 @@ import { type WIEngineInput, type WIEngineResult, type WorldInfoEntry } from './
  */
 export declare const MAX_WI_KEY_CHARS = 500;
 /**
- * 条目是否落 standing 侧（缓存安全）：constant 且无本轮宏。与 assemble 的渲染分流
+ * 条目是否确定常驻：无本轮宏、概率、分组或定时条件。与 assemble 的渲染分流
  * 共用同一判定，两处不得漂移。standing 侧条目豁免 turn 层预算（走钉死的 system 段，
- * 命中前缀缓存；体积由 assemble 的总窗口预算兜底）。
+ * 命中前缀缓存；live 通道体积由 node/pipeline 单独检查）。
  */
 export declare function isStandingSafeEntry(entry: WorldInfoEntry): boolean;
 /**

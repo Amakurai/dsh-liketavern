@@ -1,5 +1,6 @@
 /** 正则脚本面板（panel/regex.tsx）界面文案。zh 为键全集源；en 必须同键齐全（test/i18n.test.ts 校验）。 */
 export declare const zh: {
+    readonly 'regex.liveNotice': "实际会话只应用 output/render 展示规则。input/send、prompt/assemble 和 prompt/send 用于 ST 模拟与代答，不会改写宿主入模历史。";
     readonly 'regex.scope.input': "用户输入";
     readonly 'regex.scope.output': "AI 输出";
     readonly 'regex.scope.prompt': "发送给模型";
@@ -26,9 +27,9 @@ export declare const zh: {
     readonly 'regex.toggledOn': "已启用「{name}」";
     readonly 'regex.toggledOff': "已关闭「{name}」";
     readonly 'regex.saved': "已保存 {count} 条规则";
-    readonly 'regex.desc': "对话展示会自动收起 UpdateVariable、JSONPatch 等机读标签，不依赖预设是否带了正则。上方是你额外要改写展示或入模的规则；下方列出预设随带的正则，可直接开关。";
+    readonly 'regex.desc': "对话展示会自动收起 UpdateVariable、JSONPatch 等机读标签，不依赖预设是否带了正则。上方是你额外要改写展示或 ST 模拟的规则；下方列出预设随带的正则，可直接开关。";
     readonly 'regex.emptyTitle': "暂无自定义规则";
-    readonly 'regex.emptyDesc': "点「新建规则」添加展示或入模的改写规则。";
+    readonly 'regex.emptyDesc': "点「新建规则」添加展示或 ST 模拟的改写规则。";
     readonly 'regex.new': "新建规则";
     readonly 'regex.saveAll': "保存全部";
     readonly 'regex.discard': "放弃更改并刷新";

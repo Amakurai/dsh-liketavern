@@ -5,20 +5,21 @@
  * 只有每轮首次评估（live 模式）才持久化新的定时状态——经 WorkspaceFs 写入，
  * 因而落入当前楼层 WAL，可随回退/swipe 回滚。
  * preview（预览提示词 / 代答）用空定时器评估，既不读也不写该缓存，见下方 cacheable。
- * 每步仍重新组装 standing/turn：长上下文下靠最新 runtime context 快照重放本轮世界书/记忆，
+ * 首次成功组装后冻结整轮计划；每步仍把同一份 standing/turn 安装到宿主组装结果，
  * 遗忘则按条用工具补读，而不是跳过组装。
  */
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { LlmRuntime, Message } from '@deepseek-ai/dsh-llm'
-import { assemblePrompt, defaultPreset, isDeltaRenderedInTurn, type AssembledPrompt } from '../core/assemble.js'
-import { isSyntheticUserText } from '../core/dshPrompt.js'
-import { createTurnRandom, hashToSeed } from '../core/macros.js'
+import { defaultPreset, isDeltaRenderedInTurn, type AssembledPrompt } from '../core/assemble.js'
+import { BOUND_DISCIPLINE, TURN_PLAYBOOK, isSyntheticUserText } from '../core/dshPrompt.js'
+import { hashToSeed } from '../core/macros.js'
 import { memorySearchOptions, selectMemoryBodies } from '../core/memoryRetrieval.js'
 import { clipToTokenBudget, estimateTokens } from '../core/tokenize.js'
-import type { ChatMessage, MacroContext, WIEngineResult, WorldDelta, WorldInfoEntry } from '../core/types.js'
+import type { ChatMessage, WIEngineResult, WorldDelta, WorldInfoEntry } from '../core/types.js'
 import { EMPTY_TIMER_STATE } from '../core/types.js'
-import { evaluateWorldInfo } from '../core/worldbook.js'
+import { isolated } from './isolated.js'
 import { clipWorldDeltasForTurn } from '../core/turnBudget.js'
+import { standingFingerprint } from '../core/standingPin.js'
 import { DEFAULT_USER_NAME } from '../core/persona.js'
 import { parseLorebook } from '../state/lorebook.js'
 import type { TavernState } from './state.js'
@@ -44,6 +45,8 @@ export interface PipelineInput {
 }
 
 export interface PipelineResult {
+  standingKey: string
+  sampling: import('../core/types.js').SamplingSettings
   /** 角色定义 + 预设骨架（写入 system 段，绑定不变则字节级稳定）。 */
   standing: string
   /** 本轮世界书/记忆/变化层（写入 runtime context，不进 system 前缀）。 */
@@ -92,7 +95,7 @@ async function resolveContextWindow(input: PipelineInput): Promise<number> {
 }
 
 export async function loadBoundLoreEntries(state: TavernState, binding: NonNullable<Awaited<ReturnType<TavernState['loadBinding']>>>): Promise<{ entries: WorldInfoEntry[]; deltas: WorldDelta[] }> {
-  const ws = await state.workspace(binding.cardId)
+  const ws = await state.storyWorkspace(binding.cardId, binding.storyId)
   const groups: WorldInfoEntry[][] = []
 
   // 全局世界书
@@ -139,14 +142,22 @@ export async function runTavernPipeline(input: PipelineInput): Promise<PipelineR
   await state.waitForSessionTasks(sessionId)
   const binding = await state.loadBinding(sessionId)
   if (!binding) return null
+  const activeTurn = state.currentTurns.get(sessionId)
+  const previous = state.turnPlans.get(sessionId)
+  if (input.mode === 'live' && activeTurn !== undefined && previous?.turn === activeTurn) {
+    if (previous.cardId !== binding.cardId || previous.storyId !== binding.storyId) throw new Error('生成期间绑定已变化，请在下一轮继续')
+    return previous.result
+  }
   const charWs = await state.loadCharacter(binding.cardId)
   if (!charWs) return null
   const card = charWs.card
-  const ws = await state.workspace(binding.cardId)
+  const ws = await state.storyWorkspace(binding.cardId, binding.storyId)
 
   const preset = (binding.presetId ? await state.loadPreset(binding.presetId) : null) ?? defaultPreset()
   const persona = await state.resolvePersona(binding.personaId)
   const userName = persona?.name ?? DEFAULT_USER_NAME
+  const standingKey = standingFingerprint(binding, { name: userName, description: persona?.description ?? '' },
+    state.standingRevTags(binding, { personaLorebookId: persona?.lorebookId ?? null }), input.generationType ?? 'normal')
   const rawHistory = input.agent
     ? flattenMessages(input.agent.session.deriveMessages(), card.name, userName)
     : (input.historyOverride ?? [])
@@ -176,11 +187,11 @@ export async function runTavernPipeline(input: PipelineInput): Promise<PipelineR
   const contextWindow = await resolveContextWindow(input)
   const turn = state.currentTurns.get(sessionId) ?? -1
   const turnSeed = hashToSeed(`${sessionId}:${turn}`)
-  const macroCtx: MacroContext = {
+  const macroCtx = {
     char: card.name,
     user: userName,
     lastUserMessage,
-    random: createTurnRandom(turnSeed ^ 0x9e3779b9),
+    now: new Date(),
   }
 
   // ── WI / 记忆 / 变化层：每 turn 评估一次并缓存 ──
@@ -203,27 +214,18 @@ export async function runTavernPipeline(input: PipelineInput): Promise<PipelineR
   } else {
     const { entries, deltas: liveDeltas } = await loadBoundLoreEntries(state, binding)
     deltas = liveDeltas
-    const timerState = input.mode === 'live' ? await state.loadTimers(binding.cardId, sessionId) : structuredClone(EMPTY_TIMER_STATE)
+    const timerState = input.mode === 'live' ? await state.loadTimers(binding.cardId, sessionId, binding.storyId) : structuredClone(EMPTY_TIMER_STATE)
     const reservedTokens = estimateTokens(scanMessages.map((m) => m.content).join('\n'))
-    wi = evaluateWorldInfo({
+    wi = await isolated('wi', {
       entries,
       messages: scanMessages,
       settings: config.worldInfo,
       timerState,
       contextWindowTokens: contextWindow,
       reservedTokens,
-      estimateTokens,
-      random: createTurnRandom(turnSeed),
+      seed: turnSeed,
       macroCtx: { char: card.name, user: userName },
     })
-    if (input.mode === 'live') {
-      // 定时器落进本轮楼层（随回退/swipe 回滚）。楼层可能开在换绑前的另一张卡上
-      // （openFloors entry 与当前绑定不同卡）——那是别人卡的楼层，不能拿来做本会话写入；
-      // turn/start 时无绑定的会话本轮没有楼层，同样按非会话写入落盘（不记 WAL）。
-      const openFloor = state.openFloors.get(sessionId)
-      const floor = openFloor && openFloor.cardId === binding.cardId ? openFloor.floor : null
-      await state.saveTimers(binding.cardId, sessionId, wi.timerState, floor)
-    }
 
     // 记忆检索：本轮输入 + 最近 N 条历史做查询
     const queryMessages = [pendingFresh.join('\n'), ...scanMessages.slice(-config.memory.queryMessages).map((m) => m.content)]
@@ -247,7 +249,7 @@ export async function runTavernPipeline(input: PipelineInput): Promise<PipelineR
       if (rawJournal?.trim()) journalText = clipToTokenBudget(rawJournal, 800).text
     }
 
-    if (cacheable) state.wiCache.set(sessionId, { turn, wi, memories, deltas, lastCharMessage, journalText })
+
   }
 
   // 变化层进快照前按预算裁剪：预算只覆盖真正会渲染的条目（无键常驻 + 本轮被引擎命中的
@@ -263,7 +265,7 @@ export async function runTavernPipeline(input: PipelineInput): Promise<PipelineR
     estimateTokens,
   )
 
-  const assembled = assemblePrompt({
+  const assembled = await isolated('assemble', {
     preset,
     card,
     personaDescription: persona?.description ?? '',
@@ -278,21 +280,34 @@ export async function runTavernPipeline(input: PipelineInput): Promise<PipelineR
     regexRules: await state.rulesFor(binding),
     // ST injection_trigger 评估用：当前正常发信是 normal；continue/impersonate 经 PipelineInput 传入。
     generationType: input.generationType ?? 'normal',
-    estimateTokens,
+    seed: turnSeed ^ 0x9e3779b9,
     budget: {
       maxTokens: contextWindow,
       reserveForOutput: config.sampling.maxTokens ?? FALLBACK_RESERVE_OUTPUT,
     },
   })
 
+  // live 通道独立预算；历史的压缩由宿主处理，不能用模拟历史长度裁掉角色定义。
+  const minimumLiveTokens = estimateTokens([BOUND_DISCIPLINE, assembled.standing, TURN_PLAYBOOK, assembled.turnContext].join('\n\n'))
+  const available = contextWindow - (config.sampling.maxTokens ?? FALLBACK_RESERVE_OUTPUT)
+  if (input.mode === 'live' && minimumLiveTokens > available) throw new Error('角色设定与本轮上下文已超过模型可用窗口，请缩减设定或提高上下文容量')
+  if (input.mode === 'live' && !(cached && cached.turn === turn)) {
+    const entry = state.openFloors.get(sessionId)
+    if (entry && entry.cardId === binding.cardId && entry.storyId === binding.storyId) {
+      await state.saveTimers(binding.cardId, sessionId, wi.timerState, entry.floor, binding.storyId)
+    }
+  }
   const logLines = formatLogs(wi, assembled)
+  logLines.push(`[live:budget] 插件通道≈${minimumLiveTokens} tokens；不含宿主 system/tools/历史，模拟裁剪不影响这些通道`)
   // turn 尾巴体积(缓存观测):快照对新请求永远是未缓存前缀,体积即每轮全价重付的量。
   logLines.push(`[turn:tail] turnContext≈${estimateTokens(assembled.turnContext)} tokens`)
   if (deltaClip.dropped > 0) {
     logLines.push(`[turn:tail] 变化层超预算裁掉 ${deltaClip.dropped} 条（tavern_lore_read source=delta 可补读）`)
   }
   state.recordTriggerLog(sessionId, logLines)
-  return {
+  const result: PipelineResult = {
+    standingKey,
+    sampling: structuredClone(config.sampling),
     standing: assembled.standing,
     turnContext: assembled.turnContext,
     system: assembled.system,
@@ -305,6 +320,9 @@ export async function runTavernPipeline(input: PipelineInput): Promise<PipelineR
     personaLorebookId: persona?.lorebookId ?? null,
     wiBudget: wi.budget,
   }
+  if (cacheable) state.wiCache.set(sessionId, { turn, wi, memories, deltas, lastCharMessage, journalText })
+  if (cacheable) state.turnPlans.set(sessionId, { turn, cardId: binding.cardId, storyId: binding.storyId, result })
+  return result
 }
 
 function formatLogs(wi: WIEngineResult, assembled: AssembledPrompt): string[] {

@@ -1,5 +1,9 @@
 /** 会话头部角色 chip（chip.tsx）界面文案：绑定编辑、开场白、调试与提示词预览。zh 为键全集源；en 必须同键齐全。 */
 export declare const zh: {
+    readonly 'chip.preview.actual': "最近宿主请求";
+    readonly 'chip.preview.noActual': "尚未捕获请求。先发送一轮消息；重启或缓存淘汰后旧请求不可用。";
+    readonly 'chip.preview.actualTruncated': "（请求超过显示上限，内容已截断）";
+    readonly 'chip.preview.notice': "最近请求来自宿主 llm/stream 边界（适配器转换前）。其他页签为重新计算的 ST 模拟，深度插入、历史正则与裁剪不能代表实际请求。";
     readonly 'chip.characterFallback': "角色";
     readonly 'chip.dialog.title': "Tavern 绑定";
     readonly 'chip.group.binding': "绑定";
@@ -52,6 +56,6 @@ export declare const zh: {
     readonly 'chip.preview.trimmed': "裁剪 {sections}";
     readonly 'chip.preview.listSep': "、";
     readonly 'chip.preview.tab.turn': "本轮 turn";
-    readonly 'chip.preview.tab.full': "完整序列";
+    readonly 'chip.preview.tab.full': "ST 模拟序列";
 };
 export declare const en: Record<keyof typeof zh, string>;

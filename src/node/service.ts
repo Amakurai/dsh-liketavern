@@ -7,13 +7,14 @@
  * 每个方法的返回注解指向 ../remote.ts 的 TavernMethodResults——结果形状的单一来源，
  * client 镜像（client/types.ts）索引同一张表，两面形状漂移会立刻编译报错。
  */
+import type { TavernServiceContract } from '../remote.js'
 import type { Context } from '@deepseek-ai/cordis'
 import type { LlmRuntime } from '@deepseek-ai/dsh-llm'
 import type { Session } from '@deepseek-ai/dsh-session'
 import type { SettingsScope } from '@deepseek-ai/dsh-settings'
 import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import { estimateTokens } from '../core/tokenize.js'
-import { applyRegexRules } from '../core/regex.js'
+import { isolated } from './isolated.js'
 import { presentRenderedOutput } from '../core/displaySanitize.js'
 import { expandIdentityMacros } from '../core/macros.js'
 import { DEFAULT_USER_NAME } from '../core/persona.js'
@@ -33,7 +34,7 @@ import type { TavernMethodResults } from '../remote.js'
 /** 头像缓存条数上限：卡删除/再导入会产生新 cardId，旧条目无人主动清，超上限淘汰最旧（只多一次重读，无正确性影响）。 */
 const AVATAR_CACHE_MAX = 32
 
-export class TavernService extends TypertRemoteService {
+export class TavernService extends TypertRemoteService implements TavernServiceContract {
   constructor(
     ctx: Context,
     /** 运行时中枢（agent 面插件经 ctx.tavern 访问）。 */
@@ -57,8 +58,9 @@ export class TavernService extends TypertRemoteService {
     return { settings: this.settingsScope.get() }
   }
 
-  async updateSettings(request: { patch: object }): Promise<TavernMethodResults['updateSettings']> {
-    await this.settingsScope.update(request.patch ?? {})
+  async updateSettings(request: { patch: unknown }): Promise<TavernMethodResults['updateSettings']> {
+    if (!request.patch || typeof request.patch !== 'object' || Array.isArray(request.patch)) throw new FloorError('invalid-settings', '设置补丁必须是对象')
+    await this.settingsScope.update(request.patch)
     return { settings: this.settingsScope.get() }
   }
 
@@ -197,8 +199,9 @@ export class TavernService extends TypertRemoteService {
     return { id, warnings }
   }
 
-  async savePreset(request: { preset: PromptPreset }): Promise<TavernMethodResults['savePreset']> {
-    if (!request.preset || typeof request.preset.identifier !== 'string' || !request.preset.identifier) {
+  async savePreset(request: { preset: unknown }): Promise<TavernMethodResults['savePreset']> {
+    const preset = request.preset as Partial<PromptPreset> | null
+    if (!preset || typeof preset.identifier !== 'string' || !preset.identifier) {
       throw new FloorError('invalid-preset', '预设缺少 identifier')
     }
     // 宽松传输、严格校验：remote schema 对复杂资产是宽松形状，落盘前用现有预设解析帮手
@@ -206,15 +209,15 @@ export class TavernService extends TypertRemoteService {
     // （非对象 / entries 缺失或不是数组）直接抛错；往返后条目变少说明有缺失或重复
     // identifier 的条目被丢弃，同样拒绝。校验不过不写盘。
     try {
-      const normalized = parseStPreset(exportStPreset(request.preset)).preset
-      if (normalized.entries.length !== request.preset.entries?.length) {
+      const normalized = parseStPreset(exportStPreset(preset as PromptPreset)).preset
+      if (normalized.entries.length !== preset.entries?.length) {
         throw new Error('预设条目缺失，或存在缺失/重复的 identifier')
       }
     } catch (error) {
       throw new FloorError('invalid-preset', error instanceof Error ? error.message : String(error))
     }
     // 回显用落盘后的实际 id（理由同 importPreset）。
-    const id = await this.state.savePreset(request.preset)
+    const id = await this.state.savePreset(preset as PromptPreset)
     return { id }
   }
 
@@ -276,34 +279,34 @@ export class TavernService extends TypertRemoteService {
     return { deleted: true }
   }
 
-  async getChatLorebook(request: { cardId: string }): Promise<TavernMethodResults['getChatLorebook']> {
+  async getChatLorebook(request: { cardId: string; storyId?: string }): Promise<TavernMethodResults['getChatLorebook']> {
     if ((await this.state.loadCharacter(request.cardId)) === null) {
       throw new FloorError('card-not-found', `角色 ${request.cardId} 不存在`)
     }
-    const json = await this.state.getChatLorebook(request.cardId)
+    const json = await this.state.getChatLorebook(request.cardId, request.storyId)
     return { json }
   }
 
-  async saveChatLorebook(request: { cardId: string; json: unknown }): Promise<TavernMethodResults['saveChatLorebook']> {
+  async saveChatLorebook(request: { cardId: string; storyId?: string; json: unknown }): Promise<TavernMethodResults['saveChatLorebook']> {
     if ((await this.state.loadCharacter(request.cardId)) === null) {
       throw new FloorError('card-not-found', `角色 ${request.cardId} 不存在`)
     }
-    await this.state.saveChatLorebook(request.cardId, request.json)
+    await this.state.saveChatLorebook(request.cardId, request.json, request.storyId)
     return { saved: true }
   }
 
-  async getJournal(request: { cardId: string }): Promise<TavernMethodResults['getJournal']> {
+  async getJournal(request: { cardId: string; storyId?: string }): Promise<TavernMethodResults['getJournal']> {
     if ((await this.state.loadCharacter(request.cardId)) === null) {
       throw new FloorError('card-not-found', `角色 ${request.cardId} 不存在`)
     }
-    return { text: await this.state.getJournal(request.cardId) }
+    return { text: await this.state.getJournal(request.cardId, request.storyId) }
   }
 
-  async saveJournal(request: { cardId: string; text: string }): Promise<TavernMethodResults['saveJournal']> {
+  async saveJournal(request: { cardId: string; storyId?: string; text: string }): Promise<TavernMethodResults['saveJournal']> {
     if ((await this.state.loadCharacter(request.cardId)) === null) {
       throw new FloorError('card-not-found', `角色 ${request.cardId} 不存在`)
     }
-    await this.state.saveJournal(request.cardId, request.text ?? '')
+    await this.state.saveJournal(request.cardId, request.text ?? '', request.storyId)
     return { saved: true }
   }
 
@@ -379,6 +382,7 @@ export class TavernService extends TypertRemoteService {
     const walLineage = existing?.cardId === binding.cardId ? existing.walLineage : undefined
     await this.state.saveBinding({
       ...binding,
+      storyId: existing?.cardId === binding.cardId ? existing.storyId : undefined,
       walLineage,
     })
     return { saved: true }
@@ -438,12 +442,7 @@ export class TavernService extends TypertRemoteService {
     const names = { char: ws?.card.name ?? 'Assistant', user: persona?.name ?? DEFAULT_USER_NAME }
     // SillyTavern：先 substituteParams 再跑展示正则，开场白里的 {{user}} 才能被按名字匹配。
     const named = expandIdentityMacros(text, names)
-    const rendered = applyRegexRules(
-      named,
-      rules,
-      { scope: 'output', timing: 'render' },
-      { ...names, outlets: {} },
-    )
+    const rendered = await isolated('render', { text: named, rules, macroCtx: { ...names, outlets: {} } })
     const presented = presentRenderedOutput(rendered.text, settings.interactiveCards)
     const htmls = presented.htmls.map((h) => expandIdentityMacros(h, names))
     const greetings = (ws ? [ws.card.firstMes, ...ws.card.alternateGreetings] : []).map((g) =>
@@ -508,15 +507,19 @@ export class TavernService extends TypertRemoteService {
 
   // ── 记忆 ─────────────────────────────────────────────────────────────────
 
-  async getMemories(request: { cardId: string }): Promise<TavernMethodResults['getMemories']> {
-    const ws = await this.state.workspace(request.cardId)
+  async listStories(request: { cardId: string }): Promise<TavernMethodResults['listStories']> {
+    return { items: await this.state.listStories(request.cardId) }
+  }
+
+  async getMemories(request: { cardId: string; storyId?: string }): Promise<TavernMethodResults['getMemories']> {
+    const ws = await this.state.storyWorkspace(request.cardId, request.storyId)
     return { items: await ws.memory.list() }
   }
 
-  async saveMemory(request: { cardId: string; id?: string; body: string; tags?: string[]; keys?: string[] }): Promise<TavernMethodResults['saveMemory']> {
+  async saveMemory(request: { cardId: string; storyId?: string; id?: string; body: string; tags?: string[]; keys?: string[] }): Promise<TavernMethodResults['saveMemory']> {
     // 面板/服务层非会话写路径一律走 plainWorkspace（floor 恒 null，绝不记 WAL）：
     // 生成进行中的面板编辑若走携带楼层的实例，会被记进当前楼层 WAL、回退时静默改回旧值。
-    const ws = await this.state.plainWorkspace(request.cardId)
+    const ws = await this.state.plainWorkspace(request.cardId, request.storyId)
     let entry: MemoryEntry | null
     if (request.id) {
       entry = await ws.memory.update(
@@ -532,18 +535,18 @@ export class TavernService extends TypertRemoteService {
     return { id: entry.id }
   }
 
-  async deleteMemory(request: { cardId: string; id: string }): Promise<TavernMethodResults['deleteMemory']> {
+  async deleteMemory(request: { cardId: string; storyId?: string; id: string }): Promise<TavernMethodResults['deleteMemory']> {
     // 面板写路径走 plainWorkspace（理由同 saveMemory）。
-    const ws = await this.state.plainWorkspace(request.cardId)
+    const ws = await this.state.plainWorkspace(request.cardId, request.storyId)
     const deleted = await ws.memory.delete(request.id)
     if (deleted) await rebuildIndex(ws.fs, estimateTokens)
     return { deleted }
   }
 
   /** 无 LLM 的确定性归并：原文逐条保留，只减少条目数，不宣称减少 token。 */
-  async compressMemories(request: { cardId: string }): Promise<TavernMethodResults['compressMemories']> {
+  async compressMemories(request: { cardId: string; storyId?: string }): Promise<TavernMethodResults['compressMemories']> {
     // 面板写路径走 plainWorkspace（理由同 saveMemory）。
-    const ws = await this.state.plainWorkspace(request.cardId)
+    const ws = await this.state.plainWorkspace(request.cardId, request.storyId)
     const batch = await ws.memory.oldest(this.state.config.memory.compressBatch)
     if (batch.length < 2) return { merged: 0 }
     const merged = batch.map((b, i) => `${i + 1}. ${b.body}`).join('\n')
@@ -557,19 +560,19 @@ export class TavernService extends TypertRemoteService {
 
   // ── 世界状态 ──────────────────────────────────────────────────────────────
 
-  async getWorldDeltas(request: { cardId: string }): Promise<TavernMethodResults['getWorldDeltas']> {
-    const ws = await this.state.workspace(request.cardId)
+  async getWorldDeltas(request: { cardId: string; storyId?: string }): Promise<TavernMethodResults['getWorldDeltas']> {
+    const ws = await this.state.storyWorkspace(request.cardId, request.storyId)
     return { items: await ws.deltas.list({ includeRevoked: true }) }
   }
 
-  async revokeWorldDelta(request: { cardId: string; id: string }): Promise<TavernMethodResults['revokeWorldDelta']> {
+  async revokeWorldDelta(request: { cardId: string; storyId?: string; id: string }): Promise<TavernMethodResults['revokeWorldDelta']> {
     // 面板写路径走 plainWorkspace（理由同 saveMemory）。
-    const ws = await this.state.plainWorkspace(request.cardId)
+    const ws = await this.state.plainWorkspace(request.cardId, request.storyId)
     return { revoked: await ws.deltas.revoke(request.id) }
   }
 
   async addWorldDelta(request: {
-    cardId: string
+    cardId: string; storyId?: string
     type: 'add' | 'update' | 'invalidate'
     content: string
     ref?: string | null
@@ -581,7 +584,7 @@ export class TavernService extends TypertRemoteService {
       throw new FloorError('card-not-found', `角色 ${request.cardId} 不存在`)
     }
     // 面板写路径走 plainWorkspace（理由同 saveMemory）。
-    const ws = await this.state.plainWorkspace(request.cardId)
+    const ws = await this.state.plainWorkspace(request.cardId, request.storyId)
     const delta = await ws.deltas.append({
       type: request.type,
       ref: request.ref ?? null,
@@ -595,10 +598,10 @@ export class TavernService extends TypertRemoteService {
     return { id: delta.id }
   }
 
-  async exportMergedLorebook(request: { cardId: string }): Promise<TavernMethodResults['exportMergedLorebook']> {
+  async exportMergedLorebook(request: { cardId: string; storyId?: string }): Promise<TavernMethodResults['exportMergedLorebook']> {
     const charWs = await this.state.loadCharacter(request.cardId)
     if (!charWs) throw new FloorError('card-not-found', `角色 ${request.cardId} 不存在`)
-    const ws = await this.state.workspace(request.cardId)
+    const ws = await this.state.storyWorkspace(request.cardId, request.storyId)
     const book = await this.state.loadCharacterLorebookRaw(request.cardId)
     const originals = book ? parseLorebook(book.json, { source: 'character', sourceRef: request.cardId }) : []
     const deltas = await ws.deltas.list()
@@ -619,6 +622,7 @@ export class TavernService extends TypertRemoteService {
     const result = await runTavernPipeline({ state: this.state, sessionId: request.sessionId, agent, llm, mode: 'preview' })
     if (!result) throw new FloorError('no-binding', '当前会话未绑定 Tavern 角色卡')
     return {
+      actualRequest: this.state.requestDiagnostics.get(request.sessionId) ?? null,
       standing: result.standing,
       turnContext: result.turnContext,
       system: result.system,

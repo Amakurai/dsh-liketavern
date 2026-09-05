@@ -14,6 +14,8 @@ export interface WalLineageEntry {
 export interface SessionBinding {
   sessionId: string
   cardId: string
+  /** 独立剧情状态；旧绑定缺省，首次读取时从旧角色状态复制迁移。由 host 管理。 */
+  storyId?: string
   /** 绑定时的角色显示名；删除后按此找回新工作区。旧文件可缺。 */
   cardName?: string
   /** 预设 identifier；null = 内建默认预设。 */

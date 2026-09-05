@@ -21,7 +21,7 @@
  *   truncated 清单，渲染侧在快照尾部附 uid 供模型按条补读。
  * - 多来源合并：Chat > Persona > Character/Global（strategy: 0 evenly / 1 character_first / 2 global_first），
  *   delta 变化层与 character 同级（紧随原书条目之后，由渲染侧标注「当前状态」）。
- * - 键安全：触发键在主事件循环同步执行。超长键（> MAX_WI_KEY_CHARS）与含灾难性回溯构造的
+ * - 键安全：纯引擎同步执行；host 调用须放在有超时的 worker。超长键（> MAX_WI_KEY_CHARS）与含灾难性回溯构造的
  *   /regex/ 键（复用 regex.ts 的保守启发式）一律按「永不命中」处理，与非法正则键同口径。
  */
 import { expandIdentityMacros, hasTurnLocalMacros } from './macros.js'
@@ -53,12 +53,17 @@ const REGEX_KEY_RE = /^\/(.*)\/([a-z]*)$/s
 export const MAX_WI_KEY_CHARS = 500
 
 /**
- * 条目是否落 standing 侧（缓存安全）：constant 且无本轮宏。与 assemble 的渲染分流
+ * 条目是否确定常驻：无本轮宏、概率、分组或定时条件。与 assemble 的渲染分流
  * 共用同一判定，两处不得漂移。standing 侧条目豁免 turn 层预算（走钉死的 system 段，
- * 命中前缀缓存；体积由 assemble 的总窗口预算兜底）。
+ * 命中前缀缓存；live 通道体积由 node/pipeline 单独检查）。
  */
 export function isStandingSafeEntry(entry: WorldInfoEntry): boolean {
   return entry.constant && !hasTurnLocalMacros(entry.content)
+    && (!entry.useProbability || entry.probability >= 100) && !entry.group
+    && !(entry.sticky && entry.sticky > 0) && !(entry.cooldown && entry.cooldown > 0)
+    && !(entry.delay && entry.delay > 0) && entry.delayUntilRecursion === 0
+    && entry.source !== 'delta'
+    && entry.position !== WIPosition.AuthorNoteTop && entry.position !== WIPosition.AuthorNoteBottom && entry.position !== WIPosition.Outlet
 }
 
 function ident(text: string, ctx?: Pick<MacroContext, 'char' | 'user'>): string {
@@ -333,11 +338,8 @@ export function evaluateWorldInfo(input: WIEngineInput): WIEngineResult {
 
   const tryActivate = (entry: WorldInfoEntry, matchedKeys: string[], via: WIActivation['via'], level: number): boolean => {
     if (activatedKeys.has(entry.key)) return false
-    // 概率判定（sticky 延续期跳过）。standing-safe 条目（constant 且无本轮宏）豁免掷骰：
-    // 它们落进按会话钉死的 standing 段，钉死早已把掷骰冻结成「每会话一次」，逐轮随机从未生效；
-    // 而 swipe/重新生成 fork 出的子会话换了种子重掷，会与父会话 standing 字节漂移、打穿整个
-    // system 前缀缓存。恒定注入让 standing 只取决于资产内容，跨会话/跨分支字节确定。
-    if (via !== 'sticky' && entry.useProbability && entry.probability < 100 && !isStandingSafeEntry(entry)) {
+    // 只有 sticky 延续豁免概率。确定常驻条目本来就没有概率过滤，概率型 constant 必须按轮评估。
+    if (via !== 'sticky' && entry.useProbability && entry.probability < 100) {
       if (random() * 100 >= entry.probability) {
         log.push({ kind: 'probability-skip', entryKey: entry.key, detail: `probability=${entry.probability}` })
         return false
@@ -367,6 +369,13 @@ export function evaluateWorldInfo(input: WIEngineInput): WIEngineResult {
       // 递归门槛
       if (level > 0 && entry.excludeRecursion) continue
       if (entry.delayUntilRecursion > level) continue
+      // 条目编辑为确定常驻后，旧配置留下的计时器不能改变稳定段是否存在。
+      if (isStandingSafeEntry(entry)) {
+        delete timer.stickyLeft[entry.key]
+        delete timer.cooldownLeft[entry.key]
+        if (tryActivate(entry, [], 'constant', level)) fresh.push(activated[activated.length - 1]!)
+        continue
+      }
       // sticky 延续：无需命中、跳过概率（须先于 cooldown 判定：cooldown 与 sticky
       // 串联写入时 sticky 期间 cooldown 一并倒数，先判 cooldown 会拦死 sticky 延续）
       if ((timer.stickyLeft[entry.key] ?? 0) > 0) {

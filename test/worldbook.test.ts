@@ -29,7 +29,7 @@ import {
   type WorldInfoEntry,
   type WorldInfoGlobalSettings,
 } from '../src/core/types.js'
-import { evaluateWorldInfo } from '../src/core/worldbook.js'
+import { evaluateWorldInfo, isStandingSafeEntry } from '../src/core/worldbook.js'
 
 // ---------------------------------------------------------------------------
 // 构造辅助
@@ -309,15 +309,15 @@ describe('constant 与 probability', () => {
     expect(activatedKeys(res)).toEqual(['e'])
   })
 
-  it('standing-safe 常驻条目豁免概率：probability=0 也恒定激活（standing 跨会话字节确定）', () => {
+  it('概率为零的常驻条目仍不得激活', () => {
     // constant 且无本轮宏 → 落 standing 钉死段；掷骰早已被钉死冻结成「每会话一次」，
     // 而 fork 分支换种子重掷会打穿整个 system 前缀缓存——改为恒定注入。
     const res = run({
       entries: [makeEntry({ key: 'c', constant: true, useProbability: true, probability: 0, content: 'CONST' })],
       random: () => 0.99,
     })
-    expect(activatedKeys(res)).toEqual(['c'])
-    expect(logsOf(res, 'probability-skip')).toEqual([])
+    expect(activatedKeys(res)).toEqual([])
+    expect(logsOf(res, 'probability-skip')).toHaveLength(1)
   })
 
   it('含本轮宏的 constant 条目不豁免（落 turn 层）：仍按概率掷骰', () => {
@@ -978,4 +978,13 @@ describe('键安全', () => {
     const res = run({ entries: [badGroup], messages: [userMsg('ok')] })
     expect(activatedKeys(res)).toEqual(['bg']) // 非字符串 group 视为不分组
   })
+})
+
+
+it('AN/outlet 和条件常驻不得豁免 turn 预算', () => {
+  for (const position of [WIPosition.AuthorNoteTop, WIPosition.AuthorNoteBottom, WIPosition.Outlet]) {
+    expect(isStandingSafeEntry(makeEntry({ key: 'test', constant: true, position }))).toBe(false)
+  }
+  expect(isStandingSafeEntry(makeEntry({ key: 'test', constant: true, group: 'g' }))).toBe(false)
+  expect(isStandingSafeEntry(makeEntry({ key: 'test', constant: true, probability: 0, useProbability: true }))).toBe(false)
 })

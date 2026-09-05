@@ -493,6 +493,7 @@ describe('compressOldestMemories', () => {
     return {
       stream: vi.fn(async function* () {
         yield { type: 'text-delta' as const, text }
+        yield { type: 'finish' as const, reason: { kind: 'stop' as const } }
       }),
     } as unknown as LlmRuntime
   }
@@ -509,10 +510,11 @@ describe('compressOldestMemories', () => {
     expect(result).toEqual({ merged: '艾莉丝委托铁匠重铸断剑，三天后交货', archived: 3 })
     expect((await ws.memory.stats()).count).toBe(1)
     const hits = await ws.memory.search('断剑', { topK: 5 })
-    expect(hits.map((h) => h.entry.body)).toEqual(['艾莉丝委托铁匠重铸断剑，三天后交货'])
-    expect(hits[0]!.entry.tags).toContain('compressed')
-    expect(hits[0]!.entry.tags).toEqual(expect.arrayContaining(['关系', '物品', '约定']))
-    expect(hits[0]!.entry.keys).toEqual(expect.arrayContaining(['艾莉丝', '断剑', '铁匠']))
+    expect(hits.map((h) => h.entry.body)).toEqual(expect.arrayContaining(['艾莉丝委托铁匠重铸断剑，三天后交货', '艾莉丝把断剑交给了铁匠']))
+    const summary = hits.find((hit) => !hit.entry.archived)!
+    expect(summary.entry.tags).toContain('compressed')
+    expect(summary.entry.tags).toEqual(expect.arrayContaining(['关系', '物品', '约定']))
+    expect(summary.entry.keys).toEqual(expect.arrayContaining(['艾莉丝', '断剑', '铁匠']))
   })
 
   it('无模型或缺 provider/model 时不做任何事', async () => {
@@ -633,6 +635,7 @@ describe('面板写路径不记 WAL', () => {
     const llm = {
       stream: vi.fn(async function* () {
         yield { type: 'text-delta' as const, text: '合并结果' }
+        yield { type: 'finish' as const, reason: { kind: 'stop' as const } }
       }),
     } as unknown as LlmRuntime
     const result = await compressOldestMemories(state, llm, cardId, 'p', 'm')

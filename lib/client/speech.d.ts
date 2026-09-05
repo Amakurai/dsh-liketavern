@@ -10,4 +10,4 @@ export declare function SpeechBubble(props: {
     /** 会话级交互卡开关（binding.interactiveCards）；null/缺省回落全局设置。 */
     interactiveCards?: boolean | null;
     onSwipeGreeting?: (index: number) => void;
-}): any;
+}): import("react").JSX.Element;

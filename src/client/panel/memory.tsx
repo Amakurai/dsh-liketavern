@@ -20,7 +20,7 @@ function splitList(text: string): string[] {
     .filter(Boolean)
 }
 
-function MemoryEditor(props: { remote: TavernRemote; cardId: string; entry: MemoryEntry; onDone: () => void }) {
+function MemoryEditor(props: { remote: TavernRemote; cardId: string; storyId?: string; entry: MemoryEntry; onDone: () => void }) {
   const { entry } = props
   const t = useT()
   const [body, setBody] = useState(entry.body)
@@ -32,6 +32,7 @@ function MemoryEditor(props: { remote: TavernRemote; cardId: string; entry: Memo
     runAsync(setBusy, setError, async () => {
       const r = await props.remote.saveMemory({
         cardId: props.cardId,
+        storyId: props.storyId,
         id: entry.id,
         body,
         tags: splitList(tags),
@@ -68,6 +69,8 @@ export function MemorySection(props: { remote: TavernRemote }) {
   const t = useT()
   const chars = useLoader(() => remote.listCharacters({}), [])
   const [cardId, setCardId] = useState('')
+  const [storyId, setStoryId] = useState<string | undefined>(undefined)
+  const stories = useLoader(() => remote.listStories({ cardId }), [cardId], cardId !== '')
   const [tab, setTab] = useState<'memory' | 'delta' | 'journal'>('memory')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -80,9 +83,9 @@ export function MemorySection(props: { remote: TavernRemote }) {
   const [deltaKeys, setDeltaKeys] = useState('')
   const toast = useToast()
 
-  const memories = useLoader(() => remote.getMemories({ cardId }), [cardId], cardId !== '')
-  const deltas = useLoader(() => remote.getWorldDeltas({ cardId }), [cardId], cardId !== '')
-  const journal = useLoader(() => remote.getJournal({ cardId }), [cardId], cardId !== '')
+  const memories = useLoader(() => remote.getMemories({ cardId, storyId }), [cardId, storyId], cardId !== '')
+  const deltas = useLoader(() => remote.getWorldDeltas({ cardId, storyId }), [cardId, storyId], cardId !== '')
+  const journal = useLoader(() => remote.getJournal({ cardId, storyId }), [cardId, storyId], cardId !== '')
 
   /**
    * 写操作统一外壳：busy 防连击（快速双击重复创建/并发压缩）；
@@ -98,14 +101,17 @@ export function MemorySection(props: { remote: TavernRemote }) {
   // 此时 cardId 已指向新卡，不清空就会被「保存笔记」原样写进新卡的 journal.md（覆盖丢数据）。
   useEffect(() => {
     setJournalText('')
-  }, [cardId])
+    setEditingId(null)
+    setNewBody('')
+    setDeltaContent('')
+  }, [cardId, storyId])
   useEffect(() => {
     if (journal.state.status === 'ready') setJournalText(journal.state.value.text)
   }, [journal.state])
 
   const addMemory = () =>
     op(async () => {
-      const r = await remote.saveMemory({ cardId, body: newBody.trim() })
+      const r = await remote.saveMemory({ cardId, storyId, body: newBody.trim() })
       const err = errOf(r)
       if (err) setError(err)
       else {
@@ -116,7 +122,7 @@ export function MemorySection(props: { remote: TavernRemote }) {
 
   const deleteMemory = (id: string) =>
     op(async () => {
-      const r = await remote.deleteMemory({ cardId, id })
+      const r = await remote.deleteMemory({ cardId, storyId, id })
       const err = errOf(r)
       if (err) setError(err)
       else memories.reload()
@@ -124,7 +130,7 @@ export function MemorySection(props: { remote: TavernRemote }) {
 
   const compress = () =>
     op(async () => {
-      const r = await remote.compressMemories({ cardId })
+      const r = await remote.compressMemories({ cardId, storyId })
       if (!r.ok) setError(r.error.message)
       else {
         toast.show(r.value.merged > 0 ? t('memory.compressed', { count: r.value.merged }) : t('memory.compressNoop'))
@@ -134,7 +140,7 @@ export function MemorySection(props: { remote: TavernRemote }) {
 
   const revoke = (id: string) =>
     op(async () => {
-      const r = await remote.revokeWorldDelta({ cardId, id })
+      const r = await remote.revokeWorldDelta({ cardId, storyId, id })
       const err = errOf(r)
       if (err) setError(err)
       else {
@@ -145,7 +151,7 @@ export function MemorySection(props: { remote: TavernRemote }) {
 
   const exportBook = () =>
     op(async () => {
-      const r = await remote.exportMergedLorebook({ cardId })
+      const r = await remote.exportMergedLorebook({ cardId, storyId })
       if (!r.ok) setError(r.error.message)
       else {
         downloadJson(`lorebook-merged-${cardId}.json`, r.value.json)
@@ -155,7 +161,7 @@ export function MemorySection(props: { remote: TavernRemote }) {
 
   const saveJournal = () =>
     op(async () => {
-      const r = await remote.saveJournal({ cardId, text: journalText })
+      const r = await remote.saveJournal({ cardId, storyId, text: journalText })
       const err = errOf(r)
       if (err) setError(err)
       else {
@@ -167,7 +173,7 @@ export function MemorySection(props: { remote: TavernRemote }) {
   const addDelta = () =>
     op(async () => {
       const r = await remote.addWorldDelta({
-        cardId,
+        cardId, storyId,
         type: deltaType,
         content: deltaContent.trim(),
         ref: deltaRef.trim() || null,
@@ -191,11 +197,15 @@ export function MemorySection(props: { remote: TavernRemote }) {
         <Select
           size="md"
           value={cardId}
-          onChange={setCardId}
+          disabled={busy} onChange={(value) => { setStoryId(undefined); setCardId(value) }}
           options={[{ value: '', label: t('memory.pickCharacter') }, ...charItems.map((c) => ({ value: c.cardId, label: c.name }))]}
         />
       </SettingsRow>
-      <Err message={error} />
+      {cardId && <SettingsRow title={t('memory.story')} description={t('memory.storyDesc')}>
+        <Select value={storyId ?? ''} disabled={busy} onChange={(value) => setStoryId(value || undefined)}
+          options={[{ value: '', label: t('memory.initialState') }, ...(stories.state.status === 'ready' ? stories.state.value.items.map((story) => ({ value: story.id, label: `${story.sessionId} · ${story.createdAt.slice(0, 10)}` })) : [])]} />
+      </SettingsRow>}
+      <Err message={stories.state.status === 'error' ? stories.state.message : error} />
       {cardId && (
         <>
           <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10, margin: '10px 0 14px' }}>
@@ -253,6 +263,7 @@ export function MemorySection(props: { remote: TavernRemote }) {
                     <MemoryEditor
                       remote={remote}
                       cardId={cardId}
+                      storyId={storyId}
                       entry={m}
                       onDone={() => {
                         setEditingId(null)

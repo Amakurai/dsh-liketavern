@@ -6,7 +6,7 @@
  * 非 Tavern 会话上（切换瞬间），立刻交回空树之外的原生 Markdown 回退，避免挡住 dsh。
  */
 import { Fragment, useMemo } from 'react'
-import type { ReactNode } from 'react'
+import type { ReactNode, ComponentProps } from 'react'
 import { JsonBlock, MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives'
 import { stripDisplayMeta } from '../core/displaySanitize.js'
 import { cachedCharacterDetail, cachedSessionBinding } from './cache.js'
@@ -67,7 +67,7 @@ export function TavernAssistantNode(props: {
   renderMessageImages?: RenderMessageImages
   useTurnData?: (key: string) => unknown
   openFile?: (path: string) => void
-  fileMentions?: (owner: TurnTailOwner) => unknown
+  fileMentions?: (owner: TurnTailOwner) => ComponentProps<typeof MarkdownText>['fileMentions']
 }) {
   const { remote, sessionId, sessions, node } = props
   const t = useT()
@@ -142,7 +142,7 @@ function NativeAssistantFallback(props: {
   renderMessageImages?: RenderMessageImages
   useTurnData?: (key: string) => unknown
   openFile?: (path: string) => void
-  fileMentions?: (owner: TurnTailOwner) => unknown
+  fileMentions?: (owner: TurnTailOwner) => ComponentProps<typeof MarkdownText>['fileMentions']
   streaming: boolean
   interrupted: boolean
   stripMeta?: boolean
@@ -164,7 +164,7 @@ function NativeAssistantFallback(props: {
     () => (mentionOwner && fileMentions ? fileMentions(mentionOwner) : undefined),
     [fileMentions, mentionOwner],
   )
-  const rendered: unknown[] = []
+  const rendered: ReactNode[] = []
   const blocks = node.data.blocks
   for (let i = 0; i < blocks.length; i++) {
     const block = blocks[i]
@@ -200,7 +200,7 @@ function NativeAssistantFallback(props: {
     } else if (block.kind === 'tool-call') {
       continue
     } else {
-      rendered.push(<JsonBlock key={i} label={t('assistant.unknownBlock')} payload={block.block} />)
+      rendered.push(<JsonBlock key={i} label={t('assistant.unknownBlock')} truncatedLabel={(total) => t('assistant.truncated', { total })} payload={block.block} />)
     }
   }
   return (

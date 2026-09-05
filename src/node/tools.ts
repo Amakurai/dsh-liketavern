@@ -39,6 +39,7 @@ import type { MemoryEntry } from '../core/types.js'
 import { rebuildIndex } from '../state/workspace.js'
 import { MemoryStore } from '../state/memory.js'
 import { WorldDeltaStore } from '../state/worlddelta.js'
+import { isStoryPath } from '../state/story.js'
 import type { WorkspaceFs } from '../state/workspaceFs.js'
 import type { SessionBinding } from './bindings.js'
 import { loadBoundLoreEntries } from './pipeline.js'
@@ -52,6 +53,7 @@ const ASSET_CATALOG_MAX = 200
 interface ToolCtx {
   binding: SessionBinding
   ws: { fs: WorkspaceFs; memory: MemoryStore; deltas: WorldDeltaStore }
+  assetFs: WorkspaceFs
   sessionId: string
 }
 
@@ -82,19 +84,19 @@ async function resolveCtx(
   if (!binding) return { error: 'no-binding：当前会话未绑定 Tavern 角色卡' }
   // 生成中换绑：楼层还开在换绑前那张卡上，按新绑定写入会把别的卡的快照记进本楼层
   // （回滚时跨卡回放），或绕过 WAL 不可回滚——拒绝写入，等下一轮在新卡上开新楼层。
-  if (options?.requireOpenFloor && entry && entry.cardId !== binding.cardId) {
+  if (options?.requireOpenFloor && entry && (entry.cardId !== binding.cardId || entry.storyId !== binding.storyId)) {
     return { error: 'binding-changed：生成期间角色卡绑定已更换，楼层开在另一张卡上，已拒绝本次写入以保住可回滚性' }
   }
   // 同一张卡的并发会话各有独立楼层（index.ts onTurnStart 按 `sessionId#tN` beginFloor）。
   // 工具的写入快照必须记进本会话自己的楼层：用 withFloor 派生实例而不是共享句柄——
   // 共享句柄 floor 恒为 null，直接用它写入会逃出楼层事务；楼层属于别的卡时读工具
   // 不写入、不触发 record，scoped 口径保持统一。
-  const handle = await state.workspace(binding.cardId)
+  const handle = await state.storyWorkspace(binding.cardId, binding.storyId)
   const fs = handle.fs.withFloor(entry?.floor ?? null)
   const ws = { fs, memory: new MemoryStore(fs), deltas: new WorldDeltaStore(fs) }
   // 7 个工具（含读工具）的统一收口通知注入点：走到这里说明本轮确实在做多步。
   maybeInjectStepNotice(state, exec)
-  return { binding, ws, sessionId }
+  return { binding, ws, sessionId, assetFs: (await state.workspace(binding.cardId)).fs }
 }
 
 function injectWriteAck(exec: ToolRunContext, detail: string): void {
@@ -176,7 +178,7 @@ function clipMemoryHits(
   let used = 0
   let omitted = 0
   for (const hit of hits) {
-    const meta = { id: hit.entry.id, score: hit.score, tags: hit.entry.tags, keys: hit.entry.keys }
+    const meta = { path: `memory/${hit.entry.archived ? 'archive/' : ''}${hit.entry.id}.md`, archived: hit.entry.archived, sourceRange: hit.entry.sourceRange, id: hit.entry.id, score: hit.score, tags: hit.entry.tags, keys: hit.entry.keys }
     const remain = limit - used
     if (remain <= 0) {
       omitted += 1
@@ -218,7 +220,7 @@ export function registerTavernTools(ctx: Context, state: TavernState): void {
           omitted: clipped.omitted,
           results: clipped.results as unknown as JsonValue,
           ...(clipped.omitted > 0
-            ? { hint: '超出 token 预算的条目只给了 id/标签/关键词；确需正文用 tavern_asset_read({ path: "memory/<id>.md" }) 按条读。' }
+            ? { hint: '超出 token 预算的条目只给了 id/标签/关键词；确需正文用 tavern_asset_read({ path: results 中的 path }) 按条读。' }
             : {}),
         }
       },
@@ -262,7 +264,7 @@ export function registerTavernTools(ctx: Context, state: TavernState): void {
         const stats = await ws.memory.stats()
         const incomingTokens = estimateTokens(args.body)
         const compressScheduled = stats.count + 1 > config.maxEntries || stats.tokens + incomingTokens > config.maxTokens
-        if (compressScheduled) state.pendingMemoryCompress.add(resolved.binding.cardId)
+        if (compressScheduled) state.pendingMemoryCompress.add(resolved.binding.storyId ?? resolved.binding.cardId)
 
         const entry = await ws.memory.write({ body: args.body, tags: args.tags, keys: args.keys })
         await rebuildIndex(ws.fs, estimateTokens)
@@ -297,6 +299,10 @@ export function registerTavernTools(ctx: Context, state: TavernState): void {
         if ('error' in resolved) return { ok: false, error: resolved.error }
         const entry = await resolved.ws.memory.update(args.id, { body: args.body, tags: args.tags, keys: args.keys })
         if (!entry) return { ok: false, error: `not-found：记忆 ${args.id} 不存在` }
+        const stats = await resolved.ws.memory.stats()
+        if (stats.count > state.config.memory.maxEntries || stats.tokens > state.config.memory.maxTokens) {
+          state.pendingMemoryCompress.add(resolved.binding.storyId ?? resolved.binding.cardId)
+        }
         await rebuildIndex(resolved.ws.fs, estimateTokens)
         injectWriteAck(exec, `记忆 id=${entry.id} 已更新。下一轮才进入检索层；本轮把更新视为已知，现在输出扮演正文。`)
         return { ok: true, id: entry.id, updated: entry.updated }
@@ -434,7 +440,8 @@ export function registerTavernTools(ctx: Context, state: TavernState): void {
         // 整棵走完再过滤会让本工具随数据积累越来越慢。state/ 下其余可读文件
         // （world-delta.jsonl、wi-timers）仍在白名单内，保持 list 与 read 口径一致。
         const readable = (
-          await ws.fs.list('', { skipDir: (dir) => dir === 'state/wal' || dir === 'memory/archive' })
+          [...(await ws.fs.list('', { skipDir: (dir) => dir === 'state/wal' || dir === 'memory/archive' })).filter(isStoryPath),
+            ...(await resolved.assetFs.list('', { skipDir: (dir) => dir === 'stories' || dir === 'state' || dir === 'memory' })).filter((p) => !isStoryPath(p))]
         ).filter((p) => resolveReadableAssetPath(p).ok)
         return {
           ok: true,
@@ -509,7 +516,7 @@ export function registerTavernTools(ctx: Context, state: TavernState): void {
         if (pathArg?.trim()) {
           const resolvedPath = resolveReadableAssetPath(pathArg)
           if (!resolvedPath.ok) return { ok: false, error: resolvedPath.error }
-          const body = await resolved.ws.fs.readText(resolvedPath.path)
+          const body = await (isStoryPath(resolvedPath.path) ? resolved.ws.fs : resolved.assetFs).readText(resolvedPath.path)
           if (body === null) return { ok: false, error: `not-found：${resolvedPath.path}` }
           const clipped = clipAssetText(body)
           out.file = {

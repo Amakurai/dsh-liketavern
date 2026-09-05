@@ -1,4 +1,5 @@
-import type { ReactNode } from 'react';
+import type { ReactNode, ComponentProps } from 'react';
+import { MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives';
 import { type UseSessions } from './mode.js';
 import type { TavernRemote } from './types.js';
 interface AssistantBlock {
@@ -50,6 +51,6 @@ export declare function TavernAssistantNode(props: {
     renderMessageImages?: RenderMessageImages;
     useTurnData?: (key: string) => unknown;
     openFile?: (path: string) => void;
-    fileMentions?: (owner: TurnTailOwner) => unknown;
-}): any;
+    fileMentions?: (owner: TurnTailOwner) => ComponentProps<typeof MarkdownText>['fileMentions'];
+}): import("react").JSX.Element;
 export {};

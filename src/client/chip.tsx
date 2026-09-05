@@ -49,15 +49,7 @@ function PreDialog(props: { title: string; text: string; onClose: () => void }) 
   )
 }
 
-type PromptPreview = {
-  standing: string
-  turnContext: string
-  system: string
-  messages: unknown[]
-  logLines: string[]
-  worldInfoBudget: { limit: number; used: number; overflowed: boolean }
-  assembleBudget: { tokensBefore: number; tokensAfter: number; trimmedSections: string[] }
-}
+type PromptPreview = import('../remote.js').PromptPreview
 
 /** 千位缩写（12.3k）；null 显示 ?。 */
 function fmtTokens(n: number | null): string {
@@ -68,12 +60,14 @@ function fmtTokens(n: number | null): string {
 function PromptPreviewDialog(props: { data: PromptPreview; onClose: () => void }) {
   const { data } = props
   const t = useT()
-  const [tab, setTab] = useState<'standing' | 'turn' | 'full' | 'log'>('standing')
+  const [tab, setTab] = useState<'standing' | 'turn' | 'full' | 'log' | 'actual'>('actual')
   const toast = useToast()
   const wi = data.worldInfoBudget
   const assemble = data.assembleBudget
   const body =
-    tab === 'standing'
+    tab === 'actual'
+      ? data.actualRequest ? data.actualRequest.text + (data.actualRequest.truncated ? '\n' + t('chip.preview.actualTruncated') : '') : t('chip.preview.noActual')
+      : tab === 'standing'
       ? data.standing || t('chip.preview.empty')
       : tab === 'turn'
         ? data.turnContext || t('chip.preview.empty')
@@ -90,6 +84,7 @@ function PromptPreviewDialog(props: { data: PromptPreview; onClose: () => void }
   }
   return (
     <Dialog open title={t('chip.preview.title')} onClose={props.onClose} width="lg">
+      <Muted>{t('chip.preview.notice')}</Muted>
       <Muted>
         {t('chip.preview.budget', { used: wi.used, limit: wi.limit })}
         {wi.overflowed ? ` · ${t('chip.preview.overflowed')}` : ''}
@@ -105,6 +100,7 @@ function PromptPreviewDialog(props: { data: PromptPreview; onClose: () => void }
           value={tab}
           onChange={(id) => setTab(id as typeof tab)}
           items={[
+            { id: 'actual', label: t('chip.preview.actual') },
             { id: 'standing', label: 'standing' },
             { id: 'turn', label: t('chip.preview.tab.turn') },
             { id: 'full', label: t('chip.preview.tab.full') },
@@ -169,7 +165,7 @@ export function TavernHeaderChip(props: {
   const toast = useToast()
   const [view, setView] = useState<{ title: string; text: string } | null>(null)
   const [previewData, setPreviewData] = useState<PromptPreview | null>(null)
-  const [chatLore, setChatLore] = useState<{ cardId: string; entries: WorldInfoEntry[] } | null>(null)
+  const [chatLore, setChatLore] = useState<{ cardId: string; storyId?: string; entries: WorldInfoEntry[] } | null>(null)
   const [confirmUnbind, setConfirmUnbind] = useState(false)
   const [unbindBusy, setUnbindBusy] = useState(false)
   /** 无绑定时选择角色会异步读取 defaults；序号保证只有最后一次选择能落到草稿。 */
@@ -317,8 +313,8 @@ export function TavernHeaderChip(props: {
 
   const openChatLore = async () => {
     const cardId = draft?.cardId
-    if (!cardId) return
-    const r = await remote.getChatLorebook({ cardId })
+    if (!cardId || cardId !== binding?.cardId || !binding.storyId) return
+    const r = await remote.getChatLorebook({ cardId, storyId: binding?.cardId === cardId ? binding.storyId : undefined })
     if (!r.ok) {
       setError(r.error.message)
       return
@@ -326,6 +322,7 @@ export function TavernHeaderChip(props: {
     try {
       setChatLore({
         cardId,
+        storyId: binding?.cardId === cardId ? binding.storyId : undefined,
         entries: parseLorebook(r.value.json, { source: 'chat', sourceRef: 'chat-lorebook' }),
       })
     } catch (err) {
@@ -365,7 +362,7 @@ export function TavernHeaderChip(props: {
               ) : null}
               <span className="dsh-tavern-footSpacer" />
               <span className="dsh-tavern-footGroup">
-                <Btn size="md" onClick={() => void openChatLore()}>{t('chip.chatLore.edit')}</Btn>
+                <Btn size="md" disabled={!binding?.storyId || draft?.cardId !== binding.cardId} onClick={() => void openChatLore()}>{t('chip.chatLore.edit')}</Btn>
                 <Btn primary size="md" onClick={() => void saveBinding()}>{t('binding.save')}</Btn>
               </span>
             </div>
@@ -555,7 +552,7 @@ export function TavernHeaderChip(props: {
               toast.show(t('chip.chatLore.saved'))
               setChatLore(null)
             }}
-            save={(json) => remote.saveChatLorebook({ cardId: chatLore.cardId, json })}
+            save={(json) => remote.saveChatLorebook({ cardId: chatLore.cardId, storyId: chatLore.storyId, json })}
           />
         </Dialog>
       )}

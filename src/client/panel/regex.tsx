@@ -28,8 +28,8 @@ function newRule(): RegexRule {
     find: '',
     replace: '',
     enabled: true,
-    scopes: ['prompt'],
-    timing: ['send'],
+    scopes: ['output'],
+    timing: ['render'],
     minDepth: null,
     maxDepth: null,
     substituteRegex: 0,
@@ -175,7 +175,7 @@ export function RegexSection(props: { remote: TavernRemote }) {
 
   const current = rules ?? []
   return (
-    <Section title={t('section.regex')}>
+    <Section description={t('regex.liveNotice')} title={t('section.regex')}>
       {toast.node}
       <Muted>
         {t('regex.desc')}

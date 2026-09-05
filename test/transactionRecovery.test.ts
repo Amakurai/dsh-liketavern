@@ -14,12 +14,13 @@ import { compressOldestMemories } from '../src/node/memoryMaintenance.js'
 import { MemoryStore } from '../src/state/memory.js'
 import { WorldDeltaStore } from '../src/state/worlddelta.js'
 
-const fault = vi.hoisted(() => ({ target: '', gate: null as null | (() => Promise<void>) }))
+const fault = vi.hoisted(() => ({ target: '', afterRename: false, gate: null as null | (() => Promise<void>) }))
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>()
   return { ...actual, rename: async (...args: Parameters<typeof actual.rename>) => {
     if (fault.target && String(args[1]).endsWith(fault.target)) {
       fault.target = ''
+      if (fault.afterRename) { fault.afterRename = false; await actual.rename(...args); throw new Error('测试：替换后崩溃') }
       if (fault.gate) { const gate = fault.gate; fault.gate = null; await gate() }
       else throw new Error('测试：原子替换失败')
     }
@@ -36,7 +37,7 @@ beforeEach(async () => {
   await state.init()
 })
 afterEach(async () => {
-  fault.target = ''; fault.gate = null
+  fault.target = ''; fault.gate = null; fault.afterRename = false
   vi.restoreAllMocks()
   await rm(root, { recursive: true, force: true })
 })
@@ -53,6 +54,7 @@ const delta = (content: string) => ({ type: 'add' as const, ref: null, content, 
 const model = (text: string, beforeOutput?: () => Promise<unknown>) => ({ async *stream() {
   await beforeOutput?.()
   yield { type: 'text-delta', text }
+        yield { type: 'finish' as const, reason: { kind: 'stop' as const } }
 } }) as unknown as LlmRuntime
 
 describe('人工修订与楼层逆操作', () => {
@@ -226,4 +228,46 @@ describe('摘要来源与回滚', () => {
     await rollback()
     expect((await panel.memory.list()).map((entry) => entry.body)).toEqual(['人工确认'])
   })
+})
+
+
+it('回滚在正文替换后崩溃：恢复游标防止重放较新版本', async () => {
+  const { ws, panel, memory, rollback } = await setup()
+  const entry = await panel.memory.write({ body: '原文' })
+  await memory.update(entry.id, { body: '第一次' })
+  await memory.update(entry.id, { body: '第二次' })
+  await ws.wal.commitFloor('s#t1')
+  fault.target = `${entry.id}.md`; fault.afterRename = true
+  await expect(rollback()).rejects.toThrow('替换后崩溃')
+  const { Wal } = await import('../src/state/wal.js')
+  await new Wal(join(ws.fs.root, 'state/wal')).rollbackFloor('s#t1', ws.fs.root)
+  expect((await panel.memory.get(entry.id))!.body).toBe('原文')
+})
+
+it('共享旧 WAL 不允许越过同一文件的后继写入撤销，避免之后复活已撤销事实', async () => {
+  const { ws, panel, memory } = await setup()
+  const entry = await panel.memory.write({ body: '原文' })
+  await memory.update(entry.id, { body: 'A' })
+  await ws.wal.commitFloor('s#t1')
+  await ws.wal.beginFloor('other#t1')
+  await new MemoryStore(ws.fs.withFloor('other#t1')).update(entry.id, { body: 'B' })
+  await ws.wal.commitFloor('other#t1')
+  await expect(ws.wal.rollbackFloor('s#t1', ws.fs.root)).rejects.toThrow('后继依赖')
+  expect((await panel.memory.get(entry.id))!.body).toBe('B')
+  await ws.wal.rollbackAfter(['s#t1', 'other#t1'], ws.fs.root)
+  expect((await panel.memory.get(entry.id))!.body).toBe('原文')
+})
+
+
+it('摘要遗漏的关键词仍能命中归档来源，去重写入只针对活跃条目', async () => {
+  const { ws, memory, rollback } = await setup()
+  await memory.write({ body: '独有暗号：赤铜飞燕' })
+  await memory.write({ body: '门打开了' })
+  await ws.wal.commitFloor('s#t1')
+  await compressOldestMemories(state, model('门打开了'), 'audit', 'test', 'test')
+  const hits = await ws.memory.search('赤铜飞燕')
+  expect(hits.some((hit) => hit.entry.archived && hit.entry.body.includes('赤铜飞燕'))).toBe(true)
+  expect((await ws.memory.findSimilar('赤铜飞燕', [])).every((hit) => !hit.entry.archived)).toBe(true)
+  await rollback()
+  expect(await ws.memory.search('赤铜飞燕')).toEqual([])
 })

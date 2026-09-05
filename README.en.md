@@ -66,15 +66,23 @@ Runtime data (cards, memories, session bindings) lives in `$DSH_HOME/dsh-tavern/
 
 The plugin UI is in English by default. To switch to Chinese, open the Tavern settings tab → "Interface" subgroup → "Language"; the change applies immediately and is saved automatically (it only affects this plugin's UI, not the host interface).
 
+## Story state upgrade
+
+Each session and branch now has its own storyId. New sessions copy the character’s initial state. Regeneration rolls back a child snapshot and preserves the original session state. The memory panel selects a character and then a story; “Initial state” applies to future sessions.
+
+Legacy bindings copy the old shared state once on first access, preserving the original directory. Previously mixed branch facts cannot be reliably separated automatically; review each migrated story. Editing an AI reply revokes facts derived from that turn and later turns without inferring replacement facts or starting a model call.
+
+Automatic summaries may omit information. Original sources remain archived and searchable through active summaries. Failed, truncated or timed out model streams cannot archive originals. Snapshots and archives consume disk space; old stories are not automatically deleted.
+
 ## Platform limitations
 
 Due to current dsh host capabilities, the following differs from vanilla SillyTavern. These are known boundaries, not bugs:
 
 - **Sampling parameters**: only `temperature`, `maxTokens`, `stop`, and the "deep thinking" levels published by the current model actually reach the model; `top_p` and penalty coefficients are recorded in the panel but have no effect.
-- **Prompt placement**: @D (depth injection) and author's notes are merged into the tail of the system prompt in real requests, not inserted into the middle of chat history; only "preview prompt" shows the full ST sequence.
+- **Prompt placement and regex**: static depth injection goes into standing; dynamic @D and author notes go into runtime context. Host history is unchanged. input/send, prompt/assemble and prompt/send apply to ST simulation and impersonation; live display uses output/render. “Last host request” shows the actual request before adapter conversion; other preview tabs are simulations.
 - **The session log cannot be deleted**: regenerating / rolling back / editing a floor forks a branch session and continues there, while the original session stays intact in the session list; sibling branches forked at the same floor are navigable via ‹ n/m › on the action bar.
 - **AI impersonation**: the host input area has no plugin-writable API, so impersonation results can only be copied to the clipboard and pasted manually.
-- **Multiple sessions on the same card**: the workspace and WAL are shared per card, so concurrent writes across sessions may interleave.
+- **Multiple sessions and branches**: memories, world changes, notes, chat lore, timers and WAL are isolated per story. Character assets remain shared. Multiple host processes writing the same data directory are unsupported.
 
 ## Development
 

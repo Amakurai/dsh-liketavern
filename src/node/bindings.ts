@@ -4,11 +4,13 @@
  * SessionBinding / WalLineageEntry 是纯数据形状，定义在 core/binding（remote 契约引用），此处 re-export。
  * 读写共用 parseSessionBinding 严格校验（RPC 宽松传输、存储层严格校验的落点），不再 as 断言。
  */
-import { readdir, readFile, unlink, writeFile } from 'node:fs/promises'
+import { readdir, readFile, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { sessionFile, type TavernPaths } from './paths.js'
 import { assertValidCardId } from '../state/workspace.js'
 import type { SessionBinding, WalLineageEntry } from '../core/binding.js'
+import { atomicWrite } from '../state/atomicWrite.js'
+import { storyRoot } from '../state/story.js'
 
 export type { SessionBinding, WalLineageEntry } from '../core/binding.js'
 
@@ -53,6 +55,8 @@ export function parseSessionBinding(input: unknown): SessionBinding {
   const cardId = requiredString('cardId')
   // cardId 是 characters/ 下的单层目录名；格式不对直接拒绝（防路径越界，与工作区入口同一帮手）。
   assertValidCardId(cardId)
+  const storyId = optionalString('storyId')
+  if (storyId !== undefined) storyRoot('.', storyId)
 
   const lorebookIdsRaw = raw['lorebookIds']
   if (!Array.isArray(lorebookIdsRaw)) invalidBinding('lorebookIds', '字符串数组')
@@ -94,6 +98,7 @@ export function parseSessionBinding(input: unknown): SessionBinding {
   return {
     sessionId,
     cardId,
+    storyId,
     cardName: optionalString('cardName'),
     presetId: nullableString('presetId'),
     personaId: nullableString('personaId'),
@@ -123,7 +128,7 @@ export async function saveBinding(paths: TavernPaths, binding: SessionBinding): 
   // 写入侧严格校验（sessionId 非空、cardId 目录名格式在 parse 内检查）：坏数据不落盘，
   // 否则合法 JSON 但字段缺失的绑定要到使用点才抛错。
   const checked = parseSessionBinding(binding)
-  await writeFile(sessionFile(paths, checked.sessionId), JSON.stringify(checked, null, 2) + '\n', 'utf8')
+  await atomicWrite(sessionFile(paths, checked.sessionId), JSON.stringify(checked, null, 2) + '\n')
 }
 
 export async function deleteBinding(paths: TavernPaths, sessionId: string): Promise<void> {

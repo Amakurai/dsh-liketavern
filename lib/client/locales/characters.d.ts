@@ -33,7 +33,7 @@ export declare const zh: {
     readonly 'characters.detail.groupAdvanced': "高级注入";
     readonly 'characters.detail.systemPrompt': "系统提示";
     readonly 'characters.detail.postHistory': "历史后指令";
-    readonly 'characters.detail.depthPrompt': "depth_prompt（预览按深度插位，live 并入本轮 turn）";
+    readonly 'characters.detail.depthPrompt': "depth_prompt（模拟按深度插位；live 静态进 standing，动态进 turn）";
     readonly 'characters.detail.depth': "深度";
     readonly 'characters.detail.role': "角色";
     readonly 'characters.detail.groupMetadata': "元数据";

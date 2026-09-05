@@ -13,5 +13,5 @@ export declare function TavernHeroCharacter(props: {
     };
     session?: HeroSession;
     useSessions?: UseSessions;
-}): any;
+}): import("react").JSX.Element | null;
 export {};

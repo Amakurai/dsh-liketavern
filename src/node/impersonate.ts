@@ -14,33 +14,18 @@ import {
   type GenerateOptions,
   type LlmRuntime,
   type Message,
-  type StreamChunk,
 } from '@deepseek-ai/dsh-llm'
 import type { Session } from '@deepseek-ai/dsh-session'
 import { resolveTavernReasoningEffort, type AdvertisedReasoningInfo } from '../core/callConfig.js'
 import { FloorError, forkAgentOptions } from './floors.js'
 import { runTavernPipeline } from './pipeline.js'
 import { isTavernRuntimeSession } from './tavernSession.js'
+import { collectCompleteText } from './collectText.js'
 import type { TavernState } from './state.js'
 
 export interface ImpersonateDeps {
   ctx: Context
   state: TavernState
-}
-
-/** 收集一条一次性流的正文；error/aborted 终止帧转成 FloorError。 */
-async function collectText(stream: AsyncIterable<StreamChunk>): Promise<string> {
-  let text = ''
-  for await (const chunk of stream) {
-    if (chunk.type === 'text-delta') {
-      text += chunk.text
-    } else if (chunk.type === 'finish') {
-      if (chunk.reason.kind === 'error' || chunk.reason.kind === 'aborted') {
-        throw new FloorError('impersonate-failed', `代答生成失败：${chunk.reason.failure.message}`)
-      }
-    }
-  }
-  return text.trim()
 }
 
 /**
@@ -114,7 +99,8 @@ export async function impersonate({ ctx, state }: ImpersonateDeps, sessionId: st
     ...(sampling.stop.length > 0 ? { stop: [...sampling.stop] } : {}),
     ...(reasoningEffort !== undefined ? { reasoningEffort: ReasoningEffortId(reasoningEffort) } : {}),
   }
-  const text = await collectText(llm.stream(options))
+  const signal = AbortSignal.timeout(60_000)
+  const text = await collectCompleteText(llm.stream({ ...options, signal }), signal)
   if (!text) throw new FloorError('empty-result', '模型没有产出台词，请重试')
   return { text }
 }

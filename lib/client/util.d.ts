@@ -10,7 +10,7 @@ export declare function Btn(props: {
     title?: string;
     size?: 'sm' | 'md';
     children?: ReactNode;
-}): any;
+}): import("react").JSX.Element;
 export interface SelectOption {
     value: string;
     label: string;
@@ -24,18 +24,18 @@ export declare function Select(props: {
     title?: string;
     width?: number | string;
     size?: 'sm' | 'md';
-}): any;
+}): import("react").JSX.Element;
 export declare function FileBtn(props: {
     accept: string;
     disabled?: boolean;
     onFile: (file: File) => void;
     children?: ReactNode;
-}): any;
+}): import("react").JSX.Element;
 export declare function Section(props: {
     title?: string;
     description?: string;
     children?: ReactNode;
-}): any;
+}): import("react").JSX.Element;
 export interface TabItem {
     id: string;
     label: string;
@@ -46,16 +46,16 @@ export declare function Tabs(props: {
     value: string;
     onChange: (id: string) => void;
     size?: 'md' | 'sm';
-}): any;
+}): import("react").JSX.Element;
 /** 分组保存行：与上方表单一条淡分隔，主操作左齐。 */
 export declare function SaveBar(props: {
     children?: ReactNode;
-}): any;
+}): import("react").JSX.Element;
 export declare function Badge(props: {
     accent?: boolean;
     danger?: boolean;
     children?: ReactNode;
-}): any;
+}): import("react").JSX.Element;
 /**
  * 预设/卡内嵌 regex_scripts 的展示行：开关 + 名称 + 作用域徽标 + 查找式。
  * 作用域语义与 core/regex.ts 的 compileRegexScripts 一致；onToggle 传入时显示启用开关。
@@ -65,21 +65,21 @@ export declare function RegexScriptRow(props: {
     index: number;
     onToggle?: (disabled: boolean) => void;
     disabled?: boolean;
-}): any;
+}): import("react").JSX.Element;
 /** 条目启用开关（对齐 SillyTavern 的 on/off，视觉走 dsh 胶囊）。 */
 export declare function Toggle(props: {
     checked: boolean;
     onChange: (value: boolean) => void;
     disabled?: boolean;
     title?: string;
-}): any;
+}): import("react").JSX.Element;
 export declare function IconBtn(props: {
     label: string;
     danger?: boolean;
     disabled?: boolean;
     onClick: () => void;
     children?: ReactNode;
-}): any;
+}): import("react").JSX.Element;
 /** 对齐通用设置：标题 + 说明 + 右侧控件。stacked = 宽控件（checkbox 列表等）换成纵向满宽。inline 已废弃（现在默认就是行式）。 */
 export declare function SettingsRow(props: {
     title: string;
@@ -87,11 +87,11 @@ export declare function SettingsRow(props: {
     stacked?: boolean;
     inline?: boolean;
     children?: ReactNode;
-}): any;
+}): import("react").JSX.Element;
 export declare function Field(props: {
     label: string;
     children?: ReactNode;
-}): any;
+}): import("react").JSX.Element;
 /** 列表搜索框（36px 胶囊 + 前导图标），配合面板里的关键字过滤。 */
 export declare function SearchInput(props: {
     label: string;
@@ -99,13 +99,13 @@ export declare function SearchInput(props: {
     onChange: (value: string) => void;
     placeholder?: string;
     width?: number | string;
-}): any;
+}): import("react").JSX.Element;
 /** 列表搜索的空结果态：与各面板空态同一套样式，附「清空搜索」动作。 */
 export declare function SearchEmpty(props: {
     what: string;
     query: string;
     onClear: () => void;
-}): any;
+}): import("react").JSX.Element;
 /** 多选 chip 组（替代复选框列表）：点击把选项切进/切出 selected，选中带对勾前缀。 */
 export declare function CheckChips(props: {
     options: {
@@ -115,31 +115,31 @@ export declare function CheckChips(props: {
     selected: readonly string[];
     onChange: (next: string[]) => void;
     ariaLabel?: string;
-}): any;
+}): import("react").JSX.Element;
 export declare function Err(props: {
     message: string | null;
-}): any;
+}): import("react").JSX.Element | null;
 export declare function Muted(props: {
     children?: ReactNode;
-}): any;
+}): import("react").JSX.Element;
 /** 头像：有图出图，无图出首字符（小尺寸回退为用户图标），不再是灰块。尺寸经 --tavern-avatar-s 传入。 */
 export declare function Avatar(props: {
     url?: string | null;
     name?: string;
     size?: number;
     className?: string;
-}): any;
+}): import("react").JSX.Element;
 /** shimmer 骨架条/块，替换「加载中…」。 */
 export declare function Skeleton(props: {
     width?: number | string;
     height?: number;
     radius?: number;
     style?: CSSProperties;
-}): any;
+}): import("react").JSX.Element;
 /** 顶部横幅通知（宿主 Toast：滑入→停留→淡出后 onDone）。瞬时操作反馈用它，上下文错误仍用 Err。 */
 export declare function useToast(): {
     show: (text: string) => void;
-    node: any;
+    node: import("react").JSX.Element | null;
 };
 /** 让卡片等元素可键盘触发（Enter/Space），配合 .is-clickable。 */
 export declare function clickableProps(onClick: () => void): {
@@ -191,7 +191,7 @@ export declare function Dialog(props: {
     footer?: ReactNode;
     width?: 'sm' | 'md' | 'lg' | 'xl' | 'full';
     children?: ReactNode;
-}): any;
+}): import("react").JSX.Element;
 export declare function ConfirmDialog(props: {
     open: boolean;
     title: string;
@@ -201,18 +201,18 @@ export declare function ConfirmDialog(props: {
     busy?: boolean;
     onCancel: () => void;
     onConfirm: () => void;
-}): any;
+}): import("react").JSX.Element;
 /** 数字输入（number）。 */
 export declare function NumInput(props: {
     value: number;
     onChange: (v: number) => void;
     step?: string;
     width?: number;
-}): any;
+}): import("react").JSX.Element;
 /** 可空数字输入（null ↔ 空串）。 */
 export declare function NullableNumInput(props: {
     value: number | null;
     onChange: (v: number | null) => void;
     width?: number;
-}): any;
+}): import("react").JSX.Element;
 export {};

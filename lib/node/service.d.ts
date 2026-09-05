@@ -7,14 +7,15 @@
  * 每个方法的返回注解指向 ../remote.ts 的 TavernMethodResults——结果形状的单一来源，
  * client 镜像（client/types.ts）索引同一张表，两面形状漂移会立刻编译报错。
  */
+import type { TavernServiceContract } from '../remote.js';
 import type { Context } from '@deepseek-ai/cordis';
 import type { SettingsScope } from '@deepseek-ai/dsh-settings';
 import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol';
-import type { PromptPreset, RegexRule } from '../core/types.js';
+import type { RegexRule } from '../core/types.js';
 import type { TavernConfigRaw } from './config.js';
 import type { Persona, TavernState } from './state.js';
 import type { TavernMethodResults } from '../remote.js';
-export declare class TavernService extends TypertRemoteService {
+export declare class TavernService extends TypertRemoteService implements TavernServiceContract {
     /** 运行时中枢（agent 面插件经 ctx.tavern 访问）。 */
     readonly state: TavernState;
     private readonly settingsScope;
@@ -30,7 +31,7 @@ export declare class TavernService extends TypertRemoteService {
     private readonly avatarCache;
     getSettings(_request: Record<string, never>): TavernMethodResults['getSettings'];
     updateSettings(request: {
-        patch: object;
+        patch: unknown;
     }): Promise<TavernMethodResults['updateSettings']>;
     listCharacters(_request: Record<string, never>): Promise<TavernMethodResults['listCharacters']>;
     inspectCharacter(request: {
@@ -81,7 +82,7 @@ export declare class TavernService extends TypertRemoteService {
         json: unknown;
     }): Promise<TavernMethodResults['importPreset']>;
     savePreset(request: {
-        preset: PromptPreset;
+        preset: unknown;
     }): Promise<TavernMethodResults['savePreset']>;
     deletePreset(request: {
         id: string;
@@ -116,16 +117,20 @@ export declare class TavernService extends TypertRemoteService {
     }): Promise<TavernMethodResults['deleteEmbeddedLorebook']>;
     getChatLorebook(request: {
         cardId: string;
+        storyId?: string;
     }): Promise<TavernMethodResults['getChatLorebook']>;
     saveChatLorebook(request: {
         cardId: string;
+        storyId?: string;
         json: unknown;
     }): Promise<TavernMethodResults['saveChatLorebook']>;
     getJournal(request: {
         cardId: string;
+        storyId?: string;
     }): Promise<TavernMethodResults['getJournal']>;
     saveJournal(request: {
         cardId: string;
+        storyId?: string;
         text: string;
     }): Promise<TavernMethodResults['saveJournal']>;
     listPersonas(_request: Record<string, never>): Promise<TavernMethodResults['listPersonas']>;
@@ -205,11 +210,16 @@ export declare class TavernService extends TypertRemoteService {
     impersonate(request: {
         sessionId: string;
     }): Promise<TavernMethodResults['impersonate']>;
+    listStories(request: {
+        cardId: string;
+    }): Promise<TavernMethodResults['listStories']>;
     getMemories(request: {
         cardId: string;
+        storyId?: string;
     }): Promise<TavernMethodResults['getMemories']>;
     saveMemory(request: {
         cardId: string;
+        storyId?: string;
         id?: string;
         body: string;
         tags?: string[];
@@ -217,21 +227,26 @@ export declare class TavernService extends TypertRemoteService {
     }): Promise<TavernMethodResults['saveMemory']>;
     deleteMemory(request: {
         cardId: string;
+        storyId?: string;
         id: string;
     }): Promise<TavernMethodResults['deleteMemory']>;
     /** 无 LLM 的确定性归并：原文逐条保留，只减少条目数，不宣称减少 token。 */
     compressMemories(request: {
         cardId: string;
+        storyId?: string;
     }): Promise<TavernMethodResults['compressMemories']>;
     getWorldDeltas(request: {
         cardId: string;
+        storyId?: string;
     }): Promise<TavernMethodResults['getWorldDeltas']>;
     revokeWorldDelta(request: {
         cardId: string;
+        storyId?: string;
         id: string;
     }): Promise<TavernMethodResults['revokeWorldDelta']>;
     addWorldDelta(request: {
         cardId: string;
+        storyId?: string;
         type: 'add' | 'update' | 'invalidate';
         content: string;
         ref?: string | null;
@@ -240,6 +255,7 @@ export declare class TavernService extends TypertRemoteService {
     }): Promise<TavernMethodResults['addWorldDelta']>;
     exportMergedLorebook(request: {
         cardId: string;
+        storyId?: string;
     }): Promise<TavernMethodResults['exportMergedLorebook']>;
     getTriggerLog(request: {
         sessionId: string;

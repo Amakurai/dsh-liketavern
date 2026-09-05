@@ -18,4 +18,4 @@ export declare function LorebookEditor(props: {
     onClose: () => void;
     onSaved: () => void;
     save: (json: unknown) => Promise<Envelope<unknown>>;
-}): any;
+}): import("react").JSX.Element;

@@ -32,7 +32,7 @@ export declare function resolveFloorTurn(events: readonly SessionEvent[], messag
 /**
  * 取指定会话 turn >= fromTurn 的 WAL 楼层。
  *
- * WalManager.rollbackAfter 会在内部按数组逆序回放，因此这里必须按 turn 数字升序传入；
+ * Wal.rollbackAfter 会在内部按数组逆序回放，因此这里必须按 turn 数字升序传入；
  * 不能先 reverse，也不能使用字符串排序（t10 会排在 t2 前面）。
  */
 export declare function floorNamesForRollback(floors: readonly string[], sessionId: string, fromTurn: number, throughTurn?: number): string[];
@@ -81,7 +81,7 @@ export declare function getFloorAssistantMessage({ ctx }: FloorDeps, sessionId: 
 }>;
 /**
  * 编辑指定楼层的 assistant 正文：fork 到该楼层结束（seed 内替换该条消息），
- * 回滚其后楼层，不自动续跑——编辑 AI 台词后通常由用户自己接话。
+ * 撤销该层及之后的派生事实，不自动续跑——编辑 AI 台词后通常由用户自己接话。
  */
 export declare function editAssistantMessage(deps: FloorDeps, sessionId: string, messageId: string, newText: string): Promise<ForkResult>;
 /**

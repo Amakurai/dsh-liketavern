@@ -22,6 +22,7 @@ export function resolveReadableAssetPath(raw: string): { ok: true; path: string 
   const path = parts.filter((p) => p !== '.').join('/')
   if (!path) return { ok: false, error: '路径不合法' }
   const lower = path.toLowerCase()
+  if (lower === 'stories' || lower.startsWith('stories/') || lower === 'story.json') return { ok: false, error: '不读取其它剧情或内部元数据' }
   if (lower === 'state/wal' || lower.startsWith('state/wal/')) return { ok: false, error: '不读取 WAL 快照' }
   if (/\.(png|jpe?g|webp|gif|bin)$/i.test(path)) return { ok: false, error: '不读取二进制资源' }
   if (!TEXT_EXT.test(path)) return { ok: false, error: '只允许 md / json / jsonl / txt' }

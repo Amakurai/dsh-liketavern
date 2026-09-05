@@ -22,7 +22,6 @@ import type { TavernState } from './node/state.js'
 import { registerTavernTools } from './node/tools.js'
 import { mergeTavernCallConfig, resolveTavernReasoningEffort, type AdvertisedReasoningInfo } from './core/callConfig.js'
 import { BOUND_DISCIPLINE, TURN_PLAYBOOK, UNBOUND_STANDING, isContinueInstruction, neutralizeDshMustache } from './core/dshPrompt.js'
-import { standingFingerprint } from './core/standingPin.js'
 import type { SamplingSettings } from './core/types.js'
 
 export const name = 'dsh-tavern-agent'
@@ -106,12 +105,7 @@ export function apply(ctx: Context): void {
       const pin = state.pinStanding(
         agent.id,
         generationType,
-        standingFingerprint(
-          binding,
-          { name: pipeline.userName, description: pipeline.personaDescription },
-          state.standingRevTags(binding, { personaLorebookId: pipeline.personaLorebookId }),
-          generationType,
-        ),
+        pipeline.standingKey,
         standing,
       )
       applyStanding(result, pin.text)
@@ -126,10 +120,8 @@ export function apply(ctx: Context): void {
       applyTurnContext(result, neutralizeDshMustache(joinPromptParts([TURN_PLAYBOOK, pipeline.turnContext])))
     } catch (error) {
       ctx.logger.warn(`dsh-tavern: 提示词组装失败：${error instanceof Error ? error.message : String(error)}`)
-      // 瞬时故障（磁盘抖动/单文件损坏）不该打穿整段前缀缓存、也不该让本轮扮演突然掉到
-      // 未绑定文案：有同卡钉位就穿钉位（可能略旧但字节稳定）；换卡后对不上钉位才回退未绑定。
-      applyStanding(result, state.peekStanding(agent.id, generationType, binding.cardId) ?? UNBOUND_STANDING)
-      applyTurnContext(result, '')
+      // 超时、损坏资产等不能悄悄变成缺设定的一轮；让宿主显示失败并允许用户修复后重试。
+      throw error
     }
     return result
   })
@@ -138,7 +130,7 @@ export function apply(ctx: Context): void {
     const config = await next()
     const binding = await state.loadBinding(payload.agent.id)
     if (!binding) return config
-    const sampling = state.config.sampling
+    const sampling = state.turnPlans.get(payload.agent.id)?.result.sampling ?? state.config.sampling
     const reasoningEffort = await resolveRequestReasoningEffort(state, llm, config, sampling, payload.signal)
     const merged = mergeTavernCallConfig(config, sampling, reasoningEffort)
     return reasoningEffort === undefined ? merged : { ...merged, reasoningEffort: ReasoningEffortId(reasoningEffort) }

@@ -1,6 +1,6 @@
 {
   "name": "dsh-liketavern",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Tavern mode for dsh web — SillyTavern character cards, prompt presets, lorebooks, personas and regex on the dsh agent runtime.",
   "license": "MIT",
   "repository": {
@@ -96,6 +96,7 @@
     "@deepseek-ai/dsh-authorization": "0.1.2-rc.1",
     "@deepseek-ai/dsh-bash-local": "0.1.2-rc.1",
     "@deepseek-ai/dsh-brand": "0.1.2-rc.1",
+    "@deepseek-ai/dsh-client-ui-primitives": "0.1.2-rc.1",
     "@deepseek-ai/dsh-code-runtime": "0.1.2-rc.1",
     "@deepseek-ai/dsh-compaction": "0.1.2-rc.1",
     "@deepseek-ai/dsh-fs": "0.1.2-rc.1",
@@ -129,6 +130,8 @@
     "@deepseek-ai/dsh-workflow": "0.1.2-rc.1",
     "@deepseek-ai/schemastery": "3.18.2",
     "@types/node": "^24.0.0",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.7",
     "esbuild": "^0.25.0",
     "typescript": "^5.8.0",
     "vitest": "^3.2.0"

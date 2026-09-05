@@ -69,6 +69,8 @@ export declare class Wal {
     private doRecordAfter;
     private doCommitFloor;
     private doRollbackFloor;
+    /** 整批先校验；不能在撤销较新楼层后才发现较旧日志损坏。 */
+    private preflightRollback;
     private doRollbackAfter;
     private doListFloors;
     private doPrune;

@@ -11,6 +11,7 @@
  * 的 parseInput、host 侧 lib/index.js 的 decode），mini schema 保留 `.parse()`，校验行为不变。
  * 代价是链式方法要写成顶层函数式：`.min(1)` → `check(minLength(1))`、`.optional()` → `optional(...)`。
  */
+import type { infer as Infer } from 'zod/mini'
 import { array, boolean, enum as enum_, int, literal, minimum, minLength, nullable, number, object, optional, string, union, unknown } from 'zod/mini'
 import type { ZodMiniType } from 'zod/mini'
 import type { AssembledPrompt } from './core/assemble.js'
@@ -37,6 +38,7 @@ const sessionBinding = () =>
     sessionId: nonEmpty(),
     cardId: nonEmpty(),
     cardName: optional(string()),
+    storyId: optional(nonEmpty()),
     presetId: nullable(string()),
     personaId: nullable(string()),
     lorebookIds: array(string()),
@@ -81,10 +83,12 @@ const regexRule = () =>
 const anyValue = unknown()
 const sessionIdField = { sessionId: nonEmpty() }
 const cardIdField = { cardId: nonEmpty() }
+const storyScope = { ...cardIdField, storyId: optional(nonEmpty()) }
 const messageIdField = { messageId: nonEmpty() }
 
 /** method → [request shape, value schema, 简介] */
-const METHODS: Record<string, { req: ZodMiniType; value: ZodMiniType; summary: string }> = {
+export const METHODS = {
+  listStories: { req: object(cardIdField), value: anyValue, summary: '列出角色的独立剧情状态' },
   // 角色
   listCharacters: { req: object({}), value: anyValue, summary: '列出全部角色卡' },
   inspectCharacter: {
@@ -163,11 +167,11 @@ const METHODS: Record<string, { req: ZodMiniType; value: ZodMiniType; summary: s
     summary: '保存角色卡内嵌世界书',
   },
   deleteEmbeddedLorebook: { req: object({ ...cardIdField }), value: anyValue, summary: '删除角色卡内嵌世界书（保留角色卡）' },
-  getChatLorebook: { req: object({ ...cardIdField }), value: anyValue, summary: '读取会话世界书' },
+  getChatLorebook: { req: object({ ...storyScope }), value: anyValue, summary: '读取会话世界书' },
   // json：会话世界书，宽松传输，state/lorebook 归一化时严格校验。
-  saveChatLorebook: { req: object({ ...cardIdField, json: anyValue }), value: anyValue, summary: '保存会话世界书' },
-  getJournal: { req: object({ ...cardIdField }), value: anyValue, summary: '读取角色笔记 journal.md' },
-  saveJournal: { req: object({ ...cardIdField, text: string() }), value: anyValue, summary: '保存角色笔记 journal.md' },
+  saveChatLorebook: { req: object({ ...storyScope, json: anyValue }), value: anyValue, summary: '保存会话世界书' },
+  getJournal: { req: object({ ...storyScope }), value: anyValue, summary: '读取角色笔记 journal.md' },
+  saveJournal: { req: object({ ...storyScope, text: string() }), value: anyValue, summary: '保存角色笔记 journal.md' },
   // 人设
   listPersonas: { req: object({}), value: anyValue, summary: '列出人设' },
   savePersona: { req: object({ persona: persona() }), value: anyValue, summary: '保存人设' },
@@ -254,10 +258,10 @@ const METHODS: Record<string, { req: ZodMiniType; value: ZodMiniType; summary: s
     summary: '以用户身份代写一句台词（不入会话日志，由前端填入输入）',
   },
   // 记忆
-  getMemories: { req: object({ ...cardIdField }), value: anyValue, summary: '列出角色记忆' },
+  getMemories: { req: object({ ...storyScope }), value: anyValue, summary: '列出角色记忆' },
   saveMemory: {
     req: object({
-      ...cardIdField,
+      ...storyScope,
       id: optional(nonEmpty()),
       body: nonEmpty(),
       tags: optional(array(string())),
@@ -266,14 +270,14 @@ const METHODS: Record<string, { req: ZodMiniType; value: ZodMiniType; summary: s
     value: anyValue,
     summary: '新增或更新记忆',
   },
-  deleteMemory: { req: object({ ...cardIdField, id: nonEmpty() }), value: anyValue, summary: '删除记忆' },
-  compressMemories: { req: object({ ...cardIdField }), value: anyValue, summary: '无损归并最旧一批记忆（减少条目数）' },
+  deleteMemory: { req: object({ ...storyScope, id: nonEmpty() }), value: anyValue, summary: '删除记忆' },
+  compressMemories: { req: object({ ...storyScope }), value: anyValue, summary: '无损归并最旧一批记忆（减少条目数）' },
   // 世界状态
-  getWorldDeltas: { req: object({ ...cardIdField }), value: anyValue, summary: '列出世界状态变化层' },
-  revokeWorldDelta: { req: object({ ...cardIdField, id: nonEmpty() }), value: anyValue, summary: '撤销一条变化' },
+  getWorldDeltas: { req: object({ ...storyScope }), value: anyValue, summary: '列出世界状态变化层' },
+  revokeWorldDelta: { req: object({ ...storyScope, id: nonEmpty() }), value: anyValue, summary: '撤销一条变化' },
   addWorldDelta: {
     req: object({
-      ...cardIdField,
+      ...storyScope,
       type: enum_(['add', 'update', 'invalidate']),
       content: nonEmpty(),
       ref: optional(nullable(string())),
@@ -283,7 +287,7 @@ const METHODS: Record<string, { req: ZodMiniType; value: ZodMiniType; summary: s
     value: anyValue,
     summary: '手动新增一条世界状态',
   },
-  exportMergedLorebook: { req: object({ ...cardIdField }), value: anyValue, summary: '导出合并变化层后的世界书' },
+  exportMergedLorebook: { req: object({ ...storyScope }), value: anyValue, summary: '导出合并变化层后的世界书' },
   // 调试
   getTriggerLog: { req: object({ ...sessionIdField }), value: anyValue, summary: '最近一次组装的触发日志' },
   previewPrompt: { req: object({ ...sessionIdField }), value: anyValue, summary: '预览完整提示词序列' },
@@ -298,7 +302,10 @@ const METHODS: Record<string, { req: ZodMiniType; value: ZodMiniType; summary: s
   getSettings: { req: object({}), value: anyValue, summary: '读取 Tavern 设置' },
   // patch：设置深补丁（嵌套 Partial，难用 zod 精确刻画），宽松传输，由 schemastery（node/config）校验合并。
   updateSettings: { req: object({ patch: anyValue }), value: anyValue, summary: '合并更新 Tavern 设置' },
-}
+} satisfies Record<keyof TavernMethodResults, { req: ZodMiniType; value: ZodMiniType; summary: string }>
+
+export type TavernServiceContract = { [K in keyof TavernMethodResults]: (request: TavernMethodRequests[K]) => TavernMethodResults[K] | Promise<TavernMethodResults[K]> }
+export type TavernMethodRequests = { [K in keyof typeof METHODS]: Infer<typeof METHODS[K]['req']> }
 
 // ---------------------------------------------------------------------------
 // 结果类型（裸业务值）的单一来源
@@ -363,6 +370,7 @@ export interface RenderedOutput {
 
 /** previewPrompt 的完整提示词预览（仅预览通道，live 插不进会话日志中间）。 */
 export interface PromptPreview {
+  actualRequest: { text: string; truncated: boolean } | null
   standing: string
   turnContext: string
   system: string
@@ -385,6 +393,7 @@ export interface ContextUsage {
 
 /** 方法名 → 裸业务结果类型。加/改 remote 方法时必须与 METHODS、service 实现、client 镜像同步。 */
 export interface TavernMethodResults {
+  listStories: { items: import('./state/story.js').StorySummary[] }
   // 角色
   listCharacters: { items: CharacterSummary[] }
   inspectCharacter: CharacterInspect
@@ -460,7 +469,7 @@ export interface TavernMethodResults {
   updateSettings: { settings: TavernConfigRaw }
 }
 
-function descriptor(method: string, def: (typeof METHODS)[string]) {
+function descriptor(method: string, def: (typeof METHODS)[keyof typeof METHODS]) {
   return {
     id: `dsh-liketavern#tavern/${method}`,
     service: 'tavern',

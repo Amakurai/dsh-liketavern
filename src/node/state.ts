@@ -10,6 +10,7 @@ import { compileCardRegexScripts, compilePresetRegexScripts } from '../core/rege
 import { normalizeBook, parseJsonCard, parsePngCard, regexScriptsOf, applyCharacterPatch, cardToStJson, createBlankCard, embedCardInPng } from '../state/card.js'
 import { parseLorebook } from '../state/lorebook.js'
 import { MemoryStore } from '../state/memory.js'
+import type { PipelineResult } from './pipeline.js'
 import { Wal } from '../state/wal.js'
 import { WorldDeltaStore } from '../state/worlddelta.js'
 import {
@@ -28,6 +29,8 @@ import { pinStandingText, stableFingerprintHash, standingPinKey, type StandingPi
 import { clearBindingsForCard, deleteBinding, loadBinding, saveBinding, type SessionBinding } from './bindings.js'
 import type { TavernConfig } from './config.js'
 import { ensurePaths, type TavernPaths } from './paths.js'
+import { withWorkspaceLock } from '../state/workspaceLock.js'
+import { discardStory, legacyStoryId, newStoryId, readStory, snapshotStory, storyRoot, listStories } from '../state/story.js'
 
 // Persona 是纯数据形状，定义在 core/persona（remote 契约引用），此处 re-export 保持现有 import 不断。
 export type { Persona } from '../core/persona.js'
@@ -114,6 +117,8 @@ export class TavernState {
   private readonly workspaces = new Map<string, WorkspaceHandle>()
   readonly triggerLogs = new Map<string, { at: string; lines: string[] }>()
   /** 会话当前 turn 号（session/event 的 turn/start 维护；WI/记忆检索按 turn 缓存）。 */
+  readonly requestDiagnostics = new Map<string, { text: string; truncated: boolean }>()
+  readonly turnPlans = new Map<string, { turn: number; cardId: string; storyId?: string; result: PipelineResult }>()
   readonly currentTurns = new Map<string, number>()
   /** 当前 turn 内的 step（pre-step / step/start 维护；turn 开始时为 1）。 */
   readonly currentSteps = new Map<string, number>()
@@ -130,7 +135,7 @@ export class TavernState {
    * 若按当前绑定提交，开层那张卡的楼层会永远悬在未提交状态；工具写路径也凭
    * entry.cardId 与当前绑定比对，不一致即拒绝写入（见 tools.ts resolveCtx）。
    */
-  readonly openFloors = new Map<string, { cardId: string; floor: string }>()
+  readonly openFloors = new Map<string, { cardId: string; storyId?: string; floor: string }>()
   /**
    * 每 turn 一次的 WI/记忆/变化层评估缓存（turn/end 清除）。
    * lastCharMessage / journalText 同轮冻结：第 1 步之后 history 会多出 assistant 文本、
@@ -228,6 +233,45 @@ export class TavernState {
     return handle
   }
 
+  /** 资产初始状态与独立剧情状态共用文件面；storyId 缺省仅供初始状态面板及旧数据迁移。 */
+  async storyWorkspace(cardId: string, storyId?: string): Promise<WorkspaceHandle> {
+    if (!storyId) return this.workspace(cardId)
+    assertValidCardId(cardId)
+    const cardRoot = join(this.paths.characters, cardId)
+    await readStory(cardRoot, storyId)
+    const key = `${cardId}/${storyId}`
+    const cached = this.workspaces.get(key)
+    if (cached) return cached
+    const root = storyRoot(cardRoot, storyId)
+    const wal = new Wal(join(root, 'state/wal'))
+    const fs = new WorkspaceFs(root, wal)
+    const handle = { fs, wal, memory: new MemoryStore(fs), deltas: new WorldDeltaStore(fs) }
+    this.workspaces.set(key, handle)
+    return handle
+  }
+
+  async discardUnboundStory(cardId: string, storyId: string, sessionId: string): Promise<void> {
+    await withWorkspaceLock(this.paths.sessions, async () => {
+      if ((await loadBinding(this.paths, sessionId))?.storyId === storyId) return
+      await discardStory(join(this.paths.characters, cardId), storyId, sessionId)
+      this.workspaces.delete(`${cardId}/${storyId}`)
+    })
+  }
+
+  async listStories(cardId: string) {
+    assertValidCardId(cardId)
+    return listStories(join(this.paths.characters, cardId))
+  }
+
+  /** 准备子剧情，在副本内撤销未继承楼层；准备失败不改变源剧情，也不发布半成品。 */
+  async forkStory(binding: SessionBinding, sessionId: string, prepare: (fs: WorkspaceFs) => Promise<void>): Promise<string> {
+    const source = await this.storyWorkspace(binding.cardId, binding.storyId)
+    const id = newStoryId()
+    await snapshotStory({ cardRoot: join(this.paths.characters, binding.cardId), sourceRoot: source.fs.root,
+      id, sessionId, includeWal: true, prepare })
+    return id
+  }
+
   async listCharacters() {
     return listCharacters(this.paths.characters)
   }
@@ -310,14 +354,17 @@ export class TavernState {
 
   /** 删除角色卡内嵌世界书（assets/character-book.json + card.json 的 characterBook 置空）。非楼层写入，不记 WAL。 */
   async deleteCharacterLorebook(cardId: string): Promise<void> {
-    const charWs = await this.loadCharacter(cardId)
-    if (!charWs) throw new Error(`角色 ${cardId} 不存在`)
-    const fs = this.plainFs(cardId)
-    await fs.delete('assets/character-book.json')
-    const cardJson: Record<string, unknown> = { ...charWs.card, characterBook: null }
-    delete cardJson.pngBytes
-    await fs.writeText('card.json', JSON.stringify(cardJson, null, 2) + '\n')
-    this.bumpAssetRev(`charlore:${cardId}`)
+    assertValidCardId(cardId)
+    return withWorkspaceLock(join(this.paths.characters, cardId), async () => {
+      const charWs = await this.loadCharacter(cardId)
+      if (!charWs) throw new Error(`角色 ${cardId} 不存在`)
+      const fs = this.plainFs(cardId)
+      await fs.delete('assets/character-book.json')
+      const cardJson: Record<string, unknown> = { ...charWs.card, characterBook: null }
+      delete cardJson.pngBytes
+      await fs.writeText('card.json', JSON.stringify(cardJson, null, 2) + '\n')
+      this.bumpAssetRev(`charlore:${cardId}`)
+    })
   }
 
   /** 导入角色卡（PNG/JSON 字节），落盘工作区并初始化索引。 */
@@ -354,31 +401,37 @@ export class TavernState {
   }
 
   async saveCharacterLorebook(cardId: string, json: unknown): Promise<{ name: string; entryCount: number }> {
-    const book = normalizeBook(json)
-    if (!book || book.entries.length === 0) throw new Error('内嵌世界书缺少条目')
-    const charWs = await this.loadCharacter(cardId)
-    if (!charWs) throw new Error(`角色 ${cardId} 不存在`)
-    const fs = this.plainFs(cardId)
-    await fs.writeText('assets/character-book.json', JSON.stringify(json, null, 2) + '\n')
-    const cardJson: Record<string, unknown> = { ...charWs.card, characterBook: book }
-    delete cardJson.pngBytes
-    await fs.writeText('card.json', JSON.stringify(cardJson, null, 2) + '\n')
-    this.bumpAssetRev(`charlore:${cardId}`)
-    return { name: book.name ?? charWs.card.name, entryCount: book.entries.length }
+    assertValidCardId(cardId)
+    return withWorkspaceLock(join(this.paths.characters, cardId), async () => {
+      const book = normalizeBook(json)
+      if (!book || book.entries.length === 0) throw new Error('内嵌世界书缺少条目')
+      const charWs = await this.loadCharacter(cardId)
+      if (!charWs) throw new Error(`角色 ${cardId} 不存在`)
+      const fs = this.plainFs(cardId)
+      await fs.writeText('assets/character-book.json', JSON.stringify(json, null, 2) + '\n')
+      const cardJson: Record<string, unknown> = { ...charWs.card, characterBook: book }
+      delete cardJson.pngBytes
+      await fs.writeText('card.json', JSON.stringify(cardJson, null, 2) + '\n')
+      this.bumpAssetRev(`charlore:${cardId}`)
+      return { name: book.name ?? charWs.card.name, entryCount: book.entries.length }
+    })
   }
 
   async saveCharacter(
     cardId: string,
     patch: Parameters<typeof applyCharacterPatch>[1],
   ): Promise<{ cardId: string; name: string }> {
-    const charWs = await this.loadCharacter(cardId)
-    if (!charWs) throw new Error(`角色 ${cardId} 不存在`)
-    if (patch.name !== undefined && !patch.name.trim()) throw new Error('角色名不能为空')
-    const next = applyCharacterPatch(charWs.card, patch)
-    const { pngBytes: _png, ...cardJson } = next
-    await this.plainFs(cardId).writeText('card.json', JSON.stringify(cardJson, null, 2) + '\n')
-    this.bumpAssetRev(`card:${cardId}`)
-    return { cardId, name: next.name }
+    assertValidCardId(cardId)
+    return withWorkspaceLock(join(this.paths.characters, cardId), async () => {
+      const charWs = await this.loadCharacter(cardId)
+      if (!charWs) throw new Error(`角色 ${cardId} 不存在`)
+      if (patch.name !== undefined && !patch.name.trim()) throw new Error('角色名不能为空')
+      const next = applyCharacterPatch(charWs.card, patch)
+      const { pngBytes: _png, ...cardJson } = next
+      await this.plainFs(cardId).writeText('card.json', JSON.stringify(cardJson, null, 2) + '\n')
+      this.bumpAssetRev(`card:${cardId}`)
+      return { cardId, name: next.name }
+    })
   }
 
   async createCharacter(name: string): Promise<CharacterWorkspace> {
@@ -399,19 +452,19 @@ export class TavernState {
     return { json, pngBase64: Buffer.from(embedded).toString('base64'), name: charWs.card.name }
   }
 
-  async getJournal(cardId: string): Promise<string> {
-    const handle = await this.workspace(cardId)
+  async getJournal(cardId: string, storyId?: string): Promise<string> {
+    const handle = await this.storyWorkspace(cardId, storyId)
     return (await handle.fs.readText('journal.md')) ?? ''
   }
 
-  async saveJournal(cardId: string, text: string): Promise<void> {
-    const fs = this.plainFs(cardId)
+  async saveJournal(cardId: string, text: string, storyId?: string): Promise<void> {
+    const { fs } = await this.plainWorkspace(cardId, storyId)
     await fs.writeText('journal.md', text)
     await rebuildIndex(fs, estimateTokens)
   }
 
-  async getChatLorebook(cardId: string): Promise<unknown> {
-    const handle = await this.workspace(cardId)
+  async getChatLorebook(cardId: string, storyId?: string): Promise<unknown> {
+    const handle = await this.storyWorkspace(cardId, storyId)
     const raw = await handle.fs.readText('assets/chat-lorebook.json')
     if (raw === null) return { entries: {} }
     try {
@@ -421,10 +474,11 @@ export class TavernState {
     }
   }
 
-  async saveChatLorebook(cardId: string, json: unknown): Promise<void> {
+  async saveChatLorebook(cardId: string, json: unknown, storyId?: string): Promise<void> {
     parseLorebook(json, { source: 'chat', sourceRef: 'chat-lorebook' })
-    await this.plainFs(cardId).writeText('assets/chat-lorebook.json', JSON.stringify(json, null, 2) + '\n')
-    this.bumpAssetRev(`chatlore:${cardId}`)
+    const { fs } = await this.plainWorkspace(cardId, storyId)
+    await fs.writeText('assets/chat-lorebook.json', JSON.stringify(json, null, 2) + '\n')
+    this.bumpAssetRev(`chatlore:${cardId}${storyId ? ':' + storyId : ''}`)
   }
 
   // ── 世界书库 ─────────────────────────────────────────────────────────────
@@ -722,6 +776,10 @@ export class TavernState {
    * 回收失败则删除绑定文件并返回 null，避免 UI 把文件夹 ID 当成角色名。
    */
   async loadBinding(sessionId: string): Promise<SessionBinding | null> {
+    return withWorkspaceLock(this.paths.sessions, () => this.loadBindingNow(sessionId))
+  }
+
+  private async loadBindingNow(sessionId: string): Promise<SessionBinding | null> {
     const parsed = await loadBinding(this.paths, sessionId)
     if (!parsed) return null
     // 快路径：cardId 对应工作区仍在时直接用（resolveStaleBinding 对在册卡只做 cardName 同步），
@@ -739,8 +797,15 @@ export class TavernState {
     }
     const persona = await this.resolvePersona(resolved.personaId)
     const personaId = persona?.id ?? null
-    const next = personaId !== resolved.personaId ? { ...resolved, personaId } : resolved
-    if (next.cardId !== parsed.cardId || next.cardName !== parsed.cardName || next.personaId !== parsed.personaId) {
+    let next = personaId !== resolved.personaId ? { ...resolved, personaId } : resolved
+    if (next.cardId !== parsed.cardId) next = { ...next, storyId: undefined, walLineage: undefined }
+    if (!next.storyId) {
+      const id = legacyStoryId(sessionId)
+      const cardRoot = join(this.paths.characters, next.cardId)
+      await snapshotStory({ cardRoot, sourceRoot: cardRoot, id, sessionId, migrated: true, includeWal: true })
+      next = { ...next, storyId: id }
+    }
+    if (next.cardId !== parsed.cardId || next.cardName !== parsed.cardName || next.personaId !== parsed.personaId || next.storyId !== parsed.storyId) {
       // 自愈是读路径上的写：loadBinding 是热路径且不走 enqueueSessionTask，
       // 从 loadBinding 读到落盘之间用户可能已经换了卡。落盘前复读一次比对，
       // 只有磁盘仍是我们读到的那份才写回；否则丢弃本次自愈（下次读会重新算），
@@ -754,8 +819,19 @@ export class TavernState {
   }
 
   async saveBinding(binding: SessionBinding): Promise<void> {
-    const ws = await this.loadCharacter(binding.cardId)
-    return saveBinding(this.paths, { ...binding, cardName: ws?.card.name ?? binding.cardName })
+    return withWorkspaceLock(this.paths.sessions, async () => {
+      const ws = await this.loadCharacter(binding.cardId)
+      const existing = await loadBinding(this.paths, binding.sessionId)
+      let id = binding.storyId ?? (existing?.cardId === binding.cardId ? existing.storyId : undefined)
+      if (!id) {
+        id = newStoryId()
+        const cardRoot = join(this.paths.characters, binding.cardId)
+        await snapshotStory({ cardRoot, sourceRoot: cardRoot, id, sessionId: binding.sessionId })
+      }
+      const story = await readStory(join(this.paths.characters, binding.cardId), id)
+      if (story.sessionId !== binding.sessionId) throw new Error('剧情状态属于另一会话，必须通过分支快照继承')
+      await saveBinding(this.paths, { ...binding, storyId: id, cardName: ws?.card.name ?? binding.cardName })
+    })
   }
 
   /**
@@ -815,7 +891,8 @@ export class TavernState {
       : `charlore:${binding.cardId}`
     tags.push(`${charKey}=${this.assetRevs.get(charKey) ?? 0}`)
     tags.push(`card:${binding.cardId}=${this.assetRevs.get(`card:${binding.cardId}`) ?? 0}`)
-    tags.push(`chatlore:${binding.cardId}=${this.assetRevs.get(`chatlore:${binding.cardId}`) ?? 0}`)
+    const chatKey = `chatlore:${binding.cardId}${binding.storyId ? ':' + binding.storyId : ''}`
+    tags.push(`${chatKey}=${this.assetRevs.get(chatKey) ?? 0}`)
     if (extra?.personaLorebookId) {
       const key = `lore:${this.assetFileId(extra.personaLorebookId)}`
       tags.push(`${key}=${this.assetRevs.get(key) ?? 0}`)
@@ -863,8 +940,8 @@ export class TavernState {
 
   // ── 世界书定时状态（工作区内，随 WAL 回滚） ───────────────────────────────
 
-  async loadTimers(cardId: string, sessionId: string): Promise<WITimerState> {
-    const ws = await this.workspace(cardId)
+  async loadTimers(cardId: string, sessionId: string, storyId?: string): Promise<WITimerState> {
+    const ws = await this.storyWorkspace(cardId, storyId)
     const raw = await ws.fs.readText(`state/wi-timers/${sessionId.replace(/[^A-Za-z0-9_.-]/g, '_')}.json`)
     if (raw === null) return structuredClone(EMPTY_TIMER_STATE)
     try {
@@ -874,8 +951,8 @@ export class TavernState {
     }
   }
 
-  async saveTimers(cardId: string, sessionId: string, state: WITimerState, floor?: string | null): Promise<void> {
-    const ws = await this.workspace(cardId)
+  async saveTimers(cardId: string, sessionId: string, state: WITimerState, floor?: string | null, storyId?: string): Promise<void> {
+    const ws = await this.storyWorkspace(cardId, storyId)
     // turn 流程传入本轮楼层（openFloors entry）→ 定时器随楼层记 WAL、可回滚；
     // 缺省/null = 非会话写入（fork 复制定时器、楼层未开启的会话），共享句柄 floor 恒 null，不记 WAL。
     const fs = floor ? ws.fs.withFloor(floor) : ws.fs
@@ -929,8 +1006,9 @@ export class TavernState {
    * memory/deltas 建在这个无楼层文件面上。供 service 面板写路径使用；
    * turn 流程内的写路径仍走 workspace(cardId) + withFloor(openFloors 的 entry.floor)。
    */
-  async plainWorkspace(cardId: string): Promise<{ fs: WorkspaceFs; memory: MemoryStore; deltas: WorldDeltaStore }> {
-    const fs = this.plainFs(cardId)
+  async plainWorkspace(cardId: string, storyId?: string): Promise<{ fs: WorkspaceFs; memory: MemoryStore; deltas: WorldDeltaStore }> {
+    const handle = await this.storyWorkspace(cardId, storyId)
+    const fs = new WorkspaceFs(handle.fs.root, null)
     return { fs, memory: new MemoryStore(fs), deltas: new WorldDeltaStore(fs) }
   }
 }

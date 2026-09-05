@@ -5,7 +5,7 @@
  * 只有每轮首次评估（live 模式）才持久化新的定时状态——经 WorkspaceFs 写入，
  * 因而落入当前楼层 WAL，可随回退/swipe 回滚。
  * preview（预览提示词 / 代答）用空定时器评估，既不读也不写该缓存，见下方 cacheable。
- * 每步仍重新组装 standing/turn：长上下文下靠最新 runtime context 快照重放本轮世界书/记忆，
+ * 首次成功组装后冻结整轮计划；每步仍把同一份 standing/turn 安装到宿主组装结果，
  * 遗忘则按条用工具补读，而不是跳过组装。
  */
 import type { Agent } from '@deepseek-ai/dsh-agent';
@@ -30,6 +30,8 @@ export interface PipelineInput {
     generationType?: string;
 }
 export interface PipelineResult {
+    standingKey: string;
+    sampling: import('../core/types.js').SamplingSettings;
     /** 角色定义 + 预设骨架（写入 system 段，绑定不变则字节级稳定）。 */
     standing: string;
     /** 本轮世界书/记忆/变化层（写入 runtime context，不进 system 前缀）。 */

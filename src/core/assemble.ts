@@ -214,8 +214,9 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
     { scope: 'prompt', timing: 'assemble' },
     macroCtx,
   )
-  let history: ChatMessage[] = regexRes.messages
-  for (const e of [...inputRegex.errors, ...regexRes.errors]) {
+  const sendRegex = applyRegexToMessages(regexRes.messages, input.regexRules, { scope: 'prompt', timing: 'send' }, macroCtx)
+  let history: ChatMessage[] = sendRegex.messages
+  for (const e of [...inputRegex.errors, ...regexRes.errors, ...sendRegex.errors]) {
     log.push({ kind: 'regex-error', detail: `${e.ruleId}: ${e.message}` })
   }
 
@@ -498,14 +499,15 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
   }
   for (const a of wiAt(WIPosition.AtDepth)) {
     if (skipScript(`世界书 @D「${a.entry.key}」`, a.entry.content)) continue
-    const content = expandTurn(a.entry.content).trim()
+    const stable = isStandingSafeEntry(a.entry)
+    const content = (stable ? expandStanding(a.entry.content) : expandTurn(a.entry.content)).trim()
     if (!content) continue
     depthInjections.push({
       depth: a.entry.depth,
       order: a.entry.order,
       role: WI_ROLE_MAP[a.entry.role],
       content,
-      turn: true, // 触发型世界书本轮命中才注入，永远进 turn
+      turn: !stable, // 确定常驻 @D 进 standing，其它按轮注入
     })
   }
   const depthPrompt = input.card?.depthPrompt
@@ -578,6 +580,7 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
     ...(anBottomMessage ? [anBottomMessage] : []),
     ...afterHistory,
   ]
+  const liveOutsideHistory = [...beforeHistory, ...tail]
   const estimate = (m: ChatMessage) => input.estimateTokens(m.content)
   const totalBudget = Math.max(0, input.budget.maxTokens - input.budget.reserveForOutput)
   const tokensOf = (msgs: ChatMessage[]) => msgs.reduce((s, m) => s + estimate(m), 0)
@@ -618,7 +621,7 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
   for (const label of trimmedSections) log.push({ kind: 'trim', detail: label })
 
   // ── 8. dsh 通道：standing（稳定前缀）与 turnContext（本轮触发层）分开 ──
-  const outsideHistory = [...beforeHistory, ...tail]
+  const outsideHistory = liveOutsideHistory
   // 插进历史中间的注入（@D / depth_prompt / 预设 in-chat）预览能看到；live 不能改日志，
   // 静态的（无本轮宏）并入 standing 钉死——字节稳定、命中前缀缓存，不再每轮全价重付；
   // 本轮才变的并入 turn 尾。

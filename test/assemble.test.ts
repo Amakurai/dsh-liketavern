@@ -1000,3 +1000,27 @@ describe('卡字段与消息宏', () => {
     expect(a.standing).not.toContain('前情')
   })
 })
+
+
+it('live standing 不受模拟历史预算裁剪影响；prompt/send 在模拟历史执行', () => {
+  const base = makeInput({ budget: { maxTokens: 500, reserveForOutput: 100 }, regexRules: [{
+    id: 'send', name: 'send', find: '原句', replace: '改句', enabled: true, scopes: ['prompt'], timing: ['send'],
+    minDepth: null, maxDepth: null, substituteRegex: 0, source: 'user',
+  }] })
+  const short = assemblePrompt({ ...base, history: [{ role: 'user', content: '原句' }] })
+  const long = assemblePrompt({ ...base, history: [{ role: 'assistant', content: 'history '.repeat(5000) }, { role: 'user', content: '原句' }] })
+  expect(short.history.at(-1)?.content).toBe('改句')
+  expect(long.standing).toBe(short.standing)
+  expect(long.standing).toContain('DESC Bob')
+  expect(long.stats.trimmedSections.length).toBeGreaterThan(0)
+})
+
+
+it('确定常驻 @D 进 standing；概率或定时 @D 留在 turn', () => {
+  const fixed = makeWiEntry({ key: 'fixed', constant: true, content: '固定深度设定', position: WIPosition.AtDepth })
+  const conditional = makeWiEntry({ key: 'conditional', constant: true, content: '条件深度设定', cooldown: 2, position: WIPosition.AtDepth })
+  const result = assemblePrompt(makeInput({ wi: wiOf({ [WIPosition.AtDepth]: [act(fixed), act(conditional)] }) }))
+  expect(result.standing).toContain('固定深度设定')
+  expect(result.standing).not.toContain('条件深度设定')
+  expect(result.turnContext).toContain('条件深度设定')
+})

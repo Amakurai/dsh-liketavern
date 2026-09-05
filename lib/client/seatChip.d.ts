@@ -16,4 +16,4 @@ export declare function TavernSeatChip(props: {
     onClick: () => void;
     chevron?: boolean;
     trailing?: ReactNode;
-}): any;
+}): import("react").JSX.Element;

@@ -10,6 +10,7 @@
  * 回滚后楼层目录改名为 <floor>.rolled-back-<timestamp>，保留供调试（UI 不展示）。
  */
 
+import { createHash } from 'node:crypto'
 import { Buffer } from 'node:buffer'
 import { appendFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
@@ -89,6 +90,19 @@ async function isDir(p: string): Promise<boolean> {
 // Wal
 // ---------------------------------------------------------------------------
 
+function deltaChangesOverlap(a: RecordLine, b: RecordLine): boolean {
+  const changed = (rec: RecordLine) => {
+    const rows = (text: string | null | undefined) => new Map((text ?? '').split('\n').filter(Boolean).map((line) => {
+      const value = JSON.parse(line) as { id: string }
+      return [value.id, line]
+    }))
+    const before = rows(rec.before), after = rows(rec.after)
+    return new Set([...before.keys(), ...after.keys()].filter((id) => before.get(id) !== after.get(id)))
+  }
+  const ids = changed(a)
+  return [...changed(b)].some((id) => ids.has(id))
+}
+
 export class Wal {
   private readonly rootDir: string
   /** 实例内 promise 队列：所有公共方法串行化，保证并发安全。 */
@@ -147,7 +161,10 @@ export class Wal {
 
   /** 逆序回放本楼层快照：before 为字符串写回（先确保父目录存在），为 null 删除文件；随后目录改名保留。 */
   rollbackFloor(floor: string, workspaceRoot: string): Promise<string[]> {
-    return withWorkspaceLock(workspaceRoot, () => this.enqueue(() => this.doRollbackFloor(floor, workspaceRoot)))
+    return withWorkspaceLock(workspaceRoot, () => this.enqueue(async () => {
+      await this.preflightRollback([floor])
+      return this.doRollbackFloor(floor, workspaceRoot)
+    }))
   }
 
   /** 按传入顺序的逆序逐个回滚（「回退到第 N 楼」= 撤销其后所有楼层）；不存在的楼层记入 skipped。 */
@@ -177,11 +194,16 @@ export class Wal {
   }
 
   private async readMeta(dir: string): Promise<FloorMeta | null> {
-    try {
-      return JSON.parse(await readFile(join(dir, 'meta.json'), 'utf8')) as FloorMeta
-    } catch {
-      return null
-    }
+    const raw = await readFile(join(dir, 'meta.json'), 'utf8').catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return null
+      throw error
+    })
+    if (raw === null) return null
+    let meta: FloorMeta
+    try { meta = JSON.parse(raw) as FloorMeta } catch { throw new Error(`WAL 元数据损坏：${dir}`) }
+    if (!meta || typeof meta.floor !== 'string' || !meta.floor || typeof meta.startedAt !== 'string'
+      || !Number.isFinite(Date.parse(meta.startedAt)) || typeof meta.committed !== 'boolean') throw new Error(`WAL 元数据形状损坏：${dir}`)
+    return meta
   }
 
   private async writeMeta(dir: string, meta: FloorMeta): Promise<void> {
@@ -199,13 +221,19 @@ export class Wal {
     const records: RecordLine[] = []
     for (const line of text.split('\n')) {
       if (!line.trim()) continue
-      // 单行损坏跳过（与 readMeta 的容忍同一标准）：整体抛错会让 doRollbackAfter
-      // 中断在该楼层，后续楼层全不回滚，工作区停在半回滚状态。
-      try {
-        records.push(JSON.parse(line) as RecordLine)
-      } catch {
-        // 坏行跳过
+      let rec: RecordLine
+      try { rec = JSON.parse(line) as RecordLine } catch { throw new Error(`WAL 记录损坏：${dir}`) }
+      const safePath = typeof rec.path === 'string' && rec.path.length > 0 && !rec.path.includes('\\')
+        && !rec.path.includes(':') && !rec.path.startsWith('/') && rec.path.split('/').every((part) => part !== '..' && part !== '.' && part !== '')
+        && !rec.path.toLowerCase().startsWith('state/wal/')
+      if (!safePath || !Number.isSafeInteger(rec.seq) || rec.seq < 1 || rec.seq <= (records.at(-1)?.seq ?? 0)
+        || !(rec.before === null || typeof rec.before === 'string')
+        || ('after' in rec && !(rec.after === null || typeof rec.after === 'string'))
+        || (rec.beforeEncoding !== undefined && !['utf8', 'base64'].includes(rec.beforeEncoding))
+        || (rec.afterEncoding !== undefined && !['utf8', 'base64'].includes(rec.afterEncoding))) {
+        throw new Error(`WAL 记录形状或路径损坏：${dir}`)
       }
+      records.push(rec)
     }
     return records
   }
@@ -338,55 +366,68 @@ export class Wal {
       )
     }
     const records = await this.readRecords(dir)
-    // 归并条目是来源事实的派生视图。先展开受影响的摘要，再对原条目执行逆操作；
-    // 整理仍不记 WAL，但不能让已撤销事实藏在新的摘要 id 下继续检索。
+    const hash = createHash('sha256').update(JSON.stringify(records)).digest('hex')
+    const progressFile = join(dir, 'rollback-progress.json')
+    type Progress = { hash: string; next: number; restored: string[]; preserved: string[];
+      pending?: { path: string; from: string | null; to: string | null } }
+    const saved = await readFile(progressFile, 'utf8').catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return null
+      throw error
+    })
+    const progress: Progress = saved === null ? { hash, next: records.length - 1, restored: [], preserved: [] } : JSON.parse(saved)
+    if (progress.hash !== hash || !Number.isInteger(progress.next) || progress.next < -1 || progress.next >= records.length
+      || !Array.isArray(progress.restored) || !Array.isArray(progress.preserved)) throw new Error('WAL 回滚恢复游标损坏')
     await expandAffectedMemories(workspaceRoot, records.map((record) => record.path))
-    const restored: string[] = []
-    const preserved = new Set<string>()
-    for (let i = records.length - 1; i >= 0; i--) {
-      const rec = records[i]!
-      const target = join(workspaceRoot, rec.path)
-      // 新记录带 after：只有文件仍保持楼层写入后的内容才执行恢复；楼层外的人工修改
-      // 留在磁盘上，避免面板编辑被回退静默覆盖。旧 WAL 没有 after，沿用原来的恢复口径。
-      if (Object.prototype.hasOwnProperty.call(rec, 'after')) {
-        const after = rec.after as string | null
-        const current = await readFile(target).catch((error: unknown) => {
-          if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
-          throw error
-        })
-        const expected = after === null
-          ? null
-          : rec.afterEncoding === 'base64'
-            ? Buffer.from(after, 'base64')
-            : Buffer.from(after, 'utf8')
-        const same = current === null && expected === null
-          ? true
-          : current !== null && expected !== null && Buffer.from(current).equals(expected)
-        if (!same) {
-          if (rec.path === 'state/world-delta.jsonl' && rec.beforeEncoding !== 'base64' && rec.afterEncoding !== 'base64') {
-            const merged = undoWorldDelta(rec.before, after, current?.toString('utf8') ?? null)
-            if (merged === null) await rm(target, { force: true })
-            else await atomicWrite(target, merged)
-            restored.push(rec.path)
-          } else {
-            preserved.add(rec.path)
-          }
-          continue
-        }
+    const checkpoint = () => atomicWrite(progressFile, JSON.stringify(progress) + '\n')
+    const currentBytes = async (path: string) => (await readFile(join(workspaceRoot, path)).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return null
+      throw error
+    }))?.toString('base64') ?? null
+    const applyPending = async () => {
+      const pending = progress.pending!
+      if (pending.path !== records[progress.next]?.path
+        || !(pending.from === null || typeof pending.from === 'string') || !(pending.to === null || typeof pending.to === 'string')) throw new Error('WAL 回滚恢复记录损坏')
+      const current = await currentBytes(pending.path)
+      // 崩溃可能发生在文件替换后、游标推进前。已到目标值则直接推进，避免重放较新的 before。
+      if (current !== pending.to) {
+        if (current !== pending.from) throw new Error(`WAL 恢复期间文件又被修改：${pending.path}`)
+        const target = join(workspaceRoot, pending.path)
+        if (pending.to === null) await rm(target, { force: true })
+        else { await mkdir(dirname(target), { recursive: true }); await atomicWrite(target, Buffer.from(pending.to, 'base64')) }
       }
-      if (rec.before === null) {
-        await rm(target, { force: true }) // 原本不存在：删除（已不存在则跳过）
-      } else {
-        await mkdir(dirname(target), { recursive: true }) // 父目录可能已被本楼层写入删除
-        if (rec.beforeEncoding === 'base64' || (rec.beforeEncoding === undefined && rec.before.startsWith(WAL_BINARY_MARK))) {
-          const encoded = rec.beforeEncoding === 'base64' ? rec.before : rec.before.slice(WAL_BINARY_MARK.length)
-          await atomicWrite(target, Buffer.from(encoded, 'base64'))
-        } else {
-          await atomicWrite(target, rec.before)
-        }
-      }
-      restored.push(rec.path)
+      progress.restored.push(pending.path)
+      delete progress.pending
+      progress.next--
+      await checkpoint()
     }
+    if (progress.pending) await applyPending()
+    for (let i = progress.next; i >= 0; i--) {
+      const rec = records[i]!
+      const current = await currentBytes(rec.path)
+      let desired = rec.before === null ? null : rec.beforeEncoding === 'base64' ? rec.before
+        : rec.beforeEncoding === undefined && rec.before.startsWith(WAL_BINARY_MARK) ? rec.before.slice(WAL_BINARY_MARK.length)
+        : Buffer.from(rec.before).toString('base64')
+      if ('after' in rec) {
+        const after = rec.after ?? null
+        const expected = after === null ? null : rec.afterEncoding === 'base64' ? after : Buffer.from(after).toString('base64')
+        if (current !== expected) {
+          if (rec.path === 'state/world-delta.jsonl' && rec.beforeEncoding !== 'base64' && rec.afterEncoding !== 'base64') {
+            const merged = undoWorldDelta(rec.before, after, current === null ? null : Buffer.from(current, 'base64').toString('utf8'))
+            desired = merged === null ? null : Buffer.from(merged).toString('base64')
+          } else {
+            progress.preserved.push(rec.path)
+            progress.next = i - 1
+            await checkpoint()
+            continue
+          }
+        }
+      }
+      progress.pending = { path: rec.path, from: current, to: desired }
+      await checkpoint()
+      await applyPending()
+    }
+    const restored = progress.restored
+    const preserved = new Set(progress.preserved)
     if (records.some((record) => record.path.startsWith('memory/') || record.path === 'state/world-delta.jsonl')) {
       await rebuildIndex(new WorkspaceFs(workspaceRoot, null), estimateTokens)
     }
@@ -399,7 +440,26 @@ export class Wal {
     return restored
   }
 
+  /** 整批先校验；不能在撤销较新楼层后才发现较旧日志损坏。 */
+  private async preflightRollback(floors: string[]): Promise<void> {
+    const selected = new Set(floors)
+    const changes: RecordLine[] = []
+    for (const floor of floors) changes.push(...await this.readRecords(join(this.rootDir, sanitizeFloor(floor))))
+    // 旧共享工作区可能仍有其它会话的后继写入。拒绝越过这些依赖撤销，防止之后撤销 B 时复活 A。
+    for (const floor of await this.doListFloors()) {
+      if (floor.rolledBack || selected.has(floor.floor)) continue
+      const records = await this.readRecords(join(this.rootDir, sanitizeFloor(floor.floor)))
+      for (const rec of records) {
+        if (changes.some((change) => change.path === rec.path && (rec.path !== 'state/world-delta.jsonl' || deltaChangesOverlap(change, rec)) && 'after' in change && change.after !== null
+          && rec.before === change.after && rec.beforeEncoding === change.afterEncoding)) {
+          throw new Error(`WAL 存在未撤销的后继依赖：${floor.floor}（${rec.path}）；请从最新楼层依次回退`)
+        }
+      }
+    }
+  }
+
   private async doRollbackAfter(floors: string[], workspaceRoot: string): Promise<RollbackAfterResult> {
+    await this.preflightRollback(floors)
     await mkdir(this.rootDir, { recursive: true })
     const restored: string[] = []
     const skipped: string[] = []
@@ -421,7 +481,7 @@ export class Wal {
     for (const entry of entries) {
       if (!entry.isDirectory()) continue
       const meta = await this.readMeta(join(this.rootDir, entry.name))
-      if (!meta) continue // 元数据缺失/损坏的目录不展示
+      if (!meta || sanitizeFloor(meta.floor) !== entry.name.split(ROLLED_BACK_MARK)[0]) throw new Error(`WAL 元数据缺失或目录不匹配：${entry.name}`)
       floors.push({
         floor: meta.floor,
         committed: meta.committed,

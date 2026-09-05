@@ -1,6 +1,6 @@
 /**
  * 世界状态变化层存储（WorldDeltaStore）单元测试。
- * 覆盖：append 生成不依赖行数的唯一 id、并发 append 经互斥队列不丢行、list 过滤 revoked/过期（注入 now）、
+ * 覆盖：append 生成不依赖行数的唯一 id、同实例及跨实例并发 append 经互斥队列不丢行、list 过滤 revoked/过期（注入 now）、
  * revoke 行内标记、toEngineEntries 的 order 紧随 ref、三种 type 的 content 标注、空 keys 不命中（constant=false）。
  */
 import { mkdtemp, rm } from 'node:fs/promises'
@@ -96,6 +96,15 @@ describe('WorldDeltaStore', () => {
     const listed = await store.list({ includeRevoked: true })
     expect(listed).toHaveLength(8)
     expect(new Set(listed.map((d) => d.id)).size).toBe(8)
+  })
+
+  it('不同 WorldDeltaStore 实例共享同一工作区队列，不丢行', async () => {
+    const other = new WorldDeltaStore(new WorkspaceFs(root, null))
+    await Promise.all([
+      store.append({ ...base, type: 'add', content: '实例 A' }),
+      other.append({ ...base, type: 'add', content: '实例 B' }),
+    ])
+    expect((await store.list({ includeRevoked: true })).map((d) => d.content).sort()).toEqual(['实例 A', '实例 B'])
   })
 
   it('toEngineEntries：order 紧随 ref（resolveRefOrder → 100 时为 100.5）', async () => {

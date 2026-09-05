@@ -117,7 +117,6 @@ export function SettingsSection(props: { remote: TavernRemote }) {
     <>
       {toast.node}
       <Tabs
-        size="sm"
         items={SUBS.map((s) => ({ id: s.id, label: t(s.labelKey) }))}
         value={sub}
         onChange={(id) => {

@@ -3,8 +3,8 @@
  * turn 结束后经 agent.runMaintenance 用当前会话模型把最旧一批记忆合并为一条。
  *
  * 语义约定：maintenance 在楼层之外运行，写入走 state.plainWorkspace 的
- * floor=null 文件面 → 压缩写入不记 WAL、不随楼层回滚（压缩是无损整理，
- * 不增删剧情事实；记忆条目本身的写入仍在 turn 内、照常回滚）。即使同卡的
+ * floor=null 文件面，压缩本身不记 WAL；原文归档并保留来源链。
+ * 源记忆回滚时先展开相关摘要再撤销原文，避免摘要残留已撤销事实。即使同卡的
  * 另一会话正在生成中（其楼层由 withFloor 派生实例持有），这里也绝不会被记进 WAL。
  * 同步压缩曾阻塞该 step 的 LLM 流式调用数秒，挪到 idle 期后写工具立即返回。
  */
@@ -62,15 +62,10 @@ export async function compressOldestMemories(
   // 永不重试）。反过来 write 失败时批次原样保留、下次压缩原样重试；archive 中途失败的
   // 最坏结果只是新（合并条目）旧（未移走的批次残余）并存——下次压缩把残余再合并一次，
   // 有冗余但不丢事实。
-  await ws.memory.write({
-    body: merged,
-    tags: [...new Set(['compressed', ...batch.flatMap((entry) => entry.tags)])],
-    keys: [...new Set(batch.flatMap((entry) => entry.keys))],
-    sourceRange: `compress:${batch.map((b) => b.id).join(',')}`,
-  })
-  await ws.memory.archive(batch.map((b) => b.id))
+  const archived = await ws.memory.mergeBatch(batch, merged, 'compress')
+  if (archived === 0) return null
   await rebuildIndex(ws.fs, estimateTokens)
-  return { merged, archived: batch.length }
+  return { merged, archived }
 }
 
 /**

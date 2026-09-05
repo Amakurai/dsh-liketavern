@@ -60,8 +60,10 @@ export declare class MemoryStore {
     invalidate(): void;
     /** 解析 memory/*.md（不含 archive/），坏文件容错跳过；按 created 升序（并列按 id 字典序）。 */
     list(): Promise<MemoryEntry[]>;
+    private listNow;
     /** 按 id 取单条（不含 archive/）；不存在或坏文件返回 null。 */
     get(id: string): Promise<MemoryEntry | null>;
+    private getNow;
     /** 写入新记忆；正文超过 200 字时返回值带 overLength: true（软提示，不拒绝）。 */
     write(input: {
         body: string;
@@ -75,10 +77,14 @@ export declare class MemoryStore {
         tags?: string[];
         keys?: string[];
     }, options?: MemoryUpdateOptions): Promise<MemoryEntry | null>;
+    private updateNow;
     /** 事务删除（经 fs.delete）；不存在返回 false。 */
     delete(id: string): Promise<boolean>;
     /** 移入 memory/archive/（读原文件 → 写 archive 路径 → 删原路径，全经 fs）；返回移动条数。 */
     archive(ids: string[]): Promise<number>;
+    private archiveNow;
+    /** 归并使用乐观校验：等待 LLM 时来源被编辑、删除或回滚，就放弃旧摘要。 */
+    mergeBatch(batch: readonly MemoryEntry[], body: string, kind: 'compress' | 'merge'): Promise<number>;
     /**
      * 以当前活跃记忆构建 BM25 索引。
      * 与 list 共用指纹缓存：记忆没变过就复用上次的索引，不重读也不重分词

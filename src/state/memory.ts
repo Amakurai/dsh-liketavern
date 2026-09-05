@@ -11,6 +11,7 @@ import { Bm25Index } from '../core/bm25.js'
 import { estimateTokens } from '../core/tokenize.js'
 import type { MemoryEntry } from '../core/types.js'
 import type { WorkspaceFs } from './workspaceFs.js'
+import { withWorkspaceLock } from './workspaceLock.js'
 
 /** 正文软上限（字）：超过不拒绝，write 返回值带 overLength: true，治理提示由工具层做。 */
 export const MEMORY_BODY_SOFT_LIMIT = 200
@@ -164,6 +165,10 @@ export class MemoryStore {
 
   /** 解析 memory/*.md（不含 archive/），坏文件容错跳过；按 created 升序（并列按 id 字典序）。 */
   async list(): Promise<MemoryEntry[]> {
+    return withWorkspaceLock(this.fs.root, () => this.listNow())
+  }
+
+  private async listNow(): Promise<MemoryEntry[]> {
     // 非递归列举：archive/ 只增不查，递归会让每次检索的成本随归档量增长。
     const stats = await this.fs.listStats(MEMORY_DIR)
     const files = stats.filter((f) => f.name.endsWith('.md'))
@@ -192,6 +197,10 @@ export class MemoryStore {
 
   /** 按 id 取单条（不含 archive/）；不存在或坏文件返回 null。 */
   async get(id: string): Promise<MemoryEntry | null> {
+    return withWorkspaceLock(this.fs.root, () => this.getNow(id))
+  }
+
+  private async getNow(id: string): Promise<MemoryEntry | null> {
     const text = await this.fs.readText(this.pathOf(id))
     if (text === null) return null
     try {
@@ -237,6 +246,10 @@ export class MemoryStore {
     patch: { body?: string; tags?: string[]; keys?: string[] },
     options?: MemoryUpdateOptions,
   ): Promise<MemoryEntry | null> {
+    return withWorkspaceLock(this.fs.root, () => this.updateNow(id, patch, options))
+  }
+
+  private async updateNow(id: string, patch: { body?: string; tags?: string[]; keys?: string[] }, options?: MemoryUpdateOptions): Promise<MemoryEntry | null> {
     const existing = await this.get(id)
     if (!existing) return null
     const lists = options?.listMode ?? 'merge'
@@ -247,7 +260,8 @@ export class MemoryStore {
     const meta: MemoryMeta = {
       created: existing.created,
       updated: new Date().toISOString(),
-      sourceRange: existing.sourceRange,
+      // 面板明确改写摘要后，它成为人工修订，不再被来源回滚自动展开。
+      sourceRange: lists === 'replace' && /^(?:compress|merge):/.test(existing.sourceRange) ? '' : existing.sourceRange,
       tags: updateList(existing.tags, patch.tags),
       keys: updateList(existing.keys, patch.keys),
     }
@@ -259,14 +273,20 @@ export class MemoryStore {
 
   /** 事务删除（经 fs.delete）；不存在返回 false。 */
   async delete(id: string): Promise<boolean> {
-    if ((await this.fs.readText(this.pathOf(id))) === null) return false
-    await this.fs.delete(this.pathOf(id))
-    this.invalidate()
-    return true
+    return withWorkspaceLock(this.fs.root, async () => {
+      if ((await this.fs.readText(this.pathOf(id))) === null) return false
+      await this.fs.delete(this.pathOf(id))
+      this.invalidate()
+      return true
+    })
   }
 
   /** 移入 memory/archive/（读原文件 → 写 archive 路径 → 删原路径，全经 fs）；返回移动条数。 */
   async archive(ids: string[]): Promise<number> {
+    return withWorkspaceLock(this.fs.root, () => this.archiveNow(ids))
+  }
+
+  private async archiveNow(ids: string[]): Promise<number> {
     let moved = 0
     for (const id of ids) {
       const text = await this.fs.readText(this.pathOf(id))
@@ -277,6 +297,24 @@ export class MemoryStore {
     }
     if (moved > 0) this.invalidate()
     return moved
+  }
+
+  /** 归并使用乐观校验：等待 LLM 时来源被编辑、删除或回滚，就放弃旧摘要。 */
+  async mergeBatch(batch: readonly MemoryEntry[], body: string, kind: 'compress' | 'merge'): Promise<number> {
+    return withWorkspaceLock(this.fs.root, async () => {
+      for (const source of batch) {
+        const current = await this.get(source.id)
+        if (!current || serializeMemory(current, current.body) !== serializeMemory(source, source.body)) return 0
+      }
+      if (!batch.length) return 0
+      await this.write({
+        body,
+        tags: [...new Set([kind === 'compress' ? 'compressed' : 'merged', ...batch.flatMap((entry) => entry.tags)])],
+        keys: [...new Set(batch.flatMap((entry) => entry.keys))],
+        sourceRange: `${kind}:${batch.map((entry) => entry.id).join(',')}`,
+      })
+      return this.archive(batch.map((entry) => entry.id))
+    })
   }
 
   /**

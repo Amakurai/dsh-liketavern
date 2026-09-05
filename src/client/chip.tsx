@@ -348,7 +348,7 @@ export function TavernHeaderChip(props: {
         open={open}
         title={t('chip.dialog.title')}
         onClose={() => setOpen(false)}
-        width="xl"
+        width="full"
         footer={
           draft ? (
             <div className="dsh-tavern-footActions">
@@ -372,7 +372,7 @@ export function TavernHeaderChip(props: {
           ) : undefined
         }
       >
-          <div className="dsh-tavern-binding">
+          <div className="dsh-tavern-binding dsh-tavern-bindingWide">
           <Err message={error} />
           {!lists && (
             <div className="dsh-tavern-panelCard">

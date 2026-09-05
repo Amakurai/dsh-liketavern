@@ -1,11 +1,12 @@
 /**
  * 事务层（WAL）：楼层级写入快照与回滚。
- * agent 每回合（楼层）对工作区的所有写入，先经 record() 快照原内容；
- * 「重新生成/回退楼层」时按记录逆序回放，把工作区精确恢复到该回合开始前。
+ * agent 每次写入先经 recordChange() 持久化前后镜像，再原子替换正文。
+ * 回退逆序撤销本层修改，保留后续手动编辑；世界状态按条目合并撤销。
+ * record()/recordAfter() 仅保留旧调用兼容，新写入不得使用后补快照协议。
  *
  * 磁盘布局（rootDir 为工作区的 state/wal/ 目录）：
  *   <root>/<floor>/meta.json      楼层事务元数据（committed/时间戳）
- *   <root>/<floor>/records.jsonl  写入前快照，每行 {"seq":n,"path":"...","before":"...|null"}
+ *   <root>/<floor>/records.jsonl  每次修改的 before/after 及其显式编码
  * 回滚后楼层目录改名为 <floor>.rolled-back-<timestamp>，保留供调试（UI 不展示）。
  */
 
@@ -13,12 +14,19 @@ import { Buffer } from 'node:buffer'
 import { appendFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { WalRecord } from '../core/types.js'
+import { undoWorldDelta } from '../core/walUndo.js'
+import { atomicWrite } from './atomicWrite.js'
+import { withWorkspaceLock } from './workspaceLock.js'
+import { expandAffectedMemories } from './memoryRollback.js'
+import { WorkspaceFs } from './workspaceFs.js'
+import { rebuildIndex } from './workspace.js'
+import { estimateTokens } from '../core/tokenize.js'
 
 // ---------------------------------------------------------------------------
 // 磁盘格式
 // ---------------------------------------------------------------------------
 
-/** records.jsonl 单行形状（floor 由所在目录承载，行内不重复）。 */
+/** records.jsonl 单行形状（floor 由所在目录承载，行内不重复）。after/编码字段兼容旧记录。 */
 type RecordLine = Omit<WalRecord, 'floor'>
 
 /** meta.json 形状：楼层事务元数据。 */
@@ -29,6 +37,8 @@ interface FloorMeta {
   committedAt?: string
   /** 回滚时刻（prune 以此为据判断过期）。 */
   rolledBackAt?: string
+  /** 与楼层写入不同的后续修订被保留，供检查回滚结果。 */
+  preservedPaths?: string[]
 }
 
 /** listFloors() 返回元素。 */
@@ -50,7 +60,7 @@ export interface RollbackAfterResult {
 /** 回滚目录名标记：<floor>.rolled-back-<timestamp>。 */
 const ROLLED_BACK_MARK = '.rolled-back-'
 
-/** records.jsonl 中二进制 before 快照的前缀（WorkspaceFs.writeBytes 写入，回滚时 base64 解码）。 */
+/** 旧版本 records.jsonl 中二进制 before 快照的前缀；新记录使用 beforeEncoding 字段。 */
 export const WAL_BINARY_MARK = 'binary-base64:'
 
 // ---------------------------------------------------------------------------
@@ -101,8 +111,33 @@ export class Wal {
   }
 
   /** 在即将写入 path 前记录快照；同层同路径只留首次快照，重复调用忽略。path 统一为正斜杠相对路径。 */
-  record(floor: string, path: string, before: string | null): Promise<void> {
-    return this.enqueue(() => this.doRecord(floor, path, before))
+  record(floor: string, path: string, before: string | null, beforeEncoding?: 'utf8' | 'base64'): Promise<void> {
+    return this.enqueue(() => this.doRecord(floor, path, before, beforeEncoding))
+  }
+
+  /** 写入完成后补记 after 快照，用于回滚前识别楼层外的人工修改。 */
+  recordAfter(floor: string, path: string, after: string | null, afterEncoding?: 'utf8' | 'base64'): Promise<void> {
+    return this.enqueue(() => this.doRecordAfter(floor, path, after, afterEncoding))
+  }
+
+  /** 每次修改独立记录 before/after，必须在正文原子替换之前持久化。 */
+  recordChange(floor: string, path: string, before: string | null, after: string | null,
+    beforeEncoding: 'utf8' | 'base64', afterEncoding: 'utf8' | 'base64'): Promise<void> {
+    return this.enqueue(async () => {
+      const dirName = sanitizeFloor(floor)
+      const dir = join(this.rootDir, dirName)
+      if (!(await isDir(dir))) throw new Error(`楼层 "${floor}" 未开始（或已回滚），无法记录写入快照`)
+      const state = await this.loadState(dirName)
+      const file = join(dir, 'records.jsonl')
+      const text = await readFile(file, 'utf8').catch((error: unknown) => {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return ''
+        throw error
+      })
+      const record: RecordLine = { seq: state.seq + 1, path: path.replace(/\\/g, '/'), before, after, beforeEncoding, afterEncoding }
+      await atomicWrite(file, text + (text && !text.endsWith('\n') ? '\n' : '') + JSON.stringify(record) + '\n')
+      state.seq = record.seq
+      state.paths.add(record.path)
+    })
   }
 
   /** 提交楼层：meta.committed=true 并记录 committedAt。 */
@@ -112,12 +147,12 @@ export class Wal {
 
   /** 逆序回放本楼层快照：before 为字符串写回（先确保父目录存在），为 null 删除文件；随后目录改名保留。 */
   rollbackFloor(floor: string, workspaceRoot: string): Promise<string[]> {
-    return this.enqueue(() => this.doRollbackFloor(floor, workspaceRoot))
+    return withWorkspaceLock(workspaceRoot, () => this.enqueue(() => this.doRollbackFloor(floor, workspaceRoot)))
   }
 
   /** 按传入顺序的逆序逐个回滚（「回退到第 N 楼」= 撤销其后所有楼层）；不存在的楼层记入 skipped。 */
   rollbackAfter(floors: string[], workspaceRoot: string): Promise<RollbackAfterResult> {
-    return this.enqueue(() => this.doRollbackAfter(floors, workspaceRoot))
+    return withWorkspaceLock(workspaceRoot, () => this.enqueue(() => this.doRollbackAfter(floors, workspaceRoot)))
   }
 
   /** 列出全部楼层（含已回滚，rolledBack: true），按 startedAt 升序。 */
@@ -150,7 +185,7 @@ export class Wal {
   }
 
   private async writeMeta(dir: string, meta: FloorMeta): Promise<void> {
-    await writeFile(join(dir, 'meta.json'), JSON.stringify(meta, null, 2) + '\n', 'utf8')
+    await atomicWrite(join(dir, 'meta.json'), JSON.stringify(meta, null, 2) + '\n')
   }
 
   private async readRecords(dir: string): Promise<RecordLine[]> {
@@ -219,7 +254,7 @@ export class Wal {
     this.states.set(dirName, { paths: new Set(), seq: 0 })
   }
 
-  private async doRecord(floor: string, path: string, before: string | null): Promise<void> {
+  private async doRecord(floor: string, path: string, before: string | null, beforeEncoding?: 'utf8' | 'base64'): Promise<void> {
     await mkdir(this.rootDir, { recursive: true })
     const dirName = sanitizeFloor(floor)
     const dir = join(this.rootDir, dirName)
@@ -234,10 +269,51 @@ export class Wal {
     // 回滚只能把文件停在改后内容——静默的数据丢失。doRecord 在串行队列内执行，
     // 这段「读—写」不会与其他记录交错，推迟更新是安全的。
     const seq = state.seq + 1
-    const line: RecordLine = { seq, path: normPath, before }
+    const line: RecordLine = {
+      seq,
+      path: normPath,
+      before,
+      ...(beforeEncoding && before !== null ? { beforeEncoding } : {}),
+    }
     await appendFile(join(dir, 'records.jsonl'), JSON.stringify(line) + '\n', 'utf8')
     state.seq = seq
     state.paths.add(normPath)
+  }
+
+  private async doRecordAfter(floor: string, path: string, after: string | null, afterEncoding?: 'utf8' | 'base64'): Promise<void> {
+    const dirName = sanitizeFloor(floor)
+    const dir = join(this.rootDir, dirName)
+    if (!(await isDir(dir))) throw new Error(`楼层 "${floor}" 未开始（或已回滚），无法记录写入后快照`)
+    const file = join(dir, 'records.jsonl')
+    let text: string
+    try {
+      text = await readFile(file, 'utf8')
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        throw new Error(`楼层 "${floor}" 没有可更新的 WAL 记录`)
+      }
+      throw error
+    }
+    const normPath = path.replace(/\\/g, '/')
+    let found = false
+    const lines = text.split('\n').map((line) => {
+      if (!line.trim()) return line
+      try {
+        const record = JSON.parse(line) as RecordLine
+        if (record.path !== normPath) return line
+        found = true
+        return JSON.stringify({
+          ...record,
+          after,
+          ...(afterEncoding && after !== null ? { afterEncoding } : {}),
+        })
+      } catch {
+        // 坏行保留原文；补写 after 不应顺手抹掉调试信息。
+        return line
+      }
+    })
+    if (!found) throw new Error(`楼层 "${floor}" 没有路径 "${normPath}" 的 WAL 记录`)
+    await atomicWrite(file, lines.join('\n'))
   }
 
   private async doCommitFloor(floor: string): Promise<void> {
@@ -262,24 +338,61 @@ export class Wal {
       )
     }
     const records = await this.readRecords(dir)
+    // 归并条目是来源事实的派生视图。先展开受影响的摘要，再对原条目执行逆操作；
+    // 整理仍不记 WAL，但不能让已撤销事实藏在新的摘要 id 下继续检索。
+    await expandAffectedMemories(workspaceRoot, records.map((record) => record.path))
     const restored: string[] = []
+    const preserved = new Set<string>()
     for (let i = records.length - 1; i >= 0; i--) {
       const rec = records[i]!
       const target = join(workspaceRoot, rec.path)
+      // 新记录带 after：只有文件仍保持楼层写入后的内容才执行恢复；楼层外的人工修改
+      // 留在磁盘上，避免面板编辑被回退静默覆盖。旧 WAL 没有 after，沿用原来的恢复口径。
+      if (Object.prototype.hasOwnProperty.call(rec, 'after')) {
+        const after = rec.after as string | null
+        const current = await readFile(target).catch((error: unknown) => {
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+          throw error
+        })
+        const expected = after === null
+          ? null
+          : rec.afterEncoding === 'base64'
+            ? Buffer.from(after, 'base64')
+            : Buffer.from(after, 'utf8')
+        const same = current === null && expected === null
+          ? true
+          : current !== null && expected !== null && Buffer.from(current).equals(expected)
+        if (!same) {
+          if (rec.path === 'state/world-delta.jsonl' && rec.beforeEncoding !== 'base64' && rec.afterEncoding !== 'base64') {
+            const merged = undoWorldDelta(rec.before, after, current?.toString('utf8') ?? null)
+            if (merged === null) await rm(target, { force: true })
+            else await atomicWrite(target, merged)
+            restored.push(rec.path)
+          } else {
+            preserved.add(rec.path)
+          }
+          continue
+        }
+      }
       if (rec.before === null) {
         await rm(target, { force: true }) // 原本不存在：删除（已不存在则跳过）
       } else {
         await mkdir(dirname(target), { recursive: true }) // 父目录可能已被本楼层写入删除
-        if (rec.before.startsWith(WAL_BINARY_MARK)) {
-          await writeFile(target, Buffer.from(rec.before.slice(WAL_BINARY_MARK.length), 'base64'))
+        if (rec.beforeEncoding === 'base64' || (rec.beforeEncoding === undefined && rec.before.startsWith(WAL_BINARY_MARK))) {
+          const encoded = rec.beforeEncoding === 'base64' ? rec.before : rec.before.slice(WAL_BINARY_MARK.length)
+          await atomicWrite(target, Buffer.from(encoded, 'base64'))
         } else {
-          await writeFile(target, rec.before, 'utf8')
+          await atomicWrite(target, rec.before)
         }
       }
       restored.push(rec.path)
     }
+    if (records.some((record) => record.path.startsWith('memory/') || record.path === 'state/world-delta.jsonl')) {
+      await rebuildIndex(new WorkspaceFs(workspaceRoot, null), estimateTokens)
+    }
     const meta = (await this.readMeta(dir)) ?? { floor, startedAt: new Date().toISOString(), committed: false }
     meta.rolledBackAt = new Date().toISOString()
+    meta.preservedPaths = [...preserved]
     await this.writeMeta(dir, meta)
     await rename(dir, join(this.rootDir, `${dirName}${ROLLED_BACK_MARK}${timestamp()}`))
     this.states.delete(dirName)

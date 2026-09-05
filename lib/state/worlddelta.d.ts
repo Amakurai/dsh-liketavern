@@ -4,17 +4,18 @@
  * 「单条撤销」为行内 revoked 标记，不物理删除；toEngineEntries 把变化层归一化为世界书引擎的
  * 额外条目源（source='delta'），update/invalidate 紧随原条目之后并显式标注「当前状态」。
  *
- * 读改写经实例内 promise 队列串行化：同 turn 连续两次 worldstate_update、或工具写与
- * 设置面板写交错时，两个并发的「读全部行 → 全量重写」会互相覆盖丢行。
+ * 读改写与回退共用工作区锁：所有实例串行执行，防止工具与设置面板并发修改丢行。
  * id 用毫秒时间戳 + 随机后缀而不按行数推导：WAL 回滚把 jsonl 恢复到更短状态后，
  * 行数推导会让新 append 复用旧 id，revoke 可能误撤。
  */
 import type { WorldDelta, WorldInfoEntry } from '../core/types.js';
 import type { WorkspaceFs } from './workspaceFs.js';
+/**
+ * 同一角色工作区可能同时存在共享句柄、楼层派生句柄和多个 plainWorkspace 实例。
+ * 队列必须按工作区根共享；放在实例字段里会让两个「读全部行 → 全量重写」互相覆盖。
+ */
 export declare class WorldDeltaStore {
     private readonly fs;
-    /** 实例内 promise 队列：append/revoke 的读改写串行化，保证并发安全。 */
-    private queue;
     constructor(fs: WorkspaceFs);
     private enqueue;
     /** 读出全部非空原始行（保留原文，重写时不丢无法解析的行）。 */
@@ -29,6 +30,7 @@ export declare class WorldDeltaStore {
         includeRevoked?: boolean;
         now?: Date;
     }): Promise<WorldDelta[]>;
+    private listNow;
     /** 单条撤销：重写该行为 revoked: true（不物理删除）；未找到返回 false。同样在互斥队列内。 */
     revoke(id: string): Promise<boolean>;
     /**

@@ -1,11 +1,12 @@
 /**
  * 事务层（WAL）：楼层级写入快照与回滚。
- * agent 每回合（楼层）对工作区的所有写入，先经 record() 快照原内容；
- * 「重新生成/回退楼层」时按记录逆序回放，把工作区精确恢复到该回合开始前。
+ * agent 每次写入先经 recordChange() 持久化前后镜像，再原子替换正文。
+ * 回退逆序撤销本层修改，保留后续手动编辑；世界状态按条目合并撤销。
+ * record()/recordAfter() 仅保留旧调用兼容，新写入不得使用后补快照协议。
  *
  * 磁盘布局（rootDir 为工作区的 state/wal/ 目录）：
  *   <root>/<floor>/meta.json      楼层事务元数据（committed/时间戳）
- *   <root>/<floor>/records.jsonl  写入前快照，每行 {"seq":n,"path":"...","before":"...|null"}
+ *   <root>/<floor>/records.jsonl  每次修改的 before/after 及其显式编码
  * 回滚后楼层目录改名为 <floor>.rolled-back-<timestamp>，保留供调试（UI 不展示）。
  */
 /** listFloors() 返回元素。 */
@@ -22,7 +23,7 @@ export interface RollbackAfterResult {
     /** 已不存在（含已回滚）而被跳过的楼层。 */
     skipped: string[];
 }
-/** records.jsonl 中二进制 before 快照的前缀（WorkspaceFs.writeBytes 写入，回滚时 base64 解码）。 */
+/** 旧版本 records.jsonl 中二进制 before 快照的前缀；新记录使用 beforeEncoding 字段。 */
 export declare const WAL_BINARY_MARK = "binary-base64:";
 export declare class Wal {
     private readonly rootDir;
@@ -39,7 +40,11 @@ export declare class Wal {
     /** 开始一个楼层事务；对已存在且未 commit 的同名单元报错（防止跨会话串层）。 */
     beginFloor(floor: string): Promise<void>;
     /** 在即将写入 path 前记录快照；同层同路径只留首次快照，重复调用忽略。path 统一为正斜杠相对路径。 */
-    record(floor: string, path: string, before: string | null): Promise<void>;
+    record(floor: string, path: string, before: string | null, beforeEncoding?: 'utf8' | 'base64'): Promise<void>;
+    /** 写入完成后补记 after 快照，用于回滚前识别楼层外的人工修改。 */
+    recordAfter(floor: string, path: string, after: string | null, afterEncoding?: 'utf8' | 'base64'): Promise<void>;
+    /** 每次修改独立记录 before/after，必须在正文原子替换之前持久化。 */
+    recordChange(floor: string, path: string, before: string | null, after: string | null, beforeEncoding: 'utf8' | 'base64', afterEncoding: 'utf8' | 'base64'): Promise<void>;
     /** 提交楼层：meta.committed=true 并记录 committedAt。 */
     commitFloor(floor: string): Promise<void>;
     /** 逆序回放本楼层快照：before 为字符串写回（先确保父目录存在），为 null 删除文件；随后目录改名保留。 */
@@ -61,6 +66,7 @@ export declare class Wal {
     private hasRolledBackDir;
     private doBeginFloor;
     private doRecord;
+    private doRecordAfter;
     private doCommitFloor;
     private doRollbackFloor;
     private doRollbackAfter;

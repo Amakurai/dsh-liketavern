@@ -1,7 +1,7 @@
 /**
  * 全局样式层：单一注入式样式表，收敛组件的 STYLE 块。
  * 底色/文字/阴影/动效走宿主 --dsw-* / --ds-* 令牌（每条带字面量兜底，防旧版宿主缺变量），
- * 其上是 Tavern 自己的识别层：青碧 accent（--tavern-accent-*）、更松的间距尺度、更大的圆角、
+ * 其上是 Tavern 自己的识别层：蓝色 accent（--tavern-accent-*）、更松的间距尺度、更大的圆角、
  * 分段控件式导航。accent 只落在开关/选中态/分组刻度/图标座上，正文与控件本体仍是 dsh 的。
  * 模块加载即注入一次（幂等）；组件文件 import './styles.js' 即可。
  */
@@ -11,12 +11,13 @@ const STYLE = `
 /* ========== 基础 ========== */
 .dsh-tavern-ui{
   color:var(--dsw-alias-label-primary, inherit);color-scheme:inherit;
-  /* Tavern 识别色：青碧。solid 用于开关/刻度等小面积；soft 系用于选中底色与图标座。 */
-  --tavern-accent:#14b8a6;
-  --tavern-accent-strong:#0f9a8c;
-  --tavern-accent-soft:rgba(20,184,166,.12);
-  --tavern-accent-softer:rgba(20,184,166,.07);
-  --tavern-accent-border:rgba(20,184,166,.32);
+  /* Tavern 识别色：蓝（solid/strong 跟随宿主 business-primary 令牌，深浅色自适应）。
+     solid 用于开关/刻度等小面积；soft 系用于选中底色与图标座。 */
+  --tavern-accent:var(--dsw-alias-state-business-primary, #4176e6);
+  --tavern-accent-strong:var(--dsw-alias-state-business-primary, #4176e6);
+  --tavern-accent-soft:rgba(65,118,230,.12);
+  --tavern-accent-softer:rgba(65,118,230,.07);
+  --tavern-accent-border:rgba(65,118,230,.32);
 }
 .dsh-tavern-panel{max-width:880px}
 .dsh-tavern-ui ::selection{background:var(--dsw-alias-bg-multi-select, rgba(84,85,87,.55));color:var(--dsw-alias-label-primary, #fff)}
@@ -65,11 +66,11 @@ const STYLE = `
   color:var(--dsw-alias-label-primary, inherit)}
 .dsh-tavern-pageIntro{margin:0;font-size:13px;line-height:21px;color:var(--dsw-alias-label-tertiary, inherit)}
 .dsh-tavern-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-bottom:10px}
-/* 分组小标题：左侧青碧小刻度是 Tavern 的签名元素 */
+/* 分组小标题：左侧蓝色小刻度是 Tavern 的签名元素 */
 .dsh-tavern-groupHead{display:flex;align-items:center;gap:8px;margin:22px 0 10px;
   font-size:13px;font-weight:600;letter-spacing:.02em;color:var(--dsw-alias-label-secondary, inherit)}
 .dsh-tavern-groupHead:before{content:"";flex:none;width:3px;height:12px;border-radius:2px;
-  background:var(--tavern-accent, #14b8a6)}
+  background:var(--tavern-accent, #4176e6)}
 .dsh-tavern-groupHead:first-child{margin-top:0}
 
 /* 页签导航：圆角分段控件（pill track），区别于宿主通用设置的下划线页签 */
@@ -120,37 +121,37 @@ const STYLE = `
 .dsh-tavern-card.is-clickable{cursor:pointer}
 /* 可点卡片 hover 轻抬升一像素 + 一层浅阴影，:active 落回，给出「这张卡能点」的物理反馈 */
 .dsh-tavern-card.is-clickable:hover,.dsh-tavern-card.is-clickable:focus-visible{
-  border-color:var(--tavern-accent-border, rgba(20,184,166,.32));
+  border-color:var(--tavern-accent-border, rgba(65,118,230,.32));
   transform:translateY(-1px);box-shadow:var(--dsw-shadow-lv1, 0 2px 4px rgba(0,0,0,.05))}
 .dsh-tavern-card.is-clickable:active{transform:none;box-shadow:none}
-.dsh-tavern-card.is-selected{border-color:var(--tavern-accent-border, rgba(20,184,166,.32));
-  background:var(--tavern-accent-softer, rgba(20,184,166,.07))}
+.dsh-tavern-card.is-selected{border-color:var(--tavern-accent-border, rgba(65,118,230,.32));
+  background:var(--tavern-accent-softer, rgba(65,118,230,.07))}
 .dsh-tavern-cardName{flex:1;min-width:0;font-size:14px;font-weight:500;line-height:22px;
   color:var(--dsw-alias-label-primary, inherit);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dsh-tavern-badge{display:inline-flex;align-items:center;flex:none;height:20px;padding:0 8px;border-radius:999px;
   font-size:11px;line-height:20px;color:var(--dsw-alias-label-secondary, inherit);
   background:var(--dsw-alias-bg-layer-2, rgba(128,128,128,.12));
   border:1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.25))}
-.dsh-tavern-badge.is-accent{color:var(--tavern-accent-strong, #0f9a8c);
-  background:var(--tavern-accent-softer, rgba(20,184,166,.07));
-  border-color:var(--tavern-accent-border, rgba(20,184,166,.32))}
+.dsh-tavern-badge.is-accent{color:var(--tavern-accent-strong, #4176e6);
+  background:var(--tavern-accent-softer, rgba(65,118,230,.07));
+  border-color:var(--tavern-accent-border, rgba(65,118,230,.32))}
 .dsh-tavern-badge.is-danger{color:var(--dsw-alias-state-error-primary, #ec1313);
   border-color:var(--dsw-alias-state-error-primary, #ec1313)}
 .dsh-tavern-list{display:flex;flex-direction:column;gap:10px}
 
-/* 空态（圆底图标 + 标题 + 说明）；图标座用青碧 soft，是空页里唯一的色彩点 */
+/* 空态（圆底图标 + 标题 + 说明）；图标座用蓝色 soft，是空页里唯一的色彩点 */
 .dsh-tavern-empty{display:flex;flex-direction:column;align-items:center;gap:8px;padding:52px 20px;text-align:center}
 .dsh-tavern-empty.is-compact{padding:28px 14px}
 .dsh-tavern-emptyIcon{display:flex;align-items:center;justify-content:center;width:64px;height:64px;margin-bottom:6px;
-  border-radius:50%;background:var(--tavern-accent-soft, rgba(20,184,166,.12));
-  color:var(--tavern-accent-strong, #0f9a8c)}
+  border-radius:50%;background:var(--tavern-accent-soft, rgba(65,118,230,.12));
+  color:var(--tavern-accent-strong, #4176e6)}
 .dsh-tavern-emptyTitle{font-size:14px;font-weight:500;line-height:22px;color:var(--dsw-alias-label-secondary, inherit)}
 .dsh-tavern-emptyDesc{font-size:13px;line-height:20px;color:var(--dsw-alias-label-tertiary, inherit);max-width:44ch}
 
 /* ========== 头像（img 或首字符 fallback，不再是灰块） ========== */
 .dsh-tavern-avatar{width:var(--tavern-avatar-s, 40px);height:var(--tavern-avatar-s, 40px);flex:none;
   border-radius:28%;overflow:hidden;display:inline-flex;align-items:center;justify-content:center;
-  background:var(--tavern-accent-soft, rgba(20,184,166,.12));color:var(--tavern-accent-strong, #0f9a8c);
+  background:var(--tavern-accent-soft, rgba(65,118,230,.12));color:var(--tavern-accent-strong, #4176e6);
   font-size:calc(var(--tavern-avatar-s, 40px) * .42);font-weight:500;line-height:1;user-select:none}
 .dsh-tavern-avatar>img{width:100%;height:100%;object-fit:cover;display:block}
 
@@ -172,11 +173,11 @@ const STYLE = `
   transition:transform var(--ds-transition-duration-fast, .1s) var(--ds-ease-in-out, ease)}
 .dsh-tavern-pillSelect[aria-expanded="true"] .dsh-tavern-pillSelectChevron{transform:rotate(180deg)}
 
-/* 开关：开启态落青碧 accent，是控件层唯一的品牌色出口 */
+/* 开关：开启态落蓝色 accent，是控件层唯一的品牌色出口 */
 .dsh-tavern-toggle{appearance:none;flex:none;width:36px;height:20px;padding:2px;border:0;border-radius:20px;
   background:var(--dsw-alias-border-l4, rgba(128,128,128,.35));cursor:pointer;
   transition:background var(--ds-transition-duration, .2s) var(--ds-ease-in-out, ease)}
-.dsh-tavern-toggle.is-on{background:var(--tavern-accent, #14b8a6)}
+.dsh-tavern-toggle.is-on{background:var(--tavern-accent, #4176e6)}
 .dsh-tavern-toggle:disabled{opacity:.4;cursor:default}
 .dsh-tavern-toggle:after{content:"";display:block;width:16px;height:16px;border-radius:50%;
   background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.18);
@@ -220,12 +221,12 @@ const STYLE = `
     border-color var(--ds-transition-duration-fast, .1s) var(--ds-ease-in-out, ease),
     color var(--ds-transition-duration-fast, .1s) var(--ds-ease-in-out, ease)}
 .dsh-tavern-chip:hover{background:var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,.14))}
-.dsh-tavern-chip[data-active="true"]{background:var(--tavern-accent-soft, rgba(20,184,166,.12));
+.dsh-tavern-chip[data-active="true"]{background:var(--tavern-accent-soft, rgba(65,118,230,.12));
   color:var(--dsw-alias-label-primary, inherit);
-  border-color:var(--tavern-accent-border, rgba(20,184,166,.32))}
+  border-color:var(--tavern-accent-border, rgba(65,118,230,.32))}
 /* 多选 chip（CheckChips）：选中时前缀对勾，与单选筛选 chip 区分 */
 .dsh-tavern-chip.is-check[data-active="true"]:before{content:'✓ ';font-weight:600;
-  color:var(--tavern-accent-strong, #0f9a8c)}
+  color:var(--tavern-accent-strong, #4176e6)}
 
 /* ========== 角色海报卡（封面 + 底部渐变名条） ========== */
 .dsh-tavern-charGrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(208px,1fr));gap:16px;margin:0;padding:0;list-style:none}
@@ -236,20 +237,20 @@ const STYLE = `
     transform var(--ds-transition-duration-fast, .1s) var(--ds-ease-in-out, ease),
     box-shadow var(--ds-transition-duration-fast, .1s) var(--ds-ease-in-out, ease)}
 .dsh-tavern-charCard:hover,.dsh-tavern-charCard:focus-visible{
-  border-color:var(--tavern-accent-border, rgba(20,184,166,.32));
+  border-color:var(--tavern-accent-border, rgba(65,118,230,.32));
   transform:translateY(-2px);box-shadow:var(--dsw-shadow-lv2, 0 4px 12px rgba(0,0,0,.04))}
 .dsh-tavern-charCard:active{transform:none;box-shadow:none}
 /* overflow:hidden 会裁掉全局 focus 轮廓，内缩到卡内 */
 .dsh-tavern-charCard:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary, #4176e6);outline-offset:-2px}
 .dsh-tavern-charCardCover{position:relative;height:168px;flex:none;overflow:hidden;
   background:linear-gradient(135deg,
-    var(--tavern-accent-softer, rgba(20,184,166,.07)),
+    var(--tavern-accent-softer, rgba(65,118,230,.07)),
     var(--dsw-alias-bg-layer-3, rgba(128,128,128,.2)))}
 .dsh-tavern-charCardCover>img{width:100%;height:100%;object-fit:cover;display:block;
   transition:transform .3s var(--ds-ease-in-out, ease)}
 .dsh-tavern-charCard:hover .dsh-tavern-charCardCover>img,.dsh-tavern-charCard:focus-visible .dsh-tavern-charCardCover>img{transform:scale(1.04)}
 .dsh-tavern-charCardInitial{width:100%;height:100%;display:flex;align-items:center;justify-content:center;padding-bottom:30px;
-  font-size:46px;font-weight:600;color:var(--tavern-accent-strong, #0f9a8c);user-select:none}
+  font-size:46px;font-weight:600;color:var(--tavern-accent-strong, #4176e6);user-select:none}
 /* 名条压在封面底部渐变上；渐变同时压暗图片和浅色兜底封面，明暗主题下白字都可读 */
 .dsh-tavern-charCardBar{position:absolute;left:0;right:0;bottom:0;padding:32px 14px 12px;min-width:0;
   display:flex;flex-direction:column;gap:2px;
@@ -278,14 +279,14 @@ const STYLE = `
     transform var(--ds-transition-duration-fast, .1s) var(--ds-ease-in-out, ease),
     box-shadow var(--ds-transition-duration-fast, .1s) var(--ds-ease-in-out, ease)}
 .dsh-tavern-tile:hover,.dsh-tavern-tile:focus-visible{
-  border-color:var(--tavern-accent-border, rgba(20,184,166,.32));
+  border-color:var(--tavern-accent-border, rgba(65,118,230,.32));
   transform:translateY(-1px);box-shadow:var(--dsw-shadow-lv1, 0 2px 4px rgba(0,0,0,.05))}
 .dsh-tavern-tile:active{transform:none;box-shadow:none}
-/* 图标座：青碧 soft 底，是列表行的识别点 */
+/* 图标座：蓝色 soft 底，是列表行的识别点 */
 .dsh-tavern-tileIcon{width:42px;height:42px;flex:none;border-radius:12px;
   display:inline-flex;align-items:center;justify-content:center;
-  background:var(--tavern-accent-soft, rgba(20,184,166,.12));
-  color:var(--tavern-accent-strong, #0f9a8c)}
+  background:var(--tavern-accent-soft, rgba(65,118,230,.12));
+  color:var(--tavern-accent-strong, #4176e6)}
 .dsh-tavern-tileMain{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
 .dsh-tavern-tileTitleRow{display:flex;align-items:center;gap:8px;min-width:0}
 .dsh-tavern-tileName{min-width:0;font-size:14px;font-weight:500;line-height:21px;
@@ -351,6 +352,7 @@ const STYLE = `
 .dsh-tavern-modal-md{width:min(520px, calc(100vw - 32px));max-width:100%}
 .dsh-tavern-modal-lg{width:min(680px, calc(100vw - 32px));max-width:100%}
 .dsh-tavern-modal-xl{width:min(880px, calc(100vw - 32px));max-width:100%}
+.dsh-tavern-modal-full{width:min(1280px, calc(100vw - 64px));max-width:100%}
 /* 弹窗内的分组面板卡：给密集表单一个有呼吸感的区块结构 */
 .dsh-tavern-dialogStack{display:flex;flex-direction:column;gap:16px;min-width:0}
 .dsh-tavern-panelCard{display:flex;flex-direction:column;gap:14px;padding:16px 18px;border-radius:16px;
@@ -377,6 +379,10 @@ const STYLE = `
 .dsh-tavern-modalBody{min-width:0}
 .dsh-tavern-modalPre{white-space:pre-wrap;font-size:12px;line-height:19px;max-height:60vh;overflow:auto;margin:0}
 .dsh-tavern-binding{display:flex;flex-direction:column;gap:16px;min-width:0}
+/* 绑定弹窗（full 档）：分组卡双栏网格排布；错误条与用量条通栏，窄视口回落单栏。 */
+.dsh-tavern-bindingWide{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}
+.dsh-tavern-bindingWide>.dsh-tavern-errText,.dsh-tavern-bindingWide>.dsh-tavern-usageBar{grid-column:1/-1}
+@media (max-width:860px){.dsh-tavern-bindingWide{grid-template-columns:minmax(0,1fr)}}
 .dsh-tavern-bindingActions{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
 
 /* ========== 文本反馈 ========== */
@@ -387,7 +393,7 @@ const STYLE = `
 .dsh-tavern-meter{height:4px;border-radius:2px;overflow:hidden;margin:2px 0 6px;
   background:var(--dsw-alias-bg-layer-2, rgba(128,128,128,.12))}
 .dsh-tavern-meterFill{display:block;height:100%;border-radius:2px;min-width:2px;
-  background:var(--tavern-accent, #14b8a6);
+  background:var(--tavern-accent, #4176e6);
   transition:width var(--ds-transition-duration, .2s) var(--ds-ease-in-out, ease)}
 .dsh-tavern-meterFill[data-warn="true"]{background:var(--dsw-alias-state-error-primary, #ec1313)}
 
@@ -409,7 +415,7 @@ const STYLE = `
 .dsh-tavern-memo.is-revoked{opacity:.62}
 /* 新增表单卡：虚线边框示意「往里添东西」 */
 .dsh-tavern-memo.is-compose{border-style:dashed;background:transparent}
-.dsh-tavern-memo.is-compose:hover{border-color:var(--tavern-accent-border, rgba(20,184,166,.32))}
+.dsh-tavern-memo.is-compose:hover{border-color:var(--tavern-accent-border, rgba(65,118,230,.32))}
 .dsh-tavern-memoHead{display:flex;align-items:center;gap:8px;min-width:0}
 .dsh-tavern-memoMeta{flex:1;min-width:0;font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary, inherit);
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -490,9 +496,9 @@ const STYLE = `
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dsh-tavern-hero-previewText{margin-top:10px;font-size:13px;line-height:22px;color:var(--dsw-alias-label-tertiary, inherit);
   display:-webkit-box;-webkit-line-clamp:5;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word}
-/* 开场白正文：左侧青碧引用竖线 + 保留换行，读起来像角色在说话 */
+/* 开场白正文：左侧蓝色引用竖线 + 保留换行，读起来像角色在说话 */
 .dsh-tavern-hero-quote{margin-top:12px;padding-left:14px;
-  border-left:3px solid var(--tavern-accent-border, rgba(20,184,166,.32));
+  border-left:3px solid var(--tavern-accent-border, rgba(65,118,230,.32));
   font-size:13px;line-height:22px;color:var(--dsw-alias-label-secondary, inherit);white-space:pre-wrap;
   display:-webkit-box;-webkit-line-clamp:6;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word}
 .dsh-tavern-hero-swipe{display:inline-flex;align-items:center;gap:4px;margin-top:8px}

@@ -1,4 +1,4 @@
-import { Wal } from './wal.js';
+import type { Wal } from './wal.js';
 /** 历史占位：旧版曾把非会话写入记入名为 non-floor 的 WAL 单元。现已不再使用。 */
 export declare const NON_FLOOR = "non-floor";
 export declare class WorkspaceFs {
@@ -37,16 +37,16 @@ export declare class WorkspaceFs {
     ensureDir(relPath?: string): Promise<void>;
     /** 读取二进制内容；不存在返回 null。 */
     readBytes(relPath: string): Promise<Uint8Array | null>;
-    /** 事务写入：有当前楼层时先向 WAL 记录 before 快照（同路径只记首次），再落盘。 */
+    /** 事务写入：每次修改先持久化 before/after，再原子替换正文；与回退共享工作区锁。 */
     writeText(relPath: string, content: string): Promise<void>;
     /**
      * 事务写入二进制（如 card.png 头像）：语义同 writeText，
-     * 已存在文件的 before 快照以 base64（带 WAL_BINARY_MARK 前缀）记录，回滚时对称解码。
+     * 已存在文件的 before 快照以 base64 + 显式编码记录，回滚时对称解码。
      */
     writeBytes(relPath: string, bytes: Uint8Array): Promise<void>;
     /**
      * 事务删除（有当前楼层时同样记录快照）。
-     * 快照口径必须与 writeBytes 对称：二进制内容（严格 UTF-8 解码失败）记 base64 + WAL_BINARY_MARK，
+     * 快照口径必须与 writeBytes 对称：二进制内容（严格 UTF-8 解码失败）记 base64 + 编码字段，
      * 否则回滚写回的是有损转码后的字节。无楼层时只需判存在性，不读全文。
      */
     delete(relPath: string): Promise<void>;

@@ -3,7 +3,8 @@
  * - TTL 内命中不重拉 remote，过期后重拉；
  * - in-flight Promise 去重：同 key 并发只发一次 RPC，调用方共享同一结果/拒绝；
  * - 错误信封与 reject 都不缓存，下次调用立即重试；
- * - invalidate* 强制下次重拉（invalidateCharacter 同时清详情与头像）。
+ * - invalidate* 强制下次重拉（invalidateCharacter 同时清详情与头像）；
+ * - 失效期间旧请求晚到时不得覆盖新缓存。
  * 注意：缓存是模块级状态，各用例使用互不相同的 key，避免跨用例串扰。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -170,5 +171,24 @@ describe('client 元数据缓存', () => {
     await cachedCharacterDetail(remote, 'c-inv')
     await cachedAvatar(remote, 'c-inv')
     expect(calls).toEqual({ binding: 0, detail: 2, avatar: 2 })
+  })
+
+  it('失效期间旧请求晚到时不得覆盖新缓存', async () => {
+    const pending: Array<(value: unknown) => void> = []
+    const remote = {
+      getSessionBinding: () => new Promise((resolve) => pending.push(resolve)),
+    } as unknown as TavernRemote
+    const old = cachedSessionBinding(remote, 's-race')
+    invalidateSessionBinding('s-race')
+    const fresh = cachedSessionBinding(remote, 's-race')
+    expect(pending).toHaveLength(2)
+
+    pending[1]!({ ok: true, value: { binding: null, userName: '新值', canSwipeGreeting: false } })
+    await fresh
+    pending[0]!({ ok: true, value: { binding: null, userName: '旧值', canSwipeGreeting: false } })
+    await old
+
+    const cached = await cachedSessionBinding(remote, 's-race')
+    expect(cached.ok && cached.value.userName).toBe('新值')
   })
 })

@@ -466,6 +466,15 @@ export interface WalRecord {
   path: string
   /** 写入前内容；null = 文件原本不存在（回滚 = 删除）。 */
   before: string | null
+  /**
+   * 快照编码。旧记录没有该字段，按 UTF-8 兼容处理；base64 仅用于二进制快照。
+   * 使用独立字段而不是在正文里放标记，避免普通文本恰好以标记开头时被误解码。
+   */
+  beforeEncoding?: 'utf8' | 'base64'
+  /** 写入后的内容，用于回滚前检测楼层外的人工修改。旧记录可能没有该字段。 */
+  after?: string | null
+  /** 写入后快照的编码，口径与 beforeEncoding 相同。 */
+  afterEncoding?: 'utf8' | 'base64'
 }
 
 // ---------------------------------------------------------------------------

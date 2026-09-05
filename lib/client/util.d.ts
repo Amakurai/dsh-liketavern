@@ -40,7 +40,7 @@ export interface TabItem {
     id: string;
     label: string;
 }
-/** 分段控件式页签（pill track，区别于宿主通用设置的下划线页签）；size="sm" 用于页内第二级导航。 */
+/** 分段控件式页签（pill track，区别于宿主通用设置的下划线页签）；size="sm" 用于弹窗内等紧凑场景。 */
 export declare function Tabs(props: {
     items: TabItem[];
     value: string;
@@ -182,14 +182,14 @@ export declare function fileToBase64(file: File): Promise<string>;
 export declare function readJsonFile(file: File): Promise<unknown>;
 export declare function downloadJson(filename: string, json: unknown): void;
 export declare function downloadBase64(filename: string, base64: string, mime: string): void;
-/** primitives Modal 的薄封装（统一关闭文案）；width 档：sm 380（默认）/ md 480 / lg 680 / xl 880。 */
+/** primitives Modal 的薄封装（统一关闭文案）；width 档：sm 380（默认）/ md 480 / lg 680 / xl 880 / full 1280（近全屏）。 */
 export declare function Dialog(props: {
     open: boolean;
     title: string;
     description?: string;
     onClose: () => void;
     footer?: ReactNode;
-    width?: 'sm' | 'md' | 'lg' | 'xl';
+    width?: 'sm' | 'md' | 'lg' | 'xl' | 'full';
     children?: ReactNode;
 }): any;
 export declare function ConfirmDialog(props: {

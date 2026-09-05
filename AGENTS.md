@@ -10,7 +10,7 @@ dsh-liketavern 是 DeepSeek Harness（dsh）插件，把 `dsh web` 做成 SillyT
 
 1. **资产文件化**：卡/世界书/预设落成工作区文件，agent 按需按条读，不整本塞进 prompt 或灌进工具结果。
 2. **多步思考**：一轮可走多步 agent 循环；默认直接扮演，不例行调工具。
-3. **楼层事务**：某层触发的写入（记忆/世界状态/定时器）走 WAL（楼层号+序号）可逆序回滚。例外：idle 期 `runMaintenance` 的记忆压缩（`floor=null` 不记 WAL）是无损整理，回退不撤。
+3. **楼层事务**：某层触发的写入（记忆/世界状态/定时器）走 WAL（楼层号+序号）可逆序回滚。idle 期记忆压缩（`floor=null`）本身不记 WAL，但必须保留归档原文和来源链；源记忆回退时先展开相关摘要，再撤销原文，不能留下已撤销事实。
 4. **不复制 ST 的一次性输入**：提示词走 dsh system-prompt 瀑布（稳定段 + runtime context），不在前端拼包直发，绝不用 `complete` 段盖掉工具前缀。
 
 实测环境：dsh `0.1.2-rc.1`（`@deepseek-ai/*` 同版本）、Node 24、Windows（CI 在 ubuntu）。本版特有宿主行为见「宿主版本注记与升级」。
@@ -135,7 +135,7 @@ src/
 2. 深度注入（@D / depth_prompt / 预设 in-chat）插不进会话日志中间：触发型（含本轮宏）并入 turn 快照尾部，静态的并入 standing（钉死）。预览才是完整 ST 序列（不含 live playbook）。
 3. 会话日志不可删。重新生成/回退/编辑 = fork 前缀 + WAL 回滚 + 子会话续跑，成功后 UI 打开分支会话并用宿主 `ISessions` 的 `scope → sessionOf → rename` 写分支标题（旧宿主缺这条路径则跳过）。编辑 assistant 正文只换 seed 里的该条消息、不续跑。例外：续写（`continueFloor`）不改历史不 fork，直接 followup 合成指令。同一父会话 + 同一楼层 fork 出的分支互为兄弟：forkAt 记 `siblings.json`，操作条给 ‹ n/m › 导航（`getFloorSiblings`，读时过滤已删分支）。会话头另有宿主原生面包屑（`meta.parentSession` 世系，`conversation.session.header.lineage`，0.1.2 occupant 为 client-ui-subagent）：会话级世系，与楼层级 ‹ n/m › 互补，不要替换那个 slot。
 4. 操作条 slot 只在 assistant 消息上，且宿主只对 finalized 消息挂 slot——被中断的楼层天然没有操作条，由 chat.node 侧补挂 `TavernInterruptedFloorActions`（`src/client/actions.tsx` 末尾；兄弟导航/重新生成/回退），这种楼层 messageId 不可用于定位，改为传 `turn`（`resolveFloorTurn`，`src/node/floors.ts`；`regenerate`/`rollbackToFloor`/`getFloorSiblings` 的 remote schema 均带可选 `turn`）。「编辑用户消息」/续写/代答都挂在 assistant 楼层。dsh 输入区没有插件可写 API，impersonate 结果只能复制到剪贴板。
-5. 同一角色卡的多会话并发已按会话隔离楼层：turn/start 直接 `wal.beginFloor(`${sessionId}#t${turn}`)`，`openFloors` 记 `sessionId → { cardId, floor }`，turn 流程写入走 `WorkspaceFs.withFloor(floor)` 派生实例，各会话 WAL 归属互不污染；生成中途换绑后写工具按 binding-changed 拒写。注意 WAL 快照仍以卡为单位落盘，跨会话同时改同一文件时文件内容本身仍会互相覆盖（只是楼层归属不再错）。
+5. 同一角色卡的多会话并发按会话隔离楼层：turn/start 直接 `wal.beginFloor(`${sessionId}#t${turn}`)`，`openFloors` 记 `sessionId → { cardId, floor }`，turn 流程写入走 `WorkspaceFs.withFloor(floor)` 派生实例；生成中途换绑后写工具按 binding-changed 拒写。写入、记忆/世界状态读改写、回退共用进程内工作区锁；每次修改通过 `recordChange` 先保存前后镜像，再原子替换正文。回退保留后续手动修改，世界状态按 id 撤销；新读改写路径须锁住整个操作。该锁不跨进程，旧版仅首次快照的记录也不能补出历史中间编辑。
 6. 角色选择和开场白预览只在 agent 预设为 `tavern`（`src/client/mode.ts`）时显示。
 
 ## 常用改动 checklist
@@ -157,6 +157,7 @@ src/
 4. 杂项迁移：`settingsNamespace()` 帮手移除（`settings.register` 直接吃字面量）；`JsonValue` 从 `dsh-session/types` 挪到 `@deepseek-ai/dsh-util-values`。dsh 把大量运行时依赖改写成了 peer（`dsh-jobs` / `dsh-session-persistence` 等基础包不再自动安装），本仓库 `legacy-peer-deps` 下这些宿主内部包必须显式列进 devDependencies，且 cordis / schemastery 要跟随宿主版本（当前 4.0.2 / 3.18.2）。
 5. web 设置 RPC 无命名空间白名单（rc.2 起，0.1.2 仍成立），宿主通用设置页也能看到/改 `dsh-tavern` 的键——宿主行为，不要为此改插件面板。
 6. 会话头宿主原生面包屑（`conversation.session.header.lineage`）与楼层级 ‹ n/m › 互补，不要替换那个 slot。
+7. primitives `Modal` 的 dialog 外壳自带 `width:min(380px,100%)`：弹窗宽度档（`Dialog` 的 md/lg/xl/full）必须经 `className` 落在外壳上，挂在 `contentClassName`（内容层）会被外壳宽度卡住不生效。
 
 升级 dsh 的检查清单：
 

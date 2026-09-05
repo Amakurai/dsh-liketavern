@@ -1,6 +1,6 @@
 /**
  * 共享 UI 工具：对齐 dsh 原语（Button / Menu / Modal / Tooltip / Toast）+ 加载 Hook + 文件/下载助手。
- * 样式集中在 ./styles.js（模块加载即注入）；颜色一律走宿主 --dsw-* 令牌 + Tavern 青碧 accent。
+ * 样式集中在 ./styles.js（模块加载即注入）；颜色一律走宿主 --dsw-* 令牌 + Tavern 蓝色 accent。
  * 原生 select 的 option 弹层用 Menu 实现（避开 Windows 系统白底白字）。
  */
 import { useCallback, useEffect, useState } from 'react'
@@ -142,7 +142,7 @@ export interface TabItem {
   label: string
 }
 
-/** 分段控件式页签（pill track，区别于宿主通用设置的下划线页签）；size="sm" 用于页内第二级导航。 */
+/** 分段控件式页签（pill track，区别于宿主通用设置的下划线页签）；size="sm" 用于弹窗内等紧凑场景。 */
 export function Tabs(props: { items: TabItem[]; value: string; onChange: (id: string) => void; size?: 'md' | 'sm' }) {
   return (
     <div className={`dsh-tavern-navPills${props.size === 'sm' ? ' is-sub' : ''}`} role="tablist">
@@ -534,20 +534,22 @@ export function downloadBase64(filename: string, base64: string, mime: string): 
   setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
-/** primitives Modal 的薄封装（统一关闭文案）；width 档：sm 380（默认）/ md 480 / lg 680 / xl 880。 */
+/** primitives Modal 的薄封装（统一关闭文案）；width 档：sm 380（默认）/ md 480 / lg 680 / xl 880 / full 1280（近全屏）。 */
 export function Dialog(props: {
   open: boolean
   title: string
   description?: string
   onClose: () => void
   footer?: ReactNode
-  width?: 'sm' | 'md' | 'lg' | 'xl'
+  width?: 'sm' | 'md' | 'lg' | 'xl' | 'full'
   children?: ReactNode
 }) {
   const t = useT()
   // Modal 的 dialog 本体不限高，超高内容会把整个弹窗顶出视口。
   // 滚动区放在 content 层（Modal 注释里指定的 scrollable content region）并钉死
   // max-height，保证任何视口高度下弹窗底部都不被裁。
+  // 宽度档必须落在 dialog 外壳（className）：外壳自带 width:min(380px,100%)，
+  // 宽度类挂在内容层会被外壳卡住，怎么调都只有默认宽度。
   const widthClass =
     props.width === 'md'
       ? 'dsh-tavern-modal-md'
@@ -555,7 +557,9 @@ export function Dialog(props: {
         ? 'dsh-tavern-modal-lg'
         : props.width === 'xl'
           ? 'dsh-tavern-modal-xl'
-          : ''
+          : props.width === 'full'
+            ? 'dsh-tavern-modal-full'
+            : ''
   return (
     <Modal
       open={props.open}
@@ -564,7 +568,8 @@ export function Dialog(props: {
       description={props.description}
       closeLabel={t('action.close')}
       footer={props.footer}
-      contentClassName={`dsh-tavern-modalContent${widthClass ? ` ${widthClass}` : ''}${props.footer ? ' dsh-tavern-modalHasFooter' : ''}`}
+      className={widthClass || undefined}
+      contentClassName={`dsh-tavern-modalContent${props.footer ? ' dsh-tavern-modalHasFooter' : ''}`}
     >
       <div className="dsh-tavern-ui dsh-tavern-modalBody">{props.children}</div>
     </Modal>

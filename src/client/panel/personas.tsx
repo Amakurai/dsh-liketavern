@@ -7,7 +7,7 @@ import { IconEditOutline16, IconTrashOutline16, IconUserOutline16 } from '@deeps
 import { useT } from '../i18n.js'
 import type { Persona, TavernRemote } from '../types.js'
 import { EMPTY_SESSION_DEFAULTS } from '../types.js'
-import { Avatar, Badge, Btn, ConfirmDialog, Err, Field, IconBtn, SaveBar, SearchEmpty, SearchInput, Section, Select, Skeleton, clickableProps, errOf, runAsync, useLoader, useToast } from '../util.js'
+import { Badge, Btn, ConfirmDialog, Err, Field, IconBtn, SaveBar, SearchEmpty, SearchInput, Section, Select, Skeleton, clickableProps, errOf, runAsync, useLoader, useToast } from '../util.js'
 
 export function PersonasSection(props: { remote: TavernRemote }) {
   const { remote } = props
@@ -109,7 +109,6 @@ export function PersonasSection(props: { remote: TavernRemote }) {
       <div className="dsh-tavern-list" style={{ marginBottom: 12 }}>
         {filtered.map((p) => (
           <div key={p.id} className="dsh-tavern-tile" {...clickableProps(() => setEditing({ ...p }))}>
-            <Avatar url={p.avatar} name={p.name} size={38} />
             <div className="dsh-tavern-tileMain">
               <div className="dsh-tavern-tileTitleRow">
                 <span className="dsh-tavern-tileName">{p.name}</span>

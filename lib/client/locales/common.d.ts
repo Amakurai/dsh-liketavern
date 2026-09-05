@@ -8,7 +8,7 @@ export declare const zh: {
     readonly 'section.characters': "角色卡";
     readonly 'section.presets': "提示词预设";
     readonly 'section.lorebooks': "世界书";
-    readonly 'section.personas': "人设";
+    readonly 'section.personas': "用户";
     readonly 'section.regex': "正则脚本";
     readonly 'section.memory': "记忆与世界状态";
     readonly 'section.sampling': "采样参数";

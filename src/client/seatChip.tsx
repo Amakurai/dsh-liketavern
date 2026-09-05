@@ -41,9 +41,12 @@ export function TavernSeatChip(props: {
         </>
       ) : (
         <>
-          <span className="dsh-tavern-seatIcon">
-            <Avatar url={props.avatarUrl} name={props.label} size={16} />
-          </span>
+          {/* 只有真实角色头像才显示图标位；未绑卡时不再渲染绿色人形 fallback。 */}
+          {props.avatarUrl ? (
+            <span className="dsh-tavern-seatIcon">
+              <Avatar url={props.avatarUrl} name={props.label} size={16} />
+            </span>
+          ) : null}
           <span className="dsh-tavern-seatLabel">{props.label}</span>
         </>
       )}

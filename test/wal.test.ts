@@ -3,7 +3,8 @@
  * 覆盖：begin→record→commit 磁盘形态、同层快照去重、单楼层回滚（改/删/最初内容）、
  * 多楼层逆序撤销（含 session turn 的 t1/t2/t10 数字排序）、回滚目录保留与
  * listFloors 标记、重复回滚抛错、prune 过期清理、appendFile 失败后重试仍留下 before 镜像、
- * records.jsonl 单行损坏跳过（坏行不阻断 rollbackAfter 的后续楼层）。
+ * records.jsonl 单行损坏跳过（坏行不阻断 rollbackAfter 的后续楼层）、人工编辑冲突保护与
+ * 历史二进制标记兼容。
  */
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -388,6 +389,33 @@ describe('Wal', () => {
 
     await wal.rollbackFloor('f1', workspace)
     expect(await readFile(join(workspace, 'journal.md'), 'utf8')).toBe('第一版正文\n第二行')
+  })
+
+  it('回滚前发现楼层外修改时保留人工编辑', async () => {
+    const wfs = new WorkspaceFs(workspace, wal)
+    await wfs.writeText('journal.md', '原始内容')
+    await wfs.beginFloor('f1')
+    await wfs.writeText('journal.md', '模型写入')
+
+    // 面板使用无楼层文件面，编辑发生在模型写入之后。
+    await new WorkspaceFs(workspace, null).writeText('journal.md', '面板修订')
+    await wfs.commitFloor()
+    await wal.rollbackFloor('f1', workspace)
+
+    expect(await readFile(join(workspace, 'journal.md'), 'utf8')).toBe('面板修订')
+  })
+
+  it('普通文本以历史二进制标记开头时仍按 UTF-8 恢复', async () => {
+    const markerText = 'binary-base64:SGVsbG8='
+    const plain = new WorkspaceFs(workspace, null)
+    await plain.writeText('marker.txt', markerText)
+    const wfs = new WorkspaceFs(workspace, wal)
+    await wfs.beginFloor('f1')
+    await wfs.writeText('marker.txt', 'changed')
+    await wfs.commitFloor()
+    await wal.rollbackFloor('f1', workspace)
+
+    expect(await readFile(join(workspace, 'marker.txt'), 'utf8')).toBe(markerText)
   })
 
   it('delete 不存在的文件不记快照（无楼层时也不抛）', async () => {

@@ -12,9 +12,11 @@
  * entry 提交，不再触碰共享句柄的 floor。
  */
 import { Buffer } from 'node:buffer'
-import { mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
-import { dirname, join, normalize, sep } from 'node:path'
-import { Wal, WAL_BINARY_MARK } from './wal.js'
+import { mkdir, readFile, readdir, rm, stat } from 'node:fs/promises'
+import { join, normalize, resolve, sep } from 'node:path'
+import type { Wal } from './wal.js'
+import { atomicWrite } from './atomicWrite.js'
+import { withWorkspaceLock } from './workspaceLock.js'
 
 /** 历史占位：旧版曾把非会话写入记入名为 non-floor 的 WAL 单元。现已不再使用。 */
 export const NON_FLOOR = 'non-floor'
@@ -23,14 +25,13 @@ export const NON_FLOOR = 'non-floor'
 const STRICT_UTF8 = new TextDecoder('utf-8', { fatal: true })
 
 /**
- * 字节 → WAL 快照文本：能严格按 UTF-8 解码的记原文，否则记 base64 + WAL_BINARY_MARK
- * （与 writeBytes 的记录口径一致，rollback 侧对称解码）。
+ * 字节 → WAL 快照：文本按 UTF-8 保存，二进制按 base64 保存并显式记录编码。
  */
-function snapshotOf(bytes: Uint8Array): string {
+function snapshotOf(bytes: Uint8Array): { value: string; encoding?: 'utf8' | 'base64' } {
   try {
-    return STRICT_UTF8.decode(bytes)
+    return { value: STRICT_UTF8.decode(bytes), encoding: 'utf8' }
   } catch {
-    return WAL_BINARY_MARK + Buffer.from(bytes).toString('base64')
+    return { value: Buffer.from(bytes).toString('base64'), encoding: 'base64' }
   }
 }
 
@@ -41,7 +42,7 @@ export class WorkspaceFs {
   constructor(
     readonly root: string,
     private readonly wal: Wal | null,
-  ) {}
+  ) { this.root = resolve(root) }
 
   /**
    * 遗留兼容：直接改本实例的 floor。host 路径已改用 withFloor 派生实例 +
@@ -131,51 +132,52 @@ export class WorkspaceFs {
     }
   }
 
-  /** 事务写入：有当前楼层时先向 WAL 记录 before 快照（同路径只记首次），再落盘。 */
+  /** 事务写入：每次修改先持久化 before/after，再原子替换正文；与回退共享工作区锁。 */
   async writeText(relPath: string, content: string): Promise<void> {
-    const abs = this.abs(relPath)
-    // before 快照只在有楼层时用得上。非会话写入（面板编辑、索引重建、导入）floor 恒为 null，
-    // 无条件预读会让每次写入都白读一遍全文——读必须留在 if 内。
-    if (this.wal && this.floor) {
-      await this.wal.record(this.floor, relPath, await this.readText(relPath))
-    }
-    await mkdir(dirname(abs), { recursive: true })
-    await writeFile(abs, content, 'utf8')
+    await withWorkspaceLock(this.root, async () => {
+      const abs = this.abs(relPath)
+      if (this.wal && this.floor) {
+        const bytes = await this.readBytes(relPath)
+        const before = bytes === null ? null : snapshotOf(bytes)
+        await this.wal.recordChange(this.floor, relPath, before?.value ?? null, content, before?.encoding ?? 'utf8', 'utf8')
+      }
+      await atomicWrite(abs, content)
+    })
   }
 
   /**
    * 事务写入二进制（如 card.png 头像）：语义同 writeText，
-   * 已存在文件的 before 快照以 base64（带 WAL_BINARY_MARK 前缀）记录，回滚时对称解码。
+   * 已存在文件的 before 快照以 base64 + 显式编码记录，回滚时对称解码。
    */
   async writeBytes(relPath: string, bytes: Uint8Array): Promise<void> {
-    const abs = this.abs(relPath)
-    if (this.wal && this.floor) {
-      const before = await this.readBytes(relPath)
-      await this.wal.record(
-        this.floor,
-        relPath,
-        before === null ? null : WAL_BINARY_MARK + Buffer.from(before).toString('base64'),
-      )
-    }
-    await mkdir(dirname(abs), { recursive: true })
-    await writeFile(abs, bytes)
+    await withWorkspaceLock(this.root, async () => {
+      const abs = this.abs(relPath)
+      if (this.wal && this.floor) {
+        const before = await this.readBytes(relPath)
+        await this.wal.recordChange(this.floor, relPath,
+          before === null ? null : Buffer.from(before).toString('base64'),
+          Buffer.from(bytes).toString('base64'), 'base64', 'base64')
+      }
+      await atomicWrite(abs, bytes)
+    })
   }
 
   /**
    * 事务删除（有当前楼层时同样记录快照）。
-   * 快照口径必须与 writeBytes 对称：二进制内容（严格 UTF-8 解码失败）记 base64 + WAL_BINARY_MARK，
+   * 快照口径必须与 writeBytes 对称：二进制内容（严格 UTF-8 解码失败）记 base64 + 编码字段，
    * 否则回滚写回的是有损转码后的字节。无楼层时只需判存在性，不读全文。
    */
   async delete(relPath: string): Promise<void> {
-    if (!(this.wal && this.floor)) {
-      if (!(await this.exists(relPath))) return
-      await rm(this.abs(relPath), { force: true })
-      return
-    }
-    const bytes = await this.readBytes(relPath)
-    if (bytes === null) return
-    await this.wal.record(this.floor, relPath, snapshotOf(bytes))
-    await rm(this.abs(relPath), { force: true })
+    await withWorkspaceLock(this.root, async () => {
+      const abs = this.abs(relPath)
+      if (this.wal && this.floor) {
+        const bytes = await this.readBytes(relPath)
+        if (bytes === null) return
+        const before = snapshotOf(bytes)
+        await this.wal.recordChange(this.floor, relPath, before.value, null, before.encoding ?? 'utf8', 'utf8')
+      }
+      await rm(abs, { force: true })
+    })
   }
 
   /**

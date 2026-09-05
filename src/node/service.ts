@@ -550,15 +550,9 @@ export class TavernService extends TypertRemoteService {
     // 顺序与 memoryMaintenance.compressOldestMemories 一致：先落合并条目成功后再归档原条目——
     // 先归档的话，合并写失败会让整批从活跃库消失（丢事实）；反过来写失败批次原样保留可重试，
     // 归档中途失败的最坏结果只是新旧并存，下次压缩把残余再合并一次，有冗余但不丢事实。
-    await ws.memory.write({
-      body: merged,
-      tags: [...new Set(['merged', ...batch.flatMap((entry) => entry.tags)])],
-      keys: [...new Set(batch.flatMap((entry) => entry.keys))],
-      sourceRange: `merge:${batch.map((b) => b.id).join(',')}`,
-    })
-    await ws.memory.archive(batch.map((b) => b.id))
+    const count = await ws.memory.mergeBatch(batch, merged, 'merge')
     await rebuildIndex(ws.fs, estimateTokens)
-    return { merged: batch.length }
+    return { merged: count }
   }
 
   // ── 世界状态 ──────────────────────────────────────────────────────────────

@@ -19,8 +19,12 @@
 11. 备份恢复必须创建新 iframe 文档。直接 `document.write` 重跑第三方页面会留下顶层词法绑定并触发 const 重声明；跨 opaque-origin 刷新也不能依赖窗口名传递数据。文档内的常规 rewrite 仅用于加载卡片内容，桥只装一层原生包装，重装前清理旧观察器与定时器。
 12. 手机设置布局：`dsh-client-ui-settings-general` 的设置 dialog 在 390px 视口中宽 342px，仍保留 188px 导航及正文两侧 48px 内边距，使 Tavern 正文只剩约 98px（含滚动条差异）。`styles.ts` 在视口不超过 560px 且 dialog 含 `.dsh-tavern-panel` 时，把原导航按钮排成横向滚动顶栏；通过直属 `nav` 与相邻正文结构限定外壳，未替换宿主节点或改其状态。其它设置页/桌面恢复宿主样式；升级时核对 SettingsPanel 结构。主会话侧栏由 `dsh-client-ui-layout` 在低于 1024px 时自动折为 56px，手动展开由用户控制，插件不调用 toggle 强制修改桌面宽度。手机弹窗使用动态视口高度和 flex 正文滚动分配，第三方 iframe 内部是否响应式仍由卡片自身实现决定。
 
+13. 重启后浏览旧会话可能只有持久日志，`ctx.sessions.get` 只返回已在线的 Session，不能据此判断“没有开场白”。展示与空白判定优先在线日志，否则使用 `ctx.sessionPersistence.inspect` 的不可变检查结果；不能用会修复并写盘的 `load`，也不能为展示调用 agents.resume。已验证冷会话 EJS 开场白可读且不落模板变量。
+14. rc.1 的输入和 assistant Message 都有稳定 `id`。按消息模板变量使用该 id，不能由正文或事件 seq 推断；编辑后的新 Message.id 即使沿用 seq 也不能复用旧快照。历史投影仅使用 deriveMessages 可见消息，并按 inbox id 对待入日志输入去重。真实分支复制继承消息 id，变量和 sticky 仍随 story 文件独立推进。
+
 升级 dsh 的检查清单：
 
+- 模板回复处理依赖 `assistant/chunk` 的唯一末尾 `finish.reason.kind=stop`、`assistant/message` 的 seq/turn/step 与 `turn/end.reason.kind=completed`。必须在当前楼层关闭前保存展示快照；client 的 finalNode.seq 传给只读渲染接口。升级时核对这些真实字段和 turn 状态，不能在刷新回调中执行持久脚本。
 - `package.json` 三处版本同步：`peerDependencies`、`overrides`、`devDependencies`（全部精确版本，不带 `^`）。
 - 逐条复查上面注记在新宿主上是否仍成立，失效的改掉并从本节删除。
 - 对照官方文档的 breaking changes：slot、profile/bundle、patch 层顺序、system-prompt 瀑布、agent 事件、session 读取 API、client seed 模块表。

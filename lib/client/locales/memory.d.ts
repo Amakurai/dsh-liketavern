@@ -24,7 +24,6 @@ export declare const zh: {
     readonly 'memory.emptyMemories': "暂无记忆";
     readonly 'memory.emptyMemoriesDesc': "让模型用 tavern_memory_write 写入，或在下方手动添加。";
     readonly 'memory.archived': "已归档";
-    readonly 'memory.collapseEdit': "收起编辑";
     readonly 'memory.deleteEntry': "删除记忆";
     readonly 'memory.tags': "标签";
     readonly 'memory.keys': "检索键";

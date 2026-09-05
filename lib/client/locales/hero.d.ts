@@ -8,7 +8,6 @@ export declare const zh: {
     readonly 'hero.picker.empty': "添加一张角色卡，选择开场白，就可以开始故事。";
     readonly 'hero.picker.more': "显示更多角色";
     readonly 'hero.characterFallback': "角色";
-    readonly 'hero.loadingCharacters': "加载角色卡…";
     readonly 'hero.creator': "作者 {name}";
     readonly 'hero.start': "开始对话";
     readonly 'hero.prevGreeting': "上一条开场白";
@@ -20,7 +19,5 @@ export declare const zh: {
     readonly 'hero.detailLoadFailed': "角色详情加载失败。可重新选择角色，或直接在下方输入。";
     readonly 'hero.emptyVariantHint': "当前这条开场白为空，可切换变体。";
     readonly 'hero.noGreetingHint': "该角色没有开场白。可以直接在下方输入。";
-    readonly 'hero.pickBook.withCount': "{name}（内嵌世界书 · {count} 条）";
-    readonly 'hero.pickBook.noCount': "{name}（内嵌世界书）";
 };
 export declare const en: Record<keyof typeof zh, string>;

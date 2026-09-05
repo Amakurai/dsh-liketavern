@@ -38,6 +38,14 @@ export declare class TavernState {
         storyId?: string;
         result: PipelineResult;
     }>;
+    /** 已成功组装但尚未完成持久化的计划；失败重试只提交快照，不再次执行模板或推进 WI。 */
+    readonly pendingTurnPlans: Map<string, {
+        turn: number;
+        cardId: string;
+        storyId?: string;
+        floor: string;
+        publish: () => Promise<PipelineResult>;
+    }>;
     readonly currentTurns: Map<string, number>;
     /** 当前 turn 内的 step（pre-step / step/start 维护；turn 开始时为 1）。 */
     readonly currentSteps: Map<string, number>;
@@ -75,6 +83,10 @@ export declare class TavernState {
     }>;
     /** 已入 inbox 尚未入日志的用户输入文本（agent/inbox/inserted 维护；turn/end 清除）。 */
     readonly pendingInputs: Map<string, string[]>;
+    readonly pendingTemplateInputs: Map<string, {
+        id: string;
+        text: string;
+    }[]>;
     /** 会话 standing 钉死（键 = 会话 × 生成场景；绑定指纹不变则复用第一次写入的字节）。 */
     readonly standingPins: Map<string, StandingPin>;
     /** standing 依赖资产的进程内修订号：经本类写方法编辑/删除即 bump，standing 指纹随内容变化失效重算。 */

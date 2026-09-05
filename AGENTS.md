@@ -17,7 +17,7 @@ dsh-liketavern 为 DeepSeek Harness 的 Tavern 插件。角色卡、预设、世
 3. **每次楼层写入先 WAL 后正文。** 每轮用 `withFloor(floor)` 派生句柄；共享句柄 floor 恒为 null。面板与维护用 `plainWorkspace(cardId, storyId)`。完整读改写、分支快照与回滚共用工作区锁。损坏日志必须在整批回滚前拒绝；恢复游标必须先于正文替换持久化。不要用“跳过坏行并标记成功”处理故障。
 4. **归档来源是数据，摘要是派生视图。** 自动摘要只接受正常 stop 终止帧，错误、截断、无终止帧或超时不能归档原文。失败保留 pending 标记等下一次 idle。检索包含活跃摘要可达的归档来源；去重只查活跃条目。回滚先展开受影响来源链，再撤销事实。
 5. **模型请求遵守宿主边界。** standing 是工具说明后的 `tavern:standing`（order 210），turn 是 runtime context `tavern:turn`。绝不使用 complete 段盖掉工具前缀。ST 全量序列是模拟，不能把它称为实际入模消息。input/send、prompt/assemble、prompt/send 的历史改写只用于模拟与代答；live 展示规则是 output/render。
-6. **第三方正则不得在 host 主线程执行。** node 调用 `isolated()` 执行 WI、组装与渲染；超时、异常退出、超量输入/输出必须明确失败。core 保持纯函数，静态正则启发式只是提前拒绝，不能代替隔离。
+6. **第三方正则与模板不得在 host 主线程执行。** node 调用 `isolated()` 执行 WI、组装与渲染；EJS JavaScript 仅在 worker 内的 QuickJS/WASM 中执行，不暴露 Node、DOM、网络或模块加载器。超时、异常退出、超量输入/输出必须明确失败。core 保持纯函数，静态正则启发式只是提前拒绝，不能代替隔离。模板变量和回复快照属于剧情，预览/重绘不得写入，正常 stop 回复在 turn/end 内只提交一次。
 7. **每轮冻结完整提示词计划。** 角色/预设/人设、修订指纹、宏时钟、检索结果与采样在首次成功组装后缓存；后续步骤重放同一份快照。资产编辑下一轮生效，不得把旧内容钉在新修订号下。工具写成功通过 notice 确认，不在同轮重评 WI。`STANDING_PIN_VERSION` 在纪律或段布局变化时递增。
 8. **不把第三方代码提升到主页面权限。** 交互卡 iframe 为 `sandbox="allow-scripts"`，不加 allow-same-origin。CSP 默认禁止 connect，允许 http/https/data 图片与字体。ST stub 桥只允许 swipeGreeting，必须校验事件来源窗口；不增加通用主窗口桥。
 9. **文件边界与私有数据。** 工具路径经 `resolveReadableAssetPath` 和 `WorkspaceFs`；不读取 WAL、其它 stories、内部 story.json 或二进制。卡片资产与当前剧情合成目录必须排除兄弟剧情。真实数据只在 `$DSH_HOME/dsh-tavern/`，不得进入源码、测试、Git 或 npm 包。
@@ -69,7 +69,7 @@ npm pack --dry-run
 - 重点回归：storyIsolation、transactionRecovery、robustBoundaries、pipelineCache、floorConcurrency、i18n。测试用手写工厂数据，不调用真实模型。
 - tests 直接 import src；Node 24 下 worker 源码测试使用类型剥离，交付运行只用 lib JS。正则超时测试必须在隔离 worker 中进行。
 - 每个源文件和测试用中文块注释说明职责；标识符英文。测试验证业务结果与失败边界，避免只镜像实现。
-- 运行依赖仅 zod；宿主包走精确 peer，开发依赖公开 npm 精确版本。禁止 file:、绝对路径或链接依赖；开发挂载仓库的 junction/symlink 是另一件事。
+- 运行依赖为 zod、quickjs-emscripten、yaml、lodash、jsonrepair、@faker-js/faker、ejs、showdown；模板库用于实际兼容编译参数、消息格式化、schema、Lodash、模型 JSON 修复与 Faker 全语言数据，构建为带许可证的 QuickJS 内部脚本，不桥接 Node 函数。Showdown 仅在可终止 worker 的 QuickJS 中使用，关闭 metadata 与标题 ID；HTML 产物只能交给原有沙箱 iframe，不能放入主页面。隔离 JavaScript、有界初值解析与新增兼容库固定公开 npm 版本，不用 node:vm 冒充安全边界。宿主包走精确 peer，开发依赖公开 npm 精确版本。禁止 file:、绝对路径或链接依赖；开发挂载仓库的 junction/symlink 是另一件事。
 - lib/ 刻意入库。所有 src 改动必须重建；CI 会拦过期、缺失和未跟踪产物。不要忽略 lib/。
 - npm 包白名单：lib、cordis.patch.yml、presets、README 两种语言、CHANGELOG、LICENSE。禁止 src/test/node_modules/本机数据。
 - 宿主升级按 [版本核对清单](docs/HOST_COMPATIBILITY.md) 执行；构建/测试不能代替安装环境的 boot 与 UI 冒烟。

@@ -19,10 +19,19 @@ import { useT } from './i18n.js'
 import { isTavernSession, type UseSessions } from './mode.js'
 import { TavernSeatChip } from './seatChip.js'
 import type { CharacterDetail, CharacterSummary, SessionBinding, TavernRemote } from './types.js'
-import { Avatar, Btn, errOf, Skeleton, useLoader } from './util.js'
+import { Avatar, Btn, Err, errOf, Skeleton, useLoader } from './util.js'
 import { expandIdentityMacros } from '../core/macros.js'
+import { hasEjs } from '../core/template.js'
 import { DEFAULT_USER_NAME } from '../core/persona.js'
 import './styles.js'
+
+/** 开场白模板只在服务端临时副本展开；英雄区不会执行第三方脚本或持久写变量。 */
+function TemplateGreetingPreview(props: { remote: TavernRemote; sessionId: string; text: string }) {
+  const preview = useLoader(() => props.remote.renderOutputText({ sessionId: props.sessionId, text: props.text }), [props.sessionId, props.text])
+  if (preview.state.status === 'error') return <Err message={preview.state.message} />
+  if (preview.state.status !== 'ready') return <Skeleton />
+  return <>{preview.state.value.text}</>
+}
 
 /** 芯片只能并入英雄行，绝不能塞进模式选择按钮内部（会把菜单点坏）。 */
 function isSafeChipHost(el: HTMLElement, from: HTMLElement): boolean {
@@ -383,7 +392,9 @@ function HeroCharacterSession(props: HeroProps) {
           {detailLoader.state.status === 'error' ? (
             <div className="dsh-tavern-hero-previewText">{t('hero.detailLoadFailed')}</div>
           ) : greetingText ? (
-            <div className="dsh-tavern-hero-quote">{greetingText}</div>
+            <div className="dsh-tavern-hero-quote">{hasEjs(greetingText)
+              ? <TemplateGreetingPreview remote={remote} sessionId={sessionId} text={greetingText} />
+              : greetingText}</div>
           ) : hasAnyGreeting ? (
             <div className="dsh-tavern-hero-previewText">{t('hero.emptyVariantHint')}</div>
           ) : (

@@ -15,6 +15,7 @@ import type { infer as Infer } from 'zod/mini';
 import type { AssembledPrompt } from './core/assemble.js';
 import type { SessionBinding } from './core/binding.js';
 import type { GreetingFloorState } from './core/greetingLog.js';
+import type { TemplateDisplayPart } from './core/templateDisplay.js';
 import type { Persona } from './core/persona.js';
 import type { SiblingSwipe } from './core/siblings.js';
 import type { CharacterCard, ChatMessage, MemoryEntry, PromptPreset, RegexRule, WIEngineResult, WorldDelta } from './core/types.js';
@@ -385,6 +386,7 @@ export declare const METHODS: {
     renderOutputText: {
         req: import("zod/mini").ZodMiniObject<{
             text: import("zod/mini").ZodMiniString<string>;
+            messageId: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNumberFormat>;
             sessionId: import("zod/mini").ZodMiniString<string>;
         }, import("zod/v4/core").$strip>;
         value: import("zod/mini").ZodMiniUnknown;
@@ -652,6 +654,7 @@ export interface PresetSummary {
 }
 /** renderOutputText：展示文本经 output/render 正则与 HTML 抽取后的形态。 */
 export interface RenderedOutput {
+    parts?: TemplateDisplayPart[];
     text: string;
     html: string | null;
     htmls: string[];
@@ -1075,6 +1078,7 @@ export declare const TYPERT_HOST: {
                     sessionId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     text: import("zod/mini").ZodMiniString<string>;
+                    messageId: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNumberFormat>;
                     sessionId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     index: import("zod/mini").ZodMiniNumberFormat;
@@ -1377,6 +1381,7 @@ export declare const TYPERT_REMOTE: {
                     sessionId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     text: import("zod/mini").ZodMiniString<string>;
+                    messageId: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNumberFormat>;
                     sessionId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     index: import("zod/mini").ZodMiniNumberFormat;

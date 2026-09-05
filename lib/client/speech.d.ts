@@ -5,6 +5,7 @@ interface SpeechBubbleProps {
     cardId: string;
     name: string;
     rawText: string;
+    messageId?: number;
     streaming?: boolean;
     /** 会话级交互卡开关（binding.interactiveCards）；null/缺省回落全局设置。 */
     interactiveCards?: boolean | null;

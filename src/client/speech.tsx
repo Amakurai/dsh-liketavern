@@ -11,6 +11,7 @@ import { IconCopyOutline16, MarkdownText } from '@deepseek-ai/dsh-client-ui-prim
 import { buildCardSrcDoc, parseCardBridgeMessage } from '../core/cardFrame.js'
 import { restoreCardVariableBackup } from '../core/cardVariables.js'
 import { stripDisplayMeta } from '../core/displaySanitize.js'
+import type { TemplateDisplayPart } from '../core/templateDisplay.js'
 import { cachedAvatar } from './cache.js'
 import { useT, useMarkdownLabels } from './i18n.js'
 import { Avatar, Btn, Dialog, Err, IconBtn, useLoader, useToast } from './util.js'
@@ -22,6 +23,7 @@ function SpeechHtmlFrame(props: {
   srcDoc: string
   title: string
   widget: boolean
+  compact?: boolean
   onSwipeGreeting?: (index: number) => void
 }) {
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
@@ -68,6 +70,8 @@ function SpeechHtmlFrame(props: {
   const frameStyle =
     frameH != null
       ? { height: frameH, minHeight: 0, overflow: 'hidden' as const }
+      : props.compact
+        ? { height: 80, minHeight: 0, overflow: 'auto' as const }
       : props.widget
         ? { height: 280, minHeight: 0, overflow: 'auto' as const }
         : { overflow: 'auto' as const }
@@ -77,7 +81,7 @@ function SpeechHtmlFrame(props: {
     <iframe
       key={activeRestore?.revision ?? 0}
       ref={iframeRef}
-      className={`dsh-tavern-speechHtml${props.widget ? ' is-widget' : ''}`}
+      className={`dsh-tavern-speechHtml${props.widget || props.compact ? ' is-widget' : ''}`}
       sandbox="allow-scripts"
       srcDoc={srcDoc}
       title={props.title}
@@ -104,6 +108,7 @@ interface SpeechBubbleProps {
   cardId: string
   name: string
   rawText: string
+  messageId?: number
   streaming?: boolean
   /** 会话级交互卡开关（binding.interactiveCards）；null/缺省回落全局设置。 */
   interactiveCards?: boolean | null
@@ -122,8 +127,8 @@ function SpeechBubbleSession(props: SpeechBubbleProps) {
   // 头像走进程内缓存（key=cardId，TTL 60s）：同一会话的 N 条气泡不再各传一次 dataURL。
   const avatar = useLoader(() => cachedAvatar(remote, cardId), [cardId], Boolean(cardId))
   const rendered = useLoader(
-    () => remote.renderOutputText({ sessionId, text: rawText }),
-    [sessionId, rawText],
+    () => remote.renderOutputText({ sessionId, text: rawText, messageId: props.messageId }),
+    [sessionId, rawText, props.messageId],
     Boolean(rawText) && !streaming,
   )
   const avatarUrl = avatar.state.status === 'ready' ? avatar.state.value.dataUrl : null
@@ -142,7 +147,7 @@ function SpeechBubbleSession(props: SpeechBubbleProps) {
       : []
   const text =
     !streaming && rendered.state.status === 'ready'
-      ? interactive || rendered.state.value.text
+      ? interactive || rendered.state.value.text || rendered.state.value.parts !== undefined
         ? rendered.state.value.text
         : stripDisplayMeta(rawText)
       : stripDisplayMeta(rawText)
@@ -194,22 +199,30 @@ function SpeechBubbleSession(props: SpeechBubbleProps) {
       fallback()
     }
   }
-  const frames = htmls.map((html, i) => {
-    const srcDoc = buildCardSrcDoc(html, { greetings, greetingIndex, connectHosts: whitelist,
+  const storedParts = !streaming && rendered.state.status === 'ready' ? rendered.state.value.parts : undefined
+  const visibleParts: TemplateDisplayPart[] = storedParts
+    ? storedParts.filter(part => interactive || part.kind === 'markdown')
+    : [...htmls.map(html => ({ kind: 'html' as const, text: html })), ...(text ? [{ kind: 'markdown' as const, text }] : [])]
+  if (!visibleParts.length) visibleParts.push({ kind: 'markdown', text: text || ' ' })
+  const content = visibleParts.map((part, i) => {
+    if (part.kind === 'markdown') return <MarkdownText key={`text:${i}`} text={part.text} streaming={Boolean(streaming)} labels={markdownLabels} />
+    const srcDoc = buildCardSrcDoc(part.text, { greetings, greetingIndex, connectHosts: whitelist,
       variableStyles: CARD_VARIABLE_STYLES,
       variableLabels: { title: t('speech.cardDataTitle'), note: t('speech.cardDataNote'), backup: t('speech.cardDataBackup'),
         text: t('speech.cardDataText') },
     })
-    const widget = htmls.length > 1 ? i > 0 : Boolean(text)
-    return (
+    const widget = visibleParts.length > 1
+    const frame = (
       <SpeechHtmlFrame
-        key={`${i}:${html.length}`}
+        key={`${i}:${part.text.length}`}
         srcDoc={srcDoc}
-        title={name}
+        title={part.title || name}
         widget={widget}
+        compact={Boolean(storedParts)}
         onSwipeGreeting={(index) => void swipeGreeting(index)}
       />
     )
+    return part.title ? <details key={`fold:${i}`} className="dsh-tavern-reason"><summary>{part.title}</summary>{frame}</details> : frame
   })
 
   return (
@@ -218,10 +231,8 @@ function SpeechBubbleSession(props: SpeechBubbleProps) {
       <div className="dsh-tavern-speechBody">
         <div className="dsh-tavern-speechName">{name}</div>
         <Err message={swipeError} />
-        {frames}
-        {(frames.length === 0 || text) && (
-          <MarkdownText text={text || ' '} streaming={Boolean(streaming)} labels={markdownLabels} />
-        )}
+        <Err message={rendered.state.status === 'error' ? rendered.state.message : null} />
+        {content}
       </div>
       <div className="dsh-tavern-speechCopy">
         <IconBtn label={t('speech.copy')} onClick={() => void onCopy()}>

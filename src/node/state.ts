@@ -5,12 +5,13 @@
 import { join } from 'node:path'
 import type { LlmResolvedModelInfo, LlmRuntime } from '@deepseek-ai/dsh-llm'
 import { estimateTokens } from '../core/tokenize.js'
-import { EMPTY_TIMER_STATE, type CharacterCard, type MemoryEntry, type PromptPreset, type RegexRule, type WIEngineResult, type WITimerState, type WorldDelta, type WorldInfoEntry } from '../core/types.js'
+import { type CharacterCard, type MemoryEntry, type PromptPreset, type RegexRule, type WIEngineResult, type WITimerState, type WorldDelta, type WorldInfoEntry } from '../core/types.js'
 import { compileCardRegexScripts, compilePresetRegexScripts } from '../core/regex.js'
 import { normalizeBook, parseJsonCard, parsePngCard, regexScriptsOf, applyCharacterPatch, cardToStJson, createBlankCard, embedCardInPng } from '../state/card.js'
 import { parseLorebook } from '../state/lorebook.js'
 import { MemoryStore } from '../state/memory.js'
 import type { PipelineResult } from './pipeline.js'
+import { loadTemplateTimers, saveTemplateTimers } from '../state/template.js'
 import { Wal } from '../state/wal.js'
 import { WorldDeltaStore } from '../state/worlddelta.js'
 import {
@@ -119,6 +120,8 @@ export class TavernState {
   /** 会话当前 turn 号（session/event 的 turn/start 维护；WI/记忆检索按 turn 缓存）。 */
   readonly requestDiagnostics = new Map<string, { text: string; truncated: boolean }>()
   readonly turnPlans = new Map<string, { turn: number; cardId: string; storyId?: string; result: PipelineResult }>()
+  /** 已成功组装但尚未完成持久化的计划；失败重试只提交快照，不再次执行模板或推进 WI。 */
+  readonly pendingTurnPlans = new Map<string, { turn: number; cardId: string; storyId?: string; floor: string; publish: () => Promise<PipelineResult> }>()
   readonly currentTurns = new Map<string, number>()
   /** 当前 turn 内的 step（pre-step / step/start 维护；turn 开始时为 1）。 */
   readonly currentSteps = new Map<string, number>()
@@ -148,6 +151,7 @@ export class TavernState {
   >()
   /** 已入 inbox 尚未入日志的用户输入文本（agent/inbox/inserted 维护；turn/end 清除）。 */
   readonly pendingInputs = new Map<string, string[]>()
+  readonly pendingTemplateInputs = new Map<string, Array<{id:string;text:string}>>()
   /** 会话 standing 钉死（键 = 会话 × 生成场景；绑定指纹不变则复用第一次写入的字节）。 */
   readonly standingPins = new Map<string, StandingPin>()
   /** standing 依赖资产的进程内修订号：经本类写方法编辑/删除即 bump，standing 指纹随内容变化失效重算。 */
@@ -942,13 +946,7 @@ export class TavernState {
 
   async loadTimers(cardId: string, sessionId: string, storyId?: string): Promise<WITimerState> {
     const ws = await this.storyWorkspace(cardId, storyId)
-    const raw = await ws.fs.readText(`state/wi-timers/${sessionId.replace(/[^A-Za-z0-9_.-]/g, '_')}.json`)
-    if (raw === null) return structuredClone(EMPTY_TIMER_STATE)
-    try {
-      return JSON.parse(raw) as WITimerState
-    } catch {
-      return structuredClone(EMPTY_TIMER_STATE)
-    }
+    return loadTemplateTimers(ws.fs, sessionId)
   }
 
   async saveTimers(cardId: string, sessionId: string, state: WITimerState, floor?: string | null, storyId?: string): Promise<void> {
@@ -956,7 +954,7 @@ export class TavernState {
     // turn 流程传入本轮楼层（openFloors entry）→ 定时器随楼层记 WAL、可回滚；
     // 缺省/null = 非会话写入（fork 复制定时器、楼层未开启的会话），共享句柄 floor 恒 null，不记 WAL。
     const fs = floor ? ws.fs.withFloor(floor) : ws.fs
-    await fs.writeText(`state/wi-timers/${sessionId.replace(/[^A-Za-z0-9_.-]/g, '_')}.json`, JSON.stringify(state, null, 2) + '\n')
+    await saveTemplateTimers(fs, sessionId, state)
   }
 
   // ── 触发日志（内存态，最近一次组装的明细） ────────────────────────────────

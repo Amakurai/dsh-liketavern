@@ -681,8 +681,3 @@ export function collectRenderedHtml(text: string): { htmls: string[]; rest: stri
   }
   return { htmls, rest: current }
 }
-
-/** 从正则替换后的展示文本里抽出完整 HTML（含 ```text/html 围栏）。 */
-export function extractRenderedHtml(text: string): string | null {
-  return splitRenderedHtml(text).html
-}

@@ -112,7 +112,8 @@ export function TavernAssistantNode(props: {
           cardId={binding.cardId}
           name={name || t('assistant.characterFallback')}
           rawText={text}
-          streaming={streaming}
+          messageId={node.data.finalNode?.seq}
+          streaming={streaming || node.location?.turn?.status === 'open'}
           interactiveCards={binding.interactiveCards}
           onSwipeGreeting={async (index) => {
             if (!sessions) throw new Error(t('speech.navigationUnavailable'))

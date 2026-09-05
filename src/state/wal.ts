@@ -177,6 +177,18 @@ export class Wal {
     return this.enqueue(() => this.doListFloors())
   }
 
+  /** 恢复前只读检查原楼层：元数据、序号、路径与全部快照都必须有效，不把坏记录当成空日志。 */
+  validateFloor(floor: string): Promise<WalFloorInfo> {
+    return this.enqueue(async () => {
+      const dir = join(this.rootDir, sanitizeFloor(floor))
+      if (!(await isDir(dir))) throw new Error(`WAL 楼层缺失或已回滚：${floor}`)
+      const meta = await this.readMeta(dir)
+      if (!meta || meta.floor !== floor) throw new Error(`WAL 楼层元数据不匹配：${floor}`)
+      await this.readRecords(dir)
+      return { floor, committed: meta.committed, startedAt: meta.startedAt, rolledBack: false }
+    })
+  }
+
   /** 删除已回滚且早于 keepRolledBackDays（默认 7）的楼层目录，返回删除数。 */
   prune(options: { keepRolledBackDays?: number }): Promise<number> {
     return this.enqueue(() => this.doPrune(options))

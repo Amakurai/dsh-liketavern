@@ -73,6 +73,24 @@ live standing 在模拟预算裁剪前构造，历史增长不再导致角色定
 
 ## 第三方计算与类型检查
 
+EJS 提示词模板在同一 worker 内另建 QuickJS/WASM 实例，只有复制的 JSON 输入与有界 JSON 输出，无 Node/DOM/网络桥。模板状态与已处理回复快照写在剧情 `state/template.json`，组装读改写共用工作区锁；分支复制此文件，WAL 回滚同步撤销。动态模板进 turn，不钉入 standing。正常 stop 回复在 turn/end 清理缓存、提交 WAL 前处理；UI 通过消息 seq 读取快照，预览和重绘不产生持久写入。详细接口及与 ST 的差异见 [模板说明](PROMPT_TEMPLATES.md)。
+
+消息变量由宿主稳定 Message.id 定位，historyIdentities 与过滤后的文本历史严格对齐，消息 seq 仅用于展示定位。新输入与普通 stop 回复一次继承前序快照；withMsg 修改历史目标也归当前执行楼层的 WAL。冻结上下文只包含当前剧情可见的快照，旧单树不用于推断缺失历史。快照摘要与条件/schema 校验共同覆盖直接引用写入。
+
+sticky 的 prompt、generate regex、message regex 分别在成功组装结束、成功组装结束、下一轮开始推进，缓存命中与预览不另行提交。prepared 期间 generation 保存单份执行日志，continuation 引用它；收口时仅为仍活跃的回调保留日志。阶段切换、消息元数据和回复操作一起重放，共享词法变量保留，旧增量仅发生于重建副本。预加载资产指纹与权威注册表阻止过期规则复活；最后一个回调到期后可释放旧日志。变量、消息快照、计时器、注册表与回执始终同文件提交。
+
+世界书装饰器先归一化；@@if 在隔离 worker 内只读筛选后才参与 WI 分组和预算，命中的条件条目强制进入 turn。每次 QuickJS 建立时重建预加载函数与缓存默认值，不持久化预加载副作用；生成与回复沿用冻结资产。JSON Patch 在副本上验证整批操作后再调用统一变量写入，模板失败仍拒绝整个回复提交。
+
+WI 扫描、预处理和组装由同一 worker 计划完成；activewi 新请求触发同轮重组，QuickJS 按来源缓存求值，所有迭代使用同一轮初定时器。动态正则只在 QuickJS 内执行；修改插件静态内容时移入 turn，历史改写只出现在模拟序列。跨阶段仅传递字符串回复规则，局部闭包在渲染前/预加载时重建。
+
+模板依赖构建为 `lib/vendor/template-libraries.js`：Zod、Lodash、jsonrepair 只在 QuickJS 中求值，不桥接 Node 函数。库加载前先固定沙箱 Date/Math.random，避免 Lodash 捕获宿主时钟。变量 schema 在副本上完成校验与转换，失败不发布；成功写入记录校验后的状态指纹，导出不会再次运行非幂等转换，绕过 setter 的持久引用改动仍需通过校验。
+
+Faker 构建为单独带许可证的 `lib/vendor/template-faker.js`。worker 只把脚本文本复制进 QuickJS，首次使用时由沙箱加载；全语言数据按需 JSON.parse，默认实例使用冻结 seed/now。角色读取快照包含 ST 根字段与 data 字段但不含 PNG/raw；普通 WI、渲染和预加载均提供 world_info，省略库名的嵌套读取保持当前条目来源。
+
+变量变更时，生成计划把 WI 定时器一同提交到模板文件的可选 wiTimers 字段，消除两次 rename 之间的半提交。未迁移的会话继续读取旧 wi-timers 路径；已迁移会话的普通计时更新也只写模板文件。pendingTurnPlans 只暂存已组装但尚未提交的绝对快照，提交成功才发布正式 turnPlans，楼层结束时清理。分支将边界定时值写子会话旧路径，不修改复制的祖先模板文件；子会话首次变量更新再在自己的楼层内迁移。
+
+定位条目由纯解析器识别，参与 WI 选择但从普通位置桶移出，避免重复注入。worker 在组装后处理 GENERATE 正文追加、@INJECT 位置/角色插入、@INJECT 正则插入，再检查总预算。精确定位仅修改模拟 messages 副本，真实内容追加到 tavern:turn，standing 与宿主历史保持其原有职责。重组重放定位来源缓存，正则目标通过正文指纹和重复次数识别，位置变化不会重复执行同一模板。
+
 WI 正则、提示词组装和 output/render 正则都在 Node worker 内运行。每次计算上限 1 秒，启动上限 10 秒；最多两个并行、十六个等待任务，输入/输出各上限 16 MiB 字符，worker 老生代上限 128 MiB。超时/超量明确失败并终止 worker；静态 regex 检查不作为最终安全保证。Node 24 源码测试映射本项目相对 .js 导入到 .ts；发布运行只加载 lib JavaScript。
 
 remote 的方法键集合、请求 schema、结果表、service 和客户端映射由编译约束。React 与宿主 primitives 使用真实公开类型，运行 bundle 保持 external，不使用 any 声明掩盖错误。

@@ -595,13 +595,3 @@ export function parseJsonCard(json: unknown): CharacterCard {
   }
   return normalizeCardInternal(json, null, null)
 }
-
-/** 归一化入口：接受任意已解析 JSON（V1 平铺 / V2 / V3），pngBytes 为来源 PNG 或 null。 */
-export function normalizeCard(json: unknown, pngBytes: Uint8Array | null): CharacterCard {
-  return normalizeCardInternal(json, pngBytes, null)
-}
-
-/** 提取问候语配图来源：PNG 卡自身即头像来源，JSON 卡为 null。 */
-export function extractGreetingImages(card: CharacterCard): Uint8Array | null {
-  return card.pngBytes
-}

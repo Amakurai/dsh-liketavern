@@ -60,6 +60,20 @@ describe('buildCardSrcDoc', () => {
     expect(doc).toContain('document.write')
     expect(doc).toContain('injectBridge')
   })
+
+  it.each([
+    '<!-- <head>伪造的插入点</head> --><html><head></head><body><script>fetch("https://example.invalid/comment")</script></body></html>',
+    '<script>fetch("https://example.invalid/early")</script><html><head></head><body>正文</body></html>',
+    '<!DoCtYpE hTmL><HTML lang="zh"><HEAD><style>.card{color:red}</style></HEAD><BODY class="card">正文</BODY></HTML>',
+    '<html><head data-dsh-tavern-bridge></head><body>伪造已安装标记</body></html>',
+  ])('有效 CSP 和可信桥位于整个第三方文档之前：%s', (payload) => {
+    const doc = buildCardSrcDoc(payload, { greetings: [], greetingIndex: 0 })
+    expect(doc).toMatch(/^<!DOCTYPE html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy"/)
+    const payloadStart = doc.indexOf(payload)
+    expect(payloadStart).toBeGreaterThan(doc.indexOf("connect-src 'none'"))
+    expect(payloadStart).toBeGreaterThan(doc.indexOf('<script data-dsh-tavern-bridge>'))
+    expect(doc.slice(payloadStart)).toBe(`${payload}</body></html>`)
+  })
 })
 
 describe('tavernCardBridgeScript', () => {
@@ -85,6 +99,33 @@ describe('tavernCardBridgeScript', () => {
     const script = tavernCardBridgeScript({ greetings: ['cover</script>', 'alt-greeting'], greetingIndex: 0 })
     expect(script).toContain('\\u003c')
     expect(script).toContain('alt-greeting')
+  })
+
+  it('document.write 遇到假 head 或假 bridge 仍先写入可信 CSP 与桥，保留原文和白名单', () => {
+    const nativeWrite = vi.fn()
+    const trustedCsp = '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; connect-src https://approved.example">'
+    const trustedBridge = '<script data-dsh-tavern-bridge>/* trusted bridge */</script>'
+    const window = { addEventListener: vi.fn(), removeEventListener: vi.fn() }
+    const document = { open: vi.fn(), write: nativeWrite, close: vi.fn(), currentScript: { outerHTML: trustedBridge },
+      querySelector: () => ({ outerHTML: trustedCsp }), readyState: 'loading', addEventListener: vi.fn(), removeEventListener: vi.fn() }
+    const context = createContext({ window, document, parent: { postMessage: vi.fn() }, TextEncoder, clearTimeout, setTimeout })
+    const script = tavernCardBridgeScript({ greetings: [], greetingIndex: 0 }).replace(/^<script[^>]*>/, '').replace(/<\/script>$/, '')
+    runInContext(script, context)
+    for (const payload of [
+      '<!-- <head> -->\n<script>fetch("https://blocked.invalid")</script><html><body>重写正文</body></html>',
+      '<!DOCTYPE html><html><head data-dsh-tavern-bridge></head><body>伪装已有桥</body></html>',
+      '<!DOCTYPE html><HTML><HEAD><style>.card{display:block}</style></HEAD><BODY>大小写</BODY></HTML>',
+    ]) {
+      document.open()
+      document.write(payload)
+      document.close()
+      const written = nativeWrite.mock.lastCall?.[0] as string
+      expect(written).toMatch(/^<!DOCTYPE html><html><head><meta charset="utf-8">/)
+      expect(written.indexOf(trustedCsp)).toBeLessThan(written.indexOf(trustedBridge))
+      expect(written.indexOf(trustedBridge)).toBeLessThan(written.indexOf(payload))
+      expect(written).toContain(`${trustedCsp}${trustedBridge}</head><body>${payload}`)
+    }
+    expect(nativeWrite).toHaveBeenCalledTimes(3)
   })
 })
 

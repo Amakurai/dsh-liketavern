@@ -16,7 +16,6 @@ import {
   applyRegexToMessages,
   compileCardRegexScripts,
   compilePresetRegexScripts,
-  extractRenderedHtml,
   splitRenderedHtml,
   collectRenderedHtml,
   type MacroContext,
@@ -644,31 +643,29 @@ describe('消息角色过滤', () => {
   })
 })
 
-describe('extractRenderedHtml', () => {
+describe('splitRenderedHtml', () => {
   it('抽出 ```text 围栏里的完整 HTML', () => {
-    const html = extractRenderedHtml('```text\n<!DOCTYPE html>\n<html><body>封面</body></html>\n```')
+    const { html } = splitRenderedHtml('```text\n<!DOCTYPE html>\n<html><body>封面</body></html>\n```')
     expect(html).toContain('<!DOCTYPE html>')
     expect(html).toContain('封面')
   })
 
   it('普通开场白返回 null', () => {
-    expect(extractRenderedHtml('你好，旅人。')).toBeNull()
+    expect(splitRenderedHtml('你好，旅人。')).toEqual({ html: null, rest: '你好，旅人。' })
   })
 
   it('无 doctype 的 style+div 小部件也抽进 html', () => {
-    const html = extractRenderedHtml('<style>.x{color:red}</style><div class="x">封面</div>')
+    const { html } = splitRenderedHtml('<style>.x{color:red}</style><div class="x">封面</div>')
     expect(html).toContain('<style>')
     expect(html).toContain('封面')
   })
 
   it('```html 围栏里无 doctype 的片段也抽出', () => {
-    const html = extractRenderedHtml('```html\n<style>.a{}</style><div>player</div>\n```\n后面正文')
+    const { html } = splitRenderedHtml('```html\n<style>.a{}</style><div>player</div>\n```\n后面正文')
     expect(html).toContain('<style>')
     expect(html).toContain('player')
   })
-})
 
-describe('splitRenderedHtml', () => {
   it('围栏 HTML 后面的正文留在 rest', () => {
     const split = splitRenderedHtml(
       '```html\n<!DOCTYPE html>\n<html><body>player</body></html>\n```\n<!--meta: 0,4-->\n后面还有正文',

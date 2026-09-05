@@ -1,40 +1,99 @@
-/** 宿主会话事件的副作用：开启/提交剧情 WAL，维护并清理每轮缓存。调用方负责按会话排队。 */
+/** 宿主会话事件的副作用：开启/提交剧情 WAL，持久模板恢复及每轮缓存清理。调用方负责按会话排队。 */
 import type { TavernState } from './state.js'
+import type { Session } from '@deepseek-ai/dsh-session'
+import { completeTemplateOutput } from './templateOutput.js'
+import { loadTemplateState, saveTemplateState } from '../state/template.js'
+import { closeTemplateGenerationState } from '../state/templateContinuation.js'
+import { withWorkspaceLock } from '../state/workspaceLock.js'
 
-export async function onTurnStart(state: TavernState, sessionId: string, turn: number): Promise<void> {
-  // turn 号先于绑定记录：turn 中途才绑卡的会话（turn/start 时无绑定，下方提前返回）
-  // 也要让 pipeline 拿到真实 turn 号走「每 turn 评估一次」缓存——否则 live 且 turn=-1
-  // 时 cacheable=false，每步全量重评并 saveTimers，sticky/cooldown 每步 tick 一次。
-  // 这种会话本轮没有 beginFloor，pipeline 不落盘定时器，避免产生无 WAL 的轮次写入。
-  state.currentTurns.set(sessionId, turn)
-  state.currentSteps.set(sessionId, 1)
+export async function onTurnStart(state:TavernState,sessionId:string,turn:number):Promise<void> {
+  state.currentTurns.set(sessionId,turn)
+  state.currentSteps.set(sessionId,1)
   const binding = await state.loadBinding(sessionId)
   if (!binding) return
-  const ws = await state.storyWorkspace(binding.cardId, binding.storyId)
-  // 楼层直接开在 WAL 上，不再写共享 WorkspaceFs 的可变 floor：同一张卡的并发会话
-  // 各有各的楼层，turn 内的写入经 withFloor(floor) 派生实例记进各自楼层（见 tools.ts）。
-  const floor = `${sessionId}#t${turn}`
-  await ws.wal.beginFloor(floor)
-  // 记下楼层开在哪张卡上：turn/end 必须按这张卡这个楼层提交，不能重新读绑定；
-  // 工具写路径也凭这条 entry 校验「楼层确实开在当前绑定的卡上」。
-  state.openFloors.set(sessionId, { cardId: binding.cardId, storyId: binding.storyId, floor })
+  const ws = await state.storyWorkspace(binding.cardId,binding.storyId)
+  await withWorkspaceLock(ws.fs.root,async()=> {
+    const floor = `${sessionId}#t${turn}`
+    const stored = await loadTemplateState(ws.fs)
+    const generation = stored.generation
+    if (generation?.sessionId===sessionId) {
+      if (generation.cardId!==binding.cardId || generation.storyId!==binding.storyId) throw new Error('模板轮次恢复的剧情归属不一致')
+      if (generation.turn>turn) throw new Error('宿主轮次早于已保存的模板计划，请先回滚剧情')
+      if (generation.turn===turn) {
+        const original = await ws.wal.validateFloor(floor)
+        if (generation.status!=='prepared' || original.committed) throw new Error('该模板楼层已经结束或缺失，不能重复开始')
+        state.openFloors.set(sessionId,{cardId:binding.cardId,storyId:binding.storyId,floor})
+        return
+      }
+      if (generation.status==='prepared') {
+        await ws.wal.validateFloor(generation.floor)
+        closeTemplateGenerationState(stored,'terminated')
+        await saveTemplateState(ws.fs.withFloor(generation.floor),stored)
+        await ws.wal.commitFloor(generation.floor)
+      }
+    }
+    await ws.wal.beginFloor(floor)
+    state.openFloors.set(sessionId,{cardId:binding.cardId,storyId:binding.storyId,floor})
+  })
 }
 
-export async function onTurnEnd(state: TavernState, sessionId: string): Promise<void> {
-  // 不变式：谁 beginFloor 谁 commitFloor。用户中途换绑/解绑时当前绑定已经指向别的卡，
-  // 按当前绑定提交会把开层那张卡的楼层永远留在未提交状态：之后同会话同 turn 号再
-  // beginFloor 会抛「已存在且未提交」，该楼层也一直占着 listFloors。
-  const entry = state.openFloors.get(sessionId)
+export async function onTurnEnd(state:TavernState,sessionId:string,session?:Pick<Session,'id'|'snapshotEvents'>):Promise<void> {
+  if (session && session.id!==sessionId) throw new Error('模板结束事件与目标会话不一致')
+  let templateError:unknown
+  try { if (session) await completeTemplateOutput(state,session) }
+  catch (error) {
+    templateError = error
+    state.recordTriggerLog(sessionId,[...(state.turnPlans.get(sessionId)?.result.logLines ?? []),`[template:error] ${String(error)}`])
+  }
+  // 优先原开层归属；进程重启后只接受当前剧情内同会话同结束帧的持久回执。
+  let entry = state.openFloors.get(sessionId)
+  const events = session?.snapshotEvents() ?? []
+  const ending = [...events].reverse().find(event=>event.type==='turn/start'||event.type==='turn/end')
+  if (!entry && session?.id===sessionId && ending?.type==='turn/end') {
+    const binding = await state.loadBinding(sessionId)
+    if (binding) {
+      const ws = await state.storyWorkspace(binding.cardId,binding.storyId)
+      const generation = (await loadTemplateState(ws.fs)).generation
+      if (generation?.sessionId===sessionId && generation.turn===ending.data.turn) {
+        if (generation.cardId!==binding.cardId || generation.storyId!==binding.storyId) throw new Error('模板结束恢复的剧情归属不一致')
+        await ws.wal.validateFloor(generation.floor)
+        entry = {cardId:generation.cardId,storyId:generation.storyId,floor:generation.floor}
+      }
+    }
+  }
   state.openFloors.delete(sessionId)
   state.currentTurns.delete(sessionId)
   state.currentSteps.delete(sessionId)
   state.stepNoticeMarks.delete(sessionId)
   state.wiCache.delete(sessionId)
   state.turnPlans.delete(sessionId)
+  state.pendingTurnPlans.delete(sessionId)
   state.pendingInputs.delete(sessionId)
-  if (!entry) return
-  const ws = await state.storyWorkspace(entry.cardId, entry.storyId)
-  // 提交失败由调用方 warn；entry 已先摘除，不会留下悬空楼层
-  // （共享 WorkspaceFs 的 floor 恒为 null，没有 setFloor(null) 兜底的需求）。
-  await ws.wal.commitFloor(entry.floor)
+  state.pendingTemplateInputs.delete(sessionId)
+  if (entry) {
+    const ws = await state.storyWorkspace(entry.cardId,entry.storyId)
+    await withWorkspaceLock(ws.fs.root,async()=> {
+      await ws.wal.validateFloor(entry.floor)
+      if (!templateError) {
+        try {
+          const stored = await loadTemplateState(ws.fs), generation = stored.generation
+          if (generation?.status==='prepared' && generation.sessionId===sessionId && generation.cardId===entry.cardId
+            && generation.storyId===entry.storyId && generation.floor===entry.floor) {
+            const completed = ending?.type==='turn/end' && ending.data.turn===generation.turn && ending.data.reason.kind==='completed'
+              && events.some(event=>{
+                if (event.type!=='assistant/message' || event.data.turn!==generation.turn || event.data.interrupted || event.seq>=ending.seq) return false
+                const chunks = events.filter(chunk=>chunk.type==='assistant/chunk' && chunk.data.turn===generation.turn && chunk.data.step===event.data.step)
+                const last = chunks.at(-1)
+                return chunks.filter(chunk=>chunk.type==='assistant/chunk' && chunk.data.chunk.type==='finish').length===1
+                  && last?.type==='assistant/chunk' && last.data.chunk.type==='finish' && last.data.chunk.reason.kind==='stop' && last.seq<event.seq
+              })
+            closeTemplateGenerationState(stored,completed?'completed':'terminated')
+            await saveTemplateState(ws.fs.withFloor(entry.floor),stored)
+          }
+        } catch (error) { templateError = error }
+      }
+      await ws.wal.commitFloor(entry.floor)
+    })
+  }
+  if (templateError) throw templateError
 }

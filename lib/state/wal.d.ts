@@ -53,6 +53,8 @@ export declare class Wal {
     rollbackAfter(floors: string[], workspaceRoot: string): Promise<RollbackAfterResult>;
     /** 列出全部楼层（含已回滚，rolledBack: true），按 startedAt 升序。 */
     listFloors(): Promise<WalFloorInfo[]>;
+    /** 恢复前只读检查原楼层：元数据、序号、路径与全部快照都必须有效，不把坏记录当成空日志。 */
+    validateFloor(floor: string): Promise<WalFloorInfo>;
     /** 删除已回滚且早于 keepRolledBackDays（默认 7）的楼层目录，返回删除数。 */
     prune(options: {
         keepRolledBackDays?: number;

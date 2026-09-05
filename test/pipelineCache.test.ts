@@ -19,6 +19,7 @@ import { runTavernPipeline } from '../src/node/pipeline.js'
 import type { TavernPaths } from '../src/node/paths.js'
 import { TavernState } from '../src/node/state.js'
 import { importCard } from '../src/state/workspace.js'
+import { onTurnStart,onTurnEnd } from '../src/node/sessionLifecycle.js'
 
 let root: string
 let paths: TavernPaths
@@ -95,8 +96,11 @@ describe('缓存字节稳定性守卫', () => {
     }
     await saveBinding(paths, binding)
 
-    const run = (turn: number, history: { role: 'user' | 'assistant'; content: string }[]) => {
-      state.currentTurns.set('s1', turn)
+    const run = async (turn: number, history: { role: 'user' | 'assistant'; content: string }[]) => {
+      if(state.currentTurns.get('s1')!==turn) {
+        if(state.currentTurns.has('s1')) await onTurnEnd(state,'s1')
+        await onTurnStart(state,'s1',turn)
+      }
       return runTavernPipeline({ state, sessionId: 's1', agent: null, mode: 'live', generationType: 'normal', historyOverride: history })
     }
 

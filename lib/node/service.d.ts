@@ -189,6 +189,7 @@ export declare class TavernService extends TypertRemoteService implements Tavern
     renderOutputText(request: {
         sessionId: string;
         text: string;
+        messageId?: number;
     }): Promise<TavernMethodResults['renderOutputText']>;
     regenerate(request: {
         sessionId: string;

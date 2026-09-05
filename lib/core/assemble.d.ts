@@ -1,5 +1,5 @@
 import { type MacroContext } from './macros.js';
-import { type ChatMessage, type CharacterCard, type PromptPreset, type RegexRule, type WIEngineResult, type WorldDelta } from './types.js';
+import { type ChatMessage, type ChatRole, type CharacterCard, type PromptPreset, type RegexRule, type WIEngineResult, type WorldDelta } from './types.js';
 export interface AssembleInput {
     preset: PromptPreset;
     card: CharacterCard | null;
@@ -17,6 +17,19 @@ export interface AssembleInput {
     authorNote?: string;
     /** 角色笔记 journal.md（进 turn；调用方已按预算裁过）。 */
     journalText?: string;
+    /** node worker 提供隔离模板执行器；core 本身不执行 JavaScript。 */
+    renderTemplate?: (text: string, source: string, context: MacroContext) => string;
+    /** worker 按完整模拟序列顺序求值；在实际正文预算裁剪前执行，core 不运行第三方代码。 */
+    processTemplateSequence?: (messages: TemplateSequenceMessage[]) => {
+        turnContext?: string[];
+        log?: AssembleLogEntry[];
+    };
+    /** 临时模板正则只处理插件内容与历史模拟副本；回调由 node 的隔离器提供。 */
+    transformPrompt?: (text: string, meta: {
+        role: ChatRole;
+        worldinfo: boolean;
+        depth: number;
+    }) => string;
     macroCtx: MacroContext;
     regexRules: RegexRule[];
     /**
@@ -33,7 +46,7 @@ export interface AssembleInput {
     };
 }
 export interface AssembleLogEntry {
-    kind: 'unknown-marker' | 'unknown-macro' | 'dropped-marker-content' | 'dropped-script' | 'auto-marker' | 'regex-error' | 'trim';
+    kind: 'unknown-marker' | 'unknown-macro' | 'dropped-marker-content' | 'dropped-script' | 'auto-marker' | 'regex-error' | 'trim' | 'template-placement';
     detail: string;
 }
 export interface AssembledPrompt {
@@ -53,6 +66,17 @@ export interface AssembledPrompt {
         tokensAfter: number;
         trimmedSections: string[];
     };
+}
+/** 可变引用仅在本次纯函数组装内使用；历史本体的改变只进入 ST 模拟副本。 */
+export interface TemplateSequenceMessage {
+    message: ChatMessage;
+    worldinfo: boolean;
+    depth: number;
+    history: boolean;
+    /** 历史模拟副本保留正文处理结果；GENERATE 位置注入只加入完整 messages 序列。 */
+    historyContent?: string;
+    /** worker 还原的原始正文，用于区分来源占位替换与实际模板/正则修改。 */
+    originalContent?: string;
 }
 /** mes_example 按 <START> 切块（对齐 SillyTavern）。 */
 export declare function splitExampleMessages(mesExample: string): string[];

@@ -21,6 +21,7 @@ import { createAssistantMessage, createUserMessage, type AssistantMessage, type 
 import { SessionLogOffset, type Session, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { join } from 'node:path'
 import { Wal } from '../state/wal.js'
+import { copyTemplateTimers } from '../state/template.js'
 import { estimateTokens } from '../core/tokenize.js'
 import { rebuildIndex } from '../state/workspace.js'
 import { greetingFloorState, isGreetingOnlyBlank, pickGreetingText, sessionHasUserMessage, TAVERN_GREETING_SOURCE } from '../core/greetingLog.js'
@@ -398,8 +399,7 @@ async function forkAt(
     }
     const boundaryTurn = options?.rollbackFromTurn !== undefined ? options.rollbackFromTurn - 1 : inheritedThroughTurn(seed) ?? 0
     const owner = timerOwnerAtTurn(binding, source.id, boundaryTurn)
-    const timers = await fs.readText(`state/wi-timers/${owner.replace(/[^A-Za-z0-9_.-]/g, '_')}.json`)
-    if (timers !== null) await fs.writeText(`state/wi-timers/${childId.replace(/[^A-Za-z0-9_.-]/g, '_')}.json`, timers)
+    await copyTemplateTimers(fs, owner, childId)
     await rebuildIndex(fs, estimateTokens)
   })
   const throughTurn = inheritedThroughTurn(seed)

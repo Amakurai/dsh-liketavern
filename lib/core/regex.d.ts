@@ -101,5 +101,3 @@ export declare function collectRenderedHtml(text: string): {
     htmls: string[];
     rest: string;
 };
-/** 从正则替换后的展示文本里抽出完整 HTML（含 ```text/html 围栏）。 */
-export declare function extractRenderedHtml(text: string): string | null;

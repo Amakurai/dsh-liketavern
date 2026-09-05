@@ -35,7 +35,3 @@ export declare function applyCharacterPatch(card: CharacterCard, patch: Partial<
 export declare function createBlankCard(name: string): CharacterCard;
 /** 解析 JSON 角色卡（.json 导入），无 PNG 字节。 */
 export declare function parseJsonCard(json: unknown): CharacterCard;
-/** 归一化入口：接受任意已解析 JSON（V1 平铺 / V2 / V3），pngBytes 为来源 PNG 或 null。 */
-export declare function normalizeCard(json: unknown, pngBytes: Uint8Array | null): CharacterCard;
-/** 提取问候语配图来源：PNG 卡自身即头像来源，JSON 卡为 null。 */
-export declare function extractGreetingImages(card: CharacterCard): Uint8Array | null;

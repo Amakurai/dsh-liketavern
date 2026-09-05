@@ -19,7 +19,7 @@
  *    dialogueExamples marker（marker 缺席则记日志丢弃）；AN top 置于历史之前、
  *    AN bottom 置于全序列最末；@D 按 depth/role 插入历史。
  *    世界书：常驻且无本轮宏的进 standing（会话钉死后不随预算抖动）；
- *    关键词命中进 turnContext；含 EJS/STscript 的条目不注入（本插件不执行脚本）。
+ *    关键词命中进 turnContext；EJS 经注入的隔离执行器展开后进 turn，STscript 跳过。
  * 5. 宏展开（{{char}}/{{user}}/{{description}}/{{persona}}/{{outlet::Name}}/{{setvar}} 等），
  *    outlet 内容来自世界书结果。
  *    卡级 system_prompt / post_history_instructions 里的 {{original}} 引用预设 main /
@@ -41,6 +41,7 @@ import { isSyntheticUserText } from './dshPrompt.js'
 import { expandIdentityMacros, expandMacros, hasTurnLocalMacros, hasUnevaluatedScript, type MacroContext } from './macros.js'
 import { applyRegexToMessages } from './regex.js'
 import { isStandingSafeEntry } from './worldbook.js'
+import { hasEjs } from './template.js'
 import {
   Marker,
   WIPosition,
@@ -73,6 +74,12 @@ export interface AssembleInput {
   authorNote?: string
   /** 角色笔记 journal.md（进 turn；调用方已按预算裁过）。 */
   journalText?: string
+  /** node worker 提供隔离模板执行器；core 本身不执行 JavaScript。 */
+  renderTemplate?: (text: string, source: string, context: MacroContext) => string
+  /** worker 按完整模拟序列顺序求值；在实际正文预算裁剪前执行，core 不运行第三方代码。 */
+  processTemplateSequence?: (messages: TemplateSequenceMessage[]) => {turnContext?: string[];log?:AssembleLogEntry[]}
+  /** 临时模板正则只处理插件内容与历史模拟副本；回调由 node 的隔离器提供。 */
+  transformPrompt?: (text: string, meta: {role: ChatRole;worldinfo:boolean;depth:number}) => string
   macroCtx: MacroContext
   regexRules: RegexRule[]
   /**
@@ -87,7 +94,7 @@ export interface AssembleInput {
 }
 
 export interface AssembleLogEntry {
-  kind: 'unknown-marker' | 'unknown-macro' | 'dropped-marker-content' | 'dropped-script' | 'auto-marker' | 'regex-error' | 'trim'
+  kind: 'unknown-marker' | 'unknown-macro' | 'dropped-marker-content' | 'dropped-script' | 'auto-marker' | 'regex-error' | 'trim' | 'template-placement'
   detail: string
 }
 
@@ -104,6 +111,18 @@ export interface AssembledPrompt {
   history: ChatMessage[]
   log: AssembleLogEntry[]
   stats: { tokensBefore: number; tokensAfter: number; trimmedSections: string[] }
+}
+
+/** 可变引用仅在本次纯函数组装内使用；历史本体的改变只进入 ST 模拟副本。 */
+export interface TemplateSequenceMessage {
+  message: ChatMessage
+  worldinfo: boolean
+  depth: number
+  history: boolean
+  /** 历史模拟副本保留正文处理结果；GENERATE 位置注入只加入完整 messages 序列。 */
+  historyContent?: string
+  /** worker 还原的原始正文，用于区分来源占位替换与实际模板/正则修改。 */
+  originalContent?: string
 }
 
 const WI_ROLE_MAP: Record<WIRole, ChatRole> = {
@@ -131,6 +150,7 @@ interface DepthInjection {
   content: string
   /** 本轮才变（触发型世界书/含本轮宏）= true；静态内容 = false（live 侧进 standing 钉死）。 */
   turn: boolean
+  worldinfo?: boolean
 }
 
 const CLOCK_FROZEN = { time: '', date: '', datetime: '', weekday: '' } as const
@@ -222,13 +242,35 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
 
   // ── 2. 世界书结果分桶 ────────────────────────────────────────────────────
   const wi = input.wi
+  const templateCache = new Map<string, string>()
+  const renderTemplate = (text: string, source = text, context: MacroContext = macroCtx): string => {
+    if (!hasEjs(text) && !input.processTemplateSequence) return text
+    if (!input.renderTemplate) throw new Error('EJS 模板需要隔离执行器')
+    const cached = templateCache.get(source)
+    if (cached !== undefined) return cached
+    let rendered: string
+    try { rendered = input.renderTemplate(text, source, context) }
+    catch (error) { throw new Error(`模板「${source === text ? '文本' : source}」：${error instanceof Error ? error.message : String(error)}`) }
+    templateCache.set(source, rendered)
+    return rendered
+  }
+  // 历史 EJS 仅处理模拟副本，真实宿主消息不在这个函数的写入范围。
+  if (input.processTemplateSequence) history = history.map((message,index)=>({...message,
+    content:renderTemplate(message.content,`history:${index}`,macroCtx)}))
+  const originalHistory = new Set(history)
+  const historyDepth = new Map(history.map((message,index)=>[message,history.length-index-1]))
+  const processedHistory = new Map<ChatMessage,string>()
+  // 宏引用含脚本的卡字段时同样属于动态文本，不得钉进 standing。
+  const dynamic = (text: string): boolean => hasTurnLocalMacros(text) || hasEjs(text)
+    || /\{\{\s*(description|personality|scenario|persona|firstmessage|charfirstmessage)\s*\}\}/i.test(text)
+      && [macroCtx.description, macroCtx.personality, macroCtx.scenario, macroCtx.persona, macroCtx.firstMessage].some(t => t && hasEjs(t))
   const outlets: Record<string, string> = {}
   if (wi) {
     for (const [name, acts] of Object.entries(wi.outlets)) {
       // outlet 内容同样做宏展开（与定位条目一致）；此处 macroCtx.outlets 尚未赋值，
       // 故内容中嵌套的 {{outlet::X}} 不会递归解析（对齐「禁止嵌套 outlet」）。
       outlets[name] = joinContents(
-        acts.map((a) => (hasUnevaluatedScript(a.entry.content) ? '' : expandMacros(a.entry.content, macroCtx))),
+        acts.map((a) => (hasUnevaluatedScript(a.entry.content) && !hasEjs(a.entry.content) ? '' : renderTemplate(expandMacros(a.entry.content, macroCtx), a.entry.key))),
       )
     }
   }
@@ -245,14 +287,15 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
     lastUserMessage: '',
     lastCharMessage: '',
   }
-  const expandStanding = (text: string, ctx: MacroContext = standingCtx) => {
-    const out = expandMacros(text, ctx)
+  const expandStanding = (text: string, ctx: MacroContext = standingCtx, source = text) => {
+    const effective = dynamic(text) ? { ...ctx, ...macroCtx, vars: { ...macroCtx.vars, ...(ctx.vars?.original === undefined ? {} : { original: ctx.vars.original }) } } : ctx
+    const out = expandMacros(renderTemplate(expandMacros(text, effective), source, effective), effective)
     for (const [k, v] of standingStore) {
       if (!turnStore.has(k)) turnStore.set(k, v)
     }
     return out
   }
-  const expandTurn = (text: string) => expandMacros(text, macroCtx)
+  const expandTurn = (text: string, source = text) => expandMacros(renderTemplate(expandMacros(text, macroCtx), source, macroCtx), macroCtx)
   /**
    * turn 侧消息按对象身份追踪，不按内容字节：两条展开后同字节的消息若分属 standing/turn，
    * 按字节匹配会把 standing 那条误踢进每轮重付的 turn 层（前缀缓存白丢）。
@@ -273,7 +316,12 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
     group.add(message)
     return message
   }
+  const definition = (role: ChatRole, raw: string, group = characterDefinitionMessages, ctx = standingCtx, source = raw): ChatMessage => {
+    const message = trackedMessage(role, expandStanding(raw, ctx, source), group)
+    return dynamic(raw) ? asTurn(message) : message
+  }
   const skipScript = (label: string, text: string): boolean => {
+    if (hasEjs(text) && input.renderTemplate) return false
     if (!hasUnevaluatedScript(text)) return false
     if (!skippedScripts.has(label)) {
       skippedScripts.add(label)
@@ -290,7 +338,7 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
   const WI_LABEL_STANDING = '【世界书·常驻】'
   const WI_LABEL_TURN = '【世界书·本轮触发】'
   const labelWi = (text: string, standingSide: boolean): string => `${standingSide ? WI_LABEL_STANDING : WI_LABEL_TURN}\n${text}`
-  /** 常驻无脚本进 standing；关键词命中进 turn；EJS 丢弃。 */
+  /** 常驻无脚本进 standing；关键词与隔离展开的 EJS 进 turn。 */
   const wiChunks = (pos: WIPosition): { standing: string; turn: string } => {
     const standingParts: string[] = []
     const turnParts: string[] = []
@@ -299,8 +347,8 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
       if (a.entry.source === 'delta') continue
       if (skipScript(`世界书「${a.entry.key}」`, a.entry.content)) continue
       // standing/turn 分流与引擎的预算豁免共用同一判定（isStandingSafeEntry），不得漂移。
-      const standingSafe = isStandingSafeEntry(a.entry)
-      const text = (standingSafe ? expandStanding(a.entry.content) : expandTurn(a.entry.content)).trim()
+      const standingSafe = isStandingSafeEntry(a.entry) && !dynamic(a.entry.content)
+      const text = (standingSafe ? expandStanding(a.entry.content, standingCtx, a.entry.key) : expandTurn(a.entry.content, a.entry.key)).trim()
       if (!text) continue
       if (standingSafe) standingParts.push(text)
       else turnParts.push(text)
@@ -349,15 +397,15 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
         return wiMessages(WIPosition.AfterCharDefs, role)
       case Marker.CharDescription:
         return card?.description.trim()
-          ? [trackedMessage(role, expandStanding(card.description), characterDefinitionMessages)]
+          ? [definition(role, card.description, characterDefinitionMessages, standingCtx, 'card:description')]
           : []
       case Marker.CharPersonality:
         return card?.personality.trim()
-          ? [trackedMessage(role, expandStanding(card.personality), characterDefinitionMessages)]
+          ? [definition(role, card.personality, characterDefinitionMessages, standingCtx, 'card:personality')]
           : []
       case Marker.Scenario:
         return card?.scenario.trim()
-          ? [trackedMessage(role, expandStanding(card.scenario), characterDefinitionMessages)]
+          ? [definition(role, card.scenario, characterDefinitionMessages, standingCtx, 'card:scenario')]
           : []
       case Marker.DialogueExamples: {
         if (!card) return []
@@ -367,14 +415,14 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
         const out: ChatMessage[] = []
         if (before.standing) out.push(trackedMessage(role, labelWi(before.standing, true), worldInfoPromptMessages))
         if (before.turn) out.push(asTurn(trackedMessage(role, labelWi(before.turn, false), worldInfoPromptMessages)))
-        out.push(...blocks.map((b) => trackedMessage(role, expandStanding(b), examplePromptMessages)))
+        out.push(...blocks.map((b, index) => definition(role, b, examplePromptMessages, standingCtx, `card:example:${index}`)))
         if (after.standing) out.push(trackedMessage(role, labelWi(after.standing, true), worldInfoPromptMessages))
         if (after.turn) out.push(asTurn(trackedMessage(role, labelWi(after.turn, false), worldInfoPromptMessages)))
         return out
       }
       case Marker.PersonaDescription:
         return input.personaDescription.trim()
-          ? [trackedMessage(role, expandStanding(input.personaDescription), characterDefinitionMessages)]
+          ? [definition(role, input.personaDescription, characterDefinitionMessages, standingCtx, 'persona')]
           : []
       case Marker.AgentMemory:
         return memoryText ? [asTurn(trackedMessage(role, memoryText, memoryPromptMessages))] : []
@@ -438,8 +486,8 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
     }
     if (!entry.content.trim()) continue
     if (skipScript(`预设「${entry.identifier}」`, entry.content)) continue
-    const turnLocal = hasTurnLocalMacros(entry.content)
-    const text = (turnLocal ? expandTurn(entry.content) : expandStanding(entry.content)).trim()
+    const turnLocal = dynamic(entry.content)
+    const text = (turnLocal ? expandTurn(entry.content, `preset:${entry.identifier}`) : expandStanding(entry.content, standingCtx, `preset:${entry.identifier}`)).trim()
     if (!text) continue // setvar/注释/trim 预处理后为空，不进模型
     const message: ChatMessage = { role: entry.role, content: text }
     if (turnLocal) turnMessages.add(message)
@@ -460,13 +508,13 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
   const mainEntry = slotEntry('main')
   if (card?.systemPrompt.trim() && mainEntry?.forbidOverrides !== true) {
     beforeHistory.unshift(
-      trackedMessage('system', expandStanding(card.systemPrompt, withOriginal(mainEntry?.content ?? '')), characterDefinitionMessages),
+      definition('system', card.systemPrompt, characterDefinitionMessages, withOriginal(mainEntry?.content ?? ''), 'card:system'),
     )
   }
   const jailbreakEntry = slotEntry('jailbreak')
   if (card?.postHistoryInstructions.trim() && jailbreakEntry?.forbidOverrides !== true) {
     afterHistory.push(
-      trackedMessage('system', expandStanding(card.postHistoryInstructions, withOriginal(jailbreakEntry?.content ?? '')), characterDefinitionMessages),
+      definition('system', card.postHistoryInstructions, characterDefinitionMessages, withOriginal(jailbreakEntry?.content ?? ''), 'card:post-history'),
     )
   }
 
@@ -486,21 +534,21 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
       const resolved = markerContent(id, entry.role)
       if (resolved === null || resolved.length === 0) continue
       for (const m of resolved) {
-        depthInjections.push({ depth: entry.depth, order: entry.order, role: m.role, content: m.content, turn: turnMessages.has(m) })
+        depthInjections.push({ depth: entry.depth, order: entry.order, role: m.role, content: m.content, turn: turnMessages.has(m),worldinfo:worldInfoPromptMessages.has(m) })
       }
       continue
     }
     if (!entry.content.trim()) continue
     if (skipScript(`预设 in-chat「${entry.identifier}」`, entry.content)) continue
-    const turnLocal = hasTurnLocalMacros(entry.content)
-    const content = (turnLocal ? expandTurn(entry.content) : expandStanding(entry.content)).trim()
+    const turnLocal = dynamic(entry.content)
+    const content = (turnLocal ? expandTurn(entry.content, `preset:${entry.identifier}`) : expandStanding(entry.content, standingCtx, `preset:${entry.identifier}`)).trim()
     if (!content) continue
     depthInjections.push({ depth: entry.depth, order: entry.order, role: entry.role, content, turn: turnLocal })
   }
   for (const a of wiAt(WIPosition.AtDepth)) {
     if (skipScript(`世界书 @D「${a.entry.key}」`, a.entry.content)) continue
-    const stable = isStandingSafeEntry(a.entry)
-    const content = (stable ? expandStanding(a.entry.content) : expandTurn(a.entry.content)).trim()
+    const stable = isStandingSafeEntry(a.entry) && !dynamic(a.entry.content)
+    const content = (stable ? expandStanding(a.entry.content, standingCtx, a.entry.key) : expandTurn(a.entry.content, a.entry.key)).trim()
     if (!content) continue
     depthInjections.push({
       depth: a.entry.depth,
@@ -508,14 +556,15 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
       role: WI_ROLE_MAP[a.entry.role],
       content,
       turn: !stable, // 确定常驻 @D 进 standing，其它按轮注入
+      worldinfo:true,
     })
   }
   const depthPrompt = input.card?.depthPrompt
   if (depthPrompt?.prompt.trim()) {
     if (!skipScript('角色 depth_prompt', depthPrompt.prompt)) {
       // 静态 depth_prompt（无本轮宏）进 standing 钉死，不再每轮全价重付。
-      const turnLocal = hasTurnLocalMacros(depthPrompt.prompt)
-      const content = (turnLocal ? expandTurn(depthPrompt.prompt) : expandStanding(depthPrompt.prompt)).trim()
+      const turnLocal = dynamic(depthPrompt.prompt)
+      const content = (turnLocal ? expandTurn(depthPrompt.prompt, 'card:depth') : expandStanding(depthPrompt.prompt, standingCtx, 'card:depth')).trim()
       if (content) {
         depthInjections.push({
           depth: depthPrompt.depth,
@@ -555,8 +604,21 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
     afterHistory.push(asTurn({ role: 'system', content: note }))
   }
 
+  if (input.transformPrompt) {
+    history = history.map((m,index)=>({...m,content:input.transformPrompt!(m.content,{role:m.role,worldinfo:false,depth:history.length-index-1})}))
+    for (const m of [...beforeHistory,...afterHistory,...(anBottomMessage ? [anBottomMessage] : [])]) {
+      const content = input.transformPrompt(m.content,{role:m.role,worldinfo:worldInfoPromptMessages.has(m),depth:0})
+      if (content!==m.content) {m.content=content;asTurn(m)}
+    }
+    for (const injection of depthInjections) {
+      const content = input.transformPrompt(injection.content,{role:injection.role,worldinfo:injection.worldinfo ?? false,depth:injection.depth})
+      if (content!==injection.content) {injection.content=content;injection.turn=true}
+    }
+  }
+
   // ── 6. 历史内插入（深 depth 先插，同 depth order 升序） ─────────────────
   const byDepth = new Map<number, DepthInjection[]>()
+  const depthBindings = new Map<ChatMessage, DepthInjection>()
   for (const inj of depthInjections) {
     if (inj.depth === 0) continue // depth 0 = 历史之后，单独处理
     ;(byDepth.get(inj.depth) ?? byDepth.set(inj.depth, []).get(inj.depth)!).push(inj)
@@ -565,7 +627,11 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
   for (const depth of depths) {
     const at = Math.max(0, history.length - depth)
     const group = byDepth.get(depth)!.sort((a, b) => a.order - b.order)
-    history.splice(at, 0, ...group.map((g) => ({ role: g.role, content: g.content })))
+    history.splice(at, 0, ...group.map((g) => {
+      const message:ChatMessage={role:g.role,content:g.content}
+      depthBindings.set(message,g)
+      return message
+    }))
   }
   const depth0 = depthInjections.filter((d) => d.depth === 0).sort((a, b) => a.order - b.order)
 
@@ -573,6 +639,7 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
   const tail: ChatMessage[] = [
     ...depth0.map((d) => {
       const message: ChatMessage = { role: d.role, content: d.content }
+      depthBindings.set(message,d)
       // tail 是新建对象，turn 归属从注入记录显式转标记（身份追踪见 turnMessages）。
       if (d.turn) turnMessages.add(message)
       return message
@@ -580,6 +647,32 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
     ...(anBottomMessage ? [anBottomMessage] : []),
     ...afterHistory,
   ]
+  let templateTurnContext:string[]=[]
+  if(input.processTemplateSequence) {
+    const sequence=[...beforeHistory,...history,...tail]
+    const items:TemplateSequenceMessage[]=sequence.map(message=>({message,
+      worldinfo:worldInfoPromptMessages.has(message) || depthBindings.get(message)?.worldinfo===true,
+      depth:depthBindings.get(message)?.depth ?? historyDepth.get(message) ?? 0,
+      history:originalHistory.has(message),
+    }))
+    const processed=input.processTemplateSequence(items)
+    for(const item of items) if(item.history && item.historyContent!==undefined) processedHistory.set(item.message,item.historyContent)
+    templateTurnContext=processed.turnContext ?? []
+    if(processed.log) log.push(...processed.log)
+    for(const item of items) {
+      const message=item.message
+      const injection=depthBindings.get(message)
+      if(item.originalContent!==message.content && !originalHistory.has(message)) {
+        asTurn(message)
+        if(injection) injection.turn=true
+      }
+      if(injection) injection.content=message.content
+    }
+    // 只有声明或变量写入的模板仍执行，但不能留下空消息。
+    for(const bucket of [beforeHistory,history,tail]) {
+      for(let index=bucket.length-1;index>=0;index--) if(!bucket[index]!.content.trim()) bucket.splice(index,1)
+    }
+  }
   const liveOutsideHistory = [...beforeHistory, ...tail]
   const estimate = (m: ChatMessage) => input.estimateTokens(m.content)
   const totalBudget = Math.max(0, input.budget.maxTokens - input.budget.reserveForOutput)
@@ -634,6 +727,7 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
   const turnContext = joinPromptParts([
     ...outsideHistory.filter((m) => turnMessages.has(m)).map((m) => m.content),
     ...splicedTurn,
+    ...templateTurnContext,
   ])
   const system = joinPromptParts([standing, turnContext])
 
@@ -642,7 +736,7 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
     standing,
     turnContext,
     system,
-    history,
+    history:history.map(message=>processedHistory.has(message)?{...message,content:processedHistory.get(message)!}:message),
     log,
     stats: { tokensBefore, tokensAfter, trimmedSections },
   }

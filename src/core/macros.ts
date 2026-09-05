@@ -134,6 +134,7 @@ function applyCommand(inner: string, ctx: MacroContext, clock: Record<string, st
     const content = ctx.outlets?.[outletName] ?? ''
     return content.replaceAll('{{', FROZEN_OPEN)
   }
+  if (raw.startsWith('outletPromptsInjected:')) return `{{${raw}}}`
 
   if (Object.hasOwn(clock, lower)) return clock[lower]!
 
@@ -222,19 +223,13 @@ export function expandIdentityMacros(text: string, ctx: Pick<MacroContext, 'char
   })
 }
 
-/** 收集文本中出现的宏名（调试用）。 */
-export function listMacros(text: string): string[] {
-  const out: string[] = []
-  for (const m of text.matchAll(MACRO_RE)) out.push(m[1]!.trim())
-  return out
-}
-
 /** 条目是否含本轮才稳定的宏（应进 turnContext，避免打穿 standing KV）。 */
 export function hasTurnLocalMacros(text: string): boolean {
-  return /\{\{\s*(outlet::|lastusermessage|lastmessage|last_user_message|lastcharmessage|last_char_message|time|date|datetime|weekday|random\s*:|pick\s*:)/i.test(text)
+  if (text.includes('<%')) return true
+  return /\{\{\s*(outlet::|outletPromptsInjected:|lastusermessage|lastmessage|last_user_message|lastcharmessage|last_char_message|time|date|datetime|weekday|random\s*:|pick\s*:)/i.test(text)
 }
 
-/** SillyTavern EJS / STscript。本插件不执行，原文注入只会污染上下文。 */
+/** 检测尚未处理的 EJS / STscript；EJS 由隔离执行器展开，STscript 仍不执行。 */
 export function hasUnevaluatedScript(text: string): boolean {
   return /<%[_=-]?/.test(text) || /\{%\s*(if|for|set)\b/i.test(text)
 }

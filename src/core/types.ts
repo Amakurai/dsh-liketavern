@@ -196,6 +196,17 @@ export interface WorldInfoEntry {
   /** 组内优先：本条命中时压过同组无 override 的条目。 */
   groupOverride: boolean
   automationId: string
+  /** ST @@if：由 QuickJS 在世界书扫描前只读判断，条件条目只进入本轮上下文。 */
+  templateCondition?: string
+  /** 预加载仅重建本次沙箱定义与临时变量，不在打开角色或重复预览时写剧情。 */
+  templatePreload?: boolean
+  templateOnlyPreload?: boolean
+  templateDontActivate?: boolean
+  templatePreprocessing?: boolean
+  /** RENDER 输出进入独立 iframe；空串表示直接展开，非空串为默认折叠标题。 */
+  templateIframe?: string
+  /** RENDER 条目整体先按消息 Markdown 规则格式化，再进入安全展示片段。 */
+  templateMessageFormatting?: boolean
   /** delta 层专有：变化类型与指向原书条目的 uid。 */
   deltaType?: 'update' | 'add' | 'invalidate'
   deltaRef?: string | null

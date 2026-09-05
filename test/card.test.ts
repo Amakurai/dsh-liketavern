@@ -14,7 +14,6 @@ import {
   cardToStJson,
   createBlankCard,
   embedCardInPng,
-  extractGreetingImages,
   parseJsonCard,
   parsePngCard,
 } from '../src/state/card.js'
@@ -103,7 +102,6 @@ describe('parsePngCard', () => {
     expect(card.extensions.talkativeness).toBe(0.5)
     expect(card.pngBytes).toEqual(png)
     expect(card.raw).toEqual(V2_JSON)
-    expect(extractGreetingImages(card)).toEqual(png)
   })
 
   it('识别 ccv3 关键字为 V3 卡', () => {
@@ -234,7 +232,7 @@ describe('parsePngCard', () => {
   })
 })
 
-describe('parseJsonCard / normalizeCard', () => {
+describe('parseJsonCard', () => {
   it('V1 顶层平铺映射为归一化结构', () => {
     const card = parseJsonCard({
       name: '老式角色',

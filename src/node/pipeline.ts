@@ -10,7 +10,7 @@
  */
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { LlmRuntime, Message } from '@deepseek-ai/dsh-llm'
-import { defaultPreset, isDeltaRenderedInTurn, type AssembledPrompt } from '../core/assemble.js'
+import { defaultPreset, type AssembledPrompt } from '../core/assemble.js'
 import { BOUND_DISCIPLINE, TURN_PLAYBOOK, isSyntheticUserText } from '../core/dshPrompt.js'
 import { hashToSeed } from '../core/macros.js'
 import { memorySearchOptions, selectMemoryBodies } from '../core/memoryRetrieval.js'
@@ -18,10 +18,20 @@ import { clipToTokenBudget, estimateTokens } from '../core/tokenize.js'
 import type { ChatMessage, WIEngineResult, WorldDelta, WorldInfoEntry } from '../core/types.js'
 import { EMPTY_TIMER_STATE } from '../core/types.js'
 import { isolated } from './isolated.js'
-import { clipWorldDeltasForTurn } from '../core/turnBudget.js'
 import { standingFingerprint } from '../core/standingPin.js'
 import { DEFAULT_USER_NAME } from '../core/persona.js'
 import { parseLorebook } from '../state/lorebook.js'
+import { withWorkspaceLock } from '../state/workspaceLock.js'
+import { loadTemplateState, saveTemplateState } from '../state/template.js'
+import { templateGenerationContext, type PreparedTemplateGeneration } from '../state/templateGeneration.js'
+import { type TemplateContext } from '../core/template.js'
+import { templateCardData } from '../core/templateAssets.js'
+import { normalizeTemplateLore } from '../core/templateLore.js'
+import type { TemplateReplay } from '../core/templateReplay.js'
+import { buildTemplateMessageHistory } from './templateMessageHistory.js'
+import { mergeTemplateMessageVariables, visibleTemplateMessageVariables, type TemplateMessageIdentity } from '../core/templateMessageVariables.js'
+import { loadTemplateAvatars } from './templateAvatar.js'
+import { resolveTemplateContinuation } from '../state/templateContinuation.js'
 import type { TavernState } from './state.js'
 
 const FALLBACK_CONTEXT_WINDOW = 131072
@@ -45,6 +55,9 @@ export interface PipelineInput {
 }
 
 export interface PipelineResult {
+  /** 本轮冻结的模板输入；回复处理只使用这份资产与时钟快照。 */
+  templateContext?: TemplateContext
+  templateReplay?:TemplateReplay
   standingKey: string
   sampling: import('../core/types.js').SamplingSettings
   /** 角色定义 + 预设骨架（写入 system 段，绑定不变则字节级稳定）。 */
@@ -137,21 +150,60 @@ export async function loadBoundLoreEntries(state: TavernState, binding: NonNulla
 
 /** 组装一次 Tavern 提示词。绑定缺失或角色不存在时返回 null。 */
 export async function runTavernPipeline(input: PipelineInput): Promise<PipelineResult | null> {
+  await input.state.waitForSessionTasks(input.sessionId)
+  const binding = await input.state.loadBinding(input.sessionId)
+  if (!binding) return null
+  const ws = await input.state.storyWorkspace(binding.cardId, binding.storyId)
+  return withWorkspaceLock(ws.fs.root, () => runTavernPipelineLocked(input, binding))
+}
+
+async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId: string; storyId?: string }): Promise<PipelineResult | null> {
   const { state, sessionId } = input
   // turn/start 的监听器异步开 WAL；提示词/工具热路径必须等它完成后才能产生工作区写入。
-  await state.waitForSessionTasks(sessionId)
   const binding = await state.loadBinding(sessionId)
   if (!binding) return null
+  if (binding.cardId !== expected.cardId || binding.storyId !== expected.storyId) throw new Error('组装排队期间剧情绑定已变化')
   const activeTurn = state.currentTurns.get(sessionId)
   const previous = state.turnPlans.get(sessionId)
   if (input.mode === 'live' && activeTurn !== undefined && previous?.turn === activeTurn) {
     if (previous.cardId !== binding.cardId || previous.storyId !== binding.storyId) throw new Error('生成期间绑定已变化，请在下一轮继续')
     return previous.result
   }
+  const pendingPlan = state.pendingTurnPlans.get(sessionId)
+  if (input.mode === 'live' && pendingPlan) {
+    if (activeTurn === pendingPlan.turn) {
+      if (pendingPlan.cardId !== binding.cardId || pendingPlan.storyId !== binding.storyId) throw new Error('生成期间绑定已变化，请在下一轮继续')
+      return pendingPlan.publish()
+    }
+    state.pendingTurnPlans.delete(sessionId)
+  }
+  const ws = await state.storyWorkspace(binding.cardId, binding.storyId)
+  const templateState = await loadTemplateState(ws.fs)
+  const generation = templateState.generation
+  if (input.mode==='live' && generation?.sessionId===sessionId && generation.cardId===binding.cardId && generation.storyId===binding.storyId) {
+    let recoveryTurn = activeTurn
+    if (recoveryTurn===undefined && generation.status==='prepared') {
+      const events = input.agent?.session.snapshotEvents()
+      const last = events && [...events].reverse().find(event=>event.type==='turn/start'||event.type==='turn/end')
+      if (last?.type!=='turn/start' || last.data.turn!==generation.turn) throw new Error('模板计划等待恢复：请先完成当前宿主轮次，不能重新执行已提交模板')
+      recoveryTurn = last.data.turn
+    }
+    if (recoveryTurn===generation.turn) {
+      if (generation.status!=='prepared') throw new Error('该轮模板已经结束，请开启新一轮，不能重复执行')
+      const floor = await ws.wal.validateFloor(generation.floor)
+      if (floor.committed) throw new Error('模板计划恢复缺少未提交的原剧情楼层')
+      const open = state.openFloors.get(sessionId)
+      if (open && (open.cardId!==binding.cardId || open.storyId!==binding.storyId || open.floor!==generation.floor)) throw new Error('模板计划恢复的剧情楼层冲突')
+      const restored = restorePipelineResult(generation)
+      state.currentTurns.set(sessionId,generation.turn)
+      state.openFloors.set(sessionId,{cardId:generation.cardId,storyId:generation.storyId,floor:generation.floor})
+      state.turnPlans.set(sessionId,{turn:generation.turn,cardId:generation.cardId,storyId:generation.storyId,result:restored})
+      return restored
+    }
+  }
   const charWs = await state.loadCharacter(binding.cardId)
   if (!charWs) return null
   const card = charWs.card
-  const ws = await state.storyWorkspace(binding.cardId, binding.storyId)
 
   const preset = (binding.presetId ? await state.loadPreset(binding.presetId) : null) ?? defaultPreset()
   const persona = await state.resolvePersona(binding.personaId)
@@ -182,6 +234,12 @@ export async function runTavernPipeline(input: PipelineInput): Promise<PipelineR
     ...history,
     ...pendingFresh.map((content) => ({ role: 'user' as const, content, name: userName })),
   ]
+  const messageProjection=input.agent ? buildTemplateMessageHistory(input.agent.session.deriveMessages(),
+    state.pendingTemplateInputs.get(sessionId) ?? [],card.name,userName,input.agent.session.snapshotEvents?.() ?? []) : undefined
+  const templateHistory=messageProjection?.history ?? scanMessages
+  const historyIdentities:TemplateMessageIdentity[]=messageProjection?.identities ?? templateHistory.map((_,index)=>({
+    messageId:`preview:${sessionId}:${state.currentTurns.get(sessionId) ?? -1}:${index}`,swipeId:0,
+  }))
   const lastUserMessage = pendingFresh.at(-1) ?? [...history].reverse().find((m) => m.role === 'user')?.content ?? ''
   const config = state.config
   const contextWindow = await resolveContextWindow(input)
@@ -201,31 +259,23 @@ export async function runTavernPipeline(input: PipelineInput): Promise<PipelineR
   // 且 idle 时 turn 恒为 -1，各次预览之间也不该互相复用（绑定/世界书/记忆随时可能被编辑）。
   // 代价是每次预览/代答多评估一次世界书——正确且便宜。
   const cacheable = input.mode === 'live' && turn >= 0
-  let wi: WIEngineResult
   let memories: string[]
   let deltas: WorldDelta[]
   let lastCharMessage: string
   let journalText: string
-  const cached = cacheable ? state.wiCache.get(sessionId) : undefined
-  if (cached && cached.turn === turn) {
-    // 同轮后续步：lastCharMessage / journalText 一并复用——history 增长（assistant 文本）
-    // 与 journal 中途编辑不得改变快照字节，否则宿主按字节去重失效、每步多付一份快照。
-    ;({ wi, memories, deltas, lastCharMessage, journalText } = cached)
-  } else {
-    const { entries, deltas: liveDeltas } = await loadBoundLoreEntries(state, binding)
-    deltas = liveDeltas
-    const timerState = input.mode === 'live' ? await state.loadTimers(binding.cardId, sessionId, binding.storyId) : structuredClone(EMPTY_TIMER_STATE)
-    const reservedTokens = estimateTokens(scanMessages.map((m) => m.content).join('\n'))
-    wi = await isolated('wi', {
-      entries,
-      messages: scanMessages,
-      settings: config.worldInfo,
-      timerState,
-      contextWindowTokens: contextWindow,
-      reservedTokens,
-      seed: turnSeed,
-      macroCtx: { char: card.name, user: userName },
-    })
+  const lore = await loadBoundLoreEntries(state, binding)
+  lore.entries = lore.entries.map(normalizeTemplateLore)
+  const templateContext: TemplateContext = {
+    variables: templateState.variables, char: card.name, user: userName,
+    card: templateCardData(card),
+    entries: lore.entries, presets: preset.entries.filter(e => e.enabled), history: templateHistory,
+    historyIdentities,messageVariables:visibleTemplateMessageVariables(templateState.messageVariables,historyIdentities),
+    ...await loadTemplateAvatars(state,binding.cardId,persona),
+    now: macroCtx.now.getTime(), seed: turnSeed, phase: 'generate',
+    sessionId, cardId: binding.cardId, generationType: input.generationType ?? 'normal', model:input.agent?.options.model ?? '',
+  }
+  {
+    deltas = lore.deltas
 
     // 记忆检索：本轮输入 + 最近 N 条历史做查询
     const queryMessages = [pendingFresh.join('\n'), ...scanMessages.slice(-config.memory.queryMessages).map((m) => m.content)]
@@ -252,27 +302,22 @@ export async function runTavernPipeline(input: PipelineInput): Promise<PipelineR
 
   }
 
-  // 变化层进快照前按预算裁剪：预算只覆盖真正会渲染的条目（无键常驻 + 本轮被引擎命中的
-  // 有键条目，判定与 assemble 共用 isDeltaRenderedInTurn），未命中的有键变化不占快照预算。
-  // 从最新往旧保留（WORLD_DELTA_TURN_BUDGET），更旧的不随快照每轮重付，
-  // 模型可经 tavern_lore_read(source=delta) 按条补读。
-  // 引擎触发改用全量 delta（上面 evaluateWorldInfo 的 entries），裁剪只影响展示层。
-  const activatedDeltaIds = new Set(
-    wi.activated.filter((a) => a.entry.source === 'delta').map((a) => a.entry.uid),
-  )
-  const deltaClip = clipWorldDeltasForTurn(
-    deltas.filter((d) => isDeltaRenderedInTurn(d, activatedDeltaIds)),
-    estimateTokens,
-  )
-
   const assembled = await isolated('assemble', {
+    templates: templateContext,
+    templateContinuation:resolveTemplateContinuation(templateState),
+    wiEvaluation: {
+      entries:lore.entries, messages:scanMessages, settings:config.worldInfo,
+      timerState:input.mode==='live' ? await state.loadTimers(binding.cardId,sessionId,binding.storyId) : structuredClone(EMPTY_TIMER_STATE),
+      contextWindowTokens:contextWindow, reservedTokens:estimateTokens(scanMessages.map(m=>m.content).join('\n')),
+      seed:turnSeed, macroCtx:{char:card.name,user:userName},
+    },
     preset,
     card,
     personaDescription: persona?.description ?? '',
     history: scanMessages,
-    wi,
+    wi:null,
     memories,
-    worldDeltas: deltaClip.kept,
+    worldDeltas:deltas,
     authorNote: binding.authorNote ?? '',
     journalText,
     // 显式冻结 lastCharMessage（同轮复用缓存值），不让 assemble 回退到随 history 增长的现算值。
@@ -287,25 +332,23 @@ export async function runTavernPipeline(input: PipelineInput): Promise<PipelineR
     },
   })
 
+  const wi = assembled.evaluatedWi!
+  templateContext.regexRules = assembled.templateRegexRules
+  templateContext.hasMessageRegex = assembled.templateHasMessageRegex
   // live 通道独立预算；历史的压缩由宿主处理，不能用模拟历史长度裁掉角色定义。
   const minimumLiveTokens = estimateTokens([BOUND_DISCIPLINE, assembled.standing, TURN_PLAYBOOK, assembled.turnContext].join('\n\n'))
   const available = contextWindow - (config.sampling.maxTokens ?? FALLBACK_RESERVE_OUTPUT)
   if (input.mode === 'live' && minimumLiveTokens > available) throw new Error('角色设定与本轮上下文已超过模型可用窗口，请缩减设定或提高上下文容量')
-  if (input.mode === 'live' && !(cached && cached.turn === turn)) {
-    const entry = state.openFloors.get(sessionId)
-    if (entry && entry.cardId === binding.cardId && entry.storyId === binding.storyId) {
-      await state.saveTimers(binding.cardId, sessionId, wi.timerState, entry.floor, binding.storyId)
-    }
-  }
   const logLines = formatLogs(wi, assembled)
   logLines.push(`[live:budget] 插件通道≈${minimumLiveTokens} tokens；不含宿主 system/tools/历史，模拟裁剪不影响这些通道`)
   // turn 尾巴体积(缓存观测):快照对新请求永远是未缓存前缀,体积即每轮全价重付的量。
   logLines.push(`[turn:tail] turnContext≈${estimateTokens(assembled.turnContext)} tokens`)
-  if (deltaClip.dropped > 0) {
-    logLines.push(`[turn:tail] 变化层超预算裁掉 ${deltaClip.dropped} 条（tavern_lore_read source=delta 可补读）`)
+  if (assembled.deltaDropped) {
+    logLines.push(`[turn:tail] 变化层超预算裁掉 ${assembled.deltaDropped} 条（tavern_lore_read source=delta 可补读）`)
   }
-  state.recordTriggerLog(sessionId, logLines)
   const result: PipelineResult = {
+    templateContext,
+    templateReplay:assembled.templateReplay,
     standingKey,
     sampling: structuredClone(config.sampling),
     standing: assembled.standing,
@@ -320,9 +363,54 @@ export async function runTavernPipeline(input: PipelineInput): Promise<PipelineR
     personaLorebookId: persona?.lorebookId ?? null,
     wiBudget: wi.budget,
   }
-  if (cacheable) state.wiCache.set(sessionId, { turn, wi, memories, deltas, lastCharMessage, journalText })
-  if (cacheable) state.turnPlans.set(sessionId, { turn, cardId: binding.cardId, storyId: binding.storyId, result })
-  return result
+  const entry = input.mode === 'live' ? state.openFloors.get(sessionId) : undefined
+  const writable = entry && entry.cardId === binding.cardId && entry.storyId === binding.storyId
+  const variablesChanged = assembled.templateVariables && JSON.stringify(assembled.templateVariables) !== JSON.stringify(templateState.variables)
+  if (input.mode === 'live' && (variablesChanged || result.templateReplay) && !writable) throw new Error('模板写变量需要在绑定角色后开启新的一轮')
+  const persistedGeneration:PreparedTemplateGeneration | undefined = result.templateReplay && writable && binding.storyId ? {
+    version:1,status:'prepared',sessionId,cardId:binding.cardId,storyId:binding.storyId,turn,floor:entry.floor,replay:result.templateReplay,
+    regexRules:templateContext.regexRules,hasMessageRegex:templateContext.hasMessageRegex,
+    plan:{standingKey:result.standingKey,sampling:result.sampling,standing:result.standing,turnContext:result.turnContext,messages:result.messages,
+      history:result.history,logLines:result.logLines,userName:result.userName,personaDescription:result.personaDescription,
+      personaLorebookId:result.personaLorebookId,wiBudget:result.wiBudget,assembleLog:result.assembled.log,stats:result.assembled.stats},
+  } : undefined
+  // 变量发生变化时，定时器必须与变量同文件提交；否则第二个 rename 失败会让重试多 tick 一次。
+  // 先冻结待提交闭包，但不发布 turnPlans。提交报错后保留绝对快照，重试不再运行第三方代码。
+  const publish = async (): Promise<PipelineResult> => {
+    if (writable) {
+      const latestBinding = await state.loadBinding(sessionId)
+      const latestFloor = state.openFloors.get(sessionId)
+      if (latestBinding?.cardId !== binding.cardId || latestBinding?.storyId !== binding.storyId
+        || latestFloor?.floor !== entry.floor || latestFloor.cardId !== binding.cardId || latestFloor.storyId !== binding.storyId
+        || (cacheable && (state.currentTurns.get(sessionId) !== turn || entry.floor!==`${sessionId}#t${turn}`))) throw new Error('模板提交前剧情绑定或楼层已变化')
+      if (variablesChanged || persistedGeneration || assembled.templateMessageVariables) {
+        await saveTemplateState(ws.fs.withFloor(entry.floor), { ...templateState, variables: assembled.templateVariables ?? templateState.variables,
+          ...(assembled.templateMessageVariables ? {messageVariables:mergeTemplateMessageVariables(templateState.messageVariables,assembled.templateMessageVariables,historyIdentities)} : {}),
+          ...(assembled.templateContinuation ? {continuation:assembled.templateContinuation} : {}),
+          wiTimers: { ...templateState.wiTimers, [sessionId]: wi.timerState },
+          ...(persistedGeneration ? {generation:persistedGeneration} : {}) })
+      } else {
+        await state.saveTimers(binding.cardId, sessionId, wi.timerState, entry.floor, binding.storyId)
+      }
+    }
+    state.recordTriggerLog(sessionId, logLines)
+    if (cacheable) {
+      state.wiCache.set(sessionId, { turn, wi, memories, deltas, lastCharMessage, journalText })
+      state.turnPlans.set(sessionId, { turn, cardId: binding.cardId, storyId: binding.storyId, result })
+      state.pendingTurnPlans.delete(sessionId)
+    }
+    return result
+  }
+  if (cacheable && writable) state.pendingTurnPlans.set(sessionId, { turn, cardId: binding.cardId, storyId: binding.storyId, floor: entry.floor, publish })
+  return publish()
+}
+
+/** 从单份持久快照恢复所有入模字节与采样；不读取当前资产、不重跑 WI 或模板。 */
+function restorePipelineResult(generation:PreparedTemplateGeneration):PipelineResult {
+  const {assembleLog,stats,...plan} = generation.plan
+  const system = [plan.standing,plan.turnContext].filter(Boolean).join('\n\n')
+  return {...plan,system,templateContext:templateGenerationContext(generation),templateReplay:generation.replay,
+    assembled:{messages:plan.messages,history:plan.history,standing:plan.standing,turnContext:plan.turnContext,system,log:assembleLog,stats}}
 }
 
 function formatLogs(wi: WIEngineResult, assembled: AssembledPrompt): string[] {

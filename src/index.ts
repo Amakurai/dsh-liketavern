@@ -69,8 +69,11 @@ export async function apply(ctx: Context): Promise<void> {
       const { step } = event.data as { step: number }
       if (state.currentTurns.has(session.id)) state.currentSteps.set(session.id, step)
     } else if (event.type === 'turn/end') {
+      // 事件队列可能晚于下一轮开始才执行；必须携带这一刻的不可变日志快照。
+      const events = session.snapshotEvents()
+      const closedSession = { id: session.id, snapshotEvents: () => events }
       void state
-        .enqueueSessionTask(session.id, () => onTurnEnd(state, session.id))
+        .enqueueSessionTask(session.id, () => onTurnEnd(state, session.id, closedSession))
         .catch((error) => ctx.logger.warn(`dsh-tavern: commitFloor 失败：${String(error)}`))
     }
   })
@@ -85,6 +88,9 @@ export async function apply(ctx: Context): Promise<void> {
       const list = state.pendingInputs.get(agent.id) ?? []
       list.push(text)
       state.pendingInputs.set(agent.id, list)
+      const templateInputs=state.pendingTemplateInputs.get(agent.id) ?? []
+      templateInputs.push({id:message.id,text})
+      state.pendingTemplateInputs.set(agent.id,templateInputs)
     }
     void state
       .enqueueSessionTask(agent.id, () => ensureGreeting({ ctx, state }, agent.id))

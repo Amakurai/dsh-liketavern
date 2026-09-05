@@ -20,6 +20,7 @@
 
 - **角色卡**：导入 / 导出 SillyTavern V1/V2/V3 角色卡（PNG 内嵌或 JSON），支持多开场白 swipe、卡内嵌世界书、正则脚本（`regex_scripts`），交互卡（HTML 封面）在沙箱 iframe 中渲染。
 - **提示词预设**：导入 ST 预设 JSON，按 Prompt Manager 语义组装；提示词走 dsh 的 system-prompt 瀑布（稳定段 + 每轮 runtime context），不在前端拼包直发。
+- **内置 EJS 模板**：条件、循环、异步表达式、剧情与按消息变量、JSON/YAML 初值、JSON Patch、Zod 校验与世界书装饰器；支持主动激活、跨来源正则、sticky 跨轮注入和闭包、头像上下文、Lodash、Faker 与历史查询。正常完成回复中的脚本只处理一次，重启、分支与楼层回滚保持变量和计数一致。无需另装 ST-Prompt-Template；[兼容范围与示例](docs/PROMPT_TEMPLATES.md)列出接口及宿主差异。
 - **世界书**：全局 / 角色 / 会话三级，关键词触发、常驻条目；另有「变化层」支持剧情中的世界状态增改与失效。
 - **长期记忆**：BM25 检索 + 时间衰减，模型可通过工具主动读写；超容量时 idle 期自动异步压缩。
 - **人设（Persona）**：`{{user}}` 默认值与描述注入。
@@ -57,7 +58,7 @@ dsh plugin --profile web list --depth 0
 两点说明（对应官方文档[打包与安装插件](https://deepseek-harness.github.io/deepseek-harness/develop/basic/publish)）：
 
 - **git 安装拉的是源码而非构建产物**，pnpm 不会替你跑 `build`。本仓库把构建产物 `lib/` 刻意入库，因此从 GitHub 直接安装即可用。建议锁定 commit（`github:Amakurai/dsh-liketavern#<sha>`），避免后续推送悄悄改变实际运行的内容。
-- **安装面刻意做小**：运行时依赖只有 `zod`，`@deepseek-ai/*` 全部是 peer 依赖、由 profile 里已安装的 dsh 宿主满足。安装本插件不会拉取宿主本体及其原生依赖（`node-pty` 等），因此正常不会触发 pnpm 的构建脚本拦截（`ERR_PNPM_IGNORED_BUILDS`）。万一遇到，那是 profile 里 dsh 自身依赖的一次性授权：按 dsh 报错提示把包名加进 `~/.dsh/profiles/web/pnpm-workspace.yaml` 的 `allowBuilds`，重跑安装命令即可。
+- **安装依赖**：使用 `zod`、`quickjs-emscripten`、`yaml`、`lodash`、`jsonrepair`、`@faker-js/faker`、`ejs` 和 `showdown`，提供不需要原生构建的模板沙箱、初值解析、编译和格式化兼容。`@deepseek-ai/*` 全部是 peer 依赖，由 profile 里已安装的 dsh 宿主满足。如遇 pnpm 构建脚本拦截，按 dsh 报错核对 profile 中宿主依赖的 `allowBuilds` 配置。
 - 也可以走 tarball：作者侧 `npm pack`（`prepack` 会先构建），用户侧 `dsh plugin --profile web add ./dsh-liketavern-0.1.1.tgz`。
 
 版本兼容：本包以 peerDependency 锁 dsh `0.1.2-rc.1`；dsh 处于预发布阶段，升级 dsh 后需同步换装适配的插件版本。版本对应关系见 [CHANGELOG.md](./CHANGELOG.md)。
@@ -96,7 +97,7 @@ dsh plugin --profile web list --depth 0
 npm install        # 安装开发依赖（公开 npm，精确版本）
 npm run build      # tsc 编译 src/ → lib/，再由 esbuild 打 client 单文件 bundle
 npm test           # vitest run（例数随改动浮动，不写死在这里）
-npm run dev        # dsh web --patch ./cordis.dev.yml（需先把仓库挂进 profile，见下）
+npm run dev        # dsh web --patch ./cordis.patch.yml（需先把仓库挂进 profile，见下）
 ```
 
 本地调试：把仓库挂进 profile 的 `node_modules`（需先跑过一次 `dsh web` 使 profile 初始化），然后 `npm run dev`。Windows 用 junction，macOS / Linux 用 symlink：

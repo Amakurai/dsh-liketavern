@@ -12,6 +12,8 @@ import type { Agent } from '@deepseek-ai/dsh-agent';
 import type { LlmRuntime, Message } from '@deepseek-ai/dsh-llm';
 import { type AssembledPrompt } from '../core/assemble.js';
 import type { ChatMessage, WorldDelta, WorldInfoEntry } from '../core/types.js';
+import { type TemplateContext } from '../core/template.js';
+import type { TemplateReplay } from '../core/templateReplay.js';
 import type { TavernState } from './state.js';
 export interface PipelineInput {
     state: TavernState;
@@ -30,6 +32,9 @@ export interface PipelineInput {
     generationType?: string;
 }
 export interface PipelineResult {
+    /** 本轮冻结的模板输入；回复处理只使用这份资产与时钟快照。 */
+    templateContext?: TemplateContext;
+    templateReplay?: TemplateReplay;
     standingKey: string;
     sampling: import('../core/types.js').SamplingSettings;
     /** 角色定义 + 预设骨架（写入 system 段，绑定不变则字节级稳定）。 */

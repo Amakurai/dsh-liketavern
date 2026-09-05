@@ -20,6 +20,7 @@ The experience is close to native dsh: prompts flow through the host's system-pr
 
 - **Character cards**: import/export SillyTavern V1/V2/V3 cards (PNG-embedded or JSON), multiple greetings with swipe, embedded character lorebooks, regex scripts (`regex_scripts`), and interactive cards (HTML covers) rendered in a sandboxed iframe.
 - **Prompt presets**: import ST preset JSON, assembled with Prompt Manager semantics; prompts go through dsh's system-prompt waterfall (stable sections + per-turn runtime context) — never assembled and sent from the frontend.
+- **Built-in EJS templates**: conditions, loops, async expressions, story and per-message variables, JSON/YAML initial values, JSON Patch, Zod validation and worldbook decorators. Includes active entries, regex across merged sources, sticky injections and closures across turns, avatar context, Lodash, Faker and history queries. Completed response scripts execute once; restart, branching and floor rollback preserve variables and counters. ST-Prompt-Template is not required. See the [compatibility guide](docs/PROMPT_TEMPLATES.md) for supported APIs and host differences.
 - **Lorebooks**: global / character / session scopes, keyword triggering and constant entries; a "delta layer" lets the story add, update, and invalidate world-state facts.
 - **Long-term memory**: BM25 retrieval with time decay; the model can read/write it via tools, with automatic asynchronous compression during idle time when over capacity.
 - **Personas**: `{{user}}` default name and description injection.
@@ -57,7 +58,7 @@ dsh plugin --profile web list --depth 0
 Two notes (per the official docs, [Packaging and installing plugins](https://deepseek-harness.github.io/deepseek-harness/develop/basic/publish)):
 
 - **Git installs pull source, not build artifacts** — pnpm won't run your `build` for you. This repository deliberately commits the built `lib/` output, so installing straight from GitHub works. Pinning a commit (`github:Amakurai/dsh-liketavern#<sha>`) is recommended so later pushes can't silently change what runs.
-- **The install surface is deliberately tiny**: the only runtime dependency is `zod`; all `@deepseek-ai/*` packages are peer dependencies satisfied by the dsh host already in the profile. Installing this plugin does not pull the dsh host tree or its native dependencies (`node-pty` and friends), so it should not trip pnpm's build-script blocking (`ERR_PNPM_IGNORED_BUILDS`). If you still hit it, that's a one-time authorization for dsh's own dependencies in the profile: add the printed package names under `allowBuilds` in `~/.dsh/profiles/web/pnpm-workspace.yaml` as the dsh error suggests, then re-run the install.
+- **Runtime dependencies**: `zod`, `quickjs-emscripten`, `yaml`, `lodash`, `jsonrepair`, `@faker-js/faker`, `ejs` and `showdown` provide the template sandbox, initial-variable parsing, compilation and formatting compatibility without native builds. All `@deepseek-ai/*` packages remain peers supplied by the profile's dsh host. If pnpm blocks host dependency build scripts, follow the dsh error to review the profile's `allowBuilds` configuration.
 - A tarball also works: the author runs `npm pack` (its `prepack` builds first), and the user runs `dsh plugin --profile web add ./dsh-liketavern-0.1.1.tgz`.
 
 Version compatibility: this package pins dsh `0.1.2-rc.1` via peerDependencies. dsh is in pre-release — after upgrading dsh, install the plugin version built for it. See [CHANGELOG.md](./CHANGELOG.md) for the version mapping.
@@ -96,7 +97,7 @@ Due to current dsh host capabilities, the following differs from vanilla SillyTa
 npm install        # install dev dependencies (public npm, exact versions)
 npm run build      # tsc compiles src/ → lib/, then esbuild bundles the client
 npm test           # vitest run (case count drifts with changes; not pinned here)
-npm run dev        # dsh web --patch ./cordis.dev.yml (requires linking the repo into the profile, below)
+npm run dev        # dsh web --patch ./cordis.patch.yml (requires linking the repo into the profile, below)
 ```
 
 Local debugging: link this repo into the profile's `node_modules` (run `dsh web` once first to initialize the profile), then `npm run dev`. Use a junction on Windows, a symlink on macOS / Linux:

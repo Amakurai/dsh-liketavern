@@ -1,5 +1,12 @@
 /** 新会话英雄区（hero.tsx）界面文案。zh 为键全集源；en 必须同键齐全（test/i18n.test.ts 校验）。 */
 export declare const zh: {
+    readonly 'hero.picker.embeddedBook': "内嵌世界书";
+    readonly 'hero.picker.recent': "最近使用";
+    readonly 'hero.picker.selected': "已选择";
+    readonly 'hero.picker.back': "返回角色选择";
+    readonly 'hero.picker.manage': "导入 / 创建角色";
+    readonly 'hero.picker.empty': "添加一张角色卡，选择开场白，就可以开始故事。";
+    readonly 'hero.picker.more': "显示更多角色";
     readonly 'hero.characterFallback': "角色";
     readonly 'hero.loadingCharacters': "加载角色卡…";
     readonly 'hero.creator': "作者 {name}";

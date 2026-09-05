@@ -27,6 +27,12 @@ The experience is close to native dsh: prompts flow through the host's system-pr
 - **Impersonate / continue**: impersonation results are copied to the clipboard; continuing a floor doesn't touch history and just follows up.
 - **Model tools (7)**: memory search / write / update, per-entry lorebook read, world-state update, asset list / read — available to the multi-step agent loop on demand.
 
+Interactive-card variable APIs store temporary data inside the current frame; they are not SillyTavern's persistent storage. Cards using variables show a backup section. Generate and copy its text, then use **Restore card backup** below the card to paste it into a newly opened card. Backups exclude unsaved form inputs, are limited to 1 MiB, and do not write character assets or story memory.
+
+Editors confirm navigation with unsaved changes and guard browser refresh/close. Unsaved edits for characters, presets, lorebooks, personas, regex, memory and settings are backed up to `editor-drafts/` in the data directory. Once the backup status appears, refreshing the same browser tab or reopening the editor restores its content, tab and character/story selection. Save applies changes; explicitly discarding clears the draft. Browser storage holds only a random tab identifier, never editor content. Recovery is not guaranteed after closing the tab or disabling browser storage. Each draft has a 2 MiB limit; failed backups preserve the current editor and offer retry.
+
+On phones, Tavern settings use horizontal top navigation with wider content, responsive forms and reachable dialog actions on short screens. Chat content uses the available width; third-party interactive cards control their own internal layout.
+
 ## Requirements
 
 - Node.js ≥ 24

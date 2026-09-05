@@ -23,6 +23,31 @@ import type { ForkResult } from './node/floors.js';
 import type { CharacterSummary } from './state/workspace.js';
 /** method → [request shape, value schema, 简介] */
 export declare const METHODS: {
+    getEditorDraft: {
+        req: import("zod/mini").ZodMiniObject<{
+            owner: import("zod/mini").ZodMiniString<string>;
+            key: import("zod/mini").ZodMiniString<string>;
+        }, import("zod/v4/core").$strip>;
+        value: import("zod/mini").ZodMiniUnknown;
+        summary: string;
+    };
+    saveEditorDraft: {
+        req: import("zod/mini").ZodMiniObject<{
+            value: import("zod/mini").ZodMiniUnknown;
+            owner: import("zod/mini").ZodMiniString<string>;
+            key: import("zod/mini").ZodMiniString<string>;
+        }, import("zod/v4/core").$strip>;
+        value: import("zod/mini").ZodMiniUnknown;
+        summary: string;
+    };
+    deleteEditorDraft: {
+        req: import("zod/mini").ZodMiniObject<{
+            owner: import("zod/mini").ZodMiniString<string>;
+            key: import("zod/mini").ZodMiniString<string>;
+        }, import("zod/v4/core").$strip>;
+        value: import("zod/mini").ZodMiniUnknown;
+        summary: string;
+    };
     listStories: {
         req: import("zod/mini").ZodMiniObject<{
             cardId: import("zod/mini").ZodMiniString<string>;
@@ -336,6 +361,7 @@ export declare const METHODS: {
     };
     clearSessionBinding: {
         req: import("zod/mini").ZodMiniObject<{
+            onlyIfBlank: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniBoolean<boolean>>;
             sessionId: import("zod/mini").ZodMiniString<string>;
         }, import("zod/v4/core").$strip>;
         value: import("zod/mini").ZodMiniUnknown;
@@ -661,6 +687,18 @@ export interface ContextUsage {
 }
 /** 方法名 → 裸业务结果类型。加/改 remote 方法时必须与 METHODS、service 实现、client 镜像同步。 */
 export interface TavernMethodResults {
+    getEditorDraft: {
+        draft: {
+            value: unknown;
+            updatedAt: string;
+        } | null;
+    };
+    saveEditorDraft: {
+        saved: true;
+    };
+    deleteEditorDraft: {
+        deleted: true;
+    };
     listStories: {
         items: import('./state/story.js').StorySummary[];
     };
@@ -768,6 +806,7 @@ export interface TavernMethodResults {
         binding: SessionBinding | null;
         userName: string;
         canSwipeGreeting: boolean;
+        conversationStarted: boolean;
     };
     setSessionBinding: {
         saved: boolean;
@@ -777,6 +816,7 @@ export interface TavernMethodResults {
     };
     ensureGreeting: {
         created: boolean;
+        conversationStarted: boolean;
     };
     getGreetingSwipe: GreetingFloorState;
     renderOutputText: RenderedOutput;
@@ -873,6 +913,13 @@ export declare const TYPERT_HOST: {
                 mode: "strict";
                 typeSymbol: string;
                 schema: import("zod/mini").ZodMiniObject<{
+                    owner: import("zod/mini").ZodMiniString<string>;
+                    key: import("zod/mini").ZodMiniString<string>;
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                    value: import("zod/mini").ZodMiniUnknown;
+                    owner: import("zod/mini").ZodMiniString<string>;
+                    key: import("zod/mini").ZodMiniString<string>;
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     cardId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{}, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     name: import("zod/mini").ZodMiniString<string>;
@@ -1019,6 +1066,7 @@ export declare const TYPERT_HOST: {
                         createdAt: import("zod/mini").ZodMiniString<string>;
                     }, import("zod/v4/core").$strip>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                    onlyIfBlank: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniBoolean<boolean>>;
                     sessionId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     sessionId: import("zod/mini").ZodMiniString<string>;
@@ -1167,6 +1215,13 @@ export declare const TYPERT_REMOTE: {
                 mode: "strict";
                 typeSymbol: string;
                 schema: import("zod/mini").ZodMiniObject<{
+                    owner: import("zod/mini").ZodMiniString<string>;
+                    key: import("zod/mini").ZodMiniString<string>;
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                    value: import("zod/mini").ZodMiniUnknown;
+                    owner: import("zod/mini").ZodMiniString<string>;
+                    key: import("zod/mini").ZodMiniString<string>;
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     cardId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{}, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     name: import("zod/mini").ZodMiniString<string>;
@@ -1313,6 +1368,7 @@ export declare const TYPERT_REMOTE: {
                         createdAt: import("zod/mini").ZodMiniString<string>;
                     }, import("zod/v4/core").$strip>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                    onlyIfBlank: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniBoolean<boolean>>;
                     sessionId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     sessionId: import("zod/mini").ZodMiniString<string>;

@@ -3,7 +3,9 @@
  * 折叠行上可开关，展开后编辑关键词/正文/插入位置等。不展示原始 JSON。
  * 展开/收起走 .dsh-tavern-collapse 动画容器（grid-rows 过渡，表单始终渲染）。
  */
-import { useMemo, useState } from 'react'
+import { useDraftGuard } from '../drafts.js'
+import { PersistentEditor, useDraftState } from '../draftPersistence.js'
+import { useId, useMemo, useRef, useState } from 'react'
 import {
   IconChevronDownOutline14,
   IconPlusOutline16,
@@ -14,7 +16,7 @@ import type { WIPosition, WIRole, WISelectiveLogic, WISource, WorldInfoEntry } f
 import { exportLorebook } from '../../state/lorebook.js'
 import { useT } from '../i18n.js'
 import { Badge, Btn, ConfirmDialog, Err, IconBtn, Muted, NumInput, NullableNumInput, Select, Toggle, errOf, runAsync } from '../util.js'
-import type { Envelope } from '../types.js'
+import type { Envelope, TavernRemote } from '../types.js'
 
 const PAGE_SIZE = 40
 
@@ -129,7 +131,7 @@ function newEntry(source: WISource, sourceRef: string): WorldInfoEntry {
 export type LorebookTarget =
   | { kind: 'library'; name: string }
   | { kind: 'character'; cardId: string; name: string }
-  | { kind: 'chat'; cardId: string; name: string }
+  | { kind: 'chat'; cardId: string; storyId?: string; name: string }
 
 function sourceOf(target: LorebookTarget): { source: WISource; sourceRef: string } {
   if (target.kind === 'library') return { source: 'global', sourceRef: target.name }
@@ -143,24 +145,44 @@ function targetKindLabel(t: TFunc, kind: LorebookTarget['kind']): string {
   return t('lorebookEditor.kind.library')
 }
 
-export function LorebookEditor(props: {
+type LorebookEditorProps = {
+  remote?: TavernRemote
   target: LorebookTarget
   entries: WorldInfoEntry[]
   onClose: () => void
   onSaved: () => void
   save: (json: unknown) => Promise<Envelope<unknown>>
-}) {
+}
+
+/** 共享库按名字、内嵌书按角色、聊天书按角色和剧情隔离；无剧情的旧入口不跨挂载恢复。 */
+function targetDraftKey(target: LorebookTarget, fallback: string): string {
+  if (target.kind === 'library') return `lorebook.library:${JSON.stringify(target.name)}`
+  if (target.kind === 'character') return `lorebook.character:${target.cardId}`
+  return `lorebook.chat:${JSON.stringify([target.cardId, target.storyId ?? fallback])}`
+}
+
+export function LorebookEditor(props: LorebookEditorProps) {
+  const fallback = useId()
+  const draftKey = targetDraftKey(props.target, fallback)
+  const editor = <LorebookEditorContent key={draftKey} {...props} draftKey={draftKey} />
+  if (!props.remote || (props.target.kind === 'chat' && !props.target.storyId)) return editor
+  return <PersistentEditor remote={props.remote} scope={draftKey}>{editor}</PersistentEditor>
+}
+
+function LorebookEditorContent(props: LorebookEditorProps & { draftKey: string }) {
   const t = useT()
-  const { target } = props
+  const { target, draftKey } = props
   const { source, sourceRef } = sourceOf(target)
-  const [entries, setEntries] = useState<WorldInfoEntry[]>(() => props.entries.map((e) => ({ ...e })))
-  const [dirty, setDirty] = useState(false)
-  const [query, setQuery] = useState('')
-  const [filter, setFilter] = useState<FilterId>('all')
-  const [page, setPage] = useState(0)
-  const [openUid, setOpenUid] = useState<string | null>(null)
-  const [advanced, setAdvanced] = useState(false)
+  const [entries, setEntries] = useDraftState<WorldInfoEntry[]>(`${draftKey}.entries`, () => props.entries.map((e) => ({ ...e })))
+  const [dirty, setDirty] = useDraftState(`${draftKey}.dirty`, false)
+  const [query, setQuery] = useDraftState(`${draftKey}.query`, '')
+  const [filter, setFilter] = useDraftState<FilterId>(`${draftKey}.filter`, 'all')
+  const [page, setPage] = useDraftState(`${draftKey}.page`, 0)
+  const [openUid, setOpenUid] = useDraftState<string | null>(`${draftKey}.openUid`, null)
+  const [advanced, setAdvanced] = useDraftState(`${draftKey}.advanced`, false)
+  const savedEntries = useRef(props.entries)
   const [busy, setBusy] = useState(false)
+  const guard = useDraftGuard(dirty, busy)
   const [error, setError] = useState<string | null>(null)
   const [toDelete, setToDelete] = useState<string | null>(null)
   const [leaveConfirm, setLeaveConfirm] = useState(false)
@@ -205,7 +227,9 @@ export function LorebookEditor(props: {
       const err = errOf(r)
       if (err) setError(err)
       else {
+        savedEntries.current = entries
         setDirty(false)
+        guard.clearDraft()
         props.onSaved()
       }
     })
@@ -233,6 +257,7 @@ export function LorebookEditor(props: {
   }
 
   const askClose = () => {
+    if (busy) return
     if (dirty) setLeaveConfirm(true)
     else props.onClose()
   }
@@ -396,7 +421,11 @@ export function LorebookEditor(props: {
         danger
         onCancel={() => setLeaveConfirm(false)}
         onConfirm={() => {
+          if (busy) return
           setLeaveConfirm(false)
+          setEntries(savedEntries.current)
+          setDirty(false)
+          guard.clearDraft()
           props.onClose()
         }}
       />

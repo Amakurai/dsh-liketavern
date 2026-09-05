@@ -114,13 +114,11 @@ export function TavernAssistantNode(props: {
           rawText={text}
           streaming={streaming}
           interactiveCards={binding.interactiveCards}
-          onSwipeGreeting={(index) => {
-            if (!sessions) return
-            void remote.swipeGreeting({ sessionId, index }).then((r) => {
-              if (r.ok) return openChildSession(sessions, r.value.childSessionId, r.value.title)
-            }).catch(() => {
-              // 对话已开始等错误：封面按钮无独立报错条，忽略以免未处理 rejection。
-            })
+          onSwipeGreeting={async (index) => {
+            if (!sessions) throw new Error(t('speech.navigationUnavailable'))
+            const r = await remote.swipeGreeting({ sessionId, index })
+            if (!r.ok) throw new Error(r.error.message)
+            await openChildSession(sessions, r.value.childSessionId, r.value.title)
           }}
         />
         {interrupted && <div className="dsh-tavern-notice">{t('assistant.stopped')}</div>}

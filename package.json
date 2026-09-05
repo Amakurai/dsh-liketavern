@@ -1,6 +1,6 @@
 {
   "name": "dsh-liketavern",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "Tavern mode for dsh web — SillyTavern character cards, prompt presets, lorebooks, personas and regex on the dsh agent runtime.",
   "license": "MIT",
   "repository": {
@@ -132,7 +132,9 @@
     "@types/node": "^24.0.0",
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.7",
+    "@types/react-test-renderer": "18.3.1",
     "esbuild": "^0.25.0",
+    "react-test-renderer": "18.3.1",
     "typescript": "^5.8.0",
     "vitest": "^3.2.0"
   }

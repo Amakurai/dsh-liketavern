@@ -1,6 +1,8 @@
 /** 角色卡分区（panel/characters.tsx）界面文案。zh 为键全集源；en 必须同键齐全（test/i18n.test.ts 校验）。 */
 
 export const zh = {
+  'characters.detail.greetingNumber': '备选开场白 {index}',
+  'characters.detail.addGreeting': '添加开场白',
   'characters.section.desc': '导入或新建角色卡。点进卡片可编辑正文并导出 PNG/JSON。删除会清掉该卡工作区，以及仍指向它的会话绑定。',
   'characters.what': '角色卡',
   'characters.importFile': '导入 PNG / JSON',
@@ -61,6 +63,8 @@ export const zh = {
 } as const
 
 export const en: Record<keyof typeof zh, string> = {
+  'characters.detail.greetingNumber': 'Alternate greeting {index}',
+  'characters.detail.addGreeting': 'Add greeting',
   'characters.section.desc': 'Import or create character cards. Open a card to edit its content and export PNG/JSON. Deleting a card wipes its workspace and unbinds any sessions still pointing to it.',
   'characters.what': 'character cards',
   'characters.importFile': 'Import PNG / JSON',

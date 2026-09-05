@@ -3,7 +3,7 @@
  * 样式集中在 ./styles.js（模块加载即注入）；颜色一律走宿主 --dsw-* 令牌 + Tavern 蓝色 accent。
  * 原生 select 的 option 弹层用 Menu 实现（避开 Windows 系统白底白字）。
  */
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useId, useState } from 'react'
 import { Button, IconChevronDownOutline14, IconSearchOutline16, IconUserOutline16, Menu, Modal, Toast, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { CSSProperties, ReactNode } from 'react'
 import type { CardRegexScript } from '../core/types.js'
@@ -23,6 +23,7 @@ export function Btn(props: {
   return (
     <Button
       type="button"
+      className="dsh-tavern-btn"
       variant={props.primary ? 'primary' : 'outline'}
       size={props.size ?? 'sm'}
       disabled={props.disabled}
@@ -106,7 +107,7 @@ export function FileBtn(props: {
       variant="outline"
       size="md"
       disabled={props.disabled}
-      className="dsh-tavern-file"
+      className="dsh-tavern-file dsh-tavern-btn"
       onClick={() => {
         const el = document.createElement('input')
         el.type = 'file'
@@ -143,17 +144,31 @@ export interface TabItem {
 }
 
 /** 分段控件式页签（pill track，区别于宿主通用设置的下划线页签）；size="sm" 用于弹窗内等紧凑场景。 */
-export function Tabs(props: { items: TabItem[]; value: string; onChange: (id: string) => void; size?: 'md' | 'sm' }) {
+export function Tabs(props: { items: TabItem[]; value: string; onChange: (id: string) => void; size?: 'md' | 'sm'; id?: string; panelId?: string; label?: string }) {
+  const generatedId = useId()
+  const id = props.id ?? generatedId
   return (
-    <div className={`dsh-tavern-navPills${props.size === 'sm' ? ' is-sub' : ''}`} role="tablist">
+    <div className={`dsh-tavern-navPills${props.size === 'sm' ? ' is-sub' : ''}`} role="tablist" aria-label={props.label} onKeyDown={(e) => {
+      const direction = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0
+      if (!direction && e.key !== 'Home' && e.key !== 'End') return
+      const buttons = Array.from(e.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]'))
+      const current = buttons.indexOf(e.target as HTMLButtonElement)
+      if (current < 0) return
+      e.preventDefault()
+      const next = e.key === 'Home' ? 0 : e.key === 'End' ? buttons.length - 1 : (current + direction + buttons.length) % buttons.length
+      buttons[next]?.focus()
+    }}>
       {props.items.map((item) => (
         <button
           key={item.id}
           type="button"
           role="tab"
+          id={`${id}-${item.id}`}
+          tabIndex={props.value === item.id ? 0 : -1}
           className="dsh-tavern-navPill"
           data-active={props.value === item.id ? 'true' : 'false'}
           aria-selected={props.value === item.id}
+          aria-controls={props.panelId}
           onClick={() => props.onChange(item.id)}
         >
           {item.label}
@@ -164,8 +179,8 @@ export function Tabs(props: { items: TabItem[]; value: string; onChange: (id: st
 }
 
 /** 分组保存行：与上方表单一条淡分隔，主操作左齐。 */
-export function SaveBar(props: { children?: ReactNode }) {
-  return <div className="dsh-tavern-saveBar">{props.children}</div>
+export function SaveBar(props: { children?: ReactNode; inline?: boolean }) {
+  return <div className={`dsh-tavern-saveBar${props.inline ? ' is-inline' : ''}`}>{props.children}</div>
 }
 
 export function Badge(props: { accent?: boolean; danger?: boolean; children?: ReactNode }) {
@@ -358,7 +373,7 @@ export function CheckChips(props: {
 
 export function Err(props: { message: string | null }) {
   if (!props.message) return null
-  return <div className="dsh-tavern-errText">{props.message}</div>
+  return <div className="dsh-tavern-errText" role="alert">{props.message}</div>
 }
 
 export function Muted(props: { children?: ReactNode }) {
@@ -416,7 +431,8 @@ export function clickableProps(onClick: () => void) {
     role: 'button',
     tabIndex: 0,
     onClick,
-    onKeyDown: (e: { key: string; preventDefault: () => void }) => {
+    onKeyDown: (e: { key: string; target: unknown; currentTarget: unknown; preventDefault: () => void }) => {
+      if (e.target !== e.currentTarget) return
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault()
         onClick()

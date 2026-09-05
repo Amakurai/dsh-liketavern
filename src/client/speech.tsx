@@ -9,12 +9,14 @@
 import { useEffect, useRef, useState } from 'react'
 import { IconCopyOutline16, MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives'
 import { buildCardSrcDoc, parseCardBridgeMessage } from '../core/cardFrame.js'
+import { restoreCardVariableBackup } from '../core/cardVariables.js'
 import { stripDisplayMeta } from '../core/displaySanitize.js'
 import { cachedAvatar } from './cache.js'
 import { useT, useMarkdownLabels } from './i18n.js'
-import { Avatar, IconBtn, useLoader, useToast } from './util.js'
+import { Avatar, Btn, Dialog, Err, IconBtn, useLoader, useToast } from './util.js'
+import { useDraftGuard } from './drafts.js'
 import type { TavernRemote } from './types.js'
-import './styles.js'
+import { CARD_VARIABLE_STYLES } from './styles.js'
 
 function SpeechHtmlFrame(props: {
   srcDoc: string
@@ -24,14 +26,32 @@ function SpeechHtmlFrame(props: {
 }) {
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
   const [frameH, setFrameH] = useState<number | null>(null)
+  const t = useT()
+  const [restoreOpen, setRestoreOpen] = useState(false)
+  const [backup, setBackup] = useState('')
+  const [restoreError, setRestoreError] = useState<string | null>(null)
+  const [restored, setRestored] = useState<{ source: string; doc: string; revision: number } | null>(null)
+  const guard = useDraftGuard(restoreOpen && backup.trim() !== '')
+  const activeRestore = restored?.source === props.srcDoc ? restored : null
+  const srcDoc = activeRestore?.doc ?? props.srcDoc
+  const closeRestore = () => guard.request(() => { setRestoreOpen(false); setBackup('') })
+  const restore = () => {
+    try {
+      const doc = restoreCardVariableBackup(props.srcDoc, backup)
+      setRestored((current) => ({ source: props.srcDoc, doc, revision: (current?.revision ?? 0) + 1 }))
+      setRestoreOpen(false)
+      setBackup('')
+      setRestoreError(null)
+    } catch { setRestoreError(t('speech.cardDataFailed')) }
+  }
 
   useEffect(() => {
     setFrameH(null)
-  }, [props.srcDoc])
+  }, [srcDoc])
 
   useEffect(() => {
     const onMsg = (e: MessageEvent) => {
-      if (iframeRef.current && e.source !== iframeRef.current.contentWindow) return
+      if (!iframeRef.current || e.source !== iframeRef.current.contentWindow) return
       const parsed = parseCardBridgeMessage(e.data)
       if (!parsed) return
       if (parsed.action === 'swipeGreeting' && typeof parsed.index === 'number') {
@@ -53,18 +73,32 @@ function SpeechHtmlFrame(props: {
         : { overflow: 'auto' as const }
 
   return (
+    <>
     <iframe
+      key={activeRestore?.revision ?? 0}
       ref={iframeRef}
       className={`dsh-tavern-speechHtml${props.widget ? ' is-widget' : ''}`}
       sandbox="allow-scripts"
-      srcDoc={props.srcDoc}
+      srcDoc={srcDoc}
       title={props.title}
       style={frameStyle}
     />
+    <div className="dsh-tavern-cardBackupBar">
+      <Btn onClick={() => { setRestoreError(null); setRestoreOpen(true) }}>{t('speech.cardDataRestore')}</Btn>
+    </div>
+    {guard.confirmation}
+    {restoreOpen && <Dialog open title={t('speech.cardDataRestore')} onClose={closeRestore}
+      footer={<><Btn onClick={closeRestore}>{t('action.cancel')}</Btn><Btn primary disabled={!backup.trim()} onClick={restore}>{t('action.confirm')}</Btn></>}>
+      <p>{t('speech.cardDataRestoreDesc')}</p>
+      <textarea className="dsh-tavern-input dsh-tavern-textarea" aria-label={t('speech.cardDataText')}
+        value={backup} onChange={(event) => setBackup(event.target.value)} />
+      <Err message={restoreError} />
+    </Dialog>}
+    </>
   )
 }
 
-export function SpeechBubble(props: {
+interface SpeechBubbleProps {
   remote: TavernRemote
   sessionId: string
   cardId: string
@@ -73,8 +107,15 @@ export function SpeechBubble(props: {
   streaming?: boolean
   /** 会话级交互卡开关（binding.interactiveCards）；null/缺省回落全局设置。 */
   interactiveCards?: boolean | null
-  onSwipeGreeting?: (index: number) => void
-}) {
+  onSwipeGreeting?: (index: number) => void | Promise<void>
+}
+
+/** 按会话和角色卸载旧气泡状态，慢请求的报错不能留到新会话。 */
+export function SpeechBubble(props: SpeechBubbleProps) {
+  return <SpeechBubbleSession key={`${props.sessionId}:${props.cardId}`} {...props} />
+}
+
+function SpeechBubbleSession(props: SpeechBubbleProps) {
   const { remote, sessionId, cardId, name, rawText, streaming, onSwipeGreeting } = props
   const t = useT()
   const markdownLabels = useMarkdownLabels()
@@ -111,6 +152,22 @@ export function SpeechBubble(props: {
   const canSwipe =
     rendered.state.status === 'ready' ? rendered.state.value.canSwipeGreeting !== false : false
   const toast = useToast()
+  const swipeBusy = useRef(false)
+  const [swipeError, setSwipeError] = useState<string | null>(null)
+  const swipeGreeting = async (index: number) => {
+    if (swipeBusy.current) return
+    if (!canSwipe) { setSwipeError(t('speech.swipeStarted')); return }
+    if (!onSwipeGreeting) { setSwipeError(t('speech.navigationUnavailable')); return }
+    swipeBusy.current = true
+    setSwipeError(null)
+    try {
+      await onSwipeGreeting(index)
+    } catch (cause) {
+      setSwipeError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      swipeBusy.current = false
+    }
+  }
 
   /** 复制纯文本：优先 navigator.clipboard，沙盒/权限被拒时回退 execCommand。 */
   const onCopy = async () => {
@@ -138,7 +195,11 @@ export function SpeechBubble(props: {
     }
   }
   const frames = htmls.map((html, i) => {
-    const srcDoc = buildCardSrcDoc(html, { greetings, greetingIndex, connectHosts: whitelist })
+    const srcDoc = buildCardSrcDoc(html, { greetings, greetingIndex, connectHosts: whitelist,
+      variableStyles: CARD_VARIABLE_STYLES,
+      variableLabels: { title: t('speech.cardDataTitle'), note: t('speech.cardDataNote'), backup: t('speech.cardDataBackup'),
+        text: t('speech.cardDataText') },
+    })
     const widget = htmls.length > 1 ? i > 0 : Boolean(text)
     return (
       <SpeechHtmlFrame
@@ -146,7 +207,7 @@ export function SpeechBubble(props: {
         srcDoc={srcDoc}
         title={name}
         widget={widget}
-        onSwipeGreeting={canSwipe ? onSwipeGreeting : undefined}
+        onSwipeGreeting={(index) => void swipeGreeting(index)}
       />
     )
   })
@@ -156,6 +217,7 @@ export function SpeechBubble(props: {
       <Avatar url={avatarUrl} name={name} size={40} className="dsh-tavern-speechAvatar" />
       <div className="dsh-tavern-speechBody">
         <div className="dsh-tavern-speechName">{name}</div>
+        <Err message={swipeError} />
         {frames}
         {(frames.length === 0 || text) && (
           <MarkdownText text={text || ' '} streaming={Boolean(streaming)} labels={markdownLabels} />

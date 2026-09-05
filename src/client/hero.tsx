@@ -10,10 +10,10 @@ import { createPortal } from 'react-dom'
 import {
   IconChevronLeftOutline14,
   IconChevronRightOutline14,
-  Menu,
 } from '@deepseek-ai/dsh-client-ui-primitives'
+import { CharacterPicker, rememberCharacter } from './characterPicker.js'
 import { BINDING_CHANGED_EVENT } from './actions.js'
-import { cachedAvatar, cachedCharacterDetail, cachedSessionBinding, invalidateSessionBinding } from './cache.js'
+import { cachedAvatar, cachedCharacterDetail, invalidateSessionBinding } from './cache.js'
 import { bindingFromDefaults } from './chip.js'
 import { useT } from './i18n.js'
 import { isTavernSession, type UseSessions } from './mode.js'
@@ -71,24 +71,43 @@ interface HeroSession {
   promptAttempted?: boolean
 }
 
-export function TavernHeroCharacter(props: {
+interface HeroProps {
   remote: TavernRemote
   sessionId: string
-  sessions: { open(id: string): void }
+  sessions: { open(id: string): void; refresh?: () => Promise<void> }
   session?: HeroSession
   useSessions?: UseSessions
-}) {
+}
+
+/** 会话切换时卸载旧选择器，异步结果不能把忙碌态、错误或弹窗带到新会话。 */
+export function TavernHeroCharacter(props: HeroProps) {
+  return <HeroCharacterSession key={props.sessionId} {...props} />
+}
+
+function HeroCharacterSession(props: HeroProps) {
   const { remote, sessionId, session } = props
   const t = useT()
   const tavern = isTavernSession(props.useSessions, sessionId)
-  const showHero = tavern && session?.blank === true && session.promptAttempted !== true
+  const eligible = tavern && session?.blank === true && session.promptAttempted !== true
+  const [entered, setEntered] = useState(false)
+  const alive = useRef(true)
+  useEffect(() => {
+    alive.current = true
+    return () => { alive.current = false }
+  }, [])
   const dockRef = useRef<HTMLDivElement | null>(null)
   const [chipHost, setChipHost] = useState<HTMLElement | null>(null)
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const bindingLoader = useLoader(() => cachedSessionBinding(remote, sessionId), [sessionId], showHero)
+  // 空白判定涉及写操作，不使用可能仍缓存着「未开始」的绑定快照。
+  const bindingLoader = useLoader(() => remote.getSessionBinding({ sessionId }), [sessionId], eligible)
+  const started = bindingLoader.state.status === 'ready' && bindingLoader.state.value.conversationStarted
+  const showHero = eligible && !entered && !started
+  useEffect(() => {
+    if (eligible && started) void props.sessions.refresh?.().catch(() => {})
+  }, [eligible, started, props.sessions])
   const binding: SessionBinding | null = bindingLoader.state.status === 'ready' ? bindingLoader.state.value.binding : null
   const userName =
     bindingLoader.state.status === 'ready' ? (bindingLoader.state.value.userName || DEFAULT_USER_NAME) : DEFAULT_USER_NAME
@@ -144,13 +163,14 @@ export function TavernHeroCharacter(props: {
     void (async () => {
       try {
         if (picking.current) return
-        const r = await remote.clearSessionBinding({ sessionId })
+        const r = await remote.clearSessionBinding({ sessionId, onlyIfBlank: true })
         if (picking.current) return
         const err = errOf(r)
         if (err) {
           setError(err)
           return
         }
+        if (r.ok && !r.value.cleared) setEntered(true)
         invalidateSessionBinding(sessionId)
         window.dispatchEvent(new CustomEvent(BINDING_CHANGED_EVENT, { detail: sessionId }))
         bindingLoader.reload()
@@ -220,8 +240,10 @@ export function TavernHeroCharacter(props: {
     setError(null)
     try {
       while (clearing.current) await new Promise((resolve) => setTimeout(resolve, 20))
+      if (!alive.current) return
       // 点选角色始终重新读取默认配置；不能复用清扫请求发出前 render 闭包里的陈旧 binding。
       const next = await bindingFromDefaults(remote, sessionId, cardId)
+      if (!alive.current) return
       const saved = await remote.setSessionBinding({ binding: next })
       const saveErr = errOf(saved)
       if (saveErr) {
@@ -231,6 +253,8 @@ export function TavernHeroCharacter(props: {
       invalidateSessionBinding(sessionId)
       window.dispatchEvent(new CustomEvent(BINDING_CHANGED_EVENT, { detail: sessionId }))
       bindingLoader.reload()
+      rememberCharacter(remote, cardId)
+      setOpen(false)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
     } finally {
@@ -255,8 +279,19 @@ export function TavernHeroCharacter(props: {
       const entered = await remote.ensureGreeting({ sessionId })
       const enterErr = errOf(entered)
       if (enterErr) setError(enterErr)
-      else if (entered.ok && !entered.value.created) {
-        setError(t('hero.error.enterFailed'))
+      else if (entered.ok) {
+        if (entered.value.created || entered.value.conversationStarted) {
+          invalidateSessionBinding(sessionId)
+          window.dispatchEvent(new CustomEvent(BINDING_CHANGED_EVENT, { detail: sessionId }))
+          setEntered(true)
+          // 插件直接追加日志不会经过宿主 send；主动同步 blank，解除空白会话复用。
+          try {
+            await props.sessions.refresh?.()
+          } catch (cause) {
+            setEntered(false)
+            throw cause
+          }
+        } else setError(t('hero.error.enterFailed'))
       }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
@@ -294,48 +329,22 @@ export function TavernHeroCharacter(props: {
 
   const chip = (
     <span data-tavern-hero-seat="" className="dsh-tavern-ui">
-      <Menu
-        open={open}
-        portal
-        compact
-        align="start"
-        selectedId={binding?.cardId}
-        onClose={() => setOpen(false)}
-        onSelect={(id: string) => {
-          setOpen(false)
-          void pickCharacter(id)
-        }}
-        items={
-          characters.length === 0
-            ? [{ id: '__empty__', label: charsLoader.state.status === 'loading' ? t('hero.loadingCharacters') : t('hero.noCharacters'), disabled: true }]
-            : characters.map((c) => ({
-                id: c.cardId,
-                label: !c.hasCharacterBook
-                  ? c.name
-                  : typeof c.characterBookEntryCount === 'number' && c.characterBookEntryCount > 0
-                    ? t('hero.pickBook.withCount', { name: c.name, count: c.characterBookEntryCount })
-                    : t('hero.pickBook.noCount', { name: c.name }),
-              }))
-        }
-        anchor={
-          <TavernSeatChip
-            label={chipLabel}
-            title={t('hero.pickCharacter')}
-            avatarUrl={avatar}
-            open={open}
-            loading={bindingLoader.state.status === 'loading'}
-            disabled={busy}
-            onClick={() => setOpen((v: boolean) => !v)}
-          />
-        }
-      />
+      <TavernSeatChip label={chipLabel} title={t('hero.pickCharacter')} avatarUrl={avatar}
+        open={open} hasPopup="dialog" loading={bindingLoader.state.status === 'loading'} disabled={busy}
+        onClick={() => { setError(null); setOpen(true) }} />
     </span>
   )
 
   return (
     <div ref={dockRef} data-tavern-hero-root="" className="dsh-tavern-ui">
       {chipHost ? createPortal(chip, chipHost) : chip}
+      {open && <CharacterPicker remote={remote} selectedId={binding?.cardId} busy={busy} error={error}
+        onPick={(id) => void pickCharacter(id)} onClose={() => setOpen(false)} />}
       {error && <div className="dsh-tavern-hero-error">{error}</div>}
+      {bindingLoader.state.status === 'error' && <div role="alert" className="dsh-tavern-hero-error">
+        {bindingLoader.state.message}
+        <Btn onClick={bindingLoader.reload} disabled={busy}>{t('action.retry')}</Btn>
+      </div>}
       {binding && detailLoader.state.status === 'loading' && (
         <div className="dsh-tavern-hero-preview" aria-busy="true">
           <div className="dsh-tavern-hero-previewHead">
@@ -381,7 +390,7 @@ export function TavernHeroCharacter(props: {
             <div className="dsh-tavern-hero-previewText">{t('hero.noGreetingHint')}</div>
           )}
           <div className="dsh-tavern-hero-actions">
-            <Btn primary size="md" disabled={busy} onClick={() => void startConversation()}>
+            <Btn primary size="md" disabled={busy || !greetingText.trim() || !detail} onClick={() => void startConversation()}>
               {t('hero.start')}
             </Btn>
             {variants.length > 1 && (

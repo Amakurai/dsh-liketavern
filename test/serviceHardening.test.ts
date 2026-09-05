@@ -20,6 +20,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
+import { Session } from '@deepseek-ai/dsh-session'
+import { greetingMessage } from '../src/node/greetingSeed.js'
 import type { SettingsScope } from '@deepseek-ai/dsh-settings'
 import { defaultPreset } from '../src/core/assemble.js'
 import type { CharacterCard, PromptPreset } from '../src/core/types.js'
@@ -38,6 +40,7 @@ let paths: TavernPaths
 let state: TavernState
 let service: TavernService
 let settingsRaw: TavernConfigRaw
+const sessions = new Map<string, Session>()
 
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'service-hardening-test-'))
@@ -59,7 +62,10 @@ beforeEach(async () => {
       settingsRaw = { ...settingsRaw, ...(patch as Partial<TavernConfigRaw>) }
     },
   } as unknown as SettingsScope<TavernConfigRaw>
-  const ctx = { reflect: { provide: () => {} } } as unknown as Context
+  sessions.clear()
+  const ctx = { reflect: { provide: () => {} }, get: () => undefined,
+    sessions: { get: (id: string) => sessions.get(id) }, agents: { get: () => undefined },
+  } as unknown as Context
   service = new TavernService(ctx, state, settingsScope)
 })
 
@@ -108,6 +114,45 @@ function makeBinding(overrides: Partial<SessionBinding> = {}): SessionBinding {
     ...overrides,
   }
 }
+
+describe('开场白开始状态（真实存储 + 宿主 Session）', () => {
+  async function setup(firstMes = '你好') {
+    const { cardId } = await importCard(paths.characters, makeCard({ firstMes }))
+    const session = Session.create('session-greeting-test' as Session['id'])
+    session.append('agent-preset/selected', { agentPreset: 'tavern' })
+    sessions.set(session.id, session)
+    await state.saveBinding(makeBinding({ sessionId: session.id, cardId }))
+    return session
+  }
+
+  it('首次开始写入一轮，重复点击成功识别已开始且不重复写入', async () => {
+    const session = await setup()
+    const request = { sessionId: session.id }
+    expect((await service.getSessionBinding(request)).conversationStarted).toBe(false)
+    const results = await Promise.all([service.ensureGreeting(request), service.ensureGreeting(request)])
+    expect(results).toEqual([{ created: true, conversationStarted: true }, { created: false, conversationStarted: true }])
+    expect(session.snapshotEvents().filter((e) => e.type === 'assistant/message')).toHaveLength(1)
+    expect(session.snapshotEvents().filter((e) => e.type === 'turn/start')).toHaveLength(1)
+    expect((await service.getSessionBinding(request)).conversationStarted).toBe(true)
+    expect(await state.loadBinding(session.id)).not.toBeNull()
+  })
+
+  it('旧 turn 0 开场白也视为已开始；再次进入补齐 turn 而不复制正文', async () => {
+    const session = await setup()
+    session.append('assistant/message', { turn: 0, step: 0, message: greetingMessage('旧开场白') }, { surfaceOp: 'append', sourceEventSeqs: [] })
+    expect((await service.getSessionBinding({ sessionId: session.id })).conversationStarted).toBe(true)
+    expect(await service.ensureGreeting({ sessionId: session.id })).toEqual({ created: false, conversationStarted: true })
+    expect(session.snapshotEvents().filter((e) => e.type === 'assistant/message')).toHaveLength(1)
+    expect(session.snapshotEvents().some((e) => e.type === 'turn/start')).toBe(true)
+  })
+
+  it('空开场白与未绑定会话不能假报开始成功', async () => {
+    const session = await setup('')
+    expect(await service.ensureGreeting({ sessionId: session.id })).toEqual({ created: false, conversationStarted: false })
+    expect(await service.ensureGreeting({ sessionId: 'missing' })).toEqual({ created: false, conversationStarted: false })
+    expect(session.snapshotEvents().some((e) => e.type === 'turn/start')).toBe(false)
+  })
+})
 
 describe('面板写路径不记 WAL（plainWorkspace）', () => {
   it('turn 进行中（共享句柄 floor 非 null）面板写不记楼层快照，回退不撤销', async () => {

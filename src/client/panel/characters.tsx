@@ -3,7 +3,9 @@
  * 列表行走 Avatar + 尾部详情/删除 IconBtn；导入/删除等瞬时反馈走 useToast，上下文错误用 Err。
  * 交互卡预览保留 CSP meta 注入 + sandbox iframe（无 allow-same-origin），不得放宽。
  */
-import { useEffect, useState } from 'react'
+import { useDraftGuard } from '../drafts.js'
+import { PersistentEditor, useDraftRestored, useDraftState } from '../draftPersistence.js'
+import { useEffect, useRef, useState } from 'react'
 import { Button, IconDownloadOutline16, IconTrashOutline16, IconUserOutline16, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
 import { cachedAvatar, cachedCharacterDetail, invalidateCharacter } from '../cache.js'
 import { useT } from '../i18n.js'
@@ -104,15 +106,28 @@ function CharacterDetailDialog(props: { remote: TavernRemote; cardId: string; on
     [cardId],
   )
   const [cardOpen, setCardOpen] = useState(false)
-  const [draft, setDraft] = useState<CharacterDetail | null>(null)
+  const draftKey = `characters.detail:${cardId}`
+  const [draft, setDraft] = useDraftState<CharacterDetail | null>(draftKey, null)
+  const restored = useDraftRestored(draftKey)
+  const preserveRestored = useRef(restored && draft !== null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const toast = useToast()
   const loaded: CharacterDetail | null = state.status === 'ready' ? state.value : null
   const detail = draft ?? loaded
+  const dirty = draft !== null && (loaded === null ? restored : JSON.stringify(draft) !== JSON.stringify(loaded))
+  const guard = useDraftGuard(dirty, busy)
   useEffect(() => {
-    if (loaded) setDraft(loaded)
-  }, [loaded])
+    if (!loaded) return
+    // 首次 ready 仅提供比较基线；恢复的未保存正文必须保留，成功保存后的 reload 正常更新。
+    if (preserveRestored.current) preserveRestored.current = false
+    else setDraft(loaded)
+  }, [loaded, setDraft])
+
+  const close = () => guard.request(() => {
+    setDraft(null)
+    props.onClose()
+  })
 
   const set = (patch: Partial<CharacterDetail>) => setDraft(detail ? { ...detail, ...patch } : detail)
   const interactiveHtml = typeof detail?.extensions?.interactiveHtml === 'string' ? (detail.extensions.interactiveHtml as string) : null
@@ -167,8 +182,15 @@ function CharacterDetailDialog(props: { remote: TavernRemote; cardId: string; on
   }
 
   return (
-    <Dialog open width="xl" title={t('characters.detail.title', { name: detail?.name ?? cardId })} onClose={props.onClose}>
+    <Dialog open width="xl" title={t('characters.detail.title', { name: detail?.name ?? cardId })} onClose={close}
+      footer={detail ? <div className="dsh-tavern-ui dsh-tavern-footActions">
+        <span className="dsh-tavern-muted" role="status">{dirty ? t('draft.unsaved') : ''}</span>
+        <span className="dsh-tavern-footSpacer" />
+        <Btn size="md" disabled={busy} onClick={close}>{t('action.close')}</Btn>
+        <Btn primary size="md" disabled={busy || !dirty} onClick={() => void save()}>{t(busy ? 'draft.saving' : 'action.save')}</Btn>
+      </div> : undefined}>
       {toast.node}
+      {guard.confirmation}
       {state.status === 'loading' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           <Skeleton height={48} />
@@ -178,7 +200,7 @@ function CharacterDetailDialog(props: { remote: TavernRemote; cardId: string; on
       )}
       {state.status === 'error' && <Err message={state.message} />}
       {detail && (
-        <div className="dsh-tavern-dialogStack dsh-tavern-scroll" style={{ maxHeight: '65vh', overflow: 'auto', fontSize: 13 }}>
+        <fieldset disabled={busy} className="dsh-tavern-editorFields dsh-tavern-dialogStack" style={{ fontSize: 13 }}>
           <div className="dsh-tavern-panelCard" style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
             <CardAvatar remote={remote} cardId={cardId} name={detail.name} size={52} />
             <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -205,12 +227,15 @@ function CharacterDetailDialog(props: { remote: TavernRemote; cardId: string; on
             <LabeledArea label={t('characters.detail.greeting')} minHeight={88} value={detail.firstMes} onChange={(v) => set({ firstMes: v })} />
             <div className="dsh-tavern-field">
               <span className="dsh-tavern-fieldLabel">{t('characters.detail.altGreetings')}</span>
-              <textarea
-                className="dsh-tavern-input dsh-tavern-textarea"
-                style={{ minHeight: 72 }}
-                value={detail.alternateGreetings.join('\n')}
-                onChange={(e) => set({ alternateGreetings: e.target.value.split('\n') })}
-              />
+              {detail.alternateGreetings.map((greeting, index) => <div key={index} className="dsh-tavern-greetingEntry">
+                <label className="dsh-tavern-field">
+                  <span className="dsh-tavern-fieldLabel">{t('characters.detail.greetingNumber', { index: index + 1 })}</span>
+                  <textarea className="dsh-tavern-input dsh-tavern-textarea" value={greeting} disabled={busy}
+                    onChange={(e) => set({ alternateGreetings: detail.alternateGreetings.map((text, i) => i === index ? e.target.value : text) })} />
+                </label>
+                <Btn disabled={busy} onClick={() => set({ alternateGreetings: detail.alternateGreetings.filter((_, i) => i !== index) })}>{t('action.delete')}</Btn>
+              </div>)}
+              <Btn disabled={busy} onClick={() => set({ alternateGreetings: [...detail.alternateGreetings, ''] })}>{t('characters.detail.addGreeting')}</Btn>
             </div>
             <LabeledArea label={t('characters.detail.mesExample')} value={detail.mesExample} onChange={(v) => set({ mesExample: v })} />
           </div>
@@ -282,9 +307,8 @@ function CharacterDetailDialog(props: { remote: TavernRemote; cardId: string; on
             {interactiveHtml !== null && <Btn size="md" onClick={() => setCardOpen(true)}>{t('interactive.open')}</Btn>}
             <span className="dsh-tavern-footSpacer" />
             <Btn size="md" disabled={busy} onClick={() => void exportCard('json')}>{t('characters.detail.exportJson')}</Btn>
-            <Btn primary size="md" disabled={busy} onClick={() => void save()}>{t('action.save')}</Btn>
           </div>
-        </div>
+        </fieldset>
       )}
       {cardOpen && interactiveHtml !== null && (
         <Dialog open width="lg" title={t('characters.detail.interactiveTitle', { name: detail?.name ?? '' })} onClose={() => setCardOpen(false)}>
@@ -301,18 +325,27 @@ function CharacterDetailDialog(props: { remote: TavernRemote; cardId: string; on
 }
 
 export function CharactersSection(props: { remote: TavernRemote }) {
+  return <PersistentEditor remote={props.remote} scope="characters"><CharactersSectionContent {...props} /></PersistentEditor>
+}
+
+function CharactersSectionContent(props: { remote: TavernRemote }) {
   const { remote } = props
   const t = useT()
   const { state, reload } = useLoader(() => remote.listCharacters({}), [])
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  const [detailId, setDetailId] = useState<string | null>(null)
+  const [detailId, setDetailId] = useDraftState<string | null>('characters:detailId', null)
   const [pending, setPending] = useState<{ name: string; dataBase64: string; preview: CharacterInspect } | null>(null)
   const [toDelete, setToDelete] = useState<CharacterSummary | null>(null)
-  const [creating, setCreating] = useState(false)
-  const [newName, setNewName] = useState('')
+  const [creating, setCreating] = useDraftState('characters:creating', false)
+  const [newName, setNewName] = useDraftState('characters:newName', '')
   const [query, setQuery] = useState('')
   const toast = useToast()
+  const createGuard = useDraftGuard(creating && !!newName.trim(), busy)
+  const closeCreate = () => createGuard.request(() => {
+    setCreating(false)
+    setNewName('')
+  })
 
   const doImport = async (name: string, dataBase64: string, importWorldBook: boolean) => {
     setBusy(true)
@@ -388,6 +421,7 @@ export function CharactersSection(props: { remote: TavernRemote }) {
   return (
     <Section title={t('section.characters')} description={t('characters.section.desc')}>
       {toast.node}
+      {createGuard.confirmation}
       <div className="dsh-tavern-toolbar">
         <FileBtn accept=".png,.json" disabled={busy} onFile={(file) => void onImportFile(file)}>
           {t('characters.importFile')}
@@ -432,6 +466,7 @@ export function CharactersSection(props: { remote: TavernRemote }) {
       </div>
       {detailId && (
         <CharacterDetailDialog
+          key={detailId}
           remote={remote}
           cardId={detailId}
           onClose={() => setDetailId(null)}
@@ -478,10 +513,10 @@ export function CharactersSection(props: { remote: TavernRemote }) {
         open={creating}
         title={t('characters.create.title')}
         description={t('characters.create.desc')}
-        onClose={() => setCreating(false)}
+        onClose={closeCreate}
         footer={
           <div className="dsh-tavern-modalActions">
-            <Btn size="md" onClick={() => setCreating(false)}>{t('action.cancel')}</Btn>
+            <Btn size="md" disabled={busy} onClick={closeCreate}>{t('action.cancel')}</Btn>
             <Btn
               primary
               size="md"
@@ -509,6 +544,7 @@ export function CharactersSection(props: { remote: TavernRemote }) {
         <input
           className="dsh-tavern-input"
           style={{ width: '100%', height: 36, borderRadius: 8, padding: '0 10px', fontSize: 13, boxSizing: 'border-box' }}
+          disabled={busy}
           value={newName}
           placeholder={t('characters.create.namePlaceholder')}
           onChange={(e) => setNewName(e.target.value)}

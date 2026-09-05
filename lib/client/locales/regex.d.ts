@@ -28,6 +28,7 @@ export declare const zh: {
     readonly 'regex.toggledOff': "已关闭「{name}」";
     readonly 'regex.saved': "已保存 {count} 条规则";
     readonly 'regex.desc': "对话展示会自动收起 UpdateVariable、JSONPatch 等机读标签，不依赖预设是否带了正则。上方是你额外要改写展示或 ST 模拟的规则；下方列出预设随带的正则，可直接开关。";
+    readonly 'regex.customHead': "自定义规则";
     readonly 'regex.emptyTitle': "暂无自定义规则";
     readonly 'regex.emptyDesc': "点「新建规则」添加展示或 ST 模拟的改写规则。";
     readonly 'regex.new': "新建规则";

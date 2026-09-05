@@ -4,6 +4,16 @@
  * 模块私有文案放各自的 locales/<module>.ts，键一律带模块前缀，避免碰撞。
  */
 export declare const zh: {
+    readonly 'draft.unsaved': "未保存修改";
+    readonly 'draft.leaveTitle': "放弃未保存的修改？";
+    readonly 'draft.leaveDesc': "离开后，这些修改将丢失。取消可返回继续编辑并保存。";
+    readonly 'draft.discard': "放弃修改并离开";
+    readonly 'draft.saving': "保存中…";
+    readonly 'draft.loadFailed': "未能读取编辑草稿。";
+    readonly 'draft.restored': "已恢复上次编辑草稿，请检查后保存。";
+    readonly 'draft.autosaving': "正在暂存草稿…";
+    readonly 'draft.autosaved': "草稿已暂存，刷新后可恢复；修改仍需点击保存。";
+    readonly 'draft.autosaveFailed': "草稿暂存失败，编辑内容仍保留在当前页面。";
     readonly 'settings.label': "Tavern";
     readonly 'section.characters': "角色卡";
     readonly 'section.presets': "提示词预设";

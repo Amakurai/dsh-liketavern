@@ -46,10 +46,14 @@ export declare function Tabs(props: {
     value: string;
     onChange: (id: string) => void;
     size?: 'md' | 'sm';
+    id?: string;
+    panelId?: string;
+    label?: string;
 }): import("react").JSX.Element;
 /** 分组保存行：与上方表单一条淡分隔，主操作左齐。 */
 export declare function SaveBar(props: {
     children?: ReactNode;
+    inline?: boolean;
 }): import("react").JSX.Element;
 export declare function Badge(props: {
     accent?: boolean;
@@ -148,6 +152,8 @@ export declare function clickableProps(onClick: () => void): {
     onClick: () => void;
     onKeyDown: (e: {
         key: string;
+        target: unknown;
+        currentTarget: unknown;
         preventDefault: () => void;
     }) => void;
 };

@@ -3,6 +3,8 @@
  * 卡片可键盘触发（clickableProps）；导入/保存等瞬时反馈走 useToast，上下文错误用 Err。
  */
 import { useState } from 'react'
+import { PersistentEditor, useDraftState } from '../draftPersistence.js'
+import { useDraftGuard } from '../drafts.js'
 import { IconDownloadOutline16, IconEditOutline16, IconFolderOpenOutline16, IconTrashOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { WorldInfoEntry } from '../../core/types.js'
 import { parseLorebook } from '../../state/lorebook.js'
@@ -14,19 +16,28 @@ import { LorebookEditor, type LorebookTarget } from './lorebookEditor.js'
 type Opened = { target: LorebookTarget; entries: WorldInfoEntry[] }
 
 export function LorebooksSection(props: { remote: TavernRemote }) {
+  return <PersistentEditor remote={props.remote} scope="lorebooks"><LorebooksSectionContent {...props} /></PersistentEditor>
+}
+
+function LorebooksSectionContent(props: { remote: TavernRemote }) {
   const { remote } = props
   const { state, reload } = useLoader(() => remote.listLorebooks({}), [])
   const chars = useLoader(() => remote.listCharacters({}), [])
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [opening, setOpening] = useState(false)
-  const [opened, setOpened] = useState<Opened | null>(null)
+  const [opened, setOpened] = useDraftState<Opened | null>('lorebooks:opened', null)
   const [toDelete, setToDelete] = useState<string | null>(null)
   const [toDeleteEmbedded, setToDeleteEmbedded] = useState<CharacterSummary | null>(null)
-  const [creating, setCreating] = useState(false)
-  const [newName, setNewName] = useState('')
+  const [creating, setCreating] = useDraftState('lorebooks:creating', false)
+  const [newName, setNewName] = useDraftState('lorebooks:newName', '')
   const toast = useToast()
   const t = useT()
+  const createGuard = useDraftGuard(creating && !!newName.trim(), busy)
+  const closeCreate = () => createGuard.request(() => {
+    setCreating(false)
+    setNewName('')
+  })
 
   const names = state.status === 'ready' ? state.value.items : []
   const charItems: CharacterSummary[] = chars.state.status === 'ready' ? chars.state.value.items : []
@@ -163,6 +174,7 @@ export function LorebooksSection(props: { remote: TavernRemote }) {
       >
         {toast.node}
         <LorebookEditor
+          remote={remote}
           target={opened.target}
           entries={opened.entries}
           onClose={() => setOpened(null)}
@@ -184,6 +196,7 @@ export function LorebooksSection(props: { remote: TavernRemote }) {
   return (
     <Section title={t('section.lorebooks')} description={t('lorebooks.listDesc')}>
       {toast.node}
+      {createGuard.confirmation}
       <div className="dsh-tavern-toolbar">
         <FileBtn accept=".json" disabled={busy} onFile={(file) => void onImportFile(file)}>
           {t('lorebooks.importJson')}
@@ -326,13 +339,13 @@ export function LorebooksSection(props: { remote: TavernRemote }) {
         open={creating}
         title={t('lorebooks.createTitle')}
         description={t('lorebooks.createDesc')}
-        onClose={() => setCreating(false)}
+        onClose={closeCreate}
         footer={
           <div className="dsh-tavern-modalActions">
-            <Btn size="md" onClick={() => setCreating(false)}>
+            <Btn size="md" disabled={busy} onClick={closeCreate}>
               {t('action.cancel')}
             </Btn>
-            <Btn primary size="md" disabled={busy} onClick={() => void createEmpty()}>
+            <Btn primary size="md" disabled={busy || !newName.trim()} onClick={() => void createEmpty()}>
               {t('lorebooks.create')}
             </Btn>
           </div>
@@ -342,6 +355,7 @@ export function LorebooksSection(props: { remote: TavernRemote }) {
           className="dsh-tavern-input"
           style={{ width: '100%', height: 36, borderRadius: 8, padding: '0 10px', fontSize: 13, boxSizing: 'border-box' }}
           value={newName}
+          disabled={busy}
           placeholder={t('lorebooks.namePlaceholder')}
           onChange={(e) => setNewName(e.target.value)}
         />

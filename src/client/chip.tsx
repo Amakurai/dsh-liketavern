@@ -2,7 +2,9 @@
  * 会话头部角色 chip（slot conversation.session.header.actions，session 作用域）。
  * 显示当前会话绑定的角色；点击展开绑定编辑 / 开场白 / 调试小面板。
  */
-import { useEffect, useRef, useState } from 'react'
+import { DraftScope } from './drafts.js'
+import { MemorySection } from './panel/memory.js'
+import { useEffect, useId, useRef, useState } from 'react'
 import { BINDING_CHANGED_EVENT } from './actions.js'
 import { cachedAvatar, cachedCharacterDetail, cachedSessionBinding, invalidateSessionBinding } from './cache.js'
 import { useT } from './i18n.js'
@@ -60,6 +62,7 @@ function fmtTokens(n: number | null): string {
 function PromptPreviewDialog(props: { data: PromptPreview; onClose: () => void }) {
   const { data } = props
   const t = useT()
+  const tabsId = useId()
   const [tab, setTab] = useState<'standing' | 'turn' | 'full' | 'log' | 'actual'>('actual')
   const toast = useToast()
   const wi = data.worldInfoBudget
@@ -96,6 +99,7 @@ function PromptPreviewDialog(props: { data: PromptPreview; onClose: () => void }
       </Muted>
       <div className="dsh-tavern-filters" style={{ margin: '10px 0 12px' }}>
         <Tabs
+          id={tabsId} panelId={`${tabsId}-panel`} label={t('chip.preview.title')}
           size="sm"
           value={tab}
           onChange={(id) => setTab(id as typeof tab)}
@@ -112,7 +116,7 @@ function PromptPreviewDialog(props: { data: PromptPreview; onClose: () => void }
           <IconCopyOutline16 />
         </IconBtn>
       </div>
-      <pre className="dsh-tavern-modalPre">{body}</pre>
+      <pre id={`${tabsId}-panel`} role="tabpanel" aria-labelledby={`${tabsId}-${tab}`} tabIndex={0} className="dsh-tavern-modalPre">{body}</pre>
       {toast.node}
     </Dialog>
   )
@@ -166,6 +170,7 @@ export function TavernHeaderChip(props: {
   const [view, setView] = useState<{ title: string; text: string } | null>(null)
   const [previewData, setPreviewData] = useState<PromptPreview | null>(null)
   const [chatLore, setChatLore] = useState<{ cardId: string; storyId?: string; entries: WorldInfoEntry[] } | null>(null)
+  const [memoryOpen, setMemoryOpen] = useState(false)
   const [confirmUnbind, setConfirmUnbind] = useState(false)
   const [unbindBusy, setUnbindBusy] = useState(false)
   /** 无绑定时选择角色会异步读取 defaults；序号保证只有最后一次选择能落到草稿。 */
@@ -363,6 +368,7 @@ export function TavernHeaderChip(props: {
               <span className="dsh-tavern-footSpacer" />
               <span className="dsh-tavern-footGroup">
                 <Btn size="md" disabled={!binding?.storyId || draft?.cardId !== binding.cardId} onClick={() => void openChatLore()}>{t('chip.chatLore.edit')}</Btn>
+                <Btn size="md" disabled={!binding?.storyId} onClick={() => setMemoryOpen(true)}>{t('section.memory')}</Btn>
                 <Btn primary size="md" onClick={() => void saveBinding()}>{t('binding.save')}</Btn>
               </span>
             </div>
@@ -542,10 +548,11 @@ export function TavernHeaderChip(props: {
       {toast.node}
       {view && <PreDialog title={view.title} text={view.text} onClose={() => setView(null)} />}
       {previewData && <PromptPreviewDialog data={previewData} onClose={() => setPreviewData(null)} />}
-      {chatLore && (
-        <Dialog open width="xl" title={t('chip.chatLore.title')} onClose={() => setChatLore(null)}>
+      {chatLore && <DraftScope>{(request) =>
+        <Dialog open width="xl" title={t('chip.chatLore.title')} onClose={() => request(() => setChatLore(null))}>
           <LorebookEditor
-            target={{ kind: 'chat', cardId: chatLore.cardId, name: t('chip.chatLore.title') }}
+            remote={remote}
+            target={{ kind: 'chat', cardId: chatLore.cardId, storyId: chatLore.storyId, name: t('chip.chatLore.title') }}
             entries={chatLore.entries}
             onClose={() => setChatLore(null)}
             onSaved={() => {
@@ -555,7 +562,12 @@ export function TavernHeaderChip(props: {
             save={(json) => remote.saveChatLorebook({ cardId: chatLore.cardId, storyId: chatLore.storyId, json })}
           />
         </Dialog>
-      )}
+      }</DraftScope>}
+      {memoryOpen && binding?.storyId && <DraftScope>{(request) =>
+        <Dialog open width="xl" title={t('section.memory')} onClose={() => request(() => setMemoryOpen(false))}>
+          <MemorySection key={binding.storyId} remote={remote} initialContext={{ cardId: binding.cardId, storyId: binding.storyId! }} />
+        </Dialog>
+      }</DraftScope>}
       <ConfirmDialog
         open={confirmUnbind}
         title={t('chip.unbind.title')}

@@ -2,6 +2,8 @@
  * 设置面板分区：人设（卡片网格 / 新建编辑 / 删除 / 设为默认）。
  * 卡片可键盘触发（clickableProps）；保存/设默认等瞬时反馈走 useToast，上下文错误用 Err。
  */
+import { useDraftGuard } from '../drafts.js'
+import { useDraftState } from '../draftPersistence.js'
 import { useState } from 'react'
 import { IconEditOutline16, IconTrashOutline16, IconUserOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { useT } from '../i18n.js'
@@ -16,10 +18,13 @@ export function PersonasSection(props: { remote: TavernRemote }) {
   const lore = useLoader(() => remote.listLorebooks({}), [])
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  const [editing, setEditing] = useState<Persona | null>(null)
+  const [baseline, setBaseline] = useDraftState<string | null>('personas:baseline', null)
+  const [editing, setEditing] = useDraftState<Persona | null>('personas:editing', null)
   const [toDelete, setToDelete] = useState<Persona | null>(null)
   const [query, setQuery] = useState('')
   const toast = useToast()
+  const guard = useDraftGuard(editing !== null && JSON.stringify(editing) !== baseline, busy)
+  const openPersona = (p: Persona) => guard.request(() => { setEditing({ ...p }); setBaseline(JSON.stringify(p)) })
 
   const items = state.status === 'ready' ? state.value.items : []
   const q = query.trim().toLowerCase()
@@ -36,6 +41,7 @@ export function PersonasSection(props: { remote: TavernRemote }) {
       const err = errOf(r)
       if (err) setError(err)
       else {
+        setBaseline(JSON.stringify(editing))
         toast.show(t('personas.saved', { name: editing.name }))
         reload()
       }
@@ -78,8 +84,9 @@ export function PersonasSection(props: { remote: TavernRemote }) {
   return (
     <Section title={t('section.personas')} description={t('personas.sectionDesc')}>
       {toast.node}
+      {guard.confirmation}
       <div className="dsh-tavern-toolbar">
-        <Btn size="md" onClick={createNew}>{t('personas.new')}</Btn>
+        <Btn size="md" onClick={() => guard.request(createNew)}>{t('personas.new')}</Btn>
         <Btn size="md" onClick={reload} disabled={busy}>{t('action.refresh')}</Btn>
         {items.length >= 5 && (
           <SearchInput label={t('personas.searchLabel')} value={query} onChange={setQuery} placeholder={t('personas.searchPlaceholder')} width={220} />
@@ -108,7 +115,7 @@ export function PersonasSection(props: { remote: TavernRemote }) {
       )}
       <div className="dsh-tavern-list" style={{ marginBottom: 12 }}>
         {filtered.map((p) => (
-          <div key={p.id} className="dsh-tavern-tile" {...clickableProps(() => setEditing({ ...p }))}>
+          <div key={p.id} className="dsh-tavern-tile" {...clickableProps(() => openPersona(p))}>
             <div className="dsh-tavern-tileMain">
               <div className="dsh-tavern-tileTitleRow">
                 <span className="dsh-tavern-tileName">{p.name}</span>
@@ -117,7 +124,7 @@ export function PersonasSection(props: { remote: TavernRemote }) {
               <span className="dsh-tavern-tileSub">{p.description.trim() || t('personas.noDescription')}</span>
             </div>
             <div className="dsh-tavern-tileActions">
-              <IconBtn label={t('action.edit')} onClick={() => setEditing({ ...p })}>
+              <IconBtn label={t('action.edit')} onClick={() => openPersona(p)}>
                 <IconEditOutline16 />
               </IconBtn>
               <Btn size="sm" disabled={busy} onClick={() => void setAsDefault(p.id)}>{t('personas.setDefault')}</Btn>
@@ -139,7 +146,7 @@ export function PersonasSection(props: { remote: TavernRemote }) {
         onConfirm={() => void remove()}
       />
       {editing && (
-        <div className="dsh-tavern-card" style={{ marginBottom: 12 }}>
+        <fieldset disabled={busy} className="dsh-tavern-editorFields dsh-tavern-card" style={{ marginBottom: 12 }}>
           <Field label={t('personas.field.name')}>
             <input className="dsh-tavern-input" style={{ flex: 1 }} value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} />
           </Field>
@@ -164,9 +171,9 @@ export function PersonasSection(props: { remote: TavernRemote }) {
           </Field>
           <SaveBar>
             <Btn disabled={busy} onClick={() => void save()} primary>{t('action.save')}</Btn>
-            <Btn onClick={() => setEditing(null)}>{t('action.close')}</Btn>
+            <Btn onClick={() => guard.request(() => setEditing(null))}>{t('action.close')}</Btn>
           </SaveBar>
-        </div>
+        </fieldset>
       )}
     </Section>
   )

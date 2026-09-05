@@ -3,6 +3,7 @@
  * 内存版 localStorage/sessionStorage shim（opaque origin 下原生访问会抛 SecurityError）。
  * 卡内 JS 不能碰主窗口；只通过 postMessage 请求切换开场白 swipe。
  */
+import { installCardVariables, type CardVariableLabels } from './cardVariables.js'
 
 export const CARD_BRIDGE_SOURCE = 'dsh-tavern-card'
 
@@ -10,6 +11,8 @@ export interface CardFrameOptions {
   /** 开场白变体（0 = first_mes）。供 getChatMessages / swipe_id 使用。 */
   greetings: string[]
   greetingIndex: number
+  variableLabels?: CardVariableLabels
+  variableStyles?: string
   /**
    * 额外信任的主机：放宽 connect-src 与 script-src（img/font/style 已默认放行 https）。
    * 空数组 = 脚本不能 fetch/XHR，也不能加载外部脚本；`*` = 全部放行。
@@ -34,7 +37,10 @@ function cspContent(connectHosts: string[]): string {
   const connect = allowAll ? 'https: http:' : hosts.length > 0 ? hosts.join(' ') : "'none'"
   // 白名单主机同时进 script-src：有的封面会 fetch 外部 HTML 再 document.write，
   // 拉回的页面常带 <script src>，只放行 connect-src 仍然跑不起来。
-  const script = allowAll ? "'unsafe-inline' https: http:" : ["'unsafe-inline'", ...hosts].join(' ')
+  // Vue 等模板编译器依赖 Function；仅在 opaque-origin 沙箱内允许动态编译，
+  // 不改变外部主机白名单、connect-src 或主页面权限。
+  const localScript = "'unsafe-inline' 'unsafe-eval'"
+  const script = allowAll ? `${localScript} https: http:` : [localScript, ...hosts].join(' ')
   return [
     "default-src 'none'",
     `script-src ${script}`,
@@ -47,7 +53,7 @@ function cspContent(connectHosts: string[]): string {
 }
 
 /** SillyTavern / tavernhelper 常用入口的 stub；卡内按钮经 postMessage 请求 swipeGreeting。 */
-export function tavernCardBridgeScript(options: Pick<CardFrameOptions, 'greetings' | 'greetingIndex'>): string {
+export function tavernCardBridgeScript(options: Pick<CardFrameOptions, 'greetings' | 'greetingIndex' | 'variableLabels' | 'variableStyles'>): string {
   const payload = escapeScriptJson({
     greetings: options.greetings,
     greetingIndex: options.greetingIndex,
@@ -81,6 +87,10 @@ export function tavernCardBridgeScript(options: Pick<CardFrameOptions, 'greeting
   }
   shimStorage('localStorage');
   shimStorage('sessionStorage');
+  (${installCardVariables.toString()})(${escapeScriptJson(options.variableLabels ?? {
+    title: 'Temporary card data / backup', note: 'Card variables stay in this frame only. Copy a backup before leaving or refreshing. They are not shared with the host or other conversations.',
+    backup: 'Select backup text', text: 'Card variable backup',
+  })}, ${escapeScriptJson(options.variableStyles ?? '')});
   var cfg = ${payload};
   function post(action, extra) {
     var msg = { source: cfg.source, action: action };
@@ -139,6 +149,8 @@ export function tavernCardBridgeScript(options: Pick<CardFrameOptions, 'greeting
   window.toastr = window.toastr || { info: function () {}, success: function () {}, warning: function () {}, error: function () {} };
   window.SillyTavern = { getContext: function () { return ctx; } };
   window.TavernHelper = Object.assign(window.TavernHelper || {}, api);
+  if (typeof window.__dshTavernBridgeCleanup === 'function') window.__dshTavernBridgeCleanup();
+  var ro = null, timers = [], lastHeight = 0;
   function reportHeight() {
     try {
       var h = 0;
@@ -154,26 +166,37 @@ export function tavernCardBridgeScript(options: Pick<CardFrameOptions, 'greeting
           if (r && r.bottom > h) h = r.bottom;
         }
       }
-      if (h > 0) post('resize', { height: Math.ceil(h) });
+      if (h > 0 && Math.ceil(h) !== lastHeight) {
+        lastHeight = Math.ceil(h);
+        post('resize', { height: lastHeight });
+      }
     } catch (e) {}
   }
   function watchHeight() {
     reportHeight();
     if (typeof ResizeObserver !== 'undefined') {
       try {
-        var ro = new ResizeObserver(function () { reportHeight(); });
+        ro = new ResizeObserver(function () { reportHeight(); });
         if (document.documentElement) ro.observe(document.documentElement);
         if (document.body) ro.observe(document.body);
       } catch (e2) {}
     }
     window.addEventListener('load', reportHeight);
-    setTimeout(reportHeight, 300);
-    setTimeout(reportHeight, 1200);
+    timers.push(setTimeout(reportHeight, 300), setTimeout(reportHeight, 1200));
   }
+  window.__dshTavernBridgeCleanup = function () {
+    if (ro) ro.disconnect();
+    timers.forEach(clearTimeout);
+    window.removeEventListener('load', reportHeight);
+    document.removeEventListener('DOMContentLoaded', watchHeight);
+  };
   // 封面常 document.write 整页 HTML，会冲掉 head 里的桥。把 stub/CSP 写回后再落盘。
-  var origOpen = document.open.bind(document);
-  var origWrite = document.write.bind(document);
-  var origClose = document.close.bind(document);
+  var nativeDocument = window.__dshTavernNativeDocument || (window.__dshTavernNativeDocument = {
+    open: document.open.bind(document), write: document.write.bind(document), close: document.close.bind(document)
+  });
+  var origOpen = nativeDocument.open;
+  var origWrite = nativeDocument.write;
+  var origClose = nativeDocument.close;
   var writeBuf = null;
   var stubNode = document.currentScript;
   var stubHtml = stubNode && stubNode.outerHTML ? stubNode.outerHTML : '';

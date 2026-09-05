@@ -13,6 +13,11 @@
 5. web 设置 RPC 无命名空间白名单（rc.2 起，0.1.2 仍成立），宿主通用设置页也能看到/改 `dsh-tavern` 的键——宿主行为，不要为此改插件面板。
 6. 会话头宿主原生面包屑（`conversation.session.header.lineage`）与楼层级 ‹ n/m › 互补，不要替换那个 slot。
 7. primitives `Modal` 的 dialog 外壳自带 `width:min(380px,100%)`：弹窗宽度档（`Dialog` 的 md/lg/xl/full）必须经 `className` 落在外壳上，挂在 `contentClassName`（内容层）会被外壳宽度卡住不生效。
+8. 插件直接追加开场白的 `turn/start` 会推进服务端 `sessionListMetadata.blank`，但不经过客户端 `session.send` 的 blank 更新路径；成功后调用 `sessions.refresh()` 同步会话列表，避免「新会话」复用和英雄区预览残留。绑定读取附带日志判定的 `conversationStarted`，用于防止 blank 镜像滞后时误清绑定。
+9. Vue 全局构建的模板编译依赖 `Function`。交互卡 srcDoc 在 `sandbox="allow-scripts"` 的 opaque origin 内允许 `unsafe-eval`，包括 `document.write` 重写后的文档；不增加 `allow-same-origin`、主窗口桥或默认网络访问权限。
+10. 卡内变量兼容参考 [Tavern Helper 变量接口定义](https://github.com/N0VI028/JS-Slash-Runner/blob/main/%40types/function/variables.d.ts)，目前提供 get / replace / insertOrAssign / insert 四项。各 scope 在当前 iframe 内分表，`character` / `global` 也不读写宿主角色资产或全局数据。备份大小上限 1 MiB；恢复由用户在宿主表单中粘贴并校验后创建新 iframe，保留 sandbox/CSP/消息来源校验。原生页面刷新会清空内存变量；不提供自动持久化和完整 Tavern Helper API。
+11. 备份恢复必须创建新 iframe 文档。直接 `document.write` 重跑第三方页面会留下顶层词法绑定并触发 const 重声明；跨 opaque-origin 刷新也不能依赖窗口名传递数据。文档内的常规 rewrite 仅用于加载卡片内容，桥只装一层原生包装，重装前清理旧观察器与定时器。
+12. 手机设置布局：`dsh-client-ui-settings-general` 的设置 dialog 在 390px 视口中宽 342px，仍保留 188px 导航及正文两侧 48px 内边距，使 Tavern 正文只剩约 98px（含滚动条差异）。`styles.ts` 在视口不超过 560px 且 dialog 含 `.dsh-tavern-panel` 时，把原导航按钮排成横向滚动顶栏；通过直属 `nav` 与相邻正文结构限定外壳，未替换宿主节点或改其状态。其它设置页/桌面恢复宿主样式；升级时核对 SettingsPanel 结构。主会话侧栏由 `dsh-client-ui-layout` 在低于 1024px 时自动折为 56px，手动展开由用户控制，插件不调用 toggle 强制修改桌面宽度。手机弹窗使用动态视口高度和 flex 正文滚动分配，第三方 iframe 内部是否响应式仍由卡片自身实现决定。
 
 升级 dsh 的检查清单：
 

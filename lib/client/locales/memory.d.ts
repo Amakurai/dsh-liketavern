@@ -1,5 +1,11 @@
 /** 记忆与世界状态面板（panel/memory.tsx）界面文案。zh 为键全集源；en 必须同键齐全（test/i18n.test.ts 校验）。 */
 export declare const zh: {
+    readonly 'memory.deleteConfirm': "删除后，这条记忆将不再用于当前状态的检索。确定删除？";
+    readonly 'memory.storyLabel': "剧情 {index} · {date}";
+    readonly 'memory.scopeStory': "剧情状态";
+    readonly 'memory.scopeInitial': "新会话初始状态";
+    readonly 'memory.scopeStoryDesc': "修改仅影响所选剧情，不会改变其他会话或分支。";
+    readonly 'memory.scopeInitialDesc': "修改用于以后新建的会话，不会改变已经开始的剧情。";
     readonly 'memory.story': "剧情状态";
     readonly 'memory.storyDesc': "各会话和分支独立保存记忆、变化层与笔记。初始状态只影响以后新建的会话。";
     readonly 'memory.initialState': "初始状态（新会话模板）";

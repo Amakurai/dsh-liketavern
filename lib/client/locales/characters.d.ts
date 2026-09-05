@@ -1,5 +1,7 @@
 /** 角色卡分区（panel/characters.tsx）界面文案。zh 为键全集源；en 必须同键齐全（test/i18n.test.ts 校验）。 */
 export declare const zh: {
+    readonly 'characters.detail.greetingNumber': "备选开场白 {index}";
+    readonly 'characters.detail.addGreeting': "添加开场白";
     readonly 'characters.section.desc': "导入或新建角色卡。点进卡片可编辑正文并导出 PNG/JSON。删除会清掉该卡工作区，以及仍指向它的会话绑定。";
     readonly 'characters.what': "角色卡";
     readonly 'characters.importFile': "导入 PNG / JSON";

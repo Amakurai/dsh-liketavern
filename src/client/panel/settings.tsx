@@ -4,7 +4,9 @@
  * 排版对齐通用设置：标题 + 说明 + 右侧 36px 胶囊控件；瞬时保存反馈走 useToast，上下文错误用 Err。
  * 「界面」组只有语言一项：选择即写设置并 setTavernLocale 立即生效，不走 SaveBar。
  */
-import { useEffect, useState } from 'react'
+import { useDraftGuard } from '../drafts.js'
+import { useDraftRestored, useDraftState } from '../draftPersistence.js'
+import { useEffect, useId, useRef, useState } from 'react'
 import { setTavernLocale, useT } from '../i18n.js'
 import { EMPTY_SESSION_DEFAULTS, type PresetSummary, type TavernRemote, type TavernSettings } from '../types.js'
 import { Btn, CheckChips, Err, Muted, NumInput, SaveBar, Section, Select, SettingsRow, Skeleton, Tabs, Toggle, runAsync, useLoader, useToast } from '../util.js'
@@ -26,16 +28,22 @@ let lastSub: SubId | undefined
 export function SettingsSection(props: { remote: TavernRemote }) {
   const { remote } = props
   const t = useT()
+  const tabsId = useId()
   const { state, reload } = useLoader(() => remote.getSettings({}), [])
   const dataInfo = useLoader(() => remote.getDataInfo({}), [])
   const presets = useLoader(() => remote.listPresets({}), [])
   const lore = useLoader(() => remote.listLorebooks({}), [])
   const personas = useLoader(() => remote.listPersonas({}), [])
-  const [sub, setSub] = useState<SubId>(lastSub ?? 'interface')
-  const [draft, setDraft] = useState<TavernSettings | null>(null)
+  const [sub, setSub] = useDraftState<SubId>('settings:sub', lastSub ?? 'interface')
+  const [baseline, setBaseline] = useDraftState<TavernSettings | null>('settings:baseline', null)
+  const [draft, setDraft] = useDraftState<TavernSettings | null>('settings:draft', null)
+  const restoredDraft = useDraftRestored('settings:draft')
+  const restoredBaseline = useDraftRestored('settings:baseline')
+  const receivedSettings = useRef(false)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const toast = useToast()
+  useDraftGuard(draft !== null && baseline !== null && JSON.stringify(draft) !== JSON.stringify(baseline), busy)
 
   /** 老配置可能缺 defaults 键，落成草稿时按 EMPTY_SESSION_DEFAULTS 补齐。 */
   const toDraft = (settings: TavernSettings): TavernSettings => ({
@@ -45,7 +53,12 @@ export function SettingsSection(props: { remote: TavernRemote }) {
   })
 
   useEffect(() => {
-    if (state.status === 'ready') setDraft(toDraft(state.value.settings))
+    if (state.status !== 'ready') return
+    const firstReady = !receivedSettings.current
+    receivedSettings.current = true
+    // 首次远端读取只补没有恢复的字段；null 表示尚未初始化，不应让加载中的快照锁死页面。
+    if (!firstReady || !restoredDraft || draft === null) setDraft(toDraft(state.value.settings))
+    if (!firstReady || !restoredBaseline || baseline === null) setBaseline(toDraft(state.value.settings))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state])
 
@@ -57,6 +70,7 @@ export function SettingsSection(props: { remote: TavernRemote }) {
         return
       }
       const saved = toDraft(r.value.settings)
+      setBaseline(saved)
       // 一页有多个独立保存区：只用服务端返回值刷新本次保存的键，保留其它区尚未保存的草稿。
       setDraft((current) => {
         if (!current) return saved
@@ -77,6 +91,7 @@ export function SettingsSection(props: { remote: TavernRemote }) {
     setTavernLocale(locale)
     void runAsync(setBusy, setError, async () => {
       const r = await remote.updateSettings({ patch: { locale } })
+      if (r.ok) setBaseline((current) => current ? { ...current, locale } : current)
       if (!r.ok) {
         setDraft((current) => (current ? { ...current, locale: prev } : current))
         setTavernLocale(prev)
@@ -116,7 +131,9 @@ export function SettingsSection(props: { remote: TavernRemote }) {
   return (
     <>
       {toast.node}
+      <fieldset disabled={busy} className="dsh-tavern-editorFields">
       <Tabs
+        id={tabsId} panelId={`${tabsId}-panel`} label={t('settings.title')}
         items={SUBS.map((s) => ({ id: s.id, label: t(s.labelKey) }))}
         value={sub}
         onChange={(id) => {
@@ -125,7 +142,7 @@ export function SettingsSection(props: { remote: TavernRemote }) {
         }}
       />
       {/* key=sub 让切组重新挂载并播 fade-up；草稿挂在父组件上，切组不丢未保存编辑 */}
-      <div key={sub} className="dsh-tavern-rise">
+      <div key={sub} id={`${tabsId}-panel`} role="tabpanel" aria-labelledby={`${tabsId}-${sub}`} tabIndex={0} className="dsh-tavern-rise">
         {sub === 'interface' && (
           <Section title={t('settings.interface.title')} description={t('settings.interface.desc')}>
             <SettingsRow title={t('settings.interface.language')} description={t('settings.interface.languageDesc')}>
@@ -380,6 +397,7 @@ export function SettingsSection(props: { remote: TavernRemote }) {
       </div>
 
       <Err message={error} />
+      </fieldset>
     </>
   )
 }

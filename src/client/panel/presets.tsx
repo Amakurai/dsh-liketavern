@@ -2,6 +2,8 @@
  * 设置面板分区：提示词预设（卡片网格 / 导入 / 导出 / 删除 / 条目表格编辑）。
  * 卡片可键盘触发（clickableProps）；保存/导入/设默认等瞬时反馈走 useToast，上下文错误用 Err。
  */
+import { useDraftGuard } from '../drafts.js'
+import { useDraftState } from '../draftPersistence.js'
 import { useState } from 'react'
 import { IconDownloadOutline16, IconEditOutline16, IconFolderOpenOutline16, IconListPenOutline16, IconTrashOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { CardRegexScript, ChatRole, PresetEntry, PromptPreset } from '../../core/types.js'
@@ -102,11 +104,13 @@ export function PresetsSection(props: { remote: TavernRemote }) {
   const { state, reload } = useLoader(() => remote.listPresets({}), [])
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  const [editing, setEditing] = useState<PromptPreset | null>(null)
+  const [baseline, setBaseline] = useDraftState<string | null>('presets:baseline', null)
+  const [editing, setEditing] = useDraftState<PromptPreset | null>('presets:editing', null)
   const [toDelete, setToDelete] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const toast = useToast()
   const t = useT()
+  const guard = useDraftGuard(editing !== null && JSON.stringify(editing) !== baseline, busy)
 
   const items: PresetSummary[] = state.status === 'ready' ? state.value.items : []
   const q = query.trim().toLowerCase()
@@ -115,7 +119,7 @@ export function PresetsSection(props: { remote: TavernRemote }) {
   const open = async (id: string) => {
     await runAsync(setBusy, setError, async () => {
       const r = await remote.getPreset({ id })
-      if (r.ok) setEditing(structuredClone(r.value.preset))
+      if (r.ok) { setEditing(structuredClone(r.value.preset)); setBaseline(JSON.stringify(r.value.preset)) }
       else setError(r.error.message)
     })
   }
@@ -127,6 +131,7 @@ export function PresetsSection(props: { remote: TavernRemote }) {
       const err = errOf(r)
       if (err) setError(err)
       else {
+        setBaseline(JSON.stringify(editing))
         toast.show(t('presets.saved', { name: editing.name }))
         reload()
       }
@@ -233,11 +238,12 @@ export function PresetsSection(props: { remote: TavernRemote }) {
   return (
     <Section title={t('section.presets')} description={t('presets.section.desc')}>
       {toast.node}
+      {guard.confirmation}
       <div className="dsh-tavern-toolbar">
         <FileBtn accept=".json" disabled={busy} onFile={(file) => void onImportFile(file)}>
           {t('presets.importFile')}
         </FileBtn>
-        <Btn size="md" onClick={createNew}>{t('presets.new')}</Btn>
+        <Btn size="md" onClick={() => guard.request(createNew)}>{t('presets.new')}</Btn>
         <Btn size="md" onClick={reload} disabled={busy}>{t('action.refresh')}</Btn>
         {items.length >= 5 && (
           <SearchInput label={t('presets.searchLabel')} value={query} onChange={setQuery} placeholder={t('presets.searchPlaceholder')} width={220} />
@@ -266,7 +272,7 @@ export function PresetsSection(props: { remote: TavernRemote }) {
       )}
       <div className="dsh-tavern-list" style={{ marginBottom: 12 }}>
         {filtered.map((item) => (
-          <div key={item.id} className="dsh-tavern-tile" {...clickableProps(() => void open(item.id))}>
+          <div key={item.id} className="dsh-tavern-tile" {...clickableProps(() => guard.request(() => void open(item.id)))}>
             <span className="dsh-tavern-tileIcon">
               <IconListPenOutline16 size={18} />
             </span>
@@ -278,7 +284,7 @@ export function PresetsSection(props: { remote: TavernRemote }) {
               <span className="dsh-tavern-tileSub">{item.id}</span>
             </div>
             <div className="dsh-tavern-tileActions">
-              <IconBtn label={t('action.edit')} onClick={() => void open(item.id)}>
+              <IconBtn label={t('action.edit')} onClick={() => guard.request(() => void open(item.id))}>
                 <IconEditOutline16 />
               </IconBtn>
               <IconBtn label={t('presets.export')} disabled={busy} onClick={() => void exportPreset(item.id, item.name)}>
@@ -303,7 +309,7 @@ export function PresetsSection(props: { remote: TavernRemote }) {
         onConfirm={() => void remove()}
       />
       {editing && (
-        <div className="dsh-tavern-card" style={{ marginBottom: 12 }}>
+        <fieldset disabled={busy} className="dsh-tavern-editorFields dsh-tavern-card" style={{ marginBottom: 12 }}>
           <Field label={t('presets.name')}>
             <input className="dsh-tavern-input" style={{ flex: 1 }} value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} />
           </Field>
@@ -327,11 +333,12 @@ export function PresetsSection(props: { remote: TavernRemote }) {
             ))}
           </div>
           <SaveBar>
+            <span className="dsh-tavern-muted">{JSON.stringify(editing) !== baseline ? t('draft.unsaved') : ''}</span>
             <Btn onClick={() => setEditing({ ...editing, entries: [...editing.entries, newEntry(editing.entries.length * 100 + 100)] })}>{t('presets.addEntry')}</Btn>
             <Btn disabled={busy} onClick={() => void save()} primary>{t('presets.save')}</Btn>
-            <Btn onClick={() => setEditing(null)}>{t('action.close')}</Btn>
+            <Btn onClick={() => guard.request(() => setEditing(null))}>{t('action.close')}</Btn>
           </SaveBar>
-        </div>
+        </fieldset>
       )}
     </Section>
   )

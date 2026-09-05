@@ -19,6 +19,7 @@ export declare function cachedSessionBinding(remote: TavernRemote, sessionId: st
     binding: import("./types.js").SessionBinding | null;
     userName: string;
     canSwipeGreeting: boolean;
+    conversationStarted: boolean;
 }>>;
 /** 角色详情（key=cardId）。 */
 export declare function cachedCharacterDetail(remote: TavernRemote, cardId: string): Promise<Envelope<import("./types.js").CharacterDetail>>;

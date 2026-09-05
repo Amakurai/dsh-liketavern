@@ -1,6 +1,13 @@
 /** 新会话英雄区（hero.tsx）界面文案。zh 为键全集源；en 必须同键齐全（test/i18n.test.ts 校验）。 */
 
 export const zh = {
+  'hero.picker.embeddedBook': '内嵌世界书',
+  'hero.picker.recent': '最近使用',
+  'hero.picker.selected': '已选择',
+  'hero.picker.back': '返回角色选择',
+  'hero.picker.manage': '导入 / 创建角色',
+  'hero.picker.empty': '添加一张角色卡，选择开场白，就可以开始故事。',
+  'hero.picker.more': '显示更多角色',
   'hero.characterFallback': '角色',
   'hero.loadingCharacters': '加载角色卡…',
   'hero.creator': '作者 {name}',
@@ -19,6 +26,13 @@ export const zh = {
 } as const
 
 export const en: Record<keyof typeof zh, string> = {
+  'hero.picker.embeddedBook': 'Embedded lorebook',
+  'hero.picker.recent': 'Recently used',
+  'hero.picker.selected': 'Selected',
+  'hero.picker.back': 'Back to character selection',
+  'hero.picker.manage': 'Import / create character',
+  'hero.picker.empty': 'Add a character, choose a greeting, and start your story.',
+  'hero.picker.more': 'Show more characters',
   'hero.characterFallback': 'Character',
   'hero.loadingCharacters': 'Loading characters…',
   'hero.creator': 'By {name}',

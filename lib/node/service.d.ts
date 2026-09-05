@@ -29,6 +29,19 @@ export declare class TavernService extends TypertRemoteService implements Tavern
      * 且能捕获绕开写方法直写磁盘的路径（WAL 回滚 / 外部换图）。
      */
     private readonly avatarCache;
+    getEditorDraft(request: {
+        owner: string;
+        key: string;
+    }): Promise<TavernMethodResults['getEditorDraft']>;
+    saveEditorDraft(request: {
+        owner: string;
+        key: string;
+        value: unknown;
+    }): Promise<TavernMethodResults['saveEditorDraft']>;
+    deleteEditorDraft(request: {
+        owner: string;
+        key: string;
+    }): Promise<TavernMethodResults['deleteEditorDraft']>;
     getSettings(_request: Record<string, never>): TavernMethodResults['getSettings'];
     updateSettings(request: {
         patch: unknown;
@@ -144,6 +157,8 @@ export declare class TavernService extends TypertRemoteService implements Tavern
     saveRegexRules(request: {
         rules: RegexRule[];
     }): Promise<TavernMethodResults['saveRegexRules']>;
+    /** 以已提交日志判定是否进入对话，避免客户端 blank 镜像滞后时误清绑定。 */
+    private conversationStarted;
     getSessionBinding(request: {
         sessionId: string;
     }): Promise<TavernMethodResults['getSessionBinding']>;
@@ -152,6 +167,7 @@ export declare class TavernService extends TypertRemoteService implements Tavern
     }): Promise<TavernMethodResults['setSessionBinding']>;
     clearSessionBinding(request: {
         sessionId: string;
+        onlyIfBlank?: boolean;
     }): Promise<TavernMethodResults['clearSessionBinding']>;
     ensureGreeting(request: {
         sessionId: string;

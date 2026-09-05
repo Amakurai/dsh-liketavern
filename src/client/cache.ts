@@ -19,6 +19,8 @@ import type { Envelope, TavernRemote } from './types.js'
 const META_TTL_MS = 30_000
 /** 头像 dataURL 体积最大、且客户端没有改头像的写路径，放宽到 60s。 */
 const AVATAR_TTL_MS = 60_000
+/** 与读取界面的 20s 超时一致；断线悬挂的 RPC 不能永久占住重试入口。 */
+const PENDING_TTL_MS = 20_000
 
 /** remote 方法的裸业务结果类型（信封内 value；与 service 实现同源，不另手写形状）。 */
 type ResultOf<M extends keyof TavernRemote> = Awaited<ReturnType<TavernRemote[M]>> extends Envelope<infer T> ? T : never
@@ -30,12 +32,12 @@ interface CacheEntry<T> {
 }
 
 /**
- * 读一条缓存：in-flight 共享 > TTL 内命中 > 重拉。只缓存成功信封——错误信封多为
+ * 读一条缓存：限时共享 in-flight > TTL 内命中 > 重拉。只缓存成功信封——错误信封多为
  * 上下文性失败（未绑定/服务未就绪），下次应真打 remote；reject 同理不留痕迹。
  */
 function read<T>(map: Map<string, CacheEntry<T>>, key: string, ttlMs: number, load: () => Promise<Envelope<T>>): Promise<Envelope<T>> {
   const hit = map.get(key)
-  if (hit?.pending) return hit.pending
+  if (hit?.pending && Date.now() - hit.at < PENDING_TTL_MS) return hit.pending
   if (hit?.value && Date.now() - hit.at < ttlMs) return Promise.resolve(hit.value)
   const pending = load().then(
     (r) => {

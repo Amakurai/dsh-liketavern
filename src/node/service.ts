@@ -30,6 +30,7 @@ import { impersonate } from './impersonate.js'
 import { runTavernPipeline } from './pipeline.js'
 import type { Persona, TavernState } from './state.js'
 import type { TavernMethodResults } from '../remote.js'
+import { deleteEditorDraft, getEditorDraft, saveEditorDraft } from './editorDrafts.js'
 
 /** 头像缓存条数上限：卡删除/再导入会产生新 cardId，旧条目无人主动清，超上限淘汰最旧（只多一次重读，无正确性影响）。 */
 const AVATAR_CACHE_MAX = 32
@@ -51,6 +52,22 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
    * 且能捕获绕开写方法直写磁盘的路径（WAL 回滚 / 外部换图）。
    */
   private readonly avatarCache = new Map<string, { fingerprint: string; dataUrl: string | null }>()
+
+  // ── 未提交的编辑器草稿 ────────────────────────────────────────────────────
+
+  async getEditorDraft(request: { owner: string; key: string }): Promise<TavernMethodResults['getEditorDraft']> {
+    return { draft: await getEditorDraft(this.state.paths.root, request.owner, request.key) }
+  }
+
+  async saveEditorDraft(request: { owner: string; key: string; value: unknown }): Promise<TavernMethodResults['saveEditorDraft']> {
+    await saveEditorDraft(this.state.paths.root, request.owner, request.key, request.value)
+    return { saved: true }
+  }
+
+  async deleteEditorDraft(request: { owner: string; key: string }): Promise<TavernMethodResults['deleteEditorDraft']> {
+    await deleteEditorDraft(this.state.paths.root, request.owner, request.key)
+    return { deleted: true }
+  }
 
   // ── 设置 ─────────────────────────────────────────────────────────────────
 
@@ -355,13 +372,21 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
 
   // ── 会话绑定 ──────────────────────────────────────────────────────────────
 
+  /** 以已提交日志判定是否进入对话，避免客户端 blank 镜像滞后时误清绑定。 */
+  private conversationStarted(sessionId: string): boolean {
+    return this.ctx.sessions.get(sessionId as Session['id'])?.snapshotEvents().some(
+      (e) => e.type === 'turn/start' || e.type === 'assistant/message' || e.type === 'user/message',
+    ) ?? false
+  }
+
   async getSessionBinding(request: { sessionId: string }): Promise<TavernMethodResults['getSessionBinding']> {
-    const session = this.ctx.sessions.get(request.sessionId as Session['id'])
-    const canSwipeGreeting = Boolean(session && !session.snapshotEvents().some((e) => e.type === 'user/message'))
     const binding = await this.state.loadBinding(request.sessionId)
-    if (!binding) return { binding: null, userName: DEFAULT_USER_NAME, canSwipeGreeting: false }
-    const persona = await this.state.resolvePersona(binding.personaId)
-    return { binding, userName: persona?.name ?? DEFAULT_USER_NAME, canSwipeGreeting }
+    const persona = binding ? await this.state.resolvePersona(binding.personaId) : null
+    // 异步读资产期间可能刚写入开场白，返回前再取日志状态，避免向 hero 回传旧 blank 判定。
+    const session = this.ctx.sessions.get(request.sessionId as Session['id'])
+    const canSwipeGreeting = Boolean(binding && session && !session.snapshotEvents().some((e) => e.type === 'user/message'))
+    const conversationStarted = this.conversationStarted(request.sessionId)
+    return { binding, userName: persona?.name ?? DEFAULT_USER_NAME, canSwipeGreeting, conversationStarted }
   }
 
   async setSessionBinding(request: { binding: unknown }): Promise<TavernMethodResults['setSessionBinding']> {
@@ -388,8 +413,16 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
     return { saved: true }
   }
 
-  async clearSessionBinding(request: { sessionId: string }): Promise<TavernMethodResults['clearSessionBinding']> {
+  async clearSessionBinding(request: { sessionId: string; onlyIfBlank?: boolean }): Promise<TavernMethodResults['clearSessionBinding']> {
     if (!request.sessionId) throw new FloorError('invalid-binding', '绑定缺少 sessionId')
+    if (request.onlyIfBlank === true) {
+      // 与 ensureGreeting、inbox 初始化共用队列，在真正删除前重新确认状态。
+      return this.state.enqueueSessionTask(request.sessionId, async () => {
+        if (this.conversationStarted(request.sessionId)) return { cleared: false }
+        await this.state.clearBinding(request.sessionId)
+        return { cleared: true }
+      })
+    }
     await this.state.clearBinding(request.sessionId)
     return { cleared: true }
   }
@@ -399,6 +432,7 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
   async ensureGreeting(request: { sessionId: string }): Promise<TavernMethodResults['ensureGreeting']> {
     return this.state.enqueueSessionTask(request.sessionId, async () => ({
       created: await enterGreetingConversation(this.floorDeps(), request.sessionId),
+      conversationStarted: this.conversationStarted(request.sessionId),
     }))
   }
 

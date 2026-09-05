@@ -12,7 +12,7 @@
  * 代价是链式方法要写成顶层函数式：`.min(1)` → `check(minLength(1))`、`.optional()` → `optional(...)`。
  */
 import type { infer as Infer } from 'zod/mini'
-import { array, boolean, enum as enum_, int, literal, minimum, minLength, nullable, number, object, optional, string, union, unknown } from 'zod/mini'
+import { array, boolean, enum as enum_, int, literal, maxLength, minimum, minLength, nullable, number, object, optional, regex, string, union, unknown } from 'zod/mini'
 import type { ZodMiniType } from 'zod/mini'
 import type { AssembledPrompt } from './core/assemble.js'
 import type { SessionBinding } from './core/binding.js'
@@ -85,9 +85,17 @@ const sessionIdField = { sessionId: nonEmpty() }
 const cardIdField = { cardId: nonEmpty() }
 const storyScope = { ...cardIdField, storyId: optional(nonEmpty()) }
 const messageIdField = { messageId: nonEmpty() }
+const editorDraftScope = {
+  owner: string().check(regex(/^[A-Za-z0-9_-]{8,80}$/)),
+  key: string().check(minLength(1), maxLength(300)),
+}
 
 /** method → [request shape, value schema, 简介] */
 export const METHODS = {
+  // 未提交的编辑器草稿独立保存，不改动业务资产。
+  getEditorDraft: { req: object(editorDraftScope), value: anyValue, summary: '读取当前浏览器的编辑器草稿' },
+  saveEditorDraft: { req: object({ ...editorDraftScope, value: anyValue }), value: anyValue, summary: '保存当前浏览器的编辑器草稿' },
+  deleteEditorDraft: { req: object(editorDraftScope), value: anyValue, summary: '删除当前浏览器的编辑器草稿' },
   listStories: { req: object(cardIdField), value: anyValue, summary: '列出角色的独立剧情状态' },
   // 角色
   listCharacters: { req: object({}), value: anyValue, summary: '列出全部角色卡' },
@@ -182,7 +190,7 @@ export const METHODS = {
   // 会话绑定
   getSessionBinding: { req: object({ ...sessionIdField }), value: anyValue, summary: '读取会话绑定' },
   setSessionBinding: { req: object({ binding: sessionBinding() }), value: anyValue, summary: '保存会话绑定' },
-  clearSessionBinding: { req: object({ ...sessionIdField }), value: anyValue, summary: '清除会话角色卡绑定' },
+  clearSessionBinding: { req: object({ ...sessionIdField, onlyIfBlank: optional(boolean()) }), value: anyValue, summary: '清除会话角色卡绑定（可限于尚未开始的会话）' },
   // 开场白
   ensureGreeting: { req: object({ ...sessionIdField }), value: anyValue, summary: '确保会话有开场白' },
   getGreetingSwipe: {
@@ -393,6 +401,9 @@ export interface ContextUsage {
 
 /** 方法名 → 裸业务结果类型。加/改 remote 方法时必须与 METHODS、service 实现、client 镜像同步。 */
 export interface TavernMethodResults {
+  getEditorDraft: { draft: { value: unknown; updatedAt: string } | null }
+  saveEditorDraft: { saved: true }
+  deleteEditorDraft: { deleted: true }
   listStories: { items: import('./state/story.js').StorySummary[] }
   // 角色
   listCharacters: { items: CharacterSummary[] }
@@ -431,11 +442,11 @@ export interface TavernMethodResults {
   listRegexRules: { rules: RegexRule[] }
   saveRegexRules: { count: number }
   // 会话绑定
-  getSessionBinding: { binding: SessionBinding | null; userName: string; canSwipeGreeting: boolean }
+  getSessionBinding: { binding: SessionBinding | null; userName: string; canSwipeGreeting: boolean; conversationStarted: boolean }
   setSessionBinding: { saved: boolean }
   clearSessionBinding: { cleared: boolean }
   // 开场白
-  ensureGreeting: { created: boolean }
+  ensureGreeting: { created: boolean; conversationStarted: boolean }
   getGreetingSwipe: GreetingFloorState
   renderOutputText: RenderedOutput
   swipeGreeting: { childSessionId: string; index: number; title: string }

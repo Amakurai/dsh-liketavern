@@ -1,16 +1,17 @@
 /**
  * 交互卡 srcDoc：默认放行 https 图片/字体；注入 ST stub；解析 swipe 桥消息。
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import { createContext, runInContext } from 'node:vm'
 import { buildCardSrcDoc, CARD_BRIDGE_SOURCE, parseCardBridgeMessage, tavernCardBridgeScript } from '../src/core/cardFrame.js'
 
 describe('buildCardSrcDoc', () => {
-  it('CSP 默认允许 https 图片与字体，connect-src 默认 none、script-src 仅内联', () => {
+  it('CSP 允许沙箱内模板编译，默认不加载外部脚本或连接网络', () => {
     const doc = buildCardSrcDoc('<html><head></head><body>hi</body></html>', { greetings: ['cover'], greetingIndex: 0 })
     expect(doc).toContain("img-src https: http: data: blob:")
     expect(doc).toContain("font-src https: http: data:")
     expect(doc).toContain("connect-src 'none'")
-    expect(doc).toContain("script-src 'unsafe-inline';")
+    expect(doc).toContain("script-src 'unsafe-inline' 'unsafe-eval';")
     expect(doc).toContain('getChatMessages')
     expect(doc).toContain('setChatMessage')
     expect(doc).toContain('SillyTavern')
@@ -25,7 +26,7 @@ describe('buildCardSrcDoc', () => {
       connectHosts: ['example.com'],
     })
     expect(doc).toContain('connect-src https://example.com')
-    expect(doc).toContain("script-src 'unsafe-inline' https://example.com")
+    expect(doc).toContain("script-src 'unsafe-inline' 'unsafe-eval' https://example.com")
   })
 
   it('白名单 * = 全部放行 https/http', () => {
@@ -35,7 +36,7 @@ describe('buildCardSrcDoc', () => {
       connectHosts: ['*'],
     })
     expect(doc).toContain('connect-src https: http:')
-    expect(doc).toContain("script-src 'unsafe-inline' https: http:")
+    expect(doc).toContain("script-src 'unsafe-inline' 'unsafe-eval' https: http:")
   })
 
   it('非法白名单条目被丢弃：含引号/空白的注入尝试不进 CSP', () => {
@@ -62,6 +63,24 @@ describe('buildCardSrcDoc', () => {
 })
 
 describe('tavernCardBridgeScript', () => {
+  it('重装桥后重写文档仍直达原生方法，不叠加旧包装或旧观察器', () => {
+    const nativeOpen = vi.fn(), nativeWrite = vi.fn(), nativeClose = vi.fn()
+    const window = { name: '', addEventListener: vi.fn(), removeEventListener: vi.fn(), location: { reload: vi.fn() } }
+    const document = { open: nativeOpen, write: nativeWrite, close: nativeClose, currentScript: null,
+      querySelector: () => null, readyState: 'loading', addEventListener: vi.fn(), removeEventListener: vi.fn() }
+    const context = createContext({ window, document, parent: { postMessage: vi.fn() }, TextEncoder, clearTimeout, setTimeout })
+    const script = tavernCardBridgeScript({ greetings: [], greetingIndex: 0 }).replace(/^<script[^>]*>/, '').replace(/<\/script>$/, '')
+    for (let n = 0; n < 3; n++) {
+      runInContext(script, context)
+      document.open()
+      document.write('<html><head></head><body>工厂页面</body></html>')
+      document.close()
+    }
+    expect(nativeOpen).toHaveBeenCalledTimes(3)
+    expect(nativeWrite).toHaveBeenCalledTimes(3)
+    expect(nativeClose).toHaveBeenCalledTimes(3)
+    expect(window.removeEventListener).toHaveBeenCalledTimes(2)
+  })
   it('把开场白变体编进脚本，避免 </script> 打断', () => {
     const script = tavernCardBridgeScript({ greetings: ['cover</script>', 'alt-greeting'], greetingIndex: 0 })
     expect(script).toContain('\\u003c')

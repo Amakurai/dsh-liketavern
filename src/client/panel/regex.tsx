@@ -2,6 +2,8 @@
  * 设置面板分区：全局正则脚本（列表 + enabled 开关 + 编辑，整表保存）。
  * find/replace 等代码向输入用 code 字体类；保存反馈走 useToast，上下文错误用 Err。
  */
+import { useDraftGuard } from '../drafts.js'
+import { useDraftState } from '../draftPersistence.js'
 import { useEffect, useState } from 'react'
 import { IconTrashOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PromptPreset, RegexRule, RegexScope, RegexTiming } from '../../core/types.js'
@@ -106,10 +108,12 @@ export function RegexSection(props: { remote: TavernRemote }) {
   const t = useT()
   const { remote } = props
   const { state, reload } = useLoader(() => remote.listRegexRules({}), [])
-  const [rules, setRules] = useState<RegexRule[] | null>(null)
+  const [rules, setRules] = useDraftState<RegexRule[] | null>('regex:rules', null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const toast = useToast()
+  const [savedRules, setSavedRules] = useDraftState<string | null>('regex:savedRules', null)
+  useDraftGuard(rules !== null && JSON.stringify(rules) !== (savedRules ?? (state.status === 'ready' ? JSON.stringify(state.value.rules) : null)), busy)
 
   useEffect(() => {
     if (state.status === 'ready' && rules === null) setRules(structuredClone(state.value.rules))
@@ -170,7 +174,7 @@ export function RegexSection(props: { remote: TavernRemote }) {
       const r = await remote.saveRegexRules({ rules: next })
       const err = errOf(r)
       if (err) setError(err)
-      else toast.show(t('regex.saved', { count: next.length }))
+      else { setSavedRules(JSON.stringify(next)); toast.show(t('regex.saved', { count: next.length })) }
     })
 
   const current = rules ?? []
@@ -190,7 +194,8 @@ export function RegexSection(props: { remote: TavernRemote }) {
       {state.status === 'error' && <Err message={state.message} />}
       <Err message={error} />
       {rules !== null && (
-        <>
+        <div className="dsh-tavern-regexCustom">
+          <div className="dsh-tavern-groupHead">{t('regex.customHead')}</div>
           {current.map((rule, i) => (
             <RuleEditor
               key={rule.id}
@@ -204,12 +209,12 @@ export function RegexSection(props: { remote: TavernRemote }) {
             />
           ))}
           {current.length === 0 && (
-            <div className="dsh-tavern-empty is-compact">
+            <div className="dsh-tavern-regexEmpty">
               <div className="dsh-tavern-emptyTitle">{t('regex.emptyTitle')}</div>
               <div className="dsh-tavern-emptyDesc">{t('regex.emptyDesc')}</div>
             </div>
           )}
-          <SaveBar>
+          <SaveBar inline>
             <Btn onClick={() => setRules([...current, newRule()])}>{t('regex.new')}</Btn>
             <Btn disabled={busy} onClick={() => void save(current)} primary>{t('regex.saveAll')}</Btn>
             <Btn
@@ -221,32 +226,34 @@ export function RegexSection(props: { remote: TavernRemote }) {
               {t('regex.discard')}
             </Btn>
           </SaveBar>
-        </>
+        </div>
       )}
 
-      <div className="dsh-tavern-groupHead">{t('regex.presetHead')}</div>
-      {presetRegex.state.status === 'loading' && (
-        <>
-          <Skeleton height={56} />
-          <Skeleton height={56} />
-        </>
-      )}
-      {presetRegex.state.status === 'error' && <Err message={presetRegex.state.message} />}
-      {presetDrafts !== null && presetDrafts.length === 0 && (
-        <Muted>{t('regex.noPresetRegex')}</Muted>
-      )}
-      {(presetDrafts ?? []).map((preset, pi) => (
-        <div key={preset.identifier}>
-          <div className="dsh-tavern-fieldLabel" style={{ margin: '12px 0 6px' }}>
-            {t('regex.presetCount', { name: preset.name?.trim() || preset.identifier, count: preset.regexScripts!.length })}
+      <div className="dsh-tavern-regexPresets">
+        <div className="dsh-tavern-groupHead">{t('regex.presetHead')}</div>
+        {presetRegex.state.status === 'loading' && (
+          <>
+            <Skeleton height={56} />
+            <Skeleton height={56} />
+          </>
+        )}
+        {presetRegex.state.status === 'error' && <Err message={presetRegex.state.message} />}
+        {presetDrafts !== null && presetDrafts.length === 0 && (
+          <Muted>{t('regex.noPresetRegex')}</Muted>
+        )}
+        {(presetDrafts ?? []).map((preset, pi) => (
+          <div className="dsh-tavern-regexPreset" key={preset.identifier}>
+            <div className="dsh-tavern-fieldLabel">
+              {t('regex.presetCount', { name: preset.name?.trim() || preset.identifier, count: preset.regexScripts!.length })}
+            </div>
+            <div className="dsh-tavern-list">
+              {preset.regexScripts!.map((s, si) => (
+                <RegexScriptRow key={s.id ?? si} script={s} index={si} disabled={busy} onToggle={(disabled) => void togglePresetScript(pi, si, disabled)} />
+              ))}
+            </div>
           </div>
-          <div className="dsh-tavern-list">
-            {preset.regexScripts!.map((s, si) => (
-              <RegexScriptRow key={s.id ?? si} script={s} index={si} disabled={busy} onToggle={(disabled) => void togglePresetScript(pi, si, disabled)} />
-            ))}
-          </div>
-        </div>
-      ))}
+        ))}
+      </div>
     </Section>
   )
 }

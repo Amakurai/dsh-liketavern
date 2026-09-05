@@ -7,7 +7,35 @@
  */
 const STYLE_ID = 'dsh-tavern-ui-style'
 
+/** 仅注入卡内沙箱的备份工具；不依赖主页面样式继承，也不覆盖卡片自身控件。 */
+export const CARD_VARIABLE_STYLES = `
+#dsh-tavern-variable-backup{box-sizing:border-box;margin:8px;padding:10px 12px;border:1px solid var(--dsw-alias-border-l2,GrayText);
+  border-radius:8px;font:13px/1.5 system-ui;background:var(--dsw-alias-bg-layer-2,Canvas);color:var(--dsw-alias-label-primary,CanvasText);position:relative;z-index:1}
+#dsh-tavern-variable-backup summary{cursor:pointer;min-height:28px}
+#dsh-tavern-variable-backup textarea{box-sizing:border-box;display:block;width:100%;min-height:90px;margin:8px 0;font:12px/1.5 monospace}
+#dsh-tavern-variable-backup button{min-height:32px;margin:4px 8px 4px 0;cursor:pointer}
+`
+
 const STYLE = `
+/* 编辑器与剧情上下文：边界信息持续可见，正文与操作在窄容器内自然换行。 */
+.dsh-tavern-editorFields{border:0;margin:0;padding:0;min-width:0}
+.dsh-tavern-draftStatus{margin-bottom:10px}
+.dsh-tavern-cardBackupBar{display:flex;justify-content:flex-end;margin:6px 0 12px}
+.dsh-tavern-storyContext{display:flex;flex-direction:column;gap:8px;padding:16px;border-radius:14px;
+  background:var(--tavern-accent-softer);border:1px solid var(--tavern-accent-border);font-size:13px;line-height:21px;overflow-wrap:anywhere}
+.dsh-tavern-storyContextTitle{display:flex;flex-wrap:wrap;align-items:center;gap:10px}
+.dsh-tavern-pickerList{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(250px,100%),1fr));gap:10px}
+.dsh-tavern-pickerItem{appearance:none;display:flex;align-items:center;gap:12px;padding:14px;min-width:0;text-align:left;
+  font:inherit;color:var(--dsw-alias-label-primary, CanvasText);background:var(--dsw-alias-bg-layer-2, Canvas);
+  border:1px solid var(--dsw-alias-border-l2, GrayText);border-radius:14px;cursor:pointer}
+.dsh-tavern-pickerItem:hover,.dsh-tavern-pickerItem[aria-pressed="true"]{border-color:var(--tavern-accent-border);background:var(--tavern-accent-softer)}
+.dsh-tavern-pickerItem:disabled{opacity:.6;cursor:wait}
+.dsh-tavern-pickerText{display:flex;flex-direction:column;gap:4px;min-width:0;flex:1}
+.dsh-tavern-pickerText strong{font-size:15px;overflow-wrap:anywhere}
+.dsh-tavern-pickerText>span{font-size:12px;color:var(--dsw-alias-label-secondary, inherit);overflow-wrap:anywhere}
+.dsh-tavern-greetingEntry{display:flex;flex-direction:column;gap:8px;padding:12px 0;border-bottom:1px solid var(--dsw-alias-border-l1, GrayText)}
+.dsh-tavern-greetingEntry>button{align-self:flex-end}
+
 /* ========== 基础 ========== */
 .dsh-tavern-ui{
   color:var(--dsw-alias-label-primary, inherit);color-scheme:inherit;
@@ -19,7 +47,7 @@ const STYLE = `
   --tavern-accent-softer:rgba(65,118,230,.07);
   --tavern-accent-border:rgba(65,118,230,.32);
 }
-.dsh-tavern-panel{max-width:880px}
+.dsh-tavern-panel{max-width:880px;container-type:inline-size;container-name:tavern-panel}
 .dsh-tavern-ui ::selection{background:var(--dsw-alias-bg-multi-select, rgba(84,85,87,.55));color:var(--dsw-alias-label-primary, #fff)}
 .dsh-tavern-ui input,.dsh-tavern-ui textarea,.dsh-tavern-ui select{
   color:var(--dsw-alias-label-primary, CanvasText);
@@ -105,8 +133,17 @@ const STYLE = `
 .dsh-tavern-row.is-stacked .dsh-tavern-rowControl{width:100%}
 .dsh-tavern-row.is-stacked .dsh-tavern-rowControl .dsh-tavern-select{width:100%}
 /* 分组保存行：与上方表单一条淡分隔，操作左齐 */
-.dsh-tavern-saveBar{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-top:6px;padding-top:16px;
+.dsh-tavern-saveBar{position:sticky;bottom:0;z-index:1;background:var(--dsw-alias-bg-base, Canvas);padding-bottom:12px;display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-top:6px;padding-top:16px;
   border-top:1px solid var(--dsw-alias-border-l1, rgba(128,128,128,.14))}
+/* 正则页的操作属于自定义规则分组，不吸底遮住下方独立保存的预设开关。 */
+.dsh-tavern-saveBar.is-inline{position:static;background:transparent;margin:0;padding:12px 0 0}
+.dsh-tavern-regexCustom{display:flex;flex-direction:column;gap:12px;min-width:0;padding:16px;
+  border:1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.18));border-radius:14px}
+.dsh-tavern-regexCustom>.dsh-tavern-groupHead,.dsh-tavern-regexPresets>.dsh-tavern-groupHead{margin:0}
+.dsh-tavern-regexEmpty{display:flex;flex-direction:column;gap:4px;align-items:flex-start;padding:4px 0 8px}
+.dsh-tavern-regexPresets{display:flex;flex-direction:column;gap:14px;min-width:0;margin-top:4px}
+.dsh-tavern-regexPreset{display:flex;flex-direction:column;gap:8px;min-width:0}
+.dsh-tavern-regexPreset>.dsh-tavern-fieldLabel{line-height:19px;overflow-wrap:anywhere}
 
 /* ========== 卡片与列表 ========== */
 /* 通用卡片容器（预设/人设的内联编辑卡等）；网格版海报卡与瓦片行见后文专节 */
@@ -156,6 +193,8 @@ const STYLE = `
 .dsh-tavern-avatar>img{width:100%;height:100%;object-fit:cover;display:block}
 
 /* ========== 控件 ========== */
+/* 宿主 Button 只设置字号，显式继承字体以免 Windows 的表单默认字体混入正文。 */
+.dsh-tavern-btn{font-family:inherit}
 .dsh-tavern-file{display:inline-flex}
 .dsh-tavern-select{display:block;width:100%;min-width:0;max-width:100%}
 .dsh-tavern-select > span{display:block;width:100%}
@@ -197,7 +236,7 @@ const STYLE = `
 .dsh-tavern-iconBtn:disabled{opacity:.4;cursor:default;background:0 0}
 
 /* 搜索框（38px 胶囊 + 前导图标） */
-.dsh-tavern-search{display:flex;align-items:center;gap:8px;width:100%;min-width:0;height:38px;padding:0 14px;
+.dsh-tavern-search{box-sizing:border-box;max-width:100%;display:flex;align-items:center;gap:8px;width:100%;min-width:0;height:38px;padding:0 14px;
   border-radius:19px;border:1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.25));
   background:var(--dsw-alias-bg-layer-2, transparent)}
 .dsh-tavern-search:focus-within{border-color:var(--dsw-alias-state-business-primary, #4176e6)}
@@ -229,7 +268,7 @@ const STYLE = `
   color:var(--tavern-accent-strong, #4176e6)}
 
 /* ========== 角色海报卡（封面 + 底部渐变名条） ========== */
-.dsh-tavern-charGrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(208px,1fr));gap:16px;margin:0;padding:0;list-style:none}
+.dsh-tavern-charGrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(208px,100%),1fr));gap:16px;margin:0;padding:0;list-style:none}
 .dsh-tavern-charCard{position:relative;display:flex;flex-direction:column;border-radius:18px;overflow:hidden;min-width:0;cursor:pointer;
   border:1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.18));
   background:var(--dsw-alias-bg-layer-3, transparent);
@@ -376,7 +415,7 @@ const STYLE = `
 .dsh-tavern-modalContent{max-height:calc(100vh - 72px);overflow:auto}
 /* 带 footer 的弹窗：滚动区再让出 footer 高度（窄宽时按钮两行 ≈116px），否则整个弹窗被顶出视口、footer 被裁 */
 .dsh-tavern-modalContent.dsh-tavern-modalHasFooter{max-height:calc(100vh - 188px)}
-.dsh-tavern-modalBody{min-width:0}
+.dsh-tavern-modalBody{min-width:0;container-type:inline-size;container-name:tavern-panel}
 .dsh-tavern-modalPre{white-space:pre-wrap;font-size:12px;line-height:19px;max-height:60vh;overflow:auto;margin:0}
 .dsh-tavern-binding{display:flex;flex-direction:column;gap:16px;min-width:0}
 /* 绑定弹窗（full 档）：分组卡双栏网格排布；错误条与用量条通栏，窄视口回落单栏。 */
@@ -515,6 +554,71 @@ const STYLE = `
 .dsh-tavern-hero-actions .dsh-tavern-hero-swipe{margin-left:auto;margin-top:0}
 .dsh-tavern-hero-error{color:var(--dsw-alias-state-error-primary, #ec1313);font-size:12px;
   max-width:var(--dsh-chat-content-width, 748px);margin:0 auto 8px;padding:0 var(--dsh-composer-side-clearance, 16px)}
+/* 根据宿主分配的面板宽度而非整个窗口调整；弹窗和设置页共用规则。 */
+@container tavern-panel (max-width:560px){
+  .dsh-tavern-row{flex-direction:column;align-items:stretch;gap:10px;padding:14px 0}
+  .dsh-tavern-rowText{padding-right:0}
+  .dsh-tavern-rowControl,.dsh-tavern-rowControl .dsh-tavern-select{width:100%}
+  .dsh-tavern-fieldRow{grid-template-columns:minmax(0,1fr);gap:12px}
+  .dsh-tavern-navPills{display:flex;flex-wrap:nowrap;overflow-x:auto;border-radius:14px}
+  .dsh-tavern-navPill{flex:none;padding:0 12px;min-height:36px}
+  .dsh-tavern-tile{flex-wrap:wrap}
+  .dsh-tavern-tileActions{flex-wrap:wrap;margin-left:auto}
+  .dsh-tavern-footGroup{flex-wrap:wrap;flex:1;justify-content:flex-end}
+  .dsh-tavern-panelCard{padding:14px;min-width:0}
+  .dsh-tavern-bindingWide{grid-template-columns:minmax(0,1fr)}
+  .dsh-tavern-memoHead{flex-wrap:wrap}
+  .dsh-tavern-memoMeta{white-space:normal}
+  .dsh-tavern-toolbar .dsh-tavern-search{width:100% !important}
+  .dsh-tavern-pickerItem{flex-wrap:wrap}
+}
+/* 0.1.2 的设置外壳固定保留 188px 导航，手机上会挤掉 Tavern 正文。
+   只匹配当前装着 Tavern 面板且拥有直属 nav 的宿主 dialog；其它设置页和桌面尺寸不受影响。
+   使用语义结构而非宿主打包后的类名，保留原导航按钮、关闭按钮及其 React 所有权。 */
+@media (max-width:560px){
+  [role="dialog"][aria-modal="true"]:has(>nav):has(.dsh-tavern-panel){
+    flex-direction:column;width:100%;max-width:calc(100vw - 16px);
+    height:calc(100vh - 16px);height:calc(100dvh - 16px);border-radius:20px}
+  [role="dialog"][aria-modal="true"]:has(.dsh-tavern-panel)>nav{
+    width:100%;min-width:0;gap:8px;padding:12px 12px 0}
+  [role="dialog"][aria-modal="true"]:has(.dsh-tavern-panel)>nav>div:first-child{
+    min-height:36px;box-sizing:border-box;padding:4px 88px 4px 4px}
+  [role="dialog"][aria-modal="true"]:has(.dsh-tavern-panel)>nav>div:last-child{
+    flex-direction:row;min-width:0;overflow-x:auto;padding-bottom:8px;overscroll-behavior-x:contain}
+  [role="dialog"][aria-modal="true"]:has(.dsh-tavern-panel)>nav button{
+    flex:none;min-height:44px;white-space:nowrap;padding:10px 12px}
+  [role="dialog"][aria-modal="true"]:has(.dsh-tavern-panel)>nav+div{min-height:0}
+  [role="dialog"][aria-modal="true"]:has(.dsh-tavern-panel)>nav+div>div:first-child{
+    position:absolute;top:8px;right:8px;height:36px;padding:0;align-items:center}
+  [role="dialog"][aria-modal="true"]:has(.dsh-tavern-panel)>nav+div>div:first-child>button{
+    width:36px;height:36px}
+  [role="dialog"][aria-modal="true"]:has(.dsh-tavern-panel)>nav+div>div:last-child{
+    padding:8px 16px max(16px,env(safe-area-inset-bottom));overscroll-behavior-y:contain}
+
+  /* 原生 Modal 用 flex 分配正文和 footer，避免估算两行按钮高度导致短屏裁切。 */
+  [role="dialog"]:has(>.dsh-tavern-modalContent){
+    max-height:calc(100vh - 48px);max-height:calc(100dvh - 48px);gap:12px;padding-bottom:16px}
+  .dsh-tavern-modalContent,.dsh-tavern-modalContent.dsh-tavern-modalHasFooter{
+    flex:1 1 auto;min-height:0;max-height:none;overscroll-behavior-y:contain}
+  .dsh-tavern-modalContent>div:first-child{padding:16px 12px 10px 16px}
+  .dsh-tavern-modalContent>div:first-child>button{width:36px;height:36px;flex:none}
+  .dsh-tavern-modalContent>div:last-child{padding-left:16px;padding-right:16px}
+  .dsh-tavern-modalContent+div{flex:none;padding-left:16px;padding-right:16px;flex-wrap:wrap}
+  .dsh-tavern-card{padding:14px}
+  .dsh-tavern-hero-preview{padding:14px;border-radius:14px}
+  .dsh-tavern-hero-swipeHint{display:none}
+  .dsh-tavern-hero-swipeBtn,.dsh-tavern-iconBtn,.dsh-tavern-action{min-width:40px;min-height:40px}
+  .dsh-tavern-speech{display:block}
+  .dsh-tavern-speechAvatar{position:absolute;top:0;left:0;width:32px;height:32px}
+  .dsh-tavern-speechBody{gap:8px}
+  .dsh-tavern-speechName{box-sizing:border-box;min-height:32px;padding:4px 44px 4px 40px;overflow-wrap:anywhere}
+  .dsh-tavern-speechCopy{opacity:1}
+  .dsh-tavern-speechHtml{box-sizing:border-box;border-radius:12px}
+}
+@media (hover:none), (pointer:coarse){
+  .dsh-tavern-charCardActions,.dsh-tavern-speechCopy{opacity:1}
+  .dsh-tavern-iconBtn,.dsh-tavern-action,.dsh-tavern-hero-swipeBtn{width:40px;height:40px}
+}
 `
 
 /** 幂等注入全局样式表（模块加载即执行一次）。 */

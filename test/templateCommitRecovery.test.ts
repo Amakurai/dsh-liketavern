@@ -198,6 +198,18 @@ describe('模板计划持久化', () => {
     await expect(run()).rejects.toThrow(/定时状态损坏/)
   })
 
+  it.each(['{broken', '{"stickyLeft":{},"cooldownLeft":{"waiting":"oops"}}'])('损坏旧计时文件阻止生成与分支发布，保留迁移来源：%s', async (raw) => {
+    const {ws, run} = await setup()
+    const path = 'state/wi-timers/s1.json'
+    await ws.fs.writeText(path, raw)
+    await expect(loadTemplateTimers(ws.fs, 's1')).rejects.toThrow(/定时状态损坏/)
+    await expect(run()).rejects.toThrow(/定时状态损坏/)
+    await expect(copyTemplateTimers(ws.fs, 's1', 'child')).rejects.toThrow(/定时状态损坏/)
+    expect(await ws.fs.readText(path)).toBe(raw)
+    expect(await ws.fs.readText('state/wi-timers/child.json')).toBeNull()
+    expect(await ws.fs.readText(TEMPLATE_STATE_PATH)).toBeNull()
+  })
+
   it('真实分支入口在草稿回滚后继承边界定时器，宿主子会话的新轮独立推进',async()=> {
     const {state,ws,run,cardId,binding} = await setup()
     await run(); await onTurnEnd(state,'s1')

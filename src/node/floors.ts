@@ -386,7 +386,7 @@ async function forkAt(
   source: Session,
   binding: SessionBinding,
   boundary: number,
-  options?: { greetingIndex?: number; seedOverride?: readonly SessionEvent[]; forkTurn?: number; rollbackFromTurn?: number },
+  options?: { prepareEdits?:(fs:import('../state/workspaceFs.js').WorkspaceFs,childId:string)=>Promise<void>; greetingIndex?: number; seedOverride?: readonly SessionEvent[]; forkTurn?: number; rollbackFromTurn?: number; verifySource?:()=>Promise<void> },
 ): Promise<string> {
   const seed = options?.seedOverride ?? sessionPrefixEvents(source.snapshotEvents(), boundary)
   const childId = newChildId()
@@ -401,6 +401,8 @@ async function forkAt(
     const owner = timerOwnerAtTurn(binding, source.id, boundaryTurn)
     await copyTemplateTimers(fs, owner, childId)
     await rebuildIndex(fs, estimateTokens)
+    await options?.prepareEdits?.(fs,childId)
+    await options?.verifySource?.()
   })
   const throughTurn = inheritedThroughTurn(seed)
   const walLineage = childWalLineage(binding, source.id, throughTurn)
@@ -842,4 +844,17 @@ export async function swipeGreeting({ ctx, state }: FloorDeps, sessionId: string
     seedOverride: greetingTurnEvents(text), greetingIndex: next, rollbackFromTurn: 0,
   })
   return { childSessionId: childId, index: next, title: await branchTitle(state, binding, `开场白 ${next + 1}/${variants.length}`) }
+}
+
+/** 助手批量正文修改保持完整后续聊天，在草稿回滚派生状态；原会话不变且不自动重生成。 */
+export async function forkEditedHistory(deps:FloorDeps,sessionId:string,storyId:string,seed:readonly SessionEvent[],fromTurn:number,verify:()=>Promise<void>,prepareEdits?:(fs:import('../state/workspaceFs.js').WorkspaceFs,childId:string)=>Promise<void>,action:'编辑聊天消息'|'删除聊天消息'='编辑聊天消息'):Promise<ForkResult>{
+  const {ctx,state}=deps,source=liveSession(ctx,sessionId)
+  if(!source)throw new FloorError('session-not-live','消息编辑需要当前会话在线')
+  requireTavernSession(ctx,source)
+  if(closedTurns(source.snapshotEvents()).openTurn!==null)throw new FloorError('turn-open','生成期间不能编辑聊天消息')
+  const loaded=await state.loadBinding(sessionId)
+  if(!loaded||loaded.storyId!==storyId)throw new FloorError('binding-changed','剧情绑定已改变')
+  const binding=inferLiveWalLineage(ctx,source,loaded)
+  const childSessionId=await forkAt(ctx,state,source,binding,source.snapshotEvents().length-1,{seedOverride:seed,forkTurn:fromTurn,rollbackFromTurn:fromTurn,verifySource:verify,prepareEdits})
+  return {childSessionId,title:await branchTitle(state,binding,action)}
 }

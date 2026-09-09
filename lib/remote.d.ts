@@ -16,6 +16,11 @@ import type { AssembledPrompt } from './core/assemble.js';
 import type { SessionBinding } from './core/binding.js';
 import type { GreetingFloorState } from './core/greetingLog.js';
 import type { TemplateDisplayPart } from './core/templateDisplay.js';
+import type { HelperMessageEditResult } from './core/helperChatEdits.js';
+import type { HelperSnapshot } from './core/helperRuntime.js';
+import type { HelperMvuWork } from './core/helperMvu.js';
+import type { HelperWorldbookContext, HelperWorldbookResult } from './core/helperWorldbook.js';
+import type { HelperScriptBundle, HelperScriptLibrary, HelperScriptAsset, HelperScriptContext, HelperScriptView } from './core/helperScripts.js';
 import type { Persona } from './core/persona.js';
 import type { SiblingSwipe } from './core/siblings.js';
 import type { CharacterCard, ChatMessage, MemoryEntry, PromptPreset, RegexRule, WIEngineResult, WorldDelta } from './core/types.js';
@@ -24,6 +29,35 @@ import type { ForkResult } from './node/floors.js';
 import type { CharacterSummary } from './state/workspace.js';
 /** method → [request shape, value schema, 简介] */
 export declare const METHODS: {
+    abandonHelperMvu: {
+        req: import("zod/mini").ZodMiniObject<{
+            sessionId: import("zod/mini").ZodMiniString<string>;
+            storyId: import("zod/mini").ZodMiniString<string>;
+        }, import("zod/v4/core").$strip>;
+        value: import("zod/mini").ZodMiniUnknown;
+        summary: string;
+    };
+    prepareHelperMvuJob: {
+        req: import("zod/mini").ZodMiniObject<{
+            storyId: import("zod/mini").ZodMiniString<string>;
+            runtimeId: import("zod/mini").ZodMiniString<string>;
+            sessionId: import("zod/mini").ZodMiniString<string>;
+        }, import("zod/v4/core").$strip>;
+        value: import("zod/mini").ZodMiniUnknown;
+        summary: string;
+    };
+    commitHelperMvuJob: {
+        req: import("zod/mini").ZodMiniObject<{
+            storyId: import("zod/mini").ZodMiniString<string>;
+            runtimeId: import("zod/mini").ZodMiniString<string>;
+            jobId: import("zod/mini").ZodMiniString<string>;
+            token: import("zod/mini").ZodMiniString<string>;
+            data: import("zod/mini").ZodMiniUnknown;
+            sessionId: import("zod/mini").ZodMiniString<string>;
+        }, import("zod/v4/core").$strip>;
+        value: import("zod/mini").ZodMiniUnknown;
+        summary: string;
+    };
     getEditorDraft: {
         req: import("zod/mini").ZodMiniObject<{
             owner: import("zod/mini").ZodMiniString<string>;
@@ -346,7 +380,25 @@ export declare const METHODS: {
                 personaId: import("zod/mini").ZodMiniNullable<import("zod/mini").ZodMiniString<string>>;
                 lorebookIds: import("zod/mini").ZodMiniArray<import("zod/mini").ZodMiniString<string>>;
                 characterLorebookId: import("zod/mini").ZodMiniNullable<import("zod/mini").ZodMiniString<string>>;
+                useEmbeddedLorebook: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniBoolean<boolean>>;
+                characterLorebookIds: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniArray<import("zod/mini").ZodMiniString<string>>>;
+                worldInfo: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniObject<{
+                    scanDepth: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNumber<number>>;
+                    minActivations: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNumber<number>>;
+                    maxScanDepth: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNumber<number>>;
+                    contextPercent: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNumber<number>>;
+                    tokenBudget: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNumber<number>>;
+                    recursiveScan: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniBoolean<boolean>>;
+                    maxRecursionSteps: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNumber<number>>;
+                    caseSensitive: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniBoolean<boolean>>;
+                    matchWholeWords: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniBoolean<boolean>>;
+                    includeNames: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniBoolean<boolean>>;
+                    overflowWarning: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniBoolean<boolean>>;
+                    characterStrategy: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniUnion<readonly [import("zod/mini").ZodMiniLiteral<0>, import("zod/mini").ZodMiniLiteral<1>, import("zod/mini").ZodMiniLiteral<2>]>>;
+                    useGroupScoring: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniBoolean<boolean>>;
+                }, import("zod/v4/core").$strip>>;
                 interactiveCards: import("zod/mini").ZodMiniNullable<import("zod/mini").ZodMiniBoolean<boolean>>;
+                helperMvu: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniBoolean<boolean>>;
                 greetingIndex: import("zod/mini").ZodMiniNumberFormat;
                 authorNote: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
                 injectJournal: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniBoolean<boolean>>;
@@ -387,6 +439,172 @@ export declare const METHODS: {
         req: import("zod/mini").ZodMiniObject<{
             text: import("zod/mini").ZodMiniString<string>;
             messageId: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNumberFormat>;
+            sessionId: import("zod/mini").ZodMiniString<string>;
+        }, import("zod/v4/core").$strip>;
+        value: import("zod/mini").ZodMiniUnknown;
+        summary: string;
+    };
+    getHelperEventState: {
+        req: import("zod/mini").ZodMiniObject<{
+            storyId: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
+            closedSeq: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNumberFormat>;
+            sessionId: import("zod/mini").ZodMiniString<string>;
+        }, import("zod/v4/core").$strip>;
+        value: import("zod/mini").ZodMiniUnknown;
+        summary: string;
+    };
+    getHelperSnapshot: {
+        req: import("zod/mini").ZodMiniObject<{
+            messageId: import("zod/mini").ZodMiniNumberFormat;
+            sessionId: import("zod/mini").ZodMiniString<string>;
+        }, import("zod/v4/core").$strip>;
+        value: import("zod/mini").ZodMiniUnknown;
+        summary: string;
+    };
+    getHelperScriptBundle: {
+        req: import("zod/mini").ZodMiniObject<{
+            sessionId: import("zod/mini").ZodMiniString<string>;
+        }, import("zod/v4/core").$strip>;
+        value: import("zod/mini").ZodMiniUnknown;
+        summary: string;
+    };
+    getCharacterHelperScripts: {
+        req: import("zod/mini").ZodMiniObject<{
+            cardId: import("zod/mini").ZodMiniString<string>;
+        }, import("zod/v4/core").$strip>;
+        value: import("zod/mini").ZodMiniUnknown;
+        summary: string;
+    };
+    editHelperMessages: {
+        req: import("zod/mini").ZodMiniObject<{
+            messageId: import("zod/mini").ZodMiniNumberFormat;
+            storyId: import("zod/mini").ZodMiniString<string>;
+            historyRevision: import("zod/mini").ZodMiniString<string>;
+            edits: import("zod/mini").ZodMiniUnknown;
+            before: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniUnknown>;
+            sessionId: import("zod/mini").ZodMiniString<string>;
+        }, import("zod/v4/core").$strip>;
+        value: import("zod/mini").ZodMiniUnknown;
+        summary: string;
+    };
+    rebindHelperWorldbooks: {
+        req: import("zod/mini").ZodMiniObject<{
+            messageId: import("zod/mini").ZodMiniNumberFormat;
+            storyId: import("zod/mini").ZodMiniString<string>;
+            bindingRevision: import("zod/mini").ZodMiniString<string>;
+            kind: import("zod/mini").ZodMiniEnum<{
+                chat: "chat";
+                character: "character";
+                global: "global";
+                settings: "settings";
+                "ensure-chat": "ensure-chat";
+            }>;
+            selection: import("zod/mini").ZodMiniUnknown;
+            sessionId: import("zod/mini").ZodMiniString<string>;
+        }, import("zod/v4/core").$strip>;
+        value: import("zod/mini").ZodMiniUnknown;
+        summary: string;
+    };
+    getHelperWorldbookContext: {
+        req: import("zod/mini").ZodMiniObject<{
+            storyId: import("zod/mini").ZodMiniString<string>;
+            sessionId: import("zod/mini").ZodMiniString<string>;
+        }, import("zod/v4/core").$strip>;
+        value: import("zod/mini").ZodMiniUnknown;
+        summary: string;
+    };
+    helperWorldbookOperation: {
+        req: import("zod/mini").ZodMiniObject<{
+            messageId: import("zod/mini").ZodMiniNumberFormat;
+            storyId: import("zod/mini").ZodMiniString<string>;
+            bindingRevision: import("zod/mini").ZodMiniString<string>;
+            name: import("zod/mini").ZodMiniString<string>;
+            operation: import("zod/mini").ZodMiniEnum<{
+                replace: "replace";
+                get: "get";
+                create: "create";
+                upsert: "upsert";
+                delete: "delete";
+            }>;
+            revision: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
+            entries: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniUnknown>;
+            label: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
+            sessionId: import("zod/mini").ZodMiniString<string>;
+        }, import("zod/v4/core").$strip>;
+        value: import("zod/mini").ZodMiniUnknown;
+        summary: string;
+    };
+    getSessionHelperScripts: {
+        req: import("zod/mini").ZodMiniObject<{
+            storyId: import("zod/mini").ZodMiniString<string>;
+            sessionId: import("zod/mini").ZodMiniString<string>;
+        }, import("zod/v4/core").$strip>;
+        value: import("zod/mini").ZodMiniUnknown;
+        summary: string;
+    };
+    commitSessionHelperScripts: {
+        req: import("zod/mini").ZodMiniObject<{
+            storyId: import("zod/mini").ZodMiniString<string>;
+            bindingRevision: import("zod/mini").ZodMiniString<string>;
+            type: import("zod/mini").ZodMiniEnum<{
+                preset: "preset";
+                character: "character";
+                global: "global";
+            }>;
+            revision: import("zod/mini").ZodMiniString<string>;
+            trees: import("zod/mini").ZodMiniUnknown;
+            sessionId: import("zod/mini").ZodMiniString<string>;
+        }, import("zod/v4/core").$strip>;
+        value: import("zod/mini").ZodMiniUnknown;
+        summary: string;
+    };
+    getHelperScriptLibrary: {
+        req: import("zod/mini").ZodMiniObject<{
+            target: import("zod/mini").ZodMiniUnion<readonly [import("zod/mini").ZodMiniObject<{
+                type: import("zod/mini").ZodMiniLiteral<"global">;
+            }, import("zod/v4/core").$strip>, import("zod/mini").ZodMiniObject<{
+                type: import("zod/mini").ZodMiniLiteral<"preset">;
+                presetId: import("zod/mini").ZodMiniString<string>;
+            }, import("zod/v4/core").$strip>, import("zod/mini").ZodMiniObject<{
+                type: import("zod/mini").ZodMiniLiteral<"character">;
+                cardId: import("zod/mini").ZodMiniString<string>;
+            }, import("zod/v4/core").$strip>]>;
+        }, import("zod/v4/core").$strip>;
+        value: import("zod/mini").ZodMiniUnknown;
+        summary: string;
+    };
+    saveHelperScriptLibrary: {
+        req: import("zod/mini").ZodMiniObject<{
+            target: import("zod/mini").ZodMiniUnion<readonly [import("zod/mini").ZodMiniObject<{
+                type: import("zod/mini").ZodMiniLiteral<"global">;
+            }, import("zod/v4/core").$strip>, import("zod/mini").ZodMiniObject<{
+                type: import("zod/mini").ZodMiniLiteral<"preset">;
+                presetId: import("zod/mini").ZodMiniString<string>;
+            }, import("zod/v4/core").$strip>, import("zod/mini").ZodMiniObject<{
+                type: import("zod/mini").ZodMiniLiteral<"character">;
+                cardId: import("zod/mini").ZodMiniString<string>;
+            }, import("zod/v4/core").$strip>]>;
+            revision: import("zod/mini").ZodMiniString<string>;
+            trees: import("zod/mini").ZodMiniUnknown;
+        }, import("zod/v4/core").$strip>;
+        value: import("zod/mini").ZodMiniUnknown;
+        summary: string;
+    };
+    saveCharacterHelperScripts: {
+        req: import("zod/mini").ZodMiniObject<{
+            cardId: import("zod/mini").ZodMiniString<string>;
+            revision: import("zod/mini").ZodMiniString<string>;
+            trees: import("zod/mini").ZodMiniUnknown;
+        }, import("zod/v4/core").$strip>;
+        value: import("zod/mini").ZodMiniUnknown;
+        summary: string;
+    };
+    commitHelperVariables: {
+        req: import("zod/mini").ZodMiniObject<{
+            messageId: import("zod/mini").ZodMiniNumberFormat;
+            storyId: import("zod/mini").ZodMiniString<string>;
+            historyRevision: import("zod/mini").ZodMiniString<string>;
+            changes: import("zod/mini").ZodMiniUnknown;
             sessionId: import("zod/mini").ZodMiniString<string>;
         }, import("zod/v4/core").$strip>;
         value: import("zod/mini").ZodMiniUnknown;
@@ -654,6 +872,10 @@ export interface PresetSummary {
 }
 /** renderOutputText：展示文本经 output/render 正则与 HTML 抽取后的形态。 */
 export interface RenderedOutput {
+    helper?: HelperSnapshot;
+    helperScripts?: HelperScriptContext;
+    helperWorldbooks?: HelperWorldbookContext;
+    userName?: string;
     parts?: TemplateDisplayPart[];
     text: string;
     html: string | null;
@@ -690,6 +912,12 @@ export interface ContextUsage {
 }
 /** 方法名 → 裸业务结果类型。加/改 remote 方法时必须与 METHODS、service 实现、client 镜像同步。 */
 export interface TavernMethodResults {
+    abandonHelperMvu: {
+        disabled: true;
+        abandoned: number;
+    };
+    prepareHelperMvuJob: HelperMvuWork;
+    commitHelperMvuJob: HelperMvuWork;
     getEditorDraft: {
         draft: {
             value: unknown;
@@ -823,6 +1051,30 @@ export interface TavernMethodResults {
     };
     getGreetingSwipe: GreetingFloorState;
     renderOutputText: RenderedOutput;
+    getHelperEventState: {
+        storyId: string;
+        historyRevision: string;
+        messages: {
+            seq: number;
+            message_id: number;
+            role: 'user' | 'assistant';
+        }[];
+        writable: boolean;
+        closedThrough: number;
+    };
+    getHelperSnapshot: HelperSnapshot;
+    getHelperScriptBundle: HelperScriptBundle;
+    getCharacterHelperScripts: HelperScriptLibrary;
+    editHelperMessages: HelperMessageEditResult;
+    rebindHelperWorldbooks: HelperWorldbookContext;
+    getHelperWorldbookContext: HelperWorldbookContext;
+    helperWorldbookOperation: HelperWorldbookResult;
+    getSessionHelperScripts: HelperScriptContext;
+    commitSessionHelperScripts: HelperScriptView;
+    getHelperScriptLibrary: HelperScriptAsset;
+    saveHelperScriptLibrary: HelperScriptAsset;
+    saveCharacterHelperScripts: HelperScriptLibrary;
+    commitHelperVariables: HelperSnapshot;
     swipeGreeting: {
         childSessionId: string;
         index: number;
@@ -916,6 +1168,20 @@ export declare const TYPERT_HOST: {
                 mode: "strict";
                 typeSymbol: string;
                 schema: import("zod/mini").ZodMiniObject<{
+                    sessionId: import("zod/mini").ZodMiniString<string>;
+                    storyId: import("zod/mini").ZodMiniString<string>;
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                    storyId: import("zod/mini").ZodMiniString<string>;
+                    runtimeId: import("zod/mini").ZodMiniString<string>;
+                    sessionId: import("zod/mini").ZodMiniString<string>;
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                    storyId: import("zod/mini").ZodMiniString<string>;
+                    runtimeId: import("zod/mini").ZodMiniString<string>;
+                    jobId: import("zod/mini").ZodMiniString<string>;
+                    token: import("zod/mini").ZodMiniString<string>;
+                    data: import("zod/mini").ZodMiniUnknown;
+                    sessionId: import("zod/mini").ZodMiniString<string>;
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     owner: import("zod/mini").ZodMiniString<string>;
                     key: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
@@ -1058,7 +1324,25 @@ export declare const TYPERT_HOST: {
                         personaId: import("zod/mini").ZodMiniNullable<import("zod/mini").ZodMiniString<string>>;
                         lorebookIds: import("zod/mini").ZodMiniArray<import("zod/mini").ZodMiniString<string>>;
                         characterLorebookId: import("zod/mini").ZodMiniNullable<import("zod/mini").ZodMiniString<string>>;
+                        useEmbeddedLorebook: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniBoolean<boolean>>;
+                        characterLorebookIds: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniArray<import("zod/mini").ZodMiniString<string>>>;
+                        worldInfo: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniObject<{
+                            scanDepth: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNumber<number>>;
+                            minActivations: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNumber<number>>;
+                            maxScanDepth: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNumber<number>>;
+                            contextPercent: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNumber<number>>;
+                            tokenBudget: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNumber<number>>;
+                            recursiveScan: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniBoolean<boolean>>;
+                            maxRecursionSteps: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNumber<number>>;
+                            caseSensitive: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniBoolean<boolean>>;
+                            matchWholeWords: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniBoolean<boolean>>;
+                            includeNames: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniBoolean<boolean>>;
+                            overflowWarning: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniBoolean<boolean>>;
+                            characterStrategy: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniUnion<readonly [import("zod/mini").ZodMiniLiteral<0>, import("zod/mini").ZodMiniLiteral<1>, import("zod/mini").ZodMiniLiteral<2>]>>;
+                            useGroupScoring: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniBoolean<boolean>>;
+                        }, import("zod/v4/core").$strip>>;
                         interactiveCards: import("zod/mini").ZodMiniNullable<import("zod/mini").ZodMiniBoolean<boolean>>;
+                        helperMvu: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniBoolean<boolean>>;
                         greetingIndex: import("zod/mini").ZodMiniNumberFormat;
                         authorNote: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
                         injectJournal: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniBoolean<boolean>>;
@@ -1079,6 +1363,102 @@ export declare const TYPERT_HOST: {
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     text: import("zod/mini").ZodMiniString<string>;
                     messageId: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNumberFormat>;
+                    sessionId: import("zod/mini").ZodMiniString<string>;
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                    storyId: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
+                    closedSeq: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNumberFormat>;
+                    sessionId: import("zod/mini").ZodMiniString<string>;
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                    messageId: import("zod/mini").ZodMiniNumberFormat;
+                    sessionId: import("zod/mini").ZodMiniString<string>;
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                    sessionId: import("zod/mini").ZodMiniString<string>;
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                    cardId: import("zod/mini").ZodMiniString<string>;
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                    messageId: import("zod/mini").ZodMiniNumberFormat;
+                    storyId: import("zod/mini").ZodMiniString<string>;
+                    historyRevision: import("zod/mini").ZodMiniString<string>;
+                    edits: import("zod/mini").ZodMiniUnknown;
+                    before: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniUnknown>;
+                    sessionId: import("zod/mini").ZodMiniString<string>;
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                    messageId: import("zod/mini").ZodMiniNumberFormat;
+                    storyId: import("zod/mini").ZodMiniString<string>;
+                    bindingRevision: import("zod/mini").ZodMiniString<string>;
+                    kind: import("zod/mini").ZodMiniEnum<{
+                        chat: "chat";
+                        character: "character";
+                        global: "global";
+                        settings: "settings";
+                        "ensure-chat": "ensure-chat";
+                    }>;
+                    selection: import("zod/mini").ZodMiniUnknown;
+                    sessionId: import("zod/mini").ZodMiniString<string>;
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                    storyId: import("zod/mini").ZodMiniString<string>;
+                    sessionId: import("zod/mini").ZodMiniString<string>;
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                    messageId: import("zod/mini").ZodMiniNumberFormat;
+                    storyId: import("zod/mini").ZodMiniString<string>;
+                    bindingRevision: import("zod/mini").ZodMiniString<string>;
+                    name: import("zod/mini").ZodMiniString<string>;
+                    operation: import("zod/mini").ZodMiniEnum<{
+                        replace: "replace";
+                        get: "get";
+                        create: "create";
+                        upsert: "upsert";
+                        delete: "delete";
+                    }>;
+                    revision: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
+                    entries: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniUnknown>;
+                    label: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
+                    sessionId: import("zod/mini").ZodMiniString<string>;
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                    storyId: import("zod/mini").ZodMiniString<string>;
+                    sessionId: import("zod/mini").ZodMiniString<string>;
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                    storyId: import("zod/mini").ZodMiniString<string>;
+                    bindingRevision: import("zod/mini").ZodMiniString<string>;
+                    type: import("zod/mini").ZodMiniEnum<{
+                        preset: "preset";
+                        character: "character";
+                        global: "global";
+                    }>;
+                    revision: import("zod/mini").ZodMiniString<string>;
+                    trees: import("zod/mini").ZodMiniUnknown;
+                    sessionId: import("zod/mini").ZodMiniString<string>;
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                    target: import("zod/mini").ZodMiniUnion<readonly [import("zod/mini").ZodMiniObject<{
+                        type: import("zod/mini").ZodMiniLiteral<"global">;
+                    }, import("zod/v4/core").$strip>, import("zod/mini").ZodMiniObject<{
+                        type: import("zod/mini").ZodMiniLiteral<"preset">;
+                        presetId: import("zod/mini").ZodMiniString<string>;
+                    }, import("zod/v4/core").$strip>, import("zod/mini").ZodMiniObject<{
+                        type: import("zod/mini").ZodMiniLiteral<"character">;
+                        cardId: import("zod/mini").ZodMiniString<string>;
+                    }, import("zod/v4/core").$strip>]>;
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                    target: import("zod/mini").ZodMiniUnion<readonly [import("zod/mini").ZodMiniObject<{
+                        type: import("zod/mini").ZodMiniLiteral<"global">;
+                    }, import("zod/v4/core").$strip>, import("zod/mini").ZodMiniObject<{
+                        type: import("zod/mini").ZodMiniLiteral<"preset">;
+                        presetId: import("zod/mini").ZodMiniString<string>;
+                    }, import("zod/v4/core").$strip>, import("zod/mini").ZodMiniObject<{
+                        type: import("zod/mini").ZodMiniLiteral<"character">;
+                        cardId: import("zod/mini").ZodMiniString<string>;
+                    }, import("zod/v4/core").$strip>]>;
+                    revision: import("zod/mini").ZodMiniString<string>;
+                    trees: import("zod/mini").ZodMiniUnknown;
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                    cardId: import("zod/mini").ZodMiniString<string>;
+                    revision: import("zod/mini").ZodMiniString<string>;
+                    trees: import("zod/mini").ZodMiniUnknown;
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                    messageId: import("zod/mini").ZodMiniNumberFormat;
+                    storyId: import("zod/mini").ZodMiniString<string>;
+                    historyRevision: import("zod/mini").ZodMiniString<string>;
+                    changes: import("zod/mini").ZodMiniUnknown;
                     sessionId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     index: import("zod/mini").ZodMiniNumberFormat;
@@ -1219,6 +1599,20 @@ export declare const TYPERT_REMOTE: {
                 mode: "strict";
                 typeSymbol: string;
                 schema: import("zod/mini").ZodMiniObject<{
+                    sessionId: import("zod/mini").ZodMiniString<string>;
+                    storyId: import("zod/mini").ZodMiniString<string>;
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                    storyId: import("zod/mini").ZodMiniString<string>;
+                    runtimeId: import("zod/mini").ZodMiniString<string>;
+                    sessionId: import("zod/mini").ZodMiniString<string>;
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                    storyId: import("zod/mini").ZodMiniString<string>;
+                    runtimeId: import("zod/mini").ZodMiniString<string>;
+                    jobId: import("zod/mini").ZodMiniString<string>;
+                    token: import("zod/mini").ZodMiniString<string>;
+                    data: import("zod/mini").ZodMiniUnknown;
+                    sessionId: import("zod/mini").ZodMiniString<string>;
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     owner: import("zod/mini").ZodMiniString<string>;
                     key: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
@@ -1361,7 +1755,25 @@ export declare const TYPERT_REMOTE: {
                         personaId: import("zod/mini").ZodMiniNullable<import("zod/mini").ZodMiniString<string>>;
                         lorebookIds: import("zod/mini").ZodMiniArray<import("zod/mini").ZodMiniString<string>>;
                         characterLorebookId: import("zod/mini").ZodMiniNullable<import("zod/mini").ZodMiniString<string>>;
+                        useEmbeddedLorebook: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniBoolean<boolean>>;
+                        characterLorebookIds: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniArray<import("zod/mini").ZodMiniString<string>>>;
+                        worldInfo: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniObject<{
+                            scanDepth: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNumber<number>>;
+                            minActivations: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNumber<number>>;
+                            maxScanDepth: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNumber<number>>;
+                            contextPercent: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNumber<number>>;
+                            tokenBudget: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNumber<number>>;
+                            recursiveScan: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniBoolean<boolean>>;
+                            maxRecursionSteps: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNumber<number>>;
+                            caseSensitive: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniBoolean<boolean>>;
+                            matchWholeWords: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniBoolean<boolean>>;
+                            includeNames: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniBoolean<boolean>>;
+                            overflowWarning: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniBoolean<boolean>>;
+                            characterStrategy: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniUnion<readonly [import("zod/mini").ZodMiniLiteral<0>, import("zod/mini").ZodMiniLiteral<1>, import("zod/mini").ZodMiniLiteral<2>]>>;
+                            useGroupScoring: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniBoolean<boolean>>;
+                        }, import("zod/v4/core").$strip>>;
                         interactiveCards: import("zod/mini").ZodMiniNullable<import("zod/mini").ZodMiniBoolean<boolean>>;
+                        helperMvu: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniBoolean<boolean>>;
                         greetingIndex: import("zod/mini").ZodMiniNumberFormat;
                         authorNote: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
                         injectJournal: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniBoolean<boolean>>;
@@ -1382,6 +1794,102 @@ export declare const TYPERT_REMOTE: {
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     text: import("zod/mini").ZodMiniString<string>;
                     messageId: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNumberFormat>;
+                    sessionId: import("zod/mini").ZodMiniString<string>;
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                    storyId: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
+                    closedSeq: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNumberFormat>;
+                    sessionId: import("zod/mini").ZodMiniString<string>;
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                    messageId: import("zod/mini").ZodMiniNumberFormat;
+                    sessionId: import("zod/mini").ZodMiniString<string>;
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                    sessionId: import("zod/mini").ZodMiniString<string>;
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                    cardId: import("zod/mini").ZodMiniString<string>;
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                    messageId: import("zod/mini").ZodMiniNumberFormat;
+                    storyId: import("zod/mini").ZodMiniString<string>;
+                    historyRevision: import("zod/mini").ZodMiniString<string>;
+                    edits: import("zod/mini").ZodMiniUnknown;
+                    before: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniUnknown>;
+                    sessionId: import("zod/mini").ZodMiniString<string>;
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                    messageId: import("zod/mini").ZodMiniNumberFormat;
+                    storyId: import("zod/mini").ZodMiniString<string>;
+                    bindingRevision: import("zod/mini").ZodMiniString<string>;
+                    kind: import("zod/mini").ZodMiniEnum<{
+                        chat: "chat";
+                        character: "character";
+                        global: "global";
+                        settings: "settings";
+                        "ensure-chat": "ensure-chat";
+                    }>;
+                    selection: import("zod/mini").ZodMiniUnknown;
+                    sessionId: import("zod/mini").ZodMiniString<string>;
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                    storyId: import("zod/mini").ZodMiniString<string>;
+                    sessionId: import("zod/mini").ZodMiniString<string>;
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                    messageId: import("zod/mini").ZodMiniNumberFormat;
+                    storyId: import("zod/mini").ZodMiniString<string>;
+                    bindingRevision: import("zod/mini").ZodMiniString<string>;
+                    name: import("zod/mini").ZodMiniString<string>;
+                    operation: import("zod/mini").ZodMiniEnum<{
+                        replace: "replace";
+                        get: "get";
+                        create: "create";
+                        upsert: "upsert";
+                        delete: "delete";
+                    }>;
+                    revision: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
+                    entries: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniUnknown>;
+                    label: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
+                    sessionId: import("zod/mini").ZodMiniString<string>;
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                    storyId: import("zod/mini").ZodMiniString<string>;
+                    sessionId: import("zod/mini").ZodMiniString<string>;
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                    storyId: import("zod/mini").ZodMiniString<string>;
+                    bindingRevision: import("zod/mini").ZodMiniString<string>;
+                    type: import("zod/mini").ZodMiniEnum<{
+                        preset: "preset";
+                        character: "character";
+                        global: "global";
+                    }>;
+                    revision: import("zod/mini").ZodMiniString<string>;
+                    trees: import("zod/mini").ZodMiniUnknown;
+                    sessionId: import("zod/mini").ZodMiniString<string>;
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                    target: import("zod/mini").ZodMiniUnion<readonly [import("zod/mini").ZodMiniObject<{
+                        type: import("zod/mini").ZodMiniLiteral<"global">;
+                    }, import("zod/v4/core").$strip>, import("zod/mini").ZodMiniObject<{
+                        type: import("zod/mini").ZodMiniLiteral<"preset">;
+                        presetId: import("zod/mini").ZodMiniString<string>;
+                    }, import("zod/v4/core").$strip>, import("zod/mini").ZodMiniObject<{
+                        type: import("zod/mini").ZodMiniLiteral<"character">;
+                        cardId: import("zod/mini").ZodMiniString<string>;
+                    }, import("zod/v4/core").$strip>]>;
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                    target: import("zod/mini").ZodMiniUnion<readonly [import("zod/mini").ZodMiniObject<{
+                        type: import("zod/mini").ZodMiniLiteral<"global">;
+                    }, import("zod/v4/core").$strip>, import("zod/mini").ZodMiniObject<{
+                        type: import("zod/mini").ZodMiniLiteral<"preset">;
+                        presetId: import("zod/mini").ZodMiniString<string>;
+                    }, import("zod/v4/core").$strip>, import("zod/mini").ZodMiniObject<{
+                        type: import("zod/mini").ZodMiniLiteral<"character">;
+                        cardId: import("zod/mini").ZodMiniString<string>;
+                    }, import("zod/v4/core").$strip>]>;
+                    revision: import("zod/mini").ZodMiniString<string>;
+                    trees: import("zod/mini").ZodMiniUnknown;
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                    cardId: import("zod/mini").ZodMiniString<string>;
+                    revision: import("zod/mini").ZodMiniString<string>;
+                    trees: import("zod/mini").ZodMiniUnknown;
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                    messageId: import("zod/mini").ZodMiniNumberFormat;
+                    storyId: import("zod/mini").ZodMiniString<string>;
+                    historyRevision: import("zod/mini").ZodMiniString<string>;
+                    changes: import("zod/mini").ZodMiniUnknown;
                     sessionId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     index: import("zod/mini").ZodMiniNumberFormat;

@@ -89,6 +89,12 @@ export declare function compilePresetRegexScripts(scripts: readonly CardRegexScr
  * 正则替换后的展示文本常是「整页 HTML 封面」或「小部件 HTML + 后面的正文」。
  * HTML 文档和小部件片段抽进 iframe；围栏外 / </html> 之前的协议标签与之后的文字留给 Markdown。
  */
+export declare function locateRenderedHtml(text: string): {
+    html: string;
+    rest: string;
+    start: number;
+} | null;
+/** 兼容聚合接口；有序展示使用定位结果，避免同文代码示例抢占真实卡面的起点。 */
 export declare function splitRenderedHtml(text: string): {
     html: string | null;
     rest: string;

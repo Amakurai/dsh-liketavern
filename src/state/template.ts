@@ -1,5 +1,6 @@
 /** 剧情模板状态与已处理回复共用单文件事务；预览只读，楼层写入先 WAL，分支按文件快照继承。 */
 import { createHash } from 'node:crypto'
+import { Buffer } from 'node:buffer'
 import { emptyTemplateScopes, parseTemplateScopes, type TemplateScopes } from '../core/template.js'
 import { EMPTY_TIMER_STATE, type WITimerState } from '../core/types.js'
 import type { WorkspaceFs } from './workspaceFs.js'
@@ -25,9 +26,11 @@ export interface TemplateState {
 export const templateTextHash = (text: string): string => createHash('sha256').update(text).digest('hex')
 
 export async function loadTemplateState(fs: WorkspaceFs): Promise<TemplateState> {
+  const metadata = await fs.stat(TEMPLATE_STATE_PATH)
+  if (metadata && metadata.size > 4 * 1024 * 1024) throw new Error('模板状态超过 4 MiB 上限')
   const raw = await fs.readText(TEMPLATE_STATE_PATH)
   if (raw === null) return { version: 1, variables: emptyTemplateScopes(), outputs: {} }
-  if (raw.length > 4 * 1024 * 1024) throw new Error('模板状态超过 4 MiB 上限')
+  if (Buffer.byteLength(raw, 'utf8') > 4 * 1024 * 1024) throw new Error('模板状态超过 4 MiB 上限')
   const data: unknown = JSON.parse(raw)
   if (!data || typeof data !== 'object' || !('version' in data) || data.version !== 1
     || !('variables' in data) || !('outputs' in data) || !data.outputs || typeof data.outputs !== 'object' || Array.isArray(data.outputs)) throw new Error('模板状态文件损坏')
@@ -69,7 +72,7 @@ async function writeTemplateState(fs: WorkspaceFs, state: TemplateState): Promis
     if (output.parts!==undefined) parseTemplateDisplayParts(output.parts)
   }
   const raw = JSON.stringify(state)
-  if (raw.length > 4 * 1024 * 1024) throw new Error('模板状态超过 4 MiB 上限')
+  if (Buffer.byteLength(raw, 'utf8') > 4 * 1024 * 1024) throw new Error('模板状态超过 4 MiB 上限')
   if (state.generation) parseTemplateGeneration(JSON.parse(raw).generation)
   if (raw !== await fs.readText(TEMPLATE_STATE_PATH)) {
     try { await fs.writeText(TEMPLATE_STATE_PATH, raw) }
@@ -100,7 +103,8 @@ export async function loadTemplateTimers(fs: WorkspaceFs, sessionId: string): Pr
   if (state.wiTimers && Object.hasOwn(state.wiTimers, sessionId)) return state.wiTimers[sessionId]!
   const raw = await fs.readText(legacyTimerPath(sessionId))
   if (raw === null) return structuredClone(EMPTY_TIMER_STATE)
-  try { return parseTimerState(JSON.parse(raw)) } catch { return structuredClone(EMPTY_TIMER_STATE) }
+  try { return parseTimerState(JSON.parse(raw)) }
+  catch (cause) { throw new Error('模板定时状态损坏', { cause }) }
 }
 
 /** 普通计时更新与分支复制只改变计时字段；未迁移会话保留原路径，不创建空模板文件。 */
@@ -124,7 +128,12 @@ export async function copyTemplateTimers(fs: WorkspaceFs, fromSessionId: string,
       await fs.writeText(legacyTimerPath(toSessionId), JSON.stringify(state.wiTimers[fromSessionId]!, null, 2) + '\n')
     } else {
       const raw = await fs.readText(legacyTimerPath(fromSessionId))
-      if (raw !== null) await fs.writeText(legacyTimerPath(toSessionId), raw)
+      if (raw !== null) {
+        // 草稿发布前先校验迁移来源，不能把损坏文件复制到已发布的子剧情。
+        try { parseTimerState(JSON.parse(raw)) }
+        catch (cause) { throw new Error('模板定时状态损坏', { cause }) }
+        await fs.writeText(legacyTimerPath(toSessionId), raw)
+      }
     }
   })
 }

@@ -207,3 +207,12 @@ describe('loadBinding / saveBinding 严格校验', () => {
     expect(await loadBinding(paths, 's-missing')).toBeNull()
   })
 })
+
+it('主书继承开关与附加书保存时严格校验，旧绑定缺省仍沿用内嵌书',async()=>{
+  const {parseSessionBinding}=await import('../src/node/bindings.js')
+  const base={sessionId:'s',cardId:'card-test1234',presetId:null,personaId:null,lorebookIds:[],characterLorebookId:null,interactiveCards:null,greetingIndex:0,createdAt:new Date(0).toISOString()}
+  expect(parseSessionBinding(base).useEmbeddedLorebook).toBeUndefined()
+  expect(parseSessionBinding({...base,useEmbeddedLorebook:false,characterLorebookIds:['one','one','two']})).toMatchObject({useEmbeddedLorebook:false,characterLorebookIds:['one','two']})
+  expect(()=>parseSessionBinding({...base,useEmbeddedLorebook:'false'})).toThrow()
+  expect(()=>parseSessionBinding({...base,characterLorebookIds:[1]})).toThrow()
+})

@@ -1,5 +1,11 @@
 /** 会话头部角色 chip（chip.tsx）界面文案：绑定编辑、开场白、调试与提示词预览。zh 为键全集源；en 必须同键齐全。 */
 export declare const zh: {
+    readonly 'chip.mvuAbandon.action': "放弃待处理任务并关闭自动 MVU";
+    readonly 'chip.mvuAbandon.title': "放弃当前剧情的待处理 MVU 任务？";
+    readonly 'chip.mvuAbandon.desc': "将关闭本会话自动 MVU，并放弃尚未提交的更新。已保存变量、完成回执和对话记录都会保留；不会补跑被放弃的更新，也不会移除排队输入。普通开关关闭只会暂停任务。";
+    readonly 'chip.mvuAbandon.done': "自动 MVU 已关闭，待处理任务已放弃，已保存变量保留。";
+    readonly 'chip.field.helperMvu': "启用原生 MVU 自动更新";
+    readonly 'chip.field.helperMvuNote': "从当前完成的角色消息初始化，等待本会话脚本就绪后更新变量。需要保持页面打开；失败或断开时保留任务。";
     readonly 'chip.preview.actual': "最近宿主请求";
     readonly 'chip.preview.noActual': "尚未捕获请求。先发送一轮消息；重启或缓存淘汰后旧请求不可用。";
     readonly 'chip.preview.actualTruncated': "（请求超过显示上限，内容已截断）";
@@ -16,6 +22,10 @@ export declare const zh: {
     readonly 'chip.field.persona': "人设";
     readonly 'chip.field.none': "（无）";
     readonly 'chip.field.mainLore': "主世界书";
+    readonly 'chip.field.additionalLore': "附加角色世界书";
+    readonly 'chip.worldInfoOverride': "会话世界书设置";
+    readonly 'chip.worldInfoOverrideDesc': "脚本为此会话覆盖了 {count} 项引擎设置；其余仍跟随全局设置。";
+    readonly 'chip.worldInfoReset': "恢复跟随全局设置";
     readonly 'chip.field.globalLore': "全局世界书（多选）";
     readonly 'chip.field.globalLoreAria': "全局世界书";
     readonly 'chip.field.noLorebooks': "库中暂无世界书";

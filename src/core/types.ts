@@ -38,6 +38,8 @@ export interface MacroContext {
    * 未提供时 expandMacros 自建临时表（单次调用内 set+get 仍生效）。
    */
   store?: Map<string, string>
+  /** 当前剧情 MVU 的轮初只读数据；不进入宏 store，写 stat_data 宏必须明确失败。 */
+  readonlyStatData?: Readonly<Record<string, unknown>>
   /** {{lastusermessage}} / {{lastMessage}}；缺省空串。 */
   lastUserMessage?: string
   /** {{lastCharMessage}}：最近一条 assistant 消息；本轮宏，standing 上下文恒为空。 */
@@ -177,6 +179,8 @@ export interface WorldInfoEntry {
   /** null = 跟随全局设置。 */
   caseSensitive: boolean | null
   matchWholeWords: boolean | null
+  /** 条目级组内计分覆盖，null/缺省跟随全局。 */
+  useGroupScoring?: boolean | null
   scanDepth: number | null
   /** Non-recursable：不可被递归激活（仅直接命中可激活）。 */
   excludeRecursion: boolean
@@ -215,6 +219,10 @@ export interface WorldInfoEntry {
 export interface WorldInfoGlobalSettings {
   /** 扫描深度：从最近 N 条消息内匹配触发键；0 = 只扫递归注入与常驻（对齐 SillyTavern）。 */
   scanDepth: number
+  /** 不足该激活数时逐条扩展历史扫描；0 关闭。 */
+  minActivations: number
+  /** 扩展扫描最大深度；0 扫到现有历史（接口硬上限 1000）。 */
+  maxScanDepth: number
   /** Context 预算百分比（相对模型上下文窗口，折算基数 clamp 到 128K 量级，见 turnBudget.ts）。 */
   contextPercent: number
   /**
@@ -242,6 +250,8 @@ export interface WorldInfoGlobalSettings {
 
 export const DEFAULT_WI_SETTINGS: WorldInfoGlobalSettings = {
   scanDepth: 2,
+  minActivations: 0,
+  maxScanDepth: 0,
   contextPercent: 25,
   tokenBudget: 8192,
   recursiveScan: true,
@@ -386,6 +396,8 @@ export interface PromptPreset {
   entries: PresetEntry[]
   /** 预设内嵌 regex_scripts（ST `extensions.regex_scripts` 原样）。缺省 = 无。 */
   regexScripts?: CardRegexScript[]
+  /** 酒馆助手预设资产；脚本经 helperScripts 归一化，保留其它作者设置供导出。 */
+  helperSettings?: Record<string, unknown>
 }
 
 // ---------------------------------------------------------------------------

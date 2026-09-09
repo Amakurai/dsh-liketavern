@@ -988,3 +988,45 @@ it('AN/outlet 和条件常驻不得豁免 turn 预算', () => {
   expect(isStandingSafeEntry(makeEntry({ key: 'test', constant: true, group: 'g' }))).toBe(false)
   expect(isStandingSafeEntry(makeEntry({ key: 'test', constant: true, probability: 0, useProbability: true }))).toBe(false)
 })
+
+it('条目计分覆盖全局：启用时低分淘汰，显式关闭仍参与权重选择',()=>{
+  const entries=[makeEntry({key:'low',keys:['x'],group:'g',useGroupScoring:true}),makeEntry({key:'high',keys:['x','y'],group:'g'})]
+  expect(activatedKeys(run({entries,messages:[userMsg('x y')],settings:makeSettings({useGroupScoring:false}),random:()=>0}))).toEqual(['high'])
+  entries[0]!.useGroupScoring=false
+  expect(activatedKeys(run({entries,messages:[userMsg('x y')],settings:makeSettings({useGroupScoring:true}),random:()=>0}))).toEqual(['low'])
+})
+it('同分计分组保留权重选择，低分 override 不绕过已启用的计分过滤',()=>{
+  const equal=[makeEntry({key:'a',keys:['x'],group:'g',groupWeight:1}),makeEntry({key:'b',keys:['x'],group:'g',groupWeight:100})]
+  expect(activatedKeys(run({entries:equal,messages:[userMsg('x')],settings:makeSettings({useGroupScoring:true}),random:()=>0}))).toEqual(['a'])
+  equal[1]!.keys=['x','y'];equal[0]!.groupOverride=true
+  expect(activatedKeys(run({entries:equal,messages:[userMsg('x y')],settings:makeSettings({useGroupScoring:true}),random:()=>0}))).toEqual(['b'])
+})
+
+/** 最少激活扩展与递归共用一次评估，不能重复定时/概率或越过条目深度。 */
+describe('最少激活历史扩展',()=>{
+  const messages=[userMsg('old'),userMsg('middle'),userMsg('latest')]
+  it('逐条扩深到目标，最大深度与条目深度独立约束',()=>{
+    const entries=[makeEntry({key:'a',keys:['middle']}),makeEntry({key:'b',keys:['old']}),makeEntry({key:'fixed',keys:['old'],scanDepth:1})]
+    const evaluate=(settings:Partial<WorldInfoGlobalSettings>)=>activatedKeys(run({entries,messages,settings:makeSettings({scanDepth:1,recursiveScan:false,...settings})}))
+    expect(evaluate({})).toEqual([])
+    expect(evaluate({minActivations:1})).toEqual(['a'])
+    expect(evaluate({minActivations:3,maxScanDepth:2})).toEqual(['a'])
+    expect(evaluate({minActivations:3})).toEqual(['a','b'])
+    expect(evaluate({minActivations:3,maxRecursionSteps:1})).toEqual([])
+  })
+  it('扩深找到的条目继续递归，递归排除不阻止直接历史命中',()=>{
+    const entries=[makeEntry({key:'a',keys:['middle'],content:'recurse',excludeRecursion:true}),makeEntry({key:'b',keys:['recurse']})]
+    expect(activatedKeys(run({entries,messages,settings:makeSettings({scanDepth:1,minActivations:2,recursiveScan:true})}))).toEqual(['a','b'])
+    expect(activatedKeys(run({entries,messages,settings:makeSettings({scanDepth:1,minActivations:2,recursiveScan:true,maxRecursionSteps:2})}))).toEqual(['a'])
+  })
+  it('扩深不会重复掷骰或扣减旧定时器，达到预算溢出后停止扩深',()=>{
+    let rolls=0
+    const entries=[makeEntry({key:'roll',keys:['latest'],probability:50,useProbability:true}),makeEntry({key:'sticky',sticky:3}),makeEntry({key:'old',keys:['old']})]
+    const result=run({entries,messages,random:()=>{rolls++;return 0.9},timerState:{stickyLeft:{sticky:3},cooldownLeft:{unrelated:4}},settings:makeSettings({scanDepth:1,minActivations:9})})
+    expect(rolls).toBe(1);expect(result.timerState.stickyLeft.sticky).toBe(2);expect(result.timerState.cooldownLeft.unrelated).toBe(3)
+    expect(activatedKeys(result)).toEqual(['old','sticky'])
+    const limited=run({entries:[makeEntry({key:'large',keys:['latest']}),makeEntry({key:'older',keys:['old']})],messages,settings:makeSettings({scanDepth:1,minActivations:3,tokenBudget:1})})
+    expect(limited.truncated.map(item=>item.key)).toEqual(['large'])
+    expect(limited.log.some(item=>item.entryKey==='older'&&item.kind==='activated')).toBe(false)
+  })
+})

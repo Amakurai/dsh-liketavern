@@ -2,6 +2,7 @@
  * 设置面板分区：提示词预设（卡片网格 / 导入 / 导出 / 删除 / 条目表格编辑）。
  * 卡片可键盘触发（clickableProps）；保存/导入/设默认等瞬时反馈走 useToast，上下文错误用 Err。
  */
+import { exportHelperScriptTrees } from '../../core/helperScripts.js'
 import { useDraftGuard } from '../drafts.js'
 import { useDraftState } from '../draftPersistence.js'
 import { useState } from 'react'
@@ -219,6 +220,7 @@ export function PresetsSection(props: { remote: TavernRemote }) {
       if (preset.regexScripts && preset.regexScripts.length > 0) {
         json.extensions = { regex_scripts: preset.regexScripts }
       }
+      if(preset.helperSettings)json.extensions={...(json.extensions as Record<string,unknown>??{}),tavern_helper:{...preset.helperSettings,scripts:exportHelperScriptTrees(preset.helperSettings.scripts??[])}}
       downloadJson(`${name || id}.json`, json)
     })
   }

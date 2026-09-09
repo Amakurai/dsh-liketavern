@@ -7,6 +7,7 @@ export declare function Btn(props: {
     disabled?: boolean;
     danger?: boolean;
     primary?: boolean;
+    pressed?: boolean;
     title?: string;
     size?: 'sm' | 'md';
     children?: ReactNode;
@@ -186,7 +187,7 @@ export declare function errOf(r: Envelope<unknown>): string | null;
 export declare function runAsync(setBusy: (busy: boolean) => void, setError: (message: string | null) => void, fn: () => Promise<void>, onError?: (message: string) => void): Promise<void>;
 export declare function fileToBase64(file: File): Promise<string>;
 export declare function readJsonFile(file: File): Promise<unknown>;
-export declare function downloadJson(filename: string, json: unknown): void;
+export declare function downloadJson(filename: string, json: unknown, space?: number): void;
 export declare function downloadBase64(filename: string, base64: string, mime: string): void;
 /** primitives Modal 的薄封装（统一关闭文案）；width 档：sm 380（默认）/ md 480 / lg 680 / xl 880 / full 1280（近全屏）。 */
 export declare function Dialog(props: {

@@ -339,3 +339,16 @@ describe('exportStPreset 与往返', () => {
     expect(warnings.some((w) => w.includes('1 条预设正则'))).toBe(true)
   })
 })
+
+it('预设脚本随导入导出保留，兼容键值对设置，并遵守脚本数据排除标记',()=>{
+  const {preset}=parseStPreset({name:'工厂预设',prompts:[],extensions:{tavern_helper:[['scripts',[{id:'script',enabled:true,content:'await Promise.resolve()',data:{secret:7},export_with:{data:false}}]],['variables',{author:5}]]}})
+  expect(preset.helperSettings).toMatchObject({variables:{author:5},scripts:[{id:'script',data:{secret:7}}]})
+  const exported=exportStPreset(preset)
+  expect(exported).toMatchObject({extensions:{tavern_helper:{variables:{author:5},scripts:[{id:'script',enabled:true,content:'await Promise.resolve()',data:{}}]}}})
+  expect(JSON.stringify(exported)).not.toContain('secret')
+  expect(parseStPreset(exported).preset.helperSettings).toMatchObject({scripts:[{id:'script'}]})
+})
+it('预设内非法脚本设置不能通过导入或保存验证',()=>{
+  expect(()=>parseStPreset({prompts:[],extensions:{tavern_helper:{scripts:[{id:'duplicate'},{id:'duplicate'}]}}})).toThrow(/重复/)
+  expect(()=>exportStPreset({identifier:'invalid',name:'invalid',entries:[],helperSettings:[] as unknown as Record<string,unknown>})).toThrow(/对象/)
+})

@@ -154,6 +154,38 @@ describe('开场白开始状态（真实存储 + 宿主 Session）', () => {
   })
 })
 
+describe('内联 HTML 卡面服务展示（真实剧情存储）', () => {
+  it('普通回复和展示正则生成的裸 div 保留正文顺序，重复刷新不修改消息与模板文件', async () => {
+    const {cardId} = await importCard(paths.characters, makeCard())
+    const session = Session.create('session-fragment' as Session['id'])
+    sessions.set(session.id, session)
+    await state.saveBinding(makeBinding({sessionId:session.id,cardId}))
+    const html = '<div style="display:flex"><span>好感度</span><div style="width:5%">5</div></div>'
+    const text = '开头台词\n'+html+'\n后续台词'
+    const message = session.append('assistant/message', {turn:0,step:0,message:greetingMessage(text)}, {surfaceOp:'append',sourceEventSeqs:[]})
+    const request = {sessionId:session.id,text,messageId:message.seq}
+    const binding = (await state.loadBinding(session.id))!, workspace = await state.storyWorkspace(cardId,binding.storyId)
+    const before = await workspace.fs.readText('state/template.json'), history = session.snapshotEvents()
+    const expected = [{kind:'markdown',text:'开头台词'},{kind:'html',text:html},{kind:'markdown',text:'后续台词'}]
+    for(let i=0;i<2;i++) {
+      const rendered = await service.renderOutputText(request)
+      expect(rendered.parts).toEqual(expected);expect(rendered.htmls).toEqual([html])
+      expect(rendered.helper?.storyId).toBe(binding.storyId)
+    }
+    await service.saveRegexRules({rules:[{id:'fragment',name:'状态栏',find:'STATUS',replace:html,enabled:true,scopes:['output'],timing:['render'],minDepth:null,maxDepth:null,substituteRegex:0,source:'user'}]})
+    expect((await service.renderOutputText({sessionId:session.id,text:'开头台词\nSTATUS\n后续台词'})).parts).toEqual(expected)
+    settingsRaw.interactiveCards=false
+    const disabled = await service.renderOutputText(request)
+    expect(disabled.htmls).toEqual([]);expect(disabled.parts).toBeUndefined()
+    settingsRaw.interactiveCards=true
+    await state.saveBinding({...binding,interactiveCards:false})
+    const sessionDisabled = await service.renderOutputText({...request,text:html})
+    expect(sessionDisabled.htmls).toEqual([]);expect(sessionDisabled.text).toBe(html)
+    expect(await workspace.fs.readText('state/template.json')).toBe(before)
+    expect(session.snapshotEvents()).toEqual(history)
+  })
+})
+
 describe('面板写路径不记 WAL（plainWorkspace）', () => {
   it('turn 进行中（共享句柄 floor 非 null）面板写不记楼层快照，回退不撤销', async () => {
     const { cardId } = await importCard(paths.characters, makeCard())
@@ -321,4 +353,36 @@ describe('getAvatar 指纹缓存', () => {
     await ws.fs.writeBytes('card.png', png2)
     expect((await service.getAvatar({ cardId })).dataUrl).toBe(`data:image/png;base64,${png2.toString('base64')}`)
   })
+})
+
+it('原生 MVU 补出卡片原有状态栏，重复展示不改写历史或剧情文件，关闭后恢复正文',async()=>{
+  const html='<div class="mvu-status">Status panel</div>'
+  const {cardId}=await importCard(paths.characters,makeCard({regexScripts:[{id:'status',scriptName:'Status',findRegex:'<StatusPlaceHolderImpl/>',replaceString:html,placement:[2],disabled:false,markdownOnly:true,promptOnly:false}]}))
+  const session=Session.create('session-mvu-status' as Session['id']);sessions.set(session.id,session)
+  await state.saveBinding(makeBinding({sessionId:session.id,cardId,helperMvu:true}))
+  const message=session.append('assistant/message',{turn:0,step:0,message:greetingMessage('正文')},{surfaceOp:'append',sourceEventSeqs:[]})
+  const binding=(await state.loadBinding(session.id))!,workspace=await state.storyWorkspace(cardId,binding.storyId)
+  const before=await workspace.fs.readText('state/helper.json'),history=session.snapshotEvents()
+  const request={sessionId:session.id,messageId:message.seq,text:'正文'}
+  for(let i=0;i<2;i++){const result=await service.renderOutputText(request);expect(result.htmls).toEqual([html]);expect(result.parts).toEqual([{kind:'markdown',text:'正文'},{kind:'html',text:html}]);expect(result.helper?.storyId).toBe(binding.storyId)}
+  expect((await service.renderOutputText({...request,text:'正文<StatusPlaceHolderImpl/>'})).htmls).toEqual([html])
+  expect(session.snapshotEvents()).toEqual(history);expect(await workspace.fs.readText('state/helper.json')).toBe(before)
+  await state.saveBinding({...binding,helperMvu:false});expect((await service.renderOutputText(request)).htmls).toEqual([])
+})
+
+/** 纯文本也必须提供发布选项所需的剧情身份，关闭交互后不提供该能力。 */
+it('纯文本回复携带当前剧情上下文，预览与关闭交互不暴露上下文',async()=>{
+  const {cardId}=await importCard(paths.characters,makeCard())
+  const session=Session.create('session-plain-helper' as Session['id']);sessions.set(session.id,session)
+  await state.saveBinding(makeBinding({sessionId:session.id,cardId}))
+  const message=session.append('assistant/message',{turn:0,step:0,message:greetingMessage('请选择【开门】')},{surfaceOp:'append',sourceEventSeqs:[]})
+  const request={sessionId:session.id,messageId:message.seq,text:'请选择【开门】'}
+  const result=await service.renderOutputText(request)
+  expect(result.htmls).toEqual([])
+  expect(result.helper?.messages[result.helper.currentMessageId]?.message).toBe(request.text)
+  expect(result.helperScripts).toBeUndefined()
+  expect((await service.renderOutputText({sessionId:session.id,text:request.text})).helper).toBeUndefined()
+  const binding=(await state.loadBinding(session.id))!
+  await state.saveBinding({...binding,interactiveCards:false})
+  expect((await service.renderOutputText(request)).helper).toBeUndefined()
 })

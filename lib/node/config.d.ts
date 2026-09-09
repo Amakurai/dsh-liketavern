@@ -39,6 +39,8 @@ export declare const TavernConfigSchema: z<Schemastery.ObjectS<{
     }>>;
     worldInfo: z<Schemastery.ObjectS<{
         scanDepth: z<number, number>;
+        minActivations: z<number, number>;
+        maxScanDepth: z<number, number>;
         contextPercent: z<number, number>;
         tokenBudget: z<number, number>;
         recursiveScan: z<boolean, boolean>;
@@ -52,6 +54,8 @@ export declare const TavernConfigSchema: z<Schemastery.ObjectS<{
         useGroupScoring: z<boolean, boolean>;
     }>, Schemastery.ObjectT<{
         scanDepth: z<number, number>;
+        minActivations: z<number, number>;
+        maxScanDepth: z<number, number>;
         contextPercent: z<number, number>;
         tokenBudget: z<number, number>;
         recursiveScan: z<boolean, boolean>;
@@ -160,6 +164,8 @@ export declare const TavernConfigSchema: z<Schemastery.ObjectS<{
     }>>;
     worldInfo: z<Schemastery.ObjectS<{
         scanDepth: z<number, number>;
+        minActivations: z<number, number>;
+        maxScanDepth: z<number, number>;
         contextPercent: z<number, number>;
         tokenBudget: z<number, number>;
         recursiveScan: z<boolean, boolean>;
@@ -173,6 +179,8 @@ export declare const TavernConfigSchema: z<Schemastery.ObjectS<{
         useGroupScoring: z<boolean, boolean>;
     }>, Schemastery.ObjectT<{
         scanDepth: z<number, number>;
+        minActivations: z<number, number>;
+        maxScanDepth: z<number, number>;
         contextPercent: z<number, number>;
         tokenBudget: z<number, number>;
         recursiveScan: z<boolean, boolean>;

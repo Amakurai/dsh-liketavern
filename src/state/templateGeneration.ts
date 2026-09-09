@@ -6,6 +6,7 @@ import { TEMPLATE_REPLAY_LIMIT, templateReplayGenerationContext, type TemplateRe
 import { parseTemplateStickyState } from '../core/templateSticky.js'
 import { parseTemplateMessageVariables, parseTemplateMessageIdentities } from '../core/templateMessageVariables.js'
 import { isTemplateAvatarUrl, TEMPLATE_AVATAR_URL_CHARS } from '../core/templateAvatar.js'
+import { parseTemplateHelperMvu, type TemplateHelperMvu } from '../core/templateHelperMvu.js'
 
 const text = z.string(), number = z.number().finite(), bool = z.boolean()
 const role = z.enum(['system','user','assistant'])
@@ -18,7 +19,7 @@ const entry = z.object({key:text,uid:text,source:z.enum(['chat','persona','chara
   keys:z.array(text),secondaryKeys:z.array(text),selective:bool,selectiveLogic:z.union([z.literal(0),z.literal(1),z.literal(2),z.literal(3)]),
   comment:text,content:text,constant:bool,enabled:bool,order:number,position:z.union([z.literal(0),z.literal(1),z.literal(2),z.literal(3),z.literal(4),z.literal(5),z.literal(6),z.literal(7)]),
   depth:number,role:z.union([z.literal(0),z.literal(1),z.literal(2)]),outletName:text,probability:number,useProbability:bool,
-  caseSensitive:bool.nullable(),matchWholeWords:bool.nullable(),scanDepth:number.nullable(),excludeRecursion:bool,preventRecursion:bool,
+  caseSensitive:bool.nullable(),matchWholeWords:bool.nullable(),useGroupScoring:bool.nullable().optional(),scanDepth:number.nullable(),excludeRecursion:bool,preventRecursion:bool,
   delayUntilRecursion:number,sticky:number.nullable(),cooldown:number.nullable(),delay:number.nullable(),ignoreBudget:bool,
   group:text,groupWeight:number,groupOverride:bool,automationId:text,templateCondition:text.optional(),templatePreload:bool.optional(),
   templateOnlyPreload:bool.optional(),templateDontActivate:bool.optional(),templatePreprocessing:bool.optional(),templateIframe:text.optional(),templateMessageFormatting:bool.optional(),
@@ -28,10 +29,12 @@ const context: z.ZodType<TemplateContext> = z.object({variables:scope,char:text,
   presets:z.array(z.object({identifier:text,name:text,content:text}).passthrough()),history:z.array(chat),now:number,seed:number,phase:z.enum(['generate','render']),
   sessionId:text.optional(),cardId:text.optional(),generationType:text.optional(),model:text.optional(),
   charAvatar:avatar.optional(),userAvatar:avatar.optional(),historyIdentities:identities.optional(),messageVariables:messageVariables.optional(),
+  helperMvu:z.unknown().transform(value=>value as TemplateHelperMvu).optional(),
   renderMessages:z.array(z.object({index:z.number().int().nonnegative(),role,name:text.optional(),swipeId:z.number().int().nonnegative(),hostMessageId:z.number().int().nonnegative().optional()}).strict()).optional(),
   regexRules:z.array(regex).optional(),hasMessageRegex:bool.optional()}).strict().superRefine((value,ctx)=>{
     try {
       if(value.historyIdentities) parseTemplateMessageIdentities(value.historyIdentities,value.history.length)
+      if(value.helperMvu!==undefined) parseTemplateHelperMvu(value.helperMvu,value.historyIdentities ?? [])
       if(value.messageVariables) {
         const ids=new Set(value.historyIdentities?.map(item=>item.messageId) ?? value.history.map((_,index)=>`preview:${index}`))
         if(Object.keys(value.messageVariables.snapshots).some(id=>!ids.has(id))) throw new Error('模板恢复包含不可见消息变量')

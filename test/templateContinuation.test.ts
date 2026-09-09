@@ -185,3 +185,14 @@ describe('跨轮 sticky 续存',()=>{
     expect(templatePreloadRevision({...replay.context,presets:[...replay.context.presets].reverse()})).not.toBe(revision)
   })
 })
+
+it('模板重放保留世界书条目计分覆盖并兼容缺少新字段的旧快照，坏类型拒绝恢复',async()=>{
+  const first=await isolated('assemble',request('ROOT',[{content:'@@only_preload\n<% const inert=1 %>',useGroupScoring:false}]))
+  const replay=parseTemplateReplay(json(first.templateReplay!))
+  expect(replay.context.entries[0]?.useGroupScoring).toBe(false)
+  const older=json(replay);delete older.context.entries[0]!.useGroupScoring
+  expect(parseTemplateReplay(older).context.entries[0]).not.toHaveProperty('useGroupScoring')
+  const invalid=json(replay) as unknown as {context:{entries:Record<string,unknown>[]}}
+  invalid.context.entries[0]!.useGroupScoring='bad'
+  expect(()=>parseTemplateReplay(invalid)).toThrow()
+})

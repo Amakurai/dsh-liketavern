@@ -64,6 +64,27 @@ async function readJson(p: string): Promise<Record<string, unknown>> {
   return JSON.parse(await readFile(p, 'utf8')) as Record<string, unknown>
 }
 
+it('受控追加写重新打开 committed 楼层，保留起始时间与首次 before，回滚仍回到追加前整层起点',async()=>{
+  const file=join(workspace,'value.txt'),meta=join(walDir,'s_t1','meta.json'),records=join(walDir,'s_t1','records.jsonl')
+  await writeFile(file,'original');await wal.beginFloor('s#t1')
+  await wal.recordChange('s#t1','value.txt','original','first','utf8','utf8');await writeFile(file,'first');await wal.commitFloor('s#t1')
+  const started=(await readJson(meta)).startedAt,before=await readFile(records,'utf8')
+  await wal.reopenFloor('s#t1')
+  expect(await readJson(meta)).toMatchObject({startedAt:started,committed:false});expect(await readJson(meta)).not.toHaveProperty('committedAt')
+  expect(await readFile(records,'utf8')).toBe(before)
+  await wal.recordChange('s#t1','value.txt','first','second','utf8','utf8');await writeFile(file,'second');await wal.commitFloor('s#t1')
+  await wal.rollbackFloor('s#t1',workspace);expect(await readFile(file,'utf8')).toBe('original')
+  await expect(wal.reopenFloor('s#t1')).rejects.toThrow(/缺失|回滚/)
+})
+
+it('重新打开前完整验证坏记录，拒绝时不改 committed 元数据或正文',async()=>{
+  const file=join(workspace,'value.txt'),meta=join(walDir,'s_t1','meta.json'),records=join(walDir,'s_t1','records.jsonl')
+  await writeFile(file,'first');await wal.beginFloor('s#t1');await wal.recordChange('s#t1','value.txt',null,'first','utf8','utf8');await wal.commitFloor('s#t1')
+  const metadata=await readFile(meta,'utf8');await writeFile(records,(await readFile(records,'utf8'))+'{broken}\n')
+  await expect(wal.reopenFloor('s#t1')).rejects.toThrow(/WAL/)
+  expect(await readFile(meta,'utf8')).toBe(metadata);expect(await readFile(file,'utf8')).toBe('first')
+})
+
 async function readLines(p: string): Promise<Record<string, unknown>[]> {
   const text = await readFile(p, 'utf8')
   return text

@@ -26,6 +26,7 @@
  * 的规则同样跳过并记录，绝不让 .includes() 处炸在主循环里。
  */
 import { expandMacros, type MacroContext } from './macros.js'
+import { findHtmlFragment } from './htmlFragment.js'
 import { isSyntheticUserText } from './dshPrompt.js'
 import type { CardRegexScript, ChatMessage, ChatRole, RegexRule, RegexScope, RegexTiming } from './types.js'
 
@@ -643,26 +644,37 @@ function splitTrailingProse(block: string): { html: string; rest: string } {
  * 正则替换后的展示文本常是「整页 HTML 封面」或「小部件 HTML + 后面的正文」。
  * HTML 文档和小部件片段抽进 iframe；围栏外 / </html> 之前的协议标签与之后的文字留给 Markdown。
  */
-export function splitRenderedHtml(text: string): { html: string | null; rest: string } {
-  if (!text) return { html: null, rest: '' }
+export function locateRenderedHtml(text: string): { html: string; rest: string; start: number } | null {
+  if (!text) return null
   const fence = HTML_FENCE_RE.exec(text)
-  if (fence?.[1] && isHtmlPayload(fence[1])) {
+  if (fence?.[1] && (isHtmlPayload(fence[1]) || findHtmlFragment(fence[1]))) {
     const rest = `${text.slice(0, fence.index)}${text.slice(fence.index + fence[0].length)}`.trim()
-    return { html: fence[1].trim(), rest }
+    const html = fence[1].trim()
+    return { html, rest, start: fence.index + fence[0].length - 3 - fence[1].length + fence[1].indexOf(html) }
   }
-  if (!isHtmlPayload(text)) return { html: null, rest: text.trim() }
+  if (!isHtmlPayload(text)) {
+    const fragment = findHtmlFragment(text)
+    if (!fragment) return null
+    return { html: text.slice(fragment.start, fragment.end), rest: [text.slice(0, fragment.start).trim(), text.slice(fragment.end).trim()].filter(Boolean).join('\n'), start:fragment.start }
+  }
   const start = text.search(HTML_PAYLOAD_START_RE)
   const end = start >= 0 ? HTML_END_RE.exec(text.slice(start)) : null
   if (start >= 0 && end) {
     const htmlEnd = start + end.index + end[0].length
     const html = text.slice(start, htmlEnd).trim()
     const rest = `${text.slice(0, start)}${text.slice(htmlEnd)}`.trim()
-    return { html, rest }
+    return { html, rest, start }
   }
   const payload = start >= 0 ? text.slice(start) : text
   const prefix = start > 0 ? text.slice(0, start).trim() : ''
   const split = splitTrailingProse(payload)
-  return { html: split.html, rest: [prefix, split.rest].filter(Boolean).join('\n') }
+  return { html: split.html, rest: [prefix, split.rest].filter(Boolean).join('\n'), start:Math.max(0,start) }
+}
+
+/** 兼容聚合接口；有序展示使用定位结果，避免同文代码示例抢占真实卡面的起点。 */
+export function splitRenderedHtml(text: string): { html: string | null; rest: string } {
+  const located = locateRenderedHtml(text)
+  return located ? {html:located.html,rest:located.rest} : {html:null,rest:text.trim()}
 }
 
 /**

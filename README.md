@@ -18,6 +18,8 @@
 
 ## 功能
 
+- **内置酒馆助手卡面兼容**：本地 jQuery/Lodash/Zod/YAML、真实聊天快照、剧情变量持久化与同剧情跨卡面事件，支持开场白选择、角色卡后台模块脚本、脚本按钮与错误提示。内置全局、预设和角色脚本库的编辑、文件夹管理、导入导出和持久启停；卡内脚本也能更新脚本库并等待保存回执，通过新旧世界书接口读写和切换绑定，支持角色附加书与保留修改的剧情私有书切换，旧世界书设置可按会话覆盖并实际控制扫描。脚本可读取并写回完整消息对象（含完整 swipe 页集合与切页分支），旧消息接口、/swipe 和上下文保存共用持久化与冲突保护，在当前剧情批量保存消息 data/extra，或批量编辑、删除消息，创建保留后续聊天且正确撤销派生事实的独立分支。消息显示支持指定楼层或当前页面插件气泡重绘，保存失败与未提交草稿会阻止刷新。全部卡面就绪后发送消息显示事件，all 重绘完成后发送剧情刷新事件，监听先同步最新剧情变量。当前对话的新消息和生成生命周期也会通知卡片，正常回复等模板与 WAL 收口成功后才触发，历史加载或重连不重复通知。提供 Mvu 手动解析与显式保存、当前沙箱的变量 schema 编辑器。会话可开启原生 MVU 自动初始化和正常回复后更新，等待后台脚本就绪，失败保留任务；下一轮 EJS/宏读取同一剧情变量。需要保持页面打开；classic schema、正文状态栏占位等完整 MVU 兼容仍待适配。聊天与预览共用沙箱；[兼容范围与示例](docs/TAVERN_HELPER.md)说明已实现接口和后续适配范围。
+
 - **角色卡**：导入 / 导出 SillyTavern V1/V2/V3 角色卡（PNG 内嵌或 JSON），支持多开场白 swipe、卡内嵌世界书、正则脚本（`regex_scripts`），交互卡（HTML 封面）在沙箱 iframe 中渲染。
 - **提示词预设**：导入 ST 预设 JSON，按 Prompt Manager 语义组装；提示词走 dsh 的 system-prompt 瀑布（稳定段 + 每轮 runtime context），不在前端拼包直发。
 - **内置 EJS 模板**：条件、循环、异步表达式、剧情与按消息变量、JSON/YAML 初值、JSON Patch、Zod 校验与世界书装饰器；支持主动激活、跨来源正则、sticky 跨轮注入和闭包、头像上下文、Lodash、Faker 与历史查询。正常完成回复中的脚本只处理一次，重启、分支与楼层回滚保持变量和计数一致。无需另装 ST-Prompt-Template；[兼容范围与示例](docs/PROMPT_TEMPLATES.md)列出接口及宿主差异。
@@ -28,7 +30,7 @@
 - **AI 代答 / 续写**：代答结果复制到剪贴板；续写不改历史，直接 followup。
 - **模型工具（7 个）**：记忆检索 / 写入 / 更新、世界书按条读取、世界状态更新、资产列表 / 读取，供多步 agent 循环按需调用。
 
-交互卡的变量接口仅兼容当前卡面内的临时读写，不等同于 SillyTavern 的持久存储。使用变量的卡片会显示“卡内临时数据 · 备份与恢复”：生成备份后复制保存；重新打开卡片时，在卡片下方点“恢复卡内备份”并粘贴。备份不包含尚未保存的表单输入，大小上限为 1 MiB，也不会写入角色资产或剧情记忆。
+真实会话中的交互卡变量通过剧情锁与 WAL 自动保存，保存状态可通过运行时 API 读取；可调用 `await flushHelperVariables()` 等待保存确认。所有作用域按剧情隔离，分支继承后独立变化；角色预览仍为临时数据。备份、恢复与刷新入口位于「Tavern 设置 → 卡片与数据」，按角色和剧情选择已保存快照，不再向角色卡页面插入管理控件。备份上限为 1 MiB，不包含尚未写入变量的表单输入。
 
 管理页编辑有离开确认和浏览器刷新/关闭保护。角色、预设、世界书、用户、正则、记忆和设置的未保存编辑会自动暂存到数据目录的 `editor-drafts/`；看到“草稿已暂存”后，在同一浏览器标签页刷新或重新打开管理页可恢复正文、页签及角色/剧情选择。点击保存才会应用修改，明确放弃会清除对应草稿。浏览器仅保存随机标签页标识，不存编辑正文；禁用浏览器存储或关闭标签页后不保证找回。单份草稿上限 2 MiB，暂存失败会保留页面内容并提供重试。
 
@@ -58,7 +60,7 @@ dsh plugin --profile web list --depth 0
 两点说明（对应官方文档[打包与安装插件](https://deepseek-harness.github.io/deepseek-harness/develop/basic/publish)）：
 
 - **git 安装拉的是源码而非构建产物**，pnpm 不会替你跑 `build`。本仓库把构建产物 `lib/` 刻意入库，因此从 GitHub 直接安装即可用。建议锁定 commit（`github:Amakurai/dsh-liketavern#<sha>`），避免后续推送悄悄改变实际运行的内容。
-- **安装依赖**：使用 `zod`、`quickjs-emscripten`、`yaml`、`lodash`、`jsonrepair`、`@faker-js/faker`、`ejs` 和 `showdown`，提供不需要原生构建的模板沙箱、初值解析、编译和格式化兼容。`@deepseek-ai/*` 全部是 peer 依赖，由 profile 里已安装的 dsh 宿主满足。如遇 pnpm 构建脚本拦截，按 dsh 报错核对 profile 中宿主依赖的 `allowBuilds` 配置。
+- **安装依赖**：使用 `zod`、`quickjs-emscripten`、`yaml`、`lodash`、`jsonrepair`、`@faker-js/faker`、`ejs`、`showdown` 和 `jquery`，提供不需要原生构建的模板沙箱、初值解析、编译、格式化和卡面兼容。`@deepseek-ai/*` 全部是 peer 依赖，由 profile 里已安装的 dsh 宿主满足。如遇 pnpm 构建脚本拦截，按 dsh 报错核对 profile 中宿主依赖的 `allowBuilds` 配置。
 - 也可以走 tarball：作者侧 `npm pack`（`prepack` 会先构建），用户侧 `dsh plugin --profile web add ./dsh-liketavern-0.1.1.tgz`。
 
 版本兼容：本包以 peerDependency 锁 dsh `0.1.2-rc.1`；dsh 处于预发布阶段，升级 dsh 后需同步换装适配的插件版本。版本对应关系见 [CHANGELOG.md](./CHANGELOG.md)。

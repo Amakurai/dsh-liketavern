@@ -9,6 +9,7 @@ import { join } from 'node:path'
 import { sessionFile, type TavernPaths } from './paths.js'
 import { assertValidCardId } from '../state/workspace.js'
 import type { SessionBinding, WalLineageEntry } from '../core/binding.js'
+import {helperWorldbookSettingsCodec} from '../core/helperWorldbookSettings.js'
 import { atomicWrite } from '../state/atomicWrite.js'
 import { storyRoot } from '../state/story.js'
 
@@ -104,7 +105,14 @@ export function parseSessionBinding(input: unknown): SessionBinding {
     personaId: nullableString('personaId'),
     lorebookIds,
     characterLorebookId: nullableString('characterLorebookId'),
+    useEmbeddedLorebook: optionalBoolean('useEmbeddedLorebook'),
+    characterLorebookIds: raw.characterLorebookIds===undefined?undefined:(()=>{
+      if(!Array.isArray(raw.characterLorebookIds)||raw.characterLorebookIds.length>64||raw.characterLorebookIds.some(id=>typeof id!=='string'||!id))invalidBinding('characterLorebookIds','至多 64 项的非空字符串数组')
+      return [...new Set(raw.characterLorebookIds as string[])]
+    })(),
+    worldInfo:raw.worldInfo===undefined?undefined:helperWorldbookSettingsCodec.nativePatch(raw.worldInfo),
     interactiveCards,
+    helperMvu:optionalBoolean('helperMvu'),
     greetingIndex,
     authorNote: optionalString('authorNote'),
     injectJournal: optionalBoolean('injectJournal'),

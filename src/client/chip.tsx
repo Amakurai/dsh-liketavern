@@ -11,6 +11,7 @@ import { useT } from './i18n.js'
 import { isTavernSession, type UseSessions } from './mode.js'
 import { openChildSession } from './openChild.js'
 import { TavernSeatChip } from './seatChip.js'
+import { HelperScripts } from './helperScripts.js'
 import type { WorldInfoEntry } from '../core/types.js'
 import { parseLorebook } from '../state/lorebook.js'
 import { LorebookEditor } from './panel/lorebookEditor.js'
@@ -41,6 +42,30 @@ export async function bindingFromDefaults(remote: TavernRemote, sessionId: strin
   // 读取设置失败时不能静默套用空默认值，否则一次暂时性的 RPC 故障会覆盖用户原有的绑定配置。
   if (!r.ok) throw new Error(r.error.message)
   return defaultBinding(sessionId, cardId, r.value.settings.defaults)
+}
+
+/** 独立于脚本运行器和全局交互开关的恢复入口；只在确认后放弃任务，不触碰宿主输入队列。 */
+export function HelperMvuAbandonAction(props: { remote: TavernRemote; sessionId: string; storyId: string; onChanged: () => void }) {
+  const t = useT(), pending = useRef(false)
+  const [confirm, setConfirm] = useState(false), [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null), [done, setDone] = useState(false)
+  const abandon = async () => {
+    if (pending.current) return
+    pending.current = true; setBusy(true); setError(null); setDone(false)
+    try {
+      const result = await props.remote.abandonHelperMvu({ sessionId: props.sessionId, storyId: props.storyId })
+      if (!result.ok) throw new Error(result.error.message)
+      setConfirm(false); setDone(true)
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
+    finally { pending.current = false; setBusy(false); props.onChanged() }
+  }
+  return <div>
+    <Btn danger disabled={busy} onClick={() => { setError(null); setDone(false); setConfirm(true) }}>{t('chip.mvuAbandon.action')}</Btn>
+    {done && <Muted>{t('chip.mvuAbandon.done')}</Muted>}
+    <Err message={error}/>
+    <ConfirmDialog open={confirm} title={t('chip.mvuAbandon.title')} description={t('chip.mvuAbandon.desc') + (error ? '\n' + error : '')}
+      confirmLabel={t('chip.mvuAbandon.action')} danger busy={busy} onCancel={() => { if (!pending.current) setConfirm(false) }} onConfirm={() => { void abandon() }}/>
+  </div>
 }
 
 function PreDialog(props: { title: string; text: string; onClose: () => void }) {
@@ -133,12 +158,14 @@ export function TavernHeaderChip(props: {
   remote: TavernRemote
   sessionId: string
   sessions: { open(id: string): void; refresh?: () => Promise<void> }
+  onCancel?: () => Promise<void>
   useSessions?: UseSessions
 }) {
   const { remote, sessionId, sessions } = props
   const t = useT()
   const tavern = isTavernSession(props.useSessions, sessionId)
   const bindingLoader = useLoader(() => cachedSessionBinding(remote, sessionId), [sessionId], tavern)
+  useEffect(()=>{const changed=(event:Event)=>{if((event as CustomEvent).detail===sessionId)bindingLoader.reload()};window.addEventListener(BINDING_CHANGED_EVENT,changed);return()=>window.removeEventListener(BINDING_CHANGED_EVENT,changed)},[sessionId,bindingLoader.reload])
   const binding = bindingLoader.state.status === 'ready' ? bindingLoader.state.value.binding : null
   const canSwipeGreeting =
     bindingLoader.state.status === 'ready' ? bindingLoader.state.value.canSwipeGreeting !== false : false
@@ -337,6 +364,7 @@ export function TavernHeaderChip(props: {
 
   return (
     <span className="dsh-tavern-ui" style={{ display: 'inline-flex' }}>
+      {binding?.storyId&&<HelperScripts key={`${sessionId}:${binding.storyId}:${binding.helperMvu===true}`} remote={remote} sessionId={sessionId} sessions={sessions} onCancel={props.onCancel}/>}
       <TavernSeatChip
         label={binding ? (name ?? listedName ?? t('chip.characterFallback')) : t('hero.pickCharacter')}
         title={t('hero.pickCharacter')}
@@ -377,6 +405,18 @@ export function TavernHeaderChip(props: {
       >
           <div className="dsh-tavern-binding dsh-tavern-bindingWide">
           <Err message={error} />
+          {binding?.storyId && <HelperMvuAbandonAction key={sessionId + ':' + binding.storyId} remote={remote} sessionId={sessionId} storyId={binding.storyId} onChanged={() => {
+            invalidateSessionBinding(sessionId)
+            bindingLoader.reload()
+            window.dispatchEvent(new CustomEvent(BINDING_CHANGED_EVENT, { detail: sessionId }))
+            // 关闭绑定后正文写入可能失败；重新读取真实开关，保留用户其它尚未保存的绑定编辑。
+            void cachedSessionBinding(remote, sessionId).then(result => {
+              if (result.ok && result.value.binding) {
+                const current = result.value.binding
+                setDraft(previous => previous?.cardId === current.cardId && previous.storyId === current.storyId ? { ...previous, helperMvu: current.helperMvu } : previous)
+              }
+            }).catch(() => {})
+          }}/>}
           {!lists && (
             <div className="dsh-tavern-panelCard">
               <Skeleton height={14} width="24%" />
@@ -426,16 +466,31 @@ export function TavernHeaderChip(props: {
 
                   <div className="dsh-tavern-panelCard">
                     <div className="dsh-tavern-groupHead">{t('section.lorebooks')}</div>
+                    {draft.worldInfo&&Object.keys(draft.worldInfo).length>0&&<Field label={t('chip.worldInfoOverride')}>
+                      <Muted>{t('chip.worldInfoOverrideDesc',{count:Object.keys(draft.worldInfo).length})}</Muted>
+                      <Btn onClick={()=>setDraft({...draft,worldInfo:{}})}>{t('chip.worldInfoReset')}</Btn>
+                    </Field>}
                     <Field label={t('chip.field.mainLore')}>
                       <Select
                         width="100%"
-                        value={draft.characterLorebookId ?? ''}
-                        onChange={(v) => setDraft({ ...draft, characterLorebookId: v || null })}
+                        value={draft.characterLorebookId ?? (draft.useEmbeddedLorebook===false?'@dsh/no-main-worldbook':'')}
+                        onChange={(v) => setDraft({ ...draft, characterLorebookId: v===''||v==='@dsh/no-main-worldbook'?null:v,useEmbeddedLorebook:v!=='@dsh/no-main-worldbook' })}
                         options={[
                           { value: '', label: embeddedBookLabel },
+                            {value:'@dsh/no-main-worldbook',label:t('chip.field.none')},
                           ...lists.lorebooks.map((n) => ({ value: n, label: n })),
                         ]}
                       />
+                    </Field>
+                    <Field label={t('chip.field.additionalLore')}>
+                      {lists.lorebooks.length === 0 ? <Muted>{t('chip.field.noLorebooks')}</Muted> : (
+                        <CheckChips
+                          ariaLabel={t('chip.field.additionalLore')}
+                          options={lists.lorebooks.filter(n => n !== draft.characterLorebookId).map(n => ({value:n,label:n}))}
+                          selected={draft.characterLorebookIds ?? []}
+                          onChange={characterLorebookIds => setDraft({...draft,characterLorebookIds})}
+                        />
+                      )}
                     </Field>
                     <Field label={t('chip.field.globalLore')}>
                       {lists.lorebooks.length === 0 ? (
@@ -469,7 +524,9 @@ export function TavernHeaderChip(props: {
                         />
                         {t('chip.field.injectJournal')}
                       </label>
+                      <label><Toggle checked={draft.helperMvu===true} onChange={helperMvu=>setDraft({...draft,helperMvu})}/>{t('chip.field.helperMvu')}</label>
                     </div>
+                    <Muted>{t('chip.field.helperMvuNote')}</Muted>
                   </div>
                 </>
               ) : (

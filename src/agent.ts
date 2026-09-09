@@ -17,6 +17,8 @@ import type { Context } from '@deepseek-ai/cordis'
 import { ReasoningEffortId, type LlmCallConfig, type LlmRuntime } from '@deepseek-ai/dsh-llm'
 import { runTavernPipeline } from './node/pipeline.js'
 import { registerMemoryMaintenance } from './node/memoryMaintenance.js'
+import { blockHelperMvuAssembly, isHelperMvuBlocked, restoreHelperMvuInputs, stopForHelperMvu } from './node/helperMvuLifecycle.js'
+import { onTurnStart } from './node/sessionLifecycle.js'
 import type { TavernService } from './node/service.js'
 import type { TavernState } from './node/state.js'
 import { registerTavernTools } from './node/tools.js'
@@ -75,14 +77,41 @@ export function apply(ctx: Context): void {
   ctx.systemPrompt.context({ name: TURN_CONTEXT, order: 20, text: '' })
 
   ctx.on('agent/pre-step', async (payload, next) => {
+    if (isHelperMvuBlocked(payload.agent, payload.turn)) {
+      restoreHelperMvuInputs(payload.agent, payload.turn, payload.messages)
+      return { kind: 'reject' }
+    }
     state.currentSteps.set(payload.agent.id, payload.step)
     return next()
   })
 
   ctx.on('system-prompt/assemble', async (_assembly, context, next) => {
-    const result = await next()
     const agent = context.agent
-    if (!agent) return result
+    if (!agent) return next()
+    const blocked = await blockHelperMvuAssembly(state, agent, context.signal)
+    let result
+    try { result = await next() }
+    catch (error) {
+      const turn = state.currentTurns.get(agent.id)
+      if (blocked && turn !== undefined) restoreHelperMvuInputs(agent, turn)
+      throw error
+    }
+    if (blocked) {
+      applyStanding(result, UNBOUND_STANDING)
+      applyTurnContext(result, '')
+      return result
+    }
+    // 首次门控可能延后了开层；变量回执已完成后才建立新 WAL，再冻结本轮提示词。
+    const turn = state.currentTurns.get(agent.id)
+    if (turn !== undefined && !state.openFloors.has(agent.id)) {
+      await state.enqueueSessionTask(agent.id, () => onTurnStart(state, agent.id, turn, agent.session))
+    }
+    // 其它 assemble 插件或延后开层期间可能出现初始化任务；冻结计划前再核验一次。
+    if (await blockHelperMvuAssembly(state, agent, context.signal)) {
+      applyStanding(result, UNBOUND_STANDING)
+      applyTurnContext(result, '')
+      return result
+    }
 
     const binding = await state.loadBinding(agent.id)
     if (!binding) {
@@ -137,5 +166,6 @@ export function apply(ctx: Context): void {
   })
 
   registerTavernTools(ctx, state)
+  ctx.on('agent/turn-stopping', ({ agent, signal }) => stopForHelperMvu(state, agent, signal))
   registerMemoryMaintenance(ctx, state, llm)
 }

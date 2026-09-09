@@ -1,9 +1,33 @@
 /**
  * 交互卡 iframe srcDoc 组装：CSP + SillyTavern / JS-Slash-Runner 窄桥脚本 +
  * 内存版 localStorage/sessionStorage shim（opaque origin 下原生访问会抛 SecurityError）。
- * 卡内 JS 不能碰主窗口；只通过 postMessage 请求切换开场白 swipe。
+ * 卡内 JS 不能碰主窗口；通过枚举业务消息切换开场白或提交当前剧情变量。
  */
 import { installCardVariables, type CardVariableLabels } from './cardVariables.js'
+import { installCardEvents } from './cardEvents.js'
+import { installCardHelper, type CardHelperContext, type CardHelperLabels } from './cardHelper.js'
+import { CARD_LIBRARIES } from '../../lib/vendor/card-libraries.js'
+import { installCardPersistence, type CardPersistenceLabels } from './cardPersistence.js'
+import type { HelperSnapshot } from './helperRuntime.js'
+import {createHelperWorldbookSettingsCodec} from './helperWorldbookSettings.js'
+import {installCardDisplay} from './cardDisplay.js'
+import {installCardLegacyChat} from './cardLegacyChat.js'
+import {installCardMvuRunner} from './cardMvuRunner.js'
+import {createHelperMvuInitialData} from './helperMvuInitial.js'
+import {installCardMvu} from './cardMvu.js'
+import {createHelperMvuCommandCodec} from './helperMvuCommands.js'
+import {installCardChatEdits} from './cardChatEdits.js'
+import {parseHelperSwipes} from './helperSwipes.js'
+import {normalizeHelperMessageInputs} from './helperMessageInputs.js'
+import {parseHelperMessageEdits} from './helperChatEdits.js'
+import {installCardWorldbook} from './cardWorldbook.js'
+import {installCardLorebook} from './cardLorebook.js'
+import {createHelperLorebookCodec} from './helperLorebook.js'
+import type {HelperWorldbookContext} from './helperWorldbook.js'
+import { installCardScriptLibraries } from './cardScriptLibraries.js'
+import { helperJson,helperRecord } from './helperRuntime.js'
+import { parseHelperScriptTrees,type HelperScriptContext } from './helperScripts.js'
+import { installCardScript,type CardScriptContext } from './cardScript.js'
 
 export const CARD_BRIDGE_SOURCE = 'dsh-tavern-card'
 
@@ -13,6 +37,15 @@ export interface CardFrameOptions {
   greetingIndex: number
   variableLabels?: CardVariableLabels
   variableStyles?: string
+  helperContext?: CardHelperContext
+  helperLabels?: CardHelperLabels
+  helperSnapshot?: HelperSnapshot
+  mvuRunner?:boolean
+  scriptContext?: CardScriptContext
+  scriptLibraries?:HelperScriptContext
+  worldbooks?:HelperWorldbookContext
+  scriptLibraryLabels?:CardPersistenceLabels
+  persistenceLabels?: CardPersistenceLabels
   /**
    * 额外信任的主机：放宽 connect-src 与 script-src（img/font/style 已默认放行 https）。
    * 空数组 = 脚本不能 fetch/XHR，也不能加载外部脚本；`*` = 全部放行。
@@ -53,14 +86,16 @@ function cspContent(connectHosts: string[]): string {
 }
 
 /** SillyTavern / tavernhelper 常用入口的 stub；卡内按钮经 postMessage 请求 swipeGreeting。 */
-export function tavernCardBridgeScript(options: Pick<CardFrameOptions, 'greetings' | 'greetingIndex' | 'variableLabels' | 'variableStyles'>): string {
+export function tavernCardBridgeScript(options: Omit<CardFrameOptions, 'connectHosts'>): string {
   const payload = escapeScriptJson({
     greetings: options.greetings,
     greetingIndex: options.greetingIndex,
     source: CARD_BRIDGE_SOURCE,
+    helperSnapshot: options.helperSnapshot,
   })
   return `<script data-dsh-tavern-bridge>
 (function () {
+  if (typeof window.__dshTavernBridgeCleanup === 'function') window.__dshTavernBridgeCleanup();
   // 沙箱无 allow-same-origin（opaque origin）：访问 localStorage/sessionStorage 会抛
   // SecurityError。依赖存储的封面脚本在启动时就会整页崩成空白。
   // 装内存版 shim——挂在 window 上，document.write 重写文档后依然生效；刷新即失，不落盘。
@@ -87,78 +122,64 @@ export function tavernCardBridgeScript(options: Pick<CardFrameOptions, 'greeting
   }
   shimStorage('localStorage');
   shimStorage('sessionStorage');
-  (${installCardVariables.toString()})(${escapeScriptJson(options.variableLabels ?? {
-    title: 'Temporary card data / backup', note: 'Card variables stay in this frame only. Copy a backup before leaving or refreshing. They are not shared with the host or other conversations.',
-    backup: 'Select backup text', text: 'Card variable backup',
-  })}, ${escapeScriptJson(options.variableStyles ?? '')});
   var cfg = ${payload};
+  var cleanupPersistence = cfg.helperSnapshot ? (${installCardPersistence.toString()})(cfg.helperSnapshot,cfg.source,
+    ${escapeScriptJson(options.persistenceLabels ?? {saving:'Saving story variables…',saved:'Story variables saved',failed:'Story variable save failed; keep a backup and refresh'})}) : function () {};
+  (${installCardVariables.toString()})(${escapeScriptJson(options.variableLabels ?? {
+    title: 'Card variables / backup', note: options.helperSnapshot ? 'Variables save to this story. Wait for the saved status before leaving; keep a backup if saving fails. Restoring also updates story variables.' : 'Card variables stay in this preview only. Copy a backup before leaving or refreshing.',
+    backup: 'Select backup text', text: 'Card variable backup',
+  })}, ${escapeScriptJson(options.variableStyles ?? '')}, cfg.helperSnapshot ? cfg.helperSnapshot.currentMessageId : ${escapeScriptJson(options.helperContext?.messageId ?? 0)}, cfg.helperSnapshot ? cfg.helperSnapshot.messages.length : undefined);
   function post(action, extra) {
     var msg = { source: cfg.source, action: action };
     if (extra) for (var k in extra) if (Object.prototype.hasOwnProperty.call(extra, k)) msg[k] = extra[k];
     try { parent.postMessage(msg, '*'); } catch (e) {}
   }
-  function msgAt(i) {
-    var g = cfg.greetings || [];
-    var idx = typeof i === 'number' ? i : cfg.greetingIndex;
-    if (idx < 0) idx = 0;
-    if (g.length && idx >= g.length) idx = idx % g.length;
-    var mes = g[idx] != null ? g[idx] : (g[0] || '');
-    return {
-      message: mes,
-      mes: mes,
-      name: '',
-      is_user: false,
-      is_system: false,
-      swipe_id: idx,
-      swipes: g.slice(),
-      extra: {},
-      send_date: Date.now()
-    };
-  }
-  async function getChatMessages(range) {
-    void range;
-    return [msgAt(cfg.greetingIndex)];
-  }
-  async function setChatMessage(field, messageId, options) {
-    void field;
-    void messageId;
-    var opts = options || {};
-    var index = typeof opts.swipe_id === 'number' ? opts.swipe_id : cfg.greetingIndex;
-    post('swipeGreeting', { index: index });
-  }
-  async function triggerSlash(text) {
-    var t = String(text || '');
-    if (/^\\/swipe\\b/i.test(t)) post('swipeGreeting', { index: cfg.greetingIndex + 1 });
-    return t;
-  }
-  var chat = [msgAt(cfg.greetingIndex)];
-  function saveChat() {
-    var swipe = chat[0] && typeof chat[0].swipe_id === 'number' ? chat[0].swipe_id : cfg.greetingIndex;
-    post('swipeGreeting', { index: swipe });
-    return Promise.resolve();
-  }
-  var ctx = {
-    chat: chat,
-    swipe: function () { post('swipeGreeting', { index: cfg.greetingIndex + 1 }); },
-    saveChat: saveChat
-  };
-  var api = { getChatMessages: getChatMessages, setChatMessage: setChatMessage, triggerSlash: triggerSlash };
-  window.getChatMessages = getChatMessages;
-  window.setChatMessage = setChatMessage;
-  window.triggerSlash = triggerSlash;
-  window.toastr = window.toastr || { info: function () {}, success: function () {}, warning: function () {}, error: function () {} };
-  window.SillyTavern = { getContext: function () { return ctx; } };
-  window.TavernHelper = Object.assign(window.TavernHelper || {}, api);
-  if (typeof window.__dshTavernBridgeCleanup === 'function') window.__dshTavernBridgeCleanup();
+  var cleanupEvents = (${installCardEvents.toString()})(Boolean(cfg.helperSnapshot));
+  var cleanupHelper = (${installCardHelper.toString()})(Object.assign(${escapeScriptJson(options.helperContext ?? {})},{snapshot:cfg.helperSnapshot}), cfg.greetings, cfg.greetingIndex, cfg.source,
+    ${escapeScriptJson(options.helperLabels ?? { diagnostics: "Card script messages", unsupported: "Not available in this card sandbox" })});
+  var cleanupMvu=(function(){
+    var HELPER_MAX_BYTES=1024*1024,helperRecord=(${helperRecord.toString()}),helperJson=(${helperJson.toString()});
+    return (${installCardMvu.toString()})((${createHelperMvuCommandCodec.toString()})(helperJson),helperJson);
+  })();
+  var cleanupMvuRunner=${options.mvuRunner ? `(function(){var HELPER_MAX_BYTES=1024*1024,helperRecord=(${helperRecord.toString()}),helperJson=(${helperJson.toString()});return (${installCardMvuRunner.toString()})((${createHelperMvuInitialData.toString()}),helperJson);})()` : 'function(){}'};
   var ro = null, timers = [], lastHeight = 0;
+  var scriptContext=${escapeScriptJson(options.scriptContext??null)};
+  var scriptLibraries=${escapeScriptJson(options.scriptLibraries??null)};
+  var cleanupScriptLibraries=scriptLibraries?(function(){
+    var HELPER_MAX_BYTES=1024*1024;
+    var helperRecord=(${helperRecord.toString()});
+    var helperJson=(${helperJson.toString()});
+    var parseScriptTrees=(${parseHelperScriptTrees.toString()});
+    var normalize=function(input){return parseScriptTrees(input,helperJson,helperRecord);};
+    return (${installCardScriptLibraries.toString()})(scriptLibraries,normalize,helperJson,${escapeScriptJson(options.scriptLibraryLabels??{saving:'Saving script library…',saved:'Script library saved',failed:'Script library save failed; keep your edits and refresh'})});
+  })():function(){};
+  var worldbooks=${escapeScriptJson(options.worldbooks??null)};
+  var cleanupWorldbooks=worldbooks?(function(){
+    var HELPER_MAX_BYTES=1024*1024,helperRecord=(${helperRecord.toString()}),helperJson=(${helperJson.toString()});
+    var cleanup=(${installCardWorldbook.toString()})(worldbooks,helperJson,(${createHelperWorldbookSettingsCodec.toString()})(helperJson));
+    (${installCardLorebook.toString()})(window.TavernHelper,(${createHelperLorebookCodec.toString()})(helperJson));
+    return cleanup;
+  })():function(){};
+  var cleanupChatEdits=cfg.helperSnapshot?(function(){
+    var HELPER_MAX_BYTES=1024*1024,helperRecord=(${helperRecord.toString()}),helperJson=(${helperJson.toString()});
+    var parseHelperSwipes=(${parseHelperSwipes.toString()});
+    var parseHelperMessageEdits=(${parseHelperMessageEdits.toString()});
+    var normalizeHelperMessageInputs=(${normalizeHelperMessageInputs.toString()});
+    var cleanup=(${installCardChatEdits.toString()})(function(input,lookup){return parseHelperMessageEdits(normalizeHelperMessageInputs(input,lookup,helperJson,parseHelperSwipes),helperJson,parseHelperSwipes);},helperJson);
+    var cleanupDisplay=(${installCardDisplay.toString()})();
+    var cleanupLegacy=(${installCardLegacyChat.toString()})(helperJson);
+    return function(){cleanupDisplay();cleanupLegacy();cleanup();};
+  })():function(){};
+  var cleanupScript=scriptContext?(${installCardScript.toString()})(scriptContext):function(){};
   function reportHeight() {
     try {
       var h = 0;
       var el = document.documentElement;
       var body = document.body;
-      if (el) h = Math.max(h, el.scrollHeight || 0, el.offsetHeight || 0);
+      // 根元素至少等于 iframe 视口，不能作为折叠后的内容高度下限。
       if (body) {
-        h = Math.max(h, body.scrollHeight || 0, body.offsetHeight || 0);
+        h = Math.max(h, body.offsetHeight || 0);
+        if (body.scrollHeight > (el ? el.clientHeight : 0)) h = Math.max(h, body.scrollHeight);
         var nodes = body.querySelectorAll('*');
         var n = Math.min(nodes.length, 400);
         for (var i = 0; i < n; i++) {
@@ -185,6 +206,15 @@ export function tavernCardBridgeScript(options: Pick<CardFrameOptions, 'greeting
     timers.push(setTimeout(reportHeight, 300), setTimeout(reportHeight, 1200));
   }
   window.__dshTavernBridgeCleanup = function () {
+    cleanupScript();
+    cleanupScriptLibraries();
+    cleanupWorldbooks();
+    cleanupChatEdits();
+    cleanupMvuRunner();
+    cleanupMvu();
+    cleanupPersistence();
+    cleanupHelper();
+    cleanupEvents();
     if (ro) ro.disconnect();
     timers.forEach(clearTimeout);
     window.removeEventListener('load', reportHeight);
@@ -202,9 +232,11 @@ export function tavernCardBridgeScript(options: Pick<CardFrameOptions, 'greeting
   var stubHtml = stubNode && stubNode.outerHTML ? stubNode.outerHTML : '';
   var cspNode = document.querySelector('meta[http-equiv="Content-Security-Policy"]');
   var cspHtml = cspNode && cspNode.outerHTML ? cspNode.outerHTML : '';
+  var libraryNode = document.querySelector('script[data-dsh-tavern-libraries]');
+  var libraryHtml = libraryNode && libraryNode.outerHTML ? libraryNode.outerHTML : '';
   function injectBridge(html) {
     // 不信任第三方 head、注释或伪造的 bridge 标记；重新解析前先建立有效策略。
-    return (${wrapCardDocument.toString()})(html, cspHtml + stubHtml);
+    return (${wrapCardDocument.toString()})(html, cspHtml + libraryHtml + stubHtml);
   }
   document.open = function () {
     writeBuf = '';
@@ -251,7 +283,8 @@ function wrapCardDocument(html: string, trustedHead: string): string {
 export function buildCardSrcDoc(html: string, options: CardFrameOptions): string {
   const meta = `<meta http-equiv="Content-Security-Policy" content="${cspContent(options.connectHosts ?? [])}">`
   const stub = tavernCardBridgeScript(options)
-  return wrapCardDocument(html, meta + stub)
+  const libraries = `<script data-dsh-tavern-libraries>${CARD_LIBRARIES.replace(/<\/script/gi, '<\\/script')}</script>`
+  return wrapCardDocument(html, meta + libraries + stub)
 }
 
 export interface CardBridgeMessage {
@@ -265,6 +298,8 @@ export function parseCardBridgeMessage(data: unknown): CardBridgeMessage | null 
   if (!data || typeof data !== 'object' || Array.isArray(data)) return null
   const rec = data as Record<string, unknown>
   if (rec.source !== CARD_BRIDGE_SOURCE || typeof rec.action !== 'string') return null
+  if (rec.action !== 'swipeGreeting' && rec.action !== 'resize') return null
+  if (rec.action === 'swipeGreeting' && (typeof rec.index !== 'number' || !Number.isSafeInteger(rec.index) || rec.index < 0)) return null
   const index = typeof rec.index === 'number' && Number.isFinite(rec.index) ? rec.index : undefined
   const height = typeof rec.height === 'number' && Number.isFinite(rec.height) ? rec.height : undefined
   return {

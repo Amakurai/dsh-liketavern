@@ -24,20 +24,26 @@ type Variables = {
   insertOrAssignVariables(value: unknown, option?: unknown): Record<string, unknown>
   insertVariables(value: unknown, option?: unknown): Record<string, unknown>
 }
-function frame(seed?: string) {
+function frame(seed?: string, showTools = true) {
   const body = new Element()
   const window = {} as Variables
   const postMessage = vi.fn()
   const context = { window, labels, TextEncoder, parent: { postMessage }, document: {
     readyState: 'complete', body, getElementById: (id: string) => body.children.find((n) => n.id === id), createElement: () => new Element(),
   } }
-  const install = () => runInNewContext(`(${installCardVariables.toString()})(labels)`, context)
+  const install = () => runInNewContext(`(${installCardVariables.toString()})(labels,'',undefined,undefined,${showTools})`, context)
   if (seed) runInNewContext(seed, context)
   install()
   return { api: window, body, install, postMessage }
 }
 
 describe('隔离的卡内变量', () => {
+  it('普通卡面读写和重装不插入任何变量管理控件',()=>{
+    const f=frame(undefined,false)
+    f.api.replaceVariables({hp:3});f.install()
+    expect(f.api.getVariables()).toEqual({hp:3})
+    expect(f.body.children).toHaveLength(0)
+  })
   it('兼容 character 预设写入/读取；返回副本，嵌套合并且数组整体替换', () => {
     const { api } = frame()
     api.insertOrAssignVariables({ presets: ['old', 'old2'], hero: { name: '工厂角色', level: 1 } }, { type: 'character' })
@@ -90,7 +96,7 @@ describe('隔离的卡内变量', () => {
     backupA!.onclick!()
     const original = buildCardSrcDoc('<p>工厂卡</p>', { greetings: [], greetingIndex: 0 })
     const restored = restoreCardVariableBackup(original, textA!.value)
-    const seed = /<script>([\s\S]*?)<\/script>/.exec(restored)![1]!
+    const seed = /<script>(window\.__dshTavernVariables=[\s\S]*?)<\/script>/.exec(restored)![1]!
     const b = frame(seed)
     expect(b.api.getVariables({ type: 'character' })).toEqual({ presets: [{ name: '测试预设' }] })
     expect(() => restoreCardVariableBackup(original, '{"version":1,"scopes":{"bad":{}}}')).toThrow()
@@ -104,7 +110,7 @@ describe('隔离的卡内变量', () => {
     const payload = '</script><script>throw new Error("injected")</script>'
     const restored = restoreCardVariableBackup(original, JSON.stringify({ version: 1, scopes: { '["character",""]': { payload } } }))
     expect(restored).not.toContain(payload)
-    const b = frame(/<script>([\s\S]*?)<\/script>/.exec(restored)![1]!)
+    const b = frame(/<script>(window\.__dshTavernVariables=[\s\S]*?)<\/script>/.exec(restored)![1]!)
     expect(b.api.getVariables({ type: 'character' }).payload).toBe(payload)
     expect(restored.indexOf('Content-Security-Policy')).toBeLessThan(restored.indexOf('window.__dshTavernVariables='))
   })

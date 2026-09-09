@@ -3,6 +3,10 @@
  * 聚合数据目录、设置、各资产存储与工作区句柄，供 remote 服务、工具与组装管线共用。
  */
 import { join } from 'node:path'
+import { createHash,randomUUID } from 'node:crypto'
+import {CHAT_WORLDBOOK_PATH,parseChatWorldbookFile,encodeChatWorldbooks,plainChatWorldbook} from '../state/chatWorldbooks.js'
+import { characterHelperScripts,characterHelperSettings,helperScriptSettings,parseHelperScriptTrees,type HelperScriptLibrary,type HelperScriptAsset,type HelperScriptTarget,type HelperScriptContext,type HelperScriptCommit,type HelperScriptView,type HelperScriptType } from '../core/helperScripts.js'
+import { helperJson } from '../core/helperRuntime.js'
 import type { LlmResolvedModelInfo, LlmRuntime } from '@deepseek-ai/dsh-llm'
 import { estimateTokens } from '../core/tokenize.js'
 import { type CharacterCard, type MemoryEntry, type PromptPreset, type RegexRule, type WIEngineResult, type WITimerState, type WorldDelta, type WorldInfoEntry } from '../core/types.js'
@@ -184,6 +188,8 @@ export class TavernState {
    * 但 beginFloor / 开场白 / commitFloor / idle maintenance 必须保持事件发生顺序。
    */
   private readonly sessionTaskTails = new Map<string, Promise<void>>()
+  /** 实时助手事件的收口回执；只保留最近 256 轮，历史加载不依赖或回放这些回执。 */
+  readonly helperTurnClosures = new Map<string, { seq:number; storyId:string|undefined; error?:string }>()
 
   constructor(
     readonly paths: TavernPaths,
@@ -193,6 +199,8 @@ export class TavernState {
   async init(): Promise<void> {
     await ensurePaths(this.paths)
   }
+
+  worldInfoFor(binding:SessionBinding) {return {...this.config.worldInfo,...binding.worldInfo}}
 
   get config(): TavernConfig {
     return this.getConfig()
@@ -363,11 +371,12 @@ export class TavernState {
       const charWs = await this.loadCharacter(cardId)
       if (!charWs) throw new Error(`角色 ${cardId} 不存在`)
       const fs = this.plainFs(cardId)
+      try {
       await fs.delete('assets/character-book.json')
       const cardJson: Record<string, unknown> = { ...charWs.card, characterBook: null }
       delete cardJson.pngBytes
       await fs.writeText('card.json', JSON.stringify(cardJson, null, 2) + '\n')
-      this.bumpAssetRev(`charlore:${cardId}`)
+      } finally { this.bumpAssetRev(`charlore:${cardId}`) }
     })
   }
 
@@ -408,15 +417,16 @@ export class TavernState {
     assertValidCardId(cardId)
     return withWorkspaceLock(join(this.paths.characters, cardId), async () => {
       const book = normalizeBook(json)
-      if (!book || book.entries.length === 0) throw new Error('内嵌世界书缺少条目')
+      if (!book) throw new Error('内嵌世界书缺少合法结构')
       const charWs = await this.loadCharacter(cardId)
       if (!charWs) throw new Error(`角色 ${cardId} 不存在`)
       const fs = this.plainFs(cardId)
+      try {
       await fs.writeText('assets/character-book.json', JSON.stringify(json, null, 2) + '\n')
       const cardJson: Record<string, unknown> = { ...charWs.card, characterBook: book }
       delete cardJson.pngBytes
       await fs.writeText('card.json', JSON.stringify(cardJson, null, 2) + '\n')
-      this.bumpAssetRev(`charlore:${cardId}`)
+      } finally { this.bumpAssetRev(`charlore:${cardId}`) }
       return { name: book.name ?? charWs.card.name, entryCount: book.entries.length }
     })
   }
@@ -446,6 +456,35 @@ export class TavernState {
     return ws
   }
 
+  /** 脚本树修订只覆盖脚本资产；用户同时修改描述等其它字段时，保存脚本不得覆盖它们。 */
+  async getCharacterHelperScripts(cardId:string):Promise<HelperScriptLibrary> {
+    assertValidCardId(cardId)
+    const character=await this.loadCharacter(cardId)
+    if(!character)throw new Error('角色不存在')
+    const trees=characterHelperScripts(character.card.extensions)
+    const revision=createHash('sha256').update(JSON.stringify(helperJson(trees,4*1024*1024))).digest('hex')
+    return {cardId,trees,revision}
+  }
+  async saveCharacterHelperScripts(cardId:string,revision:string,input:unknown):Promise<HelperScriptLibrary> {
+    assertValidCardId(cardId)
+    const trees=parseHelperScriptTrees(input)
+    // 归一化后再次校验预算，确保写出的资产下一次能够直接读取。
+    parseHelperScriptTrees(trees)
+    return withWorkspaceLock(join(this.paths.characters,cardId),async()=>{
+      const current=await this.getCharacterHelperScripts(cardId)
+      if(JSON.stringify(current.trees)===JSON.stringify(trees))return current
+      if(current.revision!==revision)throw new Error('脚本库已被其他编辑器修改，请重新读取后合并')
+      const workspace=await this.loadCharacter(cardId)
+      if(!workspace)throw new Error('角色不存在')
+      const extensions:Record<string,unknown>={...workspace.card.extensions,tavern_helper:{...characterHelperSettings(workspace.card.extensions),scripts:trees}}
+      delete extensions.TavernHelper_scripts
+      const {pngBytes:_png,...card}=workspace.card
+      try{await this.plainFs(cardId).writeText('card.json',JSON.stringify({...card,extensions},null,2)+'\n')}
+      finally{this.bumpAssetRev(`card:${cardId}`)}
+      return this.getCharacterHelperScripts(cardId)
+    })
+  }
+
   async exportCharacter(cardId: string): Promise<{ json: unknown; pngBase64: string; name: string }> {
     const charWs = await this.loadCharacter(cardId)
     if (!charWs) throw new Error(`角色 ${cardId} 不存在`)
@@ -454,6 +493,82 @@ export class TavernState {
     const png = await handle.fs.readBytes('card.png')
     const embedded = embedCardInPng(png, json, charWs.card.spec)
     return { json, pngBase64: Buffer.from(embedded).toString('base64'), name: charWs.card.name }
+  }
+
+  /** 全局脚本与预设脚本是共享资产；运行变量继续归属当前剧情，不在此处初始化。 */
+  async getHelperScriptLibrary(target:HelperScriptTarget):Promise<HelperScriptAsset> {
+    if(target.type==='character') {
+      const library=await this.getCharacterHelperScripts(target.cardId)
+      return {target:{type:'character',cardId:library.cardId},revision:library.revision,trees:library.trees}
+    }
+    let input:unknown=[]
+    if(target.type==='global') {
+      const raw=await (await this.rootFs()).readText('library/helper-scripts.json')
+      if(raw!==null)input=JSON.parse(raw)
+    } else if(target.type==='preset') {
+      if(!target.presetId)throw new Error('预设 ID 不能为空')
+      const id=this.assetFileId(target.presetId),preset=await this.loadPreset(id)
+      if(!preset)throw new Error('预设不存在或无法读取')
+      input=helperScriptSettings(preset.helperSettings??{}).scripts;target={type:'preset',presetId:id}
+    } else throw new Error('脚本库类型无效')
+    const trees=parseHelperScriptTrees(input)
+    return {target,trees,revision:createHash('sha256').update(JSON.stringify(helperJson(trees,4*1024*1024))).digest('hex')}
+  }
+
+  async saveHelperScriptLibrary(target:HelperScriptTarget,revision:string,input:unknown):Promise<HelperScriptAsset> {
+    if(target.type==='character') {
+      const library=await this.saveCharacterHelperScripts(target.cardId,revision,input)
+      return {target:{type:'character',cardId:library.cardId},revision:library.revision,trees:library.trees}
+    }
+    const trees=parseHelperScriptTrees(parseHelperScriptTrees(input)),fs=await this.rootFs()
+    return withWorkspaceLock(fs.root,async()=>{
+      const current=await this.getHelperScriptLibrary(target)
+      if(JSON.stringify(current.trees)===JSON.stringify(trees))return current
+      if(current.revision!==revision)throw new Error('脚本库已被其他编辑器修改，请重新读取后合并')
+      if(current.target.type==='global')await fs.writeText('library/helper-scripts.json',JSON.stringify(trees,null,2)+'\n')
+      else if(current.target.type==='preset') {
+        const id=current.target.presetId,preset=await this.loadPreset(id)
+        if(!preset)throw new Error('预设不存在或无法读取')
+        try{await fs.writeText(`library/presets/${id}.json`,JSON.stringify({...preset,helperSettings:{...preset.helperSettings,scripts:trees}},null,2)+'\n')}
+        finally{this.bumpAssetRev(`preset:${id}`)}
+      }
+      return this.getHelperScriptLibrary(current.target)
+    })
+  }
+
+  /** 沙箱只选择库类型，资产身份始终从绑定中派生；绑定锁覆盖校验到资产落盘。 */
+  private helperScriptBinding(binding:SessionBinding|null) {
+    if(!binding?.storyId)throw new Error('会话未绑定可用剧情')
+    if(!this.config.interactiveCards||binding.interactiveCards===false)throw new Error('交互卡已关闭')
+    const revision=createHash('sha256').update(JSON.stringify([binding.cardId,binding.presetId,binding.storyId])).digest('hex')
+    const target=(type:HelperScriptType):HelperScriptTarget=>{
+      if(type==='global')return {type}
+      if(type==='character')return {type,cardId:binding.cardId}
+      if(type==='preset'&&binding.presetId)return {type,presetId:binding.presetId}
+      throw new Error('未绑定目标脚本库')
+    }
+    return {binding,revision,target}
+  }
+  async getSessionHelperScripts(sessionId:string,storyId:string):Promise<HelperScriptContext> {
+    return withWorkspaceLock(this.paths.sessions,async()=>{
+      const selected=this.helperScriptBinding(await this.loadBindingNow(sessionId))
+      if(selected.binding.storyId!==storyId)throw new Error('脚本剧情绑定已改变')
+      const types:HelperScriptType[]=['global',...(selected.binding.presetId?['preset' as const]:[]),'character']
+      const libraries=await Promise.all(types.map(async type=>{
+        const library=await this.getHelperScriptLibrary(selected.target(type))
+        return {type,revision:library.revision,trees:library.trees}
+      }))
+      helperJson(libraries,4*1024*1024)
+      return {storyId,bindingRevision:selected.revision,libraries}
+    })
+  }
+  async commitSessionHelperScripts(sessionId:string,request:HelperScriptCommit):Promise<HelperScriptView> {
+    return withWorkspaceLock(this.paths.sessions,async()=>{
+      const selected=this.helperScriptBinding(await this.loadBindingNow(sessionId))
+      if(selected.binding.storyId!==request.storyId||selected.revision!==request.bindingRevision)throw new Error('脚本会话绑定已改变，请重新加载')
+      const library=await this.saveHelperScriptLibrary(selected.target(request.type),request.revision,request.trees)
+      return {type:request.type,revision:library.revision,trees:library.trees}
+    })
   }
 
   async getJournal(cardId: string, storyId?: string): Promise<string> {
@@ -478,11 +593,17 @@ export class TavernState {
     }
   }
 
+  invalidateChatLorebook(cardId:string,storyId:string):void {assertValidCardId(cardId);this.bumpAssetRev('chatlore:'+cardId+':'+storyId)}
+
   async saveChatLorebook(cardId: string, json: unknown, storyId?: string): Promise<void> {
     parseLorebook(json, { source: 'chat', sourceRef: 'chat-lorebook' })
     const { fs } = await this.plainWorkspace(cardId, storyId)
-    await fs.writeText('assets/chat-lorebook.json', JSON.stringify(json, null, 2) + '\n')
-    this.bumpAssetRev(`chatlore:${cardId}${storyId ? ':' + storyId : ''}`)
+    await withWorkspaceLock(fs.root,async()=>{
+      const text=await fs.readText(CHAT_WORLDBOOK_PATH),store=parseChatWorldbookFile(text)
+      const id=store.active??(!store.books.has('main')?'main':'book-'+randomUUID()),previous=store.books.get(id) as Record<string,unknown>|undefined;store.books.set(id,{...previous,...plainChatWorldbook(json) as Record<string,unknown>});store.active=id
+      try{await fs.writeText(CHAT_WORLDBOOK_PATH,JSON.stringify(encodeChatWorldbooks(store),null,2)+'\n')}
+      finally{this.bumpAssetRev(`chatlore:${cardId}${storyId ? ':' + storyId : ''}`)}
+    })
   }
 
   // ── 世界书库 ─────────────────────────────────────────────────────────────
@@ -523,6 +644,7 @@ export class TavernState {
   /** 落盘并 bump 修订号，返回磁盘上的 id：调用方（服务层/客户端）之后要按这个 id 打开，不能用原始名。 */
   async saveLorebook(name: string, json: unknown): Promise<string> {
     const fs = await this.rootFs()
+    return withWorkspaceLock(fs.root,async()=>{
     // 世界书没有独立于显示名的内部 id：身份 = 文件内的 name 字段。json 缺 name 时把传入名
     // 补进文件（ST 世界书本就有 name 字段）——否则「主线 设定」与「主线?设定」这类净化撞名
     // 在磁盘上无法区分，同名再保存与撞名冲突必有一个判错。
@@ -532,16 +654,18 @@ export class TavernState {
         : json
     const identity = stringField(content, 'name') ?? name
     const id = await this.resolveAssetWriteId(fs, 'library/lorebooks', name, (existing) => existing === identity)
-    await fs.writeText(`library/lorebooks/${id}.json`, JSON.stringify(content, null, 2) + '\n')
-    this.bumpAssetRev(`lore:${id}`)
+    try{await fs.writeText(`library/lorebooks/${id}.json`, JSON.stringify(content, null, 2) + '\n')}
+    finally{this.bumpAssetRev(`lore:${id}`)}
     return id
+    })
   }
 
   async deleteLorebook(name: string): Promise<void> {
     const id = this.assetFileId(name)
     const fs = await this.rootFs()
-    await fs.delete(`library/lorebooks/${id}.json`)
-    this.bumpAssetRev(`lore:${id}`)
+    await withWorkspaceLock(fs.root,async()=>{
+      try{await fs.delete(`library/lorebooks/${id}.json`)}finally{this.bumpAssetRev(`lore:${id}`)}
+    })
   }
 
   // ── 预设库 ────────────────────────────────────────────────────────────────
@@ -589,20 +713,26 @@ export class TavernState {
   }
 
   /** 落盘并 bump 修订号，返回磁盘上的 id（identifier 含非法字符时与 preset.identifier 不同）。 */
-  async savePreset(preset: PromptPreset): Promise<string> {
+  async savePreset(preset: PromptPreset,options:{preserveHelperSettings?:boolean}={}): Promise<string> {
     const fs = await this.rootFs()
+    return withWorkspaceLock(fs.root,async()=>{
     // 预设身份是 identifier（编辑器内不可改，name 可改）：改名是编辑不是冲突。
     const id = await this.resolveAssetWriteId(fs, 'library/presets', preset.identifier, (existing) => existing === preset.identifier)
-    await fs.writeText(`library/presets/${id}.json`, JSON.stringify(preset, null, 2) + '\n')
-    this.bumpAssetRev(`preset:${id}`)
+    const previous=options.preserveHelperSettings?await this.loadPreset(id):null
+    const value=previous?{...preset,helperSettings:previous.helperSettings}:preset
+    if(value.helperSettings!==undefined)value.helperSettings=helperScriptSettings(value.helperSettings)
+    try{await fs.writeText(`library/presets/${id}.json`, JSON.stringify(value, null, 2) + '\n')}
+    finally{this.bumpAssetRev(`preset:${id}`)}
     return id
+    })
   }
 
   async deletePreset(id: string): Promise<void> {
     const safe = this.assetFileId(id)
     const fs = await this.rootFs()
-    await fs.delete(`library/presets/${safe}.json`)
-    this.bumpAssetRev(`preset:${safe}`)
+    await withWorkspaceLock(fs.root,async()=>{
+      try{await fs.delete(`library/presets/${safe}.json`)}finally{this.bumpAssetRev(`preset:${safe}`)}
+    })
   }
 
   // ── 人设 ─────────────────────────────────────────────────────────────────
@@ -890,6 +1020,8 @@ export class TavernState {
       const key = `lore:${this.assetFileId(id)}`
       tags.push(`${key}=${this.assetRevs.get(key) ?? 0}`)
     }
+    if(!binding.characterLorebookId&&binding.useEmbeddedLorebook===false)tags.push('character:disabled')
+    for(const id of new Set(binding.characterLorebookIds??[])){if(id===binding.characterLorebookId)continue;const key=`lore:${this.assetFileId(id)}`;tags.push(`character-additional:${key}=${this.assetRevs.get(key)??0}`)}
     const charKey = binding.characterLorebookId
       ? `lore:${this.assetFileId(binding.characterLorebookId)}`
       : `charlore:${binding.cardId}`
@@ -911,8 +1043,8 @@ export class TavernState {
     // 注意：新增会影响 standing 字节的设置键时必须加进这里，否则改动永远到不了模型。
     tags.push(
       `config=${stableFingerprintHash({
-        wiStrategy: this.config.worldInfo.characterStrategy,
-        wiScoring: this.config.worldInfo.useGroupScoring,
+        wiStrategy: this.worldInfoFor(binding).characterStrategy,
+        wiScoring: this.worldInfoFor(binding).useGroupScoring,
         out: this.config.sampling.maxTokens,
       })}`,
     )

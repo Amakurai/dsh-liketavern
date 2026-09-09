@@ -7,9 +7,12 @@ import type { ReactTestRenderer } from 'react-test-renderer'
 import { DraftScope, useDraftGuard } from '../src/client/drafts.js'
 import { CharacterPicker } from '../src/client/characterPicker.js'
 import { CharactersSection } from '../src/client/panel/characters.js'
+import { VariableBackupEditor, StoryVariableSettings } from '../src/client/panel/cardData.js'
 import { MemorySection } from '../src/client/panel/memory.js'
 import { setTavernLocale } from '../src/client/i18n.js'
-import { Btn, ConfirmDialog, Dialog, IconBtn, Select } from '../src/client/util.js'
+import { TavernHeaderChip, defaultBinding } from '../src/client/chip.js'
+import { TavernSeatChip } from '../src/client/seatChip.js'
+import { Btn, CheckChips, ConfirmDialog, Dialog, IconBtn, Select } from '../src/client/util.js'
 import type { CharacterDetail, CharacterSummary, TavernRemote } from '../src/client/types.js'
 
 /** 仅替换宿主平台原语；被测组件的 hooks、草稿、remote 调用与状态更新都运行真实实现。 */
@@ -25,6 +28,7 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
   IconDownloadOutline16: () => null,
   IconTrashOutline16: () => null,
   IconEditOutline16: () => null,
+  IconCopyOutline16: () => null,
 }))
 
 const mounted: ReactTestRenderer[] = []
@@ -177,5 +181,78 @@ describe('角色选择', () => {
     expect(items).toHaveLength(1)
     await act(async () => items[0]!.props.onClick())
     expect(onPick).toHaveBeenCalledWith('b')
+  })
+})
+
+/** 世界书绑定表单通过真实控件事件提交；主书关闭与附加书不混入全局选择。 */
+it('会话绑定面板保存无主书与附加书，保留全局选择', async () => {
+  vi.stubGlobal('window',new EventTarget())
+  try {
+    let binding={...defaultBinding('binding-controls','card-controls'),lorebookIds:['global-book'],worldInfo:{scanDepth:3}}
+    const card=detail('card-controls')
+    const setSessionBinding=vi.fn(async (request:{binding:typeof binding})=>{binding=request.binding;return ok({})})
+    const remote={getSessionBinding:async()=>ok({binding}),getCharacterDetail:async()=>ok(card),getAvatar:async()=>ok({dataUrl:null}),
+      listCharacters:async()=>ok({items:[summary(card.cardId,card.name)]}),listPresets:async()=>ok({items:[]}),listPersonas:async()=>ok({items:[]}),
+      listLorebooks:async()=>ok({items:['global-book','extra-book']}),getContextUsage:async()=>ok({usage:null}),setSessionBinding} as unknown as TavernRemote
+    const view=await render(<TavernHeaderChip remote={remote} sessionId="binding-controls" sessions={{open:()=>{}}} useSessions={select=>select({byId:{'binding-controls':{projectionValues:{agentPreset:'tavern'}}}})}/>)
+    await act(async()=>view.root.findByType(TavernSeatChip).props.onClick())
+    const main=view.root.findAllByType(Select).find(select=>select.props.options.some((option:{value:string})=>option.value==='@dsh/no-main-worldbook'))!
+    await act(async()=>main.props.onChange('@dsh/no-main-worldbook'))
+    await act(async()=>view.root.findAllByType(CheckChips).find(chips=>chips.props.ariaLabel==='附加角色世界书')!.props.onChange(['extra-book']))
+    await act(async()=>button(view,'恢复跟随全局设置').props.onClick())
+    await act(async()=>button(view,'保存绑定').props.onClick())
+    expect(setSessionBinding).toHaveBeenCalledWith({binding:expect.objectContaining({characterLorebookId:null,useEmbeddedLorebook:false,characterLorebookIds:['extra-book'],lorebookIds:['global-book'],worldInfo:{}})})
+    await act(async()=>view.unmount())
+  } finally {vi.unstubAllGlobals()}
+})
+
+/** 设置恢复使用选定剧情及宿主 seq，失败保留草稿；不重新挂载第三方角色卡。 */
+describe('设置中的卡面变量管理',()=>{
+  const snapshot={storyId:'story-one',historyRevision:'rev-one',currentMessageId:0,writable:true,messages:[],scopes:{'["chat",""]':{hp:1}}}
+  it.each([true,false])('看似无变化的恢复先复核服务器，变量已改变时保留备份：%s',async changed=>{
+    const text=JSON.stringify({version:1,scopes:snapshot.scopes})
+    const getHelperSnapshot=vi.fn(async()=>ok({...snapshot,scopes:{'["chat",""]':{hp:changed?2:1}}}))
+    const commitHelperVariables=vi.fn()
+    const view=await render(<VariableBackupEditor remote={{getHelperSnapshot,commitHelperVariables} as unknown as TavernRemote} sessionId="session-one" messageId={17} snapshot={snapshot} onRefresh={()=>{}}/>)
+    await act(async()=>view.root.findByType('textarea').props.onChange({target:{value:text}}))
+    await act(async()=>button(view,'恢复卡内备份').props.onClick())
+    await act(async()=>confirmation(view).props.onConfirm())
+    expect(getHelperSnapshot).toHaveBeenCalledWith({sessionId:'session-one',messageId:17})
+    expect(commitHelperVariables).not.toHaveBeenCalled()
+    expect(view.root.findByType('textarea').props.value).toBe(changed?text:'')
+    if(changed)expect(view.root.findByProps({role:'alert'}).children.join('')).toContain('剧情变量已改变')
+  })
+  it('恢复只在确认后提交，成功使用原值校验并清空草稿',async()=>{
+    const commit=vi.fn(async()=>ok({...snapshot,scopes:{'["chat",""]':{hp:2}}}))
+    const remote={commitHelperVariables:commit} as unknown as TavernRemote
+    const view=await render(<VariableBackupEditor remote={remote} sessionId="session-one" messageId={17} snapshot={snapshot} onRefresh={()=>{}}/>)
+    await act(async()=>view.root.findByType('textarea').props.onChange({target:{value:JSON.stringify({version:1,scopes:{'["chat",""]':{hp:2}}})}}))
+    await act(async()=>button(view,'恢复卡内备份').props.onClick())
+    expect(commit).not.toHaveBeenCalled()
+    await act(async()=>confirmation(view).props.onConfirm())
+    expect(commit).toHaveBeenCalledWith({sessionId:'session-one',messageId:17,storyId:'story-one',historyRevision:'rev-one',changes:[{key:'["chat",""]',before:{hp:1},value:{hp:2}}]})
+    expect(view.root.findByType('textarea').props.value).toBe('')
+  })
+  it('保存冲突保留备份，刷新前保护草稿，取消刷新不丢输入',async()=>{
+    const commit=vi.fn(async()=>({ok:false,error:{code:'conflict',message:'变量已经改变'}})),refresh=vi.fn()
+    const text=JSON.stringify({version:1,scopes:{'["chat",""]':{hp:2}}})
+    const view=await render(<VariableBackupEditor remote={{commitHelperVariables:commit} as unknown as TavernRemote} sessionId="session-one" messageId={17} snapshot={snapshot} onRefresh={refresh}/>)
+    await act(async()=>view.root.findByType('textarea').props.onChange({target:{value:text}}))
+    await act(async()=>button(view,'恢复卡内备份').props.onClick())
+    await act(async()=>confirmation(view).props.onConfirm())
+    expect(view.root.findByType('textarea').props.value).toBe(text)
+    expect(view.root.findByProps({role:'alert'}).children.join('')).toContain('变量已经改变')
+    await act(async()=>button(view,'刷新剧情数据').props.onClick())
+    expect(refresh).not.toHaveBeenCalled()
+    await act(async()=>confirmation(view).props.onCancel())
+    expect(view.root.findByType('textarea').props.value).toBe(text)
+  })
+  it('读取最后一条角色消息的宿主 seq，并拒绝不同剧情的快照',async()=>{
+    const get=vi.fn(async()=>ok({...snapshot,storyId:'wrong-story'}))
+    const remote={getHelperEventState:async()=>ok({messages:[{seq:7,message_id:0,role:'assistant'},{seq:20,message_id:1,role:'user'},{seq:29,message_id:2,role:'assistant'}]}),getHelperSnapshot:get} as unknown as TavernRemote
+    const view=await render(<StoryVariableSettings remote={remote} sessionId="session-one" storyId="story-one" cardId="card-one"/>)
+    expect(get).toHaveBeenCalledWith({sessionId:'session-one',messageId:29})
+    expect(view.root.findAllByType(VariableBackupEditor)).toHaveLength(0)
+    expect(view.root.findByProps({role:'alert'}).children.join('')).toContain('剧情绑定已改变')
   })
 })

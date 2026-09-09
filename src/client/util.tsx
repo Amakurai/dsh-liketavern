@@ -3,19 +3,32 @@
  * 样式集中在 ./styles.js（模块加载即注入）；颜色一律走宿主 --dsw-* 令牌 + Tavern 蓝色 accent。
  * 原生 select 的 option 弹层用 Menu 实现（避开 Windows 系统白底白字）。
  */
-import { useCallback, useEffect, useId, useState } from 'react'
+import { Children, cloneElement, createContext, isValidElement, useCallback, useContext, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { Button, IconChevronDownOutline14, IconSearchOutline16, IconUserOutline16, Menu, Modal, Toast, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { CSSProperties, ReactNode } from 'react'
+import type { AriaAttributes, CSSProperties, ReactNode } from 'react'
 import type { CardRegexScript } from '../core/types.js'
 import { useT } from './i18n.js'
 import type { Envelope } from './types.js'
 import './styles.js'
+
+/** 设置行与字段把可见标签传给实际控件，读屏及语音操作可以按字段名定位。 */
+const ControlLabel = createContext<{ labelId: string; descriptionId?: string } | null>(null)
+function labelNativeControls(children: ReactNode, labelId: string, descriptionId?: string): ReactNode {
+  return Children.map(children, (child) => {
+    if (!isValidElement<AriaAttributes>(child) || typeof child.type !== 'string' || !['input', 'textarea', 'select'].includes(child.type)) return child
+    return cloneElement(child, {
+      'aria-labelledby': child.props['aria-labelledby'] ?? (child.props['aria-label'] ? undefined : labelId),
+      'aria-describedby': child.props['aria-describedby'] ?? descriptionId,
+    })
+  })
+}
 
 export function Btn(props: {
   onClick: () => void
   disabled?: boolean
   danger?: boolean
   primary?: boolean
+  pressed?: boolean
   title?: string
   size?: 'sm' | 'md'
   children?: ReactNode
@@ -28,6 +41,7 @@ export function Btn(props: {
       size={props.size ?? 'sm'}
       disabled={props.disabled}
       title={props.title}
+      aria-pressed={props.pressed}
       onClick={(e: { stopPropagation: () => void }) => {
         e.stopPropagation()
         props.onClick()
@@ -39,7 +53,8 @@ export function Btn(props: {
   )
 }
 
-const EMPTY_SELECT_ID = '__empty__'
+/** 为所有值加同一前缀，空值不会与用户资产名碰撞。 */
+const selectOptionId = (value: string) => `value:${value}`
 
 export interface SelectOption {
   value: string
@@ -57,19 +72,21 @@ export function Select(props: {
   size?: 'sm' | 'md'
 }) {
   const [open, setOpen] = useState(false)
+  const label = useContext(ControlLabel)
   const selected = props.options.find((o) => o.value === props.value)
   const width = props.width ?? '100%'
   return (
     <div className="dsh-tavern-select" style={{ width }}>
       <Menu
-        open={open}
+        open={open && !props.disabled}
         portal
         compact={props.size !== 'md'}
         align="start"
-        selectedId={props.value === '' ? EMPTY_SELECT_ID : props.value}
+        selectedId={selectOptionId(props.value)}
         onClose={() => setOpen(false)}
         onSelect={(id: string) => {
-          props.onChange(id === EMPTY_SELECT_ID ? '' : id)
+          const option = props.options.find((item) => selectOptionId(item.value) === id)
+          if (!props.disabled && option) props.onChange(option.value)
           setOpen(false)
         }}
         anchor={
@@ -78,6 +95,9 @@ export function Select(props: {
             className={`dsh-tavern-pillSelect${props.size === 'sm' ? ' is-sm' : ''}`}
             aria-haspopup="menu"
             aria-expanded={open}
+            aria-label={props.title}
+            aria-labelledby={props.title ? undefined : label?.labelId}
+            aria-describedby={label?.descriptionId}
             disabled={props.disabled}
             title={props.title}
             onClick={() => setOpen((v: boolean) => !v)}
@@ -87,7 +107,7 @@ export function Select(props: {
           </button>
         }
         items={props.options.map((o) => ({
-          id: o.value === '' ? EMPTY_SELECT_ID : o.value,
+          id: selectOptionId(o.value),
           label: o.label,
         }))}
       />
@@ -147,8 +167,26 @@ export interface TabItem {
 export function Tabs(props: { items: TabItem[]; value: string; onChange: (id: string) => void; size?: 'md' | 'sm'; id?: string; panelId?: string; label?: string }) {
   const generatedId = useId()
   const id = props.id ?? generatedId
+  const nav = useRef<HTMLDivElement>(null)
+  // 缩窄窗口或恢复上次页签后，当前项不能藏到横向滚动区域外；只移动导航，不改变正文纵向滚动位置。
+  useLayoutEffect(() => {
+    const element = nav.current
+    if (!element) return
+    const reveal = () => {
+      const selected = element.querySelector<HTMLElement>('[aria-selected="true"]')
+      if (!selected || element.scrollWidth <= element.clientWidth) return
+      const bounds = element.getBoundingClientRect(), item = selected.getBoundingClientRect()
+      if (item.left < bounds.left + 4) element.scrollLeft += item.left - bounds.left - 4
+      else if (item.right > bounds.right - 4) element.scrollLeft += item.right - bounds.right + 4
+    }
+    reveal()
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(reveal)
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [props.value, props.items])
   return (
-    <div className={`dsh-tavern-navPills${props.size === 'sm' ? ' is-sub' : ''}`} role="tablist" aria-label={props.label} onKeyDown={(e) => {
+    <div ref={nav} className={`dsh-tavern-navPills${props.size === 'sm' ? ' is-sub' : ''}`} role="tablist" aria-label={props.label} onKeyDown={(e) => {
       const direction = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0
       if (!direction && e.key !== 'Home' && e.key !== 'End') return
       const buttons = Array.from(e.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]'))
@@ -239,11 +277,15 @@ export function Toggle(props: {
   disabled?: boolean
   title?: string
 }) {
+  const label = useContext(ControlLabel)
   return (
     <button
       type="button"
       role="switch"
       aria-checked={props.checked}
+      aria-label={props.title}
+      aria-labelledby={props.title ? undefined : label?.labelId}
+      aria-describedby={label?.descriptionId}
       className={`dsh-tavern-toggle${props.checked ? ' is-on' : ''}`}
       disabled={props.disabled}
       title={props.title}
@@ -282,22 +324,26 @@ export function IconBtn(props: {
 
 /** 对齐通用设置：标题 + 说明 + 右侧控件。stacked = 宽控件（checkbox 列表等）换成纵向满宽。inline 已废弃（现在默认就是行式）。 */
 export function SettingsRow(props: { title: string; description?: string; stacked?: boolean; inline?: boolean; children?: ReactNode }) {
+  const id = useId(), labelId = `${id}-label`, descriptionId = props.description ? `${id}-description` : undefined
   return (
     <div className={`dsh-tavern-row${props.stacked ? ' is-stacked' : ''}`}>
       <div className="dsh-tavern-rowText">
-        <div className="dsh-tavern-rowTitle">{props.title}</div>
-        {props.description ? <div className="dsh-tavern-rowDesc">{props.description}</div> : null}
+        <div id={labelId} className="dsh-tavern-rowTitle">{props.title}</div>
+        {props.description ? <div id={descriptionId} className="dsh-tavern-rowDesc">{props.description}</div> : null}
       </div>
-      <div className="dsh-tavern-rowControl">{props.children}</div>
+      <div className="dsh-tavern-rowControl"><ControlLabel.Provider value={{ labelId, descriptionId }}>
+        {labelNativeControls(props.children, labelId, descriptionId)}
+      </ControlLabel.Provider></div>
     </div>
   )
 }
 
 export function Field(props: { label: string; children?: ReactNode }) {
+  const labelId = useId()
   return (
     <div className="dsh-tavern-field">
-      <span className="dsh-tavern-fieldLabel">{props.label}</span>
-      {props.children}
+      <span id={labelId} className="dsh-tavern-fieldLabel">{props.label}</span>
+      <ControlLabel.Provider value={{ labelId }}>{labelNativeControls(props.children, labelId)}</ControlLabel.Provider>
     </div>
   )
 }
@@ -527,8 +573,8 @@ export async function readJsonFile(file: File): Promise<unknown> {
   return JSON.parse(await file.text()) as unknown
 }
 
-export function downloadJson(filename: string, json: unknown): void {
-  const blob = new Blob([JSON.stringify(json, null, 2)], { type: 'application/json' })
+export function downloadJson(filename: string, json: unknown, space = 2): void {
+  const blob = new Blob([JSON.stringify(json, null, space)], { type: 'application/json' })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
@@ -633,9 +679,12 @@ export function ConfirmDialog(props: {
 
 /** 数字输入（number）。 */
 export function NumInput(props: { value: number; onChange: (v: number) => void; step?: string; width?: number }) {
+  const label = useContext(ControlLabel)
   return (
     <input
       type="number"
+      aria-labelledby={label?.labelId}
+      aria-describedby={label?.descriptionId}
       className="dsh-tavern-input"
       style={{ width: props.width ?? 90 }}
       value={Number.isFinite(props.value) ? props.value : 0}
@@ -651,9 +700,12 @@ export function NumInput(props: { value: number; onChange: (v: number) => void; 
 /** 可空数字输入（null ↔ 空串）。 */
 export function NullableNumInput(props: { value: number | null; onChange: (v: number | null) => void; width?: number }) {
   const t = useT()
+  const label = useContext(ControlLabel)
   return (
     <input
       type="number"
+      aria-labelledby={label?.labelId}
+      aria-describedby={label?.descriptionId}
       className="dsh-tavern-input"
       style={{ width: props.width ?? 90 }}
       value={props.value ?? ''}

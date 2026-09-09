@@ -6,7 +6,7 @@
  * - 触发策略：🔵 constant、🟢 关键词；🔗 向量匹配不做（由记忆 BM25 层承担，见 README）。
  * - 条目级 scanDepth：null 跟随全局；0 = 该条关键词不扫消息（常驻/递归/sticky 仍可活）。
  * - inclusion group：同组只留一条。sticky 延续占用组；否则 groupOverride 优先，
- *   再按 useGroupScoring（命中键数）或 groupWeight 加权随机。每轮扫描结束后即时裁决：
+ *   useGroupScoring 可逐条覆盖全局：计分低于组内最高分的启用条目先淘汰，再按 override/权重选择。每轮即时裁决：
  *   落选条目的正文不喂给后续递归轮次、不进最终输出；后续轮新激活的组员与现任胜者
  *   重新角逐，可以翻盘（如递归层才命中的 override 条目）。
  * - 递归扫描：excludeRecursion（不可被递归激活）/ preventRecursion（激活后不触发他人）/
@@ -208,19 +208,6 @@ function textsAtDepth(
   return texts
 }
 
-/** 组内计分挑选（useGroupScoring）：命中键数多者胜 → groupWeight 高者胜 → key 字典序小者胜。 */
-function pickGroupByScore(pool: Candidate[]): Candidate {
-  return pool.reduce((best, candidate) => {
-    const bestScore = best.matchedKeys.length
-    const score = candidate.matchedKeys.length
-    if (score !== bestScore) return score > bestScore ? candidate : best
-    if (candidate.entry.groupWeight !== best.entry.groupWeight) {
-      return candidate.entry.groupWeight > best.entry.groupWeight ? candidate : best
-    }
-    return candidate.entry.key.localeCompare(best.entry.key) < 0 ? candidate : best
-  })
-}
-
 /** 组内加权随机挑选（groupWeight 为权重；全零权重取第一条）。 */
 function pickGroupWeighted(pool: Candidate[], random: () => number): Candidate {
   const weights = pool.map((c) => Math.max(0, c.entry.groupWeight))
@@ -284,6 +271,8 @@ export function evaluateWorldInfo(input: WIEngineInput): WIEngineResult {
 
   const activated: Candidate[] = []
   const activatedKeys = new Set<string>()
+  const probabilityFailures = new Set<string>()
+  let expandedDepth=settings.scanDepth
   let recursionQueue: Candidate[] = []
 
   // inclusion group 即时裁决状态：组名 → 当前胜者（sticky 占用时可多条）；落选者进 groupLosers
@@ -317,9 +306,12 @@ export function evaluateWorldInfo(input: WIEngineInput): WIEngineResult {
       } else if (pool.length === 1) {
         winners = pool // 单成员组不消耗 random（与旧行为逐字节一致）
       } else {
-        const overrides = pool.filter((m) => m.entry.groupOverride)
-        const contenders = overrides.length > 0 ? overrides : pool
-        winners = [settings.useGroupScoring ? pickGroupByScore(contenders) : pickGroupWeighted(contenders, random)]
+        // 只淘汰启用计分且低于组内最高分的条目；显式关闭计分的条目仍可参与权重选择。
+        const maxScore=Math.max(...pool.map(candidate=>candidate.matchedKeys.length))
+        const scored=pool.filter(candidate=>!(candidate.entry.useGroupScoring??settings.useGroupScoring)||candidate.matchedKeys.length===maxScore)
+        const overrides = scored.filter((m) => m.entry.groupOverride)
+        const contenders = overrides.length > 0 ? overrides : scored
+        winners = [contenders.length===1?contenders[0]!:pickGroupWeighted(contenders, random)]
       }
       groupWinners.set(group, winners)
       const winnerKeys = new Set(winners.map((w) => w.entry.key))
@@ -337,10 +329,11 @@ export function evaluateWorldInfo(input: WIEngineInput): WIEngineResult {
   }
 
   const tryActivate = (entry: WorldInfoEntry, matchedKeys: string[], via: WIActivation['via'], level: number): boolean => {
-    if (activatedKeys.has(entry.key)) return false
+    if (activatedKeys.has(entry.key)||probabilityFailures.has(entry.key)) return false
     // 只有 sticky 延续豁免概率。确定常驻条目本来就没有概率过滤，概率型 constant 必须按轮评估。
     if (via !== 'sticky' && entry.useProbability && entry.probability < 100) {
       if (random() * 100 >= entry.probability) {
+        probabilityFailures.add(entry.key)
         log.push({ kind: 'probability-skip', entryKey: entry.key, detail: `probability=${entry.probability}` })
         return false
       }
@@ -400,7 +393,7 @@ export function evaluateWorldInfo(input: WIEngineInput): WIEngineResult {
       if (entry.keys.length === 0) continue
       const scanTextsForEntry =
         level === 0
-          ? textsAtDepth(depthTexts, input.messages, entry.scanDepth ?? settings.scanDepth, settings.includeNames, input.macroCtx)
+          ? textsAtDepth(depthTexts, input.messages, entry.scanDepth ?? expandedDepth, settings.includeNames, input.macroCtx)
           : texts
       const matched = matchCompiled(c, scanTextsForEntry)
       if (matched === null) continue
@@ -418,7 +411,7 @@ export function evaluateWorldInfo(input: WIEngineInput): WIEngineResult {
 
   // ── 递归扫描：新激活条目的内容成为下一轮扫描输入（inclusion group 落选者除外） ──
   const maxSteps = settings.maxRecursionSteps // 0=不限（受条目数与预算收敛）；1=关闭；n=总扫描轮数（含首轮）
-  while (
+  const scanRecursion=()=>{while (
     settings.recursiveScan &&
     recursionQueue.length > 0 &&
     (maxSteps === 0 || level < maxSteps - 1)
@@ -435,6 +428,18 @@ export function evaluateWorldInfo(input: WIEngineInput): WIEngineResult {
     if (recursionTexts.length === 0) break
     recursionQueue = evaluate(recursionTexts, level)
     adjudicateGroups(recursionQueue)
+  }}
+  scanRecursion()
+
+  // 扩展历史与递归在同一次求值内运行：定时器只推进一次，概率失败不会随扩深反复掷骰。
+  const expansionLimit=Math.min(input.messages.length,1000,settings.maxScanDepth>0?settings.maxScanDepth:1000)
+  const scanBudget=settings.tokenBudget>0?settings.tokenBudget:Math.max(0,Math.floor(Math.min(input.contextWindowTokens,WI_PERCENT_WINDOW_BASE)*settings.contextPercent/100)-Math.max(0,input.reservedTokens))
+  const surviving=()=>activated.filter(c=>!groupLosers.has(c.entry.key))
+  while(settings.minActivations>0&&surviving().length<settings.minActivations&&expandedDepth<expansionLimit&&(maxSteps===0||level<maxSteps-1)){
+    const counted=surviving().filter(c=>!isStandingSafeEntry(c.entry))
+    if(counted.reduce((sum,c)=>sum+input.estimateTokens(c.entry.content),0)>scanBudget)break
+    expandedDepth++;level++
+    recursionQueue=evaluate([],0);adjudicateGroups(recursionQueue);scanRecursion()
   }
 
   // ── 轮末扣减定时计数：仅扣轮初已存在的键；本轮新激活写入的值从下一轮开始倒数 ──

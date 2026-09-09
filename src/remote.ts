@@ -18,6 +18,11 @@ import type { AssembledPrompt } from './core/assemble.js'
 import type { SessionBinding } from './core/binding.js'
 import type { GreetingFloorState } from './core/greetingLog.js'
 import type { TemplateDisplayPart } from './core/templateDisplay.js'
+import type {HelperMessageEditResult} from './core/helperChatEdits.js'
+import type { HelperSnapshot } from './core/helperRuntime.js'
+import type {HelperMvuWork} from './core/helperMvu.js'
+import type {HelperWorldbookContext,HelperWorldbookResult} from './core/helperWorldbook.js'
+import type { HelperScriptBundle,HelperScriptLibrary,HelperScriptAsset,HelperScriptContext,HelperScriptView } from './core/helperScripts.js'
 import type { Persona } from './core/persona.js'
 import type { SiblingSwipe } from './core/siblings.js'
 import type { CharacterCard, ChatMessage, MemoryEntry, PromptPreset, RegexRule, WIEngineResult, WorldDelta } from './core/types.js'
@@ -29,6 +34,7 @@ import type { CharacterSummary } from './state/workspace.js'
 const nonEmpty = () => string().check(minLength(1))
 /** 楼层 turn 号：正整数（原 `z.number().int().min(1)`）。 */
 const turnNumber = () => int().check(minimum(1))
+const helperScriptTarget=()=>union([object({type:literal('global')}),object({type:literal('preset'),presetId:nonEmpty()}),object({type:literal('character'),cardId:nonEmpty()})])
 
 /**
  * 会话绑定（setSessionBinding）。字段全集与 node/bindings.ts 的 parseSessionBinding 一致：
@@ -44,7 +50,11 @@ const sessionBinding = () =>
     personaId: nullable(string()),
     lorebookIds: array(string()),
     characterLorebookId: nullable(string()),
+    useEmbeddedLorebook:optional(boolean()),
+    characterLorebookIds:optional(array(nonEmpty())),
+    worldInfo:optional(object({scanDepth:optional(number()),minActivations:optional(number()),maxScanDepth:optional(number()),contextPercent:optional(number()),tokenBudget:optional(number()),recursiveScan:optional(boolean()),maxRecursionSteps:optional(number()),caseSensitive:optional(boolean()),matchWholeWords:optional(boolean()),includeNames:optional(boolean()),overflowWarning:optional(boolean()),characterStrategy:optional(union([literal(0),literal(1),literal(2)])),useGroupScoring:optional(boolean())})),
     interactiveCards: nullable(boolean()),
+    helperMvu:optional(boolean()),
     greetingIndex: int().check(minimum(0)),
     authorNote: optional(string()),
     injectJournal: optional(boolean()),
@@ -93,6 +103,9 @@ const editorDraftScope = {
 
 /** method → [request shape, value schema, 简介] */
 export const METHODS = {
+  abandonHelperMvu:{req:object({sessionId:string().check(minLength(1),maxLength(256)),storyId:string().check(minLength(1),maxLength(256))}),value:anyValue,summary:'显式放弃待处理 MVU 任务并关闭本会话自动更新'},
+  prepareHelperMvuJob:{req:object({...sessionIdField,storyId:nonEmpty(),runtimeId:string().check(minLength(8),maxLength(96))}),value:anyValue,summary:'准备当前剧情的原生 MVU 任务'},
+  commitHelperMvuJob:{req:object({...sessionIdField,storyId:nonEmpty(),runtimeId:string().check(minLength(8),maxLength(96)),jobId:nonEmpty(),token:nonEmpty(),data:anyValue}),value:anyValue,summary:'原子提交 MVU 变量与完成回执'},
   // 未提交的编辑器草稿独立保存，不改动业务资产。
   getEditorDraft: { req: object(editorDraftScope), value: anyValue, summary: '读取当前浏览器的编辑器草稿' },
   saveEditorDraft: { req: object({ ...editorDraftScope, value: anyValue }), value: anyValue, summary: '保存当前浏览器的编辑器草稿' },
@@ -203,6 +216,31 @@ export const METHODS = {
     req: object({ ...sessionIdField, text: string(), messageId: optional(int().check(minimum(0))) }),
     value: anyValue,
     summary: '对展示文本应用 output/render 正则并抽出 HTML',
+  },
+  getHelperEventState: {
+    req: object({...sessionIdField,storyId:optional(nonEmpty()),closedSeq:optional(int().check(minimum(0)))}),value:anyValue,
+    summary:'读取当前剧情可见消息编号，核验实时轮次的模板与 WAL 收口',
+  },
+  getHelperSnapshot: {
+    req: object({ ...sessionIdField, messageId: int().check(minimum(0)) }), value: anyValue,
+    summary: '读取当前剧情的酒馆助手历史与变量快照',
+  },
+  getHelperScriptBundle: {
+    req: object({...sessionIdField}),value:anyValue,summary:'读取角色脚本树及当前剧情的沙箱启动快照',
+  },
+  getCharacterHelperScripts:{req:object({cardId:nonEmpty()}),value:anyValue,summary:'读取角色卡脚本资产与修订号'},
+  editHelperMessages:{req:object({...sessionIdField,messageId:int().check(minimum(0)),storyId:nonEmpty(),historyRevision:nonEmpty(),edits:anyValue,before:optional(anyValue)}),value:anyValue,summary:'在独立剧情分支批量编辑可见聊天正文，撤销相关派生事实'},
+  rebindHelperWorldbooks:{req:object({...sessionIdField,messageId:int().check(minimum(0)),storyId:nonEmpty(),bindingRevision:nonEmpty(),kind:enum_(['global','character','chat','ensure-chat','settings']),selection:anyValue}),value:anyValue,summary:'修改固定会话世界书绑定，聊天切换保留剧情副本并经过 WAL'},
+  getHelperWorldbookContext:{req:object({...sessionIdField,storyId:nonEmpty()}),value:anyValue,summary:'读取固定剧情的世界书目录和绑定'},
+  helperWorldbookOperation:{req:object({...sessionIdField,messageId:int().check(minimum(0)),storyId:nonEmpty(),bindingRevision:nonEmpty(),name:nonEmpty(),operation:enum_(['get','replace','create','upsert','delete']),revision:optional(nonEmpty()),entries:optional(anyValue),label:optional(nonEmpty())}),value:anyValue,summary:'世界书资产 CRUD，聊天书写入经过当前剧情 WAL'},
+  getSessionHelperScripts:{req:object({...sessionIdField,storyId:nonEmpty()}),value:anyValue,summary:'读取固定会话的三类脚本库快照'},
+  commitSessionHelperScripts:{req:object({...sessionIdField,storyId:nonEmpty(),bindingRevision:nonEmpty(),type:enum_(['global','preset','character']),revision:nonEmpty(),trees:anyValue}),value:anyValue,summary:'校验固定会话绑定与资产修订后保存脚本库'},
+  getHelperScriptLibrary:{req:object({target:helperScriptTarget()}),value:anyValue,summary:'读取全局、预设或角色脚本库及修订'},
+  saveHelperScriptLibrary:{req:object({target:helperScriptTarget(),revision:nonEmpty(),trees:anyValue}),value:anyValue,summary:'按修订保存指定脚本库'},
+  saveCharacterHelperScripts:{req:object({cardId:nonEmpty(),revision:nonEmpty(),trees:anyValue}),value:anyValue,summary:'按修订号保存角色脚本，保留其它角色资产字段'},
+  commitHelperVariables: {
+    req: object({ ...sessionIdField, messageId: int().check(minimum(0)), storyId: nonEmpty(), historyRevision: nonEmpty(), changes: anyValue }), value: anyValue,
+    summary: '校验剧情与历史修订后，通过楼层 WAL 提交变量表差异',
   },
   swipeGreeting: {
     req: object({ ...sessionIdField, index: int().check(minimum(0)) }),
@@ -367,6 +405,10 @@ export interface PresetSummary {
 
 /** renderOutputText：展示文本经 output/render 正则与 HTML 抽取后的形态。 */
 export interface RenderedOutput {
+  helper?: HelperSnapshot
+  helperScripts?: HelperScriptContext
+  helperWorldbooks?:HelperWorldbookContext
+  userName?: string
   parts?: TemplateDisplayPart[]
   text: string
   html: string | null
@@ -403,6 +445,9 @@ export interface ContextUsage {
 
 /** 方法名 → 裸业务结果类型。加/改 remote 方法时必须与 METHODS、service 实现、client 镜像同步。 */
 export interface TavernMethodResults {
+  abandonHelperMvu:{disabled:true;abandoned:number}
+  prepareHelperMvuJob:HelperMvuWork
+  commitHelperMvuJob:HelperMvuWork
   getEditorDraft: { draft: { value: unknown; updatedAt: string } | null }
   saveEditorDraft: { saved: true }
   deleteEditorDraft: { deleted: true }
@@ -451,6 +496,20 @@ export interface TavernMethodResults {
   ensureGreeting: { created: boolean; conversationStarted: boolean }
   getGreetingSwipe: GreetingFloorState
   renderOutputText: RenderedOutput
+  getHelperEventState: {storyId:string;historyRevision:string;messages:{seq:number;message_id:number;role:'user'|'assistant'}[];writable:boolean;closedThrough:number}
+  getHelperSnapshot: HelperSnapshot
+  getHelperScriptBundle: HelperScriptBundle
+  getCharacterHelperScripts:HelperScriptLibrary
+  editHelperMessages:HelperMessageEditResult
+  rebindHelperWorldbooks:HelperWorldbookContext
+  getHelperWorldbookContext:HelperWorldbookContext
+  helperWorldbookOperation:HelperWorldbookResult
+  getSessionHelperScripts:HelperScriptContext
+  commitSessionHelperScripts:HelperScriptView
+  getHelperScriptLibrary:HelperScriptAsset
+  saveHelperScriptLibrary:HelperScriptAsset
+  saveCharacterHelperScripts:HelperScriptLibrary
+  commitHelperVariables: HelperSnapshot
   swipeGreeting: { childSessionId: string; index: number; title: string }
   // 楼层
   regenerate: ForkResult

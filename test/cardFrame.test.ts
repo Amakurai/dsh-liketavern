@@ -93,7 +93,9 @@ describe('tavernCardBridgeScript', () => {
     expect(nativeOpen).toHaveBeenCalledTimes(3)
     expect(nativeWrite).toHaveBeenCalledTimes(3)
     expect(nativeClose).toHaveBeenCalledTimes(3)
-    expect(window.removeEventListener).toHaveBeenCalledTimes(2)
+    expect(window.removeEventListener.mock.calls.filter(([event]) => event === 'load')).toHaveLength(2)
+    expect(window.removeEventListener.mock.calls.filter(([event]) => event === 'error')).toHaveLength(2)
+    expect(window.removeEventListener.mock.calls.filter(([event]) => event === 'unhandledrejection')).toHaveLength(2)
   })
   it('把开场白变体编进脚本，避免 </script> 打断', () => {
     const script = tavernCardBridgeScript({ greetings: ['cover</script>', 'alt-greeting'], greetingIndex: 0 })
@@ -144,4 +146,24 @@ describe('parseCardBridgeMessage', () => {
       height: 240,
     })
   })
+})
+
+/** 使用真实注入桥验证尺寸反馈，视口高度不能成为卡片折叠后的高度下限。 */
+it('卡片内容折叠后可以缩小，内容扩展仍通知新高度',()=>{
+  const callbacks=new Map<string,()=>void>(),postMessage=vi.fn()
+  let contentHeight=560
+  const window={addEventListener:(name:string,fn:()=>void)=>callbacks.set(name,fn),removeEventListener:vi.fn()}
+  const document={open:vi.fn(),write:vi.fn(),close:vi.fn(),currentScript:null,querySelector:()=>null,
+    readyState:'loading',addEventListener:(name:string,fn:()=>void)=>callbacks.set(name,fn),removeEventListener:vi.fn(),
+    documentElement:{scrollHeight:560,offsetHeight:560,clientHeight:560},
+    body:{get offsetHeight(){return contentHeight},get scrollHeight(){return Math.max(contentHeight,560)},
+      querySelectorAll:()=>[{getBoundingClientRect:()=>({bottom:contentHeight})}]}}
+  const context=createContext({window,document,parent:{postMessage},TextEncoder,clearTimeout:vi.fn(),setTimeout:vi.fn()})
+  const script=tavernCardBridgeScript({greetings:[],greetingIndex:0}).replace(/^<script[^>]*>/,'').replace(/<\/script>$/,'')
+  runInContext(script,context)
+  callbacks.get('DOMContentLoaded')?.()
+  contentHeight=180;callbacks.get('load')?.()
+  contentHeight=720;callbacks.get('load')?.()
+  expect(postMessage.mock.calls.map(([message])=>message).filter(message=>message.action==='resize').map(message=>message.height)).toEqual([560,180,720])
+  runInContext('window.__dshTavernBridgeCleanup()',context)
 })

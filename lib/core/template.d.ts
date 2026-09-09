@@ -1,6 +1,7 @@
 /** 模板跨隔离边界的数据契约；只接受有界 JSON，禁止原型路径与不可序列化状态。 */
 import type { ChatMessage, ChatRole, WorldInfoEntry } from './types.js';
 import type { TemplateMessageIdentity, TemplateMessageVariables } from './templateMessageVariables.js';
+import type { TemplateHelperMvu } from './templateHelperMvu.js';
 export type TemplateValue = null | boolean | number | string | TemplateValue[] | {
     [key: string]: TemplateValue;
 };
@@ -32,6 +33,8 @@ export interface TemplateContext {
     history: ChatMessage[];
     historyIdentities?: TemplateMessageIdentity[];
     messageVariables?: TemplateMessageVariables;
+    /** 来自 helper.json 的只读消息 stat_data；与模板可写变量分离，并随每轮计划冻结。 */
+    helperMvu?: TemplateHelperMvu;
     now: number;
     seed: number;
     phase: 'generate' | 'render';

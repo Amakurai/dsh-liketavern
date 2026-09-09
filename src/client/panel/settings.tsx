@@ -1,10 +1,12 @@
 /**
- * 设置面板分区：二级子导航拆成六组——界面 / 默认配置 / 采样与思考 / 世界书引擎 / 记忆 / 卡片与数据。
+ * 设置面板分区：二级子导航拆成七组——界面 / 默认配置 / 采样与思考 / 世界书引擎 / 记忆 / 脚本 / 卡片与数据。
  * 每组一个 Section（页面头 + 设置行 + 自己的 SaveBar），一次只看一组，不再一页堆到底。
  * 排版对齐通用设置：标题 + 说明 + 右侧 36px 胶囊控件；瞬时保存反馈走 useToast，上下文错误用 Err。
  * 「界面」组只有语言一项：选择即写设置并 setTavernLocale 立即生效，不走 SaveBar。
  */
-import { useDraftGuard } from '../drafts.js'
+import { ScriptSettings } from './scripts.js'
+import { CardDataSettings } from './cardData.js'
+import { DraftScope, useDraftGuard } from '../drafts.js'
 import { useDraftRestored, useDraftState } from '../draftPersistence.js'
 import { useEffect, useId, useRef, useState } from 'react'
 import { setTavernLocale, useT } from '../i18n.js'
@@ -17,6 +19,7 @@ const SUBS = [
   { id: 'sampling', labelKey: 'settings.sub.sampling' },
   { id: 'worldinfo', labelKey: 'settings.sub.worldinfo' },
   { id: 'memory', labelKey: 'settings.sub.memory' },
+  { id: 'scripts', labelKey: 'settings.sub.scripts' },
   { id: 'cards', labelKey: 'settings.sub.cards' },
 ] as const
 
@@ -26,6 +29,10 @@ type SubId = (typeof SUBS)[number]['id']
 let lastSub: SubId | undefined
 
 export function SettingsSection(props: { remote: TavernRemote }) {
+  return <DraftScope>{request=><SettingsContent {...props} request={request}/>}</DraftScope>
+}
+
+function SettingsContent(props: { remote: TavernRemote; request: (action:()=>void)=>void }) {
   const { remote } = props
   const t = useT()
   const tabsId = useId()
@@ -71,12 +78,14 @@ export function SettingsSection(props: { remote: TavernRemote }) {
       }
       const saved = toDraft(r.value.settings)
       setBaseline(saved)
-      // 一页有多个独立保存区：只用服务端返回值刷新本次保存的键，保留其它区尚未保存的草稿。
+      // 保存区接收服务器结果；其它区只保留实际编辑的草稿，未编辑字段同步最新值，避免凭空产生脏状态。
       setDraft((current) => {
         if (!current) return saved
-        const next = { ...current }
-        for (const key of Object.keys(patch) as Array<keyof TavernSettings>) {
-          ;(next as unknown as Record<string, unknown>)[key] = structuredClone(saved[key])
+        const next = { ...saved }
+        for (const key of Object.keys(current) as Array<keyof TavernSettings>) {
+          if (!Object.hasOwn(patch, key) && JSON.stringify(current[key]) !== JSON.stringify(baseline?.[key])) {
+            ;(next as unknown as Record<string, unknown>)[key] = structuredClone(current[key])
+          }
         }
         return next
       })
@@ -90,12 +99,17 @@ export function SettingsSection(props: { remote: TavernRemote }) {
     setDraft({ ...draft, locale })
     setTavernLocale(locale)
     void runAsync(setBusy, setError, async () => {
-      const r = await remote.updateSettings({ patch: { locale } })
-      if (r.ok) setBaseline((current) => current ? { ...current, locale } : current)
-      if (!r.ok) {
+      try {
+        const r = await remote.updateSettings({ patch: { locale } })
+        if (!r.ok) throw new Error(r.error.message)
+        const savedLocale = r.value.settings.locale
+        setBaseline((current) => current ? { ...current, locale: savedLocale } : current)
+        setDraft((current) => current ? { ...current, locale: savedLocale } : current)
+        setTavernLocale(savedLocale)
+      } catch (error) {
         setDraft((current) => (current ? { ...current, locale: prev } : current))
         setTavernLocale(prev)
-        setError(`${t('settings.interface.languageFailed')}: ${r.error.message}`)
+        throw new Error(`${t('settings.interface.languageFailed')}: ${error instanceof Error ? error.message : String(error)}`)
       }
     })
   }
@@ -136,13 +150,14 @@ export function SettingsSection(props: { remote: TavernRemote }) {
         id={tabsId} panelId={`${tabsId}-panel`} label={t('settings.title')}
         items={SUBS.map((s) => ({ id: s.id, label: t(s.labelKey) }))}
         value={sub}
-        onChange={(id) => {
+        onChange={(id) => props.request(() => {
           lastSub = id as SubId
           setSub(id as SubId)
-        }}
+        })}
       />
       {/* key=sub 让切组重新挂载并播 fade-up；草稿挂在父组件上，切组不丢未保存编辑 */}
       <div key={sub} id={`${tabsId}-panel`} role="tabpanel" aria-labelledby={`${tabsId}-${sub}`} tabIndex={0} className="dsh-tavern-rise">
+        {sub === 'scripts' && <ScriptSettings remote={remote}/>}
         {sub === 'interface' && (
           <Section title={t('settings.interface.title')} description={t('settings.interface.desc')}>
             <SettingsRow title={t('settings.interface.language')} description={t('settings.interface.languageDesc')}>
@@ -265,6 +280,12 @@ export function SettingsSection(props: { remote: TavernRemote }) {
             <SettingsRow title={t('settings.worldinfo.scanDepth')}>
               <NumInput value={draft.worldInfo.scanDepth} onChange={(v) => setWorldInfo({ scanDepth: Math.max(0, Math.round(v)) })} />
             </SettingsRow>
+            <SettingsRow title={t('settings.worldinfo.minActivations')} description={t('settings.worldinfo.minActivationsDesc')}>
+              <NumInput value={draft.worldInfo.minActivations ?? 0} onChange={v=>setWorldInfo({minActivations:Math.min(2000,Math.max(0,Math.round(v)))})}/>
+            </SettingsRow>
+            <SettingsRow title={t('settings.worldinfo.maxScanDepth')} description={t('settings.worldinfo.maxScanDepthDesc')}>
+              <NumInput value={draft.worldInfo.maxScanDepth ?? 0} onChange={v=>setWorldInfo({maxScanDepth:Math.min(1000,Math.max(0,Math.round(v)))})}/>
+            </SettingsRow>
             <SettingsRow title={t('settings.worldinfo.contextPercent')} description={t('settings.worldinfo.contextPercentDesc')}>
               <NumInput value={draft.worldInfo.contextPercent} onChange={(v) => setWorldInfo({ contextPercent: v })} />
             </SettingsRow>
@@ -385,6 +406,7 @@ export function SettingsSection(props: { remote: TavernRemote }) {
                 </Btn>
               </SaveBar>
             </Section>
+            <CardDataSettings remote={remote} />
             <div className="dsh-tavern-groupHead">{t('settings.cards.dataHome')}</div>
             <Muted>
               <span style={{ wordBreak: 'break-all' }}>

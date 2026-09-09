@@ -228,3 +228,17 @@ describe('请求 schema 校验（gateway 只调用 .parse）', () => {
     expect(() => schema.parse({ swipe: { turn: 2, index: 0, total: 3 } })).toThrow()
   })
 })
+
+it('脚本库请求固定目标类型与资产身份，拒绝缺少预设/角色 ID 的请求',()=>{
+  const codec=requestCodec('saveHelperScriptLibrary')
+  for(const target of [{type:'global'},{type:'preset',presetId:'p'},{type:'character',cardId:'c'}])expect(codec.schema.parse({target,revision:'r',trees:[]})).toMatchObject({target})
+  for(const target of [{type:'preset'},{type:'character',cardId:''},{type:'file',path:'private.json'}])expect(()=>codec.schema.parse({target,revision:'r',trees:[]})).toThrow()
+})
+
+it('世界书重绑只能使用声明的选择类型，会话新字段通过同一请求契约',()=>{
+  const binding={sessionId:'s',cardId:'card-test1234',presetId:null,personaId:null,lorebookIds:[],characterLorebookId:null,interactiveCards:null,greetingIndex:0,createdAt:'factory',useEmbeddedLorebook:false,characterLorebookIds:['extra']}
+  expect(requestCodec('setSessionBinding').schema.parse({binding})).toEqual({binding})
+  const request={sessionId:'s',messageId:1,storyId:'story',bindingRevision:'rev',kind:'chat',selection:null}
+  expect(requestCodec('rebindHelperWorldbooks').schema.parse(request)).toEqual(request)
+  expect(()=>requestCodec('rebindHelperWorldbooks').schema.parse({...request,kind:'file'})).toThrow()
+})

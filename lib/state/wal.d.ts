@@ -47,6 +47,8 @@ export declare class Wal {
     recordChange(floor: string, path: string, before: string | null, after: string | null, beforeEncoding: 'utf8' | 'base64', afterEncoding: 'utf8' | 'base64'): Promise<void>;
     /** 提交楼层：meta.committed=true 并记录 committedAt。 */
     commitFloor(floor: string): Promise<void>;
+    /** 已完成楼层追加受控事务前重新标记未收口；保留全部快照和时间，先验证整层，不能用旧 committed 掩盖新写入失败。 */
+    reopenFloor(floor: string): Promise<void>;
     /** 逆序回放本楼层快照：before 为字符串写回（先确保父目录存在），为 null 删除文件；随后目录改名保留。 */
     rollbackFloor(floor: string, workspaceRoot: string): Promise<string[]>;
     /** 按传入顺序的逆序逐个回滚（「回退到第 N 楼」= 撤销其后所有楼层）；不存在的楼层记入 skipped。 */

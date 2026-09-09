@@ -3,7 +3,10 @@
  * 列表行走 Avatar + 尾部详情/删除 IconBtn；导入/删除等瞬时反馈走 useToast，上下文错误用 Err。
  * 交互卡预览保留 CSP meta 注入 + sandbox iframe（无 allow-same-origin），不得放宽。
  */
+import {cardVariableLabels} from '../cardVariableLabels.js'
 import { useDraftGuard } from '../drafts.js'
+import { buildCardSrcDoc } from '../../core/cardFrame.js'
+import { CARD_VARIABLE_STYLES } from '../styles.js'
 import { PersistentEditor, useDraftRestored, useDraftState } from '../draftPersistence.js'
 import { useEffect, useRef, useState } from 'react'
 import { Button, IconDownloadOutline16, IconTrashOutline16, IconUserOutline16, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -11,19 +14,6 @@ import { cachedAvatar, cachedCharacterDetail, invalidateCharacter } from '../cac
 import { useT } from '../i18n.js'
 import type { CharacterDetail, CharacterInspect, CharacterSummary, TavernRemote } from '../types.js'
 import { Avatar, Btn, ConfirmDialog, Dialog, Err, Field, FileBtn, IconBtn, Muted, NumInput, SearchEmpty, SearchInput, Section, Select, Skeleton, clickableProps, downloadBase64, downloadJson, errOf, fileToBase64, runAsync, useLoader, useToast } from '../util.js'
-
-const CSP_META =
-  '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; script-src \'unsafe-inline\'; style-src \'unsafe-inline\'">'
-
-/** 把 CSP meta 注入交互卡 HTML 头部（无 <head> 则直接前置）。 */
-function withCsp(html: string): string {
-  const head = /<head[^>]*>/i.exec(html)
-  if (head) {
-    const at = head.index + head[0].length
-    return html.slice(0, at) + CSP_META + html.slice(at)
-  }
-  return CSP_META + html
-}
 
 /** 按 cardId 拉头像 dataURL 的 Avatar 包装（失败时回落首字符/图标）；头像走进程内缓存。 */
 function CardAvatar(props: { remote: TavernRemote; cardId: string; name: string; size: number }) {
@@ -314,7 +304,12 @@ function CharacterDetailDialog(props: { remote: TavernRemote; cardId: string; on
         <Dialog open width="lg" title={t('characters.detail.interactiveTitle', { name: detail?.name ?? '' })} onClose={() => setCardOpen(false)}>
           <iframe
             sandbox="allow-scripts"
-            srcDoc={withCsp(interactiveHtml)}
+            srcDoc={buildCardSrcDoc(interactiveHtml, { greetings: detail ? [detail.firstMes, ...detail.alternateGreetings] : [], greetingIndex: 0,
+              helperContext: { name: detail?.name, canSwipe: false },
+              helperLabels: { diagnostics: t('speech.helperMessages'), unsupported: t('speech.helperUnsupported') },
+              variableStyles: CARD_VARIABLE_STYLES,
+              variableLabels:cardVariableLabels(t,t('speech.cardDataNote')),
+            })}
             title={t('characters.detail.interactiveFrame')}
             style={{ width: '100%', height: '60vh', border: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.25))', borderRadius: 16, background: 'var(--dsw-alias-bg-base, #111)' }}
           />

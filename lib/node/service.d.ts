@@ -14,7 +14,7 @@ import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol';
 import type { RegexRule } from '../core/types.js';
 import type { TavernConfigRaw } from './config.js';
 import type { Persona, TavernState } from './state.js';
-import type { TavernMethodResults } from '../remote.js';
+import type { TavernMethodResults, TavernMethodRequests } from '../remote.js';
 export declare class TavernService extends TypertRemoteService implements TavernServiceContract {
     /** 运行时中枢（agent 面插件经 ctx.tavern 访问）。 */
     readonly state: TavernState;
@@ -191,6 +191,40 @@ export declare class TavernService extends TypertRemoteService implements Tavern
         text: string;
         messageId?: number;
     }): Promise<TavernMethodResults['renderOutputText']>;
+    getHelperEventState(request: TavernMethodRequests['getHelperEventState']): Promise<TavernMethodResults['getHelperEventState']>;
+    getHelperSnapshot(request: {
+        sessionId: string;
+        messageId: number;
+    }): Promise<TavernMethodResults['getHelperSnapshot']>;
+    prepareHelperMvuJob(request: TavernMethodRequests['prepareHelperMvuJob']): Promise<TavernMethodResults['prepareHelperMvuJob']>;
+    abandonHelperMvu(request: TavernMethodRequests['abandonHelperMvu']): Promise<TavernMethodResults['abandonHelperMvu']>;
+    commitHelperMvuJob(request: TavernMethodRequests['commitHelperMvuJob']): Promise<TavernMethodResults['commitHelperMvuJob']>;
+    getHelperScriptBundle(request: {
+        sessionId: string;
+    }): Promise<TavernMethodResults['getHelperScriptBundle']>;
+    getCharacterHelperScripts(request: {
+        cardId: string;
+    }): Promise<TavernMethodResults['getCharacterHelperScripts']>;
+    editHelperMessages(request: TavernMethodRequests['editHelperMessages']): Promise<TavernMethodResults['editHelperMessages']>;
+    rebindHelperWorldbooks(request: TavernMethodRequests['rebindHelperWorldbooks']): Promise<TavernMethodResults['rebindHelperWorldbooks']>;
+    getHelperWorldbookContext(request: TavernMethodRequests['getHelperWorldbookContext']): Promise<TavernMethodResults['getHelperWorldbookContext']>;
+    helperWorldbookOperation(request: TavernMethodRequests['helperWorldbookOperation']): Promise<TavernMethodResults['helperWorldbookOperation']>;
+    getSessionHelperScripts(request: TavernMethodRequests['getSessionHelperScripts']): Promise<TavernMethodResults['getSessionHelperScripts']>;
+    commitSessionHelperScripts(request: TavernMethodRequests['commitSessionHelperScripts']): Promise<TavernMethodResults['commitSessionHelperScripts']>;
+    getHelperScriptLibrary(request: TavernMethodRequests['getHelperScriptLibrary']): Promise<TavernMethodResults['getHelperScriptLibrary']>;
+    saveHelperScriptLibrary(request: TavernMethodRequests['saveHelperScriptLibrary']): Promise<TavernMethodResults['saveHelperScriptLibrary']>;
+    saveCharacterHelperScripts(request: {
+        cardId: string;
+        revision: string;
+        trees: unknown;
+    }): Promise<TavernMethodResults['saveCharacterHelperScripts']>;
+    commitHelperVariables(request: {
+        sessionId: string;
+        messageId: number;
+        storyId: string;
+        historyRevision: string;
+        changes: unknown;
+    }): Promise<TavernMethodResults['commitHelperVariables']>;
     regenerate(request: {
         sessionId: string;
         messageId?: string;

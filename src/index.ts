@@ -13,6 +13,7 @@ import { installTavernPreset } from './node/presetInstall.js'
 import { createTavernService } from './node/service.js'
 import { registerRequestDiagnostics } from './node/requestDiagnostics.js'
 import { onTurnStart, onTurnEnd } from './node/sessionLifecycle.js'
+import { registerHelperMvuLifecycle, reserveHelperMvuMaintenance } from './node/helperMvuLifecycle.js'
 import { TavernState } from './node/state.js'
 import { isTavernRuntimeSession } from './node/tavernSession.js'
 import { TYPERT_HOST } from './remote.js'
@@ -42,6 +43,7 @@ export async function apply(ctx: Context): Promise<void> {
 
   createTavernService(ctx, state, scope)
   registerRequestDiagnostics(ctx, state)
+  registerHelperMvuLifecycle(ctx)
   ctx.effect(() => ctx.typert.register(TYPERT_HOST as never), 'dsh-tavern.typert')
 
   const retireStuckBlank = (session: Session) => {
@@ -63,7 +65,7 @@ export async function apply(ctx: Context): Promise<void> {
     if (event.type === 'turn/start') {
       const { turn } = event.data as { turn: number }
       void state
-        .enqueueSessionTask(session.id, () => onTurnStart(state, session.id, turn))
+        .enqueueSessionTask(session.id, () => onTurnStart(state, session.id, turn, session))
         .catch((error) => ctx.logger.warn(`dsh-tavern: beginFloor 失败：${String(error)}`))
     } else if (event.type === 'step/start') {
       const { step } = event.data as { step: number }
@@ -84,7 +86,7 @@ export async function apply(ctx: Context): Promise<void> {
     const session = ctx.sessions.get(agent.id)
     if (!session || !isTavernRuntimeSession(ctx, session)) return
     const text = messageText(message.content)
-    if (text.trim()) {
+    if (text.trim() && !state.pendingTemplateInputs.get(agent.id)?.some(input => input.id === message.id)) {
       const list = state.pendingInputs.get(agent.id) ?? []
       list.push(text)
       state.pendingInputs.set(agent.id, list)
@@ -95,5 +97,6 @@ export async function apply(ctx: Context): Promise<void> {
     void state
       .enqueueSessionTask(agent.id, () => ensureGreeting({ ctx, state }, agent.id))
       .catch((error) => ctx.logger.warn(`dsh-tavern: 写入开场白失败：${String(error)}`))
+    reserveHelperMvuMaintenance(state, agent, error => ctx.logger.warn(`dsh-tavern: MVU 等待已结束，待处理任务与输入保留：${String(error)}`))
   })
 }

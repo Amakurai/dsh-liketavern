@@ -52,7 +52,7 @@ jobs:
           // prepack 钩子的构建日志会先混进 stdout，从首个以 [ 开头的行截取 JSON
           const json = out.slice(out.search(/^\[/m));
           const files = JSON.parse(json)[0].files.map((f) => f.path);
-          const required = ["lib/index.js", "lib/client.js", "lib/vendor/template-libraries.js", "lib/vendor/template-faker.js", "cordis.patch.yml", "presets/tavern/agent.cordis.yml", "README.md", "README.en.md", "CHANGELOG.md", "LICENSE"];
+          const required = ["lib/index.js", "lib/client.js", "lib/vendor/template-libraries.js", "lib/vendor/template-faker.js", "lib/vendor/card-libraries.js", "cordis.patch.yml", "presets/tavern/agent.cordis.yml", "README.md", "README.en.md", "CHANGELOG.md", "LICENSE"];
           const missing = required.filter((p) => !files.includes(p));
           const forbidden = files.filter((p) => /^(src|test|node_modules)\//.test(p));
           if (missing.length || forbidden.length) {

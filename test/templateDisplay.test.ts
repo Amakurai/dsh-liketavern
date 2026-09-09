@@ -115,6 +115,7 @@ it('真实剧情落盘后按顺序重绘，资产修改和重复读取不重跑�
   for(let i=0;i<2;i++) expect((await service.renderOutputText({sessionId:'s1',text,messageId:5})).parts).toEqual(stored.outputs['5']?.parts)
   config.interactiveCards=false
   const disabled=await service.renderOutputText({sessionId:'s1',text,messageId:5})
+  expect(disabled.userName).toBe('User')
   expect(disabled.text).toContain('完成')
   expect(disabled.text).not.toContain('<%')
   expect(disabled.htmls).toEqual([])

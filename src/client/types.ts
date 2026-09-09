@@ -4,6 +4,7 @@
  * （宿主经 declaration merging 注入的 slots/remote/locale 服务在此以结构化类型描述，避免依赖宿主包的类型）。
  */
 import type { TavernMethodResults, TavernMethodRequests } from '../remote.js'
+import type { SessionBinding as HostSessionBinding } from '@deepseek-ai/dsh-api-session-controller/client'
 
 // 契约共享形状：从唯一定义处 re-export，本文件不再保留手写副本。
 export type { CharacterSummary } from '../state/workspace.js'
@@ -54,6 +55,8 @@ export interface ClientContext {
   sessions: {
     open(id: string): void
     refresh?: () => Promise<void>
+    /** 当前已保留会话的公开同步事件源；不借此打开会话或读取后台历史。 */
+    binding?(id: string): (Pick<HostSessionBinding, 'sessionId' | 'eventSource'> & { session?: Pick<HostSessionBinding['session'], 'cancel'> }) | undefined
     /** 会话列表快照 store（含 current；预设 id 在 projectionValues.agentPreset）；seatWatch 与 assistant-step 显隐据此判断。 */
     list: {
       getSnapshot(): {

@@ -6,6 +6,9 @@
  * conversation.chat.node / assistant-step 是 keyed 覆盖位：登记就会挡住原生
  * AssistantNodeView。因此只在当前会话是 Tavern 模式时才挂上，切走即卸掉。
  */
+import type {Context} from '@deepseek-ai/cordis'
+import type {IConversation} from '@deepseek-ai/dsh-client-ui-conversation/client'
+import {installChoiceInput} from './helperChoices.js'
 import { TYPERT_REMOTE } from '../remote.js'
 import { TavernFloorActions } from './actions.js'
 import { TavernAssistantNode } from './assistant.js'
@@ -14,6 +17,7 @@ import { TavernHeroCharacter } from './hero.js'
 import { setTavernHostLocale, setTavernLocale } from './i18n.js'
 import { en, zh } from './locales.js'
 import { isCurrentTavernSession } from './mode.js'
+import { installHelperLiveEvents } from './helperLiveEvents.js'
 import { TavernPanel } from './panel/index.js'
 import { installTavernSeatWatch } from './seatWatch.js'
 import type { ClientContext, TavernRemote } from './types.js'
@@ -30,6 +34,21 @@ export async function apply(ctx: ClientContext) {
   await ctx.remote.$mount(TYPERT_REMOTE)
   const remote = ctx.get('remote.tavern') as TavernRemote
   const sessions = ctx.sessions
+  ctx.effect(()=>installChoiceInput(sessionId=>{
+    if(sessions.list.getSnapshot().current!==sessionId)return undefined
+    const scope=sessions.scope?.(sessionId)
+    const conversation=ctx.get('conversation') as IConversation|undefined
+    return scope&&conversation?.input?conversation.input.for(scope as Context):undefined
+  }),'dsh-tavern: choice input')
+  /** 使用宿主公开取消动作；其 keepInbox 语义保留待处理输入，也可以终止空闲维护等待。 */
+  const cancelWaiting = (sessionId: string): (() => Promise<void>) | undefined => {
+    const face = sessions.binding?.(sessionId)?.session
+    if (!face) return undefined
+    return async () => {
+      const result = await face.cancel()
+      if (!result.ok) throw new Error(result.error.message)
+    }
+  }
 
   // 界面语言在挂载 slot 前播种（持久化于 dsh-tavern 设置的 locale 键），避免先英文闪一下再切走。
   try {
@@ -50,6 +69,7 @@ export async function apply(ctx: ClientContext) {
 
   // 无会话 hero 上选「Tavern 模式」时自动补一次「新对话」，让暂存的模式选择落地。
   ctx.effect(() => installTavernSeatWatch(ctx), 'dsh-tavern: seat watch')
+  ctx.effect(() => installHelperLiveEvents(sessions, remote), 'dsh-tavern: helper live events')
 
   /** slot 声明可能尚未就位（插件加载顺序），优先经 slots.inject 延迟注册。 */
   const mount = (slotName: string, options: Record<string, unknown>, component: unknown) => {
@@ -73,7 +93,7 @@ export async function apply(ctx: ClientContext) {
   // C. 会话头部角色 chip（session 作用域；对话开始后可见）
   mount(
     'conversation.session.header.actions',
-    { id: 'tavern-binding', order: 20, inject: (sessionId: string) => ({ remote, sessionId, sessions }) },
+    { id: 'tavern-binding', order: 20, inject: (sessionId: string) => ({ remote, sessionId, sessions, onCancel: cancelWaiting(sessionId) }) },
     TavernHeaderChip,
   )
 

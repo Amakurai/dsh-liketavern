@@ -142,3 +142,5 @@ export declare function swipeGreeting({ ctx, state }: FloorDeps, sessionId: stri
     index: number;
     title: string;
 }>;
+/** 助手批量正文修改保持完整后续聊天，在草稿回滚派生状态；原会话不变且不自动重生成。 */
+export declare function forkEditedHistory(deps: FloorDeps, sessionId: string, storyId: string, seed: readonly SessionEvent[], fromTurn: number, verify: () => Promise<void>, prepareEdits?: (fs: import('../state/workspaceFs.js').WorkspaceFs, childId: string) => Promise<void>, action?: '编辑聊天消息' | '删除聊天消息'): Promise<ForkResult>;

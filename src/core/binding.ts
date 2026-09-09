@@ -4,6 +4,8 @@
  * SessionBinding 数据形状也归这里（纯数据，core 层）；持久化在 node/bindings，remote 契约引用本文件。
  */
 
+import type {WorldInfoGlobalSettings} from './types.js'
+
 /** 子会话继承的祖先 WAL 边界：仅 throughTurn（含）属于当前分支历史。 */
 export interface WalLineageEntry {
   sessionId: string
@@ -25,8 +27,16 @@ export interface SessionBinding {
   lorebookIds: string[]
   /** 主世界书（Character Lore）；null = 使用卡内嵌书（若有）。 */
   characterLorebookId: string | null
+  /** 主书为空时是否使用内嵌书，旧绑定缺省为 true。 */
+  useEmbeddedLorebook?: boolean
+  /** 当前会话的附加角色世界书。 */
+  characterLorebookIds?: string[]
+  /** 当前会话世界书引擎覆盖；未指定字段跟随项目设置。 */
+  worldInfo?: Partial<WorldInfoGlobalSettings>
   /** 会话级交互卡开关；null 跟随全局设置。 */
   interactiveCards: boolean | null
+  /** 显式启用本会话原生 MVU 初始化与自动变量更新；旧绑定默认关闭。 */
+  helperMvu?: boolean
   /** 开场白 swipe 下标（0 = first_mes，1.. = alternate_greetings）。 */
   greetingIndex: number
   /** 会话作者注释，每轮进 turnContext。 */

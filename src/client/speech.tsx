@@ -6,66 +6,252 @@
  * 卡内按钮经 postMessage 请求宿主 swipeGreeting。无 allow-same-origin。
  * 正则若只把标记换成 HTML，iframe 下面仍渲染剩余正文。
  */
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { IconCopyOutline16, MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives'
 import { buildCardSrcDoc, parseCardBridgeMessage } from '../core/cardFrame.js'
-import { restoreCardVariableBackup } from '../core/cardVariables.js'
+import {ScriptChoices,publishScriptChoices,clearScriptChoices,parseScriptChoices} from './helperChoices.js'
+import {cardVariableLabels} from './cardVariableLabels.js'
 import { stripDisplayMeta } from '../core/displaySanitize.js'
 import type { TemplateDisplayPart } from '../core/templateDisplay.js'
-import { cachedAvatar } from './cache.js'
+import { cachedAvatar,invalidateSessionBinding } from './cache.js'
+import {BINDING_CHANGED_EVENT} from './actions.js'
 import { useT, useMarkdownLabels } from './i18n.js'
-import { Avatar, Btn, Dialog, Err, IconBtn, useLoader, useToast } from './util.js'
-import { useDraftGuard } from './drafts.js'
+import { Avatar, Btn, Err, IconBtn, useLoader, useToast } from './util.js'
 import type { TavernRemote } from './types.js'
 import { CARD_VARIABLE_STYLES } from './styles.js'
+import { helperJson, helperChanges, helperRecord, type HelperSnapshot } from '../core/helperRuntime.js'
+import { watchHelperStory, notifyHelperStory } from './helperNotifications.js'
+import type {HelperWorldbookContext,HelperWorldbookRequest,HelperWorldbookResult,HelperWorldbookRebindRequest} from '../core/helperWorldbook.js'
+import { notifyHelperScripts } from './helperScriptNotifications.js'
+import {parseHelperScriptTrees,type HelperScriptCommit,type HelperScriptContext,type HelperScriptView} from '../core/helperScripts.js'
+import {parseHelperMessageEdits,type HelperMessageEditRequest,type HelperMessageEditResult} from '../core/helperChatEdits.js'
+import {prepareHelperDisplay,registerHelperDisplay,waitHelperDisplay,HelperDisplayError,type HelperDisplayLease,type HelperDisplayRequest} from './helperDisplay.js'
+import { emitHelperHostEvent,hasHelperEventAudience } from './helperEventRouter.js'
+import { attachHelperEvents } from './helperEventRouter.js'
 
-function SpeechHtmlFrame(props: {
+function displayFailure(error:unknown,t:ReturnType<typeof useT>):string{
+  if(error instanceof HelperDisplayError)return t(error.code==='busy'?'speech.helperDisplayBusy':error.code==='timeout'?'speech.helperDisplayTimeout':'speech.helperDisplayStale')
+  return error instanceof Error?error.message:String(error)
+}
+export function SpeechHtmlFrame(props: {
+  onFrameReady?:()=>void
+  onScriptError?:(message:string)=>void
+  onScriptReady?:(ready:boolean)=>void
+  registerDisplayGuard?:(guard:(request:HelperDisplayRequest)=>Promise<HelperDisplayLease>)=>()=>void
   srcDoc: string
   title: string
   widget: boolean
   compact?: boolean
+  onMessageEdit?:(request:HelperMessageEditRequest)=>Promise<HelperMessageEditResult>
+  onMessageBranch?:(branch:NonNullable<HelperMessageEditResult['branch']>)=>Promise<void>
   onSwipeGreeting?: (index: number) => void
+  onHelperCommit?: (request:{storyId:string;historyRevision:string;changes:unknown})=>Promise<HelperSnapshot>
+  onHelperRefresh?: ()=>Promise<HelperSnapshot>
+  onScriptCommit?:(request:HelperScriptCommit)=>Promise<HelperScriptView>
+  onScriptRefresh?:()=>Promise<HelperScriptContext>
+  onWorldbookRequest?:(request:HelperWorldbookRequest)=>Promise<HelperWorldbookResult>
+  onWorldbookRefresh?:()=>Promise<HelperWorldbookContext>
+  onWorldbookBind?:(request:HelperWorldbookRebindRequest)=>Promise<HelperWorldbookContext>
+  helperBinding?: {sessionId:string;storyId:string}
 }) {
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
   const [frameH, setFrameH] = useState<number | null>(null)
   const t = useT()
-  const [restoreOpen, setRestoreOpen] = useState(false)
-  const [backup, setBackup] = useState('')
-  const [restoreError, setRestoreError] = useState<string | null>(null)
-  const [restored, setRestored] = useState<{ source: string; doc: string; revision: number } | null>(null)
-  const guard = useDraftGuard(restoreOpen && backup.trim() !== '')
-  const activeRestore = restored?.source === props.srcDoc ? restored : null
-  const srcDoc = activeRestore?.doc ?? props.srcDoc
-  const closeRestore = () => guard.request(() => { setRestoreOpen(false); setBackup('') })
-  const restore = () => {
-    try {
-      const doc = restoreCardVariableBackup(props.srcDoc, backup)
-      setRestored((current) => ({ source: props.srcDoc, doc, revision: (current?.revision ?? 0) + 1 }))
-      setRestoreOpen(false)
-      setBackup('')
-      setRestoreError(null)
-    } catch { setRestoreError(t('speech.cardDataFailed')) }
-  }
-
+  const [editedBranch,setEditedBranch]=useState<HelperMessageEditResult['branch']>(null)
+  const [branchError,setBranchError]=useState<string|null>(null)
+  const srcDoc = props.srcDoc
+  // 普通 React 重绘不销毁正在等待的回执；只有卡面文档替换或卸载才取消回复。
+  const handlers = useRef({ onFrameReady:props.onFrameReady,onScriptError:props.onScriptError,onScriptReady:props.onScriptReady,onMessageEdit:props.onMessageEdit,onMessageBranch:props.onMessageBranch,onSwipeGreeting: props.onSwipeGreeting, onHelperCommit: props.onHelperCommit, onHelperRefresh:props.onHelperRefresh,onScriptCommit:props.onScriptCommit,onScriptRefresh:props.onScriptRefresh,onWorldbookRequest:props.onWorldbookRequest,onWorldbookRefresh:props.onWorldbookRefresh,onWorldbookBind:props.onWorldbookBind, t })
+  handlers.current = { onFrameReady:props.onFrameReady,onScriptError:props.onScriptError,onScriptReady:props.onScriptReady,onMessageEdit:props.onMessageEdit,onMessageBranch:props.onMessageBranch,onSwipeGreeting: props.onSwipeGreeting, onHelperCommit: props.onHelperCommit, onHelperRefresh:props.onHelperRefresh,onScriptCommit:props.onScriptCommit,onScriptRefresh:props.onScriptRefresh,onWorldbookRequest:props.onWorldbookRequest,onWorldbookRefresh:props.onWorldbookRefresh,onWorldbookBind:props.onWorldbookBind, t }
   useEffect(() => {
     setFrameH(null)
   }, [srcDoc])
 
-  useEffect(() => {
+  useEffect(()=>{
+    if(!props.helperBinding) return
+    const {sessionId,storyId}=props.helperBinding
+    return watchHelperStory(sessionId,storyId,()=>iframeRef.current?.contentWindow?.postMessage({
+      source:'dsh-tavern-card',action:'helperSnapshotInvalidated',storyId,
+    },'*'))
+  },[props.helperBinding?.sessionId,props.helperBinding?.storyId])
+
+  useLayoutEffect(() => {
+    let active=true
+    const eventEndpoint=props.helperBinding?attachHelperEvents(props.helperBinding.sessionId,props.helperBinding.storyId,
+      message=>{if(active)iframeRef.current?.contentWindow?.postMessage(message,'*')}):undefined
+    let editPending=false,editFinished=false,frameReady=false,legacyHeight=false
+    const pending=new Set<string>(),scriptReceipts=new Set<string>(),editReceipts=new Map<string,NonNullable<HelperMessageEditResult['branch']>>()
+    let displayBusy=false,guardSerial=0
+    const heldGuards=new Set<string>(),guardEpoch=crypto.randomUUID()
+    const displayReceipts=new Map<string,{lease:HelperDisplayLease;timer:ReturnType<typeof setTimeout>}>()
+    const guards=new Map<string,{resolve:(lease:HelperDisplayLease)=>void;reject:(error:Error)=>void;timer:ReturnType<typeof setTimeout>}>()
+    const unlock=(id:string)=>iframeRef.current?.contentWindow?.postMessage({source:'dsh-tavern-card',action:'helperDisplayUnlock',requestId:id},'*')
+    const unregisterGuard=props.registerDisplayGuard?.(request=>{
+      if(pending.size||editPending||editFinished||guards.size) return Promise.reject(new Error(handlers.current.t('speech.helperSaveBusy')))
+      const id='display-guard:'+guardEpoch+':'+(++guardSerial)
+      return new Promise<HelperDisplayLease>((resolve,reject)=>{
+        const timer=setTimeout(()=>{guards.delete(id);unlock(id);reject(new Error(handlers.current.t('speech.helperSaveBusy')))},5000)
+        guards.set(id,{resolve,reject,timer});iframeRef.current?.contentWindow?.postMessage({source:'dsh-tavern-card',action:'helperDisplayGuard',requestId:id,storyId:request.storyId,historyRevision:request.historyRevision},'*')
+      })
+    })
+    const choiceOwner=Symbol('script-choices')
+    let choiceSerial=0
     const onMsg = (e: MessageEvent) => {
       if (!iframeRef.current || e.source !== iframeRef.current.contentWindow) return
+      const value:unknown=e.data
+      if(helperRecord(value)&&['iframe-resize','resizeIframe'].includes(String(value.type))&&typeof value.height==='number'&&Number.isFinite(value.height)&&value.height>0){legacyHeight=true;setFrameH(Math.min(8000,Math.max(80,Math.ceil(value.height))));return}
+      if(helperRecord(value)&&value.source==='dsh-tavern-card'&&value.action==='helperFrameReady'){
+        if(!frameReady&&eventEndpoint?.matchesRuntime(value.runtimeId)){frameReady=true;handlers.current.onFrameReady?.()}return
+      }
+      if(helperRecord(value)&&value.source==='dsh-tavern-card'&&value.action==='helperDisplayGuardResult'&&typeof value.requestId==='string'){
+        const id=value.requestId,guard=guards.get(id);if(!guard)return
+        guards.delete(id);clearTimeout(guard.timer)
+        if(value.ok!==true||pending.size||editPending){unlock(id);guard.reject(new Error(typeof value.error==='string'?value.error:handlers.current.t('speech.helperSaveBusy')));return}
+        heldGuards.add(id)
+        let held=true;const expires=Date.now()+35000;const check=()=>{if(!active||!held||Date.now()>expires)throw new Error(handlers.current.t('speech.helperStoryChanged'))}
+        guard.resolve({check,commit:check,cancel:()=>{if(held){held=false;heldGuards.delete(id);unlock(id)}}});return
+      }
+      if(helperRecord(value)&&value.source==='dsh-tavern-card'&&value.action==='helperDisplayApplied'&&typeof value.requestId==='string'){
+        const receipt=displayReceipts.get(value.requestId);if(!receipt)return
+        displayReceipts.delete(value.requestId);clearTimeout(receipt.timer)
+        try{receipt.lease.commit()}catch(error){setBranchError(displayFailure(error,handlers.current.t))}finally{receipt.lease.cancel();displayBusy=false}return
+      }
+      if(helperRecord(value)&&value.source==='dsh-tavern-card'&&value.action==='helperDisplayRefresh'&&typeof value.requestId==='string'&&value.requestId.length<=96){
+        const target=iframeRef.current.contentWindow,requestId=value.requestId
+        const respond=(data:Record<string,unknown>)=>{if(active&&iframeRef.current?.contentWindow===target)target?.postMessage({source:'dsh-tavern-card',action:'helperDisplayResult',requestId,...data},'*')}
+        if(displayBusy||pending.size||editPending||editFinished){respond({ok:false,error:handlers.current.t('speech.helperSaveBusy')});return}
+        displayBusy=true
+        void(async()=>{
+          const binding=props.helperBinding
+          if(!binding||value.storyId!==binding.storyId||typeof value.historyRevision!=='string'||value.historyRevision.length>96||value.ids!==null&&(!Array.isArray(value.ids)||value.ids.length>4096||value.ids.some(id=>typeof id!=='number'||!Number.isSafeInteger(id)||id<0||id>=4096)))throw new Error(handlers.current.t('speech.helperUnsupported'))
+          const snapshot=await waitHelperDisplay(Promise.resolve(handlers.current.onHelperRefresh?.()),AbortSignal.timeout(5000))
+          if(!snapshot||snapshot.storyId!==value.storyId||snapshot.historyRevision!==value.historyRevision||Array.isArray(value.ids)&&value.ids.some(id=>Number(id)>=snapshot.messages.length))throw new Error(handlers.current.t('speech.helperStoryChanged'))
+          const lease=await prepareHelperDisplay(binding.sessionId,{storyId:binding.storyId,historyRevision:value.historyRevision,ids:value.ids as number[]|null})
+          if(!active){lease.cancel();return}
+          const timer=setTimeout(()=>{displayReceipts.delete(requestId);lease.cancel();displayBusy=false},10000)
+          displayReceipts.set(requestId,{lease,timer});respond({ok:true})
+        })().catch(error=>{displayBusy=false;respond({ok:false,error:displayFailure(error,handlers.current.t)})})
+        return
+      }
+      if(heldGuards.size&&helperRecord(value)&&value.source==='dsh-tavern-card'&&typeof value.action==='string'){
+        const responses:Record<string,string>={helperMessageEdit:'helperMessageEditResult',helperVariablesCommit:'helperVariablesResult',helperSnapshotGet:'helperSnapshotResult',helperScriptLibraryCommit:'helperScriptLibraryResult',helperScriptLibrariesGet:'helperScriptLibrariesResult',helperWorldbookOperation:'helperWorldbookResult',helperWorldbookContextGet:'helperWorldbookContextResult',helperWorldbookBind:'helperWorldbookBindResult'}
+        const action=responses[value.action]
+        if(action){iframeRef.current.contentWindow?.postMessage({source:'dsh-tavern-card',action,requestId:value.requestId,ok:false,error:handlers.current.t('speech.helperSaveBusy')},'*');return}
+        if(value.action==='swipeGreeting')return
+      }
+      if(helperRecord(value)&&value.source==='dsh-tavern-card'&&value.action==='helperMessageEditApplied'&&typeof value.requestId==='string'){
+        const branch=editReceipts.get(value.requestId);if(branch){editReceipts.delete(value.requestId);void handlers.current.onMessageBranch?.(branch).catch(error=>{if(active)setBranchError(String(error))})}return
+      }
+      if(helperRecord(value)&&value.source==='dsh-tavern-card'&&value.action==='helperMessageEdit'&&typeof value.requestId==='string'&&value.requestId.length<=96){
+        const target=iframeRef.current.contentWindow,requestId=value.requestId
+        const respond=(result:Record<string,unknown>)=>{if(active&&iframeRef.current?.contentWindow===target)target?.postMessage({source:'dsh-tavern-card',action:'helperMessageEditResult',requestId,...result},'*')}
+        if(pending.has(requestId))return
+        if(pending.size>=4||editPending||editFinished||editReceipts.size){respond({ok:false,error:handlers.current.t('speech.helperSaveBusy')});return}
+        pending.add(requestId);editPending=true
+        void(async()=>{
+          if(!handlers.current.onMessageEdit||!handlers.current.onMessageBranch||typeof value.storyId!=='string'||value.storyId!==props.helperBinding?.storyId||typeof value.historyRevision!=='string'||value.historyRevision.length>96)throw new Error(handlers.current.t('speech.helperUnsupported'))
+          const result=await handlers.current.onMessageEdit({storyId:value.storyId,historyRevision:value.historyRevision,edits:parseHelperMessageEdits(value.edits),...(value.before===undefined?{}:{before:parseHelperMessageEdits(value.before)})})
+          if(active&&result.branch){editFinished=true;editReceipts.set(requestId,result.branch);setEditedBranch(result.branch);setBranchError(null)}
+          respond({ok:true,result})
+        })().catch(error=>respond({ok:false,error:error instanceof Error?error.message:String(error)})).finally(()=>{editPending=false;pending.delete(requestId)})
+        return
+      }
+      if(helperRecord(value)&&value.source==='dsh-tavern-card'&&value.action==='helperScriptChoices'&&props.onScriptReady&&props.helperBinding&&eventEndpoint?.matchesRuntime(value.runtimeId)){
+        const serial=++choiceSerial,binding=props.helperBinding
+        void (async()=>{try{if(typeof value.messageId!=='number')throw new Error('选项目标消息无效');const choices=parseScriptChoices(value.choices),context=await handlers.current.onHelperRefresh?.();if(!active||serial!==choiceSerial)return;if(!context||context.storyId!==binding.storyId||context.storyId!==value.storyId||context.historyRevision!==value.historyRevision)throw new Error(handlers.current.t('speech.helperStoryChanged'));publishScriptChoices(choiceOwner,binding.sessionId,context,value.messageId,choices)}catch(error){if(active&&serial===choiceSerial){clearScriptChoices(choiceOwner);handlers.current.onScriptError?.(error instanceof Error?error.message:String(error))}}})();return
+      }
+      if(helperRecord(value)&&value.source==='dsh-tavern-card'&&value.action==='helperScriptDiagnostic' &&eventEndpoint?.matchesRuntime(value.runtimeId)&&typeof value.error==='string'&&value.error.length>0&&value.error.length<=2000){choiceSerial++;clearScriptChoices(choiceOwner);handlers.current.onScriptError?.(value.error);handlers.current.onScriptReady?.(false);return}
+      if(helperRecord(value)&&value.source==='dsh-tavern-card'&&value.action==='helperScriptReady'&&eventEndpoint?.matchesRuntime(value.runtimeId)){handlers.current.onScriptReady?.(value.ok===true);return}
+      if(helperRecord(value)&&value.source==='dsh-tavern-card'&&typeof value.action==='string'&&value.action.startsWith('helperEvent')) {
+        (value.action==='helperEventConnect'||value.action==='helperEventDisconnect')&&handlers.current.onScriptReady?.(false)
+        eventEndpoint?.receive(value);return
+      }
+      if(helperRecord(value)&&value.source==='dsh-tavern-card'&&value.action==='helperScriptLibraryApplied'&&typeof value.requestId==='string') {
+        if(scriptReceipts.has(value.requestId)&&props.helperBinding){scriptReceipts.clear();notifyHelperScripts(props.helperBinding.sessionId,props.helperBinding.storyId)}
+        return
+      }
+      if(helperRecord(value)&&value.source==='dsh-tavern-card'&&(value.action==='helperScriptLibraryCommit'||value.action==='helperScriptLibrariesGet')&&typeof value.requestId==='string'&&value.requestId.length<=96) {
+        const target=iframeRef.current.contentWindow,requestId=value.requestId,resultAction=value.action==='helperScriptLibraryCommit'?'helperScriptLibraryResult':'helperScriptLibrariesResult'
+        const respond=(result:Record<string,unknown>)=>{if(active&&iframeRef.current?.contentWindow===target)target?.postMessage({source:'dsh-tavern-card',action:resultAction,requestId,...result},'*')}
+        if(pending.has(requestId))return
+        if(pending.size>=4){respond({ok:false,error:handlers.current.t('speech.helperSaveBusy')});return}
+        pending.add(requestId)
+        void(async()=>{
+          if(typeof value.storyId!=='string'||value.storyId!==props.helperBinding?.storyId)throw new Error(handlers.current.t('speech.helperStoryChanged'))
+          if(value.action==='helperScriptLibrariesGet'){
+            if(!handlers.current.onScriptRefresh)throw new Error(handlers.current.t('speech.helperUnsupported'))
+            const context=await handlers.current.onScriptRefresh()
+            if(context.storyId!==value.storyId)throw new Error(handlers.current.t('speech.helperStoryChanged'))
+            respond({ok:true,context});return
+          }
+          if(!handlers.current.onScriptCommit||typeof value.bindingRevision!=='string'||value.bindingRevision.length>96||typeof value.revision!=='string'||value.revision.length>96||!['global','preset','character'].includes(String(value.type)))throw new Error(handlers.current.t('speech.helperUnsupported'))
+          const library=await handlers.current.onScriptCommit({storyId:value.storyId,bindingRevision:value.bindingRevision,type:value.type as HelperScriptCommit['type'],revision:value.revision,trees:parseHelperScriptTrees(value.trees)})
+          if(active){scriptReceipts.add(requestId);if(scriptReceipts.size>16)scriptReceipts.delete(scriptReceipts.values().next().value!)}
+          respond({ok:true,library})
+        })().catch(error=>respond({ok:false,error:error instanceof Error?error.message:String(error)})).finally(()=>pending.delete(requestId))
+        return
+      }
+      if(helperRecord(value)&&value.source==='dsh-tavern-card'&&(value.action==='helperWorldbookOperation'||value.action==='helperWorldbookContextGet'||value.action==='helperWorldbookBind')&&typeof value.requestId==='string'&&value.requestId.length<=96){
+        const target=iframeRef.current.contentWindow,requestId=value.requestId,resultAction=value.action==='helperWorldbookOperation'?'helperWorldbookResult':value.action==='helperWorldbookBind'?'helperWorldbookBindResult':'helperWorldbookContextResult'
+        const respond=(result:Record<string,unknown>)=>{if(active&&iframeRef.current?.contentWindow===target)target?.postMessage({source:'dsh-tavern-card',action:resultAction,requestId,...result},'*')}
+        if(pending.has(requestId))return
+        if(pending.size>=4){respond({ok:false,error:handlers.current.t('speech.helperSaveBusy')});return}
+        pending.add(requestId)
+        void(async()=>{
+          if(typeof value.storyId!=='string'||value.storyId!==props.helperBinding?.storyId)throw new Error(handlers.current.t('speech.helperStoryChanged'))
+          if(value.action==='helperWorldbookBind'){
+            if(!handlers.current.onWorldbookBind||typeof value.bindingRevision!=='string'||value.bindingRevision.length>96||!['global','character','chat','ensure-chat','settings'].includes(String(value.kind)))throw new Error(handlers.current.t('speech.helperUnsupported'))
+            const context=await handlers.current.onWorldbookBind({storyId:value.storyId,bindingRevision:value.bindingRevision,kind:value.kind as HelperWorldbookRebindRequest['kind'],selection:helperJson(value.selection,16384)})
+            if(context.storyId!==value.storyId)throw new Error(handlers.current.t('speech.helperStoryChanged'))
+            respond({ok:true,context});return
+          }
+          if(value.action==='helperWorldbookContextGet'){
+            if(!handlers.current.onWorldbookRefresh)throw new Error(handlers.current.t('speech.helperUnsupported'))
+            const context=await handlers.current.onWorldbookRefresh();if(context.storyId!==value.storyId)throw new Error(handlers.current.t('speech.helperStoryChanged'));respond({ok:true,context});return
+          }
+          if(!handlers.current.onWorldbookRequest||typeof value.bindingRevision!=='string'||value.bindingRevision.length>96||typeof value.name!=='string'||value.name.length>256||!['get','replace','create','upsert','delete'].includes(String(value.operation))||value.revision!==undefined&&(typeof value.revision!=='string'||value.revision.length>96))throw new Error(handlers.current.t('speech.helperUnsupported'))
+          const result=await handlers.current.onWorldbookRequest({storyId:value.storyId,bindingRevision:value.bindingRevision,name:value.name,operation:value.operation as HelperWorldbookRequest['operation'],...(value.revision===undefined?{}:{revision:value.revision as string}),...(value.entries===undefined?{}:{entries:helperJson(value.entries,8*1024*1024)}),...(value.label===undefined?{}:{label:value.label as string})})
+          respond({ok:true,result})
+        })().catch(error=>respond({ok:false,error:error instanceof Error?error.message:String(error)})).finally(()=>pending.delete(requestId))
+        return
+      }
+      if(helperRecord(value) && value.source==='dsh-tavern-card' && (value.action==='helperVariablesCommit'||value.action==='helperSnapshotGet')
+        && typeof value.requestId==='string' && value.requestId.length<=96) {
+        const target=iframeRef.current.contentWindow, requestId=value.requestId
+        const resultAction=value.action==='helperSnapshotGet'?'helperSnapshotResult':'helperVariablesResult'
+        const respond=(result:Record<string,unknown>)=>{
+          if(active && iframeRef.current?.contentWindow===target) target?.postMessage({source:'dsh-tavern-card',action:resultAction,requestId,...result},'*')
+        }
+        if(pending.has(requestId)) return
+        if(pending.size>=4) {respond({ok:false,error:handlers.current.t('speech.helperSaveBusy')});return}
+        pending.add(requestId)
+        void (async()=>{
+          if(value.action==='helperSnapshotGet') {
+            const refresh=handlers.current.onHelperRefresh
+            if(!refresh||typeof value.storyId!=='string') throw new Error(handlers.current.t('speech.helperUnsupported'))
+            const snapshot=await refresh()
+            if(snapshot.storyId!==value.storyId) throw new Error(handlers.current.t('speech.helperStoryChanged'))
+            respond({ok:true,snapshot});return
+          }
+          const commit=handlers.current.onHelperCommit
+          if(!commit||typeof value.storyId!=='string'||typeof value.historyRevision!=='string') throw new Error(handlers.current.t('speech.helperUnsupported'))
+          const snapshot=await commit({storyId:value.storyId,historyRevision:value.historyRevision,changes:helperChanges(value.changes)})
+          respond({ok:true,scopes:snapshot.scopes})
+        })().catch(error=>respond({ok:false,error:error instanceof Error?error.message:String(error)})).finally(()=>pending.delete(requestId))
+        return
+      }
       const parsed = parseCardBridgeMessage(e.data)
       if (!parsed) return
       if (parsed.action === 'swipeGreeting' && typeof parsed.index === 'number') {
-        props.onSwipeGreeting?.(parsed.index)
+        handlers.current.onSwipeGreeting?.(parsed.index)
       }
-      if (parsed.action === 'resize' && typeof parsed.height === 'number' && Number.isFinite(parsed.height)) {
+      if (!legacyHeight && parsed.action === 'resize' && typeof parsed.height === 'number' && Number.isFinite(parsed.height)) {
         setFrameH(Math.min(8000, Math.max(80, Math.ceil(parsed.height))))
       }
     }
     window.addEventListener('message', onMsg)
-    return () => window.removeEventListener('message', onMsg)
-  }, [props.onSwipeGreeting])
+    return () => {active=false;clearScriptChoices(choiceOwner);unregisterGuard?.();for(const [id,guard] of guards){clearTimeout(guard.timer);unlock(id);guard.reject(new Error('卡面已关闭'))}for(const receipt of displayReceipts.values()){clearTimeout(receipt.timer);receipt.lease.cancel()}eventEndpoint?.dispose();window.removeEventListener('message', onMsg)}
+  }, [srcDoc,props.helperBinding?.sessionId,props.helperBinding?.storyId])
 
   const frameStyle =
     frameH != null
@@ -79,7 +265,6 @@ function SpeechHtmlFrame(props: {
   return (
     <>
     <iframe
-      key={activeRestore?.revision ?? 0}
       ref={iframeRef}
       className={`dsh-tavern-speechHtml${props.widget || props.compact ? ' is-widget' : ''}`}
       sandbox="allow-scripts"
@@ -87,17 +272,7 @@ function SpeechHtmlFrame(props: {
       title={props.title}
       style={frameStyle}
     />
-    <div className="dsh-tavern-cardBackupBar">
-      <Btn onClick={() => { setRestoreError(null); setRestoreOpen(true) }}>{t('speech.cardDataRestore')}</Btn>
-    </div>
-    {guard.confirmation}
-    {restoreOpen && <Dialog open title={t('speech.cardDataRestore')} onClose={closeRestore}
-      footer={<><Btn onClick={closeRestore}>{t('action.cancel')}</Btn><Btn primary disabled={!backup.trim()} onClick={restore}>{t('action.confirm')}</Btn></>}>
-      <p>{t('speech.cardDataRestoreDesc')}</p>
-      <textarea className="dsh-tavern-input dsh-tavern-textarea" aria-label={t('speech.cardDataText')}
-        value={backup} onChange={(event) => setBackup(event.target.value)} />
-      <Err message={restoreError} />
-    </Dialog>}
+    {editedBranch&&<div className="dsh-tavern-cardBackupBar"><Btn onClick={()=>{void props.onMessageBranch?.(editedBranch).catch(error=>setBranchError(String(error)))}}>{t('speech.openEditedBranch')}</Btn><Err message={branchError}/></div>}
     </>
   )
 }
@@ -112,6 +287,7 @@ interface SpeechBubbleProps {
   streaming?: boolean
   /** 会话级交互卡开关（binding.interactiveCards）；null/缺省回落全局设置。 */
   interactiveCards?: boolean | null
+  onMessageBranch?:(branch:NonNullable<HelperMessageEditResult['branch']>)=>Promise<void>
   onSwipeGreeting?: (index: number) => void | Promise<void>
 }
 
@@ -126,11 +302,55 @@ function SpeechBubbleSession(props: SpeechBubbleProps) {
   const markdownLabels = useMarkdownLabels()
   // 头像走进程内缓存（key=cardId，TTL 60s）：同一会话的 N 条气泡不再各传一次 dataURL。
   const avatar = useLoader(() => cachedAvatar(remote, cardId), [cardId], Boolean(cardId))
-  const rendered = useLoader(
+  const loaded = useLoader(
     () => remote.renderOutputText({ sessionId, text: rawText, messageId: props.messageId }),
     [sessionId, rawText, props.messageId],
     Boolean(rawText) && !streaming,
   )
+  const [display,setDisplay]=useState<{base:typeof loaded.state;value:Extract<typeof loaded.state,{status:'ready'}>['value'];revision:number;completion?:{resolve:()=>void;reject:(error:unknown)=>void}}|null>(null)
+  const rendered={state:useMemo(()=>display?.base===loaded.state?{status:'ready' as const,value:display.value}:loaded.state,[display,loaded.state])}
+  const displayGuards=useRef(new Set<(request:HelperDisplayRequest)=>Promise<HelperDisplayLease>>())
+  const renderLatest=useRef(rendered.state);renderLatest.current=rendered.state
+  useEffect(()=>{
+    if(props.messageId===undefined||streaming)return
+    let alive=true
+    const readyTasks=new Set<()=>void>()
+    const stop=registerHelperDisplay(sessionId,async(request,signal)=>{
+      const current=renderLatest.current
+      if(current.status!=='ready')throw new HelperDisplayError('stale')
+      // 旧气泡的显示快照可以落后于新消息；仅冻结剧情归属，目标下标和修订必须以当前宿主快照为准。
+      if(current.value.helper&&current.value.helper.storyId!==request.storyId)throw new HelperDisplayError('stale')
+      const response=await waitHelperDisplay(remote.getHelperSnapshot({sessionId,messageId:props.messageId!}),signal)
+      if(!response.ok)throw new Error(response.error.message)
+      const snapshot=response.value
+      if(snapshot.storyId!==request.storyId||snapshot.historyRevision!==request.historyRevision)throw new HelperDisplayError('stale')
+      if(request.ids!==null&&!request.ids.includes(snapshot.currentMessageId))return null
+      const leases:HelperDisplayLease[]=[]
+      try{
+        const results=await Promise.allSettled([...displayGuards.current].map(guard=>guard(request)))
+        for(const result of results)if(result.status==='fulfilled')leases.push(result.value)
+        const failed=results.find(result=>result.status==='rejected');if(failed?.status==='rejected')throw failed.reason
+        const next=await waitHelperDisplay(remote.renderOutputText({sessionId,text:rawText,messageId:props.messageId}),signal)
+        if(!next.ok)throw new Error(next.error.message)
+        const verified=next.value.helper?{ok:true as const,value:next.value.helper}:await waitHelperDisplay(remote.getHelperSnapshot({sessionId,messageId:props.messageId!}),signal)
+        if(!verified.ok||verified.value.storyId!==request.storyId||verified.value.historyRevision!==request.historyRevision)throw new HelperDisplayError('stale')
+        const check=()=>{if(!alive||renderLatest.current!==current)throw new HelperDisplayError('stale');for(const lease of leases)lease.check()}
+        check()
+        let timer:ReturnType<typeof setTimeout>|undefined,resolve!:()=>void,reject!:(error:unknown)=>void
+        const ready=new Promise<void>((yes,no)=>{resolve=yes;reject=no});void ready.catch(()=>{})
+        const cancelReady=()=>completion.reject(new HelperDisplayError('stale'))
+        const completion={resolve:()=>{clearTimeout(timer);readyTasks.delete(cancelReady);resolve()},reject:(error:unknown)=>{clearTimeout(timer);readyTasks.delete(cancelReady);reject(error)}}
+        return {check,after:()=>ready,current:()=>alive&&renderLatest.current.status==='ready'&&renderLatest.current.value===next.value,
+          cancel:()=>{completion.reject(new HelperDisplayError('stale'));for(const lease of leases)lease.cancel()},commit:()=>{
+            check();for(const cancel of readyTasks)cancel();readyTasks.clear();readyTasks.add(cancelReady)
+            timer=setTimeout(()=>completion.reject(new HelperDisplayError('timeout')),60000)
+            setDisplay(previous=>({base:loaded.state,value:next.value,revision:(previous?.revision??0)+1,completion}))
+          }}
+
+      }catch(error){for(const lease of leases)lease.cancel();throw error}
+    })
+    return()=>{alive=false;for(const cancel of readyTasks)cancel();readyTasks.clear();stop()}
+  },[sessionId,props.messageId,rawText,streaming,loaded.state])
   const avatarUrl = avatar.state.status === 'ready' ? avatar.state.value.dataUrl : null
   // 交互卡渲染决策：会话绑定有值时优先于全局设置（renderOutputText 回包的
   // interactiveCards 即全局值）。HTML 抽取在服务端按全局开关做，会话关 → 不渲染
@@ -204,22 +424,72 @@ function SpeechBubbleSession(props: SpeechBubbleProps) {
     ? storedParts.filter(part => interactive || part.kind === 'markdown')
     : [...htmls.map(html => ({ kind: 'html' as const, text: html })), ...(text ? [{ kind: 'markdown' as const, text }] : [])]
   if (!visibleParts.length) visibleParts.push({ kind: 'markdown', text: text || ' ' })
+  const cycleRef=useRef<{state:typeof rendered.state;seen:Set<number>;done:boolean;active:boolean}|null>(null)
+  if(cycleRef.current?.state!==rendered.state)cycleRef.current={state:rendered.state,seen:new Set(),done:false,active:true}
+  const cycle=cycleRef.current,htmlCount=visibleParts.filter(part=>part.kind==='html').length
+  const [lifecycleError,setLifecycleError]=useState<{cycle:typeof cycle;message:string}|null>(null)
+  const completeDisplay=()=>{
+    if(cycleRef.current!==cycle||cycle.done||cycle.seen.size<htmlCount||streaming||rendered.state.status!=='ready')return
+    cycle.done=true
+    const current=()=>cycle.active&&cycleRef.current===cycle&&renderLatest.current===cycle.state
+    const completion=display?.base===loaded.state?display.completion:undefined
+    void(async()=>{
+      if(props.messageId===undefined||!hasHelperEventAudience(sessionId))return
+      const response=rendered.state.status==='ready'&&rendered.state.value.helper?{ok:true as const,value:rendered.state.value.helper}:await waitHelperDisplay(remote.getHelperSnapshot({sessionId,messageId:props.messageId}),AbortSignal.timeout(5000))
+      if(!response.ok)throw new Error(response.error.message)
+      if(!current())throw new HelperDisplayError('stale')
+      const snapshot=response.value,message=snapshot.messages[snapshot.currentMessageId]
+      if(!message)throw new HelperDisplayError('stale')
+      await emitHelperHostEvent(sessionId,snapshot.storyId,message.role==='user'?'user_message_rendered':'character_message_rendered',message.role==='user'?[snapshot.currentMessageId]:[snapshot.currentMessageId,'normal'],current)
+    })().then(()=>completion?.resolve()).catch(error=>{completion?.reject(error);if(current())setLifecycleError({cycle,message:displayFailure(error,t)})})
+  }
+  useEffect(()=>{if(!htmlCount)completeDisplay()},[rendered.state,htmlCount,streaming])
+  useEffect(()=>{cycle.active=true;return()=>{cycle.active=false}},[cycle])
   const content = visibleParts.map((part, i) => {
     if (part.kind === 'markdown') return <MarkdownText key={`text:${i}`} text={part.text} streaming={Boolean(streaming)} labels={markdownLabels} />
     const srcDoc = buildCardSrcDoc(part.text, { greetings, greetingIndex, connectHosts: whitelist,
+      helperSnapshot: rendered.state.status==='ready'?rendered.state.value.helper:undefined,
+      scriptLibraries:rendered.state.status==='ready'?rendered.state.value.helperScripts:undefined,
+      worldbooks:rendered.state.status==='ready'?rendered.state.value.helperWorldbooks:undefined,
+      scriptLibraryLabels:{saving:t('speech.scriptSaving'),saved:t('speech.scriptSaved'),failed:t('speech.scriptSaveFailed')},
+      persistenceLabels:{saving:t('speech.helperSaving'),saved:t('speech.helperSaved'),failed:t('speech.helperSaveFailed'),refresh:t('speech.helperRefresh')},
+      helperContext: { message: rawText, messageId: canSwipe ? 0 : props.messageId ?? 0, name,
+        userName: rendered.state.status === 'ready' ? rendered.state.value.userName : undefined,
+        frameIndex: i, canSwipe: canSwipe && Boolean(onSwipeGreeting) },
+      helperLabels: { diagnostics: t('speech.helperMessages'), unsupported: t('speech.helperUnsupported') },
       variableStyles: CARD_VARIABLE_STYLES,
-      variableLabels: { title: t('speech.cardDataTitle'), note: t('speech.cardDataNote'), backup: t('speech.cardDataBackup'),
-        text: t('speech.cardDataText') },
+      variableLabels:cardVariableLabels(t,rendered.state.status==='ready'&&rendered.state.value.helper?t('speech.helperDataNote'):t('speech.cardDataNote')),
     })
     const widget = visibleParts.length > 1
     const frame = (
       <SpeechHtmlFrame
-        key={`${i}:${part.text.length}`}
+        key={`${i}:${part.text.length}:${display?.base===loaded.state?display.revision:0}`}
+        onFrameReady={()=>{if(cycleRef.current===cycle){cycle.seen.add(i);completeDisplay()}}}
+        registerDisplayGuard={guard=>{displayGuards.current.add(guard);return()=>{displayGuards.current.delete(guard)}}}
         srcDoc={srcDoc}
         title={part.title || name}
         widget={widget}
         compact={Boolean(storedParts)}
+        helperBinding={rendered.state.status==='ready'&&rendered.state.value.helper?{sessionId,storyId:rendered.state.value.helper.storyId}:undefined}
         onSwipeGreeting={(index) => void swipeGreeting(index)}
+        onMessageBranch={props.onMessageBranch}
+        onMessageEdit={props.messageId===undefined?undefined:async request=>{const result=await remote.editHelperMessages({...request,sessionId:props.sessionId,messageId:props.messageId!});if(!result.ok)throw new Error(result.error.message);if(result.value.snapshot)notifyHelperStory(props.sessionId,result.value.snapshot.storyId);return result.value}}
+        onWorldbookBind={props.messageId===undefined?undefined:async request=>{const result=await remote.rebindHelperWorldbooks({...request,sessionId:props.sessionId,messageId:props.messageId!});if(!result.ok)throw new Error(result.error.message);invalidateSessionBinding(props.sessionId);window.dispatchEvent(new CustomEvent(BINDING_CHANGED_EVENT,{detail:props.sessionId}));return result.value}}
+        onWorldbookRequest={props.messageId===undefined?undefined:async request=>{const result=await remote.helperWorldbookOperation({...request,sessionId:props.sessionId,messageId:props.messageId!});if(!result.ok)throw new Error(result.error.message);return result.value}}
+        onWorldbookRefresh={props.messageId===undefined?undefined:async()=>{const helper=rendered.state.status==='ready'?rendered.state.value.helper:undefined;if(!helper)throw new Error(t('speech.helperUnsupported'));const result=await remote.getHelperWorldbookContext({sessionId:props.sessionId,storyId:helper.storyId});if(!result.ok)throw new Error(result.error.message);return result.value}}
+        onScriptCommit={props.messageId===undefined?undefined:async request=>{const result=await remote.commitSessionHelperScripts({...request,sessionId:props.sessionId});if(!result.ok)throw new Error(result.error.message);return result.value}}
+        onScriptRefresh={props.messageId===undefined?undefined:async()=>{const helper=rendered.state.status==='ready'?rendered.state.value.helper:undefined;if(!helper)throw new Error(t('speech.helperUnsupported'));const result=await remote.getSessionHelperScripts({sessionId:props.sessionId,storyId:helper.storyId});if(!result.ok)throw new Error(result.error.message);return result.value}}
+        onHelperCommit={props.messageId===undefined?undefined:async request=>{
+          const result=await remote.commitHelperVariables({...request,sessionId,messageId:props.messageId!})
+          if(!result.ok) throw new Error(result.error.message)
+          notifyHelperStory(sessionId,result.value.storyId)
+          return result.value
+        }}
+        onHelperRefresh={props.messageId===undefined?undefined:async()=>{
+          const result=await remote.getHelperSnapshot({sessionId,messageId:props.messageId!})
+          if(!result.ok) throw new Error(result.error.message)
+          return result.value
+        }}
       />
     )
     return part.title ? <details key={`fold:${i}`} className="dsh-tavern-reason"><summary>{part.title}</summary>{frame}</details> : frame
@@ -231,8 +501,10 @@ function SpeechBubbleSession(props: SpeechBubbleProps) {
       <div className="dsh-tavern-speechBody">
         <div className="dsh-tavern-speechName">{name}</div>
         <Err message={swipeError} />
+        <Err message={lifecycleError?.cycle===cycle?lifecycleError.message:null} />
         <Err message={rendered.state.status === 'error' ? rendered.state.message : null} />
         {content}
+        {!streaming&&rendered.state.status==='ready'&&rendered.state.value.helper&&<ScriptChoices sessionId={sessionId} context={rendered.state.value.helper}/>}
       </div>
       <div className="dsh-tavern-speechCopy">
         <IconBtn label={t('speech.copy')} onClick={() => void onCopy()}>

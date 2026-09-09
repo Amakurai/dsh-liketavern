@@ -4,8 +4,8 @@ import { act, create } from 'react-test-renderer'
 import type { ReactTestRenderer } from 'react-test-renderer'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SettingsSection } from '../src/client/panel/settings.js'
-import { setTavernLocale } from '../src/client/i18n.js'
-import { Btn, NumInput } from '../src/client/util.js'
+import { getTavernLocale, setTavernLocale } from '../src/client/i18n.js'
+import { Btn, NumInput, Select } from '../src/client/util.js'
 import { TavernConfigSchema, type TavernConfigRaw } from '../src/node/config.js'
 import type { TavernRemote } from '../src/client/types.js'
 
@@ -60,6 +60,38 @@ beforeEach(() => { snapshot.initial = {}; snapshot.observed = {}; setTavernLocal
 afterEach(async () => { for (const view of mounted.splice(0)) await act(async () => view.unmount()) })
 
 describe('设置草稿恢复', () => {
+  it.each([false, true])('分区保存同步其它未编辑字段，并保留实际编辑的草稿：%s', async (hasOtherDraft) => {
+    const old = settings(0.4), edited = settings(0.9), saved = settings(0.9)
+    saved.triggerLogRetention = old.triggerLogRetention + 10
+    saved.memory.maxEntries = old.memory.maxEntries + 20
+    if (hasOtherDraft) edited.memory.maxEntries = old.memory.maxEntries + 5
+    snapshot.initial = { 'settings:sub': 'sampling', 'settings:baseline': old, 'settings:draft': edited }
+    const api = remote(async () => ok({ settings: old }))
+    vi.mocked(api.updateSettings).mockResolvedValue(ok({ settings: saved }))
+    const view = await render(api)
+    await act(async () => view.root.findAllByType(Btn).find(button => button.props.primary)!.props.onClick())
+    const draft = snapshot.observed['settings:draft'] as TavernConfigRaw
+    expect(draft.triggerLogRetention).toBe(saved.triggerLogRetention)
+    expect(draft.memory.maxEntries).toBe(hasOtherDraft ? edited.memory.maxEntries : saved.memory.maxEntries)
+    expect(snapshot.observed['settings:baseline']).toEqual(saved)
+    if (!hasOtherDraft) expect(draft).toEqual(saved)
+  })
+
+  it.each(['transport', 'envelope'])('语言保存失败恢复原来的语言、选择和基线：%s', async (failure) => {
+    const initial = { ...settings(0.4), locale: 'zh' as const }
+    snapshot.initial = { 'settings:sub': 'interface' }
+    const api = remote(async () => ok({ settings: initial }))
+    if (failure === 'transport') vi.mocked(api.updateSettings).mockRejectedValue(new Error('连接中断'))
+    else vi.mocked(api.updateSettings).mockResolvedValue({ ok: false, error: { code: 'TEST', message: '连接中断' } })
+    const view = await render(api)
+    await act(async () => view.root.findByType(Select).props.onChange('en'))
+    expect(getTavernLocale()).toBe('zh')
+    expect((snapshot.observed['settings:draft'] as TavernConfigRaw).locale).toBe('zh')
+    expect(snapshot.observed['settings:baseline']).toEqual(initial)
+    expect(view.root.findByProps({ role: 'alert' }).children.join('')).toContain('连接中断')
+    expect(view.root.findByType('fieldset').props.disabled).toBe(false)
+  })
+
   it('首次远端读取保留恢复的字段与基线，保存提交恢复内容而非服务器旧值', async () => {
     const old = settings(0.4)
     const edited = settings(0.9)

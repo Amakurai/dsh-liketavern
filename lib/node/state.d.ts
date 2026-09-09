@@ -1,3 +1,4 @@
+import { type HelperScriptLibrary, type HelperScriptAsset, type HelperScriptTarget, type HelperScriptContext, type HelperScriptCommit, type HelperScriptView } from '../core/helperScripts.js';
 import type { LlmResolvedModelInfo, LlmRuntime } from '@deepseek-ai/dsh-llm';
 import { type MemoryEntry, type PromptPreset, type RegexRule, type WIEngineResult, type WITimerState, type WorldDelta, type WorldInfoEntry } from '../core/types.js';
 import { applyCharacterPatch } from '../state/card.js';
@@ -119,8 +120,29 @@ export declare class TavernState {
      * 但 beginFloor / 开场白 / commitFloor / idle maintenance 必须保持事件发生顺序。
      */
     private readonly sessionTaskTails;
+    /** 实时助手事件的收口回执；只保留最近 256 轮，历史加载不依赖或回放这些回执。 */
+    readonly helperTurnClosures: Map<string, {
+        seq: number;
+        storyId: string | undefined;
+        error?: string;
+    }>;
     constructor(paths: TavernPaths, getConfig: () => TavernConfig);
     init(): Promise<void>;
+    worldInfoFor(binding: SessionBinding): {
+        scanDepth: number;
+        minActivations: number;
+        maxScanDepth: number;
+        contextPercent: number;
+        tokenBudget: number;
+        recursiveScan: boolean;
+        maxRecursionSteps: number;
+        caseSensitive: boolean;
+        matchWholeWords: boolean;
+        includeNames: boolean;
+        overflowWarning: boolean;
+        characterStrategy: 0 | 1 | 2;
+        useGroupScoring: boolean;
+    };
     get config(): TavernConfig;
     /**
      * 把一个副作用接到同会话队尾；前一任务失败不会毒死后续队列，调用方仍会收到本次异常。
@@ -178,14 +200,25 @@ export declare class TavernState {
         name: string;
     }>;
     createCharacter(name: string): Promise<CharacterWorkspace>;
+    /** 脚本树修订只覆盖脚本资产；用户同时修改描述等其它字段时，保存脚本不得覆盖它们。 */
+    getCharacterHelperScripts(cardId: string): Promise<HelperScriptLibrary>;
+    saveCharacterHelperScripts(cardId: string, revision: string, input: unknown): Promise<HelperScriptLibrary>;
     exportCharacter(cardId: string): Promise<{
         json: unknown;
         pngBase64: string;
         name: string;
     }>;
+    /** 全局脚本与预设脚本是共享资产；运行变量继续归属当前剧情，不在此处初始化。 */
+    getHelperScriptLibrary(target: HelperScriptTarget): Promise<HelperScriptAsset>;
+    saveHelperScriptLibrary(target: HelperScriptTarget, revision: string, input: unknown): Promise<HelperScriptAsset>;
+    /** 沙箱只选择库类型，资产身份始终从绑定中派生；绑定锁覆盖校验到资产落盘。 */
+    private helperScriptBinding;
+    getSessionHelperScripts(sessionId: string, storyId: string): Promise<HelperScriptContext>;
+    commitSessionHelperScripts(sessionId: string, request: HelperScriptCommit): Promise<HelperScriptView>;
     getJournal(cardId: string, storyId?: string): Promise<string>;
     saveJournal(cardId: string, text: string, storyId?: string): Promise<void>;
     getChatLorebook(cardId: string, storyId?: string): Promise<unknown>;
+    invalidateChatLorebook(cardId: string, storyId: string): void;
     saveChatLorebook(cardId: string, json: unknown, storyId?: string): Promise<void>;
     listLorebooks(): Promise<string[]>;
     /** 读取世界书原始 JSON（供设置面板编辑）；不存在或损坏返回 null。 */
@@ -202,7 +235,9 @@ export declare class TavernState {
     }>>;
     loadPreset(id: string): Promise<PromptPreset | null>;
     /** 落盘并 bump 修订号，返回磁盘上的 id（identifier 含非法字符时与 preset.identifier 不同）。 */
-    savePreset(preset: PromptPreset): Promise<string>;
+    savePreset(preset: PromptPreset, options?: {
+        preserveHelperSettings?: boolean;
+    }): Promise<string>;
     deletePreset(id: string): Promise<void>;
     listPersonas(): Promise<Persona[]>;
     loadPersona(id: string | null): Promise<Persona | null>;

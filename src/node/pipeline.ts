@@ -23,6 +23,9 @@ import { DEFAULT_USER_NAME } from '../core/persona.js'
 import { parseLorebook } from '../state/lorebook.js'
 import { withWorkspaceLock } from '../state/workspaceLock.js'
 import { loadTemplateState, saveTemplateState } from '../state/template.js'
+import { loadHelperState } from '../state/helper.js'
+import { latestTemplateHelperMvu, projectTemplateHelperMvu } from '../core/templateHelperMvu.js'
+import { currentHelperMvuTemplateData } from './helperMvuTemplateSnapshot.js'
 import { templateGenerationContext, type PreparedTemplateGeneration } from '../state/templateGeneration.js'
 import { type TemplateContext } from '../core/template.js'
 import { templateCardData } from '../core/templateAssets.js'
@@ -118,9 +121,12 @@ export async function loadBoundLoreEntries(state: TavernState, binding: NonNulla
   // 主世界书（Character Lore）：绑定指定库文件 > 卡内嵌书（card.json / assets/character-book.json）
   if (binding.characterLorebookId) {
     groups.push(await state.loadLorebookEntries(binding.characterLorebookId, 'character'))
-  } else {
+  } else if(binding.useEmbeddedLorebook!==false) {
     const embedded = await state.loadCharacterLorebookRaw(binding.cardId)
     if (embedded) groups.push(parseLorebook(embedded.json, { source: 'character', sourceRef: binding.cardId }))
+  }
+  for(const id of new Set(binding.characterLorebookIds??[])){
+    if(id!==binding.characterLorebookId)groups.push(await state.loadLorebookEntries(id,'character'))
   }
   // 聊天世界书（会话级，存工作区）
   const chatRaw = await ws.fs.readText('assets/chat-lorebook.json')
@@ -240,6 +246,13 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
   const historyIdentities:TemplateMessageIdentity[]=messageProjection?.identities ?? templateHistory.map((_,index)=>({
     messageId:`preview:${sessionId}:${state.currentTurns.get(sessionId) ?? -1}:${index}`,swipeId:0,
   }))
+  // 使用宿主真实可见身份；无身份的纯文本预览不能猜测消息对应关系或读入其它剧情数据。
+  let helperMvu: TemplateContext['helperMvu']
+  if(messageProjection && binding.helperMvu===true && state.config.interactiveCards && binding.interactiveCards!==false) {
+    const helper = await loadHelperState(ws.fs)
+    const current = currentHelperMvuTemplateData(input.agent!.session.snapshotEvents(),helper.scopes)
+    if(current !== undefined) helperMvu = projectTemplateHelperMvu(helper.scopes,historyIdentities,current)
+  }
   const lastUserMessage = pendingFresh.at(-1) ?? [...history].reverse().find((m) => m.role === 'user')?.content ?? ''
   const config = state.config
   const contextWindow = await resolveContextWindow(input)
@@ -250,6 +263,7 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
     user: userName,
     lastUserMessage,
     now: new Date(),
+    readonlyStatData: latestTemplateHelperMvu(helperMvu,historyIdentities),
   }
 
   // ── WI / 记忆 / 变化层：每 turn 评估一次并缓存 ──
@@ -270,6 +284,7 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
     card: templateCardData(card),
     entries: lore.entries, presets: preset.entries.filter(e => e.enabled), history: templateHistory,
     historyIdentities,messageVariables:visibleTemplateMessageVariables(templateState.messageVariables,historyIdentities),
+    ...(helperMvu ? {helperMvu} : {}),
     ...await loadTemplateAvatars(state,binding.cardId,persona),
     now: macroCtx.now.getTime(), seed: turnSeed, phase: 'generate',
     sessionId, cardId: binding.cardId, generationType: input.generationType ?? 'normal', model:input.agent?.options.model ?? '',
@@ -306,7 +321,7 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
     templates: templateContext,
     templateContinuation:resolveTemplateContinuation(templateState),
     wiEvaluation: {
-      entries:lore.entries, messages:scanMessages, settings:config.worldInfo,
+      entries:lore.entries, messages:scanMessages, settings:state.worldInfoFor(binding),
       timerState:input.mode==='live' ? await state.loadTimers(binding.cardId,sessionId,binding.storyId) : structuredClone(EMPTY_TIMER_STATE),
       contextWindowTokens:contextWindow, reservedTokens:estimateTokens(scanMessages.map(m=>m.content).join('\n')),
       seed:turnSeed, macroCtx:{char:card.name,user:userName},

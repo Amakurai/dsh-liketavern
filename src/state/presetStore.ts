@@ -19,6 +19,8 @@ import { MAX_WI_KEY_CHARS } from '../core/worldbook.js'
 import type { CardRegexScript, ChatRole, PresetEntry, PromptPreset } from '../core/types.js'
 import { MAX_LOREBOOK_CONTENT_CHARS, MAX_LOREBOOK_ENTRIES } from './lorebook.js'
 import { pickRegexScripts } from './card.js'
+import { characterHelperSettings,helperScriptSettings,exportHelperScriptTrees } from '../core/helperScripts.js'
+
 
 export interface ParseStPresetResult {
   preset: PromptPreset
@@ -249,6 +251,9 @@ export function parseStPreset(json: unknown): ParseStPresetResult {
     entries,
   }
   const regexScripts = pickRegexScripts(json, json)
+  if(isRecord(json.extensions)&&(json.extensions.tavern_helper!==undefined||json.extensions.TavernHelper_scripts!==undefined)) {
+    preset.helperSettings=helperScriptSettings(characterHelperSettings(json.extensions))
+  }
   const embedded = regexScripts.length > 0 ? [] : collectPromptEmbeddedRegex(rawPrompts)
   const scripts = regexScripts.length > 0 ? regexScripts : embedded
   if (scripts.length > 0) {
@@ -283,6 +288,10 @@ export function exportStPreset(preset: PromptPreset): unknown {
   }
   if (preset.regexScripts && preset.regexScripts.length > 0) {
     exported.extensions = { regex_scripts: preset.regexScripts }
+  }
+  if(preset.helperSettings!==undefined) {
+    const settings=helperScriptSettings(preset.helperSettings)
+    exported.extensions={...(exported.extensions as Record<string,unknown>??{}),tavern_helper:{...settings,scripts:exportHelperScriptTrees(settings.scripts??[])}}
   }
   return exported
 }

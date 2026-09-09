@@ -306,7 +306,7 @@ await Mvu.replaceMvuData(next, {type: 'message', message_id: getCurrentMessageId
 
 解析依次等待 VARIABLE_UPDATE_STARTED、COMMAND_PARSED、mag_command_parsed_for_zod、mag_command_parsed_ended_for_zod，应用剩余命令后等待 VARIABLE_UPDATE_ENDED、mag_variable_update_ended_for_zod。回调对变量对象和命令数组的修改经现有同剧情事件路由回传；Zod 回调可自行处理并清空命令。函数与 schema 闭包始终留在各自沙箱。任一监听失败或运行时关闭，解析失败且不自动保存。display_data 保留解析前的未变路径，delta_data 记录命令变化；结束钩子可以删除这两项。
 
-经典 MVU 的 schema 树、扩展性与模板元数据尚未实现；解析结果只允许无 schema 或 Zod 特定标记“没有用别管这个”，不支持的规则明确失败。临时 stat_data.$internal 不得保存。会话启用下述原生自动更新后会触发 VARIABLE_INITIALIZED；BEFORE_MESSAGE_UPDATE 正文改写及状态栏占位替换仍待适配。不要同时加载依赖 parent.Mvu 的原版框架来替代本地对象；任意 initializeGlobal/其它 waitGlobalInitialized 名称及跨沙箱同步对象共享尚未支持。
+经典 MVU 的 schema 树、扩展性与模板元数据尚未实现；解析结果只允许无 schema 或 Zod 特定标记“没有用别管这个”，不支持的规则明确失败。临时 stat_data.$internal 不得保存。会话启用下述原生自动更新后会触发 VARIABLE_INITIALIZED；BEFORE_MESSAGE_UPDATE 正文改写仍待适配。原生 MVU 已支持展示时补齐 `<StatusPlaceHolderImpl/>`：仅当启用的角色展示正则明确匹配该占位符且没有深度限制时生效，不改写历史正文或剧情变量。不要同时加载依赖 parent.Mvu 的原版框架来替代本地对象；任意 initializeGlobal/其它 waitGlobalInitialized 名称及跨沙箱同步对象共享尚未支持。
 
 行为按 [MVU 公开接口实现](https://github.com/MagicalAstrogy/MagVarUpdate/blob/master/src/function/global/index.ts) 与 [变量事件和命令实现](https://github.com/MagicalAstrogy/MagVarUpdate/blob/master/src/function/update_variables.ts)独立适配；这不是整套 MVU 卡片兼容完成的声明。
 

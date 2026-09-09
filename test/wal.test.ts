@@ -3,7 +3,7 @@
  * 覆盖：begin→record→commit 磁盘形态、同层快照去重、单楼层回滚（改/删/最初内容）、
  * 多楼层逆序撤销（含 session turn 的 t1/t2/t10 数字排序）、回滚目录保留与
  * listFloors 标记、重复回滚抛错、prune 过期清理、appendFile 失败后重试仍留下 before 镜像、
- * records.jsonl 单行损坏跳过（坏行不阻断 rollbackAfter 的后续楼层）、人工编辑冲突保护与
+ * records.jsonl 损坏时整批回滚拒绝、人工编辑冲突保护与
  * 历史二进制标记兼容。
  */
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'

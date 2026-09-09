@@ -13,6 +13,7 @@ import { type CharacterCard, type MemoryEntry, type PromptPreset, type RegexRule
 import { compileCardRegexScripts, compilePresetRegexScripts } from '../core/regex.js'
 import { normalizeBook, parseJsonCard, parsePngCard, regexScriptsOf, applyCharacterPatch, cardToStJson, createBlankCard, embedCardInPng } from '../state/card.js'
 import { parseLorebook } from '../state/lorebook.js'
+import { parseStoredPreset } from '../state/presetStore.js'
 import { MemoryStore } from '../state/memory.js'
 import type { PipelineResult } from './pipeline.js'
 import { loadTemplateTimers, saveTemplateTimers } from '../state/template.js'
@@ -29,7 +30,7 @@ import {
 } from '../state/workspace.js'
 import { WorkspaceFs } from '../state/workspaceFs.js'
 import { resolveStaleBinding } from '../core/binding.js'
-import { pickPersona, type Persona } from '../core/persona.js'
+import { parsePersona, pickPersona, type Persona } from '../core/persona.js'
 import { pinStandingText, stableFingerprintHash, standingPinKey, type StandingPin } from '../core/standingPin.js'
 import { clearBindingsForCard, deleteBinding, loadBinding, saveBinding, type SessionBinding } from './bindings.js'
 import type { TavernConfig } from './config.js'
@@ -703,7 +704,7 @@ export class TavernState {
     let value: PromptPreset | null = null
     if (raw !== null) {
       try {
-        value = JSON.parse(raw) as PromptPreset
+        value = parseStoredPreset(JSON.parse(raw))
       } catch {
         value = null
       }
@@ -714,6 +715,7 @@ export class TavernState {
 
   /** 落盘并 bump 修订号，返回磁盘上的 id（identifier 含非法字符时与 preset.identifier 不同）。 */
   async savePreset(preset: PromptPreset,options:{preserveHelperSettings?:boolean}={}): Promise<string> {
+    preset = parseStoredPreset(preset)
     const fs = await this.rootFs()
     return withWorkspaceLock(fs.root,async()=>{
     // 预设身份是 identifier（编辑器内不可改，name 可改）：改名是编辑不是冲突。
@@ -744,7 +746,7 @@ export class TavernState {
     const parsed = await Promise.all(
       files.map(async (file) => {
         try {
-          return JSON.parse((await fs.readText(`personas/${file}`))!) as Persona
+          return parsePersona(JSON.parse((await fs.readText(`personas/${file}`))!))
         } catch {
           return null // 坏文件跳过
         }
@@ -766,7 +768,7 @@ export class TavernState {
     let value: Persona | null = null
     if (raw !== null) {
       try {
-        value = JSON.parse(raw) as Persona
+        value = parsePersona(JSON.parse(raw))
       } catch {
         value = null
       }
@@ -788,6 +790,7 @@ export class TavernState {
 
   /** 落盘并返回磁盘上的 id；id 被净化过（含冲突后缀）时连同 JSON 里的 id 一起改写，避免文件名和内容各说各话。 */
   async savePersona(persona: Persona): Promise<string> {
+    persona = parsePersona(persona)
     const fs = await this.rootFs()
     // 人设身份是 id（客户端生成，编辑器内不可改，name 可改）：改名是编辑不是冲突。
     // 文件内的 id 是落盘时改写过的净化 id，故原始 id 与净化 id 都认作同一资产。

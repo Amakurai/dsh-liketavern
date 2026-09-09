@@ -65,6 +65,8 @@ export declare class Wal {
     private readMeta;
     private writeMeta;
     private readRecords;
+    /** 预检与执行共用同一套只读校验，任何坏游标都必须在修改批次中首个文件前被发现。 */
+    private readRollbackProgress;
     /** 读取楼层记录状态（惰性加载，进程重启后首次访问时从磁盘重建）。 */
     private loadState;
     private hasRolledBackDir;

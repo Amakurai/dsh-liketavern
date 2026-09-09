@@ -2,6 +2,7 @@
  * 人设解析：会话绑定未指定时，用默认页或「库里只剩一条」接上，避免 {{user}} 落成 User。
  * Persona 数据形状也归这里（纯数据，core 层）；存储在 node/state，remote 契约引用本文件。
  */
+import { looseObject, minLength, nullable, optional, string } from 'zod/mini'
 
 /** 无人设时 {{user}} 的展示名（对齐 SillyTavern 缺省 User）。 */
 export const DEFAULT_USER_NAME = 'User'
@@ -15,6 +16,19 @@ export interface Persona {
   avatar: string | null
   /** 挂接的世界书库文件名；空/缺省 = 无人设书。 */
   lorebookId?: string | null
+}
+
+const personaSchema = looseObject({
+  id: string().check(minLength(1)),
+  name: string(),
+  description: string(),
+  avatar: nullable(string()),
+  lorebookId: optional(nullable(string())),
+})
+
+/** 人设存储边界：合法 JSON 也要验证字段，避免坏资产进入列表、默认人设解析与提示词。 */
+export function parsePersona(value: unknown): Persona {
+  return personaSchema.parse(value)
 }
 
 /**

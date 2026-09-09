@@ -23,7 +23,7 @@ import { DEFAULT_USER_NAME } from '../core/persona.js'
 import { isTavernGreetingEvent } from '../core/greetingLog.js'
 import type { MemoryEntry, PromptPreset, RegexRule } from '../core/types.js'
 import { exportLorebook, mergeDeltasForExport, parseLorebook } from '../state/lorebook.js'
-import { exportStPreset, parseStPreset } from '../state/presetStore.js'
+import { parseStoredPreset, parseStPreset } from '../state/presetStore.js'
 import { rebuildIndex } from '../state/workspace.js'
 import { parseSessionBinding, type SessionBinding } from './bindings.js'
 import type { TavernConfigRaw } from './config.js'
@@ -232,24 +232,14 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
   }
 
   async savePreset(request: { preset: unknown }): Promise<TavernMethodResults['savePreset']> {
-    const preset = request.preset as Partial<PromptPreset> | null
-    if (!preset || typeof preset.identifier !== 'string' || !preset.identifier) {
-      throw new FloorError('invalid-preset', '预设缺少 identifier')
-    }
-    // 宽松传输、严格校验：remote schema 对复杂资产是宽松形状，落盘前用现有预设解析帮手
-    // 整体过一遍——经 ST 导出形态往返（exportStPreset → parseStPreset）：结构非法
-    // （非对象 / entries 缺失或不是数组）直接抛错；往返后条目变少说明有缺失或重复
-    // identifier 的条目被丢弃，同样拒绝。校验不过不写盘。
+    let preset: PromptPreset
     try {
-      const normalized = parseStPreset(exportStPreset(preset as PromptPreset)).preset
-      if (normalized.entries.length !== preset.entries?.length) {
-        throw new Error('预设条目缺失，或存在缺失/重复的 identifier')
-      }
+      preset = parseStoredPreset(request.preset)
     } catch (error) {
       throw new FloorError('invalid-preset', error instanceof Error ? error.message : String(error))
     }
     // 回显用落盘后的实际 id（理由同 importPreset）。
-    const id = await this.state.savePreset(preset as PromptPreset,{preserveHelperSettings:true})
+    const id = await this.state.savePreset(preset,{preserveHelperSettings:true})
     return { id }
   }
 

@@ -30,6 +30,15 @@ import { estimateTokens } from '../core/tokenize.js'
 /** records.jsonl 单行形状（floor 由所在目录承载，行内不重复）。after/编码字段兼容旧记录。 */
 type RecordLine = Omit<WalRecord, 'floor'>
 
+/** 回滚恢复游标；pending 的前后镜像始终为标准 base64，null 表示文件不存在。 */
+interface RollbackProgress {
+  hash: string
+  next: number
+  restored: string[]
+  preserved: string[]
+  pending?: { path: string; from: string | null; to: string | null }
+}
+
 /** meta.json 形状：楼层事务元数据。 */
 interface FloorMeta {
   floor: string
@@ -63,6 +72,15 @@ const ROLLED_BACK_MARK = '.rolled-back-'
 
 /** 旧版本 records.jsonl 中二进制 before 快照的前缀；新记录使用 beforeEncoding 字段。 */
 export const WAL_BINARY_MARK = 'binary-base64:'
+
+/** Buffer 的 base64 解码会忽略坏字符和截断；必须往返一致才允许用作恢复镜像。 */
+function isBase64(value: unknown): value is string {
+  return typeof value === 'string' && Buffer.from(value, 'base64').toString('base64') === value
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
 
 // ---------------------------------------------------------------------------
 // 内部工具
@@ -250,6 +268,7 @@ export class Wal {
       if (!line.trim()) continue
       let rec: RecordLine
       try { rec = JSON.parse(line) as RecordLine } catch { throw new Error(`WAL 记录损坏：${dir}`) }
+      if (!isRecord(rec)) throw new Error(`WAL 记录形状损坏：${dir}`)
       const safePath = typeof rec.path === 'string' && rec.path.length > 0 && !rec.path.includes('\\')
         && !rec.path.includes(':') && !rec.path.startsWith('/') && rec.path.split('/').every((part) => part !== '..' && part !== '.' && part !== '')
         && !rec.path.toLowerCase().startsWith('state/wal/')
@@ -260,9 +279,46 @@ export class Wal {
         || (rec.afterEncoding !== undefined && !['utf8', 'base64'].includes(rec.afterEncoding))) {
         throw new Error(`WAL 记录形状或路径损坏：${dir}`)
       }
+      const before = rec.beforeEncoding === undefined && rec.before?.startsWith(WAL_BINARY_MARK)
+        ? rec.before.slice(WAL_BINARY_MARK.length) : rec.before
+      if ((before !== null && (rec.beforeEncoding === 'base64' || before !== rec.before) && !isBase64(before))
+        || (rec.afterEncoding === 'base64' && rec.after !== null && !isBase64(rec.after))) {
+        throw new Error(`WAL 快照编码损坏：${dir}`)
+      }
       records.push(rec)
     }
     return records
+  }
+
+  /** 预检与执行共用同一套只读校验，任何坏游标都必须在修改批次中首个文件前被发现。 */
+  private async readRollbackProgress(dir: string, records: RecordLine[]): Promise<RollbackProgress> {
+    const hash = createHash('sha256').update(JSON.stringify(records)).digest('hex')
+    const saved = await readFile(join(dir, 'rollback-progress.json'), 'utf8').catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return null
+      throw error
+    })
+    if (saved === null) return { hash, next: records.length - 1, restored: [], preserved: [] }
+    let value: unknown
+    try { value = JSON.parse(saved) } catch { throw new Error(`WAL 回滚恢复游标损坏：${dir}`) }
+    const paths = new Set(records.map(record => record.path))
+    const isPaths = (items: unknown): items is string[] => Array.isArray(items)
+      && items.every(item => typeof item === 'string' && paths.has(item))
+    if (!isRecord(value) || value.hash !== hash || typeof value.next !== 'number'
+      || !Number.isSafeInteger(value.next) || value.next < -1 || value.next >= records.length
+      || !isPaths(value.restored) || !isPaths(value.preserved)
+      || value.restored.length + value.preserved.length !== records.length - value.next - 1) {
+      throw new Error(`WAL 回滚恢复游标损坏：${dir}`)
+    }
+    const progress: RollbackProgress = { hash, next: value.next, restored: value.restored, preserved: value.preserved }
+    if ('pending' in value) {
+      const pending = value.pending
+      if (!isRecord(pending) || typeof pending.path !== 'string' || pending.path !== records[value.next]?.path
+        || !(pending.from === null || isBase64(pending.from)) || !(pending.to === null || isBase64(pending.to))) {
+        throw new Error(`WAL 回滚恢复记录损坏：${dir}`)
+      }
+      progress.pending = { path: pending.path, from: pending.from, to: pending.to }
+    }
+    return progress
   }
 
   /** 读取楼层记录状态（惰性加载，进程重启后首次访问时从磁盘重建）。 */
@@ -393,17 +449,8 @@ export class Wal {
       )
     }
     const records = await this.readRecords(dir)
-    const hash = createHash('sha256').update(JSON.stringify(records)).digest('hex')
     const progressFile = join(dir, 'rollback-progress.json')
-    type Progress = { hash: string; next: number; restored: string[]; preserved: string[];
-      pending?: { path: string; from: string | null; to: string | null } }
-    const saved = await readFile(progressFile, 'utf8').catch((error: NodeJS.ErrnoException) => {
-      if (error.code === 'ENOENT') return null
-      throw error
-    })
-    const progress: Progress = saved === null ? { hash, next: records.length - 1, restored: [], preserved: [] } : JSON.parse(saved)
-    if (progress.hash !== hash || !Number.isInteger(progress.next) || progress.next < -1 || progress.next >= records.length
-      || !Array.isArray(progress.restored) || !Array.isArray(progress.preserved)) throw new Error('WAL 回滚恢复游标损坏')
+    const progress = await this.readRollbackProgress(dir, records)
     await expandAffectedMemories(workspaceRoot, records.map((record) => record.path))
     const checkpoint = () => atomicWrite(progressFile, JSON.stringify(progress) + '\n')
     const currentBytes = async (path: string) => (await readFile(join(workspaceRoot, path)).catch((error: NodeJS.ErrnoException) => {
@@ -412,8 +459,6 @@ export class Wal {
     }))?.toString('base64') ?? null
     const applyPending = async () => {
       const pending = progress.pending!
-      if (pending.path !== records[progress.next]?.path
-        || !(pending.from === null || typeof pending.from === 'string') || !(pending.to === null || typeof pending.to === 'string')) throw new Error('WAL 回滚恢复记录损坏')
       const current = await currentBytes(pending.path)
       // 崩溃可能发生在文件替换后、游标推进前。已到目标值则直接推进，避免重放较新的 before。
       if (current !== pending.to) {
@@ -471,7 +516,12 @@ export class Wal {
   private async preflightRollback(floors: string[]): Promise<void> {
     const selected = new Set(floors)
     const changes: RecordLine[] = []
-    for (const floor of floors) changes.push(...await this.readRecords(join(this.rootDir, sanitizeFloor(floor))))
+    for (const floor of floors) {
+      const dir = join(this.rootDir, sanitizeFloor(floor))
+      const records = await this.readRecords(dir)
+      await this.readRollbackProgress(dir, records)
+      changes.push(...records)
+    }
     // 旧共享工作区可能仍有其它会话的后继写入。拒绝越过这些依赖撤销，防止之后撤销 B 时复活 A。
     for (const floor of await this.doListFloors()) {
       if (floor.rolledBack || selected.has(floor.floor)) continue

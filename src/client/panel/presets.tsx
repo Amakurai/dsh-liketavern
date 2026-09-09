@@ -2,7 +2,7 @@
  * 设置面板分区：提示词预设（卡片网格 / 导入 / 导出 / 删除 / 条目表格编辑）。
  * 卡片可键盘触发（clickableProps）；保存/导入/设默认等瞬时反馈走 useToast，上下文错误用 Err。
  */
-import { exportHelperScriptTrees } from '../../core/helperScripts.js'
+import { exportStPreset } from '../../core/presetExport.js'
 import { useDraftGuard } from '../drafts.js'
 import { useDraftState } from '../draftPersistence.js'
 import { useState } from 'react'
@@ -199,29 +199,7 @@ export function PresetsSection(props: { remote: TavernRemote }) {
         return
       }
       const preset = r.value.preset
-      const prompts = preset.entries.map((e) => ({
-        identifier: e.identifier,
-        name: e.name,
-        role: e.role,
-        content: e.content,
-        marker: e.marker,
-        system_prompt: e.role === 'system',
-        injection_position: e.position === 'in-chat' ? 1 : 0,
-        injection_depth: e.depth,
-        injection_order: e.order,
-      }))
-      const order = preset.entries.map((e) => ({ identifier: e.identifier, enabled: e.enabled }))
-      const json: Record<string, unknown> = {
-        name: preset.name,
-        identifier: preset.identifier,
-        prompts,
-        prompt_order: [{ character_id: 100001, order }],
-      }
-      if (preset.regexScripts && preset.regexScripts.length > 0) {
-        json.extensions = { regex_scripts: preset.regexScripts }
-      }
-      if(preset.helperSettings)json.extensions={...(json.extensions as Record<string,unknown>??{}),tavern_helper:{...preset.helperSettings,scripts:exportHelperScriptTrees(preset.helperSettings.scripts??[])}}
-      downloadJson(`${name || id}.json`, json)
+      downloadJson(`${name || id}.json`, exportStPreset(preset))
     })
   }
 

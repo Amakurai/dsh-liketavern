@@ -21,6 +21,12 @@ export declare class WorkspaceFs {
      */
     withFloor(floor: string | null): WorkspaceFs;
     private abs;
+    /**
+     * WAL 记录用的规范相对路径：正斜杠、去掉 `.` 与空段。读路径可以宽松（normalize 会折叠它们），
+     * 但记进日志的路径必须是 Wal.readRecords 日后接受的形状——一条 `memory/./x.md` 会让整层
+     * 日志被判定损坏，进而阻断该剧情之后所有回退与分支。盘符与 WAL 自身目录同样拒绝。
+     */
+    private walPath;
     readText(relPath: string): Promise<string | null>;
     /** 判断路径是否存在（文件或目录）。 */
     exists(relPath: string): Promise<boolean>;

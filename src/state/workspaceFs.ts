@@ -82,6 +82,20 @@ export class WorkspaceFs {
     return abs
   }
 
+  /**
+   * WAL 记录用的规范相对路径：正斜杠、去掉 `.` 与空段。读路径可以宽松（normalize 会折叠它们），
+   * 但记进日志的路径必须是 Wal.readRecords 日后接受的形状——一条 `memory/./x.md` 会让整层
+   * 日志被判定损坏，进而阻断该剧情之后所有回退与分支。盘符与 WAL 自身目录同样拒绝。
+   */
+  private walPath(relPath: string): string {
+    const parts = relPath.replace(/\\/g, '/').split('/').filter((seg) => seg !== '' && seg !== '.')
+    const path = parts.join('/')
+    if (!path || path.includes(':') || parts.includes('..') || path.toLowerCase().startsWith('state/wal/')) {
+      throw new Error(`工作区路径无法记录快照: ${relPath}`)
+    }
+    return path
+  }
+
   async readText(relPath: string): Promise<string | null> {
     try {
       return await readFile(this.abs(relPath), 'utf8')
@@ -137,9 +151,10 @@ export class WorkspaceFs {
     await withWorkspaceLock(this.root, async () => {
       const abs = this.abs(relPath)
       if (this.wal && this.floor) {
+        const path = this.walPath(relPath)
         const bytes = await this.readBytes(relPath)
         const before = bytes === null ? null : snapshotOf(bytes)
-        await this.wal.recordChange(this.floor, relPath, before?.value ?? null, content, before?.encoding ?? 'utf8', 'utf8')
+        await this.wal.recordChange(this.floor, path, before?.value ?? null, content, before?.encoding ?? 'utf8', 'utf8')
       }
       await atomicWrite(abs, content)
     })
@@ -153,8 +168,9 @@ export class WorkspaceFs {
     await withWorkspaceLock(this.root, async () => {
       const abs = this.abs(relPath)
       if (this.wal && this.floor) {
+        const path = this.walPath(relPath)
         const before = await this.readBytes(relPath)
-        await this.wal.recordChange(this.floor, relPath,
+        await this.wal.recordChange(this.floor, path,
           before === null ? null : Buffer.from(before).toString('base64'),
           Buffer.from(bytes).toString('base64'), 'base64', 'base64')
       }
@@ -171,10 +187,11 @@ export class WorkspaceFs {
     await withWorkspaceLock(this.root, async () => {
       const abs = this.abs(relPath)
       if (this.wal && this.floor) {
+        const path = this.walPath(relPath)
         const bytes = await this.readBytes(relPath)
         if (bytes === null) return
         const before = snapshotOf(bytes)
-        await this.wal.recordChange(this.floor, relPath, before.value, null, before.encoding ?? 'utf8', 'utf8')
+        await this.wal.recordChange(this.floor, path, before.value, null, before.encoding ?? 'utf8', 'utf8')
       }
       await rm(abs, { force: true })
     })

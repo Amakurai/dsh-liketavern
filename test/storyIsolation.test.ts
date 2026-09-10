@@ -12,6 +12,7 @@ import { regenerate, editAssistantMessage, rollbackToFloor } from '../src/node/f
 import { saveBinding, type SessionBinding } from '../src/node/bindings.js'
 import { MemoryStore } from '../src/state/memory.js'
 import { resolveReadableAssetPath } from '../src/core/assetRead.js'
+import { CONTINUE_INSTRUCTION_PREFIX } from '../src/core/dshPrompt.js'
 import { onTurnStart, onTurnEnd } from '../src/node/sessionLifecycle.js'
 import { registerMemoryMaintenance } from '../src/node/memoryMaintenance.js'
 import { registerRequestDiagnostics } from '../src/node/requestDiagnostics.js'
@@ -85,6 +86,22 @@ it('连续重生成兄弟分支：原会话的事实不变，兄弟新事实不�
   expect((await state.workspace(cardId)).fs.root).not.toBe((await workspace('parent')).fs.root)
 })
 
+it('重生成续写轮时驱动消息保留插件 notice 来源，不把续写指令变成用户台词', async () => {
+  const instruction = createUserMessage({ content: [{ type: 'text', text: `${CONTINUE_INSTRUCTION_PREFIX}请继续` }],
+    source: { kind: 'plugin', plugin: 'dsh-tavern', form: 'notice', summary: '续写指令' } })
+  const events = [...turn(1), ...turn(2).map((e) => e.type === 'user/message' ? { ...e, data: instruction } : e)] as SessionEvent[]
+  addSession('parent', events)
+  const child = await regenerate({ ctx, state }, 'parent')
+  const followup = (agents.get(child.childSessionId) as { followup: ReturnType<typeof vi.fn> }).followup
+  expect(followup).toHaveBeenCalledTimes(1)
+  const driven = followup.mock.calls[0]![0] as { content: unknown; source: unknown }
+  expect(driven.source).toEqual(instruction.source)
+  expect(driven.content).toEqual(instruction.content)
+  const plain = await regenerate({ ctx, state }, 'parent', undefined, 1)
+  const plainDriven = (agents.get(plain.childSessionId) as { followup: ReturnType<typeof vi.fn> }).followup.mock.calls[0]![0] as { source: unknown }
+  expect(plainDriven.source).toEqual({ kind: 'user' })
+})
+
 it('编辑 assistant 撤销该层派生事实，保留新正文；再次回退祖先仍使用各自副本', async () => {
   await writeFact('parent', 1, '门打开了')
   const event = sessions.get('parent')!.snapshotEvents()[2]!
@@ -109,6 +126,21 @@ it('新会话复制初始状态；旧绑定只迁移一次并保留原目录', a
   expect((await (await workspace('legacy')).memory.list()).map((m) => m.body)).toEqual(['初始事实'])
   expect((await template.memory.list()).length).toBe(2)
   expect(resolveReadableAssetPath(`stories/${legacy!.storyId}/memory/a.md`).ok).toBe(false)
+})
+
+it('子会话已创建但绑定落盘失败时，用创建句柄移除子会话并丢弃草稿剧情', async () => {
+  const handle = { dispose: vi.fn(async () => undefined) }
+  const registry = ctx.agents as unknown as { create: (opts: { sessionId: string; seed?: SessionEvent[]; meta: { agentPreset: string } }) => Promise<unknown> }
+  registry.create = async (opts) => { created(opts); addSession(opts.sessionId, opts.seed ?? [], opts.meta); return handle }
+  const original = state.saveBinding.bind(state)
+  vi.spyOn(state, 'saveBinding').mockImplementation(async (b) => {
+    if (b.sessionId !== 'parent') throw new Error('磁盘故障')
+    return original(b)
+  })
+  await expect(regenerate({ ctx, state }, 'parent')).rejects.toThrow('准备分支失败')
+  expect(created).toHaveBeenCalledTimes(1)
+  expect(handle.dispose).toHaveBeenCalledTimes(1)
+  expect(await state.listStories(cardId)).toHaveLength(1)
 })
 
 it('源 WAL 损坏时拒绝分支，宿主尚未创建子会话且原状态完整', async () => {

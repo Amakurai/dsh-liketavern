@@ -26,7 +26,10 @@ export declare function loadTemplateState(fs: WorkspaceFs): Promise<TemplateStat
 export declare function saveTemplateState(fs: WorkspaceFs, state: TemplateState): Promise<void>;
 /** 新状态优先；旧文件保留为迁移来源和回滚旧楼层所需的历史数据。 */
 export declare function loadTemplateTimers(fs: WorkspaceFs, sessionId: string): Promise<WITimerState>;
-/** 普通计时更新与分支复制只改变计时字段；未迁移会话保留原路径，不创建空模板文件。 */
+/**
+ * 普通计时更新与分支复制只改变计时字段；未迁移会话保留原路径，不创建空模板文件。
+ * 内容未变时不重写：每轮都落一条同值 WAL 记录既无意义，也会给后续楼层回滚制造假依赖。
+ */
 export declare function saveTemplateTimers(fs: WorkspaceFs, sessionId: string, timers: WITimerState): Promise<void>;
 /** 分支草稿把边界定时器复制到子会话旧路径；不改祖先模板镜像，跨分支 WAL 才能逐层撤销。 */
 export declare function copyTemplateTimers(fs: WorkspaceFs, fromSessionId: string, toSessionId: string): Promise<void>;

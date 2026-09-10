@@ -18,7 +18,7 @@ import { LorebookEditor } from './panel/lorebookEditor.js'
 import type { CharacterSummary, Persona, PresetSummary, SessionBinding, TavernRemote, TavernSettings } from './types.js'
 import { EMPTY_SESSION_DEFAULTS } from './types.js'
 import { IconCopyOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
-import { Btn, CheckChips, ConfirmDialog, Dialog, Err, Field, IconBtn, Muted, Select, Skeleton, Tabs, Toggle, errOf, useLoader, useToast } from './util.js'
+import { Btn, CheckChips, ConfirmDialog, Dialog, Err, Field, IconBtn, Muted, Select, Skeleton, Tabs, Toggle, errOf, runAsync, useLoader, useToast } from './util.js'
 
 export function defaultBinding(sessionId: string, cardId: string, defaults?: TavernSettings['defaults']): SessionBinding {
   const d = defaults ?? EMPTY_SESSION_DEFAULTS
@@ -200,6 +200,9 @@ export function TavernHeaderChip(props: {
   const [memoryOpen, setMemoryOpen] = useState(false)
   const [confirmUnbind, setConfirmUnbind] = useState(false)
   const [unbindBusy, setUnbindBusy] = useState(false)
+  /** 保存/开场白/预览等写操作共用一个 busy：传输层 reject 也要显示错误并解锁，重复点击不能发出第二次请求（换开场白会再建一条分支）。 */
+  const [busy, setBusy] = useState(false)
+  const run = (fn: () => Promise<void>) => { if (!busy) void runAsync(setBusy, setError, fn) }
   /** 无绑定时选择角色会异步读取 defaults；序号保证只有最后一次选择能落到草稿。 */
   const characterRequest = useRef(0)
 
@@ -395,9 +398,9 @@ export function TavernHeaderChip(props: {
               ) : null}
               <span className="dsh-tavern-footSpacer" />
               <span className="dsh-tavern-footGroup">
-                <Btn size="md" disabled={!binding?.storyId || draft?.cardId !== binding.cardId} onClick={() => void openChatLore()}>{t('chip.chatLore.edit')}</Btn>
+                <Btn size="md" disabled={busy || !binding?.storyId || draft?.cardId !== binding.cardId} onClick={() => run(openChatLore)}>{t('chip.chatLore.edit')}</Btn>
                 <Btn size="md" disabled={!binding?.storyId} onClick={() => setMemoryOpen(true)}>{t('section.memory')}</Btn>
-                <Btn primary size="md" onClick={() => void saveBinding()}>{t('binding.save')}</Btn>
+                <Btn primary size="md" disabled={busy} onClick={() => run(saveBinding)}>{t('binding.save')}</Btn>
               </span>
             </div>
           ) : undefined
@@ -561,11 +564,11 @@ export function TavernHeaderChip(props: {
               <div className="dsh-tavern-panelCard">
                 <div className="dsh-tavern-groupHead">{t('chip.group.greetingDebug')}</div>
                 <div className="dsh-tavern-bindingActions">
-                  <Btn disabled={!binding} onClick={() => void insertGreeting()}>{t('binding.greeting')}</Btn>
-                  <Btn disabled={!binding || !canSwipeGreeting} onClick={() => void swipeBy(-1)}>{t('chip.greeting.prev')}</Btn>
-                  <Btn disabled={!binding || !canSwipeGreeting} onClick={() => void swipeBy(1)}>{t('chip.greeting.next')}</Btn>
-                  <Btn onClick={() => void showTriggerLog()}>{t('binding.triggerLog')}</Btn>
-                  <Btn onClick={() => void preview()}>{t('binding.preview')}</Btn>
+                  <Btn disabled={busy || !binding} onClick={() => run(insertGreeting)}>{t('binding.greeting')}</Btn>
+                  <Btn disabled={busy || !binding || !canSwipeGreeting} onClick={() => run(() => swipeBy(-1))}>{t('chip.greeting.prev')}</Btn>
+                  <Btn disabled={busy || !binding || !canSwipeGreeting} onClick={() => run(() => swipeBy(1))}>{t('chip.greeting.next')}</Btn>
+                  <Btn disabled={busy} onClick={() => run(showTriggerLog)}>{t('binding.triggerLog')}</Btn>
+                  <Btn disabled={busy} onClick={() => run(preview)}>{t('binding.preview')}</Btn>
                 </div>
               </div>
 

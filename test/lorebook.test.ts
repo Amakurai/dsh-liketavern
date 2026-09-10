@@ -215,6 +215,21 @@ describe('parseLorebook：character_book 条目', () => {
     const viaArray = parseLorebook(book.entries, { source: 'character', sourceRef: 'cardX' })
     expect(viaArray).toEqual(viaObject)
   })
+
+  it('数组形态重复的 id 按下标区分，导出不丢条目且往返稳定', () => {
+    const entries = [
+      { id: 5, keys: ['甲'], content: '第一条' },
+      { id: 5, keys: ['乙'], content: '第二条' },
+      { id: 5, keys: ['丙'], content: '第三条' },
+    ]
+    const parsed = parseLorebook({ entries }, { source: 'character', sourceRef: 'cardX' })
+    expect(parsed.map((e) => e.uid)).toEqual(['5', '5#1', '5#2'])
+    expect(new Set(parsed.map((e) => e.key)).size).toBe(3)
+    const exported = exportLorebook(parsed, 'x') as { entries: Record<string, { content: string }> }
+    expect(Object.keys(exported.entries)).toEqual(['5', '5#1', '5#2'])
+    expect(Object.values(exported.entries).map((e) => e.content)).toEqual(['第一条', '第二条', '第三条'])
+    expect(parseLorebook(exported, { source: 'character', sourceRef: 'cardX' }).map((e) => e.content)).toEqual(['第一条', '第二条', '第三条'])
+  })
 })
 
 describe('exportLorebook：ST 原生形态与往返', () => {

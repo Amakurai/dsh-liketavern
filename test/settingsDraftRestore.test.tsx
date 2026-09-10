@@ -5,7 +5,7 @@ import type { ReactTestRenderer } from 'react-test-renderer'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SettingsSection } from '../src/client/panel/settings.js'
 import { getTavernLocale, setTavernLocale } from '../src/client/i18n.js'
-import { Btn, NumInput, Select } from '../src/client/util.js'
+import { Btn, ConfirmDialog, NumInput, Select, Tabs } from '../src/client/util.js'
 import { TavernConfigSchema, type TavernConfigRaw } from '../src/node/config.js'
 import type { TavernRemote } from '../src/client/types.js'
 
@@ -115,6 +115,21 @@ describe('设置草稿恢复', () => {
     expect(view.root.findAllByType(NumInput)[0]!.props.value).toBe(0.7)
     expect(snapshot.observed['settings:draft']).toEqual(settings(0.7))
     expect(snapshot.observed['settings:baseline']).toEqual(settings(0.7))
+  })
+
+  it('设置草稿未保存时切换子组直接生效且不弹放弃确认，草稿保留；点当前子组不触发任何操作', async () => {
+    const old = settings(0.4), edited = settings(0.9)
+    snapshot.initial = { 'settings:sub': 'sampling', 'settings:baseline': old, 'settings:draft': edited }
+    const view = await render(remote(async () => ok({ settings: old })))
+    const openDialogs = () => view.root.findAllByType(ConfirmDialog).filter((dialog) => dialog.props.open)
+    await act(async () => view.root.findByType(Tabs).props.onChange('sampling'))
+    expect(openDialogs()).toHaveLength(0)
+    expect(snapshot.observed['settings:sub']).toBe('sampling')
+    await act(async () => view.root.findByType(Tabs).props.onChange('memory'))
+    expect(openDialogs()).toHaveLength(0)
+    expect(snapshot.observed['settings:sub']).toBe('memory')
+    expect(snapshot.observed['settings:draft']).toEqual(edited)
+    expect(view.root.findByProps({ role: 'tabpanel' }).props['aria-labelledby']).toMatch(/-memory$/)
   })
 
   it('加载中保存的 null 快照不会锁死页面，仍可接收首次远端数据', async () => {

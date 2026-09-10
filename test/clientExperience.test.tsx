@@ -206,6 +206,36 @@ it('会话绑定面板保存无主书与附加书，保留全局选择', async (
   } finally {vi.unstubAllGlobals()}
 })
 
+/** 绑定面板的写操作：传输层 reject 显示错误并解锁；请求在途时重复点击不会再发一次（换开场白会再建分支）。 */
+it('会话绑定面板保存失败显示传输错误并解锁，换开场白在途时忽略重复点击', async () => {
+  vi.stubGlobal('window',new EventTarget())
+  try {
+    const binding=defaultBinding('binding-busy','card-busy')
+    const card=detail('card-busy')
+    const pendingSwipe=Promise.withResolvers<{ok:true;value:{childSessionId:string;title:string}}>()
+    const swipeGreeting=vi.fn(()=>pendingSwipe.promise)
+    const opened:string[]=[]
+    const remote={getSessionBinding:async()=>ok({binding,canSwipeGreeting:true}),getCharacterDetail:async()=>ok(card),getAvatar:async()=>ok({dataUrl:null}),
+      listCharacters:async()=>ok({items:[summary(card.cardId,card.name)]}),listPresets:async()=>ok({items:[]}),listPersonas:async()=>ok({items:[]}),
+      listLorebooks:async()=>ok({items:[]}),getContextUsage:async()=>ok({usage:null}),
+      setSessionBinding:vi.fn(async()=>{throw new Error('连接中断')}),swipeGreeting} as unknown as TavernRemote
+    const view=await render(<TavernHeaderChip remote={remote} sessionId="binding-busy" sessions={{open:(id)=>{opened.push(id)}}} useSessions={select=>select({byId:{'binding-busy':{projectionValues:{agentPreset:'tavern'}}}})}/>)
+    await act(async()=>view.root.findByType(TavernSeatChip).props.onClick())
+    await act(async()=>button(view,'保存绑定').props.onClick())
+    expect(view.root.findByProps({role:'alert'}).children.join('')).toContain('连接中断')
+    expect(button(view,'保存绑定').props.disabled).toBe(false)
+    await act(async()=>button(view,'下一条开场白').props.onClick())
+    expect(button(view,'下一条开场白').props.disabled).toBe(true)
+    expect(button(view,'保存绑定').props.disabled).toBe(true)
+    await act(async()=>button(view,'下一条开场白').props.onClick())
+    expect(swipeGreeting).toHaveBeenCalledTimes(1)
+    await act(async()=>pendingSwipe.resolve(ok({childSessionId:'child-1',title:'分支'})))
+    expect(opened).toEqual(['child-1'])
+    expect(button(view,'下一条开场白').props.disabled).toBe(false)
+    await act(async()=>view.unmount())
+  } finally {vi.unstubAllGlobals()}
+})
+
 /** 设置恢复使用选定剧情及宿主 seq，失败保留草稿；不重新挂载第三方角色卡。 */
 describe('设置中的卡面变量管理',()=>{
   const snapshot={storyId:'story-one',historyRevision:'rev-one',currentMessageId:0,writable:true,messages:[],scopes:{'["chat",""]':{hp:1}}}

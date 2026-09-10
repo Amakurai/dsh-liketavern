@@ -10,9 +10,9 @@ import type { TavernRemote } from './types.js'
 
 type ScriptEditorProps={label?:string;remote:TavernRemote;library:HelperScriptLibrary|HelperScriptAsset;onClose:()=>void;onSaved:()=>void}
 const libraryTarget=(library:ScriptEditorProps['library']):HelperScriptTarget=>'target' in library?library.target:{type:'character',cardId:library.cardId}
+const draftScope=(target:HelperScriptTarget)=>`helper-scripts:${target.type==='character'?target.cardId:JSON.stringify(target)}`
 export function HelperScriptEditor(props:ScriptEditorProps) {
-  const target=libraryTarget(props.library)
-  return <PersistentEditor remote={props.remote} scope={`helper-scripts:${target.type==='character'?target.cardId:JSON.stringify(target)}`}>
+  return <PersistentEditor remote={props.remote} scope={draftScope(libraryTarget(props.library))}>
     <HelperScriptEditorBody {...props}/>
   </PersistentEditor>
 }
@@ -21,10 +21,13 @@ export function HelperScriptEditorBody(props:ScriptEditorProps) {
   const t=useT(),toast=useToast(),tabsId=useId()
   const saving=useRef(false)
   const [query,setQuery]=useState(''),[section,setSection]=useState('code')
-  const [trees,setTrees]=useDraftState<HelperScriptTree[]>('trees',props.library.trees)
-  const [revision,setRevision]=useDraftState('revision',props.library.revision)
-  const [baseline,setBaseline]=useDraftState('baseline',JSON.stringify(props.library.trees))
-  const [dataTexts,setDataTexts]=useDraftState<Record<string,string>>('data',{})
+  // 设置面板内嵌时 PersistentEditor 复用父级快照，外层 scope 不生效；草稿键必须自带目标身份，
+  // 否则全局库的未保存草稿会在打开另一张卡的脚本库时被当作它的草稿恢复并保存进错误的卡。
+  const scope=draftScope(target)
+  const [trees,setTrees]=useDraftState<HelperScriptTree[]>(`${scope}:trees`,props.library.trees)
+  const [revision,setRevision]=useDraftState(`${scope}:revision`,props.library.revision)
+  const [baseline,setBaseline]=useDraftState(`${scope}:baseline`,JSON.stringify(props.library.trees))
+  const [dataTexts,setDataTexts]=useDraftState<Record<string,string>>(`${scope}:data`,{})
   const [selected,setSelected]=useState<string|null>(props.library.trees[0]?.id??null),[error,setError]=useState<string|null>(null),[busy,setBusy]=useState(false),[removing,setRemoving]=useState(false)
   const flat=trees.flatMap(tree=>tree.type==='folder'?[tree,...tree.scripts]:[tree])
   useEffect(()=>{if(!flat.some(item=>item.id===selected))setSelected(flat[0]?.id??null)},[trees,selected])

@@ -522,7 +522,9 @@ export function useLoader<T>(load: () => Promise<Envelope<T>>, deps: readonly un
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [...deps, seq, enabled])
-  return { state, reload: () => setSeq((s) => s + 1) }
+  // reload 身份稳定：调用方把它放进 effect 依赖（如绑定变更监听）时不会每次渲染都重新订阅。
+  const reload = useCallback(() => setSeq((s) => s + 1), [])
+  return { state, reload }
 }
 
 /** 信封 → 错误消息（ok 时返回 null）。 */
@@ -715,6 +717,41 @@ export function NullableNumInput(props: { value: number | null; onChange: (v: nu
         if (raw === '') return props.onChange(null)
         const v = Number(raw)
         if (Number.isFinite(v)) props.onChange(v)
+      }}
+    />
+  )
+}
+
+/** 以逗号或换行分隔的字符串列表。全角逗号与半角逗号等价，空项忽略。 */
+export function splitListText(text: string): string[] {
+  return text.split(/[,，\n]/).map((item) => item.trim()).filter(Boolean)
+}
+
+export function joinListText(items: readonly string[]): string {
+  return items.join(', ')
+}
+
+/**
+ * 关键词/标签这类列表输入：输入框持有原始文本，解析结果提交给业务状态。
+ * 若把业务数组重新拼接成受控值，用户键入的分隔符和尾随空格会被立即吞掉，无法输入第二项。
+ * 只有业务值与当前文本的解析结果不一致（切换条目、放弃修改、恢复草稿）时才采用外部值。
+ */
+export function ListInput(props: { value: readonly string[]; onChange: (items: string[]) => void; className?: string; style?: CSSProperties; placeholder?: string }) {
+  const label = useContext(ControlLabel)
+  const [text, setText] = useState(() => joinListText(props.value))
+  const external = joinListText(props.value)
+  const shown = joinListText(splitListText(text)) === external ? text : external
+  return (
+    <input
+      aria-labelledby={label?.labelId}
+      aria-describedby={label?.descriptionId}
+      className={props.className ?? 'dsh-tavern-input'}
+      style={props.style}
+      value={shown}
+      placeholder={props.placeholder}
+      onChange={(e) => {
+        setText(e.target.value)
+        props.onChange(splitListText(e.target.value))
       }}
     />
   )

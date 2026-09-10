@@ -107,7 +107,10 @@ export async function loadTemplateTimers(fs: WorkspaceFs, sessionId: string): Pr
   catch (cause) { throw new Error('模板定时状态损坏', { cause }) }
 }
 
-/** 普通计时更新与分支复制只改变计时字段；未迁移会话保留原路径，不创建空模板文件。 */
+/**
+ * 普通计时更新与分支复制只改变计时字段；未迁移会话保留原路径，不创建空模板文件。
+ * 内容未变时不重写：每轮都落一条同值 WAL 记录既无意义，也会给后续楼层回滚制造假依赖。
+ */
 export async function saveTemplateTimers(fs: WorkspaceFs, sessionId: string, timers: WITimerState): Promise<void> {
   await withWorkspaceLock(fs.root, async () => {
     const state = await loadTemplateState(fs)
@@ -115,7 +118,8 @@ export async function saveTemplateTimers(fs: WorkspaceFs, sessionId: string, tim
     if (state.wiTimers && Object.hasOwn(state.wiTimers, sessionId)) {
       await writeTemplateState(fs, { ...state, wiTimers: { ...state.wiTimers, [sessionId]: parsed } })
     } else {
-      await fs.writeText(legacyTimerPath(sessionId), JSON.stringify(parsed, null, 2) + '\n')
+      const path = legacyTimerPath(sessionId), raw = JSON.stringify(parsed, null, 2) + '\n'
+      if (raw !== await fs.readText(path)) await fs.writeText(path, raw)
     }
   })
 }

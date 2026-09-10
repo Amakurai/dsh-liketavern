@@ -135,7 +135,7 @@ export function sessionPrefixEvents(events: readonly SessionEvent[], boundaryInc
  * setup 走 mount（与官方 fork 相同），不要 composeFrom（那是 subagent 路径）。
  * 开场白必须预先编进 seed，禁止 create 之后再 append。
  */
-async function forkChildSession(ctx: Context, source: Session, seed: readonly SessionEvent[], childId = newChildId()): Promise<string> {
+async function forkChildSession(ctx: Context, source: Session, seed: readonly SessionEvent[], childId = newChildId()): Promise<{ childId: string; handle: { dispose(): Promise<void> } }> {
   const presets = agentPresetsOf(ctx)
   const parent = ctx.agents.get(source.id)
   const named = (parent ? presets.composedPreset(parent.ctx) : undefined) ?? sessionPresetId(ctx, source) ?? 'tavern'
@@ -183,9 +183,9 @@ async function forkChildSession(ctx: Context, source: Session, seed: readonly Se
       )
     }
   }
-  // The caller owns the handle only for creation cleanup; the running child remains registered.
-  // AgentRegistry removes its own handle ownership after create resolves.
-  return childId
+  // 调用方只在「分支尚未绑定完成」的清理路径上使用 handle；正常路径不 dispose，子会话保持注册运行。
+  // ctx.agents.get(id) 只返回裸 Agent，没有 dispose 能力，所以失败清理必须拿到这份 handle。
+  return { childId, handle }
 }
 
 /** 会话事件里 turn N 的 turn/start 的 seq；不存在返回 null。 */
@@ -406,8 +406,9 @@ async function forkAt(
   })
   const throughTurn = inheritedThroughTurn(seed)
   const walLineage = childWalLineage(binding, source.id, throughTurn)
+  let created: { dispose(): Promise<void> } | undefined
   try {
-    await forkChildSession(ctx, source, seed, childId)
+    created = (await forkChildSession(ctx, source, seed, childId)).handle
     await state.saveBinding({
       ...binding,
       sessionId: childId,
@@ -420,8 +421,9 @@ async function forkAt(
       ?.list()
       .find((item) => item.sessionIds.includes(childId))
     await workspace?.detachSession?.(childId).catch(() => {})
-    const child = ctx.agents.get(childId as Session['id']) as (Agent & { dispose?: () => Promise<void> }) | undefined
-    await child?.dispose?.().catch(() => {})
+    // 子会话已创建但绑定未落盘：用 create 返回的 handle 停止并移除它，否则会留下一个没有 Tavern 绑定、
+    // 插件无法操作的孤儿会话。
+    await created?.dispose().catch(() => {})
     await state.discardUnboundStory(binding.cardId, storyId, childId)
     throw new FloorError('fork-failed', `准备分支失败：${error instanceof Error ? error.message : String(error)}`)
   }
@@ -486,7 +488,9 @@ export async function regenerate({ ctx, state }: FloorDeps, sessionId: string, m
   if (!binding) throw new FloorError('no-binding', '当前会话未绑定 Tavern 角色卡')
   // fork/挂工作区/保存子绑定全部成功后才改 WAL；这些步骤失败时源工作区保持原状。
   const childId = await forkAt(ctx, state, source, binding, seq - 1, { forkTurn: target, rollbackFromTurn: target })
-  await resumeAndDrive(ctx, childId, createUserMessage({ content: userMessage.content, source: { kind: 'user' } }))
+  // 保留原消息来源：重生成一个续写轮时驱动消息仍是插件 notice，宿主不会把续写指令当用户台词渲染，
+  // 自动 MVU 的续写核对（按 source 识别）也仍能把新片段接回被截断的上一条回复。
+  await resumeAndDrive(ctx, childId, createUserMessage({ content: userMessage.content, source: userMessage.source }))
   return { childSessionId: childId, title: await branchTitle(state, binding, `从第 ${target} 层重生成`) }
 }
 

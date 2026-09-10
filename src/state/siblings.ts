@@ -8,9 +8,10 @@
  * 所有读改写（追加登记 / 读路径剪枝）必须经 mutateSiblingForks：模块级互斥串行化，
  * 否则不同会话的并发 fork 登记 / 剪枝落盘会互相覆盖丢记录。
  */
-import { readFile, writeFile } from 'node:fs/promises'
+import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { normalizeSiblingForks, recordSiblingFork, type SiblingFork } from '../core/siblings.js'
+import { atomicWrite } from './atomicWrite.js'
 
 /** 数据根 → 串行链。进程内数据根唯一，Map 实际只有一项，无需清理。 */
 const mutexes = new Map<string, Promise<unknown>>()
@@ -19,17 +20,30 @@ export function siblingsFile(rootDir: string): string {
   return join(rootDir, 'siblings.json')
 }
 
-/** 读取索引；文件缺失或损坏视为空索引。 */
-export async function loadSiblingForks(rootDir: string): Promise<SiblingFork[]> {
+/** 读取索引并区分「文件缺失」与「文件损坏」：读路径两者都当空索引，写路径不得把损坏覆盖成空。 */
+async function readSiblingForks(rootDir: string): Promise<{ forks: SiblingFork[]; corrupt: boolean }> {
+  let raw: string
   try {
-    return normalizeSiblingForks(JSON.parse(await readFile(siblingsFile(rootDir), 'utf8')))
+    raw = await readFile(siblingsFile(rootDir), 'utf8')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { forks: [], corrupt: false }
+    throw error
+  }
+  try {
+    return { forks: normalizeSiblingForks(JSON.parse(raw)), corrupt: false }
   } catch {
-    return []
+    return { forks: [], corrupt: true }
   }
 }
 
+/** 读取索引；文件缺失或损坏视为空索引。 */
+export async function loadSiblingForks(rootDir: string): Promise<SiblingFork[]> {
+  return (await readSiblingForks(rootDir)).forks
+}
+
+/** 原子替换：崩溃不会留下截断的索引文件（截断后读成空索引，再一次登记就把全部导航记录永久抹掉）。 */
 export async function saveSiblingForks(rootDir: string, forks: readonly SiblingFork[]): Promise<void> {
-  await writeFile(siblingsFile(rootDir), JSON.stringify(forks, null, 2) + '\n', 'utf8')
+  await atomicWrite(siblingsFile(rootDir), JSON.stringify(forks, null, 2) + '\n')
 }
 
 /**
@@ -42,7 +56,8 @@ export async function mutateSiblingForks(
 ): Promise<void> {
   const previous = mutexes.get(rootDir) ?? Promise.resolve()
   const run = previous.then(async () => {
-    const forks = await loadSiblingForks(rootDir)
+    const { forks, corrupt } = await readSiblingForks(rootDir)
+    if (corrupt) throw new Error('分支兄弟索引 siblings.json 损坏，拒绝以空索引覆盖；请修复或删除该文件')
     const next = await fn(forks)
     if (next !== forks && JSON.stringify(next) !== JSON.stringify(forks)) {
       await saveSiblingForks(rootDir, next)

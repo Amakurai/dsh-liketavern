@@ -8,6 +8,7 @@ import { act, create } from 'react-test-renderer'
 import type { ReactTestRenderer } from 'react-test-renderer'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PersistentEditor, useDraftState } from '../src/client/draftPersistence.js'
+import { HelperScriptEditorBody } from '../src/client/helperScriptEditor.js'
 import { useDraftGuard } from '../src/client/drafts.js'
 import { setTavernLocale } from '../src/client/i18n.js'
 import { Btn, ConfirmDialog } from '../src/client/util.js'
@@ -222,6 +223,42 @@ describe('编辑草稿持久化', () => {
     await act(async () => gate.resolve())
     expect(env.stored()).toEqual(snapshot('恢复版本 A'))
     expect(env.save).toHaveBeenCalledTimes(2)
+  })
+
+  it('嵌在面板快照里的脚本库编辑器按目标身份区分草稿，全局库的未保存脚本不会被当成另一张卡的草稿', async () => {
+    const env = environment()
+    const global = { target: { type: 'global' as const }, trees: [], revision: 'r-global' }
+    const character = { target: { type: 'character' as const, cardId: 'card-b' }, trees: [], revision: 'r-card' }
+    function Panel(props: { library: typeof global | typeof character }) {
+      return <PersistentEditor remote={env.api} scope={env.scope}>
+        <HelperScriptEditorBody remote={env.api} library={props.library} onClose={() => {}} onSaved={() => {}} />
+      </PersistentEditor>
+    }
+    let view!: ReactTestRenderer
+    await act(async () => { view = create(<Panel library={global} />) })
+    mounted.push(view)
+    const status = () => view.root.findByProps({ className: 'dsh-tavern-scriptSaveStatus' }).props.children as string
+    const addButton = view.root.findAllByType(Btn).find((button) => button.props.children === '添加脚本')
+    expect(addButton).toBeDefined()
+    await act(async () => addButton!.props.onClick())
+    expect(status()).toBe('有未保存的修改')
+    await advance()
+    const stored = env.stored() as { fields: Record<string, unknown> } | null
+    expect(stored).not.toBeNull()
+    const treeKeys = Object.keys(stored!.fields).filter((key) => key.endsWith(':trees'))
+    expect(treeKeys).toEqual(['helper-scripts:{"type":"global"}:trees'])
+    expect(stored!.fields[treeKeys[0]!]).toHaveLength(1)
+    await unmount(view)
+    await advance(1200)
+    await act(async () => { view = create(<Panel library={character} />) })
+    mounted.push(view)
+    expect(status()).toBe('所有修改已保存')
+    expect(JSON.stringify(view.toJSON())).not.toContain('新脚本')
+    await unmount(view)
+    await advance(1200)
+    await act(async () => { view = create(<Panel library={global} />) })
+    mounted.push(view)
+    expect(status()).toBe('有未保存的修改')
   })
 
   it('读取失败可以重试，成功后恢复内容且不新建空草稿覆盖原记录', async () => {

@@ -3,7 +3,8 @@ import type { ReactNode } from 'react'
 import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Menu } from '@deepseek-ai/dsh-client-ui-primitives'
-import { Field, NumInput, Select, SettingsRow, Toggle } from '../src/client/util.js'
+import { useState } from 'react'
+import { Field, ListInput, NumInput, Select, SettingsRow, Toggle } from '../src/client/util.js'
 
 vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
   Button: (props: { children?: ReactNode }) => <button>{props.children}</button>,
@@ -63,5 +64,36 @@ describe('共享表单控件', () => {
     expect(view.root.findByProps({id:implicit!.props['aria-labelledby']}).children).toEqual(['正文'])
     expect(explicit!.props['aria-label']).toBe('明确的名称')
     expect(explicit!.props['aria-labelledby']).toBeUndefined()
+  })
+
+  it('关键词列表输入保留正在键入的分隔符与空格，外部切换值时才覆盖文本', async () => {
+    const changes: string[][] = []
+    function Form(props: { initial: string[] }) {
+      const [keys, setKeys] = useState(props.initial)
+      return <>
+        <Field label="关键词"><ListInput value={keys} onChange={(next) => { changes.push(next); setKeys(next) }}/></Field>
+        <button onClick={() => setKeys(['外部', '重置'])}>外部重置</button>
+      </>
+    }
+    const view = await render(<Form initial={['a']}/>)
+    const input = () => view.root.findByType('input')
+    expect(view.root.findByProps({id:input().props['aria-labelledby']}).children).toEqual(['关键词'])
+    const type = async (text: string) => act(async () => input().props.onChange({ target: { value: text } }))
+    await type('a,')
+    expect(input().props.value).toBe('a,')
+    await type('a, ')
+    expect(input().props.value).toBe('a, ')
+    await type('a, b')
+    expect(input().props.value).toBe('a, b')
+    expect(changes.at(-1)).toEqual(['a', 'b'])
+    await type('a, b，c\n')
+    expect(changes.at(-1)).toEqual(['a', 'b', 'c'])
+    await type('')
+    expect(input().props.value).toBe('')
+    expect(changes.at(-1)).toEqual([])
+    await act(async () => view.root.findByType('button').props.onClick())
+    expect(input().props.value).toBe('外部, 重置')
+    await type('外部, 重置,')
+    expect(input().props.value).toBe('外部, 重置,')
   })
 })

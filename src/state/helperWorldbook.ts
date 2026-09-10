@@ -6,9 +6,18 @@ const positions=['before_character_definition','after_character_definition','bef
 const logics=['and_any','not_all','not_any','and_all'] as const
 const roles=['system','user','assistant'] as const
 const extraFields=['outletName','useProbability','caseSensitive','matchWholeWords','useGroupScoring','ignoreBudget','group','groupWeight','groupOverride','automationId'] as const
+/** 数组形态条目的原始 UID，与 parseLorebook 的 entryUid 同口径：非字符串/数字/布尔回落到下标。 */
+function rawUid(item:HelperTable,index:number):string{
+  const value=item.uid??item.id
+  return (typeof value==='string'?value:typeof value==='number'||typeof value==='boolean'?String(value):'')||String(index)
+}
+function rawArrayIds(input:unknown):string[]|null{
+  const rows=Array.isArray(input)?input:helperRecord(input)?input.entries:undefined
+  return Array.isArray(rows)?rows.flatMap((item,index)=>helperRecord(item)?[rawUid(item,index)]:[]):null
+}
 function sourceRows(input:unknown):Map<string,HelperTable>{
   const rows=Array.isArray(input)?input:helperRecord(input)?input.entries:undefined
-  if(Array.isArray(rows))return new Map(rows.flatMap((item,index)=>helperRecord(item)?[[String(item.uid??item.id??index),item] as [string,HelperTable]]:[]))
+  if(Array.isArray(rows))return new Map(rows.flatMap((item,index)=>helperRecord(item)?[[rawUid(item,index),item] as [string,HelperTable]]:[]))
   return new Map(helperRecord(rows)?Object.entries(rows).filter((pair):pair is [string,HelperTable]=>helperRecord(pair[1])):[])
 }
 export function readHelperWorldbook(input:unknown):{entries:HelperWorldbookEntry[];originalIds:Map<number,string>} {
@@ -16,6 +25,9 @@ export function readHelperWorldbook(input:unknown):{entries:HelperWorldbookEntry
   if(!Array.isArray(container)&&!helperRecord(container))throw new Error('世界书缺少合法条目结构')
   const values=Object.values(container)
   if(values.length>2000||values.some(value=>!helperRecord(value)))throw new Error('世界书条目损坏或超过 2000 项预算')
+  // 导入路径会给数组形态的重复 UID 加下标后缀以免丢条目；脚本桥面向的是可编辑资产，重复原始 UID 直接拒绝而不猜测归属。
+  const arrayIds=rawArrayIds(json)
+  if(arrayIds&&new Set(arrayIds).size!==arrayIds.length)throw new Error('世界书原始 UID 重复或包含保留名称')
   const normalized=parseLorebook(json,{source:'global',sourceRef:'helper'}),rows=sourceRows(json)
   const sourceIds=new Set<string>()
   for(const entry of normalized){if(['__proto__','prototype','constructor'].includes(entry.uid)||sourceIds.has(entry.uid))throw new Error('世界书原始 UID 重复或包含保留名称');sourceIds.add(entry.uid)}

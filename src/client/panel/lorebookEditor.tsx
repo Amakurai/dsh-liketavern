@@ -15,7 +15,7 @@ import {
 import type { WIPosition, WIRole, WISelectiveLogic, WISource, WorldInfoEntry } from '../../core/types.js'
 import { exportLorebook } from '../../state/lorebook.js'
 import { useT } from '../i18n.js'
-import { Badge, Btn, ConfirmDialog, Err, IconBtn, Muted, NumInput, NullableNumInput, Select, Toggle, errOf, runAsync } from '../util.js'
+import { Badge, Btn, ConfirmDialog, Err, IconBtn, ListInput, Muted, NumInput, NullableNumInput, Select, Toggle, errOf, runAsync } from '../util.js'
 import type { Envelope, TavernRemote } from '../types.js'
 
 const PAGE_SIZE = 40
@@ -57,17 +57,6 @@ const triValue = (v: boolean | null): string => (v === null ? '' : String(v))
 const triFrom = (v: string): boolean | null => (v === '' ? null : v === 'true')
 
 type FilterId = 'all' | 'on' | 'off' | 'constant'
-
-function splitKeys(text: string): string[] {
-  return text
-    .split(/[,，\n]/)
-    .map((s) => s.trim())
-    .filter(Boolean)
-}
-
-function joinKeys(keys: string[]): string {
-  return keys.join(', ')
-}
 
 function entryTitle(t: TFunc, entry: WorldInfoEntry): string {
   const comment = entry.comment.trim()
@@ -457,12 +446,12 @@ function EntryForm(props: {
       </label>
       <label className="dsh-tavern-field">
         <span className="dsh-tavern-fieldLabel">{t('lorebookEditor.form.keys')}</span>
-        <input
+        <ListInput
           className="dsh-tavern-input dsh-tavern-codeFont"
           style={{ width: '100%', height: 36, padding: '0 10px', fontSize: 13, boxSizing: 'border-box' }}
-          value={joinKeys(entry.keys)}
+          value={entry.keys}
           placeholder={t('lorebookEditor.form.keysPlaceholder')}
-          onChange={(e) => set({ keys: splitKeys(e.target.value) })}
+          onChange={(keys) => set({ keys })}
         />
       </label>
       <label className="dsh-tavern-field">
@@ -523,12 +512,12 @@ function EntryForm(props: {
         <div className="dsh-tavern-fieldRow">
           <label className="dsh-tavern-field">
             <span className="dsh-tavern-fieldLabel">{t('lorebookEditor.form.secondaryKeys')}</span>
-            <input
+            <ListInput
               className="dsh-tavern-input dsh-tavern-codeFont"
               style={{ width: '100%', height: 36, padding: '0 10px', fontSize: 13, boxSizing: 'border-box' }}
-              value={joinKeys(entry.secondaryKeys)}
+              value={entry.secondaryKeys}
               placeholder={t('lorebookEditor.form.secondaryKeysPlaceholder')}
-              onChange={(e) => set({ secondaryKeys: splitKeys(e.target.value) })}
+              onChange={(secondaryKeys) => set({ secondaryKeys })}
             />
           </label>
           <label className="dsh-tavern-field">

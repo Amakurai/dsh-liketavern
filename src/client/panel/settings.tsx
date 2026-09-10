@@ -29,10 +29,6 @@ type SubId = (typeof SUBS)[number]['id']
 let lastSub: SubId | undefined
 
 export function SettingsSection(props: { remote: TavernRemote }) {
-  return <DraftScope>{request=><SettingsContent {...props} request={request}/>}</DraftScope>
-}
-
-function SettingsContent(props: { remote: TavernRemote; request: (action:()=>void)=>void }) {
   const { remote } = props
   const t = useT()
   const tabsId = useId()
@@ -146,16 +142,22 @@ function SettingsContent(props: { remote: TavernRemote; request: (action:()=>voi
     <>
       {toast.node}
       <fieldset disabled={busy} className="dsh-tavern-editorFields">
+      {/* 设置草稿挂在本组件上，切子组不会丢，因此本组件的守卫只向面板级作用域汇报；
+          这里的内层作用域只保护子组内随切换卸载的嵌套编辑器（脚本库、卡片数据），不会为设置自身的草稿弹放弃确认。 */}
+      <DraftScope>{(request) => <>
       <Tabs
         id={tabsId} panelId={`${tabsId}-panel`} label={t('settings.title')}
         items={SUBS.map((s) => ({ id: s.id, label: t(s.labelKey) }))}
         value={sub}
-        onChange={(id) => props.request(() => {
-          lastSub = id as SubId
-          setSub(id as SubId)
-        })}
+        onChange={(id) => {
+          if (id === sub) return
+          request(() => {
+            lastSub = id as SubId
+            setSub(id as SubId)
+          })
+        }}
       />
-      {/* key=sub 让切组重新挂载并播 fade-up；草稿挂在父组件上，切组不丢未保存编辑 */}
+      {/* key=sub 让切组重新挂载并播 fade-up */}
       <div key={sub} id={`${tabsId}-panel`} role="tabpanel" aria-labelledby={`${tabsId}-${sub}`} tabIndex={0} className="dsh-tavern-rise">
         {sub === 'scripts' && <ScriptSettings remote={remote}/>}
         {sub === 'interface' && (
@@ -417,6 +419,7 @@ function SettingsContent(props: { remote: TavernRemote; request: (action:()=>voi
           </>
         )}
       </div>
+      </>}</DraftScope>
 
       <Err message={error} />
       </fieldset>

@@ -13,7 +13,7 @@ import { Button, IconDownloadOutline16, IconTrashOutline16, IconUserOutline16, T
 import { cachedAvatar, cachedCharacterDetail, invalidateCharacter } from '../cache.js'
 import { useT } from '../i18n.js'
 import type { CharacterDetail, CharacterInspect, CharacterSummary, TavernRemote } from '../types.js'
-import { Avatar, Btn, ConfirmDialog, Dialog, Err, Field, FileBtn, IconBtn, Muted, NumInput, SearchEmpty, SearchInput, Section, Select, Skeleton, clickableProps, downloadBase64, downloadJson, errOf, fileToBase64, runAsync, useLoader, useToast } from '../util.js'
+import { Avatar, Btn, ConfirmDialog, Dialog, Err, Field, FileBtn, IconBtn, ListInput, Muted, NumInput, SearchEmpty, SearchInput, Section, Select, Skeleton, clickableProps, downloadBase64, downloadJson, errOf, fileToBase64, runAsync, useLoader, useToast } from '../util.js'
 
 /** 按 cardId 拉头像 dataURL 的 Avatar 包装（失败时回落首字符/图标）；头像走进程内缓存。 */
 function CardAvatar(props: { remote: TavernRemote; cardId: string; name: string; size: number }) {
@@ -281,12 +281,7 @@ function CharacterDetailDialog(props: { remote: TavernRemote; cardId: string; on
               </Field>
             </div>
             <Field label={t('characters.detail.tags')}>
-              <input
-                className="dsh-tavern-input"
-                style={{ width: '100%' }}
-                value={detail.tags.join(', ')}
-                onChange={(e) => set({ tags: e.target.value.split(/[，,]/).map((s: string) => s.trim()).filter(Boolean) })}
-              />
+              <ListInput style={{ width: '100%' }} value={detail.tags} onChange={(tags) => set({ tags })} />
             </Field>
           </div>
           <Err message={error} />

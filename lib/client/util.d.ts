@@ -222,4 +222,19 @@ export declare function NullableNumInput(props: {
     onChange: (v: number | null) => void;
     width?: number;
 }): import("react").JSX.Element;
+/** 以逗号或换行分隔的字符串列表。全角逗号与半角逗号等价，空项忽略。 */
+export declare function splitListText(text: string): string[];
+export declare function joinListText(items: readonly string[]): string;
+/**
+ * 关键词/标签这类列表输入：输入框持有原始文本，解析结果提交给业务状态。
+ * 若把业务数组重新拼接成受控值，用户键入的分隔符和尾随空格会被立即吞掉，无法输入第二项。
+ * 只有业务值与当前文本的解析结果不一致（切换条目、放弃修改、恢复草稿）时才采用外部值。
+ */
+export declare function ListInput(props: {
+    value: readonly string[];
+    onChange: (items: string[]) => void;
+    className?: string;
+    style?: CSSProperties;
+    placeholder?: string;
+}): import("react").JSX.Element;
 export {};

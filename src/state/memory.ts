@@ -65,6 +65,14 @@ export function serializeMemory(meta: MemoryMeta, body: string): string {
 }
 
 /**
+ * 记忆 id 是否可作为 memory/ 下的单个文件名：不含路径分隔符、盘符、NUL，且不是 . 或 ..。
+ * 只挡越出目录与 WAL 记不下来的形状；本类生成的 `m-<base36>-<hex>` 与手放的普通文件名都通过。
+ */
+export function isMemoryId(id: unknown): id is string {
+  return typeof id === 'string' && id.length > 0 && id.length <= 255 && !/[\\/:\0]/.test(id) && id !== '.' && id !== '..'
+}
+
+/**
  * 解析 md 文本为 MemoryEntry。file 为相对 memory/ 目录的路径（如 `m-x.md`、`archive/m-x.md`）。
  * 缺少 frontmatter、created 缺失/非法、数组字段非 JSON 字符串数组时抛错。
  */
@@ -150,7 +158,13 @@ export class MemoryStore {
     this.similarTopK = options?.similarTopK ?? 3
   }
 
+  /**
+   * id 必须是单个文件名段。模型可以把任意字符串当 id 传进 update/delete：
+   * `archive/x` 会绕过「去重只查活跃条目」改写归档来源，`./x` 能读到文件却会在 WAL 里留下
+   * 日后无法读回的路径，让整个剧情的回退/分支失效。此处不区分归档与否统一拒绝。
+   */
   private pathOf(id: string, archived = false): string {
+    if (!isMemoryId(id)) throw new Error(`记忆 id 非法: ${id}`)
     return `${MEMORY_DIR}/${archived ? ARCHIVE_PREFIX : ''}${id}.md`
   }
 
@@ -201,6 +215,7 @@ export class MemoryStore {
   }
 
   private async getNow(id: string): Promise<MemoryEntry | null> {
+    if (!isMemoryId(id)) return null // 形状不合法的 id 等同不存在，工具层给出 not-found 而非异常
     const text = await this.fs.readText(this.pathOf(id))
     if (text === null) return null
     try {
@@ -274,7 +289,7 @@ export class MemoryStore {
   /** 事务删除（经 fs.delete）；不存在返回 false。 */
   async delete(id: string): Promise<boolean> {
     return withWorkspaceLock(this.fs.root, async () => {
-      if ((await this.fs.readText(this.pathOf(id))) === null) return false
+      if (!isMemoryId(id) || (await this.fs.readText(this.pathOf(id))) === null) return false
       await this.fs.delete(this.pathOf(id))
       this.invalidate()
       return true

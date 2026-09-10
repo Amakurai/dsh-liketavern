@@ -68,6 +68,18 @@ it('普通预设编辑保留当前脚本资产，显式重新导入可以替换�
   await state.deletePreset('factory')
   await expect(state.saveHelperScriptLibrary(saved.target,saved.revision,[])).rejects.toThrow(/不存在/)
 })
+it('绑定的预设被删除或损坏后，会话脚本包按没有预设脚本加载，而不是整条渲染链抛错',async()=>{
+  await save({type:'global'},'g');await save({type:'preset',presetId:'factory'},'p')
+  const binding=(await state.loadBinding('a'))!
+  await state.deletePreset('factory')
+  const context=await state.getSessionHelperScripts('a',binding.storyId!)
+  expect(context.libraries.map(item=>item.type)).toEqual(['global','character'])
+  expect(enabledHelperLibraries((await getHelperScriptBundle(ctx,state,'a')).libraries).map(script=>script.id)).toEqual(['g'])
+  await writeFile(join(root,'library/presets/factory.json'),'{broken')
+  state=new TavernState(state.paths,()=>resolveConfig({}));await state.init()
+  expect((await state.getSessionHelperScripts('a',binding.storyId!)).libraries.map(item=>item.type)).toEqual(['global','character'])
+  await expect(state.getHelperScriptLibrary({type:'preset',presetId:'factory'})).rejects.toThrow(/不存在|无法读取/)
+})
 it('跨库启用 ID 冲突返回运行错误但保留管理数据，损坏的全局库不能被当成空库覆盖',async()=>{
   await save({type:'global'},'duplicate');await save({type:'preset',presetId:'factory'},'duplicate')
   const bundle=await getHelperScriptBundle(ctx,state,'a')

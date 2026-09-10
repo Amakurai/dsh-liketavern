@@ -4,8 +4,12 @@
  * - recordSiblingFork：追加幂等（childSessionId 去重），拒绝自环；
  * - siblingSwipe：同父同层成组、位次按创建先后（根在前）、嵌套同层 fork 并组、
  *   不同楼层互不串组、exists 过滤已删会话后位次重算；
- * - pruneSiblingForks：剪掉悬空记录并报告变化。
+ * - pruneSiblingForks：剪掉悬空记录并报告变化；
+ * - state/siblings：损坏的索引文件不会被登记覆盖成空索引。
  */
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   normalizeSiblingForks,
@@ -14,6 +18,7 @@ import {
   siblingSwipe,
   type SiblingFork,
 } from '../src/core/siblings.js'
+import { appendSiblingFork, loadSiblingForks } from '../src/state/siblings.js'
 
 let seq = 0
 function makeFork(parent: string, turn: number, child: string, createdAt?: string): SiblingFork {
@@ -102,5 +107,21 @@ describe('pruneSiblingForks', () => {
     const same = pruneSiblingForks(pruned.forks, () => true)
     expect(same.changed).toBe(false)
     expect(same.forks).toHaveLength(1)
+  })
+})
+
+describe('siblings.json 存储', () => {
+  it('损坏的索引文件读作空，但登记不得把它覆盖成空索引；缺失文件正常创建', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'tavern-siblings-'))
+    try {
+      await appendSiblingFork(root, makeFork('A', 1, 'B'))
+      expect((await loadSiblingForks(root)).map((f) => f.childSessionId)).toEqual(['B'])
+      await writeFile(join(root, 'siblings.json'), '[{"parentSessionId":"A","turn":1,"childSessionId":"B","cre', 'utf8')
+      expect(await loadSiblingForks(root)).toEqual([])
+      await expect(appendSiblingFork(root, makeFork('A', 1, 'C'))).rejects.toThrow('损坏')
+      expect(await readFile(join(root, 'siblings.json'), 'utf8')).toContain('"cre')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
   })
 })

@@ -89,7 +89,8 @@
     "@deepseek-ai/dsh-scope": "0.1.2-rc.1",
     "@deepseek-ai/dsh-system-prompt": "0.1.2-rc.1",
     "@deepseek-ai/dsh-timeout": "0.1.2-rc.1",
-    "@deepseek-ai/dsh-user-approval": "0.1.2-rc.1"
+    "@deepseek-ai/dsh-user-approval": "0.1.2-rc.1",
+    "js-yaml": "4.3.2"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.2",
@@ -145,6 +146,6 @@
     "esbuild": "^0.25.0",
     "react-test-renderer": "18.3.1",
     "typescript": "^5.8.0",
-    "vitest": "^3.2.0"
+    "vitest": "4.1.11"
   }
 }

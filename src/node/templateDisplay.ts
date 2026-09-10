@@ -13,7 +13,7 @@ function formatTemplateMessage(value) {
   messageConverter ||= new __TavernTemplateLibraries.showdown.Converter({
     emoji:true,literalMidWordUnderscores:true,parseImgDimensions:true,tables:true,underline:true,
     simpleLineBreaks:true,strikethrough:true,disableForced4SpacesIndentedSublists:true,
-    metadata:false,noHeaderId:true,tablesHeaderId:false,
+    metadata:false,completeHTMLDocument:false,noHeaderId:true,tablesHeaderId:false,
   });
   const output=messageConverter.makeHtml(text);
   if(output.length>1024*1024) throw Error('消息格式化输出超过 1 MiB 上限');

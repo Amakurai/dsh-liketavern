@@ -147,6 +147,7 @@ dsh plugin --profile web add ./dsh-liketavern-0.2.1.tgz
 | [提示词模板说明](docs/PROMPT_TEMPLATES.md) | EJS、宏、装饰器与示例 |
 | [架构说明](docs/ARCHITECTURE.md) | 剧情隔离、分支回滚、记忆和提示词通道 |
 | [宿主兼容记录](docs/HOST_COMPATIBILITY.md) | 已核对的宿主行为及升级检查 |
+| [依赖安全记录](docs/DEPENDENCY_SECURITY.md) | 安全更新、Showdown 剩余告警与隔离边界 |
 | [开发约定](./AGENTS.md) | 代码边界、测试与交付要求 |
 
 ## 开发

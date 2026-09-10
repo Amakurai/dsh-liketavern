@@ -149,6 +149,7 @@ The detailed guides below are currently in Chinese.
 | [Prompt templates](docs/PROMPT_TEMPLATES.md) | EJS, macros, decorators, and examples |
 | [Architecture](docs/ARCHITECTURE.md) | Story isolation, branch rollback, memory, and prompt channels |
 | [Host compatibility](docs/HOST_COMPATIBILITY.md) | Verified host behavior and upgrade checks |
+| [Dependency security](docs/DEPENDENCY_SECURITY.md) | Security updates, remaining Showdown advisories, and sandbox boundaries |
 | [Development conventions](./AGENTS.md) | Code boundaries, testing, and delivery requirements |
 
 ## Development

@@ -434,15 +434,17 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
     }
   }
 
-  // EM 依附的 marker 缺席时，其世界书条目无处落位——记日志（对齐 ST 语义：marker 即落位点）
+  // EM 依附的 marker 缺席时，其世界书条目无处落位——记日志（对齐 ST 语义：marker 即落位点）。
+  // 只认 relative：in-chat 的 dialogueExamples marker 无深度锚定语义（下方第 5 步跳过），
+  // 不能作为 EM 落位点，否则唯一的 marker 处于 in-chat 时条目被静默丢弃且无任何日志。
   if (wi) {
     const hasEmMarker = input.preset.entries.some(
-      (e) => e.marker && e.markerId === Marker.DialogueExamples && e.enabled && triggered(e),
+      (e) => e.marker && e.markerId === Marker.DialogueExamples && e.enabled && e.position === 'relative' && triggered(e),
     )
     if (!hasEmMarker) {
       for (const pos of [WIPosition.BeforeExampleMessages, WIPosition.AfterExampleMessages] as const) {
         for (const a of wiAt(pos)) {
-          log.push({ kind: 'dropped-marker-content', detail: `dialogueExamples marker 缺席，丢弃 EM 条目 ${a.entry.key}` })
+          log.push({ kind: 'dropped-marker-content', detail: `dialogueExamples marker 缺席（in-chat 位置无锚定语义），丢弃 EM 条目 ${a.entry.key}` })
         }
       }
     }
@@ -606,6 +608,11 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
 
   if (input.transformPrompt) {
     history = history.map((m,index)=>({...m,content:input.transformPrompt!(m.content,{role:m.role,worldinfo:false,depth:history.length-index-1})}))
+    // 重映射产生新对象；originalHistory/historyDepth 按对象身份追踪，必须随之重建，
+    // 否则模板序列的 depth 归 0、history 标记落空、historyContent 与 asTurn 判定全部失效。
+    originalHistory.clear()
+    historyDepth.clear()
+    history.forEach((message,index)=>{originalHistory.add(message);historyDepth.set(message,history.length-index-1)})
     for (const m of [...beforeHistory,...afterHistory,...(anBottomMessage ? [anBottomMessage] : [])]) {
       const content = input.transformPrompt(m.content,{role:m.role,worldinfo:worldInfoPromptMessages.has(m),depth:0})
       if (content!==m.content) {m.content=content;asTurn(m)}

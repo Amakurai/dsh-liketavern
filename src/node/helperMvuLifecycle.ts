@@ -113,7 +113,9 @@ export async function stopForHelperMvu(state: TavernState, agent: Agent, signal:
     || last?.type !== 'assistant/chunk' || last.data.chunk.type !== 'finish' || last.data.chunk.reason.kind !== 'stop'
     || last.seq >= assistant.seq) return
   await abortable(queueHelperMvuStop(state, agent.id, { id: agent.id, snapshotEvents: () => events }), signal)
-  await waitForHelperMvu(state, agent, signal)
+  // 预检与 candidates() 口径不完全一致（surfaceOp/空正文）：queue 可能登记 0 个任务。
+  // 未初始化剧情若已无可初始化回复，includeInitialization 必须为 false，否则轮次停止被无限阻塞。
+  await waitForHelperMvu(state, agent, signal, helperMvuHasAssistant(agent.session))
 }
 
 /** 只从公开 claim 删除记录取得原目标；取消删除带 outcome=canceled，不被当作待恢复输入。 */

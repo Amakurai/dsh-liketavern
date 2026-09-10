@@ -4,6 +4,15 @@
 
 ## 未发布
 
+- 修复自动 MVU 停止门控的口径不一致：干净 stop 但正文为空的消息不登记任务时，未初始化剧情不再被锁进无限等待（`stopForHelperMvu` 补 `helperMvuHasAssistant` 守卫，与同文件其余调用点对齐）；turn-stopping 不会被空补全永久阻塞。
+- 修复开场白与首条输入的轮次撞号：`syncIdleAgentLastTurn` 现同时接受 maintenance 相位。此前开场白会话任务恰逢维护窗口时，`lastTurn` 校正被吞掉，锁存唤醒再开 turn 1 会清空已提交开场白楼层的 WAL 记录，导致该楼层不可回滚。
+- 修复角色卡编辑器保存后的数据丢失竞态：reload 往返窗口期内的新键入不再被 `setDraft(loaded)` 整体覆盖，「未保存」提示保持可见（以最近应用/保存基线判定窗口期编辑）。
+- 修复 `transformPrompt` 重映射历史后按对象身份追踪的深度/历史标记全部落空的问题：重映射后重建 `originalHistory`/`historyDepth` 索引，模板序列的 `historyContent` 回填与 `asTurn` 判定恢复正确（该钩子当前无调用方，属潜伏缺陷修复）。
+- EM 世界书条目的丢弃告警按 position 判定：唯一的 dialogueExamples marker 处于 in-chat 位置时不再抑制 `dropped-marker-content` 日志，条目去向可从触发日志追溯。
+- 聊天世界书文件在 `JSON.parse` 前增加体量闸（2.5 倍值预算上限，覆盖 2 空格美化膨胀），被外部篡改的超大文件不再造成无界读取与解析期内存尖峰，与 helper/template 状态文件的前置检查对齐。
+- cardId 校验拒绝 Windows 保留设备名（CON/NUL/COM1 等，含带扩展段的形态），RPC 直传保留名不再解析为设备路径。
+- `useToast` 的 React key 改为单调计数器，同毫秒两次 `show()` 不再共用 Toast 实例导致第二条沿用第一条的停留计时器。
+- 新增 10 个回归用例（MVU 空正文停止、maintenance 相位开场白、编辑器 reload 竞态、transformPrompt 身份追踪、EM 告警口径、体量闸、保留设备名、Toast key），全部先在未修复代码上验证失败后落盘。
 - 更新并固定开发测试框架 Vitest 4.1.11，通过根级覆盖和锁文件将开发宿主依赖链的 js-yaml 更新到 4.3.2，消除已知文件读取与 YAML 解析工作量限制告警；宿主包版本保持 0.1.2-rc.1。
 - Showdown 格式化显式关闭完整 HTML 文档输出，避免继承模板修改的全局默认项；新增标题/表格注入形状、恶意链接超时和恢复渲染的安全回归测试。暂无已发布修复版的 Showdown 告警及现有隔离措施见[依赖安全记录](docs/DEPENDENCY_SECURITY.md)。
 

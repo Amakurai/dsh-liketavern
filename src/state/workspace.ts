@@ -58,8 +58,12 @@ export interface WorkspaceIndex {
  * 不能只拦截 `..`：在 Windows 上 `join(dataRoot, '.')` 会直接指向角色库根目录，
  * 若随后执行递归删除，会把全部角色一并删掉。这里同时拒绝路径分隔符、首尾点与
  * 连续点，保留旧版可能使用的字母、数字、下划线、连字符、中文和中间单点。
+ * 另外拒绝 Windows 保留设备名（CON/NUL/COM1…，含带任意扩展段的形态如 CON.card）：
+ * RPC 直传这类 id 时 join 会解析为设备路径，后续 mkdir/rm 行为异常。
  */
+const WINDOWS_RESERVED_NAME = /^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9]|CLOCK\$)$/i
 export function isValidCardId(cardId: string): boolean {
+  if (WINDOWS_RESERVED_NAME.test(cardId.split('.')[0] ?? '')) return false
   return /^[A-Za-z0-9_一-龥-]+(?:\.[A-Za-z0-9_一-龥-]+)*$/.test(cardId)
 }
 

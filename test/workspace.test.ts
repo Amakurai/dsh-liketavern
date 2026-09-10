@@ -99,6 +99,17 @@ describe('newCardId', () => {
       expect(isValidCardId(id), id).toBe(false)
     }
   })
+
+  it('cardId 拒绝 Windows 保留设备名（含带扩展段的形态）', () => {
+    // RPC 直传 CON/NUL/COM1 等保留名（或 CON.card 形态）时，join 会解析为设备路径；
+    // 生成 id 带 hash 后缀不会撞上，这里挡的是直传入口。
+    for (const id of ['CON', 'con', 'NUL', 'PRN', 'AUX', 'COM1', 'LPT9', 'CON.card', 'com1.legacy']) {
+      expect(isValidCardId(id), id).toBe(false)
+    }
+    // 正常名不受影响：保留名只出现在首段时才拒绝。
+    expect(isValidCardId('console-hero-a1b2c3d4')).toBe(true)
+    expect(isValidCardId('card-com1-a1b2c3d4')).toBe(true)
+  })
 })
 
 describe('importCard', () => {

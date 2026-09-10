@@ -22,3 +22,9 @@ it('目录标识不成为路径，损坏活动副本、非法闲置书和 65 本
   const store={active:null,books:new Map(Array.from({length:65},(_,i)=>['book-'+i,book('bounded')]))}
   expect(()=>encodeChatWorldbooks(store)).toThrow(/64/)
 })
+it('解析前体量闸：被篡改的超大文件在 JSON.parse 前拒绝',()=>{
+  // 写路径按 32MiB 值预算封顶，但以 2 空格美化落盘；闸门按 2.5 倍预算放行合法美化文件，
+  // 超限的篡改文件在无界读取与 JSON.parse 前直接失败。
+  expect(()=>parseChatWorldbookFile(' '.repeat(96*1024*1024))).toThrow(/超限/)
+  expect(()=>parseChatWorldbookFile('null')).toThrow(/损坏/)
+})

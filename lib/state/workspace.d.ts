@@ -27,13 +27,6 @@ export interface WorkspaceIndex {
     files: WorkspaceIndexFile[];
     updatedAt: string;
 }
-/**
- * cardId 必须是 characters/ 下的单层目录名。
- *
- * 不能只拦截 `..`：在 Windows 上 `join(dataRoot, '.')` 会直接指向角色库根目录，
- * 若随后执行递归删除，会把全部角色一并删掉。这里同时拒绝路径分隔符、首尾点与
- * 连续点，保留旧版可能使用的字母、数字、下划线、连字符、中文和中间单点。
- */
 export declare function isValidCardId(cardId: string): boolean;
 /** 非法 cardId 统一抛错，供所有会创建/删除工作区句柄的入口复用。 */
 export declare function assertValidCardId(cardId: string): void;

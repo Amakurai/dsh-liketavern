@@ -465,8 +465,11 @@ export function Skeleton(props: { width?: number | string; height?: number; radi
 
 /** 顶部横幅通知（宿主 Toast：滑入→停留→淡出后 onDone）。瞬时操作反馈用它，上下文错误仍用 Err。 */
 export function useToast() {
+  // key 用单调计数器而不是 Date.now()：同毫秒两次 show 会撞 key，React 复用实例只换文本，
+  // 第二条消息沿用第一条的停留计时器提前淡出。计数器保证每次 show 都重建实例。
+  const counter = useRef(0)
   const [item, setItem] = useState<{ key: number; text: string } | null>(null)
-  const show = useCallback((text: string) => setItem({ key: Date.now(), text }), [])
+  const show = useCallback((text: string) => { counter.current += 1; setItem({ key: counter.current, text }) }, [])
   const node = item ? <Toast key={item.key} text={item.text} onDone={() => setItem(null)} /> : null
   return { show, node }
 }

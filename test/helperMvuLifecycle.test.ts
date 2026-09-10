@@ -16,6 +16,7 @@ import { resolveConfig } from '../src/node/config.js'
 import { onTurnStart, onTurnEnd } from '../src/node/sessionLifecycle.js'
 import { registerHelperMvuLifecycle, reserveHelperMvuMaintenance, restoreHelperMvuInputs, blockHelperMvuAssembly, stopForHelperMvu, runHelperMvuEnable } from '../src/node/helperMvuLifecycle.js'
 import { commitHelperMvuJob, helperMvuPending, prepareHelperMvuJob } from '../src/node/helperMvu.js'
+import { enterGreetingConversation } from '../src/node/floors.js'
 import { loadHelperState } from '../src/state/helper.js'
 import { runTavernPipeline } from '../src/node/pipeline.js'
 import { withWorkspaceLock } from '../src/state/workspaceLock.js'
@@ -199,6 +200,36 @@ describe('宿主自动 MVU 门控', () => {
     expect((await loadHelperState((await workspace()).fs)).mvu).toBeUndefined()
   })
 
+  it('干净 stop 但正文为空的消息不登记任务，也不把未初始化剧情锁进无限等待', async () => {
+    agent.session.append('turn/start', { turn: 1 }); await state.waitForSessionTasks(agent.id)
+    // 预检通过（唯一 finish、reason=stop、seq 顺序正确）但 candidates() 因空正文排除：
+    // queue 登记 0 个任务；未初始化且无可初始化回复时等待必须立即返回，不得阻塞 turn-stopping。
+    agent.session.append('step/start', { turn: 1, step: 1 })
+    agent.session.append('assistant/chunk', { turn: 1, step: 1, chunk: { type: 'finish', reason: { kind: 'stop' } } })
+    agent.session.append('assistant/message', { turn: 1, step: 1, message: createAssistantMessage({ content: [], source: { provider: 'deepseek', model: 'v4' } }) }, { surfaceOp: 'append' })
+    agent.session.append('step/end', { turn: 1, step: 1 })
+    await expect(stopForHelperMvu(state, agent, new AbortController().signal)).resolves.toBeUndefined()
+    expect((await loadHelperState((await workspace()).fs)).mvu).toBeUndefined()
+    // includeInitialization=false：无任务、无回执、无未登记楼层时不再视为待处理。
+    expect(await helperMvuPending(state, agent.id, false)).toBe(false)
+  })
+
+  it('干净 stop 且历史已有可初始化回复时，空正文消息仍等待既有初始化工作', async () => {
+    greeting()
+    // 真实流程：开场白初始化在轮次开启前由维护门控完成（首条输入测试同路径）。
+    await completeJob()
+    expect((await loadHelperState((await workspace()).fs)).mvu?.initialized).toBe(true)
+    agent.session.append('turn/start', { turn: 1 }); await state.waitForSessionTasks(agent.id)
+    agent.session.append('step/start', { turn: 1, step: 1 })
+    agent.session.append('assistant/chunk', { turn: 1, step: 1, chunk: { type: 'finish', reason: { kind: 'stop' } } })
+    agent.session.append('assistant/message', { turn: 1, step: 1, message: createAssistantMessage({ content: [], source: { provider: 'deepseek', model: 'v4' } }) }, { surfaceOp: 'append' })
+    agent.session.append('step/end', { turn: 1, step: 1 })
+    // 已初始化且无任务：空正文 stop 不登记也不等待，立即返回。
+    await expect(stopForHelperMvu(state, agent, new AbortController().signal)).resolves.toBeUndefined()
+    const saved = await loadHelperState((await workspace()).fs)
+    expect(saved.mvu?.pending).toEqual([]); expect(saved.mvu?.completed).toHaveLength(1)
+  })
+
   it('无开场白的首轮尚有 steering 时，不把本轮未结束回复当作可初始化历史阻断后续步骤', async () => {
     agent.session.append('turn/start', { turn: 1 }); await state.waitForSessionTasks(agent.id); stopMessage()
     expect(await blockHelperMvuAssembly(state, agent, new AbortController().signal)).toBe(false)
@@ -313,5 +344,30 @@ describe('宿主自动 MVU 门控', () => {
     await expect(runHelperMvuEnable(ctx, state, 'offline', save)).rejects.toThrow('请等待当前生成和维护结束')
     state.openFloors.delete('offline')
     expect(await runHelperMvuEnable(ctx, state, 'offline', save)).toBe('saved'); expect(save).toHaveBeenCalledTimes(1)
+  })
+
+  it('maintenance 相位内补开场白 turn 1 也对齐 lastTurn，锁存唤醒不撞号清空开场白楼层', async () => {
+    await state.saveBinding({ ...(await state.loadBinding(agent.id))!, helperMvu: false })
+    agent.session.append('agent-preset/selected', { agentPreset: 'tavern' })
+    // 复现真实时序：开场白会话任务已入队执行中，首条输入触发维护（maintenance 内
+    // waitForSessionTasks 等它完成），开场白恰在 maintenance 窗口内 append turn 1。
+    const release = Promise.withResolvers<void>()
+    const entering = state.enqueueSessionTask(agent.id, async () => {
+      await release.promise
+      expect(await enterGreetingConversation({ ctx, state }, agent.id)).toBe(true)
+      // maintenance 已开始：sync 必须在 maintenance 相位上也生效，否则恢复 lastTurn=0 后撞号。
+      expect(agent.phase.kind).toBe('maintenance')
+    })
+    // 等任务真正进入执行（挂起在 release 上），再让首条输入触发维护。
+    await until(() => state.triggerLogs.size >= 0 && release.promise !== undefined && entering !== undefined)
+    reserveOnInsert(); agent.followup(message('开场白后第一条'))
+    await until(() => agent.phase.kind === 'maintenance')
+    release.resolve(); await entering
+    expect(events().filter(event => event.type === 'turn/start').map(event => event.data.turn)).toEqual([1])
+    // maintenance 结束后锁存唤醒开真实轮次：必须是 turn 2，不与开场白 turn 1 撞号。
+    await agent.whenIdle(); await state.waitForSessionTasks(agent.id)
+    const turns = events().filter(event => event.type === 'turn/start').map(event => event.data.turn)
+    expect(turns[0]).toBe(1); expect(new Set(turns).size).toBe(turns.length); expect(turns.at(-1)).toBe(2)
+    expect(errors).toEqual([])
   })
 })

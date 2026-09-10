@@ -685,11 +685,17 @@ async function expandGreeting(state: TavernState, binding: SessionBinding, text:
   })
 }
 
-/** agent-loop 的 lastTurn 只在构造时从 turnBoundary 投影读取；补 turn 后把 idle 相位对齐，避免下一句抢号。 */
+/**
+ * agent-loop 的 lastTurn 只在构造时从 turnBoundary 投影读取；补 turn 后把空闲相位对齐，避免下一句抢号。
+ * maintenance 相位同样要对齐：runMaintenance 结束时恢复的是相位对象上捕获的 lastTurn
+ * （dsh-agent-loop 0.1.2 的 maintenance.lastTurn 与 phase.lastTurn 同源），在窗口内改写即随恢复生效。
+ * 否则首条输入触发的维护（如 reserveHelperMvuMaintenance）会把开场白 turn 1 的对齐吞掉，
+ * 锁存唤醒再开 turn 1 撞号，进而清空已提交开场白楼层的 WAL 记录。
+ */
 function syncIdleAgentLastTurn(ctx: Context | undefined, sessionId: string): void {
   const agent = (ctx as { agents?: { get(id: string): unknown } } | undefined)?.agents?.get(sessionId)
   const phase = (agent as { phase?: { kind?: string; lastTurn?: number } } | undefined)?.phase
-  if (!phase || phase.kind !== 'idle' || typeof phase.lastTurn !== 'number') return
+  if (!phase || (phase.kind !== 'idle' && phase.kind !== 'maintenance') || typeof phase.lastTurn !== 'number') return
   phase.lastTurn = 1
 }
 

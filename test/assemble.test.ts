@@ -1024,3 +1024,58 @@ it('确定常驻 @D 进 standing；概率或定时 @D 留在 turn', () => {
   expect(result.standing).not.toContain('条件深度设定')
   expect(result.turnContext).toContain('条件深度设定')
 })
+
+
+describe('transformPrompt 与模板序列的身份追踪', () => {
+  it('transformPrompt 重映射历史后，序列 depth/history 标记与 historyContent 仍按原身份生效', () => {
+    const seen: { depth: number[]; history: boolean[] } = { depth: [], history: [] }
+    const res = assemblePrompt(makeInput({
+      history: [
+        { role: 'user', content: 'u0' },
+        { role: 'assistant', content: 'a1' },
+        { role: 'user', content: 'u2' },
+      ],
+      transformPrompt: (text) => `[T]${text}`,
+      renderTemplate: (text) => text,
+      processTemplateSequence: (items) => {
+        // 只看三条真实历史消息（排除注入与骨架），验证 depth 与 history 标记未被重映射打断。
+        for (const item of items.filter((i) => ['[T]u0', '[T]a1', '[T]u2'].includes(i.message.content))) {
+          seen.depth.push(item.depth)
+          seen.history.push(item.history)
+          item.historyContent = `${item.message.content}-processed`
+        }
+        return {}
+      },
+    }))
+    // 三条历史：depth 2/1/0，全部标记为历史；重映射曾把身份追踪清空（depth 全 0、history 全 false）。
+    expect(seen.depth).toEqual([2, 1, 0])
+    expect(seen.history).toEqual([true, true, true])
+    // historyContent 回填进模拟副本，不丢模板处理结果。
+    expect(res.history.map((m) => m.content)).toContain('[T]u0-processed')
+    expect(res.history.map((m) => m.content)).toContain('[T]a1-processed')
+    expect(res.history.map((m) => m.content)).toContain('[T]u2-processed')
+  })
+})
+
+describe('EM 条目丢弃告警的 position 口径', () => {
+  it('唯一的 dialogueExamples marker 处于 in-chat 时，EM 条目丢弃仍记 dropped-marker-content 日志', () => {
+    const preset = defaultPreset()
+    // 移除 relative 的 dialogueExamples marker，只留一个 in-chat 版本（无锚定语义，不提供落位点）。
+    preset.entries = preset.entries.filter((e) => e.markerId !== Marker.DialogueExamples)
+    preset.entries.push(
+      presetEntry({ identifier: 'examples-in-chat', marker: true, markerId: Marker.DialogueExamples, position: 'in-chat', depth: 1 }),
+    )
+    const wi = wiOf({
+      [WIPosition.BeforeExampleMessages]: [act(makeWiEntry({ key: 'em-before', content: 'EM-BEFORE' }))],
+      [WIPosition.AfterExampleMessages]: [act(makeWiEntry({ key: 'em-after', content: 'EM-AFTER' }))],
+    })
+    const res = assemblePrompt(makeInput({ preset, wi }))
+    const dropped = res.log.filter((l) => l.kind === 'dropped-marker-content').map((l) => l.detail)
+    // in-chat marker 自身的跳过日志 + EM 条目丢弃日志都必须可见。
+    expect(dropped.some((d) => d.includes('in-chat 位置的 dialogueExamples marker 无深度锚定语义'))).toBe(true)
+    expect(dropped.some((d) => d.includes('丢弃 EM 条目 em-before'))).toBe(true)
+    expect(dropped.some((d) => d.includes('丢弃 EM 条目 em-after'))).toBe(true)
+    // 条目本身仍不注入（对齐 ST 栈位锚定语义）。
+    expect(res.messages.every((m) => !m.content.includes('EM-BEFORE'))).toBe(true)
+  })
+})

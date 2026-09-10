@@ -31,6 +31,10 @@ export function decodeChatWorldbooks(input:unknown|null):ChatWorldbooks {
 }
 export function parseChatWorldbookFile(text:string|null):ChatWorldbooks {
   if(text===null)return decodeChatWorldbooks(null)
+  // 解析前体量闸：写路径以 2 空格美化落盘，合法值（32MiB 值预算）最坏膨胀约 2 倍字符；
+  // 超过 2.5 倍预算必为外部篡改，与 helper.ts/template.ts 的 stat 前置检查同族，
+  // 避免被篡改的超大文件造成无界读取与解析期内存尖峰。
+  if(text.length>CHAT_WORLDBOOK_TOTAL_BYTES*2.5)throw new Error('聊天世界书文件超限')
   const value:unknown=JSON.parse(text)
   if(value===null)throw new Error('聊天世界书文件损坏')
   return decodeChatWorldbooks(value)

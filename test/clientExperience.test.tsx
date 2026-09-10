@@ -125,6 +125,42 @@ describe('编辑草稿保护', () => {
     await act(async () => view.root.findAllByType(Dialog).find((d) => d.props.width === 'xl')!.props.onClose())
     expect(confirmation(view)).toBeDefined()
   })
+
+  it('保存成功后的 reload 往返窗口期内继续编辑，落地时不覆盖窗口期输入', async () => {
+    // 复现竞态：save 成功 → busy 复位、表单解锁 → reload RPC 仍在飞行 → 用户继续键入 →
+    // reload 落地。旧行为会 setDraft(loaded) 整体覆盖窗口期编辑并把 dirty 复位；现在必须保留草稿。
+    const card = detail('reload-character')
+    let serverCard = card
+    const pendingReloads: Array<(value: ReturnType<typeof ok<CharacterDetail>>) => void> = []
+    const getCharacterDetail = vi.fn(async () => new Promise<ReturnType<typeof ok<CharacterDetail>>>((resolve) => { pendingReloads.push(resolve) }))
+    const saveCharacter = vi.fn(async (request: { alternateGreetings: string[] }) => {
+      serverCard = { ...serverCard, alternateGreetings: request.alternateGreetings }
+      return ok({ cardId: serverCard.cardId, name: serverCard.name })
+    })
+    const remote = { listCharacters: async () => ok({ items: [summary(card.cardId, card.name)] }), getCharacterDetail,
+      getAvatar: async () => ok({ dataUrl: null }), saveCharacter } as unknown as TavernRemote
+    const view = await render(<CharactersSection remote={remote} />)
+    await act(async () => view.root.findByProps({ className: 'dsh-tavern-charCard' }).props.onClick())
+    // 首次加载落地（冲刷全部挂起的详情请求，等待 loading → ready 状态更新）。
+    const flushReloads = () => { for (const resolve of pendingReloads.splice(0)) resolve(ok(serverCard)) }
+    const settle = async () => { await act(async () => { flushReloads(); await Promise.resolve(); await Promise.resolve(); await Promise.resolve() }) }
+    await settle()
+    const byValue = (value: string) => view.root.findAllByType('textarea').find((n) => n.props.value === value)!
+    await act(async () => byValue('第一段\n第二段').props.onChange({ target: { value: '保存的版本' } }))
+    await act(async () => button(view, '保存').props.onClick())
+    expect(saveCharacter).toHaveBeenCalledTimes(1)
+    // busy 已随保存收尾复位；reload 仍挂起（loading 态），窗口期内继续键入。
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    expect(pendingReloads.length).toBeGreaterThan(0)
+    const fieldset = view.root.findByType('fieldset')
+    expect(fieldset.props.disabled).toBe(false)
+    await act(async () => byValue('保存的版本').props.onChange({ target: { value: '窗口期的新编辑' } }))
+    await act(async () => { flushReloads() })
+    await act(async () => {})
+    // reload 落地：窗口期编辑保留，dirty 提示仍可见，不被静默覆盖。
+    expect(view.root.findAllByType('textarea').some((n) => n.props.value === '窗口期的新编辑')).toBe(true)
+    expect(JSON.stringify(view.toJSON())).toContain('未保存')
+  })
 })
 
 describe('剧情上下文', () => {

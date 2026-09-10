@@ -1005,6 +1005,11 @@ it('同分计分组保留权重选择，低分 override 不绕过已启用的计
 /** 最少激活扩展与递归共用一次评估，不能重复定时/概率或越过条目深度。 */
 describe('最少激活历史扩展',()=>{
   const messages=[userMsg('old'),userMsg('middle'),userMsg('latest')]
+  it('扩深不能重置总扫描预算：两轮只扫描最近两条消息',()=>{
+    const entries=[makeEntry({key:'oldest',keys:['old']})]
+    const settings=makeSettings({scanDepth:1,minActivations:1,maxRecursionSteps:2,recursiveScan:false})
+    expect(activatedKeys(run({entries,messages,settings}))).toEqual([])
+  })
   it('逐条扩深到目标，最大深度与条目深度独立约束',()=>{
     const entries=[makeEntry({key:'a',keys:['middle']}),makeEntry({key:'b',keys:['old']}),makeEntry({key:'fixed',keys:['old'],scanDepth:1})]
     const evaluate=(settings:Partial<WorldInfoGlobalSettings>)=>activatedKeys(run({entries,messages,settings:makeSettings({scanDepth:1,recursiveScan:false,...settings})}))
@@ -1017,7 +1022,27 @@ describe('最少激活历史扩展',()=>{
   it('扩深找到的条目继续递归，递归排除不阻止直接历史命中',()=>{
     const entries=[makeEntry({key:'a',keys:['middle'],content:'recurse',excludeRecursion:true}),makeEntry({key:'b',keys:['recurse']})]
     expect(activatedKeys(run({entries,messages,settings:makeSettings({scanDepth:1,minActivations:2,recursiveScan:true})}))).toEqual(['a','b'])
+    // 扩深可以触发递归，但初始、扩深、递归三次扫描仍受同一个总预算约束。
     expect(activatedKeys(run({entries,messages,settings:makeSettings({scanDepth:1,minActivations:2,recursiveScan:true,maxRecursionSteps:2})}))).toEqual(['a'])
+    expect(activatedKeys(run({entries,messages,settings:makeSettings({scanDepth:1,minActivations:2,recursiveScan:true,maxRecursionSteps:3})}))).toEqual(['a','b'])
+  })
+  it('扩展轮的递归门槛与首轮同口径：delayUntilRecursion=1 的条目在扩展轮递归可激活',()=>{
+    const entries=[makeEntry({key:'direct',keys:['latest']}),makeEntry({key:'delayed',keys:['recurse'],delayUntilRecursion:1}),makeEntry({key:'feeder',keys:['older'],content:'recurse'})]
+    const history=[userMsg('older'),userMsg('latest')]
+    // 无扩展：direct 直接命中，无递归输入 → delayed 不可达
+    expect(activatedKeys(run({entries,messages:history,settings:makeSettings({scanDepth:1,recursiveScan:true})}))).toEqual(['direct'])
+    // 扩展轮 feeder 经扩深命中后其内容进入递归 level=1：delayed 应与正常递归路径同口径激活
+    expect(activatedKeys(run({entries,messages:history,settings:makeSettings({scanDepth:1,recursiveScan:true,minActivations:2,maxRecursionSteps:3})}))).toEqual(['delayed','direct','feeder'])
+    // 对照：直接递归路径下 delayed 在首轮递归激活
+    const direct=[makeEntry({key:'delayed',keys:['recurse'],delayUntilRecursion:1}),makeEntry({key:'feeder',keys:['latest'],content:'recurse'})]
+    expect(activatedKeys(run({entries:direct,messages:[userMsg('latest')],settings:makeSettings({scanDepth:1,recursiveScan:true,maxRecursionSteps:2})}))).toEqual(['delayed','feeder'])
+  })
+  it('空内容递归轮不消耗递归步数',()=>{
+    // direct 命中但 content 为空：递归轮无可扫文本即终止，level 不 +1；
+    // 否则 maxRecursionSteps=2 的预算被空轮吃掉，minActivations 扩展轮被挡死。
+    const entries=[makeEntry({key:'direct',keys:['latest']}),makeEntry({key:'older',keys:['old'],content:'x'})]
+    const history=[userMsg('old'),userMsg('latest')]
+    expect(activatedKeys(run({entries,messages:history,settings:makeSettings({scanDepth:1,recursiveScan:true,minActivations:2,maxRecursionSteps:2})}))).toEqual(['direct','older'])
   })
   it('扩深不会重复掷骰或扣减旧定时器，达到预算溢出后停止扩深',()=>{
     let rolls=0

@@ -399,6 +399,26 @@ describe('standingRevTags', () => {
     expect(loadSpy).toHaveBeenCalledTimes(1)
     loadSpy.mockRestore()
   })
+
+  it('deleteCharacter 逐出全部剧情句柄与正则缓存，不留滞留条目', async () => {
+    const { cardId } = await importCard(join(root, 'characters'), makeCard())
+    // 预热共享句柄、剧情句柄（saveBinding 建剧情快照）与卡级正则缓存
+    const binding = makeBinding({ cardId, presetId: null })
+    await state.rulesFor(binding)
+    await state.saveBinding({ ...binding, storyId: undefined })
+    const storyId = (await state.loadBinding(binding.sessionId))!.storyId!
+    await state.storyWorkspace(cardId, storyId)
+    const workspaces = (state as unknown as { workspaces: Map<string, unknown> }).workspaces
+    expect(workspaces.has(cardId)).toBe(true)
+    expect(workspaces.has(cardId + '/' + storyId)).toBe(true)
+
+    await state.deleteCharacter(cardId)
+    // 共享句柄、剧情句柄（cardId/ 前缀）与卡级正则缓存全部逐出
+    expect([...workspaces.keys()].some((key) => key === cardId || key.startsWith(`${cardId}/`))).toBe(false)
+    const cardRegexCache = (state as unknown as { cardRegexCache: Map<string, unknown> }).cardRegexCache
+    expect(cardRegexCache.has(cardId)).toBe(false)
+    expect(await state.loadCharacter(cardId)).toBeNull()
+  })
 })
 
 describe('peekStanding', () => {

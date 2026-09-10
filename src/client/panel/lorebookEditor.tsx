@@ -206,20 +206,30 @@ function LorebookEditorContent(props: LorebookEditorProps & { draftKey: string }
   // 整段包进 runAsync：typert 传输失败或入参严格校验不过时是 reject 而非错误信封，
   // 传输层 reject 也必须解锁按钮——否则 busy 卡死，两个「保存」都点不动，
   // 编辑器里这一批未写回的条目全部作废。
+  const entriesRef = useRef(entries)
+  entriesRef.current = entries
   const save = () =>
     runAsync(setBusy, setError, async () => {
+      // 闭包捕获点击保存那一刻的渲染值；飞行期间的新编辑经 ref 在回包后复核。
+      const saved = entries
       const json =
         target.kind === 'character'
-          ? { name: target.name, ...(exportLorebook(entries, target.name) as object) }
-          : exportLorebook(entries, target.name)
+          ? { name: target.name, ...(exportLorebook(saved, target.name) as object) }
+          : exportLorebook(saved, target.name)
       const r = await props.save(json)
       const err = errOf(r)
       if (err) setError(err)
       else {
-        savedEntries.current = entries
-        setDirty(false)
-        guard.clearDraft()
-        props.onSaved()
+        savedEntries.current = saved
+        // 保存飞行期间继续键入的内容没有落盘：只有当前值仍等于已保存快照才清 dirty，
+        // 否则「未保存」徽标消失 + 草稿被删会把这批编辑静默蒸发。
+        // 此时也不触发 onSaved——调用方（如聊天世界书）会在其中关闭编辑器，
+        // 把还有未保存编辑的用户直接踢出去。
+        if (JSON.stringify(entriesRef.current) === JSON.stringify(saved)) {
+          setDirty(false)
+          guard.clearDraft()
+          props.onSaved()
+        }
       }
     })
 

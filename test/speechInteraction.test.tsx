@@ -11,6 +11,7 @@ import { Btn,FileBtn,SearchInput,Select,Tabs,Toggle } from '../src/client/util.j
 import { HelperScriptEditorBody } from '../src/client/helperScriptEditor.js'
 import type { HelperSnapshot } from '../src/core/helperRuntime.js'
 import { HelperScripts } from '../src/client/helperScripts.js'
+import { scriptStatusStore } from '../src/client/helperScriptStatus.js'
 import { parseHelperScriptTrees } from '../src/core/helperScripts.js'
 import { splitTemplateDisplay } from '../src/core/templateDisplay.js'
 import { presentRenderedOutput } from '../src/core/displaySanitize.js'
@@ -617,4 +618,16 @@ it('旧卡高度回执仅接受本 iframe，原生探测不会覆盖卡片自己
  await act(async()=>send({type:'iframe-resize',height:430}));expect(view!.root.findByType('iframe').props.style.height).toBe(430)
  await act(async()=>send({source:'dsh-tavern-card',action:'resize',height:610}));expect(view!.root.findByType('iframe').props.style.height).toBe(430)
  await act(async()=>send({type:'resizeIframe',height:999999}));expect(view!.root.findByType('iframe').props.style.height).toBe(8000)
+})
+
+/** 超预算诊断必须与实际挂载一致；禁用的脚本集合不应误报运行故障。 */
+it.each([true,false])('33 个启用脚本在会话 enabled=%s 时正确发布预算状态',async enabled=>{
+  const trees=parseHelperScriptTrees(Array.from({length:33},(_,index)=>({id:'budget-'+index,enabled:true,content:'void 0'})))
+  const getHelperScriptBundle=vi.fn(async()=>({ok:true as const,value:{cardId:'card',revision:'budget',storyId:'budget-story',trees,enabled,whitelist:[],messageId:null}}))
+  await mount(<HelperScripts remote={{getHelperScriptBundle} as unknown as TavernRemote} sessionId="budget-session"/>)
+  expect(view!.root.findAllByType('iframe')).toHaveLength(0)
+  const status=scriptStatusStore.getSnapshot().find(item=>item.sessionId==='budget-session')!
+  expect(status.state).toBe(enabled?'error':'disabled')
+  if(enabled)expect(status.error).toContain('32')
+  else expect(status.error).toBeUndefined()
 })

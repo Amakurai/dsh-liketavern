@@ -54,7 +54,7 @@ export async function helperWorldbookOperation(ctx:Context,state:TavernState,ses
   name(request.name);if(request.label!==undefined)name(request.label)
   if(!['get','replace','create','upsert','delete'].includes(request.operation))throw new Error('世界书操作无效')
   const privateId=chatWorldbookId(request.name)
-  const run=async(writeChat?:(raw:unknown|null)=>Promise<void>):Promise<HelperWorldbookResult>=>withWorkspaceLock(state.paths.sessions,async()=>{
+  const run=async(writeChat?:(raw:unknown|null,binding:SessionBinding)=>Promise<void>):Promise<HelperWorldbookResult>=>withWorkspaceLock(state.paths.sessions,async()=>{
     const {binding,chat}=await selected(state,sessionId,request.storyId,request.bindingRevision)
     const lock=request.name===CHARACTER?join(state.paths.characters,binding.cardId):state.paths.root
     return withWorkspaceLock(lock,async()=>{
@@ -76,7 +76,7 @@ export async function helperWorldbookOperation(ctx:Context,state:TavernState,ses
         if(!writeChat)throw new Error('聊天世界书缺少楼层写入上下文')
         if(next===null){chat.books.delete(privateId);if(chat.active===privateId)chat.active=null}
         else{if(chat.books.size===0&&privateId==='main')chat.active='main';chat.books.set(privateId,next)}
-        await writeChat(encodeChatWorldbooks(chat))
+        await writeChat(encodeChatWorldbooks(chat),binding)
         const context=await contextFrom(state,binding,chat)
         return next===null?{deleted:true,context}:{created:current.raw===null,snapshot:snapshot(next),context}
       }
@@ -92,8 +92,10 @@ export async function helperWorldbookOperation(ctx:Context,state:TavernState,ses
       return {created:current.raw===null,snapshot:snapshot(saved.raw,id)}
     })
   })
-  if(privateId!==null&&request.operation!=='get')return withHelperStoryWrite(ctx,state,sessionId,messageId,request.storyId,async(fs,begin)=>run(async raw=>{
-    await begin();try{if(raw===null)await fs.delete(CHAT_WORLDBOOK_PATH);else await fs.writeText(CHAT_WORLDBOOK_PATH,JSON.stringify(raw,null,2)+'\n')}finally{state.invalidateChatLorebook((await state.loadBinding(sessionId))!.cardId,request.storyId)}
+  if(privateId!==null&&request.operation!=='get')return withHelperStoryWrite(ctx,state,sessionId,messageId,request.storyId,async(fs,begin)=>run(async(raw,binding)=>{
+    await begin();try{if(raw===null)await fs.delete(CHAT_WORLDBOOK_PATH);else await fs.writeText(CHAT_WORLDBOOK_PATH,JSON.stringify(raw,null,2)+'\n')}finally{
+      // 使用本次实际写入的绑定；并发解绑/换卡不能跳过失效，也不能掩盖写入错误。
+      state.invalidateChatLorebook(binding.cardId,request.storyId)}
   }))
   return run()
 }
@@ -106,7 +108,7 @@ export async function rebindHelperWorldbooks(ctx:Context,state:TavernState,sessi
     const existing=await withWorkspaceLock(state.paths.sessions,async()=>{const {binding,chat}=await selected(state,sessionId,request.storyId,request.bindingRevision);return chat.active===null?null:contextFrom(state,binding,chat)})
     if(existing)return existing
   }
-  const run=async(writeChat?:(raw:unknown|null)=>Promise<void>)=>withWorkspaceLock(state.paths.sessions,async()=>{
+  const run=async(writeChat?:(raw:unknown|null,binding:SessionBinding)=>Promise<void>)=>withWorkspaceLock(state.paths.sessions,async()=>{
     const {binding,chat}=await selected(state,sessionId,request.storyId,request.bindingRevision)
     return withWorkspaceLock(state.paths.root,async()=>{
       const shared=async(input:unknown)=>{const ref=name(input);if(chatWorldbookId(ref)!==null)throw new Error('剧情书不能作为共享角色或全局绑定');const id=await resolveBook(state,ref);if(id===null)throw new Error('绑定的世界书不存在');const book=await rawBook(state,binding,id,chat);if(book.raw===null)throw new Error('绑定的世界书不存在');readHelperWorldbook(book.raw);return id}
@@ -144,11 +146,12 @@ export async function rebindHelperWorldbooks(ctx:Context,state:TavernState,sessi
           chat.active=target
         }
       }
-      await writeChat(encodeChatWorldbooks(chat));return contextFrom(state,binding,chat)
+      await writeChat(encodeChatWorldbooks(chat),binding);return contextFrom(state,binding,chat)
     })
   })
   if(request.kind==='global'||request.kind==='character'||request.kind==='settings')return run()
-  return withHelperStoryWrite(ctx,state,sessionId,messageId,request.storyId,async(fs,begin)=>run(async raw=>{
-    await begin();try{if(raw===null)await fs.delete(CHAT_WORLDBOOK_PATH);else await fs.writeText(CHAT_WORLDBOOK_PATH,JSON.stringify(raw,null,2)+'\n')}finally{state.invalidateChatLorebook((await state.loadBinding(sessionId))!.cardId,request.storyId)}
+  return withHelperStoryWrite(ctx,state,sessionId,messageId,request.storyId,async(fs,begin)=>run(async(raw,binding)=>{
+    await begin();try{if(raw===null)await fs.delete(CHAT_WORLDBOOK_PATH);else await fs.writeText(CHAT_WORLDBOOK_PATH,JSON.stringify(raw,null,2)+'\n')}finally{
+      state.invalidateChatLorebook(binding.cardId,request.storyId)}
   }))
 }

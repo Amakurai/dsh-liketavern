@@ -40,11 +40,25 @@ export async function isolated<K extends keyof ComputeJobs>(kind: K, input: Comp
         clearTimeout(timer)
         void worker.terminate().then(() => error ? reject(error) : resolve(value!), reject)
       }
-      let timer = setTimeout(() => finish(new Error('提示词 worker 启动超时')), 10_000)
+      // 多次沙箱重建共享累计预算；切换阶段只暂停计时，不能重置已用额度。
+      const remaining = { loading: 10_000, computing: timeoutMs }
+      let phase: 'loading' | 'computing' = 'loading'
+      let phaseStarted = performance.now()
+      const expired = () => finish(new Error(phase === 'loading'
+        ? '提示词 worker 启动或装载超时' : '第三方正则或提示词计算超时，已终止 worker'))
+      let timer = setTimeout(expired, remaining.loading)
       worker.on('message', (message) => {
-        if (message.ready) {
+        if (settled || message.ready) return
+        if (message.loading || message.computing) {
+          const next = message.computing ? 'computing' : 'loading'
+          if (next === phase) return
+          const now = performance.now()
+          remaining[phase] -= now - phaseStarted
           clearTimeout(timer)
-          timer = setTimeout(() => finish(new Error('第三方正则或提示词计算超时，已终止 worker')), timeoutMs)
+          if (remaining[phase] <= 0) { expired(); return }
+          phase = next
+          phaseStarted = now
+          timer = setTimeout(expired, remaining[phase])
         } else if (message.error) finish(new Error(message.error))
         else finish(undefined, message.value)
       })

@@ -127,10 +127,18 @@ describe('Wal', () => {
   it('已存在且未 commit 的同名单元再次 begin 报错', async () => {
     await wal.beginFloor('f1')
     await expect(wal.beginFloor('f1')).rejects.toThrow(/已存在且未提交/)
-    // 已提交的同名单元允许重新开始（旧记录清空）
+    // 已提交也不能覆盖：受控追加使用显式 reopenFloor。
     await wal.commitFloor('f1')
-    await expect(wal.beginFloor('f1')).resolves.toBeUndefined()
-    expect(await readLines(join(walDir, 'f1', 'records.jsonl'))).toEqual([])
+    await expect(wal.beginFloor('f1')).rejects.toThrow(/已存在/)
+    expect((await wal.validateFloor('f1')).committed).toBe(true)
+  })
+
+  it('元数据缺失的已有楼层拒绝覆盖，原记录保留供恢复', async () => {
+    await wal.beginFloor('f1')
+    await wal.record('f1', 'a.md', 'before')
+    await rm(join(walDir, 'f1', 'meta.json'))
+    await expect(wal.beginFloor('f1')).rejects.toThrow(/已存在/)
+    expect(await readLines(join(walDir, 'f1', 'records.jsonl'))).toEqual([{ seq: 1, path: 'a.md', before: 'before' }])
   })
 
   it('同层同路径重复 record 只保留首次快照', async () => {
@@ -490,4 +498,17 @@ describe('WorkspaceFs.list / listStats', () => {
     expect(await fs.list('nope')).toEqual([])
     expect(await fs.listStats('nope')).toEqual([])
   })
+})
+
+/** 已提交楼层属于既有剧情：重复开层不能销毁任何回滚镜像。 */
+it('已提交楼层重复 begin 拒绝且原始记录仍可在重启后回滚', async () => {
+  const file = join(workspace, 'a.md')
+  await writeFile(file, 'before')
+  await wal.beginFloor('duplicate')
+  await wal.recordChange('duplicate', 'a.md', 'before', 'after', 'utf8', 'utf8')
+  await writeFile(file, 'after')
+  await wal.commitFloor('duplicate')
+  await expect(wal.beginFloor('duplicate')).rejects.toThrow(/已存在/)
+  await new Wal(walDir).rollbackFloor('duplicate', workspace)
+  expect(await readFile(file, 'utf8')).toBe('before')
 })

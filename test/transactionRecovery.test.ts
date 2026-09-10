@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { LlmRuntime } from '@deepseek-ai/dsh-llm'
 import { resolveConfig } from '../src/node/config.js'
 import { TavernState } from '../src/node/state.js'
+import { onTurnStart, onTurnEnd } from '../src/node/sessionLifecycle.js'
 import { compressOldestMemories } from '../src/node/memoryMaintenance.js'
 import { MemoryStore } from '../src/state/memory.js'
 import { WorldDeltaStore } from '../src/state/worlddelta.js'
@@ -270,4 +271,21 @@ it('摘要遗漏的关键词仍能命中归档来源，去重写入只针对活�
   expect((await ws.memory.findSimilar('赤铜飞燕', [])).every((hit) => !hit.entry.archived)).toBe(true)
   await rollback()
   expect(await ws.memory.search('赤铜飞燕')).toEqual([])
+})
+
+/** 宿主重复 turn/start 不得覆盖已经收口的楼层日志。 */
+it('宿主重用已完成轮号时拒绝开层，原剧情仍能完整回滚',async()=>{
+  const {cardId}=await state.createCharacter('工厂角色')
+  await state.saveBinding({sessionId:'collision',cardId,presetId:null,personaId:null,lorebookIds:[],characterLorebookId:null,interactiveCards:null,greetingIndex:0,createdAt:new Date(0).toISOString()})
+  const binding=(await state.loadBinding('collision'))!
+  const ws=await state.storyWorkspace(cardId,binding.storyId)
+  await ws.fs.writeText('journal.md','原文')
+  await onTurnStart(state,'collision',1)
+  await ws.fs.withFloor('collision#t1').writeText('journal.md','本轮正文')
+  await onTurnEnd(state,'collision')
+  await expect(onTurnStart(state,'collision',1)).rejects.toThrow(/已存在/)
+  expect(state.openFloors.has('collision')).toBe(false)
+  expect(await ws.fs.readText('journal.md')).toBe('本轮正文')
+  await ws.wal.rollbackFloor('collision#t1',ws.fs.root)
+  expect(await ws.fs.readText('journal.md')).toBe('原文')
 })

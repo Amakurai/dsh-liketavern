@@ -106,9 +106,10 @@ export declare class TavernState {
     /**
      * 卡级正则解析缓存（assets/regex-scripts.json），按 mtime+size 的 stat 指纹失效。
      * 为什么不用 assetRevs 修订号：该文件的写入点都绕开本类写方法——导入走 workspace.ts 的
-     * plainFs 直写，楼层 WAL 回滚更是绕过一切写方法把旧内容直接写回磁盘；指纹两条路径都能
-     * 捕获（同 MemoryStore 的指纹缓存思路）。同尺寸且同 mtime 刻度的极端回滚指纹兜不住，
-     * 由 floors.ts 回滚后手动调 invalidateCardRegex 兜底。
+     * plainFs 直写；指纹能捕获（同 MemoryStore 的指纹缓存思路）。楼层 WAL 回滚只写剧情
+     * 草稿根，本缓存读取的是共享卡根（rulesFor → workspace(cardId)），回滚不触及；
+     * 旧架构（0.1.8 前回滚写卡根）遗留的 floors.ts 回滚后调用已随重构移除。
+     * invalidateCardRegex 保留给同尺寸同刻度的极端直写场景手动兜底。
      */
     private readonly cardRegexCache;
     /** 模型元数据进程内缓存：resolveModelInfo 每步被调（reasoningEffort / 上下文窗口），带 TTL 防配置热更后拿到旧值。 */
@@ -253,7 +254,7 @@ export declare class TavernState {
     saveRegexRules(rules: RegexRule[]): Promise<void>;
     /** 某会话生效的全部正则（全局 + 当前角色卡内嵌 + 当前预设内嵌）。 */
     rulesFor(binding: SessionBinding): Promise<RegexRule[]>;
-    /** 作废卡级正则缓存：WAL 回滚绕过写路径直写磁盘，由 floors.ts 回滚后调用（见 cardRegexCache）。 */
+    /** 作废卡级正则缓存：绕过写路径的同尺寸同刻度直写（如外部工具改文件）后手动调用；WAL 回滚不触及共享卡根，无需调用。 */
     invalidateCardRegex(cardId: string): void;
     /**
      * 卡级正则（assets/regex-scripts.json）带 stat 指纹缓存的读取。

@@ -267,3 +267,22 @@ it('设置写后报错可重新读取确认，策略覆盖进入 standing 指纹
   await expect(bindBooks('settings',{scan_depth:4})).rejects.toThrow(/written/);spy.mockRestore()
   expect((await getHelperWorldbookContext(state,'a',binding.storyId!)).settings!.scan_depth).toBe(4)
 })
+
+/** 写后回执失败且会话并发解绑时，仍失效实际写入的剧情并保留原始错误。 */
+it.each(['replace','chat'] as const)('聊天世界书 %s 写后解绑不跳过缓存失效',async kind=>{
+  const first=(await op('@dsh/chat','create',[{content:'原文'}])).snapshot!
+  const storyId=(await state.loadBinding('a'))!.storyId!
+  const context=await getHelperWorldbookContext(state,'a',storyId)
+  const invalidate=vi.spyOn(state,'invalidateChatLorebook')
+  const original=WorkspaceFs.prototype.writeText
+  vi.spyOn(WorkspaceFs.prototype,'writeText').mockImplementation(async function(path,text){
+    await original.call(this,path,text)
+    if(path===CHAT_WORLDBOOK_PATH){await state.clearBinding('a');throw new Error('工厂写后回执失败')}
+  })
+  const result=kind==='replace'
+    ? helperWorldbookOperation(ctx,state,'a',1,{storyId,bindingRevision:context.bindingRevision,name:'@dsh/chat',operation:'replace',revision:first.revision,entries:[{content:'新文'}]})
+    : rebindHelperWorldbooks(ctx,state,'a',1,{storyId,bindingRevision:context.bindingRevision,kind:'chat',selection:null})
+  await expect(result).rejects.toThrow('工厂写后回执失败')
+  expect(invalidate).toHaveBeenCalledWith(cardId,storyId)
+  expect(await state.loadBinding('a')).toBeNull()
+})

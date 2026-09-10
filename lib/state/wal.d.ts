@@ -37,7 +37,7 @@ export declare class Wal {
     private readonly states;
     /** rootDir 为工作区的 state/wal/ 目录；不存在则在首次操作时创建。 */
     constructor(rootDir: string);
-    /** 开始一个楼层事务；对已存在且未 commit 的同名单元报错（防止跨会话串层）。 */
+    /** 开始新的楼层事务；已有楼层必须显式 reopen 或先回滚，不能覆盖原始镜像。 */
     beginFloor(floor: string): Promise<void>;
     /** 在即将写入 path 前记录快照；同层同路径只留首次快照，重复调用忽略。path 统一为正斜杠相对路径。 */
     record(floor: string, path: string, before: string | null, beforeEncoding?: 'utf8' | 'base64'): Promise<void>;

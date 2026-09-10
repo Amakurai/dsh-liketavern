@@ -168,6 +168,9 @@ export function Tabs(props: { items: TabItem[]; value: string; onChange: (id: st
   const generatedId = useId()
   const id = props.id ?? generatedId
   const nav = useRef<HTMLDivElement>(null)
+  // 调用方普遍传内联数组字面量（每次渲染新引用）：按 id 和文案派生稳定信号（语言切换后仍需重新定位），
+  // 否则每次键入重渲染都销毁重建 ResizeObserver 并触发强制布局读。
+  const itemsKey = JSON.stringify(props.items.map((item) => [item.id, item.label]))
   // 缩窄窗口或恢复上次页签后，当前项不能藏到横向滚动区域外；只移动导航，不改变正文纵向滚动位置。
   useLayoutEffect(() => {
     const element = nav.current
@@ -184,7 +187,7 @@ export function Tabs(props: { items: TabItem[]; value: string; onChange: (id: st
     const observer = new ResizeObserver(reveal)
     observer.observe(element)
     return () => observer.disconnect()
-  }, [props.value, props.items])
+  }, [props.value, itemsKey])
   return (
     <div ref={nav} className={`dsh-tavern-navPills${props.size === 'sm' ? ' is-sub' : ''}`} role="tablist" aria-label={props.label} onKeyDown={(e) => {
       const direction = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0

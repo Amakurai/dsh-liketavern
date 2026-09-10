@@ -5,6 +5,8 @@ import { collectCompleteText } from '../src/node/collectText.js'
 import { compressMemoryBatch } from '../src/node/memoryMaintenance.js'
 import { isolated } from '../src/node/isolated.js'
 import { compileRegexScripts } from '../src/core/regex.js'
+import { emptyTemplateScopes } from '../src/core/template.js'
+import { parseLorebook } from '../src/state/lorebook.js'
 import { resolveReadableAssetPath } from '../src/core/assetRead.js'
 import { METHODS, type TavernMethodResults } from '../src/remote.js'
 import { TavernService } from '../src/node/service.js'
@@ -35,10 +37,24 @@ it('重叠分支正则被 worker 超时终止，主线程计时器仍能执行�
   } finally { clearTimeout(timer) }
 })
 
+it('受信装载不占计算预算：小预算模板任务成功，死循环模板仍被终止', async () => {
+  const context = { variables: emptyTemplateScopes(), char: 'A', user: 'B', card: {}, entries: [], presets: [], history: [], now: 1000, seed: 1, phase: 'generate' }
+  // vendor 库装载（数百毫秒）在 computing 信号前完成；100ms 预算只覆盖第三方模板执行。
+  const result = await isolated('template', { texts: ['<%= "ok" %>'], context }, 100)
+  expect(result.texts).toEqual(['ok'])
+  await expect(isolated('template', { texts: ['<% while (true) {} %>'], context }, 100)).rejects.toThrow(/interrupt|超时/)
+})
+
 it('remote 注册表和 service 方法集均受契约检查约束', () => {
   for (const method of Object.keys(METHODS)) expect(typeof TavernService.prototype[method as keyof TavernMethodResults]).toBe('function')
   expect(METHODS.getMemories.req.safeParse({ cardId: 'test', storyId: 'story-test' }).success).toBe(true)
   for (const path of ['stories/story-test/memory/a.md', 'stories/../card.json', 'state/./wal/a.json', 'story.json']) {
     expect(resolveReadableAssetPath(path).ok).toBe(false)
   }
+})
+
+it('预加载的第三方代码也受 worker 计算预算约束，不能借用装载预算', async () => {
+  const entries = parseLorebook({ entries: [{ content: '@@preload\n<% while (true) {} %>' }] }, { source: 'global', sourceRef: 'factory' })
+  const context = { variables: emptyTemplateScopes(), char: 'A', user: 'B', card: {}, entries, presets: [], history: [], now: 1000, seed: 1, phase: 'generate' }
+  await expect(isolated('template', { texts: ['ok'], context }, 100)).rejects.toThrow('第三方正则或提示词计算超时')
 })

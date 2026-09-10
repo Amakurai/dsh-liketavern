@@ -65,6 +65,32 @@ it('保存成功立即关闭整个窗口后删除原草稿', async () => {
   expect(f.stored()).toBeNull()
 })
 
+it('保存飞行期间的继续键入不丢失：未保存提示保留，草稿不被删除，不触发关闭回调', async () => {
+  const f = await fixture()
+  await act(async () => { view = create(f.node) })
+  await click('新建条目')
+  await act(async () => vi.advanceTimersByTimeAsync(500))
+  // 保存 RPC 挂起：飞行期间用户继续修改条目备注
+  let release!: (value: ReturnType<typeof ok>) => void
+  f.save.mockImplementationOnce(() => new Promise((resolve) => { release = resolve }))
+  await click('保存')
+  const input = view!.root.findAllByType('input').find((node) => node.props.placeholder === '给自己看的名字，例如「主角身世」')!
+  await act(async () => input.props.onChange({ target: { value: '飞行期新键入' } }))
+  await act(async () => vi.advanceTimersByTimeAsync(500))
+  // 保存成功回包：当前值已偏离已保存快照——dirty 保持、草稿保留、编辑器不被 onSaved 关闭
+  await act(async () => release(ok({ saved: true })))
+  expect(view!.root.findAllByType('span').map((node) => node.children.join()).includes('closed')).toBe(false)
+  const badges = view!.root.findAllByProps({ className: 'dsh-tavern-badge is-accent' })
+  expect(badges.length).toBeGreaterThan(0)
+  expect(badges.map((node) => JSON.stringify(node.children)).join()).toContain('未保存')
+  await act(async () => vi.advanceTimersByTimeAsync(500))
+  expect(f.stored()).not.toBeNull()
+  // 再次保存把飞行期编辑落盘后，才走 onSaved 正常关闭
+  await click('保存')
+  expect(f.save).toHaveBeenCalledTimes(2)
+  expect(view!.root.findByType('span').children).toEqual(['closed'])
+})
+
 it('明确放弃并关闭整个窗口后删除原草稿', async () => {
   const f = await prepare()
   await click('关闭')

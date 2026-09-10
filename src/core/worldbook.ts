@@ -406,6 +406,7 @@ export function evaluateWorldInfo(input: WIEngineInput): WIEngineResult {
 
   // ── 第 0 层：直接扫描（每条用自己的 scanDepth） ─────────────────────────
   let level = 0
+  let scanSteps = 1
   recursionQueue = evaluate([], 0)
   adjudicateGroups(recursionQueue)
 
@@ -414,9 +415,8 @@ export function evaluateWorldInfo(input: WIEngineInput): WIEngineResult {
   const scanRecursion=()=>{while (
     settings.recursiveScan &&
     recursionQueue.length > 0 &&
-    (maxSteps === 0 || level < maxSteps - 1)
+    (maxSteps === 0 || scanSteps < maxSteps)
   ) {
-    level += 1
     const stopped = recursionQueue.filter((c) => c.entry.preventRecursion && !groupLosers.has(c.entry.key))
     for (const c of stopped) {
       log.push({ kind: 'recursion-stop', entryKey: c.entry.key, detail: 'preventRecursion：内容不进入递归扫描' })
@@ -425,7 +425,11 @@ export function evaluateWorldInfo(input: WIEngineInput): WIEngineResult {
       .filter((c) => !c.entry.preventRecursion && !groupLosers.has(c.entry.key))
       .map((c) => (typeof c.entry.content === 'string' ? ident(c.entry.content, input.macroCtx) : ''))
       .filter((t) => t.trim().length > 0)
+    // 没有可递归文本就不消耗递归步数：空内容轮提前 break 时 level 不 +1，
+    // 后续 minActivations 扩展轮的「总扫描轮数」预算不被空轮挤占。
     if (recursionTexts.length === 0) break
+    level += 1
+    scanSteps += 1
     recursionQueue = evaluate(recursionTexts, level)
     adjudicateGroups(recursionQueue)
   }}
@@ -435,10 +439,14 @@ export function evaluateWorldInfo(input: WIEngineInput): WIEngineResult {
   const expansionLimit=Math.min(input.messages.length,1000,settings.maxScanDepth>0?settings.maxScanDepth:1000)
   const scanBudget=settings.tokenBudget>0?settings.tokenBudget:Math.max(0,Math.floor(Math.min(input.contextWindowTokens,WI_PERCENT_WINDOW_BASE)*settings.contextPercent/100)-Math.max(0,input.reservedTokens))
   const surviving=()=>activated.filter(c=>!groupLosers.has(c.entry.key))
-  while(settings.minActivations>0&&surviving().length<settings.minActivations&&expandedDepth<expansionLimit&&(maxSteps===0||level<maxSteps-1)){
+  while(settings.minActivations>0&&surviving().length<settings.minActivations&&expandedDepth<expansionLimit&&(maxSteps===0||scanSteps<maxSteps)){
     const counted=surviving().filter(c=>!isStandingSafeEntry(c.entry))
     if(counted.reduce((sum,c)=>sum+input.estimateTokens(c.entry.content),0)>scanBudget)break
-    expandedDepth++;level++
+    expandedDepth++
+    scanSteps++
+    // 扩展轮是新的直接扫描：递归 level 归零重起，delayUntilRecursion 门槛与首轮路径
+    // 同口径；scanSteps 独立累计初始扫描、扩深和递归，不能借层级归零重置总预算。
+    level=0
     recursionQueue=evaluate([],0);adjudicateGroups(recursionQueue);scanRecursion()
   }
 

@@ -29,6 +29,8 @@ import { parseTemplateScopes, validateTemplateJson, type TemplateContext, type T
 
 let templateLibrarySource: string | undefined
 let templateFakerSource: string | undefined
+/** 仅供 worker 编排计时，不暴露给 QuickJS 脚本。 */
+let computationPhase: ((phase: 'loading' | 'computing') => void) | undefined
 
 /** 本段是沙箱内的 JavaScript 源码，不在宿主执行；所有外部数据经 JSON 复制进去。 */
 const BOOTSTRAP = String.raw`
@@ -301,7 +303,7 @@ ${TEMPLATE_DISPLAY}
 export class TemplateSandbox {
   private readonly renderedSources = new Map<string, string>()
   private readonly vm: QuickJSContext
-  private readonly deadline: number
+  private deadline: number
   private initialContext!:TemplateContext
   private bootstrap?:TemplateReplayBootstrap
   private recording=false
@@ -309,7 +311,8 @@ export class TemplateSandbox {
   private operationChars=0
   private constructor(vm: QuickJSContext, deadline: number) { this.vm = vm; this.deadline = deadline }
   /** 仅预热受信任的 WASM 模块；不解析或执行第三方输入。 */
-  static async prepare(): Promise<void> {
+  static async prepare(onPhase?: (phase: 'loading' | 'computing') => void): Promise<void> {
+    computationPhase = onPhase
     await Promise.all([getQuickJS(),
       readFile(new URL('../../lib/vendor/template-libraries.js',import.meta.url),'utf8').then(source=>{templateLibrarySource=source}),
       readFile(new URL('../../lib/vendor/template-faker.js',import.meta.url),'utf8').then(source=>{templateFakerSource=source}),
@@ -337,15 +340,17 @@ export class TemplateSandbox {
   }
 
   static async create(input: TemplateContext, record=false, bootstrap?:TemplateReplayBootstrap): Promise<TemplateSandbox> {
+    computationPhase?.('computing')
     const initialContext=structuredClone(input)
     input=TemplateSandbox.normalizeContext(input)
+    computationPhase?.('loading')
     const engine = await getQuickJS()
     const vm = engine.newContext()
     vm.runtime.setMemoryLimit(32 * 1024 * 1024)
     vm.runtime.setMaxStackSize(512 * 1024)
-    const deadline = Date.now() + 750
-    vm.runtime.setInterruptHandler(() => Date.now() > deadline)
-    const sandbox = new TemplateSandbox(vm, deadline)
+    // 受信装载（vendor 库求值、上下文初始化）给宽裕期限；第三方执行前由 beginComputation 收紧。
+    const sandbox = new TemplateSandbox(vm, Date.now() + 10_000)
+    vm.runtime.setInterruptHandler(() => Date.now() > sandbox.deadline)
     try {
       if (!templateLibrarySource) throw new Error('模板依赖产物缺失，请先运行 npm run build')
       if (!templateFakerSource) throw new Error('Faker 模板依赖产物缺失，请先运行 npm run build')
@@ -353,6 +358,7 @@ export class TemplateSandbox {
       try { vm.setProp(vm.global,'__tavernFakerSource',fakerSourceHandle) } finally { fakerSourceHandle.dispose() }
       sandbox.evaluate(`globalThis.__input = ${JSON.stringify(JSON.stringify(input))};\n${BOOTSTRAP.replace('/* TEMPLATE_VENDOR */',()=>templateLibrarySource!)}`)
       if(bootstrap?.preload==='refresh') sandbox.sticky('restore',bootstrap.state)
+      sandbox.beginComputation()
       sandbox.preload(input)
       if(bootstrap?.preload==='preserve') sandbox.sticky('restore',bootstrap.state)
       sandbox.initialContext=initialContext
@@ -425,6 +431,12 @@ export class TemplateSandbox {
     try { return this.vm.dump(result.value) } finally { result.value.dispose() }
   }
 
+  /** 受信装载结束后收紧到第三方计算预算；后续阶段（resume/继续轮）重置同一预算。 */
+  private beginComputation(): void {
+    computationPhase?.('computing')
+    this.deadline = Date.now() + 750
+  }
+
   private preload(context:TemplateContext):void {
     const recording=this.recording;this.recording=false
     try {
@@ -437,6 +449,7 @@ export class TemplateSandbox {
   }
 
   resume(context:TemplateContext,refreshPreload=false):void {
+    this.beginComputation()
     const normalized=TemplateSandbox.normalizeContext(context)
     if(context.phase==='generate') {
       this.evaluate(`__continueTemplateGeneration(${JSON.stringify(normalized)})`)

@@ -7,7 +7,7 @@ import { type TemplateContext, type TemplateScopes, type TemplateRegexDescriptor
 export declare class TemplateSandbox {
     private readonly renderedSources;
     private readonly vm;
-    private readonly deadline;
+    private deadline;
     private initialContext;
     private bootstrap?;
     private recording;
@@ -15,7 +15,7 @@ export declare class TemplateSandbox {
     private operationChars;
     private constructor();
     /** 仅预热受信任的 WASM 模块；不解析或执行第三方输入。 */
-    static prepare(): Promise<void>;
+    static prepare(onPhase?: (phase: 'loading' | 'computing') => void): Promise<void>;
     private static normalizeContext;
     static create(input: TemplateContext, record?: boolean, bootstrap?: TemplateReplayBootstrap): Promise<TemplateSandbox>;
     /** 重建同轮已执行的代码和词法环境；所有输入仍由 QuickJS 求值，每步校验确定性结果。 */
@@ -25,6 +25,8 @@ export declare class TemplateSandbox {
     private record;
     replay(): TemplateReplay;
     private evaluate;
+    /** 受信装载结束后收紧到第三方计算预算；后续阶段（resume/继续轮）重置同一预算。 */
+    private beginComputation;
     private preload;
     resume(context: TemplateContext, refreshPreload?: boolean): void;
     stickyState(): TemplateStickyState;

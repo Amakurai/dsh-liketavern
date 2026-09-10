@@ -54,12 +54,15 @@ if (parentPort) {
           || /^\[(InitialVariables|RENDER:BEFORE|RENDER:AFTER)\]/i.test(entry.comment))
       }))
     const templateClass = needsTemplates ? (await import('./templateSandbox.js')).TemplateSandbox : null
-    // 依赖装载属于 worker 启动预算；第三方 YAML/JS 在 ready 后才开始计算预算。
-    await templateClass?.prepare()
+    // 输入解析、预加载与重放都计入计算预算；只有受信依赖和沙箱初始化走装载预算。
+    await templateClass?.prepare(phase => parentPort!.postMessage({ [phase]: true }))
     parentPort.postMessage({ ready: true })
+    const beginComputing = () => parentPort!.postMessage({ computing: true })
+    beginComputing()
     let value: unknown
     if (kind === 'assemble') {
       const sandbox = templateClass ? await prepareContinuedTemplate(templateClass,input.templates,input.templateContinuation) : null
+      beginComputing()
       try {
         const assembled=assembleTemplatePlan(input,sandbox)
         sandbox?.sticky('finish')
@@ -72,6 +75,7 @@ if (parentPort) {
       if(continuation && (!input.replay || continuation.preloadRevision!==templatePreloadRevision(templateReplayGenerationContext(input.replay))
         || continuation.replay && JSON.stringify(continuation.replay)!==JSON.stringify(input.replay))) throw new Error('回复 sticky 状态与生成日志不一致')
       const sandbox = input.replay ? await templateClass!.restore(input.replay,input.context) : await templateClass!.create(input.context)
+      beginComputing()
       try {
         if(continuation && JSON.stringify(continuation.state)!==JSON.stringify(sandbox.stickyState())) throw new Error('回复 sticky 注册表与已提交状态不一致')
         const entries = (input.context as TemplateContext).entries.map(normalizeTemplateLore)
@@ -88,6 +92,7 @@ if (parentPort) {
     }
     else if (kind === 'wi') {
       const sandbox = templateClass ? await templateClass.create(input.templates) : null
+      beginComputing()
       try {
         const entries = input.entries.map((entry: import('../core/types.js').WorldInfoEntry) => {
           if (!entry.enabled || !entry.templateCondition) return entry
@@ -97,8 +102,8 @@ if (parentPort) {
         value = evaluateWorldInfo({ ...input, entries, estimateTokens, random: createTurnRandom(input.seed) })
       } finally { sandbox?.dispose() }
     }
-    else if (kind === 'render') value = applyRegexRules(input.text, input.rules, { scope: 'output', timing: 'render' }, input.macroCtx)
-    else if (kind === 'display') value = {parts:presentTemplateDisplay(input.parts,input.rules,input.macroCtx)}
+    else if (kind === 'render') { beginComputing(); value = applyRegexRules(input.text, input.rules, { scope: 'output', timing: 'render' }, input.macroCtx) }
+    else if (kind === 'display') { beginComputing(); value = {parts:presentTemplateDisplay(input.parts,input.rules,input.macroCtx)} }
     else throw new Error('未知提示词任务')
     if (JSON.stringify(value).length > 16 * 1024 * 1024) throw new Error('提示词计算结果超过 16 MiB 上限')
     parentPort.postMessage({ value })

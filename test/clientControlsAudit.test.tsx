@@ -96,4 +96,57 @@ describe('共享表单控件', () => {
     await type('外部, 重置,')
     expect(input().props.value).toBe('外部, 重置,')
   })
+
+  it('数字字段可以清空后重输，不把输入过程中的空值提交为 0 或夹回最小值', async () => {
+    const changes: number[] = []
+    function Form() {
+      const [value, setValue] = useState(200)
+      return <NumInput value={value} onChange={(next) => { changes.push(next); setValue(Math.max(1, Math.round(next))) }} />
+    }
+    const view = await render(<Form />)
+    const input = () => view.root.findByType('input')
+    await act(async () => input().props.onChange({ target: { value: '' } }))
+    expect(input().props.value).toBe('')
+    expect(changes).toEqual([])
+    await act(async () => input().props.onChange({ target: { value: '8' } }))
+    expect(Number(input().props.value)).toBe(8)
+    expect(changes).toEqual([8])
+  })
+
+  it('未完成的数字离开焦点时恢复最后有效值，外部重置仍及时反映', async () => {
+    const change = vi.fn()
+    const view = await render(<NumInput value={0.75} onChange={change} />)
+    const input = () => view.root.findByType('input')
+    await act(async () => input().props.onChange({ target: { value: '' } }))
+    expect(input().props.value).toBe('')
+    await act(async () => input().props.onBlur())
+    expect(Number(input().props.value)).toBe(0.75)
+    expect(change).not.toHaveBeenCalled()
+    await act(async () => input().props.onChange({ target: { value: '' } }))
+    await act(async () => view.update(<NumInput value={0.9} onChange={change} />))
+    expect(Number(input().props.value)).toBe(0.9)
+    await act(async () => input().props.onChange({ target: { value: '1e999' } }))
+    expect(change).not.toHaveBeenCalled()
+    await act(async () => input().props.onBlur())
+    expect(Number(input().props.value)).toBe(0.9)
+  })
+
+  it('多位数的第一位低于最小值时仍可继续输入，失焦再显示限幅结果', async () => {
+    function Form() {
+      const [value, setValue] = useState(200)
+      return <NumInput value={value} onChange={(next) => setValue(Math.max(10, Math.round(next)))} />
+    }
+    const view = await render(<Form />)
+    const input = () => view.root.findByType('input')
+    for (const text of ['', '2', '25']) {
+      await act(async () => input().props.onChange({ target: { value: text } }))
+      expect(input().props.value).toBe(text)
+    }
+    await act(async () => input().props.onBlur())
+    expect(Number(input().props.value)).toBe(25)
+    await act(async () => input().props.onChange({ target: { value: '1' } }))
+    expect(input().props.value).toBe('1')
+    await act(async () => input().props.onBlur())
+    expect(Number(input().props.value)).toBe(10)
+  })
 })

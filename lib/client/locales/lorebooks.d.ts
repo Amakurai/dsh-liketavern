@@ -30,6 +30,7 @@ export declare const zh: {
     readonly 'lorebooks.create': "创建";
     readonly 'lorebooks.namePlaceholder': "世界书名称";
     readonly 'lorebooks.nameRequired': "请填写世界书名称";
+    readonly 'lorebooks.opening': "正在打开「{name}」…";
     readonly 'lorebooks.imported': "已导入 {name}（{count} 条）";
     readonly 'lorebooks.saved': "已保存「{name}」";
     readonly 'lorebooks.embeddedDeleted': "已删除「{name}」的内嵌世界书";

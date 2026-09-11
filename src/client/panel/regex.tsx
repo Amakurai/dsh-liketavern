@@ -116,7 +116,11 @@ export function RegexSection(props: { remote: TavernRemote }) {
   useDraftGuard(rules !== null && JSON.stringify(rules) !== (savedRules ?? (state.status === 'ready' ? JSON.stringify(state.value.rules) : null)), busy)
 
   useEffect(() => {
-    if (state.status === 'ready' && rules === null) setRules(structuredClone(state.value.rules))
+    if (state.status === 'ready' && rules === null) {
+      setRules(structuredClone(state.value.rules))
+      // 放弃后重拉的服务器版本成为新基线；不能继续用刷新前那次保存的快照判断脏状态。
+      setSavedRules(JSON.stringify(state.value.rules))
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state])
 
@@ -129,7 +133,8 @@ export function RegexSection(props: { remote: TavernRemote }) {
       for (const p of list.value.items) {
         if (p.regexCount <= 0) continue
         const r = await remote.getPreset({ id: p.id })
-        if (r.ok && (r.value.preset.regexScripts?.length ?? 0) > 0) items.push(r.value.preset)
+        if (!r.ok) return r
+        if ((r.value.preset.regexScripts?.length ?? 0) > 0) items.push(r.value.preset)
       }
       return { ok: true as const, value: { items } }
     },
@@ -191,7 +196,10 @@ export function RegexSection(props: { remote: TavernRemote }) {
           <Skeleton height={72} />
         </>
       )}
-      {state.status === 'error' && <Err message={state.message} />}
+      {state.status === 'error' && <>
+        <Err message={state.message} />
+        <Btn disabled={busy} onClick={reload}>{t('action.retry')}</Btn>
+      </>}
       <Err message={error} />
       {rules !== null && (
         <div className="dsh-tavern-regexCustom">
@@ -218,8 +226,11 @@ export function RegexSection(props: { remote: TavernRemote }) {
             <Btn onClick={() => setRules([...current, newRule()])}>{t('regex.new')}</Btn>
             <Btn disabled={busy} onClick={() => void save(current)} primary>{t('regex.saveAll')}</Btn>
             <Btn
+              disabled={busy}
               onClick={() => {
+                if (busy) return
                 setRules(null)
+                setSavedRules(null)
                 reload()
               }}
             >
@@ -237,7 +248,10 @@ export function RegexSection(props: { remote: TavernRemote }) {
             <Skeleton height={56} />
           </>
         )}
-        {presetRegex.state.status === 'error' && <Err message={presetRegex.state.message} />}
+        {presetRegex.state.status === 'error' && <>
+          <Err message={presetRegex.state.message} />
+          <Btn disabled={busy} onClick={presetRegex.reload}>{t('action.retry')}</Btn>
+        </>}
         {presetDrafts !== null && presetDrafts.length === 0 && (
           <Muted>{t('regex.noPresetRegex')}</Muted>
         )}

@@ -209,7 +209,7 @@ export declare function ConfirmDialog(props: {
     onCancel: () => void;
     onConfirm: () => void;
 }): import("react").JSX.Element;
-/** 数字输入（number）。 */
+/** 数字输入保留未完成文本；空值不误提交为 0，失焦时显示有效值，外部重置及时同步。 */
 export declare function NumInput(props: {
     value: number;
     onChange: (v: number) => void;

@@ -685,9 +685,20 @@ export function ConfirmDialog(props: {
   )
 }
 
-/** 数字输入（number）。 */
+/** 数字输入保留未完成文本；空值不误提交为 0，失焦时显示有效值，外部重置及时同步。 */
 export function NumInput(props: { value: number; onChange: (v: number) => void; step?: string; width?: number }) {
   const label = useContext(ControlLabel)
+  const value = Number.isFinite(props.value) ? props.value : 0
+  const [draft, setDraft] = useState(() => ({ value, text: String(value), pending: false }))
+  let text = draft.text
+  if (draft.pending) {
+    // 本次键入可触发父表单限幅：保留输入文本才能逐位输入 25（第一位 2 可能被夹成 10）。
+    // 记录本次回传后的业务值，之后独立发生的外部重置仍会立即覆盖文本。
+    setDraft({ value, text, pending: false })
+  } else if (!Object.is(draft.value, value)) {
+    text = String(value)
+    setDraft({ value, text, pending: false })
+  }
   return (
     <input
       type="number"
@@ -695,12 +706,19 @@ export function NumInput(props: { value: number; onChange: (v: number) => void; 
       aria-describedby={label?.descriptionId}
       className="dsh-tavern-input"
       style={{ width: props.width ?? 90 }}
-      value={Number.isFinite(props.value) ? props.value : 0}
+      value={text}
       step={props.step ?? 'any'}
       onChange={(e) => {
-        const v = Number(e.target.value)
-        if (Number.isFinite(v)) props.onChange(v)
+        const raw = e.target.value
+        const next = raw.trim() === '' ? NaN : Number(raw)
+        if (!Number.isFinite(next)) {
+          setDraft({ value, text: raw, pending: true })
+          return
+        }
+        setDraft({ value, text: raw, pending: true })
+        props.onChange(next)
       }}
+      onBlur={() => setDraft({ value, text: String(value), pending: false })}
     />
   )
 }

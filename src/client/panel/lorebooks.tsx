@@ -2,7 +2,7 @@
  * 设置面板分区：世界书库与角色卡内嵌书。卡片网格展示，点开后按条目开关/编辑。
  * 卡片可键盘触发（clickableProps）；导入/保存等瞬时反馈走 useToast，上下文错误用 Err。
  */
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { PersistentEditor, useDraftState } from '../draftPersistence.js'
 import { useDraftGuard } from '../drafts.js'
 import { IconDownloadOutline16, IconEditOutline16, IconFolderOpenOutline16, IconTrashOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -25,7 +25,9 @@ function LorebooksSectionContent(props: { remote: TavernRemote }) {
   const chars = useLoader(() => remote.listCharacters({}), [])
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  const [opening, setOpening] = useState(false)
+  const [opening, setOpening] = useState<string | null>(null)
+  const openRequest = useRef(0)
+  useEffect(() => () => { openRequest.current += 1 }, [])
   const [opened, setOpened] = useDraftState<Opened | null>('lorebooks:opened', null)
   const [toDelete, setToDelete] = useState<string | null>(null)
   const [toDeleteEmbedded, setToDeleteEmbedded] = useState<CharacterSummary | null>(null)
@@ -50,44 +52,42 @@ function LorebooksSectionContent(props: { remote: TavernRemote }) {
   const shownNames = q === '' ? names : names.filter(matchBook)
   const totalBooks = charBooks.length + names.length
 
-  const openLibrary = async (name: string) => {
+  /** 库文件与内嵌书共用请求身份；只有最后一次点选可以打开编辑器、报告错误或收起加载反馈。 */
+  const openBook = async (name: string, load: () => Promise<Opened>) => {
+    const request = ++openRequest.current
     setError(null)
-    setOpening(true)
+    setOpening(name)
     try {
-      const r = await remote.getLorebook({ name })
-      if (!r.ok) {
-        setError(r.error.message)
-        return
-      }
-      setOpened({
-        target: { kind: 'library', name },
-        entries: parseLorebook(r.value.json, { source: 'global', sourceRef: name }),
-      })
+      const book = await load()
+      if (openRequest.current === request) setOpened(book)
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      if (openRequest.current === request) setError(err instanceof Error ? err.message : String(err))
     } finally {
-      setOpening(false)
+      if (openRequest.current === request) setOpening(null)
     }
   }
 
-  const openCharacter = async (item: CharacterSummary) => {
-    setError(null)
-    setOpening(true)
-    try {
-      const r = await remote.getCharacterLorebook({ cardId: item.cardId })
-      if (!r.ok) {
-        setError(r.error.message)
-        return
-      }
-      setOpened({
-        target: { kind: 'character', cardId: item.cardId, name: r.value.name },
-        entries: parseLorebook(r.value.json, { source: 'character', sourceRef: item.cardId }),
-      })
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setOpening(false)
+  const openLibrary = (name: string) => openBook(name, async () => {
+    const r = await remote.getLorebook({ name })
+    if (!r.ok) throw new Error(r.error.message)
+    return {
+      target: { kind: 'library', name },
+      entries: parseLorebook(r.value.json, { source: 'global', sourceRef: name }),
     }
+  })
+
+  const openCharacter = (item: CharacterSummary) => openBook(item.characterBookName || item.name, async () => {
+    const r = await remote.getCharacterLorebook({ cardId: item.cardId })
+    if (!r.ok) throw new Error(r.error.message)
+    return {
+      target: { kind: 'character', cardId: item.cardId, name: r.value.name },
+      entries: parseLorebook(r.value.json, { source: 'character', sourceRef: item.cardId }),
+    }
+  })
+
+  const cancelOpening = () => {
+    openRequest.current += 1
+    setOpening(null)
   }
 
   const remove = async () => {
@@ -198,10 +198,10 @@ function LorebooksSectionContent(props: { remote: TavernRemote }) {
       {toast.node}
       {createGuard.confirmation}
       <div className="dsh-tavern-toolbar">
-        <FileBtn accept=".json" disabled={busy} onFile={(file) => void onImportFile(file)}>
+        <FileBtn accept=".json" disabled={busy || opening !== null} onFile={(file) => void onImportFile(file)}>
           {t('lorebooks.importJson')}
         </FileBtn>
-        <Btn size="md" disabled={busy} onClick={() => setCreating(true)}>
+        <Btn size="md" disabled={busy || opening !== null} onClick={() => setCreating(true)}>
           {t('lorebooks.newEmpty')}
         </Btn>
         <Btn
@@ -218,7 +218,11 @@ function LorebooksSectionContent(props: { remote: TavernRemote }) {
           <SearchInput label={t('lorebooks.searchLabel')} value={query} onChange={setQuery} placeholder={t('lorebooks.searchPlaceholder')} width={220} />
         )}
       </div>
-      {(state.status === 'loading' || opening) && (
+      {opening !== null && <div className="dsh-tavern-toolbar" role="status">
+        <span>{t('lorebooks.opening', { name: opening })}</span>
+        <Btn disabled={busy} onClick={cancelOpening}>{t('action.cancel')}</Btn>
+      </div>}
+      {(state.status === 'loading' || opening !== null) && (
         <div className="dsh-tavern-list">
           <Skeleton height={70} radius={16} />
           <Skeleton height={70} radius={16} />
@@ -255,7 +259,7 @@ function LorebooksSectionContent(props: { remote: TavernRemote }) {
                   <IconBtn label={t('lorebooks.editEntries')} onClick={() => void openCharacter(item)}>
                     <IconEditOutline16 />
                   </IconBtn>
-                  <IconBtn label={t('lorebooks.deleteEmbedded')} danger onClick={() => setToDeleteEmbedded(item)}>
+                  <IconBtn label={t('lorebooks.deleteEmbedded')} danger disabled={busy || opening !== null} onClick={() => setToDeleteEmbedded(item)}>
                     <IconTrashOutline16 />
                   </IconBtn>
                 </div>
@@ -296,10 +300,10 @@ function LorebooksSectionContent(props: { remote: TavernRemote }) {
                 <IconBtn label={t('lorebooks.editEntries')} onClick={() => void openLibrary(name)}>
                   <IconEditOutline16 />
                 </IconBtn>
-                <IconBtn label={t('lorebooks.exportJson')} disabled={busy} onClick={() => void exportBook(name)}>
+                <IconBtn label={t('lorebooks.exportJson')} disabled={busy || opening !== null} onClick={() => void exportBook(name)}>
                   <IconDownloadOutline16 />
                 </IconBtn>
-                <IconBtn label={t('lorebooks.deleteBook')} danger onClick={() => setToDelete(name)}>
+                <IconBtn label={t('lorebooks.deleteBook')} danger disabled={busy || opening !== null} onClick={() => setToDelete(name)}>
                   <IconTrashOutline16 />
                 </IconBtn>
               </div>

@@ -107,6 +107,8 @@ export function PresetsSection(props: { remote: TavernRemote }) {
   const [busy, setBusy] = useState(false)
   const [baseline, setBaseline] = useDraftState<string | null>('presets:baseline', null)
   const [editing, setEditing] = useDraftState<PromptPreset | null>('presets:editing', null)
+  // identifier 保留导入原值，磁盘 id 可能经过净化或带冲突后缀；草稿同时保存实际资产身份。
+  const [editingId, setEditingId] = useDraftState<string | null>('presets:editingId', null)
   const [toDelete, setToDelete] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const toast = useToast()
@@ -117,10 +119,16 @@ export function PresetsSection(props: { remote: TavernRemote }) {
   const q = query.trim().toLowerCase()
   const filtered = q === '' ? items : items.filter((p) => p.name.toLowerCase().includes(q) || p.id.toLowerCase().includes(q))
 
+  const closeEditor = () => {
+    setEditing(null)
+    setEditingId(null)
+    setBaseline(null)
+  }
+
   const open = async (id: string) => {
     await runAsync(setBusy, setError, async () => {
       const r = await remote.getPreset({ id })
-      if (r.ok) { setEditing(structuredClone(r.value.preset)); setBaseline(JSON.stringify(r.value.preset)) }
+      if (r.ok) { setEditing(structuredClone(r.value.preset)); setEditingId(id); setBaseline(JSON.stringify(r.value.preset)) }
       else setError(r.error.message)
     })
   }
@@ -129,9 +137,9 @@ export function PresetsSection(props: { remote: TavernRemote }) {
     if (!editing) return
     await runAsync(setBusy, setError, async () => {
       const r = await remote.savePreset({ preset: editing })
-      const err = errOf(r)
-      if (err) setError(err)
+      if (!r.ok) setError(r.error.message)
       else {
+        setEditingId(r.value.id)
         setBaseline(JSON.stringify(editing))
         toast.show(t('presets.saved', { name: editing.name }))
         reload()
@@ -146,7 +154,7 @@ export function PresetsSection(props: { remote: TavernRemote }) {
       const err = errOf(r)
       if (err) setError(err)
       else {
-        if (editing?.identifier === toDelete) setEditing(null)
+        if ((editingId ?? editing?.identifier) === toDelete) closeEditor()
         setToDelete(null)
         reload()
       }
@@ -206,6 +214,8 @@ export function PresetsSection(props: { remote: TavernRemote }) {
   const createNew = () => {
     const id = `preset-${Date.now().toString(36)}`
     setEditing({ name: t('presets.newPresetName'), identifier: id, entries: [newEntry(100)] })
+    setEditingId(null)
+    setBaseline(null)
   }
 
   const setEntry = (index: number, entry: PresetEntry) => {
@@ -225,7 +235,7 @@ export function PresetsSection(props: { remote: TavernRemote }) {
         </FileBtn>
         <Btn size="md" onClick={() => guard.request(createNew)}>{t('presets.new')}</Btn>
         <Btn size="md" onClick={reload} disabled={busy}>{t('action.refresh')}</Btn>
-        {items.length >= 5 && (
+        {(items.length >= 5 || query !== '') && (
           <SearchInput label={t('presets.searchLabel')} value={query} onChange={setQuery} placeholder={t('presets.searchPlaceholder')} width={220} />
         )}
       </div>
@@ -316,7 +326,7 @@ export function PresetsSection(props: { remote: TavernRemote }) {
             <span className="dsh-tavern-muted">{JSON.stringify(editing) !== baseline ? t('draft.unsaved') : ''}</span>
             <Btn onClick={() => setEditing({ ...editing, entries: [...editing.entries, newEntry(editing.entries.length * 100 + 100)] })}>{t('presets.addEntry')}</Btn>
             <Btn disabled={busy} onClick={() => void save()} primary>{t('presets.save')}</Btn>
-            <Btn onClick={() => guard.request(() => setEditing(null))}>{t('action.close')}</Btn>
+            <Btn onClick={() => guard.request(closeEditor)}>{t('action.close')}</Btn>
           </SaveBar>
         </fieldset>
       )}

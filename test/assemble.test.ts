@@ -17,6 +17,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { assemblePrompt, defaultPreset, splitExampleMessages, type AssembleInput } from '../src/core/assemble.js'
+import { exportStPreset, parseStPreset } from '../src/state/presetStore.js'
 import {
   EMPTY_TIMER_STATE,
   Marker,
@@ -170,6 +171,26 @@ const contents = (msgs: ChatMessage[]): string[] => msgs.map((m) => m.content)
 // ---------------------------------------------------------------------------
 
 describe('relative 骨架与 marker 替换', () => {
+  /** 编辑数值顺序不重排源数组；导出往返必须保持实际提示词，包括同序号深度注入的先后。 */
+  it.each([10, 20])('预设编辑后导出再导入保持提示词组装顺序，同序号按标识符定序：%s', order => {
+    const preset: PromptPreset = { identifier: 'reordered', name: '调整顺序', entries: [
+      presetEntry({ identifier: 'late', content: 'TAIL', order: 100 }),
+      presetEntry({ identifier: 'depth-z', position: 'in-chat', depth: 1, order: 7, content: 'DEPTH FIRST' }),
+      presetEntry({ identifier: 'z-relative', content: 'Z', order: 20 }),
+      presetEntry({ identifier: 'chatHistory', marker: true, markerId: Marker.ChatHistory, order: 50 }),
+      presetEntry({ identifier: 'depth-a', position: 'in-chat', depth: 1, order: 7, content: 'DEPTH SECOND' }),
+      presetEntry({ identifier: 'a-relative', content: 'A', order }),
+      presetEntry({ identifier: 'disabled', content: 'DISABLED', enabled: false, order: -10 }),
+    ] }
+    const original = structuredClone(preset)
+    const imported = parseStPreset(exportStPreset(preset))
+    expect(imported.warnings).toEqual([])
+    expect(assemblePrompt(makeInput({ preset: imported.preset })).messages).toEqual(assemblePrompt(makeInput({ preset })).messages)
+    expect(imported.preset.entries.filter(entry => entry.position === 'in-chat')).toEqual(preset.entries.filter(entry => entry.position === 'in-chat'))
+    expect(imported.preset.entries.find(entry => entry.identifier === 'disabled')?.enabled).toBe(false)
+    expect(preset).toEqual(original)
+  })
+
   it('relative 条目按 order 升序落在历史前，jailbreak 落在历史后；marker 全替换', () => {
     const wi = wiOf({
       [WIPosition.BeforeCharDefs]: [act(makeWiEntry({ key: 'wib', content: 'WIB' }))],

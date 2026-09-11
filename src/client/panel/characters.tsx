@@ -355,6 +355,7 @@ function CharactersSectionContent(props: { remote: TavernRemote }) {
       const err = errOf(r)
       if (err) setError(err)
       else {
+        setPending(null)
         toast.show(t(importWorldBook ? 'characters.importedWithBook' : 'characters.imported'))
         reload()
       }
@@ -362,7 +363,6 @@ function CharactersSectionContent(props: { remote: TavernRemote }) {
       setError(err2 instanceof Error ? err2.message : String(err2))
     } finally {
       setBusy(false)
-      setPending(null)
     }
   }
 
@@ -408,7 +408,7 @@ function CharactersSectionContent(props: { remote: TavernRemote }) {
   }
 
   const items = state.status === 'ready' ? state.value.items : []
-  // 卡多到要翻页找时才出搜索框；关键词同时匹配角色名与内嵌书名。
+  // 卡多或已有搜索内容时显示搜索框；删卡与刷新不能隐藏仍生效的筛选。
   const q = query.trim().toLowerCase()
   const filtered =
     q === ''
@@ -428,7 +428,7 @@ function CharactersSectionContent(props: { remote: TavernRemote }) {
         </FileBtn>
         <Btn size="md" disabled={busy} onClick={() => setCreating(true)}>{t('characters.newCard')}</Btn>
         <Btn size="md" onClick={reload} disabled={busy}>{t('action.refresh')}</Btn>
-        {items.length >= 5 && (
+        {(items.length >= 5 || query !== '') && (
           <SearchInput
             label={t('characters.searchLabel')}
             value={query}
@@ -482,7 +482,7 @@ function CharactersSectionContent(props: { remote: TavernRemote }) {
               ? t('characters.importBook.descNamed', { name: pending.preview.name, book: pending.preview.characterBookName, count: pending.preview.entryCount })
               : t('characters.importBook.desc', { name: pending.preview.name, count: pending.preview.entryCount })
           }
-          onClose={() => setPending(null)}
+          onClose={() => { if (!busy) setPending(null) }}
           footer={
             <div className="dsh-tavern-modalActions">
               <Button type="button" variant="outline" size="md" disabled={busy} onClick={() => void doImport(pending.name, pending.dataBase64, false)}>
@@ -494,6 +494,7 @@ function CharactersSectionContent(props: { remote: TavernRemote }) {
             </div>
           }
         >
+          <Err message={error} />
           <p style={{ margin: 0, fontSize: 13, lineHeight: '20px', color: 'var(--dsw-alias-label-secondary)' }}>
             {t('characters.importBook.skipNote')}
           </p>

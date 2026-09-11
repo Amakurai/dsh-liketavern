@@ -17,7 +17,14 @@ export function exportStPreset(preset: PromptPreset): unknown {
     ...(entry.extension ? { extension: true } : {}),
     ...(entry.injectionTrigger?.length ? { injection_trigger: [...entry.injectionTrigger] } : {}),
   }))
-  const order = preset.entries.map((entry) => ({ identifier: entry.identifier, enabled: entry.enabled }))
+  // 编辑器改 order 不重排源数组；relative 栈序须与组装一致。深度条目保留原位，避免同 depth/order 的先后被改写。
+  const relative = preset.entries.filter(entry => entry.position !== 'in-chat')
+    .sort((a, b) => a.order - b.order || a.identifier.localeCompare(b.identifier))
+  let relativeIndex = 0
+  const order = preset.entries.map(entry => {
+    const ordered = entry.position === 'in-chat' ? entry : relative[relativeIndex++]!
+    return { identifier: ordered.identifier, enabled: ordered.enabled }
+  })
   const exported: Record<string, unknown> = {
     name: preset.name,
     identifier: preset.identifier,

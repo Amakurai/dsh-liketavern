@@ -88,7 +88,7 @@ export function PersonasSection(props: { remote: TavernRemote }) {
       <div className="dsh-tavern-toolbar">
         <Btn size="md" onClick={() => guard.request(createNew)}>{t('personas.new')}</Btn>
         <Btn size="md" onClick={reload} disabled={busy}>{t('action.refresh')}</Btn>
-        {items.length >= 5 && (
+        {(items.length >= 5 || query !== '') && (
           <SearchInput label={t('personas.searchLabel')} value={query} onChange={setQuery} placeholder={t('personas.searchPlaceholder')} width={220} />
         )}
       </div>

@@ -102,6 +102,20 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
     return { items: await this.state.listCharacters() }
   }
 
+  async listArchivedCharacters(_request: Record<string, never>): Promise<TavernMethodResults['listArchivedCharacters']> {
+    return { items: await this.state.listArchivedCharacters() }
+  }
+
+  async archiveCharacter(request: { cardId: string }): Promise<TavernMethodResults['archiveCharacter']> {
+    await this.state.archiveCharacter(request.cardId)
+    return { archived: true }
+  }
+
+  async restoreCharacter(request: { cardId: string }): Promise<TavernMethodResults['restoreCharacter']> {
+    await this.state.restoreCharacter(request.cardId)
+    return { restored: true }
+  }
+
   async inspectCharacter(request: { name: string; dataBase64: string }): Promise<TavernMethodResults['inspectCharacter']> {
     try {
       const bytes = Buffer.from(request.dataBase64, 'base64')

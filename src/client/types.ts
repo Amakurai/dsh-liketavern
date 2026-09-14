@@ -7,7 +7,7 @@ import type { TavernMethodResults, TavernMethodRequests } from '../remote.js'
 import type { SessionBinding as HostSessionBinding } from '@deepseek-ai/dsh-api-session-controller/client'
 
 // 契约共享形状：从唯一定义处 re-export，本文件不再保留手写副本。
-export type { CharacterSummary } from '../state/workspace.js'
+export type { ArchivedCharacterSummary, CharacterSummary } from '../state/workspace.js'
 export type { Persona } from '../core/persona.js'
 export type { SessionBinding } from '../core/binding.js'
 export type { CharacterDetail, CharacterInspect, PresetSummary } from '../remote.js'

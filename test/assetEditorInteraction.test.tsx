@@ -1,4 +1,4 @@
-/** 资产编辑交互回归：真实文件系统与服务适配器覆盖预设身份、导入失败重试，以及列表缩短后的搜索恢复。 */
+/** 资产编辑交互回归：真实文件系统与服务适配器覆盖预设身份、收纳与删除失败恢复、导入重试及搜索恢复。 */
 import type { ReactNode } from 'react'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -15,7 +15,7 @@ import { PresetsSection } from '../src/client/panel/presets.js'
 import { LorebooksSection } from '../src/client/panel/lorebooks.js'
 import { LorebookEditor } from '../src/client/panel/lorebookEditor.js'
 import { PersistentEditor } from '../src/client/draftPersistence.js'
-import { Btn, ConfirmDialog, Dialog, Err, FileBtn, IconBtn, SearchInput, fileToBase64 } from '../src/client/util.js'
+import { Btn, ConfirmDialog, Dialog, Err, FileBtn, IconBtn, SearchInput, Tabs, fileToBase64 } from '../src/client/util.js'
 import type { Envelope, TavernRemote } from '../src/client/types.js'
 import { resolveConfig, type TavernConfigRaw } from '../src/node/config.js'
 import { TavernService } from '../src/node/service.js'
@@ -27,8 +27,9 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
   Menu: (props: { anchor?: ReactNode }) => <>{props.anchor}</>,
   Tooltip: (props: { children?: ReactNode }) => <>{props.children}</>, Toast: () => null,
   IconChevronDownOutline14: () => null, IconSearchOutline16: () => null, IconUserOutline16: () => null,
-  IconDownloadOutline16: () => null, IconEditOutline16: () => null, IconFolderOpenOutline16: () => null,
+  IconArchiveOutline20: () => null, IconDownloadOutline16: () => null, IconEditOutline16: () => null, IconFolderOpenOutline16: () => null,
   IconListPenOutline16: () => null, IconTrashOutline16: () => null, IconPlusOutline16: () => null,
+  IconRefreshOutline16: () => null,
 }))
 vi.mock('../src/client/util.js', async importOriginal => ({
   ...await importOriginal<typeof import('../src/client/util.js')>(),
@@ -72,6 +73,10 @@ async function fixture() {
     savePreset: vi.fn(async (request: Parameters<TavernRemote['savePreset']>[0]) => ok(await service.savePreset(request))),
     deletePreset: vi.fn(async (request: Parameters<TavernRemote['deletePreset']>[0]) => ok(await service.deletePreset(request))),
     listCharacters: vi.fn(async () => ok(await service.listCharacters({}))),
+    listArchivedCharacters: vi.fn(async () => ok(await service.listArchivedCharacters({}))),
+    archiveCharacter: vi.fn(async (request: Parameters<TavernRemote['archiveCharacter']>[0]) => ok(await service.archiveCharacter(request))),
+    restoreCharacter: vi.fn(async (request: Parameters<TavernRemote['restoreCharacter']>[0]) => ok(await service.restoreCharacter(request))),
+    deleteCharacter: vi.fn(async (request: Parameters<TavernRemote['deleteCharacter']>[0]) => ok(await service.deleteCharacter(request))),
     inspectCharacter: vi.fn(async (request: Parameters<TavernRemote['inspectCharacter']>[0]) => ok(await service.inspectCharacter(request))),
     importCharacter: vi.fn(async (request: Parameters<TavernRemote['importCharacter']>[0]) => ok(await service.importCharacter(request))),
     getAvatar: async () => ok({ dataUrl: null }),
@@ -199,6 +204,139 @@ describe('角色卡导入失败恢复', () => {
     await act(async () => dialog(view)!.props.onClose())
     expect(dialog(view)).toBeUndefined()
     expect(await f.state.listCharacters()).toHaveLength(0)
+  })
+})
+
+/** 收纳是可逆的列表迁移；只有收纳箱展示永久删除入口，不能再从活跃列表误触清空工作区。 */
+describe('角色卡收纳箱交互', () => {
+  it('活跃卡可收纳、恢复并在收纳箱永久删除，两个列表和危险入口保持分离', async () => {
+    const f = await fixture()
+    const created = await f.state.createCharacter('收纳测试角色')
+    const view = await render(<CharactersSection remote={f.remote} />)
+    await settle(() => {}, () => completed(f.remote.listCharacters))
+
+    expect(view.root.findAllByProps({ 'aria-label': t('characters.card.archive') })).toHaveLength(1)
+    expect(view.root.findAllByProps({ 'aria-label': t('characters.card.deletePermanently') })).toHaveLength(0)
+    await settle(
+      () => view.root.findByProps({ 'aria-label': t('characters.card.archive') }).props.onClick({ stopPropagation: () => {} }),
+      () => vi.mocked(f.remote.listCharacters).mock.calls.length === 2 && completed(f.remote.listCharacters),
+    )
+    expect(view.root.findAllByProps({ className: 'dsh-tavern-charCard' })).toHaveLength(0)
+
+    await settle(
+      () => view.root.findByType(Tabs).props.onChange('archived'),
+      () => completed(f.remote.listArchivedCharacters),
+    )
+    expect(view.root.findAllByProps({ 'aria-label': t('characters.card.restore') })).toHaveLength(1)
+    expect(view.root.findAllByProps({ 'aria-label': t('characters.card.deletePermanently') })).toHaveLength(1)
+    await settle(
+      () => view.root.findByProps({ 'aria-label': t('characters.card.restore') }).props.onClick({ stopPropagation: () => {} }),
+      () => vi.mocked(f.remote.listArchivedCharacters).mock.calls.length === 2 && completed(f.remote.listArchivedCharacters),
+    )
+    expect(view.root.findAllByProps({ className: 'dsh-tavern-charCard is-archived' })).toHaveLength(0)
+
+    await settle(
+      () => view.root.findByType(Tabs).props.onChange('active'),
+      () => vi.mocked(f.remote.listCharacters).mock.calls.length === 3 && completed(f.remote.listCharacters),
+    )
+    expect(view.root.findAllByProps({ className: 'dsh-tavern-charCard' })).toHaveLength(1)
+
+    await settle(
+      () => view.root.findByProps({ 'aria-label': t('characters.card.archive') }).props.onClick({ stopPropagation: () => {} }),
+      () => vi.mocked(f.remote.listCharacters).mock.calls.length === 4 && completed(f.remote.listCharacters),
+    )
+    await settle(
+      () => view.root.findByType(Tabs).props.onChange('archived'),
+      () => vi.mocked(f.remote.listArchivedCharacters).mock.calls.length === 3 && completed(f.remote.listArchivedCharacters),
+    )
+    await act(async () => view.root.findByProps({ 'aria-label': t('characters.card.deletePermanently') }).props.onClick({ stopPropagation: () => {} }))
+    const confirmation = view.root.findAllByType(ConfirmDialog).find(item => item.props.open && item.props.danger)!
+    expect(confirmation.props.confirmLabel).toBe(t('characters.deletePermanently.confirm'))
+    await settle(
+      () => confirmation.props.onConfirm(),
+      () => completed(f.remote.deleteCharacter) && vi.mocked(f.remote.listArchivedCharacters).mock.calls.length === 4,
+    )
+    expect(await f.state.loadCharacter(created.cardId)).toBeNull()
+    expect((await f.state.listArchivedCharacters())).toEqual([])
+  })
+
+  it.each(['envelope', 'transport'] as const)('永久删除 %s 失败后关闭确认框、显示错误并刷新，保留卡片供重试', async failure => {
+    const f = await fixture()
+    const created = await f.state.createCharacter(`删除失败-${failure}`)
+    await f.state.archiveCharacter(created.cardId)
+    const view = await render(<CharactersSection remote={f.remote} />)
+    await settle(() => view.root.findByType(Tabs).props.onChange('archived'), () => completed(f.remote.listArchivedCharacters))
+    const message = '模拟删除失败，角色仍保留'
+    if (failure === 'envelope') vi.mocked(f.remote.deleteCharacter).mockResolvedValueOnce(fail(message))
+    else vi.mocked(f.remote.deleteCharacter).mockRejectedValueOnce(new Error(message))
+    const requestDelete = async () => {
+      await act(async () => view.root.findByProps({ 'aria-label': t('characters.card.deletePermanently') }).props.onClick({ stopPropagation: () => {} }))
+      const count = vi.mocked(f.remote.listArchivedCharacters).mock.calls.length
+      await settle(
+        () => view.root.findAllByType(ConfirmDialog).find(item => item.props.open && item.props.danger)!.props.onConfirm(),
+        () => vi.mocked(f.remote.listArchivedCharacters).mock.calls.length > count && completed(f.remote.listArchivedCharacters),
+      )
+    }
+    await requestDelete()
+    expect(view.root.findAllByType(ConfirmDialog).filter(item => item.props.open)).toHaveLength(0)
+    expect(view.root.findByProps({ role: 'alert' }).children.join('')).toContain(message)
+    expect(view.root.findAllByProps({ className: 'dsh-tavern-charCard is-archived' })).toHaveLength(1)
+    expect(await f.state.loadCharacter(created.cardId)).not.toBeNull()
+    await requestDelete()
+    expect(await f.state.loadCharacter(created.cardId)).toBeNull()
+  })
+
+  it.each(['archive', 'restore'] as const)('%s 已落盘但回执断连时，刷新列表以免继续操作过期卡片', async operation => {
+    const f = await fixture()
+    const created = await f.state.createCharacter(`回执丢失-${operation}`)
+    if (operation === 'restore') await f.state.archiveCharacter(created.cardId)
+    const view = await render(<CharactersSection remote={f.remote} />)
+    const listing = operation === 'archive' ? f.remote.listCharacters : f.remote.listArchivedCharacters
+    await settle(() => {
+      if (operation === 'restore') view.root.findByType(Tabs).props.onChange('archived')
+    }, () => completed(listing))
+    const message = '模拟保存成功后连接中断'
+    if (operation === 'archive') vi.mocked(f.remote.archiveCharacter).mockImplementationOnce(async request => {
+      await f.service.archiveCharacter(request)
+      throw new Error(message)
+    })
+    else vi.mocked(f.remote.restoreCharacter).mockImplementationOnce(async request => {
+      await f.service.restoreCharacter(request)
+      throw new Error(message)
+    })
+    await settle(
+      () => view.root.findByProps({ 'aria-label': t(operation === 'archive' ? 'characters.card.archive' : 'characters.card.restore') }).props.onClick({ stopPropagation: () => {} }),
+      () => vi.mocked(listing).mock.calls.length === 2 && completed(listing),
+    )
+    expect(view.root.findAllByType('article')).toHaveLength(0)
+    expect(view.root.findByProps({ role: 'alert' }).children.join('')).toContain(message)
+    const active = await f.state.listCharacters()
+    expect(active.some(item => item.cardId === created.cardId)).toBe(operation === 'restore')
+  })
+
+  it('收纳请求完成前，鼠标和键盘都不能打开将移出列表的角色编辑器', async () => {
+    const f = await fixture()
+    await f.state.createCharacter('正在收纳的角色')
+    const pending = deferred<void>()
+    vi.mocked(f.remote.archiveCharacter).mockImplementationOnce(async request => {
+      await pending.promise
+      return ok(await f.service.archiveCharacter(request))
+    })
+    f.remote.getCharacterDetail = vi.fn(async request => ok(await f.service.getCharacterDetail(request)))
+    const view = await render(<CharactersSection remote={f.remote} />)
+    await settle(() => {}, () => completed(f.remote.listCharacters))
+    await act(async () => view.root.findByProps({ 'aria-label': t('characters.card.archive') }).props.onClick({ stopPropagation: () => {} }))
+    const card = view.root.findByType('article')
+    expect(card.props['aria-disabled']).toBe(true)
+    await act(async () => {
+      card.props.onClick()
+      const target = {}
+      card.props.onKeyDown({ key: 'Enter', target, currentTarget: target, preventDefault: () => {} })
+    })
+    expect(f.remote.getCharacterDetail).not.toHaveBeenCalled()
+    expect(view.root.findAllByType(Dialog).filter(item => item.props.open)).toHaveLength(0)
+    await settle(() => pending.resolve(), () => vi.mocked(f.remote.listCharacters).mock.calls.length === 2 && completed(f.remote.listCharacters))
+    expect(view.root.findAllByType('article')).toHaveLength(0)
   })
 })
 

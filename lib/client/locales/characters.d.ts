@@ -2,7 +2,10 @@
 export declare const zh: {
     readonly 'characters.detail.greetingNumber': "备选开场白 {index}";
     readonly 'characters.detail.addGreeting': "添加开场白";
-    readonly 'characters.section.desc': "导入或新建角色卡。点进卡片可编辑正文并导出 PNG/JSON。删除会清掉该卡工作区，以及仍指向它的会话绑定。";
+    readonly 'characters.section.desc': "导入或新建角色卡。暂时不用的卡可移入收纳箱，历史剧情与记忆仍保留；永久删除只在没有任何引用时开放。";
+    readonly 'characters.collectionLabel': "角色卡列表";
+    readonly 'characters.collection.active': "活跃角色";
+    readonly 'characters.collection.archived': "收纳箱";
     readonly 'characters.what': "角色卡";
     readonly 'characters.importFile': "导入 PNG / JSON";
     readonly 'characters.newCard': "新建空白卡";
@@ -11,10 +14,15 @@ export declare const zh: {
     readonly 'characters.emptyDesc': "导入一张 SillyTavern 角色卡，或新建空白卡。";
     readonly 'characters.imported': "已导入角色卡";
     readonly 'characters.importedWithBook': "已导入角色卡（含内嵌世界书）";
+    readonly 'characters.archived': "已将「{name}」移入收纳箱";
+    readonly 'characters.restored': "已恢复「{name}」";
     readonly 'characters.deleted': "已删除「{name}」";
     readonly 'characters.deletedSalvaged': "已删除「{name}」，内嵌世界书已保留到世界书库：{book}";
     readonly 'characters.created': "已创建「{name}」";
     readonly 'characters.card.delete': "删除角色卡";
+    readonly 'characters.card.archive': "移入收纳箱";
+    readonly 'characters.card.restore': "恢复角色卡";
+    readonly 'characters.card.deletePermanently': "永久删除";
     readonly 'characters.card.embeddedBook': "内嵌世界书";
     readonly 'characters.card.embeddedBookNamed': "内嵌世界书「{name}」";
     readonly 'characters.card.entryCount': "{count} 条";
@@ -53,8 +61,13 @@ export declare const zh: {
     readonly 'characters.importBook.skip': "跳过";
     readonly 'characters.importBook.import': "导入世界书";
     readonly 'characters.importBook.skipNote': "跳过后仍导入角色卡（描述、开场白、正则），只是不启用这本内嵌世界书。";
+    readonly 'characters.archive.emptyTitle': "收纳箱是空的";
+    readonly 'characters.archive.emptyDesc': "从活跃角色列表收纳的角色会出现在这里，并可随时恢复。";
     readonly 'characters.delete.title': "删除角色卡？";
-    readonly 'characters.delete.desc': "确定删除角色「{name}」？其工作区（记忆/世界状态）以及仍绑定该卡的会话都会解除。文件夹 ID 不会出现在对话标题里。";
+    readonly 'characters.delete.desc': "确定删除角色「{name}」？";
+    readonly 'characters.deletePermanently.title': "永久删除角色卡？";
+    readonly 'characters.deletePermanently.desc': "这会永久删除「{name}」及其剧情工作区，无法撤销。只要仍有会话或剧情引用它，操作就会被拒绝。";
+    readonly 'characters.deletePermanently.confirm': "永久删除";
     readonly 'characters.create.title': "新建空白角色卡";
     readonly 'characters.create.desc': "先建一张只有名字和默认开场白的卡，再点进去填描述。";
     readonly 'characters.create.confirm': "创建";

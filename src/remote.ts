@@ -28,7 +28,23 @@ import type { SiblingSwipe } from './core/siblings.js'
 import type { CharacterCard, ChatMessage, MemoryEntry, PromptPreset, RegexRule, WIEngineResult, WorldDelta } from './core/types.js'
 import type { TavernConfigRaw } from './node/config.js'
 import type { ForkResult } from './node/floors.js'
-import type { CharacterSummary } from './state/workspace.js'
+import type { ArchivedCharacterSummary, CharacterSummary } from './state/workspace.js'
+
+/**
+ * Tavern 资产生命周期的稳定远程错误词汇。details 只携带可公开的计数，
+ * 会话 ID、story 元数据和损坏文件名只留在 host 内部诊断，不穿过 typert 边界。
+ */
+declare module '@deepseek-ai/dsh-typert-protocol' {
+  interface RemoteErrorDetailsMap {
+    'tavern/character-not-archived': Record<string, never>
+    'tavern/character-archived': Record<string, never>
+    'tavern/character-in-use': {
+      readonly sessionCount: number
+      readonly storyCount: number
+      readonly corruptBindingCount: number
+    }
+  }
+}
 
 /** 非空字符串（原 `z.string().min(1)`）。 */
 const nonEmpty = () => string().check(minLength(1))
@@ -113,6 +129,9 @@ export const METHODS = {
   listStories: { req: object(cardIdField), value: anyValue, summary: '列出角色的独立剧情状态' },
   // 角色
   listCharacters: { req: object({}), value: anyValue, summary: '列出全部角色卡' },
+  listArchivedCharacters: { req: object({}), value: anyValue, summary: '列出收纳箱中的角色卡' },
+  archiveCharacter: { req: object({ ...cardIdField }), value: anyValue, summary: '将角色卡移入收纳箱' },
+  restoreCharacter: { req: object({ ...cardIdField }), value: anyValue, summary: '从收纳箱恢复角色卡' },
   inspectCharacter: {
     // dataBase64：卡文件字节（PNG/JSON），传输层只判非空；V1/V2/V3 结构由 state/card 的 PNG/JSON 解析入口归一化校验。
     req: object({ name: nonEmpty(), dataBase64: nonEmpty() }),
@@ -129,7 +148,7 @@ export const METHODS = {
     value: anyValue,
     summary: '导入角色卡（PNG/JSON，base64）',
   },
-  deleteCharacter: { req: object({ ...cardIdField }), value: anyValue, summary: '删除角色卡工作区' },
+  deleteCharacter: { req: object({ ...cardIdField }), value: anyValue, summary: '永久删除无会话或剧情引用的角色卡工作区' },
   getCharacterDetail: { req: object({ ...cardIdField }), value: anyValue, summary: '角色卡详情（归一化卡 + 开场白列表）' },
   saveCharacter: {
     req: object({
@@ -454,6 +473,9 @@ export interface TavernMethodResults {
   listStories: { items: import('./state/story.js').StorySummary[] }
   // 角色
   listCharacters: { items: CharacterSummary[] }
+  listArchivedCharacters: { items: ArchivedCharacterSummary[] }
+  archiveCharacter: { archived: boolean }
+  restoreCharacter: { restored: boolean }
   inspectCharacter: CharacterInspect
   importCharacter: { cardId: string; name: string }
   deleteCharacter: { deleted: boolean; salvagedLorebook: string | null }

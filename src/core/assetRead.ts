@@ -22,6 +22,7 @@ export function resolveReadableAssetPath(raw: string): { ok: true; path: string 
   const path = parts.filter((p) => p !== '.').join('/')
   if (!path) return { ok: false, error: '路径不合法' }
   const lower = path.toLowerCase()
+  if (lower === '.archive.json') return { ok: false, error: '不读取角色生命周期元数据' }
   if (lower === 'stories' || lower.startsWith('stories/') || lower === 'story.json') return { ok: false, error: '不读取其它剧情或内部元数据' }
   if (lower === 'state/wal' || lower.startsWith('state/wal/')) return { ok: false, error: '不读取 WAL 快照' }
   if (lower === 'state/template.json') return { ok: false, error: '不读取内部模板状态与回复快照' }

@@ -16,6 +16,16 @@ export interface CharacterSummary {
     characterBookName: string | null;
     characterBookEntryCount: number;
 }
+/** 收纳箱中的角色摘要；其它字段与活动角色列表保持一致。 */
+export interface ArchivedCharacterSummary extends CharacterSummary {
+    archivedAt: string;
+}
+/** 工作区根的收纳标记；不属于剧情状态，不进入 story 快照或 WAL。 */
+export interface CharacterArchiveMetadata {
+    version: 1;
+    archivedAt: string;
+}
+export declare const CHARACTER_ARCHIVE_FILE = ".archive.json";
 export interface WorkspaceIndexFile {
     /** 相对工作区根的路径（正斜杠）。 */
     path: string;
@@ -43,15 +53,23 @@ export interface ImportCardOptions {
  * journal.md（不存在则建空文件）与初始 index.json。
  */
 export declare function importCard(dataRoot: string, card: CharacterCard, opts?: ImportCardOptions): Promise<CharacterWorkspace>;
-/**
- * 列出全部角色（读各 card.json 的 name 与 card.png 存在性）；损坏目录容错跳过。
- * 只 readdir characters/ 本层、逐目录读 card.json 探测：卡目录约定为单层
- * characters/<cardId>/card.json，递归遍历会把每个角色的 memory/archive/、
- * state/wal/ 整棵走完（数据积累后设置面板打开随之变慢），这里不做任何递归。
- */
+/** 读收纳标记；文件损坏时明确报错，不把本应隐藏的角色误当活动角色。 */
+export declare function readCharacterArchiveMetadata(dataRoot: string, cardId: string): Promise<CharacterArchiveMetadata | null>;
 export declare function listCharacters(dataRoot: string): Promise<CharacterSummary[]>;
+/**
+ * 列出收纳箱角色。标记 JSON 损坏时仍依「文件存在」收纳，并用 mtime 兜底时间：
+ * 这样角色不会误回活动库，也不会从两个列表同时消失，用户仍能点击恢复清掉坏标记。
+ */
+export declare function listArchivedCharacters(dataRoot: string): Promise<ArchivedCharacterSummary[]>;
 /** 读取角色工作区；card.json 缺失或损坏返回 null。 */
 export declare function loadCharacter(dataRoot: string, cardId: string): Promise<CharacterWorkspace | null>;
+/**
+ * 将角色收纳：只原子写入根级标记，不搬动工作区，因此剧情、WAL 和历史绑定仍按
+ * 原路径可用。重复收纳保留首次 archivedAt，避免列表顺序因重试抖动。
+ */
+export declare function archiveCharacter(dataRoot: string, cardId: string): Promise<CharacterArchiveMetadata>;
+/** 恢复收纳角色；对已在活动库的角色幂等，不修改任何剧情文件。 */
+export declare function restoreCharacter(dataRoot: string, cardId: string): Promise<void>;
 /** 删除角色工作区整目录（rm -rf；本模块唯一直接使用 node:fs 的位置）。 */
 export declare function deleteCharacter(dataRoot: string, cardId: string): Promise<void>;
 /**

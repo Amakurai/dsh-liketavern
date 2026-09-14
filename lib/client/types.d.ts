@@ -5,7 +5,7 @@
  */
 import type { TavernMethodResults, TavernMethodRequests } from '../remote.js';
 import type { SessionBinding as HostSessionBinding } from '@deepseek-ai/dsh-api-session-controller/client';
-export type { CharacterSummary } from '../state/workspace.js';
+export type { ArchivedCharacterSummary, CharacterSummary } from '../state/workspace.js';
 export type { Persona } from '../core/persona.js';
 export type { SessionBinding } from '../core/binding.js';
 export type { CharacterDetail, CharacterInspect, PresetSummary } from '../remote.js';

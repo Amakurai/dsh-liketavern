@@ -5,13 +5,15 @@
  *   interactiveCards（boolean | null）三态透传；cardId 目录名格式校验；未知字段丢弃。
  * - loadBinding/saveBinding 往返：写入侧拒绝坏数据；坏 JSON、缺字段、sessionId 不一致
  *   一律视为未绑定（返回 null），不再把「合法 JSON 但字段缺失」的数据交给使用点。
+ * - listBindingReferencesForCard：永久删除预检保守识别部分损坏绑定，未知损坏、
+ *   非普通文件、大小写扩展名与超限文件均 fail-closed。
  */
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, symlink, truncate, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { resolveStaleBinding, type SessionBinding, type WalLineageEntry } from '../src/core/binding.js'
-import { loadBinding, parseSessionBinding, saveBinding } from '../src/node/bindings.js'
+import { listBindingReferencesForCard, loadBinding, parseSessionBinding, saveBinding } from '../src/node/bindings.js'
 import type { TavernPaths } from '../src/node/paths.js'
 
 /** 手写全字段默认绑定（各用例用 overrides 覆盖）。 */
@@ -205,6 +207,82 @@ describe('loadBinding / saveBinding 严格校验', () => {
     await writeFile(join(paths.sessions, 's-file.json'), JSON.stringify(makeBinding({ sessionId: 's-other' })), 'utf8')
     expect(await loadBinding(paths, 's-file')).toBeNull()
     expect(await loadBinding(paths, 's-missing')).toBeNull()
+  })
+
+  it('引用扫描识别严格解码失败但 cardId 明确的文件', async () => {
+    const cardId = '受保护角色-a1b2c3d4'
+    await saveBinding(paths, makeBinding({ sessionId: 's-reference', cardId }))
+    // 缺必填字段，loadBinding 会视为损坏，但 cardId 仍足以证明它是删除引用。
+    await writeFile(join(paths.sessions, 's-partial.json'), JSON.stringify({ sessionId: 's-partial', cardId }), 'utf8')
+    await writeFile(join(paths.sessions, 's-unrelated.json'), JSON.stringify({ sessionId: 's-unrelated', cardId: 'other-card' }), 'utf8')
+    await writeFile(join(paths.sessions, 's-unreadable-json.json'), '{broken', 'utf8')
+
+    const scan = await listBindingReferencesForCard(paths, cardId)
+    expect(scan.sessionIds).toEqual(['s-partial', 's-reference'])
+    expect(scan.corruptFiles).toEqual(expect.arrayContaining([
+      's-broken.json',
+      's-corrupt.json',
+      's-file.json',
+      's-partial.json',
+      's-unreadable-json.json',
+      's-unrelated.json',
+    ]))
+  })
+
+  it('引用扫描拒绝非普通 JSON 与符号链接，且绝不读取链接的外部目标', async () => {
+    const cardId = '链接保护角色-a1b2c3d4'
+    const directoryName = '伪装目录.json'
+    const linkName = '外部绑定.json'
+    const external = join(root, 'external-binding.json')
+    await mkdir(join(paths.sessions, directoryName))
+    await writeFile(external, JSON.stringify(makeBinding({ sessionId: 'external-session', cardId })), 'utf8')
+
+    try {
+      await symlink(external, join(paths.sessions, linkName), 'file')
+    } catch (error) {
+      // Windows 未启用开发者模式时普通用户可能不能创建符号链接；目录边界仍照常验证。
+      const code = (error as NodeJS.ErrnoException).code
+      if (code === 'EPERM' || code === 'EACCES' || code === 'ENOTSUP') {
+        const scan = await listBindingReferencesForCard(paths, cardId)
+        expect(scan.corruptFiles).toContain(directoryName)
+        return
+      }
+      throw error
+    }
+
+    const scan = await listBindingReferencesForCard(paths, cardId)
+    expect(scan.corruptFiles).toEqual(expect.arrayContaining([directoryName, linkName]))
+    // 若错误地跟随链接，外部 JSON 会把这个 sessionId 当成目标角色引用。
+    expect(scan.sessionIds).not.toContain('external-session')
+  })
+
+  it('大小写扩展名与超限绑定都不能绕过永久删除预检', async () => {
+    const cardId = '扩展名保护角色-a1b2c3d4'
+    await writeFile(join(paths.sessions, 's-uppercase.JSON'), JSON.stringify(makeBinding({
+      sessionId: 's-uppercase', cardId,
+    })), 'utf8')
+    const oversized = join(paths.sessions, 'oversized.json')
+    await writeFile(oversized, '')
+    await truncate(oversized, 1024 * 1024 + 1)
+
+    const scan = await listBindingReferencesForCard(paths, cardId)
+    expect(scan.sessionIds).toContain('s-uppercase')
+    expect(scan.corruptFiles).toContain('oversized.json')
+    // POSIX 上大小写不同的文件名与 sessionFile 不一致，会额外记为损坏；
+    // Windows 上则是同一路径。两者都已通过 sessionIds 阻断删除。
+    if (process.platform !== 'win32') expect(scan.corruptFiles).toContain('s-uppercase.JSON')
+  })
+
+  it('引用扫描按宿主文件系统区分角色 ID 大小写，损坏引用使用相同口径', async () => {
+    const cardId = 'case-sensitive-card-a1b2c3d4'
+    await saveBinding(paths, makeBinding({ sessionId: 's-card-case', cardId: cardId.toUpperCase() }))
+    await writeFile(join(paths.sessions, 's-card-case-partial.json'), JSON.stringify({
+      sessionId: 's-card-case-partial', cardId: cardId.toUpperCase(),
+    }), 'utf8')
+
+    const scan = await listBindingReferencesForCard(paths, cardId)
+    expect(scan.sessionIds).toEqual(process.platform === 'win32' ? ['s-card-case', 's-card-case-partial'] : [])
+    expect(scan.corruptFiles).toContain('s-card-case-partial.json')
   })
 })
 

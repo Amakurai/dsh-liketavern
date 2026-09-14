@@ -83,6 +83,16 @@ describe('请求 schema 校验（gateway 只调用 .parse）', () => {
     expect(() => codec.schema.parse({ sessionId: 's1' })).toThrow()
   })
 
+  it('收纳、恢复与永久删除共用非空 cardId 边界', () => {
+    for (const method of ['archiveCharacter', 'restoreCharacter', 'deleteCharacter']) {
+      const codec = requestCodec(method)
+      expect(codec.schema.parse({ cardId: 'card-a1b2c3d4' })).toEqual({ cardId: 'card-a1b2c3d4' })
+      expect(() => codec.schema.parse({ cardId: '' }), method).toThrow()
+      expect(() => codec.schema.parse({}), method).toThrow()
+    }
+    expect(requestCodec('listArchivedCharacters').schema.parse({})).toEqual({})
+  })
+
   it('楼层 turn 是可选正整数，messageId 也可缺省', () => {
     const codec = requestCodec('regenerate')
     expect(codec.schema.parse({ sessionId: 's1' })).toEqual({ sessionId: 's1' })

@@ -47,6 +47,13 @@ export declare class TavernService extends TypertRemoteService implements Tavern
         patch: unknown;
     }): Promise<TavernMethodResults['updateSettings']>;
     listCharacters(_request: Record<string, never>): Promise<TavernMethodResults['listCharacters']>;
+    listArchivedCharacters(_request: Record<string, never>): Promise<TavernMethodResults['listArchivedCharacters']>;
+    archiveCharacter(request: {
+        cardId: string;
+    }): Promise<TavernMethodResults['archiveCharacter']>;
+    restoreCharacter(request: {
+        cardId: string;
+    }): Promise<TavernMethodResults['restoreCharacter']>;
     inspectCharacter(request: {
         name: string;
         dataBase64: string;

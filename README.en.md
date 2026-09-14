@@ -4,7 +4,7 @@
 
 **Tavern-style roleplay in DeepSeek Harness's `dsh web`, with character cards, lorebooks, and long-term memory.**
 
-**[v0.2.3](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.2.3) · Targets dsh `0.1.5-rc.2` · Node.js ≥ 24**
+**[v0.2.4](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.2.4) · Targets dsh `0.1.5-rc.2` · Node.js ≥ 24**
 
 [中文](./README.md) | English
 
@@ -34,7 +34,7 @@ If you are new to dsh, start with the [official documentation](https://deepseek-
 Run these commands to install a fixed release tag:
 
 ```bash
-dsh plugin --profile web add github:Amakurai/dsh-liketavern#v0.2.3
+dsh plugin --profile web add github:Amakurai/dsh-liketavern#v0.2.4
 dsh plugin --profile web list --depth 0
 ```
 
@@ -48,10 +48,10 @@ The repository includes compiled `lib/` files; a normal installation needs no ma
 
 ### Install a tarball
 
-Download `dsh-liketavern-0.2.3.tgz` from the [v0.2.3 Release](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.2.3), then run this command in the download directory:
+Download `dsh-liketavern-0.2.4.tgz` from the [v0.2.4 Release](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.2.4), then run this command in the download directory:
 
 ```bash
-dsh plugin --profile web add ./dsh-liketavern-0.2.3.tgz
+dsh plugin --profile web add ./dsh-liketavern-0.2.4.tgz
 ```
 
 Restart `dsh web` afterward. The release includes `SHA256SUMS.txt` to verify the download.
@@ -80,7 +80,7 @@ Tavern uses dsh's native PTC tool presentation. The model replies directly when 
 
 | Feature | Current support |
 | --- | --- |
-| Character cards | Import V1 / V2 / V3 PNG and JSON cards; export PNG / JSON; multiple greetings, embedded lorebooks, card regex, and interactive HTML cards |
+| Character cards | Import V1 / V2 / V3 PNG and JSON cards; export PNG / JSON; recoverable archiving and reference-protected permanent deletion; multiple greetings, embedded lorebooks, card regex, and interactive HTML cards |
 | Presets and personas | Import, edit, and export ST prompt presets; personas supply the `{{user}}` name and description; preset and persona data is validated on read and write |
 | Lorebooks and world state | Global, character, and session lorebooks, keyword triggers, and constant entries; a story delta layer records new, changed, and invalidated facts |
 | Long-term memory | BM25 retrieval with time decay and model-driven reads/writes; automatic summaries during idle time when over capacity, retaining searchable archived sources |
@@ -98,8 +98,8 @@ Editors provide unsaved-change prompts and draft recovery. Settings, forms, and 
 
 ### Third-party cards, templates, and scripts
 
-- **Tavern Helper support is a subset.** Variables, script libraries, worldbooks, and several message operations are supported. `generate` / `generateRaw`, message insertion and rotation, history pagination, and cross-page events remain unsupported. See [Tavern Helper compatibility](docs/TAVERN_HELPER.md) for APIs and examples.
-- **EJS templates are built in.** Cards using supported APIs do not require a separate ST-Prompt-Template installation. See [prompt templates](docs/PROMPT_TEMPLATES.md) for host differences in prompt placement and history handling.
+- **Tavern Helper support is a subset.** Variables, script libraries, worldbooks, and several message operations are supported. `generate` / `generateRaw`, message insertion and rotation, history pagination, and cross-page events remain unsupported. See [Tavern Helper compatibility](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/TAVERN_HELPER.md) for APIs and examples.
+- **EJS templates are built in.** Cards using supported APIs do not require a separate ST-Prompt-Template installation. See [prompt templates](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/PROMPT_TEMPLATES.md) for host differences in prompt placement and history handling.
 - **MVU has limits.** A pure official MVU import entry can use the native runner; custom framework code is retained. Classic schemas and the `BEFORE_MESSAGE_UPDATE` body-update hook remain unsupported. The current UI has no separate variable schema editor entry point.
 - **Interactive cards run in isolated iframes.** They cannot access the main page DOM, `parent.TavernHelper`, `parent.$`, or Node. Network requests and external scripts are restricted by default; trusted domains can be configured under Settings → Cards & Data. Images and fonts follow the existing loading policy.
 - **Script choices do not send messages.** Clicking a script's text option fills the current input draft. AI impersonation still uses the clipboard and requires manual pasting.
@@ -134,7 +134,9 @@ Legacy shared state is copied into isolated stories on first access to an old bi
 
 **No Tavern mode or settings after installation?** Run `dsh --version` to confirm host version `0.1.5-rc.2`, then `dsh plugin --profile web list --depth 0` to check the installation target. Restart `dsh web` and create a new session. If Tavern is still missing, check the terminal for plugin loading errors.
 
-**The card displays, but buttons, scripts, or MVU do not work?** Under Settings → Scripts, check that the script and its folder are enabled and saved, then inspect the current session's runtime diagnostics. MVU also requires the session's automatic update option and an open page. Check [compatibility](docs/TAVERN_HELPER.md) for cards relying on parent-window objects or unsupported APIs.
+**The card displays, but buttons, scripts, or MVU do not work?** Under Settings → Scripts, check that the script and its folder are enabled and saved, then inspect the current session's runtime diagnostics. MVU also requires the session's automatic update option and an open page. Check [compatibility](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/TAVERN_HELPER.md) for cards relying on parent-window objects or unsupported APIs.
+
+**Want to check the data directory without changing any files?** Run `dsh plugin --profile web exec dsh-tavern-doctor` in the installed environment (`npm run doctor` in a source checkout), adding `--json` for machine-readable output. The report contains only versions, directory states, aggregate character/story/WAL counts, and fixed issue codes. It never prints real paths, asset names, IDs, message text, or tokens, and it has no repair option.
 
 **pnpm reports a blocked build script?** The plugin ships compiled output; first identify the dependency named in the error. A release tarball may resolve a plugin source-build problem. Host dependency build requirements still need to be addressed by following dsh's message and checking `allowBuilds` in that profile's `pnpm-workspace.yaml`.
 
@@ -147,12 +149,12 @@ The detailed guides below are currently in Chinese.
 | Document | Contents |
 | --- | --- |
 | [Changelog](./CHANGELOG.md) | Version changes and corresponding host versions |
-| [Tavern Helper compatibility](docs/TAVERN_HELPER.md) | Card, script, variable, worldbook, message, and MVU APIs |
-| [Prompt templates](docs/PROMPT_TEMPLATES.md) | EJS, macros, decorators, and examples |
-| [Architecture](docs/ARCHITECTURE.md) | Story isolation, branch rollback, memory, and prompt channels |
-| [Host compatibility](docs/HOST_COMPATIBILITY.md) | Verified host behavior and upgrade checks |
-| [Dependency security](docs/DEPENDENCY_SECURITY.md) | Security updates, remaining Showdown advisories, and sandbox boundaries |
-| [Development conventions](./AGENTS.md) | Code boundaries, testing, and delivery requirements |
+| [Tavern Helper compatibility](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/TAVERN_HELPER.md) | Card, script, variable, worldbook, message, and MVU APIs |
+| [Prompt templates](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/PROMPT_TEMPLATES.md) | EJS, macros, decorators, and examples |
+| [Architecture](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/ARCHITECTURE.md) | Story isolation, branch rollback, memory, and prompt channels |
+| [Host compatibility](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/HOST_COMPATIBILITY.md) | Verified host behavior and upgrade checks |
+| [Dependency security](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/DEPENDENCY_SECURITY.md) | Security updates, remaining Showdown advisories, and sandbox boundaries |
+| [Development conventions](https://github.com/Amakurai/dsh-liketavern/blob/main/AGENTS.md) | Code boundaries, testing, and delivery requirements |
 
 ## Development
 

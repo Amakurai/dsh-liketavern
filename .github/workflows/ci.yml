@@ -5,13 +5,17 @@ on:
     branches: [main]
   pull_request:
 
-jobs:
-  build-test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+permissions:
+  contents: read
 
-      - uses: actions/setup-node@v4
+jobs:
+  ubuntu-full:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
           cache: npm
@@ -24,6 +28,9 @@ jobs:
 
       - name: 测试
         run: npm test
+
+      - name: 诊断命令安装入口冒烟
+        run: npm run doctor:check
 
       # lib/ 刻意入库，GitHub/git 安装路径的用户拿到的就是这份产物。
       # 提交前忘了 npm run build 的话，这里会拦下来。
@@ -41,25 +48,46 @@ jobs:
             exit 1
           fi
 
-      # npm pack --dry-run 只打印清单、永远 exit 0，必须解析 files 列表做断言。
-      - name: 校验 npm pack 白名单
-        run: |
-          node -e '
-          const { execFileSync } = require("node:child_process");
-          const npm = process.platform === "win32" ? "npm.cmd" : "npm";
-          // Windows 上 Node 禁止无 shell 拉起 .cmd，runner（ubuntu）直接 exec
-          const out = execFileSync(npm, ["pack", "--dry-run", "--json"], { encoding: "utf8", shell: process.platform === "win32" });
-          // prepack 钩子的构建日志会先混进 stdout，从首个以 [ 开头的行截取 JSON
-          const json = out.slice(out.search(/^\[/m));
-          const files = JSON.parse(json)[0].files.map((f) => f.path);
-          const required = ["lib/index.js", "lib/client.js", "lib/vendor/template-libraries.js", "lib/vendor/template-faker.js", "lib/vendor/card-libraries.js", "cordis.patch.yml", "presets/tavern/agent.cordis.yml", "README.md", "README.en.md", "CHANGELOG.md", "LICENSE"];
-          const missing = required.filter((p) => !files.includes(p));
-          const forbidden = files.filter((p) => /^(src|test|node_modules)\//.test(p));
-          if (missing.length || forbidden.length) {
-            console.error("npm pack 白名单校验失败");
-            if (missing.length) console.error("缺失文件: " + missing.join(", "));
-            if (forbidden.length) console.error("越界文件: " + forbidden.join(", "));
-            process.exit(1);
-          }
-          console.log("npm pack 白名单校验通过，共 " + files.length + " 个文件");
-          '
+      # lib/ 已完成构建与一致性检查；此处禁用生命周期并生成一次真实 tarball。
+      # 审核及后续发布都应使用这一份字节流，不重新打包。
+      - name: 生成并校验待审核 npm 包
+        id: package
+        run: node scripts/verify-package.mjs
+
+      - name: 上传待审核 npm 包
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: npm-package-${{ github.sha }}
+          path: |
+            ${{ steps.package.outputs.tarball }}
+            ${{ steps.package.outputs.checksum }}
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+  windows-core:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 构建（tsc + client bundle）
+        run: npm run build
+
+      - name: 测试
+        run: npm test
+
+      - name: 诊断命令安装入口冒烟
+        run: npm run doctor:check
+
+      # 直接运行 Node 脚本（不经 npm run），覆盖 Windows 的 npm.cmd 安全拉起分支。
+      - name: 校验 npm 包边界（Windows）
+        run: node scripts/verify-package.mjs --dry-run

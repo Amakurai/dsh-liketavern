@@ -14,6 +14,7 @@
  * - 卡级正则解析缓存（assets/regex-scripts.json，mtime+size stat 指纹）：rulesFor 命中缓存不重读
  *   文件、绕开写方法的直写经指纹失效、同尺寸覆盖（WAL 回滚）经 invalidateCardRegex 可见、
  *   文件缺失且卡无正则时兜底重编译只跑一次（不收敛不复发）；
+ * - 角色永久删除：会话绑定与已发布剧情分别受引用保护，无引用后才删目录并逐出缓存；
  * - loadBinding 自愈的读-改-写竞态：落盘前复读，磁盘已被换卡覆盖则丢弃本次自愈；
  * - workspace：拒绝会把工作区根移出 characters/ 的非法 cardId；
  * - 会话副作用队列：同会话严格串行、不同会话互不阻塞、失败后仍可继续；
@@ -28,7 +29,7 @@
  *   同名再保存与预设/人设改名仍是编辑（不 fork）；
  * - saveRegexRules 逐条结构校验：字段缺失/类型错误的规则抛错不落盘。
  */
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -400,7 +401,7 @@ describe('standingRevTags', () => {
     loadSpy.mockRestore()
   })
 
-  it('deleteCharacter 逐出全部剧情句柄与正则缓存，不留滞留条目', async () => {
+  it('deleteCharacter 保护会话与剧情引用，清理引用后删卡并逐出缓存', async () => {
     const { cardId } = await importCard(join(root, 'characters'), makeCard())
     // 预热共享句柄、剧情句柄（saveBinding 建剧情快照）与卡级正则缓存
     const binding = makeBinding({ cardId, presetId: null })
@@ -411,13 +412,131 @@ describe('standingRevTags', () => {
     const workspaces = (state as unknown as { workspaces: Map<string, unknown> }).workspaces
     expect(workspaces.has(cardId)).toBe(true)
     expect(workspaces.has(cardId + '/' + storyId)).toBe(true)
+    await state.archiveCharacter(cardId)
 
+    const both = state.deleteCharacter(cardId)
+    await expect(both).rejects.toMatchObject({
+      code: 'tavern/character-in-use',
+      details: { sessionCount: 1, storyCount: 1, corruptBindingCount: 0 },
+      isDSHRemoteError: true,
+      references: {
+        sessionIds: [binding.sessionId],
+        stories: [expect.objectContaining({ id: storyId, sessionId: binding.sessionId })],
+        corruptBindingFiles: [],
+      },
+    })
+    expect(await state.loadCharacter(cardId)).not.toBeNull()
+    expect((await loadBinding(paths, binding.sessionId))?.cardId).toBe(cardId)
+
+    // 只清绑定后，历史 story 仍是独立引用，不得因当前会话已解绑而误删。
+    await state.clearBinding(binding.sessionId)
+    await expect(state.deleteCharacter(cardId)).rejects.toMatchObject({
+      code: 'tavern/character-in-use',
+      details: { sessionCount: 0, storyCount: 1, corruptBindingCount: 0 },
+      references: { sessionIds: [], stories: [expect.objectContaining({ id: storyId })], corruptBindingFiles: [] },
+    })
+
+    // 测试环境显式清掉无绑定的剧情；再塞入一条假的剧情缓存键，验证最终删除的前缀逐出。
+    await state.discardUnboundStory(cardId, storyId, binding.sessionId)
+    workspaces.set(cardId + '/story-cached-only', {})
     await state.deleteCharacter(cardId)
     // 共享句柄、剧情句柄（cardId/ 前缀）与卡级正则缓存全部逐出
     expect([...workspaces.keys()].some((key) => key === cardId || key.startsWith(`${cardId}/`))).toBe(false)
     const cardRegexCache = (state as unknown as { cardRegexCache: Map<string, unknown> }).cardRegexCache
     expect(cardRegexCache.has(cardId)).toBe(false)
     expect(await state.loadCharacter(cardId)).toBeNull()
+  })
+
+  it('收纳与新绑定并发时，先入队的收纳阻止新 session 及孤儿剧情', async () => {
+    const { cardId } = await importCard(paths.characters, makeCard({ name: '并发角色' }))
+    const binding = makeBinding({ sessionId: 'concurrent-bind', cardId })
+    const [archived, saved] = await Promise.allSettled([
+      state.archiveCharacter(cardId),
+      state.saveBinding(binding),
+    ])
+
+    expect(archived.status).toBe('fulfilled')
+    expect(saved.status).toBe('rejected')
+    if (saved.status === 'rejected') expect(saved.reason).toMatchObject({ code: 'tavern/character-archived', isDSHRemoteError: true })
+    expect(await loadBinding(paths, binding.sessionId)).toBeNull()
+    expect(await state.listStories(cardId)).toEqual([])
+    expect((await state.listArchivedCharacters())[0]?.cardId).toBe(cardId)
+  })
+
+  it('收纳卡只允许原 session 原 story 更新，拒绝新 session、换 story 与换卡绑定', async () => {
+    const archivedCard = await importCard(paths.characters, makeCard({ name: '原剧情' }))
+    await state.saveBinding(makeBinding({ sessionId: 'existing', cardId: archivedCard.cardId }))
+    const existing = (await state.loadBinding('existing'))!
+    await state.archiveCharacter(archivedCard.cardId)
+
+    await expect(state.saveBinding({ ...existing, greetingIndex: 1 })).resolves.toBeUndefined()
+    expect((await loadBinding(paths, 'existing'))?.greetingIndex).toBe(1)
+    const newSessionError = await state.saveBinding({ ...existing, sessionId: 'new-session', storyId: undefined }).then(
+      () => null,
+      (error: unknown) => error as { code: string; message: string; details: unknown },
+    )
+    expect(newSessionError).toMatchObject({ code: 'tavern/character-archived', details: {} })
+    expect(newSessionError?.message).not.toContain(archivedCard.cardId)
+    expect(JSON.stringify(newSessionError?.details)).not.toContain(archivedCard.cardId)
+    await expect(state.saveBinding({ ...existing, storyId: 'story-00000000-0000-4000-8000-000000000000' })).rejects.toMatchObject({
+      code: 'tavern/character-archived',
+    })
+
+    const activeCard = await importCard(paths.characters, makeCard({ name: '活动角色' }))
+    await state.saveBinding(makeBinding({ sessionId: 'switcher', cardId: activeCard.cardId }))
+    const switcher = (await state.loadBinding('switcher'))!
+    await expect(state.saveBinding({ ...switcher, cardId: archivedCard.cardId, storyId: existing.storyId })).rejects.toMatchObject({
+      code: 'tavern/character-archived',
+    })
+  })
+
+  it('无法归属的损坏 session JSON 使永久删除 fail-closed，details 只暴露计数', async () => {
+    const { cardId } = await importCard(paths.characters, makeCard({ name: '损坏绑定保护' }))
+    await state.archiveCharacter(cardId)
+    const corrupt = join(paths.sessions, 'unknown.json')
+    await writeFile(corrupt, '{broken', 'utf8')
+
+    const deletion = state.deleteCharacter(cardId)
+    await expect(deletion).rejects.toMatchObject({
+      code: 'tavern/character-in-use',
+      details: { sessionCount: 0, storyCount: 0, corruptBindingCount: 1 },
+      references: { sessionIds: [], stories: [], corruptBindingFiles: ['unknown.json'] },
+    })
+    await expect(deletion).rejects.not.toMatchObject({ details: { sessionIds: expect.anything(), stories: expect.anything() } })
+    expect(await state.loadCharacter(cardId)).not.toBeNull()
+
+    await unlink(corrupt)
+    await expect(state.deleteCharacter(cardId)).resolves.toEqual({ salvagedLorebook: null })
+  })
+
+  it.runIf(process.platform === 'win32')('Windows 上永久删除保护大小写变体的旧绑定并清理同卡缓存', async () => {
+    const { cardId } = await importCard(paths.characters, makeCard({ name: 'Case Reference' }))
+    const upperId = cardId.toUpperCase()
+    // 模拟未触发懒迁移的旧绑定：尚无 story 目录，引用扫描是最后一道删除保护。
+    await saveBinding(paths, makeBinding({ sessionId: 'legacy-case', cardId: upperId }))
+    await state.archiveCharacter(cardId)
+    await expect(state.deleteCharacter(cardId)).rejects.toMatchObject({
+      code: 'tavern/character-in-use',
+      details: { sessionCount: 1, storyCount: 0, corruptBindingCount: 0 },
+    })
+    expect(await state.loadCharacter(upperId)).not.toBeNull()
+
+    await state.clearBinding('legacy-case')
+    await state.loadCharacter(cardId)
+    await state.workspace(cardId)
+    await state.workspace(upperId)
+    await state.rulesFor(makeBinding({ cardId, presetId: null }))
+    await state.rulesFor(makeBinding({ cardId: upperId, presetId: null }))
+    // 删除请求本身也可能使用大小写别名，所有指向同一目录的缓存都必须失效。
+    await state.deleteCharacter(upperId)
+    expect(await state.loadCharacter(cardId)).toBeNull()
+    expect(await state.loadCharacter(upperId)).toBeNull()
+    const caches = state as unknown as { workspaces: Map<string, unknown>; cardRegexCache: Map<string, unknown> }
+    expect(caches.workspaces.size).toBe(0)
+    expect(caches.cardRegexCache.size).toBe(0)
+    await expect(state.saveBinding(makeBinding({ cardId, sessionId: 'after-case-delete' }))).rejects.toThrow(/不存在/)
+    expect(await loadBinding(paths, 'after-case-delete')).toBeNull()
+    expect(await state.listStories(cardId)).toEqual([])
   })
 })
 

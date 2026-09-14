@@ -10,5 +10,14 @@ export declare function parseSessionBinding(input: unknown): SessionBinding;
 export declare function loadBinding(paths: TavernPaths, sessionId: string): Promise<SessionBinding | null>;
 export declare function saveBinding(paths: TavernPaths, binding: SessionBinding): Promise<void>;
 export declare function deleteBinding(paths: TavernPaths, sessionId: string): Promise<void>;
-/** 删除角色卡时清掉仍指向该 cardId 的会话绑定，避免封面页继续显示文件夹 ID。 */
-export declare function clearBindingsForCard(paths: TavernPaths, cardId: string): Promise<void>;
+/**
+ * 扫描持久化会话中对角色的引用。永久删除必须 fail-closed：任意 `.json` 无法解析、
+ * 不符合绑定 schema 或文件身份与 sessionId 不一致，都记为无法安全归属的损坏绑定。
+ * 若部分损坏对象仍明确携带目标 cardId，同时记入 sessionIds，供 host 诊断；
+ * 对外 RemoteError details 只传计数，不传这些文件名或会话身份。
+ */
+export interface BindingReferenceScan {
+    sessionIds: string[];
+    corruptFiles: string[];
+}
+export declare function listBindingReferencesForCard(paths: TavernPaths, cardId: string): Promise<BindingReferenceScan>;

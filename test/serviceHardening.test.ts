@@ -12,10 +12,11 @@
  *   invalid-preset 抛错且不写盘；带 regexScripts 的合法预设照常通过；
  * - setSessionBinding 经 parseSessionBinding 整体验证：非对象/缺字段抛 invalid-binding，
  *  合法绑定落盘，且客户端自报的 walLineage 不被信任（无同卡既有绑定时丢弃）；
+ * - 收纳箱 service 契约：收纳/列举/恢复可逆，历史绑定在收纳后仍可读，永久删除明确拒绝引用；
  * - getAvatar 指纹缓存：同 mtime+size 指纹不重读 card.png，文件变更后指纹失效重读，
  *   无头像缓存 null 结果。
  */
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -32,7 +33,7 @@ import { TavernService } from '../src/node/service.js'
 import { TavernState } from '../src/node/state.js'
 import { MemoryStore } from '../src/state/memory.js'
 import { exportStPreset } from '../src/state/presetStore.js'
-import { importCard } from '../src/state/workspace.js'
+import { CHARACTER_ARCHIVE_FILE, importCard } from '../src/state/workspace.js'
 import { WorkspaceFs } from '../src/state/workspaceFs.js'
 
 let root: string
@@ -114,6 +115,70 @@ function makeBinding(overrides: Partial<SessionBinding> = {}): SessionBinding {
     ...overrides,
   }
 }
+
+describe('角色收纳箱 service 契约', () => {
+  it('收纳后从活动列表隐藏，历史绑定仍可读并能恢复', async () => {
+    const { cardId } = await importCard(paths.characters, makeCard({ name: '灯塔守望者' }))
+    await state.saveBinding(makeBinding({ cardId }))
+    const before = await state.loadBinding('s1')
+    const story = await state.storyWorkspace(cardId, before!.storyId)
+    await story.fs.writeText('journal.md', '已有剧情笔记')
+
+    const directDeleteError = await service.deleteCharacter({ cardId }).then(
+      () => null,
+      (error: unknown) => error as { code: string; message: string; details: unknown; isDSHRemoteError: boolean },
+    )
+    expect(directDeleteError).toMatchObject({
+      code: 'tavern/character-not-archived', details: {}, isDSHRemoteError: true,
+    })
+    expect(directDeleteError?.message).not.toContain(cardId)
+    expect(JSON.stringify(directDeleteError?.details)).not.toContain(cardId)
+
+    await expect(service.archiveCharacter({ cardId })).resolves.toEqual({ archived: true })
+    expect((await service.listCharacters({})).items).toEqual([])
+    expect((await service.listArchivedCharacters({})).items).toEqual([
+      expect.objectContaining({ cardId, name: '灯塔守望者', archivedAt: expect.any(String) }),
+    ])
+    expect(await state.loadBinding('s1')).toEqual(before)
+    expect(await (await state.storyWorkspace(cardId, before!.storyId)).fs.readText('journal.md')).toBe('已有剧情笔记')
+
+    await expect(service.restoreCharacter({ cardId })).resolves.toEqual({ restored: true })
+    expect((await service.listCharacters({})).items[0]?.cardId).toBe(cardId)
+    expect((await service.listArchivedCharacters({})).items).toEqual([])
+    expect(await (await state.storyWorkspace(cardId, before!.storyId)).fs.readText('journal.md')).toBe('已有剧情笔记')
+    // 模拟收纳箱中打开的旧确认框：恢复后迟到的 delete RPC 必须在引用检查前被拒绝。
+    await expect(service.deleteCharacter({ cardId })).rejects.toMatchObject({
+      code: 'tavern/character-not-archived', details: {}, isDSHRemoteError: true,
+    })
+  })
+
+  it('永久删除保留被引用的卡、绑定与内嵌书，不产生抢救副本', async () => {
+    const { cardId } = await importCard(paths.characters, makeCard({
+      characterBook: { name: '不应抢救', entries: [{ keys: ['k'], content: 'v' }] },
+    }))
+    await state.saveBinding(makeBinding({ cardId }))
+    await service.archiveCharacter({ cardId })
+
+    await expect(service.deleteCharacter({ cardId })).rejects.toMatchObject({
+      code: 'tavern/character-in-use',
+      details: { sessionCount: 1, storyCount: 1, corruptBindingCount: 0 },
+      isDSHRemoteError: true,
+    })
+    expect((await state.loadCharacter(cardId))?.card.name).toBe('测试角色')
+    expect((await loadBinding(paths, 's1'))?.cardId).toBe(cardId)
+    expect(await state.listLorebooks()).toEqual([])
+  })
+
+  it('语法合法但日期无效的收纳标记不是永久删除凭证', async () => {
+    const { cardId, root: cardRoot } = await importCard(paths.characters, makeCard({ name: '损坏收纳凭证' }))
+    await writeFile(join(cardRoot, CHARACTER_ARCHIVE_FILE), JSON.stringify({ version: 1, archivedAt: 'invalid-date' }))
+
+    await expect(service.deleteCharacter({ cardId })).rejects.toMatchObject({
+      code: 'tavern/character-not-archived', details: {}, isDSHRemoteError: true,
+    })
+    expect(await state.loadCharacter(cardId)).not.toBeNull()
+  })
+})
 
 describe('开场白开始状态（真实存储 + 宿主 Session）', () => {
   async function setup(firstMes = '你好') {

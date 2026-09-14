@@ -1,7 +1,7 @@
 /**
  * 角色工作区（workspace）单元测试。
  * 使用真实临时目录（WorkspaceFs wal 传 null）。
- * 覆盖：importCard 目录结构与文件内容、list/load/delete、cardId 路径边界、坏目录容错、
+ * 覆盖：importCard 目录结构与文件内容、list/load/archive/restore/delete、cardId 路径边界、坏目录容错、
  * listCharacters 只探测 characters/<cardId>/card.json（深层垃圾/散落文件/缺 card.json 不影响列举）、
  * rebuildIndex 摘要与注入式 token 估算、WorkspaceFs 的 '..' 段级越界拒绝。
  */
@@ -11,13 +11,18 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { CharacterCard } from '../src/core/types.js'
 import {
+  archiveCharacter,
+  CHARACTER_ARCHIVE_FILE,
   deleteCharacter,
   importCard,
   isValidCardId,
+  listArchivedCharacters,
   listCharacters,
   loadCharacter,
   newCardId,
+  readCharacterArchiveMetadata,
   rebuildIndex,
+  restoreCharacter,
   type WorkspaceIndex,
 } from '../src/state/workspace.js'
 import { WorkspaceFs } from '../src/state/workspaceFs.js'
@@ -252,6 +257,50 @@ describe('list/load/delete', () => {
     await writeFile(join(ws.root, 'card.json'), JSON.stringify(cardJson))
     const loaded = await loadCharacter(charactersDir, ws.cardId)
     expect(loaded!.card.depthPrompt).toEqual({ prompt: '旧深度提示', depth: 2, role: 'user' })
+  })
+
+  it('收纳只隐藏活动列表，保留卡目录并可原样恢复', async () => {
+    const ws = await importCard(charactersDir, makeCard({ name: '待收纳角色' }))
+    await writeFile(join(ws.root, 'memory', 'kept.md'), '必须保留的剧情资料')
+
+    await archiveCharacter(charactersDir, ws.cardId)
+    const first = await readCharacterArchiveMetadata(charactersDir, ws.cardId)
+    expect(first?.version).toBe(1)
+    expect(Number.isNaN(Date.parse(first!.archivedAt))).toBe(false)
+    expect(await listCharacters(charactersDir)).toEqual([])
+    expect(await listArchivedCharacters(charactersDir)).toEqual([
+      expect.objectContaining({ cardId: ws.cardId, name: '待收纳角色', archivedAt: first!.archivedAt }),
+    ])
+    // loadCharacter 不受视图标记影响：历史会话仍能读卡，且重试不重置首次收纳时间。
+    expect((await loadCharacter(charactersDir, ws.cardId))?.card.name).toBe('待收纳角色')
+    expect(await archiveCharacter(charactersDir, ws.cardId)).toEqual(first)
+
+    await restoreCharacter(charactersDir, ws.cardId)
+    expect(await readCharacterArchiveMetadata(charactersDir, ws.cardId)).toBeNull()
+    expect((await listCharacters(charactersDir)).map((item) => item.cardId)).toEqual([ws.cardId])
+    expect(await listArchivedCharacters(charactersDir)).toEqual([])
+    expect(await readFile(join(ws.root, 'memory', 'kept.md'), 'utf8')).toBe('必须保留的剧情资料')
+    await expect(restoreCharacter(charactersDir, ws.cardId)).resolves.toBeUndefined()
+  })
+
+  it('损坏收纳标记仍留在收纳箱供恢复，不会让角色消失或回到活动列表', async () => {
+    const ws = await importCard(charactersDir, makeCard({ name: '标记损坏' }))
+    // JSON 语法合法但时间非法也是损坏标记，不得被当成有效删除凭证。
+    await writeFile(join(ws.root, CHARACTER_ARCHIVE_FILE), JSON.stringify({ version: 1, archivedAt: 'not-a-date' }))
+    await expect(readCharacterArchiveMetadata(charactersDir, ws.cardId)).rejects.toThrow(/收纳标记损坏/)
+    expect(await listCharacters(charactersDir)).toEqual([])
+    expect(await listArchivedCharacters(charactersDir)).toEqual([
+      expect.objectContaining({ cardId: ws.cardId, archivedAt: expect.any(String) }),
+    ])
+    await restoreCharacter(charactersDir, ws.cardId)
+    expect((await listCharacters(charactersDir))[0]?.cardId).toBe(ws.cardId)
+  })
+
+  it('收纳与恢复拒绝缺失卡和非法 cardId', async () => {
+    await expect(archiveCharacter(charactersDir, 'missing')).rejects.toThrow(/不存在/)
+    await expect(restoreCharacter(charactersDir, 'missing')).rejects.toThrow(/不存在/)
+    await expect(archiveCharacter(charactersDir, '../evil')).rejects.toThrow(/非法的角色 ID/)
+    await expect(restoreCharacter(charactersDir, '.')).rejects.toThrow(/非法的角色 ID/)
   })
 
   it('card.json 缺 characterBook 时从 assets/character-book.json 补回', async () => {

@@ -1,6 +1,6 @@
 /**
- * 设置面板分区：角色卡（列表 / 导入 / 删除 / 详情 / 交互卡）。
- * 列表行走 Avatar + 尾部详情/删除 IconBtn；导入/删除等瞬时反馈走 useToast，上下文错误用 Err。
+ * 设置面板分区：角色卡（列表 / 导入 / 收纳与恢复 / 永久删除 / 详情 / 交互卡）。
+ * 活跃卡只提供可逆收纳；收纳箱内才提供恢复与永久删除，瞬时反馈走 useToast，上下文错误用 Err。
  * 交互卡预览保留 CSP meta 注入 + sandbox iframe（无 allow-same-origin），不得放宽。
  */
 import {cardVariableLabels} from '../cardVariableLabels.js'
@@ -9,11 +9,11 @@ import { buildCardSrcDoc } from '../../core/cardFrame.js'
 import { CARD_VARIABLE_STYLES } from '../styles.js'
 import { PersistentEditor, useDraftRestored, useDraftState } from '../draftPersistence.js'
 import { useEffect, useRef, useState } from 'react'
-import { Button, IconDownloadOutline16, IconTrashOutline16, IconUserOutline16, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, IconArchiveOutline20, IconDownloadOutline16, IconRefreshOutline16, IconTrashOutline16, IconUserOutline16, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
 import { cachedAvatar, cachedCharacterDetail, invalidateCharacter } from '../cache.js'
 import { useT } from '../i18n.js'
 import type { CharacterDetail, CharacterInspect, CharacterSummary, TavernRemote } from '../types.js'
-import { Avatar, Btn, ConfirmDialog, Dialog, Err, Field, FileBtn, IconBtn, ListInput, Muted, NumInput, SearchEmpty, SearchInput, Section, Select, Skeleton, clickableProps, downloadBase64, downloadJson, errOf, fileToBase64, runAsync, useLoader, useToast } from '../util.js'
+import { Avatar, Btn, ConfirmDialog, Dialog, Err, Field, FileBtn, IconBtn, ListInput, Muted, NumInput, SearchEmpty, SearchInput, Section, Select, Skeleton, Tabs, clickableProps, downloadBase64, downloadJson, errOf, fileToBase64, runAsync, useLoader, useToast } from '../util.js'
 
 /** 按 cardId 拉头像 dataURL 的 Avatar 包装（失败时回落首字符/图标）；头像走进程内缓存。 */
 function CardAvatar(props: { remote: TavernRemote; cardId: string; name: string; size: number }) {
@@ -22,12 +22,15 @@ function CardAvatar(props: { remote: TavernRemote; cardId: string; name: string;
   return <Avatar url={url} name={props.name} size={props.size} />
 }
 
-/** 海报卡：封面图（或首字符封面）+ 底部渐变上的名字与内嵌书信息；整卡可点进编辑，删除钮悬停浮现。 */
+/** 海报卡：活跃卡可点进编辑并收纳；收纳箱卡只允许恢复或发起受保护的永久删除。 */
 function CharacterCard(props: {
   remote: TavernRemote
   item: CharacterSummary
   busy: boolean
-  onOpen: (cardId: string) => void
+  archived: boolean
+  onOpen?: (cardId: string) => void
+  onArchive: (item: CharacterSummary) => void
+  onRestore: (item: CharacterSummary) => void
   onDelete: (item: CharacterSummary) => void
 }) {
   const t = useT()
@@ -44,8 +47,12 @@ function CharacterCard(props: {
           : ''
       }`
     : ''
+  const openProps = props.onOpen ? {
+    ...clickableProps(() => { if (!props.busy) props.onOpen?.(props.item.cardId) }),
+    'aria-disabled': props.busy || undefined,
+  } : {}
   return (
-    <article className="dsh-tavern-charCard" {...clickableProps(() => props.onOpen(props.item.cardId))}>
+    <article className={`dsh-tavern-charCard${props.archived ? ' is-archived' : ''}`} {...openProps}>
       <div className="dsh-tavern-charCardCover">
         {url ? <img src={url} alt="" /> : <span className="dsh-tavern-charCardInitial">{initial}</span>}
       </div>
@@ -54,20 +61,29 @@ function CharacterCard(props: {
         {meta ? <div className="dsh-tavern-charCardMeta">{meta}</div> : null}
       </div>
       <div className="dsh-tavern-charCardActions">
-        <Tooltip label={t('characters.card.delete')} side="bottom">
-          <button
-            type="button"
-            aria-label={t('characters.card.delete')}
-            className="dsh-tavern-coverBtn is-danger"
-            disabled={props.busy}
-            onClick={(e: { stopPropagation: () => void }) => {
-              e.stopPropagation()
-              props.onDelete(props.item)
-            }}
-          >
-            <IconTrashOutline16 />
-          </button>
-        </Tooltip>
+        {props.archived ? (
+          <>
+            <Tooltip label={t('characters.card.restore')} side="bottom">
+              <button type="button" aria-label={t('characters.card.restore')} className="dsh-tavern-coverBtn" disabled={props.busy}
+                onClick={(e: { stopPropagation: () => void }) => { e.stopPropagation(); props.onRestore(props.item) }}>
+                <IconRefreshOutline16 />
+              </button>
+            </Tooltip>
+            <Tooltip label={t('characters.card.deletePermanently')} side="bottom">
+              <button type="button" aria-label={t('characters.card.deletePermanently')} className="dsh-tavern-coverBtn is-danger" disabled={props.busy}
+                onClick={(e: { stopPropagation: () => void }) => { e.stopPropagation(); props.onDelete(props.item) }}>
+                <IconTrashOutline16 />
+              </button>
+            </Tooltip>
+          </>
+        ) : (
+          <Tooltip label={t('characters.card.archive')} side="bottom">
+            <button type="button" aria-label={t('characters.card.archive')} className="dsh-tavern-coverBtn" disabled={props.busy}
+              onClick={(e: { stopPropagation: () => void }) => { e.stopPropagation(); props.onArchive(props.item) }}>
+              <IconArchiveOutline20 size={16} />
+            </button>
+          </Tooltip>
+        )}
       </div>
     </article>
   )
@@ -333,7 +349,11 @@ export function CharactersSection(props: { remote: TavernRemote }) {
 function CharactersSectionContent(props: { remote: TavernRemote }) {
   const { remote } = props
   const t = useT()
-  const { state, reload } = useLoader(() => remote.listCharacters({}), [])
+  const [collection, setCollection] = useState<'active' | 'archived'>('active')
+  const { state, reload } = useLoader(
+    () => collection === 'active' ? remote.listCharacters({}) : remote.listArchivedCharacters({}),
+    [collection],
+  )
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [detailId, setDetailId] = useDraftState<string | null>('characters:detailId', null)
@@ -390,12 +410,23 @@ function CharactersSectionContent(props: { remote: TavernRemote }) {
     }
   }
 
+  // 写入失败可能只是回执丢失，也可能是另一窗口改了收纳状态；重读列表恢复真实状态，保留错误供重试判断。
+  const refreshAfterError = (message: string) => {
+    setError(message)
+    reload()
+  }
+
   const onDelete = async () => {
     if (!toDelete) return
+    const failed = (message: string) => {
+      // 引用保护和传输失败都关闭确认框，避免正文错误被模态框遮住。
+      setToDelete(null)
+      refreshAfterError(message)
+    }
     await runAsync(setBusy, setError, async () => {
       const r = await remote.deleteCharacter({ cardId: toDelete.cardId })
       const err = errOf(r)
-      if (err) setError(err)
+      if (err) failed(err)
       else {
         toast.show(
           r.ok && r.value.salvagedLorebook
@@ -406,7 +437,32 @@ function CharactersSectionContent(props: { remote: TavernRemote }) {
         setToDelete(null)
         reload()
       }
-    })
+    }, failed)
+  }
+
+  const onArchive = async (item: CharacterSummary) => {
+    await runAsync(setBusy, setError, async () => {
+      const r = await remote.archiveCharacter({ cardId: item.cardId })
+      const err = errOf(r)
+      if (err) refreshAfterError(err)
+      else {
+        toast.show(t('characters.archived', { name: item.name }))
+        if (detailId === item.cardId) setDetailId(null)
+        reload()
+      }
+    }, refreshAfterError)
+  }
+
+  const onRestore = async (item: CharacterSummary) => {
+    await runAsync(setBusy, setError, async () => {
+      const r = await remote.restoreCharacter({ cardId: item.cardId })
+      const err = errOf(r)
+      if (err) refreshAfterError(err)
+      else {
+        toast.show(t('characters.restored', { name: item.name }))
+        reload()
+      }
+    }, refreshAfterError)
   }
 
   const items = state.status === 'ready' ? state.value.items : []
@@ -424,11 +480,26 @@ function CharactersSectionContent(props: { remote: TavernRemote }) {
     <Section title={t('section.characters')} description={t('characters.section.desc')}>
       {toast.node}
       {createGuard.confirmation}
+      <Tabs
+        value={collection}
+        label={t('characters.collectionLabel')}
+        onChange={(value) => {
+          setCollection(value as 'active' | 'archived')
+          setError(null)
+          setToDelete(null)
+        }}
+        items={[
+          { id: 'active', label: t('characters.collection.active') },
+          { id: 'archived', label: t('characters.collection.archived') },
+        ]}
+      />
       <div className="dsh-tavern-toolbar">
-        <FileBtn accept=".png,.json" disabled={busy} onFile={(file) => void onImportFile(file)}>
-          {t('characters.importFile')}
-        </FileBtn>
-        <Btn size="md" disabled={busy} onClick={() => setCreating(true)}>{t('characters.newCard')}</Btn>
+        {collection === 'active' && <>
+          <FileBtn accept=".png,.json" disabled={busy} onFile={(file) => void onImportFile(file)}>
+            {t('characters.importFile')}
+          </FileBtn>
+          <Btn size="md" disabled={busy} onClick={() => setCreating(true)}>{t('characters.newCard')}</Btn>
+        </>}
         <Btn size="md" onClick={reload} disabled={busy}>{t('action.refresh')}</Btn>
         {(items.length >= 5 || query !== '') && (
           <SearchInput
@@ -452,10 +523,10 @@ function CharactersSectionContent(props: { remote: TavernRemote }) {
       {items.length === 0 && state.status === 'ready' && (
         <div className="dsh-tavern-empty">
           <div className="dsh-tavern-emptyIcon">
-            <IconUserOutline16 size={32} />
+            {collection === 'active' ? <IconUserOutline16 size={32} /> : <IconArchiveOutline20 size={32} />}
           </div>
-          <div className="dsh-tavern-emptyTitle">{t('hero.noCharacters')}</div>
-          <div className="dsh-tavern-emptyDesc">{t('characters.emptyDesc')}</div>
+          <div className="dsh-tavern-emptyTitle">{t(collection === 'active' ? 'hero.noCharacters' : 'characters.archive.emptyTitle')}</div>
+          <div className="dsh-tavern-emptyDesc">{t(collection === 'active' ? 'characters.emptyDesc' : 'characters.archive.emptyDesc')}</div>
         </div>
       )}
       {q !== '' && filtered.length === 0 && state.status === 'ready' && (
@@ -463,7 +534,9 @@ function CharactersSectionContent(props: { remote: TavernRemote }) {
       )}
       <div className="dsh-tavern-charGrid">
         {filtered.map((item) => (
-          <CharacterCard key={item.cardId} remote={remote} item={item} busy={busy} onOpen={setDetailId} onDelete={setToDelete} />
+          <CharacterCard key={item.cardId} remote={remote} item={item} busy={busy} archived={collection === 'archived'}
+            onOpen={collection === 'active' ? setDetailId : undefined} onArchive={(card) => void onArchive(card)}
+            onRestore={(card) => void onRestore(card)} onDelete={setToDelete} />
         ))}
       </div>
       {detailId && (
@@ -504,9 +577,9 @@ function CharactersSectionContent(props: { remote: TavernRemote }) {
       )}
       <ConfirmDialog
         open={toDelete !== null}
-        title={t('characters.delete.title')}
-        description={toDelete ? t('characters.delete.desc', { name: toDelete.name }) : ''}
-        confirmLabel={t('action.delete')}
+        title={t('characters.deletePermanently.title')}
+        description={toDelete ? t('characters.deletePermanently.desc', { name: toDelete.name }) : ''}
+        confirmLabel={t('characters.deletePermanently.confirm')}
         danger
         busy={busy}
         onCancel={() => setToDelete(null)}

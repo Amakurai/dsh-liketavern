@@ -1,6 +1,6 @@
 /**
  * 工作区资产路径消毒与预设目录。
- * 覆盖：文本路径白名单、越界/绝对路径/WAL/二进制拒绝、'.' 段折叠后再判定 WAL、
+ * 覆盖：文本路径白名单、越界/绝对路径/WAL/角色生命周期元数据/二进制拒绝、'.' 段折叠后再判定 WAL、
  * 预设目录令牌与按 identifier 取条目。
  */
 import { describe, expect, it } from 'vitest'
@@ -24,6 +24,7 @@ describe('resolveReadableAssetPath', () => {
     expect(resolveReadableAssetPath('C:\\abs.md').ok).toBe(false)
     expect(resolveReadableAssetPath('/etc/passwd').ok).toBe(false)
     expect(resolveReadableAssetPath('state/wal/1.json').ok).toBe(false)
+    expect(resolveReadableAssetPath('.archive.json').ok).toBe(false)
     expect(resolveReadableAssetPath('card.png').ok).toBe(false)
   })
 

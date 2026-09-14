@@ -1,3 +1,4 @@
+import { RemoteError } from '@deepseek-ai/dsh-typert-protocol';
 import { type HelperScriptLibrary, type HelperScriptAsset, type HelperScriptTarget, type HelperScriptContext, type HelperScriptCommit, type HelperScriptView } from '../core/helperScripts.js';
 import type { LlmResolvedModelInfo, LlmRuntime } from '@deepseek-ai/dsh-llm';
 import { type MemoryEntry, type PromptPreset, type RegexRule, type WIEngineResult, type WITimerState, type WorldDelta, type WorldInfoEntry } from '../core/types.js';
@@ -6,14 +7,34 @@ import { MemoryStore } from '../state/memory.js';
 import type { PipelineResult } from './pipeline.js';
 import { Wal } from '../state/wal.js';
 import { WorldDeltaStore } from '../state/worlddelta.js';
-import { type CharacterWorkspace } from '../state/workspace.js';
+import { type ArchivedCharacterSummary, type CharacterWorkspace } from '../state/workspace.js';
 import { WorkspaceFs } from '../state/workspaceFs.js';
 import { type Persona } from '../core/persona.js';
 import { type StandingPin } from '../core/standingPin.js';
 import { type SessionBinding } from './bindings.js';
 import type { TavernConfig } from './config.js';
 import { type TavernPaths } from './paths.js';
+import { type StorySummary } from '../state/story.js';
 export type { Persona } from '../core/persona.js';
+/** 永久删除前的持久化引用快照；两类引用都为空才允许移除卡目录。 */
+export interface CharacterReferences {
+    sessionIds: string[];
+    stories: StorySummary[];
+    corruptBindingFiles: string[];
+}
+/** 真正的 typert 业务错误：内部保留引用身份供测试/诊断，线上 details 只穿透计数。 */
+export declare class CharacterInUseError extends RemoteError<'tavern/character-in-use'> {
+    readonly references: CharacterReferences;
+    constructor(references: CharacterReferences);
+}
+/** 永久删除只接受当前仍持有有效收纳标记的角色，阻断旧确认框与直接 RPC。 */
+export declare class CharacterNotArchivedError extends RemoteError<'tavern/character-not-archived'> {
+    constructor(cause?: unknown);
+}
+/** 收纳后只允许原会话原 story 更新选项，不允许新绑定绕过活动列表。 */
+export declare class CharacterArchivedError extends RemoteError<'tavern/character-archived'> {
+    constructor();
+}
 interface WorkspaceHandle {
     fs: WorkspaceFs;
     wal: Wal;
@@ -156,12 +177,22 @@ export declare class TavernState {
     /** 资产初始状态与独立剧情状态共用文件面；storyId 缺省仅供初始状态面板及旧数据迁移。 */
     storyWorkspace(cardId: string, storyId?: string): Promise<WorkspaceHandle>;
     discardUnboundStory(cardId: string, storyId: string, sessionId: string): Promise<void>;
-    listStories(cardId: string): Promise<import("../state/story.js").StorySummary[]>;
+    listStories(cardId: string): Promise<StorySummary[]>;
     /** 准备子剧情，在副本内撤销未继承楼层；准备失败不改变源剧情，也不发布半成品。 */
     forkStory(binding: SessionBinding, sessionId: string, prepare: (fs: WorkspaceFs) => Promise<void>): Promise<string>;
     listCharacters(): Promise<import("../state/workspace.js").CharacterSummary[]>;
+    /** 收纳箱是角色资产视图；卡目录不搬动，已绑定剧情仍可按原 ID 继续读写。 */
+    listArchivedCharacters(): Promise<ArchivedCharacterSummary[]>;
+    archiveCharacter(cardId: string): Promise<void>;
+    restoreCharacter(cardId: string): Promise<void>;
     loadCharacter(cardId: string): Promise<CharacterWorkspace | null>;
-    /** 删除角色卡工作区、清掉指向它的会话绑定，并逐出缓存句柄。cascadeDeleteEmbeddedBook=false 时先把内嵌书抢救到世界书库。 */
+    /**
+     * 永久删除角色。会话锁先于卡锁，与 saveBinding（绑定 → 剧情快照）同序；
+     * 有效收纳标记、引用检查与 rm 处在同一临界区，避免恢复后旧确认或预检后新绑定插入。
+     * 任一绑定、已发布 story 或无法归属的损坏 session JSON 存在时
+     * 明确拒绝，不再像旧实现那样连带清掉绑定。cascadeDeleteEmbeddedBook=false 时只在
+     * 预检通过后把内嵌书抢救到世界书库，失败请求不产生半成品抢救文件。
+     */
     deleteCharacter(cardId: string): Promise<{
         salvagedLorebook: string | null;
     }>;

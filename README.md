@@ -4,7 +4,7 @@
 
 **在 DeepSeek Harness 的 `dsh web` 中使用角色卡、世界书与长期记忆，开始 Tavern 式角色扮演。**
 
-**[v0.2.3](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.2.3) · 适配 dsh `0.1.5-rc.2` · Node.js ≥ 24**
+**[v0.2.4](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.2.4) · 适配 dsh `0.1.5-rc.2` · Node.js ≥ 24**
 
 中文 | [English](./README.en.md)
 
@@ -34,7 +34,7 @@
 在终端执行，固定到发布标签：
 
 ```bash
-dsh plugin --profile web add github:Amakurai/dsh-liketavern#v0.2.3
+dsh plugin --profile web add github:Amakurai/dsh-liketavern#v0.2.4
 dsh plugin --profile web list --depth 0
 ```
 
@@ -48,10 +48,10 @@ dsh web
 
 ### 使用安装包
 
-从 [v0.2.3 Release](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.2.3) 下载 `dsh-liketavern-0.2.3.tgz`，在文件所在目录执行：
+从 [v0.2.4 Release](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.2.4) 下载 `dsh-liketavern-0.2.4.tgz`，在文件所在目录执行：
 
 ```bash
-dsh plugin --profile web add ./dsh-liketavern-0.2.3.tgz
+dsh plugin --profile web add ./dsh-liketavern-0.2.4.tgz
 ```
 
 安装后同样重启 `dsh web`。Release 附有 `SHA256SUMS.txt`，可用于核对下载文件。
@@ -80,7 +80,7 @@ dsh plugin --profile web add ./dsh-liketavern-0.2.3.tgz
 
 | 功能 | 当前能力 |
 | --- | --- |
-| 角色卡 | 导入 V1 / V2 / V3 的 PNG、JSON 角色卡，导出 PNG / JSON；多开场白、内嵌世界书、卡内正则与 HTML 交互卡 |
+| 角色卡 | 导入 V1 / V2 / V3 的 PNG、JSON 角色卡，导出 PNG / JSON；支持可恢复的收纳箱与引用保护永久删除；多开场白、内嵌世界书、卡内正则与 HTML 交互卡 |
 | 预设与人设 | 导入、编辑和导出 ST 提示词预设；人设提供 `{{user}}` 名称和描述；预设与人设在读写入口校验数据 |
 | 世界书与世界状态 | 全局、角色、会话级世界书；关键词触发、常驻条目；剧情变化层记录新增、变更和失效的事实 |
 | 长期记忆 | BM25 检索与时间衰减，模型按需读写；超过容量时在空闲阶段自动摘要，保留可检索的归档来源 |
@@ -98,8 +98,8 @@ dsh plugin --profile web add ./dsh-liketavern-0.2.3.tgz
 
 ### 第三方卡片、模板和脚本
 
-- **酒馆助手提供部分兼容接口。** 支持变量、脚本库、世界书与多种消息操作；`generate` / `generateRaw`、消息插入与旋转、历史分页和跨页面事件等仍待适配。完整接口和示例见[酒馆助手兼容说明](docs/TAVERN_HELPER.md)。
-- **EJS 模板已内置。** 使用已支持接口的卡无需另装 ST-Prompt-Template；提示词位置、历史处理等宿主差异见[提示词模板说明](docs/PROMPT_TEMPLATES.md)。
+- **酒馆助手提供部分兼容接口。** 支持变量、脚本库、世界书与多种消息操作；`generate` / `generateRaw`、消息插入与旋转、历史分页和跨页面事件等仍待适配。完整接口和示例见[酒馆助手兼容说明](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/TAVERN_HELPER.md)。
+- **EJS 模板已内置。** 使用已支持接口的卡无需另装 ST-Prompt-Template；提示词位置、历史处理等宿主差异见[提示词模板说明](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/PROMPT_TEMPLATES.md)。
 - **MVU 支持有边界。** 纯官方 MVU 导入入口可适配到原生执行器，自定义框架保持原代码；classic schema 与 `BEFORE_MESSAGE_UPDATE` 正文更新钩子仍待适配。当前界面没有独立的变量 schema 编辑器入口。
 - **交互卡在隔离 iframe 中运行。** 不提供主页面 DOM、`parent.TavernHelper`、`parent.$` 或 Node 访问。网络请求及外部脚本默认受限，可在「设置 → 卡片与数据」配置可信域名；图片和字体按现有策略加载。
 - **脚本选项不会自动发送。** 后台脚本发布的文字选项由用户点击后填入当前输入草稿；AI 代答目前仍使用剪贴板，需要手动粘贴。
@@ -134,7 +134,9 @@ dsh plugin --profile web add ./dsh-liketavern-0.2.3.tgz
 
 **安装后没有 Tavern 模式或设置入口？** 先用 `dsh --version` 确认宿主为 `0.1.5-rc.2`，再用 `dsh plugin --profile web list --depth 0` 检查安装目标。重启 `dsh web` 后新建会话；仍未出现时，查看终端中的插件加载错误。
 
-**卡片能显示，但按钮、脚本或 MVU 不工作？** 在「设置 → 脚本」检查脚本及所在文件夹是否启用并保存，查看当前会话的运行诊断。MVU 还需开启会话内的自动更新选项并保持页面打开。对依赖父窗口对象或未实现接口的卡，按[兼容说明](docs/TAVERN_HELPER.md)检查依赖。
+**卡片能显示，但按钮、脚本或 MVU 不工作？** 在「设置 → 脚本」检查脚本及所在文件夹是否启用并保存，查看当前会话的运行诊断。MVU 还需开启会话内的自动更新选项并保持页面打开。对依赖父窗口对象或未实现接口的卡，按[兼容说明](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/TAVERN_HELPER.md)检查依赖。
+
+**想先检查数据目录但不修改任何文件？** 安装环境可运行 `dsh plugin --profile web exec dsh-tavern-doctor`（源码仓库中运行 `npm run doctor`），需要机器可读结果时加 `--json`。报告只给出版本、目录状态、角色/剧情/WAL 数量和固定问题码，不输出真实路径、资产名称、ID、正文或令牌，也不提供修复参数。
 
 **pnpm 提示构建脚本被拦截？** 本插件随包提供编译产物；先核对报错涉及的具体依赖。插件源码构建问题可尝试改用 Release 安装包；宿主依赖的构建要求仍需按 dsh 提示，检查对应 profile 的 `pnpm-workspace.yaml` 中的 `allowBuilds` 配置。
 
@@ -145,12 +147,12 @@ dsh plugin --profile web add ./dsh-liketavern-0.2.3.tgz
 | 文档 | 内容 |
 | --- | --- |
 | [更新日志](./CHANGELOG.md) | 版本变化与宿主对应关系 |
-| [酒馆助手兼容说明](docs/TAVERN_HELPER.md) | 卡面、脚本、变量、世界书、消息和 MVU 接口 |
-| [提示词模板说明](docs/PROMPT_TEMPLATES.md) | EJS、宏、装饰器与示例 |
-| [架构说明](docs/ARCHITECTURE.md) | 剧情隔离、分支回滚、记忆和提示词通道 |
-| [宿主兼容记录](docs/HOST_COMPATIBILITY.md) | 已核对的宿主行为及升级检查 |
-| [依赖安全记录](docs/DEPENDENCY_SECURITY.md) | 安全更新、Showdown 剩余告警与隔离边界 |
-| [开发约定](./AGENTS.md) | 代码边界、测试与交付要求 |
+| [酒馆助手兼容说明](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/TAVERN_HELPER.md) | 卡面、脚本、变量、世界书、消息和 MVU 接口 |
+| [提示词模板说明](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/PROMPT_TEMPLATES.md) | EJS、宏、装饰器与示例 |
+| [架构说明](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/ARCHITECTURE.md) | 剧情隔离、分支回滚、记忆和提示词通道 |
+| [宿主兼容记录](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/HOST_COMPATIBILITY.md) | 已核对的宿主行为及升级检查 |
+| [依赖安全记录](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/DEPENDENCY_SECURITY.md) | 安全更新、Showdown 剩余告警与隔离边界 |
+| [开发约定](https://github.com/Amakurai/dsh-liketavern/blob/main/AGENTS.md) | 代码边界、测试与交付要求 |
 
 ## 开发
 

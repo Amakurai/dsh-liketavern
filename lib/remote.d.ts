@@ -26,7 +26,22 @@ import type { SiblingSwipe } from './core/siblings.js';
 import type { CharacterCard, ChatMessage, MemoryEntry, PromptPreset, RegexRule, WIEngineResult, WorldDelta } from './core/types.js';
 import type { TavernConfigRaw } from './node/config.js';
 import type { ForkResult } from './node/floors.js';
-import type { CharacterSummary } from './state/workspace.js';
+import type { ArchivedCharacterSummary, CharacterSummary } from './state/workspace.js';
+/**
+ * Tavern 资产生命周期的稳定远程错误词汇。details 只携带可公开的计数，
+ * 会话 ID、story 元数据和损坏文件名只留在 host 内部诊断，不穿过 typert 边界。
+ */
+declare module '@deepseek-ai/dsh-typert-protocol' {
+    interface RemoteErrorDetailsMap {
+        'tavern/character-not-archived': Record<string, never>;
+        'tavern/character-archived': Record<string, never>;
+        'tavern/character-in-use': {
+            readonly sessionCount: number;
+            readonly storyCount: number;
+            readonly corruptBindingCount: number;
+        };
+    }
+}
 /** method → [request shape, value schema, 简介] */
 export declare const METHODS: {
     abandonHelperMvu: {
@@ -92,6 +107,25 @@ export declare const METHODS: {
     };
     listCharacters: {
         req: import("zod/mini").ZodMiniObject<{}, import("zod/v4/core").$strip>;
+        value: import("zod/mini").ZodMiniUnknown;
+        summary: string;
+    };
+    listArchivedCharacters: {
+        req: import("zod/mini").ZodMiniObject<{}, import("zod/v4/core").$strip>;
+        value: import("zod/mini").ZodMiniUnknown;
+        summary: string;
+    };
+    archiveCharacter: {
+        req: import("zod/mini").ZodMiniObject<{
+            cardId: import("zod/mini").ZodMiniString<string>;
+        }, import("zod/v4/core").$strip>;
+        value: import("zod/mini").ZodMiniUnknown;
+        summary: string;
+    };
+    restoreCharacter: {
+        req: import("zod/mini").ZodMiniObject<{
+            cardId: import("zod/mini").ZodMiniString<string>;
+        }, import("zod/v4/core").$strip>;
         value: import("zod/mini").ZodMiniUnknown;
         summary: string;
     };
@@ -936,6 +970,15 @@ export interface TavernMethodResults {
     listCharacters: {
         items: CharacterSummary[];
     };
+    listArchivedCharacters: {
+        items: ArchivedCharacterSummary[];
+    };
+    archiveCharacter: {
+        archived: boolean;
+    };
+    restoreCharacter: {
+        restored: boolean;
+    };
     inspectCharacter: CharacterInspect;
     importCharacter: {
         cardId: string;
@@ -1190,7 +1233,11 @@ export declare const TYPERT_HOST: {
                     key: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     cardId: import("zod/mini").ZodMiniString<string>;
-                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{}, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{}, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{}, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                    cardId: import("zod/mini").ZodMiniString<string>;
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                    cardId: import("zod/mini").ZodMiniString<string>;
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     name: import("zod/mini").ZodMiniString<string>;
                     dataBase64: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
@@ -1621,7 +1668,11 @@ export declare const TYPERT_REMOTE: {
                     key: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     cardId: import("zod/mini").ZodMiniString<string>;
-                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{}, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{}, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{}, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                    cardId: import("zod/mini").ZodMiniString<string>;
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                    cardId: import("zod/mini").ZodMiniString<string>;
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     name: import("zod/mini").ZodMiniString<string>;
                     dataBase64: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{

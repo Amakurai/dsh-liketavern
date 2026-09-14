@@ -67,6 +67,8 @@ live standing 在模拟预算裁剪前构造，历史增长不再导致角色定
 
 每轮首次成功组装冻结完整计划与 standing 指纹，后续 step 每次重放同样的通道。设置、资产与时钟中途变化下一轮生效。失败不发布计划、不提交 WI 定时器，也不静默改成缺设定的请求。工具同轮写入通过 notice 确认，下一轮才重新检索。
 
+Tavern 预设挂载官方 `dsh-agent-tool-presentation` 的 `mode: ptc`。七个业务工具由宿主生成 SDK，模型只直接调用 `run_code`；工具规范输出由 schema 验证。独立只读工具声明 `isConcurrencySafe`，可在同一程序内并行；写工具不声明并行，使用宿主独占屏障。依赖前项结果的操作依次 await，中间结果只有程序返回/打印的部分进入模型历史，子调用仍由宿主记录。步骤 notice 按模型 step 去重，不按 PTC 子调用累加；写入确认仍保留。模型编写的 PTC 程序使用宿主运行时，第三方卡片/EJS 继续使用原有隔离边界，不能把第三方脚本转交 PTC 执行。
+
 当前 dsh 深度冻结 GenerateOptions；agent/request 只变更采样，llm/stream 的 next() 不接收替换消息。因此 live 不改写历史。新正则默认 output/render；input/send、prompt/assemble、prompt/send 明示为模拟与代答用途，不假装已经影响普通会话的入模消息。
 
 “最近宿主请求”通过 llm/stream 只读捕获适配器转换前的请求，包含实际 system/messages/tools 和采样。内存只保留八个会话各一份，单份最多 2 MiB 字符，截断明示；不落盘，重启/淘汰后不可用。它不是供应商最终 HTTP 包，适配器之后的转换仍需看供应商日志。其他预览页签是重新计算的 ST 模拟。

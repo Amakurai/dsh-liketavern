@@ -1,6 +1,13 @@
-# Tavern 模式的 agent 面组合：只挂载 dsh-tavern 的 agent 模块。
+# Tavern 模式的 agent 面组合：Tavern 业务工具 + 宿主原生 PTC 呈现。
 # 该模块注册 tavern 工具集、Tavern 系统指令段与 agent/pre-step 组装管线；
 # 全部状态按 SessionId 键控，多个 Tavern 会话共享此 standing mount。
 # __AGENT_MODULE__ 占位符由插件启动时替换为本包 agent 入口的绝对路径或包名子路径。
 - id: tavern
   name: '__AGENT_MODULE__'
+
+# 与原装 ptc 预设相同：只改变当前预设的工具呈现，运行时由宿主提供。
+# selector 会等待 codeRuntime；缺少运行时应在预设激活时明确失败。
+- id: tool-presentation
+  name: '@deepseek-ai/dsh-agent-tool-presentation'
+  config:
+    mode: ptc

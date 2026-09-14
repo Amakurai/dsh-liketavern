@@ -58,10 +58,11 @@ describe('有序展示与真实消息格式化',()=>{
       {uid:1,comment:'status',content:'@@render_after\n@@message_formatting\n@@iframe 状态\n**生命**\n\n<script>parent.postMessage("unsafe","*")</script>'},
     ])
     expect(result.parts[0]?.[0]?.kind).toBe('html')
-    expect(result.parts[0]?.[0]?.text).toContain('<details><summary>内层</summary>内容</details>')
-    expect(result.parts[0]?.[1]).toMatchObject({kind:'html',title:'状态'})
-    expect(result.parts[0]?.[1]?.text).toContain('<strong>生命</strong>')
-    expect(result.parts[0]?.[1]?.text).toContain('<script>')
+    expect(result.parts[0]?.filter(part=>part.kind==='html').map(part=>part.text).join('')).toContain('<details><summary>内层</summary>内容</details>')
+    expect(result.parts[0]?.filter(part=>part.kind==='markdown').some(part=>/<details|<script/.test(part.text))).toBe(false)
+    expect(result.parts[0]?.at(-1)).toMatchObject({kind:'html',title:'状态'})
+    expect(result.parts[0]?.at(-1)?.text).toContain('<strong>生命</strong>')
+    expect(result.parts[0]?.at(-1)?.text).toContain('<script>')
   })
   it('QuickJS 的捕获适配与官方 Showdown 的代码块、HTML、表格和 emoji 输出一致',async()=>{
     const converter=new official.Converter({emoji:true,literalMidWordUnderscores:true,parseImgDimensions:true,tables:true,underline:true,simpleLineBreaks:true,strikethrough:true,disableForced4SpacesIndentedSublists:true,metadata:false,noHeaderId:true,tablesHeaderId:false})
@@ -81,6 +82,12 @@ describe('有序展示与真实消息格式化',()=>{
     const result=await isolated('display',{parts:[{kind:'markdown',text:'one'},{kind:'html',text:'<b>two</b>',title:'two'},{kind:'markdown',text:'three'}],rules:[rule,{...rule,id:'cross',find:'/changed[\\s\\S]*three/',replace:'wrong'}],macroCtx:{char:'A',user:'B',outlets:{}}})
     expect(result.parts).toEqual([{kind:'markdown',text:'changed'},{kind:'html',text:'<b>changed</b>',title:'two'},{kind:'markdown',text:'three'}])
   })
+  it('展示正则生成的折叠日志与末尾样式在同一个卡面交付',async()=>{
+    const widget='<div class="record"><details><summary>变更记录</summary><div style="opacity:0">测试条目</div></details></div>\n<style>.record details[open]>div{opacity:1!important}</style>'
+    const rule:RegexRule={id:'log',name:'log',find:'\\[record\\]',replace:widget,enabled:true,scopes:['output'],timing:['render'],minDepth:null,maxDepth:null,substituteRegex:0,source:'user'}
+    const result=await isolated('display',{parts:[{kind:'markdown',text:'前文\n[record]\n后文'}],rules:[rule],macroCtx:{char:'A',user:'B',outlets:{}}})
+    expect(result.parts).toEqual([{kind:'markdown',text:'前文'},{kind:'html',text:widget},{kind:'markdown',text:'后文'}])
+  })
 })
 
 const roots:string[]=[]
@@ -96,8 +103,8 @@ it('真实剧情落盘后按顺序重绘，资产修改和重复读取不重跑�
   await onTurnStart(state,'s1',1)
   await runTavernPipeline({state,sessionId:'s1',agent:null,mode:'live',historyOverride:[{role:'user',content:'hi'}]})
   const text='<% incvar("count") %><%= "**完成**" %>'
-  const events=[{type:'assistant/chunk',seq:4,time:0,data:{turn:1,step:1,chunk:{type:'finish',reason:{kind:'stop'}}}},
-    {type:'assistant/message',seq:5,time:0,data:{turn:1,step:1,message:createAssistantMessage({content:[{type:'text',text}]})}},
+  const events=[
+    {type:'assistant/message',seq:5,time:0,data:{stream: [{type:'chunk',time:0,chunk:{type:'finish',reason:{kind:'stop'}}}], turn:1,step:1,message:createAssistantMessage({content:[{type:'text',text}]})}},
     {type:'turn/end',seq:6,time:0,data:{turn:1,reason:{kind:'completed'}}}] as unknown as SessionEvent[]
   const session={id:'s1' as Session['id'],snapshotEvents:()=>events}
   await onTurnEnd(state,'s1',session)
@@ -108,7 +115,7 @@ it('真实剧情落盘后按顺序重绘，资产修改和重复读取不重跑�
   const config=(TavernConfigSchema as (input:unknown)=>TavernConfigRaw)({})
   let live:typeof session|undefined=session
   let storedEvents=events, inspections=0
-  const persistence={inspect:async(id:string)=>{inspections++;return {meta:{id},events:storedEvents}},
+  const persistence={open:async(id:string,access:string)=>{expect(access).toBe('read');inspections++;return {id,header:{id},read:async()=>({events:storedEvents}),close:async()=>{}}},
     load:()=>{throw new Error('展示不能修复或落盘宿主日志')}}
   const ctx={reflect:{provide:()=>{}},get:(key:string)=>key==='sessionPersistence'?persistence:undefined,sessions:{get:()=>live}} as unknown as Context
   const service=new TavernService(ctx,state,{get:()=>config} as unknown as SettingsScope<TavernConfigRaw>)
@@ -126,7 +133,7 @@ it('真实剧情落盘后按顺序重绘，资产修改和重复读取不重跑�
   // 重启后旧会话可只存在持久日志；展示不能把开场白误认成未提交回复。
   live=undefined
   const greeting='<% setvar("preview",42) %>已恢复开场白:<%- getvar("preview") %>'
-  storedEvents=[{type:'assistant/message',seq:5,time:0,data:{turn:1,step:1,
+  storedEvents=[{type:'assistant/message',seq:5,time:0,data:{stream: [], turn:1,step:1,
     message:createAssistantMessage({content:[{type:'text',text:greeting}],source:TAVERN_GREETING_SOURCE})}}] as unknown as SessionEvent[]
   expect((await service.getSessionBinding({sessionId:'s1'})).conversationStarted).toBe(true)
   expect((await service.clearSessionBinding({sessionId:'s1',onlyIfBlank:true})).cleared).toBe(false)

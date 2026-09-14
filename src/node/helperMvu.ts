@@ -13,6 +13,7 @@ import {loadHelperState,saveHelperState,type HelperState} from '../state/helper.
 import {withWorkspaceLock} from '../state/workspaceLock.js'
 import {getHelperSnapshot,helperHistoryOf,helperHistoryRevision} from './helperRuntime.js'
 import {readDisplaySessionEvents} from './sessionEvents.js'
+import {hasNormalAssistantStop} from './assistantStream.js'
 import type {TavernState} from './state.js'
 
 type Snapshot=Pick<Session,'id'|'snapshotEvents'>
@@ -30,19 +31,11 @@ function requestIdentity(request:Request):void{
   if(!request.sessionId||!request.storyId||!request.runtimeId||request.runtimeId.length>96)throw new Error('自动 MVU 运行时身份无效')
 }
 function candidates(events:readonly SessionEvent[],turn:number,through=Infinity){
-  const steps=new Map<number,{finishes:number;last:number;stop:boolean}>()
-  for(const event of events){
-    if(event.type!=='assistant/chunk'||event.data.turn!==turn)continue
-    const status=steps.get(event.data.step)??{finishes:0,last:-1,stop:false}
-    if(event.data.chunk.type==='finish')status.finishes++
-    status.last=event.seq;status.stop=event.data.chunk.type==='finish'&&event.data.chunk.reason.kind==='stop';steps.set(event.data.step,status)
-  }
   return events.filter((event):event is SessionEvent<'assistant/message'>=>{
     if(event.type!=='assistant/message'||event.data.turn!==turn||event.data.interrupted||event.seq>=through||event.surfaceOp!==undefined&&event.surfaceOp!=='append')return false
     if(!event.data.message.content.some(block=>block.type==='text'&&block.text.trim()))return false
     if(isTavernGreetingEvent(event))return true
-    const status=steps.get(event.data.step)
-    return !!status&&status.finishes===1&&status.stop&&status.last<event.seq
+    return hasNormalAssistantStop(event)
   })
 }
 function makeJob(event:SessionEvent<'assistant/message'>,kind:HelperMvuJob['kind'],floor:string):HelperMvuJob{

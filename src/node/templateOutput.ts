@@ -1,5 +1,6 @@
 /** 正常 stop 回复只在 turn/end 处理一次；冻结闭包可从当前剧情恢复，状态与展示快照原子落盘。 */
 import type { Session } from '@deepseek-ai/dsh-session'
+import { hasNormalAssistantStop } from './assistantStream.js'
 import { hasEjs, type TemplateMessageMetadata } from '../core/template.js'
 import { loadTemplateState, saveTemplateState, templateTextHash } from '../state/template.js'
 import { templateGenerationContext } from '../state/templateGeneration.js'
@@ -50,10 +51,8 @@ export async function completeTemplateOutput(state:TavernState,session:Pick<Sess
     const after = context.entries.filter(entry=>entry.enabled && !entry.templateOnlyPreload && /^\[RENDER:AFTER\]/i.test(entry.comment))
     const pending:typeof candidates = []
     for (const candidate of candidates) {
-      const chunks = events.filter(event=>event.type==='assistant/chunk' && event.data.turn===turn && event.data.step===candidate.step)
-      const finish = chunks.at(-1)
-      if (chunks.filter(event=>event.type==='assistant/chunk' && event.data.chunk.type==='finish').length!==1) continue
-      if (finish?.type!=='assistant/chunk' || finish.data.chunk.type!=='finish' || finish.data.chunk.reason.kind!=='stop' || finish.seq>=candidate.seq) continue
+      const message = events.find(event=>event.seq===candidate.seq)
+      if (message?.type!=='assistant/message' || !hasNormalAssistantStop(message)) continue
       if (!historyIdentities && !hasEjs(candidate.text) && !before.length && !after.length && !context.regexRules?.length && !context.hasMessageRegex) continue
       if (stored.outputs[candidate.id]?.hash===templateTextHash(candidate.text)) continue
       if (stored.outputs[candidate.id]) throw new Error('已处理的模板回复发生改写，请回滚该楼层后继续')

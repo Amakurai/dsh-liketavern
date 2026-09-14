@@ -30,3 +30,36 @@ it('仅同会话同剧情同修订消息显示选项，点击只写草稿，忙�
     await act(async()=>clearScriptChoices(owner));expect(view!.toJSON()).toBe(null)
   }finally{stop();clearScriptChoices(owner);if(view)await act(async()=>view!.unmount())}
 })
+
+/** 选项替换必须限定到未编辑的上次填入结果，不能按文本后缀猜测用户输入的来源。 */
+it.each(['manual', 'revision', 'session', 'story', 'history', 'message'] as const)('保留手写草稿与不同上下文中的同文后缀：%s', async change => {
+  const owner = Symbol()
+  let draft = 'keep', draftRev = 0
+  const setDraft = vi.fn((text: string) => { draft = text; draftRev++ })
+  const stop = installChoiceInput(() => ({ setDraft, state: { getSnapshot: () => ({ draft, draftRev, phase: 'plain', occurrences: [] }) } }) as unknown as SessionInput)
+  let view: ReactTestRenderer | undefined
+  try {
+    const choices = [{ label: 'First', text: 'first' }, { label: 'Second', text: 'second' }]
+    publishScriptChoices(owner, 'session', context, 0, choices)
+    await act(async () => { view = create(<ScriptChoices sessionId="session" context={context}/>) })
+    await act(async () => view!.root.findAllByType(Btn)[0]!.props.onClick())
+    expect(draft).toBe('keep\nfirst')
+    // 未经编辑可以直接换选。
+    await act(async () => view!.root.findAllByType(Btn)[1]!.props.onClick())
+    await act(async () => view!.root.findAllByType(Btn)[0]!.props.onClick())
+    expect(draft).toBe('keep\nfirst')
+    if (change === 'manual') { draft = 'I wrote first'; draftRev++ }
+    if (change === 'revision') { draftRev += 2 } // 手动清空后重写成同文，已是用户自己的输入。
+    const sessionId = change === 'session' ? 'other-session' : 'session'
+    const next = { ...context,
+      storyId: change === 'story' ? 'other-story' : context.storyId,
+      historyRevision: change === 'history' ? 'new-revision' : context.historyRevision,
+      currentMessageId: change === 'message' ? 1 : 0,
+      messages: change === 'message' ? [...context.messages, { ...context.messages[0]!, message_id: 1 }] : context.messages,
+    }
+    await act(async () => { publishScriptChoices(owner, sessionId, next, next.currentMessageId, choices); view!.update(<ScriptChoices sessionId={sessionId} context={next}/>) })
+    const before = draft
+    await act(async () => view!.root.findAllByType(Btn)[1]!.props.onClick())
+    expect(draft).toBe(`${before}\nsecond`)
+  } finally { stop(); clearScriptChoices(owner); if (view) await act(async () => view!.unmount()) }
+})

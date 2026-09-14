@@ -22,7 +22,7 @@ function events():SessionEvent[] {
     {type:'turn/start',seq:0,time:0,data:{turn:1}},
     {type:'user/message',seq:1,time:0,surfaceOp:'append',data:createUserMessage({content:[{type:'text',text:'打开门'}],source:{kind:'user'}})},
     {type:'user/message',seq:2,time:0,surfaceOp:'append',data:createUserMessage({content:[{type:'text',text:'Current runtime context. hidden'}],source:{kind:'user'}})},
-    {type:'assistant/message',seq:3,time:0,surfaceOp:'append',data:{turn:1,step:1,message:createAssistantMessage({content:[{type:'text',text:'门开了'}]})}},
+    {type:'assistant/message',seq:3,time:0,surfaceOp:'append',data:{stream: [], turn:1,step:1,message:createAssistantMessage({content:[{type:'text',text:'门开了'}]})}},
     {type:'turn/end',seq:4,time:0,data:{turn:1,reason:{kind:'completed'}}},
   ] as unknown as SessionEvent[]
 }

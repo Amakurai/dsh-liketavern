@@ -116,6 +116,35 @@ afterEach(async () => {
 })
 
 describe('编辑草稿持久化', () => {
+  it.each([false, true])('子编辑器延迟加载时暂存保留尚未消费的恢复字段，父编辑已保存：%s', async savedParent => {
+    const env = environment()
+    const fields = { ...snapshot('恢复的父草稿').fields, 'lazy:text': '尚未加载的子草稿', 'lazy:baseline': 'base' }
+    await env.write({ owner, key: env.scope, value: { version: 1, fields } })
+    const view = await render(env)
+    await change(view, '父编辑的新草稿')
+    await advance()
+    if (savedParent) { await action(view, 'save-business'); await advance() }
+    await unmount(view)
+    // 立即重启浏览器模拟内存中的 restored 消失，只能使用自动暂存的快照。
+    function LazyEditor() {
+      const [text] = useDraftState('lazy:text', 'base')
+      const [baseline, setBaseline] = useDraftState('lazy:baseline', 'base')
+      useDraftGuard(text !== baseline)
+      return <><textarea aria-label="子草稿" value={text} readOnly/><button data-action="save-child" onClick={() => setBaseline(text)}>保存子草稿</button></>
+    }
+    let reopened!: ReactTestRenderer
+    await act(async () => { reopened = create(<PersistentEditor remote={env.api} scope={env.scope}><Editor leave={() => {}}/><LazyEditor/></PersistentEditor>) })
+    mounted.push(reopened)
+    expect(reopened.root.findByType('input').props.value).toBe('父编辑的新草稿')
+    expect(reopened.root.findByType('textarea').props.value).toBe('尚未加载的子草稿')
+    expect(env.stored()).toEqual({ version: 1, fields: { ...fields, 'test:text': '父编辑的新草稿', 'test:baseline': savedParent ? '父编辑的新草稿' : 'base' } })
+    if (savedParent) {
+      await action(reopened, 'save-child')
+      await advance()
+      expect(env.stored()).toBeNull()
+    }
+  })
+
   it('恢复正文与基线，初次打开不会重复保存；浏览器只存随机标识', async () => {
     const env = environment()
     env.seed('恢复的正文')

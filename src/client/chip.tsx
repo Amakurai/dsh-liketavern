@@ -59,7 +59,7 @@ export function HelperMvuAbandonAction(props: { remote: TavernRemote; sessionId:
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
     finally { pending.current = false; setBusy(false); props.onChanged() }
   }
-  return <div>
+  return <div className="dsh-tavern-mvuRecovery">
     <Btn danger disabled={busy} onClick={() => { setError(null); setDone(false); setConfirm(true) }}>{t('chip.mvuAbandon.action')}</Btn>
     {done && <Muted>{t('chip.mvuAbandon.done')}</Muted>}
     <Err message={error}/>
@@ -154,13 +154,20 @@ interface Lists {
   lorebooks: string[]
 }
 
-export function TavernHeaderChip(props: {
+interface HeaderChipProps {
   remote: TavernRemote
   sessionId: string
   sessions: { open(id: string): void; refresh?: () => Promise<void> }
   onCancel?: () => Promise<void>
   useSessions?: UseSessions
-}) {
+}
+
+/** 宿主切换会话可能复用 slot；表单、子弹窗与在途请求的状态都必须随会话重新挂载。 */
+export function TavernHeaderChip(props: HeaderChipProps) {
+  return <HeaderChipSession key={props.sessionId} {...props}/>
+}
+
+function HeaderChipSession(props: HeaderChipProps) {
   const { remote, sessionId, sessions } = props
   const t = useT()
   const tavern = isTavernSession(props.useSessions, sessionId)
@@ -303,7 +310,7 @@ export function TavernHeaderChip(props: {
     if (!r.ok) setError(r.error.message)
     else {
       // 二次打开可能因会话尚未登记而抛错；分支已建好，toast 提示即可
-      await openChildSession(sessions, r.value.childSessionId, r.value.title).catch(() => {
+      await openChildSession(sessions, r.value.childSessionId, r.value.title, sessionId).catch(() => {
         toast.show(t('chip.swipe.childCreated'))
       })
     }
@@ -385,7 +392,7 @@ export function TavernHeaderChip(props: {
         open={open}
         title={t('chip.dialog.title')}
         onClose={() => setOpen(false)}
-        width="full"
+        width="xl"
         footer={
           draft ? (
             <div className="dsh-tavern-footActions">
@@ -412,18 +419,6 @@ export function TavernHeaderChip(props: {
       >
           <div className="dsh-tavern-binding dsh-tavern-bindingWide">
           <Err message={error} />
-          {binding?.storyId && <HelperMvuAbandonAction key={sessionId + ':' + binding.storyId} remote={remote} sessionId={sessionId} storyId={binding.storyId} onChanged={() => {
-            invalidateSessionBinding(sessionId)
-            bindingLoader.reload()
-            window.dispatchEvent(new CustomEvent(BINDING_CHANGED_EVENT, { detail: sessionId }))
-            // 关闭绑定后正文写入可能失败；重新读取真实开关，保留用户其它尚未保存的绑定编辑。
-            void cachedSessionBinding(remote, sessionId).then(result => {
-              if (result.ok && result.value.binding) {
-                const current = result.value.binding
-                setDraft(previous => previous?.cardId === current.cardId && previous.storyId === current.storyId ? { ...previous, helperMvu: current.helperMvu } : previous)
-              }
-            }).catch(() => {})
-          }}/>}
           {!lists && (
             <div className="dsh-tavern-panelCard">
               <Skeleton height={14} width="24%" />
@@ -434,6 +429,7 @@ export function TavernHeaderChip(props: {
           )}
           {lists && (
             <>
+              <div className="dsh-tavern-bindingColumn">
               {draft ? (
                 <>
                   <div className="dsh-tavern-panelCard">
@@ -513,28 +509,6 @@ export function TavernHeaderChip(props: {
                     </Field>
                   </div>
 
-                  <div className="dsh-tavern-panelCard">
-                    <div className="dsh-tavern-groupHead">{t('chip.group.turnInject')}</div>
-                    <Field label={t('chip.field.authorNote')}>
-                      <textarea
-                        className="dsh-tavern-input dsh-tavern-textarea"
-                        style={{ minHeight: 96 }}
-                        value={draft.authorNote ?? ''}
-                        onChange={(e) => setDraft({ ...draft, authorNote: e.target.value })}
-                      />
-                    </Field>
-                    <div className="dsh-tavern-inlineChecks">
-                      <label>
-                        <Toggle
-                          checked={draft.injectJournal === true}
-                          onChange={(injectJournal) => setDraft({ ...draft, injectJournal })}
-                        />
-                        {t('chip.field.injectJournal')}
-                      </label>
-                      <label><Toggle checked={draft.helperMvu===true} onChange={helperMvu=>setDraft({...draft,helperMvu})}/>{t('chip.field.helperMvu')}</label>
-                    </div>
-                    <Muted>{t('chip.field.helperMvuNote')}</Muted>
-                  </div>
                 </>
               ) : (
                 <div className="dsh-tavern-panelCard">
@@ -564,6 +538,33 @@ export function TavernHeaderChip(props: {
                   </Field>
                 </div>
               )}
+              </div>
+
+              <div className="dsh-tavern-bindingColumn">
+              {draft && (
+                <div className="dsh-tavern-panelCard">
+                  <div className="dsh-tavern-groupHead">{t('chip.group.turnInject')}</div>
+                  <Field label={t('chip.field.authorNote')}>
+                    <textarea
+                      className="dsh-tavern-input dsh-tavern-textarea"
+                      style={{ minHeight: 96 }}
+                      value={draft.authorNote ?? ''}
+                      onChange={(e) => setDraft({ ...draft, authorNote: e.target.value })}
+                    />
+                  </Field>
+                  <div className="dsh-tavern-inlineChecks">
+                    <label>
+                      <Toggle
+                        checked={draft.injectJournal === true}
+                        onChange={(injectJournal) => setDraft({ ...draft, injectJournal })}
+                      />
+                      {t('chip.field.injectJournal')}
+                    </label>
+                    <label><Toggle checked={draft.helperMvu===true} onChange={helperMvu=>setDraft({...draft,helperMvu})}/>{t('chip.field.helperMvu')}</label>
+                  </div>
+                  <Muted>{t('chip.field.helperMvuNote')}</Muted>
+                </div>
+              )}
 
               <div className="dsh-tavern-panelCard">
                 <div className="dsh-tavern-groupHead">{t('chip.group.greetingDebug')}</div>
@@ -574,6 +575,7 @@ export function TavernHeaderChip(props: {
                   <Btn disabled={busy} onClick={() => run(showTriggerLog)}>{t('binding.triggerLog')}</Btn>
                   <Btn disabled={busy} onClick={() => run(preview)}>{t('binding.preview')}</Btn>
                 </div>
+              </div>
               </div>
 
               {usage && (
@@ -608,6 +610,18 @@ export function TavernHeaderChip(props: {
             </>
           )}
           </div>
+          {binding?.storyId && <HelperMvuAbandonAction key={sessionId + ':' + binding.storyId} remote={remote} sessionId={sessionId} storyId={binding.storyId} onChanged={() => {
+            invalidateSessionBinding(sessionId)
+            bindingLoader.reload()
+            window.dispatchEvent(new CustomEvent(BINDING_CHANGED_EVENT, { detail: sessionId }))
+            // 关闭绑定后正文写入可能失败；重新读取真实开关，保留用户其它尚未保存的绑定编辑。
+            void cachedSessionBinding(remote, sessionId).then(result => {
+              if (result.ok && result.value.binding) {
+                const current = result.value.binding
+                setDraft(previous => previous?.cardId === current.cardId && previous.storyId === current.storyId ? { ...previous, helperMvu: current.helperMvu } : previous)
+              }
+            }).catch(() => {})
+          }}/>}
       </Dialog>
       {toast.node}
       {view && <PreDialog title={view.title} text={view.text} onClose={() => setView(null)} />}

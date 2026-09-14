@@ -31,11 +31,8 @@ export function splitTemplateDisplay(text:string,preserveMeta=false):TemplateDis
       if(value) parts.push({kind:'markdown',text:value})
       return
     }
-    const start=split.start
-    let before=source.slice(0,start),after=source.slice(start+split.html.length)
-    const fence=/```(?:text|html|xml)?[ \t]*\r?\n[ \t\r\n]*$/i.exec(before)
-    const close=/^[ \t\r\n]*```/.exec(after)
-    if(fence && close) {before=before.slice(0,fence.index);after=after.slice(close[0].length)}
+    const before=source.slice(0,split.fence?.start??split.start)
+    const after=source.slice(split.fence?.end??split.start+split.html.length)
     visit(before,depth+1)
     parts.push({kind:'html',text:split.html})
     visit(after,depth+1)

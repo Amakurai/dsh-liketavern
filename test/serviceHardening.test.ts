@@ -139,7 +139,7 @@ describe('开场白开始状态（真实存储 + 宿主 Session）', () => {
 
   it('旧 turn 0 开场白也视为已开始；再次进入补齐 turn 而不复制正文', async () => {
     const session = await setup()
-    session.append('assistant/message', { turn: 0, step: 0, message: greetingMessage('旧开场白') }, { surfaceOp: 'append', sourceEventSeqs: [] })
+    session.append('assistant/message', {stream: [],  turn: 0, step: 0, message: greetingMessage('旧开场白') }, { surfaceOp: 'append' })
     expect((await service.getSessionBinding({ sessionId: session.id })).conversationStarted).toBe(true)
     expect(await service.ensureGreeting({ sessionId: session.id })).toEqual({ created: false, conversationStarted: true })
     expect(session.snapshotEvents().filter((e) => e.type === 'assistant/message')).toHaveLength(1)
@@ -162,7 +162,7 @@ describe('内联 HTML 卡面服务展示（真实剧情存储）', () => {
     await state.saveBinding(makeBinding({sessionId:session.id,cardId}))
     const html = '<div style="display:flex"><span>好感度</span><div style="width:5%">5</div></div>'
     const text = '开头台词\n'+html+'\n后续台词'
-    const message = session.append('assistant/message', {turn:0,step:0,message:greetingMessage(text)}, {surfaceOp:'append',sourceEventSeqs:[]})
+    const message = session.append('assistant/message', {stream: [], turn:0,step:0,message:greetingMessage(text)}, {surfaceOp:'append'})
     const request = {sessionId:session.id,text,messageId:message.seq}
     const binding = (await state.loadBinding(session.id))!, workspace = await state.storyWorkspace(cardId,binding.storyId)
     const before = await workspace.fs.readText('state/template.json'), history = session.snapshotEvents()
@@ -360,7 +360,7 @@ it('原生 MVU 补出卡片原有状态栏，重复展示不改写历史或剧�
   const {cardId}=await importCard(paths.characters,makeCard({regexScripts:[{id:'status',scriptName:'Status',findRegex:'<StatusPlaceHolderImpl/>',replaceString:html,placement:[2],disabled:false,markdownOnly:true,promptOnly:false}]}))
   const session=Session.create('session-mvu-status' as Session['id']);sessions.set(session.id,session)
   await state.saveBinding(makeBinding({sessionId:session.id,cardId,helperMvu:true}))
-  const message=session.append('assistant/message',{turn:0,step:0,message:greetingMessage('正文')},{surfaceOp:'append',sourceEventSeqs:[]})
+  const message=session.append('assistant/message',{stream: [], turn:0,step:0,message:greetingMessage('正文')},{surfaceOp:'append'})
   const binding=(await state.loadBinding(session.id))!,workspace=await state.storyWorkspace(cardId,binding.storyId)
   const before=await workspace.fs.readText('state/helper.json'),history=session.snapshotEvents()
   const request={sessionId:session.id,messageId:message.seq,text:'正文'}
@@ -375,7 +375,7 @@ it('纯文本回复携带当前剧情上下文，预览与关闭交互不暴露�
   const {cardId}=await importCard(paths.characters,makeCard())
   const session=Session.create('session-plain-helper' as Session['id']);sessions.set(session.id,session)
   await state.saveBinding(makeBinding({sessionId:session.id,cardId}))
-  const message=session.append('assistant/message',{turn:0,step:0,message:greetingMessage('请选择【开门】')},{surfaceOp:'append',sourceEventSeqs:[]})
+  const message=session.append('assistant/message',{stream: [], turn:0,step:0,message:greetingMessage('请选择【开门】')},{surfaceOp:'append'})
   const request={sessionId:session.id,messageId:message.seq,text:'请选择【开门】'}
   const result=await service.renderOutputText(request)
   expect(result.htmls).toEqual([])

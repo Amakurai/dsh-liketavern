@@ -35,7 +35,7 @@ function turn(number: number): SessionEvent[] {
   const events = [
     { type: 'turn/start', data: { turn: number } },
     { type: 'user/message', data: createUserMessage({ content: [{ type: 'text', text: '开门' }], source: { kind: 'user' } }) },
-    { type: 'assistant/message', data: { turn: number, step: 1, message: createAssistantMessage({ content: [{ type: 'text', text: '门打开了' }], source: { provider: 'test', model: 'test' } }) } },
+    { type: 'assistant/message', data: {stream: [],  turn: number, step: 1, message: createAssistantMessage({ content: [{ type: 'text', text: '门打开了' }], source: { provider: 'test', model: 'test' } }) } },
     { type: 'turn/end', data: { turn: number, reason: { kind: 'completed' } } },
   ]
   return events.map((e, seq) => ({ ...e, seq: (number - 1) * 4 + seq, time: seq })) as SessionEvent[]

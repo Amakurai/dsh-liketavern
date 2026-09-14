@@ -37,9 +37,9 @@ async function fixture() {
   }
   const run=(runtime=state,id='s1',mode:'live'|'preview'='live')=>runTavernPipeline({state:runtime,sessionId:id,agent:agent(id),mode})
   const end=async(turn:number,runtime=state,id='s1',finish='stop')=>{
-    events.push(event('assistant/chunk',{turn,step:1,chunk:{type:'finish',reason:{kind:finish}}},events.length))
+
     const message=createAssistantMessage({content:[{type:'text',text:'word'}]});messages.push(message)
-    const seq=events.length;events.push(event('assistant/message',{turn,step:1,message},seq))
+    const seq=events.length;events.push(event('assistant/message',{stream: [{type:'chunk',time:0,chunk:{type:'finish',reason:{kind:finish}}}], turn,step:1,message},seq))
     events.push(event('turn/end',{turn,reason:{kind:'completed'}},events.length))
     const session={id:id as Session['id'],snapshotEvents:()=>events}
     await onTurnEnd(runtime,id,session);return {seq,session}

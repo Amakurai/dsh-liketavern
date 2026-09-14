@@ -9,9 +9,14 @@ export async function readDisplaySessionEvents(ctx:Context,sessionId:string):Pro
   const persistence=ctx.get('sessionPersistence')
   if(!persistence) return []
   try {
-    const inspection=await persistence.inspect(sessionId as Session['id'])
-    if(inspection.meta.id!==sessionId) throw new Error('展示历史的宿主会话归属不一致')
-    return ctx.sessions.get(sessionId as Session['id'])?.snapshotEvents() ?? inspection.events
+    const handle=await persistence.open(sessionId as Session['id'],'read')
+    try {
+      if(handle.id!==sessionId || handle.header.id!==sessionId) throw new Error('展示历史的宿主会话归属不一致')
+      const {events}=await handle.read()
+      return ctx.sessions.get(sessionId as Session['id'])?.snapshotEvents() ?? events
+    } finally {
+      await handle.close()
+    }
   } catch(error) {
     if(error instanceof SessionPersistenceNotFoundError) return []
     throw error

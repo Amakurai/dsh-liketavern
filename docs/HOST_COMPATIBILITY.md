@@ -1,10 +1,26 @@
 # 宿主兼容记录
 
-这些是 dsh 0.1.2-rc.1 的观测结果，升级时重新核对，不是永久架构要求。
+当前源码基线为 dsh 0.1.5-rc.2。以下按版本记录观测结果，升级时重新核对，不是永久架构要求。
 
-## 宿主版本注记与升级（当前 dsh 0.1.2-rc.1）
+## 0.1.5-rc.2 升级核对（2026-09-14）
+
+- 全局 CLI 与项目内宿主包升级到 `0.1.5-rc.2`；peerDependencies、overrides、devDependencies 同步精确版本，锁文件重新解析。React / React DOM `18.3.1` 显式作为测试开发依赖，与 react-test-renderer 一致；客户端仍使用宿主提供的 React。
+- `assistant/chunk` 不再是持久事件。`assistant/message.data.stream` 保存该消息的完整定时流，未产生正文的尝试为 `assistant/attempt`；assistant 不再允许 sourceEventSeqs。正常收口只认可该消息自身流中唯一且位于末尾的 stop，不能借用同一步重试的 finish；开场白使用空 stream。正文编辑清空过时的嵌入流，消息桥同步清理对应尝试记录。
+- 冷会话读取改为 `sessionPersistence.open(id, 'read')` → `handle.read()`，在 finally 中关闭句柄。归属校验、读取故障传播及在线会话优先保持；不取得写所有权或为了展示执行恢复写入。
+- `AgentLoop.create` 为异步。Inbox 由宿主 session projection 驱动，在 session/event 通知前已经更新；MVU 从有游标的日志折叠中读取 splice 前的输入，保留原消息 ID、队列目标和顺序。真实 Loop 回归覆盖拒绝、取消、维护等待、显式删除与日志重放。
+- PTC 子调用日志改为 `tool/ptc-dispatch-start` / `tool/ptc-dispatch`；原生 PTC、多读并发、写入屏障及 standing 位于 TOOLS_SDK 后的回归通过。
+
+
+
+验证：Windows / Node 24.18.0 下，127 个测试文件、1572 项测试全部通过；build 与 pack dry-run 白名单（401 个文件）通过。最终 lib 在独立临时 DSH_HOME 启动实际 dsh 0.1.5-rc.2，浏览器添加工厂工作区并创建会话，切换 Tavern 模式后出现角色选择入口。工厂 overlay 仅把目录选择器替换为官方 browse 两面；未配置模型凭据、未调用真实模型或写入真实剧情。验收页与宿主进程已关闭。这是基础 boot/UI 冒烟，不代表全部第三方卡或真实模型链路验收。
+
+## 0.1.2-rc.1 历史观测（接口变更以上方新版本记录为准）
 
 以下行为绑定 0.1.2-rc.1，升级宿主时逐条复查（以官方文档和宿主源码为准）：
+
+2026-09-14 工具调用核对：原装 ptc 预设在 agent 面挂载 `@deepseek-ai/dsh-agent-tool-presentation`（`mode: ptc`），复用宿主 `codeRuntime`；Tavern 采用同一入口。`ToolRuntime` 仅向模型发送 `run_code` schema，七个 Tavern 业务工具的参数/规范输出进入 SDK，子调用仍经宿主策略管线、作用域与并发调度。四个读工具声明可并行，写工具保留独占屏障；`ok=false` 为可检查的业务拒绝，宿主错误以 `ToolCallError` 拒绝。rc.1 的 `TOOLS_SDK` 顺序为 5000，standing 使用公开 `getSectionOrder('TOOLS_SDK') + 10`；旧 order 210 会早于 PTC SDK，因此同步修订约定并递增 standing pin 版本。
+
+验证：真实注册表、Agent、SystemPrompt、WorkerThreadCodeRuntime、Session 与临时剧情文件覆盖一次程序多操作、读取重叠、写后读、相似记忆更新、路径/楼层拒绝、WAL 回滚、步骤通知去重和普通模式隔离；实际组装断言工具前缀早于 standing、相同组装字节不变。全量 126 文件/1568 测试、build、pack dry-run 通过。在独立临时 DSH_HOME 启动 Windows/Node 24/dsh 0.1.2-rc.1，浏览器创建工厂工作区、将空白会话切换为 Tavern，成功显示角色选择入口。目录选择在工厂 overlay 中使用官方 browse 两面；预设指向当前 lib，未配置模型凭据或调用真实模型，未测实际模型延迟。测试页与宿主进程已关闭。
 
 1. `Session.events` 数组属性已移除：读全量用 `snapshotEvents()`（下次追加前缓存复用，放心多次调），单条 `eventAt(seq)`，日志长度 `session.seq`。`header.seedLength` 移除：fork 继承前缀长度是 `session.inheritedEventCount`；`agents.create` 的 meta 写 `isSeeded: true` + 顶层 `inheritedEventCount`（与官方 `SessionStore.fork` 同形）。
 2. 会话预设判定：`resolveSessionPreset` 帮手移除，官方路径是 `agentPreset` 会话投影；插件封装在 `sessionPresetId`（投影缺席时手动折叠 header + `agent-preset/selected` 兜底）。
@@ -70,7 +86,11 @@
 
 33. MVU 手动接口在各自 opaque iframe 中运行：同步读取剧情快照，解析顺序等待同剧情可变事件，显式 replace 等待已有 CAS/WAL 回执。真实文件系统与模拟宿主验证消息变量保存、WAL committed、重建后可读和同卡剧情隔离；解析不改宿主正文、不创建分支。编译产物的真实浏览器工厂验证 add 后保存 15、Zod 拒绝负数、字符串 18 转为数字并保存、再次解析由结束钩子钳制为 20；模拟保存失败时存储仍为 20、编辑草稿保留 19，卡面显示错误。schema 留当前 iframe，仅约束编辑器。实际浏览器发现并修复 label 样式覆盖 hidden 属性的问题，复查聊天/消息作用域的目标输入切换通过。工厂的保存传输为内存适配器，文件系统行为另由集成测试覆盖；未将这一工厂称为完整 MVU 卡或安装宿主全量验收。世界书初值、正常 stop 自动更新、经典 schema 和模板变量整合仍待适配。临时页面和服务均已关闭。
 
-34. 原生 MVU 自动模式使用 0.1.2-rc.1 的 agent/turn-stopping 串行钩子，在正常 stop 的 assistant 已追加、turn/end 与下次输入 claim 之前登记任务。等待浏览器不占 session task 队列或剧情锁；真正 idle 由 runMaintenance 同步认领，兜底保留原生输入身份/顺序/目标，取消不伪造唤醒消息。实际开场白既有旧 turn 0，也有 greeting 来源标记的 turn 1（无模型 finish chunk），两者均纳入测试。完成数据与任务回执同写 helper.json；闭合楼层追加 MVU 写先 reopenFloor 保留原始回滚快照，WAL 恢复成功后才确认完成。
+34. 原生 MVU 自动模式使用 agent/turn-stopping 串行钩子，在正常 stop 的 assistant 已追加、turn/end 与下次输入 claim 之前持久登记任务，随后立即返回，不把浏览器变量处理算成模型生成。下一条输入由 runMaintenance 同步认领真正 idle 并等待，兜底 assemble 门控保留原生输入身份/顺序/目标；等待不占 session task 队列或剧情锁，取消不伪造唤醒消息。页面断开或脚本失败保留任务并阻止旧变量进入新轮次。实际开场白既有旧 turn 0，也有 greeting 来源标记的 turn 1（无模型 finish chunk），两者均纳入测试。完成数据与任务回执同写 helper.json；闭合楼层追加 MVU 写先 reopenFloor 保留原始回滚快照，WAL 恢复成功后才确认完成。
+
+rc.2 的公开 SessionEventSource 将流式回复结算发布为 `settle-assistant`，其 `entry` 可缺省，不带 `entries`。实时追加只处理 type=event 的持久记录；结算读取单个持久 entry，临时流的分数 seq 不推进基线或消费游标。replace/prepend 仍不回放历史，最终接收通知仍等待对应 turn/end 的剧情收口回执。测试加载同包的真实事件源 ESM，并用真实 AgentLoop 与工厂 LLM 流验证无人提交 MVU 时回复仍正常 completed/idle、下一条输入保留且提交后才生成。
+
+2026-09-14 在实际 Windows/Node 24/rc.2 安装环境完成启动与页面冒烟：先取消旧代码卡住的生成，重建并重启宿主，刷新后正文保留、会话恢复空闲、卡面不再显示 `change.entries is not iterable`，消息选项正常出现。没有发送真实模型请求；新回复的自动 completed/idle 与待处理变量门控由上述真实 Loop 和工厂流测试覆盖。全量 127 个测试文件、1576 项测试通过，打包白名单检查通过。
 
 2026-09-06 的真实浏览器双沙箱工厂验证：异步模块就绪后初始化 7，经 INITIALIZED 钩子变 10；后续 stop 工厂输入依次得到 15、20，下一次命令到 25 经结束钩子限制回 20，监听读取的当前消息位置为 1/2/3。随后在实际 Windows/Node 24/dsh 0.1.2-rc.1 的独立工厂 DSH_HOME 启动新构建，UI 开启原生 MVU；真实 turn 1 开场白完成初始化，磁盘 pending 为空、完成回执一条、WAL committed=true；原有卡面按钮继续保存 count=3，未调用模型。此验证覆盖初始化和普通变量衔接；正常模型 stop 链路另由真实 AgentLoop/Session 与手写流适配器集成测试验证，未调用真实模型。
 

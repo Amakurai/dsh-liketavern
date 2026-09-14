@@ -22,7 +22,7 @@ const TEMPLATE_URL = new URL('../presets/tavern/agent.cordis.yml', import.meta.u
  * 这正是要验的失败模式，所以不借助宽松的 YAML 库。
  */
 function readSingleQuotedName(yaml: string): string {
-  const match = /^\s*name:\s*'((?:[^']|'')*)'\s*$/m.exec(yaml)
+  const match = /^- id: tavern\r?\n\s*name:\s*'((?:[^']|'')*)'\s*$/m.exec(yaml)
   if (!match) throw new Error('agent.cordis.yml 缺少合法的单引号 name 标量')
   return match[1]!.replaceAll("''", "'")
 }

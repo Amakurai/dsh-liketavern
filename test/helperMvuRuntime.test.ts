@@ -26,8 +26,8 @@ const request=(runtimeId='runtime')=>({sessionId:'session',storyId,runtimeId})
 const ws=()=>state.storyWorkspace(cardId,storyId)
 const read=async()=>loadHelperState((await ws()).fs)
 function append(type:string,data:unknown){events.push({type,data,seq:events.length,time:0,...(type==='assistant/message'?{surfaceOp:'append'}:{})} as SessionEvent)}
-function assistant(turn:number,text='角色回复',step=1,interrupted=false){
-  append('assistant/message',{turn,step,message:createAssistantMessage({content:[{type:'text',text}],source:turn===0?TAVERN_GREETING_SOURCE:{provider:'fixture',model:'fixture'}}),...(interrupted?{interrupted:true}:{})})
+function assistant(turn:number,text='角色回复',step=1,interrupted=false,finishes:string[]=[]){
+  append('assistant/message',{stream: finishes.map(kind=>({type:'chunk',time:0,chunk:{type:'finish',reason:{kind}}})), turn,step,message:createAssistantMessage({content:[{type:'text',text}],source:turn===0?TAVERN_GREETING_SOURCE:{provider:'fixture',model:'fixture'}}),...(interrupted?{interrupted:true}:{})})
 }
 function createState(){return new TavernState({root,characters:join(root,'characters'),lorebooks:join(root,'library/lorebooks'),presets:join(root,'library/presets'),personas:join(root,'personas'),regexDir:join(root,'regex'),sessions:join(root,'sessions')},()=>resolveConfig({}))}
 beforeEach(async()=>{
@@ -43,7 +43,7 @@ async function commit(work:HelperMvuWork,data:unknown,runtimeId='runtime'){
 }
 async function initialize(){assistant(0,'<initvar>hp: 10</initvar>');const work=await prepare();await commit(work,{stat_data:{hp:10},other:'greeting'});return work}
 async function start(turn=1,text="_.add('hp',1);",reason='stop'){
-  append('turn/start',{turn});append('assistant/chunk',{turn,step:1,chunk:{type:'finish',reason:{kind:reason}}});assistant(turn,text)
+  append('turn/start',{turn});assistant(turn,text,1,false,[reason])
   const floor='session#t'+turn,workspace=await ws();await workspace.wal.beginFloor(floor);state.openFloors.set('session',{cardId,storyId,floor})
 }
 async function end(turn=1,kind='completed'){
@@ -52,7 +52,7 @@ async function end(turn=1,kind='completed'){
 async function continuation(turn:number,text:string,owned=true){
   append('turn/start',{turn})
   append('user/message',createUserMessage({content:[{type:'text',text:CONTINUE_INSTRUCTION_PREFIX+'紧接断点继续'}],source:owned?{kind:'plugin',plugin:'dsh-tavern',form:'notice',summary:'续写指令'}:{kind:'user'}}))
-  append('assistant/chunk',{turn,step:1,chunk:{type:'finish',reason:{kind:'stop'}}});assistant(turn,text)
+  assistant(turn,text,1,false,['stop'])
   const floor='session#t'+turn;await (await ws()).wal.beginFloor(floor);state.openFloors.set('session',{cardId,storyId,floor})
 }
 
@@ -142,7 +142,7 @@ it('无开场白的工具中间回复不挂载首次脚本；真实 stop 的 bun
   await state.saveHelperScriptLibrary(library.target,library.revision,[{type:'script',id:'seeded',enabled:true,name:'seeded',content:'',data:{factory:7}}])
   await start(1,'工具中间消息','tool-calls')
   expect((await getHelperScriptBundle(ctx,state,'session')).messageId).toBeNull();expect((await read()).mvu).toBeUndefined()
-  append('assistant/chunk',{turn:1,step:2,chunk:{type:'finish',reason:{kind:'stop'}}});assistant(1,'正常回复',2)
+  assistant(1,'正常回复',2,false,['stop'])
   const [bundle]=await Promise.all([getHelperScriptBundle(ctx,state,'session'),queueHelperMvuStop(state,'session',snapshot())])
   expect(bundle.messageId).toBe(events.at(-1)!.seq);expect(bundle.snapshot?.scopes['["script","seeded"]']).toEqual({factory:7})
   expect((await read()).mvu?.pending).toHaveLength(1);expect((await (await ws()).wal.validateFloor('session#t1')).committed).toBe(false)
@@ -160,7 +160,7 @@ it('已有完成锚点的首次 bundle 在返回前播种并登记初始化，�
 it('全局开关在新楼层期间恢复时延期旧锚点初始化，当前真实 stop 后再挂载',async()=>{
   assistant(0,'旧开场');await start(1,'中间工具消息','tool-calls')
   expect((await getHelperScriptBundle(ctx,state,'session')).messageId).toBeNull();expect((await prepare()).status).toBe('waiting')
-  append('assistant/chunk',{turn:1,step:2,chunk:{type:'finish',reason:{kind:'stop'}}});assistant(1,'本轮完成',2)
+  assistant(1,'本轮完成',2,false,['stop'])
   expect((await getHelperScriptBundle(ctx,state,'session')).messageId).toBe(events.at(-1)!.seq)
   expect((await read()).mvu?.pending[0]).toMatchObject({turn:1,kind:'initialize',floor:'session#t1'})
 })
@@ -234,7 +234,7 @@ it('已有 pending 与旧执行租约在 prepare 和 commit 再核续写来源�
 
 it('多步骤正常 stop 顺序排队，每个任务从前一个已完成消息状态接续',async()=>{
   await initialize();await start()
-  append('assistant/chunk',{turn:1,step:2,chunk:{type:'finish',reason:{kind:'stop'}}});assistant(1,'第二步',2)
+  assistant(1,'第二步',2,false,['stop'])
   await queueHelperMvuStop(state,'session',snapshot());expect((await read()).mvu?.pending).toHaveLength(2)
   const first=await prepare();await commit(first,{stat_data:{hp:11}})
   const second=await prepare();expect(second.base?.stat_data).toEqual({hp:11});await commit(second,{stat_data:{hp:12}})
@@ -244,9 +244,9 @@ it('多步骤正常 stop 顺序排队，每个任务从前一个已完成消息�
 it('截断、缺 finish、重复 finish、interrupted 或失败终止帧不能登记成功更新',async()=>{
   await initialize();await start(1,'截断','max-tokens');await queueHelperMvuStop(state,'session',snapshot());expect((await read()).mvu?.pending).toEqual([])
   events.splice(1);append('turn/start',{turn:1});assistant(1,'无finish');await queueHelperMvuStop(state,'session',snapshot());expect((await read()).mvu?.pending).toEqual([])
-  events.splice(1);append('turn/start',{turn:1});append('assistant/chunk',{turn:1,step:1,chunk:{type:'finish',reason:{kind:'stop'}}});append('assistant/chunk',{turn:1,step:1,chunk:{type:'finish',reason:{kind:'stop'}}});assistant(1,'重复finish');await queueHelperMvuStop(state,'session',snapshot());expect((await read()).mvu?.pending).toEqual([])
-  events.splice(1);append('turn/start',{turn:1});append('assistant/chunk',{turn:1,step:1,chunk:{type:'finish',reason:{kind:'stop'}}});assistant(1,'中断',1,true);await queueHelperMvuStop(state,'session',snapshot());expect((await read()).mvu?.pending).toEqual([])
-  events.splice(1);append('turn/start',{turn:1});append('assistant/chunk',{turn:1,step:1,chunk:{type:'finish',reason:{kind:'stop'}}});assistant(1);append('turn/end',{turn:1,reason:{kind:'error',error:{code:'UNKNOWN',message:'failure'}}});await queueHelperMvuTurn(state,'session',snapshot());expect((await read()).mvu?.pending).toEqual([])
+  events.splice(1);append('turn/start',{turn:1});assistant(1,'重复finish',1,false,['stop','stop']);await queueHelperMvuStop(state,'session',snapshot());expect((await read()).mvu?.pending).toEqual([])
+  events.splice(1);append('turn/start',{turn:1});assistant(1,'中断',1,true,['stop']);await queueHelperMvuStop(state,'session',snapshot());expect((await read()).mvu?.pending).toEqual([])
+  events.splice(1);append('turn/start',{turn:1});assistant(1,'角色回复',1,false,['stop']);append('turn/end',{turn:1,reason:{kind:'error',error:{code:'UNKNOWN',message:'failure'}}});await queueHelperMvuTurn(state,'session',snapshot());expect((await read()).mvu?.pending).toEqual([])
 })
 
 it('已登记真实 stop 在取消结束后保留，重启不继承租约但可重新准备同一个持久任务',async()=>{

@@ -27,7 +27,7 @@ beforeEach(async()=>{
     source.append('turn/start',{turn});source.append('user/message',createUserMessage({content:[{type:'text',text:'user-'+turn}],source:{kind:'user'}}),{surfaceOp:'append'})
     source.append('step/start',{turn,step:1})
     const callId=ToolCallId('call-'+turn)
-    source.append('assistant/message',{turn,step:1,message:createAssistantMessage({content:[{type:'text',text:'assistant-'+turn},...(turn===2?[{type:'tool-call' as const,id:callId,name:'fixture_tool',arguments:'{}'}]:[])],source:{provider:'test',model:'test'}})},{surfaceOp:'append'})
+    source.append('assistant/message',{stream: [], turn,step:1,message:createAssistantMessage({content:[{type:'text',text:'assistant-'+turn},...(turn===2?[{type:'tool-call' as const,id:callId,name:'fixture_tool',arguments:'{}'}]:[])],source:{provider:'test',model:'test'}})},{surfaceOp:'append'})
     if(turn===2){source.append('tool/call',{turn,step:1,callId,name:'fixture_tool',arguments:'{}'});source.append('tool/result',{turn,step:1,message:createToolResultMessage({callId,content:[{type:'text',text:'fixture tool result'}],isError:false})},{surfaceOp:'append'})}
     source.append('step/end',{turn,step:1})
     source.append('turn/end',{turn,reason:{kind:'completed'}})
@@ -109,7 +109,7 @@ it('批量改用户和 assistant 正文，保留后续消息，只撤销子剧�
 })
 it('移除修改后已过时的压缩替换，模型和可见消息都读到新正文',async()=>{
   const nodes=source.snapshotEvents().filter(event=>'surfaceOp' in event&&event.surfaceOp==='append'),start=nodes[0]!.seq,end=nodes.at(-1)!.seq
-  source.append('user/message',createUserMessage({content:[{type:'text',text:'STALE SUMMARY'}],source:{kind:'user'}}),{surfaceOp:{op:'replace',start,end},sourceEventSeqs:nodes.map(event=>event.seq)})
+  source.append('user/message',createUserMessage({content:[{type:'text',text:'STALE SUMMARY'}],source:{kind:'user'}}),{surfaceOp:{op:'replace',startSeq:start,endSeq:end},sourceEventSeqs:nodes.map(event=>event.seq)})
   expect(texts(source)).toEqual(['STALE SUMMARY'])
   const result=await edit([{message_id:1,message:'NEW FIRST REPLY'}]),child=sessions.get(result.branch!.childSessionId)!
   expect(texts(child)).not.toContain('STALE SUMMARY');expect(texts(child)).toContain('NEW FIRST REPLY');expect(texts(child)).toContain('assistant-3')
@@ -145,12 +145,13 @@ it('编辑正文获得新消息身份，坏 seed 在创建分支前拒绝',()=>{
 
 it('流式旧正文不残留，非正文推理块保持位置，编辑消息不引用旧片段',()=>{
   const raw=Session.create('session-stream-edit' as Session['id']);raw.append('turn/start',{turn:1})
-  const chunk=raw.append('assistant/chunk',{turn:1,step:1,chunk:{type:'text-delta',index:0,text:'old text'}})
-  const message=raw.append('assistant/message',{turn:1,step:1,message:createAssistantMessage({content:[{type:'reasoning',text:'reason preserved'},{type:'text',text:'old text'}],source:{provider:'test',model:'test'}})},{surfaceOp:'append',sourceEventSeqs:[chunk.seq]})
+  const chunk=raw.append('assistant/attempt',{turn:1,step:1,stream:[{type:'text-chunks',time0:0,index:0,dt:[0],texts:['old text']}]})
+  const message=raw.append('assistant/message',{stream: [{type:'text-chunks',time0:0,index:0,dt:[0],texts:['old text']}], turn:1,step:1,message:createAssistantMessage({content:[{type:'reasoning',text:'reason preserved'},{type:'text',text:'old text'}],source:{provider:'test',model:'test'}})},{surfaceOp:'append'})
   raw.append('turn/end',{turn:1,reason:{kind:'completed'}})
   const changed=editedHistorySeed(raw.snapshotEvents(),new Map([[message.seq,'new text']])),edited=changed.find(event=>event.seq===message.seq)!
   expect(changed.find(event=>event.seq===chunk.seq)).toMatchObject({type:'tavern/message-edit-marker',ignorable:true})
   expect(edited).not.toHaveProperty('sourceEventSeqs')
+  expect(edited).toHaveProperty('data.stream',[])
   expect(edited.type==='assistant/message'&&edited.data.message.content).toEqual([{type:'reasoning',text:'reason preserved'},{type:'text',text:'new text'}])
 })
 it('复制剧情期间有新的宿主事件时拒绝发布分支，保留新事件与来源状态',async()=>{
@@ -275,7 +276,7 @@ async function assertHostTrace(session:Session){
 it('删除用户和 assistant 消息同时移除工具配对及过时摘要，保留后续历史与原会话',async()=>{
   await assertHostTrace(source)
   const nodes=source.snapshotEvents().filter(event=>'surfaceOp' in event&&event.surfaceOp==='append')
-  source.append('user/message',createUserMessage({source:{kind:'user'},content:[{type:'text',text:'stale deleted summary'}]}),{surfaceOp:{op:'replace',start:nodes[0]!.seq,end:nodes.at(-1)!.seq},sourceEventSeqs:nodes.map(event=>event.seq)})
+  source.append('user/message',createUserMessage({source:{kind:'user'},content:[{type:'text',text:'stale deleted summary'}]}),{surfaceOp:{op:'replace',startSeq:nodes[0]!.seq,endSeq:nodes.at(-1)!.seq},sourceEventSeqs:nodes.map(event=>event.seq)})
   const original=source.snapshotEvents(),result=await edit([{message_id:2,delete:true},{message_id:3,delete:true}]),child=sessions.get(result.branch!.childSessionId)!
   expect(result.branch?.title).toContain('删除聊天消息');expect(texts(child)).toEqual(['user-1','assistant-1','user-3','assistant-3'])
   expect(child.snapshotEvents().filter(event=>event.type==='tool/call'||event.type==='tool/result')).toHaveLength(0)
@@ -299,12 +300,12 @@ it('删除后按稳定 seq 映射其它修改；旧导入消息数据和完整�
 it('可以删除包括当前卡面在内的全部可见消息，子会话仍能继续新回合',async()=>{
   for(let turn=4;turn<=33;turn++){
     source.append('turn/start',{turn});source.append('user/message',createUserMessage({source:{kind:'user'},content:[{type:'text',text:'bulk user '+turn}]}),{surfaceOp:'append'})
-    source.append('step/start',{turn,step:1});source.append('assistant/message',{turn,step:1,message:createAssistantMessage({source:{provider:'test',model:'test'},content:[{type:'text',text:'bulk reply '+turn}]})},{surfaceOp:'append'});source.append('step/end',{turn,step:1});source.append('turn/end',{turn,reason:{kind:'completed'}})
+    source.append('step/start',{turn,step:1});source.append('assistant/message',{stream: [], turn,step:1,message:createAssistantMessage({source:{provider:'test',model:'test'},content:[{type:'text',text:'bulk reply '+turn}]})},{surfaceOp:'append'});source.append('step/end',{turn,step:1});source.append('turn/end',{turn,reason:{kind:'completed'}})
   }
   const result=await edit(Array.from({length:66},(_,message_id)=>({message_id,delete:true}))),child=sessions.get(result.branch!.childSessionId)!
   expect(child.deriveMessages()).toEqual([]);await assertHostTrace(child)
   child.append('turn/start',{turn:34});child.append('user/message',createUserMessage({source:{kind:'user'},content:[{type:'text',text:'new start'}]}),{surfaceOp:'append'})
-  child.append('step/start',{turn:34,step:1});const reply=child.append('assistant/message',{turn:34,step:1,message:createAssistantMessage({source:{provider:'test',model:'test'},content:[{type:'text',text:'new reply'}]})},{surfaceOp:'append'});child.append('step/end',{turn:34,step:1});child.append('turn/end',{turn:34,reason:{kind:'completed'}})
+  child.append('step/start',{turn:34,step:1});const reply=child.append('assistant/message',{stream: [], turn:34,step:1,message:createAssistantMessage({source:{provider:'test',model:'test'},content:[{type:'text',text:'new reply'}]})},{surfaceOp:'append'});child.append('step/end',{turn:34,step:1});child.append('turn/end',{turn:34,reason:{kind:'completed'}})
   await assertHostTrace(child);expect((await getHelperSnapshot(ctx,state,child.id,reply.seq)).messages.map(row=>row.message)).toEqual(['new start','new reply'])
 })
 it('删除非法批次、生成中、坏 WAL 和宿主创建失败均不影响来源',async()=>{
@@ -317,13 +318,13 @@ it('删除非法批次、生成中、坏 WAL 和宿主创建失败均不影响�
 })
 it('删除有流式片段的消息不残留旧文本；不存在的 seq 和共享步骤的歧义目标拒绝',()=>{
   const raw=Session.create('session-delete-stream' as Session['id']);raw.append('turn/start',{turn:1});raw.append('step/start',{turn:1,step:1})
-  raw.append('assistant/chunk',{turn:1,step:1,chunk:{type:'text-delta',index:0,text:'deleted streamed text'}})
-  const message=raw.append('assistant/message',{turn:1,step:1,message:createAssistantMessage({source:{provider:'test',model:'test'},content:[{type:'text',text:'deleted streamed text'}]})},{surfaceOp:'append'})
+  raw.append('assistant/attempt',{turn:1,step:1,stream:[{type:'text-chunks',time0:0,index:0,dt:[0],texts:['deleted streamed text']}]})
+  const message=raw.append('assistant/message',{stream: [], turn:1,step:1,message:createAssistantMessage({source:{provider:'test',model:'test'},content:[{type:'text',text:'deleted streamed text'}]})},{surfaceOp:'append'})
   raw.append('step/end',{turn:1,step:1});raw.append('turn/end',{turn:1,reason:{kind:'completed'}})
-  const seed=editedHistorySeed(raw.snapshotEvents(),new Map(),new Set([message.seq]));expect(JSON.stringify(seed)).not.toContain('deleted streamed text');expect(seed.some(event=>event.type==='assistant/chunk')).toBe(false)
+  const seed=editedHistorySeed(raw.snapshotEvents(),new Map(),new Set([message.seq]));expect(JSON.stringify(seed)).not.toContain('deleted streamed text');expect(seed.some(event=>event.type==='assistant/attempt')).toBe(false)
   expect(()=>editedHistorySeed(raw.snapshotEvents(),new Map(),new Set([999]))).toThrow(/不在日志/)
   const shared=Session.create('session-delete-shared' as Session['id']);shared.append('turn/start',{turn:1});shared.append('step/start',{turn:1,step:1})
-  const one=shared.append('assistant/message',{turn:1,step:1,message:createAssistantMessage({source:{provider:'test',model:'test'},content:[{type:'text',text:'one'}]})},{surfaceOp:'append'})
-  shared.append('assistant/message',{turn:1,step:1,message:createAssistantMessage({source:{provider:'test',model:'test'},content:[{type:'text',text:'two'}]})},{surfaceOp:'append'});shared.append('step/end',{turn:1,step:1});shared.append('turn/end',{turn:1,reason:{kind:'completed'}})
+  const one=shared.append('assistant/message',{stream: [], turn:1,step:1,message:createAssistantMessage({source:{provider:'test',model:'test'},content:[{type:'text',text:'one'}]})},{surfaceOp:'append'})
+  shared.append('assistant/message',{stream: [], turn:1,step:1,message:createAssistantMessage({source:{provider:'test',model:'test'},content:[{type:'text',text:'two'}]})},{surfaceOp:'append'});shared.append('step/end',{turn:1,step:1});shared.append('turn/end',{turn:1,reason:{kind:'completed'}})
   expect(()=>editedHistorySeed(shared.snapshotEvents(),new Map(),new Set([one.seq]))).toThrow(/共用步骤/)
 })

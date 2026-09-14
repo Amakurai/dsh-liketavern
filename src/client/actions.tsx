@@ -11,19 +11,20 @@
  * - 重新生成/回退/编辑均按「这一层」生效（slot owner 提供 messageId，host 端据此定位楼层）；
  *   成功后自动 sessions.open(分支子会话) 并把 host 给的分支标题 rename 进会话列表；
  * - 续写（continue）不 fork：host 校验只能续最后一层，续跑流式在当前会话原生可见；
- * - 代答（impersonate）生成用户台词，dsh 输入区没有插件可写 API，结果复制到剪贴板；
+ * - 代答（impersonate）生成用户台词并复制到剪贴板；剪贴板不可用时展示文本供手动复制；
  * - 被中断（已停止）的楼层宿主不挂本 slot（只挂 finalized 消息），由 chat.node 渲染侧
  *   补挂 TavernInterruptedFloorActions（重新生成/回退/兄弟导航，按 turn 号定位）。
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { IconBranchOutline16, IconChevronLeftOutline14, IconChevronRightOutline14, IconEditOutline16, IconListPenOutline16, IconLoadingOutline16, IconPlayOutline16, IconRefreshOutline16, IconUserOutline16, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ReactNode } from 'react'
 import { cachedSessionBinding } from './cache.js'
+import { useDraftGuard } from './drafts.js'
 import { useT } from './i18n.js'
 import { isTavernSession, type UseSessions } from './mode.js'
 import { openChildSession } from './openChild.js'
 import type { Envelope, TavernRemote } from './types.js'
-import { Btn, Dialog, Err, useLoader, useToast } from './util.js'
+import { Badge, Btn, Dialog, Err, SaveBar, useLoader, useToast } from './util.js'
 import './styles.js'
 
 function IconAction(props: { label: string; disabled?: boolean; busy?: boolean; onClick: () => void; children: ReactNode }) {
@@ -110,9 +111,17 @@ export function TavernFloorActions(props: FloorActionsProps) {
   const [operation, setOperation] = useState<FloorOperation>(null)
   const [failure, setFailure] = useState<string | null>(null)
   const [editFailure, setEditFailure] = useState<string | null>(null)
-  const [edit, setEdit] = useState<{ turn: number; text: string } | null>(null)
+  const [edit, setEdit] = useState<{ turn: number; text: string; original: string } | null>(null)
   const [editAiFailure, setEditAiFailure] = useState<string | null>(null)
-  const [editAi, setEditAi] = useState<{ turn: number; text: string } | null>(null)
+  const [editAi, setEditAi] = useState<{ turn: number; text: string; original: string } | null>(null)
+  // 同一次 React 提交前的连续点击也必须互斥，不能仅依赖按钮 disabled 的下一次渲染。
+  const submitting = useRef(false)
+  const editDirty = edit !== null && edit.text !== edit.original
+  const editAiDirty = editAi !== null && editAi.text !== editAi.original
+  const editGuard = useDraftGuard(editDirty, operation === 'submit-edit')
+  const editAiGuard = useDraftGuard(editAiDirty, operation === 'submit-edit-ai')
+  const closeEdit = () => { if (!submitting.current) editGuard.request(() => setEdit(null)) }
+  const closeEditAi = () => { if (!submitting.current) editAiGuard.request(() => setEditAi(null)) }
   /** 剪贴板不可用时展示的代答结果（用户手动复制）。 */
   const [impersonated, setImpersonated] = useState<string | null>(null)
   const toast = useToast()
@@ -164,7 +173,7 @@ export function TavernFloorActions(props: FloorActionsProps) {
       if (r.ok) {
         // 源会话的兄弟导航（若仍挂载）据此重拉索引
         window.dispatchEvent(new CustomEvent(BRANCH_CHANGED_EVENT, { detail: sessionId }))
-        await openChildSession(sessions, r.value.childSessionId, r.value.title)
+        await openChildSession(sessions, r.value.childSessionId, r.value.title, sessionId)
       } else setFailure(r.error.message)
     } catch (e) {
       setFailure(e instanceof Error ? e.message : String(e))
@@ -191,7 +200,7 @@ export function TavernFloorActions(props: FloorActionsProps) {
     const target = nav.siblings[(nav.index + delta + nav.total) % nav.total]
     if (!target || target === sessionId) return
     setOperation(delta < 0 ? 'branch-prev' : 'branch-next')
-    void openChildSession(sessions, target)
+    void openChildSession(sessions, target, undefined, sessionId)
       .catch(() => {
         toast.show(t('actions.branchGone'))
         siblingLoader.reload()
@@ -205,7 +214,7 @@ export function TavernFloorActions(props: FloorActionsProps) {
     setEditFailure(null)
     try {
       const r = await remote.getFloorUserMessage({ sessionId, messageId })
-      if (r.ok) setEdit({ turn: r.value.turn, text: r.value.text })
+      if (r.ok) setEdit({ turn: r.value.turn, text: r.value.text, original: r.value.text })
       else setFailure(r.error.message)
     } catch (e) {
       setFailure(e instanceof Error ? e.message : String(e))
@@ -216,7 +225,8 @@ export function TavernFloorActions(props: FloorActionsProps) {
 
   const submitEdit = async () => {
     const draft = edit
-    if (!draft) return
+    if (!draft || !editDirty || !draft.text.trim() || submitting.current) return
+    submitting.current = true
     setOperation('submit-edit')
     setEditFailure(null)
     try {
@@ -224,13 +234,14 @@ export function TavernFloorActions(props: FloorActionsProps) {
       if (r.ok) {
         setEdit(null)
         window.dispatchEvent(new CustomEvent(BRANCH_CHANGED_EVENT, { detail: sessionId }))
-        await openChildSession(sessions, r.value.childSessionId, r.value.title)
+        await openChildSession(sessions, r.value.childSessionId, r.value.title, sessionId)
       } else {
         setEditFailure(r.error.message)
       }
     } catch (e) {
       setEditFailure(e instanceof Error ? e.message : String(e))
     } finally {
+      submitting.current = false
       setOperation(null)
     }
   }
@@ -255,7 +266,7 @@ export function TavernFloorActions(props: FloorActionsProps) {
     setEditAiFailure(null)
     try {
       const r = await remote.getFloorAssistantMessage({ sessionId, messageId })
-      if (r.ok) setEditAi({ turn: r.value.turn, text: r.value.text })
+      if (r.ok) setEditAi({ turn: r.value.turn, text: r.value.text, original: r.value.text })
       else setFailure(r.error.message)
     } catch (e) {
       setFailure(e instanceof Error ? e.message : String(e))
@@ -266,7 +277,8 @@ export function TavernFloorActions(props: FloorActionsProps) {
 
   const submitEditAi = async () => {
     const draft = editAi
-    if (!draft) return
+    if (!draft || !editAiDirty || !draft.text.trim() || submitting.current) return
+    submitting.current = true
     setOperation('submit-edit-ai')
     setEditAiFailure(null)
     try {
@@ -274,18 +286,19 @@ export function TavernFloorActions(props: FloorActionsProps) {
       if (r.ok) {
         setEditAi(null)
         window.dispatchEvent(new CustomEvent(BRANCH_CHANGED_EVENT, { detail: sessionId }))
-        await openChildSession(sessions, r.value.childSessionId, r.value.title)
+        await openChildSession(sessions, r.value.childSessionId, r.value.title, sessionId)
       } else {
         setEditAiFailure(r.error.message)
       }
     } catch (e) {
       setEditAiFailure(e instanceof Error ? e.message : String(e))
     } finally {
+      submitting.current = false
       setOperation(null)
     }
   }
 
-  /** AI 代答用户：结果复制进剪贴板（dsh 输入区没有插件可写 API）；剪贴板不可用时弹窗展示。 */
+  /** AI 代答用户：结果复制进剪贴板；剪贴板不可用时弹窗展示。 */
   const onImpersonate = async () => {
     setOperation('impersonate')
     setFailure(null)
@@ -372,39 +385,45 @@ export function TavernFloorActions(props: FloorActionsProps) {
         </span>
       )}
       {edit !== null && (
-        <Dialog open title={t('actions.editUserTitle', { turn: edit.turn })} onClose={() => { if (!busy) setEdit(null) }}>
+        <Dialog open width="lg" title={t('actions.editUserTitle', { turn: edit.turn })} description={t('actions.editUserHint')} onClose={closeEdit}>
           <textarea
-            className="dsh-tavern-input dsh-tavern-textarea"
-            style={{ minHeight: 120 }}
+            aria-label={t('actions.editUserTitle', { turn: edit.turn })}
+            className="dsh-tavern-input dsh-tavern-textarea dsh-tavern-floorEditor"
+            disabled={busy}
             value={edit.text}
-            onChange={(e) => setEdit({ ...edit, text: e.target.value })}
+            onChange={(e) => { if (!submitting.current) setEdit({ ...edit, text: e.target.value }) }}
           />
           <Err message={editFailure} />
-          <div className="dsh-tavern-modalActions" style={{ marginTop: 12 }}>
-            <Btn disabled={busy} onClick={() => setEdit(null)}>{t('action.cancel')}</Btn>
-            <Btn disabled={busy || !edit.text.trim()} onClick={() => void submitEdit()}>
+          <SaveBar>
+            {editDirty && <Badge>{t('draft.unsaved')}</Badge>}
+            <Btn disabled={busy} onClick={closeEdit}>{t('action.cancel')}</Btn>
+            <Btn primary disabled={busy || !editDirty || !edit.text.trim()} onClick={() => void submitEdit()}>
               {operation === 'submit-edit' ? t('actions.saving') : t('actions.saveRerun')}
             </Btn>
-          </div>
+          </SaveBar>
         </Dialog>
       )}
       {editAi !== null && (
-        <Dialog open title={t('actions.editAiTitle', { turn: editAi.turn })} onClose={() => { if (!busy) setEditAi(null) }}>
+        <Dialog open width="lg" title={t('actions.editAiTitle', { turn: editAi.turn })} description={t('actions.editAiHint')} onClose={closeEditAi}>
           <textarea
-            className="dsh-tavern-input dsh-tavern-textarea"
-            style={{ minHeight: 160 }}
+            aria-label={t('actions.editAiTitle', { turn: editAi.turn })}
+            className="dsh-tavern-input dsh-tavern-textarea dsh-tavern-floorEditor"
+            disabled={busy}
             value={editAi.text}
-            onChange={(e) => setEditAi({ ...editAi, text: e.target.value })}
+            onChange={(e) => { if (!submitting.current) setEditAi({ ...editAi, text: e.target.value }) }}
           />
           <Err message={editAiFailure} />
-          <div className="dsh-tavern-modalActions" style={{ marginTop: 12 }}>
-            <Btn disabled={busy} onClick={() => setEditAi(null)}>{t('action.cancel')}</Btn>
-            <Btn disabled={busy || !editAi.text.trim()} onClick={() => void submitEditAi()}>
+          <SaveBar>
+            {editAiDirty && <Badge>{t('draft.unsaved')}</Badge>}
+            <Btn disabled={busy} onClick={closeEditAi}>{t('action.cancel')}</Btn>
+            <Btn primary disabled={busy || !editAiDirty || !editAi.text.trim()} onClick={() => void submitEditAi()}>
               {operation === 'submit-edit-ai' ? t('actions.saving') : t('actions.saveNoRerun')}
             </Btn>
-          </div>
+          </SaveBar>
         </Dialog>
       )}
+      {editGuard.confirmation}
+      {editAiGuard.confirmation}
       {impersonated !== null && (
         <Dialog open title={t('actions.impersonateTitle')} onClose={() => setImpersonated(null)}>
           <textarea readOnly className="dsh-tavern-input dsh-tavern-textarea" style={{ minHeight: 120 }} value={impersonated} />
@@ -457,7 +476,7 @@ export function TavernInterruptedFloorActions(props: {
       const r = await op()
       if (r.ok) {
         window.dispatchEvent(new CustomEvent(BRANCH_CHANGED_EVENT, { detail: sessionId }))
-        await openChildSession(sessions, r.value.childSessionId, r.value.title)
+        await openChildSession(sessions, r.value.childSessionId, r.value.title, sessionId)
       } else setFailure(r.error.message)
     } catch (e) {
       setFailure(e instanceof Error ? e.message : String(e))
@@ -472,7 +491,7 @@ export function TavernInterruptedFloorActions(props: {
     const target = nav.siblings[(nav.index + delta + nav.total) % nav.total]
     if (!target || target === sessionId) return
     setOperation(delta < 0 ? 'branch-prev' : 'branch-next')
-    void openChildSession(sessions, target)
+    void openChildSession(sessions, target, undefined, sessionId)
       .catch(() => {
         toast.show(t('actions.branchGone'))
         siblingLoader.reload()

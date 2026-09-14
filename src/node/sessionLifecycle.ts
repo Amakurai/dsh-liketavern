@@ -7,6 +7,7 @@ import { closeTemplateGenerationState } from '../state/templateContinuation.js'
 import { withWorkspaceLock } from '../state/workspaceLock.js'
 import { helperMvuPending, queueHelperMvuTurn } from './helperMvu.js'
 import { helperMvuHasAssistant } from './helperMvuLifecycle.js'
+import { hasNormalAssistantStop } from './assistantStream.js'
 
 /** 暂缓开层只标记当前宿主轮，不能用它收口旧 MVU 楼层或抹掉待恢复输入。 */
 const deferredTurns = new WeakMap<TavernState, Map<string, number>>()
@@ -116,10 +117,7 @@ async function finishTurn(state:TavernState,sessionId:string,session?:Pick<Sessi
             const completed = ending?.type==='turn/end' && ending.data.turn===generation.turn && ending.data.reason.kind==='completed'
               && events.some(event=>{
                 if (event.type!=='assistant/message' || event.data.turn!==generation.turn || event.data.interrupted || event.seq>=ending.seq) return false
-                const chunks = events.filter(chunk=>chunk.type==='assistant/chunk' && chunk.data.turn===generation.turn && chunk.data.step===event.data.step)
-                const last = chunks.at(-1)
-                return chunks.filter(chunk=>chunk.type==='assistant/chunk' && chunk.data.chunk.type==='finish').length===1
-                  && last?.type==='assistant/chunk' && last.data.chunk.type==='finish' && last.data.chunk.reason.kind==='stop' && last.seq<event.seq
+                return hasNormalAssistantStop(event)
               })
             closeTemplateGenerationState(stored,completed?'completed':'terminated')
             await saveTemplateState(ws.fs.withFloor(entry.floor),stored)

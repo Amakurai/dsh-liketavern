@@ -161,6 +161,34 @@ describe('编辑草稿保护', () => {
     expect(view.root.findAllByType('textarea').some((n) => n.props.value === '窗口期的新编辑')).toBe(true)
     expect(JSON.stringify(view.toJSON())).toContain('未保存')
   })
+
+  it.each(['pending', 'error'] as const)('角色保存后的详情重读尚未成功，新编辑仍受关闭和刷新保护：%s', async state => {
+    vi.stubGlobal('window', new EventTarget())
+    const card = detail(`reload-guard-${state}`)
+    let first = true
+    const reload = Promise.withResolvers<ReturnType<typeof ok<CharacterDetail>>>()
+    const remote = { listCharacters: async () => ok({ items: [summary(card.cardId, card.name)] }),
+      getCharacterDetail: async () => { if (first) { first = false; return ok(card) } return reload.promise },
+      getAvatar: async () => ok({ dataUrl: null }), saveCharacter: async () => ok({ cardId: card.cardId, name: card.name }),
+    } as unknown as TavernRemote
+    const view = await render(<CharactersSection remote={remote}/>)
+    try {
+      await act(async () => view.root.findByProps({ className: 'dsh-tavern-charCard' }).props.onClick())
+      const greeting = (value: string) => view.root.findAllByType('textarea').find(item => item.props.value === value)!
+      await act(async () => greeting('第一段\n第二段').props.onChange({ target: { value: '已保存版本' } }))
+      await act(async () => button(view, '保存').props.onClick())
+      if (state === 'error') await act(async () => reload.reject(new Error('重新读取失败')))
+      await act(async () => greeting('已保存版本').props.onChange({ target: { value: '重新读取期间的新草稿' } }))
+      expect(button(view, '保存').props.disabled).toBe(false)
+      const unload = new Event('beforeunload', { cancelable: true })
+      window.dispatchEvent(unload)
+      expect(unload.defaultPrevented).toBe(true)
+      await act(async () => view.root.findAllByType(Dialog).find(dialog => dialog.props.width === 'xl')!.props.onClose())
+      expect(confirmation(view)).toBeDefined()
+      await act(async () => confirmation(view).props.onCancel())
+      expect(greeting('重新读取期间的新草稿')).toBeDefined()
+    } finally { await act(async () => view.unmount()); vi.unstubAllGlobals() }
+  })
 })
 
 describe('剧情上下文', () => {
@@ -270,6 +298,62 @@ it('会话绑定面板保存失败显示传输错误并解锁，换开场白在�
     expect(button(view,'下一条开场白').props.disabled).toBe(false)
     await act(async()=>view.unmount())
   } finally {vi.unstubAllGlobals()}
+})
+
+/** 复用宿主 slot 时切换会话，旧表单与迟到分支不能影响新页面。 */
+describe('绑定面板会话切换', () => {
+  function setup(prefix: string) {
+    const ids = [`${prefix}-a`, `${prefix}-b`]
+    const cards = ids.map(id => detail(`${id}-card`))
+    let current = ids[0]!
+    const setSessionBinding = vi.fn(async () => ok({}))
+    const pending = Promise.withResolvers<ReturnType<typeof ok<{ childSessionId: string; title: string }>>>()
+    const open = vi.fn(), refresh = vi.fn(async () => {})
+    const sessions = { open, refresh, list: { getSnapshot: () => ({ current }) } }
+    const remote = {
+      getSessionBinding: async ({ sessionId }: { sessionId: string }) => ok({ binding: { ...defaultBinding(sessionId, `${sessionId}-card`), authorNote: `${sessionId} note` }, canSwipeGreeting: true }),
+      getCharacterDetail: async ({ cardId }: { cardId: string }) => ok(cards.find(card => card.cardId === cardId)!),
+      getAvatar: async () => ok({ dataUrl: null }), listCharacters: async () => ok({ items: cards }),
+      listPresets: async () => ok({ items: [] }), listPersonas: async () => ok({ items: [] }),
+      listLorebooks: async () => ok({ items: [] }), getContextUsage: async () => ok({ usage: null }),
+      setSessionBinding, swipeGreeting: vi.fn(() => pending.promise),
+    } as unknown as TavernRemote
+    const component = () => <TavernHeaderChip remote={remote} sessionId={current} sessions={sessions} useSessions={select => select({ byId: Object.fromEntries(ids.map(id => [id, { projectionValues: { agentPreset: 'tavern' } }])) })}/>
+    return { component, setSessionBinding, pending, open, refresh, switchSession: () => { current = ids[1]! }, ids }
+  }
+  it('切换后关闭旧绑定表单，重新打开只保存新会话的绑定', async () => {
+    vi.stubGlobal('window', new EventTarget())
+    const fixture = setup('binding-switch')
+    const view = await render(fixture.component())
+    try {
+      await act(async () => view.root.findByType(TavernSeatChip).props.onClick())
+      await act(async () => view.root.findByType('textarea').props.onChange({ target: { value: '仅属于旧会话的编辑' } }))
+      await act(async () => { fixture.switchSession(); view.update(fixture.component()) })
+      expect(view.root.findAllByProps({ role: 'dialog' })).toHaveLength(0)
+      await act(async () => view.root.findByType(TavernSeatChip).props.onClick())
+      expect(view.root.findByType('textarea').props.value).toBe(`${fixture.ids[1]} note`)
+      await act(async () => button(view, '保存绑定').props.onClick())
+      expect(fixture.setSessionBinding).toHaveBeenCalledWith({ binding: expect.objectContaining({ sessionId: fixture.ids[1], cardId: `${fixture.ids[1]}-card`, authorNote: `${fixture.ids[1]} note` }) })
+    } finally { await act(async () => view.unmount()); vi.unstubAllGlobals() }
+  })
+  it.each(['reply', 'refresh'] as const)('切换会话后忽略迟到的开场白跳转：%s', async stage => {
+    vi.stubGlobal('window', new EventTarget())
+    const fixture = setup(`binding-late-${stage}`)
+    const refreshPending = Promise.withResolvers<void>()
+    if (stage === 'refresh') fixture.refresh.mockImplementation(() => refreshPending.promise)
+    const view = await render(fixture.component())
+    try {
+      await act(async () => view.root.findByType(TavernSeatChip).props.onClick())
+      await act(async () => button(view, '下一条开场白').props.onClick())
+      if (stage === 'refresh') {
+        await act(async () => fixture.pending.resolve(ok({ childSessionId: 'late-child', title: '分支' })))
+        expect(fixture.refresh).toHaveBeenCalledTimes(1)
+      }
+      await act(async () => { fixture.switchSession(); view.update(fixture.component()) })
+      await act(async () => { fixture.pending.resolve(ok({ childSessionId: 'late-child', title: '分支' })); refreshPending.resolve() })
+      expect(fixture.open).not.toHaveBeenCalled()
+    } finally { await act(async () => view.unmount()); vi.unstubAllGlobals() }
+  })
 })
 
 /** 设置恢复使用选定剧情及宿主 seq，失败保留草稿；不重新挂载第三方角色卡。 */

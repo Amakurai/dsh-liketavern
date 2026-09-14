@@ -95,8 +95,8 @@ async function setup(description = '<% incvar("visits"); %>访问=<%- getvar("vi
 
 function sessionOutput(text: string, reason = 'completed', finish = 'stop'): Pick<Session,'id'|'snapshotEvents'> {
   const events = [
-    { type:'assistant/chunk', seq:4, time:0, data:{turn:1,step:1,chunk:{type:'finish',reason:{kind:finish}}} },
-    { type:'assistant/message', seq:5, time:0, data:{turn:1,step:1,message:createAssistantMessage({content:[{type:'text',text}]})} },
+
+    { type:'assistant/message', seq:5, time:0, data:{stream: [{type:'chunk',time:0,chunk:{type:'finish',reason:{kind:finish}}}], turn:1,step:1,message:createAssistantMessage({content:[{type:'text',text}]})} },
     { type:'turn/end', seq:6, time:0, data:{turn:1,reason:{kind:reason}} },
   ] as unknown as SessionEvent[]
   return {id:'s1' as Session['id'], snapshotEvents:()=>events}
@@ -282,7 +282,8 @@ describe('剧情模板集成', () => {
     await completeTemplateOutput(state, sessionOutput(text,'completed','length'))
     const malformed = sessionOutput(text)
     const invalidEvents = [...malformed.snapshotEvents()]
-    invalidEvents.splice(1,0,{type:'assistant/chunk',seq:4,time:0,data:{turn:1,step:1,chunk:{type:'text-delta',index:0,text:'after stop'}}} as unknown as SessionEvent)
+    const invalidMessage = invalidEvents.find(event=>event.type==='assistant/message')!
+    if(invalidMessage.type==='assistant/message') invalidMessage.data.stream.push({type:'text-chunks',time0:0,index:0,dt:[0],texts:['after stop']})
     await completeTemplateOutput(state,{id:malformed.id,snapshotEvents:()=>invalidEvents})
     expect((await loadTemplateState(ws.fs)).variables.message.affinity).toBeUndefined()
     const session = sessionOutput(text)

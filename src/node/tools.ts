@@ -1,6 +1,7 @@
 /**
  * Tavern 模型工具：记忆检索/写入/更新、世界书按条阅读、世界状态更新、资产清单/阅读。
  * 全部经 exec.agent 定位会话绑定与角色工作区；写操作经 WorkspaceFs（落入楼层 WAL）。
+ * 由宿主 PTC 暴露 SDK；四个只读工具允许并行，三个写工具保持独占屏障。
  *
  * WI/记忆检索按 turn 缓存（pipeline.ts），工具写入不重评世界书定时器——这是有意的。
  * 写入成功后经 agent.inject 发一条同轮确认（不当作用户台词、不扫世界书），
@@ -44,6 +45,7 @@ import type { WorkspaceFs } from '../state/workspaceFs.js'
 import type { SessionBinding } from './bindings.js'
 import { loadBoundLoreEntries } from './pipeline.js'
 import type { TavernState } from './state.js'
+import { TOOL_OUTPUTS, type TavernToolOutput } from './toolOutputs.js'
 
 /** 记忆检索一次返回的条数上限：对齐 tavern_lore_read 的 LORE_READ_MAX_TOPK，模型给的 topK 再大也不放行。 */
 const MEMORY_SEARCH_MAX_TOPK = 20
@@ -197,16 +199,17 @@ export function registerTavernTools(ctx: Context, state: TavernState): void {
   ctx.tools.register(
     defineTool({
       name: 'tavern_memory_search',
+      isConcurrencySafe: () => true,
       description: '检索当前角色的长期记忆（BM25）。仅当 runtime context 里的记忆不够、需要核对更早事实时调用；不要每轮例行检索。',
       parameters: {
         query: { type: 'string', required: true, description: '检索查询（自然语言或关键词）' },
         topK: { type: 'number', description: `返回条数上限（默认跟随设置，最大 ${MEMORY_SEARCH_MAX_TOPK}）` },
       },
       output: {
-        schema: { type: 'json' },
+        schema: TOOL_OUTPUTS.memorySearch,
         render: (_args, value) => text(value as ToolResultValue),
       },
-      async execute(args, exec): Promise<JsonValue> {
+      async execute(args, exec): Promise<TavernToolOutput<'memorySearch'>> {
         const resolved = await resolveCtx(state, exec)
         if ('error' in resolved) return { ok: false, error: resolved.error }
         const config = state.config.memory
@@ -218,7 +221,7 @@ export function registerTavernTools(ctx: Context, state: TavernState): void {
           count: hits.length,
           tokensUsed: clipped.tokensUsed,
           omitted: clipped.omitted,
-          results: clipped.results as unknown as JsonValue,
+          results: clipped.results,
           ...(clipped.omitted > 0
             ? { hint: '超出 token 预算的条目只给了 id/标签/关键词；确需正文用 tavern_asset_read({ path: results 中的 path }) 按条读。' }
             : {}),
@@ -238,10 +241,10 @@ export function registerTavernTools(ctx: Context, state: TavernState): void {
         keys: { type: 'array', items: { type: 'string' }, description: '触发关键词（可选）' },
       },
       output: {
-        schema: { type: 'json' },
+        schema: TOOL_OUTPUTS.memoryWrite,
         render: (_args, value) => text(value as ToolResultValue),
       },
-      async execute(args, exec): Promise<JsonValue> {
+      async execute(args, exec): Promise<TavernToolOutput<'memoryWrite'>> {
         const resolved = await resolveCtx(state, exec, { requireOpenFloor: true })
         if ('error' in resolved) return { ok: false, error: resolved.error }
         const { ws } = resolved
@@ -291,10 +294,10 @@ export function registerTavernTools(ctx: Context, state: TavernState): void {
         keys: { type: 'array', items: { type: 'string' }, description: '追加关键词（可选）' },
       },
       output: {
-        schema: { type: 'json' },
+        schema: TOOL_OUTPUTS.memoryUpdate,
         render: (_args, value) => text(value as ToolResultValue),
       },
-      async execute(args, exec): Promise<JsonValue> {
+      async execute(args, exec): Promise<TavernToolOutput<'memoryUpdate'>> {
         const resolved = await resolveCtx(state, exec, { requireOpenFloor: true })
         if ('error' in resolved) return { ok: false, error: resolved.error }
         const entry = await resolved.ws.memory.update(args.id, { body: args.body, tags: args.tags, keys: args.keys })
@@ -314,8 +317,9 @@ export function registerTavernTools(ctx: Context, state: TavernState): void {
   ctx.tools.register(
     defineTool({
       name: 'tavern_lore_read',
+      isConcurrencySafe: () => true,
       description:
-        '阅读世界书（全局/角色/会话/变化层）。不带参数返回目录（uid/键/摘要）；给 uid 或 query 再取正文。不要整本倾倒。仅当本轮 context 缺设定或长上下文遗忘时调用。',
+        '阅读世界书（全局/角色/会话/变化层）。已知 uid 或关键词直接传 uid/query 取正文；仅未知目标时不带参数看目录（uid/键/摘要）。不要整本倾倒。仅当本轮 context 缺关键设定时调用。',
       parameters: {
         uid: { type: 'string', description: '条目 uid 或完整 key；优先精确匹配' },
         query: { type: 'string', description: '关键词，匹配键/注释/正文' },
@@ -323,10 +327,10 @@ export function registerTavernTools(ctx: Context, state: TavernState): void {
         topK: { type: 'number', description: 'query 模式返回条数（默认 6，最大 20）' },
       },
       output: {
-        schema: { type: 'json' },
+        schema: TOOL_OUTPUTS.loreRead,
         render: (_args, value) => text(value as ToolResultValue),
       },
-      async execute(args, exec): Promise<JsonValue> {
+      async execute(args, exec): Promise<TavernToolOutput<'loreRead'>> {
         const resolved = await resolveCtx(state, exec)
         if ('error' in resolved) return { ok: false, error: resolved.error }
         const q: LoreReadQuery = {
@@ -345,7 +349,7 @@ export function registerTavernTools(ctx: Context, state: TavernState): void {
             mode: 'catalog',
             count: scoped.length,
             truncated: scoped.length > LORE_CATALOG_MAX,
-            entries: catalog as unknown as JsonValue,
+            entries: catalog,
             hint: '用 uid 或 query 取正文；disabled 条目仍可读。',
           }
         }
@@ -359,7 +363,7 @@ export function registerTavernTools(ctx: Context, state: TavernState): void {
           mode: 'content',
           tokensUsed: clipped.tokensUsed,
           omitted: clipped.omitted,
-          entries: clipped.entries as unknown as JsonValue,
+          entries: clipped.entries,
         }
       },
     }),
@@ -379,10 +383,10 @@ export function registerTavernTools(ctx: Context, state: TavernState): void {
         expiresAt: { type: 'string', description: '过期时间 ISO 字符串（可选，默认不过期）' },
       },
       output: {
-        schema: { type: 'json' },
+        schema: TOOL_OUTPUTS.worldstateUpdate,
         render: (_args, value) => text(value as ToolResultValue),
       },
-      async execute(args, exec): Promise<JsonValue> {
+      async execute(args, exec): Promise<TavernToolOutput<'worldstateUpdate'>> {
         const resolved = await resolveCtx(state, exec, { requireOpenFloor: true })
         if ('error' in resolved) return { ok: false, error: resolved.error }
         if ((args.type === 'update' || args.type === 'invalidate') && !args.ref) {
@@ -411,13 +415,14 @@ export function registerTavernTools(ctx: Context, state: TavernState): void {
   ctx.tools.register(
     defineTool({
       name: 'tavern_asset_list',
+      isConcurrencySafe: () => true,
       description: '列出当前角色工作区可读文本资产、绑定预设条目目录（与 tavern_asset_read 的白名单一致，不含 WAL/图片）。读取正文用 tavern_asset_read（path 或 preset）。不要每轮例行调用。',
       parameters: {},
       output: {
-        schema: { type: 'json' },
+        schema: TOOL_OUTPUTS.assetList,
         render: (_args, value) => text(value as ToolResultValue),
       },
-      async execute(_args, exec): Promise<JsonValue> {
+      async execute(_args, exec): Promise<TavernToolOutput<'assetList'>> {
         const resolved = await resolveCtx(state, exec)
         if ('error' in resolved) return { ok: false, error: resolved.error }
         const { binding, ws } = resolved
@@ -452,7 +457,7 @@ export function registerTavernTools(ctx: Context, state: TavernState): void {
           filesTruncated: readable.length > ASSET_CATALOG_MAX,
           preset: { id: preset.identifier, name: preset.name, entries: listPresetCatalog(preset) },
           hint: '读文件：tavern_asset_read({ path: "journal.md" })；读预设：tavern_asset_read({ preset: "identifier 或 list" })',
-        } as unknown as JsonValue
+        }
       },
     }),
   )
@@ -461,6 +466,7 @@ export function registerTavernTools(ctx: Context, state: TavernState): void {
   ctx.tools.register(
     defineTool({
       name: 'tavern_asset_read',
+      isConcurrencySafe: () => true,
       description:
         '阅读工作区文本文件或预设条目（含未启用）。path 如 journal.md、index.json、memory/xxx.md、assets/character-book.json；preset 填 list 列目录，或填 identifier 取正文。不读 WAL/图片。',
       parameters: {
@@ -468,10 +474,10 @@ export function registerTavernTools(ctx: Context, state: TavernState): void {
         preset: { type: 'string', description: 'list/* 列出预设条目；或条目 identifier' },
       },
       output: {
-        schema: { type: 'json' },
+        schema: TOOL_OUTPUTS.assetRead,
         render: (_args, value) => text(value as ToolResultValue),
       },
-      async execute(args, exec): Promise<JsonValue> {
+      async execute(args, exec): Promise<TavernToolOutput<'assetRead'>> {
         const resolved = await resolveCtx(state, exec)
         if ('error' in resolved) return { ok: false, error: resolved.error }
         const pathArg = asOptionalString(args.path)
@@ -480,7 +486,7 @@ export function registerTavernTools(ctx: Context, state: TavernState): void {
           return { ok: false, error: '需要 path 或 preset。先用 tavern_asset_list 看目录。' }
         }
 
-        const out: ToolResultValue = { ok: true }
+        const out: TavernToolOutput<'assetRead'> = { ok: true }
 
         if (presetArg !== undefined) {
           const preset = (resolved.binding.presetId ? await state.loadPreset(resolved.binding.presetId) : null) ?? defaultPreset()
@@ -527,7 +533,7 @@ export function registerTavernTools(ctx: Context, state: TavernState): void {
           }
         }
 
-        return out as unknown as JsonValue
+        return out
       },
     }),
   )

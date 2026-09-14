@@ -1,5 +1,5 @@
 /** 脚本只能提交有界文本选项；可信按钮经宿主公开草稿接口填入，第三方代码不接触主页面。 */
-import {useState,useSyncExternalStore} from 'react'
+import {useRef,useState,useSyncExternalStore} from 'react'
 import type {SessionInput} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {HelperSnapshot} from '../core/helperRuntime.js'
 import {Btn,Err} from './util.js'
@@ -24,9 +24,30 @@ export function publishScriptChoices(owner:symbol,sessionId:string,context:Helpe
 }
 export function clearScriptChoices(owner:symbol):void {if(!entries.some(entry=>entry.owner===owner))return;entries=entries.filter(entry=>entry.owner!==owner);notify()}
 export function choiceDraft(draft:string,text:string,previous:string):string {return previous&&draft.endsWith(previous)?draft.slice(0,-previous.length)+text:draft+(draft&&!draft.endsWith('\n')?'\n':'')+text}
-export function ScriptChoices({sessionId,context}:{sessionId:string;context:HelperSnapshot}) {
-  const t=useT(),all=useSyncExternalStore(subscribe,snapshot,snapshot),[error,setError]=useState<string|null>(null),[previous,setPrevious]=useState('')
+interface ScriptChoicesProps {sessionId:string;context:HelperSnapshot}
+export function ScriptChoices(props:ScriptChoicesProps) {
+  const {sessionId,context}=props
+  return <ScriptChoicesMessage key={JSON.stringify([sessionId,context.storyId,context.historyRevision,context.currentMessageId])} {...props}/>
+}
+function ScriptChoicesMessage({sessionId,context}:ScriptChoicesProps) {
+  const t=useT(),all=useSyncExternalStore(subscribe,snapshot,snapshot),[error,setError]=useState<string|null>(null)
+  const previous=useRef<{draft:string;revision:number;text:string}|null>(null)
   const choices=all.filter(entry=>entry.sessionId===sessionId&&entry.storyId===context.storyId&&entry.historyRevision===context.historyRevision&&entry.messageId===context.currentMessageId).flatMap(entry=>entry.choices)
   if(!choices.length)return null
-  return <div className="dsh-tavern-messageChoices" aria-label={t('speech.scriptChoices')}><div>{choices.map((choice,index)=><Btn key={index} title={choice.text} onClick={()=>{try{const input=inputFor?.(sessionId);if(!input)throw new Error(t('speech.choiceUnavailable'));const state=input.state.getSnapshot();if(state.phase!=='plain'||state.occurrences.length)throw new Error(t('speech.choiceBusy'));input.setDraft(choiceDraft(state.draft,choice.text,previous));setPrevious(choice.text);setError(null)}catch(value){setError(value instanceof Error?value.message:String(value))}}}>{choice.label}</Btn>)}</div><Err message={error}/></div>
+  const pick=(choice:ScriptChoice)=>{
+    try {
+      const input=inputFor?.(sessionId)
+      if(!input)throw new Error(t('speech.choiceUnavailable'))
+      const state=input.state.getSnapshot()
+      if(state.phase!=='plain'||state.occurrences.length)throw new Error(t('speech.choiceBusy'))
+      // 宿主 draftRev 可区分手动改回同文；只替换本消息上次写入且从未被编辑的完整结果。
+      const last=previous.current
+      const replace=last&&last.draft===state.draft&&last.revision===state.draftRev
+      input.setDraft(choiceDraft(state.draft,choice.text,replace?last.text:''))
+      const written=input.state.getSnapshot()
+      previous.current={draft:written.draft,revision:written.draftRev,text:choice.text}
+      setError(null)
+    } catch(value) {setError(value instanceof Error?value.message:String(value))}
+  }
+  return <div className="dsh-tavern-messageChoices" aria-label={t('speech.scriptChoices')}><div>{choices.map((choice,index)=><Btn key={index} title={choice.text} onClick={()=>pick(choice)}>{choice.label}</Btn>)}</div><Err message={error}/></div>
 }

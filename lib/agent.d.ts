@@ -5,7 +5,7 @@
  *    已绑定：standing = 角色定义 + 预设骨架（冻结时钟，按会话钉死字节）；
  *    turn = 固定 playbook（不随 step 变，宿主按字节去重不重复追加）+ 世界书/记忆/变化层。
  *    未绑定：standing 固定短文案（不删段，避免段布局抖动打穿 KV），turn 为空。
- *    standing 段 order=210，排在工具说明（100–199）之后：即使骨架仍有残余抖动，
+ *    standing 排在宿主 TOOLS_SDK 段之后：即使骨架仍有残余抖动，
  *    稳定的工具说明仍能命中 DeepSeek 前缀缓存。绝不把整包 ST 预设改成 complete 段。
  * 2. 在 agent/request waterfall 中合入采样参数（temperature/maxTokens/stop）
  *    与 thinking→reasoningEffort（只写模型公布的档位；模型元数据经

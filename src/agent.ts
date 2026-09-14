@@ -5,7 +5,7 @@
  *    已绑定：standing = 角色定义 + 预设骨架（冻结时钟，按会话钉死字节）；
  *    turn = 固定 playbook（不随 step 变，宿主按字节去重不重复追加）+ 世界书/记忆/变化层。
  *    未绑定：standing 固定短文案（不删段，避免段布局抖动打穿 KV），turn 为空。
- *    standing 段 order=210，排在工具说明（100–199）之后：即使骨架仍有残余抖动，
+ *    standing 排在宿主 TOOLS_SDK 段之后：即使骨架仍有残余抖动，
  *    稳定的工具说明仍能命中 DeepSeek 前缀缓存。绝不把整包 ST 预设改成 complete 段。
  * 2. 在 agent/request waterfall 中合入采样参数（temperature/maxTokens/stop）
  *    与 thinking→reasoningEffort（只写模型公布的档位；模型元数据经
@@ -31,8 +31,6 @@ export const inject = ['tavern', 'systemPrompt', 'tools', 'llm']
 
 const STANDING_SECTION = 'tavern:standing'
 const TURN_CONTEXT = 'tavern:turn'
-/** 工具说明占用 100–199；骨架放在其后，避免抖动打穿工具前缀。 */
-const STANDING_ORDER = 210
 
 function applyStanding(result: { sections: Array<{ name: string; text: string }> }, text: string): void {
   const index = result.sections.findIndex((s) => s.name === STANDING_SECTION)
@@ -73,7 +71,8 @@ export function apply(ctx: Context): void {
   const state = service.state
   const llm = ctx.get('llm') as LlmRuntime | undefined
 
-  ctx.systemPrompt.section({ name: STANDING_SECTION, order: STANDING_ORDER, text: UNBOUND_STANDING })
+  // rc.1 的 PTC SDK order=5000；旧 order=210 会把角色文本放到 SDK 前，损失工具前缀缓存。
+  ctx.systemPrompt.section({ name: STANDING_SECTION, order: ctx.systemPrompt.getSectionOrder('TOOLS_SDK') + 10, text: UNBOUND_STANDING })
   ctx.systemPrompt.context({ name: TURN_CONTEXT, order: 20, text: '' })
 
   ctx.on('agent/pre-step', async (payload, next) => {

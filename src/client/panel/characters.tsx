@@ -105,10 +105,12 @@ function CharacterDetailDialog(props: { remote: TavernRemote; cardId: string; on
   const toast = useToast()
   const loaded: CharacterDetail | null = state.status === 'ready' ? state.value : null
   const detail = draft ?? loaded
-  const dirty = draft !== null && (loaded === null ? restored : JSON.stringify(draft) !== JSON.stringify(loaded))
-  const guard = useDraftGuard(dirty, busy)
   // 最近一次应用到草稿的服务端值（或保存成功那一刻的草稿）：用于识别 reload 往返窗口期内的新编辑。
   const appliedRef = useRef<CharacterDetail | null>(null)
+  // 重读挂起或失败时仍用已知保存版本比较，不能把刚输入的正文误判为已保存。
+  const baseline = loaded ?? appliedRef.current
+  const dirty = draft !== null && (baseline === null ? restored : JSON.stringify(draft) !== JSON.stringify(baseline))
+  const guard = useDraftGuard(dirty, busy)
   const draftRef = useRef(draft)
   draftRef.current = draft
   useEffect(() => {

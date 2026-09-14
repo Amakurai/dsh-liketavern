@@ -12,6 +12,8 @@ import { setTavernLocale, t } from '../src/client/i18n.js'
 import { CharactersSection } from '../src/client/panel/characters.js'
 import { PersonasSection } from '../src/client/panel/personas.js'
 import { PresetsSection } from '../src/client/panel/presets.js'
+import { LorebooksSection } from '../src/client/panel/lorebooks.js'
+import { LorebookEditor } from '../src/client/panel/lorebookEditor.js'
 import { PersistentEditor } from '../src/client/draftPersistence.js'
 import { Btn, ConfirmDialog, Dialog, Err, FileBtn, IconBtn, SearchInput, fileToBase64 } from '../src/client/util.js'
 import type { Envelope, TavernRemote } from '../src/client/types.js'
@@ -26,7 +28,7 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
   Tooltip: (props: { children?: ReactNode }) => <>{props.children}</>, Toast: () => null,
   IconChevronDownOutline14: () => null, IconSearchOutline16: () => null, IconUserOutline16: () => null,
   IconDownloadOutline16: () => null, IconEditOutline16: () => null, IconFolderOpenOutline16: () => null,
-  IconListPenOutline16: () => null, IconTrashOutline16: () => null,
+  IconListPenOutline16: () => null, IconTrashOutline16: () => null, IconPlusOutline16: () => null,
 }))
 vi.mock('../src/client/util.js', async importOriginal => ({
   ...await importOriginal<typeof import('../src/client/util.js')>(),
@@ -129,6 +131,28 @@ describe('预设删除使用磁盘身份', () => {
     expect(view.root.findAllByType('fieldset')).toHaveLength(0)
     expect(await f.state.loadPreset(id)).toBeNull()
   })
+})
+
+/** 真实文件系统与服务边界：失败不创建资产，保留名称的重试只创建并打开目标世界书。 */
+it('世界书新建失败后原地重试，实际目录只新增一次目标文件', async () => {
+  const f = await fixture()
+  f.remote.listLorebooks = vi.fn(async () => ok(await f.service.listLorebooks({})))
+  f.remote.getLorebook = vi.fn(async request => ok(await f.service.getLorebook(request)))
+  f.remote.importLorebook = vi.fn(async request => ok(await f.service.importLorebook(request)))
+  vi.mocked(f.remote.importLorebook).mockRejectedValueOnce(new Error('模拟连接中断'))
+  const view = await render(<LorebooksSection remote={f.remote}/>)
+  await click(view, '新建空书')
+  const dialog = () => view.root.findAllByType(Dialog).find(item => item.props.open)!
+  await act(async () => dialog().findByType('input').props.onChange({ target: { value: '港口重试' } }))
+  await click(view, '创建')
+  expect(dialog().findByProps({ role: 'alert' }).children.join('')).toContain('模拟连接中断')
+  expect(dialog().findByType('input').props.value).toBe('港口重试')
+  expect((await f.service.listLorebooks({})).items).toEqual([])
+  await settle(() => view.root.findAllByType(Btn).find(item => item.props.children === '创建')!.props.onClick(), () => completed(f.remote.getLorebook))
+  expect(view.root.findByType(LorebookEditor).props.target).toEqual({ kind: 'library', name: '港口重试' })
+  expect((await f.service.listLorebooks({})).items).toEqual(['港口重试'])
+  expect((await f.service.getLorebook({ name: '港口重试' })).json).toEqual({ name: '港口重试', entries: {} })
+  expect(f.remote.importLorebook).toHaveBeenCalledTimes(2)
 })
 
 describe('角色卡导入失败恢复', () => {

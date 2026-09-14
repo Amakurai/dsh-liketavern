@@ -23,8 +23,8 @@ export function greetingTurnEvents(text: string): SessionEvent[] {
   detached.append('step/start', { turn: 1, step: 1 })
   detached.append(
     'assistant/message',
-    { turn: 1, step: 1, message: greetingMessage(text) },
-    { surfaceOp: 'append', sourceEventSeqs: [] },
+    { turn: 1, step: 1, message: greetingMessage(text), stream: [] },
+    { surfaceOp: 'append' },
   )
   detached.append('step/end', { turn: 1, step: 1 })
   detached.append('turn/end', { turn: 1, reason: { kind: 'completed' } })

@@ -108,7 +108,7 @@ async function fixture(description = `EJS=<%- getvar('stat_data.hp') %>;MACRO={{
   await saveBinding(paths, { sessionId: 's1', cardId, cardName: 'Alice', presetId: null, personaId: null, lorebookIds: [], characterLorebookId: null, interactiveCards: null, helperMvu:true, greetingIndex: 0, createdAt: new Date(0).toISOString() })
   const binding = (await state.loadBinding('s1'))!, ws = await state.storyWorkspace(cardId, binding.storyId)
   const greeting = createAssistantMessage({ content: [{ type: 'text', text: '开场白' }], source:TAVERN_GREETING_SOURCE }), messages: Message[] = [greeting]
-  const events: SessionEvent[] = [event('assistant/message', { turn: 0, step: 0, message: greeting }, 0)]
+  const events: SessionEvent[] = [event('assistant/message', {stream: [],  turn: 0, step: 0, message: greeting }, 0)]
   await ws.wal.beginFloor('s1#t0'); await writeHelper(ws.fs, 's1#t0', greeting.id, 10); await ws.wal.commitFloor('s1#t0')
   const agent = (id = 's1') => ({ options: {}, session: { id, deriveMessages: () => messages, snapshotEvents: () => events } } as unknown as Agent)
   const run = (runtime = state, id = 's1', mode: 'live' | 'preview' = 'live') => runTavernPipeline({ state: runtime, sessionId: id, agent: agent(id), mode })
@@ -117,8 +117,8 @@ async function fixture(description = `EJS=<%- getvar('stat_data.hp') %>;MACRO={{
     const input = createUserMessage({ content: [{ type: 'text', text }], source:{kind:'user'} }); messages.push(input); events.push(event('user/message', input, events.length))
   }
   const end = async (turn: number, text = '回复') => {
-    events.push(event('assistant/chunk', { turn, step: 1, chunk: { type: 'finish', reason: { kind: 'stop' } } }, events.length))
-    const output = createAssistantMessage({ content: [{ type: 'text', text }] }); messages.push(output); events.push(event('assistant/message', { turn, step: 1, message: output }, events.length))
+
+    const output = createAssistantMessage({ content: [{ type: 'text', text }] }); messages.push(output); events.push(event('assistant/message', {stream: [{type:'chunk',time:0,chunk:{ type: 'finish', reason: { kind: 'stop' } }}],  turn, step: 1, message: output }, events.length))
     events.push(event('turn/end', { turn, reason: { kind: 'completed' } }, events.length)); await onTurnEnd(state, 's1', { id: 's1' as never, snapshotEvents: () => events })
     // 此工厂只验模板桥；模拟原生 MVU 消费完成，具体租约/事件/提交由独立宿主集成覆盖。
     const saved=await loadHelperState(ws.fs)
@@ -152,7 +152,7 @@ it('真实剧情 MVU 更新进入下一轮 EJS/macros，同轮和重启恢复保
 it('预览只读，当前变量可继承模型裁剪的原始消息但历史投影与同角色其他剧情保持隔离', async () => {
   const f = await fixture()
   const hidden = createAssistantMessage({ content: [{ type: 'text', text: '不可见' }] })
-  f.events.push(event('assistant/message', { turn: 0, step: 0, message: hidden }, f.events.length))
+  f.events.push(event('assistant/message', {stream: [],  turn: 0, step: 0, message: hidden }, f.events.length))
   await f.ws.wal.beginFloor('s1#t1'); await writeHelper(f.ws.fs, 's1#t1', hidden.id, 99); await f.ws.wal.commitFloor('s1#t1')
   const beforeHelper = await f.ws.fs.readText('state/helper.json'), beforeTemplate = await f.ws.fs.readText('state/template.json')
   const preview=await f.run(f.state, 's1', 'preview')
@@ -208,11 +208,11 @@ it('真实 Session 摘要压缩后，模板当前基准与后台下一回复继�
   session.append('turn/start',{turn:1})
   const user=session.append('user/message',createUserMessage({content:[{type:'text',text:'旧用户台词'}],source:{kind:'user'}}),{surfaceOp:'append'})
   session.append('step/start',{turn:1,step:1})
-  session.append('assistant/chunk',{turn:1,step:1,chunk:{type:'finish',reason:{kind:'stop'}}})
-  const first=session.append('assistant/message',{turn:1,step:1,message:createAssistantMessage({content:[{type:'text',text:'旧角色原文'}],source:{provider:'test',model:'test'}})},{surfaceOp:'append'})
+
+  const first=session.append('assistant/message',{stream: [{type:'chunk',time:0,chunk:{type:'finish',reason:{kind:'stop'}}}], turn:1,step:1,message:createAssistantMessage({content:[{type:'text',text:'旧角色原文'}],source:{provider:'test',model:'test'}})},{surfaceOp:'append'})
   session.append('step/end',{turn:1,step:1});session.append('turn/end',{turn:1,reason:{kind:'completed'}})
   await f.ws.wal.beginFloor(id+'#t1');await writeHelper(f.ws.fs,id+'#t1',first.data.message.id,27);await f.ws.wal.commitFloor(id+'#t1')
-  session.append('user/message',createUserMessage({content:[{type:'text',text:'压缩摘要'}],source:{kind:'user'}}),{surfaceOp:{op:'replace',start:user.seq,end:first.seq},sourceEventSeqs:[user.seq,first.seq]})
+  session.append('user/message',createUserMessage({content:[{type:'text',text:'压缩摘要'}],source:{kind:'user'}}),{surfaceOp:{op:'replace',startSeq:user.seq,endSeq:first.seq},sourceEventSeqs:[user.seq,first.seq]})
   session.append('turn/start',{turn:2});session.append('user/message',createUserMessage({content:[{type:'text',text:'下一条用户输入'}],source:{kind:'user'}}),{surfaceOp:'append'})
   const agent={options:{},session} as unknown as Agent
   await onTurnStart(f.state,id,2,session)
@@ -222,8 +222,8 @@ it('真实 Session 摘要压缩后，模板当前基准与后台下一回复继�
   expect(plan.templateContext?.helperMvu).toEqual({version:1,current:{hp:27},snapshots:{}})
   const explicit=await isolated('template',{texts:[`<%- getMessageVar('stat_data.hp',{withMsg:{id:0},defaults:'missing'}) %>`],context:plan.templateContext!})
   expect(explicit.texts).toEqual(['missing'])
-  session.append('step/start',{turn:2,step:1});session.append('assistant/chunk',{turn:2,step:1,chunk:{type:'finish',reason:{kind:'stop'}}})
-  session.append('assistant/message',{turn:2,step:1,message:createAssistantMessage({content:[{type:'text',text:"_.add('hp',2);"}],source:{provider:'test',model:'test'}})},{surfaceOp:'append'})
+  session.append('step/start',{turn:2,step:1});
+  session.append('assistant/message',{stream: [{type:'chunk',time:0,chunk:{type:'finish',reason:{kind:'stop'}}}], turn:2,step:1,message:createAssistantMessage({content:[{type:'text',text:"_.add('hp',2);"}],source:{provider:'test',model:'test'}})},{surfaceOp:'append'})
   session.append('step/end',{turn:2,step:1})
   const ctx={sessions:{get:()=>session},agents:{get:()=>agent}} as unknown as Context
   await queueHelperMvuStop(f.state,id,session)
@@ -234,11 +234,11 @@ it('真实 Session 摘要压缩后，模板当前基准与后台下一回复继�
 
 it('当前基准沿用最近普通消息的手动变量，摘要替换与续写指令的 scope 不参与后台继承',()=>{
   const session=Session.create('template-mvu-current' as Session['id']),scopes:Record<string,Record<string,unknown>>={}
-  const assistant=session.append('assistant/message',{turn:1,step:1,message:createAssistantMessage({content:[{type:'text',text:'旧角色回复'}]})},{surfaceOp:'append'})
+  const assistant=session.append('assistant/message',{stream: [], turn:1,step:1,message:createAssistantMessage({content:[{type:'text',text:'旧角色回复'}]})},{surfaceOp:'append'})
   scopes[scope(assistant.data.message.id)]={stat_data:{hp:10}}
   const user=session.append('user/message',createUserMessage({content:[{type:'text',text:'手动修改变量的用户消息'}]}),{surfaceOp:'append'})
   scopes[scope(user.data.id)]={stat_data:{hp:15}}
-  const summary=session.append('user/message',createUserMessage({content:[{type:'text',text:'摘要'}]}),{surfaceOp:{op:'replace',start:assistant.seq,end:user.seq},sourceEventSeqs:[assistant.seq,user.seq]})
+  const summary=session.append('user/message',createUserMessage({content:[{type:'text',text:'摘要'}]}),{surfaceOp:{op:'replace',startSeq:assistant.seq,endSeq:user.seq},sourceEventSeqs:[assistant.seq,user.seq]})
   scopes[scope(summary.data.id)]={stat_data:{hp:999}}
   const continuation=session.append('user/message',createUserMessage({content:[{type:'text',text:CONTINUE_INSTRUCTION_PREFIX+'继续'}]}),{surfaceOp:'append'})
   scopes[scope(continuation.data.id)]={stat_data:{hp:888}}

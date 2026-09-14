@@ -62,7 +62,7 @@ describe('hero 自动清扫绑定', () => {
   })
 
   it('旧 turn 0 开场白同样阻止自动清扫，手动解除保持原行为', async () => {
-    session.append('assistant/message', { turn: 0, step: 0, message: greetingMessage('旧测试开场白') }, { surfaceOp: 'append', sourceEventSeqs: [] })
+    session.append('assistant/message', {stream: [],  turn: 0, step: 0, message: greetingMessage('旧测试开场白') }, { surfaceOp: 'append' })
     expect(await service.clearSessionBinding({ sessionId: session.id, onlyIfBlank: true })).toEqual({ cleared: false })
     expect(await state.loadBinding(session.id)).not.toBeNull()
     expect(await service.clearSessionBinding({ sessionId: session.id })).toEqual({ cleared: true })

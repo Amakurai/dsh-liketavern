@@ -19,7 +19,7 @@ export function editedHistorySeed(events:readonly SessionEvent[],edits:ReadonlyM
     if(event.type==='assistant/message')deleteSteps.add(event.data.turn+':'+event.data.step)
   }
   for(const event of events){
-    if(!['assistant/message','assistant/chunk','tool/call','tool/result'].includes(event.type))continue
+    if(!['assistant/message','assistant/attempt','tool/call','tool/result'].includes(event.type))continue
     const data=event.data as {turn:number;step:number}
     if(!deleteSteps.has(data.turn+':'+data.step))continue
     if(event.type==='assistant/message'&&event.surfaceOp==='append'&&!deleted.has(event.seq))throw new Error('删除目标与另一条 assistant 消息共用步骤')
@@ -31,7 +31,7 @@ export function editedHistorySeed(events:readonly SessionEvent[],edits:ReadonlyM
     if(removed.has(event.seq))return marker(event,'deleted-message')
     if(String(event.type).startsWith('compaction/'))return marker(event,'stale-compaction')
     if(event.seq>=first&&'surfaceOp' in event&&event.surfaceOp&&event.surfaceOp!=='append')return marker(event,'stale-compaction')
-    if(event.type==='assistant/chunk'&&steps.has(event.data.turn+':'+event.data.step))return marker(event,'edited-stream')
+    if(event.type==='assistant/attempt'&&steps.has(event.data.turn+':'+event.data.step))return marker(event,'edited-stream')
     const text=edits.get(event.seq)
     if(text===undefined)return event
     if(event.type==='user/message'){
@@ -42,7 +42,7 @@ export function editedHistorySeed(events:readonly SessionEvent[],edits:ReadonlyM
       if(typeof event.data.message.source.provider!=='string'||typeof event.data.message.source.model!=='string')throw new Error('历史 assistant 消息缺少宿主模型来源')
       const message=createAssistantMessage({source:{provider:event.data.message.source.provider,model:event.data.message.source.model},content:editedContent(event.data.message.content,text)})
       const {sourceEventSeqs:_sources,...rest}=event,{interrupted:_interrupted,...data}=event.data
-      return {...rest,data:{...data,message}}
+      return {...rest,data:{...data,message,stream:[]}}
     }
     throw new Error('目标不是可见消息')
   })

@@ -33,12 +33,14 @@ function LorebooksSectionContent(props: { remote: TavernRemote }) {
   const [toDeleteEmbedded, setToDeleteEmbedded] = useState<CharacterSummary | null>(null)
   const [creating, setCreating] = useDraftState('lorebooks:creating', false)
   const [newName, setNewName] = useDraftState('lorebooks:newName', '')
+  const [createError, setCreateError] = useState<string | null>(null)
   const toast = useToast()
   const t = useT()
   const createGuard = useDraftGuard(creating && !!newName.trim(), busy)
   const closeCreate = () => createGuard.request(() => {
     setCreating(false)
     setNewName('')
+    setCreateError(null)
   })
 
   const names = state.status === 'ready' ? state.value.items : []
@@ -150,13 +152,13 @@ function LorebooksSectionContent(props: { remote: TavernRemote }) {
   const createEmpty = async () => {
     const name = newName.trim()
     if (!name) {
-      setError(t('lorebooks.nameRequired'))
+      setCreateError(t('lorebooks.nameRequired'))
       return
     }
-    await runAsync(setBusy, setError, async () => {
+    await runAsync(setBusy, setCreateError, async () => {
       const r = await remote.importLorebook({ name, json: { entries: {} } })
       if (!r.ok) {
-        setError(r.error.message)
+        setCreateError(r.error.message)
         return
       }
       setCreating(false)
@@ -201,7 +203,7 @@ function LorebooksSectionContent(props: { remote: TavernRemote }) {
         <FileBtn accept=".json" disabled={busy || opening !== null} onFile={(file) => void onImportFile(file)}>
           {t('lorebooks.importJson')}
         </FileBtn>
-        <Btn size="md" disabled={busy || opening !== null} onClick={() => setCreating(true)}>
+        <Btn size="md" disabled={busy || opening !== null} onClick={() => { setCreateError(null); setCreating(true) }}>
           {t('lorebooks.newEmpty')}
         </Btn>
         <Btn
@@ -214,7 +216,7 @@ function LorebooksSectionContent(props: { remote: TavernRemote }) {
         >
           {t('action.refresh')}
         </Btn>
-        {totalBooks >= 5 && (
+        {(totalBooks >= 5 || query !== '') && (
           <SearchInput label={t('lorebooks.searchLabel')} value={query} onChange={setQuery} placeholder={t('lorebooks.searchPlaceholder')} width={220} />
         )}
       </div>
@@ -355,6 +357,7 @@ function LorebooksSectionContent(props: { remote: TavernRemote }) {
           </div>
         }
       >
+        <Err message={createError}/>
         <input
           className="dsh-tavern-input"
           style={{ width: '100%', height: 36, borderRadius: 8, padding: '0 10px', fontSize: 13, boxSizing: 'border-box' }}

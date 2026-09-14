@@ -93,6 +93,10 @@ export declare function locateRenderedHtml(text: string): {
     html: string;
     rest: string;
     start: number;
+    fence?: {
+        start: number;
+        end: number;
+    };
 } | null;
 /** 兼容聚合接口；有序展示使用定位结果，避免同文代码示例抢占真实卡面的起点。 */
 export declare function splitRenderedHtml(text: string): {

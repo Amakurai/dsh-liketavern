@@ -1,15 +1,15 @@
-/** 自动 MVU 门控集成：真实 0.1.2-rc.1 AgentLoop/Inbox、工厂 Session 和真实剧情 WAL 验证等待、取消与输入恢复。 */
+/** 自动 MVU 门控集成：真实 0.1.5-rc.2 AgentLoop/Inbox、工厂 Session 和真实剧情 WAL 验证等待、取消与输入恢复。 */
 import { mkdtemp, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import { AgentRegistry, Inbox, type Agent } from '@deepseek-ai/dsh-agent'
+import { AgentRegistry, type Agent } from '@deepseek-ai/dsh-agent'
 import { AgentLoop } from '@deepseek-ai/dsh-agent-loop'
-import { SessionId, SessionStore } from '@deepseek-ai/dsh-session'
+import { Session, SessionId, SessionStore } from '@deepseek-ai/dsh-session'
 import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection'
 import { SystemPrompt } from '@deepseek-ai/dsh-system-prompt'
-import { createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
+import { createAssistantMessage, createUserMessage, LlmAdapter, LlmRuntime, type StreamChunk } from '@deepseek-ai/dsh-llm'
 import { apply as applyAgent } from '../src/agent.js'
 import { TavernState } from '../src/node/state.js'
 import { resolveConfig } from '../src/node/config.js'
@@ -36,7 +36,7 @@ const request = () => ({ sessionId: agent.id, storyId, runtimeId: 'factory-brows
 const events = () => agent.session.snapshotEvents()
 async function until(check: () => boolean | Promise<boolean>): Promise<void> { await vi.waitFor(async () => expect(await check()).toBe(true), { timeout: 2500, interval: 10 }) }
 function greeting(): void {
-  agent.session.append('assistant/message', { turn: 0, step: 0, message: createAssistantMessage({ content: [{ type: 'text', text: '开场白' }], source: TAVERN_GREETING_SOURCE }) }, { surfaceOp: 'append' })
+  agent.session.append('assistant/message', {stream: [],  turn: 0, step: 0, message: createAssistantMessage({ content: [{ type: 'text', text: '开场白' }], source: TAVERN_GREETING_SOURCE }) }, { surfaceOp: 'append' })
 }
 async function completeJob(): Promise<void> {
   const work = await prepareHelperMvuJob(ctx, state, request())
@@ -45,8 +45,8 @@ async function completeJob(): Promise<void> {
 }
 function stopMessage(reason: 'stop' | 'max-tokens' = 'stop'): void {
   agent.session.append('step/start', { turn: 1, step: 1 })
-  agent.session.append('assistant/chunk', { turn: 1, step: 1, chunk: { type: 'finish', reason: { kind: reason } } })
-  agent.session.append('assistant/message', { turn: 1, step: 1, message: createAssistantMessage({ content: [{ type: 'text', text: '正常回复' }] }) }, { surfaceOp: 'append' })
+
+  agent.session.append('assistant/message', {stream: [{type:'chunk',time:0,chunk:{ type: 'finish', reason: { kind: reason } }}],  turn: 1, step: 1, message: createAssistantMessage({ content: [{ type: 'text', text: '正常回复' }] }) }, { surfaceOp: 'append' })
   agent.session.append('step/end', { turn: 1, step: 1 })
 }
 function reserveOnInsert(): void {
@@ -70,7 +70,7 @@ beforeEach(async () => {
   storyId = (await state.loadBinding('mvu-factory'))!.storyId!
   ctx = new Context()
   new SessionStore(ctx); new AgentRegistry(ctx); new SessionProjectionRegistry(ctx); new SystemPrompt(ctx, {})
-  const loop = new AgentLoop(ctx, { agents: [] }); agent = loop.create(SessionId('mvu-factory'))
+  const loop = new AgentLoop(ctx, { agents: [] }); agent = await loop.create(SessionId('mvu-factory'))
   ctx.provide('tavern', { state })
   registerHelperMvuLifecycle(ctx)
   ctx.on('session/event', (session, event) => {
@@ -89,6 +89,39 @@ afterEach(async () => {
 })
 
 describe('宿主自动 MVU 门控', () => {
+  it('真实模型 stop 后不等浏览器即可 idle；任务持久保留，后续输入等提交完成才调用模型', async () => {
+    let calls = 0
+    class FactoryAdapter extends LlmAdapter {
+      async *stream(): AsyncIterable<StreamChunk> {
+        calls++
+        yield { type: 'text-delta', index: 0, text: '工厂完整回复' }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      }
+    }
+    const llm = new LlmRuntime(ctx)
+    llm.registerAdapter(['factory'], new FactoryAdapter())
+    ctx.on('agent/request', async (_payload, next) => ({ ...await next(), provider: 'factory', model: 'factory' }))
+    reserveOnInsert()
+    agent.followup(message('正文结束后应恢复输入'))
+    await until(() => calls === 1 && agent.status === 'idle')
+    await agent.whenIdle(); await state.waitForSessionTasks(agent.id)
+    expect(events().filter(event => event.type === 'turn/end').at(-1)?.data.reason.kind).toBe('completed')
+    const ws = await workspace(), pending = (await loadHelperState(ws.fs)).mvu?.pending
+    expect(pending).toHaveLength(1)
+    expect((await ws.wal.validateFloor(agent.id + '#t1')).committed).toBe(true)
+    const input = message('变量完成后再接话')
+    agent.followup(input)
+    await until(() => agent.phase.kind === 'maintenance')
+    expect(calls).toBe(1); expect(agent.status).toBe('idle')
+    expect(agent.inbox.nextTurn.map(item => item.id)).toEqual([input.id])
+    await completeJob()
+    await until(() => calls === 2 && agent.status === 'idle')
+    await agent.whenIdle(); await state.waitForSessionTasks(agent.id)
+    expect((await loadHelperState(ws.fs)).mvu?.completed).toHaveLength(1)
+    expect((await loadHelperState(ws.fs)).mvu?.pending).toHaveLength(1)
+    expect(errors).toEqual([])
+  })
+
   it('真实 Loop 在首次插入通知同步认领维护，浏览器提交前不 claim，提交后只读取新变量', async () => {
     greeting(); reserveOnInsert(); const observed: string[] = []; rejectBeforeModel(observed)
     const first = message('第一条输入'), second = message('下一条输入')
@@ -111,7 +144,7 @@ describe('宿主自动 MVU 门控', () => {
     const handle = await ctx.agents.create({ sessionId: SessionId('seed-greeting'), seed: greetingTurnEvents('实际 seed 开场白') })
     agent = handle.agent; storyId = (await state.loadBinding(agent.id))!.storyId!
     reserveOnInsert(); const input = message('开场白后首条真实输入')
-    expect(events().some(event => event.type === 'assistant/chunk')).toBe(false)
+    expect(events().filter(event => event.type === 'assistant/message').every(event => event.data.stream.length === 0)).toBe(true)
     agent.followup(input)
     await until(() => state.triggerLogs.get(agent.id)?.lines.some(line => line.includes('mvu:waiting')) === true)
     expect(events().filter(event => event.type === 'turn/start')).toHaveLength(1)
@@ -139,8 +172,8 @@ describe('宿主自动 MVU 门控', () => {
     expect(runTavernPipeline).not.toHaveBeenCalled()
     expect(agent.inbox.nextStep.map(item => item.id)).toEqual([steer1.id, steer2.id])
     expect(agent.inbox.nextTurn.map(item => item.id)).toEqual([queued1.id, queued2.id])
-    const replay = new Inbox(agent.session, { inserted() {}, discarded() {}, claimed() {} })
-    expect(replay.nextStep.map(item => item.id)).toEqual([steer1.id, steer2.id]); expect(replay.nextTurn.map(item => item.id)).toEqual([queued1.id, queued2.id])
+    const replay = ctx.sessionProjections.stateOf(Session.create(SessionId('session-inbox-replay'), agent.session.snapshotEvents()), 'inbox')!
+    expect(replay['next-step'].map(item => item.id)).toEqual([steer1.id, steer2.id]); expect(replay['next-turn'].map(item => item.id)).toEqual([queued1.id, queued2.id])
     expect(events().filter(event => event.type === 'turn/start')).toHaveLength(1)
     expect(events().some(event => event.type === 'step/start' || event.type === 'user/message')).toBe(false)
     expect(await (await workspace()).wal.listFloors()).toEqual([])
@@ -160,12 +193,13 @@ describe('宿主自动 MVU 门控', () => {
     expect(events().some(event => event.type === 'user/message')).toBe(false)
   })
 
-  it('正常 stop 在 turn/end 前登记并等待，等待不占剧情锁或会话任务队列，提交只落当前楼层一次', async () => {
+  it('正常 stop 在 turn/end 前登记后返回，不占剧情锁或任务队列，提前提交只落当前楼层一次', async () => {
     agent.session.append('turn/start', { turn: 1 }); await state.waitForSessionTasks(agent.id); stopMessage()
     const control = new AbortController(); let done = false
     const stopping = ctx.serial('agent/turn-stopping', { agent, turn: 1, signal: control.signal }).then(() => { done = true })
     await until(async () => (await loadHelperState((await workspace()).fs)).mvu?.pending.length === 1)
-    expect(done).toBe(false)
+    await stopping
+    expect(done).toBe(true)
     await state.enqueueSessionTask(agent.id, async () => {})
     expect(await withWorkspaceLock((await workspace()).fs.root, async () => 'unlocked')).toBe('unlocked')
     await completeJob(); await stopping
@@ -177,12 +211,13 @@ describe('宿主自动 MVU 门控', () => {
     expect(errors).toEqual([])
   })
 
-  it('stop 等待取消立即结束但持久任务保留；下一次门控暂缓新 WAL，不抹掉旧任务', async () => {
+  it('stop 登记后用户取消不清持久任务；下一次门控暂缓新 WAL，不抹掉旧任务', async () => {
     agent.session.append('turn/start', { turn: 1 }); await state.waitForSessionTasks(agent.id); stopMessage()
     const control = new AbortController(), stopping = stopForHelperMvu(state, agent, control.signal)
     await until(async () => (await loadHelperState((await workspace()).fs)).mvu?.pending.length === 1)
     const cancelReason = new Error('工厂用户取消')
-    control.abort(cancelReason); await expect(stopping).rejects.toThrow()
+    await stopping
+    control.abort(cancelReason)
     expect(control.signal.reason).toBe(cancelReason)
     agent.session.append('turn/end', { turn: 1, reason: { kind: 'aborted', reason: { kind: 'user' } } }); await state.waitForSessionTasks(agent.id)
     const before = await loadHelperState((await workspace()).fs)
@@ -205,8 +240,8 @@ describe('宿主自动 MVU 门控', () => {
     // 预检通过（唯一 finish、reason=stop、seq 顺序正确）但 candidates() 因空正文排除：
     // queue 登记 0 个任务；未初始化且无可初始化回复时等待必须立即返回，不得阻塞 turn-stopping。
     agent.session.append('step/start', { turn: 1, step: 1 })
-    agent.session.append('assistant/chunk', { turn: 1, step: 1, chunk: { type: 'finish', reason: { kind: 'stop' } } })
-    agent.session.append('assistant/message', { turn: 1, step: 1, message: createAssistantMessage({ content: [], source: { provider: 'deepseek', model: 'v4' } }) }, { surfaceOp: 'append' })
+
+    agent.session.append('assistant/message', {stream: [{type:'chunk',time:0,chunk:{ type: 'finish', reason: { kind: 'stop' } }}],  turn: 1, step: 1, message: createAssistantMessage({ content: [], source: { provider: 'deepseek', model: 'v4' } }) }, { surfaceOp: 'append' })
     agent.session.append('step/end', { turn: 1, step: 1 })
     await expect(stopForHelperMvu(state, agent, new AbortController().signal)).resolves.toBeUndefined()
     expect((await loadHelperState((await workspace()).fs)).mvu).toBeUndefined()
@@ -221,8 +256,8 @@ describe('宿主自动 MVU 门控', () => {
     expect((await loadHelperState((await workspace()).fs)).mvu?.initialized).toBe(true)
     agent.session.append('turn/start', { turn: 1 }); await state.waitForSessionTasks(agent.id)
     agent.session.append('step/start', { turn: 1, step: 1 })
-    agent.session.append('assistant/chunk', { turn: 1, step: 1, chunk: { type: 'finish', reason: { kind: 'stop' } } })
-    agent.session.append('assistant/message', { turn: 1, step: 1, message: createAssistantMessage({ content: [], source: { provider: 'deepseek', model: 'v4' } }) }, { surfaceOp: 'append' })
+
+    agent.session.append('assistant/message', {stream: [{type:'chunk',time:0,chunk:{ type: 'finish', reason: { kind: 'stop' } }}],  turn: 1, step: 1, message: createAssistantMessage({ content: [], source: { provider: 'deepseek', model: 'v4' } }) }, { surfaceOp: 'append' })
     agent.session.append('step/end', { turn: 1, step: 1 })
     // 已初始化且无任务：空正文 stop 不登记也不等待，立即返回。
     await expect(stopForHelperMvu(state, agent, new AbortController().signal)).resolves.toBeUndefined()

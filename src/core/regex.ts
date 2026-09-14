@@ -26,7 +26,8 @@
  * 的规则同样跳过并记录，绝不让 .includes() 处炸在主循环里。
  */
 import { expandMacros, type MacroContext } from './macros.js'
-import { findHtmlFragment } from './htmlFragment.js'
+import { findHtmlDocument, findHtmlFragment } from './htmlFragment.js'
+import { findHtmlFence } from './htmlFence.js'
 import { isSyntheticUserText } from './dshPrompt.js'
 import type { CardRegexScript, ChatMessage, ChatRole, RegexRule, RegexScope, RegexTiming } from './types.js'
 
@@ -609,66 +610,20 @@ export function compilePresetRegexScripts(scripts: readonly CardRegexScript[], p
   return compileRegexScripts(scripts, { source: 'preset', sourceRef: presetId })
 }
 
-const HTML_DOC_RE = /<!DOCTYPE\s+html|<html[\s>]|<body[\s>]/i
-const HTML_FENCE_RE = /```(?:text|html|xml)?\s*\n([\s\S]*?)```/i
-const HTML_END_RE = /<\/html\s*>/i
-/** 封面小部件常是 <style>/<script> 片段，没有 doctype。 */
-const HTML_UI_RE = /<(?:style|script)\b/i
-const HTML_PAYLOAD_START_RE = /<!DOCTYPE\s+html|<html[\s>]|<body[\s>]|<style[\s>]|<script[\s>]/i
-
-function isHtmlDocument(text: string): boolean {
-  return HTML_DOC_RE.test(text)
-}
-
-/** 整页文档，或带闭合 style/script 的交互卡片段（正则常不包 doctype）。 */
-function isHtmlPayload(text: string): boolean {
-  if (isHtmlDocument(text)) return true
-  return HTML_UI_RE.test(text) && /<\/(?:style|script)\s*>/i.test(text)
-}
-
-/** 片段没有 </html> 时，最后一个块级闭标签之后若不再是标签，当作正文拆走。 */
-function splitTrailingProse(block: string): { html: string; rest: string } {
-  const closeRe = /<\/(?:script|style|div|section|article|main)\s*>/gi
-  let cut = -1
-  let match: RegExpExecArray | null
-  while ((match = closeRe.exec(block))) {
-    cut = match.index + match[0].length
-  }
-  if (cut < 0) return { html: block.trim(), rest: '' }
-  const after = block.slice(cut).trim()
-  if (!after || after.startsWith('<')) return { html: block.trim(), rest: '' }
-  return { html: block.slice(0, cut).trim(), rest: after }
-}
-
 /**
  * 正则替换后的展示文本常是「整页 HTML 封面」或「小部件 HTML + 后面的正文」。
  * HTML 文档和小部件片段抽进 iframe；围栏外 / </html> 之前的协议标签与之后的文字留给 Markdown。
  */
-export function locateRenderedHtml(text: string): { html: string; rest: string; start: number } | null {
+export function locateRenderedHtml(text: string): { html: string; rest: string; start: number; fence?:{start:number;end:number} } | null {
   if (!text) return null
-  const fence = HTML_FENCE_RE.exec(text)
-  if (fence?.[1] && (isHtmlPayload(fence[1]) || findHtmlFragment(fence[1]))) {
-    const rest = `${text.slice(0, fence.index)}${text.slice(fence.index + fence[0].length)}`.trim()
-    const html = fence[1].trim()
-    return { html, rest, start: fence.index + fence[0].length - 3 - fence[1].length + fence[1].indexOf(html) }
-  }
-  if (!isHtmlPayload(text)) {
-    const fragment = findHtmlFragment(text)
-    if (!fragment) return null
-    return { html: text.slice(fragment.start, fragment.end), rest: [text.slice(0, fragment.start).trim(), text.slice(fragment.end).trim()].filter(Boolean).join('\n'), start:fragment.start }
-  }
-  const start = text.search(HTML_PAYLOAD_START_RE)
-  const end = start >= 0 ? HTML_END_RE.exec(text.slice(start)) : null
-  if (start >= 0 && end) {
-    const htmlEnd = start + end.index + end[0].length
-    const html = text.slice(start, htmlEnd).trim()
-    const rest = `${text.slice(0, start)}${text.slice(htmlEnd)}`.trim()
-    return { html, rest, start }
-  }
-  const payload = start >= 0 ? text.slice(start) : text
-  const prefix = start > 0 ? text.slice(0, start).trim() : ''
-  const split = splitTrailingProse(payload)
-  return { html: split.html, rest: [prefix, split.rest].filter(Boolean).join('\n'), start:Math.max(0,start) }
+  const fence = findHtmlFence(text)
+  const fragment = findHtmlFragment(text)
+  const document = findHtmlDocument(text)
+  // 从组件容器开始保留相邻 CSS/JS，不能从中间的 style 起切，更不能吞入下一张完整文档。
+  const range = fragment && (!document || fragment.start < document.start) ? fragment : document
+  if(fence&&(!range||fence.start<range.start))return {html:text.slice(fence.contentStart,fence.contentEnd),rest:[text.slice(0,fence.start).trim(),text.slice(fence.end).trim()].filter(Boolean).join('\n'),start:fence.contentStart,fence:{start:fence.start,end:fence.end}}
+  if (!range) return null
+  return {html:text.slice(range.start,range.end),rest:[text.slice(0,range.start).trim(),text.slice(range.end).trim()].filter(Boolean).join('\n'),start:range.start}
 }
 
 /** 兼容聚合接口；有序展示使用定位结果，避免同文代码示例抢占真实卡面的起点。 */

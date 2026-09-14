@@ -45,7 +45,7 @@ function assistant(provider: string, model: string): SessionEvent {
     type: 'assistant/message',
     seq: 0,
     time: 0,
-    data: { message: { source: { provider, model } } },
+    data: {stream: [],  message: { source: { provider, model } } },
   } as SessionEvent
 }
 
@@ -148,9 +148,8 @@ describe('withEditedAssistantMessage', () => {
       type: 'assistant/message',
       seq: 1,
       time: 0,
-      data: { turn: 1, step: 1, message },
+      data: {stream: [],  turn: 1, step: 1, message },
       surfaceOp: 'append',
-      sourceEventSeqs: [],
     },
     { type: 'turn/end', seq: 2, time: 0, data: { turn: 1, reason: { kind: 'completed' } } },
   ] as unknown as SessionEvent[]
@@ -238,7 +237,7 @@ describe('editUserMessage 空文本', () => {
       time: 0,
       data: createUserMessage({ content: [{ type: 'text', text: '你好' }], source: { kind: 'user' } }),
     },
-    { type: 'assistant/message', seq: 2, time: 0, data: { turn: 1, step: 1, message } },
+    { type: 'assistant/message', seq: 2, time: 0, data: {stream: [],  turn: 1, step: 1, message } },
     { type: 'turn/end', seq: 3, time: 0, data: { turn: 1, reason: { kind: 'completed' } } },
   ] as unknown as SessionEvent[]
   const session = { id: 'session-x', header: { agentPreset: 'tavern' }, snapshotEvents: () => events } as unknown as Session
@@ -260,10 +259,10 @@ describe('editUserMessage 空文本', () => {
 describe('resolveFloorTurn（中断楼层按 turn 号定位）', () => {
   const events = [
     { type: 'turn/start', seq: 0, time: 0, data: { turn: 1 } },
-    { type: 'assistant/message', seq: 1, time: 0, data: { turn: 1, step: 1, message: { id: 'm1' } } },
+    { type: 'assistant/message', seq: 1, time: 0, data: {stream: [],  turn: 1, step: 1, message: { id: 'm1' } } },
     { type: 'turn/end', seq: 2, time: 0, data: { turn: 1, reason: { kind: 'completed' } } },
     { type: 'turn/start', seq: 3, time: 0, data: { turn: 2 } },
-    { type: 'assistant/message', seq: 4, time: 0, data: { turn: 2, step: 1, message: { id: 'm2' } } },
+    { type: 'assistant/message', seq: 4, time: 0, data: {stream: [],  turn: 2, step: 1, message: { id: 'm2' } } },
     { type: 'turn/end', seq: 5, time: 0, data: { turn: 2, reason: { kind: 'interrupted' } } },
   ] as unknown as SessionEvent[]
 

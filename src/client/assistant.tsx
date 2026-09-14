@@ -129,12 +129,12 @@ export function TavernAssistantNode(props: {
           messageId={node.data.finalNode?.seq}
           streaming={streaming || node.location?.turn?.status === 'open'}
           interactiveCards={binding.interactiveCards}
-          onMessageBranch={async branch=>{if(!sessions)throw new Error(t('speech.navigationUnavailable'));await openChildSession(sessions,branch.childSessionId,branch.title)}}
+          onMessageBranch={async branch=>{if(!sessions)throw new Error(t('speech.navigationUnavailable'));await openChildSession(sessions,branch.childSessionId,branch.title,sessionId)}}
           onSwipeGreeting={async (index) => {
             if (!sessions) throw new Error(t('speech.navigationUnavailable'))
             const r = await remote.swipeGreeting({ sessionId, index })
             if (!r.ok) throw new Error(r.error.message)
-            await openChildSession(sessions, r.value.childSessionId, r.value.title)
+            await openChildSession(sessions, r.value.childSessionId, r.value.title, sessionId)
           }}
         />
         {interrupted && <div className="dsh-tavern-notice">{t('assistant.stopped')}</div>}

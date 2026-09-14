@@ -4,7 +4,7 @@
 
 **Tavern-style roleplay in DeepSeek Harness's `dsh web`, with character cards, lorebooks, and long-term memory.**
 
-**[v0.2.2](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.2.2) · Built for dsh `0.1.2-rc.1` · Node.js ≥ 24**
+**[v0.2.3](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.2.3) · Targets dsh `0.1.5-rc.2` · Node.js ≥ 24**
 
 [中文](./README.md) | English
 
@@ -23,7 +23,7 @@ EJS prompt templates, a subset of Tavern Helper APIs, and optional native MVU ar
 | Component | Requirement |
 | --- | --- |
 | Node.js | 24 or newer; development and CI currently use Node 24 |
-| dsh CLI / host | **`0.1.2-rc.1`**; the plugin pins its host dependencies to this version |
+| dsh CLI / host | **`0.1.5-rc.2`**; the plugin pins its host dependencies to this version |
 | pnpm | Installed and available in your terminal, for `dsh plugin` to manage dependencies |
 | Model | Configured in dsh and able to complete a conversation |
 
@@ -34,7 +34,7 @@ If you are new to dsh, start with the [official documentation](https://deepseek-
 Run these commands to install a fixed release tag:
 
 ```bash
-dsh plugin --profile web add github:Amakurai/dsh-liketavern#v0.2.2
+dsh plugin --profile web add github:Amakurai/dsh-liketavern#v0.2.3
 dsh plugin --profile web list --depth 0
 ```
 
@@ -48,10 +48,10 @@ The repository includes compiled `lib/` files; a normal installation needs no ma
 
 ### Install a tarball
 
-Download `dsh-liketavern-0.2.2.tgz` from the [v0.2.2 Release](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.2.2), then run this command in the download directory:
+Download `dsh-liketavern-0.2.3.tgz` from the [v0.2.3 Release](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.2.3), then run this command in the download directory:
 
 ```bash
-dsh plugin --profile web add ./dsh-liketavern-0.2.2.tgz
+dsh plugin --profile web add ./dsh-liketavern-0.2.3.tgz
 ```
 
 Restart `dsh web` afterward. The release includes `SHA256SUMS.txt` to verify the download.
@@ -75,6 +75,8 @@ A GitHub address without a `#version-tag` follows the repository's default branc
 **Interface language:** The default follows the host: Chinese for a Chinese host locale, English otherwise. Choose a fixed language under Tavern → Settings → Interface → Language. It saves immediately and affects only the plugin interface.
 
 ## Features
+
+Tavern uses dsh's native PTC tool presentation. The model replies directly when the context is sufficient; otherwise, it can combine operations in one `run_code`, run independent reads in parallel, and return only relevant results. Writes retain the current story's floor transactions. Restart dsh after updating to reload the managed Tavern preset. Custom hosts must provide `codeRuntime`, as required by the built-in PTC mode.
 
 | Feature | Current support |
 | --- | --- |
@@ -130,7 +132,7 @@ Legacy shared state is copied into isolated stories on first access to an old bi
 
 ## FAQ
 
-**No Tavern mode or settings after installation?** Run `dsh --version` to confirm host version `0.1.2-rc.1`, then `dsh plugin --profile web list --depth 0` to check the installation target. Restart `dsh web` and create a new session. If Tavern is still missing, check the terminal for plugin loading errors.
+**No Tavern mode or settings after installation?** Run `dsh --version` to confirm host version `0.1.5-rc.2`, then `dsh plugin --profile web list --depth 0` to check the installation target. Restart `dsh web` and create a new session. If Tavern is still missing, check the terminal for plugin loading errors.
 
 **The card displays, but buttons, scripts, or MVU do not work?** Under Settings → Scripts, check that the script and its folder are enabled and saved, then inspect the current session's runtime diagnostics. MVU also requires the session's automatic update option and an open page. Check [compatibility](docs/TAVERN_HELPER.md) for cards relying on parent-window objects or unsupported APIs.
 

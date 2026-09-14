@@ -9,7 +9,7 @@ export declare function HelperMvuAbandonAction(props: {
     storyId: string;
     onChanged: () => void;
 }): import("react").JSX.Element;
-export declare function TavernHeaderChip(props: {
+interface HeaderChipProps {
     remote: TavernRemote;
     sessionId: string;
     sessions: {
@@ -18,4 +18,7 @@ export declare function TavernHeaderChip(props: {
     };
     onCancel?: () => Promise<void>;
     useSessions?: UseSessions;
-}): import("react").JSX.Element | null;
+}
+/** 宿主切换会话可能复用 slot；表单、子弹窗与在途请求的状态都必须随会话重新挂载。 */
+export declare function TavernHeaderChip(props: HeaderChipProps): import("react").JSX.Element;
+export {};

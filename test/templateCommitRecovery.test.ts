@@ -218,7 +218,7 @@ describe('模板计划持久化', () => {
     const events = messages.flatMap((message,index)=>[
       {type:'turn/start',data:{turn:index+1}},
       {type:'user/message',data:createUserMessage({content:[{type:'text',text:'你好'}],source:{kind:'user'}})},
-      {type:'assistant/message',data:{turn:index+1,step:1,message}},
+      {type:'assistant/message',data:{stream: [], turn:index+1,step:1,message}},
       {type:'turn/end',data:{turn:index+1,reason:{kind:'completed'}}},
     ]).map((event,seq)=>({...event,seq,time:seq})) as SessionEvent[]
     const sessions = new Map<string,Session>()

@@ -1,4 +1,4 @@
-/** MVU 宿主门控：停止前等待浏览器提交，空闲期保留输入；兜底拒绝只恢复原生队列，不伪造模型请求。 */
+/** MVU 宿主门控：停止前持久登记任务，浏览器提交只门控下一轮输入；兜底拒绝恢复原生队列，不伪造模型请求。 */
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent, InboxTarget } from '@deepseek-ai/dsh-agent'
 import type { Session, SessionEvent, UserMessage } from '@deepseek-ai/dsh-session'
@@ -6,11 +6,14 @@ import { SessionId } from '@deepseek-ai/dsh-session'
 import { setTimeout as delay } from 'node:timers/promises'
 import { helperMvuPending, queueHelperMvuStop } from './helperMvu.js'
 import { isTavernGreetingEvent } from '../core/greetingLog.js'
+import { hasNormalAssistantStop } from './assistantStream.js'
 import type { TavernState } from './state.js'
 
 type Snapshot = Pick<Session, 'id' | 'snapshotEvents'>
 interface Claim { message: UserMessage; target: InboxTarget; turn: number }
 interface Gate {
+  inbox: Record<InboxTarget, UserMessage[]>
+  inboxCursor: number
   removed: Map<string, InboxTarget>
   claimed: Map<string, Claim>
   blocked: Set<number>
@@ -20,7 +23,7 @@ interface Gate {
 const gates = new WeakMap<Agent, Gate>()
 function gateFor(agent: Agent): Gate {
   let gate = gates.get(agent)
-  if (!gate) { gate = { removed: new Map(), claimed: new Map(), blocked: new Set(), maintenance: false, abortCleanup: new Map() }; gates.set(agent, gate) }
+  if (!gate) { gate = { inbox: { 'next-turn': [], 'next-step': [] }, inboxCursor: 0, removed: new Map(), claimed: new Map(), blocked: new Set(), maintenance: false, abortCleanup: new Map() }; gates.set(agent, gate) }
   return gate
 }
 /** 开启配置必须先同步认领宿主真正 idle；不能在新的空 WAL 出现后再尝试初始化旧回复。 */
@@ -54,10 +57,7 @@ export function helperMvuHasAssistant(session: Snapshot): boolean {
     if (isTavernGreetingEvent(event) || event.data.turn === 0) return true
     const end = events.find(item => item.type === 'turn/end' && item.data.turn === event.data.turn)
     if (end?.type !== 'turn/end' || end.data.reason.kind !== 'completed') return false
-    const chunks = events.filter(item => item.type === 'assistant/chunk' && item.data.turn === event.data.turn && item.data.step === event.data.step)
-    const last = chunks.at(-1)
-    return chunks.filter(item => item.type === 'assistant/chunk' && item.data.chunk.type === 'finish').length === 1
-      && last?.type === 'assistant/chunk' && last.data.chunk.type === 'finish' && last.data.chunk.reason.kind === 'stop' && last.seq < event.seq
+    return hasNormalAssistantStop(event)
   })
 }
 
@@ -99,7 +99,7 @@ export function reserveHelperMvuMaintenance(state: TavernState, agent: Agent, re
   }
 }
 
-/** 正常 stop 候选在宿主 turn/end 与下一条输入 claim 前排入持久任务；取消不清掉任务。 */
+/** 正常 stop 在 turn/end 前持久登记；不等待浏览器，避免脚本未就绪/页面断开让完整回复永远显示生成中。 */
 export async function stopForHelperMvu(state: TavernState, agent: Agent, signal: AbortSignal): Promise<void> {
   await abortable(state.waitForSessionTasks(agent.id), signal)
   signal.throwIfAborted()
@@ -107,29 +107,33 @@ export async function stopForHelperMvu(state: TavernState, agent: Agent, signal:
   const turn = currentTurn(agent.session)
   const assistant = [...events].reverse().find(event => event.type === 'assistant/message' && event.data.turn === turn)
   if (assistant?.type !== 'assistant/message' || assistant.data.interrupted) return
-  const chunks = events.filter(event => event.type === 'assistant/chunk' && event.data.turn === turn && event.data.step === assistant.data.step)
-  const last = chunks.at(-1)
-  if (chunks.filter(event => event.type === 'assistant/chunk' && event.data.chunk.type === 'finish').length !== 1
-    || last?.type !== 'assistant/chunk' || last.data.chunk.type !== 'finish' || last.data.chunk.reason.kind !== 'stop'
-    || last.seq >= assistant.seq) return
+  if (!hasNormalAssistantStop(assistant)) return
   await abortable(queueHelperMvuStop(state, agent.id, { id: agent.id, snapshotEvents: () => events }), signal)
-  // 预检与 candidates() 口径不完全一致（surfaceOp/空正文）：queue 可能登记 0 个任务。
-  // 未初始化剧情若已无可初始化回复，includeInitialization 必须为 false，否则轮次停止被无限阻塞。
-  await waitForHelperMvu(state, agent, signal, helperMvuHasAssistant(agent.session))
+  // 下一条输入仍由 idle 维护和 assemble 门控等待任务，不能用旧变量开新 WAL。
+  // 当前轮先正常关闭，让模板展示与页面脚本拿到完成消息；任务失败/断线时仍持久保留。
 }
 
 /** 只从公开 claim 删除记录取得原目标；取消删除带 outcome=canceled，不被当作待恢复输入。 */
 export function observeHelperMvuSessionEvent(agent: Agent, event: SessionEvent): void {
   const gate = gateFor(agent)
   if (event.type === 'agent/inbox/spliced') {
+    // 新宿主在 session/event 通知前推进 inbox 投影；从日志游标折叠变更前的队列，不能拿变更后的下标找已移除输入。
+    for (const prior of agent.session.snapshotEvents().slice(gate.inboxCursor, event.seq)) {
+      if (prior.type === 'agent/inbox/spliced') {
+        const data = prior.data
+        gate.inbox[data.target].splice(data.start, data.removedCount ?? 0, ...data.inserted)
+      }
+    }
     const splice = event.data
+    const list = gate.inbox[splice.target]
     if (splice.removedCount) {
-      const list = splice.target === 'next-turn' ? agent.inbox.nextTurn : agent.inbox.nextStep
       for (const message of list.slice(splice.start, splice.start + splice.removedCount)) {
         if (splice.outcome === 'canceled') { gate.claimed.delete(message.id); gate.removed.delete(message.id) }
         else if (splice.inserted.length === 0) gate.removed.set(message.id, splice.target)
       }
     }
+    list.splice(splice.start, splice.removedCount ?? 0, ...splice.inserted)
+    gate.inboxCursor = event.seq + 1
   } else if (event.type === 'user/message') {
     gate.claimed.delete(event.data.id)
   } else if (event.type === 'turn/end') {

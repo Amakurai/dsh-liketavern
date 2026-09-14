@@ -23,8 +23,8 @@ afterEach(async()=>{vi.restoreAllMocks();for(const root of roots.splice(0)) awai
 function ending(text='word/<%- next() %>',sessionId='s1',finish='stop',reason='completed'):Pick<Session,'id'|'snapshotEvents'> {
   return {id:sessionId as Session['id'],snapshotEvents:()=>[
     {type:'turn/start',seq:0,time:0,data:{turn:1}},
-    {type:'assistant/chunk',seq:4,time:0,data:{turn:1,step:1,chunk:{type:'finish',reason:{kind:finish}}}},
-    {type:'assistant/message',seq:5,time:0,data:{turn:1,step:1,message:createAssistantMessage({content:[{type:'text',text}]})}},
+
+    {type:'assistant/message',seq:5,time:0,data:{stream: [{type:'chunk',time:0,chunk:{type:'finish',reason:{kind:finish}}}], turn:1,step:1,message:createAssistantMessage({content:[{type:'text',text}]})}},
     {type:'turn/end',seq:6,time:0,data:{turn:1,reason:{kind:reason}}},
   ] as unknown as SessionEvent[]}
 }

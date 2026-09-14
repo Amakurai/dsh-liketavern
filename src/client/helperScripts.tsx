@@ -68,7 +68,7 @@ export function HelperScripts(props:{remote:TavernRemote;sessionId:string;sessio
             onScriptError={error=>setFailures(current=>({...current,[script.id]:{version:scriptVersion,error}}))}
             onScriptReady={value=>setReady(current=>current[script.id]===(value?scriptVersion:'')?current:{...current,[script.id]:value?scriptVersion:''})}
             helperBinding={{sessionId,storyId:snapshot.storyId}}
-            onMessageBranch={props.sessions?async branch=>{await openChildSession(props.sessions!,branch.childSessionId,branch.title)}:undefined}
+            onMessageBranch={props.sessions?async branch=>{await openChildSession(props.sessions!,branch.childSessionId,branch.title,props.sessionId)}:undefined}
             onMessageEdit={async request=>{const result=await remote.editHelperMessages({...request,sessionId,messageId});if(!result.ok)throw new Error(result.error.message);if(result.value.snapshot)notifyHelperStory(sessionId,result.value.snapshot.storyId);return result.value}}
             onWorldbookBind={async request=>{const result=await remote.rebindHelperWorldbooks({...request,sessionId,messageId});if(!result.ok)throw new Error(result.error.message);invalidateSessionBinding(sessionId);window.dispatchEvent(new CustomEvent(BINDING_CHANGED_EVENT,{detail:sessionId}));return result.value}}
             onWorldbookRequest={async request=>{const result=await remote.helperWorldbookOperation({...request,sessionId,messageId});if(!result.ok)throw new Error(result.error.message);return result.value}}

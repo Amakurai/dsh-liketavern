@@ -9,9 +9,14 @@
 export interface SessionsPort {
     open(id: string): void;
     refresh?: () => Promise<void>;
+    list?: {
+        getSnapshot(): {
+            current?: string | null;
+        };
+    };
     scope?(id: string): unknown;
     sessionOf?(ctx: unknown): {
         rename(title: string): Promise<unknown>;
     } | undefined;
 }
-export declare function openChildSession(sessions: SessionsPort, childId: string, title?: string): Promise<void>;
+export declare function openChildSession(sessions: SessionsPort, childId: string, title?: string, sourceSessionId?: string): Promise<void>;

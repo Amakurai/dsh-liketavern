@@ -574,7 +574,7 @@ export function withEditedAssistantMessage(
   })
   // 编辑生成的是完整新正文，中断标记（宿主 rc.2 起 interrupted: true）不应带进分支 seed。
   const { interrupted: _dropped, ...rest } = data
-  const replaced = { ...event, data: { ...rest, message } } as SessionEvent
+  const replaced = { ...event, data: { ...rest, message, stream: [] } } as SessionEvent
   return [...events.slice(0, index), replaced, ...events.slice(index + 1)]
 }
 
@@ -802,8 +802,8 @@ export async function enterGreetingConversation({ ctx, state }: FloorDeps, sessi
   session.append('step/start', { turn: 1, step: 1 })
   session.append(
     'assistant/message',
-    { turn: 1, step: 1, message: greetingMessage(text) },
-    { surfaceOp: 'append', sourceEventSeqs: [] },
+    { turn: 1, step: 1, message: greetingMessage(text), stream: [] },
+    { surfaceOp: 'append' },
   )
   session.append('step/end', { turn: 1, step: 1 })
   session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
@@ -825,7 +825,7 @@ export async function ensureGreeting({ ctx, state }: FloorDeps, sessionId: strin
   const raw = pickGreetingText(variants, binding.greetingIndex)
   if (!raw) return false
   const text = await expandGreeting(state, binding, raw)
-  session.append('assistant/message', { turn: 0, step: 0, message: greetingMessage(text) }, { surfaceOp: 'append', sourceEventSeqs: [] })
+  session.append('assistant/message', { turn: 0, step: 0, message: greetingMessage(text), stream: [] }, { surfaceOp: 'append' })
   return true
 }
 

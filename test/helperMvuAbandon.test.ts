@@ -41,15 +41,15 @@ beforeEach(async () => {
 })
 afterEach(async () => { vi.restoreAllMocks(); await rm(root, { recursive: true, force: true }) })
 async function initialize() {
-  session.append('assistant/message', { turn: 0, step: 0, message: createAssistantMessage({ content: [{ type: 'text', text: '开场白' }], source: TAVERN_GREETING_SOURCE }) }, { surfaceOp: 'append' })
+  session.append('assistant/message', {stream: [],  turn: 0, step: 0, message: createAssistantMessage({ content: [{ type: 'text', text: '开场白' }], source: TAVERN_GREETING_SOURCE }) }, { surfaceOp: 'append' })
   const work = await prepareHelperMvuJob(ctx, state, leaseRequest())
   await commitHelperMvuJob(ctx, state, { ...leaseRequest(), jobId: work.job!.id, token: work.token!, data: { stat_data: { hp: 10 }, custom: 'kept' } })
 }
 async function start(turn: number, pending = false) {
   state.currentTurns.set(session.id, turn)
   session.append('turn/start', { turn })
-  session.append('assistant/chunk', { turn, step: 1, chunk: { type: 'finish', reason: { kind: 'stop' } } })
-  session.append('assistant/message', { turn, step: 1, message: createAssistantMessage({ content: [{ type: 'text', text: '角色回复' + turn }], source: { provider: 'factory', model: 'factory' } }) }, { surfaceOp: 'append' })
+
+  session.append('assistant/message', {stream: [{type:'chunk',time:0,chunk:{ type: 'finish', reason: { kind: 'stop' } }}],  turn, step: 1, message: createAssistantMessage({ content: [{ type: 'text', text: '角色回复' + turn }], source: { provider: 'factory', model: 'factory' } }) }, { surfaceOp: 'append' })
   await (await ws()).wal.beginFloor(floor(turn)); state.openFloors.set(session.id, { cardId, storyId, floor: floor(turn) })
   if (pending) await queueHelperMvuStop(state, session.id, session)
 }

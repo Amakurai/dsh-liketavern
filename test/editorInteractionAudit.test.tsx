@@ -10,7 +10,7 @@ import { setTavernLocale } from '../src/client/i18n.js'
 import { LorebooksSection } from '../src/client/panel/lorebooks.js'
 import { LorebookEditor } from '../src/client/panel/lorebookEditor.js'
 import { RegexSection } from '../src/client/panel/regex.js'
-import { Btn, ConfirmDialog } from '../src/client/util.js'
+import { Btn, ConfirmDialog, Dialog, SearchInput } from '../src/client/util.js'
 import type { Envelope, TavernRemote } from '../src/client/types.js'
 import type { RegexRule } from '../src/core/types.js'
 
@@ -162,6 +162,45 @@ describe('世界书打开请求', () => {
   function remoteRetry(remote: TavernRemote) {
     vi.mocked(remote.getCharacterLorebook).mockResolvedValueOnce(ok({ name: '灯塔', json: { entries: {} }, entryCount: 0 }))
   }
+})
+
+/** 新建失败留在原弹窗重试，搜索入口不能随列表缩短消失而留下隐藏过滤条件。 */
+describe('世界书表单恢复', () => {
+  it.each(['envelope', 'transport'] as const)('新建失败在弹窗内显示错误并保留名称，重试后只打开新书：%s', async failure => {
+    const pending = deferred<Envelope<{ name: string; entryCount: number }>>()
+    const importLorebook = vi.fn(() => pending.promise)
+    const remote = { listLorebooks: async () => ok({ items: [] }), listCharacters: async () => ok({ items: [] }),
+      importLorebook, getLorebook: async () => ok({ json: { entries: {} } }),
+    } as unknown as TavernRemote
+    const view = await render(<LorebooksSection remote={remote}/>)
+    await click(view, '新建空书')
+    const dialog = () => view.root.findAllByType(Dialog).find(item => item.props.open)!
+    await act(async () => dialog().findByType('input').props.onChange({ target: { value: '  港口设定  ' } }))
+    await click(view, '创建')
+    if (failure === 'transport') await act(async () => pending.reject(new Error('连接中断')))
+    else await act(async () => pending.resolve(fail('连接中断')))
+    expect(dialog().findByProps({ role: 'alert' }).children.join('')).toContain('连接中断')
+    expect(dialog().findByType('input').props.value).toBe('  港口设定  ')
+    expect(button(view, '创建').props.disabled).toBe(false)
+    importLorebook.mockResolvedValueOnce(ok({ name: '港口设定', entryCount: 0 }))
+    await click(view, '创建')
+    expect(importLorebook).toHaveBeenCalledTimes(2)
+    expect(importLorebook).toHaveBeenLastCalledWith({ name: '港口设定', json: { entries: {} } })
+    expect(view.root.findByType(LorebookEditor).props.target).toEqual({ kind: 'library', name: '港口设定' })
+  })
+
+  it('世界书不足五本时仍能看见当前搜索条件并清空恢复全部条目', async () => {
+    let names = ['港口', '灯塔', '森林', '城镇', '山谷']
+    const remote = { listLorebooks: async () => ok({ items: names }), listCharacters: async () => ok({ items: [] }) } as unknown as TavernRemote
+    const view = await render(<LorebooksSection remote={remote}/>)
+    await act(async () => view.root.findByType(SearchInput).props.onChange('港'))
+    names = names.slice(0, 4)
+    await click(view, '刷新')
+    expect(view.root.findByType(SearchInput).props.value).toBe('港')
+    expect(view.root.findAllByProps({ className: 'dsh-tavern-tile' })).toHaveLength(1)
+    await act(async () => view.root.findByType(SearchInput).props.onChange(''))
+    expect(view.root.findAllByProps({ className: 'dsh-tavern-tile' })).toHaveLength(4)
+  })
 })
 
 /** 手写规则与延迟 remote；通过真实 DraftScope 的离开确认判断编辑状态。 */

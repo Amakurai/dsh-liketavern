@@ -82,8 +82,8 @@ async function setup() {
 }
 function messageEvents(step:number,seq:number,text:string,finish:'stop'|'tool-calls'='stop',interrupted=false):SessionEvent[] {
   return [
-    {type:'assistant/chunk',seq:seq-1,time:0,data:{turn:1,step,chunk:{type:'finish',reason:{kind:finish}}}},
-    {type:'assistant/message',seq,time:0,data:{turn:1,step,message:createAssistantMessage({content:[{type:'text',text}]}),...(interrupted?{interrupted:true}:{})}},
+
+    {type:'assistant/message',seq,time:0,data:{stream: [{type:'chunk',time:0,chunk:{type:'finish',reason:{kind:finish}}}], turn:1,step,message:createAssistantMessage({content:[{type:'text',text}]}),...(interrupted?{interrupted:true}:{})}},
   ] as SessionEvent[]
 }
 

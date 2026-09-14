@@ -4,7 +4,7 @@
 
 **在 DeepSeek Harness 的 `dsh web` 中使用角色卡、世界书与长期记忆，开始 Tavern 式角色扮演。**
 
-**[v0.2.2](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.2.2) · 适配 dsh `0.1.2-rc.1` · Node.js ≥ 24**
+**[v0.2.3](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.2.3) · 适配 dsh `0.1.5-rc.2` · Node.js ≥ 24**
 
 中文 | [English](./README.en.md)
 
@@ -23,7 +23,7 @@
 | 项目 | 要求 |
 | --- | --- |
 | Node.js | 24 或更新版本；当前开发与 CI 使用 Node 24 |
-| dsh CLI / 宿主 | **`0.1.2-rc.1`**，本插件的宿主依赖锁定此版本 |
+| dsh CLI / 宿主 | **`0.1.5-rc.2`**，本插件的宿主依赖锁定此版本 |
 | pnpm | 已安装且可在终端运行，供 `dsh plugin` 管理插件依赖 |
 | 模型 | 在 dsh 中完成模型配置，能够正常对话 |
 
@@ -34,7 +34,7 @@
 在终端执行，固定到发布标签：
 
 ```bash
-dsh plugin --profile web add github:Amakurai/dsh-liketavern#v0.2.2
+dsh plugin --profile web add github:Amakurai/dsh-liketavern#v0.2.3
 dsh plugin --profile web list --depth 0
 ```
 
@@ -48,10 +48,10 @@ dsh web
 
 ### 使用安装包
 
-从 [v0.2.2 Release](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.2.2) 下载 `dsh-liketavern-0.2.2.tgz`，在文件所在目录执行：
+从 [v0.2.3 Release](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.2.3) 下载 `dsh-liketavern-0.2.3.tgz`，在文件所在目录执行：
 
 ```bash
-dsh plugin --profile web add ./dsh-liketavern-0.2.2.tgz
+dsh plugin --profile web add ./dsh-liketavern-0.2.3.tgz
 ```
 
 安装后同样重启 `dsh web`。Release 附有 `SHA256SUMS.txt`，可用于核对下载文件。
@@ -73,6 +73,8 @@ dsh plugin --profile web add ./dsh-liketavern-0.2.2.tgz
 **脚本和 MVU：** 全局、预设和角色脚本统一在「Tavern → 设置 → 脚本」管理，可编辑、启停和查看运行错误。需要自动 MVU 的卡，还需在会话顶部的角色配置中勾选「启用原生 MVU 自动更新」并保存；运行时保持该会话页面打开。
 
 **界面语言：** 默认跟随宿主（中文宿主显示中文，其余显示英文）。可在「Tavern → 设置 → 界面 → 界面语言」固定为中文或 English，选择后立即保存，仅影响插件界面。
+
+**工具调用：** Tavern 使用 dsh 原生 PTC。设定够用时直接扮演；需要查证或记事时，模型用一次 `run_code` 合并操作，独立查询可并行，只回传必要结果。写入仍经当前剧情的楼层事务。更新后重启 dsh，以加载插件托管的 Tavern 预设；自建宿主需提供 `codeRuntime`，与原装 PTC 模式要求相同。
 
 ## 功能
 
@@ -130,7 +132,7 @@ dsh plugin --profile web add ./dsh-liketavern-0.2.2.tgz
 
 ## 常见问题
 
-**安装后没有 Tavern 模式或设置入口？** 先用 `dsh --version` 确认宿主为 `0.1.2-rc.1`，再用 `dsh plugin --profile web list --depth 0` 检查安装目标。重启 `dsh web` 后新建会话；仍未出现时，查看终端中的插件加载错误。
+**安装后没有 Tavern 模式或设置入口？** 先用 `dsh --version` 确认宿主为 `0.1.5-rc.2`，再用 `dsh plugin --profile web list --depth 0` 检查安装目标。重启 `dsh web` 后新建会话；仍未出现时，查看终端中的插件加载错误。
 
 **卡片能显示，但按钮、脚本或 MVU 不工作？** 在「设置 → 脚本」检查脚本及所在文件夹是否启用并保存，查看当前会话的运行诊断。MVU 还需开启会话内的自动更新选项并保持页面打开。对依赖父窗口对象或未实现接口的卡，按[兼容说明](docs/TAVERN_HELPER.md)检查依赖。
 

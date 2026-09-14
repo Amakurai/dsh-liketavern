@@ -14,7 +14,7 @@ import {
 function greetingEvent() {
   return {
     type: 'assistant/message',
-    data: { message: { source: { ...TAVERN_GREETING_SOURCE } } },
+    data: {stream: [],  message: { source: { ...TAVERN_GREETING_SOURCE } } },
   }
 }
 
@@ -31,7 +31,7 @@ describe('isGreetingOnlyBlank', () => {
   it('其它 assistant 消息不算', () => {
     expect(
       isGreetingOnlyBlank([
-        { type: 'assistant/message', data: { message: { source: { provider: 'deepseek', model: 'v4' } } } },
+        { type: 'assistant/message', data: {stream: [],  message: { source: { provider: 'deepseek', model: 'v4' } } } },
       ]),
     ).toBe(false)
   })
@@ -56,7 +56,7 @@ describe('pickGreetingText', () => {
 describe('greetingFloorState', () => {
   const greet = (id: string) => ({
     type: 'assistant/message',
-    data: { message: { id, source: { ...TAVERN_GREETING_SOURCE } } },
+    data: {stream: [],  message: { id, source: { ...TAVERN_GREETING_SOURCE } } },
   })
 
   it('只把第一条本插件开场白标成 greeting，并在有多条变体时给出 swipe', () => {
@@ -83,7 +83,7 @@ describe('greetingFloorState', () => {
     const events = [
       greet('a'),
       { type: 'user/message', data: {} },
-      { type: 'assistant/message', data: { message: { id: 'b', source: { provider: 'deepseek', model: 'v4' } } } },
+      { type: 'assistant/message', data: {stream: [],  message: { id: 'b', source: { provider: 'deepseek', model: 'v4' } } } },
     ]
     expect(greetingFloorState(events, 'b', 0, 3)).toEqual({
       isGreeting: false,

@@ -1,8 +1,10 @@
-/** 公开同步事件源的手写适配器：验证实时消息边界、收口屏障、异步取消、队列预算和会话切换，不打开历史或调用模型。 */
+/** 真实宿主同步事件源配手写业务适配器：验证流式结算、实时消息边界、收口屏障与会话切换，不打开历史或调用模型。 */
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { SessionEventLikeEntry, SessionEventSource, SessionEventWindow } from '@deepseek-ai/dsh-api-session-controller/client'
 import { SessionId, SessionSeq, type SessionEvent, type TurnEndReason } from '@deepseek-ai/dsh-session/types'
 import { createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
+// 宿主 client 导出是浏览器 ModuleLoader 包；Node 测试直接加载同包附带的真实 ESM 实现。
+import { MutableSessionEventSource } from '../node_modules/@deepseek-ai/dsh-api-session-controller/lib/types/client/contract/events.js'
 import { installHelperLiveEvents } from '../src/client/helperLiveEvents.js'
 import { emitHelperHostEvent, reportHelperHostEventError } from '../src/client/helperEventRouter.js'
 import { watchHelperStory } from '../src/client/helperNotifications.js'
@@ -29,34 +31,32 @@ afterEach(() => { for (const stop of cleanups.splice(0)) stop(); vi.unstubAllGlo
 
 class Source implements SessionEventSource {
   listeners = new Set<() => void>()
-  snapshot: SessionEventWindow
+  host = new MutableSessionEventSource()
+  get snapshot(): SessionEventWindow { return this.host.getSnapshot() }
   constructor(events: SessionEvent[] = []) {
     const entries = events.map(event => ({ type: 'event' as const, event }))
-    this.snapshot = { entries, hasMore: false, revision: 0, change: { kind: 'replace', entries } }
+    this.host.replace(entries, false)
+    this.host.subscribe(() => this.notify())
   }
   getSnapshot = () => this.snapshot
   subscribe = (fn: () => void) => { this.listeners.add(fn); return () => { this.listeners.delete(fn) } }
   notify() { for (const listener of this.listeners) listener() }
   append(...events: SessionEvent[]) {
-    const entries = events.map(event => ({ type: 'event' as const, event }))
-    this.snapshot = { ...this.snapshot, revision: this.snapshot.revision + 1, entries: [...this.snapshot.entries, ...entries], change: { kind: 'append', entries } }
-    this.notify()
+    for (const event of events) this.host.append({ type: 'event', event })
   }
   replace(events: SessionEvent[]) {
     const entries = events.map(event => ({ type: 'event' as const, event }))
-    this.snapshot = { ...this.snapshot, revision: this.snapshot.revision + 1, entries, change: { kind: 'replace', entries } }
-    this.notify()
+    this.host.replace(entries, false)
   }
   prepend(events: SessionEvent[]) {
     const entries: SessionEventLikeEntry[] = events.map(event => ({ type: 'event', event }))
-    this.snapshot = { ...this.snapshot, revision: this.snapshot.revision + 1, entries: [...entries, ...this.snapshot.entries], change: { kind: 'prepend', entries } }
-    this.notify()
+    this.host.prepend(entries, false)
   }
 }
 const start = (seq: number, turn = 1): SessionEvent<'turn/start'> => ({ seq: SessionSeq(seq), time: seq, type: 'turn/start', data: { turn } })
 const end = (seq: number, turn = 1, reason: TurnEndReason = { kind: 'completed' }): SessionEvent<'turn/end'> => ({ seq: SessionSeq(seq), time: seq, type: 'turn/end', data: { turn, reason } })
 const user = (seq: number, text = '用户台词'): SessionEvent<'user/message'> => ({ seq: SessionSeq(seq), time: seq, type: 'user/message', surfaceOp: 'append', data: createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } }) })
-const assistant = (seq: number, turn = 1, step = 1, interrupted = false): SessionEvent<'assistant/message'> => ({ seq: SessionSeq(seq), time: seq, type: 'assistant/message', surfaceOp: 'append', data: { turn, step, message: createAssistantMessage({ content: [{ type: 'text', text: '角色回复' }], source: { provider: 'fixture', model: 'fixture' } }), ...(interrupted ? { interrupted: true } : {}) } })
+const assistant = (seq: number, turn = 1, step = 1, interrupted = false): SessionEvent<'assistant/message'> => ({ seq: SessionSeq(seq), time: seq, type: 'assistant/message', surfaceOp: 'append', data: {stream: [],  turn, step, message: createAssistantMessage({ content: [{ type: 'text', text: '角色回复' }], source: { provider: 'fixture', model: 'fixture' } }), ...(interrupted ? { interrupted: true } : {}) } })
 
 function fixture(initial: SessionEvent[] = [], initialCurrent: string | undefined = 'session') {
   const source = new Source(initial), sources = new Map([['session', source]])
@@ -89,6 +89,44 @@ function fixture(initial: SessionEvent[] = [], initialCurrent: string | undefine
   }
 }
 const events = () => emissions.map(({ event, data }) => [event, data])
+
+it('真实宿主 settle-assistant 结算流式回复，临时序号不吞掉最终消息；结束屏障前不发送接收事件', async () => {
+  const f = fixture(); await settle()
+  f.source.append(start(0), user(1))
+  const attemptId = 'fixture-attempt' as Parameters<MutableSessionEventSource['settleAssistant']>[0]
+  f.source.host.append({ type: 'transient', event: { type: 'assistant/live-chunk', seq: 2.5, time: 2,
+    data: { attemptId, turn: 1, step: 1, chunk: { type: 'finish', reason: { kind: 'stop' } } } } })
+  f.source.host.settleAssistant(attemptId, { type: 'event', event: assistant(2) })
+  await settle()
+  expect(events()).toEqual([['generation_started', ['normal', {}, false]], ['message_sent', [0]]])
+  f.source.append(end(3)); await settle()
+  expect(events().slice(2)).toEqual([['message_received', [1, 'normal']], ['generation_ended', [1]]])
+  expect(reportHelperHostEventError).not.toHaveBeenCalled()
+})
+
+it('无消息结算只清理临时流；失败尝试不清掉轮次，也不伪造接收事件', async () => {
+  const f = fixture(); await settle(); f.source.append(start(0))
+  const attemptId = 'failed-attempt' as Parameters<MutableSessionEventSource['settleAssistant']>[0]
+  f.source.host.settleAssistant(attemptId)
+  f.source.host.settleAssistant(attemptId, { type: 'event', event: { type: 'assistant/attempt', seq: SessionSeq(1), time: 1,
+    data: { turn: 1, step: 1, stream: [] } } })
+  f.source.host.settleAssistant(attemptId, { type: 'event', event: assistant(2) })
+  f.source.append(end(3)); await settle()
+  expect(events()).toEqual([['generation_started', ['normal', {}, false]], ['message_received', [0, 'normal']], ['generation_ended', [0]]])
+  expect(reportHelperHostEventError).not.toHaveBeenCalled()
+})
+
+it('生成中重新订阅只以持久历史建基线，随后结算当前回复不会被临时流序号跳过', async () => {
+  const f = fixture([start(0)]); await settle(); f.stop()
+  const attemptId = 'reconnected-attempt' as Parameters<MutableSessionEventSource['settleAssistant']>[0]
+  f.source.host.append({ type: 'transient', event: { type: 'assistant/live-chunk', seq: 1.5, time: 1,
+    data: { attemptId, turn: 1, step: 1, chunk: { type: 'finish', reason: { kind: 'stop' } } } } })
+  cleanups.push(installHelperLiveEvents(f.sessions, { getHelperEventState: f.getHelperEventState })); await settle()
+  f.source.host.settleAssistant(attemptId, { type: 'event', event: assistant(1) })
+  f.source.append(end(2)); await settle()
+  expect(events()).toEqual([['message_received', [0, 'normal']], ['generation_ended', [0]]])
+  expect(reportHelperHostEventError).not.toHaveBeenCalled()
+})
 
 it('初始历史、分页和重连仅建立基线，不把旧回复或初始 append 快照当成新消息', async () => {
   const f = fixture([start(10), assistant(11), end(12)]), notify = vi.fn()

@@ -17,6 +17,8 @@ export declare const zh: {
     readonly 'actions.rollback': "回退到这一层（丢弃其后楼层）";
     readonly 'actions.editUserTitle': "编辑第 {turn} 层的用户消息";
     readonly 'actions.editAiTitle': "编辑第 {turn} 层的回复";
+    readonly 'actions.editUserHint': "保存后会创建新分支，并从这一层重新生成回复。原会话保留。";
+    readonly 'actions.editAiHint': "保存后会创建新分支，撤销这一层及后续的记忆和状态变更，不自动重新生成回复。原会话保留。";
     readonly 'actions.saving': "保存中…";
     readonly 'actions.saveRerun': "保存并重跑";
     readonly 'actions.saveNoRerun': "保存（不重跑）";

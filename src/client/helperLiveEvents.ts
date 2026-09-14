@@ -1,4 +1,4 @@
-/** 当前 Tavern 页面的实时宿主日志订阅：只消费 append 增量，按真实剧情快照映射消息，完成屏障后再通知沙箱。 */
+/** 当前 Tavern 页面的实时宿主日志订阅：消费实时追加与回复结算，忽略临时流和历史载入，完成屏障后再通知沙箱。 */
 import type { SessionEventSource, SessionEventWindow } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { SessionEvent } from '@deepseek-ai/dsh-session/types'
 import { BINDING_CHANGED_EVENT } from './actions.js'
@@ -57,7 +57,7 @@ export function installHelperLiveEvents(sessions: ClientContext['sessions'], rem
   }
   const baseline = (view: View, snapshot: SessionEventWindow) => {
     view.revision = snapshot.revision
-    for (const entry of snapshot.entries) view.highwater = Math.max(view.highwater, entry.event.seq)
+    for (const entry of snapshot.entries) if (entry.type === 'event') view.highwater = Math.max(view.highwater, entry.event.seq)
   }
   const reset = (view: View, snapshot: SessionEventWindow) => {
     cancel(view); baseline(view, snapshot)
@@ -165,7 +165,15 @@ export function installHelperLiveEvents(sessions: ClientContext['sessions'], rem
       view.revision = snapshot.revision
       if (snapshot.change.kind === 'replace') { reset(view, snapshot); return }
       if (snapshot.change.kind === 'prepend') return
-      try { for (const entry of snapshot.change.entries) capture(view, entry.event) }
+      try {
+        // rc.2 结算会以单个 entry 替换临时流；无 entry 只是清理失败/取消的尝试。
+        // 临时流的分数 seq 不属于持久游标，不能提前吞掉同一步最终 assistant/message。
+        if (snapshot.change.kind === 'settle-assistant') {
+          if (snapshot.change.entry) capture(view, snapshot.change.entry.event)
+        } else {
+          for (const entry of snapshot.change.entries) if (entry.type === 'event') capture(view, entry.event)
+        }
+      }
       catch (error) { report(view, error); reset(view, snapshot); return }
       drain(view)
     })

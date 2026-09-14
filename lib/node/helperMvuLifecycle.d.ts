@@ -1,4 +1,4 @@
-/** MVU 宿主门控：停止前等待浏览器提交，空闲期保留输入；兜底拒绝只恢复原生队列，不伪造模型请求。 */
+/** MVU 宿主门控：停止前持久登记任务，浏览器提交只门控下一轮输入；兜底拒绝恢复原生队列，不伪造模型请求。 */
 import type { Context } from '@deepseek-ai/cordis';
 import type { Agent } from '@deepseek-ai/dsh-agent';
 import type { Session, SessionEvent, UserMessage } from '@deepseek-ai/dsh-session';
@@ -11,7 +11,7 @@ export declare function helperMvuHasAssistant(session: Snapshot): boolean;
 export declare function waitForHelperMvu(state: TavernState, agent: Agent, signal: AbortSignal, includeInitialization?: boolean): Promise<void>;
 /** inbox 插入通知在 send 唤醒之前同步到达；先认领真正 idle，才在维护内部读取配置和等待。 */
 export declare function reserveHelperMvuMaintenance(state: TavernState, agent: Agent, report: (error: unknown) => void): void;
-/** 正常 stop 候选在宿主 turn/end 与下一条输入 claim 前排入持久任务；取消不清掉任务。 */
+/** 正常 stop 在 turn/end 前持久登记；不等待浏览器，避免脚本未就绪/页面断开让完整回复永远显示生成中。 */
 export declare function stopForHelperMvu(state: TavernState, agent: Agent, signal: AbortSignal): Promise<void>;
 /** 只从公开 claim 删除记录取得原目标；取消删除带 outcome=canceled，不被当作待恢复输入。 */
 export declare function observeHelperMvuSessionEvent(agent: Agent, event: SessionEvent): void;

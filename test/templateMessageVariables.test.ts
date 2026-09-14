@@ -148,8 +148,8 @@ async function fixture(description='<% setvar("hp",5) %>role') {
     const message=user(text);messages.push(message);events.push(event('user/message',message,events.length));return message
   }
   const end=async(turn:number,text:string,r=runtime,id='s1')=>{
-    events.push(event('assistant/chunk',{turn,step:1,chunk:{type:'finish',reason:{kind:'stop'}}},events.length))
-    const message=assistant(text);messages.push(message);events.push(event('assistant/message',{turn,step:1,message},events.length))
+
+    const message=assistant(text);messages.push(message);events.push(event('assistant/message',{stream: [{type:'chunk',time:0,chunk:{type:'finish',reason:{kind:'stop'}}}], turn,step:1,message},events.length))
     events.push(event('turn/end',{turn,reason:{kind:'completed'}},events.length))
     const session={id:id as Session['id'],snapshotEvents:()=>events}
     await onTurnEnd(r,id,session);return {message,session}
@@ -161,7 +161,7 @@ describe('消息身份和剧情事务',()=> {
   it('同文本输入按 stable id 去重，seq 与文本索引无关，压缩隐藏的消息不回流',()=> {
     const first=user('same'),second=user('same'),hidden=user('secret'),empty=assistant('')
     const projection=buildTemplateMessageHistory([first,empty],[{id:first.id,text:'same'},{id:second.id,text:'same'}],'Alice','Bob',
-      [event('user/message',hidden,1),event('user/message',first,31),event('assistant/message',{message:empty},55)])
+      [event('user/message',hidden,1),event('user/message',first,31),event('assistant/message',{stream: [], message:empty},55)])
     expect(projection.history.map(value=>value.content)).toEqual(['same','same'])
     expect(projection.identities).toEqual([{messageId:first.id,hostMessageId:31,swipeId:0},{messageId:second.id,swipeId:0}])
     expect(projection.identities.some(value=>value.messageId===hidden.id)).toBe(false)

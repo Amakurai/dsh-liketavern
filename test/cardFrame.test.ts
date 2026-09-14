@@ -167,3 +167,61 @@ it('卡片内容折叠后可以缩小，内容扩展仍通知新高度',()=>{
   expect(postMessage.mock.calls.map(([message])=>message).filter(message=>message.action==='resize').map(message=>message.height)).toEqual([560,180,720])
   runInContext('window.__dshTavernBridgeCleanup()',context)
 })
+
+/** 收起 details 后 Chromium 保留内部旧矩形；标题可见、正文不可见，必须区分测量。 */
+it('折叠日志的隐藏旧矩形不撑高卡片，展开和再次收起立即同步',()=>{
+  const callbacks=new Map<string,()=>void>(),postMessage=vi.fn()
+  const summary={tagName:'SUMMARY',contains:(node:unknown)=>node===label}
+  const details={tagName:'DETAILS',open:false,children:[summary],parentElement:null}
+  const label={parentElement:details,getBoundingClientRect:()=>({bottom:64})}
+  const content={parentElement:details,getBoundingClientRect:()=>({bottom:530})}
+  const document={open:vi.fn(),write:vi.fn(),close:vi.fn(),currentScript:null,querySelector:()=>null,
+    readyState:'loading',addEventListener:(name:string,fn:()=>void)=>callbacks.set(name,fn),removeEventListener:vi.fn(),
+    documentElement:{clientHeight:560},body:{get offsetHeight(){return details.open?530:52},scrollHeight:560,querySelectorAll:()=>[label,content]}}
+  const window={addEventListener:(name:string,fn:()=>void)=>callbacks.set(name,fn),removeEventListener:vi.fn()}
+  const context=createContext({window,document,parent:{postMessage},TextEncoder,clearTimeout:vi.fn(),setTimeout:vi.fn()})
+  const script=tavernCardBridgeScript({greetings:[],greetingIndex:0}).replace(/^<script[^>]*>/,'').replace(/<\/script>$/,'')
+  runInContext(script,context)
+  callbacks.get('DOMContentLoaded')?.()
+  details.open=true;callbacks.get('toggle')?.()
+  details.open=false;callbacks.get('toggle')?.()
+  expect(postMessage.mock.calls.map(([message])=>message).filter(message=>message.action==='resize').map(message=>message.height)).toEqual([64,530,64])
+  runInContext('window.__dshTavernBridgeCleanup()',context)
+  expect(document.removeEventListener).toHaveBeenCalledWith('toggle',expect.any(Function),true)
+})
+
+/** body 外折叠的边距必须纳入实际溢出；视口随后变高也不能锁死收起高度。 */
+it('展开内容的外边距不造成内部滚动条，根视口不会阻止再次缩小',()=>{
+  const callbacks=new Map<string,()=>void>(),postMessage=vi.fn()
+  const root={clientHeight:200,scrollHeight:224}
+  let contentHeight=200
+  const document={open:vi.fn(),write:vi.fn(),close:vi.fn(),currentScript:null,querySelector:()=>null,
+    readyState:'loading',addEventListener:(name:string,fn:()=>void)=>callbacks.set(name,fn),removeEventListener:vi.fn(),
+    documentElement:root,body:{get offsetHeight(){return contentHeight},get scrollHeight(){return contentHeight},getBoundingClientRect:()=>({bottom:contentHeight+12}),querySelectorAll:()=>[]}}
+  const window={addEventListener:(name:string,fn:()=>void)=>callbacks.set(name,fn),removeEventListener:vi.fn()}
+  const context=createContext({window,document,parent:{postMessage},TextEncoder,getComputedStyle:()=>({marginBottom:'12px'}),clearTimeout:vi.fn(),setTimeout:vi.fn()})
+  runInContext(tavernCardBridgeScript({greetings:[],greetingIndex:0}).replace(/^<script[^>]*>/,'').replace(/<\/script>$/,''),context)
+  callbacks.get('DOMContentLoaded')?.()
+  root.clientHeight=224;callbacks.get('toggle')?.()
+  contentHeight=52;callbacks.get('toggle')?.()
+  root.clientHeight=76;root.scrollHeight=76;callbacks.get('toggle')?.()
+  expect(postMessage.mock.calls.map(([message])=>message).filter(message=>message.action==='resize').map(message=>message.height)).toEqual([224,76])
+  runInContext('window.__dshTavernBridgeCleanup()',context)
+})
+
+/** 内部滚动区只占作者指定的可见高度，不能按被裁切的长列表再次撑高整个 iframe。 */
+it('受限滚动区的后代矩形按容器裁切，允许外溢时仍可扩展',()=>{
+  const callbacks=new Map<string,()=>void>(),postMessage=vi.fn()
+  const panel={parentElement:null,tagName:'DIV',children:[],style:{marginBottom:'0px',overflowY:'auto'},getBoundingClientRect:()=>({bottom:120})}
+  const child={parentElement:panel,style:{marginBottom:'0px',overflowY:'visible'},getBoundingClientRect:()=>({bottom:920})}
+  const document={open:vi.fn(),write:vi.fn(),close:vi.fn(),currentScript:null,querySelector:()=>null,
+    readyState:'loading',addEventListener:(name:string,fn:()=>void)=>callbacks.set(name,fn),removeEventListener:vi.fn(),
+    documentElement:{clientHeight:280},body:{offsetHeight:120,scrollHeight:120,querySelectorAll:()=>[panel,child]}}
+  const window={addEventListener:(name:string,fn:()=>void)=>callbacks.set(name,fn),removeEventListener:vi.fn()}
+  const context=createContext({window,document,parent:{postMessage},TextEncoder,getComputedStyle:(node:{style?:unknown})=>node.style??{},clearTimeout:vi.fn(),setTimeout:vi.fn()})
+  runInContext(tavernCardBridgeScript({greetings:[],greetingIndex:0}).replace(/^<script[^>]*>/,'').replace(/<\/script>$/,''),context)
+  callbacks.get('DOMContentLoaded')?.()
+  panel.style.overflowY='visible';callbacks.get('load')?.()
+  expect(postMessage.mock.calls.map(([message])=>message).filter(message=>message.action==='resize').map(message=>message.height)).toEqual([120,920])
+  runInContext('window.__dshTavernBridgeCleanup()',context)
+})

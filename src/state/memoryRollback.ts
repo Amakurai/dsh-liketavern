@@ -1,26 +1,27 @@
 /** 回滚前展开受影响的归并谱系：摘要可重建，来源事实随原楼层撤销，旧格式同样适用。 */
-import { parseMemory } from './memory.js'
+import { isMemoryId, memorySourceIds, parseMemory } from './memory.js'
 import { WorkspaceFs } from './workspaceFs.js'
 
 export async function expandAffectedMemories(root: string, paths: readonly string[]): Promise<void> {
   const changed = new Set(paths.flatMap((path) => {
-    const match = /^memory\/([A-Za-z0-9_-]+)\.md$/.exec(path)
-    return match ? [match[1]!] : []
+    const match = /^memory\/([^/]+)\.md$/.exec(path)
+    return match && isMemoryId(match[1]) ? [match[1]] : []
   }))
   if (!changed.size) return
   const fs = new WorkspaceFs(root, null)
   const summaries = new Map<string, string[]>()
   for (const file of await fs.list('memory')) {
-    if (!/^(?:archive\/)?[A-Za-z0-9_-]+\.md$/.test(file)) continue
+    const fileMatch = /^(?:archive\/)?([^/]+)\.md$/.exec(file)
+    if (!fileMatch || !isMemoryId(fileMatch[1])) continue
     const text = await fs.readText(`memory/${file}`)
     if (text === null) continue
-    try {
-      const entry = parseMemory(file, text)
-      const match = /^(?:compress|merge):(.+)$/.exec(entry.sourceRange)
-      if (!match) continue
-      const ids = match[1]!.split(',')
-      if (ids.length && ids.every((id) => /^[A-Za-z0-9_-]+$/.test(id) && id !== entry.id)) summaries.set(entry.id, ids)
-    } catch { /* 损坏条目交由既有读取容错处理。 */ }
+    let entry
+    try { entry = parseMemory(file, text) }
+    catch { continue /* 损坏条目交由既有读取容错处理。 */ }
+    // 来源损坏必须在展开写入之前失败，不能把摘要误作独立事实后继续撤销来源。
+    const ids = memorySourceIds(entry.sourceRange)
+    if (ids.includes(entry.id)) throw new Error('记忆归并来源存在循环，已停止回滚')
+    if (ids.length) summaries.set(entry.id, ids)
   }
   const invalid = new Set<string>()
   let grew = true

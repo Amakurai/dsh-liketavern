@@ -72,6 +72,33 @@ export function isMemoryId(id: unknown): id is string {
   return typeof id === 'string' && id.length > 0 && id.length <= 255 && !/[\\/:\0]/.test(id) && id !== '.' && id !== '..'
 }
 
+/** 来源格式共用入口：旧逗号列表继续可读，特殊文件名用独立 JSON 标记避免逗号与换行歧义。 */
+export function isMemorySummary(sourceRange: string): boolean {
+  return /^(?:compress|merge)(?:-json)?:/.test(sourceRange)
+}
+
+export function memorySourceIds(sourceRange: string): string[] {
+  const match = /^(?:compress|merge)(-json)?:([\s\S]*)$/.exec(sourceRange)
+  if (!match) return []
+  let ids: unknown
+  try {
+    ids = match[1] ? JSON.parse(match[2]!) : match[2]!.split(',')
+  } catch {
+    throw new Error('记忆归并来源格式损坏')
+  }
+  if (!Array.isArray(ids) || !ids.length || !ids.every(isMemoryId)) {
+    throw new Error('记忆归并来源 id 非法')
+  }
+  return ids
+}
+
+function memorySourceRange(kind: 'compress' | 'merge', ids: string[]): string {
+  if (!ids.every(isMemoryId)) throw new Error('记忆归并来源 id 非法')
+  return ids.every((id) => /^[A-Za-z0-9_-]+$/.test(id))
+    ? `${kind}:${ids.join(',')}`
+    : `${kind}-json:${JSON.stringify(ids)}`
+}
+
 /**
  * 解析 md 文本为 MemoryEntry。file 为相对 memory/ 目录的路径（如 `m-x.md`、`archive/m-x.md`）。
  * 缺少 frontmatter、created 缺失/非法、数组字段非 JSON 字符串数组时抛错。
@@ -276,7 +303,7 @@ export class MemoryStore {
       created: existing.created,
       updated: new Date().toISOString(),
       // 面板明确改写摘要后，它成为人工修订，不再被来源回滚自动展开。
-      sourceRange: lists === 'replace' && /^(?:compress|merge):/.test(existing.sourceRange) ? '' : existing.sourceRange,
+      sourceRange: lists === 'replace' && isMemorySummary(existing.sourceRange) ? '' : existing.sourceRange,
       tags: updateList(existing.tags, patch.tags),
       keys: updateList(existing.keys, patch.keys),
     }
@@ -326,7 +353,7 @@ export class MemoryStore {
         body,
         tags: [...new Set([kind === 'compress' ? 'compressed' : 'merged', ...batch.flatMap((entry) => entry.tags)])],
         keys: [...new Set(batch.flatMap((entry) => entry.keys))],
-        sourceRange: `${kind}:${batch.map((entry) => entry.id).join(',')}`,
+        sourceRange: memorySourceRange(kind, batch.map((entry) => entry.id)),
       })
       return this.archive(batch.map((entry) => entry.id))
     })
@@ -348,9 +375,9 @@ export class MemoryStore {
       const visited = new Set(entries.map((entry) => entry.id))
       // 只索引活跃摘要可达的归档来源；不扫整棵 archive，已撤销/删除摘要不会把旧事实带回来。
       for (let i = 0; i < indexed.length; i++) {
-        const refs = /^(?:compress|merge):(.+)$/.exec(indexed[i]!.sourceRange)?.[1]?.split(',') ?? []
+        const refs = memorySourceIds(indexed[i]!.sourceRange)
         for (const id of refs) {
-          if (!/^[A-Za-z0-9_-]+$/.test(id) || visited.has(id)) continue
+          if (visited.has(id)) continue
           if (visited.size >= 10_000) throw new Error('记忆来源索引超过 10000 条，请分拆剧情或清理记忆')
           visited.add(id)
           const raw = await this.fs.readText(this.pathOf(id, true))

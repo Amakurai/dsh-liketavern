@@ -33,6 +33,36 @@ async function putMemory(id: string, created: string, body: string, updated = cr
 }
 
 describe('MemoryStore', () => {
+  it.each(['旅程.第一天', 'old memory', 'chapter,one'])('归并后仍能检索普通文件名 %s 的来源，去重不包含归档', async (id) => {
+    await putMemory(id, '2026-01-01T00:00:00.000Z', '翡翠钥匙藏在钟楼')
+    expect(await store.mergeBatch(await store.list(), '旅途摘要', 'compress')).toBe(1)
+    const reopened = new MemoryStore(fs)
+    expect((await reopened.search('翡翠钥匙')).map((hit) => hit.entry.id)).toEqual([id])
+    expect(await reopened.findSimilar('翡翠钥匙', [])).toEqual([])
+  })
+
+  it.each(['compress', 'merge'])('兼容旧 %s 来源列表中的中文和空格文件名', async (kind) => {
+    const ids = ['旅程.第一天', 'old memory']
+    for (const id of ids) await putMemory(id, '2026-01-01T00:00:00.000Z', '翡翠钥匙藏在钟楼')
+    await store.write({ body: '旅途摘要', sourceRange: `${kind}:${ids.join(',')}` })
+    await store.archive(ids)
+    expect((await store.search('翡翠钥匙')).map((hit) => hit.entry.id).sort()).toEqual(ids.sort())
+  })
+
+  it.each(['compress-json:[', 'merge-json:["../private"]', 'compress:../private', 'merge-json:[]'])('拒绝损坏或越界来源 %s', async (sourceRange) => {
+    await store.write({ body: '旅途摘要', sourceRange })
+    await expect(store.search('旅途')).rejects.toThrow('记忆归并来源')
+  })
+
+  it.each(['compress', 'merge'] as const)('人工修订 %s 的特殊文件名摘要后不再检索旧来源', async (kind) => {
+    await putMemory('chapter,one', '2026-01-01T00:00:00.000Z', '翡翠钥匙藏在钟楼')
+    await store.mergeBatch(await store.list(), '旅途摘要', kind)
+    const summary = (await store.list())[0]!
+    await store.update(summary.id, { body: '人工确认' }, { listMode: 'replace' })
+    expect((await store.get(summary.id))?.sourceRange).toBe('')
+    expect(await store.search('翡翠钥匙')).toEqual([])
+  })
+
   it('write → get/list 往返：frontmatter 字段完整', async () => {
     const entry = await store.write({
       body: '艾琳在桥头受了轻伤，左臂包扎。',

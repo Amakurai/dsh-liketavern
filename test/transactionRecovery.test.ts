@@ -12,7 +12,7 @@ import { resolveConfig } from '../src/node/config.js'
 import { TavernState } from '../src/node/state.js'
 import { onTurnStart, onTurnEnd } from '../src/node/sessionLifecycle.js'
 import { compressOldestMemories } from '../src/node/memoryMaintenance.js'
-import { MemoryStore } from '../src/state/memory.js'
+import { MemoryStore, serializeMemory } from '../src/state/memory.js'
 import { WorldDeltaStore } from '../src/state/worlddelta.js'
 
 const fault = vi.hoisted(() => ({ target: '', afterRename: false, gate: null as null | (() => Promise<void>) }))
@@ -162,6 +162,46 @@ describe('原子写入与失败恢复', () => {
 })
 
 describe('摘要来源与回滚', () => {
+  it.each(['compress-json:[', 'merge-json:["../private"]', 'compress:../private'])('来源损坏 %s 时回滚在修改文件前失败', async (sourceRange) => {
+    const { ws, panel, memory, rollback } = await setup()
+    const item = await memory.write({ body: '本层事实' })
+    const summary = await panel.memory.write({ body: '损坏摘要', sourceRange })
+    await panel.memory.archive([item.id])
+    const archive = await ws.fs.readText(`memory/archive/${item.id}.md`)
+    await expect(rollback()).rejects.toThrow('记忆归并来源')
+    expect(await ws.fs.readText(`memory/archive/${item.id}.md`)).toBe(archive)
+    expect(await panel.memory.get(item.id)).toBeNull()
+    expect((await panel.memory.get(summary.id))?.body).toBe('损坏摘要')
+    expect((await ws.wal.listFloors())[0]?.rolledBack).toBe(false)
+  })
+
+  it('旧格式中文来源与普通文件名摘要在回滚时一并展开', async () => {
+    const { ws, panel, memory, rollback } = await setup()
+    const meta = { created: '2026-01-01T00:00:00.000Z', updated: '2026-01-01T00:00:00.000Z',
+      sourceRange: '', tags: [], keys: [] }
+    await ws.fs.writeText('memory/旅程.第一天.md', serializeMemory(meta, '原始事实'))
+    await memory.update('旅程.第一天', { body: '本层事实' })
+    await ws.fs.writeText('memory/旅途 摘要.md', serializeMemory({ ...meta, sourceRange: 'merge:旅程.第一天' }, '旧摘要'))
+    await panel.memory.archive(['旅程.第一天'])
+    await rollback()
+    expect((await panel.memory.list()).map((entry) => entry.body)).toEqual(['原始事实'])
+  })
+
+  it.each(['旅程.第一天', 'old memory', 'chapter,one'])('普通文件名 %s 经过嵌套归并后仍能撤销楼层更新', async (id) => {
+    const { ws, panel, memory, rollback } = await setup()
+    await ws.fs.writeText(`memory/${id}.md`, serializeMemory({
+      created: '2026-01-01T00:00:00.000Z', updated: '2026-01-01T00:00:00.000Z',
+      sourceRange: '', tags: [], keys: [],
+    }, '更新前事实'))
+    await memory.update(id, { body: '本层事实' })
+    await panel.memory.mergeBatch(await panel.memory.list(), '本层事实的摘要', 'compress')
+    await panel.memory.write({ body: '其它事实' })
+    await panel.memory.mergeBatch(await panel.memory.list(), '第二层摘要', 'merge')
+    await rollback()
+    expect((await panel.memory.list()).map((entry) => entry.body).sort()).toEqual(['其它事实', '更新前事实'])
+    expect(await panel.memory.search('本层')).toEqual([])
+  })
+
   it('自动压缩后回滚新增事实，活跃库和检索都不再包含它', async () => {
     const { ws, memory, panel, rollback } = await setup()
     await memory.write({ body: '钥匙在塔中' })

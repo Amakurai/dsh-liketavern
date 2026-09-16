@@ -4,7 +4,7 @@ import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Menu } from '@deepseek-ai/dsh-client-ui-primitives'
 import { useState } from 'react'
-import { Field, ListInput, NumInput, Select, SettingsRow, Toggle } from '../src/client/util.js'
+import { Field, ListInput, NumInput, Select, SettingsRow, Toggle, splitRegexListText } from '../src/client/util.js'
 
 vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
   Button: (props: { children?: ReactNode }) => <button>{props.children}</button>,
@@ -95,6 +95,33 @@ describe('共享表单控件', () => {
     expect(input().props.value).toBe('外部, 重置')
     await type('外部, 重置,')
     expect(input().props.value).toBe('外部, 重置,')
+  })
+
+  it.each([
+    { text: '/\\d{1,3}/, 港口', expected: ['/\\d{1,3}/', '港口'] },
+    { text: ' /[/,，]+/u , 普通，词\n/foo{1,3}/ ', expected: ['/[/,，]+/u', '普通', '词', '/foo{1,3}/'] },
+    { text: '/a\\/,b/i,/c\\[d,e/g', expected: ['/a\\/,b/i', '/c\\[d,e/g'] },
+    { text: '普通, /unfinished，另一个词\npath/a,b', expected: ['普通', '/unfinished', '另一个词', 'path/a', 'b'] },
+  ])('世界书分隔识别完整正则边界且不执行：$text', ({ text, expected }) => {
+    expect(splitRegexListText(text)).toEqual(expected)
+  })
+
+  it('正则关键词可逐字输入，普通标签仍保持逗号分项语义', async () => {
+    const changes: string[][] = []
+    function Form(props: { preserveRegex: boolean }) {
+      const [keys, setKeys] = useState<string[]>([])
+      return <ListInput value={keys} preserveRegex={props.preserveRegex} onChange={next => { changes.push(next); setKeys(next) }}/>
+    }
+    const view = await render(<Form preserveRegex />)
+    const text = '/\\d{1,3}/, 港口'
+    for (let index = 1; index <= text.length; index++) {
+      await act(async () => view.root.findByType('input').props.onChange({ target: { value: text.slice(0, index) } }))
+      expect(view.root.findByType('input').props.value).toBe(text.slice(0, index))
+    }
+    expect(changes.at(-1)).toEqual(['/\\d{1,3}/', '港口'])
+    await act(async () => view.update(<Form preserveRegex={false}/>))
+    await act(async () => view.root.findByType('input').props.onChange({ target: { value: '/a,b/, 标签' } }))
+    expect(changes.at(-1)).toEqual(['/a', 'b/', '标签'])
   })
 
   it('数字字段可以清空后重输，不把输入过程中的空值提交为 0 或夹回最小值', async () => {

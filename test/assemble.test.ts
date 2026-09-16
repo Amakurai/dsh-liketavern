@@ -989,6 +989,44 @@ describe('injection_trigger', () => {
 // ---------------------------------------------------------------------------
 
 describe('卡字段与消息宏', () => {
+  it('卡字段的间接本轮宏进入 turn，跨字段引用也使用当前用户消息', () => {
+    const preset = defaultPreset()
+    preset.entries.push(presetEntry({ identifier: 'indirect', content: '引用[{{description}}]', order: 95 }))
+    const card = makeCard({ description: '{{scenario}}', scenario: '关系：{{lastusermessage}}' })
+    const run = (content: string) => assemblePrompt(makeInput({ preset, card, history: [{ role: 'user', content }] }))
+    const first = run('成为朋友')
+    const next = run('成为同伴')
+    expect(first.turnContext).toContain('引用[关系：成为朋友]')
+    expect(next.turnContext).toContain('引用[关系：成为同伴]')
+    expect(first.standing).not.toContain('引用[')
+    expect(next.standing).toBe(first.standing)
+  })
+
+  it('{{original}} 间接引用本轮宏时，卡级覆盖保留完整本轮上下文', () => {
+    const preset = defaultPreset()
+    preset.entries.find((entry) => entry.identifier === 'main')!.content = '回应 {{lastusermessage}}'
+    preset.entries.find((entry) => entry.identifier === 'jailbreak')!.content = '参考 {{lastcharmessage}}'
+    const card = makeCard({ systemPrompt: '覆盖[{{original}}]', postHistoryInstructions: '后置[{{original}}]' })
+    const result = assemblePrompt(makeInput({ preset, card, history: [
+      { role: 'assistant', content: '刚才的回答' }, { role: 'user', content: '新的问题' },
+    ] }))
+    expect(result.turnContext).toContain('覆盖[回应 新的问题]')
+    expect(result.turnContext).toContain('后置[参考 刚才的回答]')
+    expect(result.standing).not.toContain('覆盖[')
+    expect(result.standing).not.toContain('后置[')
+  })
+
+  it('动态依赖只追踪实际引用字段，循环字段引用不会挂起组装', () => {
+    const preset = defaultPreset()
+    preset.entries.push(presetEntry({ identifier: 'static-field', content: '静态[{{scenario}}]', order: 95 }))
+    const card = makeCard({ description: '<%= 1 %>', scenario: '固定背景' })
+    const staticResult = assemblePrompt(makeInput({ preset, card, renderTemplate: (text) => text.replace('<%= 1 %>', '1') }))
+    expect(staticResult.standing).toContain('静态[固定背景]')
+    expect(staticResult.turnContext).not.toContain('静态[固定背景]')
+    const cyclic = makeCard({ description: '{{scenario}}', scenario: '{{description}}' })
+    expect(() => assemblePrompt(makeInput({ preset, card: cyclic }))).not.toThrow()
+  })
+
   it('预设条目里的 {{description}}/{{personality}}/{{scenario}}/{{persona}}/{{charFirstMessage}} 展开', () => {
     const preset = defaultPreset()
     preset.entries.push(

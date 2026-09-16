@@ -126,6 +126,7 @@ export async function commitHelperVariables(ctx:Context,state:TavernState,reques
     const current=await helperContext(ctx,state,request.sessionId,request.messageId)
     if(current.binding.storyId!==request.storyId || current.ws.fs.root!==context.ws.fs.root) throw new Error('卡面剧情绑定已经改变')
     if(current.historyRevision!==request.historyRevision) throw new Error('聊天历史已改变，请刷新卡面后重试')
+    if(!state.config.interactiveCards||current.binding.interactiveCards===false)throw new Error('交互卡已关闭')
     await assertHelperMvuWritable(state,request.sessionId)
     if(!current.writable) throw new Error('生成期间不能修改酒馆助手剧情变量')
     const mapped=changes.map(change=>{
@@ -153,6 +154,7 @@ export async function withHelperStoryWrite<T>(ctx:Context,state:TavernState,sess
   return withWorkspaceLock(first.ws.fs.root,async()=>{
     const current=await helperContext(ctx,state,sessionId,messageId)
     if(current.binding.storyId!==storyId||current.ws.fs.root!==first.ws.fs.root)throw new Error('世界书剧情绑定已改变')
+    if(!state.config.interactiveCards||current.binding.interactiveCards===false)throw new Error('交互卡已关闭')
     await assertHelperMvuWritable(state,sessionId)
     if(!current.writable)throw new Error('生成期间不能修改聊天世界书')
     const floor=sessionId+'#t'+current.turn

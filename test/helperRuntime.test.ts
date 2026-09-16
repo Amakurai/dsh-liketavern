@@ -8,7 +8,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { TavernState } from '../src/node/state.js'
 import { resolveConfig } from '../src/node/config.js'
-import { getHelperSnapshot, commitHelperVariables,getHelperScriptBundle } from '../src/node/helperRuntime.js'
+import { getHelperSnapshot, commitHelperVariables,getHelperScriptBundle,withHelperStoryWrite } from '../src/node/helperRuntime.js'
 import { helperChanges, helperTable, type HelperSnapshot } from '../src/core/helperRuntime.js'
 import { HELPER_STATE_PATH } from '../src/state/helper.js'
 import { newStoryId, snapshotStory } from '../src/state/story.js'
@@ -126,6 +126,17 @@ describe('剧情变量与真实历史',()=>{
     sessions.set('a',events()) // 新 UUID，即使正文和 seq 相同也不能写旧消息。
     await expect(save(snapshot,'["chat",""]',{bad:true})).rejects.toThrow(/历史已改变/)
     expect(await (await ws()).fs.readText(HELPER_STATE_PATH)).toBeNull()
+  })
+  it.each(['session','global'] as const)('关闭 %s 交互卡后，旧快照不能提交变量或开始剧情写入',async target=>{
+    const snapshot=await read(),workspace=await ws()
+    if(target==='session')await state.saveBinding({... (await state.loadBinding('a'))!,interactiveCards:false})
+    else vi.spyOn(state,'config','get').mockReturnValue({...state.config,interactiveCards:false})
+    await expect(save(snapshot,'["chat",""]',{stale:true})).rejects.toThrow(/交互卡已关闭/)
+    const write=vi.fn(async(fs:WorkspaceFs,begin:()=>Promise<void>)=>{await begin();await fs.writeText('journal.md','stale')})
+    await expect(withHelperStoryWrite(ctx,state,'a',3,snapshot.storyId,write)).rejects.toThrow(/交互卡已关闭/)
+    expect(write).not.toHaveBeenCalled()
+    expect(await workspace.fs.readText(HELPER_STATE_PATH)).toBeNull()
+    expect(await workspace.wal.listFloors()).toEqual([])
   })
   it('分支复制后独立推进，撤销子楼层恢复继承值，来源不变',async()=>{
     const saved=await save(await read(),'["message",1]',{n:1})

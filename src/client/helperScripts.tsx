@@ -1,5 +1,5 @@
 /** 会话级隐藏后台脚本容器：管理入口统一放在设置；解绑或切换会话时卸载各自的 opaque-origin iframe。 */
-import { useEffect,useState,useRef,useCallback } from 'react'
+import { useEffect,useState,useRef,useCallback,useMemo } from 'react'
 import { buildCardSrcDoc } from '../core/cardFrame.js'
 import { helperScriptHtml,isNativeMvuFramework } from '../core/cardScript.js'
 import {publishScriptStatus,clearScriptStatus,type ScriptRuntimeStatus} from './helperScriptStatus.js'
@@ -20,13 +20,23 @@ import type { TavernRemote } from './types.js'
 export function HelperScripts(props:{remote:TavernRemote;sessionId:string;sessions?:{open(id:string):void;refresh?:()=>Promise<void>};onCancel?:()=>Promise<void>}) {
   const {remote,sessionId}=props,t=useT()
   const loader=useLoader(()=>remote.getHelperScriptBundle({sessionId}),[sessionId],true)
+  const bundle=loader.state.status==='ready'?loader.state.value:undefined
+  // RPC 每次成功载入的是一组新沙箱；内容修订相同也不代表旧运行时仍在。
+  const runtimeVersion=useMemo(()=>crypto.randomUUID(),[bundle])
+  const currentRuntime=useRef(runtimeVersion)
+  currentRuntime.current=runtimeVersion
   const [ready,setReady]=useState<Record<string,string>>({})
   const [failures,setFailures]=useState<Record<string,{version:string;error:string}>>({})
   const owner=useRef(Symbol('script-runtime'))
-  const [mvu,setMvu]=useState<{error:string|null;busy:boolean}>({error:null,busy:false})
-  const retryMvu=useRef<()=>void>(()=>{})
-  const mvuStatus=useCallback((value:{error:string|null;busy:boolean;retry:()=>void})=>{retryMvu.current=value.retry;setMvu(current=>current.error===value.error&&current.busy===value.busy?current:{error:value.error,busy:value.busy})},[])
-  const bundle=loader.state.status==='ready'?loader.state.value:undefined
+  const [mvuState,setMvu]=useState<{version:string;error:string|null;busy:boolean}>({version:runtimeVersion,error:null,busy:false})
+  const mvu=mvuState.version===runtimeVersion?mvuState:{error:null,busy:false}
+  const retryMvu=useRef<{version:string;run:()=>void}>({version:'',run:()=>{}})
+  const mvuStatus=useCallback((value:{error:string|null;busy:boolean;retry:()=>void})=>{if(currentRuntime.current!==runtimeVersion)return;retryMvu.current={version:runtimeVersion,run:value.retry};setMvu(current=>current.version===runtimeVersion&&current.error===value.error&&current.busy===value.busy?current:{version:runtimeVersion,error:value.error,busy:value.busy})},[runtimeVersion])
+  useEffect(()=>{
+    if(bundle)return
+    // 重读期间 iframe 与 MVU 执行器已卸载；即使资产修订不变，也不能沿用旧运行时的就绪或故障。
+    setReady({});setFailures({});retryMvu.current={version:'',run:()=>{}}
+  },[bundle])
   useEffect(()=>bundle?watchHelperScripts(sessionId,bundle.storyId,()=>loader.reload()):undefined,[sessionId,bundle?.storyId,loader.reload])
   const libraries:HelperScriptAsset[]=bundle?(bundle.libraries??[{target:{type:'character',cardId:bundle.cardId},revision:bundle.revision,trees:bundle.trees}]):[]
   let scripts:HelperScript[]=[],scriptError:string|null=null
@@ -42,18 +52,18 @@ export function HelperScripts(props:{remote:TavernRemote;sessionId:string;sessio
   },[sessionId,bundle?.storyId,waitingForMessage,loader.reload])
   const scriptVersion=JSON.stringify(libraries.map(library=>[library.target,library.revision]))
   useEffect(()=>watchHelperScriptAssets(target=>{if(libraries.some(library=>JSON.stringify(library.target)===JSON.stringify(target)))loader.reload()}),[loader.reload,scriptVersion,bundle?.cardId])
-  const allReady=!scriptError&&!bundle?.runtimeError&&scripts.length<=32&&scripts.every(script=>ready[script.id]===scriptVersion&&failures[script.id]?.version!==scriptVersion)
+  const allReady=!scriptError&&!bundle?.runtimeError&&scripts.length<=32&&scripts.every(script=>ready[script.id]===runtimeVersion&&failures[script.id]?.version!==runtimeVersion)
   // 超预算时一个脚本都不会挂载：状态必须显式报错，否则谎报 running 且 MVU 永远「等待脚本就绪」。
   const scriptsBudget=bundle?.enabled===true&&scripts.length>32
   const status:ScriptRuntimeStatus={sessionId,cardId:bundle?.cardId??'',nativeMvu:bundle?.helperMvu===true,mvuBusy:mvu.busy,mvuError:mvu.error??undefined,
-    state:loader.state.status==='error'||scriptError||bundle?.runtimeError||mvu.error||scriptsBudget||scripts.some(script=>failures[script.id]?.version===scriptVersion)?'error':!bundle?'loading':!bundle.enabled?'disabled':waitingForMessage?'waiting':'running',
+    state:loader.state.status==='error'||scriptError||bundle?.runtimeError||mvu.error||scriptsBudget||scripts.some(script=>failures[script.id]?.version===runtimeVersion)?'error':!bundle?'loading':!bundle.enabled?'disabled':waitingForMessage?'waiting':'running',
     error:loader.state.status==='error'?loader.state.message:scriptError??bundle?.runtimeError??(scriptsBudget?t('speech.scriptsBudget'):undefined),
-    scripts:scripts.map(script=>({id:script.id,name:script.name||script.id,native:isNativeMvuFramework(script.content),state:failures[script.id]?.version===scriptVersion?'error':ready[script.id]===scriptVersion?'ready':'loading',error:failures[script.id]?.version===scriptVersion?failures[script.id]?.error:undefined}))}
+    scripts:scripts.map(script=>({id:script.id,name:script.name||script.id,native:isNativeMvuFramework(script.content),state:failures[script.id]?.version===runtimeVersion?'error':ready[script.id]===runtimeVersion?'ready':'loading',error:failures[script.id]?.version===runtimeVersion?failures[script.id]?.error:undefined}))}
   const statusKey=JSON.stringify(status)
-  useEffect(()=>{publishScriptStatus(owner.current,status,()=>retryMvu.current())},[statusKey])
+  useEffect(()=>{publishScriptStatus(owner.current,status,()=>{if(retryMvu.current.version===currentRuntime.current)retryMvu.current.run()})},[statusKey])
   useEffect(()=>()=>clearScriptStatus(owner.current,sessionId),[sessionId])
   return <span className="dsh-tavern-scriptHost" hidden>
-    {bundle?.enabled&&bundle.helperMvu&&bundle.snapshot&&<HelperMvuRunner key={scriptVersion} remote={remote} sessionId={sessionId} storyId={bundle.storyId} snapshot={bundle.snapshot} ready={allReady} onStatus={mvuStatus} onCancel={props.onCancel}/>}
+    {bundle?.enabled&&bundle.helperMvu&&bundle.snapshot&&<HelperMvuRunner key={runtimeVersion} remote={remote} sessionId={sessionId} storyId={bundle.storyId} snapshot={bundle.snapshot} ready={allReady} onStatus={mvuStatus} onCancel={props.onCancel}/>}
     <div>
       {bundle?.enabled&&!bundle.runtimeError&&!scriptError&&bundle.snapshot&&bundle.messageId!==null&&scripts.length<=32&&scripts.map(script=>{
         const snapshot=bundle.snapshot!,messageId=bundle.messageId!
@@ -63,10 +73,10 @@ export function HelperScripts(props:{remote:TavernRemote;sessionId:string;sessio
           persistenceLabels:{saving:t('speech.helperSaving'),saved:t('speech.helperSaved'),failed:t('speech.helperSaveFailed'),refresh:t('speech.helperRefresh')},
           helperLabels:{diagnostics:t('speech.helperMessages'),unsupported:t('speech.helperUnsupported')},
           variableLabels:cardVariableLabels(t,t('speech.helperDataNote'))})
-        return <section key={scriptVersion+script.id}>
+        return <section key={runtimeVersion+script.id}>
           {<SpeechHtmlFrame srcDoc={srcDoc} title={script.name||script.id} widget compact
-            onScriptError={error=>setFailures(current=>({...current,[script.id]:{version:scriptVersion,error}}))}
-            onScriptReady={value=>setReady(current=>current[script.id]===(value?scriptVersion:'')?current:{...current,[script.id]:value?scriptVersion:''})}
+            onScriptError={error=>{if(currentRuntime.current===runtimeVersion)setFailures(current=>({...current,[script.id]:{version:runtimeVersion,error}}))}}
+            onScriptReady={value=>{if(currentRuntime.current===runtimeVersion)setReady(current=>current[script.id]===(value?runtimeVersion:'')?current:{...current,[script.id]:value?runtimeVersion:''})}}
             helperBinding={{sessionId,storyId:snapshot.storyId}}
             onMessageBranch={props.sessions?async branch=>{await openChildSession(props.sessions!,branch.childSessionId,branch.title,props.sessionId)}:undefined}
             onMessageEdit={async request=>{const result=await remote.editHelperMessages({...request,sessionId,messageId});if(!result.ok)throw new Error(result.error.message);if(result.value.snapshot)notifyHelperStory(sessionId,result.value.snapshot.storyId);return result.value}}

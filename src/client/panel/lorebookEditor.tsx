@@ -457,6 +457,7 @@ function EntryForm(props: {
       <label className="dsh-tavern-field">
         <span className="dsh-tavern-fieldLabel">{t('lorebookEditor.form.keys')}</span>
         <ListInput
+          preserveRegex
           className="dsh-tavern-input dsh-tavern-codeFont"
           style={{ width: '100%', height: 36, padding: '0 10px', fontSize: 13, boxSizing: 'border-box' }}
           value={entry.keys}
@@ -523,6 +524,7 @@ function EntryForm(props: {
           <label className="dsh-tavern-field">
             <span className="dsh-tavern-fieldLabel">{t('lorebookEditor.form.secondaryKeys')}</span>
             <ListInput
+              preserveRegex
               className="dsh-tavern-input dsh-tavern-codeFont"
               style={{ width: '100%', height: 36, padding: '0 10px', fontSize: 13, boxSizing: 'border-box' }}
               value={entry.secondaryKeys}

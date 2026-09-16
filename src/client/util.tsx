@@ -7,6 +7,7 @@ import { Children, cloneElement, createContext, isValidElement, useCallback, use
 import { Button, IconChevronDownOutline14, IconSearchOutline16, IconUserOutline16, Menu, Modal, Toast, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { AriaAttributes, CSSProperties, ReactNode } from 'react'
 import type { CardRegexScript } from '../core/types.js'
+import { MAX_WI_KEY_CHARS } from '../core/worldbook.js'
 import { useT } from './i18n.js'
 import type { Envelope } from './types.js'
 import './styles.js'
@@ -751,6 +752,50 @@ export function splitListText(text: string): string[] {
   return text.split(/[,，\n]/).map((item) => item.trim()).filter(Boolean)
 }
 
+/** 世界书关键词中的正则字面量只做有界词法扫描；量词/字符类内的逗号不分项，绝不编译或执行。 */
+export function splitRegexListText(text: string): string[] {
+  const separator = (char: string | undefined) => char === ',' || char === '，' || char === '\n'
+  const regexEnd = (start: number): number => {
+    let escaped = false, inClass = false
+    const limit = Math.min(text.length, start + MAX_WI_KEY_CHARS)
+    for (let index = start + 1; index < limit; index++) {
+      const char = text[index]!
+      if (char === '\n' || char === '\r') return -1
+      if (escaped) { escaped = false; continue }
+      if (char === '\\') { escaped = true; continue }
+      if (char === '[') inClass = true
+      else if (char === ']') inClass = false
+      else if (char === '/' && !inClass) {
+        let end = index + 1
+        while (end < limit && text[end]! >= 'a' && text[end]! <= 'z') end++
+        let next = end
+        while (next < text.length && !separator(text[next]) && text[next]!.trim() === '') next++
+        if (next === text.length || separator(text[next])) return end
+      }
+    }
+    return -1
+  }
+  const items: string[] = []
+  let start = 0, atStart = true
+  for (let index = 0; index < text.length; index++) {
+    const char = text[index]!
+    if (separator(char)) {
+      const item = text.slice(start, index).trim()
+      if (item) items.push(item)
+      start = index + 1; atStart = true
+    } else if (atStart && char.trim() !== '') {
+      atStart = false
+      if (char === '/') {
+        const end = regexEnd(index)
+        if (end >= 0) index = end - 1
+      }
+    }
+  }
+  const last = text.slice(start).trim()
+  if (last) items.push(last)
+  return items
+}
+
 export function joinListText(items: readonly string[]): string {
   return items.join(', ')
 }
@@ -760,11 +805,12 @@ export function joinListText(items: readonly string[]): string {
  * 若把业务数组重新拼接成受控值，用户键入的分隔符和尾随空格会被立即吞掉，无法输入第二项。
  * 只有业务值与当前文本的解析结果不一致（切换条目、放弃修改、恢复草稿）时才采用外部值。
  */
-export function ListInput(props: { value: readonly string[]; onChange: (items: string[]) => void; className?: string; style?: CSSProperties; placeholder?: string }) {
+export function ListInput(props: { value: readonly string[]; onChange: (items: string[]) => void; className?: string; style?: CSSProperties; placeholder?: string; preserveRegex?: boolean }) {
   const label = useContext(ControlLabel)
   const [text, setText] = useState(() => joinListText(props.value))
+  const split = props.preserveRegex ? splitRegexListText : splitListText
   const external = joinListText(props.value)
-  const shown = joinListText(splitListText(text)) === external ? text : external
+  const shown = joinListText(split(text)) === external ? text : external
   return (
     <input
       aria-labelledby={label?.labelId}
@@ -775,7 +821,7 @@ export function ListInput(props: { value: readonly string[]; onChange: (items: s
       placeholder={props.placeholder}
       onChange={(e) => {
         setText(e.target.value)
-        props.onChange(splitListText(e.target.value))
+        props.onChange(split(e.target.value))
       }}
     />
   )

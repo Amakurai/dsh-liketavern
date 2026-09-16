@@ -145,6 +145,14 @@ describe('lastCharMessage', () => {
 })
 
 describe('setvar / getvar / 注释', () => {
+  it('stat_data 只读快照读取属于本轮宏，普通变量名仍可用于稳定规则', () => {
+    for (const text of ['{{getvar::stat_data}}', '{{ getlocalvar :: stat_data.hp }}', '{{getglobalvar::stat_data["hp"]}}']) {
+      expect(hasTurnLocalMacros(text)).toBe(true)
+    }
+    expect(hasTurnLocalMacros('{{getvar::stat_database}}')).toBe(false)
+    expect(hasTurnLocalMacros('{{getvar::writingStyle}}')).toBe(false)
+  })
+
   it('同一次调用内 set 后 get', () => {
     const c: MacroContext = { ...ctx, store: new Map() }
     expect(expandMacros('{{setvar::wordsCloud::不少于1500}}正文{{getvar::wordsCloud}}字', c)).toBe('正文不少于1500字')

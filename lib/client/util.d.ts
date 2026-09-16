@@ -224,6 +224,8 @@ export declare function NullableNumInput(props: {
 }): import("react").JSX.Element;
 /** 以逗号或换行分隔的字符串列表。全角逗号与半角逗号等价，空项忽略。 */
 export declare function splitListText(text: string): string[];
+/** 世界书关键词中的正则字面量只做有界词法扫描；量词/字符类内的逗号不分项，绝不编译或执行。 */
+export declare function splitRegexListText(text: string): string[];
 export declare function joinListText(items: readonly string[]): string;
 /**
  * 关键词/标签这类列表输入：输入框持有原始文本，解析结果提交给业务状态。
@@ -236,5 +238,6 @@ export declare function ListInput(props: {
     className?: string;
     style?: CSSProperties;
     placeholder?: string;
+    preserveRegex?: boolean;
 }): import("react").JSX.Element;
 export {};

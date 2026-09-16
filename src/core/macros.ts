@@ -239,6 +239,8 @@ export function expandIdentityMacros(text: string, ctx: Pick<MacroContext, 'char
 /** 条目是否含本轮才稳定的宏（应进 turnContext，避免打穿 standing KV）。 */
 export function hasTurnLocalMacros(text: string): boolean {
   if (text.includes('<%')) return true
+  // 原生 MVU 的 stat_data 是轮初剧情快照；读取它的宏和 EJS 一样不能跨轮钉死。
+  if (/\{\{\s*(?:getvar|getlocalvar|getglobalvar)\s*::\s*stat_data(?:[.\[]|\s*\}\})/i.test(text)) return true
   return /\{\{\s*(outlet::|outletPromptsInjected:|lastusermessage|lastmessage|last_user_message|lastcharmessage|last_char_message|time|date|datetime|weekday|random\s*:|pick\s*:)/i.test(text)
 }
 

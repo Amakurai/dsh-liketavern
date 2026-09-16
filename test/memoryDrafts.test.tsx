@@ -99,3 +99,23 @@ it('恢复已选择的初始状态，不因省略 undefined 又回到聊天入�
   await click('保存笔记')
   expect(f.saveJournal).toHaveBeenCalledWith({ cardId: 'card-a', storyId: undefined, text: '初始状态草稿' })
 })
+
+it('保存世界变化期间冻结完整表单，失败保留原稿并恢复编辑', async () => {
+  const key = contextKey('story-a')
+  const f = fixture({ 'memory:cardId': 'card-a', 'memory:storyId': 'story-a', [`${key}:tab`]: 'delta',
+    [`${key}:deltaType`]: 'update', [`${key}:deltaRef`]: '旧事实', [`${key}:deltaKeys`]: '角色, 地点', [`${key}:deltaContent`]: '修订事实' })
+  const pending = Promise.withResolvers<Awaited<ReturnType<TavernRemote['addWorldDelta']>>>()
+  const addWorldDelta = vi.fn(() => pending.promise)
+  await mount(component({ ...f.remote, addWorldDelta }))
+  const save = () => view!.root.findAllByType(Btn).find(button => button.props.children === '添加世界状态')!
+  await act(async () => save().props.onClick())
+  expect(addWorldDelta).toHaveBeenCalledWith({ cardId: 'card-a', storyId: 'story-a', type: 'update', ref: '旧事实', keys: ['角色', '地点'], content: '修订事实' })
+  expect(view!.root.findAllByType(Select).every(field => field.props.disabled)).toBe(true)
+  expect(view!.root.findAllByType('input').every(field => field.props.disabled)).toBe(true)
+  expect(view!.root.findByType('textarea').props.disabled).toBe(true)
+  await act(async () => pending.reject(new Error('保存中断')))
+  expect(view!.root.findAllByType('input').map(field => field.props.value)).toEqual(['旧事实', '角色, 地点'])
+  expect(view!.root.findByType('textarea').props.value).toBe('修订事实')
+  expect(view!.root.findAllByType('input').every(field => !field.props.disabled)).toBe(true)
+  expect(save().props.disabled).toBe(false)
+})

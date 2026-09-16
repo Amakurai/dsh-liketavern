@@ -381,6 +381,7 @@ function MemoryContextSection(props: { remote: TavernRemote; cardId: string; sto
                     <Select
                       size="md"
                       value={deltaType}
+                      disabled={busy}
                       onChange={(v) => setDeltaType(v as 'add' | 'update' | 'invalidate')}
                       options={[
                         { value: 'add', label: t(DELTA_TYPE_KEY.add) },
@@ -392,7 +393,7 @@ function MemoryContextSection(props: { remote: TavernRemote; cardId: string; sto
                   {(deltaType === 'update' || deltaType === 'invalidate') && (
                     <label className="dsh-tavern-field">
                       <span className="dsh-tavern-fieldLabel">{t('memory.deltaRef')}</span>
-                      <input className="dsh-tavern-input" value={deltaRef} onChange={(e) => setDeltaRef(e.target.value)} />
+                      <input className="dsh-tavern-input" disabled={busy} value={deltaRef} onChange={(e) => setDeltaRef(e.target.value)} />
                     </label>
                   )}
                 </div>
@@ -406,7 +407,7 @@ function MemoryContextSection(props: { remote: TavernRemote; cardId: string; sto
                 />
                 <label className="dsh-tavern-field" style={{ marginTop: 8 }}>
                   <span className="dsh-tavern-fieldLabel">{t('memory.deltaKeys')}</span>
-                  <input className="dsh-tavern-input" value={deltaKeys} onChange={(e) => setDeltaKeys(e.target.value)} />
+                  <input className="dsh-tavern-input" disabled={busy} value={deltaKeys} onChange={(e) => setDeltaKeys(e.target.value)} />
                 </label>
                 <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
                   <Btn primary disabled={busy || !deltaContent.trim()} onClick={() => void addDelta()}>{t('memory.addDelta')}</Btn>

@@ -73,6 +73,28 @@ it('更晚开始的楼层叠写同一文件时仍拒绝越过它撤销', async (
   expect(await shared.readText('memory/m1.md')).toBe('原文')
 })
 
+it.each(['legacy', 'text-to-bytes', 'bytes-to-text'] as const)('不同快照编码仍识别相同文件字节的后继依赖：%s', async (mode) => {
+  await shared.writeText('journal.md', '原文')
+  await wal.beginFloor('s#t1')
+  if (mode === 'legacy') {
+    await wal.record('s#t1', 'journal.md', '原文')
+    await shared.writeText('journal.md', '待撤销事实')
+    await wal.recordAfter('s#t1', 'journal.md', '待撤销事实')
+  } else if (mode === 'bytes-to-text') {
+    await shared.withFloor('s#t1').writeBytes('journal.md', Buffer.from('待撤销事实'))
+  } else await shared.withFloor('s#t1').writeText('journal.md', '待撤销事实')
+  await wal.commitFloor('s#t1')
+  await wal.beginFloor('other#t1')
+  if (mode === 'text-to-bytes') await shared.withFloor('other#t1').writeBytes('journal.md', Buffer.from('后续修订'))
+  else await shared.withFloor('other#t1').writeText('journal.md', '后续修订')
+  await wal.commitFloor('other#t1')
+
+  await expect(wal.rollbackFloor('s#t1', root)).rejects.toThrow('后继依赖')
+  expect(await shared.readText('journal.md')).toBe('后续修订')
+  await wal.rollbackAfter(['s#t1', 'other#t1'], root)
+  expect(await shared.readText('journal.md')).toBe('原文')
+})
+
 it.each([false, true])('更早开始但更晚写入的交错楼层仍是后继依赖（已提交：%s）', async (committed) => {
   await wal.beginFloor('other#t1')
   await new Promise((resolve) => setTimeout(resolve, 2))

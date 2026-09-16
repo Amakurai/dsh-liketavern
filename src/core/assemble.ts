@@ -260,10 +260,28 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
   const originalHistory = new Set(history)
   const historyDepth = new Map(history.map((message,index)=>[message,history.length-index-1]))
   const processedHistory = new Map<ChatMessage,string>()
-  // 宏引用含脚本的卡字段时同样属于动态文本，不得钉进 standing。
-  const dynamic = (text: string): boolean => hasTurnLocalMacros(text) || hasEjs(text)
-    || /\{\{\s*(description|personality|scenario|persona|firstmessage|charfirstmessage)\s*\}\}/i.test(text)
-      && [macroCtx.description, macroCtx.personality, macroCtx.scenario, macroCtx.persona, macroCtx.firstMessage].some(t => t && hasEjs(t))
+  // 字段与 original 可继续引用其它字段：沿实际依赖识别本轮宏，避免先用 standing
+  // 的空历史/时钟展开后钉死。每个字段至多访问一次，循环引用不执行宏也不会无限递归。
+  const dynamic = (text: string, ctx: MacroContext = macroCtx): boolean => {
+    const fields: Record<string, string | undefined> = {
+      description: ctx.description, personality: ctx.personality, scenario: ctx.scenario,
+      persona: ctx.persona, firstmessage: ctx.firstMessage, charfirstmessage: ctx.firstMessage,
+      original: ctx.vars?.original,
+    }
+    const pending = [text]
+    const visited = new Set<string>()
+    while (pending.length > 0) {
+      const current = pending.pop()!
+      if (hasTurnLocalMacros(current) || hasEjs(current)) return true
+      for (const match of current.matchAll(/\{\{\s*(description|personality|scenario|persona|firstmessage|charfirstmessage|original)\s*\}\}/gi)) {
+        const name = match[1]!.toLowerCase()
+        if (visited.has(name)) continue
+        visited.add(name)
+        if (fields[name]) pending.push(fields[name])
+      }
+    }
+    return false
+  }
   const outlets: Record<string, string> = {}
   if (wi) {
     for (const [name, acts] of Object.entries(wi.outlets)) {
@@ -288,7 +306,7 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
     lastCharMessage: '',
   }
   const expandStanding = (text: string, ctx: MacroContext = standingCtx, source = text) => {
-    const effective = dynamic(text) ? { ...ctx, ...macroCtx, vars: { ...macroCtx.vars, ...(ctx.vars?.original === undefined ? {} : { original: ctx.vars.original }) } } : ctx
+    const effective = dynamic(text, ctx) ? { ...ctx, ...macroCtx, vars: { ...macroCtx.vars, ...(ctx.vars?.original === undefined ? {} : { original: ctx.vars.original }) } } : ctx
     const out = expandMacros(renderTemplate(expandMacros(text, effective), source, effective), effective)
     for (const [k, v] of standingStore) {
       if (!turnStore.has(k)) turnStore.set(k, v)
@@ -318,7 +336,7 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
   }
   const definition = (role: ChatRole, raw: string, group = characterDefinitionMessages, ctx = standingCtx, source = raw): ChatMessage => {
     const message = trackedMessage(role, expandStanding(raw, ctx, source), group)
-    return dynamic(raw) ? asTurn(message) : message
+    return dynamic(raw, ctx) ? asTurn(message) : message
   }
   const skipScript = (label: string, text: string): boolean => {
     if (hasEjs(text) && input.renderTemplate) return false

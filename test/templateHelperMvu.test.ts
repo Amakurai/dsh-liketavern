@@ -149,6 +149,24 @@ it('真实剧情 MVU 更新进入下一轮 EJS/macros，同轮和重启恢复保
   expect((await loadHelperState(f.ws.fs)).scopes[scope(f.greeting.id)]?.stat_data).toEqual({ hp: 12 })
 })
 
+it('纯 stat_data 宏随剧情更新进入 turn，不能被 standing 钉死到第一轮', async () => {
+  const f = await fixture('HP={{getvar::stat_data.hp}};JSON={{getlocalvar::stat_data}};BRACKET={{getglobalvar::stat_data[hp]}}')
+  await f.begin(1)
+  const first = (await f.run())!
+  expect(first.turnContext).toContain('HP=10;JSON={"hp":10};BRACKET=10')
+  expect(first.standing).not.toContain('HP=')
+  f.state.pinStanding('s1', 'normal', first.standingKey, first.standing)
+  await writeHelper(f.ws.fs, 's1#t1', f.greeting.id, 12)
+  expect(await f.run()).toBe(first)
+  await f.end(1)
+  await f.begin(2)
+  const next = (await f.run())!
+  const pinned = f.state.pinStanding('s1', 'normal', next.standingKey, next.standing)
+  expect(pinned.reused).toBe(true)
+  expect(pinned.text).not.toContain('HP=')
+  expect(next.turnContext).toContain('HP=12;JSON={"hp":12};BRACKET=12')
+})
+
 it('预览只读，当前变量可继承模型裁剪的原始消息但历史投影与同角色其他剧情保持隔离', async () => {
   const f = await fixture()
   const hidden = createAssistantMessage({ content: [{ type: 'text', text: '不可见' }] })

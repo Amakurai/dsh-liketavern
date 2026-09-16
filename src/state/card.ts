@@ -536,7 +536,10 @@ export function applyCharacterPatch(
     >
   >,
 ): CharacterCard {
-  const next: CharacterCard = { ...card, ...patch }
+  // RPC 组装补丁时会显式带上未传字段的 undefined；它表示「未修改」，
+  // 不能覆盖旧值并在 JSON 序列化时删除整片角色字段。空串、空数组与 null 仍允许清空。
+  const definedPatch = Object.fromEntries(Object.entries(patch).filter(([, value]) => value !== undefined))
+  const next: CharacterCard = { ...card, ...definedPatch }
   const extensions: Record<string, unknown> = { ...next.extensions }
   if (next.depthPrompt) {
     extensions.depth_prompt = {

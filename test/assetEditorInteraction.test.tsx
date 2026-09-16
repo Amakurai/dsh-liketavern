@@ -20,6 +20,8 @@ import type { Envelope, TavernRemote } from '../src/client/types.js'
 import { resolveConfig, type TavernConfigRaw } from '../src/node/config.js'
 import { TavernService } from '../src/node/service.js'
 import { TavernState } from '../src/node/state.js'
+import { isolated } from '../src/node/isolated.js'
+import { DEFAULT_WI_SETTINGS, EMPTY_TIMER_STATE } from '../src/core/types.js'
 
 vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
   Button: (props: { children?: ReactNode }) => <button>{props.children}</button>,
@@ -158,6 +160,29 @@ it('世界书新建失败后原地重试，实际目录只新增一次目标文�
   expect((await f.service.listLorebooks({})).items).toEqual(['港口重试'])
   expect((await f.service.getLorebook({ name: '港口重试' })).json).toEqual({ name: '港口重试', entries: {} })
   expect(f.remote.importLorebook).toHaveBeenCalledTimes(2)
+})
+
+/** 世界书编辑经真实文件存储回读，并在隔离 worker 内验证含逗号的正则主/次级键仍能触发。 */
+it('已有正则关键词追加普通词后保存，不拆坏量词与字符类中的逗号', async () => {
+  const f = await fixture(), name = '正则关键词', primary = '/\\d{1,3}/', secondary = '/coin[,，]gold/i'
+  await f.service.importLorebook({ name, json: { entries: { 1: { uid: 1, key: [primary], keysecondary: [secondary],
+    selective: true, selectiveLogic: 0, content: '正则命中后的设定', disable: false, constant: false } } } })
+  f.remote.listLorebooks = vi.fn(async () => ok(await f.service.listLorebooks({})))
+  f.remote.getLorebook = vi.fn(async request => ok(await f.service.getLorebook(request)))
+  f.remote.saveLorebook = vi.fn(async request => ok(await f.service.saveLorebook(request)))
+  const view = await render(<LorebooksSection remote={f.remote}/>)
+  await settle(() => {}, () => completed(f.remote.listLorebooks))
+  await settle(() => view.root.findByProps({ className: 'dsh-tavern-tile' }).props.onClick(), () => completed(f.remote.getLorebook))
+  const input = (placeholder: string) => view.root.findAllByType('input').find(item => item.props.placeholder === placeholder)!
+  await act(async () => input(t('lorebookEditor.form.keysPlaceholder')).props.onChange({ target: { value: `${primary}, 港口` } }))
+  await act(async () => input(t('lorebookEditor.form.secondaryKeysPlaceholder')).props.onChange({ target: { value: `${secondary}, 船` } }))
+  await settle(() => view.root.findAllByType(Btn).find(item => item.props.children === '保存')!.props.onClick(), () => completed(f.remote.saveLorebook))
+  const entries = await f.state.loadLorebookEntries(name, 'global')
+  expect(entries[0]!.keys).toEqual([primary, '港口'])
+  expect(entries[0]!.secondaryKeys).toEqual([secondary, '船'])
+  const result = await isolated('wi', { entries, messages: [{ role: 'user', content: '24 COIN,GOLD' }],
+    settings: DEFAULT_WI_SETTINGS, timerState: EMPTY_TIMER_STATE, contextWindowTokens: 8192, reservedTokens: 0, seed: 1 })
+  expect(result.activated.map(item => item.entry.uid)).toEqual(['1'])
 })
 
 describe('角色卡导入失败恢复', () => {

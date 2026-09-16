@@ -108,6 +108,16 @@ async function isDir(p: string): Promise<boolean> {
 // Wal
 // ---------------------------------------------------------------------------
 
+/** 快照统一为实际字节的 base64；旧版省略 utf8 标签或使用 before 前缀也必须得到相同身份。 */
+function snapshotBytes(rec: RecordLine, side: 'before' | 'after'): string | null {
+  const value = rec[side] ?? null
+  if (value === null) return null
+  const encoding = side === 'before' ? rec.beforeEncoding : rec.afterEncoding
+  if (encoding === 'base64') return value
+  if (side === 'before' && encoding === undefined && value.startsWith(WAL_BINARY_MARK)) return value.slice(WAL_BINARY_MARK.length)
+  return Buffer.from(value).toString('base64')
+}
+
 /**
  * 两条世界状态快照是否改动了同一批 id。快照来自正文原样镜像，而正文读写（WorldDeltaStore、undoWorldDelta）
  * 都刻意保留无法解析的行；这里同样只按能解析出字符串 id 的行比较，坏行不能让预检抛出原始解析错误。
@@ -119,7 +129,11 @@ function deltaChangesOverlap(a: RecordLine, b: RecordLine): boolean {
       try { id = (JSON.parse(line) as { id?: unknown } | null)?.id } catch { return [] }
       return typeof id === 'string' ? [[id, line] as const] : []
     }))
-    const before = rows(rec.before), after = rows(rec.after)
+    const text = (side: 'before' | 'after') => {
+      const bytes = snapshotBytes(rec, side)
+      return bytes === null ? null : Buffer.from(bytes, 'base64').toString('utf8')
+    }
+    const before = rows(text('before')), after = rows(text('after'))
     return new Set([...before.keys(), ...after.keys()].filter((id) => before.get(id) !== after.get(id)))
   }
   const ids = changed(a)
@@ -128,7 +142,7 @@ function deltaChangesOverlap(a: RecordLine, b: RecordLine): boolean {
 
 /** before 与 after 字节相同的记录：恢复时不改文件，既不会被复活，也不能作为别的楼层的依赖锚点。 */
 function isNoopRecord(rec: RecordLine): boolean {
-  return 'after' in rec && rec.before === rec.after && (rec.beforeEncoding ?? 'utf8') === (rec.afterEncoding ?? 'utf8')
+  return 'after' in rec && snapshotBytes(rec, 'before') === snapshotBytes(rec, 'after')
 }
 
 export class Wal {
@@ -176,7 +190,13 @@ export class Wal {
         throw error
       })
       const record: RecordLine = { seq: state.seq + 1, path: path.replace(/\\/g, '/'), before, after, beforeEncoding, afterEncoding }
-      await atomicWrite(file, text + (text && !text.endsWith('\n') ? '\n' : '') + JSON.stringify(record) + '\n')
+      try {
+        await atomicWrite(file, text + (text && !text.endsWith('\n') ? '\n' : '') + JSON.stringify(record) + '\n')
+      } catch (error) {
+        // 替换可能已经完成、仅清理临时文件失败；下一次必须重读磁盘，不能复用旧序号。
+        this.states.delete(dirName)
+        throw error
+      }
       state.seq = record.seq
       state.paths.add(record.path)
     })
@@ -397,7 +417,12 @@ export class Wal {
       before,
       ...(beforeEncoding && before !== null ? { beforeEncoding } : {}),
     }
-    await appendFile(join(dir, 'records.jsonl'), JSON.stringify(line) + '\n', 'utf8')
+    try {
+      await appendFile(join(dir, 'records.jsonl'), JSON.stringify(line) + '\n', 'utf8')
+    } catch (error) {
+      this.states.delete(dirName)
+      throw error
+    }
     state.seq = seq
     state.paths.add(normPath)
   }
@@ -487,12 +512,10 @@ export class Wal {
     for (let i = progress.next; i >= 0; i--) {
       const rec = records[i]!
       const current = await currentBytes(rec.path)
-      let desired = rec.before === null ? null : rec.beforeEncoding === 'base64' ? rec.before
-        : rec.beforeEncoding === undefined && rec.before.startsWith(WAL_BINARY_MARK) ? rec.before.slice(WAL_BINARY_MARK.length)
-        : Buffer.from(rec.before).toString('base64')
+      let desired = snapshotBytes(rec, 'before')
       if ('after' in rec) {
         const after = rec.after ?? null
-        const expected = after === null ? null : rec.afterEncoding === 'base64' ? after : Buffer.from(after).toString('base64')
+        const expected = snapshotBytes(rec, 'after')
         if (current !== expected) {
           if (rec.path === 'state/world-delta.jsonl' && rec.beforeEncoding !== 'base64' && rec.afterEncoding !== 'base64') {
             const merged = undoWorldDelta(rec.before, after, current === null ? null : Buffer.from(current, 'base64').toString('utf8'))
@@ -552,7 +575,7 @@ export class Wal {
         if (isNoopRecord(rec)) continue
         if (changes.some(({ rec: change, startedAt }) => (startedAt === null || !Number.isFinite(completedAt) || completedAt >= startedAt)
           && change.path === rec.path && (rec.path !== 'state/world-delta.jsonl' || deltaChangesOverlap(change, rec)) && 'after' in change && change.after !== null
-          && rec.before === change.after && rec.beforeEncoding === change.afterEncoding)) {
+          && snapshotBytes(rec, 'before') === snapshotBytes(change, 'after'))) {
           throw new Error(`WAL 存在未撤销的后继依赖：${floor.floor}（${rec.path}）；请从最新楼层依次回退`)
         }
       }

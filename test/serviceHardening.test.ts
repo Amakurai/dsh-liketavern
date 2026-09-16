@@ -116,6 +116,31 @@ function makeBinding(overrides: Partial<SessionBinding> = {}): SessionBinding {
   }
 }
 
+describe('角色卡局部保存', () => {
+  it('只修改描述时保留其它字段，重新读取和导出仍得到完整角色卡', async () => {
+    const original = makeCard({ name: '局部编辑', personality: '谨慎', firstMes: '初次见面',
+      alternateGreetings: ['另一个开场'], tags: ['标签'], depthPrompt: { prompt: '深度设定', depth: 2, role: 'system' } })
+    const { cardId, root: cardRoot } = await importCard(paths.characters, original)
+    await expect(service.saveCharacter({ cardId, description: '新描述' })).resolves.toEqual({ cardId, name: original.name })
+    const stored = JSON.parse(await readFile(join(cardRoot, 'card.json'), 'utf8'))
+    const { pngBytes: _png, raw: _raw, ...persistedFields } = original
+    expect(stored).toMatchObject({ ...persistedFields, description: '新描述' })
+    const fresh = new TavernState(paths, () => resolveConfig({}))
+    await fresh.init()
+    expect((await fresh.loadCharacter(cardId))?.card).toMatchObject({ name: original.name, description: '新描述',
+      personality: original.personality, firstMes: original.firstMes, alternateGreetings: original.alternateGreetings,
+      tags: original.tags, depthPrompt: original.depthPrompt })
+    expect((await fresh.exportCharacter(cardId)).json).toMatchObject({ data: { name: original.name,
+      description: '新描述', first_mes: original.firstMes, alternate_greetings: original.alternateGreetings,
+      extensions: { depth_prompt: original.depthPrompt } } })
+
+    // 显式空值仍表示用户清空字段；缺省字段继续保留。
+    await service.saveCharacter({ cardId, description: '', alternateGreetings: [], tags: [], depthPrompt: null })
+    expect((await state.loadCharacter(cardId))?.card).toMatchObject({ name: original.name, description: '',
+      firstMes: original.firstMes, alternateGreetings: [], tags: [], depthPrompt: null })
+  })
+})
+
 describe('角色收纳箱 service 契约', () => {
   it('收纳后从活动列表隐藏，历史绑定仍可读并能恢复', async () => {
     const { cardId } = await importCard(paths.characters, makeCard({ name: '灯塔守望者' }))

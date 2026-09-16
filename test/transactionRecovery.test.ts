@@ -132,6 +132,20 @@ describe('原子写入与失败恢复', () => {
     expect(await ws.fs.readText('journal.md')).toBe('原文')
   })
 
+  it('WAL 替换后报错再重试时重新读取日志序号，整层仍可恢复', async () => {
+    const { ws, fs, rollback } = await setup()
+    await ws.fs.writeText('journal.md', '原文')
+    await fs.writeText('journal.md', '第一稿')
+    fault.target = 'records.jsonl'; fault.afterRename = true
+    await expect(fs.writeText('journal.md', '第二稿')).rejects.toThrow('替换后崩溃')
+    expect(await ws.fs.readText('journal.md')).toBe('第一稿')
+    await fs.writeText('journal.md', '第三稿')
+    await ws.wal.commitFloor('s#t1')
+    await expect(ws.wal.validateFloor('s#t1')).resolves.toMatchObject({ committed: true })
+    await rollback()
+    expect(await ws.fs.readText('journal.md')).toBe('原文')
+  })
+
   it('活跃写路径不再依赖写完正文后补记 recordAfter', async () => {
     const { ws, fs, rollback } = await setup()
     await ws.fs.writeText('journal.md', '原文')

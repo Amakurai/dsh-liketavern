@@ -4,7 +4,7 @@
 
 **Tavern-style roleplay in DeepSeek Harness's `dsh web`, with character cards, lorebooks, and long-term memory.**
 
-**[v0.2.4](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.2.4) · Targets dsh `0.1.5-rc.2` · Node.js ≥ 24**
+**[v0.2.5](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.2.5) · Targets dsh `0.1.5-rc.2` · Node.js ≥ 24**
 
 [中文](./README.md) | English
 
@@ -34,7 +34,7 @@ If you are new to dsh, start with the [official documentation](https://deepseek-
 Run these commands to install a fixed release tag:
 
 ```bash
-dsh plugin --profile web add github:Amakurai/dsh-liketavern#v0.2.4
+dsh plugin --profile web add github:Amakurai/dsh-liketavern#v0.2.5
 dsh plugin --profile web list --depth 0
 ```
 
@@ -48,10 +48,10 @@ The repository includes compiled `lib/` files; a normal installation needs no ma
 
 ### Install a tarball
 
-Download `dsh-liketavern-0.2.4.tgz` from the [v0.2.4 Release](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.2.4), then run this command in the download directory:
+Download `dsh-liketavern-0.2.5.tgz` from the [v0.2.5 Release](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.2.5), then run this command in the download directory:
 
 ```bash
-dsh plugin --profile web add ./dsh-liketavern-0.2.4.tgz
+dsh plugin --profile web add ./dsh-liketavern-0.2.5.tgz
 ```
 
 Restart `dsh web` afterward. The release includes `SHA256SUMS.txt` to verify the download.

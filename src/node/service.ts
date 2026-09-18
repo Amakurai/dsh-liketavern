@@ -16,8 +16,8 @@ import type { SettingsScope } from '@deepseek-ai/dsh-settings'
 import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import { estimateTokens } from '../core/tokenize.js'
 import { isolated } from './isolated.js'
-import { presentRenderedOutput } from '../core/displaySanitize.js'
-import { disableInteractiveParts, splitTemplateDisplay, type TemplateDisplayPart } from '../core/templateDisplay.js'
+import { presentRenderedOutput, stripOpaqueDisplayMeta } from '../core/displaySanitize.js'
+import { disableInteractiveParts, splitTemplateDisplay, TEMPLATE_DISPLAY_PARTS_VERSION, type TemplateDisplayPart } from '../core/templateDisplay.js'
 import { expandIdentityMacros } from '../core/macros.js'
 import { DEFAULT_USER_NAME } from '../core/persona.js'
 import { isTavernGreetingEvent } from '../core/greetingLog.js'
@@ -511,6 +511,11 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
     if (cached && cached.hash === templateTextHash(text)) {
       named = expandIdentityMacros(cached.text, names)
       templateParts = cached.parts
+      // 旧投影会在逐片清理时永久丢掉 opener；完整已求值文本仍在，可只读重建安全展示而不重跑模板。
+      if (templateParts && cached.partsVersion !== TEMPLATE_DISPLAY_PARTS_VERSION) {
+        const legacyProjection = stripOpaqueDisplayMeta(cached.text)
+        if (legacyProjection !== cached.text) templateParts = splitTemplateDisplay(legacyProjection)
+      }
     }
     else if (hasEjs(named)) {
       const greeting = request.messageId !== undefined && displayEvents.some(event => Number(event.seq) === request.messageId && isTavernGreetingEvent(event))
@@ -545,7 +550,7 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
       if(presented.htmls.length) parts = splitTemplateDisplay(rendered)
     } else presented = { htmls: allowHtml ? parts.filter(part => part.kind === 'html').map(part => part.text) : [],
           text: parts.filter(part => part.kind === 'markdown').map(part => part.text).join('\n') || presentRenderedOutput(named, false).text }
-    const htmls = presented.htmls.map((h) => expandIdentityMacros(h, names))
+    const htmls = presented.htmls
     const greetings = (ws ? [ws.card.firstMes, ...ws.card.alternateGreetings] : []).map((g) =>
       expandIdentityMacros(g, names),
     )
@@ -556,7 +561,7 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
       ...(htmls.length && request.messageId !== undefined ? {helperScripts:await this.state.getSessionHelperScripts(request.sessionId,binding.storyId!),helperWorldbooks:await getHelperWorldbookContext(this.state,request.sessionId,binding.storyId!)} : {}),
       html: htmls[0] ?? null,
       htmls,
-      text: expandIdentityMacros(presented.text, names),
+      text: presented.text,
       interactiveCards: settings.interactiveCards,
       whitelist,
       greetings,

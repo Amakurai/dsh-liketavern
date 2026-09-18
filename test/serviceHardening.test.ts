@@ -480,6 +480,17 @@ it('纯文本回复携带当前剧情上下文，预览与关闭交互不暴露�
 
 /** 审查修复回归：版本检查与写入在同一锁内，模板回退不能改动任何剧情快照。 */
 describe('审查修复回归：服务边界', () => {
+  it('身份名称中的嵌套宏不在展示清理后再次展开注入机读块', async () => {
+    const { cardId } = await state.createCharacter('{{user}}')
+    const persona = await service.savePersona({ persona: { id: 'nested-macro-user', name: '<think>SECRET</think>VISIBLE', description: '', avatar: null } })
+    const session = Session.create('session-review-nested-identity' as Session['id'])
+    sessions.set(session.id, session)
+    await state.saveBinding(makeBinding({ sessionId: session.id, cardId, personaId: persona.id }))
+
+    const result = await service.renderOutputText({ sessionId: session.id, text: '{{char}}' })
+    expect(result.text).toBe('{{user}}')
+    expect(JSON.stringify({ parts: result.parts, html: result.html, htmls: result.htmls, text: result.text })).not.toContain('SECRET')
+  })
   it('陈旧的全字段保存被拒绝，重新读取版本后可以保存且不丢另一编辑器的正文', async () => {
     const { cardId } = await state.createCharacter('并发角色')
     const baseline = await service.getCharacterDetail({ cardId })
@@ -532,6 +543,70 @@ describe('审查修复回归：服务边界', () => {
       expect(result.text.indexOf('钥匙')).toBeLessThan(result.text.indexOf('后文'))
       if (cached) expect(result.parts?.map(part => part.kind)).toEqual(['markdown', 'markdown', 'markdown'])
     }
+    expect(await workspace.fs.readText('state/template.json')).toBe(before)
+    expect(session.snapshotEvents()).toEqual(history)
+  })
+  it('无版本旧缓存只有合法 HTML 注释时保留原卡面投影', async () => {
+    const { loadTemplateState, templateTextHash } = await import('../src/state/template.js')
+    const { cardId } = await state.createCharacter('旧注释卡面')
+    const session = Session.create('session-review-legacy-comment' as Session['id'])
+    sessions.set(session.id, session)
+    await state.saveBinding(makeBinding({ sessionId: session.id, cardId, interactiveCards: true }))
+    const binding = (await state.loadBinding(session.id))!, workspace = await state.storyWorkspace(cardId, binding.storyId)
+    const text = '<div><!--marker--><span>可见卡面</span></div>'
+    const message = session.append('assistant/message', { stream: [], turn: 0, step: 0, message: greetingMessage(text) }, { surfaceOp: 'append' })
+    const snapshot = await loadTemplateState(workspace.fs)
+    snapshot.outputs[String(message.seq)] = { hash: templateTextHash(text), text, parts: [{ kind: 'html', text }] }
+    await workspace.fs.writeText('state/template.json', JSON.stringify(snapshot))
+    const before = await workspace.fs.readText('state/template.json')
+
+    const result = await service.renderOutputText({ sessionId: session.id, messageId: message.seq, text })
+    expect(result.htmls).toEqual([text])
+    expect(result.parts).toEqual([{ kind: 'html', text }])
+    expect(await workspace.fs.readText('state/template.json')).toBe(before)
+  })
+  it.each([
+    { label: 'think 保留孤儿闭标签', tag: 'think', oldTail: '尾部秘密</think>中间', broken: undefined },
+    { label: 'UpdateVariable 连闭标签也已丢失', tag: 'UpdateVariable', oldTail: '尾部秘密中间', broken: undefined },
+    { label: '前置未闭合脚本不能遮蔽 think', tag: 'think', oldTail: '尾部秘密</think>中间', broken: '<script>window.x=1' },
+    { label: '前置未闭合注释不能遮蔽 think', tag: 'think', oldTail: '尾部秘密</think>中间', broken: '<!-- unclosed' },
+  ].flatMap(sample => [true, false].map(interactiveCards => ({ ...sample, interactiveCards }))))(
+  '旧缓存真实损坏片段从完整文本只读重建：$label，interactiveCards=$interactiveCards', async ({ tag, oldTail, broken, interactiveCards }) => {
+    const { loadTemplateState, templateTextHash } = await import('../src/state/template.js')
+    const { cardId } = await state.createCharacter('模板隐私边界')
+    const session = Session.create(`session-review-hidden-parts-${tag}-${interactiveCards}` as Session['id'])
+    sessions.set(session.id, session)
+    await state.saveBinding(makeBinding({ sessionId: session.id, cardId, interactiveCards }))
+    const binding = (await state.loadBinding(session.id))!, workspace = await state.storyWorkspace(cardId, binding.storyId)
+    const text = `${broken ? `${broken}\n` : ''}前文<${tag}><div>隐藏卡面</div>尾部秘密</${tag}>中间<div>可见卡面</div>后文`
+    const message = session.append('assistant/message', { stream: [], turn: 0, step: 0, message: greetingMessage(text) }, { surfaceOp: 'append' })
+    const snapshot = await loadTemplateState(workspace.fs)
+    // 模拟旧版本真实落盘结果：逐片清理已丢 opener，部分协议连 closer 也已丢失，且没有投影版本。
+    snapshot.outputs[String(message.seq)] = { hash: templateTextHash(text), text, parts: [
+      ...(broken ? [{ kind: 'html' as const, text: broken }] : []),
+      { kind: 'markdown', text: '前文' },
+      { kind: 'html', text: '<div>隐藏卡面</div>' },
+      { kind: 'markdown', text: oldTail },
+      { kind: 'html', text: '<div>可见卡面</div>' },
+      { kind: 'markdown', text: '后文' },
+    ] }
+    await workspace.fs.writeText('state/template.json', JSON.stringify(snapshot))
+    const before = await workspace.fs.readText('state/template.json'), history = session.snapshotEvents()
+
+    const result = await service.renderOutputText({ sessionId: session.id, messageId: message.seq, text })
+    const brokenComment = broken?.startsWith('<!--') ?? false
+    expect(result.htmls).toEqual(!broken && interactiveCards ? ['<div>可见卡面</div>'] : [])
+    expect(result.parts?.map(part => part.kind)).toEqual(brokenComment ? [] : broken ? ['markdown'] : interactiveCards
+      ? ['markdown', 'html', 'markdown'] : ['markdown', 'markdown', 'markdown'])
+    if (!brokenComment) {
+      expect(result.text).toContain('前文')
+      expect(result.text).toContain('中间')
+      expect(JSON.stringify(result)).toContain('<div>可见卡面</div>')
+      expect(result.text).toContain('后文')
+    }
+    const projection = JSON.stringify({ parts: result.parts, html: result.html, htmls: result.htmls, text: result.text })
+    expect(projection).not.toContain('隐藏卡面')
+    expect(projection).not.toContain('尾部秘密')
     expect(await workspace.fs.readText('state/template.json')).toBe(before)
     expect(session.snapshotEvents()).toEqual(history)
   })

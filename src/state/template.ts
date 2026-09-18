@@ -6,7 +6,7 @@ import { EMPTY_TIMER_STATE, type WITimerState } from '../core/types.js'
 import type { WorkspaceFs } from './workspaceFs.js'
 import { withWorkspaceLock } from './workspaceLock.js'
 import { parseTemplateGeneration, type TemplateGeneration } from './templateGeneration.js'
-import { parseTemplateDisplayParts, type TemplateDisplayPart } from '../core/templateDisplay.js'
+import { parseTemplateDisplayParts, TEMPLATE_DISPLAY_PARTS_VERSION, type TemplateDisplayPart } from '../core/templateDisplay.js'
 import { parseTemplateContinuation,resolveTemplateContinuation } from './templateContinuation.js'
 import { parseTemplateMessageVariables, type TemplateMessageVariables } from '../core/templateMessageVariables.js'
 import type { TemplateContinuation } from '../core/templateContinuation.js'
@@ -17,7 +17,7 @@ export interface TemplateState {
   variables: TemplateScopes
   messageVariables?:TemplateMessageVariables
   continuation?:TemplateContinuation
-  outputs: Record<string, { hash: string; text: string; parts?:TemplateDisplayPart[] }>
+  outputs: Record<string, { hash: string; text: string; parts?:TemplateDisplayPart[]; partsVersion?:typeof TEMPLATE_DISPLAY_PARTS_VERSION }>
   /** 与生成变量在同一次原子替换中提交；缺字段的旧状态继续读取独立定时文件。 */
   wiTimers?: Record<string, WITimerState>
   /** 未完成轮的闭包重放与冻结计划；完成后缩成归属回执，防止重启重复执行。 */
@@ -39,7 +39,10 @@ export async function loadTemplateState(fs: WorkspaceFs): Promise<TemplateState>
   for (const [key, value] of Object.entries(data.outputs)) {
     if (!/^\d+$/.test(key) || !value || typeof value !== 'object' || !('hash' in value) || typeof value.hash !== 'string'
       || !/^[a-f0-9]{64}$/.test(value.hash) || !('text' in value) || typeof value.text !== 'string') throw new Error('模板回复快照损坏')
-    outputs[key] = { hash: value.hash, text: value.text, ...('parts' in value ? {parts:parseTemplateDisplayParts(value.parts)} : {}) }
+    if ('partsVersion' in value && value.partsVersion !== TEMPLATE_DISPLAY_PARTS_VERSION) throw new Error('模板回复展示版本无效')
+    outputs[key] = { hash: value.hash, text: value.text,
+      ...('parts' in value ? {parts:parseTemplateDisplayParts(value.parts)} : {}),
+      ...('partsVersion' in value ? {partsVersion:TEMPLATE_DISPLAY_PARTS_VERSION} : {}) }
   }
   let wiTimers: TemplateState['wiTimers']
   if ('wiTimers' in data) {
@@ -70,6 +73,7 @@ async function writeTemplateState(fs: WorkspaceFs, state: TemplateState): Promis
     if (!/^\d+$/.test(key) || !output || typeof output!=='object' || typeof output.hash!=='string'
       || !/^[a-f0-9]{64}$/.test(output.hash) || typeof output.text!=='string') throw new Error('模板回复快照损坏')
     if (output.parts!==undefined) parseTemplateDisplayParts(output.parts)
+    if (output.partsVersion!==undefined && output.partsVersion!==TEMPLATE_DISPLAY_PARTS_VERSION) throw new Error('模板回复展示版本无效')
   }
   const raw = JSON.stringify(state)
   if (Buffer.byteLength(raw, 'utf8') > 4 * 1024 * 1024) throw new Error('模板状态超过 4 MiB 上限')

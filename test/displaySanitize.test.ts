@@ -3,7 +3,7 @@
  *（customize_HCI、now_plot 等），不误伤普通正文与 HTML。
  */
 import { describe, expect, it } from 'vitest'
-import { presentRenderedOutput, stripDisplayMeta } from '../src/core/displaySanitize.js'
+import { presentRenderedOutput, stripDisplayMeta, stripOpaqueDisplayMeta } from '../src/core/displaySanitize.js'
 
 const SAMPLE = `他点了点头。
 
@@ -32,6 +32,15 @@ describe('stripDisplayMeta', () => {
     expect(stripDisplayMeta('他说："<你真行>"。')).toBe('他说："<你真行>"。')
     const html = '<!DOCTYPE html><html><body><p>cover</p></body></html>'
     expect(stripDisplayMeta(html)).toBe(html)
+  })
+
+  it('邮箱自动链接与相近 custom element 不被当成机读标签', () => {
+    for (const text of [
+      'contact <think@example.com> visible',
+      'contact <Analysis@example.com> visible',
+      '<think-box>legit</think-box> after',
+      '<think:note>legit</think:note> after',
+    ]) expect(stripDisplayMeta(text)).toBe(text)
   })
 
   it('交互卡 HTML 与后面的正文拆开，正文再收起机读标签', () => {
@@ -123,5 +132,119 @@ describe('审查修复回归：交互卡回退', () => {
     const html = '<div>```\n<script>untrusted()</script></div>'
     const result = presentRenderedOutput(html, false)
     expect(result.text).toBe(`\`\`\`\`html\n${html}\n\`\`\`\``)
+  })
+
+  it.each(['think', 'thinking', 'Analysis', 'UpdateVariable', 'JSONPatch'])(
+    '机读块 %s 包住 HTML 时开启或关闭交互卡都不泄漏', tag => {
+      const rendered = `<${tag} data-note=">"><div>隐藏推理</div>尾部秘密</${tag}>可见答案`
+      for (const allowHtml of [false, true]) {
+        const result = presentRenderedOutput(rendered, allowHtml)
+        expect(result.text).toBe('可见答案')
+        expect(result.htmls).toEqual([])
+        expect(JSON.stringify(result)).not.toContain('隐藏推理')
+        expect(JSON.stringify(result)).not.toContain('尾部秘密')
+      }
+    },
+  )
+
+  it('HTML 内的机读块与注释在源码回退中隐藏，脚本字符串和合法卡面保持原样', () => {
+    const rendered = '<div class="card">公开<Analysis>内部秘密</Analysis><!--注释秘密-->'
+      + '<details><summary>线索</summary>可见内容</details>'
+      + '<script>const literal = "<think>代码字面量</think>"</script></div>'
+    const interactive = presentRenderedOutput(rendered, true)
+    expect(interactive.htmls[0]).toContain('可见内容')
+    expect(interactive.htmls[0]).toContain('<!--注释秘密-->')
+    expect(interactive.htmls[0]).toContain('<think>代码字面量</think>')
+    expect(JSON.stringify(interactive)).not.toContain('内部秘密')
+
+    const disabled = presentRenderedOutput(rendered, false)
+    expect(disabled.text).toContain('<details><summary>线索</summary>可见内容</details>')
+    expect(disabled.text).toContain('<think>代码字面量</think>')
+    expect(disabled.text).not.toContain('内部秘密')
+    expect(disabled.text).not.toContain('注释秘密')
+  })
+
+  it('脚本文字中的畸形伪标签不妨碍脚本后的机读块收起', () => {
+    const rendered = `<script>const x = "<foo q='";</script><think><div>SECRET</div>TAIL</think>VISIBLE`
+    expect(stripOpaqueDisplayMeta(rendered)).toBe(`<script>const x = "<foo q='";</script>VISIBLE`)
+    for (const allowHtml of [true, false]) {
+      const result = presentRenderedOutput(rendered, allowHtml)
+      expect(JSON.stringify(result)).not.toContain('SECRET')
+      expect(JSON.stringify(result)).not.toContain('TAIL')
+      expect(JSON.stringify(result)).toContain('VISIBLE')
+    }
+    expect(stripOpaqueDisplayMeta('<script>未闭合 <think>SECRET</think>VISIBLE'))
+      .toBe('<script>未闭合 VISIBLE')
+  })
+
+  it('Markdown 邮箱与尖括号文本不被误认成不透明 HTML 元素', () => {
+    for (const rendered of [
+      'contact <script@example.com> <think><div>SECRET</div>TAIL</think>VISIBLE',
+      'x < script> <think><div>SECRET</div>TAIL</think>VISIBLE',
+    ]) {
+      for (const allowHtml of [true, false]) {
+        const result = presentRenderedOutput(rendered, allowHtml)
+        expect(JSON.stringify(result)).not.toContain('SECRET')
+        expect(JSON.stringify(result)).not.toContain('TAIL')
+        expect(JSON.stringify(result)).toContain('VISIBLE')
+      }
+    }
+  })
+
+  it('嵌套与未闭合机读块按隐私优先隐藏到边界或文末', () => {
+    expect(stripOpaqueDisplayMeta('<think><Analysis>秘密</Analysis><div>隐藏卡</div></think>公开')).toBe('公开')
+    expect(presentRenderedOutput('开头<think><div>未闭合秘密</div>', false).text).toBe('开头')
+    expect(stripOpaqueDisplayMeta('公开<think')).toBe('公开')
+  })
+
+  it('畸形尖括号不吞掉后续机读开标签', () => {
+    for (const rendered of [
+      'x < y <think><div>secret</div>tail</think> visible',
+      'x <not q="unterminated <think><div>secret</div>tail</think> visible',
+      '<think foo=<div>secret</div></think>visible',
+    ]) {
+      for (const allowHtml of [true, false]) {
+        const result = presentRenderedOutput(rendered, allowHtml)
+        expect(JSON.stringify(result)).not.toContain('secret')
+        expect(JSON.stringify(result)).not.toContain('tail')
+      }
+    }
+  })
+
+  it('错序闭合保持尚未安全闭合的机读边界', () => {
+    const rendered = '<think><Analysis>一</think>交叉泄漏</Analysis>公开'
+    expect(stripOpaqueDisplayMeta(rendered)).toBe('')
+    expect(JSON.stringify(presentRenderedOutput(rendered, true))).not.toContain('交叉泄漏')
+    expect(JSON.stringify(presentRenderedOutput(rendered, false))).not.toContain('交叉泄漏')
+  })
+
+  it('完整 HTML 直接入口也先清理机读块', () => {
+    const rendered = '<think><html><body>隐藏</body></html>尾部秘密</think>公开'
+    expect(stripDisplayMeta(rendered)).toBe('公开')
+  })
+
+  it('大量短注释按单次线性扫描处理，后续机读块仍收起', () => {
+    const comments = '<!---->'.repeat(20_000)
+    expect(stripOpaqueDisplayMeta(`${comments}<think>SECRET</think>VISIBLE`)).toBe(`${comments}VISIBLE`)
+  })
+
+  it('无尖括号或实体候选的大段正文走零映射快速路径', () => {
+    const plain = 'a'.repeat(1024 * 1024)
+    expect(stripOpaqueDisplayMeta(plain)).toBe(plain)
+  })
+
+  it('大段正文末尾的单个 &amp; 不建立逐字符映射且原样保留', () => {
+    const plain = `${'a'.repeat(1024 * 1024)}&amp;`
+    const attributed = `<div data-note="${plain}">VISIBLE</div>`
+    const started = performance.now()
+    for (let run = 0; run < 3; run++) expect(stripOpaqueDisplayMeta(plain)).toBe(plain)
+    expect(stripOpaqueDisplayMeta(attributed)).toBe(attributed)
+    expect(performance.now() - started).toBeLessThan(300)
+  })
+
+  it('轻量预判后仍收起多层实体编码的机读标签', () => {
+    const rendered = '&amp;amp;lt;think&amp;amp;gt;SECRET'
+      + '&amp;amp;lt;&amp;amp;sol;think&amp;amp;gt;VISIBLE'
+    expect(stripOpaqueDisplayMeta(rendered)).toBe('VISIBLE')
   })
 })

@@ -259,6 +259,23 @@ it('模板片段依次展示；折叠标题是纯文字，格式化 HTML 全部�
     '```html\n<script>window.test=1</script><b>前置卡</b>\n```', '正文', '```html\n<strong>后置格式化</strong>\n```'])
 })
 
+it('前端局部关闭交互卡时跨模板片段收起机读块，只围栏化可见卡面',async()=>{
+  const parts=[
+    {kind:'markdown',text:'前文<think>'}, {kind:'html',text:'<div>隐藏卡面</div>'},
+    {kind:'markdown',text:'尾部秘密</think>中间'}, {kind:'html',text:'<div>可见卡面</div>'},
+    {kind:'markdown',text:'后文'},
+  ]
+  const remote={renderOutputText:async()=>({ok:true,value:{text:'前文\n中间\n后文',html:null,htmls:[],parts,
+    interactiveCards:true,whitelist:[],greetings:[],greetingIndex:0,canSwipeGreeting:false}})} as unknown as TavernRemote
+  await mount(<SpeechBubble remote={remote} sessionId="hidden-parts" cardId="card" name="角色"
+    rawText="<% evaluated %>" interactiveCards={false}/>)
+  expect(view!.root.findAllByType('iframe')).toHaveLength(0)
+  const markdown=view!.root.findAllByType('p').map(node=>node.props['data-markdown'])
+  expect(markdown).toEqual(['前文','中间','```html\n<div>可见卡面</div>\n```','后文'])
+  expect(JSON.stringify(view!.toJSON())).not.toContain('隐藏卡面')
+  expect(JSON.stringify(view!.toJSON())).not.toContain('尾部秘密')
+})
+
 it('全 HTML 或空模板关闭交互卡后使用求值结果，不重新展示原始 EJS',async()=>{
   const pureRemote={renderOutputText:async()=>({ok:true,value:{text:'<p>已求值</p>',html:null,htmls:[],parts:[{kind:'html',text:'<p>已求值</p>'}],interactiveCards:false,whitelist:[],greetings:[],greetingIndex:0,canSwipeGreeting:false}})} as unknown as TavernRemote
   await mount(<SpeechBubble remote={pureRemote} sessionId="pure" cardId="card" name="角色" rawText="<%= '已求值' %>" />)

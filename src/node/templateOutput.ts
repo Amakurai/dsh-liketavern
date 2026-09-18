@@ -9,6 +9,7 @@ import { withWorkspaceLock } from '../state/workspaceLock.js'
 import { isolated } from './isolated.js'
 import type { TavernState } from './state.js'
 import { mergeTemplateMessageVariables, visibleTemplateMessageVariables } from '../core/templateMessageVariables.js'
+import { TEMPLATE_DISPLAY_PARTS_VERSION } from '../core/templateDisplay.js'
 
 export async function completeTemplateOutput(state:TavernState,session:Pick<Session,'id'|'snapshotEvents'>):Promise<void> {
   const events = session.snapshotEvents()
@@ -66,7 +67,7 @@ export async function completeTemplateOutput(state:TavernState,session:Pick<Sess
     stored.variables = result.variables
     if(result.templateContinuation) stored.continuation=result.templateContinuation
     if(historyIdentities) stored.messageVariables=mergeTemplateMessageVariables(stored.messageVariables,result.messageVariables,historyIdentities)
-    pending.forEach((candidate,index)=>{ stored.outputs[candidate.id] = {hash:templateTextHash(candidate.text),text:result.texts[index]!,parts:result.parts[index]} })
+    pending.forEach((candidate,index)=>{ stored.outputs[candidate.id] = {hash:templateTextHash(candidate.text),text:result.texts[index]!,parts:result.parts[index],partsVersion:TEMPLATE_DISPLAY_PARTS_VERSION} })
     if (ownGeneration) closeTemplateGenerationState(stored,'completed')
     const latest = await state.loadBinding(session.id)
     if (latest?.cardId!==binding.cardId || latest.storyId!==binding.storyId) throw new Error('模板回复提交前剧情绑定已变化')

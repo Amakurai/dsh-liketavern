@@ -8,7 +8,8 @@ export declare function memorySearchOptions(topK: number, halfLifeDays: number):
     halfLifeMs?: number;
 };
 /**
- * 按相关性顺序装入预算。单条过大时继续寻找后续可完整放入的条目；
+ * 按相关性顺序装入预算，跳过空正文与已选正文的重复项（仅忽略首尾空白）。
+ * 单条过大时继续寻找后续可完整放入的条目；
  * 若没有任何完整条目可用，则截取最高相关的超大条目，避免本轮记忆层完全为空。
  */
 export declare function selectMemoryBodies(hits: readonly {

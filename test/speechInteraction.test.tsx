@@ -255,13 +255,14 @@ it('模板片段依次展示；折叠标题是纯文字，格式化 HTML 全部�
   expect(ordered[1]!.props.srcDoc.indexOf('Content-Security-Policy')).toBeLessThan(ordered[1]!.props.srcDoc.indexOf('window.test=1'))
   await act(async()=>view!.update(<SpeechBubble remote={orderedRemote} sessionId="ordered" cardId="card" name="角色" rawText="<% script %>" interactiveCards={false} />))
   expect(view!.root.findAllByType('iframe')).toHaveLength(0)
-  expect(view!.root.findAllByType('p').map(node=>node.props['data-markdown'])).toEqual(['前置文字','正文'])
+  expect(view!.root.findAllByType('p').map(node=>node.props['data-markdown'])).toEqual(['前置文字',
+    '```html\n<script>window.test=1</script><b>前置卡</b>\n```', '正文', '```html\n<strong>后置格式化</strong>\n```'])
 })
 
 it('全 HTML 或空模板关闭交互卡后使用求值结果，不重新展示原始 EJS',async()=>{
   const pureRemote={renderOutputText:async()=>({ok:true,value:{text:'<p>已求值</p>',html:null,htmls:[],parts:[{kind:'html',text:'<p>已求值</p>'}],interactiveCards:false,whitelist:[],greetings:[],greetingIndex:0,canSwipeGreeting:false}})} as unknown as TavernRemote
   await mount(<SpeechBubble remote={pureRemote} sessionId="pure" cardId="card" name="角色" rawText="<%= '已求值' %>" />)
-  expect(view!.root.findByType('p').props['data-markdown']).toBe('<p>已求值</p>')
+  expect(view!.root.findByType('p').props['data-markdown']).toBe('```html\n<p>已求值</p>\n```')
   expect(view!.root.findAllByType('iframe')).toHaveLength(0)
   const emptyRemote={renderOutputText:async()=>({ok:true,value:{text:'',html:null,htmls:[],parts:[],interactiveCards:false,whitelist:[],greetings:[],greetingIndex:0,canSwipeGreeting:false}})} as unknown as TavernRemote
   await act(async()=>view!.update(<SpeechBubble remote={emptyRemote} sessionId="empty" cardId="card" name="角色" rawText="<% incvar('x') %>" />))

@@ -150,6 +150,8 @@ function CharacterDetailDialog(props: { remote: TavernRemote; cardId: string; on
 
   const save = async () => {
     if (!detail) return
+    // 旧版恢复草稿没有基线版本，不能拿刚读取的版本替它授权覆盖。
+    if (!detail.revision) { setError(t('characters.detail.missingRevision')); return }
     if (!detail.name.trim()) {
       setError(t('characters.detail.nameRequired'))
       return
@@ -157,6 +159,7 @@ function CharacterDetailDialog(props: { remote: TavernRemote; cardId: string; on
     await runAsync(setBusy, setError, async () => {
       const r = await remote.saveCharacter({
         cardId,
+        expectedRevision: detail.revision,
         name: detail.name,
         description: detail.description,
         personality: detail.personality,
@@ -173,10 +176,12 @@ function CharacterDetailDialog(props: { remote: TavernRemote; cardId: string; on
         depthPrompt: detail.depthPrompt ?? null,
       })
       const err = errOf(r)
-      if (err) setError(err)
-      else {
-        // reload 往返窗口期内的新编辑不覆盖：基线推进到刚保存的这份草稿。
-        appliedRef.current = detail
+      if (err) { setError(err); invalidateCharacter(cardId) }
+      else if (r.ok) {
+        // 保存回执推进版本，但只更新版本字段，不能覆盖往返期间的新键入。
+        const revision = r.value.revision
+        appliedRef.current = { ...detail, revision }
+        setDraft(current => current ? { ...current, revision } : current)
         toast.show(t('characters.detail.saved', { name: detail.name }))
         // 先失效详情/头像缓存再 reload，否则详情弹窗与聊天气泡继续吃旧值。
         invalidateCharacter(cardId)

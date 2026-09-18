@@ -387,3 +387,35 @@ describe('缩短列表后仍可清除搜索', () => {
     expect(tiles()).toHaveLength(4)
   })
 })
+
+
+/** 审查修复回归：两个真实 React 编辑器使用同一服务，陈旧编辑器失败且草稿完整保留。 */
+it('审查修复回归：双编辑器保存不静默覆盖，保存回执版本支持连续保存', async () => {
+  const f = await fixture(), created = await f.state.createCharacter('双窗口角色')
+  f.remote.getCharacterDetail = vi.fn(async request => ok(await f.service.getCharacterDetail(request)))
+  f.remote.saveCharacter = vi.fn(async request => {
+    try { return ok(await f.service.saveCharacter(request)) }
+    catch (error) { return fail(error instanceof Error ? error.message : String(error)) }
+  })
+  const a = await render(<CharactersSection remote={f.remote} />), b = await render(<CharactersSection remote={f.remote} />)
+  for (const view of [a, b]) {
+    await settle(() => {}, () => view.root.findAllByProps({ className: 'dsh-tavern-charCard' }).length === 1)
+    await settle(() => view.root.findByProps({ className: 'dsh-tavern-charCard' }).props.onClick(),
+      () => view.root.findAllByType('textarea').length > 0)
+  }
+  const save = (view: ReactTestRenderer) => settle(() => view.root.findAllByType(Btn).find(item => item.props.children === '保存')!.props.onClick(), () => completed(f.remote.saveCharacter))
+  const description = (view: ReactTestRenderer) => view.root.findAllByType('textarea')[0]!
+  await act(async () => description(a).props.onChange({ target: { value: 'A 保存的描述' } }))
+  await save(a)
+  const first = await f.service.getCharacterDetail({ cardId: created.cardId })
+  expect(first.description).toBe('A 保存的描述')
+  await act(async () => description(b).props.onChange({ target: { value: 'B 未保存的草稿' } }))
+  await save(b)
+  expect(description(b).props.value).toBe('B 未保存的草稿')
+  expect(JSON.stringify(b.toJSON())).toContain('其他编辑器')
+  expect((await f.service.getCharacterDetail({ cardId: created.cardId })).description).toBe('A 保存的描述')
+  await act(async () => description(a).props.onChange({ target: { value: 'A 第二次描述' } }))
+  await save(a)
+  expect((await f.service.getCharacterDetail({ cardId: created.cardId })).description).toBe('A 第二次描述')
+  expect(vi.mocked(f.remote.saveCharacter).mock.calls[2]?.[0].expectedRevision).toBe(first.revision)
+})

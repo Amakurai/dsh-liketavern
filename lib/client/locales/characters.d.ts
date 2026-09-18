@@ -28,6 +28,7 @@ export declare const zh: {
     readonly 'characters.card.entryCount': "{count} 条";
     readonly 'characters.detail.title': "编辑角色：{name}";
     readonly 'characters.detail.nameRequired': "角色名不能为空";
+    readonly 'characters.detail.missingRevision': "草稿缺少版本信息，不能安全保存。请复制草稿后重新打开角色并合并修改。";
     readonly 'characters.detail.saved': "已保存「{name}」";
     readonly 'characters.detail.exported': "已导出 {kind}";
     readonly 'characters.detail.displayName': "显示名（不会改工作区 ID）";

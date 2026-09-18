@@ -5,7 +5,7 @@
  * 预设若没带展示正则，Markdown 会把这些当正文渲染。封面整页 HTML 原样留给 iframe；
  * 小部件 HTML 后面若还有正文，拆开后只对正文做收起。
  */
-import { collectRenderedHtml } from './regex.js'
+import { collectRenderedHtml, locateRenderedHtml } from './regex.js'
 
 export const DISPLAY_META_TAGS = [
   'UpdateVariable',
@@ -95,6 +95,28 @@ export function stripDisplayMeta(text: string): string {
   )
 }
 
+/** 交互卡关闭后的源码回退：围栏长于内容中的反引号，不能逃逸成可执行 HTML。 */
+export function htmlSourceFallback(html: string): string {
+  let length = 3
+  for (const match of html.matchAll(/`+/g)) length = Math.max(length, match[0].length + 1)
+  const fence = '`'.repeat(length)
+  return `${fence}html\n${html}\n${fence}`
+}
+
+/** 只在卡面之外收起机读标签；不能把已识别的 details/style 小部件连同正文裁掉。 */
+function disabledHtmlText(rendered: string): string {
+  const parts: string[] = []
+  let remaining = rendered
+  for (let i = 0; i < 128; i++) {
+    const located = locateRenderedHtml(remaining)
+    if (!located) { parts.push(stripDisplayMeta(remaining)); return parts.filter(Boolean).join('\n\n') }
+    parts.push(stripDisplayMeta(remaining.slice(0, located.fence?.start ?? located.start)))
+    parts.push(htmlSourceFallback(located.html))
+    remaining = remaining.slice(located.fence?.end ?? located.start + located.html.length)
+  }
+  throw new Error('交互卡展示片段过多')
+}
+
 /**
  * 正则渲染后的展示拆分：交互卡 HTML 进 iframe（可能连续多段），剩余正文再收起机读标签。
  * `allowHtml` 为 false 时整段当文本（交互卡开关关闭）。
@@ -103,10 +125,8 @@ export function presentRenderedOutput(
   rendered: string,
   allowHtml: boolean,
 ): { html: string | null; htmls: string[]; text: string } {
+  if (!allowHtml) return { html: null, htmls: [], text: disabledHtmlText(rendered) }
   const { htmls, rest } = collectRenderedHtml(rendered)
-  if (!allowHtml) {
-    return { html: null, htmls: [], text: stripDisplayMeta(rest || rendered) }
-  }
   return {
     html: htmls[0] ?? null,
     htmls,

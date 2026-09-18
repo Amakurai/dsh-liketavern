@@ -734,3 +734,24 @@ describe('splitRenderedHtml', () => {
     expect(split.rest).toBe('正文')
   })
 })
+
+
+/** 审查修复回归：trim 与非 trim 路径都把宏美元符号视为字面值。 */
+describe('审查修复回归：正则宏值', () => {
+  it.each(['Cash$1', '$<name>', 'Cash$$Money', '$0/$9', '$$1'])('保留宏值 %s，单文本与历史路径一致', user => {
+    const rule = makeRule({ id: 'review-trim', find: '/(?<name>foo)/g', replace: '{{user}}:$1:$<name>:{{match}}' })
+    const context = { char: '角色', user }
+    const expected = `${user}:foo:foo:foo`
+    const plain = run('foo', [rule], context)
+    const trimmed = { ...rule, trimStrings: ['#'] }
+    expect(plain.text).toBe(expected)
+    const single = run('foo', [trimmed], context)
+    const history = applyRegexToMessages([{ role: 'assistant', content: 'foo' }], [trimmed], FILTER, context)
+    expect(single.errors).toEqual([]); expect(history.errors).toEqual([])
+    expect(single.text).toBe(expected); expect(history.messages[0]?.content).toBe(expected)
+  })
+  it('显式 $$1 是字面量，捕获组仍按 trim 规则过滤', () => {
+    const rule = makeRule({ id: 'review-escape', find: '/(f#oo)/g', replace: '$$1:$1', trimStrings: ['#'] })
+    expect(run('f#oo', [rule]).text).toBe('$1:foo')
+  })
+})

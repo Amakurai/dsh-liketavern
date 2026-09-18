@@ -45,7 +45,9 @@ describe('stripDisplayMeta', () => {
     const rendered = '```html\n<!DOCTYPE html>\n<html><body>player</body></html>\n```\n可见正文。'
     const shown = presentRenderedOutput(rendered, false)
     expect(shown.html).toBeNull()
-    expect(shown.text).toBe('可见正文。')
+    expect(shown.text).toContain('player')
+    expect(shown.text).toContain('可见正文。')
+    expect(shown.text).toContain('```html')
   })
 
   it('连续两段封面 HTML 都进 htmls，不把第二段源码当正文', () => {
@@ -98,5 +100,28 @@ describe('stripDisplayMeta', () => {
     expect(shown.html).toContain('<style>')
     expect(shown.text).toBe('可见正文。')
     expect(shown.text).not.toContain('customize_HCI')
+  })
+})
+
+
+/** 审查修复回归：禁用不丢内容，不执行 HTML，不让嵌入反引号逃逸围栏。 */
+describe('审查修复回归：交互卡回退', () => {
+  it.each([
+    '<div class="character-card">关键线索：钥匙在柜子里</div>',
+    '<details class="hint-box"><summary>线索</summary>关键线索：钥匙在柜子里</details>',
+    '<!doctype html><html><body>关键线索：钥匙在柜子里</body></html>',
+  ])('关闭交互卡仍按原顺序显示线索：%s', html => {
+    const result = presentRenderedOutput(`前文\n${html}\n后文\n<UpdateVariable>secret</UpdateVariable>`, false)
+    expect(result.htmls).toEqual([]); expect(result.html).toBeNull()
+    expect(result.text).toContain(html)
+    expect(result.text.indexOf('前文')).toBeLessThan(result.text.indexOf('关键线索'))
+    expect(result.text.indexOf('关键线索')).toBeLessThan(result.text.indexOf('后文'))
+    expect(result.text).not.toContain('secret')
+    expect(result.text).toContain('```html')
+  })
+  it('HTML 内有三反引号时使用更长围栏，不把脚本暴露为 Markdown HTML', () => {
+    const html = '<div>```\n<script>untrusted()</script></div>'
+    const result = presentRenderedOutput(html, false)
+    expect(result.text).toBe(`\`\`\`\`html\n${html}\n\`\`\`\``)
   })
 })

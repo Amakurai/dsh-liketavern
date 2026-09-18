@@ -5,10 +5,10 @@
  * listCharacters 只探测 characters/<cardId>/card.json（深层垃圾/散落文件/缺 card.json 不影响列举）、
  * rebuildIndex 摘要与注入式 token 估算、WorkspaceFs 的 '..' 段级越界拒绝。
  */
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { CharacterCard } from '../src/core/types.js'
 import {
   archiveCharacter,
@@ -157,10 +157,10 @@ describe('importCard', () => {
     expect(rules[0]!.source).toBe('card')
     expect(rules[0]!.scopes).toEqual(['output'])
 
-    // journal.md 空文件、index.json 初始空清单
+    // 发布前已经重建索引，包含新建的空 journal.md。
     expect(await readFile(join(ws.root, 'journal.md'), 'utf8')).toBe('')
     const index = (await readJson(join(ws.root, 'index.json'))) as unknown as WorkspaceIndex
-    expect(index.files).toEqual([])
+    expect(index.files).toEqual([{ path: 'journal.md', summary: '', tokens: 0 }])
     expect(typeof index.updatedAt).toBe('string')
   })
 
@@ -408,5 +408,50 @@ describe('rebuildIndex', () => {
     await rebuildIndex(fs, (t) => t.length)
     const index = JSON.parse(await readFile(join(ws.root, 'index.json'), 'utf8')) as WorkspaceIndex
     expect(index.files.map((f) => f.path)).toEqual([])
+  })
+})
+
+
+/** 审查修复回归：故障发生在哪个文件都只清理私有草稿，不影响已存在角色。 */
+describe('审查修复回归：角色导入原子发布', () => {
+  it.each(['card.json', 'card.png', 'assets/character-book.json', 'assets/regex-scripts.json', 'journal.md', 'index.json'])('写入 %s 失败不出现半成品，重试只新增一个完整角色', async failedPath => {
+    const existing = await importCard(charactersDir, makeCard({ name: '原有角色' }))
+    const before = await readFile(join(existing.root, 'card.json'), 'utf8')
+    const original = WorkspaceFs.prototype.writeBytes
+    const originalText = WorkspaceFs.prototype.writeText
+    const fault = Object.assign(new Error('模拟 ENOSPC'), { code: 'ENOSPC' })
+    const spy = vi.spyOn(WorkspaceFs.prototype, 'writeBytes').mockImplementation(async function(path, bytes) {
+      if (path === failedPath) throw fault
+      return original.call(this, path, bytes)
+    })
+    const textSpy = vi.spyOn(WorkspaceFs.prototype, 'writeText').mockImplementation(async function(path, text) {
+      if (path === failedPath) throw fault
+      return originalText.call(this, path, text)
+    })
+    try {
+      await expect(importCard(charactersDir, makeCard({ name: '新角色' }))).rejects.toThrow('模拟 ENOSPC')
+    } finally { spy.mockRestore(); textSpy.mockRestore() }
+    expect((await listCharacters(charactersDir)).map(item => item.cardId)).toEqual([existing.cardId])
+    expect(await readdir(charactersDir)).toEqual([existing.cardId])
+    expect(await readFile(join(existing.root, 'card.json'), 'utf8')).toBe(before)
+    const created = await importCard(charactersDir, makeCard({ name: '新角色' }))
+    expect(await listCharacters(charactersDir)).toHaveLength(2)
+    expect(await readFile(join(created.root, 'card.png'))).toEqual(Buffer.from(makeCard().pngBytes!))
+    const index = JSON.parse(await readFile(join(created.root, 'index.json'), 'utf8'))
+    expect(index.files).toEqual([{ path: 'journal.md', summary: '', tokens: 0 }])
+  })
+  it('索引还在准备时列表不可见，发布后才列出', async () => {
+    const started = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+    const original = WorkspaceFs.prototype.writeText
+    const spy = vi.spyOn(WorkspaceFs.prototype, 'writeText').mockImplementation(async function(path, bytes) {
+      if (path === 'index.json') { started.resolve(); await release.promise }
+      return original.call(this, path, bytes)
+    })
+    const pending = importCard(charactersDir, makeCard())
+    try {
+      await started.promise
+      expect(await listCharacters(charactersDir)).toEqual([])
+    } finally { release.resolve(); await pending; spy.mockRestore() }
+    expect(await listCharacters(charactersDir)).toHaveLength(1)
   })
 })

@@ -12,7 +12,7 @@ import { buildCardSrcDoc, parseCardBridgeMessage } from '../core/cardFrame.js'
 import {ScriptChoices,publishScriptChoices,clearScriptChoices,parseScriptChoices} from './helperChoices.js'
 import {cardVariableLabels} from './cardVariableLabels.js'
 import { stripDisplayMeta } from '../core/displaySanitize.js'
-import type { TemplateDisplayPart } from '../core/templateDisplay.js'
+import { disableInteractiveParts, type TemplateDisplayPart } from '../core/templateDisplay.js'
 import { cachedAvatar,invalidateSessionBinding } from './cache.js'
 import {BINDING_CHANGED_EVENT} from './actions.js'
 import { useT, useMarkdownLabels } from './i18n.js'
@@ -421,7 +421,7 @@ function SpeechBubbleSession(props: SpeechBubbleProps) {
   }
   const storedParts = !streaming && rendered.state.status === 'ready' ? rendered.state.value.parts : undefined
   const visibleParts: TemplateDisplayPart[] = storedParts
-    ? storedParts.filter(part => interactive || part.kind === 'markdown')
+    ? interactive ? storedParts : disableInteractiveParts(storedParts)
     : [...htmls.map(html => ({ kind: 'html' as const, text: html })), ...(text ? [{ kind: 'markdown' as const, text }] : [])]
   if (!visibleParts.length) visibleParts.push({ kind: 'markdown', text: text || ' ' })
   const cycleRef=useRef<{state:typeof rendered.state;seen:Set<number>;done:boolean;active:boolean}|null>(null)

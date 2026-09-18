@@ -10,11 +10,12 @@
  * 收纳箱只在角色根写 `.archive.json` 原子标记，不搬动工作区：已绑定会话
  * 仍可以按原 cardId/storyId 读取剧情，而新会话的普通列表不再暴露已收纳角色。
  */
-import { createHash, randomBytes } from 'node:crypto'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import type { Dirent } from 'node:fs'
-import { readdir, rm } from 'node:fs/promises'
+import { readdir, rename, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { compileCardRegexScripts } from '../core/regex.js'
+import { estimateTokens } from '../core/tokenize.js'
 import type { CharacterCard } from '../core/types.js'
 import { hydrateStoredCard, normalizeBook } from './card.js'
 import { WorkspaceFs } from './workspaceFs.js'
@@ -125,34 +126,40 @@ export async function importCard(dataRoot: string, card: CharacterCard, opts?: I
   const importWorldBook = opts?.importWorldBook !== false
   const cardId = newCardId(card.name)
   const root = join(dataRoot, cardId)
-  const fs = new WorkspaceFs(root, null)
+  // 点号前缀不是合法 cardId，列表和 RPC 均看不到准备中的工作区。
+  const staging = join(dataRoot, `.importing-${randomUUID()}`)
+  const fs = new WorkspaceFs(staging, null)
+  try {
+    await fs.ensureDir('assets')
+    await fs.ensureDir('memory/archive')
+    await fs.ensureDir('state/wal')
 
-  await fs.ensureDir('assets')
-  await fs.ensureDir('memory/archive')
-  await fs.ensureDir('state/wal')
+    const { pngBytes, ...cardJson } = card
+    if (!importWorldBook) cardJson.characterBook = null
+    await fs.writeText('card.json', JSON.stringify(cardJson, null, 2) + '\n')
+    if (pngBytes) await fs.writeBytes('card.png', pngBytes)
 
-  const { pngBytes, ...cardJson } = card
-  if (!importWorldBook) cardJson.characterBook = null
-  await fs.writeText('card.json', JSON.stringify(cardJson, null, 2) + '\n')
-  if (pngBytes) await fs.writeBytes('card.png', pngBytes)
+    if (importWorldBook && card.characterBook && card.characterBook.entries.length > 0) {
+      const book = { name: card.characterBook.name ?? card.name, entries: card.characterBook.entries }
+      await fs.writeText('assets/character-book.json', JSON.stringify(book, null, 2) + '\n')
+    }
 
-  if (importWorldBook && card.characterBook && card.characterBook.entries.length > 0) {
-    const book = { name: card.characterBook.name ?? card.name, entries: card.characterBook.entries }
-    await fs.writeText('assets/character-book.json', JSON.stringify(book, null, 2) + '\n')
-  }
+    const rules = compileCardRegexScripts(card.regexScripts, cardId)
+    await fs.writeText('assets/regex-scripts.json', JSON.stringify(rules, null, 2) + '\n')
 
-  const rules = compileCardRegexScripts(card.regexScripts, cardId)
-  await fs.writeText('assets/regex-scripts.json', JSON.stringify(rules, null, 2) + '\n')
+    if ((await fs.readText('journal.md')) === null) await fs.writeText('journal.md', '')
 
-  if ((await fs.readText('journal.md')) === null) await fs.writeText('journal.md', '')
+    await rebuildIndex(fs, estimateTokens)
+    await rename(staging, root)
 
-  const index: WorkspaceIndex = { files: [], updatedAt: new Date().toISOString() }
-  await fs.writeText('index.json', JSON.stringify(index, null, 2) + '\n')
-
-  return {
-    cardId,
-    root,
-    card: importWorldBook ? card : { ...card, characterBook: null },
+    return {
+      cardId,
+      root,
+      card: importWorldBook ? card : { ...card, characterBook: null },
+    }
+  } finally {
+    // 只移除本次临时目录；发布成功后它已不存在，永不清理正式角色目录。
+    await rm(staging, { recursive: true, force: true })
   }
 }
 

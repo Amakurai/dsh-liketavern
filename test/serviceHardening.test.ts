@@ -121,7 +121,7 @@ describe('角色卡局部保存', () => {
     const original = makeCard({ name: '局部编辑', personality: '谨慎', firstMes: '初次见面',
       alternateGreetings: ['另一个开场'], tags: ['标签'], depthPrompt: { prompt: '深度设定', depth: 2, role: 'system' } })
     const { cardId, root: cardRoot } = await importCard(paths.characters, original)
-    await expect(service.saveCharacter({ cardId, description: '新描述' })).resolves.toEqual({ cardId, name: original.name })
+    await expect(service.saveCharacter({ cardId, description: '新描述' })).resolves.toEqual({ cardId, name: original.name, revision: expect.stringMatching(/^[a-f0-9]{64}$/) })
     const stored = JSON.parse(await readFile(join(cardRoot, 'card.json'), 'utf8'))
     const { pngBytes: _png, raw: _raw, ...persistedFields } = original
     expect(stored).toMatchObject({ ...persistedFields, description: '新描述' })
@@ -270,7 +270,7 @@ describe('内联 HTML 卡面服务展示（真实剧情存储）', () => {
     settingsRaw.interactiveCards=true
     await state.saveBinding({...binding,interactiveCards:false})
     const sessionDisabled = await service.renderOutputText({...request,text:html})
-    expect(sessionDisabled.htmls).toEqual([]);expect(sessionDisabled.text).toBe(html)
+    expect(sessionDisabled.htmls).toEqual([]);expect(sessionDisabled.text).toBe('```html\n'+html+'\n```')
     expect(await workspace.fs.readText('state/template.json')).toBe(before)
     expect(session.snapshotEvents()).toEqual(history)
   })
@@ -475,4 +475,64 @@ it('纯文本回复携带当前剧情上下文，预览与关闭交互不暴露�
   const binding=(await state.loadBinding(session.id))!
   await state.saveBinding({...binding,interactiveCards:false})
   expect((await service.renderOutputText(request)).helper).toBeUndefined()
+})
+
+
+/** 审查修复回归：版本检查与写入在同一锁内，模板回退不能改动任何剧情快照。 */
+describe('审查修复回归：服务边界', () => {
+  it('陈旧的全字段保存被拒绝，重新读取版本后可以保存且不丢另一编辑器的正文', async () => {
+    const { cardId } = await state.createCharacter('并发角色')
+    const baseline = await service.getCharacterDetail({ cardId })
+    expect(baseline.revision).toMatch(/^[a-f0-9]{64}$/)
+    const first = await service.saveCharacter({ cardId, description: 'A 的新描述', expectedRevision: baseline.revision })
+    const before = await readFile(join(paths.characters, cardId, 'card.json'), 'utf8')
+    await expect(service.saveCharacter({ ...baseline, name: 'B 的名字', expectedRevision: baseline.revision })).rejects.toThrow('其他编辑器')
+    expect(await readFile(join(paths.characters, cardId, 'card.json'), 'utf8')).toBe(before)
+    const fresh = await service.getCharacterDetail({ cardId })
+    expect(fresh.revision).toBe(first.revision); expect(fresh.revision).not.toBe(baseline.revision)
+    await service.saveCharacter({ cardId, name: 'B 的名字', expectedRevision: fresh.revision })
+    expect(await service.getCharacterDetail({ cardId })).toMatchObject({ name: 'B 的名字', description: 'A 的新描述' })
+  })
+  it('并发提交相同基线恰好一次成功', async () => {
+    const { cardId } = await state.createCharacter('并行版本')
+    const { revision } = await service.getCharacterDetail({ cardId })
+    const results = await Promise.allSettled(['A', 'B'].map(name => service.saveCharacter({ cardId, name, expectedRevision: revision })))
+    expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1)
+    expect(results.filter(result => result.status === 'rejected')).toHaveLength(1)
+  })
+  it('只修改世界书不产生正文冲突，正文保存保留世界书', async () => {
+    const { cardId } = await state.createCharacter('共享资产')
+    const { revision } = await service.getCharacterDetail({ cardId })
+    await state.saveCharacterLorebook(cardId, { entries: [{ keys: ['钥匙'], content: '在柜子里' }] })
+    await service.saveCharacter({ cardId, name: '新名字', expectedRevision: revision })
+    expect((await state.loadCharacter(cardId))?.card.characterBook?.entries[0]?.content).toBe('在柜子里')
+  })
+  it.each([false, true])('关闭交互卡保留模板缓存中的 HTML 段，原始快照不变：cached=%s', async cached => {
+    const { loadTemplateState, templateTextHash } = await import('../src/state/template.js')
+    const { cardId } = await state.createCharacter('模板回退')
+    const session = Session.create(`session-review-display-${cached}` as Session['id'])
+    sessions.set(session.id, session)
+    await state.saveBinding(makeBinding({ sessionId: session.id, cardId, interactiveCards: false }))
+    const binding = (await state.loadBinding(session.id))!, workspace = await state.storyWorkspace(cardId, binding.storyId)
+    const html = '<div class="hint-box">钥匙在柜子里</div>', text = `前文\n${html}\n后文`
+    const message = session.append('assistant/message', { stream: [], turn: 0, step: 0, message: greetingMessage(text) }, { surfaceOp: 'append' })
+    if (cached) {
+      const snapshot = await loadTemplateState(workspace.fs)
+      snapshot.outputs[String(message.seq)] = { hash: templateTextHash(text), text, parts: [
+        { kind: 'markdown', text: '前文' }, { kind: 'html', text: html }, { kind: 'markdown', text: '后文' },
+      ] }
+      // 手写已提交快照作为测试输入；展示本身必须只读。
+      await workspace.fs.writeText('state/template.json', JSON.stringify(snapshot))
+    }
+    const before = await workspace.fs.readText('state/template.json'), history = session.snapshotEvents()
+    for (let i = 0; i < 2; i++) {
+      const result = await service.renderOutputText({ sessionId: session.id, messageId: message.seq, text })
+      expect(result.htmls).toEqual([]); expect(result.text).toContain('钥匙在柜子里')
+      expect(result.text.indexOf('前文')).toBeLessThan(result.text.indexOf('钥匙'))
+      expect(result.text.indexOf('钥匙')).toBeLessThan(result.text.indexOf('后文'))
+      if (cached) expect(result.parts?.map(part => part.kind)).toEqual(['markdown', 'markdown', 'markdown'])
+    }
+    expect(await workspace.fs.readText('state/template.json')).toBe(before)
+    expect(session.snapshotEvents()).toEqual(history)
+  })
 })

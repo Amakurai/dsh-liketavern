@@ -71,6 +71,7 @@ export declare class TavernService extends TypertRemoteService implements Tavern
     }): Promise<TavernMethodResults['getCharacterDetail']>;
     saveCharacter(request: {
         cardId: string;
+        expectedRevision?: string;
         name?: string;
         description?: string;
         personality?: string;

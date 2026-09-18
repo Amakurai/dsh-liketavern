@@ -1,6 +1,6 @@
 /** 有序展示片段契约：HTML 永远交给隔离卡面，Markdown 与 HTML 的前后位置、折叠标题独立保存。 */
 import { locateRenderedHtml } from './regex.js'
-import { stripDisplayMeta } from './displaySanitize.js'
+import { htmlSourceFallback, stripDisplayMeta } from './displaySanitize.js'
 
 export type TemplateDisplayPart = {kind:'markdown';text:string} | {kind:'html';text:string;title?:string}
 const MAX_PARTS=128
@@ -39,4 +39,11 @@ export function splitTemplateDisplay(text:string,preserveMeta=false):TemplateDis
   }
   visit(text)
   return parseTemplateDisplayParts(parts)
+}
+
+/** 会话/全局关闭交互卡时逐段降级，不过滤 HTML 段或改变正文顺序。 */
+export function disableInteractiveParts(parts: readonly TemplateDisplayPart[]): TemplateDisplayPart[] {
+  return parts.map(part => part.kind === 'html'
+    ? { kind: 'markdown', text: htmlSourceFallback(part.text) }
+    : part)
 }

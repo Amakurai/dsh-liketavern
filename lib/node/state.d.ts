@@ -227,9 +227,10 @@ export declare class TavernState {
         name: string;
         entryCount: number;
     }>;
-    saveCharacter(cardId: string, patch: Parameters<typeof applyCharacterPatch>[1]): Promise<{
+    saveCharacter(cardId: string, patch: Parameters<typeof applyCharacterPatch>[1], expectedRevision?: string): Promise<{
         cardId: string;
         name: string;
+        revision: string;
     }>;
     createCharacter(name: string): Promise<CharacterWorkspace>;
     /** 脚本树修订只覆盖脚本资产；用户同时修改描述等其它字段时，保存脚本不得覆盖它们。 */

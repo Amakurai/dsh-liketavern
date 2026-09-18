@@ -17,7 +17,7 @@ import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import { estimateTokens } from '../core/tokenize.js'
 import { isolated } from './isolated.js'
 import { presentRenderedOutput } from '../core/displaySanitize.js'
-import { splitTemplateDisplay, type TemplateDisplayPart } from '../core/templateDisplay.js'
+import { disableInteractiveParts, splitTemplateDisplay, type TemplateDisplayPart } from '../core/templateDisplay.js'
 import { expandIdentityMacros } from '../core/macros.js'
 import { DEFAULT_USER_NAME } from '../core/persona.js'
 import { isTavernGreetingEvent } from '../core/greetingLog.js'
@@ -28,6 +28,7 @@ import { rebuildIndex } from '../state/workspace.js'
 import { parseSessionBinding, type SessionBinding } from './bindings.js'
 import type { TavernConfigRaw } from './config.js'
 import { parseJsonCard, parsePngCard } from '../state/card.js'
+import { characterEditRevision } from '../state/characterRevision.js'
 import { FloorError, continueFloor, editAssistantMessage, editUserMessage, enterGreetingConversation, getFloorAssistantMessage, getFloorSiblings, getFloorUserMessage, getGreetingSwipe, regenerate, rollbackToFloor, swipeGreeting } from './floors.js'
 import { impersonate } from './impersonate.js'
 import { loadBoundLoreEntries, runTavernPipeline } from './pipeline.js'
@@ -154,6 +155,7 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
     const { card } = ws
     return {
       cardId: ws.cardId,
+      revision: characterEditRevision(card),
       name: card.name,
       description: card.description,
       personality: card.personality,
@@ -179,6 +181,7 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
 
   async saveCharacter(request: {
     cardId: string
+    expectedRevision?: string
     name?: string
     description?: string
     personality?: string
@@ -210,7 +213,7 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
         characterVersion: request.characterVersion,
         tags: request.tags,
         depthPrompt: request.depthPrompt,
-      })
+      }, request.expectedRevision)
     } catch (error) {
       throw new FloorError('invalid-card', error instanceof Error ? error.message : String(error))
     }
@@ -533,6 +536,7 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
       parts: templateParts.map(part => ({ ...part, text: expandIdentityMacros(part.text, names) })),
       rules, macroCtx: { ...names, outlets: {} },
     })).parts
+    if (parts !== undefined && !allowHtml) parts = disableInteractiveParts(parts)
     let presented: {htmls:string[];text:string}
     if(parts === undefined) {
       const rendered = (await isolated('render', { text: named, rules, macroCtx: { ...names, outlets: {} } })).text

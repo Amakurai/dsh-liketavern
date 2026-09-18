@@ -162,6 +162,7 @@ export declare const METHODS: {
     };
     saveCharacter: {
         req: import("zod/mini").ZodMiniObject<{
+            expectedRevision: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
             name: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
             description: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
             personality: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
@@ -877,6 +878,7 @@ export interface CharacterInspect {
 /** getCharacterDetail 的角色卡详情（归一化卡的扁平字段 + 世界书/头像元信息）。 */
 export interface CharacterDetail {
     cardId: string;
+    revision: string;
     name: string;
     description: string;
     personality: string;
@@ -992,6 +994,7 @@ export interface TavernMethodResults {
     saveCharacter: {
         cardId: string;
         name: string;
+        revision: string;
     };
     createCharacter: {
         cardId: string;
@@ -1249,6 +1252,7 @@ export declare const TYPERT_HOST: {
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     cardId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                    expectedRevision: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
                     name: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
                     description: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
                     personality: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
@@ -1684,6 +1688,7 @@ export declare const TYPERT_REMOTE: {
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     cardId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                    expectedRevision: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
                     name: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
                     description: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
                     personality: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;

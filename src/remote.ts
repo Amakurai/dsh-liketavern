@@ -153,6 +153,8 @@ export const METHODS = {
   saveCharacter: {
     req: object({
       ...cardIdField,
+      // 兼容旧 RPC 调用；新版编辑器始终携带读取时的版本，缺失旧草稿不会自动获得新版本。
+      expectedRevision: optional(string().check(regex(/^[a-f0-9]{64}$/))),
       name: optional(string()),
       description: optional(string()),
       personality: optional(string()),
@@ -393,6 +395,7 @@ export interface CharacterInspect {
 /** getCharacterDetail 的角色卡详情（归一化卡的扁平字段 + 世界书/头像元信息）。 */
 export interface CharacterDetail {
   cardId: string
+  revision: string
   name: string
   description: string
   personality: string
@@ -480,7 +483,7 @@ export interface TavernMethodResults {
   importCharacter: { cardId: string; name: string }
   deleteCharacter: { deleted: boolean; salvagedLorebook: string | null }
   getCharacterDetail: CharacterDetail
-  saveCharacter: { cardId: string; name: string }
+  saveCharacter: { cardId: string; name: string; revision: string }
   createCharacter: { cardId: string; name: string }
   exportCharacter: { json: unknown; pngBase64: string; name: string }
   getAvatar: { dataUrl: string | null }

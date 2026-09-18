@@ -49,7 +49,7 @@ function confirmation(view: ReactTestRenderer) {
 const ok = <T,>(value: T) => ({ ok: true as const, value })
 const summary = (cardId: string, name: string): CharacterSummary => ({ cardId, name, hasAvatar: false, hasCharacterBook: false, characterBookName: null, characterBookEntryCount: 0 })
 function detail(cardId: string): CharacterDetail {
-  return { ...summary(cardId, '灯塔守望者'), description: '守护海岸', personality: '', scenario: '', firstMes: '欢迎来到灯塔。',
+  return { ...summary(cardId, '灯塔守望者'), revision: '0'.repeat(64), description: '守护海岸', personality: '', scenario: '', firstMes: '欢迎来到灯塔。',
     alternateGreetings: ['第一段\n第二段'], mesExample: '', systemPrompt: '', postHistoryInstructions: '', creatorNotes: '', creator: '', characterVersion: '', tags: [],
     spec: 'chara_card_v2', depthPrompt: null, extensions: {} }
 }
@@ -137,7 +137,7 @@ describe('编辑草稿保护', () => {
     const getCharacterDetail = vi.fn(async () => new Promise<ReturnType<typeof ok<CharacterDetail>>>((resolve) => { pendingReloads.push(resolve) }))
     const saveCharacter = vi.fn(async (request: { alternateGreetings: string[] }) => {
       serverCard = { ...serverCard, alternateGreetings: request.alternateGreetings }
-      return ok({ cardId: serverCard.cardId, name: serverCard.name })
+      return ok({ cardId: serverCard.cardId, name: serverCard.name, revision: serverCard.revision })
     })
     const remote = { listCharacters: async () => ok({ items: [summary(card.cardId, card.name)] }), getCharacterDetail,
       getAvatar: async () => ok({ dataUrl: null }), saveCharacter } as unknown as TavernRemote
@@ -171,7 +171,7 @@ describe('编辑草稿保护', () => {
     const reload = Promise.withResolvers<ReturnType<typeof ok<CharacterDetail>>>()
     const remote = { listCharacters: async () => ok({ items: [summary(card.cardId, card.name)] }),
       getCharacterDetail: async () => { if (first) { first = false; return ok(card) } return reload.promise },
-      getAvatar: async () => ok({ dataUrl: null }), saveCharacter: async () => ok({ cardId: card.cardId, name: card.name }),
+      getAvatar: async () => ok({ dataUrl: null }), saveCharacter: async () => ok({ cardId: card.cardId, name: card.name, revision: card.revision }),
     } as unknown as TavernRemote
     const view = await render(<CharactersSection remote={remote}/>)
     try {
@@ -407,4 +407,20 @@ describe('设置中的卡面变量管理',()=>{
     expect(view.root.findAllByType(VariableBackupEditor)).toHaveLength(0)
     expect(view.root.findByProps({role:'alert'}).children.join('')).toContain('剧情绑定已改变')
   })
+})
+
+
+/** 审查修复回归：旧版草稿/旧宿主缺少修订信息时，不以新读到的版本替它授权写入。 */
+it('审查修复回归：缺少角色版本时保留编辑，不发送无条件覆盖请求', async () => {
+  const { revision: _revision, ...legacy } = detail('legacy-review-draft')
+  const saveCharacter = vi.fn()
+  const remote = { listCharacters: async () => ok({ items: [summary(legacy.cardId, legacy.name)] }),
+    getCharacterDetail: async () => ok(legacy), getAvatar: async () => ok({ dataUrl: null }), saveCharacter } as unknown as TavernRemote
+  const view = await render(<CharactersSection remote={remote} />)
+  await act(async () => view.root.findByProps({ className: 'dsh-tavern-charCard' }).props.onClick())
+  await act(async () => view.root.findAllByType('textarea')[0]!.props.onChange({ target: { value: '旧版草稿的正文' } }))
+  await act(async () => button(view, '保存').props.onClick())
+  expect(saveCharacter).not.toHaveBeenCalled()
+  expect(JSON.stringify(view.toJSON())).toContain('草稿缺少版本信息')
+  expect(view.root.findAllByType('textarea')[0]!.props.value).toBe('旧版草稿的正文')
 })

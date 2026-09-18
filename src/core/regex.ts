@@ -307,7 +307,8 @@ function replaceWithGroupTrim(text: string, re: RegExp, template: string, rule: 
     // 回调实参是 [match, ...捕获组, offset, subject]（有命名组时末尾再多一个 groups 对象）。
     // 越界的 $N 会读到 offset（数字）或整段原文，必须挡掉：原生 replace 对越界 $N 原样输出字面量。
     const groupCount = args.length - (groups ? 4 : 3)
-    return tpl.replace(/\$(\d+)|\$<([^>]+)>/g, (_m: string, num: string | undefined, name: string | undefined) => {
+    return tpl.replace(/\$\$|\$(\d+)|\$<([^>]+)>/g, (_m: string, num: string | undefined, name: string | undefined) => {
+      if (_m === '$$') return '$' // 宏值中的字面美元符号，不再扫描回调返回值。
       let value: unknown
       if (num !== undefined) {
         if (Number(num) > groupCount) return _m
@@ -347,8 +348,8 @@ export function applyRegexRules(
           if (!source) continue
           trimRes.push(compileTrimRegex(source))
         }
-        // 手工代入路径全程是回调返回值（字面量），宏值里的 `$` 不会被再解释，故不翻倍。
-        const replacement = expandMacros(rule.replace, macroCtx)
+        // 捕获组扫描发生在宏展开之后；宏值必须转义，扫描器用 $$ 还原字面美元符号。
+        const replacement = expandMacros(rule.replace, macroCtx, undefined, escapeReplacementDollars)
         next = replaceWithGroupTrim(out, re, replacement, rule, trimRes, macroCtx)
       } else {
         // replace 先宏展开（对齐 ST：substituteParams 后再 replace），捕获组由原生 replace 处理。
@@ -406,8 +407,8 @@ function prepareRegexRule(rule: RegexRule, macroCtx: MacroContext): PreparedRule
 function applyPreparedRule(text: string, p: PreparedRule, macroCtx: MacroContext): string {
   if (p.error !== undefined || !p.re) return text
   if (p.trimRes) {
-    // 手工代入路径全程是回调返回值（字面量），宏值里的 `$` 不会被再解释，故不翻倍。
-    const replacement = expandMacros(p.rule.replace, macroCtx)
+    // 与单文本路径相同：宏字面值不得被捕获组扫描器二次解释。
+    const replacement = expandMacros(p.rule.replace, macroCtx, undefined, escapeReplacementDollars)
     return replaceWithGroupTrim(text, p.re, replacement, p.rule, p.trimRes, macroCtx)
   }
   const replacement = expandMacros(p.rule.replace, macroCtx, undefined, escapeReplacementDollars)

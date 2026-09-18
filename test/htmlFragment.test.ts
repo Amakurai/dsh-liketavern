@@ -40,7 +40,7 @@ it('无 html/style/script 外壳的内联样式状态栏进入 HTML，嵌套与�
   expect(splitTemplateDisplay('前文\n' + html + '\n后文')).toEqual([
     {kind:'markdown',text:'前文'}, {kind:'html',text:html}, {kind:'markdown',text:'后文'},
   ])
-  expect(presentRenderedOutput(html, false)).toEqual({html:null,htmls:[],text:html})
+  expect(presentRenderedOutput(html, false)).toEqual({html:null,htmls:[],text:'```html\n'+html+'\n```'})
 })
 
 it('显式 html 围栏中的裸片段进入沙箱，围栏外两侧正文不遗失', () => {

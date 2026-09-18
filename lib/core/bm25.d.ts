@@ -28,8 +28,8 @@ export declare class Bm25Index<D = unknown> {
     private readonly k1;
     private readonly b;
     private readonly docs;
-    /** term → 文档频率（包含该 term 的文档数）。 */
-    private readonly df;
+    /** term → 命中文档引用；集合大小就是 df，避免全库扫描和重复查文档表。 */
+    private readonly postings;
     private totalLength;
     constructor(options?: {
         k1?: number;

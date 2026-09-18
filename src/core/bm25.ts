@@ -39,6 +39,7 @@ export interface Bm25Hit<D = unknown> {
 // ---------------------------------------------------------------------------
 
 interface DocEntry<D> {
+  id: string
   /** 文档长度（term 频次总计，含 keys 重复计入的部分）。 */
   length: number
   /** term → 频次。 */
@@ -51,8 +52,8 @@ export class Bm25Index<D = unknown> {
   private readonly k1: number
   private readonly b: number
   private readonly docs = new Map<string, DocEntry<D>>()
-  /** term → 文档频率（包含该 term 的文档数）。 */
-  private readonly df = new Map<string, number>()
+  /** term → 命中文档引用；集合大小就是 df，避免全库扫描和重复查文档表。 */
+  private readonly postings = new Map<string, Set<DocEntry<D>>>()
   private totalLength = 0
 
   constructor(options?: { k1?: number; b?: number }) {
@@ -82,11 +83,16 @@ export class Bm25Index<D = unknown> {
     if (doc.keys) {
       for (const term of tokenize(doc.keys.join(' '))) count(term)
     }
-    const entry: DocEntry<D> = { length, tf, ts: doc.ts, data: doc.data }
+    const entry: DocEntry<D> = { id: doc.id, length, tf, ts: doc.ts, data: doc.data }
     this.docs.set(doc.id, entry)
     this.totalLength += length
     for (const term of tf.keys()) {
-      this.df.set(term, (this.df.get(term) ?? 0) + 1)
+      let postings = this.postings.get(term)
+      if (!postings) {
+        postings = new Set<DocEntry<D>>()
+        this.postings.set(term, postings)
+      }
+      postings.add(entry)
     }
   }
 
@@ -96,16 +102,16 @@ export class Bm25Index<D = unknown> {
     this.docs.delete(id)
     this.totalLength -= entry.length
     for (const term of entry.tf.keys()) {
-      const n = this.df.get(term)
-      if (n === undefined) continue
-      if (n <= 1) this.df.delete(term)
-      else this.df.set(term, n - 1)
+      const postings = this.postings.get(term)
+      if (!postings) continue
+      postings.delete(entry)
+      if (postings.size === 0) this.postings.delete(term)
     }
   }
 
   clear(): void {
     this.docs.clear()
-    this.df.clear()
+    this.postings.clear()
     this.totalLength = 0
   }
 
@@ -123,13 +129,15 @@ export class Bm25Index<D = unknown> {
     const avgdl = this.totalLength / docCount
     const scores = new Map<string, number>()
     for (const term of terms) {
-      const df = this.df.get(term)
-      if (df === undefined) continue
+      const postings = this.postings.get(term)
+      if (!postings) continue
+      const df = postings.size
       // Robertson 变体 IDF：ln(1 + (N - df + 0.5)/(df + 0.5))，保证非负
       const idf = Math.log(1 + (docCount - df + 0.5) / (df + 0.5))
-      for (const [id, entry] of this.docs) {
-        const tf = entry.tf.get(term)
-        if (tf === undefined) continue
+      // 只访问命中文档；评分公式、查询词顺序与最终 tie-break 保持不变。
+      for (const entry of postings) {
+        const id = entry.id
+        const tf = entry.tf.get(term)!
         const norm = 1 - this.b + (this.b * entry.length) / avgdl
         const score = (idf * tf * (this.k1 + 1)) / (tf + this.k1 * norm)
         scores.set(id, (scores.get(id) ?? 0) + score)

@@ -329,6 +329,9 @@ export declare class TavernService extends TypertRemoteService implements Tavern
     getContextUsage(request: {
         sessionId: string;
     }): TavernMethodResults['getContextUsage'];
+    /** 关于页只读取本机版本；版本检查按需联网，不提供安装执行入口。 */
+    getPluginAbout(_request: Record<string, never>): Promise<TavernMethodResults['getPluginAbout']>;
+    checkPluginUpdate(_request: Record<string, never>): Promise<TavernMethodResults['checkPluginUpdate']>;
     /** Tavern 数据目录（$DSH_HOME/dsh-tavern），设置面板展示用。 */
     getDataInfo(_request: Record<string, never>): TavernMethodResults['getDataInfo'];
     getAvatar(request: {

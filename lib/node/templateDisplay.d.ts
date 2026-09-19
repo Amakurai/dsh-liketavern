@@ -1,4 +1,4 @@
-/** 展示模板在隔离 worker 内格式化；真实 Showdown 仅在 QuickJS 中运行，产物以有序片段交给安全 iframe。 */
+/** 展示模板在隔离 worker 内格式化；Markdown 引擎仅在 QuickJS 中运行，产物以有序片段交给安全 iframe。 */
 import { type TemplateDisplayPart } from '../core/templateDisplay.js';
 import type { WorldInfoEntry, MacroContext, RegexRule } from '../core/types.js';
 import type { TemplateSandbox } from './templateSandbox.js';

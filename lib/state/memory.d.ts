@@ -112,14 +112,16 @@ export declare class MemoryStore {
         entry: MemoryEntry;
         score: number;
     }>>;
-    /** 检索：BM25 + 可选半衰期时间衰减（ts 用 updated；now/halfLifeMs 可注入以便测试）。 */
+    /** 检索：BM25 + 时间衰减；仅自动入模额外请求摘要来源，工具的结果形状和排序保持不变。 */
     search(query: string, options?: {
         topK?: number;
         halfLifeMs?: number;
         now?: number;
+        includeSummarySources?: boolean;
     }): Promise<Array<{
         entry: MemoryEntry;
         score: number;
+        summarySourceIds?: readonly string[];
     }>>;
     /** 容量统计：条数与正文 token 粗估累加。 */
     stats(): Promise<{

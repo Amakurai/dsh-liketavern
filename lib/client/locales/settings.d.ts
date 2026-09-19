@@ -116,7 +116,7 @@ export declare const zh: {
     readonly 'settings.memory.maxTokens': "token 上限 maxTokens";
     readonly 'settings.memory.maxTokensDesc': "每角色记忆的估算 token 上限，超出同样触发压缩。";
     readonly 'settings.memory.retrievalTopK': "检索条数 retrievalTopK";
-    readonly 'settings.memory.retrievalTopKDesc': "每轮 BM25 检索注入 runtime context 的记忆条数；0 = 不注入。";
+    readonly 'settings.memory.retrievalTopKDesc': "每轮最多注入的记忆条数；0 = 不检索。先取最多 4 倍候选（上限 200），再按去重和预算筛选，实际条数可能更少。";
     readonly 'settings.memory.retrievalTokenBudget': "检索预算 retrievalTokenBudget";
     readonly 'settings.memory.retrievalTokenBudgetDesc': "每轮检索注入的估算 token 预算。";
     readonly 'settings.memory.halfLifeDays': "时间衰减半衰期（天）";

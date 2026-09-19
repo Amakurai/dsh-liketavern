@@ -46,6 +46,8 @@ export type TemplateReplayOperation = TemplateReplayInstruction & {
 };
 export interface TemplateReplay {
     version: 2;
+    /** 缺省表示旧 Showdown；可读取备份，但活动日志必须在旧版本完成或回滚，禁止静默迁移闭包。 */
+    formatterVersion?: 2;
     context: TemplateContext;
     operations: TemplateReplayOperation[];
     variables: TemplateScopes;
@@ -53,4 +55,6 @@ export interface TemplateReplay {
     bootstrap?: TemplateReplayBootstrap;
 }
 export declare const TEMPLATE_REPLAY_LIMIT: number;
+/** 外显哈希不覆盖闭包中的隐式格式化捕获，旧引擎的活动日志必须先在旧版本完成或回滚。 */
+export declare function assertTemplateReplayFormatter(replay: Pick<TemplateReplay, 'formatterVersion'>): void;
 export declare function templateReplayGenerationContext(replay: TemplateReplay): TemplateContext;

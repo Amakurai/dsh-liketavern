@@ -3,7 +3,7 @@
  * 样式集中在 ./styles.js（模块加载即注入）；颜色一律走宿主 --dsw-* 令牌 + Tavern 蓝色 accent。
  * 原生 select 的 option 弹层用 Menu 实现（避开 Windows 系统白底白字）。
  */
-import { Children, cloneElement, createContext, isValidElement, useCallback, useContext, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
+import { Children, cloneElement, createContext, isValidElement, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Button, IconChevronDownOutline14, IconSearchOutline16, IconUserOutline16, Menu, Modal, Toast, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { AriaAttributes, CSSProperties, ReactNode } from 'react'
 import type { CardRegexScript } from '../core/types.js'
@@ -499,9 +499,16 @@ type LoadState<T> = { status: 'idle' } | { status: 'loading' } | { status: 'read
 /** 拉取一个 remote 读取；reload() 触发重拉；enabled=false 时挂起（idle）。 */
 export function useLoader<T>(load: () => Promise<Envelope<T>>, deps: readonly unknown[] = [], enabled = true, timeoutMs = 20_000) {
   const t = useT()
-  const [state, setState] = useState<LoadState<T>>(enabled ? { status: 'loading' } : { status: 'idle' })
   const [seq, setSeq] = useState(0)
+  const request = useMemo(() => ({}), [...deps, seq, enabled])
+  const [result, setResult] = useState<{ request: object; state: LoadState<T> }>(() => ({
+    request, state: enabled ? { status: 'loading' } : { status: 'idle' },
+  }))
+  // effect 在提交后才清理旧请求；依赖变化的首帧就必须隐藏旧结果，避免消费方把旧角色/剧情
+  // 存成新身份的基线。相同依赖的普通重渲染仍保留结果，reload 期间由消费方决定是否保留旧显示。
+  const state: LoadState<T> = result.request === request ? result.state : enabled ? { status: 'loading' } : { status: 'idle' }
   useEffect(() => {
+    const setState = (state: LoadState<T>) => setResult({ request, state })
     if (!enabled) {
       setState({ status: 'idle' })
       return
@@ -528,7 +535,7 @@ export function useLoader<T>(load: () => Promise<Envelope<T>>, deps: readonly un
       clearTimeout(timer)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [...deps, seq, enabled])
+  }, [request])
   // reload 身份稳定：调用方把它放进 effect 依赖（如绑定变更监听）时不会每次渲染都重新订阅。
   const reload = useCallback(() => setSeq((s) => s + 1), [])
   return { state, reload }

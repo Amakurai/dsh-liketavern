@@ -2,8 +2,9 @@
 import type { TavernState } from './state.js'
 import type { Session } from '@deepseek-ai/dsh-session'
 import { completeTemplateOutput } from './templateOutput.js'
-import { loadTemplateState, saveTemplateState } from '../state/template.js'
-import { closeTemplateGenerationState } from '../state/templateContinuation.js'
+import { loadTemplateState, saveTemplateState, type TemplateState } from '../state/template.js'
+import { closeTemplateGenerationState, resolveTemplateContinuation } from '../state/templateContinuation.js'
+import { assertTemplateReplayFormatter } from '../core/templateReplay.js'
 import { withWorkspaceLock } from '../state/workspaceLock.js'
 import { helperMvuPending, queueHelperMvuTurn } from './helperMvu.js'
 import { helperMvuHasAssistant } from './helperMvuLifecycle.js'
@@ -11,6 +12,13 @@ import { hasNormalAssistantStop } from './assistantStream.js'
 
 /** 暂缓开层只标记当前宿主轮，不能用它收口旧 MVU 楼层或抹掉待恢复输入。 */
 const deferredTurns = new WeakMap<TavernState, Map<string, number>>()
+
+/** 只在运行时拒绝旧引擎活动日志；普通读取和备份仍允许保存有效旧状态。调用点必须持有剧情锁。 */
+function assertActiveTemplateFormatter(stored:TemplateState,sessionId:string):void {
+  const carried=resolveTemplateContinuation(stored)?.replay
+  if(carried) assertTemplateReplayFormatter(carried)
+  if(stored.generation?.status==='prepared' && stored.generation.sessionId===sessionId) assertTemplateReplayFormatter(stored.generation.replay)
+}
 
 export async function onTurnStart(state:TavernState,sessionId:string,turn:number,session?:Pick<Session,'id'|'snapshotEvents'>):Promise<void> {
   state.currentTurns.set(sessionId,turn)
@@ -26,6 +34,7 @@ export async function onTurnStart(state:TavernState,sessionId:string,turn:number
   await withWorkspaceLock(ws.fs.root,async()=> {
     const floor = `${sessionId}#t${turn}`
     const stored = await loadTemplateState(ws.fs)
+    assertActiveTemplateFormatter(stored,sessionId)
     const generation = stored.generation
     if (generation?.sessionId===sessionId) {
       if (generation.cardId!==binding.cardId || generation.storyId!==binding.storyId) throw new Error('模板轮次恢复的剧情归属不一致')
@@ -72,6 +81,16 @@ export async function onTurnEnd(state:TavernState,sessionId:string,session?:Pick
 
 async function finishTurn(state:TavernState,sessionId:string,session?:Pick<Session,'id'|'snapshotEvents'>):Promise<void> {
   if (session && session.id!==sessionId) throw new Error('模板结束事件与目标会话不一致')
+  const events = session?.snapshotEvents() ?? []
+  const ending = [...events].reverse().find(event=>event.type==='turn/start'||event.type==='turn/end')
+  // 只有宿主结束帧可能处理持久回复；无事件清理不新增绑定 I/O。已有开层仍由最终提交锁内预检保护。
+  if(ending?.type==='turn/end') {
+    const binding=await state.loadBinding(sessionId)
+    if(binding) {
+      const ws=await state.storyWorkspace(binding.cardId,binding.storyId)
+      await withWorkspaceLock(ws.fs.root,async()=>assertActiveTemplateFormatter(await loadTemplateState(ws.fs),sessionId))
+    }
+  }
   let templateError:unknown,helperQueueError:unknown
   if(session){
     try{await completeTemplateOutput(state,session)}
@@ -82,8 +101,6 @@ async function finishTurn(state:TavernState,sessionId:string,session?:Pick<Sessi
   }
   // 优先原开层归属；进程重启后只接受当前剧情内同会话同结束帧的持久回执。
   let entry = state.openFloors.get(sessionId)
-  const events = session?.snapshotEvents() ?? []
-  const ending = [...events].reverse().find(event=>event.type==='turn/start'||event.type==='turn/end')
   if (!entry && session?.id===sessionId && ending?.type==='turn/end') {
     const binding = await state.loadBinding(sessionId)
     if (binding) {
@@ -108,6 +125,8 @@ async function finishTurn(state:TavernState,sessionId:string,session?:Pick<Sessi
   if (entry) {
     const ws = await state.storyWorkspace(entry.cardId,entry.storyId)
     await withWorkspaceLock(ws.fs.root,async()=> {
+      // 开始预检与最终提交分属两次持锁；复核最新状态，不能将间隙恢复的旧日志按通用错误路径收口。
+      assertActiveTemplateFormatter(await loadTemplateState(ws.fs),sessionId)
       await ws.wal.validateFloor(entry.floor)
       if (!templateError) {
         try {

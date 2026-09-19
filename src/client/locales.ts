@@ -6,6 +6,7 @@
  */
 
 import * as actions from './locales/actions.js'
+import * as about from './locales/about.js'
 import * as assistant from './locales/assistant.js'
 import * as characters from './locales/characters.js'
 import * as chip from './locales/chip.js'
@@ -31,6 +32,7 @@ export type TavernLocalePreference = 'auto' | TavernLocaleId
 export const DEFAULT_LOCALE: TavernLocaleId = 'en'
 
 export const zh: Record<string, string> = {
+  ...about.zh,
   ...common.zh,
   ...util.zh,
   ...panel.zh,
@@ -50,6 +52,7 @@ export const zh: Record<string, string> = {
 }
 
 export const en: Record<string, string> = {
+  ...about.en,
   ...common.en,
   ...util.en,
   ...panel.en,

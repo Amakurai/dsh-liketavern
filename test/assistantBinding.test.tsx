@@ -4,6 +4,9 @@
  */
 import type { ReactNode } from 'react'
 import { useEffect } from 'react'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { act, create } from 'react-test-renderer'
 import type { ReactTestRenderer } from 'react-test-renderer'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -61,6 +64,51 @@ async function render(remote: TavernRemote, sessionId: string) {
 }
 
 describe('assistant 楼层绑定刷新', () => {
+  /** 真实绑定文件配延迟 remote：复用宿主楼层组件时，新会话不能暂借旧角色身份。 */
+  it('切换会话后等待自己的绑定，旧会话刷新迟到也不能恢复旧角色气泡', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'tavern-assistant-binding-'))
+    const firstId = 'assistant-switch-first', secondId = 'assistant-switch-second'
+    const firstBinding = defaultBinding(firstId, 'switch-card-first')
+    const secondBinding = defaultBinding(secondId, 'switch-card-second')
+    const firstReload = Promise.withResolvers<void>(), secondRead = Promise.withResolvers<void>()
+    let view: ReactTestRenderer | undefined
+    try {
+      await writeFile(join(root, `${firstId}.json`), JSON.stringify(firstBinding))
+      await writeFile(join(root, `${secondId}.json`), JSON.stringify(secondBinding))
+      const getSessionBinding = vi.fn(async ({ sessionId }: { sessionId: string }) => {
+        if (sessionId === secondId) await secondRead.promise
+        const binding = JSON.parse(await readFile(join(root, `${sessionId}.json`), 'utf8')) as SessionBinding
+        return ok({ binding })
+      })
+      const remote = { getSessionBinding, getCharacterDetail: async ({ cardId }: { cardId: string }) => ok({ ...detail, cardId }) } as unknown as TavernRemote
+      const useSessions = (select: (state: unknown) => unknown) => select({ byId: Object.fromEntries(
+        [firstId, secondId].map(id => [id, { projectionValues: { agentPreset: 'tavern' } }]),
+      ) })
+      const component = (sessionId: string) => <TavernAssistantNode remote={remote} sessionId={sessionId} node={node} useSessions={useSessions as never} />
+      await act(async () => { view = create(component(firstId)); await vi.waitFor(() => expect(getSessionBinding.mock.settledResults.at(-1)?.type).toBe('fulfilled')) })
+      expect(view!.root.findByProps({ 'data-bubble': firstBinding.cardId })).toBeDefined()
+      await act(async () => view!.update(component(secondId)))
+      // 第一帧也不能给 lastBinding 写入“新 sessionId + 旧绑定”，否则整个等待期都会串角色。
+      expect(view!.root.findAll((instance) => typeof instance.props['data-bubble'] === 'string')).toHaveLength(0)
+      await act(async () => { secondRead.resolve(); await vi.waitFor(() => expect(getSessionBinding.mock.settledResults.at(-1)?.type).toBe('fulfilled')) })
+      expect(view!.root.findByProps({ 'data-bubble': secondBinding.cardId })).toBeDefined()
+
+      await act(async () => view!.update(component(firstId)))
+      getSessionBinding.mockImplementationOnce(async () => { await firstReload.promise; return ok({ binding: firstBinding }) })
+      invalidateSessionBinding(firstId)
+      await act(async () => window.dispatchEvent(new CustomEvent(BINDING_CHANGED_EVENT, { detail: firstId })))
+      await act(async () => view!.update(component(secondId)))
+      expect(view!.root.findByProps({ 'data-bubble': secondBinding.cardId })).toBeDefined()
+      await act(async () => firstReload.resolve())
+      expect(view!.root.findByProps({ 'data-bubble': secondBinding.cardId })).toBeDefined()
+    } finally {
+      firstReload.resolve(); secondRead.resolve()
+      if (view) await act(async () => view!.unmount())
+      invalidateSessionBinding(firstId); invalidateSessionBinding(secondId)
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('无绑定时按原生排版，绑定广播后切换为角色气泡，解绑后回到原生排版', async () => {
     const sessionId = 'assistant-binding-1'
     const env = environment(sessionId)

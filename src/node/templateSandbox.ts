@@ -23,7 +23,7 @@ import type { TemplateReplayBootstrap } from '../core/templateContinuation.js'
 import { parseTemplateStickyState, type TemplateStickyState } from '../core/templateSticky.js'
 import type { TemplateRegexSource } from './templateRegexSources.js'
 import { parseTemplateMessageIdentities, parseTemplateMessageVariables, type TemplateMessageVariables } from '../core/templateMessageVariables.js'
-import { TEMPLATE_REPLAY_LIMIT, type TemplateReplay, type TemplateReplayOperation, type TemplateReplayInstruction } from '../core/templateReplay.js'
+import { assertTemplateReplayFormatter, TEMPLATE_REPLAY_LIMIT, type TemplateReplay, type TemplateReplayOperation, type TemplateReplayInstruction } from '../core/templateReplay.js'
 import { normalizeTemplateLore } from '../core/templateLore.js'
 import { parseTemplateScopes, validateTemplateJson, type TemplateContext, type TemplateScopes, type TemplateRegexDescriptor, type TemplateMessageMetadata } from '../core/template.js'
 
@@ -377,6 +377,8 @@ export class TemplateSandbox {
 
   static async rebuild(replay:TemplateReplay):Promise<TemplateSandbox> {
     if(replay.version!==2) throw new Error('模板重放版本不兼容，需要完成或回滚旧版本楼层')
+    // 外显操作哈希无法覆盖词法闭包内捕获的格式化结果；必须在任何第三方代码执行前拒绝旧引擎日志。
+    assertTemplateReplayFormatter(replay)
     if(replay.context.phase!=='generate' || !Array.isArray(replay.operations)
       || replay.operations.length>4096 || JSON.stringify(replay).length>TEMPLATE_REPLAY_LIMIT) throw new Error('模板重放记录无效或超限')
     const sandbox=await TemplateSandbox.create(replay.context,false,replay.bootstrap)
@@ -415,7 +417,7 @@ export class TemplateSandbox {
   }
   replay():TemplateReplay {
     const variables=this.variables()
-    const replay:TemplateReplay={version:2,context:this.initialContext,operations:this.operations,variables,messageVariablesHash:this.hash(this.messageVariables()),
+    const replay:TemplateReplay={version:2,formatterVersion:2,context:this.initialContext,operations:this.operations,variables,messageVariablesHash:this.hash(this.messageVariables()),
       ...(this.bootstrap ? {bootstrap:this.bootstrap} : {})}
     if(JSON.stringify(replay).length>TEMPLATE_REPLAY_LIMIT) throw new Error('模板重放快照超过 4 MiB 上限')
     return JSON.parse(JSON.stringify(replay)) as TemplateReplay

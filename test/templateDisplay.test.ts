@@ -1,4 +1,4 @@
-/** 展示模板兼容：真实 QuickJS/Showdown、持久化回复和服务重绘验证顺序、隔离交付及只读边界。 */
+/** 展示模板兼容：真实 QuickJS/Markdown、持久化回复和服务重绘验证顺序、隔离交付及只读边界。 */
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -7,7 +7,6 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { SettingsScope } from '@deepseek-ai/dsh-settings'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import { createAssistantMessage } from '@deepseek-ai/dsh-llm'
-import { createRequire } from 'node:module'
 import { emptyTemplateScopes, type TemplateContext } from '../src/core/template.js'
 import {
   disableInteractiveParts,
@@ -33,7 +32,6 @@ import { TAVERN_GREETING_SOURCE } from '../src/core/greetingLog.js'
 const context=(patch:Partial<TemplateContext>={}):TemplateContext=>({variables:emptyTemplateScopes(),char:'A',user:'B',card:{},entries:[],presets:[],history:[],now:1000,seed:1,phase:'render',...patch})
 const lore=(entries:unknown[])=>parseLorebook({entries},{source:'character',sourceRef:'card'})
 const render=(text:string,entries:unknown[]=[])=>isolated('template',{texts:[text],context:context({entries:lore(entries)}),decorateOutput:true})
-const official=createRequire(import.meta.url)('showdown') as {Converter:new(options:Record<string,unknown>)=>{makeHtml:(text:string)=>string}}
 
 describe('有序展示与真实消息格式化',()=>{
   it('BEFORE、正文内卡面和 AFTER 按原位置交付，非空 iframe 标题单独保存',async()=>{
@@ -70,13 +68,19 @@ describe('有序展示与真实消息格式化',()=>{
     expect(result.parts[0]?.at(-1)?.text).toContain('<strong>生命</strong>')
     expect(result.parts[0]?.at(-1)?.text).toContain('<script>')
   })
-  it('QuickJS 的捕获适配与官方 Showdown 的代码块、HTML、表格和 emoji 输出一致',async()=>{
-    const converter=new official.Converter({emoji:true,literalMidWordUnderscores:true,parseImgDimensions:true,tables:true,underline:true,simpleLineBreaks:true,strikethrough:true,disableForced4SpacesIndentedSublists:true,metadata:false,noHeaderId:true,tablesHeaderId:false})
-    const samples=['```html\n<p>代码里的 HTML</p>\n```','`<b>code</b>` :smile: **bold**','<details><summary>标题</summary>内容</details>',
-      '| one | two |\n|---|---|\n| ~~strike~~ | __underline__ |','> quote\n\nnext_line\nsecond line']
-    for(const sample of samples) {
+  it('隔离格式化保留代码转义、原始 HTML、表格、下划线、换行和 emoji 的展示语义',async()=>{
+    const samples=[
+      {source:'```html\n<p>代码里的 HTML</p>\n```',fragments:['<pre><code','&lt;p&gt;代码里的 HTML&lt;/p&gt;','</code></pre>']},
+      {source:'`<b>code</b>` :smile: **bold**',fragments:['<code>&lt;b&gt;code&lt;/b&gt;</code>','😄','<strong>bold</strong>']},
+      {source:'<details><summary>标题</summary>内容</details>',fragments:['<details><summary>标题</summary>内容</details>']},
+      {source:'| one | two |\n|---|---|\n| ~~strike~~ | __underline__ |',fragments:['<table>','<th>one</th>','<del>strike</del>','<u>underline</u>']},
+      {source:'> quote\n\nnext_line\nsecond line',fragments:['<blockquote>','<p>quote</p>','next_line<br','second line']},
+    ]
+    for(const {source:sample,fragments} of samples) {
       const actual=await render('',[{uid:1,comment:'format',content:'@@render_after\n@@message_formatting\n'+sample}])
-      expect(actual.parts[0]).toEqual([{kind:'html',text:converter.makeHtml(sample)}])
+      expect(actual.parts[0]).toHaveLength(1)
+      expect(actual.parts[0]?.[0]?.kind).toBe('html')
+      for(const fragment of fragments) expect(actual.parts[0]?.[0]?.text).toContain(fragment)
     }
   })
   it('普通片段拆分保留开头和结尾；展示边界拒绝坏数据及无界输出',()=>{

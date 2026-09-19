@@ -13,6 +13,7 @@
  */
 import type { infer as Infer } from 'zod/mini';
 import type { AssembledPrompt } from './core/assemble.js';
+import type { CharacterCompatibilityReport } from './core/characterCompatibility.js';
 import type { SessionBinding } from './core/binding.js';
 import type { GreetingFloorState } from './core/greetingLog.js';
 import type { TemplateDisplayPart } from './core/templateDisplay.js';
@@ -26,6 +27,7 @@ import type { SiblingSwipe } from './core/siblings.js';
 import type { CharacterCard, ChatMessage, MemoryEntry, PromptPreset, RegexRule, WIEngineResult, WorldDelta } from './core/types.js';
 import type { TavernConfigRaw } from './node/config.js';
 import type { ForkResult } from './node/floors.js';
+import type { PluginAbout, PluginUpdate } from './node/pluginAbout.js';
 import type { ArchivedCharacterSummary, CharacterSummary } from './state/workspace.js';
 /**
  * Tavern 资产生命周期的稳定远程错误词汇。details 只携带可公开的计数，
@@ -841,6 +843,16 @@ export declare const METHODS: {
         value: import("zod/mini").ZodMiniUnknown;
         summary: string;
     };
+    getPluginAbout: {
+        req: import("zod/mini").ZodMiniObject<{}, import("zod/v4/core").$strip>;
+        value: import("zod/mini").ZodMiniUnknown;
+        summary: string;
+    };
+    checkPluginUpdate: {
+        req: import("zod/mini").ZodMiniObject<{}, import("zod/v4/core").$strip>;
+        value: import("zod/mini").ZodMiniUnknown;
+        summary: string;
+    };
     getAvatar: {
         req: import("zod/mini").ZodMiniObject<{
             cardId: import("zod/mini").ZodMiniString<string>;
@@ -874,6 +886,7 @@ export interface CharacterInspect {
     hasCharacterBook: boolean;
     characterBookName: string | null;
     entryCount: number;
+    compatibility: CharacterCompatibilityReport;
 }
 /** getCharacterDetail 的角色卡详情（归一化卡的扁平字段 + 世界书/头像元信息）。 */
 export interface CharacterDetail {
@@ -948,6 +961,8 @@ export interface ContextUsage {
 }
 /** 方法名 → 裸业务结果类型。加/改 remote 方法时必须与 METHODS、service 实现、client 镜像同步。 */
 export interface TavernMethodResults {
+    getPluginAbout: PluginAbout;
+    checkPluginUpdate: PluginUpdate;
     abandonHelperMvu: {
         disabled: true;
         abandoned: number;
@@ -1590,7 +1605,7 @@ export declare const TYPERT_HOST: {
                     sessionId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     sessionId: import("zod/mini").ZodMiniString<string>;
-                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{}, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{}, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{}, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{}, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     cardId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{}, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     patch: import("zod/mini").ZodMiniUnknown;
@@ -2026,7 +2041,7 @@ export declare const TYPERT_REMOTE: {
                     sessionId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     sessionId: import("zod/mini").ZodMiniString<string>;
-                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{}, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{}, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{}, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{}, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     cardId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{}, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     patch: import("zod/mini").ZodMiniUnknown;

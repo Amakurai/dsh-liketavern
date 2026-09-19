@@ -13,7 +13,7 @@ import type { LlmRuntime, Message } from '@deepseek-ai/dsh-llm';
 import { type AssembledPrompt } from '../core/assemble.js';
 import type { ChatMessage, WorldDelta, WorldInfoEntry } from '../core/types.js';
 import { type TemplateContext } from '../core/template.js';
-import type { TemplateReplay } from '../core/templateReplay.js';
+import { type TemplateReplay } from '../core/templateReplay.js';
 import type { TavernState } from './state.js';
 export interface PipelineInput {
     state: TavernState;

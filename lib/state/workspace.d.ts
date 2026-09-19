@@ -9,6 +9,9 @@ export interface CharacterWorkspace {
 export interface CharacterSummary {
     cardId: string;
     name: string;
+    /** 共享资产的检索字段；可选以兼容旧宿主列表响应。 */
+    creator?: string;
+    tags?: string[];
     hasAvatar: boolean;
     createdAt?: string;
     /** 卡内嵌世界书（assets/character-book.json 或 card.characterBook）。 */

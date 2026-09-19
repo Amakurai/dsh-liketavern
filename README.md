@@ -4,7 +4,7 @@
 
 **在 DeepSeek Harness 的 `dsh web` 中使用角色卡、世界书与长期记忆，开始 Tavern 式角色扮演。**
 
-**[v0.2.5](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.2.5) · 适配 dsh `0.1.5-rc.2` · Node.js ≥ 24**
+**[v0.2.6](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.2.6) · 适配 dsh `0.1.5-rc.2` · Node.js ≥ 24**
 
 中文 | [English](./README.en.md)
 
@@ -38,6 +38,8 @@ dsh-liketavern 是 DeepSeek Harness 的角色扮演插件。你可以导入 Sill
 
 编辑器支持未保存提示和草稿恢复；设置页、表单和弹窗适配窄屏。第三方交互卡内部是否适配手机，仍由卡片自身排版决定。
 
+角色管理页、收纳箱和新会话角色选择器支持按角色名、标签、作者或内嵌世界书名搜索。
+
 ### 基本概念
 
 | 名称 | 用途与区别 |
@@ -67,7 +69,7 @@ dsh-liketavern 是 DeepSeek Harness 的角色扮演插件。你可以导入 Sill
 在终端执行，固定到发布标签：
 
 ```bash
-dsh plugin --profile web add github:Amakurai/dsh-liketavern#v0.2.5
+dsh plugin --profile web add github:Amakurai/dsh-liketavern#v0.2.6
 dsh plugin --profile web list --depth 0
 ```
 
@@ -81,15 +83,17 @@ dsh web
 
 ### 使用安装包
 
-从 [v0.2.5 Release](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.2.5) 下载 `dsh-liketavern-0.2.5.tgz`，在文件所在目录执行：
+从 [v0.2.6 Release](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.2.6) 下载 `dsh-liketavern-0.2.6.tgz`，在文件所在目录执行：
 
 ```bash
-dsh plugin --profile web add ./dsh-liketavern-0.2.5.tgz
+dsh plugin --profile web add ./dsh-liketavern-0.2.6.tgz
 ```
 
 安装后同样重启 `dsh web`。Release 附有 `SHA256SUMS.txt`，可用于核对下载文件。
 
 ### 升级
+
+在「设置 → Tavern → 关于」可查看插件和宿主版本、打开 GitHub 项目，并点击「检查更新」查询最新正式发布。页面会核对宿主版本；发现兼容的新版本后可复制固定发布标签的更新命令。当前宿主通过终端安装更新，检查按钮不会自动安装。源码开发版会提示在源码目录更新并构建。自定义 profile 需将命令中的 `web` 改为对应名称。
 
 先核对[更新日志](./CHANGELOG.md)中的宿主版本，停止 dsh 并备份数据，再执行目标版本的安装命令。升级插件沿用现有数据目录；完整备份范围见[数据与备份](#数据与备份)。
 
@@ -99,7 +103,7 @@ dsh plugin --profile web add ./dsh-liketavern-0.2.5.tgz
 
 先完成 dsh 的模型配置，再用一张角色卡跑通普通对话。提示词预设可使用内建默认值，人设、附加世界书、脚本和 MVU 按卡片需要再配置。
 
-1. **准备角色卡。** 在 dsh 设置中的「Tavern → 角色」页导入 PNG / JSON，或创建角色。导入时可以选择是否接收卡内嵌世界书。
+1. **准备角色卡。** 在 dsh 设置中的「Tavern → 角色」页导入 PNG / JSON，或创建角色。导入前会显示兼容报告，再选择是否接收内嵌世界书；取消检查不会保存角色。报告静态检查已知接口、脚本、模板和外部资源，不执行代码，也不保证任意第三方卡兼容。
 2. **新建剧情。** 新建会话，选择「Tavern 模式」，再点选角色卡。新会话不会自动绑定默认角色；空列表中的「导入 / 创建角色」也可打开管理页。
 3. **确认设定。** 点击会话顶部的角色入口，为当前会话选择提示词预设、人设和世界书并保存；暂时没有附加资产时可保留默认配置。
 4. **开始对话。** 有多条开场白时用左右按钮切换，再点「开始对话」并发送第一条台词；没有开场白的卡可直接输入。
@@ -143,6 +147,7 @@ dsh plugin --profile web add ./dsh-liketavern-0.2.5.tgz
 
 - **酒馆助手提供部分兼容接口。** 支持变量、脚本库、世界书与多种消息操作；`generate` / `generateRaw`、消息插入与旋转、历史分页和跨页面事件等仍待适配。完整接口和示例见[酒馆助手兼容说明](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/TAVERN_HELPER.md)。
 - **EJS 模板已内置。** 使用已支持接口的卡无需另装 ST-Prompt-Template；提示词位置、历史处理等宿主差异见[提示词模板说明](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/PROMPT_TEMPLATES.md)。
+- **消息格式化已更换为 markdown-it。** 已移除有漏洞的 Showdown，保留常用展示语法；旧回复快照不重算。升级前请备份并完成旧模板生成、让跨轮回调结束；仍含旧重放日志时会明确拒绝继续执行，保留数据供完成或回滚。格式差异和处理步骤见上述模板说明。
 - **MVU 支持有边界。** 纯官方 MVU 导入入口可适配到原生执行器，自定义框架保持原代码；classic schema 与 `BEFORE_MESSAGE_UPDATE` 正文更新钩子仍待适配。当前界面没有独立的变量 schema 编辑器入口。
 - **交互卡在隔离 iframe 中运行。** 不提供主页面 DOM、`parent.TavernHelper`、`parent.$` 或 Node 访问。网络请求及外部脚本默认受限，可在「设置 → 卡片与数据」配置可信域名；图片和字体按现有策略加载。
 - **脚本选项不会自动发送。** 后台脚本发布的文字选项由用户点击后填入当前输入草稿；AI 代答目前仍使用剪贴板，需要手动粘贴。
@@ -178,15 +183,27 @@ Tavern 使用 dsh 原生 PTC（程序化工具调用）。需要查证或记事�
 | --- | --- | --- |
 | 交互卡变量备份 | 已保存的当前剧情变量，变量数据最多 1 MiB | 「设置 → 卡片与数据」选择角色与剧情，导出或粘贴备份恢复；不包含消息正文、角色卡、脚本资产或尚未写入变量的表单输入 |
 | 编辑草稿暂存 | 角色、预设、世界书、用户、正则、记忆和设置的未保存编辑 | 出现「草稿已暂存」后，在同一浏览器标签页刷新或重开编辑器可恢复；仍需点保存才能应用。单份上限 2 MiB |
-| 完整目录备份 | 插件数据以及宿主会话、配置等 | 停止 dsh 后备份整个 `DSH_HOME`；上述变量导出不能替代完整备份 |
+| 可校验目录备份 | `DSH_HOME` 内插件数据、宿主会话与配置；含版本、文件大小及 SHA-256 清单 | 用下方命令创建、校验、恢复到新目录；排除可重装的 profile 依赖，变量导出不能替代此备份 |
 
 编辑草稿保存在插件数据目录的 `editor-drafts/`，浏览器只保存随机标签页标识。关闭标签页或禁用浏览器存储后不保证恢复；暂存失败会保留页面内容并提供重试，明确放弃会清除对应草稿。角色预览中的交互数据是临时的，不会写入真实剧情。
 
 ### 迁移与恢复
 
-1. 记录当前插件与 dsh 版本，停止所有使用该数据目录的 dsh 进程，复制整个 `DSH_HOME`。
-2. 恢复到单独目录，先用与备份一致的版本启动，并让 `DSH_HOME` 指向恢复目录；保留原备份。
+在插件源码或安装目录中使用以下命令，把示例路径替换为实际路径。备份和恢复的目标必须不存在，其父目录必须已存在。
+
+```sh
+node lib/backup.js create --home "C:/data/dsh-home" --backup "D:/backups/dsh-2026-09-19" --offline
+node lib/backup.js verify --backup "D:/backups/dsh-2026-09-19"
+node lib/backup.js restore --backup "D:/backups/dsh-2026-09-19" --target "C:/data/dsh-restored" --offline
+```
+
+安装环境已暴露命令时，也可将 `node lib/backup.js` 换成 `dsh-tavern-backup`。加 `--json` 可读取结构化结果。校验会拒绝缺失、篡改和额外文件，并检查插件数据结构、绑定引用和 WAL；恢复先验证并在临时目录复制，成功后才发布新目录，不覆盖现有数据。宿主压缩历史按字节校验，不做完整语义解析，恢复后仍需实际打开会话检查。
+
+1. 停止所有使用该数据目录的 dsh 进程，再创建备份。`--offline` 是操作者的停机声明；工具可拒绝仍活跃的 PID 锁，但无法证明所有写入进程均已停止。
+2. 恢复到单独目录，核对保留的 profile 配置与锁文件，安装对应的 dsh / 插件版本，并让 `DSH_HOME` 指向恢复目录；保留原备份。清单记录执行备份工具时的版本，不能证明数据最后由哪个历史版本写入。
 3. 核对角色、会话、分支、记忆与已保存变量，再按目标版本的升级说明继续。
+
+备份保留 profile 配置和锁文件，精确排除 `profiles/node_modules`、`profiles/<名称>/node_modules` 与 `profiles/<名称>/.dsh-module-fallback/node_modules`；恢复后需按原 profile 重装依赖。其余位置的符号链接、junction、硬链接与异常文件会被拒绝，不跟随到目录外。自定义放在 `DSH_HOME` 外的插件数据、外部工作区及外部凭据需另行备份。目录备份没有加密，可能包含本地凭据和私有对话，应按原数据同等保护。
 
 旧版共享状态会在首次打开旧绑定时复制到独立剧情，原目录保留。此前混合的多分支事实无法自动可靠拆分，需要核对迁移结果。自动摘要可能遗漏信息，原文来源会保留；异常、截断或超时回复不会触发归档。分支与归档会占用磁盘，当前不自动清理旧剧情。
 

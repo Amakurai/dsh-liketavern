@@ -64,6 +64,8 @@ export declare class Wal {
     private enqueue;
     private readMeta;
     private writeMeta;
+    /** 恢复游标绑定原始记录集合；中断后只能继续回滚，追加或提交会使游标失效或误报已完成。 */
+    private assertNotRecovering;
     private readRecords;
     /** 预检与执行共用同一套只读校验，任何坏游标都必须在修改批次中首个文件前被发现。 */
     private readRollbackProgress;

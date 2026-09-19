@@ -44,7 +44,7 @@ const context: z.ZodType<TemplateContext> = z.object({variables:scope,char:text,
 const hash = z.string().regex(/^[a-f0-9]{64}$/)
 const stickyState=z.unknown().transform(parseTemplateStickyState)
 const metadata=z.object({index:z.number().int().nonnegative(),role,name:text.optional(),swipeId:z.number().int().nonnegative(),hostMessageId:z.number().int().nonnegative().optional()}).strict()
-const replay: z.ZodType<TemplateReplay> = z.object({version:z.literal(2),context:context.refine(value=>value.phase==='generate'),variables:scope,messageVariablesHash:hash,
+const replay: z.ZodType<TemplateReplay> = z.object({version:z.literal(2),formatterVersion:z.literal(2).optional(),context:context.refine(value=>value.phase==='generate'),variables:scope,messageVariablesHash:hash,
   bootstrap:z.object({state:stickyState,preload:z.enum(['preserve','refresh'])}).strict().optional(),
   operations:z.array(z.discriminatedUnion('kind',[
     z.object({kind:z.literal('render'),text,data:z.record(text,z.unknown()),source:text.optional(),hash}).strict(),

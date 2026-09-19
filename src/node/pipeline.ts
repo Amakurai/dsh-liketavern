@@ -13,7 +13,7 @@ import type { LlmRuntime, Message } from '@deepseek-ai/dsh-llm'
 import { defaultPreset, type AssembledPrompt } from '../core/assemble.js'
 import { BOUND_DISCIPLINE, TURN_PLAYBOOK, isSyntheticUserText } from '../core/dshPrompt.js'
 import { hashToSeed } from '../core/macros.js'
-import { memorySearchOptions, selectMemoryBodies } from '../core/memoryRetrieval.js'
+import { memoryCandidateCount, memorySearchOptions, selectMemoryBodies } from '../core/memoryRetrieval.js'
 import { clipToTokenBudget, estimateTokens } from '../core/tokenize.js'
 import type { ChatMessage, WIEngineResult, WorldDelta, WorldInfoEntry } from '../core/types.js'
 import { EMPTY_TIMER_STATE } from '../core/types.js'
@@ -30,7 +30,7 @@ import { templateGenerationContext, type PreparedTemplateGeneration } from '../s
 import { type TemplateContext } from '../core/template.js'
 import { templateCardData } from '../core/templateAssets.js'
 import { normalizeTemplateLore } from '../core/templateLore.js'
-import type { TemplateReplay } from '../core/templateReplay.js'
+import { assertTemplateReplayFormatter, type TemplateReplay } from '../core/templateReplay.js'
 import { buildTemplateMessageHistory } from './templateMessageHistory.js'
 import { mergeTemplateMessageVariables, visibleTemplateMessageVariables, type TemplateMessageIdentity } from '../core/templateMessageVariables.js'
 import { loadTemplateAvatars } from './templateAvatar.js'
@@ -196,6 +196,7 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
     }
     if (recoveryTurn===generation.turn) {
       if (generation.status!=='prepared') throw new Error('该轮模板已经结束，请开启新一轮，不能重复执行')
+      assertTemplateReplayFormatter(generation.replay)
       const floor = await ws.wal.validateFloor(generation.floor)
       if (floor.committed) throw new Error('模板计划恢复缺少未提交的原剧情楼层')
       const open = state.openFloors.get(sessionId)
@@ -297,12 +298,13 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
       .filter((t) => t.trim())
       .join('\n')
     memories = []
-    if (queryMessages.trim()) {
+    const candidateCount = memoryCandidateCount(config.memory.retrievalTopK)
+    if (queryMessages.trim() && candidateCount > 0 && Number.isFinite(config.memory.retrievalTokenBudget) && config.memory.retrievalTokenBudget >= 1) {
       const hits = await ws.memory.search(
         queryMessages,
-        memorySearchOptions(config.memory.retrievalTopK, config.memory.halfLifeDays),
+        { ...memorySearchOptions(candidateCount, config.memory.halfLifeDays), includeSummarySources: true },
       )
-      memories = selectMemoryBodies(hits, config.memory.retrievalTokenBudget)
+      memories = selectMemoryBodies(hits, config.memory.retrievalTokenBudget, config.memory.retrievalTopK)
     }
 
     // 同轮冻结的宏输入：第 1 步取当前 history 的最近 assistant 正文（{{lastcharmessage}} 用），

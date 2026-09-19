@@ -15,7 +15,7 @@
 
 - EJS 使用真实 6.0.1，覆盖第三参、嵌套上下文、同步/异步 include 与多参数 print；include 不提供文件系统。
 - 生成阶段闭包通过确定性操作重放恢复，冻结计划与变量、计时器共同持久化；重启后恢复后续步骤和正常回复，完成回执防止重复执行。已有真实文件系统、写入故障、坏 WAL、停止/截断、分支与回滚测试。
-- `<%=` 生成原样、回复消息格式化；`@@iframe` / `@@message_formatting` 的 BEFORE→正文→AFTER 有序片段与折叠标题随回复原子保存。Showdown 的代码块、表格、HTML、emoji 已与官方输出对照；所有 HTML 进入不透明来源 iframe，展示正则不跨片段边界，ST 主题及自定义 Markdown 扩展不在本次映射中。
+- `<%=` 生成原样、回复消息格式化；`@@iframe` / `@@message_formatting` 的 BEFORE→正文→AFTER 有序片段与折叠标题随回复原子保存。消息格式化现用固定版 markdown-it / markdown-it-emoji，测试覆盖代码块、表格、HTML、emoji、下划线与图片尺寸；所有 HTML 进入不透明来源 iframe。与旧 Showdown 的格式差异和活动重放升级限制见 [模板说明](PROMPT_TEMPLATES.md)；ST 主题及自定义 Markdown 扩展不在映射中。
 - 回复逐条建立姓名、文本索引、swipe、最后标记及正则深度，宿主 seq 单独传递；默认名字、最后消息、模型与群聊空值已覆盖。
 - generateData 提供未经 EJS 处理的完整 ST 模拟序列；全局 BEFORE 之后先应用 basic，逐消息与后续钩子读取 basic 处理后的序列。GENERATE 钩子的 generateBuffer 按前后顺序推进，普通嵌套资产不额外承诺逐片段推进。装饰器支持下标及 REGEX 参数，实际展开正文参与预算检查，同一父来源 activewi 重组复用首次结果。
 - `@INJECT` 与普通生成正文均先执行 generate 正则，再求值 EJS。宏 outlet 原文与父模板共同编译，保留父条件、循环与词法变量；templatePlacement 和 templateGeneration 验证动态创建/删除 EJS、跳过 false 分支、循环副作用及重组后新来源加入。对应固定版本的 [生成处理](https://github.com/zonde306/ST-Prompt-Template/blob/9bf9bcdfa8d0d38ab1f4f7342067bc16f347d85d/src/modules/handler.ts#L243-L253) 与 [定位注入](https://github.com/zonde306/ST-Prompt-Template/blob/9bf9bcdfa8d0d38ab1f4f7342067bc16f347d85d/src/features/inject-prompt.ts#L71-L84)。

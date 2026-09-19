@@ -7,5 +7,6 @@ export declare const zh: {
     readonly 'panel.tab.regex': "正则";
     readonly 'panel.tab.memory': "记忆";
     readonly 'panel.tab.settings': "设置";
+    readonly 'panel.tab.about': "关于";
 };
 export declare const en: Record<keyof typeof zh, string>;

@@ -8,6 +8,7 @@ export const zh = {
   'panel.tab.regex': '正则',
   'panel.tab.memory': '记忆',
   'panel.tab.settings': '设置',
+  'panel.tab.about': '关于',
 } as const
 
 export const en: Record<keyof typeof zh, string> = {
@@ -18,4 +19,5 @@ export const en: Record<keyof typeof zh, string> = {
   'panel.tab.regex': 'Regex',
   'panel.tab.memory': 'Memory',
   'panel.tab.settings': 'Settings',
+  'panel.tab.about': 'About',
 }

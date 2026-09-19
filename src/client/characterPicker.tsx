@@ -1,6 +1,7 @@
 /** 新会话角色选择：头像、搜索与本次打开应用期间最近使用；资产管理复用原有导入及世界书确认流程。 */
 import { useState } from 'react'
 import { cachedAvatar } from './cache.js'
+import { matchesCharacterSearch } from './characterSearch.js'
 import { DraftScope } from './drafts.js'
 import { useT } from './i18n.js'
 import { CharactersSection } from './panel/characters.js'
@@ -35,8 +36,7 @@ export function CharacterPicker(props: { remote: TavernRemote; selectedId?: stri
   const chars = useLoader(() => props.remote.listCharacters({}), [managing])
   const items = chars.state.status === 'ready' ? chars.state.value.items : []
   const recent = recentByRemote.get(props.remote) ?? []
-  const q = query.trim().toLocaleLowerCase()
-  const filtered = items.filter((c) => `${c.name}\n${c.characterBookName ?? ''}`.toLocaleLowerCase().includes(q))
+  const filtered = items.filter((c) => matchesCharacterSearch(c, query))
     .sort((a, b) => {
       const rank = (id: string) => { const i = recent.indexOf(id); return i < 0 ? recent.length : i }
       return rank(a.cardId) - rank(b.cardId)
@@ -48,7 +48,7 @@ export function CharacterPicker(props: { remote: TavernRemote; selectedId?: stri
       <CharactersSection remote={props.remote} />
     </> : <div className="dsh-tavern-section">
       <div className="dsh-tavern-toolbar">
-        <SearchInput label={t('characters.searchLabel')} value={query} width="100%" onChange={(value) => { setQuery(value); setLimit(24) }} />
+        <SearchInput label={t('characters.searchLabel')} placeholder={t('characters.searchPlaceholder')} value={query} width="100%" onChange={(value) => { setQuery(value); setLimit(24) }} />
         <Btn disabled={props.busy} onClick={() => setManaging(true)}>{t('hero.picker.manage')}</Btn>
       </div>
       <Err message={props.error ?? (chars.state.status === 'error' ? chars.state.message : null)} />

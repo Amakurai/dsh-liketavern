@@ -299,6 +299,32 @@ it('回滚在正文替换后崩溃：恢复游标防止重放较新版本', asyn
   expect((await panel.memory.get(entry.id))!.body).toBe('原文')
 })
 
+it('回滚中断后冻结原楼层的追加与提交，重启仍可按原游标完成恢复', async () => {
+  const { ws, fs, rollback } = await setup()
+  await ws.fs.writeText('journal.md', '原文')
+  await fs.writeText('journal.md', '第一稿')
+  await fs.writeText('journal.md', '第二稿')
+  await ws.wal.commitFloor('s#t1')
+  fault.target = 'journal.md'; fault.afterRename = true
+  await expect(rollback()).rejects.toThrow('替换后崩溃')
+
+  const { Wal } = await import('../src/state/wal.js')
+  const recovered = new Wal(join(ws.fs.root, 'state/wal'))
+  const metadata = await ws.fs.readText('state/wal/s_t1/meta.json')
+  const records = await ws.fs.readText('state/wal/s_t1/records.jsonl')
+  await expect(recovered.reopenFloor('s#t1')).rejects.toThrow('回滚恢复')
+  await expect(fs.writeText('journal.md', '迟到的写入')).rejects.toThrow('回滚恢复')
+  await expect(recovered.record('s#t1', 'other.md', null)).rejects.toThrow('回滚恢复')
+  await expect(recovered.recordAfter('s#t1', 'journal.md', '后补快照')).rejects.toThrow('回滚恢复')
+  await expect(recovered.commitFloor('s#t1')).rejects.toThrow('回滚恢复')
+  expect(await ws.fs.readText('state/wal/s_t1/meta.json')).toBe(metadata)
+  expect(await ws.fs.readText('state/wal/s_t1/records.jsonl')).toBe(records)
+  expect(await ws.fs.readText('journal.md')).toBe('第一稿')
+
+  await recovered.rollbackFloor('s#t1', ws.fs.root)
+  expect(await ws.fs.readText('journal.md')).toBe('原文')
+})
+
 it('共享旧 WAL 不允许越过同一文件的后继写入撤销，避免之后复活已撤销事实', async () => {
   const { ws, panel, memory } = await setup()
   const entry = await panel.memory.write({ body: '原文' })

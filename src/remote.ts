@@ -15,6 +15,7 @@ import type { infer as Infer } from 'zod/mini'
 import { array, boolean, enum as enum_, int, literal, maxLength, minimum, minLength, nullable, number, object, optional, regex, string, union, unknown } from 'zod/mini'
 import type { ZodMiniType } from 'zod/mini'
 import type { AssembledPrompt } from './core/assemble.js'
+import type { CharacterCompatibilityReport } from './core/characterCompatibility.js'
 import type { SessionBinding } from './core/binding.js'
 import type { GreetingFloorState } from './core/greetingLog.js'
 import type { TemplateDisplayPart } from './core/templateDisplay.js'
@@ -28,6 +29,7 @@ import type { SiblingSwipe } from './core/siblings.js'
 import type { CharacterCard, ChatMessage, MemoryEntry, PromptPreset, RegexRule, WIEngineResult, WorldDelta } from './core/types.js'
 import type { TavernConfigRaw } from './node/config.js'
 import type { ForkResult } from './node/floors.js'
+import type { PluginAbout, PluginUpdate } from './node/pluginAbout.js'
 import type { ArchivedCharacterSummary, CharacterSummary } from './state/workspace.js'
 
 /**
@@ -365,6 +367,8 @@ export const METHODS = {
     summary: '读取会话上下文占用（token-meter 投影；宿主未挂投影时 usage=null）',
   },
   getDataInfo: { req: object({}), value: anyValue, summary: 'Tavern 数据目录路径' },
+  getPluginAbout: { req: object({}), value: anyValue, summary: '读取插件版本与项目地址' },
+  checkPluginUpdate: { req: object({}), value: anyValue, summary: '检查 GitHub 正式发布与宿主兼容性，不安装更新' },
   getAvatar: { req: object({ ...cardIdField }), value: anyValue, summary: '角色头像 dataURL' },
   // 设置（采样参数与世界书全局设置等，落 dsh 设置命名空间 dsh-tavern）
   getSettings: { req: object({}), value: anyValue, summary: '读取 Tavern 设置' },
@@ -390,6 +394,7 @@ export interface CharacterInspect {
   hasCharacterBook: boolean
   characterBookName: string | null
   entryCount: number
+  compatibility: CharacterCompatibilityReport
 }
 
 /** getCharacterDetail 的角色卡详情（归一化卡的扁平字段 + 世界书/头像元信息）。 */
@@ -467,6 +472,8 @@ export interface ContextUsage {
 
 /** 方法名 → 裸业务结果类型。加/改 remote 方法时必须与 METHODS、service 实现、client 镜像同步。 */
 export interface TavernMethodResults {
+  getPluginAbout: PluginAbout
+  checkPluginUpdate: PluginUpdate
   abandonHelperMvu:{disabled:true;abandoned:number}
   prepareHelperMvuJob:HelperMvuWork
   commitHelperMvuJob:HelperMvuWork

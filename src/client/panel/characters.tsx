@@ -11,6 +11,7 @@ import { PersistentEditor, useDraftRestored, useDraftState } from '../draftPersi
 import { useEffect, useRef, useState } from 'react'
 import { Button, IconArchiveOutline20, IconDownloadOutline16, IconRefreshOutline16, IconTrashOutline16, IconUserOutline16, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
 import { cachedAvatar, cachedCharacterDetail, invalidateCharacter } from '../cache.js'
+import { matchesCharacterSearch } from '../characterSearch.js'
 import { useT } from '../i18n.js'
 import type { CharacterDetail, CharacterInspect, CharacterSummary, TavernRemote } from '../types.js'
 import { Avatar, Btn, ConfirmDialog, Dialog, Err, Field, FileBtn, IconBtn, ListInput, Muted, NumInput, SearchEmpty, SearchInput, Section, Select, Skeleton, Tabs, clickableProps, downloadBase64, downloadJson, errOf, fileToBase64, runAsync, useLoader, useToast } from '../util.js'
@@ -92,15 +93,14 @@ function CharacterCard(props: {
 /** 详情弹窗里的「标签 + 多行框」单元，配合 groupHead 分组使用。 */
 function LabeledArea(props: { label: string; value: string; minHeight?: number; onChange: (value: string) => void }) {
   return (
-    <div className="dsh-tavern-field">
-      <span className="dsh-tavern-fieldLabel">{props.label}</span>
+    <Field label={props.label}>
       <textarea
         className="dsh-tavern-input dsh-tavern-textarea"
         style={{ minHeight: props.minHeight ?? 64 }}
         value={props.value}
         onChange={(e) => props.onChange(e.target.value)}
       />
-    </div>
+    </Field>
   )
 }
 
@@ -267,8 +267,7 @@ function CharacterDetailDialog(props: { remote: TavernRemote; cardId: string; on
             <div className="dsh-tavern-groupHead">{t('characters.detail.groupAdvanced')}</div>
             <LabeledArea label={t('characters.detail.systemPrompt')} value={detail.systemPrompt} onChange={(v) => set({ systemPrompt: v })} />
             <LabeledArea label={t('characters.detail.postHistory')} value={detail.postHistoryInstructions} onChange={(v) => set({ postHistoryInstructions: v })} />
-            <div className="dsh-tavern-field">
-              <span className="dsh-tavern-fieldLabel">{t('characters.detail.depthPrompt')}</span>
+            <Field label={t('characters.detail.depthPrompt')}>
               <textarea
                 className="dsh-tavern-input dsh-tavern-textarea"
                 style={{ minHeight: 64 }}
@@ -299,7 +298,7 @@ function CharacterDetailDialog(props: { remote: TavernRemote; cardId: string; on
                   </Field>
                 </div>
               ) : null}
-            </div>
+            </Field>
           </div>
 
           <div className="dsh-tavern-panelCard">
@@ -403,11 +402,7 @@ function CharactersSectionContent(props: { remote: TavernRemote }) {
         setError(inspected.error.message)
         return
       }
-      if (inspected.value.hasCharacterBook) {
-        setPending({ name: file.name, dataBase64, preview: inspected.value })
-        return
-      }
-      await doImport(file.name, dataBase64, false)
+      setPending({ name: file.name, dataBase64, preview: inspected.value })
     } catch (err2) {
       setError(err2 instanceof Error ? err2.message : String(err2))
     } finally {
@@ -473,14 +468,7 @@ function CharactersSectionContent(props: { remote: TavernRemote }) {
   const items = state.status === 'ready' ? state.value.items : []
   // 卡多或已有搜索内容时显示搜索框；删卡与刷新不能隐藏仍生效的筛选。
   const q = query.trim().toLowerCase()
-  const filtered =
-    q === ''
-      ? items
-      : items.filter(
-          (c) =>
-            c.name.toLowerCase().includes(q) ||
-            (c.characterBookName ?? '').toLowerCase().includes(q),
-        )
+  const filtered = items.filter((c) => matchesCharacterSearch(c, query))
   return (
     <Section title={t('section.characters')} description={t('characters.section.desc')}>
       {toast.node}
@@ -556,28 +544,47 @@ function CharactersSectionContent(props: { remote: TavernRemote }) {
       {pending && (
         <Dialog
           open
-          title={t('characters.importBook.title')}
+          title={t('characters.importPreview.title')}
           description={
-            pending.preview.characterBookName
+            !pending.preview.hasCharacterBook
+              ? t('characters.importPreview.desc', { name: pending.preview.name })
+              : pending.preview.characterBookName
               ? t('characters.importBook.descNamed', { name: pending.preview.name, book: pending.preview.characterBookName, count: pending.preview.entryCount })
               : t('characters.importBook.desc', { name: pending.preview.name, count: pending.preview.entryCount })
           }
           onClose={() => { if (!busy) setPending(null) }}
           footer={
             <div className="dsh-tavern-modalActions">
-              <Button type="button" variant="outline" size="md" disabled={busy} onClick={() => void doImport(pending.name, pending.dataBase64, false)}>
-                {t('characters.importBook.skip')}
+              <Button type="button" variant="outline" size="md" disabled={busy} onClick={() => { setPending(null); setError(null) }}>
+                {t('action.cancel')}
               </Button>
-              <Button type="button" variant="primary" size="md" disabled={busy} onClick={() => void doImport(pending.name, pending.dataBase64, true)}>
-                {t('characters.importBook.import')}
+              {pending.preview.hasCharacterBook && <Button type="button" variant="outline" size="md" disabled={busy} onClick={() => void doImport(pending.name, pending.dataBase64, false)}>
+                {t('characters.importBook.skip')}
+              </Button>}
+              <Button type="button" variant="primary" size="md" disabled={busy} onClick={() => void doImport(pending.name, pending.dataBase64, pending.preview.hasCharacterBook)}>
+                {t(pending.preview.hasCharacterBook ? 'characters.importBook.import' : 'characters.importPreview.import')}
               </Button>
             </div>
           }
         >
           <Err message={error} />
-          <p style={{ margin: 0, fontSize: 13, lineHeight: '20px', color: 'var(--dsw-alias-label-secondary)' }}>
+          <section className="dsh-tavern-compatibility" aria-label={t('characters.compatibility.title')}>
+            <p className="dsh-tavern-compatibilityNote">{t('characters.compatibility.note')}</p>
+            {(['unsupported', 'review', 'supported'] as const).map(status => {
+              const findings = pending.preview.compatibility.findings.filter(item => item.status === status)
+              return findings.length > 0 && <div key={status}>
+                <h3>{t(`characters.compatibility.status.${status}`)}</h3>
+                <ul>{findings.map(item => <li key={item.code}>
+                  <strong>{t(`characters.compatibility.${item.code}.title`)}</strong>
+                  <span>{t(`characters.compatibility.${item.code}.desc`)}</span>
+                  <small>{t('characters.compatibility.locations', { count: item.count, locations: item.locations.join(', ') })}</small>
+                </li>)}</ul>
+              </div>
+            })}
+          </section>
+          {pending.preview.hasCharacterBook && <p className="dsh-tavern-compatibilityNote">
             {t('characters.importBook.skipNote')}
-          </p>
+          </p>}
         </Dialog>
       )}
       <ConfirmDialog

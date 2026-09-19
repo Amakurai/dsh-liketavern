@@ -51,31 +51,10 @@ export function btoa(value) {
   return output;
 }`
 const result = await build({
-  stdin:{contents:'export { z } from "zod"; export { default as lodash } from "lodash"; export { jsonrepair } from "jsonrepair"; export { default as ejs } from "ejs"; export { default as showdown } from "showdown"; export { default as ejsUtils } from "tavern-ejs-utils";',resolveDir:root,sourcefile:'template-libraries-entry.js'},
+  stdin:{contents:'export { z } from "zod"; export { default as lodash } from "lodash"; export { jsonrepair } from "jsonrepair"; export { default as ejs } from "ejs"; export { createMessageFormatter } from "./src/node/templateMarkdown.ts"; export { default as ejsUtils } from "tavern-ejs-utils";',resolveDir:root,sourcefile:'template-libraries-entry.js'},
   bundle:true,format:'iife',globalName:'__TavernTemplateLibraries',platform:'browser',target:'es2022',
   write:false,minify:true,legalComments:'inline',
   plugins:[{name:'ejs-virtual-files',setup(builder) {
-    // QuickJS 不提供过时的 RegExp.$1/$2；只替换 Showdown 两处捕获读取，保留官方解析流程。
-    builder.onLoad({filter:/[\\/]showdown[\\/]dist[\\/]showdown\.js$/},async args=>{
-      let source=(await readFile(args.path,'utf8')).replaceAll('\r\n','\n')
-      const rewrites=[
-        [String.raw`while (/¨C(\d+)C/.test(repText)) {
-      var num = RegExp.$1;`,String.raw`var spanMatch;
-    while ((spanMatch = /¨C(\d+)C/.exec(repText))) {
-      var num = spanMatch[1];`],
-        [String.raw`while (/¨(K|G)(\d+)\1/.test(grafsOutIt)) {
-      var delim = RegExp.$1,
-          num   = RegExp.$2;`,String.raw`var blockMatch;
-    while ((blockMatch = /¨(K|G)(\d+)\1/.exec(grafsOutIt))) {
-      var delim = blockMatch[1],
-          num   = blockMatch[2];`],
-      ]
-      for(const [before,after] of rewrites) {
-        if(source.split(before).length!==2) throw new Error('Showdown 静态捕获适配与已固定版本不一致')
-        source=source.replace(before,after)
-      }
-      return {contents:source,loader:'js'}
-    })
     builder.onResolve({filter:/^tavern-ejs-utils$/},()=>({path:join(root,'node_modules/ejs/lib/esm/utils.js')}))
     builder.onResolve({filter:/^node:(fs|path)$/},args=>({path:args.path,namespace:'ejs-virtual-files'}))
     builder.onLoad({filter:/.*/,namespace:'ejs-virtual-files'},args=>({loader:'js',contents:args.path==='node:fs'
@@ -109,12 +88,14 @@ const fakerResult=await build({
   }}],
 })
 const licenses=new Map()
-for (const name of ['zod','lodash','jsonrepair','ejs','showdown','@faker-js/faker']) {
-  const license = await readFile(join(root,'node_modules',name,name==='jsonrepair' ? 'LICENSE.md' : 'LICENSE'),'utf8')
+const markdownPackages=['markdown-it','markdown-it-emoji','mdurl','entities','uc.micro','linkify-it','punycode.js']
+for (const name of ['zod','lodash','jsonrepair','ejs',...markdownPackages,'@faker-js/faker']) {
+  const filename=name==='jsonrepair' ? 'LICENSE.md' : name==='uc.micro' ? 'LICENSE.txt' : name==='punycode.js' ? 'LICENSE-MIT.txt' : 'LICENSE'
+  const license = await readFile(join(root,'node_modules',name,filename),'utf8')
   const version = JSON.parse(await readFile(join(root,'node_modules',name,'package.json'),'utf8')).version
   licenses.set(name,`/* ${name} ${version}\n${license.replaceAll('*/','* /')}\n*/`)
 }
-for(const [filename,bundle,names] of [['template-libraries.js',result,['zod','lodash','jsonrepair','ejs','showdown']],['template-faker.js',fakerResult,['@faker-js/faker']]]) {
+for(const [filename,bundle,names] of [['template-libraries.js',result,['zod','lodash','jsonrepair','ejs',...markdownPackages]],['template-faker.js',fakerResult,['@faker-js/faker']]]) {
   const source = `/** 模板沙箱依赖产物，由 scripts/build-template-vendor.mjs 生成。 */\n${names.map(name=>licenses.get(name)).join('\n')}\n${bundle.outputFiles[0].text}`
   const destination = join(root,'lib/vendor',filename)
   await mkdir(dirname(destination),{recursive:true})

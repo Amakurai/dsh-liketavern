@@ -72,6 +72,41 @@ export function isMemoryId(id: unknown): id is string {
   return typeof id === 'string' && id.length > 0 && id.length <= 255 && !/[\\/:\0]/.test(id) && id !== '.' && id !== '..'
 }
 
+interface MemoryIndex {
+  index: Bm25Index<MemoryEntry>
+  entries: ReadonlyMap<string, MemoryEntry>
+}
+
+/** 迭代展开摘要的完整叶来源；避免多代摘要递归爆栈，也拒绝循环来源伪装成独立事实。 */
+function summarySourceIds(id: string, entries: ReadonlyMap<string, MemoryEntry>): string[] {
+  const leaves = new Set<string>()
+  const finished = new Set<string>()
+  const visiting = new Set<string>()
+  const pending = [{ id, exit: false }]
+  while (pending.length > 0) {
+    const next = pending.pop()!
+    if (next.exit) {
+      visiting.delete(next.id)
+      finished.add(next.id)
+      continue
+    }
+    if (finished.has(next.id)) continue
+    if (visiting.has(next.id)) throw new Error('记忆归并来源存在循环')
+    const entry = entries.get(next.id)
+    if (!entry) throw new Error(`摘要来源 ${next.id} 缺失，无法保证检索完整性`)
+    const sources = memorySourceIds(entry.sourceRange)
+    if (!sources.length) {
+      leaves.add(next.id)
+      finished.add(next.id)
+      continue
+    }
+    visiting.add(next.id)
+    pending.push({ id: next.id, exit: true })
+    for (const source of sources) pending.push({ id: source, exit: false })
+  }
+  return [...leaves].sort()
+}
+
 /** 来源格式共用入口：旧逗号列表继续可读，特殊文件名用独立 JSON 标记避免逗号与换行歧义。 */
 export function isMemorySummary(sourceRange: string): boolean {
   return /^(?:compress|merge)(?:-json)?:/.test(sourceRange)
@@ -176,7 +211,7 @@ export class MemoryStore {
    * 缓存的收益点：一次 memory_write 要连着跑 findSimilar → stats → write，
    * 一个 turn 里 search 也可能被工具重复调用；没有缓存的话每次都全量重读 + 重建索引。
    */
-  private cache: { fingerprint: string; entries: MemoryEntry[]; index?: Bm25Index<MemoryEntry>; sourceIndex?: Bm25Index<MemoryEntry> } | null = null
+  private cache: { fingerprint: string; entries: MemoryEntry[]; index?: MemoryIndex; sourceIndex?: MemoryIndex } | null = null
 
   constructor(
     private readonly fs: WorkspaceFs,
@@ -364,7 +399,7 @@ export class MemoryStore {
    * 与 list 共用指纹缓存：记忆没变过就复用上次的索引，不重读也不重分词
    * （分词是 CJK bigram，重建成本与库体量成正比，一个 turn 里可能被调多次）。
    */
-  private async buildIndex(includeSources = false): Promise<Bm25Index<MemoryEntry>> {
+  private async buildIndex(includeSources = false): Promise<MemoryIndex> {
     const entries = await this.list()
     const cached = this.cache
     const existing = includeSources ? cached?.sourceIndex : cached?.index
@@ -395,14 +430,15 @@ export class MemoryStore {
         data: entry,
       })
     }
+    const built = { index, entries: new Map(indexed.map((entry) => [entry.id, entry])) }
     // list 刚刚按当前指纹填过 cache，这里把索引挂上去；指纹变化时整条缓存会被换掉。
     // 引用相等校验：await list 期间若另一任务 write → invalidate → list（缓存被换成新指纹对象），
     // 不能把「旧 entries 建出的索引」挂到新缓存上，否则检索会一直用旧索引直到下次指纹变化。
     if (this.cache && this.cache.entries === entries) {
-      if (includeSources) this.cache.sourceIndex = index
-      else this.cache.index = index
+      if (includeSources) this.cache.sourceIndex = built
+      else this.cache.index = built
     }
-    return index
+    return built
   }
 
   /**
@@ -414,20 +450,23 @@ export class MemoryStore {
     keys: string[],
     topK?: number,
   ): Promise<Array<{ entry: MemoryEntry; score: number }>> {
-    const index = await this.buildIndex()
+    const { index } = await this.buildIndex()
     return index
       .search([text, ...keys].join(' '), { topK: topK ?? this.similarTopK })
       .map((hit) => ({ entry: hit.data!, score: hit.score }))
   }
 
-  /** 检索：BM25 + 可选半衰期时间衰减（ts 用 updated；now/halfLifeMs 可注入以便测试）。 */
+  /** 检索：BM25 + 时间衰减；仅自动入模额外请求摘要来源，工具的结果形状和排序保持不变。 */
   async search(
     query: string,
-    options?: { topK?: number; halfLifeMs?: number; now?: number },
-  ): Promise<Array<{ entry: MemoryEntry; score: number }>> {
+    options?: { topK?: number; halfLifeMs?: number; now?: number; includeSummarySources?: boolean },
+  ): Promise<Array<{ entry: MemoryEntry; score: number; summarySourceIds?: readonly string[] }>> {
     return withWorkspaceLock(this.fs.root, async () => {
-      const index = await this.buildIndex(true)
-      return index.search(query, options).map((hit) => ({ entry: hit.data!, score: hit.score }))
+      const { index, entries } = await this.buildIndex(true)
+      return index.search(query, options).map((hit) => ({ entry: hit.data!, score: hit.score,
+        ...(options?.includeSummarySources && isMemorySummary(hit.data!.sourceRange)
+          ? { summarySourceIds: summarySourceIds(hit.id, entries) } : {}),
+      }))
     })
   }
 

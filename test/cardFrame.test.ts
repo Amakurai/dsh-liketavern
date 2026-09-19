@@ -61,6 +61,13 @@ describe('buildCardSrcDoc', () => {
     expect(doc).toContain('injectBridge')
   })
 
+  it('普通卡面采用宿主偏好的明暗方案，并保留作者自定义样式', () => {
+    const html = '<style>:root{color-scheme:only light}body{color:#123;background:#fff}</style><p>正文</p>'
+    const doc = buildCardSrcDoc(html, { greetings: [], greetingIndex: 0 })
+    expect(doc).toContain('<meta name="color-scheme" content="light dark"></head><body>')
+    expect(doc.endsWith(`<body>${html}</body></html>`)).toBe(true)
+  })
+
   it.each([
     '<!-- <head>伪造的插入点</head> --><html><head></head><body><script>fetch("https://example.invalid/comment")</script></body></html>',
     '<script>fetch("https://example.invalid/early")</script><html><head></head><body>正文</body></html>',
@@ -125,7 +132,7 @@ describe('tavernCardBridgeScript', () => {
       expect(written).toMatch(/^<!DOCTYPE html><html><head><meta charset="utf-8">/)
       expect(written.indexOf(trustedCsp)).toBeLessThan(written.indexOf(trustedBridge))
       expect(written.indexOf(trustedBridge)).toBeLessThan(written.indexOf(payload))
-      expect(written).toContain(`${trustedCsp}${trustedBridge}</head><body>${payload}`)
+      expect(written).toContain(`${trustedCsp}${trustedBridge}<meta name="color-scheme" content="light dark"></head><body>${payload}`)
     }
     expect(nativeWrite).toHaveBeenCalledTimes(3)
   })

@@ -1,0 +1,33 @@
+/** 关于页文案：项目来源、版本、按需检查更新与宿主支持的安装步骤。 */
+export declare const zh: {
+    readonly 'about.title': "关于 Tavern";
+    readonly 'about.description': "在 DeepSeek Harness 中使用角色卡、世界书与长期记忆。";
+    readonly 'about.project': "GitHub 项目";
+    readonly 'about.version': "当前插件版本";
+    readonly 'about.host': "当前宿主版本";
+    readonly 'about.hostRequired': "此插件适配 dsh {version}。";
+    readonly 'about.unknown': "无法读取";
+    readonly 'about.hostUnknown': "无法确认当前启动的宿主版本，暂不能判断更新兼容性。可先查看发布说明。";
+    readonly 'about.source': "源码开发版";
+    readonly 'about.sourceHint': "当前从源码目录加载。请在源码目录更新并重新构建，然后重启 dsh。";
+    readonly 'about.updates': "插件更新";
+    readonly 'about.updateHint': "点击后查询 GitHub 的最新正式发布，并核对宿主版本。";
+    readonly 'about.check': "检查更新";
+    readonly 'about.checking': "正在检查…";
+    readonly 'about.releases': "发布说明";
+    readonly 'about.loadFailed': "无法读取插件信息，请重试。";
+    readonly 'about.restartRequired': "关于页所需的后台功能尚未加载。请保存修改并结束生成，完整重启 dsh 后刷新网页；仅刷新网页或点击重试无法加载新版后台。";
+    readonly 'about.checkFailed': "暂时无法检查更新，请稍后重试，或直接查看 GitHub 发布说明。";
+    readonly 'about.current': "最新正式版本为 {version}，与当前版本号一致。";
+    readonly 'about.available': "发现新版本 {version}，与当前宿主兼容。";
+    readonly 'about.ahead': "当前版本比最新正式发布 {version} 更新。";
+    readonly 'about.incompatible': "最新版本 {version} 需要 dsh {host}，与当前宿主不匹配。";
+    readonly 'about.steps': "更新步骤";
+    readonly 'about.instructions': "先保存修改、结束生成并备份数据，停止 dsh；运行下面的命令后重新启动。";
+    readonly 'about.cliNote': "当前宿主通过终端安装更新，此按钮只检查版本。";
+    readonly 'about.profileNote': "命令用于 web 配置；如果使用自定义配置，请将 web 改为对应名称。";
+    readonly 'about.copyCommand': "复制更新命令";
+    readonly 'about.copied': "更新命令已复制";
+    readonly 'about.copyFailed': "未能复制，请手动选择命令复制。";
+};
+export declare const en: Record<keyof typeof zh, string>;

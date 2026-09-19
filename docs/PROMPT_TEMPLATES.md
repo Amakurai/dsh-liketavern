@@ -108,9 +108,11 @@ activewi 重组复用相同来源的模板结果及相同匹配身份的回调�
 
 ## 执行、持久化与回滚
 
-RENDER 条目支持 `@@iframe` 与 `@@message_formatting`。`@@iframe 状态` 把该条目放入默认折叠、标题为「状态」的卡面；省略标题时直接显示。两项同时使用时，先按真实 Showdown 消息格式转换 Markdown，再放入 iframe。它们只适用于 `[RENDER:BEFORE]` / `[RENDER:AFTER]`（或对应位置装饰器）。
+RENDER 条目支持 `@@iframe` 与 `@@message_formatting`。`@@iframe 状态` 把该条目放入默认折叠、标题为「状态」的卡面；省略标题时直接显示。两项同时使用时，先格式化 Markdown，再放入 iframe。它们只适用于 `[RENDER:BEFORE]` / `[RENDER:AFTER]`（或对应位置装饰器）。
 
-生成阶段 `<%=` 原样输出，回复阶段将值格式化为消息 HTML；`<%-` 保持原样。粗体、表格、代码块、删除线与 emoji 使用固定版本 Showdown，在 QuickJS 内执行。这里不复制 ST 的主题、Markdown 自定义扩展和用户格式化设置；QuickJS 缺少的旧式正则静态捕获在构建时改为等价局部捕获，测试直接核对官方输出。
+生成阶段 `<%=` 原样输出，回复阶段将值格式化为消息 HTML；`<%-` 保持原样。粗体、表格、代码块、删除线、命名 emoji、下划线与图片尺寸使用固定版 markdown-it 15.0.2 / markdown-it-emoji 3.1.0 及少量兼容规则，在 QuickJS 内执行。这里不复制 ST 的主题、Markdown 自定义扩展和用户格式化设置。标题遵守 CommonMark 空格规则（`#Heading` 是普通文本），`...` 不自动替换为省略号，旧库的远程图片 emoji 如 `:octocat:` 保留原文；复杂列表/HTML 的结构空白和代码块 class 可能与旧 Showdown 不同。
+
+双/三下划线表示下划线，单下划线保留原文；反引号代码、原始 `<code>` 与 HTML 属性不参与格式替换。支持行内及引用式图片尺寸（如 `![图](image.png =100x200)`），只接受有界数字、常用单位与 `*`，不接受任意属性/CSS。重复引用定义遵循 CommonMark 的首次定义优先规则，旧 Showdown 的后定义覆盖行为不再复制。
 
 回复快照保存 BEFORE→正文→AFTER 的有序 Markdown/HTML 片段及折叠标题。普通格式化 HTML 也通过现有 `sandbox="allow-scripts"` iframe 显示，不获得主页面或同源权限；标题作为 React 文字显示。片段内的 output/render 正则在隔离 worker 中执行，不跨卡面/正文边界匹配；需要跨边界替换的旧规则须改为针对单段内容。关闭交互卡时保留正文，只有 HTML 的回复回退到已求值文本，不再次执行或露出原始 EJS。旧快照继续使用原展示方式。
 
@@ -121,6 +123,8 @@ RENDER 条目支持 `@@iframe` 与 `@@message_formatting`。`@@iframe 状态` �
 生成恢复记录、变量、消息快照、sticky 注册表及 WI 定时器通过同一次 WAL/原子替换提交。prepared 阶段只保存一份闭包日志；回复完成或终止后，仍有活跃回调时把日志转入 continuation，最后一个回调到期后释放它，保留完成回执和过期记录。重放包含阶段切换、消息上下文与回复操作，既恢复共享局部变量，也核验消息快照摘要。写入失败保留待恢复记录，重试提交同一快照。恢复前校验剧情归属、宿主轮次、记录内容和原 WAL。旧 `state/wi-timers` 文件保留为迁移与回滚来源；分支复制不改祖先模板文件。旧版本未完成的重放记录明确拒绝混用新语义，需要完成或回滚相应楼层。
 
 展示接口只读取保存的回复结果，不在页面刷新时重复执行 setvar。开场白或独立文本预览在临时变量副本里执行，不保存更改。编辑 assistant 撤销该层模板状态，不自动执行编辑后的新脚本。模板出错会在触发日志中显示来源与错误；没有成功快照的含脚本回复显示错误，不能假装处理成功。
+
+**更换格式化器的升级边界：** 新日志标记 `formatterVersion: 2`。缺少该标记的旧未完成生成日志或跨轮闭包日志仍可读取、备份和显示已有结果，但不能在新引擎中继续重放；执行前明确拒绝并保留变量、日志和 WAL。闭包内部可能捕获格式化字符串，而旧日志只记录外显结果的 hash，不能据此证明状态等价，也不能直接改 hash 或静默丢闭包。升级前应备份并完成旧生成、让相关回调结束；已升级后遇到诊断时，可保留备份后使用原版本完成，或回滚到注册相关回调之前，再升级。已完成且没有活动重放的普通旧剧情可以继续使用，旧回复的保存片段不会重算。
 
 global 是**当前剧情内的独立命名空间**。message 快照按宿主稳定 Message.id 保存，文本索引与事件 seq 分开。新消息只继承一次最近前序状态；已初始化的后代不会因祖先变量被修改而重新继承。普通 stop 回复也保存继承快照。旧单树只用作当前新目标的迁移基线，不伪造整段历史。
 
@@ -139,9 +143,9 @@ global 是**当前剧情内的独立命名空间**。message 快照按宿主稳�
 
 新增依赖 `quickjs-emscripten` 和 `yaml` 是为了独立 JavaScript 运行时与标准的有界 YAML 解析，均为公开 npm 固定版本，不需要原生构建。没有把第三方脚本放入 Node 主线程或主页面。
 
-`zod`、`lodash`、`jsonrepair`、`ejs` 与 `showdown` 在构建时生成带原始许可证的 `lib/vendor/template-libraries.js`，由 worker 在 QuickJS 中加载。发布产物包含这份文件；安装后不需要 esbuild，不从磁盘加载第三方卡片指定的模块。
+`zod`、`lodash`、`jsonrepair`、`ejs`、`markdown-it` 与 `markdown-it-emoji` 在构建时生成带原始及传递依赖许可证的 `lib/vendor/template-libraries.js`，由 worker 在 QuickJS 中加载。发布产物包含这份文件；安装后不需要 esbuild，不从磁盘加载第三方卡片指定的模块。
 
-2026-09-05 的 npm audit 对 Showdown 2.1.0 报告 1 个中等级别依赖问题，涉及链接正则拒绝服务、metadata 标题及表头 ID 注入，暂无已发布修复。此处采用该库以对齐 ST 格式化行为；计算有 worker/QuickJS 时间限制，metadata 与标题 ID 均关闭，格式化 HTML 只进入无同源权限的 iframe。审计记录仍存在，不应宣称依赖零漏洞。
+2026-09-19 已移除存在三份漏洞公告且没有已发布补丁的 Showdown；当前锁文件 `npm audit` 为 0 项已知漏洞。新引擎不生成 metadata 完整文档或标题/表头 ID；计算仍有 worker/QuickJS 时间和内存限制，格式化 HTML 只进入无同源权限的 iframe。具体修复与验证见 [依赖安全记录](DEPENDENCY_SECURITY.md)。
 
 Faker 单独生成 `lib/vendor/template-faker.js`，保留原始许可证；普通模板只接收脚本文本，首次访问 faker 才在 QuickJS 内编译和执行。语言 fallback 链在构建时逐一与官方实例核对，行为测试也直接比较官方库的输出。
 

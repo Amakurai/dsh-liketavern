@@ -15,6 +15,7 @@ import type { Session } from '@deepseek-ai/dsh-session'
 import type { SettingsScope } from '@deepseek-ai/dsh-settings'
 import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import { estimateTokens } from '../core/tokenize.js'
+import { inspectCharacterCompatibility } from '../core/characterCompatibility.js'
 import { isolated } from './isolated.js'
 import { presentRenderedOutput, stripOpaqueDisplayMeta } from '../core/displaySanitize.js'
 import { disableInteractiveParts, splitTemplateDisplay, TEMPLATE_DISPLAY_PARTS_VERSION, type TemplateDisplayPart } from '../core/templateDisplay.js'
@@ -47,6 +48,7 @@ import {getHelperEventState} from './helperEventState.js'
 import type { Persona, TavernState } from './state.js'
 import type { TavernMethodResults,TavernMethodRequests } from '../remote.js'
 import { deleteEditorDraft, getEditorDraft, saveEditorDraft } from './editorDrafts.js'
+import { getPluginAbout, checkPluginUpdate } from './pluginAbout.js'
 
 /** 头像缓存条数上限：卡删除/再导入会产生新 cardId，旧条目无人主动清，超上限淘汰最旧（只多一次重读，无正确性影响）。 */
 const AVATAR_CACHE_MAX = 32
@@ -131,6 +133,7 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
         hasCharacterBook: entryCount > 0,
         characterBookName: card.characterBook?.name ?? null,
         entryCount,
+        compatibility: inspectCharacterCompatibility(card),
       }
     } catch (error) {
       throw new FloorError('invalid-card', error instanceof Error ? error.message : String(error))
@@ -828,6 +831,15 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
         messageTokens: breakdown?.messageTokens ?? null,
       },
     }
+  }
+
+  /** 关于页只读取本机版本；版本检查按需联网，不提供安装执行入口。 */
+  getPluginAbout(_request: Record<string, never>): Promise<TavernMethodResults['getPluginAbout']> {
+    return getPluginAbout()
+  }
+
+  checkPluginUpdate(_request: Record<string, never>): Promise<TavernMethodResults['checkPluginUpdate']> {
+    return checkPluginUpdate()
   }
 
   /** Tavern 数据目录（$DSH_HOME/dsh-tavern），设置面板展示用。 */

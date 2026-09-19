@@ -31,6 +31,9 @@ export interface CharacterWorkspace {
 export interface CharacterSummary {
   cardId: string
   name: string
+  /** 共享资产的检索字段；可选以兼容旧宿主列表响应。 */
+  creator?: string
+  tags?: string[]
   hasAvatar: boolean
   createdAt?: string
   /** 卡内嵌世界书（assets/character-book.json 或 card.characterBook）。 */
@@ -216,6 +219,9 @@ async function characterSummary(dataRoot: string, cardId: string): Promise<Chara
   return {
     cardId,
     name: ws.card.name,
+    // 旧版/手工维护的 card.json 不保证新摘要字段的形状；元数据异常不能让整张卡从列表消失。
+    creator: typeof ws.card.creator === 'string' ? ws.card.creator : '',
+    tags: Array.isArray(ws.card.tags) ? ws.card.tags.filter((tag): tag is string => typeof tag === 'string') : [],
     hasAvatar: await fs.exists('card.png'),
     hasCharacterBook: entryCount > 0 || (await fs.exists('assets/character-book.json')),
     characterBookName: bookName,

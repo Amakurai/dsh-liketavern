@@ -1,6 +1,6 @@
 {
   "name": "dsh-liketavern",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "description": "Tavern mode for dsh web — SillyTavern character cards, prompt presets, lorebooks, personas and regex on the dsh agent runtime.",
   "license": "MIT",
   "repository": {
@@ -10,7 +10,8 @@
   "type": "module",
   "main": "lib/index.js",
   "bin": {
-    "dsh-tavern-doctor": "./lib/doctor.js"
+    "dsh-tavern-doctor": "./lib/doctor.js",
+    "dsh-tavern-backup": "./lib/backup.js"
   },
   "exports": {
     ".": {
@@ -28,6 +29,10 @@
     "./doctor": {
       "types": "./lib/doctor.d.ts",
       "default": "./lib/doctor.js"
+    },
+    "./backup": {
+      "types": "./lib/backup.d.ts",
+      "default": "./lib/backup.js"
     },
     "./package.json": "./package.json"
   },
@@ -57,6 +62,8 @@
     "test": "vitest run",
     "doctor": "node lib/doctor.js",
     "doctor:check": "node scripts/verify-doctor.mjs",
+    "backup": "node lib/backup.js",
+    "backup:check": "node scripts/verify-backup.mjs",
     "package:check": "node scripts/verify-package.mjs --dry-run",
     "prepack": "npm run build",
     "dev": "dsh web --patch ./cordis.patch.yml"
@@ -67,8 +74,9 @@
     "jquery": "3.7.1",
     "jsonrepair": "3.15.0",
     "lodash": "4.18.1",
+    "markdown-it": "15.0.2",
+    "markdown-it-emoji": "3.1.0",
     "quickjs-emscripten": "0.32.0",
-    "showdown": "2.1.0",
     "yaml": "2.9.0",
     "zod": "^4.4.3"
   },
@@ -154,6 +162,7 @@
     "@deepseek-ai/dsh-util-workspace-path": "0.1.5-rc.2",
     "@deepseek-ai/dsh-workflow": "0.1.5-rc.2",
     "@deepseek-ai/schemastery": "3.18.2",
+    "@types/markdown-it-emoji": "3.0.1",
     "@types/node": "^24.0.0",
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.7",
@@ -166,5 +175,13 @@
     "typescript": "^5.8.0",
     "vitest": "4.1.11",
     "zustand": "4.4.7"
+  },
+  "allowScripts": {
+    "esbuild@0.25.12": true,
+    "koffi@3.2.1": true,
+    "node-pty@1.2.0-beta.15": true,
+    "protobufjs@7.6.6": true,
+    "@deepseek-ai/dsh-subprocess-local@0.1.5-rc.2": true,
+    "@google/genai@1.52.0": true
   }
 }

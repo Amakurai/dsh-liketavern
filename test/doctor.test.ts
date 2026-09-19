@@ -269,7 +269,7 @@ describe('doctor 聚合报告', () => {
 describe('doctor CLI', () => {
   it('发布清单提供编译后可执行入口和可导入的诊断 API', async () => {
     const packageJson = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))
-    expect(packageJson.bin).toEqual({ 'dsh-tavern-doctor': './lib/doctor.js' })
+    expect(packageJson.bin).toMatchObject({ 'dsh-tavern-doctor': './lib/doctor.js' })
     expect(packageJson.exports['./doctor']).toEqual({ types: './lib/doctor.d.ts', default: './lib/doctor.js' })
     expect(packageJson.scripts.doctor).toBe('node lib/doctor.js')
     expect(packageJson.peerDependencies['@deepseek-ai/dsh']).toBe('0.1.5-rc.2')

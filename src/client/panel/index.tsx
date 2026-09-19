@@ -1,5 +1,5 @@
 /**
- * 设置面板入口：7 页签拆分各分区。导航是 Tavern 自己的分段控件（pill track），
+ * 设置面板入口：8 页签拆分各分区。导航是 Tavern 自己的分段控件（pill track），
  * 切页带 fade-up 过场；「默认绑定」已并入「设置」页，设置页内再分子导航。
  */
 import { useId, useLayoutEffect, useRef } from 'react'
@@ -15,6 +15,7 @@ import { PersonasSection } from './personas.js'
 import { PresetsSection } from './presets.js'
 import { RegexSection } from './regex.js'
 import { SettingsSection } from './settings.js'
+import { AboutSection } from './about.js'
 
 const TABS = [
   { id: 'characters', labelKey: 'panel.tab.characters' },
@@ -24,6 +25,7 @@ const TABS = [
   { id: 'regex', labelKey: 'panel.tab.regex' },
   { id: 'memory', labelKey: 'panel.tab.memory' },
   { id: 'sampling', labelKey: 'panel.tab.settings' },
+  { id: 'about', labelKey: 'panel.tab.about' },
 ] as const
 
 type TabId = (typeof TABS)[number]['id']
@@ -75,6 +77,7 @@ function PanelContent(props: { remote: TavernRemote }) {
         {tab === 'regex' && <RegexSection remote={remote} />}
         {tab === 'memory' && <MemorySection remote={remote} />}
         {tab === 'sampling' && <SettingsSection remote={remote} />}
+        {tab === 'about' && <AboutSection remote={remote} />}
       </div>
     </div>}</DraftScope>
   )

@@ -1,6 +1,6 @@
 /** 资产编辑交互回归：真实文件系统与服务适配器覆盖预设身份、收纳与删除失败恢复、导入重试及搜索恢复。 */
 import type { ReactNode } from 'react'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
@@ -185,13 +185,39 @@ it('已有正则关键词追加普通词后保存，不拆坏量词与字符类�
   expect(result.activated.map(item => item.entry.uid)).toEqual(['1'])
 })
 
+/** 多行角色字段复用 Field 的关联标签；多个编辑实例的名称引用互不串联。 */
+it('角色详情多行输入框具有真实关联的可访问名称，重复挂载保持标签身份独立', async () => {
+  const f = await fixture()
+  await f.state.createCharacter('可访问角色')
+  f.remote.getCharacterDetail = vi.fn(async request => ok(await f.service.getCharacterDetail(request)))
+  const views = [await render(<CharactersSection remote={f.remote} />), await render(<CharactersSection remote={f.remote} />)]
+  const labelIds: string[] = []
+  const expected = ['description', 'personality', 'scenario', 'greeting', 'mesExample', 'systemPrompt', 'postHistory', 'depthPrompt', 'creatorNotes']
+  for (const view of views) {
+    await settle(() => {}, () => view.root.findAllByProps({ className: 'dsh-tavern-charCard' }).length === 1)
+    await act(async () => view.root.findByProps({ className: 'dsh-tavern-charCard' }).props.onClick())
+    await settle(() => {}, () => view.root.findAllByType('textarea').length >= expected.length)
+    const controls = view.root.findAllByType('textarea').filter(node => node.props['aria-labelledby'])
+    const names = controls.map(node => {
+      const id = node.props['aria-labelledby'] as string
+      labelIds.push(id)
+      return view.root.findByProps({ id }).children.join('')
+    })
+    expect(names).toEqual(expect.arrayContaining(expected.map(name => t(`characters.detail.${name}`))))
+    const ids = controls.map(node => node.props['aria-labelledby'])
+    await act(async () => controls[0]!.props.onChange({ target: { value: '更新但不换标签' } }))
+    expect(view.root.findAllByType('textarea').filter(node => node.props['aria-labelledby']).map(node => node.props['aria-labelledby'])).toEqual(ids)
+  }
+  expect(new Set(labelIds).size).toBe(labelIds.length)
+})
+
 describe('角色卡导入失败恢复', () => {
   const file = () => new File([JSON.stringify({ spec: 'chara_card_v2', spec_version: '2.0', data: {
     name: '测试旅人', description: '手写测试卡', first_mes: '你好', character_book: { name: '测试港口', entries: [
       { id: 1, keys: ['港口'], content: '测试设定', enabled: true, insertion_order: 10 },
     ] },
   } })], 'traveler.json', { type: 'application/json' })
-  const dialog = (view: ReactTestRenderer) => view.root.findAllByType(Dialog).find(item => item.props.title === t('characters.importBook.title'))
+  const dialog = (view: ReactTestRenderer) => view.root.findAllByType(Dialog).find(item => item.props.title === t('characters.importPreview.title'))
   const choose = (view: ReactTestRenderer, importBook: boolean) => dialog(view)!.findAllByType(Button).find(item =>
     item.props.children === t(importBook ? 'characters.importBook.import' : 'characters.importBook.skip'))!
 
@@ -229,6 +255,71 @@ describe('角色卡导入失败恢复', () => {
     await act(async () => dialog(view)!.props.onClose())
     expect(dialog(view)).toBeUndefined()
     expect(await f.state.listCharacters()).toHaveLength(0)
+  })
+
+  it('无内嵌书也先预检，取消不创建资产，导入失败可保留报告原地重试', async () => {
+    const f = await fixture()
+    const plain = new File([JSON.stringify({ name: '无书角色', first_mes: '<div>预检</div>' })], 'plain.json')
+    const view = await render(<CharactersSection remote={f.remote} />)
+    const importButton = () => dialog(view)!.findAllByType(Button).find(item => item.props.children === t('characters.importPreview.import'))!
+    await settle(() => view.root.findByType(FileBtn).props.onFile(plain), () => completed(f.remote.inspectCharacter))
+    expect(dialog(view)!.findByProps({ 'aria-label': t('characters.compatibility.title') }).findAllByType('li').length).toBeGreaterThan(0)
+    expect(f.remote.importCharacter).not.toHaveBeenCalled()
+    expect(await f.state.listCharacters()).toEqual([])
+    await act(async () => dialog(view)!.findAllByType(Button).find(item => item.props.children === t('action.cancel'))!.props.onClick())
+    expect(dialog(view)).toBeUndefined()
+    expect(await f.state.listCharacters()).toEqual([])
+    await settle(() => view.root.findByType(FileBtn).props.onFile(plain), () => vi.mocked(f.remote.inspectCharacter).mock.settledResults.length === 2)
+    vi.mocked(f.remote.importCharacter).mockRejectedValueOnce(new Error('无书导入失败'))
+    await act(async () => importButton().props.onClick())
+    expect(dialog(view)!.findAllByType(Err).some(item => item.props.message === '无书导入失败')).toBe(true)
+    await settle(() => importButton().props.onClick(), () => completed(f.remote.importCharacter))
+    expect(dialog(view)).toBeUndefined()
+    expect((await f.state.listCharacters()).map(item => item.name)).toEqual(['无书角色'])
+    expect(vi.mocked(f.remote.importCharacter).mock.calls.every(([request]) => request.importWorldBook === false)).toBe(true)
+  })
+
+  it('检查传输失败不导入，重新选择同一文件可重试，随后取消没有副作用', async () => {
+    const f = await fixture()
+    vi.mocked(f.remote.inspectCharacter).mockResolvedValueOnce(fail('预检连接中断'))
+    const view = await render(<CharactersSection remote={f.remote} />)
+    await settle(() => view.root.findByType(FileBtn).props.onFile(file()), () => completed(f.remote.inspectCharacter))
+    expect(dialog(view)).toBeUndefined()
+    expect(view.root.findAllByType(Err).some(item => item.props.message === '预检连接中断')).toBe(true)
+    expect(f.remote.importCharacter).not.toHaveBeenCalled()
+    await settle(() => view.root.findByType(FileBtn).props.onFile(file()), () => vi.mocked(f.remote.inspectCharacter).mock.settledResults.length === 2)
+    expect(dialog(view)).toBeDefined()
+    await act(async () => dialog(view)!.props.onClose())
+    expect(await f.state.listCharacters()).toEqual([])
+  })
+
+  it('服务预检的成功与失败均不落盘；导入保留脚本与正则，跳过内嵌书同时清除卡片和资产书', async () => {
+    const f = await fixture()
+    await f.state.createCharacter('已有资产')
+    const snapshot = async () => {
+      const files = (await readdir(f.state.paths.root, { recursive: true, withFileTypes: true }))
+        .filter(entry => entry.isFile()).map(entry => join(entry.parentPath, entry.name)).sort()
+      return Promise.all(files.map(async path => [path, (await readFile(path)).toString('base64')]))
+    }
+    const source = { name: '兼容检查', description: '<% throw Error("不得运行") %>',
+      extensions: { regex_scripts: [{ findRegex: '/(a+)+$/', replaceString: '<div>显示</div>' }],
+        tavern_helper: { scripts: [{ type: 'script', id: 'test', content: 'generateRaw();', enabled: false }] } },
+      character_book: { name: '待选书', entries: [{ keys: ['港口'], content: '测试设定', vectorized: true }] } }
+    const request = { name: 'review.json', dataBase64: Buffer.from(JSON.stringify(source)).toString('base64') }
+    const before = await snapshot()
+    const preview = await f.service.inspectCharacter(request)
+    expect(preview.compatibility.findings.map(item => item.code)).toEqual(expect.arrayContaining(['unsupportedApi', 'vectorLore', 'templates']))
+    await expect(f.service.inspectCharacter({ name: 'broken.json', dataBase64: Buffer.from('{').toString('base64') })).rejects.toThrow()
+    expect(await snapshot()).toEqual(before)
+    for (const importWorldBook of [true, false]) {
+      const result = await f.service.importCharacter({ ...request, importWorldBook })
+      const saved = (await f.state.loadCharacter(result.cardId))!.card
+      expect(saved.extensions.tavern_helper).toEqual(source.extensions.tavern_helper)
+      expect(saved.regexScripts).toEqual(source.extensions.regex_scripts)
+      expect(saved.description).toBe(source.description)
+      expect(saved.characterBook !== null).toBe(importWorldBook)
+      expect(await f.state.loadCharacterLorebookRaw(result.cardId)).toEqual(importWorldBook ? expect.objectContaining({ entryCount: 1 }) : null)
+    }
   })
 })
 

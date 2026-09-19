@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { en, zh } from '../src/client/locales.js'
 import * as actions from '../src/client/locales/actions.js'
+import * as about from '../src/client/locales/about.js'
 import * as assistant from '../src/client/locales/assistant.js'
 import * as characters from '../src/client/locales/characters.js'
 import * as chip from '../src/client/locales/chip.js'
@@ -29,6 +30,7 @@ import * as speech from '../src/client/locales/speech.js'
 import * as util from '../src/client/locales/util.js'
 
 const FRAGMENTS = {
+  about,
   actions,
   assistant,
   characters,

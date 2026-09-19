@@ -69,7 +69,7 @@ npm pack --dry-run
 - 重点回归：storyIsolation、transactionRecovery、robustBoundaries、pipelineCache、floorConcurrency、i18n。测试用手写工厂数据，不调用真实模型。
 - tests 直接 import src；Node 24 下 worker 源码测试使用类型剥离，交付运行只用 lib JS。正则超时测试必须在隔离 worker 中进行。
 - 每个源文件和测试用中文块注释说明职责；标识符英文。测试验证业务结果与失败边界，避免只镜像实现。
-- 运行依赖为 zod、quickjs-emscripten、yaml、lodash、jsonrepair、@faker-js/faker、ejs、showdown、jquery；jquery 仅随卡面库脚本文本打包，在 opaque-origin iframe 内执行，不能在宿主或主页面执行。模板库用于实际兼容编译参数、消息格式化、schema、Lodash、模型 JSON 修复与 Faker 全语言数据，构建为带许可证的 QuickJS 内部脚本，不桥接 Node 函数。Showdown 仅在可终止 worker 的 QuickJS 中使用，关闭 metadata 与标题 ID；HTML 产物只能交给原有沙箱 iframe，不能放入主页面。隔离 JavaScript、有界初值解析与新增兼容库固定公开 npm 版本，不用 node:vm 冒充安全边界。宿主包走精确 peer，开发依赖公开 npm 精确版本。禁止 file:、绝对路径或链接依赖；开发挂载仓库的 junction/symlink 是另一件事。
+- 运行依赖为 zod、quickjs-emscripten、yaml、lodash、jsonrepair、@faker-js/faker、ejs、markdown-it、markdown-it-emoji、jquery；jquery 仅随卡面库脚本文本打包，在 opaque-origin iframe 内执行，不能在宿主或主页面执行。模板库用于实际兼容编译参数、消息格式化、schema、Lodash、模型 JSON 修复与 Faker 全语言数据，构建为带原始及传递依赖许可证的 QuickJS 内部脚本，不桥接 Node 函数。Markdown 格式化仅在可终止 worker 的 QuickJS 中执行，不生成 metadata 完整文档或标题 ID；HTML 产物只能交给原有沙箱 iframe，不能放入主页面。已移除无公开补丁的 Showdown；格式化器升级使用 replay.formatterVersion 边界，旧活动日志不能静默改 hash、丢闭包或在拒绝前推进 WAL。隔离 JavaScript、有界初值解析与新增兼容库固定公开 npm 版本，不用 node:vm 冒充安全边界。宿主包走精确 peer，开发依赖公开 npm 精确版本。禁止 file:、绝对路径或链接依赖；开发挂载仓库的 junction/symlink 是另一件事。
 - lib/ 刻意入库。所有 src 改动必须重建；CI 会拦过期、缺失和未跟踪产物。不要忽略 lib/。
 - npm 包白名单：lib、cordis.patch.yml、presets、README 两种语言、CHANGELOG、LICENSE。禁止 src/test/node_modules/本机数据。
 - 宿主升级按 [版本核对清单](docs/HOST_COMPATIBILITY.md) 执行；构建/测试不能代替安装环境的 boot 与 UI 冒烟。

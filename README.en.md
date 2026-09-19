@@ -4,7 +4,7 @@
 
 **Tavern-style roleplay in DeepSeek Harness's `dsh web`, with character cards, lorebooks, and long-term memory.**
 
-**[v0.2.5](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.2.5) · Targets dsh `0.1.5-rc.2` · Node.js ≥ 24**
+**[v0.2.6](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.2.6) · Targets dsh `0.1.5-rc.2` · Node.js ≥ 24**
 
 [中文](./README.md) | English
 
@@ -38,6 +38,8 @@ The model has 7 tools: memory search / write / update, per-entry lorebook reads,
 
 Editors provide unsaved-change prompts and draft recovery. Settings, forms, and dialogs adapt to narrow screens; a third-party card's internal mobile layout depends on the card itself.
 
+Character management, the archive, and the new-session character picker support searching by character name, tags, creator, or embedded lorebook name.
+
 ### Key concepts
 
 | Term | Purpose and distinction |
@@ -67,7 +69,7 @@ If you are new to dsh, start with the [official documentation](https://deepseek-
 Run these commands to install a fixed release tag:
 
 ```bash
-dsh plugin --profile web add github:Amakurai/dsh-liketavern#v0.2.5
+dsh plugin --profile web add github:Amakurai/dsh-liketavern#v0.2.6
 dsh plugin --profile web list --depth 0
 ```
 
@@ -81,15 +83,17 @@ The repository includes compiled `lib/` files; a normal installation needs no ma
 
 ### Install a tarball
 
-Download `dsh-liketavern-0.2.5.tgz` from the [v0.2.5 Release](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.2.5), then run this command in the download directory:
+Download `dsh-liketavern-0.2.6.tgz` from the [v0.2.6 Release](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.2.6), then run this command in the download directory:
 
 ```bash
-dsh plugin --profile web add ./dsh-liketavern-0.2.5.tgz
+dsh plugin --profile web add ./dsh-liketavern-0.2.6.tgz
 ```
 
 Restart `dsh web` afterward. The release includes `SHA256SUMS.txt` to verify the download.
 
 ### Upgrade
+
+Open **Settings → Tavern → About** to see plugin and host versions, visit the GitHub project, and check the latest stable release. A compatible newer release includes a command pinned to its release tag. This host installs updates through the terminal; checking does not install anything. Source checkouts show instructions to update and rebuild their source. Replace `web` in the command if you use a custom profile.
 
 Check the host version in the [changelog](./CHANGELOG.md), stop dsh, and back up your data before running the target version's installation command. Plugin upgrades reuse the existing data directory; see [data and backups](#data-and-backups) for a complete backup.
 
@@ -99,7 +103,7 @@ A GitHub address without a `#version-tag` follows the repository's default branc
 
 Configure a model in dsh first, then try an ordinary conversation with one character card. You can use the built-in prompt preset and add personas, extra lorebooks, scripts, or MVU as your card requires.
 
-1. **Prepare a character.** In dsh settings, open Tavern → Characters to import PNG / JSON or create a character. During import, choose whether to include the card's embedded lorebook.
+1. **Prepare a character.** In dsh settings, open Tavern → Characters to import PNG / JSON or create a character. Review the compatibility report before choosing whether to include the embedded lorebook. Cancelling saves no character. The report statically checks known APIs, scripts, templates, and external resources; it executes no code and cannot guarantee third-party compatibility.
 2. **Start a story.** Create a session, select the `Tavern 模式` preset, and choose a character. New sessions do not automatically bind a default character. The empty picker also offers “Import / create character.”
 3. **Check the setup.** Open the character control at the top of the conversation to select and save the session's prompt preset, persona, and lorebooks. Keep the defaults if you have no additional assets yet.
 4. **Begin the conversation.** Use the arrows for cards with multiple greetings, select “Start chat,” and send your first line. If there is no greeting, type directly into the input.
@@ -143,6 +147,7 @@ Editing an AI reply also creates a branch and revokes derived facts from that tu
 
 - **Tavern Helper support is a subset.** Variables, script libraries, worldbooks, and several message operations are supported. `generate` / `generateRaw`, message insertion and rotation, history pagination, and cross-page events remain unsupported. See [Tavern Helper compatibility](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/TAVERN_HELPER.md) for APIs and examples.
 - **EJS templates are built in.** Cards using supported APIs do not require a separate ST-Prompt-Template installation. See [prompt templates](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/PROMPT_TEMPLATES.md) for host differences in prompt placement and history handling.
+- **Message formatting now uses markdown-it.** Vulnerable Showdown has been removed, with common display syntax retained. Saved replies are not reformatted. Before upgrading, back up, finish pending template generation, and let cross-turn callbacks expire. Old active replay logs are explicitly refused and preserved for completion or rollback; see the template guide above for format differences and recovery steps.
 - **MVU has limits.** A pure official MVU import entry can use the native runner; custom framework code is retained. Classic schemas and the `BEFORE_MESSAGE_UPDATE` body-update hook remain unsupported. The current UI has no separate variable schema editor entry point.
 - **Interactive cards run in isolated iframes.** They cannot access the main page DOM, `parent.TavernHelper`, `parent.$`, or Node. Network requests and external scripts are restricted by default; trusted domains can be configured under Settings → Cards & Data. Images and fonts follow the existing loading policy.
 - **Script choices do not send messages.** Clicking a script's text option fills the current input draft. AI impersonation still uses the clipboard and requires manual pasting.
@@ -178,15 +183,27 @@ Plugin data lives in `$DSH_HOME/dsh-tavern/`. With no `DSH_HOME` override, this 
 | --- | --- | --- |
 | Interactive-card variable backup | Saved variables from the selected story, up to 1 MiB of variable data | Select a character and story under Settings → Cards & Data, then export or paste a backup to restore. Excludes message text, cards, script assets, and form inputs not yet stored as variables |
 | Editor draft backup | Unsaved character, preset, lorebook, persona, regex, memory, and settings edits | After the saved-draft status appears, refresh the same browser tab or reopen the editor to recover it. Save is still required to apply changes. Each draft is limited to 2 MiB |
-| Complete directory backup | Plugin data plus host sessions, configuration, and other data | Stop dsh and back up the entire `DSH_HOME`. Variable exports cannot replace this backup |
+| Verified directory backup | Plugin data, host sessions, and configuration inside `DSH_HOME`, with versions, sizes, and SHA-256 hashes | Create, verify, and restore into a new directory using the commands below. Reinstallable profile dependencies are excluded; variable exports cannot replace this backup |
 
 Editor drafts are stored in `editor-drafts/` inside the plugin data directory; browser storage holds only a random tab ID. Recovery is not guaranteed after closing the tab or disabling browser storage. Failed backups preserve the page content and offer retry; explicitly discarding an edit removes its draft. Interactive data in character previews is temporary and does not update a real story.
 
 ### Migration and recovery
 
-1. Record the current plugin and dsh versions, stop all dsh processes using the data directory, and copy the entire `DSH_HOME`.
-2. Restore into a separate directory and start with versions matching the backup, pointing `DSH_HOME` at the restored directory. Keep the original backup.
+Run these commands from the plugin source or installation directory, replacing the example paths. Backup and restore destinations must not exist; their parent directories must already exist.
+
+```sh
+node lib/backup.js create --home "C:/data/dsh-home" --backup "D:/backups/dsh-2026-09-19" --offline
+node lib/backup.js verify --backup "D:/backups/dsh-2026-09-19"
+node lib/backup.js restore --backup "D:/backups/dsh-2026-09-19" --target "C:/data/dsh-restored" --offline
+```
+
+If installed on your command path, replace `node lib/backup.js` with `dsh-tavern-backup`. Add `--json` for structured output. Verification rejects missing, altered, or extra files and checks plugin structure, binding references, and WAL. Restore validates and copies into staging before publishing a new directory; it never overwrites existing data. Compressed host history is verified as bytes, without full semantic parsing; open restored sessions to confirm they work.
+
+1. Stop all dsh processes using the data directory before creating a backup. `--offline` declares that you have done so; active PID locks can be rejected, but the tool cannot prove that every writer has stopped.
+2. Restore into a separate directory, check the preserved profile configuration and lockfiles, install the corresponding dsh and plugin versions, and point `DSH_HOME` at the restored directory. Keep the original backup. Manifest versions describe the backup tool's environment, not proof of the versions that last wrote the data.
 3. Check characters, sessions, branches, memories, and saved variables before following the target version's upgrade instructions.
+
+Profile configuration and lockfiles are preserved. Only `profiles/node_modules`, `profiles/<name>/node_modules`, and `profiles/<name>/.dsh-module-fallback/node_modules` are excluded; reinstall dependencies for the original profiles after restoring. Symlinks, junctions, hardlinks, and special files elsewhere are rejected instead of followed. Back up any custom plugin data, workspaces, or credentials outside `DSH_HOME` separately. Directory backups are unencrypted and may contain local credentials and private conversations; protect them like the original data.
 
 Legacy shared state is copied into isolated stories on first access to an old binding, preserving the original directory. Previously mixed branch facts cannot be separated reliably and need review after migration. Automatic summaries may omit information, but their original sources remain available; failed, truncated, or timed-out replies do not trigger archiving. Branches and archives consume disk space, and old stories are not automatically cleaned up.
 

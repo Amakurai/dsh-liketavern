@@ -17,7 +17,7 @@ import { parse } from 'yaml'
 import { apply as applyAgent } from '../src/agent.js'
 import { TavernState } from '../src/node/state.js'
 import { resolveConfig } from '../src/node/config.js'
-import { TURN_STEP_NOTICE_PREFIX, TURN_WRITE_ACK_PREFIX } from '../src/core/dshPrompt.js'
+import { TURN_PLAYBOOK, TURN_STEP_NOTICE_PREFIX, TURN_WRITE_ACK_PREFIX } from '../src/core/dshPrompt.js'
 import { WorkspaceFs } from '../src/state/workspaceFs.js'
 
 let root: string, ctx: Context, state: TavernState, agent: Agent, native: Agent, cardId: string, storyId: string
@@ -135,6 +135,66 @@ it('读写混排保持独占顺序，结果可直接引用；同层回滚撤销�
   expect(await ws.memory.stats()).toMatchObject({ count: 0 })
   expect(await ws.deltas.list()).toHaveLength(0)
   expect(inject.mock.calls.filter(([message]) => JSON.stringify(message).includes(TURN_WRITE_ACK_PREFIX))).toHaveLength(3)
+})
+
+it('成功写入后返回缺失字段会令外层 invalid-output，但保留单条记忆、写入确认及楼层回滚', async () => {
+  const inject = vi.spyOn(agent, 'inject').mockImplementation(() => undefined)
+  const result = await run(`
+    const r = await tools.tavern_memory_write({body:'工厂旅人把蓝色钥匙交给守卫', keys:['蓝色钥匙']});
+    return {ok:r.ok, id:r.id, error:r.error};
+  `)
+  expect(result.isError).toBe(true)
+  expect(result.error?.info?.code).toBe('CODE_RUN_FAILED')
+  expect(JSON.stringify(result.content)).toContain('invalid-output')
+  expect(JSON.stringify(result.content)).toContain('program completion must be lossless JSON')
+  const ws = await workspace(), floor = state.openFloors.get(agent.id)!.floor
+  const entries = await ws.memory.list()
+  expect(entries).toHaveLength(1)
+  expect(entries[0]!.body).toBe('工厂旅人把蓝色钥匙交给守卫')
+  const dispatches = agent.session.snapshotEvents().filter(event => event.type === 'tool/ptc-dispatch')
+  expect(dispatches).toHaveLength(1)
+  expect(dispatches[0]!.data).toMatchObject({ name: 'tavern_memory_write', isError: false })
+  const notices = inject.mock.calls.map(([message]) => JSON.stringify(message))
+    .filter(text => text.includes(TURN_WRITE_ACK_PREFIX))
+  expect(notices).toHaveLength(1)
+  expect(notices[0]).toContain(entries[0]!.id)
+  expect(notices[0]).toContain('已落盘')
+  expect(ws.fs.currentFloor).toBeNull()
+  await ws.wal.commitFloor(floor)
+  await ws.wal.rollbackFloor(floor, ws.fs.root)
+  expect(await ws.memory.list()).toHaveLength(0)
+})
+
+it.each([
+  { label: '原样返回', output: 'return r;', normalized: false },
+  { label: '提示词中的缺失字段置 null 示例', output: TURN_PLAYBOOK.match(/例如 (return \{[^\n]+?\};)/)?.[1], normalized: true },
+])('$label 在成功与业务拒绝时均合法，并保留 error 和 hint', async ({ output, normalized }) => {
+  expect(output, '提示词必须包含可执行的安全返回示例').toBeTruthy()
+  const write = `const r = await tools.tavern_memory_write({body:'工厂旅人借走灯塔的铜铃', keys:['灯塔铜铃']}); ${output}`
+  const success = await run(write)
+  expect(success.isError, JSON.stringify(success.content)).toBe(false)
+  const ws = await workspace(), entries = await ws.memory.list()
+  expect(entries).toHaveLength(1)
+  expect(success.value).toMatchObject({ result: {
+    ok: true, id: entries[0]!.id,
+    ...(normalized ? { error: null, hint: null, status: null, similarId: null } : {}),
+  } })
+
+  const duplicate = await run(write)
+  expect(duplicate.isError, JSON.stringify(duplicate.content)).toBe(false)
+  expect(duplicate.value).toMatchObject({ result: {
+    ok: false, status: 'similar-found', similarId: entries[0]!.id, hint: expect.stringContaining('tavern_memory_update'),
+    ...(normalized ? { id: null, error: null } : {}),
+  } })
+
+  state.openFloors.delete(agent.id)
+  const denied = await run(write)
+  expect(denied.isError, JSON.stringify(denied.content)).toBe(false)
+  expect(denied.value).toMatchObject({ result: {
+    ok: false, error: expect.stringContaining('floor-not-open'),
+    ...(normalized ? { id: null, hint: null, status: null, similarId: null } : {}),
+  } })
+  expect(await ws.memory.list()).toEqual(entries)
 })
 
 it('程序内业务拒绝可检查，路径越界与未开楼层都不能写入剧情', async () => {

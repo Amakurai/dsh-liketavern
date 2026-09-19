@@ -130,8 +130,8 @@ describe('历史变量选择和继承',()=> {
   })
 })
 
-function user(text:string) {return createUserMessage({content:[{type:'text',text}]})}
-function assistant(text:string) {return createAssistantMessage({content:[{type:'text',text}]})}
+function user(text:string) {return createUserMessage({source:{kind:'user'},content:[{type:'text',text}]})}
+function assistant(text:string) {return createAssistantMessage({source:{provider:'factory',model:'factory'},content:[{type:'text',text}]})}
 function event(type:string,data:unknown,seq:number):SessionEvent {return {type,data,seq,time:0,surfaceOp:type.endsWith('/message')?'append':undefined} as unknown as SessionEvent}
 async function fixture(description='<% setvar("hp",5) %>role') {
   const root=await mkdtemp(join(tmpdir(),'tavern-message-vars-'));roots.push(root)

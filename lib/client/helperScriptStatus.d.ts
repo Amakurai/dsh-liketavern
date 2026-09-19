@@ -15,6 +15,8 @@ export interface ScriptRuntimeStatus {
         native: boolean;
     }[];
 }
+/** 浏览器拒绝跨窗口读取时给出兼容说明；只用于展示，不改变失败状态或放行权限。 */
+export declare function isScriptWindowAccessError(error: string | undefined): boolean;
 export declare function retryScriptMvu(sessionId: string): void;
 export declare const scriptStatusStore: {
     getSnapshot: () => readonly ScriptRuntimeStatus[];

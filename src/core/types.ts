@@ -40,7 +40,9 @@ export interface MacroContext {
   store?: Map<string, string>
   /** 当前剧情 MVU 的轮初只读数据；不进入宏 store，写 stat_data 宏必须明确失败。 */
   readonlyStatData?: Readonly<Record<string, unknown>>
-  /** {{lastusermessage}} / {{lastMessage}}；缺省空串。 */
+  /** {{lastMessage}}：最近一条真实用户或 assistant 消息；本轮宏，缺省空串。 */
+  lastMessage?: string
+  /** {{lastUserMessage}}：最近一条真实用户消息；缺省空串。 */
   lastUserMessage?: string
   /** {{lastCharMessage}}：最近一条 assistant 消息；本轮宏，standing 上下文恒为空。 */
   lastCharMessage?: string
@@ -54,6 +56,10 @@ export interface MacroContext {
   persona?: string
   /** {{charFirstMessage}} / {{firstMessage}}：角色开场白；缺省空串。 */
   firstMessage?: string
+  /** {{charPrompt}}：角色卡 system_prompt（Main 覆盖）正文；缺省空串。 */
+  charPrompt?: string
+  /** {{charInstruction}}：角色卡 post_history_instructions（PHI 覆盖）正文；缺省空串。 */
+  charInstruction?: string
   /** 收到未支持宏时回调（用于记日志）；未提供则静默保留原文。 */
   onUnknown?: (name: string) => void
 }
@@ -376,6 +382,8 @@ export interface PresetEntry {
   marker: boolean
   /** marker=true 时的占位标识；内建 Marker 之外的值渲染为空串并记日志。 */
   markerId?: string
+  /** ST system_prompt 是内建槽位标记，与消息 role 独立；缺省按已知内建槽位推断。 */
+  systemPrompt?: boolean
   /**
    * ST forbid_overrides：main/jailbreak 槽位为 true 时拒绝卡级
    * system_prompt / post_history_instructions 覆盖（不注入卡级覆盖）。
@@ -398,6 +406,10 @@ export interface PromptPreset {
   regexScripts?: CardRegexScript[]
   /** 酒馆助手预设资产；脚本经 helperScripts 归一化，保留其它作者设置供导出。 */
   helperSettings?: Record<string, unknown>
+  /** 预设采样按已提供字段覆盖插件设置；未提供字段继续使用全局配置。 */
+  sampling?: PresetSamplingSettings
+  /** ST 文本包装模板；缺省使用插件原行为，显式空串表示不包装。 */
+  formatting?: { worldInfo?: string; scenario?: string; personality?: string }
 }
 
 // ---------------------------------------------------------------------------
@@ -520,6 +532,10 @@ export interface SamplingSettings {
    */
   thinking: 'enabled' | 'disabled' | 'low' | 'high' | 'max'
 }
+
+/** ST 预设可保存的采样字段；thinking 仍由宿主模型与插件设置决定。 */
+export type PresetSamplingSettings = Partial<Pick<SamplingSettings,
+  'temperature' | 'topP' | 'maxTokens' | 'stop' | 'presencePenalty' | 'frequencyPenalty'>>
 
 export const DEFAULT_SAMPLING: SamplingSettings = {
   temperature: 1,

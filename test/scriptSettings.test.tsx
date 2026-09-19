@@ -8,6 +8,7 @@ import {HelperScriptEditor} from '../src/client/helperScriptEditor.js'
 import {Btn,Select} from '../src/client/util.js'
 import type {TavernRemote} from '../src/client/types.js'
 import {notifyHelperScriptAssets,watchHelperScriptAssets} from '../src/client/helperScriptNotifications.js'
+import {setTavernLocale,t} from '../src/client/i18n.js'
 vi.mock('../src/client/helperScriptEditor.js',()=>({HelperScriptEditor:()=>null}))
 vi.mock('@deepseek-ai/dsh-client-ui-primitives',()=>({
   Button:(p:{children?:ReactNode})=><button>{p.children}</button>,Menu:()=>null,
@@ -53,4 +54,32 @@ it('运行错误在设置可见，旧容器卸载不能清掉新运行器的诊�
   const remote={listCharacters:async()=>({ok:true,value:{items:[{cardId:'card',name:'Character'}]}}),listPresets:async()=>({ok:true,value:{items:[]}})} as unknown as TavernRemote
   try{await act(async()=>{view=create(<ScriptSettings remote={remote}/>)});expect(JSON.stringify(view!.toJSON())).toContain('sandbox failure');expect(scriptStatusStore.getSnapshot()).toHaveLength(1)}finally{await act(async()=>clearScriptStatus(current,'session'))}
   expect(scriptStatusStore.getSnapshot()).toHaveLength(0)
+})
+
+it.each(['zh','en'] as const)('跨窗口故障显示适配说明并保留原始错误和失败状态（%s）',async locale=>{
+  const owner=Symbol(),errors=[
+    `Failed to read a named property 'document' from 'Window': Blocked a frame with origin "null" from accessing a cross-origin frame.`,
+    `Failed to read a named property '__fixture_loaded__' from 'Window': Blocked a frame with origin "null" from accessing a cross-origin frame.`,
+    `Permission denied to access property "document" on cross-origin object`,
+  ]
+  setTavernLocale(locale)
+  publishScriptStatus(owner,{sessionId:'diagnostics',cardId:'card',state:'error',nativeMvu:true,
+    scripts:[...errors.map((error,index)=>({id:String(index),name:`Script ${index}`,state:'error' as const,error,native:false})),
+      {id:'syntax',name:'Syntax',state:'error',error:'Unexpected token',native:false}]})
+  const remote={listCharacters:async()=>({ok:true,value:{items:[]}}),listPresets:async()=>({ok:true,value:{items:[]}})} as unknown as TavernRemote
+  try{
+    await act(async()=>{view=create(<ScriptSettings remote={remote}/>)})
+    const items=view!.root.findAllByType('li')
+    for(const [index,error] of errors.entries()){
+      const row=items[index]!
+      expect(row.findAllByType('span').some(node=>node.children.includes(t('settings.scripts.runtime.incompatible')))).toBe(true)
+      expect(row.findAllByType('span').some(node=>node.children.includes(t('settings.scripts.windowAccess')))).toBe(true)
+      expect(row.findAllByProps({role:'alert'}).some(node=>node.children.includes(error))).toBe(true)
+    }
+    expect(items[3]!.findAllByType('span').some(node=>node.children.includes(t('settings.scripts.runtime.error')))).toBe(true)
+    expect(items[3]!.findAllByType('span').some(node=>node.children.includes(t('settings.scripts.windowAccess')))).toBe(false)
+    expect(scriptStatusStore.getSnapshot().find(value=>value.sessionId==='diagnostics')?.scripts.every(script=>script.state==='error')).toBe(true)
+  }finally{
+    await act(async()=>{view!.unmount();view=undefined;clearScriptStatus(owner,'diagnostics');setTavernLocale('auto')})
+  }
 })

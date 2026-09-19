@@ -18,6 +18,7 @@ import { parseLorebook } from '../state/lorebook.js'
 import { parseStoredPreset } from '../state/presetStore.js'
 import { MemoryStore } from '../state/memory.js'
 import type { PipelineResult } from './pipeline.js'
+import type { PresetAdapterController } from './presetAdapter.js'
 import { loadTemplateTimers, saveTemplateTimers } from '../state/template.js'
 import { Wal } from '../state/wal.js'
 import { WorldDeltaStore } from '../state/worlddelta.js'
@@ -168,6 +169,8 @@ interface WorkspaceHandle {
 }
 
 export class TavernState {
+  /** 宿主作用域持有的布局适配器；agent 销毁不影响其它剧情的注册。 */
+  presetAdapter?: PresetAdapterController
   private readonly workspaces = new Map<string, WorkspaceHandle>()
   readonly triggerLogs = new Map<string, { at: string; lines: string[] }>()
   /** 会话当前 turn 号（session/event 的 turn/start 维护；WI/记忆检索按 turn 缓存）。 */
@@ -204,7 +207,7 @@ export class TavernState {
   >()
   /** 已入 inbox 尚未入日志的用户输入文本（agent/inbox/inserted 维护；turn/end 清除）。 */
   readonly pendingInputs = new Map<string, string[]>()
-  readonly pendingTemplateInputs = new Map<string, Array<{id:string;text:string}>>()
+  readonly pendingTemplateInputs = new Map<string, Array<{id:string;text:string;hasImage?:boolean;chat?:boolean}>>()
   /** 会话 standing 钉死（键 = 会话 × 生成场景；绑定指纹不变则复用第一次写入的字节）。 */
   readonly standingPins = new Map<string, StandingPin>()
   /** standing 依赖资产的进程内修订号：经本类写方法编辑/删除即 bump，standing 指纹随内容变化失效重算。 */
@@ -1165,6 +1168,7 @@ export class TavernState {
     // - characterStrategy 决定多来源条目（含 standing 侧常驻）的落位顺序；
     // - useGroupScoring 决定 inclusion group 里哪条常驻条目胜出；
     // - sampling.maxTokens 决定 trimNonHistory 的裁剪线。
+    // - prompts 决定预设 main/jailbreak 是否接收角色卡覆盖。
     // 其余世界书键（scanDepth / tokenBudget / contextPercent / 递归 / 大小写等）只影响 turn 层
     // 触发与计费——常驻条目激活不靠键、且豁免预算后不再被截断，改这些键不许白白打穿前缀缓存。
     // 注意：新增会影响 standing 字节的设置键时必须加进这里，否则改动永远到不了模型。
@@ -1173,6 +1177,7 @@ export class TavernState {
         wiStrategy: this.worldInfoFor(binding).characterStrategy,
         wiScoring: this.worldInfoFor(binding).useGroupScoring,
         out: this.config.sampling.maxTokens,
+        prompts: this.config.prompts,
       })}`,
     )
     return tags

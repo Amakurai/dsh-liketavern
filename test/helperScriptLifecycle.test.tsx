@@ -1,4 +1,4 @@
-/** 后台脚本运行器生命周期：真实 React 与模拟宿主消息验证同版本重载不能复用旧沙箱的就绪或故障状态。 */
+/** 后台脚本运行器生命周期：真实 React 与模拟宿主消息验证官方 MVU 适配、故障阻止执行与重载后的运行时隔离。 */
 import type { ReactNode } from 'react'
 import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -14,7 +14,7 @@ vi.mock('../src/client/speech.js', () => ({ SpeechHtmlFrame: () => null }))
 vi.mock('../src/client/helperMvuRunner.js', () => ({ HelperMvuRunner: () => null }))
 vi.mock('../src/client/actions.js', () => ({ BINDING_CHANGED_EVENT: 'test-binding-changed' }))
 vi.mock('../src/client/styles.js', () => ({ CARD_VARIABLE_STYLES: '' }))
-vi.mock('../src/core/cardFrame.js', () => ({ buildCardSrcDoc: () => '<!doctype html>' }))
+vi.mock('../src/core/cardFrame.js', () => ({ buildCardSrcDoc: (html: string) => html }))
 vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
   Button: (props: { children?: ReactNode }) => <button>{props.children}</button>,
   Tooltip: (props: { children?: ReactNode }) => <>{props.children}</>,
@@ -38,6 +38,52 @@ const bundle: HelperScriptBundle = {
     messages: [{ message_id: 0, name: '角色', role: 'assistant', is_hidden: false, message: 'hello', data: {}, extra: {} }] },
 }
 const status = () => scriptStatusStore.getSnapshot().find(item => item.sessionId === 'session')!
+const betaImport = "import 'https://testingcf.jsdelivr.net/gh/MagicalAstrogy/MagVarUpdate@beta/artifact/bundle.js';"
+
+it('官方 beta 脚本显示原生适配，并在沙箱就绪回执后允许 MVU 执行', async () => {
+  const nativeBundle: HelperScriptBundle = { ...bundle, libraries: [{ ...bundle.libraries[0]!,
+    trees: parseHelperScriptTrees([{ id: 'native', name: '原生框架', enabled: true, content: betaImport }]) }] }
+  const remote = { getHelperScriptBundle: async () => ({ ok: true, value: structuredClone(nativeBundle) }) } as unknown as TavernRemote
+  await act(async () => { view = create(<HelperScripts remote={remote} sessionId="session" />) })
+  expect(status().scripts).toEqual([expect.objectContaining({ id: 'native', native: true, state: 'loading' })])
+  expect(view!.root.findByType(HelperMvuRunner).props.ready).toBe(false)
+  const frame = view!.root.findByType(SpeechHtmlFrame).props
+  expect(frame.srcDoc).toContain("waitGlobalInitialized('Mvu')")
+  expect(frame.srcDoc).not.toContain('bundle.js')
+  await act(async () => frame.onScriptReady(true))
+  expect(status().scripts[0]).toMatchObject({ native: true, state: 'ready' })
+  expect(view!.root.findByType(HelperMvuRunner).props.ready).toBe(true)
+})
+
+it('原生 beta 就绪不能绕过其它脚本故障，旧运行时及故障后的就绪回执也不能放行 MVU', async () => {
+  const mixedBundle: HelperScriptBundle = { ...bundle, libraries: [{ ...bundle.libraries[0]!,
+    trees: parseHelperScriptTrees([
+      { id: 'native', name: '原生框架', enabled: true, content: betaImport },
+      { id: 'custom', name: '自定义规则', enabled: true, content: 'throw new Error("工厂故障")' },
+    ]) }] }
+  const remote = { getHelperScriptBundle: async () => ({ ok: true, value: structuredClone(mixedBundle) }) } as unknown as TavernRemote
+  await act(async () => { view = create(<HelperScripts remote={remote} sessionId="session" />) })
+  const oldFrames = view!.root.findAllByType(SpeechHtmlFrame).map(frame => frame.props)
+  await act(async () => { for (const frame of oldFrames) frame.onScriptReady(true) })
+  expect(view!.root.findByType(HelperMvuRunner).props.ready).toBe(true)
+  await act(async () => notifyHelperScripts('session', 'story'))
+  const frames = view!.root.findAllByType(SpeechHtmlFrame)
+  const native = frames.find(frame => frame.props.title === '原生框架')!.props
+  const custom = frames.find(frame => frame.props.title === '自定义规则')!.props
+  await act(async () => {
+    custom.onScriptError('工厂故障')
+    for (const frame of oldFrames) frame.onScriptReady(true)
+  })
+  expect(status().scripts.find(script => script.id === 'native')?.state).toBe('loading')
+  expect(view!.root.findByType(HelperMvuRunner).props.ready).toBe(false)
+  await act(async () => native.onScriptReady(true))
+  expect(status().scripts.find(script => script.id === 'native')).toMatchObject({ native: true, state: 'ready' })
+  expect(view!.root.findByType(HelperMvuRunner).props.ready).toBe(false)
+  await act(async () => custom.onScriptReady(true))
+  expect(status().state).toBe('error')
+  expect(status().scripts.find(script => script.id === 'custom')).toMatchObject({ native: false, state: 'error', error: '工厂故障' })
+  expect(view!.root.findByType(HelperMvuRunner).props.ready).toBe(false)
+})
 
 it.each([
   { failed: false, delayed: false }, { failed: true, delayed: false },

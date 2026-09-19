@@ -6,6 +6,7 @@ import type { TemplateMessageIdentity } from '../core/templateMessageVariables.j
 export declare function buildTemplateMessageHistory(messages: readonly Message[], pending: readonly {
     id: string;
     text: string;
+    hasImage?: boolean;
 }[], charName: string, userName: string, events?: readonly SessionEvent[]): {
     history: ChatMessage[];
     identities: TemplateMessageIdentity[];

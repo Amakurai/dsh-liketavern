@@ -6,6 +6,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import { createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
+import { AttachmentId } from '@deepseek-ai/dsh-attachment'
 import { TavernState } from '../src/node/state.js'
 import { resolveConfig } from '../src/node/config.js'
 import { regenerate, editAssistantMessage, rollbackToFloor } from '../src/node/floors.js'
@@ -15,7 +16,7 @@ import { resolveReadableAssetPath } from '../src/core/assetRead.js'
 import { CONTINUE_INSTRUCTION_PREFIX } from '../src/core/dshPrompt.js'
 import { onTurnStart, onTurnEnd } from '../src/node/sessionLifecycle.js'
 import { registerMemoryMaintenance } from '../src/node/memoryMaintenance.js'
-import { registerRequestDiagnostics } from '../src/node/requestDiagnostics.js'
+import { recordRequestDiagnostics, registerRequestDiagnostics } from '../src/node/requestDiagnostics.js'
 
 let root: string, state: TavernState, cardId: string, ctx: Context
 const sessions = new Map<string, Session>()
@@ -202,4 +203,45 @@ it('请求诊断只读捕获冻结请求，保留真实消息与工具，并原�
   const recorded = state.requestDiagnostics.get('parent')!
   expect(JSON.parse(recorded.text).request).toEqual(request)
   expect(recorded.truncated).toBe(false)
+})
+
+it.each(['host', 'tavern-adapter'] as const)('请求诊断在序列化前剥除新旧私有布局，保留其它来源和图片：%s', stage => {
+  const privatePlan = { version: 1 as const, sessionId: 'parent', turn: 1, standingText: 'PRIVATE-LAYOUT', contextText: '',
+    layout: { version: 1 as const, history: [], entries: [] }, toJSON: vi.fn(() => { throw new Error('私有布局不应被序列化') }) }
+  const original = createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: '实际原文' },
+    { type: 'image', attachment: { attachmentId: AttachmentId('a'.repeat(64)), mediaType: 'image/png', bytes: 32, width: 1, height: 1, name: 'factory.png' } }] })
+  const attached = Object.freeze({ ...original, source: Object.freeze({ ...original.source, tavernPromptPlan: privatePlan, factory: { keep: true } }) })
+  const legacy = { ...createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: '旧载体标记' }] }),
+    source: { kind: 'tavern-prompt-plan' as const, plan: privatePlan } }
+  const request = { sessionId: 'parent', provider: 'test', model: 'test', messages: [attached, legacy],
+    tools: [{ name: 'factory_tool', description: '保留工具', parameters: {} }] }
+  recordRequestDiagnostics(state, 'parent', request, stage)
+  const recorded = state.requestDiagnostics.get('parent')!
+  const data = JSON.parse(recorded.text)
+  expect(data.stage).toBe(stage)
+  expect(data.request.messages[0]).toEqual({ ...original, source: { kind: 'user', factory: { keep: true } } })
+  expect(data.request.messages[1].source).toEqual({ kind: 'tavern-prompt-plan' })
+  expect(data.request.tools).toEqual(request.tools)
+  expect(recorded.text).not.toContain('PRIVATE-LAYOUT')
+  expect(recorded.text).not.toContain('tavernPromptPlan')
+  expect(recorded.truncated).toBe(false)
+  expect(privatePlan.toJSON).not.toHaveBeenCalled()
+  expect(attached.source.tavernPromptPlan).toBe(privatePlan)
+  expect(legacy.source.plan).toBe(privatePlan)
+})
+
+it('诊断遇到其它来源的循环元数据时记录失败提示，宿主和适配器调用仍能继续', () => {
+  let observe: (options: unknown, next: () => unknown) => unknown = () => {}
+  const scoped = { ...ctx, on: (_name: string, fn: typeof observe) => { observe = fn } } as unknown as Context
+  registerRequestDiagnostics(scoped, state)
+  const circular: Record<string, unknown> = {}; circular.self = circular
+  const original = createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: '正常请求正文' }] })
+  const request = { sessionId: 'parent', provider: 'test', model: 'test',
+    messages: [{ ...original, source: { ...original.source, foreign: circular } }] }
+  const sentinel = {}, next = vi.fn(() => sentinel)
+  expect(observe(request, next)).toBe(sentinel)
+  expect(next).toHaveBeenCalledExactlyOnceWith()
+  expect(JSON.parse(state.requestDiagnostics.get('parent')!.text)).toMatchObject({ stage: 'host', error: expect.stringContaining('生成继续') })
+  expect(() => recordRequestDiagnostics(state, 'parent', request, 'tavern-adapter')).not.toThrow()
+  expect(JSON.parse(state.requestDiagnostics.get('parent')!.text)).toMatchObject({ stage: 'tavern-adapter', error: expect.stringContaining('生成继续') })
 })

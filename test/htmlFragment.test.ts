@@ -121,3 +121,78 @@ it('前面的普通代码块不会挡住后面的真实 HTML 围栏', () => {
     {kind:'markdown',text:code},{kind:'html',text:diary},{kind:'markdown',text:'后文'},
   ])
 })
+
+/** 正文标点不能永久开启代码状态；文档和片段都必须在刷新时稳定恢复同一张卡。 */
+it.each([diary,'<!DOCTYPE html><html><body><div>实际状态页</div></body></html>'])('未成对反引号和行中波浪不阻断后续 HTML：%s',html=>{
+  for(const prefix of ['他说：`这是什么。','他说：``这是什么。','价格是 ~~~ 元。','价格是 ~~~~ 元。','他说：\\`这是什么。']) {
+    const source=prefix+'\n\n'+html+'\n后文'
+    expect(splitRenderedHtml(source)).toEqual({html,rest:prefix+'\n后文'})
+    expect(presentRenderedOutput(source,true).htmls).toEqual([html])
+    expect(splitTemplateDisplay(source)).toEqual([
+      {kind:'markdown',text:prefix},{kind:'html',text:html},{kind:'markdown',text:'后文'},
+    ])
+  }
+})
+
+it.each([diary,'<html><body>文档示例</body></html>'])('真正的代码跨度、围栏及缩进仍不提升为卡面：%s',html=>{
+  for(const source of [
+    '`'+html+'`',
+    '``前文 ` '+html+' 后文``',
+    '`前文\n'+html+'\n后文`',
+    '```javascript\n'+html+'\n```',
+    '~~~javascript\n'+html+'\n~~~~',
+    '```javascript\n'+html,
+    '~~~javascript\n'+html,
+    '```html\n'+html,
+    '    '+html,
+    '\t'+html,
+    '> ```javascript\n> '+html+'\n> ```',
+    '- ```javascript\n  '+html+'\n  ```',
+    '> ```html\n> '+html+'\n> ```',
+    '- ```html\n  '+html+'\n  ```',
+    '```javascript\n> ```\n'+html+'\n```',
+    '> ```javascript\n>> ```\n> '+html+'\n> ```',
+    '- ```javascript\n```\n  '+html+'\n  ```',
+  ]) expect(splitRenderedHtml(source)).toEqual({html:null,rest:source.trim()})
+})
+
+/** 列表标记后的 Tab 到达下一制表位；缩进不足的伪闭符不能把示例内容提升成可执行卡面。 */
+it.each(['```','~~~'])('列表 Tab 缩进按列计算，较浅的 %s 标记不能提前结束代码保护',marker=>{
+  for(const html of [diary,'<html><body>文档示例</body></html>']) {
+    const source='-\t'+marker+'javascript\n  '+marker+'\n'+html+'\n  '+marker
+    expect(splitRenderedHtml(source)).toEqual({html:null,rest:source})
+    expect(splitTemplateDisplay(source)).toEqual([{kind:'markdown',text:source}])
+    const closed='-\t'+marker+'javascript\n\t<div>代码示例</div>\n\t'+marker
+    expect(splitRenderedHtml(closed+'\n\n'+html)).toEqual({html,rest:closed})
+  }
+})
+
+/** 引用前缀占据真实列位置，列表后的 Tab 与闭围栏必须从同一制表位口径计算。 */
+it.each(['```','~~~'])('引用中的列表 Tab 围栏 %s 正常闭合，后续真实卡面仍可显示',marker=>{
+  for(const [opening,body,closing] of [['> -\t','> \t','> \t'],['> -\t','>   ','>   '],['>\t-\t','>\t\t','>\t\t']]) {
+    const code=opening+marker+'javascript\n'+body+'<div>代码示例</div>\n'+closing+marker
+    expect(splitRenderedHtml(code+'\n\n'+diary)).toEqual({html:diary,rest:code})
+    expect(splitTemplateDisplay(code+'\n\n'+diary)).toEqual([{kind:'markdown',text:code},{kind:'html',text:diary}])
+  }
+})
+
+it('inline 代码总以最近的等长标记结束，内部不同长度标记与转义不改变边界',()=>{
+  const samples=[
+    '`<div>一</div>` ``<div>二</div>``',
+    '``<div>`一`</div>`` `<div>二</div>`',
+    '\\``<div>一</div>`',
+    '`<div>一</div>\\`',
+  ]
+  for(const sample of samples)expect(splitRenderedHtml(sample+'\n\n'+diary)).toEqual({html:diary,rest:sample})
+})
+
+it.each([diary,'<!DOCTYPE html><html><body>实际文档</body></html>'])('成对代码之后仍识别真实卡片与 HTML 围栏：%s',html=>{
+  for(const example of ['`<div>代码示例</div>`','```javascript\n<div>代码示例</div>\n````','~~~javascript\n<div>代码示例</div>\n~~~~']) {
+    expect(splitRenderedHtml(example+'\n\n'+html)).toEqual({html,rest:example})
+  }
+  for(const marker of ['```','~~~']) {
+    expect(splitTemplateDisplay('正文包含 ` 标点\n\n'+marker+'html\n'+html+'\n'+marker+'\n后文 ` 符号')).toEqual([
+      {kind:'markdown',text:'正文包含 ` 标点'},{kind:'html',text:html},{kind:'markdown',text:'后文 ` 符号'},
+    ])
+  }
+})

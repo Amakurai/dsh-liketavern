@@ -24,7 +24,7 @@ function ending(text='word/<%- next() %>',sessionId='s1',finish='stop',reason='c
   return {id:sessionId as Session['id'],snapshotEvents:()=>[
     {type:'turn/start',seq:0,time:0,data:{turn:1}},
 
-    {type:'assistant/message',seq:5,time:0,data:{stream: [{type:'chunk',time:0,chunk:{type:'finish',reason:{kind:finish}}}], turn:1,step:1,message:createAssistantMessage({content:[{type:'text',text}]})}},
+    {type:'assistant/message',seq:5,time:0,data:{stream: [{type:'chunk',time:0,chunk:{type:'finish',reason:{kind:finish}}}], turn:1,step:1,message:createAssistantMessage({source:{provider:'factory',model:'factory'},content:[{type:'text',text}]})}},
     {type:'turn/end',seq:6,time:0,data:{turn:1,reason:{kind:reason}}},
   ] as unknown as SessionEvent[]}
 }

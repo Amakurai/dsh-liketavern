@@ -223,6 +223,56 @@ it('模板渲染传递宿主消息 seq，失败在气泡中明确展示', async 
   expect(view!.root.findByProps({ role: 'alert' }).children.join('')).toContain('模板未成功提交')
 })
 
+it.each(['envelope','rejected'] as const)('卡片显示失败可在原消息重试，恢复前保留原文（%s）',async failure=>{
+  const renderOutputText=vi.fn<TavernRemote['renderOutputText']>()
+  if(failure==='rejected')renderOutputText.mockRejectedValueOnce(new Error('连接中断'))
+  else renderOutputText.mockResolvedValueOnce({ok:false,error:{code:'render-failed',message:'连接中断'}})
+  const pending=Promise.withResolvers<Awaited<ReturnType<TavernRemote['renderOutputText']>>>()
+  renderOutputText.mockImplementationOnce(()=>pending.promise)
+  const rpc={renderOutputText} as unknown as TavernRemote
+  await mount(<SpeechBubble remote={rpc} sessionId="render-retry" cardId="card" name="角色" rawText="保留剧情原文" messageId={23}/>)
+  expect(view!.root.findByProps({role:'alert'}).children.join('')).toContain('连接中断')
+  expect(view!.root.findByType('p').props['data-markdown']).toBe('保留剧情原文')
+  const retry=view!.root.findAllByType(Btn).find(button=>button.props.children==='重新加载卡片显示')!
+  await act(async()=>retry.props.onClick())
+  expect(renderOutputText).toHaveBeenCalledTimes(2)
+  expect(renderOutputText).toHaveBeenLastCalledWith({sessionId:'render-retry',text:'保留剧情原文',messageId:23})
+  expect(view!.root.findAllByType('iframe')).toHaveLength(0)
+  expect(view!.root.findByType('p').props['data-markdown']).toBe('保留剧情原文')
+  await act(async()=>pending.resolve(await remote.renderOutputText({sessionId:'render-retry',text:'保留剧情原文',messageId:23})))
+  expect(view!.root.findAllByProps({role:'alert'})).toHaveLength(0)
+  expect(view!.root.findByType('iframe').props.srcDoc).toContain('<p>测试卡</p>')
+  expect(view!.root.findByType('iframe').props.sandbox).toBe('allow-scripts')
+})
+
+it('重新启用交互卡时重读展示，不能沿用关闭时的纯文本结果',async()=>{
+  let enabled=false
+  const renderOutputText=vi.fn(async()=>({ok:true as const,value:{text:enabled?'':'原文',html:enabled?'<div>已恢复状态栏</div>':null,
+    htmls:enabled?['<div>已恢复状态栏</div>']:[],interactiveCards:true,whitelist:[],greetings:[],greetingIndex:0,canSwipeGreeting:false}}))
+  const rpc={renderOutputText} as unknown as TavernRemote
+  const message=()=> <SpeechBubble remote={rpc} sessionId="render-toggle" cardId="card" name="角色" rawText="原文" interactiveCards={enabled}/>
+  await mount(message())
+  expect(view!.root.findAllByType('iframe')).toHaveLength(0)
+  enabled=true
+  await act(async()=>view!.update(message()))
+  expect(renderOutputText).toHaveBeenCalledTimes(2)
+  expect(view!.root.findByType('iframe').props.srcDoc).toContain('<div>已恢复状态栏</div>')
+})
+
+it('展示正则失败可查到规则名和原因，保留已成功生成的卡片且不执行错误内容',async()=>{
+  const success=await remote.renderOutputText({sessionId:'regex-diagnostics',text:'剧情原文'})
+  if(!success.ok)throw new Error('factory failed')
+  const rpc={renderOutputText:async()=>({ok:true,value:{...success.value,regexDiagnostics:{total:2,
+    errors:[{ruleId:'rule',ruleName:'<img src=x onerror=alert(1)>',message:'正则表达式无效'}]}}})} as unknown as TavernRemote
+  await mount(<SpeechBubble remote={rpc} sessionId="regex-diagnostics" cardId="card" name="角色" rawText="剧情原文"/>)
+  const diagnostics=view!.root.findByType('details')
+  expect(diagnostics.findByType('summary').children.join('')).toContain('2 条展示规则执行失败')
+  expect(diagnostics.findByType('li').children.join('')).toContain('<img src=x onerror=alert(1)>: 正则表达式无效')
+  expect(diagnostics.findAllByType('img')).toHaveLength(0)
+  expect(diagnostics.findByType('div').children.join('')).toContain('另有 1 条失败规则')
+  expect(view!.root.findByType('iframe').props.srcDoc).toContain('<p>测试卡</p>')
+})
+
 it('内联样式状态栏经真实拆分进入现有沙箱，前后台词继续作为 Markdown 显示',async()=>{
   const html='<div style="display:flex"><span>好感度</span><div style="width:5%">5</div></div>',text='前文\n'+html+'\n后文'
   const fragmentRemote={renderOutputText:async()=>({ok:true,value:{...presentRenderedOutput(text,true),parts:splitTemplateDisplay(text),interactiveCards:true,whitelist:[],greetings:[],greetingIndex:0,canSwipeGreeting:false}})} as unknown as TavernRemote

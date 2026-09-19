@@ -1,5 +1,5 @@
 /**
- * 设置面板分区：二级子导航拆成七组——界面 / 默认配置 / 采样与思考 / 世界书引擎 / 记忆 / 脚本 / 卡片与数据。
+ * 设置面板分区：二级子导航拆成八组——界面 / 默认配置 / 提示词 / 采样与思考 / 世界书引擎 / 记忆 / 脚本 / 卡片与数据。
  * 每组一个 Section（页面头 + 设置行 + 自己的 SaveBar），一次只看一组，不再一页堆到底。
  * 排版对齐通用设置：标题 + 说明 + 右侧 36px 胶囊控件；瞬时保存反馈走 useToast，上下文错误用 Err。
  * 「界面」组只有语言一项：选择即写设置并 setTavernLocale 立即生效，不走 SaveBar。
@@ -10,12 +10,13 @@ import { DraftScope, useDraftGuard } from '../drafts.js'
 import { useDraftRestored, useDraftState } from '../draftPersistence.js'
 import { useEffect, useId, useRef, useState } from 'react'
 import { setTavernLocale, useT } from '../i18n.js'
-import { EMPTY_SESSION_DEFAULTS, type PresetSummary, type TavernRemote, type TavernSettings } from '../types.js'
+import { DEFAULT_PROMPT_PREFERENCES, EMPTY_SESSION_DEFAULTS, type PresetSummary, type TavernRemote, type TavernSettings } from '../types.js'
 import { Btn, CheckChips, Err, Muted, NumInput, SaveBar, Section, Select, SettingsRow, Skeleton, Tabs, Toggle, runAsync, useLoader, useToast } from '../util.js'
 
 const SUBS = [
   { id: 'interface', labelKey: 'settings.sub.interface' },
   { id: 'defaults', labelKey: 'settings.sub.defaults' },
+  { id: 'prompts', labelKey: 'settings.sub.prompts' },
   { id: 'sampling', labelKey: 'settings.sub.sampling' },
   { id: 'worldinfo', labelKey: 'settings.sub.worldinfo' },
   { id: 'memory', labelKey: 'settings.sub.memory' },
@@ -48,10 +49,11 @@ export function SettingsSection(props: { remote: TavernRemote }) {
   const toast = useToast()
   useDraftGuard(draft !== null && baseline !== null && JSON.stringify(draft) !== JSON.stringify(baseline), busy)
 
-  /** 老配置可能缺 defaults 键，落成草稿时按 EMPTY_SESSION_DEFAULTS 补齐。 */
+  /** 老配置可能缺 defaults/prompts 键，落成草稿时补齐，避免新设置被误显示为关闭。 */
   const toDraft = (settings: TavernSettings): TavernSettings => ({
     ...structuredClone(settings),
     defaults: { ...EMPTY_SESSION_DEFAULTS, ...settings.defaults },
+    prompts: { ...DEFAULT_PROMPT_PREFERENCES, ...settings.prompts },
     worldInfo: { ...settings.worldInfo, useGroupScoring: settings.worldInfo.useGroupScoring ?? false },
   })
 
@@ -133,6 +135,8 @@ export function SettingsSection(props: { remote: TavernRemote }) {
   const lorebooks = lore.state.status === 'ready' ? lore.state.value.items : []
   const personaItems = personas.state.status === 'ready' ? personas.state.value.items : []
 
+  const promptPreferences = { ...DEFAULT_PROMPT_PREFERENCES, ...draft.prompts }
+  const setPrompts = (patch: Partial<TavernSettings['prompts']>) => setDraft({ ...draft, prompts: { ...promptPreferences, ...patch } })
   const setSampling = (patch: Partial<TavernSettings['sampling']>) => setDraft({ ...draft, sampling: { ...draft.sampling, ...patch } })
   const setWorldInfo = (patch: Partial<TavernSettings['worldInfo']>) => setDraft({ ...draft, worldInfo: { ...draft.worldInfo, ...patch } })
   const setMemory = (patch: Partial<TavernSettings['memory']>) => setDraft({ ...draft, memory: { ...draft.memory, ...patch } })
@@ -225,6 +229,22 @@ export function SettingsSection(props: { remote: TavernRemote }) {
             <SaveBar>
               <Btn primary size="md" disabled={busy} onClick={() => void save({ defaults: draft.defaults }, t('settings.defaults.saved'))}>
                 {t('settings.defaults.save')}
+              </Btn>
+            </SaveBar>
+          </Section>
+        )}
+
+        {sub === 'prompts' && (
+          <Section title={t('settings.prompts.title')} description={t('settings.prompts.desc')}>
+            <SettingsRow title={t('settings.prompts.preferCharacterPrompt')} description={t('settings.prompts.preferCharacterPromptDesc')}>
+              <Toggle checked={promptPreferences.preferCharacterPrompt} onChange={(preferCharacterPrompt) => setPrompts({ preferCharacterPrompt })} />
+            </SettingsRow>
+            <SettingsRow title={t('settings.prompts.preferCharacterInstructions')} description={t('settings.prompts.preferCharacterInstructionsDesc')}>
+              <Toggle checked={promptPreferences.preferCharacterInstructions} onChange={(preferCharacterInstructions) => setPrompts({ preferCharacterInstructions })} />
+            </SettingsRow>
+            <SaveBar>
+              <Btn disabled={busy} onClick={() => void save({ prompts: promptPreferences }, t('settings.prompts.saved'))} primary size="md">
+                {t('settings.prompts.save')}
               </Btn>
             </SaveBar>
           </Section>

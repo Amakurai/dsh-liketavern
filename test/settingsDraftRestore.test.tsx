@@ -5,7 +5,7 @@ import type { ReactTestRenderer } from 'react-test-renderer'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SettingsSection } from '../src/client/panel/settings.js'
 import { getTavernLocale, setTavernLocale } from '../src/client/i18n.js'
-import { Btn, ConfirmDialog, NumInput, Select, Tabs } from '../src/client/util.js'
+import { Btn, ConfirmDialog, NumInput, Select, Tabs, Toggle } from '../src/client/util.js'
 import { TavernConfigSchema, type TavernConfigRaw } from '../src/node/config.js'
 import type { TavernRemote } from '../src/client/types.js'
 
@@ -60,6 +60,43 @@ beforeEach(() => { snapshot.initial = {}; snapshot.observed = {}; setTavernLocal
 afterEach(async () => { for (const view of mounted.splice(0)) await act(async () => view.unmount()) })
 
 describe('设置草稿恢复', () => {
+  it('角色提示词偏好只保存 prompts 分区，失败保留草稿，成功同步真实回显', async () => {
+    const initial = settings(0.4)
+    snapshot.initial = { 'settings:sub': 'prompts' }
+    const api = remote(async () => ok({ settings: initial }))
+    const view = await render(api)
+    expect(view.root.findAllByType(Toggle).map(toggle => toggle.props.checked)).toEqual([true, true])
+    await act(async () => view.root.findAllByType(Toggle)[0]!.props.onChange(false))
+    await act(async () => view.root.findAllByType(Toggle)[1]!.props.onChange(false))
+    expect(api.updateSettings).not.toHaveBeenCalled()
+    const expected = { preferCharacterPrompt: false, preferCharacterInstructions: false }
+    expect((snapshot.observed['settings:baseline'] as TavernConfigRaw).prompts).toEqual(initial.prompts)
+    vi.mocked(api.updateSettings).mockResolvedValueOnce({ ok: false, error: { code: 'TEST', message: '保存失败' } })
+    const save = () => view.root.findAllByType(Btn).find(button => button.props.primary)!.props.onClick()
+    await act(async () => save())
+    expect(view.root.findAllByType(Toggle).map(toggle => toggle.props.checked)).toEqual([false, false])
+    expect((snapshot.observed['settings:baseline'] as TavernConfigRaw).prompts).toEqual(initial.prompts)
+    expect(view.root.findByProps({ role: 'alert' }).children.join('')).toContain('保存失败')
+
+    const saved = { ...initial, prompts: expected }
+    vi.mocked(api.updateSettings).mockResolvedValueOnce(ok({ settings: saved }))
+    await act(async () => save())
+    expect(api.updateSettings).toHaveBeenLastCalledWith({ patch: { prompts: expected } })
+    expect(snapshot.observed['settings:draft']).toEqual(saved)
+    expect(snapshot.observed['settings:baseline']).toEqual(saved)
+  })
+
+  it('旧版草稿缺少 prompts 时显示默认开启，编辑一项仍保留另一项默认值', async () => {
+    const { prompts: _prompts, ...legacy } = settings(0.4)
+    snapshot.initial = { 'settings:sub': 'prompts', 'settings:baseline': legacy, 'settings:draft': legacy }
+    const api = remote(async () => ok({ settings: settings(0.4) }))
+    const view = await render(api)
+    expect(view.root.findAllByType(Toggle).map(toggle => toggle.props.checked)).toEqual([true, true])
+    await act(async () => view.root.findAllByType(Toggle)[0]!.props.onChange(false))
+    await act(async () => view.root.findAllByType(Btn).find(button => button.props.primary)!.props.onClick())
+    expect(api.updateSettings).toHaveBeenCalledWith({ patch: { prompts: { preferCharacterPrompt: false, preferCharacterInstructions: true } } })
+  })
+
   it.each([false, true])('分区保存同步其它未编辑字段，并保留实际编辑的草稿：%s', async (hasOtherDraft) => {
     const old = settings(0.4), edited = settings(0.9), saved = settings(0.9)
     saved.triggerLogRetention = old.triggerLogRetention + 10

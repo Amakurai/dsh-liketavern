@@ -214,7 +214,7 @@ describe('模板计划持久化', () => {
     const {state,ws,run,cardId,binding} = await setup()
     await run(); await onTurnEnd(state,'s1')
     await onTurnStart(state,'s1',2); await run(); await onTurnEnd(state,'s1')
-    const messages = [1,2].map(turn=>createAssistantMessage({content:[{type:'text',text:`第${turn}层`}]}))
+    const messages = [1,2].map(turn=>createAssistantMessage({source:{provider:'factory',model:'factory'},content:[{type:'text',text:`第${turn}层`}]}))
     const events = messages.flatMap((message,index)=>[
       {type:'turn/start',data:{turn:index+1}},
       {type:'user/message',data:createUserMessage({content:[{type:'text',text:'你好'}],source:{kind:'user'}})},

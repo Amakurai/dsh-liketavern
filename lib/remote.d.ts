@@ -533,8 +533,8 @@ export declare const METHODS: {
                 chat: "chat";
                 character: "character";
                 global: "global";
-                settings: "settings";
                 "ensure-chat": "ensure-chat";
+                settings: "settings";
             }>;
             selection: import("zod/mini").ZodMiniUnknown;
             sessionId: import("zod/mini").ZodMiniString<string>;
@@ -919,6 +919,15 @@ export interface PresetSummary {
     name: string;
     regexCount: number;
 }
+/** 展示正则的去重诊断；仅传前 64 条，total 保留实际去重条数以标明截断。 */
+export interface DisplayRegexDiagnostics {
+    errors: Array<{
+        ruleId: string;
+        ruleName: string;
+        message: string;
+    }>;
+    total: number;
+}
 /** renderOutputText：展示文本经 output/render 正则与 HTML 抽取后的形态。 */
 export interface RenderedOutput {
     helper?: HelperSnapshot;
@@ -926,6 +935,7 @@ export interface RenderedOutput {
     helperWorldbooks?: HelperWorldbookContext;
     userName?: string;
     parts?: TemplateDisplayPart[];
+    regexDiagnostics?: DisplayRegexDiagnostics;
     text: string;
     html: string | null;
     htmls: string[];
@@ -1456,8 +1466,8 @@ export declare const TYPERT_HOST: {
                         chat: "chat";
                         character: "character";
                         global: "global";
-                        settings: "settings";
                         "ensure-chat": "ensure-chat";
+                        settings: "settings";
                     }>;
                     selection: import("zod/mini").ZodMiniUnknown;
                     sessionId: import("zod/mini").ZodMiniString<string>;
@@ -1892,8 +1902,8 @@ export declare const TYPERT_REMOTE: {
                         chat: "chat";
                         character: "character";
                         global: "global";
-                        settings: "settings";
                         "ensure-chat": "ensure-chat";
+                        settings: "settings";
                     }>;
                     selection: import("zod/mini").ZodMiniUnknown;
                     sessionId: import("zod/mini").ZodMiniString<string>;

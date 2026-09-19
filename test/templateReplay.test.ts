@@ -77,7 +77,7 @@ afterEach(async()=>{for(const root of roots.splice(0)) await rm(root,{recursive:
 function output(text:string,finish='stop'):Pick<Session,'id'|'snapshotEvents'> {
   return {id:'s1' as Session['id'],snapshotEvents:()=>[
 
-    {type:'assistant/message',seq:5,time:0,data:{stream: [{type:'chunk',time:0,chunk:{type:'finish',reason:{kind:finish}}}], turn:1,step:1,message:createAssistantMessage({content:[{type:'text',text}]})}},
+    {type:'assistant/message',seq:5,time:0,data:{stream: [{type:'chunk',time:0,chunk:{type:'finish',reason:{kind:finish}}}], turn:1,step:1,message:createAssistantMessage({source:{provider:'factory',model:'factory'},content:[{type:'text',text}]})}},
     {type:'turn/end',seq:6,time:0,data:{turn:1,reason:{kind:'completed'}}},
   ] as unknown as SessionEvent[]}
 }

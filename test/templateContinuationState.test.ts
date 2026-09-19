@@ -33,12 +33,12 @@ async function fixture() {
   const agent=(id='s1')=>({options:{},session:{id,snapshotEvents:()=>events,deriveMessages:()=>messages}} as unknown as Agent)
   const begin=async(turn:number,runtime=state,id='s1')=>{
     events.push(event('turn/start',{turn},events.length));await onTurnStart(runtime,id,turn)
-    const message=createUserMessage({content:[{type:'text',text:'next '+turn}]});messages.push(message);events.push(event('user/message',message,events.length))
+    const message=createUserMessage({source:{kind:'user'},content:[{type:'text',text:'next '+turn}]});messages.push(message);events.push(event('user/message',message,events.length))
   }
   const run=(runtime=state,id='s1',mode:'live'|'preview'='live')=>runTavernPipeline({state:runtime,sessionId:id,agent:agent(id),mode})
   const end=async(turn:number,runtime=state,id='s1',finish='stop')=>{
 
-    const message=createAssistantMessage({content:[{type:'text',text:'word'}]});messages.push(message)
+    const message=createAssistantMessage({source:{provider:'factory',model:'factory'},content:[{type:'text',text:'word'}]});messages.push(message)
     const seq=events.length;events.push(event('assistant/message',{stream: [{type:'chunk',time:0,chunk:{type:'finish',reason:{kind:finish}}}], turn,step:1,message},seq))
     events.push(event('turn/end',{turn,reason:{kind:'completed'}},events.length))
     const session={id:id as Session['id'],snapshotEvents:()=>events}

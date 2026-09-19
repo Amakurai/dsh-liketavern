@@ -4,7 +4,7 @@
 
 **在 DeepSeek Harness 的 `dsh web` 中使用角色卡、世界书与长期记忆，开始 Tavern 式角色扮演。**
 
-**[v0.2.6](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.2.6) · 适配 dsh `0.1.5-rc.2` · Node.js ≥ 24**
+**[v0.3.0](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.3.0) · 适配 dsh `0.1.5-rc.2` · Node.js ≥ 24**
 
 中文 | [English](./README.en.md)
 
@@ -69,7 +69,7 @@ dsh-liketavern 是 DeepSeek Harness 的角色扮演插件。你可以导入 Sill
 在终端执行，固定到发布标签：
 
 ```bash
-dsh plugin --profile web add github:Amakurai/dsh-liketavern#v0.2.6
+dsh plugin --profile web add github:Amakurai/dsh-liketavern#v0.3.0
 dsh plugin --profile web list --depth 0
 ```
 
@@ -83,10 +83,10 @@ dsh web
 
 ### 使用安装包
 
-从 [v0.2.6 Release](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.2.6) 下载 `dsh-liketavern-0.2.6.tgz`，在文件所在目录执行：
+从 [v0.3.0 Release](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.3.0) 下载 `dsh-liketavern-0.3.0.tgz`，在文件所在目录执行：
 
 ```bash
-dsh plugin --profile web add ./dsh-liketavern-0.2.6.tgz
+dsh plugin --profile web add ./dsh-liketavern-0.3.0.tgz
 ```
 
 安装后同样重启 `dsh web`。Release 附有 `SHA256SUMS.txt`，可用于核对下载文件。
@@ -109,7 +109,7 @@ dsh plugin --profile web add ./dsh-liketavern-0.2.6.tgz
 4. **开始对话。** 有多条开场白时用左右按钮切换，再点「开始对话」并发送第一条台词；没有开场白的卡可直接输入。
 5. **继续或修改剧情。** 使用 AI 回复旁的操作条进行重新生成、编辑、回退、续写或 AI 代答；同一楼层的分支可用 `‹ n/m ›` 切换。
 
-收到第一条正常回复后，可从会话顶部角色入口打开「提示词预览 → 最近宿主请求」，查看本轮实际捕获的请求。脚本卡的后续配置见[脚本与原生 MVU](#脚本与原生-mvu)。
+收到第一条正常回复后，可从会话顶部角色入口打开「提示词预览 → 最近请求」，查看本轮实际捕获的请求。脚本卡的后续配置见[脚本与原生 MVU](#脚本与原生-mvu)。
 
 ## 日常使用
 
@@ -156,9 +156,12 @@ dsh plugin --profile web add ./dsh-liketavern-0.2.6.tgz
 
 | 项目 | 实际行为 |
 | --- | --- |
-| 采样参数 | `temperature`、`maxTokens`、`stop` 及模型公布的思考档位可以生效；`top_p`、惩罚系数仅记录。宿主锁定关闭思考时，插件不能强制开启 |
-| 提示词预览 | 「最近宿主请求」显示实际捕获的请求（适配器转换前）；其他页签是重新计算的 ST 模拟，不能代表实际入模消息 |
-| 正则与位置 | 实时展示使用 `output/render`；`input/send`、`prompt/assemble`、`prompt/send` 的历史改写只用于模拟与代答。静态深度内容进入稳定提示词段，动态 `@D` 和作者注释进入每轮上下文 |
+| 采样参数 | 导入预设保留受支持的采样字段，并按字段覆盖插件设置，未提供的沿用插件设置；旧预设需重新导入以补回以前未保存的参数。`temperature`、`maxTokens`、`stop` 及插件设置中模型公布的思考档位可以生效；`top_p`、惩罚系数仅记录并提示。宿主锁定关闭思考时，插件不能强制开启 |
+| 提示词预览 | 「最近请求」在官方 DeepSeek 通道显示布局与系统能力处理后的消息及兼容说明；其它通道显示宿主请求。其他页签是重新计算的 ST 模拟，不能代表实际入模消息 |
+| 预设语义 | 卡级主提示词与后置指令替换原槽位，遵守开关、触发场景及禁止覆盖设置；「设置 → 提示词」可分别关闭这两种角色覆盖。仅通过 `{{original}}` 保留原文。动态宏变量的后续读取进入本轮上下文，静态变量仍可使用稳定前缀 |
+| 预设格式与宏 | 保留 `wi_format`、`scenario_format`、`personality_format`；空格式发送原字段，旧预设需重新导入原 JSON 补回格式。`lastmessage` 读取最后一条真实用户或角色消息，`charPrompt` / `charInstruction` 读取卡片提示字段。导出内建标记 `system_prompt` 与消息角色独立，自定义 system 条目可往返 |
+| 预设消息位置 | DeepSeek 官方通道自动使用 Tavern 适配器按角色、顺序与深度插入预设。支持途中更新 system 的模型使用完整系统快照；只读首条 system 的模型将系统条目合并到首条，user/assistant 保留位置。继续使用原宿主聊天、工具、凭证及流式回复；每轮冻结布局，不替换历史正文。其他供应商暂沿用 standing/turn 两段映射 |
+| 正则与助手预填 | 实时展示使用 `output/render`；历史正则改写用于模拟与代答。末尾 assistant 条目按普通 assistant 消息发送，尚未实现供应商专用 prefill/prefix 协议；不能据此保证模型从该文本继续生成 |
 | 改写与删除 | 楼层编辑、回退、重新生成及脚本消息删除通过分支实现，原会话保留。编辑 AI 正文会撤销该层及后续派生事实，不自动重新提取或发起回复 |
 | 回滚范围 | 回滚覆盖插件剧情状态；剧情工作区之外的工具副作用不会随楼层操作撤销 |
 
@@ -215,7 +218,7 @@ node lib/backup.js restore --backup "D:/backups/dsh-2026-09-19" --target "C:/dat
 | 改了默认预设，当前对话没有变化 | 默认配置只在新会话点选角色时套用；当前对话在会话顶部角色入口修改并保存 |
 | 卡片显示正常，但按钮、脚本或 MVU 不工作 | 检查交互卡是否启用，再到「设置 → 脚本」确认脚本及文件夹已启用并保存，查看运行诊断；自动 MVU 还需开启会话选项并保持页面打开，按[兼容范围](#兼容范围)核对所需接口 |
 | 记忆页为空，或修改没有作用于当前剧情 | 检查所选角色、剧情及是否选中了「初始状态」；长期记忆由模型工具或手动写入，对话正文不会逐条自动复制到记忆中 |
-| 提示词预览与模型表现不一致 | 先查看「最近宿主请求」；其他页签是 ST 模拟。新会话尚未发出请求、宿主重启或缓存淘汰后，最近请求可能为空 |
+| 提示词预览与模型表现不一致 | 先查看「最近请求」及兼容说明；其他页签是 ST 模拟。新会话尚未发出请求、宿主重启或缓存淘汰后，最近请求可能为空 |
 | pnpm 提示构建脚本被拦截 | 先核对报错涉及的依赖；插件源码构建问题可尝试 Release 安装包，宿主依赖按 dsh 提示检查对应 profile 的 `pnpm-workspace.yaml` 中的 `allowBuilds` |
 
 ### 只读诊断
@@ -318,7 +321,7 @@ src/
 - 从哪个页面执行了哪些步骤、预期结果和实际结果，以及相关错误或只读诊断结果。
 - 去除私人内容的最小复现；第三方卡片问题请说明依赖的脚本或接口，可用手写测试卡复现。
 
-涉及提示词问题时，请说明依据的是「最近宿主请求」还是 ST 模拟；提交截图或日志前移除密钥、私人剧情与个人信息。
+涉及提示词问题时，请说明依据的是「最近请求」还是 ST 模拟；提交截图或日志前移除密钥、私人剧情与个人信息。
 
 ### 代码与文档
 

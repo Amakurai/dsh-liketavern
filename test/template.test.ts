@@ -96,7 +96,7 @@ async function setup(description = '<% incvar("visits"); %>访问=<%- getvar("vi
 function sessionOutput(text: string, reason = 'completed', finish = 'stop'): Pick<Session,'id'|'snapshotEvents'> {
   const events = [
 
-    { type:'assistant/message', seq:5, time:0, data:{stream: [{type:'chunk',time:0,chunk:{type:'finish',reason:{kind:finish}}}], turn:1,step:1,message:createAssistantMessage({content:[{type:'text',text}]})} },
+    { type:'assistant/message', seq:5, time:0, data:{stream: [{type:'chunk',time:0,chunk:{type:'finish',reason:{kind:finish}}}], turn:1,step:1,message:createAssistantMessage({source:{provider:'factory',model:'factory'},content:[{type:'text',text}]})} },
     { type:'turn/end', seq:6, time:0, data:{turn:1,reason:{kind:reason}} },
   ] as unknown as SessionEvent[]
   return {id:'s1' as Session['id'], snapshotEvents:()=>events}

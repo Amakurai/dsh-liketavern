@@ -21,6 +21,8 @@ export type Envelope<T> = {
 };
 /** 设置命名空间 dsh-tavern 的原始（schemastery 解析后）形状；单一来源是 host 侧 TavernConfigRaw；maxTokens 为数字，0 = 不限。 */
 export type TavernSettings = TavernMethodResults['getSettings']['settings'];
+/** 兼容旧版保存的设置草稿；字段与宿主 schema 同名，默认遵循 ST 的卡级提示词偏好。 */
+export declare const DEFAULT_PROMPT_PREFERENCES: TavernSettings['prompts'];
 export declare const EMPTY_SESSION_DEFAULTS: TavernSettings['defaults'];
 /**
  * remote 调用镜像：请求形状按方法声明（与 remote.ts 的 req schema 对应），

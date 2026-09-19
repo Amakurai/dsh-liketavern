@@ -9,14 +9,14 @@ import { Fragment, useEffect, useMemo, useRef } from 'react'
 import type { ReactNode, ComponentProps } from 'react'
 import { JsonBlock, MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives'
 import { stripDisplayMeta } from '../core/displaySanitize.js'
-import { cachedCharacterDetail, cachedSessionBinding } from './cache.js'
+import { cachedCharacterDetail, cachedSessionBinding, invalidateSessionBinding } from './cache.js'
 import { useMarkdownLabels, useT } from './i18n.js'
 import { isTavernSession, type UseSessions } from './mode.js'
 import { openChildSession } from './openChild.js'
 import { BINDING_CHANGED_EVENT, TavernInterruptedFloorActions } from './actions.js'
 import { SpeechBubble } from './speech.js'
 import type { SessionBinding, TavernRemote } from './types.js'
-import { useLoader } from './util.js'
+import { Btn, Err, useLoader } from './util.js'
 
 interface AssistantBlock {
   kind: string
@@ -83,12 +83,12 @@ export function TavernAssistantNode(props: {
     window.addEventListener(BINDING_CHANGED_EVENT, changed)
     return () => window.removeEventListener(BINDING_CHANGED_EVENT, changed)
   }, [tavern, sessionId, bindingLoader.reload])
-  // 重拉期间沿用同一会话上次读到的绑定：气泡与互动卡 iframe 不因短暂的 loading 被卸载重建。
+  // 重拉与读取失败时沿用同一会话上次确认的绑定，避免短暂故障卸载互动卡；成功解绑仍立即生效。
   const lastBinding = useRef<{ sessionId: string; binding: SessionBinding | null } | null>(null)
   if (bindingLoader.state.status === 'ready') lastBinding.current = { sessionId, binding: bindingLoader.state.value.binding }
   const binding = bindingLoader.state.status === 'ready'
     ? bindingLoader.state.value.binding
-    : bindingLoader.state.status === 'loading' && lastBinding.current?.sessionId === sessionId ? lastBinding.current.binding : null
+    : (bindingLoader.state.status === 'loading' || bindingLoader.state.status === 'error') && lastBinding.current?.sessionId === sessionId ? lastBinding.current.binding : null
   const detail = useLoader(
     () => cachedCharacterDetail(remote, binding!.cardId),
     [binding?.cardId],
@@ -107,6 +107,14 @@ export function TavernAssistantNode(props: {
     return <NativeAssistantFallback {...props} streaming={streaming} interrupted={interrupted} />
   }
 
+  // 失败不是“没有绑定”：保留可读正文并提供就地恢复，重试先清缓存以绕开仍挂起的旧请求。
+  const bindingError = bindingLoader.state.status === 'error' ? (
+    <div className="dsh-tavern-notice">
+      <Err message={t('assistant.bindingLoadFailed', { message: bindingLoader.state.message })} />
+      <Btn onClick={() => { invalidateSessionBinding(sessionId); bindingLoader.reload() }}>{t('assistant.retryBinding')}</Btn>
+    </div>
+  ) : null
+
   // 中断楼层（已停止）的补救操作组：宿主 assistant-actions slot 只挂 finalized 消息，
   // 这里在节点内按 turn 号补挂重新生成/回退/兄弟导航（见 actions.tsx）。
   const locationTurn =
@@ -119,6 +127,7 @@ export function TavernAssistantNode(props: {
   if (binding && text && !hasImages) {
     return (
       <div>
+        {bindingError}
         <ReasoningFold text={reasoningText} streaming={streaming} />
         <SpeechBubble
           remote={remote}
@@ -145,6 +154,7 @@ export function TavernAssistantNode(props: {
 
   return (
     <div>
+      {bindingError}
       <NativeAssistantFallback {...props} streaming={streaming} interrupted={interrupted} stripMeta />
       {interruptedActions}
     </div>

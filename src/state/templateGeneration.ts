@@ -7,6 +7,7 @@ import { parseTemplateStickyState } from '../core/templateSticky.js'
 import { parseTemplateMessageVariables, parseTemplateMessageIdentities } from '../core/templateMessageVariables.js'
 import { isTemplateAvatarUrl, TEMPLATE_AVATAR_URL_CHARS } from '../core/templateAvatar.js'
 import { parseTemplateHelperMvu, type TemplateHelperMvu } from '../core/templateHelperMvu.js'
+import { PromptLayoutSchema } from '../core/promptLayout.js'
 
 const text = z.string(), number = z.number().finite(), bool = z.boolean()
 const role = z.enum(['system','user','assistant'])
@@ -58,10 +59,11 @@ const replay: z.ZodType<TemplateReplay> = z.object({version:z.literal(2),formatt
     z.object({kind:z.literal('sticky'),action:z.enum(['begin','finish','restore']),state:stickyState.optional(),hash}).strict(),
   ])).max(4096)}).strict()
 const plan = z.object({standingKey:text,standing:text,turnContext:text,messages:z.array(chat),history:z.array(chat),logLines:z.array(text),
+  layout:PromptLayoutSchema.optional(),
   userName:text,personaDescription:text,personaLorebookId:text.nullable(),wiBudget:z.object({limit:number,used:number,overflowed:bool}).strict(),
   sampling:z.object({temperature:number,topP:number,maxTokens:number.nullable(),stop:z.array(text),presencePenalty:number,frequencyPenalty:number,
     thinking:z.enum(['enabled','disabled','low','high','max'])}).strict(),
-  assembleLog:z.array(z.object({kind:z.enum(['unknown-marker','unknown-macro','dropped-marker-content','dropped-script','auto-marker','regex-error','trim','template-placement']),detail:text}).strict()),
+  assembleLog:z.array(z.object({kind:z.enum(['unknown-marker','unknown-macro','dropped-marker-content','dropped-script','auto-marker','regex-error','trim','template-placement','live-compatibility']),detail:text}).strict()),
   stats:z.object({tokensBefore:number,tokensAfter:number,trimmedSections:z.array(text)}).strict(),
 }).strict()
 const identity = z.object({version:z.literal(1),sessionId:z.string().min(1).max(256).regex(/^[A-Za-z0-9_.-]+$/),

@@ -7,6 +7,8 @@ export const zh = {
   'assistant.characterFallback': '角色',
   'assistant.stopped': '已停止',
   'assistant.unknownBlock': '未知块',
+  'assistant.bindingLoadFailed': '角色卡信息暂时无法加载：{message}',
+  'assistant.retryBinding': '重新加载角色卡',
 } as const
 
 export const en: Record<keyof typeof zh, string> = {
@@ -16,4 +18,6 @@ export const en: Record<keyof typeof zh, string> = {
   'assistant.characterFallback': 'Character',
   'assistant.stopped': 'Stopped',
   'assistant.unknownBlock': 'Unknown block',
+  'assistant.bindingLoadFailed': 'Character information could not be loaded: {message}',
+  'assistant.retryBinding': 'Reload character',
 }

@@ -56,7 +56,8 @@ globalThis.__resolveTemplateOutlets = text => {
 export function finalizeTemplateOutlets<T extends AssembledPrompt>(
   assembled:T, sandbox:{resolveOutlets(text:string):string}, budget:number,
 ):T {
-  const texts = [assembled.standing,assembled.turnContext,...assembled.messages.map(m=>m.content),...assembled.history.map(m=>m.content)]
+  const texts = [assembled.standing,assembled.turnContext,...assembled.messages.map(m=>m.content),...assembled.history.map(m=>m.content),
+    ...(assembled.layout?.entries.map(entry=>entry.content) ?? [])]
   if (!texts.some(containsTemplateOutlet)) return assembled
   const resolved = new Map<string,string>()
   const expand = (text:string):string => {
@@ -66,6 +67,8 @@ export function finalizeTemplateOutlets<T extends AssembledPrompt>(
   }
   const messages = assembled.messages.map(message=>({...message,content:expand(message.content)}))
   const history = assembled.history.map(message=>({...message,content:expand(message.content)}))
+  const layout = assembled.layout ? { ...assembled.layout, entries: assembled.layout.entries.map(entry=>({ ...entry,
+    content:expand(entry.content), turnLocal:entry.turnLocal || containsTemplateOutlet(entry.content) })) } : undefined
   let standing = expand(assembled.standing), turnContext = expand(assembled.turnContext)
   const movedStanding = containsTemplateOutlet(assembled.standing)
   // core 应提前将含出口的来源标为动态；若正则等后处理新造出口，保守迁移整段以免钉死动态内容。
@@ -76,7 +79,7 @@ export function finalizeTemplateOutlets<T extends AssembledPrompt>(
   const tokensAfter = messages.reduce((total,message)=>total+estimateTokens(message.content),0)
   const system = [standing,turnContext].filter(Boolean).join('\n\n')
   if (tokensAfter>budget || estimateTokens(system)>budget) throw new Error('延迟注入展开后的提示词超过可用窗口，请缩减注入或提高上下文容量')
-  return {...assembled,messages,history,standing,turnContext,system,
+  return {...assembled,messages,history,standing,turnContext,system,...(layout ? {layout} : {}),
     log:[...assembled.log,{kind:'template-placement',detail:`延迟命名注入已在完整组装后展开${movedStanding?'；动态 standing 已迁入 tavern:turn':''}`}],
     stats:{...assembled.stats,tokensAfter}}
 }

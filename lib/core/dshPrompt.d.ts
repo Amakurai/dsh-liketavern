@@ -9,7 +9,7 @@ export declare const BOUND_DISCIPLINE: string;
  * 本轮 runtime context 头：**内容固定，不随 step 变化**。宿主对快照按字节去重——
  * 文本不变则不再追加新消息，多步 turn 的后续步骤因此零快照开销（前缀缓存全保）。
  * 步骤收口压力改走【Tavern 步骤】inject 通知（node/tools.ts），不要在这里放任何
- * 每步/每轮易变的内容（步骤号、时钟、随机宏均属此类）。
+ * 每步变化的内容。历史后指令的轮次标记由 pipeline 写入冻结计划，确保跨轮刷新且同轮去重。
  */
 export declare const TURN_PLAYBOOK: string;
 /** 多步收口通知（agent.inject，form: notice）；不当作用户台词，也不扫世界书。 */

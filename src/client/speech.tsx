@@ -304,7 +304,7 @@ function SpeechBubbleSession(props: SpeechBubbleProps) {
   const avatar = useLoader(() => cachedAvatar(remote, cardId), [cardId], Boolean(cardId))
   const loaded = useLoader(
     () => remote.renderOutputText({ sessionId, text: rawText, messageId: props.messageId }),
-    [sessionId, rawText, props.messageId],
+    [sessionId, rawText, props.messageId, props.interactiveCards],
     Boolean(rawText) && !streaming,
   )
   const [display,setDisplay]=useState<{base:typeof loaded.state;value:Extract<typeof loaded.state,{status:'ready'}>['value'];revision:number;completion?:{resolve:()=>void;reject:(error:unknown)=>void}}|null>(null)
@@ -371,6 +371,7 @@ function SpeechBubbleSession(props: SpeechBubbleProps) {
         ? rendered.state.value.text
         : stripDisplayMeta(rawText)
       : stripDisplayMeta(rawText)
+  const regexDiagnostics=!streaming&&rendered.state.status==='ready'?rendered.state.value.regexDiagnostics:undefined
   const whitelist = rendered.state.status === 'ready' ? rendered.state.value.whitelist : []
   const greetings = rendered.state.status === 'ready' ? rendered.state.value.greetings ?? [] : []
   const greetingIndex = rendered.state.status === 'ready' ? rendered.state.value.greetingIndex ?? 0 : 0
@@ -502,7 +503,15 @@ function SpeechBubbleSession(props: SpeechBubbleProps) {
         <div className="dsh-tavern-speechName">{name}</div>
         <Err message={swipeError} />
         <Err message={lifecycleError?.cycle===cycle?lifecycleError.message:null} />
-        <Err message={rendered.state.status === 'error' ? rendered.state.message : null} />
+        {rendered.state.status === 'error'&&<div>
+          <Err message={t('speech.renderFailed',{error:rendered.state.message})}/>
+          <Btn onClick={loaded.reload}>{t('speech.retryRender')}</Btn>
+        </div>}
+        {regexDiagnostics&&<details className="dsh-tavern-reason">
+          <summary>{t('speech.regexFailures',{count:regexDiagnostics.total})}</summary>
+          <ul>{regexDiagnostics.errors.map((error,index)=><li key={index}>{error.ruleName||error.ruleId}: {error.message}</li>)}</ul>
+          {regexDiagnostics.total>regexDiagnostics.errors.length&&<div>{t('speech.regexFailuresMore',{count:regexDiagnostics.total-regexDiagnostics.errors.length})}</div>}
+        </details>}
         {content}
         {!streaming&&rendered.state.status==='ready'&&rendered.state.value.helper&&<ScriptChoices sessionId={sessionId} context={rendered.state.value.helper}/>}
       </div>

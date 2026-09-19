@@ -7,6 +7,12 @@ import { DEFAULT_SAMPLING, DEFAULT_WI_SETTINGS, type SamplingSettings, type Worl
 
 export const TAVERN_NS = 'dsh-tavern'
 
+/** 对齐 ST power_user 的全局提示词偏好；不属于单份提示词预设。 */
+const PromptsSchema = z.object({
+  preferCharacterPrompt: z.boolean().default(true),
+  preferCharacterInstructions: z.boolean().default(true),
+}).default({ preferCharacterPrompt: true, preferCharacterInstructions: true })
+
 const SamplingSchema = z.object({
   /** 0–2，默认 1（DeepSeek 官方）。thinking 模式下不生效。 */
   temperature: z.number().min(0).max(2).default(DEFAULT_SAMPLING.temperature),
@@ -96,6 +102,7 @@ const MemorySchema = z.object({
 export const TavernConfigSchema = z.object({
   /** 前端界面语言（面板/芯片/英雄区/操作条等本插件 UI 文案）；auto（默认）跟随宿主界面语言，设置页可锁定中/英。 */
   locale: z.union([z.const('auto'), z.const('en'), z.const('zh')]).default('auto'),
+  prompts: PromptsSchema,
   sampling: SamplingSchema,
   worldInfo: WorldInfoSchema,
   memory: MemorySchema,
@@ -112,6 +119,12 @@ export const TavernConfigSchema = z.object({
 
 export type TavernConfigRaw = ReturnType<typeof TavernConfigSchema>
 
+/** 全局卡级覆盖偏好；当前轮冻结计划不因设置保存而重算。 */
+export interface TavernPromptPreferences {
+  preferCharacterPrompt: boolean
+  preferCharacterInstructions: boolean
+}
+
 export interface TavernSessionDefaults {
   cardId: string
   presetId: string
@@ -122,6 +135,7 @@ export interface TavernSessionDefaults {
 
 export interface TavernConfig {
   locale: 'auto' | 'en' | 'zh'
+  prompts: TavernPromptPreferences
   sampling: SamplingSettings
   worldInfo: WorldInfoGlobalSettings
   memory: {
@@ -146,6 +160,7 @@ export function resolveConfig(raw: unknown): TavernConfig {
   const value = (TavernConfigSchema as (input: unknown) => TavernConfigRaw)(raw)
   return {
     locale: value.locale,
+    prompts: { ...value.prompts },
     sampling: {
       ...value.sampling,
       maxTokens: value.sampling.maxTokens > 0 ? value.sampling.maxTokens : null,

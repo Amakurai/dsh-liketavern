@@ -76,6 +76,8 @@ setChatMessages 的 refresh:'none' 保持现有文档运行，affected（默认�
 
 重绘使用原有 renderOutputText 路径，正则和模板保持 worker/QuickJS 隔离，已提交回复继续读取模板快照，预览求值不落盘。相同 HTML 也会重建沙箱，使启动代码重新读取已保存数据。渲染失败不撤销此前已成功保存的消息 data/extra。refreshOneMessage 的第二个宿主 JQuery/DOM 目标参数明确拒绝，不提供任意主页面节点访问。CHARACTER_MESSAGE_RENDERED 与 all 刷新产生的 CHAT_CHANGED 按下述规则发送；宿主原生用户气泡及 USER_MESSAGE_RENDERED 仍待适配。
 
+显示请求失败会保留原文并提供手动重试；角色绑定重新读取失败时保留同会话已挂载的卡面。展示正则执行失败会在消息中列出规则名称和原因，成功规则仍继续生效；最多显示 64 条去重诊断，超过时提示剩余数量。规则没有匹配正文并不算执行错误，仍需核对原始回复与规则的查找表达式。正文中未配对的反引号或行内波浪号不再阻断后续 HTML，真正代码示例和未闭合围栏仍保留为原文。
+
 ~~~javascript
 await setChatMessages([{message_id:0,data:{hp:8}}], {refresh:'none'});
 await refreshOneMessage(0); // 先准备，再重建已显示的插件气泡。
@@ -352,7 +354,9 @@ registerVariableSchema(schema, {type: 'global'|'preset'|'character'|'chat'|'mess
 
 设置 → 脚本显示当前页面已挂载会话的逐脚本启动状态、运行错误和原生 MVU 任务错误。成功通知不会被当作脚本失败；原生任务只有在全部脚本就绪后执行，失败任务可在设置中重试。管理入口不再出现在会话消息里。
 
-纯 `MagicalAstrogy/MagVarUpdate/artifact/bundle.js` 官方 jsDelivr 导入入口交给原生 MVU 适配器。仍须在会话绑定中启用原生 MVU；自定义框架代码不自动替换。卡面提供 Zod 4 模块命名空间，兼容 `z.object` 和 `z.z.ZodObject`。原版依赖父窗口 Vue、SillyTavern 或主页面 DOM 的脚本须迁移，不能据此认为完整 SillyTavern 已被实现。异步初始化应使用模块顶层 await，确保注册规则后才发出就绪回执。MVU 更新钩子应修改传入的变量对象，由原生任务最终统一提交；不要在钩子内再次显式保存同一消息变量。
+纯 `MagicalAstrogy/MagVarUpdate/artifact/bundle.js` 和 `MagicalAstrogy/MagVarUpdate@beta/artifact/bundle.js` 官方 jsDelivr 导入入口交给原生 MVU 适配器，不下载依赖 Vue/父窗口的原版框架。识别仅限现有四个镜像（cdn、testingcf、fastly、gcore），额外代码、查询参数及其它版本不会被自动接管。仍须在会话绑定中启用原生 MVU；自定义框架代码不自动替换。卡面提供 Zod 4 模块命名空间，兼容 `z.object` 和 `z.z.ZodObject`。原版依赖父窗口 Vue、SillyTavern 或主页面 DOM 的脚本须迁移，不能据此认为完整 SillyTavern 已被实现。异步初始化应使用模块顶层 await，确保注册规则后才发出就绪回执。MVU 更新钩子应修改传入的变量对象，由原生任务最终统一提交；不要在钩子内再次显式保存同一消息变量。
+
+运行状态会把浏览器明确拒绝的跨窗口访问标为「需要适配」，保留原始错误；该脚本仍未就绪，不能跳过失败钩子继续 MVU。增加网络白名单不能解除此限制，可换用适配版或在脚本管理中暂时停用。脚本作者应把加载标记保留在本沙箱，通过本地 `getChatMessages` / `setChatMessages` 读写消息；正文修改会创建分支并撤销对应派生事实。依赖主页面 DOM 的外置状态栏还需要可见的沙箱 UI 及业务接口适配，当前隐藏后台脚本容器不能替代酒馆主页面。
 
 后台脚本可调用 `setMessageChoices(messageId, [{label, text}])` 为当前快照中的角色消息设置纯文本选项。最多 32 项，label 最多 128 字符，text 最多 1024 字符；空数组清除当前脚本选项。宿主核对来源窗口、运行时、剧情、历史修订和可见角色消息，下次同脚本发布替换旧列表，卸载清除。选项只在对应消息下方出现；可信按钮点击后经宿主公开 SessionInput.setDraft 填入当前会话草稿，保留已有文字，连续点选替换末尾上次填入的选项。含引用、已认领指令或提交期间拒绝覆盖。此桥不发送消息，不传递 HTML、代码或 DOM 权限，也不允许脚本直接读写输入框。
 

@@ -19,7 +19,7 @@ beforeEach(async()=>{
   await state.savePreset({identifier:'factory',name:'工厂预设',entries:[],helperSettings:{variables:{author:5},other:true,scripts:[]}})
   for(const sessionId of ['a','b'])await state.saveBinding({sessionId,cardId,presetId:'factory',personaId:null,lorebookIds:[],characterLorebookId:null,interactiveCards:null,greetingIndex:0,createdAt:new Date(0).toISOString()})
   const events=[{type:'turn/start',seq:0,time:0,data:{turn:1}},
-    {type:'assistant/message',seq:1,time:0,data:{stream: [], turn:1,step:1,message:createAssistantMessage({content:[{type:'text',text:'工厂消息'}]})}},
+    {type:'assistant/message',seq:1,time:0,data:{stream: [], turn:1,step:1,message:createAssistantMessage({source:{provider:'factory',model:'factory'},content:[{type:'text',text:'工厂消息'}]})}},
     {type:'turn/end',seq:2,time:0,data:{turn:1,reason:{kind:'completed'}}}] as unknown as SessionEvent[]
   ctx={sessions:{get:()=>({snapshotEvents:()=>events})},get:()=>undefined} as unknown as Context
 })

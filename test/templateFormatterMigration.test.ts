@@ -39,12 +39,12 @@ async function fixture(description = shared) {
   const agent = () => ({ options: {}, session: { id: 's1', snapshotEvents: () => events, deriveMessages: () => messages } } as unknown as Agent)
   const begin = async (turn: number, runtime = state) => {
     events.push(event('turn/start', { turn }, events.length)); await onTurnStart(runtime, 's1', turn)
-    const message = createUserMessage({ content: [{ type: 'text', text: `next ${turn}` }] }); messages.push(message)
+    const message = createUserMessage({source:{kind:'user'}, content: [{ type: 'text', text: `next ${turn}` }] }); messages.push(message)
     events.push(event('user/message', message, events.length))
   }
   const run = (runtime = state) => runTavernPipeline({ state: runtime, sessionId: 's1', agent: agent(), mode: 'live' })
   const end = async (turn: number, runtime = state, text = 'word') => {
-    const message = createAssistantMessage({ content: [{ type: 'text', text }] }); messages.push(message)
+    const message = createAssistantMessage({source:{provider:'factory',model:'factory'}, content: [{ type: 'text', text }] }); messages.push(message)
     const seq = events.length
     events.push(event('assistant/message', { stream: [{ type: 'chunk', time: 0, chunk: { type: 'finish', reason: { kind: 'stop' } } }], turn, step: 1, message }, seq))
     events.push(event('turn/end', { turn, reason: { kind: 'completed' } }, events.length))

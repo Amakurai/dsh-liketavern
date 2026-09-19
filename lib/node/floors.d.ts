@@ -19,6 +19,8 @@ export declare class FloorError extends Error {
  *
  * 优先会话最新 request/header（用户中途换模也跟得上），其次父 agent.options，
  * 再次最近一条非开场白 assistant 的 source。
+ * 输出上限只继承父 agent.options 的明确配置；header 已混入 Tavern 预设采样，
+ * 不能把临时覆盖升级成子会话默认值，否则随后清空预设上限仍会恢复旧值。
  */
 export declare function forkAgentOptions(parent: Pick<Agent, 'options'> | undefined, source: Session): AgentOptions;
 /** 切到 boundaryInclusive（含）为止的前缀；-1 / 空日志得到空数组（重跑第一层时 turn/start 在 seq 0）。 */

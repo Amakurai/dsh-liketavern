@@ -19,6 +19,8 @@ import type { ChatMessage, WIEngineResult, WorldDelta, WorldInfoEntry } from '..
 import { EMPTY_TIMER_STATE } from '../core/types.js'
 import { isolated } from './isolated.js'
 import { standingFingerprint } from '../core/standingPin.js'
+import { resolvePresetSampling } from '../core/presetSampling.js'
+import type { PromptLayout } from '../core/promptLayout.js'
 import { DEFAULT_USER_NAME } from '../core/persona.js'
 import { parseLorebook } from '../state/lorebook.js'
 import { withWorkspaceLock } from '../state/workspaceLock.js'
@@ -71,6 +73,8 @@ export interface PipelineResult {
   system: string
   /** ST 语义全量序列（预览用）。 */
   messages: ChatMessage[]
+  /** 已冻结的预设布局；真实历史由适配器按消息身份保留。 */
+  layout?: PromptLayout
   /** 入模历史（经正则与预算裁剪后）。 */
   history: ChatMessage[]
   assembled: AssembledPrompt
@@ -217,9 +221,15 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
   const userName = persona?.name ?? DEFAULT_USER_NAME
   const standingKey = standingFingerprint(binding, { name: userName, description: persona?.description ?? '' },
     state.standingRevTags(binding, { personaLorebookId: persona?.lorebookId ?? null }), input.generationType ?? 'normal')
-  const rawHistory = input.agent
-    ? flattenMessages(input.agent.session.deriveMessages(), card.name, userName)
-    : (input.historyOverride ?? [])
+  const hostMessages = input.agent?.session.deriveMessages() ?? []
+  const hostHistory = hostMessages.flatMap(message => {
+    const text = flattenMessages([message], card.name, userName)[0]
+    // 无文字图片仍是一条聊天消息，深度计算不能把它吞掉。
+    const chat = text ?? (message.content.some(block => block.type === 'image')
+      ? { role: message.role, content: '', name: message.role === 'assistant' ? card.name : userName } : undefined)
+    return chat ? [{ chat, id: String(message.id), counted: message.source.kind === 'user' || message.source.kind === 'model' }] : []
+  }).filter(({ chat }) => !(chat.role === 'user' && isSyntheticUserText(chat.content)))
+  const rawHistory = input.agent ? hostHistory.map(item => item.chat) : (input.historyOverride ?? [])
   const history = rawHistory.filter((m) => !(m.role === 'user' && isSyntheticUserText(m.content)))
 
   // 待入日志的本轮输入：去重（已入日志的不再追加）。同轮第 2 步起 history 末条已是
@@ -228,9 +238,13 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
   // 已入日志的条数）。合成 user 文本（runtime context 快照、同轮写入确认、续写指令）
   // 不经 inbox 也进不了 {{lastusermessage}} 与世界书扫描——它们不是用户台词。
   const pending = (state.pendingInputs.get(sessionId) ?? []).filter((t) => !isSyntheticUserText(t))
-  const pendingFresh = [...pending]
+  const identifiedPending = (state.pendingTemplateInputs.get(sessionId) ?? []).filter(item => !isSyntheticUserText(item.text))
+  const havePendingIds = identifiedPending.length === pending.length && identifiedPending.every((item, index) => item.text === pending[index])
+  const visibleIds = new Set(hostMessages.map(message => String(message.id)))
+  const freshIdentified = identifiedPending.filter(item => !visibleIds.has(item.id))
+  const pendingFresh = havePendingIds ? freshIdentified.map(item => item.text) : [...pending]
   let scannedUsers = 0
-  for (let i = history.length - 1; i >= 0 && pendingFresh.length > 0 && scannedUsers < pending.length; i--) {
+  for (let i = history.length - 1; !havePendingIds && i >= 0 && pendingFresh.length > 0 && scannedUsers < pending.length; i--) {
     const message = history[i]!
     if (message.role !== 'user') continue
     scannedUsers++
@@ -241,6 +255,10 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
     ...history,
     ...pendingFresh.map((content) => ({ role: 'user' as const, content, name: userName })),
   ]
+  const chatFlags = [...history.map((message,index) => input.agent ? hostHistory[index]?.counted === true : message.role !== 'system'),
+    ...pendingFresh.map((_, index) => !havePendingIds || freshIdentified[index]?.chat !== false)]
+  // 插件来源可保留为显式模板索引，但不能触发角色世界书或冒充最后一句台词。
+  const chatMessages = scanMessages.filter((_,index) => chatFlags[index])
   const messageProjection=input.agent ? buildTemplateMessageHistory(input.agent.session.deriveMessages(),
     state.pendingTemplateInputs.get(sessionId) ?? [],card.name,userName,input.agent.session.snapshotEvents?.() ?? []) : undefined
   const templateHistory=messageProjection?.history ?? scanMessages
@@ -254,8 +272,9 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
     const current = currentHelperMvuTemplateData(input.agent!.session.snapshotEvents(),helper.scopes)
     if(current !== undefined) helperMvu = projectTemplateHelperMvu(helper.scopes,historyIdentities,current)
   }
-  const lastUserMessage = pendingFresh.at(-1) ?? [...history].reverse().find((m) => m.role === 'user')?.content ?? ''
+  const lastUserMessage = [...chatMessages].reverse().find((m) => m.role === 'user')?.content ?? ''
   const config = state.config
+  const sampling = resolvePresetSampling(config.sampling, preset.sampling)
   const contextWindow = await resolveContextWindow(input)
   const turn = state.currentTurns.get(sessionId) ?? -1
   const turnSeed = hashToSeed(`${sessionId}:${turn}`)
@@ -263,6 +282,10 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
     char: card.name,
     user: userName,
     lastUserMessage,
+    lastMessage: [...chatMessages].reverse().find(message => message.role === 'assistant'
+      || (message.role === 'user' && !isSyntheticUserText(message.content)))?.content ?? '',
+    charPrompt: config.prompts.preferCharacterPrompt ? card.systemPrompt : '',
+    charInstruction: config.prompts.preferCharacterInstructions ? card.postHistoryInstructions : '',
     now: new Date(),
     readonlyStatData: latestTemplateHelperMvu(helperMvu,historyIdentities),
   }
@@ -294,7 +317,7 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
     deltas = lore.deltas
 
     // 记忆检索：本轮输入 + 最近 N 条历史做查询
-    const queryMessages = [pendingFresh.join('\n'), ...scanMessages.slice(-config.memory.queryMessages).map((m) => m.content)]
+    const queryMessages = chatMessages.slice(-config.memory.queryMessages).map((m) => m.content)
       .filter((t) => t.trim())
       .join('\n')
     memories = []
@@ -309,7 +332,7 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
 
     // 同轮冻结的宏输入：第 1 步取当前 history 的最近 assistant 正文（{{lastcharmessage}} 用），
     // 后续步 history 增长也不变；journal 同理只在本轮首次评估读一次盘。
-    lastCharMessage = [...history].reverse().find((m) => m.role === 'assistant')?.content ?? ''
+    lastCharMessage = [...chatMessages].reverse().find((m) => m.role === 'assistant')?.content ?? ''
     journalText = ''
     if (binding.injectJournal) {
       const rawJournal = await ws.fs.readText('journal.md')
@@ -323,15 +346,21 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
     templates: templateContext,
     templateContinuation:resolveTemplateContinuation(templateState),
     wiEvaluation: {
-      entries:lore.entries, messages:scanMessages, settings:state.worldInfoFor(binding),
+      entries:lore.entries, messages:chatMessages, settings:state.worldInfoFor(binding),
       timerState:input.mode==='live' ? await state.loadTimers(binding.cardId,sessionId,binding.storyId) : structuredClone(EMPTY_TIMER_STATE),
       contextWindowTokens:contextWindow, reservedTokens:estimateTokens(scanMessages.map(m=>m.content).join('\n')),
       seed:turnSeed, macroCtx:{char:card.name,user:userName},
     },
     preset,
+    promptPreferences: config.prompts,
     card,
     personaDescription: persona?.description ?? '',
     history: scanMessages,
+    historyMessageIds: [
+      ...history.map((_, index) => input.agent ? hostHistory[index]?.id : undefined),
+      ...pendingFresh.map((_, index) => havePendingIds ? freshIdentified[index]?.id : undefined),
+    ],
+    historyChatFlags: chatFlags,
     wi:null,
     memories,
     worldDeltas:deltas,
@@ -345,7 +374,7 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
     seed: turnSeed ^ 0x9e3779b9,
     budget: {
       maxTokens: contextWindow,
-      reserveForOutput: config.sampling.maxTokens ?? FALLBACK_RESERVE_OUTPUT,
+      reserveForOutput: sampling.maxTokens ?? FALLBACK_RESERVE_OUTPUT,
     },
   })
 
@@ -353,8 +382,12 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
   templateContext.regexRules = assembled.templateRegexRules
   templateContext.hasMessageRegex = assembled.templateHasMessageRegex
   // live 通道独立预算；历史的压缩由宿主处理，不能用模拟历史长度裁掉角色定义。
-  const minimumLiveTokens = estimateTokens([BOUND_DISCIPLINE, assembled.standing, TURN_PLAYBOOK, assembled.turnContext].join('\n\n'))
-  const available = contextWindow - (config.sampling.maxTokens ?? FALLBACK_RESERVE_OUTPUT)
+  // 宿主跨轮也按字节去重快照；有尾部指令时固定本轮编号，让它每轮仍在新输入之后。
+  // 编号和正文同存冻结计划，后续步骤与崩溃恢复不重新计算或反复追加。
+  const turnContext = input.mode === 'live' && assembled.hasTurnTail && activeTurn !== undefined
+    ? `【Tavern 本轮提示：第 ${activeTurn} 轮】\n\n${assembled.turnContext}` : assembled.turnContext
+  const minimumLiveTokens = estimateTokens([BOUND_DISCIPLINE, assembled.standing, TURN_PLAYBOOK, turnContext].join('\n\n'))
+  const available = contextWindow - (sampling.maxTokens ?? FALLBACK_RESERVE_OUTPUT)
   if (input.mode === 'live' && minimumLiveTokens > available) throw new Error('角色设定与本轮上下文已超过模型可用窗口，请缩减设定或提高上下文容量')
   const logLines = formatLogs(wi, assembled)
   logLines.push(`[live:budget] 插件通道≈${minimumLiveTokens} tokens；不含宿主 system/tools/历史，模拟裁剪不影响这些通道`)
@@ -367,11 +400,12 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
     templateContext,
     templateReplay:assembled.templateReplay,
     standingKey,
-    sampling: structuredClone(config.sampling),
+    sampling,
     standing: assembled.standing,
-    turnContext: assembled.turnContext,
-    system: assembled.system,
+    turnContext,
+    system: [assembled.standing, turnContext].filter(Boolean).join('\n\n'),
     messages: assembled.messages,
+    layout: assembled.layout,
     history: assembled.history,
     assembled,
     logLines,
@@ -388,6 +422,7 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
     version:1,status:'prepared',sessionId,cardId:binding.cardId,storyId:binding.storyId,turn,floor:entry.floor,replay:result.templateReplay,
     regexRules:templateContext.regexRules,hasMessageRegex:templateContext.hasMessageRegex,
     plan:{standingKey:result.standingKey,sampling:result.sampling,standing:result.standing,turnContext:result.turnContext,messages:result.messages,
+      ...(result.layout ? {layout:result.layout} : {}),
       history:result.history,logLines:result.logLines,userName:result.userName,personaDescription:result.personaDescription,
       personaLorebookId:result.personaLorebookId,wiBudget:result.wiBudget,assembleLog:result.assembled.log,stats:result.assembled.stats},
   } : undefined
@@ -427,7 +462,7 @@ function restorePipelineResult(generation:PreparedTemplateGeneration):PipelineRe
   const {assembleLog,stats,...plan} = generation.plan
   const system = [plan.standing,plan.turnContext].filter(Boolean).join('\n\n')
   return {...plan,system,templateContext:templateGenerationContext(generation),templateReplay:generation.replay,
-    assembled:{messages:plan.messages,history:plan.history,standing:plan.standing,turnContext:plan.turnContext,system,log:assembleLog,stats}}
+    assembled:{messages:plan.messages,history:plan.history,layout:plan.layout,standing:plan.standing,turnContext:plan.turnContext,system,log:assembleLog,stats}}
 }
 
 function formatLogs(wi: WIEngineResult, assembled: AssembledPrompt): string[] {

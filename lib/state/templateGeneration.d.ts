@@ -34,6 +34,7 @@ declare const generation: z.ZodDiscriminatedUnion<[z.ZodObject<{
             name: z.ZodOptional<z.ZodString>;
         }, z.core.$strict>>;
         logLines: z.ZodArray<z.ZodString>;
+        layout: z.ZodOptional<z.ZodType<import("../core/promptLayout.js").PromptLayout, unknown, z.core.$ZodTypeInternals<import("../core/promptLayout.js").PromptLayout, unknown>>>;
         userName: z.ZodString;
         personaDescription: z.ZodString;
         personaLorebookId: z.ZodNullable<z.ZodString>;
@@ -67,6 +68,7 @@ declare const generation: z.ZodDiscriminatedUnion<[z.ZodObject<{
                 "auto-marker": "auto-marker";
                 "regex-error": "regex-error";
                 "template-placement": "template-placement";
+                "live-compatibility": "live-compatibility";
             }>;
             detail: z.ZodString;
         }, z.core.$strict>>;

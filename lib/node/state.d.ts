@@ -5,6 +5,7 @@ import { type MemoryEntry, type PromptPreset, type RegexRule, type WIEngineResul
 import { applyCharacterPatch } from '../state/card.js';
 import { MemoryStore } from '../state/memory.js';
 import type { PipelineResult } from './pipeline.js';
+import type { PresetAdapterController } from './presetAdapter.js';
 import { Wal } from '../state/wal.js';
 import { WorldDeltaStore } from '../state/worlddelta.js';
 import { type ArchivedCharacterSummary, type CharacterWorkspace } from '../state/workspace.js';
@@ -44,6 +45,8 @@ interface WorkspaceHandle {
 export declare class TavernState {
     readonly paths: TavernPaths;
     private readonly getConfig;
+    /** 宿主作用域持有的布局适配器；agent 销毁不影响其它剧情的注册。 */
+    presetAdapter?: PresetAdapterController;
     private readonly workspaces;
     readonly triggerLogs: Map<string, {
         at: string;
@@ -108,6 +111,8 @@ export declare class TavernState {
     readonly pendingTemplateInputs: Map<string, {
         id: string;
         text: string;
+        hasImage?: boolean;
+        chat?: boolean;
     }[]>;
     /** 会话 standing 钉死（键 = 会话 × 生成场景；绑定指纹不变则复用第一次写入的字节）。 */
     readonly standingPins: Map<string, StandingPin>;

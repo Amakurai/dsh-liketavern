@@ -32,6 +32,15 @@ describe('BOUND_DISCIPLINE', () => {
 })
 
 describe('TURN_PLAYBOOK', () => {
+  it('说明返回值的可选字段边界，并阻止外层格式错误触发重复写入', () => {
+    expect(TURN_PLAYBOOK).toContain('无损 JSON')
+    expect(TURN_PLAYBOOK).toContain('可选字段可能不存在')
+    expect(TURN_PLAYBOOK).toContain('error: r.error ?? null')
+    expect(TURN_PLAYBOOK).toContain('hint: r.hint ?? null')
+    expect(TURN_PLAYBOOK).toContain('不得为修正返回格式重复写入')
+    expect(TURN_PLAYBOOK).toContain('先按条只读核实')
+  })
+
   it('内容固定不随 step 变化（宿主按字节去重，多步后续零快照开销）', () => {
     expect(TURN_PLAYBOOK).toContain('【本轮】')
     expect(TURN_PLAYBOOK).toContain('够用就直接以角色身份回复')
@@ -60,6 +69,7 @@ describe('formatTurnStepNotice', () => {
 describe('isSyntheticUserText', () => {
   it('识别 runtime context、同轮写入确认、续写指令与步骤收口通知', () => {
     expect(isSyntheticUserText('Current runtime context. x')).toBe(true)
+    expect(isSyntheticUserText('【Tavern 提示词布局快照】')).toBe(true)
     expect(isSyntheticUserText(`${TURN_WRITE_ACK_PREFIX}记忆 id=1 已落盘。`)).toBe(true)
     expect(isSyntheticUserText(`${CONTINUE_INSTRUCTION_PREFIX}上一条角色回复可能被截断。`)).toBe(true)
     expect(isSyntheticUserText(`${TURN_STEP_NOTICE_PREFIX}本轮第 2 步：现在输出扮演正文。`)).toBe(true)

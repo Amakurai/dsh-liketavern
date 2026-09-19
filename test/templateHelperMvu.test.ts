@@ -118,7 +118,7 @@ async function fixture(description = `EJS=<%- getvar('stat_data.hp') %>;MACRO={{
   }
   const end = async (turn: number, text = '回复') => {
 
-    const output = createAssistantMessage({ content: [{ type: 'text', text }] }); messages.push(output); events.push(event('assistant/message', {stream: [{type:'chunk',time:0,chunk:{ type: 'finish', reason: { kind: 'stop' } }}],  turn, step: 1, message: output }, events.length))
+    const output = createAssistantMessage({source:{provider:'factory',model:'factory'}, content: [{ type: 'text', text }] }); messages.push(output); events.push(event('assistant/message', {stream: [{type:'chunk',time:0,chunk:{ type: 'finish', reason: { kind: 'stop' } }}],  turn, step: 1, message: output }, events.length))
     events.push(event('turn/end', { turn, reason: { kind: 'completed' } }, events.length)); await onTurnEnd(state, 's1', { id: 's1' as never, snapshotEvents: () => events })
     // 此工厂只验模板桥；模拟原生 MVU 消费完成，具体租约/事件/提交由独立宿主集成覆盖。
     const saved=await loadHelperState(ws.fs)
@@ -169,7 +169,7 @@ it('纯 stat_data 宏随剧情更新进入 turn，不能被 standing 钉死到�
 
 it('预览只读，当前变量可继承模型裁剪的原始消息但历史投影与同角色其他剧情保持隔离', async () => {
   const f = await fixture()
-  const hidden = createAssistantMessage({ content: [{ type: 'text', text: '不可见' }] })
+  const hidden = createAssistantMessage({source:{provider:'factory',model:'factory'}, content: [{ type: 'text', text: '不可见' }] })
   f.events.push(event('assistant/message', {stream: [],  turn: 0, step: 0, message: hidden }, f.events.length))
   await f.ws.wal.beginFloor('s1#t1'); await writeHelper(f.ws.fs, 's1#t1', hidden.id, 99); await f.ws.wal.commitFloor('s1#t1')
   const beforeHelper = await f.ws.fs.readText('state/helper.json'), beforeTemplate = await f.ws.fs.readText('state/template.json')
@@ -252,13 +252,13 @@ it('真实 Session 摘要压缩后，模板当前基准与后台下一回复继�
 
 it('当前基准沿用最近普通消息的手动变量，摘要替换与续写指令的 scope 不参与后台继承',()=>{
   const session=Session.create('template-mvu-current' as Session['id']),scopes:Record<string,Record<string,unknown>>={}
-  const assistant=session.append('assistant/message',{stream: [], turn:1,step:1,message:createAssistantMessage({content:[{type:'text',text:'旧角色回复'}]})},{surfaceOp:'append'})
+  const assistant=session.append('assistant/message',{stream: [], turn:1,step:1,message:createAssistantMessage({source:{provider:'factory',model:'factory'},content:[{type:'text',text:'旧角色回复'}]})},{surfaceOp:'append'})
   scopes[scope(assistant.data.message.id)]={stat_data:{hp:10}}
-  const user=session.append('user/message',createUserMessage({content:[{type:'text',text:'手动修改变量的用户消息'}]}),{surfaceOp:'append'})
+  const user=session.append('user/message',createUserMessage({source:{kind:'user'},content:[{type:'text',text:'手动修改变量的用户消息'}]}),{surfaceOp:'append'})
   scopes[scope(user.data.id)]={stat_data:{hp:15}}
-  const summary=session.append('user/message',createUserMessage({content:[{type:'text',text:'摘要'}]}),{surfaceOp:{op:'replace',startSeq:assistant.seq,endSeq:user.seq},sourceEventSeqs:[assistant.seq,user.seq]})
+  const summary=session.append('user/message',createUserMessage({source:{kind:'user'},content:[{type:'text',text:'摘要'}]}),{surfaceOp:{op:'replace',startSeq:assistant.seq,endSeq:user.seq},sourceEventSeqs:[assistant.seq,user.seq]})
   scopes[scope(summary.data.id)]={stat_data:{hp:999}}
-  const continuation=session.append('user/message',createUserMessage({content:[{type:'text',text:CONTINUE_INSTRUCTION_PREFIX+'继续'}]}),{surfaceOp:'append'})
+  const continuation=session.append('user/message',createUserMessage({source:{kind:'user'},content:[{type:'text',text:CONTINUE_INSTRUCTION_PREFIX+'继续'}]}),{surfaceOp:'append'})
   scopes[scope(continuation.data.id)]={stat_data:{hp:888}}
   expect(currentHelperMvuTemplateData(session.snapshotEvents(),scopes)).toEqual({hp:15})
   scopes[scope(user.data.id)]={stat_data:null}

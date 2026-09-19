@@ -1,6 +1,7 @@
 /**
  * 楼层 fork 的 agentOptions：子会话必须带上 provider/model，
  * 否则 system-prompt 插值 {{model}} 会在重新生成时抛无值错误。
+ * 输出上限只继承父 agent.options，不把请求里已应用的预设采样提升成子会话默认。
  * 另覆盖：childWalLineage 祖先边界 clamp、sessionPrefixEvents、回滚楼层名、
  * inheritedThroughTurn、withEditedAssistantMessage、timerOwnerAtTurn、
  * editUserMessage 空文本拒绝（与 editAssistantMessage 同口径）、
@@ -50,12 +51,17 @@ function assistant(provider: string, model: string): SessionEvent {
 }
 
 describe('forkAgentOptions', () => {
-  it('request/header 覆盖父 agent.options（换模后跟 header）', () => {
+  it('路由跟随最新 request/header，输出上限保留父 agent.options', () => {
     const out = forkAgentOptions(
       { options: { provider: 'old', model: 'old-model', maxTokens: 100 } },
       sessionOf({ header: { provider: 'deepseek', model: 'deepseek-chat', maxTokens: 8192 } }),
     )
-    expect(out).toEqual({ provider: 'deepseek', model: 'deepseek-chat', maxTokens: 8192 })
+    expect(out).toEqual({ provider: 'deepseek', model: 'deepseek-chat', maxTokens: 100 })
+  })
+
+  it.each([undefined, { options: { provider: 'old', model: 'old-model' } }])('父 agent 未明确配置上限时不从已采样 header 推断', parent => {
+    expect(forkAgentOptions(parent, sessionOf({ header: { provider: 'deepseek', model: 'deepseek-chat', maxTokens: 8192 } })))
+      .toEqual({ provider: 'deepseek', model: 'deepseek-chat' })
   })
 
   it('没有 header 时用父 agent.options', () => {

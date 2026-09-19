@@ -1,6 +1,10 @@
 /** 角色发言条（speech.tsx）界面文案。zh 为键全集源。 */
 
 export const zh = {
+  'speech.renderFailed': '角色消息显示处理失败，已保留原文：{error}',
+  'speech.retryRender': '重新加载卡片显示',
+  'speech.regexFailures': '{count} 条展示规则执行失败，卡片可能显示不完整',
+  'speech.regexFailuresMore': '另有 {count} 条失败规则，请在正则设置中检查。',
   "speech.scriptChoices": "可选行动",
   "speech.choiceUnavailable": "当前会话输入框尚未就绪。",
   "speech.choiceBusy": "请先完成输入框中的指令或引用，再填入选项。",
@@ -121,6 +125,10 @@ export const zh = {
 } as const
 
 export const en: Record<keyof typeof zh, string> = {
+  'speech.renderFailed': 'Could not render the character message. The original text is still shown: {error}',
+  'speech.retryRender': 'Reload card display',
+  'speech.regexFailures': '{count} display rules failed; the card may be incomplete',
+  'speech.regexFailuresMore': '{count} more rules failed. Check the regex settings.',
   "speech.scriptChoices": "Available choices",
   "speech.choiceUnavailable": "The conversation input is not ready.",
   "speech.choiceBusy": "Finish the command or references in the input before inserting a choice.",

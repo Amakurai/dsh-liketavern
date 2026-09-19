@@ -1,4 +1,4 @@
-/** 资产编辑交互回归：真实文件系统与服务适配器覆盖预设身份、收纳与删除失败恢复、导入重试及搜索恢复。 */
+/** 资产编辑交互回归：真实文件系统与服务适配器覆盖预设身份与采样草稿、收纳与删除失败恢复、导入重试及搜索恢复。 */
 import type { ReactNode } from 'react'
 import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -209,6 +209,47 @@ it('角色详情多行输入框具有真实关联的可访问名称，重复挂�
     expect(view.root.findAllByType('textarea').filter(node => node.props['aria-labelledby']).map(node => node.props['aria-labelledby'])).toEqual(ids)
   }
   expect(new Set(labelIds).size).toBe(labelIds.length)
+})
+
+/** 采样恢复全局仅修改编辑草稿；放弃不落盘，保存才删除预设覆盖字段。 */
+it('预设改用插件采样设置可取消，保存后实际移除采样覆盖', async () => {
+  const f = await fixture()
+  const sampling = { temperature: 0.4, maxTokens: 2048, stop: ['END'], topP: 0.7 }
+  const id = await f.state.savePreset({ identifier: 'sampling-reset', name: '采样草稿', entries: [], sampling })
+  const view = await render(<PresetsSection remote={f.remote} />)
+  await settle(() => {}, () => completed(f.remote.listPresets))
+  const open = async () => {
+    const count = vi.mocked(f.remote.getPreset).mock.calls.length
+    await settle(() => view.root.findByProps({ className: 'dsh-tavern-tile' }).props.onClick(),
+      () => vi.mocked(f.remote.getPreset).mock.calls.length > count && completed(f.remote.getPreset))
+  }
+  const resetButtons = () => view.root.findAllByType(Btn).filter(item => item.props.children === t('presets.sampling.useGlobal'))
+  await open()
+  expect(resetButtons()).toHaveLength(1)
+  await click(view, t('presets.sampling.useGlobal'))
+  expect(resetButtons()).toHaveLength(0)
+  expect(f.remote.savePreset).not.toHaveBeenCalled()
+  expect((await f.state.loadPreset(id))?.sampling).toEqual(sampling)
+
+  await click(view, t('action.close'))
+  const discard = view.root.findAllByType(ConfirmDialog).find(item => item.props.open && item.props.title === t('draft.leaveTitle'))!
+  await act(async () => discard.props.onConfirm())
+  expect(view.root.findAllByType('fieldset')).toHaveLength(0)
+  expect(f.remote.savePreset).not.toHaveBeenCalled()
+  expect((await f.state.loadPreset(id))?.sampling).toEqual(sampling)
+
+  await open()
+  expect(resetButtons()).toHaveLength(1)
+  await click(view, t('presets.sampling.useGlobal'))
+  await settle(() => view.root.findAllByType(Btn).find(item => item.props.children === t('presets.save'))!.props.onClick(),
+    () => completed(f.remote.savePreset))
+  expect(f.remote.savePreset).toHaveBeenCalledOnce()
+  expect(vi.mocked(f.remote.savePreset).mock.calls[0]![0].preset).not.toHaveProperty('sampling')
+  expect(await f.state.loadPreset(id)).not.toHaveProperty('sampling')
+  await click(view, t('action.close'))
+  expect(view.root.findAllByType('fieldset')).toHaveLength(0)
+  await open()
+  expect(resetButtons()).toHaveLength(0)
 })
 
 describe('角色卡导入失败恢复', () => {

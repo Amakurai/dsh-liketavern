@@ -16,7 +16,7 @@ import {
   type Message,
 } from '@deepseek-ai/dsh-llm'
 import type { Session } from '@deepseek-ai/dsh-session'
-import { resolveTavernReasoningEffort, type AdvertisedReasoningInfo } from '../core/callConfig.js'
+import { mergeTavernCallConfig, resolveTavernReasoningEffort, type AdvertisedReasoningInfo } from '../core/callConfig.js'
 import { FloorError, forkAgentOptions } from './floors.js'
 import { runTavernPipeline } from './pipeline.js'
 import { isTavernRuntimeSession } from './tavernSession.js'
@@ -55,7 +55,7 @@ export async function impersonate({ ctx, state }: ImpersonateDeps, sessionId: st
   const pipeline = await runTavernPipeline({ state, sessionId, agent, llm, mode: 'preview', generationType: 'impersonate' })
   if (!pipeline) throw new FloorError('no-card', '角色卡不存在或绑定已失效')
 
-  const sampling = state.config.sampling
+  const sampling = pipeline.sampling
   // 深度思考的三级挑选与 live 请求共用 resolveTavernReasoningEffort（core/callConfig）：
   // 关键是 deepseek-official 在元数据解析失败时也要能关掉 thinking——代答曾漏掉这层兜底。
   let reasoning: AdvertisedReasoningInfo | undefined
@@ -69,7 +69,7 @@ export async function impersonate({ ctx, state }: ImpersonateDeps, sessionId: st
   const currentEffort = session.requestHeader()?.config.reasoningEffort
   const reasoningEffort = resolveTavernReasoningEffort(sampling.thinking, reasoning, currentEffort, provider)
 
-  const messages: Message[] = pipeline.history.map((m) =>
+  const messages: Message[] = pipeline.history.filter(message=>message.content.trim()).map((m) =>
     m.role === 'assistant'
       ? createAssistantMessage({ content: [{ type: 'text', text: m.content }], source: { provider, model } })
       : createUserMessage({ content: [{ type: 'text', text: m.content }], source: { kind: 'user' } }),
@@ -89,16 +89,13 @@ export async function impersonate({ ctx, state }: ImpersonateDeps, sessionId: st
     }),
   )
 
-  const options: GenerateOptions = {
+  const options: GenerateOptions = mergeTavernCallConfig({
     provider,
     model,
     messages,
     system: pipeline.system,
-    temperature: sampling.temperature,
-    ...(sampling.maxTokens !== null ? { maxTokens: sampling.maxTokens } : {}),
-    ...(sampling.stop.length > 0 ? { stop: [...sampling.stop] } : {}),
     ...(reasoningEffort !== undefined ? { reasoningEffort: ReasoningEffortId(reasoningEffort) } : {}),
-  }
+  }, sampling, undefined, agent.options.maxTokens)
   const signal = AbortSignal.timeout(60_000)
   const text = await collectCompleteText(llm.stream({ ...options, signal }), signal)
   if (!text) throw new FloorError('empty-result', '模型没有产出台词，请重试')

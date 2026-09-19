@@ -34,7 +34,7 @@ dsh-liketavern 内置 EJS 模板执行与剧情变量，不需要另装 ST-Promp
 | `_` | 内置 Lodash 4.18.1 的完整库，包含集合、链式、路径、模板等 API；捕获冻结时钟/随机源；宿主定时器、网络或 Node 能力仍不提供 |
 | `faker` | @faker-js/faker 10.6.0 完整 namespace，含 77 种 locale、官方实例和构造器；首次访问时在 QuickJS 内加载，内置实例默认使用本轮 seed/now |
 | `[GENERATE:BEFORE] / [GENERATE:AFTER]` | 使用普通 WI 触发规则，在模拟序列首条正文前/末条正文后执行并原样拼接；对应动态正文映射到真实本轮上下文 |
-| `@INJECT pos=… / target=… / regex=…` | 在模拟消息中按位置、角色出现次数或第一条正则匹配插入独立消息；支持 role、order、at；正文同时映射到真实 tavern:turn |
+| `@INJECT pos=… / target=… / regex=…` | 按位置、角色出现次数或第一条正则匹配插入独立消息；支持 role、order、at；DeepSeek 官方布局通道保留位置，其它通道映射到 tavern:turn |
 | `[GENERATE:index:BEFORE/AFTER] / [GENERATE:REGEX:pattern]` | 在模拟消息正文前后追加内容，正则忽略大小写并匹配每条；提供 matched_message、matched_message_index、matched_message_role 和 world_info |
 | `[RENDER:BEFORE] / [RENDER:AFTER]` | 启用条目按 order 排序，围绕正常完成的 assistant 正文执行 |
 | assistant 回复中的 EJS | 完整 turn 正常完成且该 step 有 stop 终止帧时执行；变量与展示结果一次原子写入 |
@@ -90,7 +90,9 @@ GENERATE 钩子的 `generateBuffer` 是该钩子之前已收集的正文。执�
 
 activewi 重组复用相同来源的模板结果及相同匹配身份的回调结果；新匹配或显式重新注册的规则仍会执行回调，新一轮清除匹配缓存。所有输出按实际正文检查预算。
 
-**精确位置与 role 只适用于 ST 模拟序列。** dsh 的真实消息历史由宿主管理，定位正文以带来源标签的段落进入真实 `tavern:turn`，不成为额外的 user/assistant 历史消息。触发诊断同时说明这项映射。因此需要依赖真实消息角色或绝对排列的卡仍有宿主差异。
+DeepSeek 官方通道会把已求值的定位内容保存为结构化布局，按原 role 和消息 ID 插入请求副本；GENERATE、INSERT 与延迟出口不会在后续工具步骤重新执行。原历史正文、图片、工具调用和结果保持不变，插入不能拆开工具交换。深度落在已压缩的历史中时只能定位到摘要边界。其它供应商通道仍把定位正文映射为 `tavern:turn` 段落，尚不保留精确角色与位置；供应商专用助手预填也尚未接入。
+
+system 位置还取决于模型能力：支持中途更新的模型在各个位置接收完整系统快照；只支持首条 system 的模型合并系统条目并在「最近请求」记录差异，user/assistant 的定位保留。模板不能借增量 system 片段丢弃宿主工具说明。
 
 示例：把下面内容放在常驻世界书里：
 

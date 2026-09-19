@@ -9,6 +9,8 @@ export declare const zh: {
     readonly "settings.scripts.runtime.running": "已加载当前会话脚本";
     readonly "settings.scripts.runtime.error": "运行失败";
     readonly "settings.scripts.runtime.ready": "已就绪";
+    readonly "settings.scripts.runtime.incompatible": "需要适配";
+    readonly "settings.scripts.windowAccess": "脚本尝试访问其它窗口的页面或全局对象，受到浏览器隔离限制。请使用适配版脚本，或在下方脚本管理中暂时停用它；放宽网络白名单无法解决此问题。";
     readonly "settings.scripts.nativeOn": "MVU 框架由原生执行器接管，变量在剧情内保存。";
     readonly "settings.scripts.nativeOff": "已适配 MVU 入口，但此会话尚未启用原生 MVU；请在角色配置中开启后应用。";
     readonly "settings.scripts.global": "全局脚本";
@@ -41,6 +43,7 @@ export declare const zh: {
     readonly 'settings.title': "设置";
     readonly 'settings.sub.interface': "界面";
     readonly 'settings.sub.defaults': "默认配置";
+    readonly 'settings.sub.prompts': "提示词";
     readonly 'settings.sub.sampling': "采样与思考";
     readonly 'settings.sub.worldinfo': "世界书引擎";
     readonly 'settings.sub.memory': "记忆";
@@ -68,6 +71,14 @@ export declare const zh: {
     readonly 'settings.defaults.noLorebooks': "库中暂无独立世界书。可在「世界书」页导入，或使用角色卡内嵌书。";
     readonly 'settings.defaults.save': "保存默认配置";
     readonly 'settings.defaults.saved': "已保存选卡后的默认配置";
+    readonly 'settings.prompts.title': "角色卡提示词";
+    readonly 'settings.prompts.desc': "这些偏好适用于所有会话，默认开启。保存后从下一轮生效；预设条目禁止角色卡覆盖时，仍使用预设内容。";
+    readonly 'settings.prompts.preferCharacterPrompt': "优先使用角色卡主提示词";
+    readonly 'settings.prompts.preferCharacterPromptDesc': "开启时，角色卡填写的主提示词覆盖预设主提示词；关闭或角色卡未填写时使用预设。";
+    readonly 'settings.prompts.preferCharacterInstructions': "优先使用角色卡历史后指令";
+    readonly 'settings.prompts.preferCharacterInstructionsDesc': "开启时，角色卡填写的历史后指令覆盖预设对应条目；关闭或角色卡未填写时使用预设。";
+    readonly 'settings.prompts.save': "保存提示词设置";
+    readonly 'settings.prompts.saved': "已保存提示词设置，下一轮生效";
     readonly 'settings.sampling.title': "采样与思考";
     readonly 'settings.sampling.desc': "temperature / maxTokens / stop 会透传到模型；topP 与 penalty 当前平台不生效，仅作记录。";
     readonly 'settings.sampling.temperatureDesc': "0–2，默认 1。thinking 模式下不生效。";

@@ -46,7 +46,7 @@ async function completeJob(): Promise<void> {
 function stopMessage(reason: 'stop' | 'max-tokens' = 'stop'): void {
   agent.session.append('step/start', { turn: 1, step: 1 })
 
-  agent.session.append('assistant/message', {stream: [{type:'chunk',time:0,chunk:{ type: 'finish', reason: { kind: reason } }}],  turn: 1, step: 1, message: createAssistantMessage({ content: [{ type: 'text', text: '正常回复' }] }) }, { surfaceOp: 'append' })
+  agent.session.append('assistant/message', {stream: [{type:'chunk',time:0,chunk:{ type: 'finish', reason: { kind: reason } }}],  turn: 1, step: 1, message: createAssistantMessage({source:{provider:'factory',model:'factory'}, content: [{ type: 'text', text: '正常回复' }] }) }, { surfaceOp: 'append' })
   agent.session.append('step/end', { turn: 1, step: 1 })
 }
 function reserveOnInsert(): void {

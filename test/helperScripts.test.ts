@@ -45,12 +45,26 @@ it('脚本文件导入识别单脚本和脚本库，导出遵守数据及按钮�
   expect(trees[0]).toMatchObject({data:{privateValue:'excluded'}})
 })
 
-it('仅纯官方 MVU 导入接管为原生框架，自定义代码和伪造地址不改写',()=>{
-  const entry="import 'https://testingcf.jsdelivr.net/gh/MagicalAstrogy/MagVarUpdate/artifact/bundle.js';"
-  expect(isNativeMvuFramework(entry)).toBe(true)
-  expect(helperScriptHtml(entry)).toContain("waitGlobalInitialized('Mvu')")
-  for(const code of [entry+' customRule()',entry.replace('testingcf.jsdelivr.net','attacker.invalid'),entry.replace('bundle.js','bundle.js?variant=1'),'// customized\n'+entry]){
+it('纯官方 MVU 的无版本与 beta 入口都交给原生框架，不再加载依赖父窗口的远端代码',()=>{
+  for(const host of ['testingcf.jsdelivr.net','cdn.jsdelivr.net','fastly.jsdelivr.net','gcore.jsdelivr.net']){
+    for(const ref of ['', '@beta'])for(const quote of ["'",'"'])for(const semicolon of ['', ';']){
+      const entry=`  import ${quote}https://${host}/gh/MagicalAstrogy/MagVarUpdate${ref}/artifact/bundle.js${quote}${semicolon}\n`
+      expect(isNativeMvuFramework(entry)).toBe(true)
+      expect(helperScriptHtml(entry)).toContain("waitGlobalInitialized('Mvu')")
+      expect(helperScriptHtml(entry)).not.toContain('bundle.js')
+    }
+  }
+})
+it('MVU 自定义代码、未知版本与相似恶意地址完整保留，不误接管为原生框架',()=>{
+  const entry="import 'https://testingcf.jsdelivr.net/gh/MagicalAstrogy/MagVarUpdate@beta/artifact/bundle.js';"
+  for(const code of [entry+' customRule()',entry+' parent.Vue.createApp({})','// customized\n'+entry,
+    entry.replace('testingcf.jsdelivr.net','attacker.invalid'),entry.replace('testingcf.jsdelivr.net','testingcf.jsdelivr.net.attacker.invalid'),
+    entry.replace('testingcf.jsdelivr.net','testingcf.jsdelivr.net@attacker.invalid'),entry.replace('MagicalAstrogy','AnotherAuthor'),
+    entry.replace('@beta','@beta-other'),entry.replace('@beta','@main'),entry.replace('@beta','@master'),
+    entry.replace('bundle.js','bundle.js?variant=1'),entry.replace('bundle.js','bundle.js#native'),
+    entry.replace('bundle.js','bundle.js/other'),entry.replace('https://','http://')]){
     expect(isNativeMvuFramework(code)).toBe(false)
     expect(helperScriptHtml(code)).toContain('bundle.js')
+    expect(helperScriptHtml(code)).not.toContain("waitGlobalInitialized('Mvu')")
   }
 })

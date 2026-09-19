@@ -83,7 +83,7 @@ async function setup() {
 function messageEvents(step:number,seq:number,text:string,finish:'stop'|'tool-calls'='stop',interrupted=false):SessionEvent[] {
   return [
 
-    {type:'assistant/message',seq,time:0,data:{stream: [{type:'chunk',time:0,chunk:{type:'finish',reason:{kind:finish}}}], turn:1,step,message:createAssistantMessage({content:[{type:'text',text}]}),...(interrupted?{interrupted:true}:{})}},
+    {type:'assistant/message',seq,time:0,data:{stream: [{type:'chunk',time:0,chunk:{type:'finish',reason:{kind:finish}}}], turn:1,step,message:createAssistantMessage({source:{provider:'factory',model:'factory'},content:[{type:'text',text}]}),...(interrupted?{interrupted:true}:{})}},
   ] as SessionEvent[]
 }
 
@@ -125,7 +125,7 @@ describe('多 step 宿主回复上下文',()=> {
     const {state}=await setup()
     await onTurnStart(state,'s1',1)
     const options={provider:'test-provider',model:'model-a'}
-    const agent={options,session:{deriveMessages:()=>[createUserMessage({content:[{type:'text',text:'hello'}]})]}} as unknown as Agent
+    const agent={options,session:{deriveMessages:()=>[createUserMessage({source:{kind:'user'},content:[{type:'text',text:'hello'}]})]}} as unknown as Agent
     const request={state,sessionId:'s1',agent,mode:'live' as const}
     const first=await runTavernPipeline(request)
     expect(first!.templateContext!.model).toBe('model-a')

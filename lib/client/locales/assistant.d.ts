@@ -6,5 +6,7 @@ export declare const zh: {
     readonly 'assistant.characterFallback': "角色";
     readonly 'assistant.stopped': "已停止";
     readonly 'assistant.unknownBlock': "未知块";
+    readonly 'assistant.bindingLoadFailed': "角色卡信息暂时无法加载：{message}";
+    readonly 'assistant.retryBinding': "重新加载角色卡";
 };
 export declare const en: Record<keyof typeof zh, string>;

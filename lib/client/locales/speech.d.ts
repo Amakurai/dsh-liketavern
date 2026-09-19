@@ -1,5 +1,9 @@
 /** 角色发言条（speech.tsx）界面文案。zh 为键全集源。 */
 export declare const zh: {
+    readonly 'speech.renderFailed': "角色消息显示处理失败，已保留原文：{error}";
+    readonly 'speech.retryRender': "重新加载卡片显示";
+    readonly 'speech.regexFailures': "{count} 条展示规则执行失败，卡片可能显示不完整";
+    readonly 'speech.regexFailuresMore': "另有 {count} 条失败规则，请在正则设置中检查。";
     readonly "speech.scriptChoices": "可选行动";
     readonly "speech.choiceUnavailable": "当前会话输入框尚未就绪。";
     readonly "speech.choiceBusy": "请先完成输入框中的指令或引用，再填入选项。";

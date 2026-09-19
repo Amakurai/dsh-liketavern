@@ -17,6 +17,7 @@ import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import { estimateTokens } from '../core/tokenize.js'
 import { inspectCharacterCompatibility } from '../core/characterCompatibility.js'
 import { isolated } from './isolated.js'
+import { collectDisplayRegexDiagnostics } from './templateDisplay.js'
 import { presentRenderedOutput, stripOpaqueDisplayMeta } from '../core/displaySanitize.js'
 import { disableInteractiveParts, splitTemplateDisplay, TEMPLATE_DISPLAY_PARTS_VERSION, type TemplateDisplayPart } from '../core/templateDisplay.js'
 import { expandIdentityMacros } from '../core/macros.js'
@@ -540,17 +541,20 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
       named+='\n'+MVU_STATUS_PLACEHOLDER
       if(templateParts!==undefined)templateParts=[...templateParts,{kind:'markdown',text:MVU_STATUS_PLACEHOLDER}]
     }
-    let parts = templateParts === undefined ? undefined : (await isolated('display', {
+    const display = templateParts === undefined ? undefined : await isolated('display', {
       parts: templateParts.map(part => ({ ...part, text: expandIdentityMacros(part.text, names) })),
       rules, macroCtx: { ...names, outlets: {} },
-    })).parts
+    })
+    let parts = display?.parts
+    let regexDiagnostics = display?.regexDiagnostics
     if (parts !== undefined && !allowHtml) parts = disableInteractiveParts(parts)
     let presented: {htmls:string[];text:string}
     if(parts === undefined) {
-      const rendered = (await isolated('render', { text: named, rules, macroCtx: { ...names, outlets: {} } })).text
-      presented = presentRenderedOutput(rendered, allowHtml)
+      const rendered = await isolated('render', { text: named, rules, macroCtx: { ...names, outlets: {} } })
+      regexDiagnostics = collectDisplayRegexDiagnostics(rendered.errors, rules)
+      presented = presentRenderedOutput(rendered.text, allowHtml)
       // 普通回复与展示正则生成的片段也保留原位置，避免尾部状态栏移到台词前面。
-      if(presented.htmls.length) parts = splitTemplateDisplay(rendered)
+      if(presented.htmls.length) parts = splitTemplateDisplay(rendered.text)
     } else presented = { htmls: allowHtml ? parts.filter(part => part.kind === 'html').map(part => part.text) : [],
           text: parts.filter(part => part.kind === 'markdown').map(part => part.text).join('\n') || presentRenderedOutput(named, false).text }
     const htmls = presented.htmls
@@ -559,6 +563,7 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
     )
     return {
       ...(parts === undefined ? {} : { parts }),
+      ...(regexDiagnostics ? { regexDiagnostics } : {}),
       // 纯文本消息也承载后台脚本发布的选项；上下文不能依赖是否生成 HTML。
       ...(allowHtml && request.messageId !== undefined ? {helper: await getHelperSnapshot(this.ctx,this.state,request.sessionId,request.messageId)} : {}),
       ...(htmls.length && request.messageId !== undefined ? {helperScripts:await this.state.getSessionHelperScripts(request.sessionId,binding.storyId!),helperWorldbooks:await getHelperWorldbookContext(this.state,request.sessionId,binding.storyId!)} : {}),

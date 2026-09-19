@@ -5,7 +5,7 @@
  * - standingRevTags：绑定 → 修订标记形状；savePreset/deletePreset/saveLorebook/deleteLorebook/
  *   saveCharacterLorebook 等写方法 bump 对应修订号（standing 指纹随资产内容失效重算）；
  *   末尾 config 标记只随真正决定 standing 字节的键变化（characterStrategy / useGroupScoring /
- *   sampling.maxTokens），只影响 turn 层的键（tokenBudget / scanDepth 等）不动它；
+ *   sampling.maxTokens / prompts），只影响 turn 层的键（tokenBudget / scanDepth 等）不动它；
  * - peekStanding：组装失败兜底只读同卡同场景的钉位，异卡/异场景/异会话一律不命中；
  * - 库资产文件名净化：写盘 id、删除路径与修订号键共用一个 id（原始名带空格也能失效钉死）；
  * - 库资产解析缓存（rev-keyed）：写方法 bump 后读到新值，损坏的预设文件回退 null 不抛错；
@@ -194,6 +194,12 @@ describe('standingRevTags', () => {
 
     // maxTokens 决定 trimNonHistory 的裁剪线，同样必须打穿
     raw = { sampling: { maxTokens: 4096 } }
+    expect(configTag(live.standingRevTags(makeBinding()))).not.toBe(base)
+
+    // 全局卡级提示词偏好改变条目内容，必须让下一轮重新钉住正确版本。
+    raw = { prompts: { preferCharacterPrompt: false } }
+    expect(configTag(live.standingRevTags(makeBinding()))).not.toBe(base)
+    raw = { prompts: { preferCharacterInstructions: false } }
     expect(configTag(live.standingRevTags(makeBinding()))).not.toBe(base)
 
     // tokenBudget / scanDepth 只影响 turn 层触发与计费，不能白白打断 KV 前缀缓存

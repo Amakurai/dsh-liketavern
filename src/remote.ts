@@ -430,6 +430,12 @@ export interface PresetSummary {
   regexCount: number
 }
 
+/** 展示正则的去重诊断；仅传前 64 条，total 保留实际去重条数以标明截断。 */
+export interface DisplayRegexDiagnostics {
+  errors: Array<{ ruleId: string; ruleName: string; message: string }>
+  total: number
+}
+
 /** renderOutputText：展示文本经 output/render 正则与 HTML 抽取后的形态。 */
 export interface RenderedOutput {
   helper?: HelperSnapshot
@@ -437,6 +443,7 @@ export interface RenderedOutput {
   helperWorldbooks?:HelperWorldbookContext
   userName?: string
   parts?: TemplateDisplayPart[]
+  regexDiagnostics?: DisplayRegexDiagnostics
   text: string
   html: string | null
   htmls: string[]

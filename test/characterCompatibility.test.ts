@@ -36,18 +36,32 @@ describe('角色卡只读静态兼容报告', () => {
     { tavern_helper: { scripts: [script("import 'https://cdn.jsdelivr.net/gh/MagicalAstrogy/MagVarUpdate/artifact/bundle.js';")] } },
     { TavernHelper_scripts: [script('import "https://fastly.jsdelivr.net/gh/MagicalAstrogy/MagVarUpdate/artifact/bundle.js"')] },
     { tavern_helper: [['scripts', [script("import 'https://testingcf.jsdelivr.net/gh/MagicalAstrogy/MagVarUpdate/artifact/bundle.js'")]]] },
+    { tavern_helper: { scripts: [script("import 'https://testingcf.jsdelivr.net/gh/MagicalAstrogy/MagVarUpdate@beta/artifact/bundle.js';")] } },
+    { TavernHelper_scripts: [script('import "https://fastly.jsdelivr.net/gh/MagicalAstrogy/MagVarUpdate@beta/artifact/bundle.js"')] },
+    { tavern_helper: [['scripts', [script("import 'https://cdn.jsdelivr.net/gh/MagicalAstrogy/MagVarUpdate@beta/artifact/bundle.js'")]]] },
   ])('支持已有三种脚本库格式的纯官方入口，不误报该入口必须下载外链框架：%j', extensions => {
     const findings = inspect({ extensions }).findings
     expect(findings.find(row => row.code === 'nativeMvu')).toMatchObject({ status: 'supported', count: 1 })
     expect(findings.some(row => row.code === 'customMvu' || row.code === 'externalScript' || row.code === 'invalidScripts')).toBe(false)
   })
 
-  it('官方 URL 附带额外代码仍按自定义模块报告，外链原文和已有 API 不被修改', () => {
+  it.each(['', '@beta'])('官方 URL %s 附带额外代码仍按自定义模块报告，外链原文和已有 API 不被修改', ref => {
     const findings = inspect({ extensions: { tavern_helper: { scripts: [script(
-      "import 'https://cdn.jsdelivr.net/gh/MagicalAstrogy/MagVarUpdate/artifact/bundle.js'; parent.Vue.createApp({}); Mvu.getMvuData();",
+      `import 'https://cdn.jsdelivr.net/gh/MagicalAstrogy/MagVarUpdate${ref}/artifact/bundle.js'; parent.Vue.createApp({}); Mvu.getMvuData();`,
     )] } } }).findings
     expect(findings.map(row => row.code)).toEqual(expect.arrayContaining(['customMvu', 'externalScript', 'parentAccess']))
     expect(findings.some(row => row.code === 'nativeMvu' || row.code === 'unsupportedApi')).toBe(false)
+  })
+
+  it.each([
+    'https://testingcf.jsdelivr.net.attacker.invalid/gh/MagicalAstrogy/MagVarUpdate@beta/artifact/bundle.js',
+    'https://testingcf.jsdelivr.net@attacker.invalid/gh/MagicalAstrogy/MagVarUpdate@beta/artifact/bundle.js',
+    'https://testingcf.jsdelivr.net/gh/MagicalAstrogy/MagVarUpdate@beta-other/artifact/bundle.js',
+    'https://testingcf.jsdelivr.net/gh/MagicalAstrogy/MagVarUpdate@beta/artifact/bundle.js?variant=1',
+  ])('相似 MVU 地址仍报告外部自定义模块，不声明原生支持：%s', url => {
+    const findings = inspect({ extensions: { tavern_helper: { scripts: [script(`import '${url}';`)] } } }).findings
+    expect(findings.map(row => row.code)).toEqual(expect.arrayContaining(['customMvu', 'externalScript']))
+    expect(findings.some(row => row.code === 'nativeMvu')).toBe(false)
   })
 
   it('非法脚本库显示无法加载的结构问题，禁用脚本也纳入静态检查', () => {

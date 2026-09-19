@@ -6,7 +6,7 @@
  * 历史裁最旧）、system 输出合并、standing/turnContext 分流（记忆变化不改 standing）、
  * setvar 条目省略 / getvar 代入、{{lastusermessage}} 走 turn 不打穿 standing、
  * 预设 prompt 正则只包最新用户句、常驻世界书进 standing、EJS 脚本跳过注入、
- * 本轮 setvar 不泄漏进 standing getvar、runtime context 快照不当成 lastUserMessage、
+ * 动态变量依赖进入 turn 且不污染 standing、runtime context 快照不当成 lastUserMessage、
  * prompt 正则的纯函数性、历史 {{user}}/{{char}} 展开、第三方预设缺少私有 marker 时的动态层兜底、
  * 世界状态按 keys 触发且不与世界书位置重复注入、in-chat 内容 marker 按 depth 注入、
  * {{original}} 引用预设 main/jailbreak 原文、forbid_overrides 拒绝卡级覆盖、
@@ -171,8 +171,75 @@ const contents = (msgs: ChatMessage[]): string[] => msgs.map((m) => m.content)
 // ---------------------------------------------------------------------------
 
 describe('relative 骨架与 marker 替换', () => {
+  it('相同 order 保留原栈顺序，不按条目标识改写历史边界', () => {
+    const preset: PromptPreset = { name: '同序号', identifier: 'same-order', entries: [
+      presetEntry({ identifier: 'z-opening', content: 'OPEN' }),
+      presetEntry({ identifier: 'chatHistory', marker: true, markerId: Marker.ChatHistory }),
+      presetEntry({ identifier: 'a-closing', content: 'CLOSE' }),
+    ] }
+    const result = assemblePrompt(makeInput({ preset, card: null }))
+    expect(contents(result.messages)).toEqual(['OPEN', 'h0', 'h1', 'CLOSE'])
+    expect(result.standing).toBe('OPEN')
+    expect(result.turnContext).toBe('CLOSE')
+  })
+
+  it.each([0, 1])('同深度 %s 按 order、角色分组排序，同角色仍保持原栈顺序', depth => {
+    const preset: PromptPreset = { name: '深度排序', identifier: 'depth-order', entries: [
+      presetEntry({ identifier: 'system', role: 'system', position: 'in-chat', depth, content: 'SYSTEM' }),
+      presetEntry({ identifier: 'z-user', role: 'user', position: 'in-chat', depth, content: 'USER-1' }),
+      presetEntry({ identifier: 'assistant', role: 'assistant', position: 'in-chat', depth, content: 'ASSISTANT' }),
+      presetEntry({ identifier: 'a-user', role: 'user', position: 'in-chat', depth, content: 'USER-2' }),
+      presetEntry({ identifier: 'early-system', role: 'system', position: 'in-chat', depth, order: 90, content: 'EARLY' }),
+    ] }
+    const result = assemblePrompt(makeInput({ preset, card: null }))
+    const rules = ['EARLY', 'ASSISTANT', 'USER-1', 'USER-2', 'SYSTEM']
+    expect(contents(result.messages)).toEqual(depth === 0 ? ['h0', 'h1', ...rules] : ['h0', ...rules, 'h1'])
+    expect(depth === 0 ? result.turnContext : result.standing).toBe(rules.join('\n\n'))
+  })
+
+  it('lastmessage 读取最近角色回复并排除系统提示、续写和 runtime context', () => {
+    const preset: PromptPreset = { name: '最近消息', identifier: 'latest', entries: [
+      presetEntry({ identifier: 'latest', content: '最近={{lastmessage}}；用户={{lastusermessage}}' }),
+    ] }
+    const result = assemblePrompt(makeInput({ preset, history: [
+      { role: 'user', content: '用户台词' }, { role: 'assistant', content: '角色台词' },
+      { role: 'system', content: '系统段' }, { role: 'user', content: '【Tavern 续写】继续' },
+      { role: 'user', content: 'Current runtime context. snapshot' },
+    ] }))
+    expect(result.standing).toBe('')
+    expect(result.turnContext).toBe('最近=角色台词；用户=用户台词')
+  })
+
+  it('显式卡片提示宏读取卡字段，并将字段中的本轮宏归入 turn', () => {
+    const preset: PromptPreset = { name: '卡片宏', identifier: 'card-macros', entries: [
+      presetEntry({ identifier: 'card-main', content: 'MAIN={{charPrompt}}', order: 1 }),
+      presetEntry({ identifier: 'card-phi', content: 'PHI={{charInstruction}}', order: 2 }),
+    ] }
+    const result = assemblePrompt(makeInput({ preset, card: makeCard({
+      systemPrompt: '扮演{{char}}', postHistoryInstructions: '承接{{lastmessage}}',
+    }) }))
+    expect(result.standing).toBe('MAIN=扮演Alice')
+    expect(result.turnContext).toBe('PHI=承接h1')
+    const disabled = assemblePrompt(makeInput({ preset, promptPreferences: { preferCharacterPrompt: false, preferCharacterInstructions: false } }))
+    expect(contents(disabled.messages)).toEqual(['MAIN=', 'PHI=', 'h0', 'h1'])
+  })
+
+  it('缺少 prompt_order 时沿 prompts 原顺序保留主提示、历史和后置边界', () => {
+    const { preset } = parseStPreset({ prompts: [
+      { identifier: 'z-main', content: 'MAIN' },
+      { identifier: 'chatHistory', marker: true },
+      { identifier: 'a-tail', content: 'TAIL' },
+      { identifier: 'depth', content: 'DEPTH', injection_position: 1, injection_depth: 0, injection_order: 7 },
+    ] })
+    const result = assemblePrompt(makeInput({ preset, card: null, history: [{ role: 'user', content: 'INPUT' }] }))
+    expect(contents(result.messages)).toEqual(['MAIN', 'INPUT', 'DEPTH', 'TAIL'])
+    expect(result.standing).toBe('MAIN')
+    expect(result.turnContext).toBe('DEPTH\n\nTAIL')
+    expect(preset.entries.find(entry => entry.identifier === 'depth')?.order).toBe(7)
+  })
+
   /** 编辑数值顺序不重排源数组；导出往返必须保持实际提示词，包括同序号深度注入的先后。 */
-  it.each([10, 20])('预设编辑后导出再导入保持提示词组装顺序，同序号按标识符定序：%s', order => {
+  it.each([10, 20])('预设编辑后导出再导入保持提示词组装顺序，同序号沿用原栈：%s', order => {
     const preset: PromptPreset = { identifier: 'reordered', name: '调整顺序', entries: [
       presetEntry({ identifier: 'late', content: 'TAIL', order: 100 }),
       presetEntry({ identifier: 'depth-z', position: 'in-chat', depth: 1, order: 7, content: 'DEPTH FIRST' }),
@@ -186,7 +253,8 @@ describe('relative 骨架与 marker 替换', () => {
     const imported = parseStPreset(exportStPreset(preset))
     expect(imported.warnings).toEqual([])
     expect(assemblePrompt(makeInput({ preset: imported.preset })).messages).toEqual(assemblePrompt(makeInput({ preset })).messages)
-    expect(imported.preset.entries.filter(entry => entry.position === 'in-chat')).toEqual(preset.entries.filter(entry => entry.position === 'in-chat'))
+    expect(imported.preset.entries.filter(entry => entry.position === 'in-chat')).toEqual(
+      preset.entries.filter(entry => entry.position === 'in-chat').map(entry => ({ ...entry, systemPrompt: false })))
     expect(imported.preset.entries.find(entry => entry.identifier === 'disabled')?.enabled).toBe(false)
     expect(preset).toEqual(original)
   })
@@ -201,8 +269,7 @@ describe('relative 骨架与 marker 替换', () => {
     ]
     const res = assemblePrompt(makeInput({ wi, memories: ['MEM {{user}}'], worldDeltas: deltas }))
     expect(contents(res.messages)).toEqual([
-      'SYS Alice', // 卡片 system_prompt 最前
-      MAIN_EXPANDED, // main
+      'SYS Alice', // 卡片 system_prompt 替换 main 槽位
       '【世界书·本轮触发】\nWIB', // worldInfoBefore（带来源标签）
       'PERSONA', // personaDescription
       'DESC Bob', // charDescription（宏已展开）
@@ -215,8 +282,7 @@ describe('relative 骨架与 marker 替换', () => {
       EXAMPLE_2,
       'h0', // chatHistory
       'h1',
-      'JB', // chatHistory 之后的 jailbreak
-      'POST-HIST', // 卡片 post_history_instructions 尾部
+      'POST-HIST', // 卡片 post_history_instructions 替换 jailbreak 槽位
     ])
     // 历史之后没有别的 relative 内容插到 jailbreak 前
     expect(res.messages[0]!.role).toBe('system')
@@ -307,7 +373,7 @@ describe('relative 骨架与 marker 替换', () => {
     const delta = { id: 'd1', ts: '', type: 'add' as const, ref: null, content: 'STATE-A', keys: [], order: 100, sourceRange: '', expires: null }
     const res = assemblePrompt(makeInput({ preset, memories: ['MEM-A'], worldDeltas: [delta] }))
 
-    expect(contents(res.messages)).toEqual(['SYS Alice', 'MAIN', '【检索记忆】\nMEM-A', 'STATE-A', 'h0', 'h1', 'TAIL', 'POST-HIST'])
+    expect(contents(res.messages)).toEqual(['SYS Alice', '【检索记忆】\nMEM-A', 'STATE-A', 'h0', 'h1', 'TAIL'])
     expect(res.turnContext).toContain('MEM-A')
     expect(res.turnContext).toContain('STATE-A')
     expect(res.log.filter((entry) => entry.kind === 'auto-marker')).toHaveLength(2)
@@ -425,7 +491,10 @@ describe('深度注入', () => {
     const res = assemblePrompt(makeInput({ preset, wi }))
     const cs = contents(res.messages)
     const tail = cs.slice(cs.indexOf('h1') + 1)
-    expect(tail).toEqual(['INJ-0', 'ANB', 'JB', 'POST-HIST'])
+    expect(tail).toEqual(['INJ-0', 'ANB', 'POST-HIST'])
+    expect(res.turnContext).toBe('INJ-0\n\nANB\n\nPOST-HIST')
+    expect(res.standing).not.toContain('INJ-0')
+    expect(res.hasTurnTail).toBe(true)
   })
 
   it('AN top 置于历史之前（beforeHistory 末尾）', () => {
@@ -608,8 +677,8 @@ describe('system 输出', () => {
     const res = assemblePrompt(makeInput())
     expect(res.system.length).toBeGreaterThan(0)
     expect(res.system).toContain('SYS Alice')
-    expect(res.system).toContain(MAIN_EXPANDED)
-    expect(res.system).toContain('JB')
+    expect(res.system).not.toContain(MAIN_EXPANDED)
+    expect(res.system).not.toContain('JB')
     expect(res.system).toContain('POST-HIST')
     expect(res.system).not.toContain('h0')
   })
@@ -621,7 +690,7 @@ describe('system 输出', () => {
     const a = assemblePrompt(makeInput({ wi, memories: ['MEM-A'] }))
     const b = assemblePrompt(makeInput({ wi, memories: ['MEM-B'] }))
     expect(a.standing).toBe(b.standing)
-    expect(a.standing).toContain(MAIN_EXPANDED)
+    expect(a.standing).not.toContain(MAIN_EXPANDED)
     expect(a.standing).toContain('SYS Alice')
     expect(a.standing).not.toContain('WIB')
     expect(a.standing).not.toContain('MEM-A')
@@ -694,17 +763,19 @@ describe('system 输出', () => {
     expect(a.log.some((l) => l.kind === 'dropped-script')).toBe(true)
   })
 
-  it('本轮 setvar 不泄漏进 standing 的 getvar', () => {
+  it('本轮 setvar 的后续 getvar 保留值并进入 turn，不污染 standing', () => {
     const preset = defaultPreset()
     const jb = preset.entries.find((e) => e.identifier === 'jailbreak')
     if (jb) jb.content = 'JB-{{getvar::leak}}'
     preset.entries.push(
       presetEntry({ identifier: 'set-leak', content: '{{setvar::leak::{{lastusermessage}}}}{{trim}}', order: 5 }),
     )
-    const a = assemblePrompt(makeInput({ preset, history: [{ role: 'user', content: '你好' }] }))
-    const b = assemblePrompt(makeInput({ preset, history: [{ role: 'user', content: '换一句' }] }))
+    const card = makeCard({ postHistoryInstructions: '' })
+    const a = assemblePrompt(makeInput({ preset, card, history: [{ role: 'user', content: '你好' }] }))
+    const b = assemblePrompt(makeInput({ preset, card, history: [{ role: 'user', content: '换一句' }] }))
     expect(a.standing).toBe(b.standing)
-    expect(a.standing).toContain('JB-')
+    expect(a.turnContext).toContain('JB-你好')
+    expect(b.turnContext).toContain('JB-换一句')
     expect(a.standing).not.toContain('你好')
     expect(a.standing).not.toContain('换一句')
   })
@@ -862,26 +933,140 @@ describe('depth_prompt / 作者注释 / 角色笔记', () => {
   })
 })
 
+/** ST 格式包装应进入实际通道；空模板恢复原文，动态宏不能被钉在静态前缀。 */
+describe('预设格式模板', () => {
+  it('纯空白格式是明确的空输出，不意外恢复性格或场景正文', () => {
+    const preset = defaultPreset()
+    preset.formatting = { personality: '  ', scenario: '\n\t' }
+    const result = assemblePrompt(makeInput({ preset }))
+    expect(contents(result.messages)).not.toContain('PERS')
+    expect(contents(result.messages)).not.toContain('SCEN')
+  })
+
+  it('性格、场景包装支持嵌套卡字段宏与本轮宏', () => {
+    const preset = defaultPreset()
+    preset.formatting = { personality: '<personality>{{personality}}</personality>', scenario: '<scene>{{scenario}} / {{lastmessage}}</scene>' }
+    const result = assemblePrompt(makeInput({ preset }))
+    expect(result.standing).toContain('<personality>PERS</personality>')
+    expect(result.turnContext).toContain('<scene>SCEN / h1</scene>')
+    expect(result.standing).not.toContain('<scene>')
+  })
+
+  it('世界书格式用 {0} 放入正文，并将包装中的本轮宏整体放入 turn', () => {
+    const preset = defaultPreset()
+    preset.formatting = { worldInfo: '<lore for="{{lastmessage}}">{0}</lore>' }
+    const wi = wiOf({ [WIPosition.BeforeCharDefs]: [act(makeWiEntry({ key: 'lore', constant: true, content: '城镇资料' }))] })
+    const result = assemblePrompt(makeInput({ preset, wi }))
+    expect(result.turnContext).toContain('<lore for="h1">城镇资料</lore>')
+    expect(result.standing).not.toContain('城镇资料')
+    expect(result.system).not.toContain('【世界书·')
+  })
+
+  it('空格式保留原字段；世界书包装不会再次执行已经求值的宏', () => {
+    const preset = defaultPreset()
+    preset.formatting = { worldInfo: '', personality: '', scenario: '' }
+    preset.entries.push(presetEntry({ identifier: 'read-counter', content: 'COUNT={{getvar::counter}}', order: 999 }))
+    const wi = wiOf({ [WIPosition.BeforeCharDefs]: [act(makeWiEntry({ key: 'lore', constant: true, content: '{{addvar::counter::1}}设定正文' }))] })
+    const result = assemblePrompt(makeInput({ preset, wi }))
+    expect(contents(result.messages)).toEqual(expect.arrayContaining(['PERS', 'SCEN', '设定正文', 'COUNT=1']))
+    expect(result.system).not.toContain('【世界书·')
+  })
+
+  it('无命中的世界书不输出空包装，也不执行包装里的变量写入', () => {
+    const preset = defaultPreset()
+    preset.formatting = { worldInfo: '{{setvar::touched::yes}}<lore>{0}</lore>' }
+    preset.entries.push(presetEntry({ identifier: 'read-format', content: 'TOUCHED={{getvar::touched}}', order: 999 }))
+    const result = assemblePrompt(makeInput({ preset }))
+    expect(result.system).toContain('TOUCHED=')
+    expect(result.system).not.toContain('TOUCHED=yes')
+    expect(result.system).not.toContain('<lore>')
+  })
+})
+
 // ---------------------------------------------------------------------------
 // {{original}} 与 forbid_overrides
 // ---------------------------------------------------------------------------
 
 describe('{{original}} 与 forbid_overrides', () => {
+  it('卡级纯空白覆盖可清空启用槽位，空字符串仍使用预设原文', () => {
+    const blank = assemblePrompt(makeInput({ card: makeCard({ systemPrompt: '  ', postHistoryInstructions: '\n' }) }))
+    expect(blank.standing).not.toContain(MAIN_EXPANDED)
+    expect(blank.turnContext).not.toContain('JB')
+    const empty = assemblePrompt(makeInput({ card: makeCard({ systemPrompt: '', postHistoryInstructions: '' }) }))
+    expect(empty.standing).toContain(MAIN_EXPANDED)
+    expect(empty.turnContext).toContain('JB')
+  })
+
+  it('角色覆盖的两个全局开关独立生效，默认行为与原槽位角色不变', () => {
+    const mainOff = assemblePrompt(makeInput({ promptPreferences: { preferCharacterPrompt: false, preferCharacterInstructions: true } }))
+    expect(mainOff.standing).toContain(MAIN_EXPANDED)
+    expect(mainOff.standing).not.toContain('SYS Alice')
+    expect(mainOff.turnContext).toBe('POST-HIST')
+    const phiOff = assemblePrompt(makeInput({ promptPreferences: { preferCharacterPrompt: true, preferCharacterInstructions: false } }))
+    expect(phiOff.standing).toContain('SYS Alice')
+    expect(phiOff.turnContext).toBe('JB')
+    expect(phiOff.turnContext).not.toContain('POST-HIST')
+  })
+
   it('卡级 system_prompt 里的 {{original}} 展开为预设 main 原文（含宏展开）', () => {
     const card = makeCard({ systemPrompt: 'OVERRIDE <<{{original}}>>' })
     const res = assemblePrompt(makeInput({ card }))
     expect(contents(res.messages)[0]).toBe(`OVERRIDE <<${MAIN_EXPANDED}>>`)
-    // 预设 main 条目本身仍在序列里
-    expect(contents(res.messages)).toContain(MAIN_EXPANDED)
+    // 原文仅经 {{original}} 出现一次，不能另发一份原 main。
+    expect(contents(res.messages)).not.toContain(MAIN_EXPANDED)
+    expect(res.system.split(MAIN_EXPANDED)).toHaveLength(2)
   })
 
   it('卡级 post_history_instructions 里的 {{original}} 展开为预设 jailbreak 原文', () => {
     const card = makeCard({ postHistoryInstructions: 'PHI [{{original}}]' })
     const res = assemblePrompt(makeInput({ card }))
     expect(contents(res.messages)).toContain('PHI [JB]')
+    expect(contents(res.messages)).not.toContain('JB')
+    expect(res.turnContext).toBe('PHI [JB]')
+    expect(res.standing).not.toContain('PHI [JB]')
   })
 
-  it('预设缺 main 槽位时 {{original}} 为空串，不当成未知宏', () => {
+  it.each(['main', 'jailbreak'])('禁用或不匹配场景的 %s 槽位不会被卡级覆盖重新启用', identifier => {
+    for (const patch of [{ enabled: false }, { injectionTrigger: ['continue'] }]) {
+      const preset = defaultPreset()
+      Object.assign(preset.entries.find(entry => entry.identifier === identifier)!, patch)
+      const result = assemblePrompt(makeInput({ preset }))
+      expect(result.system).not.toContain(identifier === 'main' ? 'SYS Alice' : 'POST-HIST')
+    }
+  })
+
+  it('覆盖沿用原槽位角色与深度，未引用的原槽位宏不执行', () => {
+    const preset = defaultPreset()
+    Object.assign(preset.entries.find(entry => entry.identifier === 'main')!, {
+      role: 'assistant', position: 'in-chat', depth: 1, content: '{{setvar::unused::不应写入}}ORIGINAL',
+    })
+    preset.entries.push(presetEntry({ identifier: 'read-unused', content: 'VALUE={{getvar::unused}}', order: 999 }))
+    const result = assemblePrompt(makeInput({ preset }))
+    const index = result.messages.findIndex(message => message.content === 'SYS Alice')
+    expect(result.messages[index]).toEqual({ role: 'assistant', content: 'SYS Alice' })
+    expect(result.messages[index + 1]?.content).toBe('h1')
+    expect(result.messages.some(message => message.content === 'VALUE=')).toBe(true)
+    expect(result.system).not.toContain('ORIGINAL')
+    expect(result.system).not.toContain('不应写入')
+    expect(result.log.some(item => item.kind === 'live-compatibility' && item.detail.includes('助手预填'))).toBe(true)
+  })
+
+  it('静态和动态后置片段保持相邻顺序，depth=0 不再混入稳定前缀', () => {
+    const preset: PromptPreset = { identifier: 'tail', name: '尾部顺序', entries: [
+      presetEntry({ identifier: 'main', content: 'STATIC MAIN', order: 1 }),
+      presetEntry({ identifier: 'chatHistory', marker: true, markerId: Marker.ChatHistory, order: 2 }),
+      presetEntry({ identifier: 'open', content: '<rules>', order: 3 }),
+      presetEntry({ identifier: 'dynamic', content: '{{lastusermessage}}', order: 4 }),
+      presetEntry({ identifier: 'close', content: '</rules>', order: 5 }),
+      presetEntry({ identifier: 'prefill', role: 'assistant', position: 'in-chat', depth: 0, content: 'PREFIX' }),
+    ] }
+    const result = assemblePrompt(makeInput({ preset, card: null, history: [{ role: 'user', content: '当前输入' }] }))
+    expect(result.standing).toBe('STATIC MAIN')
+    expect(result.turnContext).toBe('PREFIX\n\n<rules>\n\n当前输入\n\n</rules>')
+    expect(result.hasTurnTail).toBe(true)
+  })
+
+  it('预设缺 main 槽位时不额外注入卡级覆盖', () => {
     const preset: PromptPreset = {
       name: 'no-main',
       identifier: 'no-main',
@@ -889,7 +1074,7 @@ describe('{{original}} 与 forbid_overrides', () => {
     }
     const card = makeCard({ systemPrompt: 'X{{original}}Y' })
     const res = assemblePrompt(makeInput({ preset, card }))
-    expect(contents(res.messages)[0]).toBe('XY')
+    expect(contents(res.messages)).toEqual(['h0', 'h1'])
     expect(res.log.filter((l) => l.kind === 'unknown-macro')).toHaveLength(0)
   })
 

@@ -11,6 +11,13 @@ export interface ScriptRuntimeStatus {
 }
 let snapshot:readonly ScriptRuntimeStatus[]=[]
 const retries=new Map<string,()=>void>()
+/** 浏览器拒绝跨窗口读取时给出兼容说明；只用于展示，不改变失败状态或放行权限。 */
+export function isScriptWindowAccessError(error:string|undefined):boolean {
+  if(!error)return false
+  const message=error.slice(0,2000)
+  return /Blocked a frame with origin [^\r\n]* from accessing a cross-origin frame/i.test(message)
+    || /Permission denied to access property [^\r\n]* on cross-origin object/i.test(message)
+}
 export function retryScriptMvu(sessionId:string):void {retries.get(sessionId)?.()}
 const owners=new Map<string,symbol>(),listeners=new Set<()=>void>()
 const notify=()=>{for(const listener of listeners)listener()}

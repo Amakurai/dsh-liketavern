@@ -46,6 +46,30 @@ function PresetRegexList(props: { scripts: CardRegexScript[]; onChange: (scripts
   )
 }
 
+/** 展示随预设保存的采样覆盖，避免用户把导入值与插件全局设置混淆。 */
+function PresetSamplingSummary({ sampling, onChange }: { sampling: PromptPreset['sampling']; onChange: () => void }) {
+  const t = useT()
+  const supported = [
+    ...(sampling?.temperature !== undefined ? [t('presets.sampling.temperature', { value: sampling.temperature })] : []),
+    ...(sampling?.maxTokens !== undefined ? [t('presets.sampling.maxTokens', { value: sampling.maxTokens ?? t('presets.sampling.modelDefault') })] : []),
+    ...(sampling?.stop !== undefined ? [t('presets.sampling.stop', { value: JSON.stringify(sampling.stop) })] : []),
+  ]
+  const retained = [
+    ...(sampling?.topP !== undefined ? [`top_p=${sampling.topP}`] : []),
+    ...(sampling?.presencePenalty !== undefined ? [`presence_penalty=${sampling.presencePenalty}`] : []),
+    ...(sampling?.frequencyPenalty !== undefined ? [`frequency_penalty=${sampling.frequencyPenalty}`] : []),
+  ]
+  return <Field label={t('presets.sampling.label')}>
+    <Muted>{supported.length > 0 ? supported.join(t('presets.warningSep')) : t('presets.sampling.global')}</Muted>
+    <Muted>{t('presets.sampling.desc')}</Muted>
+    {retained.length > 0 && <Muted>{t('presets.sampling.retained', { values: retained.join(t('presets.warningSep')) })}</Muted>}
+    {sampling !== undefined && <>
+      <Btn onClick={onChange}>{t('presets.sampling.useGlobal')}</Btn>
+      <Muted>{t('presets.sampling.useGlobalDesc')}</Muted>
+    </>}
+  </Field>
+}
+
 function EntryEditor(props: { entry: PresetEntry; onChange: (e: PresetEntry) => void; onDelete: () => void }) {
   const { entry } = props
   const t = useT()
@@ -306,6 +330,11 @@ export function PresetsSection(props: { remote: TavernRemote }) {
           <Field label={t('presets.identifier')}>
             <Muted>{editing.identifier}</Muted>
           </Field>
+          <PresetSamplingSummary sampling={editing.sampling} onChange={() => {
+            const next = { ...editing }
+            delete next.sampling
+            setEditing(next)
+          }} />
           {(editing.regexScripts?.length ?? 0) > 0 && (
             <PresetRegexList
               scripts={editing.regexScripts!}

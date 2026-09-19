@@ -1,6 +1,6 @@
 /** 提示词预设面板（panel/presets.tsx）界面文案。zh 为键全集源；en 必须同键齐全（test/i18n.test.ts 校验）。 */
 export declare const zh: {
-    readonly 'presets.section.desc': "导入 SillyTavern 预设 JSON（含 extensions.regex_scripts）。新会话默认在「设置」页或卡脚「设为默认」；当前对话用角色芯片切换。已在库中的预设需重新导入才会带上正则。";
+    readonly 'presets.section.desc': "导入 SillyTavern 预设 JSON（含采样参数和 extensions.regex_scripts）。新会话默认在「设置」页或卡脚「设为默认」；当前对话用角色芯片切换。旧版已导入的预设需重新导入才会带上采样参数。";
     readonly 'presets.importFile': "导入 SillyTavern 预设 JSON";
     readonly 'presets.new': "新建预设";
     readonly 'presets.searchLabel': "搜索预设";
@@ -22,6 +22,16 @@ export declare const zh: {
     readonly 'presets.newPresetName': "新预设";
     readonly 'presets.name': "名称";
     readonly 'presets.identifier': "标识";
+    readonly 'presets.sampling.label': "预设采样参数";
+    readonly 'presets.sampling.temperature': "温度：{value}";
+    readonly 'presets.sampling.maxTokens': "回复上限：{value}";
+    readonly 'presets.sampling.stop': "停止序列：{value}";
+    readonly 'presets.sampling.modelDefault': "沿用模型设置";
+    readonly 'presets.sampling.global': "温度、回复上限和停止序列沿用插件设置。";
+    readonly 'presets.sampling.desc': "已导入字段优先于插件设置，未提供字段沿用插件设置；编辑或切换预设在下一轮生效。思考档位仍由插件与宿主模型设置决定。";
+    readonly 'presets.sampling.retained': "仅保留供导出，当前宿主不透传：{values}";
+    readonly 'presets.sampling.useGlobal': "改用插件设置";
+    readonly 'presets.sampling.useGlobalDesc': "清除本预设保存的全部采样参数，点击「保存预设」后生效；关闭并放弃修改可取消。";
     readonly 'presets.addEntry': "添加条目";
     readonly 'presets.save': "保存预设";
     readonly 'presets.newEntryName': "新条目";

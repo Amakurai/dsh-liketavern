@@ -34,5 +34,9 @@ export interface CallConfigPatch {
     stop?: string[];
     reasoningEffort?: string;
 }
-/** 透传 temperature / maxTokens / stop，并在有合法档位时写入 reasoningEffort。 */
-export declare function mergeTavernCallConfig<T extends CallConfigPatch>(config: T, sampling: SamplingSettings, reasoningEffort: string | undefined): T;
+/**
+ * 透传 temperature / maxTokens / stop，并在有合法档位时写入 reasoningEffort。
+ * 宿主后续请求以已记录 header 为种子，空采样必须撤销上轮插件值；
+ * maxTokens=null 时仅恢复调用方提供的明确 AgentOptions 上限，否则交给模型默认值。
+ */
+export declare function mergeTavernCallConfig<T extends CallConfigPatch>(config: T, sampling: SamplingSettings, reasoningEffort: string | undefined, hostMaxTokens?: number): T;

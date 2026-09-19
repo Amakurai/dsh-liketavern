@@ -4,7 +4,7 @@
 
 **Tavern-style roleplay in DeepSeek Harness's `dsh web`, with character cards, lorebooks, and long-term memory.**
 
-**[v0.2.6](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.2.6) · Targets dsh `0.1.5-rc.2` · Node.js ≥ 24**
+**[v0.3.0](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.3.0) · Targets dsh `0.1.5-rc.2` · Node.js ≥ 24**
 
 [中文](./README.md) | English
 
@@ -69,7 +69,7 @@ If you are new to dsh, start with the [official documentation](https://deepseek-
 Run these commands to install a fixed release tag:
 
 ```bash
-dsh plugin --profile web add github:Amakurai/dsh-liketavern#v0.2.6
+dsh plugin --profile web add github:Amakurai/dsh-liketavern#v0.3.0
 dsh plugin --profile web list --depth 0
 ```
 
@@ -83,10 +83,10 @@ The repository includes compiled `lib/` files; a normal installation needs no ma
 
 ### Install a tarball
 
-Download `dsh-liketavern-0.2.6.tgz` from the [v0.2.6 Release](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.2.6), then run this command in the download directory:
+Download `dsh-liketavern-0.3.0.tgz` from the [v0.3.0 Release](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.3.0), then run this command in the download directory:
 
 ```bash
-dsh plugin --profile web add ./dsh-liketavern-0.2.6.tgz
+dsh plugin --profile web add ./dsh-liketavern-0.3.0.tgz
 ```
 
 Restart `dsh web` afterward. The release includes `SHA256SUMS.txt` to verify the download.
@@ -109,7 +109,7 @@ Configure a model in dsh first, then try an ordinary conversation with one chara
 4. **Begin the conversation.** Use the arrows for cards with multiple greetings, select “Start chat,” and send your first line. If there is no greeting, type directly into the input.
 5. **Continue or revise the story.** Use the actions next to an AI reply to regenerate, edit, roll back, continue, or request AI impersonation. Switch branches at the same turn with `‹ n/m ›`.
 
-After the first normally completed reply, open Prompt preview → Last host request from the conversation's character control to inspect the captured request. For cards that use scripts, continue with [scripts and native MVU](#scripts-and-native-mvu).
+After the first normally completed reply, open Prompt preview → Last request from the conversation's character control to inspect the captured request. For cards that use scripts, continue with [scripts and native MVU](#scripts-and-native-mvu).
 
 ## Everyday use
 
@@ -156,9 +156,12 @@ Editing an AI reply also creates a branch and revokes derived facts from that tu
 
 | Area | Actual behavior |
 | --- | --- |
-| Sampling | `temperature`, `maxTokens`, `stop`, and model-published reasoning levels can take effect; `top_p` and penalties are recorded only. The plugin cannot override a host setting that locks reasoning off |
-| Prompt preview | “Last host request” shows a captured request before adapter conversion. Other tabs recompute an ST simulation and do not represent the actual model input |
-| Regex and placement | Live display uses `output/render`; history rewriting in `input/send`, `prompt/assemble`, and `prompt/send` applies only to simulation and impersonation. Static depth content enters the standing prompt; dynamic `@D` and author notes enter per-turn context |
+| Sampling | Imported presets retain supported sampling fields and override plugin settings field by field; omitted fields use plugin settings. Reimport older presets to recover parameters that were previously discarded. `temperature`, `maxTokens`, `stop`, and model-published reasoning levels selected in plugin settings can take effect; `top_p` and penalties are stored with a notice. The plugin cannot override a host setting that locks reasoning off |
+| Prompt preview | “Last request” shows messages after layout and system-capability processing, with compatibility notes, for the official DeepSeek route; other routes show the host request. Other tabs recompute an ST simulation and do not represent actual model input |
+| Preset semantics | Character main and post-history instructions replace the original slots, respecting toggles, generation triggers and override restrictions. Settings → Prompts can disable these two character overrides independently. Only `{{original}}` retains the original text. Reads of dynamic macro variables enter per-turn context; static variables can still use the stable prefix |
+| Preset formats and macros | Retains `wi_format`, `scenario_format`, and `personality_format`; empty formats send the original fields. Reimport older presets to recover discarded formats. `lastmessage` reads the last real user or character message; `charPrompt` / `charInstruction` read character prompt fields. The exported `system_prompt` built-in marker is independent of role, preserving custom system entries on round trips |
+| Preset message placement | The official DeepSeek route automatically uses the Tavern adapter to insert preset roles at their ordered history positions. Models supporting system updates receive complete system snapshots; models reading only a leading system message receive combined system entries there, while user/assistant positions remain intact. The host conversation, tools, credentials and streaming flow remain in use. Layouts are frozen each turn without replacing history. Other providers retain the standing/turn mapping |
+| Regex and assistant prefill | Live display uses `output/render`; history regex edits apply to simulation and impersonation. Trailing assistant entries are sent as ordinary assistant messages. Provider-specific prefill/prefix protocols are not implemented, so continuation from that text is not guaranteed |
 | Editing and deletion | Message edits, rollback, regeneration, and script-driven deletion use branches and preserve the original session. Editing an AI reply revokes derived facts from that turn onward, without automatically extracting replacements or generating a reply |
 | Rollback scope | Rollback covers plugin story state. Tool side effects outside the story workspace are not undone |
 
@@ -215,7 +218,7 @@ Legacy shared state is copied into isolated stories on first access to an old bi
 | Changing the default preset did not change the current conversation | Defaults apply when selecting a character in a new session. Change and save the current session's configuration through its character control |
 | The card displays, but buttons, scripts, or MVU do not work | Check that interactive cards are enabled, then confirm that the script and its folder are enabled and saved under Settings → Scripts. Inspect runtime diagnostics; automatic MVU also needs its session option enabled and the page open. Check the required APIs against [compatibility](#compatibility) |
 | The memory page is empty, or an edit did not affect the current story | Check the selected character and story, including whether “Initial state” is selected. Long-term memories are written by model tools or manually; chat messages are not automatically copied into memory one by one |
-| Prompt preview does not match model behavior | Inspect “Last host request” first; other tabs are ST simulations. A new session without a request, a host restart, or cache eviction can leave the last-request view empty |
+| Prompt preview does not match model behavior | Inspect “Last request” and its compatibility notes first; other tabs are ST simulations. A new session without a request, a host restart, or cache eviction can leave the last-request view empty |
 | pnpm reports a blocked build script | Identify the dependency named in the error. Try a release tarball for a plugin source-build problem; for host dependencies, follow dsh's message and check `allowBuilds` in that profile's `pnpm-workspace.yaml` |
 
 ### Read-only diagnostics
@@ -320,7 +323,7 @@ When opening a [GitHub issue](https://github.com/Amakurai/dsh-liketavern/issues)
 - The page and steps involved, expected and actual behavior, and relevant errors or read-only diagnostic results.
 - A minimal reproduction with private content removed. For third-party cards, identify the scripts or APIs they require; a hand-written test card is useful.
 
-For prompt problems, state whether you inspected “Last host request” or an ST simulation. Remove secrets, private stories, and personal information from screenshots and logs before sharing them.
+For prompt problems, state whether you inspected “Last request” or an ST simulation. Remove secrets, private stories, and personal information from screenshots and logs before sharing them.
 
 ### Code and documentation
 

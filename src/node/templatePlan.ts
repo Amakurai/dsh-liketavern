@@ -1,6 +1,6 @@
 /** 同一隔离器内完成模板预处理、主动激活与提示词组装；重组只重放来源，定时器从同一轮初快照计算。 */
 import { assemblePrompt, isDeltaRenderedInTurn } from '../core/assemble.js'
-import { evaluateWorldInfo } from '../core/worldbook.js'
+import { evaluateWorldInfo, isStandingSafeEntry } from '../core/worldbook.js'
 import { createTurnRandom, expandMacros } from '../core/macros.js'
 import { estimateTokens } from '../core/tokenize.js'
 import { clipWorldDeltasForTurn } from '../core/turnBudget.js'
@@ -31,7 +31,13 @@ export function assembleTemplatePlan(input: ComputeJobs['assemble']['input'], sa
   }
 
   const macroCtx = {...input.macroCtx,random:createTurnRandom(input.seed)}
-  const entries = evaluation.entries.map(normalizeTemplateLore).map(entry=> {
+  const normalizedEntries = evaluation.entries.map(normalizeTemplateLore)
+  // 必须在条件求值、预处理及 WI 命中筛选之前收集写入来源。未命中的来源以后仍可能
+  // 修改同名变量，若仅观察本轮激活结果，首轮空/default 读取会被 standing pin 留住。
+  const potentialMacroSources = normalizedEntries.map(entry => ({ text: entry.content,
+    turnLocal: !entry.enabled || !isStandingSafeEntry(entry) || Boolean(entry.templateCondition
+      || entry.templatePreprocessing || parseTemplatePlacement(entry.comment)) }))
+  const entries = normalizedEntries.map(entry=> {
     if (!sandbox || !entry.enabled || !(entry.templatePreprocessing || /^\[Preprocessing\]/i.test(entry.comment))) return entry
     if (entry.templateCondition && !sandbox.condition(entry.templateCondition)) return {...entry,enabled:false}
     const render = (text:string,source:string) => expandMacros(sandbox.renderSource(expandMacros(text,macroCtx),source),macroCtx)
@@ -66,7 +72,7 @@ export function assembleTemplatePlan(input: ComputeJobs['assemble']['input'], sa
       byPosition:Object.fromEntries(Object.entries(wi.byPosition).map(([key,acts])=>[key,ordinary(acts)])),
       outlets:Object.fromEntries(Object.entries(wi.outlets).map(([key,acts])=>[key,ordinary(acts)])),
     }
-    const assemblyInput = {...input,wi:regularWi,worldDeltas:deltaClip.kept,estimateTokens,
+    const assemblyInput = {...input,wi:regularWi,worldDeltas:deltaClip.kept,estimateTokens,potentialMacroSources,
       ...(sandbox ? createTemplateGeneration(sandbox,placements,macroCtx,generationRegexCache) : {}),
       macroCtx:{...input.macroCtx,random:createTurnRandom(input.seed)} } satisfies Parameters<typeof assemblePrompt>[0]
     let assembled = assemblePrompt(assemblyInput)

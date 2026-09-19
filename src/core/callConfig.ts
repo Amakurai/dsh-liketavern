@@ -22,7 +22,7 @@ export interface AdvertisedReasoningInfo {
 }
 
 /** 解析不到公布档时仍认它接受 off：部署没锁死 thinking 的话，插件必须关得掉。 */
-const DEEPSEEK_OFFICIAL_PROVIDER = 'deepseek-official'
+const DEEPSEEK_OFFICIAL_PROVIDERS = new Set(['deepseek-official', 'tavern-deepseek'])
 
 /**
  * 按 Tavern「深度思考」设置挑选 reasoningEffort。
@@ -66,7 +66,7 @@ export function resolveTavernReasoningEffort(
 ): string | undefined {
   const picked = pickReasoningEffort(thinking, reasoning?.efforts, reasoning?.defaultEffort, current)
   if (picked !== undefined) return picked
-  if (thinking === 'disabled' && provider === DEEPSEEK_OFFICIAL_PROVIDER) return 'off'
+  if (thinking === 'disabled' && provider !== undefined && DEEPSEEK_OFFICIAL_PROVIDERS.has(provider)) return 'off'
   return pickReasoningEffort(thinking, undefined, undefined, current)
 }
 
@@ -77,17 +77,26 @@ export interface CallConfigPatch {
   reasoningEffort?: string
 }
 
-/** 透传 temperature / maxTokens / stop，并在有合法档位时写入 reasoningEffort。 */
+/**
+ * 透传 temperature / maxTokens / stop，并在有合法档位时写入 reasoningEffort。
+ * 宿主后续请求以已记录 header 为种子，空采样必须撤销上轮插件值；
+ * maxTokens=null 时仅恢复调用方提供的明确 AgentOptions 上限，否则交给模型默认值。
+ */
 export function mergeTavernCallConfig<T extends CallConfigPatch>(
   config: T,
   sampling: SamplingSettings,
   reasoningEffort: string | undefined,
+  hostMaxTokens?: number,
 ): T {
-  return {
+  const merged = {
     ...config,
     temperature: sampling.temperature,
-    ...(sampling.maxTokens !== null ? { maxTokens: sampling.maxTokens } : {}),
-    ...(sampling.stop.length > 0 ? { stop: [...sampling.stop] } : {}),
     ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
   }
+  const maxTokens = sampling.maxTokens ?? hostMaxTokens
+  if (maxTokens === undefined) delete merged.maxTokens
+  else merged.maxTokens = maxTokens
+  if (sampling.stop.length > 0) merged.stop = [...sampling.stop]
+  else delete merged.stop
+  return merged
 }

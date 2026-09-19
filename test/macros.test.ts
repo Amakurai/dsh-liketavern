@@ -6,6 +6,7 @@
  */
 import { describe, expect, it, vi } from 'vitest'
 import { expandIdentityMacros, expandMacros, hasTurnLocalMacros, hasUnevaluatedScript, createTurnRandom, type MacroContext } from '../src/core/macros.js'
+import { createMacroDependencyTracker } from '../src/core/macroDependencies.js'
 
 const ctx: MacroContext = { char: 'Alice', user: 'Bob' }
 
@@ -128,6 +129,49 @@ describe('卡字段与人设宏', () => {
 
   it('大小写不敏感：{{Description}}/{{LastCharMessage}}', () => {
     expect(expandMacros('{{Description}}/{{LastCharMessage}}', rich)).toBe('DESC Bob/LAST-CHAR')
+  })
+
+  it('charPrompt / charInstruction 取卡级覆盖，并继续展开字段里的身份宏', () => {
+    const c: MacroContext = { ...rich, charPrompt: 'MAIN {{char}}', charInstruction: 'TAIL {{user}}' }
+    expect(expandMacros('{{charPrompt}}|{{CHARINSTRUCTION}}', c)).toBe('MAIN Alice|TAIL Bob')
+    expect(expandMacros('{{charPrompt}}|{{charInstruction}}', ctx)).toBe('|')
+  })
+})
+
+describe('lastMessage', () => {
+  it('与最后用户消息分开，使用调用方提供的最后真实消息', () => {
+    const c: MacroContext = { ...ctx, lastUserMessage: 'user question', lastCharMessage: 'assistant answer', lastMessage: 'assistant answer' }
+    expect(expandMacros('{{LastMessage}}|{{lastUserMessage}}|{{lastCharMessage}}', c)).toBe('assistant answer|user question|assistant answer')
+    expect(expandMacros('{{lastMessage}}', { ...c, lastMessage: 'new user question' })).toBe('new user question')
+  })
+
+  it('缺少最后消息时为空，不把最后用户消息误当成当前位置', () => {
+    expect(expandMacros('{{lastMessage}}', { ...ctx, lastUserMessage: 'older user question' })).toBe('')
+    expect(hasTurnLocalMacros('{{LastMessage}}')).toBe(true)
+    expect(hasTurnLocalMacros('{{charPrompt}}/{{charInstruction}}')).toBe(false)
+  })
+})
+
+describe('卡级覆盖宏的通道依赖', () => {
+  it('纯静态字段仍稳定，字段内 lastMessage 与间接字段引用属于本轮', () => {
+    const stable: MacroContext = { ...ctx, charPrompt: 'Write about {{char}}', charInstruction: 'Use a calm tone' }
+    expect(createMacroDependencyTracker(stable).isDynamic('{{charPrompt}}|{{charInstruction}}', stable)).toBe(false)
+    const dynamic: MacroContext = { ...stable, charPrompt: 'Respond to {{lastMessage}}', charInstruction: '{{charPrompt}}' }
+    expect(createMacroDependencyTracker(dynamic).isDynamic('{{charInstruction}}', dynamic)).toBe(true)
+  })
+
+  it('两个字段中的变量写入及潜在来源传递到后续 getvar', () => {
+    const c: MacroContext = { ...ctx, charPrompt: '{{setvar::topic::{{lastMessage}}}}', charInstruction: '{{charPrompt}}' }
+    const tracker = createMacroDependencyTracker(c, [{ text: '{{charInstruction}}', turnLocal: false }])
+    expect(tracker.isDynamic('RULE={{getvar::topic}}', c)).toBe(true)
+    tracker.record('{{setvar::copy::{{getvar::topic}}}}', c, false)
+    expect(tracker.isDynamic('COPY={{getvar::copy}}', c)).toBe(true)
+    expect(tracker.isDynamic('STYLE={{getvar::style}}', c)).toBe(false)
+  })
+
+  it('卡字段循环依赖只检查一次，含 lastMessage 时仍能找出动态依赖', () => {
+    const c: MacroContext = { ...ctx, charPrompt: '{{charInstruction}}', charInstruction: '{{charPrompt}} {{lastMessage}}' }
+    expect(createMacroDependencyTracker(c).isDynamic('{{charPrompt}}', c)).toBe(true)
   })
 })
 

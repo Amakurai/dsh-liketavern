@@ -7,13 +7,15 @@
  * - `{{description}}` / `{{personality}}` / `{{scenario}}`：角色卡字段
  * - `{{persona}}`：当前用户人设描述
  * - `{{charFirstMessage}}` / `{{firstMessage}}`：角色开场白（ST 拼写为 charFirstMessage）
+ * - `{{charPrompt}}` / `{{charInstruction}}`：角色卡 Main / PHI 覆盖正文
  * - `{{outlet::Name}}`：世界书 Outlet；未匹配为空串。替换结果不再扫描（禁止嵌套 outlet）
  * - `{{time}}` / `{{date}}` / `{{datetime}}` / `{{weekday}}`：当前时间（可经 vars 覆盖）
  * - `{{trim}}` / `{{noop}}`：删除
  * - `{{//…}}`：注释，删除（社区预设用来写作者说明）
  * - `{{setvar::name::value}}` / `{{getvar::name}}`：一次组装内的变量表
  *   （setlocalvar/setglobalvar 视为 setvar；get* 同 getvar。不落盘。）
- * - `{{lastusermessage}}` / `{{lastMessage}}`：最近一条用户消息
+ * - `{{lastUserMessage}}`：最近一条用户消息
+ * - `{{lastMessage}}`：最近一条真实用户或 assistant 消息（本轮宏，禁止进 standing）
  * - `{{lastCharMessage}}`：最近一条 assistant 消息（本轮宏，禁止进 standing）
  * - `{{random::A::B}}` / `{{pick::A,B}}` / `{{random:1,10}}`：掷骰（本轮宏，禁止进 standing）
  *

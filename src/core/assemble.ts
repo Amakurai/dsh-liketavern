@@ -31,17 +31,19 @@
  *
  * 输出三通道（dsh 不复制 ST「每轮整包塞进 system」）：
  * - `messages`：SillyTavern 语义全量序列（预览/调试）。
- * - `standing`：缓存稳定前缀——角色定义 + 预设骨架 + 常驻世界书 + 静态深度注入（无脚本/记忆/时钟）。
- * - `turnContext`：本轮才变的触发层——关键词世界书、记忆、变化层、AN、本轮宏、触发型 @D。
+ * - `standing`：缓存稳定前缀——历史前的静态角色/预设/世界书 + 非零深度静态注入。
+ * - `turnContext`：关键词世界书、记忆、变化层、AN、本轮宏；最后保留历史后条目与 depth=0。
  * - `system`：standing + turnContext 的合并（预览/兼容旧调用方）。
- * live 路径把 standing 写入 system 段（order 210，在工具说明之后）、
- * turnContext 写入 runtime context；standing 再按会话指纹钉死字节。
+ * live 路径把 standing 写入工具说明后的 system 段，turnContext 写入 runtime context；
+ * 有尾部指令时由 pipeline 加本轮标记，避免宿主跨轮去重使指令留在旧历史位置。
  */
 import { isSyntheticUserText } from './dshPrompt.js'
-import { expandIdentityMacros, expandMacros, hasTurnLocalMacros, hasUnevaluatedScript, type MacroContext } from './macros.js'
+import { expandIdentityMacros, expandMacros, hasUnevaluatedScript, type MacroContext } from './macros.js'
+import { createMacroDependencyTracker, type MacroDependencySource } from './macroDependencies.js'
 import { applyRegexToMessages } from './regex.js'
 import { isStandingSafeEntry } from './worldbook.js'
 import { hasEjs } from './template.js'
+import { createPromptLayout, promptDepthPlacement, promptHistoryAnchors, type PromptLayout, type PromptLayoutFragment, type PromptMessageProvenance } from './promptLayout.js'
 import {
   Marker,
   WIPosition,
@@ -59,13 +61,21 @@ import {
 
 export interface AssembleInput {
   preset: PromptPreset
+  /** 对齐 ST 全局角色覆盖开关；不是预设导入字段，缺省允许角色卡覆盖。 */
+  promptPreferences?: { preferCharacterPrompt: boolean; preferCharacterInstructions: boolean }
   card: CharacterCard | null
   /** 当前用户人设描述（空串 = 无）。 */
   personaDescription: string
   /** 会话历史（新的在后），含当前用户输入。 */
   history: ChatMessage[]
+  /** 与 history 逐项对应的真实消息 ID；未映射项仅支持模拟，不允许请求适配器猜测。 */
+  historyMessageIds?: readonly (string | undefined)[]
+  /** 宿主根据消息来源指明真实 user/model 正文；工具/插件输入不得挤占聊天深度。 */
+  historyChatFlags?: readonly boolean[]
   /** 世界书引擎结果（null = 无世界书）。 */
   wi: WIEngineResult | null
+  /** 隔离器提供全部候选来源，未命中的条件写入也不能使读取者被跨轮钉死。 */
+  potentialMacroSources?: readonly MacroDependencySource[]
   /** BM25 检索到的记忆正文（已排序截断）。 */
   memories: string[]
   /** 生效中的世界状态变化层（调用方过滤 revoked/expires）。 */
@@ -77,7 +87,7 @@ export interface AssembleInput {
   /** node worker 提供隔离模板执行器；core 本身不执行 JavaScript。 */
   renderTemplate?: (text: string, source: string, context: MacroContext) => string
   /** worker 按完整模拟序列顺序求值；在实际正文预算裁剪前执行，core 不运行第三方代码。 */
-  processTemplateSequence?: (messages: TemplateSequenceMessage[]) => {turnContext?: string[];log?:AssembleLogEntry[]}
+  processTemplateSequence?: (messages: TemplateSequenceMessage[]) => {turnContext?: string[];tailInsertions?:string[];log?:AssembleLogEntry[]}
   /** 临时模板正则只处理插件内容与历史模拟副本；回调由 node 的隔离器提供。 */
   transformPrompt?: (text: string, meta: {role: ChatRole;worldinfo:boolean;depth:number}) => string
   macroCtx: MacroContext
@@ -94,17 +104,23 @@ export interface AssembleInput {
 }
 
 export interface AssembleLogEntry {
-  kind: 'unknown-marker' | 'unknown-macro' | 'dropped-marker-content' | 'dropped-script' | 'auto-marker' | 'regex-error' | 'trim' | 'template-placement'
+  kind: 'unknown-marker' | 'unknown-macro' | 'dropped-marker-content' | 'dropped-script' | 'auto-marker' | 'regex-error' | 'trim' | 'template-placement' | 'live-compatibility'
   detail: string
 }
 
 export interface AssembledPrompt {
   /** ST 语义全量序列（含历史与注入）。 */
   messages: ChatMessage[]
+  /** 已完成宏/模板求值的插件布局；不含宿主历史正文，供实际请求适配器每步重放。 */
+  layout?: PromptLayout
+  /** messages 的并行身份表，用于 worker 后置定位注入；不含历史正文。 */
+  messageProvenance?: PromptMessageProvenance[]
   /** 角色定义 + 预设骨架 + 常驻世界书；不含关键词世界书/记忆/脚本。 */
   standing: string
   /** 本轮世界书命中、检索记忆、变化层、作者注释。 */
   turnContext: string
+  /** 存在历史后指令，live 必须每轮刷新快照；同轮步骤仍复用冻结字节。 */
+  hasTurnTail?: boolean
   /** standing + turnContext（预览与旧调用方）。 */
   system: string
   /** dsh 通道之外的历史（= 输入历史经正则与裁剪后的形态，供预览）。 */
@@ -121,6 +137,8 @@ export interface TemplateSequenceMessage {
   history: boolean
   /** 历史模拟副本保留正文处理结果；GENERATE 位置注入只加入完整 messages 序列。 */
   historyContent?: string
+  /** GENERATE 钩子围绕历史正文生成的插件内容；精确布局不复制历史正文。 */
+  historyInsertions?: { before: string; after: string }
   /** worker 还原的原始正文，用于区分来源占位替换与实际模板/正则修改。 */
   originalContent?: string
 }
@@ -151,6 +169,13 @@ interface DepthInjection {
   /** 本轮才变（触发型世界书/含本轮宏）= true；静态内容 = false（live 侧进 standing 钉死）。 */
   turn: boolean
   worldinfo?: boolean
+  sourceKeys: string[]
+}
+
+/** ST 完整历史的正向顺序：同深度先 order，再 assistant / user / system；同角色保持原栈顺序。 */
+const DEPTH_ROLE_ORDER: Record<ChatRole, number> = { assistant: 0, user: 1, system: 2 }
+function compareDepthInjections(a: DepthInjection, b: DepthInjection): number {
+  return a.order - b.order || DEPTH_ROLE_ORDER[a.role] - DEPTH_ROLE_ORDER[b.role]
 }
 
 const CLOCK_FROZEN = { time: '', date: '', datetime: '', weekday: '' } as const
@@ -182,6 +207,15 @@ function lastRealCharMessage(history: ChatMessage[]): string {
   return ''
 }
 
+/** lastmessage 包含最近角色回复；系统段与宿主合成输入都不是聊天正文。 */
+function lastRealMessage(history: ChatMessage[]): string {
+  for (let i = history.length - 1; i >= 0; i--) {
+    const message = history[i]!
+    if (message.role === 'assistant' || (message.role === 'user' && !isSyntheticUserText(message.content))) return message.content
+  }
+  return ''
+}
+
 /**
  * 变化层条目本轮是否进快照渲染：无 keys = 常驻事实；有 keys = 本轮被 WI 引擎命中才注入。
  * 本函数由 assemble（渲染过滤）与 pipeline（进快照预算裁剪）共用，两处判定不得漂移。
@@ -192,6 +226,10 @@ export function isDeltaRenderedInTurn(delta: WorldDelta, activatedDeltaIds: Read
 
 export function assemblePrompt(input: AssembleInput): AssembledPrompt {
   const log: AssembleLogEntry[] = []
+  const layoutHistory = promptHistoryAnchors(input.history, input.historyMessageIds, input.historyChatFlags)
+  const chatHistory = input.history.filter((_, index) => layoutHistory[index]!.chat)
+  let remainingChat = layoutHistory.filter(anchor=>anchor.chat).length
+  const historyDepths = layoutHistory.map(anchor=>{if(anchor.chat) remainingChat--; return remainingChat})
   const unknownMacros = new Set<string>()
   const generationType = (input.generationType ?? 'normal').toLowerCase()
   // injection_trigger（对齐 ST shouldTrigger）：空/缺省 = 全场景；否则须含当前场景。
@@ -205,10 +243,13 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
     scenario: input.macroCtx.scenario ?? input.card?.scenario ?? '',
     persona: input.macroCtx.persona ?? input.personaDescription,
     firstMessage: input.macroCtx.firstMessage ?? input.card?.firstMes ?? '',
-    lastCharMessage: input.macroCtx.lastCharMessage ?? lastRealCharMessage(input.history),
+    charPrompt: input.promptPreferences?.preferCharacterPrompt === false ? '' : input.macroCtx.charPrompt ?? input.card?.systemPrompt ?? '',
+    charInstruction: input.promptPreferences?.preferCharacterInstructions === false ? '' : input.macroCtx.charInstruction ?? input.card?.postHistoryInstructions ?? '',
+    lastMessage: input.macroCtx.lastMessage ?? lastRealMessage(chatHistory),
+    lastCharMessage: input.macroCtx.lastCharMessage ?? lastRealCharMessage(chatHistory),
     outlets: undefined, // outlet 在世界书求值后填充，见下
     store: input.macroCtx.store ?? new Map(),
-    lastUserMessage: input.macroCtx.lastUserMessage ?? lastRealUserMessage(input.history),
+    lastUserMessage: input.macroCtx.lastUserMessage ?? lastRealUserMessage(chatHistory),
     onUnknown: (name) => {
       if (!unknownMacros.has(name)) {
         unknownMacros.add(name)
@@ -258,29 +299,20 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
   if (input.processTemplateSequence) history = history.map((message,index)=>({...message,
     content:renderTemplate(message.content,`history:${index}`,macroCtx)}))
   const originalHistory = new Set(history)
-  const historyDepth = new Map(history.map((message,index)=>[message,history.length-index-1]))
+  const historyDepth = new Map(history.map((message,index)=>[message,historyDepths[index]!]))
+  const historyAnchors = new Map(history.map((message,index)=>[message,layoutHistory[index]!]))
   const processedHistory = new Map<ChatMessage,string>()
-  // 字段与 original 可继续引用其它字段：沿实际依赖识别本轮宏，避免先用 standing
-  // 的空历史/时钟展开后钉死。每个字段至多访问一次，循环引用不执行宏也不会无限递归。
-  const dynamic = (text: string, ctx: MacroContext = macroCtx): boolean => {
-    const fields: Record<string, string | undefined> = {
-      description: ctx.description, personality: ctx.personality, scenario: ctx.scenario,
-      persona: ctx.persona, firstmessage: ctx.firstMessage, charfirstmessage: ctx.firstMessage,
-      original: ctx.vars?.original,
-    }
-    const pending = [text]
-    const visited = new Set<string>()
-    while (pending.length > 0) {
-      const current = pending.pop()!
-      if (hasTurnLocalMacros(current) || hasEjs(current)) return true
-      for (const match of current.matchAll(/\{\{\s*(description|personality|scenario|persona|firstmessage|charfirstmessage|original)\s*\}\}/gi)) {
-        const name = match[1]!.toLowerCase()
-        if (visited.has(name)) continue
-        visited.add(name)
-        if (fields[name]) pending.push(fields[name])
-      }
-    }
-    return false
+  // 按实际求值顺序传播变量依赖，避免动态 setvar 的读取者误入稳定前缀。
+  const conditionalFormats = input.preset.formatting?.worldInfo
+  const macroDependencies = createMacroDependencyTracker(macroCtx, [
+    ...(input.potentialMacroSources ?? []),
+    // 世界书格式仅在有命中正文时执行；即使首轮未命中，其变量写入也可能影响后续轮读取。
+    ...(conditionalFormats ? [{ text: conditionalFormats, turnLocal: true }] : []),
+  ])
+  const dynamic = (text: string, ctx: MacroContext = macroCtx): boolean => macroDependencies.isDynamic(text, ctx)
+  const expandTracked = (text: string, ctx: MacroContext, turnLocal: boolean): string => {
+    macroDependencies.record(text, ctx, turnLocal)
+    return expandMacros(text, ctx)
   }
   const outlets: Record<string, string> = {}
   if (wi) {
@@ -288,32 +320,27 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
       // outlet 内容同样做宏展开（与定位条目一致）；此处 macroCtx.outlets 尚未赋值，
       // 故内容中嵌套的 {{outlet::X}} 不会递归解析（对齐「禁止嵌套 outlet」）。
       outlets[name] = joinContents(
-        acts.map((a) => (hasUnevaluatedScript(a.entry.content) && !hasEjs(a.entry.content) ? '' : renderTemplate(expandMacros(a.entry.content, macroCtx), a.entry.key))),
+        acts.map((a) => (hasUnevaluatedScript(a.entry.content) && !hasEjs(a.entry.content) ? '' : renderTemplate(expandTracked(a.entry.content, macroCtx, true), a.entry.key))),
       )
     }
   }
   macroCtx.outlets = outlets
-  // standing 用独立 store：本轮 setvar（含 lastusermessage）不得泄漏进骨架 getvar。
-  const turnStore = macroCtx.store ?? new Map<string, string>()
-  macroCtx.store = turnStore
-  const standingStore = new Map<string, string>()
+  // 变量值按一份表顺序读写；是否能进入 standing 由来源依赖判定。分表会丢失动态
+  // setvar 的后续 getvar，也会让后写的静态赋值无法覆盖 turn 中已有的旧值。
   const standingCtx: MacroContext = {
     ...macroCtx,
-    store: standingStore,
     outlets: {},
     vars: { ...macroCtx.vars, ...CLOCK_FROZEN },
     lastUserMessage: '',
     lastCharMessage: '',
+    lastMessage: '',
   }
   const expandStanding = (text: string, ctx: MacroContext = standingCtx, source = text) => {
-    const effective = dynamic(text, ctx) ? { ...ctx, ...macroCtx, vars: { ...macroCtx.vars, ...(ctx.vars?.original === undefined ? {} : { original: ctx.vars.original }) } } : ctx
-    const out = expandMacros(renderTemplate(expandMacros(text, effective), source, effective), effective)
-    for (const [k, v] of standingStore) {
-      if (!turnStore.has(k)) turnStore.set(k, v)
-    }
-    return out
+    const turnLocal = dynamic(text, ctx)
+    const effective = turnLocal ? { ...ctx, ...macroCtx, vars: { ...macroCtx.vars, ...(ctx.vars?.original === undefined ? {} : { original: ctx.vars.original }) } } : ctx
+    return expandTracked(renderTemplate(expandTracked(text, effective, turnLocal), source, effective), effective, turnLocal)
   }
-  const expandTurn = (text: string, source = text) => expandMacros(renderTemplate(expandMacros(text, macroCtx), source, macroCtx), macroCtx)
+  const expandTurn = (text: string, source = text) => expandTracked(renderTemplate(expandTracked(text, macroCtx, true), source, macroCtx), macroCtx, true)
   /**
    * turn 侧消息按对象身份追踪，不按内容字节：两条展开后同字节的消息若分属 standing/turn，
    * 按字节匹配会把 standing 那条误踢进每轮重付的 turn 层（前缀缓存白丢）。
@@ -329,14 +356,20 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
   const worldInfoPromptMessages = new Set<ChatMessage>()
   const examplePromptMessages = new Set<ChatMessage>()
   const characterDefinitionMessages = new Set<ChatMessage>()
-  const trackedMessage = (role: ChatRole, content: string, group: Set<ChatMessage>): ChatMessage => {
+  const messageSources = new Map<ChatMessage, string[]>()
+  const relativeOrders = new Map<ChatMessage, number>()
+  const trackedMessage = (role: ChatRole, content: string, group: Set<ChatMessage>, sourceKeys?: string[]): ChatMessage => {
     const message: ChatMessage = { role, content }
     group.add(message)
+    messageSources.set(message, sourceKeys ?? [group === memoryPromptMessages ? 'memory'
+      : group === worldStatePromptMessages ? 'world-state' : group === worldInfoPromptMessages ? 'world-info'
+      : group === examplePromptMessages ? 'card:examples' : 'character-definition'])
     return message
   }
   const definition = (role: ChatRole, raw: string, group = characterDefinitionMessages, ctx = standingCtx, source = raw): ChatMessage => {
-    const message = trackedMessage(role, expandStanding(raw, ctx, source), group)
-    return dynamic(raw, ctx) ? asTurn(message) : message
+    const turnLocal = dynamic(raw, ctx)
+    const message = trackedMessage(role, expandStanding(raw, ctx, source), group, [source])
+    return turnLocal ? asTurn(message) : message
   }
   const skipScript = (label: string, text: string): boolean => {
     if (hasEjs(text) && input.renderTemplate) return false
@@ -357,9 +390,11 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
   const WI_LABEL_TURN = '【世界书·本轮触发】'
   const labelWi = (text: string, standingSide: boolean): string => `${standingSide ? WI_LABEL_STANDING : WI_LABEL_TURN}\n${text}`
   /** 常驻无脚本进 standing；关键词与隔离展开的 EJS 进 turn。 */
-  const wiChunks = (pos: WIPosition): { standing: string; turn: string } => {
+  const wiChunks = (pos: WIPosition): { standing: string; turn: string; standingSources: string[]; turnSources: string[] } => {
     const standingParts: string[] = []
     const turnParts: string[] = []
+    const standingSources: string[] = []
+    const turnSources: string[] = []
     for (const a of wiAt(pos)) {
       // delta 内容由 worldState marker 统一落位；这里仍保留它参与引擎匹配/递归的结果。
       if (a.entry.source === 'delta') continue
@@ -368,20 +403,41 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
       const standingSafe = isStandingSafeEntry(a.entry) && !dynamic(a.entry.content)
       const text = (standingSafe ? expandStanding(a.entry.content, standingCtx, a.entry.key) : expandTurn(a.entry.content, a.entry.key)).trim()
       if (!text) continue
-      if (standingSafe) standingParts.push(text)
-      else turnParts.push(text)
+      if (standingSafe) { standingParts.push(text); standingSources.push(a.entry.key) }
+      else { turnParts.push(text); turnSources.push(a.entry.key) }
     }
-    return { standing: joinContents(standingParts), turn: joinContents(turnParts) }
+    return { standing: joinContents(standingParts), turn: joinContents(turnParts), standingSources, turnSources }
   }
   const wiMessages = (pos: WIPosition, role: ChatRole): ChatMessage[] => {
-    const { standing, turn } = wiChunks(pos)
+    const { standing, turn, standingSources, turnSources } = wiChunks(pos)
     const out: ChatMessage[] = []
-    if (standing) out.push(trackedMessage(role, labelWi(standing, true), worldInfoPromptMessages))
-    if (turn) out.push(asTurn(trackedMessage(role, labelWi(turn, false), worldInfoPromptMessages)))
+    if (!standing && !turn) return out
+    const format = input.preset.formatting?.worldInfo
+    if (format !== undefined) {
+      if (skipScript('世界书格式模板', format)) return out
+      // 只展开包装自身的宏，再在字面布局中保留正文的独立来源占位。先注册包装会把
+      // {0} 藏进未展开来源；注册一个聚合父来源又会在 activewi 重组时冻结旧条目集合。
+      // 已处理的正文不重新经过宏展开，模板阶段仍能逐条冻结世界书来源。
+      const turnLocal = dynamic(format)
+      const context = turnLocal ? macroCtx : standingCtx
+      const wrapper = format.trim() ? expandTracked(format, context, turnLocal) : '{0}'
+      for (const [text, local, sources] of [[standing, turnLocal, standingSources], [turn, true, turnSources]] as const) {
+        if (!text) continue
+        const content = wrapper.replaceAll('{0}', () => text)
+        if (!content.trim()) continue
+        const message = trackedMessage(role, content, worldInfoPromptMessages, ['preset:format:world-info', ...sources])
+        out.push(local ? asTurn(message) : message)
+      }
+    } else {
+      if (standing) out.push(trackedMessage(role, labelWi(standing, true), worldInfoPromptMessages, standingSources))
+      if (turn) out.push(asTurn(trackedMessage(role, labelWi(turn, false), worldInfoPromptMessages, turnSources)))
+    }
     return out
   }
+  const wiTextSources = new Map<WIPosition, string[]>()
   const wiText = (pos: WIPosition): string => {
-    const { standing, turn } = wiChunks(pos)
+    const { standing, turn, standingSources, turnSources } = wiChunks(pos)
+    wiTextSources.set(pos, [...standingSources, ...turnSources])
     return joinContents([standing, turn])
   }
 
@@ -419,11 +475,13 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
           : []
       case Marker.CharPersonality:
         return card?.personality.trim()
-          ? [definition(role, card.personality, characterDefinitionMessages, standingCtx, 'card:personality')]
+          ? [definition(role, input.preset.formatting?.personality ? input.preset.formatting.personality : card.personality,
+            characterDefinitionMessages, standingCtx, 'card:personality')]
           : []
       case Marker.Scenario:
         return card?.scenario.trim()
-          ? [definition(role, card.scenario, characterDefinitionMessages, standingCtx, 'card:scenario')]
+          ? [definition(role, input.preset.formatting?.scenario ? input.preset.formatting.scenario : card.scenario,
+            characterDefinitionMessages, standingCtx, 'card:scenario')]
           : []
       case Marker.DialogueExamples: {
         if (!card) return []
@@ -431,11 +489,11 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
         const before = wiChunks(WIPosition.BeforeExampleMessages)
         const after = wiChunks(WIPosition.AfterExampleMessages)
         const out: ChatMessage[] = []
-        if (before.standing) out.push(trackedMessage(role, labelWi(before.standing, true), worldInfoPromptMessages))
-        if (before.turn) out.push(asTurn(trackedMessage(role, labelWi(before.turn, false), worldInfoPromptMessages)))
+        if (before.standing) out.push(trackedMessage(role, labelWi(before.standing, true), worldInfoPromptMessages, before.standingSources))
+        if (before.turn) out.push(asTurn(trackedMessage(role, labelWi(before.turn, false), worldInfoPromptMessages, before.turnSources)))
         out.push(...blocks.map((b, index) => definition(role, b, examplePromptMessages, standingCtx, `card:example:${index}`)))
-        if (after.standing) out.push(trackedMessage(role, labelWi(after.standing, true), worldInfoPromptMessages))
-        if (after.turn) out.push(asTurn(trackedMessage(role, labelWi(after.turn, false), worldInfoPromptMessages)))
+        if (after.standing) out.push(trackedMessage(role, labelWi(after.standing, true), worldInfoPromptMessages, after.standingSources))
+        if (after.turn) out.push(asTurn(trackedMessage(role, labelWi(after.turn, false), worldInfoPromptMessages, after.turnSources)))
         return out
       }
       case Marker.PersonaDescription:
@@ -471,13 +529,29 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
   // ── 4. relative 骨架（历史之前部分 + 历史之后部分） ──────────────────────
   const relative = input.preset.entries
     .filter((e) => e.enabled && e.position === 'relative' && triggered(e))
-    .sort((a, b) => a.order - b.order || a.identifier.localeCompare(b.identifier))
+    .sort((a, b) => a.order - b.order)
   // 兜底注入按「预设里是否存在该 marker」判定，不限 relative——in-chat 的同名 marker 已有落位。
   const presentMarkerIds = new Set(
     input.preset.entries.filter((e) => e.enabled && e.marker && triggered(e)).map((e) => e.markerId),
   )
   const beforeHistory: ChatMessage[] = []
   const afterHistory: ChatMessage[] = []
+  const presetPromptMessages = new Set<ChatMessage>()
+  /** 卡级覆盖替换启用槽位正文，沿用槽位角色/位置/深度；不另加重复消息或执行原文副作用。 */
+  const presetMessage = (entry: PresetEntry): ChatMessage | null => {
+    const override = entry.forbidOverrides ? undefined
+      : entry.identifier === 'main' && input.promptPreferences?.preferCharacterPrompt !== false ? card?.systemPrompt
+      : entry.identifier === 'jailbreak' && input.promptPreferences?.preferCharacterInstructions !== false ? card?.postHistoryInstructions : undefined
+    const overridden = Boolean(override)
+    const raw = overridden ? override! : entry.content
+    if (!raw.trim() || skipScript(`预设「${entry.identifier}」`, raw)) return null
+    const context = overridden ? { ...standingCtx, vars: { ...standingCtx.vars, original: entry.content } } : standingCtx
+    const message = definition(entry.role, raw, overridden ? characterDefinitionMessages : presetPromptMessages, context,
+      overridden ? (entry.identifier === 'main' ? 'card:system' : 'card:post-history') : `preset:${entry.identifier}`)
+    messageSources.set(message, [...new Set([`preset:${entry.identifier}`, ...(messageSources.get(message) ?? [])])])
+    message.content = message.content.trim()
+    return message.content ? message : null
+  }
   let seenHistory = false
   let insertedFallbackMarkers = false
   const insertFallbackMarkers = () => {
@@ -501,42 +575,20 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
     const bucket = seenHistory ? afterHistory : beforeHistory
     if (entry.marker) {
       const content = markerContent(entry.markerId ?? '', entry.role)
-      if (content) bucket.push(...content)
+      if (content) {
+        for (const message of content) {
+          relativeOrders.set(message, entry.order)
+          messageSources.set(message, [`preset:${entry.identifier}`, ...(messageSources.get(message) ?? [])])
+        }
+        bucket.push(...content)
+      }
       continue
     }
-    if (!entry.content.trim()) continue
-    if (skipScript(`预设「${entry.identifier}」`, entry.content)) continue
-    const turnLocal = dynamic(entry.content)
-    const text = (turnLocal ? expandTurn(entry.content, `preset:${entry.identifier}`) : expandStanding(entry.content, standingCtx, `preset:${entry.identifier}`)).trim()
-    if (!text) continue // setvar/注释/trim 预处理后为空，不进模型
-    const message: ChatMessage = { role: entry.role, content: text }
-    if (turnLocal) turnMessages.add(message)
-    bucket.push(message)
+    const message = presetMessage(entry)
+    if (message) { relativeOrders.set(message, entry.order); bucket.push(message) }
   }
   // 没有 chatHistory marker 时，组装器仍会在骨架后追加历史；动态私有层紧贴该边界。
   if (!seenHistory) insertFallbackMarkers()
-  // 卡片级 system_prompt / post_history_instructions。
-  // {{original}} 引用预设 main / jailbreak 原文（对齐 ST preparePrompt(prompt, original)）：
-  // 经 vars 注入，只在展开卡级覆盖时可见；原文里的宏随多轮展开正常展开。
-  // 预设槽位 forbid_overrides=true 时拒绝卡级覆盖（对齐 ST preparePromptsForChatCompletion）。
-  const slotEntry = (identifier: string): PresetEntry | undefined =>
-    input.preset.entries.find((e) => e.identifier === identifier && !e.marker && triggered(e))
-  const withOriginal = (original: string): MacroContext => ({
-    ...standingCtx,
-    vars: { ...standingCtx.vars, original },
-  })
-  const mainEntry = slotEntry('main')
-  if (card?.systemPrompt.trim() && mainEntry?.forbidOverrides !== true) {
-    beforeHistory.unshift(
-      definition('system', card.systemPrompt, characterDefinitionMessages, withOriginal(mainEntry?.content ?? ''), 'card:system'),
-    )
-  }
-  const jailbreakEntry = slotEntry('jailbreak')
-  if (card?.postHistoryInstructions.trim() && jailbreakEntry?.forbidOverrides !== true) {
-    afterHistory.push(
-      definition('system', card.postHistoryInstructions, characterDefinitionMessages, withOriginal(jailbreakEntry?.content ?? ''), 'card:post-history'),
-    )
-  }
 
   // ── 5. 深度注入合并：预设 in-chat 条目 + 世界书 @D ───────────────────────
   const depthInjections: DepthInjection[] = []
@@ -554,16 +606,14 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
       const resolved = markerContent(id, entry.role)
       if (resolved === null || resolved.length === 0) continue
       for (const m of resolved) {
-        depthInjections.push({ depth: entry.depth, order: entry.order, role: m.role, content: m.content, turn: turnMessages.has(m),worldinfo:worldInfoPromptMessages.has(m) })
+        depthInjections.push({ depth: entry.depth, order: entry.order, role: m.role, content: m.content, turn: turnMessages.has(m),worldinfo:worldInfoPromptMessages.has(m),
+          sourceKeys: [`preset:${entry.identifier}`, ...(messageSources.get(m) ?? [])] })
       }
       continue
     }
-    if (!entry.content.trim()) continue
-    if (skipScript(`预设 in-chat「${entry.identifier}」`, entry.content)) continue
-    const turnLocal = dynamic(entry.content)
-    const content = (turnLocal ? expandTurn(entry.content, `preset:${entry.identifier}`) : expandStanding(entry.content, standingCtx, `preset:${entry.identifier}`)).trim()
-    if (!content) continue
-    depthInjections.push({ depth: entry.depth, order: entry.order, role: entry.role, content, turn: turnLocal })
+    const message = presetMessage(entry)
+    if (message) depthInjections.push({ depth: entry.depth, order: entry.order, role: message.role,
+      content: message.content, turn: turnMessages.has(message), sourceKeys: messageSources.get(message) ?? [`preset:${entry.identifier}`] })
   }
   for (const a of wiAt(WIPosition.AtDepth)) {
     if (skipScript(`世界书 @D「${a.entry.key}」`, a.entry.content)) continue
@@ -577,6 +627,7 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
       content,
       turn: !stable, // 确定常驻 @D 进 standing，其它按轮注入
       worldinfo:true,
+      sourceKeys: [a.entry.key],
     })
   }
   const depthPrompt = input.card?.depthPrompt
@@ -592,20 +643,21 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
           role: depthPrompt.role,
           content,
           turn: turnLocal,
+          sourceKeys: ['card:depth'],
         })
       }
     }
   }
   // AN bottom：全序列最末；AN top：历史之前
   const anTop = wiText(WIPosition.AuthorNoteTop)
-  if (anTop) beforeHistory.push(asTurn(trackedMessage('system', anTop, worldInfoPromptMessages)))
+  if (anTop) beforeHistory.push(asTurn(trackedMessage('system', anTop, worldInfoPromptMessages, wiTextSources.get(WIPosition.AuthorNoteTop))))
   const sessionNote = input.authorNote?.trim() ? expandTurn(input.authorNote).trim() : ''
-  if (sessionNote) beforeHistory.push(asTurn(trackedMessage('system', `【作者注释】${sessionNote}`, worldInfoPromptMessages)))
+  if (sessionNote) beforeHistory.push(asTurn(trackedMessage('system', `【作者注释】${sessionNote}`, worldInfoPromptMessages, ['author-note'])))
   const journalNote = input.journalText?.trim() ? expandTurn(input.journalText).trim() : ''
-  if (journalNote) beforeHistory.push(asTurn(trackedMessage('system', `【角色笔记】${journalNote}`, worldInfoPromptMessages)))
+  if (journalNote) beforeHistory.push(asTurn(trackedMessage('system', `【角色笔记】${journalNote}`, worldInfoPromptMessages, ['journal'])))
   const anBottom = wiText(WIPosition.AuthorNoteBottom)
   const anBottomMessage = anBottom
-    ? asTurn(trackedMessage('system', anBottom, worldInfoPromptMessages))
+    ? asTurn(trackedMessage('system', anBottom, worldInfoPromptMessages, wiTextSources.get(WIPosition.AuthorNoteBottom)))
     : null
 
   if (skippedScripts.size > 0) {
@@ -625,12 +677,13 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
   }
 
   if (input.transformPrompt) {
-    history = history.map((m,index)=>({...m,content:input.transformPrompt!(m.content,{role:m.role,worldinfo:false,depth:history.length-index-1})}))
+    history = history.map(m=>({...m,content:input.transformPrompt!(m.content,{role:m.role,worldinfo:false,depth:historyDepth.get(m) ?? 0})}))
     // 重映射产生新对象；originalHistory/historyDepth 按对象身份追踪，必须随之重建，
     // 否则模板序列的 depth 归 0、history 标记落空、historyContent 与 asTurn 判定全部失效。
     originalHistory.clear()
     historyDepth.clear()
-    history.forEach((message,index)=>{originalHistory.add(message);historyDepth.set(message,history.length-index-1)})
+    historyAnchors.clear()
+    history.forEach((message,index)=>{originalHistory.add(message);historyDepth.set(message,historyDepths[index]!);historyAnchors.set(message,layoutHistory[index]!)})
     for (const m of [...beforeHistory,...afterHistory,...(anBottomMessage ? [anBottomMessage] : [])]) {
       const content = input.transformPrompt(m.content,{role:m.role,worldinfo:worldInfoPromptMessages.has(m),depth:0})
       if (content!==m.content) {m.content=content;asTurn(m)}
@@ -649,16 +702,19 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
     ;(byDepth.get(inj.depth) ?? byDepth.set(inj.depth, []).get(inj.depth)!).push(inj)
   }
   const depths = [...byDepth.keys()].sort((a, b) => b - a)
+  const depthChatHistory = history.filter(message=>historyAnchors.get(message)?.chat)
   for (const depth of depths) {
-    const at = Math.max(0, history.length - depth)
-    const group = byDepth.get(depth)!.sort((a, b) => a.order - b.order)
+    // 模板缓冲与最终布局使用同一真实聊天边界；插件通知、system 与已插入片段不消耗 depth。
+    const next = depthChatHistory[Math.max(0, depthChatHistory.length - depth)]
+    const at = next ? history.indexOf(next) : 0
+    const group = byDepth.get(depth)!.sort(compareDepthInjections)
     history.splice(at, 0, ...group.map((g) => {
       const message:ChatMessage={role:g.role,content:g.content}
       depthBindings.set(message,g)
       return message
     }))
   }
-  const depth0 = depthInjections.filter((d) => d.depth === 0).sort((a, b) => a.order - b.order)
+  const depth0 = depthInjections.filter((d) => d.depth === 0).sort(compareDepthInjections)
 
   // ── 7. 全量序列与预算裁剪（历史最后裁） ──────────────────────────────────
   const tail: ChatMessage[] = [
@@ -673,6 +729,9 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
     ...afterHistory,
   ]
   let templateTurnContext:string[]=[]
+  const templateHistoryInsertions = new Map<ChatMessage, { before: string; after: string }>()
+  let preciseTemplateHistory = true
+  let templateTailInsertions: string[] | undefined
   if(input.processTemplateSequence) {
     const sequence=[...beforeHistory,...history,...tail]
     const items:TemplateSequenceMessage[]=sequence.map(message=>({message,
@@ -681,6 +740,9 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
       history:originalHistory.has(message),
     }))
     const processed=input.processTemplateSequence(items)
+    templateTailInsertions=processed.tailInsertions
+    preciseTemplateHistory=items.filter(item=>item.history).every(item=>item.historyInsertions!==undefined)
+    for(const item of items) if(item.history && item.historyInsertions) templateHistoryInsertions.set(item.message,item.historyInsertions)
     for(const item of items) if(item.history && item.historyContent!==undefined) processedHistory.set(item.message,item.historyContent)
     templateTurnContext=processed.turnContext ?? []
     if(processed.log) log.push(...processed.log)
@@ -693,12 +755,56 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
       }
       if(injection) injection.content=message.content
     }
-    // 只有声明或变量写入的模板仍执行，但不能留下空消息。
-    for(const bucket of [beforeHistory,history,tail]) {
-      for(let index=bucket.length-1;index>=0;index--) if(!bucket[index]!.content.trim()) bucket.splice(index,1)
+    // 原始历史即使没有文字仍保留身份（例如图片），后置 INSERT 必须能准确引用它。
+    // 只有声明或变量写入的插件空输出由下面的统一清理删除。
+  }
+  for (const bucket of [beforeHistory, history, tail]) {
+    for (let index=bucket.length-1;index>=0;index--) {
+      const message=bucket[index]!
+      if (!originalHistory.has(message) && !message.content.trim()) bucket.splice(index,1)
     }
   }
   const liveOutsideHistory = [...beforeHistory, ...tail]
+  // 在模拟裁剪前保留尾部的真实内容。后置条目即使完全静态也不能回到 system 前缀。
+  const liveTail = [...tail]
+  // 实际请求计划在模拟预算裁剪前保存插件正文；它只引用历史 ID，不携带经过正则的历史副本。
+  const layoutFragments: PromptLayoutFragment[] = []
+  const layoutMessageIndices = new Map<ChatMessage, number>()
+  const firstChat = layoutHistory.find(anchor=>anchor.chat)
+  const lastChat = [...layoutHistory].reverse().find(anchor=>anchor.chat)
+  const tailSet = new Set(tail)
+  for (const message of [...beforeHistory, ...history, ...tail]) {
+    const anchor = historyAnchors.get(message)
+    if (anchor) {
+      const inserted = preciseTemplateHistory ? templateHistoryInsertions.get(message) : undefined
+      if (inserted) for (const side of ['before', 'after'] as const) {
+        if (inserted[side].trim()) layoutFragments.push({ role: message.role, content: inserted[side],
+          sourceKeys: [`template:generate:history:${anchor.inputIndex}:${side}`], turnLocal: true,
+          placement: { kind: 'history-relative', anchor, side } })
+      }
+      continue
+    }
+    const injection = depthBindings.get(message)
+    const after = tailSet.has(message)
+    if (!message.content.trim()) continue
+    layoutMessageIndices.set(message, layoutFragments.length)
+    layoutFragments.push({ role: message.role, content: message.content,
+      sourceKeys: injection?.sourceKeys ?? messageSources.get(message) ?? ['assembly:notice'],
+      turnLocal: injection?.turn ?? turnMessages.has(message),
+      placement: injection ? promptDepthPlacement(layoutHistory, injection.depth, injection.order)
+        : { kind: after ? 'after-history' : 'before-history',
+          ...((after ? lastChat : firstChat) ? { anchor: (after ? lastChat : firstChat)! } : {}),
+          ...(relativeOrders.has(message) ? { order: relativeOrders.get(message)! } : {}) },
+    })
+  }
+  for (const content of templateTailInsertions ?? []) layoutFragments.push({role:'system',content,
+    sourceKeys:['template:generate:empty-sequence'],turnLocal:true,placement:{kind:'after-history'}})
+  if (!preciseTemplateHistory || (!layoutHistory.length && templateTailInsertions===undefined)) {
+    for (const content of templateTurnContext) layoutFragments.push({ role: 'system', content,
+      sourceKeys: ['template:legacy-turn-context'], turnLocal: true, compatibilityFallback: true,
+      placement: { kind: 'after-history', ...(lastChat ? { anchor: lastChat } : {}) } })
+  }
+  const layout = createPromptLayout(layoutHistory, layoutFragments)
   const estimate = (m: ChatMessage) => input.estimateTokens(m.content)
   const totalBudget = Math.max(0, input.budget.maxTokens - input.budget.reserveForOutput)
   const tokensOf = (msgs: ChatMessage[]) => msgs.reduce((s, m) => s + estimate(m), 0)
@@ -739,12 +845,15 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
   for (const label of trimmedSections) log.push({ kind: 'trim', detail: label })
 
   // ── 8. dsh 通道：standing（稳定前缀）与 turnContext（本轮触发层）分开 ──
-  const outsideHistory = liveOutsideHistory
+  const tailMessages = new Set(liveTail)
+  const outsideHistory = liveOutsideHistory.filter(message => !tailMessages.has(message))
   // 插进历史中间的注入（@D / depth_prompt / 预设 in-chat）预览能看到；live 不能改日志，
   // 静态的（无本轮宏）并入 standing 钉死——字节稳定、命中前缀缓存，不再每轮全价重付；
   // 本轮才变的并入 turn 尾。
-  const splicedStanding = depthInjections.filter((d) => d.depth !== 0 && !d.turn).map((d) => d.content)
-  const splicedTurn = depthInjections.filter((d) => d.depth !== 0 && d.turn).map((d) => d.content)
+  const spliced = depthInjections.filter((d) => d.depth !== 0)
+    .sort((a, b) => b.depth - a.depth || compareDepthInjections(a, b))
+  const splicedStanding = spliced.filter((d) => !d.turn).map((d) => d.content)
+  const splicedTurn = spliced.filter((d) => d.turn).map((d) => d.content)
   const standing = joinPromptParts([
     ...outsideHistory.filter((m) => !turnMessages.has(m)).map((m) => m.content),
     ...splicedStanding,
@@ -753,13 +862,31 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
     ...outsideHistory.filter((m) => turnMessages.has(m)).map((m) => m.content),
     ...splicedTurn,
     ...templateTurnContext,
+    ...liveTail.map((m) => m.content),
   ])
+  const nonSystem = [...liveOutsideHistory].filter(message => message.role !== 'system')
+  if (nonSystem.length || depthInjections.some(injection => injection.role !== 'system')) {
+    log.push({ kind: 'live-compatibility', detail: '已保存预设 user/assistant 角色布局；DeepSeek 官方通道按原角色投影，其它通道映射为提示词文本。末尾 assistant 不等同于供应商专用助手预填。' })
+  }
+  if (depthInjections.some(injection => injection.depth > 0)) {
+    log.push({ kind: 'live-compatibility', detail: '已冻结真实聊天身份与深度边界；DeepSeek 官方通道据此插入。system 深度按模型能力处理，仅支持首条 system 时合并系统指令；其它通道沿用 standing/tavern:turn 映射。原宿主历史正文保持不变。' })
+  }
   const system = joinPromptParts([standing, turnContext])
 
   return {
     messages,
+    layout,
+    messageProvenance: messages.map(message => {
+      const anchor = historyAnchors.get(message)
+      if (anchor) return { kind: 'history', anchor: { ...anchor } }
+      const index = layoutMessageIndices.get(message)
+      const entryKey = index === undefined ? undefined : layout.entries[index]?.key
+      if (entryKey === undefined) throw new Error('提示词消息缺少布局来源')
+      return { kind: 'layout', entryKey }
+    }),
     standing,
     turnContext,
+    hasTurnTail: liveTail.length > 0,
     system,
     history:history.map(message=>processedHistory.has(message)?{...message,content:processedHistory.get(message)!}:message),
     log,

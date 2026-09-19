@@ -8,7 +8,7 @@
  * 与世界书同口径统一拒绝）。
  */
 import { describe, expect, it } from 'vitest'
-import { exportStPreset, parseStPreset } from '../src/state/presetStore.js'
+import { exportStPreset, parseStoredPreset, parseStPreset } from '../src/state/presetStore.js'
 
 const ST_PRESET = {
   prompts: [
@@ -204,6 +204,18 @@ describe('parseStPreset', () => {
 })
 
 describe('导入硬上限与错型拒绝（与世界书同口径，统一拒绝）', () => {
+  it('聊天深度在导入与内部保存时拒绝负数、小数和不安全整数，合法数字字符串可归一化', () => {
+    const raw = { identifier: 'depth', content: 'RULE', injection_position: 1, injection_depth: '2' }
+    const valid = parseStPreset({ prompts: [raw] }).preset
+    expect(valid.entries[0]!.depth).toBe(2)
+    expect(parseStoredPreset(valid).entries[0]!.depth).toBe(2)
+    for (const depth of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(() => parseStPreset({ prompts: [{ ...raw, injection_depth: depth }] })).toThrow(/injection_depth.*非负/)
+      expect(() => parseStoredPreset({ ...valid, entries: [{ ...valid.entries[0]!, depth }] })).toThrow(/injection_depth.*非负/)
+    }
+    expect(parseStPreset({ prompts: [{ ...raw, injection_position: 0, injection_depth: -1 }] }).preset.entries[0]!.depth).toBe(-1)
+  })
+
   it('prompts 条目数超过 2000 拒绝导入', () => {
     const prompts = Array.from({ length: 2001 }, (_, i) => ({ identifier: `p${i}`, content: 'c' }))
     expect(() => parseStPreset({ prompts })).toThrow(/条目数 2001 超过上限 2000/)
@@ -263,7 +275,7 @@ describe('exportStPreset 与往返', () => {
     expect(jb.injection_position).toBe(1)
     expect(jb.injection_depth).toBe(2)
     expect(jb.injection_order).toBe(90)
-    expect(jb.system_prompt).toBe(false)
+    expect(jb.system_prompt).toBe(true) // 内建槽位身份独立于 user 消息角色
     expect(jb.injection_trigger).toEqual(['key']) // 导出带回
     expect(exported.prompts[0]!.system_prompt).toBe(true)
     expect(exported.prompts[0]!.forbid_overrides).toBeUndefined() // 默认值不导出

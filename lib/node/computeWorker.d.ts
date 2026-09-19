@@ -6,6 +6,7 @@ import type { TemplateContext, TemplateScopes, TemplateRegexDescriptor } from '.
 import type { TemplateReplay } from '../core/templateReplay.js';
 import type { TemplateMessageVariables } from '../core/templateMessageVariables.js';
 import type { TemplateDisplayPart } from '../core/templateDisplay.js';
+import { presentTemplateDisplayResult } from './templateDisplay.js';
 import type { TemplateContinuation } from '../core/templateContinuation.js';
 type SerializableMacros = Omit<MacroContext, 'random' | 'onUnknown'>;
 export interface ComputeJobs {
@@ -65,9 +66,7 @@ export interface ComputeJobs {
             rules: Parameters<typeof applyRegexRules>[1];
             macroCtx: SerializableMacros;
         };
-        output: {
-            parts: TemplateDisplayPart[];
-        };
+        output: ReturnType<typeof presentTemplateDisplayResult>;
     };
 }
 export {};

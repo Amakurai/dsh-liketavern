@@ -245,6 +245,54 @@ describe('开场白开始状态（真实存储 + 宿主 Session）', () => {
 })
 
 describe('内联 HTML 卡面服务展示（真实剧情存储）', () => {
+  it.each(['正文里有一个 ` 符号。','正文里有 ~~~ 波浪线。'])('普通标点不能使展示正则生成的卡面永久回退，重复刷新只读：%s',async prefix=>{
+    const {cardId}=await importCard(paths.characters,makeCard())
+    const session=Session.create('session-render-markers' as Session['id'])
+    sessions.set(session.id,session)
+    await state.saveBinding(makeBinding({sessionId:session.id,cardId}))
+    const html='<div class="status"><strong>状态栏已加载</strong></div>',text=prefix+'\n\nSTATUS\n\n后续正文'
+    await service.saveRegexRules({rules:[{id:'status',name:'状态栏',find:'STATUS',replace:html,enabled:true,scopes:['output'],timing:['render'],minDepth:null,maxDepth:null,substituteRegex:0,source:'user'}]})
+    const message=session.append('assistant/message',{stream:[],turn:0,step:0,message:greetingMessage(text)},{surfaceOp:'append'})
+    const binding=(await state.loadBinding(session.id))!,workspace=await state.storyWorkspace(cardId,binding.storyId)
+    const before=await workspace.fs.readText('state/template.json'),history=session.snapshotEvents()
+    for(let index=0;index<2;index++){
+      const rendered=await service.renderOutputText({sessionId:session.id,messageId:message.seq,text})
+      expect(rendered.htmls).toEqual([html])
+      expect(rendered.parts).toEqual([{kind:'markdown',text:prefix},{kind:'html',text:html},{kind:'markdown',text:'后续正文'}])
+    }
+    expect(await workspace.fs.readText('state/template.json')).toBe(before)
+    expect(session.snapshotEvents()).toEqual(history)
+  })
+
+  it.each([false,true])('展示规则失败返回诊断且保留成功卡面，普通与缓存模板路径只读：cached=%s',async cached=>{
+    const {loadTemplateState,templateTextHash}=await import('../src/state/template.js')
+    const {cardId}=await importCard(paths.characters,makeCard())
+    const session=Session.create(`session-render-errors-${cached}` as Session['id'])
+    sessions.set(session.id,session)
+    await state.saveBinding(makeBinding({sessionId:session.id,cardId}))
+    const html='<div>有效状态栏</div>',text='正文\nSTATUS'
+    await service.saveRegexRules({rules:[
+      {id:'broken',name:'损坏的展示规则',find:'[',replace:'不会执行',enabled:true,scopes:['output'],timing:['render'],minDepth:null,maxDepth:null,substituteRegex:0,source:'user'},
+      {id:'status',name:'状态栏',find:'STATUS',replace:html,enabled:true,scopes:['output'],timing:['render'],minDepth:null,maxDepth:null,substituteRegex:0,source:'user'},
+    ]})
+    const message=session.append('assistant/message',{stream:[],turn:0,step:0,message:greetingMessage(text)},{surfaceOp:'append'})
+    const binding=(await state.loadBinding(session.id))!,workspace=await state.storyWorkspace(cardId,binding.storyId)
+    if(cached){
+      const snapshot=await loadTemplateState(workspace.fs)
+      snapshot.outputs[String(message.seq)]={hash:templateTextHash(text),text,parts:[{kind:'markdown',text:'正文'},{kind:'markdown',text:'STATUS'}]}
+      await workspace.fs.writeText('state/template.json',JSON.stringify(snapshot))
+    }
+    const before=await workspace.fs.readText('state/template.json'),history=session.snapshotEvents()
+    for(let index=0;index<2;index++){
+      const result=await service.renderOutputText({sessionId:session.id,messageId:message.seq,text})
+      expect(result.htmls).toEqual([html])
+      expect(result.regexDiagnostics).toMatchObject({total:1,errors:[{ruleId:'broken',ruleName:'损坏的展示规则',message:expect.any(String)}]})
+      expect(result.regexDiagnostics!.errors[0]!.message.length).toBeGreaterThan(0)
+    }
+    expect(await workspace.fs.readText('state/template.json')).toBe(before)
+    expect(session.snapshotEvents()).toEqual(history)
+  })
+
   it('普通回复和展示正则生成的裸 div 保留正文顺序，重复刷新不修改消息与模板文件', async () => {
     const {cardId} = await importCard(paths.characters, makeCard())
     const session = Session.create('session-fragment' as Session['id'])

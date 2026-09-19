@@ -6,10 +6,10 @@ export declare const zh: {
     readonly 'chip.mvuAbandon.done': "自动 MVU 已关闭，待处理任务已放弃，已保存变量保留。";
     readonly 'chip.field.helperMvu': "启用原生 MVU 自动更新";
     readonly 'chip.field.helperMvuNote': "从当前完成的角色消息初始化，等待本会话脚本就绪后更新变量。需要保持页面打开；失败或断开时保留任务。";
-    readonly 'chip.preview.actual': "最近宿主请求";
+    readonly 'chip.preview.actual': "最近请求";
     readonly 'chip.preview.noActual': "尚未捕获请求。先发送一轮消息；重启或缓存淘汰后旧请求不可用。";
     readonly 'chip.preview.actualTruncated': "（请求超过显示上限，内容已截断）";
-    readonly 'chip.preview.notice': "最近请求来自宿主 llm/stream 边界（适配器转换前）。其他页签为重新计算的 ST 模拟，深度插入、历史正则与裁剪不能代表实际请求。";
+    readonly 'chip.preview.notice': "DeepSeek 官方通道按预设布局发送；system 深度取决于模型能力，只支持首条 system 的模型会合并系统指令。最近请求显示处理后的消息和兼容说明。其他通道沿用两段提示词。ST 模拟独立计算；历史正则改写和供应商专用助手预填尚未接入普通聊天。";
     readonly 'chip.characterFallback': "角色";
     readonly 'chip.dialog.title': "Tavern 绑定";
     readonly 'chip.group.binding': "绑定";

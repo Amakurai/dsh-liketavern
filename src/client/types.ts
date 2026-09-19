@@ -17,6 +17,12 @@ export type Envelope<T> = { ok: true; value: T } | { ok: false; error: { code: s
 /** 设置命名空间 dsh-tavern 的原始（schemastery 解析后）形状；单一来源是 host 侧 TavernConfigRaw；maxTokens 为数字，0 = 不限。 */
 export type TavernSettings = TavernMethodResults['getSettings']['settings']
 
+/** 兼容旧版保存的设置草稿；字段与宿主 schema 同名，默认遵循 ST 的卡级提示词偏好。 */
+export const DEFAULT_PROMPT_PREFERENCES: TavernSettings['prompts'] = {
+  preferCharacterPrompt: true,
+  preferCharacterInstructions: true,
+}
+
 export const EMPTY_SESSION_DEFAULTS: TavernSettings['defaults'] = {
   cardId: '',
   presetId: '',

@@ -1,6 +1,6 @@
 /** 设置中的脚本资产管理：无需绑定会话，按全局、角色与预设选择独立脚本库，复用带草稿保护的编辑器。 */
 import { useRef, useState,useSyncExternalStore } from 'react'
-import {scriptStatusStore,retryScriptMvu} from '../helperScriptStatus.js'
+import {scriptStatusStore,retryScriptMvu,isScriptWindowAccessError} from '../helperScriptStatus.js'
 import type { HelperScriptAsset, HelperScriptTarget } from '../../core/helperScripts.js'
 import type { TavernRemote } from '../types.js'
 import { HelperScriptEditor } from '../helperScriptEditor.js'
@@ -40,7 +40,13 @@ export function ScriptSettings({remote}:{remote:TavernRemote}) {
         {runtime.nativeMvu&&<Muted>{t(runtime.mvuError?'speech.mvuRetry':runtime.mvuBusy?'speech.mvuRunning':runtime.scripts.every(script=>script.state==='ready')?'speech.mvuReady':'speech.mvuWaiting')}</Muted>}
         <Err message={runtime.mvuError??null}/>
         {runtime.mvuError&&<Btn onClick={()=>retryScriptMvu(runtime.sessionId)}>{t('speech.mvuRetry')}</Btn>}
-        <ul>{runtime.scripts.map(script=><li key={script.id}><span>{script.name}</span><span className="dsh-tavern-scriptRuntimeStatus">{t(`settings.scripts.runtime.${script.state}`)}</span>{script.error&&<Err message={script.error}/>}</li>)}</ul>
+        <ul>{runtime.scripts.map(script=>{
+          const incompatible=script.state==='error'&&isScriptWindowAccessError(script.error)
+          return <li key={script.id}><span>{script.name}</span><span className="dsh-tavern-scriptRuntimeStatus">{t(`settings.scripts.runtime.${incompatible?'incompatible':script.state}`)}</span>
+            {incompatible&&<Muted>{t('settings.scripts.windowAccess')}</Muted>}
+            {script.error&&<Err message={script.error}/>}
+          </li>
+        })}</ul>
       </div>)}
     </section>
     <div className="dsh-tavern-scriptLibraries" aria-busy={busy}>

@@ -69,6 +69,12 @@ describe('resolveTavernReasoningEffort', () => {
     expect(resolveTavernReasoningEffort('disabled', undefined, 'max', undefined)).toBeUndefined()
   })
 
+  it('同一官方传输的 Tavern 路由在元数据失败时仍保留关闭思考的明确选择', () => {
+    expect(resolveTavernReasoningEffort('disabled', undefined, 'high', 'tavern-deepseek')).toBe('off')
+    expect(resolveTavernReasoningEffort('disabled', { efforts: [{ id: 'high' }] }, 'high', 'tavern-deepseek')).toBe('off')
+    expect(resolveTavernReasoningEffort('enabled', undefined, 'high', 'tavern-deepseek')).toBe('high')
+  })
+
   it('开启档位在无公布信息时沿用当前非 off 档；off 当前档不沿用', () => {
     expect(resolveTavernReasoningEffort('enabled', undefined, 'max', 'deepseek-official')).toBe('max')
     expect(resolveTavernReasoningEffort('enabled', undefined, 'off', 'deepseek-official')).toBeUndefined()
@@ -91,15 +97,22 @@ describe('mergeTavernCallConfig', () => {
     })
   })
 
-  it('maxTokens 为 null 且无 stop 时不覆盖这两项；无档位则不写 reasoningEffort', () => {
+  it('maxTokens 为 null 且无 stop 时撤销旧 header 中的插件值；无档位则不写 reasoningEffort', () => {
     const sampling = { ...DEFAULT_SAMPLING, maxTokens: null, stop: [] }
     expect(
-      mergeTavernCallConfig({ provider: 'p', model: 'm', maxTokens: 111 }, sampling, undefined),
+      mergeTavernCallConfig({ provider: 'p', model: 'm', maxTokens: 111, stop: ['OLD'] }, sampling, undefined),
     ).toEqual({
       provider: 'p',
       model: 'm',
       temperature: sampling.temperature,
-      maxTokens: 111,
     })
+  })
+
+  it('清空预设输出上限后恢复明确的宿主 AgentOptions 上限，不沿用旧预设值', () => {
+    const config = { provider: 'p', model: 'm', maxTokens: 111, stop: ['OLD'] }
+    const result = mergeTavernCallConfig(config, DEFAULT_SAMPLING, undefined, 4096)
+    expect(result).toEqual({ provider: 'p', model: 'm', temperature: 1, maxTokens: 4096 })
+    expect(config).toEqual({ provider: 'p', model: 'm', maxTokens: 111, stop: ['OLD'] })
+    expect(mergeTavernCallConfig(config, { ...DEFAULT_SAMPLING, maxTokens: 2048 }, undefined, 4096).maxTokens).toBe(2048)
   })
 })

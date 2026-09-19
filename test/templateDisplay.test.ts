@@ -405,7 +405,7 @@ it('真实剧情落盘后按顺序重绘，资产修改和重复读取不重跑�
   await runTavernPipeline({state,sessionId:'s1',agent:null,mode:'live',historyOverride:[{role:'user',content:'hi'}]})
   const text='<% incvar("count") %><%= "**完成**" %>'
   const events=[
-    {type:'assistant/message',seq:5,time:0,data:{stream: [{type:'chunk',time:0,chunk:{type:'finish',reason:{kind:'stop'}}}], turn:1,step:1,message:createAssistantMessage({content:[{type:'text',text}]})}},
+    {type:'assistant/message',seq:5,time:0,data:{stream: [{type:'chunk',time:0,chunk:{type:'finish',reason:{kind:'stop'}}}], turn:1,step:1,message:createAssistantMessage({source:{provider:'factory',model:'factory'},content:[{type:'text',text}]})}},
     {type:'turn/end',seq:6,time:0,data:{turn:1,reason:{kind:'completed'}}}] as unknown as SessionEvent[]
   const session={id:'s1' as Session['id'],snapshotEvents:()=>events}
   await onTurnEnd(state,'s1',session)

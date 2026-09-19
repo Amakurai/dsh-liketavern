@@ -143,7 +143,7 @@ it('实际剧情事务保存 MVU 消息变量，重建宿主仍可读且同卡�
     const {cardId}=await state.createCharacter('MVU 工厂角色')
     for(const sessionId of ['mvu-session','other'])await state.saveBinding({sessionId,cardId,presetId:null,personaId:null,lorebookIds:[],characterLorebookId:null,interactiveCards:null,greetingIndex:0,createdAt:new Date(0).toISOString()})
     const events=[{type:'turn/start',seq:0,time:0,data:{turn:1}},
-      {type:'assistant/message',seq:1,time:0,surfaceOp:'append',data:{stream: [], turn:1,step:1,message:createAssistantMessage({content:[{type:'text',text:'出发'}]})}},
+      {type:'assistant/message',seq:1,time:0,surfaceOp:'append',data:{stream: [], turn:1,step:1,message:createAssistantMessage({source:{provider:'factory',model:'factory'},content:[{type:'text',text:'出发'}]})}},
       {type:'turn/end',seq:2,time:0,data:{turn:1,reason:{kind:'completed'}}}] as unknown as SessionEvent[]
     const ctx={sessions:{get:()=>({snapshotEvents:()=>events})},get:()=>undefined} as unknown as Context
     const before=await getHelperSnapshot(ctx,state,'mvu-session',1),f=frame(before)

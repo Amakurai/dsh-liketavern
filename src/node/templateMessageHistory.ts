@@ -6,21 +6,21 @@ import type { ChatMessage } from '../core/types.js'
 import type { TemplateMessageIdentity } from '../core/templateMessageVariables.js'
 import { isSyntheticUserText } from '../core/dshPrompt.js'
 
-export function buildTemplateMessageHistory(messages:readonly Message[],pending:readonly {id:string;text:string}[],charName:string,userName:string,events:readonly SessionEvent[]=[]) {
+export function buildTemplateMessageHistory(messages:readonly Message[],pending:readonly {id:string;text:string;hasImage?:boolean}[],charName:string,userName:string,events:readonly SessionEvent[]=[]) {
   const visible=new Set(messages.map(message=>String(message.id)))
   const seqs=new Map<string,number>()
   for(const event of events) {const message=deriveEventMessage(event);if(message && visible.has(message.id)) seqs.set(message.id,event.seq)}
   const history:ChatMessage[]=[],identities:TemplateMessageIdentity[]=[]
   const seen=new Set<string>()
-  const add=(id:string,role:ChatMessage['role'],content:string)=>{
-    if(!content.trim() || role==='user' && isSyntheticUserText(content) || seen.has(id)) return
+  const add=(id:string,role:ChatMessage['role'],content:string,hasImage=false)=>{
+    if(!content.trim() && !hasImage || role==='user' && isSyntheticUserText(content) || seen.has(id)) return
     seen.add(id)
     const name=role==='assistant' ? charName : role==='user' ? userName : undefined
     history.push({role,content,...(name ? {name} : {})})
     const seq=seqs.get(id)
     identities.push({messageId:id,swipeId:0,...(seq!==undefined ? {hostMessageId:seq} : {})})
   }
-  for(const message of messages) add(message.id,message.role,message.content.filter(block=>block.type==='text').map(block=>block.text).join('\n'))
-  for(const message of pending) add(message.id,'user',message.text)
+  for(const message of messages) add(message.id,message.role,message.content.filter(block=>block.type==='text').map(block=>block.text).join('\n'),message.content.some(block=>block.type==='image'))
+  for(const message of pending) add(message.id,'user',message.text,message.hasImage)
   return {history,identities}
 }

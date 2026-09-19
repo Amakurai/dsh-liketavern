@@ -12,6 +12,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent';
 import type { LlmRuntime, Message } from '@deepseek-ai/dsh-llm';
 import { type AssembledPrompt } from '../core/assemble.js';
 import type { ChatMessage, WorldDelta, WorldInfoEntry } from '../core/types.js';
+import type { PromptLayout } from '../core/promptLayout.js';
 import { type TemplateContext } from '../core/template.js';
 import { type TemplateReplay } from '../core/templateReplay.js';
 import type { TavernState } from './state.js';
@@ -45,6 +46,8 @@ export interface PipelineResult {
     system: string;
     /** ST 语义全量序列（预览用）。 */
     messages: ChatMessage[];
+    /** 已冻结的预设布局；真实历史由适配器按消息身份保留。 */
+    layout?: PromptLayout;
     /** 入模历史（经正则与预算裁剪后）。 */
     history: ChatMessage[];
     assembled: AssembledPrompt;

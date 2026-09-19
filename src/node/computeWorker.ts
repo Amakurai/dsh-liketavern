@@ -13,7 +13,7 @@ import { parseTemplatePlacement } from '../core/templatePlacement.js'
 import type { TemplateReplay } from '../core/templateReplay.js'
 import type { TemplateMessageVariables } from '../core/templateMessageVariables.js'
 import type { TemplateDisplayPart } from '../core/templateDisplay.js'
-import { renderTemplateDisplay, presentTemplateDisplay } from './templateDisplay.js'
+import { renderTemplateDisplay, presentTemplateDisplayResult } from './templateDisplay.js'
 import type { TemplateContinuation } from '../core/templateContinuation.js'
 import { prepareContinuedTemplate,exportTemplateContinuation } from './templateContinuation.js'
 import { parseTemplateContinuation,templatePreloadRevision } from '../state/templateContinuation.js'
@@ -39,7 +39,7 @@ export interface ComputeJobs {
   }
   display: {
     input: {parts:TemplateDisplayPart[];rules:Parameters<typeof applyRegexRules>[1];macroCtx:SerializableMacros}
-    output: {parts:TemplateDisplayPart[]}
+    output: ReturnType<typeof presentTemplateDisplayResult>
   }
 }
 
@@ -103,7 +103,7 @@ if (parentPort) {
       } finally { sandbox?.dispose() }
     }
     else if (kind === 'render') { beginComputing(); value = applyRegexRules(input.text, input.rules, { scope: 'output', timing: 'render' }, input.macroCtx) }
-    else if (kind === 'display') { beginComputing(); value = {parts:presentTemplateDisplay(input.parts,input.rules,input.macroCtx)} }
+    else if (kind === 'display') { beginComputing(); value = presentTemplateDisplayResult(input.parts,input.rules,input.macroCtx) }
     else throw new Error('未知提示词任务')
     if (JSON.stringify(value).length > 16 * 1024 * 1024) throw new Error('提示词计算结果超过 16 MiB 上限')
     parentPort.postMessage({ value })

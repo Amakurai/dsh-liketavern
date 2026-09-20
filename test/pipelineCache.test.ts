@@ -19,6 +19,7 @@ import { runTavernPipeline } from '../src/node/pipeline.js'
 import type { TavernPaths } from '../src/node/paths.js'
 import { TavernState } from '../src/node/state.js'
 import { importCard } from '../src/state/workspace.js'
+import { parseJsonCard } from '../src/state/card.js'
 import { onTurnStart,onTurnEnd } from '../src/node/sessionLifecycle.js'
 
 let root: string
@@ -73,6 +74,28 @@ function makeCard(overrides: Partial<CharacterCard> = {}): CharacterCard {
 const TURN1_HISTORY = [{ role: 'user' as const, content: '苹果好吃吗' }]
 
 describe('缓存字节稳定性守卫', () => {
+  it('V3 nickname 作为提示词身份展开，但不改角色资产展示名', async () => {
+    const card = parseJsonCard({ spec: 'chara_card_v3', data: {
+      name: '资产展示名', description: '模型身份={{char}}', nickname: '剧情昵称',
+    } })
+    const { cardId } = await importCard(paths.characters, card)
+    await saveBinding(paths, {
+      sessionId: 'nickname-preview', cardId, cardName: card.name, presetId: null, personaId: null,
+      lorebookIds: [], characterLorebookId: null, interactiveCards: null, greetingIndex: 0,
+      createdAt: new Date(0).toISOString(),
+    })
+
+    const result = await runTavernPipeline({
+      state, sessionId: 'nickname-preview', agent: null, mode: 'preview',
+      historyOverride: [{ role: 'user', content: '你好' }],
+    })
+
+    expect(result?.standing).toContain('模型身份=剧情昵称')
+    expect(result?.standing).not.toContain('模型身份=资产展示名')
+    expect(result?.templateContext?.char).toBe('剧情昵称')
+    expect((await state.loadCharacter(cardId))?.card.name).toBe('资产展示名')
+  })
+
   it('跨轮 standing 字节一致；同轮两步快照字节一致；常驻条目恒定注入', async () => {
     const { cardId } = await importCard(paths.characters, makeCard())
     // 常驻条目故意给 probability=100：standing-safe 豁免掷骰，必须恒定出现在 standing 里

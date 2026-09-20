@@ -25,7 +25,7 @@ function frame(sessionId='session',storyId='story',nativeMvu?:Parameters<typeof 
   let closed=false
   const close=()=>{if(closed)return;closed=true;run('cleanup()');endpoint.dispose()}
   cleanups.push(close)
-  return {run,close,errors,deliveries,reinstall:()=>{run('cleanup()');install()}}
+  return {run,close,errors,deliveries,setHostEventsEnabled:endpoint.setHostEventsEnabled,reinstall:()=>{run('cleanup()');install()}}
 }
 
 it('first/last 在整个剧情排序，监听修改按顺序传播，发送方原对象身份保留',async()=>{
@@ -151,6 +151,17 @@ it('宿主显示事件在同剧情按 first/last 顺序分发，预备完成前�
   const result=emitHelperHostEvent('session','story','character_message_rendered',[2,'normal']);await settle()
   expect(a.run('seen')).toEqual(['fresh',[2,'normal']]);expect(b.run('seen')).toEqual([])
   b.run('release()');await result;expect(b.run('seen')).toEqual([[2,'normal']])
+})
+it('重绘锁临时跳过旧卡宿主监听，失败解锁后 once 仍可正常执行',async()=>{
+  const old=frame(),candidate=frame()
+  old.run('window.n=0;__dshTavernPrepareHostEvent=async()=>{throw Error("display locked")};eventOnce(tavern_events.CHARACTER_MESSAGE_RENDERED,()=>n++)')
+  candidate.run('window.n=0;__dshTavernPrepareHostEvent=async()=>{};eventOn(tavern_events.CHARACTER_MESSAGE_RENDERED,()=>n++)')
+  await settle();old.setHostEventsEnabled(false)
+  await emitHelperHostEvent('session','story','character_message_rendered',[0,'normal'])
+  expect(old.run('n')).toBe(0);expect(old.deliveries).toHaveLength(0);expect(candidate.run('n')).toBe(1)
+  old.run('__dshTavernPrepareHostEvent=async()=>{}');old.setHostEventsEnabled(true)
+  await emitHelperHostEvent('session','story','character_message_rendered',[0,'normal'])
+  expect(old.run('n')).toBe(1);expect(candidate.run('n')).toBe(2)
 })
 it('准备失败保留 once 监听，显式修复草稿后可重试；普通脚本事件不伪装宿主准备',async()=>{
   const {emitHelperHostEvent}=await import('../src/client/helperEventRouter.js')

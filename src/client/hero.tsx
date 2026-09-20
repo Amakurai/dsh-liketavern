@@ -13,7 +13,7 @@ import {
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { CharacterPicker, rememberCharacter } from './characterPicker.js'
 import { BINDING_CHANGED_EVENT } from './actions.js'
-import { cachedAvatar, cachedCharacterDetail, invalidateSessionBinding } from './cache.js'
+import { CHARACTER_CHANGED_EVENT, cachedAvatar, cachedCharacterDetail, invalidateSessionBinding } from './cache.js'
 import { bindingFromDefaults } from './chip.js'
 import { useT } from './i18n.js'
 import { isTavernSession, type UseSessions } from './mode.js'
@@ -136,6 +136,18 @@ function HeroCharacterSession(props: HeroProps) {
   )
 
   useEffect(() => {
+    if (!showHero || !binding) return
+    const onCharacterChanged = (event: Event) => {
+      if ((event as CustomEvent<string>).detail !== binding.cardId) return
+      detailLoader.reload()
+      avatarLoader.reload()
+      charsLoader.reload()
+    }
+    window.addEventListener(CHARACTER_CHANGED_EVENT, onCharacterChanged)
+    return () => window.removeEventListener(CHARACTER_CHANGED_EVENT, onCharacterChanged)
+  }, [showHero, binding?.cardId, detailLoader.reload, avatarLoader.reload, charsLoader.reload])
+
+  useEffect(() => {
     if (!showHero) return
     const onChanged = (e: Event) => {
       if ((e as CustomEvent<string>).detail === sessionId) bindingLoader.reload()
@@ -227,11 +239,15 @@ function HeroCharacterSession(props: HeroProps) {
   const selected = binding ? characters.find((c) => c.cardId === binding.cardId) : undefined
   const chipLabel = binding ? (detail?.name ?? selected?.name ?? t('hero.characterFallback')) : t('hero.pickCharacter')
   const variants = detail ? greetingVariants(detail) : []
-  const greetingIndex = binding?.greetingIndex ?? 0
+  // 编辑角色卡会缩短开场白列表，旧空白会话仍可能保存着原下标。预览、计数与
+  // 键盘翻页都以同一安全下标为准，避免正文回退到第一条却显示成“8/2”。
+  const storedGreetingIndex = binding?.greetingIndex ?? 0
+  const greetingIndex = Number.isSafeInteger(storedGreetingIndex)
+    && storedGreetingIndex >= 0 && storedGreetingIndex < variants.length ? storedGreetingIndex : 0
   const greetingText = detail
-    ? expandIdentityMacros(
+      ? expandIdentityMacros(
         variants[greetingIndex] ?? variants[0] ?? '',
-        { char: detail?.name ?? chipLabel, user: userName },
+        { char: detail?.characterName ?? detail?.name ?? chipLabel, user: userName },
       )
     : ''
   const hasAnyGreeting = variants.some((v) => v.trim() !== '')
@@ -390,7 +406,7 @@ function HeroCharacterSession(props: HeroProps) {
             </div>
           </div>
           {detailLoader.state.status === 'error' ? (
-            <div className="dsh-tavern-hero-previewText">{t('hero.detailLoadFailed')}</div>
+            <div className="dsh-tavern-hero-previewText" role="alert">{t('hero.detailLoadFailed')}</div>
           ) : greetingText ? (
             <div className="dsh-tavern-hero-quote">{hasEjs(greetingText)
               ? <TemplateGreetingPreview remote={remote} sessionId={sessionId} text={greetingText} />
@@ -404,6 +420,7 @@ function HeroCharacterSession(props: HeroProps) {
             <Btn primary size="md" disabled={busy || !greetingText.trim() || !detail} onClick={() => void startConversation()}>
               {t('hero.start')}
             </Btn>
+            {detailLoader.state.status === 'error' && <Btn disabled={busy} onClick={detailLoader.reload}>{t('action.retry')}</Btn>}
             {variants.length > 1 && (
               <div className="dsh-tavern-hero-swipe">
                 <button
@@ -411,11 +428,12 @@ function HeroCharacterSession(props: HeroProps) {
                   className="dsh-tavern-hero-swipeBtn"
                   disabled={busy}
                   title={t('hero.prevGreeting')}
+                  aria-label={t('hero.prevGreeting')}
                   onClick={() => void swipe(-1)}
                 >
                   <IconChevronLeftOutline14 />
                 </button>
-                <span className="dsh-tavern-hero-swipeIdx">
+                <span className="dsh-tavern-hero-swipeIdx" role="status" aria-live="polite" aria-atomic="true">
                   {greetingIndex + 1}/{variants.length}
                 </span>
                 <button
@@ -423,6 +441,7 @@ function HeroCharacterSession(props: HeroProps) {
                   className="dsh-tavern-hero-swipeBtn"
                   disabled={busy}
                   title={t('hero.nextGreeting')}
+                  aria-label={t('hero.nextGreeting')}
                   onClick={() => void swipe(1)}
                 >
                   <IconChevronRightOutline14 />

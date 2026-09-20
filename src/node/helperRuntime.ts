@@ -5,7 +5,7 @@ import {expandIdentityMacros} from '../core/macros.js'
 import { createHash } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
-import { helperJson, helperChanges, helperScopeKey, type HelperScopes, type HelperSnapshot } from '../core/helperRuntime.js'
+import { helperJson, helperChanges, helperScopeKey, type HelperDisplayContext, type HelperScopes, type HelperSnapshot } from '../core/helperRuntime.js'
 import { isSyntheticUserText } from '../core/dshPrompt.js'
 import { DEFAULT_USER_NAME } from '../core/persona.js'
 import { applyHelperChanges, commitHelperChanges, loadHelperScopes, loadHelperState, type HelperState } from '../state/helper.js'
@@ -14,6 +14,60 @@ import { withWorkspaceLock } from '../state/workspaceLock.js'
 import { readDisplaySessionEvents } from './sessionEvents.js'
 import type { TavernState } from './state.js'
 import { enabledHelperLibraries,type HelperScriptBundle } from '../core/helperScripts.js'
+import { characterPromptName } from '../core/characterData.js'
+
+/**
+ * Helper 历史只由不可变宿主事件快照与显示名称派生；一个长会话打开时，前端会并发为
+ * 每个历史气泡请求 renderOutputText。若每个请求都重扫完整日志并重算 sha256，会退化成
+ * O(消息数²)。这里只缓存最近若干会话的一份派生视图：
+ *
+ * - live Session 的 snapshotEvents() 通常在 append 后更换引用；兼容桩若原地增长，长度与尾事件也会失效；
+ * - 换卡/换剧情/换人设纳入 bindingKey，角色或人设改名再由显示名称失效；
+ * - 绑定、工作区、open floor 与 writable 绝不进入缓存，仍在每次读取及剧情锁内复核；
+ * - 最多保留 8 个会话，单条历史本身还有 helperHistoryOf 的 4 MiB / 4096 条上限。
+ */
+const HELPER_HISTORY_CACHE_SESSIONS = 8
+type HelperHistory = ReturnType<typeof helperHistoryOf>
+interface HelperHistoryCacheEntry {
+  events: readonly SessionEvent[]
+  eventCount: number
+  lastEvent: SessionEvent|undefined
+  lastEventSeq: number|undefined
+  bindingKey: string
+  charName: string
+  userName: string
+  history: HelperHistory
+  historyRevision: string
+  assistantIndexBySeq: ReadonlyMap<number,number>
+  indexByIdentity: ReadonlyMap<string,number>
+  lastBoundary: {type:'turn/start'|'turn/end';turn:number}|undefined
+}
+const helperHistoryCaches = new WeakMap<TavernState,Map<string,HelperHistoryCacheEntry>>()
+
+function cachedHelperHistory(state:TavernState,sessionId:string,events:readonly SessionEvent[],bindingKey:string,names:{char:string;user:string}):HelperHistoryCacheEntry {
+  let cache=helperHistoryCaches.get(state)
+  if(!cache){cache=new Map();helperHistoryCaches.set(state,cache)}
+  const previous=cache.get(sessionId)
+  const lastEvent=events.at(-1)
+  if(previous?.events===events&&previous.eventCount===events.length&&previous.lastEvent===lastEvent&&previous.lastEventSeq===lastEvent?.seq
+    &&previous.bindingKey===bindingKey&&previous.charName===names.char&&previous.userName===names.user){
+    // Map 的插入顺序兼作 LRU；命中移到末尾，避免活跃长会话被后台查询挤出。
+    cache.delete(sessionId);cache.set(sessionId,previous)
+    return previous
+  }
+  const history=helperHistoryOf(events,names),assistantIndexBySeq=new Map<number,number>(),indexByIdentity=new Map<string,number>()
+  history.forEach((message,index)=>{if(!indexByIdentity.has(message.identity))indexByIdentity.set(message.identity,index);if(message.role==='assistant')assistantIndexBySeq.set(message.seq,index)})
+  let lastBoundary:HelperHistoryCacheEntry['lastBoundary']
+  for(let index=events.length-1;index>=0;index--){
+    const event=events[index]!
+    if(event.type==='turn/start'||event.type==='turn/end'){lastBoundary={type:event.type,turn:event.data.turn};break}
+  }
+  const entry={events,eventCount:events.length,lastEvent,lastEventSeq:lastEvent?.seq,bindingKey,charName:names.char,userName:names.user,history,
+    historyRevision:helperHistoryRevision(history),assistantIndexBySeq,indexByIdentity,lastBoundary} satisfies HelperHistoryCacheEntry
+  cache.delete(sessionId);cache.set(sessionId,entry)
+  while(cache.size>HELPER_HISTORY_CACHE_SESSIONS)cache.delete(cache.keys().next().value!)
+  return entry
+}
 
 export function helperHistoryOf(events: readonly SessionEvent[], names: {char:string;user:string}) {
   const messages: {seq:number;identity:string;name:string;role:'user'|'assistant';message:string}[] = []
@@ -40,31 +94,33 @@ async function helperContext(ctx:Context,state:TavernState,sessionId:string,mess
   if (!binding?.storyId) throw new Error('会话未绑定可用剧情')
   const events=await readDisplaySessionEvents(ctx,sessionId)
   const card=await state.loadCharacter(binding.cardId),persona=await state.resolvePersona(binding.personaId)
-  const history=helperHistoryOf(events,{char:card?.card.name??'Assistant',user:persona?.name??DEFAULT_USER_NAME})
-  const currentMessageId=history.findIndex(message=>message.seq===messageId && message.role==='assistant')
+  const charName=card?characterPromptName(card.card):'Assistant'
+  const names={char:card?.card.name??'Assistant',user:persona?.name??DEFAULT_USER_NAME}
+  const bindingKey=`${binding.cardId}\0${binding.storyId}\0${binding.personaId??''}`
+  const cached=cachedHelperHistory(state,sessionId,events,bindingKey,names)
+  const history=cached.history,currentMessageId=cached.assistantIndexBySeq.get(messageId)??-1
   if (currentMessageId<0) throw new Error('卡面消息不在当前剧情中')
-  const lastBoundary=[...events].reverse().find(event=>event.type==='turn/start'||event.type==='turn/end')
-  const turn=lastBoundary?.type==='turn/end'?lastBoundary.data.turn:0
-  const writable=!state.openFloors.has(sessionId) && lastBoundary?.type!=='turn/start'
-  const historyRevision=helperHistoryRevision(history)
+  const turn=cached.lastBoundary?.type==='turn/end'?cached.lastBoundary.turn:0
+  const writable=!state.openFloors.has(sessionId) && cached.lastBoundary?.type!=='turn/start'
+  const historyRevision=cached.historyRevision
   const ws=await state.storyWorkspace(binding.cardId,binding.storyId)
-  const greetings=card?[card.card.firstMes,...card.card.alternateGreetings].map(text=>expandIdentityMacros(text,{char:card.card.name,user:persona?.name??DEFAULT_USER_NAME})):[]
-  return {binding,history,currentMessageId,historyRevision,ws,writable,turn,greetings}
+  const greetings=card?[card.card.firstMes,...card.card.alternateGreetings].map(text=>expandIdentityMacros(text,{char:charName,user:persona?.name??DEFAULT_USER_NAME})):[]
+  return {binding,history,currentMessageId,historyRevision,indexByIdentity:cached.indexByIdentity,ws,writable,turn,greetings}
 }
-function publicScopes(scopes:HelperScopes,history:Awaited<ReturnType<typeof helperContext>>['history']):HelperScopes {
+function publicScopes(scopes:HelperScopes,indexByIdentity:ReadonlyMap<string,number>):HelperScopes {
   const result:HelperScopes={}
   for(const [key,value] of Object.entries(scopes)) {
     const [type,id]=helperScopeKey(key)
     if(type!=='message') result[key]=value
     else {
-      const index=history.findIndex(message=>message.identity===id)
-      if(index>=0) result[JSON.stringify(['message',index])]=value
+      const index=typeof id==='string'?indexByIdentity.get(id):undefined
+      if(index!==undefined) result[JSON.stringify(['message',index])]=value
     }
   }
   return result
 }
 function snapshot(context:Awaited<ReturnType<typeof helperContext>>,scopes:HelperScopes,extras:HelperState['extras']={},swipes:Record<string,HelperSwipeSet>={}):HelperSnapshot {
-  const exposed=publicScopes(scopes,context.history)
+  const exposed=publicScopes(scopes,context.indexByIdentity)
   return {storyId:context.binding.storyId!,historyRevision:context.historyRevision,currentMessageId:context.currentMessageId,
     writable:context.writable,scopes:exposed,messages:context.history.map((message,index)=>{
       const data=exposed[JSON.stringify(['message',index])]??{},extra=extras[message.identity]??{}
@@ -72,6 +128,20 @@ function snapshot(context:Awaited<ReturnType<typeof helperContext>>,scopes:Helpe
       return {message_id:index,name:message.name,role:message.role,is_hidden:false,message:message.message,data,extra,
         swipe:effectiveHelperSwipes({message:message.message,data,extra},swipes[message.identity]??initial)}
     })}
+}
+/**
+ * 纯文本展示只返回剧情/历史身份与当前消息角色；仍在剧情锁内二次读取，
+ * 与完整 HelperSnapshot 保持同一套绑定和历史修订校验，但不读取、复制变量表。
+ */
+export async function getHelperDisplayContext(ctx:Context,state:TavernState,sessionId:string,messageId:number):Promise<HelperDisplayContext> {
+  const context=await helperContext(ctx,state,sessionId,messageId)
+  return withWorkspaceLock(context.ws.fs.root,async()=>{
+    const current=await helperContext(ctx,state,sessionId,messageId)
+    if(current.ws.fs.root!==context.ws.fs.root)throw new Error('卡面剧情绑定已经改变')
+    const message=current.history[current.currentMessageId]
+    if(!message)throw new Error('卡面消息不在当前剧情中')
+    return {storyId:current.binding.storyId!,historyRevision:current.historyRevision,currentMessageId:current.currentMessageId,currentMessageRole:message.role}
+  })
 }
 export async function getHelperSnapshot(ctx:Context,state:TavernState,sessionId:string,messageId:number):Promise<HelperSnapshot> {
   const context=await helperContext(ctx,state,sessionId,messageId)
@@ -87,7 +157,7 @@ export async function getHelperScriptBundle(ctx:Context,state:TavernState,sessio
   if(!binding?.storyId)throw new Error('会话未绑定可用剧情')
   const ensureBinding=async()=>{
     const current=await state.loadBinding(sessionId)
-    if(!current||current.storyId!==binding.storyId||current.cardId!==binding.cardId||current.presetId!==binding.presetId||current.interactiveCards!==binding.interactiveCards||current.helperMvu!==binding.helperMvu)throw new Error('脚本会话绑定已改变，请重新加载')
+    if(!current||current.storyId!==binding.storyId||current.cardId!==binding.cardId||current.presetId!==binding.presetId||current.personaId!==binding.personaId||current.interactiveCards!==binding.interactiveCards||current.helperMvu!==binding.helperMvu)throw new Error('脚本会话绑定已改变，请重新加载')
   }
 
   // 预设被删除或损坏时与 getSessionHelperScripts 同口径：按没有预设脚本加载，不让整个脚本包失败。
@@ -100,7 +170,13 @@ export async function getHelperScriptBundle(ctx:Context,state:TavernState,sessio
   await ensureBinding()
   const enabled=state.config.interactiveCards&&binding.interactiveCards!==false
   const character=libraries.find(library=>library.target.type==='character')!
-  const base={helperMvu:binding.helperMvu===true,cardId:binding.cardId,trees:character.trees,revision:character.revision,libraries,storyId:binding.storyId,enabled,whitelist:[...state.config.cardNetworkWhitelist]}
+  const card=await state.loadCharacter(binding.cardId),persona=await state.resolvePersona(binding.personaId)
+  // 角色/人设元数据读取同样跨越异步边界；若此时会话换绑，不能把旧名称连同新一轮
+  // 脚本运行时一起返回。尤其 disabled / 无脚本分支会在下面提前返回，必须先复核。
+  await ensureBinding()
+  const name=card?.card.name??binding.cardName
+  const base={helperMvu:binding.helperMvu===true,cardId:binding.cardId,trees:character.trees,revision:character.revision,libraries,storyId:binding.storyId,enabled,whitelist:[...state.config.cardNetworkWhitelist],
+    name,characterName:card?characterPromptName(card.card):name,userName:persona?.name??DEFAULT_USER_NAME}
   if(!enabled)return {...base,messageId:null}
   try{helperJson(libraries,4*1024*1024);if(!enabledHelperLibraries(libraries).length&&!base.helperMvu)return {...base,messageId:null}}
   catch(error){return {...base,messageId:null,runtimeError:error instanceof Error?error.message:String(error)}}

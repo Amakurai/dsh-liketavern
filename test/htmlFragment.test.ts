@@ -1,6 +1,7 @@
 /** 内联样式卡面的识别回归：手写状态栏、嵌套及相邻容器、正文顺序、代码示例与不完整输出。 */
 import { expect, it } from 'vitest'
 import { splitRenderedHtml } from '../src/core/regex.js'
+import { isFullHtmlDocument } from '../src/core/htmlFragment.js'
 import { presentRenderedOutput } from '../src/core/displaySanitize.js'
 import { splitTemplateDisplay } from '../src/core/templateDisplay.js'
 
@@ -8,6 +9,31 @@ const status = '<div style="display:flex;align-items:center"><span style="width:
 const diary = '<div style="padding:16px"><div style="font-weight:bold">日记</div><div style="white-space:pre-wrap">今天去了图书馆。</div></div>'
 const expandable = '<div class="record"><details><summary>记录</summary><div class="content" style="opacity:0">内容</div></details></div>'
 const revealStyle = '<style>.record details[open] .content{opacity:1!important}</style>'
+
+it('完整文档判断跳过代码与脚本字符串，只识别实际文档边界',()=>{
+  expect(isFullHtmlDocument('<!DOCTYPE html><html><body>卡面</body></html>')).toBe(true)
+  expect(isFullHtmlDocument('<html lang="zh"><body class="cover">省略 html 闭标签</body>\n')).toBe(true)
+  expect(isFullHtmlDocument('<body class="cover">卡面</body>')).toBe(true)
+  expect(isFullHtmlDocument('<html><body>仍在流式输出')).toBe(false)
+  expect(isFullHtmlDocument('<html><body>卡面</body>后续台词')).toBe(false)
+  expect(isFullHtmlDocument('```html\n<html><body>示例</body></html>\n```')).toBe(false)
+  expect(isFullHtmlDocument('<script>const sample="<html><body>x</body></html>"</script><div>部件</div>')).toBe(false)
+})
+
+it('template 与 noscript 内容保持惰性，后续真实卡面仍按原字节识别',()=>{
+  const inert='<template id="samples"><script>const close="</template><div>伪卡</div>"</script>'
+    +'<template><html><body>文档示例</body></html></template><div>片段示例</div></template>'
+  expect(isFullHtmlDocument(inert)).toBe(false)
+  expect(splitRenderedHtml(inert)).toEqual({html:null,rest:inert})
+  const card=inert+'\n<div class="real-card">真实卡面</div>'
+  expect(splitRenderedHtml(card)).toEqual({html:card,rest:''})
+
+  const noScript='<noscript><html><body>回退文档</body></html><div>回退片段</div></noscript>'
+  expect(isFullHtmlDocument(noScript)).toBe(false)
+  expect(splitRenderedHtml(noScript+'\n<section>真实状态</section>')).toEqual({
+    html:noScript+'\n<section>真实状态</section>',rest:'',
+  })
+})
 
 it.each([
   expandable + '\n' + revealStyle,
@@ -50,6 +76,24 @@ it('显式 html 围栏中的裸片段进入沙箱，围栏外两侧正文不遗�
   expect(splitTemplateDisplay('前文\n```html\r\n\r\n  ' + status + '\r\n```\n后文')).toEqual([
     {kind:'markdown',text:'前文'}, {kind:'html',text:status}, {kind:'markdown',text:'后文'},
   ])
+  const controls='<button type="button">继续</button>\n<p>没有 div 外壳</p>'
+  expect(splitTemplateDisplay('前文\n```html\n'+controls+'\n```\n后文')).toEqual([
+    {kind:'markdown',text:'前文'}, {kind:'html',text:controls}, {kind:'markdown',text:'后文'},
+  ])
+  expect(splitTemplateDisplay('```xml\n<status-card hp="7"/>\n```')).toEqual([
+    {kind:'html',text:'<status-card hp="7"/>'},
+  ])
+})
+
+it('样式或脚本前导与相邻普通元素、空元素保持在同一个卡面',()=>{
+  const styled='<style>p{color:red}.portrait{width:32px}</style>\n<p>状态</p>\n<img class="portrait" src="data:image/png;base64,AA==">'
+  expect(splitTemplateDisplay('前文\n'+styled+'\n后文')).toEqual([
+    {kind:'markdown',text:'前文'},{kind:'html',text:styled},{kind:'markdown',text:'后文'},
+  ])
+  // 没有明确围栏或前导卡面时仍不把普通段落从 Markdown 提升为脚本沙箱。
+  expect(splitRenderedHtml('<p>普通 HTML 段落</p>')).toEqual({html:null,rest:'<p>普通 HTML 段落</p>'})
+  const selfClosing='<style>.portrait{width:32px}</style><img class="portrait" src="data:image/png;base64,AA=="/>'
+  expect(splitTemplateDisplay(selfClosing)).toEqual([{kind:'html',text:selfClosing}])
 })
 
 it('多个片段之间的台词保留 Markdown 顺序，根容器大小写和属性内闭标签不影响边界', () => {

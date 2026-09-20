@@ -47,7 +47,7 @@ function RuleEditor(props: { rule: RegexRule; onChange: (r: RegexRule) => void; 
     <div className="dsh-tavern-entry" style={{ marginBottom: 8 }}>
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '12px 16px 8px' }}>
         <Toggle checked={rule.enabled} onChange={(enabled) => set({ enabled })} title={rule.enabled ? t('regex.toggleDisable') : t('regex.toggleEnable')} />
-        <input className="dsh-tavern-input" style={{ flex: 1 }} value={rule.name} onChange={(e) => set({ name: e.target.value })} />
+        <input aria-label={t('regex.ruleName')} className="dsh-tavern-input" style={{ flex: 1 }} value={rule.name} onChange={(e) => set({ name: e.target.value })} />
         <Badge>{t(SOURCE_LABEL_KEY[rule.source])}</Badge>
         <IconBtn label={t('regex.deleteRule')} danger onClick={props.onDelete}>
           <IconTrashOutline16 />
@@ -57,8 +57,9 @@ function RuleEditor(props: { rule: RegexRule; onChange: (r: RegexRule) => void; 
       <Field label={t('regex.find')}>
         <input className="dsh-tavern-input dsh-tavern-codeFont" style={{ flex: 1 }} value={rule.find} onChange={(e) => set({ find: e.target.value })} />
       </Field>
-      <div className="dsh-tavern-fieldLabel" style={{ margin: '4px 0' }}>{t('regex.replace')}</div>
-      <textarea className="dsh-tavern-input dsh-tavern-textarea dsh-tavern-codeFont" style={{ minHeight: 40 }} value={rule.replace} onChange={(e) => set({ replace: e.target.value })} />
+      <Field label={t('regex.replace')}>
+        <textarea className="dsh-tavern-input dsh-tavern-textarea dsh-tavern-codeFont" style={{ minHeight: 40 }} value={rule.replace} onChange={(e) => set({ replace: e.target.value })} />
+      </Field>
       <div className="dsh-tavern-fieldRow" style={{ margin: '8px 0 4px' }}>
         <div className="dsh-tavern-field">
           <span className="dsh-tavern-fieldLabel">{t('regex.scope')}</span>

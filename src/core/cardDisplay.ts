@@ -36,7 +36,9 @@ export function installCardDisplay():()=>void{
             if(!active||preparing!==preparation)return
             if(value.storyId!==snapshot()?.storyId||value.historyRevision!==snapshot()?.historyRevision)throw new Error('卡面历史已改变或正在刷新')
             check();lock=preparation.id;root.__dshTavernDisplayLocked=true
-            lockTimer=setTimeout(unlock,45000)
+            // 宿主会先做最多 25s 的只读重渲染，再给隐藏新投影最多 60s 完成 ready/事件；
+            // 兜底锁必须覆盖整个窗口，正常成功或失败仍由宿主显式 unlock/卸载结束。
+            lockTimer=setTimeout(unlock,90000)
             parent.postMessage({source,action:'helperDisplayGuardResult',requestId:lock,ok:true},'*')
           }catch(error){if(active&&preparing===preparation)parent.postMessage({source,action:'helperDisplayGuardResult',requestId:preparation.id,ok:false,error:String(error)},'*')}
           finally{if(preparing===preparation)preparing=null}

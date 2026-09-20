@@ -19,6 +19,11 @@ export declare function normalizeBook(value: unknown): LorebookFile | null;
 export declare function pickRegexScripts(json: Record<string, unknown>, data: Record<string, unknown>): CardRegexScript[];
 /** 已落盘的归一化卡也可能 regexScripts 为空，从 raw / extensions 补回。 */
 export declare function regexScriptsOf(card: CharacterCard): CardRegexScript[];
+/**
+ * 用户拒绝导入内嵌世界书时的纯函数清洗：运行字段、兼容镜像和 raw 原文一起清除。
+ * raw 仍保留未知 V3 字段与其它 extensions，不原地修改预检得到的卡对象。
+ */
+export declare function withoutEmbeddedCharacterBook(card: CharacterCard): CharacterCard;
 /** 工作区 card.json 是归一化卡；旧文件可能只有 extensions.depth_prompt。 */
 export declare function hydrateStoredCard(record: Record<string, unknown>): CharacterCard;
 /**

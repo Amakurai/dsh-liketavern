@@ -33,6 +33,19 @@ describe('模板资产兼容',()=> {
     const result=await render(`<% const value=await getCharaData(); value.data.creator='changed'; %><%- JSON.stringify([value.name,(await getCharData(characterId)).data.creator,(await getCharData()).data.extensions.custom]) %>`,ctx)
     expect(JSON.parse(result.texts[0]!)).toEqual(['Alice','Author',{enabled:true}])
   })
+  it('V3 直接 data 字段在 getCharaData 中保持原层级',async()=> {
+    const card=parseJsonCard({spec:'chara_card_v3',spec_version:'3.0',data:{name:'V3',nickname:'小V',group_only_greetings:['群聊'],assets:[{type:'icon',uri:'ccdefault:'}],extensions:{custom:true}}})
+    const ctx=context();ctx.char=card.name;ctx.card=templateCardData(card)
+    const result=await render('<%- JSON.stringify([(await getCharaData()).data.nickname,(await getCharaData()).data.assets,(await getCharaData()).data.group_only_greetings,(await getCharaData()).data.extensions]) %>',ctx)
+    expect(JSON.parse(result.texts[0]!)).toEqual(['小V',[{type:'icon',uri:'ccdefault:'}],['群聊'],{custom:true}])
+  })
+  it('V3 nickname 用于模板 {{char}}，按资产名与昵称仍可查询同一角色',async()=> {
+    const card=parseJsonCard({spec:'chara_card_v3',data:{name:'完整角色名',nickname:'剧情昵称',description:'描述'}})
+    const ctx=context();ctx.char='剧情昵称';ctx.card=templateCardData(card)
+    ctx.variables.message={format:'<%- name %>|<%- chara_name %>|{{char}}'}
+    const result=await render(`<%- await getchar('完整角色名',getvar('format')) %>|<%- await getchar('剧情昵称',getvar('format')) %>`,ctx)
+    expect(result.texts[0]).toBe('完整角色名|完整角色名|剧情昵称|完整角色名|完整角色名|剧情昵称')
+  })
   it('省略库名读取主世界书，显式库名可读绑定库，嵌套 getwi 跟随当前条目来源',async()=> {
     const ctx=context()
     ctx.entries=[...book('global','global',[

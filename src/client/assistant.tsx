@@ -9,7 +9,7 @@ import { Fragment, useEffect, useMemo, useRef } from 'react'
 import type { ReactNode, ComponentProps } from 'react'
 import { JsonBlock, MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives'
 import { stripDisplayMeta } from '../core/displaySanitize.js'
-import { cachedCharacterDetail, cachedSessionBinding, invalidateSessionBinding } from './cache.js'
+import { CHARACTER_CHANGED_EVENT, cachedCharacterDetail, cachedSessionBinding, invalidateCharacter, invalidateSessionBinding } from './cache.js'
 import { useMarkdownLabels, useT } from './i18n.js'
 import { isTavernSession, type UseSessions } from './mode.js'
 import { openChildSession } from './openChild.js'
@@ -34,6 +34,23 @@ interface AssistantNode {
   }
 }
 
+/** 同一卡片内会改变 output/render、宏或剧情 helper 身份的绑定字段。 */
+function displayBindingRevision(binding: SessionBinding): string {
+  return JSON.stringify([
+    binding.storyId,
+    binding.presetId,
+    binding.personaId,
+    binding.interactiveCards,
+    binding.helperMvu === true,
+    binding.lorebookIds,
+    binding.characterLorebookId,
+    binding.useEmbeddedLorebook !== false,
+    binding.characterLorebookIds ?? [],
+    binding.worldInfo ?? null,
+    binding.greetingIndex,
+  ])
+}
+
 /** 宿主 owner props 里的图片渲染器（rc.2 起替代 loadImage，见 conversation.chat.node 契约）。 */
 type RenderMessageImages = (owner: {
   images: readonly { attachment: unknown }[]
@@ -45,6 +62,30 @@ interface TurnTailOwner {
   turn: { status?: string }
   seq: number
   openFile?: (path: string) => void
+}
+
+/**
+ * 宿主只允许最终 turn-tail 上已经核验过的路径变成文件链接。角色气泡和原生回退
+ * 必须共用同一份解析结果，否则绑定角色后同一句 Markdown 会突然失去文件跳转能力。
+ */
+function useResolvedFileMentions(
+  node: AssistantNode,
+  useTurnData?: (key: string) => unknown,
+  openFile?: (path: string) => void,
+  fileMentions?: (owner: TurnTailOwner) => ComponentProps<typeof MarkdownText>['fileMentions'],
+) {
+  const turn = node.location?.kind === 'turn' || node.location?.kind === 'step' ? node.location.turn : undefined
+  const tail = useTurnData?.('turn-tail') as { closing?: { finalNode?: { seq?: number } } } | undefined
+  const finalSeq = node.data.finalNode?.seq
+  const mentionOwner = useMemo<TurnTailOwner | undefined>(() => {
+    if (!turn || turn.status !== 'closed' || finalSeq === undefined) return undefined
+    if (tail?.closing?.finalNode?.seq !== finalSeq) return undefined
+    return { turn, seq: finalSeq, openFile }
+  }, [turn, tail, finalSeq, openFile])
+  return useMemo(
+    () => (mentionOwner && fileMentions ? fileMentions(mentionOwner) : undefined),
+    [fileMentions, mentionOwner],
+  )
 }
 
 function ReasoningFold(props: { text: string; streaming?: boolean }) {
@@ -94,17 +135,38 @@ export function TavernAssistantNode(props: {
     [binding?.cardId],
     tavern && binding !== null,
   )
+  useEffect(() => {
+    if (!tavern || !binding) return
+    const changed = (event: Event) => {
+      if ((event as CustomEvent<string>).detail === binding.cardId) detail.reload()
+    }
+    window.addEventListener(CHARACTER_CHANGED_EVENT, changed)
+    return () => window.removeEventListener(CHARACTER_CHANGED_EVENT, changed)
+  }, [tavern, binding?.cardId, detail.reload])
   const streaming = node.data.status === 'running'
   const interrupted = node.data.status === 'interrupted'
   const text = node.data.blocks.filter((b) => b.kind === 'text').map((b) => b.text ?? '').join('\n')
   const name = detail.state.status === 'ready' ? detail.state.value.name : ''
   const hasImages = node.data.blocks.some((b) => b.kind === 'image')
+  const firstImage = node.data.blocks.findIndex((block) => block.kind === 'image')
+  const firstText = node.data.blocks.findIndex((block) => block.kind === 'text')
+  // SpeechBubble 的卡面投影是整条文本的一次 output/render，宿主图片只能作为尾部
+  // media 插槽。只接管 reasoning* → text* → image*（其间可有不可见 tool-call）；
+  // 图片后还有可见块、正文后又出现 reasoning，或宿主新增未知块时回退原生节点，
+  // 避免重排图片/思考过程，也不能静默丢掉未来块类型。
+  const supportsBubbleBlocks = node.data.blocks.every((block) =>
+    block.kind === 'reasoning' || block.kind === 'text' || block.kind === 'image' || block.kind === 'tool-call')
+  const hasInterleavedImages = firstImage >= 0
+    && node.data.blocks.slice(firstImage + 1).some((block) => block.kind !== 'image' && block.kind !== 'tool-call')
+  const hasLateReasoning = firstText >= 0
+    && node.data.blocks.slice(firstText + 1).some((block) => block.kind === 'reasoning')
   const reasoningBlocks = node.data.blocks.filter((b) => b.kind === 'reasoning')
+  const mentions = useResolvedFileMentions(node, props.useTurnData, props.openFile, props.fileMentions)
 
   const reasoningText = reasoningBlocks.map((b) => b.text ?? '').filter((chunk) => chunk.trim()).join('\n\n---\n\n')
 
   if (!tavern) {
-    return <NativeAssistantFallback {...props} streaming={streaming} interrupted={interrupted} />
+    return <NativeAssistantFallback {...props} mentions={mentions} streaming={streaming} interrupted={interrupted} />
   }
 
   // 失败不是“没有绑定”：保留可读正文并提供就地恢复，重试先清缓存以绕开仍挂起的旧请求。
@@ -112,6 +174,12 @@ export function TavernAssistantNode(props: {
     <div className="dsh-tavern-notice">
       <Err message={t('assistant.bindingLoadFailed', { message: bindingLoader.state.message })} />
       <Btn onClick={() => { invalidateSessionBinding(sessionId); bindingLoader.reload() }}>{t('assistant.retryBinding')}</Btn>
+    </div>
+  ) : null
+  const detailError = binding && detail.state.status === 'error' ? (
+    <div className="dsh-tavern-notice">
+      <Err message={t('assistant.bindingLoadFailed', { message: detail.state.message })} />
+      <Btn onClick={() => { invalidateCharacter(binding.cardId); detail.reload() }}>{t('assistant.retryBinding')}</Btn>
     </div>
   ) : null
 
@@ -124,17 +192,28 @@ export function TavernAssistantNode(props: {
       <TavernInterruptedFloorActions remote={remote} sessionId={sessionId} sessions={sessions} turn={locationTurn} />
     ) : null
 
-  if (binding && text && !hasImages) {
+  if (binding && text && supportsBubbleBlocks && !hasInterleavedImages && !hasLateReasoning) {
+    const images = hasImages && props.renderMessageImages
+      ? props.renderMessageImages({
+          images: node.data.blocks.filter((block) => block.kind === 'image').map(({ attachment }) => ({ attachment })),
+          align: 'start',
+        })
+      : null
     return (
       <div>
         {bindingError}
+        {detailError}
         <ReasoningFold text={reasoningText} streaming={streaming} />
         <SpeechBubble
           remote={remote}
           sessionId={sessionId}
           cardId={binding.cardId}
           name={name || t('assistant.characterFallback')}
+          characterRevision={detail.state.status === 'ready' ? detail.state.value.revision : undefined}
+          bindingRevision={displayBindingRevision(binding)}
           rawText={text}
+          fileMentions={mentions}
+          media={images}
           messageId={node.data.finalNode?.seq}
           streaming={streaming || node.location?.turn?.status === 'open'}
           interactiveCards={binding.interactiveCards}
@@ -155,7 +234,7 @@ export function TavernAssistantNode(props: {
   return (
     <div>
       {bindingError}
-      <NativeAssistantFallback {...props} streaming={streaming} interrupted={interrupted} stripMeta />
+      <NativeAssistantFallback {...props} mentions={mentions} streaming={streaming} interrupted={interrupted} stripMeta />
       {interruptedActions}
     </div>
   )
@@ -167,27 +246,14 @@ function NativeAssistantFallback(props: {
   useTurnData?: (key: string) => unknown
   openFile?: (path: string) => void
   fileMentions?: (owner: TurnTailOwner) => ComponentProps<typeof MarkdownText>['fileMentions']
+  mentions?: ComponentProps<typeof MarkdownText>['fileMentions']
   streaming: boolean
   interrupted: boolean
   stripMeta?: boolean
 }) {
-  const { node, renderMessageImages, useTurnData, openFile, fileMentions, streaming, interrupted, stripMeta } = props
+  const { node, renderMessageImages, mentions, streaming, interrupted, stripMeta } = props
   const t = useT()
   const markdownLabels = useMarkdownLabels()
-  // fileMentions 是宿主 owner 函数，需按原生 AssistantNodeView 的方式用
-  // turn-tail owner 解析成 mentions 再交给 MarkdownText（旧版直接透传函数本体，等于没配）。
-  const turn = node.location?.kind === 'turn' || node.location?.kind === 'step' ? node.location.turn : undefined
-  const tail = useTurnData?.('turn-tail') as { closing?: { finalNode?: { seq?: number } } } | undefined
-  const finalSeq = node.data.finalNode?.seq
-  const mentionOwner = useMemo<TurnTailOwner | undefined>(() => {
-    if (!turn || turn.status !== 'closed' || finalSeq === undefined) return undefined
-    if (tail?.closing?.finalNode?.seq !== finalSeq) return undefined
-    return { turn, seq: finalSeq, openFile }
-  }, [turn, tail, finalSeq, openFile])
-  const mentions = useMemo(
-    () => (mentionOwner && fileMentions ? fileMentions(mentionOwner) : undefined),
-    [fileMentions, mentionOwner],
-  )
   const rendered: ReactNode[] = []
   const blocks = node.data.blocks
   for (let i = 0; i < blocks.length; i++) {

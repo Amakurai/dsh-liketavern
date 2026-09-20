@@ -8,7 +8,7 @@ import { installCardVariables } from '../src/core/cardVariables.js'
 import { parseCardBridgeMessage, tavernCardBridgeScript } from '../src/core/cardFrame.js'
 
 const lodash: unknown = createRequire(import.meta.url)('lodash')
-function frame(options: CardHelperContext = { message: '当前回复', messageId: 17, name: '灯塔', userName: '旅人', canSwipe: false }) {
+function frame(options: CardHelperContext = { message: '当前回复', messageId: 17, name: '灯塔', userName: '旅人', canSwipe: false }, greetingIndex = 0) {
   const listeners = new Map<string, Set<() => void>>()
   const document = { readyState: 'loading', body: null,
     addEventListener: (event: string, callback: () => void) => { if (!listeners.has(event)) listeners.set(event, new Set()); listeners.get(event)!.add(callback) },
@@ -22,7 +22,7 @@ function frame(options: CardHelperContext = { message: '当前回复', messageId
   const run = (code: string) => runInContext(code, context)
   run(`(${installCardVariables.toString()})({title:'备份',note:'临时',backup:'备份',text:'数据'}, '', ${options.messageId ?? 0})`)
   run(`var cleanupEvents = (${installCardEvents.toString()})()`)
-  run(`var cleanupHelper = (${installCardHelper.toString()})(${JSON.stringify(options)}, ['开场白', '备选'], 0, 'dsh-tavern-card', {diagnostics:'脚本消息',unsupported:'不支持'})`)
+  run(`var cleanupHelper = (${installCardHelper.toString()})(${JSON.stringify(options)}, ['开场白', '备选'], ${greetingIndex}, 'dsh-tavern-card', {diagnostics:'脚本消息',unsupported:'不支持'})`)
   return { run, postMessage, ready: () => { for (const fn of listeners.get('DOMContentLoaded') ?? []) fn() } }
 }
 
@@ -44,6 +44,12 @@ describe('卡面消息与受限操作', () => {
     expect(run('getMessageId(getIframeName())')).toBe(17)
     expect(run('substitudeMacros("{{char}}/{{user}}/{{lastMessageId}}/{{unknown}}")')).toBe('灯塔/旅人/17/{{unknown}}')
   })
+  it('V3 nickname 只替换 {{char}}，聊天消息与 SillyTavern name2 仍保留资产名', () => {
+    const { run } = frame({ message: '当前回复', messageId: 17, name: '灯塔守望者', macroName: '守望者', userName: '旅人' })
+    expect(run('substitudeMacros("{{char}}")')).toBe('守望者')
+    expect(run('getChatMessages(-1)[0].name')).toBe('灯塔守望者')
+    expect(run('SillyTavern.getContext().name2')).toBe('灯塔守望者')
+  })
   it('开场白现代与旧接口只请求 swipe；非法整批/正文写入和未知 Slash 不产生副作用', async () => {
     const { run, postMessage } = frame({ messageId: 0, canSwipe: true })
     expect(run('getChatMessages(0,{include_swipes:true})[0].swipes')).toEqual(['开场白', '备选'])
@@ -61,6 +67,16 @@ describe('卡面消息与受限操作', () => {
     expect(await run('triggerSlash("/pass {{lastMessageId}}")')).toBe('0')
     expect(() => run('generate({})')).toThrow(/不支持.*generate/)
     expect(parseCardBridgeMessage({source:'dsh-tavern-card',action:'generate'})).toBeNull()
+  })
+  it('已删除的开场白下标在卡面 API 内一致回退到第一条', async () => {
+    const { run, postMessage } = frame({ messageId: 0, canSwipe: true }, 7)
+    run('replaceVariables({hp:7},{type:"message"})')
+    expect(run('getChatMessages(0,{include_swipes:true})[0]')).toMatchObject({
+      message: '开场白', mes: '开场白', swipe_id: 0,
+    })
+    expect(run('getChatMessages(0,{include_swipes:true})[0].swipes_data')).toEqual([{hp:7}, {}])
+    await run('triggerSlash("/swipe right")')
+    expect(postMessage).toHaveBeenCalledWith({ source: 'dsh-tavern-card', action: 'swipeGreeting', index: 1 }, '*')
   })
   it('回复与只读预览均拒绝切换，未发生的宿主事件不会被伪造', async () => {
     const { run, postMessage, ready } = frame()

@@ -6,6 +6,8 @@ type NativeMvu = {
 type Message = Record<string, unknown>;
 export declare function attachHelperEvents(sessionId: string, storyId: string, send: (message: Message) => void, nativeMvu?: NativeMvu): {
     matchesRuntime: (id: unknown) => boolean;
+    /** 重绘锁定旧卡时只暂停宿主生命周期事件；普通卡间事件和监听注册仍保持原运行时。 */
+    setHostEventsEnabled: (enabled: boolean) => void;
     receive: (value: unknown) => void;
     dispose: () => void;
 };

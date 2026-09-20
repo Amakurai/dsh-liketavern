@@ -1,17 +1,22 @@
 /** 显式放弃 MVU 界面：真实 React 验证确认、请求去重、失败重试及关闭交互后仍可恢复。 */
 import { act, create, type ReactTestRenderer } from 'react-test-renderer'
-import type { ReactNode } from 'react'
+import { useEffect, type ReactNode } from 'react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { BINDING_CHANGED_EVENT } from '../src/client/actions.js'
 import { HelperMvuAbandonAction, TavernHeaderChip } from '../src/client/chip.js'
 import { TavernSeatChip } from '../src/client/seatChip.js'
 import { Btn, ConfirmDialog, Err } from '../src/client/util.js'
 import { invalidateSessionBinding, invalidateCharacter } from '../src/client/cache.js'
 import { setTavernLocale } from '../src/client/i18n.js'
 import type { SessionBinding, TavernRemote } from '../src/client/types.js'
+const helperRuntime = vi.hoisted(() => ({ mounts: 0, unmounts: 0 }))
 vi.mock('../src/client/styles.js', () => ({}))
 vi.mock('../src/client/panel/memory.js', () => ({ MemorySection: () => null }))
 vi.mock('../src/client/panel/lorebookEditor.js', () => ({ LorebookEditor: () => null }))
-vi.mock('../src/client/helperScripts.js', () => ({ HelperScripts: () => null }))
+vi.mock('../src/client/helperScripts.js', () => ({ HelperScripts: () => {
+  useEffect(() => { helperRuntime.mounts += 1; return () => { helperRuntime.unmounts += 1 } }, [])
+  return null
+} }))
 vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
   IconCopyOutline16: () => null, IconUserOutline16: () => null, IconChevronDownOutline14: () => null,
   Tooltip: (props: { children?: ReactNode }) => <>{props.children}</>,
@@ -19,7 +24,7 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
   Modal: (props: { open: boolean; children?: ReactNode; footer?: ReactNode }) => props.open ? <>{props.children}{props.footer}</> : null,
 }))
 let view: ReactTestRenderer | undefined
-beforeEach(() => { vi.stubGlobal('window', new EventTarget()); setTavernLocale('zh'); invalidateSessionBinding('session'); invalidateCharacter('card') })
+beforeEach(() => { helperRuntime.mounts = 0; helperRuntime.unmounts = 0; vi.stubGlobal('window', new EventTarget()); setTavernLocale('zh'); invalidateSessionBinding('session'); invalidateCharacter('card') })
 afterEach(async () => { if (view) await act(async () => view!.unmount()); view = undefined; vi.unstubAllGlobals() })
 async function mount(component: ReactNode) { await act(async () => { view = create(component) }) }
 const dialog = () => view!.root.findByType(ConfirmDialog)
@@ -58,4 +63,35 @@ it('交互关闭且列表仍加载时，真实会话面板仍显示恢复入口'
   await act(async () => view!.root.findByType(TavernSeatChip).props.onClick())
   expect(view!.root.findByType(HelperMvuAbandonAction).props.storyId).toBe('story')
   expect(button()).toBeDefined(); expect(remote.abandonHelperMvu).not.toHaveBeenCalled()
+})
+it('同一剧情切换人设或脚本与世界书绑定时重建后台脚本沙箱', async () => {
+  const sessionId = 'helper-binding-refresh'
+  let binding: SessionBinding = {
+    sessionId, storyId: 'story', cardId: 'card-a', presetId: 'preset-a', personaId: 'persona-a',
+    lorebookIds: ['global-a'], characterLorebookId: null, interactiveCards: true, helperMvu: false,
+    greetingIndex: 0, createdAt: 'factory',
+  }
+  const getSessionBinding = vi.fn(async () => ({ ok: true as const, value: { binding } }))
+  const remote = {
+    getSessionBinding,
+    getCharacterDetail: vi.fn(async ({ cardId }: { cardId: string }) => ({ ok: true as const, value: { name: cardId } })),
+    getAvatar: vi.fn(async () => ({ ok: true as const, value: { dataUrl: null } })),
+    listCharacters: vi.fn(async () => ({ ok: true as const, value: { items: [] } })),
+  }
+  const useSessions = (selector: (state: unknown) => unknown) => selector({ byId: { [sessionId]: { projectionValues: { agentPreset: 'tavern' } } } })
+  invalidateSessionBinding(sessionId)
+  await mount(<TavernHeaderChip remote={remote as unknown as TavernRemote} sessionId={sessionId} sessions={{ open: () => {} }} useSessions={useSessions as never}/>)
+  expect(helperRuntime.mounts).toBe(1)
+
+  binding = { ...binding, personaId: 'persona-b' }
+  invalidateSessionBinding(sessionId)
+  await act(async () => window.dispatchEvent(new CustomEvent(BINDING_CHANGED_EVENT, { detail: sessionId })))
+  await vi.waitFor(() => expect(helperRuntime.mounts).toBe(2))
+
+  binding = { ...binding, presetId: 'preset-b', lorebookIds: ['global-b'], interactiveCards: false }
+  invalidateSessionBinding(sessionId)
+  await act(async () => window.dispatchEvent(new CustomEvent(BINDING_CHANGED_EVENT, { detail: sessionId })))
+  await vi.waitFor(() => expect(helperRuntime.mounts).toBe(3))
+  expect(helperRuntime.unmounts).toBe(2)
+  invalidateSessionBinding(sessionId)
 })

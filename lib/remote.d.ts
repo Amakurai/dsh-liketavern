@@ -18,7 +18,7 @@ import type { SessionBinding } from './core/binding.js';
 import type { GreetingFloorState } from './core/greetingLog.js';
 import type { TemplateDisplayPart } from './core/templateDisplay.js';
 import type { HelperMessageEditResult } from './core/helperChatEdits.js';
-import type { HelperSnapshot } from './core/helperRuntime.js';
+import type { HelperDisplayContext, HelperSnapshot } from './core/helperRuntime.js';
 import type { HelperMvuWork } from './core/helperMvu.js';
 import type { HelperWorldbookContext, HelperWorldbookResult } from './core/helperWorldbook.js';
 import type { HelperScriptBundle, HelperScriptLibrary, HelperScriptAsset, HelperScriptContext, HelperScriptView } from './core/helperScripts.js';
@@ -912,6 +912,8 @@ export interface CharacterDetail {
     hasAvatar: boolean;
     depthPrompt: CharacterCard['depthPrompt'];
     extensions: CharacterCard['extensions'];
+    /** CCv3 nickname 生效后的提示词身份；列表、标题与头像仍使用 name。 */
+    characterName?: string;
 }
 /** listPresets 的预设摘要。 */
 export interface PresetSummary {
@@ -930,10 +932,15 @@ export interface DisplayRegexDiagnostics {
 }
 /** renderOutputText：展示文本经 output/render 正则与 HTML 抽取后的形态。 */
 export interface RenderedOutput {
+    /** iframe 卡面需要的完整历史与变量快照；纯文本不携带。 */
     helper?: HelperSnapshot;
+    /** 纯文本匹配脚本选项和展示事件所需的有界只读身份。 */
+    helperContext?: HelperDisplayContext;
     helperScripts?: HelperScriptContext;
     helperWorldbooks?: HelperWorldbookContext;
     userName?: string;
+    /** 交互卡 {{char}} 宏使用的有效角色身份；气泡标题与 name2 仍使用资产 name。 */
+    characterName?: string;
     parts?: TemplateDisplayPart[];
     regexDiagnostics?: DisplayRegexDiagnostics;
     text: string;

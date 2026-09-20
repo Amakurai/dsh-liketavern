@@ -26,6 +26,7 @@ import {
   type WorkspaceIndex,
 } from '../src/state/workspace.js'
 import { WorkspaceFs } from '../src/state/workspaceFs.js'
+import { cardToStJson, embedCardInPng, parseJsonCard, parsePngCard } from '../src/state/card.js'
 
 let root: string
 /** 角色库目录（与 node/paths.ts 的 paths.characters 对应）。 */
@@ -173,14 +174,81 @@ describe('importCard', () => {
     expect(listed[0]).toMatchObject({ hasCharacterBook: false, characterBookEntryCount: 0 })
   })
 
-  it('importWorldBook: false 跳过内嵌世界书落盘，card.json 里 characterBook 为空', async () => {
-    const ws = await importCard(charactersDir, makeCard(), { importWorldBook: false })
+  it('importWorldBook: false 跳过资产书，并清除 card 镜像与 raw 全部已识别落点', async () => {
+    const book = (id: string) => ({ name: id, entries: [{ keys: [id], content: `${id}-content` }] })
+    const card = parseJsonCard({
+      spec: 'chara_card_v3',
+      character_book: book('top-snake'),
+      lorebook: JSON.stringify(book('top-alias')),
+      characterBook: book('top-camel'),
+      extensions: { character_book: book('top-ext-snake'), characterBook: book('top-ext-camel'), world: book('top-ext-world'), keepTop: true },
+      data: {
+        name: '跳过内嵌书',
+        character_book: book('data-snake'),
+        lorebook: book('data-alias'),
+        characterBook: book('data-camel'),
+        // data.world 只是 V3/厂商直接字段；data.extensions.lorebook 也不在 pickCharacterBook 的别名中。
+        world: book('data-world-must-stay'),
+        extensions: { character_book: book('data-ext-snake'), characterBook: book('data-ext-camel'), world: book('data-ext-world'),
+          lorebook: book('data-ext-lorebook-must-stay'), keepData: true },
+      },
+    })
+    const ws = await importCard(charactersDir, card, { importWorldBook: false })
     expect(await pathExists(join(ws.root, 'assets', 'character-book.json'))).toBe(false)
     expect(ws.card.characterBook).toBeNull()
+    expect(ws.card.extensions).toEqual({ world: book('data-world-must-stay'), lorebook: book('data-ext-lorebook-must-stay'), keepData: true })
     const cardJson = await readJson(join(ws.root, 'card.json'))
     expect(cardJson.characterBook).toBeNull()
+    expect(cardJson.extensions).toEqual({ world: book('data-world-must-stay'), lorebook: book('data-ext-lorebook-must-stay'), keepData: true })
+    const raw = cardJson.raw as Record<string, unknown> & { data: Record<string, unknown> }
+    for (const layer of [raw, raw.data]) {
+      expect(layer).not.toHaveProperty('character_book')
+      expect(layer).not.toHaveProperty('lorebook')
+      expect(layer).not.toHaveProperty('characterBook')
+    }
+    // 被 data.extensions 遮蔽的顶层兼容落点也要按 skip 意图清理，避免其它读取器重新识别。
+    expect(raw.extensions).toEqual({ keepTop: true })
+    expect(raw.data.world).toEqual(book('data-world-must-stay'))
+    expect(raw.data.extensions).toEqual({ lorebook: book('data-ext-lorebook-must-stay'), keepData: true })
     const loaded = await loadCharacter(charactersDir, ws.cardId)
     expect(loaded!.card.characterBook).toBeNull()
+    expect(loaded!.card.raw).toEqual(raw)
+
+    // 没有 data.extensions 时顶层 extensions 才是解析器实际来源；只清 world 等支持键，不误删 ext.lorebook。
+    const fallback = parseJsonCard({ name: '顶层扩展书', extensions: {
+      world: book('fallback-world'), lorebook: book('fallback-lorebook-must-stay'), keep: 1,
+    } })
+    const fallbackWs = await importCard(charactersDir, fallback, { importWorldBook: false })
+    const fallbackRaw = (await readJson(join(fallbackWs.root, 'card.json'))).raw as { extensions: Record<string, unknown> }
+    expect(fallbackRaw.extensions).toEqual({ lorebook: book('fallback-lorebook-must-stay'), keep: 1 })
+  })
+
+  it('importWorldBook: false 重嵌 PNG 卡元数据，磁盘 card.png 不残留内嵌书', async () => {
+    const rawSource = {
+      spec: 'chara_card_v3',
+      spec_version: '3.7-vendor',
+      vendor_meta: { exporter: 'vendor-x', untouched: true },
+      data: {
+        name: 'PNG 清洗卡',
+        nickname: '清洗后仍保留',
+        character_book: { name: '敏感设定', entries: [{ keys: ['secret'], content: '不得驻盘' }] },
+      },
+    }
+    const source = parseJsonCard(rawSource)
+    const originalPng = embedCardInPng(null, rawSource, source.spec)
+    const pngCard = parsePngCard(originalPng)
+    expect(pngCard.characterBook?.entries).toHaveLength(1)
+
+    const ws = await importCard(charactersDir, pngCard, { importWorldBook: false })
+    const savedPng = new Uint8Array(await readFile(join(ws.root, 'card.png')))
+    const reparsed = parsePngCard(savedPng)
+    expect(reparsed.characterBook).toBeNull()
+    expect((reparsed.raw as { data: Record<string, unknown> }).data).not.toHaveProperty('character_book')
+    expect((reparsed.raw as { data: Record<string, unknown> }).data.nickname).toBe('清洗后仍保留')
+    expect((reparsed.raw as { spec_version: string }).spec_version).toBe('3.7-vendor')
+    expect((reparsed.raw as { vendor_meta: unknown }).vendor_meta).toEqual(rawSource.vendor_meta)
+    expect(savedPng).not.toEqual(originalPng)
+    expect(await pathExists(join(ws.root, 'assets', 'character-book.json'))).toBe(false)
   })
 })
 

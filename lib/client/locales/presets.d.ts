@@ -40,6 +40,7 @@ export declare const zh: {
     readonly 'presets.entry.depth': "深度";
     readonly 'presets.entry.order': "顺序";
     readonly 'presets.entry.marker': "占位符";
+    readonly 'presets.entry.markerId': "占位符标识";
     readonly 'presets.entry.content': "内容";
     readonly 'presets.entry.delete': "删除条目";
     readonly 'presets.regexList.label': "随预设导入的正则（{count} 条；开关随「保存预设」生效，重新导入以文件为准）";

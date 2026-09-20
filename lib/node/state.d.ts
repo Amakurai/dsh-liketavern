@@ -213,7 +213,7 @@ export declare class TavernState {
      * 身份是 identifier/id，显示名可改），原 id 照常覆盖。
      */
     private resolveAssetWriteId;
-    /** 删除角色卡内嵌世界书（assets/character-book.json + card.json 的 characterBook 置空）。非楼层写入，不记 WAL。 */
+    /** 删除角色卡内嵌世界书（规范字段、兼容别名、独立资产与 PNG 元数据一并清理）。非楼层写入，不记 WAL。 */
     deleteCharacterLorebook(cardId: string): Promise<void>;
     /** 导入角色卡（PNG/JSON 字节），落盘工作区并初始化索引。 */
     importCharacter(fileName: string, bytes: Uint8Array, opts?: {

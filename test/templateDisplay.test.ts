@@ -85,7 +85,27 @@ describe('有序展示与真实消息格式化',()=>{
   })
   it('普通片段拆分保留开头和结尾；展示边界拒绝坏数据及无界输出',()=>{
     expect(splitTemplateDisplay('before\n<html><body>one</body></html>\nmiddle\n```html\n<html><body>two</body></html>\n```\nafter').map(p=>p.kind)).toEqual(['markdown','html','markdown','html','markdown'])
+    expect(splitTemplateDisplay('before\n```html\n<button>继续</button><p>状态</p>\n```\nafter')).toEqual([
+      {kind:'markdown',text:'before'},{kind:'html',text:'<button>继续</button><p>状态</p>'},{kind:'markdown',text:'after'},
+    ])
+    const styled='<style>.status{color:red}</style><p class="status">正常</p>'
+    expect(splitTemplateDisplay(styled)).toEqual([{kind:'html',text:styled}])
     for(const bad of [[{kind:'script',text:'x'}],[{kind:'markdown',text:'x',title:'bad'}],[{kind:'html',text:'x',title:8}],[{kind:'html',text:'x'.repeat(1024*1024+1)}],Array.from({length:129},()=>({kind:'markdown',text:'x'}))]) expect(()=>parseTemplateDisplayParts(bad)).toThrow()
+  })
+  it('惰性模板内的围栏与文档示例不被提升，模板后的真实卡仍在同一沙箱',()=>{
+    const inert='<template id="card-template"><template><html><body>示例文档</body></html></template>\n'
+      +'```html\n<button>示例按钮</button>\n```\n</template>'
+    expect(splitTemplateDisplay(inert)).toEqual([{kind:'markdown',text:inert}])
+    const live=inert+'\n<script>document.body.dataset.ready="yes"</script><button type="button">真实按钮</button>'
+    expect(splitTemplateDisplay('前文\n'+live+'\n后文')).toEqual([
+      {kind:'markdown',text:'前文'},{kind:'html',text:live},{kind:'markdown',text:'后文'},
+    ])
+
+    const fallback='<noscript>```html\n<div>回退示例</div>\n```</noscript>'
+    expect(splitTemplateDisplay(fallback)).toEqual([{kind:'markdown',text:fallback}])
+    expect(splitTemplateDisplay(fallback+'\n<div>真实状态</div>')).toEqual([
+      {kind:'html',text:fallback+'\n<div>真实状态</div>'},
+    ])
   })
   it('机读块先于 HTML 拆分收起，跨片段清理后只降级真正可见的卡面',()=>{
     const raw='<think><div>隐藏推理</div>尾部秘密</think>可见答案'

@@ -76,6 +76,11 @@ export function Select(props: {
   const label = useContext(ControlLabel)
   const selected = props.options.find((o) => o.value === props.value)
   const width = props.width ?? '100%'
+  // 保存等操作会临时禁用整张表单；若此时菜单正展开，只把传给 Menu 的 open
+  // 变成 false 会留下内部 open=true，操作结束后菜单会无故再次弹出。
+  useEffect(() => {
+    if (props.disabled) setOpen(false)
+  }, [props.disabled])
   return (
     <div className="dsh-tavern-select" style={{ width }}>
       <Menu
@@ -95,7 +100,7 @@ export function Select(props: {
             type="button"
             className={`dsh-tavern-pillSelect${props.size === 'sm' ? ' is-sm' : ''}`}
             aria-haspopup="menu"
-            aria-expanded={open}
+            aria-expanded={open && !props.disabled}
             aria-label={props.title}
             aria-labelledby={props.title ? undefined : label?.labelId}
             aria-describedby={label?.descriptionId}
@@ -437,7 +442,7 @@ export function Avatar(props: { url?: string | null; name?: string; size?: numbe
   const cls = `dsh-tavern-avatar${props.className ? ` ${props.className}` : ''}`
   if (props.url) {
     return (
-      <span className={cls} style={style}>
+      <span className={cls} style={style} aria-hidden="true">
         <img src={props.url} alt="" />
       </span>
     )
@@ -445,13 +450,13 @@ export function Avatar(props: { url?: string | null; name?: string; size?: numbe
   const initial = (props.name ?? '').trim().charAt(0)
   if (initial && size >= 24) {
     return (
-      <span className={cls} style={style}>
+      <span className={cls} style={style} aria-hidden="true">
         {initial}
       </span>
     )
   }
   return (
-    <span className={cls} style={style}>
+    <span className={cls} style={style} aria-hidden="true">
       <IconUserOutline16 size={Math.max(12, Math.round(size * 0.6))} />
     </span>
   )
@@ -462,6 +467,7 @@ export function Skeleton(props: { width?: number | string; height?: number; radi
   return (
     <div
       className="dsh-tavern-skeleton"
+      aria-hidden="true"
       style={{ width: props.width ?? '100%', height: props.height ?? 14, borderRadius: props.radius, ...props.style }}
     />
   )
@@ -521,7 +527,11 @@ export function useLoader<T>(load: () => Promise<Envelope<T>>, deps: readonly un
       if (alive) setState({ status: 'error', message: t('util.loadTimeout') })
     }, timeoutMs)
     const settle = () => clearTimeout(timer)
-    load()
+    // typert 通常返回 Promise，但代理未安装、方法 getter 或测试替身也可能在返回
+    // Promise 前同步抛错。先进入已解决 Promise，把两类失败统一收进错误态；否则
+    // 异常会逃出 effect，页面既白屏又无法点 reload 恢复。
+    Promise.resolve()
+      .then(load)
       .then((r) => {
         settle()
         if (alive) setState(r.ok ? { status: 'ready', value: r.value } : { status: 'error', message: r.error.message })
@@ -665,16 +675,24 @@ export function ConfirmDialog(props: {
   onConfirm: () => void
 }) {
   const t = useT()
+  // 请求已经提交后，Esc/遮罩和按钮必须遵守同一 busy 闸门；仅禁用 footer
+  // 按钮仍会让 Modal.onClose 绕过限制，导致进行中的破坏性操作失去可见反馈。
+  const cancel = () => {
+    if (!props.busy) props.onCancel()
+  }
+  const confirm = () => {
+    if (!props.busy) props.onConfirm()
+  }
   return (
     <Modal
       open={props.open}
-      onClose={props.onCancel}
+      onClose={cancel}
       title={props.title}
       description={props.description}
       closeLabel={t('action.cancel')}
       footer={
         <div className="dsh-tavern-modalActions">
-          <Button type="button" variant="outline" size="md" disabled={props.busy} onClick={props.onCancel}>
+          <Button type="button" variant="outline" size="md" disabled={props.busy} onClick={cancel}>
             {t('action.cancel')}
           </Button>
           <Button
@@ -682,7 +700,7 @@ export function ConfirmDialog(props: {
             variant="primary"
             size="md"
             disabled={props.busy}
-            onClick={props.onConfirm}
+            onClick={confirm}
             style={props.danger ? { background: 'var(--dsw-alias-state-error-primary, #ec1313)', borderColor: 'transparent' } : undefined}
           >
             {props.confirmLabel ?? t('action.confirm')}

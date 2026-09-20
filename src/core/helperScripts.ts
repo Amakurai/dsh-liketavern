@@ -9,7 +9,7 @@ export interface HelperScriptView {type:HelperScriptType;revision:string;trees:H
 export interface HelperScriptContext {storyId:string;bindingRevision:string;libraries:HelperScriptView[]}
 export interface HelperScriptCommit {storyId:string;bindingRevision:string;type:HelperScriptType;revision:string;trees:unknown}
 export interface HelperScriptAsset {target:HelperScriptTarget;revision:string;trees:HelperScriptTree[]}
-export interface HelperScriptBundle extends HelperScriptLibrary {libraries:HelperScriptAsset[];scriptContext?:HelperScriptContext;worldbooks?:HelperWorldbookContext;runtimeError?:string;storyId:string;messageId:number|null;snapshot?:HelperSnapshot;enabled:boolean;helperMvu?:boolean;whitelist:string[]}
+export interface HelperScriptBundle extends HelperScriptLibrary {libraries:HelperScriptAsset[];scriptContext?:HelperScriptContext;worldbooks?:HelperWorldbookContext;runtimeError?:string;storyId:string;messageId:number|null;snapshot?:HelperSnapshot;enabled:boolean;helperMvu?:boolean;whitelist:string[];name?:string;characterName?:string;userName?:string}
 export interface HelperScriptButton {name:string;visible:boolean}
 export interface HelperScript {
   type:'script';id:string;name:string;enabled:boolean;content:string;info:string

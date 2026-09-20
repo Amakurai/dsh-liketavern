@@ -36,12 +36,13 @@ import { impersonate } from './impersonate.js'
 import { loadBoundLoreEntries, runTavernPipeline } from './pipeline.js'
 import { hasEjs } from '../core/template.js'
 import { templateCardData } from '../core/templateAssets.js'
+import { characterPromptName } from '../core/characterData.js'
 import { loadTemplateState, templateTextHash } from '../state/template.js'
 import { loadTemplateAvatars } from './templateAvatar.js'
-import { readDisplaySessionEvents } from './sessionEvents.js'
+import { displaySessionEventAt, displaySessionHasUserMessage, readDisplaySessionEvents } from './sessionEvents.js'
 import {getHelperWorldbookContext,helperWorldbookOperation,rebindHelperWorldbooks} from './helperWorldbook.js'
 import {editHelperMessages} from './helperChatEdits.js'
-import { getHelperSnapshot, commitHelperVariables, getHelperScriptBundle } from './helperRuntime.js'
+import { getHelperDisplayContext, getHelperSnapshot, commitHelperVariables, getHelperScriptBundle } from './helperRuntime.js'
 import {prepareHelperMvuJob,commitHelperMvuJob} from './helperMvu.js'
 import {runHelperMvuEnable} from './helperMvuLifecycle.js'
 import {abandonHelperMvu} from './helperMvuAbandon.js'
@@ -180,6 +181,7 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
       hasAvatar: await handle.fs.exists('card.png'),
       depthPrompt: card.depthPrompt,
       extensions: card.extensions,
+      characterName: characterPromptName(card),
     }
   }
 
@@ -486,7 +488,8 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
     const settings = this.settingsScope.get()
     const whitelist = [...settings.cardNetworkWhitelist]
     const session = this.ctx.sessions.get(request.sessionId as Session['id'])
-    const canSwipeGreeting = Boolean(session && !session.snapshotEvents().some((e) => e.type === 'user/message'))
+    const liveEvents=session?.snapshotEvents()
+    const canSwipeGreeting = Boolean(liveEvents && !displaySessionHasUserMessage(liveEvents))
     const binding = await this.state.loadBinding(request.sessionId)
     if (!binding) {
       const presented = presentRenderedOutput(text, settings.interactiveCards)
@@ -500,12 +503,11 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
         canSwipeGreeting: false,
       }
     }
-    const displayEvents = await readDisplaySessionEvents(this.ctx,request.sessionId)
     const allowHtml = settings.interactiveCards && binding.interactiveCards !== false
     const rules = await this.state.rulesFor(binding)
     const ws = await this.state.loadCharacter(binding.cardId)
     const persona = await this.state.resolvePersona(binding.personaId)
-    const names = { char: ws?.card.name ?? 'Assistant', user: persona?.name ?? DEFAULT_USER_NAME }
+    const names = { char: ws ? characterPromptName(ws.card) : 'Assistant', user: persona?.name ?? DEFAULT_USER_NAME }
     // SillyTavern：先 substituteParams 再跑展示正则，开场白里的 {{user}} 才能被按名字匹配。
     let named = expandIdentityMacros(text, names)
     let templateParts: TemplateDisplayPart[] | undefined
@@ -522,7 +524,9 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
       }
     }
     else if (hasEjs(named)) {
-      const greeting = request.messageId !== undefined && displayEvents.some(event => Number(event.seq) === request.messageId && isTavernGreetingEvent(event))
+      // 只有未物化 EJS 才需要核对开场白事件；普通历史气泡不再重复读取完整会话。
+      const displayEvents=await readDisplaySessionEvents(this.ctx,request.sessionId)
+      const greeting = request.messageId !== undefined && isTavernGreetingEvent(displaySessionEventAt(displayEvents,request.messageId)??{type:''})
       if (request.messageId !== undefined && !greeting) throw new Error('该回复的模板未成功提交或已被编辑；请查看触发日志，不会在刷新时重新执行写入')
       // 开场白/独立展示没有楼层，仅执行临时副本；浏览器传入文本永远不能落盘变量。
       const preset = binding.presetId ? await this.state.loadPreset(binding.presetId) : null
@@ -564,8 +568,10 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
     return {
       ...(parts === undefined ? {} : { parts }),
       ...(regexDiagnostics ? { regexDiagnostics } : {}),
-      // 纯文本消息也承载后台脚本发布的选项；上下文不能依赖是否生成 HTML。
-      ...(allowHtml && request.messageId !== undefined ? {helper: await getHelperSnapshot(this.ctx,this.state,request.sessionId,request.messageId)} : {}),
+      // 纯文本消息也承载后台脚本发布的选项，但不应为历史中的每个气泡重复传输完整消息与变量快照。
+      ...(allowHtml && request.messageId !== undefined ? htmls.length
+        ? {helper:await getHelperSnapshot(this.ctx,this.state,request.sessionId,request.messageId)}
+        : {helperContext:await getHelperDisplayContext(this.ctx,this.state,request.sessionId,request.messageId)} : {}),
       ...(htmls.length && request.messageId !== undefined ? {helperScripts:await this.state.getSessionHelperScripts(request.sessionId,binding.storyId!),helperWorldbooks:await getHelperWorldbookContext(this.state,request.sessionId,binding.storyId!)} : {}),
       html: htmls[0] ?? null,
       htmls,
@@ -576,6 +582,7 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
       greetingIndex: binding.greetingIndex,
       canSwipeGreeting,
       userName: names.user,
+      characterName: names.char,
     }
   }
 

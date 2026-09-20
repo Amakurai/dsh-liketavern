@@ -8,7 +8,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { TavernState } from '../src/node/state.js'
 import { resolveConfig } from '../src/node/config.js'
-import { getHelperSnapshot, commitHelperVariables,getHelperScriptBundle,withHelperStoryWrite } from '../src/node/helperRuntime.js'
+import { getHelperDisplayContext, getHelperSnapshot, commitHelperVariables,getHelperScriptBundle,withHelperStoryWrite } from '../src/node/helperRuntime.js'
 import { helperChanges, helperTable, type HelperSnapshot } from '../src/core/helperRuntime.js'
 import { HELPER_STATE_PATH } from '../src/state/helper.js'
 import { newStoryId, snapshotStory } from '../src/state/story.js'
@@ -40,6 +40,48 @@ const save=(snapshot:HelperSnapshot,key:string,value:Record<string,unknown>,sess
 const ws=async(id='a')=>{const binding=(await state.loadBinding(id))!;return state.storyWorkspace(cardId,binding.storyId)}
 
 describe('剧情变量与真实历史',()=>{
+  /**
+   * 长聊天首屏会并发渲染全部 assistant 气泡。缓存必须只扫描一次同一不可变事件快照，
+   * 但 append 或换绑后必须重新派生，不能把旧剧情身份/历史修订带入新卡面。
+   */
+  it('并发气泡复用一次历史派生，宿主 append 与剧情换绑可靠失效',async()=>{
+    let contentReads=0
+    const tracked=(text:string)=>{
+      const content=[{type:'text',text}]
+      const filter=content.filter.bind(content)
+      Object.defineProperty(content,'filter',{value:(predicate:Parameters<typeof filter>[0])=>{contentReads++;return filter(predicate)}})
+      return content
+    }
+    const history:SessionEvent[]=[]
+    const assistantSeqs:number[]=[]
+    for(let index=0;index<48;index++){
+      const userSeq=history.length,assistantSeq=userSeq+1
+      history.push({type:'user/message',seq:userSeq,time:0,surfaceOp:'append',data:{id:`u-${index}`,content:tracked(`用户 ${index}`),source:{kind:'user'}}} as unknown as SessionEvent)
+      history.push({type:'assistant/message',seq:assistantSeq,time:0,surfaceOp:'append',data:{stream:[],turn:index+1,step:1,
+        message:{id:`a-${index}`,content:tracked(`角色 ${index}`),source:{provider:'factory',model:'factory'}}}} as unknown as SessionEvent)
+      assistantSeqs.push(assistantSeq)
+    }
+    sessions.set('a',history)
+    const batch=await Promise.all(assistantSeqs.map(messageId=>getHelperDisplayContext(ctx,state,'a',messageId)))
+    expect(contentReads).toBe(history.length)
+    expect(new Set(batch.map(item=>item.historyRevision))).toHaveLength(1)
+    expect(batch.map(item=>item.currentMessageId)).toEqual(assistantSeqs.map((_,index)=>index*2+1))
+
+    const initialEventCount=history.length
+    history.push({type:'assistant/message',seq:history.length,time:0,surfaceOp:'append',data:{stream:[],turn:49,step:1,
+      message:{id:'a-new',content:tracked('新增回复'),source:{provider:'factory',model:'factory'}}}} as unknown as SessionEvent)
+    const appended=history
+    const appendedSeq=history.length-1,afterAppend=await getHelperDisplayContext(ctx,state,'a',appendedSeq)
+    expect(contentReads).toBe(initialEventCount+appended.length)
+    expect(afterAppend.historyRevision).not.toBe(batch[0]?.historyRevision)
+
+    const oldStory=afterAppend.storyId,nextCard=await state.createCharacter('缓存换绑角色')
+    await state.saveBinding({... (await state.loadBinding('a'))!,cardId:nextCard.cardId,storyId:undefined})
+    const rebound=await getHelperDisplayContext(ctx,state,'a',appendedSeq)
+    expect(rebound.storyId).not.toBe(oldStory)
+    expect(contentReads).toBe(initialEventCount+appended.length*2)
+  })
+
   it('脚本资产按修订保存并随角色导出，保留同期修改的角色资料和旧设置',async()=>{
     const cardRoot=(await state.workspace(cardId)).fs.root,json=JSON.parse(await readFile(join(cardRoot,'card.json'),'utf8'))
     json.extensions={unrelated:{keep:true},tavern_helper:[['scripts',[]],['variables',{seed:5}],['otherSetting',true]]}
@@ -91,6 +133,55 @@ describe('剧情变量与真实历史',()=>{
     await state.saveBinding({... (await state.loadBinding('a'))!,interactiveCards:false})
     const disabled=await getHelperScriptBundle(ctx,state,'a')
     expect(disabled.enabled).toBe(false);expect(disabled.snapshot).toBeUndefined()
+  })
+  it('脚本包读取角色元数据期间换绑会拒绝旧结果，重试只返回新角色',async()=>{
+    const previous=(await state.loadBinding('a'))!,next=await state.createCharacter('新工厂角色')
+    const entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>()
+    const original=state.resolvePersona.bind(state)
+    let calls=0
+    vi.spyOn(state,'resolvePersona').mockImplementation(async personaId=>{
+      calls++
+      // getHelperScriptBundle：初读绑定、首次复核、读取脚本包元数据。只卡住最后一步，
+      // 让换绑恰好发生在首次复核之后，覆盖无脚本提前返回曾泄漏旧名称的窗口。
+      if(calls===3){entered.resolve();await release.promise}
+      return original(personaId)
+    })
+
+    const stale=getHelperScriptBundle(ctx,state,'a')
+    await entered.promise
+    await state.saveBinding({...previous,cardId:next.cardId,storyId:undefined})
+    release.resolve()
+
+    await expect(stale).rejects.toThrow(/绑定已改变/)
+    const fresh=await getHelperScriptBundle(ctx,state,'a')
+    expect(fresh).toMatchObject({cardId:next.cardId,name:'新工厂角色',characterName:'新工厂角色'})
+    expect(fresh.name).not.toBe('工厂角色')
+  })
+  it('脚本包读取人设期间只换 personaId 也拒绝旧 userName，重试返回新人设',async()=>{
+    const oldPersona=await state.savePersona({id:'old-persona',name:'旧旅人',description:'',avatar:null})
+    const newPersona=await state.savePersona({id:'new-persona',name:'新旅人',description:'',avatar:null})
+    const previous=(await state.loadBinding('a'))!
+    await state.saveBinding({...previous,personaId:oldPersona})
+    const bound=(await state.loadBinding('a'))!
+    const entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>()
+    const original=state.resolvePersona.bind(state)
+    let calls=0
+    vi.spyOn(state,'resolvePersona').mockImplementation(async personaId=>{
+      calls++
+      // 初读绑定、首次复核后，卡住真正用于 bundle.userName 的人设读取。
+      if(calls===3){entered.resolve();await release.promise}
+      return original(personaId)
+    })
+
+    const stale=getHelperScriptBundle(ctx,state,'a')
+    await entered.promise
+    await state.saveBinding({...bound,personaId:newPersona})
+    release.resolve()
+
+    await expect(stale).rejects.toThrow(/绑定已改变/)
+    const fresh=await getHelperScriptBundle(ctx,state,'a')
+    expect(fresh).toMatchObject({cardId,userName:'新旅人'})
+    expect(fresh.userName).not.toBe('旧旅人')
   })
   it('投影真实原文和连续下标，过滤合成消息；读快照不写状态',async()=>{
     const snapshot=await read()

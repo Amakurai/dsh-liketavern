@@ -4,10 +4,11 @@ import type {ReactNode} from 'react'
 import {expect,it,vi} from 'vitest'
 import type {SessionInput} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import {ScriptChoices,parseScriptChoices,choiceDraft,publishScriptChoices,clearScriptChoices,installChoiceInput} from '../src/client/helperChoices.js'
-import type {HelperSnapshot} from '../src/core/helperRuntime.js'
+import type {HelperDisplayContext,HelperSnapshot} from '../src/core/helperRuntime.js'
 import {Btn} from '../src/client/util.js'
 vi.mock('@deepseek-ai/dsh-client-ui-primitives',()=>({Button:(p:{children?:ReactNode})=><button>{p.children}</button>,Tooltip:(p:{children?:ReactNode})=><>{p.children}</>,IconChevronDownOutline14:()=>null}))
 const context:HelperSnapshot={storyId:'story',historyRevision:'rev',currentMessageId:0,messages:[{message_id:0,name:'Character',role:'assistant',message:'sample',is_hidden:false,data:{},extra:{}}],scopes:{},writable:true}
+const displayContext:HelperDisplayContext={storyId:'story',historyRevision:'rev',currentMessageId:0,currentMessageRole:'assistant'}
 it('有界纯文本选项拒绝额外字段与不可见目标',()=>{
   expect(()=>parseScriptChoices([{label:'x',text:'y',html:'<script>'}])).toThrow()
   expect(()=>parseScriptChoices(Array.from({length:33},()=>({label:'x',text:'y'})))).toThrow()
@@ -22,9 +23,10 @@ it('仅同会话同剧情同修订消息显示选项，点击只写草稿，忙�
   let view:ReactTestRenderer|undefined
   try{
     publishScriptChoices(owner,'session',context,0,[{label:'Pick',text:'choice'}])
-    await act(async()=>{view=create(<ScriptChoices sessionId="other" context={context}/>)});expect(view!.toJSON()).toBe(null)
-    await act(async()=>view!.update(<ScriptChoices sessionId="session" context={{...context,historyRevision:'new'}}/>));expect(view!.toJSON()).toBe(null)
-    await act(async()=>view!.update(<ScriptChoices sessionId="session" context={context}/>))
+    // 展示端只需紧凑上下文；消息正文与变量表不应成为选项按钮的依赖。
+    await act(async()=>{view=create(<ScriptChoices sessionId="other" context={displayContext}/>)});expect(view!.toJSON()).toBe(null)
+    await act(async()=>view!.update(<ScriptChoices sessionId="session" context={{...displayContext,historyRevision:'new'}}/>));expect(view!.toJSON()).toBe(null)
+    await act(async()=>view!.update(<ScriptChoices sessionId="session" context={displayContext}/>))
     await act(async()=>view!.root.findByType(Btn).props.onClick());expect(setDraft).toHaveBeenCalledWith('keep\nchoice');expect(submit).not.toHaveBeenCalled()
     phase='submitting';await act(async()=>view!.root.findByType(Btn).props.onClick());expect(setDraft).toHaveBeenCalledTimes(1)
     await act(async()=>clearScriptChoices(owner));expect(view!.toJSON()).toBe(null)

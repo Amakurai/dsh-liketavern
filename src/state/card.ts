@@ -8,6 +8,7 @@
 
 import { Buffer } from 'node:buffer'
 import { inflateSync } from 'node:zlib'
+import { characterDataExtras, isKnownCharacterDataKey } from '../core/characterData.js'
 import type { CardRegexScript, CharacterCard, ChatRole, DepthPrompt, LorebookFile } from '../core/types.js'
 
 /** 角色卡解析失败时抛出，消息使用中文。 */
@@ -59,26 +60,6 @@ function toStr(value: unknown): string {
 function toStrArr(value: unknown): string[] {
   return Array.isArray(value) ? value.map(toStr) : []
 }
-
-/** 归一化时已消费的 data 字段；其余字段（含 V3 新增）落入 extensions。 */
-const KNOWN_DATA_KEYS = new Set([
-  'name',
-  'description',
-  'personality',
-  'scenario',
-  'first_mes',
-  'alternate_greetings',
-  'mes_example',
-  'system_prompt',
-  'post_history_instructions',
-  'creator_notes',
-  'creator',
-  'character_version',
-  'tags',
-  'character_book',
-  'regex_scripts',
-  'extensions',
-])
 
 /** spec 判定：json.spec 优先，其次 PNG chunk 关键字 hint，再按 data 包装/顶层平铺推断。 */
 function detectSpec(obj: Record<string, unknown>, hint: 'chara_card_v3' | null): CardSpec {
@@ -169,6 +150,79 @@ function pickCharacterBook(json: Record<string, unknown>, data: Record<string, u
   return null
 }
 
+const DIRECT_BOOK_KEYS = ['character_book', 'lorebook', 'characterBook'] as const
+const EXTENSION_BOOK_KEYS = ['character_book', 'characterBook', 'world'] as const
+
+/** 仅判定解析器会当作有效内嵌书的非空值，不误删同名的其它厂商扩展。 */
+function isEmbeddedBook(value: unknown): boolean {
+  return (normalizeBook(value)?.entries.length ?? 0) > 0
+}
+
+/** 清理 V1/V2/V3 顶层或 data 直接字段中的世界书落点，不触碰 extensions。 */
+function stripDirectBooks(input: Record<string, unknown>): Record<string, unknown> {
+  const output = { ...input }
+  for (const key of DIRECT_BOOK_KEYS) {
+    if (isEmbeddedBook(input[key])) delete output[key]
+  }
+  return output
+}
+
+/** 仅清理 pickCharacterBook 实际采用的 extensions 来源中三个受支持的键。 */
+function stripExtensionBooks(input: Record<string, unknown>): Record<string, unknown> {
+  const output = { ...input }
+  for (const key of EXTENSION_BOOK_KEYS) {
+    if (isEmbeddedBook(input[key])) delete output[key]
+  }
+  return output
+}
+
+function stripRawCharacterBooks(value: unknown): unknown {
+  if (!isRecord(value)) return value
+  const hasWrappedData = isRecord(value.data)
+  const rawData = hasWrappedData ? value.data as Record<string, unknown> : value
+  const root = stripDirectBooks(value)
+  const data = hasWrappedData ? stripDirectBooks(rawData) : root
+  // 用户明确选择“不导入世界书”时，连被 data.extensions 遮蔽的顶层兼容落点也清理，
+  // 避免换一个读取器后又把同一 PNG/JSON 中的书识别出来；不支持的 extensions.lorebook 保留。
+  if (isRecord(value.extensions)) root.extensions = stripExtensionBooks(value.extensions)
+  if (isRecord(rawData.extensions)) data.extensions = stripExtensionBooks(rawData.extensions)
+  if (hasWrappedData) root.data = data
+  return root
+}
+
+/**
+ * 用户拒绝导入内嵌世界书时的纯函数清洗：运行字段、兼容镜像和 raw 原文一起清除。
+ * raw 仍保留未知 V3 字段与其它 extensions，不原地修改预检得到的卡对象。
+ */
+export function withoutEmbeddedCharacterBook(card: CharacterCard): CharacterCard {
+  const extensions = { ...card.extensions }
+  const raw = isRecord(card.raw) ? card.raw : null
+  if (raw) {
+    const rawData = isRecord(raw.data) ? raw.data : raw
+    const directKeys = new Set(Object.keys(rawData))
+    const extensionSource = isRecord(rawData.extensions) ? rawData.extensions
+      : rawData !== raw && isRecord(raw.extensions) ? raw.extensions : null
+    // 旧版曾把直接别名镜像进 extensions；删除镜像后，data.extensions.lorebook
+    // 不在解析器支持列表中，若原本存在必须恢复为厂商扩展。
+    for (const key of ['lorebook', 'characterBook'] as const) {
+      if (!isEmbeddedBook(rawData[key]) || !isEmbeddedBook(extensions[key])) continue
+      if (key === 'lorebook' && isRecord(rawData.extensions) && Object.hasOwn(rawData.extensions, key)) {
+        extensions[key] = rawData.extensions[key]
+      } else delete extensions[key]
+    }
+    for (const key of EXTENSION_BOOK_KEYS) {
+      if (!extensionSource || !isEmbeddedBook(extensionSource[key])) continue
+      // data.world 会在归一化时覆盖同名 extensions.world，但它本身不是世界书落点。
+      if (key === 'world' && directKeys.has('world')) continue
+      if (isEmbeddedBook(extensions[key])) delete extensions[key]
+    }
+  } else {
+    // 无 raw 的手工/旧卡无法追溯镜像来源；只清理解析器明确支持的扩展键。
+    for (const key of EXTENSION_BOOK_KEYS) if (isEmbeddedBook(extensions[key])) delete extensions[key]
+  }
+  return { ...card, characterBook: null, extensions, raw: stripRawCharacterBooks(card.raw) }
+}
+
 function parseDepthPrompt(ext: Record<string, unknown>): DepthPrompt | null {
   const raw = ext.depth_prompt
   if (!isRecord(raw)) return null
@@ -219,7 +273,7 @@ function normalizeCardInternal(
   const extensions: Record<string, unknown> = {}
   if (isRecord(data.extensions)) Object.assign(extensions, data.extensions)
   for (const [key, value] of Object.entries(data)) {
-    if (!KNOWN_DATA_KEYS.has(key)) extensions[key] = value
+    if (!isKnownCharacterDataKey(key, value)) extensions[key] = value
   }
 
   return {
@@ -472,7 +526,8 @@ export function embedCardInPng(pngBytes: Uint8Array | null, json: unknown, spec:
 
 /** 导出 SillyTavern 角色卡 JSON（V2 data 包装；V3 保持 spec）。 */
 export function cardToStJson(card: CharacterCard): unknown {
-  const extensions: Record<string, unknown> = { ...card.extensions }
+  const projected = characterDataExtras(card)
+  const extensions: Record<string, unknown> = projected.extensions
   if (card.depthPrompt) {
     extensions.depth_prompt = {
       prompt: card.depthPrompt.prompt,
@@ -483,6 +538,7 @@ export function cardToStJson(card: CharacterCard): unknown {
     delete extensions.depth_prompt
   }
   const data: Record<string, unknown> = {
+    ...projected.fields,
     name: card.name,
     description: card.description,
     personality: card.personality,

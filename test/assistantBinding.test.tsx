@@ -12,16 +12,17 @@ import type { ReactTestRenderer } from 'react-test-renderer'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BINDING_CHANGED_EVENT } from '../src/client/actions.js'
 import { TavernAssistantNode } from '../src/client/assistant.js'
-import { invalidateSessionBinding } from '../src/client/cache.js'
+import { CHARACTER_CHANGED_EVENT, invalidateCharacter, invalidateSessionBinding } from '../src/client/cache.js'
 import { defaultBinding } from '../src/client/chip.js'
 import { setTavernLocale } from '../src/client/i18n.js'
 import type { CharacterDetail, SessionBinding, TavernRemote } from '../src/client/types.js'
 
-const bubble = vi.hoisted(() => ({ mounts: 0 }))
+const bubble = vi.hoisted(() => ({ mounts: 0, props: undefined as Record<string, unknown> | undefined }))
 vi.mock('../src/client/speech.js', () => ({
-  SpeechBubble: (props: { cardId: string; interactiveCards?: boolean }) => {
+  SpeechBubble: (props: { cardId: string; characterRevision?:string; bindingRevision?:string; interactiveCards?: boolean; fileMentions?: unknown; media?: ReactNode }) => {
+    bubble.props = props
     useEffect(() => { bubble.mounts += 1 }, [])
-    return <div data-bubble={props.cardId} data-cards={props.interactiveCards === true ? 'on' : 'off'} />
+    return <div data-bubble={props.cardId} data-cards={props.interactiveCards === true ? 'on' : 'off'}>{props.media}</div>
   },
 }))
 vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
@@ -40,7 +41,7 @@ const detail: CharacterDetail = { cardId: 'card-a', name: '灯塔守望者', has
   creatorNotes: '', creator: '', characterVersion: '', tags: [], spec: 'chara_card_v2', depthPrompt: null, extensions: {} }
 const node = { location: { kind: 'turn', turn: { status: 'closed', turn: 1 } }, data: { status: 'complete', blocks: [{ kind: 'text', text: '你好。' }], finalNode: { seq: 3 } } }
 
-beforeEach(() => { setTavernLocale('zh'); bubble.mounts = 0; vi.stubGlobal('window', new EventTarget()) })
+beforeEach(() => { setTavernLocale('zh'); bubble.mounts = 0; bubble.props = undefined; vi.stubGlobal('window', new EventTarget()) })
 afterEach(async () => { for (const view of mounted.splice(0)) await act(async () => view.unmount()); vi.unstubAllGlobals(); vi.useRealTimers() })
 
 function environment(sessionId: string) {
@@ -224,5 +225,146 @@ describe('assistant 楼层绑定刷新', () => {
     const calls = env.getSessionBinding.mock.calls.length
     await act(async () => { window.dispatchEvent(new CustomEvent(BINDING_CHANGED_EVENT, { detail: 'other-session' })) })
     expect(env.getSessionBinding.mock.calls.length).toBe(calls)
+  })
+
+  it('同一卡切换剧情或人设时更新显示绑定修订且不重挂气泡', async () => {
+    const sessionId = 'assistant-display-binding-revision'
+    const env = environment(sessionId)
+    const view = await render(env.remote, sessionId)
+    await env.change({ ...defaultBinding(sessionId, 'card-a'), storyId: 'story-a', personaId: 'persona-a' })
+    const first = bubble.props?.bindingRevision
+    await env.change({ ...defaultBinding(sessionId, 'card-a'), storyId: 'story-b', personaId: 'persona-b' })
+    expect(bubble.props?.bindingRevision).not.toBe(first)
+    const second = bubble.props?.bindingRevision
+    await env.change({ ...defaultBinding(sessionId, 'card-a'), storyId: 'story-b', personaId: 'persona-b', helperMvu: true })
+    expect(bubble.props?.bindingRevision).not.toBe(second)
+    expect(view.root.findByProps({ 'data-bubble': 'card-a' })).toBeDefined()
+    expect(bubble.mounts).toBe(1)
+  })
+
+  it('绑定后的角色气泡沿用宿主核验的文件链接解析结果', async () => {
+    const sessionId = 'assistant-file-mentions'
+    const env = environment(sessionId)
+    const mentions = { resolve: vi.fn() }
+    const resolver = vi.fn(() => mentions as never)
+    const openFile = vi.fn()
+    const useTurnData = vi.fn(() => ({ closing: { finalNode: { seq: 3 } } }))
+    const useSessions = (select: (state: unknown) => unknown) => select({ byId: {
+      [sessionId]: { projectionValues: { agentPreset: 'tavern' } },
+    } })
+    let view!: ReactTestRenderer
+    await act(async () => { view = create(<TavernAssistantNode remote={env.remote} sessionId={sessionId} node={node}
+      useSessions={useSessions as never} useTurnData={useTurnData} openFile={openFile} fileMentions={resolver} />) })
+    mounted.push(view)
+    await env.change(defaultBinding(sessionId, 'card-a'))
+    expect(resolver).toHaveBeenCalledWith(expect.objectContaining({ seq: 3, openFile }))
+    expect(bubble.props?.fileMentions).toBe(mentions)
+  })
+
+  it('角色详情加载失败时保留正文与明确重试，恢复后更新角色名', async () => {
+    const sessionId = 'assistant-detail-retry', cardId = 'assistant-detail-retry-card'
+    const env = environment(sessionId)
+    const getCharacterDetail = vi.fn()
+      .mockResolvedValueOnce({ ok: false, error: { code: 'offline', message: '角色详情连接失败' } })
+      .mockResolvedValue({ ok: true, value: { ...detail, cardId, name: '恢复后的角色' } })
+    const remote = { ...env.remote, getCharacterDetail } as TavernRemote
+    invalidateCharacter(cardId)
+    const view = await render(remote, sessionId)
+    await env.change(defaultBinding(sessionId, cardId))
+    expect(view.root.findByProps({ 'data-bubble': cardId })).toBeDefined()
+    expect(JSON.stringify(view.toJSON())).toContain('角色详情连接失败')
+    const retry = view.root.findAllByType('button').find(button => button.props.children === '重新加载角色卡')
+    expect(retry).toBeDefined()
+    await act(async () => retry!.props.onClick({ stopPropagation() {} }))
+    expect(getCharacterDetail).toHaveBeenCalledTimes(2)
+    expect(bubble.props?.name).toBe('恢复后的角色')
+    invalidateCharacter(cardId)
+  })
+
+  it('文本与图片混合的绑定消息仍走角色气泡，并保留宿主图片渲染器', async () => {
+    const sessionId = 'assistant-card-with-images'
+    const env = environment(sessionId)
+    const mixedNode = { ...node, data: { ...node.data, blocks: [
+      { kind: 'text', text: '<div>角色卡正文</div>' },
+      { kind: 'image', attachment: { id: 'image-1' } },
+    ] } }
+    const renderMessageImages = vi.fn(() => <div data-owner-images="true" />)
+    const useSessions = (select: (state: unknown) => unknown) => select({ byId: {
+      [sessionId]: { projectionValues: { agentPreset: 'tavern' } },
+    } })
+    let view!: ReactTestRenderer
+    await act(async () => { view = create(<TavernAssistantNode remote={env.remote} sessionId={sessionId} node={mixedNode}
+      useSessions={useSessions as never} renderMessageImages={renderMessageImages} />) })
+    mounted.push(view)
+    await env.change(defaultBinding(sessionId, 'card-a'))
+    expect(view.root.findByProps({ 'data-bubble': 'card-a' })).toBeDefined()
+    expect(bubble.props?.rawText).toBe('<div>角色卡正文</div>')
+    expect(view.root.findByProps({ 'data-owner-images': 'true' })).toBeDefined()
+    expect(renderMessageImages).toHaveBeenLastCalledWith({ images: [{ attachment: { id: 'image-1' } }], align: 'start' })
+  })
+
+  it('图片夹在两段正文之间时回退宿主保序渲染，不把图片错误挪到末尾', async () => {
+    const sessionId = 'assistant-interleaved-images'
+    const env = environment(sessionId)
+    const mixedNode = { ...node, data: { ...node.data, blocks: [
+      { kind: 'text', text: '图片前' },
+      { kind: 'image', attachment: { id: 'image-middle' } },
+      { kind: 'text', text: '图片后' },
+    ] } }
+    const renderMessageImages = vi.fn(({ images }: { images: Array<{ attachment: { id: string } }> }) => <div data-owner-images={images[0]!.attachment.id} />)
+    const useSessions = (select: (state: unknown) => unknown) => select({ byId: {
+      [sessionId]: { projectionValues: { agentPreset: 'tavern' } },
+    } })
+    let view!: ReactTestRenderer
+    await act(async () => { view = create(<TavernAssistantNode remote={env.remote} sessionId={sessionId} node={mixedNode}
+      useSessions={useSessions as never} renderMessageImages={renderMessageImages as never} />) })
+    mounted.push(view)
+    await env.change(defaultBinding(sessionId, 'card-a'))
+    expect(view.root.findAllByProps({ 'data-bubble': 'card-a' })).toHaveLength(0)
+    const ordered = view.root.findAll(node => node.type === 'p' || node.props['data-owner-images'])
+    expect(ordered.map(item => item.type === 'p' ? item.props.children : item.props['data-owner-images'])).toEqual([
+      '图片前', 'image-middle', '图片后',
+    ])
+  })
+
+  it.each([
+    ['图片后的思考块', [{ kind: 'text', text: '正文' }, { kind: 'image', attachment: { id: 'image-tail' } }, { kind: 'reasoning', text: '后置思考' }]],
+    ['宿主未知块', [{ kind: 'text', text: '正文' }, { kind: 'future-block', block: { value: 1 } }, { kind: 'image', attachment: { id: 'image-tail' } }]],
+  ])('%s 回退宿主块渲染，不被角色气泡重排或吞掉', async (_label, blocks) => {
+    const sessionId = `assistant-native-blocks-${_label}`
+    const env = environment(sessionId)
+    const mixedNode = { ...node, data: { ...node.data, blocks } }
+    const renderMessageImages = vi.fn(() => <div data-owner-images="tail" />)
+    const useSessions = (select: (state: unknown) => unknown) => select({ byId: {
+      [sessionId]: { projectionValues: { agentPreset: 'tavern' } },
+    } })
+    let view!: ReactTestRenderer
+    await act(async () => { view = create(<TavernAssistantNode remote={env.remote} sessionId={sessionId} node={mixedNode}
+      useSessions={useSessions as never} renderMessageImages={renderMessageImages} />) })
+    mounted.push(view)
+    await env.change(defaultBinding(sessionId, 'card-a'))
+    expect(view.root.findAllByProps({ 'data-bubble': 'card-a' })).toHaveLength(0)
+    expect(view.root.findByProps({ 'data-owner-images': 'tail' })).toBeDefined()
+  })
+
+  it('同页保存角色卡后，已挂载气泡主动刷新角色详情', async () => {
+    const sessionId = 'assistant-character-changed', cardId = 'assistant-live-card'
+    const env = environment(sessionId)
+    let current = { ...detail, cardId, revision: 'revision-1', name: '保存前名称' }
+    const getCharacterDetail = vi.fn(async () => ok(current))
+    const remote = { ...env.remote, getCharacterDetail } as TavernRemote
+    invalidateCharacter(cardId)
+    const view = await render(remote, sessionId)
+    await env.change(defaultBinding(sessionId, cardId))
+    expect(bubble.props?.name).toBe('保存前名称')
+
+    current = { ...current, revision: 'revision-2', name: '保存后名称' }
+    invalidateCharacter(cardId)
+    await act(async () => window.dispatchEvent(new CustomEvent(CHARACTER_CHANGED_EVENT, { detail: cardId })))
+    expect(getCharacterDetail).toHaveBeenCalledTimes(2)
+    expect(bubble.props?.name).toBe('保存后名称')
+    expect(bubble.props?.characterRevision).toBe('revision-2')
+    expect(view.root.findByProps({ 'data-bubble': cardId })).toBeDefined()
+    invalidateCharacter(cardId)
   })
 })

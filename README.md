@@ -4,7 +4,7 @@
 
 **在 DeepSeek Harness 的 `dsh web` 中使用角色卡、世界书与长期记忆，开始 Tavern 式角色扮演。**
 
-**[v0.3.0](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.3.0) · 适配 dsh `0.1.5-rc.2` · Node.js ≥ 24**
+**[v0.3.1](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.3.1) · 适配 dsh `0.1.5-rc.2` · Node.js ≥ 24**
 
 中文 | [English](./README.en.md)
 
@@ -69,7 +69,7 @@ dsh-liketavern 是 DeepSeek Harness 的角色扮演插件。你可以导入 Sill
 在终端执行，固定到发布标签：
 
 ```bash
-dsh plugin --profile web add github:Amakurai/dsh-liketavern#v0.3.0
+dsh plugin --profile web add github:Amakurai/dsh-liketavern#v0.3.1
 dsh plugin --profile web list --depth 0
 ```
 
@@ -83,10 +83,10 @@ dsh web
 
 ### 使用安装包
 
-从 [v0.3.0 Release](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.3.0) 下载 `dsh-liketavern-0.3.0.tgz`，在文件所在目录执行：
+从 [v0.3.1 Release](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.3.1) 下载 `dsh-liketavern-0.3.1.tgz`，在文件所在目录执行：
 
 ```bash
-dsh plugin --profile web add ./dsh-liketavern-0.3.0.tgz
+dsh plugin --profile web add ./dsh-liketavern-0.3.1.tgz
 ```
 
 安装后同样重启 `dsh web`。Release 附有 `SHA256SUMS.txt`，可用于核对下载文件。

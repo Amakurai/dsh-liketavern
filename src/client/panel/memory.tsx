@@ -59,7 +59,7 @@ function MemoryEditor(props: { remote: TavernRemote; cardId: string; storyId?: s
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 }}>
       {guard.confirmation}
-      <textarea className="dsh-tavern-input dsh-tavern-textarea" disabled={busy} value={body} onChange={(e) => setBody(e.target.value)} />
+      <textarea aria-label={t('memory.entryBody')} className="dsh-tavern-input dsh-tavern-textarea" disabled={busy} value={body} onChange={(e) => setBody(e.target.value)} />
       <div className="dsh-tavern-fieldRow">
         <label className="dsh-tavern-field">
           <span className="dsh-tavern-fieldLabel">{t('memory.tags')}</span>
@@ -241,12 +241,12 @@ function MemoryContextSection(props: { remote: TavernRemote; cardId: string; sto
         <Select
           size="md"
           value={cardId}
-          disabled={busy || editingId !== null} onChange={(value) => guard.request(() => { setStoryId(undefined); setCardId(value) })}
+          disabled={busy || editingId !== null || chars.state.status !== 'ready'} onChange={(value) => guard.request(() => { setStoryId(undefined); setCardId(value) })}
           options={[{ value: '', label: t('memory.pickCharacter') }, ...charItems.map((c) => ({ value: c.cardId, label: c.name }))]}
         />
       </SettingsRow>
       {cardId && <SettingsRow title={t('memory.story')} description={t('memory.storyDesc')}>
-        <Select value={storyId ?? ''} disabled={busy || editingId !== null} onChange={(value) => guard.request(() => setStoryId(value || undefined))}
+        <Select value={storyId ?? ''} disabled={busy || editingId !== null || stories.state.status !== 'ready'} onChange={(value) => guard.request(() => setStoryId(value || undefined))}
           options={[{ value: '', label: t('memory.initialState') }, ...(stories.state.status === 'ready' ? stories.state.value.items.map((story, index) => ({ value: story.id, label: t('memory.storyLabel', { index: index + 1, date: story.createdAt.slice(0, 10) }) })) : [])]} />
       </SettingsRow>}
       {cardId && <div className="dsh-tavern-storyContext" role="status">
@@ -258,18 +258,20 @@ function MemoryContextSection(props: { remote: TavernRemote; cardId: string; sto
         {storyId && <span className="dsh-tavern-muted">{stories.state.status === 'ready'
           ? stories.state.value.items.find((s) => s.id === storyId)?.sessionId ?? storyId : storyId}</span>}
       </div>}
-      <Err message={stories.state.status === 'error' ? stories.state.message : error} />
+      <Err message={chars.state.status === 'error' ? chars.state.message : stories.state.status === 'error' ? stories.state.message : error} />
+      {chars.state.status === 'error' && <Btn disabled={busy} onClick={chars.reload}>{t('action.retry')}</Btn>}
+      {stories.state.status === 'error' && <Btn disabled={busy} onClick={stories.reload}>{t('action.retry')}</Btn>}
       {cardId && (
         <>
           <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10, margin: '10px 0 14px' }}>
-            <div className="dsh-tavern-filters">
-              <button type="button" className="dsh-tavern-chip" data-active={tab === 'memory' ? 'true' : 'false'} disabled={busy || editingId !== null} onClick={() => setTab('memory')}>
+            <div className="dsh-tavern-filters" role="group" aria-label={t('section.memory')}>
+              <button type="button" aria-pressed={tab === 'memory'} className="dsh-tavern-chip" data-active={tab === 'memory' ? 'true' : 'false'} disabled={busy || editingId !== null} onClick={() => setTab('memory')}>
                 {t('memory.tab.memory', { count: memoryItems.length })}
               </button>
-              <button type="button" className="dsh-tavern-chip" data-active={tab === 'delta' ? 'true' : 'false'} disabled={busy || editingId !== null} onClick={() => setTab('delta')}>
+              <button type="button" aria-pressed={tab === 'delta'} className="dsh-tavern-chip" data-active={tab === 'delta' ? 'true' : 'false'} disabled={busy || editingId !== null} onClick={() => setTab('delta')}>
                 {t('memory.tab.delta', { count: deltaItems.length })}
               </button>
-              <button type="button" className="dsh-tavern-chip" data-active={tab === 'journal' ? 'true' : 'false'} disabled={busy || editingId !== null} onClick={() => setTab('journal')}>
+              <button type="button" aria-pressed={tab === 'journal'} className="dsh-tavern-chip" data-active={tab === 'journal' ? 'true' : 'false'} disabled={busy || editingId !== null} onClick={() => setTab('journal')}>
                 {t('memory.tab.journal')}
               </button>
             </div>
@@ -286,7 +288,7 @@ function MemoryContextSection(props: { remote: TavernRemote; cardId: string; sto
                   <Skeleton height={72} />
                 </>
               )}
-              {memories.state.status === 'error' && <Err message={memories.state.message} />}
+              {memories.state.status === 'error' && <><Err message={memories.state.message} /><Btn disabled={busy} onClick={memories.reload}>{t('action.retry')}</Btn></>}
               {memoryItems.length === 0 && memories.state.status === 'ready' && (
                 <div className="dsh-tavern-empty is-compact">
                   <div className="dsh-tavern-emptyTitle">{t('memory.emptyMemories')}</div>
@@ -329,6 +331,7 @@ function MemoryContextSection(props: { remote: TavernRemote; cardId: string; sto
               <div className="dsh-tavern-memo is-compose">
                 <textarea
                   className="dsh-tavern-input dsh-tavern-textarea"
+                  aria-label={t('memory.entryBody')}
                   style={{ minHeight: 60 }}
                   placeholder={t('memory.newPlaceholder')}
                   disabled={busy}
@@ -350,7 +353,7 @@ function MemoryContextSection(props: { remote: TavernRemote; cardId: string; sto
                   <Skeleton height={72} />
                 </>
               )}
-              {deltas.state.status === 'error' && <Err message={deltas.state.message} />}
+              {deltas.state.status === 'error' && <><Err message={deltas.state.message} /><Btn disabled={busy} onClick={deltas.reload}>{t('action.retry')}</Btn></>}
               {deltaItems.map((d: WorldDelta) => (
                 <div key={d.id} className={`dsh-tavern-memo${d.revoked ? ' is-revoked' : ''}`}>
                   <div className="dsh-tavern-memoHead">
@@ -399,6 +402,7 @@ function MemoryContextSection(props: { remote: TavernRemote; cardId: string; sto
                 </div>
                 <textarea
                   className="dsh-tavern-input dsh-tavern-textarea"
+                  aria-label={t('memory.deltaBodyPlaceholder')}
                   style={{ minHeight: 60, marginTop: 8 }}
                   placeholder={t('memory.deltaBodyPlaceholder')}
                   disabled={busy}
@@ -422,13 +426,14 @@ function MemoryContextSection(props: { remote: TavernRemote; cardId: string; sto
               {journal.state.status === 'ready' ? (
                 <textarea
                   className="dsh-tavern-input dsh-tavern-textarea"
+                  aria-label={t('memory.tab.journal')}
                   style={{ minHeight: 180 }}
                   disabled={busy}
                   value={journalText}
                   onChange={(e) => setJournalText(e.target.value)}
                 />
               ) : journal.state.status === 'error' ? (
-                <Err message={journal.state.message} />
+                <><Err message={journal.state.message} /><Btn disabled={busy} onClick={journal.reload}>{t('action.retry')}</Btn></>
               ) : (
                 <Skeleton height={180} />
               )}

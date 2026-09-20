@@ -2,6 +2,7 @@
 import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { ReactNode } from 'react'
+import { MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives'
 import {watchHelperScripts} from '../src/client/helperScriptNotifications.js'
 import {ScriptChoices} from '../src/client/helperChoices.js'
 import { SpeechHtmlFrame,SpeechBubble } from '../src/client/speech.js'
@@ -17,7 +18,11 @@ import { splitTemplateDisplay } from '../src/core/templateDisplay.js'
 import { presentRenderedOutput } from '../src/core/displaySanitize.js'
 
 vi.mock('../src/client/styles.js', () => ({ CARD_VARIABLE_STYLES: '' }))
-vi.mock('../src/client/cache.js', () => ({ cachedAvatar: async () => ({ ok: true, value: { dataUrl: null } }) }))
+vi.mock('../src/client/cache.js', () => ({
+  CHARACTER_CHANGED_EVENT:'dsh-tavern:character-changed',
+  cachedAvatar: async () => ({ ok: true, value: { dataUrl: null } }),
+  invalidateSessionBinding:vi.fn(),
+}))
 vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
   IconCopyOutline16: () => null, IconUserOutline16: () => null, IconSearchOutline16: () => null,
   IconChevronDownOutline14: () => null, Menu: () => null,
@@ -101,7 +106,7 @@ it('会话隐藏后台脚本，设置保存只重新加载使用该资产的运�
   const trees=parseHelperScriptTrees([{id:'script-a',name:'工厂脚本',enabled:true,content:'await Promise.resolve(); window.factory=1'}])
   let revision='v1'
   const getHelperScriptBundle=vi.fn(async()=>({ok:true,value:{cardId:'card',revision,storyId:'story',trees,messageId:17,snapshot:helperSnapshot,enabled:true,whitelist:[]}}))
-  await mount(<HelperScripts remote={{getHelperScriptBundle} as unknown as TavernRemote} sessionId="script-session"/>)
+  await mount(<HelperScripts remote={{getHelperScriptBundle} as unknown as TavernRemote} sessionId="script-session" cardId="card"/>)
   const frame=view!.root.findByType('iframe')
   expect(frame.props.sandbox).toBe('allow-scripts')
   expect(view!.root.findByProps({className:'dsh-tavern-scriptHost'}).props.hidden).toBe(true)
@@ -113,6 +118,26 @@ it('会话隐藏后台脚本，设置保存只重新加载使用该资产的运�
   expect(getHelperScriptBundle).toHaveBeenCalledTimes(2)
   expect(view!.root.findByType('iframe')).not.toBe(frame)
   expect(view!.root.findByType('iframe').props.srcDoc).toContain('window.factory=1')
+  const assetFrame=view!.root.findByType('iframe')
+  await act(async()=>window.dispatchEvent(new CustomEvent('dsh-tavern:character-changed',{detail:'other'})))
+  expect(getHelperScriptBundle).toHaveBeenCalledTimes(2);expect(view!.root.findByType('iframe')).toBe(assetFrame)
+  await act(async()=>window.dispatchEvent(new CustomEvent('dsh-tavern:character-changed',{detail:'card'})))
+  expect(getHelperScriptBundle).toHaveBeenCalledTimes(3);expect(view!.root.findByType('iframe')).not.toBe(assetFrame)
+})
+
+it('角色连续保存时后台脚本在 bundle 重拉空窗仍不会漏掉第二次刷新',async()=>{
+  const pending=Promise.withResolvers<{ok:true;value:{cardId:string;revision:string;storyId:string;trees:never[];messageId:null;snapshot:null;enabled:boolean;whitelist:never[]}}>()
+  const bundle={cardId:'card',revision:'v1',storyId:'story',trees:[] as never[],messageId:null,snapshot:null,enabled:false,whitelist:[] as never[]}
+  const getHelperScriptBundle=vi.fn()
+    .mockResolvedValueOnce({ok:true,value:bundle})
+    .mockImplementationOnce(()=>pending.promise)
+    .mockResolvedValue({ok:true,value:{...bundle,revision:'v3'}})
+  await mount(<HelperScripts remote={{getHelperScriptBundle} as unknown as TavernRemote} sessionId="script-race" cardId="card"/>)
+  await act(async()=>{window.dispatchEvent(new CustomEvent('dsh-tavern:character-changed',{detail:'card'}));await Promise.resolve()})
+  expect(getHelperScriptBundle).toHaveBeenCalledTimes(2)
+  await act(async()=>{window.dispatchEvent(new CustomEvent('dsh-tavern:character-changed',{detail:'card'}));await Promise.resolve()})
+  expect(getHelperScriptBundle).toHaveBeenCalledTimes(3)
+  await act(async()=>pending.resolve({ok:true,value:{...bundle,revision:'v2'}}))
 })
 
 it('刷新固定真实会话和消息；剧情换绑后的回包不能泄漏新剧情数据',async()=>{
@@ -223,6 +248,42 @@ it('模板渲染传递宿主消息 seq，失败在气泡中明确展示', async 
   expect(view!.root.findByProps({ role: 'alert' }).children.join('')).toContain('模板未成功提交')
 })
 
+it('空展示片段不污染 remote 回包，Markdown 继续使用宿主核验的文件链接', async () => {
+  const parts: [] = []
+  const renderOutputText = vi.fn(async () => ({ ok: true as const, value: {
+    text: '查看 `C:/story/card.txt`', html: null, htmls: [], parts, interactiveCards: true,
+    whitelist: [], greetings: [], greetingIndex: 0, canSwipeGreeting: false,
+  } }))
+  const fileMentions = { resolve: vi.fn() } as never
+  await mount(<SpeechBubble remote={{ renderOutputText } as unknown as TavernRemote} sessionId="mentions"
+    cardId="card" name="灯塔" rawText="原始正文" fileMentions={fileMentions}
+    media={<div data-owner-media="true" />} />)
+  const markdown = view!.root.findByType(MarkdownText)
+  expect(markdown.props.text).toBe('查看 `C:/story/card.txt`')
+  expect(markdown.props.fileMentions).toBe(fileMentions)
+  expect(parts).toEqual([])
+  expect(view!.root.findByProps({ className: 'dsh-tavern-speechBody' }).findByProps({ 'data-owner-media': 'true' })).toBeDefined()
+})
+
+it('角色详情首个修订只建立基线，后续修订才重新读取卡面宏与开场白投影',async()=>{
+  let revision='旧修订'
+  const renderOutputText=vi.fn(async()=>({ok:true as const,value:{text:'',htmls:[`<p>${revision}</p>`],interactiveCards:true,
+    whitelist:[],greetings:[revision],greetingIndex:0,canSwipeGreeting:false}}))
+  const rpc={renderOutputText} as unknown as TavernRemote
+  await mount(<SpeechBubble remote={rpc} sessionId="revision" cardId="card" name="角色" rawText="正文"/> )
+  expect(view!.root.findByType('iframe').props.srcDoc).toContain('旧修订')
+  await act(async()=>view!.update(<SpeechBubble remote={rpc} sessionId="revision" cardId="card" characterRevision="r1" name="角色" rawText="正文"/>))
+  expect(renderOutputText).toHaveBeenCalledTimes(1)
+  revision='新修订'
+  await act(async()=>view!.update(<SpeechBubble remote={rpc} sessionId="revision" cardId="card" characterRevision="r2" name="角色" rawText="正文"/>))
+  expect(renderOutputText).toHaveBeenCalledTimes(2)
+  expect(view!.root.findByType('iframe').props.srcDoc).toContain('新修订')
+  revision='新绑定'
+  await act(async()=>view!.update(<SpeechBubble remote={rpc} sessionId="revision" cardId="card" characterRevision="r2" bindingRevision="story-b" name="角色" rawText="正文"/>))
+  expect(renderOutputText).toHaveBeenCalledTimes(3)
+  expect(view!.root.findByType('iframe').props.srcDoc).toContain('新绑定')
+})
+
 it.each(['envelope','rejected'] as const)('卡片显示失败可在原消息重试，恢复前保留原文（%s）',async failure=>{
   const renderOutputText=vi.fn<TavernRemote['renderOutputText']>()
   if(failure==='rejected')renderOutputText.mockRejectedValueOnce(new Error('连接中断'))
@@ -284,6 +345,41 @@ it('内联样式状态栏经真实拆分进入现有沙箱，前后台词继续�
   expect(nodes[1]!.props.srcDoc).toContain("connect-src 'none'")
 })
 
+it('完整页面即使混排前后台词也使用全卡高度，内联状态栏仍使用紧凑高度',async()=>{
+  const page='<!DOCTYPE html><html><head><style>html,body{height:100%}</style></head><body>整页卡</body></html>'
+  const response=(html:string)=>({ok:true as const,value:{...presentRenderedOutput(html,true),parts:splitTemplateDisplay(html),interactiveCards:true,
+    whitelist:[],greetings:[],greetingIndex:0,canSwipeGreeting:false}})
+  await mount(<SpeechBubble remote={{renderOutputText:async()=>response(page)} as unknown as TavernRemote}
+    sessionId="page-height" cardId="card" name="角色" rawText={page}/> )
+  let frame=view!.root.findByType('iframe')
+  expect(frame.props.className).toBe('dsh-tavern-speechHtml')
+  expect(frame.props.style.height).toBeUndefined()
+  const mixed={...presentRenderedOutput(page,true),parts:[{kind:'markdown' as const,text:'前文'},{kind:'html' as const,text:page}],interactiveCards:true,
+    whitelist:[],greetings:[],greetingIndex:0,canSwipeGreeting:false}
+  await act(async()=>view!.update(<SpeechBubble remote={{renderOutputText:async()=>({ok:true as const,value:mixed})} as unknown as TavernRemote}
+    sessionId="mixed-page-height" cardId="card" name="角色" rawText={'前文\n'+page}/>))
+  frame=view!.root.findByType('iframe')
+  expect(frame.props.className).toBe('dsh-tavern-speechHtml')
+  expect(frame.props.style.height).toBeUndefined()
+  const status='<div class="status">状态栏</div>'
+  await act(async()=>view!.update(<SpeechBubble remote={{renderOutputText:async()=>response(status)} as unknown as TavernRemote}
+    sessionId="status-height" cardId="card" name="角色" rawText={status}/>))
+  frame=view!.root.findByType('iframe')
+  expect(frame.props.className).toContain('is-widget')
+  expect(frame.props.style.height).toBe(80)
+})
+
+it('显式 HTML 围栏里的按钮和段落始终进入隔离卡面',async()=>{
+  const sourceText='前文\n```html\n<button type="button">继续</button><p>状态</p>\n```\n后文'
+  const rpc={renderOutputText:async()=>({ok:true as const,value:{...presentRenderedOutput(sourceText,true),parts:splitTemplateDisplay(sourceText),interactiveCards:true,
+    whitelist:[],greetings:[],greetingIndex:0,canSwipeGreeting:false}})} as unknown as TavernRemote
+  await mount(<SpeechBubble remote={rpc} sessionId="fenced-controls" cardId="card" name="角色" rawText={sourceText}/> )
+  const nodes=view!.root.findAll(node=>node.type==='iframe'||node.type==='p'&&node.props['data-markdown']!==undefined)
+  expect(nodes.map(node=>node.type)).toEqual(['p','iframe','p'])
+  expect(nodes[1]!.props.srcDoc).toContain('<button type="button">继续</button><p>状态</p>')
+  expect(nodes[1]!.props.sandbox).toBe('allow-scripts')
+})
+
 it('模板片段依次展示；折叠标题是纯文字，格式化 HTML 全部保持不透明来源 iframe',async()=>{
   const parts=[{kind:'markdown',text:'前置文字'},{kind:'html',text:'<script>window.test=1</script><b>前置卡</b>',title:'<img src=x onerror=alert(1)>'},
     {kind:'markdown',text:'正文'},{kind:'html',text:'<strong>后置格式化</strong>'}]
@@ -293,6 +389,9 @@ it('模板片段依次展示；折叠标题是纯文字，格式化 HTML 全部�
   expect(ordered.map(node=>node.type)).toEqual(['p','iframe','p','iframe'])
   expect(ordered[0]!.props['data-markdown']).toBe('前置文字')
   expect(ordered[2]!.props['data-markdown']).toBe('正文')
+  expect(ordered[1]!.props.srcDoc).toContain('"frameIndex":0')
+  expect(ordered[3]!.props.srcDoc).toContain('"frameIndex":1')
+  expect(ordered[3]!.props.srcDoc).not.toContain('"frameIndex":3')
   const fold=view!.root.findByType('details')
   expect(fold.props.open).toBeUndefined()
   expect(fold.findByType('summary').children).toEqual(['<img src=x onerror=alert(1)>'])
@@ -458,13 +557,14 @@ it('删除桥同样固定来源和剧情，拒绝混合字段，支持长删除�
   await act(async()=>emit('helperMessageEditApplied',[],{}));expect(open).not.toHaveBeenCalled();await act(async()=>emit('helperMessageEditApplied',[]));expect(open).toHaveBeenCalledOnce()
 })
 
-/** 真实 React 气泡仅在回执确认后替换，并再次执行只读渲染；普通重绘不得毁掉旧卡。 */
-it('刷新固定当前会话与消息，准备失败保留原卡，成功确认后替换且可再次刷新',async()=>{
+/** 真实 React 气泡先隐藏挂载新投影，ready 与显示事件都成功后才替换；普通重绘不得毁掉旧卡。 */
+it('刷新固定当前会话与消息，新投影就绪前保留原卡，发布后可再次刷新',async()=>{
   const snapshot:HelperSnapshot={...helperSnapshot,messages:[{message_id:0,name:'灯塔',role:'assistant',is_hidden:false,message:'卡面',data:{},extra:{}}]}
   let body='<p>旧显示</p>',fail=false
   const renderOutputText=vi.fn(async()=>fail?{ok:false as const,error:{message:'渲染失败'}}:{ok:true as const,value:{text:'',htmls:[body],interactiveCards:true,whitelist:[],greetings:[],greetingIndex:0,canSwipeGreeting:false,helper:snapshot}})
   const getHelperSnapshot=vi.fn(async()=>({ok:true as const,value:snapshot}))
-  const rpc={renderOutputText,getHelperSnapshot} as unknown as TavernRemote
+  const commitHelperVariables=vi.fn(async()=>({ok:true as const,value:snapshot}))
+  const rpc={renderOutputText,getHelperSnapshot,commitHelperVariables} as unknown as TavernRemote
   const component=()=> <SpeechBubble remote={rpc} sessionId="display-session" cardId="card" name="灯塔" rawText="卡面" messageId={17}/>
   const send=(data:Record<string,unknown>,from:unknown=source)=>{const event=new Event('message');Object.defineProperties(event,{source:{value:from},data:{value:{source:'dsh-tavern-card',...data}}});events.dispatchEvent(event)}
   await mount(component());const initial=view!.root.findByType('iframe').props.srcDoc
@@ -484,8 +584,19 @@ it('刷新固定当前会话与消息，准备失败保留原卡，成功确认�
   expect(source.postMessage).toHaveBeenCalledWith(expect.objectContaining({action:'helperSnapshotResult',requestId:'during-refresh',ok:false}),'*')
   await act(async()=>view!.update(component()))
   await act(async()=>send({action:'helperDisplayApplied',requestId:'first'},{}));expect(view!.root.findByType('iframe').props.srcDoc).toBe(initial)
-  await act(async()=>send({action:'helperDisplayApplied',requestId:'first'}));const updated=view!.root.findByType('iframe').props.srcDoc;expect(updated).toContain('新显示')
+  await act(async()=>send({action:'helperDisplayApplied',requestId:'first'}))
+  let staged=view!.root.findAllByType('iframe');expect(staged).toHaveLength(2)
+  expect(staged[0]!.props.srcDoc).toBe(initial);expect(staged[1]!.props.srcDoc).toContain('新显示')
+  const projections=view!.root.findAll(node=>typeof node.props.className==='string'&&node.props.className.includes('dsh-tavern-displayProjection'))
+  expect(projections.map(node=>node.props.className.includes('is-staging'))).toEqual([false,true])
+  expect(projections[1]!.props.hidden).toBeUndefined();expect(projections[1]!.props.style?.display).not.toBe('none')
+  await act(async()=>{send({action:'helperEventConnect',runtimeId:'new-runtime'});send({action:'helperFrameReady',runtimeId:'new-runtime'})})
+  const updated=view!.root.findByType('iframe').props.srcDoc;expect(updated).toContain('新显示')
   expect(updated).not.toBe(initial);expect(getHelperSnapshot.mock.calls[0]?.[0]).toEqual({sessionId:'display-session',messageId:17})
+  await act(async()=>send({action:'helperVariablesCommit',requestId:'published-write',storyId:'story',historyRevision:'revision',
+    changes:[{key:'["chat",""]',before:{},value:{published:true}}]}))
+  expect(source.postMessage.mock.calls.at(-1)?.[0]).toMatchObject({action:'helperVariablesResult',requestId:'published-write',ok:true})
+  expect(commitHelperVariables).toHaveBeenCalledOnce()
   source.postMessage.mockClear();fail=true
   await act(async()=>send(request('second')))
   const nextGuard=source.postMessage.mock.calls.find(([value])=>value.action==='helperDisplayGuard')![0]
@@ -494,6 +605,65 @@ it('刷新固定当前会话与消息，准备失败保留原卡，成功确认�
   expect(source.postMessage).toHaveBeenCalledWith(expect.objectContaining({action:'helperDisplayUnlock'}),'*')
   expect(view!.root.findByType('iframe').props.srcDoc).toBe(updated)
 })
+
+it('相同 HTML 仍后台重建沙箱，60 秒未 ready 时移除 stage、解锁并保留旧卡',async()=>{
+  vi.useFakeTimers()
+  const frames:{postMessage:ReturnType<typeof vi.fn>}[]=[]
+  const snapshot:HelperSnapshot={...helperSnapshot,messages:[{message_id:0,name:'灯塔',role:'assistant',is_hidden:false,message:'卡面',data:{},extra:{}}]}
+  const renderOutputText=vi.fn(async()=>({ok:true as const,value:{text:'',htmls:['<p>相同卡面</p>'],interactiveCards:true,
+    whitelist:[],greetings:[],greetingIndex:0,canSwipeGreeting:false,helper:snapshot}}))
+  const commitHelperVariables=vi.fn(async()=>({ok:true as const,value:snapshot}))
+  const rpc={renderOutputText,commitHelperVariables,getHelperSnapshot:async()=>({ok:true as const,value:snapshot})} as unknown as TavernRemote
+  const send=(from:unknown,value:Record<string,unknown>)=>{const event=new Event('message');Object.defineProperties(event,{source:{value:from},data:{value:{source:'dsh-tavern-card',...value}}});events.dispatchEvent(event)}
+  try{
+    await act(async()=>{view=create(<SpeechBubble remote={rpc} sessionId="display-timeout" cardId="card" name="灯塔" rawText="卡面" messageId={17}/>,
+      {createNodeMock:element=>{if(element.type!=='iframe')return null;const frame={postMessage:vi.fn()};frames.push(frame);return {contentWindow:frame}}})})
+    const original=view!.root.findByType('iframe')
+    await act(async()=>send(frames[0],{action:'helperDisplayRefresh',requestId:'same',storyId:'story',historyRevision:'revision',ids:[0]}))
+    const guard=frames[0]!.postMessage.mock.calls.find(([value])=>value.action==='helperDisplayGuard')![0]
+    await act(async()=>send(frames[0],{action:'helperDisplayGuardResult',requestId:guard.requestId,ok:true}))
+    await act(async()=>send(frames[0],{action:'helperDisplayApplied',requestId:'same'}))
+    expect(renderOutputText).toHaveBeenCalledTimes(2);expect(frames).toHaveLength(2)
+    let staged=view!.root.findAllByType('iframe');expect(staged).toHaveLength(2);expect(staged[0]).toBe(original);expect(staged[1]).not.toBe(original)
+    const projections=view!.root.findAll(node=>typeof node.props.className==='string'&&node.props.className.includes('dsh-tavern-displayProjection'))
+    expect(projections.map(node=>node.props.className.includes('is-staging'))).toEqual([false,true])
+    expect(projections[1]!.props.hidden).toBeUndefined();expect(projections[1]!.props.style?.display).not.toBe('none')
+    await act(async()=>send(frames[1],{action:'helperEventEmit',requestId:'candidate-lifecycle',runtimeId:'candidate-runtime',
+      event:'message_iframe_render_started',args:['iframe-1']}))
+    expect(frames[1]!.postMessage).toHaveBeenCalledWith(expect.objectContaining({action:'helperEventResult',requestId:'candidate-lifecycle',
+      runtimeId:'candidate-runtime',args:['iframe-1'],ok:true}),'*')
+    await act(async()=>{await vi.advanceTimersByTimeAsync(59_999)})
+    expect(view!.root.findAllByType('iframe')).toHaveLength(2)
+    await act(async()=>{await vi.advanceTimersByTimeAsync(1)})
+    staged=view!.root.findAllByType('iframe');expect(staged).toHaveLength(1);expect(staged[0]).toBe(original)
+    expect(frames[0]!.postMessage).toHaveBeenCalledWith(expect.objectContaining({action:'helperDisplayUnlock'}),'*')
+    expect(view!.root.findAllByProps({role:'alert'}).map(node=>node.children.join('')).join('\n')).toContain('原显示已保留')
+  }finally{vi.useRealTimers()}
+})
+
+it('候选卡初始化写剧情会立即废弃候选、解锁并保留旧卡',async()=>{
+  const frames:{postMessage:ReturnType<typeof vi.fn>}[]=[]
+  const snapshot:HelperSnapshot={...helperSnapshot,messages:[{message_id:0,name:'灯塔',role:'assistant',is_hidden:false,message:'卡面',data:{},extra:{}}]}
+  const renderOutputText=vi.fn(async()=>({ok:true as const,value:{text:'',htmls:['<p>候选卡面</p>'],interactiveCards:true,
+    whitelist:[],greetings:[],greetingIndex:0,canSwipeGreeting:false,helper:snapshot}}))
+  const commitHelperVariables=vi.fn(async()=>({ok:true as const,value:snapshot}))
+  const rpc={renderOutputText,commitHelperVariables,getHelperSnapshot:async()=>({ok:true as const,value:snapshot})} as unknown as TavernRemote
+  const send=(from:unknown,value:Record<string,unknown>)=>{const event=new Event('message');Object.defineProperties(event,{source:{value:from},data:{value:{source:'dsh-tavern-card',...value}}});events.dispatchEvent(event)}
+  await act(async()=>{view=create(<SpeechBubble remote={rpc} sessionId="display-write" cardId="card" name="灯塔" rawText="卡面" messageId={17}/>,
+    {createNodeMock:element=>{if(element.type!=='iframe')return null;const frame={postMessage:vi.fn()};frames.push(frame);return {contentWindow:frame}}})})
+  const original=view!.root.findByType('iframe')
+  await act(async()=>send(frames[0],{action:'helperDisplayRefresh',requestId:'write',storyId:'story',historyRevision:'revision',ids:[0]}))
+  const guard=frames[0]!.postMessage.mock.calls.find(([value])=>value.action==='helperDisplayGuard')![0]
+  await act(async()=>send(frames[0],{action:'helperDisplayGuardResult',requestId:guard.requestId,ok:true}))
+  await act(async()=>send(frames[0],{action:'helperDisplayApplied',requestId:'write'}))
+  expect(view!.root.findAllByType('iframe')).toHaveLength(2)
+  await act(async()=>send(frames[1],{action:'helperVariablesCommit',requestId:'candidate-write',storyId:'story',historyRevision:'revision',changes:[]}))
+  expect(commitHelperVariables).not.toHaveBeenCalled()
+  expect(frames[1]!.postMessage).toHaveBeenCalledWith(expect.objectContaining({action:'helperVariablesResult',requestId:'candidate-write',ok:false}),'*')
+  const remaining=view!.root.findAllByType('iframe');expect(remaining).toHaveLength(1);expect(remaining[0]).toBe(original)
+  expect(frames[0]!.postMessage).toHaveBeenCalledWith(expect.objectContaining({action:'helperDisplayUnlock'}),'*')
+})
+
 it('未显示楼层无需重建；拒绝错误序号和陈旧历史，取消迟到的显示发布',async()=>{
   const {registerHelperDisplay}=await import('../src/client/helperDisplay.js')
   const lease={check:vi.fn(),commit:vi.fn(),cancel:vi.fn()},prepare=vi.fn(async()=>lease)
@@ -536,10 +706,39 @@ it('同一消息的全部卡面就绪才发送显示事件，all 等待新卡后
     await act(async()=>{send(frames[0],{action:'helperFrameReady',runtimeId:'a'});view!.update(component())});expect(deliveries).toHaveLength(1)
     await act(async()=>send(frames[0],{action:'helperDisplayRefresh',requestId:'all',storyId:'story',historyRevision:'revision',ids:null}))
     await act(async()=>{for(const frame of frames){const guard=frame.postMessage.mock.calls.find(([value])=>value.action==='helperDisplayGuard')![0];send(frame,{action:'helperDisplayGuardResult',requestId:guard.requestId,ok:true})}})
+    const original=view!.root.findAllByType('iframe')
     await act(async()=>send(frames[0],{action:'helperDisplayApplied',requestId:'all'}));expect(frames).toHaveLength(4);expect(deliveries).toHaveLength(1)
-    await act(async()=>{ready(frames[2],'c');send(frames[3],{action:'helperFrameReady',runtimeId:'b'})});expect(deliveries).toHaveLength(1)
+    let staged=view!.root.findAllByType('iframe');expect(staged).toHaveLength(4);expect(staged[0]).toBe(original[0]);expect(staged[1]).toBe(original[1])
+    await act(async()=>{ready(frames[2],'c');send(frames[3],{action:'helperFrameReady',runtimeId:'b'})})
+    staged=view!.root.findAllByType('iframe');expect(staged).toHaveLength(4);expect(staged[0]).toBe(original[0]);expect(staged[1]).toBe(original[1]);expect(deliveries).toHaveLength(1)
     await act(async()=>ready(frames[3],'d'));expect(deliveries).toEqual([{event:'character_message_rendered',args:[0,'normal']},{event:'character_message_rendered',args:[0,'normal']},{event:'chat_id_changed',args:['story']}])
+    const published=view!.root.findAllByType('iframe');expect(published).toHaveLength(2);expect(published[0]).not.toBe(original[0]);expect(published[1]).not.toBe(original[1])
     await act(async()=>send(frames[3],{action:'helperFrameReady',runtimeId:'d'}));expect(deliveries).toHaveLength(3)
+  }finally{observer.dispose()}
+})
+
+it('纯文本用紧凑剧情上下文发送显示事件，不再补拉完整历史快照',async()=>{
+  const {attachHelperEvents}=await import('../src/client/helperEventRouter.js')
+  const deliveries:unknown[][]=[]
+  let prepared:unknown[]|undefined
+  const observer=attachHelperEvents('compact-context','story',message=>{
+    if(message.action==='helperEventDeliver'){prepared=message.args;queueMicrotask(()=>observer.receive({source:'dsh-tavern-card',action:'helperEventPrepared',runtimeId:'observer',deliveryId:message.deliveryId,args:message.args}))}
+    if(message.action==='helperEventExecute'){
+      deliveries.push(prepared??[])
+      queueMicrotask(()=>observer.receive({source:'dsh-tavern-card',action:'helperEventReply',runtimeId:'observer',deliveryId:message.deliveryId,args:prepared??[],ok:true}))
+    }
+  })
+  observer.receive({source:'dsh-tavern-card',action:'helperEventConnect',runtimeId:'observer'})
+  observer.receive({source:'dsh-tavern-card',action:'helperEventSubscribe',runtimeId:'observer',listenerId:'rendered',event:'character_message_rendered',once:false,position:'normal'})
+  const getHelperSnapshot=vi.fn()
+  const rpc={getHelperSnapshot,renderOutputText:async()=>({ok:true as const,value:{text:'纯文本',html:null,htmls:[],interactiveCards:true,
+    whitelist:[],greetings:[],greetingIndex:0,canSwipeGreeting:false,
+    helperContext:{storyId:'story',historyRevision:'revision',currentMessageId:4,currentMessageRole:'assistant' as const}}})} as unknown as TavernRemote
+  try{
+    await mount(<SpeechBubble remote={rpc} sessionId="compact-context" cardId="card" name="灯塔" rawText="纯文本" messageId={27}/> )
+    await vi.waitFor(()=>expect(deliveries).toEqual([[4,'normal']]))
+    expect(getHelperSnapshot).not.toHaveBeenCalled()
+    expect(view!.root.findAllByType('iframe')).toHaveLength(0)
   }finally{observer.dispose()}
 })
 
@@ -575,14 +774,17 @@ it.each(['affected','all'] as const)('新消息追加后 %s 重绘跳过旧显�
   expect(frames[1]!.postMessage).toHaveBeenCalledWith(expect.objectContaining({action:'helperDisplayResult',requestId:'new',ok:true}),'*')
   expect(view!.root.findAllByType('iframe')[0]).toBe(original[0]);expect(view!.root.findAllByType('iframe')[1]).toBe(original[1])
   await act(async()=>send(frames[1],{action:'helperDisplayApplied',requestId:'new'}))
-  const updated=view!.root.findAllByType('iframe')
-  expect(updated[1]).not.toBe(original[1])
-  if(mode==='all'){expect(updated[0]).not.toBe(original[0]);expect(updated[0]!.props.srcDoc).toContain('H2')}
-  else expect(updated[0]).toBe(original[0])
+  const staged=view!.root.findAllByType('iframe')
+  expect(staged).toHaveLength(mode==='all'?4:3)
+  expect(staged[0]).toBe(original[0]);expect(staged[mode==='all'?2:1]).toBe(original[1])
   expect(counts.get(17)).toBe(mode==='all'?2:1);expect(counts.get(27)).toBe(2)
   expect(getHelperSnapshot).toHaveBeenCalledWith({sessionId:'history-display',messageId:17})
   expect(getHelperSnapshot).toHaveBeenCalledWith({sessionId:'history-display',messageId:27})
   await act(async()=>{for(let index=2;index<frames.length;index++){send(frames[index],{action:'helperEventConnect',runtimeId:'updated-'+index});send(frames[index],{action:'helperFrameReady',runtimeId:'updated-'+index})}})
+  const updated=view!.root.findAllByType('iframe');expect(updated).toHaveLength(2)
+  expect(updated[1]).not.toBe(original[1])
+  if(mode==='all'){expect(updated[0]).not.toBe(original[0]);expect(updated[0]!.props.srcDoc).toContain('H2')}
+  else expect(updated[0]).toBe(original[0])
 })
 
 /** 等待首条消息的后台脚本随剧情通知启动，运行后保持同一沙箱，避免每个新回复重新执行脚本。 */

@@ -13,7 +13,7 @@ import type { LlmResolvedModelInfo, LlmRuntime } from '@deepseek-ai/dsh-llm'
 import { estimateTokens } from '../core/tokenize.js'
 import { type CharacterCard, type MemoryEntry, type PromptPreset, type RegexRule, type WIEngineResult, type WITimerState, type WorldDelta, type WorldInfoEntry } from '../core/types.js'
 import { compileCardRegexScripts, compilePresetRegexScripts } from '../core/regex.js'
-import { normalizeBook, parseJsonCard, parsePngCard, regexScriptsOf, applyCharacterPatch, cardToStJson, createBlankCard, embedCardInPng } from '../state/card.js'
+import { normalizeBook, parseJsonCard, parsePngCard, regexScriptsOf, applyCharacterPatch, cardToStJson, createBlankCard, embedCardInPng, withoutEmbeddedCharacterBook } from '../state/card.js'
 import { parseLorebook } from '../state/lorebook.js'
 import { parseStoredPreset } from '../state/presetStore.js'
 import { MemoryStore } from '../state/memory.js'
@@ -102,6 +102,33 @@ function stringField(json: unknown, key: string): string | null {
   if (!json || typeof json !== 'object') return null
   const value = (json as Record<string, unknown>)[key]
   return typeof value === 'string' && value.trim() ? value : null
+}
+
+/** 角色卡 raw 可重解析时优先沿用，以保留 data 外的厂商字段；旧空 raw 回退标准导出结构。 */
+function preferredCardMetadata(card: CharacterCard): Record<string, unknown> {
+  if (card.raw && typeof card.raw === 'object' && !Array.isArray(card.raw)) {
+    try {
+      parseJsonCard(card.raw)
+      return card.raw as Record<string, unknown>
+    } catch {
+      // 旧工作区可能只有空对象占位；下方用归一化卡生成完整、可重解析的元数据。
+    }
+  }
+  const fallback = cardToStJson(card)
+  if (!fallback || typeof fallback !== 'object' || Array.isArray(fallback)) {
+    throw new Error('无法生成角色卡元数据')
+  }
+  return fallback as Record<string, unknown>
+}
+
+/** 在已清掉全部旧别名的元数据上只挂一个 canonical character_book，避免新旧书并存。 */
+function attachCharacterBookMetadata(card: CharacterCard, book: NonNullable<CharacterCard['characterBook']>): Record<string, unknown> {
+  const metadata = preferredCardMetadata(card)
+  const payload = book.raw ?? { name: book.name ?? card.name, entries: book.entries }
+  if (metadata.data && typeof metadata.data === 'object' && !Array.isArray(metadata.data)) {
+    return { ...metadata, data: { ...(metadata.data as Record<string, unknown>), character_book: payload } }
+  }
+  return { ...metadata, character_book: payload }
 }
 
 /** RegexScope / RegexTiming 的合法取值（types.ts 只导出类型，取值集合在此守住落盘边界）。 */
@@ -469,18 +496,26 @@ export class TavernState {
     })
   }
 
-  /** 删除角色卡内嵌世界书（assets/character-book.json + card.json 的 characterBook 置空）。非楼层写入，不记 WAL。 */
+  /** 删除角色卡内嵌世界书（规范字段、兼容别名、独立资产与 PNG 元数据一并清理）。非楼层写入，不记 WAL。 */
   async deleteCharacterLorebook(cardId: string): Promise<void> {
     assertValidCardId(cardId)
     return withWorkspaceLock(join(this.paths.characters, cardId), async () => {
       const charWs = await this.loadCharacter(cardId)
       if (!charWs) throw new Error(`角色 ${cardId} 不存在`)
       const fs = this.plainFs(cardId)
+      const cleaned = withoutEmbeddedCharacterBook(charWs.card)
+      // 先完成元数据清洗与 PNG 重嵌计算；坏图会在任何删除/写入前失败，不留下半清理状态。
+      const metadata = preferredCardMetadata(cleaned)
+      const next: CharacterCard = { ...cleaned, raw: metadata }
+      const currentPng = await fs.readBytes('card.png')
+      const rewrittenPng = currentPng
+        ? embedCardInPng(currentPng, metadata, next.spec)
+        : null
+      const { pngBytes: _png, ...cardJson } = next
       try {
-      await fs.delete('assets/character-book.json')
-      const cardJson: Record<string, unknown> = { ...charWs.card, characterBook: null }
-      delete cardJson.pngBytes
-      await fs.writeText('card.json', JSON.stringify(cardJson, null, 2) + '\n')
+        await fs.delete('assets/character-book.json')
+        await fs.writeText('card.json', JSON.stringify(cardJson, null, 2) + '\n')
+        if (rewrittenPng) await fs.writeBytes('card.png', rewrittenPng)
       } finally { this.bumpAssetRev(`charlore:${cardId}`) }
     })
   }
@@ -525,11 +560,18 @@ export class TavernState {
       const charWs = await this.loadCharacter(cardId)
       if (!charWs) throw new Error(`角色 ${cardId} 不存在`)
       const fs = this.plainFs(cardId)
+      // 旧卡可能同时含 character_book/lorebook/characterBook/world 等兼容落点；
+      // 先统一清除，再只写一个 canonical character_book，避免导出时新旧两本书并存。
+      const cleaned = withoutEmbeddedCharacterBook(charWs.card)
+      const nextWithoutRaw: CharacterCard = { ...cleaned, characterBook: book }
+      const next: CharacterCard = {
+        ...nextWithoutRaw,
+        raw: attachCharacterBookMetadata(cleaned, book),
+      }
+      const { pngBytes: _png, ...cardJson } = next
       try {
-      await fs.writeText('assets/character-book.json', JSON.stringify(json, null, 2) + '\n')
-      const cardJson: Record<string, unknown> = { ...charWs.card, characterBook: book }
-      delete cardJson.pngBytes
-      await fs.writeText('card.json', JSON.stringify(cardJson, null, 2) + '\n')
+        await fs.writeText('assets/character-book.json', JSON.stringify(json, null, 2) + '\n')
+        await fs.writeText('card.json', JSON.stringify(cardJson, null, 2) + '\n')
       } finally { this.bumpAssetRev(`charlore:${cardId}`) }
       return { name: book.name ?? charWs.card.name, entryCount: book.entries.length }
     })

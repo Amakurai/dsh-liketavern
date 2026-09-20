@@ -14,7 +14,7 @@ function args(value:unknown):unknown[] {
   return parsed
 }
 class Endpoint {
-  runtimeId='';active=true;serial=0;inflight=0
+  runtimeId='';active=true;hostEventsEnabled=true;serial=0;inflight=0
   pending=new Map<string,Delivery>()
   constructor(readonly group:Group,readonly send:(message:Message)=>void,readonly nativeMvu?:NativeMvu){}
   post(message:Message){if(this.active)this.send({source:'dsh-tavern-card',runtimeId:this.runtimeId,...message})}
@@ -132,6 +132,8 @@ export function attachHelperEvents(sessionId:string,storyId:string,send:(message
   const endpoint=new Endpoint(group,send,nativeMvu);group.endpoints.add(endpoint)
   return {
     matchesRuntime:(id:unknown)=>endpoint.active&&typeof id==='string'&&id!==''&&endpoint.runtimeId===id,
+    /** 重绘锁定旧卡时只暂停宿主生命周期事件；普通卡间事件和监听注册仍保持原运行时。 */
+    setHostEventsEnabled:(enabled:boolean)=>{endpoint.hostEventsEnabled=enabled},
     receive:(value:unknown)=>{if(helperRecord(value)&&value.source==='dsh-tavern-card')endpoint.receive(value)},
     dispose:()=>{endpoint.active=false;endpoint.reset('事件监听卡面已卸载');group!.endpoints.delete(endpoint);if(!group!.endpoints.size)groups.delete(key)},
   }
@@ -148,7 +150,7 @@ export async function emitHelperHostEvent(sessionId:string,storyId:string,event:
   try{
     for(const entry of [...group.listeners]){
       if(!current()||groups.get(key)!==group)throw new Error('宿主事件来源已改变')
-      if(entry.event!==event||!group.listeners.includes(entry))continue
+      if(entry.event!==event||!entry.endpoint.hostEventsEnabled||!group.listeners.includes(entry))continue
       if(Date.now()>=deadline)throw new Error('事件处理超过总时间预算')
       const result=await entry.endpoint.invoke(entry,payload,id,deadline-Date.now(),()=>current()&&groups.get(key)===group)
       payload=args(result.args)

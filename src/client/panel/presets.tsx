@@ -78,7 +78,7 @@ function EntryEditor(props: { entry: PresetEntry; onChange: (e: PresetEntry) => 
     <div className="dsh-tavern-entry">
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', padding: '12px 16px 8px' }}>
         <Toggle checked={entry.enabled} onChange={(enabled) => set({ enabled })} title={entry.enabled ? t('presets.entry.disable') : t('presets.entry.enable')} />
-        <input className="dsh-tavern-input" style={{ width: 160 }} value={entry.name} placeholder={t('presets.name')} onChange={(e) => set({ name: e.target.value })} />
+        <input aria-label={t('presets.name')} className="dsh-tavern-input" style={{ width: 160 }} value={entry.name} placeholder={t('presets.name')} onChange={(e) => set({ name: e.target.value })} />
         <Select
           value={entry.role}
           onChange={(v) => set({ role: v as ChatRole })}
@@ -108,7 +108,7 @@ function EntryEditor(props: { entry: PresetEntry; onChange: (e: PresetEntry) => 
           <input type="checkbox" checked={entry.marker} onChange={(e) => set({ marker: e.target.checked })} /> {t('presets.entry.marker')}
         </label>
         {entry.marker && (
-          <input className="dsh-tavern-input" style={{ width: 140 }} value={entry.markerId ?? ''} placeholder="markerId" onChange={(e) => set({ markerId: e.target.value })} />
+          <input aria-label={t('presets.entry.markerId')} className="dsh-tavern-input" style={{ width: 140 }} value={entry.markerId ?? ''} placeholder="markerId" onChange={(e) => set({ markerId: e.target.value })} />
         )}
         <span style={{ flex: 1 }} />
         <IconBtn label={t('presets.entry.delete')} danger onClick={props.onDelete}>
@@ -117,7 +117,7 @@ function EntryEditor(props: { entry: PresetEntry; onChange: (e: PresetEntry) => 
       </div>
       {!entry.marker && (
         <div style={{ padding: '2px 16px 14px' }}>
-          <textarea className="dsh-tavern-input dsh-tavern-textarea" style={{ minHeight: 60 }} value={entry.content} placeholder={t('presets.entry.content')} onChange={(e) => set({ content: e.target.value })} />
+          <textarea aria-label={t('presets.entry.content')} className="dsh-tavern-input dsh-tavern-textarea" style={{ minHeight: 60 }} value={entry.content} placeholder={t('presets.entry.content')} onChange={(e) => set({ content: e.target.value })} />
         </div>
       )}
     </div>
@@ -257,7 +257,7 @@ export function PresetsSection(props: { remote: TavernRemote }) {
         <FileBtn accept=".json" disabled={busy} onFile={(file) => void onImportFile(file)}>
           {t('presets.importFile')}
         </FileBtn>
-        <Btn size="md" onClick={() => guard.request(createNew)}>{t('presets.new')}</Btn>
+        <Btn size="md" disabled={busy} onClick={() => guard.request(createNew)}>{t('presets.new')}</Btn>
         <Btn size="md" onClick={reload} disabled={busy}>{t('action.refresh')}</Btn>
         {(items.length >= 5 || query !== '') && (
           <SearchInput label={t('presets.searchLabel')} value={query} onChange={setQuery} placeholder={t('presets.searchPlaceholder')} width={220} />
@@ -298,14 +298,14 @@ export function PresetsSection(props: { remote: TavernRemote }) {
               <span className="dsh-tavern-tileSub">{item.id}</span>
             </div>
             <div className="dsh-tavern-tileActions">
-              <IconBtn label={t('action.edit')} onClick={() => guard.request(() => void open(item.id))}>
+              <IconBtn label={t('action.edit')} disabled={busy} onClick={() => guard.request(() => void open(item.id))}>
                 <IconEditOutline16 />
               </IconBtn>
               <IconBtn label={t('presets.export')} disabled={busy} onClick={() => void exportPreset(item.id, item.name)}>
                 <IconDownloadOutline16 />
               </IconBtn>
               <Btn size="sm" disabled={busy} onClick={() => void setAsDefault(item.id)}>{t('presets.setAsDefault')}</Btn>
-              <IconBtn label={t('presets.delete')} danger onClick={() => setToDelete(item.id)}>
+              <IconBtn label={t('presets.delete')} danger disabled={busy} onClick={() => setToDelete(item.id)}>
                 <IconTrashOutline16 />
               </IconBtn>
             </div>

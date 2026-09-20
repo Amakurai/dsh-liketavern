@@ -31,6 +31,7 @@ import { currentHelperMvuTemplateData } from './helperMvuTemplateSnapshot.js'
 import { templateGenerationContext, type PreparedTemplateGeneration } from '../state/templateGeneration.js'
 import { type TemplateContext } from '../core/template.js'
 import { templateCardData } from '../core/templateAssets.js'
+import { characterPromptName } from '../core/characterData.js'
 import { normalizeTemplateLore } from '../core/templateLore.js'
 import { assertTemplateReplayFormatter, type TemplateReplay } from '../core/templateReplay.js'
 import { buildTemplateMessageHistory } from './templateMessageHistory.js'
@@ -215,6 +216,7 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
   const charWs = await state.loadCharacter(binding.cardId)
   if (!charWs) return null
   const card = charWs.card
+  const charName = characterPromptName(card)
 
   const preset = (binding.presetId ? await state.loadPreset(binding.presetId) : null) ?? defaultPreset()
   const persona = await state.resolvePersona(binding.personaId)
@@ -279,7 +281,7 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
   const turn = state.currentTurns.get(sessionId) ?? -1
   const turnSeed = hashToSeed(`${sessionId}:${turn}`)
   const macroCtx = {
-    char: card.name,
+    char: charName,
     user: userName,
     lastUserMessage,
     lastMessage: [...chatMessages].reverse().find(message => message.role === 'assistant'
@@ -304,7 +306,7 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
   const lore = await loadBoundLoreEntries(state, binding)
   lore.entries = lore.entries.map(normalizeTemplateLore)
   const templateContext: TemplateContext = {
-    variables: templateState.variables, char: card.name, user: userName,
+    variables: templateState.variables, char: charName, user: userName,
     card: templateCardData(card),
     entries: lore.entries, presets: preset.entries.filter(e => e.enabled), history: templateHistory,
     historyIdentities,messageVariables:visibleTemplateMessageVariables(templateState.messageVariables,historyIdentities),
@@ -349,7 +351,7 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
       entries:lore.entries, messages:chatMessages, settings:state.worldInfoFor(binding),
       timerState:input.mode==='live' ? await state.loadTimers(binding.cardId,sessionId,binding.storyId) : structuredClone(EMPTY_TIMER_STATE),
       contextWindowTokens:contextWindow, reservedTokens:estimateTokens(scanMessages.map(m=>m.content).join('\n')),
-      seed:turnSeed, macroCtx:{char:card.name,user:userName},
+      seed:turnSeed, macroCtx:{char:charName,user:userName},
     },
     preset,
     promptPreferences: config.prompts,

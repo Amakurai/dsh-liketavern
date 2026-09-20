@@ -275,6 +275,98 @@ describe('parseJsonCard', () => {
     expect(card.tags).toEqual(['a'])
   })
 
+  it('V3 未建模字段往返保留 data 原位置，不搬进 extensions', () => {
+    const source = {
+      spec: 'chara_card_v3',
+      spec_version: '3.0',
+      data: {
+        name: 'V3 完整卡',
+        nickname: '艾菈',
+        creator_notes_multilingual: { zh: '中文备注' },
+        source: ['https://example.invalid/card'],
+        group_only_greetings: ['群聊开场'],
+        creation_date: 123,
+        modification_date: 456,
+        assets: [{ type: 'icon', uri: 'ccdefault:' }],
+        extensions: { talkativeness: 0.7, assets: { nested: 'must-stay-nested' } },
+      },
+    }
+    const card = parseJsonCard(source)
+    // 运行时仍保留旧兼容镜像，但镜像不能改变导出字段层级。
+    expect(card.extensions.nickname).toBe('艾菈')
+    expect(card.extensions.assets).toEqual([{ type: 'icon', uri: 'ccdefault:' }])
+
+    const exported = cardToStJson(card) as { data: Record<string, unknown> & { extensions: Record<string, unknown> } }
+    for (const key of ['nickname', 'creator_notes_multilingual', 'source', 'group_only_greetings', 'creation_date', 'modification_date']) {
+      expect(exported.data[key]).toEqual(source.data[key as keyof typeof source.data])
+      expect(exported.data.extensions).not.toHaveProperty(key)
+    }
+    expect(exported.data.assets).toEqual(source.data.assets)
+    expect(exported.data.extensions).toMatchObject({ talkativeness: 0.7, assets: { nested: 'must-stay-nested' } })
+
+    const patched = applyCharacterPatch(card, { description: '编辑后描述' })
+    const roundTrip = parseJsonCard(cardToStJson(patched))
+    expect(roundTrip.description).toBe('编辑后描述')
+    expect((roundTrip.raw as typeof source).data.assets).toEqual(source.data.assets)
+    expect((roundTrip.raw as typeof source).data.nickname).toBe('艾菈')
+  })
+
+  it('V3 直接镜像被后续编辑删除时不从 raw 复活', () => {
+    const card = parseJsonCard({
+      spec: 'chara_card_v3',
+      data: { name: 'V3 脚本卡', TavernHelper_scripts: [{ type: 'script', value: 'legacy' }] },
+    })
+    delete card.extensions.TavernHelper_scripts
+    card.extensions.tavern_helper = { scripts: [] }
+    const exported = cardToStJson(card) as { data: Record<string, unknown> & { extensions: Record<string, unknown> } }
+    expect(exported.data).not.toHaveProperty('TavernHelper_scripts')
+    expect(exported.data.extensions).not.toHaveProperty('TavernHelper_scripts')
+    expect(exported.data.extensions.tavern_helper).toEqual({ scripts: [] })
+  })
+
+  it('V3 nested 镜像删除或迁移后不从 raw 复活', () => {
+    const card = parseJsonCard({
+      spec: 'chara_card_v3',
+      data: {
+        name: 'V3 nested 脚本卡',
+        extensions: { TavernHelper_scripts: [{ type: 'script', value: 'legacy' }], keep: true },
+      },
+    })
+    delete card.extensions.TavernHelper_scripts
+    card.extensions.tavern_helper = { scripts: [{ type: 'script', value: 'modern' }] }
+
+    const exported = cardToStJson(card) as { data: { extensions: Record<string, unknown> } }
+    expect(exported.data.extensions).not.toHaveProperty('TavernHelper_scripts')
+    expect(exported.data.extensions.tavern_helper).toEqual({ scripts: [{ type: 'script', value: 'modern' }] })
+    expect(exported.data.extensions.keep).toBe(true)
+  })
+
+  it('无效世界书别名保持 direct 位置，并保留同名 nested 厂商字段', () => {
+    const source = {
+      spec: 'chara_card_v3',
+      data: {
+        name: '别名冲突卡',
+        lorebook: { vendor: 'direct-lorebook' },
+        characterBook: 'direct-characterBook-vendor-value',
+        extensions: {
+          lorebook: { vendor: 'nested-lorebook' },
+          characterBook: { vendor: 'nested-characterBook' },
+        },
+      },
+    }
+    const card = parseJsonCard(source)
+    expect(card.characterBook).toBeNull()
+    // 扁平兼容镜像由 direct 覆盖，但导出仍须恢复冲突两侧的原始层级。
+    expect(card.extensions.lorebook).toEqual(source.data.lorebook)
+    expect(card.extensions.characterBook).toBe(source.data.characterBook)
+
+    const exported = cardToStJson(card) as { data: Record<string, unknown> & { extensions: Record<string, unknown> } }
+    expect(exported.data.lorebook).toEqual(source.data.lorebook)
+    expect(exported.data.characterBook).toBe(source.data.characterBook)
+    expect(exported.data.extensions.lorebook).toEqual(source.data.extensions.lorebook)
+    expect(exported.data.extensions.characterBook).toEqual(source.data.extensions.characterBook)
+  })
+
   it('character_book entries 对象 map 转数组', () => {
     const card = parseJsonCard({
       name: '带书卡',

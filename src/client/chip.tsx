@@ -6,7 +6,7 @@ import { DraftScope } from './drafts.js'
 import { MemorySection } from './panel/memory.js'
 import { useEffect, useId, useRef, useState } from 'react'
 import { BINDING_CHANGED_EVENT } from './actions.js'
-import { cachedAvatar, cachedCharacterDetail, cachedSessionBinding, invalidateSessionBinding } from './cache.js'
+import { CHARACTER_CHANGED_EVENT, cachedAvatar, cachedCharacterDetail, cachedSessionBinding, invalidateSessionBinding } from './cache.js'
 import { useT } from './i18n.js'
 import { isTavernSession, type UseSessions } from './mode.js'
 import { openChildSession } from './openChild.js'
@@ -162,6 +162,25 @@ interface HeaderChipProps {
   useSessions?: UseSessions
 }
 
+/** 后台脚本持有绑定派生的名称、脚本库与世界书令牌；任一来源变化都必须重建沙箱。 */
+function helperRuntimeKey(sessionId: string, binding: SessionBinding): string {
+  return JSON.stringify([
+    sessionId,
+    binding.storyId,
+    binding.cardId,
+    binding.presetId,
+    binding.personaId,
+    binding.interactiveCards,
+    binding.helperMvu === true,
+    binding.lorebookIds,
+    binding.characterLorebookId,
+    binding.useEmbeddedLorebook !== false,
+    binding.characterLorebookIds ?? [],
+    binding.worldInfo ?? null,
+    binding.greetingIndex,
+  ])
+}
+
 /** 宿主切换会话可能复用 slot；表单、子弹窗与在途请求的状态都必须随会话重新挂载。 */
 export function TavernHeaderChip(props: HeaderChipProps) {
   return <HeaderChipSession key={props.sessionId} {...props}/>
@@ -185,6 +204,12 @@ function HeaderChipSession(props: HeaderChipProps) {
     [binding?.cardId],
     tavern && binding !== null,
   )
+  useEffect(()=>{
+    if(!tavern||!binding)return
+    const changed=(event:Event)=>{if((event as CustomEvent<string>).detail===binding.cardId)detail.reload()}
+    window.addEventListener(CHARACTER_CHANGED_EVENT,changed)
+    return()=>window.removeEventListener(CHARACTER_CHANGED_EVENT,changed)
+  },[tavern,binding?.cardId,detail.reload])
 
   const listsLoader = useLoader(
     () => remote.listCharacters({}),
@@ -378,7 +403,7 @@ function HeaderChipSession(props: HeaderChipProps) {
 
   return (
     <span className="dsh-tavern-ui" style={{ display: 'inline-flex' }}>
-      {binding?.storyId&&<HelperScripts key={`${sessionId}:${binding.storyId}:${binding.helperMvu===true}`} remote={remote} sessionId={sessionId} sessions={sessions} onCancel={props.onCancel}/>}
+      {binding?.storyId&&<HelperScripts key={helperRuntimeKey(sessionId,binding)} remote={remote} sessionId={sessionId} cardId={binding.cardId} sessions={sessions} onCancel={props.onCancel}/>}
       <TavernSeatChip
         label={binding ? (name ?? listedName ?? t('chip.characterFallback')) : t('hero.pickCharacter')}
         title={t('hero.pickCharacter')}

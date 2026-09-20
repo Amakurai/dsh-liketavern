@@ -86,8 +86,8 @@ export function PersonasSection(props: { remote: TavernRemote }) {
       {toast.node}
       {guard.confirmation}
       <div className="dsh-tavern-toolbar">
-        <Btn size="md" onClick={() => guard.request(createNew)}>{t('personas.new')}</Btn>
-        <Btn size="md" onClick={reload} disabled={busy}>{t('action.refresh')}</Btn>
+        <Btn size="md" disabled={busy} onClick={() => guard.request(createNew)}>{t('personas.new')}</Btn>
+        <Btn size="md" onClick={() => { reload(); lore.reload() }} disabled={busy}>{t('action.refresh')}</Btn>
         {(items.length >= 5 || query !== '') && (
           <SearchInput label={t('personas.searchLabel')} value={query} onChange={setQuery} placeholder={t('personas.searchPlaceholder')} width={220} />
         )}
@@ -100,6 +100,7 @@ export function PersonasSection(props: { remote: TavernRemote }) {
         </div>
       )}
       {state.status === 'error' && <Err message={state.message} />}
+      {lore.state.status === 'error' && <Err message={lore.state.message} />}
       <Err message={error} />
       {items.length === 0 && state.status === 'ready' && (
         <div className="dsh-tavern-empty">
@@ -128,7 +129,7 @@ export function PersonasSection(props: { remote: TavernRemote }) {
                 <IconEditOutline16 />
               </IconBtn>
               <Btn size="sm" disabled={busy} onClick={() => void setAsDefault(p.id)}>{t('personas.setDefault')}</Btn>
-              <IconBtn label={t('personas.delete')} danger onClick={() => setToDelete(p)}>
+              <IconBtn label={t('personas.delete')} danger disabled={busy} onClick={() => setToDelete(p)}>
                 <IconTrashOutline16 />
               </IconBtn>
             </div>
@@ -150,18 +151,18 @@ export function PersonasSection(props: { remote: TavernRemote }) {
           <Field label={t('personas.field.name')}>
             <input className="dsh-tavern-input" style={{ flex: 1 }} value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} />
           </Field>
-          <div className="dsh-tavern-field">
-            <span className="dsh-tavern-fieldLabel">{t('personas.field.description')}</span>
+          <Field label={t('personas.field.description')}>
             <textarea
               className="dsh-tavern-input dsh-tavern-textarea"
               value={editing.description}
               onChange={(e) => setEditing({ ...editing, description: e.target.value })}
             />
-          </div>
+          </Field>
           <Field label={t('personas.field.lorebook')}>
             <Select
               width="100%"
               value={editing.lorebookId ?? ''}
+              disabled={lore.state.status !== 'ready'}
               onChange={(v) => setEditing({ ...editing, lorebookId: v || null })}
               options={[
                 { value: '', label: t('personas.lorebookNone') },

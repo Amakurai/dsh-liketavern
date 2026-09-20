@@ -26,6 +26,8 @@ export function TavernSeatChip(props: {
       className="dsh-tavern-seat"
       aria-haspopup={props.hasPopup ?? 'menu'}
       aria-expanded={props.open}
+      aria-label={props.label}
+      aria-busy={props.loading || undefined}
       title={props.title ?? props.label}
       disabled={props.disabled || props.loading}
       onClick={props.onClick}

@@ -4,16 +4,20 @@
  * 本模块按 key 做值缓存 + in-flight Promise 去重：同 key 并发共享一次 RPC；
  * 命中即回，过期后首个请求重拉并回填。
  *
- * TTL 口径：客户端拿不到可靠的变更事件（面板编辑、模型工具写入、其他浏览器页签
- * 都绕开本模块直写宿主），TTL 是「最迟多久看到新值」的兜底上限，不是精确失效点。
- * 本端已知的写路径在成功后显式调 invalidate*（必须先于 useLoader.reload() 与
- * BINDING_CHANGED_EVENT 广播，否则 reload 会吃到旧缓存）；其余写路径靠 TTL 收敛。
+ * TTL 口径：它只约束「下一次读取」能复用旧值多久，不是会主动唤醒 useLoader 的
+ * 轮询器。本端已知写路径在成功后显式 invalidate 并广播（必须先失效再 reload，
+ * 否则仍会吃到旧缓存）；模型工具、其它页签等外部写入会在组件下一次重载时收敛。
  * 失败（reject 或错误信封）不缓存，下次调用立即重试。
  *
  * 已知让步：getSessionBinding 的结果带 canSwipeGreeting（取决于会话是否已有用户
  * 消息），首条用户消息发出后最长 TTL 秒内可能仍读到 true；服务端仍是最终闸门。
  */
 import type { Envelope, TavernRemote } from './types.js';
+/**
+ * 同页角色资产变更广播。仅清 Map 不会重新触发已经挂载的 useLoader；气泡、开场预览
+ * 与会话 chip 监听此事件后按 cardId 主动 reload，避免保存成功却继续显示旧名称/设定。
+ */
+export declare const CHARACTER_CHANGED_EVENT = "dsh-tavern:character-changed";
 /** 会话绑定（key=sessionId）；assistant 节点 / 会话芯片 / 英雄区 / 操作条共享一次 RPC。 */
 export declare function cachedSessionBinding(remote: TavernRemote, sessionId: string): Promise<Envelope<{
     binding: import("./types.js").SessionBinding | null;
@@ -31,3 +35,5 @@ export declare function cachedAvatar(remote: TavernRemote, cardId: string): Prom
 export declare function invalidateSessionBinding(sessionId: string): void;
 /** 角色卡保存 / 删除后调用（详情与头像一起失效；删除时宿主侧绑定已清，会话绑定缓存靠 TTL 收敛）。 */
 export declare function invalidateCharacter(cardId: string): void;
+/** 本端确认角色写入成功后，先失效缓存再通知所有仍挂载的消费者。 */
+export declare function notifyCharacterChanged(cardId: string): void;

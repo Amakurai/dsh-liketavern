@@ -12,8 +12,9 @@ vi.mock('../src/client/actions.js', () => ({ BINDING_CHANGED_EVENT: 'binding-cha
 vi.mock('../src/client/chip.js', () => ({ bindingFromDefaults: async (_remote: unknown, sessionId: string, cardId: string) => ({ sessionId, cardId }) }))
 vi.mock('../src/client/characterPicker.js', () => ({ CharacterPicker: () => null, rememberCharacter: () => {} }))
 vi.mock('../src/client/cache.js', () => ({ invalidateSessionBinding: () => {},
+  CHARACTER_CHANGED_EVENT: 'character-changed',
   cachedAvatar: async () => ({ ok: true, value: { dataUrl: null } }),
-  cachedCharacterDetail: async () => ({ ok: true, value: { name: '灯塔', firstMes: '欢迎', alternateGreetings: [], tags: [] } }),
+  cachedCharacterDetail: async () => ({ ok: true, value: { name: '灯塔', firstMes: '欢迎', alternateGreetings: ['备用开场'], tags: [] } }),
 }))
 vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
   Button: (p: { children?: ReactNode }) => <button>{p.children}</button>,
@@ -37,19 +38,29 @@ afterEach(async () => {
 const ok = <T,>(value: T) => ({ ok: true as const, value })
 function fixture(started = false) {
   let selected = started
+  let greetingIndex = 0
   const clearSessionBinding = vi.fn(async () => ok({ cleared: true }))
   const ensureGreeting = vi.fn(async () => ok({ created: true, conversationStarted: true }))
+  const setSessionBinding = vi.fn(async ({ binding }: { binding: { greetingIndex?: number } }) => {
+    selected = true
+    if (typeof binding.greetingIndex === 'number') greetingIndex = binding.greetingIndex
+    return ok({ saved: true })
+  })
   const remote = {
-    getSessionBinding: async ({ sessionId }: { sessionId: string }) => ok({ binding: selected ? { cardId: 'card', sessionId, greetingIndex: 0 } : null,
+    getSessionBinding: async ({ sessionId }: { sessionId: string }) => ok({ binding: selected ? { cardId: 'card', sessionId, greetingIndex } : null,
       userName: '旅人', canSwipeGreeting: true, conversationStarted: started }),
     listCharacters: async () => ok({ items: [] }),
-    setSessionBinding: async () => { selected = true; return ok({ saved: true }) },
+    setSessionBinding,
     clearSessionBinding, ensureGreeting,
   } as unknown as TavernRemote
   const sessions = { open: vi.fn(), refresh: vi.fn(async () => {}) }
   const node = (sessionId: string) => <TavernHeroCharacter remote={remote} sessionId={sessionId} sessions={sessions}
     session={{ blank: true }} useSessions={() => 'tavern'} />
-  return { clearSessionBinding, ensureGreeting, sessions, node }
+  const setGreetingIndex = async (index: number) => {
+    greetingIndex = index
+    await act(async () => window.dispatchEvent(new CustomEvent('binding-changed', { detail: 'invalid-index' })))
+  }
+  return { clearSessionBinding, ensureGreeting, setSessionBinding, setGreetingIndex, sessions, node }
 }
 async function mount(node: ReactNode) { await act(async () => { view = create(node) }) }
 async function pick() {
@@ -101,4 +112,15 @@ it('开始请求尚未返回时切换会话，旧请求完成不能隐藏新会�
   await act(async () => finish(ok({ created: true, conversationStarted: true })))
   expect(view!.root.findByProps({ 'data-tavern-hero-seat': '' }).findByType('button').props.disabled).toBeFalsy()
   expect(view!.toJSON()).not.toBeNull()
+})
+
+it('角色编辑删掉开场白后，旧越界下标按第一条显示并从正确位置翻页', async () => {
+  const f = fixture()
+  await mount(f.node('invalid-index'))
+  await pick()
+  await f.setGreetingIndex(7)
+  expect(view!.root.findByProps({ className: 'dsh-tavern-hero-swipeIdx' }).children.join('')).toBe('1/2')
+  const next = view!.root.findAllByProps({ className: 'dsh-tavern-hero-swipeBtn' })[1]!
+  await act(async () => next.props.onClick())
+  expect(f.setSessionBinding).toHaveBeenLastCalledWith({ binding: expect.objectContaining({ greetingIndex: 1 }) })
 })

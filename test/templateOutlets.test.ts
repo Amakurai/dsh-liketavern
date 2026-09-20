@@ -25,7 +25,7 @@ function input(reader:string,writer:string,extra:Record<string,unknown>[]=[]):Co
     wiEvaluation:{entries,messages:history,settings:DEFAULT_WI_SETTINGS,timerState:EMPTY_TIMER_STATE,
       contextWindowTokens:100000,reservedTokens:0,seed:42}}
 }
-const run=(reader:string,writer:string,extra:Record<string,unknown>[]=[])=>isolated('assemble',input(reader,writer,extra))
+const run=(reader:string,writer:string,extra:Record<string,unknown>[]=[],timeoutMs=1000)=>isolated('assemble',input(reader,writer,extra),timeoutMs)
 
 describe('命名注入读取时机',()=> {
   it('普通模板默认即时，显式 outlet 返回占位符，带后处理即时读取',async()=> {
@@ -86,7 +86,9 @@ describe('命名注入读取时机',()=> {
     await expect(run('{{outletPromptsInjected:a}}',`<% injectPrompt('a','{{outletPromptsInjected:b}}'); injectPrompt('b','{{outletPromptsInjected:a}}'); %>`)).rejects.toThrow(/循环/)
     await expect(run('{{outletPromptsInjected:n0}}',`<% for(let i=0;i<40;i++) injectPrompt('n'+i,'{{outletPromptsInjected:n'+(i+1)+'}}'); %>`)).rejects.toThrow(/32 层/)
     await expect(run(`{{outletPromptsInjected:a}}`.repeat(4097),`<% injectPrompt('a','') %>`)).rejects.toThrow(/4096 次/)
-    await expect(run('{{outletPromptsInjected:a}}{{outletPromptsInjected:a}}',`<% injectPrompt('a','x'.repeat(600000)) %>`)).rejects.toThrow(/1 MiB/)
+    // 这里只验证最终展开的 1 MiB 尺寸守卫；全量并发时 QuickJS 生成 120 万字符可能先撞
+    // 默认 1s 计算超时，测试单独放宽预算以隔离机器负载时序，生产隔离上限保持不变。
+    await expect(run('{{outletPromptsInjected:a}}{{outletPromptsInjected:a}}',`<% injectPrompt('a','x'.repeat(600000)) %>`,[],5000)).rejects.toThrow(/1 MiB/)
   },15000)
 
   it('最终展开重新计算预算，短占位符不能夹带超量提示词',async()=> {

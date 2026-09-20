@@ -508,8 +508,8 @@ it('原生 MVU 补出卡片原有状态栏，重复展示不改写历史或剧�
   await state.saveBinding({...binding,helperMvu:false});expect((await service.renderOutputText(request)).htmls).toEqual([])
 })
 
-/** 纯文本也必须提供发布选项所需的剧情身份，关闭交互后不提供该能力。 */
-it('纯文本回复携带当前剧情上下文，预览与关闭交互不暴露上下文',async()=>{
+/** 纯文本只提供选项/显示事件所需的紧凑身份，不按气泡重复回传整段历史。 */
+it('纯文本回复只携带当前剧情读上下文，HTML 仍携带完整快照',async()=>{
   const {cardId}=await importCard(paths.characters,makeCard())
   const session=Session.create('session-plain-helper' as Session['id']);sessions.set(session.id,session)
   await state.saveBinding(makeBinding({sessionId:session.id,cardId}))
@@ -517,12 +517,22 @@ it('纯文本回复携带当前剧情上下文，预览与关闭交互不暴露�
   const request={sessionId:session.id,messageId:message.seq,text:'请选择【开门】'}
   const result=await service.renderOutputText(request)
   expect(result.htmls).toEqual([])
-  expect(result.helper?.messages[result.helper.currentMessageId]?.message).toBe(request.text)
+  expect(result.helper).toBeUndefined()
+  expect(result.helperContext).toEqual({storyId:expect.any(String),historyRevision:expect.stringMatching(/^[a-f0-9]{64}$/),currentMessageId:0,currentMessageRole:'assistant'})
+  expect(JSON.stringify(result.helperContext)).not.toContain(request.text)
   expect(result.helperScripts).toBeUndefined()
-  expect((await service.renderOutputText({sessionId:session.id,text:request.text})).helper).toBeUndefined()
+  const preview=await service.renderOutputText({sessionId:session.id,text:request.text})
+  expect(preview.helper).toBeUndefined();expect(preview.helperContext).toBeUndefined()
+
+  const html='<div class="choice-card">请选择</div>'
+  const htmlResult=await service.renderOutputText({...request,text:html})
+  expect(htmlResult.htmls).toEqual([html])
+  expect(htmlResult.helper?.messages[htmlResult.helper.currentMessageId]?.message).toBe(request.text)
+  expect(htmlResult.helperContext).toBeUndefined()
   const binding=(await state.loadBinding(session.id))!
   await state.saveBinding({...binding,interactiveCards:false})
-  expect((await service.renderOutputText(request)).helper).toBeUndefined()
+  const disabled=await service.renderOutputText(request)
+  expect(disabled.helper).toBeUndefined();expect(disabled.helperContext).toBeUndefined()
 })
 
 

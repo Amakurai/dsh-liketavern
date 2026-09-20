@@ -5,7 +5,10 @@ export interface CardHelperContext {
     message?: string;
     /** 当前卡面的宿主消息 seq；独立开场白/预览为 0，不冒充完整 ST 聊天序号。 */
     messageId?: number;
+    /** 资产/聊天消息展示名。 */
     name?: string;
+    /** CCv3 nickname 生效后的 {{char}}；缺省回退 name。 */
+    macroName?: string;
     userName?: string;
     frameIndex?: number;
     canSwipe?: boolean;

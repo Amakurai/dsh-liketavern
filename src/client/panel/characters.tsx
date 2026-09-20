@@ -10,7 +10,7 @@ import { CARD_VARIABLE_STYLES } from '../styles.js'
 import { PersistentEditor, useDraftRestored, useDraftState } from '../draftPersistence.js'
 import { useEffect, useRef, useState } from 'react'
 import { Button, IconArchiveOutline20, IconDownloadOutline16, IconRefreshOutline16, IconTrashOutline16, IconUserOutline16, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
-import { cachedAvatar, cachedCharacterDetail, invalidateCharacter } from '../cache.js'
+import { cachedAvatar, cachedCharacterDetail, invalidateCharacter, notifyCharacterChanged } from '../cache.js'
 import { matchesCharacterSearch } from '../characterSearch.js'
 import { useT } from '../i18n.js'
 import type { CharacterDetail, CharacterInspect, CharacterSummary, TavernRemote } from '../types.js'
@@ -184,7 +184,7 @@ function CharacterDetailDialog(props: { remote: TavernRemote; cardId: string; on
         setDraft(current => current ? { ...current, revision } : current)
         toast.show(t('characters.detail.saved', { name: detail.name }))
         // 先失效详情/头像缓存再 reload，否则详情弹窗与聊天气泡继续吃旧值。
-        invalidateCharacter(cardId)
+        notifyCharacterChanged(cardId)
         reload()
         props.onSaved()
       }
@@ -221,7 +221,10 @@ function CharacterDetailDialog(props: { remote: TavernRemote; cardId: string; on
           <Skeleton height={90} />
         </div>
       )}
-      {state.status === 'error' && <Err message={state.message} />}
+      {state.status === 'error' && <div>
+        <Err message={state.message} />
+        <Btn disabled={busy} onClick={reload}>{t('action.retry')}</Btn>
+      </div>}
       {detail && (
         <fieldset disabled={busy} className="dsh-tavern-editorFields dsh-tavern-dialogStack" style={{ fontSize: 13 }}>
           <div className="dsh-tavern-panelCard" style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
@@ -332,7 +335,7 @@ function CharacterDetailDialog(props: { remote: TavernRemote; cardId: string; on
           <iframe
             sandbox="allow-scripts"
             srcDoc={buildCardSrcDoc(interactiveHtml, { greetings: detail ? [detail.firstMes, ...detail.alternateGreetings] : [], greetingIndex: 0,
-              helperContext: { name: detail?.name, canSwipe: false },
+              helperContext: { name: detail?.name, macroName: detail?.characterName ?? detail?.name, canSwipe: false },
               helperLabels: { diagnostics: t('speech.helperMessages'), unsupported: t('speech.helperUnsupported') },
               variableStyles: CARD_VARIABLE_STYLES,
               variableLabels:cardVariableLabels(t,t('speech.cardDataNote')),
@@ -629,14 +632,16 @@ function CharactersSectionContent(props: { remote: TavernRemote }) {
           </div>
         }
       >
-        <input
-          className="dsh-tavern-input"
-          style={{ width: '100%', height: 36, borderRadius: 8, padding: '0 10px', fontSize: 13, boxSizing: 'border-box' }}
-          disabled={busy}
-          value={newName}
-          placeholder={t('characters.create.namePlaceholder')}
-          onChange={(e) => setNewName(e.target.value)}
-        />
+        <Field label={t('characters.create.namePlaceholder')}>
+          <input
+            className="dsh-tavern-input"
+            style={{ width: '100%', height: 36, borderRadius: 8, padding: '0 10px', fontSize: 13, boxSizing: 'border-box' }}
+            disabled={busy}
+            value={newName}
+            placeholder={t('characters.create.namePlaceholder')}
+            onChange={(e) => setNewName(e.target.value)}
+          />
+        </Field>
       </Dialog>
     </Section>
   )

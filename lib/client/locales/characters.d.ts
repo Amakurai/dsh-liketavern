@@ -61,7 +61,7 @@ export declare const zh: {
     readonly 'characters.importBook.descNamed': "角色卡「{name}」内嵌世界书「{book}」，共 {count} 条。导入后会作为该卡的主世界书。";
     readonly 'characters.importBook.skip': "跳过";
     readonly 'characters.importBook.import': "导入世界书";
-    readonly 'characters.importBook.skipNote': "跳过后仍导入角色卡（描述、开场白、正则），只是不启用这本内嵌世界书。";
+    readonly 'characters.importBook.skipNote': "跳过后仍导入角色卡（描述、开场白、正则），内嵌世界书不会保存到角色工作区。";
     readonly 'characters.importPreview.title': "导入角色卡：兼容性预检";
     readonly 'characters.importPreview.desc': "已读取「{name}」，尚未保存。确认报告后可导入角色卡。";
     readonly 'characters.importPreview.import': "导入角色卡";

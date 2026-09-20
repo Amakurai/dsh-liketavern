@@ -28,6 +28,7 @@ import { greetingFloorState, isGreetingOnlyBlank, pickGreetingText, sessionHasUs
 import { expandMacros } from '../core/macros.js'
 import { CONTINUE_INSTRUCTION_PREFIX } from '../core/dshPrompt.js'
 import { DEFAULT_USER_NAME } from '../core/persona.js'
+import { characterPromptName } from '../core/characterData.js'
 import { greetingMessage, greetingTurnEvents } from './greetingSeed.js'
 import { isTavernRuntimeSession, sessionPresetId } from './tavernSession.js'
 import { pruneSiblingForks, siblingSwipe, type SiblingSwipe } from '../core/siblings.js'
@@ -684,7 +685,7 @@ async function expandGreeting(state: TavernState, binding: SessionBinding, text:
   const ws = await state.loadCharacter(binding.cardId)
   const persona = await state.resolvePersona(binding.personaId)
   return expandMacros(text, {
-    char: ws?.card.name ?? 'Assistant',
+    char: ws ? characterPromptName(ws.card) : 'Assistant',
     user: persona?.name ?? DEFAULT_USER_NAME,
   })
 }

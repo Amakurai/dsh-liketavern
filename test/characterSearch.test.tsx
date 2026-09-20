@@ -8,9 +8,9 @@ import type { ReactTestRenderer } from 'react-test-renderer'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { CharacterPicker } from '../src/client/characterPicker.js'
 import { CharactersSection } from '../src/client/panel/characters.js'
-import { SearchInput } from '../src/client/util.js'
+import { Btn, SearchInput } from '../src/client/util.js'
 import { setTavernLocale } from '../src/client/i18n.js'
-import type { CharacterSummary, TavernRemote } from '../src/client/types.js'
+import type { CharacterDetail, CharacterSummary, TavernRemote } from '../src/client/types.js'
 import { createBlankCard } from '../src/state/card.js'
 import { archiveCharacter, importCard, listArchivedCharacters, listCharacters } from '../src/state/workspace.js'
 
@@ -88,4 +88,35 @@ it.each(['management', 'picker'] as const)('%s 支持标签/作者/书名搜索�
   expect(cards()).toHaveLength(0)
   await act(async () => view.root.findByType(SearchInput).props.onChange(''))
   expect(cards()).toHaveLength(6)
+})
+
+it('角色详情读取失败时保留弹窗和重试入口，恢复后显示真实字段', async () => {
+  const item: CharacterSummary = {
+    cardId: 'detail-retry-card', name: '灯塔', hasAvatar: false,
+    hasCharacterBook: false, characterBookName: null, characterBookEntryCount: 0,
+  }
+  const detail: CharacterDetail = {
+    ...item, revision: 'revision', description: '海边守望者', personality: '', scenario: '', firstMes: '',
+    alternateGreetings: [], mesExample: '', systemPrompt: '', postHistoryInstructions: '', creatorNotes: '', creator: '',
+    characterVersion: '', tags: [], spec: 'chara_card_v2', depthPrompt: null, extensions: {},
+  }
+  const getCharacterDetail = vi.fn()
+    .mockResolvedValueOnce({ ok: false, error: { code: 'offline', message: '角色详情暂时不可用' } })
+    .mockResolvedValue({ ok: true, value: detail })
+  const remote = {
+    listCharacters: async () => ({ ok: true, value: { items: [item] } }),
+    getCharacterDetail,
+    getAvatar: async () => ({ ok: true, value: { dataUrl: null } }),
+  } as unknown as TavernRemote
+  let view!: ReactTestRenderer
+  await act(async () => { view = create(<CharactersSection remote={remote} />) })
+  mounted.push(view)
+  const card = view.root.findByProps({ className: 'dsh-tavern-charCard' })
+  await act(async () => card.props.onClick())
+  expect(JSON.stringify(view.toJSON())).toContain('角色详情暂时不可用')
+  const retry = view.root.findAllByType(Btn).find(button => button.props.children === '重试')
+  expect(retry).toBeDefined()
+  await act(async () => retry!.props.onClick())
+  expect(getCharacterDetail).toHaveBeenCalledTimes(2)
+  expect(view.root.findByProps({ value: '海边守望者' })).toBeDefined()
 })

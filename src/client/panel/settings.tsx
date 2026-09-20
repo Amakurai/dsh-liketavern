@@ -134,6 +134,13 @@ export function SettingsSection(props: { remote: TavernRemote }) {
   const presetItems: PresetSummary[] = presets.state.status === 'ready' ? presets.state.value.items : []
   const lorebooks = lore.state.status === 'ready' ? lore.state.value.items : []
   const personaItems = personas.state.status === 'ready' ? personas.state.value.items : []
+  const defaultAssetsError = presets.state.status === 'error'
+    ? presets.state.message
+    : personas.state.status === 'error'
+      ? personas.state.message
+      : lore.state.status === 'error'
+        ? lore.state.message
+        : null
 
   const promptPreferences = { ...DEFAULT_PROMPT_PREFERENCES, ...draft.prompts }
   const setPrompts = (patch: Partial<TavernSettings['prompts']>) => setDraft({ ...draft, prompts: { ...promptPreferences, ...patch } })
@@ -184,10 +191,13 @@ export function SettingsSection(props: { remote: TavernRemote }) {
 
         {sub === 'defaults' && (
           <Section title={t('settings.defaults.title')} description={t('settings.defaults.desc')}>
+            <Err message={defaultAssetsError} />
+            {defaultAssetsError && <Btn size="sm" disabled={busy} onClick={() => { presets.reload(); personas.reload(); lore.reload() }}>{t('action.retry')}</Btn>}
             <SettingsRow title={t('settings.defaults.preset')} description={t('settings.defaults.presetDesc')}>
               <Select
                 size="md"
                 value={draft.defaults.presetId}
+                disabled={presets.state.status !== 'ready'}
                 onChange={(presetId) => setDefaults({ presetId })}
                 options={[
                   { value: '', label: t('settings.defaults.builtinPreset') },
@@ -202,6 +212,7 @@ export function SettingsSection(props: { remote: TavernRemote }) {
               <Select
                 size="md"
                 value={draft.defaults.personaId}
+                disabled={personas.state.status !== 'ready'}
                 onChange={(personaId) => setDefaults({ personaId })}
                 options={[{ value: '', label: t('settings.defaults.noPersona') }, ...personaItems.map((p) => ({ value: p.id, label: p.name }))]}
               />
@@ -210,21 +221,24 @@ export function SettingsSection(props: { remote: TavernRemote }) {
               <Select
                 size="md"
                 value={draft.defaults.characterLorebookId}
+                disabled={lore.state.status !== 'ready'}
                 onChange={(characterLorebookId) => setDefaults({ characterLorebookId })}
                 options={[{ value: '', label: t('settings.defaults.embeddedLore') }, ...lorebooks.map((n) => ({ value: n, label: n }))]}
               />
             </SettingsRow>
             <SettingsRow title={t('settings.defaults.globalLore')} description={t('settings.defaults.globalLoreDesc')} stacked>
-              {lorebooks.length === 0 ? (
+              {lore.state.status === 'loading' ? (
+                <Skeleton height={32} />
+              ) : lore.state.status === 'ready' && lorebooks.length === 0 ? (
                 <Muted>{t('settings.defaults.noLorebooks')}</Muted>
-              ) : (
+              ) : lore.state.status === 'ready' ? (
                 <CheckChips
                   ariaLabel={t('settings.defaults.globalLore')}
                   options={lorebooks.map((n) => ({ value: n, label: n }))}
                   selected={draft.defaults.lorebookIds}
                   onChange={(lorebookIds) => setDefaults({ lorebookIds })}
                 />
-              )}
+              ) : null}
             </SettingsRow>
             <SaveBar>
               <Btn primary size="md" disabled={busy} onClick={() => void save({ defaults: draft.defaults }, t('settings.defaults.saved'))}>
@@ -430,12 +444,15 @@ export function SettingsSection(props: { remote: TavernRemote }) {
             </Section>
             <CardDataSettings remote={remote} />
             <div className="dsh-tavern-groupHead">{t('settings.cards.dataHome')}</div>
-            <Muted>
+            {dataInfo.state.status === 'error' ? <>
+              <Err message={dataInfo.state.message} />
+              <Btn size="sm" disabled={busy} onClick={dataInfo.reload}>{t('action.retry')}</Btn>
+            </> : <Muted>
               <span style={{ wordBreak: 'break-all' }}>
                 {t('settings.cards.dataHomeDesc')}
                 {dataInfo.state.status === 'ready' ? dataInfo.state.value.dataHome : '…'}
               </span>
-            </Muted>
+            </Muted>}
           </>
         )}
       </div>

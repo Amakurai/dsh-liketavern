@@ -50,6 +50,9 @@ export interface HelperScriptBundle extends HelperScriptLibrary {
     enabled: boolean;
     helperMvu?: boolean;
     whitelist: string[];
+    name?: string;
+    characterName?: string;
+    userName?: string;
 }
 export interface HelperScriptButton {
     name: string;

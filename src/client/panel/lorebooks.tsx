@@ -232,6 +232,7 @@ function LorebooksSectionContent(props: { remote: TavernRemote }) {
         </div>
       )}
       {state.status === 'error' && <Err message={state.message} />}
+      {chars.state.status === 'error' && <Err message={chars.state.message} />}
       <Err message={error} />
       {q !== '' && shownCharBooks.length === 0 && shownNames.length === 0 && state.status === 'ready' && chars.state.status === 'ready' && (
         <SearchEmpty what={t('section.lorebooks')} query={query.trim()} onClear={() => setQuery('')} />

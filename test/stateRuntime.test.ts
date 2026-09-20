@@ -41,6 +41,7 @@ import { resolveConfig } from '../src/node/config.js'
 import { compressOldestMemories } from '../src/node/memoryMaintenance.js'
 import type { TavernPaths } from '../src/node/paths.js'
 import { TavernState } from '../src/node/state.js'
+import { embedCardInPng, parseJsonCard, parsePngCard } from '../src/state/card.js'
 import { MemoryStore } from '../src/state/memory.js'
 import { importCard } from '../src/state/workspace.js'
 
@@ -282,6 +283,87 @@ describe('standingRevTags', () => {
     expect(state.standingRevTags(binding)).toContain(`charlore:${cardId}=0`)
     await state.saveCharacterLorebook(cardId, { entries: [{ keys: ['剑'], content: '断剑重铸' }] })
     expect(state.standingRevTags(binding)).toContain(`charlore:${cardId}=1`)
+  })
+
+  it('内嵌书保存先收敛旧别名，删除同步清理 card.json、磁盘 PNG 与两种导出', async () => {
+    const oldBook = { name: '旧书', entries: [{ keys: ['旧'], content: '旧设定' }] }
+    const raw = {
+      spec: 'chara_card_v3',
+      spec_version: '3.0',
+      vendor_root: { signature: 'keep-root' },
+      data: {
+        name: '兼容角色',
+        description: '描述保留',
+        nickname: '馆主',
+        vendor_payload: { flag: 'keep-data' },
+        character_book: oldBook,
+        lorebook: oldBook,
+        characterBook: oldBook,
+        extensions: {
+          vendor_extension: { flag: 'keep-extension' },
+          lorebook: { vendorFlag: 'not-a-book' },
+          character_book: oldBook,
+          characterBook: oldBook,
+          world: oldBook,
+        },
+      },
+    }
+    const parsed = parseJsonCard(raw)
+    const originalPng = embedCardInPng(null, raw, parsed.spec)
+    const { cardId } = await importCard(paths.characters, { ...parsed, pngBytes: originalPng })
+    const binding = makeBinding({ cardId })
+
+    const newBook = { name: '新书', entries: [{ keys: ['新'], content: '新设定' }] }
+    await state.saveCharacterLorebook(cardId, newBook)
+    expect(state.standingRevTags(binding)).toContain(`charlore:${cardId}=1`)
+
+    // 保存不是在旧 raw 上盲加：所有可识别别名先清掉，只留下 canonical 新书。
+    const saved = JSON.parse(await readFile(join(root, 'characters', cardId, 'card.json'), 'utf8')) as Record<string, unknown>
+    const savedRaw = saved.raw as Record<string, unknown>
+    const savedData = savedRaw.data as Record<string, unknown>
+    const savedExtensions = savedData.extensions as Record<string, unknown>
+    expect(savedData.character_book).toEqual(newBook)
+    expect(savedData).not.toHaveProperty('lorebook')
+    expect(savedData).not.toHaveProperty('characterBook')
+    expect(savedExtensions).not.toHaveProperty('character_book')
+    expect(savedExtensions).not.toHaveProperty('characterBook')
+    expect(savedExtensions).not.toHaveProperty('world')
+    expect(savedExtensions.lorebook).toEqual({ vendorFlag: 'not-a-book' })
+    expect(savedRaw.vendor_root).toEqual({ signature: 'keep-root' })
+
+    // 先命中解析缓存，再删除；修订号必须让下一次读取看到清理后的卡。
+    expect((await state.loadCharacter(cardId))?.card.characterBook?.name).toBe('新书')
+    await state.deleteCharacterLorebook(cardId)
+    expect(state.standingRevTags(binding)).toContain(`charlore:${cardId}=2`)
+    const loaded = (await state.loadCharacter(cardId))!.card
+    expect(loaded.characterBook).toBeNull()
+
+    const deletedJson = JSON.parse(await readFile(join(root, 'characters', cardId, 'card.json'), 'utf8')) as Record<string, unknown>
+    expect(deletedJson.characterBook).toBeNull()
+    const deletedRaw = deletedJson.raw as Record<string, unknown>
+    expect(parseJsonCard(deletedRaw).characterBook).toBeNull()
+    expect(deletedRaw.vendor_root).toEqual({ signature: 'keep-root' })
+    const deletedData = deletedRaw.data as Record<string, unknown>
+    expect(deletedData.vendor_payload).toEqual({ flag: 'keep-data' })
+    expect((deletedData.extensions as Record<string, unknown>).vendor_extension).toEqual({ flag: 'keep-extension' })
+    await expect(readFile(join(root, 'characters', cardId, 'assets', 'character-book.json'))).rejects.toMatchObject({ code: 'ENOENT' })
+
+    const exported = await state.exportCharacter(cardId)
+    const exportedJsonCard = parseJsonCard(exported.json)
+    expect(exportedJsonCard.characterBook).toBeNull()
+    expect(exportedJsonCard.description).toBe('描述保留')
+    expect(exportedJsonCard.extensions.vendor_payload).toEqual({ flag: 'keep-data' })
+    expect(exportedJsonCard.extensions.vendor_extension).toEqual({ flag: 'keep-extension' })
+
+    const diskPngCard = parsePngCard(new Uint8Array(await readFile(join(root, 'characters', cardId, 'card.png'))))
+    expect(diskPngCard.characterBook).toBeNull()
+    expect((diskPngCard.raw as Record<string, unknown>).vendor_root).toEqual({ signature: 'keep-root' })
+    expect(diskPngCard.extensions.vendor_payload).toEqual({ flag: 'keep-data' })
+
+    const exportedPngCard = parsePngCard(new Uint8Array(Buffer.from(exported.pngBase64, 'base64')))
+    expect(exportedPngCard.characterBook).toBeNull()
+    expect(exportedPngCard.description).toBe('描述保留')
+    expect(exportedPngCard.extensions.vendor_extension).toEqual({ flag: 'keep-extension' })
   })
 
   it('saveCharacter / saveChatLorebook bump 卡与会话世界书修订号', async () => {

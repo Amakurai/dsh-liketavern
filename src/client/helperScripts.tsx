@@ -7,7 +7,7 @@ import { enabledHelperScripts,enabledHelperLibraries,type HelperScriptAsset,type
 import {HelperMvuRunner} from './helperMvuRunner.js'
 import {openChildSession} from './openChild.js'
 import { SpeechHtmlFrame } from './speech.js'
-import {invalidateSessionBinding} from './cache.js'
+import {CHARACTER_CHANGED_EVENT,invalidateSessionBinding} from './cache.js'
 import {BINDING_CHANGED_EVENT} from './actions.js'
 import { watchHelperScripts,watchHelperScriptAssets } from './helperScriptNotifications.js'
 import { notifyHelperStory,watchHelperStory } from './helperNotifications.js'
@@ -17,7 +17,7 @@ import { useLoader } from './util.js'
 import { CARD_VARIABLE_STYLES } from './styles.js'
 import type { TavernRemote } from './types.js'
 
-export function HelperScripts(props:{remote:TavernRemote;sessionId:string;sessions?:{open(id:string):void;refresh?:()=>Promise<void>};onCancel?:()=>Promise<void>}) {
+export function HelperScripts(props:{remote:TavernRemote;sessionId:string;cardId?:string;sessions?:{open(id:string):void;refresh?:()=>Promise<void>};onCancel?:()=>Promise<void>}) {
   const {remote,sessionId}=props,t=useT()
   const loader=useLoader(()=>remote.getHelperScriptBundle({sessionId}),[sessionId],true)
   const bundle=loader.state.status==='ready'?loader.state.value:undefined
@@ -38,6 +38,14 @@ export function HelperScripts(props:{remote:TavernRemote;sessionId:string;sessio
     setReady({});setFailures({});retryMvu.current={version:'',run:()=>{}}
   },[bundle])
   useEffect(()=>bundle?watchHelperScripts(sessionId,bundle.storyId,()=>loader.reload()):undefined,[sessionId,bundle?.storyId,loader.reload])
+  const watchedCardId=props.cardId??bundle?.cardId
+  useEffect(()=>{
+    if(!watchedCardId)return
+    // HeaderChip 传入绑定中的稳定 cardId；重拉期间 bundle 暂时为空也不能漏掉连续保存事件。
+    const changed=(event:Event)=>{if((event as CustomEvent<string>).detail===watchedCardId)loader.reload()}
+    window.addEventListener(CHARACTER_CHANGED_EVENT,changed)
+    return()=>window.removeEventListener(CHARACTER_CHANGED_EVENT,changed)
+  },[watchedCardId,loader.reload])
   const libraries:HelperScriptAsset[]=bundle?(bundle.libraries??[{target:{type:'character',cardId:bundle.cardId},revision:bundle.revision,trees:bundle.trees}]):[]
   let scripts:HelperScript[]=[],scriptError:string|null=null
   try{scripts=enabledHelperLibraries(libraries)}catch(error){scriptError=error instanceof Error?error.message:String(error)}
@@ -67,9 +75,11 @@ export function HelperScripts(props:{remote:TavernRemote;sessionId:string;sessio
     <div>
       {bundle?.enabled&&!bundle.runtimeError&&!scriptError&&bundle.snapshot&&bundle.messageId!==null&&scripts.length<=32&&scripts.map(script=>{
         const snapshot=bundle.snapshot!,messageId=bundle.messageId!
+        const assistantName=bundle.name??snapshot.messages.find(message=>message.role==='assistant')?.name??''
+        const userName=bundle.userName??snapshot.messages.find(message=>message.role==='user')?.name??''
         const srcDoc=buildCardSrcDoc(helperScriptHtml(script.content),{greetings:[],greetingIndex:0,helperSnapshot:snapshot,
           worldbooks:bundle.worldbooks,scriptLibraries:bundle.scriptContext,scriptLibraryLabels:{saving:t('speech.scriptSaving'),saved:t('speech.scriptSaved'),failed:t('speech.scriptSaveFailed')},
-          scriptContext:{script,trees:bundle.trees,libraryType:libraries.find(library=>enabledHelperScripts(library.trees).some(item=>item.id===script.id))?.target.type,libraries:libraries.map(library=>({type:library.target.type,trees:library.trees}))},helperContext:{canSwipe:false,scriptFrame:true},connectHosts:bundle.whitelist,variableStyles:CARD_VARIABLE_STYLES,
+          scriptContext:{script,trees:bundle.trees,libraryType:libraries.find(library=>enabledHelperScripts(library.trees).some(item=>item.id===script.id))?.target.type,libraries:libraries.map(library=>({type:library.target.type,trees:library.trees}))},helperContext:{canSwipe:false,scriptFrame:true,name:assistantName,macroName:bundle.characterName??assistantName,userName},connectHosts:bundle.whitelist,variableStyles:CARD_VARIABLE_STYLES,
           persistenceLabels:{saving:t('speech.helperSaving'),saved:t('speech.helperSaved'),failed:t('speech.helperSaveFailed'),refresh:t('speech.helperRefresh')},
           helperLabels:{diagnostics:t('speech.helperMessages'),unsupported:t('speech.helperUnsupported')},
           variableLabels:cardVariableLabels(t,t('speech.helperDataNote'))})

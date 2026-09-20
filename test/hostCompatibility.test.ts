@@ -3,12 +3,12 @@ import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
-import { createAssistantMessage, type AssistantStreamRecord } from '@deepseek-ai/dsh-llm'
-import { Session, SessionId, SessionStore } from '@deepseek-ai/dsh-session'
+import { createAssistantMessage, createUserMessage, type AssistantStreamRecord } from '@deepseek-ai/dsh-llm'
+import { Session, SessionId, SessionStore, type SessionEvent } from '@deepseek-ai/dsh-session'
 import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import { afterEach, expect, it, vi } from 'vitest'
 import { hasNormalAssistantStop } from '../src/node/assistantStream.js'
-import { readDisplaySessionEvents } from '../src/node/sessionEvents.js'
+import { displaySessionEventAt, displaySessionHasUserMessage, readDisplaySessionEvents } from '../src/node/sessionEvents.js'
 import { withEditedAssistantMessage } from '../src/node/floors.js'
 
 const stop: AssistantStreamRecord = { type: 'chunk', time: 2, chunk: { type: 'finish', reason: { kind: 'stop' } } }
@@ -48,6 +48,18 @@ it('楼层编辑清空嵌入流并生成新消息身份，来源日志保持不�
   expect(changed).toHaveProperty('data.message.content', [{ type: 'text', text: '修订回复' }])
   expect(changed.type === 'assistant/message' && changed.data.message.id).not.toBe(event.data.message.id)
   expect(event.data.stream).toEqual([text, stop])
+})
+
+/** 兼容部分宿主测试桩复用数组后原地 append；摘要与 seq 索引都必须观察到增长。 */
+it('展示事件摘要在同一数组原地增长后失效',()=>{
+  const mutable=[...reply([text,stop]).session.snapshotEvents()]
+  expect(displaySessionHasUserMessage(mutable)).toBe(false)
+  expect(displaySessionEventAt(mutable,3)?.type).toBe('assistant/message')
+  const appended={type:'user/message',seq:mutable.length,time:Date.now(),surfaceOp:'append',
+    data:createUserMessage({content:[{type:'text',text:'继续'}],source:{kind:'user'}})} as unknown as SessionEvent
+  mutable.push(appended)
+  expect(displaySessionHasUserMessage(mutable)).toBe(true)
+  expect(displaySessionEventAt(mutable,appended.seq)).toBe(appended)
 })
 
 async function artifacts(root: string) {

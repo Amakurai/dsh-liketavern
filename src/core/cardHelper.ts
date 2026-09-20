@@ -5,7 +5,10 @@ export interface CardHelperContext {
   message?: string
   /** 当前卡面的宿主消息 seq；独立开场白/预览为 0，不冒充完整 ST 聊天序号。 */
   messageId?: number
+  /** 资产/聊天消息展示名。 */
   name?: string
+  /** CCv3 nickname 生效后的 {{char}}；缺省回退 name。 */
+  macroName?: string
   userName?: string
   frameIndex?: number
   canSwipe?: boolean
@@ -31,9 +34,15 @@ export function installCardHelper(
   const latestId=()=>getSnapshot()?getSnapshot()!.messages.length-1:currentId()
   const frameIndex = context.frameIndex ?? 0
   const name = context.name ?? ''
+  const macroName = context.macroName ?? name
   const user = context.userName ?? ''
-  const text = context.message ?? greetings[greetingIndex] ?? greetings[0] ?? ''
-  const canSwipe = context.canSwipe ?? (context.message === undefined && greetings.length > 0)
+  // 角色编辑可能删掉已选中的备用开场白，旧会话仍会带着越界下标。所有兼容
+  // API 必须与实际回退到的第一页一致，不能正文显示第 1 条却报告 swipe_id=8。
+  const activeGreetingIndex = Number.isSafeInteger(greetingIndex) && greetingIndex >= 0 && greetingIndex < greetings.length
+    ? greetingIndex
+    : 0
+  const text = context.message ?? greetings[activeGreetingIndex] ?? greetings[0] ?? ''
+  const canSwipe = (context.canSwipe ?? (context.message === undefined && greetings.length > 0)) && greetings.length > 0
   const iframeName = `TH-message--${currentId()}--${frameIndex}`
   if(context.scriptFrame)delete root.__dshTavernScriptFailure
   const errors: string[] = []
@@ -84,7 +93,7 @@ export function installCardHelper(
     if (typeof value !== 'string') throw new Error('Macro input must be text')
     return value.replace(/\{\{(char|user|lastMessageId|currentMessageId)\}\}/gi, (match, key: string) => {
       switch (key.toLowerCase()) {
-        case 'char': return name
+        case 'char': return macroName
         case 'user': return user
         case 'lastmessageid': return String(latestId())
         case 'currentmessageid': return String(currentId())
@@ -111,7 +120,7 @@ export function installCardHelper(
         && (!option.role||option.role==='all'||option.role===message.role)
         && (!option.hide_state||option.hide_state==='all'||(option.hide_state==='hidden')===message.is_hidden))
         .map(message=>{
-          const current=message.swipe?.active??(canSwipe&&message.message_id===id?greetingIndex:0)
+          const current=message.swipe?.active??(canSwipe&&message.message_id===id?activeGreetingIndex:0)
           const swipes=message.swipe?message.swipe.pages.map(page=>page.message):canSwipe&&message.message_id===id?greetings.slice():[message.message]
           swipes[current]=message.message
           const data=variables({type:'message',message_id:message.message_id}),extra=JSON.parse(JSON.stringify(message.extra))
@@ -126,8 +135,8 @@ export function installCardHelper(
     const data = variables({ type: 'message', message_id: id })
     return [{ message_id: id, name, role: 'assistant', is_hidden: false, message: text, data, extra: {},
       // 旧封面依赖这些 ST 原生字段；现代调用也能读取正常的 message/data。
-      mes: text, is_user: false, is_system: false, swipe_id: canSwipe ? greetingIndex : 0,
-      swipes, ...(option.include_swipes ? { swipes_data: swipes.map((_,index) => index===(canSwipe?greetingIndex:0)?JSON.parse(JSON.stringify(data)):{}), swipes_info: swipes.map(() => ({})) } : {}),
+      mes: text, is_user: false, is_system: false, swipe_id: canSwipe ? activeGreetingIndex : 0,
+      swipes, ...(option.include_swipes ? { swipes_data: swipes.map((_,index) => index===(canSwipe?activeGreetingIndex:0)?JSON.parse(JSON.stringify(data)):{}), swipes_info: swipes.map(() => ({})) } : {}),
     }]
   }
   function swipe(index: number) {
@@ -153,7 +162,7 @@ export function installCardHelper(
     const match = /^\/swipe(?:\s+(\d+|left|right))?\s*$/i.exec(command.trim())
     if (match) {
       const value = match[1]?.toLowerCase()
-      const index = value === 'left' ? greetingIndex - 1 : !value || value === 'right' ? greetingIndex + 1 : Number(value)
+      const index = value === 'left' ? activeGreetingIndex - 1 : !value || value === 'right' ? activeGreetingIndex + 1 : Number(value)
       swipe(value && /^\d+$/.test(value) ? index : (index + greetings.length) % greetings.length)
       return ''
     }
@@ -194,7 +203,7 @@ export function installCardHelper(
   }
   root.SillyTavern = { getContext: () => ({ chat: contextChat(),
     name1: user, name2: name,
-    swipe: () => swipe((greetingIndex + 1) % greetings.length),
+    swipe: () => swipe((activeGreetingIndex + 1) % greetings.length),
     saveChat: async () => {
       if (!chat || chatContent(chat) !== originalChat) return unsupported('saveChat (only greeting swipe_id is supported)')
       await setChatMessages([{ message_id: currentId(), swipe_id: chat.find(message=>message.message_id===currentId())?.swipe_id }])

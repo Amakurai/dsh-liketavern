@@ -2,6 +2,7 @@ import type { TavernRemote } from './types.js';
 export declare function HelperScripts(props: {
     remote: TavernRemote;
     sessionId: string;
+    cardId?: string;
     sessions?: {
         open(id: string): void;
         refresh?: () => Promise<void>;

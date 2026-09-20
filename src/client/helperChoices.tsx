@@ -1,7 +1,7 @@
 /** 脚本只能提交有界文本选项；可信按钮经宿主公开草稿接口填入，第三方代码不接触主页面。 */
 import {useRef,useState,useSyncExternalStore} from 'react'
 import type {SessionInput} from '@deepseek-ai/dsh-client-ui-conversation/client'
-import type {HelperSnapshot} from '../core/helperRuntime.js'
+import type {HelperDisplayContext,HelperSnapshot} from '../core/helperRuntime.js'
 import {Btn,Err} from './util.js'
 import {useT} from './i18n.js'
 export interface ScriptChoice {label:string;text:string}
@@ -24,7 +24,8 @@ export function publishScriptChoices(owner:symbol,sessionId:string,context:Helpe
 }
 export function clearScriptChoices(owner:symbol):void {if(!entries.some(entry=>entry.owner===owner))return;entries=entries.filter(entry=>entry.owner!==owner);notify()}
 export function choiceDraft(draft:string,text:string,previous:string):string {return previous&&draft.endsWith(previous)?draft.slice(0,-previous.length)+text:draft+(draft&&!draft.endsWith('\n')?'\n':'')+text}
-interface ScriptChoicesProps {sessionId:string;context:HelperSnapshot}
+type ScriptChoiceContext=Pick<HelperDisplayContext,'storyId'|'historyRevision'|'currentMessageId'>
+interface ScriptChoicesProps {sessionId:string;context:ScriptChoiceContext}
 export function ScriptChoices(props:ScriptChoicesProps) {
   const {sessionId,context}=props
   return <ScriptChoicesMessage key={JSON.stringify([sessionId,context.storyId,context.historyRevision,context.currentMessageId])} {...props}/>

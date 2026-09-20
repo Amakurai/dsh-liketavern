@@ -14,6 +14,7 @@ export declare const zh: {
     readonly 'regex.toggleDisable': "关闭此规则";
     readonly 'regex.toggleEnable': "启用此规则";
     readonly 'regex.deleteRule': "删除规则";
+    readonly 'regex.ruleName': "规则名称";
     readonly 'regex.find': "查找 (find)";
     readonly 'regex.replace': "替换 (replace)";
     readonly 'regex.scope': "作用域";

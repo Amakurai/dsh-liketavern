@@ -23,6 +23,7 @@ export function CardDataSettings({remote}:{remote:TavernRemote}){
   return <Section title={t('speech.cardDataTitle')} description={t('settings.cards.variablesDesc')}>
     <DraftScope>{request=><>
       <SettingsRow title={t('settings.cards.variableCharacter')}><Select value={cardId} title={t('settings.cards.variableCharacter')}
+        disabled={chars.state.status!=='ready'}
         options={[{value:'',label:t('settings.cards.variableChoose')},...(chars.state.status==='ready'?chars.state.value.items.map(item=>({value:item.cardId,label:item.name})):[])]}
         onChange={value=>request(()=>{setCardId(value);setStoryId('')})}/></SettingsRow>
       <SettingsRow title={t('memory.story')}><Select value={storyId} title={t('memory.story')} disabled={!cardId||stories.state.status!=='ready'}

@@ -17,7 +17,7 @@ import { disableInteractiveParts, type TemplateDisplayPart } from '../core/templ
 import { isFullHtmlDocument } from '../core/htmlFragment.js'
 import { cachedAvatar,invalidateSessionBinding } from './cache.js'
 import {BINDING_CHANGED_EVENT} from './actions.js'
-import { useT, useMarkdownLabels } from './i18n.js'
+import { getTavernLocale, useT, useMarkdownLabels } from './i18n.js'
 import { Avatar, Btn, Err, IconBtn, useLoader, useToast } from './util.js'
 import type { TavernRemote } from './types.js'
 import { CARD_VARIABLE_STYLES } from './styles.js'
@@ -106,7 +106,7 @@ export function SpeechHtmlFrame(props: {
     const onMsg = (e: MessageEvent) => {
       if (!iframeRef.current || e.source !== iframeRef.current.contentWindow) return
       const value:unknown=e.data
-      if(helperRecord(value)&&['iframe-resize','resizeIframe'].includes(String(value.type))&&typeof value.height==='number'&&Number.isFinite(value.height)&&value.height>0){legacyHeight=true;setFrameH(Math.min(8000,Math.max(80,Math.ceil(value.height))));return}
+      if(helperRecord(value)&&['iframe-resize','resizeIframe'].includes(String(value.type))&&typeof value.height==='number'&&Number.isFinite(value.height)&&value.height>0){legacyHeight=true;setFrameH(Math.min(8000,Math.max(24,Math.ceil(value.height))));return}
       if(helperRecord(value)&&value.source==='dsh-tavern-card'&&value.action==='helperFrameReady'){
         if(!frameReady&&eventEndpoint?.matchesRuntime(value.runtimeId)){frameReady=true;handlers.current.onFrameReady?.()}return
       }
@@ -277,7 +277,7 @@ export function SpeechHtmlFrame(props: {
         handlers.current.onSwipeGreeting?.(parsed.index)
       }
       if (!legacyHeight && parsed.action === 'resize' && typeof parsed.height === 'number' && Number.isFinite(parsed.height)) {
-        setFrameH(Math.min(8000, Math.max(80, Math.ceil(parsed.height))))
+        setFrameH(Math.min(8000, Math.max(24, Math.ceil(parsed.height))))
       }
     }
     window.addEventListener('message', onMsg)
@@ -288,7 +288,7 @@ export function SpeechHtmlFrame(props: {
     frameH != null
       ? { height: frameH, minHeight: 0, overflow: 'hidden' as const }
       : props.compact
-        ? { height: 80, minHeight: 0, overflow: 'auto' as const }
+        ? { height: 48, minHeight: 0, overflow: 'auto' as const }
       : props.widget
         ? { height: 280, minHeight: 0, overflow: 'auto' as const }
         : { overflow: 'auto' as const }
@@ -338,6 +338,7 @@ export function SpeechBubble(props: SpeechBubbleProps) {
 interface DisplayProjectionProps extends SpeechBubbleProps {
   value: RenderedOutput
   staging: boolean
+  refreshing?: boolean
   publishing?: boolean
   registerDisplayGuard: (guard: (request: HelperDisplayRequest) => Promise<HelperDisplayLease>) => () => void
   isCurrent: () => boolean
@@ -354,18 +355,42 @@ interface DisplayProjectionProps extends SpeechBubbleProps {
 function DisplayProjection(props: DisplayProjectionProps) {
   const { remote, sessionId, rawText, streaming, value } = props
   const t = useT(), markdownLabels = useMarkdownLabels()
+  const locale = getTavernLocale()
   const interactive = props.interactiveCards ?? value.interactiveCards
-  const htmls = !streaming && interactive
-    ? value.htmls?.length ? value.htmls : value.html ? [value.html] : []
-    : []
-  const text = !streaming
-    ? interactive || value.text || value.parts !== undefined ? value.text : stripDisplayMeta(rawText)
-    : stripDisplayMeta(rawText)
-  const storedParts = !streaming ? value.parts : undefined
-  const visibleParts: TemplateDisplayPart[] = storedParts
-    ? interactive ? [...storedParts] : disableInteractiveParts(storedParts)
-    : [...htmls.map(html => ({ kind: 'html' as const, text: html })), ...(text ? [{ kind: 'markdown' as const, text }] : [])]
-  if (!visibleParts.length) visibleParts.push({ kind: 'markdown', text: text || ' ' })
+  const visibleParts = useMemo(():TemplateDisplayPart[] => {
+    const htmls = !streaming && interactive
+      ? value.htmls?.length ? value.htmls : value.html ? [value.html] : []
+      : []
+    const text = !streaming
+      ? interactive || value.text || value.parts !== undefined ? value.text : stripDisplayMeta(rawText)
+      : stripDisplayMeta(rawText)
+    const storedParts = !streaming ? value.parts : undefined
+    const parts:TemplateDisplayPart[] = storedParts
+      ? interactive ? [...storedParts] : disableInteractiveParts(storedParts)
+      : [...htmls.map(html => ({ kind: 'html' as const, text: html })), ...(text ? [{ kind: 'markdown' as const, text }] : [])]
+    if (!parts.length) parts.push({ kind: 'markdown', text: text || ' ' })
+    return parts
+  },[streaming,interactive,value,rawText])
+
+  // 每个卡面会内嵌完整消息快照。普通气泡重绘只更新事件回调，不重复序列化历史。
+  const frameDocs=useMemo(()=>{
+    let frameIndex=0
+    return visibleParts.map(part=>{
+      if(part.kind!=='html')return null
+      return buildCardSrcDoc(part.text, {
+        greetings: value.greetings ?? [], greetingIndex: value.greetingIndex ?? 0, connectHosts: value.whitelist,
+        helperSnapshot: value.helper, scriptLibraries: value.helperScripts, worldbooks: value.helperWorldbooks,
+        scriptLibraryLabels: { saving: t('speech.scriptSaving'), saved: t('speech.scriptSaved'), failed: t('speech.scriptSaveFailed') },
+        persistenceLabels: { saving: t('speech.helperSaving'), saved: t('speech.helperSaved'), failed: t('speech.helperSaveFailed'), refresh: t('speech.helperRefresh') },
+        helperContext: { message: rawText, messageId: value.canSwipeGreeting !== false ? 0 : props.messageId ?? 0, name: props.name,
+          macroName: value.characterName ?? props.name, userName: value.userName, frameIndex: frameIndex++,
+          canSwipe: value.canSwipeGreeting !== false && Boolean(props.onSwipeGreeting) },
+        helperLabels: { diagnostics: t('speech.helperMessages'), unsupported: t('speech.helperUnsupported') },
+        variableStyles: CARD_VARIABLE_STYLES,
+        variableLabels: cardVariableLabels(t, value.helper ? t('speech.helperDataNote') : t('speech.cardDataNote')),
+      })
+    })
+  },[visibleParts,value,rawText,props.messageId,props.name,Boolean(props.onSwipeGreeting),locale])
 
   const htmlCount = visibleParts.filter(part => part.kind === 'html').length
   const cycleRef = useRef({ seen: new Set<number>(), done: false, active: true })
@@ -411,22 +436,9 @@ function DisplayProjection(props: DisplayProjectionProps) {
   // 聚合继续发送 CHAT_CHANGED，避免事件先于真实 DOM 发布。
   useLayoutEffect(() => { if (props.publishing) props.onPublished?.() }, [props.publishing, props.onPublished])
 
-  let htmlFrameIndex = 0
   const content = visibleParts.map((part, index) => {
     if (part.kind === 'markdown') return <MarkdownText key={`text:${index}`} text={part.text} streaming={Boolean(streaming)} labels={markdownLabels} fileMentions={props.fileMentions} />
-    const frameIndex = htmlFrameIndex++
-    const srcDoc = buildCardSrcDoc(part.text, {
-      greetings: value.greetings ?? [], greetingIndex: value.greetingIndex ?? 0, connectHosts: value.whitelist,
-      helperSnapshot: value.helper, scriptLibraries: value.helperScripts, worldbooks: value.helperWorldbooks,
-      scriptLibraryLabels: { saving: t('speech.scriptSaving'), saved: t('speech.scriptSaved'), failed: t('speech.scriptSaveFailed') },
-      persistenceLabels: { saving: t('speech.helperSaving'), saved: t('speech.helperSaved'), failed: t('speech.helperSaveFailed'), refresh: t('speech.helperRefresh') },
-      helperContext: { message: rawText, messageId: value.canSwipeGreeting !== false ? 0 : props.messageId ?? 0, name: props.name,
-        macroName: value.characterName ?? props.name, userName: value.userName, frameIndex,
-        canSwipe: value.canSwipeGreeting !== false && Boolean(props.onSwipeGreeting) },
-      helperLabels: { diagnostics: t('speech.helperMessages'), unsupported: t('speech.helperUnsupported') },
-      variableStyles: CARD_VARIABLE_STYLES,
-      variableLabels: cardVariableLabels(t, value.helper ? t('speech.helperDataNote') : t('speech.cardDataNote')),
-    })
+    const srcDoc = frameDocs[index]!
     const fullDocumentCover = isFullHtmlDocument(part.text)
     const widget = !fullDocumentCover && visibleParts.length > 1
     const frame = <SpeechHtmlFrame
@@ -436,8 +448,8 @@ function DisplayProjection(props: DisplayProjectionProps) {
       srcDoc={srcDoc}
       title={part.title || props.name}
       widget={widget}
-      compact={Boolean(storedParts) && !fullDocumentCover}
-      readOnly={props.staging}
+      compact={Boolean(!streaming&&value.parts) && !fullDocumentCover}
+      readOnly={props.staging||props.refreshing}
       onReadOnlyViolation={props.staging?()=>props.onFailure(new HelperDisplayError('stale')):undefined}
       helperBinding={value.helper ? { sessionId, storyId: value.helper.storyId } : undefined}
       onSwipeGreeting={props.onSwipe}
@@ -534,13 +546,22 @@ function SpeechBubbleSession(props: SpeechBubbleProps) {
   const [stage, setStage] = useState<DisplayStage | null>(null)
   const stageRef = useRef<DisplayStage | null>(null)
   const projectionSerial = useRef(0)
-  const baseProjectionId = useMemo(() => ++projectionSerial.current, [loaded.state])
-  const validDisplay = display?.base === loaded.state ? display : null
+  // 资产/绑定刷新期间沿用上一份已成功发布的投影，避免短暂显示原始 HTML 源码。
+  // 正文或消息身份改变时立即失效；会话与角色身份由 SpeechBubble 的 key 隔离。
+  const projectionIdentity=useMemo(()=>({}),[sessionId,rawText,props.messageId,props.interactiveCards,streaming])
+  const lastReady=useRef<{identity:object;source:object;state:{status:'ready';value:RenderedOutput};id:number}|null>(null)
+  if(loaded.state.status==='ready'&&(lastReady.current?.source!==loaded.state||lastReady.current.identity!==projectionIdentity)) {
+    lastReady.current={identity:projectionIdentity,source:loaded.state,state:loaded.state,id:++projectionSerial.current}
+  }
+  const remembered=lastReady.current?.identity===projectionIdentity?lastReady.current:null
+  const baseProjectionId=remembered?.id??0
+  const visibleState=loaded.state.status==='ready'?loaded.state:remembered?.state??loaded.state
+  const validDisplay = display?.base === (loaded.state.status==='ready'?loaded.state:remembered?.source) ? display : null
   const validStage = stage?.base === loaded.state ? stage : null
   const activeOverride = validStage?.phase === 'publishing' ? validStage : validDisplay
   const rendered = { state: useMemo(() => activeOverride
     ? { status: 'ready' as const, value: activeOverride.value }
-    : loaded.state, [activeOverride, loaded.state]) }
+    : visibleState, [activeOverride, visibleState]) }
   const displayGuards=useRef(new Set<(request:HelperDisplayRequest)=>Promise<HelperDisplayLease>>())
   const renderLatest=useRef(rendered.state);renderLatest.current=rendered.state
   const [lifecycleError, setLifecycleError] = useState<string | null>(null)
@@ -671,6 +692,7 @@ function SpeechBubbleSession(props: SpeechBubbleProps) {
   if(rendered.state.status==='ready'&&validStage?.phase!=='publishing'){
     const value=rendered.state.value
     projectionNodes.push(<DisplayProjection key={`display:${activeProjectionId}`} {...props} value={value} staging={false}
+      refreshing={loaded.state.status!=='ready'}
       registerDisplayGuard={registerDisplayGuard}
       isCurrent={()=>!stageRef.current&&renderLatest.current.status==='ready'&&renderLatest.current.value===value}
       onComplete={()=>{}}
@@ -698,8 +720,8 @@ function SpeechBubbleSession(props: SpeechBubbleProps) {
         <div className="dsh-tavern-speechName">{name}</div>
         <Err message={swipeError} />
         <Err message={lifecycleError} />
-        {rendered.state.status === 'error'&&<div>
-          <Err message={t('speech.renderFailed',{error:rendered.state.message})}/>
+        {loaded.state.status === 'error'&&<div>
+          <Err message={t('speech.renderFailed',{error:loaded.state.message})}/>
           <Btn onClick={loaded.reload}>{t('speech.retryRender')}</Btn>
         </div>}
         {regexDiagnostics&&<details className="dsh-tavern-reason">
@@ -709,7 +731,7 @@ function SpeechBubbleSession(props: SpeechBubbleProps) {
         </details>}
         {projectionNodes}
         {props.media}
-        {!streaming&&rendered.state.status==='ready'&&(rendered.state.value.helper??rendered.state.value.helperContext)&&<ScriptChoices sessionId={sessionId} context={(rendered.state.value.helper??rendered.state.value.helperContext)!}/>}
+        {!streaming&&loaded.state.status==='ready'&&rendered.state.status==='ready'&&(rendered.state.value.helper??rendered.state.value.helperContext)&&<ScriptChoices sessionId={sessionId} context={(rendered.state.value.helper??rendered.state.value.helperContext)!}/>}
       </div>
       <div className="dsh-tavern-speechCopy">
         <IconBtn label={t('speech.copy')} onClick={() => void onCopy()}>

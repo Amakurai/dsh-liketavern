@@ -101,6 +101,8 @@ describe('stripDisplayMeta', () => {
 
   it('不把普通 HTML 标签当协议标签收起', () => {
     expect(stripDisplayMeta('他说 <div class="note">旁白</div> 完。')).toBe('他说 <div class="note">旁白</div> 完。')
+    const upper='第一行<BR>第二行 <B>加粗</B> <DIV><TABLE><TR><TD>数字</TD></TR></TABLE><SVG><PATH d="M0 0"/></SVG></DIV>'
+    expect(stripDisplayMeta(upper)).toBe(upper)
   })
 
   it('style 小部件进 htmls，前面的协议标签从正文收起', () => {

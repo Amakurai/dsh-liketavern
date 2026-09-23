@@ -92,6 +92,12 @@ describe('有序展示与真实消息格式化',()=>{
     expect(splitTemplateDisplay(styled)).toEqual([{kind:'html',text:styled}])
     for(const bad of [[{kind:'script',text:'x'}],[{kind:'markdown',text:'x',title:'bad'}],[{kind:'html',text:'x',title:8}],[{kind:'html',text:'x'.repeat(1024*1024+1)}],Array.from({length:129},()=>({kind:'markdown',text:'x'}))]) expect(()=>parseTemplateDisplayParts(bad)).toThrow()
   })
+  it('展示正则产出的独立样式跨片段与后续组件共用沙箱',()=>{
+    const style='<style>.status{color:red}</style>',card='<div class="status">状态</div>'
+    expect(sanitizeTemplateDisplayParts([
+      {kind:'html',text:style},{kind:'markdown',text:'台词'},{kind:'html',text:card},
+    ])).toEqual([{kind:'markdown',text:'台词'},{kind:'html',text:style+'\n'+card}])
+  })
   it('惰性模板内的围栏与文档示例不被提升，模板后的真实卡仍在同一沙箱',()=>{
     const inert='<template id="card-template"><template><html><body>示例文档</body></html></template>\n'
       +'```html\n<button>示例按钮</button>\n```\n</template>'

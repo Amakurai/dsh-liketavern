@@ -1,5 +1,5 @@
 /** 定位明确允许展示的 Markdown HTML 围栏；跳过注释、原始/惰性内容元素及其它语言代码块，保留完整围栏边界。 */
-import { findHtmlDocument, findHtmlFragment, findHtmlOpaqueEnd } from './htmlFragment.js'
+import { findHtmlDocument, findHtmlFragment, findHtmlOpaqueEnd, LENIENT_OPAQUE } from './htmlFragment.js'
 import { markdownCodeScanner } from './markdownCode.js'
 
 export function findHtmlFence(text:string):{start:number;end:number;contentStart:number;contentEnd:number}|null {
@@ -10,7 +10,7 @@ export function findHtmlFence(text:string):{start:number;end:number;contentStart
     if(raw.startsWith('<!--'))continue
     if(token[1]) {
       const end=findHtmlOpaqueEnd(text,tokens.lastIndex,token[1])
-      if(end===null)return null
+      if(end===null){if(LENIENT_OPAQUE.has(token[1].toLowerCase()))continue;return null}
       tokens.lastIndex=end;continue
     }
     const fence=code.fence(token.index)
@@ -21,7 +21,8 @@ export function findHtmlFence(text:string):{start:number;end:number;contentStart
     }
     if(!fence.closed)return null
     tokens.lastIndex=fence.end
-    const info=fence.info.trim().toLowerCase()
+    // CommonMark 以 info 的首个单词作为语言，`html title="x"` 仍是 HTML 围栏。
+    const info=fence.info.trim().split(/\s+/)[0]!.toLowerCase()
     if(!fence.standalone||!['','html','text','xml'].includes(info))continue
     const content=text.slice(fence.contentStart,fence.contentEnd),trimmed=content.trim()
     // 明确标成 html/xml 的围栏本身就是作者给出的执行边界。button、p、自定义元素等

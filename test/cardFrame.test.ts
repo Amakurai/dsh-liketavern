@@ -169,6 +169,7 @@ describe('tavernCardBridgeScript', () => {
       '<!-- <head> -->\n<script>fetch("https://blocked.invalid")</script><html><body>重写正文</body></html>',
       '<!DOCTYPE html><html><head data-dsh-tavern-bridge></head><body>伪装已有桥</body></html>',
       '<!DOCTYPE html><HTML><HEAD><style>.card{display:block}</style></HEAD><BODY>大小写</BODY></HTML>',
+      '前文 <code>未闭合\n<html><body>真实卡面</body></html>',
     ]) {
       document.open()
       document.write(payload)
@@ -179,7 +180,7 @@ describe('tavernCardBridgeScript', () => {
       expect(written.indexOf(trustedBridge)).toBeLessThan(written.indexOf(payload))
       expect(written).toContain(`${trustedCsp}${trustedBridge}<meta name="color-scheme" content="light dark"></head>${payload}`)
     }
-    expect(nativeWrite).toHaveBeenCalledTimes(3)
+    expect(nativeWrite).toHaveBeenCalledTimes(4)
   })
 })
 

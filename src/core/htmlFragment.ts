@@ -4,6 +4,11 @@ import { markdownCodeScanner } from './markdownCode.js'
 const CONTAINERS = new Set(['div', 'section', 'article', 'main', 'aside', 'header', 'footer', 'nav', 'figure', 'table', 'ul', 'ol', 'form', 'fieldset', 'details'])
 const RAW_TEXT = new Set(['script', 'style', 'textarea', 'title', 'pre', 'code'])
 const INERT_CONTENT = new Set(['noscript'])
+/**
+ * code/pre 只是代码示例的启发式边界，浏览器里仍是普通元素：正文提到未闭合的 `<code>`
+ * 时只忽略这个开标签，不能让后续真实卡面全部失去识别。
+ */
+export const LENIENT_OPAQUE = new Set(['code', 'pre'])
 const VOID_ELEMENTS = new Set(['area','base','br','col','embed','hr','img','input','link','meta','param','source','track','wbr'])
 const HTML_TAGS=/<!--[\s\S]*?(?:-->|$)|<\/?([A-Za-z][A-Za-z0-9:-]*)(?=[\s/>])(?:[^"'<>]|"[^"]*"|'[^']*')*>/gi
 
@@ -28,7 +33,7 @@ export function findHtmlOpaqueEnd(text:string,contentStart:number,tag:string):nu
     if(!nested)continue
     if(!closing&&(RAW_TEXT.has(nested)||INERT_CONTENT.has(nested))) {
       const end=findHtmlOpaqueEnd(text,tokens.lastIndex,nested)
-      if(end===null)return null
+      if(end===null){if(LENIENT_OPAQUE.has(nested))continue;return null}
       tokens.lastIndex=end
       continue
     }
@@ -63,7 +68,7 @@ export function findHtmlDocument(text:string):{start:number;end:number}|null {
     }
     if(tag&&!closing&&(RAW_TEXT.has(tag)||INERT_CONTENT.has(tag)||tag==='template')) {
       const end=findHtmlOpaqueEnd(text,tokens.lastIndex,tag)
-      if(end===null)break
+      if(end===null){if(LENIENT_OPAQUE.has(tag))continue;break}
       tokens.lastIndex=end
     } else if(start>=0&&closing&&tag===root) {
       // 旧卡偶尔只写 body 起点却仍以 html 收尾；把紧跟的外壳闭标签一并保留。
@@ -117,7 +122,7 @@ export function findHtmlFragment(text: string): { start: number; end: number } |
     }
     if (!closing && (RAW_TEXT.has(tag) || INERT_CONTENT.has(tag) || tag === 'template')) {
       const opaqueEnd=findHtmlOpaqueEnd(text,tokens.lastIndex,tag)
-      if(opaqueEnd===null) break
+      if(opaqueEnd===null) { if(LENIENT_OPAQUE.has(tag)) continue; break }
       tokens.lastIndex=opaqueEnd
       if (!depth) {
         if(tag==='template'||INERT_CONTENT.has(tag)) {

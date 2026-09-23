@@ -2,6 +2,7 @@
 import { locateRenderedHtml } from './regex.js'
 import {
   htmlSourceFallback,
+  mergeDetachedCardStyles,
   stripDisplayMeta,
   stripOpaqueDisplayMeta,
   stripOpaqueDisplayMetaParts,
@@ -46,7 +47,8 @@ export function splitTemplateDisplay(text:string,preserveMeta=false):TemplateDis
   }
   // 机读块必须在首次 HTML 定位前按完整字符串收起，不能让拆分切断其开闭标签。
   visit(stripOpaqueDisplayMeta(text))
-  return preserveMeta ? parseTemplateDisplayParts(parts) : sanitizeTemplateDisplayParts(parts)
+  const grouped=mergeDetachedCardStyles(parts)
+  return preserveMeta ? parseTemplateDisplayParts(grouped) : sanitizeTemplateDisplayParts(grouped)
 }
 
 /**
@@ -64,7 +66,7 @@ export function sanitizeTemplateDisplayParts(parts: readonly TemplateDisplayPart
     const text = stripDisplayMeta(part.text)
     if (text) output.push({ kind: 'markdown', text })
   }
-  return parseTemplateDisplayParts(output)
+  return parseTemplateDisplayParts(mergeDetachedCardStyles(output))
 }
 
 /** 会话/全局关闭交互卡时跨片段清理，再逐 HTML 段安全降级并保持顺序。 */

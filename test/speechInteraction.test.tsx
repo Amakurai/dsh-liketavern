@@ -284,6 +284,45 @@ it('角色详情首个修订只建立基线，后续修订才重新读取卡面�
   expect(view!.root.findByType('iframe').props.srcDoc).toContain('新绑定')
 })
 
+/** 绑定变更的远程渲染可能很慢；现有沙箱应留在页面上直到新投影完成。 */
+it('绑定刷新期间保留旧 iframe，不闪出原始 HTML 源码',async()=>{
+  const pending=Promise.withResolvers<Awaited<ReturnType<TavernRemote['renderOutputText']>>>()
+  const old={text:'',htmls:['<div>旧状态</div>'],interactiveCards:true,whitelist:[],greetings:[],greetingIndex:0,canSwipeGreeting:false}
+  const renderOutputText=vi.fn<TavernRemote['renderOutputText']>()
+    .mockResolvedValueOnce({ok:true,value:old})
+    .mockImplementationOnce(()=>pending.promise)
+  const rpc={renderOutputText} as unknown as TavernRemote
+  const bubble=(revision:string)=><SpeechBubble remote={rpc} sessionId="refresh-hold" cardId="card" name="角色"
+    rawText="<div>原始源码</div>" bindingRevision={revision}/>
+  await mount(bubble('a'))
+  const original=view!.root.findByType('iframe')
+  await act(async()=>view!.update(bubble('b')))
+  expect(renderOutputText).toHaveBeenCalledTimes(2)
+  expect(view!.root.findByType('iframe')).toBe(original)
+  expect(view!.root.findAllByProps({'data-markdown':'<div>原始源码</div>'})).toHaveLength(0)
+  await act(async()=>pending.resolve({ok:true,value:{...old,htmls:['<div>新状态</div>']}}))
+  const updated=view!.root.findByType('iframe')
+  expect(updated).not.toBe(original)
+  expect(updated.props.srcDoc).toContain('<div>新状态</div>')
+})
+
+/** 大剧情快照只能在卡面内容变化时序列化，宿主父级状态更新不能反复拼整页 srcDoc。 */
+it('同一渲染结果的父级重绘不重新序列化卡面快照',async()=>{
+  let serializations=0
+  const snapshot={...helperSnapshot,toJSON(){serializations++;return {...helperSnapshot}}}
+  const response={text:'',htmls:['<div>状态</div>'],interactiveCards:true,whitelist:[],greetings:[],
+    greetingIndex:0,canSwipeGreeting:false,helper:snapshot}
+  const rpc={renderOutputText:async()=>({ok:true as const,value:response})} as unknown as TavernRemote
+  const bubble=(name:string)=><SpeechBubble remote={rpc} sessionId="memo-frame" cardId="card" name={name} rawText="状态"/>
+  await mount(bubble('角色'))
+  const before=serializations
+  expect(before).toBeGreaterThan(0)
+  const original=view!.root.findByType('iframe')
+  await act(async()=>view!.update(bubble('角色')))
+  expect(view!.root.findByType('iframe')).toBe(original)
+  expect(serializations).toBe(before)
+})
+
 it.each(['envelope','rejected'] as const)('卡片显示失败可在原消息重试，恢复前保留原文（%s）',async failure=>{
   const renderOutputText=vi.fn<TavernRemote['renderOutputText']>()
   if(failure==='rejected')renderOutputText.mockRejectedValueOnce(new Error('连接中断'))
@@ -366,7 +405,7 @@ it('完整页面即使混排前后台词也使用全卡高度，内联状态栏�
     sessionId="status-height" cardId="card" name="角色" rawText={status}/>))
   frame=view!.root.findByType('iframe')
   expect(frame.props.className).toContain('is-widget')
-  expect(frame.props.style.height).toBe(80)
+  expect(frame.props.style.height).toBe(48)
 })
 
 it('显式 HTML 围栏里的按钮和段落始终进入隔离卡面',async()=>{
@@ -888,6 +927,16 @@ it('旧卡高度回执仅接受本 iframe，原生探测不会覆盖卡片自己
  await act(async()=>send({type:'iframe-resize',height:430}));expect(view!.root.findByType('iframe').props.style.height).toBe(430)
  await act(async()=>send({source:'dsh-tavern-card',action:'resize',height:610}));expect(view!.root.findByType('iframe').props.style.height).toBe(430)
  await act(async()=>send({type:'resizeIframe',height:999999}));expect(view!.root.findByType('iframe').props.style.height).toBe(8000)
+})
+
+it('单行紧凑卡可缩到 80px 以下，仍保留可见的最小高度',async()=>{
+  await mount(<SpeechHtmlFrame srcDoc="compact-height" title="status" widget compact/> )
+  const send=(height:number)=>{const event=new Event('message');Object.defineProperties(event,{source:{value:source},data:{value:{source:'dsh-tavern-card',action:'resize',height}}});events.dispatchEvent(event)}
+  expect(view!.root.findByType('iframe').props.style.height).toBe(48)
+  await act(async()=>send(31))
+  expect(view!.root.findByType('iframe').props.style.height).toBe(31)
+  await act(async()=>send(4))
+  expect(view!.root.findByType('iframe').props.style.height).toBe(24)
 })
 
 /** 超预算诊断必须与实际挂载一致；禁用的脚本集合不应误报运行故障。 */

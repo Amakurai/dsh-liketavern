@@ -5,6 +5,12 @@ export declare function stripOpaqueDisplayMeta(text: string, removeComments?: bo
 export declare function stripOpaqueDisplayMetaParts<T extends {
     text: string;
 }>(parts: readonly T[], removeComments?: boolean, separator?: string): T[];
+/** 独立样式片段不应占一个空 iframe；跨过普通台词，将 CSS 交给下一张真正的卡面。 */
+export declare function mergeDetachedCardStyles<T extends {
+    kind: 'markdown' | 'html';
+    text: string;
+    title?: string;
+}>(parts: readonly T[]): T[];
 /** 去掉展示不该看见的机读块与小部件；角色正文保留。 */
 export declare function stripDisplayMeta(text: string): string;
 /** 交互卡关闭后的源码回退：围栏长于内容中的反引号，不能逃逸成可执行 HTML。 */

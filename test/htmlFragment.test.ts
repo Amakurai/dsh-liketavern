@@ -85,6 +85,36 @@ it('显式 html 围栏中的裸片段进入沙箱，围栏外两侧正文不遗�
   ])
 })
 
+/** 社区卡会把样式先写在正文上方；隔离 iframe 必须让样式与目标组件同处一页。 */
+it('独立样式跨过台词归入后续卡面，不留下空白 iframe',()=>{
+  const style='<style>.bar{color:red}</style>',card='<div class="bar">HP 10</div>'
+  const source=style+'\n她走了过来。\n'+card
+  expect(splitTemplateDisplay(source)).toEqual([
+    {kind:'markdown',text:'她走了过来。'},
+    {kind:'html',text:style+'\n'+card},
+  ])
+  expect(presentRenderedOutput(source,true)).toEqual({html:style+'\n'+card,htmls:[style+'\n'+card],text:'她走了过来。'})
+})
+
+/** 未闭合的普通 code/pre 提及不应屏蔽后面明确给出的 HTML 卡。 */
+it.each(['code','pre'])('正文中未闭合的 <%s> 后仍识别独立卡面与围栏',tag=>{
+  const prefix=`他提到 <${tag}> 标签。`
+  const card='<div class="status">HP 10</div>'
+  expect(splitTemplateDisplay(prefix+'\n'+card)).toEqual([
+    {kind:'markdown',text:prefix},{kind:'html',text:card},
+  ])
+  expect(splitTemplateDisplay(prefix+'\n```html title="状态"\n'+card+'\n```\n后文')).toEqual([
+    {kind:'markdown',text:prefix},{kind:'html',text:card},{kind:'markdown',text:'后文'},
+  ])
+})
+
+it('带附加属性的 HTML 围栏仍以第一个 info 单词判定语言',()=>{
+  const html='<button type="button">继续</button>'
+  expect(splitTemplateDisplay('前文\n```html title="选择"\n'+html+'\n```\n后文')).toEqual([
+    {kind:'markdown',text:'前文'},{kind:'html',text:html},{kind:'markdown',text:'后文'},
+  ])
+})
+
 it('样式或脚本前导与相邻普通元素、空元素保持在同一个卡面',()=>{
   const styled='<style>p{color:red}.portrait{width:32px}</style>\n<p>状态</p>\n<img class="portrait" src="data:image/png;base64,AA==">'
   expect(splitTemplateDisplay('前文\n'+styled+'\n后文')).toEqual([

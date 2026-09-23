@@ -354,7 +354,10 @@ function hasCardDocumentShell(html:string):boolean {
     if(!closing&&(tag==='html'||tag==='body'))return true
     if(!closing&&['script','style','textarea','title','pre','code','template'].includes(tag??'')){
       const close=new RegExp('</'+tag+'\\s*>','gi');close.lastIndex=tokens.lastIndex
-      const found=close.exec(html);if(!found)return false;tokens.lastIndex=close.lastIndex
+      const found=close.exec(html)
+      // code/pre 在浏览器中是普通元素，未闭合时只跳过该开标签，与宿主侧识别口径一致。
+      if(!found){if(tag==='code'||tag==='pre')continue;return false}
+      tokens.lastIndex=close.lastIndex
     }
   }
   return false

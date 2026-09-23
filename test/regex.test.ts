@@ -260,6 +260,17 @@ describe('批级预编译（RegExp 编译一次，替换串宏展开仍逐消息
     // 两条消息各掷一次、拿到流里连续两个值；批级只展开一次的话两条会相同
     expect(res.messages.map((m) => m.content)).toEqual(['1', '10'])
   })
+
+  it.each([false, true])('sticky 正则在每条消息前归零 lastIndex（trim=%s）', trim => {
+    const messages: ChatMessage[] = Array.from({ length: 3 }, () => ({ role: 'user', content: 'cat' }))
+    const rule = makeRule({
+      id: 'sticky', find: '/(cat)/y', replace: 'dog',
+      ...(trim ? { trimStrings: ['#'] } : {}),
+    })
+    const result = applyRegexToMessages(messages, [rule], FILTER, CTX)
+    expect(result.messages.map(message => message.content)).toEqual(['dog', 'dog', 'dog'])
+    expect(result.applied).toEqual(['sticky', 'sticky', 'sticky'])
+  })
 })
 
 describe('规则容错', () => {

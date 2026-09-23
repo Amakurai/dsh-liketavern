@@ -70,6 +70,20 @@ describe('stripDisplayMeta', () => {
     expect(shown.text).not.toContain('<!DOCTYPE')
   })
 
+  it('超过八段交互卡时仍逐段隔离，源码不流入正文', () => {
+    const rendered = Array.from({ length: 9 }, (_, index) => `<div>卡面 ${index}</div>\n台词 ${index}`).join('\n')
+    const shown = presentRenderedOutput(rendered, true)
+    expect(shown.htmls).toHaveLength(9)
+    expect(shown.htmls[8]).toBe('<div>卡面 8</div>')
+    expect(shown.text).not.toContain('<div>')
+    expect(shown.text).toContain('台词 8')
+  })
+
+  it('超过片段预算时明确失败，不返回残留的交互 HTML', () => {
+    const rendered = Array.from({ length: 129 }, (_, index) => `<div>卡面 ${index}</div>\n台词 ${index}`).join('\n')
+    expect(() => presentRenderedOutput(rendered, true)).toThrow('交互卡展示片段过多')
+  })
+
   it('收起 StatusPlaceHolderImpl 占位', () => {
     expect(stripDisplayMeta('<StatusPlaceHolderImpl/>\n正文')).toBe('正文')
   })

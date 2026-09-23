@@ -26,6 +26,7 @@ import {
   type WorkspaceIndex,
 } from '../src/state/workspace.js'
 import { WorkspaceFs } from '../src/state/workspaceFs.js'
+import { withWorkspaceLock } from '../src/state/workspaceLock.js'
 import { cardToStJson, embedCardInPng, parseJsonCard, parsePngCard } from '../src/state/card.js'
 
 let root: string
@@ -476,6 +477,47 @@ describe('rebuildIndex', () => {
     await rebuildIndex(fs, (t) => t.length)
     const index = JSON.parse(await readFile(join(ws.root, 'index.json'), 'utf8')) as WorkspaceIndex
     expect(index.files.map((f) => f.path)).toEqual([])
+  })
+
+  it('并发写入期间不扫描旧笔记，最终索引对应已提交的正文', async () => {
+    const ws = await importCard(charactersDir, makeCard())
+    const fs = new WorkspaceFs(ws.root, null)
+    await fs.writeText('journal.md', '旧笔记')
+
+    let entered!: () => void, allowWrite!: () => void, staleRead!: () => void, continueRead!: () => void
+    const lockEntered = new Promise<void>(resolve => { entered = resolve })
+    const writeGate = new Promise<void>(resolve => { allowWrite = resolve })
+    const readOld = new Promise<void>(resolve => { staleRead = resolve })
+    const readGate = new Promise<void>(resolve => { continueRead = resolve })
+    const originalRead = fs.readText.bind(fs)
+    const readSpy = vi.spyOn(fs, 'readText').mockImplementation(async path => {
+      const value = await originalRead(path)
+      if (path === 'journal.md' && value === '旧笔记') { staleRead(); await readGate }
+      return value
+    })
+    const writer = withWorkspaceLock(ws.root, async () => {
+      entered()
+      await writeGate
+      await fs.writeText('journal.md', '新笔记')
+    })
+    await lockEntered
+    const listSpy = vi.spyOn(fs, 'list')
+    const rebuilding = rebuildIndex(fs, text => text.length)
+    try {
+      // 未加锁的实现会立即扫描旧正文；等它读完后提交新正文，稳定复现旧索引覆盖。
+      if (listSpy.mock.calls.length > 0) await readOld
+      allowWrite()
+      await writer
+      continueRead()
+      await rebuilding
+      const index = JSON.parse(await fs.readText('index.json') ?? '{}') as WorkspaceIndex
+      expect(index.files.find(file => file.path === 'journal.md')?.summary).toBe('新笔记')
+    } finally {
+      allowWrite()
+      continueRead()
+      listSpy.mockRestore()
+      readSpy.mockRestore()
+    }
   })
 })
 

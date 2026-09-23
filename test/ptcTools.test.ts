@@ -18,6 +18,7 @@ import { apply as applyAgent } from '../src/agent.js'
 import { TavernState } from '../src/node/state.js'
 import { resolveConfig } from '../src/node/config.js'
 import { TURN_PLAYBOOK, TURN_STEP_NOTICE_PREFIX, TURN_WRITE_ACK_PREFIX } from '../src/core/dshPrompt.js'
+import { estimateTokens } from '../src/core/tokenize.js'
 import { WorkspaceFs } from '../src/state/workspaceFs.js'
 
 let root: string, ctx: Context, state: TavernState, agent: Agent, native: Agent, cardId: string, storyId: string
@@ -129,6 +130,9 @@ it('读写混排保持独占顺序，结果可直接引用；同层回滚撤销�
   const ws = await workspace(), floor = state.openFloors.get(agent.id)!.floor
   expect(await ws.memory.stats()).toMatchObject({ count: 1 })
   expect(await ws.deltas.list()).toHaveLength(1)
+  const deltaText = (await ws.fs.readText('state/world-delta.jsonl'))!
+  const index = JSON.parse((await ws.fs.readText('index.json'))!) as { files: Array<{ path: string; tokens: number }> }
+  expect(index.files.find(file => file.path === 'state/world-delta.jsonl')?.tokens).toBe(estimateTokens(deltaText))
   expect(ws.fs.currentFloor).toBeNull()
   await ws.wal.commitFloor(floor)
   await ws.wal.rollbackFloor(floor, ws.fs.root)

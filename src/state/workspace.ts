@@ -376,31 +376,34 @@ export async function rebuildIndex(
   fs: WorkspaceFs,
   estimateTokens: (text: string) => number,
 ): Promise<void> {
-  const files: WorkspaceIndexFile[] = []
+  // 索引是多文件派生视图；扫描到写回必须同占工作区锁，不能让并发编辑插在两者之间。
+  await withWorkspaceLock(fs.root, async () => {
+    const files: WorkspaceIndexFile[] = []
 
-  // 非递归列举：archive/ 不进清单，递归走一遍再丢掉会让每次写入后的重建随归档量变慢。
-  const memoryFiles = await fs.list('memory', { recursive: false })
-  for (const rel of memoryFiles) {
-    if (!rel.endsWith('.md')) continue
-    const content = (await fs.readText(`memory/${rel}`)) ?? ''
-    files.push({ path: `memory/${rel}`, summary: summarizeMarkdown(content), tokens: estimateTokens(content) })
-  }
+    // 非递归列举：archive/ 不进清单，递归走一遍再丢掉会让每次写入后的重建随归档量变慢。
+    const memoryFiles = await fs.list('memory', { recursive: false })
+    for (const rel of memoryFiles) {
+      if (!rel.endsWith('.md')) continue
+      const content = (await fs.readText(`memory/${rel}`)) ?? ''
+      files.push({ path: `memory/${rel}`, summary: summarizeMarkdown(content), tokens: estimateTokens(content) })
+    }
 
-  const delta = await fs.readText('state/world-delta.jsonl')
-  if (delta !== null) {
-    const count = delta.split('\n').filter((line) => line.trim() !== '').length
-    files.push({
-      path: 'state/world-delta.jsonl',
-      summary: delta.trim() === '' ? '' : `${count} 条变化`,
-      tokens: estimateTokens(delta),
-    })
-  }
+    const delta = await fs.readText('state/world-delta.jsonl')
+    if (delta !== null) {
+      const count = delta.split('\n').filter((line) => line.trim() !== '').length
+      files.push({
+        path: 'state/world-delta.jsonl',
+        summary: delta.trim() === '' ? '' : `${count} 条变化`,
+        tokens: estimateTokens(delta),
+      })
+    }
 
-  const journal = await fs.readText('journal.md')
-  if (journal !== null) {
-    files.push({ path: 'journal.md', summary: summarizeMarkdown(journal), tokens: estimateTokens(journal) })
-  }
+    const journal = await fs.readText('journal.md')
+    if (journal !== null) {
+      files.push({ path: 'journal.md', summary: summarizeMarkdown(journal), tokens: estimateTokens(journal) })
+    }
 
-  const index: WorkspaceIndex = { files, updatedAt: new Date().toISOString() }
-  await fs.writeText('index.json', JSON.stringify(index, null, 2) + '\n')
+    const index: WorkspaceIndex = { files, updatedAt: new Date().toISOString() }
+    await fs.writeText('index.json', JSON.stringify(index, null, 2) + '\n')
+  })
 }

@@ -25,6 +25,7 @@ import { Session } from '@deepseek-ai/dsh-session'
 import { greetingMessage } from '../src/node/greetingSeed.js'
 import type { SettingsScope } from '@deepseek-ai/dsh-settings'
 import { defaultPreset } from '../src/core/assemble.js'
+import { estimateTokens } from '../src/core/tokenize.js'
 import type { CharacterCard, PromptPreset } from '../src/core/types.js'
 import { loadBinding, type SessionBinding } from '../src/node/bindings.js'
 import { TavernConfigSchema, resolveConfig, type TavernConfigRaw } from '../src/node/config.js'
@@ -325,6 +326,16 @@ describe('内联 HTML 卡面服务展示（真实剧情存储）', () => {
 })
 
 describe('面板写路径不记 WAL（plainWorkspace）', () => {
+  it('撤销世界状态后同步重建索引，目录 token 与实际文件一致', async () => {
+    const { cardId } = await importCard(paths.characters, makeCard())
+    const { id } = await service.addWorldDelta({ cardId, type: 'add', content: '旧王都已经陷落' })
+    expect(await service.revokeWorldDelta({ cardId, id })).toEqual({ revoked: true })
+    const fs = (await state.plainWorkspace(cardId)).fs
+    const body = (await fs.readText('state/world-delta.jsonl'))!
+    const index = JSON.parse((await fs.readText('index.json'))!) as { files: Array<{ path: string; tokens: number }> }
+    expect(index.files.find(file => file.path === 'state/world-delta.jsonl')?.tokens).toBe(estimateTokens(body))
+  })
+
   it('turn 进行中（共享句柄 floor 非 null）面板写不记楼层快照，回退不撤销', async () => {
     const { cardId } = await importCard(paths.characters, makeCard())
     // 楼层开始前的既有数据（不涉 WAL）

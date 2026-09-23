@@ -746,7 +746,9 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
   async revokeWorldDelta(request: { cardId: string; storyId?: string; id: string }): Promise<TavernMethodResults['revokeWorldDelta']> {
     // 面板写路径走 plainWorkspace（理由同 saveMemory）。
     const ws = await this.state.plainWorkspace(request.cardId, request.storyId)
-    return { revoked: await ws.deltas.revoke(request.id) }
+    const revoked = await ws.deltas.revoke(request.id)
+    if (revoked) await rebuildIndex(ws.fs, estimateTokens)
+    return { revoked }
   }
 
   async addWorldDelta(request: {

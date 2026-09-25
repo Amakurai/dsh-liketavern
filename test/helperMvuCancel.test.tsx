@@ -13,7 +13,7 @@ vi.mock('../src/client/styles.js', () => ({ CARD_VARIABLE_STYLES: '' }))
 vi.mock('../src/client/speech.js', () => ({ SpeechHtmlFrame: () => null }))
 vi.mock('../src/client/helperScriptEditor.js', () => ({ HelperScriptEditor: () => null }))
 vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
-  IconCopyOutline16: () => null, IconUserOutline16: () => null, IconChevronDownOutline14: () => null,
+  IconCopyOutlineMedium: () => null, IconUserOutlineMedium: () => null, IconChevronDownOutlineMedium: () => null,
   Tooltip: (props: { children?: ReactNode }) => <>{props.children}</>,
   Button: (props: { children?: ReactNode }) => <button>{props.children}</button>, Toast: () => null,
 }))

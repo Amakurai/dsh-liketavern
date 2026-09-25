@@ -1,3 +1,4 @@
+import type {} from './messageSources.js'
 /**
  * 楼层操作：重新生成 / 回退 / 编辑用户消息 / 编辑 assistant 正文 / 续写 / 开场白 swipe。
  *
@@ -16,7 +17,7 @@
 import { randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent, AgentOptions, CreateAgentOptions } from '@deepseek-ai/dsh-agent'
-import type { AgentPresets } from '@deepseek-ai/dsh-agent-presets'
+import type { AgentPresetRegistry } from '@deepseek-ai/dsh-agent-preset-registry'
 import { createAssistantMessage, createUserMessage, type AssistantMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionLogOffset, type Session, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { join } from 'node:path'
@@ -66,8 +67,8 @@ interface WorkspaceRegistryLike {
   list(): WorkspaceAttachable[]
 }
 
-function agentPresetsOf(ctx: Context): AgentPresets {
-  const presets = ctx.get('agentPresets') as AgentPresets | undefined
+function agentPresetsOf(ctx: Context): AgentPresetRegistry {
+  const presets = ctx.get('agentPresets') as AgentPresetRegistry | undefined
   if (!presets) throw new FloorError('no-presets', '当前运行时没有 agent 预设服务，无法创建分支会话')
   return presets
 }
@@ -668,7 +669,7 @@ export async function continueFloor(
         text: `${CONTINUE_INSTRUCTION_PREFIX}上一条角色回复可能因长度上限被截断。请紧接断点继续写扮演正文，不要重复已输出的内容，不要解释，中间不要调用工具。`,
       },
     ],
-    source: { kind: 'plugin', plugin: 'dsh-tavern', form: 'notice', summary: '续写指令' },
+    source: { kind: 'dsh-tavern', form: 'notice', summary: '续写指令' },
   })
   await resumeAndDrive(ctx, sessionId, instruction)
   return { continued: true }

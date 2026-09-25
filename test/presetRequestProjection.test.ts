@@ -1,3 +1,4 @@
+import { messagesResponse } from './messagesApiFactory.js'
 /** 真实 Session 与手写请求验证预设布局载体恢复、消息身份/附件/工具保真、跨步固定边界和压缩来源映射。 */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -9,7 +10,7 @@ import { AttachmentId } from '@deepseek-ai/dsh-attachment'
 import { createAssistantMessage, createSystemMessage, createToolResultMessage, createUserMessage, ToolCallId,
   type GenerateOptions, type Message } from '@deepseek-ai/dsh-llm'
 import { Session, SessionId, SessionStore, type SessionEvent } from '@deepseek-ai/dsh-session'
-import { Config as DeepSeekConfig, DeepSeekAdapter, resolveAdapterOptions } from '@deepseek-ai/dsh-llm-deepseek'
+import { Config as DeepSeekConfig, plainOptions, DeepSeekAdapter, resolveAdapterOptions } from '@deepseek-ai/dsh-llm-deepseek'
 import { validateStoredEvents } from '@deepseek-ai/dsh-session-persistence'
 import { joinContextSections } from '@deepseek-ai/dsh-system-prompt'
 import { BOUND_DISCIPLINE, TURN_PLAYBOOK } from '../src/core/dshPrompt.js'
@@ -41,7 +42,7 @@ function factory() {
     { type: 'image', attachment: { attachmentId: AttachmentId('a'.repeat(64)), mediaType: 'image/png', bytes: 32, width: 1, height: 1, name: 'factory.png' } }] })
   session.append('user/message', current, { surfaceOp: 'append' })
   const sections = [{ name: 'other-plugin', text: 'FOREIGN-CONTEXT' }, { name: 'tavern:turn', text: contextText }]
-  const snapshot = createUserMessage({ source: { kind: 'plugin', plugin: hostPlugin, form: 'snapshot', sections },
+  const snapshot = createUserMessage({ source: { kind: 'runtime-context', form: 'snapshot', sections },
     content: [{ type: 'text', text: joinContextSections(sections) }] })
   session.append('user/message', snapshot, { surfaceOp: 'append' })
   const history = [first, answer, current].map((message, inputIndex) => ({ inputIndex, messageId: message.id, role: message.role, chat: true }))
@@ -94,7 +95,7 @@ it('附加布局保留原消息 ID、角色、正文和 source.kind，真实恢�
   const output = projectPresetRequest({ ...f.request(), messages: restored.deriveMessages() }, restored)
   const retained = output.messages.find(message => message.id === f.snapshot.id)!
   expect(retained.role).toBe('user')
-  expect(retained.source).toEqual({ kind: 'plugin', plugin: hostPlugin, form: 'snapshot', sections: [{ name: 'other-plugin', text: 'FOREIGN-CONTEXT' }] })
+  expect(retained.source).toEqual({ kind: 'runtime-context', form: 'snapshot', sections: [{ name: 'other-plugin', text: 'FOREIGN-CONTEXT' }] })
   expect(textOf(retained)).toContain('FOREIGN-CONTEXT')
   expect(textOf(output.messages.at(-1)!)).toBe('ASSISTANT-PREFILL')
   expect(output.messages.some(message => 'tavernPromptPlan' in message.source)).toBe(false)
@@ -126,18 +127,17 @@ it('官方 DeepSeek HTTP 序列化忽略附加 source 元数据，未投影路�
   const bodies: string[] = []
   vi.stubGlobal('fetch', vi.fn<typeof fetch>(async (_input, init) => {
     bodies.push(String(init?.body))
-    return new Response('data: {"choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":null}]}\n\ndata: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
-      { status: 200, headers: { 'content-type': 'text/event-stream' } })
+    return messagesResponse('ok')
   }))
   try {
-    const adapter = new DeepSeekAdapter({ options: () => resolveAdapterOptions(DeepSeekConfig({ baseURL: 'https://factory.invalid/v1',
-      apiKeyEnv: 'FACTORY_KEY', models: [{ id: 'factory', contextWindow: 64_000 }] })), resolveApiKey: async () => 'factory-key',
+    const adapter = new DeepSeekAdapter({ options: () => resolveAdapterOptions(plainOptions(DeepSeekConfig({ baseURL: 'https://factory.invalid/v1',
+      apiKeyEnv: 'FACTORY_KEY', models: [{ id: 'factory', contextWindow: 64_000 }] }))), resolveAuth: async () => ({ headers: { 'x-api-key': 'factory-key' } }),
       resolveUserId: () => 'factory-user' as AnonymousUserId, prepareExtensions: async () => ({ fields: {}, accept: async () => {} }) })
     const frames = []
     for await (const frame of adapter.stream({ provider: 'deepseek-official', model: 'factory', messages: [attached] })) frames.push(frame)
     expect(frames.at(-1)).toMatchObject({ type: 'finish', reason: { kind: 'stop' } })
     expect(bodies).toHaveLength(1)
-    expect(JSON.parse(bodies[0]!).messages).toEqual([{ role: 'user', content: '仅发送这句原始用户正文' }])
+    expect(JSON.parse(bodies[0]!).messages).toEqual([{ role: 'user', content: [{ type: 'text', text: '仅发送这句原始用户正文' }] }])
     expect(bodies[0]).not.toContain('tavernPromptPlan')
     expect(bodies[0]).not.toContain('PRIVATE-METADATA-ONLY')
     expect(bodies[0]).not.toContain(PRESET_PLAN_MESSAGE_TEXT)
@@ -170,20 +170,20 @@ it('按 ID 区分同文用户，保留图片、原始 source、模型回放状�
   expect(output.messages.filter(message => textOf(message).includes(TURN_PLAYBOOK))).toHaveLength(1)
   const retainedContext = output.messages.find(message => message.id === f.snapshot.id)!
   expect(textOf(retainedContext)).toContain('FOREIGN-CONTEXT')
-  expect(retainedContext.source).toEqual({ kind: 'plugin', plugin: hostPlugin, form: 'snapshot', sections: [{ name: 'other-plugin', text: 'FOREIGN-CONTEXT' }] })
+  expect(retainedContext.source).toEqual({ kind: 'runtime-context', form: 'snapshot', sections: [{ name: 'other-plugin', text: 'FOREIGN-CONTEXT' }] })
 })
 
 it('仅保留最新完整宿主 system，保留其它来源的 system 消息及其它 runtime sections', () => {
   const f = factory()
-  const foreign = createSystemMessage('FOREIGN-SYSTEM', 'foreign')
-  f.session.append('system/message', { turn: 1, step: 1, message: foreign }, { surfaceOp: 'append' })
+  const foreign = createUserMessage({ source: { kind: 'factory-context' }, content: [{ type: 'text', text: 'FOREIGN-CONTEXT' }] })
+  f.session.append('user/message', foreign, { surfaceOp: 'append' })
   const newer = createSystemMessage(`NEW-HOST-TOOLS\n\n${f.record.standingText}`, hostPlugin)
   f.session.append('system/message', { turn: 1, step: 1, message: newer }, { surfaceOp: 'append' })
   f.publish()
   const output = projectPresetRequest(f.request(), f.session)
   expect(output.messages[0]!.id).toBe(newer.id)
   expect(textOf(output.messages[0]!)).toBe(`NEW-HOST-TOOLS\n\n${BOUND_DISCIPLINE}`)
-  expect(output.messages.filter(message => message.role === 'system' && message.source.kind === 'plugin' && message.source.plugin === hostPlugin)).toHaveLength(1)
+  expect(output.messages.filter(message => message.role === 'system' && message.source.kind === 'system-prompt' && !('tavernProjection' in message.source))).toHaveLength(1)
   expect(output.messages.find(message => message.id === foreign.id)).toEqual(foreign)
 })
 
@@ -238,14 +238,24 @@ it('工具结果前的插入退到完整批次之前，未完成工具调用后�
   expect(() => projectPresetRequest(f.request(), f.session)).toThrow('未完成的工具调用')
   const result = createToolResultMessage({ callId, content: [{ type: 'text', text: 'RESULT' }], isError: false })
   f.session.append('tool/result', { turn: 1, step: 1, message: result }, { surfaceOp: 'append' })
-  const resultAnchor = { inputIndex: 4, messageId: result.id, role: 'user' as const, chat: false }
+  const notice = user('批次中的通知')
+  const beforeResult = f.session.snapshotEvents().slice(0, -1)
+  const rebuilt = Session.create(f.session.id, beforeResult, f.session.header)
+  rebuilt.append('user/message', notice, { surfaceOp: 'append' })
+  rebuilt.append('tool/result', { turn: 1, step: 1, message: result }, { surfaceOp: 'append' })
+  const requestBefore = f.request()
+  f.request = () => ({ ...requestBefore, messages: rebuilt.deriveMessages() })
+  f.session = rebuilt
+  f.publish = () => { const carrier = createPresetPlanMessage(f.record); rebuilt.append('user/message', carrier, { surfaceOp: 'append' }); return carrier }
+  const resultAnchor = { inputIndex: 4, messageId: notice.id, role: 'user' as const, chat: false }
   f.record.layout.history.push(resultAnchor)
   f.record.layout.entries = [entry('BEFORE-RESULT', 'system', { kind: 'history-relative', anchor: resultAnchor, side: 'before' })]
   f.publish()
   const output = projectPresetRequest(f.request(), f.session)
   const callIndex = output.messages.findIndex(message => message.id === call.id)
   expect(textOf(output.messages[callIndex - 1]!)).toBe('BEFORE-RESULT')
-  expect(output.messages[callIndex + 1]?.id).toBe(result.id)
+  expect(output.messages[callIndex + 1]?.id).toBe(notice.id)
+  expect(output.messages[callIndex + 2]?.id).toBe(result.id)
 })
 
 it('INSERT 对插件片段递归定位并保持同边界顺序，循环布局明确失败', () => {
@@ -296,7 +306,7 @@ it('空 outlet 片段仍能作为 INSERT 身份锚点，但不发出空角色消
 })
 
 function compact(f: ReturnType<typeof factory>, targets: readonly SessionEvent[], text: string, plugin = 'compact') {
-  const message = createUserMessage({ source: { kind: 'plugin', plugin }, content: [{ type: 'text', text }] })
+  const message = createUserMessage({ source: { kind: plugin === 'compact' ? 'compact-checkpoint' : plugin }, content: [{ type: 'text', text }] })
   return f.session.append('user/message', message, { surfaceOp: { op: 'replace', startSeq: targets[0]!.seq, endSeq: targets.at(-1)!.seq },
     sourceEventSeqs: targets.map(event => event.seq) })
 }
@@ -404,6 +414,34 @@ it('in-history 每条 system 都是完整快照，尾条不覆盖 SDK 或先前�
   expect(output.messages.indexOf(systems.at(-1)!)).toBeGreaterThan(output.messages.indexOf(f.current))
 })
 
+it('Messages 协议遇到 system 后接 user 时合并系统提示，保留图片与原历史', () => {
+  const f = factory()
+  f.record.layout.entries.push(entry('INVALID-SYSTEM', 'system', { kind: 'depth', depth: 1, order: 30, previous: f.record.layout.history[1]!, next: f.record.layout.history[2]! }))
+  f.publish()
+  const request = f.request(), original = JSON.stringify(request)
+  const diagnostics: PresetProjectionDiagnostic[] = []
+  const output = projectPresetRequest(request, f.session, { messagesApi: true, model: { systemPromptUpdate: 'in-history' }, onDiagnostic: item => diagnostics.push(item) })
+  expect(output.messages.filter(message => message.role === 'system')).toHaveLength(1)
+  for (const text of ['HOST-TOOLS', TURN_PLAYBOOK, 'MAIN', 'DEPTH-0-SYSTEM']) expect(textOf(output.messages[0]!)).toContain(text)
+  expect(output.messages.find(message => message.id === f.current.id)).toBe(request.messages.find(message => message.id === f.current.id))
+  expect(diagnostics).toContainEqual({ kind: 'messages-system-layout' })
+  expect(JSON.stringify(request)).toBe(original)
+})
+
+it('Messages 协议合法 user/system/assistant 边界仍保留完整快照和深度位置', () => {
+  const f = factory()
+  f.record.layout.entries = [entry('LEGAL-SYSTEM', 'system', { kind: 'depth', depth: 0, order: 20, previous: f.record.layout.history[2]! }),
+    entry('ASSISTANT-PREFILL', 'assistant', { kind: 'after-history', anchor: f.record.layout.history[2]! })]
+  f.publish()
+  const diagnostics: PresetProjectionDiagnostic[] = []
+  const output = projectPresetRequest(f.request(), f.session, { messagesApi: true, model: { systemPromptUpdate: 'in-history' }, onDiagnostic: item => diagnostics.push(item) })
+  const systems = output.messages.filter(message => message.role === 'system')
+  expect(systems.length).toBeGreaterThan(1)
+  for (const system of systems) expect(textOf(system)).toContain('HOST-TOOLS')
+  expect(textOf(systems.at(-1)!)).toContain('LEGAL-SYSTEM')
+  expect(diagnostics).not.toContainEqual({ kind: 'messages-system-layout' })
+})
+
 it('只支持首条 system 的模型合并系统预设，保留其它角色及图片并明确报告能力差异', () => {
   const f = factory(); f.publish()
   const diagnostics: PresetProjectionDiagnostic[] = []
@@ -419,9 +457,9 @@ it('只支持首条 system 的模型合并系统预设，保留其它角色及�
 
 it('相邻自有 system 合并后再累计，保留宿主 system 边界、稳定首条 ID 及冻结逻辑布局', () => {
   const f = factory()
-  const foreign = createSystemMessage('FOREIGN-SYSTEM', 'foreign')
-  f.session.append('system/message', { turn: 1, step: 1, message: foreign }, { surfaceOp: 'append' })
-  const anchor = { inputIndex: 3, messageId: foreign.id, role: 'system' as const, chat: false }
+  const foreign = createUserMessage({ source: { kind: 'factory-context' }, content: [{ type: 'text', text: 'FOREIGN-CONTEXT' }] })
+  f.session.append('user/message', foreign, { surfaceOp: 'append' })
+  const anchor = { inputIndex: 3, messageId: foreign.id, role: 'user' as const, chat: false }
   f.record.layout.history.push(anchor)
   f.record.layout.entries = [entry('A', 'system', { kind: 'before-history' }), entry('B', 'system', { kind: 'before-history' }),
     entry('C', 'system', { kind: 'history-relative', anchor, side: 'before' }), entry('D', 'system', { kind: 'history-relative', anchor, side: 'before' }),
@@ -431,15 +469,13 @@ it('相邻自有 system 合并后再累计，保留宿主 system 边界、稳定
   const logical = projectPresetRequest(request, f.session)
   const output = projectPresetRequest(request, f.session, { model: { systemPromptUpdate: 'in-history' } })
   const systems = output.messages.filter(message => message.role === 'system')
-  expect(systems).toHaveLength(5)
+  expect(systems).toHaveLength(4)
   expect(textOf(systems[1]!)).toContain('A\n\nB')
   expect(textOf(systems[2]!)).toContain('C\n\nD')
   expect(systems[2]!.id).toBe(logical.messages.find(message => textOf(message) === 'C')!.id)
-  expect(systems[3]!.id).toBe(foreign.id)
-  expect(systems[3]!.source).toEqual(foreign.source)
-  expect(textOf(systems[3]!)).not.toContain('\n\nE')
-  expect(textOf(systems[4]!)).toContain('E\n\nF')
-  expect(textOf(systems[4]!)).toContain('HOST-TOOLS')
+  expect(output.messages.find(message => message.id === foreign.id)).toBe(request.messages.find(message => message.id === foreign.id))
+  expect(textOf(systems[3]!)).toContain('E\n\nF')
+  expect(textOf(systems[3]!)).toContain('HOST-TOOLS')
   expect(JSON.stringify(request)).toBe(original)
   expect(f.record.layout.entries).toHaveLength(6)
 })

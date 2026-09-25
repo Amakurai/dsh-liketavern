@@ -5,7 +5,7 @@
 import { useDraftGuard } from '../drafts.js'
 import { useDraftState } from '../draftPersistence.js'
 import { useState } from 'react'
-import { IconEditOutline16, IconTrashOutline16, IconUserOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconEditOutlineMedium, IconTrashOutlineMedium, IconUserOutlineMedium } from '@deepseek-ai/dsh-client-ui-primitives'
 import { useT } from '../i18n.js'
 import type { Persona, TavernRemote } from '../types.js'
 import { EMPTY_SESSION_DEFAULTS } from '../types.js'
@@ -105,7 +105,7 @@ export function PersonasSection(props: { remote: TavernRemote }) {
       {items.length === 0 && state.status === 'ready' && (
         <div className="dsh-tavern-empty">
           <div className="dsh-tavern-emptyIcon">
-            <IconUserOutline16 size={32} />
+            <IconUserOutlineMedium size={32} />
           </div>
           <div className="dsh-tavern-emptyTitle">{t('personas.emptyTitle')}</div>
           <div className="dsh-tavern-emptyDesc">{t('personas.emptyDesc')}</div>
@@ -126,11 +126,11 @@ export function PersonasSection(props: { remote: TavernRemote }) {
             </div>
             <div className="dsh-tavern-tileActions">
               <IconBtn label={t('action.edit')} onClick={() => openPersona(p)}>
-                <IconEditOutline16 />
+                <IconEditOutlineMedium />
               </IconBtn>
               <Btn size="sm" disabled={busy} onClick={() => void setAsDefault(p.id)}>{t('personas.setDefault')}</Btn>
               <IconBtn label={t('personas.delete')} danger disabled={busy} onClick={() => setToDelete(p)}>
-                <IconTrashOutline16 />
+                <IconTrashOutlineMedium />
               </IconBtn>
             </div>
           </div>

@@ -20,7 +20,7 @@ export function buildTemplateMessageHistory(messages:readonly Message[],pending:
     const seq=seqs.get(id)
     identities.push({messageId:id,swipeId:0,...(seq!==undefined ? {hostMessageId:seq} : {})})
   }
-  for(const message of messages) add(message.id,message.role,message.content.filter(block=>block.type==='text').map(block=>block.text).join('\n'),message.content.some(block=>block.type==='image'))
+  for(const message of messages) if(message.role!=='tool' && message.role!=='developer') add(message.id,message.role,message.content.filter(block=>block.type==='text').map(block=>block.text).join('\n'),message.content.some(block=>block.type==='image'))
   for(const message of pending) add(message.id,'user',message.text,message.hasImage)
   return {history,identities}
 }

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
-import type { SettingsScope } from '@deepseek-ai/dsh-settings'
+import type { TavernSettingsScope } from '../src/node/config.js'
 import { createAssistantMessage } from '@deepseek-ai/dsh-llm'
 import { TAVERN_GREETING_SOURCE } from '../src/core/greetingLog.js'
 import { resolveReadableAssetPath } from '../src/core/assetRead.js'
@@ -37,7 +37,7 @@ beforeEach(async () => {
   await state.saveBinding({ sessionId: session.id, cardId, presetId: null, personaId: null, lorebookIds: [], characterLorebookId: null, interactiveCards: true, helperMvu: true, greetingIndex: 0, createdAt: 'factory' })
   storyId = (await state.loadBinding(session.id))!.storyId!
   ctx = { reflect: { provide: () => {} }, get: () => undefined, sessions: { get: (id: string) => id === session.id ? session : undefined }, agents: { get: () => undefined } } as unknown as Context
-  service = new TavernService(ctx, state, {} as SettingsScope<TavernConfigRaw>)
+  service = new TavernService(ctx, state, {} as TavernSettingsScope)
 })
 afterEach(async () => { vi.restoreAllMocks(); await rm(root, { recursive: true, force: true }) })
 async function initialize() {

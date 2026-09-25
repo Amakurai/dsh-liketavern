@@ -1,3 +1,4 @@
+import type { Context } from '@deepseek-ai/cordis';
 export declare const TAVERN_PRESET_ID = "tavern";
 /** 推导 agent 入口的 file:// URL（Windows 下 loader 只接受合法 ESM URL）。 */
 export declare function agentModulePath(): string;
@@ -8,9 +9,5 @@ export declare function agentModulePath(): string;
  * 语法坏掉的 YAML —— 预设挂不上且没有任何诊断。
  */
 export declare function escapeYamlSingleQuoted(value: string): string;
-export interface PresetInstallResult {
-    dir: string;
-    written: string[];
-    skipped: string[];
-}
-export declare function installTavernPreset(home?: string): Promise<PresetInstallResult>;
+/** 新宿主从声明注册预设，不再扫描 .agent-presets；注册跟随插件生命周期撤销。 */
+export declare function installTavernPreset(ctx: Pick<Context, 'agentPresets'>): Promise<() => Promise<void>>;

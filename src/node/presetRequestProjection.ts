@@ -4,8 +4,10 @@
  */
 import { createHash } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
-import { createUserMessage, freezeMessage, MessageId, type GenerateOptions, type LlmResolvedModelInfo, type Message, type UserMessage } from '@deepseek-ai/dsh-llm'
+import { createUserMessage, freezeMessage, MessageId, type GenerateOptions, type LlmResolvedModelInfo, type Message, type RequestMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import { deriveEventMessage, foldSurface, type Session, type SessionSeq } from '@deepseek-ai/dsh-session'
+import type {} from '@deepseek-ai/dsh-agent-loop'
+import type {} from '@deepseek-ai/dsh-compaction-basic'
 import { joinContextSections } from '@deepseek-ai/dsh-system-prompt'
 import { z } from 'zod'
 import { BOUND_DISCIPLINE, TURN_PLAYBOOK } from '../core/dshPrompt.js'
@@ -13,8 +15,6 @@ import { PromptLayoutSchema, type PromptHistoryAnchor, type PromptLayout, type P
 import { estimateTokens } from '../core/tokenize.js'
 
 export const PRESET_PLAN_MESSAGE_TEXT = '【Tavern 提示词布局快照】'
-const HOST_PROMPT_PLUGIN = '@deepseek-ai/dsh-system-prompt'
-const PROJECTION_PLUGIN = 'dsh-liketavern'
 
 export interface PresetRequestPlan {
   version: 1
@@ -31,7 +31,7 @@ export type PresetProjectionDiagnostic = {
   kind: 'compaction-clamp'
   messageId: string
   summaryMessageId: string
-} | { kind: 'leading-system-only' } | {
+} | { kind: 'leading-system-only' } | { kind: 'messages-system-layout' } | {
   kind: 'text-budget'
   beforeTextTokens: number
   afterTextTokens: number
@@ -47,6 +47,8 @@ export interface PresetProjectionOptions {
   onDiagnostic?: (diagnostic: PresetProjectionDiagnostic) => void
   /** 未提供时只生成逻辑布局；真实适配器必须提供本次 prepareCall 冻结的模型能力。 */
   model?: ProjectionModel
+  /** DeepSeek Messages 只允许 user/tool 之后、assistant 之前或请求末尾更新 system。 */
+  messagesApi?: boolean
 }
 
 declare module '@deepseek-ai/dsh-llm' {
@@ -100,7 +102,7 @@ export function hasPresetPlanMessage(message: Message, sessionId: string, turn: 
 
 /** 私有布局字段只属于持久化计划；适配器副本保留其余来源字段与原始内容块。 */
 function stripPlanMetadata(message: Message): Message {
-  if (!('tavernPromptPlan' in message.source)) return message
+  if (message.role !== 'user' || !('tavernPromptPlan' in message.source)) return message
   const { tavernPromptPlan: _plan, ...source } = message.source
   return Object.freeze({ ...message, source: Object.freeze(source) })
 }
@@ -135,7 +137,7 @@ function plainText(message: Message): string {
 /** 只重写宿主声明的段；其它来源、图片、工具与模型 replayState 保留同一 Message 对象。 */
 function hostMessages(messages: readonly Message[], plan: PresetRequestPlan): Message[] {
   const systems = messages.filter(message => message.role === 'system'
-    && message.source.kind === 'plugin' && message.source.plugin === HOST_PROMPT_PLUGIN)
+    && message.source.kind === 'system-prompt')
   const latest = systems.at(-1)
   if (!latest) throw new Error('Tavern 请求缺少宿主完整 system 消息，不能安全投影预设')
   const systemText = plainText(latest)
@@ -149,11 +151,14 @@ function hostMessages(messages: readonly Message[], plan: PresetRequestPlan): Me
   for (const original of messages) {
     if (original.source.kind === 'tavern-prompt-plan') continue
     const message = stripPlanMetadata(original)
-    if (message.source.kind === 'plugin' && message.source.plugin === HOST_PROMPT_PLUGIN) {
-      if (message.role === 'system') continue
-      if (message.role === 'user' && message.source.form === 'snapshot') {
-        const sections = message.source.sections.filter(section => section.name !== 'tavern:turn')
-        if (sections.length === message.source.sections.length) { result.push(message); continue }
+    if (message.role === 'system' && message.source.kind === 'system-prompt') continue
+    // runtime-context 的来源声明未由宿主包入口导出；校验真实数据，避免伪造模块类型。
+    if (message.role === 'user') {
+      const snapshot = z.object({ kind: z.literal('runtime-context'), form: z.literal('snapshot'),
+        sections: z.array(z.object({ name: z.string(), text: z.string() })) }).safeParse(message.source)
+      if (snapshot.success) {
+        const sections = snapshot.data.sections.filter(section => section.name !== 'tavern:turn')
+        if (sections.length === snapshot.data.sections.length) { result.push(message); continue }
         const text = joinContextSections(sections)
         if (text) result.push(freezeMessage({ ...message, source: { ...message.source, sections }, content: [{ type: 'text' as const, text }] }))
         continue
@@ -164,10 +169,13 @@ function hostMessages(messages: readonly Message[], plan: PresetRequestPlan): Me
   return result
 }
 
-function pluginMessage(plan: PresetRequestPlan, key: string, role: Message['role'], content: string): Message {
+function pluginMessage(plan: PresetRequestPlan, key: string, role: 'system' | 'user' | 'assistant', content: string): Message {
   const digest = createHash('sha256').update(JSON.stringify([plan.sessionId, plan.turn, key])).digest('hex')
-  return freezeMessage({ id: MessageId(`tavern-prompt-${digest}`), role,
-    source: { kind: 'plugin', plugin: PROJECTION_PLUGIN }, content: [{ type: 'text', text: content }] })
+  const fields = { id: MessageId(`tavern-prompt-${digest}`), content: [{ type: 'text' as const, text: content }] }
+  // 仅存在于适配器请求副本；不追加 assistant/message，也不伪造模型历史或重放元数据。
+  if (role === 'assistant') return freezeMessage({ ...fields, role, source: { kind: 'model', provider: 'tavern-preset', model: 'instruction', tavernProjection: true } })
+  if (role === 'system') return freezeMessage({ ...fields, role, source: { kind: 'system-prompt', tavernProjection: true } })
+  return freezeMessage({ ...fields, role, source: { kind: 'dsh-tavern', tavernProjection: true } })
 }
 
 /** in-history 的每条 system 是完整快照；旧模型只读首条，因此不能直接发送增量 system 片段。 */
@@ -187,10 +195,27 @@ function applySystemPolicy(messages: readonly Message[], projection: PresetProje
     sections.push(text)
     return freezeMessage({ ...message, content: [{ type: 'text' as const, text: sections.join('\n\n') }] })
   }
-  if (projection.model.systemPromptUpdate === 'in-history') {
+  let incompatiblePosition = false
+  if (projection.messagesApi) {
+    let previous: Message['role'] | undefined, pending = false
+    for (const message of messages) {
+      if (message.role === 'system') {
+        if (previous !== undefined) {
+          pending = true
+          if (previous !== 'user' && previous !== 'tool') incompatiblePosition = true
+        }
+      } else {
+        if (pending && message.role !== 'assistant') incompatiblePosition = true
+        previous = message.role
+        pending = false
+      }
+    }
+  }
+  if (incompatiblePosition) projection.onDiagnostic?.({ kind: 'messages-system-layout' })
+  if (projection.model.systemPromptUpdate === 'in-history' && !incompatiblePosition) {
     const grouped: Message[] = []
     const isTavernSystem = (message: Message) => message.role === 'system'
-      && message.source.kind === 'plugin' && message.source.plugin === PROJECTION_PLUGIN
+      && 'tavernProjection' in message.source && message.source.tavernProjection === true
     for (let index = 0; index < messages.length;) {
       const message = messages[index++]!
       if (!isTavernSystem(message)) { grouped.push(message); continue }
@@ -209,7 +234,7 @@ function applySystemPolicy(messages: readonly Message[], projection: PresetProje
     }
     return grouped.map(message => message.role === 'system' ? complete(message) : message)
   }
-  if (systems.length > 1) projection.onDiagnostic?.({ kind: 'leading-system-only' })
+  if (systems.length > 1 && !incompatiblePosition) projection.onDiagnostic?.({ kind: 'leading-system-only' })
   // 只构造一次首条完整 system，避免模型忽略中途系统指令；其它角色的相对位置保持不变。
   let bytes = 0
   const parts = systems.map(message => {
@@ -223,7 +248,7 @@ function applySystemPolicy(messages: readonly Message[], projection: PresetProje
 }
 
 /** 只估可见 text 块与旧式 system；图片、工具参数/结果编码及 provider framing 不在此估算内。 */
-function requestTextTokens(options: Readonly<GenerateOptions>, messages: readonly Message[]): number {
+function requestTextTokens(options: Readonly<GenerateOptions>, messages: readonly RequestMessage[]): number {
   let tokens = options.system ? estimateTokens(options.system) : 0
   for (const message of messages) for (const block of message.content) {
     if (block.type === 'text') tokens += estimateTokens(block.text)
@@ -247,13 +272,13 @@ function toolSpans(messages: readonly Message[]): ToolSpan[] {
         pending.set(call.id, group)
       }
     }
-    for (const block of message.content) {
-      if (block.type !== 'tool-result') continue
-      const group = pending.get(block.toolCallId)
-      if (!group) continue
-      pending.delete(block.toolCallId)
-      group.remaining--
-      if (group.remaining === 0) { group.span.end = index; group.span.complete = true }
+    if (message.role === 'tool') {
+      const group = pending.get(message.toolCallId)
+      if (group) {
+        pending.delete(message.toolCallId)
+        group.remaining--
+        if (group.remaining === 0) { group.span.end = index; group.span.complete = true }
+      }
     }
   })
   return spans
@@ -263,10 +288,14 @@ function toolSpans(messages: readonly Message[]): ToolSpan[] {
 export function projectPresetRequest(options: Readonly<GenerateOptions>, session: Session, projection: PresetProjectionOptions = {}): GenerateOptions {
   if (options.purpose) return { ...options, messages: [...options.messages] }
   if (!options.sessionId || options.sessionId !== session.id) throw new Error('Tavern 请求与会话身份不匹配')
-  const { plan, carrier } = currentPlan(options.messages, session)
+  const requestMessages = options.messages.map(message => {
+    if (message.id === undefined || message.source === undefined) throw new Error('Tavern 普通聊天请求缺少持久消息身份，不能投影预设')
+    return message
+  })
+  const { plan, carrier } = currentPlan(requestMessages, session)
   const entries = plan.layout.entries
   if (entries.some(entry => entry.compatibilityFallback)) throw new Error('Tavern 冻结布局缺少模板精确位置，不能用于真实请求；请修订模板后开启下一轮')
-  const messages = hostMessages(options.messages, plan)
+  const messages = hostMessages(requestMessages, plan)
   const positions = new Map<string, number>()
   messages.forEach((message, index) => {
     if (positions.has(message.id)) throw new Error('Tavern 请求消息 ID 重复，不能可靠定位历史')
@@ -310,8 +339,8 @@ export function projectPresetRequest(options: Readonly<GenerateOptions>, session
     while (seq !== undefined && replacements.has(seq)) {
       const replacementSeq = replacements.get(seq)!
       const event = eventBySeq.get(replacementSeq)
-      // 官方压缩检查点来源固定 plugin:compact；编辑、删除、任意 producer 的替换不能按摘要放宽。
-      if (!event || event.type !== 'user/message' || event.data.source.kind !== 'plugin' || event.data.source.plugin !== 'compact') break
+      // 官方压缩检查点来源固定 compact-checkpoint；编辑、删除、任意 producer 的替换不能按摘要放宽。
+      if (!event || event.type !== 'user/message' || event.data.source.kind !== 'compact-checkpoint') break
       const summaryIndex = positions.get(event.data.id)
       if (summaryIndex !== undefined && surfaceNodes.has(replacementSeq)) {
         if (!reported.has(anchor.messageId!)) {
@@ -327,13 +356,13 @@ export function projectPresetRequest(options: Readonly<GenerateOptions>, session
     throw new Error('Tavern 历史锚点已缺失且没有合法压缩映射；不会恢复旧正文，请开启下一轮')
   }
   // 载体在首次接收批次末尾：后续工具步骤保留在它之后，尾条绝不重新附到工具结果之后。
-  const carrierIndex = options.messages.findIndex(message => message.id === carrier.id)
+  const carrierIndex = requestMessages.findIndex(message => message.id === carrier.id)
   let frontierEnd: number | undefined
   const frontier = (): number => {
     if (frontierEnd !== undefined) return frontierEnd
     if (carrierIndex < 0) throw new Error('Tavern 首次输入边界已被压缩，不能重排本轮尾条；请开启下一轮')
     let end = 1
-    for (const message of options.messages.slice(0, carrierIndex + 1)) {
+    for (const message of requestMessages.slice(0, carrierIndex + 1)) {
       const at = positions.get(message.id)
       if (at !== undefined) end = Math.max(end, at + 1)
     }
@@ -450,6 +479,6 @@ export function createPresetRequestProjector(ctx: Pick<Context, 'sessions'>, pro
     if (options.purpose) return { ...options, messages: [...options.messages] }
     const session = options.sessionId ? ctx.sessions.get(options.sessionId) : undefined
     if (!session) throw new Error('Tavern 请求找不到当前 Session，不能读取冻结提示词布局')
-    return projectPresetRequest(options, session, { ...projection, model })
+    return projectPresetRequest(options, session, { ...projection, model, messagesApi: true })
   } }
 }

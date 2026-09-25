@@ -16,7 +16,7 @@
  *   补挂 TavernInterruptedFloorActions（重新生成/回退/兄弟导航，按 turn 号定位）。
  */
 import { useEffect, useRef, useState } from 'react'
-import { IconBranchOutline16, IconChevronLeftOutline14, IconChevronRightOutline14, IconEditOutline16, IconListPenOutline16, IconLoadingOutline16, IconPlayOutline16, IconRefreshOutline16, IconUserOutline16, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconBranchOutlineMedium, IconChevronLeftOutlineMedium, IconChevronRightOutlineMedium, IconEditOutlineMedium, IconListPenOutlineMedium, IconLoadingOutlineMedium, IconPlayOutlineMedium, IconRefreshOutlineMedium, IconUserOutlineMedium, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ReactNode } from 'react'
 import { cachedSessionBinding } from './cache.js'
 import { useDraftGuard } from './drafts.js'
@@ -33,7 +33,7 @@ function IconAction(props: { label: string; disabled?: boolean; busy?: boolean; 
       <button type="button" aria-label={props.label} className="dsh-tavern-action" disabled={props.disabled} onClick={props.onClick}>
         {props.busy ? (
           <span className="dsh-tavern-spin">
-            <IconLoadingOutline16 />
+            <IconLoadingOutlineMedium />
           </span>
         ) : (
           props.children
@@ -326,13 +326,13 @@ export function TavernFloorActions(props: FloorActionsProps) {
       {!isGreeting && siblingSwipe && siblingSwipe.total > 1 && (
         <>
           <IconAction label={t('actions.branchPrev')} disabled={busy} busy={operation === 'branch-prev'} onClick={() => onBranch(-1)}>
-            <IconChevronLeftOutline14 />
+            <IconChevronLeftOutlineMedium />
           </IconAction>
           <span className="dsh-tavern-swipeIdx" title={t('actions.branchCount', { turn: siblingSwipe.turn, total: siblingSwipe.total })}>
             {siblingSwipe.index + 1}/{siblingSwipe.total}
           </span>
           <IconAction label={t('actions.branchNext')} disabled={busy} busy={operation === 'branch-next'} onClick={() => onBranch(1)}>
-            <IconChevronRightOutline14 />
+            <IconChevronRightOutlineMedium />
           </IconAction>
           <span className="dsh-tavern-actionDivider" />
         </>
@@ -340,43 +340,43 @@ export function TavernFloorActions(props: FloorActionsProps) {
       {swipe && (
         <>
           <IconAction label={t('actions.swipePrev')} disabled={busy} busy={operation === 'swipe-prev'} onClick={() => onSwipe(-1)}>
-            <IconChevronLeftOutline14 />
+            <IconChevronLeftOutlineMedium />
           </IconAction>
           <span className="dsh-tavern-swipeIdx">
             {swipe.index + 1}/{swipe.total}
           </span>
           <IconAction label={t('actions.swipeNext')} disabled={busy} busy={operation === 'swipe-next'} onClick={() => onSwipe(1)}>
-            <IconChevronRightOutline14 />
+            <IconChevronRightOutlineMedium />
           </IconAction>
           <span className="dsh-tavern-actionDivider" />
         </>
       )}
       {!isGreeting && (
         <IconAction label={t('actions.regenerate')} disabled={busy} busy={operation === 'regenerate'} onClick={onRegenerate}>
-          <IconRefreshOutline16 />
+          <IconRefreshOutlineMedium />
         </IconAction>
       )}
       {!isGreeting && (
         <IconAction label={t('actions.continue')} disabled={busy} busy={operation === 'continue'} onClick={() => void onContinue()}>
-          <IconPlayOutline16 />
+          <IconPlayOutlineMedium />
         </IconAction>
       )}
       {!isGreeting && (
         <IconAction label={t('actions.editUser')} disabled={busy} busy={operation === 'load-edit'} onClick={() => void onEdit()}>
-          <IconEditOutline16 />
+          <IconEditOutlineMedium />
         </IconAction>
       )}
       {!isGreeting && (
         <IconAction label={t('actions.editAi')} disabled={busy} busy={operation === 'load-edit-ai'} onClick={() => void onEditAi()}>
-          <IconListPenOutline16 />
+          <IconListPenOutlineMedium />
         </IconAction>
       )}
       <IconAction label={t('actions.impersonate')} disabled={busy} busy={operation === 'impersonate'} onClick={() => void onImpersonate()}>
-        <IconUserOutline16 />
+        <IconUserOutlineMedium />
       </IconAction>
       {(!isGreeting || started) && (
         <IconAction label={t('actions.rollback')} disabled={busy} busy={operation === 'rollback'} onClick={onRollback}>
-          <IconBranchOutline16 />
+          <IconBranchOutlineMedium />
         </IconAction>
       )}
       {failure !== null && (
@@ -504,13 +504,13 @@ export function TavernInterruptedFloorActions(props: {
       {siblingSwipe && siblingSwipe.total > 1 && (
         <>
           <IconAction label={t('actions.branchPrev')} disabled={busy} busy={operation === 'branch-prev'} onClick={() => onBranch(-1)}>
-            <IconChevronLeftOutline14 />
+            <IconChevronLeftOutlineMedium />
           </IconAction>
           <span className="dsh-tavern-swipeIdx" title={t('actions.branchCount', { turn: siblingSwipe.turn, total: siblingSwipe.total })}>
             {siblingSwipe.index + 1}/{siblingSwipe.total}
           </span>
           <IconAction label={t('actions.branchNext')} disabled={busy} busy={operation === 'branch-next'} onClick={() => onBranch(1)}>
-            <IconChevronRightOutline14 />
+            <IconChevronRightOutlineMedium />
           </IconAction>
           <span className="dsh-tavern-actionDivider" />
         </>
@@ -521,7 +521,7 @@ export function TavernInterruptedFloorActions(props: {
         busy={operation === 'regenerate'}
         onClick={() => void run('regenerate', () => remote.regenerate({ sessionId, turn }))}
       >
-        <IconRefreshOutline16 />
+        <IconRefreshOutlineMedium />
       </IconAction>
       <IconAction
         label={t('actions.rollback')}
@@ -529,7 +529,7 @@ export function TavernInterruptedFloorActions(props: {
         busy={operation === 'rollback'}
         onClick={() => void run('rollback', () => remote.rollbackToFloor({ sessionId, turn }))}
       >
-        <IconBranchOutline16 />
+        <IconBranchOutlineMedium />
       </IconAction>
       {failure !== null && (
         <span role="status" style={{ fontSize: 12, color: 'var(--dsw-alias-state-error-primary, #ec1313)', paddingLeft: 4 }}>

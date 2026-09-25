@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
-import type { SettingsScope } from '@deepseek-ai/dsh-settings'
+import type { TavernSettingsScope } from '../src/node/config.js'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import { createAssistantMessage } from '@deepseek-ai/dsh-llm'
 import { emptyTemplateScopes, parseTemplateScopes, type TemplateContext } from '../src/core/template.js'
@@ -294,7 +294,7 @@ describe('剧情模板集成', () => {
     expect((await loadTemplateState(ws.fs)).variables.message.affinity).toBe(10)
     const raw = (TavernConfigSchema as (input: unknown) => TavernConfigRaw)({})
     const ctx = {reflect:{provide:()=>{}},get:()=>undefined,sessions:{get:()=>session}} as unknown as Context
-    const service = new TavernService(ctx,state,{get:()=>raw} as unknown as SettingsScope<TavernConfigRaw>)
+    const service = new TavernService(ctx,state,{get:()=>raw} as unknown as TavernSettingsScope)
     expect((await service.renderOutputText({sessionId:'s1',text,messageId:5})).text).toBe('好感=10')
     expect((await service.renderOutputText({sessionId:'s1',text,messageId:5})).text).toBe('好感=10')
     await service.renderOutputText({sessionId:'s1',text:'<% incvar("affinity",100) %>预览'})
@@ -303,7 +303,7 @@ describe('剧情模板集成', () => {
     const greetingText = '<% setvar("greeting",42) %>开场白=<%- getvar("greeting") %>'
     const greetingEvents = greetingTurnEvents(greetingText)
     const greetingCtx = {reflect:{provide:()=>{}},get:()=>undefined,sessions:{get:()=>({id:'s1',snapshotEvents:()=>greetingEvents})}} as unknown as Context
-    const greetingService = new TavernService(greetingCtx,state,{get:()=>raw} as unknown as SettingsScope<TavernConfigRaw>)
+    const greetingService = new TavernService(greetingCtx,state,{get:()=>raw} as unknown as TavernSettingsScope)
     const greetingId = Number(greetingEvents.find(e=>e.type==='assistant/message')!.seq)
     expect((await greetingService.renderOutputText({sessionId:'s1',text:greetingText,messageId:greetingId})).text).toBe('开场白=42')
     expect((await loadTemplateState(ws.fs)).variables.message.greeting).toBeUndefined()

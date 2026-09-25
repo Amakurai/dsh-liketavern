@@ -5,6 +5,8 @@
  */
 import type { Context } from '@deepseek-ai/cordis';
 import '@deepseek-ai/dsh-typert-registry';
+import { Config } from './node/config.js';
 export declare const name = "dsh-liketavern";
+export { Config };
 export declare const inject: string[];
-export declare function apply(ctx: Context): Promise<void>;
+export declare function apply(ctx: Context, config: ReturnType<typeof Config>): Promise<void>;

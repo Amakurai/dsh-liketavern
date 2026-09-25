@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { Session } from '@deepseek-ai/dsh-session'
-import type { SettingsScope } from '@deepseek-ai/dsh-settings'
+import type { TavernSettingsScope } from '../src/node/config.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { resolveConfig, type TavernConfigRaw } from '../src/node/config.js'
 import { greetingMessage } from '../src/node/greetingSeed.js'
@@ -40,7 +40,7 @@ beforeEach(async () => {
     reflect: { provide: () => {} }, get: () => undefined,
     sessions: { get: (id: string) => id === session.id ? session : undefined }, agents: { get: () => undefined },
   } as unknown as Context
-  service = new TavernService(ctx, state, {} as SettingsScope<TavernConfigRaw>)
+  service = new TavernService(ctx, state, {} as TavernSettingsScope)
 })
 afterEach(async () => { vi.restoreAllMocks(); await rm(root, { recursive: true, force: true }) })
 

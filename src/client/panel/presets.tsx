@@ -6,7 +6,7 @@ import { exportStPreset } from '../../core/presetExport.js'
 import { useDraftGuard } from '../drafts.js'
 import { useDraftState } from '../draftPersistence.js'
 import { useState } from 'react'
-import { IconDownloadOutline16, IconEditOutline16, IconFolderOpenOutline16, IconListPenOutline16, IconTrashOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconDownloadOutlineMedium, IconEditOutlineMedium, IconFolderOpenOutlineMedium, IconListPenOutlineMedium, IconTrashOutlineMedium } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { CardRegexScript, ChatRole, PresetEntry, PromptPreset } from '../../core/types.js'
 import { EMPTY_SESSION_DEFAULTS, type PresetSummary, type TavernRemote } from '../types.js'
 import { t as tBare, useT } from '../i18n.js'
@@ -112,7 +112,7 @@ function EntryEditor(props: { entry: PresetEntry; onChange: (e: PresetEntry) => 
         )}
         <span style={{ flex: 1 }} />
         <IconBtn label={t('presets.entry.delete')} danger onClick={props.onDelete}>
-          <IconTrashOutline16 />
+          <IconTrashOutlineMedium />
         </IconBtn>
       </div>
       {!entry.marker && (
@@ -275,7 +275,7 @@ export function PresetsSection(props: { remote: TavernRemote }) {
       {items.length === 0 && state.status === 'ready' && (
         <div className="dsh-tavern-empty">
           <div className="dsh-tavern-emptyIcon">
-            <IconFolderOpenOutline16 size={32} />
+            <IconFolderOpenOutlineMedium size={32} />
           </div>
           <div className="dsh-tavern-emptyTitle">{t('presets.empty')}</div>
           <div className="dsh-tavern-emptyDesc">{t('presets.emptyDesc')}</div>
@@ -288,7 +288,7 @@ export function PresetsSection(props: { remote: TavernRemote }) {
         {filtered.map((item) => (
           <div key={item.id} className="dsh-tavern-tile" {...clickableProps(() => guard.request(() => void open(item.id)))}>
             <span className="dsh-tavern-tileIcon">
-              <IconListPenOutline16 size={18} />
+              <IconListPenOutlineMedium size={18} />
             </span>
             <div className="dsh-tavern-tileMain">
               <div className="dsh-tavern-tileTitleRow">
@@ -299,14 +299,14 @@ export function PresetsSection(props: { remote: TavernRemote }) {
             </div>
             <div className="dsh-tavern-tileActions">
               <IconBtn label={t('action.edit')} disabled={busy} onClick={() => guard.request(() => void open(item.id))}>
-                <IconEditOutline16 />
+                <IconEditOutlineMedium />
               </IconBtn>
               <IconBtn label={t('presets.export')} disabled={busy} onClick={() => void exportPreset(item.id, item.name)}>
-                <IconDownloadOutline16 />
+                <IconDownloadOutlineMedium />
               </IconBtn>
               <Btn size="sm" disabled={busy} onClick={() => void setAsDefault(item.id)}>{t('presets.setAsDefault')}</Btn>
               <IconBtn label={t('presets.delete')} danger disabled={busy} onClick={() => setToDelete(item.id)}>
-                <IconTrashOutline16 />
+                <IconTrashOutlineMedium />
               </IconBtn>
             </div>
           </div>

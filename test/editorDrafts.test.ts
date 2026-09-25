@@ -7,7 +7,7 @@ import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
-import type { SettingsScope } from '@deepseek-ai/dsh-settings'
+import type { TavernSettingsScope } from '../src/node/config.js'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { METHODS } from '../src/remote.js'
 import { resolveConfig, type TavernConfigRaw } from '../src/node/config.js'
@@ -32,7 +32,7 @@ function service(): TavernService {
     regexDir: join(root, 'regex'), sessions: join(root, 'sessions'),
   }, () => resolveConfig({}))
   const ctx = { reflect: { provide: () => {} } } as unknown as Context
-  return new TavernService(ctx, state, {} as SettingsScope<TavernConfigRaw>)
+  return new TavernService(ctx, state, {} as TavernSettingsScope)
 }
 
 beforeEach(async () => { root = await mkdtemp(join(tmpdir(), 'tavern-editor-drafts-test-')) })

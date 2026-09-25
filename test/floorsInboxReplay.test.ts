@@ -47,7 +47,7 @@ beforeEach(async () => {
   ctx = new Context()
   new SessionStore(ctx); new AgentRegistry(ctx); new SessionProjectionRegistry(ctx); new SystemPrompt(ctx, {}); new ToolRuntime(ctx)
   new LlmRuntime(ctx).registerAdapter(['factory'], new FactoryAdapter())
-  new AgentLoop(ctx, { agents: [] })
+  new AgentLoop(ctx, AgentLoop.Config({ agents: [] }))
   ctx.provide('agentPresets', { composedPreset: () => 'tavern', resolve: async () => ({ id: 'tavern' }), mount: async () => {} })
   ctx.on('agent/error', ({ error }) => errors.push(error))
   ctx.on('agent/created', ({ agent: created }) => {

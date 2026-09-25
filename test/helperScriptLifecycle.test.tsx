@@ -18,7 +18,7 @@ vi.mock('../src/core/cardFrame.js', () => ({ buildCardSrcDoc: (html: string) => 
 vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
   Button: (props: { children?: ReactNode }) => <button>{props.children}</button>,
   Tooltip: (props: { children?: ReactNode }) => <>{props.children}</>,
-  IconChevronDownOutline14: () => null, Menu: () => null,
+  IconChevronDownOutlineMedium: () => null, Menu: () => null,
 }))
 
 let view: ReactTestRenderer | undefined

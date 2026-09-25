@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
-import type { SettingsScope } from '@deepseek-ai/dsh-settings'
+import type { TavernSettingsScope } from '../src/node/config.js'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { defaultPreset } from '../src/core/assemble.js'
 import type { Persona } from '../src/core/persona.js'
@@ -22,7 +22,7 @@ beforeEach(async () => {
     presets: join(root, 'library/presets'), personas: join(root, 'personas'), regexDir: join(root, 'regex'), sessions: join(root, 'sessions') }, () => resolveConfig({}))
   await state.init()
   fs = new WorkspaceFs(root, null)
-  service = new TavernService({ reflect: { provide: () => {} } } as unknown as Context, state, {} as SettingsScope<TavernConfigRaw>)
+  service = new TavernService({ reflect: { provide: () => {} } } as unknown as Context, state, {} as TavernSettingsScope)
 })
 afterEach(async () => { await rm(root, { recursive: true, force: true }) })
 

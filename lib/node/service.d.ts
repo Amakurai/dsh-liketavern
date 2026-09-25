@@ -9,10 +9,9 @@
  */
 import type { TavernServiceContract } from '../remote.js';
 import type { Context } from '@deepseek-ai/cordis';
-import type { SettingsScope } from '@deepseek-ai/dsh-settings';
+import type { TavernSettingsScope } from './config.js';
 import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol';
 import type { RegexRule } from '../core/types.js';
-import type { TavernConfigRaw } from './config.js';
 import type { Persona, TavernState } from './state.js';
 import type { TavernMethodResults, TavernMethodRequests } from '../remote.js';
 export declare class TavernService extends TypertRemoteService implements TavernServiceContract {
@@ -21,7 +20,7 @@ export declare class TavernService extends TypertRemoteService implements Tavern
     private readonly settingsScope;
     constructor(ctx: Context, 
     /** 运行时中枢（agent 面插件经 ctx.tavern 访问）。 */
-    state: TavernState, settingsScope: SettingsScope<TavernConfigRaw>);
+    state: TavernState, settingsScope: TavernSettingsScope);
     /**
      * 头像 dataURL 进程内缓存：getAvatar 每次调用都全文读盘 + Base64 编码整图，
      * 与会话头/英雄区的渲染频率不匹配。指纹用 WorkspaceFs.stat('card.png') 的
@@ -339,4 +338,4 @@ export declare class TavernService extends TypertRemoteService implements Tavern
     }): Promise<TavernMethodResults['getAvatar']>;
     private floorDeps;
 }
-export declare function createTavernService(ctx: Context, state: TavernState, settingsScope: SettingsScope<TavernConfigRaw>): TavernService;
+export declare function createTavernService(ctx: Context, state: TavernState, settingsScope: TavernSettingsScope): TavernService;

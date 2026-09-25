@@ -31,7 +31,7 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
   Menu: (props: { anchor?: ReactNode }) => <>{props.anchor}</>,
   MarkdownText: (props: { text: string }) => <p data-native>{props.text}</p>,
   JsonBlock: () => null,
-  IconChevronDownOutline14: () => null, IconSearchOutline16: () => null, IconUserOutline16: () => null,
+  IconChevronDownOutlineMedium: () => null, IconSearchOutlineMedium: () => null, IconUserOutlineMedium: () => null,
 }))
 
 const ok = <T,>(value: T) => ({ ok: true as const, value })

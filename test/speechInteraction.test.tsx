@@ -24,8 +24,8 @@ vi.mock('../src/client/cache.js', () => ({
   invalidateSessionBinding:vi.fn(),
 }))
 vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
-  IconCopyOutline16: () => null, IconUserOutline16: () => null, IconSearchOutline16: () => null,
-  IconChevronDownOutline14: () => null, Menu: () => null,
+  IconCopyOutlineMedium: () => null, IconUserOutlineMedium: () => null, IconSearchOutlineMedium: () => null,
+  IconChevronDownOutlineMedium: () => null, Menu: () => null,
   Tooltip: (p: { children?: ReactNode }) => <>{p.children}</>,
   Button: (p: { children?: ReactNode }) => <button>{p.children}</button>,
   Modal: (p: { open: boolean; children?: ReactNode; footer?: ReactNode }) => p.open ? <div>{p.children}{p.footer}</div> : null,

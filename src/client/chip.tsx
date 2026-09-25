@@ -17,7 +17,7 @@ import { parseLorebook } from '../state/lorebook.js'
 import { LorebookEditor } from './panel/lorebookEditor.js'
 import type { CharacterSummary, Persona, PresetSummary, SessionBinding, TavernRemote, TavernSettings } from './types.js'
 import { EMPTY_SESSION_DEFAULTS } from './types.js'
-import { IconCopyOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconCopyOutlineMedium } from '@deepseek-ai/dsh-client-ui-primitives'
 import { Btn, CheckChips, ConfirmDialog, Dialog, Err, Field, IconBtn, Muted, Select, Skeleton, Tabs, Toggle, errOf, runAsync, useLoader, useToast } from './util.js'
 
 export function defaultBinding(sessionId: string, cardId: string, defaults?: TavernSettings['defaults']): SessionBinding {
@@ -138,7 +138,7 @@ function PromptPreviewDialog(props: { data: PromptPreview; onClose: () => void }
         />
         <span style={{ flex: 1 }} />
         <IconBtn label={t('chip.preview.copyView')} onClick={() => void copyBody()}>
-          <IconCopyOutline16 />
+          <IconCopyOutlineMedium />
         </IconBtn>
       </div>
       <pre id={`${tabsId}-panel`} role="tabpanel" aria-labelledby={`${tabsId}-${tab}`} tabIndex={0} className="dsh-tavern-modalPre">{body}</pre>

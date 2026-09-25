@@ -30,7 +30,7 @@ const errors: unknown[] = []
 const children: AgentHandle[] = []
 const textOf = (message: Message) => message.content.filter(block => block.type === 'text').map(block => block.text).join('\n')
 const snapshots = (request: GenerateOptions) => request.messages.filter(message =>
-  message.role === 'user' && message.source.kind === 'plugin' && message.source.plugin === '@deepseek-ai/dsh-system-prompt')
+  message.role === 'user' && message.source.kind === 'runtime-context')
 const systemText = (request: GenerateOptions) => request.messages.filter(message => message.role === 'system').map(textOf).join('\n')
 
 /** 工厂适配器只消费公开请求并返回手写流；图片引用留在模型消息中，不读取真实附件或调用网络。 */
@@ -91,7 +91,7 @@ beforeEach(async () => {
   new SessionStore(ctx); new AgentRegistry(ctx); new SessionProjectionRegistry(ctx); new SystemPrompt(ctx, {}); new ToolRuntime(ctx)
   const llm = new LlmRuntime(ctx)
   llm.registerAdapter(['factory'], new FactoryAdapter())
-  const loop = new AgentLoop(ctx, { agents: [] })
+  const loop = new AgentLoop(ctx, AgentLoop.Config({ agents: [] }))
   agent = await loop.create(SessionId('preset-live-factory'), { provider: 'factory', model: 'factory' })
   ctx.provide('tavern', { state })
   ctx.on('session/event', (session, event) => {
@@ -189,7 +189,7 @@ it('同轮工具后重放冻结预设且不重复快照，下一轮才更新采�
   const toolCall = second.messages.find(message => message.role === 'assistant' && message.content.some(block => block.type === 'tool-call'))!
   const toolResult = second.messages.find(message => message.source.kind === 'tool')!
   expect(toolCall.content).toEqual([{ type: 'tool-call', id: ToolCallId('factory-call'), name: 'factory_edit_preset', arguments: '{}' }])
-  expect(toolResult.content).toEqual([{ type: 'tool-result', toolCallId: ToolCallId('factory-call'), content: [{ type: 'text', text: 'FACTORY-TOOL-RESULT' }], isError: false }])
+  expect(toolResult).toMatchObject({ role: 'tool', toolCallId: ToolCallId('factory-call'), content: [{ type: 'text', text: 'FACTORY-TOOL-RESULT' }], isError: false })
   await send(userMessage('新一轮使用更新预设'))
   expect(requests).toHaveLength(3)
   const third = requests[2]!

@@ -12,7 +12,7 @@ import {setTavernLocale,t} from '../src/client/i18n.js'
 vi.mock('../src/client/helperScriptEditor.js',()=>({HelperScriptEditor:()=>null}))
 vi.mock('@deepseek-ai/dsh-client-ui-primitives',()=>({
   Button:(p:{children?:ReactNode})=><button>{p.children}</button>,Menu:()=>null,
-  Tooltip:(p:{children?:ReactNode})=><>{p.children}</>,IconChevronDownOutline14:()=>null,
+  Tooltip:(p:{children?:ReactNode})=><>{p.children}</>,IconChevronDownOutlineMedium:()=>null,
 }))
 let view:ReactTestRenderer|undefined
 afterEach(async()=>{if(view)await act(async()=>view!.unmount());view=undefined})

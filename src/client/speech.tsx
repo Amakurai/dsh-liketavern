@@ -8,7 +8,7 @@
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ComponentProps, ReactNode } from 'react'
-import { IconCopyOutline16, MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconCopyOutlineMedium, MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives'
 import { buildCardSrcDoc, parseCardBridgeMessage } from '../core/cardFrame.js'
 import {ScriptChoices,publishScriptChoices,clearScriptChoices,parseScriptChoices} from './helperChoices.js'
 import {cardVariableLabels} from './cardVariableLabels.js'
@@ -735,7 +735,7 @@ function SpeechBubbleSession(props: SpeechBubbleProps) {
       </div>
       <div className="dsh-tavern-speechCopy">
         <IconBtn label={t('speech.copy')} onClick={() => void onCopy()}>
-          <IconCopyOutline16 />
+          <IconCopyOutlineMedium />
         </IconBtn>
       </div>
       {toast.node}

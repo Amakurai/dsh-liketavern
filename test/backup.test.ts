@@ -77,7 +77,7 @@ describe('完整用户数据快照', () => {
     const body = Buffer.alloc(400_000, 99); await writeFile(join(home, 'large.bin'), body)
     await create(); const data = parseBackupManifest(await manifest())
     expect(data.versions.plugin).toMatch(/^\d+\./)
-    expect(data.versions.dsh).toBe('0.1.5-rc.2')
+    expect(data.versions.dsh).toBe('0.1.7-rc.2')
     expect(data.entries).toMatchObject([{ path: 'large.bin', kind: 'file', size: body.length, sha256: expect.stringMatching(/^[0-9a-f]{64}$/) }])
     await restore(); expect(await readFile(join(target, 'large.bin'))).toEqual(body)
   })

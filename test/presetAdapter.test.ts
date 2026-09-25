@@ -1,3 +1,4 @@
+import { messagesResponse } from './messagesApiFactory.js'
 /** DeepSeek 投影适配器回归：真实设置文件、LLM runtime 与官方传输配合工厂网络验证路由、冻结、取消和消息保真。 */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -9,8 +10,9 @@ import { DeepSeekLlmApiExtensionRegistry } from '@deepseek-ai/dsh-deepseek-llm-a
 import { createLaunchEnvironmentSnapshot } from '@deepseek-ai/dsh-launch-environment'
 import { createAssistantMessage, createMessage, createSystemMessage, createToolResultMessage, createUserMessage,
   LlmRuntime, ReasoningEffortId, ToolCallId, type GenerateOptions, type LlmResolvedModelInfo, type StreamChunk } from '@deepseek-ai/dsh-llm'
-import { Config as DeepSeekConfig, DeepSeekAdapter } from '@deepseek-ai/dsh-llm-deepseek'
-import { SettingsProvider, type SettingsNamespace, type SettingsScope } from '@deepseek-ai/dsh-settings'
+import { Config as DeepSeekConfig } from '@deepseek-ai/dsh-llm-deepseek-api-key'
+import { DeepSeekAdapter } from '@deepseek-ai/dsh-llm-deepseek'
+import { FileSettings } from './hostSettingsFactory.js'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { PRESET_ADAPTER_PROVIDER, PRESET_ADAPTER_SOURCE_PROVIDER, registerPresetAdapter } from '../src/node/presetAdapter.js'
 
@@ -21,20 +23,11 @@ declare module '@deepseek-ai/dsh-deepseek-llm-api-extensions' {
 }
 
 /** 设置写入真实临时文件，保留宿主的默认/base/用户覆盖解析与变更通知。 */
-class FileSettings extends SettingsProvider {
-  readonly writable = true
-  constructor(ctx: Context, private readonly file: string) { super(ctx) }
-  protected async load(): Promise<Record<string, unknown>> { return JSON.parse(await readFile(this.file, 'utf8')) as Record<string, unknown> }
-  protected async persist(ns: SettingsNamespace, section: Record<string, unknown>): Promise<void> {
-    await writeFile(this.file, JSON.stringify({ ...await this.load(), [ns]: section }))
-  }
-  async reload() { this.publish(await this.load()) }
-}
 
 type Wire = { url: string; headers: Headers; body: { model: string; max_tokens?: number; stop?: string[];
   messages: { role: string; content: unknown; tool_call_id?: string; tool_calls?: unknown[] }[];
   tools?: unknown[]; tavern_factory?: { ready: boolean } } }
-let ctx: Context, llm: LlmRuntime, settings: FileSettings, scope: SettingsScope<DeepSeekConfig>, root: string
+let ctx: Context, llm: LlmRuntime, settings: FileSettings, scope: { update(patch: object): Promise<void> }, root: string
 let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>
 let credential: ReturnType<typeof vi.fn<(ref: string) => Promise<{ value: string; source: string } | undefined>>>
 const wires: Wire[] = []
@@ -43,12 +36,7 @@ const request = (config: Awaited<ReturnType<LlmRuntime['prepareCall']>>['config'
 })
 async function collect(stream: AsyncIterable<StreamChunk>) { const chunks: StreamChunk[] = []; for await (const chunk of stream) chunks.push(chunk); return chunks }
 /** 只返回手写 SSE；测试中的任何 fetch 都不访问网络。 */
-function response(): Response {
-  const frames = [{ choices: [{ index: 0, delta: { content: '工厂回复' }, finish_reason: null }] },
-    { choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 8, completion_tokens: 2, total_tokens: 10 } }]
-  return new Response(frames.map(frame => `data: ${JSON.stringify(frame)}\n\n`).join('') + 'data: [DONE]\n\n',
-    { status: 200, headers: { 'content-type': 'text/event-stream' } })
-}
+function response(): Response { return messagesResponse() }
 
 beforeEach(async () => {
   wires.length = 0
@@ -58,8 +46,7 @@ beforeEach(async () => {
   ctx = new Context()
   llm = new LlmRuntime(ctx)
   settings = new FileSettings(ctx, file)
-  await settings.reload()
-  scope = settings.register('llm-deepseek', DeepSeekConfig, { base: {
+  scope = await settings.register('llm-deepseek-api-key', DeepSeekConfig, { base: {
     baseURL: 'https://factory.invalid/v1', apiKeyEnv: 'FACTORY_KEY', maxTokens: 1234,
     models: [{ id: 'factory', name: '工厂模型', contextWindow: 64000, inputModalities: ['text', 'image'], systemPromptUpdate: 'in-history' }],
     retryPolicy: { mode: 'normal', maxRetries: 2 },
@@ -100,17 +87,18 @@ it('复用宿主最终设置和凭证，投影角色后单次经过 middleware�
   expect(observed).toEqual([original])
   expect(original.messages).toEqual(originalMessages)
   expect(wires).toHaveLength(1)
-  expect(wires[0]!.url).toBe('https://factory.invalid/v1/chat/completions')
-  expect(wires[0]!.headers.get('authorization')).toBe('Bearer FACTORY_KEY-value')
+  expect(wires[0]!.url).toBe('https://factory.invalid/v1/messages')
+  expect(wires[0]!.headers.get('x-api-key')).toBe('FACTORY_KEY-value')
   expect(wires[0]!.headers.get('user-agent')).toBeTruthy()
-  expect(wires[0]!.body.messages.map(message => message.role)).toEqual(['system', 'user', 'assistant', 'tool', 'system', 'assistant'])
-  expect(wires[0]!.body.messages[3]!.tool_call_id).toBe(callId)
+  expect(wires[0]!.body.messages.map(message => message.role)).toEqual(['user', 'assistant', 'user', 'system', 'assistant'])
+  expect(wires[0]!.body.system).toBe('宿主工具说明')
+  expect(wires[0]!.body.messages[2]!.content).toEqual([{ type: 'tool_result', tool_use_id: callId, content: [{ type: 'text', text: '工具结果' }], is_error: false }])
   expect(wires[0]!.body.tools).toHaveLength(1)
   expect(wires[0]!.body.max_tokens).toBe(1234)
-  expect(wires[0]!.body.stop).toEqual(['STOP'])
+  expect(wires[0]!.body.stop_sequences).toEqual(['STOP'])
   expect(chunks.at(-1)).toMatchObject({ type: 'finish', reason: { kind: 'stop' } })
   expect(chunks.at(-2)?.type).toBe('usage')
-  expect(settings.describe().map(item => item.ns)).toEqual(['llm-deepseek'])
+  expect(settings.describe().map(item => item.ns)).toEqual(['llm-deepseek-api-key'])
   expect(credential).toHaveBeenCalledExactlyOnceWith('FACTORY_KEY')
 })
 
@@ -133,9 +121,9 @@ it('模型能力和连接同代冻结，更新后才准备的新请求使用新�
   await collect(before.stream(request(before.config)))
   const after = await llm.prepareCall({ provider: PRESET_ADAPTER_PROVIDER, model: 'factory' })
   await collect(after.stream(request(after.config)))
-  expect(wires.map(wire => [wire.url, wire.body.max_tokens, wire.headers.get('authorization')])).toEqual([
-    ['https://factory.invalid/v1/chat/completions', 1234, 'Bearer FACTORY_KEY-value'],
-    ['https://second.invalid/v1/chat/completions', 4321, 'Bearer SECOND_KEY-value'],
+  expect(wires.map(wire => [wire.url, wire.body.max_tokens, wire.headers.get('x-api-key')])).toEqual([
+    ['https://factory.invalid/v1/messages', 1234, 'FACTORY_KEY-value'],
+    ['https://second.invalid/v1/messages', 4321, 'SECOND_KEY-value'],
   ])
   expect(after.retryPolicy).toMatchObject({ mode: 'normal', maxRetries: 4 })
   expect(before.retryPolicy).toMatchObject({ mode: 'normal', maxRetries: 2 })
@@ -160,7 +148,7 @@ it('宿主 namespace 未安装时不注册、不猜 endpoint，也不触碰凭�
   try {
     const runtime = new LlmRuntime(pending)
     const controller = registerPresetAdapter(pending, options => options)
-    expect(() => controller.ensureRegistered()).toThrow(/llm-deepseek settings namespace/)
+    expect(() => controller.ensureRegistered()).toThrow(/llm-deepseek-api-key settings namespace/)
     expect(runtime.listProviders()).toEqual([])
     expect(credential).not.toHaveBeenCalled()
     expect(fetchMock).not.toHaveBeenCalled()
@@ -197,7 +185,7 @@ it('API 扩展仍在官方传输内准备和确认，仅收到真正发送的投
   expect(prepare).toHaveBeenCalledOnce()
   expect(accept).toHaveBeenCalledOnce()
   expect(wires[0]!.body.tavern_factory).toEqual({ ready: true })
-  expect(wires[0]!.body.messages.at(-1)).toMatchObject({ role: 'system', content: '扩展前规则' })
+  expect(wires[0]!.body.messages.at(-1)).toMatchObject({ role: 'system', content: [{ type: 'text', text: '扩展前规则' }] })
 })
 
 it('向同代 delegate 转交官方 provider、原图片对象和工具结构，不再次走 runtime', async () => {

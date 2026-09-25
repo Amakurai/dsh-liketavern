@@ -4,7 +4,7 @@
  * 原生 select 的 option 弹层用 Menu 实现（避开 Windows 系统白底白字）。
  */
 import { Children, cloneElement, createContext, isValidElement, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { Button, IconChevronDownOutline14, IconSearchOutline16, IconUserOutline16, Menu, Modal, Toast, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, IconChevronDownOutlineMedium, IconSearchOutlineMedium, IconUserOutlineMedium, Menu, Modal, Toast, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { AriaAttributes, CSSProperties, ReactNode } from 'react'
 import type { CardRegexScript } from '../core/types.js'
 import { MAX_WI_KEY_CHARS } from '../core/worldbook.js'
@@ -109,7 +109,7 @@ export function Select(props: {
             onClick={() => setOpen((v: boolean) => !v)}
           >
             <span className="dsh-tavern-pillSelectLabel">{selected?.label ?? props.value}</span>
-            <IconChevronDownOutline14 className="dsh-tavern-pillSelectChevron" />
+            <IconChevronDownOutlineMedium className="dsh-tavern-pillSelectChevron" />
           </button>
         }
         items={props.options.map((o) => ({
@@ -369,7 +369,7 @@ export function SearchInput(props: {
   return (
     <div className="dsh-tavern-search" role="search" style={{ width: props.width ?? 220 }}>
       <span className="dsh-tavern-searchIcon">
-        <IconSearchOutline16 />
+        <IconSearchOutlineMedium />
       </span>
       <input
         type="text"
@@ -457,7 +457,7 @@ export function Avatar(props: { url?: string | null; name?: string; size?: numbe
   }
   return (
     <span className={cls} style={style} aria-hidden="true">
-      <IconUserOutline16 size={Math.max(12, Math.round(size * 0.6))} />
+      <IconUserOutlineMedium size={Math.max(12, Math.round(size * 0.6))} />
     </span>
   )
 }

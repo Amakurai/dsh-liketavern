@@ -7,10 +7,10 @@
  *
  * 刻意用 `zod/mini` 而不是经典 `zod`：本模块被 client 入口导入（TYPERT_REMOTE），
  * 经典 API 会往浏览器 bundle 里塞 ~530 KiB（占产物 59%），mini 只有 ~32 KiB。
- * gateway 两面都只调 `codec.schema.parse(value)`（client 侧 dsh-api-gateway/lib/client.js
- * 的 parseInput、host 侧 lib/index.js 的 decode），mini schema 保留 `.parse()`，校验行为不变。
+ * gateway 经 `codec.create()` 取得当前进程的 schema，再调用 `.parse()`；mini 保留相同校验边界。
  * 代价是链式方法要写成顶层函数式：`.min(1)` → `check(minLength(1))`、`.optional()` → `optional(...)`。
  */
+import type { TypertContribution } from '@deepseek-ai/dsh-typert-registry'
 import type { infer as Infer } from 'zod/mini'
 import { array, boolean, enum as enum_, int, literal, maxLength, minimum, minLength, nullable, number, object, optional, regex, string, union, unknown } from 'zod/mini'
 import type { ZodMiniType } from 'zod/mini'
@@ -599,10 +599,10 @@ function descriptor(method: string, def: (typeof METHODS)[keyof typeof METHODS])
         name: 'request',
         wire: 'request',
         source: 'json' as const,
-        codec: { mode: 'strict' as const, typeSymbol: `dsh-liketavern/types#${method}Request`, schema: def.req },
+        codec: { mode: 'strict' as const, typeSymbol: `dsh-liketavern/types#${method}Request`, create: () => def.req },
       },
     ],
-    result: { mode: 'strict' as const, typeSymbol: `dsh-liketavern/types#${method}Result`, schema: def.value },
+    result: { mode: 'strict' as const, typeSymbol: `dsh-liketavern/types#${method}Result`, create: () => def.value },
   }
 }
 
@@ -612,31 +612,31 @@ const descriptors = Object.entries(METHODS).map(([method, def]) => descriptor(me
 export const TYPERT_HOST = {
   package: 'dsh-liketavern',
   face: 'host' as const,
-  schemas: [] as unknown[],
+  schemas: [],
   invocations: descriptors,
   model: {
     services: [
       {
         description: 'Tavern 角色扮演服务：角色卡、世界书、预设、记忆、世界状态、楼层操作与提示词预览。',
         summary: 'SillyTavern 兼容角色扮演服务。',
-        tags: [] as string[],
+        tags: [],
         jsDoc: '/** Tavern service: cards, lorebooks, presets, memories, world deltas, floor ops. */',
         key: 'tavern',
         exportName: 'TavernService',
         members: Object.entries(METHODS).map(([method, def]) => ({
-          kind: 'method',
+          kind: 'method' as const,
           name: method,
           signature: `async ${method}(request): Promise<Envelope>`,
           summary: def.summary,
           jsDoc: `/** ${def.summary} */`,
         })),
-        types: [] as unknown[],
+        types: [],
       },
     ],
-    events: [] as unknown[],
-    objects: [] as unknown[],
+    events: [],
+    objects: [],
   },
-}
+} satisfies TypertContribution
 
 /** client 侧贡献：ctx.remote.$mount(TYPERT_REMOTE) 后以 ctx.remote.tavern.<method>(request) 调用。 */
 export const TYPERT_REMOTE = {

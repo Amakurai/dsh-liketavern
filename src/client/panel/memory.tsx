@@ -6,7 +6,7 @@
 import { useDraftGuard } from '../drafts.js'
 import { PersistentEditor, useDraftRestored, useDraftState } from '../draftPersistence.js'
 import { useEffect, useRef, useState } from 'react'
-import { IconEditOutline16, IconTrashOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconEditOutlineMedium, IconTrashOutlineMedium } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { MemoryEntry, WorldDelta } from '../../core/types.js'
 import { useT } from '../i18n.js'
 import type { TavernRemote } from '../types.js'
@@ -306,10 +306,10 @@ function MemoryContextSection(props: { remote: TavernRemote; cardId: string; sto
                     <span className="dsh-tavern-memoMeta">{m.updated}</span>
                     <span className="dsh-tavern-memoActions">
                       <IconBtn disabled={editingId !== null || busy} label={t('action.edit')} onClick={() => setEditingId(editingId === m.id ? null : m.id)}>
-                        <IconEditOutline16 />
+                        <IconEditOutlineMedium />
                       </IconBtn>
                       <IconBtn label={t('memory.deleteEntry')} danger disabled={busy || editingId !== null} onClick={() => setDeleteId(m.id)}>
-                        <IconTrashOutline16 />
+                        <IconTrashOutlineMedium />
                       </IconBtn>
                     </span>
                   </div>

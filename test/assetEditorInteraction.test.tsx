@@ -4,7 +4,7 @@ import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
-import type { SettingsScope } from '@deepseek-ai/dsh-settings'
+import type { TavernSettingsScope } from '../src/node/config.js'
 import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
 import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -28,10 +28,10 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
   Modal: (props: { open: boolean; children?: ReactNode; footer?: ReactNode }) => props.open ? <div role="dialog">{props.children}{props.footer}</div> : null,
   Menu: (props: { anchor?: ReactNode }) => <>{props.anchor}</>,
   Tooltip: (props: { children?: ReactNode }) => <>{props.children}</>, Toast: () => null,
-  IconChevronDownOutline14: () => null, IconSearchOutline16: () => null, IconUserOutline16: () => null,
-  IconArchiveOutline20: () => null, IconDownloadOutline16: () => null, IconEditOutline16: () => null, IconFolderOpenOutline16: () => null,
-  IconListPenOutline16: () => null, IconTrashOutline16: () => null, IconPlusOutline16: () => null,
-  IconRefreshOutline16: () => null,
+  IconChevronDownOutlineMedium: () => null, IconSearchOutlineMedium: () => null, IconUserOutlineMedium: () => null,
+  IconArchiveOutlineMedium: () => null, IconDownloadOutlineMedium: () => null, IconEditOutlineMedium: () => null, IconFolderOpenOutlineMedium: () => null,
+  IconListPenOutlineMedium: () => null, IconTrashOutlineMedium: () => null, IconPlusOutlineMedium: () => null,
+  IconRefreshOutlineMedium: () => null,
 }))
 vi.mock('../src/client/util.js', async importOriginal => ({
   ...await importOriginal<typeof import('../src/client/util.js')>(),
@@ -68,7 +68,7 @@ async function fixture() {
   const state = new TavernState({ root, characters: join(root, 'characters'), lorebooks: join(root, 'library/lorebooks'),
     presets: join(root, 'library/presets'), personas: join(root, 'personas'), regexDir: join(root, 'regex'), sessions: join(root, 'sessions') }, () => resolveConfig({}))
   await state.init()
-  const service = new TavernService({ reflect: { provide: () => {} } } as unknown as Context, state, {} as SettingsScope<TavernConfigRaw>)
+  const service = new TavernService({ reflect: { provide: () => {} } } as unknown as Context, state, {} as TavernSettingsScope)
   const remote = {
     listPresets: vi.fn(async () => ok(await service.listPresets({}))),
     getPreset: vi.fn(async (request: Parameters<TavernRemote['getPreset']>[0]) => ok(await service.getPreset(request))),

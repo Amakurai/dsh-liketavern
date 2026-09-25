@@ -45,7 +45,7 @@ async function edit(edits:unknown){const input=await request();return editHelper
   const target=input.messages.at(row.message_id)!
   return {message_id:row.message_id,...(row.data!==undefined?{data:target?.data??{}}:{}),...(row.extra!==undefined?{extra:target?.extra??{}}:{}),...(row.pages!==undefined?{pages:target?.swipe??{active:0,pages:[{message:target.message,data:target.data,extra:target.extra}]}}:{})}
 })})}
-const texts=(session:Session)=>session.deriveMessages().flatMap(message=>message.content.filter(block=>block.type==='text').map(block=>block.text))
+const texts=(session:Session)=>session.deriveMessages().filter(message=>message.role!=='tool'&&message.role!=='developer').flatMap(message=>message.content.filter(block=>block.type==='text').map(block=>block.text))
 /** 重建工厂的三个已完成楼层，把真实 MVU 状态和回执按原始顺序写入各自 WAL。 */
 async function completedMvu(){
   const binding={...(await state.loadBinding(source.id))!,storyId:newStoryId(),helperMvu:true}

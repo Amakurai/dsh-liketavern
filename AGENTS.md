@@ -6,7 +6,7 @@
 
 dsh-liketavern 为 DeepSeek Harness 的 Tavern 插件。角色卡、预设、世界书、人设、正则、记忆、世界变化层和分支操作共用 dsh agent 运行时。普通扮演不另起发信通道；AI 代答是明确的辅助调用。
 
-当前基线：dsh / @deepseek-ai 包 0.1.5-rc.2、Node 24、Windows；CI 为 Ubuntu。TypeScript ESM，NodeNext，strict + noUncheckedIndexedAccess，相对导入显式 `.js`。
+当前基线：dsh / @deepseek-ai 包 0.1.7-rc.2、Node 24、Windows；CI 为 Ubuntu。TypeScript ESM，NodeNext，strict + noUncheckedIndexedAccess，相对导入显式 `.js`。
 
 查宿主机制先看 [官方文档](https://deepseek-harness.github.io/deepseek-harness/) 和已安装包的 `lib/`、`.d.ts`，先核对各包 package.json；不要凭旧版本记忆推断 slot、profile、patch、system-prompt 或事件时序。
 

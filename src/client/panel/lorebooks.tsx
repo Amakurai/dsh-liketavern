@@ -5,7 +5,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { PersistentEditor, useDraftState } from '../draftPersistence.js'
 import { useDraftGuard } from '../drafts.js'
-import { IconDownloadOutline16, IconEditOutline16, IconFolderOpenOutline16, IconTrashOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconDownloadOutlineMedium, IconEditOutlineMedium, IconFolderOpenOutlineMedium, IconTrashOutlineMedium } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { WorldInfoEntry } from '../../core/types.js'
 import { parseLorebook } from '../../state/lorebook.js'
 import { useT } from '../i18n.js'
@@ -245,7 +245,7 @@ function LorebooksSectionContent(props: { remote: TavernRemote }) {
             {shownCharBooks.map((item) => (
               <div key={item.cardId} className="dsh-tavern-tile" {...clickableProps(() => void openCharacter(item))}>
                 <span className="dsh-tavern-tileIcon">
-                  <IconFolderOpenOutline16 size={18} />
+                  <IconFolderOpenOutlineMedium size={18} />
                 </span>
                 <div className="dsh-tavern-tileMain">
                   <div className="dsh-tavern-tileTitleRow">
@@ -260,10 +260,10 @@ function LorebooksSectionContent(props: { remote: TavernRemote }) {
                 </div>
                 <div className="dsh-tavern-tileActions">
                   <IconBtn label={t('lorebooks.editEntries')} onClick={() => void openCharacter(item)}>
-                    <IconEditOutline16 />
+                    <IconEditOutlineMedium />
                   </IconBtn>
                   <IconBtn label={t('lorebooks.deleteEmbedded')} danger disabled={busy || opening !== null} onClick={() => setToDeleteEmbedded(item)}>
-                    <IconTrashOutline16 />
+                    <IconTrashOutlineMedium />
                   </IconBtn>
                 </div>
               </div>
@@ -277,7 +277,7 @@ function LorebooksSectionContent(props: { remote: TavernRemote }) {
         q === '' ? (
           <div className="dsh-tavern-empty">
             <div className="dsh-tavern-emptyIcon">
-              <IconFolderOpenOutline16 size={32} />
+              <IconFolderOpenOutlineMedium size={32} />
             </div>
             <div className="dsh-tavern-emptyTitle">{t('lorebooks.emptyTitle')}</div>
             <div className="dsh-tavern-emptyDesc">
@@ -290,7 +290,7 @@ function LorebooksSectionContent(props: { remote: TavernRemote }) {
           {shownNames.map((name) => (
             <div key={name} className="dsh-tavern-tile" {...clickableProps(() => void openLibrary(name))}>
               <span className="dsh-tavern-tileIcon">
-                <IconFolderOpenOutline16 size={18} />
+                <IconFolderOpenOutlineMedium size={18} />
               </span>
               <div className="dsh-tavern-tileMain">
                 <div className="dsh-tavern-tileTitleRow">
@@ -301,13 +301,13 @@ function LorebooksSectionContent(props: { remote: TavernRemote }) {
               </div>
               <div className="dsh-tavern-tileActions">
                 <IconBtn label={t('lorebooks.editEntries')} onClick={() => void openLibrary(name)}>
-                  <IconEditOutline16 />
+                  <IconEditOutlineMedium />
                 </IconBtn>
                 <IconBtn label={t('lorebooks.exportJson')} disabled={busy || opening !== null} onClick={() => void exportBook(name)}>
-                  <IconDownloadOutline16 />
+                  <IconDownloadOutlineMedium />
                 </IconBtn>
                 <IconBtn label={t('lorebooks.deleteBook')} danger disabled={busy || opening !== null} onClick={() => setToDelete(name)}>
-                  <IconTrashOutline16 />
+                  <IconTrashOutlineMedium />
                 </IconBtn>
               </div>
             </div>

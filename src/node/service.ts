@@ -12,7 +12,7 @@ import type { TavernServiceContract } from '../remote.js'
 import type { Context } from '@deepseek-ai/cordis'
 import type { LlmRuntime } from '@deepseek-ai/dsh-llm'
 import type { Session } from '@deepseek-ai/dsh-session'
-import type { SettingsScope } from '@deepseek-ai/dsh-settings'
+import type { TavernSettingsScope } from './config.js'
 import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import { estimateTokens } from '../core/tokenize.js'
 import { inspectCharacterCompatibility } from '../core/characterCompatibility.js'
@@ -28,7 +28,6 @@ import { exportLorebook, mergeDeltasForExport, parseLorebook } from '../state/lo
 import { parseStoredPreset, parseStPreset } from '../state/presetStore.js'
 import { rebuildIndex } from '../state/workspace.js'
 import { parseSessionBinding, type SessionBinding } from './bindings.js'
-import type { TavernConfigRaw } from './config.js'
 import { parseJsonCard, parsePngCard } from '../state/card.js'
 import { characterEditRevision } from '../state/characterRevision.js'
 import { FloorError, continueFloor, editAssistantMessage, editUserMessage, enterGreetingConversation, getFloorAssistantMessage, getFloorSiblings, getFloorUserMessage, getGreetingSwipe, regenerate, rollbackToFloor, swipeGreeting } from './floors.js'
@@ -60,7 +59,7 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
     ctx: Context,
     /** 运行时中枢（agent 面插件经 ctx.tavern 访问）。 */
     readonly state: TavernState,
-    private readonly settingsScope: SettingsScope<TavernConfigRaw>,
+    private readonly settingsScope: TavernSettingsScope,
   ) {
     super(ctx, 'tavern')
   }
@@ -885,6 +884,6 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
   }
 }
 
-export function createTavernService(ctx: Context, state: TavernState, settingsScope: SettingsScope<TavernConfigRaw>): TavernService {
+export function createTavernService(ctx: Context, state: TavernState, settingsScope: TavernSettingsScope): TavernService {
   return new TavernService(ctx, state, settingsScope)
 }

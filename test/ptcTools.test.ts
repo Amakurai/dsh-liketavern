@@ -7,7 +7,11 @@ import { Context } from '@deepseek-ai/cordis'
 import { AgentRegistry, type Agent } from '@deepseek-ai/dsh-agent'
 import { AgentLoop } from '@deepseek-ai/dsh-agent-loop'
 import * as presentation from '@deepseek-ai/dsh-agent-tool-presentation'
-import { WorkerThreadCodeRuntime } from '@deepseek-ai/dsh-code-runtime-worker-thread'
+import { NodePtcRuntime } from '@deepseek-ai/dsh-ptc-runtime-node'
+import { LocalFileSystem } from '@deepseek-ai/dsh-fs-local'
+import { LocalSubprocessRuntime } from '@deepseek-ai/dsh-subprocess-local'
+import { LocalSandboxProvider } from '@deepseek-ai/dsh-sandbox-local'
+import { SandboxPolicyService } from '@deepseek-ai/dsh-sandbox-policy'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import { SessionId, SessionStore } from '@deepseek-ai/dsh-session'
 import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection'
@@ -40,8 +44,13 @@ beforeEach(async () => {
   storyId = (await state.loadBinding('ptc-story'))!.storyId!
   ctx = new Context()
   new SessionStore(ctx); new AgentRegistry(ctx); new SessionProjectionRegistry(ctx); new SystemPrompt(ctx, {}); new ToolRuntime(ctx)
-  new WorkerThreadCodeRuntime(ctx, { computeMs: 5000, maxWallMs: 10000, maxOutputBytes: 1_048_576, maxOldGenerationSizeMb: 128 })
-  const loop = new AgentLoop(ctx, { agents: [] })
+  new LocalFileSystem(ctx, LocalFileSystem.Config({}))
+  new LocalSubprocessRuntime(ctx)
+  new LocalSandboxProvider(ctx, LocalSandboxProvider.Config({}))
+  // 仅执行本文件手写程序，不运行第三方脚本；测试使用真实 Node PTC 子进程。
+  new SandboxPolicyService(ctx, { mode: 'danger-full-access', workspaceRoot: root })
+  new NodePtcRuntime(ctx, NodePtcRuntime.Config({ timeoutMs: 10000, maxTimeoutMs: 10000, maxOutputBytes: 1_048_576, maxOldGenerationSizeMb: 128 }))
+  const loop = new AgentLoop(ctx, AgentLoop.Config({ agents: [] }))
   agent = await loop.create(SessionId('ptc-story')); native = await loop.create(SessionId('native-story'))
   ctx.provide('tavern', { state })
   applyAgent(agent.ctx)

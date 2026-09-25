@@ -18,7 +18,7 @@ vi.mock('../src/client/helperScripts.js', () => ({ HelperScripts: () => {
   return null
 } }))
 vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
-  IconCopyOutline16: () => null, IconUserOutline16: () => null, IconChevronDownOutline14: () => null,
+  IconCopyOutlineMedium: () => null, IconUserOutlineMedium: () => null, IconChevronDownOutlineMedium: () => null,
   Tooltip: (props: { children?: ReactNode }) => <>{props.children}</>,
   Button: (props: { children?: ReactNode }) => <button>{props.children}</button>, Toast: () => null, Menu: () => null,
   Modal: (props: { open: boolean; children?: ReactNode; footer?: ReactNode }) => props.open ? <>{props.children}{props.footer}</> : null,

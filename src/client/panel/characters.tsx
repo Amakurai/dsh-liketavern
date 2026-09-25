@@ -9,7 +9,7 @@ import { buildCardSrcDoc } from '../../core/cardFrame.js'
 import { CARD_VARIABLE_STYLES } from '../styles.js'
 import { PersistentEditor, useDraftRestored, useDraftState } from '../draftPersistence.js'
 import { useEffect, useRef, useState } from 'react'
-import { Button, IconArchiveOutline20, IconDownloadOutline16, IconRefreshOutline16, IconTrashOutline16, IconUserOutline16, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, IconArchiveOutlineMedium, IconDownloadOutlineMedium, IconRefreshOutlineMedium, IconTrashOutlineMedium, IconUserOutlineMedium, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
 import { cachedAvatar, cachedCharacterDetail, invalidateCharacter, notifyCharacterChanged } from '../cache.js'
 import { matchesCharacterSearch } from '../characterSearch.js'
 import { useT } from '../i18n.js'
@@ -67,13 +67,13 @@ function CharacterCard(props: {
             <Tooltip label={t('characters.card.restore')} side="bottom">
               <button type="button" aria-label={t('characters.card.restore')} className="dsh-tavern-coverBtn" disabled={props.busy}
                 onClick={(e: { stopPropagation: () => void }) => { e.stopPropagation(); props.onRestore(props.item) }}>
-                <IconRefreshOutline16 />
+                <IconRefreshOutlineMedium />
               </button>
             </Tooltip>
             <Tooltip label={t('characters.card.deletePermanently')} side="bottom">
               <button type="button" aria-label={t('characters.card.deletePermanently')} className="dsh-tavern-coverBtn is-danger" disabled={props.busy}
                 onClick={(e: { stopPropagation: () => void }) => { e.stopPropagation(); props.onDelete(props.item) }}>
-                <IconTrashOutline16 />
+                <IconTrashOutlineMedium />
               </button>
             </Tooltip>
           </>
@@ -81,7 +81,7 @@ function CharacterCard(props: {
           <Tooltip label={t('characters.card.archive')} side="bottom">
             <button type="button" aria-label={t('characters.card.archive')} className="dsh-tavern-coverBtn" disabled={props.busy}
               onClick={(e: { stopPropagation: () => void }) => { e.stopPropagation(); props.onArchive(props.item) }}>
-              <IconArchiveOutline20 size={16} />
+              <IconArchiveOutlineMedium size={16} />
             </button>
           </Tooltip>
         )}
@@ -322,7 +322,7 @@ function CharacterDetailDialog(props: { remote: TavernRemote; cardId: string; on
           <Err message={error} />
           <div className="dsh-tavern-footActions" style={{ marginTop: 2 }}>
             <IconBtn label={t('characters.detail.exportPng')} disabled={busy} onClick={() => void exportCard('png')}>
-              <IconDownloadOutline16 />
+              <IconDownloadOutlineMedium />
             </IconBtn>
             {interactiveHtml !== null && <Btn size="md" onClick={() => setCardOpen(true)}>{t('interactive.open')}</Btn>}
             <span className="dsh-tavern-footSpacer" />
@@ -519,7 +519,7 @@ function CharactersSectionContent(props: { remote: TavernRemote }) {
       {items.length === 0 && state.status === 'ready' && (
         <div className="dsh-tavern-empty">
           <div className="dsh-tavern-emptyIcon">
-            {collection === 'active' ? <IconUserOutline16 size={32} /> : <IconArchiveOutline20 size={32} />}
+            {collection === 'active' ? <IconUserOutlineMedium size={32} /> : <IconArchiveOutlineMedium size={32} />}
           </div>
           <div className="dsh-tavern-emptyTitle">{t(collection === 'active' ? 'hero.noCharacters' : 'characters.archive.emptyTitle')}</div>
           <div className="dsh-tavern-emptyDesc">{t(collection === 'active' ? 'characters.emptyDesc' : 'characters.archive.emptyDesc')}</div>

@@ -6,7 +6,7 @@ import type {SessionInput} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import {ScriptChoices,parseScriptChoices,choiceDraft,publishScriptChoices,clearScriptChoices,installChoiceInput} from '../src/client/helperChoices.js'
 import type {HelperDisplayContext,HelperSnapshot} from '../src/core/helperRuntime.js'
 import {Btn} from '../src/client/util.js'
-vi.mock('@deepseek-ai/dsh-client-ui-primitives',()=>({Button:(p:{children?:ReactNode})=><button>{p.children}</button>,Tooltip:(p:{children?:ReactNode})=><>{p.children}</>,IconChevronDownOutline14:()=>null}))
+vi.mock('@deepseek-ai/dsh-client-ui-primitives',()=>({Button:(p:{children?:ReactNode})=><button>{p.children}</button>,Tooltip:(p:{children?:ReactNode})=><>{p.children}</>,IconChevronDownOutlineMedium:()=>null}))
 const context:HelperSnapshot={storyId:'story',historyRevision:'rev',currentMessageId:0,messages:[{message_id:0,name:'Character',role:'assistant',message:'sample',is_hidden:false,data:{},extra:{}}],scopes:{},writable:true}
 const displayContext:HelperDisplayContext={storyId:'story',historyRevision:'rev',currentMessageId:0,currentMessageRole:'assistant'}
 it('有界纯文本选项拒绝额外字段与不可见目标',()=>{

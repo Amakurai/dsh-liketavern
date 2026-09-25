@@ -4,7 +4,7 @@
 
 **Tavern-style roleplay in DeepSeek Harness's `dsh web`, with character cards, lorebooks, and long-term memory.**
 
-[![Release](https://img.shields.io/badge/version-v0.3.1-blue.svg)](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.3.1)
+[![Release](https://img.shields.io/badge/version-v0.4.0-blue.svg)](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.4.0)
 [![dsh](https://img.shields.io/badge/dsh-0.1.5--rc.2-informational.svg)](https://deepseek-harness.github.io/deepseek-harness/)
 [![Node.js](https://img.shields.io/badge/node-%E2%89%A524-brightgreen.svg)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
@@ -86,7 +86,7 @@ flowchart LR
 | Component | Minimum Requirement | Notes |
 | :--- | :--- | :--- |
 | **Node.js** | `≥ 24.0.0` | Development and CI environments use Node 24 |
-| **dsh CLI / Host** | **`0.1.5-rc.2`** | Peer dependencies are pinned to this host version |
+| **dsh CLI / Host** | **`0.1.7-rc.2`** | Peer dependencies are pinned to this host version |
 | **pnpm** | Any modern version | Used by `dsh plugin` to resolve and install dependencies |
 | **Model** | Configured in dsh | Ensure you can start an ordinary conversation in dsh |
 
@@ -100,7 +100,7 @@ Run these commands in your terminal to install the pinned stable release:
 
 ```bash
 # 1. Add plugin to web profile
-dsh plugin --profile web add github:Amakurai/dsh-liketavern#v0.3.1
+dsh plugin --profile web add github:Amakurai/dsh-liketavern#v0.4.0
 
 # 2. Verify installation
 dsh plugin --profile web list --depth 0
@@ -115,11 +115,11 @@ dsh web
 
 ### Option 2: Install from Release Tarball (Offline)
 
-1. Download `dsh-liketavern-0.3.1.tgz` from the [v0.3.1 Release](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.3.1) (with `SHA256SUMS.txt` for integrity verification).
+1. Download `dsh-liketavern-0.4.0.tgz` from the [v0.4.0 Release](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.4.0) (with `SHA256SUMS.txt` for integrity verification).
 2. In the download directory, run:
 
 ```bash
-dsh plugin --profile web add ./dsh-liketavern-0.3.1.tgz
+dsh plugin --profile web add ./dsh-liketavern-0.4.0.tgz
 dsh web
 ```
 
@@ -210,7 +210,7 @@ Unlike standard linear chat, dsh-liketavern provides **fine-grained state snapsh
 | Item | Actual Behavior |
 | :--- | :--- |
 | **Sampling Parameters** | Supports `temperature`, `maxTokens`, `stop`, and published `reasoningEffort`. `top_p` and penalty parameters are logged with informative notices. |
-| **Preset Layout Projection** | DeepSeek official route uses the Tavern adapter to project roles to exact context depths and history positions. Other providers use the standard standing/turn dual mapping. |
+| **Preset Layout Projection** | The DeepSeek API-key route projects the frozen preset layout. Unsupported mid-history system positions are merged into the leading system prompt with a diagnostic; adjacent same-role messages may be merged. DeepSeek account and other routes use the standing/turn mapping. |
 | **Dynamic Macros & Formats** | Full support for `wi_format`, `scenario_format`, `personality_format`, and macros such as `{{lastmessage}}` and `{{charPrompt}}`. |
 | **PTC Tool Calls** | Built on dsh native Programmatic Tool Calling (PTC), supporting multi-tool combinations in a single code run and parallel queries. Writes are protected by story floor transactions. |
 
@@ -272,7 +272,7 @@ node lib/backup.js restore --backup "D:/backups/dsh-2026-09-19" --target "C:/dat
 <details>
 <summary><b>Q1: No "Tavern 模式" or settings entry after installation?</b></summary>
 
-1. Run `dsh --version` to verify host version is `0.1.5-rc.2`.
+1. Run `dsh --version` to verify host version is `0.1.7-rc.2`.
 2. Run `dsh plugin --profile web list --depth 0` to confirm plugin is installed in `web` profile.
 3. Restart `dsh web` and check the terminal log for plugin loading errors.
 </details>

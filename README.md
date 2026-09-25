@@ -4,7 +4,7 @@
 
 **在 DeepSeek Harness 的 `dsh web` 中使用角色卡、世界书与长期记忆，开启 Tavern 式角色扮演。**
 
-[![Release](https://img.shields.io/badge/version-v0.3.1-blue.svg)](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.3.1)
+[![Release](https://img.shields.io/badge/version-v0.4.0-blue.svg)](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.4.0)
 [![dsh](https://img.shields.io/badge/dsh-0.1.5--rc.2-informational.svg)](https://deepseek-harness.github.io/deepseek-harness/)
 [![Node.js](https://img.shields.io/badge/node-%E2%89%A524-brightgreen.svg)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
@@ -86,7 +86,7 @@ flowchart LR
 | 依赖项 | 最低要求 | 说明 |
 | :--- | :--- | :--- |
 | **Node.js** | `≥ 24.0.0` | 开发与 CI 环境均基于 Node 24 |
-| **dsh CLI / 宿主** | **`0.1.5-rc.2`** | 插件的宿主 Peer 依赖锁定此版本 |
+| **dsh CLI / 宿主** | **`0.1.7-rc.2`** | 插件的宿主 Peer 依赖锁定此版本 |
 | **pnpm** | 任意主流版本 | 用于 `dsh plugin` 自动拉取与管理依赖 |
 | **模型配置** | 已在 dsh 中完成配置 | 确保在宿主中可以正常发起对话 |
 
@@ -100,7 +100,7 @@ flowchart LR
 
 ```bash
 # 1. 添加插件到 web profile
-dsh plugin --profile web add github:Amakurai/dsh-liketavern#v0.3.1
+dsh plugin --profile web add github:Amakurai/dsh-liketavern#v0.4.0
 
 # 2. 检查安装状态
 dsh plugin --profile web list --depth 0
@@ -115,11 +115,11 @@ dsh web
 
 ### 方式二：通过 Release 安装包（离线环境）
 
-1. 从 [v0.3.1 Release](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.3.1) 下载 `dsh-liketavern-0.3.1.tgz`（发布页附带 `SHA256SUMS.txt` 校验和）。
+1. 从 [v0.4.0 Release](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.4.0) 下载 `dsh-liketavern-0.4.0.tgz`（发布页附带 `SHA256SUMS.txt` 校验和）。
 2. 在压缩包所在目录执行：
 
 ```bash
-dsh plugin --profile web add ./dsh-liketavern-0.3.1.tgz
+dsh plugin --profile web add ./dsh-liketavern-0.4.0.tgz
 dsh web
 ```
 
@@ -210,7 +210,7 @@ dsh web
 | 项目 | 实际处理机制 |
 | :--- | :--- |
 | **采样参数** | 支持 `temperature`、`maxTokens`、`stop` 及模型公布的思考档位（`reasoningEffort`）。`top_p` 与各类惩罚项做记录与友好提示。 |
-| **预设位置投影** | DeepSeek 官方通道由插件适配器将预设角色注入至精准的上下文深度与历史位置；其他模型通道沿用标准的 standing/turn 两段映射。 |
+| **预设位置投影** | DeepSeek API-key 官方通道按冻结布局投影预设；Messages 不支持的中途 system 位置合并到首条并显示兼容说明，相邻同角色消息可能合并。DeepSeek 账号通道与其他通道沿用 standing/turn 两段映射。 |
 | **动态宏与格式** | 完整支持 `wi_format`、`scenario_format`、`personality_format` 以及 `{{lastmessage}}`、`{{charPrompt}}` 等常用宏。 |
 | **PTC 工具调用** | 基于 dsh 原生程序化工具调用（PTC），支持单次多工具组合执行与并发查询。写入操作受当前剧情的楼层事务锁保护。 |
 
@@ -272,7 +272,7 @@ node lib/backup.js restore --backup "D:/backups/dsh-2026-09-19" --target "C:/dat
 <details>
 <summary><b>Q1: 安装后在新建会话中找不到「Tavern 模式」或设置入口？</b></summary>
 
-1. 执行 `dsh --version` 确认宿主版本是否为 `0.1.5-rc.2`。
+1. 执行 `dsh --version` 确认宿主版本是否为 `0.1.7-rc.2`。
 2. 执行 `dsh plugin --profile web list --depth 0` 确认插件已正确安装到 `web` profile。
 3. 重启 `dsh web`，并检查启动终端中是否有插件加载异常报错。
 </details>

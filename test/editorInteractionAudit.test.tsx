@@ -19,9 +19,9 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
   Modal: (props: { open: boolean; children?: ReactNode; footer?: ReactNode }) => props.open ? <div role="dialog">{props.children}{props.footer}</div> : null,
   Menu: (props: { anchor?: ReactNode }) => <>{props.anchor}</>,
   Tooltip: (props: { children?: ReactNode }) => <>{props.children}</>, Toast: () => null,
-  IconChevronDownOutline14: () => null, IconSearchOutline16: () => null, IconUserOutline16: () => null,
-  IconDownloadOutline16: () => null, IconEditOutline16: () => null, IconFolderOpenOutline16: () => null,
-  IconTrashOutline16: () => null, IconPlusOutline16: () => null,
+  IconChevronDownOutlineMedium: () => null, IconSearchOutlineMedium: () => null, IconUserOutlineMedium: () => null,
+  IconDownloadOutlineMedium: () => null, IconEditOutlineMedium: () => null, IconFolderOpenOutlineMedium: () => null,
+  IconTrashOutlineMedium: () => null, IconPlusOutlineMedium: () => null,
 }))
 
 const ok = <T,>(value: T): Envelope<T> => ({ ok: true, value })

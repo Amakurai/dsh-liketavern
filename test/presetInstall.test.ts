@@ -4,14 +4,14 @@
  * - escapeYamlSingleQuoted：撇号按 YAML 单引号规则加倍，其余字符原样；
  * - 模板替换：安装路径含撇号（如 C:\Users\O'Brien）时写出的仍是合法单引号标量，
  *   能原样还原成 file:// URL；不转义则标量提前闭合，YAML 坏掉；
- * - installTavernPreset：真实落盘的 agent.cordis.yml 可还原出 agentModulePath()，
- *   内容一致时二次安装跳过。
+ * - installTavernPreset：新注册器收到合法模板、agent URL，生命周期撤销与失败传播。
  */
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import type { Context } from '@deepseek-ai/cordis'
 import { agentModulePath, escapeYamlSingleQuoted, installTavernPreset } from '../src/node/presetInstall.js'
 
 const TEMPLATE_URL = new URL('../presets/tavern/agent.cordis.yml', import.meta.url)
@@ -50,29 +50,21 @@ describe('__AGENT_MODULE__ 替换', () => {
 })
 
 describe('installTavernPreset', () => {
-  let home: string
-
-  beforeEach(async () => {
-    home = await mkdtemp(join(tmpdir(), 'preset-install-test-'))
+  it('向新注册表提供合法模板及 agent URL，并返回生命周期释放句柄', async () => {
+    const dispose = vi.fn(async () => {})
+    const register = vi.fn(async () => dispose)
+    const ctx = { agentPresets: { register } } as unknown as Pick<Context, 'agentPresets'>
+    const release = await installTavernPreset(ctx)
+    expect(register).toHaveBeenCalledWith(expect.objectContaining({ id: 'tavern', plugins: [
+      { id: 'tavern', name: agentModulePath() },
+      { id: 'tool-presentation', name: '@deepseek-ai/dsh-agent-tool-presentation', config: { mode: 'ptc' } },
+    ] }))
+    expect(dispose).not.toHaveBeenCalled()
+    await release()
+    expect(dispose).toHaveBeenCalledOnce()
   })
-
-  afterEach(async () => {
-    await rm(home, { recursive: true, force: true })
-  })
-
-  it('落盘的 agent.cordis.yml 能还原出 agent 入口 URL', async () => {
-    const result = await installTavernPreset(home)
-    expect(result.written).toEqual(['preset.yml', 'agent.cordis.yml'])
-
-    const yaml = await readFile(join(result.dir, 'agent.cordis.yml'), 'utf8')
-    expect(yaml).not.toContain('__AGENT_MODULE__')
-    expect(readSingleQuotedName(yaml)).toBe(agentModulePath())
-  })
-
-  it('内容一致时二次安装跳过', async () => {
-    await installTavernPreset(home)
-    const again = await installTavernPreset(home)
-    expect(again.written).toEqual([])
-    expect(again.skipped).toEqual(['preset.yml', 'agent.cordis.yml'])
+  it('注册失败向调用者传播，不把没有安装的预设报告为成功', async () => {
+    const ctx = { agentPresets: { register: async () => { throw new Error('注册失败') } } } as unknown as Pick<Context, 'agentPresets'>
+    await expect(installTavernPreset(ctx)).rejects.toThrow('注册失败')
   })
 })

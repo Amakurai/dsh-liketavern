@@ -9,7 +9,7 @@ import type { Envelope } from '../src/client/types.js'
 vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
   Button: (props: { children?: ReactNode }) => <button>{props.children}</button>,
   Modal: () => null, Menu: () => null, Toast: () => null, Tooltip: () => null,
-  IconChevronDownOutline14: () => null, IconSearchOutline16: () => null, IconUserOutline16: () => null,
+  IconChevronDownOutlineMedium: () => null, IconSearchOutlineMedium: () => null, IconUserOutlineMedium: () => null,
 }))
 
 const ok = (value: string): Envelope<string> => ({ ok: true, value })

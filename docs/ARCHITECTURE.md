@@ -66,7 +66,7 @@ sequenceDiagram
 | 历史前角色定义、稳定预设、确定常驻 WI、非零深度静态注入 | system 段 tavern:standing，工具说明之后 |
 | 本轮宏、触发 WI、记忆、世界变化、AN、笔记、历史后条目与 depth=0 内容 | runtime context tavern:turn；历史后条目与 depth=0 保留尾部顺序 |
 | 历史消息、图片、工具调用、工具结果 | 宿主 deriveMessages 与 agent-loop |
-| DeepSeek 官方通道的预设角色、顺序、深度与模板位置 | 同一 AgentLoop 的 Tavern 适配器，在原始 Message[] 上按冻结身份插入 |
+| DeepSeek API-key 官方通道的预设角色、顺序、深度与模板位置 | 同一 AgentLoop 的 Tavern 适配器，在原始 Message[] 上按冻结身份插入 |
 | 历史正则、历史裁剪 | ST 模拟序列与辅助代答 |
 
 live standing 在模拟预算裁剪前构造，历史增长不再导致角色定义被裁掉并钉死。只有确定常驻条目可进 standing：概率、组竞争、sticky/cooldown/delay、递归门槛或本轮宏都走 turn；probability=0 必须尊重。插件通道有独立体积检查，宿主历史/system/tools 的最终窗口与压缩由宿主负责，模拟 token 数不能代替实际请求计量。
@@ -81,11 +81,13 @@ live standing 在模拟预算裁剪前构造，历史增长不再导致角色定
 
 `agent/request` 将已绑定会话的 `deepseek-official` 路由映射到 `tavern-deepseek`。自持有的公开 `DeepSeekAdapter` 复用已注册设置 namespace 的最终配置、凭证、附件、Files 与 API 扩展；`prepareCall` 委托保持同代连接事实，不另开模型请求或重复进入 llm/stream。适配器在副本中保留宿主工具系统前缀，移除 Tavern 两段内容，再按原角色与身份锚点插入布局条目。当前轮载体固定历史后边界，后续工具步骤不移动它；工具调用与结果不能被插入项拆开。历史锚点被合法摘要替代时，只映射至摘要边界，不恢复旧正文；任意丢失或不明来源拒绝。其它供应商路由暂使用上表的 standing/turn 映射。
 
-投影同时读取本次 `prepareCall` 冻结的模型能力。`systemPromptUpdate=in-history` 表示最新 system 完整生效，先合并相邻的 Tavern 系统条目，再使每条中途 system 包含宿主 SDK 和截至该位置的全部系统条目，不能只发送增量预设。合并不跨真实 user/assistant 或其它来源的 system。未声明该能力的模型只读首条 system，因此系统条目合并到首条并记录兼容诊断，user/assistant 的位置不变。完整快照在拼接前逐项计数，累计超过 16 MiB 明确拒绝，避免深度条目放大输出；逻辑布局和宿主历史均不被改写。实际请求可能比两段映射更长，诊断提供处理前后的文本估算和同代模型窗口；估算不含图片与工具编码，不替代供应商实际计量。
+投影同时读取本次 `prepareCall` 冻结的模型能力。`systemPromptUpdate=in-history` 表示最新 system 完整生效，先合并相邻的 Tavern 系统条目，再使每条中途 system 包含宿主 SDK 和截至该位置的全部系统条目，不能只发送增量预设。合并不跨真实 user/assistant 或其它来源的 system。未声明该能力的模型只读首条 system，因此系统条目合并到首条并记录兼容诊断，user/assistant 的位置不变。完整快照在拼接前逐项计数，累计超过 16 MiB 明确拒绝，避免深度条目放大输出；逻辑布局和宿主历史均不被改写。DeepSeek Messages 协议还要求中途 system 位于 user/tool 之后、assistant 或结束之前；不满足时系统条目合并到首条并显示 `messages-system-layout` 诊断。供应商可能合并相邻同角色消息，因此该投影仍不是任意 ST 布局的有线等价物。实际请求可能比两段映射更长，诊断提供处理前后的文本估算和同代模型窗口；估算不含图片与工具编码，不替代供应商实际计量。
 
-assistant 预设条目使用插件来源，绝不伪造持久 assistant/message 的模型来源；末尾 assistant 不代表供应商专用 prefill/prefix，当前未实现该协议。代答仍使用独立的 system/history 请求，采用历史正则结果，不等同于模拟完整角色序列。
+assistant 预设条目只存在于请求副本，携带 tavernProjection 标记，绝不写入持久 assistant/message 或伪造历史模型输出；末尾 assistant 不代表供应商专用 prefill/prefix，当前未实现该协议。代答仍使用独立的 system/history 请求，采用历史正则结果，不等同于模拟完整角色序列。
 
-Tavern 预设挂载官方 `dsh-agent-tool-presentation` 的 `mode: ptc`。七个业务工具由宿主生成 SDK，模型只直接调用 `run_code`；工具规范输出由 schema 验证。独立只读工具声明 `isConcurrencySafe`，可在同一程序内并行；写工具不声明并行，使用宿主独占屏障。依赖前项结果的操作依次 await，中间结果只有程序返回/打印的部分进入模型历史，子调用仍由宿主记录。步骤 notice 按模型 step 去重，不按 PTC 子调用累加；写入确认仍保留。模型编写的 PTC 程序使用宿主运行时，第三方卡片/EJS 继续使用原有隔离边界，不能把第三方脚本转交 PTC 执行。
+Tavern 模式经 `dsh-agent-preset-registry` 注册和撤销，不再生成 `.agent-presets` 文件。设置通过宿主 volatile Config 与 SettingsForms 更新当前 profile；固定 entry id `dsh-tavern` 让宿主可迁移旧 settings.yaml 的同名节。
+
+Tavern 预设挂载官方 `dsh-agent-tool-presentation` 的 `mode: ptc`。七个业务工具由宿主生成 SDK，模型只直接调用 `run_code`；工具规范输出由 schema 验证。独立只读工具声明 `isConcurrencySafe`，可在同一程序内并行；写工具不声明并行，使用宿主独占屏障。依赖前项结果的操作依次 await，中间结果只有程序返回/打印的部分进入模型历史，子调用仍由宿主记录。步骤 notice 按模型 step 去重，不按 PTC 子调用累加；写入确认仍保留。模型编写的 PTC 程序使用宿主 `dsh-ptc-runtime-node` 的子进程运行时，第三方卡片/EJS 继续使用原有隔离边界，不能把第三方脚本转交 PTC 执行。
 
 PTC 程序的非空返回值必须为无损 JSON。工具原始短结果可直接返回；重组 SDK 可选字段时必须省略缺省项或使用 `?? null`，不能生成含 `undefined` 的对象/数组。外层 `invalid-output` 不会自动撤销已完成的子工具写入；写入确认仍有效，格式修复不得重做已经确认成功的操作，无回执时先只读核实。写入仍属于原楼层 WAL，可由正常楼层回滚撤销。该约定通过提示词引导并由宿主校验，不保证模型永不生成非法程序。
 

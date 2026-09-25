@@ -8,8 +8,8 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
-  IconChevronLeftOutline14,
-  IconChevronRightOutline14,
+  IconChevronLeftOutlineMedium,
+  IconChevronRightOutlineMedium,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { CharacterPicker, rememberCharacter } from './characterPicker.js'
 import { BINDING_CHANGED_EVENT } from './actions.js'
@@ -431,7 +431,7 @@ function HeroCharacterSession(props: HeroProps) {
                   aria-label={t('hero.prevGreeting')}
                   onClick={() => void swipe(-1)}
                 >
-                  <IconChevronLeftOutline14 />
+                  <IconChevronLeftOutlineMedium />
                 </button>
                 <span className="dsh-tavern-hero-swipeIdx" role="status" aria-live="polite" aria-atomic="true">
                   {greetingIndex + 1}/{variants.length}
@@ -444,7 +444,7 @@ function HeroCharacterSession(props: HeroProps) {
                   aria-label={t('hero.nextGreeting')}
                   onClick={() => void swipe(1)}
                 >
-                  <IconChevronRightOutline14 />
+                  <IconChevronRightOutlineMedium />
                 </button>
                 <span className="dsh-tavern-hero-swipeHint">{t('hero.swipeHint')}</span>
               </div>

@@ -12,8 +12,8 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
   Modal: (p: { open: boolean; children?: ReactNode; footer?: ReactNode }) => p.open ? <div>{p.children}{p.footer}</div> : null,
   Tooltip: (p: { children?: ReactNode }) => <>{p.children}</>, Toast: () => null,
   Menu: (p: { anchor?: ReactNode }) => <>{p.anchor}</>,
-  IconChevronDownOutline14: () => null, IconSearchOutline16: () => null,
-  IconEditOutline16: () => null, IconTrashOutline16: () => null,
+  IconChevronDownOutlineMedium: () => null, IconSearchOutlineMedium: () => null,
+  IconEditOutlineMedium: () => null, IconTrashOutlineMedium: () => null,
 }))
 
 let view: ReactTestRenderer | undefined

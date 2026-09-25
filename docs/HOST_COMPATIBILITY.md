@@ -1,6 +1,19 @@
 # 宿主兼容记录
 
-当前源码基线为 dsh 0.1.5-rc.2。以下按版本记录观测结果，升级时重新核对，不是永久架构要求。
+当前源码基线为 dsh 0.1.7-rc.2。以下按版本记录观测结果，升级时重新核对，不是永久架构要求。
+
+## 0.1.7-rc.2 升级核对（2026-09-25）
+
+逐包核对公开 npm 的 package.json、lib 和声明：Cordis 4.0.4、Schemastery 3.18.4；宿主包统一锁定 `0.1.7-rc.2`。
+
+- `dsh-agent-presets` 改为 `dsh-agent-preset-registry`，Tavern 用 register/dispose 管理模式；提供业务 service 后再注册预设以满足立即激活。
+- `dsh-settings` 以 Loader 配置和 volatile 值为唯一读写来源，更新后当前实例读取新值；entry id 与旧 `settings.yaml` 的 `dsh-tavern` 节一致。远程 strict codec 必须提供 `create()` 工厂，已移除旧 schema 字段及入口的类型绕过。
+- 新消息将 tool/developer 分为独立 role；剧情历史投影必须跳过。runtime-context、system-prompt、compact-checkpoint 采用新版来源；插件 notice 使用声明扩展，并兼容旧 notice。
+- 官方 DeepSeek 配置和凭据来自 `dsh-llm-deepseek-api-key`；复用公开适配器的 Messages、Files 协议。同代 prepareCall 冻结连接及能力。中途 system 只允许 user/tool 后、assistant 或结束前，否则合入首条并显示兼容说明；累计完整快照仍有 16 MiB 上限。
+- PTC 从 worker-thread codeRuntime 转为 `dsh-ptc-runtime-node` 子进程，真实工具测试启用临时目录沙箱；卡面/EJS 不进入该执行器。
+- 客户端改用宿主实际导出的 Medium 图标，仍使用原生 primitives 和不带同源权限的 iframe。
+
+安装验收使用独立 `DSH_HOME`，通过真实 `dsh plugin --profile web add` 安装本地 tgz，再启动 dsh web；修复了启动时才暴露的 strict codec 故障。未配置模型凭据、未调用真实模型，模型请求由真实 AgentLoop、适配器和工厂 HTTP/SSE 测试覆盖。 界面实际完成工作区选择、Tavern 模式切换、手写角色创建/编辑/绑定和开场白显示；设置写入当前 profile，重启后角色与历史恢复。向独立 home 放入手写旧 settings.yaml 后，宿主将其重命名为 settings.yaml.imported，两项提示词偏好迁移后的 UI 值与新 profile 文件一致。浏览器未报告错误，验收页和宿主均已关闭。干净 npm ci（601 个包、审计 0 已知漏洞）、构建、157 个测试文件 / 2263 项通过 / 1 项 POSIX 跳过、doctor/backup 和 441 文件打包白名单检查通过。
 
 ## 0.1.5-rc.2 角色卡显示与安装环境 UI 复查（2026-09-20）
 

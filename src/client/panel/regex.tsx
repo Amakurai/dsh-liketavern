@@ -5,7 +5,7 @@
 import { useDraftGuard } from '../drafts.js'
 import { useDraftState } from '../draftPersistence.js'
 import { useEffect, useState } from 'react'
-import { IconTrashOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconTrashOutlineMedium } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PromptPreset, RegexRule, RegexScope, RegexTiming } from '../../core/types.js'
 import type { TavernRemote } from '../types.js'
 import { t as tOnce, useT } from '../i18n.js'
@@ -50,7 +50,7 @@ function RuleEditor(props: { rule: RegexRule; onChange: (r: RegexRule) => void; 
         <input aria-label={t('regex.ruleName')} className="dsh-tavern-input" style={{ flex: 1 }} value={rule.name} onChange={(e) => set({ name: e.target.value })} />
         <Badge>{t(SOURCE_LABEL_KEY[rule.source])}</Badge>
         <IconBtn label={t('regex.deleteRule')} danger onClick={props.onDelete}>
-          <IconTrashOutline16 />
+          <IconTrashOutlineMedium />
         </IconBtn>
       </div>
       <div style={{ padding: '2px 16px 14px' }}>

@@ -7,10 +7,10 @@ import { useDraftGuard } from '../drafts.js'
 import { PersistentEditor, useDraftState } from '../draftPersistence.js'
 import { useId, useMemo, useRef, useState } from 'react'
 import {
-  IconChevronDownOutline14,
-  IconPlusOutline16,
-  IconSearchOutline16,
-  IconTrashOutline16,
+  IconChevronDownOutlineMedium,
+  IconPlusOutlineMedium,
+  IconSearchOutlineMedium,
+  IconTrashOutlineMedium,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { WIPosition, WIRole, WISelectiveLogic, WISource, WorldInfoEntry } from '../../core/types.js'
 import { exportLorebook } from '../../state/lorebook.js'
@@ -290,7 +290,7 @@ function LorebookEditorContent(props: LorebookEditorProps & { draftKey: string }
 
       <div className="dsh-tavern-search" style={{ margin: '10px 0 12px' }}>
         <span className="dsh-tavern-searchIcon">
-          <IconSearchOutline16 />
+          <IconSearchOutlineMedium />
         </span>
         <input
           value={query}
@@ -355,7 +355,7 @@ function LorebookEditorContent(props: LorebookEditorProps & { draftKey: string }
                     {entry.keys.length > 0 ? <Badge>{t('lorebookEditor.entry.keys', { count: entry.keys.length })}</Badge> : <Badge>{t('lorebookEditor.entry.noKeys')}</Badge>}
                   </div>
                   <span className={`dsh-tavern-chevron${open ? ' is-open' : ''}`}>
-                    <IconChevronDownOutline14 />
+                    <IconChevronDownOutlineMedium />
                   </span>
                 </div>
                 <div className={`dsh-tavern-collapse${open ? ' is-open' : ''}`}>
@@ -392,7 +392,7 @@ function LorebookEditorContent(props: LorebookEditorProps & { draftKey: string }
       <div className="dsh-tavern-stickyBar">
         <Btn size="md" onClick={addEntry}>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-            <IconPlusOutline16 /> {t('lorebookEditor.newEntry')}
+            <IconPlusOutlineMedium /> {t('lorebookEditor.newEntry')}
           </span>
         </Btn>
         <Btn primary size="md" disabled={busy || !dirty} onClick={() => void save()}>
@@ -640,7 +640,7 @@ function EntryForm(props: {
 
       <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
         <IconBtn label={t('lorebookEditor.deleteEntry')} danger onClick={props.onDelete}>
-          <IconTrashOutline16 />
+          <IconTrashOutlineMedium />
         </IconBtn>
       </div>
     </div>

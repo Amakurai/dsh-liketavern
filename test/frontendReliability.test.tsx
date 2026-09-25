@@ -20,9 +20,9 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
   Modal: (props: { children?: ReactNode; footer?: ReactNode }) => <div>{props.children}{props.footer}</div>,
   Toast: () => null,
   Tooltip: (props: { children?: ReactNode }) => <>{props.children}</>,
-  IconChevronDownOutline14: () => null,
-  IconSearchOutline16: () => null,
-  IconUserOutline16: () => null,
+  IconChevronDownOutlineMedium: () => null,
+  IconSearchOutlineMedium: () => null,
+  IconUserOutlineMedium: () => null,
 }))
 
 const mounted: ReactTestRenderer[] = []

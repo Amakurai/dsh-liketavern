@@ -70,7 +70,7 @@ beforeEach(async () => {
   storyId = (await state.loadBinding('mvu-factory'))!.storyId!
   ctx = new Context()
   new SessionStore(ctx); new AgentRegistry(ctx); new SessionProjectionRegistry(ctx); new SystemPrompt(ctx, {})
-  const loop = new AgentLoop(ctx, { agents: [] }); agent = await loop.create(SessionId('mvu-factory'))
+  const loop = new AgentLoop(ctx, AgentLoop.Config({ agents: [] })); agent = await loop.create(SessionId('mvu-factory'))
   ctx.provide('tavern', { state })
   registerHelperMvuLifecycle(ctx)
   ctx.on('session/event', (session, event) => {

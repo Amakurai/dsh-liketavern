@@ -6,24 +6,13 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
-import { SettingsProvider, type SettingsNamespace } from '@deepseek-ai/dsh-settings'
+import { FileSettings } from './hostSettingsFactory.js'
 import { afterEach, describe, expect, it } from 'vitest'
-import { TAVERN_NS, TavernConfigSchema, resolveConfig } from '../src/node/config.js'
+import { TAVERN_NS, Config, resolveConfig } from '../src/node/config.js'
 import { TavernService } from '../src/node/service.js'
 import { TavernState } from '../src/node/state.js'
 
 /** 存储适配器只把宿主通过验证的命名空间写到测试目录，合并与验证仍走真实 SettingsProvider。 */
-class FileSettingsProvider extends SettingsProvider {
-  readonly writable = true
-  constructor(ctx: Context, private readonly file: string) { super(ctx) }
-  protected async load(): Promise<Record<string, unknown>> { return JSON.parse(await readFile(this.file, 'utf8')) as Record<string, unknown> }
-  protected async persist(ns: SettingsNamespace, section: Record<string, unknown>): Promise<void> {
-    const document = await this.load()
-    document[ns] = section
-    await writeFile(this.file, JSON.stringify(document))
-  }
-  async reload() { this.publish(await this.load()) }
-}
 
 const contexts: Context[] = []
 const roots: string[] = []
@@ -50,9 +39,8 @@ describe('全局提示词偏好', () => {
     await writeFile(file, JSON.stringify({ [TAVERN_NS]: { sampling: { temperature: 0.7 } } }))
     const ctx = new Context()
     contexts.push(ctx)
-    const provider = new FileSettingsProvider(ctx, file)
-    await provider.reload()
-    const scope = provider.register(TAVERN_NS, TavernConfigSchema)
+    const provider = new FileSettings(ctx, file)
+      const scope = await provider.register(TAVERN_NS, Config)
     const state = new TavernState({ root, characters: join(root, 'characters'), lorebooks: join(root, 'library/lorebooks'),
       presets: join(root, 'library/presets'), personas: join(root, 'personas'), regexDir: join(root, 'regex'), sessions: join(root, 'sessions') },
     () => resolveConfig(scope.get()))
@@ -73,9 +61,8 @@ describe('全局提示词偏好', () => {
 
     const restartedCtx = new Context()
     contexts.push(restartedCtx)
-    const restarted = new FileSettingsProvider(restartedCtx, file)
-    await restarted.reload()
-    const restored = restarted.register(TAVERN_NS, TavernConfigSchema)
+    const restarted = new FileSettings(restartedCtx, file)
+      const restored = await restarted.register(TAVERN_NS, Config)
     expect(restored.get().prompts).toEqual(saved.settings.prompts)
     expect(resolveConfig(restored.get()).prompts).toEqual(state.config.prompts)
   })

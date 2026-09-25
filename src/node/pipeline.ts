@@ -91,6 +91,7 @@ export interface PipelineResult {
 export function flattenMessages(messages: readonly Message[], charName: string, userName: string): ChatMessage[] {
   const out: ChatMessage[] = []
   for (const m of messages) {
+    if (m.role === 'tool' || m.role === 'developer') continue
     const text = m.content
       .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
       .map((b) => b.text)
@@ -225,6 +226,7 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
     state.standingRevTags(binding, { personaLorebookId: persona?.lorebookId ?? null }), input.generationType ?? 'normal')
   const hostMessages = input.agent?.session.deriveMessages() ?? []
   const hostHistory = hostMessages.flatMap(message => {
+    if (message.role === 'tool' || message.role === 'developer') return []
     const text = flattenMessages([message], card.name, userName)[0]
     // 无文字图片仍是一条聊天消息，深度计算不能把它吞掉。
     const chat = text ?? (message.content.some(block => block.type === 'image')

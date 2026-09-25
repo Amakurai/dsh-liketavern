@@ -6,7 +6,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { Session } from '@deepseek-ai/dsh-session'
 import '@deepseek-ai/dsh-typert-registry'
-import { TAVERN_NS, TavernConfigSchema, resolveConfig } from './node/config.js'
+import { Config, TAVERN_NS, TavernConfigSchema, resolveConfig } from './node/config.js'
 import { ensureGreeting, retireGreetingOnlyBlankSession } from './node/floors.js'
 import { tavernPaths } from './node/paths.js'
 import { installTavernPreset } from './node/presetInstall.js'
@@ -21,6 +21,7 @@ import { isTavernRuntimeSession } from './node/tavernSession.js'
 import { TYPERT_HOST } from './remote.js'
 
 export const name = 'dsh-liketavern'
+export { Config }
 export const inject = ['settings', 'sessions', 'agents', 'typert', 'workspaceRegistry', 'agentPresets']
 
 /** 从消息内容块中提取纯文本（非 text 块忽略）。 */
@@ -31,19 +32,24 @@ function messageText(content: readonly { type: string; text?: string }[]): strin
     .join('\n')
 }
 
-export async function apply(ctx: Context): Promise<void> {
-  const scope = ctx.settings.register(TAVERN_NS, TavernConfigSchema, { applies: 'live' })
+export async function apply(ctx: Context, config: ReturnType<typeof Config>): Promise<void> {
+  const ns = ctx.fiber.entry?.options.id ?? TAVERN_NS
+  ctx.effect(() => ctx.settings.configure({ auto: false }), 'dsh-tavern settings')
+  const scope = {
+    get: () => TavernConfigSchema(Object.fromEntries(Object.entries(config).map(([key, value]) => [key, value.get()]))),
+    update: (patch: object) => ctx.settings.update(ns, patch),
+  }
   const state = new TavernState(tavernPaths(), () => resolveConfig(scope.get()))
   await state.init()
+  createTavernService(ctx, state, scope)
 
   try {
-    const result = await installTavernPreset()
-    if (result.written.length > 0) ctx.logger.info(`dsh-tavern: agent 预设已安装（${result.written.join(', ')}）`)
+    const disposePreset = await installTavernPreset(ctx)
+    ctx.effect(() => disposePreset, 'dsh-tavern preset')
   } catch (error) {
     ctx.logger.warn(`dsh-tavern: agent 预设安装失败：${error instanceof Error ? error.message : String(error)}`)
   }
 
-  createTavernService(ctx, state, scope)
   registerRequestDiagnostics(ctx, state)
   state.presetAdapter = registerPresetAdapter(ctx, (options, model) => {
     // 摘要、标题和明确的独立代答没有普通聊天布局；仍复用相同官方传输。
@@ -60,6 +66,8 @@ export async function apply(ctx: Context): Promise<void> {
           + (diagnostic.exceedsAvailable ? '估算已超过可用窗口，可能请求失败；请缩短预设、减少深度 system 或清理历史。' : ''))
       } else if (notes.size < 128) notes.add(diagnostic.kind === 'compaction-clamp'
         ? `历史消息 ${diagnostic.messageId} 已压缩，提示词位置映射至摘要 ${diagnostic.summaryMessageId} 的边界。`
+        : diagnostic.kind === 'messages-system-layout'
+        ? 'DeepSeek Messages 不支持此预设的中途 system 位置；全部系统指令合入首条完整提示，保留工具说明。user/assistant 条目仍按布局投影，供应商可能合并相邻同角色消息。'
         : '当前模型仅支持首条 system；系统角色预设合入首条完整提示，user/assistant 角色仍按布局插入。')
     }})
     const projected = projector.project(options, model)
@@ -76,7 +84,7 @@ export async function apply(ctx: Context): Promise<void> {
   preparePresetAdapter()
   ctx.on('llm/adapters-updated', preparePresetAdapter)
   registerHelperMvuLifecycle(ctx)
-  ctx.effect(() => ctx.typert.register(TYPERT_HOST as never), 'dsh-tavern.typert')
+  ctx.effect(() => ctx.typert.register(TYPERT_HOST), 'dsh-tavern.typert')
 
   const retireStuckBlank = (session: Session) => {
     try {

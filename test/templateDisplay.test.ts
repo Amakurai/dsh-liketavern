@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
-import type { SettingsScope } from '@deepseek-ai/dsh-settings'
+import type { TavernSettingsScope } from '../src/node/config.js'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import { createAssistantMessage } from '@deepseek-ai/dsh-llm'
 import { emptyTemplateScopes, type TemplateContext } from '../src/core/template.js'
@@ -446,7 +446,7 @@ it('真实剧情落盘后按顺序重绘，资产修改和重复读取不重跑�
   const persistence={open:async(id:string,access:string)=>{expect(access).toBe('read');inspections++;return {id,header:{id},read:async()=>({events:storedEvents}),close:async()=>{}}},
     load:()=>{throw new Error('展示不能修复或落盘宿主日志')}}
   const ctx={reflect:{provide:()=>{}},get:(key:string)=>key==='sessionPersistence'?persistence:undefined,sessions:{get:()=>live}} as unknown as Context
-  const service=new TavernService(ctx,state,{get:()=>config} as unknown as SettingsScope<TavernConfigRaw>)
+  const service=new TavernService(ctx,state,{get:()=>config} as unknown as TavernSettingsScope)
   for(let i=0;i<2;i++) expect((await service.renderOutputText({sessionId:'s1',text,messageId:5})).parts).toEqual(stored.outputs['5']?.parts)
   config.interactiveCards=false
   const disabled=await service.renderOutputText({sessionId:'s1',text,messageId:5})

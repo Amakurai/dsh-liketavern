@@ -12,9 +12,9 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
   Button: (props: { children?: ReactNode }) => <button>{props.children}</button>,
   Modal: () => null, Tooltip: (props: { children?: ReactNode }) => <>{props.children}</>,
   Toast: () => null, Menu: (props: { anchor?: ReactNode }) => <>{props.anchor}</>,
-  IconChevronDownOutline14: () => null, IconSearchOutline16: () => null, IconUserOutline16: () => null,
-  IconDownloadOutline16: () => null, IconEditOutline16: () => null, IconFolderOpenOutline16: () => null,
-  IconListPenOutline16: () => null, IconTrashOutline16: () => null,
+  IconChevronDownOutlineMedium: () => null, IconSearchOutlineMedium: () => null, IconUserOutlineMedium: () => null,
+  IconDownloadOutlineMedium: () => null, IconEditOutlineMedium: () => null, IconFolderOpenOutlineMedium: () => null,
+  IconListPenOutlineMedium: () => null, IconTrashOutlineMedium: () => null,
 }))
 vi.mock('../src/client/util.js', async importOriginal => ({ ...await importOriginal<typeof import('../src/client/util.js')>(), downloadJson: vi.fn() }))
 

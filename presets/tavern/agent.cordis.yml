@@ -6,7 +6,7 @@
   name: '__AGENT_MODULE__'
 
 # 与原装 ptc 预设相同：只改变当前预设的工具呈现，运行时由宿主提供。
-# selector 会等待 codeRuntime；缺少运行时应在预设激活时明确失败。
+# selector 会等待 ptcRuntime；缺少运行时应在预设激活时明确失败。
 - id: tool-presentation
   name: '@deepseek-ai/dsh-agent-tool-presentation'
   config:

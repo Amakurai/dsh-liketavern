@@ -5,8 +5,8 @@ import { launchEnvironmentOf } from '@deepseek-ai/dsh-launch-environment'
 import { assertUsableApiKey, callConfigEquals, LlmAdapter, LlmError, resolveImageAttachmentAccess,
   type AdapterRegistrationHandle, type GenerateOptions, type LlmModelInfo, type LlmResolvedModelInfo,
   type PreparedAdapterCall, type ResolvedRetryPolicy, type StreamChunk } from '@deepseek-ai/dsh-llm'
-import { Config as DeepSeekConfig, DeepSeekAdapter, DeepSeekFileStore, resolveAdapterOptions,
-  type DeepSeekConnectionOptions } from '@deepseek-ai/dsh-llm-deepseek'
+import { DeepSeekAdapter, DeepSeekFileStore, catalogModelInfo } from '@deepseek-ai/dsh-llm-deepseek'
+import { Config as DeepSeekConfig, plainOptions, resolveAdapterOptions, type ResolvedDeepSeekOptions } from '@deepseek-ai/dsh-llm-deepseek-api-key'
 import { deepFreeze } from '@deepseek-ai/dsh-util-values'
 import type {} from '@deepseek-ai/dsh-attachment'
 import type {} from '@deepseek-ai/dsh-credentials'
@@ -16,7 +16,7 @@ import type {} from '@deepseek-ai/dsh-settings'
 
 export const PRESET_ADAPTER_PROVIDER = 'tavern-deepseek'
 export const PRESET_ADAPTER_SOURCE_PROVIDER = 'deepseek-official'
-const SETTINGS_NS = 'llm-deepseek'
+const SETTINGS_NS = 'llm-deepseek-api-key'
 
 export interface PresetAdapterController {
   /** 在选择 Tavern 路由前准备注册；宿主配置未就绪时明确失败，不猜测 endpoint 或凭证。 */
@@ -61,27 +61,30 @@ class PresetAdapter extends LlmAdapter {
 
 /** 懒注册避免与宿主 namespace 安装顺序竞争；配置和密钥始终来自原有公开服务。 */
 export function registerPresetAdapter(ctx: Context, project: PresetRequestProjection): PresetAdapterController {
-  let lastRaw: unknown, connection: DeepSeekConnectionOptions | undefined
-  const options = (): DeepSeekConnectionOptions => {
-    const raw = ctx.get('settings')?.get(SETTINGS_NS)
-    if (raw === undefined) throw new LlmError('Tavern DeepSeek adapter is waiting for the host llm-deepseek settings namespace.', 'PRESET_ADAPTER_UNAVAILABLE')
+  let lastRaw: unknown, connection: ResolvedDeepSeekOptions | undefined
+  const options = (): ResolvedDeepSeekOptions => {
+    const directory = ctx.get('llm')?.listConfigurableProviders().find(item => item.provider === PRESET_ADAPTER_SOURCE_PROVIDER)
+    const descriptor = ctx.get('settings')?.describe().find(item => item.ns === (directory?.settingsNs ?? SETTINGS_NS))
+    const raw = (directory?.settingsPath ?? []).reduce<unknown>((value, key) => value && typeof value === 'object' ? Reflect.get(value, key) : undefined, descriptor?.value)
+    if (raw === undefined) throw new LlmError('Tavern DeepSeek adapter is waiting for the host llm-deepseek-api-key settings namespace.', 'PRESET_ADAPTER_UNAVAILABLE')
     if (raw !== lastRaw || connection === undefined) {
-      const next = resolveAdapterOptions(DeepSeekConfig(raw), launchEnvironmentOf(ctx))
+      const next = resolveAdapterOptions(plainOptions(DeepSeekConfig(raw)), launchEnvironmentOf(ctx))
       lastRaw = raw; connection = next
     }
     return connection
   }
   // 与官方适配器一样使用公开的持久上传索引；同一实例保留上传复用和并发等待状态。
   const files = new DeepSeekFileStore()
-  const delegate = new DeepSeekAdapter({
+  const delegate = new DeepSeekAdapter<ResolvedDeepSeekOptions>({
+    discoverModels: async provider => options().models.map(model => catalogModelInfo(provider, model)),
     options,
-    resolveApiKey: async snapshot => {
+    resolveAuth: async snapshot => {
       const credentials = ctx.get('credentials')
       const value = credentials === undefined ? launchEnvironmentOf(ctx).get(snapshot.apiKeyEnv)?.value
         : (await credentials.resolve(snapshot.apiKeyEnv))?.value
       if (value === undefined || value.length === 0) throw new LlmError(
         `Tavern cannot resolve the host DeepSeek credential reference ${snapshot.apiKeyEnv}.`, 'MISSING_CREDENTIAL')
-      return assertUsableApiKey(value, 'dsh-tavern', snapshot.apiKeyEnv)
+      return { headers: { 'x-api-key': assertUsableApiKey(value, 'dsh-tavern', snapshot.apiKeyEnv) } }
     },
     resolveUserId: () => getOrCreateAnonymousUserId(),
     resolveAttachments: () => ctx.get('attachments'),
@@ -101,8 +104,8 @@ export function registerPresetAdapter(ctx: Context, project: PresetRequestProjec
     else if (registeredPolicy !== policy) registration.replace([PRESET_ADAPTER_PROVIDER])
     registeredPolicy = policy
   }
-  ctx.on('settings/updated', ns => {
-    if (ns === SETTINGS_NS && registration) ensureRegistered()
+  ctx.on('settings/document-updated', () => {
+    if (registration) ensureRegistered()
   })
   return { ensureRegistered }
 }

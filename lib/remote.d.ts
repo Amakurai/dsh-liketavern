@@ -1,16 +1,3 @@
-/**
- * typert 远端契约（手写，模仿 dsh-typert-generator 产物形态）。
- * host 侧经 ctx.typert.register(TYPERT_HOST) 注册；client 侧经 ctx.remote.$mount(TYPERT_REMOTE) 挂载。
- * 结果 schema 描述裸业务值；{ ok, value | error } 信封是 gateway 传输层约定，
- * 由 host invokeRpc / client invoke 自动生成，这里不能再包。
- * 复杂资产（卡片/预设/世界书 JSON）用宽松 schema，由存储层归一化时严格校验。
- *
- * 刻意用 `zod/mini` 而不是经典 `zod`：本模块被 client 入口导入（TYPERT_REMOTE），
- * 经典 API 会往浏览器 bundle 里塞 ~530 KiB（占产物 59%），mini 只有 ~32 KiB。
- * gateway 两面都只调 `codec.schema.parse(value)`（client 侧 dsh-api-gateway/lib/client.js
- * 的 parseInput、host 侧 lib/index.js 的 decode），mini schema 保留 `.parse()`，校验行为不变。
- * 代价是链式方法要写成顶层函数式：`.min(1)` → `check(minLength(1))`、`.optional()` → `optional(...)`。
- */
 import type { infer as Infer } from 'zod/mini';
 import type { AssembledPrompt } from './core/assemble.js';
 import type { CharacterCompatibilityReport } from './core/characterCompatibility.js';
@@ -1229,7 +1216,7 @@ export interface TavernMethodResults {
 export declare const TYPERT_HOST: {
     package: string;
     face: "host";
-    schemas: unknown[];
+    schemas: never[];
     invocations: {
         id: string;
         service: string;
@@ -1245,7 +1232,7 @@ export declare const TYPERT_HOST: {
             codec: {
                 mode: "strict";
                 typeSymbol: string;
-                schema: import("zod/mini").ZodMiniObject<{
+                create: () => import("zod/mini").ZodMiniObject<{
                     sessionId: import("zod/mini").ZodMiniString<string>;
                     storyId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
@@ -1632,7 +1619,7 @@ export declare const TYPERT_HOST: {
         result: {
             mode: "strict";
             typeSymbol: string;
-            schema: import("zod/mini").ZodMiniUnknown | import("zod/mini").ZodMiniObject<{
+            create: () => import("zod/mini").ZodMiniUnknown | import("zod/mini").ZodMiniObject<{
                 swipe: import("zod/mini").ZodMiniNullable<import("zod/mini").ZodMiniObject<{
                     turn: import("zod/mini").ZodMiniNumberFormat;
                     index: import("zod/mini").ZodMiniNumberFormat;
@@ -1646,21 +1633,21 @@ export declare const TYPERT_HOST: {
         services: {
             description: string;
             summary: string;
-            tags: string[];
+            tags: never[];
             jsDoc: string;
             key: string;
             exportName: string;
             members: {
-                kind: string;
+                kind: "method";
                 name: string;
                 signature: string;
                 summary: string;
                 jsDoc: string;
             }[];
-            types: unknown[];
+            types: never[];
         }[];
-        events: unknown[];
-        objects: unknown[];
+        events: never[];
+        objects: never[];
     };
 };
 /** client 侧贡献：ctx.remote.$mount(TYPERT_REMOTE) 后以 ctx.remote.tavern.<method>(request) 调用。 */
@@ -1681,7 +1668,7 @@ export declare const TYPERT_REMOTE: {
             codec: {
                 mode: "strict";
                 typeSymbol: string;
-                schema: import("zod/mini").ZodMiniObject<{
+                create: () => import("zod/mini").ZodMiniObject<{
                     sessionId: import("zod/mini").ZodMiniString<string>;
                     storyId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
@@ -2068,7 +2055,7 @@ export declare const TYPERT_REMOTE: {
         result: {
             mode: "strict";
             typeSymbol: string;
-            schema: import("zod/mini").ZodMiniUnknown | import("zod/mini").ZodMiniObject<{
+            create: () => import("zod/mini").ZodMiniUnknown | import("zod/mini").ZodMiniObject<{
                 swipe: import("zod/mini").ZodMiniNullable<import("zod/mini").ZodMiniObject<{
                     turn: import("zod/mini").ZodMiniNumberFormat;
                     index: import("zod/mini").ZodMiniNumberFormat;

@@ -3,7 +3,7 @@
  * 会话头部与空白页选角共用，避免一套 outline 按钮、一套 pill。
  */
 import type { ReactNode } from 'react'
-import { IconChevronDownOutline14 } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconChevronDownOutlineMedium } from '@deepseek-ai/dsh-client-ui-primitives'
 import { Avatar, Skeleton } from './util.js'
 import './styles.js'
 
@@ -52,7 +52,7 @@ export function TavernSeatChip(props: {
           <span className="dsh-tavern-seatLabel">{props.label}</span>
         </>
       )}
-      {props.chevron !== false ? <IconChevronDownOutline14 className="dsh-tavern-seatChevron" /> : null}
+      {props.chevron !== false ? <IconChevronDownOutlineMedium className="dsh-tavern-seatChevron" /> : null}
       {props.trailing}
     </button>
   )

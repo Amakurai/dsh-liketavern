@@ -1,3 +1,4 @@
+import { isTavernNotice } from './messageSources.js'
 /** 自动 MVU 的宿主事务：正常 stop 登记任务，短期沙箱租约冻结读取，数据和幂等回执同文件经楼层 WAL 提交。 */
 import {createHash,randomUUID} from 'node:crypto'
 import type {Context} from '@deepseek-ai/cordis'
@@ -49,7 +50,7 @@ function verifyContinuation(events:readonly SessionEvent[],job:Pick<HelperMvuJob
     const start=events.find(event=>event.type==='turn/start'&&event.data.turn===target.turn&&event.seq<target.seq)
     if(!start)return
     const continued=events.some(event=>event.type==='user/message'&&event.seq>start.seq&&event.seq<target.seq
-      &&(event.surfaceOp===undefined||event.surfaceOp==='append')&&event.data.source.kind==='plugin'&&event.data.source.plugin==='dsh-tavern'&&event.data.source.form==='notice'
+      &&(event.surfaceOp===undefined||event.surfaceOp==='append')&&isTavernNotice(event.data.source)
       &&isContinueInstruction(event.data.content.filter(block=>block.type==='text').map(block=>block.text).join('\n')))
     if(!continued)return
     const previous=[...events].reverse().find((event):event is SessionEvent<'assistant/message'>=>event.type==='assistant/message'&&event.seq<start.seq

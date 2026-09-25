@@ -1,3 +1,4 @@
+import type {} from './messageSources.js'
 /**
  * Tavern 模型工具：记忆检索/写入/更新、世界书按条阅读、世界状态更新、资产清单/阅读。
  * 全部经 exec.agent 定位会话绑定与角色工作区；写操作经 WorkspaceFs（落入楼层 WAL）。
@@ -108,7 +109,7 @@ function injectWriteAck(exec: ToolRunContext, detail: string): void {
     agent.inject(
       createUserMessage({
         content: [{ type: 'text', text: neutralizeDshMustache(`${TURN_WRITE_ACK_PREFIX}${detail}`) }],
-        source: { kind: 'plugin', plugin: 'dsh-tavern', form: 'notice', summary: '同轮写入确认' },
+        source: { kind: 'dsh-tavern', form: 'notice', summary: '同轮写入确认' },
       }),
     )
   } catch {
@@ -138,7 +139,7 @@ function maybeInjectStepNotice(state: TavernState, exec: ToolRunContext): void {
     agent.inject(
       createUserMessage({
         content: [{ type: 'text', text: neutralizeDshMustache(formatTurnStepNotice(nextStep)) }],
-        source: { kind: 'plugin', plugin: 'dsh-tavern', form: 'notice', summary: '多步收口提示' },
+        source: { kind: 'dsh-tavern', form: 'notice', summary: '多步收口提示' },
       }),
     )
   } catch {

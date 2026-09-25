@@ -3,7 +3,7 @@
  * 避免非 Tavern 会话被楼层 WAL、开场白写入等副作用碰到。
  */
 import type { Context } from '@deepseek-ai/cordis'
-import type { AgentPresets } from '@deepseek-ai/dsh-agent-presets'
+import type { AgentPresetRegistry } from '@deepseek-ai/dsh-agent-preset-registry'
 import type { Session } from '@deepseek-ai/dsh-session'
 import { isTavernPresetId } from '../core/tavernMode.js'
 
@@ -32,7 +32,7 @@ export function sessionPresetId(ctx: Context, session: Session): string | null {
 
 /** 活 agent 的组成预设优先；否则读会话预设投影（header + 之后的 agent-preset/selected）。 */
 export function isTavernRuntimeSession(ctx: Context, session: Session): boolean {
-  const presets = ctx.get('agentPresets') as AgentPresets | undefined
+  const presets = ctx.get('agentPresets') as AgentPresetRegistry | undefined
   const agent = ctx.agents.get(session.id)
   const live = agent && presets ? presets.composedPreset(agent.ctx) : undefined
   return isTavernPresetId(live ?? sessionPresetId(ctx, session))

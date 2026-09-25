@@ -136,7 +136,7 @@ describe('doctor 聚合报告', () => {
     }
 
     const report = await runDoctor({ home: linkedHome, nodeVersion: '24.0.0', pluginVersion: '9.8.7',
-      dshInstalledVersion: '0.1.5-rc.2', dshExpectedVersion: '0.1.5-rc.2' })
+      dshInstalledVersion: '0.1.7-rc.2', dshExpectedVersion: '0.1.7-rc.2' })
     expect(report.ok).toBe(false)
     expect(report.storage).toMatchObject({ homeStatus: 'link', dataRootStatus: 'link' })
     expect(report.statistics.characters.directories).toBe(0)
@@ -152,7 +152,7 @@ describe('doctor 聚合报告', () => {
     await writeFile(join(cardRoot, 'card.json'), JSON.stringify({ name: '不应输出的角色' }))
     await writeFile(join(cardRoot, '.archive.json'), JSON.stringify({ version: 1, archivedAt: 'not-a-date' }))
     const report = await runDoctor({ home, nodeVersion: '24.0.0', pluginVersion: '9.8.7',
-      dshInstalledVersion: '0.1.5-rc.2', dshExpectedVersion: '0.1.5-rc.2' })
+      dshInstalledVersion: '0.1.7-rc.2', dshExpectedVersion: '0.1.7-rc.2' })
     expect(report.ok).toBe(false)
     expect(report.statistics.characters).toMatchObject({ directories: 1, healthy: 0, unhealthy: 1, archived: 0 })
     expect(report.issues).toContainEqual({ code: 'CHARACTER_ARCHIVE_MARKER_INVALID', severity: 'error', count: 1 })
@@ -210,7 +210,7 @@ describe('doctor 聚合报告', () => {
     await writeFile(oversized, '')
     await truncate(oversized, 16 * 1024 * 1024 + 1)
     const report = await runDoctor({ home, nodeVersion: '24.0.0', pluginVersion: '9.8.7',
-      dshInstalledVersion: '0.1.5-rc.2', dshExpectedVersion: '0.1.5-rc.2' })
+      dshInstalledVersion: '0.1.7-rc.2', dshExpectedVersion: '0.1.7-rc.2' })
     expect(report.ok).toBe(true)
     expect(report.statistics.files).toMatchObject({ total: 1, json: 1, oversizedJson: 1, invalidJson: 0 })
     expect(report.issues).toContainEqual({ code: 'JSON_VALIDATION_LIMIT_EXCEEDED', severity: 'warning', count: 1 })
@@ -222,7 +222,7 @@ describe('doctor 聚合报告', () => {
     await mkdir(cardRoot)
     await writeFile(join(cardRoot, 'card.json'), JSON.stringify({ name: '预算内不应回显', description: 'x'.repeat(256) }))
     const report = await runDoctor({ home, nodeVersion: '24.0.0', pluginVersion: '9.8.7', readBudgetBytes: 32,
-      dshInstalledVersion: '0.1.5-rc.2', dshExpectedVersion: '0.1.5-rc.2' })
+      dshInstalledVersion: '0.1.7-rc.2', dshExpectedVersion: '0.1.7-rc.2' })
     expect(report.ok).toBe(true)
     expect(report.statistics.characters).toMatchObject({ directories: 1, healthy: 0, unhealthy: 0, uninspected: 1 })
     expect(report.statistics.files.scanTruncated).toBe(true)
@@ -272,7 +272,7 @@ describe('doctor CLI', () => {
     expect(packageJson.bin).toMatchObject({ 'dsh-tavern-doctor': './lib/doctor.js' })
     expect(packageJson.exports['./doctor']).toEqual({ types: './lib/doctor.d.ts', default: './lib/doctor.js' })
     expect(packageJson.scripts.doctor).toBe('node lib/doctor.js')
-    expect(packageJson.peerDependencies['@deepseek-ai/dsh']).toBe('0.1.5-rc.2')
+    expect(packageJson.peerDependencies['@deepseek-ai/dsh']).toBe('0.1.7-rc.2')
   })
 
   it('只接受只读参数，未知修复参数直接拒绝', () => {
@@ -304,15 +304,15 @@ describe('doctor 宿主版本', () => {
 
   it('精确匹配 peer 版本时报告兼容', async () => {
     const report = await runDoctor({ home, nodeVersion: '24.0.0', pluginVersion: '9.8.7' })
-    expect(report.runtime.dsh).toEqual({ installedVersion: '0.1.5-rc.2', expectedVersion: '0.1.5-rc.2', compatible: true })
-    expect(areDshVersionsCompatible('0.1.5-rc.2+host', '0.1.5-rc.2+plugin')).toBe(true)
+    expect(report.runtime.dsh).toEqual({ installedVersion: '0.1.7-rc.2', expectedVersion: '0.1.7-rc.2', compatible: true })
+    expect(areDshVersionsCompatible('0.1.7-rc.2+host', '0.1.7-rc.2+plugin')).toBe(true)
   })
 
   it('已安装版本不匹配时固定报错并影响健康状态', async () => {
     const report = await runDoctor({ home, nodeVersion: '24.0.0', pluginVersion: '9.8.7',
-      dshInstalledVersion: '0.1.5-rc.1', dshExpectedVersion: '0.1.5-rc.2' })
+      dshInstalledVersion: '0.1.5-rc.1', dshExpectedVersion: '0.1.7-rc.2' })
     expect(report.ok).toBe(false)
-    expect(report.runtime.dsh).toEqual({ installedVersion: '0.1.5-rc.1', expectedVersion: '0.1.5-rc.2', compatible: false })
+    expect(report.runtime.dsh).toEqual({ installedVersion: '0.1.5-rc.1', expectedVersion: '0.1.7-rc.2', compatible: false })
     expect(report.issues).toContainEqual({ code: 'DSH_VERSION_INCOMPATIBLE', severity: 'error', count: 1 })
   })
 

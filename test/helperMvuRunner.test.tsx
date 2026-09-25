@@ -9,7 +9,7 @@ import type {TavernRemote} from '../src/client/types.js'
 import type {HelperMvuWork} from '../src/core/helperMvu.js'
 import type {HelperSnapshot} from '../src/core/helperRuntime.js'
 vi.mock('@deepseek-ai/dsh-client-ui-primitives',()=>({
-  IconChevronDownOutline14:()=>null,Menu:()=>null,
+  IconChevronDownOutlineMedium:()=>null,Menu:()=>null,
   Tooltip:(p:{children?:ReactNode})=><>{p.children}</>,Button:(p:{children?:ReactNode})=><button>{p.children}</button>,
 }))
 let view:ReactTestRenderer|undefined,events:EventTarget

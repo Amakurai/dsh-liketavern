@@ -20,7 +20,7 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
   Modal: (props: { open: boolean; children?: ReactNode; footer?: ReactNode }) => props.open ? <div role="dialog">{props.children}{props.footer}</div> : null,
   Tooltip: (props: { children?: ReactNode }) => <>{props.children}</>,
   Toast: () => null, Menu: (props: { anchor?: ReactNode }) => <>{props.anchor}</>,
-  IconChevronDownOutline14: () => null, IconSearchOutline16: () => null, IconUserOutline16: () => null,
+  IconChevronDownOutlineMedium: () => null, IconSearchOutlineMedium: () => null, IconUserOutlineMedium: () => null,
 }))
 
 type Stored = NonNullable<TavernMethodResults['getEditorDraft']['draft']>

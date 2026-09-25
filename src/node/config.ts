@@ -1,6 +1,6 @@
 /**
  * 插件设置（settings namespace `dsh-tavern`）。
- * 用户层覆盖经 dsh-settings 持久化到 ~/.dsh/settings.yaml，UI 设置面板读写。
+ * 用户层覆盖经 dsh-settings 的 volatile Config 持久化到当前 profile，UI 设置面板读写。
  */
 import z from '@deepseek-ai/schemastery'
 import { DEFAULT_SAMPLING, DEFAULT_WI_SETTINGS, type SamplingSettings, type WorldInfoGlobalSettings } from '../core/types.js'
@@ -118,6 +118,26 @@ export const TavernConfigSchema = z.object({
 })
 
 export type TavernConfigRaw = ReturnType<typeof TavernConfigSchema>
+
+/** 宿主 0.1.7 的配置表单读取 volatile 字段，保存到当前 profile 并即时更新。 */
+export const Config = z.object({
+  locale: TavernConfigSchema.dict!.locale!.volatile(),
+  prompts: PromptsSchema.volatile(),
+  sampling: SamplingSchema.volatile(),
+  worldInfo: WorldInfoSchema.volatile(),
+  memory: MemorySchema.volatile(),
+  defaults: SessionDefaultsSchema.volatile(),
+  interactiveCards: z.boolean().default(true).volatile(),
+  cascadeDeleteEmbeddedBook: z.boolean().default(true).volatile(),
+  cardNetworkWhitelist: z.array(String).default([]).volatile(),
+  triggerLogMax: z.number().min(10).default(200).volatile(),
+})
+
+/** 业务服务只读当前值并通过宿主表单写入，不保留失效的旧 SettingsScope。 */
+export interface TavernSettingsScope {
+  get(): TavernConfigRaw
+  update(patch: object): Promise<void>
+}
 
 /** 全局卡级覆盖偏好；当前轮冻结计划不因设置保存而重算。 */
 export interface TavernPromptPreferences {

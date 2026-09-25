@@ -12,7 +12,7 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
   Button: (props: ButtonHTMLAttributes<HTMLButtonElement>) => <button {...props} />,
   Toast: (props: { text: string }) => <div data-toast>{props.text}</div>,
   Modal: () => null, Menu: () => null, Tooltip: () => null,
-  IconChevronDownOutline14: () => null, IconSearchOutline16: () => null, IconUserOutline16: () => null,
+  IconChevronDownOutlineMedium: () => null, IconSearchOutlineMedium: () => null, IconUserOutlineMedium: () => null,
 }))
 
 const PROJECT = 'https://github.com/Amakurai/dsh-liketavern'

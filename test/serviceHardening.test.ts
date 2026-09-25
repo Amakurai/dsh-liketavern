@@ -23,7 +23,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import { Session } from '@deepseek-ai/dsh-session'
 import { greetingMessage } from '../src/node/greetingSeed.js'
-import type { SettingsScope } from '@deepseek-ai/dsh-settings'
+import type { TavernSettingsScope } from '../src/node/config.js'
 import { defaultPreset } from '../src/core/assemble.js'
 import { estimateTokens } from '../src/core/tokenize.js'
 import type { CharacterCard, PromptPreset } from '../src/core/types.js'
@@ -63,7 +63,7 @@ beforeEach(async () => {
     update: async (patch: object) => {
       settingsRaw = { ...settingsRaw, ...(patch as Partial<TavernConfigRaw>) }
     },
-  } as unknown as SettingsScope<TavernConfigRaw>
+  } as unknown as TavernSettingsScope
   sessions.clear()
   const ctx = { reflect: { provide: () => {} }, get: () => undefined,
     sessions: { get: (id: string) => sessions.get(id) }, agents: { get: () => undefined },

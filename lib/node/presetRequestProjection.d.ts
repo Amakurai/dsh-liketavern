@@ -20,6 +20,8 @@ export type PresetProjectionDiagnostic = {
 } | {
     kind: 'leading-system-only';
 } | {
+    kind: 'messages-system-layout';
+} | {
     kind: 'text-budget';
     beforeTextTokens: number;
     afterTextTokens: number;
@@ -33,6 +35,8 @@ export interface PresetProjectionOptions {
     onDiagnostic?: (diagnostic: PresetProjectionDiagnostic) => void;
     /** 未提供时只生成逻辑布局；真实适配器必须提供本次 prepareCall 冻结的模型能力。 */
     model?: ProjectionModel;
+    /** DeepSeek Messages 只允许 user/tool 之后、assistant 之前或请求末尾更新 system。 */
+    messagesApi?: boolean;
 }
 declare module '@deepseek-ai/dsh-llm' {
     interface MessageSourceMap {

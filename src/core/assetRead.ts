@@ -16,7 +16,8 @@ export function resolveReadableAssetPath(raw: string): { ok: true; path: string 
   const slashed = trimmed.replaceAll('\\', '/')
   if (slashed.startsWith('/') || /^[A-Za-z]:/.test(slashed)) return { ok: false, error: '禁止绝对路径' }
   const parts = slashed.split('/')
-  if (parts.some((p) => p === '' || p === '..')) return { ok: false, error: '路径不合法' }
+  // Windows 的冒号还可打开 NTFS alternate data stream；它不在目录中出现，不能按扩展名白名单放行。
+  if (parts.some((p) => p === '' || p === '..' || p.includes(':'))) return { ok: false, error: '路径不合法' }
   // 先归一化再判定：'.' 段必须在 WAL 前缀比对之前折掉，且返回的 path 用折叠后的规范形式。
   // 否则 'state/./wal/x.jsonl' 能绕过下面的前缀检查，而 WorkspaceFs.abs 又会把它还原成 WAL 路径。
   const path = parts.filter((p) => p !== '.').join('/')

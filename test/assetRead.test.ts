@@ -26,6 +26,8 @@ describe('resolveReadableAssetPath', () => {
     expect(resolveReadableAssetPath('state/wal/1.json').ok).toBe(false)
     expect(resolveReadableAssetPath('.archive.json').ok).toBe(false)
     expect(resolveReadableAssetPath('card.png').ok).toBe(false)
+    expect(resolveReadableAssetPath('journal.md:private.txt').ok).toBe(false)
+    expect(resolveReadableAssetPath('memory/notes.md:private.txt').ok).toBe(false)
   })
 
   it("'.' 段折叠后再判定 WAL，绕不过前缀检查", () => {

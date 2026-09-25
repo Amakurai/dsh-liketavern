@@ -1,5 +1,5 @@
 /** 原生 PTC 集成：真实宿主注册表/worker/Session 与临时剧情文件，验证呈现隔离、并行读、写屏障和 WAL 回滚。 */
-import { mkdtemp, rm, readFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, readFile, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -115,6 +115,24 @@ it('一次程序完成并行读取并裁剪结果；多子调用只发一条步�
   const notices = inject.mock.calls.map(([message]) => JSON.stringify(message))
   expect(notices.filter(text => text.includes(TURN_STEP_NOTICE_PREFIX))).toHaveLength(1)
   expect(agent.session.snapshotEvents().filter(event => event.type === 'tool/ptc-dispatch')).toHaveLength(4)
+})
+
+it('资产工具拒绝链接目录指向剧情外的文本，目录也不广告链接', async () => {
+  const ws = await workspace()
+  const privateDir = join(root, 'private')
+  await mkdir(privateDir)
+  await writeFile(join(privateDir, 'secret.md'), '剧情外的私有文本')
+  await mkdir(join(ws.fs.root, 'memory'), { recursive: true })
+  await symlink(privateDir, join(ws.fs.root, 'memory', 'linked.md'), process.platform === 'win32' ? 'junction' : 'dir')
+  const result = await run(`
+    const file = await tools.tavern_asset_read({path:'memory/linked.md/secret.md'});
+    const catalog = await tools.tavern_asset_list({});
+    return {file, files:catalog.files};
+  `)
+  expect(result.isError, JSON.stringify(result.content)).toBe(false)
+  expect(result.value).toMatchObject({ result: { file: { ok: false, error: '资产路径不能经过链接' } } })
+  expect(JSON.stringify(result.value)).not.toContain('剧情外的私有文本')
+  expect(JSON.stringify(result.value)).not.toContain('memory/linked.md')
 })
 
 it('读写混排保持独占顺序，结果可直接引用；同层回滚撤销全部派生事实', async () => {

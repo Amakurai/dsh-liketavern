@@ -1,6 +1,9 @@
 import type { Wal } from './wal.js';
 /** 历史占位：旧版曾把非会话写入记入名为 non-floor 的 WAL 单元。现已不再使用。 */
 export declare const NON_FLOOR = "non-floor";
+/** 资产读取拒绝磁盘链接，避免一个看似安全的相对路径实际指向 WAL、兄弟剧情或工作区外。 */
+export declare class WorkspaceLinkError extends Error {
+}
 export declare class WorkspaceFs {
     readonly root: string;
     private readonly wal;
@@ -27,7 +30,10 @@ export declare class WorkspaceFs {
      * 日志被判定损坏，进而阻断该剧情之后所有回退与分支。盘符与 WAL 自身目录同样拒绝。
      */
     private walPath;
-    readText(relPath: string): Promise<string | null>;
+    private assertNoLinks;
+    readText(relPath: string, options?: {
+        rejectLinks?: boolean;
+    }): Promise<string | null>;
     /** 判断路径是否存在（文件或目录）。 */
     exists(relPath: string): Promise<boolean>;
     /**

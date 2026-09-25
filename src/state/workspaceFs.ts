@@ -12,8 +12,8 @@
  * entry 提交，不再触碰共享句柄的 floor。
  */
 import { Buffer } from 'node:buffer'
-import { mkdir, readFile, readdir, rm, stat } from 'node:fs/promises'
-import { join, normalize, resolve, sep } from 'node:path'
+import { lstat, mkdir, readFile, readdir, rm, stat } from 'node:fs/promises'
+import { join, normalize, relative, resolve, sep } from 'node:path'
 import type { Wal } from './wal.js'
 import { atomicWrite } from './atomicWrite.js'
 import { withWorkspaceLock } from './workspaceLock.js'
@@ -23,6 +23,9 @@ export const NON_FLOOR = 'non-floor'
 
 /** 严格 UTF-8 解码器：非法字节序列抛错；ignoreBOM 保留开头的 BOM 字符，确保快照可还原原始字节。 */
 const STRICT_UTF8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true })
+
+/** 资产读取拒绝磁盘链接，避免一个看似安全的相对路径实际指向 WAL、兄弟剧情或工作区外。 */
+export class WorkspaceLinkError extends Error {}
 
 /**
  * 字节 → WAL 快照：文本按 UTF-8 保存，二进制按 base64 保存并显式记录编码。
@@ -96,9 +99,24 @@ export class WorkspaceFs {
     return path
   }
 
-  async readText(relPath: string): Promise<string | null> {
+  private async assertNoLinks(abs: string): Promise<void> {
+    let current = this.root
+    for (const segment of ['', ...relative(this.root, abs).split(sep).filter(Boolean)]) {
+      if (segment) current = join(current, segment)
+      try {
+        if ((await lstat(current)).isSymbolicLink()) throw new WorkspaceLinkError(`工作区资产路径不能经过链接: ${abs}`)
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+        throw error
+      }
+    }
+  }
+
+  async readText(relPath: string, options?: { rejectLinks?: boolean }): Promise<string | null> {
     try {
-      return await readFile(this.abs(relPath), 'utf8')
+      const abs = this.abs(relPath)
+      if (options?.rejectLinks) await this.assertNoLinks(abs)
+      return await readFile(abs, 'utf8')
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
       throw error
@@ -223,7 +241,7 @@ export class WorkspaceFs {
         const childRel = rel ? `${rel}/${e.name}` : e.name
         if (e.isDirectory()) {
           if (recursive && !skipDir?.(childRel)) await walk(join(dir, e.name), childRel)
-        } else out.push(childRel)
+        } else if (e.isFile()) out.push(childRel)
       }
     }
     await walk(base, '')

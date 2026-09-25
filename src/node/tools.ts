@@ -42,6 +42,7 @@ import { rebuildIndex } from '../state/workspace.js'
 import { MemoryStore } from '../state/memory.js'
 import { WorldDeltaStore } from '../state/worlddelta.js'
 import { isStoryPath } from '../state/story.js'
+import { WorkspaceLinkError } from '../state/workspaceFs.js'
 import type { WorkspaceFs } from '../state/workspaceFs.js'
 import type { SessionBinding } from './bindings.js'
 import { loadBoundLoreEntries } from './pipeline.js'
@@ -524,7 +525,14 @@ export function registerTavernTools(ctx: Context, state: TavernState): void {
         if (pathArg?.trim()) {
           const resolvedPath = resolveReadableAssetPath(pathArg)
           if (!resolvedPath.ok) return { ok: false, error: resolvedPath.error }
-          const body = await (isStoryPath(resolvedPath.path) ? resolved.ws.fs : resolved.assetFs).readText(resolvedPath.path)
+          let body: string | null
+          try {
+            body = await (isStoryPath(resolvedPath.path) ? resolved.ws.fs : resolved.assetFs)
+              .readText(resolvedPath.path, { rejectLinks: true })
+          } catch (error) {
+            if (error instanceof WorkspaceLinkError) return { ok: false, error: '资产路径不能经过链接' }
+            throw error
+          }
           if (body === null) return { ok: false, error: `not-found：${resolvedPath.path}` }
           const clipped = clipAssetText(body)
           out.file = {

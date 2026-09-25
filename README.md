@@ -5,7 +5,7 @@
 **在 DeepSeek Harness 的 `dsh web` 中使用角色卡、世界书与长期记忆，开启 Tavern 式角色扮演。**
 
 [![Release](https://img.shields.io/badge/version-v0.4.0-blue.svg)](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.4.0)
-[![dsh](https://img.shields.io/badge/dsh-0.1.5--rc.2-informational.svg)](https://deepseek-harness.github.io/deepseek-harness/)
+[![dsh](https://img.shields.io/badge/dsh-0.1.7--rc.2-informational.svg)](https://deepseek-harness.github.io/deepseek-harness/)
 [![Node.js](https://img.shields.io/badge/node-%E2%89%A524-brightgreen.svg)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 

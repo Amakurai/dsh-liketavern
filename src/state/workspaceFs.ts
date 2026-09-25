@@ -224,10 +224,11 @@ export class WorkspaceFs {
    * state/wal、memory/archive 这类只增不查的目录应在遍历时直接排除，
    * 而不是全棵走完再由调用方过滤。
    */
-  async list(prefix = '', options?: { recursive?: boolean; skipDir?: (relDir: string) => boolean }): Promise<string[]> {
+  async list(prefix = '', options?: { recursive?: boolean; skipDir?: (relDir: string) => boolean; rejectLinks?: boolean }): Promise<string[]> {
     const recursive = options?.recursive !== false
     const skipDir = options?.skipDir
     const base = this.abs(prefix)
+    if (options?.rejectLinks) await this.assertNoLinks(base)
     const out: string[] = []
     const walk = async (dir: string, rel: string): Promise<void> => {
       let entries
@@ -239,6 +240,10 @@ export class WorkspaceFs {
       }
       for (const e of entries) {
         const childRel = rel ? `${rel}/${e.name}` : e.name
+        if (e.isSymbolicLink()) {
+          if (options?.rejectLinks) throw new WorkspaceLinkError(`工作区目录不能包含链接: ${prefix ? `${prefix}/${childRel}` : childRel}`)
+          continue
+        }
         if (e.isDirectory()) {
           if (recursive && !skipDir?.(childRel)) await walk(join(dir, e.name), childRel)
         } else if (e.isFile()) out.push(childRel)

@@ -85,7 +85,8 @@ export async function snapshotStory(options: {
       await dest.ensureDir()
       const paths = ['journal.md', 'assets/chat-lorebook.json', 'state/world-delta.jsonl', 'state/template.json', 'state/helper.json']
       for (const directory of ['memory', 'state/wi-timers', ...(options.includeWal ? ['state/wal'] : [])]) {
-        for (const file of await source.list(directory)) paths.push(`${directory}/${file}`)
+        // 资产目录可忽略链接，但剧情快照必须明确拒绝，避免静默发布丢失文件的分支。
+        for (const file of await source.list(directory, { rejectLinks: true })) paths.push(`${directory}/${file}`)
       }
       for (const path of paths) {
         // 外部链接不属于快照；避免本机手改的 junction/symlink 把其它目录带进分支。

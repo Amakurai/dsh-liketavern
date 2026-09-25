@@ -1,5 +1,5 @@
 /** 剧情隔离集成：真实文件存储 + 模拟宿主，覆盖分支、编辑、迁移、失败发布、并发卡片修改。 */
-import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, readFile, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -153,6 +153,19 @@ it('源 WAL 损坏时拒绝分支，宿主尚未创建子会话且原状态完�
   expect(created).not.toHaveBeenCalled()
   expect((await (await workspace('parent')).memory.list())[0]!.body).toBe('门打开了')
   expect(await state.listStories(cardId)).toHaveLength(1)
+})
+
+it('来源剧情含链接目录时拒绝分支，不悄悄发布缺文件的子剧情', async () => {
+  const ws = await workspace('parent')
+  const outside = join(root, 'outside-memory')
+  await mkdir(outside)
+  await writeFile(join(outside, 'private.md'), '不属于剧情的文件')
+  await mkdir(join(ws.fs.root, 'memory'), { recursive: true })
+  await symlink(outside, join(ws.fs.root, 'memory', 'linked'), process.platform === 'win32' ? 'junction' : 'dir')
+  await expect(regenerate({ ctx, state }, 'parent')).rejects.toThrow('链接')
+  expect(created).not.toHaveBeenCalled()
+  expect(await state.listStories(cardId)).toHaveLength(1)
+  expect(await readFile(join(outside, 'private.md'), 'utf8')).toBe('不属于剧情的文件')
 })
 
 it('并发卡片 patch 锁住完整读改写，不丢另一字段', async () => {

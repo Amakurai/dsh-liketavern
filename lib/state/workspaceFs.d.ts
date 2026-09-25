@@ -74,6 +74,7 @@ export declare class WorkspaceFs {
     list(prefix?: string, options?: {
         recursive?: boolean;
         skipDir?: (relDir: string) => boolean;
+        rejectLinks?: boolean;
     }): Promise<string[]>;
     /**
      * 列出 prefix 本层文件及其 mtime/size（非递归）。

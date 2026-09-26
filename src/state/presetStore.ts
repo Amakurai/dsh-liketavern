@@ -170,7 +170,7 @@ function pickPromptOrder(promptOrder: unknown): OrderItem[] | null {
   for (const block of promptOrder) {
     if (!isRecord(block) || !Array.isArray(block.order)) continue
     const items = flattenOrderItems(block.order)
-    if (items.length === 0) continue
+    // 空顺序也是明确选择：不能跳过首选角色而启用旧角色的提示词。
     blocks.push({ id: toNum(block.character_id, Number.NaN), items })
   }
   if (blocks.length === 0) return []

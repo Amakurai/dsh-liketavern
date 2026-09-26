@@ -25,7 +25,7 @@ export declare class WorldDeltaStore {
     append(input: Omit<WorldDelta, 'id' | 'ts'> & {
         ts?: string;
     }): Promise<WorldDelta>;
-    /** 列出变化；默认过滤 revoked 与 expires 已过期（expires ISO < now），坏行跳过。 */
+    /** 列出变化；默认过滤 revoked 与 expires 已过期（expires ISO <= now），坏行跳过。 */
     list(options?: {
         includeRevoked?: boolean;
         now?: Date;

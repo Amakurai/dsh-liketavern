@@ -222,14 +222,15 @@ function parseCharacterBookEntry(
   }
 }
 
-/** 条目形态判定：带 keys 数组 / extensions 对象 / snake_case 特征字段者视为 character_book 条目。 */
+/** 角色书使用明确的 keys/snake_case 标识；原生 key 优先，数值字符串 position 和扩展元数据不改变格式。 */
 function isCharacterBookEntry(raw: Record<string, unknown>): boolean {
+  if ('key' in raw || 'keysecondary' in raw) return false
   return (
     Array.isArray(raw.keys) ||
-    isRecord(raw.extensions) ||
     'insertion_order' in raw ||
     'secondary_keys' in raw ||
-    typeof raw.position === 'string'
+    raw.position === 'before_char' || raw.position === 'after_char' ||
+    (isRecord(raw.extensions) && !('disable' in raw) && !('order' in raw))
   )
 }
 
@@ -324,7 +325,7 @@ export function parseLorebook(json: unknown, opts: ParseLorebookOptions): WorldI
  */
 export function exportLorebook(entries: WorldInfoEntry[], name: string): unknown {
   void name // ST 原生世界书 JSON 无 name 字段，不写入
-  const map: Record<string, unknown> = {}
+  const map: Record<string, unknown> = Object.create(null)
   for (const e of entries) {
     map[e.uid] = {
       uid: e.uid,

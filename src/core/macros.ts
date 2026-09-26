@@ -34,8 +34,16 @@ export type { MacroContext }
 /** 只匹配不含花括号的最内层宏，便于 `{{setvar::x::{{char}}}}` 由内向外展开。 */
 const MACRO_RE = /\{\{\s*([^{}]+?)\s*\}\}/g
 const MAX_PASSES = 8
-/** outlet 替换结果里的 `{{` 冻结，避免二次扫描（禁止嵌套 outlet）。 */
-const FROZEN_OPEN = '\uE000'
+/** 冻结标记必须避开本次所有文本来源，私用区字符本身也可能是角色使用的图标。 */
+function frozenOpenFor(text: string, ctx: MacroContext): string {
+  const reserved = [text, ...Object.values(ctx).filter((value): value is string => typeof value === 'string'),
+    ...Object.values(ctx.vars ?? {}), ...Object.values(ctx.outlets ?? {}), ...(ctx.store?.values() ?? []),
+    ctx.readonlyStatData === undefined ? '' : JSON.stringify(ctx.readonlyStatData)].join('\n')
+  let index = 0
+  let marker = `\uE000tavernFrozenOpen${index}\uE001`
+  while (reserved.includes(marker)) marker = `\uE000tavernFrozenOpen${++index}\uE001`
+  return marker
+}
 
 function pad2s(n: number): string {
   return n < 10 ? `0${n}` : String(n)
@@ -136,8 +144,8 @@ function applyCommand(inner: string, ctx: MacroContext, clock: Record<string, st
 
   if (lower.startsWith('outlet::')) {
     const outletName = raw.slice('outlet::'.length).trim()
-    const content = ctx.outlets?.[outletName] ?? ''
-    return content.replaceAll('{{', FROZEN_OPEN)
+    const content = ctx.outlets && Object.hasOwn(ctx.outlets, outletName) ? ctx.outlets[outletName]! : ''
+    return content
   }
   if (raw.startsWith('outletPromptsInjected:')) return `{{${raw}}}`
 
@@ -199,32 +207,47 @@ export function expandMacros(
 ): string {
   if (!text.includes('{{')) return text
   const clock = { ...defaultVars(now), ...ctx.vars }
+  const frozenOpen = frozenOpenFor(text, ctx)
+  const frozenClose = `${frozenOpen}close`
+  const thaw = (value: string): string => value.replaceAll(frozenClose, '}').replaceAll(frozenOpen, '{')
   let current = text
 
   const replaceInnermost = (skipGet: boolean, unknowns: string[] | null): void => {
     current = current.replace(MACRO_RE, (raw, inner: string) => {
       if (skipGet && isGetVar(inner)) return raw
       const applied = applyCommand(inner, ctx, clock)
-      if (applied !== undefined) return postProcess ? postProcess(applied) : applied
+      if (applied !== undefined) {
+        const value = postProcess ? postProcess(applied) : applied
+        // 转义等后处理先作用于原文，再冻结双向花括号，避免截断外层 setvar。
+        return inner.trim().toLowerCase().startsWith('outlet::')
+          ? value.replaceAll('{', frozenOpen).replaceAll('}', frozenClose) : value
+      }
       unknowns?.push(inner.trim())
       return raw
     })
   }
 
-  for (let pass = 0; pass < MAX_PASSES && current.includes('{{'); pass++) {
-    const before = current
-    // 先展开 setvar/char 等，避免同串里 {{getvar}} 在写入前被读成空。
-    replaceInnermost(true, null)
-    if (current !== before) continue
+  try {
+    for (let pass = 0; pass < MAX_PASSES && current.includes('{{'); pass++) {
+      const before = current
+      // 先展开 setvar/char 等，避免同串里 {{getvar}} 在写入前被读成空。
+      replaceInnermost(true, null)
+      if (current !== before) continue
 
-    const unknowns: string[] = []
-    replaceInnermost(false, unknowns)
-    if (current === before || pass === MAX_PASSES - 1) {
-      for (const name of unknowns) ctx.onUnknown?.(name)
-      break
+      const unknowns: string[] = []
+      replaceInnermost(false, unknowns)
+      if (current === before || pass === MAX_PASSES - 1) {
+        for (const name of unknowns) ctx.onUnknown?.(name)
+        break
+      }
+    }
+    return thaw(current)
+  } finally {
+    // setvar 可以捕获 outlet 内容；调用结束不能把本次内部占位符留在共享变量表里。
+    for (const [key, value] of ctx.store ?? []) {
+      if (value.includes(frozenOpen)) ctx.store!.set(key, thaw(value))
     }
   }
-  return current.replaceAll(FROZEN_OPEN, '{{')
 }
 
 const IDENTITY_MACRO_RE = /\{\{\s*(char|charname|user|username)\s*\}\}/gi

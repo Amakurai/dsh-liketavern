@@ -10,11 +10,18 @@
  */
 
 import { randomBytes } from 'node:crypto'
+import { array, boolean, enum as enum_, looseObject, minLength, nullable, number, optional, safeParse, string } from 'zod/mini'
 import type { WorldDelta, WorldInfoEntry } from '../core/types.js'
 import type { WorkspaceFs } from './workspaceFs.js'
 import { withWorkspaceLock } from './workspaceLock.js'
 
 const DELTA_FILE = 'state/world-delta.jsonl'
+/** 磁盘 JSON 必须满足实际业务形状，不能仅凭 id 就把错型字段送入引擎或编辑器。 */
+const deltaSchema = looseObject({
+  id: string().check(minLength(1)), ts: string(), type: enum_(['add', 'update', 'invalidate']),
+  ref: nullable(string()), content: string(), keys: array(string()), order: number(),
+  sourceRange: string(), expires: nullable(string()), revoked: optional(boolean()),
+})
 
 /**
  * 同一角色工作区可能同时存在共享句柄、楼层派生句柄和多个 plainWorkspace 实例。
@@ -37,8 +44,8 @@ export class WorldDeltaStore {
 
   private static parseLine(line: string): WorldDelta | null {
     try {
-      const value = JSON.parse(line) as WorldDelta
-      return value && typeof value.id === 'string' ? value : null
+      const result = safeParse(deltaSchema, JSON.parse(line))
+      return result.success ? result.data : null
     } catch {
       return null
     }
@@ -53,12 +60,13 @@ export class WorldDeltaStore {
         id: `d-${Date.now().toString(36)}-${randomBytes(3).toString('hex')}`,
         ts: input.ts ?? new Date().toISOString(),
       }
+      deltaSchema.parse(delta)
       await this.fs.writeText(DELTA_FILE, `${[...lines, JSON.stringify(delta)].join('\n')}\n`)
       return delta
     })
   }
 
-  /** 列出变化；默认过滤 revoked 与 expires 已过期（expires ISO < now），坏行跳过。 */
+  /** 列出变化；默认过滤 revoked 与 expires 已过期（expires ISO <= now），坏行跳过。 */
   async list(options?: { includeRevoked?: boolean; now?: Date }): Promise<WorldDelta[]> {
     // 读也排进同一工作区队列，避免读到另一个实例正在覆盖写入时的半截文件。
     return this.enqueue(() => this.listNow(options))
@@ -73,7 +81,7 @@ export class WorldDeltaStore {
       if (!options?.includeRevoked && delta.revoked) continue
       if (delta.expires) {
         const expires = Date.parse(delta.expires)
-        if (!Number.isNaN(expires) && expires < now.getTime()) continue
+        if (!Number.isNaN(expires) && expires <= now.getTime()) continue
       }
       out.push(delta)
     }

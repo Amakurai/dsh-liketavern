@@ -12,9 +12,7 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { normalizeSiblingForks, recordSiblingFork, type SiblingFork } from '../core/siblings.js'
 import { atomicWrite } from './atomicWrite.js'
-
-/** 数据根 → 串行链。进程内数据根唯一，Map 实际只有一项，无需清理。 */
-const mutexes = new Map<string, Promise<unknown>>()
+import { withWorkspaceLock } from './workspaceLock.js'
 
 export function siblingsFile(rootDir: string): string {
   return join(rootDir, 'siblings.json')
@@ -30,7 +28,10 @@ async function readSiblingForks(rootDir: string): Promise<{ forks: SiblingFork[]
     throw error
   }
   try {
-    return { forks: normalizeSiblingForks(JSON.parse(raw)), corrupt: false }
+    const value: unknown = JSON.parse(raw)
+    const forks = normalizeSiblingForks(value)
+    // JSON 可解析不等于索引完整；写路径不能借容错归一化静默删除坏记录。
+    return { forks, corrupt: !Array.isArray(value) || forks.length !== value.length }
   } catch {
     return { forks: [], corrupt: true }
   }
@@ -48,14 +49,13 @@ export async function saveSiblingForks(rootDir: string, forks: readonly SiblingF
 
 /**
  * 互斥内的读-改-写：fn 拿到磁盘现状，返回新值（等于原值则不落盘）。
- * fn 自身不要再调 mutateSiblingForks（会死锁——互斥不可重入）。
+ * fn 自身不要再调 mutateSiblingForks，避免外层旧快照覆盖内层刚写入的登记。
  */
 export async function mutateSiblingForks(
   rootDir: string,
   fn: (forks: SiblingFork[]) => Promise<SiblingFork[]> | SiblingFork[],
 ): Promise<void> {
-  const previous = mutexes.get(rootDir) ?? Promise.resolve()
-  const run = previous.then(async () => {
+  await withWorkspaceLock(siblingsFile(rootDir), async () => {
     const { forks, corrupt } = await readSiblingForks(rootDir)
     if (corrupt) throw new Error('分支兄弟索引 siblings.json 损坏，拒绝以空索引覆盖；请修复或删除该文件')
     const next = await fn(forks)
@@ -63,11 +63,6 @@ export async function mutateSiblingForks(
       await saveSiblingForks(rootDir, next)
     }
   })
-  mutexes.set(
-    rootDir,
-    run.catch(() => undefined),
-  )
-  await run
 }
 
 /** 读-改-写追加一条 fork 记录（recordSiblingFork 幂等）。 */

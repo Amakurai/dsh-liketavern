@@ -6,7 +6,7 @@ export declare function loadSiblingForks(rootDir: string): Promise<SiblingFork[]
 export declare function saveSiblingForks(rootDir: string, forks: readonly SiblingFork[]): Promise<void>;
 /**
  * 互斥内的读-改-写：fn 拿到磁盘现状，返回新值（等于原值则不落盘）。
- * fn 自身不要再调 mutateSiblingForks（会死锁——互斥不可重入）。
+ * fn 自身不要再调 mutateSiblingForks，避免外层旧快照覆盖内层刚写入的登记。
  */
 export declare function mutateSiblingForks(rootDir: string, fn: (forks: SiblingFork[]) => Promise<SiblingFork[]> | SiblingFork[]): Promise<void>;
 /** 读-改-写追加一条 fork 记录（recordSiblingFork 幂等）。 */

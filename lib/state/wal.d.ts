@@ -27,14 +27,6 @@ export interface RollbackAfterResult {
 export declare const WAL_BINARY_MARK = "binary-base64:";
 export declare class Wal {
     private readonly rootDir;
-    /** 实例内 promise 队列：所有公共方法串行化，保证并发安全。 */
-    private queue;
-    /**
-     * 楼层目录名 → 记录状态（paths 用于同层同路径去重，seq 为已用最大序号）。
-     * 全部公共方法按 floor 参数化、状态按楼层目录分键：多个未提交楼层可以并存
-     * （同一张卡的并发会话各开各的 `sessionId#tN`），本类没有单态「当前楼层」。
-     */
-    private readonly states;
     /** rootDir 为工作区的 state/wal/ 目录；不存在则在首次操作时创建。 */
     constructor(rootDir: string);
     /** 开始新的楼层事务；已有楼层必须显式 reopen 或先回滚，不能覆盖原始镜像。 */
@@ -69,7 +61,7 @@ export declare class Wal {
     private readRecords;
     /** 预检与执行共用同一套只读校验，任何坏游标都必须在修改批次中首个文件前被发现。 */
     private readRollbackProgress;
-    /** 读取楼层记录状态（惰性加载，进程重启后首次访问时从磁盘重建）。 */
+    /** 每次从当前日志读取序号和去重路径；其它实例追加及替换后报错都不能复用旧缓存。 */
     private loadState;
     private hasRolledBackDir;
     private doBeginFloor;

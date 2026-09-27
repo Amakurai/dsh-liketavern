@@ -35,6 +35,15 @@ export function sessionHasUserMessage(events: readonly GreetingLogEvent[]): bool
 }
 
 /**
+ * 开场白变体列表（greetingIndex 的唯一下标口径，服务端、英雄区、chip 与卡面桥必须共用）。
+ * 对齐 ST getFirstMessage：first_mes 为空而有备选开场白时，第一条备选即开场白，空 first_mes 不占位；
+ * 否则空 first_mes 会让会话既没有开场白楼层、也无从 swipe 到备选。
+ */
+export function cardGreetingVariants(firstMes: string, alternateGreetings: readonly string[]): string[] {
+  return !firstMes.trim() && alternateGreetings.length > 0 ? [...alternateGreetings] : [firstMes, ...alternateGreetings]
+}
+
+/**
  * 按绑定下标取开场白。空串 / 纯空白不算有开场白（不偷偷改用别的变体，以免和 swipe 下标错位）。
  * 下标越界时回退到变体 0。
  */

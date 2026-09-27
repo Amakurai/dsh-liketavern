@@ -16,6 +16,14 @@ export interface ParseLorebookOptions {
  */
 export declare function parseLorebook(json: unknown, opts: ParseLorebookOptions): WorldInfoEntry[];
 /**
+ * 导出为角色卡 V2/V3 规范的 character_book（对齐 ST convertWorldInfoToCharacterBook）：
+ * entries 是数组，字段为 keys/insertion_order/enabled，引擎细节放在 extensions 的 snake_case 键。
+ * ST 读取卡内书时按数组遍历，原生世界书的 uid map 形态会让整本书无法导入。
+ */
+export declare function exportCharacterBook(entries: WorldInfoEntry[], name: string): Record<string, unknown>;
+/** 卡内书是否已是规范数组形态（且每条都是角色书条目）；是则导出时原样保留作者的额外字段。 */
+export declare function isSpecCharacterBook(value: unknown): boolean;
+/**
  * 导出为 SillyTavern 原生形态 {entries: {<uid>: {...}}}（camelCase 字段对齐原生 WI JSON）。
  * name 不写入文件（ST 原生世界书 JSON 无此字段），保留在签名中供调用方传递命名上下文。
  */

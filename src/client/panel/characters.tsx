@@ -6,6 +6,7 @@
 import {cardVariableLabels} from '../cardVariableLabels.js'
 import { useDraftGuard } from '../drafts.js'
 import { buildCardSrcDoc } from '../../core/cardFrame.js'
+import { cardGreetingVariants } from '../../core/greetingLog.js'
 import { CARD_VARIABLE_STYLES } from '../styles.js'
 import { PersistentEditor, useDraftRestored, useDraftState } from '../draftPersistence.js'
 import { useEffect, useRef, useState } from 'react'
@@ -334,7 +335,7 @@ function CharacterDetailDialog(props: { remote: TavernRemote; cardId: string; on
         <Dialog open width="lg" title={t('characters.detail.interactiveTitle', { name: detail?.name ?? '' })} onClose={() => setCardOpen(false)}>
           <iframe
             sandbox="allow-scripts"
-            srcDoc={buildCardSrcDoc(interactiveHtml, { greetings: detail ? [detail.firstMes, ...detail.alternateGreetings] : [], greetingIndex: 0,
+            srcDoc={buildCardSrcDoc(interactiveHtml, { greetings: detail ? cardGreetingVariants(detail.firstMes, detail.alternateGreetings) : [], greetingIndex: 0,
               helperContext: { name: detail?.name, macroName: detail?.characterName ?? detail?.name, canSwipe: false },
               helperLabels: { diagnostics: t('speech.helperMessages'), unsupported: t('speech.helperUnsupported') },
               variableStyles: CARD_VARIABLE_STYLES,

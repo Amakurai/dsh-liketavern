@@ -14,7 +14,7 @@ import type { SessionFormatArtifact, SessionFormatEvent, SessionFormatMigrationC
 import { createSessionFormatV3ToV4, RELEASED_V3_EVENT_TYPES, restoreReleasedV4Artifact } from '@deepseek-ai/dsh-session-format-v3-to-v4'
 import { TavernState } from '../src/node/state.js'
 import { resolveConfig } from '../src/node/config.js'
-import { ensureGreeting, enterGreetingConversation, sessionPrefixEvents, swipeGreeting } from '../src/node/floors.js'
+import { ensureGreeting, enterGreetingConversation, getGreetingSwipe, sessionPrefixEvents, swipeGreeting } from '../src/node/floors.js'
 import { greetingTurnEvents } from '../src/node/greetingSeed.js'
 import { reserveHelperMvuMaintenance } from '../src/node/helperMvuLifecycle.js'
 
@@ -147,4 +147,16 @@ it.each(['已经生成', '读取角色', '准备分支'] as const)('切换开场
   expect(await state.loadBinding(agent.id)).toEqual(binding)
   expect(await ws.fs.readText('journal.md')).toBe('来源笔记')
   expect(agent.session.snapshotEvents().filter(e => e.type === 'assistant/message')).toHaveLength(1)
+})
+
+it('开场白为空、只有备选开场白的卡：进入会话写入第一条备选，翻页计数不含空开场白', async () => {
+  const binding = (await state.loadBinding(agent.id))!
+  await state.saveCharacter(binding.cardId, { firstMes: '', alternateGreetings: ['备选一', '备选二'] })
+  expect(await enterGreetingConversation({ ctx, state }, agent.id)).toBe(true)
+  const greetings = agent.session.snapshotEvents().filter(e => e.type === 'assistant/message')
+    .map(e => (e.data as { message: { id: string } }).message)
+  expect(greetings).toHaveLength(1)
+  expect(JSON.stringify(greetings[0])).toContain('备选一')
+  const floor = await getGreetingSwipe({ ctx, state }, agent.id, greetings[0]!.id)
+  expect(floor).toMatchObject({ isGreeting: true, swipe: { index: 0, total: 2 } })
 })

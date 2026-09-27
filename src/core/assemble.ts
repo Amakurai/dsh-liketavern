@@ -153,6 +153,9 @@ function joinContents(parts: string[]): string {
   return parts.filter((p) => p.trim().length > 0).join('\n\n')
 }
 
+/** 预设未提供 new_example_chat_prompt 时的示例分隔（ST 出厂值）；显式空串表示不加分隔。 */
+export const DEFAULT_EXAMPLE_CHAT_SEPARATOR = '[Example Chat]'
+
 /** mes_example 按 <START> 切块（对齐 SillyTavern）。 */
 export function splitExampleMessages(mesExample: string): string[] {
   return mesExample
@@ -178,7 +181,7 @@ function compareDepthInjections(a: DepthInjection, b: DepthInjection): number {
   return a.order - b.order || DEPTH_ROLE_ORDER[a.role] - DEPTH_ROLE_ORDER[b.role]
 }
 
-const CLOCK_FROZEN = { time: '', date: '', datetime: '', weekday: '' } as const
+const CLOCK_FROZEN = { time: '', date: '', datetime: '', weekday: '', isodate: '', isotime: '' } as const
 
 /** 快照尾部「命中但未注入」清单最多列出的条数（超出折叠为「等 N 条」）。 */
 const WI_TRUNCATED_HINT_MAX = 8
@@ -491,7 +494,10 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
         const out: ChatMessage[] = []
         if (before.standing) out.push(trackedMessage(role, labelWi(before.standing, true), worldInfoPromptMessages, before.standingSources))
         if (before.turn) out.push(asTurn(trackedMessage(role, labelWi(before.turn, false), worldInfoPromptMessages, before.turnSources)))
-        out.push(...blocks.map((b, index) => definition(role, b, examplePromptMessages, standingCtx, `card:example:${index}`)))
+        // ST 在每段示例前插入 new_example_chat_prompt；缺少分隔时示例会被模型当成真实的往期对话。
+        const separator = input.preset.formatting?.exampleChat ?? DEFAULT_EXAMPLE_CHAT_SEPARATOR
+        out.push(...blocks.map((b, index) => definition(role, separator.trim() ? `${separator.trim()}\n${b}` : b,
+          examplePromptMessages, standingCtx, `card:example:${index}`)))
         if (after.standing) out.push(trackedMessage(role, labelWi(after.standing, true), worldInfoPromptMessages, after.standingSources))
         if (after.turn) out.push(asTurn(trackedMessage(role, labelWi(after.turn, false), worldInfoPromptMessages, after.turnSources)))
         return out

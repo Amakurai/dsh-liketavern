@@ -103,6 +103,8 @@ export interface TemplateSequenceMessage {
     /** worker 还原的原始正文，用于区分来源占位替换与实际模板/正则修改。 */
     originalContent?: string;
 }
+/** 预设未提供 new_example_chat_prompt 时的示例分隔（ST 出厂值）；显式空串表示不加分隔。 */
+export declare const DEFAULT_EXAMPLE_CHAT_SEPARATOR = "[Example Chat]";
 /** mes_example 按 <START> 切块（对齐 SillyTavern）。 */
 export declare function splitExampleMessages(mesExample: string): string[];
 /**

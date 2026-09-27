@@ -294,3 +294,48 @@ describe('random / pick', () => {
     expect(hasTurnLocalMacros('{{char}} 在场')).toBe(false)
   })
 })
+
+describe('ST 常用宏补全', () => {
+  const at = new Date(2026, 0, 2, 3, 4)
+  it('roll 骰子按确定性随机流取值，支持 NdM±K / dM / M，非法表达式为空串', () => {
+    expect(expandMacros('{{roll:1d20}}', { ...ctx, random: () => 0 })).toBe('1')
+    expect(expandMacros('{{roll:d20}}', { ...ctx, random: () => 0.999 })).toBe('20')
+    expect(expandMacros('{{roll:2d6+3}}', { ...ctx, random: () => 0.5 })).toBe('11')
+    expect(expandMacros('{{roll:20}}', { ...ctx, random: () => 0 })).toBe('1')
+    expect(expandMacros('[{{roll:abc}}][{{roll:1000d6}}]', { ...ctx, random: () => 0 })).toBe('[][]')
+  })
+
+  it('isodate / isotime 使用组装时钟，standing 冻结时可被 vars 覆盖', () => {
+    expect(expandMacros('{{isodate}} {{isotime}}', ctx, at)).toBe('2026-01-02 03:04')
+    expect(expandMacros('{{isodate}}', { ...ctx, vars: { isodate: '' } }, at)).toBe('')
+  })
+
+  it('incvar / decvar / hasvar 读写同一变量表；hasvar 在同串 setvar 之后求值', () => {
+    expect(expandMacros('{{incvar::n}}{{incvar::n}}{{decvar::n}}{{getvar::n}}', { ...ctx })).toBe('1')
+    expect(expandMacros('{{hasvar::x}}|{{setvar::x::1}}{{hasvar::x}}', { ...ctx })).toBe('true|true')
+    expect(expandMacros('{{hasvar::y}}', { ...ctx })).toBe('false')
+  })
+
+  it('简单别名：space / reverse / banned / charJailbreak / group / notChar', () => {
+    expect(expandMacros('a{{space}}b|{{reverse:abc}}|{{banned "x"}}|{{charJailbreak}}|{{group}}|{{notChar}}',
+      { ...ctx, charInstruction: 'PHI' })).toBe('a b|cba||PHI|Alice|Bob')
+  })
+
+  it('字段别名内的动态宏与变量写入继续参与依赖传播', () => {
+    const context = { ...ctx, charInstruction: '{{setvar::topic::{{lastMessage}}}}', char: '{{isodate}}', user: '{{lastUserMessage}}' }
+    const tracker = createMacroDependencyTracker(context, [{ text: '{{charJailbreak}}', turnLocal: false }])
+    for (const text of ['{{charJailbreak}}', '{{group}}', '{{groupNotMuted}}', '{{notChar}}', '{{getvar::topic}}']) {
+      expect(tracker.isDynamic(text, context), text).toBe(true)
+    }
+    const stable = { ...ctx, charInstruction: '固定规则' }
+    expect(createMacroDependencyTracker(stable).isDynamic('{{charJailbreak}}', stable)).toBe(false)
+  })
+
+  it('骰子与 ISO 时钟是本轮宏，不能进 standing；增减变量的写入参与依赖传播', () => {
+    expect(hasTurnLocalMacros('{{roll:1d6}}')).toBe(true)
+    expect(hasTurnLocalMacros('{{isodate}}')).toBe(true)
+    const tracker = createMacroDependencyTracker(ctx, [{ text: '{{incvar::hp}}', turnLocal: true }])
+    expect(tracker.isDynamic('{{getvar::hp}}', ctx)).toBe(true)
+    expect(tracker.isDynamic('{{hasvar::hp}}', ctx)).toBe(true)
+  })
+})

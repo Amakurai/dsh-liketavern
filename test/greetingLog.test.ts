@@ -3,6 +3,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
+  cardGreetingVariants,
   greetingFloorState,
   isGreetingOnlyBlank,
   isTavernGreetingEvent,
@@ -90,5 +91,18 @@ describe('greetingFloorState', () => {
       started: true,
       swipe: null,
     })
+  })
+})
+
+describe('cardGreetingVariants', () => {
+  it('first_mes 为空而有备选时，第一条备选即开场白（对齐 ST），空 first_mes 不占下标', () => {
+    expect(cardGreetingVariants('', ['甲', '乙'])).toEqual(['甲', '乙'])
+    expect(cardGreetingVariants('  ', ['甲'])).toEqual(['甲'])
+    expect(pickGreetingText(cardGreetingVariants('', ['甲', '乙']), 0)).toBe('甲')
+  })
+
+  it('first_mes 非空或没有备选时保持 0 = first_mes 的原下标', () => {
+    expect(cardGreetingVariants('开场', ['甲'])).toEqual(['开场', '甲'])
+    expect(cardGreetingVariants('', [])).toEqual([''])
   })
 })

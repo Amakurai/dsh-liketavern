@@ -25,11 +25,12 @@ import { importStPresetSampling, parsePresetSampling } from '../core/presetSampl
 import { isStSystemPrompt } from '../core/presetExport.js'
 export { exportStPreset } from '../core/presetExport.js'
 
-/** 格式模板只接收三个有界文本字段；字符串按原样保存，空串表示明确禁用包装。 */
+/** 格式模板只接收有界文本字段；字符串按原样保存，空串表示明确禁用包装。 */
 const presetFormattingSchema = strictObject({
   worldInfo: optional(string().check(maxLength(MAX_LOREBOOK_CONTENT_CHARS))),
   scenario: optional(string().check(maxLength(MAX_LOREBOOK_CONTENT_CHARS))),
   personality: optional(string().check(maxLength(MAX_LOREBOOK_CONTENT_CHARS))),
+  exampleChat: optional(string().check(maxLength(MAX_LOREBOOK_CONTENT_CHARS))),
 })
 
 function parsePresetFormatting(value: unknown): NonNullable<PromptPreset['formatting']> {
@@ -324,7 +325,7 @@ export function parseStPreset(json: unknown): ParseStPresetResult {
   const sampling = importStPresetSampling(json, warnings)
   if (sampling !== undefined) preset.sampling = sampling
   const formatting: Record<string, unknown> = {}
-  for (const [source, target] of [['wi_format', 'worldInfo'], ['scenario_format', 'scenario'], ['personality_format', 'personality']] as const) {
+  for (const [source, target] of [['wi_format', 'worldInfo'], ['scenario_format', 'scenario'], ['personality_format', 'personality'], ['new_example_chat_prompt', 'exampleChat']] as const) {
     if (json[source] !== undefined) formatting[target] = json[source]
   }
   if (Object.keys(formatting).length > 0) preset.formatting = parsePresetFormatting(formatting)

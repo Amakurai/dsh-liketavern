@@ -21,6 +21,7 @@ import { TavernSeatChip } from './seatChip.js'
 import type { CharacterDetail, CharacterSummary, SessionBinding, TavernRemote } from './types.js'
 import { Avatar, Btn, Err, errOf, Skeleton, useLoader } from './util.js'
 import { expandIdentityMacros } from '../core/macros.js'
+import { cardGreetingVariants } from '../core/greetingLog.js'
 import { hasEjs } from '../core/template.js'
 import { DEFAULT_USER_NAME } from '../core/persona.js'
 import './styles.js'
@@ -70,7 +71,7 @@ function findHeroChipRow(from: HTMLElement | null): HTMLElement | null {
 }
 
 function greetingVariants(detail: CharacterDetail): string[] {
-  return [detail.firstMes, ...detail.alternateGreetings]
+  return cardGreetingVariants(detail.firstMes, detail.alternateGreetings)
 }
 
 interface HeroSession {

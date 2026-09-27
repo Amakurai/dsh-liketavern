@@ -38,7 +38,7 @@ export function exportStPreset(preset: PromptPreset): unknown {
     prompts,
     prompt_order: [{ character_id: 100001, order }],
   }
-  for (const [source, target] of [['worldInfo', 'wi_format'], ['scenario', 'scenario_format'], ['personality', 'personality_format']] as const) {
+  for (const [source, target] of [['worldInfo', 'wi_format'], ['scenario', 'scenario_format'], ['personality', 'personality_format'], ['exampleChat', 'new_example_chat_prompt']] as const) {
     if (preset.formatting?.[source] !== undefined) exported[target] = preset.formatting[source]
   }
   if (preset.regexScripts?.length) exported.extensions = { regex_scripts: preset.regexScripts }

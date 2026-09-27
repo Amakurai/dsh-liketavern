@@ -13,6 +13,7 @@ import { openChildSession } from './openChild.js'
 import { TavernSeatChip } from './seatChip.js'
 import { HelperScripts } from './helperScripts.js'
 import type { WorldInfoEntry } from '../core/types.js'
+import { cardGreetingVariants } from '../core/greetingLog.js'
 import { parseLorebook } from '../state/lorebook.js'
 import { LorebookEditor } from './panel/lorebookEditor.js'
 import type { CharacterSummary, Persona, PresetSummary, SessionBinding, TavernRemote, TavernSettings } from './types.js'
@@ -325,7 +326,7 @@ function HeaderChipSession(props: HeaderChipProps) {
       setError(variants.error.message)
       return
     }
-    const total = 1 + variants.value.alternateGreetings.length
+    const total = cardGreetingVariants(variants.value.firstMes, variants.value.alternateGreetings).length
     if (total < 2) {
       toast.show(t('chip.swipe.none'))
       return

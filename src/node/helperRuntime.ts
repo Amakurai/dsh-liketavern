@@ -2,6 +2,7 @@
 import {assertHelperMvuWritable,ensureHelperMvuScriptAnchor} from './helperMvu.js'
 import {effectiveHelperSwipes,type HelperSwipeSet} from '../core/helperSwipes.js'
 import {expandIdentityMacros} from '../core/macros.js'
+import {cardGreetingVariants} from '../core/greetingLog.js'
 import { createHash } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
@@ -104,7 +105,7 @@ async function helperContext(ctx:Context,state:TavernState,sessionId:string,mess
   const writable=!state.openFloors.has(sessionId) && cached.lastBoundary?.type!=='turn/start'
   const historyRevision=cached.historyRevision
   const ws=await state.storyWorkspace(binding.cardId,binding.storyId)
-  const greetings=card?[card.card.firstMes,...card.card.alternateGreetings].map(text=>expandIdentityMacros(text,{char:charName,user:persona?.name??DEFAULT_USER_NAME})):[]
+  const greetings=card?cardGreetingVariants(card.card.firstMes,card.card.alternateGreetings).map(text=>expandIdentityMacros(text,{char:charName,user:persona?.name??DEFAULT_USER_NAME})):[]
   return {binding,history,currentMessageId,historyRevision,indexByIdentity:cached.indexByIdentity,ws,writable,turn,greetings}
 }
 function publicScopes(scopes:HelperScopes,indexByIdentity:ReadonlyMap<string,number>):HelperScopes {

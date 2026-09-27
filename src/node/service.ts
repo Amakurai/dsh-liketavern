@@ -22,7 +22,7 @@ import { presentRenderedOutput, stripOpaqueDisplayMeta } from '../core/displaySa
 import { disableInteractiveParts, splitTemplateDisplay, TEMPLATE_DISPLAY_PARTS_VERSION, type TemplateDisplayPart } from '../core/templateDisplay.js'
 import { expandIdentityMacros } from '../core/macros.js'
 import { DEFAULT_USER_NAME } from '../core/persona.js'
-import { isTavernGreetingEvent } from '../core/greetingLog.js'
+import { cardGreetingVariants, isTavernGreetingEvent } from '../core/greetingLog.js'
 import type { MemoryEntry, PromptPreset, RegexRule } from '../core/types.js'
 import { exportLorebook, mergeDeltasForExport, parseLorebook } from '../state/lorebook.js'
 import { parseStoredPreset, parseStPreset } from '../state/presetStore.js'
@@ -561,7 +561,7 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
     } else presented = { htmls: allowHtml ? parts.filter(part => part.kind === 'html').map(part => part.text) : [],
           text: parts.filter(part => part.kind === 'markdown').map(part => part.text).join('\n') || presentRenderedOutput(named, false).text }
     const htmls = presented.htmls
-    const greetings = (ws ? [ws.card.firstMes, ...ws.card.alternateGreetings] : []).map((g) =>
+    const greetings = (ws ? cardGreetingVariants(ws.card.firstMes, ws.card.alternateGreetings) : []).map((g) =>
       expandIdentityMacros(g, names),
     )
     return {

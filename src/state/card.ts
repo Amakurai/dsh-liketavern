@@ -9,6 +9,7 @@
 import { Buffer } from 'node:buffer'
 import { inflateSync } from 'node:zlib'
 import { characterDataExtras, isKnownCharacterDataKey } from '../core/characterData.js'
+import { exportCharacterBook, isSpecCharacterBook, parseLorebook } from './lorebook.js'
 import type { CardRegexScript, CharacterCard, ChatRole, DepthPrompt, LorebookFile } from '../core/types.js'
 
 /** 角色卡解析失败时抛出，消息使用中文。 */
@@ -255,12 +256,30 @@ function toNum(value: unknown, fallback: number): number {
   return fallback
 }
 
+/** Pygmalion/Gradio 旧卡字段 → V1 字段（对齐 ST 导入）；这些卡没有 spec/name，只有 char_* 字段。 */
+const GRADIO_FIELDS = [
+  ['char_name', 'name'], ['char_persona', 'description'], ['world_scenario', 'scenario'],
+  ['char_greeting', 'first_mes'], ['example_dialogue', 'mes_example'],
+] as const
+
+function fromGradioCard(json: Record<string, unknown>): Record<string, unknown> {
+  if (json.spec !== undefined || json.data !== undefined || json.name !== undefined || typeof json.char_name !== 'string') return json
+  const converted: Record<string, unknown> = { ...json }
+  for (const [source, target] of GRADIO_FIELDS) {
+    delete converted[source]
+    if (json[source] !== undefined) converted[target] = json[source]
+  }
+  return converted
+}
+
 function normalizeCardInternal(
-  json: unknown,
+  input: unknown,
   pngBytes: Uint8Array | null,
   specHint: 'chara_card_v3' | null,
 ): CharacterCard {
-  if (!isRecord(json)) throw new CardParseError('角色卡 JSON 不是对象')
+  if (!isRecord(input)) throw new CardParseError('角色卡 JSON 不是对象')
+  // raw 记录转换后的 V1 形态：导出与模板快照不再带回无人认识的 char_* 字段。
+  const json = fromGradioCard(input)
 
   const spec = detectSpec(json, specHint)
   // V2/V3 取 data；data 缺失时回退顶层平铺（部分卡只有顶层字段）。V1 恒为顶层平铺。
@@ -555,10 +574,16 @@ export function cardToStJson(card: CharacterCard): unknown {
     extensions,
   }
   if (card.characterBook && card.characterBook.entries.length > 0) {
-    data.character_book = card.characterBook.raw ?? {
-      name: card.characterBook.name ?? card.name,
-      entries: card.characterBook.entries,
+    const book = card.characterBook
+    const raw = book.raw ?? { name: book.name ?? card.name, entries: book.entries }
+    // 编辑器以原生世界书形态（uid map + key/order/disable）保存卡内书；原样写进卡会让 ST 等读取器无法导入。
+    let converted: unknown = raw
+    if (!isSpecCharacterBook(raw)) {
+      // 无法归一化的旧数据保持原样导出，不让整张卡的导出因卡内书失败。
+      try { converted = exportCharacterBook(parseLorebook(raw, { source: 'character', sourceRef: card.name }), book.name ?? card.name) }
+      catch { converted = raw }
     }
+    data.character_book = converted
   }
   if (card.regexScripts.length > 0) data.regex_scripts = card.regexScripts
   const spec = card.spec === 'chara_card_v1' || card.spec === 'unknown' ? 'chara_card_v2' : card.spec

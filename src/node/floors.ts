@@ -25,7 +25,7 @@ import { Wal } from '../state/wal.js'
 import { copyTemplateTimers } from '../state/template.js'
 import { estimateTokens } from '../core/tokenize.js'
 import { rebuildIndex } from '../state/workspace.js'
-import { greetingFloorState, isGreetingOnlyBlank, pickGreetingText, sessionHasUserMessage, TAVERN_GREETING_SOURCE } from '../core/greetingLog.js'
+import { cardGreetingVariants, greetingFloorState, isGreetingOnlyBlank, pickGreetingText, sessionHasUserMessage, TAVERN_GREETING_SOURCE } from '../core/greetingLog.js'
 import { expandMacros } from '../core/macros.js'
 import { CONTINUE_INSTRUCTION_PREFIX } from '../core/dshPrompt.js'
 import { DEFAULT_USER_NAME } from '../core/persona.js'
@@ -673,7 +673,7 @@ export async function continueFloor(
 export async function greetingVariants(state: TavernState, cardId: string): Promise<string[]> {
   const ws = await state.loadCharacter(cardId)
   if (!ws) return []
-  return [ws.card.firstMes, ...ws.card.alternateGreetings]
+  return cardGreetingVariants(ws.card.firstMes, ws.card.alternateGreetings)
 }
 
 async function expandGreeting(state: TavernState, binding: SessionBinding, text: string): Promise<string> {

@@ -278,14 +278,32 @@ describe('relative 骨架与 marker 替换', () => {
       '【检索记忆】\nMEM Bob', // agentMemory（带来源标签）
       'DELTA Alice', // worldState
       '【世界书·本轮触发】\nWIA', // worldInfoAfter（带来源标签）
-      EXAMPLE_1, // dialogueExamples 两块
-      EXAMPLE_2,
+      `[Example Chat]\n${EXAMPLE_1}`, // dialogueExamples 两块，每块前带 ST 默认分隔
+      `[Example Chat]\n${EXAMPLE_2}`,
       'h0', // chatHistory
       'h1',
       'POST-HIST', // 卡片 post_history_instructions 替换 jailbreak 槽位
     ])
     // 历史之后没有别的 relative 内容插到 jailbreak 前
     expect(res.messages[0]!.role).toBe('system')
+  })
+
+  it('示例分隔对齐 ST new_example_chat_prompt：缺省 [Example Chat]、可自定义并展开宏、空串不加分隔', () => {
+    const examples = (exampleChat?: string) => {
+      const preset = defaultPreset()
+      if (exampleChat !== undefined) preset.formatting = { exampleChat }
+      return assemblePrompt(makeInput({ preset })).messages.map((message) => message.content)
+        .filter((content) => content.includes(EXAMPLE_1) || content.includes(EXAMPLE_2))
+    }
+    expect(examples()).toEqual([`[Example Chat]\n${EXAMPLE_1}`, `[Example Chat]\n${EXAMPLE_2}`])
+    expect(examples('### {{char}} 示例')).toEqual([`### Alice 示例\n${EXAMPLE_1}`, `### Alice 示例\n${EXAMPLE_2}`])
+    expect(examples('')).toEqual([EXAMPLE_1, EXAMPLE_2])
+  })
+
+  it('new_example_chat_prompt 随 ST 预设导入并原样导出', () => {
+    const { preset } = parseStPreset({ name: 'x', prompts: [], new_example_chat_prompt: '[示例]' })
+    expect(preset.formatting?.exampleChat).toBe('[示例]')
+    expect((exportStPreset(preset) as Record<string, unknown>).new_example_chat_prompt).toBe('[示例]')
   })
 
   it('splitExampleMessages 按 <START> 切块并去空白空块', () => {

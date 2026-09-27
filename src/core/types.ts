@@ -408,8 +408,11 @@ export interface PromptPreset {
   helperSettings?: Record<string, unknown>
   /** 预设采样按已提供字段覆盖插件设置；未提供字段继续使用全局配置。 */
   sampling?: PresetSamplingSettings
-  /** ST 文本包装模板；缺省使用插件原行为，显式空串表示不包装。 */
-  formatting?: { worldInfo?: string; scenario?: string; personality?: string }
+  /**
+   * ST 文本包装模板；缺省使用插件原行为，显式空串表示不包装。
+   * exampleChat 对应 new_example_chat_prompt：每段 <START> 示例前的分隔标记，缺省同 ST 为 [Example Chat]。
+   */
+  formatting?: { worldInfo?: string; scenario?: string; personality?: string; exampleChat?: string }
 }
 
 // ---------------------------------------------------------------------------

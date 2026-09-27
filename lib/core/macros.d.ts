@@ -18,6 +18,11 @@
  * - `{{lastMessage}}`：最近一条真实用户或 assistant 消息（本轮宏，禁止进 standing）
  * - `{{lastCharMessage}}`：最近一条 assistant 消息（本轮宏，禁止进 standing）
  * - `{{random::A::B}}` / `{{pick::A,B}}` / `{{random:1,10}}`：掷骰（本轮宏，禁止进 standing）
+ * - `{{roll:1d20}}` / `{{roll:d6+2}}` / `{{roll:20}}`：ST 骰子（本轮宏）；非法表达式为空串
+ * - `{{isodate}}` / `{{isotime}}`：ISO 日期与时间（本轮宏）
+ * - `{{incvar::x}}` / `{{decvar::x}}` / `{{hasvar::x}}`：变量自增、自减与存在判断（true/false）
+ * - `{{space}}` / `{{reverse:文本}}` / `{{banned "词"}}`（删除）/ `{{charJailbreak}}`（同 charInstruction）
+ * - `{{group}}` / `{{groupNotMuted}}`：单角色会话即角色名；`{{notChar}}`：用户名
  *
  * 这是组装前预处理：setvar 条目展开后变空，不进模型；getvar 处变成真正的写作规则。
  * 不是把 ST 宏引擎原样扔给模型。

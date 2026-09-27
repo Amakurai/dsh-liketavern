@@ -17,6 +17,7 @@ import {
   parseJsonCard,
   parsePngCard,
 } from '../src/state/card.js'
+import { exportLorebook, parseLorebook } from '../src/state/lorebook.js'
 
 const PNG_SIGNATURE = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
 
@@ -233,6 +234,24 @@ describe('parsePngCard', () => {
 })
 
 describe('parseJsonCard', () => {
+  it('Pygmalion/Gradio 旧卡（char_* 字段）按 ST 映射导入，不再报缺少 name', () => {
+    const card = parseJsonCard({
+      char_name: 'Pyg', char_persona: '一个机器人', char_greeting: '你好', world_scenario: '房间',
+      example_dialogue: '<START>\nYou: hi', custom_field: 'kept',
+    })
+    expect(card.spec).toBe('chara_card_v1')
+    expect([card.name, card.description, card.firstMes, card.scenario, card.mesExample])
+      .toEqual(['Pyg', '一个机器人', '你好', '房间', '<START>\nYou: hi'])
+    expect(card.extensions).toEqual({ custom_field: 'kept' })
+    expect(card.raw).not.toHaveProperty('char_name')
+  })
+
+  it('已有 name 的卡不被 char_* 字段改写', () => {
+    const card = parseJsonCard({ name: 'Real', description: 'd', char_name: 'Other' })
+    expect(card.name).toBe('Real')
+    expect(card.description).toBe('d')
+  })
+
   it('V1 顶层平铺映射为归一化结构', () => {
     const card = parseJsonCard({
       name: '老式角色',
@@ -469,5 +488,35 @@ describe('parseJsonCard', () => {
     expect(patched.depthPrompt).toEqual({ prompt: 'DP', depth: 3, role: 'system' })
     const json = cardToStJson(patched) as { data: { extensions: { depth_prompt: unknown } } }
     expect(json.data.extensions.depth_prompt).toEqual({ prompt: 'DP', depth: 3, role: 'system' })
+  })
+})
+
+describe('卡内世界书导出格式', () => {
+  const v2 = {
+    spec: 'chara_card_v2',
+    data: { name: 'A', character_book: { name: 'Book', scan_depth: 3, entries: [
+      { id: 0, keys: ['sword'], content: 'A sword', insertion_order: 10, enabled: true, position: 'before_char', extensions: { depth: 2 } },
+      { id: 1, keys: ['shield'], content: 'A shield', insertion_order: 20, enabled: false, position: 'after_char', extensions: { position: 4, depth: 6 } },
+    ] } },
+  }
+
+  it('未编辑的规范卡内书原样导出，保留作者的书级字段', () => {
+    const book = (cardToStJson(parseJsonCard(v2)) as { data: { character_book: unknown } }).data.character_book
+    expect(book).toEqual(v2.data.character_book)
+  })
+
+  it('编辑器保存的原生世界书形态导出为 ST 可读的 V2 数组，并能无损再导入', () => {
+    const card = parseJsonCard(v2)
+    const entries = parseLorebook(card.characterBook!.raw, { source: 'character', sourceRef: 'A' })
+    entries[0]!.content = 'An edited sword'
+    const native = { name: 'Book', ...(exportLorebook(entries, 'Book') as object) }
+    const edited = { ...card, characterBook: { name: 'Book', entries: Object.values((native as { entries: object }).entries), raw: native } }
+    const book = (cardToStJson(edited) as { data: { character_book: { name: string; entries: Array<Record<string, unknown>> } } }).data.character_book
+    expect(book.name).toBe('Book')
+    expect(Array.isArray(book.entries)).toBe(true)
+    expect(book.entries[0]).toMatchObject({ id: 0, keys: ['sword'], content: 'An edited sword', insertion_order: 10, enabled: true, position: 'before_char' })
+    expect(book.entries[1]).toMatchObject({ id: 1, enabled: false, position: 'after_char', extensions: { position: 4, depth: 6 } })
+    const reimported = parseLorebook(book, { source: 'character', sourceRef: 'A' })
+    expect(reimported).toEqual(entries)
   })
 })

@@ -18,6 +18,11 @@
  * - `{{lastMessage}}`：最近一条真实用户或 assistant 消息（本轮宏，禁止进 standing）
  * - `{{lastCharMessage}}`：最近一条 assistant 消息（本轮宏，禁止进 standing）
  * - `{{random::A::B}}` / `{{pick::A,B}}` / `{{random:1,10}}`：掷骰（本轮宏，禁止进 standing）
+ * - `{{roll:1d20}}` / `{{roll:d6+2}}` / `{{roll:20}}`：ST 骰子（本轮宏）；非法表达式为空串
+ * - `{{isodate}}` / `{{isotime}}`：ISO 日期与时间（本轮宏）
+ * - `{{incvar::x}}` / `{{decvar::x}}` / `{{hasvar::x}}`：变量自增、自减与存在判断（true/false）
+ * - `{{space}}` / `{{reverse:文本}}` / `{{banned "词"}}`（删除）/ `{{charJailbreak}}`（同 charInstruction）
+ * - `{{group}}` / `{{groupNotMuted}}`：单角色会话即角色名；`{{notChar}}`：用户名
  *
  * 这是组装前预处理：setvar 条目展开后变空，不进模型；getvar 处变成真正的写作规则。
  * 不是把 ST 宏引擎原样扔给模型。
@@ -56,6 +61,8 @@ function defaultVars(now: Date): Record<string, string> {
     date: `${now.getFullYear()}-${pad2s(now.getMonth() + 1)}-${pad2s(now.getDate())}`,
     datetime: `${now.getFullYear()}-${pad2s(now.getMonth() + 1)}-${pad2s(now.getDate())} ${pad2s(now.getHours())}:${pad2s(now.getMinutes())}`,
     weekday: weekdays[now.getDay()]!,
+    isodate: `${now.getFullYear()}-${pad2s(now.getMonth() + 1)}-${pad2s(now.getDate())}`,
+    isotime: `${pad2s(now.getHours())}:${pad2s(now.getMinutes())}`,
   }
 }
 
@@ -112,8 +119,22 @@ function parseChoiceMacro(inner: string): { kind: 'random' | 'pick'; options: st
   return { kind, options: parts.map((s) => s.trim()).filter(Boolean) }
 }
 
+/** ST 骰子：NdM±K、dM 或纯数字 M（= 1dM）。个数与面数有界，非法返回 null。 */
+function rollDice(expression: string, random: () => number): string | null {
+  const match = /^(\d*)\s*d\s*(\d+)\s*([+-]\s*\d+)?$/i.exec(expression) ?? /^()(\d+)()$/.exec(expression)
+  if (!match) return null
+  const count = match[1] ? Number(match[1]) : 1
+  const sides = Number(match[2])
+  const modifier = match[3] ? Number(match[3].replace(/\s+/g, '')) : 0
+  if (!Number.isSafeInteger(count) || count < 1 || count > 100 || !Number.isSafeInteger(sides) || sides < 1 || sides > 1_000_000
+    || !Number.isSafeInteger(modifier)) return null
+  let total = modifier
+  for (let i = 0; i < count; i++) total += 1 + Math.min(sides - 1, Math.floor(random() * sides))
+  return String(total)
+}
+
 function isGetVar(inner: string): boolean {
-  return /^(getvar|getlocalvar|getglobalvar)\s*::/i.test(inner.trim())
+  return /^(getvar|getlocalvar|getglobalvar|hasvar)\s*::/i.test(inner.trim())
 }
 
 function applyCommand(inner: string, ctx: MacroContext, clock: Record<string, string>): string | undefined {
@@ -128,7 +149,11 @@ function applyCommand(inner: string, ctx: MacroContext, clock: Record<string, st
   if (lower === 'persona') return ctx.persona ?? ''
   if (lower === 'charfirstmessage' || lower === 'firstmessage') return ctx.firstMessage ?? ''
   if (lower === 'charprompt') return ctx.charPrompt ?? ''
-  if (lower === 'charinstruction') return ctx.charInstruction ?? ''
+  if (lower === 'charinstruction' || lower === 'charjailbreak') return ctx.charInstruction ?? ''
+  if (lower === 'group' || lower === 'groupnotmuted') return ctx.char
+  if (lower === 'notchar') return ctx.user
+  if (lower === 'space') return ' '
+  if (/^banned\s+"[^"]*"$/i.test(raw)) return ''
   if (lower === 'trim' || lower === 'noop' || lower === 'newline') return lower === 'newline' ? '\n' : ''
   if (lower === 'lastmessage') return ctx.lastMessage ?? ''
   if (lower === 'lastusermessage' || lower === 'last_user_message') {
@@ -138,6 +163,11 @@ function applyCommand(inner: string, ctx: MacroContext, clock: Record<string, st
     return ctx.lastCharMessage ?? ''
   }
   if (lower.startsWith('//')) return ''
+
+  const roll = /^roll\s*:\s*(.*)$/i.exec(raw)
+  if (roll) return rollDice(roll[1]!.trim(), ctx.random ?? Math.random) ?? ''
+  const reversed = /^reverse\s*:([\s\S]*)$/i.exec(raw)
+  if (reversed) return [...reversed[1]!].reverse().join('')
 
   const choices = parseChoiceMacro(raw)
   if (choices) return rollChoice(choices.options, ctx.random ?? Math.random, choices.kind === 'random')
@@ -159,7 +189,7 @@ function applyCommand(inner: string, ctx: MacroContext, clock: Record<string, st
   const variableKey = splitOnce(rest)[0].trim()
   const mvuPath = variableKey.replace(/\[(["']?)([^\]"']+)\1\]/g, '.$2').split('.')
   if (ctx.readonlyStatData !== undefined && mvuPath[0] === 'stat_data') {
-    if (['setvar', 'setlocalvar', 'setglobalvar', 'addvar'].includes(cmd)) throw new Error('MVU stat_data 是只读快照，不能通过宏修改')
+    if (['setvar', 'setlocalvar', 'setglobalvar', 'addvar', 'incvar', 'decvar'].includes(cmd)) throw new Error('MVU stat_data 是只读快照，不能通过宏修改')
     if (['getvar', 'getlocalvar', 'getglobalvar'].includes(cmd)) {
       let value: unknown = ctx.readonlyStatData
       for (const part of mvuPath.slice(1)) {
@@ -179,6 +209,14 @@ function applyCommand(inner: string, ctx: MacroContext, clock: Record<string, st
   if (cmd === 'getvar' || cmd === 'getlocalvar' || cmd === 'getglobalvar') {
     const key = rest.trim()
     return storeOf(ctx).get(key) ?? ''
+  }
+  if (cmd === 'hasvar') return storeOf(ctx).has(rest.trim()) ? 'true' : 'false'
+  if (cmd === 'incvar' || cmd === 'decvar') {
+    const key = rest.trim()
+    const prev = Number(storeOf(ctx).get(key) ?? '0')
+    const next = (Number.isFinite(prev) ? prev : 0) + (cmd === 'incvar' ? 1 : -1)
+    storeOf(ctx).set(key, String(next))
+    return ''
   }
   if (cmd === 'addvar') {
     const [name, deltaRaw] = splitOnce(rest)
@@ -269,7 +307,7 @@ export function hasTurnLocalMacros(text: string): boolean {
   if (text.includes('<%')) return true
   // 原生 MVU 的 stat_data 是轮初剧情快照；读取它的宏和 EJS 一样不能跨轮钉死。
   if (/\{\{\s*(?:getvar|getlocalvar|getglobalvar)\s*::\s*stat_data(?:[.\[]|\s*\}\})/i.test(text)) return true
-  return /\{\{\s*(outlet::|outletPromptsInjected:|lastusermessage|lastmessage|last_user_message|lastcharmessage|last_char_message|time|date|datetime|weekday|random\s*:|pick\s*:)/i.test(text)
+  return /\{\{\s*(outlet::|outletPromptsInjected:|lastusermessage|lastmessage|last_user_message|lastcharmessage|last_char_message|time|date|datetime|weekday|isodate|isotime|roll\s*:|random\s*:|pick\s*:)/i.test(text)
 }
 
 /** 检测尚未处理的 EJS / STscript；EJS 由隔离执行器展开，STscript 仍不执行。 */

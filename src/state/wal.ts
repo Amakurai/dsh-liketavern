@@ -119,11 +119,11 @@ function snapshotBytes(rec: RecordLine, side: 'before' | 'after'): string | null
 }
 
 /**
- * 两条世界状态快照是否改动了同一批 id。快照来自正文原样镜像，而正文读写（WorldDeltaStore、undoWorldDelta）
+ * 后继世界状态快照是否依赖先前修改的 id。快照来自正文原样镜像，而正文读写（WorldDeltaStore、undoWorldDelta）
  * 都刻意保留无法解析的行；这里同样只按能解析出字符串 id 的行比较，坏行不能让预检抛出原始解析错误。
  */
-function deltaChangesOverlap(a: RecordLine, b: RecordLine): boolean {
-  const changed = (rec: RecordLine) => {
+function deltaChangesDependOn(previous: RecordLine, next: RecordLine): boolean {
+  const snapshots = (rec: RecordLine) => {
     const rows = (text: string | null | undefined) => new Map((text ?? '').split('\n').filter((line) => line.trim()).flatMap((line) => {
       let id: unknown
       try { id = (JSON.parse(line) as { id?: unknown } | null)?.id } catch { return [] }
@@ -134,10 +134,12 @@ function deltaChangesOverlap(a: RecordLine, b: RecordLine): boolean {
       return bytes === null ? null : Buffer.from(bytes, 'base64').toString('utf8')
     }
     const before = rows(text('before')), after = rows(text('after'))
-    return new Set([...before.keys(), ...after.keys()].filter((id) => before.get(id) !== after.get(id)))
+    return { before, after, changed: new Set([...before.keys(), ...after.keys()].filter((id) => before.get(id) !== after.get(id))) }
   }
-  const ids = changed(a)
-  return [...changed(b)].some((id) => ids.has(id))
+  const a = snapshots(previous), b = snapshots(next)
+  // 中间插入其它 id 或保留坏行会改变整文件镜像，但不会消除同一条目的前后依赖。
+  // 人工修改过同一 id 的情况则必须保留，不能只因 id 重叠就拒绝撤销。
+  return [...b.changed].some((id) => a.changed.has(id) && a.after.get(id) === b.before.get(id))
 }
 
 /** before 与 after 字节相同的记录：恢复时不改文件，既不会被复活，也不能作为别的楼层的依赖锚点。 */
@@ -176,6 +178,7 @@ export class Wal {
       const dir = join(this.rootDir, dirName)
       if (!(await isDir(dir))) throw new Error(`楼层 "${floor}" 未开始（或已回滚），无法记录写入快照`)
       await this.assertNotRecovering(dir)
+      await this.readFloorMeta(dir, floor)
       const state = await this.loadState(dirName)
       const file = join(dir, 'records.jsonl')
       const text = await readFile(file, 'utf8').catch((error: unknown) => {
@@ -198,8 +201,7 @@ export class Wal {
       const dir = join(this.rootDir, sanitizeFloor(floor))
       if (!(await isDir(dir))) throw new Error(`WAL 楼层缺失或已回滚：${floor}`)
       await this.assertNotRecovering(dir)
-      const meta = await this.readMeta(dir)
-      if (!meta || meta.floor !== floor) throw new Error(`WAL 楼层元数据不匹配：${floor}`)
+      const meta = await this.readFloorMeta(dir, floor)
       await this.readRecords(dir)
       if (!meta.committed) return
       meta.committed = false
@@ -226,13 +228,13 @@ export class Wal {
     return this.enqueue(() => this.doListFloors())
   }
 
-  /** 恢复前只读检查原楼层：元数据、序号、路径与全部快照都必须有效，不把坏记录当成空日志。 */
+  /** 只读检查可用楼层：元数据、序号、路径与快照必须有效；回滚中的旧 committed 不能作为完成证明。 */
   validateFloor(floor: string): Promise<WalFloorInfo> {
     return this.enqueue(async () => {
       const dir = join(this.rootDir, sanitizeFloor(floor))
       if (!(await isDir(dir))) throw new Error(`WAL 楼层缺失或已回滚：${floor}`)
-      const meta = await this.readMeta(dir)
-      if (!meta || meta.floor !== floor) throw new Error(`WAL 楼层元数据不匹配：${floor}`)
+      const meta = await this.readFloorMeta(dir, floor)
+      await this.assertNotRecovering(dir)
       await this.readRecords(dir)
       return { floor, committed: meta.committed, startedAt: meta.startedAt, rolledBack: false }
     })
@@ -267,6 +269,13 @@ export class Wal {
 
   private async writeMeta(dir: string, meta: FloorMeta): Promise<void> {
     await atomicWrite(join(dir, 'meta.json'), JSON.stringify(meta, null, 2) + '\n')
+  }
+
+  /** 目录存在不代表楼层可写；元数据必须完整且属于请求的原始楼层，不能只比净化后的目录名。 */
+  private async readFloorMeta(dir: string, floor: string): Promise<FloorMeta> {
+    const meta = await this.readMeta(dir)
+    if (!meta || meta.floor !== floor) throw new Error(`WAL 楼层元数据不存在或不匹配：${floor}`)
+    return meta
   }
 
   /** 恢复游标绑定原始记录集合；中断后只能继续回滚，追加或提交会使游标失效或误报已完成。 */
@@ -393,6 +402,7 @@ export class Wal {
       throw new Error(`楼层 "${floor}" 未开始（或已回滚），无法记录写入快照`)
     }
     await this.assertNotRecovering(dir)
+    await this.readFloorMeta(dir, floor)
     const normPath = path.replace(/\\/g, '/')
     const state = await this.loadState(dirName)
     if (state.paths.has(normPath)) return // 同层同路径只留首次快照
@@ -413,6 +423,8 @@ export class Wal {
     const dir = join(this.rootDir, dirName)
     if (!(await isDir(dir))) throw new Error(`楼层 "${floor}" 未开始（或已回滚），无法记录写入后快照`)
     await this.assertNotRecovering(dir)
+    await this.readFloorMeta(dir, floor)
+    await this.readRecords(dir)
     const file = join(dir, 'records.jsonl')
     let text: string
     try {
@@ -448,9 +460,10 @@ export class Wal {
   private async doCommitFloor(floor: string): Promise<void> {
     await mkdir(this.rootDir, { recursive: true })
     const dir = join(this.rootDir, sanitizeFloor(floor))
-    const meta = await this.readMeta(dir)
-    if (!meta) throw new Error(`楼层 "${floor}" 不存在，无法提交`)
+    const meta = await this.readFloorMeta(dir, floor)
     await this.assertNotRecovering(dir)
+    // 提交是完成证明，不能让读取/回滚均拒绝的日志得到 committed=true。
+    await this.readRecords(dir)
     meta.committed = true
     meta.committedAt = new Date().toISOString()
     await this.writeMeta(dir, meta)
@@ -470,8 +483,11 @@ export class Wal {
     const records = await this.readRecords(dir)
     const progressFile = join(dir, 'rollback-progress.json')
     const progress = await this.readRollbackProgress(dir, records)
-    await expandAffectedMemories(workspaceRoot, records.map((record) => record.path))
     const checkpoint = () => atomicWrite(progressFile, JSON.stringify(progress) + '\n')
+    // 摘要展开本身也会恢复/删除正文；先固定恢复状态，展开中断后不能再把旧 committed
+    // 当成完成证明，也不能允许迟到的写入改变原日志使后续恢复游标失效。
+    await checkpoint()
+    await expandAffectedMemories(workspaceRoot, records.map((record) => record.path))
     const currentBytes = async (path: string) => (await readFile(join(workspaceRoot, path)).catch((error: NodeJS.ErrnoException) => {
       if (error.code === 'ENOENT') return null
       throw error
@@ -557,8 +573,10 @@ export class Wal {
       for (const rec of records) {
         if (isNoopRecord(rec)) continue
         if (changes.some(({ rec: change, startedAt }) => (startedAt === null || !Number.isFinite(completedAt) || completedAt >= startedAt)
-          && change.path === rec.path && (rec.path !== 'state/world-delta.jsonl' || deltaChangesOverlap(change, rec)) && 'after' in change
-          && snapshotBytes(rec, 'before') === snapshotBytes(change, 'after'))) {
+          && change.path === rec.path && 'after' in change
+          && (rec.path === 'state/world-delta.jsonl'
+            ? deltaChangesDependOn(change, rec)
+            : snapshotBytes(rec, 'before') === snapshotBytes(change, 'after')))) {
           throw new Error(`WAL 存在未撤销的后继依赖：${floor.floor}（${rec.path}）；请从最新楼层依次回退`)
         }
       }

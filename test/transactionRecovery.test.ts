@@ -108,6 +108,46 @@ describe('人工修订与楼层逆操作', () => {
 })
 
 describe('原子写入与失败恢复', () => {
+  it.each(['missing','broken','identity'] as const)('楼层元数据 %s 时拒绝正文、日志追加和提交，修复后仍可重试回滚', async damage => {
+    const { ws, fs, rollback } = await setup()
+    await ws.fs.writeText('journal.md','原文')
+    await fs.writeText('journal.md','第一稿')
+    const path='state/wal/s_t1/meta.json',metadata=(await ws.fs.readText(path))!
+    const records=await ws.fs.readText('state/wal/s_t1/records.jsonl')
+    if(damage==='missing')await ws.fs.delete(path)
+    else await ws.fs.writeText(path,damage==='broken'?'{broken':JSON.stringify({...JSON.parse(metadata),floor:'other#t1'}))
+    const invalid=await ws.fs.readText(path)
+    await expect(fs.writeText('journal.md','错误新稿')).rejects.toThrow(/WAL.*元数据/)
+    await expect(fs.writeBytes('journal.md',Buffer.from('错误字节'))).rejects.toThrow(/WAL.*元数据/)
+    await expect(fs.delete('journal.md')).rejects.toThrow(/WAL.*元数据/)
+    await expect(ws.wal.record('s#t1','legacy.md',null)).rejects.toThrow(/WAL.*元数据/)
+    await expect(ws.wal.recordAfter('s#t1','journal.md','错误快照')).rejects.toThrow(/WAL.*元数据/)
+    await expect(ws.wal.commitFloor('s#t1')).rejects.toThrow(/WAL.*元数据/)
+    expect(await ws.fs.readText(path)).toBe(invalid)
+    expect(await ws.fs.readText('state/wal/s_t1/records.jsonl')).toBe(records)
+    expect(await ws.fs.readText('journal.md')).toBe('第一稿')
+    await ws.fs.writeText(path,metadata)
+    await fs.writeText('journal.md','修复后第二稿')
+    await ws.wal.commitFloor('s#t1')
+    await rollback()
+    expect(await ws.fs.readText('journal.md')).toBe('原文')
+  })
+
+  it('记录损坏时提交与旧协议补记均拒绝，不把坏日志标记完成或修改其中有效行',async()=>{
+    const { ws, fs, rollback }=await setup()
+    await ws.fs.writeText('journal.md','原文');await fs.writeText('journal.md','第一稿')
+    const path='state/wal/s_t1/records.jsonl',records=(await ws.fs.readText(path))!
+    const metadata=await ws.fs.readText('state/wal/s_t1/meta.json'),broken=records+'{broken}\n'
+    await ws.fs.writeText(path,broken)
+    await expect(ws.wal.commitFloor('s#t1')).rejects.toThrow(/WAL 记录/)
+    await expect(ws.wal.recordAfter('s#t1','journal.md','错误快照')).rejects.toThrow(/WAL 记录/)
+    expect(await ws.fs.readText('state/wal/s_t1/meta.json')).toBe(metadata)
+    expect(await ws.fs.readText(path)).toBe(broken)
+    expect(await ws.fs.readText('journal.md')).toBe('第一稿')
+    await ws.fs.writeText(path,records);await ws.wal.commitFloor('s#t1');await rollback()
+    expect(await ws.fs.readText('journal.md')).toBe('原文')
+  })
+
   it('WAL 替换失败时正文不变、旧 WAL 仍完整可回滚', async () => {
     const { ws, fs, rollback } = await setup()
     await ws.fs.writeText('journal.md', '原文')
@@ -312,6 +352,7 @@ it('回滚中断后冻结原楼层的追加与提交，重启仍可按原游标�
   const recovered = new Wal(join(ws.fs.root, 'state/wal'))
   const metadata = await ws.fs.readText('state/wal/s_t1/meta.json')
   const records = await ws.fs.readText('state/wal/s_t1/records.jsonl')
+  await expect(recovered.validateFloor('s#t1')).rejects.toThrow('回滚恢复')
   await expect(recovered.reopenFloor('s#t1')).rejects.toThrow('回滚恢复')
   await expect(fs.writeText('journal.md', '迟到的写入')).rejects.toThrow('回滚恢复')
   await expect(recovered.record('s#t1', 'other.md', null)).rejects.toThrow('回滚恢复')

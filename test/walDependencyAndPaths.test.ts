@@ -185,3 +185,36 @@ it('世界状态文件夹带无法解析的行时，预检仍按 id 判断重叠
   await wal.rollbackAfter(['s#t3'], root)
   expect(await shared.readText(delta)).toBe('{"id":"d1","content":"甲"}\n损坏的一行\n{"id":"d2","content":"乙"}\n')
 })
+
+it.each(['text', 'bytes'] as const)('世界状态中插入其它条目不掩盖同一 id 的后继依赖（%s）', async encoding => {
+  const path = 'state/world-delta.jsonl'
+  const fact = '{"id":"d1","content":"本层事实"}\n'
+  const manual = '{"id":"d2","content":"人工事实"}\n'
+  const revoked = '{"id":"d1","content":"本层事实","revoked":true}\n'
+  await turn('s#t1', { [path]: fact })
+  await shared.writeText(path, fact + manual)
+  await wal.beginFloor('s#t2')
+  if (encoding === 'bytes') await shared.withFloor('s#t2').writeBytes(path, Buffer.from(revoked + manual))
+  else await shared.withFloor('s#t2').writeText(path, revoked + manual)
+  await wal.commitFloor('s#t2')
+
+  await expect(wal.rollbackFloor('s#t1', root)).rejects.toThrow('后继依赖')
+  expect(await shared.readText(path)).toBe(revoked + manual)
+  expect((await wal.listFloors()).every(floor => !floor.rolledBack)).toBe(true)
+  await wal.rollbackAfter(['s#t1', 's#t2'], root)
+  expect(await shared.readText(path)).toBe(manual)
+})
+
+it('世界状态同一 id 经人工修订后不再依赖原楼层，回滚保留人工内容', async () => {
+  const path = 'state/world-delta.jsonl'
+  const original = '{"id":"d1","content":"模型事实"}\n'
+  const manual = '{"id":"d1","content":"人工修订"}\n'
+  const next = '{"id":"d1","content":"后继修订"}\n'
+  await turn('s#t1', { [path]: original })
+  await shared.writeText(path, manual)
+  await turn('s#t2', { [path]: next })
+  await wal.rollbackFloor('s#t1', root)
+  expect(await shared.readText(path)).toBe(next)
+  await wal.rollbackFloor('s#t2', root)
+  expect(await shared.readText(path)).toBe(manual)
+})

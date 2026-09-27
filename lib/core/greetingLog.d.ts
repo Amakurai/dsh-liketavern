@@ -23,6 +23,11 @@ export declare function sessionHasUserMessage(events: readonly GreetingLogEvent[
  */
 export declare function cardGreetingVariants(firstMes: string, alternateGreetings: readonly string[]): string[];
 /**
+ * 绑定下标 → 实际展示的变体下标。编辑角色卡删掉备选开场白后旧会话仍可能带着越界下标：
+ * 一律回退 0（不夹到末尾），正文、翻页计数、卡面 swipe_id 与 MVU 初始化必须共用这一口径。
+ */
+export declare function activeGreetingIndex(index: number, count: number): number;
+/**
  * 按绑定下标取开场白。空串 / 纯空白不算有开场白（不偷偷改用别的变体，以免和 swipe 下标错位）。
  * 下标越界时回退到变体 0。
  */

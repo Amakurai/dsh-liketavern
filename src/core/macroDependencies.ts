@@ -45,20 +45,20 @@ export function createMacroDependencyTracker(initial: MacroContext, potentialSou
       const current = pending.pop()!
       if (hasTurnLocalMacros(current)) result.dynamic = true
       // 扫描宏开头而不吞掉整个正文，嵌套 set/get 同样能逐个看到；不执行随机数与写入。
-      for (const match of current.matchAll(/\{\{\s*(getvar|getlocalvar|getglobalvar|hasvar)\s*::([^{}]*)(?=\{\{|\}\})/gi)) {
+      for (const match of current.matchAll(/\{\{\s*(get|has)(?:local|global)?var\s*::([^{}]*)(?=\{\{|\}\})/gi)) {
         const key = match[2]!.trim()
         const computed = current.slice(match.index + match[0].length, match.index + match[0].length + 2) === '{{'
         result.reads.add(key)
         if (computed || unknownDynamicWrite || dynamicVariables.has(key) || potentialVariables.has(key)) result.dynamic = true
       }
-      for (const match of current.matchAll(/\{\{\s*(setvar|setlocalvar|setglobalvar|addvar|incvar|decvar)\s*::([^{}]*?)(?=::|\{\{|\}\})/gi)) {
+      for (const match of current.matchAll(/\{\{\s*(set|add|inc|dec)(?:local|global)?var\s*::([^{}]*?)(?=::|\{\{|\}\})/gi)) {
         const key = match[2]!.trim()
         const computed = current.slice(match.index + match[0].length, match.index + match[0].length + 2) === '{{'
         if (computed) result.unknownWrite = true
         else if (key) {
           result.writes.add(key)
           // 增减类写入以旧值为输入：读写都要记，动态旧值会把结果一起带入本轮通道。
-          if (['addvar', 'incvar', 'decvar'].includes(match[1]!.toLowerCase())) {
+          if (match[1]!.toLowerCase() !== 'set') {
             result.reads.add(key)
             if (unknownDynamicWrite || dynamicVariables.has(key) || potentialVariables.has(key)) result.dynamic = true
           }

@@ -149,6 +149,28 @@ describe('tavernCardBridgeScript', () => {
     expect(window.removeEventListener.mock.calls.filter(([event]) => event === 'error')).toHaveLength(2)
     expect(window.removeEventListener.mock.calls.filter(([event]) => event === 'unhandledrejection')).toHaveLength(2)
   })
+  it('只 write 整页不 close 的封面在下一任务补写并保持打开，不会整页空白；同任务内 close 只写一次', async () => {
+    const nativeOpen = vi.fn(), nativeWrite = vi.fn(), nativeClose = vi.fn()
+    const window = { addEventListener: vi.fn(), removeEventListener: vi.fn() }
+    const document = { open: nativeOpen, write: nativeWrite, close: nativeClose, currentScript: null,
+      querySelector: () => null, readyState: 'loading', addEventListener: vi.fn(), removeEventListener: vi.fn() }
+    const context = createContext({ window, document, parent: { postMessage: vi.fn() }, TextEncoder, clearTimeout, setTimeout, queueMicrotask })
+    const script = tavernCardBridgeScript({ greetings: [], greetingIndex: 0 }).replace(/^<script[^>]*>/, '').replace(/<\/script>$/, '')
+    runInContext(script, context)
+    runInContext("document.write('<!DOCTYPE html><html><body>拉取的'); document.write('卡面</body></html>')", context)
+    expect(nativeWrite).not.toHaveBeenCalled()
+    await new Promise(resolve => setTimeout(resolve, 10))
+    expect(nativeOpen).toHaveBeenCalledTimes(1)
+    expect(nativeWrite).toHaveBeenCalledTimes(1)
+    expect(nativeWrite.mock.lastCall?.[0]).toContain('<body>拉取的卡面</body>')
+    expect(nativeClose).not.toHaveBeenCalled()
+
+    runInContext("document.open(); document.write('<html><body>完整</body></html>'); document.close()", context)
+    await new Promise(resolve => setTimeout(resolve, 10))
+    expect(nativeWrite).toHaveBeenCalledTimes(2)
+    expect(nativeClose).toHaveBeenCalledTimes(1)
+  })
+
   it('把开场白变体编进脚本，避免 </script> 打断', () => {
     const script = tavernCardBridgeScript({ greetings: ['cover</script>', 'alt-greeting'], greetingIndex: 0 })
     expect(script).toContain('\\u003c')

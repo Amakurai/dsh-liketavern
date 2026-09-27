@@ -298,8 +298,8 @@ export async function prepareHelperMvuJob(ctx:Context,state:TavernState,request:
     const initialSources=job.kind==='initialize'?await sources(state,binding):undefined
     const greeting=events.find((event):event is SessionEvent<'assistant/message'>=>event.type==='assistant/message'&&isTavernGreetingEvent(event)&&(event.surfaceOp===undefined||event.surfaceOp==='append'))
     const isGreeting=isTavernGreetingEvent(events.find(event=>event.seq===job.seq)!)
-    const token=randomUUID(),work:HelperMvuWork={...baseWork,status:'pending',job,token,base:helperJson(base) as Record<string,unknown>,snapshot:{...await getHelperSnapshot(ctx,state,request.sessionId,job.seq),writable:false},applyText:job.kind==='update'||!isGreeting&&!helperRecord(target.stat_data),
-      ...(initialSources?{initialSources,greeting:greeting?.data.message.content.filter(block=>block.type==='text').map(block=>block.text).join('\n')??'',swipeId:isGreeting?binding.greetingIndex:saved.swipes?.[job.identity]?.active??0}:{})}
+    const token=randomUUID(),snapshot={...await getHelperSnapshot(ctx,state,request.sessionId,job.seq),writable:false},work:HelperMvuWork={...baseWork,status:'pending',job,token,base:helperJson(base) as Record<string,unknown>,snapshot,applyText:job.kind==='update'||!isGreeting&&!helperRecord(target.stat_data),
+      ...(initialSources?{initialSources,greeting:greeting?.data.message.content.filter(block=>block.type==='text').map(block=>block.text).join('\n')??'',swipeId:isGreeting?snapshot.messages[index]?.swipe?.active??0:saved.swipes?.[job.identity]?.active??0}:{})}
     if(map.size>=128)throw new Error('自动 MVU 活动运行时超过预算')
     map.set(key,{runtimeId:request.runtimeId,token,expires:Date.now()+90000,job,binding:hash(binding),scripts:await scriptRevision(state,request),history:helperHistoryRevision(history),before:stateHash(saved),work})
     return helperJson(work,4*1024*1024) as HelperMvuWork

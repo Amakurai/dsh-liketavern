@@ -18,9 +18,10 @@
  * - `{{lastMessage}}`：最近一条真实用户或 assistant 消息（本轮宏，禁止进 standing）
  * - `{{lastCharMessage}}`：最近一条 assistant 消息（本轮宏，禁止进 standing）
  * - `{{random::A::B}}` / `{{pick::A,B}}` / `{{random:1,10}}`：掷骰（本轮宏，禁止进 standing）
- * - `{{roll:1d20}}` / `{{roll:d6+2}}` / `{{roll:20}}`：ST 骰子（本轮宏）；非法表达式为空串
+ * - `{{roll:1d20}}` / `{{roll d6+2}}` / `{{roll:20}}`：ST 骰子（本轮宏）；非法表达式为空串
  * - `{{isodate}}` / `{{isotime}}`：ISO 日期与时间（本轮宏）
- * - `{{incvar::x}}` / `{{decvar::x}}` / `{{hasvar::x}}`：变量自增、自减与存在判断（true/false）
+ * - `{{incvar::x}}` / `{{decvar::x}}`：自增、自减并返回新值；`{{hasvar::x}}`：存在判断（true/false）
+ *   （add/inc/dec/has 的 local/global 拼写同样视为同一变量表）
  * - `{{space}}` / `{{reverse:文本}}` / `{{banned "词"}}`（删除）/ `{{charJailbreak}}`（同 charInstruction）
  * - `{{group}}` / `{{groupNotMuted}}`：单角色会话即角色名；`{{notChar}}`：用户名
  *
@@ -133,8 +134,15 @@ function rollDice(expression: string, random: () => number): string | null {
   return String(total)
 }
 
+const GET_VAR_COMMANDS = ['getvar', 'getlocalvar', 'getglobalvar']
+const HAS_VAR_COMMANDS = ['hasvar', 'haslocalvar', 'hasglobalvar']
+const SET_VAR_COMMANDS = ['setvar', 'setlocalvar', 'setglobalvar']
+const ADD_VAR_COMMANDS = ['addvar', 'addlocalvar', 'addglobalvar']
+const INC_VAR_COMMANDS = ['incvar', 'inclocalvar', 'incglobalvar']
+const DEC_VAR_COMMANDS = ['decvar', 'declocalvar', 'decglobalvar']
+
 function isGetVar(inner: string): boolean {
-  return /^(getvar|getlocalvar|getglobalvar|hasvar)\s*::/i.test(inner.trim())
+  return /^(getvar|getlocalvar|getglobalvar|hasvar|haslocalvar|hasglobalvar)\s*::/i.test(inner.trim())
 }
 
 function applyCommand(inner: string, ctx: MacroContext, clock: Record<string, string>): string | undefined {
@@ -164,7 +172,8 @@ function applyCommand(inner: string, ctx: MacroContext, clock: Record<string, st
   }
   if (lower.startsWith('//')) return ''
 
-  const roll = /^roll\s*:\s*(.*)$/i.exec(raw)
+  // ST 同时接受 {{roll:1d6}} 与 {{roll 1d6}}。
+  const roll = /^roll(?:\s*:|\s+)\s*(.*)$/i.exec(raw)
   if (roll) return rollDice(roll[1]!.trim(), ctx.random ?? Math.random) ?? ''
   const reversed = /^reverse\s*:([\s\S]*)$/i.exec(raw)
   if (reversed) return [...reversed[1]!].reverse().join('')
@@ -189,36 +198,40 @@ function applyCommand(inner: string, ctx: MacroContext, clock: Record<string, st
   const variableKey = splitOnce(rest)[0].trim()
   const mvuPath = variableKey.replace(/\[(["']?)([^\]"']+)\1\]/g, '.$2').split('.')
   if (ctx.readonlyStatData !== undefined && mvuPath[0] === 'stat_data') {
-    if (['setvar', 'setlocalvar', 'setglobalvar', 'addvar', 'incvar', 'decvar'].includes(cmd)) throw new Error('MVU stat_data 是只读快照，不能通过宏修改')
-    if (['getvar', 'getlocalvar', 'getglobalvar'].includes(cmd)) {
+    if ([...SET_VAR_COMMANDS, ...ADD_VAR_COMMANDS, ...INC_VAR_COMMANDS, ...DEC_VAR_COMMANDS].includes(cmd)) {
+      throw new Error('MVU stat_data 是只读快照，不能通过宏修改')
+    }
+    if (GET_VAR_COMMANDS.includes(cmd) || HAS_VAR_COMMANDS.includes(cmd)) {
       let value: unknown = ctx.readonlyStatData
       for (const part of mvuPath.slice(1)) {
         if (!part || ['__proto__', 'constructor', 'prototype'].includes(part)) throw new Error('MVU 宏变量路径无效')
         value = value && typeof value === 'object' && Object.hasOwn(value, part) ? (value as Record<string, unknown>)[part] : undefined
       }
+      if (HAS_VAR_COMMANDS.includes(cmd)) return value === undefined ? 'false' : 'true'
       return value === undefined ? '' : typeof value === 'string' ? value : JSON.stringify(value)
     }
   }
 
-  if (cmd === 'setvar' || cmd === 'setlocalvar' || cmd === 'setglobalvar') {
+  if (SET_VAR_COMMANDS.includes(cmd)) {
     const [name, value] = splitOnce(rest)
     const key = name.trim()
     if (key) storeOf(ctx).set(key, value)
     return ''
   }
-  if (cmd === 'getvar' || cmd === 'getlocalvar' || cmd === 'getglobalvar') {
+  if (GET_VAR_COMMANDS.includes(cmd)) {
     const key = rest.trim()
     return storeOf(ctx).get(key) ?? ''
   }
-  if (cmd === 'hasvar') return storeOf(ctx).has(rest.trim()) ? 'true' : 'false'
-  if (cmd === 'incvar' || cmd === 'decvar') {
+  if (HAS_VAR_COMMANDS.includes(cmd)) return storeOf(ctx).has(rest.trim()) ? 'true' : 'false'
+  // 对齐 ST：incvar/decvar 返回新值（addvar 返回空串）。
+  if (INC_VAR_COMMANDS.includes(cmd) || DEC_VAR_COMMANDS.includes(cmd)) {
     const key = rest.trim()
     const prev = Number(storeOf(ctx).get(key) ?? '0')
-    const next = (Number.isFinite(prev) ? prev : 0) + (cmd === 'incvar' ? 1 : -1)
-    storeOf(ctx).set(key, String(next))
-    return ''
+    const next = String((Number.isFinite(prev) ? prev : 0) + (INC_VAR_COMMANDS.includes(cmd) ? 1 : -1))
+    storeOf(ctx).set(key, next)
+    return next
   }
-  if (cmd === 'addvar') {
+  if (ADD_VAR_COMMANDS.includes(cmd)) {
     const [name, deltaRaw] = splitOnce(rest)
     const key = name.trim()
     const prev = Number(storeOf(ctx).get(key) ?? '0')
@@ -306,8 +319,8 @@ export function expandIdentityMacros(text: string, ctx: Pick<MacroContext, 'char
 export function hasTurnLocalMacros(text: string): boolean {
   if (text.includes('<%')) return true
   // 原生 MVU 的 stat_data 是轮初剧情快照；读取它的宏和 EJS 一样不能跨轮钉死。
-  if (/\{\{\s*(?:getvar|getlocalvar|getglobalvar)\s*::\s*stat_data(?:[.\[]|\s*\}\})/i.test(text)) return true
-  return /\{\{\s*(outlet::|outletPromptsInjected:|lastusermessage|lastmessage|last_user_message|lastcharmessage|last_char_message|time|date|datetime|weekday|isodate|isotime|roll\s*:|random\s*:|pick\s*:)/i.test(text)
+  if (/\{\{\s*(?:getvar|getlocalvar|getglobalvar|hasvar|haslocalvar|hasglobalvar)\s*::\s*stat_data(?:[.\[]|\s*\}\})/i.test(text)) return true
+  return /\{\{\s*(outlet::|outletPromptsInjected:|lastusermessage|lastmessage|last_user_message|lastcharmessage|last_char_message|time|date|datetime|weekday|isodate|isotime|roll(?:\s*:|\s+\S)|random\s*:|pick\s*:)/i.test(text)
 }
 
 /** 检测尚未处理的 EJS / STscript；EJS 由隔离执行器展开，STscript 仍不执行。 */

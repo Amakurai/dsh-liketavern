@@ -305,15 +305,39 @@ describe('ST 常用宏补全', () => {
     expect(expandMacros('[{{roll:abc}}][{{roll:1000d6}}]', { ...ctx, random: () => 0 })).toBe('[][]')
   })
 
+  it('roll 也接受 ST 的空格写法，且同样是本轮宏；{{rollback}} 之类不是骰子', () => {
+    expect(expandMacros('{{roll 1d6}}|{{roll d20+1}}', { ...ctx, random: () => 0 })).toBe('1|2')
+    expect(hasTurnLocalMacros('{{roll 1d6}}')).toBe(true)
+    expect(hasTurnLocalMacros('{{rollback}}')).toBe(false)
+  })
+
   it('isodate / isotime 使用组装时钟，standing 冻结时可被 vars 覆盖', () => {
     expect(expandMacros('{{isodate}} {{isotime}}', ctx, at)).toBe('2026-01-02 03:04')
     expect(expandMacros('{{isodate}}', { ...ctx, vars: { isodate: '' } }, at)).toBe('')
   })
 
   it('incvar / decvar / hasvar 读写同一变量表；hasvar 在同串 setvar 之后求值', () => {
-    expect(expandMacros('{{incvar::n}}{{incvar::n}}{{decvar::n}}{{getvar::n}}', { ...ctx })).toBe('1')
+    // 对齐 ST：incvar/decvar 输出新值，卡片常写「第{{incvar::day}}天」。
+    expect(expandMacros('{{incvar::n}},{{incvar::n}},{{decvar::n}}|{{getvar::n}}', { ...ctx })).toBe('1,2,1|1')
+    expect(expandMacros('第{{incvar::day}}天', { ...ctx, store: new Map([['day', '3']]) })).toBe('第4天')
     expect(expandMacros('{{hasvar::x}}|{{setvar::x::1}}{{hasvar::x}}', { ...ctx })).toBe('true|true')
     expect(expandMacros('{{hasvar::y}}', { ...ctx })).toBe('false')
+  })
+
+  it('add/inc/dec/has 的 global 拼写与 setglobalvar 共用同一变量表', () => {
+    const store = new Map<string, string>()
+    expect(expandMacros('{{setglobalvar::g::5}}{{addglobalvar::g::2}}{{incglobalvar::g}}|{{decglobalvar::g}}|{{hasglobalvar::g}}',
+      { ...ctx, store })).toBe('8|7|true')
+    expect(store.get('g')).toBe('7')
+    const tracker = createMacroDependencyTracker(ctx, [{ text: '{{incglobalvar::hp}}', turnLocal: true }])
+    expect(tracker.isDynamic('{{getglobalvar::hp}}', ctx)).toBe(true)
+  })
+
+  it('hasvar 读取 MVU stat_data 只读快照，并且是本轮宏；写入仍被拒绝', () => {
+    const mvu = { ...ctx, readonlyStatData: { hp: 0, bag: { key: 'x' } } }
+    expect(expandMacros('{{hasvar::stat_data.hp}}|{{hasvar::stat_data.bag.key}}|{{hasvar::stat_data.mp}}', mvu)).toBe('true|true|false')
+    expect(hasTurnLocalMacros('{{hasvar::stat_data.hp}}')).toBe(true)
+    expect(() => expandMacros('{{incglobalvar::stat_data.hp}}', mvu)).toThrow(/只读/)
   })
 
   it('简单别名：space / reverse / banned / charJailbreak / group / notChar', () => {

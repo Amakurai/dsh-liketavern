@@ -184,6 +184,16 @@ describe('深度过滤（applyRegexToMessages，depth 0 = 数组末尾）', () =
     expect(res.messages.map((m) => m.content)).toEqual(['cat', 'cat', 'dog'])
   })
 
+  it('对齐 ST：负数 maxDepth / minDepth 表示不限，导入的 -1 不会让规则对所有消息失效', () => {
+    const res = applyRegexToMessages(
+      messages,
+      [makeRule({ id: 'r', find: 'cat', replace: 'dog', minDepth: -1, maxDepth: -1 })],
+      FILTER,
+      CTX,
+    )
+    expect(res.messages.map((m) => m.content)).toEqual(['dog', 'dog', 'dog'])
+  })
+
   it('minDepth=1 跳过 depth 0 的最新消息', () => {
     const res = applyRegexToMessages(
       messages,

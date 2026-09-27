@@ -18,9 +18,10 @@
  * - `{{lastMessage}}`：最近一条真实用户或 assistant 消息（本轮宏，禁止进 standing）
  * - `{{lastCharMessage}}`：最近一条 assistant 消息（本轮宏，禁止进 standing）
  * - `{{random::A::B}}` / `{{pick::A,B}}` / `{{random:1,10}}`：掷骰（本轮宏，禁止进 standing）
- * - `{{roll:1d20}}` / `{{roll:d6+2}}` / `{{roll:20}}`：ST 骰子（本轮宏）；非法表达式为空串
+ * - `{{roll:1d20}}` / `{{roll d6+2}}` / `{{roll:20}}`：ST 骰子（本轮宏）；非法表达式为空串
  * - `{{isodate}}` / `{{isotime}}`：ISO 日期与时间（本轮宏）
- * - `{{incvar::x}}` / `{{decvar::x}}` / `{{hasvar::x}}`：变量自增、自减与存在判断（true/false）
+ * - `{{incvar::x}}` / `{{decvar::x}}`：自增、自减并返回新值；`{{hasvar::x}}`：存在判断（true/false）
+ *   （add/inc/dec/has 的 local/global 拼写同样视为同一变量表）
  * - `{{space}}` / `{{reverse:文本}}` / `{{banned "词"}}`（删除）/ `{{charJailbreak}}`（同 charInstruction）
  * - `{{group}}` / `{{groupNotMuted}}`：单角色会话即角色名；`{{notChar}}`：用户名
  *

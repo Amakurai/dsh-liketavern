@@ -13,7 +13,7 @@ import { openChildSession } from './openChild.js'
 import { TavernSeatChip } from './seatChip.js'
 import { HelperScripts } from './helperScripts.js'
 import type { WorldInfoEntry } from '../core/types.js'
-import { cardGreetingVariants } from '../core/greetingLog.js'
+import { activeGreetingIndex, cardGreetingVariants } from '../core/greetingLog.js'
 import { parseLorebook } from '../state/lorebook.js'
 import { LorebookEditor } from './panel/lorebookEditor.js'
 import type { CharacterSummary, Persona, PresetSummary, SessionBinding, TavernRemote, TavernSettings } from './types.js'
@@ -331,7 +331,8 @@ function HeaderChipSession(props: HeaderChipProps) {
       toast.show(t('chip.swipe.none'))
       return
     }
-    const next = ((binding.greetingIndex + delta) % total + total) % total
+    // 越界的旧下标实际展示的是第 1 条；从它翻页，不能「下一条」又落回当前这条。
+    const next = ((activeGreetingIndex(binding.greetingIndex, total) + delta) % total + total) % total
     const r = await remote.swipeGreeting({ sessionId, index: next })
     if (!r.ok) setError(r.error.message)
     else {

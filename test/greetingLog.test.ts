@@ -3,6 +3,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
+  activeGreetingIndex,
   cardGreetingVariants,
   greetingFloorState,
   isGreetingOnlyBlank,
@@ -91,6 +92,13 @@ describe('greetingFloorState', () => {
       started: true,
       swipe: null,
     })
+  })
+})
+
+describe('activeGreetingIndex', () => {
+  it('合法下标原样返回；越界、负数与非整数一律回退 0，不夹到末尾', () => {
+    expect(activeGreetingIndex(1, 3)).toBe(1)
+    expect([activeGreetingIndex(5, 2), activeGreetingIndex(-1, 2), activeGreetingIndex(1.5, 2), activeGreetingIndex(0, 0)]).toEqual([0, 0, 0, 0])
   })
 })
 

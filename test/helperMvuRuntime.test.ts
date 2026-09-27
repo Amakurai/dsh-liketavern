@@ -167,11 +167,21 @@ it('全局开关在新楼层期间恢复时延期旧锚点初始化，当前真�
 
 it('真实 turn 1 greeting seed 没有 finish 也能初始化，识别开场文本与 swipe 且不执行正文命令',async()=>{
   events.push(...greetingTurnEvents("<initvar>hp: 7</initvar> _.add('hp',9);"))
+  await state.saveCharacter(cardId,{firstMes:'一',alternateGreetings:['二',"<initvar>hp: 7</initvar> _.add('hp',9);"]})
   await state.saveBinding({... (await state.loadBinding('session'))!,greetingIndex:2})
   const bundle=await getHelperScriptBundle(ctx,state,'session'),work=await prepare()
   expect(work).toMatchObject({job:{turn:1,kind:'initialize'},applyText:false,swipeId:2,greeting:"<initvar>hp: 7</initvar> _.add('hp',9);"})
   expect(work.job?.seq).toBe(bundle.messageId);await commit(work,{stat_data:{hp:7}})
   await queueHelperMvuTurn(state,'session',snapshot());expect((await read()).mvu?.pending).toEqual([])
+})
+
+it('编辑角色卡删掉备选开场白后，越界的旧下标按实际展示的第 1 条报告 swipe，不夹到末页也不丢页',async()=>{
+  events.push(...greetingTurnEvents('一'))
+  await state.saveCharacter(cardId,{firstMes:'一',alternateGreetings:['二']})
+  await state.saveBinding({... (await state.loadBinding('session'))!,greetingIndex:5})
+  const bundle=await getHelperScriptBundle(ctx,state,'session')
+  expect(bundle.snapshot?.messages[0]?.swipe).toMatchObject({active:0,pages:[{message:'一'},{message:'二'}]})
+  expect(await prepare()).toMatchObject({job:{kind:'initialize'},swipeId:0,greeting:'一'})
 })
 
 it('完成回执在宿主重启后仍以有界 id/digest 暴露，可确认丢失的成功响应',async()=>{

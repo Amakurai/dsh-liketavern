@@ -300,8 +300,25 @@ export function tavernCardBridgeScript(options: Omit<CardFrameOptions, 'connectH
     // 不信任第三方 head、注释或伪造的 bridge 标记；重新解析前先建立有效策略。
     return (${wrapCardDocument.toString()})(html, cspHtml + libraryHtml + stubHtml, (${hasCardDocumentShell.toString()})(html));
   }
+  // 浏览器里 document.write 后不调用 close 仍会渲染（文档保持打开）。缓冲整页时若同一任务内
+  // 没等到 close，就在下一任务补写并保持打开；否则只写不关的封面会整页空白。
+  var flushTimer = null;
+  function flushBuffered(close) {
+    if (flushTimer !== null) { clearTimeout(flushTimer); flushTimer = null; }
+    if (writeBuf === null) return false;
+    var html = injectBridge(writeBuf);
+    writeBuf = null;
+    origOpen();
+    origWrite(html);
+    if (close) origClose();
+    return true;
+  }
+  function deferFlush() {
+    if (flushTimer === null) flushTimer = setTimeout(function () { flushTimer = null; flushBuffered(false); }, 0);
+  }
   document.open = function () {
     writeBuf = '';
+    deferFlush();
     return document;
   };
   document.write = function () {
@@ -309,6 +326,7 @@ export function tavernCardBridgeScript(options: Omit<CardFrameOptions, 'connectH
     if (writeBuf === null) {
       if (/<!DOCTYPE/i.test(chunk) || /<html[\\s>]/i.test(chunk)) {
         writeBuf = chunk;
+        deferFlush();
         return;
       }
       return origWrite(chunk);
@@ -319,12 +337,7 @@ export function tavernCardBridgeScript(options: Omit<CardFrameOptions, 'connectH
     document.write(Array.prototype.join.call(arguments, '') + '\\n');
   };
   document.close = function () {
-    if (writeBuf === null) return origClose();
-    var html = injectBridge(writeBuf);
-    writeBuf = null;
-    origOpen();
-    origWrite(html);
-    origClose();
+    if (!flushBuffered(true)) return origClose();
   };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', watchHeight);
   else watchHeight();

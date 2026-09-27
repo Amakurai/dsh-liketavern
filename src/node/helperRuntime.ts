@@ -2,7 +2,7 @@
 import {assertHelperMvuWritable,ensureHelperMvuScriptAnchor} from './helperMvu.js'
 import {effectiveHelperSwipes,type HelperSwipeSet} from '../core/helperSwipes.js'
 import {expandIdentityMacros} from '../core/macros.js'
-import {cardGreetingVariants} from '../core/greetingLog.js'
+import {activeGreetingIndex,cardGreetingVariants} from '../core/greetingLog.js'
 import { createHash } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
@@ -125,7 +125,7 @@ function snapshot(context:Awaited<ReturnType<typeof helperContext>>,scopes:Helpe
   return {storyId:context.binding.storyId!,historyRevision:context.historyRevision,currentMessageId:context.currentMessageId,
     writable:context.writable,scopes:exposed,messages:context.history.map((message,index)=>{
       const data=exposed[JSON.stringify(['message',index])]??{},extra=extras[message.identity]??{}
-      const initial=index===0&&message.role==='assistant'&&context.greetings.length?{active:Math.min(context.binding.greetingIndex,context.greetings.length-1),pages:context.greetings.map(text=>({message:text,data:{},extra:{}}))}:undefined
+      const initial=index===0&&message.role==='assistant'&&context.greetings.length?{active:activeGreetingIndex(context.binding.greetingIndex,context.greetings.length),pages:context.greetings.map(text=>({message:text,data:{},extra:{}}))}:undefined
       return {message_id:index,name:message.name,role:message.role,is_hidden:false,message:message.message,data,extra,
         swipe:effectiveHelperSwipes({message:message.message,data,extra},swipes[message.identity]??initial)}
     })}

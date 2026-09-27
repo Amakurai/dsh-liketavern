@@ -182,6 +182,22 @@ it('世界状态拒绝无法解析的过期时间，合法 ISO 时间照常落�
   expect(deltas.map(delta => [delta.content, delta.expires])).toEqual([['集市今日开放', '2999-01-01T00:00:00.000Z']])
 })
 
+it('世界状态拒绝被 Date.parse 宽松解析成旧年份的写法与已过去的时间，避免写入即过期、静默不可见', async () => {
+  vi.spyOn(agent, 'inject').mockImplementation(() => undefined)
+  const result = await run(`
+    const out = [];
+    for (const expiresAt of ['3', 'day 3', 'June 5', '2001-01-01']) out.push(await tools.tavern_worldstate_update({type:'add', content:expiresAt, expiresAt}));
+    out.push(await tools.tavern_worldstate_update({type:'add', content:'日期形态', expiresAt:'2999-06-05'}));
+    return out;
+  `)
+  expect(result.isError, JSON.stringify(result.content)).toBe(false)
+  const out = (result.value as { result: Array<{ ok: boolean; error?: string }> }).result
+  expect(out.map(item => item.ok)).toEqual([false, false, false, false, true])
+  expect(out[3]!.error).toContain('已经过去')
+  const deltas = await (await workspace()).deltas.list({ includeRevoked: true })
+  expect(deltas.map(delta => delta.content)).toEqual(['日期形态'])
+})
+
 it('成功写入后返回缺失字段会令外层 invalid-output，但保留单条记忆、写入确认及楼层回滚', async () => {
   const inject = vi.spyOn(agent, 'inject').mockImplementation(() => undefined)
   const result = await run(`

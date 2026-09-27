@@ -160,8 +160,8 @@ it('编辑回复失败重试只发布一个分支，正文与派生事实分别�
     const message = { ...createAssistantMessage({ content: [{ type: 'text', text: '灯亮着' }], source: { provider: 'test', model: 'test' } }), id: 'message-2' }
     const events = [
       { type: 'turn/start', data: { turn: 2 } },
-      { type: 'user/message', data: createUserMessage({ content: [{ type: 'text', text: '看看灯塔' }], source: { kind: 'user' } }) },
-      { type: 'assistant/message', data: {stream: [],  turn: 2, step: 1, message } },
+      { type: 'user/message', surfaceOp: 'append', data: createUserMessage({ content: [{ type: 'text', text: '看看灯塔' }], source: { kind: 'user' } }) },
+      { type: 'assistant/message', surfaceOp: 'append', data: {stream: [],  turn: 2, step: 1, message } },
       { type: 'turn/end', data: { turn: 2, reason: { kind: 'completed' } } },
     ].map((event, seq) => ({ ...event, seq, time: seq })) as SessionEvent[]
     const sourceSession = { id: 'floor-editor', header: { agentPreset: 'tavern' }, inheritedEventCount: 0,

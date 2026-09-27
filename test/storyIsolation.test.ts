@@ -9,8 +9,10 @@ import { createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { AttachmentId } from '@deepseek-ai/dsh-attachment'
 import { TavernState } from '../src/node/state.js'
 import { resolveConfig } from '../src/node/config.js'
-import { regenerate, editAssistantMessage, rollbackToFloor } from '../src/node/floors.js'
+import { regenerate, editAssistantMessage, rollbackToFloor, getFloorSiblings } from '../src/node/floors.js'
 import { saveBinding, type SessionBinding } from '../src/node/bindings.js'
+import * as bindingStorage from '../src/node/bindings.js'
+import { appendSiblingFork, loadSiblingForks } from '../src/state/siblings.js'
 import { MemoryStore } from '../src/state/memory.js'
 import { resolveReadableAssetPath } from '../src/core/assetRead.js'
 import { CONTINUE_INSTRUCTION_PREFIX } from '../src/core/dshPrompt.js'
@@ -35,8 +37,8 @@ function addSession(id: string, events: SessionEvent[], header = { agentPreset: 
 function turn(number: number): SessionEvent[] {
   const events = [
     { type: 'turn/start', data: { turn: number } },
-    { type: 'user/message', data: createUserMessage({ content: [{ type: 'text', text: '开门' }], source: { kind: 'user' } }) },
-    { type: 'assistant/message', data: {stream: [],  turn: number, step: 1, message: createAssistantMessage({ content: [{ type: 'text', text: '门打开了' }], source: { provider: 'test', model: 'test' } }) } },
+    { type: 'user/message', surfaceOp: 'append', data: createUserMessage({ content: [{ type: 'text', text: '开门' }], source: { kind: 'user' } }) },
+    { type: 'assistant/message', surfaceOp: 'append', data: {stream: [],  turn: number, step: 1, message: createAssistantMessage({ content: [{ type: 'text', text: '门打开了' }], source: { provider: 'test', model: 'test' } }) } },
     { type: 'turn/end', data: { turn: number, reason: { kind: 'completed' } } },
   ]
   return events.map((e, seq) => ({ ...e, seq: (number - 1) * 4 + seq, time: seq })) as SessionEvent[]
@@ -87,6 +89,31 @@ it('连续重生成兄弟分支：原会话的事实不变，兄弟新事实不�
   expect((await state.workspace(cardId)).fs.root).not.toBe((await workspace('parent')).fs.root)
 })
 
+it('导航清理与新分支登记并发时保留新分支，只删除已确认的悬空记录', async () => {
+  addSession('old-child', turn(1))
+  const fork = (childSessionId: string) => ({ parentSessionId: 'parent', childSessionId, turn: 1, createdAt: '2026-01-01' })
+  await appendSiblingFork(root, fork('old-child'))
+  await appendSiblingFork(root, fork('missing-child'))
+  let entered!: () => void, release!: () => void
+  const started = new Promise<void>(resolve => { entered = resolve })
+  const gate = new Promise<void>(resolve => { release = resolve })
+  const original = bindingStorage.loadBinding
+  const probe = vi.spyOn(bindingStorage, 'loadBinding').mockImplementation(async (paths, sessionId) => {
+    if (sessionId === 'missing-child') { entered(); await gate }
+    return original(paths, sessionId)
+  })
+  try {
+    const reading = getFloorSiblings({ ctx, state }, 'parent', undefined, 1)
+    await started
+    addSession('new-child', turn(1))
+    const adding = appendSiblingFork(root, fork('new-child'))
+    release()
+    await Promise.all([reading, adding])
+    expect((await loadSiblingForks(root)).map(fork => fork.childSessionId).sort()).toEqual(['new-child', 'old-child'])
+    expect((await getFloorSiblings({ ctx, state }, 'parent', undefined, 1)).swipe?.siblings).toEqual(['parent', 'new-child', 'old-child'])
+  } finally { release(); probe.mockRestore() }
+})
+
 it('重生成续写轮时驱动消息保留插件 notice 来源，不把续写指令变成用户台词', async () => {
   const instruction = createUserMessage({ content: [{ type: 'text', text: `${CONTINUE_INSTRUCTION_PREFIX}请继续` }],
     source: { kind: 'plugin', plugin: 'dsh-tavern', form: 'notice', summary: '续写指令' } })
@@ -127,6 +154,29 @@ it('新会话复制初始状态；旧绑定只迁移一次并保留原目录', a
   expect((await (await workspace('legacy')).memory.list()).map((m) => m.body)).toEqual(['初始事实'])
   expect((await template.memory.list()).length).toBe(2)
   expect(resolveReadableAssetPath(`stories/${legacy!.storyId}/memory/a.md`).ok).toBe(false)
+})
+
+it.each(['binding', 'metadata'] as const)('读取时拒绝 %s 中错误的剧情所属会话，不能开启写入另一会话的楼层', async mode => {
+  await state.saveBinding(binding('other'))
+  const parentBinding = (await state.loadBinding('parent'))!
+  const otherBinding = (await state.loadBinding('other'))!
+  const parent = await workspace('parent'), other = await workspace('other')
+  await parent.fs.writeText('journal.md', 'parent 原文')
+  await other.fs.writeText('journal.md', 'other 原文')
+  if (mode === 'binding') {
+    await saveBinding(state.paths, { ...parentBinding, storyId: otherBinding.storyId })
+  } else {
+    const path = join(parent.fs.root, 'story.json')
+    const metadata = JSON.parse(await readFile(path, 'utf8'))
+    await writeFile(path, JSON.stringify({ ...metadata, sessionId: 'other' }))
+  }
+  await expect(state.loadBinding('parent')).rejects.toThrow(/剧情状态属于另一会话/)
+  await expect(onTurnStart(state, 'parent', 2)).rejects.toThrow(/剧情状态属于另一会话/)
+  expect(state.openFloors.has('parent')).toBe(false)
+  expect(await parent.fs.readText('journal.md')).toBe('parent 原文')
+  expect(await other.fs.readText('journal.md')).toBe('other 原文')
+  expect(await parent.wal.listFloors()).toEqual([])
+  expect(await other.wal.listFloors()).toEqual([])
 })
 
 it('子会话已创建但绑定落盘失败时，用创建句柄移除子会话并丢弃草稿剧情', async () => {

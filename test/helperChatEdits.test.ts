@@ -14,6 +14,7 @@ import {commitHelperVariables,getHelperSnapshot,helperHistoryOf} from '../src/no
 import {editHelperMessages} from '../src/node/helperChatEdits.js'
 import {parseHelperMessageEdits} from '../src/core/helperChatEdits.js'
 import {editedHistorySeed} from '../src/node/helperChatSeed.js'
+import {editAssistantMessage} from '../src/node/floors.js'
 import {WorkspaceFs} from '../src/state/workspaceFs.js'
 import {loadHelperState,saveHelperState,type HelperState} from '../src/state/helper.js'
 import {MemoryStore} from '../src/state/memory.js'
@@ -46,6 +47,37 @@ async function edit(edits:unknown){const input=await request();return editHelper
   return {message_id:row.message_id,...(row.data!==undefined?{data:target?.data??{}}:{}),...(row.extra!==undefined?{extra:target?.extra??{}}:{}),...(row.pages!==undefined?{pages:target?.swipe??{active:0,pages:[{message:target.message,data:target.data,extra:target.extra}]}}:{})}
 })})}
 const texts=(session:Session)=>session.deriveMessages().filter(message=>message.role!=='tool'&&message.role!=='developer').flatMap(message=>message.content.filter(block=>block.type==='text').map(block=>block.text))
+
+it('楼层正文编辑保留工具调用与结果配对，子剧情撤销派生事实但原会话不变',async()=>{
+  const event=source.snapshotEvents().find(event=>event.type==='assistant/message'&&event.data.turn===2)!
+  if(event.type!=='assistant/message')throw Error('fixture missing assistant')
+  const before=source.snapshotEvents(),call=event.data.message.content.find(block=>block.type==='tool-call')!
+  const result=await editAssistantMessage({ctx,state},source.id,event.data.message.id,'edited floor reply')
+  const child=sessions.get(result.childSessionId)!
+  const reply=child.deriveMessages().find(message=>message.role==='assistant'&&message.content.some(block=>block.type==='text'&&block.text==='edited floor reply'))!
+  expect(reply.content).toContainEqual(call)
+  expect(child.deriveMessages().some(message=>message.role==='tool'&&call.type==='tool-call'&&message.toolCallId===call.id)).toBe(true)
+  expect(source.snapshotEvents()).toEqual(before)
+  const binding=(await state.loadBinding(child.id))!
+  expect((await (await state.storyWorkspace(cardId,binding.storyId)).memory.list()).map(entry=>entry.body)).toEqual(['fact-1'])
+})
+
+it('楼层正文编辑清除同轮旧压缩和失败流，模型实际视图使用修订正文',async()=>{
+  const raw=Session.create(source.id)
+  raw.append('agent-preset/selected',{agentPreset:'tavern'})
+  raw.append('turn/start',{turn:1});raw.append('step/start',{turn:1,step:1})
+  raw.append('assistant/attempt',{turn:1,step:1,stream:[{type:'text-chunks',time0:0,index:0,dt:[0],texts:['old failed text']}]})
+  const event=raw.append('assistant/message',{turn:1,step:1,stream:[],message:createAssistantMessage({content:[{type:'text',text:'original reply'}],source:{provider:'test',model:'test'}})},{surfaceOp:'append'})
+  raw.append('user/message',createUserMessage({content:[{type:'text',text:'stale compressed reply'}],source:{kind:'user'}}),{surfaceOp:{op:'replace',startSeq:event.seq,endSeq:event.seq},sourceEventSeqs:[event.seq]})
+  raw.append('step/end',{turn:1,step:1});raw.append('turn/end',{turn:1,reason:{kind:'completed'}})
+  source=raw;sessions.set(source.id,source)
+  const before=source.snapshotEvents()
+  const result=await editAssistantMessage({ctx,state},source.id,event.data.message.id,'revised floor reply')
+  const child=sessions.get(result.childSessionId)!
+  expect(texts(child)).toEqual(['revised floor reply'])
+  expect(JSON.stringify(child.snapshotEvents())).not.toContain('old failed text')
+  expect(source.snapshotEvents()).toEqual(before)
+})
 /** 重建工厂的三个已完成楼层，把真实 MVU 状态和回执按原始顺序写入各自 WAL。 */
 async function completedMvu(){
   const binding={...(await state.loadBinding(source.id))!,storyId:newStoryId(),helperMvu:true}

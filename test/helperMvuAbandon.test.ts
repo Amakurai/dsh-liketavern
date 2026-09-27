@@ -192,6 +192,7 @@ it('已提交的放弃标记随剧情分支继承，子剧情可再次放弃而�
   const childStory = await state.forkStory(binding, childId, async () => {})
   session = Session.create(childId, sourceSession.snapshotEvents()); storyId = childStory
   await state.saveBinding({ ...binding, sessionId: childId, storyId: childStory, helperMvu: true, walLineage: [{ sessionId: sourceSession.id, throughTurn: 2 }] })
+  expect(await (await ws()).fs.readText(HELPER_MVU_ABANDON_PATH)).toBe(sourceMarker)
   await start(3, true); await end(3)
   expect(await abandonHelperMvu(state, request())).toEqual({ disabled: true, abandoned: 1 })
   expect((await read()).mvu?.pending).toEqual([]); expect((await read()).mvu?.completed).toEqual(source.mvu?.completed)
@@ -199,4 +200,8 @@ it('已提交的放弃标记随剧情分支继承，子剧情可再次放弃而�
   expect(await loadHelperState(sourceWorkspace.fs)).toEqual(source)
   expect(await sourceWorkspace.fs.readText(HELPER_MVU_ABANDON_PATH)).toBe(sourceMarker)
   expect(JSON.parse((await (await ws()).fs.readText(HELPER_MVU_ABANDON_PATH))!)).toMatchObject({ sessionId: childId, storyId: childStory, floor: floor(3) })
+  const childWorkspace = await ws()
+  await childWorkspace.wal.rollbackFloor(floor(3), childWorkspace.fs.root)
+  expect(await childWorkspace.fs.readText(HELPER_MVU_ABANDON_PATH)).toBe(sourceMarker)
+  expect(await loadHelperState(childWorkspace.fs)).toEqual(source)
 })

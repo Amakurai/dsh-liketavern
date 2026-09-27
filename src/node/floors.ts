@@ -18,7 +18,7 @@ import { randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent, AgentOptions, CreateAgentOptions } from '@deepseek-ai/dsh-agent'
 import type { AgentPresetRegistry } from '@deepseek-ai/dsh-agent-preset-registry'
-import { createAssistantMessage, createUserMessage, type AssistantMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
+import { createUserMessage, type AssistantMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionLogOffset, type Session, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { join } from 'node:path'
 import { Wal } from '../state/wal.js'
@@ -31,9 +31,11 @@ import { CONTINUE_INSTRUCTION_PREFIX } from '../core/dshPrompt.js'
 import { DEFAULT_USER_NAME } from '../core/persona.js'
 import { characterPromptName } from '../core/characterData.js'
 import { greetingMessage, greetingTurnEvents } from './greetingSeed.js'
+import { editedHistorySeed } from './helperChatSeed.js'
 import { isTavernRuntimeSession, sessionPresetId } from './tavernSession.js'
 import { pruneSiblingForks, siblingSwipe, type SiblingSwipe } from '../core/siblings.js'
-import { appendSiblingFork, loadSiblingForks, mutateSiblingForks } from '../state/siblings.js'
+import { appendSiblingFork, loadSiblingForks, mutateSiblingForks, siblingsFile } from '../state/siblings.js'
+import { withWorkspaceLock } from '../state/workspaceLock.js'
 import { loadBinding, type SessionBinding, type WalLineageEntry } from './bindings.js'
 import type { TavernState } from './state.js'
 
@@ -561,7 +563,7 @@ export async function editUserMessage(
 
 /**
  * 把 seed 里指定 assistant 消息的正文替换为编辑后文本（新消息 id，保留原模型 source）。
- * 事件本体深冻，这里浅拷一层换 data.message；找不到返回 null。
+ * 保留非正文块与工具配对，共用批量编辑的旧压缩/流清理与真实宿主 seed 校验；找不到返回 null。
  */
 export function withEditedAssistantMessage(
   events: readonly SessionEvent[],
@@ -573,15 +575,7 @@ export function withEditedAssistantMessage(
   )
   if (index === -1) return null
   const event = events[index]!
-  const data = event.data as { turn: number; step: number; message: AssistantMessage; usage?: unknown; interrupted?: true }
-  const message = createAssistantMessage({
-    content: [{ type: 'text', text: newText }],
-    source: { provider: data.message.source.provider, model: data.message.source.model },
-  })
-  // 编辑生成的是完整新正文，中断标记（宿主 rc.2 起 interrupted: true）不应带进分支 seed。
-  const { interrupted: _dropped, ...rest } = data
-  const replaced = { ...event, data: { ...rest, message, stream: [] } } as SessionEvent
-  return [...events.slice(0, index), replaced, ...events.slice(index + 1)]
+  return editedHistorySeed(events, new Map([[event.seq, newText]]))
 }
 
 /** 读取指定楼层 assistant 消息的正文（编辑对话框预填用）。 */
@@ -753,35 +747,37 @@ export async function getFloorSiblings(
   const turn = resolveFloorTurn(session.snapshotEvents(), messageId, floorTurn)
   if (turn === null) return none
 
-  const forks = await loadSiblingForks(state.paths.root)
-  if (forks.length === 0) return none
-  const ids = new Set<string>()
-  for (const f of forks) {
-    ids.add(f.parentSessionId)
-    ids.add(f.childSessionId)
-  }
-  const existing = new Set<string>([sessionId])
-  // 并行探测存在性：兄弟索引会随分支数增长，串行 await loadBinding 让每次导航查询线性变慢。
-  await Promise.all(
-    [...ids].map(async (id) => {
-      if (ctx.sessions.get(id as Session['id']) !== undefined || (await loadBinding(state.paths, id)) !== null) {
-        existing.add(id)
-      }
-    }),
-  )
-  const exists = (id: string) => existing.has(id)
-  // 剪枝落盘走互斥读改写：与其它会话的 fork 登记（appendSiblingFork）并发时不互相覆盖。
-  try {
-    await mutateSiblingForks(state.paths.root, (current) => {
-      const pruned = pruneSiblingForks(current, exists)
-      return pruned.changed ? pruned.forks : current
-    })
-  } catch {
-    // 落盘失败不影响本次查询；下次读取再剪
-  }
-  const swipe = siblingSwipe(pruneSiblingForks(forks, exists).forks, sessionId, turn, exists)
-  if (!swipe) return none
-  return { swipe: { turn, ...swipe } }
+  // 存在性探测也是读改写的一部分：只锁最终写入会把期间新增、尚未探测的分支误删。
+  return withWorkspaceLock(siblingsFile(state.paths.root), async () => {
+    const forks = await loadSiblingForks(state.paths.root)
+    if (forks.length === 0) return none
+    const ids = new Set<string>()
+    for (const f of forks) {
+      ids.add(f.parentSessionId)
+      ids.add(f.childSessionId)
+    }
+    const existing = new Set<string>([sessionId])
+    // 并行探测存在性：兄弟索引会随分支数增长，串行 await loadBinding 让每次导航查询线性变慢。
+    await Promise.all(
+      [...ids].map(async (id) => {
+        if (ctx.sessions.get(id as Session['id']) !== undefined || (await loadBinding(state.paths, id)) !== null) {
+          existing.add(id)
+        }
+      }),
+    )
+    const exists = (id: string) => existing.has(id)
+    try {
+      await mutateSiblingForks(state.paths.root, (current) => {
+        const pruned = pruneSiblingForks(current, exists)
+        return pruned.changed ? pruned.forks : current
+      })
+    } catch {
+      // 落盘失败不影响本次查询；下次读取再剪。
+    }
+    const swipe = siblingSwipe(pruneSiblingForks(forks, exists).forks, sessionId, turn, exists)
+    if (!swipe) return none
+    return { swipe: { turn, ...swipe } }
+  })
 }
 
 /**

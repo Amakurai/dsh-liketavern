@@ -7,7 +7,9 @@ declare module '@deepseek-ai/dsh-session/types' {
 function marker(event:SessionEvent,reason:'stale-compaction'|'edited-stream'|'deleted-message'):SessionEvent{return {type:'tavern/message-edit-marker',seq:event.seq,time:event.time,ignorable:true,data:{originalType:event.type,reason}}}
 function editedContent(blocks:readonly ContentBlock[],text:string):ContentBlock[]{
   let placed=false
-  return blocks.flatMap<ContentBlock>(block=>{if(block.type!=='text')return [block];if(placed)return [];placed=true;return [{type:'text',text}]})
+  const edited=blocks.flatMap<ContentBlock>(block=>{if(block.type!=='text')return [block];if(placed)return [];placed=true;return [{type:'text',text}]})
+  // 工具调用或推理独占的回复原本没有 text 块，正文编辑仍须实际写入，而不能只换消息身份。
+  return placed?edited:[...edited,{type:'text',text}]
 }
 export function editedHistorySeed(events:readonly SessionEvent[],edits:ReadonlyMap<number,string>,deleted:ReadonlySet<number>=new Set()):SessionEvent[]{
   if(!edits.size&&!deleted.size)return [...events]

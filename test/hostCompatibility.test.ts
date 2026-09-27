@@ -3,7 +3,7 @@ import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
-import { createAssistantMessage, createUserMessage, type AssistantStreamRecord } from '@deepseek-ai/dsh-llm'
+import { createAssistantMessage, createUserMessage, ToolCallId, type AssistantStreamRecord } from '@deepseek-ai/dsh-llm'
 import { Session, SessionId, SessionStore, type SessionEvent } from '@deepseek-ai/dsh-session'
 import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import { afterEach, expect, it, vi } from 'vitest'
@@ -48,6 +48,20 @@ it('楼层编辑清空嵌入流并生成新消息身份，来源日志保持不�
   expect(changed).toHaveProperty('data.message.content', [{ type: 'text', text: '修订回复' }])
   expect(changed.type === 'assistant/message' && changed.data.message.id).not.toBe(event.data.message.id)
   expect(event.data.stream).toEqual([text, stop])
+})
+
+it('编辑原本只有工具调用的回复时写入新正文，同时保留工具块', () => {
+  const session = Session.create(SessionId('session-tool-only-edit'))
+  session.append('turn/start', { turn: 1 })
+  const call = { type: 'tool-call' as const, id: ToolCallId('factory-call'), name: 'factory_tool', arguments: '{}' }
+  const event = session.append('assistant/message', { turn: 1, step: 1, stream: [],
+    message: createAssistantMessage({ source: { provider: 'factory', model: 'factory' }, content: [call] }),
+  }, { surfaceOp: 'append' })
+  session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
+  const seed = withEditedAssistantMessage(session.snapshotEvents(), event.data.message.id, '新增正文')!
+  const changed = Session.create(SessionId('session-tool-only-child'), seed).deriveMessages()[0]!
+  expect(changed.role !== 'tool' && changed.role !== 'developer' && changed.content).toEqual([call, { type: 'text', text: '新增正文' }])
+  expect(event.data.message.content).toEqual([call])
 })
 
 /** 兼容部分宿主测试桩复用数组后原地 append；摘要与 seq 索引都必须观察到增长。 */

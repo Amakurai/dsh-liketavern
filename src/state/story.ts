@@ -83,7 +83,10 @@ export async function snapshotStory(options: {
         if (info?.isSymbolicLink()) throw new Error(`剧情快照不支持链接目录：${directory}`)
       }
       await dest.ensureDir()
-      const paths = ['journal.md', 'assets/chat-lorebook.json', 'state/world-delta.jsonl', 'state/template.json', 'state/helper.json']
+      const paths = ['journal.md', 'assets/chat-lorebook.json', 'state/world-delta.jsonl', 'state/template.json', 'state/helper.json',
+        // 放弃 MVU 的恢复标记也是 WAL 管理的剧情正文。继承日志却漏掉它会让子剧情
+        // 下一次写入记录错误的 before 镜像，之后无法完整还原祖先恢复状态。
+        ...(options.includeWal ? ['state/helper-mvu-abandon.json'] : [])]
       for (const directory of ['memory', 'state/wi-timers', ...(options.includeWal ? ['state/wal'] : [])]) {
         // 资产目录可忽略链接，但剧情快照必须明确拒绝，避免静默发布丢失文件的分支。
         for (const file of await source.list(directory, { rejectLinks: true })) paths.push(`${directory}/${file}`)

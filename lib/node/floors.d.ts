@@ -73,7 +73,7 @@ export declare function getFloorUserMessage({ ctx }: FloorDeps, sessionId: strin
 export declare function editUserMessage(deps: FloorDeps, sessionId: string, messageId: string, newText: string): Promise<ForkResult>;
 /**
  * 把 seed 里指定 assistant 消息的正文替换为编辑后文本（新消息 id，保留原模型 source）。
- * 事件本体深冻，这里浅拷一层换 data.message；找不到返回 null。
+ * 保留非正文块与工具配对，共用批量编辑的旧压缩/流清理与真实宿主 seed 校验；找不到返回 null。
  */
 export declare function withEditedAssistantMessage(events: readonly SessionEvent[], messageId: string, newText: string): SessionEvent[] | null;
 /** 读取指定楼层 assistant 消息的正文（编辑对话框预填用）。 */

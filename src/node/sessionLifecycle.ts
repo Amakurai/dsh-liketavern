@@ -68,6 +68,9 @@ export async function onTurnEnd(state:TavernState,sessionId:string,session?:Pick
     return
   }
   if(!key)return finishTurn(state,sessionId,session)
+  // 重复投递的旧结束帧不能借当前 openFloors 收口后来的轮次，也不能覆写旧成功回执。
+  const active=state.openFloors.get(sessionId)
+  if(active && active.floor!==key)throw new Error('宿主结束帧与当前楼层不一致')
   const storyId=state.openFloors.get(sessionId)?.storyId??(await state.loadBinding(sessionId))?.storyId
   const record=(error?:unknown)=>{
     if(!key||ending?.type!=='turn/end')return
@@ -113,7 +116,6 @@ async function finishTurn(state:TavernState,sessionId:string,session?:Pick<Sessi
       }
     }
   }
-  state.openFloors.delete(sessionId)
   state.currentTurns.delete(sessionId)
   state.currentSteps.delete(sessionId)
   state.stepNoticeMarks.delete(sessionId)
@@ -147,5 +149,8 @@ async function finishTurn(state:TavernState,sessionId:string,session?:Pick<Sessi
       if(!helperQueueError)await ws.wal.commitFloor(entry.floor)
     })
   }
+  // 最终校验或提交失败时保留原楼层归属，供同一结束事件重试。没有模板 generation
+  // 的普通楼层无法从模板恢复；提前清掉句柄会让重试虚报成功却漏掉 WAL 提交。
+  state.openFloors.delete(sessionId)
   if (templateError) throw templateError
 }

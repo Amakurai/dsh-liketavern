@@ -198,7 +198,8 @@ export async function getHelperScriptBundle(ctx:Context,state:TavernState,sessio
 export async function commitHelperVariables(ctx:Context,state:TavernState,request:{sessionId:string;messageId:number;storyId:string;historyRevision:string;changes:unknown}):Promise<HelperSnapshot> {
   const changes=helperChanges(request.changes)
   const context=await helperContext(ctx,state,request.sessionId,request.messageId)
-  return withWorkspaceLock(context.ws.fs.root,async()=>{
+  // 与消息修订共用剧情 → 绑定锁序；复核到提交期间不能让换绑使旧卡面继续写入。
+  return withWorkspaceLock(context.ws.fs.root,()=>withWorkspaceLock(state.paths.sessions,async()=>{
     const current=await helperContext(ctx,state,request.sessionId,request.messageId)
     if(current.binding.storyId!==request.storyId || current.ws.fs.root!==context.ws.fs.root) throw new Error('卡面剧情绑定已经改变')
     if(current.historyRevision!==request.historyRevision) throw new Error('聊天历史已改变，请刷新卡面后重试')
@@ -215,19 +216,19 @@ export async function commitHelperVariables(ctx:Context,state:TavernState,reques
     applyHelperChanges(await loadHelperScopes(current.ws.fs),mapped)
     const floors=await current.ws.wal.listFloors()
     if(floors.some(item=>item.floor===floor && item.rolledBack)) throw new Error('酒馆助手目标楼层已回滚')
-    if(floors.some(item=>item.floor===floor)) await current.ws.wal.validateFloor(floor)
+    if(floors.some(item=>item.floor===floor)) await current.ws.wal.reopenFloor(floor)
     else await current.ws.wal.beginFloor(floor)
     const scopes=await commitHelperChanges(current.ws.fs.withFloor(floor),mapped)
     await current.ws.wal.commitFloor(floor)
     const saved=await loadHelperState(current.ws.fs)
     return snapshot(current,scopes,saved.extras,saved.swipes)
-  })
+  }))
 }
 
 /** 聊天世界书等沙箱剧情写入复用楼层纪律；先验证业务内容，再调用 begin，最后 WAL 提交。 */
 export async function withHelperStoryWrite<T>(ctx:Context,state:TavernState,sessionId:string,messageId:number,storyId:string,write:(fs:WorkspaceFs,begin:()=>Promise<void>)=>Promise<T>):Promise<T> {
   const first=await helperContext(ctx,state,sessionId,messageId)
-  return withWorkspaceLock(first.ws.fs.root,async()=>{
+  return withWorkspaceLock(first.ws.fs.root,()=>withWorkspaceLock(state.paths.sessions,async()=>{
     const current=await helperContext(ctx,state,sessionId,messageId)
     if(current.binding.storyId!==storyId||current.ws.fs.root!==first.ws.fs.root)throw new Error('世界书剧情绑定已改变')
     if(!state.config.interactiveCards||current.binding.interactiveCards===false)throw new Error('交互卡已关闭')
@@ -239,12 +240,12 @@ export async function withHelperStoryWrite<T>(ctx:Context,state:TavernState,sess
       if(started)return
       const floors=await current.ws.wal.listFloors()
       if(floors.some(item=>item.floor===floor&&item.rolledBack))throw new Error('世界书目标楼层已回滚')
-      if(floors.some(item=>item.floor===floor))await current.ws.wal.validateFloor(floor)
+      if(floors.some(item=>item.floor===floor))await current.ws.wal.reopenFloor(floor)
       else await current.ws.wal.beginFloor(floor)
       started=true
     }
     const result=await write(current.ws.fs.withFloor(floor),begin)
     if(started)await current.ws.wal.commitFloor(floor)
     return result
-  })
+  }))
 }

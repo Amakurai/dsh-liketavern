@@ -14,6 +14,8 @@ import { HELPER_STATE_PATH } from '../src/state/helper.js'
 import { newStoryId, snapshotStory } from '../src/state/story.js'
 import { resolveReadableAssetPath } from '../src/core/assetRead.js'
 import { WorkspaceFs } from '../src/state/workspaceFs.js'
+import * as atomic from '../src/state/atomicWrite.js'
+import { withWorkspaceLock } from '../src/state/workspaceLock.js'
 
 let root:string,state:TavernState,ctx:Context,cardId:string
 const sessions=new Map<string,SessionEvent[]>()
@@ -257,6 +259,48 @@ describe('剧情变量与真实历史',()=>{
     await writeFile(records,valid)
     await workspace.wal.rollbackFloor('a#t1',workspace.fs.root)
     expect(await workspace.fs.readText(HELPER_STATE_PATH)).toBeNull()
+  })
+  it.each(['variables','story'] as const)('%s 正文替换失败后楼层保持未提交，重试成功后仍可完整回滚',async mode=>{
+    const initial=await save(await read(),'["chat",""]',{n:1}),workspace=await ws()
+    await workspace.fs.writeText('journal.md','原笔记')
+    const path=mode==='variables'?HELPER_STATE_PATH:'journal.md',before=await workspace.fs.readText(path)
+    const execute=()=>mode==='variables'?save(initial,'["chat",""]',{n:2}):withHelperStoryWrite(ctx,state,'a',3,initial.storyId,async(fs,begin)=>{await begin();await fs.writeText(path,'新笔记')})
+    const original=atomic.atomicWrite
+    const failure=vi.spyOn(atomic,'atomicWrite').mockImplementation(async(...args)=>{
+      if(args[0].endsWith(mode==='variables'?'helper.json':'journal.md'))throw new Error('工厂正文替换失败')
+      return original(...args)
+    })
+    await expect(execute()).rejects.toThrow('工厂正文替换失败')
+    failure.mockRestore()
+    expect(await workspace.fs.readText(path)).toBe(before)
+    expect((await workspace.wal.validateFloor('a#t1')).committed).toBe(false)
+    await execute()
+    expect((await workspace.wal.validateFloor('a#t1')).committed).toBe(true)
+    expect(await workspace.fs.readText(path)).not.toBe(before)
+    await workspace.wal.rollbackFloor('a#t1',workspace.fs.root)
+    expect(await workspace.fs.readText(HELPER_STATE_PATH)).toBeNull()
+    expect(await workspace.fs.readText('journal.md')).toBe('原笔记')
+  })
+  it.each(['variables','story'] as const)('%s 校验到提交期间换绑必须等待，旧卡面不能写入新剧情',async mode=>{
+    const snapshot=await read(),workspace=await ws(),binding=(await state.loadBinding('a'))!
+    const replacement=await state.createCharacter('并发换绑角色')
+    let entered!:()=>void,release!:()=>void
+    const started=new Promise<void>(resolve=>{entered=resolve}),gate=new Promise<void>(resolve=>{release=resolve})
+    const original=workspace.wal.recordChange.bind(workspace.wal)
+    vi.spyOn(workspace.wal,'recordChange').mockImplementationOnce(async(...args)=>{entered();await gate;return original(...args)})
+    const writing=mode==='variables'?save(snapshot,'["chat",""]',{n:1}):withHelperStoryWrite(ctx,state,'a',3,snapshot.storyId,async(fs,begin)=>{await begin();await fs.writeText('journal.md','旧剧情笔记')})
+    await started
+    let swapped=false
+    const switching=withWorkspaceLock(state.paths.sessions,async()=>{swapped=true;await state.saveBinding({...binding,cardId:replacement.cardId,storyId:undefined})})
+    await new Promise(resolve=>setImmediate(resolve))
+    const changedDuringWrite=swapped
+    release();await Promise.all([writing,switching])
+    expect(changedDuringWrite).toBe(false)
+    const next=(await state.loadBinding('a'))!,nextWorkspace=await state.storyWorkspace(next.cardId,next.storyId)
+    expect(next.cardId).toBe(replacement.cardId)
+    expect(await nextWorkspace.fs.readText(HELPER_STATE_PATH)).toBeNull()
+    expect(await nextWorkspace.fs.readText('journal.md')).toBe('')
+    await expect(save(snapshot,'["chat",""]',{stale:true})).rejects.toThrow(/绑定/)
   })
   it('损坏状态、超量与 getter 污染数据拒绝，不静默清空旧值',async()=>{
     const snapshot=await read(),workspace=await ws()

@@ -14,6 +14,7 @@ import * as templateOutput from '../src/node/templateOutput.js'
 import {getHelperEventState} from '../src/node/helperEventState.js'
 import {getHelperSnapshot} from '../src/node/helperRuntime.js'
 import {HELPER_STATE_PATH} from '../src/state/helper.js'
+import * as atomic from '../src/state/atomicWrite.js'
 
 let root:string,state:TavernState,ctx:Context,cardId:string,storyId:string,events:SessionEvent[]
 function factory():SessionEvent[]{return [
@@ -70,8 +71,30 @@ describe('实时助手事件的剧情收口屏障',()=>{
     vi.spyOn((await workspace()).wal,'commitFloor').mockRejectedValueOnce(new Error('工厂提交失败'))
     await expect(state.enqueueSessionTask('a',()=>onTurnEnd(state,'a',session()))).rejects.toThrow('工厂提交失败')
     await state.waitForSessionTasks('a')
-    expect(state.openFloors.has('a')).toBe(false)
+    expect(state.openFloors.has('a')).toBe(true)
     await expect(read(4)).rejects.toThrow('剧情收口失败：工厂提交失败')
+  })
+  it('无模板恢复记录的楼层提交失败后可重试，完成回执必须对应真实提交且仍能回滚',async()=>{
+    const ws=await workspace()
+    await ws.fs.writeText('journal.md','原文')
+    await onTurnStart(state,'a',1)
+    await ws.fs.withFloor('a#t1').writeText('journal.md','本轮事实')
+    const original=atomic.atomicWrite
+    const failure=vi.spyOn(atomic,'atomicWrite').mockImplementation(async(...args)=>{
+      if(args[0].endsWith('meta.json'))throw new Error('工厂楼层元数据替换失败')
+      return original(...args)
+    })
+    await expect(onTurnEnd(state,'a',session())).rejects.toThrow('工厂楼层元数据替换失败')
+    failure.mockRestore()
+    expect((await ws.wal.validateFloor('a#t1')).committed).toBe(false)
+    await expect(read(4)).rejects.toThrow(/剧情收口失败/)
+    await onTurnEnd(state,'a',session())
+    expect((await ws.wal.validateFloor('a#t1')).committed).toBe(true)
+    expect(await read(4)).toMatchObject({writable:true,closedThrough:4})
+    expect(state.openFloors.has('a')).toBe(false)
+    expect(await ws.fs.readText('journal.md')).toBe('本轮事实')
+    await ws.wal.rollbackFloor('a#t1',ws.fs.root)
+    expect(await ws.fs.readText('journal.md')).toBe('原文')
   })
   it('模板失败但 WAL 已提交时仍拒绝，允许显式成功重试后恢复',async()=>{
     await onTurnStart(state,'a',1)
@@ -81,6 +104,23 @@ describe('实时助手事件的剧情收口屏障',()=>{
     await expect(read(4)).rejects.toThrow('剧情收口失败：工厂模板失败')
     fail.mockRestore();await onTurnEnd(state,'a',session())
     expect((await read(4)).closedThrough).toBe(4)
+  })
+  it('迟到的旧结束帧不能收口新楼层、清除新轮状态或破坏旧成功回执',async()=>{
+    await onTurnStart(state,'a',1);await onTurnEnd(state,'a',session())
+    const previous=state.helperTurnClosures.get('a#t1')
+    const ws=await workspace()
+    await onTurnStart(state,'a',2)
+    await ws.fs.withFloor('a#t2').writeText('journal.md','第二轮事实')
+    const current=state.openFloors.get('a')
+    await expect(onTurnEnd(state,'a',session())).rejects.toThrow(/结束帧与当前楼层不一致/)
+    expect(state.openFloors.get('a')).toEqual(current)
+    expect(state.currentTurns.get('a')).toBe(2)
+    expect(state.helperTurnClosures.get('a#t1')).toEqual(previous)
+    expect((await ws.wal.validateFloor('a#t2')).committed).toBe(false)
+    events.push({type:'turn/start',seq:5,time:0,data:{turn:2}} as SessionEvent,{type:'turn/end',seq:6,time:0,data:{turn:2,reason:{kind:'completed'}}} as SessionEvent)
+    await onTurnEnd(state,'a',session())
+    expect((await ws.wal.validateFloor('a#t2')).committed).toBe(true)
+    expect((await read(6)).writable).toBe(true)
   })
   it('服务等待已入队的收口任务，再返回有提交证明的结果',async()=>{
     await onTurnStart(state,'a',1)
@@ -116,5 +156,24 @@ describe('实时助手事件的剧情收口屏障',()=>{
     await onTurnStart(state,'a',1);await onTurnEnd(state,'a',session())
     await appendFile(join((await workspace()).fs.root,'state/wal/a_t1/records.jsonl'),'{broken}\n')
     await expect(read(4)).rejects.toThrow(/WAL/)
+  })
+  it('已收口楼层回滚中断后，旧回执和 committed 标记不能放行完成事件',async()=>{
+    const ws=await workspace()
+    await ws.fs.writeText('journal.md','原文')
+    await onTurnStart(state,'a',1)
+    await ws.fs.withFloor('a#t1').writeText('journal.md','本轮笔记')
+    await onTurnEnd(state,'a',session())
+    expect((await read(4)).closedThrough).toBe(4)
+    const original=atomic.atomicWrite
+    const failure=vi.spyOn(atomic,'atomicWrite').mockImplementation(async (...args)=>{
+      if(args[0].endsWith('journal.md'))throw new Error('工厂回滚替换失败')
+      return original(...args)
+    })
+    await expect(ws.wal.rollbackFloor('a#t1',ws.fs.root)).rejects.toThrow('工厂回滚替换失败')
+    failure.mockRestore()
+    await expect(read(4)).rejects.toThrow('回滚恢复')
+    expect(await ws.fs.readText('journal.md')).toBe('本轮笔记')
+    await ws.wal.rollbackFloor('a#t1',ws.fs.root)
+    expect(await ws.fs.readText('journal.md')).toBe('原文')
   })
 })

@@ -2,6 +2,16 @@
 
 当前源码基线为 dsh 0.1.7-rc.2。以下按版本记录观测结果，升级时重新核对，不是永久架构要求。
 
+## 开场白首节点与迁移校验（2026-09-27）
+
+rc.2 的运行中 `Session` 接受先写 assistant 开场白、后写 system 的顺序，但发布版 v3→v4 迁移器会拒绝：`system/message requires a protected first surface head`。单独验证 `Session.create` 不足以发现这个重载故障。
+
+点击进入、swipe seed 和首条输入补偿统一写完整 turn/step，并在开场白前用公开 `createSystemMessage('')` 保留空 system 首节点。宿主 `SystemPromptProjection` 在首次请求时正常填入完整提示词，仍由宿主组装 SDK、standing 和 turn；占位不携带角色设定，不伪造模型请求。首条输入补偿在已有维护门控内等待会话队列，更新 lastTurn 后才放行生成；不再写 turn 0 游离开场白，异步资产读取后复核宿主是否已经开轮。
+
+回归使用真实临时目录、AgentLoop、模拟适配器及发布版迁移器，覆盖开场白、首轮回复、回退继承前缀和旧顺序拒绝。此修改预防新记录继续产生上述结构，不自动修复已经无法加载的外部旧日志；安装环境 boot/UI 冒烟仍需单独进行。
+
+切换开场白还需在读取前拒绝开放轮次，并在宏展开后及剧情分支草稿发布前复核来源 Session 身份与 seq；首条输入可能在文件读取期间到达，不能仅凭尚未落盘的 user/message 判定会话空闲。
+
 ## 0.1.7-rc.2 升级核对（2026-09-25）
 
 逐包核对公开 npm 的 package.json、lib 和声明：Cordis 4.0.4、Schemastery 3.18.4；宿主包统一锁定 `0.1.7-rc.2`。

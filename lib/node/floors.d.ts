@@ -99,8 +99,8 @@ export declare function continueFloor({ ctx, state }: FloorDeps, sessionId: stri
 export declare function greetingVariants(state: TavernState, cardId: string): Promise<string[]>;
 /**
  * 把「只有开场白、从未 turn/start」的会话标成已开聊，这样「新对话」不会再复用它。
- * dsh 的 blank 只看 turn/start；assistant/message 不够。不要在 inbox/inserted 热路径调用：
- * agent loop 马上会自己 append turn/start，抢号会把当轮打崩。
+ * dsh 的 blank 只看 turn/start；assistant/message 不够。inbox 补偿必须在维护门控内
+ * 等待会话队列后调用，不能与已经启动的 agent loop 抢 turn 号。
  */
 export declare function retireGreetingOnlyBlankSession(session: Session, ctx?: Context): boolean;
 /** 开场白楼层的 swipe / 是否问候楼层；其它 assistant 消息 isGreeting = false。 */
@@ -126,12 +126,12 @@ export declare function getFloorSiblings({ ctx, state }: FloorDeps, sessionId: s
 /**
  * 选卡进入对话：把开场白写进一轮完整 turn（start/step/message/end），
  * 聊天区才能露出封面，工具栏才会挂在这条开场白下面。「新对话」也不会再复用。
- * inbox 热路径仍走 ensureGreeting，避免和 agent loop 抢 turn 号。
+ * inbox 热路径在维护门控内等待同一个会话队列，使用相同的完整开场白轮次。
  */
 export declare function enterGreetingConversation({ ctx, state }: FloorDeps, sessionId: string): Promise<boolean>;
 /**
- * 确保会话有开场白：会话尚无任何 assistant 消息时，把当前 greetingIndex 对应的
- * 开场白作为 turn 0 的 assistant 消息追加进日志。已有则返回 false。
+ * 首条输入的补偿入口：由 inbox 的维护门控等待队列，在真实生成前补完整开场白轮次。
+ * 不再写 turn 0 游离消息；生成已开始时不补写，以免破坏宿主日志关系。
  */
 export declare function ensureGreeting({ ctx, state }: FloorDeps, sessionId: string): Promise<boolean>;
 /**

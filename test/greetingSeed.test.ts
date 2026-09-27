@@ -11,6 +11,7 @@ describe('greetingTurnEvents', () => {
     expect(events.map((event) => event.type)).toEqual([
       'turn/start',
       'step/start',
+      'system/message',
       'assistant/message',
       'step/end',
       'turn/end',

@@ -4,7 +4,7 @@
 
 **在 DeepSeek Harness 的 `dsh web` 中使用角色卡、世界书与长期记忆，开启 Tavern 式角色扮演。**
 
-[![Release](https://img.shields.io/badge/version-v0.4.1-blue.svg)](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.4.1)
+[![Release](https://img.shields.io/badge/version-v0.4.2-blue.svg)](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.4.2)
 [![dsh](https://img.shields.io/badge/dsh-0.1.7--rc.2-informational.svg)](https://deepseek-harness.github.io/deepseek-harness/)
 [![Node.js](https://img.shields.io/badge/node-%E2%89%A524-brightgreen.svg)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
@@ -100,7 +100,7 @@ flowchart LR
 
 ```bash
 # 1. 添加插件到 web profile
-dsh plugin --profile web add github:Amakurai/dsh-liketavern#v0.4.1
+dsh plugin --profile web add github:Amakurai/dsh-liketavern#v0.4.2
 
 # 2. 检查安装状态
 dsh plugin --profile web list --depth 0
@@ -115,11 +115,11 @@ dsh web
 
 ### 方式二：通过 Release 安装包（离线环境）
 
-1. 从 [v0.4.1 Release](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.4.1) 下载 `dsh-liketavern-0.4.1.tgz`（发布页附带 `SHA256SUMS.txt` 校验和）。
+1. 从 [v0.4.2 Release](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.4.2) 下载 `dsh-liketavern-0.4.2.tgz`（发布页附带 `SHA256SUMS.txt` 校验和）。
 2. 在压缩包所在目录执行：
 
 ```bash
-dsh plugin --profile web add ./dsh-liketavern-0.4.1.tgz
+dsh plugin --profile web add ./dsh-liketavern-0.4.2.tgz
 dsh web
 ```
 

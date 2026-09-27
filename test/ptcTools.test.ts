@@ -168,6 +168,20 @@ it('读写混排保持独占顺序，结果可直接引用；同层回滚撤销�
   expect(inject.mock.calls.filter(([message]) => JSON.stringify(message).includes(TURN_WRITE_ACK_PREFIX))).toHaveLength(3)
 })
 
+it('世界状态拒绝无法解析的过期时间，合法 ISO 时间照常落盘', async () => {
+  vi.spyOn(agent, 'inject').mockImplementation(() => undefined)
+  const result = await run(`
+    const bad = await tools.tavern_worldstate_update({type:'add', content:'城门明天关闭', expiresAt:'明天傍晚'});
+    const good = await tools.tavern_worldstate_update({type:'add', content:'集市今日开放', expiresAt:'2999-01-01T00:00:00.000Z'});
+    return {bad, good};
+  `)
+  expect(result.isError, JSON.stringify(result.content)).toBe(false)
+  expect(result.value).toMatchObject({ result: { bad: { ok: false }, good: { ok: true } } })
+  expect(JSON.stringify(result.value)).toContain('invalid-args')
+  const deltas = await (await workspace()).deltas.list()
+  expect(deltas.map(delta => [delta.content, delta.expires])).toEqual([['集市今日开放', '2999-01-01T00:00:00.000Z']])
+})
+
 it('成功写入后返回缺失字段会令外层 invalid-output，但保留单条记忆、写入确认及楼层回滚', async () => {
   const inject = vi.spyOn(agent, 'inject').mockImplementation(() => undefined)
   const result = await run(`

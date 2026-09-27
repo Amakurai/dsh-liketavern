@@ -9,9 +9,10 @@ import { CardDataSettings } from './cardData.js'
 import { DraftScope, useDraftGuard } from '../drafts.js'
 import { useDraftRestored, useDraftState } from '../draftPersistence.js'
 import { useEffect, useId, useRef, useState } from 'react'
+import { MAX_PRESET_STOP_CHARS, MAX_PRESET_STOP_SEQUENCES } from '../../core/presetSampling.js'
 import { setTavernLocale, useT } from '../i18n.js'
 import { DEFAULT_PROMPT_PREFERENCES, EMPTY_SESSION_DEFAULTS, type PresetSummary, type TavernRemote, type TavernSettings } from '../types.js'
-import { Btn, CheckChips, Err, Muted, NumInput, SaveBar, Section, Select, SettingsRow, Skeleton, Tabs, Toggle, runAsync, useLoader, useToast } from '../util.js'
+import { Btn, CheckChips, Err, LineListInput, Muted, NumInput, SaveBar, Section, Select, SettingsRow, Skeleton, Tabs, Toggle, runAsync, useLoader, useToast } from '../util.js'
 
 const SUBS = [
   { id: 'interface', labelKey: 'settings.sub.interface' },
@@ -28,6 +29,12 @@ type SubId = (typeof SUBS)[number]['id']
 
 /** 切走再切回「设置」页签后停在用户上次看的子组。 */
 let lastSub: SubId | undefined
+
+/** 与预设采样同一上限（DeepSeek 最多 16 个）；超限的全局值会让每次请求失败，保存前拒绝。 */
+function stopSequencesError(stop: readonly string[]): 'count' | 'length' | null {
+  if (stop.length > MAX_PRESET_STOP_SEQUENCES) return 'count'
+  return stop.some((item) => item.length > MAX_PRESET_STOP_CHARS) ? 'length' : null
+}
 
 export function SettingsSection(props: { remote: TavernRemote }) {
   const { remote } = props
@@ -296,15 +303,12 @@ export function SettingsSection(props: { remote: TavernRemote }) {
               />
             </SettingsRow>
             <SettingsRow title={t('settings.sampling.stop')} description={t('settings.sampling.stopDesc')} stacked>
-              <textarea
-                className="dsh-tavern-input dsh-tavern-textarea dsh-tavern-codeFont"
-                style={{ minHeight: 64 }}
-                value={draft.sampling.stop.join('\n')}
-                onChange={(e) => setSampling({ stop: e.target.value.split('\n').map((s: string) => s.trim()).filter(Boolean) })}
-              />
+              <LineListInput style={{ minHeight: 64 }} value={draft.sampling.stop} onChange={(stop) => setSampling({ stop })} />
             </SettingsRow>
+            <Err message={stopSequencesError(draft.sampling.stop) === null ? null
+              : t('settings.sampling.stopInvalid', { count: MAX_PRESET_STOP_SEQUENCES, chars: MAX_PRESET_STOP_CHARS })} />
             <SaveBar>
-              <Btn disabled={busy} onClick={() => void save({ sampling: draft.sampling }, t('settings.sampling.saved'))} primary size="md">
+              <Btn disabled={busy || stopSequencesError(draft.sampling.stop) !== null} onClick={() => void save({ sampling: draft.sampling }, t('settings.sampling.saved'))} primary size="md">
                 {t('settings.sampling.save')}
               </Btn>
             </SaveBar>
@@ -412,13 +416,10 @@ export function SettingsSection(props: { remote: TavernRemote }) {
                 <NumInput value={draft.triggerLogMax} onChange={(v) => setDraft({ ...draft, triggerLogMax: Math.max(10, Math.round(v)) })} />
               </SettingsRow>
               <SettingsRow title={t('settings.cards.whitelist')} description={t('settings.cards.whitelistDesc')} stacked>
-                <textarea
-                  className="dsh-tavern-input dsh-tavern-textarea dsh-tavern-codeFont"
+                <LineListInput
                   style={{ minHeight: 64 }}
-                  value={draft.cardNetworkWhitelist.join('\n')}
-                  onChange={(e) =>
-                    setDraft({ ...draft, cardNetworkWhitelist: e.target.value.split('\n').map((s: string) => s.trim()).filter(Boolean) })
-                  }
+                  value={draft.cardNetworkWhitelist}
+                  onChange={(cardNetworkWhitelist) => setDraft({ ...draft, cardNetworkWhitelist })}
                 />
               </SettingsRow>
               <SaveBar>

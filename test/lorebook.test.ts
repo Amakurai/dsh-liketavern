@@ -210,6 +210,18 @@ describe('parseLorebook：character_book 条目', () => {
     expect(e.sticky).toBeNull()
   })
 
+  it('position 缺失或非法时对齐 ST：只有 before_char 在角色定义前，其余落 after_char', () => {
+    const entries = parseLorebook({
+      entries: [
+        { keys: ['缺省'], content: '无 position' },
+        { keys: ['未知'], content: '未知字符串', position: 'somewhere' },
+        { keys: ['前'], content: '显式前置', position: 'before_char' },
+        { keys: ['数值'], content: '数值字符串', position: '4' },
+      ],
+    }, { source: 'character', sourceRef: 'cardX' })
+    expect(entries.map((e) => e.position)).toEqual([1, 1, 0, 4])
+  })
+
   it('顶层即条目数组同样可解析', () => {
     const viaObject = parseLorebook(book, { source: 'character', sourceRef: 'cardX' })
     const viaArray = parseLorebook(book.entries, { source: 'character', sourceRef: 'cardX' })
@@ -349,6 +361,16 @@ describe('mergeDeltasForExport', () => {
     expect(added.order).toBe(77)
     expect(added.enabled).toBe(true)
     expect(added.position).toBe(1) // AfterCharDefs
+    expect(added.constant).toBe(false) // 有关键词：按键触发
+  })
+
+  it('无关键词的 add 与剧情中一样常驻，导出后不会变成永不触发的空键条目', () => {
+    const merged = mergeDeltasForExport(originals, [delta({ id: '8', type: 'add', content: '城门已关闭' })])
+    const added = merged[2]!
+    expect(added.keys).toEqual([])
+    expect(added.constant).toBe(true)
+    const reparsed = parseLorebook(exportLorebook(merged, 'c'), { source: 'character', sourceRef: 'c' })
+    expect(reparsed.find((entry) => entry.content === '城门已关闭')?.constant).toBe(true)
   })
 
   it('revoked 与已过期的 delta 忽略', () => {

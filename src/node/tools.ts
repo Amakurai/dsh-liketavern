@@ -394,6 +394,11 @@ export function registerTavernTools(ctx: Context, state: TavernState): void {
         if ((args.type === 'update' || args.type === 'invalidate') && !args.ref) {
           return { ok: false, error: `invalid-args：type=${args.type} 需要提供 ref` }
         }
+        // 变化层只认可解析的时间；「明天」这类剧情内时间若原样落盘，会被当成永不过期。
+        const expires = args.expiresAt?.trim() ? args.expiresAt.trim() : null
+        if (expires !== null && Number.isNaN(Date.parse(expires))) {
+          return { ok: false, error: `invalid-args：expiresAt=${expires} 不是可解析的 ISO 时间；不需要过期时省略该参数` }
+        }
         const turn = state.currentTurns.get(resolved.sessionId) ?? 0
         const delta = await resolved.ws.deltas.append({
           type: args.type,
@@ -402,7 +407,7 @@ export function registerTavernTools(ctx: Context, state: TavernState): void {
           keys: args.keys ?? [],
           order: 100,
           sourceRange: `t${turn}`,
-          expires: args.expiresAt ?? null,
+          expires,
         })
         await rebuildIndex(resolved.ws.fs, estimateTokens)
         injectWriteAck(

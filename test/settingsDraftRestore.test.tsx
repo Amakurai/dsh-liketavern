@@ -176,4 +176,25 @@ describe('设置草稿恢复', () => {
     expect(snapshot.observed['settings:draft']).toEqual(settings(0.8))
     expect(snapshot.observed['settings:baseline']).toEqual(settings(0.8))
   })
+  it('停止序列逐键输入保留换行与空格，超过 16 个时提示并禁止保存', async () => {
+    snapshot.initial = { 'settings:sub': 'sampling' }
+    const api = remote(async () => ok({ settings: settings(0.7) }))
+    const view = await render(api)
+    const area = () => view.root.findByType('textarea')
+    const stop = () => (snapshot.observed['settings:draft'] as TavernConfigRaw).sampling.stop
+    // 逐键输入：回车与行尾空格必须留在编辑框里，否则第二个序列和带空格的序列无法输入。
+    let typed = ''
+    for (const char of 'User:\nNarrator: x') {
+      typed += char
+      await act(async () => area().props.onChange({ target: { value: typed } }))
+      expect(area().props.value).toBe(typed)
+    }
+    expect(stop()).toEqual(['User:', 'Narrator: x'])
+    const save = () => view.root.findAllByType(Btn).find(button => button.props.primary)!
+    expect(save().props.disabled).toBe(false)
+    const tooMany = Array.from({ length: 17 }, (_, index) => `S${index}`).join('\n')
+    await act(async () => area().props.onChange({ target: { value: tooMany } }))
+    expect(save().props.disabled).toBe(true)
+    expect(view.root.findByProps({ role: 'alert' }).children.join('')).toContain('16')
+  })
 })

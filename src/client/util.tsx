@@ -851,3 +851,29 @@ export function ListInput(props: { value: readonly string[]; onChange: (items: s
     />
   )
 }
+
+/** 每行一项（停止序列、主机白名单）；空行与首尾空白不入值。 */
+export function splitLineListText(text: string): string[] {
+  return text.split('\n').map((item) => item.trim()).filter(Boolean)
+}
+
+/** ListInput 的多行版本：同样由文本框持有原文，回车与行尾空格不会被受控回显吞掉。 */
+export function LineListInput(props: { value: readonly string[]; onChange: (items: string[]) => void; style?: CSSProperties }) {
+  const label = useContext(ControlLabel)
+  const [text, setText] = useState(() => props.value.join('\n'))
+  const external = props.value.join('\n')
+  const shown = splitLineListText(text).join('\n') === external ? text : external
+  return (
+    <textarea
+      aria-labelledby={label?.labelId}
+      aria-describedby={label?.descriptionId}
+      className="dsh-tavern-input dsh-tavern-textarea dsh-tavern-codeFont"
+      style={props.style}
+      value={shown}
+      onChange={(e) => {
+        setText(e.target.value)
+        props.onChange(splitLineListText(e.target.value))
+      }}
+    />
+  )
+}

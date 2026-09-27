@@ -240,4 +240,12 @@ export declare function ListInput(props: {
     placeholder?: string;
     preserveRegex?: boolean;
 }): import("react").JSX.Element;
+/** 每行一项（停止序列、主机白名单）；空行与首尾空白不入值。 */
+export declare function splitLineListText(text: string): string[];
+/** ListInput 的多行版本：同样由文本框持有原文，回车与行尾空格不会被受控回显吞掉。 */
+export declare function LineListInput(props: {
+    value: readonly string[];
+    onChange: (items: string[]) => void;
+    style?: CSSProperties;
+}): import("react").JSX.Element;
 export {};

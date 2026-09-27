@@ -93,6 +93,7 @@ export declare const zh: {
     readonly 'settings.sampling.thinking.max': "最高";
     readonly 'settings.sampling.stop': "停止序列";
     readonly 'settings.sampling.stopDesc': "每行一个。";
+    readonly 'settings.sampling.stopInvalid': "停止序列最多 {count} 个，每个最多 {chars} 字符；超出时模型请求会失败，请删减后再保存。";
     readonly 'settings.sampling.save': "保存采样参数";
     readonly 'settings.sampling.saved': "已保存采样参数";
     readonly 'settings.worldinfo.title': "世界书引擎";

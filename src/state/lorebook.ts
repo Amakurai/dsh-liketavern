@@ -165,13 +165,16 @@ function parseNativeEntry(
   }
 }
 
-/** character_book 条目的 position：extensions.position 数值优先于顶层字符串。 */
+/**
+ * character_book 条目的 position：extensions.position 数值优先于顶层字符串。
+ * 两者都缺失或非法时对齐 ST convertCharacterBook：只有 before_char 落在角色定义前，其余一律 after_char。
+ */
 function parseBookPosition(raw: Record<string, unknown>, ext: Record<string, unknown>): WIPosition {
   const fromExt = toNum(ext.position, Number.NaN)
   if (Number.isInteger(fromExt) && fromExt >= 0 && fromExt <= 7) return fromExt as WIPosition
   if (raw.position === 'before_char') return 0
   if (raw.position === 'after_char') return 1
-  return toPosition(raw.position)
+  return toPosition(raw.position, 1)
 }
 
 /**
@@ -400,7 +403,8 @@ export function mergeDeltasForExport(originals: WorldInfoEntry[], deltas: WorldD
         selectiveLogic: 0,
         comment: `世界状态变化 ${delta.id}`,
         content: delta.content,
-        constant: false,
+        // 无关键词的变化在剧情里每轮常驻注入（isDeltaRenderedInTurn）；导出为非常驻空键条目会永不触发。
+        constant: delta.keys.length === 0,
         enabled: true,
         order: delta.order,
         position: 1, // AfterCharDefs（plan 3.12.4：变化层默认位置）

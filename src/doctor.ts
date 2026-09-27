@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url'
 import { dshHomeDisplay, resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 import { CHARACTER_ARCHIVE_FILE, isValidCardId } from './state/workspace.js'
 import { storyRoot } from './state/story.js'
-import { WAL_BINARY_MARK } from './state/wal.js'
+import { WAL_BINARY_MARK, WAL_FLOOR_MARKERS } from './state/wal.js'
 import { tavernPaths } from './node/paths.js'
 
 const REQUIRED_NODE_MAJOR = 24
@@ -224,6 +224,17 @@ async function readBoundedText(path: string, maxBytes: number, sharedBudget?: Re
   }
 }
 
+/** 楼层目录不含任何开始标记文件（链接或不可读都不算缺失，交给后续检查报错）。 */
+async function isUnstartedFloor(directory: string): Promise<boolean> {
+  for (const name of WAL_FLOOR_MARKERS) {
+    try { await lstat(`${directory}/${name}`) } catch (error) {
+      if (errno(error) === 'ENOENT') continue
+    }
+    return false
+  }
+  return true
+}
+
 async function readBoundedJson(path: string, maxBytes = MAX_JSON_BYTES, budget?: ReadBudget): Promise<ReadJsonResult> {
   const read = await readBoundedText(path, maxBytes, budget)
   if (read.status !== 'ok') return read
@@ -399,8 +410,10 @@ async function inspectWalRoot(
       continue
     }
     if (!entry.isDirectory()) continue
-    stats.floors += 1
     const rolledBack = entry.name.includes(ROLLED_BACK_MARK)
+    // 与 Wal 相同：开始楼层时崩溃遗留的空目录不是损坏，宿主会跳过并允许重新开始。
+    if (!rolledBack && await isUnstartedFloor(`${root}/${entry.name}`)) continue
+    stats.floors += 1
     if (rolledBack) stats.rolledBack += 1
     else stats.active += 1
 

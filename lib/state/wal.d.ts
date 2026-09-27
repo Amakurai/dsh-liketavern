@@ -25,6 +25,12 @@ export interface RollbackAfterResult {
 }
 /** 旧版本 records.jsonl 中二进制 before 快照的前缀；新记录使用 beforeEncoding 字段。 */
 export declare const WAL_BINARY_MARK = "binary-base64:";
+/**
+ * 楼层目录中表明楼层已开始的文件。建目录后、写 meta 前崩溃会留下这些文件都不存在的目录：
+ * 记录只在元数据存在后追加，回滚也先写游标再改正文，这种目录不可能关联任何正文修改，
+ * 按未开始处理；缺元数据但有记录或回滚游标仍是损坏，照常拒绝。doctor 共用同一判定。
+ */
+export declare const WAL_FLOOR_MARKERS: readonly ["meta.json", "records.jsonl", "rollback-progress.json"];
 export declare class Wal {
     private readonly rootDir;
     /** rootDir 为工作区的 state/wal/ 目录；不存在则在首次操作时创建。 */

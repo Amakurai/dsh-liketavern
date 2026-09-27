@@ -45,6 +45,7 @@ interface WorkspaceHandle {
 export declare class TavernState {
     readonly paths: TavernPaths;
     private readonly getConfig;
+    private readonly warn;
     /** 宿主作用域持有的布局适配器；agent 销毁不影响其它剧情的注册。 */
     presetAdapter?: PresetAdapterController;
     private readonly workspaces;
@@ -153,8 +154,11 @@ export declare class TavernState {
         storyId: string | undefined;
         error?: string;
     }>;
-    constructor(paths: TavernPaths, getConfig: () => TavernConfig);
+    /** warn 是非致命维护问题的日志出口；host 传入 ctx.logger.warn，测试缺省静默。 */
+    constructor(paths: TavernPaths, getConfig: () => TavernConfig, warn?: (message: string) => void);
     init(): Promise<void>;
+    /** 清理崩溃遗留的原子写临时文件；只是回收空间，失败不能阻断启动或打开剧情。 */
+    private sweepTemps;
     worldInfoFor(binding: SessionBinding): {
         scanDepth: number;
         minActivations: number;

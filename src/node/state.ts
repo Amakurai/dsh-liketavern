@@ -38,6 +38,7 @@ import {
   type CharacterWorkspace,
 } from '../state/workspace.js'
 import { WorkspaceFs } from '../state/workspaceFs.js'
+import { sweepOrphanTemps } from '../state/atomicWrite.js'
 import { resolveStaleBinding } from '../core/binding.js'
 import { parsePersona, pickPersona, type Persona } from '../core/persona.js'
 import { pinStandingText, stableFingerprintHash, standingPinKey, type StandingPin } from '../core/standingPin.js'
@@ -271,13 +272,24 @@ export class TavernState {
   /** 实时助手事件的收口回执；只保留最近 256 轮，历史加载不依赖或回放这些回执。 */
   readonly helperTurnClosures = new Map<string, { seq:number; storyId:string|undefined; error?:string }>()
 
+  /** warn 是非致命维护问题的日志出口；host 传入 ctx.logger.warn，测试缺省静默。 */
   constructor(
     readonly paths: TavernPaths,
     private readonly getConfig: () => TavernConfig,
+    private readonly warn: (message: string) => void = () => {},
   ) {}
 
   async init(): Promise<void> {
     await ensurePaths(this.paths)
+    // 角色与剧情目录较大，改在各自首次打开时清理；这里只覆盖绑定、资产库与草稿。
+    await this.sweepTemps(this.paths.root, (rel) => rel === 'characters')
+  }
+
+  /** 清理崩溃遗留的原子写临时文件；只是回收空间，失败不能阻断启动或打开剧情。 */
+  private async sweepTemps(dir: string, skipDir?: (relDir: string) => boolean): Promise<void> {
+    await sweepOrphanTemps(dir, { skipDir }).catch((error: unknown) => {
+      this.warn(`dsh-tavern: 清理临时文件失败：${error instanceof Error ? error.message : String(error)}`)
+    })
   }
 
   worldInfoFor(binding:SessionBinding) {return {...this.config.worldInfo,...binding.worldInfo}}
@@ -322,6 +334,7 @@ export class TavernState {
     const fs = new WorkspaceFs(root, wal)
     const handle: WorkspaceHandle = { fs, wal, memory: new MemoryStore(fs), deltas: new WorldDeltaStore(fs) }
     this.workspaces.set(cardId, handle)
+    await this.sweepTemps(root, (rel) => rel === 'stories')
     return handle
   }
 
@@ -339,6 +352,7 @@ export class TavernState {
     const fs = new WorkspaceFs(root, wal)
     const handle = { fs, wal, memory: new MemoryStore(fs), deltas: new WorldDeltaStore(fs) }
     this.workspaces.set(key, handle)
+    await this.sweepTemps(root)
     return handle
   }
 

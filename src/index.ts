@@ -39,7 +39,7 @@ export async function apply(ctx: Context, config: ReturnType<typeof Config>): Pr
     get: () => TavernConfigSchema(Object.fromEntries(Object.entries(config).map(([key, value]) => [key, value.get()]))),
     update: (patch: object) => ctx.settings.update(ns, patch),
   }
-  const state = new TavernState(tavernPaths(), () => resolveConfig(scope.get()))
+  const state = new TavernState(tavernPaths(), () => resolveConfig(scope.get()), (message) => ctx.logger.warn(message))
   await state.init()
   createTavernService(ctx, state, scope)
 

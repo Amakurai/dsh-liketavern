@@ -108,6 +108,34 @@ describe('doctor 聚合报告', () => {
     expect(JSON.stringify(report)).not.toContain('hidden-session')
   })
 
+  it('开始楼层崩溃遗留的空目录不算损坏，只有回滚游标的目录仍报错', async () => {
+    const root = await makeStandardDirectories()
+    const cardRoot = join(root, 'characters', 'crash-card-a1b2c3d4')
+    const storyId = 'story-00000000-0000-4000-8000-000000000001'
+    const story = join(cardRoot, 'stories', storyId)
+    await mkdir(story, { recursive: true })
+    await writeFile(join(cardRoot, 'card.json'), JSON.stringify({ name: '崩溃恢复' }))
+    await writeFile(join(story, 'story.json'), JSON.stringify({
+      version: 1, id: storyId, sessionId: 's', createdAt: new Date(0).toISOString(), migrated: false,
+    }))
+    const wal = new Wal(join(story, 'state/wal'))
+    await wal.beginFloor('s#t1')
+    await wal.commitFloor('s#t1')
+    await mkdir(join(story, 'state/wal/s_t2'))
+    await writeFile(join(story, 'state/wal/s_t2/meta.json.0123.tmp'), '{"floor":')
+
+    const clean = await runDoctor({ home, nodeVersion: '24.0.0', pluginVersion: '9.8.7' })
+    expect(clean.ok).toBe(true)
+    expect(clean.statistics.wal).toMatchObject({ floors: 1, healthy: 1, unhealthy: 0 })
+    expect(clean.issues.map(issue => issue.code)).not.toContain('WAL_INVALID')
+
+    await writeFile(join(story, 'state/wal/s_t2/rollback-progress.json'), '{}')
+    const stuck = await runDoctor({ home, nodeVersion: '24.0.0', pluginVersion: '9.8.7' })
+    expect(stuck.ok).toBe(false)
+    expect(stuck.statistics.wal).toMatchObject({ floors: 2, healthy: 1, unhealthy: 1 })
+    expect(stuck.issues.map(issue => issue.code)).toContain('WAL_INVALID')
+  })
+
   it('缺失标准目录只告警且诊断前后目录结构和修改时间不变', async () => {
     const root = join(home, 'dsh-tavern')
     await mkdir(root)

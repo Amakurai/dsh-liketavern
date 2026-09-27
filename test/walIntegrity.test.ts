@@ -1,6 +1,9 @@
-/** WAL 完整性回归：损坏快照与恢复游标必须在整批回滚前拒绝，真实文件与楼层状态保持原样。 */
+/**
+ * WAL 完整性回归：损坏快照与恢复游标必须在整批回滚前拒绝，真实文件与楼层状态保持原样；
+ * 开始楼层时崩溃留下的空目录按未开始处理，不能阻断整个剧情的回退。
+ */
 import { createHash } from 'node:crypto'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -87,5 +90,36 @@ describe('批量回滚预检恢复游标', () => {
     await writeFile(join(root, 'state/wal/f1/rollback-progress.json'), JSON.stringify({ hash, next: 0, restored: [], preserved: [], ...patch }))
     await expect(wal.rollbackAfter(['f1', 'f2'], root)).rejects.toThrow(/WAL.*恢复/)
     await expectIntact()
+  })
+})
+
+describe('开始楼层崩溃遗留', () => {
+  it('建目录后、写元数据前崩溃的空楼层不阻断列举与回退，并可重新开始', async () => {
+    await mkdir(join(root, 'state/wal/f3'), { recursive: true })
+    await writeFile(join(root, 'state/wal/f3/meta.json.0123-tmp.tmp'), '{"floor":')
+    expect((await wal.listFloors()).map(floor => floor.floor)).toEqual(['f1', 'f2'])
+    await wal.rollbackFloor('f2', root)
+    expect(await fs.readText('b.txt')).toBeNull()
+    await wal.beginFloor('f3')
+    await fs.withFloor('f3').writeText('c.txt', '重新开始')
+    await wal.commitFloor('f3')
+    await wal.rollbackFloor('f3', root)
+    expect(await fs.readText('c.txt')).toBeNull()
+  })
+
+  it('空楼层回滚中途崩溃只留下游标时仍按恢复中拒绝，不能静默复用', async () => {
+    await mkdir(join(root, 'state/wal/f3'), { recursive: true })
+    await writeFile(join(root, 'state/wal/f3/rollback-progress.json'), '{}')
+    await expect(wal.listFloors()).rejects.toThrow('WAL 元数据缺失')
+    await expect(wal.beginFloor('f3')).rejects.toThrow('拒绝重复开始')
+  })
+
+  it('缺元数据但已有记录仍视为损坏，拒绝列举与重新开始', async () => {
+    await rm(join(root, 'state/wal/f2/meta.json'))
+    await expect(wal.listFloors()).rejects.toThrow('WAL 元数据缺失')
+    await expect(wal.beginFloor('f2')).rejects.toThrow('拒绝重复开始')
+    await expect(wal.rollbackFloor('f1', root)).rejects.toThrow()
+    expect(await fs.readText('a.txt')).toBe('旧楼层正文')
+    expect(await fs.readText('b.txt')).toBe('新楼层正文')
   })
 })

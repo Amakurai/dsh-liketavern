@@ -60,6 +60,16 @@ it('每个沙箱内置同步 Mvu 读取，无命令解析返回独立副本且�
   await expect(f.run('waitGlobalInitialized("UnknownFramework")')).rejects.toThrow(/尚未适配/)
 })
 
+it('官方 SINGLE_VARIABLE_UPDATED 可注册，每条 set/add 后报告路径与前后值，监听修改带入下一条命令',async()=>{
+  const a=frame(),b=frame()
+  expect(b.run('Mvu.events.SINGLE_VARIABLE_UPDATED')).toBe('mag_variable_updated')
+  b.run('window.updates=[];eventOn(Mvu.events.SINGLE_VARIABLE_UPDATED,(stat,path,oldValue,newValue)=>{updates.push([path,oldValue,newValue]);if(path==="hp")stat.hp=Math.min(stat.hp,15)})')
+  const result=await a.run(`Mvu.parseMessage(${JSON.stringify("_.set('hp', 10, 30);//治疗\n_.add('hp', 2);\n_.set('角色.状态', '受伤');")},{stat_data:{hp:10,角色:{状态:'正常'}}})`)
+  expect(b.run('updates')).toEqual([['hp',10,30],['hp',15,17],['角色.状态','正常','受伤']])
+  expect(result.stat_data).toEqual({hp:15,角色:{状态:'受伤'}})
+  expect(result.delta_data).toMatchObject({hp:expect.stringContaining('15->17'),角色:{状态:expect.stringContaining('正常->受伤')}})
+})
+
 it('跨卡面等待命令修订与结束钳制，保留原值并只在显式保存得到回执后结束',async()=>{
   const a=frame(),b=frame()
   a.run('window.before={initialized_lorebooks:{},stat_data:{hp:10,flag:false}}')

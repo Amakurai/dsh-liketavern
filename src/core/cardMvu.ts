@@ -7,6 +7,8 @@ export function installCardMvu(codec:HelperMvuCommandCodec,json:(value:unknown,m
   const root=window as unknown as Record<string,unknown>
   let active=true,parsing=0
   const events=Object.freeze({
+    // 与官方 MVU variable_events 同名；缺项会让 eventOn(Mvu.events.X) 在卡面脚本顶层抛错。
+    SINGLE_VARIABLE_UPDATED:'mag_variable_updated',
     VARIABLE_INITIALIZED:'mag_variable_initialized',VARIABLE_UPDATE_STARTED:'mag_variable_update_started',
     COMMAND_PARSED:'mag_command_parsed',VARIABLE_UPDATE_ENDED:'mag_variable_update_ended',
     BEFORE_MESSAGE_UPDATE:'mag_before_message_update',
@@ -47,6 +49,15 @@ export function installCardMvu(codec:HelperMvuCommandCodec,json:(value:unknown,m
     if(typeof flush==='function')await flush()
     check()
   }
+  /** 合并单条命令的变更日志；数组下标的 null 只是占位，不能覆盖前面命令写下的日志。 */
+  function mergeLog(target:Table|unknown[],source:Table|unknown[]):void{
+    for(const [key,value] of Object.entries(source)){
+      if(value===null&&Array.isArray(source))continue
+      const current=(target as Table)[key]
+      if(value&&typeof value==='object'&&current&&typeof current==='object'&&Array.isArray(value)===Array.isArray(current))mergeLog(current as Table,value as Table)
+      else (target as Table)[key]=value&&typeof value==='object'?json(value):value
+    }
+  }
   async function emit(name:string,...args:unknown[]):Promise<void>{
     check();json(args,256*1024)
     await (root.eventEmit as (name:string,...args:unknown[])=>Promise<void>)(name,...args)
@@ -66,8 +77,21 @@ export function installCardMvu(codec:HelperMvuCommandCodec,json:(value:unknown,m
       await emit('mag_command_parsed_ended_for_zod',next,commands,message)
       if(commands.length){
         supported(next)
-        const applied=codec.apply(table(data(next).stat_data),commands,table(next.display_data))
-        Object.assign(next,applied)
+        // 逐条应用：每条 set/add 后按官方 MVU 发出 SINGLE_VARIABLE_UPDATED(stat_data, 路径, 旧值, 新值)，
+        // 监听器对 stat_data 的修改在下一条命令前生效。无监听时结果与整批应用相同；任一条失败整体拒绝。
+        let display=table(next.display_data)
+        const delta:Table={}
+        for(const command of commands){
+          const stat=table(data(next).stat_data),before=codec.read(stat,command.args[0])
+          const applied=codec.apply(stat,[command],display)
+          display=applied.display_data;mergeLog(delta,applied.delta_data)
+          next.stat_data=applied.stat_data;next.display_data=display;next.delta_data=delta
+          if(command.type==='set'||command.type==='add'){
+            const raw=String(command.args[0]).trim(),quoted=/^(['"])([\s\S]*)\1$/.exec(raw)
+            await emit(events.SINGLE_VARIABLE_UPDATED,next.stat_data,quoted?quoted[2]:raw,before,codec.read(table(next.stat_data),command.args[0]))
+          }
+        }
+        next.delta_data=table(delta)
       }
       await emit(events.VARIABLE_UPDATE_ENDED,next,before)
       await emit('mag_variable_update_ended_for_zod',next,before)

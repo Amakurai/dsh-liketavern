@@ -88,6 +88,16 @@ describe('卡面消息与受限操作', () => {
     const preview = frame({canSwipe:false})
     await expect(preview.run('triggerSlash("/swipe")')).rejects.toThrow(/不支持/)
   })
+  it('ST event_types 的常见名称都有定义：注册宿主不发的事件不会让卡面脚本在顶层抛错，也不会被伪造触发', async () => {
+    const { run, ready } = frame()
+    const names = ['STREAM_TOKEN_RECEIVED', 'CHAT_COMPLETION_PROMPT_READY', 'CHARACTER_FIRST_MESSAGE_SELECTED', 'GENERATE_AFTER_DATA',
+      'WORLD_INFO_ACTIVATED', 'CHAT_CREATED', 'MESSAGE_SWIPE_DELETED', 'SETTINGS_UPDATED']
+    for (const name of names) expect(typeof run(`tavern_events.${name}`), name).toBe('string')
+    run(`var fired=0,after=false; ${names.map(name => `eventOn(tavern_events.${name},()=>fired++);`).join('')} after=true`)
+    ready()
+    expect(run('after')).toBe(true)
+    expect(run('fired')).toBe(0)
+  })
   it('原生上下文允许开场白 swipe，不能把正文修改假装保存成功', async () => {
     const { run, postMessage } = frame({messageId:0,canSwipe:true})
     run('var ctx=SillyTavern.getContext(); ctx.chat[0].swipe_id=1')

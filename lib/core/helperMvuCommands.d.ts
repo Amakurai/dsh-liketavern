@@ -12,6 +12,8 @@ export interface HelperMvuCommandCodec {
         display_data: Record<string, unknown>;
         delta_data: Record<string, unknown>;
     };
+    /** 按命令同一路径规则只读取值（副本）；路径不存在时为 null，供 SINGLE_VARIABLE_UPDATED 报告前后值。 */
+    read(statData: Record<string, unknown>, path: unknown): unknown;
 }
 /** json 必须是不调用访问器的有界普通 JSON 复制器；工厂不捕获模块变量、不使用代码求值或第三方解析器。 */
 export declare function createHelperMvuCommandCodec(json: (value: unknown, maxBytes?: number) => unknown): HelperMvuCommandCodec;

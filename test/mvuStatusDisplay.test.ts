@@ -8,3 +8,7 @@ it('明确的角色状态栏在普通正文缺少占位符时补位，已存在�
  expect(needsMvuStatusPlaceholder('正文'+MVU_STATUS_PLACEHOLDER,[rule])).toBe(false)
  for(const patch of [{enabled:false},{source:'preset' as const},{scopes:['prompt'] as RegexRule['scopes']},{timing:['send'] as RegexRule['timing']},{roles:['user'] as RegexRule['roles']},{minDepth:1},{maxDepth:2},{find:'unrelated'},{replace:''}])expect(needsMvuStatusPlaceholder('正文',[{...rule,...patch}])).toBe(false)
 })
+it('ST 导出的 -1 / minDepth 0 表示不限深度，仍然补位；有正数上限的规则保持不补',()=>{
+ for(const patch of [{minDepth:-1,maxDepth:-1},{minDepth:0},{maxDepth:-1}])expect(needsMvuStatusPlaceholder('正文',[{...rule,...patch}])).toBe(true)
+ expect(needsMvuStatusPlaceholder('正文',[{...rule,minDepth:-1,maxDepth:3}])).toBe(false)
+})

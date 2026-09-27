@@ -33,6 +33,13 @@ it('set 支持普通 JSON、旧值装饰参数、默认 VWD 与可空数值，�
   expect(apply({ pair: [1, '描述'] }, `_.set('pair','3');`).stat_data.pair).toEqual([3, '描述'])
 })
 
+it('两个字符串的列表形似 VWD：set 新数组是整体替换，不写成 [[新列表], 原第二项]；标量 set 仍更新 VWD 值位', () => {
+  const stat = { bag: ['剑', '盾'], mood: ['平静', '当前情绪'] }
+  const result = apply(stat, `_.set('bag', ['剑', '盾', '药水']); _.set('mood', '愤怒');`)
+  expect(result.stat_data).toEqual({ bag: ['剑', '盾', '药水'], mood: ['愤怒', '当前情绪'] })
+  expect(apply({ bag: ['剑', '盾'] }, `_.set('bag', ['剑', '盾'], []);`).stat_data.bag).toEqual([])
+})
+
 it('add 累加有限数字并消除常见浮点误差，支持 VWD；日期与字符串不被误加', () => {
   const result = apply({ plain: 0.1, pair: [5, '分数'] }, `_.add('plain',0.2); _.add('pair',-2);`)
   expect(result.stat_data).toEqual({ plain: 0.3, pair: [3, '分数'] })

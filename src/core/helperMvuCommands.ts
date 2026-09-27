@@ -10,6 +10,8 @@ export interface HelperMvuCommandCodec {
   apply(statData: Record<string, unknown>, commands: HelperMvuCommand[], displayBase?: Record<string, unknown>): {
     stat_data: Record<string, unknown>; display_data: Record<string, unknown>; delta_data: Record<string, unknown>
   }
+  /** 按命令同一路径规则只读取值（副本）；路径不存在时为 null，供 SINGLE_VARIABLE_UPDATED 报告前后值。 */
+  read(statData: Record<string, unknown>, path: unknown): unknown
 }
 
 /** json 必须是不调用访问器的有界普通 JSON 复制器；工厂不捕获模块变量、不使用代码求值或第三方解析器。 */
@@ -326,9 +328,12 @@ export function createHelperMvuCommandCodec(json: (value: unknown, maxBytes?: nu
       const label = rawPath.startsWith('"') || rawPath.startsWith("'") ? String(literal(rawPath)) : rawPath
       let log = '', logPath = parts
       if (type === 'set' || type === 'add') {
-        const previous = get(stat, parts), wrapped = !isPatch && vwd(previous), oldValue = wrapped ? previous[0] : previous
+        const previous = get(stat, parts)
         if (type === 'set' && args.length === 3) literal(args[1])
         let value = literal(args.at(-1))
+        // [值, 描述] 的值位本身从不是数组（见 vwd）；把数组 set 进来是整体替换，
+        // 否则两个字符串的列表（如 ['剑','盾']）会被误当成带描述值，写成 [[新列表], '盾']。
+        const wrapped = !isPatch && vwd(previous) && !(type === 'set' && Array.isArray(value)), oldValue = wrapped ? previous[0] : previous
         if (type === 'add') {
           // 日期字符串和数学式需要原版额外解释器，不能在这个 JSON 适配里按字符串连接或隐式日期解析。
           if (typeof oldValue !== 'number' || typeof value !== 'number') throw new Error('MVU add 仅支持有限数字；暂不支持日期或表达式')
@@ -390,5 +395,10 @@ export function createHelperMvuCommandCodec(json: (value: unknown, maxBytes?: nu
     }
     return json({ stat_data: stat, display_data: display, delta_data: delta }, OUTPUT) as ReturnType<HelperMvuCommandCodec['apply']>
   }
-  return { parse, apply }
+  const read: HelperMvuCommandCodec['read'] = (statData, source) => {
+    const parts = path(source)
+    try { const value = get(statData, parts); return value === undefined ? null : copy(value) }
+    catch { return null }
+  }
+  return { parse, apply, read }
 }

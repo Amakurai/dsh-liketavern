@@ -54,18 +54,17 @@ export interface ClientContext {
     } & Record<string, unknown>;
     slots: SlotsLike;
     locale: LocaleLike;
-    /** dsh-client-runtime 的会话运行时：open 跳转；refresh 把 fork 子会话拉进列表后再 open。 */
+    /** 宿主 ISessions：refresh 把 fork 子会话拉进列表；0.1.7 起无 open，导航改走 uiWorkspace（navigation.ts）。 */
     sessions: {
-        open(id: string): void;
+        open?(id: string): void;
         refresh?: () => Promise<void>;
         /** 当前已保留会话的公开同步事件源；不借此打开会话或读取后台历史。 */
         binding?(id: string): (Pick<HostSessionBinding, 'sessionId' | 'eventSource'> & {
             session?: Pick<HostSessionBinding['session'], 'cancel'>;
         }) | undefined;
-        /** 会话列表快照 store（含 current；预设 id 在 projectionValues.agentPreset）；seatWatch 与 assistant-step 显隐据此判断。 */
+        /** 会话列表快照 store（预设 id 在 projectionValues.agentPreset）；0.1.7 起不含当前选择，见 sessionViews.ts。 */
         list: {
             getSnapshot(): {
-                current: string | undefined;
                 byId: Record<string, {
                     projectionValues?: {
                         agentPreset?: string | null;

@@ -14,6 +14,7 @@
  * - seat chip = button[aria-haspopup="menu"] 且 title 为 seatHint 的中/英文案；
  * - 选中文案 = presets/tavern/preset.yml 的 name（宿主原样显示，不做本地化）。
  */
+import { sessionViews, type SessionViewsPort } from './sessionViews.js'
 import type { ClientContext } from './types.js'
 
 /** 与 presets/tavern/preset.yml 的 name 保持一致。 */
@@ -35,7 +36,7 @@ function seatShowsTavern(): boolean | null {
 }
 
 /** 安装监听；返回清理函数（挂进 ctx.effect）。 */
-export function installTavernSeatWatch(ctx: ClientContext): () => void {
+export function installTavernSeatWatch(ctx: ClientContext, views: Pick<SessionViewsPort, 'hasShownSession'> = sessionViews): () => void {
   if (typeof document === 'undefined' || typeof MutationObserver === 'undefined') {
     return () => {}
   }
@@ -58,7 +59,8 @@ export function installTavernSeatWatch(ctx: ClientContext): () => void {
     if (tavern === lastTavern) return
     lastTavern = tavern
     if (!tavern || coolingDown) return
-    if (ctx.sessions.list.getSnapshot().current !== undefined) return // 已有会话：宿主自己会处理
+    // 已有会话在显示：宿主自己会处理。0.1.7 起列表不含 current，由会话作用域组件登记。
+    if (views.hasShownSession()) return
     coolingDown = true
     setTimeout(() => {
       coolingDown = false

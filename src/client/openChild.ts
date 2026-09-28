@@ -6,17 +6,20 @@
  * fork 出来的分支标题经宿主 ISessions 的 rename 写入（scope → sessionOf），
  * 旧宿主没有这条路径时静默跳过，分支仍会打开。
  */
+import { sessionViews, type SessionViewsPort } from './sessionViews.js'
+
 export interface SessionsPort {
   open(id: string): void
   refresh?: () => Promise<void>
-  list?: { getSnapshot(): { current?: string | null } }
   scope?(id: string): unknown
   sessionOf?(ctx: unknown): { rename(title: string): Promise<unknown> } | undefined
 }
 
-export async function openChildSession(sessions: SessionsPort, childId: string, title?: string, sourceSessionId?: string): Promise<void> {
+export async function openChildSession(sessions: SessionsPort, childId: string, title?: string, sourceSessionId?: string,
+  views: Pick<SessionViewsPort, 'isSessionShown'> = sessionViews): Promise<void> {
   // RPC 与 refresh 都可能晚于用户切换页面；分支保留在列表，但不能抢走新会话的焦点。
-  const isCurrent = () => sourceSessionId === undefined || !sessions.list || sessions.list.getSnapshot().current === sourceSessionId
+  // 宿主 0.1.7 不再公开当前会话，来源会话是否仍在显示由会话作用域组件登记。
+  const isCurrent = () => sourceSessionId === undefined || views.isSessionShown(sourceSessionId)
   if (typeof sessions.refresh === 'function') {
     try {
       await sessions.refresh()

@@ -10,6 +10,7 @@ import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TavernFloorActions } from '../src/client/actions.js'
 import { invalidateSessionBinding } from '../src/client/cache.js'
+import { markSessionView } from '../src/client/sessionViews.js'
 import { setTavernLocale } from '../src/client/i18n.js'
 import { Btn, ConfirmDialog, Dialog } from '../src/client/util.js'
 import type { TavernRemote } from '../src/client/types.js'
@@ -30,8 +31,10 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
 
 const ok = <T,>(value: T) => ({ ok: true as const, value })
 const mounted: ReactTestRenderer[] = []
-beforeEach(() => { setTavernLocale('zh'); vi.stubGlobal('window', new EventTarget()); invalidateSessionBinding('floor-editor') })
-afterEach(async () => { for (const view of mounted.splice(0)) await act(async () => view.unmount()); vi.unstubAllGlobals() })
+// 操作条属于正在显示的会话；真实界面由会话头部登记，这里直接登记，分支完成后才允许跳转。
+let unmarkView: () => void = () => {}
+beforeEach(() => { setTavernLocale('zh'); vi.stubGlobal('window', new EventTarget()); invalidateSessionBinding('floor-editor'); unmarkView = markSessionView('floor-editor', true) })
+afterEach(async () => { unmarkView(); for (const view of mounted.splice(0)) await act(async () => view.unmount()); vi.unstubAllGlobals() })
 
 function fixture() {
   const save = vi.fn<TavernRemote['editAssistantMessage']>(async () => ok({ childSessionId: 'child' }))

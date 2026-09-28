@@ -6,7 +6,6 @@
 import { TAVERN_AGENT_PRESET } from '../core/tavernMode.js';
 export { TAVERN_AGENT_PRESET };
 export type SessionsListState = {
-    current?: string;
     byId: Record<string, {
         projectionValues?: {
             agentPreset?: string | null;
@@ -16,7 +15,3 @@ export type SessionsListState = {
 export type UseSessions = (selector: (state: SessionsListState) => unknown) => unknown;
 export declare function readAgentPreset(useSessions: UseSessions | undefined, sessionId: string): string | undefined;
 export declare function isTavernSession(useSessions: UseSessions | undefined, sessionId: string): boolean;
-/** 当前打开的会话是否为 Tavern 模式（slot 全局注册时用来决定要不要接管 assistant-step）。 */
-export declare function isCurrentTavernSession(list: {
-    getSnapshot(): SessionsListState;
-}): boolean;

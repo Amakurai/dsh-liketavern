@@ -233,3 +233,11 @@ Windows / Node 24.18.0 / dsh 0.1.5-rc.2，使用独立临时 DSH_HOME、手写�
 最终构建产物在独立本地 Edge 测试页验证三种工厂内容：孤立反引号、行内波浪号及 HTML 围栏后的卡片均出现，按钮可点击、整页重载仍正常，三个 iframe 均仅为 `sandbox="allow-scripts"`，读取父窗口继续被拒绝。此页使用真实隔离 worker、展示拆分与卡面 srcDoc；诊断外壳为测试页面，实际插件组件由 React 测试覆盖。本次未启动新宿主、调用模型或修改真实剧情，也未取得截图中角色的原始回复和展示规则，不能据此确认其唯一根因。测试页和服务器已关闭。
 
 最终全量 149 个测试文件通过，2117 项通过、Windows 跳过 1 项 POSIX 用例；构建、`npm pack --dry-run --ignore-scripts`（此前已完成构建）与 431 文件发布白名单检查通过。本轮未更改依赖。
+
+### 2026-09-27：rc.2 当前会话与导航接口移除
+
+0.1.7-rc.2 的 `SessionListState` 只剩 `ids/byId/phase/projectionsBySession`，视图选择留在 UiSession 私有状态；`ISessions` 也不再有 `open`。插件此前自写的列表类型仍声明 `current`，编译无法发现，运行时 `list.getSnapshot().current` 恒为 undefined。后果是 assistant-step 从未注册：Tavern 消息全部走宿主原生 AssistantNodeView，纯文本开场白看不出问题，但 HTML 卡面显示为代码块；实时脚本事件、选项输入与开场白/分支导航同样失效，seatWatch 也会把已有会话误判为无会话。
+
+修复后不再读取宿主当前选择：会话头部 chip 与新会话英雄区只随被显示的会话挂载，挂载期间在 `sessionViews` 登记（会话 id 与是否 Tavern），assistant-step、实时事件、选项输入、分支导航防抢焦点与 seatWatch 都读这份登记。宿主 keyed 覆盖位没有按会话筛选或渲染被遮挡原生节点的公开接口，所以仍按「有 Tavern 视图显示时接管」处理。导航改走 `uiWorkspace.openSession`，旧宿主回退 `sessions.open`，两者都缺时明确报错。
+
+验收：使用独立临时 DSH_HOME（本机剧情数据副本，无模型凭据）与 profile/node_modules 到 checkout 的 junction 启动 `dsh web`，headless Chrome 经 CDP 打开受影响会话。修复前开场白为原生代码块、无 `.dsh-tavern-speech`；修复后显示角色气泡与 489px 高的卡面 iframe，无代码块。点击「下一条开场白」后生成「开场白 2/3」子会话并自动切换，文本开场白进入 Tavern 气泡。临时服务、浏览器与数据副本均已删除。升级宿主时须核对 `SessionListState`、`ISessions` 与 `UiWorkspace` 的实际类型，插件内的最小类型不能代替核对。

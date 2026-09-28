@@ -17,6 +17,7 @@ import { CHARACTER_CHANGED_EVENT, cachedAvatar, cachedCharacterDetail, invalidat
 import { bindingFromDefaults } from './chip.js'
 import { useT } from './i18n.js'
 import { isTavernSession, type UseSessions } from './mode.js'
+import { useSessionView } from './sessionViews.js'
 import { TavernSeatChip } from './seatChip.js'
 import type { CharacterDetail, CharacterSummary, SessionBinding, TavernRemote } from './types.js'
 import { Avatar, Btn, Err, errOf, Skeleton, useLoader } from './util.js'
@@ -98,6 +99,8 @@ function HeroCharacterSession(props: HeroProps) {
   const { remote, sessionId, session } = props
   const t = useT()
   const tavern = isTavernSession(props.useSessions, sessionId)
+  // 英雄区只在会话被显示时挂载；登记后无会话补偿与消息排版都能判断当前视图。
+  useSessionView(sessionId, tavern)
   const eligible = tavern && session?.blank === true && session.promptAttempted !== true
   const [entered, setEntered] = useState(false)
   const alive = useRef(true)

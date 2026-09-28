@@ -8,7 +8,6 @@ import { isTavernPresetId, TAVERN_AGENT_PRESET } from '../core/tavernMode.js'
 export { TAVERN_AGENT_PRESET }
 
 export type SessionsListState = {
-  current?: string
   // 0.1.2 起预设 id 只落在会话投影里（SessionSummary.projectionValues.agentPreset），
   // 顶层不再有 agentPreset 字段。
   byId: Record<string, { projectionValues?: { agentPreset?: string | null } } | undefined>
@@ -25,10 +24,3 @@ export function isTavernSession(useSessions: UseSessions | undefined, sessionId:
   return isTavernPresetId(readAgentPreset(useSessions, sessionId))
 }
 
-/** 当前打开的会话是否为 Tavern 模式（slot 全局注册时用来决定要不要接管 assistant-step）。 */
-export function isCurrentTavernSession(list: { getSnapshot(): SessionsListState }): boolean {
-  const snap = list.getSnapshot()
-  const id = snap.current
-  if (!id) return false
-  return isTavernPresetId(snap.byId?.[id]?.projectionValues?.agentPreset ?? undefined)
-}

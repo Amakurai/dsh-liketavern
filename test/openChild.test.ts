@@ -8,7 +8,7 @@ describe('openChildSession', () => {
   it('refresh 成功后打开子会话', async () => {
     const open = vi.fn()
     const refresh = vi.fn(async () => undefined)
-    await openChildSession({ open, refresh, list: { getSnapshot: () => ({ current: 'source' }) } }, 'session-child', undefined, 'source')
+    await openChildSession({ open, refresh }, 'session-child', undefined, 'source', { isSessionShown: id => id === 'source' })
     expect(refresh).toHaveBeenCalledTimes(1)
     expect(open).toHaveBeenCalledWith('session-child')
   })
@@ -32,7 +32,8 @@ describe('openChildSession', () => {
     const refresh = vi.fn(() => pending.promise)
     if (stage === 'retry') refresh.mockImplementationOnce(async () => {})
     const scope = vi.fn(() => ({})), rename = vi.fn(async () => {})
-    const opening = openChildSession({ open, refresh, list: { getSnapshot: () => ({ current }) }, scope, sessionOf: () => ({ rename }) }, 'session-child', 'Created branch', 'source')
+    const opening = openChildSession({ open, refresh, scope, sessionOf: () => ({ rename }) }, 'session-child', 'Created branch', 'source',
+      { isSessionShown: id => id === current })
     // 首次打开失败后的第二次 refresh 同样是导航竞态窗口。
     await Promise.resolve()
     current = 'other'

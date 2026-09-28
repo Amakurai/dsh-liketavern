@@ -66,7 +66,7 @@ function fixture(initial: SessionEvent[] = [], initialCurrent: string | undefine
     open: vi.fn(),
     binding: id => { const value = sources.get(id); return value ? { sessionId: SessionId(id), eventSource: value } : undefined },
     list: {
-      getSnapshot: () => ({ current: selected, byId: Object.fromEntries([...sources].map(([id]) => [id, { projectionValues: { agentPreset: preset } }])) }),
+      getSnapshot: () => ({ byId: Object.fromEntries([...sources].map(([id]) => [id, { projectionValues: { agentPreset: preset } }])) }),
       subscribe: fn => { listListeners.add(fn); return () => { listListeners.delete(fn) } },
     },
   }
@@ -81,8 +81,11 @@ function fixture(initial: SessionEvent[] = [], initialCurrent: string | undefine
     return { storyId, historyRevision: `revision-${events.length}`, messages, writable: true, closedThrough }
   }
   const getHelperEventState = vi.fn<TavernRemote['getHelperEventState']>(async request => ({ ok: true, value: state(request) }))
-  const stop = installHelperLiveEvents(sessions, { getHelperEventState }); cleanups.push(stop)
-  return { source, sources, sessions, state, getHelperEventState, stop,
+  // 宿主 0.1.7 不再公开 current：当前 Tavern 视图由会话作用域组件登记，这里按选择与预设模拟登记结果。
+  const views = { currentTavernSession: () => preset === 'tavern' ? selected : undefined,
+    subscribe: (fn: () => void) => { listListeners.add(fn); return () => { listListeners.delete(fn) } } }
+  const stop = installHelperLiveEvents(sessions, { getHelperEventState }, views); cleanups.push(stop)
+  return { source, sources, sessions, views, state, getHelperEventState, stop,
     select: (id: string | undefined) => { selected = id; for (const fn of listListeners) fn() },
     preset: (value: string) => { preset = value; for (const fn of listListeners) fn() },
     story: (value: string) => { storyId = value; browser.dispatchEvent(new CustomEvent('fixture-binding-changed', { detail: selected })) },
@@ -121,7 +124,7 @@ it('生成中重新订阅只以持久历史建基线，随后结算当前回复�
   const attemptId = 'reconnected-attempt' as Parameters<MutableSessionEventSource['settleAssistant']>[0]
   f.source.host.append({ type: 'transient', event: { type: 'assistant/live-chunk', seq: 1.5, time: 1,
     data: { attemptId, turn: 1, step: 1, chunk: { type: 'finish', reason: { kind: 'stop' } } } } })
-  cleanups.push(installHelperLiveEvents(f.sessions, { getHelperEventState: f.getHelperEventState })); await settle()
+  cleanups.push(installHelperLiveEvents(f.sessions, { getHelperEventState: f.getHelperEventState }, f.views)); await settle()
   f.source.host.settleAssistant(attemptId, { type: 'event', event: assistant(1) })
   f.source.append(end(2)); await settle()
   expect(events()).toEqual([['message_received', [0, 'normal']], ['generation_ended', [0]]])
@@ -135,7 +138,7 @@ it('初始历史、分页和重连仅建立基线，不把旧回复或初始 app
   f.source.append(end(13)); await settle()
   expect(emissions).toEqual([]); expect(notify).toHaveBeenCalledTimes(1)
   expect(f.sessions.open).not.toHaveBeenCalled()
-  f.stop(); const late = installHelperLiveEvents(f.sessions, { getHelperEventState: f.getHelperEventState }); cleanups.push(late)
+  f.stop(); const late = installHelperLiveEvents(f.sessions, { getHelperEventState: f.getHelperEventState }, f.views); cleanups.push(late)
   await settle(); expect(emissions).toEqual([])
 })
 
@@ -231,8 +234,9 @@ it('初次身份读取期间仍捕获同步增量，换会话后迟到响应不�
   const source = new Source(), listeners = new Set<() => void>(); let selected: string | undefined = 'session'
   const remote = { getHelperEventState: vi.fn<TavernRemote['getHelperEventState']>().mockReturnValue(first.promise) }
   const sessions: ClientContext['sessions'] = { open: vi.fn(), binding: id => ({ sessionId: SessionId(id), eventSource: source }),
-    list: { getSnapshot: () => ({ current: selected, byId: { session: { projectionValues: { agentPreset: 'tavern' } } } }), subscribe: fn => { listeners.add(fn); return () => { listeners.delete(fn) } } } }
-  const stop = installHelperLiveEvents(sessions, remote); cleanups.push(stop)
+    list: { getSnapshot: () => ({ byId: { session: { projectionValues: { agentPreset: 'tavern' } } } }), subscribe: fn => { listeners.add(fn); return () => { listeners.delete(fn) } } } }
+  const views = { currentTavernSession: () => selected, subscribe: (fn: () => void) => { listeners.add(fn); return () => { listeners.delete(fn) } } }
+  const stop = installHelperLiveEvents(sessions, remote, views); cleanups.push(stop)
   source.append(start(0), assistant(1), end(2)); await settle(); expect(remote.getHelperEventState).toHaveBeenCalledTimes(1)
   selected = undefined; for (const fn of listeners) fn()
   first.resolve({ ok: true, value: { storyId: 'story', historyRevision: 'a', messages: [], writable: true, closedThrough: 2 } }); await settle()
@@ -243,14 +247,14 @@ it('初次身份读取完成后按原序消费等待期间的消息，替换初�
   const f = fixture(); await settle(); f.stop()
   const first = deferred<Awaited<ReturnType<TavernRemote['getHelperEventState']>>>()
   f.getHelperEventState.mockReturnValueOnce(first.promise)
-  const stop = installHelperLiveEvents(f.sessions, { getHelperEventState: f.getHelperEventState }); cleanups.push(stop)
+  const stop = installHelperLiveEvents(f.sessions, { getHelperEventState: f.getHelperEventState }, f.views); cleanups.push(stop)
   f.source.append(start(0), user(1), assistant(2), end(3)); await settle(); expect(emissions).toEqual([])
   first.resolve({ ok: true, value: f.state({ sessionId: 'session' }) }); await settle()
   expect(events()).toEqual([['generation_started', ['normal', {}, false]], ['message_sent', [0]], ['message_received', [1, 'normal']], ['generation_ended', [1]]])
   stop(); emissions.length = 0
   const stale = deferred<Awaited<ReturnType<TavernRemote['getHelperEventState']>>>()
   f.getHelperEventState.mockReturnValueOnce(stale.promise)
-  cleanups.push(installHelperLiveEvents(f.sessions, { getHelperEventState: f.getHelperEventState }))
+  cleanups.push(installHelperLiveEvents(f.sessions, { getHelperEventState: f.getHelperEventState }, f.views))
   f.source.append(start(4, 2), assistant(5, 2)); f.source.replace([start(4, 2), assistant(5, 2)])
   stale.resolve({ ok: true, value: { ...f.state({ sessionId: 'session' }), storyId: 'stale-story' } }); await settle()
   f.source.append(end(6, 2), start(7, 3), assistant(8, 3), end(9, 3)); await settle()
@@ -313,6 +317,6 @@ it('非 Tavern 模式不订阅；binding 延迟出现后随列表建立基线；
   f.sources.delete('session'); f.select('session'); expect(f.source.listeners.size).toBe(0)
   f.sources.set('session', f.source); f.select('session'); await settle(); expect(emissions).toEqual([])
   f.stop(); expect(f.source.listeners.size).toBe(0)
-  const legacy = { ...f.sessions, binding: undefined }; const stop = installHelperLiveEvents(legacy, { getHelperEventState: f.getHelperEventState }); stop()
+  const legacy = { ...f.sessions, binding: undefined }; const stop = installHelperLiveEvents(legacy, { getHelperEventState: f.getHelperEventState }, f.views); stop()
   expect(f.sessions.open).not.toHaveBeenCalled()
 })

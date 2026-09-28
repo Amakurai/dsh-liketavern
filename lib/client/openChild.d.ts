@@ -6,17 +6,13 @@
  * fork 出来的分支标题经宿主 ISessions 的 rename 写入（scope → sessionOf），
  * 旧宿主没有这条路径时静默跳过，分支仍会打开。
  */
+import { type SessionViewsPort } from './sessionViews.js';
 export interface SessionsPort {
     open(id: string): void;
     refresh?: () => Promise<void>;
-    list?: {
-        getSnapshot(): {
-            current?: string | null;
-        };
-    };
     scope?(id: string): unknown;
     sessionOf?(ctx: unknown): {
         rename(title: string): Promise<unknown>;
     } | undefined;
 }
-export declare function openChildSession(sessions: SessionsPort, childId: string, title?: string, sourceSessionId?: string): Promise<void>;
+export declare function openChildSession(sessions: SessionsPort, childId: string, title?: string, sourceSessionId?: string, views?: Pick<SessionViewsPort, 'isSessionShown'>): Promise<void>;

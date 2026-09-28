@@ -14,6 +14,7 @@
  * - seat chip = button[aria-haspopup="menu"] 且 title 为 seatHint 的中/英文案；
  * - 选中文案 = presets/tavern/preset.yml 的 name（宿主原样显示，不做本地化）。
  */
+import { type SessionViewsPort } from './sessionViews.js';
 import type { ClientContext } from './types.js';
 /** 安装监听；返回清理函数（挂进 ctx.effect）。 */
-export declare function installTavernSeatWatch(ctx: ClientContext): () => void;
+export declare function installTavernSeatWatch(ctx: ClientContext, views?: Pick<SessionViewsPort, 'hasShownSession'>): () => void;

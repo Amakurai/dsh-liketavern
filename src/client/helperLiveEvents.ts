@@ -4,7 +4,7 @@ import type { SessionEvent } from '@deepseek-ai/dsh-session/types'
 import { BINDING_CHANGED_EVENT } from './actions.js'
 import { emitHelperHostEvent, reportHelperHostEventError } from './helperEventRouter.js'
 import { notifyHelperStory } from './helperNotifications.js'
-import { isCurrentTavernSession } from './mode.js'
+import { sessionViews, type SessionViewsPort } from './sessionViews.js'
 import type { ClientContext, TavernRemote } from './types.js'
 
 type EventRemote = Pick<TavernRemote, 'getHelperEventState'>
@@ -21,7 +21,8 @@ const MAX_QUEUE = 256, MAX_TURNS = 64, MAX_ASSISTANTS = 4096
 class SourceChanged extends Error {}
 
 /** 仅解析当前已保留会话的公开 binding，不调用 open/历史分页；旧宿主没有 binding 时不安装。 */
-export function installHelperLiveEvents(sessions: ClientContext['sessions'], remote: EventRemote): () => void {
+export function installHelperLiveEvents(sessions: Pick<ClientContext['sessions'], 'binding'>, remote: EventRemote,
+  views: Pick<SessionViewsPort, 'currentTavernSession' | 'subscribe'> = sessionViews): () => void {
   if (!sessions.binding) return () => {}
   let active = true, selected: View | undefined
   const current = (view: View, epoch = view.epoch) => active && selected === view && view.active && view.epoch === epoch
@@ -149,7 +150,8 @@ export function installHelperLiveEvents(sessions: ClientContext['sessions'], rem
     }
   }
   const sync = () => {
-    const sessionId = isCurrentTavernSession(sessions.list) ? sessions.list.getSnapshot().current : undefined
+    // 宿主 0.1.7 不再公开当前会话；取会话作用域组件登记的最近显示的 Tavern 会话。
+    const sessionId = views.currentTavernSession()
     const binding = sessionId ? sessions.binding?.(sessionId) : undefined
     if (selected?.sessionId === sessionId && selected?.source === binding?.eventSource) return
     if (selected) { selected.active = false; cancel(selected); selected.dispose(); selected = undefined }
@@ -195,7 +197,7 @@ export function installHelperLiveEvents(sessions: ClientContext['sessions'], rem
       report(view, error); cancel(view); baseline(view, view.source.getSnapshot()); view.ready = false
     })
   }
-  const unsub = sessions.list.subscribe(sync)
+  const unsub = views.subscribe(sync)
   if (typeof window !== 'undefined') window.addEventListener(BINDING_CHANGED_EVENT, changed)
   sync()
   return () => {

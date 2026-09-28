@@ -235,6 +235,7 @@ describe('消息身份和剧情事务',()=> {
     await child.wal.rollbackFloor('child#t2',child.fs.root)
     expect((await loadTemplateState(child.fs)).messageVariables?.snapshots[first.id]?.values.hp).toBe(5)
   })
+  // 多轮 QuickJS 与分支回滚共用全局集成测试时限，避免旧的 10 秒覆盖在 CI 上产生假超时。
   it('编辑 assistant 创建新 id 即使 seq 不变也不继承被撤销的旧快照',async()=> {
     const f=await fixture();await f.begin(1,'one');await f.run();await f.end(1,'first')
     await f.runtime.saveCharacter(f.cardId,{description:'<% setvar("hp",9) %>role'})
@@ -255,7 +256,7 @@ describe('消息身份和剧情事务',()=> {
     expect(saved.messageVariables?.snapshots[previous.message.id]).toBeUndefined()
     expect(saved.messageVariables?.snapshots[changed.data.message.id]?.values.hp).toBe(5)
     expect((await loadTemplateState(f.ws.fs)).messageVariables?.snapshots[previous.message.id]?.values.hp).toBe(9)
-  },10000)
+  })
   it('重启恢复核验历史快照摘要，损坏指纹不能执行回复或覆盖正文状态',async()=> {
     const f=await fixture();await f.begin(1,'one');await f.run()
     const saved=await loadTemplateState(f.ws.fs)

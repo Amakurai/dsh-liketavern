@@ -107,6 +107,64 @@ export function installCardMvu(codec:HelperMvuCommandCodec,json:(value:unknown,m
     return result
   }
   root.__dshTavernMvuInitialize=initialize
+  /**
+   * 与 StageDog tavern_resource 的 mvu_zod 同名同行为的本地实现（原文件许可证不明，不随包分发）：
+   * 开局按 schema 校验并补全 stat_data；更新时逐条套用命令，只保留通过 schema 的结果，
+   * 以 `_` 开头的路径视为只读；命令全部由这里消化，最后写入原生 MVU 认可的 schema 标记。
+   */
+  function registerMvuSchema(input:unknown):void{
+    check()
+    type Zod={safeParse:(value:unknown)=>{success:boolean;data?:unknown;error?:unknown}}
+    const z=(root.z as {z?:unknown}|undefined)?.z??root.z
+    const zod=z as {ZodObject?:new(...args:unknown[])=>unknown;looseObject?:(shape:unknown)=>Zod;object?:(shape:unknown)=>unknown}|undefined
+    const on=root.eventOn as ((name:string,listener:(...args:unknown[])=>unknown)=>unknown)|undefined
+    if(!zod||typeof on!=='function')throw new Error('registerMvuSchema 需要沙箱内的 zod 与 eventOn')
+    const resolve=():Zod=>{
+      const raw=(typeof input==='function'?(input as ()=>unknown)():input) as {shape?:unknown}&Zod
+      if(!raw||typeof raw.safeParse!=='function')throw new Error('registerMvuSchema 需要 zod schema')
+      const schema=zod.ZodObject&&raw instanceof zod.ZodObject&&typeof zod.looseObject==='function'?zod.looseObject(raw.shape):raw
+      const registerSchema=root.registerVariableSchema
+      if(typeof registerSchema==='function'&&typeof zod.object==='function')registerSchema(zod.object({stat_data:schema}),{type:'message'})
+      return schema
+    }
+    resolve()
+    const report=(level:'warn'|'error',title:string,error:unknown)=>{
+      const detail=error&&typeof error==='object'&&'issues' in error?JSON.stringify((error as {issues:unknown}).issues):String(error)
+      console[level]('[MVU zod] '+title+'\n'+detail.slice(0,4000))
+    }
+    const readOnly=(path:unknown):boolean=>{
+      const text=String(path??'').trim().replace(/^[\\"'` ]+|[\\"'` ]+$/g,'').replace(/^(?:stat_data|status_current_variables)\./,'')
+      return text.split(/[.[\]]+/).some(segment=>segment.startsWith('_'))
+    }
+    on(events.VARIABLE_INITIALIZED,(variables:unknown,swipeId:unknown)=>{
+      if(!active)return
+      const target=variables as Table
+      const result=resolve().safeParse(target.stat_data??{})
+      if(result.success)target.stat_data={...(target.stat_data as Table|undefined),...(result.data as Table)}
+      else report('error',`第 ${Number(swipeId)+1} 条开场白的变量初始化失败`,result.error)
+    })
+    on('mag_command_parsed_for_zod',(variables:unknown,commands:unknown)=>{
+      if(!active||!Array.isArray(commands))return
+      const target=variables as Table,schema=resolve()
+      for(const command of commands as Array<{type:string;args:unknown[];full_match?:string}>){
+        if(command.type==='move'?command.args.some(readOnly):readOnly(command.args[0]))continue
+        let candidate:Table
+        try{candidate=codec.apply(table(target.stat_data),[command as never]).stat_data}
+        catch(error){report('warn','变量更新命令无法套用，可能需要重 Roll：'+String(command.full_match??command.type),error);continue}
+        const result=schema.safeParse(candidate)
+        if(result.success)target.stat_data=table(result.data)
+        else report('warn','变量更新不符合 schema，已忽略：'+String(command.full_match??command.type),result.error)
+      }
+    })
+    // 命令已按 schema 逐条处理；清空后原生 MVU 不再重复套用。
+    on('mag_command_parsed_ended_for_zod',(_variables:unknown,commands:unknown)=>{if(active&&Array.isArray(commands))commands.length=0})
+    on('mag_variable_update_ended_for_zod',(variables:unknown)=>{
+      if(!active)return
+      const target=variables as Table
+      target.schema='没有用别管这个';delete target.display_data;delete target.delta_data
+    })
+  }
+  root.__dshTavernMvuZod=Object.freeze({registerMvuSchema})
   const mvu=Object.freeze({events,getMvuData,replaceMvuData,parseMessage,isDuringExtraAnalysis:()=>{check();return false}})
   root.Mvu=mvu
   // 原版依赖 parent.Mvu 的发布方式不适用于不透明源；内置对象在每个沙箱独立安装。
@@ -121,6 +179,7 @@ export function installCardMvu(codec:HelperMvuCommandCodec,json:(value:unknown,m
     active=false
     if(root.Mvu===mvu)delete root.Mvu
     if(root.__dshTavernMvuInitialize===initialize)delete root.__dshTavernMvuInitialize
+    if((root.__dshTavernMvuZod as {registerMvuSchema?:unknown}|undefined)?.registerMvuSchema===registerMvuSchema)delete root.__dshTavernMvuZod
     if(root.waitGlobalInitialized===waitGlobalInitialized)delete root.waitGlobalInitialized
     const helper=root.TavernHelper as Table|undefined
     if(helper?.waitGlobalInitialized===waitGlobalInitialized)delete helper.waitGlobalInitialized

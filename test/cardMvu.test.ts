@@ -175,3 +175,42 @@ it('实际剧情事务保存 MVU 消息变量，重建宿主仍可读且同卡�
     f.close()
   }finally{await rm(root,{recursive:true,force:true})}
 })
+
+/**
+ * MVU zod 模板：卡片以 `import { registerMvuSchema } from '…/mvu_zod.js'` 注册 schema。
+ * 远程模块被沙箱 CSP 拦截后脚本永远不就绪、原生 MVU 一直等待；改写为本地实现后，
+ * 开局按 schema 补全，更新逐条校验，`_` 路径只读，结果带原生 MVU 认可的 schema 标记。
+ */
+it('registerMvuSchema 本地实现：开局补全、逐条校验、只读路径与 schema 标记', async () => {
+  // 与卡面 vendor 相同：zod 打包后在沙箱同一 realm 内运行，结果对象才是沙箱内的普通 JSON。
+  const { build } = await import('esbuild')
+  const bundled = await build({ stdin: { contents: "import * as z from 'zod'; window.z = z", resolveDir: process.cwd() }, bundle: true, format: 'iife', write: false })
+  const f = frame({ ...snapshot, scopes: { '["chat",""]': { initialized_lorebooks: {}, stat_data: { hp: 10, _secret: 1 } } } })
+  f.run(bundled.outputFiles[0]!.text)
+  f.run('window.schema = z.z.object({ hp: z.z.number().min(0), mood: z.z.string().default("平静") })')
+  // 变量编辑器的 schema 登记会请求备份回执，这里只核对调用约定（真实沙箱另经浏览器验证）。
+  f.run('window.registered = []; window.registerVariableSchema = (value, option) => registered.push([typeof value.safeParseAsync, option.type])')
+  f.run('__dshTavernMvuZod.registerMvuSchema(() => schema)')
+  expect(f.run('registered')).toEqual([['function', 'message']])
+  const initialized = await f.run('__dshTavernMvuInitialize({ stat_data: { hp: 3 } }, 0)')
+  expect(initialized.stat_data).toEqual({ hp: 3, mood: '平静' })
+  const message = "_.set('hp', 10, 20);\n_.set('hp', -5);\n_.add('hp', 2);\n_.set('_secret', 99);\n_.set('mood', '紧张');"
+  const result = await f.run(`Mvu.parseMessage(${JSON.stringify(message)}, { initialized_lorebooks: {}, stat_data: { hp: 10, _secret: 1, mood: '平静' } })`)
+  // -5 违反 min(0) 被忽略；_secret 只读；其余逐条生效且不会被原生 MVU 重复套用（add 只加一次）。
+  expect(result.stat_data).toEqual({ hp: 22, _secret: 1, mood: '紧张' })
+  expect(result.schema).toBe('没有用别管这个')
+  expect(result).not.toHaveProperty('display_data')
+  expect(result).not.toHaveProperty('delta_data')
+})
+
+it('只改写 mvu_zod 的顶层具名导入，其它远程导入与异常写法原样保留', async () => {
+  const { rewriteMvuZodImport, helperScriptHtml } = await import('../src/core/cardScript.js')
+  const source = "import { registerMvuSchema as reg } from 'https://testingcf.jsdelivr.net/gh/StageDog/tavern_resource/dist/util/mvu_zod.js';\nreg(() => Schema)"
+  expect(rewriteMvuZodImport(source)).toBe('const {registerMvuSchema:reg}=window.__dshTavernMvuZod;\nreg(() => Schema)')
+  expect(rewriteMvuZodImport("import { registerMvuSchema } from \"https://cdn.jsdelivr.net/gh/StageDog/tavern_resource@0.3.1/dist/util/mvu_zod.js\"")).toBe('const {registerMvuSchema}=window.__dshTavernMvuZod;')
+  for (const untouched of ["import * as m from 'https://testingcf.jsdelivr.net/gh/StageDog/tavern_resource/dist/util/mvu_zod.js'",
+    "import { x } from 'https://example.com/mvu_zod.js'", "import { a-b } from 'https://testingcf.jsdelivr.net/gh/StageDog/tavern_resource/dist/util/mvu_zod.js'"]) {
+    expect(rewriteMvuZodImport(untouched)).toBe(untouched)
+  }
+  expect(helperScriptHtml(source)).not.toContain('jsdelivr')
+})

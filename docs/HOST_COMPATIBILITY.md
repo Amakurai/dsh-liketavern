@@ -249,3 +249,12 @@ Windows / Node 24.18.0 / dsh 0.1.5-rc.2，使用独立临时 DSH_HOME、手写�
 - 上下文用量读取 token-meter 的 `contextBreakdown` 时按扁平对象取值，实际状态为 `{ nodes, breakdown }`（0.1.5 已如此，非本次升级引入），面板构成三项恒为空；已改为读取 `breakdown`。
 
 已核对无变化：插件使用的五个 slot 名与作用域、`SessionSnapshot.blank/promptAttempted`、assistant 块种类与 `finalNode.seq`、`turn-tail` 数据、locale `register/getSnapshot().active`、订阅的 12 个宿主事件、`agentPreset` 投影、WorkspaceRegistry `list/attachSession`、`data-composer-seat`，以及运行时上下文快照按字节去重（稳定前缀依赖此行为）。
+
+### 2026-09-28：MVU zod 模板与原生 MVU 默认开启
+
+用户反馈「MVU 在 0.1.7-rc.2 不能用」。独立 DSH_HOME + headless Chrome（CDP 采集沙箱 console）复现：卡片 `[MVU]…_zod` 脚本 `import { registerMvuSchema } from '…/StageDog/tavern_resource/dist/util/mvu_zod.js'` 被沙箱 CSP（`script-src 'unsafe-inline' 'unsafe-eval'`）拦截，脚本永不就绪，原生 MVU 的 `allReady` 为假，初始化任务一直 pending；另外现有绑定未开启 `helperMvu`，原生 MVU 根本不运行。两点均非本次宿主升级引入，但 MVU zod 是常见模板。
+
+- 原文件许可证为 NOASSERTION，不随包分发；在沙箱 `installCardMvu` 内按其可观察行为本地实现 `registerMvuSchema`（开局按 schema 补全、命令逐条套用并校验、`_` 路径只读、清空命令后写入 `没有用别管这个` 标记），并只把该 URL 的顶层具名导入改写为 `window.__dshTavernMvuZod`。其它远程导入仍按 CSP 失败并显示。
+- 首次绑定（或换卡）且客户端未表态时，若卡片启用的脚本包含官方 MVU 框架入口，服务端自动开启原生 MVU；显式关闭始终尊重，已有绑定不被改写。
+
+验收：同一会话副本开启原生 MVU 后，初始化任务完成（`initialized: true`，stat_data 由卡片 `[Initvar]` 与 schema 默认值组成），无 CSP 错误与页面异常。命令更新路径以打包进 vm 同一 realm 的真实 zod 做单元验证（非法值忽略、add 只套用一次、只读路径、标记）。未调用真实模型；临时服务、浏览器与数据副本已删除。

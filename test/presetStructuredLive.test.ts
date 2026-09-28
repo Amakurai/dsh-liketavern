@@ -215,6 +215,17 @@ it('缓存优先：真实 wire 的下一轮请求以上一轮请求开头，上�
   expect(wireText(wires[1]!.messages[previous.length]!)).toContain('FACTORY-ANSWER-1')
 })
 
+it('钉位复用旧 standing（指纹未变、当轮重算不同）时，布局载体按实际写入 system 的文本建立', async () => {
+  configRaw = {}
+  await send(await user('INPUT-ONE'))
+  // 模拟绕开写方法的手改文件：指纹不变，但钉住的是旧字节。旧实现按重算结果建计划，
+  // 投影在宿主 system 里找不到 standing，每一轮都失败且无法靠「开启下一轮」恢复。
+  for (const [key, pin] of state.standingPins) state.standingPins.set(key, { ...pin, text: `${pin.text}\n\nSTALE-PINNED` })
+  await send(await user('INPUT-TWO'))
+  expect(wires).toHaveLength(2)
+  expect(JSON.stringify(wires[1])).not.toContain('STALE-PINNED')
+})
+
 it('模型只支持首条 system 时真实传输合并全部系统规则，其它角色仍按布局送出', async () => {
   agent.options.model = 'factory-leading'
   await send(await user('LEADING-ONLY-INPUT'))

@@ -12,6 +12,7 @@ import {installChoiceInput} from './helperChoices.js'
 import { TYPERT_REMOTE } from '../remote.js'
 import { TavernFloorActions } from './actions.js'
 import { TavernAssistantNode } from './assistant.js'
+import { TavernTurnTrigger } from './trigger.js'
 import { TavernHeaderChip } from './chip.js'
 import { TavernHeroCharacter } from './hero.js'
 import { setTavernHostLocale, setTavernLocale } from './i18n.js'
@@ -111,7 +112,7 @@ export async function apply(ctx: ClientContext) {
     const applyNode = (want: boolean) => {
       if (want) {
         if (nodeDispose) return
-        nodeDispose = ctx.slots.register(
+        const assistant = ctx.slots.register(
           {
             name: 'conversation.chat.node',
             key: 'assistant-step',
@@ -120,6 +121,9 @@ export async function apply(ctx: ClientContext) {
           },
           TavernAssistantNode,
         )
+        // 续写等合成指令唤醒的回合：宿主会把指令原文画成可展开行，这里换成简短说明（见 trigger.tsx）。
+        const trigger = ctx.slots.register({ name: 'conversation.chat.node', key: 'turn-trigger', priority: -1 }, TavernTurnTrigger)
+        nodeDispose = () => { assistant(); trigger() }
       } else if (nodeDispose) {
         nodeDispose()
         nodeDispose = undefined

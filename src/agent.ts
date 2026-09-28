@@ -93,7 +93,8 @@ export function apply(ctx: Context): void {
       if (event.type === 'turn/start') break
     }
     if (hasPlan) return decision
-    const standing = neutralizeDshMustache(joinPromptParts([BOUND_DISCIPLINE, pipeline.standing]))
+    // 优先使用同一步组装真正写入 system 的钉位文本；缺失时（旧流程）才按本轮结果重算。
+    const standing = state.appliedStanding.get(payload.agent.id) ?? neutralizeDshMustache(joinPromptParts([BOUND_DISCIPLINE, pipeline.standing]))
     const plan = {version:1 as const,sessionId:payload.agent.id,turn:payload.turn,layout:pipeline.layout,
       standingText:standing,contextText:neutralizeDshMustache(joinPromptParts([TURN_PLAYBOOK,pipeline.turnContext])),
       cacheFirst:state.config.prompts.cacheFirstLayout}
@@ -107,6 +108,8 @@ export function apply(ctx: Context): void {
   ctx.on('system-prompt/assemble', async (_assembly, context, next) => {
     const agent = context.agent
     if (!agent) return next()
+    // 每步重新记录；未绑定、阻塞或失败的步骤不能沿用上一步的 standing。
+    state.appliedStanding.delete(agent.id)
     const blocked = await blockHelperMvuAssembly(state, agent, context.signal)
     let result
     try { result = await next() }
@@ -157,6 +160,7 @@ export function apply(ctx: Context): void {
         standing,
       )
       applyStanding(result, pin.text)
+      state.appliedStanding.set(agent.id, pin.text)
       // 缓存观测：standing 是否复用钉位（recompute = 指纹变化重算并重钉，本轮前缀缓存打穿一次）。
       // recordTriggerLog 是整体覆盖写，必须把 pipeline 的明细行一并带上。
       state.recordTriggerLog(agent.id, [

@@ -37,7 +37,9 @@ function context() {
     effect: (fn: () => void | (() => void)) => { const dispose = fn(); if (dispose) effects.push(dispose) },
   } as unknown as ClientContext
   cleanups.push(() => { for (const dispose of effects.splice(0).reverse()) dispose() })
-  return { ctx, occupied: () => (registered.get('conversation.chat.node:assistant-step') ?? 0) > 0 }
+  const has = (key: string) => (registered.get(`conversation.chat.node:${key}`) ?? 0) > 0
+  // 消息排版与唤醒行两个覆盖位同进同退。
+  return { ctx, occupied: () => { expect(has('turn-trigger')).toBe(has('assistant-step')); return has('assistant-step') } }
 }
 
 it('Tavern 会话显示期间接管 assistant-step，切到普通会话后交还原生排版', async () => {

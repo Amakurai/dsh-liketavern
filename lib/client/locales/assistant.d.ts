@@ -8,5 +8,8 @@ export declare const zh: {
     readonly 'assistant.unknownBlock': "未知块";
     readonly 'assistant.bindingLoadFailed': "角色卡信息暂时无法加载：{message}";
     readonly 'assistant.retryBinding': "重新加载角色卡";
+    readonly 'trigger.continue': "↪ 接着上一条回复续写";
+    readonly 'trigger.tavern': "↪ Tavern 自动操作";
+    readonly 'trigger.external': "收到外部请求，触发了本轮回复";
 };
 export declare const en: Record<keyof typeof zh, string>;

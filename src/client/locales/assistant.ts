@@ -9,6 +9,9 @@ export const zh = {
   'assistant.unknownBlock': '未知块',
   'assistant.bindingLoadFailed': '角色卡信息暂时无法加载：{message}',
   'assistant.retryBinding': '重新加载角色卡',
+  'trigger.continue': '↪ 接着上一条回复续写',
+  'trigger.tavern': '↪ Tavern 自动操作',
+  'trigger.external': '收到外部请求，触发了本轮回复',
 } as const
 
 export const en: Record<keyof typeof zh, string> = {
@@ -20,4 +23,7 @@ export const en: Record<keyof typeof zh, string> = {
   'assistant.unknownBlock': 'Unknown block',
   'assistant.bindingLoadFailed': 'Character information could not be loaded: {message}',
   'assistant.retryBinding': 'Reload character',
+  'trigger.continue': '↪ Continuing the previous reply',
+  'trigger.tavern': '↪ Tavern automatic action',
+  'trigger.external': 'An external request started this reply',
 }

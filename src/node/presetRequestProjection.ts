@@ -290,6 +290,43 @@ function toolSpans(messages: readonly Message[]): ToolSpan[] {
   return spans
 }
 
+/**
+ * 缓存优先计划的本轮尾块：标题 + 按投影发射顺序的尾块条目（system 改由 user 承载）。
+ * 当前轮与历史轮共用同一构造，历史轮重放与当轮实际发送逐字节一致，前缀缓存才能延续。
+ */
+function turnTailMessages(plan: PresetRequestPlan): Message[] {
+  if (!plan.cacheFirst) return []
+  const entries = plan.layout.entries
+  const byKey = new Map(entries.map(entry => [entry.key, entry]))
+  const inTail = (entry: PromptLayoutEntry): boolean => {
+    let root: PromptLayoutEntry | undefined = entry
+    for (let depth = 0; root?.placement.kind === 'entry-relative'; depth++) {
+      if (depth >= 512) return false
+      root = byKey.get(root.placement.entryKey)
+    }
+    const placement = root?.placement
+    return placement !== undefined && (placement.kind === 'depth' || placement.kind === 'after-history'
+      || (placement.kind === 'before-history' && root!.turnLocal))
+  }
+  const before = new Map<string, PromptLayoutEntry[]>(), after = new Map<string, PromptLayoutEntry[]>()
+  for (const entry of entries) {
+    if (entry.placement.kind !== 'entry-relative') continue
+    const target = entry.placement.side === 'before' ? before : after
+    const siblings = target.get(entry.placement.entryKey)
+    if (siblings) siblings.push(entry)
+    else target.set(entry.placement.entryKey, [entry])
+  }
+  const out: Message[] = []
+  const emit = (entry: PromptLayoutEntry, depth = 0): void => {
+    if (depth >= 512) throw new Error('Tavern 模板插入位置嵌套超过 512 层')
+    for (const child of before.get(entry.key) ?? []) emit(child, depth + 1)
+    if (inTail(entry) && entry.content.trim()) out.push(pluginMessage(plan, entry.key, entry.role === 'system' ? 'user' : entry.role, entry.content))
+    for (const child of after.get(entry.key) ?? []) emit(child, depth + 1)
+  }
+  for (const entry of entries) if (entry.placement.kind !== 'entry-relative') emit(entry)
+  return out.length ? [pluginMessage(plan, 'host:turn-tail-header', 'user', turnTailHeader(plan.turn)), ...out] : []
+}
+
 /** 适配器边界的唯一变换：返回新请求，原请求和 Session 永远不被修改。 */
 export function projectPresetRequest(options: Readonly<GenerateOptions>, session: Session, projection: PresetProjectionOptions = {}): GenerateOptions {
   if (options.purpose) return { ...options, messages: [...options.messages] }
@@ -363,17 +400,21 @@ export function projectPresetRequest(options: Readonly<GenerateOptions>, session
   }
   // 载体在首次接收批次末尾：后续工具步骤保留在它之后，尾条绝不重新附到工具结果之后。
   const carrierIndex = requestMessages.findIndex(message => message.id === carrier.id)
+  /** 某条载体所在输入批次之后的边界（历史轮与本轮同一算法）。 */
+  const frontierAt = (index: number): number => {
+    let end = 1
+    for (const message of requestMessages.slice(0, index + 1)) {
+      const at = positions.get(message.id)
+      if (at !== undefined) end = Math.max(end, at + 1)
+    }
+    return end
+  }
   let frontierEnd: number | undefined
   const frontier = (): number => {
     if (frontierEnd !== undefined) return frontierEnd
     if (carrierIndex < 0) throw new Error('Tavern 首次输入边界已被压缩，不能重排本轮尾条；请开启下一轮')
-    let end = 1
-    for (const message of requestMessages.slice(0, carrierIndex + 1)) {
-      const at = positions.get(message.id)
-      if (at !== undefined) end = Math.max(end, at + 1)
-    }
-    frontierEnd = end
-    return end
+    frontierEnd = frontierAt(carrierIndex)
+    return frontierEnd
   }
   const spans = toolSpans(messages)
   const safeGaps = { before: new Map<number, number>(), after: new Map<number, number>() }
@@ -477,15 +518,34 @@ export function projectPresetRequest(options: Readonly<GenerateOptions>, session
   const emit = (entry: PromptLayoutEntry, depth = 0): void => {
     if (depth >= 512) throw new Error('Tavern 模板插入位置嵌套超过 512 层')
     for (const child of before.get(entry.key) ?? []) emit(child, depth + 1)
-    // 尾部 system 在 in-history 模型上会整份重发系统快照（每轮不可缓存），在首条模型上又会并回首条；
-    // 尾块的系统条目改用 user 承载，与 tavern:turn 的通道一致，首条 system 保持字节稳定且不重复。
-    const role = entry.role === 'system' && inTurnTail(entry) ? 'user' : entry.role
-    if (entry.content.trim()) append(gapFor(entry), pluginMessage(plan, entry.key, role, entry.content))
+    // 尾块条目由 turnTailMessages 统一构造（system 改由 user 承载），这里只放其余条目。
+    if (entry.content.trim() && !inTurnTail(entry)) append(gapFor(entry), pluginMessage(plan, entry.key, entry.role, entry.content))
     for (const child of after.get(entry.key) ?? []) emit(child, depth + 1)
   }
   // 尾块会并入玩家输入所在的 user 轮；标题与非 DeepSeek 通道一致，标明其后是系统材料。
-  if (entries.some(entry => entry.content.trim() && inTurnTail(entry))) {
-    append(safeGap(frontier(), 'after'), pluginMessage(plan, 'host:turn-tail-header', 'user', turnTailHeader(plan.turn)))
+  const currentTail = turnTailMessages(plan)
+  if (currentTail.length) {
+    const gap = safeGap(frontier(), 'after')
+    for (const message of currentTail) append(gap, message)
+  }
+  // 历史轮尾块原位重放：DeepSeek 的前缀缓存覆盖上一轮请求及其生成内容（思考、工具调用、回复）。
+  // 丢掉旧尾块会让前缀断在上一轮输入之后，其后的回复与工具结果每轮全价重付。
+  // 载体已被压缩的轮次不再重放；元数据损坏只放弃这一轮的缓存重放，不阻断当前请求。
+  if (plan.cacheFirst) {
+    const replayed = new Set([`${plan.sessionId} ${plan.turn}`])
+    requestMessages.forEach((message, index) => {
+      if (index === carrierIndex) return
+      let past: PresetRequestPlan | undefined
+      try { past = planFromMessage(message) } catch { return }
+      if (!past?.cacheFirst) return
+      const key = `${past.sessionId} ${past.turn}`
+      if (replayed.has(key)) return
+      replayed.add(key)
+      const tail = turnTailMessages(past)
+      if (!tail.length) return
+      const gap = safeGap(frontierAt(index), 'after')
+      for (const tailMessage of tail) append(gap, tailMessage)
+    })
   }
   for (const entry of entries) if (entry.placement.kind !== 'entry-relative') emit(entry)
   const projected: Message[] = []

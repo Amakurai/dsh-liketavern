@@ -581,3 +581,79 @@ it('完整 system 快照膨胀在分配超量结果前明确失败', () => {
   f.publish()
   expect(() => projectPresetRequest(f.request(), f.session, { model: { systemPromptUpdate: 'in-history' } })).toThrow('16 MiB')
 })
+
+/**
+ * 跨轮前缀：DeepSeek 前缀缓存覆盖上一轮请求及其生成内容。下一轮投影必须以上一轮实际发送的
+ * 消息序列（含其尾块）逐字节开头，后接上一轮的工具调用、工具结果与回复，才能整段命中。
+ */
+it('缓存优先：下一轮请求以上一轮请求逐字节开头，旧轮尾块原位重放', () => {
+  const session = Session.create(SessionId('cross-turn-prefix'))
+  const standingText = `${BOUND_DISCIPLINE}\n\nSTANDING`
+  // 供应商只看到角色与正文；宿主每轮新写 system 消息、插件条目按轮派生 ID，都不上线。
+  const wire = (messages: readonly Message[]) => messages.map(message => [message.role, textOf(message)])
+  const request = (): GenerateOptions => ({ provider: 'factory', model: 'factory', sessionId: session.id, messages: session.deriveMessages() })
+  const layoutFor = (turn: number, inputs: Message[]) => {
+    const history = inputs.map((message, inputIndex) => ({ inputIndex, messageId: message.id, role: message.role, chat: true }))
+    const last = history.at(-1)!
+    return { version: 1 as const, history, entries: [
+      { ...entry('STATIC-CARD', 'system', { kind: 'before-history', anchor: history[0]! }), turnLocal: false },
+      { ...entry(`WI-${turn}`, 'system', { kind: 'before-history', anchor: history[0]! }), key: 'wi' },
+      { ...entry(`AUTHOR-NOTE-${turn}`, 'system', { kind: 'depth', depth: 1, order: 10, previous: last }), key: 'note' },
+      { ...entry('JAILBREAK', 'system', { kind: 'after-history', anchor: last }), turnLocal: false, key: 'jb' },
+    ] }
+  }
+  const startTurn = (turn: number, input: Message, inputs: Message[]) => {
+    session.append('turn/start', { turn })
+    session.append('step/start', { turn, step: 1 })
+    session.append('system/message', { turn, step: 1, message: createSystemMessage(`HOST-TOOLS\n\n${standingText}`, hostPlugin) }, { surfaceOp: 'append' })
+    const plan: PresetRequestPlan = { version: 1, sessionId: session.id, turn, standingText, contextText: TURN_PLAYBOOK, cacheFirst: true, layout: layoutFor(turn, inputs) }
+    session.append('user/message', attachPresetPlanMessage(input, plan), { surfaceOp: 'append' })
+  }
+  const project = () => projectPresetRequest(request(), session, { messagesApi: true, model: { systemPromptUpdate: 'in-history' } }).messages
+
+  const first = user('第一轮输入')
+  startTurn(1, first, [first])
+  const turn1 = project()
+  // 第一轮用了工具步骤：工具调用、结果与最终回复都进入缓存，下一轮必须能接着命中。
+  const callId = ToolCallId('lore-call')
+  const call = createAssistantMessage({ source: { provider: 'factory', model: 'factory' },
+    content: [{ type: 'tool-call', id: callId, name: 'run_code', arguments: '{}' }] })
+  session.append('assistant/message', { turn: 1, step: 1, message: call, stream: [] }, { surfaceOp: 'append' })
+  session.append('tool/result', { turn: 1, step: 1, message: createToolResultMessage({ callId, content: [{ type: 'text', text: 'LORE' }], isError: false }) }, { surfaceOp: 'append' })
+  const step2 = project()
+  expect(wire(step2.slice(0, turn1.length))).toEqual(wire(turn1))
+  session.append('step/start', { turn: 1, step: 2 })
+  const reply = createAssistantMessage({ source: { provider: 'factory', model: 'factory' }, content: [{ type: 'text', text: '第一轮回复' }] })
+  session.append('assistant/message', { turn: 1, step: 2, message: reply, stream: [] }, { surfaceOp: 'append' })
+  session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
+  const afterTurn1 = [...step2, reply]
+
+  const second = user('第二轮输入')
+  startTurn(2, second, [first, reply, second])
+  const turn2 = project()
+  expect(wire(turn2.slice(0, afterTurn1.length))).toEqual(wire(afterTurn1))
+  const texts = turn2.map(textOf)
+  expect(texts.filter(text => text === 'WI-1')).toHaveLength(1)
+  expect(texts.indexOf('WI-1')).toBeLessThan(texts.indexOf('第一轮回复'))
+  expect(texts.indexOf('WI-2')).toBeGreaterThan(texts.indexOf('第二轮输入'))
+  expect(texts.filter(text => text.startsWith('【Tavern 本轮提示'))).toEqual(['【Tavern 本轮提示：第 1 轮】', '【Tavern 本轮提示：第 2 轮】'])
+})
+
+it('未开启缓存优先的计划不重放旧轮尾块', () => {
+  const session = Session.create(SessionId('no-replay'))
+  const standingText = `${BOUND_DISCIPLINE}\n\nSTANDING`
+  const put = (turn: number, input: Message, cacheFirst: boolean) => {
+    session.append('turn/start', { turn })
+    session.append('step/start', { turn, step: 1 })
+    session.append('system/message', { turn, step: 1, message: createSystemMessage(`HOST\n\n${standingText}`, hostPlugin) }, { surfaceOp: 'append' })
+    const history = [{ inputIndex: 0, messageId: input.id, role: 'user' as const, chat: true }]
+    session.append('user/message', attachPresetPlanMessage(input, { version: 1, sessionId: session.id, turn, standingText, contextText: '', cacheFirst,
+      layout: { version: 1, history, entries: [entry(`TAIL-${turn}`, 'system', { kind: 'after-history', anchor: history[0]! })] } }), { surfaceOp: 'append' })
+  }
+  put(1, user('一'), false)
+  session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
+  put(2, user('二'), true)
+  const texts = projectPresetRequest({ provider: 'factory', model: 'factory', sessionId: session.id, messages: session.deriveMessages() }, session).messages.map(textOf)
+  expect(texts).not.toContain('TAIL-1')
+  expect(texts).toContain('TAIL-2')
+})

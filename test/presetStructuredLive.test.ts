@@ -203,6 +203,18 @@ it('缓存优先：真实 wire 首条 system 不含深度条目，深度注入�
   expect(slot(wires[0]!, '【Tavern 本轮提示：第 1 轮】')).toBeLessThan(slot(wires[0]!, 'DEPTH-TWO'))
 })
 
+it('缓存优先：真实 wire 的下一轮请求以上一轮请求开头，上一轮回复紧随其后', async () => {
+  configRaw = {}
+  await send(await user('INPUT-ONE'))
+  await send(await user('INPUT-TWO'))
+  expect(wires).toHaveLength(2)
+  // DeepSeek 前缀缓存覆盖上一轮请求与生成内容；顶层 system 与消息序列都必须是逐字节延续。
+  expect(wires[1]!.system).toBe(wires[0]!.system)
+  const previous = wires[0]!.messages
+  expect(JSON.stringify(wires[1]!.messages.slice(0, previous.length))).toBe(JSON.stringify(previous))
+  expect(wireText(wires[1]!.messages[previous.length]!)).toContain('FACTORY-ANSWER-1')
+})
+
 it('模型只支持首条 system 时真实传输合并全部系统规则，其它角色仍按布局送出', async () => {
   agent.options.model = 'factory-leading'
   await send(await user('LEADING-ONLY-INPUT'))

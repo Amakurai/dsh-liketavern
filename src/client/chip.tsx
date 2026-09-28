@@ -85,16 +85,32 @@ function fmtTokens(n: number | null): string {
   return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n)
 }
 
+function fmtRate(rate: number | null): string {
+  return rate === null ? '—' : `${(rate * 100).toFixed(1)}%`
+}
+
+/** 等宽表格文本：与其它页签共用 pre 展示和复制。 */
+function cacheUsageText(usage: PromptPreview['cacheUsage'], t: ReturnType<typeof useT>): string {
+  if (usage.total.steps === 0) return t('chip.preview.cacheNone')
+  const row = (label: string, v: PromptPreview['cacheUsage']['total']) =>
+    [label, String(v.steps), fmtRate(v.hitRate), fmtTokens(v.uncachedInput), fmtTokens(v.cacheRead), fmtTokens(v.output)].join(' | ')
+  return [t('chip.preview.cacheNote'), '', t('chip.preview.cacheColumns'),
+    ...usage.turns.map((turn) => row(String(turn.turn), turn)), row(t('chip.preview.cacheTotal'), usage.total)].join('\n')
+}
+
 function PromptPreviewDialog(props: { data: PromptPreview; onClose: () => void }) {
   const { data } = props
   const t = useT()
   const tabsId = useId()
-  const [tab, setTab] = useState<'standing' | 'turn' | 'full' | 'log' | 'actual'>('actual')
+  const [tab, setTab] = useState<'standing' | 'turn' | 'full' | 'log' | 'actual' | 'cache'>('actual')
   const toast = useToast()
   const wi = data.worldInfoBudget
   const assemble = data.assembleBudget
+  const lastTurn = data.cacheUsage.turns.at(-1)
   const body =
-    tab === 'actual'
+    tab === 'cache'
+      ? cacheUsageText(data.cacheUsage, t)
+      : tab === 'actual'
       ? data.actualRequest ? data.actualRequest.text + (data.actualRequest.truncated ? '\n' + t('chip.preview.actualTruncated') : '') : t('chip.preview.noActual')
       : tab === 'standing'
       ? data.standing || t('chip.preview.empty')
@@ -123,6 +139,11 @@ function PromptPreviewDialog(props: { data: PromptPreview; onClose: () => void }
           ? ` · ${t('chip.preview.trimmed', { sections: assemble.trimmedSections.join(t('chip.preview.listSep')) })}`
           : ''}
       </Muted>
+      {lastTurn && (
+        <Muted>
+          {t('chip.preview.cacheSummary', { rate: fmtRate(lastTurn.hitRate), uncached: fmtTokens(lastTurn.uncachedInput), steps: lastTurn.steps })}
+        </Muted>
+      )}
       <div className="dsh-tavern-filters" style={{ margin: '10px 0 12px' }}>
         <Tabs
           id={tabsId} panelId={`${tabsId}-panel`} label={t('chip.preview.title')}
@@ -131,6 +152,7 @@ function PromptPreviewDialog(props: { data: PromptPreview; onClose: () => void }
           onChange={(id) => setTab(id as typeof tab)}
           items={[
             { id: 'actual', label: t('chip.preview.actual') },
+            { id: 'cache', label: t('chip.preview.tab.cache') },
             { id: 'standing', label: 'standing' },
             { id: 'turn', label: t('chip.preview.tab.turn') },
             { id: 'full', label: t('chip.preview.tab.full') },

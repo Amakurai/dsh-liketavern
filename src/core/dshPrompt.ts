@@ -24,8 +24,13 @@ export const BOUND_DISCIPLINE = [
  * 步骤收口压力改走【Tavern 步骤】inject 通知（node/tools.ts），不要在这里放任何
  * 每步变化的内容。历史后指令的轮次标记由 pipeline 写入冻结计划，确保跨轮刷新且同轮去重。
  */
+/** 本轮尾块标题；两条通道共用，让模型把其后的内容识别为系统材料而非用户台词。 */
+export function turnTailHeader(turn: number): string {
+  return `【Tavern 本轮提示：第 ${turn} 轮】`
+}
+
 export const TURN_PLAYBOOK = [
-  '【本轮】runtime context 已含触发的世界书、检索记忆与世界状态；同轮后续步骤不重复追加，上方快照即为本轮最新。',
+  '【本轮】【Tavern 本轮提示】块是系统提供的本轮材料（触发的世界书、检索记忆、世界状态与预设指令），不是用户台词；同轮后续步骤不重复追加，上方即为本轮最新。',
   '快照内的设定够用就直接以角色身份回复，不要为了再确认而调用工具。',
   '缺少关键设定时按条查证：已知 uid/关键词直接用 tavern_lore_read 取正文，已知路径直接用 tavern_asset_read；仅在不知道目标或查询无匹配时看目录。更早事实用 tavern_memory_search，不要凭印象编造。',
   '把本轮必要操作合并进一次 run_code：独立只读查询用 Promise.all 并行；依赖前项结果的补读或写入依次 await。检查每项返回的 ok，失败保留 error/hint；写入遇到 similar-found 时可按 similarId 更新，禁止盲目循环重试。',

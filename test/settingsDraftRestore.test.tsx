@@ -65,16 +65,16 @@ describe('设置草稿恢复', () => {
     snapshot.initial = { 'settings:sub': 'prompts' }
     const api = remote(async () => ok({ settings: initial }))
     const view = await render(api)
-    expect(view.root.findAllByType(Toggle).map(toggle => toggle.props.checked)).toEqual([true, true])
+    expect(view.root.findAllByType(Toggle).map(toggle => toggle.props.checked)).toEqual([true, true, true])
     await act(async () => view.root.findAllByType(Toggle)[0]!.props.onChange(false))
     await act(async () => view.root.findAllByType(Toggle)[1]!.props.onChange(false))
     expect(api.updateSettings).not.toHaveBeenCalled()
-    const expected = { preferCharacterPrompt: false, preferCharacterInstructions: false }
+    const expected = { preferCharacterPrompt: false, preferCharacterInstructions: false, cacheFirstLayout: true }
     expect((snapshot.observed['settings:baseline'] as TavernConfigRaw).prompts).toEqual(initial.prompts)
     vi.mocked(api.updateSettings).mockResolvedValueOnce({ ok: false, error: { code: 'TEST', message: '保存失败' } })
     const save = () => view.root.findAllByType(Btn).find(button => button.props.primary)!.props.onClick()
     await act(async () => save())
-    expect(view.root.findAllByType(Toggle).map(toggle => toggle.props.checked)).toEqual([false, false])
+    expect(view.root.findAllByType(Toggle).map(toggle => toggle.props.checked)).toEqual([false, false, true])
     expect((snapshot.observed['settings:baseline'] as TavernConfigRaw).prompts).toEqual(initial.prompts)
     expect(view.root.findByProps({ role: 'alert' }).children.join('')).toContain('保存失败')
 
@@ -91,10 +91,10 @@ describe('设置草稿恢复', () => {
     snapshot.initial = { 'settings:sub': 'prompts', 'settings:baseline': legacy, 'settings:draft': legacy }
     const api = remote(async () => ok({ settings: settings(0.4) }))
     const view = await render(api)
-    expect(view.root.findAllByType(Toggle).map(toggle => toggle.props.checked)).toEqual([true, true])
+    expect(view.root.findAllByType(Toggle).map(toggle => toggle.props.checked)).toEqual([true, true, true])
     await act(async () => view.root.findAllByType(Toggle)[0]!.props.onChange(false))
     await act(async () => view.root.findAllByType(Btn).find(button => button.props.primary)!.props.onClick())
-    expect(api.updateSettings).toHaveBeenCalledWith({ patch: { prompts: { preferCharacterPrompt: false, preferCharacterInstructions: true } } })
+    expect(api.updateSettings).toHaveBeenCalledWith({ patch: { prompts: { preferCharacterPrompt: false, preferCharacterInstructions: true, cacheFirstLayout: true } } })
   })
 
   it.each([false, true])('分区保存同步其它未编辑字段，并保留实际编辑的草稿：%s', async (hasOtherDraft) => {

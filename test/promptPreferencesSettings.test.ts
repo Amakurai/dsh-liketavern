@@ -23,11 +23,13 @@ afterEach(async () => {
 
 describe('全局提示词偏好', () => {
   it('缺省与部分设置保持 ST 默认，两个开关互不影响，错型明确拒绝', () => {
-    expect(resolveConfig({}).prompts).toEqual({ preferCharacterPrompt: true, preferCharacterInstructions: true })
+    expect(resolveConfig({}).prompts).toEqual({ preferCharacterPrompt: true, preferCharacterInstructions: true, cacheFirstLayout: true })
     expect(resolveConfig({ prompts: { preferCharacterPrompt: false } }).prompts)
-      .toEqual({ preferCharacterPrompt: false, preferCharacterInstructions: true })
+      .toEqual({ preferCharacterPrompt: false, preferCharacterInstructions: true, cacheFirstLayout: true })
     expect(resolveConfig({ prompts: { preferCharacterInstructions: false } }).prompts)
-      .toEqual({ preferCharacterPrompt: true, preferCharacterInstructions: false })
+      .toEqual({ preferCharacterPrompt: true, preferCharacterInstructions: false, cacheFirstLayout: true })
+    expect(resolveConfig({ prompts: { cacheFirstLayout: false } }).prompts)
+      .toEqual({ preferCharacterPrompt: true, preferCharacterInstructions: true, cacheFirstLayout: false })
     expect(() => resolveConfig({ prompts: { preferCharacterPrompt: 'false' } })).toThrow()
     expect(() => resolveConfig({ prompts: { preferCharacterInstructions: 0 } })).toThrow()
   })
@@ -45,11 +47,11 @@ describe('全局提示词偏好', () => {
       presets: join(root, 'library/presets'), personas: join(root, 'personas'), regexDir: join(root, 'regex'), sessions: join(root, 'sessions') },
     () => resolveConfig(scope.get()))
     const service = new TavernService(ctx, state, scope)
-    expect(service.getSettings({}).settings.prompts).toEqual({ preferCharacterPrompt: true, preferCharacterInstructions: true })
+    expect(service.getSettings({}).settings.prompts).toEqual({ preferCharacterPrompt: true, preferCharacterInstructions: true, cacheFirstLayout: true })
     await service.updateSettings({ patch: { prompts: { preferCharacterPrompt: false } } })
-    expect(state.config.prompts).toEqual({ preferCharacterPrompt: false, preferCharacterInstructions: true })
+    expect(state.config.prompts).toEqual({ preferCharacterPrompt: false, preferCharacterInstructions: true, cacheFirstLayout: true })
     const saved = await service.updateSettings({ patch: { prompts: { preferCharacterInstructions: false } } })
-    expect(saved.settings.prompts).toEqual({ preferCharacterPrompt: false, preferCharacterInstructions: false })
+    expect(saved.settings.prompts).toEqual({ preferCharacterPrompt: false, preferCharacterInstructions: false, cacheFirstLayout: true })
     expect(saved.settings.sampling.temperature).toBe(0.7)
     const persisted = await readFile(file, 'utf8')
     expect(JSON.parse(persisted)).toEqual({ [TAVERN_NS]: { sampling: { temperature: 0.7 },

@@ -12,6 +12,12 @@ export interface PresetRequestPlan {
     standingText: string;
     /** 宿主 tavern:turn 的完整已冻结文本，包含 TURN_PLAYBOOK。 */
     contextText: string;
+    /**
+     * 缓存优先：本轮动态的历史前条目与全部深度注入改放到本轮输入之后，system 角色改由 user 承载。
+     * 它们在 ST 位置上每轮变化或随历史增长移动，会让其后的整段历史失去前缀缓存。
+     * 随计划冻结，同轮各步骤一致；旧计划缺省按原位置投影。
+     */
+    cacheFirst?: boolean;
 }
 export type PresetProjectionDiagnostic = {
     kind: 'compaction-clamp';

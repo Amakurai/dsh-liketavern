@@ -81,6 +81,8 @@ live standing 在模拟预算裁剪前构造，历史增长不再导致角色定
 
 `agent/request` 将已绑定会话的 `deepseek-official` 路由映射到 `tavern-deepseek`。自持有的公开 `DeepSeekAdapter` 复用已注册设置 namespace 的最终配置、凭证、附件、Files 与 API 扩展；`prepareCall` 委托保持同代连接事实，不另开模型请求或重复进入 llm/stream。适配器在副本中保留宿主工具系统前缀，移除 Tavern 两段内容，再按原角色与身份锚点插入布局条目。当前轮载体固定历史后边界，后续工具步骤不移动它；工具调用与结果不能被插入项拆开。历史锚点被合法摘要替代时，只映射至摘要边界，不恢复旧正文；任意丢失或不明来源拒绝。其它供应商路由暂使用上表的 standing/turn 映射。
 
+缓存优先布局（设置「缓存优先布局」，默认开启）随本轮计划冻结。开启时，本轮动态的历史前条目（触发世界书、记忆、变化层等）与全部深度注入都放在本轮输入之后，与原有历史后条目组成本轮尾块。尾块以 `turnTailHeader` 标题开头，与 tavern:turn 通道一致，标明其后是系统材料，而不是玩家台词。尾块中的 system 条目一律改用 user 发送。原因是：放在历史前的动态内容每轮都会变，深度位置也随历史增长而移动，都会让后面的整段历史失去 DeepSeek 前缀缓存。此外，中途 system 在 in-history 模型上会作为整份系统快照发送，在只支持首条 system 的模型上又会并回首条，同样破坏前缀。历史后 system 在 in-history 模型上本来就会每轮在尾部整份重发，产生不可缓存的重复。静态历史前条目保持原位置。尾块不保留到下一轮：保留旧尾块只会让命中率数字变好看，未缓存 token 并不会减少，反而增加上下文占用，还会留下过期设定。关闭后按 ST 原位置投影；缺少该标记的旧计划也按原位置投影。
+
 投影同时读取本次 `prepareCall` 冻结的模型能力。`systemPromptUpdate=in-history` 表示最新 system 完整生效，先合并相邻的 Tavern 系统条目，再使每条中途 system 包含宿主 SDK 和截至该位置的全部系统条目，不能只发送增量预设。合并不跨真实 user/assistant 或其它来源的 system。未声明该能力的模型只读首条 system，因此系统条目合并到首条并记录兼容诊断，user/assistant 的位置不变。完整快照在拼接前逐项计数，累计超过 16 MiB 明确拒绝，避免深度条目放大输出；逻辑布局和宿主历史均不被改写。DeepSeek Messages 协议还要求中途 system 位于 user/tool 之后、assistant 或结束之前；不满足时系统条目合并到首条并显示 `messages-system-layout` 诊断。供应商可能合并相邻同角色消息，因此该投影仍不是任意 ST 布局的有线等价物。实际请求可能比两段映射更长，诊断提供处理前后的文本估算和同代模型窗口；估算不含图片与工具编码，不替代供应商实际计量。
 
 assistant 预设条目只存在于请求副本，携带 tavernProjection 标记，绝不写入持久 assistant/message 或伪造历史模型输出；末尾 assistant 不代表供应商专用 prefill/prefix，当前未实现该协议。代答仍使用独立的 system/history 请求，采用历史正则结果，不等同于模拟完整角色序列。

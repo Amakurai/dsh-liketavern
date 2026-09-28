@@ -27,6 +27,7 @@ import type { HelperScriptBundle,HelperScriptLibrary,HelperScriptAsset,HelperScr
 import type { Persona } from './core/persona.js'
 import type { SiblingSwipe } from './core/siblings.js'
 import type { CharacterCard, ChatMessage, MemoryEntry, PromptPreset, RegexRule, WIEngineResult, WorldDelta } from './core/types.js'
+import type { CacheUsageSummary } from './core/cacheUsage.js'
 import type { TavernConfigRaw } from './node/config.js'
 import type { ForkResult } from './node/floors.js'
 import type { PluginAbout, PluginUpdate } from './node/pluginAbout.js'
@@ -464,6 +465,8 @@ export interface RenderedOutput {
 /** previewPrompt 的完整提示词预览（仅预览通道，live 插不进会话日志中间）。 */
 export interface PromptPreview {
   actualRequest: { text: string; truncated: boolean } | null
+  /** 本会话自有步骤的宿主 usage 汇总（不含分支继承的父会话步骤）。 */
+  cacheUsage: CacheUsageSummary
   standing: string
   turnContext: string
   system: string

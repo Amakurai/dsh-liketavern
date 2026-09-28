@@ -9,7 +9,7 @@ export declare const zh: {
     readonly 'chip.preview.actual': "最近请求";
     readonly 'chip.preview.noActual': "尚未捕获请求。先发送一轮消息；重启或缓存淘汰后旧请求不可用。";
     readonly 'chip.preview.actualTruncated': "（请求超过显示上限，内容已截断）";
-    readonly 'chip.preview.notice': "DeepSeek 官方通道按预设布局发送；system 深度取决于模型能力，只支持首条 system 的模型会合并系统指令。最近请求显示处理后的消息和兼容说明。其他通道沿用两段提示词。ST 模拟独立计算；历史正则改写和供应商专用助手预填尚未接入普通聊天。";
+    readonly 'chip.preview.notice': "DeepSeek 官方通道按预设布局发送；开启「缓存优先布局」时，本轮动态条目、深度注入与历史后指令放在最新输入之后，保护历史前缀缓存；关闭时 system 深度取决于模型能力，只支持首条 system 的模型会合并系统指令。最近请求显示处理后的消息和兼容说明。其他通道沿用两段提示词。ST 模拟独立计算；历史正则改写和供应商专用助手预填尚未接入普通聊天。";
     readonly 'chip.characterFallback': "角色";
     readonly 'chip.dialog.title': "Tavern 绑定";
     readonly 'chip.group.binding': "绑定";
@@ -67,5 +67,11 @@ export declare const zh: {
     readonly 'chip.preview.listSep': "、";
     readonly 'chip.preview.tab.turn': "本轮 turn";
     readonly 'chip.preview.tab.full': "ST 模拟序列";
+    readonly 'chip.preview.tab.cache': "缓存用量";
+    readonly 'chip.preview.cacheSummary': "缓存命中 {rate} · 未缓存输入 {uncached} token（{steps} 步）";
+    readonly 'chip.preview.cacheNone': "尚无用量记录：先发送一轮消息；供应商未上报 usage 时也不会有数据。";
+    readonly 'chip.preview.cacheNote': "命中率 = 缓存读 / 全部输入。每轮真正按全价计费的是「未缓存输入」，降低它比追求命中率数字更重要。分支从父会话继承的轮次不计入。";
+    readonly 'chip.preview.cacheColumns': "轮次 | 步数 | 命中率 | 未缓存输入 | 缓存读 | 输出";
+    readonly 'chip.preview.cacheTotal': "合计";
 };
 export declare const en: Record<keyof typeof zh, string>;

@@ -21,6 +21,7 @@ export type TavernSettings = TavernMethodResults['getSettings']['settings']
 export const DEFAULT_PROMPT_PREFERENCES: TavernSettings['prompts'] = {
   preferCharacterPrompt: true,
   preferCharacterInstructions: true,
+  cacheFirstLayout: true,
 }
 
 export const EMPTY_SESSION_DEFAULTS: TavernSettings['defaults'] = {

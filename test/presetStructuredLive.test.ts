@@ -36,6 +36,8 @@ type Wire = { system?: string; messages: WireMessage[]; temperature?: number; ma
 let ctx: Context, state: TavernState, agent: Agent, root: string, cardId: string, presetId: string, storyId: string
 let attachments: LocalAttachmentStore
 let runTool = false, uploadCount = 0
+// 既有用例校验 ST 原位置投影；缓存优先用例单独开启。
+let configRaw: Record<string, unknown> = {}
 const wires: Wire[] = [], requests: GenerateOptions[] = [], projected: GenerateOptions[] = [], seeds: SessionEvent[][] = [], errors: unknown[] = []
 const children: AgentHandle[] = [], otherRequests: GenerateOptions[] = []
 const textOf = (message: Message) => message.content.filter(block => block.type === 'text').map(block => block.text).join('\n')
@@ -74,6 +76,7 @@ async function send(message: UserMessage): Promise<void> {
 }
 
 beforeEach(async () => {
+  configRaw = { prompts: { cacheFirstLayout: false } }
   wires.length = 0; requests.length = 0; projected.length = 0; seeds.length = 0; errors.length = 0
   children.length = 0; otherRequests.length = 0; runTool = false; uploadCount = 0
   root = await mkdtemp(join(tmpdir(), 'tavern-structured-live-'))
@@ -92,7 +95,7 @@ beforeEach(async () => {
   }))
   state = new TavernState({ root, characters: join(root, 'characters'), lorebooks: join(root, 'library/lorebooks'),
     presets: join(root, 'library/presets'), personas: join(root, 'personas'), regexDir: join(root, 'regex'), sessions: join(root, 'sessions') },
-  () => resolveConfig({}))
+  () => resolveConfig(configRaw))
   await state.init()
   cardId = (await state.createCharacter('结构化工厂角色')).cardId
   const { preset } = parseStPreset({ name: '结构化工厂', identifier: 'structured-live', temperature: 0.31, openai_max_tokens: 777,
@@ -180,6 +183,24 @@ it('自动选择适配器，真实 wire 保留 system/user/assistant 深度、SD
   expect(JSON.stringify(wires[0])).not.toContain(PRESET_PLAN_MESSAGE_TEXT)
   const ws = await state.storyWorkspace(cardId, storyId)
   expect((await ws.wal.validateFloor(`${agent.id}#t1`)).committed).toBe(true)
+})
+
+it('缓存优先：真实 wire 首条 system 不含深度条目，深度注入改以 user 送到本轮输入之后', async () => {
+  configRaw = {}
+  await send(await user('INPUT-ONE'))
+  expect(wires).toHaveLength(1)
+  for (const text of ['FACTORY-SDK-PREFIX', 'PRESET-MAIN']) expect(wires[0]!.system).toContain(text)
+  expect(wires[0]!.system).not.toContain('DEPTH-TWO')
+  const input = slot(wires[0]!, 'INPUT-ONE')
+  for (const text of ['DEPTH-TWO', 'DEPTH-ONE', 'DEPTH-ZERO']) expect(slot(wires[0]!, text)).toBeGreaterThan(input)
+  const depthTwo = wires[0]!.messages.find(message => wireText(message).split('\n').includes('DEPTH-TWO'))!
+  expect(depthTwo.role).toBe('user')
+  // 历史后 system 同样进入尾块，wire 上既不在顶层 system，也没有重发整份系统快照的中途 system。
+  expect(wires[0]!.system).not.toContain('AFTER-HISTORY')
+  expect(wires[0]!.messages.some(message => message.role === 'system')).toBe(false)
+  expect(slot(wires[0]!, 'AFTER-HISTORY')).toBeGreaterThan(input)
+  expect(slot(wires[0]!, '【Tavern 本轮提示：第 1 轮】')).toBeGreaterThan(input)
+  expect(slot(wires[0]!, '【Tavern 本轮提示：第 1 轮】')).toBeLessThan(slot(wires[0]!, 'DEPTH-TWO'))
 })
 
 it('模型只支持首条 system 时真实传输合并全部系统规则，其它角色仍按布局送出', async () => {

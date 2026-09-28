@@ -1,6 +1,8 @@
 /** 在宿主 llm/stream 边界只读观察真实请求；不改冻结消息，不另开生成通道，不落盘。 */
 import type { Context } from '@deepseek-ai/cordis'
 import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
+import type { Session } from '@deepseek-ai/dsh-session'
+import { summarizeCacheUsage, type CacheUsageSummary, type StepUsage } from '../core/cacheUsage.js'
 import type { TavernState } from './state.js'
 import { isTavernRuntimeSession } from './tavernSession.js'
 
@@ -41,4 +43,14 @@ export function registerRequestDiagnostics(ctx: Context, state: TavernState): vo
     } catch (error) { ctx.logger.warn(`dsh-tavern: 请求诊断记录失败：${String(error)}`) }
     return next()
   })
+}
+
+/** 宿主把每步 usage 随 assistant/message 持久化；分支继承的父会话事件已在父会话计费，不重复统计。 */
+export function sessionCacheUsage(session: Pick<Session, 'snapshotEvents' | 'inheritedEventCount'>): CacheUsageSummary {
+  const steps: StepUsage[] = []
+  for (const event of session.snapshotEvents().slice(Number(session.inheritedEventCount))) {
+    if (event.type !== 'assistant/message' || !event.data.usage) continue
+    steps.push({ turn: event.data.turn, ...event.data.usage })
+  }
+  return summarizeCacheUsage(steps)
 }

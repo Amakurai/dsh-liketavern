@@ -77,6 +77,8 @@ export declare const zh: {
     readonly 'settings.prompts.preferCharacterPromptDesc': "开启时，角色卡填写的主提示词覆盖预设主提示词；关闭或角色卡未填写时使用预设。";
     readonly 'settings.prompts.preferCharacterInstructions': "优先使用角色卡历史后指令";
     readonly 'settings.prompts.preferCharacterInstructionsDesc': "开启时，角色卡填写的历史后指令覆盖预设对应条目；关闭或角色卡未填写时使用预设。";
+    readonly 'settings.prompts.cacheFirstLayout': "缓存优先布局";
+    readonly 'settings.prompts.cacheFirstLayoutDesc': "仅影响 DeepSeek 官方通道。开启时，本轮触发的世界书、记忆等动态条目与深度注入统一放在请求末尾，历史前缀保持不变，可大幅提高缓存命中率；关闭则按预设原位置插入，更接近 SillyTavern，但每轮几乎都要重新计费全部历史。";
     readonly 'settings.prompts.save': "保存提示词设置";
     readonly 'settings.prompts.saved': "已保存提示词设置，下一轮生效";
     readonly 'settings.sampling.title': "采样与思考";

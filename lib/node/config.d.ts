@@ -11,9 +11,13 @@ export declare const TavernConfigSchema: z<Schemastery.ObjectS<NoInfer<{
     prompts: z<Schemastery.ObjectS<NoInfer<{
         preferCharacterPrompt: z<boolean, boolean, "defined">;
         preferCharacterInstructions: z<boolean, boolean, "defined">;
+        /** DeepSeek 官方布局通道：本轮动态条目与深度注入移到请求尾部，保护历史前缀缓存。 */
+        cacheFirstLayout: z<boolean, boolean, "defined">;
     }>>, Schemastery.ObjectT<NoInfer<{
         preferCharacterPrompt: z<boolean, boolean, "defined">;
         preferCharacterInstructions: z<boolean, boolean, "defined">;
+        /** DeepSeek 官方布局通道：本轮动态条目与深度注入移到请求尾部，保护历史前缀缓存。 */
+        cacheFirstLayout: z<boolean, boolean, "defined">;
     }>>, "defined">;
     sampling: z<Schemastery.ObjectS<NoInfer<{
         /** 0–2，默认 1（DeepSeek 官方）。thinking 模式下不生效。 */
@@ -143,9 +147,13 @@ export declare const TavernConfigSchema: z<Schemastery.ObjectS<NoInfer<{
     prompts: z<Schemastery.ObjectS<NoInfer<{
         preferCharacterPrompt: z<boolean, boolean, "defined">;
         preferCharacterInstructions: z<boolean, boolean, "defined">;
+        /** DeepSeek 官方布局通道：本轮动态条目与深度注入移到请求尾部，保护历史前缀缓存。 */
+        cacheFirstLayout: z<boolean, boolean, "defined">;
     }>>, Schemastery.ObjectT<NoInfer<{
         preferCharacterPrompt: z<boolean, boolean, "defined">;
         preferCharacterInstructions: z<boolean, boolean, "defined">;
+        /** DeepSeek 官方布局通道：本轮动态条目与深度注入移到请求尾部，保护历史前缀缓存。 */
+        cacheFirstLayout: z<boolean, boolean, "defined">;
     }>>, "defined">;
     sampling: z<Schemastery.ObjectS<NoInfer<{
         /** 0–2，默认 1（DeepSeek 官方）。thinking 模式下不生效。 */
@@ -277,9 +285,13 @@ export declare const Config: z<Schemastery.ObjectS<NoInfer<{
     prompts: z<NoInfer<Schemastery.ObjectS<NoInfer<{
         preferCharacterPrompt: z<boolean, boolean, "defined">;
         preferCharacterInstructions: z<boolean, boolean, "defined">;
+        /** DeepSeek 官方布局通道：本轮动态条目与深度注入移到请求尾部，保护历史前缀缓存。 */
+        cacheFirstLayout: z<boolean, boolean, "defined">;
     }>>>, NoInfer<Schemastery.ObjectT<NoInfer<{
         preferCharacterPrompt: z<boolean, boolean, "defined">;
         preferCharacterInstructions: z<boolean, boolean, "defined">;
+        /** DeepSeek 官方布局通道：本轮动态条目与深度注入移到请求尾部，保护历史前缀缓存。 */
+        cacheFirstLayout: z<boolean, boolean, "defined">;
     }>>>, "volatile-defined">;
     sampling: z<NoInfer<Schemastery.ObjectS<NoInfer<{
         /** 0–2，默认 1（DeepSeek 官方）。thinking 模式下不生效。 */
@@ -404,9 +416,13 @@ export declare const Config: z<Schemastery.ObjectS<NoInfer<{
     prompts: z<NoInfer<Schemastery.ObjectS<NoInfer<{
         preferCharacterPrompt: z<boolean, boolean, "defined">;
         preferCharacterInstructions: z<boolean, boolean, "defined">;
+        /** DeepSeek 官方布局通道：本轮动态条目与深度注入移到请求尾部，保护历史前缀缓存。 */
+        cacheFirstLayout: z<boolean, boolean, "defined">;
     }>>>, NoInfer<Schemastery.ObjectT<NoInfer<{
         preferCharacterPrompt: z<boolean, boolean, "defined">;
         preferCharacterInstructions: z<boolean, boolean, "defined">;
+        /** DeepSeek 官方布局通道：本轮动态条目与深度注入移到请求尾部，保护历史前缀缓存。 */
+        cacheFirstLayout: z<boolean, boolean, "defined">;
     }>>>, "volatile-defined">;
     sampling: z<NoInfer<Schemastery.ObjectS<NoInfer<{
         /** 0–2，默认 1（DeepSeek 官方）。thinking 模式下不生效。 */
@@ -536,6 +552,7 @@ export interface TavernSettingsScope {
 export interface TavernPromptPreferences {
     preferCharacterPrompt: boolean;
     preferCharacterInstructions: boolean;
+    cacheFirstLayout: boolean;
 }
 export interface TavernSessionDefaults {
     cardId: string;

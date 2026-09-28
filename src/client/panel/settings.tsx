@@ -263,6 +263,9 @@ export function SettingsSection(props: { remote: TavernRemote }) {
             <SettingsRow title={t('settings.prompts.preferCharacterInstructions')} description={t('settings.prompts.preferCharacterInstructionsDesc')}>
               <Toggle checked={promptPreferences.preferCharacterInstructions} onChange={(preferCharacterInstructions) => setPrompts({ preferCharacterInstructions })} />
             </SettingsRow>
+            <SettingsRow title={t('settings.prompts.cacheFirstLayout')} description={t('settings.prompts.cacheFirstLayoutDesc')}>
+              <Toggle checked={promptPreferences.cacheFirstLayout} onChange={(cacheFirstLayout) => setPrompts({ cacheFirstLayout })} />
+            </SettingsRow>
             <SaveBar>
               <Btn disabled={busy} onClick={() => void save({ prompts: promptPreferences }, t('settings.prompts.saved'))} primary size="md">
                 {t('settings.prompts.save')}

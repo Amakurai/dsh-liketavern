@@ -11,6 +11,8 @@ export declare const BOUND_DISCIPLINE: string;
  * 步骤收口压力改走【Tavern 步骤】inject 通知（node/tools.ts），不要在这里放任何
  * 每步变化的内容。历史后指令的轮次标记由 pipeline 写入冻结计划，确保跨轮刷新且同轮去重。
  */
+/** 本轮尾块标题；两条通道共用，让模型把其后的内容识别为系统材料而非用户台词。 */
+export declare function turnTailHeader(turn: number): string;
 export declare const TURN_PLAYBOOK: string;
 /** 多步收口通知（agent.inject，form: notice）；不当作用户台词，也不扫世界书。 */
 export declare const TURN_STEP_NOTICE_PREFIX = "\u3010Tavern \u6B65\u9AA4\u3011";

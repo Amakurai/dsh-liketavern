@@ -173,6 +173,84 @@ it('按 ID 区分同文用户，保留图片、原始 source、模型回放状�
   expect(retainedContext.source).toEqual({ kind: 'runtime-context', form: 'snapshot', sections: [{ name: 'other-plugin', text: 'FOREIGN-CONTEXT' }] })
 })
 
+/** 缓存优先布局：按宿主真实前缀比较，而不是只看条目顺序。 */
+function cacheFirstLayout(f: ReturnType<typeof factory>, dynamic: string) {
+  const history = f.record.layout.history
+  f.record.cacheFirst = true
+  f.record.layout.entries = [
+    { ...entry('STATIC-CARD', 'system', { kind: 'before-history', anchor: history[0]! }), turnLocal: false },
+    { ...entry('WI', 'system', { kind: 'before-history', anchor: history[0]! }), content: dynamic },
+    { ...entry('STATIC-DEPTH', 'system', { kind: 'depth', depth: 1, order: 20, previous: history[1]!, next: history[2]! }), turnLocal: false },
+    entry('POST-HISTORY', 'system', { kind: 'after-history', anchor: history[2]! }),
+  ]
+}
+
+it('缓存优先：本轮动态条目与深度注入移到本轮输入之后，变化不影响历史前缀', () => {
+  const prefixes: string[] = []
+  for (const dynamic of ['本轮命中世界书 A', '本轮命中世界书 B']) {
+    const f = factory()
+    cacheFirstLayout(f, dynamic)
+    f.publish()
+    const diagnostics: PresetProjectionDiagnostic[] = []
+    const output = projectPresetRequest(f.request(), f.session, { messagesApi: true, model: { systemPromptUpdate: 'in-history' },
+      onDiagnostic: item => diagnostics.push(item) })
+    const texts = output.messages.map(textOf)
+    const current = output.messages.findIndex(message => message.id === f.current.id)
+    const context = output.messages.findIndex(message => message.id === f.snapshot.id)
+    expect(texts.findIndex(text => text.includes('STATIC-CARD'))).toBeLessThan(output.messages.findIndex(message => message.id === f.first.id))
+    const tail = texts.slice(context + 1).join('\n')
+    for (const key of [dynamic, 'STATIC-DEPTH', 'POST-HISTORY']) {
+      expect(texts.slice(0, context + 1).some(text => text.includes(key))).toBe(false)
+      expect(tail).toContain(key)
+    }
+    expect(tail.indexOf(dynamic)).toBeLessThan(tail.indexOf('STATIC-DEPTH'))
+    expect(tail.indexOf('STATIC-DEPTH')).toBeLessThan(tail.indexOf('POST-HISTORY'))
+    expect(output.messages.find(message => textOf(message) === dynamic)?.role).toBe('user')
+    // 历史后 system 也走 user：in-history 模型不再在尾部整份重发系统快照。
+    expect(output.messages.slice(1).some(message => message.role === 'system' && textOf(message).includes('POST-HISTORY'))).toBe(false)
+    expect(textOf(output.messages[context + 1]!)).toBe('【Tavern 本轮提示：第 1 轮】')
+    expect(output.messages[context + 1]!.role).toBe('user')
+    // 尾部 system 位于 user 之后，DeepSeek Messages 可逐条接收，不再整体并入首条 system。
+    expect(diagnostics.some(item => item.kind === 'messages-system-layout')).toBe(false)
+    expect(textOf(output.messages[0]!)).not.toContain(dynamic)
+    // 每次工厂生成新的消息 ID；比较供应商可见的角色与正文。
+    prefixes.push(JSON.stringify(output.messages.slice(0, current + 1).map(message => [message.role, textOf(message)])))
+  }
+  expect(prefixes[0]).toBe(prefixes[1])
+})
+
+it('缓存优先：仅支持首条 system 的模型也不把本轮动态条目并回首条系统提示', () => {
+  const firsts: string[] = []
+  for (const dynamic of ['DYNAMIC-A', 'DYNAMIC-B']) {
+    const f = factory()
+    cacheFirstLayout(f, dynamic)
+    f.publish()
+    const output = projectPresetRequest(f.request(), f.session, { messagesApi: true, model: {} })
+    expect(output.messages.filter(message => message.role === 'system')).toHaveLength(1)
+    firsts.push(textOf(output.messages[0]!))
+    expect(output.messages.some(message => message.role === 'user' && textOf(message) === dynamic)).toBe(true)
+  }
+  expect(firsts[0]).toBe(firsts[1])
+  expect(firsts[0]).toContain('STATIC-CARD')
+})
+
+it('未开启缓存优先的旧计划仍按预设原位置投影深度与历史前条目', () => {
+  const f = factory()
+  cacheFirstLayout(f, 'DYNAMIC-WI')
+  delete f.record.cacheFirst
+  f.publish()
+  const diagnostics: PresetProjectionDiagnostic[] = []
+  const output = projectPresetRequest(f.request(), f.session, { messagesApi: true, model: { systemPromptUpdate: 'in-history' },
+    onDiagnostic: item => diagnostics.push(item) })
+  expect(diagnostics.some(item => item.kind === 'messages-system-layout')).toBe(true)
+  expect(textOf(output.messages[0]!)).toContain('DYNAMIC-WI')
+})
+
+it('缓存优先标记随计划冻结，错型标记明确拒绝', () => {
+  const f = factory()
+  expect(() => createPresetPlanMessage({ ...f.record, cacheFirst: 'yes' as unknown as boolean })).toThrow('布局快照无效')
+})
+
 it('仅保留最新完整宿主 system，保留其它来源的 system 消息及其它 runtime sections', () => {
   const f = factory()
   const foreign = createUserMessage({ source: { kind: 'factory-context' }, content: [{ type: 'text', text: 'FOREIGN-CONTEXT' }] })

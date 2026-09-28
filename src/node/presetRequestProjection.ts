@@ -10,7 +10,7 @@ import type {} from '@deepseek-ai/dsh-agent-loop'
 import type {} from '@deepseek-ai/dsh-compaction-basic'
 import { joinContextSections } from '@deepseek-ai/dsh-system-prompt'
 import { z } from 'zod'
-import { BOUND_DISCIPLINE, TURN_PLAYBOOK } from '../core/dshPrompt.js'
+import { BOUND_DISCIPLINE, TURN_PLAYBOOK, turnTailHeader } from '../core/dshPrompt.js'
 import { PromptLayoutSchema, type PromptHistoryAnchor, type PromptLayout, type PromptLayoutEntry } from '../core/promptLayout.js'
 import { estimateTokens } from '../core/tokenize.js'
 
@@ -25,6 +25,12 @@ export interface PresetRequestPlan {
   standingText: string
   /** 宿主 tavern:turn 的完整已冻结文本，包含 TURN_PLAYBOOK。 */
   contextText: string
+  /**
+   * 缓存优先：本轮动态的历史前条目与全部深度注入改放到本轮输入之后，system 角色改由 user 承载。
+   * 它们在 ST 位置上每轮变化或随历史增长移动，会让其后的整段历史失去前缀缓存。
+   * 随计划冻结，同轮各步骤一致；旧计划缺省按原位置投影。
+   */
+  cacheFirst?: boolean
 }
 
 export type PresetProjectionDiagnostic = {
@@ -60,7 +66,7 @@ declare module '@deepseek-ai/dsh-llm' {
 // 来源元数据会经过磁盘与分支恢复；不能把 TypeScript 类型当作 JSON 校验。
 const textSchema = z.string().max(2_000_000)
 const planSchema = z.strictObject({ version: z.literal(1), sessionId: z.string().min(1).max(4096), turn: z.number().int().nonnegative(),
-  standingText: textSchema.min(1), contextText: textSchema, layout: PromptLayoutSchema })
+  standingText: textSchema.min(1), contextText: textSchema, cacheFirst: z.boolean().optional(), layout: PromptLayoutSchema })
 
 function parsePlan(value: unknown): PresetRequestPlan {
   const result = planSchema.safeParse(value)
@@ -389,6 +395,23 @@ export function projectPresetRequest(options: Readonly<GenerateOptions>, session
     if (byKey.has(entry.key)) throw new Error('Tavern 冻结布局条目 key 重复')
     byKey.set(entry.key, entry)
   }
+  // entry-relative 跟随其目标，位置判定一律看链条根部条目。
+  const rootEntry = (entry: PromptLayoutEntry): PromptLayoutEntry | undefined => {
+    let current: PromptLayoutEntry | undefined = entry
+    for (let depth = 0; current?.placement.kind === 'entry-relative'; depth++) {
+      if (depth >= 512) return undefined
+      current = byKey.get(current.placement.entryKey)
+    }
+    return current
+  }
+  // 缓存优先只移动每轮变化或随历史增长漂移的条目。
+  const movesToTail = (entry: PromptLayoutEntry): boolean => {
+    const root = plan.cacheFirst ? rootEntry(entry) : undefined
+    return root !== undefined && (root.placement.kind === 'depth' || (root.placement.kind === 'before-history' && root.turnLocal))
+  }
+  // 本轮尾块：移来的条目与原本就在历史后的条目，都位于本轮输入之后。
+  const inTurnTail = (entry: PromptLayoutEntry): boolean => movesToTail(entry)
+    || (plan.cacheFirst === true && rootEntry(entry)?.placement.kind === 'after-history')
   const gaps = new Map<string, number>()
   const resolving = new Set<string>()
   const gapFor = (entry: PromptLayoutEntry): number => {
@@ -399,6 +422,12 @@ export function projectPresetRequest(options: Readonly<GenerateOptions>, session
     resolving.add(entry.key)
     const placement = entry.placement
     let gap: number
+    if (placement.kind !== 'entry-relative' && movesToTail(entry)) {
+      gap = safeGap(frontier(), 'after')
+      resolving.delete(entry.key)
+      gaps.set(entry.key, gap)
+      return gap
+    }
     switch (placement.kind) {
       case 'entry-relative': {
         const target = byKey.get(placement.entryKey)
@@ -448,8 +477,15 @@ export function projectPresetRequest(options: Readonly<GenerateOptions>, session
   const emit = (entry: PromptLayoutEntry, depth = 0): void => {
     if (depth >= 512) throw new Error('Tavern 模板插入位置嵌套超过 512 层')
     for (const child of before.get(entry.key) ?? []) emit(child, depth + 1)
-    if (entry.content.trim()) append(gapFor(entry), pluginMessage(plan, entry.key, entry.role, entry.content))
+    // 尾部 system 在 in-history 模型上会整份重发系统快照（每轮不可缓存），在首条模型上又会并回首条；
+    // 尾块的系统条目改用 user 承载，与 tavern:turn 的通道一致，首条 system 保持字节稳定且不重复。
+    const role = entry.role === 'system' && inTurnTail(entry) ? 'user' : entry.role
+    if (entry.content.trim()) append(gapFor(entry), pluginMessage(plan, entry.key, role, entry.content))
     for (const child of after.get(entry.key) ?? []) emit(child, depth + 1)
+  }
+  // 尾块会并入玩家输入所在的 user 轮；标题与非 DeepSeek 通道一致，标明其后是系统材料。
+  if (entries.some(entry => entry.content.trim() && inTurnTail(entry))) {
+    append(safeGap(frontier(), 'after'), pluginMessage(plan, 'host:turn-tail-header', 'user', turnTailHeader(plan.turn)))
   }
   for (const entry of entries) if (entry.placement.kind !== 'entry-relative') emit(entry)
   const projected: Message[] = []

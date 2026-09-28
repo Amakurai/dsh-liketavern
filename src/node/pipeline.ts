@@ -11,7 +11,7 @@
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { LlmRuntime, Message } from '@deepseek-ai/dsh-llm'
 import { defaultPreset, type AssembledPrompt } from '../core/assemble.js'
-import { BOUND_DISCIPLINE, TURN_PLAYBOOK, isSyntheticUserText } from '../core/dshPrompt.js'
+import { BOUND_DISCIPLINE, TURN_PLAYBOOK, isSyntheticUserText, turnTailHeader } from '../core/dshPrompt.js'
 import { hashToSeed } from '../core/macros.js'
 import { memoryCandidateCount, memorySearchOptions, selectMemoryBodies } from '../core/memoryRetrieval.js'
 import { clipToTokenBudget, estimateTokens } from '../core/tokenize.js'
@@ -389,7 +389,7 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
   // 宿主跨轮也按字节去重快照；有尾部指令时固定本轮编号，让它每轮仍在新输入之后。
   // 编号和正文同存冻结计划，后续步骤与崩溃恢复不重新计算或反复追加。
   const turnContext = input.mode === 'live' && assembled.hasTurnTail && activeTurn !== undefined
-    ? `【Tavern 本轮提示：第 ${activeTurn} 轮】\n\n${assembled.turnContext}` : assembled.turnContext
+    ? `${turnTailHeader(activeTurn)}\n\n${assembled.turnContext}` : assembled.turnContext
   const minimumLiveTokens = estimateTokens([BOUND_DISCIPLINE, assembled.standing, TURN_PLAYBOOK, turnContext].join('\n\n'))
   const available = contextWindow - (sampling.maxTokens ?? FALLBACK_RESERVE_OUTPUT)
   if (input.mode === 'live' && minimumLiveTokens > available) throw new Error('角色设定与本轮上下文已超过模型可用窗口，请缩减设定或提高上下文容量')

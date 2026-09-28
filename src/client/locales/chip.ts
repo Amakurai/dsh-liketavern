@@ -10,7 +10,7 @@ export const zh = {
   'chip.preview.actual': '最近请求',
   'chip.preview.noActual': '尚未捕获请求。先发送一轮消息；重启或缓存淘汰后旧请求不可用。',
   'chip.preview.actualTruncated': '（请求超过显示上限，内容已截断）',
-  'chip.preview.notice': 'DeepSeek 官方通道按预设布局发送；system 深度取决于模型能力，只支持首条 system 的模型会合并系统指令。最近请求显示处理后的消息和兼容说明。其他通道沿用两段提示词。ST 模拟独立计算；历史正则改写和供应商专用助手预填尚未接入普通聊天。',
+  'chip.preview.notice': 'DeepSeek 官方通道按预设布局发送；开启「缓存优先布局」时，本轮动态条目、深度注入与历史后指令放在最新输入之后，保护历史前缀缓存；关闭时 system 深度取决于模型能力，只支持首条 system 的模型会合并系统指令。最近请求显示处理后的消息和兼容说明。其他通道沿用两段提示词。ST 模拟独立计算；历史正则改写和供应商专用助手预填尚未接入普通聊天。',
   'chip.characterFallback': '角色',
   'chip.dialog.title': 'Tavern 绑定',
   'chip.group.binding': '绑定',
@@ -68,6 +68,12 @@ export const zh = {
   'chip.preview.listSep': '、',
   'chip.preview.tab.turn': '本轮 turn',
   'chip.preview.tab.full': 'ST 模拟序列',
+  'chip.preview.tab.cache': '缓存用量',
+  'chip.preview.cacheSummary': '缓存命中 {rate} · 未缓存输入 {uncached} token（{steps} 步）',
+  'chip.preview.cacheNone': '尚无用量记录：先发送一轮消息；供应商未上报 usage 时也不会有数据。',
+  'chip.preview.cacheNote': '命中率 = 缓存读 / 全部输入。每轮真正按全价计费的是「未缓存输入」，降低它比追求命中率数字更重要。分支从父会话继承的轮次不计入。',
+  'chip.preview.cacheColumns': '轮次 | 步数 | 命中率 | 未缓存输入 | 缓存读 | 输出',
+  'chip.preview.cacheTotal': '合计',
 } as const
 
 export const en: Record<keyof typeof zh, string> = {
@@ -80,7 +86,7 @@ export const en: Record<keyof typeof zh, string> = {
   'chip.preview.actual': 'Last request',
   'chip.preview.noActual': 'No request captured. Send a message first; snapshots are unavailable after restart or eviction.',
   'chip.preview.actualTruncated': '(Request exceeded the display limit and was truncated.)',
-  'chip.preview.notice': 'The official DeepSeek route uses the preset layout. System depth depends on model support; models that only read the first system message receive combined system instructions. Last request shows processed messages and compatibility notes. Other routes retain two sections. ST simulation is separate; history regex edits and provider-specific prefill are not applied to live chat.',
+  'chip.preview.notice': 'The official DeepSeek route uses the preset layout. With the cache-first layout enabled, per-turn entries, depth injections and post-history instructions follow the latest input to protect the cached history prefix; when disabled, system depth depends on model support; models that only read the first system message receive combined system instructions. Last request shows processed messages and compatibility notes. Other routes retain two sections. ST simulation is separate; history regex edits and provider-specific prefill are not applied to live chat.',
   'chip.characterFallback': 'Character',
   'chip.dialog.title': 'Tavern binding',
   'chip.group.binding': 'Binding',
@@ -138,4 +144,10 @@ export const en: Record<keyof typeof zh, string> = {
   'chip.preview.listSep': ', ',
   'chip.preview.tab.turn': 'This turn',
   'chip.preview.tab.full': 'ST simulation',
+  'chip.preview.tab.cache': 'Cache usage',
+  'chip.preview.cacheSummary': 'Cache hit {rate} · uncached input {uncached} tokens ({steps} steps)',
+  'chip.preview.cacheNone': 'No usage recorded yet: send a message first. Providers that do not report usage produce no data.',
+  'chip.preview.cacheNote': 'Hit rate = cache reads / all input. The uncached input is what each turn pays full price for; lowering it matters more than the hit-rate figure. Turns inherited from a parent branch are excluded.',
+  'chip.preview.cacheColumns': 'Turn | Steps | Hit | Uncached input | Cache read | Output',
+  'chip.preview.cacheTotal': 'Total',
 }

@@ -11,7 +11,9 @@ export const TAVERN_NS = 'dsh-tavern'
 const PromptsSchema = z.object({
   preferCharacterPrompt: z.boolean().default(true),
   preferCharacterInstructions: z.boolean().default(true),
-}).default({ preferCharacterPrompt: true, preferCharacterInstructions: true })
+  /** DeepSeek 官方布局通道：本轮动态条目与深度注入移到请求尾部，保护历史前缀缓存。 */
+  cacheFirstLayout: z.boolean().default(true),
+}).default({ preferCharacterPrompt: true, preferCharacterInstructions: true, cacheFirstLayout: true })
 
 const SamplingSchema = z.object({
   /** 0–2，默认 1（DeepSeek 官方）。thinking 模式下不生效。 */
@@ -143,6 +145,7 @@ export interface TavernSettingsScope {
 export interface TavernPromptPreferences {
   preferCharacterPrompt: boolean
   preferCharacterInstructions: boolean
+  cacheFirstLayout: boolean
 }
 
 export interface TavernSessionDefaults {

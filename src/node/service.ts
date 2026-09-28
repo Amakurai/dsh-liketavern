@@ -38,6 +38,7 @@ import { templateCardData } from '../core/templateAssets.js'
 import { characterPromptName } from '../core/characterData.js'
 import { loadTemplateState, templateTextHash } from '../state/template.js'
 import { loadTemplateAvatars } from './templateAvatar.js'
+import { sessionCacheUsage } from './requestDiagnostics.js'
 import { displaySessionEventAt, displaySessionHasUserMessage, readDisplaySessionEvents } from './sessionEvents.js'
 import {getHelperWorldbookContext,helperWorldbookOperation,rebindHelperWorldbooks} from './helperWorldbook.js'
 import {editHelperMessages} from './helperChatEdits.js'
@@ -802,6 +803,7 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
     if (!result) throw new FloorError('no-binding', '当前会话未绑定 Tavern 角色卡')
     return {
       actualRequest: this.state.requestDiagnostics.get(request.sessionId) ?? null,
+      cacheUsage: sessionCacheUsage(agent.session),
       standing: result.standing,
       turnContext: result.turnContext,
       system: result.system,

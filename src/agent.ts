@@ -95,7 +95,8 @@ export function apply(ctx: Context): void {
     if (hasPlan) return decision
     const standing = neutralizeDshMustache(joinPromptParts([BOUND_DISCIPLINE, pipeline.standing]))
     const plan = {version:1 as const,sessionId:payload.agent.id,turn:payload.turn,layout:pipeline.layout,
-      standingText:standing,contextText:neutralizeDshMustache(joinPromptParts([TURN_PLAYBOOK,pipeline.turnContext]))}
+      standingText:standing,contextText:neutralizeDshMustache(joinPromptParts([TURN_PLAYBOOK,pipeline.turnContext])),
+      cacheFirst:state.config.prompts.cacheFirstLayout}
     // 最终路由到 agent/request 才确定。先给正常输入附加模型不可见元数据，
     // 不猜旧 header，也不给其它供应商增加一条人工台词。
     const last = decision.messages.at(-1)

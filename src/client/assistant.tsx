@@ -105,6 +105,11 @@ export function TavernAssistantNode(props: {
   sessions?: { open(id: string): void; refresh?: () => Promise<void> }
   useSessions?: UseSessions
   node: AssistantNode
+  /**
+   * 0.1.7 起宿主把同时含思考与正文的步骤拆成两次渲染：reasoning 段放进「用时」折叠区
+   * （折叠时隐藏但仍挂载），response 段是正文。忽略它会在折叠区里再挂一整份卡面与脚本。
+   */
+  groupPart?: string
   renderMessageImages?: RenderMessageImages
   useTurnData?: (key: string) => unknown
   openFile?: (path: string) => void
@@ -168,6 +173,9 @@ export function TavernAssistantNode(props: {
   if (!tavern) {
     return <NativeAssistantFallback {...props} mentions={mentions} streaming={streaming} interrupted={interrupted} />
   }
+  // 思考段只画思考；气泡、卡面与脚本只属于正文段，避免同一楼层挂两份沙箱。
+  if (props.groupPart === 'reasoning') return <ReasoningFold text={reasoningText} streaming={streaming} />
+  const showReasoning = props.groupPart !== 'response'
 
   // 失败不是“没有绑定”：保留可读正文并提供就地恢复，重试先清缓存以绕开仍挂起的旧请求。
   const bindingError = bindingLoader.state.status === 'error' ? (
@@ -203,7 +211,7 @@ export function TavernAssistantNode(props: {
       <div>
         {bindingError}
         {detailError}
-        <ReasoningFold text={reasoningText} streaming={streaming} />
+        {showReasoning && <ReasoningFold text={reasoningText} streaming={streaming} />}
         <SpeechBubble
           remote={remote}
           sessionId={sessionId}
@@ -250,8 +258,9 @@ function NativeAssistantFallback(props: {
   streaming: boolean
   interrupted: boolean
   stripMeta?: boolean
+  groupPart?: string
 }) {
-  const { node, renderMessageImages, mentions, streaming, interrupted, stripMeta } = props
+  const { node, renderMessageImages, mentions, streaming, interrupted, stripMeta, groupPart } = props
   const t = useT()
   const markdownLabels = useMarkdownLabels()
   const rendered: ReactNode[] = []
@@ -259,13 +268,16 @@ function NativeAssistantFallback(props: {
   for (let i = 0; i < blocks.length; i++) {
     const block = blocks[i]
     if (!block) continue
+    // 与宿主 AssistantMarkdown 相同的分段过滤。
+    if (groupPart === 'reasoning' && block.kind !== 'reasoning') continue
+    if (groupPart === 'response' && block.kind === 'reasoning') continue
     if (block.kind === 'text') {
       const shown = stripMeta ? stripDisplayMeta(block.text ?? '') : (block.text ?? '')
       rendered.push(
         <MarkdownText key={i} text={shown} streaming={streaming} fileMentions={mentions} labels={markdownLabels} />,
       )
     } else if (block.kind === 'reasoning') {
-      if (stripMeta) continue
+      if (stripMeta && groupPart !== 'reasoning') continue
       rendered.push(
         <details key={i} className="dsh-tavern-reason">
           <summary>{streaming ? t('assistant.thinking') : t('assistant.thought')}</summary>
@@ -295,9 +307,9 @@ function NativeAssistantFallback(props: {
   }
   return (
     <div>
-      {stripMeta ? <ReasoningFold text={node.data.blocks.filter((b) => b.kind === 'reasoning').map((b) => b.text ?? '').join('\n\n')} streaming={streaming} /> : null}
+      {stripMeta && groupPart === undefined ? <ReasoningFold text={node.data.blocks.filter((b) => b.kind === 'reasoning').map((b) => b.text ?? '').join('\n\n')} streaming={streaming} /> : null}
       {rendered}
-      {interrupted ? <span>{t('assistant.stopped')}</span> : null}
+      {interrupted && groupPart !== 'reasoning' ? <span>{t('assistant.stopped')}</span> : null}
     </div>
   )
 }

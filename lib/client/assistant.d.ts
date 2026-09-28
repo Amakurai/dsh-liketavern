@@ -48,6 +48,11 @@ export declare function TavernAssistantNode(props: {
     };
     useSessions?: UseSessions;
     node: AssistantNode;
+    /**
+     * 0.1.7 起宿主把同时含思考与正文的步骤拆成两次渲染：reasoning 段放进「用时」折叠区
+     * （折叠时隐藏但仍挂载），response 段是正文。忽略它会在折叠区里再挂一整份卡面与脚本。
+     */
+    groupPart?: string;
     renderMessageImages?: RenderMessageImages;
     useTurnData?: (key: string) => unknown;
     openFile?: (path: string) => void;

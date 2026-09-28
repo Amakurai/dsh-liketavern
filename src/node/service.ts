@@ -828,9 +828,10 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
       | { contextWindow?: number; pressureTokens?: number; surfaceTokens?: number }
       | undefined
     if (!pressure || typeof pressure.surfaceTokens !== 'number') return { usage: null }
-    const breakdown = projections?.stateOf?.(session, 'contextBreakdown') as
-      | { systemTokens?: number; toolsTokens?: number; messageTokens?: number }
-      | undefined
+    // token-meter 的状态是 { nodes, breakdown: {...} }；此前按扁平对象读取，三项恒为 null。
+    const breakdown = (projections?.stateOf?.(session, 'contextBreakdown') as
+      | { breakdown?: { systemTokens?: number; toolsTokens?: number; messageTokens?: number } }
+      | undefined)?.breakdown
     const percent =
       typeof pressure.pressureTokens === 'number' && typeof pressure.contextWindow === 'number' && pressure.contextWindow > 0
         ? Math.round((pressure.pressureTokens / pressure.contextWindow) * 100)

@@ -50,3 +50,16 @@ describe('sessionViews', () => {
     expect(listener).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('seat chip 识别', () => {
+  it('同时认 0.1.7 与旧版宿主的 seatHint 文案，以及 CSS module 的 seat 类名', async () => {
+    const { isSeatChip } = await import('../src/client/seatWatch.js')
+    expect(isSeatChip('选择新任务使用的 Agent 预设', '')).toBe(true)
+    expect(isSeatChip('Choose the agent preset for your new task', '')).toBe(true)
+    expect(isSeatChip('即将开始的这个会话所用的 Agent 预设', '')).toBe(true)
+    // title 被错误信息顶替时仍按宿主 seat 按钮类名识别。
+    expect(isSeatChip('加载失败', 'cubgiG_seat')).toBe(true)
+    expect(isSeatChip('其它菜单', 'cubgiG_seatLabel other_menu')).toBe(false)
+    expect(isSeatChip(null, '')).toBe(false)
+  })
+})

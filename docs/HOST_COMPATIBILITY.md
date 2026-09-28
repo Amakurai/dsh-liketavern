@@ -241,3 +241,11 @@ Windows / Node 24.18.0 / dsh 0.1.5-rc.2，使用独立临时 DSH_HOME、手写�
 修复后不再读取宿主当前选择：会话头部 chip 与新会话英雄区只随被显示的会话挂载，挂载期间在 `sessionViews` 登记（会话 id 与是否 Tavern），assistant-step、实时事件、选项输入、分支导航防抢焦点与 seatWatch 都读这份登记。宿主 keyed 覆盖位没有按会话筛选或渲染被遮挡原生节点的公开接口，所以仍按「有 Tavern 视图显示时接管」处理。导航改走 `uiWorkspace.openSession`，旧宿主回退 `sessions.open`，两者都缺时明确报错。
 
 验收：使用独立临时 DSH_HOME（本机剧情数据副本，无模型凭据）与 profile/node_modules 到 checkout 的 junction 启动 `dsh web`，headless Chrome 经 CDP 打开受影响会话。修复前开场白为原生代码块、无 `.dsh-tavern-speech`；修复后显示角色气泡与 489px 高的卡面 iframe，无代码块。点击「下一条开场白」后生成「开场白 2/3」子会话并自动切换，文本开场白进入 Tavern 气泡。临时服务、浏览器与数据副本均已删除。升级宿主时须核对 `SessionListState`、`ISessions` 与 `UiWorkspace` 的实际类型，插件内的最小类型不能代替核对。
+
+同日按 0.1.5-rc.2（本机全局安装）与 0.1.7-rc.2 的类型声明逐包比对被删成员，并核对插件经字符串、DOM 或 `unknown` 读取的宿主数据，另外发现：
+
+- 预设 seat chip 的 title 改为「选择新任务使用的 Agent 预设 / Choose the agent preset for your new task」，seatWatch 只认旧文案会让无会话 hero 的补偿静默失效；现同时认新旧文案，并以 CSS module 的 `<hash>_seat` 类名兜底。
+- conversation.chat.node 新增 `groupPart`：同时含思考与正文的 assistant 步骤会渲染两次，reasoning 段在「用时」折叠区内，折叠时隐藏但仍挂载。插件节点忽略它会在折叠区里再挂一整份角色气泡、卡面沙箱与脚本。现 reasoning 段只画思考，response 段画气泡且不重复思考，原生回退按宿主 AssistantMarkdown 同样过滤。
+- 上下文用量读取 token-meter 的 `contextBreakdown` 时按扁平对象取值，实际状态为 `{ nodes, breakdown }`（0.1.5 已如此，非本次升级引入），面板构成三项恒为空；已改为读取 `breakdown`。
+
+已核对无变化：插件使用的五个 slot 名与作用域、`SessionSnapshot.blank/promptAttempted`、assistant 块种类与 `finalNode.seq`、`turn-tail` 数据、locale `register/getSnapshot().active`、订阅的 12 个宿主事件、`agentPreset` 投影、WorkspaceRegistry `list/attachSession`、`data-composer-seat`，以及运行时上下文快照按字节去重（稳定前缀依赖此行为）。

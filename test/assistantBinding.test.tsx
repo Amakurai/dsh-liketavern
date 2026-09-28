@@ -368,3 +368,47 @@ describe('assistant 楼层绑定刷新', () => {
     invalidateCharacter(cardId)
   })
 })
+
+describe('0.1.7 思考/正文分段渲染', () => {
+  const split = { ...node, data: { ...node.data, blocks: [{ kind: 'reasoning', text: '先想想灯塔。' }, { kind: 'text', text: '你好。' }] } }
+  async function renderPart(groupPart: string | undefined, tavern = true) {
+    const sessionId = `assistant-group-${groupPart ?? 'whole'}-${tavern}`
+    const env = environment(sessionId)
+    await env.change(defaultBinding(sessionId, 'card-a'))
+    const useSessions = (select: (state: unknown) => unknown) => select({ byId: { [sessionId]: { projectionValues: { agentPreset: tavern ? 'tavern' : 'coding' } } } })
+    let view!: ReactTestRenderer
+    await act(async () => { view = create(<TavernAssistantNode remote={env.remote} sessionId={sessionId} node={split} groupPart={groupPart}
+      useSessions={useSessions as never} />) })
+    mounted.push(view)
+    return JSON.stringify(view.toJSON())
+  }
+
+  it('reasoning 段只画思考，不在折叠区里再挂一份角色气泡与卡面', async () => {
+    const html = await renderPart('reasoning')
+    expect(html).toContain('先想想灯塔。')
+    expect(html).not.toContain('data-bubble')
+    expect(bubble.mounts).toBe(0)
+  })
+
+  it('response 段画角色气泡且不重复思考', async () => {
+    const html = await renderPart('response')
+    expect(html).toContain('data-bubble')
+    expect(html).not.toContain('先想想灯塔。')
+    expect(bubble.mounts).toBe(1)
+  })
+
+  it('未分段时保持原有「思考 + 气泡」', async () => {
+    const html = await renderPart(undefined)
+    expect(html).toContain('先想想灯塔。')
+    expect(html).toContain('data-bubble')
+  })
+
+  it('非 Tavern 会话的原生回退按宿主规则分段', async () => {
+    const reasoning = await renderPart('reasoning', false)
+    expect(reasoning).toContain('先想想灯塔。')
+    expect(reasoning).not.toContain('你好。')
+    const response = await renderPart('response', false)
+    expect(response).toContain('你好。')
+    expect(response).not.toContain('先想想灯塔。')
+  })
+})

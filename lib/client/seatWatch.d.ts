@@ -16,5 +16,7 @@
  */
 import { type SessionViewsPort } from './sessionViews.js';
 import type { ClientContext } from './types.js';
+/** 判定一个菜单按钮是否为宿主的预设 seat chip（纯函数，便于脱离 DOM 测试）。 */
+export declare function isSeatChip(title: string | null, className: string): boolean;
 /** 安装监听；返回清理函数（挂进 ctx.effect）。 */
 export declare function installTavernSeatWatch(ctx: ClientContext, views?: Pick<SessionViewsPort, 'hasShownSession'>): () => void;

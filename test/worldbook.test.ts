@@ -7,7 +7,7 @@
  * 递归（excludeRecursion/preventRecursion/delayUntilRecursion/
  * maxRecursionSteps）、定时（sticky/cooldown/delay，跨轮回传 timerState）、
  * 落选回滚（未注入条目清本轮写入的 sticky/cooldown；sticky 延续条目被预算裁掉也清 stickyLeft、保留 cooldown）、
- * 预算截断（优先级/ignoreBudget/overflowWarning；固定预算为绝对上限、百分比按 128K 基数
+ * 预算截断（优先级/本句提到优先于作者 order/ignoreBudget/overflowWarning；固定预算为绝对上限、百分比按 128K 基数
  * 折算并扣减 reservedTokens；standing 侧常驻豁免计费，被裁条目进 truncated 清单）、
  * 位置分桶、多来源排序、includeNames、
  * 键安全（超长键与灾难回溯正则键永不命中；绕过归一化的非字符串键塌缩不炸）。
@@ -460,6 +460,35 @@ describe('预算截断', () => {
     expect(logsOf(res, 'budget-trim').map((l) => l.entryKey)).toEqual(['kw'])
     expect(res.truncated.map((t) => t.key)).toEqual(['kw'])
     expect(res.budget).toEqual({ limit: 15, used: 10, overflowed: true })
+  })
+
+  it('预算不足时玩家本句提到的条目先于作者 order 完整注入，更早消息命中的进 uid 清单', () => {
+    const res = run({
+      entries: [
+        makeEntry({ key: 'old', keys: ['灯塔'], order: 999, content: 'x'.repeat(10) }),
+        makeEntry({ key: 'now', keys: ['码头'], order: 1, content: 'y'.repeat(10) }),
+      ],
+      messages: [{ role: 'assistant', content: '远处的灯塔亮了。' }, userMsg('我走向码头')],
+      settings: budget(15),
+      estimateTokens: (t) => t.length,
+    })
+    expect(activatedKeys(res)).toEqual(['now'])
+    expect(res.truncated.map((t) => t.key)).toEqual(['old'])
+  })
+
+  it('本句提到的条目仍排在计费 constant 之后；同为本句提到时按作者 order', () => {
+    const res = run({
+      entries: [
+        makeEntry({ key: 'const', constant: true, content: '{{time}}', order: 1 }),
+        makeEntry({ key: 'low', keys: ['码头'], order: 1, content: 'a'.repeat(10) }),
+        makeEntry({ key: 'high', keys: ['船'], order: 500, content: 'b'.repeat(10) }),
+      ],
+      messages: [userMsg('码头边的船')],
+      settings: budget(25),
+      estimateTokens: (t) => (t === '{{time}}' ? 10 : t.length),
+    })
+    expect(activatedKeys(res).sort()).toEqual(['const', 'high'])
+    expect(res.truncated.map((t) => t.key)).toEqual(['low'])
   })
 
   it('落 standing 的常驻条目（constant 且无本轮宏）豁免 turn 层预算', () => {

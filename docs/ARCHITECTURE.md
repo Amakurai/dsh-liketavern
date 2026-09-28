@@ -69,7 +69,7 @@ sequenceDiagram
 | DeepSeek API-key 官方通道的预设角色、顺序、深度与模板位置 | 同一 AgentLoop 的 Tavern 适配器，在原始 Message[] 上按冻结身份插入 |
 | 历史正则、历史裁剪 | ST 模拟序列与辅助代答 |
 
-live standing 在模拟预算裁剪前构造，历史增长不再导致角色定义被裁掉并钉死。只有确定常驻条目可进 standing：概率、组竞争、sticky/cooldown/delay、递归门槛或本轮宏都走 turn；probability=0 必须尊重。插件通道有独立体积检查，宿主历史/system/tools 的最终窗口与压缩由宿主负责，模拟 token 数不能代替实际请求计量。
+live standing 在模拟预算裁剪前构造，历史增长不再导致角色定义被裁掉并钉死。只有确定常驻条目可进 standing：概率、组竞争、sticky/cooldown/delay、递归门槛或本轮宏都走 turn；probability=0 必须尊重。turn 层世界书受固定预算约束（默认 8192），被裁条目在快照尾部留 uid 清单，模型可按需补读。因此预算决定的是哪些条目完整注入：主键命中最新一条消息（玩家本句）的条目优先于作者 order，更早消息、递归或 sticky 带出的条目先退到清单。插件通道有独立体积检查，宿主历史/system/tools 的最终窗口与压缩由宿主负责，模拟 token 数不能代替实际请求计量。
 
 每轮首次成功组装冻结完整计划与 standing 指纹，后续 step 每次重放同样的通道。设置、资产与时钟中途变化下一轮生效。失败不发布计划、不提交 WI 定时器，也不静默改成缺设定的请求。工具同轮写入通过 notice 确认，下一轮才重新检索。
 

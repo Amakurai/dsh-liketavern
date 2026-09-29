@@ -29,7 +29,7 @@ import {
   type WorldInfoEntry,
   type WorldInfoGlobalSettings,
 } from '../src/core/types.js'
-import { evaluateWorldInfo, isStandingSafeEntry } from '../src/core/worldbook.js'
+import { evaluateWorldInfo, isStandingSafeEntry, worldInfoBudgetText } from '../src/core/worldbook.js'
 
 // ---------------------------------------------------------------------------
 // 构造辅助
@@ -595,6 +595,37 @@ describe('预算截断', () => {
     })
     expect(logsOf(res2, 'budget-overflow')).toEqual([])
     expect(logsOf(res2, 'budget-trim')).toHaveLength(1)
+  })
+
+  it('EJS 条目按可输出文本计费：大段判断脚本不会挤掉后面的常驻条目', () => {
+    // 真实卡片形态：条件脚本很长、字面输出很短；按源码计费时后面的核心条目会被裁进清单。
+    const gate = `<%_ { const s = getvar('stat_data'); const phase = _.get(s, '游戏状态.当前阶段', '日常');\n${'// 分支判定\n'.repeat(30)} _%>`
+    const res = run({
+      entries: [
+        makeEntry({ key: 'calendar', constant: true, order: 200, content: `${gate}<% if (phase === '日常') { %>今天是10月2日<% } %><%_ } _%>` }),
+        makeEntry({ key: 'core', constant: true, order: 100, content: `<%# 阶段控制 %>当前阶段：<%= phase %>` }),
+      ],
+      messages: [userMsg('好')],
+      estimateTokens: (t) => t.length,
+      settings: budget(60),
+    })
+    expect(activatedKeys(res).sort()).toEqual(['calendar', 'core'])
+    expect(res.truncated).toEqual([])
+    // 输出标签与字面文本仍计费；预算真正不足时照常截断。
+    const tight = run({
+      entries: [makeEntry({ key: 'core', constant: true, content: `<% if (x) { %>${'正文'.repeat(20)}<% } %>` })],
+      messages: [userMsg('好')],
+      estimateTokens: (t) => t.length,
+      settings: budget(30),
+    })
+    expect(tight.truncated.map((t) => t.key)).toEqual(['core'])
+  })
+
+  it('预算文本只去掉脚本段，保留字面文本、输出标签与 <%% 转义', () => {
+    expect(worldInfoBudgetText('A<%_ if (x) { _%>B<% } -%>C<%# note %>D')).toBe('ABCD')
+    expect(worldInfoBudgetText('值=<%= a %>/<%- b %>')).toBe('值=<%= a %>/<%- b %>')
+    expect(worldInfoBudgetText('字面 <%% 标签 %>')).toBe('字面 <%% 标签 %>')
+    expect(worldInfoBudgetText('无脚本 {{char}}')).toBe('无脚本 {{char}}')
   })
 
   it('tokenBudget=0 时按 contextPercent 折算预算', () => {

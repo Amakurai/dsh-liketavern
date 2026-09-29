@@ -18,7 +18,7 @@ import { estimateTokens } from '../core/tokenize.js'
 import { inspectCharacterCompatibility } from '../core/characterCompatibility.js'
 import { isolated } from './isolated.js'
 import { collectDisplayRegexDiagnostics } from './templateDisplay.js'
-import { presentRenderedOutput, stripOpaqueDisplayMeta } from '../core/displaySanitize.js'
+import { hideIncompleteHtml, presentRenderedOutput, stripOpaqueDisplayMeta } from '../core/displaySanitize.js'
 import { disableInteractiveParts, splitTemplateDisplay, TEMPLATE_DISPLAY_PARTS_VERSION, type TemplateDisplayPart } from '../core/templateDisplay.js'
 import { expandIdentityMacros } from '../core/macros.js'
 import { DEFAULT_USER_NAME } from '../core/persona.js'
@@ -42,6 +42,7 @@ import { sessionCacheUsage } from './requestDiagnostics.js'
 import { enabledHelperScripts } from '../core/helperScripts.js'
 import { isNativeMvuFramework } from '../core/cardScript.js'
 import { displaySessionEventAt, displaySessionHasUserMessage, readDisplaySessionEvents } from './sessionEvents.js'
+import { continuationDisplayText } from '../core/continuationDisplay.js'
 import {getHelperWorldbookContext,helperWorldbookOperation,rebindHelperWorldbooks} from './helperWorldbook.js'
 import {editHelperMessages} from './helperChatEdits.js'
 import { getHelperDisplayContext, getHelperSnapshot, commitHelperVariables, getHelperScriptBundle } from './helperRuntime.js'
@@ -506,7 +507,7 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
       const presented = presentRenderedOutput(text, settings.interactiveCards)
       return {
         ...presented,
-        ...(presented.htmls.length ? {parts:splitTemplateDisplay(text)} : {}),
+        ...(presented.htmls.length ? {parts:splitTemplateDisplay(hideIncompleteHtml(stripOpaqueDisplayMeta(text)).text)} : {}),
         interactiveCards: settings.interactiveCards,
         whitelist,
         greetings: [] as string[],
@@ -551,6 +552,17 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
       named = result.texts[0]!
       templateParts = result.parts[0]
     }
+    // 机读 opener 与未完成卡面可能在前文；只读已提交模板快照，不能借续写重跑旧模板。
+    if(request.messageId!==undefined){
+      const events=liveEvents??await readDisplaySessionEvents(this.ctx,request.sessionId)
+      const continued=continuationDisplayText(events,request.messageId,text,named,event=>{
+        const raw=event.data.message.content.filter(block=>block.type==='text').map(block=>block.text).join('\n')
+        const previous=templates.outputs[String(event.seq)]
+        if(previous?.hash===templateTextHash(raw))return expandIdentityMacros(previous.text,names)
+        return hasEjs(raw)?undefined:expandIdentityMacros(raw,names)
+      })
+      if(continued!==named){named=continued;if(templateParts!==undefined)templateParts=splitTemplateDisplay(named)}
+    }
     // 原生 MVU 已启用且卡片明确提供状态栏时，展示层补位；历史和模板缓存仍保持原始文本。
     if(allowHtml&&binding.helperMvu===true&&request.messageId!==undefined&&needsMvuStatusPlaceholder(named,rules)){
       named+='\n'+MVU_STATUS_PLACEHOLDER
@@ -563,15 +575,25 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
     let parts = display?.parts
     let regexDiagnostics = display?.regexDiagnostics
     if (parts !== undefined && !allowHtml) parts = disableInteractiveParts(parts)
-    let presented: {htmls:string[];text:string}
+    let presented: {htmls:string[];text:string;pendingHtml?:true}
     if(parts === undefined) {
       const rendered = await isolated('render', { text: named, rules, macroCtx: { ...names, outlets: {} } })
       regexDiagnostics = collectDisplayRegexDiagnostics(rendered.errors, rules)
       presented = presentRenderedOutput(rendered.text, allowHtml)
       // 普通回复与展示正则生成的片段也保留原位置，避免尾部状态栏移到台词前面。
-      if(presented.htmls.length) parts = splitTemplateDisplay(rendered.text)
-    } else presented = { htmls: allowHtml ? parts.filter(part => part.kind === 'html').map(part => part.text) : [],
-          text: parts.filter(part => part.kind === 'markdown').map(part => part.text).join('\n') || presentRenderedOutput(named, false).text }
+      if(presented.htmls.length) parts = splitTemplateDisplay(hideIncompleteHtml(stripOpaqueDisplayMeta(rendered.text)).text)
+    } else {
+      let pendingHtml=false
+      if(allowHtml)parts=parts.map(part=>{
+        if(part.kind!=='markdown')return part
+        const visible=hideIncompleteHtml(part.text)
+        pendingHtml ||= visible.pendingHtml===true
+        return {...part,text:visible.text}
+      })
+      presented = { htmls: allowHtml ? parts.filter(part => part.kind === 'html').map(part => part.text) : [],
+        text: parts.filter(part => part.kind === 'markdown').map(part => part.text).join('\n') || (pendingHtml?'':presentRenderedOutput(named, false).text),
+        ...(pendingHtml?{pendingHtml:true as const}:{}) }
+    }
     const htmls = presented.htmls
     const greetings = (ws ? cardGreetingVariants(ws.card.firstMes, ws.card.alternateGreetings) : []).map((g) =>
       expandIdentityMacros(g, names),
@@ -587,6 +609,7 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
       html: htmls[0] ?? null,
       htmls,
       text: presented.text,
+      ...(presented.pendingHtml?{pendingHtml:true as const}:{}),
       interactiveCards: settings.interactiveCards,
       whitelist,
       greetings,

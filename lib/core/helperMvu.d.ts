@@ -45,6 +45,8 @@ export interface HelperMvuWork {
     awaitingTurnEnd?: boolean;
     snapshot?: HelperSnapshot;
     applyText?: boolean;
+    /** 尚未提交的续写前文，只引用同一冻结快照中的 assistant 下标；不改写原消息。 */
+    continuationMessageIds?: number[];
     completed?: {
         id: string;
         digest: string;

@@ -1,6 +1,7 @@
 import type { ReactNode, ComponentProps } from 'react';
 import { MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives';
 import { type UseSessions } from './mode.js';
+import type { TavernSessions } from './navigation.js';
 import type { TavernRemote } from './types.js';
 interface AssistantBlock {
     kind: string;
@@ -42,10 +43,7 @@ interface TurnTailOwner {
 export declare function TavernAssistantNode(props: {
     remote: TavernRemote;
     sessionId: string;
-    sessions?: {
-        open(id: string): void;
-        refresh?: () => Promise<void>;
-    };
+    sessions?: Pick<TavernSessions, 'open' | 'refresh' | 'binding'>;
     useSessions?: UseSessions;
     node: AssistantNode;
     /**
@@ -57,5 +55,5 @@ export declare function TavernAssistantNode(props: {
     useTurnData?: (key: string) => unknown;
     openFile?: (path: string) => void;
     fileMentions?: (owner: TurnTailOwner) => ComponentProps<typeof MarkdownText>['fileMentions'];
-}): import("react").JSX.Element;
+}): import("react").JSX.Element | null;
 export {};

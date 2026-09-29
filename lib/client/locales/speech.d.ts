@@ -2,6 +2,9 @@
 export declare const zh: {
     readonly 'speech.renderFailed': "角色消息显示处理失败，已保留原文：{error}";
     readonly 'speech.retryRender': "重新加载卡片显示";
+    readonly 'speech.cardPending': "生成完成后显示卡片";
+    readonly 'speech.cardIncomplete': "卡片内容尚未完整，可续写补全";
+    readonly 'speech.continuationFailed': "续写消息显示暂不可用：{error}";
     readonly 'speech.regexFailures': "{count} 条展示规则执行失败，卡片可能显示不完整";
     readonly 'speech.regexFailuresMore': "另有 {count} 条失败规则，请在正则设置中检查。";
     readonly "speech.scriptChoices": "可选行动";

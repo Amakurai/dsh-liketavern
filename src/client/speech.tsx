@@ -12,13 +12,15 @@ import { IconCopyOutlineMedium, MarkdownText } from '@deepseek-ai/dsh-client-ui-
 import { buildCardSrcDoc, parseCardBridgeMessage } from '../core/cardFrame.js'
 import {ScriptChoices,publishScriptChoices,clearScriptChoices,parseScriptChoices} from './helperChoices.js'
 import {cardVariableLabels} from './cardVariableLabels.js'
-import { stripDisplayMeta } from '../core/displaySanitize.js'
+import { presentStreamingOutput, stripDisplayMeta } from '../core/displaySanitize.js'
+import type { SessionEventSource } from '@deepseek-ai/dsh-api-session-controller/client'
+import { useContinuationStream } from './continuationStream.js'
 import { disableInteractiveParts, type TemplateDisplayPart } from '../core/templateDisplay.js'
 import { isFullHtmlDocument } from '../core/htmlFragment.js'
 import { cachedAvatar,invalidateSessionBinding } from './cache.js'
 import {BINDING_CHANGED_EVENT} from './actions.js'
 import { getTavernLocale, useT, useMarkdownLabels } from './i18n.js'
-import { Avatar, Btn, Err, IconBtn, useLoader, useToast } from './util.js'
+import { Avatar, Btn, Err, IconBtn, Skeleton, useLoader, useToast } from './util.js'
 import type { TavernRemote } from './types.js'
 import { CARD_VARIABLE_STYLES } from './styles.js'
 import { helperJson, helperChanges, helperRecord, type HelperSnapshot } from '../core/helperRuntime.js'
@@ -324,6 +326,9 @@ interface SpeechBubbleProps {
   media?: ReactNode
   messageId?: number
   streaming?: boolean
+  /** 当前会话的公开只读事件源；用于尚未持久化的续写消息展示。 */
+  streamSource?: SessionEventSource
+  turn?: number
   /** 会话级交互卡开关（binding.interactiveCards）；null/缺省回落全局设置。 */
   interactiveCards?: boolean | null
   onMessageBranch?:(branch:NonNullable<HelperMessageEditResult['branch']>)=>Promise<void>
@@ -505,7 +510,10 @@ function DisplayProjection(props: DisplayProjectionProps) {
       : frame
   })
 
-  return <div className={`dsh-tavern-displayProjection${props.staging?' is-staging':''}`} aria-hidden={props.staging || undefined}>{content}</div>
+  return <div className={`dsh-tavern-displayProjection${props.staging?' is-staging':''}`} aria-hidden={props.staging || undefined}>
+    {content}
+    {interactive&&value.pendingHtml&&<div className="dsh-tavern-muted" role="status">{t('speech.cardIncomplete')}</div>}
+  </div>
 }
 
 interface DisplayStage {
@@ -549,6 +557,9 @@ function SpeechBubbleSession(props: SpeechBubbleProps) {
   // 资产/绑定刷新期间沿用上一份已成功发布的投影，避免短暂显示原始 HTML 源码。
   // 正文或消息身份改变时立即失效；会话与角色身份由 SpeechBubble 的 key 隔离。
   const projectionIdentity=useMemo(()=>({}),[sessionId,rawText,props.messageId,props.interactiveCards,streaming])
+  // 首次投影完成前只显示骨架；失败后已显示的原文在重试期间保留，避免恢复按钮清空可读内容。
+  const failedProjection=useRef<object|null>(null)
+  if(loaded.state.status==='error')failedProjection.current=projectionIdentity
   const lastReady=useRef<{identity:object;source:object;state:{status:'ready';value:RenderedOutput};id:number}|null>(null)
   if(loaded.state.status==='ready'&&(lastReady.current?.source!==loaded.state||lastReady.current.identity!==projectionIdentity)) {
     lastReady.current={identity:projectionIdentity,source:loaded.state,state:loaded.state,id:++projectionSerial.current}
@@ -632,12 +643,14 @@ function SpeechBubbleSession(props: SpeechBubbleProps) {
   // 封面 iframe；正文若已随抽取变空，回退原始文本，对齐全局关闭的「纯文本显示」。
   const interactive =
     props.interactiveCards ?? (rendered.state.status === 'ready' ? rendered.state.value.interactiveCards : true)
+  const continuation=useContinuationStream(streaming?props.streamSource:undefined,props.turn,props.messageId,rawText)
+  const streamDisplay = useMemo(() => streaming ? presentStreamingOutput(continuation.text, interactive) : null, [streaming, continuation.text, interactive])
   const text =
     !streaming && rendered.state.status === 'ready'
       ? interactive || rendered.state.value.text || rendered.state.value.parts !== undefined
         ? rendered.state.value.text
         : stripDisplayMeta(rawText)
-      : stripDisplayMeta(rawText)
+      : streamDisplay?.text ?? stripDisplayMeta(rawText)
   const regexDiagnostics=!streaming&&rendered.state.status==='ready'?rendered.state.value.regexDiagnostics:undefined
   const canSwipe =
     rendered.state.status === 'ready' ? rendered.state.value.canSwipeGreeting !== false : false
@@ -661,7 +674,7 @@ function SpeechBubbleSession(props: SpeechBubbleProps) {
 
   /** 复制纯文本：优先 navigator.clipboard，沙盒/权限被拒时回退 execCommand。 */
   const onCopy = async () => {
-    const plain = text || stripDisplayMeta(rawText)
+    const plain = streaming || rendered.state.status==='ready'&&rendered.state.value.pendingHtml ? text : text || stripDisplayMeta(rawText)
     const fallback = () => {
       try {
         const ta = document.createElement('textarea')
@@ -689,7 +702,12 @@ function SpeechBubbleSession(props: SpeechBubbleProps) {
   }
   const activeProjectionId=activeOverride?.id??baseProjectionId
   const projectionNodes:ReactNode[]=[]
-  if(rendered.state.status==='ready'&&validStage?.phase!=='publishing'){
+  if(streaming){
+    if(text||!streamDisplay?.pendingHtml)projectionNodes.push(<MarkdownText key="streaming-text" text={text||' '} streaming labels={markdownLabels} fileMentions={props.fileMentions}/>)
+    if(streamDisplay?.pendingHtml)projectionNodes.push(<div key="streaming-card" role="status">
+      <span className="dsh-tavern-muted">{t('speech.cardPending')}</span><Skeleton height={48}/>
+    </div>)
+  }else if(rendered.state.status==='ready'&&validStage?.phase!=='publishing'){
     const value=rendered.state.value
     projectionNodes.push(<DisplayProjection key={`display:${activeProjectionId}`} {...props} value={value} staging={false}
       refreshing={loaded.state.status!=='ready'}
@@ -699,7 +717,9 @@ function SpeechBubbleSession(props: SpeechBubbleProps) {
       onFailure={error=>setLifecycleError(displayFailure(error,t))}
       onSwipe={index=>void swipeGreeting(index)}/>)
   }else if(rendered.state.status!=='ready'){
-    projectionNodes.push(<MarkdownText key={`fallback:${baseProjectionId}`} text={text||' '} streaming={Boolean(streaming)} labels={markdownLabels} fileMentions={props.fileMentions}/>)
+    projectionNodes.push(!streaming&&rendered.state.status==='loading'&&failedProjection.current!==projectionIdentity
+      ? <Skeleton key="loading" height={48}/>
+      : <MarkdownText key={`fallback:${baseProjectionId}`} text={text||' '} streaming={Boolean(streaming)} labels={markdownLabels} fileMentions={props.fileMentions}/>)
   }
   if(validStage){
     const pending=stageRef.current
@@ -720,6 +740,7 @@ function SpeechBubbleSession(props: SpeechBubbleProps) {
         <div className="dsh-tavern-speechName">{name}</div>
         <Err message={swipeError} />
         <Err message={lifecycleError} />
+        {streaming&&continuation.error&&<Err message={t('speech.continuationFailed',{error:continuation.error})}/>}
         {loaded.state.status === 'error'&&<div>
           <Err message={t('speech.renderFailed',{error:loaded.state.message})}/>
           <Btn onClick={loaded.reload}>{t('speech.retryRender')}</Btn>

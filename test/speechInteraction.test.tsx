@@ -284,7 +284,67 @@ it('角色详情首个修订只建立基线，后续修订才重新读取卡面�
   expect(view!.root.findByType('iframe').props.srcDoc).toContain('新绑定')
 })
 
-/** 绑定变更的远程渲染可能很慢；现有沙箱应留在页面上直到新投影完成。 */
+/** 首次读取与流式正文尚未形成可运行卡面，不能把内部源码交给普通 Markdown。 */
+it('流式卡面保留前文并等待结束后才运行；普通代码示例仍正常显示',async()=>{
+  const renderOutputText=vi.fn(remote.renderOutputText)
+  const rpc={renderOutputText} as unknown as TavernRemote
+  const bubble=(rawText:string,streaming=true,interactiveCards=true)=><SpeechBubble remote={rpc} sessionId="stream-card"
+    cardId="card" name="角色" rawText={rawText} streaming={streaming} interactiveCards={interactiveCards}/>
+  const visible=()=>view!.root.findAllByType(MarkdownText).map(item=>item.props.text).join('\n')
+  await mount(bubble('普通台词正在生成'))
+  expect(visible()).toBe('普通台词正在生成')
+  const raw='卡片前的台词。\n<!doctype html><html><body><button>卡面按钮</button><script>window.cardInit=1;</script></body></html>'
+  for(const partial of [raw.slice(0,raw.indexOf('<body>')),raw]) {
+    await act(async()=>view!.update(bubble(partial)))
+    expect(visible()).toBe('卡片前的台词。')
+    expect(JSON.stringify(view!.toJSON())).toContain('生成完成后显示卡片')
+    expect(view!.root.findAllByType('iframe')).toHaveLength(0)
+    expect(renderOutputText).not.toHaveBeenCalled()
+  }
+  const example='示例：`<html>`\n```js\nconst tag="<div>";\n```'
+  await act(async()=>view!.update(bubble(example)))
+  expect(visible()).toBe(example)
+  await act(async()=>view!.update(bubble(raw,true,false)))
+  expect(visible()).toContain('<button>卡面按钮</button>')
+  await act(async()=>view!.update(bubble(raw,false)))
+  expect(renderOutputText).toHaveBeenCalledTimes(1)
+  expect(view!.root.findByType('iframe').props.srcDoc).toContain('<p>测试卡</p>')
+  expect(JSON.stringify(view!.toJSON())).not.toContain('生成完成后显示卡片')
+})
+
+it('结束后仍未闭合的卡片显示续写提示；补全后只在当前消息运行完整卡面',async()=>{
+  const html='<div><button>完整卡片</button></div><script>window.count=1;</script>'
+  const renderOutputText=vi.fn<TavernRemote['renderOutputText']>()
+    .mockResolvedValueOnce({ok:true,value:{text:'前文',html:null,htmls:[],pendingHtml:true,interactiveCards:true,whitelist:[],greetings:[],greetingIndex:0}})
+    .mockResolvedValueOnce({ok:true,value:{text:'后文',html,htmls:[html],interactiveCards:true,whitelist:[],greetings:[],greetingIndex:0}})
+  const rpc={renderOutputText} as unknown as TavernRemote
+  await mount(<SpeechBubble remote={rpc} sessionId="partial-html" cardId="card" name="角色" rawText="前文<html><script>window.count=" messageId={11}/>)
+  expect(view!.root.findByProps({role:'status'}).children.join('')).toBe('卡片内容尚未完整，可续写补全')
+  expect(view!.root.findAllByType('iframe')).toHaveLength(0)
+  expect(view!.root.findAllByType(MarkdownText).map(node=>node.props.text).join('')).toBe('前文')
+  await act(async()=>view!.update(<SpeechBubble remote={rpc} sessionId="partial-html" cardId="card" name="角色" rawText="1;</script></html>后文" messageId={22}/>))
+  expect(JSON.stringify(view!.toJSON())).not.toContain('卡片内容尚未完整')
+  const frame=view!.root.findByType('iframe')
+  expect(frame.props.sandbox).toBe('allow-scripts')
+  expect(frame.props.srcDoc).toContain(html)
+  expect(view!.root.findAllByType(MarkdownText).map(node=>node.props.text).join('')).toBe('后文')
+})
+
+it('首次展示等待服务端渲染期间不泄漏原始卡面和模板源码',async()=>{
+  const pending=Promise.withResolvers<Awaited<ReturnType<TavernRemote['renderOutputText']>>>()
+  const renderOutputText=vi.fn(()=>pending.promise)
+  const rpc={renderOutputText} as unknown as TavernRemote
+  const raw='<html><body><button>角色按钮</button></body></html><% print("模板内部内容") %>'
+  await mount(<SpeechBubble remote={rpc} sessionId="cold-render" cardId="card" name="角色" rawText={raw} messageId={12}/>)
+  expect(view!.root.findAllByType(MarkdownText)).toHaveLength(0)
+  expect(view!.root.findAllByType('iframe')).toHaveLength(0)
+  expect(JSON.stringify(view!.toJSON())).not.toContain('模板内部内容')
+  await act(async()=>pending.resolve({ok:true,value:{text:'已处理的正文',htmls:['<button>角色按钮</button>'],interactiveCards:true,
+    whitelist:[],greetings:[],greetingIndex:0,canSwipeGreeting:false}}))
+  expect(view!.root.findByType('iframe').props.srcDoc).toContain('<button>角色按钮</button>')
+  expect(view!.root.findAllByType(MarkdownText).map(item=>item.props.text)).toContain('已处理的正文')
+})
+
 it('绑定刷新期间保留旧 iframe，不闪出原始 HTML 源码',async()=>{
   const pending=Promise.withResolvers<Awaited<ReturnType<TavernRemote['renderOutputText']>>>()
   const old={text:'',htmls:['<div>旧状态</div>'],interactiveCards:true,whitelist:[],greetings:[],greetingIndex:0,canSwipeGreeting:false}

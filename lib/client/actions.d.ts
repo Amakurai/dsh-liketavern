@@ -19,8 +19,8 @@ export interface FloorActionsProps {
 export declare function TavernFloorActions(props: FloorActionsProps): import("react").JSX.Element | null;
 /**
  * 被中断（已停止）楼层的最小操作组。
- * 宿主的 assistant-actions slot 只挂 finalized 消息（"Only finalized messages reach this slot"），
- * 中断楼层拿不到 slot、没有 messageId 可用，这里由 chat.node 渲染侧按 turn 号补挂：
+ * 宿主的 assistant-actions slot 依赖 turn-tail 的持久 messageId，部分中断楼层也具备它。
+ * 只有对应消息确实拿不到该 slot 时，才由 chat.node 渲染侧按 turn 号补挂：
  * 重新生成 / 回退 + 同层分支兄弟导航。除此之外不放编辑/续写/代答，保持最小面。
  */
 export declare function TavernInterruptedFloorActions(props: {

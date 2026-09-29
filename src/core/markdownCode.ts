@@ -3,22 +3,21 @@ interface MarkdownLine { start:number; end:number; next:number }
 interface FenceOpening { marker:string; info:string; line:number; listIndent:number; quoteDepth:number; standalone:boolean }
 export interface MarkdownFence { info:string; contentStart:number; contentEnd:number; end:number; closed:boolean; standalone:boolean }
 
-/** Markdown 缩进按四列制表位计算；原始字符下标仍用于返回展示边界。 */
-function expandIndentTabs(value:string,initialColumn=0):string {
-  if(!value.includes('\t'))return value
-  let columns=initialColumn,expanded=''
-  for(const char of value) {
-    const width=char==='\t'?4-columns%4:1
-    expanded+=char==='\t'?' '.repeat(width):char
-    columns+=width
-  }
-  return expanded
-}
-
 export function markdownCodeScanner(text:string):{
   inlineEnd:(start:number)=>number|null
   fence:(start:number)=>MarkdownFence|null
 } {
+  /** 四列缩进计算留在工厂内部，整个扫描器可原样注入 MVU 沙箱，不引用外部闭包。 */
+  function expandIndentTabs(value:string,initialColumn=0):string {
+    if(!value.includes('\t'))return value
+    let columns=initialColumn,expanded=''
+    for(const char of value) {
+      const width=char==='\t'?4-columns%4:1
+      expanded+=char==='\t'?' '.repeat(width):char
+      columns+=width
+    }
+    return expanded
+  }
   if(!/[`~]/.test(text))return {inlineEnd:()=>null,fence:()=>null}
   const lines:MarkdownLine[]=[]
   const openings=new Map<number,FenceOpening>()

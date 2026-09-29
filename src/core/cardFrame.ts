@@ -16,6 +16,7 @@ import {installCardMvuRunner} from './cardMvuRunner.js'
 import {createHelperMvuInitialData} from './helperMvuInitial.js'
 import {installCardMvu} from './cardMvu.js'
 import {createHelperMvuCommandCodec} from './helperMvuCommands.js'
+import {markdownCodeScanner} from './markdownCode.js'
 import {installCardChatEdits} from './cardChatEdits.js'
 import {parseHelperSwipes} from './helperSwipes.js'
 import {normalizeHelperMessageInputs} from './helperMessageInputs.js'
@@ -144,7 +145,7 @@ export function tavernCardBridgeScript(options: Omit<CardFrameOptions, 'connectH
     ${escapeScriptJson(options.helperLabels ?? { diagnostics: "Card script messages", unsupported: "Not available in this card sandbox" })});
   var cleanupMvu=(function(){
     var HELPER_MAX_BYTES=1024*1024,helperRecord=(${helperRecord.toString()}),helperJson=(${helperJson.toString()});
-    return (${installCardMvu.toString()})((${createHelperMvuCommandCodec.toString()})(helperJson),helperJson);
+    return (${installCardMvu.toString()})((${createHelperMvuCommandCodec.toString()})(helperJson,(${markdownCodeScanner.toString()})),helperJson);
   })();
   var cleanupMvuRunner=${options.mvuRunner ? `(function(){var HELPER_MAX_BYTES=1024*1024,helperRecord=(${helperRecord.toString()}),helperJson=(${helperJson.toString()});return (${installCardMvuRunner.toString()})((${createHelperMvuInitialData.toString()}),helperJson);})()` : 'function(){}'};
   var ro = null, mo = null, timers = [], lastHeight = 0;

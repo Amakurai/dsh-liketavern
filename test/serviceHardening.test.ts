@@ -22,6 +22,8 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import { Session } from '@deepseek-ai/dsh-session'
+import { createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
+import { CONTINUE_INSTRUCTION_PREFIX } from '../src/core/dshPrompt.js'
 import { greetingMessage } from '../src/node/greetingSeed.js'
 import type { TavernSettingsScope } from '../src/node/config.js'
 import { defaultPreset } from '../src/core/assemble.js'
@@ -246,6 +248,121 @@ describe('开场白开始状态（真实存储 + 宿主 Session）', () => {
 })
 
 describe('内联 HTML 卡面服务展示（真实剧情存储）', () => {
+  it.each([false,true])('代码示例续写保持 Markdown，旧模板投影也不能把示例变成卡面：cached=%s',async cached=>{
+    const {loadTemplateState,templateTextHash}=await import('../src/state/template.js')
+    const {cardId}=await state.createCharacter('代码示例续写')
+    const session=Session.create(('session-code-continuation-'+cached) as Session['id']);sessions.set(session.id,session)
+    await state.saveBinding(makeBinding({sessionId:session.id,cardId,interactiveCards:true}))
+    const prefix='旧台词\n```js\nconst example="',html='<html><body><button>不应执行</button><script>window.executed=true;</script></body></html>'
+    const tail=html+'";\n```\n当前台词',firstText=cached?'<%= prefix %>':prefix,lastText=cached?'<%= tail %>':tail
+    session.append('turn/start',{turn:1})
+    const first=session.append('assistant/message',{turn:1,step:1,message:createAssistantMessage({content:[{type:'text',text:firstText}],source:{provider:'test',model:'test'}}),stream:[{type:'chunk',time:0,chunk:{type:'finish',reason:{kind:'max-tokens'}}}]},{surfaceOp:'append'})
+    session.append('turn/end',{turn:1,reason:{kind:'completed'}});session.append('turn/start',{turn:2})
+    session.append('user/message',createUserMessage({content:[{type:'text',text:CONTINUE_INSTRUCTION_PREFIX+'继续'}],source:{kind:'dsh-tavern',form:'notice',summary:'续写'}}),{surfaceOp:'append'})
+    const last=session.append('assistant/message',{turn:2,step:1,message:createAssistantMessage({content:[{type:'text',text:lastText}],source:{provider:'test',model:'test'}}),stream:[{type:'chunk',time:0,chunk:{type:'finish',reason:{kind:'stop'}}}]},{surfaceOp:'append'})
+    session.append('turn/end',{turn:2,reason:{kind:'completed'}})
+    const binding=(await state.loadBinding(session.id))!,workspace=await state.storyWorkspace(cardId,binding.storyId)
+    if(cached){
+      const state=await loadTemplateState(workspace.fs)
+      state.variables.local.untouched=99
+      state.outputs[String(first.seq)]={hash:templateTextHash(firstText),text:prefix,parts:[{kind:'markdown',text:prefix}]}
+      state.outputs[String(last.seq)]={hash:templateTextHash(lastText),text:tail,parts:[{kind:'html',text:html},{kind:'markdown',text:'当前台词'}]}
+      await workspace.fs.writeText('state/template.json',JSON.stringify(state))
+    }
+    const before=await workspace.fs.readText('state/template.json'),helper=await workspace.fs.readText('state/helper.json'),history=session.snapshotEvents()
+    for(let attempt=0;attempt<2;attempt++){
+      const result=await service.renderOutputText({sessionId:session.id,messageId:last.seq,text:lastText})
+      expect(result.htmls).toEqual([]);expect(result.pendingHtml).toBeUndefined();expect(result.helper).toBeUndefined()
+      expect(result.text).toContain(html);expect(result.text).toContain('当前台词');expect(result.text).not.toContain('旧台词')
+      expect(result.parts?.some(part=>part.kind==='html')??false).toBe(false)
+    }
+    expect(await workspace.fs.readText('state/template.json')).toBe(before)
+    expect(await workspace.fs.readText('state/helper.json')).toBe(helper);expect(session.snapshotEvents()).toEqual(history)
+  })
+
+  it.each([false,true])('未闭合 HTML 待续写，补全后绑定新消息且重复刷新不写变量：cached=%s',async cached=>{
+    const {loadTemplateState,templateTextHash}=await import('../src/state/template.js')
+    const {cardId}=await state.createCharacter('跨消息卡片')
+    const session=Session.create(('session-html-continuation-'+cached) as Session['id']);sessions.set(session.id,session)
+    await state.saveBinding(makeBinding({sessionId:session.id,cardId,interactiveCards:true}))
+    const binding=(await state.loadBinding(session.id))!,workspace=await state.storyWorkspace(cardId,binding.storyId)
+    const prefix='<!doctype html><html><body><button id="x">{{char}}</button><script>window.count=',tail='1;</script></body></html>\n新的台词'
+    const firstText=cached?'旧台词\n<%= cachedPrefix %>':'旧台词\n'+prefix,lastText=cached?'<%= cachedTail %>':tail
+    session.append('turn/start',{turn:1});session.append('step/start',{turn:1,step:1})
+    const first=session.append('assistant/message',{turn:1,step:1,message:createAssistantMessage({content:[{type:'text',text:firstText}],source:{provider:'test',model:'test'}}),stream:[{type:'chunk',time:0,chunk:{type:'finish',reason:{kind:cached?'stop':'max-tokens'}}}]},{surfaceOp:'append'})
+    session.append('step/end',{turn:1,step:1});session.append('turn/end',{turn:1,reason:{kind:'completed'}})
+    session.append('turn/start',{turn:2});session.append('user/message',createUserMessage({content:[{type:'text',text:CONTINUE_INSTRUCTION_PREFIX+'继续'}],source:{kind:'dsh-tavern',form:'notice',summary:'续写'}}),{surfaceOp:'append'})
+    session.append('step/start',{turn:2,step:1})
+    const last=session.append('assistant/message',{turn:2,step:1,message:createAssistantMessage({content:[{type:'text',text:lastText}],source:{provider:'test',model:'test'}}),stream:[{type:'chunk',time:0,chunk:{type:'finish',reason:{kind:'stop'}}}]},{surfaceOp:'append'})
+    session.append('step/end',{turn:2,step:1});session.append('turn/end',{turn:2,reason:{kind:'completed'}})
+    if(cached){
+      const template=await loadTemplateState(workspace.fs)
+      template.variables.local.untouched=99
+      template.outputs[String(first.seq)]={hash:templateTextHash(firstText),text:'旧台词\n'+prefix,parts:[{kind:'markdown',text:'旧台词\n'+prefix}]}
+      template.outputs[String(last.seq)]={hash:templateTextHash(lastText),text:tail,parts:[{kind:'markdown',text:tail}]}
+      await workspace.fs.writeText('state/template.json',JSON.stringify(template))
+    }
+    const before=await workspace.fs.readText('state/template.json'),helper=await workspace.fs.readText('state/helper.json'),history=session.snapshotEvents()
+    for(let attempt=0;attempt<2;attempt++){
+      const partial=await service.renderOutputText({sessionId:session.id,messageId:first.seq,text:firstText})
+      expect(partial).toMatchObject({htmls:[],pendingHtml:true});expect(partial.text.trim()).toBe('旧台词')
+      expect(JSON.stringify(partial.parts??[])).not.toContain('window.count')
+      const complete=await service.renderOutputText({sessionId:session.id,messageId:last.seq,text:lastText})
+      expect(complete.pendingHtml).toBeUndefined();expect(complete.text.trim()).toBe('新的台词')
+      expect(complete.htmls).toEqual([prefix.replace('{{char}}','跨消息卡片')+'1;</script></body></html>'])
+      expect(complete.helper?.messages[complete.helper.currentMessageId]?.message).toBe(lastText)
+      expect(complete.helper?.messages[0]?.message).toBe(firstText)
+    }
+    expect(await workspace.fs.readText('state/template.json')).toBe(before)
+    expect(await workspace.fs.readText('state/helper.json')).toBe(helper)
+    expect(session.snapshotEvents()).toEqual(history)
+  })
+
+  it('未提交的前文模板不能通过续写显示重新运行',async()=>{
+    const {cardId}=await state.createCharacter('未提交卡片')
+    const session=Session.create('session-html-uncommitted' as Session['id']);sessions.set(session.id,session)
+    await state.saveBinding(makeBinding({sessionId:session.id,cardId,interactiveCards:true}))
+    session.append('turn/start',{turn:1})
+    session.append('assistant/message',{turn:1,step:1,message:createAssistantMessage({content:[{type:'text',text:'<div><% setvar("sideEffect", 1) %>半张卡'}],source:{provider:'test',model:'test'}}),stream:[{type:'chunk',time:0,chunk:{type:'finish',reason:{kind:'max-tokens'}}}]},{surfaceOp:'append'})
+    session.append('turn/end',{turn:1,reason:{kind:'completed'}});session.append('turn/start',{turn:2})
+    session.append('user/message',createUserMessage({content:[{type:'text',text:CONTINUE_INSTRUCTION_PREFIX+'继续'}],source:{kind:'dsh-tavern',form:'notice',summary:'续写'}}),{surfaceOp:'append'})
+    const text='尾部</div>',last=session.append('assistant/message',{turn:2,step:1,message:createAssistantMessage({content:[{type:'text',text}],source:{provider:'test',model:'test'}}),stream:[{type:'chunk',time:0,chunk:{type:'finish',reason:{kind:'stop'}}}]},{surfaceOp:'append'})
+    session.append('turn/end',{turn:2,reason:{kind:'completed'}})
+    const binding=(await state.loadBinding(session.id))!,workspace=await state.storyWorkspace(cardId,binding.storyId)
+    const before=await workspace.fs.readText('state/template.json')
+    await expect(service.renderOutputText({sessionId:session.id,messageId:last.seq,text})).rejects.toThrow('模板尚未提交')
+    expect(await workspace.fs.readText('state/template.json')).toBe(before)
+  })
+
+  it.each([false,true])('续写尾段在普通及已提交模板路径中隐藏，卡面与原始数据保留：cached=%s',async cached=>{
+    const {loadTemplateState,templateTextHash}=await import('../src/state/template.js')
+    const {cardId}=await state.createCharacter('续写展示')
+    const session=Session.create(('session-continuation-display-'+cached) as Session['id']);sessions.set(session.id,session)
+    await state.saveBinding(makeBinding({sessionId:session.id,cardId,interactiveCards:true}))
+    const binding=(await state.loadBinding(session.id))!,workspace=await state.storyWorkspace(cardId,binding.storyId)
+    session.append('turn/start',{turn:1});session.append('step/start',{turn:1,step:1})
+    session.append('assistant/message',{turn:1,step:1,message:createAssistantMessage({content:[{type:'text',text:"前文<UpdateVariable>_.add('hp',"}],source:{provider:'test',model:'test'}}),stream:[{type:'chunk',time:0,chunk:{type:'finish',reason:{kind:'max-tokens'}}}]},{surfaceOp:'append'})
+    session.append('step/end',{turn:1,step:1});session.append('turn/end',{turn:1,reason:{kind:'completed'}})
+    session.append('turn/start',{turn:2});session.append('user/message',createUserMessage({content:[{type:'text',text:CONTINUE_INSTRUCTION_PREFIX+'继续'}],source:{kind:'dsh-tavern',form:'notice',summary:'续写'}}),{surfaceOp:'append'})
+    session.append('step/start',{turn:2,step:1})
+    const html='<div><button>继续巡逻</button></div>',visible='续写后的台词\n'+html
+    const raw="2);</UpdateVariable>"+(cached?'<%= untouched %>':visible)
+    const message=session.append('assistant/message',{turn:2,step:1,message:createAssistantMessage({content:[{type:'text',text:raw}],source:{provider:'test',model:'test'}}),stream:[{type:'chunk',time:0,chunk:{type:'finish',reason:{kind:'stop'}}}]},{surfaceOp:'append'})
+    session.append('step/end',{turn:2,step:1});session.append('turn/end',{turn:2,reason:{kind:'completed'}})
+    if(cached){
+      const template=await loadTemplateState(workspace.fs)
+      template.variables.local.untouched=99;template.outputs[String(message.seq)]={hash:templateTextHash(raw),text:'2);</UpdateVariable>'+visible,parts:[{kind:'markdown',text:'2);续写后的台词'},{kind:'html',text:html}]}
+      await workspace.fs.writeText('state/template.json',JSON.stringify(template))
+    }
+    const before=await workspace.fs.readText('state/template.json'),history=session.snapshotEvents()
+    for(let attempt=0;attempt<2;attempt++){
+      const result=await service.renderOutputText({sessionId:session.id,messageId:message.seq,text:raw})
+      expect(result.text.trim()).toBe('续写后的台词');expect(result.htmls).toEqual([html])
+      expect(JSON.stringify(result.parts)).not.toContain('2);')
+    }
+    expect(await workspace.fs.readText('state/template.json')).toBe(before)
+    expect(session.snapshotEvents()).toEqual(history)
+  })
   it.each(['正文里有一个 ` 符号。','正文里有 ~~~ 波浪线。'])('普通标点不能使展示正则生成的卡面永久回退，重复刷新只读：%s',async prefix=>{
     const {cardId}=await importCard(paths.characters,makeCard())
     const session=Session.create('session-render-markers' as Session['id'])
@@ -681,7 +798,11 @@ describe('审查修复回归：服务边界', () => {
     expect(result.htmls).toEqual(!broken && interactiveCards ? ['<div>可见卡面</div>'] : [])
     expect(result.parts?.map(part => part.kind)).toEqual(brokenComment ? [] : broken ? ['markdown'] : interactiveCards
       ? ['markdown', 'html', 'markdown'] : ['markdown', 'markdown', 'markdown'])
-    if (!brokenComment) {
+    if (interactiveCards && broken?.startsWith('<script>')) {
+      // 脚本从未闭合，其后所有字符仍属于损坏卡面；不能当成普通正文泄漏。
+      expect(result.pendingHtml).toBe(true)
+      expect(result.text).toBe('')
+    } else if (!brokenComment) {
       expect(result.text).toContain('前文')
       expect(result.text).toContain('中间')
       expect(JSON.stringify(result)).toContain('<div>可见卡面</div>')

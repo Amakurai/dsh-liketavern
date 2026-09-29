@@ -3,6 +3,9 @@
 export const zh = {
   'speech.renderFailed': '角色消息显示处理失败，已保留原文：{error}',
   'speech.retryRender': '重新加载卡片显示',
+  'speech.cardPending': '生成完成后显示卡片',
+  'speech.cardIncomplete': '卡片内容尚未完整，可续写补全',
+  'speech.continuationFailed': '续写消息显示暂不可用：{error}',
   'speech.regexFailures': '{count} 条展示规则执行失败，卡片可能显示不完整',
   'speech.regexFailuresMore': '另有 {count} 条失败规则，请在正则设置中检查。',
   "speech.scriptChoices": "可选行动",
@@ -133,6 +136,9 @@ export const zh = {
 export const en: Record<keyof typeof zh, string> = {
   'speech.renderFailed': 'Could not render the character message. The original text is still shown: {error}',
   'speech.retryRender': 'Reload card display',
+  'speech.cardPending': 'The card will appear when generation finishes',
+  'speech.cardIncomplete': 'This card is incomplete. Continue the reply to finish it.',
+  'speech.continuationFailed': 'Continuation display is temporarily unavailable: {error}',
   'speech.regexFailures': '{count} display rules failed; the card may be incomplete',
   'speech.regexFailuresMore': '{count} more rules failed. Check the regex settings.',
   "speech.scriptChoices": "Available choices",

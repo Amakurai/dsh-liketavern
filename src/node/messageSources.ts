@@ -7,10 +7,4 @@ declare module '@deepseek-ai/dsh-llm' {
   }
 }
 
-/** 旧剧情中的 plugin 来源仍是合法持久数据，续写检查必须兼容，不能绕过未处理片段。 */
-export function isTavernNotice(source: unknown): boolean {
-  if (!source || typeof source !== 'object') return false
-  const value = source as Record<string, unknown>
-  return value.form === 'notice' && (value.kind === 'dsh-tavern'
-    || value.kind === 'plugin' && value.plugin === 'dsh-tavern')
-}
+export { isTavernNotice } from '../core/messageSources.js'

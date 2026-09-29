@@ -3,10 +3,52 @@ import { createContext, runInContext } from 'node:vm'
 import { expect, it } from 'vitest'
 import { createHelperMvuCommandCodec, type HelperMvuCommand } from '../src/core/helperMvuCommands.js'
 import { helperJson, helperRecord } from '../src/core/helperRuntime.js'
+import { markdownCodeScanner } from '../src/core/markdownCode.js'
 
-const codec = createHelperMvuCommandCodec(helperJson)
+const codec = createHelperMvuCommandCodec(helperJson,markdownCodeScanner)
 const apply = (stat: Record<string, unknown>, text: string) => codec.apply(stat, codec.parse(text))
 const patch = (operations: unknown[]) => '<JSON_Patch>\n```json\n' + JSON.stringify(operations) + '\n```\n</JSON_Patch>'
+
+it('普通代码示例里的命令不更新剧情，显式更新块仍生效',()=>{
+  const message='示例 `_.add("hp",100);`\n```js\n_.add("hp",200);\n```\n<UpdateVariable>_.add("hp",1);</UpdateVariable>'
+  expect(apply({hp:10},message).stat_data.hp).toBe(11)
+})
+
+it('卡面脚本、属性、注释和原始文本中的命令不参与剧情更新',()=>{
+  const card='<html><body data-example="_.add(\'hp\',100);"><!-- _.add("hp",200); --><textarea>_.add("hp",400);</textarea><script>const local={}; _.set(local,"hp",999); const sample="_.add(\'hp\',500);";</script><button>卡片</button></body></html>'
+  expect(apply({hp:10},card+'<UpdateVariable>_.add("hp",1);</UpdateVariable>').stat_data.hp).toBe(11)
+  expect(apply({hp:10},card).stat_data.hp).toBe(10)
+})
+
+it.each([
+  '<UpdateVariable>\n```js\n_.add("hp",1);\n```\n</UpdateVariable>',
+  '<UpdateVariable>`_.add("hp",1);`</UpdateVariable>',
+  '```xml\n<UpdateVariable>_.add("hp",1);</UpdateVariable>\n```',
+  '~~~\n<JSONPatch>[{"op":"delta","path":"/hp","value":1}]</JSONPatch>\n~~~',
+  '<UpdateVariable>\n    _.add("hp",1);\n</UpdateVariable>',
+])('显式更新载体的格式包装继续兼容：%s',message=>{
+  expect(apply({hp:10},message).stat_data.hp).toBe(11)
+})
+
+it('嵌套示例容器和伪自闭合 HTML 脚本都不泄漏命令，真实更新正常执行',()=>{
+  const inert='<template><template data-end="</template>">_.add("hp",100);</template><script>"</template>";_.add("hp",200);</script></template>'
+    +'<pre/><code>_.add("hp",400);</code></pre><script/>_.add("hp",800);</script>'
+    +'<svg/><math/><style>.x {content:"_.add(\'hp\',1600);"}</style>'
+  expect(apply({hp:10},inert+'<UpdateVariable>_.add("hp",1);</UpdateVariable>').stat_data.hp).toBe(11)
+})
+
+it('代码示例中的完整更新标签不运行，真实命令的 HTML 字符串值保持原样',()=>{
+  const example='`<UpdateVariable>_.add("hp",100);</UpdateVariable>`\n```js\nconst s="<UpdateVariable>_.add(\'hp\',200);</UpdateVariable>";\n```\n    _.add("hp",400);\n'
+  const literal='<script>_.add("hp",800);</script>'
+  expect(apply({hp:10,text:''},example+'<UpdateVariable>_.set("text",'+JSON.stringify(literal)+');_.add("hp",1);</UpdateVariable>').stat_data).toEqual({hp:11,text:literal})
+})
+
+it('未闭合的代码或卡面文本容器不执行尾部样例，深层更新载体明确拒绝',()=>{
+  expect(apply({hp:10},'```js\n_.add("hp",100);').stat_data.hp).toBe(10)
+  expect(apply({hp:10},'<script>_.add("hp",100);').stat_data.hp).toBe(10)
+  expect(()=>codec.parse('<template>'.repeat(65))).toThrow(/64 层/)
+  expect(()=>codec.parse('<UpdateVariable>'.repeat(65))).toThrow(/64 层/)
+})
 
 it('按正文顺序提取命令和 JSON Patch，保留字面量参数与注释原因并归一化别名', () => {
   const text = `正文\n_.set('hp', 10, 12);//治疗\n${patch([{ op: 'delta', path: '/hp', value: 2 }])}\n_.assign('bag', {name:'药水', count:1});\n_.unset('flag');`
@@ -178,9 +220,9 @@ it('文本、命令数、路径层数、字面量深度和总输出都有预算�
   expect(() => codec.apply({ value: '' }, [command])).toThrow(/256 KiB/)
 })
 
-it('工厂 toString 后只依赖显式 json 参数，在独立 realm 内保持相同语义', () => {
+it('工厂 toString 后只依赖显式 JSON 和 Markdown 参数，在独立 realm 内保持相同语义', () => {
   const context = createContext({ TextEncoder })
-  const result = runInContext(`const HELPER_MAX_BYTES=1024*1024; const helperRecord=(${helperRecord.toString()}); const json=(${helperJson.toString()}); const codec=(${createHelperMvuCommandCodec.toString()})(json); codec.apply({hp:2},codec.parse("_.add('hp',3);"))`, context)
+  const result = runInContext(`const HELPER_MAX_BYTES=1024*1024; const helperRecord=(${helperRecord.toString()}); const json=(${helperJson.toString()}); const codec=(${createHelperMvuCommandCodec.toString()})(json,(${markdownCodeScanner.toString()})); codec.apply({hp:2},codec.parse("_.add('hp',3);"))`, context)
   expect(result.stat_data).toEqual({ hp: 5 })
   expect(result.delta_data).toEqual({ hp: '2->5 ' })
 })

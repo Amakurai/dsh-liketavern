@@ -441,6 +441,8 @@ export interface DisplayRegexDiagnostics {
 
 /** renderOutputText：展示文本经 output/render 正则与 HTML 抽取后的形态。 */
 export interface RenderedOutput {
+  /** 原文包含未闭合卡面；显示待续写提示，保持源码在原始消息中。 */
+  pendingHtml?:true
   /** iframe 卡面需要的完整历史与变量快照；纯文本不携带。 */
   helper?: HelperSnapshot
   /** 纯文本匹配脚本选项和展示事件所需的有界只读身份。 */

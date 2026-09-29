@@ -4,7 +4,7 @@
 
 **Tavern-style roleplay in DeepSeek Harness's `dsh web`, with character cards, lorebooks, and long-term memory.**
 
-[![Release](https://img.shields.io/badge/version-v0.4.5-blue.svg)](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.4.5)
+[![Release](https://img.shields.io/badge/version-v0.4.6-blue.svg)](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.4.6)
 [![dsh](https://img.shields.io/badge/dsh-0.1.7--rc.2-informational.svg)](https://deepseek-harness.github.io/deepseek-harness/)
 [![Node.js](https://img.shields.io/badge/node-%E2%89%A524-brightgreen.svg)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
@@ -100,7 +100,7 @@ Run these commands in your terminal to install the pinned stable release:
 
 ```bash
 # 1. Add plugin to web profile
-dsh plugin --profile web add github:Amakurai/dsh-liketavern#v0.4.5
+dsh plugin --profile web add github:Amakurai/dsh-liketavern#v0.4.6
 
 # 2. Verify installation
 dsh plugin --profile web list --depth 0
@@ -115,11 +115,11 @@ dsh web
 
 ### Option 2: Install from Release Tarball (Offline)
 
-1. Download `dsh-liketavern-0.4.5.tgz` from the [v0.4.5 Release](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.4.5) (with `SHA256SUMS.txt` for integrity verification).
+1. Download `dsh-liketavern-0.4.6.tgz` from the [v0.4.6 Release](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.4.6) (with `SHA256SUMS.txt` for integrity verification).
 2. In the download directory, run:
 
 ```bash
-dsh plugin --profile web add ./dsh-liketavern-0.4.5.tgz
+dsh plugin --profile web add ./dsh-liketavern-0.4.6.tgz
 dsh web
 ```
 

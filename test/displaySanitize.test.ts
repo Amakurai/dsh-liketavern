@@ -3,13 +3,89 @@
  *（customize_HCI、now_plot 等），不误伤普通正文与 HTML。
  */
 import { describe, expect, it } from 'vitest'
-import { presentRenderedOutput, stripDisplayMeta, stripOpaqueDisplayMeta } from '../src/core/displaySanitize.js'
+import { presentRenderedOutput, presentStreamingOutput, stripDisplayMeta, stripOpaqueDisplayMeta } from '../src/core/displaySanitize.js'
 
 const SAMPLE = `他点了点头。
 
 <UpdateVariable> <Analysis> notes </Analysis> <JSONPatch> [ { "op": "replace", "path": "/state/flag", "value": true }, { "op": "delta", "path": "/status/score", "value": 2 } ] </JSONPatch> </UpdateVariable>`
 
+/** 流式只延迟卡面尾部，既不运行残缺脚本，也不把普通代码说明当成交互卡。 */
+describe('presentStreamingOutput', () => {
+  it.each([
+    '<!doctype html><html><head><style>body{color:red}',
+    '<HTML lang="zh"><body><button>按钮</button></body></HTML>',
+    '<div class="card" title="还没写完',
+    '<script>window.marker=1;',
+    '```html\n<button>按钮',
+    '~~~xml title="状态"\n<scene>未完成',
+    '```\n<div>部分内容',
+    '```text\n<!doctype html><html>',
+  ])('隐藏生成中的卡面源码 %s', raw => {
+    expect(presentStreamingOutput(`台词。\n${raw}`, true)).toEqual({ text: '台词。', pendingHtml: true })
+  })
+  it('保留普通文字、行内标签示例、其它语言及缩进代码，跳过注释和属性里的假起点', () => {
+    for (const text of ['普通台词。', '他说：<你真行>', '示例 `<html>` 后文',
+      '```js\nconst html="<div>例子</div>";\n```', '    <html>代码</html>',
+      '<span title="<div>说明</div>">普通内容</span>', '<pre><html>说明</html></pre>']) {
+      expect(presentStreamingOutput(text, true)).toEqual({ text, pendingHtml: false })
+    }
+    expect(presentStreamingOutput('正文<!-- <div>说明 -->\n<body>卡片', true)).toEqual({ text: '正文', pendingHtml: true })
+  })
+  it('隐藏 MVU 协议并保留关闭交互卡时的源码选择', () => {
+    const html = '<html><body>卡面</body></html>'
+    const raw = '<initvar>hp:10</initvar>台词\n' + html + '<UpdateVariable>_.add("hp",1)</UpdateVariable>'
+    expect(presentStreamingOutput(raw, true)).toEqual({ text: '台词', pendingHtml: true })
+    expect(presentStreamingOutput(raw, false)).toEqual({ text: '台词\n' + html, pendingHtml: false })
+    expect(presentStreamingOutput('台词\n<UpdateVariable>_.add("hp",1)', true)).toEqual({ text: '台词', pendingHtml: false })
+  })
+})
+
+/** 停止后的半张卡也不能泄漏脚本；闭合完成的独立卡面与代码示例不受影响。 */
+describe('incomplete HTML display',()=>{
+  it.each([
+    '<!doctype html><html><head><style>body{color:red}',
+    '<div title="未完成属性',
+    '```html\n<button>按钮',
+    '<div>卡面</div><script>window.pending=',
+  ])('未完成的卡片改为待续写提示：%s',html=>{
+    expect(presentRenderedOutput('台词。\n'+html,true)).toEqual({text:'台词。',html:null,htmls:[],pendingHtml:true})
+    expect(presentRenderedOutput(html,false).pendingHtml).toBeUndefined()
+  })
+  it('保留已完成的卡片、显式闭合围栏和代码说明',()=>{
+    const card='<div>完整卡片</div>'
+    const shown=presentRenderedOutput(card+'\n中间台词\n<html><body>未完成',true)
+    expect(shown).toEqual({text:'中间台词',html:card,htmls:[card],pendingHtml:true})
+    expect(presentRenderedOutput('```html\n<button>按钮</button>\n```\n<script>尚未完成',true)).toEqual({text:'',html:'<button>按钮</button>',htmls:['<button>按钮</button>'],pendingHtml:true})
+    for(const text of ['示例 `<html>`', '```js\nconst x="<div>";\n```', '    <html>未闭合示例']){
+      expect(presentRenderedOutput(text,true).pendingHtml).toBeUndefined()
+    }
+    const script='<div>卡片</div><script>const text="<html>";</script>'
+    expect(presentRenderedOutput(script,true)).toEqual({text:'',html:script,htmls:[script]})
+  })
+  it('行首的半个 HTML 标签暂缓展示，普通比较符号、未知标签和代码示例保留',()=>{
+    for(const source of ['<ht','<di','<!doc','<!doctype ht']){
+      expect(presentRenderedOutput('前文\n'+source,true)).toEqual({text:'前文',html:null,htmls:[],pendingHtml:true})
+    }
+    for(const source of ['值 x < height','<3','单个符号 <','<http','`<ht`','    <ht','```js\nconst tag="<ht']){
+      expect(presentRenderedOutput(source,true).pendingHtml).toBeUndefined()
+    }
+  })
+})
+
 describe('stripDisplayMeta', () => {
+  it('MVU 初值块只用于初始化，普通正文和卡面都不展示初值源码', () => {
+    const initial = '<initvar>\nhp: 10\nprivate_note: 灯塔初值\n</initvar>'
+    expect(stripDisplayMeta(`开场前文\n${initial}\n开场后文`)).toBe('开场前文\n\n开场后文')
+    expect(stripDisplayMeta('开场\n<INITVAR>hp: 10')).toBe('开场')
+    const html = '<!doctype html><html><body><button>读取变量</button><script>const sample="<initvar>hp:10</initvar>";</script></body></html>'
+    const shown = presentRenderedOutput(`${initial}\n${html}`, true)
+    expect(shown.text).toBe('')
+    expect(shown.htmls).toEqual([html])
+    const disabled = presentRenderedOutput(`${initial}\n${html}`, false)
+    expect(disabled.text).not.toContain('private_note')
+    expect(disabled.text).toContain('读取变量')
+  })
+
   it('收起 UpdateVariable（含嵌套 Analysis/JSONPatch），留下正文', () => {
     expect(stripDisplayMeta(SAMPLE)).toBe('他点了点头。')
   })

@@ -63,6 +63,46 @@ it('更新使用刷新后的同一目标快照，事件能改命令与结束数�
   f.dispatch();expect(await f.result()).toMatchObject({ok:true,data:{stat_data:{hp:16}}});expect(input.base).toEqual({stat_data:{hp:10}})
 })
 
+/** 同时经过真实序列化工厂与 MVU 事件，展示样例既不能更新数值也不能阻断实际更新。 */
+it('完整卡面执行器跳过代码和脚本样例，事件仍读取原始正文且只收到真实命令',async()=>{
+  const text='示例 `_.add("hp",100);`\n<script>const sample="_.set(local, \'hp\',999);";</script>\n<UpdateVariable>_.add("hp",1);</UpdateVariable>'
+  const input=work('update',1,text),f=frame(input)
+  f.run('window.received=[];eventOn(Mvu.events.COMMAND_PARSED,(d,c)=>{received.push([c.length,getChatMessages(0)[0].message])})')
+  f.dispatch();expect(await f.result()).toMatchObject({ok:true,data:{stat_data:{hp:11}}})
+  expect(f.run('received')).toEqual([[1,text]])
+  expect(input.base).toEqual({stat_data:{hp:10}})
+})
+
+/** 真正解析跨消息、甚至跨字符串 token 的命令；前文只来自任务授权的同一快照。 */
+it('续写以原字节连接多段正文，完整命令和半条命令各计算一次',async()=>{
+  const input=work('update',3,"p',2);</UpdateVariable>\n后续台词")
+  const first="<UpdateVariable>_.add('hp',3);_.add('h",middle=''
+  const template=input.snapshot!.messages[0]!
+  input.snapshot!.messages=[{...template,message_id:0,message:first},{...template,message_id:1,message:middle},{...template,message_id:2,message:input.job!.text}]
+  input.snapshot!.currentMessageId=2;input.continuationMessageIds=[0,1]
+  const f=frame(input)
+  f.run('window.updates=0;eventOn(Mvu.events.VARIABLE_UPDATE_ENDED,()=>{window.updates++})')
+  f.dispatch();expect(await f.result()).toMatchObject({ok:true,data:{stat_data:{hp:15}}})
+  expect(f.run('updates')).toBe(1);expect(input.base?.stat_data).toEqual({hp:10})
+})
+
+it.each([[0,0],[1,0],[2],[-1],[1.5]])('拒绝伪造或乱序的续写来源 %j，不执行变量钩子',async(ids)=>{
+  const input=work('update',2,'2);'),template=input.snapshot!.messages[0]!
+  input.snapshot!.messages=[{...template,message_id:0,message:"_.add('hp',"},{...template,message_id:1,message:'别的回复'},{...template,message_id:2,message:input.job!.text}]
+  input.snapshot!.currentMessageId=2;input.continuationMessageIds=ids
+  const f=frame(input);f.run('window.updates=0;eventOn(Mvu.events.VARIABLE_UPDATE_STARTED,()=>{window.updates++})')
+  f.dispatch();expect(await f.result()).toMatchObject({ok:false,error:expect.stringMatching(/续写来源/)});expect(f.run('updates')).toBe(0)
+})
+
+it('续写不读取用户消息或超出累计预算的内容',async()=>{
+  const input=work('update',2,'2);'),template=input.snapshot!.messages[0]!
+  input.snapshot!.messages=[{...template,message_id:0,role:'user',message:"_.add('hp',"},{...template,message_id:1,message:input.job!.text}]
+  input.snapshot!.currentMessageId=1;input.continuationMessageIds=[0]
+  const f=frame(input);f.dispatch();expect(await f.result()).toMatchObject({ok:false,error:expect.stringMatching(/续写来源/)});f.close()
+  input.snapshot!.messages[0]={...template,message_id:0,message:'灯'.repeat(90000)}
+  const large=frame(input);large.dispatch();expect(await large.result()).toMatchObject({ok:false,error:expect.stringMatching(/256 KiB/)})
+})
+
 it('命令与监听失败返回明确错误，不报告成功也不提交变量',async()=>{
   const f=frame();f.run('eventOn(Mvu.events.VARIABLE_UPDATE_ENDED,()=>{throw Error("schema failed")})');f.dispatch()
   expect(await f.result()).toMatchObject({ok:false,error:'schema failed'})

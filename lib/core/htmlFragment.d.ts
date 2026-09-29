@@ -1,3 +1,4 @@
+export declare const HTML_CARD_CONTAINERS: ReadonlySet<string>;
 /**
  * code/pre 只是代码示例的启发式边界，浏览器里仍是普通元素：正文提到未闭合的 `<code>`
  * 时只忽略这个开标签，不能让后续真实卡面全部失去识别。

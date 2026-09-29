@@ -32,6 +32,8 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
   MarkdownText: (props: { text: string }) => <p data-native>{props.text}</p>,
   JsonBlock: () => null,
   IconChevronDownOutlineMedium: () => null, IconSearchOutlineMedium: () => null, IconUserOutlineMedium: () => null,
+  IconBranchOutlineMedium: () => null, IconChevronLeftOutlineMedium: () => null, IconChevronRightOutlineMedium: () => null,
+  IconLoadingOutlineMedium: () => null, IconRefreshOutlineMedium: () => null,
 }))
 
 const ok = <T,>(value: T) => ({ ok: true as const, value })
@@ -65,6 +67,21 @@ async function render(remote: TavernRemote, sessionId: string) {
 }
 
 describe('assistant 楼层绑定刷新', () => {
+  it.each(['complete', 'running'])('首次读取绑定期间不把 %s 卡面源码先交给原生正文渲染', async status => {
+    const sessionId = 'assistant-cold-binding-' + status
+    const pending = Promise.withResolvers<ReturnType<typeof ok<{ binding: SessionBinding | null }>>>()
+    const remote = { getSessionBinding: () => pending.promise, getCharacterDetail: async () => ok(detail) } as unknown as TavernRemote
+    const useSessions = (select: (state: unknown) => unknown) => select({ byId: { [sessionId]: { projectionValues: { agentPreset: 'tavern' } } } })
+    const htmlNode = { ...node, data: { ...node.data, status, blocks: [{ kind: 'text', text: '<html><body><button>读取变量</button></body></html>' }] } }
+    let view!: ReactTestRenderer
+    await act(async () => { view = create(<TavernAssistantNode remote={remote} sessionId={sessionId} node={htmlNode} useSessions={useSessions as never} />) })
+    mounted.push(view)
+    expect(view.root.findAllByProps({ 'data-native': true })).toHaveLength(0)
+    expect(JSON.stringify(view.toJSON())).not.toContain('<html>')
+    await act(async () => pending.resolve(ok({ binding: defaultBinding(sessionId, 'card-a') })))
+    expect(view.root.findAllByProps({ 'data-bubble': 'card-a' })).toHaveLength(1)
+  })
+
   it('角色详情重读或失败保留显示名称与修订，避免同一 HTML 卡被临时改名重建', async () => {
     const sessionId='assistant-detail-refresh',binding=defaultBinding(sessionId,'card-detail-refresh')
     const pending=Promise.withResolvers<ReturnType<typeof ok<CharacterDetail>>>()
@@ -401,6 +418,8 @@ describe('0.1.7 思考/正文分段渲染', () => {
     expect(html).toContain('先想想灯塔。')
     expect(html).not.toContain('data-bubble')
     expect(bubble.mounts).toBe(0)
+    expect(html).not.toContain('"type":"details"')
+    expect(html).not.toContain('"type":"summary"')
   })
 
   it('response 段画角色气泡且不重复思考', async () => {
@@ -423,5 +442,27 @@ describe('0.1.7 思考/正文分段渲染', () => {
     const response = await renderPart('response', false)
     expect(response).toContain('你好。')
     expect(response).not.toContain('先想想灯塔。')
+  })
+})
+
+describe('中断回复的宿主操作栏归属', () => {
+  it.each([
+    { label: '同一条持久消息已有宿主操作栏', closing: { finalNode: { seq: 3, messageId: 'assistant-message' } }, expected: 0 },
+    { label: '没有收尾节点', closing: null, expected: 1 },
+    { label: '收尾消息没有持久 ID', closing: { finalNode: { seq: 3 } }, expected: 1 },
+    { label: '收尾栏属于同轮另一条消息', closing: { finalNode: { seq: 9, messageId: 'another-message' } }, expected: 1 },
+  ])('$label', async ({ closing, expected }) => {
+    const sessionId = `interrupted-actions-${JSON.stringify(closing)}`
+    const env = environment(sessionId)
+    await env.change(defaultBinding(sessionId, 'card-a'))
+    const remote = { ...env.remote, getFloorSiblings: async () => ok({ swipe: null }) } as TavernRemote
+    const useSessions = (select: (state: unknown) => unknown) => select({ byId: { [sessionId]: { projectionValues: { agentPreset: 'tavern' } } } })
+    let view!: ReactTestRenderer
+    await act(async () => { view = create(<TavernAssistantNode remote={remote} sessionId={sessionId}
+      node={{ ...node, data: { ...node.data, status: 'interrupted' } }} sessions={{ open: vi.fn() }}
+      useSessions={useSessions as never} useTurnData={() => ({ closing })} />) })
+    mounted.push(view)
+    expect(view.root.findAllByProps({ 'aria-label': '重新生成这一层' })).toHaveLength(expected)
+    expect(view.root.findAllByProps({ 'aria-label': '回退到这一层（丢弃其后楼层）' })).toHaveLength(expected)
   })
 })

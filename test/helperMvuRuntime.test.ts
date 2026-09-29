@@ -16,8 +16,11 @@ import {TAVERN_GREETING_SOURCE} from '../src/core/greetingLog.js'
 import {greetingTurnEvents} from '../src/node/greetingSeed.js'
 import {createHash} from 'node:crypto'
 import {helperJson} from '../src/core/helperRuntime.js'
+import {createHelperMvuCommandCodec} from '../src/core/helperMvuCommands.js'
+import {markdownCodeScanner} from '../src/core/markdownCode.js'
 import {CONTINUE_INSTRUCTION_PREFIX} from '../src/core/dshPrompt.js'
 import {onTurnEnd} from '../src/node/sessionLifecycle.js'
+import {abandonHelperMvu} from '../src/node/helperMvuAbandon.js'
 
 let root:string,state:TavernState,ctx:Context,cardId:string,storyId:string,events:SessionEvent[]
 const sources=new Map<string,SessionEvent[]>()
@@ -61,12 +64,30 @@ async function start(turn=1,text="_.add('hp',1);",reason='stop'){
 async function end(turn=1,kind='completed'){
   append('turn/end',{turn,reason:{kind}});state.openFloors.delete('session');await (await ws()).wal.commitFloor('session#t'+turn)
 }
-async function continuation(turn:number,text:string,owned=true){
+async function continuation(turn:number,text:string,owned=true,reason='stop'){
   append('turn/start',{turn})
   append('user/message',createUserMessage({content:[{type:'text',text:CONTINUE_INSTRUCTION_PREFIX+'紧接断点继续'}],source:owned?{kind:'plugin',plugin:'dsh-tavern',form:'notice',summary:'续写指令'}:{kind:'user'}}))
-  assistant(turn,text,1,false,['stop'])
+  assistant(turn,text,1,false,[reason])
   const floor='session#t'+turn;await (await ws()).wal.beginFloor(floor);state.openFloors.set('session',{cardId,storyId,floor})
 }
+
+/** 解析改动贯穿 stop 入队、真实磁盘提交和楼层回滚，不把示例带进完成回执。 */
+it('含代码与脚本样例的正常回复只提交实际变量变化，重复准备只读且回滚恢复基线',async()=>{
+  await initialize()
+  const text='示例 `_.add("hp",100);`\n<script>_.set(local,"hp",999);</script>\n<UpdateVariable>_.add("hp",1);</UpdateVariable>'
+  await start(1,text);await queueHelperMvuStop(state,'session',snapshot());await end()
+  const work=await prepare(),codec=createHelperMvuCommandCodec(helperJson,markdownCodeScanner)
+  const data=codec.apply(work.base!.stat_data as Record<string,unknown>,codec.parse(work.job!.text))
+  await commit(work,data)
+  expect((await read()).scopes[JSON.stringify(['message',work.job!.identity])]).toMatchObject({stat_data:{hp:11}})
+  expect((await read()).mvu?.pending).toEqual([])
+  const workspace=await ws(),before=await workspace.fs.readText(HELPER_STATE_PATH)
+  expect(await prepare()).toMatchObject({status:'idle'})
+  expect(await workspace.fs.readText(HELPER_STATE_PATH)).toBe(before)
+  await workspace.wal.rollbackFloor('session#t1',workspace.fs.root)
+  const restored=await read()
+  expect(Object.values(restored.scopes).map(value=>value.stat_data)).toEqual([{hp:10}])
+})
 
 it('空历史等待初始化，未登记任务时允许脚本播种，关闭开关后不再门控',async()=>{
   expect(await prepare()).toMatchObject({enabled:true,status:'waiting'})
@@ -213,13 +234,18 @@ it('初始化后正常 stop 更新继承前一有效消息数据，登记及同�
   await expect(commit(work,{stat_data:{hp:12}})).rejects.toThrow(/回执不一致/)
 })
 
-it.each(["_.add('hp',2);","_.add('hp',"] )('真实续写不把未提交截断片段 %s 静默漏算为成功',async(text)=>{
+it.each(["_.add('hp',2);","_.add('hp',"] )('真实续写携带未提交片段 %s，只在新楼层写变量和幂等回执',async(text)=>{
   await initialize();await start(1,text,'max-tokens');await end(1,'max-tokens');const before=await read()
   await continuation(2,'2); 剩余正文')
-  await expect(queueHelperMvuStop(state,'session',snapshot())).rejects.toThrow(/截断回复.*重新生成/)
+  await queueHelperMvuStop(state,'session',snapshot())
+  const work=await prepare();expect(work.continuationMessageIds).toEqual([1]);expect(work.job?.text).toBe('2); 剩余正文')
+  expect(work.snapshot?.messages[1]?.message).toBe(text);expect(work.base?.stat_data).toEqual({hp:10})
+  expect((await read()).scopes).toEqual(before.scopes)
+  await commit(work,{stat_data:{hp:12}});await commit(work,{stat_data:{hp:12}});await end(2)
+  await queueHelperMvuTurn(state,'session',snapshot());expect((await prepare()).status).toBe('idle')
+  expect((await read()).mvu?.completed).toHaveLength(2)
+  const workspace=await ws();await workspace.wal.rollbackFloor('session#t2',workspace.fs.root)
   expect(await read()).toEqual(before)
-  await end(2);await expect(queueHelperMvuTurn(state,'session',snapshot())).rejects.toThrow(/截断回复.*重新生成/)
-  await expect(getHelperScriptBundle(ctx,state,'session')).rejects.toThrow(/截断回复.*重新生成/)
 })
 
 it('正常已计算回复后的续写只提交新文本，不重复应用前一回复的命令',async()=>{
@@ -229,29 +255,79 @@ it('正常已计算回复后的续写只提交新文本，不重复应用前一�
   await commit(work,{stat_data:{hp:17}});expect((await read()).mvu?.completed).toHaveLength(3)
 })
 
-it('仅同文用户台词不冒充宿主续写，真实连续续写链不能隐藏更早未处理的截断',async()=>{
+it.each([false,true])('停用期间或明确放弃的正常回复不能借后续续写补执行：abandoned=%s',async abandoned=>{
+  await initialize()
+  if(!abandoned)await state.saveBinding({... (await state.loadBinding('session'))!,helperMvu:false})
+  await start(1,"_.add('hp',50);")
+  await queueHelperMvuStop(state,'session',snapshot());await end(1)
+  if(abandoned)expect(await abandonHelperMvu(state,{sessionId:'session',storyId})).toEqual({disabled:true,abandoned:1})
+  await state.saveBinding({... (await state.loadBinding('session'))!,helperMvu:true})
+  await continuation(2,"_.add('hp',2);");await queueHelperMvuStop(state,'session',snapshot())
+  const work=await prepare();expect(work.continuationMessageIds).toBeUndefined();expect(work.base?.stat_data).toEqual({hp:10})
+  await commit(work,{stat_data:{hp:12}})
+  expect((await read()).mvu?.completed).toHaveLength(2)
+})
+
+it('连续长度截断的完整来源按原序交给最终 stop，同文用户台词不能冒充宿主续写',async()=>{
   await initialize();await start(1,"_.add('hp',",'max-tokens');await end(1,'max-tokens')
-  await continuation(2,'2);');await end(2)
-  await continuation(3,'后续正文');await expect(queueHelperMvuStop(state,'session',snapshot())).rejects.toThrow(/截断回复.*重新生成/)
-  const instruction=events.findLast(event=>event.type==='user/message')! as SessionEvent<'user/message'>
-  instruction.data=createUserMessage({content:instruction.data.content,source:{kind:'user'}})
-  await queueHelperMvuStop(state,'session',snapshot());expect((await prepare()).job?.turn).toBe(3)
+  await continuation(2,'2);',true,'max-tokens');await end(2,'max-tokens')
+  await continuation(3,'后续正文');await queueHelperMvuStop(state,'session',snapshot())
+  const work=await prepare();expect(work.continuationMessageIds).toEqual([1,2])
+  await commit(work,{stat_data:{hp:12}});await end(3)
+  await start(4,"_.add('hp',",'max-tokens');await end(4,'max-tokens');await continuation(5,'2);',false)
+  await queueHelperMvuStop(state,'session',snapshot())
+  expect((await prepare()).continuationMessageIds).toBeUndefined()
 })
 
-it('首次启用必须复核续写来源，不把最新尾段当作完整初始化锚点',async()=>{
-  await start(1,'未处理截断','max-tokens');await end(1,'max-tokens');await continuation(2,'继续片段');await end(2)
-  await expect(prepare()).rejects.toThrow(/截断回复.*重新生成/)
-  await expect(getHelperScriptBundle(ctx,state,'session')).rejects.toThrow(/截断回复.*重新生成/)
-  expect((await read()).mvu).toBeUndefined()
+it('首次启用的续写锚点保留完整前文，重启后仍从同一消息快照准备',async()=>{
+  await start(1,"_.add('hp',",'max-tokens');await end(1,'max-tokens');await continuation(2,'2);');await end(2)
+  const work=await prepare();expect(work).toMatchObject({job:{kind:'initialize',turn:2},continuationMessageIds:[0]})
+  state=createState();await state.init()
+  const restarted=await prepare('restarted');expect(restarted.continuationMessageIds).toEqual([0]);expect(restarted.job).toEqual(work.job)
+  expect((await getHelperScriptBundle(ctx,state,'session')).messageId).toBe(work.job?.seq)
+  await commit(restarted,{stat_data:{hp:12}},'restarted');expect((await read()).mvu?.completed).toHaveLength(1)
 })
 
-it('已有 pending 与旧执行租约在 prepare 和 commit 再核续写来源，来源变化不能绕过检查',async()=>{
+it('来源授权变化使旧租约失效，新任务必须重新核对并携带前文',async()=>{
   await initialize();await start(1,'未处理截断','max-tokens');await end(1,'max-tokens');await continuation(2,'继续片段',false)
   await queueHelperMvuStop(state,'session',snapshot());const work=await prepare()
   const instruction=events.findLast(event=>event.type==='user/message')! as SessionEvent<'user/message'>
   instruction.data=createUserMessage({content:instruction.data.content,source:{kind:'plugin',plugin:'dsh-tavern',form:'notice',summary:'续写指令'}})
-  await expect(prepare()).rejects.toThrow(/截断回复.*重新生成/);await expect(commit(work,{stat_data:{hp:20}})).rejects.toThrow(/截断回复.*重新生成/)
+  await expect(commit(work,{stat_data:{hp:20}})).rejects.toThrow(/续写来源已改变/)
+  const next=await prepare();expect(next.token).not.toBe(work.token);expect(next.continuationMessageIds).toEqual([1])
+  await expect(commit(work,{stat_data:{hp:20}})).rejects.toThrow(/租约已失效/)
   expect((await read()).mvu?.pending).toHaveLength(1);expect((await read()).mvu?.completed).toHaveLength(1)
+})
+
+it('续写前文被修改时旧计算结果不能提交；同一轮后续步骤不重放前文',async()=>{
+  await initialize();await start(1,"_.add('hp',",'max-tokens');await end(1,'max-tokens')
+  await continuation(2,'2);');await queueHelperMvuStop(state,'session',snapshot());const work=await prepare()
+  const original=events.find(event=>event.type==='assistant/message'&&event.data.turn===1)! as SessionEvent<'assistant/message'>
+  const message=original.data.message
+  original.data.message={...message,content:[{type:'text',text:"_.add('mp',"}]}
+  await expect(commit(work,{stat_data:{hp:12}})).rejects.toThrow(/聊天历史已改变/)
+  original.data.message=message
+  await commit(work,{stat_data:{hp:12}})
+  assistant(2,"_.add('hp',3);",2,false,['stop']);await queueHelperMvuStop(state,'session',snapshot())
+  const second=await prepare();expect(second.continuationMessageIds).toBeUndefined();expect(second.base?.stat_data).toEqual({hp:12})
+  await commit(second,{stat_data:{hp:15}});expect((await read()).mvu?.completed).toHaveLength(3)
+})
+
+it('手动停止可在新的正常 stop 接续，缺终止帧和错误来源仍拒绝且不写待处理队列',async()=>{
+  await initialize();await start(1,"_.add('hp',")
+  const partial=events.at(-1)! as SessionEvent<'assistant/message'>;partial.data.interrupted=true;partial.data.stream=[]
+  await end(1,'aborted');await continuation(2,'2);');await queueHelperMvuStop(state,'session',snapshot())
+  const work=await prepare();expect(work.continuationMessageIds).toEqual([1]);await commit(work,{stat_data:{hp:12}});await end(2)
+  await start(3,'无终止帧');const invalid=events.at(-1)! as SessionEvent<'assistant/message'>;invalid.data.stream=[];await end(3)
+  const before=await read();await continuation(4,'后续正文')
+  await expect(queueHelperMvuStop(state,'session',snapshot())).rejects.toThrow(/没有可恢复/);expect(await read()).toEqual(before)
+})
+
+it('累计 UTF-8 预算在拼接前拒绝过长续写，保留原剧情状态',async()=>{
+  await initialize();await start(1,'灯'.repeat(70000),'max-tokens');await end(1,'max-tokens')
+  const before=await read();await continuation(2,'塔'.repeat(20000))
+  await expect(queueHelperMvuStop(state,'session',snapshot())).rejects.toThrow(/续写合并正文超过 256 KiB/)
+  expect(await read()).toEqual(before)
 })
 
 it('多步骤正常 stop 顺序排队，每个任务从前一个已完成消息状态接续',async()=>{

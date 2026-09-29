@@ -1,4 +1,5 @@
 /** MVU 普通 JSON 命令编解码：独立有界字面量解析、路径校验及原子应用，可把工厂序列化进不透明卡面沙箱。 */
+import type {markdownCodeScanner} from './markdownCode.js'
 export interface HelperMvuCommand {
   type: 'set' | 'add' | 'insert' | 'delete' | 'move' | 'copy' | 'test'
   full_match: string
@@ -14,8 +15,8 @@ export interface HelperMvuCommandCodec {
   read(statData: Record<string, unknown>, path: unknown): unknown
 }
 
-/** json 必须是不调用访问器的有界普通 JSON 复制器；工厂不捕获模块变量、不使用代码求值或第三方解析器。 */
-export function createHelperMvuCommandCodec(json: (value: unknown, maxBytes?: number) => unknown): HelperMvuCommandCodec {
+/** 两个依赖均显式传入：有界 JSON 复制器与纯 Markdown 扫描器；工厂不捕获模块变量或求值代码。 */
+export function createHelperMvuCommandCodec(json: (value: unknown, maxBytes?: number) => unknown, markdown:typeof markdownCodeScanner): HelperMvuCommandCodec {
   type Table = Record<string, unknown>
   type Command = HelperMvuCommand
   const INPUT = 256 * 1024, OUTPUT = 1024 * 1024, MAX_COMMANDS = 256, DEPTH = 64
@@ -195,13 +196,85 @@ export function createHelperMvuCommandCodec(json: (value: unknown, maxBytes?: nu
       throw new Error('暂不支持此 MVU JSON Patch 操作：' + op.op)
     })
   }
+  type HtmlToken={name:string;closing:boolean;selfClosing:boolean;end:number}
+  const htmlHead=/<(\/?)([a-z][\w:-]*)(?=[\s/>]|$)/iy
+  const rawTags=new Set(['script','style','textarea','title','xmp','plaintext'])
+  const hiddenTags=new Set([...rawTags,'pre','code','noscript','template','svg','math','analysis','think','thinking'])
+  /** 属性内的命令只是字符串；没有闭合标签时保守跳过尾部，不能将属性残片识别成剧情命令。 */
+  const htmlToken=(message:string,start:number):HtmlToken|null=>{
+    htmlHead.lastIndex=start
+    const head=htmlHead.exec(message)
+    if(!head)return null
+    let at=htmlHead.lastIndex,quote=''
+    for(;at<message.length;at++){
+      const char=message[at]!
+      if(quote){if(char===quote)quote='';continue}
+      if(char==='"'||char==="'"){quote=char;continue}
+      if(char==='>')break
+    }
+    return {name:head[2]!.toLowerCase(),closing:head[1]==='/',selfClosing:message[at-1]==='/',end:Math.min(message.length,at+1)}
+  }
+  const commentEnd=(message:string,start:number):number=>{
+    const end=message.indexOf('-->',start+4)
+    return end<0?message.length:end+3
+  }
+  /** 原始文本与惰性容器中的函数名都不是 MVU；template/pre 等按标签和属性边界寻找真实结束。 */
+  const hiddenEnd=(message:string,tag:HtmlToken):number=>{
+    // HTML 非空元素不会因尾部的 / 自闭合；按浏览器语义保留整个脚本/文本容器边界。
+    if(tag.selfClosing&&(tag.name==='svg'||tag.name==='math'))return tag.end
+    if(tag.name==='plaintext')return message.length
+    if(rawTags.has(tag.name)){
+      const close=new RegExp('</'+tag.name+'(?=[\\s/>])','gi');close.lastIndex=tag.end
+      const found=close.exec(message)
+      return found?htmlToken(message,found.index)?.end??message.length:message.length
+    }
+    let at=tag.end,depth=1
+    while(at<message.length){
+      const open=message.indexOf('<',at)
+      if(open<0)return message.length
+      if(message.startsWith('<!--',open)){at=commentEnd(message,open);continue}
+      const child=htmlToken(message,open)
+      if(!child){at=open+1;continue}
+      at=child.end
+      if(child.name===tag.name){
+        if(child.closing){if(--depth===0)return at}
+        else if(!(child.selfClosing&&(child.name==='svg'||child.name==='math'))&&++depth>DEPTH)throw new Error('MVU 文本容器嵌套超过 64 层')
+      }else if(!child.closing&&rawTags.has(child.name))at=hiddenEnd(message,child)
+    }
+    return message.length
+  }
   const parse = (message: string): Command[] => {
     if (typeof message !== 'string' || message.length > INPUT || size(message) > INPUT) throw new Error('MVU 命令文本超过 256 KiB 或不是字符串')
     if (message.trim() === '[]' || /^\[\s*\{/.test(message.trim())) return patchCommands(message)
     const result: Command[] = []
     const append = (command: Command) => { if (result.length >= MAX_COMMANDS) throw new Error('MVU 单次最多 256 个命令'); result.push(command) }
-    let at = 0
+    const code=markdown(message),syntaxEnds=new Map<number,number>()
+    let at = 0,updates=0
     while (at < message.length) {
+      const syntaxEnd=syntaxEnds.get(at)
+      if(syntaxEnd!==undefined){at=syntaxEnd;continue}
+      if(message[at]==='`'||message[at]==='~'){
+        const fence=code.fence(at)
+        if(fence){
+          const content=message.slice(fence.contentStart,fence.contentEnd).trim()
+          const envelope=/^<(updatevariable|json_?patch)(?=[\s>])/i.exec(content)
+          const payload=fence.standalone&&envelope&&new RegExp('</'+envelope[1]+'\\s*>\\s*$','i').test(content)
+          if(updates||payload){syntaxEnds.set(fence.contentEnd,fence.end);at=fence.contentStart}
+          else at=fence.end
+          continue
+        }
+        const end=code.inlineEnd(at)
+        if(end!==null){
+          if(updates){let width=1;while(message[at+width]==='`')width++;syntaxEnds.set(end-width,end);at+=width}
+          else at=end
+          continue
+        }
+      }
+      // 四空格/制表符代码块只有在明确更新载体内才具有命令语义。
+      if(!updates&&(at===0||message[at-1]==='\n')&&/^(?: {4}|\t)/.test(message.slice(at,at+4))){
+        const end=message.indexOf('\n',at);at=end<0?message.length:end+1;continue
+      }
+      if(message.startsWith('<!--',at)){at=commentEnd(message,at);continue}
       const tag = message[at] === '<' ? ['jsonpatch', 'json_patch'].find(name => message.slice(at, at + name.length + 2).toLowerCase() === '<' + name + '>') : undefined
       if (tag) {
         let end = at + tag.length + 2
@@ -213,6 +286,17 @@ export function createHelperMvuCommandCodec(json: (value: unknown, maxBytes?: nu
         if (end >= message.length) throw new Error('MVU JSON Patch 标签未闭合')
         for (const command of patchCommands(message.slice(at + tag.length + 2, end))) append(command)
         at = end + tag.length + 3; continue
+      }
+      if(message[at]==='<'){
+        const token=htmlToken(message,at)
+        if(token){
+          if(token.name==='updatevariable'){
+            if(token.closing)updates=Math.max(0,updates-1)
+            else if(!token.selfClosing&&++updates>DEPTH)throw new Error('MVU 更新块嵌套超过 64 层')
+          }
+          at=!token.closing&&hiddenTags.has(token.name)?hiddenEnd(message,token):token.end
+          continue
+        }
       }
       if (!message.startsWith('_.', at)) { at++; continue }
       const start = at; at += 2; const nameStart = at

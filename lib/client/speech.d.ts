@@ -1,5 +1,6 @@
 import type { ComponentProps, ReactNode } from 'react';
 import { MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives';
+import type { SessionEventSource } from '@deepseek-ai/dsh-api-session-controller/client';
 import type { TavernRemote } from './types.js';
 import { type HelperSnapshot } from '../core/helperRuntime.js';
 import type { HelperWorldbookContext, HelperWorldbookRequest, HelperWorldbookResult, HelperWorldbookRebindRequest } from '../core/helperWorldbook.js';
@@ -54,6 +55,9 @@ interface SpeechBubbleProps {
     media?: ReactNode;
     messageId?: number;
     streaming?: boolean;
+    /** 当前会话的公开只读事件源；用于尚未持久化的续写消息展示。 */
+    streamSource?: SessionEventSource;
+    turn?: number;
     /** 会话级交互卡开关（binding.interactiveCards）；null/缺省回落全局设置。 */
     interactiveCards?: boolean | null;
     onMessageBranch?: (branch: NonNullable<HelperMessageEditResult['branch']>) => Promise<void>;

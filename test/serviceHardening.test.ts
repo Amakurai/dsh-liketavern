@@ -403,7 +403,7 @@ describe('compressMemories 先写合并条目再归档', () => {
 describe('回显实际净化 id', () => {
   it('savePreset/importPreset 返回落盘后的实际 id', async () => {
     const preset = { ...defaultPreset(), identifier: 'my preset!①', name: '测试预设' }
-    await expect(service.savePreset({ preset })).resolves.toEqual({ id: 'my_preset__' })
+    await expect(service.savePreset({ preset })).resolves.toEqual({ id: 'my_preset__', revision: expect.stringMatching(/^[a-f0-9]{64}$/) })
 
     const json = exportStPreset({ ...defaultPreset(), identifier: 'imp preset!' })
     const r = await service.importPreset({ name: '导入名', json })
@@ -413,7 +413,7 @@ describe('回显实际净化 id', () => {
   })
 
   it('saveLorebook/importLorebook 返回落盘后的实际 id', async () => {
-    await expect(service.saveLorebook({ name: 'my book!', json: { entries: [] } })).resolves.toEqual({ name: 'my_book_' })
+    await expect(service.saveLorebook({ name: 'my book!', json: { entries: [] } })).resolves.toEqual({ name: 'my_book_', revision: expect.stringMatching(/^[a-f0-9]{64}$/) })
     await expect(
       service.importLorebook({ name: 'other book', json: { entries: [{ keys: ['剑'], content: '断剑' }] } }),
     ).resolves.toEqual({ name: 'other_book', entryCount: 1 })
@@ -422,15 +422,29 @@ describe('回显实际净化 id', () => {
 
   it('savePersona 返回实际净化 id，写默认页用同一 id；已有默认人设不覆盖', async () => {
     const r = await service.savePersona({ persona: { id: 'p 1!', name: '测试人设', description: '', avatar: null } })
-    expect(r).toEqual({ id: 'p_1_' })
+    expect(r).toEqual({ id: 'p_1_', revision: expect.stringMatching(/^[a-f0-9]{64}$/) })
     // 默认页与磁盘 JSON 的 id 都是净化后的实际 id
     expect(settingsRaw.defaults.personaId).toBe('p_1_')
     const personas = await state.listPersonas()
     expect(personas).toHaveLength(1)
     expect(personas[0]!.id).toBe('p_1_')
+    expect((await service.listPersonas({})).items[0]!.revision).toBe(r.revision)
 
     await service.savePersona({ persona: { id: 'p2', name: '第二', description: '', avatar: null } })
     expect(settingsRaw.defaults.personaId).toBe('p_1_')
+  })
+
+  it('默认设置写入失败仍如实回报人设已保存，附带可重试的单独提示', async () => {
+    const persona = { id: 'saved-despite-default', name: '已保存', description: '不丢失正文', avatar: null }
+    const failing = new TavernService({ reflect: { provide: () => {} } } as unknown as Context, state, {
+      get: () => settingsRaw,
+      update: async () => { throw new Error('配置只读') },
+    } as unknown as TavernSettingsScope)
+    const result = await failing.savePersona({ persona, expectedRevision: null })
+    expect(result).toMatchObject({ id: persona.id, defaultWarning: '配置只读', revision: expect.any(String) })
+    expect(await state.loadPersona(persona.id)).toEqual(persona)
+    await expect(failing.savePersona({ persona: { ...persona, description: '继续编辑' }, expectedRevision: result.revision })).resolves.toMatchObject({ id: persona.id })
+    expect(settingsRaw.defaults.personaId).toBe('')
   })
 })
 
@@ -458,7 +472,7 @@ describe('宽松传输、严格校验', () => {
       identifier: 'with-regex',
       regexScripts: [{ scriptName: 'r1', findRegex: '/a/g', replaceString: 'b' }],
     }
-    await expect(service.savePreset({ preset })).resolves.toEqual({ id: 'with-regex' })
+    await expect(service.savePreset({ preset })).resolves.toEqual({ id: 'with-regex', revision: expect.stringMatching(/^[a-f0-9]{64}$/) })
     const stored = await state.loadPreset('with-regex')
     expect(stored?.regexScripts).toHaveLength(1)
   })

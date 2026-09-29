@@ -17,9 +17,10 @@ type LorebookEditorProps = {
     remote?: TavernRemote;
     target: LorebookTarget;
     entries: WorldInfoEntry[];
+    revision?: string;
     onClose: () => void;
     onSaved: () => void;
-    save: (json: unknown) => Promise<Envelope<unknown>>;
+    save: (json: unknown, expectedRevision?: string) => Promise<Envelope<unknown>>;
 };
 export declare function LorebookEditor(props: LorebookEditorProps): import("react").JSX.Element;
 export {};

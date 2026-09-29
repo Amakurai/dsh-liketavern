@@ -11,8 +11,7 @@ import type { TavernServiceContract } from '../remote.js';
 import type { Context } from '@deepseek-ai/cordis';
 import type { TavernSettingsScope } from './config.js';
 import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol';
-import type { RegexRule } from '../core/types.js';
-import type { Persona, TavernState } from './state.js';
+import type { TavernState } from './state.js';
 import type { TavernMethodResults, TavernMethodRequests } from '../remote.js';
 export declare class TavernService extends TypertRemoteService implements TavernServiceContract {
     /** 运行时中枢（agent 面插件经 ctx.tavern 访问）。 */
@@ -101,9 +100,7 @@ export declare class TavernService extends TypertRemoteService implements Tavern
         name: string;
         json: unknown;
     }): Promise<TavernMethodResults['importPreset']>;
-    savePreset(request: {
-        preset: unknown;
-    }): Promise<TavernMethodResults['savePreset']>;
+    savePreset(request: TavernMethodRequests['savePreset']): Promise<TavernMethodResults['savePreset']>;
     deletePreset(request: {
         id: string;
     }): Promise<TavernMethodResults['deletePreset']>;
@@ -118,20 +115,14 @@ export declare class TavernService extends TypertRemoteService implements Tavern
         name: string;
         json: unknown;
     }): Promise<TavernMethodResults['importLorebook']>;
-    saveLorebook(request: {
-        name: string;
-        json: unknown;
-    }): Promise<TavernMethodResults['saveLorebook']>;
+    saveLorebook(request: TavernMethodRequests['saveLorebook']): Promise<TavernMethodResults['saveLorebook']>;
     deleteLorebook(request: {
         name: string;
     }): Promise<TavernMethodResults['deleteLorebook']>;
     getCharacterLorebook(request: {
         cardId: string;
     }): Promise<TavernMethodResults['getCharacterLorebook']>;
-    saveCharacterLorebook(request: {
-        cardId: string;
-        json: unknown;
-    }): Promise<TavernMethodResults['saveCharacterLorebook']>;
+    saveCharacterLorebook(request: TavernMethodRequests['saveCharacterLorebook']): Promise<TavernMethodResults['saveCharacterLorebook']>;
     deleteEmbeddedLorebook(request: {
         cardId: string;
     }): Promise<TavernMethodResults['deleteEmbeddedLorebook']>;
@@ -139,11 +130,7 @@ export declare class TavernService extends TypertRemoteService implements Tavern
         cardId: string;
         storyId?: string;
     }): Promise<TavernMethodResults['getChatLorebook']>;
-    saveChatLorebook(request: {
-        cardId: string;
-        storyId?: string;
-        json: unknown;
-    }): Promise<TavernMethodResults['saveChatLorebook']>;
+    saveChatLorebook(request: TavernMethodRequests['saveChatLorebook']): Promise<TavernMethodResults['saveChatLorebook']>;
     getJournal(request: {
         cardId: string;
         storyId?: string;
@@ -154,16 +141,12 @@ export declare class TavernService extends TypertRemoteService implements Tavern
         text: string;
     }): Promise<TavernMethodResults['saveJournal']>;
     listPersonas(_request: Record<string, never>): Promise<TavernMethodResults['listPersonas']>;
-    savePersona(request: {
-        persona: Persona;
-    }): Promise<TavernMethodResults['savePersona']>;
+    savePersona(request: TavernMethodRequests['savePersona']): Promise<TavernMethodResults['savePersona']>;
     deletePersona(request: {
         id: string;
     }): Promise<TavernMethodResults['deletePersona']>;
     listRegexRules(_request: Record<string, never>): Promise<TavernMethodResults['listRegexRules']>;
-    saveRegexRules(request: {
-        rules: RegexRule[];
-    }): Promise<TavernMethodResults['saveRegexRules']>;
+    saveRegexRules(request: TavernMethodRequests['saveRegexRules']): Promise<TavernMethodResults['saveRegexRules']>;
     /** 以已提交日志判定是否进入对话，避免客户端 blank 镜像滞后时误清绑定。 */
     private conversationStarted;
     getSessionBinding(request: {

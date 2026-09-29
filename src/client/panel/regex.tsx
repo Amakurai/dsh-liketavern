@@ -4,7 +4,7 @@
  */
 import { useDraftGuard } from '../drafts.js'
 import { useDraftState } from '../draftPersistence.js'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { IconTrashOutlineMedium } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PromptPreset, RegexRule, RegexScope, RegexTiming } from '../../core/types.js'
 import type { TavernRemote } from '../types.js'
@@ -22,6 +22,7 @@ const TIMINGS: { value: RegexTiming; labelKey: string }[] = [
   { value: 'render', labelKey: 'regex.timing.render' },
 ]
 const SOURCE_LABEL_KEY: Record<RegexRule['source'], string> = { user: 'regex.source.user', card: 'regex.source.card', preset: 'regex.source.preset' }
+type PresetDraft = PromptPreset & { editRevision?: string }
 
 function newRule(): RegexRule {
   return {
@@ -114,6 +115,8 @@ export function RegexSection(props: { remote: TavernRemote }) {
   const [busy, setBusy] = useState(false)
   const toast = useToast()
   const [savedRules, setSavedRules] = useDraftState<string | null>('regex:savedRules', null)
+  const [revision, setRevision] = useDraftState<string | null>('regex:revision', null)
+  const saving = useRef(false)
   useDraftGuard(rules !== null && JSON.stringify(rules) !== (savedRules ?? (state.status === 'ready' ? JSON.stringify(state.value.rules) : null)), busy)
 
   useEffect(() => {
@@ -121,6 +124,7 @@ export function RegexSection(props: { remote: TavernRemote }) {
       setRules(structuredClone(state.value.rules))
       // 放弃后重拉的服务器版本成为新基线；不能继续用刷新前那次保存的快照判断脏状态。
       setSavedRules(JSON.stringify(state.value.rules))
+      setRevision(state.value.revision ?? null)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state])
@@ -130,37 +134,41 @@ export function RegexSection(props: { remote: TavernRemote }) {
     async () => {
       const list = await remote.listPresets({})
       if (!list.ok) return list
-      const items: PromptPreset[] = []
+      const items: PresetDraft[] = []
       for (const p of list.value.items) {
         if (p.regexCount <= 0) continue
         const r = await remote.getPreset({ id: p.id })
         if (!r.ok) return r
-        if ((r.value.preset.regexScripts?.length ?? 0) > 0) items.push(r.value.preset)
+        if ((r.value.preset.regexScripts?.length ?? 0) > 0) items.push({ ...r.value.preset, editRevision: r.value.revision })
       }
       return { ok: true as const, value: { items } }
     },
     [],
   )
-  const [presetDrafts, setPresetDrafts] = useState<PromptPreset[] | null>(null)
+  const [presetDrafts, setPresetDrafts] = useState<PresetDraft[] | null>(null)
   useEffect(() => {
     if (presetRegex.state.status === 'ready' && presetDrafts === null) setPresetDrafts(structuredClone(presetRegex.state.value.items))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [presetRegex.state])
 
   const togglePresetScript = async (pi: number, si: number, disabled: boolean) => {
+    if (saving.current) return
     const drafts = presetDrafts ?? []
     const preset = drafts[pi]
     const script = preset?.regexScripts?.[si]
     if (!preset || !script) return
-    const nextPreset: PromptPreset = {
+    if (!preset.editRevision) { setError(t('presets.missingRevision')); return }
+    const nextPreset: PresetDraft = {
       ...preset,
       regexScripts: preset.regexScripts!.map((s, i) => (i === si ? { ...s, disabled } : s)),
     }
     setPresetDrafts(drafts.map((p, i) => (i === pi ? nextPreset : p)))
+    saving.current = true
     // 乐观开关失败（错误信封或传输 reject）都回滚草稿；reject 经 runAsync 落 setError，
     // 不留未处理 rejection；busy 期间 RegexScriptRow 开关禁用，防连续切换互相覆盖。
-    await runAsync(setBusy, setError, async () => {
-      const r = await remote.savePreset({ preset: nextPreset }).catch((e: unknown) => {
+    try { await runAsync(setBusy, setError, async () => {
+      const { editRevision, ...content } = nextPreset
+      const r = await remote.savePreset({ preset: content, expectedRevision: editRevision }).catch((e: unknown) => {
         setPresetDrafts(drafts)
         throw e
       })
@@ -168,20 +176,25 @@ export function RegexSection(props: { remote: TavernRemote }) {
       if (err) {
         setError(err)
         setPresetDrafts(drafts)
-      } else {
+      } else if (r.ok) {
+        setPresetDrafts(drafts.map((p, i) => i === pi ? { ...nextPreset, editRevision: r.value.revision } : p))
         const name = script.scriptName?.trim() || t('util.regex.unnamed', { index: si + 1 })
         toast.show(disabled ? t('regex.toggledOff', { name }) : t('regex.toggledOn', { name }))
       }
-    })
+    }) } finally { saving.current = false }
   }
 
-  const save = (next: RegexRule[]) =>
-    runAsync(setBusy, setError, async () => {
-      const r = await remote.saveRegexRules({ rules: next })
+  const save = async (next: RegexRule[]) => {
+    if (saving.current) return
+    if (!revision) { setError(t('regex.missingRevision')); return }
+    saving.current = true
+    try { await runAsync(setBusy, setError, async () => {
+      const r = await remote.saveRegexRules({ rules: next, expectedRevision: revision })
       const err = errOf(r)
       if (err) setError(err)
-      else { setSavedRules(JSON.stringify(next)); toast.show(t('regex.saved', { count: next.length })) }
-    })
+      else if (r.ok) { setSavedRules(JSON.stringify(next)); setRevision(r.value.revision ?? null); toast.show(t('regex.saved', { count: next.length })) }
+    }) } finally { saving.current = false }
+  }
 
   const current = rules ?? []
   return (
@@ -232,6 +245,7 @@ export function RegexSection(props: { remote: TavernRemote }) {
                 if (busy) return
                 setRules(null)
                 setSavedRules(null)
+                setRevision(null)
                 reload()
               }}
             >

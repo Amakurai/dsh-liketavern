@@ -3,7 +3,7 @@
  * 聚合数据目录、设置、各资产存储与工作区句柄，供 remote 服务、工具与组装管线共用。
  */
 import { join } from 'node:path'
-import { characterEditRevision } from '../state/characterRevision.js'
+import { characterEditRevision, jsonEditRevision, personaEditRevision, presetEditRevision, regexEditRevision } from '../state/characterRevision.js'
 import { createHash,randomUUID } from 'node:crypto'
 import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
 import {CHAT_WORLDBOOK_PATH,parseChatWorldbookFile,encodeChatWorldbooks,plainChatWorldbook} from '../state/chatWorldbooks.js'
@@ -156,6 +156,7 @@ function isDepthBound(value: unknown): boolean {
  * 非法规则在这里抛错，不写盘。
  */
 function assertValidRegexRules(rules: RegexRule[]): void {
+  if (!Array.isArray(rules)) throw new Error('正则规则必须是数组')
   for (const [index, rule] of rules.entries()) {
     const where = `第 ${index + 1} 条正则规则`
     if (!rule || typeof rule !== 'object') throw new Error(`${where}不是对象`)
@@ -555,7 +556,7 @@ export class TavernState {
     const charWs = await this.loadCharacter(cardId)
     if (!charWs) return null
     const book = charWs.card.characterBook
-    if (book && book.entries.length > 0) {
+    if (book) {
       const json = book.raw ?? { name: book.name ?? charWs.card.name, entries: book.entries }
       return { name: book.name ?? charWs.card.name, json, entryCount: book.entries.length }
     }
@@ -565,20 +566,26 @@ export class TavernState {
     try {
       const json: unknown = JSON.parse(file)
       const normalized = normalizeBook(json)
-      if (!normalized || normalized.entries.length === 0) return null
+      if (!normalized) return null
       return { name: normalized.name ?? charWs.card.name, json, entryCount: normalized.entries.length }
     } catch {
       return null
     }
   }
 
-  async saveCharacterLorebook(cardId: string, json: unknown): Promise<{ name: string; entryCount: number }> {
+  async saveCharacterLorebook(cardId: string, json: unknown, expectedRevision?: string | null): Promise<{ name: string; entryCount: number; revision: string }> {
     assertValidCardId(cardId)
     return withWorkspaceLock(join(this.paths.characters, cardId), async () => {
       const book = normalizeBook(json)
       if (!book) throw new Error('内嵌世界书缺少合法结构')
       const charWs = await this.loadCharacter(cardId)
       if (!charWs) throw new Error(`角色 ${cardId} 不存在`)
+      if (expectedRevision !== undefined) {
+        const current = await this.loadCharacterLorebookRaw(cardId)
+        if ((current ? jsonEditRevision(current.json) : null) !== expectedRevision) {
+          throw new Error('内嵌世界书已被修改或删除，请保留草稿并重新打开后再保存')
+        }
+      }
       const fs = this.plainFs(cardId)
       // 旧卡可能同时含 character_book/lorebook/characterBook/world 等兼容落点；
       // 先统一清除，再只写一个 canonical character_book，避免导出时新旧两本书并存。
@@ -593,7 +600,7 @@ export class TavernState {
         await fs.writeText('assets/character-book.json', JSON.stringify(json, null, 2) + '\n')
         await fs.writeText('card.json', JSON.stringify(cardJson, null, 2) + '\n')
       } finally { this.bumpAssetRev(`charlore:${cardId}`) }
-      return { name: book.name ?? charWs.card.name, entryCount: book.entries.length }
+      return { name: book.name ?? charWs.card.name, entryCount: book.entries.length, revision: jsonEditRevision(json) }
     })
   }
 
@@ -761,23 +768,26 @@ export class TavernState {
     const handle = await this.storyWorkspace(cardId, storyId)
     const raw = await handle.fs.readText('assets/chat-lorebook.json')
     if (raw === null) return { entries: {} }
-    try {
-      return JSON.parse(raw) as unknown
-    } catch {
-      return { entries: {} }
-    }
+    // 编辑入口不能把损坏正文当作空表，否则下一次保存会永久清空剧情世界书。
+    parseChatWorldbookFile(raw)
+    return JSON.parse(raw) as unknown
   }
 
   invalidateChatLorebook(cardId:string,storyId:string):void {assertValidCardId(cardId);this.bumpAssetRev('chatlore:'+cardId+':'+storyId)}
 
-  async saveChatLorebook(cardId: string, json: unknown, storyId?: string): Promise<void> {
+  async saveChatLorebook(cardId: string, json: unknown, storyId?: string, expectedRevision?: string): Promise<string> {
     parseLorebook(json, { source: 'chat', sourceRef: 'chat-lorebook' })
     const { fs } = await this.plainWorkspace(cardId, storyId)
-    await withWorkspaceLock(fs.root,async()=>{
+    return withWorkspaceLock(fs.root,async()=>{
       const text=await fs.readText(CHAT_WORLDBOOK_PATH),store=parseChatWorldbookFile(text)
+      if (expectedRevision !== undefined && jsonEditRevision(text === null ? { entries: {} } : JSON.parse(text)) !== expectedRevision) {
+        throw new Error('聊天世界书已被另一窗口或卡面修改，请保留草稿并重新打开后再保存')
+      }
       const id=store.active??(!store.books.has('main')?'main':'book-'+randomUUID()),previous=store.books.get(id) as Record<string,unknown>|undefined;store.books.set(id,{...previous,...plainChatWorldbook(json) as Record<string,unknown>});store.active=id
-      try{await fs.writeText(CHAT_WORLDBOOK_PATH,JSON.stringify(encodeChatWorldbooks(store),null,2)+'\n')}
+      const content = encodeChatWorldbooks(store)
+      try{await fs.writeText(CHAT_WORLDBOOK_PATH,JSON.stringify(content,null,2)+'\n')}
       finally{this.bumpAssetRev(`chatlore:${cardId}${storyId ? ':' + storyId : ''}`)}
+      return jsonEditRevision(content)
     })
   }
 
@@ -818,6 +828,11 @@ export class TavernState {
 
   /** 落盘并 bump 修订号，返回磁盘上的 id：调用方（服务层/客户端）之后要按这个 id 打开，不能用原始名。 */
   async saveLorebook(name: string, json: unknown): Promise<string> {
+    return (await this.saveLorebookSnapshot(name, json)).name
+  }
+
+  /** 编辑版本的读取与写入共用资产锁；导入仍可明确替换同身份资产。 */
+  async saveLorebookSnapshot(name: string, json: unknown, expectedRevision?: string | null): Promise<{ name: string; revision: string }> {
     const fs = await this.rootFs()
     return withWorkspaceLock(fs.root,async()=>{
     // 世界书没有独立于显示名的内部 id：身份 = 文件内的 name 字段。json 缺 name 时把传入名
@@ -829,9 +844,15 @@ export class TavernState {
         : json
     const identity = stringField(content, 'name') ?? name
     const id = await this.resolveAssetWriteId(fs, 'library/lorebooks', name, (existing) => existing === identity)
+    if (expectedRevision !== undefined) {
+      const raw = await fs.readText(`library/lorebooks/${id}.json`)
+      if ((raw === null ? null : jsonEditRevision(JSON.parse(raw))) !== expectedRevision) {
+        throw new Error('世界书已被另一窗口修改或删除，请保留草稿并重新打开后再保存')
+      }
+    }
     try{await fs.writeText(`library/lorebooks/${id}.json`, JSON.stringify(content, null, 2) + '\n')}
     finally{this.bumpAssetRev(`lore:${id}`)}
-    return id
+    return { name: id, revision: jsonEditRevision(content) }
     })
   }
 
@@ -889,17 +910,27 @@ export class TavernState {
 
   /** 落盘并 bump 修订号，返回磁盘上的 id（identifier 含非法字符时与 preset.identifier 不同）。 */
   async savePreset(preset: PromptPreset,options:{preserveHelperSettings?:boolean}={}): Promise<string> {
+    return (await this.savePresetSnapshot(preset, options)).id
+  }
+
+  async savePresetSnapshot(preset: PromptPreset, options: { preserveHelperSettings?: boolean; expectedRevision?: string | null } = {}): Promise<{ id: string; revision: string }> {
     preset = parseStoredPreset(preset)
     const fs = await this.rootFs()
     return withWorkspaceLock(fs.root,async()=>{
     // 预设身份是 identifier（编辑器内不可改，name 可改）：改名是编辑不是冲突。
     const id = await this.resolveAssetWriteId(fs, 'library/presets', preset.identifier, (existing) => existing === preset.identifier)
-    const previous=options.preserveHelperSettings?await this.loadPreset(id):null
-    const value=previous?{...preset,helperSettings:previous.helperSettings}:preset
+    // 编辑严格读取实际文件；显式导入仍按文件替换，允许修复同身份的损坏预设。
+    const raw = options.preserveHelperSettings || options.expectedRevision !== undefined
+      ? await fs.readText(`library/presets/${id}.json`) : null
+    const previous = raw === null ? null : parseStoredPreset(JSON.parse(raw))
+    if (options.expectedRevision !== undefined && (previous ? presetEditRevision(previous) : null) !== options.expectedRevision) {
+      throw new Error('预设已被另一窗口修改或删除，请保留草稿并重新打开后再保存')
+    }
+    const value=previous && options.preserveHelperSettings?{...preset,helperSettings:previous.helperSettings}:preset
     if(value.helperSettings!==undefined)value.helperSettings=helperScriptSettings(value.helperSettings)
     try{await fs.writeText(`library/presets/${id}.json`, JSON.stringify(value, null, 2) + '\n')}
     finally{this.bumpAssetRev(`preset:${id}`)}
-    return id
+    return { id, revision: presetEditRevision(value) }
     })
   }
 
@@ -963,23 +994,36 @@ export class TavernState {
   }
 
   /** 落盘并返回磁盘上的 id；id 被净化过（含冲突后缀）时连同 JSON 里的 id 一起改写，避免文件名和内容各说各话。 */
-  async savePersona(persona: Persona): Promise<string> {
+  async savePersona(persona: Persona, expectedRevision?: string | null): Promise<string> {
     persona = parsePersona(persona)
     const fs = await this.rootFs()
-    // 人设身份是 id（客户端生成，编辑器内不可改，name 可改）：改名是编辑不是冲突。
-    // 文件内的 id 是落盘时改写过的净化 id，故原始 id 与净化 id 都认作同一资产。
-    const clean = this.assetFileId(persona.id)
-    const id = await this.resolveAssetWriteId(fs, 'personas', persona.id, (existing) => existing === persona.id || existing === clean)
-    await fs.writeText(`personas/${id}.json`, JSON.stringify({ ...persona, id }, null, 2) + '\n')
-    this.bumpAssetRev(`persona:${id}`)
-    return id
+    return withWorkspaceLock(fs.root, async () => {
+      // 人设身份是 id（客户端生成，编辑器内不可改，name 可改）：改名是编辑不是冲突。
+      // 文件内的 id 是落盘时改写过的净化 id，故原始 id 与净化 id 都认作同一资产。
+      const clean = this.assetFileId(persona.id)
+      const id = await this.resolveAssetWriteId(fs, 'personas', persona.id, (existing) => existing === persona.id || existing === clean)
+      if (expectedRevision !== undefined) {
+        const raw = await fs.readText(`personas/${id}.json`)
+        const existing = raw === null ? null : parsePersona(JSON.parse(raw))
+        if ((existing === null ? null : personaEditRevision(existing)) !== expectedRevision) {
+          throw new Error('人设已被另一窗口修改或删除，请保留草稿，重新打开最新人设后再保存')
+        }
+      }
+      // 修订号属于编辑协议；即使内部调用传来列表对象也不污染持久化的人设数据。
+      const { revision: _revision, ...value } = persona as Persona & { revision?: unknown }
+      try { await fs.writeText(`personas/${id}.json`, JSON.stringify({ ...value, id }, null, 2) + '\n') }
+      finally { this.bumpAssetRev(`persona:${id}`) }
+      return id
+    })
   }
 
   async deletePersona(id: string): Promise<void> {
     const key = this.assetFileId(id)
     const fs = await this.rootFs()
-    await fs.delete(`personas/${key}.json`)
-    this.bumpAssetRev(`persona:${key}`)
+    await withWorkspaceLock(fs.root, async () => {
+      try { await fs.delete(`personas/${key}.json`) }
+      finally { this.bumpAssetRev(`persona:${key}`) }
+    })
   }
 
   // ── 全局正则 ──────────────────────────────────────────────────────────────
@@ -1003,12 +1047,28 @@ export class TavernState {
     return value
   }
 
-  async saveRegexRules(rules: RegexRule[]): Promise<void> {
+  /** 编辑读取不使用热缓存的损坏容错：不能把损坏文件伪装成空列表并授权覆盖。 */
+  async getRegexRulesSnapshot(): Promise<{ rules: RegexRule[]; revision: string }> {
+    const fs = await this.rootFs()
+    const raw = await fs.readText('regex/rules.json')
+    const rules: RegexRule[] = raw === null ? [] : JSON.parse(raw)
+    assertValidRegexRules(rules)
+    return { rules, revision: regexEditRevision(rules) }
+  }
+
+  async saveRegexRules(rules: RegexRule[], expectedRevision?: string): Promise<string> {
     // 逐条结构校验：合法 JSON 但字段缺失的规则落盘后会在渲染/组装时才抛错，必须在写盘边界挡下。
+    rules = structuredClone(rules)
     assertValidRegexRules(rules)
     const fs = await this.rootFs()
-    await fs.writeText('regex/rules.json', JSON.stringify(rules, null, 2) + '\n')
-    this.bumpAssetRev('regex:global')
+    return withWorkspaceLock(fs.root, async () => {
+      if (expectedRevision !== undefined && (await this.getRegexRulesSnapshot()).revision !== expectedRevision) {
+        throw new Error('正则规则已被另一窗口修改，请保留草稿，刷新最新规则后再保存')
+      }
+      try { await fs.writeText('regex/rules.json', JSON.stringify(rules, null, 2) + '\n') }
+      finally { this.bumpAssetRev('regex:global') }
+      return regexEditRevision(rules)
+    })
   }
 
   /** 某会话生效的全部正则（全局 + 当前角色卡内嵌 + 当前预设内嵌）。 */

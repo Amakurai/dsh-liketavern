@@ -187,6 +187,9 @@ describe('请求 schema 校验（gateway 只调用 .parse）', () => {
     const codec = requestCodec('savePersona')
     const persona = { id: 'persona-1', name: '旅人', description: '', avatar: null, lorebookId: null }
     expect(codec.create().parse({ persona })).toEqual({ persona })
+    expect(codec.create().parse({ persona, expectedRevision: null })).toEqual({ persona, expectedRevision: null })
+    expect(codec.create().parse({ persona, expectedRevision: 'abc' })).toEqual({ persona, expectedRevision: 'abc' })
+    expect(() => codec.create().parse({ persona, expectedRevision: 42 })).toThrow()
     const { lorebookId: _lorebookId, ...withoutLorebookId } = persona
     expect(codec.create().parse({ persona: withoutLorebookId })).toEqual({ persona: withoutLorebookId })
     const { avatar: _avatar, ...missingAvatar } = persona

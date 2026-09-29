@@ -23,13 +23,13 @@ import { disableInteractiveParts, splitTemplateDisplay, TEMPLATE_DISPLAY_PARTS_V
 import { expandIdentityMacros } from '../core/macros.js'
 import { DEFAULT_USER_NAME } from '../core/persona.js'
 import { cardGreetingVariants, isTavernGreetingEvent } from '../core/greetingLog.js'
-import type { MemoryEntry, PromptPreset, RegexRule } from '../core/types.js'
+import type { MemoryEntry, PromptPreset } from '../core/types.js'
 import { exportLorebook, mergeDeltasForExport, parseLorebook } from '../state/lorebook.js'
 import { parseStoredPreset, parseStPreset } from '../state/presetStore.js'
 import { rebuildIndex } from '../state/workspace.js'
 import { parseSessionBinding, type SessionBinding } from './bindings.js'
 import { parseJsonCard, parsePngCard } from '../state/card.js'
-import { characterEditRevision } from '../state/characterRevision.js'
+import { characterEditRevision, jsonEditRevision, personaEditRevision, presetEditRevision, regexEditRevision } from '../state/characterRevision.js'
 import { FloorError, continueFloor, editAssistantMessage, editUserMessage, enterGreetingConversation, getFloorAssistantMessage, getFloorSiblings, getFloorUserMessage, getGreetingSwipe, regenerate, rollbackToFloor, swipeGreeting } from './floors.js'
 import { impersonate } from './impersonate.js'
 import { loadBoundLoreEntries, runTavernPipeline } from './pipeline.js'
@@ -49,7 +49,7 @@ import {prepareHelperMvuJob,commitHelperMvuJob} from './helperMvu.js'
 import {runHelperMvuEnable} from './helperMvuLifecycle.js'
 import {abandonHelperMvu} from './helperMvuAbandon.js'
 import {getHelperEventState} from './helperEventState.js'
-import type { Persona, TavernState } from './state.js'
+import type { TavernState } from './state.js'
 import type { TavernMethodResults,TavernMethodRequests } from '../remote.js'
 import { deleteEditorDraft, getEditorDraft, saveEditorDraft } from './editorDrafts.js'
 import { getPluginAbout, checkPluginUpdate } from './pluginAbout.js'
@@ -177,7 +177,7 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
       characterVersion: card.characterVersion,
       tags: card.tags,
       spec: card.spec,
-      hasCharacterBook: card.characterBook !== null && card.characterBook.entries.length > 0,
+      hasCharacterBook: card.characterBook !== null,
       characterBookName: card.characterBook?.name ?? null,
       characterBookEntryCount: card.characterBook?.entries.length ?? 0,
       hasAvatar: await handle.fs.exists('card.png'),
@@ -256,7 +256,7 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
     return { id, warnings }
   }
 
-  async savePreset(request: { preset: unknown }): Promise<TavernMethodResults['savePreset']> {
+  async savePreset(request: TavernMethodRequests['savePreset']): Promise<TavernMethodResults['savePreset']> {
     let preset: PromptPreset
     try {
       preset = parseStoredPreset(request.preset)
@@ -264,8 +264,7 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
       throw new FloorError('invalid-preset', error instanceof Error ? error.message : String(error))
     }
     // 回显用落盘后的实际 id（理由同 importPreset）。
-    const id = await this.state.savePreset(preset,{preserveHelperSettings:true})
-    return { id }
+    return this.state.savePresetSnapshot(preset, { preserveHelperSettings: true, expectedRevision: request.expectedRevision ?? null })
   }
 
   async deletePreset(request: { id: string }): Promise<TavernMethodResults['deletePreset']> {
@@ -276,7 +275,7 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
   async getPreset(request: { id: string }): Promise<TavernMethodResults['getPreset']> {
     const preset = await this.state.loadPreset(request.id)
     if (!preset) throw new FloorError('preset-not-found', `预设 ${request.id} 不存在`)
-    return { preset }
+    return { preset, revision: presetEditRevision(preset) }
   }
 
   // ── 世界书库 ──────────────────────────────────────────────────────────────
@@ -288,7 +287,7 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
   async getLorebook(request: { name: string }): Promise<TavernMethodResults['getLorebook']> {
     const json = await this.state.loadLorebookJson(request.name)
     if (json === null) throw new FloorError('lorebook-not-found', `世界书 ${request.name} 不存在`)
-    return { json }
+    return { json, revision: jsonEditRevision(json) }
   }
 
   async importLorebook(request: { name: string; json: unknown }): Promise<TavernMethodResults['importLorebook']> {
@@ -298,11 +297,10 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
     return { name: id, entryCount: entries.length }
   }
 
-  async saveLorebook(request: { name: string; json: unknown }): Promise<TavernMethodResults['saveLorebook']> {
+  async saveLorebook(request: TavernMethodRequests['saveLorebook']): Promise<TavernMethodResults['saveLorebook']> {
     parseLorebook(request.json, { source: 'global', sourceRef: request.name })
     // 回显名以落盘后的实际 id 为准（同 importLorebook）。
-    const id = await this.state.saveLorebook(request.name, request.json)
-    return { name: id }
+    return this.state.saveLorebookSnapshot(request.name, request.json, request.expectedRevision ?? null)
   }
 
   async deleteLorebook(request: { name: string }): Promise<TavernMethodResults['deleteLorebook']> {
@@ -313,12 +311,12 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
   async getCharacterLorebook(request: { cardId: string }): Promise<TavernMethodResults['getCharacterLorebook']> {
     const book = await this.state.loadCharacterLorebookRaw(request.cardId)
     if (!book) throw new FloorError('lorebook-not-found', `角色 ${request.cardId} 没有内嵌世界书`)
-    return book
+    return { ...book, revision: jsonEditRevision(book.json) }
   }
 
-  async saveCharacterLorebook(request: { cardId: string; json: unknown }): Promise<TavernMethodResults['saveCharacterLorebook']> {
+  async saveCharacterLorebook(request: TavernMethodRequests['saveCharacterLorebook']): Promise<TavernMethodResults['saveCharacterLorebook']> {
     parseLorebook(request.json, { source: 'character', sourceRef: request.cardId })
-    return this.state.saveCharacterLorebook(request.cardId, request.json)
+    return this.state.saveCharacterLorebook(request.cardId, request.json, request.expectedRevision ?? null)
   }
 
   async deleteEmbeddedLorebook(request: { cardId: string }): Promise<TavernMethodResults['deleteEmbeddedLorebook']> {
@@ -331,15 +329,15 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
       throw new FloorError('card-not-found', `角色 ${request.cardId} 不存在`)
     }
     const json = await this.state.getChatLorebook(request.cardId, request.storyId)
-    return { json }
+    return { json, revision: jsonEditRevision(json) }
   }
 
-  async saveChatLorebook(request: { cardId: string; storyId?: string; json: unknown }): Promise<TavernMethodResults['saveChatLorebook']> {
+  async saveChatLorebook(request: TavernMethodRequests['saveChatLorebook']): Promise<TavernMethodResults['saveChatLorebook']> {
     if ((await this.state.loadCharacter(request.cardId)) === null) {
       throw new FloorError('card-not-found', `角色 ${request.cardId} 不存在`)
     }
-    await this.state.saveChatLorebook(request.cardId, request.json, request.storyId)
-    return { saved: true }
+    const revision = await this.state.saveChatLorebook(request.cardId, request.json, request.storyId, request.expectedRevision ?? jsonEditRevision({ entries: {} }))
+    return { saved: true, revision }
   }
 
   async getJournal(request: { cardId: string; storyId?: string }): Promise<TavernMethodResults['getJournal']> {
@@ -360,21 +358,26 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
   // ── 人设 ─────────────────────────────────────────────────────────────────
 
   async listPersonas(_request: Record<string, never>): Promise<TavernMethodResults['listPersonas']> {
-    return { items: await this.state.listPersonas() }
+    return { items: (await this.state.listPersonas()).map(persona => ({ ...persona, revision: personaEditRevision(persona) })) }
   }
 
-  async savePersona(request: { persona: Persona }): Promise<TavernMethodResults['savePersona']> {
+  async savePersona(request: TavernMethodRequests['savePersona']): Promise<TavernMethodResults['savePersona']> {
     if (!request.persona?.id) throw new FloorError('invalid-persona', '人设缺少 id')
     // 回显与默认页都用落盘后的实际 id：id 被净化过时磁盘 JSON 里的 id 也一并改写，
     // 若继续用原始 id，默认页指向的净化文件与这里回显的 id 会各说各话。
-    const id = await this.state.savePersona(request.persona)
-    const settings = this.settingsScope.get()
-    if (!settings.defaults?.personaId) {
-      await this.settingsScope.update({
-        defaults: { ...settings.defaults, personaId: id },
-      })
+    // 未携带版本的旧客户端只允许新建，不能无条件覆盖已有资产。
+    const id = await this.state.savePersona(request.persona, request.expectedRevision ?? null)
+    let defaultWarning: string | undefined
+    // 人设已经写入成功；默认设置是另一项写入，失败应单独回报，不能让客户端误以为资产没保存。
+    try {
+      const settings = this.settingsScope.get()
+      if (!settings.defaults?.personaId) {
+        await this.settingsScope.update({ defaults: { ...settings.defaults, personaId: id } })
+      }
+    } catch (cause) {
+      defaultWarning = cause instanceof Error ? cause.message : String(cause)
     }
-    return { id }
+    return { id, revision: personaEditRevision({ ...request.persona, id }), ...(defaultWarning ? { defaultWarning } : {}) }
   }
 
   async deletePersona(request: { id: string }): Promise<TavernMethodResults['deletePersona']> {
@@ -391,13 +394,12 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
   // ── 正则 ─────────────────────────────────────────────────────────────────
 
   async listRegexRules(_request: Record<string, never>): Promise<TavernMethodResults['listRegexRules']> {
-    return { rules: await this.state.listRegexRules() }
+    return this.state.getRegexRulesSnapshot()
   }
 
-  async saveRegexRules(request: { rules: RegexRule[] }): Promise<TavernMethodResults['saveRegexRules']> {
-    const rules = Array.isArray(request.rules) ? request.rules : []
-    await this.state.saveRegexRules(rules)
-    return { count: rules.length }
+  async saveRegexRules(request: TavernMethodRequests['saveRegexRules']): Promise<TavernMethodResults['saveRegexRules']> {
+    const revision = await this.state.saveRegexRules(request.rules, request.expectedRevision ?? regexEditRevision([]))
+    return { count: request.rules.length, revision }
   }
 
   // ── 会话绑定 ──────────────────────────────────────────────────────────────

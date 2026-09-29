@@ -140,6 +140,46 @@ describe('预设删除使用磁盘身份', () => {
   })
 })
 
+/** 手动双窗口复现的真实 React + 文件存储回归；刷新列表不为冲突草稿换发版本。 */
+it('预设旧窗口保存失败保留草稿和版本，不能覆盖另一窗口的新正文', async () => {
+  const f = await fixture()
+  const id = await f.state.savePreset({ identifier: 'two-windows', name: '初始名称', entries: [] })
+  const view = await render(<PresetsSection remote={f.remote} />)
+  await settle(() => {}, () => completed(f.remote.listPresets))
+  await settle(() => view.root.findByProps({ className: 'dsh-tavern-tile' }).props.onClick(), () => completed(f.remote.getPreset))
+  const old = await f.service.getPreset({ id })
+  await f.service.savePreset({ preset: { ...old.preset, name: 'B 已保存' }, expectedRevision: old.revision })
+  await act(async () => view.root.findByType('input').props.onChange({ target: { value: 'A 未保存' } }))
+  await settle(() => view.root.findAllByType(Btn).find(item => item.props.children === '保存预设')!.props.onClick(), () => JSON.stringify(view.toJSON()).includes('另一窗口'))
+  expect(JSON.stringify(view.toJSON())).toContain('另一窗口')
+  expect(view.root.findByType('input').props.value).toBe('A 未保存')
+  await click(view, '刷新')
+  await settle(() => view.root.findAllByType(Btn).find(item => item.props.children === '保存预设')!.props.onClick(), () => vi.mocked(f.remote.savePreset).mock.settledResults.filter(r => r.type === 'rejected').length === 2)
+  expect(f.remote.savePreset).toHaveBeenLastCalledWith(expect.objectContaining({ expectedRevision: old.revision }))
+  expect((await f.state.loadPreset(id))?.name).toBe('B 已保存')
+})
+
+it('世界书冲突保留本地条目，重复保存仍拒绝覆盖已落盘的新正文', async () => {
+  const f = await fixture(), name = '双窗口世界书'
+  await f.service.importLorebook({ name, json: { entries: { one: { uid: 'one', comment: '初始标题', content: '初始正文' } } } })
+  f.remote.listLorebooks = vi.fn(async () => ok(await f.service.listLorebooks({})))
+  f.remote.getLorebook = vi.fn(async request => ok(await f.service.getLorebook(request)))
+  f.remote.saveLorebook = vi.fn(async request => ok(await f.service.saveLorebook(request)))
+  const view = await render(<LorebooksSection remote={f.remote} />)
+  await settle(() => {}, () => completed(f.remote.listLorebooks))
+  await settle(() => view.root.findByProps({ className: 'dsh-tavern-tile' }).props.onClick(), () => completed(f.remote.getLorebook))
+  const old = await f.service.getLorebook({ name })
+  await f.service.saveLorebook({ name, json: { entries: { one: { uid: 'one', content: 'B 新正文' } } }, expectedRevision: old.revision })
+  const input = view.root.findAllByType('input').find(item => item.props.placeholder === t('lorebookEditor.form.commentPlaceholder'))!
+  await act(async () => input.props.onChange({ target: { value: 'A 未保存标题' } }))
+  await settle(() => view.root.findAllByType(Btn).find(item => item.props.children === '保存')!.props.onClick(), () => JSON.stringify(view.toJSON()).includes('另一窗口'))
+  expect(JSON.stringify(view.toJSON())).toContain('另一窗口')
+  expect(input.props.value).toBe('A 未保存标题')
+  await settle(() => view.root.findAllByType(Btn).find(item => item.props.children === '保存')!.props.onClick(), () => vi.mocked(f.remote.saveLorebook).mock.settledResults.filter(r => r.type === 'rejected').length === 2)
+  expect(f.remote.saveLorebook).toHaveBeenLastCalledWith(expect.objectContaining({ expectedRevision: old.revision }))
+  expect((await f.state.loadLorebookEntries(name, 'global'))[0]?.content).toBe('B 新正文')
+})
+
 /** 真实文件系统与服务边界：失败不创建资产，保留名称的重试只创建并打开目标世界书。 */
 it('世界书新建失败后原地重试，实际目录只新增一次目标文件', async () => {
   const f = await fixture()

@@ -210,6 +210,7 @@ export declare const METHODS: {
     savePreset: {
         req: import("zod/mini").ZodMiniObject<{
             preset: import("zod/mini").ZodMiniUnknown;
+            expectedRevision: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNullable<import("zod/mini").ZodMiniString<string>>>;
         }, import("zod/v4/core").$strip>;
         value: import("zod/mini").ZodMiniUnknown;
         summary: string;
@@ -252,6 +253,7 @@ export declare const METHODS: {
         req: import("zod/mini").ZodMiniObject<{
             name: import("zod/mini").ZodMiniString<string>;
             json: import("zod/mini").ZodMiniUnknown;
+            expectedRevision: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNullable<import("zod/mini").ZodMiniString<string>>>;
         }, import("zod/v4/core").$strip>;
         value: import("zod/mini").ZodMiniUnknown;
         summary: string;
@@ -273,6 +275,7 @@ export declare const METHODS: {
     saveCharacterLorebook: {
         req: import("zod/mini").ZodMiniObject<{
             json: import("zod/mini").ZodMiniUnknown;
+            expectedRevision: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNullable<import("zod/mini").ZodMiniString<string>>>;
             cardId: import("zod/mini").ZodMiniString<string>;
         }, import("zod/v4/core").$strip>;
         value: import("zod/mini").ZodMiniUnknown;
@@ -296,6 +299,7 @@ export declare const METHODS: {
     saveChatLorebook: {
         req: import("zod/mini").ZodMiniObject<{
             json: import("zod/mini").ZodMiniUnknown;
+            expectedRevision: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
             storyId: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
             cardId: import("zod/mini").ZodMiniString<string>;
         }, import("zod/v4/core").$strip>;
@@ -333,6 +337,7 @@ export declare const METHODS: {
                 avatar: import("zod/mini").ZodMiniNullable<import("zod/mini").ZodMiniString<string>>;
                 lorebookId: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNullable<import("zod/mini").ZodMiniString<string>>>;
             }, import("zod/v4/core").$strip>;
+            expectedRevision: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNullable<import("zod/mini").ZodMiniString<string>>>;
         }, import("zod/v4/core").$strip>;
         value: import("zod/mini").ZodMiniUnknown;
         summary: string;
@@ -383,6 +388,7 @@ export declare const METHODS: {
                 trimStrings: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniArray<import("zod/mini").ZodMiniString<string>>>;
                 trimStringsRegex: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniArray<import("zod/mini").ZodMiniString<string>>>;
             }, import("zod/v4/core").$strip>>;
+            expectedRevision: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
         }, import("zod/v4/core").$strip>;
         value: import("zod/mini").ZodMiniUnknown;
         summary: string;
@@ -1039,18 +1045,21 @@ export interface TavernMethodResults {
     };
     savePreset: {
         id: string;
+        revision: string;
     };
     deletePreset: {
         deleted: boolean;
     };
     getPreset: {
         preset: PromptPreset;
+        revision: string;
     };
     listLorebooks: {
         items: string[];
     };
     getLorebook: {
         json: unknown;
+        revision: string;
     };
     importLorebook: {
         name: string;
@@ -1058,6 +1067,7 @@ export interface TavernMethodResults {
     };
     saveLorebook: {
         name: string;
+        revision: string;
     };
     deleteLorebook: {
         deleted: boolean;
@@ -1066,19 +1076,23 @@ export interface TavernMethodResults {
         name: string;
         json: unknown;
         entryCount: number;
+        revision: string;
     };
     saveCharacterLorebook: {
         name: string;
         entryCount: number;
+        revision: string;
     };
     deleteEmbeddedLorebook: {
         deleted: boolean;
     };
     getChatLorebook: {
         json: unknown;
+        revision: string;
     };
     saveChatLorebook: {
         saved: boolean;
+        revision: string;
     };
     getJournal: {
         text: string;
@@ -1087,19 +1101,25 @@ export interface TavernMethodResults {
         saved: boolean;
     };
     listPersonas: {
-        items: Persona[];
+        items: Array<Persona & {
+            revision: string;
+        }>;
     };
     savePersona: {
         id: string;
+        revision: string;
+        defaultWarning?: string;
     };
     deletePersona: {
         deleted: boolean;
     };
     listRegexRules: {
         rules: RegexRule[];
+        revision: string;
     };
     saveRegexRules: {
         count: number;
+        revision: string;
     };
     getSessionBinding: {
         binding: SessionBinding | null;
@@ -1307,6 +1327,7 @@ export declare const TYPERT_HOST: {
                     json: import("zod/mini").ZodMiniUnknown;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     preset: import("zod/mini").ZodMiniUnknown;
+                    expectedRevision: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNullable<import("zod/mini").ZodMiniString<string>>>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     id: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
@@ -1319,12 +1340,14 @@ export declare const TYPERT_HOST: {
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     name: import("zod/mini").ZodMiniString<string>;
                     json: import("zod/mini").ZodMiniUnknown;
+                    expectedRevision: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNullable<import("zod/mini").ZodMiniString<string>>>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     name: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     cardId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     json: import("zod/mini").ZodMiniUnknown;
+                    expectedRevision: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNullable<import("zod/mini").ZodMiniString<string>>>;
                     cardId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     cardId: import("zod/mini").ZodMiniString<string>;
@@ -1333,6 +1356,7 @@ export declare const TYPERT_HOST: {
                     cardId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     json: import("zod/mini").ZodMiniUnknown;
+                    expectedRevision: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
                     storyId: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
                     cardId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
@@ -1350,6 +1374,7 @@ export declare const TYPERT_HOST: {
                         avatar: import("zod/mini").ZodMiniNullable<import("zod/mini").ZodMiniString<string>>;
                         lorebookId: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNullable<import("zod/mini").ZodMiniString<string>>>;
                     }, import("zod/v4/core").$strip>;
+                    expectedRevision: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNullable<import("zod/mini").ZodMiniString<string>>>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     id: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{}, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
@@ -1385,6 +1410,7 @@ export declare const TYPERT_HOST: {
                         trimStrings: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniArray<import("zod/mini").ZodMiniString<string>>>;
                         trimStringsRegex: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniArray<import("zod/mini").ZodMiniString<string>>>;
                     }, import("zod/v4/core").$strip>>;
+                    expectedRevision: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     sessionId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
@@ -1743,6 +1769,7 @@ export declare const TYPERT_REMOTE: {
                     json: import("zod/mini").ZodMiniUnknown;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     preset: import("zod/mini").ZodMiniUnknown;
+                    expectedRevision: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNullable<import("zod/mini").ZodMiniString<string>>>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     id: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
@@ -1755,12 +1782,14 @@ export declare const TYPERT_REMOTE: {
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     name: import("zod/mini").ZodMiniString<string>;
                     json: import("zod/mini").ZodMiniUnknown;
+                    expectedRevision: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNullable<import("zod/mini").ZodMiniString<string>>>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     name: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     cardId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     json: import("zod/mini").ZodMiniUnknown;
+                    expectedRevision: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNullable<import("zod/mini").ZodMiniString<string>>>;
                     cardId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     cardId: import("zod/mini").ZodMiniString<string>;
@@ -1769,6 +1798,7 @@ export declare const TYPERT_REMOTE: {
                     cardId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     json: import("zod/mini").ZodMiniUnknown;
+                    expectedRevision: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
                     storyId: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
                     cardId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
@@ -1786,6 +1816,7 @@ export declare const TYPERT_REMOTE: {
                         avatar: import("zod/mini").ZodMiniNullable<import("zod/mini").ZodMiniString<string>>;
                         lorebookId: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNullable<import("zod/mini").ZodMiniString<string>>>;
                     }, import("zod/v4/core").$strip>;
+                    expectedRevision: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNullable<import("zod/mini").ZodMiniString<string>>>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     id: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{}, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
@@ -1821,6 +1852,7 @@ export declare const TYPERT_REMOTE: {
                         trimStrings: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniArray<import("zod/mini").ZodMiniString<string>>>;
                         trimStringsRegex: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniArray<import("zod/mini").ZodMiniString<string>>>;
                     }, import("zod/v4/core").$strip>>;
+                    expectedRevision: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     sessionId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{

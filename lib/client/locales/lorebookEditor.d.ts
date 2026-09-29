@@ -1,5 +1,6 @@
 /** 世界书条目编辑器（panel/lorebookEditor.tsx）界面文案。zh 为键全集源；en 必须同键齐全。 */
 export declare const zh: {
+    readonly 'lorebookEditor.missingRevision': "草稿缺少保存版本。请先复制未保存内容，再返回列表重新打开世界书。";
     readonly 'lorebookEditor.kind.character': "角色卡内嵌";
     readonly 'lorebookEditor.kind.chat': "本会话世界书";
     readonly 'lorebookEditor.kind.library': "世界书库";

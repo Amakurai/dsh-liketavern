@@ -1,5 +1,6 @@
 /** 提示词预设面板（panel/presets.tsx）界面文案。zh 为键全集源；en 必须同键齐全（test/i18n.test.ts 校验）。 */
 export declare const zh: {
+    readonly 'presets.missingRevision': "草稿缺少保存版本。请先复制未保存内容，再关闭并重新打开预设。";
     readonly 'presets.section.desc': "导入 SillyTavern 预设 JSON（含采样参数和 extensions.regex_scripts）。新会话默认在「设置」页或卡脚「设为默认」；当前对话用角色芯片切换。旧版已导入的预设需重新导入才会带上采样参数。";
     readonly 'presets.importFile': "导入 SillyTavern 预设 JSON";
     readonly 'presets.new': "新建预设";

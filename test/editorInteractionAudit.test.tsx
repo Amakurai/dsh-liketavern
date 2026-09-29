@@ -10,7 +10,7 @@ import { setTavernLocale } from '../src/client/i18n.js'
 import { LorebooksSection } from '../src/client/panel/lorebooks.js'
 import { LorebookEditor } from '../src/client/panel/lorebookEditor.js'
 import { RegexSection } from '../src/client/panel/regex.js'
-import { Btn, ConfirmDialog, Dialog, SearchInput } from '../src/client/util.js'
+import { Btn, ConfirmDialog, Dialog, RegexScriptRow, SearchInput } from '../src/client/util.js'
 import type { Envelope, TavernRemote } from '../src/client/types.js'
 import type { RegexRule } from '../src/core/types.js'
 
@@ -128,18 +128,18 @@ describe('世界书打开请求', () => {
         await gate.promise
         const json: unknown = JSON.parse(await readFile(libraryPath, 'utf8'))
         libraryReady.resolve()
-        return ok({ json })
+        return ok({ json, revision: 'library' })
       }
       f.remote.getCharacterLorebook = async () => {
         const json: unknown = JSON.parse(await readFile(embeddedPath, 'utf8'))
         embeddedReady.resolve()
-        return ok({ name: '灯塔', entryCount: 0, json })
+        return ok({ name: '灯塔', entryCount: 0, json, revision: 'embedded' })
       }
       f.remote.saveCharacterLorebook = vi.fn(async ({ cardId, json }) => {
         expect(cardId).toBe('lighthouse')
         await writeFile(embeddedPath, JSON.stringify(json), 'utf8')
         savedReady.resolve()
-        return ok({ name: '灯塔', entryCount: 1 })
+        return ok({ name: '灯塔', entryCount: 1, revision: 'saved' })
       })
       const view = await render(<LorebooksSection remote={f.remote} />)
       await open(view, '港口')
@@ -217,19 +217,53 @@ function RegexHarness(props: { remote: TavernRemote }) {
 }
 function regexFixture() {
   let rules = [rule('初始规则')]
-  const listRegexRules = vi.fn(async () => ok({ rules: structuredClone(rules) }))
+  let revision = 0
+  const listRegexRules = vi.fn(async () => ok({ rules: structuredClone(rules), revision: String(revision) }))
   const saveRegexRules = vi.fn(async (request: { rules: RegexRule[] }) => {
     rules = structuredClone(request.rules)
-    return ok({ count: rules.length })
+    return ok({ count: rules.length, revision: String(++revision) })
   })
   const remote = { listRegexRules, saveRegexRules, listPresets: async () => ok({ items: [] }) } as unknown as TavernRemote
-  return { remote, listRegexRules, saveRegexRules, setServer: (next: RegexRule[]) => { rules = next } }
+  return { remote, listRegexRules, saveRegexRules, setServer: (next: RegexRule[]) => { rules = next; revision++ } }
 }
 async function renameRule(view: ReactTestRenderer, name: string) {
   await act(async () => view.root.findAllByType('input')[0]!.props.onChange({ target: { value: name } }))
 }
 
 describe('正则刷新与保存', () => {
+  it('预设正则开关携带读取版本，冲突时恢复开关并保留错误，版本字段不混进预设正文', async () => {
+    const f = regexFixture()
+    f.remote.listPresets = async () => ok({ items: [{ id: 'preset', name: '带正则预设', regexCount: 1 }] })
+    f.remote.getPreset = async () => ok({ preset: { identifier: 'preset', name: '带正则预设', entries: [], regexScripts: [{ id: 'rule', disabled: false }] }, revision: 'old-preset' })
+    f.remote.savePreset = vi.fn(async () => fail('预设已被另一窗口修改'))
+    const view = await render(<RegexHarness remote={f.remote} />)
+    await act(async () => view.root.findByType(RegexScriptRow).props.onToggle(true))
+    expect(f.remote.savePreset).toHaveBeenCalledWith({ preset: { identifier: 'preset', name: '带正则预设', entries: [], regexScripts: [{ id: 'rule', disabled: true }] }, expectedRevision: 'old-preset' })
+    expect(view.root.findByType(RegexScriptRow).props.script.disabled).toBe(false)
+    expect(JSON.stringify(view.toJSON())).toContain('另一窗口')
+  })
+  it('保存带上读取版本，冲突后保留全部编辑内容和原版本', async () => {
+    const f = regexFixture(), view = await render(<RegexHarness remote={f.remote} />)
+    f.saveRegexRules.mockResolvedValue(fail('正则规则已被另一窗口修改'))
+    await renameRule(view, '待保留规则')
+    await click(view, '保存全部')
+    expect(f.saveRegexRules).toHaveBeenLastCalledWith({ rules: [rule('待保留规则')], expectedRevision: '0' })
+    expect(view.root.findAllByType('input')[0]!.props.value).toBe('待保留规则')
+    expect(JSON.stringify(view.toJSON())).toContain('另一窗口')
+    await click(view, '保存全部')
+    expect(f.saveRegexRules).toHaveBeenLastCalledWith({ rules: [rule('待保留规则')], expectedRevision: '0' })
+  })
+
+  it('缺少服务端版本时不提交无条件覆盖', async () => {
+    const f = regexFixture()
+    f.listRegexRules.mockResolvedValue(ok({ rules: [rule('旧版规则')] }) as Awaited<ReturnType<typeof f.listRegexRules>>)
+    const view = await render(<RegexHarness remote={f.remote} />)
+    await renameRule(view, '保留草稿')
+    await click(view, '保存全部')
+    expect(f.saveRegexRules).not.toHaveBeenCalled()
+    expect(view.root.findAllByType('input')[0]!.props.value).toBe('保留草稿')
+    expect(JSON.stringify(view.toJSON())).toContain('缺少版本')
+  })
   it('保存后从服务器刷新新版本，刷新结果应是干净基线', async () => {
     const f = regexFixture(), view = await render(<RegexHarness remote={f.remote} />)
     await renameRule(view, '已保存规则')
@@ -244,15 +278,17 @@ describe('正则刷新与保存', () => {
 
   it('保存尚未完成时不能刷新旧服务器内容；允许的新输入仍作为草稿保留', async () => {
     const f = regexFixture(), view = await render(<RegexHarness remote={f.remote} />)
-    const pending = deferred<Envelope<{ count: number }>>()
+    const pending = deferred<Envelope<{ count: number; revision: string }>>()
     f.saveRegexRules.mockImplementationOnce(() => pending.promise)
     await renameRule(view, '本次提交')
     await click(view, '保存全部')
+    await click(view, '保存全部')
+    expect(f.saveRegexRules).toHaveBeenCalledTimes(1)
     expect(button(view, '放弃更改并刷新').props.disabled).toBe(true)
     await click(view, '放弃更改并刷新')
     expect(f.listRegexRules).toHaveBeenCalledTimes(1)
     await renameRule(view, '保存期间继续编辑')
-    await act(async () => pending.resolve(ok({ count: 1 })))
+    await act(async () => pending.resolve(ok({ count: 1, revision: 'saved' })))
     expect(view.root.findAllByType('input')[0]!.props.value).toBe('保存期间继续编辑')
     await click(view, '离开正则页')
     expect(view.root.findAllByType(ConfirmDialog).some((dialog) => dialog.props.open)).toBe(true)

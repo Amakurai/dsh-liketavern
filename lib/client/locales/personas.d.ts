@@ -13,6 +13,8 @@ export declare const zh: {
     readonly 'personas.deleteTitle': "删除人设？";
     readonly 'personas.deleteDesc': "确定删除人设「{name}」？";
     readonly 'personas.nameRequired': "人设名称不能为空";
+    readonly 'personas.missingRevision': "草稿缺少版本信息，请复制未保存内容，重新打开最新人设后再保存。";
+    readonly 'personas.defaultFailed': "人设已保存，但自动设为默认失败。可在列表中重试“设为默认”：{message}";
     readonly 'personas.saved': "已保存人设 {name}";
     readonly 'personas.defaultSet': "已设为新会话默认人设（当前打开的对话请用角色芯片切换）";
     readonly 'personas.field.name': "名称";

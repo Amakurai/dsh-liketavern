@@ -5,7 +5,7 @@
 import { exportStPreset } from '../../core/presetExport.js'
 import { useDraftGuard } from '../drafts.js'
 import { useDraftState } from '../draftPersistence.js'
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { IconDownloadOutlineMedium, IconEditOutlineMedium, IconFolderOpenOutlineMedium, IconListPenOutlineMedium, IconTrashOutlineMedium } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { CardRegexScript, ChatRole, PresetEntry, PromptPreset } from '../../core/types.js'
 import { EMPTY_SESSION_DEFAULTS, type PresetSummary, type TavernRemote } from '../types.js'
@@ -133,6 +133,8 @@ export function PresetsSection(props: { remote: TavernRemote }) {
   const [editing, setEditing] = useDraftState<PromptPreset | null>('presets:editing', null)
   // identifier 保留导入原值，磁盘 id 可能经过净化或带冲突后缀；草稿同时保存实际资产身份。
   const [editingId, setEditingId] = useDraftState<string | null>('presets:editingId', null)
+  const [revision, setRevision] = useDraftState<string | null>('presets:revision', null)
+  const saving = useRef(false)
   const [toDelete, setToDelete] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const toast = useToast()
@@ -146,29 +148,33 @@ export function PresetsSection(props: { remote: TavernRemote }) {
   const closeEditor = () => {
     setEditing(null)
     setEditingId(null)
+    setRevision(null)
     setBaseline(null)
   }
 
   const open = async (id: string) => {
     await runAsync(setBusy, setError, async () => {
       const r = await remote.getPreset({ id })
-      if (r.ok) { setEditing(structuredClone(r.value.preset)); setEditingId(id); setBaseline(JSON.stringify(r.value.preset)) }
+      if (r.ok) { setEditing(structuredClone(r.value.preset)); setEditingId(id); setRevision(r.value.revision ?? null); setBaseline(JSON.stringify(r.value.preset)) }
       else setError(r.error.message)
     })
   }
 
   const save = async () => {
-    if (!editing) return
-    await runAsync(setBusy, setError, async () => {
-      const r = await remote.savePreset({ preset: editing })
+    if (!editing || saving.current) return
+    if (baseline !== 'null' && !revision) { setError(t('presets.missingRevision')); return }
+    saving.current = true
+    try { await runAsync(setBusy, setError, async () => {
+      const r = await remote.savePreset({ preset: editing, expectedRevision: baseline === 'null' ? null : revision })
       if (!r.ok) setError(r.error.message)
       else {
         setEditingId(r.value.id)
+        setRevision(r.value.revision ?? null)
         setBaseline(JSON.stringify(editing))
         toast.show(t('presets.saved', { name: editing.name }))
         reload()
       }
-    })
+    }) } finally { saving.current = false }
   }
 
   const remove = async () => {
@@ -239,7 +245,8 @@ export function PresetsSection(props: { remote: TavernRemote }) {
     const id = `preset-${Date.now().toString(36)}`
     setEditing({ name: t('presets.newPresetName'), identifier: id, entries: [newEntry(100)] })
     setEditingId(null)
-    setBaseline(null)
+    setRevision(null)
+    setBaseline('null')
   }
 
   const setEntry = (index: number, entry: PresetEntry) => {

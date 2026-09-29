@@ -138,9 +138,10 @@ type LorebookEditorProps = {
   remote?: TavernRemote
   target: LorebookTarget
   entries: WorldInfoEntry[]
+  revision?: string
   onClose: () => void
   onSaved: () => void
-  save: (json: unknown) => Promise<Envelope<unknown>>
+  save: (json: unknown, expectedRevision?: string) => Promise<Envelope<unknown>>
 }
 
 /** 共享库按名字、内嵌书按角色、聊天书按角色和剧情隔离；无剧情的旧入口不跨挂载恢复。 */
@@ -164,6 +165,9 @@ function LorebookEditorContent(props: LorebookEditorProps & { draftKey: string }
   const { source, sourceRef } = sourceOf(target)
   const [entries, setEntries] = useDraftState<WorldInfoEntry[]>(`${draftKey}.entries`, () => props.entries.map((e) => ({ ...e })))
   const [dirty, setDirty] = useDraftState(`${draftKey}.dirty`, false)
+  // 恢复旧草稿时若缺版本，不能借刚拉到的新版本为旧正文授予覆盖许可。
+  const [revision, setRevision] = useDraftState<string | null>(`${draftKey}.revision`, () => dirty ? null : props.revision ?? null)
+  const saving = useRef(false)
   const [query, setQuery] = useDraftState(`${draftKey}.query`, '')
   const [filter, setFilter] = useDraftState<FilterId>(`${draftKey}.filter`, 'all')
   const [page, setPage] = useDraftState(`${draftKey}.page`, 0)
@@ -208,18 +212,25 @@ function LorebookEditorContent(props: LorebookEditorProps & { draftKey: string }
   // 编辑器里这一批未写回的条目全部作废。
   const entriesRef = useRef(entries)
   entriesRef.current = entries
-  const save = () =>
-    runAsync(setBusy, setError, async () => {
+  const save = async () => {
+    if (saving.current) return
+    if (props.remote && !revision) { setError(t('lorebookEditor.missingRevision')); return }
+    saving.current = true
+    try { await runAsync(setBusy, setError, async () => {
       // 闭包捕获点击保存那一刻的渲染值；飞行期间的新编辑经 ref 在回包后复核。
       const saved = entries
       const json =
         target.kind === 'character'
           ? { name: target.name, ...(exportLorebook(saved, target.name) as object) }
           : exportLorebook(saved, target.name)
-      const r = await props.save(json)
+      const r = await props.save(json, revision ?? undefined)
       const err = errOf(r)
       if (err) setError(err)
       else {
+        if (r.ok) {
+          const value = r.value
+          setRevision(value && typeof value === 'object' && 'revision' in value && typeof value.revision === 'string' ? value.revision : null)
+        }
         savedEntries.current = saved
         // 保存飞行期间继续键入的内容没有落盘：只有当前值仍等于已保存快照才清 dirty，
         // 否则「未保存」徽标消失 + 草稿被删会把这批编辑静默蒸发。
@@ -231,7 +242,8 @@ function LorebookEditorContent(props: LorebookEditorProps & { draftKey: string }
           props.onSaved()
         }
       }
-    })
+    }) } finally { saving.current = false }
+  }
 
   const addEntry = () => {
     const created = newEntry(source, sourceRef)

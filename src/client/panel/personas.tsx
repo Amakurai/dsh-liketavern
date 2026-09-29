@@ -11,6 +11,9 @@ import type { Persona, TavernRemote } from '../types.js'
 import { EMPTY_SESSION_DEFAULTS } from '../types.js'
 import { Badge, Btn, ConfirmDialog, Err, Field, IconBtn, SaveBar, SearchEmpty, SearchInput, Section, Select, Skeleton, clickableProps, errOf, runAsync, useLoader, useToast } from '../util.js'
 
+/** 编辑器保留读取时的版本；旧版恢复草稿缺少版本时必须重新打开，不能借刷新结果授权覆盖。 */
+type PersonaDraft = Persona & { revision?: string }
+
 export function PersonasSection(props: { remote: TavernRemote }) {
   const { remote } = props
   const t = useT()
@@ -19,7 +22,7 @@ export function PersonasSection(props: { remote: TavernRemote }) {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [baseline, setBaseline] = useDraftState<string | null>('personas:baseline', null)
-  const [editing, setEditing] = useDraftState<Persona | null>('personas:editing', null)
+  const [editing, setEditing] = useDraftState<PersonaDraft | null>('personas:editing', null)
   const [toDelete, setToDelete] = useState<Persona | null>(null)
   const [query, setQuery] = useState('')
   const toast = useToast()
@@ -32,16 +35,23 @@ export function PersonasSection(props: { remote: TavernRemote }) {
 
   const save = async () => {
     if (!editing) return
+    if (baseline === null || (baseline !== 'null' && !editing.revision)) {
+      setError(t('personas.missingRevision'))
+      return
+    }
     if (!editing.name.trim()) {
       setError(t('personas.nameRequired'))
       return
     }
     await runAsync(setBusy, setError, async () => {
-      const r = await remote.savePersona({ persona: editing })
+      const r = await remote.savePersona({ persona: editing, expectedRevision: baseline === 'null' ? null : editing.revision! })
       const err = errOf(r)
       if (err) setError(err)
-      else {
-        setBaseline(JSON.stringify(editing))
+      else if (r.ok) {
+        const saved = { ...editing, id: r.value.id, revision: r.value.revision }
+        setEditing(saved)
+        setBaseline(JSON.stringify(saved))
+        if (r.value.defaultWarning) setError(t('personas.defaultFailed', { message: r.value.defaultWarning }))
         toast.show(t('personas.saved', { name: editing.name }))
         reload()
       }
@@ -63,6 +73,7 @@ export function PersonasSection(props: { remote: TavernRemote }) {
   }
 
   const createNew = () => {
+    setBaseline('null')
     setEditing({ id: `persona-${Date.now().toString(36)}`, name: '', description: '', avatar: null, lorebookId: null })
   }
 

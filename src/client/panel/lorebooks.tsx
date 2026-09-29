@@ -13,7 +13,7 @@ import type { CharacterSummary, TavernRemote } from '../types.js'
 import { Badge, Btn, ConfirmDialog, Dialog, Err, FileBtn, IconBtn, SearchEmpty, SearchInput, Section, Skeleton, clickableProps, downloadJson, errOf, readJsonFile, runAsync, useLoader, useToast } from '../util.js'
 import { LorebookEditor, type LorebookTarget } from './lorebookEditor.js'
 
-type Opened = { target: LorebookTarget; entries: WorldInfoEntry[] }
+type Opened = { target: LorebookTarget; entries: WorldInfoEntry[]; revision?: string }
 
 export function LorebooksSection(props: { remote: TavernRemote }) {
   return <PersistentEditor remote={props.remote} scope="lorebooks"><LorebooksSectionContent {...props} /></PersistentEditor>
@@ -74,6 +74,7 @@ function LorebooksSectionContent(props: { remote: TavernRemote }) {
     if (!r.ok) throw new Error(r.error.message)
     return {
       target: { kind: 'library', name },
+      revision: r.value.revision,
       entries: parseLorebook(r.value.json, { source: 'global', sourceRef: name }),
     }
   })
@@ -83,6 +84,7 @@ function LorebooksSectionContent(props: { remote: TavernRemote }) {
     if (!r.ok) throw new Error(r.error.message)
     return {
       target: { kind: 'character', cardId: item.cardId, name: r.value.name },
+      revision: r.value.revision,
       entries: parseLorebook(r.value.json, { source: 'character', sourceRef: item.cardId }),
     }
   })
@@ -179,16 +181,17 @@ function LorebooksSectionContent(props: { remote: TavernRemote }) {
           remote={remote}
           target={opened.target}
           entries={opened.entries}
+          revision={opened.revision}
           onClose={() => setOpened(null)}
           onSaved={() => {
             toast.show(t('lorebooks.saved', { name: opened.target.name }))
             chars.reload()
             reload()
           }}
-          save={(json) =>
+          save={(json, expectedRevision) =>
             opened.target.kind === 'library'
-              ? remote.saveLorebook({ name: opened.target.name, json })
-              : remote.saveCharacterLorebook({ cardId: opened.target.cardId, json })
+              ? remote.saveLorebook({ name: opened.target.name, json, expectedRevision })
+              : remote.saveCharacterLorebook({ cardId: opened.target.cardId, json, expectedRevision })
           }
         />
       </Section>

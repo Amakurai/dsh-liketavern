@@ -195,7 +195,7 @@ export const METHODS = {
     summary: '导入 SillyTavern 预设 JSON',
   },
   // preset：同上，宽松传输，state/presetStore 归一化时严格校验。
-  savePreset: { req: object({ preset: anyValue }), value: anyValue, summary: '保存预设' },
+  savePreset: { req: object({ preset: anyValue, expectedRevision: optional(nullable(nonEmpty())) }), value: anyValue, summary: '保存预设' },
   deletePreset: { req: object({ id: nonEmpty() }), value: anyValue, summary: '删除预设' },
   getPreset: { req: object({ id: nonEmpty() }), value: anyValue, summary: '读取预设' },
   // 世界书库
@@ -203,28 +203,28 @@ export const METHODS = {
   getLorebook: { req: object({ name: nonEmpty() }), value: anyValue, summary: '读取世界书原始 JSON' },
   // json：世界书原始 JSON（ST 导出形态多样），宽松传输，由 state/lorebook 归一化时严格校验。
   importLorebook: { req: object({ name: nonEmpty(), json: anyValue }), value: anyValue, summary: '导入世界书 JSON' },
-  saveLorebook: { req: object({ name: nonEmpty(), json: anyValue }), value: anyValue, summary: '保存世界书 JSON' },
+  saveLorebook: { req: object({ name: nonEmpty(), json: anyValue, expectedRevision: optional(nullable(nonEmpty())) }), value: anyValue, summary: '保存世界书 JSON' },
   deleteLorebook: { req: object({ name: nonEmpty() }), value: anyValue, summary: '删除世界书' },
   getCharacterLorebook: { req: object({ ...cardIdField }), value: anyValue, summary: '读取角色卡内嵌世界书' },
   saveCharacterLorebook: {
     // json：卡内嵌世界书，宽松传输，state/card 的 normalizeBook 归一化时严格校验。
-    req: object({ ...cardIdField, json: anyValue }),
+    req: object({ ...cardIdField, json: anyValue, expectedRevision: optional(nullable(nonEmpty())) }),
     value: anyValue,
     summary: '保存角色卡内嵌世界书',
   },
   deleteEmbeddedLorebook: { req: object({ ...cardIdField }), value: anyValue, summary: '删除角色卡内嵌世界书（保留角色卡）' },
   getChatLorebook: { req: object({ ...storyScope }), value: anyValue, summary: '读取会话世界书' },
   // json：会话世界书，宽松传输，state/lorebook 归一化时严格校验。
-  saveChatLorebook: { req: object({ ...storyScope, json: anyValue }), value: anyValue, summary: '保存会话世界书' },
+  saveChatLorebook: { req: object({ ...storyScope, json: anyValue, expectedRevision: optional(nonEmpty()) }), value: anyValue, summary: '保存会话世界书' },
   getJournal: { req: object({ ...storyScope }), value: anyValue, summary: '读取角色笔记 journal.md' },
   saveJournal: { req: object({ ...storyScope, text: string() }), value: anyValue, summary: '保存角色笔记 journal.md' },
   // 人设
   listPersonas: { req: object({}), value: anyValue, summary: '列出人设' },
-  savePersona: { req: object({ persona: persona() }), value: anyValue, summary: '保存人设' },
+  savePersona: { req: object({ persona: persona(), expectedRevision: optional(nullable(nonEmpty())) }), value: anyValue, summary: '保存人设' },
   deletePersona: { req: object({ id: nonEmpty() }), value: anyValue, summary: '删除人设' },
   // 正则
   listRegexRules: { req: object({}), value: anyValue, summary: '列出全局正则规则' },
-  saveRegexRules: { req: object({ rules: array(regexRule()) }), value: anyValue, summary: '保存全局正则规则' },
+  saveRegexRules: { req: object({ rules: array(regexRule()), expectedRevision: optional(nonEmpty()) }), value: anyValue, summary: '保存全局正则规则' },
   // 会话绑定
   getSessionBinding: { req: object({ ...sessionIdField }), value: anyValue, summary: '读取会话绑定' },
   setSessionBinding: { req: object({ binding: sessionBinding() }), value: anyValue, summary: '保存会话绑定' },
@@ -514,29 +514,29 @@ export interface TavernMethodResults {
   // 预设
   listPresets: { items: PresetSummary[] }
   importPreset: { id: string; warnings: string[] }
-  savePreset: { id: string }
+  savePreset: { id: string; revision: string }
   deletePreset: { deleted: boolean }
-  getPreset: { preset: PromptPreset }
+  getPreset: { preset: PromptPreset; revision: string }
   // 世界书库
   listLorebooks: { items: string[] }
-  getLorebook: { json: unknown }
+  getLorebook: { json: unknown; revision: string }
   importLorebook: { name: string; entryCount: number }
-  saveLorebook: { name: string }
+  saveLorebook: { name: string; revision: string }
   deleteLorebook: { deleted: boolean }
-  getCharacterLorebook: { name: string; json: unknown; entryCount: number }
-  saveCharacterLorebook: { name: string; entryCount: number }
+  getCharacterLorebook: { name: string; json: unknown; entryCount: number; revision: string }
+  saveCharacterLorebook: { name: string; entryCount: number; revision: string }
   deleteEmbeddedLorebook: { deleted: boolean }
-  getChatLorebook: { json: unknown }
-  saveChatLorebook: { saved: boolean }
+  getChatLorebook: { json: unknown; revision: string }
+  saveChatLorebook: { saved: boolean; revision: string }
   getJournal: { text: string }
   saveJournal: { saved: boolean }
   // 人设
-  listPersonas: { items: Persona[] }
-  savePersona: { id: string }
+  listPersonas: { items: Array<Persona & { revision: string }> }
+  savePersona: { id: string; revision: string; defaultWarning?: string }
   deletePersona: { deleted: boolean }
   // 正则
-  listRegexRules: { rules: RegexRule[] }
-  saveRegexRules: { count: number }
+  listRegexRules: { rules: RegexRule[]; revision: string }
+  saveRegexRules: { count: number; revision: string }
   // 会话绑定
   getSessionBinding: { binding: SessionBinding | null; userName: string; canSwipeGreeting: boolean; conversationStarted: boolean }
   setSessionBinding: { saved: boolean }

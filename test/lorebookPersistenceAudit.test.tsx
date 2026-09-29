@@ -30,18 +30,18 @@ afterEach(async () => {
   vi.unstubAllGlobals()
 })
 const ok = <T,>(value: T) => ({ ok: true as const, value })
-function fixture() {
-  let stored: unknown = null
+function fixture(initial: unknown = null, revision = 'initial') {
+  let stored: unknown = initial
   const remote = {
     getEditorDraft: async () => ok({ draft: stored ? { value: stored, updatedAt: '2026-09-05' } : null }),
     saveEditorDraft: async ({ value }: { value: unknown }) => { stored = structuredClone(value); return ok({ saved: true }) },
     deleteEditorDraft: async () => { stored = null; return ok({ deleted: true }) },
   } as unknown as TavernRemote
-  const save = vi.fn(async () => ok({ saved: true }))
+  const save = vi.fn(async () => ok({ saved: true, revision: 'saved' }))
   function Harness() {
     const [open, setOpen] = useState(true)
     return open ? <LorebookEditor remote={remote} target={{ kind: 'chat', cardId: 'card-a', storyId: 'story-a', name: '聊天世界书' }}
-      entries={[]} save={save} onSaved={() => setOpen(false)} onClose={() => setOpen(false)} /> : <span>closed</span>
+      entries={[]} revision={revision} save={save} onSaved={() => setOpen(false)} onClose={() => setOpen(false)} /> : <span>closed</span>
   }
   return { node: <Harness />, remote, save, stored: () => stored }
 }
@@ -74,11 +74,13 @@ it('保存飞行期间的继续键入不丢失：未保存提示保留，草稿�
   let release!: (value: ReturnType<typeof ok>) => void
   f.save.mockImplementationOnce(() => new Promise((resolve) => { release = resolve }))
   await click('保存')
+  await click('保存')
+  expect(f.save).toHaveBeenCalledOnce()
   const input = view!.root.findAllByType('input').find((node) => node.props.placeholder === '给自己看的名字，例如「主角身世」')!
   await act(async () => input.props.onChange({ target: { value: '飞行期新键入' } }))
   await act(async () => vi.advanceTimersByTimeAsync(500))
   // 保存成功回包：当前值已偏离已保存快照——dirty 保持、草稿保留、编辑器不被 onSaved 关闭
-  await act(async () => release(ok({ saved: true })))
+  await act(async () => release(ok({ saved: true, revision: 'saved' })))
   expect(view!.root.findAllByType('span').map((node) => node.children.join()).includes('closed')).toBe(false)
   const badges = view!.root.findAllByProps({ className: 'dsh-tavern-badge is-accent' })
   expect(badges.length).toBeGreaterThan(0)
@@ -88,7 +90,24 @@ it('保存飞行期间的继续键入不丢失：未保存提示保留，草稿�
   // 再次保存把飞行期编辑落盘后，才走 onSaved 正常关闭
   await click('保存')
   expect(f.save).toHaveBeenCalledTimes(2)
+  expect(f.save).toHaveBeenLastCalledWith(expect.any(Object), 'saved')
   expect(view!.root.findByType('span').children).toEqual(['closed'])
+})
+
+it.each([true, false])('恢复草稿时保留原版本，缺失版本则拒绝借用新读取的版本（原版本存在=%s）', async keepRevision => {
+  const old = await prepare()
+  const snapshot = structuredClone(old.stored()) as { fields: Record<string, unknown> }
+  if (!keepRevision) for (const key of Object.keys(snapshot.fields)) if (key.endsWith('.revision')) delete snapshot.fields[key]
+  await act(async () => view!.unmount())
+  const next = fixture(snapshot, 'newer-server-revision')
+  await act(async () => { view = create(next.node) })
+  await click('保存')
+  if (keepRevision) expect(next.save).toHaveBeenCalledWith(expect.any(Object), 'initial')
+  else {
+    expect(next.save).not.toHaveBeenCalled()
+    expect(JSON.stringify(view!.toJSON())).toContain('草稿缺少保存版本')
+    expect(JSON.stringify(view!.toJSON())).toContain('未保存')
+  }
 })
 
 it('明确放弃并关闭整个窗口后删除原草稿', async () => {

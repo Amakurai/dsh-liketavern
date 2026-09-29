@@ -1,6 +1,7 @@
 /** 提示词预设面板（panel/presets.tsx）界面文案。zh 为键全集源；en 必须同键齐全（test/i18n.test.ts 校验）。 */
 
 export const zh = {
+  'presets.missingRevision': '草稿缺少保存版本。请先复制未保存内容，再关闭并重新打开预设。',
   'presets.section.desc': '导入 SillyTavern 预设 JSON（含采样参数和 extensions.regex_scripts）。新会话默认在「设置」页或卡脚「设为默认」；当前对话用角色芯片切换。旧版已导入的预设需重新导入才会带上采样参数。',
   'presets.importFile': '导入 SillyTavern 预设 JSON',
   'presets.new': '新建预设',
@@ -48,6 +49,7 @@ export const zh = {
 } as const
 
 export const en: Record<keyof typeof zh, string> = {
+  'presets.missingRevision': 'This draft has no saved revision. Copy your unsaved changes, then close and reopen the preset.',
   'presets.section.desc': 'Import SillyTavern preset JSON, including sampling parameters and extensions.regex_scripts. Set defaults on the Settings tab or via "Set as default"; switch the current conversation via the character chip. Re-import presets saved by older versions to include sampling parameters.',
   'presets.importFile': 'Import SillyTavern preset JSON',
   'presets.new': 'New preset',

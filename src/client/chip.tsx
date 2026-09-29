@@ -254,7 +254,7 @@ function HeaderChipSession(props: HeaderChipProps) {
   const toast = useToast()
   const [view, setView] = useState<{ title: string; text: string } | null>(null)
   const [previewData, setPreviewData] = useState<PromptPreview | null>(null)
-  const [chatLore, setChatLore] = useState<{ cardId: string; storyId?: string; entries: WorldInfoEntry[] } | null>(null)
+  const [chatLore, setChatLore] = useState<{ cardId: string; storyId?: string; entries: WorldInfoEntry[]; revision: string } | null>(null)
   const [memoryOpen, setMemoryOpen] = useState(false)
   const [confirmUnbind, setConfirmUnbind] = useState(false)
   const [unbindBusy, setUnbindBusy] = useState(false)
@@ -422,6 +422,7 @@ function HeaderChipSession(props: HeaderChipProps) {
         cardId,
         storyId: binding?.cardId === cardId ? binding.storyId : undefined,
         entries: parseLorebook(r.value.json, { source: 'chat', sourceRef: 'chat-lorebook' }),
+        revision: r.value.revision,
       })
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -684,12 +685,13 @@ function HeaderChipSession(props: HeaderChipProps) {
             remote={remote}
             target={{ kind: 'chat', cardId: chatLore.cardId, storyId: chatLore.storyId, name: t('chip.chatLore.title') }}
             entries={chatLore.entries}
+            revision={chatLore.revision}
             onClose={() => setChatLore(null)}
             onSaved={() => {
               toast.show(t('chip.chatLore.saved'))
               setChatLore(null)
             }}
-            save={(json) => remote.saveChatLorebook({ cardId: chatLore.cardId, storyId: chatLore.storyId, json })}
+            save={(json, expectedRevision) => remote.saveChatLorebook({ cardId: chatLore.cardId, storyId: chatLore.storyId, json, expectedRevision })}
           />
         </Dialog>
       }</DraftScope>}

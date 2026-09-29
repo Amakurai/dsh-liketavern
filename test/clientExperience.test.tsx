@@ -9,6 +9,7 @@ import { CharacterPicker } from '../src/client/characterPicker.js'
 import { CharactersSection } from '../src/client/panel/characters.js'
 import { VariableBackupEditor, StoryVariableSettings } from '../src/client/panel/cardData.js'
 import { MemorySection } from '../src/client/panel/memory.js'
+import { PersonasSection } from '../src/client/panel/personas.js'
 import { setTavernLocale } from '../src/client/i18n.js'
 import { TavernHeaderChip, defaultBinding } from '../src/client/chip.js'
 import { TavernSeatChip } from '../src/client/seatChip.js'
@@ -55,6 +56,52 @@ function detail(cardId: string): CharacterDetail {
 }
 beforeEach(() => setTavernLocale('zh'))
 afterEach(async () => { for (const view of mounted.splice(0)) await act(async () => view.unmount()) })
+
+/** 手动双窗口复现回归：资产读取版本随草稿保留，刷新列表不能给旧内容换发新版本。 */
+describe('人设并发编辑与部分写入反馈', () => {
+  const persona = { id: 'persona-one', name: '旅人', description: '旧描述', avatar: null, revision: 'old' }
+  it('旧版人设草稿缺少版本时拒绝保存，不能使用列表刷新后的版本', async () => {
+    const { revision: _revision, ...legacy } = persona
+    const savePersona = vi.fn()
+    const remote = { listPersonas: async () => ok({ items: [legacy] }), listLorebooks: async () => ok({ items: [] }), savePersona } as unknown as TavernRemote
+    const view = await render(<PersonasSection remote={remote} />)
+    await act(async () => view.root.findByProps({ className: 'dsh-tavern-tile' }).props.onClick())
+    await act(async () => view.root.findByType('textarea').props.onChange({ target: { value: '保留我的草稿' } }))
+    await act(async () => button(view, '保存').props.onClick())
+    expect(savePersona).not.toHaveBeenCalled()
+    expect(view.root.findByType('textarea').props.value).toBe('保留我的草稿')
+    expect(view.root.findByProps({ role: 'alert' }).children.join('')).toContain('缺少版本')
+  })
+  it('保存冲突保留草稿，刷新列表后仍提交原始版本', async () => {
+    const savePersona = vi.fn(async () => ({ ok: false, error: { message: '人设已被另一窗口修改' } }))
+    const listPersonas = vi.fn(async () => ok({ items: [persona] }))
+    const remote = { listPersonas, listLorebooks: async () => ok({ items: [] }), savePersona } as unknown as TavernRemote
+    const view = await render(<PersonasSection remote={remote} />)
+    await act(async () => view.root.findByProps({ className: 'dsh-tavern-tile' }).props.onClick())
+    await act(async () => view.root.findByType('textarea').props.onChange({ target: { value: 'A 的未保存草稿' } }))
+    await act(async () => button(view, '保存').props.onClick())
+    expect(view.root.findByType('textarea').props.value).toBe('A 的未保存草稿')
+    expect(view.root.findByProps({ role: 'alert' }).children.join('')).toContain('另一窗口')
+    listPersonas.mockResolvedValue(ok({ items: [{ ...persona, description: 'B 的新描述', revision: 'new' }] }))
+    await act(async () => button(view, '刷新').props.onClick())
+    await act(async () => button(view, '保存').props.onClick())
+    expect(savePersona).toHaveBeenLastCalledWith({ persona: { ...persona, description: 'A 的未保存草稿' }, expectedRevision: 'old' })
+  })
+
+  it('新建成功后使用返回的实际身份与版本，默认设置失败单独展示', async () => {
+    const savePersona = vi.fn(async () => ok({ id: 'stored-id', revision: 'saved-revision', defaultWarning: '配置只读' }))
+    const remote = { listPersonas: async () => ok({ items: [] }), listLorebooks: async () => ok({ items: [] }), savePersona } as unknown as TavernRemote
+    const view = await render(<PersonasSection remote={remote} />)
+    await act(async () => button(view, '新建人设').props.onClick())
+    await act(async () => view.root.findByType('input').props.onChange({ target: { value: '新人设' } }))
+    await act(async () => button(view, '保存').props.onClick())
+    expect(savePersona).toHaveBeenLastCalledWith(expect.objectContaining({ expectedRevision: null }))
+    expect(view.root.findByProps({ role: 'alert' }).children.join('')).toContain('人设已保存')
+    await act(async () => view.root.findByType('textarea').props.onChange({ target: { value: '再次编辑' } }))
+    await act(async () => button(view, '保存').props.onClick())
+    expect(savePersona).toHaveBeenLastCalledWith(expect.objectContaining({ persona: expect.objectContaining({ id: 'stored-id' }), expectedRevision: 'saved-revision' }))
+  })
+})
 
 function DraftEditor(props: { busy?: boolean }) {
   const [text, setText] = useState('')

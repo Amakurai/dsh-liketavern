@@ -238,9 +238,10 @@ export declare class TavernState {
         json: unknown;
         entryCount: number;
     } | null>;
-    saveCharacterLorebook(cardId: string, json: unknown): Promise<{
+    saveCharacterLorebook(cardId: string, json: unknown, expectedRevision?: string | null): Promise<{
         name: string;
         entryCount: number;
+        revision: string;
     }>;
     saveCharacter(cardId: string, patch: Parameters<typeof applyCharacterPatch>[1], expectedRevision?: string): Promise<{
         cardId: string;
@@ -267,13 +268,18 @@ export declare class TavernState {
     saveJournal(cardId: string, text: string, storyId?: string): Promise<void>;
     getChatLorebook(cardId: string, storyId?: string): Promise<unknown>;
     invalidateChatLorebook(cardId: string, storyId: string): void;
-    saveChatLorebook(cardId: string, json: unknown, storyId?: string): Promise<void>;
+    saveChatLorebook(cardId: string, json: unknown, storyId?: string, expectedRevision?: string): Promise<string>;
     listLorebooks(): Promise<string[]>;
     /** 读取世界书原始 JSON（供设置面板编辑）；不存在或损坏返回 null。 */
     loadLorebookJson(name: string): Promise<unknown | null>;
     loadLorebookEntries(name: string, source: WorldInfoEntry['source']): Promise<WorldInfoEntry[]>;
     /** 落盘并 bump 修订号，返回磁盘上的 id：调用方（服务层/客户端）之后要按这个 id 打开，不能用原始名。 */
     saveLorebook(name: string, json: unknown): Promise<string>;
+    /** 编辑版本的读取与写入共用资产锁；导入仍可明确替换同身份资产。 */
+    saveLorebookSnapshot(name: string, json: unknown, expectedRevision?: string | null): Promise<{
+        name: string;
+        revision: string;
+    }>;
     deleteLorebook(name: string): Promise<void>;
     listPresets(): Promise<string[]>;
     listPresetSummaries(): Promise<Array<{
@@ -286,6 +292,13 @@ export declare class TavernState {
     savePreset(preset: PromptPreset, options?: {
         preserveHelperSettings?: boolean;
     }): Promise<string>;
+    savePresetSnapshot(preset: PromptPreset, options?: {
+        preserveHelperSettings?: boolean;
+        expectedRevision?: string | null;
+    }): Promise<{
+        id: string;
+        revision: string;
+    }>;
     deletePreset(id: string): Promise<void>;
     listPersonas(): Promise<Persona[]>;
     loadPersona(id: string | null): Promise<Persona | null>;
@@ -295,10 +308,15 @@ export declare class TavernState {
      */
     resolvePersona(personaId: string | null): Promise<Persona | null>;
     /** 落盘并返回磁盘上的 id；id 被净化过（含冲突后缀）时连同 JSON 里的 id 一起改写，避免文件名和内容各说各话。 */
-    savePersona(persona: Persona): Promise<string>;
+    savePersona(persona: Persona, expectedRevision?: string | null): Promise<string>;
     deletePersona(id: string): Promise<void>;
     listRegexRules(): Promise<RegexRule[]>;
-    saveRegexRules(rules: RegexRule[]): Promise<void>;
+    /** 编辑读取不使用热缓存的损坏容错：不能把损坏文件伪装成空列表并授权覆盖。 */
+    getRegexRulesSnapshot(): Promise<{
+        rules: RegexRule[];
+        revision: string;
+    }>;
+    saveRegexRules(rules: RegexRule[], expectedRevision?: string): Promise<string>;
     /** 某会话生效的全部正则（全局 + 当前角色卡内嵌 + 当前预设内嵌）。 */
     rulesFor(binding: SessionBinding): Promise<RegexRule[]>;
     /** 作废卡级正则缓存：绕过写路径的同尺寸同刻度直写（如外部工具改文件）后手动调用；WAL 回滚不触及共享卡根，无需调用。 */

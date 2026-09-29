@@ -42,6 +42,18 @@ async function commit(work:HelperMvuWork,data:unknown,runtimeId='runtime'){
   return commitHelperMvuJob(ctx,state,{...request(runtimeId),jobId:work.job!.id,token:work.token!,data})
 }
 async function initialize(){assistant(0,'<initvar>hp: 10</initvar>');const work=await prepare();await commit(work,{stat_data:{hp:10},other:'greeting'});return work}
+it('绑定变化使旧租约失效，重新准备返回新快照和令牌，重试可完成且旧令牌不能提交',async()=>{
+  assistant(0,'开场白')
+  const before=await prepare()
+  await state.saveBinding({... (await state.loadBinding('session'))!,worldInfo:{scanDepth:7}})
+  await expect(commit(before,{stat_data:{hp:1}})).rejects.toThrow(/绑定或脚本库已改变/)
+  const after=await prepare()
+  expect(after.token).not.toBe(before.token)
+  await expect(commit(before,{stat_data:{hp:1}})).rejects.toThrow(/租约已失效/)
+  await commit(after,{stat_data:{hp:2}})
+  expect((await read()).mvu?.pending).toEqual([])
+  expect((await read()).scopes[JSON.stringify(['message',after.job!.identity])]).toMatchObject({stat_data:{hp:2}})
+})
 async function start(turn=1,text="_.add('hp',1);",reason='stop'){
   append('turn/start',{turn});assistant(turn,text,1,false,[reason])
   const floor='session#t'+turn,workspace=await ws();await workspace.wal.beginFloor(floor);state.openFloors.set('session',{cardId,storyId,floor})
@@ -296,9 +308,15 @@ it('变量、脚本修订、原文或绑定改变使冻结提交失败，不清�
   const saved=await read();saved.scopes['["chat",""]']={changed:true};await saveHelperState(workspace.fs.withFloor('session#t1'),saved)
   await expect(commit(work,{stat_data:{hp:11}})).rejects.toThrow(/变量或待处理队列/)
   expect((await read()).mvu?.pending).toHaveLength(1)
-  expect((await prepare()).base).toEqual(work.base)
+  const refreshed=await prepare()
+  expect(refreshed.base).toEqual(work.base)
+  expect(refreshed.token).not.toBe(work.token)
   const library=await state.getHelperScriptLibrary({type:'global'});await state.saveHelperScriptLibrary(library.target,library.revision,[{type:'script',value:{id:'factory',name:'factory',enabled:true,content:'',info:'',button:{enabled:false,buttons:[]},data:{}}}])
-  await expect(commit(work,{stat_data:{hp:11}})).rejects.toThrow(/脚本库已改变/)
+  await expect(commit(refreshed,{stat_data:{hp:11}})).rejects.toThrow(/脚本库已改变/)
+  const latest=await prepare()
+  expect(latest.token).not.toBe(refreshed.token)
+  await commit(latest,{stat_data:{hp:11}})
+  expect((await read()).mvu?.pending).toEqual([])
 })
 
 it('门控只追加无 WAL 的 turn/start 时旧 job仍可完成，真正新楼层已建立则拒绝',async()=>{

@@ -48,7 +48,7 @@ export function restoreCardVariableBackup(srcDoc: string, text: string): string 
   const seed = JSON.stringify({ scopes: parsed.scopes }).replace(/</g, '\\u003c').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029')
   const marker = '<script data-dsh-tavern-bridge>'
   if (!srcDoc.includes(marker)) throw new Error('Missing card bridge')
-  return srcDoc.replace(marker, `<script>window.__dshTavernVariables=${seed};</script>${marker}`)
+  return srcDoc.replace(marker, () => `<script>window.__dshTavernVariables=${seed};</script>${marker}`)
 }
 
 /** 自包含函数会被序列化注入沙箱，不引用宿主状态，不发送主窗口消息。 */
@@ -94,6 +94,7 @@ export function installCardVariables(labels: CardVariableLabels, styles = '', me
     return parsed
   }
   function scope(option?: unknown): string {
+    if (holder.generation !== generation) throw new Error('Card variable runtime has been disposed')
     const snapshot=root.__dshTavernSnapshot as {currentMessageId:number;messages:unknown[]}|undefined
     const currentId=snapshot?.currentMessageId??messageId, count=snapshot?.messages.length??messageCount
     const opts = option === undefined ? { type: 'chat' } : option
@@ -119,9 +120,14 @@ export function installCardVariables(labels: CardVariableLabels, styles = '', me
     return value
   }
   function replaceVariables(value: unknown, option?: unknown): Table {
+    return replaceScope(value, scope(option))
+  }
+  /** 异步更新固定开始时解析的目标，不能在回调结束后重新读取调用方的可变参数。 */
+  function replaceScope(value: unknown, key: string): Table {
+    if (holder.generation !== generation) throw new Error('Card variable runtime has been disposed')
     if(root.__dshTavernDisplayLocked)throw new Error('卡面正在重绘，请等待完成')
     const next = clone(value)
-    const scopes = clone({ ...holder.scopes, [scope(option)]: next })
+    const scopes = clone({ ...holder.scopes, [key]: next })
     clone({ version: 1, scopes }) // 写入时保留备份封装预算，保证已接受的数据能导出并恢复。
     holder.scopes = scopes as Record<string, Table>
     const changed=root.__dshTavernVariableChanged
@@ -147,13 +153,13 @@ export function installCardVariables(labels: CardVariableLabels, styles = '', me
     if (typeof updater !== 'function') throw new Error('Variable updater must be a function')
     const key = scope(option), before = JSON.stringify(holder.scopes[key] ?? {})
     const snapshotGeneration=root.__dshTavernSnapshotGeneration
-    const value = updater(getVariables(option))
+    const value = updater(clone(holder.scopes[key] ?? {}))
     const commit = (next: Table) => {
       if (holder.generation !== generation) throw new Error('Card variable runtime has been disposed')
       if(root.__dshTavernSnapshotGeneration!==snapshotGeneration) throw new Error('Story snapshot changed while updater was running')
       // 异步回调挂起时不覆盖后续的用户写入，失败时完整保留原值。
       if (JSON.stringify(holder.scopes[key] ?? {}) !== before) throw new Error('Card variables changed while updater was running')
-      return replaceVariables(next, option)
+      return replaceScope(next, key)
     }
     return value && typeof (value as Promise<Table>).then === 'function' ? Promise.resolve(value).then(commit) : commit(value as Table)
   }

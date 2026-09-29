@@ -88,6 +88,12 @@ export declare const zh: {
     readonly 'speech.mvuRetry': "重试保留的 MVU 任务";
     readonly 'speech.mvuRestart': "重新读取并运行 MVU 任务";
     readonly 'speech.mvuCancel': "取消等待（保留任务和输入）";
+    readonly 'speech.mvuRequestTimeout': "MVU 通信超时，任务和计算结果已保留，请重试确认。";
+    readonly 'speech.mvuScriptsNotReady': "脚本尚未就绪，MVU 结果等待重试。";
+    readonly 'speech.mvuExecutionTimeout': "MVU 任务执行超时，任务已保留。";
+    readonly 'speech.mvuLeaseChanged': "MVU 租约已改变，请重新读取任务；未提交的变量钩子将重新执行。";
+    readonly 'speech.mvuSandboxChanged': "MVU 执行沙箱已重建。";
+    readonly 'speech.mvuTaskChanged': "MVU 任务或脚本就绪状态已改变。";
     readonly 'speech.scriptsTitle': "后台脚本";
     readonly 'speech.scriptsReload': "重新加载脚本";
     readonly 'speech.scriptsPause': "暂停";

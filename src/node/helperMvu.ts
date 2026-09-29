@@ -284,9 +284,15 @@ export async function prepareHelperMvuJob(ctx:Context,state:TavernState,request:
     verifyTarget(events,job);verifyContinuation(events,job,mvu);await floorReady(state,binding,request.sessionId,job)
     const key=leaseKey(request),map=leaseMap(state),old=map.get(key)
     if(old&&old.job.id===job.id&&!old.committed){
-      if(old.runtimeId!==request.runtimeId)return {...baseWork,status:'waiting'}
-      old.expires=Date.now()+90000
-      return helperJson(old.work,4*1024*1024) as HelperMvuWork
+      // 提交会拒绝过期的冻结内容；准备阶段也必须撤销，否则续租会让失败任务永久无法重试。
+      const current=old.binding===hash(binding)&&old.scripts===await scriptRevision(state,request)
+        &&old.history===helperHistoryRevision(history)&&old.before===stateHash(saved)
+      if(current){
+        if(old.runtimeId!==request.runtimeId)return {...baseWork,status:'waiting'}
+        old.expires=Date.now()+90000
+        return helperJson(old.work,4*1024*1024) as HelperMvuWork
+      }
+      map.delete(key)
     }
     const index=history.findIndex(item=>item.identity===job.identity),target=saved.scopes[scope(job.identity)]??{}
     let base:Record<string,unknown>=target

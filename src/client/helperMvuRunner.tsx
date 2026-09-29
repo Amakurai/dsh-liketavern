@@ -28,6 +28,17 @@ export function HelperMvuRunner(props:{remote:TavernRemote;sessionId:string;stor
     let active=true,frameRuntime='',running=false,polling=false,failed=false,committing=false
     let work:HelperMvuWork|undefined,result:unknown,deadline=0,renewAt=0,requestId='',restart=false
     const runtimeId=crypto.randomUUID(),{sessionId,storyId}=props
+    const requests=new Set<()=>void>()
+    // RPC 无响应也必须释放本地在途锁；迟到响应只结束原 Promise，不能覆盖重试后的任务。
+    const request=async<T,>(call:()=>Promise<T>):Promise<T>=>{
+      let timer:ReturnType<typeof setTimeout>|undefined,cancel!:()=>void
+      const timeout=new Promise<never>((_resolve,reject)=>{
+        cancel=()=>reject(new Error(t('speech.mvuRequestTimeout')))
+        timer=setTimeout(cancel,20000);requests.add(cancel)
+      })
+      try{return await Promise.race([Promise.resolve().then(call),timeout])}
+      finally{clearTimeout(timer);requests.delete(cancel)}
+    }
     const send=(message:Record<string,unknown>)=>{if(active)frame.current?.contentWindow?.postMessage({source:'dsh-tavern-card',...message},'*')}
     const valid=()=>active&&running&&!failed&&live.current.ready&&Boolean(work?.job)&&Date.now()<deadline
     const endpoint=attachHelperEvents(sessionId,storyId,send,{current:valid,snapshot:()=>work?.snapshot})
@@ -38,25 +49,27 @@ export function HelperMvuRunner(props:{remote:TavernRemote;sessionId:string;stor
     }
     const commit=async()=>{
       if(!work?.job||!work.token||result===undefined||committing)return
-      if(!live.current.ready)throw new Error('脚本尚未就绪，MVU 结果等待重试')
+      if(!live.current.ready)throw new Error(t('speech.mvuScriptsNotReady'))
       committing=true
       try{
-        const response=await live.current.remote.commitHelperMvuJob({sessionId,storyId,runtimeId,jobId:work.job.id,token:work.token,data:result})
+        const payload={sessionId,storyId,runtimeId,jobId:work.job.id,token:work.token,data:result}
+        const response=await request(()=>live.current.remote.commitHelperMvuJob(payload))
         if(!response.ok)throw new Error(response.error.message)
         if(!active)return
         complete()
       }finally{committing=false}
     }
     const poll=async()=>{
-      if(!active||polling||!frameRuntime||!live.current.ready)return
+      if(!active||polling||committing||!frameRuntime||!live.current.ready)return
       if(failed&&result===undefined)return
-      if(running&&Date.now()>deadline){fail('MVU 任务执行超时；任务已保留');return}
+      if(running&&Date.now()>deadline){fail(t('speech.mvuExecutionTimeout'));return}
       if(work&&Date.now()<renewAt)return
       polling=true
+      const expectedWork=work
       try{
-        const response=await live.current.remote.prepareHelperMvuJob({sessionId,storyId,runtimeId})
+        const response=await request(()=>live.current.remote.prepareHelperMvuJob({sessionId,storyId,runtimeId}))
+        if(!active||work!==expectedWork)return
         if(!response.ok)throw new Error(response.error.message)
-        if(!active)return
         const next=response.value
         renewAt=Date.now()+20000
         if(work){
@@ -69,7 +82,7 @@ export function HelperMvuRunner(props:{remote:TavernRemote;sessionId:string;stor
               if(hex===receipt.digest){complete();return}
             }
             restart=true;setRestartRequired(true)
-            throw new Error('MVU 租约已改变；请重新读取任务，未提交的变量钩子将重新执行')
+            throw new Error(t('speech.mvuLeaseChanged'))
           }
           return
         }
@@ -77,21 +90,21 @@ export function HelperMvuRunner(props:{remote:TavernRemote;sessionId:string;stor
         if(failed||!live.current.ready||next.status!=='pending'||!next.job||!next.token||!next.snapshot)return
         work=next;running=true;deadline=Date.now()+300000;requestId=crypto.randomUUID();setBusy(true);setError(null)
         send({action:'helperMvuRun',runtimeId:frameRuntime,requestId,work:next})
-      }catch(value){fail(value)}finally{polling=false}
+      }catch(value){if(work===expectedWork)fail(value)}finally{polling=false}
     }
     const receive=(event:MessageEvent)=>{
       if(!active||event.source!==frame.current?.contentWindow||!helperRecord(event.data)||event.data.source!=='dsh-tavern-card')return
       const value=event.data
       if(typeof value.action==='string'&&value.action.startsWith('helperEvent')){endpoint.receive(value);return}
       if(value.action==='helperMvuReady'&&endpoint.matchesRuntime(value.runtimeId)){
-        if(frameRuntime&&frameRuntime!==value.runtimeId){fail('MVU 执行沙箱已重建');return}
+        if(frameRuntime&&frameRuntime!==value.runtimeId){fail(t('speech.mvuSandboxChanged'));return}
         frameRuntime=String(value.runtimeId);void poll();return
       }
       if(value.action==='helperSnapshotGet'&&typeof value.requestId==='string'&&value.storyId===storyId){
         send({action:'helperSnapshotResult',requestId:value.requestId,ok:true,snapshot:work?.snapshot??live.current.snapshot});return
       }
-      if(value.action!=='helperMvuResult'||!endpoint.matchesRuntime(value.runtimeId)||value.requestId!==requestId||!running)return
-      if(!valid()){fail('MVU 任务或脚本就绪状态已改变');return}
+      if(value.action!=='helperMvuResult'||!endpoint.matchesRuntime(value.runtimeId)||value.requestId!==requestId||!running||result!==undefined)return
+      if(!valid()){fail(t('speech.mvuTaskChanged'));return}
       if(value.ok!==true){fail(value.error);return}
       try{result=helperJson(value.data);void commit().catch(fail)}catch(error){fail(error)}
     }
@@ -103,7 +116,7 @@ export function HelperMvuRunner(props:{remote:TavernRemote;sessionId:string;stor
     }
     window.addEventListener('message',receive)
     const timer=setInterval(()=>{void poll()},1000)
-    return()=>{active=false;clearInterval(timer);endpoint.dispose();window.removeEventListener('message',receive);retry.current=()=>{}}
+    return()=>{active=false;clearInterval(timer);for(const cancel of requests)cancel();endpoint.dispose();window.removeEventListener('message',receive);retry.current=()=>{}}
   },[props.sessionId,props.storyId,srcDoc])
   return <span>
     <Muted>{t(!props.ready?'speech.mvuWaiting':busy?'speech.mvuRunning':'speech.mvuReady')}</Muted>

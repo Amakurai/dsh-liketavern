@@ -201,6 +201,20 @@ it('registerMvuSchema 本地实现：开局补全、逐条校验、只读路径�
   expect(result.schema).toBe('没有用别管这个')
   expect(result).not.toHaveProperty('display_data')
   expect(result).not.toHaveProperty('delta_data')
+  // JSON Patch 会把路径转换为带引号的方括号；复制只读取来源，目标仍受只读约束。
+  for (const message of [
+    JSON.stringify([{ op: 'replace', path: '/_secret', value: 99 }]),
+    "_.set('[\"_secret\"]',99);",
+    "_.copy('hp','_secret');",
+    "_.insert('', '_secret', 99);",
+    "_.set('', {hp:20, _secret:99});",
+  ]) {
+    const protectedResult = await f.run(`Mvu.parseMessage(${JSON.stringify(message)}, { stat_data: { hp: 10, _secret: 1 } })`)
+    expect(protectedResult.stat_data._secret).toBe(1)
+  }
+  const copied = await f.run(`Mvu.parseMessage("_.copy('_secret','hp');", { stat_data: { hp: 10, _secret: 1 } })`)
+  expect(copied.stat_data).toMatchObject({ hp: 1, _secret: 1 })
+
 })
 
 it('只改写 mvu_zod 的顶层具名导入，其它远程导入与异常写法原样保留', async () => {

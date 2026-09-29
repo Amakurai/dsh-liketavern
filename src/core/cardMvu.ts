@@ -132,9 +132,16 @@ export function installCardMvu(codec:HelperMvuCommandCodec,json:(value:unknown,m
       const detail=error&&typeof error==='object'&&'issues' in error?JSON.stringify((error as {issues:unknown}).issues):String(error)
       console[level]('[MVU zod] '+title+'\n'+detail.slice(0,4000))
     }
-    const readOnly=(path:unknown):boolean=>{
-      const text=String(path??'').trim().replace(/^[\\"'` ]+|[\\"'` ]+$/g,'').replace(/^(?:stat_data|status_current_variables)\./,'')
-      return text.split(/[.[\]]+/).some(segment=>segment.startsWith('_'))
+    // 比较命令应用后的真实 JSON 键，覆盖转义路径、复制目标、对象合并及父节点替换。
+    // schema 自身仍可计算派生字段；只读规则限制的是模型命令，不是 schema 转换。
+    const changesReadOnly=(before:unknown,after:unknown):boolean=>{
+      const left=before&&typeof before==='object'?before as Table:{},right=after&&typeof after==='object'?after as Table:{}
+      for(const key of new Set([...Object.keys(left),...Object.keys(right)])){
+        if(key.startsWith('_')){
+          if(JSON.stringify(left[key])!==JSON.stringify(right[key]))return true
+        }else if(changesReadOnly(left[key],right[key]))return true
+      }
+      return false
     }
     on(events.VARIABLE_INITIALIZED,(variables:unknown,swipeId:unknown)=>{
       if(!active)return
@@ -147,10 +154,10 @@ export function installCardMvu(codec:HelperMvuCommandCodec,json:(value:unknown,m
       if(!active||!Array.isArray(commands))return
       const target=variables as Table,schema=resolve()
       for(const command of commands as Array<{type:string;args:unknown[];full_match?:string}>){
-        if(command.type==='move'?command.args.some(readOnly):readOnly(command.args[0]))continue
         let candidate:Table
         try{candidate=codec.apply(table(target.stat_data),[command as never]).stat_data}
         catch(error){report('warn','变量更新命令无法套用，可能需要重 Roll：'+String(command.full_match??command.type),error);continue}
+        if(changesReadOnly(target.stat_data,candidate))continue
         const result=schema.safeParse(candidate)
         if(result.success)target.stat_data=table(result.data)
         else report('warn','变量更新不符合 schema，已忽略：'+String(command.full_match??command.type),result.error)

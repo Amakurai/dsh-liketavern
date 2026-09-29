@@ -259,6 +259,12 @@ Windows / Node 24.18.0 / dsh 0.1.5-rc.2，使用独立临时 DSH_HOME、手写�
 
 验收：同一会话副本开启原生 MVU 后，初始化任务完成（`initialized: true`，stat_data 由卡片 `[Initvar]` 与 schema 默认值组成），无 CSP 错误与页面异常。命令更新路径以打包进 vm 同一 realm 的真实 zod 做单元验证（非法值忽略、add 只套用一次、只读路径、标记）。未调用真实模型；临时服务、浏览器与数据副本已删除。
 
+### 2026-09-28：聊天卡面、变量与 MVU 故障回归
+
+使用独立临时 DSH_HOME、Windows / Node 24.18.0 / dsh 0.1.7-rc.2 和本次构建，浏览器创建合成角色并编辑 HTML 开场白。确认选择页只展示互动卡面提示，进入聊天后才运行 opaque-origin iframe；卡内异步 updater 在调用方改动 option 后仍只更新原表，chat.hp=11、character.hp=99，经真实剧情保存并整页刷新后仍保留；MVU JSON Patch 修改 `_secret` 被只读规则阻止。Tavern 设置及「卡片与数据」能选择实际剧情并载入已保存快照，页面无错误日志。测试页与临时宿主已关闭，未调用真实模型或使用用户剧情。
+
+新增 9 项回归并扩充既有 MVU 测试，覆盖角色详情刷新、变量旧运行时、备份特殊字符、MVU 通信超时/重复结果/迟到续租、失效租约重新准备及开场白只读预览。170 个测试文件、2411 项测试通过，1 项平台用例跳过；npm ci、build、pack dry-run（449 个文件）、发布白名单及 doctor/backup CLI 检查通过，lib 已重建。这些检查不代表任意第三方卡或真实模型生成效果均已验收。
+
 ### 2026-09-28：合成数据端到端冒烟（假 DeepSeek 端点）
 
 独立 DSH_HOME 只含脚本生成的合成角色卡，profile 补丁把 `llm-deepseek` 的 baseURL 指向本机假 Messages 端点（记录请求体、返回脚本化 SSE，含 `<UpdateVariable>` 命令与缓存用量），headless Chrome 经 CDP 驱动。覆盖：无会话 hero 选 Tavern 模式与选卡开局、HTML 开场白卡面、设置面板全部页签与 390px 窄屏、提示词预览/触发日志/记忆/会话世界书对话框、真实发信、原生 MVU 自动开启与 zod 更新（非法值被 schema 拒绝）、重新生成与回退分支的 MVU 回滚、续写、跨轮请求前缀逐字节延续。

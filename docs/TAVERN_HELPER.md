@@ -186,7 +186,7 @@ await triggerSlash('/swipe right');
 
 真实会话中，message_id 省略或为 latest 时指快照最新消息，current 指当前卡面；负数倒数，越界拒绝。预览中的 latest/current/-1 都指当前文本。旧备份的 current 表恢复到当前卡面。
 
-updateVariablesWith 支持同步或异步回调；等待期间目标变量被修改、快照被刷新或文档被重写，会拒绝过期提交。deleteVariable 使用 Lodash 路径，例如 hero.hp 或 inventory[0]。getAllVariables 合并 global→character→chat→到当前消息为止的消息表，数组整体替换，不包含 preset/script/extension。
+updateVariablesWith 支持同步或异步回调；目标在调用开始时固定，调用方随后复用或修改 option 不会改变提交目标。等待期间目标变量被修改、快照被刷新或文档被重写，会拒绝过期提交；重写前保存的旧变量接口也不能读写新运行时。deleteVariable 使用 Lodash 路径，例如 hero.hp 或 inventory[0]。getAllVariables 合并 global→character→chat→到当前消息为止的消息表，数组整体替换，不包含 preset/script/extension。
 
 同一页面内，保存成功通知同会话、同剧情的其他卡面；未修改卡面自动刷新，有未保存修改或冲突时保留本地。点击“刷新剧情数据”或调用 await refreshHelperSnapshot() 可主动读取最新状态，成功触发 dsh_helper_snapshot_refreshed。默认拒绝丢弃未保存数据；脚本显式传 {discardUnsaved:true} 才会替换为宿主已保存状态，刷新期间的新修改仍受保护。当前页面的新消息会触发剧情刷新和上述实时事件；跨浏览器页面订阅仍待实现。
 
@@ -328,7 +328,11 @@ await Mvu.replaceMvuData(next, {type: 'message', message_id: getCurrentMessageId
 
 下一轮提示词的 EJS getvar/getMessageVar、variables.stat_data 与变量宏读取同剧情可见消息 stat_data 的独立只读视图；本轮计划冻结后保持不变，下一轮才重新读取。历史被模型摘要压缩后，默认当前变量仍与后台下一条回复的继承基准一致；显式 withMsg/end 只读取模型可见的消息身份，不把被压缩原文塞回提示词。模板赋值、删除、递增及通过引用修改该视图会报错；不会把它复制进另一份模板变量存储。
 
+任务读取与结果提交的通信等待上限为 20 秒；超时后解除本地在途锁，保留任务及已有计算结果供明确重试。迟到或重复回包不会覆盖当前任务。续租也会复核绑定、脚本、历史与变量状态，已失效的租约不再被延长，重新读取时必须使用新快照与令牌。
+
 ## 变量 schema 编辑器（底层兼容能力）
+
+MVU 的 `registerMvuSchema` 对命令处理前后的真实 JSON 键检查只读字段；以下划线开头的字段不能通过 JSON Patch、转义路径、复制目标、合并或父节点替换绕过。读取只读字段并复制到普通字段允许；schema 自身的校验与派生字段转换不受该命令限制。
 
 普通卡面不再自动挂载变量工具。设置中的备份恢复只校验 JSON 和剧情提交边界，不调用第三方 iframe 注册的 schema。以下编辑器是保留的隔离实现，当前产品界面不提供入口。
 

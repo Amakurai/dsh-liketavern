@@ -10,6 +10,7 @@ export declare const zh: {
     readonly 'hero.characterFallback': "角色";
     readonly 'hero.creator': "作者 {name}";
     readonly 'hero.start': "开始对话";
+    readonly 'hero.interactiveGreeting': "此开场白包含互动卡面，开始对话后显示。";
     readonly 'hero.prevGreeting': "上一条开场白";
     readonly 'hero.nextGreeting': "下一条开场白";
     readonly 'hero.swipeHint': "← → 切换";

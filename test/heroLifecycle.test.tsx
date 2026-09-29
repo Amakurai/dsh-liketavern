@@ -46,7 +46,9 @@ function fixture(started = false) {
     if (typeof binding.greetingIndex === 'number') greetingIndex = binding.greetingIndex
     return ok({ saved: true })
   })
+  const renderOutputText=vi.fn(async({text}:{text:string})=>ok({text,htmls:[] as string[]}))
   const remote = {
+    renderOutputText,
     getSessionBinding: async ({ sessionId }: { sessionId: string }) => ok({ binding: selected ? { cardId: 'card', sessionId, greetingIndex } : null,
       userName: '旅人', canSwipeGreeting: true, conversationStarted: started }),
     listCharacters: async () => ok({ items: [] }),
@@ -60,7 +62,7 @@ function fixture(started = false) {
     greetingIndex = index
     await act(async () => window.dispatchEvent(new CustomEvent('binding-changed', { detail: 'invalid-index' })))
   }
-  return { clearSessionBinding, ensureGreeting, setSessionBinding, setGreetingIndex, sessions, node }
+  return { clearSessionBinding, ensureGreeting, setSessionBinding, setGreetingIndex, sessions, node, renderOutputText }
 }
 async function mount(node: ReactNode) { await act(async () => { view = create(node) }) }
 async function pick() {
@@ -69,6 +71,18 @@ async function pick() {
   await act(async () => view!.root.findByType(CharacterPicker).props.onPick('card'))
 }
 function start() { return view!.root.findByType(Btn).props.onClick() }
+
+it('开场白预览采用只读展示正文，互动 HTML 显示提示且不在选择页面执行',async()=>{
+  const f=fixture()
+  f.renderOutputText.mockResolvedValue(ok({text:'处理后的可见开场白',htmls:['<script>throw Error("不能提前运行")</script>']}))
+  await mount(f.node('preview'));await pick()
+  expect(JSON.stringify(view!.toJSON())).toContain('处理后的可见开场白')
+  expect(JSON.stringify(view!.toJSON())).not.toContain('不能提前运行')
+  expect(view!.root.findAllByType('iframe')).toHaveLength(0)
+  expect(JSON.stringify(view!.toJSON())).toMatch(/互动卡面|interactive card/)
+  expect(f.renderOutputText).toHaveBeenCalledWith({sessionId:'preview',text:'欢迎'})
+  expect(f.ensureGreeting).not.toHaveBeenCalled()
+})
 
 it('宿主 blank 滞后但日志已开始时不显示预览、不清绑定，并刷新列表', async () => {
   const f = fixture(true)

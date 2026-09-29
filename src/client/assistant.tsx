@@ -15,7 +15,7 @@ import { isTavernSession, type UseSessions } from './mode.js'
 import { openChildSession } from './openChild.js'
 import { BINDING_CHANGED_EVENT, TavernInterruptedFloorActions } from './actions.js'
 import { SpeechBubble } from './speech.js'
-import type { SessionBinding, TavernRemote } from './types.js'
+import type { CharacterDetail, SessionBinding, TavernRemote } from './types.js'
 import { Btn, Err, useLoader } from './util.js'
 
 interface AssistantBlock {
@@ -151,7 +151,12 @@ export function TavernAssistantNode(props: {
   const streaming = node.data.status === 'running'
   const interrupted = node.data.status === 'interrupted'
   const text = node.data.blocks.filter((b) => b.kind === 'text').map((b) => b.text ?? '').join('\n')
-  const name = detail.state.status === 'ready' ? detail.state.value.name : ''
+  // 详情刷新不应短暂改成通用角色名，否则 name 会改变 srcDoc，销毁卡面草稿和脚本运行时。
+  const lastDetail = useRef<{ cardId: string; value: CharacterDetail } | null>(null)
+  if (detail.state.status === 'ready' && binding) lastDetail.current = { cardId: binding.cardId, value: detail.state.value }
+  const currentDetail = detail.state.status === 'ready' ? detail.state.value
+    : binding && lastDetail.current?.cardId === binding.cardId ? lastDetail.current.value : undefined
+  const name = currentDetail?.name ?? binding?.cardName ?? ''
   const hasImages = node.data.blocks.some((b) => b.kind === 'image')
   const firstImage = node.data.blocks.findIndex((block) => block.kind === 'image')
   const firstText = node.data.blocks.findIndex((block) => block.kind === 'text')
@@ -217,7 +222,7 @@ export function TavernAssistantNode(props: {
           sessionId={sessionId}
           cardId={binding.cardId}
           name={name || t('assistant.characterFallback')}
-          characterRevision={detail.state.status === 'ready' ? detail.state.value.revision : undefined}
+          characterRevision={currentDetail?.revision}
           bindingRevision={displayBindingRevision(binding)}
           rawText={text}
           fileMentions={mentions}

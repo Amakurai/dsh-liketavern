@@ -23,6 +23,7 @@ type Variables = {
   replaceVariables(value: unknown, option?: unknown): Record<string, unknown>
   insertOrAssignVariables(value: unknown, option?: unknown): Record<string, unknown>
   insertVariables(value: unknown, option?: unknown): Record<string, unknown>
+  updateVariablesWith(updater: (value: Record<string, unknown>) => Record<string, unknown> | Promise<Record<string, unknown>>, option?: unknown): Record<string, unknown> | Promise<Record<string, unknown>>
 }
 function frame(seed?: string, showTools = true) {
   const body = new Element()
@@ -38,6 +39,26 @@ function frame(seed?: string, showTools = true) {
 }
 
 describe('隔离的卡内变量', () => {
+  it('异步更新固定开始时的作用域，调用方复用参数对象不会把旧值写进其它表', async () => {
+    const { api } = frame()
+    const option = { type: 'message', message_id: 1 }
+    api.replaceVariables({ hp: 10 }, option)
+    api.replaceVariables({ hp: 99 }, { type: 'message', message_id: 2 })
+    const pending = Promise.withResolvers<Record<string, unknown>>()
+    const update = api.updateVariablesWith(() => pending.promise, option)
+    option.message_id = 2
+    pending.resolve({ hp: 11 })
+    await update
+    expect(api.getVariables({ type: 'message', message_id: 1 })).toEqual({ hp: 11 })
+    expect(api.getVariables({ type: 'message', message_id: 2 })).toEqual({ hp: 99 })
+  })
+  it('卡面重写后旧变量 API 不能读取或写入新运行时', () => {
+    const f = frame(), old = { ...f.api }
+    f.api.replaceVariables({ hp: 10 }); f.install()
+    expect(() => old.replaceVariables({ hp: 0 })).toThrow(/disposed/)
+    expect(() => old.getVariables()).toThrow(/disposed/)
+    expect(f.api.getVariables()).toEqual({ hp: 10 })
+  })
   it('普通卡面读写和重装不插入任何变量管理控件',()=>{
     const f=frame(undefined,false)
     f.api.replaceVariables({hp:3});f.install()
@@ -113,6 +134,14 @@ describe('隔离的卡内变量', () => {
     const b = frame(/<script>(window\.__dshTavernVariables=[\s\S]*?)<\/script>/.exec(restored)![1]!)
     expect(b.api.getVariables({ type: 'character' }).payload).toBe(payload)
     expect(restored.indexOf('Content-Security-Policy')).toBeLessThan(restored.indexOf('window.__dshTavernVariables='))
+  })
+  it('备份中的替换符号保持字面量，不把原文档插入变量初始化脚本', () => {
+    const original = buildCardSrcDoc('<p>恢复工厂卡</p>', { greetings: [], greetingIndex: 0 })
+    const payload = "$& $' $` $$"
+    const restored = restoreCardVariableBackup(original, JSON.stringify({ version: 1, scopes: { '["chat",""]': { payload } } }))
+    const seed = /<script>(window\.__dshTavernVariables=[\s\S]*?)<\/script>/.exec(restored)![1]!
+    expect(frame(seed).api.getVariables()).toEqual({ payload })
+    expect(restored.split('<script data-dsh-tavern-bridge>')).toHaveLength(2)
   })
   it('不使用变量的普通 HTML 装饰卡不显示备份工具', () => {
     expect(frame().body.children).toHaveLength(0)

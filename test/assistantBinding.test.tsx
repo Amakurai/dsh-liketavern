@@ -65,6 +65,19 @@ async function render(remote: TavernRemote, sessionId: string) {
 }
 
 describe('assistant 楼层绑定刷新', () => {
+  it('角色详情重读或失败保留显示名称与修订，避免同一 HTML 卡被临时改名重建', async () => {
+    const sessionId='assistant-detail-refresh',binding=defaultBinding(sessionId,'card-detail-refresh')
+    const pending=Promise.withResolvers<ReturnType<typeof ok<CharacterDetail>>>()
+    const getCharacterDetail=vi.fn().mockResolvedValueOnce(ok({...detail,cardId:binding.cardId,revision:'stable'})).mockImplementationOnce(()=>pending.promise)
+    const remote={getSessionBinding:async()=>ok({binding}),getCharacterDetail} as unknown as TavernRemote
+    await render(remote,sessionId)
+    expect(bubble.props).toMatchObject({name:detail.name,characterRevision:'stable'})
+    invalidateCharacter(binding.cardId)
+    await act(async()=>window.dispatchEvent(new CustomEvent(CHARACTER_CHANGED_EVENT,{detail:binding.cardId})))
+    expect(bubble.props).toMatchObject({name:detail.name,characterRevision:'stable'})
+    await act(async()=>pending.reject(new Error('临时读取失败')))
+    expect(bubble.props).toMatchObject({name:detail.name,characterRevision:'stable'})
+  })
   it('首次读取失败显示正文与恢复入口，原地重试后恢复角色气泡', async () => {
     const sessionId = 'assistant-binding-first-failure'
     const binding = defaultBinding(sessionId, 'card-first-failure')

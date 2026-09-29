@@ -23,16 +23,16 @@ import type { CharacterDetail, CharacterSummary, SessionBinding, TavernRemote } 
 import { Avatar, Btn, Err, errOf, Skeleton, useLoader } from './util.js'
 import { expandIdentityMacros } from '../core/macros.js'
 import { cardGreetingVariants } from '../core/greetingLog.js'
-import { hasEjs } from '../core/template.js'
 import { DEFAULT_USER_NAME } from '../core/persona.js'
 import './styles.js'
 
-/** 开场白模板只在服务端临时副本展开；英雄区不会执行第三方脚本或持久写变量。 */
-function TemplateGreetingPreview(props: { remote: TavernRemote; sessionId: string; text: string }) {
+/** 开场白只读展示与聊天共用服务端处理；互动 HTML 只提示，避免源码泄露或提前执行脚本。 */
+function GreetingPreview(props: { remote: TavernRemote; sessionId: string; text: string }) {
+  const t = useT()
   const preview = useLoader(() => props.remote.renderOutputText({ sessionId: props.sessionId, text: props.text }), [props.sessionId, props.text])
   if (preview.state.status === 'error') return <Err message={preview.state.message} />
   if (preview.state.status !== 'ready') return <Skeleton />
-  return <>{preview.state.value.text}</>
+  return <>{preview.state.value.text}{preview.state.value.htmls.length > 0 && <span>{t('hero.interactiveGreeting')}</span>}</>
 }
 
 /** 芯片只能并入英雄行，绝不能塞进模式选择按钮内部（会把菜单点坏）。 */
@@ -412,9 +412,7 @@ function HeroCharacterSession(props: HeroProps) {
           {detailLoader.state.status === 'error' ? (
             <div className="dsh-tavern-hero-previewText" role="alert">{t('hero.detailLoadFailed')}</div>
           ) : greetingText ? (
-            <div className="dsh-tavern-hero-quote">{hasEjs(greetingText)
-              ? <TemplateGreetingPreview remote={remote} sessionId={sessionId} text={greetingText} />
-              : greetingText}</div>
+            <div className="dsh-tavern-hero-quote"><GreetingPreview remote={remote} sessionId={sessionId} text={greetingText} /></div>
           ) : hasAnyGreeting ? (
             <div className="dsh-tavern-hero-previewText">{t('hero.emptyVariantHint')}</div>
           ) : (

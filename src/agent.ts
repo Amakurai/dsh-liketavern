@@ -14,7 +14,7 @@
  *    执行记忆超容量压缩（memoryMaintenance.ts，不记 WAL）。
  */
 import type { Context } from '@deepseek-ai/cordis'
-import { ReasoningEffortId, type LlmCallConfig, type LlmRuntime } from '@deepseek-ai/dsh-llm'
+import { ReasoningEffortId, type LlmCallConfig, type LlmRuntime, type UserMessage } from '@deepseek-ai/dsh-llm'
 import { runTavernPipeline } from './node/pipeline.js'
 import { registerMemoryMaintenance } from './node/memoryMaintenance.js'
 import { blockHelperMvuAssembly, isHelperMvuBlocked, restoreHelperMvuInputs, stopForHelperMvu } from './node/helperMvuLifecycle.js'
@@ -23,7 +23,7 @@ import type { TavernService } from './node/service.js'
 import type { TavernState } from './node/state.js'
 import { registerTavernTools } from './node/tools.js'
 import { mergeTavernCallConfig, resolveTavernReasoningEffort, type AdvertisedReasoningInfo } from './core/callConfig.js'
-import { BOUND_DISCIPLINE, TURN_PLAYBOOK, UNBOUND_STANDING, isContinueInstruction, neutralizeDshMustache } from './core/dshPrompt.js'
+import { BOUND_DISCIPLINE, TURN_PLAYBOOK, UNBOUND_STANDING, isContinueInstruction, isTurnScopedNotice, neutralizeDshMustache } from './core/dshPrompt.js'
 import type { SamplingSettings } from './core/types.js'
 import { PRESET_ADAPTER_PROVIDER, PRESET_ADAPTER_SOURCE_PROVIDER } from './node/presetAdapter.js'
 import { attachPresetPlanMessage, createPresetPlanMessage, hasPresetPlanMessage } from './node/presetRequestProjection.js'
@@ -47,6 +47,19 @@ function applyTurnContext(result: { contexts: Array<{ name: string; text: string
 
 function joinPromptParts(parts: string[]): string {
   return parts.filter((p) => p.trim().length > 0).join('\n\n')
+}
+
+/**
+ * 宿主停止轮次时保留未消费的 next-step 输入（为用户排队消息设计），新一轮首步会一并认领。
+ * 插件的步骤收口与同轮写入确认只属于原轮；带进新一轮会让模型把旧写入确认和「第 2 步」
+ * 收口当成本轮指令。丢弃后若没有其它认领输入，返回空批次由宿主按空首步收口，不为宿主
+ * 追加的 runtime context 单独发信。
+ */
+function dropStaleTurnNotices<D extends { kind: 'enter'; messages: UserMessage[] }>(claimed: readonly UserMessage[], decision: D): D {
+  const stale = new Set(claimed.filter(isTurnScopedNotice).map((message) => message.id))
+  if (stale.size === 0) return decision
+  const kept = claimed.some((message) => !stale.has(message.id))
+  return { ...decision, messages: kept ? decision.messages.filter((message) => !stale.has(message.id)) : [] }
 }
 
 /** 解析模型公布的 reasoning 档；无 llm 或解析失败一律返回 undefined，回退交给 resolveTavernReasoningEffort。 */
@@ -83,7 +96,8 @@ export function apply(ctx: Context): void {
       return { kind: 'reject' }
     }
     state.currentSteps.set(payload.agent.id, payload.step)
-    const decision = await next()
+    const proposed = await next()
+    const decision = payload.step === 1 && proposed.kind === 'enter' ? dropStaleTurnNotices(payload.messages, proposed) : proposed
     if (decision.kind !== 'enter' || !state.presetAdapter) return decision
     const pipeline = state.turnPlans.get(payload.agent.id)?.result
     if (!pipeline?.layout) return decision

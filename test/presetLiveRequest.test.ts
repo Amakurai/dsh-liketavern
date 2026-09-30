@@ -18,6 +18,7 @@ import { forkAgentOptions } from '../src/node/floors.js'
 import { onTurnEnd, onTurnStart } from '../src/node/sessionLifecycle.js'
 import { TavernState } from '../src/node/state.js'
 import { parseStPreset } from '../src/state/presetStore.js'
+import { CONTINUE_INSTRUCTION_PREFIX, TURN_STEP_NOTICE_PREFIX, TURN_WRITE_ACK_PREFIX, formatTurnStepNotice, isTurnScopedNotice } from '../src/core/dshPrompt.js'
 
 vi.mock('../src/node/tools.js', () => ({ registerTavernTools: vi.fn() }))
 vi.mock('../src/node/memoryMaintenance.js', () => ({ registerMemoryMaintenance: vi.fn() }))
@@ -25,6 +26,7 @@ vi.mock('../src/node/memoryMaintenance.js', () => ({ registerMemoryMaintenance: 
 let root: string, ctx: Context, state: TavernState, agent: Agent, cardId: string, presetId: string, storyId: string
 let config = resolveConfig({ sampling: { temperature: 1.2, maxTokens: 1800, stop: ['GLOBAL-STOP'] } })
 let firstStepTool = false
+let firstToolName = 'factory_edit_preset'
 const requests: GenerateOptions[] = []
 const errors: unknown[] = []
 const children: AgentHandle[] = []
@@ -41,7 +43,7 @@ class FactoryAdapter extends LlmAdapter {
   async *stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
     requests.push(options)
     if (firstStepTool && requests.length === 1) {
-      yield { type: 'tool-call-delta', index: 0, id: ToolCallId('factory-call'), name: 'factory_edit_preset', argumentsDelta: '{}' }
+      yield { type: 'tool-call-delta', index: 0, id: ToolCallId('factory-call'), name: firstToolName, argumentsDelta: '{}' }
       yield { type: 'finish', reason: { kind: 'tool-calls' } }
       return
     }
@@ -67,7 +69,7 @@ async function send(message: UserMessage, target = agent): Promise<void> {
 }
 
 beforeEach(async () => {
-  requests.length = 0; errors.length = 0; children.length = 0; firstStepTool = false
+  requests.length = 0; errors.length = 0; children.length = 0; firstStepTool = false; firstToolName = 'factory_edit_preset'
   config = resolveConfig({ sampling: { temperature: 1.2, maxTokens: 1800, stop: ['GLOBAL-STOP'] } })
   root = await mkdtemp(join(tmpdir(), 'tavern-preset-live-'))
   state = new TavernState({ root, characters: join(root, 'characters'), lorebooks: join(root, 'library', 'lorebooks'),
@@ -262,4 +264,49 @@ it.each([undefined, 2500])('分支后清空预设上限，保留真正父级上�
   expect(requests[1]!.maxTokens).toBe(hostMaxTokens)
   expect(handle.agent.session.requestHeader()?.config.maxTokens).toBe(hostMaxTokens)
   expect(agent.session.requestHeader()?.config.maxTokens).toBe(777)
+})
+
+it('停止多步轮次后，遗留的步骤收口与同轮写入通知不进入下一轮请求；续写指令等唤醒输入保留', async () => {
+  firstStepTool = true
+  firstToolName = 'factory_blocking_write'
+  let started!: () => void
+  const running = new Promise<void>(resolve => { started = resolve })
+  const notice = (text: string, summary: string) => createUserMessage({ content: [{ type: 'text', text }],
+    source: { kind: 'dsh-tavern', form: 'notice', summary } } as unknown as Parameters<typeof createUserMessage>[0])
+  // 与 Tavern 写工具相同：执行中注入 next-step 通知，然后在用户停止前一直未返回。
+  ctx.tools.register(defineTool({ name: 'factory_blocking_write', description: '写入后等待停止', parameters: {},
+    output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
+    async execute(_args, exec) {
+      exec.agent!.inject(notice(formatTurnStepNotice(2), '多步收口提示'))
+      exec.agent!.inject(notice(`${TURN_WRITE_ACK_PREFIX}记忆 id=factory 已落盘。`, '同轮写入确认'))
+      started()
+      await new Promise((_resolve, reject) => exec.signal.addEventListener('abort', () => reject(exec.signal.reason), { once: true }))
+      return 'unreachable'
+    },
+  }))
+  agent.followup(userMessage('写入后被停止'))
+  await running
+  agent.cancel({ kind: 'user' }, { keepInbox: true })
+  await agent.whenIdle()
+  await state.waitForSessionTasks(agent.id)
+  expect(agent.session.snapshotEvents().filter(event => event.type === 'turn/end').at(-1)?.data.reason.kind).toBe('aborted')
+  // 宿主为排队输入保留未消费的 next-step；这正是旧通知可能串到下一轮的来源。
+  expect(agent.inbox.nextStep.map(textOf)).toEqual([formatTurnStepNotice(2), `${TURN_WRITE_ACK_PREFIX}记忆 id=factory 已落盘。`])
+
+  await send(userMessage('停止后的新一轮'))
+  expect(requests).toHaveLength(2)
+  const next = requests[1]!.messages.filter(message => message.role === 'user').map(textOf)
+  expect(next.some(text => text.includes('停止后的新一轮'))).toBe(true)
+  expect(next.some(text => text.startsWith(TURN_STEP_NOTICE_PREFIX) || text.startsWith(TURN_WRITE_ACK_PREFIX))).toBe(false)
+  const logged = agent.session.snapshotEvents().filter(event => event.type === 'user/message').map(event => textOf(event.data))
+  expect(logged.some(text => text.startsWith(TURN_STEP_NOTICE_PREFIX) || text.startsWith(TURN_WRITE_ACK_PREFIX))).toBe(false)
+})
+
+it('只把插件自身的轮内通知判为遗留；用户同名文本与续写、压缩指令不受影响', () => {
+  const tavern = (text: string) => ({ source: { kind: 'dsh-tavern' }, content: [{ type: 'text', text }] })
+  expect(isTurnScopedNotice(tavern(formatTurnStepNotice(3)))).toBe(true)
+  expect(isTurnScopedNotice(tavern(`${TURN_WRITE_ACK_PREFIX}记忆已落盘`))).toBe(true)
+  expect(isTurnScopedNotice(tavern(`${CONTINUE_INSTRUCTION_PREFIX}接着写`))).toBe(false)
+  expect(isTurnScopedNotice(tavern('记忆压缩任务'))).toBe(false)
+  expect(isTurnScopedNotice({ source: { kind: 'user' }, content: [{ type: 'text', text: formatTurnStepNotice(2) }] })).toBe(false)
 })

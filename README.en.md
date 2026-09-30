@@ -4,7 +4,7 @@
 
 **Tavern-style roleplay in DeepSeek Harness's `dsh web`, with character cards, lorebooks, and long-term memory.**
 
-[![Release](https://img.shields.io/badge/version-v0.4.6-blue.svg)](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.4.6)
+[![Release](https://img.shields.io/badge/version-v0.5.0-blue.svg)](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.5.0)
 [![dsh](https://img.shields.io/badge/dsh-0.1.7--rc.2-informational.svg)](https://deepseek-harness.github.io/deepseek-harness/)
 [![Node.js](https://img.shields.io/badge/node-%E2%89%A524-brightgreen.svg)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
@@ -86,7 +86,7 @@ flowchart LR
 | Component | Minimum Requirement | Notes |
 | :--- | :--- | :--- |
 | **Node.js** | `≥ 24.0.0` | Development and CI environments use Node 24 |
-| **dsh CLI / Host** | **`0.1.7-rc.2`** | Peer dependencies are pinned to this host version |
+| **dsh CLI / Host** | **`0.2.0-rc.2`** | Peer dependencies are pinned to this host version |
 | **pnpm** | Any modern version | Used by `dsh plugin` to resolve and install dependencies |
 | **Model** | Configured in dsh | Ensure you can start an ordinary conversation in dsh |
 
@@ -100,7 +100,7 @@ Run these commands in your terminal to install the pinned stable release:
 
 ```bash
 # 1. Add plugin to web profile
-dsh plugin --profile web add github:Amakurai/dsh-liketavern#v0.4.6
+dsh plugin --profile web add github:Amakurai/dsh-liketavern#v0.5.0
 
 # 2. Verify installation
 dsh plugin --profile web list --depth 0
@@ -115,11 +115,11 @@ dsh web
 
 ### Option 2: Install from Release Tarball (Offline)
 
-1. Download `dsh-liketavern-0.4.6.tgz` from the [v0.4.6 Release](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.4.6) (with `SHA256SUMS.txt` for integrity verification).
+1. Download `dsh-liketavern-0.5.0.tgz` from the [v0.5.0 Release](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.5.0) (with `SHA256SUMS.txt` for integrity verification).
 2. In the download directory, run:
 
 ```bash
-dsh plugin --profile web add ./dsh-liketavern-0.4.6.tgz
+dsh plugin --profile web add ./dsh-liketavern-0.5.0.tgz
 dsh web
 ```
 
@@ -272,7 +272,7 @@ node lib/backup.js restore --backup "D:/backups/dsh-2026-09-19" --target "C:/dat
 <details>
 <summary><b>Q1: No "Tavern 模式" or settings entry after installation?</b></summary>
 
-1. Run `dsh --version` to verify host version is `0.1.7-rc.2`.
+1. Run `dsh --version` to verify host version is `0.2.0-rc.2`.
 2. Run `dsh plugin --profile web list --depth 0` to confirm plugin is installed in `web` profile.
 3. Restart `dsh web` and check the terminal log for plugin loading errors.
 </details>

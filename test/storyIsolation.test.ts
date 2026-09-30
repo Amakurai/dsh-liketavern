@@ -9,7 +9,7 @@ import { createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { AttachmentId } from '@deepseek-ai/dsh-attachment'
 import { TavernState } from '../src/node/state.js'
 import { resolveConfig } from '../src/node/config.js'
-import { regenerate, editAssistantMessage, rollbackToFloor, getFloorSiblings } from '../src/node/floors.js'
+import { adoptHostFork, regenerate, editAssistantMessage, rollbackToFloor, getFloorSiblings } from '../src/node/floors.js'
 import { saveBinding, type SessionBinding } from '../src/node/bindings.js'
 import * as bindingStorage from '../src/node/bindings.js'
 import { appendSiblingFork, loadSiblingForks } from '../src/state/siblings.js'
@@ -307,4 +307,86 @@ it('诊断遇到其它来源的循环元数据时记录失败提示，宿主和�
   expect(JSON.parse(state.requestDiagnostics.get('parent')!.text)).toMatchObject({ stage: 'host', error: expect.stringContaining('生成继续') })
   expect(() => recordRequestDiagnostics(state, 'parent', request, 'tavern-adapter')).not.toThrow()
   expect(JSON.parse(state.requestDiagnostics.get('parent')!.text)).toMatchObject({ stage: 'tavern-adapter', error: expect.stringContaining('生成继续') })
+})
+
+/** 宿主原生「在新对话中分支」：只复制日志前缀，子会话头带 parentSession/isSeeded 与继承长度。 */
+function hostFork(id: string, events: SessionEvent[], inherited: number, header: Record<string, unknown> = {}): Session {
+  const child = { id, header: { agentPreset: 'tavern', parentSession: 'parent', isSeeded: true, ...header },
+    inheritedEventCount: inherited, snapshotEvents: () => events,
+    requestHeader: () => ({ config: { provider: 'test', model: 'test' } }) } as unknown as Session
+  sessions.set(id, child)
+  return child
+}
+const bodies = async (id: string) => (await (await workspace(id)).memory.list()).map((m) => m.body).sort()
+
+it('宿主原生分支按继承边界准备独立剧情并绑定；来源剧情不变', async () => {
+  addSession('parent', [...turn(1), ...turn(2)])
+  await writeFact('parent', 1, '门打开了')
+  await writeFact('parent', 2, '钥匙丢了')
+  const child = hostFork('host-child', turn(1), 4)
+  expect(await adoptHostFork({ ctx, state }, child)).toBe(true)
+  const adopted = (await state.loadBinding('host-child'))!
+  expect(adopted.storyId).not.toBe((await state.loadBinding('parent'))!.storyId)
+  expect(adopted.walLineage).toEqual([{ sessionId: 'parent', throughTurn: 1 }])
+  expect(await bodies('host-child')).toEqual(['门打开了'])
+  expect(await bodies('parent')).toEqual(['钥匙丢了', '门打开了'])
+  // 子剧情继续写入不回流来源。
+  await writeFact('host-child', 2, '窗户开着')
+  expect(await bodies('parent')).toEqual(['钥匙丢了', '门打开了'])
+})
+
+it('宿主分支停在某轮最终回复处保留该层；停在多步轮次中途则撤销该层派生事实', async () => {
+  const closed = [...turn(1), ...turn(2)]
+  addSession('parent', closed)
+  await writeFact('parent', 2, '钥匙丢了')
+  // 前缀含第 2 轮的最终回复但没有 turn/end：来源其后只有收口帧，写入完全属于子会话。
+  expect(await adoptHostFork({ ctx, state }, hostFork('at-reply', closed.slice(0, 7), 7))).toBe(true)
+  expect(await bodies('at-reply')).toEqual(['钥匙丢了'])
+
+  const reply = closed[6]!
+  const multiStep = [...closed.slice(0, 6), { ...reply, data: { ...reply.data, step: 1 } },
+    { type: 'tool/call', seq: 7, time: 7, data: { turn: 2, step: 1, callId: 'c', name: 'run_code', arguments: '{}' } },
+    { ...reply, seq: 8, data: { ...reply.data, step: 2 } },
+    { type: 'turn/end', seq: 9, time: 9, data: { turn: 2, reason: { kind: 'completed' } } }] as SessionEvent[]
+  addSession('parent', multiStep)
+  expect(await adoptHostFork({ ctx, state }, hostFork('mid-turn', multiStep.slice(0, 7), 7))).toBe(true)
+  expect(await bodies('mid-turn')).toEqual([])
+  expect((await state.loadBinding('mid-turn'))!.walLineage).toEqual([{ sessionId: 'parent', throughTurn: 1 }])
+  expect(await bodies('parent')).toEqual(['钥匙丢了'])
+})
+
+it('插件自身分支创建期间触发的接管让位，子会话只有一份剧情；读取绑定会等待接管完成', async () => {
+  await writeFact('parent', 1, '门打开了')
+  const adoptions: Promise<boolean>[] = []
+  const create = (ctx as unknown as { agents: { create: (opts: { sessionId: string }) => Promise<unknown> } }).agents.create
+  ;(ctx as unknown as { agents: { create: unknown } }).agents.create = async (opts: { sessionId: string }) => {
+    const handle = await create(opts)
+    // 宿主在 create 内同步广播 session/created；此时插件绑定尚未落盘。让接管先跑完，覆盖最不利的时序。
+    const adoption = state.trackBindingAdoption(opts.sessionId, () => adoptHostFork({ ctx, state }, sessions.get(opts.sessionId)!))
+    adoptions.push(adoption)
+    await adoption
+    return handle
+  }
+  const storiesBefore = (await state.listStories(cardId)).length
+  const result = await rollbackToFloor({ ctx, state }, 'parent', undefined, 1)
+  expect(await Promise.all(adoptions)).toEqual([false])
+  // 只有插件分支自己的一份新剧情，接管没有另建草稿或覆盖绑定。
+  expect((await state.listStories(cardId)).length).toBe(storiesBefore + 1)
+  expect(await bodies(result.childSessionId)).toEqual(['门打开了'])
+
+  const pending = state.trackBindingAdoption('late-child', () => adoptHostFork({ ctx, state }, hostFork('late-child', turn(1), 4)))
+  expect((await state.loadBinding('late-child'))?.cardId).toBe(cardId)
+  expect(await pending).toBe(true)
+})
+
+it('来源未绑定、子代理或已有绑定的会话不接管', async () => {
+  sessions.set('loose', { id: 'loose', header: { agentPreset: 'tavern' }, snapshotEvents: () => [] } as unknown as Session)
+  expect(await adoptHostFork({ ctx, state }, hostFork('orphan', turn(1), 4, { parentSession: 'loose' }))).toBe(false)
+  expect(await state.loadBinding('orphan')).toBeNull()
+  expect(await adoptHostFork({ ctx, state }, hostFork('subagent', turn(1), 4, { delegationDepth: 1 }))).toBe(false)
+  expect(await state.loadBinding('subagent')).toBeNull()
+  await state.saveBinding(binding('bound-child'))
+  const before = (await state.loadBinding('bound-child'))!.storyId
+  expect(await adoptHostFork({ ctx, state }, hostFork('bound-child', turn(1), 4))).toBe(false)
+  expect((await state.loadBinding('bound-child'))!.storyId).toBe(before)
 })

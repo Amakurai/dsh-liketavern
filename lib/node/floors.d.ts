@@ -60,6 +60,13 @@ export interface ForkResult {
     /** 分支会话的可读标题，如「角色名 · 从第 3 层重生成」。 */
     title: string;
 }
+/**
+ * 宿主原生「在新对话中分支」经 agents.create 复制前缀，但不知道 Tavern 剧情：子会话没有绑定，
+ * 渲染退回原生、之后的记忆也无处写。来源已绑定而子会话未绑定时，按插件分支同一套草稿流程准备
+ * 子剧情后再绑定。前缀停在某轮中途且该轮之后仍有模型或工具事件时，该轮写入可能不属于子会话，
+ * 保守地一并撤销。插件自身分支、子代理与已绑定会话跳过；准备失败时不发布子剧情。
+ */
+export declare function adoptHostFork({ ctx, state }: FloorDeps, child: Session): Promise<boolean>;
 /** 重新生成：回滚目标楼层并重跑。messageId（assistant 消息 id）或 floorTurn 指定楼层，都缺省取最后一个已关闭 turn。进行中的 turn 拒绝。 */
 export declare function regenerate({ ctx, state }: FloorDeps, sessionId: string, messageId?: string, floorTurn?: number): Promise<ForkResult>;
 /** 回退到指定楼层：保留该楼层（含）之前的全部内容，丢弃其后的楼层；不自动续跑。messageId 与 floorTurn 至少给其一。 */

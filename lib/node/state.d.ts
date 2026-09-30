@@ -332,6 +332,11 @@ export declare class TavernState {
      * 回收失败则删除绑定文件并返回 null，避免 UI 把文件夹 ID 当成角色名。
      */
     loadBinding(sessionId: string): Promise<SessionBinding | null>;
+    /** 不等待绑定接管的读取；只供接管流程自身复核，避免等待自己。 */
+    loadBindingUnwaited(sessionId: string): Promise<SessionBinding | null>;
+    private readonly bindingAdoptions;
+    /** 登记宿主原生分支的绑定接管；同步登记，使随后任何 loadBinding 都先等它结束。 */
+    trackBindingAdoption<T>(sessionId: string, work: () => Promise<T>): Promise<T>;
     private loadBindingNow;
     saveBinding(binding: SessionBinding): Promise<void>;
     /**

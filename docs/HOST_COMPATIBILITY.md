@@ -1,6 +1,31 @@
 # 宿主兼容记录
 
-当前源码基线为 dsh 0.1.7-rc.2。以下按版本记录观测结果，升级时重新核对，不是永久架构要求。
+当前源码基线为 dsh 0.2.0-rc.2。以下按版本记录观测结果，升级时重新核对，不是永久架构要求。
+
+## 0.2.0-rc.2 升级核对（2026-09-29）
+
+公开 npm 上 0.2.0-rc.2 覆盖了此前锁定的全部宿主包，没有包被移除或改名；Cordis 4.0.4、Schemastery 3.18.4、cordis-plugin-* 版本不变。peerDependencies、overrides、devDependencies 统一改为精确 `0.2.0-rc.2`，allowScripts 同步传递依赖的新版本（`@google/genai@2.21.0`、`koffi@3.1.1`）。重扫宿主包的非可选 peer，没有需要补进 devDependencies 的新基础包。
+
+逐包对比旧新两版已安装的 `lib/` 与声明：
+
+- llm、agent、tools、system-prompt、session-projection、settings、agent-preset-registry、attachment、credentials、typert、ptc-runtime(-node)、agent-tool-presentation 的声明无变化；session-format 仍到 v4，没有新迁移器。standing/turn 段位、`llm/stream` 冻结、prepareCall 与 `systemPromptUpdate` 边界沿用原核对结论。
+- `AgentLoop` 步骤失败时新增 `ToolCallRecovery`：先为尚无结果的工具调用追加保守的错误 `tool/result`，再关闭步骤；崩溃修复与分支种子改用同一实现，且只有同 turn/step 的 append 结果才算已答复。剧情历史投影本就跳过 tool/developer 角色，楼层 WAL 以 turn 收口提交，不受这些合成结果影响。
+- `MessageSourceMap` 新增 `user-question-reply`（ask_user 回答）。Tavern 预设不挂载 ask_user；即使出现，历史投影也只把 `user`/`model` 来源计入深度。
+- DeepSeek 文件索引的 `invalidate`/`remove` 改为批量签名，插件的布局投影装饰器不调用这两个方法。会话控制器 fork 增加可选 `onCreated` 回调、gateway 增加 `hasLiveClient`，均为加法。
+- 客户端：插件使用的 `conversation.chat.node`、`conversation.chat.assistant-actions`、`conversation.input.dock`、`conversation.session.header.actions`、`settings.section` 仍存在；chat 的 `groupPart` 分段、turn-tail `closing.finalNode.messageId` 契约不变。chat 的默认 `transcriptView` 从 standard 改为 detailed，运行状态与时长格式改为分片渲染（`duration.*Unit` 键），均为宿主自身展示。primitives 的 `--dsh-frame-top-clearance` 更名为 `--dsh-frame-overlay-top`，插件不引用；插件使用的 `--dsh-*` 变量均仍有定义。
+- `dsh web` 仍是 `dsh --profile web` 的别名，启动器的 `--patch` 叠加层保留；宿主 web 补丁仅新增桌面遥测行并移除默认禁用的 schedule 行，预设 YAML 格式与 `tool-presentation` 的 `mode: ptc` 不变。
+
+构建无类型错误，`lib/` 产物与旧基线逐字节一致；全量 172 个测试文件 / 2519 项通过、1 项 POSIX 用例跳过，仅需更新 doctor/backup 测试中的期望版本字面量。459 文件打包白名单、doctor 与 backup CLI 冒烟通过。
+
+安装冒烟：独立临时 `DSH_HOME` 中用项目内 0.2.0-rc.2 CLI 执行 `dsh plugin --profile web add` 安装本地 tgz，再启动 `dsh --profile web`。宿主正常监听，插件建立 `dsh-tavern/` 数据目录，页面合并脚本包含 `dsh-liketavern/client.js`，日志无加载错误；pnpm 仅报告宿主 peer 在 profile 内“缺失”（运行时由宿主提供），无版本冲突。
+
+端到端冒烟：`DEEPSEEK_BASE_URL` 指向本机假 Messages 端点（记录请求体、返回脚本化 SSE 与 `run_code` 工具调用），headless Edge 经 CDP 驱动同一宿主。合成角色卡覆盖：Tavern 模式选择、新建/编辑/绑定角色、英雄区宏展开、HTML 开场白卡面（仅 `allow-scripts`、`connect-src 'none'`，框内脚本可执行）、真实发信经 `tavern-deepseek` 适配器并冻结 `systemPromptUpdate: in-history`、跨轮 system 前缀逐字节一致、PTC `run_code` → `tavern_memory_write` 写入与同轮确认、重新生成/回退/编辑回复/续写各自建子会话且记忆只留在原剧情、AI 代答独立请求、设置八个页签及关于页宿主版本。完整重启宿主后四个会话均重新加载。全程浏览器无控制台错误（重启期间的断线重连除外）。
+
+新发现并修复：宿主停止轮次时保留未消费的 next-step 输入，插件在工具执行中注入的「【Tavern 步骤】」与「【Tavern 同轮写入】」会被下一轮首步一并认领，模型把旧写入确认和「第 2 步」收口当成新一轮指令。`agent/pre-step` 在每轮第 1 步丢弃这类只属于原轮的插件通知（续写指令、记忆压缩不受影响），若只剩宿主 runtime context 则返回空批次由宿主按空首步收口。真实 AgentLoop 回归先复现、后验证修复，安装环境同一操作复测确认。
+
+第二处（0.1.7 已存在）：宿主消息栏的「在新对话中分支」经 session-controller `fork` → `agents.create` 只复制日志前缀，插件不知情，子会话无绑定、无独立剧情，卡面退回原生源码显示。现于宿主 `session/created` 同步登记接管：来源已绑定、子会话为 Tavern 种子分支且非插件自身分支（插件分支在创建期间登记排除）、非子代理时，用插件分支同一草稿流程 `forkStory` 撤销未继承楼层、复制定时器与索引后绑定；前缀停在某轮中途且来源其后仍有模型/工具事件时连同该层撤销。接管完成前 `loadBinding` 等待，客户端与首轮不会读到未绑定。真实文件系统回归覆盖整轮边界、最终回复处、多步中途、插件分支不重复接管（去掉排除即失败）、读取等待及跳过条件；安装环境实际点击分支后显示角色芯片、卡面与 Tavern 操作栏，新轮在子剧情独立开层。
+
+假端点重启后曾复用工具调用 ID，使同一会话出现重复 PTC subCallId，存储日志随后被宿主（0.1.7 起已有的）校验拒绝加载；真实供应商 ID 唯一，这是测试工具产物，不是插件或升级问题。未调用真实模型，不代表生成质量或任意第三方卡已经验收。
 
 ## 开场白首节点与迁移校验（2026-09-27）
 

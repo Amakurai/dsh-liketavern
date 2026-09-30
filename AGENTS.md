@@ -6,7 +6,7 @@
 
 dsh-liketavern 为 DeepSeek Harness 的 Tavern 插件。角色卡、预设、世界书、人设、正则、记忆、世界变化层和分支操作共用 dsh agent 运行时。普通扮演不另起发信通道；AI 代答是明确的辅助调用。
 
-当前基线：dsh / @deepseek-ai 包 0.1.7-rc.2、Node 24、Windows；CI 为 Ubuntu。TypeScript ESM，NodeNext，strict + noUncheckedIndexedAccess，相对导入显式 `.js`。
+当前基线：dsh / @deepseek-ai 包 0.2.0-rc.2、Node 24、Windows；CI 为 Ubuntu。TypeScript ESM，NodeNext，strict + noUncheckedIndexedAccess，相对导入显式 `.js`。
 
 查宿主机制先看 [官方文档](https://deepseek-harness.github.io/deepseek-harness/) 和已安装包的 `lib/`、`.d.ts`，先核对各包 package.json；不要凭旧版本记忆推断 slot、profile、patch、system-prompt 或事件时序。
 
@@ -52,6 +52,7 @@ dsh-liketavern 为 DeepSeek Harness 的 Tavern 插件。角色卡、预设、世
 - 导入先 inspectCharacter，不落盘；内嵌世界书由用户选择是否导入，拒绝导入时卡与资产两处都清空。
 - 新会话不自动绑默认卡。默认设置只在点选卡时套用；hero 的空白判定和 seatWatch 补偿见兼容记录。
 - fork 用 agents.create（session- 前缀）+ workspace.attachSession，带父会话最新 provider/model；开场白预先写进 seed。客户端先 refresh 再 open 子会话。
+- 宿主消息栏「在新对话中分支」不经插件：`session/created` 时由 adoptHostFork 为已绑定来源的种子子会话准备独立剧情后绑定，接管期间 loadBinding 等待。插件自身分支在 create 前登记 pluginForkIds 排除，否则同一子会话会被准备两份剧情。
 - 会话级宿主 lineage 面包屑与楼层兄弟导航互补；不要占掉原生 lineage slot。被中断 assistant 仅在没有对应 turn-tail 持久消息操作栏时由 chat.node 按 turn 补挂，避免同层重复按钮。
 - runtime context、同轮写入、续写和步骤 notice 均经 isSyntheticUserText 过滤，不当作用户台词，不参与 WI、lastusermessage 或正则 depth。
 - 步骤收口 notice 只在工具执行时 inject，不放 agent/pre-step，否则宿主可能多拉出孤儿步骤。

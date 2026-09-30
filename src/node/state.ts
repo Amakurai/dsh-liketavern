@@ -1147,7 +1147,27 @@ export class TavernState {
    * 回收失败则删除绑定文件并返回 null，避免 UI 把文件夹 ID 当成角色名。
    */
   async loadBinding(sessionId: string): Promise<SessionBinding | null> {
+    // 宿主原生分支刚创建时绑定仍在准备；客户端与首轮读取须等它，不能先把子会话当成未绑定。
+    const adoption = this.bindingAdoptions.get(sessionId)
+    if (adoption) await adoption.catch(() => {})
+    return this.loadBindingUnwaited(sessionId)
+  }
+
+  /** 不等待绑定接管的读取；只供接管流程自身复核，避免等待自己。 */
+  async loadBindingUnwaited(sessionId: string): Promise<SessionBinding | null> {
     return withWorkspaceLock(this.paths.sessions, () => this.loadBindingNow(sessionId))
+  }
+
+  private readonly bindingAdoptions = new Map<string, Promise<unknown>>()
+
+  /** 登记宿主原生分支的绑定接管；同步登记，使随后任何 loadBinding 都先等它结束。 */
+  trackBindingAdoption<T>(sessionId: string, work: () => Promise<T>): Promise<T> {
+    const run = Promise.resolve().then(work)
+    const tracked = run.finally(() => {
+      if (this.bindingAdoptions.get(sessionId) === tracked) this.bindingAdoptions.delete(sessionId)
+    })
+    this.bindingAdoptions.set(sessionId, tracked)
+    return tracked
   }
 
   private async loadBindingNow(sessionId: string): Promise<SessionBinding | null> {

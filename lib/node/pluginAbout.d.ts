@@ -1,3 +1,4 @@
+import type { ProfileContext } from '@deepseek-ai/dsh-app-boot';
 export interface PluginAbout {
     version: string;
     hostVersion: string;
@@ -5,6 +6,7 @@ export interface PluginAbout {
     repositoryUrl: string;
     releasesUrl: string;
     sourceCheckout: boolean;
+    desktopHost: boolean;
 }
 export interface PluginUpdate {
     status: 'current' | 'available' | 'ahead' | 'incompatible';
@@ -21,6 +23,8 @@ export interface PluginAboutMetadata {
 export interface PluginAboutReaderOptions {
     fetch?: typeof globalThis.fetch;
     readMetadata?: () => Promise<PluginAboutMetadata>;
+    /** 启动宿主提供的安装锚点；桌面端的 Node 主入口不属于 CLI 包。 */
+    hostProfile?: Pick<ProfileContext, 'name' | 'installAnchor'>;
     /** 只允许缩短默认期限，供工厂测试使用；实际请求期限最多 9 秒。 */
     timeoutMs?: number;
 }

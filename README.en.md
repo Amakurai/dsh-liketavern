@@ -2,10 +2,10 @@
 
 # dsh-liketavern
 
-**Tavern-style roleplay in DeepSeek Harness's `dsh web`, with character cards, lorebooks, and long-term memory.**
+**Tavern-style roleplay in DeepSeek Harness Desktop or `dsh web`, with character cards, lorebooks, and long-term memory.**
 
-[![Release](https://img.shields.io/badge/version-v0.5.0-blue.svg)](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.5.0)
-[![dsh](https://img.shields.io/badge/dsh-0.1.7--rc.2-informational.svg)](https://deepseek-harness.github.io/deepseek-harness/)
+[![Release](https://img.shields.io/badge/version-v0.5.1-blue.svg)](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.5.1)
+[![dsh](https://img.shields.io/badge/dsh-0.2.0--rc.2-informational.svg)](https://deepseek-harness.github.io/deepseek-harness/)
 [![Node.js](https://img.shields.io/badge/node-%E2%89%A524-brightgreen.svg)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
@@ -94,13 +94,23 @@ flowchart LR
 
 ---
 
-### Option 1: Install via dsh plugin (Recommended)
+### Desktop: Install and Upgrade from GitHub
+
+Open **Plugins → Add plugin**, enter this GitHub URL, and install:
+
+```text
+https://github.com/Amakurai/dsh-liketavern.git#v0.5.1
+```
+
+To upgrade, uninstall the old Tavern plugin from the Plugins page, add the new version's tag, then fully quit and restart the desktop app. **Settings → Tavern → About → Check for updates** only checks stable releases and host compatibility; installation is handled by the desktop Plugins page. The repository includes precompiled `lib/` files, so no local build is needed.
+
+### Web / CLI: Install via dsh plugin
 
 Run these commands in your terminal to install the pinned stable release:
 
 ```bash
 # 1. Add plugin to web profile
-dsh plugin --profile web add github:Amakurai/dsh-liketavern#v0.5.0
+dsh plugin --profile web add github:Amakurai/dsh-liketavern#v0.5.1
 
 # 2. Verify installation
 dsh plugin --profile web list --depth 0
@@ -115,11 +125,11 @@ dsh web
 
 ### Option 2: Install from Release Tarball (Offline)
 
-1. Download `dsh-liketavern-0.5.0.tgz` from the [v0.5.0 Release](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.5.0) (with `SHA256SUMS.txt` for integrity verification).
+1. Download `dsh-liketavern-0.5.1.tgz` from the [v0.5.1 Release](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.5.1) (with `SHA256SUMS.txt` for integrity verification).
 2. In the download directory, run:
 
 ```bash
-dsh plugin --profile web add ./dsh-liketavern-0.5.0.tgz
+dsh plugin --profile web add ./dsh-liketavern-0.5.1.tgz
 dsh web
 ```
 
@@ -128,7 +138,8 @@ dsh web
 ### Checking for Updates & Upgrading
 
 - **In-App Check**: Open **Settings → Tavern → About** in dsh to view current versions and check for new GitHub releases.
-- **Upgrade**: Review the [Changelog](./CHANGELOG.md), back up your data, run the new `dsh plugin add` command, and restart `dsh web`.
+- **Desktop Upgrade**: Review the [Changelog](./CHANGELOG.md), back up your data, uninstall the old plugin, and enter the new GitHub tag URL in Add plugin. Fully restart the desktop app after installation.
+- **Web / CLI Upgrade**: Run the new `dsh plugin add` command and restart `dsh web`.
 - Existing data directories are preserved seamlessly across upgrades (see [Data & backups](#data--backups)).
 
 ---

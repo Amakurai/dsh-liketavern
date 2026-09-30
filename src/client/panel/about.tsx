@@ -87,12 +87,12 @@ export function AboutSection({ remote }: { remote: TavernRemote }) {
         <Btn primary disabled={!info || info.hostVersion === 'unknown' || visible?.busy} onClick={() => void checkUpdate()}>{t(visible?.busy ? 'about.checking' : 'about.check')}</Btn>
         <a className="dsh-tavern-aboutLink" href={result?.releaseUrl ?? info?.releasesUrl ?? `${PROJECT_URL}/releases`} target="_blank" rel="noopener noreferrer">{t('about.releases')}</a>
       </div>
-      <Muted>{t('about.cliNote')}</Muted>
+      <Muted>{t(info?.desktopHost ? 'about.desktopNote' : 'about.cliNote')}</Muted>
       <div role="status" aria-live="polite">
         {result && <p className="dsh-tavern-aboutStatus">{t(STATUS_KEYS[result.status], { version: result.latestVersion, host: result.requiredHostVersion })}</p>}
       </div>
       <Err message={visible?.failed ? t('about.checkFailed') : null} />
-      {result?.status === 'available' && result.command && !info?.sourceCheckout && <div className="dsh-tavern-aboutInstructions">
+      {result?.status === 'available' && result.command && !info?.sourceCheckout && !info?.desktopHost && <div className="dsh-tavern-aboutInstructions">
         <h4>{t('about.steps')}</h4>
         <p>{t('about.instructions')}</p>
         <pre className="dsh-tavern-aboutCommand"><code>{result.command}</code></pre>

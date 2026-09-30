@@ -53,7 +53,7 @@ import {getHelperEventState} from './helperEventState.js'
 import type { TavernState } from './state.js'
 import type { TavernMethodResults,TavernMethodRequests } from '../remote.js'
 import { deleteEditorDraft, getEditorDraft, saveEditorDraft } from './editorDrafts.js'
-import { getPluginAbout, checkPluginUpdate } from './pluginAbout.js'
+import { createPluginAboutReader, type PluginAboutReader } from './pluginAbout.js'
 
 /** 头像缓存条数上限：卡删除/再导入会产生新 cardId，旧条目无人主动清，超上限淘汰最旧（只多一次重读，无正确性影响）。 */
 const AVATAR_CACHE_MAX = 32
@@ -884,12 +884,17 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
   }
 
   /** 关于页只读取本机版本；版本检查按需联网，不提供安装执行入口。 */
+  private pluginAboutReader?: PluginAboutReader
+  private get aboutReader(): PluginAboutReader {
+    return this.pluginAboutReader ??= createPluginAboutReader({ hostProfile: this.ctx.get('profileContext') })
+  }
+
   getPluginAbout(_request: Record<string, never>): Promise<TavernMethodResults['getPluginAbout']> {
-    return getPluginAbout()
+    return this.aboutReader.getPluginAbout()
   }
 
   checkPluginUpdate(_request: Record<string, never>): Promise<TavernMethodResults['checkPluginUpdate']> {
-    return checkPluginUpdate()
+    return this.aboutReader.checkPluginUpdate()
   }
 
   /** Tavern 数据目录（$DSH_HOME/dsh-tavern），设置面板展示用。 */

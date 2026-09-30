@@ -16,7 +16,7 @@
  * - getAvatar 指纹缓存：同 mtime+size 指纹不重读 card.png，文件变更后指纹失效重读，
  *   无头像缓存 null 结果。
  */
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -75,6 +75,32 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await rm(root, { recursive: true, force: true })
+})
+
+it('关于 remote 服务传递本次桌面 profile，两个宿主实例的版本与检查互不串用', async () => {
+  const own = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as { version: string }
+  const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async url => new Response(JSON.stringify(
+    String(url).endsWith('/releases/latest') ? { tag_name: `v${own.version}`, draft: false, prerelease: false }
+      : { name: 'dsh-liketavern', version: own.version, peerDependencies: { '@deepseek-ai/dsh': '0.2.0-rc.2' } },
+  )))
+  vi.stubGlobal('fetch', fetch)
+  try {
+    const hosts: TavernService[] = []
+    for (const version of ['0.2.0-rc.2', '9.8.7']) {
+      const directory = join(root, version), installAnchor = join(directory, 'package.json')
+      await mkdir(directory)
+      await writeFile(installAnchor, JSON.stringify({ name: '@deepseek-ai/dsh', version }))
+      const ctx = { reflect: { provide: () => {} }, get: (key: string) => key === 'profileContext' ? { name: 'desktop', installAnchor } : undefined } as unknown as Context
+      hosts.push(new TavernService(ctx, state, { get: () => settingsRaw } as TavernSettingsScope))
+    }
+    expect(await hosts[0]!.getPluginAbout({})).toMatchObject({ hostVersion: '0.2.0-rc.2', desktopHost: true })
+    expect(await hosts[1]!.getPluginAbout({})).toMatchObject({ hostVersion: '9.8.7', desktopHost: true })
+    expect(fetch).not.toHaveBeenCalled()
+    const [compatible, incompatible] = await Promise.all(hosts.map(host => host.checkPluginUpdate({})))
+    expect(compatible).toMatchObject({ status: 'current', command: null })
+    expect(incompatible).toMatchObject({ status: 'incompatible', command: null })
+    expect(fetch).toHaveBeenCalledTimes(4)
+  } finally { vi.unstubAllGlobals() }
 })
 
 function makeCard(overrides: Partial<CharacterCard> = {}): CharacterCard {

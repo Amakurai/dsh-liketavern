@@ -2,6 +2,16 @@
 
 当前源码基线为 dsh 0.2.0-rc.2。以下按版本记录观测结果，升级时重新核对，不是永久架构要求。
 
+## 0.2.0-rc.2 桌面端关于页修复（2026-09-30）
+
+桌面端的 Node 主入口是 `dsh-desktop-host`，不是 `@deepseek-ai/dsh` 的 `bin.dsh`；此前仅核对 CLI 主入口，因而把桌面宿主显示为「无法读取」并禁用更新检查。核对已安装包的 package.json、公开声明与实际桌面包：桌面启动经 `runProfile` 提供 `profileContext.installAnchor`，指向应用内 `dsh/node_modules/@deepseek-ai/dsh/package.json`。
+
+关于服务按实例传递并冻结该 profile 的名称和安装锚点，以有界文件读取校验真实宿主包名称与 SemVer。仅在没有 profile 时保留旧 CLI 入口识别；锚点缺失、损坏、超限或身份错误时保留 unknown，不回退到插件开发依赖、PATH 或其它宿主。desktop profile 仍可查询正式发布并核对精确 peer，但更新命令为空；按桌面安装界面的实际说明，升级需先在「插件」页面卸载旧版，再通过「添加插件」安装新版并完整重启。该输入框支持包名、GitHub 仓库地址或本地目录；v0.5.1 使用带版本标签的 GitHub 地址，并随 Git 提交预编译产物。
+
+回归使用真实临时文件、目录 junction、模拟宿主 context 和手写 GitHub 响应，覆盖两个宿主实例的版本与更新检查隔离、锚点失败边界，以及真实 React 按钮与桌面提示。另以实际安装的 Electron Node 运行时执行最终构建及解压后的发布包，确认从 `resources/app.asar` 读取宿主 `0.2.0-rc.2`，安装版标识正确，模拟新版本检查成功且不给出 CLI 命令；此检查不代表完整桌面 UI 冒烟，也未改动用户安装或剧情数据。
+
+Windows / Node 24.18.0 下构建、172 个测试文件 / 2537 项通过（1 项 POSIX 用例跳过）、459 文件打包白名单与 doctor/backup 入口检查通过。原目录 `npm ci` 因运行中的宿主持有 koffi 动态库而失败，随后恢复完整依赖，并以相同 package.json、锁文件及 .npmrc 在独立目录完成干净 `npm ci`，未停止用户宿主。
+
 ## 0.2.0-rc.2 升级核对（2026-09-29）
 
 公开 npm 上 0.2.0-rc.2 覆盖了此前锁定的全部宿主包，没有包被移除或改名；Cordis 4.0.4、Schemastery 3.18.4、cordis-plugin-* 版本不变。peerDependencies、overrides、devDependencies 统一改为精确 `0.2.0-rc.2`，allowScripts 同步传递依赖的新版本（`@google/genai@2.21.0`、`koffi@3.1.1`）。重扫宿主包的非可选 peer，没有需要补进 devDependencies 的新基础包。

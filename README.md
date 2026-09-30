@@ -2,10 +2,10 @@
 
 # dsh-liketavern
 
-**在 DeepSeek Harness 的 `dsh web` 中使用角色卡、世界书与长期记忆，开启 Tavern 式角色扮演。**
+**在 DeepSeek Harness 桌面端或 `dsh web` 中使用角色卡、世界书与长期记忆，开启 Tavern 式角色扮演。**
 
-[![Release](https://img.shields.io/badge/version-v0.5.0-blue.svg)](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.5.0)
-[![dsh](https://img.shields.io/badge/dsh-0.1.7--rc.2-informational.svg)](https://deepseek-harness.github.io/deepseek-harness/)
+[![Release](https://img.shields.io/badge/version-v0.5.1-blue.svg)](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.5.1)
+[![dsh](https://img.shields.io/badge/dsh-0.2.0--rc.2-informational.svg)](https://deepseek-harness.github.io/deepseek-harness/)
 [![Node.js](https://img.shields.io/badge/node-%E2%89%A524-brightgreen.svg)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
@@ -94,13 +94,23 @@ flowchart LR
 
 ---
 
-### 方式一：通过 dsh plugin 安装（推荐）
+### 桌面端：从 GitHub 安装与升级
+
+打开 **「插件 → 添加插件」**，在输入框填写以下 GitHub 地址并安装：
+
+```text
+https://github.com/Amakurai/dsh-liketavern.git#v0.5.1
+```
+
+升级时先在「插件」页面卸载旧 Tavern，再用新版本标签重新添加，最后完全退出并重启桌面端。「设置 → Tavern → 关于」中的「检查更新」只查询正式发布与宿主兼容性；安装由桌面端插件管理页面完成。仓库已包含预编译的 `lib/`，无需本地构建。
+
+### Web / CLI：通过 dsh plugin 安装
 
 在终端中执行以下命令，固定安装到最新稳定标签：
 
 ```bash
 # 1. 添加插件到 web profile
-dsh plugin --profile web add github:Amakurai/dsh-liketavern#v0.5.0
+dsh plugin --profile web add github:Amakurai/dsh-liketavern#v0.5.1
 
 # 2. 检查安装状态
 dsh plugin --profile web list --depth 0
@@ -115,11 +125,11 @@ dsh web
 
 ### 方式二：通过 Release 安装包（离线环境）
 
-1. 从 [v0.5.0 Release](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.5.0) 下载 `dsh-liketavern-0.5.0.tgz`（发布页附带 `SHA256SUMS.txt` 校验和）。
+1. 从 [v0.5.1 Release](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.5.1) 下载 `dsh-liketavern-0.5.1.tgz`（发布页附带 `SHA256SUMS.txt` 校验和）。
 2. 在压缩包所在目录执行：
 
 ```bash
-dsh plugin --profile web add ./dsh-liketavern-0.5.0.tgz
+dsh plugin --profile web add ./dsh-liketavern-0.5.1.tgz
 dsh web
 ```
 
@@ -128,7 +138,8 @@ dsh web
 ### 检查与升级
 
 - **图形界面检查**：在 dsh 内打开 **「设置 → Tavern → 关于」**，可查看当前版本并一键检测 GitHub 最新发布。
-- **执行升级**：核对 [更新日志](./CHANGELOG.md) 中的兼容说明，备份数据后，在终端运行新版本的 `dsh plugin add` 命令并重启 `dsh web`。
+- **桌面端升级**：核对 [更新日志](./CHANGELOG.md) 中的兼容说明，备份数据后卸载旧插件，再通过「添加插件」填写新版 GitHub 标签地址，安装后完整重启桌面端。
+- **Web / CLI 升级**：在终端运行新版本的 `dsh plugin add` 命令并重启 `dsh web`。
 - 升级过程会自动沿用现有数据目录（详见[数据与备份](#数据与备份)）。
 
 ---

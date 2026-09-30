@@ -49,6 +49,7 @@ export interface HelperScriptBundle extends HelperScriptLibrary {
     snapshot?: HelperSnapshot;
     enabled: boolean;
     helperMvu?: boolean;
+    helperMvuFollow?: boolean;
     whitelist: string[];
     name?: string;
     characterName?: string;

@@ -187,6 +187,7 @@ export declare class TavernService extends TypertRemoteService implements Tavern
         messageId: number;
     }): Promise<TavernMethodResults['getHelperSnapshot']>;
     prepareHelperMvuJob(request: TavernMethodRequests['prepareHelperMvuJob']): Promise<TavernMethodResults['prepareHelperMvuJob']>;
+    enableHelperMvu(request: TavernMethodRequests['enableHelperMvu']): Promise<TavernMethodResults['enableHelperMvu']>;
     abandonHelperMvu(request: TavernMethodRequests['abandonHelperMvu']): Promise<TavernMethodResults['abandonHelperMvu']>;
     commitHelperMvuJob(request: TavernMethodRequests['commitHelperMvuJob']): Promise<TavernMethodResults['commitHelperMvuJob']>;
     getHelperScriptBundle(request: {

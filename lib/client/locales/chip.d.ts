@@ -5,7 +5,7 @@ export declare const zh: {
     readonly 'chip.mvuAbandon.desc': "将关闭本会话自动 MVU，并放弃尚未提交的更新。已保存变量、完成回执和对话记录都会保留；不会补跑被放弃的更新，也不会移除排队输入。普通开关关闭只会暂停任务。";
     readonly 'chip.mvuAbandon.done': "自动 MVU 已关闭，待处理任务已放弃，已保存变量保留。";
     readonly 'chip.field.helperMvu': "启用原生 MVU 自动更新";
-    readonly 'chip.field.helperMvuNote': "从当前完成的角色消息初始化，等待本会话脚本就绪后更新变量。需要保持页面打开；失败或断开时保留任务。";
+    readonly 'chip.field.helperMvuNote': "从当前完成的角色消息初始化，等待本会话脚本就绪后更新变量。卡片自带官方 MVU 入口且从未手动关闭时会自动开启。需要保持页面打开；失败或断开时保留任务。";
     readonly 'chip.preview.actual': "最近请求";
     readonly 'chip.preview.noActual': "尚未捕获请求。先发送一轮消息；重启或缓存淘汰后旧请求不可用。";
     readonly 'chip.preview.actualTruncated': "（请求超过显示上限，内容已截断）";

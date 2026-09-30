@@ -3,7 +3,8 @@ import type { SessionEvent } from '@deepseek-ai/dsh-session';
 import { type HelperDisplayContext, type HelperSnapshot } from '../core/helperRuntime.js';
 import type { WorkspaceFs } from '../state/workspaceFs.js';
 import type { TavernState } from './state.js';
-import { type HelperScriptBundle } from '../core/helperScripts.js';
+import { type HelperScriptAsset, type HelperScriptBundle } from '../core/helperScripts.js';
+import type { SessionBinding } from '../core/binding.js';
 export declare function helperHistoryOf(events: readonly SessionEvent[], names: {
     char: string;
     user: string;
@@ -21,6 +22,8 @@ export declare function helperHistoryRevision(history: ReturnType<typeof helperH
  */
 export declare function getHelperDisplayContext(ctx: Context, state: TavernState, sessionId: string, messageId: number): Promise<HelperDisplayContext>;
 export declare function getHelperSnapshot(ctx: Context, state: TavernState, sessionId: string, messageId: number): Promise<HelperSnapshot>;
+/** 会话实际加载的三类脚本库。预设被删除或损坏时与 getSessionHelperScripts 同口径：按没有预设脚本处理，不让整个脚本包失败。 */
+export declare function sessionHelperLibraries(state: TavernState, binding: Pick<SessionBinding, 'presetId' | 'cardId'>): Promise<HelperScriptAsset[]>;
 export declare function getHelperScriptBundle(ctx: Context, state: TavernState, sessionId: string): Promise<HelperScriptBundle>;
 export declare function commitHelperVariables(ctx: Context, state: TavernState, request: {
     sessionId: string;

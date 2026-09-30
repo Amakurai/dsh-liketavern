@@ -6,7 +6,8 @@ import { HelperScripts } from '../src/client/helperScripts.js'
 import { HelperMvuRunner } from '../src/client/helperMvuRunner.js'
 import { SpeechHtmlFrame } from '../src/client/speech.js'
 import { notifyHelperScripts } from '../src/client/helperScriptNotifications.js'
-import { scriptStatusStore } from '../src/client/helperScriptStatus.js'
+import { enableScriptMvu, scriptStatusStore } from '../src/client/helperScriptStatus.js'
+import { notifyHelperStory } from '../src/client/helperNotifications.js'
 import { parseHelperScriptTrees, type HelperScriptBundle } from '../src/core/helperScripts.js'
 import type { TavernRemote } from '../src/client/types.js'
 
@@ -125,4 +126,49 @@ it.each([
   expect(view!.root.findByType(HelperMvuRunner).props.ready).toBe(true)
   expect(status().scripts[0]?.state).toBe('ready')
   expect(status().mvuError).toBeUndefined()
+})
+
+it('未表态的官方入口在空闲时自动开启：忙时失败随剧情通知重试，开启后广播绑定变化', async () => {
+  const followBundle: HelperScriptBundle = { ...bundle, helperMvu: false, helperMvuFollow: true, libraries: [{ ...bundle.libraries[0]!,
+    trees: parseHelperScriptTrees([{ id: 'native', name: '原生框架', enabled: true, content: betaImport }]) }] }
+  const calls: unknown[] = []
+  let idle = false
+  const remote = {
+    getHelperScriptBundle: async () => ({ ok: true, value: structuredClone(followBundle) }),
+    enableHelperMvu: async (request: unknown) => {
+      calls.push(request)
+      return idle ? { ok: true, value: { enabled: true, changed: true } } : { ok: false, error: { message: '请等待当前生成和维护结束后再开启自动 MVU' } }
+    },
+  } as unknown as TavernRemote
+  const changed = vi.fn()
+  window.addEventListener('test-binding-changed', changed)
+  await act(async () => { view = create(<HelperScripts remote={remote} sessionId="session" />) })
+  expect(status()).toMatchObject({ nativeMvu: false, mvuFollow: true })
+  expect(calls).toEqual([{ sessionId: 'session', storyId: 'story', mode: 'follow' }])
+  expect(changed).not.toHaveBeenCalled()
+  idle = true
+  await act(async () => { notifyHelperStory('session', 'story'); await Promise.resolve() })
+  expect(calls).toHaveLength(2)
+  expect(changed).toHaveBeenCalledTimes(1)
+  expect((changed.mock.calls[0]![0] as CustomEvent).detail).toBe('session')
+})
+
+it('设置页显式开启经当前运行时发出 explicit 请求，服务拒绝时如实报错', async () => {
+  const offBundle: HelperScriptBundle = { ...bundle, helperMvu: false, helperMvuFollow: false }
+  const calls: unknown[] = []
+  let allow = false
+  const remote = {
+    getHelperScriptBundle: async () => ({ ok: true, value: structuredClone(offBundle) }),
+    enableHelperMvu: async (request: unknown) => {
+      calls.push(request)
+      return allow ? { ok: true, value: { enabled: true, changed: true } } : { ok: false, error: { message: '交互卡已关闭，不能开启原生 MVU' } }
+    },
+  } as unknown as TavernRemote
+  await act(async () => { view = create(<HelperScripts remote={remote} sessionId="session" />) })
+  expect(calls).toEqual([])
+  await expect(enableScriptMvu('session')).rejects.toThrow('交互卡已关闭')
+  allow = true
+  await expect(enableScriptMvu('session')).resolves.toBe(true)
+  expect(calls).toEqual([{ sessionId: 'session', storyId: 'story', mode: 'explicit' }, { sessionId: 'session', storyId: 'story', mode: 'explicit' }])
+  await expect(enableScriptMvu('missing-session')).resolves.toBe(false)
 })

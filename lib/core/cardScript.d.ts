@@ -1,5 +1,5 @@
 /** 后台脚本的沙箱专属上下文和按钮；正文作为模块执行，按钮事件仅在该 iframe 内触发。 */
-import type { HelperScript, HelperScriptTree, HelperScriptType } from './helperScripts.js';
+import { type HelperScript, type HelperScriptTree, type HelperScriptType } from './helperScripts.js';
 export interface CardScriptContext {
     script: HelperScript;
     trees: HelperScriptTree[];
@@ -20,3 +20,7 @@ export declare function helperScriptHtml(content: string): string;
 export declare function rewriteMvuZodImport(content: string): string;
 /** 仅识别无版本与 beta 的纯官方 MVU 导入入口，交给已有原生 MVU；其它代码完整保留，不伪造父窗口。 */
 export declare function isNativeMvuFramework(content: string): boolean;
+/** 会话实际启用的脚本（全局、预设、角色）是否含官方 MVU 入口；脚本 ID 冲突的库无法运行，按不含处理。 */
+export declare function hasNativeMvuEntry(libraries: readonly {
+    trees: HelperScriptTree[];
+}[]): boolean;

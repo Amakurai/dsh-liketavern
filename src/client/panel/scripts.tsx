@@ -1,6 +1,6 @@
 /** 设置中的脚本资产管理：无需绑定会话，按全局、角色与预设选择独立脚本库，复用带草稿保护的编辑器。 */
 import { useRef, useState,useSyncExternalStore } from 'react'
-import {scriptStatusStore,retryScriptMvu,isScriptWindowAccessError} from '../helperScriptStatus.js'
+import {scriptStatusStore,retryScriptMvu,enableScriptMvu,isScriptWindowAccessError} from '../helperScriptStatus.js'
 import type { HelperScriptAsset, HelperScriptTarget } from '../../core/helperScripts.js'
 import type { TavernRemote } from '../types.js'
 import { HelperScriptEditor } from '../helperScriptEditor.js'
@@ -36,7 +36,8 @@ export function ScriptSettings({remote}:{remote:TavernRemote}) {
       {runtimes.map(runtime=><div key={runtime.sessionId}>
         <strong>{characters.state.status==='ready'?characters.state.value.items.find(card=>card.cardId===runtime.cardId)?.name??t('settings.scripts.current'):t('settings.scripts.current')}</strong>
         <Muted>{t(`settings.scripts.runtime.${runtime.state}`)}</Muted><Err message={runtime.error??null}/>
-        {runtime.scripts.some(script=>script.native)&&<Muted>{t(runtime.nativeMvu?'settings.scripts.nativeOn':'settings.scripts.nativeOff')}</Muted>}
+        {runtime.scripts.some(script=>script.native)&&<Muted>{t(runtime.nativeMvu?'settings.scripts.nativeOn':runtime.mvuFollow?'settings.scripts.nativeFollow':'settings.scripts.nativeOff')}</Muted>}
+        {runtime.scripts.some(script=>script.native)&&!runtime.nativeMvu&&runtime.state!=='disabled'&&<NativeMvuEnable sessionId={runtime.sessionId}/>}
         {runtime.nativeMvu&&<Muted>{t(runtime.mvuError?'speech.mvuRetry':runtime.mvuBusy?'speech.mvuRunning':runtime.scripts.every(script=>script.state==='ready')?'speech.mvuReady':'speech.mvuWaiting')}</Muted>}
         <Err message={runtime.mvuError??null}/>
         {runtime.mvuError&&<Btn onClick={()=>retryScriptMvu(runtime.sessionId)}>{t('speech.mvuRetry')}</Btn>}
@@ -76,4 +77,16 @@ export function ScriptSettings({remote}:{remote:TavernRemote}) {
     <Err message={error}/>
     {editing&&<HelperScriptEditor remote={remote} library={editing} label={editorLabel} onClose={()=>setEditing(null)} onSaved={()=>{}}/>}
   </Section>
+}
+
+/** 已识别官方入口但未开启时的一键开启；成功后运行时重建、状态行变为已接管；宿主忙或交互卡关闭时显示服务端错误。 */
+function NativeMvuEnable({sessionId}:{sessionId:string}) {
+  const t=useT()
+  const [busy,setBusy]=useState(false),[error,setError]=useState<string|null>(null)
+  const enable=()=>{
+    if(busy)return
+    setBusy(true);setError(null)
+    enableScriptMvu(sessionId).then(found=>{if(!found)setError(t('settings.scripts.nativeUnavailable'))},cause=>setError(cause instanceof Error?cause.message:String(cause))).finally(()=>setBusy(false))
+  }
+  return <><Btn disabled={busy} onClick={enable}>{t('settings.scripts.nativeEnable')}</Btn><Err message={error}/></>
 }

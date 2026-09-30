@@ -12,7 +12,10 @@ export declare const zh: {
     readonly "settings.scripts.runtime.incompatible": "需要适配";
     readonly "settings.scripts.windowAccess": "脚本尝试访问其它窗口的页面或全局对象，受到浏览器隔离限制。请使用适配版脚本，或在下方脚本管理中暂时停用它；放宽网络白名单无法解决此问题。";
     readonly "settings.scripts.nativeOn": "MVU 框架由原生执行器接管，变量在剧情内保存。";
-    readonly "settings.scripts.nativeOff": "已适配 MVU 入口，但此会话尚未启用原生 MVU；请在角色配置中开启后应用。";
+    readonly "settings.scripts.nativeOff": "已适配 MVU 入口，但此会话已关闭原生 MVU，变量不会自动更新。";
+    readonly "settings.scripts.nativeFollow": "已识别卡片自带的 MVU 入口，会话空闲时将自动开启原生 MVU。";
+    readonly "settings.scripts.nativeEnable": "开启原生 MVU";
+    readonly "settings.scripts.nativeUnavailable": "当前无法开启原生 MVU，请确认交互卡已开启且会话仍绑定该剧情。";
     readonly "settings.scripts.global": "全局脚本";
     readonly "settings.scripts.globalDesc": "用于所有已绑定角色的会话。";
     readonly "settings.scripts.character": "角色脚本";

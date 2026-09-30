@@ -1,5 +1,5 @@
 /** 后台脚本的沙箱专属上下文和按钮；正文作为模块执行，按钮事件仅在该 iframe 内触发。 */
-import type { HelperScript,HelperScriptButton,HelperScriptTree,HelperScriptType } from './helperScripts.js'
+import { enabledHelperLibraries,type HelperScript,type HelperScriptButton,type HelperScriptTree,type HelperScriptType } from './helperScripts.js'
 export interface CardScriptContext {script:HelperScript;trees:HelperScriptTree[];libraryType?:HelperScriptType;libraries?:{type:'global'|'preset'|'character';trees:HelperScriptTree[]}[]}
 export function installCardScript(context:CardScriptContext):()=>void {
   const root=window as unknown as Record<string,unknown>
@@ -125,4 +125,9 @@ export function isNativeMvuFramework(content:string):boolean {
   const source=content.trim().replace(/;$/, '').trim()
   return ['testingcf.jsdelivr.net','cdn.jsdelivr.net','fastly.jsdelivr.net','gcore.jsdelivr.net'].some(host=>
     ['', '@beta'].some(ref=>["'",'"'].some(quote=>source==='import '+quote+'https://'+host+'/gh/MagicalAstrogy/MagVarUpdate'+ref+'/artifact/bundle.js'+quote)))
+}
+/** 会话实际启用的脚本（全局、预设、角色）是否含官方 MVU 入口；脚本 ID 冲突的库无法运行，按不含处理。 */
+export function hasNativeMvuEntry(libraries:readonly {trees:HelperScriptTree[]}[]):boolean {
+  try{return enabledHelperLibraries(libraries).some(script=>isNativeMvuFramework(script.content))}
+  catch{return false}
 }

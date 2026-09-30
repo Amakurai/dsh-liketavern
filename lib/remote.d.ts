@@ -42,6 +42,18 @@ export declare const METHODS: {
         value: import("zod/mini").ZodMiniUnknown;
         summary: string;
     };
+    enableHelperMvu: {
+        req: import("zod/mini").ZodMiniObject<{
+            sessionId: import("zod/mini").ZodMiniString<string>;
+            storyId: import("zod/mini").ZodMiniString<string>;
+            mode: import("zod/mini").ZodMiniEnum<{
+                follow: "follow";
+                explicit: "explicit";
+            }>;
+        }, import("zod/v4/core").$strip>;
+        value: import("zod/mini").ZodMiniUnknown;
+        summary: string;
+    };
     prepareHelperMvuJob: {
         req: import("zod/mini").ZodMiniObject<{
             storyId: import("zod/mini").ZodMiniString<string>;
@@ -982,6 +994,10 @@ export interface TavernMethodResults {
         disabled: true;
         abandoned: number;
     };
+    enableHelperMvu: {
+        enabled: boolean;
+        changed: boolean;
+    };
     prepareHelperMvuJob: HelperMvuWork;
     commitHelperMvuJob: HelperMvuWork;
     getEditorDraft: {
@@ -1260,6 +1276,13 @@ export declare const TYPERT_HOST: {
                 create: () => import("zod/mini").ZodMiniObject<{
                     sessionId: import("zod/mini").ZodMiniString<string>;
                     storyId: import("zod/mini").ZodMiniString<string>;
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                    sessionId: import("zod/mini").ZodMiniString<string>;
+                    storyId: import("zod/mini").ZodMiniString<string>;
+                    mode: import("zod/mini").ZodMiniEnum<{
+                        follow: "follow";
+                        explicit: "explicit";
+                    }>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     storyId: import("zod/mini").ZodMiniString<string>;
                     runtimeId: import("zod/mini").ZodMiniString<string>;
@@ -1702,6 +1725,13 @@ export declare const TYPERT_REMOTE: {
                 create: () => import("zod/mini").ZodMiniObject<{
                     sessionId: import("zod/mini").ZodMiniString<string>;
                     storyId: import("zod/mini").ZodMiniString<string>;
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                    sessionId: import("zod/mini").ZodMiniString<string>;
+                    storyId: import("zod/mini").ZodMiniString<string>;
+                    mode: import("zod/mini").ZodMiniEnum<{
+                        follow: "follow";
+                        explicit: "explicit";
+                    }>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     storyId: import("zod/mini").ZodMiniString<string>;
                     runtimeId: import("zod/mini").ZodMiniString<string>;

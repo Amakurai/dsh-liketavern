@@ -299,7 +299,7 @@ node lib/backup.js restore --backup "D:/backups/dsh-2026-09-19" --target "C:/dat
 
 1. Confirm "Allow interactive cards" is enabled in Character Settings.
 2. Go to **Settings → Tavern → Scripts** and ensure the script and its folder are **Enabled**.
-3. For auto-MVU, check "Enable native MVU updates" in the session character config and keep the chat page open.
+3. When the card (or the global/preset script library) enables the official MVU entry and native MVU was never turned off, it turns on automatically once the session is idle. For sessions where it was turned off, click "Enable native MVU" in Settings → Tavern → Scripts, or check "Enable native MVU updates" in the session character config. MVU runs in the page, so keep it open.
 </details>
 
 <details>

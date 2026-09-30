@@ -43,6 +43,7 @@ describe('卡面消息与受限操作', () => {
     expect(run('getCurrentMessageId()')).toBe(17)
     expect(run('getMessageId(getIframeName())')).toBe(17)
     expect(run('substitudeMacros("{{char}}/{{user}}/{{lastMessageId}}/{{unknown}}")')).toBe('灯塔/旅人/17/{{unknown}}')
+    expect(run('substitudeMacros("<BOT>/<user>/<Char>/</user>")')).toBe('灯塔/旅人/灯塔/</user>')
   })
   it('V3 nickname 只替换 {{char}}，聊天消息与 SillyTavern name2 仍保留资产名', () => {
     const { run } = frame({ message: '当前回复', messageId: 17, name: '灯塔守望者', macroName: '守望者', userName: '旅人' })

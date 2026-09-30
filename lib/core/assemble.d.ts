@@ -78,7 +78,7 @@ export interface AssembledPrompt {
     hasTurnTail?: boolean;
     /** standing + turnContext（预览与旧调用方）。 */
     system: string;
-    /** dsh 通道之外的历史（= 输入历史经正则与裁剪后的形态，供预览）。 */
+    /** dsh 通道之外的历史（= 输入历史经正则与裁剪后的形态，不含已并入 system 的深度注入）。 */
     history: ChatMessage[];
     log: AssembleLogEntry[];
     stats: {

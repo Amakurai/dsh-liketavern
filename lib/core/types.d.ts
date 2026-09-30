@@ -18,10 +18,15 @@ export interface MacroContext {
     /** 额外变量（如 time/date 已由调用方给定时）。 */
     vars?: Readonly<Record<string, string>>;
     /**
-     * {{random}} / {{pick}} 的随机源。缺省 Math.random。
+     * {{random}} 的随机源（缺少 pickSeed 时也用于 {{pick}}）。缺省 Math.random。
      * 同一 turn 多步组装应传入同一种子生成的新流，避免每步重抽。
      */
     random?: () => number;
+    /**
+     * 聊天身份（对齐 ST 的 chat id hash）：提供时 {{pick}} 由「聊天 + 所在文本 + 选项 + 第几次出现」
+     * 确定，同一聊天及其分支、重新生成都保持同一结果；缺省退回 random。
+     */
+    pickSeed?: string;
     /**
      * 会话级变量表（{{setvar}}/{{getvar}}）。一次 assemble 内共享、可变。
      * 未提供时 expandMacros 自建临时表（单次调用内 set+get 仍生效）。

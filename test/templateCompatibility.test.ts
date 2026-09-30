@@ -33,6 +33,18 @@ describe('ST 模板兼容接口',()=> {
     ]) %>`,{entries:lore})
     expect(JSON.parse(result.texts[0]!)).toEqual([3,['1'],['hello'],null,'2',null])
   })
+  it('关键词整词匹配把汉字等不用空格分词的文字视为边界，拉丁词仍整词判断', async()=> {
+    const lore = parseLorebook({entries:[
+      {uid:1,comment:'cn',key:['小明'],matchWholeWords:true,content:'one'},
+      {uid:2,comment:'en',key:['cat'],matchWholeWords:true,content:'two'},
+    ]},{source:'character',sourceRef:'card'})
+    const result=await render(`<%- JSON.stringify([
+      (await getWorldInfoActivatedData('card','我是小明啊')).map(e=>e.uid),
+      (await getWorldInfoActivatedData('card','一只cat跑了')).map(e=>e.uid),
+      (await getWorldInfoActivatedData('card','catalog abc小明')).map(e=>e.uid),
+    ]) %>`,{entries:lore})
+    expect(JSON.parse(result.texts[0]!)).toEqual([['1'],['2'],[]])
+  })
   it('JSON Patch 六种操作支持转义路径、数组插入与移动，不修改输入', async()=> {
     const result = await render(`<%
       const original = {items:['a','b'], 'a/b':{'~key':1}, empty:{}};

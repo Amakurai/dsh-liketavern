@@ -91,9 +91,10 @@ export function installCardHelper(
   }
   function substitudeMacros(value: string) {
     if (typeof value !== 'string') throw new Error('Macro input must be text')
-    return value.replace(/\{\{(char|user|lastMessageId|currentMessageId)\}\}/gi, (match, key: string) => {
-      switch (key.toLowerCase()) {
-        case 'char': return macroName
+    // 旧式 <USER>/<BOT>/<CHAR>/<CHARIFNOTGROUP>/<GROUP> 与 ST substituteParams 同样替换为身份名。
+    return value.replace(/\{\{(char|user|lastMessageId|currentMessageId)\}\}|<(user|bot|char|charifnotgroup|group)>/gi, (match, curly: string | undefined, legacy: string | undefined) => {
+      switch ((curly ?? legacy ?? '').toLowerCase()) {
+        case 'char': case 'bot': case 'charifnotgroup': case 'group': return macroName
         case 'user': return user
         case 'lastmessageid': return String(latestId())
         case 'currentmessageid': return String(currentId())

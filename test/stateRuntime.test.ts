@@ -18,7 +18,7 @@
  * - loadBinding 自愈的读-改-写竞态：落盘前复读，磁盘已被换卡覆盖则丢弃本次自愈；
  * - workspace：拒绝会把工作区根移出 characters/ 的非法 cardId；
  * - 会话副作用队列：同会话严格串行、不同会话互不阻塞、失败后仍可继续；
- * - compressOldestMemories：idle 期异步压缩——最旧批次合并为一条并归档、
+ * - compressOldestMemories：idle 期异步压缩——按会话最近实际请求的模型路由，最旧批次合并为一条并归档、
  *   无模型/空批次/合并失败均不动记忆库；先落合并条目再归档——write 失败时批次原样
  *   保留可重试，archive 失败时新旧并存不丢事实（archive 恢复后重试可收敛）；
  * - 面板/服务层写路径（saveJournal/saveCharacter/saveCharacterLorebook/deleteCharacterLorebook/
@@ -33,12 +33,13 @@ import { mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { Context } from '@deepseek-ai/cordis'
 import type { LlmResolvedModelInfo, LlmRuntime } from '@deepseek-ai/dsh-llm'
 import { standingFingerprint } from '../src/core/standingPin.js'
 import type { CharacterCard, PromptPreset, RegexRule } from '../src/core/types.js'
 import { loadBinding, saveBinding, type SessionBinding } from '../src/node/bindings.js'
 import { resolveConfig } from '../src/node/config.js'
-import { compressOldestMemories } from '../src/node/memoryMaintenance.js'
+import { compressOldestMemories, registerMemoryMaintenance } from '../src/node/memoryMaintenance.js'
 import type { TavernPaths } from '../src/node/paths.js'
 import { TavernState } from '../src/node/state.js'
 import { embedCardInPng, parseJsonCard, parsePngCard } from '../src/state/card.js'
@@ -873,6 +874,40 @@ describe('面板写路径不记 WAL', () => {
     await expect(readFile(join(walDir, 's9_t3', 'records.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
     state.openFloors.delete('s9')
     await ws.wal.commitFloor('s9#t3')
+  })
+
+  it('idle 压缩按会话最近实际请求的模型路由，而非创建时的默认 agent.options', async () => {
+    const small = new TavernState(paths, () => resolveConfig({ memory: { maxEntries: 1 } }))
+    await small.init()
+    const { cardId } = await importCard(paths.characters, makeCard())
+    await small.saveBinding(makeBinding({ sessionId: 's-route', cardId, presetId: null, lorebookIds: [] }))
+    const binding = (await small.loadBinding('s-route'))!
+    const ws = await small.storyWorkspace(cardId, binding.storyId)
+    await ws.memory.write({ body: '旧记忆一' })
+    await ws.memory.write({ body: '旧记忆二' })
+    const routes: Array<{ provider: string; model: string }> = []
+    const llm = {
+      stream: vi.fn(async function* (options: { provider: string; model: string }) {
+        routes.push({ provider: options.provider, model: options.model })
+        yield { type: 'text-delta' as const, text: '合并结果' }
+        yield { type: 'finish' as const, reason: { kind: 'stop' as const } }
+      }),
+    } as unknown as LlmRuntime
+    let onStatus: ((payload: { agent: unknown; status: string }) => void) | undefined
+    const ctx = {
+      on: (name: string, listener: typeof onStatus) => { if (name === 'agent/status') onStatus = listener },
+      logger: { warn: () => {}, info: () => {} },
+    } as unknown as Context
+    registerMemoryMaintenance(ctx, small, llm)
+    // 会话已切到布局通道上的另一模型；options 仍是创建时的全局默认
+    onStatus!({ status: 'idle', agent: {
+      id: 's-route', options: { provider: 'default-provider', model: 'default-model' },
+      session: { snapshotEvents: () => [], requestHeader: () => ({ config: { provider: 'tavern-deepseek', model: 'session-model' } }) },
+      runMaintenance: async (task: (signal: AbortSignal) => Promise<unknown>) => task(new AbortController().signal),
+    } })
+    await small.waitForSessionTasks('s-route')
+    expect(routes).toEqual([{ provider: 'deepseek-official', model: 'session-model' }])
+    expect((await ws.memory.stats()).count).toBe(1)
   })
 })
 

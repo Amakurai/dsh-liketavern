@@ -15,6 +15,7 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { estimateTokens } from '../core/tokenize.js'
 import { rebuildIndex } from '../state/workspace.js'
 import { collectCompleteText } from './collectText.js'
+import { sessionModelRoute } from './modelRoute.js'
 import type { TavernState } from './state.js'
 
 /** 用指定模型把一批旧记忆压缩合并为一条；失败返回 null。 */
@@ -100,7 +101,9 @@ export function registerMemoryMaintenance(ctx: Context, state: TavernState, llm:
       try {
         await agent.runMaintenance(async () => {
           ran = true
-          const result = await compressOldestMemories(state, llm, binding.cardId, agent.options.provider, agent.options.model, binding.storyId)
+          // agent.options 是创建时的全局默认模型，会话内换模后可能已不可用；按会话实际路由压缩。
+          const route = sessionModelRoute(agent)
+          const result = await compressOldestMemories(state, llm, binding.cardId, route.provider, route.model, binding.storyId)
           if (result) state.pendingMemoryCompress.delete(binding.storyId ?? binding.cardId)
           if (!result) ctx.logger.warn('dsh-tavern: 记忆压缩未完成，原文与待处理标记已保留；后续轮次再试')
           if (result) ctx.logger.info(`dsh-tavern: 记忆压缩完成（${binding.cardId}，归档 ${result.archived} 条）`)

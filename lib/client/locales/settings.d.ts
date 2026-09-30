@@ -119,7 +119,7 @@ export declare const zh: {
     readonly 'settings.worldinfo.recursiveScanDesc': "命中条目的内容继续作为关键词扫描。";
     readonly 'settings.worldinfo.caseSensitive': "区分大小写";
     readonly 'settings.worldinfo.matchWholeWords': "整词匹配";
-    readonly 'settings.worldinfo.matchWholeWordsDesc': "对中文不友好，建议关闭。";
+    readonly 'settings.worldinfo.matchWholeWordsDesc': "只约束以空格分词的文字（如英文）；中文、日文等紧挨的字不影响命中。";
     readonly 'settings.worldinfo.includeNames': "扫描计入消息名前缀";
     readonly 'settings.worldinfo.overflowWarning': "预算溢出告警";
     readonly 'settings.worldinfo.useGroupScoring': "组内按命中键数挑选";

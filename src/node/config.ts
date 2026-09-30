@@ -48,7 +48,7 @@ const WorldInfoSchema = z.object({
   recursiveScan: z.boolean().default(DEFAULT_WI_SETTINGS.recursiveScan),
   maxRecursionSteps: z.number().min(0).default(DEFAULT_WI_SETTINGS.maxRecursionSteps),
   caseSensitive: z.boolean().default(DEFAULT_WI_SETTINGS.caseSensitive),
-  /** 整词匹配对中文不友好，默认关（SillyTavern 出厂为开，差异见 README）。 */
+  /** 整词匹配只约束以空格分词的文字；汉字、假名等相邻不算粘连（与 ST 以 \W 为边界一致）。默认关。 */
   matchWholeWords: z.boolean().default(DEFAULT_WI_SETTINGS.matchWholeWords),
   includeNames: z.boolean().default(DEFAULT_WI_SETTINGS.includeNames),
   overflowWarning: z.boolean().default(DEFAULT_WI_SETTINGS.overflowWarning),

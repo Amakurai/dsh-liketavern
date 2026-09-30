@@ -568,7 +568,8 @@ describe('compileCardRegexScripts', () => {
     expect(rules[0]!.roles).toEqual(['assistant'])
   })
 
-  it('substituteRegex 透传：0/2 保留，其余归一为 1', () => {
+  it('substituteRegex 按 ST 的 Number() 口径：0/1/2 保留，旧版布尔 true/false 为 1/0，缺省与未知值不代入', () => {
+    const legacy = (value: unknown) => ({ ...base, substituteRegex: value as number })
     const rules = compileCardRegexScripts(
       [
         { ...base, scriptName: 's0', substituteRegex: 0 },
@@ -576,10 +577,17 @@ describe('compileCardRegexScripts', () => {
         { ...base, scriptName: 's1', substituteRegex: 1 },
         { ...base, scriptName: 's9', substituteRegex: 9 },
         { ...base, scriptName: 'sd' },
+        legacy(true), legacy(false), legacy('2'),
       ],
       'c',
     )
-    expect(rules.map((r) => r.substituteRegex)).toEqual([0, 2, 1, 1, 1])
+    expect(rules.map((r) => r.substituteRegex)).toEqual([0, 2, 1, 0, 0, 1, 0, 2])
+  })
+
+  it('substituteRegex=false 的旧脚本不把 <char> 标签模式替换成角色名', () => {
+    const [rule] = compileCardRegexScripts([{ findRegex: '/<char>(.*?)<\\/char>/g', replaceString: '[$1]', placement: [2], substituteRegex: false as unknown as number }], 'c')
+    const res = applyRegexRules('<char>状态</char>', [rule!], { scope: 'output', timing: 'render' }, { char: 'Alice', user: 'Bob' })
+    expect(res.text).toBe('[状态]')
   })
 
   it('空 findRegex 的脚本被跳过；id/名称/深度按缺省填充', () => {

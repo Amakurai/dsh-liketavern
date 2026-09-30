@@ -204,6 +204,17 @@ function collectPromptEmbeddedRegex(rawPrompts: unknown[]): CardRegexScript[] {
   return out
 }
 
+/**
+ * 旧版 ST 的 substituteRegex 是布尔（true = 原样代入），也可能是数字字符串；按 ST 的 Number() 口径
+ * 归一为 0/1/2 再存。否则存储校验只收数字，整份预设会因一条旧脚本导入失败。
+ */
+function normalizeImportedRegexScript(script: CardRegexScript): CardRegexScript {
+  const value: unknown = isRecord(script) ? script.substituteRegex : undefined
+  if (value === undefined || typeof value === 'number') return script
+  const substitute = Number(value)
+  return { ...script, substituteRegex: substitute === 1 || substitute === 2 ? substitute : 0 }
+}
+
 function parsePromptEntry(raw: Record<string, unknown>, index: number, warnings: string[]): PresetEntry | null {
   const identifier = toStr(raw.identifier)
   if (identifier === '') {
@@ -334,7 +345,7 @@ export function parseStPreset(json: unknown): ParseStPresetResult {
     preset.helperSettings=helperScriptSettings(characterHelperSettings(json.extensions))
   }
   const embedded = regexScripts.length > 0 ? [] : collectPromptEmbeddedRegex(rawPrompts)
-  const scripts = regexScripts.length > 0 ? regexScripts : embedded
+  const scripts = (regexScripts.length > 0 ? regexScripts : embedded).map(normalizeImportedRegexScript)
   if (scripts.length > 0) {
     preset.regexScripts = scripts
     warnings.push(`已导入 ${scripts.length} 条预设正则（随脚本开关生效）`)

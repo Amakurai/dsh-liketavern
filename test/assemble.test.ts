@@ -195,6 +195,21 @@ describe('relative 骨架与 marker 替换', () => {
     const rules = ['EARLY', 'ASSISTANT', 'USER-1', 'USER-2', 'SYSTEM']
     expect(contents(result.messages)).toEqual(depth === 0 ? ['h0', 'h1', ...rules] : ['h0', ...rules, 'h1'])
     expect(depth === 0 ? result.turnContext : result.standing).toBe(rules.join('\n\n'))
+    // 注入已在 system 里；history 只留真实聊天，代答把 system + history 发给模型时不能重复
+    expect(contents(result.history)).toEqual(['h0', 'h1'])
+  })
+
+  it('有聊天身份时 {{pick}} 进 standing，换本轮随机流也不变；旧式 <USER> 同样展开', () => {
+    const options = Array.from({ length: 20 }, (_, i) => `o${i}`).join('::')
+    const preset: PromptPreset = { name: '抽取', identifier: 'pick', entries: [
+      presetEntry({ identifier: 'look', content: `<USER>眼中的{{char}}，发色：{{pick::${options}}}` }),
+    ] }
+    const run = (random: () => number) => assemblePrompt(makeInput({ preset, card: null,
+      macroCtx: { char: 'Alice', user: 'Bob', pickSeed: 'chat-1', random } }))
+    const first = run(() => 0)
+    expect(first.standing).toMatch(/^Bob眼中的Alice，发色：o\d+$/)
+    expect(first.turnContext).toBe('')
+    expect(run(() => 0.99).standing).toBe(first.standing)
   })
 
   it('lastmessage 读取最近角色回复并排除系统提示、续写和 runtime context', () => {
@@ -862,6 +877,11 @@ describe('历史身份宏', () => {
       }),
     )
     expect(res.history.map((m) => m.content)).toEqual(['我想你了，Bob。我是Alice。'])
+  })
+
+  it('只含旧式 <USER>/<BOT> 的历史同样展开，不因缺少 {{ 被跳过', () => {
+    const res = assemblePrompt(makeInput({ history: [{ role: 'assistant', content: '<BOT>向<USER>招手。' }] }))
+    expect(res.history.map((m) => m.content)).toEqual(['Alice向Bob招手。'])
   })
 })
 

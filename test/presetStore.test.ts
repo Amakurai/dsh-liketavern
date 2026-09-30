@@ -201,6 +201,17 @@ describe('parseStPreset', () => {
     expect(() => parseStPreset({})).toThrow(/缺少 prompts 数组/)
     expect(() => parseStPreset('nope')).toThrow(/不是有效的 JSON 对象/)
   })
+
+  it('旧版布尔/字符串 substituteRegex 归一为数字，整份预设可以保存，不因一条旧脚本导入失败', () => {
+    const { preset } = parseStPreset({ prompts: [{ identifier: 'main', content: 'x' }], extensions: { regex_scripts: [
+      { scriptName: 'old-off', findRegex: '/<char>/g', replaceString: 'x', substituteRegex: false },
+      { scriptName: 'old-on', findRegex: '{{char}}', replaceString: 'x', substituteRegex: true },
+      { scriptName: 'text', findRegex: 'a', replaceString: 'b', substituteRegex: '2' },
+      { scriptName: 'plain', findRegex: 'a', replaceString: 'b' },
+    ] } })
+    expect(preset.regexScripts!.map((script) => script.substituteRegex)).toEqual([0, 1, 2, undefined])
+    expect(parseStoredPreset(preset).regexScripts).toHaveLength(4)
+  })
 })
 
 describe('导入硬上限与错型拒绝（与世界书同口径，统一拒绝）', () => {

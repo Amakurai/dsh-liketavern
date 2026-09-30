@@ -2,7 +2,7 @@
  * 宏展开器单测。
  * 覆盖：角色/用户宏（含大小写不敏感）、身份宏（展示/扫描用）、outlet 命中/未命中/不嵌套、{{trim}} 移除、
  * time/date 经 vars 覆盖、未知宏保留原样、{{setvar}}/{{getvar}}/{{//}} 预处理、
- * {{random}}/{{pick}} 本轮掷骰、由内向外展开嵌套宏、postProcess 只加工宏解析值。
+ * {{random}} 本轮掷骰、{{pick}} 按聊天身份稳定、ST 旧式 <USER>/<BOT>/<CHAR> 宏、由内向外展开嵌套宏、postProcess 只加工宏解析值。
  */
 import { describe, expect, it, vi } from 'vitest'
 import { expandIdentityMacros, expandMacros, hasTurnLocalMacros, hasUnevaluatedScript, createTurnRandom, type MacroContext } from '../src/core/macros.js'
@@ -23,12 +23,23 @@ describe('角色/用户宏', () => {
   it('宏名两侧空白被容忍', () => {
     expect(expandMacros('{{ char }}', ctx)).toBe('Alice')
   })
+
+  it('ST 旧式 <USER>/<BOT>/<CHAR>/<CHARIFNOTGROUP>/<GROUP> 大小写不敏感地展开，闭合标签不受影响', () => {
+    expect(expandMacros('<USER>对<bot>说：<Char>、<CHARIFNOTGROUP>、<group>', ctx)).toBe('Bob对Alice说：Alice、Alice、Alice')
+    expect(expandMacros('<user>和</user><users>', ctx)).toBe('Bob和</user><users>')
+    // 与花括号宏混用、值同样经过 postProcess
+    expect(expandMacros('<USER>{{char}}', ctx, undefined, (value) => `[${value}]`)).toBe('[Bob][Alice]')
+  })
 })
 
 describe('expandIdentityMacros', () => {
   it('只展开 {{user}}/{{char}}，不碰 setvar 与时钟', () => {
     expect(expandIdentityMacros('想你了，{{user}} — {{char}}', ctx)).toBe('想你了，Bob — Alice')
     expect(expandIdentityMacros('{{setvar::x::1}}{{time}}', ctx)).toBe('{{setvar::x::1}}{{time}}')
+  })
+
+  it('旧式 <USER>/<BOT> 也是身份宏：老卡开场白与世界书键按人设名匹配', () => {
+    expect(expandIdentityMacros('<BOT>向<USER>招手，{{user}}', ctx)).toBe('Alice向Bob招手，Bob')
   })
 })
 
@@ -288,10 +299,34 @@ describe('random / pick', () => {
     expect(left).toMatch(/^(X|Y|Z) (X|Y|Z)$/)
   })
 
-  it('hasTurnLocalMacros 识别 random/pick，不把 {{char}} 当本轮宏', () => {
+  it('hasTurnLocalMacros 识别 random；pick 按聊天确定，不算本轮宏；{{char}} 也不是', () => {
     expect(hasTurnLocalMacros('{{random::A::B}}')).toBe(true)
-    expect(hasTurnLocalMacros('{{pick::A,B}}')).toBe(true)
+    expect(hasTurnLocalMacros('{{pick::A,B}}')).toBe(false)
     expect(hasTurnLocalMacros('{{char}} 在场')).toBe(false)
+  })
+
+  it('有聊天身份时 {{pick}} 跨轮、跨调用稳定，不消费本轮 random', () => {
+    const options = Array.from({ length: 20 }, (_, i) => `o${i}`).join('::')
+    const text = `发色：{{pick::${options}}}`
+    const turnRandom = vi.fn(() => 0)
+    const first = expandMacros(text, { ...ctx, pickSeed: 'chat-a', random: turnRandom })
+    // 另一轮换了本轮随机流，结果仍相同
+    expect(expandMacros(text, { ...ctx, pickSeed: 'chat-a', random: () => 0.99 })).toBe(first)
+    expect(turnRandom).not.toHaveBeenCalled()
+    // 20 个选项、多个聊天身份不可能全部抽到同一项：结果确实随聊天变化
+    const chats = ['chat-a', 'chat-b', 'chat-c', 'chat-d', 'chat-e', 'chat-f']
+    expect(new Set(chats.map(seed => expandMacros(text, { ...ctx, pickSeed: seed }))).size).toBeGreaterThan(1)
+  })
+
+  it('同一段原文中重复的同组 pick 各自取值，但每次展开都按出现次序得到同一结果', () => {
+    const options = Array.from({ length: 20 }, (_, i) => `o${i}`).join(',')
+    const text = Array.from({ length: 6 }, () => `{{pick:${options}}}`).join(' ')
+    const once = expandMacros(text, { ...ctx, pickSeed: 'chat-a' })
+    expect(expandMacros(text, { ...ctx, pickSeed: 'chat-a' })).toBe(once)
+    expect(new Set(once.split(' ')).size).toBeGreaterThan(1)
+    // 前面的本轮宏长度变化不移动 pick 结果（不按字符偏移取种子）
+    const withTurnMacro = (last: string) => expandMacros(`{{lastUserMessage}}|${text}`, { ...ctx, pickSeed: 'chat-a', lastUserMessage: last }).split('|')[1]
+    expect(withTurnMacro('短')).toBe(withTurnMacro('一句长得多的本轮台词'))
   })
 })
 

@@ -17,7 +17,10 @@
  * - `{{lastUserMessage}}`：最近一条用户消息
  * - `{{lastMessage}}`：最近一条真实用户或 assistant 消息（本轮宏，禁止进 standing）
  * - `{{lastCharMessage}}`：最近一条 assistant 消息（本轮宏，禁止进 standing）
- * - `{{random::A::B}}` / `{{pick::A,B}}` / `{{random:1,10}}`：掷骰（本轮宏，禁止进 standing）
+ * - `{{random::A::B}}` / `{{random:1,10}}`：掷骰（本轮宏，禁止进 standing）
+ * - `{{pick::A::B}}` / `{{pick:A,B}}`：给定 pickSeed（聊天身份）时按「聊天 + 所在文本 + 选项 + 第几次出现」
+ *   确定，同一聊天及其分支、重新生成保持同一结果（对齐 ST），可进 standing；未给定时退回 random
+ * - `<USER>` / `<BOT>` / `<CHAR>` / `<CHARIFNOTGROUP>` / `<GROUP>`：ST 旧式宏（大小写不敏感），单角色会话里后四者即角色名
  * - `{{roll:1d20}}` / `{{roll d6+2}}` / `{{roll:20}}`：ST 骰子（本轮宏）；非法表达式为空串
  * - `{{isodate}}` / `{{isotime}}`：ISO 日期与时间（本轮宏）
  * - `{{incvar::x}}` / `{{decvar::x}}`：自增、自减并返回新值；`{{hasvar::x}}`：存在判断（true/false）
@@ -48,10 +51,13 @@ export declare function hashToSeed(text: string): number;
 export declare function expandMacros(text: string, ctx: MacroContext, now?: Date, postProcess?: (value: string) => string): string;
 /**
  * 只展开身份宏。用于开场白展示、世界书扫描、入模历史——这些地方不该跑 setvar/时钟。
- * `{{user}}` 变成当前人设名，才能和世界书键互相命中。
+ * `{{user}}` 变成当前人设名，才能和世界书键互相命中。旧式 `<USER>`/`<BOT>`/`<CHAR>` 同样是身份宏。
  */
 export declare function expandIdentityMacros(text: string, ctx: Pick<MacroContext, 'char' | 'user'>): string;
-/** 条目是否含本轮才稳定的宏（应进 turnContext，避免打穿 standing KV）。 */
+/**
+ * 条目是否含本轮才稳定的宏（应进 turnContext，避免打穿 standing KV）。
+ * {{pick}} 按聊天身份确定、跨轮不变，不算本轮宏（组装链路总会提供 pickSeed）。
+ */
 export declare function hasTurnLocalMacros(text: string): boolean;
 /** 检测尚未处理的 EJS / STscript；EJS 由隔离执行器展开，STscript 仍不执行。 */
 export declare function hasUnevaluatedScript(text: string): boolean;

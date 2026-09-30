@@ -123,6 +123,7 @@ const editorDraftScope = {
 /** method → [request shape, value schema, 简介] */
 export const METHODS = {
   abandonHelperMvu:{req:object({sessionId:string().check(minLength(1),maxLength(256)),storyId:string().check(minLength(1),maxLength(256))}),value:anyValue,summary:'显式放弃待处理 MVU 任务并关闭本会话自动更新'},
+  enableHelperMvu:{req:object({sessionId:string().check(minLength(1),maxLength(256)),storyId:string().check(minLength(1),maxLength(256)),mode:enum_(['follow','explicit'])}),value:anyValue,summary:'开启本会话原生 MVU：follow 仅在未表态且脚本含官方入口时开启，explicit 为用户点选'},
   prepareHelperMvuJob:{req:object({...sessionIdField,storyId:nonEmpty(),runtimeId:string().check(minLength(8),maxLength(96))}),value:anyValue,summary:'准备当前剧情的原生 MVU 任务'},
   commitHelperMvuJob:{req:object({...sessionIdField,storyId:nonEmpty(),runtimeId:string().check(minLength(8),maxLength(96)),jobId:nonEmpty(),token:nonEmpty(),data:anyValue}),value:anyValue,summary:'原子提交 MVU 变量与完成回执'},
   // 未提交的编辑器草稿独立保存，不改动业务资产。
@@ -494,6 +495,7 @@ export interface TavernMethodResults {
   getPluginAbout: PluginAbout
   checkPluginUpdate: PluginUpdate
   abandonHelperMvu:{disabled:true;abandoned:number}
+  enableHelperMvu:{enabled:boolean;changed:boolean}
   prepareHelperMvuJob:HelperMvuWork
   commitHelperMvuJob:HelperMvuWork
   getEditorDraft: { draft: { value: unknown; updatedAt: string } | null }

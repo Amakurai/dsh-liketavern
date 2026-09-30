@@ -14,7 +14,9 @@ import type { WorkspaceFs } from '../state/workspaceFs.js'
 import { withWorkspaceLock } from '../state/workspaceLock.js'
 import { readDisplaySessionEvents } from './sessionEvents.js'
 import type { TavernState } from './state.js'
-import { enabledHelperLibraries,type HelperScriptBundle } from '../core/helperScripts.js'
+import { enabledHelperLibraries,type HelperScriptAsset,type HelperScriptBundle } from '../core/helperScripts.js'
+import { hasNativeMvuEntry } from '../core/cardScript.js'
+import type { SessionBinding } from '../core/binding.js'
 import { characterPromptName } from '../core/characterData.js'
 
 /**
@@ -153,6 +155,15 @@ export async function getHelperSnapshot(ctx:Context,state:TavernState,sessionId:
     return snapshot(current,saved.scopes,saved.extras,saved.swipes)
   })
 }
+/** 会话实际加载的三类脚本库。预设被删除或损坏时与 getSessionHelperScripts 同口径：按没有预设脚本处理，不让整个脚本包失败。 */
+export async function sessionHelperLibraries(state:TavernState,binding:Pick<SessionBinding,'presetId'|'cardId'>):Promise<HelperScriptAsset[]> {
+  const hasPreset=binding.presetId!==null&&await state.loadPreset(binding.presetId)!==null
+  return Promise.all([
+    state.getHelperScriptLibrary({type:'global'}),
+    ...(hasPreset?[state.getHelperScriptLibrary({type:'preset',presetId:binding.presetId!})]:[]),
+    state.getHelperScriptLibrary({type:'character',cardId:binding.cardId}),
+  ])
+}
 export async function getHelperScriptBundle(ctx:Context,state:TavernState,sessionId:string):Promise<HelperScriptBundle> {
   const binding=await state.loadBinding(sessionId)
   if(!binding?.storyId)throw new Error('会话未绑定可用剧情')
@@ -161,13 +172,7 @@ export async function getHelperScriptBundle(ctx:Context,state:TavernState,sessio
     if(!current||current.storyId!==binding.storyId||current.cardId!==binding.cardId||current.presetId!==binding.presetId||current.personaId!==binding.personaId||current.interactiveCards!==binding.interactiveCards||current.helperMvu!==binding.helperMvu)throw new Error('脚本会话绑定已改变，请重新加载')
   }
 
-  // 预设被删除或损坏时与 getSessionHelperScripts 同口径：按没有预设脚本加载，不让整个脚本包失败。
-  const hasPreset=binding.presetId!==null&&await state.loadPreset(binding.presetId)!==null
-  const libraries=await Promise.all([
-    state.getHelperScriptLibrary({type:'global'}),
-    ...(hasPreset?[state.getHelperScriptLibrary({type:'preset',presetId:binding.presetId!})]:[]),
-    state.getHelperScriptLibrary({type:'character',cardId:binding.cardId}),
-  ])
+  const libraries=await sessionHelperLibraries(state,binding)
   await ensureBinding()
   const enabled=state.config.interactiveCards&&binding.interactiveCards!==false
   const character=libraries.find(library=>library.target.type==='character')!
@@ -176,7 +181,8 @@ export async function getHelperScriptBundle(ctx:Context,state:TavernState,sessio
   // 脚本运行时一起返回。尤其 disabled / 无脚本分支会在下面提前返回，必须先复核。
   await ensureBinding()
   const name=card?.card.name??binding.cardName
-  const base={helperMvu:binding.helperMvu===true,cardId:binding.cardId,trees:character.trees,revision:character.revision,libraries,storyId:binding.storyId,enabled,whitelist:[...state.config.cardNetworkWhitelist],
+  // 未表态的绑定跟随卡片：由页面调用 enableHelperMvu 经空闲认领开启，读取路径本身不写绑定。
+  const base={helperMvu:binding.helperMvu===true,helperMvuFollow:binding.helperMvu===undefined&&enabled&&hasNativeMvuEntry(libraries),cardId:binding.cardId,trees:character.trees,revision:character.revision,libraries,storyId:binding.storyId,enabled,whitelist:[...state.config.cardNetworkWhitelist],
     name,characterName:card?characterPromptName(card.card):name,userName:persona?.name??DEFAULT_USER_NAME}
   if(!enabled)return {...base,messageId:null}
   try{helperJson(libraries,4*1024*1024);if(!enabledHelperLibraries(libraries).length&&!base.helperMvu)return {...base,messageId:null}}

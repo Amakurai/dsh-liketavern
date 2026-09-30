@@ -561,7 +561,9 @@ export function compileRegexScripts(
       if (scopes.has('input')) roles.add('user')
     }
     if (scopes.size === 0) return
-    const substitute = script.substituteRegex
+    // 对齐 ST runRegexScript 的 Number(substituteRegex)：旧版布尔 true/false 即 1/0，
+    // 缺省与未知值按原样正则（不代入宏），否则 <char> 这类标签模式会被换成角色名。
+    const substitute = Number(script.substituteRegex)
     const displayOnly = [...scopes].every((s) => s === 'output') && [...timing].every((t) => t === 'render')
     let enabled = script.disabled === true ? false : source === 'preset' ? true : displayOnly
     // 卡内正则：只要带展示向就启用展示部分。社区卡常同时勾 markdownOnly+promptOnly，
@@ -590,7 +592,7 @@ export function compileRegexScripts(
       timing: timingList,
       minDepth: script.minDepth ?? null,
       maxDepth: script.maxDepth ?? null,
-      substituteRegex: substitute === 0 || substitute === 2 ? substitute : 1,
+      substituteRegex: substitute === 1 || substitute === 2 ? substitute : 0,
       source,
       ...(roleList.length > 0 ? { roles: roleList } : {}),
       ...(script.trimStrings?.some((s) => s.length > 0)

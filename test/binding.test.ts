@@ -1,5 +1,6 @@
 /**
  * 会话绑定覆盖点：
+ * - chatPickSeed：{{pick}} 的聊天身份取分支世系根会话。
  * - resolveStaleBinding：删除角色卡后 cardId 失效，按名字或「只剩一张卡」接回新工作区。
  * - parseSessionBinding（node/bindings）：全字段通过；必填缺失/类型错误抛错；
  *   interactiveCards（boolean | null）三态透传；cardId 目录名格式校验；未知字段丢弃。
@@ -12,7 +13,7 @@ import { mkdir, mkdtemp, rm, symlink, truncate, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { resolveStaleBinding, type SessionBinding, type WalLineageEntry } from '../src/core/binding.js'
+import { chatPickSeed, resolveStaleBinding, type SessionBinding, type WalLineageEntry } from '../src/core/binding.js'
 import { listBindingReferencesForCard, loadBinding, parseSessionBinding, saveBinding } from '../src/node/bindings.js'
 import type { TavernPaths } from '../src/node/paths.js'
 
@@ -35,6 +36,16 @@ function makeBinding(overrides: Partial<SessionBinding> = {}): SessionBinding {
     ...overrides,
   }
 }
+
+describe('chatPickSeed', () => {
+  it('分支与重新生成沿用世系根会话，独立会话用自身 id', () => {
+    expect(chatPickSeed(makeBinding({ sessionId: 'root', walLineage: undefined }))).toBe('root')
+    expect(chatPickSeed(makeBinding({ sessionId: 'root', walLineage: [] }))).toBe('root')
+    expect(chatPickSeed(makeBinding({ sessionId: 'child-2', walLineage: [
+      { sessionId: 'root', throughTurn: 3 }, { sessionId: 'child-1', throughTurn: 5 },
+    ] }))).toBe('root')
+  })
+})
 
 describe('resolveStaleBinding', () => {
   const binding = {

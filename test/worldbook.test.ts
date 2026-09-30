@@ -218,6 +218,20 @@ describe('触发键匹配', () => {
     const partial = makeEntry({ key: 'p', keys: ['cat'], matchWholeWords: false })
     expect(activatedKeys(run({ entries: [partial], messages: [userMsg('catalog')], settings: whole }))).toEqual(['p'])
   })
+
+  it('整词匹配：不用空格分词的文字本身就是边界，中文键在中文句中照常命中', () => {
+    const whole = makeSettings({ matchWholeWords: true })
+    const hit = (keys: string[], text: string) =>
+      activatedKeys(run({ entries: [makeEntry({ key: 'e', keys })], messages: [userMsg(text)], settings: whole }))
+    expect(hit(['小明'], '我是小明啊')).toEqual(['e'])
+    expect(hit(['魔法'], '她施展了魔法。')).toEqual(['e'])
+    expect(hit(['ケーキ'], 'ケーキを食べた')).toEqual(['e'])
+    expect(hit(['고양이'], '고양이가 왔다')).toEqual(['e'])
+    // 中文包围的英文键两侧同样是边界；拉丁字母相邻仍按整词拒绝
+    expect(hit(['cat'], '一只cat跑了')).toEqual(['e'])
+    expect(hit(['小明'], 'abc小明')).toEqual([])
+    expect(hit(['cat'], 'catalog')).toEqual([])
+  })
 })
 
 // ---------------------------------------------------------------------------

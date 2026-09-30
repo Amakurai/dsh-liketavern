@@ -133,4 +133,14 @@ describe('多 step 宿主回复上下文',()=> {
     options.model='model-b'
     expect((await runTavernPipeline(request))!.templateContext!.model).toBe('model-a')
   })
+  it('会话内换模后模板 model 取最近请求头，不取创建时的默认 agent.options',async()=> {
+    const {state}=await setup()
+    await onTurnStart(state,'s1',1)
+    const agent={options:{provider:'default-provider',model:'default-model'},session:{
+      deriveMessages:()=>[createUserMessage({source:{kind:'user'},content:[{type:'text',text:'hello'}]})],
+      requestHeader:()=>({config:{provider:'session-provider',model:'session-model'}}),
+    }} as unknown as Agent
+    const result=await runTavernPipeline({state,sessionId:'s1',agent,mode:'live'})
+    expect(result!.templateContext!.model).toBe('session-model')
+  })
 })

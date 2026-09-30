@@ -123,7 +123,7 @@ export interface AssembledPrompt {
   hasTurnTail?: boolean
   /** standing + turnContext（预览与旧调用方）。 */
   system: string
-  /** dsh 通道之外的历史（= 输入历史经正则与裁剪后的形态，供预览）。 */
+  /** dsh 通道之外的历史（= 输入历史经正则与裁剪后的形态，不含已并入 system 的深度注入）。 */
   history: ChatMessage[]
   log: AssembleLogEntry[]
   stats: { tokensBefore: number; tokensAfter: number; trimmedSections: string[] }
@@ -894,7 +894,9 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
     turnContext,
     hasTurnTail: liveTail.length > 0,
     system,
-    history:history.map(message=>processedHistory.has(message)?{...message,content:processedHistory.get(message)!}:message),
+    // 深度注入已并入 standing/turnContext（即 system）；这里只留真实历史，代答等消费方不能再发一遍。
+    history:history.filter(message=>originalHistory.has(message))
+      .map(message=>processedHistory.has(message)?{...message,content:processedHistory.get(message)!}:message),
     log,
     stats: { tokensBefore, tokensAfter, trimmedSections },
   }

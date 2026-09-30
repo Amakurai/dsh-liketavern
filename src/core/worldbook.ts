@@ -80,6 +80,15 @@ function ident(text: string, ctx?: Pick<MacroContext, 'char' | 'user'>): string 
   return ctx ? expandIdentityMacros(text, ctx) : text
 }
 
+/**
+ * 整词边界两侧不能出现的「词字符」：字母、数字、组合符与下划线，但排除不用空格分词的文字
+ * （汉字、假名、谚文、泰文等）。这些文字没有词边界可言：ST 以 \W 为边界，它们天然算边界；
+ * 若也当成词字符，「我是小明啊」里的「小明」开启整词匹配后就永远无法命中。
+ * 模板沙箱的 keywordMatch（node/templateWorldInfo.ts）使用同一口径。
+ */
+const NO_SPACE_SCRIPTS = '\\p{scx=Han}\\p{scx=Hiragana}\\p{scx=Katakana}\\p{scx=Hangul}\\p{scx=Thai}\\p{scx=Lao}\\p{scx=Khmer}\\p{scx=Myanmar}'
+const WHOLE_WORD_CHAR = `(?:(?![${NO_SPACE_SCRIPTS}])[\\p{L}\\p{N}\\p{M}_])`
+
 /** 单条触发键编译：返回 (text) => boolean。明文键支持整词/大小写选项；/.../ 为 JS 正则键。 */
 function compileKey(
   key: string,
@@ -112,7 +121,7 @@ function compileKey(
     try {
       const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
       // JS 的 \b 只识别 ASCII 词字符，会漏掉带重音字母及西里尔字母的独立词。
-      const re = new RegExp(`(?<![\\p{L}\\p{N}\\p{M}_])${escaped}(?![\\p{L}\\p{N}\\p{M}_])`, options.caseSensitive ? 'u' : 'iu')
+      const re = new RegExp(`(?<!${WHOLE_WORD_CHAR})${escaped}(?!${WHOLE_WORD_CHAR})`, options.caseSensitive ? 'u' : 'iu')
       return (text) => re.test(text)
     } catch {
       return null

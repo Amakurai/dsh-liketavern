@@ -38,6 +38,8 @@ import { buildTemplateMessageHistory } from './templateMessageHistory.js'
 import { mergeTemplateMessageVariables, visibleTemplateMessageVariables, type TemplateMessageIdentity } from '../core/templateMessageVariables.js'
 import { loadTemplateAvatars } from './templateAvatar.js'
 import { resolveTemplateContinuation } from '../state/templateContinuation.js'
+import { sessionModelRoute, type SessionModelRoute } from './modelRoute.js'
+import { chatPickSeed } from '../core/binding.js'
 import type { TavernState } from './state.js'
 
 const FALLBACK_CONTEXT_WINDOW = 131072
@@ -104,9 +106,8 @@ export function flattenMessages(messages: readonly Message[], charName: string, 
 }
 
 /** 解析模型上下文窗口；任何失败都回退默认值。元数据经 TavernState 进程内缓存，每步调用不重复解析。 */
-async function resolveContextWindow(input: PipelineInput): Promise<number> {
-  const provider = input.agent?.options.provider
-  const model = input.agent?.options.model
+async function resolveContextWindow(input: PipelineInput, route: SessionModelRoute): Promise<number> {
+  const { provider, model } = route
   if (!input.llm || !provider || !model) return FALLBACK_CONTEXT_WINDOW
   try {
     const info = await input.state.resolveModelInfoCached(input.llm, provider, model)
@@ -279,12 +280,15 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
   const lastUserMessage = [...chatMessages].reverse().find((m) => m.role === 'user')?.content ?? ''
   const config = state.config
   const sampling = resolvePresetSampling(config.sampling, preset.sampling)
-  const contextWindow = await resolveContextWindow(input)
+  // 会话内换模不回写 agent.options；窗口与模板 model 取会话最近实际路由。
+  const route = input.agent ? sessionModelRoute(input.agent) : {}
+  const contextWindow = await resolveContextWindow(input, route)
   const turn = state.currentTurns.get(sessionId) ?? -1
   const turnSeed = hashToSeed(`${sessionId}:${turn}`)
   const macroCtx = {
     char: charName,
     user: userName,
+    pickSeed: chatPickSeed(binding),
     lastUserMessage,
     lastMessage: [...chatMessages].reverse().find(message => message.role === 'assistant'
       || (message.role === 'user' && !isSyntheticUserText(message.content)))?.content ?? '',
@@ -315,7 +319,7 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
     ...(helperMvu ? {helperMvu} : {}),
     ...await loadTemplateAvatars(state,binding.cardId,persona),
     now: macroCtx.now.getTime(), seed: turnSeed, phase: 'generate',
-    sessionId, cardId: binding.cardId, generationType: input.generationType ?? 'normal', model:input.agent?.options.model ?? '',
+    sessionId, cardId: binding.cardId, generationType: input.generationType ?? 'normal', model:route.model ?? '',
   }
   {
     deltas = lore.deltas

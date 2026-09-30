@@ -21,6 +21,7 @@ import { collectDisplayRegexDiagnostics } from './templateDisplay.js'
 import { hideIncompleteHtml, presentRenderedOutput, stripOpaqueDisplayMeta } from '../core/displaySanitize.js'
 import { disableInteractiveParts, splitTemplateDisplay, TEMPLATE_DISPLAY_PARTS_VERSION, type TemplateDisplayPart } from '../core/templateDisplay.js'
 import { expandIdentityMacros } from '../core/macros.js'
+import { chatPickSeed } from '../core/binding.js'
 import { DEFAULT_USER_NAME } from '../core/persona.js'
 import { cardGreetingVariants, isTavernGreetingEvent } from '../core/greetingLog.js'
 import type { MemoryEntry, PromptPreset } from '../core/types.js'
@@ -568,14 +569,14 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
     }
     const display = templateParts === undefined ? undefined : await isolated('display', {
       parts: templateParts.map(part => ({ ...part, text: expandIdentityMacros(part.text, names) })),
-      rules, macroCtx: { ...names, outlets: {} },
+      rules, macroCtx: { ...names, outlets: {}, pickSeed: chatPickSeed(binding) },
     })
     let parts = display?.parts
     let regexDiagnostics = display?.regexDiagnostics
     if (parts !== undefined && !allowHtml) parts = disableInteractiveParts(parts)
     let presented: {htmls:string[];text:string;pendingHtml?:true}
     if(parts === undefined) {
-      const rendered = await isolated('render', { text: named, rules, macroCtx: { ...names, outlets: {} } })
+      const rendered = await isolated('render', { text: named, rules, macroCtx: { ...names, outlets: {}, pickSeed: chatPickSeed(binding) } })
       regexDiagnostics = collectDisplayRegexDiagnostics(rendered.errors, rules)
       presented = presentRenderedOutput(rendered.text, allowHtml)
       // 普通回复与展示正则生成的片段也保留原位置，避免尾部状态栏移到台词前面。

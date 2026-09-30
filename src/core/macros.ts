@@ -17,7 +17,10 @@
  * - `{{lastUserMessage}}`：最近一条用户消息
  * - `{{lastMessage}}`：最近一条真实用户或 assistant 消息（本轮宏，禁止进 standing）
  * - `{{lastCharMessage}}`：最近一条 assistant 消息（本轮宏，禁止进 standing）
- * - `{{random::A::B}}` / `{{pick::A,B}}` / `{{random:1,10}}`：掷骰（本轮宏，禁止进 standing）
+ * - `{{random::A::B}}` / `{{random:1,10}}`：掷骰（本轮宏，禁止进 standing）
+ * - `{{pick::A::B}}` / `{{pick:A,B}}`：给定 pickSeed（聊天身份）时按「聊天 + 所在文本 + 选项 + 第几次出现」
+ *   确定，同一聊天及其分支、重新生成保持同一结果（对齐 ST），可进 standing；未给定时退回 random
+ * - `<USER>` / `<BOT>` / `<CHAR>` / `<CHARIFNOTGROUP>` / `<GROUP>`：ST 旧式宏（大小写不敏感），单角色会话里后四者即角色名
  * - `{{roll:1d20}}` / `{{roll d6+2}}` / `{{roll:20}}`：ST 骰子（本轮宏）；非法表达式为空串
  * - `{{isodate}}` / `{{isotime}}`：ISO 日期与时间（本轮宏）
  * - `{{incvar::x}}` / `{{decvar::x}}`：自增、自减并返回新值；`{{hasvar::x}}`：存在判断（true/false）
@@ -40,6 +43,16 @@ export type { MacroContext }
 /** 只匹配不含花括号的最内层宏，便于 `{{setvar::x::{{char}}}}` 由内向外展开。 */
 const MACRO_RE = /\{\{\s*([^{}]+?)\s*\}\}/g
 const MAX_PASSES = 8
+/** ST evaluateMacros 的旧式非花括号宏；老卡片的开场白、描述与世界书键常用。 */
+const LEGACY_MACRO_RE = /<(USER|BOT|CHAR|CHARIFNOTGROUP|GROUP)>/gi
+
+function expandLegacyMacros(text: string, ctx: Pick<MacroContext, 'char' | 'user'>, postProcess?: (value: string) => string): string {
+  if (!text.includes('<')) return text
+  return text.replace(LEGACY_MACRO_RE, (_raw, name: string) => {
+    const value = name.toLowerCase() === 'user' ? ctx.user : ctx.char
+    return postProcess ? postProcess(value) : value
+  })
+}
 /** 冻结标记必须避开本次所有文本来源，私用区字符本身也可能是角色使用的图标。 */
 function frozenOpenFor(text: string, ctx: MacroContext): string {
   const reserved = [text, ...Object.values(ctx).filter((value): value is string => typeof value === 'string'),
@@ -145,7 +158,7 @@ function isGetVar(inner: string): boolean {
   return /^(getvar|getlocalvar|getglobalvar|hasvar|haslocalvar|hasglobalvar)\s*::/i.test(inner.trim())
 }
 
-function applyCommand(inner: string, ctx: MacroContext, clock: Record<string, string>): string | undefined {
+function applyCommand(inner: string, ctx: MacroContext, clock: Record<string, string>, pickRandom?: (inner: string) => () => number): string | undefined {
   const raw = inner.trim()
   const lower = raw.toLowerCase()
 
@@ -179,7 +192,11 @@ function applyCommand(inner: string, ctx: MacroContext, clock: Record<string, st
   if (reversed) return [...reversed[1]!].reverse().join('')
 
   const choices = parseChoiceMacro(raw)
-  if (choices) return rollChoice(choices.options, ctx.random ?? Math.random, choices.kind === 'random')
+  if (choices) {
+    // pick 有聊天身份时走确定性流，不消费本轮 random，{{random}} 的取值不随 pick 数量平移。
+    const random = choices.kind === 'pick' && pickRandom ? pickRandom(raw) : ctx.random ?? Math.random
+    return rollChoice(choices.options, random, choices.kind === 'random')
+  }
 
   if (lower.startsWith('outlet::')) {
     const outletName = raw.slice('outlet::'.length).trim()
@@ -256,17 +273,30 @@ export function expandMacros(
   now: Date = new Date(),
   postProcess?: (value: string) => string,
 ): string {
-  if (!text.includes('{{')) return text
+  // ST 先替换旧式宏（preEnvMacros），值同样经过 postProcess。
+  const legacy = expandLegacyMacros(text, ctx, postProcess)
+  if (!legacy.includes('{{')) return legacy
   const clock = { ...defaultVars(now), ...ctx.vars }
-  const frozenOpen = frozenOpenFor(text, ctx)
+  const frozenOpen = frozenOpenFor(legacy, ctx)
   const frozenClose = `${frozenOpen}close`
   const thaw = (value: string): string => value.replaceAll(frozenClose, '}').replaceAll(frozenOpen, '{')
-  let current = text
+  let current = legacy
+  // 原文哈希让不同条目里的同一组选项互相独立；同一段原文里同组选项按出现次序各取一次。
+  // 不用字符偏移：其它宏（如本轮台词）展开后长度会变，偏移会让结果跨轮漂移。
+  const pickSeed = ctx.pickSeed
+  const pickCounts = new Map<string, number>()
+  let textSeed: number | undefined
+  const pickRandom = pickSeed === undefined ? undefined : (inner: string): (() => number) => {
+    const occurrence = pickCounts.get(inner) ?? 0
+    pickCounts.set(inner, occurrence + 1)
+    textSeed ??= hashToSeed(text)
+    return createTurnRandom(hashToSeed(`${pickSeed}\0${textSeed}\0${inner}\0${occurrence}`))
+  }
 
   const replaceInnermost = (skipGet: boolean, unknowns: string[] | null): void => {
     current = current.replace(MACRO_RE, (raw, inner: string) => {
       if (skipGet && isGetVar(inner)) return raw
-      const applied = applyCommand(inner, ctx, clock)
+      const applied = applyCommand(inner, ctx, clock, pickRandom)
       if (applied !== undefined) {
         const value = postProcess ? postProcess(applied) : applied
         // 转义等后处理先作用于原文，再冻结双向花括号，避免截断外层 setvar。
@@ -305,22 +335,26 @@ const IDENTITY_MACRO_RE = /\{\{\s*(char|charname|user|username)\s*\}\}/gi
 
 /**
  * 只展开身份宏。用于开场白展示、世界书扫描、入模历史——这些地方不该跑 setvar/时钟。
- * `{{user}}` 变成当前人设名，才能和世界书键互相命中。
+ * `{{user}}` 变成当前人设名，才能和世界书键互相命中。旧式 `<USER>`/`<BOT>`/`<CHAR>` 同样是身份宏。
  */
 export function expandIdentityMacros(text: string, ctx: Pick<MacroContext, 'char' | 'user'>): string {
-  if (!text.includes('{{')) return text
-  return text.replace(IDENTITY_MACRO_RE, (_raw, name: string) => {
+  const legacy = expandLegacyMacros(text, ctx)
+  if (!legacy.includes('{{')) return legacy
+  return legacy.replace(IDENTITY_MACRO_RE, (_raw, name: string) => {
     const k = name.toLowerCase()
     return k === 'user' || k === 'username' ? ctx.user : ctx.char
   })
 }
 
-/** 条目是否含本轮才稳定的宏（应进 turnContext，避免打穿 standing KV）。 */
+/**
+ * 条目是否含本轮才稳定的宏（应进 turnContext，避免打穿 standing KV）。
+ * {{pick}} 按聊天身份确定、跨轮不变，不算本轮宏（组装链路总会提供 pickSeed）。
+ */
 export function hasTurnLocalMacros(text: string): boolean {
   if (text.includes('<%')) return true
   // 原生 MVU 的 stat_data 是轮初剧情快照；读取它的宏和 EJS 一样不能跨轮钉死。
   if (/\{\{\s*(?:getvar|getlocalvar|getglobalvar|hasvar|haslocalvar|hasglobalvar)\s*::\s*stat_data(?:[.\[]|\s*\}\})/i.test(text)) return true
-  return /\{\{\s*(outlet::|outletPromptsInjected:|lastusermessage|lastmessage|last_user_message|lastcharmessage|last_char_message|time|date|datetime|weekday|isodate|isotime|roll(?:\s*:|\s+\S)|random\s*:|pick\s*:)/i.test(text)
+  return /\{\{\s*(outlet::|outletPromptsInjected:|lastusermessage|lastmessage|last_user_message|lastcharmessage|last_char_message|time|date|datetime|weekday|isodate|isotime|roll(?:\s*:|\s+\S)|random\s*:)/i.test(text)
 }
 
 /** 检测尚未处理的 EJS / STscript；EJS 由隔离执行器展开，STscript 仍不执行。 */

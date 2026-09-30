@@ -3,6 +3,8 @@ import { availableParallelism } from 'node:os'
 import { defineConfig } from 'vitest/config'
 
 export default defineConfig({test:{
+  // 只收集仓库 test/；.tmp 等被忽略目录里的旧版冒烟副本不能混进本地全量运行。
+  include:['test/**/*.test.{ts,tsx}'],
   // CI 共享机器串行运行文件，避免多个 QuickJS 实例争抢 CPU 耗尽产品的墙钟预算。
   maxWorkers:process.env.CI ? 1 : Math.min(4,availableParallelism()),
   // 集成用例会依次启动多个 worker；整条用例的时限独立于每次隔离计算的产品限额。

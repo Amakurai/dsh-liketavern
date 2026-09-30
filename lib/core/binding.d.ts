@@ -44,6 +44,11 @@ export interface SessionBinding {
     walLineage?: WalLineageEntry[];
     createdAt: string;
 }
+/**
+ * {{pick}} 的聊天身份（对齐 ST 的 chat id hash）：取分支世系的根会话。重新生成、编辑与分支都会
+ * 建子会话，但世系根不变，已抽定的设定不会随之改变；无世系的会话即自身。
+ */
+export declare function chatPickSeed(binding: Pick<SessionBinding, 'sessionId' | 'walLineage'>): string;
 export interface BindingCardRef {
     cardId: string;
     name: string;

@@ -57,7 +57,7 @@ export declare const TavernConfigSchema: z<Schemastery.ObjectS<NoInfer<{
         recursiveScan: z<boolean, boolean, "defined">;
         maxRecursionSteps: z<number, number, "defined">;
         caseSensitive: z<boolean, boolean, "defined">;
-        /** 整词匹配对中文不友好，默认关（SillyTavern 出厂为开，差异见 README）。 */
+        /** 整词匹配只约束以空格分词的文字；汉字、假名等相邻不算粘连（与 ST 以 \W 为边界一致）。默认关。 */
         matchWholeWords: z<boolean, boolean, "defined">;
         includeNames: z<boolean, boolean, "defined">;
         overflowWarning: z<boolean, boolean, "defined">;
@@ -72,7 +72,7 @@ export declare const TavernConfigSchema: z<Schemastery.ObjectS<NoInfer<{
         recursiveScan: z<boolean, boolean, "defined">;
         maxRecursionSteps: z<number, number, "defined">;
         caseSensitive: z<boolean, boolean, "defined">;
-        /** 整词匹配对中文不友好，默认关（SillyTavern 出厂为开，差异见 README）。 */
+        /** 整词匹配只约束以空格分词的文字；汉字、假名等相邻不算粘连（与 ST 以 \W 为边界一致）。默认关。 */
         matchWholeWords: z<boolean, boolean, "defined">;
         includeNames: z<boolean, boolean, "defined">;
         overflowWarning: z<boolean, boolean, "defined">;
@@ -193,7 +193,7 @@ export declare const TavernConfigSchema: z<Schemastery.ObjectS<NoInfer<{
         recursiveScan: z<boolean, boolean, "defined">;
         maxRecursionSteps: z<number, number, "defined">;
         caseSensitive: z<boolean, boolean, "defined">;
-        /** 整词匹配对中文不友好，默认关（SillyTavern 出厂为开，差异见 README）。 */
+        /** 整词匹配只约束以空格分词的文字；汉字、假名等相邻不算粘连（与 ST 以 \W 为边界一致）。默认关。 */
         matchWholeWords: z<boolean, boolean, "defined">;
         includeNames: z<boolean, boolean, "defined">;
         overflowWarning: z<boolean, boolean, "defined">;
@@ -208,7 +208,7 @@ export declare const TavernConfigSchema: z<Schemastery.ObjectS<NoInfer<{
         recursiveScan: z<boolean, boolean, "defined">;
         maxRecursionSteps: z<number, number, "defined">;
         caseSensitive: z<boolean, boolean, "defined">;
-        /** 整词匹配对中文不友好，默认关（SillyTavern 出厂为开，差异见 README）。 */
+        /** 整词匹配只约束以空格分词的文字；汉字、假名等相邻不算粘连（与 ST 以 \W 为边界一致）。默认关。 */
         matchWholeWords: z<boolean, boolean, "defined">;
         includeNames: z<boolean, boolean, "defined">;
         overflowWarning: z<boolean, boolean, "defined">;
@@ -331,7 +331,7 @@ export declare const Config: z<Schemastery.ObjectS<NoInfer<{
         recursiveScan: z<boolean, boolean, "defined">;
         maxRecursionSteps: z<number, number, "defined">;
         caseSensitive: z<boolean, boolean, "defined">;
-        /** 整词匹配对中文不友好，默认关（SillyTavern 出厂为开，差异见 README）。 */
+        /** 整词匹配只约束以空格分词的文字；汉字、假名等相邻不算粘连（与 ST 以 \W 为边界一致）。默认关。 */
         matchWholeWords: z<boolean, boolean, "defined">;
         includeNames: z<boolean, boolean, "defined">;
         overflowWarning: z<boolean, boolean, "defined">;
@@ -346,7 +346,7 @@ export declare const Config: z<Schemastery.ObjectS<NoInfer<{
         recursiveScan: z<boolean, boolean, "defined">;
         maxRecursionSteps: z<number, number, "defined">;
         caseSensitive: z<boolean, boolean, "defined">;
-        /** 整词匹配对中文不友好，默认关（SillyTavern 出厂为开，差异见 README）。 */
+        /** 整词匹配只约束以空格分词的文字；汉字、假名等相邻不算粘连（与 ST 以 \W 为边界一致）。默认关。 */
         matchWholeWords: z<boolean, boolean, "defined">;
         includeNames: z<boolean, boolean, "defined">;
         overflowWarning: z<boolean, boolean, "defined">;
@@ -462,7 +462,7 @@ export declare const Config: z<Schemastery.ObjectS<NoInfer<{
         recursiveScan: z<boolean, boolean, "defined">;
         maxRecursionSteps: z<number, number, "defined">;
         caseSensitive: z<boolean, boolean, "defined">;
-        /** 整词匹配对中文不友好，默认关（SillyTavern 出厂为开，差异见 README）。 */
+        /** 整词匹配只约束以空格分词的文字；汉字、假名等相邻不算粘连（与 ST 以 \W 为边界一致）。默认关。 */
         matchWholeWords: z<boolean, boolean, "defined">;
         includeNames: z<boolean, boolean, "defined">;
         overflowWarning: z<boolean, boolean, "defined">;
@@ -477,7 +477,7 @@ export declare const Config: z<Schemastery.ObjectS<NoInfer<{
         recursiveScan: z<boolean, boolean, "defined">;
         maxRecursionSteps: z<number, number, "defined">;
         caseSensitive: z<boolean, boolean, "defined">;
-        /** 整词匹配对中文不友好，默认关（SillyTavern 出厂为开，差异见 README）。 */
+        /** 整词匹配只约束以空格分词的文字；汉字、假名等相邻不算粘连（与 ST 以 \W 为边界一致）。默认关。 */
         matchWholeWords: z<boolean, boolean, "defined">;
         includeNames: z<boolean, boolean, "defined">;
         overflowWarning: z<boolean, boolean, "defined">;

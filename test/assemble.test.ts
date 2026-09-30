@@ -878,6 +878,11 @@ describe('历史身份宏', () => {
     )
     expect(res.history.map((m) => m.content)).toEqual(['我想你了，Bob。我是Alice。'])
   })
+
+  it('只含旧式 <USER>/<BOT> 的历史同样展开，不因缺少 {{ 被跳过', () => {
+    const res = assemblePrompt(makeInput({ history: [{ role: 'assistant', content: '<BOT>向<USER>招手。' }] }))
+    expect(res.history.map((m) => m.content)).toEqual(['Alice向Bob招手。'])
+  })
 })
 
 describe('prompt 作用域正则', () => {

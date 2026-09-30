@@ -261,9 +261,11 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
     },
   }
 
-  const namedHistory = input.history.map((m) =>
-    m.content.includes('{{') ? { ...m, content: expandIdentityMacros(m.content, macroCtx) } : m,
-  )
+  // 旧式 <USER>/<BOT> 不含花括号，不能用 '{{' 预判；未命中时保留原对象身份。
+  const namedHistory = input.history.map((m) => {
+    const content = expandIdentityMacros(m.content, macroCtx)
+    return content === m.content ? m : { ...m, content }
+  })
 
   // ── 1. 输入侧正则（历史副本：先 input/send，再 prompt/assemble） ──────────
   const inputRegex = applyRegexToMessages(

@@ -15,22 +15,65 @@ const pkg = (version = '0.2.5', host = HOST) => ({ name: 'dsh-liketavern', versi
 const metadata = (version = '0.2.5', host = HOST, sourceCheckout = false): PluginAboutMetadata => ({ plugin: pkg(version), host: { name: '@deepseek-ai/dsh', version: host }, sourceCheckout })
 const release = (tag = 'v0.2.6') => ({ tag_name: tag, draft: false, prerelease: false, html_url: 'https://untrusted.example/ignored' })
 const response = (value: unknown) => new Response(JSON.stringify(value), { headers: { 'content-type': 'application/json' } })
-function factory(options: { current?: string; host?: string; sourceCheckout?: boolean; tag?: string; requiredHost?: string } = {}) {
+function factory(options: { current?: string; host?: string; sourceCheckout?: boolean; tag?: string; requiredHost?: string; desktopHost?: boolean } = {}) {
   const tag = options.tag ?? 'v0.2.6'
   const fetch = vi.fn<typeof globalThis.fetch>()
     .mockResolvedValueOnce(response(release(tag)))
     .mockResolvedValueOnce(response(pkg(tag.replace(/^v/, ''), options.requiredHost ?? HOST)))
-  const reader = createPluginAboutReader({ fetch, readMetadata: async () => metadata(options.current, options.host, options.sourceCheckout) })
+  const reader = createPluginAboutReader({ fetch, readMetadata: async () => metadata(options.current, options.host, options.sourceCheckout),
+    ...(options.desktopHost ? { hostProfile: { name: 'desktop', installAnchor: join(tmpdir(), 'unused-host-manifest.json') } } : {}) })
   return { reader, fetch }
 }
 
 describe('关于元数据', () => {
+  it('桌面宿主从当前 profile 的安装锚点读取版本，非 CLI 入口也可检查发布', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'tavern-desktop-host-')); roots.push(root)
+    const directory = join(root, 'resources/app.asar/dsh/node_modules/@deepseek-ai/dsh')
+    await mkdir(directory, { recursive: true })
+    const installAnchor = join(directory, 'package.json')
+    await writeFile(installAnchor, JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.2.0-rc.2' }))
+    const own = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as { version: string }
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(response(release(`v${own.version}`)))
+      .mockResolvedValueOnce(response(pkg(own.version, '0.2.0-rc.2')))
+    const reader = createPluginAboutReader({ hostProfile: { name: 'desktop', installAnchor }, fetch })
+    expect(await reader.getPluginAbout()).toMatchObject({ hostVersion: '0.2.0-rc.2', desktopHost: true })
+    expect(fetch).not.toHaveBeenCalled()
+    expect(await reader.checkPluginUpdate()).toMatchObject({ status: 'current', command: null })
+    expect(fetch).toHaveBeenCalledTimes(2)
+  })
+  it('当前 profile 锚点优先于插件旁的开发依赖，并解析目录 junction', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'tavern-profile-host-')); roots.push(root)
+    const directory = join(root, 'host'), linked = join(root, 'linked-host')
+    await mkdir(directory)
+    await writeFile(join(directory, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '9.8.7' }))
+    await symlink(directory, linked, process.platform === 'win32' ? 'junction' : 'dir')
+    const reader = createPluginAboutReader({ hostProfile: { name: 'web', installAnchor: join(linked, 'package.json') } })
+    expect(await reader.getPluginAbout()).toMatchObject({ hostVersion: '9.8.7', desktopHost: false })
+  })
+  it.each([
+    { name: 'custom-launcher', version: HOST },
+    { name: '@deepseek-ai/dsh', version: 'invalid' },
+  ])('profile 锚点身份或版本无效时不猜测其它安装：%j', async manifest => {
+    const root = await mkdtemp(join(tmpdir(), 'tavern-profile-host-')); roots.push(root)
+    const installAnchor = join(root, 'package.json')
+    await writeFile(installAnchor, JSON.stringify(manifest))
+    const reader = createPluginAboutReader({ hostProfile: { name: 'desktop', installAnchor } })
+    expect(await reader.getPluginAbout()).toMatchObject({ hostVersion: 'unknown', desktopHost: true })
+  })
+  it.each(['missing', 'invalid-json', 'oversized', 'relative'])('不可读 profile 锚点仍保留关于信息：%s', async failure => {
+    const root = await mkdtemp(join(tmpdir(), 'tavern-profile-host-')); roots.push(root)
+    const path = join(root, 'package.json')
+    if (failure === 'invalid-json') await writeFile(path, '{broken')
+    if (failure === 'oversized') await writeFile(path, JSON.stringify({ name: '@deepseek-ai/dsh', version: HOST, padding: 'x'.repeat(256 * 1024) }))
+    const reader = createPluginAboutReader({ hostProfile: { name: 'desktop', installAnchor: failure === 'relative' ? 'package.json' : path } })
+    expect(await reader.getPluginAbout()).toMatchObject({ hostVersion: 'unknown', desktopHost: true })
+  })
   it('真实源码读取自身版本，但 Vitest 启动入口不能伪装成插件旁的开发宿主', async () => {
     const own = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as { version: string; peerDependencies: Record<string, string> }
     const checkout = await lstat(fileURLToPath(new URL('../.git', import.meta.url))).then(() => true, () => false)
     const result = await getPluginAbout()
     expect(result).toEqual({ version: own.version, hostVersion: 'unknown', expectedHostVersion: own.peerDependencies['@deepseek-ai/dsh'],
-      repositoryUrl: REPOSITORY, releasesUrl: `${REPOSITORY}/releases`, sourceCheckout: checkout })
+      repositoryUrl: REPOSITORY, releasesUrl: `${REPOSITORY}/releases`, sourceCheckout: checkout, desktopHost: false })
     expect(JSON.stringify(result)).not.toContain(fileURLToPath(new URL('../', import.meta.url)))
   })
   it('初始化和读取关于信息不联网，只有显式检查才调用 fetch', async () => {
@@ -111,6 +154,12 @@ describe('明确且有界的更新检查', () => {
     const { reader } = factory({ sourceCheckout: true })
     expect((await reader.getPluginAbout()).sourceCheckout).toBe(true)
     expect(await reader.checkPluginUpdate()).toMatchObject({ status: 'available', command: null })
+  })
+  it('桌面安装版也可检查兼容性，但不提供 CLI 覆盖桌面 profile 的命令', async () => {
+    const { reader } = factory({ desktopHost: true })
+    expect(await reader.getPluginAbout()).toMatchObject({ sourceCheckout: false, desktopHost: true })
+    expect(await reader.checkPluginUpdate()).toMatchObject({ status: 'available', command: null })
+    expect(await factory({ desktopHost: true, requiredHost: '9.8.7' }).reader.checkPluginUpdate()).toMatchObject({ status: 'incompatible', command: null })
   })
   it('同时多次点击共用一轮请求，完成后可以重新检查', async () => {
     let resolveRelease!: (value: Response) => void

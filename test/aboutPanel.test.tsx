@@ -21,7 +21,7 @@ const ok = <T,>(value: T): Envelope<T> => ({ ok: true, value })
 const fail = (message: string) => ({ ok: false as const, error: { code: 'test', message } })
 const about = (change: Partial<PluginAbout> = {}): PluginAbout => ({
   version: '0.2.5', hostVersion: '0.1.5-rc.2', expectedHostVersion: '0.1.5-rc.2',
-  repositoryUrl: PROJECT, releasesUrl: `${PROJECT}/releases`, sourceCheckout: false, ...change,
+  repositoryUrl: PROJECT, releasesUrl: `${PROJECT}/releases`, sourceCheckout: false, desktopHost: false, ...change,
 })
 const update = (change: Partial<PluginUpdate> = {}): PluginUpdate => ({
   status: 'available', latestVersion: '0.2.6', requiredHostVersion: '0.1.5-rc.2',
@@ -93,6 +93,20 @@ describe('关于页与按需更新检查', () => {
     expect(content(view)).not.toContain(t('about.loadFailed'))
     expect(button(view, t('about.check')).props.disabled).not.toBe(true)
     expect(f.checkPluginUpdate).not.toHaveBeenCalled()
+  })
+
+  it.each([null, COMMAND])('桌面端读到宿主版本后启用检查，指向插件页面且隐藏 web 命令：%s', async command => {
+    const f = fixture(about({ hostVersion: '0.2.0-rc.2', desktopHost: true }))
+    f.checkPluginUpdate.mockResolvedValue(ok(update({ command })))
+    const view = await render(<AboutSection remote={f.remote} />)
+    expect(content(view)).toContain('0.2.0-rc.2')
+    expect(content(view)).toContain(t('about.desktopNote'))
+    expect(content(view)).not.toContain(t('about.cliNote'))
+    await click(view, t('about.check'))
+    expect(f.checkPluginUpdate).toHaveBeenCalledExactlyOnceWith({})
+    expect(status(view).findByType('p').children.join('')).toBe(t('about.available', { version: '0.2.6' }))
+    expect(button(view, t('about.copyCommand'))).toBeUndefined()
+    expect(view.root.findAllByType('code')).toEqual([])
   })
 
   it('新前端遇到旧后台的真实 404 信封时说明需重启，重试成功后恢复', async () => {

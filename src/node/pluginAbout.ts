@@ -2,6 +2,7 @@
 import { lstat, open, realpath } from 'node:fs/promises'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import type { ProfileContext } from '@deepseek-ai/dsh-app-boot'
 
 export interface PluginAbout {
   version: string
@@ -10,6 +11,7 @@ export interface PluginAbout {
   repositoryUrl: string
   releasesUrl: string
   sourceCheckout: boolean
+  desktopHost: boolean
 }
 export interface PluginUpdate {
   status: 'current' | 'available' | 'ahead' | 'incompatible'
@@ -22,6 +24,8 @@ export interface PluginAboutMetadata { plugin: unknown; host: unknown; sourceChe
 export interface PluginAboutReaderOptions {
   fetch?: typeof globalThis.fetch
   readMetadata?: () => Promise<PluginAboutMetadata>
+  /** 启动宿主提供的安装锚点；桌面端的 Node 主入口不属于 CLI 包。 */
+  hostProfile?: Pick<ProfileContext, 'name' | 'installAnchor'>
   /** 只允许缩短默认期限，供工厂测试使用；实际请求期限最多 9 秒。 */
   timeoutMs?: number
 }
@@ -92,16 +96,26 @@ async function localJson(path: string): Promise<unknown> {
     return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown
   } finally { await file.close() }
 }
-async function readInstalledMetadata(): Promise<PluginAboutMetadata> {
+async function readInstalledMetadata(hostProfile?: PluginAboutReaderOptions['hostProfile']): Promise<PluginAboutMetadata> {
   const sourceCheckout = await lstat(fileURLToPath(new URL('../../.git', import.meta.url))).then(() => true, (error: NodeJS.ErrnoException) => {
     if (error.code === 'ENOENT') return false
     throw new Error(METADATA_ERROR)
   })
   const [plugin, host] = await Promise.all([
     localJson(fileURLToPath(new URL('../../package.json', import.meta.url))),
-    readHostEntryMetadata(process.argv[1]),
+    hostProfile ? readHostInstallationMetadata(hostProfile.installAnchor) : readHostEntryMetadata(process.argv[1]),
   ])
   return { plugin, host, sourceCheckout }
+}
+/** profile 的 installAnchor 指向本次宿主安装；身份不符或损坏时拒绝回退到开发依赖或其它入口。 */
+async function readHostInstallationMetadata(installAnchor: string): Promise<unknown | null> {
+  try {
+    if (!isAbsolute(installAnchor)) return null
+    const manifest = await localJson(await realpath(installAnchor))
+    if (!object(manifest) || manifest.name !== '@deepseek-ai/dsh') return null
+    semver(manifest.version, METADATA_ERROR)
+    return manifest
+  } catch { return null }
 }
 /** 仅从本次 Node 主入口确认宿主；插件旁的开发依赖、PATH 里的其它 dsh 都不能冒充当前运行版本。 */
 export async function readHostEntryMetadata(entry: string | undefined): Promise<unknown | null> {
@@ -166,7 +180,8 @@ async function responseJson(response: Response, signal: AbortSignal): Promise<un
 
 export function createPluginAboutReader(options: PluginAboutReaderOptions = {}): PluginAboutReader {
   const fetcher = options.fetch ?? globalThis.fetch
-  const metadata = options.readMetadata ?? readInstalledMetadata
+  const hostProfile = options.hostProfile ? { ...options.hostProfile } : undefined
+  const metadata = options.readMetadata ?? (() => readInstalledMetadata(hostProfile))
   const timeoutMs = typeof options.timeoutMs === 'number' && Number.isSafeInteger(options.timeoutMs) && options.timeoutMs > 0
     ? Math.min(options.timeoutMs, TIMEOUT_MS) : TIMEOUT_MS
   let inflight: Promise<PluginUpdate> | undefined
@@ -175,7 +190,8 @@ export function createPluginAboutReader(options: PluginAboutReaderOptions = {}):
       const raw = await metadata(), current = packageVersions(raw.plugin, METADATA_ERROR)
       if ((raw.host !== null && (!object(raw.host) || raw.host.name !== '@deepseek-ai/dsh')) || typeof raw.sourceCheckout !== 'boolean') throw new Error(METADATA_ERROR)
       return { version: current.version.value, hostVersion: raw.host === null ? 'unknown' : semver((raw.host as Record<string, unknown>).version, METADATA_ERROR).value,
-        expectedHostVersion: current.host.value, repositoryUrl: REPOSITORY, releasesUrl: `${REPOSITORY}/releases`, sourceCheckout: raw.sourceCheckout }
+        expectedHostVersion: current.host.value, repositoryUrl: REPOSITORY, releasesUrl: `${REPOSITORY}/releases`, sourceCheckout: raw.sourceCheckout,
+        desktopHost: hostProfile?.name === 'desktop' }
     } catch { throw new Error(METADATA_ERROR) }
   }
   const check = async (): Promise<PluginUpdate> => {
@@ -209,7 +225,7 @@ export function createPluginAboutReader(options: PluginAboutReaderOptions = {}):
       const status = !compatible ? 'incompatible' : order > 0 ? 'available' : order < 0 ? 'ahead' : 'current'
       return { status, latestVersion: latest.value, requiredHostVersion: target.host.value,
         releaseUrl: `${REPOSITORY}/releases/tag/${encodeURIComponent(tag)}`,
-        command: status === 'available' && !current.sourceCheckout ? `dsh plugin --profile web add github:Amakurai/dsh-liketavern#${tag}` : null }
+        command: status === 'available' && !current.sourceCheckout && !current.desktopHost ? `dsh plugin --profile web add github:Amakurai/dsh-liketavern#${tag}` : null }
     }
     try { return await Promise.race([operation(), expired]) }
     finally { if (timeout !== undefined) clearTimeout(timeout) }

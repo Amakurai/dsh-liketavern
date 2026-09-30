@@ -25,6 +25,7 @@ export declare const zh: {
     readonly 'about.steps': "更新步骤";
     readonly 'about.instructions': "先保存修改、结束生成并备份数据，停止 dsh；运行下面的命令后重新启动。";
     readonly 'about.cliNote': "当前宿主通过终端安装更新，此按钮只检查版本。";
+    readonly 'about.desktopNote': "此按钮只检查版本。桌面端升级请先在「插件」页面卸载 Tavern，再通过「添加插件」填写 GitHub 仓库地址安装新版，最后完整重启桌面端。";
     readonly 'about.profileNote': "命令用于 web 配置；如果使用自定义配置，请将 web 改为对应名称。";
     readonly 'about.copyCommand': "复制更新命令";
     readonly 'about.copied': "更新命令已复制";

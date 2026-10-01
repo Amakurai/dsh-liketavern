@@ -578,6 +578,10 @@ export function registerTavernTools(ctx: Context, state: TavernState): void {
               .readText(resolvedPath.path, { rejectLinks: true })
           } catch (error) {
             if (error instanceof WorkspaceLinkError) return { ok: false, error: '资产路径不能经过链接' }
+            // 只转换文件系统明确的长度拒绝；不回显系统绝对路径，也不掩盖权限或真实 I/O 故障。
+            if ((error as NodeJS.ErrnoException)?.code === 'ENAMETOOLONG') {
+              return { ok: false, error: 'invalid-path：当前文件系统无法表示该资产路径，请缩短文件名或路径后重试' }
+            }
             throw error
           }
           if (body === null) {

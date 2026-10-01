@@ -21,6 +21,7 @@ export declare function snapshotStory(options: {
     migrated?: boolean;
     includeWal?: boolean;
     prepare?: (fs: WorkspaceFs) => Promise<void>;
+    beforePublish?: () => void;
 }): Promise<void>;
 /** 仅供创建分支失败时清理刚创建、尚未绑定的副本，调用方负责复核绑定。 */
 export declare function discardStory(cardRoot: string, id: string, sessionId: string): Promise<void>;

@@ -3,6 +3,8 @@ import type {createHelperWorldbookSettingsCodec,HelperLorebookSettings} from './
 import type {HelperWorldbookContext,HelperWorldbookEntry,HelperWorldbookResult,HelperWorldbookSnapshot} from './helperWorldbook.js'
 export function installCardWorldbook(initial:HelperWorldbookContext,json:(value:unknown,maxBytes:number)=>unknown,settingsCodec:ReturnType<typeof createHelperWorldbookSettingsCodec>):()=>void {
   const root=window as unknown as Record<string,unknown>,source='dsh-tavern-card',epoch=crypto.randomUUID()
+  const runtimeId=root.__dshTavernEventRuntimeId
+  if(typeof runtimeId!=='string'||!runtimeId||runtimeId.length>96)throw new Error('世界书缺少有效卡面运行时')
   let active=true,serial=0,generation=0,metadata=initial
   const cache=new Map<string,HelperWorldbookSnapshot>(),versions=new Map<string,number>()
   const pending=new Map<string,{action:string;resolve:(value:Record<string,unknown>)=>void;reject:(error:Error)=>void;timer:ReturnType<typeof setTimeout>}>()
@@ -14,11 +16,11 @@ export function installCardWorldbook(initial:HelperWorldbookContext,json:(value:
     const id=epoch+':'+(++serial)
     return new Promise((resolve,reject)=>{
       const timer=setTimeout(()=>{pending.delete(id);reject(new Error('世界书通信超时，请重新读取确认'))},15000)
-      pending.set(id,{action:resultAction,resolve,reject,timer});parent.postMessage({source,action,requestId:id,storyId:metadata.storyId,bindingRevision:metadata.bindingRevision,...value},'*')
+      pending.set(id,{action:resultAction,resolve,reject,timer});parent.postMessage({source,action,requestId:id,runtimeId,storyId:metadata.storyId,bindingRevision:metadata.bindingRevision,...value},'*')
     })
   }
   const receive=(event:MessageEvent)=>{
-    if(event.source!==parent)return
+    if(event.source!==parent||event.data?.runtimeId!==runtimeId)return
     const value=event.data,current=pending.get(value?.requestId)
     if(!current||value?.source!==source||value.action!==current.action)return
     pending.delete(value.requestId);clearTimeout(current.timer)

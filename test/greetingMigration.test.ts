@@ -17,6 +17,7 @@ import { resolveConfig } from '../src/node/config.js'
 import { ensureGreeting, enterGreetingConversation, getGreetingSwipe, sessionPrefixEvents, swipeGreeting } from '../src/node/floors.js'
 import { greetingTurnEvents } from '../src/node/greetingSeed.js'
 import { reserveHelperMvuMaintenance } from '../src/node/helperMvuLifecycle.js'
+import { WorkspaceFs } from '../src/state/workspaceFs.js'
 
 let root: string, ctx: Context, state: TavernState, agent: Agent
 const errors: unknown[] = []
@@ -147,6 +148,63 @@ it.each(['已经生成', '读取角色', '准备分支'] as const)('切换开场
   expect(await state.loadBinding(agent.id)).toEqual(binding)
   expect(await ws.fs.readText('journal.md')).toBe('来源笔记')
   expect(agent.session.snapshotEvents().filter(e => e.type === 'assistant/message')).toHaveLength(1)
+})
+
+/** 初始异步读取期间的新轮次即使已经结束，也必须拒绝，不能把结束后的日志重新当作切换基线。 */
+it('读取绑定期间新轮次已经结束，切换开场白仍拒绝进入分支准备', async () => {
+  await enterGreetingConversation({ ctx, state }, agent.id)
+  const binding = (await state.loadBinding(agent.id))!
+  const ws = await state.storyWorkspace(binding.cardId, binding.storyId)
+  await ws.fs.writeText('journal.md', '来源笔记')
+  const fork = vi.spyOn(state, 'forkStory')
+  const create = vi.spyOn(ctx.agents, 'create')
+  const loadBinding = state.loadBinding.bind(state)
+  vi.spyOn(state, 'loadBinding').mockImplementationOnce(async id => {
+    const value = await loadBinding(id)
+    agent.session.append('turn/start', { turn: 2 })
+    agent.session.append('turn/end', { turn: 2, reason: { kind: 'completed' } })
+    return value
+  })
+  await expect(swipeGreeting({ ctx, state }, agent.id, 0)).rejects.toThrow('对话已改变')
+  expect(fork).not.toHaveBeenCalled()
+  expect(create).not.toHaveBeenCalled()
+  expect(await state.loadBinding(agent.id)).toEqual(binding)
+  expect(await ws.fs.readText('journal.md')).toBe('来源笔记')
+  expect(agent.session.snapshotEvents().filter(e => e.type === 'assistant/message')).toHaveLength(1)
+})
+
+/** 草稿索引和元数据仍有异步读取，最后一次历史复核必须位于实际目录发布之前。 */
+it('开场白草稿完成准备后新轮次已经结束，发布前拒绝且保留来源日志和剧情', async () => {
+  await enterGreetingConversation({ ctx, state }, agent.id)
+  const binding = (await state.loadBinding(agent.id))!
+  const ws = await state.storyWorkspace(binding.cardId, binding.storyId)
+  await ws.fs.writeText('journal.md', '来源笔记')
+  const before = await state.listStories(binding.cardId)
+  const create = vi.spyOn(ctx.agents, 'create')
+  const discard = vi.spyOn(state, 'discardUnboundStory')
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  const write = WorkspaceFs.prototype.writeText
+  vi.spyOn(WorkspaceFs.prototype, 'writeText').mockImplementation(async function(path, text) {
+    await write.call(this, path, text)
+    if (path === 'story.json' && this.root.includes('.preparing-')) { entered.resolve(); await release.promise }
+  })
+  const pending = swipeGreeting({ ctx, state }, agent.id, 0).then(
+    value => ({ value, error: '' }), error => ({ value: null, error: String(error) }),
+  )
+  await Promise.race([entered.promise, pending.then(outcome => { throw new Error('没有到达发布屏障：' + JSON.stringify(outcome)) })])
+  agent.session.append('turn/start', { turn: 2 })
+  agent.session.append('turn/end', { turn: 2, reason: { kind: 'completed' } })
+  const history = agent.session.snapshotEvents()
+  release.resolve()
+  const result = await pending
+  // 不能先发布再依赖宿主创建失败清理：历史变化应在尚未发布的草稿内拒绝。
+  expect(discard).not.toHaveBeenCalled()
+  expect(result).toMatchObject({ value: null, error: expect.stringContaining('对话已改变') })
+  expect(create).not.toHaveBeenCalled()
+  expect(await state.listStories(binding.cardId)).toEqual(before)
+  expect(await state.loadBinding(agent.id)).toEqual(binding)
+  expect(await ws.fs.readText('journal.md')).toBe('来源笔记')
+  expect(agent.session.snapshotEvents()).toEqual(history)
 })
 
 it('开场白为空、只有备选开场白的卡：进入会话写入第一条备选，翻页计数不含空开场白', async () => {

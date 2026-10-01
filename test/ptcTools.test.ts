@@ -1,5 +1,5 @@
 /** 原生 PTC 集成：真实宿主注册表/worker/Session 与临时剧情文件，验证呈现隔离、并行读、写屏障和 WAL 回滚。 */
-import { mkdir, mkdtemp, rm, readFile, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, readFile, rename, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -23,6 +23,8 @@ import { TavernState } from '../src/node/state.js'
 import { resolveConfig } from '../src/node/config.js'
 import { TURN_PLAYBOOK, TURN_STEP_NOTICE_PREFIX, TURN_WRITE_ACK_PREFIX } from '../src/core/dshPrompt.js'
 import { estimateTokens } from '../src/core/tokenize.js'
+import { assetOutputTokens } from '../src/core/assetRead.js'
+import { defaultPreset } from '../src/core/assemble.js'
 import { WorkspaceFs } from '../src/state/workspaceFs.js'
 
 let root: string, ctx: Context, state: TavernState, agent: Agent, native: Agent, cardId: string, storyId: string
@@ -133,6 +135,26 @@ it('资产工具拒绝链接目录指向剧情外的文本，目录也不广告�
   expect(result.value).toMatchObject({ result: { file: { ok: false, error: '资产路径不能经过链接' } } })
   expect(JSON.stringify(result.value)).not.toContain('剧情外的私有文本')
   expect(JSON.stringify(result.value)).not.toContain('memory/linked.md')
+})
+
+it('资产路径大小写变化仍读取绑定剧情，不能退回角色初始状态', async () => {
+  const ws = await workspace(), assets = await state.workspace(cardId)
+  const paths = ['JOURNAL.md', 'INDEX.json', 'MEMORY/case.md', 'STATE/case.json', 'ASSETS/CHAT-LOREBOOK.json']
+  for (const path of paths) {
+    await assets.fs.writeText(path, '角色初始状态')
+    await ws.fs.writeText(path, '当前绑定剧情')
+  }
+  // 共享静态资产仍由角色目录提供，路由只改变剧情可变路径。
+  await assets.fs.writeText('ASSETS/shared.json', '共享静态资产')
+  const result = await run(`
+    const paths = ${JSON.stringify(paths)};
+    const files = await Promise.all(paths.map(path => tools.tavern_asset_read({path})));
+    const shared = await tools.tavern_asset_read({path:'ASSETS/shared.json'});
+    return {bodies:files.map(file => file.file.content), shared:shared.file.content};
+  `)
+  expect(result.isError, JSON.stringify(result.content)).toBe(false)
+  expect(result.value).toMatchObject({ result: { bodies: paths.map(() => '当前绑定剧情'), shared: '共享静态资产' } })
+  expect(JSON.stringify(result.value)).not.toContain('角色初始状态')
 })
 
 it('读写混排保持独占顺序，结果可直接引用；同层回滚撤销全部派生事实', async () => {
@@ -276,6 +298,23 @@ it('程序内业务拒绝可检查，路径越界与未开楼层都不能写入�
   expect(await (await workspace()).deltas.list()).toHaveLength(0)
 })
 
+it('相似记忆拒绝只返回有界正文预览，保留完整定位与原剧情事实', async () => {
+  const ws = await workspace()
+  const body = '北门钥匙由守卫保管。'.repeat(1000)
+  const entry = await ws.memory.write({ body, keys: ['北门钥匙'] })
+  const result = await run("return await tools.tavern_memory_write({body:'北门钥匙由守卫保管',keys:['北门钥匙']});")
+  expect(result.isError, JSON.stringify(result.content)).toBe(false)
+  const output = (result.value as { result: { ok: boolean; status: string; similarId: string;
+    similarBody: string; similarBodyTruncated: boolean; tokensUsed: number } }).result
+  expect(output).toMatchObject({ ok: false, status: 'similar-found', similarId: entry.id })
+  expect(assetOutputTokens(output)).toBeLessThanOrEqual(3000)
+  expect(output.tokensUsed).toBe(assetOutputTokens(output))
+  expect(output.similarBodyTruncated).toBe(true)
+  expect(output.similarBody).toContain('已截断')
+  expect(await ws.memory.list()).toHaveLength(1)
+  expect((await ws.memory.get(entry.id))?.body).toBe(body)
+})
+
 it('相似记忆拒绝后在同一程序内按 id 更新；宿主参数错误可捕获且不会冒充成功', async () => {
   const result = await run(`
     const args = {body:'旅人答应守卫归还北门钥匙', keys:['北门钥匙']};
@@ -293,4 +332,142 @@ it('相似记忆拒绝后在同一程序内按 id 更新；宿主参数错误可
   const entries = await (await workspace()).memory.list()
   expect(entries).toHaveLength(1)
   expect(entries[0]!.body).toBe('旅人已经归还北门钥匙')
+})
+
+it('资产索引只返回实际可读条目与规范摘要，任意附带私有 JSON 不能随目录泄漏', async () => {
+  const ws = await workspace()
+  await ws.fs.writeText('journal.md', '旅人走到了港口')
+  await ws.fs.writeText('index.json', JSON.stringify({ updatedAt: '2026-01-01T00:00:00.000Z', privateNote: '内部私有字段', files: [
+    { path: 'journal.md', summary: '港口见闻', tokens: 8, privateSnapshot: '条目私有字段' },
+    { path: 'state/wal/private.json', summary: 'WAL 私有摘要', tokens: 1 },
+    { path: 'stories/sibling/journal.md', summary: '兄弟剧情私有摘要', tokens: 1 },
+    { path: 'missing.md', summary: '不存在的条目', tokens: 1 },
+    { path: 'card.png', summary: '二进制条目', tokens: 1 },
+  ] }))
+  const result = await run('return await tools.tavern_asset_list({});')
+  expect(result.isError, JSON.stringify(result.content)).toBe(false)
+  const output = (result.value as { result: { index: { files: Array<{ path: string; summary: string; tokens: number }>; count: number; omitted: number; truncated: boolean } } }).result
+  expect(output.index.files).toEqual([{ path: 'journal.md', summary: '港口见闻', tokens: 8, truncated: false }])
+  expect(output.index).toMatchObject({ count: 5, omitted: 4, truncated: true })
+  expect(JSON.stringify(output)).not.toMatch(/私有字段|私有摘要|不存在的条目|二进制条目/)
+})
+
+it('资产文件与预设目录共同受 token/条数预算约束，定位字段不截断为假路径或假 identifier', async () => {
+  const ws = await workspace(), preset = defaultPreset()
+  const paths = Array.from({ length: 240 }, (_, i) => `state/catalog/${'nested-'.repeat(12)}/${String(i).padStart(3, '0')}-${'file-'.repeat(12)}.md`)
+  await Promise.all(paths.map(path => ws.fs.writeText(path, '目录工厂正文')))
+  await ws.fs.writeText('index.json', JSON.stringify({ updatedAt: '2026-01-01T00:00:00.000Z', files: paths.map(path => ({ path, summary: '巨大摘要'.repeat(100), tokens: 8 })) }))
+  preset.identifier = 'catalog-budget-factory'; preset.name = '巨大预设名'.repeat(2000)
+  const entry = preset.entries[0]!
+  const hugeIdentifier = '不可裁剪定位'.repeat(80)
+  preset.entries = [{ ...entry, identifier: 'anchor', name: '可读取锚点', content: '锚点正文' },
+    { ...entry, identifier: hugeIdentifier, name: '超长定位字段', content: '不可广告的条目' },
+    ...Array.from({ length: 260 }, (_, i) => ({ ...entry, identifier: `entry-${i}`, name: '巨大条目名'.repeat(500), content: '有界预览' }))]
+  const presetId = await state.savePreset(preset)
+  await state.saveBinding({ ...(await state.loadBinding(agent.id))!, presetId })
+  const result = await run(`const list = await tools.tavern_asset_list({}); const catalog = await tools.tavern_asset_read({preset:'list'}); const anchor = await tools.tavern_asset_read({preset:'anchor'}); return {list,catalog,anchor};`)
+  expect(result.isError, JSON.stringify(result.content)).toBe(false)
+  const output = (result.value as { result: { list: { files: string[]; fileCount: number; filesOmitted: number; filesTruncated: boolean; tokensUsed: number; index: { files: unknown[] }; preset: { entries: Array<{ identifier: string }>; omitted: number; count: number; truncated: boolean } }; catalog: { preset: { entries: Array<{ identifier: string }>; omitted: number; count: number; truncated: boolean } }; anchor: { preset: { content: string } } } }).result
+  expect(estimateTokens(JSON.stringify(output.list, null, 2))).toBeLessThanOrEqual(3000)
+  expect(estimateTokens(JSON.stringify(output.catalog, null, 2))).toBeLessThanOrEqual(3000)
+  expect(output.list.files.length).toBeLessThanOrEqual(200)
+  expect(output.list.filesOmitted).toBe(output.list.fileCount - output.list.files.length)
+  expect(output.list.filesTruncated).toBe(true)
+  for (const path of output.list.files) expect((await ws.fs.exists(path)) || path.startsWith('assets/') || path === 'card.json').toBe(true)
+  for (const catalog of [output.list.preset, output.catalog.preset]) {
+    expect(catalog.entries.length).toBeLessThanOrEqual(200)
+    expect(catalog).toMatchObject({ count: preset.entries.length, omitted: preset.entries.length - catalog.entries.length, truncated: true })
+    expect(catalog.entries.every(item => preset.entries.some(entry => entry.identifier === item.identifier))).toBe(true)
+  }
+  expect(output.anchor.preset.content).toBe('锚点正文')
+})
+
+it('同时读取预设与文件也遵守完整 JSON 预算，超长元数据与转义正文不会挤爆工具输出', async () => {
+  const ws = await workspace(), preset = defaultPreset()
+  preset.identifier = 'content-budget-factory'; preset.name = '巨大预设名称'.repeat(2000)
+  preset.entries = [{ ...preset.entries[0]!, identifier: 'body', name: '巨大条目名称'.repeat(2000), markerId: '巨大标记定位'.repeat(2000), content: '\u0000'.repeat(20000) }]
+  const presetId = await state.savePreset(preset)
+  await state.saveBinding({ ...(await state.loadBinding(agent.id))!, presetId })
+  await ws.fs.writeText('journal.md', '当前港口剧情'.repeat(2000))
+  const result = await run(`return await tools.tavern_asset_read({preset:'body',path:'journal.md'});`)
+  expect(result.isError, JSON.stringify(result.content)).toBe(false)
+  const output = (result.value as { result: { ok: boolean; tokensUsed: number; truncated: boolean; preset: { identifier: string; truncated: boolean; content: string; metadataTruncated: boolean; markerIdOmitted: boolean }; file: { path: string; truncated: boolean; content: string } } }).result
+  expect(output.ok).toBe(true)
+  expect(estimateTokens(JSON.stringify(output, null, 2))).toBeLessThanOrEqual(3000)
+  expect(output).toMatchObject({ truncated: true, preset: { identifier: 'body', truncated: true, metadataTruncated: true, markerIdOmitted: true }, file: { path: 'journal.md', truncated: true } })
+  expect(output.preset.content.length).toBeGreaterThan(0)
+  expect(output.file.content.length).toBeGreaterThan(0)
+})
+
+it('资产定位参数超长时返回有界拒绝，not-found 错误也不能原样回显巨型输入', async () => {
+  const result = await run(`return await Promise.all([
+    tools.tavern_asset_read({preset:'未知预设'.repeat(10000)}),
+    tools.tavern_asset_read({path:'state/'+'很长路径'.repeat(10000)+'.json'})
+  ]);`)
+  expect(result.isError, JSON.stringify(result.content)).toBe(false)
+  const outputs = (result.value as { result: Array<{ ok: boolean; error: string }> }).result
+  for (const output of outputs) {
+    expect(output.ok).toBe(false)
+    expect(output.error).toContain('asset-output-too-large')
+    expect(estimateTokens(JSON.stringify(output, null, 2))).toBeLessThanOrEqual(3000)
+  }
+})
+
+it('定位字段接近 3000 token 时未知目标的错误包装仍有界，合法定位前后空白不改变读取', async () => {
+  const path = `state/${Array.from({ length: 15 }, (_, i) => '字'.repeat(i === 14 ? 190 : 200)).join('/')}.md`
+  const result = await run(`const errors = await Promise.all([
+    tools.tavern_asset_read({preset:'字'.repeat(2990)}),
+    tools.tavern_asset_read({path:${JSON.stringify(path)}})
+  ]); const entry = await tools.tavern_asset_read({preset:' '.repeat(10000)+'main'+' '.repeat(10000)}); return {errors,entry};`)
+  expect(result.isError, JSON.stringify(result.content)).toBe(false)
+  const output = (result.value as { result: { errors: Array<{ ok: boolean; error: string }>; entry: { ok: boolean; preset: { identifier: string } } } }).result
+  for (const error of output.errors) {
+    expect(error.ok).toBe(false)
+    expect(estimateTokens(JSON.stringify(error, null, 2))).toBeLessThanOrEqual(3000)
+  }
+  expect(output.entry).toMatchObject({ ok: true, preset: { identifier: 'main' } })
+})
+
+it('完整预算容纳的长 identifier、markerId 与嵌套路径仍可在目录发现并实际读取', async () => {
+  const ws = await workspace(), preset = defaultPreset()
+  const identifier = '合法定位'.repeat(100), markerId = '长标记'.repeat(100)
+  // 总路径保持超过 400 字符；末段为原子写入的 .UUID.tmp 后缀留空间，兼容 Linux 的 255 字节上限。
+  const path = `state/${Array.from({ length: 5 }, () => '目录'.repeat(35)).join('/')}/${'笔记'.repeat(30)}.md`
+  await ws.fs.writeText(path, '长路径中的港口记录')
+  preset.identifier = 'long-locator-factory'; preset.entries = [{ ...preset.entries[0]!, identifier, markerId, content: '长定位条目的正文' }]
+  const presetId = await state.savePreset(preset)
+  await state.saveBinding({ ...(await state.loadBinding(agent.id))!, presetId })
+  const result = await run(`const list = await tools.tavern_asset_list({}); const catalog = await tools.tavern_asset_read({preset:'list'}); const entry = await tools.tavern_asset_read({preset:${JSON.stringify(identifier)}}); const file = await tools.tavern_asset_read({path:${JSON.stringify(path)}}); return {list,catalog,entry,file};`)
+  expect(result.isError, JSON.stringify(result.content)).toBe(false)
+  const output = (result.value as { result: { list: { files: string[]; preset: { entries: Array<{ identifier: string; markerId: string }> } }; catalog: { preset: { entries: Array<{ identifier: string; markerId: string }> } }; entry: { ok: boolean; preset: { identifier: string; markerId: string; content: string } }; file: { ok: boolean; file: { path: string; content: string } } } }).result
+  expect(output.entry).toMatchObject({ ok: true, preset: { identifier, markerId, content: '长定位条目的正文' } })
+  expect(output.file).toMatchObject({ ok: true, file: { path, content: '长路径中的港口记录' } })
+  expect(output.list.files).toContain(path)
+  for (const catalog of [output.list.preset, output.catalog.preset]) expect(catalog.entries).toContainEqual(expect.objectContaining({ identifier, markerId }))
+  for (const value of Object.values(output)) expect(estimateTokens(JSON.stringify(value, null, 2))).toBeLessThanOrEqual(3000)
+})
+
+it('资产索引文件链接不能把工作区外的规范摘要读取给模型', async () => {
+  const ws = await workspace(), external = join(root, 'external-index-source'), backup = join(root, 'original-story')
+  await mkdir(external)
+  await writeFile(join(external, 'journal.md'), '工作区外的文本')
+  await writeFile(join(external, 'index.json'), JSON.stringify({ files: [{ path: 'journal.md', summary: '工作区外的私有摘要', tokens: 1 }], updatedAt: '2026-01-01T00:00:00.000Z' }))
+  // Windows 文件 symlink 需要管理员权限；真实 junction 在剧情归属已复核、实际读取前
+  // 替换父目录，模拟文件系统变化窗口。仅钩住这个窗口，其余绑定、工作区与 PTC 均为真实实现。
+  const original = state.storyWorkspace.bind(state)
+  vi.spyOn(state, 'storyWorkspace').mockImplementationOnce(async (...args) => {
+    const handle = await original(...args)
+    await rename(handle.fs.root, backup)
+    await symlink(external, handle.fs.root, process.platform === 'win32' ? 'junction' : 'dir')
+    return handle
+  })
+  try {
+    const result = await run('return await tools.tavern_asset_list({});')
+    expect(result.isError, JSON.stringify(result.content)).toBe(false)
+    expect(result.value).toMatchObject({ result: { ok: false, error: '资产索引路径不能经过链接' } })
+    expect(JSON.stringify(result.value)).not.toContain('工作区外的私有摘要')
+  } finally {
+    await rm(ws.fs.root, { recursive: true, force: true })
+    await rename(backup, ws.fs.root)
+  }
 })

@@ -59,7 +59,7 @@ const replay: z.ZodType<TemplateReplay> = z.object({version:z.literal(2),formatt
     z.object({kind:z.literal('sticky'),action:z.enum(['begin','finish','restore']),state:stickyState.optional(),hash}).strict(),
   ])).max(4096)}).strict()
 const plan = z.object({standingKey:text,standing:text,turnContext:text,messages:z.array(chat),history:z.array(chat),logLines:z.array(text),
-  layout:PromptLayoutSchema.optional(),
+  layout:PromptLayoutSchema.optional(),cacheFirstLayout:bool.optional(),
   userName:text,personaDescription:text,personaLorebookId:text.nullable(),wiBudget:z.object({limit:number,used:number,overflowed:bool}).strict(),
   sampling:z.object({temperature:number,topP:number,maxTokens:number.nullable(),stop:z.array(text),presencePenalty:number,frequencyPenalty:number,
     thinking:z.enum(['enabled','disabled','low','high','max'])}).strict(),

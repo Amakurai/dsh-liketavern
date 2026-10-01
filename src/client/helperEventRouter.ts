@@ -16,7 +16,7 @@ function args(value:unknown):unknown[] {
 class Endpoint {
   runtimeId='';active=true;hostEventsEnabled=true;serial=0;inflight=0
   pending=new Map<string,Delivery>()
-  constructor(readonly group:Group,readonly send:(message:Message)=>void,readonly nativeMvu?:NativeMvu){}
+  constructor(readonly group:Group,readonly send:(message:Message)=>void,readonly nativeMvu?:NativeMvu,readonly retiredRuntimes=new Set<string>()){}
   post(message:Message){if(this.active)this.send({source:'dsh-tavern-card',runtimeId:this.runtimeId,...message})}
   reset(reason:string) {
     this.group.listeners=this.group.listeners.filter(entry=>entry.endpoint!==this)
@@ -40,10 +40,13 @@ class Endpoint {
     const action=value.action
     if(action==='helperEventConnect') {
       if(typeof value.runtimeId!=='string'||!value.runtimeId||value.runtimeId.length>96)return
+      if(value.runtimeId===this.runtimeId||this.retiredRuntimes.has(value.runtimeId))return
+      if(this.retiredRuntimes.size>=1024){if(this.runtimeId)this.retiredRuntimes.add(this.runtimeId);this.reset('卡面重建超过运行时预算');this.runtimeId='';this.send({source:'dsh-tavern-card',runtimeId:value.runtimeId,action:'helperEventResult',ok:false,args:[],error:'卡面重建超过运行时预算，请重新打开卡面'});return}
+      if(this.runtimeId)this.retiredRuntimes.add(this.runtimeId)
       this.reset('卡面事件运行时已重建');this.runtimeId=value.runtimeId;return
     }
     if(!this.active||!this.runtimeId||value.runtimeId!==this.runtimeId)return
-    if(action==='helperEventDisconnect'){this.reset('卡面事件运行时已关闭');this.runtimeId='';return}
+    if(action==='helperEventDisconnect'){this.retiredRuntimes.add(this.runtimeId);this.reset('卡面事件运行时已关闭');this.runtimeId='';return}
     if(action==='helperEventPrepared') {
       if(typeof value.deliveryId!=='string')return
       const deliveryId=value.deliveryId,delivery=this.pending.get(deliveryId),host=delivery?.host
@@ -125,17 +128,32 @@ class Endpoint {
     } catch(error) {return {action:'helperEventResult',requestId,ok:false,error:error instanceof Error?error.message:String(error),args:data}}
   }
 }
-export function attachHelperEvents(sessionId:string,storyId:string,send:(message:Message)=>void,nativeMvu?:NativeMvu) {
+/** 预览只建立本帧身份租约；没有剧情分组，不接收跨卡监听、发送或业务授权。 */
+export function attachCardBridgeRuntime(send:(message:Message)=>void,retiredRuntimes?:Set<string>) {
+  const endpoint=new Endpoint({endpoints:new Set(),listeners:[],inflight:0},send,undefined,retiredRuntimes)
+  return {
+    matchesRuntime:(id:unknown)=>endpoint.active&&typeof id==='string'&&id!==''&&endpoint.runtimeId===id,
+    runtimeId:()=>endpoint.runtimeId,
+    post:(message:Message)=>endpoint.post(message),
+    setHostEventsEnabled:(enabled:boolean)=>{endpoint.hostEventsEnabled=enabled},
+    receive:(value:unknown)=>{if(helperRecord(value)&&value.source==='dsh-tavern-card'&&(value.action==='helperEventConnect'||value.action==='helperEventDisconnect'))endpoint.receive(value)},
+    dispose:()=>{if(endpoint.runtimeId)endpoint.retiredRuntimes.add(endpoint.runtimeId);endpoint.active=false;endpoint.reset('卡面运行时已卸载')},
+  }
+}
+export function attachHelperEvents(sessionId:string,storyId:string,send:(message:Message)=>void,nativeMvu?:NativeMvu,retiredRuntimes?:Set<string>) {
   const key=JSON.stringify([sessionId,storyId])
   let group=groups.get(key)
   if(!group){group={endpoints:new Set(),listeners:[],inflight:0};groups.set(key,group)}
-  const endpoint=new Endpoint(group,send,nativeMvu);group.endpoints.add(endpoint)
+  const endpoint=new Endpoint(group,send,nativeMvu,retiredRuntimes);group.endpoints.add(endpoint)
   return {
     matchesRuntime:(id:unknown)=>endpoint.active&&typeof id==='string'&&id!==''&&endpoint.runtimeId===id,
+    /** 仅可信 UI 使用：业务桥与宿主事件共用当前沙箱身份，避免回执跨 document.write 运行时。 */
+    runtimeId:()=>endpoint.runtimeId,
+    post:(message:Message)=>endpoint.post(message),
     /** 重绘锁定旧卡时只暂停宿主生命周期事件；普通卡间事件和监听注册仍保持原运行时。 */
     setHostEventsEnabled:(enabled:boolean)=>{endpoint.hostEventsEnabled=enabled},
     receive:(value:unknown)=>{if(helperRecord(value)&&value.source==='dsh-tavern-card')endpoint.receive(value)},
-    dispose:()=>{endpoint.active=false;endpoint.reset('事件监听卡面已卸载');group!.endpoints.delete(endpoint);if(!group!.endpoints.size)groups.delete(key)},
+    dispose:()=>{if(endpoint.runtimeId)endpoint.retiredRuntimes.add(endpoint.runtimeId);endpoint.active=false;endpoint.reset('事件监听卡面已卸载');group!.endpoints.delete(endpoint);if(!group!.endpoints.size)groups.delete(key)},
   }
 }
 

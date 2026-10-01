@@ -26,8 +26,11 @@ export function storyRoot(cardRoot: string, id: string): string {
 
 /** 剧情的可变路径；其它资产由角色工作区提供。 */
 export function isStoryPath(path: string): boolean {
-  return path === 'journal.md' || path === 'index.json' || path === 'assets/chat-lorebook.json'
-    || path.startsWith('memory/') || path.startsWith('state/')
+  // Windows 文件系统的大小写别名也必须留在剧情内；保留实际读取路径的拼写，
+  // 避免把 MEMORY/foo.md 等别名错误路由到角色共享的初始状态。
+  const lower = path.toLowerCase()
+  return lower === 'journal.md' || lower === 'index.json' || lower === 'assets/chat-lorebook.json'
+    || lower.startsWith('memory/') || lower.startsWith('state/')
 }
 
 export async function readStory(cardRoot: string, id: string): Promise<StorySummary> {
@@ -61,6 +64,7 @@ export async function listStories(cardRoot: string): Promise<StorySummary[]> {
 export async function snapshotStory(options: {
   cardRoot: string; sourceRoot: string; id: string; sessionId: string; migrated?: boolean; includeWal?: boolean
   prepare?: (fs: WorkspaceFs) => Promise<void>
+  beforePublish?:()=>void
 }): Promise<void> {
   const target = storyRoot(options.cardRoot, options.id)
   await withWorkspaceLock(options.sourceRoot, async () => {
@@ -106,6 +110,7 @@ export async function snapshotStory(options: {
       await rebuildIndex(dest, estimateTokens)
       await dest.writeText('story.json', JSON.stringify({ version: 1, id: options.id,
         sessionId: options.sessionId, createdAt: new Date().toISOString(), migrated: options.migrated ?? false }) + '\n')
+      options.beforePublish?.()
       await rename(staging, target)
     } finally {
       // 只清理本次生成且确认位于 stories 内的草稿，已发布状态从不在失败清理中删除。

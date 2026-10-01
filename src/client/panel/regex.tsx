@@ -22,7 +22,7 @@ const TIMINGS: { value: RegexTiming; labelKey: string }[] = [
   { value: 'render', labelKey: 'regex.timing.render' },
 ]
 const SOURCE_LABEL_KEY: Record<RegexRule['source'], string> = { user: 'regex.source.user', card: 'regex.source.card', preset: 'regex.source.preset' }
-type PresetDraft = PromptPreset & { editRevision?: string }
+type PresetDraft = PromptPreset & { editId: string; editRevision?: string }
 
 function newRule(): RegexRule {
   return {
@@ -139,7 +139,7 @@ export function RegexSection(props: { remote: TavernRemote }) {
         if (p.regexCount <= 0) continue
         const r = await remote.getPreset({ id: p.id })
         if (!r.ok) return r
-        if ((r.value.preset.regexScripts?.length ?? 0) > 0) items.push({ ...r.value.preset, editRevision: r.value.revision })
+        if ((r.value.preset.regexScripts?.length ?? 0) > 0) items.push({ ...r.value.preset, editId: p.id, editRevision: r.value.revision })
       }
       return { ok: true as const, value: { items } }
     },
@@ -167,8 +167,8 @@ export function RegexSection(props: { remote: TavernRemote }) {
     // 乐观开关失败（错误信封或传输 reject）都回滚草稿；reject 经 runAsync 落 setError，
     // 不留未处理 rejection；busy 期间 RegexScriptRow 开关禁用，防连续切换互相覆盖。
     try { await runAsync(setBusy, setError, async () => {
-      const { editRevision, ...content } = nextPreset
-      const r = await remote.savePreset({ preset: content, expectedRevision: editRevision }).catch((e: unknown) => {
+      const { editId, editRevision, ...content } = nextPreset
+      const r = await remote.savePreset({ preset: content, id: editId, expectedRevision: editRevision }).catch((e: unknown) => {
         setPresetDrafts(drafts)
         throw e
       })
@@ -271,7 +271,7 @@ export function RegexSection(props: { remote: TavernRemote }) {
           <Muted>{t('regex.noPresetRegex')}</Muted>
         )}
         {(presetDrafts ?? []).map((preset, pi) => (
-          <div className="dsh-tavern-regexPreset" key={preset.identifier}>
+          <div className="dsh-tavern-regexPreset" key={preset.editId}>
             <div className="dsh-tavern-fieldLabel">
               {t('regex.presetCount', { name: preset.name?.trim() || preset.identifier, count: preset.regexScripts!.length })}
             </div>

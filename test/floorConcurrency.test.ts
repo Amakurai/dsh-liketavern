@@ -96,6 +96,7 @@ async function openFloor(sessionId: string, cardId: string, turn: number): Promi
   const floor = `${sessionId}#t${turn}`
   await ws.wal.beginFloor(floor)
   state.openFloors.set(sessionId, { cardId, storyId, floor })
+  state.currentTurns.set(sessionId, turn)
   return floor
 }
 
@@ -216,6 +217,30 @@ describe('写工具的事务边界（resolveCtx）', () => {
     const wsB = await state.workspace(cardB.cardId)
     expect(await wsB.fs.list('memory')).toEqual([])
   })
+})
+
+it.each([undefined, 2])('当前轮次为 %s 时，遗留旧楼层不能接受任何写工具', async turn => {
+  const { cardId } = await importCard(paths.characters, makeCard())
+  await state.saveBinding(makeBinding({ cardId, presetId: null }))
+  const binding = (await state.loadBinding('sess-1'))!
+  const ws = await state.storyWorkspace(cardId, binding.storyId)
+  const original = await ws.memory.write({ body: '原剧情灯笼仍然点亮' })
+  const floor = await openFloor('sess-1', cardId, 1)
+  if (turn === undefined) state.currentTurns.delete('sess-1')
+  else state.currentTurns.set('sess-1', turn)
+  const tools = collectTools(), exec = execOf('sess-1')
+  for (const [name, args] of [
+    ['tavern_memory_write', { body: '新轮次旅人抵达桥头' }],
+    ['tavern_memory_update', { id: original.id, body: '新轮次灯笼已经熄灭' }],
+    ['tavern_worldstate_update', { type: 'add', content: '新轮次桥梁坍塌' }],
+  ] as const) {
+    const result = await tools.get(name)!.execute(args, exec) as { ok: boolean; error?: string }
+    expect(result.ok).toBe(false)
+    expect(result.error).toContain('floor-stale')
+  }
+  expect((await ws.memory.list()).map(entry => entry.body)).toEqual(['原剧情灯笼仍然点亮'])
+  expect(await ws.deltas.list()).toEqual([])
+  expect(await recordPaths(cardId, floor)).toEqual([])
 })
 
 describe('tavern_asset_list 遍历跳过只增不查目录', () => {

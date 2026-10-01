@@ -1,6 +1,7 @@
 /** 在模拟 iframe 中运行实际自包含脚本；验证当前消息、事件生命周期、变量失败原子性与窄桥行为。 */
 import { createContext, runInContext } from 'node:vm'
 import { createRequire } from 'node:module'
+import { webcrypto } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 import { installCardHelper, type CardHelperContext } from '../src/core/cardHelper.js'
 import { installCardEvents } from '../src/core/cardEvents.js'
@@ -15,15 +16,18 @@ function frame(options: CardHelperContext = { message: '当前回复', messageId
     removeEventListener: (event: string, callback: () => void) => { listeners.get(event)?.delete(callback) },
   }
   const postMessage = vi.fn()
-  const scope: Record<string, unknown> = { document, parent: { postMessage }, TextEncoder, _: lodash,
+  const scope: Record<string, unknown> = { document, parent: { postMessage }, TextEncoder, crypto: webcrypto, _: lodash,
     addEventListener: vi.fn(), removeEventListener: vi.fn(), queueMicrotask }
   scope.window = scope
   const context = createContext(scope)
   const run = (code: string) => runInContext(code, context)
   run(`(${installCardVariables.toString()})({title:'备份',note:'临时',backup:'备份',text:'数据'}, '', ${options.messageId ?? 0})`)
   run(`var cleanupEvents = (${installCardEvents.toString()})()`)
+  const runtimeId=run('window.__dshTavernEventRuntimeId') as string
+  expect(runtimeId).toMatch(/^[\da-f-]{36}$/)
+  expect(postMessage).toHaveBeenCalledExactlyOnceWith({source:'dsh-tavern-card',action:'helperEventConnect',runtimeId},'*')
   run(`var cleanupHelper = (${installCardHelper.toString()})(${JSON.stringify(options)}, ['开场白', '备选'], ${greetingIndex}, 'dsh-tavern-card', {diagnostics:'脚本消息',unsupported:'不支持'})`)
-  return { run, postMessage, ready: () => { for (const fn of listeners.get('DOMContentLoaded') ?? []) fn() } }
+  return { run, postMessage, runtimeId, ready: () => { for (const fn of listeners.get('DOMContentLoaded') ?? []) fn() } }
 }
 
 describe('卡面消息与受限操作', () => {
@@ -52,39 +56,39 @@ describe('卡面消息与受限操作', () => {
     expect(run('SillyTavern.getContext().name2')).toBe('灯塔守望者')
   })
   it('开场白现代与旧接口只请求 swipe；非法整批/正文写入和未知 Slash 不产生副作用', async () => {
-    const { run, postMessage } = frame({ messageId: 0, canSwipe: true })
+    const { run, postMessage, runtimeId } = frame({ messageId: 0, canSwipe: true })
     expect(run('getChatMessages(0,{include_swipes:true})[0].swipes')).toEqual(['开场白', '备选'])
     await run('setChatMessages([{message_id:0,swipe_id:1}])')
     await run('setChatMessage("",0,{swipe_id:1})')
     await run('triggerSlash("/swipe right")')
-    expect(postMessage).toHaveBeenCalledTimes(3)
-    expect(postMessage.mock.calls.every(([value]) => JSON.stringify(value) === JSON.stringify({ source: 'dsh-tavern-card', action: 'swipeGreeting', index: 1 }))).toBe(true)
+    expect(postMessage).toHaveBeenCalledTimes(4)
+    expect(postMessage.mock.calls.slice(1)).toEqual(Array.from({length:3},()=>[{source:'dsh-tavern-card',action:'swipeGreeting',runtimeId,index:1},'*']))
     for (const script of ['setChatMessages([{message_id:0,swipe_id:1},{message_id:2,swipe_id:1}])',
       'setChatMessages([{message_id:0,message:"不应落盘",swipe_id:1}])', 'setChatMessages([{message_id:0,swipe_id:99}])',
       'setChatMessage("改正文",0,{swipe_id:1})', 'triggerSlash("/swipe | /trigger")', 'triggerSlash("/trigger")']) {
       await expect(run(script)).rejects.toThrow()
     }
-    expect(postMessage).toHaveBeenCalledTimes(3)
+    expect(postMessage).toHaveBeenCalledTimes(4)
     expect(await run('triggerSlash("/pass {{lastMessageId}}")')).toBe('0')
     expect(() => run('generate({})')).toThrow(/不支持.*generate/)
     expect(parseCardBridgeMessage({source:'dsh-tavern-card',action:'generate'})).toBeNull()
   })
   it('已删除的开场白下标在卡面 API 内一致回退到第一条', async () => {
-    const { run, postMessage } = frame({ messageId: 0, canSwipe: true }, 7)
+    const { run, postMessage, runtimeId } = frame({ messageId: 0, canSwipe: true }, 7)
     run('replaceVariables({hp:7},{type:"message"})')
     expect(run('getChatMessages(0,{include_swipes:true})[0]')).toMatchObject({
       message: '开场白', mes: '开场白', swipe_id: 0,
     })
     expect(run('getChatMessages(0,{include_swipes:true})[0].swipes_data')).toEqual([{hp:7}, {}])
     await run('triggerSlash("/swipe right")')
-    expect(postMessage).toHaveBeenCalledWith({ source: 'dsh-tavern-card', action: 'swipeGreeting', index: 1 }, '*')
+    expect(postMessage).toHaveBeenCalledWith({ source: 'dsh-tavern-card', action: 'swipeGreeting', runtimeId, index: 1 }, '*')
   })
   it('回复与只读预览均拒绝切换，未发生的宿主事件不会被伪造', async () => {
     const { run, postMessage, ready } = frame()
     run('var count=0; eventOn(tavern_events.MESSAGE_RECEIVED,()=>count++)')
     ready()
     await expect(run('setChatMessages([{message_id:17,swipe_id:1}])')).rejects.toThrow(/不支持/)
-    expect(postMessage).not.toHaveBeenCalled()
+    expect(postMessage).toHaveBeenCalledOnce()
     expect(run('count')).toBe(0)
     const preview = frame({canSwipe:false})
     await expect(preview.run('triggerSlash("/swipe")')).rejects.toThrow(/不支持/)
@@ -103,10 +107,10 @@ describe('卡面消息与受限操作', () => {
     const { run, postMessage } = frame({messageId:0,canSwipe:true})
     run('var ctx=SillyTavern.getContext(); ctx.chat[0].swipe_id=1')
     await run('ctx.saveChat()')
-    expect(postMessage).toHaveBeenCalledOnce()
+    expect(postMessage).toHaveBeenCalledTimes(2)
     run('ctx.chat[0].mes="修改的正文"')
     await expect(run('ctx.saveChat()')).rejects.toThrow(/saveChat/)
-    expect(postMessage).toHaveBeenCalledOnce()
+    expect(postMessage).toHaveBeenCalledTimes(2)
   })
 })
 
@@ -166,7 +170,7 @@ describe('卡面变量扩展', () => {
     expect(run('getChatMessages(-1)[0].data')).toEqual({score:7})
     run('replaceVariables({preset:true},{type:"preset"})')
     expect(run('getVariables({type:"preset"})')).toEqual({preset:true})
-    expect(postMessage).not.toHaveBeenCalled()
+    expect(postMessage).toHaveBeenCalledOnce()
   })
   it('异步更新成功提交，抛错、无效返回、超量和等待期间的冲突都保留数据', async () => {
     const { run } = frame()
@@ -184,7 +188,7 @@ describe('卡面变量扩展', () => {
   it('完整桥重装会清理旧事件，变量保留；源码被序列化后仍可运行', async () => {
     const document = { readyState:'loading', body:null, addEventListener:vi.fn(), removeEventListener:vi.fn(),
       open:vi.fn(), write:vi.fn(), close:vi.fn(), currentScript:null, querySelector:()=>null }
-    const scope:Record<string,unknown> = {document,TextEncoder,setTimeout,clearTimeout,queueMicrotask,addEventListener:vi.fn(),removeEventListener:vi.fn(),parent:{postMessage:vi.fn()}}
+    const scope:Record<string,unknown> = {document,TextEncoder,crypto:webcrypto,setTimeout,clearTimeout,queueMicrotask,addEventListener:vi.fn(),removeEventListener:vi.fn(),parent:{postMessage:vi.fn()}}
     scope.window=scope
     const context=createContext(scope)
     const source=tavernCardBridgeScript({greetings:['A','B'],greetingIndex:0}).replace(/^<script[^>]*>/,'').replace(/<\/script>$/,'')
@@ -208,10 +212,10 @@ describe('卡面变量扩展', () => {
 
 it('真实消息卡就绪回执带当前事件运行时身份，等待 iframe 生命周期监听结束；后台脚本不伪装消息就绪',async()=>{
   const snapshot={storyId:'s',historyRevision:'r',currentMessageId:0,messages:[],scopes:{},writable:true}
-  const f=frame({snapshot});f.run('window.__dshTavernEventRuntimeId="epoch";eventOn(iframe_events.MESSAGE_IFRAME_RENDER_ENDED,()=>new Promise(resolve=>window.finishReady=resolve))')
-  f.ready();await Promise.resolve();await Promise.resolve();expect(f.postMessage).not.toHaveBeenCalled()
-  await vi.waitFor(()=>expect(f.run('typeof finishReady')).toBe('function'));f.run('finishReady()');await vi.waitFor(()=>expect(f.postMessage).toHaveBeenCalledWith({source:'dsh-tavern-card',action:'helperFrameReady',runtimeId:'epoch'},'*'))
-  const background=frame({snapshot,scriptFrame:true});background.ready();await Promise.resolve();expect(background.postMessage).not.toHaveBeenCalled()
+  const f=frame({snapshot});f.run('eventOn(iframe_events.MESSAGE_IFRAME_RENDER_ENDED,()=>new Promise(resolve=>window.finishReady=resolve))')
+  f.ready();await Promise.resolve();await Promise.resolve();expect(f.postMessage).toHaveBeenCalledOnce()
+  await vi.waitFor(()=>expect(f.run('typeof finishReady')).toBe('function'));f.run('finishReady()');await vi.waitFor(()=>expect(f.postMessage).toHaveBeenCalledWith({source:'dsh-tavern-card',action:'helperFrameReady',runtimeId:f.runtimeId},'*'))
+  const background=frame({snapshot,scriptFrame:true});background.ready();await Promise.resolve();expect(background.postMessage).toHaveBeenCalledOnce()
 })
 
 it('后台诊断区分通知与致命错误，成功通知标题不会误判失败，停止后不再报告',()=>{

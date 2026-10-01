@@ -10,7 +10,8 @@
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { defaultPreset } from '../src/core/assemble.js'
 import { standingFingerprint } from '../src/core/standingPin.js'
 import type { CharacterCard } from '../src/core/types.js'
 import { saveBinding, type SessionBinding } from '../src/node/bindings.js'
@@ -74,6 +75,49 @@ function makeCard(overrides: Partial<CharacterCard> = {}): CharacterCard {
 const TURN1_HISTORY = [{ role: 'user' as const, content: '苹果好吃吗' }]
 
 describe('缓存字节稳定性守卫', () => {
+  it.each(['card', 'preset'] as const)('资产在读取后更新时，不把旧 %s 正文钉到新修订号', async (asset) => {
+    const { cardId } = await importCard(paths.characters, makeCard({ personality: 'CARD-OLD' }))
+    const preset = defaultPreset()
+    preset.identifier = 'concurrent-preset'
+    preset.entries[0]!.content = 'PRESET-OLD'
+    const presetId = await state.savePreset(preset)
+    await state.saveBinding({ sessionId: 'asset-race', cardId, presetId, personaId: null, lorebookIds: [],
+      characterLorebookId: null, interactiveCards: null, greetingIndex: 0, createdAt: new Date(0).toISOString() })
+    await onTurnStart(state, 'asset-race', 1)
+
+    // 预设已经读完而组装尚未完成时，另一编辑器保存资产；剧情锁不阻止共享资产编辑。
+    let reached!: () => void, release!: () => void
+    const reading = new Promise<void>(resolve => { reached = resolve })
+    const blocked = new Promise<void>(resolve => { release = resolve })
+    const loadPreset = state.loadPreset.bind(state)
+    const paused = vi.spyOn(state, 'loadPreset').mockImplementationOnce(async id => {
+      const value = await loadPreset(id)
+      reached()
+      await blocked
+      return value
+    })
+    const firstRun = runTavernPipeline({ state, sessionId: 'asset-race', agent: null, mode: 'live', historyOverride: TURN1_HISTORY })
+    await reading
+    try {
+      if (asset === 'card') await state.saveCharacter(cardId, { personality: 'CARD-NEW' })
+      else await state.savePreset({ ...preset, entries: preset.entries.map((entry, index) => index === 0 ? { ...entry, content: 'PRESET-NEW' } : entry) })
+    } finally {
+      release()
+    }
+    const first = (await firstRun)!
+    paused.mockRestore()
+    expect(first.standing).toContain(asset === 'card' ? 'CARD-OLD' : 'PRESET-OLD')
+    state.pinStanding('asset-race', 'normal', first.standingKey, first.standing)
+    await onTurnEnd(state, 'asset-race')
+    await onTurnStart(state, 'asset-race', 2)
+    const next = (await runTavernPipeline({ state, sessionId: 'asset-race', agent: null, mode: 'live', historyOverride: TURN1_HISTORY }))!
+    expect(next.standing).toContain(asset === 'card' ? 'CARD-NEW' : 'PRESET-NEW')
+    const pin = state.pinStanding('asset-race', 'normal', next.standingKey, next.standing)
+    expect(pin.reused).toBe(false)
+    expect(pin.text).toBe(next.standing)
+    expect(next.standingKey).not.toBe(first.standingKey)
+  })
+
   it('V3 nickname 作为提示词身份展开，但不改角色资产展示名', async () => {
     const card = parseJsonCard({ spec: 'chara_card_v3', data: {
       name: '资产展示名', description: '模型身份={{char}}', nickname: '剧情昵称',

@@ -10,16 +10,27 @@ const cleanups:(()=>void)[]=[]
 afterEach(()=>{for(const fn of cleanups.splice(0))fn()})
 const entries=parseHelperWorldbook([{uid:3,name:'条目',content:'原文'}])
 function frame(worldbooks:Record<string,unknown>={}){
-  const requests:Record<string,unknown>[]=[],listeners=new Set<(event:unknown)=>void>(),parent={postMessage:(value:Record<string,unknown>)=>{if(String(value.action).startsWith('helperWorldbook'))requests.push(JSON.parse(JSON.stringify(value)))}}
+  const requests:Record<string,unknown>[]=[],connections:Record<string,unknown>[]=[],listeners=new Set<(event:unknown)=>void>(),parent={postMessage:(value:Record<string,unknown>)=>{
+    if(value.action==='helperEventConnect')connections.push(JSON.parse(JSON.stringify(value)))
+    if(String(value.action).startsWith('helperWorldbook')){
+      expect(value.runtimeId).toBe(connections[0]!.runtimeId)
+      requests.push(JSON.parse(JSON.stringify(value)))
+    }
+  }}
   const scope:Record<string,unknown>={parent,TextEncoder,crypto:webcrypto,queueMicrotask,setTimeout,clearTimeout,document:{readyState:'loading',body:null,addEventListener:vi.fn(),removeEventListener:vi.fn(),open:vi.fn(),write:vi.fn(),close:vi.fn(),currentScript:null,querySelector:()=>null},addEventListener:(name:string,fn:(event:unknown)=>void)=>{if(name==='message')listeners.add(fn)},removeEventListener:(name:string,fn:(event:unknown)=>void)=>{if(name==='message')listeners.delete(fn)}}
   scope.window=scope;const context=createContext(scope),run=(code:string)=>runInContext(code,context)
   const source=tavernCardBridgeScript({greetings:[],greetingIndex:0,worldbooks:{settings:helperWorldbookSettingsCodec.fromNative(DEFAULT_WI_SETTINGS,['book']),storyId:'story',bindingRevision:'binding',names:['book'],global:['book'],characterName:'角色',character:{primary:null,additional:[]},chat:null,...worldbooks}}).replace(/^<script[^>]*>/,'').replace(/<\/script>$/,'')
   run(source)
-  const reply=(index:number,result:unknown,from:unknown=parent)=>{for(const fn of listeners)fn({source:from,data:{source:'dsh-tavern-card',action:'helperWorldbookResult',requestId:requests[index]!.requestId,ok:true,result}})}
+  expect(connections).toHaveLength(1)
+  expect(connections[0]!.runtimeId).toEqual(expect.any(String))
+  expect((connections[0]!.runtimeId as string).length).toBeGreaterThan(0)
+  expect((connections[0]!.runtimeId as string).length).toBeLessThanOrEqual(96)
+  expect(connections[0]!.runtimeId).toBe(run('window.__dshTavernEventRuntimeId'))
+  const reply=(index:number,result:unknown,from:unknown=parent)=>{for(const fn of listeners)fn({source:from,data:{source:'dsh-tavern-card',action:'helperWorldbookResult',requestId:requests[index]!.requestId,runtimeId:requests[index]!.runtimeId,ok:true,result}})}
   const cleanup=()=>run('window.__dshTavernBridgeCleanup()');cleanups.push(cleanup)
-  const replyBinding=(index:number,context:unknown)=>{for(const fn of listeners)fn({source:parent,data:{source:'dsh-tavern-card',action:'helperWorldbookBindResult',requestId:requests[index]!.requestId,ok:true,context}})}
-  const failBinding=(index:number,error:string)=>{for(const fn of listeners)fn({source:parent,data:{source:'dsh-tavern-card',action:'helperWorldbookBindResult',requestId:requests[index]!.requestId,ok:false,error}})}
-  const replyContext=(index:number,context:unknown)=>{for(const fn of listeners)fn({source:parent,data:{source:'dsh-tavern-card',action:'helperWorldbookContextResult',requestId:requests[index]!.requestId,ok:true,context}})}
+  const replyBinding=(index:number,context:unknown)=>{for(const fn of listeners)fn({source:parent,data:{source:'dsh-tavern-card',action:'helperWorldbookBindResult',requestId:requests[index]!.requestId,runtimeId:requests[index]!.runtimeId,ok:true,context}})}
+  const failBinding=(index:number,error:string)=>{for(const fn of listeners)fn({source:parent,data:{source:'dsh-tavern-card',action:'helperWorldbookBindResult',requestId:requests[index]!.requestId,runtimeId:requests[index]!.runtimeId,ok:false,error}})}
+  const replyContext=(index:number,context:unknown)=>{for(const fn of listeners)fn({source:parent,data:{source:'dsh-tavern-card',action:'helperWorldbookContextResult',requestId:requests[index]!.requestId,runtimeId:requests[index]!.runtimeId,ok:true,context}})}
   return {run,requests,reply,replyBinding,failBinding,replyContext,cleanup}
 }
 it('目录同步可读，条目读取为 Promise，更新等待持久回执且 RegExp 键以字符串传输',async()=>{

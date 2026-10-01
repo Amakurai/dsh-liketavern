@@ -17,7 +17,8 @@ function frame(script=false){
   const source=tavernCardBridgeScript({greetings:[],greetingIndex:0,scriptLibraries:context,scriptContext:script?{script:context.libraries[0]!.trees[0] as HelperScript,trees:[],libraryType:'global'}:undefined}).replace(/^<script[^>]*>/,'').replace(/<\/script>$/,'')
   const install=()=>run(source);install()
   const requests=()=>messages.filter(message=>['helperScriptLibraryCommit','helperScriptLibrariesGet'].includes(String(message.action)))
-  const reply=(index:number,value:Record<string,unknown>,from:unknown=parent)=>{const request=requests()[index]!;for(const listener of listeners)listener({source:from,data:{source:'dsh-tavern-card',action:request.action==='helperScriptLibraryCommit'?'helperScriptLibraryResult':'helperScriptLibrariesResult',requestId:request.requestId,...value}})}
+  // 注入脚本已安装真实事件运行时，保存/读取回执回显发起文档的固定身份。
+  const reply=(index:number,value:Record<string,unknown>,from:unknown=parent)=>{const request=requests()[index]!;for(const listener of listeners)listener({source:from,data:{source:'dsh-tavern-card',action:request.action==='helperScriptLibraryCommit'?'helperScriptLibraryResult':'helperScriptLibrariesResult',requestId:request.requestId,runtimeId:request.runtimeId,...value}})}
   const cleanup=()=>run('window.__dshTavernBridgeCleanup()');cleanups.push(cleanup)
   return {run,requests,reply,messages,install,cleanup}
 }

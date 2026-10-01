@@ -167,10 +167,10 @@ describe('世界书打开请求', () => {
 /** 新建失败留在原弹窗重试，搜索入口不能随列表缩短消失而留下隐藏过滤条件。 */
 describe('世界书表单恢复', () => {
   it.each(['envelope', 'transport'] as const)('新建失败在弹窗内显示错误并保留名称，重试后只打开新书：%s', async failure => {
-    const pending = deferred<Envelope<{ name: string; entryCount: number }>>()
-    const importLorebook = vi.fn(() => pending.promise)
+    const pending = deferred<Envelope<{ name: string; revision: string }>>()
+    const saveLorebook = vi.fn(() => pending.promise)
     const remote = { listLorebooks: async () => ok({ items: [] }), listCharacters: async () => ok({ items: [] }),
-      importLorebook, getLorebook: async () => ok({ json: { entries: {} } }),
+      saveLorebook, getLorebook: async () => ok({ json: { entries: {} }, revision: 'created-revision' }),
     } as unknown as TavernRemote
     const view = await render(<LorebooksSection remote={remote}/>)
     await click(view, '新建空书')
@@ -182,10 +182,10 @@ describe('世界书表单恢复', () => {
     expect(dialog().findByProps({ role: 'alert' }).children.join('')).toContain('连接中断')
     expect(dialog().findByType('input').props.value).toBe('  港口设定  ')
     expect(button(view, '创建').props.disabled).toBe(false)
-    importLorebook.mockResolvedValueOnce(ok({ name: '港口设定', entryCount: 0 }))
+    saveLorebook.mockResolvedValueOnce(ok({ name: '港口设定', revision: 'created-revision' }))
     await click(view, '创建')
-    expect(importLorebook).toHaveBeenCalledTimes(2)
-    expect(importLorebook).toHaveBeenLastCalledWith({ name: '港口设定', json: { entries: {} } })
+    expect(saveLorebook).toHaveBeenCalledTimes(2)
+    expect(saveLorebook).toHaveBeenLastCalledWith({ name: '港口设定', json: { entries: {} }, expectedRevision: null })
     expect(view.root.findByType(LorebookEditor).props.target).toEqual({ kind: 'library', name: '港口设定' })
   })
 
@@ -231,14 +231,14 @@ async function renameRule(view: ReactTestRenderer, name: string) {
 }
 
 describe('正则刷新与保存', () => {
-  it('预设正则开关携带读取版本，冲突时恢复开关并保留错误，版本字段不混进预设正文', async () => {
+  it('预设正则开关携带文件 ID 与读取版本，冲突时恢复开关并保留错误，编辑字段不混进预设正文', async () => {
     const f = regexFixture()
     f.remote.listPresets = async () => ok({ items: [{ id: 'preset', name: '带正则预设', regexCount: 1 }] })
     f.remote.getPreset = async () => ok({ preset: { identifier: 'preset', name: '带正则预设', entries: [], regexScripts: [{ id: 'rule', disabled: false }] }, revision: 'old-preset' })
     f.remote.savePreset = vi.fn(async () => fail('预设已被另一窗口修改'))
     const view = await render(<RegexHarness remote={f.remote} />)
     await act(async () => view.root.findByType(RegexScriptRow).props.onToggle(true))
-    expect(f.remote.savePreset).toHaveBeenCalledWith({ preset: { identifier: 'preset', name: '带正则预设', entries: [], regexScripts: [{ id: 'rule', disabled: true }] }, expectedRevision: 'old-preset' })
+    expect(f.remote.savePreset).toHaveBeenCalledWith({ id: 'preset', preset: { identifier: 'preset', name: '带正则预设', entries: [], regexScripts: [{ id: 'rule', disabled: true }] }, expectedRevision: 'old-preset' })
     expect(view.root.findByType(RegexScriptRow).props.script.disabled).toBe(false)
     expect(JSON.stringify(view.toJSON())).toContain('另一窗口')
   })

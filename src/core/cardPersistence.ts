@@ -8,6 +8,8 @@ export function installCardPersistence(snapshot:HelperSnapshot,source:string,_la
   type Change={key:string;before:Table;value:Table}
   type State={storyId:string;historyRevision:string;confirmed:Scopes}
   const root=window as unknown as Record<string,unknown>
+  const runtimeId=root.__dshTavernEventRuntimeId
+  if(typeof runtimeId!=='string'||!runtimeId||runtimeId.length>96)throw new Error('变量持久化缺少有效卡面运行时')
   const retained=root.__dshTavernSnapshot as HelperSnapshot|undefined
   if(retained?.storyId===snapshot.storyId) snapshot=retained
   root.__dshTavernSnapshot=snapshot
@@ -34,6 +36,7 @@ export function installCardPersistence(snapshot:HelperSnapshot,source:string,_la
   // 保存状态留在运行时 API；管理入口在设置面板，不向第三方 body 插入布局节点。
   function setStatus(value:string) {status=value}
   function report(error:unknown) {
+    if(!active||root.__dshTavernEventRuntimeId!==runtimeId)return
     const callback=root.__dshTavernReportError
     if(typeof callback==='function') callback(error)
   }
@@ -43,7 +46,7 @@ export function installCardPersistence(snapshot:HelperSnapshot,source:string,_la
       .map(key=>({key,before:clone(persistent.confirmed[key]??{}),value:clone(holder.scopes[key]??{})}))
   }
   const receive=(event:MessageEvent)=>{
-    if(event.source!==parent) return
+    if(event.source!==parent || event.data?.runtimeId!==runtimeId) return
     const value=event.data
     if(value?.source===source&&value.action==='helperSnapshotInvalidated'&&value.storyId===persistent.storyId) {
       invalidated=true;refreshIfClean();return
@@ -66,7 +69,7 @@ export function installCardPersistence(snapshot:HelperSnapshot,source:string,_la
     return new Promise((resolve,reject)=>{
       const timer=setTimeout(()=>{pending=null;reject(new Error('酒馆助手通信超时；请保留备份后刷新检查'))},15000)
       pending={id,action:resultAction,resolve,reject,timer}
-      parent.postMessage({source,action,requestId:id,...payload},'*')
+      parent.postMessage({source,action,requestId:id,runtimeId,...payload},'*')
     })
   }
   function refreshHelperSnapshot(option:{discardUnsaved?:boolean}={},provided?:HelperSnapshot):Promise<HelperSnapshot> {

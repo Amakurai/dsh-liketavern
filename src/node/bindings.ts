@@ -13,6 +13,7 @@ import type { SessionBinding, WalLineageEntry } from '../core/binding.js'
 import {helperWorldbookSettingsCodec} from '../core/helperWorldbookSettings.js'
 import { atomicWrite } from '../state/atomicWrite.js'
 import { storyRoot } from '../state/story.js'
+import { withWorkspaceLock } from '../state/workspaceLock.js'
 
 export type { SessionBinding, WalLineageEntry } from '../core/binding.js'
 
@@ -126,13 +127,20 @@ export function parseSessionBinding(input: unknown): SessionBinding {
   }
 }
 
-export async function loadBinding(paths: TavernPaths, sessionId: string): Promise<SessionBinding | null> {
+export async function loadBinding(paths: TavernPaths, sessionId: string, strictRead = false): Promise<SessionBinding | null> {
+  let content: string
+  try { content = await readFile(sessionFile(paths, sessionId), 'utf8') }
+  catch (error) {
+    // 面板读取继续容错；保存判断必须区分缺文件与暂时 I/O 失败，不能把不确定身份当作首次绑定。
+    if (strictRead && (error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    return null
+  }
   try {
-    const parsed = parseSessionBinding(JSON.parse(await readFile(sessionFile(paths, sessionId), 'utf8')))
+    const parsed = parseSessionBinding(JSON.parse(content))
     if (parsed.sessionId !== sessionId) return null
     return parsed
   } catch {
-    // 文件不存在（ENOENT）、JSON 损坏或字段校验失败都视为未绑定（面板可重选）。
+    // JSON 损坏或字段校验失败都视为未绑定（面板可重选）。
     return null
   }
 }
@@ -141,15 +149,45 @@ export async function saveBinding(paths: TavernPaths, binding: SessionBinding): 
   // 写入侧严格校验（sessionId 非空、cardId 目录名格式在 parse 内检查）：坏数据不落盘，
   // 否则合法 JSON 但字段缺失的绑定要到使用点才抛错。
   const checked = parseSessionBinding(binding)
-  await atomicWrite(sessionFile(paths, checked.sessionId), JSON.stringify(checked, null, 2) + '\n')
+  await withWorkspaceLock(paths.sessions, async () => {
+    await assertBindingFileIdentity(paths, checked.sessionId)
+    const file = sessionFile(paths, checked.sessionId)
+    const content = JSON.stringify(checked, null, 2) + '\n'
+    try { await atomicWrite(file, content) }
+    catch (error) {
+      // rename 完成后仍可能报错；精确读回确认已提交，避免调用方把成功换绑当失败清理。
+      if (await readFile(file, 'utf8').catch(() => null) !== content) throw error
+    }
+  })
 }
 
 export async function deleteBinding(paths: TavernPaths, sessionId: string): Promise<void> {
-  try {
-    await unlink(sessionFile(paths, sessionId))
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
-  }
+  await withWorkspaceLock(paths.sessions, async () => {
+    await assertBindingFileIdentity(paths, sessionId)
+    try { await unlink(sessionFile(paths, sessionId)) }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+  })
+}
+
+/**
+ * 净化后的文件名与 Windows 大小写别名可能碰撞；不能把另一会话的绑定当未绑定后覆盖/删除。
+ * 残缺绑定仍按原有面板重选语义允许修复，但已记录的原始 sessionId 必须严格一致。
+ * 调用方准备剧情时持有 sessions 锁，本函数也可独立安全调用。
+ */
+export async function assertBindingFileIdentity(paths: TavernPaths, sessionId: string): Promise<void> {
+  await withWorkspaceLock(paths.sessions, async () => {
+    const raw = await readFile(sessionFile(paths, sessionId), 'utf8').catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return null
+      throw error
+    })
+    if (raw === null) return
+    let value: unknown
+    try { value = JSON.parse(raw) } catch { return }
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      const owner = (value as Record<string, unknown>).sessionId
+      if (typeof owner === 'string' && owner && owner !== sessionId) throw new Error('会话绑定文件身份冲突：文件属于另一会话')
+    }
+  })
 }
 
 /**

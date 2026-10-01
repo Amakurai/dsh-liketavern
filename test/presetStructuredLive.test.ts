@@ -185,6 +185,19 @@ it('自动选择适配器，真实 wire 保留 system/user/assistant 深度、SD
   expect((await ws.wal.validateFloor(`${agent.id}#t1`)).committed).toBe(true)
 })
 
+it('首次组装后修改缓存布局设置，本轮沿用已冻结位置，下一轮才应用', async () => {
+  ctx.on('agent/pre-step', async (payload, next) => {
+    if (payload.turn === 1 && payload.step === 1) configRaw = { prompts: { cacheFirstLayout: true } }
+    return next()
+  })
+  await send(await user('FROZEN-LAYOUT-ONE'))
+  expect(slot(wires[0]!, 'DEPTH-ONE')).toBeLessThan(slot(wires[0]!, 'FROZEN-LAYOUT-ONE'))
+  expect(planMessages(requests[0]!.messages)[0]?.source).toMatchObject({ tavernPromptPlan: { cacheFirst: false } })
+  await send(await user('FROZEN-LAYOUT-TWO'))
+  expect(slot(wires[1]!, 'DEPTH-ONE')).toBeGreaterThan(slot(wires[1]!, 'FROZEN-LAYOUT-TWO'))
+  expect(planMessages(requests[1]!.messages).at(-1)?.source).toMatchObject({ tavernPromptPlan: { cacheFirst: true } })
+})
+
 it('缓存优先：真实 wire 首条 system 不含深度条目，深度注入改以 user 送到本轮输入之后', async () => {
   configRaw = {}
   await send(await user('INPUT-ONE'))

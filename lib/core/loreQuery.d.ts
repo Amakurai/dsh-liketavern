@@ -15,6 +15,8 @@ export interface LoreCatalogItem {
     constant: boolean;
     tokens: number;
     preview: string;
+    metadataTruncated?: boolean;
+    keysOmitted?: number;
 }
 export interface LoreReadQuery {
     uid?: string;
@@ -38,9 +40,20 @@ export interface LoreContentItem {
     constant: boolean;
     content: string;
     truncated: boolean;
+    metadataTruncated?: boolean;
+    keysOmitted?: number;
 }
-export declare function clipLoreContents(entries: readonly WorldInfoEntry[], budget?: number): {
-    entries: LoreContentItem[];
+export interface LoreBudgetResult<T> {
+    ok: boolean;
+    mode: 'catalog' | 'content';
+    count: number;
+    entries: T[];
     tokensUsed: number;
     omitted: number;
-};
+    truncated: boolean;
+    hint?: string;
+    error?: string;
+}
+export declare function budgetLoreCatalog(entries: readonly WorldInfoEntry[], budget?: number): LoreBudgetResult<LoreCatalogItem>;
+/** 正文按实际序列化响应拟合；控制字符转义、Unicode 代理对和字段计数都不能突破整份预算。 */
+export declare function clipLoreContents(entries: readonly WorldInfoEntry[], budget?: number): LoreBudgetResult<LoreContentItem>;

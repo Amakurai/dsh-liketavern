@@ -1,11 +1,16 @@
 /** 记忆面板持久草稿行为：恢复笔记/条目后保留原剧情，首次查询不冲掉草稿，保存后正常同步。 */
 import type { ReactNode } from 'react'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { MemorySection } from '../src/client/panel/memory.js'
 import { setTavernLocale } from '../src/client/i18n.js'
 import { Btn, ConfirmDialog, IconBtn, Select } from '../src/client/util.js'
 import type { TavernRemote } from '../src/client/types.js'
+import { resolveConfig } from '../src/node/config.js'
+import { TavernState } from '../src/node/state.js'
 
 vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
   Button: (p: { children?: ReactNode }) => <button>{p.children}</button>,
@@ -33,16 +38,17 @@ function fixture(fields: Record<string, unknown>, restoreScope?: string) {
   const saveJournal = vi.fn(async (request: { text: string }) => { journalText = request.text.trim(); return ok({ saved: true }) })
   const getJournal = vi.fn(async () => ok({ text: journalText }))
   const saveMemory = vi.fn(async () => ok({ id: 'entry-a' }))
+  const compressMemories = vi.fn(async () => ok({ merged: 1 }))
   const getEditorDraft = vi.fn(async ({ key }: { key: string }) => ok({ draft: !restoreScope || key === restoreScope
     ? { value: { version: 1, fields }, updatedAt: '2026-09-05' } : null }))
   const remote = {
     getEditorDraft, saveEditorDraft: async () => ok({ saved: true }), deleteEditorDraft: async () => ok({ deleted: true }),
     listCharacters: async () => ok({ items: [{ cardId: 'card-a', name: '工厂角色', hasAvatar: false }] }),
     listStories: async () => ok({ items: ['story-a', 'story-b'].map((id) => ({ id, sessionId: id, createdAt: '2026-09-05', migrated: false })) }),
-    getJournal, saveJournal, saveMemory, getWorldDeltas: async () => ok({ items: [] }),
+    getJournal, saveJournal, saveMemory, compressMemories, getWorldDeltas: async () => ok({ items: [] }),
     getMemories: async () => ok({ items: [{ id: 'entry-a', body: '原始事实', tags: ['旧标签'], keys: ['旧关键词'], updated: '2026-09-05', archived: false }] }),
   } as unknown as TavernRemote
-  return { remote, saveJournal, getJournal, saveMemory, getEditorDraft }
+  return { remote, saveJournal, getJournal, saveMemory, compressMemories, getEditorDraft }
 }
 function component(remote: TavernRemote, storyId = 'story-a') {
   return <MemorySection remote={remote} initialContext={{ cardId: 'card-a', storyId }} />
@@ -118,4 +124,106 @@ it('保存世界变化期间冻结完整表单，失败保留原稿并恢复编�
   expect(view!.root.findByType('textarea').props.value).toBe('修订事实')
   expect(view!.root.findAllByType('input').every(field => !field.props.disabled)).toBe(true)
   expect(save().props.disabled).toBe(false)
+})
+
+/** 父列表写入会触发重载，条目编辑期间必须阻止它们卸载并覆盖未保存正文。 */
+it('已有记忆编辑期间不压缩或新增，当前正文与新增草稿都保留', async () => {
+  const key = contextKey('story-a')
+  const f = fixture({ 'memory:cardId': 'card-a', 'memory:storyId': 'story-a', [`${key}:newBody`]: '尚未提交的新事实' })
+  await mount(component(f.remote))
+  const compress = view!.root.findAllByType(Btn).find(button => button.props.children === '归并最旧一批')!
+  const add = view!.root.findAllByType(Btn).find(button => button.props.children === '添加记忆')!
+  await act(async () => view!.root.findAllByType(IconBtn).find(button => button.props.label === '编辑')!.props.onClick())
+  const editor = () => view!.root.findAllByType('textarea').find(field => field.props.placeholder === undefined)!
+  await act(async () => editor().props.onChange({ target: { value: '尚未保存的旧事实修订' } }))
+  // 遗留的事件回调也要经过业务闸门，不能只依赖下一次渲染后的按钮 disabled。
+  await act(async () => { compress.props.onClick(); add.props.onClick() })
+  expect(f.compressMemories).not.toHaveBeenCalled()
+  expect(f.saveMemory).not.toHaveBeenCalled()
+  expect(editor().props.value).toBe('尚未保存的旧事实修订')
+  expect(view!.root.findAllByType('textarea').find(field => field.props.placeholder)?.props.value).toBe('尚未提交的新事实')
+  expect(view!.root.findAllByType(Btn).find(button => button.props.children === '归并最旧一批')!.props.disabled).toBe(true)
+  expect(view!.root.findAllByType(Btn).find(button => button.props.children === '添加记忆')!.props.disabled).toBe(true)
+})
+
+it('同批打开编辑器与压缩列表也受同步保护，不提前刷新卸载编辑器', async () => {
+  const f = fixture({ 'memory:cardId': 'card-a', 'memory:storyId': 'story-a' })
+  await mount(component(f.remote))
+  const edit = view!.root.findAllByType(IconBtn).find(button => button.props.label === '编辑')!
+  const compress = view!.root.findAllByType(Btn).find(button => button.props.children === '归并最旧一批')!
+  await act(async () => { edit.props.onClick(); compress.props.onClick() })
+  expect(f.compressMemories).not.toHaveBeenCalled()
+  expect(view!.root.findAllByType('textarea').some(field => field.props.value === '原始事实')).toBe(true)
+})
+
+it('新增记忆同批双击只发一次，失败保留正文并解锁重试', async () => {
+  const key = contextKey('story-a')
+  const f = fixture({ 'memory:cardId': 'card-a', 'memory:storyId': 'story-a', [`${key}:newBody`]: '待新增的事实' })
+  const pending = Promise.withResolvers<Awaited<ReturnType<TavernRemote['saveMemory']>>>()
+  const saveMemory = vi.fn(() => pending.promise)
+  await mount(component({ ...f.remote, saveMemory }))
+  const button = () => view!.root.findAllByType(Btn).find(button => button.props.children === '添加记忆')!
+  const add = button().props.onClick
+  await act(async () => { add(); add() })
+  expect(saveMemory).toHaveBeenCalledOnce()
+  await act(async () => pending.resolve({ ok: false, error: { code: 'test', message: '新增暂时失败' } }))
+  expect(view!.root.findByType('textarea').props.value).toBe('待新增的事实')
+  expect(button().props.disabled).toBe(false)
+  expect(JSON.stringify(view!.toJSON())).toContain('新增暂时失败')
+  saveMemory.mockResolvedValueOnce(ok({ id: 'new-entry' }))
+  await act(async () => button().props.onClick())
+  expect(saveMemory).toHaveBeenCalledTimes(2)
+  expect(view!.root.findByType('textarea').props.value).toBe('')
+})
+
+it('条目编辑保存与取消共享同步保护，失败后草稿保持并可重试', async () => {
+  const key = contextKey('story-a'), entry = 'memory:entry:["card-a","story-a","entry-a"]'
+  const f = fixture({ 'memory:cardId': 'card-a', 'memory:storyId': 'story-a', [`${key}:editingId`]: 'entry-a',
+    [`${entry}:body`]: '修订的事实' })
+  const pending = Promise.withResolvers<Awaited<ReturnType<TavernRemote['saveMemory']>>>()
+  const saveMemory = vi.fn(() => pending.promise)
+  await mount(component({ ...f.remote, saveMemory }))
+  const save = () => view!.root.findAllByType(Btn).find(button => button.props.children === '保存')!
+  const submit = save().props.onClick
+  const cancel = view!.root.findAllByType(Btn).find(button => button.props.children === '取消')!.props.onClick
+  await act(async () => { submit(); submit(); cancel() })
+  expect(saveMemory).toHaveBeenCalledOnce()
+  expect(view!.root.findAllByType(ConfirmDialog).every(dialog => !dialog.props.open)).toBe(true)
+  await act(async () => pending.reject(new Error('条目保存中断')))
+  expect(view!.root.findAllByType('textarea').some(field => field.props.value === '修订的事实')).toBe(true)
+  expect(save().props.disabled).toBe(false)
+  saveMemory.mockResolvedValueOnce(ok({ id: 'entry-a' }))
+  await act(async () => save().props.onClick())
+  expect(saveMemory).toHaveBeenCalledTimes(2)
+})
+
+/** 真实剧情文件配延迟 remote：重复点击不能在存储中留下重复活跃事实。 */
+it('新增记忆的双击在真实剧情中只创建一个条目', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'tavern-memory-panel-race-'))
+  try {
+    const state = new TavernState({ root: directory, characters: join(directory, 'characters'), lorebooks: join(directory, 'lorebooks'),
+      presets: join(directory, 'presets'), personas: join(directory, 'personas'), regexDir: join(directory, 'regex'), sessions: join(directory, 'sessions') }, () => resolveConfig({}))
+    await state.init()
+    const { cardId } = await state.createCharacter('测试灯塔')
+    await state.saveBinding({ sessionId: 'memory-panel-race', cardId, presetId: null, personaId: null, lorebookIds: [],
+      characterLorebookId: null, interactiveCards: null, greetingIndex: 0, createdAt: new Date(0).toISOString() })
+    const storyId = (await state.loadBinding('memory-panel-race'))!.storyId
+    const workspace = await state.plainWorkspace(cardId, storyId)
+    const key = `memory:context:${JSON.stringify([cardId, storyId])}`
+    const f = fixture({ 'memory:cardId': cardId, 'memory:storyId': storyId, [`${key}:newBody`]: '灯塔重新亮了' })
+    const gate = Promise.withResolvers<void>()
+    const saveMemory = vi.fn<TavernRemote['saveMemory']>(async request => {
+      await gate.promise
+      expect(request).toMatchObject({ cardId, storyId })
+      return ok({ id: (await workspace.memory.write({ body: request.body })).id })
+    })
+    await mount(<MemorySection remote={{ ...f.remote, saveMemory, getMemories: async () => ok({ items: await workspace.memory.list() }) }} initialContext={{ cardId, storyId }} />)
+    const add = view!.root.findAllByType(Btn).find(button => button.props.children === '添加记忆')!.props.onClick
+    await act(async () => { add(); add() })
+    await act(async () => { gate.resolve(); await saveMemory.mock.results[0]!.value })
+    expect(saveMemory).toHaveBeenCalledOnce()
+    expect((await (await state.plainWorkspace(cardId, storyId)).memory.list()).map(entry => entry.body)).toEqual(['灯塔重新亮了'])
+    expect((await (await state.workspace(cardId)).memory.list())).toEqual([])
+    expect(view!.root.findByType('textarea').props.value).toBe('')
+  } finally { await rm(directory, { recursive: true, force: true }) }
 })

@@ -107,7 +107,7 @@ export declare class TavernState {
         lastCharMessage: string;
         journalText: string;
     }>;
-    /** 已入 inbox 尚未入日志的用户输入文本（agent/inbox/inserted 维护；turn/end 清除）。 */
+    /** 本轮已认领尚未入日志的输入（agent/inbox/claimed 按 turn 经会话队列发布；turn/end 清除）。 */
     readonly pendingInputs: Map<string, string[]>;
     readonly pendingTemplateInputs: Map<string, {
         id: string;
@@ -194,7 +194,7 @@ export declare class TavernState {
     discardUnboundStory(cardId: string, storyId: string, sessionId: string): Promise<void>;
     listStories(cardId: string): Promise<StorySummary[]>;
     /** 准备子剧情，在副本内撤销未继承楼层；准备失败不改变源剧情，也不发布半成品。 */
-    forkStory(binding: SessionBinding, sessionId: string, prepare: (fs: WorkspaceFs) => Promise<void>): Promise<string>;
+    forkStory(binding: SessionBinding, sessionId: string, prepare: (fs: WorkspaceFs) => Promise<void>, beforePublish?: () => void): Promise<string>;
     listCharacters(): Promise<import("../state/workspace.js").CharacterSummary[]>;
     /** 收纳箱是角色资产视图；卡目录不搬动，已绑定剧情仍可按原 ID 继续读写。 */
     listArchivedCharacters(): Promise<ArchivedCharacterSummary[]>;
@@ -211,20 +211,23 @@ export declare class TavernState {
     deleteCharacter(cardId: string): Promise<{
         salvagedLorebook: string | null;
     }>;
-    /** 抢救内嵌书到世界书库时的去重文件名（与 saveLorebook 同一套净化规则）。 */
-    private salvageLorebookName;
+    /** 抢救的分配与写入共用资产锁；按实际路径探测占位，不复用同身份旧后缀或 Windows 别名。 */
+    private salvageLorebook;
     /** 占用探测：base 被占用时顺次试 -2/-3…（至多 99），再不行退回时间戳后缀。 */
     private probeAvailableAssetId;
     /**
      * assetFileId 多对一净化的冲突检测（问题5修复）：不同显示名可能净化成同一文件 id
      * （「主线 设定」/「主线?设定」→「主线_设定」），后保存者会静默覆盖前者。
-     * 落盘前若目标 id 文件已存在且文件内资产身份与本次不同（sameAsset 判定），
-     * 另起 -2/-3 后缀，返回实际落盘 id。同身份再保存是编辑（含改名：预设/人设的
-     * 身份是 identifier/id，显示名可改），原 id 照常覆盖。
+     * 先在 base 与数字后缀中定位既有身份，再为新资产寻找空槽；不能让较早的空槽
+     * 截断身份查找。同身份多份时无法凭修订推断用户选择，必须显式指定文件 ID。
+     * 返回目录中的实际拼写，身份字符串仍严格比较；调用方持有整个资产读改写锁。
      */
     private resolveAssetWriteId;
+    /** 文件名比较遵守宿主文件系统，目录清单保留实际拼写以便修订号与缓存定位一致。 */
+    private assetFileKey;
+    private assetFileIds;
     /** 删除角色卡内嵌世界书（规范字段、兼容别名、独立资产与 PNG 元数据一并清理）。非楼层写入，不记 WAL。 */
-    deleteCharacterLorebook(cardId: string): Promise<void>;
+    deleteCharacterLorebook(cardId: string, beforeWrite?: () => void): Promise<void>;
     /** 导入角色卡（PNG/JSON 字节），落盘工作区并初始化索引。 */
     importCharacter(fileName: string, bytes: Uint8Array, opts?: {
         importWorldBook?: boolean;
@@ -238,7 +241,7 @@ export declare class TavernState {
         json: unknown;
         entryCount: number;
     } | null>;
-    saveCharacterLorebook(cardId: string, json: unknown, expectedRevision?: string | null): Promise<{
+    saveCharacterLorebook(cardId: string, json: unknown, expectedRevision?: string | null, beforeWrite?: () => void): Promise<{
         name: string;
         entryCount: number;
         revision: string;
@@ -251,7 +254,7 @@ export declare class TavernState {
     createCharacter(name: string): Promise<CharacterWorkspace>;
     /** 脚本树修订只覆盖脚本资产；用户同时修改描述等其它字段时，保存脚本不得覆盖它们。 */
     getCharacterHelperScripts(cardId: string): Promise<HelperScriptLibrary>;
-    saveCharacterHelperScripts(cardId: string, revision: string, input: unknown): Promise<HelperScriptLibrary>;
+    saveCharacterHelperScripts(cardId: string, revision: string, input: unknown, beforeWrite?: () => void): Promise<HelperScriptLibrary>;
     exportCharacter(cardId: string): Promise<{
         json: unknown;
         pngBase64: string;
@@ -259,11 +262,11 @@ export declare class TavernState {
     }>;
     /** 全局脚本与预设脚本是共享资产；运行变量继续归属当前剧情，不在此处初始化。 */
     getHelperScriptLibrary(target: HelperScriptTarget): Promise<HelperScriptAsset>;
-    saveHelperScriptLibrary(target: HelperScriptTarget, revision: string, input: unknown): Promise<HelperScriptAsset>;
+    saveHelperScriptLibrary(target: HelperScriptTarget, revision: string, input: unknown, beforeWrite?: () => void): Promise<HelperScriptAsset>;
     /** 沙箱只选择库类型，资产身份始终从绑定中派生；绑定锁覆盖校验到资产落盘。 */
     private helperScriptBinding;
     getSessionHelperScripts(sessionId: string, storyId: string): Promise<HelperScriptContext>;
-    commitSessionHelperScripts(sessionId: string, request: HelperScriptCommit): Promise<HelperScriptView>;
+    commitSessionHelperScripts(sessionId: string, request: HelperScriptCommit, beforeWrite?: (binding: SessionBinding) => void): Promise<HelperScriptView>;
     getJournal(cardId: string, storyId?: string): Promise<string>;
     saveJournal(cardId: string, text: string, storyId?: string): Promise<void>;
     getChatLorebook(cardId: string, storyId?: string): Promise<unknown>;
@@ -274,13 +277,13 @@ export declare class TavernState {
     loadLorebookJson(name: string): Promise<unknown | null>;
     loadLorebookEntries(name: string, source: WorldInfoEntry['source']): Promise<WorldInfoEntry[]>;
     /** 落盘并 bump 修订号，返回磁盘上的 id：调用方（服务层/客户端）之后要按这个 id 打开，不能用原始名。 */
-    saveLorebook(name: string, json: unknown): Promise<string>;
-    /** 编辑版本的读取与写入共用资产锁；导入仍可明确替换同身份资产。 */
-    saveLorebookSnapshot(name: string, json: unknown, expectedRevision?: string | null): Promise<{
+    saveLorebook(name: string, json: unknown, beforeWrite?: () => void): Promise<string>;
+    /** 编辑按实际文件 ID 核对版本并写回同一文件；导入与新建仍按内部名称分配身份。 */
+    saveLorebookSnapshot(name: string, json: unknown, expectedRevision?: string | null, beforeWrite?: () => void): Promise<{
         name: string;
         revision: string;
     }>;
-    deleteLorebook(name: string): Promise<void>;
+    deleteLorebook(name: string, beforeWrite?: () => void): Promise<void>;
     listPresets(): Promise<string[]>;
     listPresetSummaries(): Promise<Array<{
         id: string;
@@ -293,6 +296,7 @@ export declare class TavernState {
         preserveHelperSettings?: boolean;
     }): Promise<string>;
     savePresetSnapshot(preset: PromptPreset, options?: {
+        id?: string;
         preserveHelperSettings?: boolean;
         expectedRevision?: string | null;
     }): Promise<{
@@ -331,14 +335,17 @@ export declare class TavernState {
      * 人设未绑定时，接到默认页或库里唯一一条，避免 {{user}} 落成 User。
      * 回收失败则删除绑定文件并返回 null，避免 UI 把文件夹 ID 当成角色名。
      */
-    loadBinding(sessionId: string): Promise<SessionBinding | null>;
-    /** 不等待绑定接管的读取；只供接管流程自身复核，避免等待自己。 */
-    loadBindingUnwaited(sessionId: string): Promise<SessionBinding | null>;
+    loadBinding(sessionId: string, strictRead?: boolean): Promise<SessionBinding | null>;
+    /** 绑定接管须在工作区锁外等待；调用方随后可在 sessions 锁内复核，避免子分支等待父分支时互锁。 */
+    waitForBindingAdoption(sessionId: string): Promise<void>;
+    /** 不等待绑定接管的锁内复核，避免接管流程等待自己；写入比较用 strictRead 拒绝不确定的 I/O 结果。 */
+    loadBindingUnwaited(sessionId: string, strictRead?: boolean): Promise<SessionBinding | null>;
     private readonly bindingAdoptions;
+    private readonly bindingAdoptionRetries;
     /** 登记宿主原生分支的绑定接管；同步登记，使随后任何 loadBinding 都先等它结束。 */
     trackBindingAdoption<T>(sessionId: string, work: () => Promise<T>): Promise<T>;
     private loadBindingNow;
-    saveBinding(binding: SessionBinding): Promise<void>;
+    saveBinding(binding: SessionBinding, beforePublish?: (previous: SessionBinding | null, next: SessionBinding) => void): Promise<void>;
     /**
      * 绑定不变时复用第一次 standing，避免组装抖动打穿 KV。钉位按会话 × 生成场景（standingPinKey）。
      * 返回 `reused` 供调用方记观测日志（[standing:pin] hit/recompute）。
@@ -355,6 +362,9 @@ export declare class TavernState {
     peekStanding(sessionId: string, generationType: string, cardId: string): string | undefined;
     /** 清掉会话全部场景的 standing 钉位（换绑/回收绑定时）。 */
     private clearStandingPins;
+    /** 共享库资产的 Windows 别名共享修订；缓存与展示继续保留各自请求/实际文件拼写。 */
+    private assetRevisionKey;
+    private assetRevision;
     private bumpAssetRev;
     /**
      * standing 指纹的资产修订标记（稳定顺序）：绑定预设 + 全局世界书 + 主世界书（库书或卡内嵌书）

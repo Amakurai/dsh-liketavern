@@ -16,7 +16,7 @@ const cleanups:(()=>void)[]=[]
 afterEach(()=>{for(const cleanup of cleanups.splice(0)) cleanup()})
 function frame(input:HelperSnapshot=snapshot,scriptContext?:CardScriptContext) {
   const listeners=new Map<string,Set<(event:unknown)=>void>>()
-  const requests:{source:string;action:string;requestId:string;changes:{key:string;before:unknown;value:unknown}[]}[]=[]
+  const requests:{source:string;action:string;requestId:string;runtimeId:string;changes:{key:string;before:unknown;value:unknown}[]}[]=[]
   const parent={postMessage:vi.fn((message)=>{if(['helperVariablesCommit','helperSnapshotGet','helperMessageEdit'].includes(message.action)) requests.push(message)})}
   const scope:Record<string,unknown>={parent,TextEncoder,crypto:webcrypto,queueMicrotask,setTimeout,clearTimeout,
     document:{readyState:'loading',body:null,addEventListener:vi.fn(),removeEventListener:vi.fn(),
@@ -30,15 +30,17 @@ function frame(input:HelperSnapshot=snapshot,scriptContext?:CardScriptContext) {
   const source=tavernCardBridgeScript({greetings:['开场白'],greetingIndex:0,helperSnapshot:input,scriptContext}).replace(/^<script[^>]*>/,'').replace(/<\/script>$/,'')
   const install=()=>run(source)
   install()
+  // 真实注入先安装事件运行时；宿主回执固定回显请求身份，通知使用当前文档身份。
+  const runtime=()=>run('window.__dshTavernEventRuntimeId') as string
   const reply=(index:number,extra:Record<string,unknown>,from:unknown=parent)=>{
-    for(const listener of listeners.get('message')??[]) listener({source:from,data:{source:'dsh-tavern-card',action:requests[index]!.action==='helperMessageEdit'?'helperMessageEditResult':requests[index]!.action==='helperSnapshotGet'?'helperSnapshotResult':'helperVariablesResult',requestId:requests[index]!.requestId,...extra}})
+    for(const listener of listeners.get('message')??[]) listener({source:from,data:{source:'dsh-tavern-card',action:requests[index]!.action==='helperMessageEdit'?'helperMessageEditResult':requests[index]!.action==='helperSnapshotGet'?'helperSnapshotResult':'helperVariablesResult',requestId:requests[index]!.requestId,runtimeId:requests[index]!.runtimeId,...extra}})
   }
   const invalidate=(storyId=input.storyId,from:unknown=parent)=>{
-    for(const listener of listeners.get('message')??[]) listener({source:from,data:{source:'dsh-tavern-card',action:'helperSnapshotInvalidated',storyId}})
+    for(const listener of listeners.get('message')??[]) listener({source:from,data:{source:'dsh-tavern-card',action:'helperSnapshotInvalidated',storyId,runtimeId:runtime()}})
   }
   const cleanup=()=>run('window.__dshTavernBridgeCleanup()')
   cleanups.push(cleanup)
-  const send=(data:Record<string,unknown>,from:unknown=parent)=>{for(const listener of listeners.get('message')??[])listener({source:from,data:{source:'dsh-tavern-card',...data}})}
+  const send=(data:Record<string,unknown>,from:unknown=parent)=>{for(const listener of listeners.get('message')??[])listener({source:from,data:{source:'dsh-tavern-card',runtimeId:runtime(),...data}})}
   return {run,requests,reply,parent,install,cleanup,invalidate,send}
 }
 
@@ -360,9 +362,9 @@ it('仅指定消息 id 可重绘，none 不发请求，刷新先等待变量保�
   await vi.waitFor(()=>expect(f.parent.postMessage.mock.calls.some(([value])=>value.action==='helperDisplayRefresh')).toBe(true))
   const request=f.parent.postMessage.mock.calls.find(([value])=>value.action==='helperDisplayRefresh')![0]
   expect(request).toMatchObject({storyId:snapshot.storyId,historyRevision:'history',ids:[1]})
-  f.send({action:'helperDisplayResult',requestId:request.requestId,ok:true},{})
+  f.send({action:'helperDisplayResult',requestId:request.requestId,runtimeId:request.runtimeId,ok:true},{})
   expect(f.parent.postMessage.mock.calls.some(([value])=>value.action==='helperDisplayApplied')).toBe(false)
-  f.send({action:'helperDisplayResult',requestId:request.requestId,ok:true});await refreshed
+  f.send({action:'helperDisplayResult',requestId:request.requestId,runtimeId:request.runtimeId,ok:true});await refreshed
   expect(f.parent.postMessage.mock.calls.some(([value])=>value.action==='helperDisplayApplied')).toBe(true)
   await expect(f.run('refreshOneMessage(-1)')).rejects.toThrow(/序号/)
   await expect(f.run('refreshOneMessage(1,{})')).rejects.toThrow(/DOM/)
@@ -372,7 +374,7 @@ it('元数据写回后遵守 all 重绘，失败不撤销已保存数据也不�
   await vi.waitFor(()=>expect(f.requests).toHaveLength(1));f.reply(0,{ok:true,result:{branch:null,snapshot:{...snapshot,scopes:{...snapshot.scopes,'["message",1]':{hp:9}}}}})
   await vi.waitFor(()=>expect(f.parent.postMessage.mock.calls.some(([value])=>value.action==='helperDisplayRefresh')).toBe(true))
   const request=f.parent.postMessage.mock.calls.find(([value])=>value.action==='helperDisplayRefresh')![0];expect(request.ids).toBeNull()
-  f.send({action:'helperDisplayResult',requestId:request.requestId,ok:false,error:'另一卡面未保存'});await expect(done).rejects.toThrow(/未保存/)
+  f.send({action:'helperDisplayResult',requestId:request.requestId,runtimeId:request.runtimeId,ok:false,error:'另一卡面未保存'});await expect(done).rejects.toThrow(/未保存/)
   expect(f.run('getChatMessages(1)[0].data')).toEqual({hp:9})
 })
 it('重绘准备锁保护变量和上下文草稿，取消后恢复写入，伪造或陈旧请求不能加锁',async()=>{

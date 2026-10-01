@@ -28,10 +28,11 @@ import type { MemoryEntry, PromptPreset } from '../core/types.js'
 import { exportLorebook, mergeDeltasForExport, parseLorebook } from '../state/lorebook.js'
 import { parseStoredPreset, parseStPreset } from '../state/presetStore.js'
 import { rebuildIndex } from '../state/workspace.js'
-import { parseSessionBinding, type SessionBinding } from './bindings.js'
+import { assertBindingFileIdentity, parseSessionBinding, type SessionBinding } from './bindings.js'
+import { writeHostForkSkipped } from './hostForkAdoption.js'
 import { parseJsonCard, parsePngCard } from '../state/card.js'
 import { characterEditRevision, jsonEditRevision, personaEditRevision, presetEditRevision, regexEditRevision } from '../state/characterRevision.js'
-import { FloorError, continueFloor, editAssistantMessage, editUserMessage, enterGreetingConversation, getFloorAssistantMessage, getFloorSiblings, getFloorUserMessage, getGreetingSwipe, regenerate, rollbackToFloor, swipeGreeting } from './floors.js'
+import { FloorError, continueFloor, discardHostForkAdoptionPlan, editAssistantMessage, editUserMessage, enterGreetingConversation, getFloorAssistantMessage, getFloorSiblings, getFloorUserMessage, getGreetingSwipe, regenerate, rollbackToFloor, swipeGreeting } from './floors.js'
 import { impersonate } from './impersonate.js'
 import { loadBoundLoreEntries, runTavernPipeline } from './pipeline.js'
 import { hasEjs } from '../core/template.js'
@@ -51,10 +52,12 @@ import {runHelperMvuEnable} from './helperMvuLifecycle.js'
 import {abandonHelperMvu} from './helperMvuAbandon.js'
 import {enableHelperMvu} from './helperMvuEnable.js'
 import {getHelperEventState} from './helperEventState.js'
+import {openHelperFrame,closeHelperFrame,helperFrameWriteGuard} from './helperFrameLease.js'
 import type { TavernState } from './state.js'
 import type { TavernMethodResults,TavernMethodRequests } from '../remote.js'
 import { deleteEditorDraft, getEditorDraft, saveEditorDraft } from './editorDrafts.js'
 import { createPluginAboutReader, type PluginAboutReader } from './pluginAbout.js'
+import { withWorkspaceLock } from '../state/workspaceLock.js'
 
 /** 头像缓存条数上限：卡删除/再导入会产生新 cardId，旧条目无人主动清，超上限淘汰最旧（只多一次重读，无正确性影响）。 */
 const AVATAR_CACHE_MAX = 32
@@ -266,7 +269,7 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
       throw new FloorError('invalid-preset', error instanceof Error ? error.message : String(error))
     }
     // 回显用落盘后的实际 id（理由同 importPreset）。
-    return this.state.savePresetSnapshot(preset, { preserveHelperSettings: true, expectedRevision: request.expectedRevision ?? null })
+    return this.state.savePresetSnapshot(preset, { id: request.id, preserveHelperSettings: true, expectedRevision: request.expectedRevision ?? null })
   }
 
   async deletePreset(request: { id: string }): Promise<TavernMethodResults['deletePreset']> {
@@ -423,6 +426,16 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
     return { binding, userName: persona?.name ?? DEFAULT_USER_NAME, canSwipeGreeting, conversationStarted }
   }
 
+  /** 剧情归属变更先同步取消当前宿主请求，覆盖 agent/request 之后 prepareCall 的异步准备；未来输入仍留在原生队列。 */
+  private cancelChangedBinding(sessionId: string, previous: SessionBinding | null, next: SessionBinding | null): void {
+    const plan = this.state.turnPlans.get(sessionId)
+    // 当前读失败可按未绑定容错，活动计划仍是准备中请求的确定归属；不能在实际解除后放行旧角色请求。
+    if (previous?.cardId === next?.cardId && previous?.storyId === next?.storyId
+      && (!plan || plan.cardId === next?.cardId && plan.storyId === next?.storyId)) return
+    const agent = this.ctx.agents?.get(sessionId as Session['id'])
+    if (agent?.status === 'running') agent.cancel({ kind: 'hook', reason: 'Tavern 剧情绑定已变化' }, { keepInbox: true })
+  }
+
   async setSessionBinding(request: { binding: unknown }): Promise<TavernMethodResults['setSessionBinding']> {
     // 宽松传输、严格校验：绑定整体过 parseSessionBinding（缺字段/类型不符抛错，不落盘），
     // 不能只抽查 sessionId/cardId 就把客户端自报的其余字段原样写盘。
@@ -435,7 +448,11 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
     if ((await this.state.loadCharacter(binding.cardId)) === null) {
       throw new FloorError('card-not-found', `角色 ${binding.cardId} 不存在`)
     }
-    const existing = await this.state.loadBinding(binding.sessionId)
+    const existing = await this.state.loadBinding(binding.sessionId, true)
+    // Windows 同卡别名必须先还原持久身份，后面的剧情、祖先与 MVU 判断共用它。
+    if (existing && process.platform === 'win32' && existing.cardId.toLowerCase() === binding.cardId.toLowerCase()) {
+      binding = { ...binding, cardId: existing.cardId }
+    }
     // 会话启用的脚本含官方 MVU 入口时，首次绑定（或换卡）且客户端未表态就开启原生 MVU：
     // 否则变量永不初始化，用户只会看到「MVU 不能用」。显式关闭（false）始终尊重。
     // 同卡保存保持未表态，由页面经 enableHelperMvu 在空闲时跟随，避免生成中保存其它字段被 idle 认领拒绝。
@@ -443,11 +460,17 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
       && binding.interactiveCards !== false && hasNativeMvuEntry(await sessionHelperLibraries(this.state, binding))) binding = { ...binding, helperMvu: true }
     // fork WAL 祖先由 host 维护；同卡编辑绑定时保留，换卡则清空，不能信任客户端自报。
     // createdAt 由 parseSessionBinding 保证必填非空，无需再兜底。
-    const walLineage = existing?.cardId === binding.cardId ? existing.walLineage : undefined
-    const save=()=>this.state.saveBinding({
-      ...binding,
-      storyId: existing?.cardId === binding.cardId ? existing.storyId : undefined,
-      walLineage,
+    const save=()=>withWorkspaceLock(this.state.paths.sessions,async()=>{
+      // 远程请求的前置读取可能已过时；实际提交在同一绑定锁内继承当前剧情和祖先，不能换回并发请求的旧身份。
+      const current=await this.state.loadBindingUnwaited(binding.sessionId,true)
+      const sameCard=current!==null&&(process.platform==='win32'
+        ?current.cardId.toLowerCase()===binding.cardId.toLowerCase():current.cardId===binding.cardId)
+      await this.state.saveBinding({
+        ...binding,
+        ...(sameCard?{cardId:current.cardId}:{}),
+        storyId:sameCard?current.storyId:undefined,
+        walLineage:sameCard?current.walLineage:undefined,
+      },(previous,next)=>this.cancelChangedBinding(binding.sessionId,previous,next))
     })
     if(binding.helperMvu===true&&(existing?.helperMvu!==true||existing.cardId!==binding.cardId||existing.interactiveCards===false&&binding.interactiveCards!==false))await runHelperMvuEnable(this.ctx,this.state,binding.sessionId,save)
     else await save()
@@ -456,15 +479,28 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
 
   async clearSessionBinding(request: { sessionId: string; onlyIfBlank?: boolean }): Promise<TavernMethodResults['clearSessionBinding']> {
     if (!request.sessionId) throw new FloorError('invalid-binding', '绑定缺少 sessionId')
+    const clear=()=>withWorkspaceLock(this.state.paths.sessions,async()=>{
+      // 文件名别名不能借解除绑定取消另一会话；身份校验通过后、实际删除前取消准备中的旧剧情请求。
+      await assertBindingFileIdentity(this.state.paths,request.sessionId)
+      const current=await this.state.loadBindingUnwaited(request.sessionId)
+      const live=this.ctx.sessions.get(request.sessionId as Session['id'])
+      // 明确解除的合法绑定须留原种子凭据；写失败在取消/删除之前拒绝，未知接管失败不生成 skip。
+      if(current&&live){
+        await writeHostForkSkipped(this.state.paths,live)
+        discardHostForkAdoptionPlan(this.state,request.sessionId)
+      }
+      this.cancelChangedBinding(request.sessionId,current,null)
+      await this.state.clearBinding(request.sessionId)
+    })
     if (request.onlyIfBlank === true) {
       // 与 ensureGreeting、inbox 初始化共用队列，在真正删除前重新确认状态。
       return this.state.enqueueSessionTask(request.sessionId, async () => {
         if (await this.conversationStarted(request.sessionId)) return { cleared: false }
-        await this.state.clearBinding(request.sessionId)
+        await clear()
         return { cleared: true }
       })
     }
-    await this.state.clearBinding(request.sessionId)
+    await clear()
     return { cleared: true }
   }
 
@@ -477,9 +513,9 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
     }))
   }
 
-  async swipeGreeting(request: { sessionId: string; index: number }): Promise<TavernMethodResults['swipeGreeting']> {
+  async swipeGreeting(request:TavernMethodRequests['swipeGreeting']): Promise<TavernMethodResults['swipeGreeting']> {
     return this.state.enqueueSessionTask(request.sessionId, () =>
-      swipeGreeting(this.floorDeps(), request.sessionId, request.index),
+      swipeGreeting(this.floorDeps(), request.sessionId, request.index,helperFrameWriteGuard(this.state,request,request.frameLease)),
     )
   }
 
@@ -623,6 +659,12 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
     await this.state.waitForSessionTasks(request.sessionId)
     return getHelperEventState(this.ctx,this.state,request)
   }
+  openHelperFrame(request:TavernMethodRequests['openHelperFrame']):Promise<TavernMethodResults['openHelperFrame']>{
+    return openHelperFrame(this.ctx,this.state,request)
+  }
+  async closeHelperFrame(request:TavernMethodRequests['closeHelperFrame']):Promise<void>{
+    closeHelperFrame(this.state,request)
+  }
   async getHelperSnapshot(request: {sessionId:string;messageId:number}): Promise<TavernMethodResults['getHelperSnapshot']> {
     await this.state.waitForSessionTasks(request.sessionId)
     return getHelperSnapshot(this.ctx,this.state,request.sessionId,request.messageId)
@@ -651,15 +693,15 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
   getCharacterHelperScripts(request:{cardId:string}):Promise<TavernMethodResults['getCharacterHelperScripts']> {
     return this.state.getCharacterHelperScripts(request.cardId)
   }
-  async editHelperMessages(request:TavernMethodRequests['editHelperMessages']):Promise<TavernMethodResults['editHelperMessages']>{await this.state.waitForSessionTasks(request.sessionId);return editHelperMessages(this.ctx,this.state,request.sessionId,request.messageId,request)}
-  rebindHelperWorldbooks(request:TavernMethodRequests['rebindHelperWorldbooks']):Promise<TavernMethodResults['rebindHelperWorldbooks']> {return rebindHelperWorldbooks(this.ctx,this.state,request.sessionId,request.messageId,request)}
+  async editHelperMessages(request:TavernMethodRequests['editHelperMessages']):Promise<TavernMethodResults['editHelperMessages']>{await this.state.waitForSessionTasks(request.sessionId);return editHelperMessages(this.ctx,this.state,request.sessionId,request.messageId,request,helperFrameWriteGuard(this.state,request,request.frameLease))}
+  rebindHelperWorldbooks(request:TavernMethodRequests['rebindHelperWorldbooks']):Promise<TavernMethodResults['rebindHelperWorldbooks']> {return rebindHelperWorldbooks(this.ctx,this.state,request.sessionId,request.messageId,request,helperFrameWriteGuard(this.state,request,request.frameLease))}
   getHelperWorldbookContext(request:TavernMethodRequests['getHelperWorldbookContext']):Promise<TavernMethodResults['getHelperWorldbookContext']> {return getHelperWorldbookContext(this.state,request.sessionId,request.storyId)}
-  helperWorldbookOperation(request:TavernMethodRequests['helperWorldbookOperation']):Promise<TavernMethodResults['helperWorldbookOperation']> {return helperWorldbookOperation(this.ctx,this.state,request.sessionId,request.messageId,request)}
+  helperWorldbookOperation(request:TavernMethodRequests['helperWorldbookOperation']):Promise<TavernMethodResults['helperWorldbookOperation']> {return helperWorldbookOperation(this.ctx,this.state,request.sessionId,request.messageId,request,helperFrameWriteGuard(this.state,request,request.frameLease))}
   getSessionHelperScripts(request:TavernMethodRequests['getSessionHelperScripts']):Promise<TavernMethodResults['getSessionHelperScripts']> {
     return this.state.getSessionHelperScripts(request.sessionId,request.storyId)
   }
   commitSessionHelperScripts(request:TavernMethodRequests['commitSessionHelperScripts']):Promise<TavernMethodResults['commitSessionHelperScripts']> {
-    return this.state.commitSessionHelperScripts(request.sessionId,request)
+    return this.state.commitSessionHelperScripts(request.sessionId,request,helperFrameWriteGuard(this.state,request,request.frameLease))
   }
   getHelperScriptLibrary(request:TavernMethodRequests['getHelperScriptLibrary']):Promise<TavernMethodResults['getHelperScriptLibrary']> {
     return this.state.getHelperScriptLibrary(request.target)
@@ -671,8 +713,8 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
     return this.state.saveCharacterHelperScripts(request.cardId,request.revision,request.trees)
   }
 
-  commitHelperVariables(request: {sessionId:string;messageId:number;storyId:string;historyRevision:string;changes:unknown}): Promise<TavernMethodResults['commitHelperVariables']> {
-    return this.state.enqueueSessionTask(request.sessionId,()=>commitHelperVariables(this.ctx,this.state,request))
+  commitHelperVariables(request:TavernMethodRequests['commitHelperVariables']): Promise<TavernMethodResults['commitHelperVariables']> {
+    return this.state.enqueueSessionTask(request.sessionId,()=>commitHelperVariables(this.ctx,this.state,request,helperFrameWriteGuard(this.state,request,request.frameLease)))
   }
 
   regenerate(request: { sessionId: string; messageId?: string; turn?: number }): Promise<TavernMethodResults['regenerate']> {

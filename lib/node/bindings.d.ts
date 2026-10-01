@@ -7,9 +7,15 @@ export type { SessionBinding, WalLineageEntry } from '../core/binding.js';
  * interactiveCards（会话级交互卡开关，boolean | null）原样透传——客户端依它做渲染决策。
  */
 export declare function parseSessionBinding(input: unknown): SessionBinding;
-export declare function loadBinding(paths: TavernPaths, sessionId: string): Promise<SessionBinding | null>;
+export declare function loadBinding(paths: TavernPaths, sessionId: string, strictRead?: boolean): Promise<SessionBinding | null>;
 export declare function saveBinding(paths: TavernPaths, binding: SessionBinding): Promise<void>;
 export declare function deleteBinding(paths: TavernPaths, sessionId: string): Promise<void>;
+/**
+ * 净化后的文件名与 Windows 大小写别名可能碰撞；不能把另一会话的绑定当未绑定后覆盖/删除。
+ * 残缺绑定仍按原有面板重选语义允许修复，但已记录的原始 sessionId 必须严格一致。
+ * 调用方准备剧情时持有 sessions 锁，本函数也可独立安全调用。
+ */
+export declare function assertBindingFileIdentity(paths: TavernPaths, sessionId: string): Promise<void>;
 /**
  * 扫描持久化会话中对角色的引用。永久删除必须 fail-closed：任意 `.json` 无法解析、
  * 不符合绑定 schema 或文件身份与 sessionId 不一致，都记为无法安全归属的损坏绑定。

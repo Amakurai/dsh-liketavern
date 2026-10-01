@@ -105,6 +105,7 @@ export function HelperScripts(props:{remote:TavernRemote;sessionId:string;cardId
           {<SpeechHtmlFrame srcDoc={srcDoc} title={script.name||script.id} widget compact
             onScriptError={error=>{if(currentRuntime.current===runtimeVersion)setFailures(current=>({...current,[script.id]:{version:runtimeVersion,error}}))}}
             onScriptReady={value=>{if(currentRuntime.current===runtimeVersion)setReady(current=>current[script.id]===(value?runtimeVersion:'')?current:{...current,[script.id]:value?runtimeVersion:''})}}
+            remote={remote} helperMessageId={messageId}
             helperBinding={{sessionId,storyId:snapshot.storyId}}
             onMessageBranch={props.sessions?async branch=>{await openChildSession(props.sessions!,branch.childSessionId,branch.title,props.sessionId)}:undefined}
             onMessageEdit={async request=>{const result=await remote.editHelperMessages({...request,sessionId,messageId});if(!result.ok)throw new Error(result.error.message);if(result.value.snapshot)notifyHelperStory(sessionId,result.value.snapshot.storyId);return result.value}}

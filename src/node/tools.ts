@@ -17,32 +17,37 @@ import type {} from './messageSources.js'
 import type { Context } from '@deepseek-ai/cordis'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { defineTool, type ToolRunContext } from '@deepseek-ai/dsh-tools'
-import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import {
-  clipAssetText,
+  ASSET_OUTPUT_TOKEN_BUDGET,
+  assetOutputTokens,
+  budgetAssetFiles,
+  budgetAssetIndex,
+  budgetPresetCatalog,
+  clipAssetJsonText,
   findPresetEntry,
   isPresetCatalogToken,
-  listPresetCatalog,
   resolveReadableAssetPath,
+  stampAssetTokens,
 } from '../core/assetRead.js'
 import { defaultPreset } from '../core/assemble.js'
 import { TURN_WRITE_ACK_PREFIX, formatTurnStepNotice, neutralizeDshMustache } from '../core/dshPrompt.js'
 import { memorySearchOptions } from '../core/memoryRetrieval.js'
+import { budgetMemorySearch } from '../core/memoryToolBudget.js'
+import { boundedToolError } from '../core/toolErrorBudget.js'
 import {
-  LORE_CATALOG_MAX,
+  budgetLoreCatalog,
   clipLoreContents,
   isLoreCatalogQuery,
   selectLoreEntries,
-  toLoreCatalogItem,
   type LoreReadQuery,
 } from '../core/loreQuery.js'
-import { clipToTokenBudget, estimateTokens } from '../core/tokenize.js'
-import type { MemoryEntry } from '../core/types.js'
+import { estimateTokens } from '../core/tokenize.js'
 import { rebuildIndex } from '../state/workspace.js'
-import { MemoryStore } from '../state/memory.js'
+import { MemoryStore, parseMemory, serializeMemory } from '../state/memory.js'
 import { WorldDeltaStore } from '../state/worlddelta.js'
 import { isStoryPath } from '../state/story.js'
 import { WorkspaceLinkError } from '../state/workspaceFs.js'
+import { withWorkspaceLock } from '../state/workspaceLock.js'
 import type { WorkspaceFs } from '../state/workspaceFs.js'
 import type { SessionBinding } from './bindings.js'
 import { loadBoundLoreEntries } from './pipeline.js'
@@ -51,8 +56,6 @@ import { TOOL_OUTPUTS, type TavernToolOutput } from './toolOutputs.js'
 
 /** 记忆检索一次返回的条数上限：对齐 tavern_lore_read 的 LORE_READ_MAX_TOPK，模型给的 topK 再大也不放行。 */
 const MEMORY_SEARCH_MAX_TOPK = 20
-/** 资产目录条数上限：对齐世界书目录的 LORE_CATALOG_MAX，工作区文件多了也不整棵树倾倒。 */
-const ASSET_CATALOG_MAX = 200
 /** 变化层过期时间：ISO 8601 日期或日期时间（可带秒、小数秒与时区）。 */
 const ISO_DATE_TIME_RE = /^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?$/i
 
@@ -86,6 +89,11 @@ async function resolveCtx(
   if (options?.requireOpenFloor && !entry) {
     return { error: 'floor-not-open：本层写入事务未开启（楼层 beginFloor 失败或 turn 未开始），已拒绝写入以保住可回滚性；请稍后重试或告知用户' }
   }
+  const turn = state.currentTurns.get(sessionId)
+  if (options?.requireOpenFloor && entry && (turn === undefined || entry.floor !== `${sessionId}#t${turn}`)) {
+    // 上一轮提交失败会保留恢复句柄；宿主即使继续执行新轮，也不能把新事实写进旧 WAL。
+    return { error: 'floor-stale：遗留楼层不属于当前轮次，已拒绝写入；请先完成旧楼层恢复再重试' }
+  }
   const binding = await state.loadBinding(sessionId)
   if (!binding) return { error: 'no-binding：当前会话未绑定 Tavern 角色卡' }
   // 生成中换绑：楼层还开在换绑前那张卡上，按新绑定写入会把别的卡的快照记进本楼层
@@ -105,6 +113,33 @@ async function resolveCtx(
   return { binding, ws, sessionId, assetFs: (await state.workspace(binding.cardId)).fs }
 }
 
+/** 写工具先等会话队列，再按现有剧情→绑定锁序复核并提交；排队期间换绑/换层不能写旧句柄。 */
+async function withWriteCtx<T extends { ok: boolean }>(
+  state: TavernState,
+  exec: ToolRunContext,
+  write: (resolved: ToolCtx) => Promise<T>,
+): Promise<T | { ok: false; error: string }> {
+  const resolved = await resolveCtx(state, exec, { requireOpenFloor: true })
+  if ('error' in resolved) return boundedToolError(resolved.error)
+  return withWorkspaceLock(resolved.ws.fs.root, () => withWorkspaceLock(state.paths.sessions, async () => {
+    // resolveCtx 的队列/adoption 等待只能放在锁外，锁内等待会卡住需要剧情锁的结束事件。
+    const binding = await state.loadBindingUnwaited(resolved.sessionId)
+    if (!binding || binding.cardId !== resolved.binding.cardId || binding.storyId !== resolved.binding.storyId) {
+      return boundedToolError('binding-changed：工具排队期间剧情绑定已更换，已拒绝写入旧剧情')
+    }
+    const entry = state.openFloors.get(resolved.sessionId), turn = state.currentTurns.get(resolved.sessionId)
+    if (!entry) return boundedToolError('floor-not-open：工具排队期间本层事务已结束，已拒绝写入')
+    if (turn === undefined || entry.floor !== `${resolved.sessionId}#t${turn}` || entry.floor !== resolved.ws.fs.currentFloor) {
+      return boundedToolError('floor-stale：工具排队期间当前楼层已变化，已拒绝写入旧楼层')
+    }
+    if (entry.cardId !== binding.cardId || entry.storyId !== binding.storyId) {
+      return boundedToolError('binding-changed：当前楼层属于另一剧情，已拒绝写入')
+    }
+    // 所有业务读改写、WAL、索引和成功确认在同一事务区间完成；换绑要等提交结束。
+    return write(resolved)
+  }))
+}
+
 function injectWriteAck(exec: ToolRunContext, detail: string): void {
   const agent = exec.agent
   if (!agent) return
@@ -117,6 +152,21 @@ function injectWriteAck(exec: ToolRunContext, detail: string): void {
     )
   } catch {
     // 注入失败不阻断工具结果
+  }
+}
+
+/** 主事实已落盘后，派生目录刷新故障不能冒充主写入失败，诱使 PTC 程序重试产生重复事实。 */
+async function refreshWrittenIndex(ctx: Context, fs: WorkspaceFs): Promise<{ indexUpdated?: false; hint?: string }> {
+  try {
+    await rebuildIndex(fs, estimateTokens)
+    return {}
+  } catch (error) {
+    try {
+      ctx.logger.warn(`dsh-tavern: 事实已保存，但工具派生索引刷新失败：${error instanceof Error ? error.message : String(error)}`)
+    } catch {
+      // 日志后端不可用也不能丢失已保存事实的成功回执。
+    }
+    return { indexUpdated: false, hint: '事实已保存，但资产目录刷新失败；请使用返回的完整 id，不要重复写入同一事实。' }
   }
 }
 
@@ -160,44 +210,6 @@ function clampMemoryTopK(value: unknown, fallback: number): number {
   return Math.max(0, Math.min(MEMORY_SEARCH_MAX_TOPK, raw))
 }
 
-/** 记忆检索命中：正文在预算内裁剪，超预算的只留元数据（id 仍能用 tavern_asset_read 读 memory/<id>.md）。 */
-interface MemoryHitItem {
-  id: string
-  score: number
-  tags: string[]
-  keys: string[]
-  body: string
-  truncated: boolean
-  omitted?: boolean
-}
-
-/**
- * 对齐 clipLoreContents：按相关性顺序装入 token 预算，超预算的条目不再给正文。
- * 记忆库上限 200 条 / 20000 token，没有预算的话一次检索就能把整库灌进上下文。
- */
-function clipMemoryHits(
-  hits: readonly { entry: MemoryEntry; score: number }[],
-  budget: number,
-): { results: MemoryHitItem[]; tokensUsed: number; omitted: number } {
-  const limit = Math.max(0, Math.floor(budget))
-  const results: MemoryHitItem[] = []
-  let used = 0
-  let omitted = 0
-  for (const hit of hits) {
-    const meta = { path: `memory/${hit.entry.archived ? 'archive/' : ''}${hit.entry.id}.md`, archived: hit.entry.archived, sourceRange: hit.entry.sourceRange, id: hit.entry.id, score: hit.score, tags: hit.entry.tags, keys: hit.entry.keys }
-    const remain = limit - used
-    if (remain <= 0) {
-      omitted += 1
-      results.push({ ...meta, body: '', truncated: true, omitted: true })
-      continue
-    }
-    const clipped = clipToTokenBudget(hit.entry.body, remain)
-    results.push({ ...meta, body: clipped.text, truncated: clipped.truncated })
-    used += clipped.tokens
-  }
-  return { results, tokensUsed: used, omitted }
-}
-
 export function registerTavernTools(ctx: Context, state: TavernState): void {
   // ── tavern_memory_search ────────────────────────────────────────────────
   ctx.tools.register(
@@ -215,21 +227,11 @@ export function registerTavernTools(ctx: Context, state: TavernState): void {
       },
       async execute(args, exec): Promise<TavernToolOutput<'memorySearch'>> {
         const resolved = await resolveCtx(state, exec)
-        if ('error' in resolved) return { ok: false, error: resolved.error }
+        if ('error' in resolved) return boundedToolError(resolved.error)
         const config = state.config.memory
         const topK = clampMemoryTopK(args.topK, config.retrievalTopK)
         const hits = await resolved.ws.memory.search(args.query, memorySearchOptions(topK, config.halfLifeDays))
-        const clipped = clipMemoryHits(hits, config.retrievalTokenBudget)
-        return {
-          ok: true,
-          count: hits.length,
-          tokensUsed: clipped.tokensUsed,
-          omitted: clipped.omitted,
-          results: clipped.results,
-          ...(clipped.omitted > 0
-            ? { hint: '超出 token 预算的条目只给了 id/标签/关键词；确需正文用 tavern_asset_read({ path: results 中的 path }) 按条读。' }
-            : {}),
-        }
+        return budgetMemorySearch(hits, config.retrievalTokenBudget)
       },
     }),
   )
@@ -249,39 +251,47 @@ export function registerTavernTools(ctx: Context, state: TavernState): void {
         render: (_args, value) => text(value as ToolResultValue),
       },
       async execute(args, exec): Promise<TavernToolOutput<'memoryWrite'>> {
-        const resolved = await resolveCtx(state, exec, { requireOpenFloor: true })
-        if ('error' in resolved) return { ok: false, error: resolved.error }
-        const { ws } = resolved
-        const config = state.config.memory
+        return withWriteCtx<TavernToolOutput<'memoryWrite'>>(state, exec, async resolved => {
+          const { ws } = resolved
+          const config = state.config.memory
 
-        const similar = await ws.memory.findSimilar(args.body, args.keys ?? [])
-        const top = similar[0]
-        if (top && top.score >= config.dedupScore) {
-          return {
-            ok: false,
-            status: 'similar-found',
-            similarId: top.entry.id,
-            similarBody: top.entry.body,
-            hint: '已存在高度相似的记忆，请改用 tavern_memory_update 更新该条目',
+          const similar = await ws.memory.findSimilar(args.body, args.keys ?? [])
+          const top = similar[0]
+          if (top && top.score >= config.dedupScore) {
+            const result = {
+              ok: false,
+              status: 'similar-found',
+              similarId: top.entry.id,
+              similarBody: '',
+              similarBodyTruncated: false,
+              tokensUsed: 0,
+              hint: '已存在高度相似的记忆，请改用 tavern_memory_update 更新该条目',
+            }
+            // 已存正文也可能远超建议长度；拒绝结果只展示有界预览，保留完整 id 供补读和更新。
+            const clipped = clipAssetJsonText(top.entry.body, ASSET_OUTPUT_TOKEN_BUDGET - assetOutputTokens(result) - 16)
+            result.similarBody = clipped.text
+            result.similarBodyTruncated = clipped.truncated
+            return stampAssetTokens(result)
           }
-        }
 
-        // 超容量不再在本 step 同步压缩（避免多一次阻塞的 LLM 调用）：
-        // 标记该工作区，turn 结束后由 runMaintenance 合并最旧批次（见 memoryMaintenance.ts）。
-        const stats = await ws.memory.stats()
-        const incomingTokens = estimateTokens(args.body)
-        const compressScheduled = stats.count + 1 > config.maxEntries || stats.tokens + incomingTokens > config.maxTokens
-        if (compressScheduled) state.pendingMemoryCompress.add(resolved.binding.storyId ?? resolved.binding.cardId)
+          // 超容量不再在本 step 同步压缩（避免多一次阻塞的 LLM 调用）：
+          // 标记该工作区，turn 结束后由 runMaintenance 合并最旧批次（见 memoryMaintenance.ts）。
+          const stats = await ws.memory.stats()
+          const incomingTokens = estimateTokens(args.body)
+          const compressScheduled = stats.count + 1 > config.maxEntries || stats.tokens + incomingTokens > config.maxTokens
 
-        const entry = await ws.memory.write({ body: args.body, tags: args.tags, keys: args.keys })
-        await rebuildIndex(ws.fs, estimateTokens)
-        injectWriteAck(exec, `记忆 id=${entry.id} 已落盘。下一轮才进入检索层；本轮把该事实视为已知，现在输出扮演正文。`)
-        return {
-          ok: true,
-          id: entry.id,
-          overLength: entry.overLength,
-          ...(compressScheduled ? { compressScheduled: true } : {}),
-        }
+          const entry = await ws.memory.write({ body: args.body, tags: args.tags, keys: args.keys })
+          if (compressScheduled) state.pendingMemoryCompress.add(resolved.binding.storyId ?? resolved.binding.cardId)
+          const indexStatus = await refreshWrittenIndex(ctx, ws.fs)
+          injectWriteAck(exec, `记忆 id=${entry.id} 已落盘。下一轮才进入检索层；本轮把该事实视为已知，现在输出扮演正文。`)
+          return {
+            ok: true,
+            id: entry.id,
+            overLength: entry.overLength,
+            ...(compressScheduled ? { compressScheduled: true } : {}),
+            ...indexStatus,
+          }
+        })
       },
     }),
   )
@@ -302,17 +312,22 @@ export function registerTavernTools(ctx: Context, state: TavernState): void {
         render: (_args, value) => text(value as ToolResultValue),
       },
       async execute(args, exec): Promise<TavernToolOutput<'memoryUpdate'>> {
-        const resolved = await resolveCtx(state, exec, { requireOpenFloor: true })
-        if ('error' in resolved) return { ok: false, error: resolved.error }
-        const entry = await resolved.ws.memory.update(args.id, { body: args.body, tags: args.tags, keys: args.keys })
-        if (!entry) return { ok: false, error: `not-found：记忆 ${args.id} 不存在` }
-        const stats = await resolved.ws.memory.stats()
-        if (stats.count > state.config.memory.maxEntries || stats.tokens > state.config.memory.maxTokens) {
-          state.pendingMemoryCompress.add(resolved.binding.storyId ?? resolved.binding.cardId)
-        }
-        await rebuildIndex(resolved.ws.fs, estimateTokens)
-        injectWriteAck(exec, `记忆 id=${entry.id} 已更新。下一轮才进入检索层；本轮把更新视为已知，现在输出扮演正文。`)
-        return { ok: true, id: entry.id, updated: entry.updated }
+        return withWriteCtx<TavernToolOutput<'memoryUpdate'>>(state, exec, async resolved => {
+          const existing = await resolved.ws.memory.get(args.id)
+          if (!existing) return boundedToolError(`not-found：记忆 ${args.id} 不存在`)
+          // 容量读取属于写前检查：损坏文件或 I/O 故障不能发生在主事实已改写之后而丢失回执。
+          const stats = await resolved.ws.memory.stats()
+          const body = parseMemory(existing.file, serializeMemory(existing, args.body ?? existing.body)).body
+          const tokens = stats.tokens - estimateTokens(existing.body) + estimateTokens(body)
+          const entry = await resolved.ws.memory.update(args.id, { body: args.body, tags: args.tags, keys: args.keys })
+          if (!entry) return boundedToolError(`not-found：记忆 ${args.id} 不存在`)
+          if (stats.count > state.config.memory.maxEntries || tokens > state.config.memory.maxTokens) {
+            state.pendingMemoryCompress.add(resolved.binding.storyId ?? resolved.binding.cardId)
+          }
+          const indexStatus = await refreshWrittenIndex(ctx, resolved.ws.fs)
+          injectWriteAck(exec, `记忆 id=${entry.id} 已更新。下一轮才进入检索层；本轮把更新视为已知，现在输出扮演正文。`)
+          return { ok: true, id: entry.id, updated: entry.updated, ...indexStatus }
+        })
       },
     }),
   )
@@ -336,7 +351,7 @@ export function registerTavernTools(ctx: Context, state: TavernState): void {
       },
       async execute(args, exec): Promise<TavernToolOutput<'loreRead'>> {
         const resolved = await resolveCtx(state, exec)
-        if ('error' in resolved) return { ok: false, error: resolved.error }
+        if ('error' in resolved) return boundedToolError(resolved.error)
         const q: LoreReadQuery = {
           uid: asOptionalString(args.uid),
           query: asOptionalString(args.query),
@@ -347,28 +362,10 @@ export function registerTavernTools(ctx: Context, state: TavernState): void {
         if (isLoreCatalogQuery(q)) {
           const source = q.source?.trim()
           const scoped = source ? entries.filter((e) => e.source === source) : entries
-          const catalog = scoped.slice(0, LORE_CATALOG_MAX).map(toLoreCatalogItem)
-          return {
-            ok: true,
-            mode: 'catalog',
-            count: scoped.length,
-            truncated: scoped.length > LORE_CATALOG_MAX,
-            entries: catalog,
-            hint: '用 uid 或 query 取正文；disabled 条目仍可读。',
-          }
+          return budgetLoreCatalog(scoped)
         }
         const selected = selectLoreEntries(entries, q)
-        if (selected.length === 0) {
-          return { ok: true, mode: 'content', entries: [], hint: '无匹配。先不带参数看目录。' }
-        }
-        const clipped = clipLoreContents(selected)
-        return {
-          ok: true,
-          mode: 'content',
-          tokensUsed: clipped.tokensUsed,
-          omitted: clipped.omitted,
-          entries: clipped.entries,
-        }
+        return clipLoreContents(selected)
       },
     }),
   )
@@ -391,39 +388,39 @@ export function registerTavernTools(ctx: Context, state: TavernState): void {
         render: (_args, value) => text(value as ToolResultValue),
       },
       async execute(args, exec): Promise<TavernToolOutput<'worldstateUpdate'>> {
-        const resolved = await resolveCtx(state, exec, { requireOpenFloor: true })
-        if ('error' in resolved) return { ok: false, error: resolved.error }
-        if ((args.type === 'update' || args.type === 'invalidate') && !args.ref) {
-          return { ok: false, error: `invalid-args：type=${args.type} 需要提供 ref` }
-        }
-        // 变化层只认可解析的时间；「明天」这类剧情内时间若原样落盘，会被当成永不过期。
-        // 必须是 ISO 形态：Date.parse 会把 "3"、"day 3"、"June 5" 宽松解析成 2001 年，写入即过期、永不可见。
-        const expires = args.expiresAt?.trim() ? args.expiresAt.trim() : null
-        if (expires !== null) {
-          const expiresAt = ISO_DATE_TIME_RE.test(expires) ? Date.parse(expires) : Number.NaN
-          if (Number.isNaN(expiresAt)) {
-            return { ok: false, error: `invalid-args：expiresAt=${expires} 不是可解析的 ISO 时间；不需要过期时省略该参数` }
+        return withWriteCtx<TavernToolOutput<'worldstateUpdate'>>(state, exec, async resolved => {
+          if ((args.type === 'update' || args.type === 'invalidate') && !args.ref) {
+            return boundedToolError(`invalid-args：type=${args.type} 需要提供 ref`)
           }
-          if (expiresAt <= Date.now()) {
-            return { ok: false, error: `invalid-args：expiresAt=${expires} 已经过去，写入后不会生效；不需要过期时省略该参数` }
+          // 变化层只认可解析的时间；「明天」这类剧情内时间若原样落盘，会被当成永不过期。
+          // 必须是 ISO 形态：Date.parse 会把 "3"、"day 3"、"June 5" 宽松解析成 2001 年，写入即过期、永不可见。
+          const expires = args.expiresAt?.trim() ? args.expiresAt.trim() : null
+          if (expires !== null) {
+            const expiresAt = ISO_DATE_TIME_RE.test(expires) ? Date.parse(expires) : Number.NaN
+            if (Number.isNaN(expiresAt)) {
+              return boundedToolError(`invalid-args：expiresAt=${expires} 不是可解析的 ISO 时间；不需要过期时省略该参数`)
+            }
+            if (expiresAt <= Date.now()) {
+              return boundedToolError(`invalid-args：expiresAt=${expires} 已经过去，写入后不会生效；不需要过期时省略该参数`)
+            }
           }
-        }
-        const turn = state.currentTurns.get(resolved.sessionId) ?? 0
-        const delta = await resolved.ws.deltas.append({
-          type: args.type,
-          ref: args.ref ?? null,
-          content: args.content,
-          keys: args.keys ?? [],
-          order: 100,
-          sourceRange: `t${turn}`,
-          expires,
+          const turn = state.currentTurns.get(resolved.sessionId) ?? 0
+          const delta = await resolved.ws.deltas.append({
+            type: args.type,
+            ref: args.ref ?? null,
+            content: args.content,
+            keys: args.keys ?? [],
+            order: 100,
+            sourceRange: `t${turn}`,
+            expires,
+          })
+          const indexStatus = await refreshWrittenIndex(ctx, resolved.ws.fs)
+          injectWriteAck(
+            exec,
+            `世界状态 id=${delta.id} type=${args.type} 已记录。下一轮才注入检索层；本轮视为已知，现在输出扮演正文。`,
+          )
+          return { ok: true, id: delta.id, ...indexStatus }
         })
-        await rebuildIndex(resolved.ws.fs, estimateTokens)
-        injectWriteAck(
-          exec,
-          `世界状态 id=${delta.id} type=${args.type} 已记录。下一轮才注入检索层；本轮视为已知，现在输出扮演正文。`,
-        )
-        return { ok: true, id: delta.id }
       },
     }),
   )
@@ -441,15 +438,21 @@ export function registerTavernTools(ctx: Context, state: TavernState): void {
       },
       async execute(_args, exec): Promise<TavernToolOutput<'assetList'>> {
         const resolved = await resolveCtx(state, exec)
-        if ('error' in resolved) return { ok: false, error: resolved.error }
+        if ('error' in resolved) return boundedToolError(resolved.error)
         const { binding, ws } = resolved
-        const raw = await ws.fs.readText('index.json')
+        let raw: string | null
+        try {
+          raw = await ws.fs.readText('index.json', { rejectLinks: true })
+        } catch (error) {
+          if (error instanceof WorkspaceLinkError) return { ok: false, error: '资产索引路径不能经过链接' }
+          throw error
+        }
         // 坏文件（写盘截断等）按 index: null 返回，与 loadPreset / getChatLorebook 等
         // 读取路径同一容错——索引只是目录提示，不该让工具每次必抛。
-        let index: JsonValue = null
+        let index: unknown = null
         if (raw !== null) {
           try {
-            index = JSON.parse(raw) as JsonValue
+            index = JSON.parse(raw) as unknown
           } catch {
             // 损坏按无索引处理
           }
@@ -464,17 +467,26 @@ export function registerTavernTools(ctx: Context, state: TavernState): void {
         const readable = (
           [...(await ws.fs.list('', { skipDir: (dir) => dir === 'state/wal' || dir === 'memory/archive' })).filter(isStoryPath),
             ...(await resolved.assetFs.list('', { skipDir: (dir) => dir === 'stories' || dir === 'state' || dir === 'memory' })).filter((p) => !isStoryPath(p))]
-        ).filter((p) => resolveReadableAssetPath(p).ok)
-        return {
+        ).filter((p) => { const path = resolveReadableAssetPath(p); return path.ok && path.path === p })
+        const files = budgetAssetFiles(readable, 900)
+        const safeIndex = budgetAssetIndex(index, readable.filter(isStoryPath), 900)
+        const out = {
           ok: true,
-          index,
+          index: safeIndex,
           memory: memStats,
-          files: readable.slice(0, ASSET_CATALOG_MAX),
-          fileCount: readable.length,
-          filesTruncated: readable.length > ASSET_CATALOG_MAX,
-          preset: { id: preset.identifier, name: preset.name, entries: listPresetCatalog(preset) },
+          files: files.files,
+          fileCount: files.count,
+          filesTruncated: files.truncated,
+          filesOmitted: files.omitted,
+          filesTokensUsed: files.tokensUsed,
+          tokensUsed: 0,
+          truncated: false,
           hint: '读文件：tavern_asset_read({ path: "journal.md" })；读预设：tavern_asset_read({ preset: "identifier 或 list" })',
         }
+        // 小目录使用实际花费，剩余额度给预设；索引、文件和预设共享完整输出预算。
+        const catalog = budgetPresetCatalog(preset, ASSET_OUTPUT_TOKEN_BUDGET - assetOutputTokens(out) - 32)
+        const result = { ...out, preset: catalog, truncated: files.truncated || Boolean(safeIndex?.truncated) || catalog.truncated }
+        return stampAssetTokens(result)
       },
     }),
   )
@@ -496,67 +508,122 @@ export function registerTavernTools(ctx: Context, state: TavernState): void {
       },
       async execute(args, exec): Promise<TavernToolOutput<'assetRead'>> {
         const resolved = await resolveCtx(state, exec)
-        if ('error' in resolved) return { ok: false, error: resolved.error }
+        if ('error' in resolved) return boundedToolError(resolved.error)
         const pathArg = asOptionalString(args.path)
         const presetArg = asOptionalString(args.preset)
         if (!pathArg?.trim() && presetArg === undefined) {
           return { ok: false, error: '需要 path 或 preset。先用 tavern_asset_list 看目录。' }
         }
 
-        const out: TavernToolOutput<'assetRead'> = { ok: true }
+        const out: TavernToolOutput<'assetRead'> & { tokensUsed: number } = { ok: true, tokensUsed: 0, truncated: false }
+        // 先建立有界元数据，再分配正文剩余额度；同时读取两个来源也只有一份完整输出预算。
+        const contents: Array<{ source: string; apply: (clipped: ReturnType<typeof clipAssetJsonText>) => void }> = []
 
         if (presetArg !== undefined) {
           const preset = (resolved.binding.presetId ? await state.loadPreset(resolved.binding.presetId) : null) ?? defaultPreset()
           if (isPresetCatalogToken(presetArg)) {
-            out.preset = { id: preset.identifier, name: preset.name, mode: 'catalog', entries: listPresetCatalog(preset) }
+            const catalog = budgetPresetCatalog(preset, ASSET_OUTPUT_TOKEN_BUDGET - (pathArg?.trim() ? 1200 : 64))
+            out.preset = { ...catalog, mode: 'catalog' }
+            out.truncated ||= catalog.truncated
           } else {
-            const entry = findPresetEntry(preset, presetArg)
+            const identifier = presetArg.trim()
+            if (assetOutputTokens(identifier) > ASSET_OUTPUT_TOKEN_BUDGET) {
+              return { ok: false, error: 'asset-output-too-large：预设 identifier 参数超过输出预算，请传入完整且有界的定位字段' }
+            }
+            const entry = findPresetEntry(preset, identifier)
             if (!entry) {
-              return {
+              const missing = {
                 ok: false,
-                error: `not-found：预设条目 ${presetArg} 不存在`,
+                error: `not-found：预设条目 ${identifier} 不存在`,
                 hint: 'preset 填 list 查看 identifier',
               }
+              return assetOutputTokens(missing) <= ASSET_OUTPUT_TOKEN_BUDGET ? missing
+                : { ok: false, error: 'asset-output-too-large：未找到预设条目，完整错误信息超过输出预算' }
             }
-            const clipped = clipAssetText(entry.content)
+            if (assetOutputTokens(entry.identifier) > ASSET_OUTPUT_TOKEN_BUDGET) {
+              return { ok: false, error: 'asset-output-too-large：预设条目的完整 identifier 超过输出预算，已拒绝返回截断定位字段' }
+            }
+            const name = clipAssetJsonText(preset.name, 80), entryName = clipAssetJsonText(entry.name, 80)
             out.preset = {
               id: preset.identifier,
-              name: preset.name,
+              name: name.text,
               mode: 'content',
               identifier: entry.identifier,
-              entryName: entry.name,
+              entryName: entryName.text,
               enabled: entry.enabled,
               role: entry.role,
               marker: entry.marker,
               markerId: entry.markerId ?? null,
-              truncated: clipped.truncated,
-              tokens: clipped.tokens,
-              content: clipped.text,
+              metadataTruncated: name.truncated || entryName.truncated,
+              truncated: false,
+              tokens: 0,
+              content: '',
             }
+            out.truncated ||= out.preset.metadataTruncated
+            contents.push({ source: entry.content, apply: clipped => {
+              out.preset!.content = clipped.text; out.preset!.tokens = clipped.tokens; out.preset!.truncated = clipped.truncated
+            } })
           }
         }
 
         if (pathArg?.trim()) {
           const resolvedPath = resolveReadableAssetPath(pathArg)
           if (!resolvedPath.ok) return { ok: false, error: resolvedPath.error }
+          if (assetOutputTokens(resolvedPath.path) > ASSET_OUTPUT_TOKEN_BUDGET) {
+            return { ok: false, error: 'asset-output-too-large：完整文件路径超过输出预算，已拒绝返回截断定位字段' }
+          }
           let body: string | null
           try {
             body = await (isStoryPath(resolvedPath.path) ? resolved.ws.fs : resolved.assetFs)
               .readText(resolvedPath.path, { rejectLinks: true })
           } catch (error) {
             if (error instanceof WorkspaceLinkError) return { ok: false, error: '资产路径不能经过链接' }
+            // 只转换文件系统明确的长度拒绝；不回显系统绝对路径，也不掩盖权限或真实 I/O 故障。
+            if ((error as NodeJS.ErrnoException)?.code === 'ENAMETOOLONG') {
+              return { ok: false, error: 'invalid-path：当前文件系统无法表示该资产路径，请缩短文件名或路径后重试' }
+            }
             throw error
           }
-          if (body === null) return { ok: false, error: `not-found：${resolvedPath.path}` }
-          const clipped = clipAssetText(body)
+          if (body === null) {
+            const missing = { ok: false, error: `not-found：${resolvedPath.path}` }
+            return assetOutputTokens(missing) <= ASSET_OUTPUT_TOKEN_BUDGET ? missing
+              : { ok: false, error: 'asset-output-too-large：未找到文件，完整错误信息超过输出预算' }
+          }
           out.file = {
             path: resolvedPath.path,
-            truncated: clipped.truncated,
-            tokens: clipped.tokens,
-            content: clipped.text,
+            truncated: false,
+            tokens: 0,
+            content: '',
           }
+          contents.push({ source: body, apply: clipped => {
+            out.file!.content = clipped.text; out.file!.tokens = clipped.tokens; out.file!.truncated = clipped.truncated
+          } })
         }
 
+        const metadataBudget = ASSET_OUTPUT_TOKEN_BUDGET - contents.length * 16
+        // 可选定位元数据尽量原样保留，只在完整响应真的装不下时省略；核心 identifier/path 不裁剪。
+        if (assetOutputTokens(out) > metadataBudget && out.preset?.markerId != null) {
+          delete out.preset.markerId; out.preset.markerIdOmitted = true
+          out.preset.metadataTruncated = true; out.truncated = true
+        }
+        if (assetOutputTokens(out) > metadataBudget && out.preset?.id !== undefined) {
+          delete out.preset.id; out.preset.idOmitted = true
+          out.preset.metadataTruncated = true; out.truncated = true
+        }
+        if (assetOutputTokens(out) > metadataBudget) {
+          return { ok: false, error: 'asset-output-too-large：资产元数据超过完整输出预算，请按单个来源读取' }
+        }
+        for (let i = 0; i < contents.length; i++) {
+          const remaining = contents.length - i
+          const budget = Math.floor((ASSET_OUTPUT_TOKEN_BUDGET - assetOutputTokens(out) - remaining * 16) / remaining)
+          const clipped = clipAssetJsonText(contents[i]!.source, budget)
+          contents[i]!.apply(clipped)
+          out.truncated ||= clipped.truncated
+        }
+        stampAssetTokens(out)
+        if (out.tokensUsed > ASSET_OUTPUT_TOKEN_BUDGET) {
+          return { ok: false, error: 'asset-output-too-large：完整输出超过预算，请按单个来源读取' }
+        }
         return out
       },
     }),

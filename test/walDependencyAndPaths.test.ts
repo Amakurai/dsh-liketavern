@@ -73,6 +73,17 @@ it('更晚开始的楼层叠写同一文件时仍拒绝越过它撤销', async (
   expect(await shared.readText('memory/m1.md')).toBe('原文')
 })
 
+it.skipIf(process.platform !== 'win32')('Windows 同文件的大小写别名不能绕过后继依赖保护', async () => {
+  await shared.writeText('journal.md', '原文')
+  await turn('s#t1', { 'journal.md': '本层事实' })
+  await turn('s#t2', { 'JOURNAL.md': '后继修订' })
+
+  await expect(wal.rollbackFloor('s#t1', root)).rejects.toThrow('后继依赖')
+  expect(await shared.readText('journal.md')).toBe('后继修订')
+  await wal.rollbackAfter(['s#t1', 's#t2'], root)
+  expect(await shared.readText('journal.md')).toBe('原文')
+})
+
 it('删除后被后继楼层重建的文件也存在依赖，按逆序撤销后恢复删除前原文', async () => {
   await shared.writeText('journal.md', '删除前原文')
   await turn('s#t1', { 'journal.md': null })

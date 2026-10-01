@@ -20,7 +20,8 @@ import type { Agent, AgentOptions, CreateAgentOptions } from '@deepseek-ai/dsh-a
 import type { AgentPresetRegistry } from '@deepseek-ai/dsh-agent-preset-registry'
 import { createUserMessage, type AssistantMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionLogOffset, type Session, type SessionEvent } from '@deepseek-ai/dsh-session'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
+import { lstat } from 'node:fs/promises'
 import { Wal } from '../state/wal.js'
 import { copyTemplateTimers } from '../state/template.js'
 import { estimateTokens } from '../core/tokenize.js'
@@ -36,6 +37,9 @@ import { isTavernRuntimeSession, sessionPresetId } from './tavernSession.js'
 import { pruneSiblingForks, siblingSwipe, type SiblingSwipe } from '../core/siblings.js'
 import { appendSiblingFork, loadSiblingForks, mutateSiblingForks, siblingsFile } from '../state/siblings.js'
 import { withWorkspaceLock } from '../state/workspaceLock.js'
+import { WorkspaceFs } from '../state/workspaceFs.js'
+import { sessionFile } from './paths.js'
+import { assertHostForkSource, deleteHostForkAdoption, hostForkSeedHash, readHostForkAdoption, writeHostForkAdoption, type HostForkAdoptionPlan } from './hostForkAdoption.js'
 import { loadBinding, type SessionBinding, type WalLineageEntry } from './bindings.js'
 import type { TavernState } from './state.js'
 
@@ -420,7 +424,7 @@ async function forkAt(
   source: Session,
   binding: SessionBinding,
   boundary: number,
-  options?: { prepareEdits?:(fs:import('../state/workspaceFs.js').WorkspaceFs,childId:string)=>Promise<void>; greetingIndex?: number; seedOverride?: readonly SessionEvent[]; forkTurn?: number; rollbackFromTurn?: number; verifySource?:()=>Promise<void> },
+  options?: { prepareEdits?:(fs:import('../state/workspaceFs.js').WorkspaceFs,childId:string)=>Promise<void>; greetingIndex?: number; seedOverride?: readonly SessionEvent[]; forkTurn?: number; rollbackFromTurn?: number; verifySource?:()=>Promise<void>; beforePublish?:()=>void },
 ): Promise<string> {
   const seed = options?.seedOverride ?? sessionPrefixEvents(source.snapshotEvents(), boundary)
   const childId = newChildId()
@@ -429,7 +433,7 @@ async function forkAt(
     await prepareBranchStory(fs, binding, source.id, childId, seed, options?.rollbackFromTurn)
     await options?.prepareEdits?.(fs,childId)
     await options?.verifySource?.()
-  })
+  },options?.beforePublish)
   const throughTurn = inheritedThroughTurn(seed)
   const walLineage = childWalLineage(binding, source.id, throughTurn)
   let created: { dispose(): Promise<void> } | undefined
@@ -482,6 +486,18 @@ function turnContinuesAfter(later: readonly SessionEvent[] | undefined, turn: nu
   return true
 }
 
+/** 接管失败的重试沿首次来源与继承边界，不从子会话后来追加的失败轮或父会话新绑定重新推断。 */
+interface LiveHostForkAdoptionPlan extends HostForkAdoptionPlan {
+  prefix: readonly SessionEvent[]
+  unverifiedResume?: boolean
+}
+const hostForkAdoptionPlans = new WeakMap<TavernState, Map<string, LiveHostForkAdoptionPlan>>()
+
+/** 合法解除已先持久化 skipped；只失效内存来源计划，保留旧失败屏障下一次读取确认磁盘意图。 */
+export function discardHostForkAdoptionPlan(state: TavernState, sessionId: string): void {
+  hostForkAdoptionPlans.get(state)?.delete(sessionId)
+}
+
 /**
  * 宿主原生「在新对话中分支」经 agents.create 复制前缀，但不知道 Tavern 剧情：子会话没有绑定，
  * 渲染退回原生、之后的记忆也无处写。来源已绑定而子会话未绑定时，按插件分支同一套草稿流程准备
@@ -492,39 +508,129 @@ export async function adoptHostFork({ ctx, state }: FloorDeps, child: Session): 
   const parentId = child.header.parentSession
   const depth = (child.header as { delegationDepth?: number }).delegationDepth ?? 0
   if (!parentId || child.header.isSeeded !== true || depth > 0 || pluginForkIds.has(child.id)) return false
-  if (await state.loadBindingUnwaited(child.id)) return false
-  const loaded = await state.loadBinding(parentId)
-  if (!loaded) return false
-  const parent = ctx.sessions.get(parentId)
-  const binding = parent ? inferLiveWalLineage(ctx, parent, loaded) : loaded
-  const inherited = Number.isSafeInteger(child.inheritedEventCount) ? child.inheritedEventCount : 0
-  const prefix = child.snapshotEvents().slice(0, inherited)
-  const throughTurn = inheritedThroughTurn(prefix)
-  let rollbackFromTurn = (throughTurn ?? 0) + 1
-  if (throughTurn !== null
-    && !prefix.some((event) => event.type === 'turn/end' && (event.data as { turn: number }).turn === throughTurn)
-    && turnContinuesAfter(parent?.snapshotEvents().slice(inherited), throughTurn)) {
-    rollbackFromTurn = throughTurn
+  // 已发布的独立子剧情不依赖旧来源；残留接管记录的清理不能要求原剧情仍可读。
+  const childRead = await withWorkspaceLock(state.paths.sessions, async () => {
+    const read = await state.loadBindingUnwaited(child.id, true).then(binding => ({ binding }), (error: unknown) => ({ error }))
+    if ('binding' in read && read.binding) {
+      await deleteHostForkAdoption(state.paths, child.id).catch(error => ctx.logger.warn(`dsh-tavern: 已绑定分支接管记录待清理：${String(error)}`))
+      discardHostForkAdoptionPlan(state, child.id)
+    }
+    return read
+  })
+  if ('binding' in childRead && childRead.binding) return false
+  let plans = hostForkAdoptionPlans.get(state)
+  if (!plans) { plans = new Map(); hostForkAdoptionPlans.set(state, plans) }
+  let plan = plans.get(child.id)
+  if (!plan) {
+    const inherited = Number.isSafeInteger(child.inheritedEventCount) ? child.inheritedEventCount : 0
+    const prefix = structuredClone(child.snapshotEvents().slice(0, inherited))
+    const stored = await readHostForkAdoption(state.paths, child, prefix)
+    plan = { ...(stored ?? { version: 1, status: 'unverified', sessionId: child.id, parentId, inheritedCount: inherited, seedHash: hostForkSeedHash(prefix) }),
+      prefix, ...(!stored && child.firstLifecycleSeq > inherited ? { unverifiedResume: true } : {}) }
+    plans.set(child.id, plan)
+  } else if (plan.parentId !== parentId || plan.inheritedCount !== child.inheritedEventCount
+    || plan.seedHash !== hostForkSeedHash(child.snapshotEvents().slice(0, plan.inheritedCount))) {
+    throw new FloorError('fork-source-changed', '原生分支身份或继承历史已变化，请重新创建分支')
   }
-  const storyId = await state.forkStory(binding, child.id, (fs) =>
-    prepareBranchStory(fs, binding, parentId, child.id, prefix, rollbackFromTurn))
+  if ('error' in childRead) {
+    if (plan.sourceCheckpoint === undefined && !plan.binding) {
+      plan.sourceUncertain = true
+      await writeHostForkAdoption(state.paths, plan)
+    }
+    throw childRead.error
+  }
+  const pending = plan
+  // skip 是经首次严格读取确认的合法未绑定，不再沿后来改变的父绑定推断来源。
+  if (pending.status === 'skipped') {
+    await writeHostForkAdoption(state.paths, pending)
+    plans.delete(child.id)
+    return false
+  }
+  if (pending.unverifiedResume) {
+    pending.sourceUncertain = true
+    await writeHostForkAdoption(state.paths, pending)
+    throw new FloorError('fork-source-unavailable', '无法确认恢复分支的原来源，没有原接管记录；请重新创建分支')
+  }
+  try { await writeHostForkAdoption(state.paths, pending) }
+  catch (error) {
+    if (pending.sourceCheckpoint === undefined && !pending.binding) pending.sourceUncertain = true
+    throw error
+  }
+  if (!pending.binding) await state.waitForBindingAdoption(pending.parentId)
+  if (!pending.binding) await withWorkspaceLock(state.paths.sessions, async () => {
+    if (pending.sourceUncertain) throw new FloorError('fork-source-unavailable', '未能确认原分支的来源绑定，请从来源会话重新创建分支')
+    // 文件 ID 与纳秒时间在同一绑定锁内检查；宿主 Session.seq 不包含换卡，不能据它推断绑定未变。
+    const file = sessionFile(state.paths, pending.parentId)
+    const fs = new WorkspaceFs(state.paths.sessions, null)
+    let checkpoint: string | null
+    try {
+      await fs.assertSafePath(basename(file))
+      const info = await lstat(file, { bigint: true }).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === 'ENOENT') return null
+        throw error
+      })
+      if (info && !info.isFile()) throw new FloorError('fork-source-unavailable', '来源绑定文件类型不确定，请从来源会话重新创建分支')
+      checkpoint = info ? `${info.dev}:${info.ino}:${info.size}:${info.mtimeNs}:${info.ctimeNs}` : null
+    } catch (error) {
+      if (pending.sourceCheckpoint === undefined) pending.sourceUncertain = true
+      throw error
+    }
+    if (pending.sourceCheckpoint !== undefined && pending.sourceCheckpoint !== checkpoint) {
+      throw new FloorError('fork-source-changed', '来源会话绑定已变化，不能把原角色历史移到新剧情；请重新创建分支')
+    }
+    pending.sourceCheckpoint = checkpoint
+    await writeHostForkAdoption(state.paths, pending)
+    const loaded = await state.loadBindingUnwaited(pending.parentId, true)
+    if (!loaded) {
+      if (await fs.exists(basename(file))) throw new FloorError('fork-source-unavailable', '来源会话绑定损坏，请修复后重新读取分支')
+      return
+    }
+    const parent = ctx.sessions.get(pending.parentId)
+    const binding = parent ? inferLiveWalLineage(ctx, parent, loaded) : loaded
+    const inherited = Number.isSafeInteger(child.inheritedEventCount) ? child.inheritedEventCount : 0
+    const throughTurn = inheritedThroughTurn(pending.prefix)
+    let rollbackFromTurn = (throughTurn ?? 0) + 1
+    if (throughTurn !== null
+      && !pending.prefix.some(event => event.type === 'turn/end' && event.data.turn === throughTurn)
+      && turnContinuesAfter(parent?.snapshotEvents().slice(inherited), throughTurn)) rollbackFromTurn = throughTurn
+    pending.binding = structuredClone(binding)
+    pending.rollbackFromTurn = rollbackFromTurn
+  })
+  if (!pending.binding) {
+    pending.status = 'skipped'
+    await writeHostForkAdoption(state.paths, pending)
+    plans.delete(child.id)
+    return false
+  }
+  await writeHostForkAdoption(state.paths, pending)
+  const binding = pending.binding, rollbackFromTurn = pending.rollbackFromTurn!
+  await assertHostForkSource(state.paths, binding)
+  const storyId = await state.forkStory(binding, child.id, fs =>
+    prepareBranchStory(fs, binding, pending.parentId, child.id, pending.prefix, rollbackFromTurn))
+  // 快照已释放来源剧情锁；只把子绑定发布和记录清理收在 sessions 锁内，避免迟到清理删除解除凭据。
+  return withWorkspaceLock(state.paths.sessions, async () => {
   try {
     // 准备期间若已有其它路径为子会话落了绑定，以它为准，丢弃本次草稿。
-    if (await state.loadBindingUnwaited(child.id)) {
+    if (await state.loadBindingUnwaited(child.id, true)) {
       await state.discardUnboundStory(binding.cardId, storyId, child.id)
+      await deleteHostForkAdoption(state.paths, child.id)
+      plans.delete(child.id)
       return false
     }
     await state.saveBinding({
       ...binding,
       sessionId: child.id,
       storyId,
-      walLineage: childWalLineage(binding, parentId, rollbackFromTurn > 1 ? rollbackFromTurn - 1 : null),
+      walLineage: childWalLineage(binding, pending.parentId, rollbackFromTurn > 1 ? rollbackFromTurn - 1 : null),
     })
   } catch (error) {
     await state.discardUnboundStory(binding.cardId, storyId, child.id)
     throw error
   }
+  await deleteHostForkAdoption(state.paths, child.id)
+  plans.delete(child.id)
   return true
+  })
 }
 
 /** 子会话若已由 forkChildSession 创建则直接 followup；否则 resume。不要 dispose 刚 create 的 agent。 */
@@ -723,6 +829,7 @@ export async function continueFloor(
   const source = liveSession(ctx, sessionId)
   if (!source) throw new FloorError('session-not-live', `会话 ${sessionId} 不在线（仅支持当前打开的会话）`)
   requireTavernSession(ctx, source)
+  const revision = source.seq
   const { turns, openTurn } = closedTurns(source.snapshotEvents())
   if (openTurn !== null) throw new FloorError('turn-open', `turn ${openTurn} 仍在进行中，请等待完成后再续写`)
   const turn = turnOfAssistantMessage(source.snapshotEvents(), messageId)
@@ -731,6 +838,10 @@ export async function continueFloor(
   if (last === undefined || turn !== last) throw new FloorError('not-last-floor', '只能续写最后一层回复')
   const binding = await state.loadBinding(sessionId)
   if (!binding) throw new FloorError('no-binding', '当前会话未绑定 Tavern 角色卡')
+  // 读取绑定期间可能已接入新用户轮或重建会话；旧回复的续写不能排队去续另一条回复。
+  if (liveSession(ctx, sessionId) !== source || source.seq !== revision) {
+    throw new FloorError('history-changed', '对话已改变，请刷新后再续写')
+  }
 
   const instruction = createUserMessage({
     content: [
@@ -896,14 +1007,13 @@ export async function ensureGreeting({ ctx, state }: FloorDeps, sessionId: strin
  * 那会和刚启动的 agent loop 抢 append，打开子会话历史会 Failed to fetch。
  * 会话已有后续楼层时拒绝（swipe 只适用于开场白还是最后一条消息的场景）。
  */
-export async function swipeGreeting({ ctx, state }: FloorDeps, sessionId: string, index: number): Promise<{ childSessionId: string; index: number; title: string }> {
-  const binding = await state.loadBinding(sessionId)
-  if (!binding) throw new FloorError('no-binding', '当前会话未绑定 Tavern 角色卡')
+export async function swipeGreeting({ ctx, state }: FloorDeps, sessionId: string, index: number, beforePublish?:(binding:SessionBinding)=>void): Promise<{ childSessionId: string; index: number; title: string }> {
   const source = liveSession(ctx, sessionId)
   if (!source) throw new FloorError('session-not-live', `会话 ${sessionId} 不在线`)
   requireTavernSession(ctx, source)
   const revision = source.seq
-  const verifySource = async (): Promise<void> => {
+  // 入口即冻结历史；工作区锁不阻止宿主 append，发布前也必须同步复核同一基线。
+  const assertSource = (): void => {
     if (liveSession(ctx, sessionId) !== source || source.seq !== revision) {
       throw new FloorError('history-changed', '对话已改变，请刷新后再切换开场白')
     }
@@ -911,7 +1021,16 @@ export async function swipeGreeting({ ctx, state }: FloorDeps, sessionId: string
       throw new FloorError('turn-open', '生成期间不能切换开场白')
     }
   }
-  await verifySource()
+  const verifySource = async (): Promise<void> => { assertSource() }
+  assertSource()
+  const initial = await state.loadBinding(sessionId)
+  if (!initial) throw new FloorError('no-binding', '当前会话未绑定 Tavern 角色卡')
+  const ws=await state.storyWorkspace(initial.cardId,initial.storyId)
+  return withWorkspaceLock(ws.fs.root,()=>withWorkspaceLock(state.paths.sessions,async()=>{
+  assertSource()
+  const binding=await state.loadBindingUnwaited(sessionId,true)
+  if(!binding||binding.cardId!==initial.cardId||binding.storyId!==initial.storyId)throw new FloorError('binding-changed','开场白剧情绑定已改变')
+  assertSource()
   const variants = await greetingVariants(state, binding.cardId)
   if (variants.length === 0) throw new FloorError('no-greetings', '该角色没有开场白')
   const next = ((index % variants.length) + variants.length) % variants.length
@@ -924,13 +1043,14 @@ export async function swipeGreeting({ ctx, state }: FloorDeps, sessionId: string
 
   await verifySource()
   const childId = await forkAt(ctx, state, source, binding, -1, {
-    seedOverride: greetingTurnEvents(text), greetingIndex: next, rollbackFromTurn: 0, verifySource,
+    seedOverride: greetingTurnEvents(text), greetingIndex: next, rollbackFromTurn: 0, verifySource,beforePublish:()=>{assertSource();beforePublish?.(binding)},
   })
   return { childSessionId: childId, index: next, title: await branchTitle(state, binding, `开场白 ${next + 1}/${variants.length}`) }
+  }))
 }
 
 /** 助手批量正文修改保持完整后续聊天，在草稿回滚派生状态；原会话不变且不自动重生成。 */
-export async function forkEditedHistory(deps:FloorDeps,sessionId:string,storyId:string,seed:readonly SessionEvent[],fromTurn:number,verify:()=>Promise<void>,prepareEdits?:(fs:import('../state/workspaceFs.js').WorkspaceFs,childId:string)=>Promise<void>,action:'编辑聊天消息'|'删除聊天消息'='编辑聊天消息'):Promise<ForkResult>{
+export async function forkEditedHistory(deps:FloorDeps,sessionId:string,storyId:string,seed:readonly SessionEvent[],fromTurn:number,verify:()=>Promise<void>,prepareEdits?:(fs:import('../state/workspaceFs.js').WorkspaceFs,childId:string)=>Promise<void>,action:'编辑聊天消息'|'删除聊天消息'='编辑聊天消息',beforePublish?:()=>void):Promise<ForkResult>{
   const {ctx,state}=deps,source=liveSession(ctx,sessionId)
   if(!source)throw new FloorError('session-not-live','消息编辑需要当前会话在线')
   requireTavernSession(ctx,source)
@@ -938,6 +1058,6 @@ export async function forkEditedHistory(deps:FloorDeps,sessionId:string,storyId:
   const loaded=await state.loadBinding(sessionId)
   if(!loaded||loaded.storyId!==storyId)throw new FloorError('binding-changed','剧情绑定已改变')
   const binding=inferLiveWalLineage(ctx,source,loaded)
-  const childSessionId=await forkAt(ctx,state,source,binding,source.snapshotEvents().length-1,{seedOverride:seed,forkTurn:fromTurn,rollbackFromTurn:fromTurn,verifySource:verify,prepareEdits})
+  const childSessionId=await forkAt(ctx,state,source,binding,source.snapshotEvents().length-1,{seedOverride:seed,forkTurn:fromTurn,rollbackFromTurn:fromTurn,verifySource:verify,prepareEdits,beforePublish})
   return {childSessionId,title:await branchTitle(state,binding,action)}
 }

@@ -185,8 +185,8 @@ it('世界书新建失败后原地重试，实际目录只新增一次目标文�
   const f = await fixture()
   f.remote.listLorebooks = vi.fn(async () => ok(await f.service.listLorebooks({})))
   f.remote.getLorebook = vi.fn(async request => ok(await f.service.getLorebook(request)))
-  f.remote.importLorebook = vi.fn(async request => ok(await f.service.importLorebook(request)))
-  vi.mocked(f.remote.importLorebook).mockRejectedValueOnce(new Error('模拟连接中断'))
+  f.remote.saveLorebook = vi.fn(async request => ok(await f.service.saveLorebook(request)))
+  vi.mocked(f.remote.saveLorebook).mockRejectedValueOnce(new Error('模拟连接中断'))
   const view = await render(<LorebooksSection remote={f.remote}/>)
   await click(view, '新建空书')
   const dialog = () => view.root.findAllByType(Dialog).find(item => item.props.open)!
@@ -199,7 +199,8 @@ it('世界书新建失败后原地重试，实际目录只新增一次目标文�
   expect(view.root.findByType(LorebookEditor).props.target).toEqual({ kind: 'library', name: '港口重试' })
   expect((await f.service.listLorebooks({})).items).toEqual(['港口重试'])
   expect((await f.service.getLorebook({ name: '港口重试' })).json).toEqual({ name: '港口重试', entries: {} })
-  expect(f.remote.importLorebook).toHaveBeenCalledTimes(2)
+  expect(f.remote.saveLorebook).toHaveBeenCalledTimes(2)
+  expect(f.remote.saveLorebook).toHaveBeenLastCalledWith({ name: '港口重试', json: { entries: {} }, expectedRevision: null })
 })
 
 /** 世界书编辑经真实文件存储回读，并在隔离 worker 内验证含逗号的正则主/次级键仍能触发。 */

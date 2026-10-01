@@ -31,9 +31,12 @@ function MemoryEditor(props: { remote: TavernRemote; cardId: string; storyId?: s
   const [keys, setKeys] = useDraftState(`${draftKey}:keys`, entry.keys.join(', '))
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const saving = useRef(false)
   const guard = useDraftGuard(body !== entry.body || tags !== entry.tags.join(', ') || keys !== entry.keys.join(', '), busy)
-  const save = () =>
-    runAsync(setBusy, setError, async () => {
+  const save = async () => {
+    if (saving.current || !body.trim()) return
+    saving.current = true
+    try { await runAsync(setBusy, setError, async () => {
       const r = await props.remote.saveMemory({
         cardId: props.cardId,
         storyId: props.storyId,
@@ -49,13 +52,14 @@ function MemoryEditor(props: { remote: TavernRemote; cardId: string; storyId?: s
         setKeys(splitList(keys).join(', '))
         props.onDone()
       }
-    })
-  const cancel = () => guard.request(() => {
+    }) } finally { saving.current = false }
+  }
+  const cancel = () => { if (saving.current) return; guard.request(() => {
     setBody(entry.body)
     setTags(entry.tags.join(', '))
     setKeys(entry.keys.join(', '))
     props.onDone()
-  })
+  }) }
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 }}>
       {guard.confirmation}
@@ -109,7 +113,12 @@ function MemoryContextSection(props: { remote: TavernRemote; cardId: string; sto
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [deleteId, setDeleteId] = useState<string | null>(null)
-  const [editingId, setEditingId] = useDraftState<string | null>(`${draftKey}:editingId`, null)
+  const [editingId, setStoredEditingId] = useDraftState<string | null>(`${draftKey}:editingId`, null)
+  // 同批事件也要看到刚打开的编辑器；父列表重载会卸载子编辑器并丢掉其正文。
+  const editing = useRef(editingId)
+  editing.current = editingId
+  const pending = useRef(false)
+  const setEditingId = (id: string | null) => { editing.current = id; setStoredEditingId(id) }
   const [newBody, setNewBody] = useDraftState(`${draftKey}:newBody`, '')
   const [journalText, setJournalText] = useDraftState(`${draftKey}:journalText`, '')
   const journalRestored = useDraftRestored(`${draftKey}:journalText`)
@@ -128,8 +137,12 @@ function MemoryContextSection(props: { remote: TavernRemote; cardId: string; sto
    * 写操作统一外壳：busy 防连击（快速双击重复创建/并发压缩）；
    * 错误信封进 Err（上下文），传输/zod 严格校验的 reject 落 toast，不留未处理 rejection。
    */
-  const op = (fn: () => Promise<void>) =>
-    runAsync(setBusy, setError, fn, (message) => toast.show(t('memory.opFailed', { message })))
+  const op = async (fn: () => Promise<void>) => {
+    if (pending.current || editing.current !== null) return
+    pending.current = true
+    try { await runAsync(setBusy, setError, fn, (message) => toast.show(t('memory.opFailed', { message }))) }
+    finally { pending.current = false }
+  }
 
   const journalDirty = journal.state.status === 'ready' && journalText !== journal.state.value.text
   const guard = useDraftGuard(journalDirty || !!newBody.trim() || !!deltaContent.trim() || !!deltaRef.trim() || !!deltaKeys.trim(), busy)
@@ -276,7 +289,7 @@ function MemoryContextSection(props: { remote: TavernRemote; cardId: string; sto
               </button>
             </div>
             <span style={{ flex: 1 }} />
-            {tab === 'memory' && <Btn disabled={busy} onClick={() => void compress()}>{t('memory.compressOldest')}</Btn>}
+            {tab === 'memory' && <Btn disabled={busy || editingId !== null} onClick={() => void compress()}>{t('memory.compressOldest')}</Btn>}
             {tab === 'delta' && <Btn disabled={busy} onClick={() => void exportBook()}>{t('memory.exportBook')}</Btn>}
           </div>
           {tab === 'memory' && (
@@ -305,7 +318,7 @@ function MemoryContextSection(props: { remote: TavernRemote; cardId: string; sto
                     ))}
                     <span className="dsh-tavern-memoMeta">{m.updated}</span>
                     <span className="dsh-tavern-memoActions">
-                      <IconBtn disabled={editingId !== null || busy} label={t('action.edit')} onClick={() => setEditingId(editingId === m.id ? null : m.id)}>
+                      <IconBtn disabled={editingId !== null || busy} label={t('action.edit')} onClick={() => { if (!pending.current && editing.current === null) setEditingId(m.id) }}>
                         <IconEditOutlineMedium />
                       </IconBtn>
                       <IconBtn label={t('memory.deleteEntry')} danger disabled={busy || editingId !== null} onClick={() => setDeleteId(m.id)}>
@@ -339,7 +352,7 @@ function MemoryContextSection(props: { remote: TavernRemote; cardId: string; sto
                   onChange={(e) => setNewBody(e.target.value)}
                 />
                 <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                  <Btn primary disabled={busy || !newBody.trim()} onClick={() => void addMemory()}>{t('memory.addEntry')}</Btn>
+                  <Btn primary disabled={busy || editingId !== null || !newBody.trim()} onClick={() => void addMemory()}>{t('memory.addEntry')}</Btn>
                 </div>
               </div>
             </div>

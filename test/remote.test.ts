@@ -183,6 +183,14 @@ describe('请求 schema 校验（gateway 只调用 .parse）', () => {
     expect(() => codec.create().parse({ binding: null })).toThrow()
   })
 
+  it('savePreset 保留可选的实际文件 ID，旧请求仍接受而空 ID 拒绝', () => {
+    const codec = requestCodec('savePreset')
+    const request = { preset: { identifier: 'my?preset', name: '预设', entries: [] }, expectedRevision: 'revision' }
+    expect(codec.create().parse({ ...request, id: 'my_preset-2' })).toEqual({ ...request, id: 'my_preset-2' })
+    expect(codec.create().parse(request)).toEqual(request)
+    expect(() => codec.create().parse({ ...request, id: '' })).toThrow()
+  })
+
   it('savePersona 按 Persona 形状校验（avatar 可 null，lorebookId 可缺省）', () => {
     const codec = requestCodec('savePersona')
     const persona = { id: 'persona-1', name: '旅人', description: '', avatar: null, lorebookId: null }

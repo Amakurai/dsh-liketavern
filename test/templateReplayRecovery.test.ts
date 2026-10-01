@@ -29,10 +29,10 @@ function ending(text='word/<%- next() %>',sessionId='s1',finish='stop',reason='c
   ] as unknown as SessionEvent[]}
 }
 const script = `<% const prefix='frozen'; let n=0; define('next',()=>prefix+(++n)); incvar('runs'); activateRegex(/word/g,()=>next(),{message:true}) %>original`
-async function setup(description=script) {
+async function setup(description=script,configRaw:Record<string,unknown>={}) {
   const root = await mkdtemp(join(tmpdir(),'tavern-replay-recovery-')); roots.push(root)
   const paths = {root,characters:join(root,'characters'),lorebooks:join(root,'lorebooks'),presets:join(root,'presets'),personas:join(root,'personas'),regexDir:join(root,'regex'),sessions:join(root,'sessions')}
-  const fresh = async()=>{const next=new TavernState(paths,()=>resolveConfig({}));await next.init();return next}
+  const fresh = async()=>{const next=new TavernState(paths,()=>resolveConfig(configRaw));await next.init();return next}
   const state = await fresh()
   const card = parseJsonCard({name:'Alice',description})
   const {cardId} = await importCard(paths.characters,card)
@@ -45,6 +45,26 @@ async function setup(description=script) {
 }
 
 describe('模板冻结计划恢复',()=> {
+  it.each([false,true])('重建运行时恢复冻结布局偏好，旧计划缺字段时保持原位置（旧计划=%s）',async legacy=> {
+    const configRaw={prompts:{cacheFirstLayout:false}}
+    const {ws,run,fresh}=await setup(script,configRaw)
+    const first=(await run())!
+    expect(first.cacheFirstLayout).toBe(false)
+    if(legacy) {
+      const stored=await loadTemplateState(ws.fs)
+      if(stored.generation?.status!=='prepared') throw new Error('缺少工厂生成计划')
+      delete stored.generation.plan.cacheFirstLayout
+      await saveTemplateState(ws.fs.withFloor('s1#t1'),stored)
+    }
+    configRaw.prompts.cacheFirstLayout=true
+    const restarted=await fresh()
+    const agent={options:{},session:{snapshotEvents:()=>[{type:'turn/start',seq:0,time:0,data:{turn:1}}],deriveMessages:()=>[]}} as unknown as Agent
+    const restored=(await runTavernPipeline({state:restarted,sessionId:'s1',agent,mode:'live'}))!
+    expect(restored.cacheFirstLayout).toBe(legacy ? undefined : false)
+    expect(restored.turnContext).toBe(first.turnContext)
+    expect(await run(restarted)).toBe(restored)
+  })
+
   it('没有变量写入的定义也持久化，重建运行时后恢复闭包并原子收口回复和 WAL',async()=> {
     const {state,ws,run,fresh,cardId} = await setup(`<% let n=0; const prefix='saved'; define('next',()=>prefix+(++n)) %>definition`)
     await run()

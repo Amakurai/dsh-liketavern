@@ -51,21 +51,25 @@ export const BRANCH_CHANGED_EVENT = 'dsh-tavern:branch-changed'
 
 /** 查询会话是否已绑定角色卡；null = 尚未加载完成（先不渲染，避免闪烁）。非 Tavern 不打 remote。绑定读进程内缓存：每条 assistant 消息的操作条共享一次 RPC。 */
 function useTavernBound(remote: TavernRemote, sessionId: string, enabled: boolean): boolean | null {
-  const [bound, setBound] = useState<boolean | null>(null)
+  const [bound, setBound] = useState<{ remote: TavernRemote; sessionId: string; enabled: boolean; value: boolean | null } | null>(null)
   useEffect(() => {
     if (!enabled) {
-      setBound(false)
+      setBound({ remote, sessionId, enabled, value: false })
       return
     }
     let alive = true
-    const load = () =>
-      cachedSessionBinding(remote, sessionId)
+    let request = 0
+    const load = () => {
+      // 失效缓存只保护缓存回填；仍持有旧 Promise 的组件也必须拒绝过时回包。
+      const current = ++request
+      return cachedSessionBinding(remote, sessionId)
         .then((r) => {
-          if (alive) setBound(r.ok ? r.value.binding !== null : null)
+          if (alive && current === request) setBound({ remote, sessionId, enabled, value: r.ok ? r.value.binding !== null : null })
         })
         .catch(() => {
-          if (alive) setBound(null)
+          if (alive && current === request) setBound({ remote, sessionId, enabled, value: null })
         })
+    }
     void load()
     const onChanged = (e: Event) => {
       if ((e as CustomEvent<string>).detail === sessionId) void load()
@@ -76,7 +80,8 @@ function useTavernBound(remote: TavernRemote, sessionId: string, enabled: boolea
       window.removeEventListener(BINDING_CHANGED_EVENT, onChanged)
     }
   }, [remote, sessionId, enabled])
-  return bound
+  // 会话/remote 切换的本次渲染就关掉旧权限，不能等 effect 或新读取完成才收起操作条。
+  return !enabled ? false : bound?.remote === remote && bound.sessionId === sessionId && bound.enabled === enabled ? bound.value : null
 }
 
 export interface FloorActionsProps {
@@ -166,6 +171,8 @@ export function TavernFloorActions(props: FloorActionsProps) {
     >,
     op: () => Promise<Envelope<{ childSessionId: string; title?: string }>>,
   ) => {
+    if (submitting.current) return
+    submitting.current = true
     setOperation(kind)
     setFailure(null)
     try {
@@ -178,6 +185,7 @@ export function TavernFloorActions(props: FloorActionsProps) {
     } catch (e) {
       setFailure(e instanceof Error ? e.message : String(e))
     } finally {
+      submitting.current = false
       setOperation(null)
     }
   }
@@ -196,19 +204,22 @@ export function TavernFloorActions(props: FloorActionsProps) {
   /** 兄弟分支切换：跳转打开同一楼层另一版回复所在的会话（复用 fork 的 refresh+open 路径）。 */
   const onBranch = (delta: number) => {
     const nav = siblingSwipe
-    if (!nav || nav.total < 2 || busy) return
+    if (!nav || nav.total < 2 || busy || submitting.current) return
     const target = nav.siblings[(nav.index + delta + nav.total) % nav.total]
     if (!target || target === sessionId) return
+    submitting.current = true
     setOperation(delta < 0 ? 'branch-prev' : 'branch-next')
     void openChildSession(sessions, target, undefined, sessionId)
       .catch(() => {
         toast.show(t('actions.branchGone'))
         siblingLoader.reload()
       })
-      .finally(() => setOperation(null))
+      .finally(() => { submitting.current = false; setOperation(null) })
   }
 
   const onEdit = async () => {
+    if (submitting.current) return
+    submitting.current = true
     setOperation('load-edit')
     setFailure(null)
     setEditFailure(null)
@@ -219,6 +230,7 @@ export function TavernFloorActions(props: FloorActionsProps) {
     } catch (e) {
       setFailure(e instanceof Error ? e.message : String(e))
     } finally {
+      submitting.current = false
       setOperation(null)
     }
   }
@@ -248,6 +260,8 @@ export function TavernFloorActions(props: FloorActionsProps) {
 
   /** 续写最后一层：不 fork，host 驱动画前会话，流式在当前会话出现。 */
   const onContinue = async () => {
+    if (submitting.current) return
+    submitting.current = true
     setOperation('continue')
     setFailure(null)
     try {
@@ -256,11 +270,14 @@ export function TavernFloorActions(props: FloorActionsProps) {
     } catch (e) {
       setFailure(e instanceof Error ? e.message : String(e))
     } finally {
+      submitting.current = false
       setOperation(null)
     }
   }
 
   const onEditAi = async () => {
+    if (submitting.current) return
+    submitting.current = true
     setOperation('load-edit-ai')
     setFailure(null)
     setEditAiFailure(null)
@@ -271,6 +288,7 @@ export function TavernFloorActions(props: FloorActionsProps) {
     } catch (e) {
       setFailure(e instanceof Error ? e.message : String(e))
     } finally {
+      submitting.current = false
       setOperation(null)
     }
   }
@@ -300,6 +318,8 @@ export function TavernFloorActions(props: FloorActionsProps) {
 
   /** AI 代答用户：结果复制进剪贴板；剪贴板不可用时弹窗展示。 */
   const onImpersonate = async () => {
+    if (submitting.current) return
+    submitting.current = true
     setOperation('impersonate')
     setFailure(null)
     try {
@@ -317,6 +337,7 @@ export function TavernFloorActions(props: FloorActionsProps) {
     } catch (e) {
       setFailure(e instanceof Error ? e.message : String(e))
     } finally {
+      submitting.current = false
       setOperation(null)
     }
   }
@@ -452,6 +473,7 @@ export function TavernInterruptedFloorActions(props: {
   const toast = useToast()
   const [operation, setOperation] = useState<'regenerate' | 'rollback' | 'branch-prev' | 'branch-next' | null>(null)
   const [failure, setFailure] = useState<string | null>(null)
+  const submitting = useRef(false)
   const siblingLoader = useLoader(() => remote.getFloorSiblings({ sessionId, turn }), [sessionId, turn])
   useEffect(() => {
     const onBranchChanged = (event: Event) => {
@@ -470,6 +492,8 @@ export function TavernInterruptedFloorActions(props: {
     kind: 'regenerate' | 'rollback',
     op: () => Promise<Envelope<{ childSessionId: string; title?: string }>>,
   ) => {
+    if (submitting.current) return
+    submitting.current = true
     setOperation(kind)
     setFailure(null)
     try {
@@ -481,22 +505,24 @@ export function TavernInterruptedFloorActions(props: {
     } catch (e) {
       setFailure(e instanceof Error ? e.message : String(e))
     } finally {
+      submitting.current = false
       setOperation(null)
     }
   }
 
   const onBranch = (delta: number) => {
     const nav = siblingSwipe
-    if (!nav || nav.total < 2 || busy) return
+    if (!nav || nav.total < 2 || busy || submitting.current) return
     const target = nav.siblings[(nav.index + delta + nav.total) % nav.total]
     if (!target || target === sessionId) return
+    submitting.current = true
     setOperation(delta < 0 ? 'branch-prev' : 'branch-next')
     void openChildSession(sessions, target, undefined, sessionId)
       .catch(() => {
         toast.show(t('actions.branchGone'))
         siblingLoader.reload()
       })
-      .finally(() => setOperation(null))
+      .finally(() => { submitting.current = false; setOperation(null) })
   }
 
   return (

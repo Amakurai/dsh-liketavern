@@ -152,6 +152,8 @@ export declare class TavernService extends TypertRemoteService implements Tavern
     getSessionBinding(request: {
         sessionId: string;
     }): Promise<TavernMethodResults['getSessionBinding']>;
+    /** 剧情归属变更先同步取消当前宿主请求，覆盖 agent/request 之后 prepareCall 的异步准备；未来输入仍留在原生队列。 */
+    private cancelChangedBinding;
     setSessionBinding(request: {
         binding: unknown;
     }): Promise<TavernMethodResults['setSessionBinding']>;
@@ -162,10 +164,7 @@ export declare class TavernService extends TypertRemoteService implements Tavern
     ensureGreeting(request: {
         sessionId: string;
     }): Promise<TavernMethodResults['ensureGreeting']>;
-    swipeGreeting(request: {
-        sessionId: string;
-        index: number;
-    }): Promise<TavernMethodResults['swipeGreeting']>;
+    swipeGreeting(request: TavernMethodRequests['swipeGreeting']): Promise<TavernMethodResults['swipeGreeting']>;
     getGreetingSwipe(request: {
         sessionId: string;
         messageId: string;
@@ -182,6 +181,8 @@ export declare class TavernService extends TypertRemoteService implements Tavern
         messageId?: number;
     }): Promise<TavernMethodResults['renderOutputText']>;
     getHelperEventState(request: TavernMethodRequests['getHelperEventState']): Promise<TavernMethodResults['getHelperEventState']>;
+    openHelperFrame(request: TavernMethodRequests['openHelperFrame']): Promise<TavernMethodResults['openHelperFrame']>;
+    closeHelperFrame(request: TavernMethodRequests['closeHelperFrame']): Promise<void>;
     getHelperSnapshot(request: {
         sessionId: string;
         messageId: number;
@@ -209,13 +210,7 @@ export declare class TavernService extends TypertRemoteService implements Tavern
         revision: string;
         trees: unknown;
     }): Promise<TavernMethodResults['saveCharacterHelperScripts']>;
-    commitHelperVariables(request: {
-        sessionId: string;
-        messageId: number;
-        storyId: string;
-        historyRevision: string;
-        changes: unknown;
-    }): Promise<TavernMethodResults['commitHelperVariables']>;
+    commitHelperVariables(request: TavernMethodRequests['commitHelperVariables']): Promise<TavernMethodResults['commitHelperVariables']>;
     regenerate(request: {
         sessionId: string;
         messageId?: string;

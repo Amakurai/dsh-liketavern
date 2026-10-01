@@ -4,6 +4,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   clipLoreContents,
+  budgetLoreCatalog,
   isLoreCatalogQuery,
   selectLoreEntries,
   toLoreCatalogItem,
@@ -14,6 +15,7 @@ import {
   WISelectiveLogic,
   type WorldInfoEntry,
 } from '../src/core/types.js'
+import { estimateTokens } from '../src/core/tokenize.js'
 
 function makeEntry(partial: Partial<WorldInfoEntry> & { key: string }): WorldInfoEntry {
   return {
@@ -94,10 +96,31 @@ describe('toLoreCatalogItem / clipLoreContents', () => {
   })
 
   it('正文按预算截断并计 omitted', () => {
-    const big = makeEntry({ key: 'a', uid: 'a', content: '汉'.repeat(100) })
+    const big = makeEntry({ key: 'a', uid: 'a', content: '汉'.repeat(1000) })
     const small = makeEntry({ key: 'b', uid: 'b', content: '尾' })
-    const clipped = clipLoreContents([big, small], 30)
+    const clipped = clipLoreContents([big, small], 300)
     expect(clipped.entries[0]?.truncated).toBe(true)
     expect(clipped.omitted).toBe(1)
+    expect(clipped.tokensUsed).toBe(estimateTokens(JSON.stringify(clipped, null, 2)))
+    expect(clipped.tokensUsed).toBeLessThanOrEqual(300)
+  })
+
+  it('完整目录跳过过大定位，展示字段和触发键裁剪不改写完整key', () => {
+    const huge = makeEntry({ key: '过大定位'.repeat(1000), uid: 'huge', content: '正文' })
+    const anchor = makeEntry({ key: 'global:book:anchor', uid: 'anchor', comment: '巨大注释'.repeat(1000),
+      keys: ['港口', '触发关键词'.repeat(100), '码头'], content: '锚点正文' })
+    const output = budgetLoreCatalog([huge, anchor], 500)
+    expect(output).toMatchObject({ ok: true, count: 2, omitted: 1, truncated: true,
+      entries: [{ uid: 'anchor', key: anchor.key, metadataTruncated: true, keysOmitted: 1, keys: ['港口', '码头'] }] })
+    expect(output.tokensUsed).toBe(estimateTokens(JSON.stringify(output, null, 2)))
+    expect(output.tokensUsed).toBeLessThanOrEqual(500)
+  })
+
+  it('正文转义后的完整JSON仍有界，预算不足响应头时明确拒绝', () => {
+    const output = clipLoreContents([makeEntry({ key: 'global:book:control', uid: 'control', content: '\u0000'.repeat(4000) })], 200)
+    expect(output.entries[0]?.truncated).toBe(true)
+    expect(output.tokensUsed).toBe(estimateTokens(JSON.stringify(output, null, 2)))
+    expect(output.tokensUsed).toBeLessThanOrEqual(200)
+    expect(() => budgetLoreCatalog([], 0)).toThrow('响应元数据')
   })
 })

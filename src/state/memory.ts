@@ -77,6 +77,9 @@ interface MemoryIndex {
   entries: ReadonlyMap<string, MemoryEntry>
 }
 
+/** Windows 的文件名别名共用来源身份；条目本身保留原文件名，大小写敏感系统仍区分文件。 */
+function memoryIdentity(id: string): string { return process.platform === 'win32' ? id.toLowerCase() : id }
+
 /** 迭代展开摘要的完整叶来源；避免多代摘要递归爆栈，也拒绝循环来源伪装成独立事实。 */
 function summarySourceIds(id: string, entries: ReadonlyMap<string, MemoryEntry>): string[] {
   const leaves = new Set<string>()
@@ -85,22 +88,23 @@ function summarySourceIds(id: string, entries: ReadonlyMap<string, MemoryEntry>)
   const pending = [{ id, exit: false }]
   while (pending.length > 0) {
     const next = pending.pop()!
+    const identity = memoryIdentity(next.id)
     if (next.exit) {
-      visiting.delete(next.id)
-      finished.add(next.id)
+      visiting.delete(identity)
+      finished.add(identity)
       continue
     }
-    if (finished.has(next.id)) continue
-    if (visiting.has(next.id)) throw new Error('记忆归并来源存在循环')
-    const entry = entries.get(next.id)
+    if (finished.has(identity)) continue
+    if (visiting.has(identity)) throw new Error('记忆归并来源存在循环')
+    const entry = entries.get(identity)
     if (!entry) throw new Error(`摘要来源 ${next.id} 缺失，无法保证检索完整性`)
     const sources = memorySourceIds(entry.sourceRange)
     if (!sources.length) {
-      leaves.add(next.id)
-      finished.add(next.id)
+      leaves.add(entry.id)
+      finished.add(identity)
       continue
     }
-    visiting.add(next.id)
+    visiting.add(identity)
     pending.push({ id: next.id, exit: true })
     for (const source of sources) pending.push({ id: source, exit: false })
   }
@@ -407,14 +411,15 @@ export class MemoryStore {
     const index = new Bm25Index<MemoryEntry>()
     const indexed = [...entries]
     if (includeSources) {
-      const visited = new Set(entries.map((entry) => entry.id))
+      const visited = new Set(entries.map((entry) => memoryIdentity(entry.id)))
       // 只索引活跃摘要可达的归档来源；不扫整棵 archive，已撤销/删除摘要不会把旧事实带回来。
       for (let i = 0; i < indexed.length; i++) {
         const refs = memorySourceIds(indexed[i]!.sourceRange)
         for (const id of refs) {
-          if (visited.has(id)) continue
+          const identity = memoryIdentity(id)
+          if (visited.has(identity)) continue
           if (visited.size >= 10_000) throw new Error('记忆来源索引超过 10000 条，请分拆剧情或清理记忆')
-          visited.add(id)
+          visited.add(identity)
           const raw = await this.fs.readText(this.pathOf(id, true))
           if (raw === null) throw new Error(`摘要来源 ${id} 缺失，无法保证检索完整性`)
           indexed.push(parseMemory(`${ARCHIVE_PREFIX}${id}.md`, raw))
@@ -430,7 +435,7 @@ export class MemoryStore {
         data: entry,
       })
     }
-    const built = { index, entries: new Map(indexed.map((entry) => [entry.id, entry])) }
+    const built = { index, entries: new Map(indexed.map((entry) => [memoryIdentity(entry.id), entry])) }
     // list 刚刚按当前指纹填过 cache，这里把索引挂上去；指纹变化时整条缓存会被换掉。
     // 引用相等校验：await list 期间若另一任务 write → invalidate → list（缓存被换成新指纹对象），
     // 不能把「旧 entries 建出的索引」挂到新缓存上，否则检索会一直用旧索引直到下次指纹变化。

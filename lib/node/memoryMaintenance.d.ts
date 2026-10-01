@@ -12,12 +12,12 @@ import type { Context } from '@deepseek-ai/cordis';
 import type { LlmRuntime } from '@deepseek-ai/dsh-llm';
 import type { TavernState } from './state.js';
 /** 用指定模型把一批旧记忆压缩合并为一条；失败返回 null。 */
-export declare function compressMemoryBatch(llm: LlmRuntime, provider: string, model: string, bodies: string[]): Promise<string | null>;
+export declare function compressMemoryBatch(llm: LlmRuntime, provider: string, model: string, bodies: string[], maintenanceSignal?: AbortSignal): Promise<string | null>;
 /**
  * 压缩指定角色工作区最旧的一批记忆（compressBatch 条）为一条。
  * 无模型 / 空批次 / 合并失败返回 null；成功返回合并正文与归档条数。
  */
-export declare function compressOldestMemories(state: TavernState, llm: LlmRuntime | undefined, cardId: string, provider: string | undefined, model: string | undefined, storyId?: string): Promise<{
+export declare function compressOldestMemories(state: TavernState, llm: LlmRuntime | undefined, cardId: string, provider: string | undefined, model: string | undefined, storyId?: string, maintenanceSignal?: AbortSignal): Promise<{
     merged: string;
     archived: number;
 } | null>;

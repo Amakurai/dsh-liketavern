@@ -14,6 +14,7 @@ import type { LlmRuntime } from '@deepseek-ai/dsh-llm'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { estimateTokens } from '../core/tokenize.js'
 import { rebuildIndex } from '../state/workspace.js'
+import { withWorkspaceLock } from '../state/workspaceLock.js'
 import { collectCompleteText } from './collectText.js'
 import { sessionModelRoute } from './modelRoute.js'
 import type { TavernState } from './state.js'
@@ -24,14 +25,17 @@ export async function compressMemoryBatch(
   provider: string,
   model: string,
   bodies: string[],
+  maintenanceSignal?: AbortSignal,
 ): Promise<string | null> {
   try {
+    if (maintenanceSignal?.aborted) return null
     const prompt = bodies.map((b, i) => `【记忆 ${i + 1}】\n${b}`).join('\n\n')
     const message = createUserMessage({
       content: [{ type: 'text', text: `请将以下多条角色扮演记忆合并为一条简洁、不丢失关键事实的记忆（中文，200 字以内），只输出合并后的正文：\n\n${prompt}` }],
       source: { kind: 'dsh-tavern', form: 'notice', summary: '记忆压缩' },
     })
-    const signal = AbortSignal.timeout(60_000)
+    const timeout = AbortSignal.timeout(60_000)
+    const signal = maintenanceSignal ? AbortSignal.any([maintenanceSignal, timeout]) : timeout
     return await collectCompleteText(llm.stream({ provider, model, messages: [message], maxTokens: 1024, temperature: 0.3, signal }), signal)
   } catch {
     return null
@@ -49,23 +53,28 @@ export async function compressOldestMemories(
   provider: string | undefined,
   model: string | undefined,
   storyId?: string,
+  maintenanceSignal?: AbortSignal,
 ): Promise<{ merged: string; archived: number } | null> {
-  if (!llm || !provider || !model) return null
+  if (!llm || !provider || !model || maintenanceSignal?.aborted) return null
   // idle 压缩是楼层之外的有来源摘要：plainWorkspace 的 floor 恒为 null，不记 WAL、不回滚。
   const ws = await state.plainWorkspace(cardId, storyId)
   const batch = await ws.memory.oldest(state.config.memory.compressBatch)
   if (batch.length === 0) return null
-  const merged = await compressMemoryBatch(llm, provider, model, batch.map((b) => b.body))
-  if (merged === null) return null
+  const merged = await compressMemoryBatch(llm, provider, model, batch.map((b) => b.body), maintenanceSignal)
+  if (merged === null || maintenanceSignal?.aborted) return null
   // 顺序必须是先落合并条目再归档：若先 archive，write/rebuildIndex 抛错会让整批
   // 记忆从活跃库消失而合并条目没落盘（丢事实，且 registerMemoryMaintenance 清标记后
   // 永不重试）。反过来 write 失败时批次原样保留、下次压缩原样重试；archive 中途失败的
   // 最坏结果只是新（合并条目）旧（未移走的批次残余）并存——下次压缩把残余再合并一次，
   // 有冗余但不丢事实。
-  const archived = await ws.memory.mergeBatch(batch, merged, 'compress')
-  if (archived === 0) return null
-  await rebuildIndex(ws.fs, estimateTokens)
-  return { merged, archived }
+  return withWorkspaceLock(ws.fs.root, async () => {
+    // 等待剧情锁期间仍可取消；开始写入后完成整批提交，不在归档中途截断事务。
+    if (maintenanceSignal?.aborted) return null
+    const archived = await ws.memory.mergeBatch(batch, merged, 'compress')
+    if (archived === 0) return null
+    await rebuildIndex(ws.fs, estimateTokens)
+    return { merged, archived }
+  })
 }
 
 /**
@@ -99,11 +108,12 @@ export function registerMemoryMaintenance(ctx: Context, state: TavernState, llm:
       attempted.set(key, marker)
       let ran = false
       try {
-        await agent.runMaintenance(async () => {
+        await agent.runMaintenance(async (signal) => {
           ran = true
           // agent.options 是创建时的全局默认模型，会话内换模后可能已不可用；按会话实际路由压缩。
           const route = sessionModelRoute(agent)
-          const result = await compressOldestMemories(state, llm, binding.cardId, route.provider, route.model, binding.storyId)
+          // 宿主取消维护必须取消这次辅助流；不能等待迟到的 stop 后继续归档原文。
+          const result = await compressOldestMemories(state, llm, binding.cardId, route.provider, route.model, binding.storyId, signal)
           if (result) state.pendingMemoryCompress.delete(binding.storyId ?? binding.cardId)
           if (!result) ctx.logger.warn('dsh-tavern: 记忆压缩未完成，原文与待处理标记已保留；后续轮次再试')
           if (result) ctx.logger.info(`dsh-tavern: 记忆压缩完成（${binding.cardId}，归档 ${result.archived} 条）`)

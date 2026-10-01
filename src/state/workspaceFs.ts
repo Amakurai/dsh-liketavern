@@ -24,7 +24,7 @@ export const NON_FLOOR = 'non-floor'
 /** 严格 UTF-8 解码器：非法字节序列抛错；ignoreBOM 保留开头的 BOM 字符，确保快照可还原原始字节。 */
 const STRICT_UTF8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true })
 
-/** 资产读取拒绝磁盘链接，避免一个看似安全的相对路径实际指向 WAL、兄弟剧情或工作区外。 */
+/** 工作区读写拒绝磁盘链接，避免安全的相对路径实际指向 WAL、兄弟剧情或工作区外。 */
 export class WorkspaceLinkError extends Error {}
 
 /**
@@ -112,10 +112,19 @@ export class WorkspaceFs {
     }
   }
 
-  async readText(relPath: string, options?: { rejectLinks?: boolean }): Promise<string | null> {
+  /**
+   * 所有直接操作默认拒绝根与内部父路径上的链接。根的祖先可以是宿主安装挂载，
+   * 但一旦进入指定工作区，链接不得改写剧情边界；WAL 整批预检也复用此只读检查。
+   */
+  async assertSafePath(relPath: string): Promise<void> {
+    await this.assertNoLinks(this.abs(relPath))
+  }
+
+  async readText(relPath: string, _options?: { rejectLinks?: boolean }): Promise<string | null> {
     try {
       const abs = this.abs(relPath)
-      if (options?.rejectLinks) await this.assertNoLinks(abs)
+      // rejectLinks 参数保留兼容；直接读取始终检查，普通记忆检索也不能绕过目录链接。
+      await this.assertNoLinks(abs)
       return await readFile(abs, 'utf8')
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
@@ -126,7 +135,9 @@ export class WorkspaceFs {
   /** 判断路径是否存在（文件或目录）。 */
   async exists(relPath: string): Promise<boolean> {
     try {
-      await stat(this.abs(relPath))
+      const abs = this.abs(relPath)
+      await this.assertNoLinks(abs)
+      await stat(abs)
       return true
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
@@ -141,7 +152,9 @@ export class WorkspaceFs {
    */
   async stat(relPath: string): Promise<{ mtimeMs: number; size: number } | null> {
     try {
-      const info = await stat(this.abs(relPath))
+      const abs = this.abs(relPath)
+      await this.assertNoLinks(abs)
+      const info = await stat(abs)
       return { mtimeMs: info.mtimeMs, size: info.size }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
@@ -151,13 +164,17 @@ export class WorkspaceFs {
 
   /** 确保目录存在（递归创建）。目录创建幂等且无内容副作用，不纳入 WAL。 */
   async ensureDir(relPath = ''): Promise<void> {
-    await mkdir(this.abs(relPath), { recursive: true })
+    const abs = this.abs(relPath)
+    await this.assertNoLinks(abs)
+    await mkdir(abs, { recursive: true })
   }
 
   /** 读取二进制内容；不存在返回 null。 */
   async readBytes(relPath: string): Promise<Uint8Array | null> {
     try {
-      return await readFile(this.abs(relPath))
+      const abs = this.abs(relPath)
+      await this.assertNoLinks(abs)
+      return await readFile(abs)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
       throw error
@@ -168,6 +185,7 @@ export class WorkspaceFs {
   async writeText(relPath: string, content: string): Promise<void> {
     await withWorkspaceLock(this.root, async () => {
       const abs = this.abs(relPath)
+      await this.assertNoLinks(abs)
       if (this.wal && this.floor) {
         const path = this.walPath(relPath)
         const bytes = await this.readBytes(relPath)
@@ -185,6 +203,7 @@ export class WorkspaceFs {
   async writeBytes(relPath: string, bytes: Uint8Array): Promise<void> {
     await withWorkspaceLock(this.root, async () => {
       const abs = this.abs(relPath)
+      await this.assertNoLinks(abs)
       if (this.wal && this.floor) {
         const path = this.walPath(relPath)
         const before = await this.readBytes(relPath)
@@ -204,6 +223,7 @@ export class WorkspaceFs {
   async delete(relPath: string): Promise<void> {
     await withWorkspaceLock(this.root, async () => {
       const abs = this.abs(relPath)
+      await this.assertNoLinks(abs)
       if (this.wal && this.floor) {
         const path = this.walPath(relPath)
         const bytes = await this.readBytes(relPath)
@@ -228,7 +248,8 @@ export class WorkspaceFs {
     const recursive = options?.recursive !== false
     const skipDir = options?.skipDir
     const base = this.abs(prefix)
-    if (options?.rejectLinks) await this.assertNoLinks(base)
+    // 遍历途中默认跳过链接资产；prefix 本身却不得是链接，否则会跨界列举整棵剧情。
+    await this.assertNoLinks(base)
     const out: string[] = []
     const walk = async (dir: string, rel: string): Promise<void> => {
       let entries
@@ -264,7 +285,9 @@ export class WorkspaceFs {
     const stats = await Promise.all(
       names.map(async (name) => {
         try {
-          const info = await stat(this.abs(`${base}${name}`))
+          const abs = this.abs(`${base}${name}`)
+          await this.assertNoLinks(abs)
+          const info = await stat(abs)
           return { name, mtimeMs: info.mtimeMs, size: info.size }
         } catch (error) {
           // list 与 stat 之间文件被并发删掉：按不存在处理（与 readText 返回 null 的容错口径一致）。

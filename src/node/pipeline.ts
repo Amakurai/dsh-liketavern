@@ -18,7 +18,7 @@ import { clipToTokenBudget, estimateTokens } from '../core/tokenize.js'
 import type { ChatMessage, WIEngineResult, WorldDelta, WorldInfoEntry } from '../core/types.js'
 import { EMPTY_TIMER_STATE } from '../core/types.js'
 import { isolated } from './isolated.js'
-import { standingFingerprint } from '../core/standingPin.js'
+import { stableFingerprintHash, standingFingerprint } from '../core/standingPin.js'
 import { resolvePresetSampling } from '../core/presetSampling.js'
 import type { PromptLayout } from '../core/promptLayout.js'
 import { DEFAULT_USER_NAME } from '../core/persona.js'
@@ -63,6 +63,8 @@ export interface PipelineInput {
 }
 
 export interface PipelineResult {
+  /** 首次组装的布局偏好；旧持久计划缺省保留原位置，不读取升级后的当前设置。 */
+  cacheFirstLayout?: boolean
   /** 本轮冻结的模板输入；回复处理只使用这份资产与时钟快照。 */
   templateContext?: TemplateContext
   templateReplay?:TemplateReplay
@@ -177,6 +179,10 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
   if (!binding) return null
   if (binding.cardId !== expected.cardId || binding.storyId !== expected.storyId) throw new Error('组装排队期间剧情绑定已变化')
   const activeTurn = state.currentTurns.get(sessionId)
+  const openFloor = state.openFloors.get(sessionId)
+  if (input.mode === 'live' && openFloor && (activeTurn === undefined || openFloor.floor !== `${sessionId}#t${activeTurn}`)) {
+    throw new Error('提示词楼层与当前轮次不一致，请先恢复上一楼层提交')
+  }
   const previous = state.turnPlans.get(sessionId)
   if (input.mode === 'live' && activeTurn !== undefined && previous?.turn === activeTurn) {
     if (previous.cardId !== binding.cardId || previous.storyId !== binding.storyId) throw new Error('生成期间绑定已变化，请在下一轮继续')
@@ -223,8 +229,12 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
   const preset = (binding.presetId ? await state.loadPreset(binding.presetId) : null) ?? defaultPreset()
   const persona = await state.resolvePersona(binding.personaId)
   const userName = persona?.name ?? DEFAULT_USER_NAME
+  // 修订号可能在上述异步读取期间更新；实际已读取资产的内容才是这份快照的身份。
+  // 加入正文指纹后，旧正文与新修订号即使同时出现，也不会挡住下一轮的新正文；图片不参与组装。
+  const { pngBytes: _png, ...promptCard } = card
   const standingKey = standingFingerprint(binding, { name: userName, description: persona?.description ?? '' },
-    state.standingRevTags(binding, { personaLorebookId: persona?.lorebookId ?? null }), input.generationType ?? 'normal')
+    [...state.standingRevTags(binding, { personaLorebookId: persona?.lorebookId ?? null }),
+      `snapshot=${stableFingerprintHash({ card: promptCard, preset, persona })}`], input.generationType ?? 'normal')
   const hostMessages = input.agent?.session.deriveMessages() ?? []
   const hostHistory = hostMessages.flatMap(message => {
     if (message.role === 'tool' || message.role === 'developer') return []
@@ -279,6 +289,7 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
   }
   const lastUserMessage = [...chatMessages].reverse().find((m) => m.role === 'user')?.content ?? ''
   const config = state.config
+  const cacheFirstLayout = config.prompts.cacheFirstLayout
   const sampling = resolvePresetSampling(config.sampling, preset.sampling)
   // 会话内换模不回写 agent.options；窗口与模板 model 取会话最近实际路由。
   const route = input.agent ? sessionModelRoute(input.agent) : {}
@@ -405,6 +416,7 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
     logLines.push(`[turn:tail] 变化层超预算裁掉 ${assembled.deltaDropped} 条（tavern_lore_read source=delta 可补读）`)
   }
   const result: PipelineResult = {
+    cacheFirstLayout,
     templateContext,
     templateReplay:assembled.templateReplay,
     standingKey,
@@ -423,13 +435,15 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
     wiBudget: wi.budget,
   }
   const entry = input.mode === 'live' ? state.openFloors.get(sessionId) : undefined
-  const writable = entry && entry.cardId === binding.cardId && entry.storyId === binding.storyId
+  const writable = entry && turn >= 0 && entry.floor === `${sessionId}#t${turn}`
+    && entry.cardId === binding.cardId && entry.storyId === binding.storyId
   const variablesChanged = assembled.templateVariables && JSON.stringify(assembled.templateVariables) !== JSON.stringify(templateState.variables)
   if (input.mode === 'live' && (variablesChanged || result.templateReplay) && !writable) throw new Error('模板写变量需要在绑定角色后开启新的一轮')
   const persistedGeneration:PreparedTemplateGeneration | undefined = result.templateReplay && writable && binding.storyId ? {
     version:1,status:'prepared',sessionId,cardId:binding.cardId,storyId:binding.storyId,turn,floor:entry.floor,replay:result.templateReplay,
     regexRules:templateContext.regexRules,hasMessageRegex:templateContext.hasMessageRegex,
     plan:{standingKey:result.standingKey,sampling:result.sampling,standing:result.standing,turnContext:result.turnContext,messages:result.messages,
+      cacheFirstLayout:result.cacheFirstLayout,
       ...(result.layout ? {layout:result.layout} : {}),
       history:result.history,logLines:result.logLines,userName:result.userName,personaDescription:result.personaDescription,
       personaLorebookId:result.personaLorebookId,wiBudget:result.wiBudget,assembleLog:result.assembled.log,stats:result.assembled.stats},

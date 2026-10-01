@@ -120,6 +120,8 @@ describe('剧情模板集成', () => {
     await onTurnStart(state,'s2',1)
     await run('live','s2')
     expect((await loadTemplateState(ws.fs)).variables.message).toEqual({injections:1})
+    // 宿主先结束旧轮再回滚；直接撤销 WAL 不会清理运行中的楼层归属。
+    await onTurnEnd(state,'s1')
     await ws.wal.rollbackFloor('s1#t1',ws.fs.root)
     expect(await ws.fs.readText(TEMPLATE_STATE_PATH)).toBeNull()
     await state.saveCharacter(cardId,{characterBook:book('<% setvar("partial",1); throw Error("injection failed") %>')})

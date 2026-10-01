@@ -1,4 +1,4 @@
-/** 自动 MVU 门控集成：真实 0.1.5-rc.2 AgentLoop/Inbox、工厂 Session 和真实剧情 WAL 验证等待、取消与输入恢复。 */
+/** 自动 MVU 门控集成：真实 0.2.0-rc.2 AgentLoop/Inbox、工厂 Session 和真实剧情 WAL 验证等待、取消与输入恢复。 */
 import { mkdtemp, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -22,6 +22,7 @@ import { runTavernPipeline } from '../src/node/pipeline.js'
 import { withWorkspaceLock } from '../src/state/workspaceLock.js'
 import { greetingTurnEvents } from '../src/node/greetingSeed.js'
 import { TAVERN_GREETING_SOURCE } from '../src/core/greetingLog.js'
+import { registerPromptInputTracking } from '../src/node/pendingInputs.js'
 
 vi.mock('../src/node/tools.js', () => ({ registerTavernTools: vi.fn() }))
 vi.mock('../src/node/memoryMaintenance.js', () => ({ registerMemoryMaintenance: vi.fn() }))
@@ -63,6 +64,8 @@ function rejectBeforeModel(observed: string[]): void {
 
 beforeEach(async () => {
   vi.clearAllMocks(); errors.length = 0; interactiveCards = true
+  // 其它用例只探测门控；真实发信用例单独启用生产 pipeline，不能把空 mock 当作成功冻结计划。
+  vi.mocked(runTavernPipeline).mockReset().mockResolvedValue(null)
   root = await mkdtemp(join(tmpdir(), 'tavern-mvu-lifecycle-'))
   state = new TavernState({ root, characters: join(root, 'characters'), lorebooks: join(root, 'lorebooks'), presets: join(root, 'presets'), personas: join(root, 'personas'), regexDir: join(root, 'regex'), sessions: join(root, 'sessions') }, () => resolveConfig({ interactiveCards }))
   await state.init(); cardId = (await state.createCharacter('MVU 工厂角色')).cardId
@@ -71,6 +74,7 @@ beforeEach(async () => {
   ctx = new Context()
   new SessionStore(ctx); new AgentRegistry(ctx); new SessionProjectionRegistry(ctx); new SystemPrompt(ctx, {})
   const loop = new AgentLoop(ctx, AgentLoop.Config({ agents: [] })); agent = await loop.create(SessionId('mvu-factory'))
+  agent.session.append('agent-preset/selected', { agentPreset: 'tavern' })
   ctx.provide('tavern', { state })
   registerHelperMvuLifecycle(ctx)
   ctx.on('session/event', (session, event) => {
@@ -80,6 +84,7 @@ beforeEach(async () => {
       void state.enqueueSessionTask(session.id, () => onTurnEnd(state, session.id, { id: session.id, snapshotEvents: () => closed })).catch(error => errors.push(error))
     }
   })
+  registerPromptInputTracking(ctx, state)
   applyAgent(ctx)
 })
 afterEach(async () => {
@@ -90,6 +95,9 @@ afterEach(async () => {
 
 describe('宿主自动 MVU 门控', () => {
   it('真实模型 stop 后不等浏览器即可 idle；任务持久保留，后续输入等提交完成才调用模型', async () => {
+    const actual = await vi.importActual<typeof import('../src/node/pipeline.js')>('../src/node/pipeline.js')
+    vi.mocked(runTavernPipeline).mockImplementation(actual.runTavernPipeline)
+    ctx.on('agent/error', ({ error }) => errors.push(error))
     let calls = 0
     class FactoryAdapter extends LlmAdapter {
       async *stream(): AsyncIterable<StreamChunk> {

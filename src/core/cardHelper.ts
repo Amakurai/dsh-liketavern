@@ -29,6 +29,7 @@ export function installCardHelper(
 ): () => void {
   type Table = Record<string, unknown>
   const root = window as unknown as Table
+  const runtimeId=root.__dshTavernEventRuntimeId
   const getSnapshot=()=>root.__dshTavernSnapshot as HelperSnapshot|undefined ?? context.snapshot
   const currentId=()=>getSnapshot()?.currentMessageId??context.messageId??0
   const latestId=()=>getSnapshot()?getSnapshot()!.messages.length-1:currentId()
@@ -51,10 +52,11 @@ export function installCardHelper(
   const emit = root.eventEmit as (event: string, ...args: unknown[]) => Promise<void>
   function record(value: unknown): value is Table { return value !== null && typeof value === 'object' && !Array.isArray(value) }
   function showError(error: unknown, fatal=false) {
+    if(!active||root.__dshTavernEventRuntimeId!==runtimeId)return
     const message = String(error instanceof Error ? error.message : error).slice(0, 2000)
     if(active&&context.scriptFrame&&fatal&&root.__dshTavernScriptFailure!==message){
       root.__dshTavernScriptFailure=message
-      parent.postMessage({source,action:'helperScriptDiagnostic',runtimeId:root.__dshTavernEventRuntimeId,error:message},'*')
+      parent.postMessage({source,action:'helperScriptDiagnostic',runtimeId,error:message},'*')
     }
     if (errors.includes(message)) return
     errors.push(message)
@@ -144,7 +146,7 @@ export function installCardHelper(
     if (!active) throw new Error('Card helper runtime has been disposed')
     if (!canSwipe) return unsupported('swipeGreeting (preview or conversation already started)')
     if (!Number.isSafeInteger(index) || index < 0 || index >= greetings.length) throw new Error('Greeting index out of range')
-    parent.postMessage({ source, action: 'swipeGreeting', index }, '*')
+    parent.postMessage({ source, action: 'swipeGreeting', runtimeId, index }, '*')
   }
   async function setChatMessages(messages: unknown) {
     // 整批验证后只发一次请求，拒绝半执行或把正文修改悄悄解释成 swipe。
@@ -227,7 +229,7 @@ export function installCardHelper(
       await emit('message_iframe_render_started', iframeName)
       if (active) await emit('message_iframe_render_ended', iframeName)
     }finally{
-      if(active&&getSnapshot())parent.postMessage({source,action:'helperFrameReady',runtimeId:root.__dshTavernEventRuntimeId},'*')
+      if(active&&getSnapshot())parent.postMessage({source,action:'helperFrameReady',runtimeId},'*')
     }
   }
   const onReady = () => { void ready().catch(showError) }

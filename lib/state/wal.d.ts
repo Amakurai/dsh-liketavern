@@ -33,8 +33,10 @@ export declare const WAL_BINARY_MARK = "binary-base64:";
 export declare const WAL_FLOOR_MARKERS: readonly ["meta.json", "records.jsonl", "rollback-progress.json"];
 export declare class Wal {
     private readonly rootDir;
+    private readonly logFs;
     /** rootDir 为工作区的 state/wal/ 目录；不存在则在首次操作时创建。 */
     constructor(rootDir: string);
+    private assertLogPath;
     /** 开始新的楼层事务；已有楼层必须显式 reopen 或先回滚，不能覆盖原始镜像。 */
     beginFloor(floor: string): Promise<void>;
     /** 在即将写入 path 前记录快照；同层同路径只留首次快照，重复调用忽略。path 统一为正斜杠相对路径。 */

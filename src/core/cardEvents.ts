@@ -5,13 +5,13 @@ export function installCardEvents(shared=false): () => void {
   const root = window as unknown as Record<string, unknown>
   const listeners = new Map<string, Entry[]>()
   let active = true
-  const runtimeId=shared?crypto.randomUUID():''
+  const runtimeId=crypto.randomUUID()
   root.__dshTavernEventRuntimeId=runtimeId
   let serial=0
   const outgoing=new Map<string,{data:unknown[];resolve:()=>void;reject:(error:Error)=>void;timer:ReturnType<typeof setTimeout>}>()
   const incoming=new Map<string,{timer:ReturnType<typeof setTimeout>;execute?:()=>void}>()
   const post=(action:string,value:Record<string,unknown>={})=>parent.postMessage({source:'dsh-tavern-card',runtimeId,action,...value},'*')
-  const report=(error:unknown)=>{const handler=root.__dshTavernReportError;if(typeof handler==='function')handler(error)}
+  const report=(error:unknown)=>{if(!active||root.__dshTavernEventRuntimeId!==runtimeId)return;const handler=root.__dshTavernReportError;if(typeof handler==='function')handler(error)}
   function json(value:unknown):unknown[] {
     const text=JSON.stringify(value,(key,item:unknown)=>{
       if(['__proto__','prototype','constructor'].includes(key)||typeof item==='function'||typeof item==='symbol'||typeof item==='undefined'||typeof item==='bigint'||typeof item==='number'&&!Number.isFinite(item))throw new Error('跨卡面事件只接受普通 JSON 数据')
@@ -110,7 +110,8 @@ export function installCardEvents(shared=false): () => void {
       }
     })().catch(report)
   }
-  if(shared){window.addEventListener('message',receive);post('helperEventConnect')}
+  if(shared)window.addEventListener('message',receive)
+  post('helperEventConnect')
   function eventRemoveListener(event: string, listener: Listener): void {
     if(shared)for(const entry of listeners.get(event)??[])if(entry.listener===listener)post('helperEventUnsubscribe',{listenerId:entry.id})
     const next = (listeners.get(event) ?? []).filter(entry => entry.listener !== listener)
@@ -210,7 +211,8 @@ export function installCardEvents(shared=false): () => void {
   root.TavernHelper = Object.assign(root.TavernHelper ?? {}, api)
   return () => {
     active=false;eventClearAll()
-    if(shared){post('helperEventDisconnect');window.removeEventListener('message',receive)}
+    post('helperEventDisconnect')
+    if(shared)window.removeEventListener('message',receive)
     for(const pending of outgoing.values()){clearTimeout(pending.timer);pending.reject(new Error('卡面事件运行时已关闭'))}
     outgoing.clear()
     for(const pending of incoming.values())clearTimeout(pending.timer)

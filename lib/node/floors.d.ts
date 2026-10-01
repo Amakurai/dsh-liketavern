@@ -60,6 +60,8 @@ export interface ForkResult {
     /** 分支会话的可读标题，如「角色名 · 从第 3 层重生成」。 */
     title: string;
 }
+/** 合法解除已先持久化 skipped；只失效内存来源计划，保留旧失败屏障下一次读取确认磁盘意图。 */
+export declare function discardHostForkAdoptionPlan(state: TavernState, sessionId: string): void;
 /**
  * 宿主原生「在新对话中分支」经 agents.create 复制前缀，但不知道 Tavern 剧情：子会话没有绑定，
  * 渲染退回原生、之后的记忆也无处写。来源已绑定而子会话未绑定时，按插件分支同一套草稿流程准备
@@ -146,10 +148,10 @@ export declare function ensureGreeting({ ctx, state }: FloorDeps, sessionId: str
  * 那会和刚启动的 agent loop 抢 append，打开子会话历史会 Failed to fetch。
  * 会话已有后续楼层时拒绝（swipe 只适用于开场白还是最后一条消息的场景）。
  */
-export declare function swipeGreeting({ ctx, state }: FloorDeps, sessionId: string, index: number): Promise<{
+export declare function swipeGreeting({ ctx, state }: FloorDeps, sessionId: string, index: number, beforePublish?: (binding: SessionBinding) => void): Promise<{
     childSessionId: string;
     index: number;
     title: string;
 }>;
 /** 助手批量正文修改保持完整后续聊天，在草稿回滚派生状态；原会话不变且不自动重生成。 */
-export declare function forkEditedHistory(deps: FloorDeps, sessionId: string, storyId: string, seed: readonly SessionEvent[], fromTurn: number, verify: () => Promise<void>, prepareEdits?: (fs: import('../state/workspaceFs.js').WorkspaceFs, childId: string) => Promise<void>, action?: '编辑聊天消息' | '删除聊天消息'): Promise<ForkResult>;
+export declare function forkEditedHistory(deps: FloorDeps, sessionId: string, storyId: string, seed: readonly SessionEvent[], fromTurn: number, verify: () => Promise<void>, prepareEdits?: (fs: import('../state/workspaceFs.js').WorkspaceFs, childId: string) => Promise<void>, action?: '编辑聊天消息' | '删除聊天消息', beforePublish?: () => void): Promise<ForkResult>;

@@ -42,8 +42,11 @@ function frame(input=snapshot){
   let closed=false
   const close=()=>{if(closed)return;closed=true;run('__dshTavernBridgeCleanup()');endpoint.dispose()}
   cleanups.push(close)
-  const reply=(index:number,extra:Record<string,unknown>)=>send({source:'dsh-tavern-card',action:'helperVariablesResult',requestId:requests[index]!.requestId,...extra})
-  return{run,requests,posts,reply,close,send}
+  const reply=(index:number,extra:Record<string,unknown>)=>send({source:'dsh-tavern-card',action:'helperVariablesResult',requestId:requests[index]!.requestId,runtimeId:requests[index]!.runtimeId,...extra})
+  const runtimeId=scope.__dshTavernEventRuntimeId
+  expect(typeof runtimeId).toBe('string');expect(runtimeId).not.toBe('')
+  expect(posts[0]).toMatchObject({action:'helperEventConnect',runtimeId})
+  return{run,requests,posts,reply,close,send,runtimeId}
 }
 
 it('每个沙箱内置同步 Mvu 读取，无命令解析返回独立副本且不发保存请求',async()=>{
@@ -136,11 +139,11 @@ it('持久提交失败不会虚报完成，保留本地数据供备份，关闭�
 it('变量编辑草稿阻止主动和被动显示重绘，清理后才接受显示锁',async()=>{
   const f=frame();f.run('__dshTavernVariableEditorDirty=()=>true')
   await expect(f.run('refreshOneMessage(0)')).rejects.toThrow(/变量编辑器/)
-  f.send({source:'dsh-tavern-card',action:'helperDisplayGuard',requestId:'dirty',storyId:snapshot.storyId,historyRevision:snapshot.historyRevision})
+  f.send({source:'dsh-tavern-card',action:'helperDisplayGuard',runtimeId:f.runtimeId,requestId:'dirty',storyId:snapshot.storyId,historyRevision:snapshot.historyRevision})
   expect(f.posts.at(-1)).toMatchObject({action:'helperDisplayGuardResult',requestId:'dirty',ok:false})
   expect(f.run('Boolean(window.__dshTavernDisplayLocked)')).toBe(false)
   f.run('__dshTavernVariableEditorDirty=()=>false')
-  f.send({source:'dsh-tavern-card',action:'helperDisplayGuard',requestId:'clean',storyId:snapshot.storyId,historyRevision:snapshot.historyRevision})
+  f.send({source:'dsh-tavern-card',action:'helperDisplayGuard',runtimeId:f.runtimeId,requestId:'clean',storyId:snapshot.storyId,historyRevision:snapshot.historyRevision})
   await settle()
   expect(f.posts.at(-1)).toMatchObject({action:'helperDisplayGuardResult',requestId:'clean',ok:true})
 })

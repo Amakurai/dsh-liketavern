@@ -34,14 +34,18 @@ function LorebooksSectionContent(props: { remote: TavernRemote }) {
   const [creating, setCreating] = useDraftState('lorebooks:creating', false)
   const [newName, setNewName] = useDraftState('lorebooks:newName', '')
   const [createError, setCreateError] = useState<string | null>(null)
+  const creatingPending = useRef(false)
   const toast = useToast()
   const t = useT()
   const createGuard = useDraftGuard(creating && !!newName.trim(), busy)
-  const closeCreate = () => createGuard.request(() => {
-    setCreating(false)
-    setNewName('')
-    setCreateError(null)
-  })
+  const closeCreate = () => {
+    if (creatingPending.current) return
+    createGuard.request(() => {
+      setCreating(false)
+      setNewName('')
+      setCreateError(null)
+    })
+  }
 
   const names = state.status === 'ready' ? state.value.items : []
   const charItems: CharacterSummary[] = chars.state.status === 'ready' ? chars.state.value.items : []
@@ -152,22 +156,27 @@ function LorebooksSectionContent(props: { remote: TavernRemote }) {
   }
 
   const createEmpty = async () => {
+    if (creatingPending.current) return
     const name = newName.trim()
     if (!name) {
       setCreateError(t('lorebooks.nameRequired'))
       return
     }
-    await runAsync(setBusy, setCreateError, async () => {
-      const r = await remote.importLorebook({ name, json: { entries: {} } })
-      if (!r.ok) {
-        setCreateError(r.error.message)
-        return
-      }
-      setCreating(false)
-      setNewName('')
-      reload()
-      await openLibrary(r.value.name)
-    })
+    creatingPending.current = true
+    try {
+      await runAsync(setBusy, setCreateError, async () => {
+        // 新建只允许空缺身份；存储层在同一资产锁内复核，防止同名或迟到列表清空既有正文。
+        const r = await remote.saveLorebook({ name, json: { entries: {} }, expectedRevision: null })
+        if (!r.ok) {
+          setCreateError(r.error.message)
+          return
+        }
+        setCreating(false)
+        setNewName('')
+        reload()
+        await openLibrary(r.value.name)
+      })
+    } finally { creatingPending.current = false }
   }
 
   if (opened) {
@@ -206,7 +215,7 @@ function LorebooksSectionContent(props: { remote: TavernRemote }) {
         <FileBtn accept=".json" disabled={busy || opening !== null} onFile={(file) => void onImportFile(file)}>
           {t('lorebooks.importJson')}
         </FileBtn>
-        <Btn size="md" disabled={busy || opening !== null} onClick={() => { setCreateError(null); setCreating(true) }}>
+        <Btn size="md" disabled={busy || opening !== null} onClick={() => { if (creatingPending.current) return; setCreateError(null); setCreating(true) }}>
           {t('lorebooks.newEmpty')}
         </Btn>
         <Btn

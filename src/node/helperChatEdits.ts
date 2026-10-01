@@ -15,7 +15,8 @@ import {forkEditedHistory} from './floors.js'
 import {editedHistorySeed} from './helperChatSeed.js'
 import {withWorkspaceLock} from '../state/workspaceLock.js'
 import type {TavernState} from './state.js'
-export async function editHelperMessages(ctx:Context,state:TavernState,sessionId:string,messageId:number,request:HelperMessageEditRequest):Promise<HelperMessageEditResult>{
+import type {HelperFrameWriteGuard} from '../core/helperFrame.js'
+export async function editHelperMessages(ctx:Context,state:TavernState,sessionId:string,messageId:number,request:HelperMessageEditRequest,beforeWrite?:HelperFrameWriteGuard):Promise<HelperMessageEditResult>{
   const edits=parseHelperMessageEdits(request.edits),initial=await state.loadBinding(sessionId)
   if(!initial?.storyId||initial.storyId!==request.storyId)throw new Error('消息编辑剧情绑定已改变')
   const ws=await state.storyWorkspace(initial.cardId,initial.storyId)
@@ -33,8 +34,10 @@ export async function editHelperMessages(ctx:Context,state:TavernState,sessionId
     const verify=async()=>{
       const current=await state.loadBinding(sessionId)
       if(current?.storyId!==binding.storyId||current?.cardId!==binding.cardId||source.snapshotEvents().length!==events.length||state.openFloors.has(sessionId))throw new Error('消息编辑期间会话已改变')
+      beforeWrite?.(current)
     }
     const expected=parseHelperMessageEdits(request.before??[]),saved=await loadHelperState(ws.fs)
+    beforeWrite?.(binding)
     const equal=(a:unknown,b:unknown)=>JSON.stringify(helperJson(a))===JSON.stringify(helperJson(b))
     const metadata:{seq:number;data?:Record<string,unknown>;extra?:Record<string,unknown>;pages?:HelperSwipeSet}[]=[]
     const consumed=new Set<number>()
@@ -79,8 +82,8 @@ export async function editHelperMessages(ctx:Context,state:TavernState,sessionId
       const next=apply(saved,history)
       await withHelperStoryWrite(ctx,state,sessionId,messageId,request.storyId,async(fs,begin)=>{
         if(equal(saved.scopes,next.scopes)&&equal(saved.extras,next.extras)&&equal(saved.swipes??{},next.swipes??{}))return
-        await begin();await verify();await saveHelperState(fs,next)
-      })
+        await verify();await begin();await saveHelperState(fs,next)
+      },beforeWrite)
       return {branch:null,snapshot:await getHelperSnapshot(ctx,state,sessionId,messageId)}
     }
     const first=Math.min(...changed.keys(),...deleted);let fromTurn=0
@@ -95,6 +98,6 @@ export async function editHelperMessages(ctx:Context,state:TavernState,sessionId
       const floor=childId+'#t'+turn,wal=new Wal(join(fs.root,'state','wal'))
       await wal.beginFloor(floor);await saveHelperState(new WorkspaceFs(fs.root,wal).withFloor(floor),next);await wal.commitFloor(floor)
     }
-    return {branch:await forkEditedHistory({ctx,state},sessionId,binding.storyId!,seed,fromTurn,verify,prepare,deleted.size&&!changed.size?'删除聊天消息':'编辑聊天消息')}
+    return {branch:await forkEditedHistory({ctx,state},sessionId,binding.storyId!,seed,fromTurn,verify,prepare,deleted.size&&!changed.size?'删除聊天消息':'编辑聊天消息',()=>beforeWrite?.(binding))}
   }))
 }

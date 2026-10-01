@@ -21,6 +21,14 @@ function assertActiveTemplateFormatter(stored:TemplateState,sessionId:string):vo
 }
 
 export async function onTurnStart(state:TavernState,sessionId:string,turn:number,session?:Pick<Session,'id'|'snapshotEvents'>):Promise<void> {
+  // 收口提交失败保留的句柄仍属于旧楼层；新宿主事件不能覆盖它或把旧 WAL 当作新轮写入目标。
+  const open=state.openFloors.get(sessionId)
+  if(open&&open.floor!==`${sessionId}#t${turn}`){
+    // 收口前置校验失败可能仍保留旧轮号；新宿主轮已到来，旧句柄只能重试收口、不能再写。
+    state.currentTurns.delete(sessionId)
+    state.currentSteps.delete(sessionId)
+    throw new Error('上一楼层尚未完成，请先重试结束事件恢复提交，再开启新轮次')
+  }
   state.currentTurns.set(sessionId,turn)
   state.currentSteps.set(sessionId,1)
   let deferred=deferredTurns.get(state)
@@ -65,6 +73,9 @@ export async function onTurnEnd(state:TavernState,sessionId:string,session?:Pick
     deferredTurns.get(state)?.delete(sessionId)
     state.currentTurns.delete(sessionId)
     state.currentSteps.delete(sessionId)
+    // 门控已把未进入模型的原输入放回宿主队列；下次 claim 会按新轮重新发布。
+    state.pendingInputs.delete(sessionId)
+    state.pendingTemplateInputs.delete(sessionId)
     return
   }
   if(!key)return finishTurn(state,sessionId,session)
@@ -88,7 +99,8 @@ async function finishTurn(state:TavernState,sessionId:string,session?:Pick<Sessi
   const ending = [...events].reverse().find(event=>event.type==='turn/start'||event.type==='turn/end')
   // 只有宿主结束帧可能处理持久回复；无事件清理不新增绑定 I/O。已有开层仍由最终提交锁内预检保护。
   if(ending?.type==='turn/end') {
-    const binding=await state.loadBinding(sessionId)
+    // 换绑取消仍在结束原楼层；新剧情的坏模板不能阻止旧 WAL 收口，下一轮会独立校验新剧情。
+    const binding=state.openFloors.get(sessionId)??await state.loadBinding(sessionId)
     if(binding) {
       const ws=await state.storyWorkspace(binding.cardId,binding.storyId)
       await withWorkspaceLock(ws.fs.root,async()=>assertActiveTemplateFormatter(await loadTemplateState(ws.fs),sessionId))

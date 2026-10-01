@@ -53,6 +53,13 @@ export function SettingsSection(props: { remote: TavernRemote }) {
   const receivedSettings = useRef(false)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  /** 各设置组与语言即改共用同步锁，避免 busy 提交前的重复写入及旧语言回包回滚新选择。 */
+  const pending = useRef(false)
+  const run = (fn: () => Promise<void>) => {
+    if (pending.current) return Promise.resolve()
+    pending.current = true
+    return runAsync(setBusy, setError, fn).finally(() => { pending.current = false })
+  }
   const toast = useToast()
   useDraftGuard(draft !== null && baseline !== null && JSON.stringify(draft) !== JSON.stringify(baseline), busy)
 
@@ -75,7 +82,7 @@ export function SettingsSection(props: { remote: TavernRemote }) {
   }, [state])
 
   const save = (patch: Record<string, unknown>, toastText: string) =>
-    runAsync(setBusy, setError, async () => {
+    run(async () => {
       const r = await remote.updateSettings({ patch })
       if (!r.ok) {
         setError(r.error.message)
@@ -99,11 +106,11 @@ export function SettingsSection(props: { remote: TavernRemote }) {
 
   /** 语言切换：先本地生效再持久化；保存失败回退界面语言并提示。 */
   const changeLocale = (locale: 'auto' | 'en' | 'zh') => {
-    if (!draft || locale === draft.locale) return
+    if (!draft || pending.current || locale === draft.locale) return
     const prev = draft.locale
     setDraft({ ...draft, locale })
     setTavernLocale(locale)
-    void runAsync(setBusy, setError, async () => {
+    void run(async () => {
       try {
         const r = await remote.updateSettings({ patch: { locale } })
         if (!r.ok) throw new Error(r.error.message)

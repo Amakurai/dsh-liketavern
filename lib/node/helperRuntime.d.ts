@@ -5,6 +5,7 @@ import type { WorkspaceFs } from '../state/workspaceFs.js';
 import type { TavernState } from './state.js';
 import { type HelperScriptAsset, type HelperScriptBundle } from '../core/helperScripts.js';
 import type { SessionBinding } from '../core/binding.js';
+import type { HelperFrameWriteGuard } from '../core/helperFrame.js';
 export declare function helperHistoryOf(events: readonly SessionEvent[], names: {
     char: string;
     user: string;
@@ -31,6 +32,6 @@ export declare function commitHelperVariables(ctx: Context, state: TavernState, 
     storyId: string;
     historyRevision: string;
     changes: unknown;
-}): Promise<HelperSnapshot>;
+}, beforeWrite?: HelperFrameWriteGuard): Promise<HelperSnapshot>;
 /** 聊天世界书等沙箱剧情写入复用楼层纪律；先验证业务内容，再调用 begin，最后 WAL 提交。 */
-export declare function withHelperStoryWrite<T>(ctx: Context, state: TavernState, sessionId: string, messageId: number, storyId: string, write: (fs: WorkspaceFs, begin: () => Promise<void>) => Promise<T>): Promise<T>;
+export declare function withHelperStoryWrite<T>(ctx: Context, state: TavernState, sessionId: string, messageId: number, storyId: string, write: (fs: WorkspaceFs, begin: () => Promise<void>) => Promise<T>, beforeWrite?: HelperFrameWriteGuard): Promise<T>;

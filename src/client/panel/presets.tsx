@@ -5,7 +5,7 @@
 import { exportStPreset } from '../../core/presetExport.js'
 import { useDraftGuard } from '../drafts.js'
 import { useDraftState } from '../draftPersistence.js'
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { IconDownloadOutlineMedium, IconEditOutlineMedium, IconFolderOpenOutlineMedium, IconListPenOutlineMedium, IconTrashOutlineMedium } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { CardRegexScript, ChatRole, PresetEntry, PromptPreset } from '../../core/types.js'
 import { EMPTY_SESSION_DEFAULTS, type PresetSummary, type TavernRemote } from '../types.js'
@@ -135,6 +135,10 @@ export function PresetsSection(props: { remote: TavernRemote }) {
   const [editingId, setEditingId] = useDraftState<string | null>('presets:editingId', null)
   const [revision, setRevision] = useDraftState<string | null>('presets:revision', null)
   const saving = useRef(false)
+  /** 同批点选可能先于 busy 提交；只让最后的读取更新目标、正文、版本与等待状态。 */
+  const openRequest = useRef(0)
+  const opening = useRef(false)
+  useEffect(() => () => { openRequest.current += 1 }, [])
   const [toDelete, setToDelete] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const toast = useToast()
@@ -145,7 +149,14 @@ export function PresetsSection(props: { remote: TavernRemote }) {
   const q = query.trim().toLowerCase()
   const filtered = q === '' ? items : items.filter((p) => p.name.toLowerCase().includes(q) || p.id.toLowerCase().includes(q))
 
+  const cancelOpening = () => {
+    openRequest.current += 1
+    if (opening.current) { opening.current = false; setBusy(false) }
+  }
+
   const closeEditor = () => {
+    if (saving.current) return
+    cancelOpening()
     setEditing(null)
     setEditingId(null)
     setRevision(null)
@@ -153,19 +164,29 @@ export function PresetsSection(props: { remote: TavernRemote }) {
   }
 
   const open = async (id: string) => {
-    await runAsync(setBusy, setError, async () => {
+    if (saving.current) return
+    const request = ++openRequest.current
+    opening.current = true
+    setBusy(true)
+    setError(null)
+    try {
       const r = await remote.getPreset({ id })
+      if (openRequest.current !== request) return
       if (r.ok) { setEditing(structuredClone(r.value.preset)); setEditingId(id); setRevision(r.value.revision ?? null); setBaseline(JSON.stringify(r.value.preset)) }
       else setError(r.error.message)
-    })
+    } catch (cause) {
+      if (openRequest.current === request) setError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      if (openRequest.current === request) { opening.current = false; setBusy(false) }
+    }
   }
 
   const save = async () => {
-    if (!editing || saving.current) return
+    if (!editing || saving.current || opening.current) return
     if (baseline !== 'null' && !revision) { setError(t('presets.missingRevision')); return }
     saving.current = true
     try { await runAsync(setBusy, setError, async () => {
-      const r = await remote.savePreset({ preset: editing, expectedRevision: baseline === 'null' ? null : revision })
+      const r = await remote.savePreset({ preset: editing, ...(baseline !== 'null' && editingId ? { id: editingId } : {}), expectedRevision: baseline === 'null' ? null : revision })
       if (!r.ok) setError(r.error.message)
       else {
         setEditingId(r.value.id)
@@ -242,6 +263,8 @@ export function PresetsSection(props: { remote: TavernRemote }) {
   }
 
   const createNew = () => {
+    if (saving.current) return
+    cancelOpening()
     const id = `preset-${Date.now().toString(36)}`
     setEditing({ name: t('presets.newPresetName'), identifier: id, entries: [newEntry(100)] })
     setEditingId(null)

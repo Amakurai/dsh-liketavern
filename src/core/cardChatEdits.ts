@@ -3,13 +3,15 @@ import type {HelperSnapshot} from './helperRuntime.js'
 import type {HelperMessageEditResult,HelperMessageTextEdit} from './helperChatEdits.js'
 export function installCardChatEdits(parse:(input:unknown,lookup:(id:number)=>Record<string,unknown>|undefined)=>HelperMessageTextEdit[],json:(input:unknown)=>unknown):()=>void{
   const root=window as unknown as Record<string,unknown>,source='dsh-tavern-card',epoch=crypto.randomUUID()
+  const runtimeId=root.__dshTavernEventRuntimeId
+  if(typeof runtimeId!=='string'||!runtimeId||runtimeId.length>96)throw new Error('消息编辑缺少有效卡面运行时')
   delete root.__dshTavernMessageBranch
   const previous=root.setChatMessages as (input:unknown)=>Promise<void>
   let active=true,busy=false,serial=0,branched=false
   let pending:{id:string;resolve:(result:HelperMessageEditResult)=>void;reject:(error:Error)=>void;timer:ReturnType<typeof setTimeout>}|null=null
   const receive=(event:MessageEvent)=>{
     const value=event.data
-    if(event.source!==parent||!pending||value?.source!==source||value.action!=='helperMessageEditResult'||value.requestId!==pending.id)return
+    if(event.source!==parent||value?.runtimeId!==runtimeId||!pending||value?.source!==source||value.action!=='helperMessageEditResult'||value.requestId!==pending.id)return
     const current=pending;pending=null;clearTimeout(current.timer)
     if(value.ok===true)current.resolve(value.result);else current.reject(new Error(typeof value.error==='string'?value.error:'消息编辑失败'))
   }
@@ -40,10 +42,10 @@ export function installCardChatEdits(parse:(input:unknown,lookup:(id:number)=>Re
       const id=epoch+':'+(++serial)
       const result=await new Promise<HelperMessageEditResult>((resolve,reject)=>{
         const timer=setTimeout(()=>{pending=null;reject(new Error('消息编辑回执超时，请检查会话列表中的编辑分支后再操作'))},30000)
-        pending={id,resolve,reject,timer};parent.postMessage({source,action:'helperMessageEdit',requestId:id,storyId:snapshot.storyId,historyRevision:snapshot.historyRevision,edits,...(expected.length?{before:expected}:{})},'*')
+        pending={id,resolve,reject,timer};parent.postMessage({source,action:'helperMessageEdit',requestId:id,runtimeId,storyId:snapshot.storyId,historyRevision:snapshot.historyRevision,edits,...(expected.length?{before:expected}:{})},'*')
       })
       if(!active)throw new Error('卡面已关闭，请在会话列表查看编辑分支')
-      if(result?.branch){branched=true;root.__dshTavernMessageBranch=result.branch;parent.postMessage({source,action:'helperMessageEditApplied',requestId:id},'*')}
+      if(result?.branch){branched=true;root.__dshTavernMessageBranch=result.branch;parent.postMessage({source,action:'helperMessageEditApplied',requestId:id,runtimeId},'*')}
       return result
       })
     }finally{busy=false}

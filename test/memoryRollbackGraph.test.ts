@@ -46,6 +46,20 @@ it('两个活跃摘要共享中间摘要时完整展开，撤销目标事实并�
   expect(await memory.search('target')).toEqual([])
 })
 
+it.skipIf(process.platform !== 'win32')('Windows 记忆 id 的大小写别名更新归入同一来源，回滚先展开摘要', async () => {
+  await put('target')
+  const scoped = new MemoryStore(fs.withFloor('s#t1'))
+  expect((await scoped.update('TARGET', { body: '本层新增翡翠钥匙事实' }))?.body).toBe('本层新增翡翠钥匙事实')
+  await wal.commitFloor('s#t1')
+  const memory = new MemoryStore(fs)
+  // 工具/面板可以按原 id 读取；Windows 上它与替换后的大写文件名是同一条记忆。
+  await memory.mergeBatch([(await memory.get('target'))!], '钥匙已经找到', 'merge')
+
+  await wal.rollbackFloor('s#t1', root)
+  expect((await memory.list()).map(entry => [entry.id.toLowerCase(), entry.body])).toEqual([['target', 'target']])
+  expect(await memory.search('翡翠钥匙')).toEqual([])
+})
+
 it.each(['memory/archive/kept.md', 'memory/a.md', 'memory/middle.md'])('删除 %s 中断后重启仍能恢复共享来源图', async path => {
   await sharedSummaries()
   const original = WorkspaceFs.prototype.delete

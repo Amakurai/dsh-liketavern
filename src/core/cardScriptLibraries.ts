@@ -5,6 +5,8 @@ export function installCardScriptLibraries(initial:HelperScriptContext,normalize
   type Entry=HelperScriptView&{confirmed:HelperScriptTree[];version:number}
   type Store={bindingRevision:string;libraries:Entry[]}
   const root=window as unknown as Record<string,unknown>,source='dsh-tavern-card'
+  const runtimeId=root.__dshTavernEventRuntimeId
+  if(typeof runtimeId!=='string'||!runtimeId||runtimeId.length>96)throw new Error('脚本库缺少有效卡面运行时')
   const clone=<T>(value:T):T=>JSON.parse(JSON.stringify(value)) as T
   const equal=(a:unknown,b:unknown)=>JSON.stringify(a)===JSON.stringify(b)
   let store=root.__dshTavernScriptLibraries as Store|undefined
@@ -13,7 +15,7 @@ export function installCardScriptLibraries(initial:HelperScriptContext,normalize
   let active=true,serial=0,failure:Error|null=null,running:Promise<void>|null=null,refreshing:Promise<HelperScriptContext>|null=null
   let pending:{id:string;action:string;resolve:(result:Record<string,unknown>)=>void;reject:(error:Error)=>void;timer:ReturnType<typeof setTimeout>}|null=null
   let status='saved',lastReceipt:string|null=null
-  function report(error:unknown){const callback=root.__dshTavernReportError;if(typeof callback==='function')callback(error)}
+  function report(error:unknown){if(!active||root.__dshTavernEventRuntimeId!==runtimeId)return;const callback=root.__dshTavernReportError;if(typeof callback==='function')callback(error)}
   // 脚本保存反馈由设置编辑器展示；不把状态段落插进角色卡自己的布局。
   function setStatus(value:string){status=value}
   function entry(type:HelperScriptType):Entry {
@@ -31,11 +33,11 @@ export function installCardScriptLibraries(initial:HelperScriptContext,normalize
     return new Promise((resolve,reject)=>{
       const timer=setTimeout(()=>{pending=null;reject(new Error('脚本库通信超时；本地修改已保留，请读取或重试确认'))},15000)
       pending={id,action:resultAction,resolve,reject,timer}
-      parent.postMessage({source,action,requestId:id,storyId:initial.storyId,bindingRevision:state.bindingRevision,...payload},'*')
+      parent.postMessage({source,action,requestId:id,runtimeId,storyId:initial.storyId,bindingRevision:state.bindingRevision,...payload},'*')
     })
   }
   function receive(event:MessageEvent){
-    if(event.source!==parent)return
+    if(event.source!==parent||event.data?.runtimeId!==runtimeId)return
     const result=event.data
     if(!pending||!result||result.source!==source||result.action!==pending.action||result.requestId!==pending.id)return
     const current=pending;pending=null;clearTimeout(current.timer)
@@ -58,7 +60,7 @@ export function installCardScriptLibraries(initial:HelperScriptContext,normalize
       }
       setStatus('saved')
       // 宿主收到这条确认后才可重载；本轮 Promise 的微任务仍能先确认保存结果。
-      if(lastReceipt){parent.postMessage({source,action:'helperScriptLibraryApplied',requestId:lastReceipt},'*');lastReceipt=null}
+      if(lastReceipt){parent.postMessage({source,action:'helperScriptLibraryApplied',requestId:lastReceipt,runtimeId},'*');lastReceipt=null}
     }catch(error){failure=error instanceof Error?error:new Error(String(error));if(active){setStatus('error');report(failure)}throw failure}
   }
   function flushHelperScripts(option:{retry?:boolean}={}):Promise<void>{

@@ -35,6 +35,7 @@ declare const generation: z.ZodDiscriminatedUnion<[z.ZodObject<{
         }, z.core.$strict>>;
         logLines: z.ZodArray<z.ZodString>;
         layout: z.ZodOptional<z.ZodType<import("../core/promptLayout.js").PromptLayout, unknown, z.core.$ZodTypeInternals<import("../core/promptLayout.js").PromptLayout, unknown>>>;
+        cacheFirstLayout: z.ZodOptional<z.ZodBoolean>;
         userName: z.ZodString;
         personaDescription: z.ZodString;
         personaLorebookId: z.ZodNullable<z.ZodString>;

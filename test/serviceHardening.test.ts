@@ -620,6 +620,24 @@ describe('宽松传输、严格校验', () => {
     expect(stored?.regexScripts).toHaveLength(1)
   })
 
+  it.skipIf(process.platform !== 'win32')('同一卡片大小写别名经过服务保存仍继承原剧情与宿主 WAL 祖先', async () => {
+    const { cardId } = await importCard(paths.characters, makeCard())
+    const lineage = [{ sessionId: 'ancestor', throughTurn: 3 }]
+    await state.saveBinding(makeBinding({ cardId, walLineage: lineage }))
+    const original = (await state.loadBinding('s1'))!
+    const ws = await state.storyWorkspace(cardId, original.storyId)
+    await ws.memory.write({ body: '当前剧情的真实事实' })
+
+    await expect(service.setSessionBinding({ binding: { ...original, cardId: cardId.toUpperCase(),
+      walLineage: [{ sessionId: 'client-invented', throughTurn: 99 }] } })).resolves.toEqual({ saved: true })
+
+    const saved = (await state.loadBinding('s1'))!
+    expect(saved.cardId).toBe(original.cardId)
+    expect(saved.storyId).toBe(original.storyId)
+    expect(saved.walLineage).toEqual(lineage)
+    expect((await (await state.storyWorkspace(saved.cardId, saved.storyId)).memory.list()).map(entry => entry.body)).toEqual(['当前剧情的真实事实'])
+  })
+
   it('setSessionBinding 经 parseSessionBinding 整体验证，非法抛 invalid-binding 不落盘', async () => {
     const { cardId } = await importCard(paths.characters, makeCard())
     await expect(service.setSessionBinding({ binding: 'nope' })).rejects.toMatchObject({ code: 'invalid-binding' })

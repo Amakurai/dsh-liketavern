@@ -2,6 +2,8 @@
 import type {HelperSnapshot} from './helperRuntime.js'
 export function installCardDisplay():()=>void{
   const root=window as unknown as Record<string,unknown>,source='dsh-tavern-card',epoch=crypto.randomUUID()
+  const runtimeId=root.__dshTavernEventRuntimeId
+  if(typeof runtimeId!=='string'||!runtimeId||runtimeId.length>96)throw new Error('显示刷新缺少有效卡面运行时')
   let active=true,busy=false,serial=0,lock:string|null=null,lockTimer:ReturnType<typeof setTimeout>|undefined
   let preparing:{id:string}|null=null
   let pending:{id:string;resolve:()=>void;reject:(error:Error)=>void;timer:ReturnType<typeof setTimeout>}|null=null
@@ -18,7 +20,7 @@ export function installCardDisplay():()=>void{
   }
   function receive(event:MessageEvent){
     const value=event.data
-    if(event.source!==parent||value?.source!==source)return
+    if(event.source!==parent||value?.runtimeId!==runtimeId||value?.source!==source)return
     if(value.action==='helperDisplayUnlock'&&(value.requestId===lock||value.requestId===preparing?.id)){unlock();return}
     if(value.action==='helperDisplayGuard'&&typeof value.requestId==='string'&&value.requestId.length<=96){
       try{
@@ -39,16 +41,16 @@ export function installCardDisplay():()=>void{
             // 宿主会先做最多 25s 的只读重渲染，再给隐藏新投影最多 60s 完成 ready/事件；
             // 兜底锁必须覆盖整个窗口，正常成功或失败仍由宿主显式 unlock/卸载结束。
             lockTimer=setTimeout(unlock,90000)
-            parent.postMessage({source,action:'helperDisplayGuardResult',requestId:lock,ok:true},'*')
-          }catch(error){if(active&&preparing===preparation)parent.postMessage({source,action:'helperDisplayGuardResult',requestId:preparation.id,ok:false,error:String(error)},'*')}
+            parent.postMessage({source,action:'helperDisplayGuardResult',requestId:lock,runtimeId,ok:true},'*')
+          }catch(error){if(active&&preparing===preparation)parent.postMessage({source,action:'helperDisplayGuardResult',requestId:preparation.id,runtimeId,ok:false,error:String(error)},'*')}
           finally{if(preparing===preparation)preparing=null}
         })()
-      }catch(error){parent.postMessage({source,action:'helperDisplayGuardResult',requestId:value.requestId,ok:false,error:String(error)},'*')}
+      }catch(error){parent.postMessage({source,action:'helperDisplayGuardResult',requestId:value.requestId,runtimeId,ok:false,error:String(error)},'*')}
       return
     }
     if(!pending||value.action!=='helperDisplayResult'||value.requestId!==pending.id)return
     const current=pending;pending=null;clearTimeout(current.timer)
-    if(value.ok===true){current.resolve();parent.postMessage({source,action:'helperDisplayApplied',requestId:current.id},'*')}
+    if(value.ok===true){current.resolve();parent.postMessage({source,action:'helperDisplayApplied',requestId:current.id,runtimeId},'*')}
     else current.reject(new Error(typeof value.error==='string'?value.error:'消息显示刷新失败'))
   }
   async function refresh(ids:number[]|null):Promise<void>{
@@ -64,7 +66,7 @@ export function installCardDisplay():()=>void{
       if(!active||snapshot().storyId!==storyId||snapshot().historyRevision!==historyRevision)throw new Error('等待期间聊天历史已改变')
       check()
       const id=epoch+':'+(++serial)
-      await new Promise<void>((resolve,reject)=>{const timer=setTimeout(()=>{pending=null;reject(new Error('消息显示刷新超时，原显示保留'))},35000);pending={id,resolve,reject,timer};parent.postMessage({source,action:'helperDisplayRefresh',requestId:id,storyId,historyRevision,ids},'*')})
+      await new Promise<void>((resolve,reject)=>{const timer=setTimeout(()=>{pending=null;reject(new Error('消息显示刷新超时，原显示保留'))},35000);pending={id,resolve,reject,timer};parent.postMessage({source,action:'helperDisplayRefresh',requestId:id,runtimeId,storyId,historyRevision,ids},'*')})
     }finally{busy=false}
   }
   async function refreshOneMessage(id:number,element?:unknown):Promise<void>{

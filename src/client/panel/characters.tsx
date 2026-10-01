@@ -369,13 +369,35 @@ function CharactersSectionContent(props: { remote: TavernRemote }) {
   const [toDelete, setToDelete] = useState<CharacterSummary | null>(null)
   const [creating, setCreating] = useDraftState('characters:creating', false)
   const [newName, setNewName] = useDraftState('characters:newName', '')
+  const creatingPending = useRef(false)
+  const [createError, setCreateError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const toast = useToast()
   const createGuard = useDraftGuard(creating && !!newName.trim(), busy)
-  const closeCreate = () => createGuard.request(() => {
-    setCreating(false)
-    setNewName('')
-  })
+  const closeCreate = () => {
+    if (creatingPending.current) return
+    createGuard.request(() => {
+      setCreating(false)
+      setNewName('')
+      setCreateError(null)
+    })
+  }
+
+  /** 创建回调在 React 更新前也必须互斥；等待时保留弹窗和输入，失败反馈留在弹窗内。 */
+  const createCharacter = async () => {
+    const name = newName.trim()
+    if (!name || creatingPending.current) return
+    creatingPending.current = true
+    try { await runAsync(setBusy, setCreateError, async () => {
+      const result = await remote.createCharacter({ name })
+      if (!result.ok) { setCreateError(result.error.message); return }
+      toast.show(t('characters.created', { name: result.value.name }))
+      setCreating(false)
+      setNewName('')
+      reload()
+      setDetailId(result.value.cardId)
+    }) } finally { creatingPending.current = false }
+  }
 
   const doImport = async (name: string, dataBase64: string, importWorldBook: boolean) => {
     setBusy(true)
@@ -495,7 +517,7 @@ function CharactersSectionContent(props: { remote: TavernRemote }) {
           <FileBtn accept=".png,.json" disabled={busy} onFile={(file) => void onImportFile(file)}>
             {t('characters.importFile')}
           </FileBtn>
-          <Btn size="md" disabled={busy} onClick={() => setCreating(true)}>{t('characters.newCard')}</Btn>
+          <Btn size="md" disabled={busy} onClick={() => { if (!creatingPending.current) { setCreateError(null); setCreating(true) } }}>{t('characters.newCard')}</Btn>
         </>}
         <Btn size="md" onClick={reload} disabled={busy}>{t('action.refresh')}</Btn>
         {(items.length >= 5 || query !== '') && (
@@ -613,26 +635,14 @@ function CharactersSectionContent(props: { remote: TavernRemote }) {
               primary
               size="md"
               disabled={busy || !newName.trim()}
-              onClick={() => {
-                void runAsync(setBusy, setError, async () => {
-                  const r = await remote.createCharacter({ name: newName.trim() })
-                  const err = errOf(r)
-                  if (err) setError(err)
-                  else {
-                    toast.show(t('characters.created', { name: r.ok ? r.value.name : newName }))
-                    setCreating(false)
-                    setNewName('')
-                    reload()
-                    if (r.ok) setDetailId(r.value.cardId)
-                  }
-                })
-              }}
+              onClick={() => { void createCharacter() }}
             >
               {t('characters.create.confirm')}
             </Btn>
           </div>
         }
       >
+        <Err message={createError} />
         <Field label={t('characters.create.namePlaceholder')}>
           <input
             className="dsh-tavern-input"

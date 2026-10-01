@@ -246,9 +246,9 @@ export function TavernAssistantNode(props: {
           turn={node.location?.turn?.turn}
           interactiveCards={binding.interactiveCards}
           onMessageBranch={async branch=>{if(!sessions)throw new Error(t('speech.navigationUnavailable'));await openChildSession(sessions,branch.childSessionId,branch.title,sessionId)}}
-          onSwipeGreeting={async (index) => {
+          onSwipeGreeting={async (index, frameLease) => {
             if (!sessions) throw new Error(t('speech.navigationUnavailable'))
-            const r = await remote.swipeGreeting({ sessionId, index })
+            const r = await remote.swipeGreeting({ sessionId, index, ...(frameLease?{frameLease}:{}) })
             if (!r.ok) throw new Error(r.error.message)
             await openChildSession(sessions, r.value.childSessionId, r.value.title, sessionId)
           }}

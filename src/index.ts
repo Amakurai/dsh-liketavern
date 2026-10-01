@@ -15,6 +15,7 @@ import { recordRequestDiagnostics, registerRequestDiagnostics } from './node/req
 import { PRESET_ADAPTER_PROVIDER, PRESET_ADAPTER_SOURCE_PROVIDER, registerPresetAdapter } from './node/presetAdapter.js'
 import { createPresetRequestProjector } from './node/presetRequestProjection.js'
 import { onTurnStart, onTurnEnd } from './node/sessionLifecycle.js'
+import { registerPromptInputTracking } from './node/pendingInputs.js'
 import { registerHelperMvuLifecycle, reserveHelperMvuMaintenance } from './node/helperMvuLifecycle.js'
 import { TavernState } from './node/state.js'
 import { isTavernRuntimeSession } from './node/tavernSession.js'
@@ -23,14 +24,6 @@ import { TYPERT_HOST } from './remote.js'
 export const name = 'dsh-liketavern'
 export { Config }
 export const inject = ['settings', 'sessions', 'agents', 'typert', 'workspaceRegistry', 'agentPresets']
-
-/** 从消息内容块中提取纯文本（非 text 块忽略）。 */
-function messageText(content: readonly { type: string; text?: string }[]): string {
-  return content
-    .filter((b) => b.type === 'text' && typeof b.text === 'string')
-    .map((b) => b.text!)
-    .join('\n')
-}
 
 export async function apply(ctx: Context, config: ReturnType<typeof Config>): Promise<void> {
   const ns = ctx.fiber.entry?.options.id ?? TAVERN_NS
@@ -133,21 +126,12 @@ export async function apply(ctx: Context, config: ReturnType<typeof Config>): Pr
     }
   })
 
-  // 提前捕获尚未入日志的用户输入（供 WI 当轮扫描）。
-  // 同时在第一条真正发出时才写入开场白，避免空白会话被写脏后无法换模式 / 无法新对话。
-  ctx.on('agent/inbox/inserted', ({ agent, message }) => {
+  // 宿主认领后才把尚未入日志的消息交给本轮扫描；未来排队输入不能提前触发设定。
+  registerPromptInputTracking(ctx, state)
+  // 第一条真正发出时写入开场白，避免空白会话被写脏后无法换模式 / 无法新对话。
+  ctx.on('agent/inbox/inserted', ({ agent }) => {
     const session = ctx.sessions.get(agent.id)
     if (!session || !isTavernRuntimeSession(ctx, session)) return
-    const text = messageText(message.content)
-    const hasImage = message.content.some(block => block.type === 'image')
-    if ((text.trim() || hasImage) && !state.pendingTemplateInputs.get(agent.id)?.some(input => input.id === message.id)) {
-      const list = state.pendingInputs.get(agent.id) ?? []
-      list.push(text)
-      state.pendingInputs.set(agent.id, list)
-      const templateInputs=state.pendingTemplateInputs.get(agent.id) ?? []
-      templateInputs.push({id:message.id,text,...(hasImage ? {hasImage:true} : {}),chat:message.source.kind === 'user'})
-      state.pendingTemplateInputs.set(agent.id,templateInputs)
-    }
     void state
       .enqueueSessionTask(agent.id, () => ensureGreeting({ ctx, state }, agent.id))
       .catch((error) => ctx.logger.warn(`dsh-tavern: 写入开场白失败：${String(error)}`))

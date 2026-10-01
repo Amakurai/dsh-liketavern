@@ -15,6 +15,9 @@ export declare const TOOL_OUTPUTS: {
             readonly omitted: {
                 readonly type: "number";
             };
+            readonly truncated: {
+                readonly type: "boolean";
+            };
             readonly results: {
                 readonly type: "array";
                 readonly items: {
@@ -59,6 +62,18 @@ export declare const TOOL_OUTPUTS: {
                         readonly omitted: {
                             readonly type: "boolean";
                         };
+                        readonly metadataTruncated: {
+                            readonly type: "boolean";
+                        };
+                        readonly tagsTruncated: {
+                            readonly type: "boolean";
+                        };
+                        readonly keysTruncated: {
+                            readonly type: "boolean";
+                        };
+                        readonly sourceRangeOmitted: {
+                            readonly type: "boolean";
+                        };
                     };
                 };
             };
@@ -71,6 +86,9 @@ export declare const TOOL_OUTPUTS: {
             };
             readonly hint: {
                 readonly type: "string";
+            };
+            readonly errorTruncated: {
+                readonly type: "boolean";
             };
         };
     };
@@ -87,6 +105,9 @@ export declare const TOOL_OUTPUTS: {
             readonly compressScheduled: {
                 readonly type: "boolean";
             };
+            readonly indexUpdated: {
+                readonly type: "boolean";
+            };
             readonly status: {
                 readonly type: "string";
             };
@@ -95,6 +116,12 @@ export declare const TOOL_OUTPUTS: {
             };
             readonly similarBody: {
                 readonly type: "string";
+            };
+            readonly similarBodyTruncated: {
+                readonly type: "boolean";
+            };
+            readonly tokensUsed: {
+                readonly type: "number";
             };
             readonly ok: {
                 readonly required: true;
@@ -105,6 +132,9 @@ export declare const TOOL_OUTPUTS: {
             };
             readonly hint: {
                 readonly type: "string";
+            };
+            readonly errorTruncated: {
+                readonly type: "boolean";
             };
         };
     };
@@ -118,6 +148,9 @@ export declare const TOOL_OUTPUTS: {
             readonly updated: {
                 readonly type: "string";
             };
+            readonly indexUpdated: {
+                readonly type: "boolean";
+            };
             readonly ok: {
                 readonly required: true;
                 readonly type: "boolean";
@@ -127,6 +160,12 @@ export declare const TOOL_OUTPUTS: {
             };
             readonly hint: {
                 readonly type: "string";
+            };
+            readonly errorTruncated: {
+                readonly type: "boolean";
+            };
+            readonly tokensUsed: {
+                readonly type: "number";
             };
         };
     };
@@ -195,6 +234,12 @@ export declare const TOOL_OUTPUTS: {
                         readonly tokens: {
                             readonly type: "number";
                         };
+                        readonly metadataTruncated: {
+                            readonly type: "boolean";
+                        };
+                        readonly keysOmitted: {
+                            readonly type: "number";
+                        };
                     };
                 };
             };
@@ -208,6 +253,9 @@ export declare const TOOL_OUTPUTS: {
             readonly hint: {
                 readonly type: "string";
             };
+            readonly errorTruncated: {
+                readonly type: "boolean";
+            };
         };
     };
     readonly worldstateUpdate: {
@@ -216,6 +264,9 @@ export declare const TOOL_OUTPUTS: {
         readonly properties: {
             readonly id: {
                 readonly type: "string";
+            };
+            readonly indexUpdated: {
+                readonly type: "boolean";
             };
             readonly ok: {
                 readonly required: true;
@@ -227,14 +278,72 @@ export declare const TOOL_OUTPUTS: {
             readonly hint: {
                 readonly type: "string";
             };
+            readonly errorTruncated: {
+                readonly type: "boolean";
+            };
+            readonly tokensUsed: {
+                readonly type: "number";
+            };
         };
     };
     readonly assetList: {
         readonly type: "object";
         readonly additionalProperties: false;
         readonly properties: {
+            readonly tokensUsed: {
+                readonly type: "number";
+            };
+            readonly truncated: {
+                readonly type: "boolean";
+            };
             readonly index: {
-                readonly type: "json";
+                readonly oneOf: readonly [{
+                    readonly type: "null";
+                }, {
+                    readonly type: "object";
+                    readonly additionalProperties: false;
+                    readonly properties: {
+                        readonly updatedAt: {
+                            readonly type: "string";
+                        };
+                        readonly count: {
+                            readonly type: "number";
+                        };
+                        readonly omitted: {
+                            readonly type: "number";
+                        };
+                        readonly truncated: {
+                            readonly type: "boolean";
+                        };
+                        readonly tokensUsed: {
+                            readonly type: "number";
+                        };
+                        readonly metadataTruncated: {
+                            readonly type: "boolean";
+                        };
+                        readonly files: {
+                            readonly type: "array";
+                            readonly items: {
+                                readonly type: "object";
+                                readonly additionalProperties: false;
+                                readonly properties: {
+                                    readonly path: {
+                                        readonly type: "string";
+                                    };
+                                    readonly summary: {
+                                        readonly type: "string";
+                                    };
+                                    readonly tokens: {
+                                        readonly type: "number";
+                                    };
+                                    readonly truncated: {
+                                        readonly type: "boolean";
+                                    };
+                                };
+                            };
+                        };
+                    };
+                }];
             };
             readonly memory: {
                 readonly type: "object";
@@ -260,6 +369,12 @@ export declare const TOOL_OUTPUTS: {
             readonly filesTruncated: {
                 readonly type: "boolean";
             };
+            readonly filesOmitted: {
+                readonly type: "number";
+            };
+            readonly filesTokensUsed: {
+                readonly type: "number";
+            };
             readonly preset: {
                 readonly type: "object";
                 readonly additionalProperties: false;
@@ -304,6 +419,24 @@ export declare const TOOL_OUTPUTS: {
                     readonly content: {
                         readonly type: "string";
                     };
+                    readonly count: {
+                        readonly type: "number";
+                    };
+                    readonly omitted: {
+                        readonly type: "number";
+                    };
+                    readonly tokensUsed: {
+                        readonly type: "number";
+                    };
+                    readonly metadataTruncated: {
+                        readonly type: "boolean";
+                    };
+                    readonly idOmitted: {
+                        readonly type: "boolean";
+                    };
+                    readonly markerIdOmitted: {
+                        readonly type: "boolean";
+                    };
                     readonly entries: {
                         readonly type: "array";
                         readonly items: {
@@ -340,6 +473,9 @@ export declare const TOOL_OUTPUTS: {
                                 };
                                 readonly preview: {
                                     readonly type: "string";
+                                };
+                                readonly truncated: {
+                                    readonly type: "boolean";
                                 };
                             };
                         };
@@ -356,12 +492,21 @@ export declare const TOOL_OUTPUTS: {
             readonly hint: {
                 readonly type: "string";
             };
+            readonly errorTruncated: {
+                readonly type: "boolean";
+            };
         };
     };
     readonly assetRead: {
         readonly type: "object";
         readonly additionalProperties: false;
         readonly properties: {
+            readonly tokensUsed: {
+                readonly type: "number";
+            };
+            readonly truncated: {
+                readonly type: "boolean";
+            };
             readonly preset: {
                 readonly type: "object";
                 readonly additionalProperties: false;
@@ -406,6 +551,24 @@ export declare const TOOL_OUTPUTS: {
                     readonly content: {
                         readonly type: "string";
                     };
+                    readonly count: {
+                        readonly type: "number";
+                    };
+                    readonly omitted: {
+                        readonly type: "number";
+                    };
+                    readonly tokensUsed: {
+                        readonly type: "number";
+                    };
+                    readonly metadataTruncated: {
+                        readonly type: "boolean";
+                    };
+                    readonly idOmitted: {
+                        readonly type: "boolean";
+                    };
+                    readonly markerIdOmitted: {
+                        readonly type: "boolean";
+                    };
                     readonly entries: {
                         readonly type: "array";
                         readonly items: {
@@ -442,6 +605,9 @@ export declare const TOOL_OUTPUTS: {
                                 };
                                 readonly preview: {
                                     readonly type: "string";
+                                };
+                                readonly truncated: {
+                                    readonly type: "boolean";
                                 };
                             };
                         };
@@ -475,6 +641,9 @@ export declare const TOOL_OUTPUTS: {
             };
             readonly hint: {
                 readonly type: "string";
+            };
+            readonly errorTruncated: {
+                readonly type: "boolean";
             };
         };
     };

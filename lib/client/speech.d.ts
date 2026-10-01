@@ -7,6 +7,10 @@ import type { HelperWorldbookContext, HelperWorldbookRequest, HelperWorldbookRes
 import { type HelperScriptCommit, type HelperScriptContext, type HelperScriptView } from '../core/helperScripts.js';
 import { type HelperMessageEditRequest, type HelperMessageEditResult } from '../core/helperChatEdits.js';
 import { type HelperDisplayLease, type HelperDisplayRequest } from './helperDisplay.js';
+import type { HelperFrameLease } from '../core/helperFrame.js';
+type FrameWrite<T> = T & {
+    frameLease?: HelperFrameLease;
+};
 export declare function SpeechHtmlFrame(props: {
     onFrameReady?: () => void;
     onScriptError?: (message: string) => void;
@@ -20,20 +24,22 @@ export declare function SpeechHtmlFrame(props: {
     readOnly?: boolean;
     /** 候选发布前尝试剧情写入时，立即废弃候选并保留旧卡。 */
     onReadOnlyViolation?: () => void;
-    onMessageEdit?: (request: HelperMessageEditRequest) => Promise<HelperMessageEditResult>;
+    remote?: TavernRemote;
+    helperMessageId?: number;
+    onMessageEdit?: (request: FrameWrite<HelperMessageEditRequest>) => Promise<HelperMessageEditResult>;
     onMessageBranch?: (branch: NonNullable<HelperMessageEditResult['branch']>) => Promise<void>;
-    onSwipeGreeting?: (index: number) => void;
-    onHelperCommit?: (request: {
+    onSwipeGreeting?: (index: number, frameLease?: HelperFrameLease) => void | Promise<void>;
+    onHelperCommit?: (request: FrameWrite<{
         storyId: string;
         historyRevision: string;
         changes: unknown;
-    }) => Promise<HelperSnapshot>;
+    }>) => Promise<HelperSnapshot>;
     onHelperRefresh?: () => Promise<HelperSnapshot>;
-    onScriptCommit?: (request: HelperScriptCommit) => Promise<HelperScriptView>;
+    onScriptCommit?: (request: FrameWrite<HelperScriptCommit>) => Promise<HelperScriptView>;
     onScriptRefresh?: () => Promise<HelperScriptContext>;
-    onWorldbookRequest?: (request: HelperWorldbookRequest) => Promise<HelperWorldbookResult>;
+    onWorldbookRequest?: (request: FrameWrite<HelperWorldbookRequest>) => Promise<HelperWorldbookResult>;
     onWorldbookRefresh?: () => Promise<HelperWorldbookContext>;
-    onWorldbookBind?: (request: HelperWorldbookRebindRequest) => Promise<HelperWorldbookContext>;
+    onWorldbookBind?: (request: FrameWrite<HelperWorldbookRebindRequest>) => Promise<HelperWorldbookContext>;
     helperBinding?: {
         sessionId: string;
         storyId: string;
@@ -61,7 +67,7 @@ interface SpeechBubbleProps {
     /** 会话级交互卡开关（binding.interactiveCards）；null/缺省回落全局设置。 */
     interactiveCards?: boolean | null;
     onMessageBranch?: (branch: NonNullable<HelperMessageEditResult['branch']>) => Promise<void>;
-    onSwipeGreeting?: (index: number) => void | Promise<void>;
+    onSwipeGreeting?: (index: number, frameLease?: HelperFrameLease) => void | Promise<void>;
 }
 /** 按会话和角色卸载旧气泡状态，慢请求的报错不能留到新会话。 */
 export declare function SpeechBubble(props: SpeechBubbleProps): import("react").JSX.Element;

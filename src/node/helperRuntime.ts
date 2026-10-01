@@ -17,6 +17,7 @@ import type { TavernState } from './state.js'
 import { enabledHelperLibraries,type HelperScriptAsset,type HelperScriptBundle } from '../core/helperScripts.js'
 import { hasNativeMvuEntry } from '../core/cardScript.js'
 import type { SessionBinding } from '../core/binding.js'
+import type {HelperFrameWriteGuard} from '../core/helperFrame.js'
 import { characterPromptName } from '../core/characterData.js'
 
 /**
@@ -202,7 +203,7 @@ export async function getHelperScriptBundle(ctx:Context,state:TavernState,sessio
   if(scriptContext.libraries.some(library=>libraries.find(item=>item.target.type===library.type)?.revision!==library.revision))throw new Error('加载期间脚本库已改变，请重新加载')
   return {...base,messageId,snapshot,scriptContext}
 }
-export async function commitHelperVariables(ctx:Context,state:TavernState,request:{sessionId:string;messageId:number;storyId:string;historyRevision:string;changes:unknown}):Promise<HelperSnapshot> {
+export async function commitHelperVariables(ctx:Context,state:TavernState,request:{sessionId:string;messageId:number;storyId:string;historyRevision:string;changes:unknown},beforeWrite?:HelperFrameWriteGuard):Promise<HelperSnapshot> {
   const changes=helperChanges(request.changes)
   const context=await helperContext(ctx,state,request.sessionId,request.messageId)
   // 与消息修订共用剧情 → 绑定锁序；复核到提交期间不能让换绑使旧卡面继续写入。
@@ -223,6 +224,7 @@ export async function commitHelperVariables(ctx:Context,state:TavernState,reques
     applyHelperChanges(await loadHelperScopes(current.ws.fs),mapped)
     const floors=await current.ws.wal.listFloors()
     if(floors.some(item=>item.floor===floor && item.rolledBack)) throw new Error('酒馆助手目标楼层已回滚')
+    beforeWrite?.(current.binding)
     if(floors.some(item=>item.floor===floor)) await current.ws.wal.reopenFloor(floor)
     else await current.ws.wal.beginFloor(floor)
     const scopes=await commitHelperChanges(current.ws.fs.withFloor(floor),mapped)
@@ -233,7 +235,7 @@ export async function commitHelperVariables(ctx:Context,state:TavernState,reques
 }
 
 /** 聊天世界书等沙箱剧情写入复用楼层纪律；先验证业务内容，再调用 begin，最后 WAL 提交。 */
-export async function withHelperStoryWrite<T>(ctx:Context,state:TavernState,sessionId:string,messageId:number,storyId:string,write:(fs:WorkspaceFs,begin:()=>Promise<void>)=>Promise<T>):Promise<T> {
+export async function withHelperStoryWrite<T>(ctx:Context,state:TavernState,sessionId:string,messageId:number,storyId:string,write:(fs:WorkspaceFs,begin:()=>Promise<void>)=>Promise<T>,beforeWrite?:HelperFrameWriteGuard):Promise<T> {
   const first=await helperContext(ctx,state,sessionId,messageId)
   return withWorkspaceLock(first.ws.fs.root,()=>withWorkspaceLock(state.paths.sessions,async()=>{
     const current=await helperContext(ctx,state,sessionId,messageId)
@@ -247,6 +249,7 @@ export async function withHelperStoryWrite<T>(ctx:Context,state:TavernState,sess
       if(started)return
       const floors=await current.ws.wal.listFloors()
       if(floors.some(item=>item.floor===floor&&item.rolledBack))throw new Error('世界书目标楼层已回滚')
+      beforeWrite?.(current.binding)
       if(floors.some(item=>item.floor===floor))await current.ws.wal.reopenFloor(floor)
       else await current.ws.wal.beginFloor(floor)
       started=true

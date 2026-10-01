@@ -3,6 +3,7 @@ import { enabledHelperLibraries,type HelperScript,type HelperScriptButton,type H
 export interface CardScriptContext {script:HelperScript;trees:HelperScriptTree[];libraryType?:HelperScriptType;libraries?:{type:'global'|'preset'|'character';trees:HelperScriptTree[]}[]}
 export function installCardScript(context:CardScriptContext):()=>void {
   const root=window as unknown as Record<string,unknown>
+  const runtimeId=root.__dshTavernEventRuntimeId
   const clone=<T>(value:T):T=>JSON.parse(JSON.stringify(value)) as T
   const {script}=context
   let buttons=clone(script.button.buttons),info=script.info,revision=0,active=true
@@ -14,15 +15,16 @@ export function installCardScript(context:CardScriptContext):()=>void {
     if(jquery?.ready)await jquery.ready
     // 等待此前注册的 DOM ready 回调；脚本中的额外异步初始化仍须由模块顶层 await。
     await new Promise<void>(resolve=>setTimeout(resolve,0))
+    if(!active)throw new Error('脚本已停止')
     const flush=root.flushHelperVariables
     if(typeof flush==='function')await flush()
     if(!active)throw new Error('脚本已停止')
     if(root.__dshTavernScriptFailure)throw new Error(String(root.__dshTavernScriptFailure))
-    parent.postMessage({source:'dsh-tavern-card',action:'helperScriptReady',runtimeId:root.__dshTavernEventRuntimeId,scriptId:script.id,ok:true},'*')
+    parent.postMessage({source:'dsh-tavern-card',action:'helperScriptReady',runtimeId,scriptId:script.id,ok:true},'*')
   }
   root.__dshTavernScriptReady=ready
   const emit=root.eventEmit as (name:string,...args:unknown[])=>Promise<void>
-  const report=(error:unknown)=>{const callback=root.__dshTavernReportError;if(typeof callback==='function')callback(error)}
+  const report=(error:unknown)=>{if(!active||root.__dshTavernEventRuntimeId!==runtimeId)return;const callback=root.__dshTavernReportError;if(typeof callback==='function')callback(error)}
   const getButtonEvent=(name:string)=>`dsh_script_button:${JSON.stringify([script.id,name])}`
   function validate(value:unknown):HelperScriptButton[] {
     if(!Array.isArray(value)||value.length>64)throw new Error('脚本按钮必须是至多 64 项的数组')
@@ -73,7 +75,7 @@ export function installCardScript(context:CardScriptContext):()=>void {
     const snapshot=root.__dshTavernSnapshot as {storyId:string;historyRevision:string}|undefined
     if(!snapshot)throw new Error('选项需要当前剧情快照')
     const items=choices.map(item=>{if(!item||typeof item.label!=='string'||!item.label.trim()||item.label.length>128||typeof item.text!=='string'||!item.text.trim()||item.text.length>1024)throw new Error('选项文本无效');return {label:item.label,text:item.text}})
-    parent.postMessage({source:'dsh-tavern-card',action:'helperScriptChoices',runtimeId:root.__dshTavernEventRuntimeId,storyId:snapshot.storyId,historyRevision:snapshot.historyRevision,messageId,choices:items},'*')
+    parent.postMessage({source:'dsh-tavern-card',action:'helperScriptChoices',runtimeId,storyId:snapshot.storyId,historyRevision:snapshot.historyRevision,messageId,choices:items},'*')
   }
   const api={setMessageChoices,getScriptId:()=>script.id,getScriptName:()=>script.name,getScriptInfo:()=>info,
     replaceScriptInfo:(value:string)=>{if(!active||typeof value!=='string'||value.length>64*1024)throw new Error('脚本说明无效或脚本已停止');persist(script=>({...script,info:value}));info=value},

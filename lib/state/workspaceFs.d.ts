@@ -1,7 +1,7 @@
 import type { Wal } from './wal.js';
 /** 历史占位：旧版曾把非会话写入记入名为 non-floor 的 WAL 单元。现已不再使用。 */
 export declare const NON_FLOOR = "non-floor";
-/** 资产读取拒绝磁盘链接，避免一个看似安全的相对路径实际指向 WAL、兄弟剧情或工作区外。 */
+/** 工作区读写拒绝磁盘链接，避免安全的相对路径实际指向 WAL、兄弟剧情或工作区外。 */
 export declare class WorkspaceLinkError extends Error {
 }
 export declare class WorkspaceFs {
@@ -31,7 +31,12 @@ export declare class WorkspaceFs {
      */
     private walPath;
     private assertNoLinks;
-    readText(relPath: string, options?: {
+    /**
+     * 所有直接操作默认拒绝根与内部父路径上的链接。根的祖先可以是宿主安装挂载，
+     * 但一旦进入指定工作区，链接不得改写剧情边界；WAL 整批预检也复用此只读检查。
+     */
+    assertSafePath(relPath: string): Promise<void>;
+    readText(relPath: string, _options?: {
         rejectLinks?: boolean;
     }): Promise<string | null>;
     /** 判断路径是否存在（文件或目录）。 */

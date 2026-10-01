@@ -129,6 +129,9 @@ export function tavernCardBridgeScript(options: Omit<CardFrameOptions, 'connectH
   shimStorage('localStorage');
   shimStorage('sessionStorage');
   var cfg = ${payload};
+  // 先固定本次运行时，所有业务桥随后捕获它；document.write 重建后旧异步任务不能认领新身份。
+  var cleanupEvents = (${installCardEvents.toString()})(Boolean(cfg.helperSnapshot));
+  var runtimeId = window.__dshTavernEventRuntimeId;
   var cleanupPersistence = cfg.helperSnapshot ? (${installCardPersistence.toString()})(cfg.helperSnapshot,cfg.source,
     ${escapeScriptJson(options.persistenceLabels ?? {saving:'Saving story variables…',saved:'Story variables saved',failed:'Story variable save failed; keep a backup and refresh'})}) : function () {};
   (${installCardVariables.toString()})(${escapeScriptJson(options.variableLabels ?? {
@@ -136,11 +139,10 @@ export function tavernCardBridgeScript(options: Omit<CardFrameOptions, 'connectH
     backup: 'Select backup text', text: 'Card variable backup',
   })}, ${escapeScriptJson(options.variableStyles ?? '')}, cfg.helperSnapshot ? cfg.helperSnapshot.currentMessageId : ${escapeScriptJson(options.helperContext?.messageId ?? 0)}, cfg.helperSnapshot ? cfg.helperSnapshot.messages.length : undefined);
   function post(action, extra) {
-    var msg = { source: cfg.source, action: action };
+    var msg = { source: cfg.source, action: action, runtimeId: runtimeId };
     if (extra) for (var k in extra) if (Object.prototype.hasOwnProperty.call(extra, k)) msg[k] = extra[k];
     try { parent.postMessage(msg, '*'); } catch (e) {}
   }
-  var cleanupEvents = (${installCardEvents.toString()})(Boolean(cfg.helperSnapshot));
   var cleanupHelper = (${installCardHelper.toString()})(Object.assign(${escapeScriptJson(options.helperContext ?? {})},{snapshot:cfg.helperSnapshot}), cfg.greetings, cfg.greetingIndex, cfg.source,
     ${escapeScriptJson(options.helperLabels ?? { diagnostics: "Card script messages", unsupported: "Not available in this card sandbox" })});
   var cleanupMvu=(function(){

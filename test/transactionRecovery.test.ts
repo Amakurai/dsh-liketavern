@@ -8,9 +8,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { LlmRuntime } from '@deepseek-ai/dsh-llm'
+import { Session, SessionId } from '@deepseek-ai/dsh-session'
 import { resolveConfig } from '../src/node/config.js'
 import { TavernState } from '../src/node/state.js'
 import { onTurnStart, onTurnEnd } from '../src/node/sessionLifecycle.js'
+import { runTavernPipeline } from '../src/node/pipeline.js'
 import { compressOldestMemories } from '../src/node/memoryMaintenance.js'
 import { MemoryStore, serializeMemory } from '../src/state/memory.js'
 import { WorldDeltaStore } from '../src/state/worlddelta.js'
@@ -395,6 +397,43 @@ it('摘要遗漏的关键词仍能命中归档来源，去重写入只针对活�
 })
 
 /** 宿主重复 turn/start 不得覆盖已经收口的楼层日志。 */
+it.each(['commit','preflight'] as const)('上一轮收口失败时新轮次不能覆盖开层归属，重试原结束事件后才能继续（阶段=%s）',async failure=>{
+  const {cardId}=await state.createCharacter('提交失败工厂角色')
+  const session=Session.create(SessionId('unfinished'))
+  await state.saveBinding({sessionId:session.id,cardId,presetId:null,personaId:null,lorebookIds:[],characterLorebookId:null,interactiveCards:null,greetingIndex:0,createdAt:new Date(0).toISOString()})
+  const binding=(await state.loadBinding(session.id))!,ws=await state.storyWorkspace(cardId,binding.storyId)
+  session.append('turn/start',{turn:1});await onTurnStart(state,session.id,1,session)
+  await ws.fs.withFloor('unfinished#t1').writeText('journal.md','第一轮事实')
+  session.append('turn/end',{turn:1,reason:{kind:'completed'}})
+  const closed={id:session.id,snapshotEvents:()=>[...session.snapshotEvents()]}
+  const error=new Error('工厂楼层收口失败')
+  if(failure==='commit')vi.spyOn(ws.wal,'commitFloor').mockRejectedValueOnce(error)
+  // 收口现在优先原 openFloor 的剧情；在该剧情的初始模板磁盘预检注入 I/O 失败。
+  else vi.spyOn(ws.fs,'stat').mockRejectedValueOnce(error)
+  await expect(onTurnEnd(state,session.id,closed)).rejects.toThrow('工厂楼层收口失败')
+  expect(state.openFloors.get(session.id)?.floor).toBe('unfinished#t1')
+  await expect(onTurnStart(state,session.id,2)).rejects.toThrow(/上一楼层.*未完成/)
+  expect(state.openFloors.get(session.id)?.floor).toBe('unfinished#t1')
+  expect(state.currentTurns.has(session.id)).toBe(false)
+  expect(state.currentSteps.has(session.id)).toBe(false)
+  expect((await ws.wal.listFloors()).map(floor=>floor.floor)).toEqual(['unfinished#t1'])
+  const walBefore=await ws.fs.readText('state/wal/unfinished_t1/records.jsonl'),templateBefore=await ws.fs.readText('state/template.json')
+  for(const currentTurn of [undefined,2]) {
+    if(currentTurn===undefined)state.currentTurns.delete(session.id)
+    else state.currentTurns.set(session.id,currentTurn)
+    await expect(runTavernPipeline({state,sessionId:session.id,agent:null,mode:'live',historyOverride:[{role:'user',content:'新轮输入'}]}))
+      .rejects.toThrow(/楼层.*轮次.*不一致/)
+  }
+  expect(await ws.fs.readText('state/wal/unfinished_t1/records.jsonl')).toBe(walBefore)
+  expect(await ws.fs.readText('state/template.json')).toBe(templateBefore)
+  await onTurnEnd(state,session.id,closed)
+  expect((await ws.wal.validateFloor('unfinished#t1')).committed).toBe(true)
+  await onTurnStart(state,session.id,2)
+  expect(state.openFloors.get(session.id)?.floor).toBe('unfinished#t2')
+  expect(await ws.fs.readText('journal.md')).toBe('第一轮事实')
+  await onTurnEnd(state,session.id)
+})
+
 it('宿主重用已完成轮号时拒绝开层，原剧情仍能完整回滚',async()=>{
   const {cardId}=await state.createCharacter('工厂角色')
   await state.saveBinding({sessionId:'collision',cardId,presetId:null,personaId:null,lorebookIds:[],characterLorebookId:null,interactiveCards:null,greetingIndex:0,createdAt:new Date(0).toISOString()})

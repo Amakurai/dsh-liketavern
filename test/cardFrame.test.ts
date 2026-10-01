@@ -3,6 +3,7 @@
  */
 import { describe, expect, it, vi } from 'vitest'
 import { createContext, runInContext } from 'node:vm'
+import { webcrypto } from 'node:crypto'
 import { buildCardSrcDoc, CARD_BRIDGE_SOURCE, parseCardBridgeMessage, tavernCardBridgeScript } from '../src/core/cardFrame.js'
 
 /** 可控的浏览器帧队列：测试同一帧合并与卸载取消，不用真实计时器制造竞态。 */
@@ -134,7 +135,7 @@ describe('tavernCardBridgeScript', () => {
     const window = { name: '', addEventListener: vi.fn(), removeEventListener: vi.fn(), location: { reload: vi.fn() } }
     const document = { open: nativeOpen, write: nativeWrite, close: nativeClose, currentScript: null,
       querySelector: () => null, readyState: 'loading', addEventListener: vi.fn(), removeEventListener: vi.fn() }
-    const context = createContext({ window, document, parent: { postMessage: vi.fn() }, TextEncoder, clearTimeout, setTimeout })
+    const context = createContext({crypto:webcrypto, window, document, parent: { postMessage: vi.fn() }, TextEncoder, clearTimeout, setTimeout })
     const script = tavernCardBridgeScript({ greetings: [], greetingIndex: 0 }).replace(/^<script[^>]*>/, '').replace(/<\/script>$/, '')
     for (let n = 0; n < 3; n++) {
       runInContext(script, context)
@@ -154,7 +155,7 @@ describe('tavernCardBridgeScript', () => {
     const window = { addEventListener: vi.fn(), removeEventListener: vi.fn() }
     const document = { open: nativeOpen, write: nativeWrite, close: nativeClose, currentScript: null,
       querySelector: () => null, readyState: 'loading', addEventListener: vi.fn(), removeEventListener: vi.fn() }
-    const context = createContext({ window, document, parent: { postMessage: vi.fn() }, TextEncoder, clearTimeout, setTimeout, queueMicrotask })
+    const context = createContext({crypto:webcrypto, window, document, parent: { postMessage: vi.fn() }, TextEncoder, clearTimeout, setTimeout, queueMicrotask })
     const script = tavernCardBridgeScript({ greetings: [], greetingIndex: 0 }).replace(/^<script[^>]*>/, '').replace(/<\/script>$/, '')
     runInContext(script, context)
     runInContext("document.write('<!DOCTYPE html><html><body>拉取的'); document.write('卡面</body></html>')", context)
@@ -184,7 +185,7 @@ describe('tavernCardBridgeScript', () => {
     const window = { addEventListener: vi.fn(), removeEventListener: vi.fn() }
     const document = { open: vi.fn(), write: nativeWrite, close: vi.fn(), currentScript: { outerHTML: trustedBridge },
       querySelector: () => ({ outerHTML: trustedCsp }), readyState: 'loading', addEventListener: vi.fn(), removeEventListener: vi.fn() }
-    const context = createContext({ window, document, parent: { postMessage: vi.fn() }, TextEncoder, clearTimeout, setTimeout })
+    const context = createContext({crypto:webcrypto, window, document, parent: { postMessage: vi.fn() }, TextEncoder, clearTimeout, setTimeout })
     const script = tavernCardBridgeScript({ greetings: [], greetingIndex: 0 }).replace(/^<script[^>]*>/, '').replace(/<\/script>$/, '')
     runInContext(script, context)
     for (const payload of [
@@ -234,7 +235,7 @@ it('卡片内容折叠后可以缩小，内容扩展仍通知新高度',()=>{
     documentElement:{scrollHeight:560,offsetHeight:560,clientHeight:560},
     body:{get offsetHeight(){return contentHeight},get scrollHeight(){return Math.max(contentHeight,560)},
       querySelectorAll:()=>[{getBoundingClientRect:()=>({bottom:contentHeight})}]}}
-  const context=createContext({window,document,parent:{postMessage},TextEncoder,clearTimeout:vi.fn(),setTimeout:vi.fn()})
+  const context=createContext({crypto:webcrypto,window,document,parent:{postMessage},TextEncoder,clearTimeout:vi.fn(),setTimeout:vi.fn()})
   const script=tavernCardBridgeScript({greetings:[],greetingIndex:0}).replace(/^<script[^>]*>/,'').replace(/<\/script>$/,'')
   runInContext(script,context)
   callbacks.get('DOMContentLoaded')?.();frames.flush()
@@ -255,7 +256,7 @@ it('DOM 变更和资源加载会重测卡片高度，卸载时清理观察器',(
     documentElement:{clientHeight:280},body:{offsetHeight:80,scrollHeight:80,querySelectorAll:()=>[child]}}
   const window={addEventListener:(name:string,fn:()=>void)=>callbacks.set('window:'+name,fn),removeEventListener:vi.fn(),
     requestAnimationFrame:frames.requestAnimationFrame,cancelAnimationFrame:frames.cancelAnimationFrame}
-  const context=createContext({window,document,parent:{postMessage},MutationObserver,TextEncoder,clearTimeout:vi.fn(),setTimeout:vi.fn()})
+  const context=createContext({crypto:webcrypto,window,document,parent:{postMessage},MutationObserver,TextEncoder,clearTimeout:vi.fn(),setTimeout:vi.fn()})
   runInContext(tavernCardBridgeScript({greetings:[],greetingIndex:0}).replace(/^<script[^>]*>/,'').replace(/<\/script>$/,''),context)
   callbacks.get('document:DOMContentLoaded')?.();frames.flush()
   contentHeight=360;mutation();frames.flush()
@@ -278,7 +279,7 @@ it('合并同帧高度信号并在清理时取消待执行测量',()=>{
     documentElement:{clientHeight:280},body:{offsetHeight:120,scrollHeight:120,querySelectorAll:()=>{scans++;return [child]}}}
   const window={addEventListener:(name:string,fn:()=>void)=>callbacks.set('window:'+name,fn),removeEventListener:vi.fn(),
     requestAnimationFrame:frames.requestAnimationFrame,cancelAnimationFrame:frames.cancelAnimationFrame}
-  const context=createContext({window,document,parent:{postMessage},MutationObserver,ResizeObserver,TextEncoder,
+  const context=createContext({crypto:webcrypto,window,document,parent:{postMessage},MutationObserver,ResizeObserver,TextEncoder,
     clearTimeout:vi.fn(),setTimeout:vi.fn()})
   runInContext(tavernCardBridgeScript({greetings:[],greetingIndex:0}).replace(/^<script[^>]*>/,'').replace(/<\/script>$/,''),context)
   callbacks.get('document:DOMContentLoaded')?.()
@@ -306,7 +307,7 @@ it('无动画帧 API 时用可取消的零延时高度任务',()=>{
     readyState:'loading',addEventListener:(name:string,fn:()=>void)=>callbacks.set('document:'+name,fn),removeEventListener:vi.fn(),
     documentElement:{clientHeight:280},body:{offsetHeight:120,scrollHeight:120,querySelectorAll:()=>[]}}
   const window={addEventListener:(name:string,fn:()=>void)=>callbacks.set('window:'+name,fn),removeEventListener:vi.fn()}
-  const context=createContext({window,document,parent:{postMessage},TextEncoder,setTimeout,clearTimeout})
+  const context=createContext({crypto:webcrypto,window,document,parent:{postMessage},TextEncoder,setTimeout,clearTimeout})
   runInContext(tavernCardBridgeScript({greetings:[],greetingIndex:0}).replace(/^<script[^>]*>/,'').replace(/<\/script>$/,''),context)
   callbacks.get('document:DOMContentLoaded')?.();callbacks.get('document:load')?.();callbacks.get('window:load')?.()
   expect(setTimeout.mock.calls.filter(([,delay])=>delay===0)).toHaveLength(1)
@@ -328,7 +329,7 @@ it('折叠日志的隐藏旧矩形不撑高卡片，展开和再次收起立即�
     documentElement:{clientHeight:560},body:{get offsetHeight(){return details.open?530:52},scrollHeight:560,querySelectorAll:()=>[label,content]}}
   const window={addEventListener:(name:string,fn:()=>void)=>callbacks.set(name,fn),removeEventListener:vi.fn(),
     requestAnimationFrame:frames.requestAnimationFrame,cancelAnimationFrame:frames.cancelAnimationFrame}
-  const context=createContext({window,document,parent:{postMessage},TextEncoder,clearTimeout:vi.fn(),setTimeout:vi.fn()})
+  const context=createContext({crypto:webcrypto,window,document,parent:{postMessage},TextEncoder,clearTimeout:vi.fn(),setTimeout:vi.fn()})
   const script=tavernCardBridgeScript({greetings:[],greetingIndex:0}).replace(/^<script[^>]*>/,'').replace(/<\/script>$/,'')
   runInContext(script,context)
   callbacks.get('DOMContentLoaded')?.();frames.flush()
@@ -349,7 +350,7 @@ it('展开内容的外边距不造成内部滚动条，根视口不会阻止再�
     documentElement:root,body:{get offsetHeight(){return contentHeight},get scrollHeight(){return contentHeight},getBoundingClientRect:()=>({bottom:contentHeight+12}),querySelectorAll:()=>[]}}
   const window={addEventListener:(name:string,fn:()=>void)=>callbacks.set(name,fn),removeEventListener:vi.fn(),
     requestAnimationFrame:frames.requestAnimationFrame,cancelAnimationFrame:frames.cancelAnimationFrame}
-  const context=createContext({window,document,parent:{postMessage},TextEncoder,getComputedStyle:()=>({marginBottom:'12px'}),clearTimeout:vi.fn(),setTimeout:vi.fn()})
+  const context=createContext({crypto:webcrypto,window,document,parent:{postMessage},TextEncoder,getComputedStyle:()=>({marginBottom:'12px'}),clearTimeout:vi.fn(),setTimeout:vi.fn()})
   runInContext(tavernCardBridgeScript({greetings:[],greetingIndex:0}).replace(/^<script[^>]*>/,'').replace(/<\/script>$/,''),context)
   callbacks.get('DOMContentLoaded')?.();frames.flush()
   root.clientHeight=224;callbacks.get('toggle')?.();frames.flush()
@@ -369,7 +370,7 @@ it('受限滚动区的后代矩形按容器裁切，允许外溢时仍可扩展'
     documentElement:{clientHeight:280},body:{offsetHeight:120,scrollHeight:120,querySelectorAll:()=>[panel,child]}}
   const window={addEventListener:(name:string,fn:()=>void)=>callbacks.set(name,fn),removeEventListener:vi.fn(),
     requestAnimationFrame:frames.requestAnimationFrame,cancelAnimationFrame:frames.cancelAnimationFrame}
-  const context=createContext({window,document,parent:{postMessage},TextEncoder,getComputedStyle:(node:{style?:unknown})=>node.style??{},clearTimeout:vi.fn(),setTimeout:vi.fn()})
+  const context=createContext({crypto:webcrypto,window,document,parent:{postMessage},TextEncoder,getComputedStyle:(node:{style?:unknown})=>node.style??{},clearTimeout:vi.fn(),setTimeout:vi.fn()})
   runInContext(tavernCardBridgeScript({greetings:[],greetingIndex:0}).replace(/^<script[^>]*>/,'').replace(/<\/script>$/,''),context)
   callbacks.get('DOMContentLoaded')?.();frames.flush()
   panel.style.overflowY='visible';callbacks.get('load')?.();frames.flush()

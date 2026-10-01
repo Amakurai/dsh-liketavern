@@ -2,6 +2,7 @@
 import type { StreamChunk } from '@deepseek-ai/dsh-llm'
 
 export async function collectCompleteText(stream: AsyncIterable<StreamChunk>, signal: AbortSignal): Promise<string> {
+  signal.throwIfAborted()
   const iterator = stream[Symbol.asyncIterator]()
   let text = ''
   let complete = false
@@ -13,7 +14,10 @@ export async function collectCompleteText(stream: AsyncIterable<StreamChunk>, si
   })
   try {
     while (true) {
-      const item = await Promise.race([iterator.next(), aborted])
+      // 先安装取消的拒绝处理，再调用 next；适配器同步抛错也不会留下未处理的取消 Promise。
+      const item = await Promise.race([Promise.resolve().then(() => iterator.next()), aborted])
+      // 缓冲适配器可同步兑现 next；同刻取消时它可能先赢 race，终止帧也须复核信号。
+      signal.throwIfAborted()
       if (item.done) break
       const chunk = item.value
       if (complete) throw new Error('模型在终止帧后继续发送内容')
@@ -30,6 +34,7 @@ export async function collectCompleteText(stream: AsyncIterable<StreamChunk>, si
   } finally {
     signal.removeEventListener('abort', onAbort)
     // 不等待忽略取消信号的适配器关闭，否则超时本身也会挂住维护队列。
-    void iterator.return?.().catch(() => {})
+    // 同步或异步关闭失败都不能遮掉原来的取消/模型故障。
+    void Promise.resolve().then(() => iterator.return?.()).catch(() => {})
   }
 }

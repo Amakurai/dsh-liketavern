@@ -129,14 +129,14 @@ describe('卡面变量结构和 JSON 编辑器',()=>{
     const f=frame()
     const snapshot={storyId:'story',historyRevision:'revision',currentMessageId:2,messages:[{},{},{}],scopes:{'["chat",""]':{hp:1}},writable:true}
     f.run(`window.snapshot=${JSON.stringify(snapshot)};window.__dshTavernSnapshot=snapshot;window.__dshTavernVariables.scopes=JSON.parse(JSON.stringify(snapshot.scopes))`)
-    f.run(`window.stopPersistence=(${installCardPersistence.toString()})(snapshot,'dsh-tavern-card',{saving:'Persistence saving',saved:'Persistence saved',failed:'Persistence failed'})`)
+    f.run(`window.__dshTavernEventRuntimeId=crypto.randomUUID();window.stopPersistence=(${installCardPersistence.toString()})(snapshot,'dsh-tavern-card',{saving:'Persistence saving',saved:'Persistence saved',failed:'Persistence failed'})`)
     try{
       f.run('registerVariableSchema(z.object({hp:z.coerce.number()}),{type:"chat"})')
       f.click('Load JSON');f.edit('{"hp":"5"}');f.click('Save');await f.settle()
       expect(f.postMessage).toHaveBeenCalledTimes(1)
       const request=f.postMessage.mock.calls[0]![0] as Record<string,unknown>
       expect(request).toMatchObject({source:'dsh-tavern-card',action:'helperVariablesCommit',storyId:'story',historyRevision:'revision',changes:[{key:'["chat",""]',before:{hp:1},value:{hp:5}}]})
-      const response={source:'dsh-tavern-card',action:'helperVariablesResult',requestId:request.requestId,ok:success,scopes:{'["chat",""]':{hp:5}},error:'fixture persistence refused'}
+      const response={source:'dsh-tavern-card',action:'helperVariablesResult',requestId:request.requestId,runtimeId:request.runtimeId,ok:success,scopes:{'["chat",""]':{hp:5}},error:'fixture persistence refused'}
       f.reply(response,{});await f.settle();expect(f.run('getHelperPersistenceStatus()')).toBe('pending')
       f.reply(response);await f.settle()
       expect(f.run('getHelperPersistenceStatus()')).toBe(success?'saved':'error')

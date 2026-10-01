@@ -31,8 +31,10 @@ import {parseHelperScriptTrees,type HelperScriptCommit,type HelperScriptContext,
 import {parseHelperMessageEdits,type HelperMessageEditRequest,type HelperMessageEditResult} from '../core/helperChatEdits.js'
 import {prepareHelperDisplay,registerHelperDisplay,waitHelperDisplay,HelperDisplayError,type HelperDisplayLease,type HelperDisplayRequest} from './helperDisplay.js'
 import { emitHelperHostEvent,hasHelperEventAudience } from './helperEventRouter.js'
-import { attachHelperEvents } from './helperEventRouter.js'
+import { attachHelperEvents,attachCardBridgeRuntime } from './helperEventRouter.js'
 import type { RenderedOutput } from '../remote.js'
+import type { HelperFrameLease } from '../core/helperFrame.js'
+type FrameWrite<T> = T & { frameLease?: HelperFrameLease }
 
 function displayFailure(error:unknown,t:ReturnType<typeof useT>):string{
   if(error instanceof HelperDisplayError)return t(error.code==='busy'?'speech.helperDisplayBusy':error.code==='timeout'?'speech.helperDisplayTimeout':'speech.helperDisplayStale')
@@ -51,21 +53,28 @@ export function SpeechHtmlFrame(props: {
   readOnly?: boolean
   /** 候选发布前尝试剧情写入时，立即废弃候选并保留旧卡。 */
   onReadOnlyViolation?:()=>void
-  onMessageEdit?:(request:HelperMessageEditRequest)=>Promise<HelperMessageEditResult>
+  remote?: TavernRemote
+  helperMessageId?: number
+  onMessageEdit?:(request:FrameWrite<HelperMessageEditRequest>)=>Promise<HelperMessageEditResult>
   onMessageBranch?:(branch:NonNullable<HelperMessageEditResult['branch']>)=>Promise<void>
-  onSwipeGreeting?: (index: number) => void
-  onHelperCommit?: (request:{storyId:string;historyRevision:string;changes:unknown})=>Promise<HelperSnapshot>
+  onSwipeGreeting?: (index: number, frameLease?: HelperFrameLease) => void | Promise<void>
+  onHelperCommit?: (request:FrameWrite<{storyId:string;historyRevision:string;changes:unknown}>)=>Promise<HelperSnapshot>
   onHelperRefresh?: ()=>Promise<HelperSnapshot>
-  onScriptCommit?:(request:HelperScriptCommit)=>Promise<HelperScriptView>
+  onScriptCommit?:(request:FrameWrite<HelperScriptCommit>)=>Promise<HelperScriptView>
   onScriptRefresh?:()=>Promise<HelperScriptContext>
-  onWorldbookRequest?:(request:HelperWorldbookRequest)=>Promise<HelperWorldbookResult>
+  onWorldbookRequest?:(request:FrameWrite<HelperWorldbookRequest>)=>Promise<HelperWorldbookResult>
   onWorldbookRefresh?:()=>Promise<HelperWorldbookContext>
-  onWorldbookBind?:(request:HelperWorldbookRebindRequest)=>Promise<HelperWorldbookContext>
+  onWorldbookBind?:(request:FrameWrite<HelperWorldbookRebindRequest>)=>Promise<HelperWorldbookContext>
   helperBinding?: {sessionId:string;storyId:string}
 }) {
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
+  // 私有 frameId、epoch 和服务端令牌仅留在可信宿主，不发送给卡面。
+  const frameId = useRef(crypto.randomUUID()), frameEpoch = useRef(0), retiredRuntimes = useRef(new Set<string>())
+  const fixedFrameIdentity=useRef(JSON.stringify([props.helperBinding?.sessionId,props.helperMessageId]))
   const [frameH, setFrameH] = useState<number | null>(null)
   const t = useT()
+  const remoteRef=useRef(props.remote),rotateReadOnly=useRef<(readOnly:boolean)=>void>(()=>{})
+  remoteRef.current=props.remote
   const [editedBranch,setEditedBranch]=useState<HelperMessageEditResult['branch']>(null)
   const [branchError,setBranchError]=useState<string|null>(null)
   const srcDoc = props.srcDoc
@@ -76,31 +85,79 @@ export function SpeechHtmlFrame(props: {
     setFrameH(null)
   }, [srcDoc])
 
-  useEffect(()=>{
-    if(!props.helperBinding) return
-    const {sessionId,storyId}=props.helperBinding
-    return watchHelperStory(sessionId,storyId,()=>iframeRef.current?.contentWindow?.postMessage({
-      source:'dsh-tavern-card',action:'helperSnapshotInvalidated',storyId,
-    },'*'))
-  },[props.helperBinding?.sessionId,props.helperBinding?.storyId])
-
   useLayoutEffect(() => {
+    const fixedIdentity=JSON.stringify([props.helperBinding?.sessionId,props.helperMessageId])
+    if(fixedFrameIdentity.current!==fixedIdentity){frameId.current=crypto.randomUUID();frameEpoch.current=0;fixedFrameIdentity.current=fixedIdentity}
     let active=true
-    const eventEndpoint=props.helperBinding?attachHelperEvents(props.helperBinding.sessionId,props.helperBinding.storyId,
-      message=>{if(active)iframeRef.current?.contentWindow?.postMessage(message,'*')}):undefined
+    const send=(message:Record<string,unknown>)=>{if(active)iframeRef.current?.contentWindow?.postMessage(message,'*')}
+    const eventEndpoint=props.helperBinding?attachHelperEvents(props.helperBinding.sessionId,props.helperBinding.storyId,send,undefined,retiredRuntimes.current):attachCardBridgeRuntime(send,retiredRuntimes.current)
+    type Registration={frameId:string;runtimeId:string;epoch:number;readOnly:boolean;remote:TavernRemote;token?:string;promise:Promise<HelperFrameLease>}
+    let registration:Registration|undefined
+    const closeRegistration=()=>{
+      const previous=registration;registration=undefined
+      if(previous&&props.helperBinding&&props.helperMessageId!==undefined){
+        void previous.remote.closeHelperFrame({sessionId:props.helperBinding.sessionId,messageId:props.helperMessageId,
+          frameId:previous.frameId,runtimeId:previous.runtimeId,epoch:previous.epoch,
+          ...(previous.token?{token:previous.token}:{})}).catch(()=>{})
+      }
+    }
+    const openRegistration=(runtimeId:string,readOnly=handlers.current.readOnly)=>{
+      const remote=remoteRef.current
+      if(!runtimeId||!remote||!props.helperBinding)return
+      const epoch=++frameEpoch.current
+      const current:Registration={frameId:frameId.current,runtimeId,epoch,readOnly,remote,promise:undefined!}
+      registration=current
+      current.promise=(async()=>{
+        if(props.helperMessageId===undefined||epoch>2147483647)throw new Error(handlers.current.t('speech.helperUnsupported'))
+        const result=await waitHelperDisplay(remote.openHelperFrame({sessionId:props.helperBinding!.sessionId,
+          storyId:props.helperBinding!.storyId,messageId:props.helperMessageId,frameId:current.frameId,runtimeId,epoch,readOnly}),AbortSignal.timeout(5000))
+        if(!result.ok)throw new Error(result.error.message)
+        current.token=result.value.token
+        if(!active||registration!==current||!eventEndpoint.matchesRuntime(runtimeId))throw new Error(handlers.current.t('speech.helperStoryChanged'))
+        return {frameId:current.frameId,runtimeId,epoch,token:result.value.token}
+      })()
+      void current.promise.catch(error=>{if(active&&registration===current&&eventEndpoint.matchesRuntime(runtimeId))handlers.current.onScriptError?.(error instanceof Error?error.message:String(error))})
+    }
+    const leaseFor=async(runtimeId:unknown,write=true):Promise<{frameLease?:HelperFrameLease}>=>{
+      if(!active||!eventEndpoint.matchesRuntime(runtimeId))throw new Error(handlers.current.t('speech.helperStoryChanged'))
+      // 独立预览没有业务 remote；真实卡面必须完成固定会话/消息的服务端登记。
+      if(!remoteRef.current)return {}
+      const current=registration
+      if(!current||current.runtimeId!==runtimeId||write&&current.readOnly)throw new Error(handlers.current.t('speech.helperUnsupported'))
+      const frameLease=await current.promise
+      if(!active||registration!==current||!eventEndpoint.matchesRuntime(runtimeId))throw new Error(handlers.current.t('speech.helperStoryChanged'))
+      return {frameLease}
+    }
+    const rotate=(readOnly:boolean)=>{
+      if(!active||!registration||registration.readOnly===readOnly)return
+      const runtimeId=eventEndpoint.runtimeId();closeRegistration();openRegistration(runtimeId,readOnly)
+    }
+    rotateReadOnly.current=rotate
+    const stopStory=props.helperBinding?watchHelperStory(props.helperBinding.sessionId,props.helperBinding.storyId,
+      ()=>eventEndpoint?.post({action:'helperSnapshotInvalidated',storyId:props.helperBinding!.storyId})):undefined
     let editPending=false,editFinished=false,frameReady=false,legacyHeight=false
     const pending=new Set<string>(),scriptReceipts=new Set<string>(),editReceipts=new Map<string,NonNullable<HelperMessageEditResult['branch']>>()
     let displayBusy=false,guardSerial=0
     const heldGuards=new Set<string>(),guardEpoch=crypto.randomUUID()
     const displayReceipts=new Map<string,{lease:HelperDisplayLease;timer:ReturnType<typeof setTimeout>}>()
-    const guards=new Map<string,{resolve:(lease:HelperDisplayLease)=>void;reject:(error:Error)=>void;timer:ReturnType<typeof setTimeout>}>()
-    const unlock=(id:string)=>iframeRef.current?.contentWindow?.postMessage({source:'dsh-tavern-card',action:'helperDisplayUnlock',requestId:id},'*')
+    const guards=new Map<string,{resolve:(lease:HelperDisplayLease)=>void;reject:(error:Error)=>void;timer:ReturnType<typeof setTimeout>;runtimeId:string}>()
+    const unlock=(id:string,runtimeId:string)=>iframeRef.current?.contentWindow?.postMessage({source:'dsh-tavern-card',action:'helperDisplayUnlock',requestId:id,runtimeId},'*')
+    const resetBusiness=()=>{
+      for(const [id,guard] of guards){clearTimeout(guard.timer);unlock(id,guard.runtimeId);guard.reject(new Error('卡面运行时已重建'))}
+      guards.clear();heldGuards.clear();eventEndpoint?.setHostEventsEnabled(true)
+      for(const receipt of displayReceipts.values()){clearTimeout(receipt.timer);receipt.lease.cancel()}
+      displayReceipts.clear();pending.clear();scriptReceipts.clear();editReceipts.clear()
+      editPending=false;editFinished=false;displayBusy=false;frameReady=false;choiceSerial++
+      clearScriptChoices(choiceOwner);setEditedBranch(null);setBranchError(null)
+    }
     const unregisterGuard=props.registerDisplayGuard?.(request=>{
       if(pending.size||editPending||editFinished||guards.size) return Promise.reject(new Error(handlers.current.t('speech.helperSaveBusy')))
+      const runtimeId=eventEndpoint?.runtimeId()??''
+      if(eventEndpoint&&!eventEndpoint.matchesRuntime(runtimeId))return Promise.reject(new HelperDisplayError('stale'))
       const id='display-guard:'+guardEpoch+':'+(++guardSerial)
       return new Promise<HelperDisplayLease>((resolve,reject)=>{
-        const timer=setTimeout(()=>{guards.delete(id);unlock(id);reject(new Error(handlers.current.t('speech.helperSaveBusy')))},5000)
-        guards.set(id,{resolve,reject,timer});iframeRef.current?.contentWindow?.postMessage({source:'dsh-tavern-card',action:'helperDisplayGuard',requestId:id,storyId:request.storyId,historyRevision:request.historyRevision},'*')
+        const timer=setTimeout(()=>{guards.delete(id);unlock(id,runtimeId);reject(new Error(handlers.current.t('speech.helperSaveBusy')))},5000)
+        guards.set(id,{resolve,reject,timer,runtimeId});iframeRef.current?.contentWindow?.postMessage({source:'dsh-tavern-card',action:'helperDisplayGuard',requestId:id,runtimeId,storyId:request.storyId,historyRevision:request.historyRevision},'*')
       })
     })
     const choiceOwner=Symbol('script-choices')
@@ -108,7 +165,17 @@ export function SpeechHtmlFrame(props: {
     const onMsg = (e: MessageEvent) => {
       if (!iframeRef.current || e.source !== iframeRef.current.contentWindow) return
       const value:unknown=e.data
-      if(helperRecord(value)&&['iframe-resize','resizeIframe'].includes(String(value.type))&&typeof value.height==='number'&&Number.isFinite(value.height)&&value.height>0){legacyHeight=true;setFrameH(Math.min(8000,Math.max(24,Math.ceil(value.height))));return}
+      if(helperRecord(value)&&['iframe-resize','resizeIframe'].includes(String(value.type))&&typeof value.height==='number'&&Number.isFinite(value.height)&&value.height>0){if(!eventEndpoint.matchesRuntime(value.runtimeId))return;legacyHeight=true;setFrameH(Math.min(8000,Math.max(24,Math.ceil(value.height))));return}
+      if(helperRecord(value)&&value.source==='dsh-tavern-card'&&(value.action==='helperEventConnect'||value.action==='helperEventDisconnect')){
+        const before=eventEndpoint?.runtimeId()
+        eventEndpoint?.receive(value)
+        if(before!==eventEndpoint?.runtimeId()){closeRegistration();resetBusiness();handlers.current.onScriptReady?.(false);openRegistration(eventEndpoint.runtimeId())}
+        return
+      }
+      // 高度、剧情业务、读取和应用回执共同固定到当前已连接运行时。
+      if(helperRecord(value)&&value.source==='dsh-tavern-card'&&!eventEndpoint.matchesRuntime(value.runtimeId))return
+      const runtimeId=helperRecord(value)?value.runtimeId:undefined
+      const currentRuntime=()=>active&&eventEndpoint.matchesRuntime(runtimeId)
       if(helperRecord(value)&&value.source==='dsh-tavern-card'&&value.action==='helperFrameReady'){
         if(!frameReady&&eventEndpoint?.matchesRuntime(value.runtimeId)){frameReady=true;handlers.current.onFrameReady?.()}return
       }
@@ -118,14 +185,14 @@ export function SpeechHtmlFrame(props: {
         const responses:Record<string,string>={helperDisplayRefresh:'helperDisplayResult',helperMessageEdit:'helperMessageEditResult',
           helperVariablesCommit:'helperVariablesResult',helperScriptLibraryCommit:'helperScriptLibraryResult',
           helperWorldbookOperation:'helperWorldbookResult',helperWorldbookBind:'helperWorldbookBindResult',helperEventEmit:'helperEventResult'}
-        const resultAction=responses[value.action]
+        const resultAction=value.action==='helperWorldbookOperation'&&value.operation==='get'?undefined:responses[value.action]
         if(resultAction){
           // 候选卡初始化会用 helperEventEmit 报告 iframe render started/ended。它尚未发布，
           // 不能把事件泄露给当前卡面，但也不能返回失败（否则发布后的卡会永久留下错误面板）。
           // 原样回传 args，使兼容事件调用像一次成功的无副作用发送。
           const stagedEvent=value.action==='helperEventEmit'
           iframeRef.current.contentWindow?.postMessage({source:'dsh-tavern-card',action:resultAction,requestId:value.requestId,
-            ...(stagedEvent?{runtimeId:value.runtimeId,args:value.args}:{storyId:value.storyId}),ok:stagedEvent,
+            ...(stagedEvent?{args:value.args}:{storyId:value.storyId}),runtimeId,ok:stagedEvent,
             ...(stagedEvent?{}:{error:handlers.current.t('speech.helperDisplayBusy')})},'*')
           if(!stagedEvent)handlers.current.onReadOnlyViolation?.()
           return
@@ -136,13 +203,13 @@ export function SpeechHtmlFrame(props: {
       if(helperRecord(value)&&value.source==='dsh-tavern-card'&&value.action==='helperDisplayGuardResult'&&typeof value.requestId==='string'){
         const id=value.requestId,guard=guards.get(id);if(!guard)return
         guards.delete(id);clearTimeout(guard.timer)
-        if(value.ok!==true||pending.size||editPending){unlock(id);guard.reject(new Error(typeof value.error==='string'?value.error:handlers.current.t('speech.helperSaveBusy')));return}
+        if(value.ok!==true||pending.size||editPending){unlock(id,guard.runtimeId);guard.reject(new Error(typeof value.error==='string'?value.error:handlers.current.t('speech.helperSaveBusy')));return}
         heldGuards.add(id)
         eventEndpoint?.setHostEventsEnabled(false)
         // 锁从准备重绘时取得，随后还要覆盖最多 25s 服务端重渲染和 60s 隐藏投影发布。
         // 留 5s 调度余量；失败路径仍会主动 cancel，不依赖此兜底过期。
-        let held=true;const expires=Date.now()+90000;const check=()=>{if(!active||!held||Date.now()>expires)throw new Error(handlers.current.t('speech.helperStoryChanged'))}
-        guard.resolve({check,commit:check,cancel:()=>{if(held){held=false;heldGuards.delete(id);if(!heldGuards.size)eventEndpoint?.setHostEventsEnabled(true);unlock(id)}}});return
+        let held=true;const expires=Date.now()+90000;const check=()=>{if(!currentRuntime()||!held||Date.now()>expires)throw new Error(handlers.current.t('speech.helperStoryChanged'))}
+        guard.resolve({check,commit:check,cancel:()=>{if(held){held=false;heldGuards.delete(id);if(!heldGuards.size)eventEndpoint?.setHostEventsEnabled(true);unlock(id,guard.runtimeId)}}});return
       }
       if(helperRecord(value)&&value.source==='dsh-tavern-card'&&value.action==='helperDisplayApplied'&&typeof value.requestId==='string'){
         const receipt=displayReceipts.get(value.requestId);if(!receipt)return
@@ -151,42 +218,42 @@ export function SpeechHtmlFrame(props: {
       }
       if(helperRecord(value)&&value.source==='dsh-tavern-card'&&value.action==='helperDisplayRefresh'&&typeof value.requestId==='string'&&value.requestId.length<=96){
         const target=iframeRef.current.contentWindow,requestId=value.requestId
-        const respond=(data:Record<string,unknown>)=>{if(active&&iframeRef.current?.contentWindow===target)target?.postMessage({source:'dsh-tavern-card',action:'helperDisplayResult',requestId,...data},'*')}
+        const respond=(data:Record<string,unknown>)=>{if(currentRuntime()&&iframeRef.current?.contentWindow===target)target?.postMessage({source:'dsh-tavern-card',action:'helperDisplayResult',requestId,runtimeId,...data},'*')}
         if(displayBusy||pending.size||editPending||editFinished){respond({ok:false,error:handlers.current.t('speech.helperSaveBusy')});return}
         displayBusy=true
         void(async()=>{
           const binding=props.helperBinding
           if(!binding||value.storyId!==binding.storyId||typeof value.historyRevision!=='string'||value.historyRevision.length>96||value.ids!==null&&(!Array.isArray(value.ids)||value.ids.length>4096||value.ids.some(id=>typeof id!=='number'||!Number.isSafeInteger(id)||id<0||id>=4096)))throw new Error(handlers.current.t('speech.helperUnsupported'))
           const snapshot=await waitHelperDisplay(Promise.resolve(handlers.current.onHelperRefresh?.()),AbortSignal.timeout(5000))
-          if(!snapshot||snapshot.storyId!==value.storyId||snapshot.historyRevision!==value.historyRevision||Array.isArray(value.ids)&&value.ids.some(id=>Number(id)>=snapshot.messages.length))throw new Error(handlers.current.t('speech.helperStoryChanged'))
+          if(!currentRuntime()||!snapshot||snapshot.storyId!==value.storyId||snapshot.historyRevision!==value.historyRevision||Array.isArray(value.ids)&&value.ids.some(id=>Number(id)>=snapshot.messages.length))throw new Error(handlers.current.t('speech.helperStoryChanged'))
           const lease=await prepareHelperDisplay(binding.sessionId,{storyId:binding.storyId,historyRevision:value.historyRevision,ids:value.ids as number[]|null})
-          if(!active){lease.cancel();return}
-          const timer=setTimeout(()=>{displayReceipts.delete(requestId);lease.cancel();displayBusy=false},10000)
+          if(!currentRuntime()){lease.cancel();return}
+          const timer=setTimeout(()=>{displayReceipts.delete(requestId);lease.cancel();if(currentRuntime())displayBusy=false},10000)
           displayReceipts.set(requestId,{lease,timer});respond({ok:true})
-        })().catch(error=>{displayBusy=false;respond({ok:false,error:displayFailure(error,handlers.current.t)})})
+        })().catch(error=>{if(currentRuntime())displayBusy=false;respond({ok:false,error:displayFailure(error,handlers.current.t)})})
         return
       }
       if(heldGuards.size&&helperRecord(value)&&value.source==='dsh-tavern-card'&&typeof value.action==='string'){
         const responses:Record<string,string>={helperMessageEdit:'helperMessageEditResult',helperVariablesCommit:'helperVariablesResult',helperSnapshotGet:'helperSnapshotResult',helperScriptLibraryCommit:'helperScriptLibraryResult',helperScriptLibrariesGet:'helperScriptLibrariesResult',helperWorldbookOperation:'helperWorldbookResult',helperWorldbookContextGet:'helperWorldbookContextResult',helperWorldbookBind:'helperWorldbookBindResult'}
         const action=responses[value.action]
-        if(action){iframeRef.current.contentWindow?.postMessage({source:'dsh-tavern-card',action,requestId:value.requestId,ok:false,error:handlers.current.t('speech.helperSaveBusy')},'*');return}
+        if(action){iframeRef.current.contentWindow?.postMessage({source:'dsh-tavern-card',action,requestId:value.requestId,runtimeId,ok:false,error:handlers.current.t('speech.helperSaveBusy')},'*');return}
         if(value.action==='swipeGreeting')return
       }
       if(helperRecord(value)&&value.source==='dsh-tavern-card'&&value.action==='helperMessageEditApplied'&&typeof value.requestId==='string'){
-        const branch=editReceipts.get(value.requestId);if(branch){editReceipts.delete(value.requestId);void handlers.current.onMessageBranch?.(branch).catch(error=>{if(active)setBranchError(String(error))})}return
+        const branch=editReceipts.get(value.requestId);if(branch){editReceipts.delete(value.requestId);void handlers.current.onMessageBranch?.(branch).catch(error=>{if(currentRuntime())setBranchError(String(error))})}return
       }
       if(helperRecord(value)&&value.source==='dsh-tavern-card'&&value.action==='helperMessageEdit'&&typeof value.requestId==='string'&&value.requestId.length<=96){
-        const target=iframeRef.current.contentWindow,requestId=value.requestId
-        const respond=(result:Record<string,unknown>)=>{if(active&&iframeRef.current?.contentWindow===target)target?.postMessage({source:'dsh-tavern-card',action:'helperMessageEditResult',requestId,...result},'*')}
-        if(pending.has(requestId))return
+        const target=iframeRef.current.contentWindow,requestId=value.requestId,requestKey=String(runtimeId)+'\0'+requestId
+        const respond=(result:Record<string,unknown>)=>{if(currentRuntime()&&iframeRef.current?.contentWindow===target)target?.postMessage({source:'dsh-tavern-card',action:'helperMessageEditResult',requestId,runtimeId,...result},'*')}
+        if(pending.has(requestKey))return
         if(pending.size>=4||editPending||editFinished||editReceipts.size){respond({ok:false,error:handlers.current.t('speech.helperSaveBusy')});return}
-        pending.add(requestId);editPending=true
+        pending.add(requestKey);editPending=true
         void(async()=>{
           if(!handlers.current.onMessageEdit||!handlers.current.onMessageBranch||typeof value.storyId!=='string'||value.storyId!==props.helperBinding?.storyId||typeof value.historyRevision!=='string'||value.historyRevision.length>96)throw new Error(handlers.current.t('speech.helperUnsupported'))
-          const result=await handlers.current.onMessageEdit({storyId:value.storyId,historyRevision:value.historyRevision,edits:parseHelperMessageEdits(value.edits),...(value.before===undefined?{}:{before:parseHelperMessageEdits(value.before)})})
-          if(active&&result.branch){editFinished=true;editReceipts.set(requestId,result.branch);setEditedBranch(result.branch);setBranchError(null)}
+          const result=await handlers.current.onMessageEdit({...await leaseFor(runtimeId),storyId:value.storyId,historyRevision:value.historyRevision,edits:parseHelperMessageEdits(value.edits),...(value.before===undefined?{}:{before:parseHelperMessageEdits(value.before)})})
+          if(currentRuntime()&&result.branch){editFinished=true;editReceipts.set(requestId,result.branch);setEditedBranch(result.branch);setBranchError(null)}
           respond({ok:true,result})
-        })().catch(error=>respond({ok:false,error:error instanceof Error?error.message:String(error)})).finally(()=>{editPending=false;pending.delete(requestId)})
+        })().catch(error=>respond({ok:false,error:error instanceof Error?error.message:String(error)})).finally(()=>{if(currentRuntime())editPending=false;pending.delete(requestKey)})
         return
       }
       if(helperRecord(value)&&value.source==='dsh-tavern-card'&&value.action==='helperScriptChoices'&&props.onScriptReady&&props.helperBinding&&eventEndpoint?.matchesRuntime(value.runtimeId)){
@@ -204,11 +271,11 @@ export function SpeechHtmlFrame(props: {
         return
       }
       if(helperRecord(value)&&value.source==='dsh-tavern-card'&&(value.action==='helperScriptLibraryCommit'||value.action==='helperScriptLibrariesGet')&&typeof value.requestId==='string'&&value.requestId.length<=96) {
-        const target=iframeRef.current.contentWindow,requestId=value.requestId,resultAction=value.action==='helperScriptLibraryCommit'?'helperScriptLibraryResult':'helperScriptLibrariesResult'
-        const respond=(result:Record<string,unknown>)=>{if(active&&iframeRef.current?.contentWindow===target)target?.postMessage({source:'dsh-tavern-card',action:resultAction,requestId,...result},'*')}
-        if(pending.has(requestId))return
+        const target=iframeRef.current.contentWindow,requestId=value.requestId,requestKey=String(runtimeId)+'\0'+requestId,resultAction=value.action==='helperScriptLibraryCommit'?'helperScriptLibraryResult':'helperScriptLibrariesResult'
+        const respond=(result:Record<string,unknown>)=>{if(currentRuntime()&&iframeRef.current?.contentWindow===target)target?.postMessage({source:'dsh-tavern-card',action:resultAction,requestId,runtimeId,...result},'*')}
+        if(pending.has(requestKey))return
         if(pending.size>=4){respond({ok:false,error:handlers.current.t('speech.helperSaveBusy')});return}
-        pending.add(requestId)
+        pending.add(requestKey)
         void(async()=>{
           if(typeof value.storyId!=='string'||value.storyId!==props.helperBinding?.storyId)throw new Error(handlers.current.t('speech.helperStoryChanged'))
           if(value.action==='helperScriptLibrariesGet'){
@@ -218,23 +285,23 @@ export function SpeechHtmlFrame(props: {
             respond({ok:true,context});return
           }
           if(!handlers.current.onScriptCommit||typeof value.bindingRevision!=='string'||value.bindingRevision.length>96||typeof value.revision!=='string'||value.revision.length>96||!['global','preset','character'].includes(String(value.type)))throw new Error(handlers.current.t('speech.helperUnsupported'))
-          const library=await handlers.current.onScriptCommit({storyId:value.storyId,bindingRevision:value.bindingRevision,type:value.type as HelperScriptCommit['type'],revision:value.revision,trees:parseHelperScriptTrees(value.trees)})
-          if(active){scriptReceipts.add(requestId);if(scriptReceipts.size>16)scriptReceipts.delete(scriptReceipts.values().next().value!)}
+          const library=await handlers.current.onScriptCommit({...await leaseFor(runtimeId),storyId:value.storyId,bindingRevision:value.bindingRevision,type:value.type as HelperScriptCommit['type'],revision:value.revision,trees:parseHelperScriptTrees(value.trees)})
+          if(currentRuntime()){scriptReceipts.add(requestId);if(scriptReceipts.size>16)scriptReceipts.delete(scriptReceipts.values().next().value!)}
           respond({ok:true,library})
-        })().catch(error=>respond({ok:false,error:error instanceof Error?error.message:String(error)})).finally(()=>pending.delete(requestId))
+        })().catch(error=>respond({ok:false,error:error instanceof Error?error.message:String(error)})).finally(()=>pending.delete(requestKey))
         return
       }
       if(helperRecord(value)&&value.source==='dsh-tavern-card'&&(value.action==='helperWorldbookOperation'||value.action==='helperWorldbookContextGet'||value.action==='helperWorldbookBind')&&typeof value.requestId==='string'&&value.requestId.length<=96){
-        const target=iframeRef.current.contentWindow,requestId=value.requestId,resultAction=value.action==='helperWorldbookOperation'?'helperWorldbookResult':value.action==='helperWorldbookBind'?'helperWorldbookBindResult':'helperWorldbookContextResult'
-        const respond=(result:Record<string,unknown>)=>{if(active&&iframeRef.current?.contentWindow===target)target?.postMessage({source:'dsh-tavern-card',action:resultAction,requestId,...result},'*')}
-        if(pending.has(requestId))return
+        const target=iframeRef.current.contentWindow,requestId=value.requestId,requestKey=String(runtimeId)+'\0'+requestId,resultAction=value.action==='helperWorldbookOperation'?'helperWorldbookResult':value.action==='helperWorldbookBind'?'helperWorldbookBindResult':'helperWorldbookContextResult'
+        const respond=(result:Record<string,unknown>)=>{if(currentRuntime()&&iframeRef.current?.contentWindow===target)target?.postMessage({source:'dsh-tavern-card',action:resultAction,requestId,runtimeId,...result},'*')}
+        if(pending.has(requestKey))return
         if(pending.size>=4){respond({ok:false,error:handlers.current.t('speech.helperSaveBusy')});return}
-        pending.add(requestId)
+        pending.add(requestKey)
         void(async()=>{
           if(typeof value.storyId!=='string'||value.storyId!==props.helperBinding?.storyId)throw new Error(handlers.current.t('speech.helperStoryChanged'))
           if(value.action==='helperWorldbookBind'){
             if(!handlers.current.onWorldbookBind||typeof value.bindingRevision!=='string'||value.bindingRevision.length>96||!['global','character','chat','ensure-chat','settings'].includes(String(value.kind)))throw new Error(handlers.current.t('speech.helperUnsupported'))
-            const context=await handlers.current.onWorldbookBind({storyId:value.storyId,bindingRevision:value.bindingRevision,kind:value.kind as HelperWorldbookRebindRequest['kind'],selection:helperJson(value.selection,16384)})
+            const context=await handlers.current.onWorldbookBind({...await leaseFor(runtimeId),storyId:value.storyId,bindingRevision:value.bindingRevision,kind:value.kind as HelperWorldbookRebindRequest['kind'],selection:helperJson(value.selection,16384)})
             if(context.storyId!==value.storyId)throw new Error(handlers.current.t('speech.helperStoryChanged'))
             respond({ok:true,context});return
           }
@@ -243,21 +310,21 @@ export function SpeechHtmlFrame(props: {
             const context=await handlers.current.onWorldbookRefresh();if(context.storyId!==value.storyId)throw new Error(handlers.current.t('speech.helperStoryChanged'));respond({ok:true,context});return
           }
           if(!handlers.current.onWorldbookRequest||typeof value.bindingRevision!=='string'||value.bindingRevision.length>96||typeof value.name!=='string'||value.name.length>256||!['get','replace','create','upsert','delete'].includes(String(value.operation))||value.revision!==undefined&&(typeof value.revision!=='string'||value.revision.length>96))throw new Error(handlers.current.t('speech.helperUnsupported'))
-          const result=await handlers.current.onWorldbookRequest({storyId:value.storyId,bindingRevision:value.bindingRevision,name:value.name,operation:value.operation as HelperWorldbookRequest['operation'],...(value.revision===undefined?{}:{revision:value.revision as string}),...(value.entries===undefined?{}:{entries:helperJson(value.entries,8*1024*1024)}),...(value.label===undefined?{}:{label:value.label as string})})
+          const result=await handlers.current.onWorldbookRequest({...await leaseFor(runtimeId,value.operation!=='get'),storyId:value.storyId,bindingRevision:value.bindingRevision,name:value.name,operation:value.operation as HelperWorldbookRequest['operation'],...(value.revision===undefined?{}:{revision:value.revision as string}),...(value.entries===undefined?{}:{entries:helperJson(value.entries,8*1024*1024)}),...(value.label===undefined?{}:{label:value.label as string})})
           respond({ok:true,result})
-        })().catch(error=>respond({ok:false,error:error instanceof Error?error.message:String(error)})).finally(()=>pending.delete(requestId))
+        })().catch(error=>respond({ok:false,error:error instanceof Error?error.message:String(error)})).finally(()=>pending.delete(requestKey))
         return
       }
       if(helperRecord(value) && value.source==='dsh-tavern-card' && (value.action==='helperVariablesCommit'||value.action==='helperSnapshotGet')
         && typeof value.requestId==='string' && value.requestId.length<=96) {
-        const target=iframeRef.current.contentWindow, requestId=value.requestId
+        const target=iframeRef.current.contentWindow, requestId=value.requestId,requestKey=String(runtimeId)+'\0'+requestId
         const resultAction=value.action==='helperSnapshotGet'?'helperSnapshotResult':'helperVariablesResult'
         const respond=(result:Record<string,unknown>)=>{
-          if(active && iframeRef.current?.contentWindow===target) target?.postMessage({source:'dsh-tavern-card',action:resultAction,requestId,...result},'*')
+          if(currentRuntime() && iframeRef.current?.contentWindow===target) target?.postMessage({source:'dsh-tavern-card',action:resultAction,requestId,runtimeId,...result},'*')
         }
-        if(pending.has(requestId)) return
+        if(pending.has(requestKey)) return
         if(pending.size>=4) {respond({ok:false,error:handlers.current.t('speech.helperSaveBusy')});return}
-        pending.add(requestId)
+        pending.add(requestKey)
         void (async()=>{
           if(value.action==='helperSnapshotGet') {
             const refresh=handlers.current.onHelperRefresh
@@ -268,23 +335,25 @@ export function SpeechHtmlFrame(props: {
           }
           const commit=handlers.current.onHelperCommit
           if(!commit||typeof value.storyId!=='string'||typeof value.historyRevision!=='string') throw new Error(handlers.current.t('speech.helperUnsupported'))
-          const snapshot=await commit({storyId:value.storyId,historyRevision:value.historyRevision,changes:helperChanges(value.changes)})
+          const snapshot=await commit({...await leaseFor(runtimeId),storyId:value.storyId,historyRevision:value.historyRevision,changes:helperChanges(value.changes)})
           respond({ok:true,scopes:snapshot.scopes})
-        })().catch(error=>respond({ok:false,error:error instanceof Error?error.message:String(error)})).finally(()=>pending.delete(requestId))
+        })().catch(error=>respond({ok:false,error:error instanceof Error?error.message:String(error)})).finally(()=>pending.delete(requestKey))
         return
       }
       const parsed = parseCardBridgeMessage(e.data)
       if (!parsed) return
       if (parsed.action === 'swipeGreeting' && typeof parsed.index === 'number') {
-        handlers.current.onSwipeGreeting?.(parsed.index)
+        void leaseFor(runtimeId).then(lease=>{if(currentRuntime())return handlers.current.onSwipeGreeting?.(parsed.index!,lease.frameLease)}).catch(error=>{if(currentRuntime())setBranchError(error instanceof Error?error.message:String(error))})
       }
       if (!legacyHeight && parsed.action === 'resize' && typeof parsed.height === 'number' && Number.isFinite(parsed.height)) {
         setFrameH(Math.min(8000, Math.max(24, Math.ceil(parsed.height))))
       }
     }
     window.addEventListener('message', onMsg)
-    return () => {active=false;clearScriptChoices(choiceOwner);unregisterGuard?.();for(const [id,guard] of guards){clearTimeout(guard.timer);unlock(id);guard.reject(new Error('卡面已关闭'))}for(const receipt of displayReceipts.values()){clearTimeout(receipt.timer);receipt.lease.cancel()}eventEndpoint?.dispose();window.removeEventListener('message', onMsg)}
-  }, [srcDoc,props.helperBinding?.sessionId,props.helperBinding?.storyId])
+    return () => {active=false;if(rotateReadOnly.current===rotate)rotateReadOnly.current=()=>{};closeRegistration();stopStory?.();clearScriptChoices(choiceOwner);unregisterGuard?.();for(const [id,guard] of guards){clearTimeout(guard.timer);unlock(id,guard.runtimeId);guard.reject(new Error('卡面已关闭'))}for(const receipt of displayReceipts.values()){clearTimeout(receipt.timer);receipt.lease.cancel()}eventEndpoint?.dispose();window.removeEventListener('message', onMsg)}
+  }, [srcDoc,props.helperBinding?.sessionId,props.helperBinding?.storyId,props.helperMessageId])
+
+  useLayoutEffect(()=>{rotateReadOnly.current(Boolean(props.readOnly))},[props.readOnly])
 
   const frameStyle =
     frameH != null
@@ -332,7 +401,7 @@ interface SpeechBubbleProps {
   /** 会话级交互卡开关（binding.interactiveCards）；null/缺省回落全局设置。 */
   interactiveCards?: boolean | null
   onMessageBranch?:(branch:NonNullable<HelperMessageEditResult['branch']>)=>Promise<void>
-  onSwipeGreeting?: (index: number) => void | Promise<void>
+  onSwipeGreeting?: (index: number, frameLease?: HelperFrameLease) => void | Promise<void>
 }
 
 /** 按会话和角色卸载旧气泡状态，慢请求的报错不能留到新会话。 */
@@ -350,7 +419,7 @@ interface DisplayProjectionProps extends SpeechBubbleProps {
   onComplete: () => void
   onFailure: (error: unknown) => void
   onPublished?: () => void
-  onSwipe: (index: number) => void
+  onSwipe: (index: number, frameLease?: HelperFrameLease) => void | Promise<void>
 }
 
 /**
@@ -456,6 +525,8 @@ function DisplayProjection(props: DisplayProjectionProps) {
       compact={Boolean(!streaming&&value.parts) && !fullDocumentCover}
       readOnly={props.staging||props.refreshing}
       onReadOnlyViolation={props.staging?()=>props.onFailure(new HelperDisplayError('stale')):undefined}
+      remote={value.helper?remote:undefined}
+      helperMessageId={props.messageId}
       helperBinding={value.helper ? { sessionId, storyId: value.helper.storyId } : undefined}
       onSwipeGreeting={props.onSwipe}
       onMessageBranch={props.onMessageBranch}
@@ -657,14 +728,14 @@ function SpeechBubbleSession(props: SpeechBubbleProps) {
   const toast = useToast()
   const swipeBusy = useRef(false)
   const [swipeError, setSwipeError] = useState<string | null>(null)
-  const swipeGreeting = async (index: number) => {
+  const swipeGreeting = async (index: number, frameLease?: HelperFrameLease) => {
     if (swipeBusy.current) return
     if (!canSwipe) { setSwipeError(t('speech.swipeStarted')); return }
     if (!onSwipeGreeting) { setSwipeError(t('speech.navigationUnavailable')); return }
     swipeBusy.current = true
     setSwipeError(null)
     try {
-      await onSwipeGreeting(index)
+      await onSwipeGreeting(index,frameLease)
     } catch (cause) {
       setSwipeError(cause instanceof Error ? cause.message : String(cause))
     } finally {
@@ -715,7 +786,7 @@ function SpeechBubbleSession(props: SpeechBubbleProps) {
       isCurrent={()=>!stageRef.current&&renderLatest.current.status==='ready'&&renderLatest.current.value===value}
       onComplete={()=>{}}
       onFailure={error=>setLifecycleError(displayFailure(error,t))}
-      onSwipe={index=>void swipeGreeting(index)}/>)
+      onSwipe={swipeGreeting}/>)
   }else if(rendered.state.status!=='ready'){
     projectionNodes.push(!streaming&&rendered.state.status==='loading'&&failedProjection.current!==projectionIdentity
       ? <Skeleton key="loading" height={48}/>
@@ -730,7 +801,7 @@ function SpeechBubbleSession(props: SpeechBubbleProps) {
       onComplete={()=>pending?.ready()}
       onFailure={error=>pending?.abort(error,true)}
       onPublished={()=>pending?.published()}
-      onSwipe={index=>void swipeGreeting(index)}/>)
+      onSwipe={swipeGreeting}/>)
   }
 
   return (

@@ -22,7 +22,7 @@ function frame(initial=work()){
   const endpoint=attachHelperEvents('runner-session',initial.storyId,message=>queueMicrotask(()=>send(message)),{current:()=>valid,snapshot:()=>current.snapshot})
   const parent={postMessage:(message:Record<string,unknown>)=>{
     const value=structuredClone(message);posts.push(value)
-    if(value.action==='helperSnapshotGet')queueMicrotask(()=>send({source:'dsh-tavern-card',action:'helperSnapshotResult',requestId:value.requestId,ok:true,snapshot:refreshed??current.snapshot}))
+    if(value.action==='helperSnapshotGet')queueMicrotask(()=>send({source:'dsh-tavern-card',action:'helperSnapshotResult',requestId:value.requestId,runtimeId:value.runtimeId,ok:true,snapshot:refreshed??current.snapshot}))
     else if(String(value.action).startsWith('helperEvent'))queueMicrotask(()=>endpoint.receive(value))
   }}
   const scope:Record<string,unknown>={parent,TextEncoder,crypto:webcrypto,queueMicrotask,setTimeout,clearTimeout,
@@ -35,6 +35,10 @@ function frame(initial=work()){
   run('window.YAML={parse:text=>JSON.parse(__parseYaml(text))}')
   run(tavernCardBridgeScript({greetings:[],greetingIndex:0,helperSnapshot:initial.snapshot,mvuRunner:true}).replace(/^<script[^>]*>/,'').replace(/<\/script>$/,''))
   const runtimeId=posts.find(value=>value.action==='helperMvuReady')!.runtimeId
+  // 与真实宿主相同：事件 Connect、MVU 租约和快照回执共用本次 iframe 的非空运行时。
+  expect(runtimeId).toEqual(expect.stringMatching(/^.{1,96}$/))
+  expect(posts.find(value=>value.action==='helperEventConnect')?.runtimeId).toBe(runtimeId)
+  expect(run('window.__dshTavernEventRuntimeId')).toBe(runtimeId)
   const dispatch=(next=current,requestId='request',extra:Record<string,unknown>={},source:unknown=parent)=>{current=next;send({source:'dsh-tavern-card',action:'helperMvuRun',runtimeId,requestId,work:next,...extra},source)}
   const result=async(id='request')=>{for(let i=0;i<20;i++){const found=posts.find(value=>value.action==='helperMvuResult'&&value.requestId===id);if(found)return found;await settle()}throw Error('runner result did not arrive')}
   let closed=false

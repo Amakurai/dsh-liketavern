@@ -257,10 +257,14 @@ function HeaderChipSession(props: HeaderChipProps) {
   const [chatLore, setChatLore] = useState<{ cardId: string; storyId?: string; entries: WorldInfoEntry[]; revision: string } | null>(null)
   const [memoryOpen, setMemoryOpen] = useState(false)
   const [confirmUnbind, setConfirmUnbind] = useState(false)
-  const [unbindBusy, setUnbindBusy] = useState(false)
-  /** 保存/开场白/预览等写操作共用一个 busy：传输层 reject 也要显示错误并解锁，重复点击不能发出第二次请求（换开场白会再建一条分支）。 */
+  /** 保存、解除与开场白等操作共用同步锁；React 提交 busy 前的重复点击同样不能发送第二个请求。 */
+  const pending = useRef(false)
   const [busy, setBusy] = useState(false)
-  const run = (fn: () => Promise<void>) => { if (!busy) void runAsync(setBusy, setError, fn) }
+  const run = (fn: () => Promise<void>) => {
+    if (pending.current) return
+    pending.current = true
+    void runAsync(setBusy, setError, fn).finally(() => { pending.current = false })
+  }
   /** 无绑定时选择角色会异步读取 defaults；序号保证只有最后一次选择能落到草稿。 */
   const characterRequest = useRef(0)
 
@@ -369,7 +373,6 @@ function HeaderChipSession(props: HeaderChipProps) {
   }
 
   const unbind = async () => {
-    setUnbindBusy(true)
     try {
       const r = await remote.clearSessionBinding({ sessionId })
       const err = errOf(r)
@@ -388,8 +391,6 @@ function HeaderChipSession(props: HeaderChipProps) {
       // typert 传输失败/入参校验不过时是 reject 而非错误信封：不收起确认框会永久卡死。
       setConfirmUnbind(false)
       setError(error instanceof Error ? error.message : String(error))
-    } finally {
-      setUnbindBusy(false)
     }
   }
 
@@ -453,8 +454,9 @@ function HeaderChipSession(props: HeaderChipProps) {
                 <Btn
                   danger
                   size="md"
+                  disabled={busy}
                   onClick={() => {
-                    setConfirmUnbind(true)
+                    if (!pending.current) setConfirmUnbind(true)
                   }}
                 >
                   {t('chip.unbind.action')}
@@ -706,11 +708,11 @@ function HeaderChipSession(props: HeaderChipProps) {
         description={t('chip.unbind.desc')}
         confirmLabel={t('chip.unbind.action')}
         danger
-        busy={unbindBusy}
+        busy={busy}
         onCancel={() => {
-          setConfirmUnbind(false)
+          if (!pending.current) setConfirmUnbind(false)
         }}
-        onConfirm={() => void unbind()}
+        onConfirm={() => run(unbind)}
       />
     </span>
   )

@@ -2,33 +2,48 @@
 import { isMemoryId, memorySourceIds, parseMemory } from './memory.js'
 import { WorkspaceFs } from './workspaceFs.js'
 
+/** Windows 的同名文件不区分大小写；只规范图节点身份，旧来源正文与 WAL 镜像保持原样。 */
+function memoryIdentity(id: string): string { return process.platform === 'win32' ? id.toLowerCase() : id }
+
 export async function expandAffectedMemories(root: string, paths: readonly string[]): Promise<void> {
   const changed = new Set(paths.flatMap((path) => {
-    const match = /^memory\/([^/]+)\.md$/.exec(path)
-    return match && isMemoryId(match[1]) ? [match[1]] : []
+    const match = /^memory\/([^/]+)\.md$/.exec(memoryIdentity(path))
+    return match && isMemoryId(match[1]) ? [memoryIdentity(match[1])] : []
   }))
   if (!changed.size) return
   const fs = new WorkspaceFs(root, null)
-  const summaries = new Map<string, string[]>()
-  for (const file of await fs.list('memory')) {
+  const names = new Map<string, string>()
+  const rawEntries = new Map<string, { id: string; sources: string[] }>()
+  // 摘要图必须完整：跳过链接来源会把相关摘要误判为独立事实，回滚应在写入前明确失败。
+  for (const file of await fs.list('memory', { rejectLinks: true })) {
     const fileMatch = /^(?:archive\/)?([^/]+)\.md$/.exec(file)
     if (!fileMatch || !isMemoryId(fileMatch[1])) continue
+    const identity = memoryIdentity(fileMatch[1])
+    // 比较使用磁盘身份，实际读写仍用现存文件的拼写；活跃副本优先于归档副本。
+    if (!names.has(identity) || !file.startsWith('archive/')) names.set(identity, fileMatch[1])
     const text = await fs.readText(`memory/${file}`)
     if (text === null) continue
     let entry
     try { entry = parseMemory(file, text) }
     catch { continue /* 损坏条目交由既有读取容错处理。 */ }
     // 来源损坏必须在展开写入之前失败，不能把摘要误作独立事实后继续撤销来源。
-    const ids = memorySourceIds(entry.sourceRange)
-    if (ids.includes(entry.id)) throw new Error('记忆归并来源存在循环，已停止回滚')
-    if (ids.length) summaries.set(entry.id, ids)
+    const sources = memorySourceIds(entry.sourceRange)
+    // 归档删除中断可能留下双份。活跃副本即使已被人工修订为无来源，也必须覆盖
+    // 归档旧链；只收非空来源会让旧链重新把人工正文当作派生摘要删除。
+    if (!rawEntries.has(identity) || !entry.archived) rawEntries.set(identity, { id: entry.id, sources })
+  }
+  const canonicalId = (id: string) => names.get(memoryIdentity(id)) ?? id
+  const summaries = new Map([...rawEntries.values()].filter(entry => entry.sources.length)
+    .map(({ id, sources }) => [canonicalId(id), sources.map(canonicalId)]))
+  for (const [id, sources] of summaries) {
+    if (sources.some(source => memoryIdentity(source) === memoryIdentity(id))) throw new Error('记忆归并来源存在循环，已停止回滚')
   }
   const invalid = new Set<string>()
   let grew = true
   while (grew) {
     grew = false
     for (const [id, sources] of summaries) {
-      if (!invalid.has(id) && sources.some((source) => changed.has(source) || invalid.has(source))) {
+      if (!invalid.has(id) && sources.some((source) => changed.has(memoryIdentity(source)) || invalid.has(source))) {
         invalid.add(id)
         grew = true
       }

@@ -431,8 +431,8 @@ it('定位字段接近 3000 token 时未知目标的错误包装仍有界，合�
 it('完整预算容纳的长 identifier、markerId 与嵌套路径仍可在目录发现并实际读取', async () => {
   const ws = await workspace(), preset = defaultPreset()
   const identifier = '合法定位'.repeat(100), markerId = '长标记'.repeat(100)
-  // 总路径保持超过 400 字符；单段按 UTF-8 字节控制，兼容 Linux 的 255 字节文件名上限。
-  const path = `state/${Array.from({ length: 4 }, () => '目录'.repeat(40)).join('/')}/${'笔记'.repeat(40)}.md`
+  // 总路径保持超过 400 字符；末段为原子写入的 .UUID.tmp 后缀留空间，兼容 Linux 的 255 字节上限。
+  const path = `state/${Array.from({ length: 5 }, () => '目录'.repeat(35)).join('/')}/${'笔记'.repeat(30)}.md`
   await ws.fs.writeText(path, '长路径中的港口记录')
   preset.identifier = 'long-locator-factory'; preset.entries = [{ ...preset.entries[0]!, identifier, markerId, content: '长定位条目的正文' }]
   const presetId = await state.savePreset(preset)

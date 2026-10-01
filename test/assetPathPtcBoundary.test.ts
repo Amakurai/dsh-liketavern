@@ -106,7 +106,8 @@ it('含 NUL 的路径在逻辑边界明确拒绝，同批正常文件仍可读�
 })
 
 it('合法总长超过 400 字符但每段可表示的路径保留完整定位并读取正文', async () => {
-  const path = `state/${Array.from({ length: 4 }, () => '目录'.repeat(40)).join('/')}/${'笔记'.repeat(40)}.md`
+  // 末段连同 WorkspaceFs 原子写入的 .UUID.tmp 后缀也必须在 Linux 单段字节上限内。
+  const path = `state/${Array.from({ length: 5 }, () => '目录'.repeat(35)).join('/')}/${'笔记'.repeat(30)}.md`
   expect(path.length).toBeGreaterThan(400)
   await (await workspace()).fs.writeText(path, '长路径中的工厂事实')
   const result = await run(`return await tools.tavern_asset_read({path:${JSON.stringify(path)}});`)

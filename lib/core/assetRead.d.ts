@@ -31,7 +31,9 @@ export interface PresetCatalogItem {
 }
 export declare function toPresetCatalogItem(entry: PresetEntry): PresetCatalogItem;
 export declare function listPresetCatalog(preset: PromptPreset): PresetCatalogItem[];
-export declare function findPresetEntry(preset: PromptPreset, identifier: string): PresetEntry | undefined;
+export declare function findPresetEntry(preset: PromptPreset, identifier: string, options?: {
+    exact?: boolean;
+}): PresetEntry | undefined;
 export declare function clipAssetText(text: string, budget?: number): ReturnType<typeof clipToTokenBudget>;
 /** 与工具 render 的 pretty JSON 同口径；控制字符的转义也参与预算。 */
 export declare function assetOutputTokens(value: unknown): number;

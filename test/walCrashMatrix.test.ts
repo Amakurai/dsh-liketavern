@@ -173,7 +173,7 @@ describe('WAL 崩溃矩阵', () => {
       const after = await snapshot()
       expect(after.files, `第 ${at} 步崩溃后恢复`).toEqual(before.files)
       expect(await pendingFloors([FLOOR]), `第 ${at} 步`).toEqual([])
-      // 真实崩溃不执行 atomicWrite 的 finally 清理；遗留临时文件不属于业务内容，
+      // 真实崩溃不执行 atomicWrite 的故障收尾清理；遗留临时文件不属于业务内容，
       // 超龄后由打开工作区时的回收清除（含 WAL 目录内的遗留）。
       orphans += after.orphans.length
       await sweepOrphanTemps(root, { now: Date.now() + 2 * 60 * 60 * 1000 })

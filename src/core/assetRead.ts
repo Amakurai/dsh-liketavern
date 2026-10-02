@@ -73,7 +73,10 @@ export function listPresetCatalog(preset: PromptPreset): PresetCatalogItem[] {
   return preset.entries.map(toPresetCatalogItem)
 }
 
-export function findPresetEntry(preset: PromptPreset, identifier: string): PresetEntry | undefined {
+export function findPresetEntry(preset: PromptPreset, identifier: string, options?: { exact?: boolean }): PresetEntry | undefined {
+  // identifier 是存储身份；默认精确匹配优先、未命中才兼容去空白查询，精确模式禁止回退。
+  const exact = preset.entries.find((e) => e.identifier === identifier)
+  if (exact || options?.exact) return exact
   const id = identifier.trim()
   return preset.entries.find((e) => e.identifier === id)
 }

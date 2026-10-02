@@ -1,5 +1,5 @@
 /**
- * 原子写临时文件回收：进程崩溃遗留的 `<目标>.<uuid>.tmp` 在启动及首次打开角色/剧情时清理。
+ * 原子写临时文件回收：新短名称与旧 `<目标>.<uuid>.tmp` 在启动及首次打开角色/剧情时清理。
  * 只删本模块命名格式且超龄的文件，新写入中的临时文件、相似名称的用户文件与正文保持原样；
  * 角色根不越过 stories/，兄弟剧情等到各自打开时才清理。全部使用临时目录与手写数据。
  */
@@ -57,6 +57,16 @@ describe('sweepOrphanTemps', () => {
     expect(await sweepOrphanTemps(home, { skipDir: rel => rel === 'stories' })).toBe(1)
     expect(await names(home)).toEqual([`stories/s1/${orphanName('x.json')}`])
     expect(await sweepOrphanTemps(join(home, 'missing'))).toBe(0)
+  })
+
+  it('同时回收新短名称与旧名称，保留新鲜短名称和用户相似文件', async () => {
+    const short = `.dsh-tavern-write.${UUID}.tmp`
+    await file(join(home, 'state', short), old)
+    await file(join(home, 'notes', orphanName('long-note.md')), old)
+    await file(join(home, 'memory', short), 1_000)
+    await file(join(home, 'state/.dsh-tavern-write.not-a-uuid.tmp'), old, '用户文件')
+    expect(await sweepOrphanTemps(home)).toBe(2)
+    expect(await names(home)).toEqual([`memory/${short}`, 'state/.dsh-tavern-write.not-a-uuid.tmp'])
   })
 })
 

@@ -314,7 +314,12 @@ describe('角色卡导入失败恢复', () => {
     expect(dialog(view)!.findAllByType(Err).some(item => item.props.message === '导入暂时失败')).toBe(true)
     expect(await f.state.listCharacters()).toHaveLength(0)
     expect(choose(view, importBook).props.disabled).toBe(false)
-    await settle(() => choose(view, importBook).props.onClick(), () => completed(f.remote.importCharacter))
+    await act(async () => {
+      choose(view, importBook).props.onClick()
+      expect(f.remote.importCharacter).toHaveBeenCalledTimes(2)
+      // 重试含真实文件同步，等待本次调用返回；不能让轮询默认的 1 秒成为导入性能断言。
+      expect(await vi.mocked(f.remote.importCharacter).mock.results[1]!.value).toMatchObject({ ok: true })
+    })
     expect(dialog(view)).toBeUndefined()
     expect(f.remote.inspectCharacter).toHaveBeenCalledOnce()
     expect(fileToBase64).toHaveBeenCalledOnce()
@@ -355,7 +360,11 @@ describe('角色卡导入失败恢复', () => {
     vi.mocked(f.remote.importCharacter).mockRejectedValueOnce(new Error('无书导入失败'))
     await act(async () => importButton().props.onClick())
     expect(dialog(view)!.findAllByType(Err).some(item => item.props.message === '无书导入失败')).toBe(true)
-    await settle(() => importButton().props.onClick(), () => completed(f.remote.importCharacter))
+    await act(async () => {
+      importButton().props.onClick()
+      expect(f.remote.importCharacter).toHaveBeenCalledTimes(2)
+      expect(await vi.mocked(f.remote.importCharacter).mock.results[1]!.value).toMatchObject({ ok: true })
+    })
     expect(dialog(view)).toBeUndefined()
     expect((await f.state.listCharacters()).map(item => item.name)).toEqual(['无书角色'])
     expect(vi.mocked(f.remote.importCharacter).mock.calls.every(([request]) => request.importWorldBook === false)).toBe(true)

@@ -61,6 +61,8 @@ export function summarizeCacheUsage(steps: readonly StepUsage[], limit = 20): Ca
     add(turn, usage)
     add(total, usage)
   }
-  const turns = [...byTurn.values()].sort((a, b) => a.turn - b.turn).slice(-Math.max(0, limit)).map(finish)
+  // slice(-0) 等同 slice(0)，会把应隐藏的轮次全部展示；先归一化，再单独处理关闭展示。
+  const count = Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : 0
+  const turns = count === 0 ? [] : [...byTurn.values()].sort((a, b) => a.turn - b.turn).slice(-count).map(finish)
   return { turns, total: finish(total) }
 }

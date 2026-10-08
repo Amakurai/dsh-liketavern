@@ -70,34 +70,60 @@ function read<T>(map: Map<string, CacheEntry<T>>, key: string, ttlMs: number, lo
   return pending
 }
 
-const bindings = new Map<string, CacheEntry<ResultOf<'getSessionBinding'>>>()
-const details = new Map<string, CacheEntry<ResultOf<'getCharacterDetail'>>>()
-const avatars = new Map<string, CacheEntry<ResultOf<'getAvatar'>>>()
+interface CacheTables {
+  bindings: Map<string, CacheEntry<ResultOf<'getSessionBinding'>>>
+  details: Map<string, CacheEntry<ResultOf<'getCharacterDetail'>>>
+  avatars: Map<string, CacheEntry<ResultOf<'getAvatar'>>>
+}
+
+/** remote 是当前宿主的身份；相同 sessionId/cardId 不能跨宿主复用值或飞行请求。 */
+const caches = new WeakMap<TavernRemote, CacheTables>()
+// 失效广播需覆盖仍存活的宿主，但不能因此把已卸载 remote 的头像和详情长期保留。
+const cacheRefs = new Set<WeakRef<CacheTables>>()
+
+function* liveCaches(): Generator<CacheTables> {
+  for (const ref of cacheRefs) {
+    const cache = ref.deref()
+    if (cache) yield cache
+    else cacheRefs.delete(ref)
+  }
+}
+
+function cacheFor(remote: TavernRemote): CacheTables {
+  const existing = caches.get(remote)
+  if (existing) return existing
+  const cache: CacheTables = { bindings: new Map(), details: new Map(), avatars: new Map() }
+  caches.set(remote, cache)
+  cacheRefs.add(new WeakRef(cache))
+  return cache
+}
 
 /** 会话绑定（key=sessionId）；assistant 节点 / 会话芯片 / 英雄区 / 操作条共享一次 RPC。 */
 export function cachedSessionBinding(remote: TavernRemote, sessionId: string) {
-  return read(bindings, sessionId, META_TTL_MS, () => remote.getSessionBinding({ sessionId }))
+  return read(cacheFor(remote).bindings, sessionId, META_TTL_MS, () => remote.getSessionBinding({ sessionId }))
 }
 
 /** 角色详情（key=cardId）。 */
 export function cachedCharacterDetail(remote: TavernRemote, cardId: string) {
-  return read(details, cardId, META_TTL_MS, () => remote.getCharacterDetail({ cardId }))
+  return read(cacheFor(remote).details, cardId, META_TTL_MS, () => remote.getCharacterDetail({ cardId }))
 }
 
 /** 头像 dataURL（key=cardId）。 */
 export function cachedAvatar(remote: TavernRemote, cardId: string) {
-  return read(avatars, cardId, AVATAR_TTL_MS, () => remote.getAvatar({ cardId }))
+  return read(cacheFor(remote).avatars, cardId, AVATAR_TTL_MS, () => remote.getAvatar({ cardId }))
 }
 
 /** setSessionBinding / clearSessionBinding 成功后调用（先于 reload / 广播）。 */
 export function invalidateSessionBinding(sessionId: string): void {
-  bindings.delete(sessionId)
+  for (const cache of liveCaches()) cache.bindings.delete(sessionId)
 }
 
 /** 角色卡保存 / 删除后调用（详情与头像一起失效；删除时宿主侧绑定已清，会话绑定缓存靠 TTL 收敛）。 */
 export function invalidateCharacter(cardId: string): void {
-  details.delete(cardId)
-  avatars.delete(cardId)
+  for (const cache of liveCaches()) {
+    cache.details.delete(cardId)
+    cache.avatars.delete(cardId)
+  }
 }
 
 /** 本端确认角色写入成功后，先失效缓存再通知所有仍挂载的消费者。 */

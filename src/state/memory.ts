@@ -75,6 +75,9 @@ export function isMemoryId(id: unknown): id is string {
 interface MemoryIndex {
   index: Bm25Index<MemoryEntry>
   entries: ReadonlyMap<string, MemoryEntry>
+  /** 仅可达归档的磁盘指纹；活跃摘要未变也不能复用已改写、删除或损坏的来源正文。 */
+  sourceFiles?: readonly string[]
+  sourceFingerprint?: string
 }
 
 /** Windows 的文件名别名共用来源身份；条目本身保留原文件名，大小写敏感系统仍区分文件。 */
@@ -407,9 +410,11 @@ export class MemoryStore {
     const entries = await this.list()
     const cached = this.cache
     const existing = includeSources ? cached?.sourceIndex : cached?.index
-    if (existing) return existing
+    if (existing && (!includeSources || existing.sourceFingerprint === await this.sourceFingerprint(existing.sourceFiles ?? []))) return existing
+    if (includeSources && cached) delete cached.sourceIndex
     const index = new Bm25Index<MemoryEntry>()
     const indexed = [...entries]
+    const sourceFiles: string[] = []
     if (includeSources) {
       const visited = new Set(entries.map((entry) => memoryIdentity(entry.id)))
       // 只索引活跃摘要可达的归档来源；不扫整棵 archive，已撤销/删除摘要不会把旧事实带回来。
@@ -420,8 +425,10 @@ export class MemoryStore {
           if (visited.has(identity)) continue
           if (visited.size >= 10_000) throw new Error('记忆来源索引超过 10000 条，请分拆剧情或清理记忆')
           visited.add(identity)
-          const raw = await this.fs.readText(this.pathOf(id, true))
+          const path = this.pathOf(id, true)
+          const raw = await this.fs.readText(path)
           if (raw === null) throw new Error(`摘要来源 ${id} 缺失，无法保证检索完整性`)
+          sourceFiles.push(path)
           indexed.push(parseMemory(`${ARCHIVE_PREFIX}${id}.md`, raw))
         }
       }
@@ -435,7 +442,8 @@ export class MemoryStore {
         data: entry,
       })
     }
-    const built = { index, entries: new Map(indexed.map((entry) => [memoryIdentity(entry.id), entry])) }
+    const built: MemoryIndex = { index, entries: new Map(indexed.map((entry) => [memoryIdentity(entry.id), entry])),
+      ...(includeSources ? { sourceFiles, sourceFingerprint: await this.sourceFingerprint(sourceFiles) } : {}) }
     // list 刚刚按当前指纹填过 cache，这里把索引挂上去；指纹变化时整条缓存会被换掉。
     // 引用相等校验：await list 期间若另一任务 write → invalidate → list（缓存被换成新指纹对象），
     // 不能把「旧 entries 建出的索引」挂到新缓存上，否则检索会一直用旧索引直到下次指纹变化。
@@ -444,6 +452,11 @@ export class MemoryStore {
       else this.cache.index = built
     }
     return built
+  }
+
+  /** 只 stat 活跃摘要可达的归档路径；不扫描整棵 archive，也不为缓存命中重新读正文。 */
+  private async sourceFingerprint(paths: readonly string[]): Promise<string> {
+    return JSON.stringify(await Promise.all(paths.map(async path => [path, await this.fs.stat(path)])))
   }
 
   /**

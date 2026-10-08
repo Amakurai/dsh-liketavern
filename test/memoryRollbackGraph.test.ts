@@ -46,6 +46,54 @@ it('两个活跃摘要共享中间摘要时完整展开，撤销目标事实并�
   expect(await memory.search('target')).toEqual([])
 })
 
+/** 无变化写入不撤销事实，也不应拆掉楼层结束后生成的派生摘要。 */
+it.each(['text', 'bytes', 'legacy'] as const)('同值来源写入回滚保留完整摘要和归档：%s', async mode => {
+  await put('target')
+  const path = 'memory/target.md'
+  const original = (await fs.readText(path))!
+  if (mode === 'text') await fs.withFloor('s#t1').writeText(path, original)
+  else if (mode === 'bytes') await fs.withFloor('s#t1').writeBytes(path, Buffer.from(original))
+  else {
+    await wal.record('s#t1', path, original)
+    await wal.recordAfter('s#t1', path, original)
+  }
+  await wal.commitFloor('s#t1')
+  const memory = new MemoryStore(fs)
+  await memory.mergeBatch(await memory.list(), '港口剧情摘要', 'compress')
+  const before = await snapshot()
+  const summary = (await memory.list())[0]!
+
+  await wal.rollbackFloor('s#t1', root)
+
+  expect(await snapshot()).toEqual(before)
+  expect((await new MemoryStore(fs).search('港口剧情摘要')).map(hit => hit.entry.id)).toEqual([summary.id])
+  expect(await fs.readText(path)).toBeNull()
+  expect((await wal.listFloors())[0]?.rolledBack).toBe(true)
+})
+
+/** 同层兼有真正更新时，只展开更新来源可达的摘要，无变化来源的摘要保持原样。 */
+it('混合更新与同值写入时，只撤销真正变化来源的派生摘要', async () => {
+  await put('kept')
+  await put('target')
+  await fs.withFloor('s#t1').writeText('memory/kept.md', (await fs.readText('memory/kept.md'))!)
+  await put('target', '', fs.withFloor('s#t1'))
+  await new MemoryStore(fs.withFloor('s#t1')).update('target', { body: '本层新增翡翠钥匙事实' })
+  await wal.commitFloor('s#t1')
+  const memory = new MemoryStore(fs)
+  await memory.mergeBatch([(await memory.get('kept'))!], '保留摘要', 'compress')
+  const keptSummary = (await memory.list()).find(entry => entry.body === '保留摘要')!
+  await memory.mergeBatch([(await memory.get('target'))!], '撤销摘要', 'compress')
+  const keptArchive = await fs.readText('memory/archive/kept.md')
+
+  await wal.rollbackFloor('s#t1', root)
+
+  expect((await new MemoryStore(fs).list()).map(entry => [entry.id, entry.body]).sort())
+    .toEqual([[keptSummary.id, '保留摘要'], ['target', 'target']].sort())
+  expect(await fs.readText('memory/kept.md')).toBeNull()
+  expect(await fs.readText('memory/archive/kept.md')).toBe(keptArchive)
+  expect(await new MemoryStore(fs).search('翡翠钥匙')).toEqual([])
+})
+
 it.skipIf(process.platform !== 'win32')('Windows 记忆 id 的大小写别名更新归入同一来源，回滚先展开摘要', async () => {
   await put('target')
   const scoped = new MemoryStore(fs.withFloor('s#t1'))

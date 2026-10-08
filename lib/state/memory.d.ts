@@ -104,6 +104,8 @@ export declare class MemoryStore {
      * （分词是 CJK bigram，重建成本与库体量成正比，一个 turn 里可能被调多次）。
      */
     private buildIndex;
+    /** 只 stat 活跃摘要可达的归档路径；不扫描整棵 archive，也不为缓存命中重新读正文。 */
+    private sourceFingerprint;
     /**
      * 写入前去重检索：query = text + keys，BM25（keys 加权内建），不做时间衰减。
      * 工具层据此提示 agent 改用 update 合并，而不是重复 write。

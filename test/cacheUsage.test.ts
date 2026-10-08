@@ -42,6 +42,12 @@ describe('summarizeCacheUsage', () => {
     expect(summary.turns.map(turn => turn.turn)).toEqual([4, 5])
     expect(summary.total.steps).toBe(5)
   })
+
+  it.each([0, -1, 0.9, NaN])('限制为 %s 时隐藏轮次而保留累计', limit => {
+    const result = summarizeCacheUsage([{ turn: 1, inputTokens: 10, outputTokens: 2 }], limit)
+    expect(result.turns).toEqual([])
+    expect(result.total).toMatchObject({ steps: 1, uncachedInput: 10, output: 2 })
+  })
 })
 
 describe('sessionCacheUsage', () => {

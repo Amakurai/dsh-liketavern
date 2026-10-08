@@ -104,6 +104,8 @@ export function clipToTokenBudget(text: string, budget: number): { text: string;
     if (estimateTokens(candidate) <= limit) lo = mid
     else hi = mid - 1
   }
+  // UTF-16 下标可能落在 emoji/扩展汉字的代理对中间；退回完整字符边界，不改变 token 估算口径。
+  if (lo > 0 && /[\uD800-\uDBFF]/.test(text[lo - 1]!) && /[\uDC00-\uDFFF]/.test(text[lo] ?? '')) lo--
   const out = lo > 0 ? `${text.slice(0, lo)}\n${suffix}` : suffix
   return { text: out, truncated: true, tokens: estimateTokens(out) }
 }

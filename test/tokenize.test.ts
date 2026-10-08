@@ -132,4 +132,23 @@ describe('clipToTokenBudget', () => {
     expect(clipped.tokens).toBeLessThanOrEqual(8)
     expect(clipped.tokens).toBeLessThan(estimateTokens('汉'.repeat(50)))
   })
+
+  it('截断长正文不能把 emoji 切成半个字符', () => {
+    const original = `a${'😀'.repeat(30)}`
+    const result = clipToTokenBudget(original, 6)
+    expect(result.truncated).toBe(true)
+    expect(Buffer.from(result.text, 'utf8').toString('utf8')).toBe(result.text)
+    expect(result.tokens).toBeLessThanOrEqual(6)
+  })
+
+  it('不同预算和混合语言始终返回合法 Unicode，并遵守原估算预算', () => {
+    for (const original of [`a${'😀'.repeat(40)}`, `中文a${'𠮷😺'.repeat(30)}`]) {
+      for (let budget = 1; budget < 40; budget++) {
+        const result = clipToTokenBudget(original, budget)
+        expect(Buffer.from(result.text, 'utf8').toString('utf8')).toBe(result.text)
+        expect(result.tokens).toBe(estimateTokens(result.text))
+        expect(result.tokens).toBeLessThanOrEqual(budget)
+      }
+    }
+  })
 })

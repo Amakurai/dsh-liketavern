@@ -86,8 +86,19 @@ export function isLoreCatalogQuery(q: LoreReadQuery): boolean {
 export function selectLoreEntries(entries: readonly WorldInfoEntry[], q: LoreReadQuery): WorldInfoEntry[] {
   const source = sourceOf(q.source?.trim())
   const scoped = source ? entries.filter((e) => e.source === source) : [...entries]
-  const uid = q.uid?.trim()
-  if (uid) return scoped.filter((e) => matchesUid(e, uid))
+  if (q.uid) {
+    // 完整 key 是跨书身份，优先于同名 uid/后缀；先保留原始身份，未命中才兼容去空白查询。
+    const byIdentity = (uid: string) => {
+      const keys = scoped.filter(entry => entry.key === uid)
+      if (keys.length) return keys
+      const ids = scoped.filter(entry => entry.uid === uid)
+      return ids.length ? ids : scoped.filter(entry => matchesUid(entry, uid))
+    }
+    const exact = byIdentity(q.uid)
+    if (exact.length) return exact
+    const uid = q.uid.trim()
+    if (uid) return byIdentity(uid)
+  }
   const query = q.query?.trim()
   if (!query) return scoped
   const ranked = scoped

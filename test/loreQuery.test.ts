@@ -16,6 +16,7 @@ import {
   type WorldInfoEntry,
 } from '../src/core/types.js'
 import { estimateTokens } from '../src/core/tokenize.js'
+import { parseLorebook } from '../src/state/lorebook.js'
 
 function makeEntry(partial: Partial<WorldInfoEntry> & { key: string }): WorldInfoEntry {
   return {
@@ -54,6 +55,30 @@ function makeEntry(partial: Partial<WorldInfoEntry> & { key: string }): WorldInf
     ...partial,
   }
 }
+
+describe('世界书完整身份', () => {
+  const book = (sourceRef: string, uid: string, content: string) => parseLorebook(
+    { entries: { [uid]: { content, key: ['港口'] } } }, { source: 'global', sourceRef })
+
+  it('完整 key 精确定位优先于其它条目的同名 uid 和后缀', () => {
+    const target = book('first', 'city', '真正的城市条目')[0]!
+    const collision = book('second', target.key, '另一条合法但同名的 uid')[0]!
+    expect(selectLoreEntries([collision, target], { uid: target.key }).map(entry => entry.content))
+      .toEqual(['真正的城市条目'])
+  })
+
+  it('保留合法 uid 中的前后空白，并优先精确匹配', () => {
+    const entries = [...book('book', ' city ', '空白身份'), ...book('book', 'city', '无空白身份')]
+    expect(selectLoreEntries(entries, { uid: ' city ' }).map(entry => entry.content)).toEqual(['空白身份'])
+    expect(selectLoreEntries(entries, { uid: 'global:book: city ' }).map(entry => entry.content)).toEqual(['空白身份'])
+  })
+
+  it('短 uid 仍能列出各书同名条目，未命中的带空白输入保留兼容查询', () => {
+    const entries = [...book('first', 'city', '第一本'), ...book('second', 'city', '第二本')]
+    expect(selectLoreEntries(entries, { uid: 'city' })).toHaveLength(2)
+    expect(selectLoreEntries(entries, { uid: ' city ' })).toHaveLength(2)
+  })
+})
 
 describe('isLoreCatalogQuery', () => {
   it('无 uid/query 为目录模式', () => {

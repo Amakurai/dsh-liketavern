@@ -1,3 +1,7 @@
+/**
+ * BM25 索引的行为测试：相关度排序、keys 字段加权（不计入文档长度）、时间衰减、索引维护与确定性，
+ * 以及写入去重用的相似度——相同正文为 1、不同事实远低于阈值，且同一对文本的得分不随库规模漂移。
+ */
 import { describe, expect, it } from 'vitest'
 import { Bm25Index } from '../src/core/bm25.js'
 
@@ -42,6 +46,118 @@ describe('keys 加权', () => {
     const hits = index.search('幽灵船')
     expect(hits.map(h => h.id)).toEqual(['b', 'a'])
     expect(hits[0]!.score).toBeGreaterThan(hits[1]!.score)
+  })
+
+  it('只写在 keys 里的词比正文里出现一次的词得分更高', () => {
+    const index = new Bm25Index()
+    index.add({ id: 'body', text: '她把幽灵船的事告诉了船长' })
+    index.add({ id: 'key', text: '她把那艘船的事告诉了船长', keys: ['幽灵船'] })
+    index.add({ id: 'other', text: '港口的面包涨价了两个铜板' })
+    expect(index.search('幽灵船').map(h => h.id)).toEqual(['key', 'body'])
+  })
+
+  it('keys 不计入文档长度：合并了大量 keys 的条目不会在正文词上被压到同分以下', () => {
+    const index = new Bm25Index()
+    const manyKeys = ['艾琳', '莉莉丝', '罗兰', '塞巴斯', '维多利亚', '白石', '千夏', '诺瓦', '北门', '魔法塔', '港口酒馆', '王都', '地下墓穴', '学院']
+    index.add({ id: 'few', text: '艾琳在北门答应保守秘密', keys: ['艾琳'] })
+    index.add({ id: 'many', text: '艾琳在北门答应保守秘密', keys: manyKeys })
+    index.add({ id: 'weak', text: '罗兰在集市上听说有人要保守秘密，但他并不在意这些传闻，转身就走了' })
+    const hits = index.search('保守秘密')
+    const score = (id: string): number => hits.find(h => h.id === id)!.score
+    // 查询词只出现在正文里，两条正文相同的条目应同分，且都高于只顺带提到的长条目
+    expect(score('many')).toBe(score('few'))
+    expect(score('many')).toBeGreaterThan(score('weak'))
+  })
+
+  it('全库只有 keys、没有正文时仍给出有限分数', () => {
+    const index = new Bm25Index()
+    index.add({ id: 'a', text: '', keys: ['幽灵船'] })
+    index.add({ id: 'b', text: '', keys: ['灯塔'] })
+    const hits = index.search('幽灵船')
+    expect(hits.map(h => h.id)).toEqual(['a'])
+    expect(Number.isFinite(hits[0]!.score)).toBe(true)
+    expect(hits[0]!.score).toBeGreaterThan(0)
+  })
+})
+
+describe('写入去重相似度', () => {
+  const fillers = ['港口的面包涨价了两个铜板', '学院今年举办炼金术大赛', '黑猫喜欢在窗台晒太阳', '守卫在午夜换岗',
+    '旅店地窖藏着走私火药', '河岸的渡船明晨开航', '铁匠铺收了一个新学徒', '温室里的月光花开了']
+  /** 已有条目外加 size - 1 条无关记忆；无关条目带序号，保证各不相同。 */
+  function indexOf(existing: string, size: number): Bm25Index {
+    const index = new Bm25Index()
+    index.add({ id: 'base', text: existing })
+    for (let i = 1; i < size; i++) index.add({ id: `m${i}`, text: `${fillers[i % fillers.length]}，这是第${i}件琐事` })
+    return index
+  }
+  const scoreOf = (index: Bm25Index, text: string): number =>
+    index.similarity(text, { topK: 1000 }).find(h => h.id === 'base')?.score ?? 0
+  const existing = '诺瓦在钟楼修好了断剑，代价是三枚金币。'
+
+  it.each([1, 5, 30, 200])('库规模 %i：相同正文恰好为 1，标点差异不影响', (size) => {
+    const index = indexOf(existing, size)
+    expect(scoreOf(index, existing)).toBe(1)
+    expect(scoreOf(index, '诺瓦在钟楼修好了断剑 代价是三枚金币')).toBe(1)
+  })
+
+  it.each([1, 5, 30, 200])('库规模 %i：近似重复高于默认阈值，不同事实低于默认阈值', (size) => {
+    const index = indexOf(existing, size)
+    const threshold = 0.75
+    expect(scoreOf(index, '诺瓦在钟楼修好了断剑，代价是五枚金币。')).toBeGreaterThanOrEqual(threshold)
+    expect(scoreOf(index, '诺瓦在钟楼修好了断剑，代价是三枚金币，她很满意。')).toBeGreaterThanOrEqual(threshold)
+    // 同人同地的另一件事：旧的 BM25 绝对分在各规模下都把它判成重复
+    expect(scoreOf(index, '诺瓦在钟楼捡到一张从没见过的旧地图，决定先瞒着所有人。')).toBeLessThan(0.3)
+    expect(scoreOf(index, '诺瓦其实是北境流亡贵族的后裔，这件事还没人知道。')).toBeLessThan(0.1)
+    expect(scoreOf(index, '城里新开的裁缝店每天清晨排起长队')).toBe(0)
+  })
+
+  it('同一对文本的得分不随库规模漂移', () => {
+    const variant = '诺瓦在钟楼修好了断剑，代价是五枚金币。'
+    const scores = [1, 5, 30, 200].map(size => scoreOf(indexOf(existing, size), variant))
+    expect(Math.max(...scores) - Math.min(...scores)).toBeLessThan(0.02)
+  })
+
+  it('长名字加短事件的不同事实仍低于默认阈值', () => {
+    for (const size of [1, 30, 200]) {
+      expect(scoreOf(indexOf('维多利亚在港口酒馆喝醉了', size), '维多利亚在港口酒馆赢了一局牌')).toBeLessThan(0.75)
+    }
+  })
+
+  it('双向取小：只是长条目的一小部分，或把短条目扩写成长事实，都不算相同', () => {
+    const long = '诺瓦在钟楼修好了断剑，代价是三枚金币，随后她把剑交给了守夜人，并约定月底之前取回。'
+    expect(scoreOf(indexOf(long, 30), '诺瓦在钟楼修好了断剑')).toBeLessThan(0.5)
+    expect(scoreOf(indexOf('诺瓦在钟楼修好了断剑', 30), long)).toBeLessThan(0.5)
+  })
+
+  it('keys 参与比较但不重复加权；结果按分数降序、同分按 id，并遵守 topK', () => {
+    const index = new Bm25Index<string>()
+    index.add({ id: 'b', text: '幽灵船停在港口', keys: ['幽灵船', '幽灵船'], data: 'B' })
+    index.add({ id: 'a', text: '幽灵船停在港口', keys: ['幽灵船'], data: 'A' })
+    index.add({ id: 'c', text: '幽灵船停在港口，船长已经失踪三天' })
+    const hits = index.similarity('幽灵船停在港口')
+    expect(hits.map(h => h.id)).toEqual(['a', 'b', 'c'])
+    expect(hits[0]).toEqual({ id: 'a', score: 1, data: 'A' })
+    expect(hits[1]!.score).toBe(1)
+    expect(hits[2]!.score).toBeLessThan(1)
+    expect(index.similarity('幽灵船停在港口', { topK: 1 }).map(h => h.id)).toEqual(['a'])
+    expect(index.similarity('幽灵船停在港口', { topK: 0 })).toEqual([])
+  })
+
+  it('空索引、无法成词的查询和无共同词时返回空数组', () => {
+    expect(new Bm25Index().similarity('幽灵船')).toEqual([])
+    const index = indexOf(existing, 3)
+    expect(index.similarity('')).toEqual([])
+    expect(index.similarity('火')).toEqual([])
+    expect(index.similarity('zzz qqq')).toEqual([])
+  })
+
+  it('删除与覆盖后不再与旧正文比较', () => {
+    const index = indexOf(existing, 5)
+    index.add({ id: 'base', text: '完全改写后的另一段话' })
+    expect(scoreOf(index, existing)).toBe(0)
+    expect(scoreOf(index, '完全改写后的另一段话')).toBe(1)
+    index.remove('base')
+    expect(scoreOf(index, '完全改写后的另一段话')).toBe(0)
   })
 })
 

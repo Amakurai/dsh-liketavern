@@ -80,6 +80,45 @@ interface MemoryIndex {
   sourceFingerprint?: string
 }
 
+interface FileStat { mtimeMs: number; size: number }
+
+/** 一份已解析的归档来源，连同读取前取得的磁盘指纹（读取前 stat 不到则为 null，不进缓存）。 */
+interface LoadedSource { path: string; stat: FileStat | null; entry: MemoryEntry }
+
+/** 归档读取的并发上限：避免上千个来源同时占用文件句柄。 */
+const SOURCE_READ_CONCURRENCY = 8
+
+function sourceFingerprintOf(files: ReadonlyArray<readonly [string, FileStat | null]>): string {
+  return JSON.stringify(files.map(([path, stat]) => [path, stat && [stat.mtimeMs, stat.size]]))
+}
+
+/**
+ * 有界并发的有序映射。逐项保留成功或失败，由调用方按原顺序决定先报哪个错；
+ * 出错后不再领取新任务，已领取的（下标必然更小或正在执行）照常收尾。
+ */
+async function settleLimited<T, R>(
+  items: readonly T[],
+  limit: number,
+  task: (item: T) => Promise<R>,
+): Promise<Array<PromiseSettledResult<R> | undefined>> {
+  const results = new Array<PromiseSettledResult<R> | undefined>(items.length)
+  let next = 0
+  let failed = false
+  const worker = async (): Promise<void> => {
+    while (!failed && next < items.length) {
+      const index = next++
+      try {
+        results[index] = { status: 'fulfilled', value: await task(items[index]!) }
+      } catch (reason) {
+        failed = true
+        results[index] = { status: 'rejected', reason }
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
+  return results
+}
+
 /** Windows 的文件名别名共用来源身份；条目本身保留原文件名，大小写敏感系统仍区分文件。 */
 function memoryIdentity(id: string): string { return process.platform === 'win32' ? id.toLowerCase() : id }
 
@@ -219,6 +258,15 @@ export class MemoryStore {
    * 一个 turn 里 search 也可能被工具重复调用；没有缓存的话每次都全量重读 + 重建索引。
    */
   private cache: { fingerprint: string; entries: MemoryEntry[]; index?: MemoryIndex; sourceIndex?: MemoryIndex } | null = null
+  /**
+   * 已解析的归档来源，按路径存、按磁盘指纹校验，活跃集变化时不随 cache 一起丢弃。
+   *
+   * 归档原文写入后基本不再变化，而每次 memory_write 都会让活跃集指纹变化；没有这层的话，
+   * 下一次检索要把全部可达来源重新逐个读盘（几百条来源即数百毫秒，随剧情长度线性增长）。
+   * 信任程度与来源索引的缓存命中相同：重建时仍逐个 stat，指纹不符或文件缺失就重读或报错；
+   * 显式 invalidate 会一并清空。
+   */
+  private readonly sourceCache = new Map<string, LoadedSource>()
 
   constructor(
     private readonly fs: WorkspaceFs,
@@ -243,6 +291,15 @@ export class MemoryStore {
    * 也落在同一个 mtime 刻度内（`updated` 是定长 ISO 串），指纹兜不住这种情况。
    */
   invalidate(): void {
+    this.cache = null
+    this.sourceCache.clear()
+  }
+
+  /**
+   * 本类写路径用：只作废活跃集的解析与索引。归档来源留给重建时的磁盘指纹核对，
+   * 本类亲手改写的归档路径由 archiveNow 逐条剔除。
+   */
+  private invalidateActive(): void {
     this.cache = null
   }
 
@@ -313,7 +370,7 @@ export class MemoryStore {
       keys: input.keys ?? [],
     }
     await this.fs.writeText(this.pathOf(id), serializeMemory(meta, input.body))
-    this.invalidate()
+    this.invalidateActive()
     return {
       id,
       file: `${id}.md`,
@@ -351,7 +408,7 @@ export class MemoryStore {
     }
     const body = patch.body ?? existing.body
     await this.fs.writeText(this.pathOf(id), serializeMemory(meta, body))
-    this.invalidate()
+    this.invalidateActive()
     return { ...existing, ...meta, body }
   }
 
@@ -360,7 +417,7 @@ export class MemoryStore {
     return withWorkspaceLock(this.fs.root, async () => {
       if (!isMemoryId(id) || (await this.fs.readText(this.pathOf(id))) === null) return false
       await this.fs.delete(this.pathOf(id))
-      this.invalidate()
+      this.invalidateActive()
       return true
     })
   }
@@ -375,11 +432,14 @@ export class MemoryStore {
     for (const id of ids) {
       const text = await this.fs.readText(this.pathOf(id))
       if (text === null) continue
-      await this.fs.writeText(this.pathOf(id, true), text)
+      const archivePath = this.pathOf(id, true)
+      // 亲手改写的归档路径直接剔除，不依赖 mtime 刻度区分同长度的两次写入。
+      this.sourceCache.delete(archivePath)
+      await this.fs.writeText(archivePath, text)
       await this.fs.delete(this.pathOf(id))
       moved++
     }
-    if (moved > 0) this.invalidate()
+    if (moved > 0) this.invalidateActive()
     return moved
   }
 
@@ -414,24 +474,45 @@ export class MemoryStore {
     if (includeSources && cached) delete cached.sourceIndex
     const index = new Bm25Index<MemoryEntry>()
     const indexed = [...entries]
-    const sourceFiles: string[] = []
+    const sources: LoadedSource[] = []
     if (includeSources) {
       const visited = new Set(entries.map((entry) => memoryIdentity(entry.id)))
       // 只索引活跃摘要可达的归档来源；不扫整棵 archive，已撤销/删除摘要不会把旧事实带回来。
-      for (let i = 0; i < indexed.length; i++) {
-        const refs = memorySourceIds(indexed[i]!.sourceRange)
-        for (const id of refs) {
-          const identity = memoryIdentity(id)
-          if (visited.has(identity)) continue
-          if (visited.size >= 10_000) throw new Error('记忆来源索引超过 10000 条，请分拆剧情或清理记忆')
-          visited.add(identity)
-          const path = this.pathOf(id, true)
-          const raw = await this.fs.readText(path)
-          if (raw === null) throw new Error(`摘要来源 ${id} 缺失，无法保证检索完整性`)
-          sourceFiles.push(path)
-          indexed.push(parseMemory(`${ARCHIVE_PREFIX}${id}.md`, raw))
+      // 按层展开：同一层的来源并行加载，层内与层间的先后仍是原来的队列顺序。
+      let frontier: readonly MemoryEntry[] = entries
+      while (frontier.length > 0) {
+        const ids: string[] = []
+        // 展开中途遇到的故障要排在「更早来源的读取故障」之后报告，先记下再加载已收集的部分。
+        let deferred: unknown
+        let stopped = false
+        for (const entry of frontier) {
+          try {
+            for (const id of memorySourceIds(entry.sourceRange)) {
+              const identity = memoryIdentity(id)
+              if (visited.has(identity)) continue
+              if (visited.size >= 10_000) throw new Error('记忆来源索引超过 10000 条，请分拆剧情或清理记忆')
+              visited.add(identity)
+              ids.push(id)
+            }
+          } catch (error) {
+            deferred = error
+            stopped = true
+            break
+          }
         }
+        const loaded = await this.loadSources(ids)
+        if (stopped) throw deferred
+        const next: MemoryEntry[] = []
+        for (const source of loaded) {
+          sources.push(source)
+          indexed.push(source.entry)
+          next.push(source.entry)
+        }
+        frontier = next
       }
+      // 不再可达的来源不留在缓存里；失败的重建在上面抛出，不会走到这里误删。
+      const reachable = new Set(sources.map((source) => source.path))
+      for (const path of this.sourceCache.keys()) if (!reachable.has(path)) this.sourceCache.delete(path)
     }
     for (const entry of indexed) {
       index.add({
@@ -442,8 +523,10 @@ export class MemoryStore {
         data: entry,
       })
     }
+    // 指纹取自读取前的 stat：读到的正文只会比指纹新，下次核对不符就重读，不会把旧正文钉在新指纹下。
     const built: MemoryIndex = { index, entries: new Map(indexed.map((entry) => [memoryIdentity(entry.id), entry])),
-      ...(includeSources ? { sourceFiles, sourceFingerprint: await this.sourceFingerprint(sourceFiles) } : {}) }
+      ...(includeSources ? { sourceFiles: sources.map((source) => source.path),
+        sourceFingerprint: sourceFingerprintOf(sources.map((source) => [source.path, source.stat] as const)) } : {}) }
     // list 刚刚按当前指纹填过 cache，这里把索引挂上去；指纹变化时整条缓存会被换掉。
     // 引用相等校验：await list 期间若另一任务 write → invalidate → list（缓存被换成新指纹对象），
     // 不能把「旧 entries 建出的索引」挂到新缓存上，否则检索会一直用旧索引直到下次指纹变化。
@@ -456,12 +539,42 @@ export class MemoryStore {
 
   /** 只 stat 活跃摘要可达的归档路径；不扫描整棵 archive，也不为缓存命中重新读正文。 */
   private async sourceFingerprint(paths: readonly string[]): Promise<string> {
-    return JSON.stringify(await Promise.all(paths.map(async path => [path, await this.fs.stat(path)])))
+    return sourceFingerprintOf(await Promise.all(paths.map(async (path) => [path, await this.fs.stat(path)] as const)))
   }
 
   /**
-   * 写入前去重检索：query = text + keys，BM25（keys 加权内建），不做时间衰减。
-   * 工具层据此提示 agent 改用 update 合并，而不是重复 write。
+   * 按给定顺序加载一批归档来源：磁盘指纹与缓存一致就复用已解析条目，否则读盘解析并写回缓存。
+   * 先 stat 后读；来源是否存在仍以读取结果为准。缺失、解析失败和读取故障都不进缓存，
+   * 多个来源同时出错时报告顺序最靠前的那个。
+   */
+  private async loadSources(ids: readonly string[]): Promise<LoadedSource[]> {
+    const settled = await settleLimited(ids, SOURCE_READ_CONCURRENCY, async (id): Promise<LoadedSource> => {
+      const path = this.pathOf(id, true)
+      const stat = await this.fs.stat(path)
+      const cached = this.sourceCache.get(path)
+      if (stat && cached?.stat && cached.stat.mtimeMs === stat.mtimeMs && cached.stat.size === stat.size) return cached
+      this.sourceCache.delete(path)
+      const raw = await this.fs.readText(path)
+      if (raw === null) throw new Error(`摘要来源 ${id} 缺失，无法保证检索完整性`)
+      const loaded: LoadedSource = { path, stat, entry: parseMemory(`${ARCHIVE_PREFIX}${id}.md`, raw) }
+      // 没有指纹就无从校验，下次照常重读。
+      if (stat) this.sourceCache.set(path, loaded)
+      return loaded
+    })
+    const loaded: LoadedSource[] = []
+    for (const result of settled) {
+      // 留空的是出错后未领取的任务，必然排在已记录的失败之后，轮不到它们。
+      if (result === undefined) break
+      if (result.status === 'rejected') throw result.reason
+      loaded.push(result.value)
+    }
+    return loaded
+  }
+
+  /**
+   * 写入前去重检索：query = text + keys，按 IDF 加权的双向覆盖率打分（0–1），不做时间衰减。
+   * 分数不随库规模和正文长度漂移，可直接与固定阈值比较；工具层据此提示 agent 改用 update 合并，
+   * 而不是重复 write。
    */
   async findSimilar(
     text: string,
@@ -470,7 +583,7 @@ export class MemoryStore {
   ): Promise<Array<{ entry: MemoryEntry; score: number }>> {
     const { index } = await this.buildIndex()
     return index
-      .search([text, ...keys].join(' '), { topK: topK ?? this.similarTopK })
+      .similarity([text, ...keys].join(' '), { topK: topK ?? this.similarTopK })
       .map((hit) => ({ entry: hit.data!, score: hit.score }))
   }
 

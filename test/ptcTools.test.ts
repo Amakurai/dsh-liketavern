@@ -29,6 +29,7 @@ import { WorkspaceFs } from '../src/state/workspaceFs.js'
 
 let root: string, ctx: Context, state: TavernState, agent: Agent, native: Agent, cardId: string, storyId: string
 let call = 0
+let config: ReturnType<typeof resolveConfig>
 const signal = () => new AbortController().signal
 const workspace = () => state.storyWorkspace(cardId, storyId)
 const run = (code: string) => ctx.tools.execute({ agent, callId: ToolCallId(`ptc-${++call}`),
@@ -38,7 +39,9 @@ beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'tavern-ptc-'))
   state = new TavernState({ root, characters: join(root, 'characters'), lorebooks: join(root, 'lorebooks'),
     presets: join(root, 'presets'), personas: join(root, 'personas'), regexDir: join(root, 'regex'),
-    sessions: join(root, 'sessions') }, () => resolveConfig({ memory: { dedupScore: 0.1 } }))
+    sessions: join(root, 'sessions') }, () => config)
+  // 去重使用默认阈值：相似度不随库规模漂移，单条记忆的库也能拦住原样重写。
+  config = resolveConfig({})
   await state.init()
   cardId = (await state.createCharacter('PTC 工厂角色')).cardId
   await state.saveBinding({ sessionId: 'ptc-story', cardId, presetId: null, personaId: null, lorebookIds: [],
@@ -332,6 +335,28 @@ it('相似记忆拒绝后在同一程序内按 id 更新；宿主参数错误可
   const entries = await (await workspace()).memory.list()
   expect(entries).toHaveLength(1)
   expect(entries[0]!.body).toBe('旅人已经归还北门钥匙')
+})
+
+it('同人同地的另一件事可以写入；近似重复被拒绝；阈值为 0 时不去重', async () => {
+  const program = `
+    const first = await tools.tavern_memory_write({body:'诺瓦在钟楼修好了断剑，代价是三枚金币。', keys:['诺瓦']});
+    const other = await tools.tavern_memory_write({body:'诺瓦在钟楼捡到一张从没见过的旧地图，决定先瞒着所有人。', keys:['诺瓦']});
+    const near = await tools.tavern_memory_write({body:'诺瓦在钟楼修好了断剑，代价是五枚金币。', keys:['诺瓦']});
+    return {first:first.id, other:other.ok, near:near.status ?? 'written', similarId:near.similarId ?? null};
+  `
+  const result = await run(program)
+  expect(result.isError, JSON.stringify(result.content)).toBe(false)
+  const value = (result.value as { result: { first: string; other: boolean; near: string; similarId: string | null } }).result
+  expect(value).toMatchObject({ other: true, near: 'similar-found', similarId: value.first })
+  const ws = await workspace()
+  expect((await ws.memory.list()).map(entry => entry.body).sort()).toEqual([
+    '诺瓦在钟楼修好了断剑，代价是三枚金币。', '诺瓦在钟楼捡到一张从没见过的旧地图，决定先瞒着所有人。'].sort())
+
+  config.memory.dedupSimilarity = 0
+  const repeated = await run("return await tools.tavern_memory_write({body:'诺瓦在钟楼修好了断剑，代价是三枚金币。', keys:['诺瓦']});")
+  expect(repeated.isError, JSON.stringify(repeated.content)).toBe(false)
+  expect(repeated.value).toMatchObject({ result: { ok: true } })
+  expect(await ws.memory.list()).toHaveLength(3)
 })
 
 it('资产索引只返回实际可读条目与规范摘要，任意附带私有 JSON 不能随目录泄漏', async () => {

@@ -90,8 +90,8 @@ export declare const TavernConfigSchema: z<Schemastery.ObjectS<NoInfer<{
         retrievalTokenBudget: z<number, number, "defined">;
         /** 时间衰减半衰期（天）；0 = 不衰减。 */
         halfLifeDays: z<number, number, "defined">;
-        /** 写入去重相似度阈值（BM25 分）。 */
-        dedupScore: z<number, number, "defined">;
+        /** 写入去重相似度阈值（0–1，IDF 加权的双向覆盖率）；0 = 不去重。 */
+        dedupSimilarity: z<number, number, "defined">;
         /** 每次压缩合并的最旧条数。 */
         compressBatch: z<number, number, "defined">;
         /** 检索 query 取最近 N 条消息。 */
@@ -107,8 +107,8 @@ export declare const TavernConfigSchema: z<Schemastery.ObjectS<NoInfer<{
         retrievalTokenBudget: z<number, number, "defined">;
         /** 时间衰减半衰期（天）；0 = 不衰减。 */
         halfLifeDays: z<number, number, "defined">;
-        /** 写入去重相似度阈值（BM25 分）。 */
-        dedupScore: z<number, number, "defined">;
+        /** 写入去重相似度阈值（0–1，IDF 加权的双向覆盖率）；0 = 不去重。 */
+        dedupSimilarity: z<number, number, "defined">;
         /** 每次压缩合并的最旧条数。 */
         compressBatch: z<number, number, "defined">;
         /** 检索 query 取最近 N 条消息。 */
@@ -226,8 +226,8 @@ export declare const TavernConfigSchema: z<Schemastery.ObjectS<NoInfer<{
         retrievalTokenBudget: z<number, number, "defined">;
         /** 时间衰减半衰期（天）；0 = 不衰减。 */
         halfLifeDays: z<number, number, "defined">;
-        /** 写入去重相似度阈值（BM25 分）。 */
-        dedupScore: z<number, number, "defined">;
+        /** 写入去重相似度阈值（0–1，IDF 加权的双向覆盖率）；0 = 不去重。 */
+        dedupSimilarity: z<number, number, "defined">;
         /** 每次压缩合并的最旧条数。 */
         compressBatch: z<number, number, "defined">;
         /** 检索 query 取最近 N 条消息。 */
@@ -243,8 +243,8 @@ export declare const TavernConfigSchema: z<Schemastery.ObjectS<NoInfer<{
         retrievalTokenBudget: z<number, number, "defined">;
         /** 时间衰减半衰期（天）；0 = 不衰减。 */
         halfLifeDays: z<number, number, "defined">;
-        /** 写入去重相似度阈值（BM25 分）。 */
-        dedupScore: z<number, number, "defined">;
+        /** 写入去重相似度阈值（0–1，IDF 加权的双向覆盖率）；0 = 不去重。 */
+        dedupSimilarity: z<number, number, "defined">;
         /** 每次压缩合并的最旧条数。 */
         compressBatch: z<number, number, "defined">;
         /** 检索 query 取最近 N 条消息。 */
@@ -364,8 +364,8 @@ export declare const Config: z<Schemastery.ObjectS<NoInfer<{
         retrievalTokenBudget: z<number, number, "defined">;
         /** 时间衰减半衰期（天）；0 = 不衰减。 */
         halfLifeDays: z<number, number, "defined">;
-        /** 写入去重相似度阈值（BM25 分）。 */
-        dedupScore: z<number, number, "defined">;
+        /** 写入去重相似度阈值（0–1，IDF 加权的双向覆盖率）；0 = 不去重。 */
+        dedupSimilarity: z<number, number, "defined">;
         /** 每次压缩合并的最旧条数。 */
         compressBatch: z<number, number, "defined">;
         /** 检索 query 取最近 N 条消息。 */
@@ -381,8 +381,8 @@ export declare const Config: z<Schemastery.ObjectS<NoInfer<{
         retrievalTokenBudget: z<number, number, "defined">;
         /** 时间衰减半衰期（天）；0 = 不衰减。 */
         halfLifeDays: z<number, number, "defined">;
-        /** 写入去重相似度阈值（BM25 分）。 */
-        dedupScore: z<number, number, "defined">;
+        /** 写入去重相似度阈值（0–1，IDF 加权的双向覆盖率）；0 = 不去重。 */
+        dedupSimilarity: z<number, number, "defined">;
         /** 每次压缩合并的最旧条数。 */
         compressBatch: z<number, number, "defined">;
         /** 检索 query 取最近 N 条消息。 */
@@ -495,8 +495,8 @@ export declare const Config: z<Schemastery.ObjectS<NoInfer<{
         retrievalTokenBudget: z<number, number, "defined">;
         /** 时间衰减半衰期（天）；0 = 不衰减。 */
         halfLifeDays: z<number, number, "defined">;
-        /** 写入去重相似度阈值（BM25 分）。 */
-        dedupScore: z<number, number, "defined">;
+        /** 写入去重相似度阈值（0–1，IDF 加权的双向覆盖率）；0 = 不去重。 */
+        dedupSimilarity: z<number, number, "defined">;
         /** 每次压缩合并的最旧条数。 */
         compressBatch: z<number, number, "defined">;
         /** 检索 query 取最近 N 条消息。 */
@@ -512,8 +512,8 @@ export declare const Config: z<Schemastery.ObjectS<NoInfer<{
         retrievalTokenBudget: z<number, number, "defined">;
         /** 时间衰减半衰期（天）；0 = 不衰减。 */
         halfLifeDays: z<number, number, "defined">;
-        /** 写入去重相似度阈值（BM25 分）。 */
-        dedupScore: z<number, number, "defined">;
+        /** 写入去重相似度阈值（0–1，IDF 加权的双向覆盖率）；0 = 不去重。 */
+        dedupSimilarity: z<number, number, "defined">;
         /** 每次压缩合并的最旧条数。 */
         compressBatch: z<number, number, "defined">;
         /** 检索 query 取最近 N 条消息。 */
@@ -572,7 +572,7 @@ export interface TavernConfig {
         retrievalTopK: number;
         retrievalTokenBudget: number;
         halfLifeDays: number;
-        dedupScore: number;
+        dedupSimilarity: number;
         compressBatch: number;
         queryMessages: number;
     };

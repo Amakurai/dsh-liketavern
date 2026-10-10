@@ -58,6 +58,15 @@ export declare class MemoryStore {
      * 一个 turn 里 search 也可能被工具重复调用；没有缓存的话每次都全量重读 + 重建索引。
      */
     private cache;
+    /**
+     * 已解析的归档来源，按路径存、按磁盘指纹校验，活跃集变化时不随 cache 一起丢弃。
+     *
+     * 归档原文写入后基本不再变化，而每次 memory_write 都会让活跃集指纹变化；没有这层的话，
+     * 下一次检索要把全部可达来源重新逐个读盘（几百条来源即数百毫秒，随剧情长度线性增长）。
+     * 信任程度与来源索引的缓存命中相同：重建时仍逐个 stat，指纹不符或文件缺失就重读或报错；
+     * 显式 invalidate 会一并清空。
+     */
+    private readonly sourceCache;
     constructor(fs: WorkspaceFs, options?: MemoryStoreOptions);
     /**
      * id 必须是单个文件名段。模型可以把任意字符串当 id 传进 update/delete：
@@ -71,6 +80,11 @@ export declare class MemoryStore {
      * 也落在同一个 mtime 刻度内（`updated` 是定长 ISO 串），指纹兜不住这种情况。
      */
     invalidate(): void;
+    /**
+     * 本类写路径用：只作废活跃集的解析与索引。归档来源留给重建时的磁盘指纹核对，
+     * 本类亲手改写的归档路径由 archiveNow 逐条剔除。
+     */
+    private invalidateActive;
     /** 解析 memory/*.md（不含 archive/），坏文件容错跳过；按 created 升序（并列按 id 字典序）。 */
     list(): Promise<MemoryEntry[]>;
     private listNow;
@@ -107,8 +121,15 @@ export declare class MemoryStore {
     /** 只 stat 活跃摘要可达的归档路径；不扫描整棵 archive，也不为缓存命中重新读正文。 */
     private sourceFingerprint;
     /**
-     * 写入前去重检索：query = text + keys，BM25（keys 加权内建），不做时间衰减。
-     * 工具层据此提示 agent 改用 update 合并，而不是重复 write。
+     * 按给定顺序加载一批归档来源：磁盘指纹与缓存一致就复用已解析条目，否则读盘解析并写回缓存。
+     * 先 stat 后读；来源是否存在仍以读取结果为准。缺失、解析失败和读取故障都不进缓存，
+     * 多个来源同时出错时报告顺序最靠前的那个。
+     */
+    private loadSources;
+    /**
+     * 写入前去重检索：query = text + keys，按 IDF 加权的双向覆盖率打分（0–1），不做时间衰减。
+     * 分数不随库规模和正文长度漂移，可直接与固定阈值比较；工具层据此提示 agent 改用 update 合并，
+     * 而不是重复 write。
      */
     findSimilar(text: string, keys: string[], topK?: number): Promise<Array<{
         entry: MemoryEntry;

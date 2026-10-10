@@ -14,10 +14,12 @@ function scanSearch<D>(
   if (!docs.length || topK <= 0) return []
   const terms = [...new Set(tokenize(query))]
   const entries = docs.map((doc) => {
-    const tokens = [...tokenize(doc.text), ...tokenize((doc.keys ?? []).join(' '))]
+    const body = tokenize(doc.text)
     const tf = new Map<string, number>()
-    for (const term of tokens) tf.set(term, (tf.get(term) ?? 0) + 1)
-    return { doc, tf, length: tokens.length }
+    for (const term of body) tf.set(term, (tf.get(term) ?? 0) + 1)
+    // 关键词每出现一次折算 2 次词频，且不计入文档长度
+    for (const term of tokenize((doc.keys ?? []).join(' '))) tf.set(term, (tf.get(term) ?? 0) + 2)
+    return { doc, tf, length: body.length }
   })
   const avgdl = entries.reduce((sum, entry) => sum + entry.length, 0) / entries.length
   const hits: Array<Bm25Hit<D>> = []
@@ -28,7 +30,8 @@ function scanSearch<D>(
       if (tf === undefined) continue
       const df = entries.filter((candidate) => candidate.tf.has(term)).length
       const idf = Math.log(1 + (entries.length - df + 0.5) / (df + 0.5))
-      const norm = 1 - b + (b * entry.length) / avgdl
+      // 全库正文为空（只有 keys）时没有长度信息，归一化因子取 1
+      const norm = avgdl > 0 ? 1 - b + (b * entry.length) / avgdl : 1
       score += (idf * tf * (k1 + 1)) / (tf + k1 * norm)
     }
     if (score <= 0) continue

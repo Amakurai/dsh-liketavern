@@ -174,7 +174,7 @@ describe('MemoryStore', () => {
     expect(parsed.body).toBe('旧记忆')
   })
 
-  it('findSimilar 命中相似条目（keys 加权内建）', async () => {
+  it('findSimilar 命中相似条目，分数是 0–1 的相似度', async () => {
     const target = await store.write({
       body: '艾琳把断剑寄存在铁匠铺重铸',
       keys: ['艾琳', '断剑'],
@@ -184,6 +184,23 @@ describe('MemoryStore', () => {
     expect(hits.length).toBeGreaterThan(0)
     expect(hits[0]!.entry.id).toBe(target.id)
     expect(hits[0]!.score).toBeGreaterThan(0)
+    expect(hits[0]!.score).toBeLessThan(1)
+  })
+
+  it('findSimilar 的分数不随库规模和正文长度漂移', async () => {
+    // 库里只有一条短记忆：BM25 原始分约 1.4，原先的绝对阈值 4 拦不住原样重写
+    const short = await store.write({ body: '北门已经打开' })
+    expect(await store.findSimilar('北门已经打开', [])).toEqual([{ entry: expect.objectContaining({ id: short.id }), score: 1 }])
+
+    const body = '诺瓦在钟楼修好了断剑，代价是三枚金币。'
+    const first = await store.write({ body, keys: ['诺瓦'] })
+    for (let i = 0; i < 30; i++) await putMemory(`m-filler-${i}`, '2026-08-01T00:00:00.000Z', `第${i}天港口的面包涨价了两个铜板`)
+    // 同人同地的另一件事：BM25 原始分在这个规模下约 12，原先的绝对阈值 4 会把它拒绝成重复
+    const other = await store.findSimilar('诺瓦在钟楼捡到一张从没见过的旧地图，决定先瞒着所有人。', ['诺瓦'])
+    expect(other[0]!.entry.id).toBe(first.id)
+    expect(other[0]!.score).toBeLessThan(0.3)
+    expect((await store.findSimilar(body, ['诺瓦']))[0]).toMatchObject({ entry: { id: first.id }, score: 1 })
+    expect((await store.findSimilar('北门已经打开', []))[0]).toMatchObject({ entry: { id: short.id }, score: 1 })
   })
 
   it('search 时间衰减：同分文本新近条目靠前（注入 now 与 halfLifeMs）', async () => {

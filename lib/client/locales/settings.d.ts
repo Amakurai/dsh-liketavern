@@ -138,8 +138,8 @@ export declare const zh: {
     readonly 'settings.memory.retrievalTokenBudgetDesc': "每轮检索注入的估算 token 预算。";
     readonly 'settings.memory.halfLifeDays': "时间衰减半衰期（天）";
     readonly 'settings.memory.halfLifeDaysDesc': "检索打分时旧记忆按半衰期降权；0 = 不衰减。";
-    readonly 'settings.memory.dedupScore': "去重阈值 dedupScore";
-    readonly 'settings.memory.dedupScoreDesc': "写入记忆的相似度阈值（BM25 分），达到则视为重复不写入；越高越不容易判重。";
+    readonly 'settings.memory.dedupSimilarity': "去重相似度 dedupSimilarity";
+    readonly 'settings.memory.dedupSimilarityDesc': "写入记忆时与已有条目的相似度阈值（0–1），达到则视为重复不写入，改为提示更新原条目。1 = 只拦几乎相同的正文；越低越容易判重；0 = 不去重。";
     readonly 'settings.memory.compressBatch': "压缩批次 compressBatch";
     readonly 'settings.memory.compressBatchDesc': "每次压缩合并的最旧条数。最小 2。";
     readonly 'settings.memory.queryMessages': "检索取词 queryMessages";

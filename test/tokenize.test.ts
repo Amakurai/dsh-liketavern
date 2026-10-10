@@ -2,7 +2,8 @@
  * 分词与 token 估算单测。
  * 覆盖：CJK 滑窗 bigram（含单字不成词）、假名/谚文同样走 bigram、
  * 拉丁扩展/西里尔/希腊等按整词保留并转小写、混排在文字边界断词不跨语言组词、
- * 标点空白跳过；estimateTokens 口径钉死（不随分词范围变化）、clipToTokenBudget 截断。
+ * 标点空白跳过、全角/半角/兼容写法经 NFKC 归一；
+ * estimateTokens 口径钉死（不随分词范围变化）、clipToTokenBudget 截断。
  */
 import { describe, expect, it } from 'vitest'
 import { clipToTokenBudget, estimateTokens, tokenize } from '../src/core/tokenize.js'
@@ -67,6 +68,17 @@ describe('tokenize', () => {
     expect(tokenize('你好World')).toEqual(['你好', 'world'])
     expect(tokenize('hello안녕하세요')).toEqual(['hello', '안녕', '녕하', '하세', '세요'])
     expect(tokenize('Привет世界')).toEqual(['привет', '世界'])
+  })
+
+  it('全角、半角与兼容写法归一到同一 token', () => {
+    expect(tokenize('ＡＢＣ　ｈｅｌｌｏ　１２３')).toEqual(tokenize('ABC hello 123'))
+    expect(tokenize('ＧＰＴ４')).toEqual(['gpt4'])
+    // 半角片假名与浊点合成为常规片假名后再切 bigram
+    expect(tokenize('ｶﾞｲﾄﾞ')).toEqual(tokenize('ガイド'))
+    // 组合音标与预组合字符同形
+    expect(tokenize('café')).toEqual(['café'])
+    // 归一只发生在分词内部，全角标点仍是分隔符
+    expect(tokenize('你好，ｗｏｒｌｄ！')).toEqual(['你好', 'world'])
   })
 
   it('多语种正文都能产出 token（BM25 去重与检索不会静默失效）', () => {

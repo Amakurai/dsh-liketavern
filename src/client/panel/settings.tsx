@@ -396,8 +396,8 @@ export function SettingsSection(props: { remote: TavernRemote }) {
             <SettingsRow title={t('settings.memory.halfLifeDays')} description={t('settings.memory.halfLifeDaysDesc')}>
               <NumInput value={draft.memory.halfLifeDays} onChange={(v) => setMemory({ halfLifeDays: Math.max(0, v) })} />
             </SettingsRow>
-            <SettingsRow title={t('settings.memory.dedupScore')} description={t('settings.memory.dedupScoreDesc')}>
-              <NumInput value={draft.memory.dedupScore} onChange={(v) => setMemory({ dedupScore: Math.max(0, v) })} />
+            <SettingsRow title={t('settings.memory.dedupSimilarity')} description={t('settings.memory.dedupSimilarityDesc')}>
+              <NumInput value={draft.memory.dedupSimilarity} onChange={(v) => setMemory({ dedupSimilarity: Math.min(1, Math.max(0, v)) })} />
             </SettingsRow>
             <SettingsRow title={t('settings.memory.compressBatch')} description={t('settings.memory.compressBatchDesc')}>
               <NumInput value={draft.memory.compressBatch} onChange={(v) => setMemory({ compressBatch: Math.max(2, Math.round(v)) })} />

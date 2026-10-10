@@ -1,6 +1,18 @@
 # 依赖安全记录
 
-本记录说明依赖告警的处理结果与剩余边界，核对日期为 2026-09-20。当前锁文件的 `npm audit` 为 **0 项已知漏洞**；这只表示当前公告数据库没有命中，不能把审计或测试通过解释为不存在未知漏洞。
+本记录说明依赖告警的处理结果与剩余边界，最近复核日期为 2026-10-10。v0.5.2 的干净 `npm ci` 后，全量 `npm audit` 与生产依赖审计均为 **0 项已知漏洞**。审计或测试通过都不能解释为不存在未知漏洞。
+
+## v0.5.2 发布复核（2026-10-10）
+
+本次修复前，全量 `npm audit` 报告 **5 项 high**，对应三个公告，均位于本仓库的开发宿主和测试链。根级 `overrides` 固定以下公开 npm 版本，锁文件同步更新，干净安装后全量审计归零：
+
+- `@deepseek-ai/dsh@0.2.0-rc.2 → @deepseek-ai/dsh-mcp-client → @modelcontextprotocol/client`：client 从 2.0.0 升到 **2.2.0**，其精确依赖 core 同步到 **2.2.0**，处理 MCP OAuth 凭证归属告警 [GHSA-6qxp-vccf-f47h](https://github.com/advisories/GHSA-6qxp-vccf-f47h)。审计此前将两个上游包同时计入，共 3 项。回归验证指定 `expectedIssuer` 后，错误授权服务器在网络调用前被拒绝，正确服务器仍可取令牌。独立 OAuth 使用者还须传入可信 `expectedIssuer`，迁移没有 issuer 的旧凭证，并在自定义 provider 中保留 issuer；不能只升级版本。
+- `@deepseek-ai/dsh → @deepseek-ai/dsh-otel → got → cacheable-request → http-cache-semantics`：从 4.2.0 升到 **4.3.0**，退出 [GHSA-ch52-4w7c-c8xp](https://github.com/advisories/GHSA-ch52-4w7c-c8xp) 当前受影响范围，并验证 `must-revalidate` 不被 `max-stale` 绕过。该公告仍未列出补丁版本，上游维护者对 Set-Cookie 报告的判断有[明确争议](https://github.com/kornelski/http-cache-semantics/issues/56)；4.3.0 不能被描述为禁止所有带 Cookie 的缓存复用。本仓库引入路径是宿主 OTLP 的 `got.post`，已核对其调用不配置 cache，而 got 默认 cache 为 undefined；插件本身不使用这份缓存库。
+- `vitest → vite → postcss → source-map-js`：从 1.2.1 升到 **1.2.2**，修复索引式 source map 偏移导致计算放大的告警 [GHSA-68fv-2mgg-jv7q](https://github.com/advisories/GHSA-68fv-2mgg-jv7q)。回归在可终止 worker 中验证超大、负数、小数与嵌套累计偏移被拒绝，正常映射继续可用。
+
+`test/dependencySecurity.test.ts` 还使用真实 MCP Client、动态 loopback HTTP 工厂及宿主 `createMcpToolDefinition` 验证握手、工具发现、调用与结果转换。Windows / Ubuntu CI 在安装后运行全量 `npm audit`，有漏洞时阻止发布制品进入后续流程。
+
+v0.5.2 沿用精确的 dsh `0.2.0-rc.2` 宿主基线，包内不包含 `node_modules` 或开发依赖。根级 overrides 只作用于本仓库安装，不会修改用户独立安装的宿主；实际宿主依赖需在其安装目录另行核对，宿主升级按 [版本核对清单](HOST_COMPATIBILITY.md) 完成兼容与安装验证。
 
 v0.3.1 发布复查：没有新增或升级运行依赖，也没有加入本机链接依赖；角色卡显示、CCv3 数据兼容和长聊天缓存均沿用现有隔离与数据边界。本地构建、156 个测试文件 / 2245 项通过（1 项按预期跳过）、doctor/backup 与 439 文件发布白名单检查通过；实际安装环境的动态卡仍为 opaque-origin iframe，只有 `allow-scripts`，默认禁止网络连接。发布包取自最终提交通过 Windows/Ubuntu CI 后生成的制品。
 
@@ -17,7 +29,7 @@ v0.2.6 发布前本地验收：`npm run build`、全量 **140 文件 / 1986 项�
 
 ## 安装脚本与上游弃用提示
 
-npm 11.16 的安装脚本提醒已逐包审阅，并在项目 `allowScripts` 中仅记录这六个实际版本：`@deepseek-ai/dsh-subprocess-local@0.1.5-rc.2`、`@google/genai@1.52.0`、`esbuild@0.25.12`、`koffi@3.2.1`、`node-pty@1.2.0-beta.15`、`protobufjs@7.6.6`。不使用全局放行或通配符；以后版本变化需要重新审阅。此字段是脚本审批记录，不是脚本权限沙箱，旧 npm 可能不读取它。见 [npm 官方说明](https://docs.npmjs.com/cli/v11/commands/npm-approve-scripts/)。
+npm 11.16 的安装脚本提醒已逐包审阅，并在项目 `allowScripts` 中仅记录这六个实际版本：`@deepseek-ai/dsh-subprocess-local@0.2.0-rc.2`、`@google/genai@2.21.0`、`esbuild@0.25.12`、`koffi@3.1.1`、`node-pty@1.2.0-beta.15`、`protobufjs@7.6.6`。不使用全局放行或通配符；以后版本变化需要重新审阅。此字段是脚本审批记录，不是脚本权限沙箱，旧 npm 可能不读取它。见 [npm 官方说明](https://docs.npmjs.com/cli/v11/commands/npm-approve-scripts/)。
 
 已检查脚本行为：dsh 调整包内 spawn-helper 执行权限；esbuild 准备/验证同版本平台二进制，缺包时从配置的 npm registry 安装并可回退官方 registry；koffi 选择平台预编译包或本地 CMake 构建；node-pty 准备包内 prebuild/ConPTY，缺失时由 node-gyp 构建，可能下载 Node headers；protobufjs 只检查依赖版本写法；Google preinstall 仅输出 no-op。
 

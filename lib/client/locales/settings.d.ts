@@ -143,7 +143,9 @@ export declare const zh: {
     readonly 'settings.memory.compressBatch': "压缩批次 compressBatch";
     readonly 'settings.memory.compressBatchDesc': "每次压缩合并的最旧条数。最小 2。";
     readonly 'settings.memory.queryMessages': "检索取词 queryMessages";
-    readonly 'settings.memory.queryMessagesDesc': "BM25 检索的 query 取最近 N 条消息。最小 1。";
+    readonly 'settings.memory.queryMessagesDesc': "BM25 检索的 query 取最近 N 条消息，其中最新一条用户输入里的词会加权。最小 1。";
+    readonly 'settings.memory.aliasExpansion': "检索别名 aliasExpansion";
+    readonly 'settings.memory.aliasExpansionDesc': "记忆按字面检索，换一种说法问起就找不到。开启后，写入新记忆的那一轮结束、会话空闲时，用当前模型为这些记忆补几个别名（其中的名字、同义说法、所属类别），供检索匹配。每次最多处理 12 条，会多一次较短的模型请求；关闭后不再发送，已有别名继续生效。";
     readonly 'settings.memory.save': "保存记忆设置";
     readonly 'settings.memory.saved': "已保存记忆设置";
     readonly 'settings.cards.title': "角色卡与交互卡";

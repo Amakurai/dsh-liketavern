@@ -13,9 +13,10 @@
  */
 import { Buffer } from 'node:buffer'
 import { lstat, mkdir, readFile, readdir, rm, stat } from 'node:fs/promises'
-import { join, normalize, relative, resolve, sep } from 'node:path'
+import { dirname, join, normalize, relative, resolve, sep } from 'node:path'
 import type { Wal } from './wal.js'
 import { atomicWrite } from './atomicWrite.js'
+import { noteWrite } from './writeLedger.js'
 import { withWorkspaceLock } from './workspaceLock.js'
 
 /** 历史占位：旧版曾把非会话写入记入名为 non-floor 的 WAL 单元。现已不再使用。 */
@@ -162,6 +163,36 @@ export class WorkspaceFs {
     }
   }
 
+  /**
+   * 批量取文件元信息，顺序与入参一致，不存在的为 null。
+   * 结果与逐个 stat 相同，但系统调用少得多：同一父目录到根的链接检查只做一次，
+   * 文件本身用一次 lstat 同时判断链接和取 mtime/size（不是链接时 lstat 与 stat 结果一致）。
+   * 记忆检索每次都要核对上千个归档来源的指纹，逐个 stat 是每个文件 5 次调用。
+   */
+  async statMany(relPaths: readonly string[]): Promise<Array<{ mtimeMs: number; size: number } | null>> {
+    const targets = relPaths.map((relPath) => this.abs(relPath))
+    const parents = new Set(targets.map((abs) => (abs === this.root ? abs : dirname(abs))))
+    for (const parent of parents) await this.assertNoLinks(parent)
+    // 多个文件同时出错时报告顺序最靠前的那个，不取决于哪个调用先返回。
+    const settled = await Promise.allSettled(targets.map((abs) => this.lstatFile(abs)))
+    return settled.map((result) => {
+      if (result.status === 'rejected') throw result.reason
+      return result.value
+    })
+  }
+
+  /** 父路径已确认不经过链接时，对文件本身的一次检查：是链接就拒绝，不存在返回 null。 */
+  private async lstatFile(abs: string): Promise<{ mtimeMs: number; size: number } | null> {
+    try {
+      const info = await lstat(abs)
+      if (info.isSymbolicLink()) throw new WorkspaceLinkError(`工作区资产路径不能经过链接: ${abs}`)
+      return { mtimeMs: info.mtimeMs, size: info.size }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+      throw error
+    }
+  }
+
   /** 确保目录存在（递归创建）。目录创建幂等且无内容副作用，不纳入 WAL。 */
   async ensureDir(relPath = ''): Promise<void> {
     const abs = this.abs(relPath)
@@ -192,7 +223,8 @@ export class WorkspaceFs {
         const before = bytes === null ? null : snapshotOf(bytes)
         await this.wal.recordChange(this.floor, path, before?.value ?? null, content, before?.encoding ?? 'utf8', 'utf8')
       }
-      await atomicWrite(abs, content)
+      // 无论替换是否成功都登记：多登记只会让读的一方多读一次，漏登记才会留下旧缓存。
+      try { await atomicWrite(abs, content) } finally { noteWrite(this.root, relPath) }
     })
   }
 
@@ -211,7 +243,7 @@ export class WorkspaceFs {
           before === null ? null : Buffer.from(before).toString('base64'),
           Buffer.from(bytes).toString('base64'), 'base64', 'base64')
       }
-      await atomicWrite(abs, bytes)
+      try { await atomicWrite(abs, bytes) } finally { noteWrite(this.root, relPath) }
     })
   }
 
@@ -231,7 +263,7 @@ export class WorkspaceFs {
         const before = snapshotOf(bytes)
         await this.wal.recordChange(this.floor, path, before.value, null, before.encoding ?? 'utf8', 'utf8')
       }
-      await rm(abs, { force: true })
+      try { await rm(abs, { force: true }) } finally { noteWrite(this.root, relPath) }
     })
   }
 
@@ -280,20 +312,15 @@ export class WorkspaceFs {
    * 且能捕获绕开本类的落盘（WAL 回滚会直接写回文件），故比进程内修订号更可靠。
    */
   async listStats(prefix = ''): Promise<Array<{ name: string; mtimeMs: number; size: number }>> {
+    // list 已确认 prefix 到根不经过链接，并跳过了本层的链接条目；这里每个文件只需一次 lstat。
     const names = await this.list(prefix, { recursive: false })
     const base = prefix ? `${prefix}/` : ''
     const stats = await Promise.all(
       names.map(async (name) => {
-        try {
-          const abs = this.abs(`${base}${name}`)
-          await this.assertNoLinks(abs)
-          const info = await stat(abs)
-          return { name, mtimeMs: info.mtimeMs, size: info.size }
-        } catch (error) {
-          // list 与 stat 之间文件被并发删掉：按不存在处理（与 readText 返回 null 的容错口径一致）。
-          if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
-          throw error
-        }
+        // list 与 lstat 之间文件被并发删掉：按不存在处理（与 readText 返回 null 的容错口径一致）；
+        // 期间被换成链接则照旧拒绝。
+        const info = await this.lstatFile(this.abs(`${base}${name}`))
+        return info && { name, ...info }
       }),
     )
     return stats.filter((s) => s !== null)

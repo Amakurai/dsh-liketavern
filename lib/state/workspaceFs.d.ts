@@ -50,6 +50,18 @@ export declare class WorkspaceFs {
         mtimeMs: number;
         size: number;
     } | null>;
+    /**
+     * 批量取文件元信息，顺序与入参一致，不存在的为 null。
+     * 结果与逐个 stat 相同，但系统调用少得多：同一父目录到根的链接检查只做一次，
+     * 文件本身用一次 lstat 同时判断链接和取 mtime/size（不是链接时 lstat 与 stat 结果一致）。
+     * 记忆检索每次都要核对上千个归档来源的指纹，逐个 stat 是每个文件 5 次调用。
+     */
+    statMany(relPaths: readonly string[]): Promise<Array<{
+        mtimeMs: number;
+        size: number;
+    } | null>>;
+    /** 父路径已确认不经过链接时，对文件本身的一次检查：是链接就拒绝，不存在返回 null。 */
+    private lstatFile;
     /** 确保目录存在（递归创建）。目录创建幂等且无内容副作用，不纳入 WAL。 */
     ensureDir(relPath?: string): Promise<void>;
     /** 读取二进制内容；不存在返回 null。 */

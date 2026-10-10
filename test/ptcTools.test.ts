@@ -359,6 +359,25 @@ it('同人同地的另一件事可以写入；近似重复被拒绝；阈值为 
   expect(await ws.memory.list()).toHaveLength(3)
 })
 
+it('同一程序内写入、等长更新后，检索与写前去重立即看到最新正文', async () => {
+  // 检索用长期存活的实例，写入用每次新建的带楼层实例；两次写入可能落在同一个文件时间刻度里
+  const result = await run(`
+    const written = await tools.tavern_memory_write({body:'北门已开', keys:['北门']});
+    const before = await tools.tavern_memory_search({query:'北门'});
+    await tools.tavern_memory_update({id:written.id, body:'北门未开'});
+    const after = await tools.tavern_memory_search({query:'北门'});
+    const repeated = await tools.tavern_memory_write({body:'北门未开', keys:['北门']});
+    return {id:written.id, before:JSON.stringify(before), after:JSON.stringify(after), repeated:repeated.status ?? 'written', similarId:repeated.similarId ?? null};
+  `)
+  expect(result.isError, JSON.stringify(result.content)).toBe(false)
+  const value = (result.value as { result: { id: string; before: string; after: string; repeated: string; similarId: string | null } }).result
+  expect(value.before).toContain('北门已开')
+  expect(value.after).toContain('北门未开')
+  expect(value.after).not.toContain('北门已开')
+  expect(value).toMatchObject({ repeated: 'similar-found', similarId: value.id })
+  expect((await (await workspace()).memory.list()).map(entry => entry.body)).toEqual(['北门未开'])
+})
+
 it('资产索引只返回实际可读条目与规范摘要，任意附带私有 JSON 不能随目录泄漏', async () => {
   const ws = await workspace()
   await ws.fs.writeText('journal.md', '旅人走到了港口')

@@ -4,7 +4,7 @@
 
 **Tavern-style roleplay in DeepSeek Harness Desktop or `dsh web`, with character cards, lorebooks, and long-term memory.**
 
-[![Release](https://img.shields.io/badge/version-v0.5.1-blue.svg)](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.5.1)
+[![Release](https://img.shields.io/badge/version-v0.5.2-blue.svg)](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.5.2)
 [![dsh](https://img.shields.io/badge/dsh-0.2.0--rc.2-informational.svg)](https://deepseek-harness.github.io/deepseek-harness/)
 [![Node.js](https://img.shields.io/badge/node-%E2%89%A524-brightgreen.svg)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
@@ -99,7 +99,7 @@ flowchart LR
 Open **Plugins → Add plugin**, enter this GitHub URL, and install:
 
 ```text
-https://github.com/Amakurai/dsh-liketavern.git#v0.5.1
+https://github.com/Amakurai/dsh-liketavern.git#v0.5.2
 ```
 
 To upgrade, uninstall the old Tavern plugin from the Plugins page, add the new version's tag, then fully quit and restart the desktop app. **Settings → Tavern → About → Check for updates** only checks stable releases and host compatibility; installation is handled by the desktop Plugins page. The repository includes precompiled `lib/` files, so no local build is needed.
@@ -110,7 +110,7 @@ Run these commands in your terminal to install the pinned stable release:
 
 ```bash
 # 1. Add plugin to web profile
-dsh plugin --profile web add github:Amakurai/dsh-liketavern#v0.5.1
+dsh plugin --profile web add github:Amakurai/dsh-liketavern#v0.5.2
 
 # 2. Verify installation
 dsh plugin --profile web list --depth 0
@@ -125,11 +125,11 @@ dsh web
 
 ### Option 2: Install from Release Tarball (Offline)
 
-1. Download `dsh-liketavern-0.5.1.tgz` from the [v0.5.1 Release](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.5.1) (with `SHA256SUMS.txt` for integrity verification).
+1. Download `dsh-liketavern-0.5.2.tgz` from the [v0.5.2 Release](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.5.2) (with `SHA256SUMS.txt` for integrity verification).
 2. In the download directory, run:
 
 ```bash
-dsh plugin --profile web add ./dsh-liketavern-0.5.1.tgz
+dsh plugin --profile web add ./dsh-liketavern-0.5.2.tgz
 dsh web
 ```
 

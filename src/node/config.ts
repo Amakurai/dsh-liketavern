@@ -90,6 +90,8 @@ const MemorySchema = z.object({
   compressBatch: z.number().min(2).default(20),
   /** 检索 query 取最近 N 条消息。 */
   queryMessages: z.number().min(1).default(4),
+  /** 空闲时用当前会话模型为新写入的记忆补检索别名（同义说法、类别、名字）；关闭后不发这类辅助请求。 */
+  aliasExpansion: z.boolean().default(true),
 }).default({
   maxEntries: 200,
   maxTokens: 20000,
@@ -99,6 +101,7 @@ const MemorySchema = z.object({
   dedupSimilarity: 0.75,
   compressBatch: 20,
   queryMessages: 4,
+  aliasExpansion: true,
 })
 
 export const TavernConfigSchema = z.object({
@@ -170,6 +173,7 @@ export interface TavernConfig {
     dedupSimilarity: number
     compressBatch: number
     queryMessages: number
+    aliasExpansion: boolean
   }
   defaults: TavernSessionDefaults
   interactiveCards: boolean

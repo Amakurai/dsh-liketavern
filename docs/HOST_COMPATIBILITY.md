@@ -2,6 +2,14 @@
 
 当前源码基线为 dsh 0.2.0-rc.2。以下按版本记录观测结果，升级时重新核对，不是永久架构要求。
 
+## 0.2.0-rc.2 依赖安全与 v0.5.2 安装复核（2026-10-10）
+
+宿主基线保持精确 rc.2，开发安装的 MCP client/core 固定为 2.2.0，http-cache-semantics 为 4.3.0，source-map-js 为 1.2.2。核对 dsh-mcp-client 的 package.json、lib 与声明：现有 HTTP 工厂只传 requestInit.headers，stdio 使用公开子路径，不配置 OAuth provider。真实补丁 Client 经 loopback HTTP 完成初始化、工具发现与调用，结果继续通过宿主 createMcpToolDefinition 的实际 schema 校验与转换；OAuth issuer 和 source map 限额另有行为回归。缓存公告争议与独立宿主 overrides 边界见 [依赖安全记录](DEPENDENCY_SECURITY.md)。
+
+Windows / Node 24.18.0 使用新的 `.tmp/release-052-20261010-security` 工厂，在独立 DSH_HOME 通过真实 rc.2 CLI 将当前预编译 tgz 安装进 web profile 并冷启动。关于页正确显示插件 0.5.2、宿主 0.2.0-rc.2；已安装 memory.js 的 SHA-256 与仓库构建一致。记忆设置初始 dedupSimilarity 为 0.75、aliasExpansion 开启；关闭别名并保存后，真实 profile patch 写入 false，页面重载后保持关闭。页面错误日志为空。
+
+这次页面验收覆盖安装、版本识别与记忆设置持久化；生成、取消、别名维护和隔离剧情由真实文件系统与模拟宿主的集成测试覆盖，没有调用真实模型。截图与合成资产只保留在本地 .tmp，不进入 Git 或发布包。干净 npm ci、全量及生产依赖审计均为 0；构建、221 文件 / 3130 项测试通过（10 项按平台或能力跳过）、doctor/backup 与 481 文件包白名单检查通过。最终发布附件仍取自目标提交通过两平台 CI 后的原始制品。
+
 ## 0.2.0-rc.2 卡面许可与分支恢复（2026-10-01）
 
 卡面各桥固定非空 runtimeId，并在同一 WindowProxy 文档重写后保留退役身份；请求、结果、诊断、Applied 与高度通知都不能借用新运行时。可信客户端通过枚举的 openHelperFrame / closeHelperFrame 为固定会话、消息、剧情和只读权限登记私有许可，令牌不进入 iframe。新 epoch 在任何排锁前撤销旧许可，各写入口在 WAL、共享资产修改或草稿原子发布前复核；已认领的真实提交保留正确成功回执。重绘候选发布后由宿主登记同运行时的新可写 epoch。

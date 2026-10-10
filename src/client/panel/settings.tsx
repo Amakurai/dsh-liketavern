@@ -405,6 +405,9 @@ export function SettingsSection(props: { remote: TavernRemote }) {
             <SettingsRow title={t('settings.memory.queryMessages')} description={t('settings.memory.queryMessagesDesc')}>
               <NumInput value={draft.memory.queryMessages} onChange={(v) => setMemory({ queryMessages: Math.max(1, Math.round(v)) })} />
             </SettingsRow>
+            <SettingsRow title={t('settings.memory.aliasExpansion')} description={t('settings.memory.aliasExpansionDesc')}>
+              <Toggle checked={draft.memory.aliasExpansion} onChange={(aliasExpansion) => setMemory({ aliasExpansion })} />
+            </SettingsRow>
             <SaveBar>
               <Btn disabled={busy} onClick={() => void save({ memory: draft.memory }, t('settings.memory.saved'))} primary size="md">
                 {t('settings.memory.save')}

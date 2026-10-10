@@ -23,6 +23,9 @@ jobs:
       - name: 安装依赖
         run: npm ci
 
+      - name: 依赖安全审计
+        run: npm audit
+
       - name: 构建（tsc + client bundle）
         run: npm run build
 
@@ -81,6 +84,9 @@ jobs:
 
       - name: 安装依赖
         run: npm ci
+
+      - name: 依赖安全审计
+        run: npm audit
 
       - name: 构建（tsc + client bundle）
         run: npm run build

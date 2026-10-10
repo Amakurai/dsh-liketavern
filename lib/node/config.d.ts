@@ -96,6 +96,8 @@ export declare const TavernConfigSchema: z<Schemastery.ObjectS<NoInfer<{
         compressBatch: z<number, number, "defined">;
         /** 检索 query 取最近 N 条消息。 */
         queryMessages: z<number, number, "defined">;
+        /** 空闲时用当前会话模型为新写入的记忆补检索别名（同义说法、类别、名字）；关闭后不发这类辅助请求。 */
+        aliasExpansion: z<boolean, boolean, "defined">;
     }>>, Schemastery.ObjectT<NoInfer<{
         /** 每角色记忆条数上限，超出触发压缩。 */
         maxEntries: z<number, number, "defined">;
@@ -113,6 +115,8 @@ export declare const TavernConfigSchema: z<Schemastery.ObjectS<NoInfer<{
         compressBatch: z<number, number, "defined">;
         /** 检索 query 取最近 N 条消息。 */
         queryMessages: z<number, number, "defined">;
+        /** 空闲时用当前会话模型为新写入的记忆补检索别名（同义说法、类别、名字）；关闭后不发这类辅助请求。 */
+        aliasExpansion: z<boolean, boolean, "defined">;
     }>>, "defined">;
     defaults: z<Schemastery.ObjectS<NoInfer<{
         /** 点选角色时套用的备选角色卡；空串 = 不预填。新对话不会自动绑定。 */
@@ -232,6 +236,8 @@ export declare const TavernConfigSchema: z<Schemastery.ObjectS<NoInfer<{
         compressBatch: z<number, number, "defined">;
         /** 检索 query 取最近 N 条消息。 */
         queryMessages: z<number, number, "defined">;
+        /** 空闲时用当前会话模型为新写入的记忆补检索别名（同义说法、类别、名字）；关闭后不发这类辅助请求。 */
+        aliasExpansion: z<boolean, boolean, "defined">;
     }>>, Schemastery.ObjectT<NoInfer<{
         /** 每角色记忆条数上限，超出触发压缩。 */
         maxEntries: z<number, number, "defined">;
@@ -249,6 +255,8 @@ export declare const TavernConfigSchema: z<Schemastery.ObjectS<NoInfer<{
         compressBatch: z<number, number, "defined">;
         /** 检索 query 取最近 N 条消息。 */
         queryMessages: z<number, number, "defined">;
+        /** 空闲时用当前会话模型为新写入的记忆补检索别名（同义说法、类别、名字）；关闭后不发这类辅助请求。 */
+        aliasExpansion: z<boolean, boolean, "defined">;
     }>>, "defined">;
     defaults: z<Schemastery.ObjectS<NoInfer<{
         /** 点选角色时套用的备选角色卡；空串 = 不预填。新对话不会自动绑定。 */
@@ -370,6 +378,8 @@ export declare const Config: z<Schemastery.ObjectS<NoInfer<{
         compressBatch: z<number, number, "defined">;
         /** 检索 query 取最近 N 条消息。 */
         queryMessages: z<number, number, "defined">;
+        /** 空闲时用当前会话模型为新写入的记忆补检索别名（同义说法、类别、名字）；关闭后不发这类辅助请求。 */
+        aliasExpansion: z<boolean, boolean, "defined">;
     }>>>, NoInfer<Schemastery.ObjectT<NoInfer<{
         /** 每角色记忆条数上限，超出触发压缩。 */
         maxEntries: z<number, number, "defined">;
@@ -387,6 +397,8 @@ export declare const Config: z<Schemastery.ObjectS<NoInfer<{
         compressBatch: z<number, number, "defined">;
         /** 检索 query 取最近 N 条消息。 */
         queryMessages: z<number, number, "defined">;
+        /** 空闲时用当前会话模型为新写入的记忆补检索别名（同义说法、类别、名字）；关闭后不发这类辅助请求。 */
+        aliasExpansion: z<boolean, boolean, "defined">;
     }>>>, "volatile-defined">;
     defaults: z<NoInfer<Schemastery.ObjectS<NoInfer<{
         /** 点选角色时套用的备选角色卡；空串 = 不预填。新对话不会自动绑定。 */
@@ -501,6 +513,8 @@ export declare const Config: z<Schemastery.ObjectS<NoInfer<{
         compressBatch: z<number, number, "defined">;
         /** 检索 query 取最近 N 条消息。 */
         queryMessages: z<number, number, "defined">;
+        /** 空闲时用当前会话模型为新写入的记忆补检索别名（同义说法、类别、名字）；关闭后不发这类辅助请求。 */
+        aliasExpansion: z<boolean, boolean, "defined">;
     }>>>, NoInfer<Schemastery.ObjectT<NoInfer<{
         /** 每角色记忆条数上限，超出触发压缩。 */
         maxEntries: z<number, number, "defined">;
@@ -518,6 +532,8 @@ export declare const Config: z<Schemastery.ObjectS<NoInfer<{
         compressBatch: z<number, number, "defined">;
         /** 检索 query 取最近 N 条消息。 */
         queryMessages: z<number, number, "defined">;
+        /** 空闲时用当前会话模型为新写入的记忆补检索别名（同义说法、类别、名字）；关闭后不发这类辅助请求。 */
+        aliasExpansion: z<boolean, boolean, "defined">;
     }>>>, "volatile-defined">;
     defaults: z<NoInfer<Schemastery.ObjectS<NoInfer<{
         /** 点选角色时套用的备选角色卡；空串 = 不预填。新对话不会自动绑定。 */
@@ -575,6 +591,7 @@ export interface TavernConfig {
         dedupSimilarity: number;
         compressBatch: number;
         queryMessages: number;
+        aliasExpansion: boolean;
     };
     defaults: TavernSessionDefaults;
     interactiveCards: boolean;

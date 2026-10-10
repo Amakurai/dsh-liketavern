@@ -1,11 +1,35 @@
 /**
- * 长期记忆检索结果的纯函数治理：统一时间衰减参数，并在 token 预算内挑选正文。
+ * 长期记忆检索的纯函数治理：构造自动入模的查询、统一时间衰减参数，并在 token 预算内挑选正文。
  */
 import type { MemoryEntry } from './types.js';
 /** 自动入模超取有界；最终条数仍由 retrievalTopK 单独限制。 */
 export declare const MEMORY_CANDIDATE_LIMIT = 200;
 /** 只对入模候选超取，手动 memory_search 仍使用 memorySearchOptions 的原始 topK。 */
 export declare function memoryCandidateCount(topK: number): number;
+/**
+ * 最新一条用户输入里的词在检索中额外加的倍数（与它在整段查询里的 1 倍合计 5 倍）。
+ * 整段查询往往是几百字的叙述，一句短问题的几个词会被淹没；加权按命中分相加而不是按排名融合，
+ * 所以闲聊输入偶然撞上的弱命中加不了多少分，不会挤掉前文场景的强命中。
+ */
+export declare const MEMORY_FOCUS_BOOST = 4;
+export interface MemoryQuery {
+    /** 最近若干条非空消息按顺序拼接。 */
+    query: string;
+    /** 需要强调的最新用户输入；没有可强调的片段时不设。 */
+    boost?: {
+        query: string;
+        weight: number;
+    };
+}
+/**
+ * 自动入模的检索查询：取最近 count 条消息。窗口里最后一条是用户输入、且前面还有别的内容时，
+ * 把它作为强调片段；续写或重新生成（最后一条是助手）以及只有这一条输入时不强调——
+ * 后者全部词等比例放大，排序不变。
+ */
+export declare function memoryQuery(messages: ReadonlyArray<{
+    role: string;
+    content: string;
+}>, count: number): MemoryQuery;
 /** 摘要的完整叶来源集合由存储层按当前剧情解析；普通原文不设此字段，始终可补充摘要细节。 */
 export interface MemoryBodyCandidate {
     entry: Pick<MemoryEntry, 'body'>;

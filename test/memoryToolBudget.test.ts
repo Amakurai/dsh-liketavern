@@ -1,6 +1,6 @@
 /** 记忆工具完整预算的纯函数回归：正文、展示元数据、定位字段、JSON 转义和极小预算边界均不改变原存储数据。 */
 import { expect, it } from 'vitest'
-import { budgetMemorySearch } from '../src/core/memoryToolBudget.js'
+import { budgetMemorySearch, MEMORY_SEARCH_NO_MATCH_HINT } from '../src/core/memoryToolBudget.js'
 import { assetOutputTokens } from '../src/core/assetRead.js'
 import type { MemoryEntry } from '../src/core/types.js'
 
@@ -65,4 +65,20 @@ it('零或不足响应头的预算固定拒绝，错误用量仍如实计费且�
     expect(result.tokensUsed).toBe(assetOutputTokens(result))
     expect(assetOutputTokens(result)).toBeLessThanOrEqual(100)
   }
+})
+
+it('没有命中时按调用方要求附上换词提示，预算容不下或有命中时不附', () => {
+  const empty = budgetMemorySearch([], 1200, { emptyHint: MEMORY_SEARCH_NO_MATCH_HINT })
+  expect(empty).toMatchObject({ ok: true, count: 0, omitted: 0, truncated: false, results: [], hint: MEMORY_SEARCH_NO_MATCH_HINT })
+  expect(empty.tokensUsed).toBe(assetOutputTokens(empty))
+  // 不要求提示时形状与以前相同
+  expect(budgetMemorySearch([], 1200)).not.toHaveProperty('hint')
+  // 预算只够响应头：提示让位，仍是合法的空结果
+  const bare = budgetMemorySearch([], 1200).tokensUsed
+  const tight = budgetMemorySearch([], bare + 2, { emptyHint: MEMORY_SEARCH_NO_MATCH_HINT })
+  expect(tight).toMatchObject({ ok: true, count: 0, results: [] })
+  expect(tight).not.toHaveProperty('hint')
+  expect(assetOutputTokens(tight)).toBeLessThanOrEqual(bare + 2)
+  // 有命中时这条提示不出现
+  expect(budgetMemorySearch([hit()], 1200, { emptyHint: MEMORY_SEARCH_NO_MATCH_HINT })).not.toHaveProperty('hint')
 })

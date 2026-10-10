@@ -4,20 +4,35 @@
  * frontmatter 手写解析（零依赖，不引入 yaml 库）：字段行 `key: value`，数组用 JSON 行内式
  * （`tags: ["a","b"]`）。一切文件读写经 WorkspaceFs（事务层）；检索复用核心 BM25
  * （keys 权重 ×2 已在索引侧内建），search 支持半衰期时间衰减（ts 取 updated）。
+ * 检索别名是派生数据，单独存在 memory/aliases.json，按正文指纹对应到记忆，只进检索索引、不进去重索引。
  */
 
-import { randomBytes } from 'node:crypto'
-import { Bm25Index } from '../core/bm25.js'
+import { createHash, randomBytes } from 'node:crypto'
+import { Bm25Index, type Bm25SearchOptions } from '../core/bm25.js'
+import { parseAliasFile, serializeAliasFile, type AliasRecord } from '../core/memoryAliases.js'
 import { estimateTokens } from '../core/tokenize.js'
 import type { MemoryEntry } from '../core/types.js'
 import type { WorkspaceFs } from './workspaceFs.js'
 import { withWorkspaceLock } from './workspaceLock.js'
+import { dirWrittenSince, openLedger, writtenSince, type WriteLedger } from './writeLedger.js'
 
 /** 正文软上限（字）：超过不拒绝，write 返回值带 overLength: true，治理提示由工具层做。 */
 export const MEMORY_BODY_SOFT_LIMIT = 200
 
 const MEMORY_DIR = 'memory'
 const ARCHIVE_PREFIX = 'archive/'
+const ARCHIVE_DIR = `${MEMORY_DIR}/archive`
+/** 检索别名文件。放在 memory/ 下：分支快照整目录复制记忆时会一并带走，不必在子剧情里重新生成。 */
+const ALIAS_PATH = `${MEMORY_DIR}/aliases.json`
+const NO_ALIASES: ReadonlyMap<string, AliasRecord> = new Map()
+
+function sameStat(a: FileStat | null, b: FileStat | null): boolean {
+  return a === null || b === null ? a === b : a.mtimeMs === b.mtimeMs && a.size === b.size
+}
+
+function sameList(a: readonly string[] | undefined, b: readonly string[] | undefined): boolean {
+  return a === b || (a !== undefined && b !== undefined && a.length === b.length && a.every((item, index) => item === b[index]))
+}
 
 /** 落盘的 frontmatter 元数据；id 由文件名推导、archived 由路径推导，均不写入文件。 */
 export interface MemoryMeta {
@@ -72,18 +87,31 @@ export function isMemoryId(id: unknown): id is string {
   return typeof id === 'string' && id.length > 0 && id.length <= 255 && !/[\\/:\0]/.test(id) && id !== '.' && id !== '..'
 }
 
+/**
+ * 一份跨重建保留的索引。条目变化时只增删变了的文档（按条目对象是否仍是同一个判断），
+ * 不再每次写入后把全部正文重新分词；增删后的统计与全新构建完全相同。
+ */
 interface MemoryIndex {
   index: Bm25Index<MemoryEntry>
+  /** 文件身份 → 已入索引的条目。 */
   entries: ReadonlyMap<string, MemoryEntry>
+  /** 文件身份 → 入索引时用的别名（没有或已作废的不在表里）；别名变了的条目要重新入索引。 */
+  aliases: ReadonlyMap<string, readonly string[]>
+  /** 对齐时用的别名文件解析结果；换了一份就要重新对齐。 */
+  aliasRecords: ReadonlyMap<string, AliasRecord>
+  /** 上次对齐时的活跃条目快照；list 换了一份就要重新对齐。 */
+  synced: readonly MemoryEntry[]
   /** 仅可达归档的磁盘指纹；活跃摘要未变也不能复用已改写、删除或损坏的来源正文。 */
-  sourceFiles?: readonly string[]
-  sourceFingerprint?: string
+  sourceFiles: readonly string[]
+  sourceFingerprint: string
+  /** 对齐前的写入序号；之后本进程又写过归档就不能再直接复用。 */
+  revision: number
 }
 
 interface FileStat { mtimeMs: number; size: number }
 
-/** 一份已解析的归档来源，连同读取前取得的磁盘指纹（读取前 stat 不到则为 null，不进缓存）。 */
-interface LoadedSource { path: string; stat: FileStat | null; entry: MemoryEntry }
+/** 一份已解析的归档来源，连同读取前取得的磁盘指纹（读取前 stat 不到则为 null，不进缓存）与写入序号。 */
+interface LoadedSource { path: string; stat: FileStat | null; revision: number; entry: MemoryEntry }
 
 /** 归档读取的并发上限：避免上千个来源同时占用文件句柄。 */
 const SOURCE_READ_CONCURRENCY = 8
@@ -99,7 +127,7 @@ function sourceFingerprintOf(files: ReadonlyArray<readonly [string, FileStat | n
 async function settleLimited<T, R>(
   items: readonly T[],
   limit: number,
-  task: (item: T) => Promise<R>,
+  task: (item: T, index: number) => Promise<R>,
 ): Promise<Array<PromiseSettledResult<R> | undefined>> {
   const results = new Array<PromiseSettledResult<R> | undefined>(items.length)
   let next = 0
@@ -108,7 +136,7 @@ async function settleLimited<T, R>(
     while (!failed && next < items.length) {
       const index = next++
       try {
-        results[index] = { status: 'fulfilled', value: await task(items[index]!) }
+        results[index] = { status: 'fulfilled', value: await task(items[index]!, index) }
       } catch (reason) {
         failed = true
         results[index] = { status: 'rejected', reason }
@@ -248,31 +276,49 @@ export function parseMemory(file: string, text: string): MemoryEntry {
 export class MemoryStore {
   private readonly similarTopK: number
   /**
-   * 解析结果与 BM25 索引缓存，按目录指纹（文件名 + mtime + size）失效。
+   * 活跃记忆的解析结果，按目录指纹（文件名 + mtime + size）失效。
    *
-   * 为什么不用进程内修订号（对比 TavernState 的 presetCache / loreCache）：记忆文件除了本类
-   * 还会被 WAL 回滚直接写回磁盘（楼层回退撤销本轮 memory_write），修订号捕获不到那条路径，
-   * 会让检索一直用回滚前的索引。指纹是 N 次 stat（不读数据），比 N 次全文读 + 分词便宜一个量级。
+   * 为什么以磁盘指纹为主、不只用进程内修订号（对比 TavernState 的 presetCache / loreCache）：
+   * 记忆文件除了本类还会被 WAL 回滚直接写回磁盘（楼层回退撤销本轮 memory_write），修订号捕获不到那条路径，
+   * 会让检索一直用回滚前的索引。指纹是每个文件一次 lstat（不读数据），比全文读 + 分词便宜一个量级。
+   * 本类自己的写入另外记进同一剧情共享的写入登记（WriteLedger），补上指纹在同一时间刻度内分不出的情况。
    *
    * 缓存的收益点：一次 memory_write 要连着跑 findSimilar → stats → write，
    * 一个 turn 里 search 也可能被工具重复调用；没有缓存的话每次都全量重读 + 重建索引。
    */
-  private cache: { fingerprint: string; entries: MemoryEntry[]; index?: MemoryIndex; sourceIndex?: MemoryIndex } | null = null
+  private cache: { revision: number; fingerprint: string; entries: MemoryEntry[] } | null = null
+  /** 只含活跃记忆的索引（写入去重用）与含可达归档来源的索引（检索用）；只在工作区锁内读写。 */
+  private activeIndex: MemoryIndex | null = null
+  private sourceIndex: MemoryIndex | null = null
+  /**
+   * 活跃记忆逐个文件的解析结果（坏文件记为 null）。目录指纹变化时只重读指纹变了的文件：
+   * 写一条记忆只多出一个文件，不必把其余上百条再读一遍。判断口径与目录指纹相同（文件名 + mtime + size）。
+   */
+  private readonly activeCache = new Map<string, { mtimeMs: number; size: number; revision: number; entry: MemoryEntry | null }>()
   /**
    * 已解析的归档来源，按路径存、按磁盘指纹校验，活跃集变化时不随 cache 一起丢弃。
    *
    * 归档原文写入后基本不再变化，而每次 memory_write 都会让活跃集指纹变化；没有这层的话，
    * 下一次检索要把全部可达来源重新逐个读盘（几百条来源即数百毫秒，随剧情长度线性增长）。
-   * 信任程度与来源索引的缓存命中相同：重建时仍逐个 stat，指纹不符或文件缺失就重读或报错；
+   * 信任程度与来源索引的缓存命中相同：每次对齐索引时仍批量核对指纹，指纹不符或文件缺失就重读或报错；
    * 显式 invalidate 会一并清空。
    */
   private readonly sourceCache = new Map<string, LoadedSource>()
+  /** 别名文件的解析结果，按磁盘指纹与写入登记校验；文件不存在时记为空表。 */
+  private aliasCache: { stat: FileStat | null; revision: number; records: ReadonlyMap<string, AliasRecord> } | null = null
+  /** 条目正文的指纹；条目对象在正文不变时一直是同一个，不必每次重算。 */
+  private readonly hashes = new WeakMap<MemoryEntry, string>()
+  private readonly ledger: WriteLedger
+  private epoch: number
 
   constructor(
     private readonly fs: WorkspaceFs,
     options?: MemoryStoreOptions,
   ) {
     this.similarTopK = options?.similarTopK ?? 3
+    // 同一剧情的多个实例（管线与工具的只读操作用长期存活的那个，工具写入每次新建）共用文件层的写入登记
+    this.ledger = openLedger(fs.root)
+    this.epoch = this.ledger.epoch
   }
 
   /**
@@ -286,21 +332,102 @@ export class MemoryStore {
   }
 
   /**
-   * 作废缓存。本类的写路径会自动调用；**楼层 WAL 回滚后调用方必须手动调一次**——
-   * 回滚直接把旧内容写回磁盘，绕过本类，且「撤销一次 update」可能既不改文件大小
-   * 也落在同一个 mtime 刻度内（`updated` 是定长 ISO 串），指纹兜不住这种情况。
+   * 作废这个剧情下全部实例的缓存。平时不需要调用：本类的写入、面板编辑、WAL 回滚都经 WorkspaceFs，
+   * 由文件层的写入登记通知各实例重读。只有完全绕过 WorkspaceFs 的改写（别的进程、外部编辑器、测试直接写盘）
+   * 才可能既不改文件大小、又落在同一个 mtime 刻度内，那时需要调用方手动调一次。
    */
   invalidate(): void {
-    this.cache = null
-    this.sourceCache.clear()
+    this.ledger.epoch++
+    this.sync()
+  }
+
+  /** 取共享的写入登记；有实例显式作废过就先丢掉本实例的全部缓存。 */
+  private sync(): WriteLedger {
+    if (this.epoch !== this.ledger.epoch) {
+      this.epoch = this.ledger.epoch
+      this.cache = null
+      this.activeIndex = null
+      this.sourceIndex = null
+      this.activeCache.clear()
+      this.sourceCache.clear()
+      this.aliasCache = null
+    }
+    return this.ledger
+  }
+
+  /** 正文指纹：别名按它对应到记忆，正文一改即作废。 */
+  private hashOf(entry: MemoryEntry): string {
+    let hash = this.hashes.get(entry)
+    if (hash === undefined) {
+      hash = createHash('sha256').update(entry.body).digest('hex').slice(0, 32)
+      this.hashes.set(entry, hash)
+    }
+    return hash
   }
 
   /**
-   * 本类写路径用：只作废活跃集的解析与索引。归档来源留给重建时的磁盘指纹核对，
-   * 本类亲手改写的归档路径由 archiveNow 逐条剔除。
+   * 读别名文件；调用方必须持有工作区锁。文件缺失或损坏都当作没有别名——它是派生数据，之后会重新生成。
+   * known 是调用方刚取到的磁盘指纹（与别的文件一起批量取的），传了就不再单独 stat。
    */
-  private invalidateActive(): void {
-    this.cache = null
+  private async loadAliases(known?: FileStat | null): Promise<ReadonlyMap<string, AliasRecord>> {
+    const ledger = this.sync()
+    const revision = ledger.counter
+    const stat = known !== undefined ? known : (await this.fs.statMany([ALIAS_PATH]))[0] ?? null
+    const cached = this.aliasCache
+    if (cached && sameStat(cached.stat, stat) && !writtenSince(ledger, ALIAS_PATH, cached.revision)) return cached.records
+    const text = stat ? await this.fs.readText(ALIAS_PATH) : null
+    const records = text === null ? NO_ALIASES : parseAliasFile(text)
+    this.aliasCache = { stat, revision, records }
+    return records
+  }
+
+  /** 这条记忆当前有效的别名：指纹与正文对得上、且不为空。 */
+  private aliasesOf(entry: MemoryEntry, records: ReadonlyMap<string, AliasRecord>): readonly string[] | undefined {
+    const record = records.get(entry.id)
+    return record && record.aliases.length > 0 && record.hash === this.hashOf(entry) ? record.aliases : undefined
+  }
+
+  /**
+   * 还没有别名、或者别名已随正文改动作废的活跃记忆，最新的在前，最多 limit 条。
+   * 生成过但模型没给出别名的条目记为空列表，不再重复请求。
+   */
+  async aliasCandidates(limit: number): Promise<MemoryEntry[]> {
+    return withWorkspaceLock(this.fs.root, async () => {
+      const entries = await this.listNow()
+      const records = await this.loadAliases()
+      const pending: MemoryEntry[] = []
+      for (let i = entries.length - 1; i >= 0 && pending.length < limit; i--) {
+        const entry = entries[i]!
+        if (entry.body.trim() && records.get(entry.id)?.hash !== this.hashOf(entry)) pending.push(entry)
+      }
+      return pending
+    })
+  }
+
+  /**
+   * 保存一批别名，返回实际保存的条数。等待模型期间被改写、删除或归并的记忆对不上现在的正文，直接跳过。
+   * 别名是派生数据，只能经无楼层的文件面写入：记进楼层 WAL 的话，回退楼层会把别的记忆的别名一起改回去。
+   * 顺带清掉既不在活跃库、也不在归档里的记录。
+   */
+  async saveAliases(items: ReadonlyArray<{ entry: MemoryEntry; aliases: readonly string[] }>): Promise<number> {
+    if (this.fs.currentFloor !== null) throw new Error('记忆别名是派生数据，不能在楼层内写入')
+    return withWorkspaceLock(this.fs.root, async () => {
+      const current = new Map((await this.listNow()).map((entry) => [entry.id, entry]))
+      const records = new Map(await this.loadAliases())
+      let saved = 0
+      for (const item of items) {
+        const live = current.get(item.entry.id)
+        if (!live || live.body !== item.entry.body) continue
+        records.set(live.id, { hash: this.hashOf(live), aliases: [...item.aliases] })
+        saved++
+      }
+      if (saved === 0) return 0
+      const archived = new Set((await this.fs.list(ARCHIVE_DIR, { recursive: false }))
+        .filter((name) => name.endsWith('.md')).map((name) => name.slice(0, -3)))
+      for (const id of [...records.keys()]) if (!current.has(id) && !archived.has(id)) records.delete(id)
+      await this.fs.writeText(ALIAS_PATH, serializeAliasFile(records))
+      return saved
+    })
   }
 
   /** 解析 memory/*.md（不含 archive/），坏文件容错跳过；按 created 升序（并列按 id 字典序）。 */
@@ -309,29 +436,44 @@ export class MemoryStore {
   }
 
   private async listNow(): Promise<MemoryEntry[]> {
+    // 序号取在读盘之前：读盘期间别的实例写入的文件，下次仍会被判为需要重读。
+    const ledger = this.sync()
+    const revision = ledger.counter
     // 非递归列举：archive/ 只增不查，递归会让每次检索的成本随归档量增长。
     const stats = await this.fs.listStats(MEMORY_DIR)
     const files = stats.filter((f) => f.name.endsWith('.md'))
     const fingerprint = files.map((f) => `${f.name}:${f.mtimeMs}:${f.size}`).join('\n')
     const cached = this.cache
-    if (cached && cached.fingerprint === fingerprint) return cached.entries
+    if (cached && cached.fingerprint === fingerprint && !dirWrittenSince(ledger, MEMORY_DIR, cached.revision)) return cached.entries
     // 并行读取：记忆库上限几百条，串行 await 会让每次检索/写入前的全量 list 线性放大 I/O 等待。
+    // 指纹没变且本进程没再写过的文件直接复用上次的解析结果。
     const parsed = await Promise.all(
       files.map(async (file) => {
-        const text = await this.fs.readText(`${MEMORY_DIR}/${file.name}`)
-        if (text === null) return null
-        try {
-          return parseMemory(file.name, text)
-        } catch {
-          return null // 坏文件跳过
+        const path = `${MEMORY_DIR}/${file.name}`
+        const known = this.activeCache.get(file.name)
+        if (known && known.mtimeMs === file.mtimeMs && known.size === file.size && !writtenSince(ledger, path, known.revision)) {
+          return known.entry
         }
+        const text = await this.fs.readText(path)
+        let entry: MemoryEntry | null = null
+        if (text !== null) {
+          try {
+            entry = parseMemory(file.name, text)
+          } catch {
+            entry = null // 坏文件跳过
+          }
+        }
+        this.activeCache.set(file.name, { mtimeMs: file.mtimeMs, size: file.size, revision, entry })
+        return entry
       }),
     )
+    const listed = new Set(files.map((file) => file.name))
+    for (const name of this.activeCache.keys()) if (!listed.has(name)) this.activeCache.delete(name)
     const entries = parsed.filter((e): e is MemoryEntry => e !== null)
     entries.sort((a, b) =>
       a.created < b.created ? -1 : a.created > b.created ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
     )
-    this.cache = { fingerprint, entries }
+    this.cache = { revision, fingerprint, entries }
     return entries
   }
 
@@ -370,7 +512,6 @@ export class MemoryStore {
       keys: input.keys ?? [],
     }
     await this.fs.writeText(this.pathOf(id), serializeMemory(meta, input.body))
-    this.invalidateActive()
     return {
       id,
       file: `${id}.md`,
@@ -408,7 +549,6 @@ export class MemoryStore {
     }
     const body = patch.body ?? existing.body
     await this.fs.writeText(this.pathOf(id), serializeMemory(meta, body))
-    this.invalidateActive()
     return { ...existing, ...meta, body }
   }
 
@@ -417,7 +557,6 @@ export class MemoryStore {
     return withWorkspaceLock(this.fs.root, async () => {
       if (!isMemoryId(id) || (await this.fs.readText(this.pathOf(id))) === null) return false
       await this.fs.delete(this.pathOf(id))
-      this.invalidateActive()
       return true
     })
   }
@@ -432,14 +571,11 @@ export class MemoryStore {
     for (const id of ids) {
       const text = await this.fs.readText(this.pathOf(id))
       if (text === null) continue
-      const archivePath = this.pathOf(id, true)
-      // 亲手改写的归档路径直接剔除，不依赖 mtime 刻度区分同长度的两次写入。
-      this.sourceCache.delete(archivePath)
-      await this.fs.writeText(archivePath, text)
+      // 两步都经文件层登记：所有实例都会重读归档路径，不依赖 mtime 刻度区分同长度的两次写入。
+      await this.fs.writeText(this.pathOf(id, true), text)
       await this.fs.delete(this.pathOf(id))
       moved++
     }
-    if (moved > 0) this.invalidateActive()
     return moved
   }
 
@@ -462,17 +598,27 @@ export class MemoryStore {
   }
 
   /**
-   * 以当前活跃记忆构建 BM25 索引。
-   * 与 list 共用指纹缓存：记忆没变过就复用上次的索引，不重读也不重分词
-   * （分词是 CJK bigram，重建成本与库体量成正比，一个 turn 里可能被调多次）。
+   * 取与当前磁盘状态对齐的 BM25 索引；调用方必须持有工作区锁，并在返回后同步用完。
+   * 活跃集与归档指纹都没变就直接复用；否则重新展开来源，再把索引增量对齐到新的条目集合。
    */
   private async buildIndex(includeSources = false): Promise<MemoryIndex> {
     const entries = await this.list()
-    const cached = this.cache
-    const existing = includeSources ? cached?.sourceIndex : cached?.index
-    if (existing && (!includeSources || existing.sourceFingerprint === await this.sourceFingerprint(existing.sourceFiles ?? []))) return existing
-    if (includeSources && cached) delete cached.sourceIndex
-    const index = new Bm25Index<MemoryEntry>()
+    const existing = includeSources ? this.sourceIndex : this.activeIndex
+    const revision = this.ledger.counter
+    // 别名只进检索索引：去重比较的是新正文与已有条目，别名会让同一段正文显得不那么相似。
+    let records = NO_ALIASES
+    const reusable = existing !== null && existing.synced === entries
+    if (!includeSources) {
+      if (reusable) return existing
+    } else if (reusable && !dirWrittenSince(this.ledger, ARCHIVE_DIR, existing.revision)) {
+      // 缓存命中的常见路径：归档来源与别名文件的指纹一次批量取回，不为别名多发一轮 stat。
+      const stats = await this.fs.statMany([...existing.sourceFiles, ALIAS_PATH])
+      records = await this.loadAliases(stats[existing.sourceFiles.length] ?? null)
+      const fingerprint = sourceFingerprintOf(existing.sourceFiles.map((path, index) => [path, stats[index] ?? null] as const))
+      if (existing.aliasRecords === records && existing.sourceFingerprint === fingerprint) return existing
+    } else {
+      records = await this.loadAliases()
+    }
     const indexed = [...entries]
     const sources: LoadedSource[] = []
     if (includeSources) {
@@ -500,7 +646,7 @@ export class MemoryStore {
             break
           }
         }
-        const loaded = await this.loadSources(ids)
+        const loaded = await this.loadSources(ids, revision)
         if (stopped) throw deferred
         const next: MemoryEntry[] = []
         for (const source of loaded) {
@@ -514,49 +660,62 @@ export class MemoryStore {
       const reachable = new Set(sources.map((source) => source.path))
       for (const path of this.sourceCache.keys()) if (!reachable.has(path)) this.sourceCache.delete(path)
     }
-    for (const entry of indexed) {
+    // 来源全部加载成功后才动索引：中途失败时上一份索引保持原样。以下到返回之间没有 await。
+    const index = existing?.index ?? new Bm25Index<MemoryEntry>()
+    const previous = existing?.entries ?? new Map<string, MemoryEntry>()
+    const next = new Map(indexed.map((entry) => [memoryIdentity(entry.id), entry]))
+    const previousAliases = existing?.aliases ?? new Map<string, readonly string[]>()
+    const aliases = new Map<string, readonly string[]>()
+    if (records.size > 0) {
+      for (const [identity, entry] of next) {
+        const list = this.aliasesOf(entry, records)
+        if (list) aliases.set(identity, list)
+      }
+    }
+    // 未变的活跃条目和归档来源都来自解析缓存，是同一个对象；对象换了就是正文或元数据变了。别名变了同样要重新入索引。
+    const unchanged = (identity: string, entry: MemoryEntry): boolean =>
+      previous.get(identity) === entry && next.get(identity) === entry && sameList(previousAliases.get(identity), aliases.get(identity))
+    for (const [identity, entry] of previous) if (!unchanged(identity, entry)) index.remove(entry.id)
+    for (const [identity, entry] of next) {
+      if (unchanged(identity, entry)) continue
       index.add({
         id: entry.id,
         text: entry.body,
         keys: entry.keys,
+        aliases: aliases.get(identity),
         ts: Date.parse(entry.updated),
         data: entry,
       })
     }
     // 指纹取自读取前的 stat：读到的正文只会比指纹新，下次核对不符就重读，不会把旧正文钉在新指纹下。
-    const built: MemoryIndex = { index, entries: new Map(indexed.map((entry) => [memoryIdentity(entry.id), entry])),
-      ...(includeSources ? { sourceFiles: sources.map((source) => source.path),
-        sourceFingerprint: sourceFingerprintOf(sources.map((source) => [source.path, source.stat] as const)) } : {}) }
-    // list 刚刚按当前指纹填过 cache，这里把索引挂上去；指纹变化时整条缓存会被换掉。
-    // 引用相等校验：await list 期间若另一任务 write → invalidate → list（缓存被换成新指纹对象），
-    // 不能把「旧 entries 建出的索引」挂到新缓存上，否则检索会一直用旧索引直到下次指纹变化。
-    if (this.cache && this.cache.entries === entries) {
-      if (includeSources) this.cache.sourceIndex = built
-      else this.cache.index = built
-    }
+    // synced 记下这次用的活跃快照：等待期间若别的任务让 list 换了一份，下次调用会再对齐一遍。
+    const built: MemoryIndex = { index, entries: next, aliases, aliasRecords: records, synced: entries, revision,
+      sourceFiles: sources.map((source) => source.path),
+      sourceFingerprint: sourceFingerprintOf(sources.map((source) => [source.path, source.stat] as const)) }
+    if (includeSources) this.sourceIndex = built
+    else this.activeIndex = built
     return built
-  }
-
-  /** 只 stat 活跃摘要可达的归档路径；不扫描整棵 archive，也不为缓存命中重新读正文。 */
-  private async sourceFingerprint(paths: readonly string[]): Promise<string> {
-    return sourceFingerprintOf(await Promise.all(paths.map(async (path) => [path, await this.fs.stat(path)] as const)))
   }
 
   /**
    * 按给定顺序加载一批归档来源：磁盘指纹与缓存一致就复用已解析条目，否则读盘解析并写回缓存。
-   * 先 stat 后读；来源是否存在仍以读取结果为准。缺失、解析失败和读取故障都不进缓存，
-   * 多个来源同时出错时报告顺序最靠前的那个。
+   * 先整批取指纹再读；来源是否存在仍以读取结果为准。缺失、解析失败和读取故障都不进缓存。
+   * 取指纹阶段的故障先于读取阶段报告；同一阶段多个来源出错时报告顺序最靠前的那个。
    */
-  private async loadSources(ids: readonly string[]): Promise<LoadedSource[]> {
-    const settled = await settleLimited(ids, SOURCE_READ_CONCURRENCY, async (id): Promise<LoadedSource> => {
-      const path = this.pathOf(id, true)
-      const stat = await this.fs.stat(path)
+  private async loadSources(ids: readonly string[], revision: number): Promise<LoadedSource[]> {
+    if (ids.length === 0) return []
+    const paths = ids.map((id) => this.pathOf(id, true))
+    const stats = await this.fs.statMany(paths)
+    const settled = await settleLimited(ids, SOURCE_READ_CONCURRENCY, async (id, index): Promise<LoadedSource> => {
+      const path = paths[index]!
+      const stat = stats[index] ?? null
       const cached = this.sourceCache.get(path)
-      if (stat && cached?.stat && cached.stat.mtimeMs === stat.mtimeMs && cached.stat.size === stat.size) return cached
+      if (stat && cached?.stat && cached.stat.mtimeMs === stat.mtimeMs && cached.stat.size === stat.size
+        && !writtenSince(this.ledger, path, cached.revision)) return cached
       this.sourceCache.delete(path)
       const raw = await this.fs.readText(path)
       if (raw === null) throw new Error(`摘要来源 ${id} 缺失，无法保证检索完整性`)
-      const loaded: LoadedSource = { path, stat, entry: parseMemory(`${ARCHIVE_PREFIX}${id}.md`, raw) }
+      const loaded: LoadedSource = { path, stat, revision, entry: parseMemory(`${ARCHIVE_PREFIX}${id}.md`, raw) }
       // 没有指纹就无从校验，下次照常重读。
       if (stat) this.sourceCache.set(path, loaded)
       return loaded
@@ -581,16 +740,22 @@ export class MemoryStore {
     keys: string[],
     topK?: number,
   ): Promise<Array<{ entry: MemoryEntry; score: number }>> {
-    const { index } = await this.buildIndex()
-    return index
-      .similarity([text, ...keys].join(' '), { topK: topK ?? this.similarTopK })
-      .map((hit) => ({ entry: hit.data!, score: hit.score }))
+    // 索引跨调用保留并原地更新，对齐与查询必须在同一把锁内完成。
+    return withWorkspaceLock(this.fs.root, async () => {
+      const { index } = await this.buildIndex()
+      return index
+        .similarity([text, ...keys].join(' '), { topK: topK ?? this.similarTopK })
+        .map((hit) => ({ entry: hit.data!, score: hit.score }))
+    })
   }
 
-  /** 检索：BM25 + 时间衰减；仅自动入模额外请求摘要来源，工具的结果形状和排序保持不变。 */
+  /**
+   * 检索：BM25 + 时间衰减。仅自动入模额外请求摘要来源并给最新输入加权（boost），
+   * 工具不传这两项，结果形状不变。
+   */
   async search(
     query: string,
-    options?: { topK?: number; halfLifeMs?: number; now?: number; includeSummarySources?: boolean },
+    options?: Bm25SearchOptions & { includeSummarySources?: boolean },
   ): Promise<Array<{ entry: MemoryEntry; score: number; summarySourceIds?: readonly string[] }>> {
     return withWorkspaceLock(this.fs.root, async () => {
       const { index, entries } = await this.buildIndex(true)

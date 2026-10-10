@@ -32,7 +32,7 @@ import {
 import { defaultPreset } from '../core/assemble.js'
 import { TURN_WRITE_ACK_PREFIX, formatTurnStepNotice, neutralizeDshMustache } from '../core/dshPrompt.js'
 import { memorySearchOptions } from '../core/memoryRetrieval.js'
-import { budgetMemorySearch } from '../core/memoryToolBudget.js'
+import { budgetMemorySearch, MEMORY_SEARCH_NO_MATCH_HINT } from '../core/memoryToolBudget.js'
 import { boundedToolError } from '../core/toolErrorBudget.js'
 import {
   budgetLoreCatalog,
@@ -62,6 +62,12 @@ const ISO_DATE_TIME_RE = /^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)
 interface ToolCtx {
   binding: SessionBinding
   ws: { fs: WorkspaceFs; memory: MemoryStore; deltas: WorldDeltaStore }
+  /**
+   * 只读的记忆操作（检索、相似度、容量）用剧情句柄上长期存活的实例：它的解析缓存与索引跨工具调用保留，
+   * 而 ws.memory 每次调用新建，冷启动要把活跃记忆和全部可达归档重读一遍。写入仍必须走带楼层的 ws.memory；
+   * 两个实例共享写入登记，写完后这里立即可见。
+   */
+  memoryReader: MemoryStore
   assetFs: WorkspaceFs
   sessionId: string
 }
@@ -110,7 +116,7 @@ async function resolveCtx(
   const ws = { fs, memory: new MemoryStore(fs), deltas: new WorldDeltaStore(fs) }
   // 7 个工具（含读工具）的统一收口通知注入点：走到这里说明本轮确实在做多步。
   maybeInjectStepNotice(state, exec)
-  return { binding, ws, sessionId, assetFs: (await state.workspace(binding.cardId)).fs }
+  return { binding, ws, memoryReader: handle.memory, sessionId, assetFs: (await state.workspace(binding.cardId)).fs }
 }
 
 /** 写工具先等会话队列，再按现有剧情→绑定锁序复核并提交；排队期间换绑/换层不能写旧句柄。 */
@@ -230,8 +236,11 @@ export function registerTavernTools(ctx: Context, state: TavernState): void {
         if ('error' in resolved) return boundedToolError(resolved.error)
         const config = state.config.memory
         const topK = clampMemoryTopK(args.topK, config.retrievalTopK)
-        const hits = await resolved.ws.memory.search(args.query, memorySearchOptions(topK, config.halfLifeDays))
-        return budgetMemorySearch(hits, config.retrievalTokenBudget)
+        // 模型给出的检索词按字面对待：只搜一个字时，功能字（名字叫「七」「月」）也照常匹配
+        const hits = await resolved.memoryReader.search(args.query, { ...memorySearchOptions(topK, config.halfLifeDays), explicit: true })
+        // 库里有记忆却没匹配上：多半是说法不同，提示模型换词或看目录；空库不提示，免得白白重试。
+        const noMatch = hits.length === 0 && topK > 0 && (await resolved.memoryReader.stats()).count > 0
+        return budgetMemorySearch(hits, config.retrievalTokenBudget, noMatch ? { emptyHint: MEMORY_SEARCH_NO_MATCH_HINT } : undefined)
       },
     }),
   )
@@ -244,7 +253,7 @@ export function registerTavernTools(ctx: Context, state: TavernState): void {
       parameters: {
         body: { type: 'string', required: true, description: '记忆正文' },
         tags: { type: 'array', items: { type: 'string' }, description: '标签（可选）' },
-        keys: { type: 'array', items: { type: 'string' }, description: '触发关键词（可选）' },
+        keys: { type: 'array', items: { type: 'string' }, description: '触发关键词（可选）。人名、物名各写一项；只有一个字的名字要单独写成一项，否则日后可能无法按这个名字检索。检索按字面匹配，日后问起时可能用到、正文里却没有的说法（同义词、所属类别）也可以各写一项' },
       },
       output: {
         schema: TOOL_OUTPUTS.memoryWrite,
@@ -255,7 +264,7 @@ export function registerTavernTools(ctx: Context, state: TavernState): void {
           const { ws } = resolved
           const config = state.config.memory
 
-          const similar = await ws.memory.findSimilar(args.body, args.keys ?? [])
+          const similar = await resolved.memoryReader.findSimilar(args.body, args.keys ?? [])
           const top = similar[0]
           if (top && config.dedupSimilarity > 0 && top.score >= config.dedupSimilarity) {
             const result = {
@@ -276,7 +285,7 @@ export function registerTavernTools(ctx: Context, state: TavernState): void {
 
           // 超容量不再在本 step 同步压缩（避免多一次阻塞的 LLM 调用）：
           // 标记该工作区，turn 结束后由 runMaintenance 合并最旧批次（见 memoryMaintenance.ts）。
-          const stats = await ws.memory.stats()
+          const stats = await resolved.memoryReader.stats()
           const incomingTokens = estimateTokens(args.body)
           const compressScheduled = stats.count + 1 > config.maxEntries || stats.tokens + incomingTokens > config.maxTokens
 
@@ -305,7 +314,7 @@ export function registerTavernTools(ctx: Context, state: TavernState): void {
         id: { type: 'string', required: true, description: '记忆条目 id' },
         body: { type: 'string', description: '新正文（可选）' },
         tags: { type: 'array', items: { type: 'string' }, description: '追加标签（可选）' },
-        keys: { type: 'array', items: { type: 'string' }, description: '追加关键词（可选）' },
+        keys: { type: 'array', items: { type: 'string' }, description: '追加关键词（可选）。只有一个字的名字要单独写成一项；正文里没有的同义说法也可以各写一项' },
       },
       output: {
         schema: TOOL_OUTPUTS.memoryUpdate,
@@ -316,7 +325,7 @@ export function registerTavernTools(ctx: Context, state: TavernState): void {
           const existing = await resolved.ws.memory.get(args.id)
           if (!existing) return boundedToolError(`not-found：记忆 ${args.id} 不存在`)
           // 容量读取属于写前检查：损坏文件或 I/O 故障不能发生在主事实已改写之后而丢失回执。
-          const stats = await resolved.ws.memory.stats()
+          const stats = await resolved.memoryReader.stats()
           const body = parseMemory(existing.file, serializeMemory(existing, args.body ?? existing.body)).body
           const tokens = stats.tokens - estimateTokens(existing.body) + estimateTokens(body)
           const entry = await resolved.ws.memory.update(args.id, { body: args.body, tags: args.tags, keys: args.keys })
@@ -457,7 +466,7 @@ export function registerTavernTools(ctx: Context, state: TavernState): void {
             // 损坏按无索引处理
           }
         }
-        const memStats = await ws.memory.stats()
+        const memStats = await resolved.memoryReader.stats()
         const preset = (binding.presetId ? await state.loadPreset(binding.presetId) : null) ?? defaultPreset()
         // 目录必须与 tavern_asset_read 的可读白名单一致：同一个 resolveReadableAssetPath 过滤，
         // 否则会向模型广告 state/wal/*、回滚残留目录、card.png 这些 asset_read 一律拒绝的路径。

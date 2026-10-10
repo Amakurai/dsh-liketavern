@@ -22,6 +22,7 @@ import { apply as applyAgent } from '../src/agent.js'
 import { TavernState } from '../src/node/state.js'
 import { resolveConfig } from '../src/node/config.js'
 import { estimateTokens } from '../src/core/tokenize.js'
+import { MEMORY_SEARCH_NO_MATCH_HINT } from '../src/core/memoryToolBudget.js'
 
 let root: string, ctx: Context, state: TavernState, agent: Agent, cardId: string, storyId: string
 let budget = 1200, call = 0
@@ -94,4 +95,41 @@ it('正常短元数据与完整定位保留，零预算明确业务拒绝而不�
   expect(denied.isError, JSON.stringify(denied.content)).toBe(false)
   expect(denied.value).toMatchObject({ result: { ok: false, error: expect.stringContaining('memory-budget-too-small') } })
   expect(JSON.stringify(denied.value)).not.toContain('北门钥匙已经归还')
+})
+
+it('库里有记忆却没匹配上时提示换词或看目录，空库与有命中时不提示', async () => {
+  // 空库：没有可换的说法，不提示
+  const blank = await run(`return await tools.tavern_memory_search({query:'谁在偷药'});`)
+  expect(blank.isError, JSON.stringify(blank.content)).toBe(false)
+  expect(blank.value).toMatchObject({ result: { ok: true, count: 0, results: [] } })
+  expect((blank.value as { result: object }).result).not.toHaveProperty('hint')
+
+  const ws = await workspace()
+  const entry = await ws.memory.write({ body: '医务室的止痛剂上个月少了两箱，值班记录被人改过。' })
+  // 说法不同：字面上没有任何共同的词
+  const missed = await run(`return await tools.tavern_memory_search({query:'谁在偷药'});`)
+  expect(missed.isError, JSON.stringify(missed.content)).toBe(false)
+  const output = (missed.value as { result: { count: number; hint?: string; tokensUsed: number } }).result
+  expect(output).toMatchObject({ ok: true, count: 0, results: [], hint: MEMORY_SEARCH_NO_MATCH_HINT })
+  expect(output.tokensUsed).toBe(estimateTokens(JSON.stringify(output, null, 2)))
+  // 提示指向的两条路都走得通：换成记忆里的词能查到，目录里也有这条记忆的摘要
+  const retry = await run(`const [hit, list] = await Promise.all([tools.tavern_memory_search({query:'止痛剂'}), tools.tavern_asset_list({})]); return { hit, list };`)
+  expect(retry.isError, JSON.stringify(retry.content)).toBe(false)
+  const value = (retry.value as { result: { hit: { results: Array<{ id: string }>; hint?: string }; list: unknown } }).result
+  expect(value.hit.results.map((item) => item.id)).toEqual([entry.id])
+  expect(value.hit).not.toHaveProperty('hint')
+  expect(JSON.stringify(value.list)).toContain(`memory/${entry.id}.md`)
+})
+
+it('工具按字面检索：只搜一个字时，名字正好是功能字的记忆也能找到', async () => {
+  const ws = await workspace()
+  const seven = await ws.memory.write({ body: '七三年前在南方的码头失踪，至今下落不明。' })
+  await ws.memory.write({ body: '北门每晚亥时落锁。' })
+  await ws.memory.write({ body: '灯塔的看守人是个哑巴老人。' })
+  const result = await run(`const [one, sentence] = await Promise.all([tools.tavern_memory_search({query:'七'}), tools.tavern_memory_search({query:'七后来找到了吗'})]); return { one, sentence };`)
+  expect(result.isError, JSON.stringify(result.content)).toBe(false)
+  const value = (result.value as { result: { one: { results: Array<{ id: string }> }; sentence: { count: number; hint?: string } } }).result
+  expect(value.one.results.map((item) => item.id)).toEqual([seven.id])
+  // 放在句子里时「七」仍只是数词：没有命中，并提示换词
+  expect(value.sentence).toMatchObject({ count: 0, hint: MEMORY_SEARCH_NO_MATCH_HINT })
 })

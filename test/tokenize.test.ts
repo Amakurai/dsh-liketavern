@@ -2,11 +2,11 @@
  * 分词与 token 估算单测。
  * 覆盖：CJK 滑窗 bigram（含单字不成词）、假名/谚文同样走 bigram、
  * 拉丁扩展/西里尔/希腊等按整词保留并转小写、混排在文字边界断词不跨语言组词、
- * 标点空白跳过、全角/半角/兼容写法经 NFKC 归一；
+ * 标点空白跳过、全角/半角/兼容写法经 NFKC 归一、analyzeText 额外切出 bigram 文字的单字与各段首尾字；
  * estimateTokens 口径钉死（不随分词范围变化）、clipToTokenBudget 截断。
  */
 import { describe, expect, it } from 'vitest'
-import { clipToTokenBudget, estimateTokens, tokenize } from '../src/core/tokenize.js'
+import { analyzeText, clipToTokenBudget, estimateTokens, isBigramTerm, isKana, tokenize } from '../src/core/tokenize.js'
 
 describe('tokenize', () => {
   it('中文切滑窗 bigram', () => {
@@ -79,6 +79,96 @@ describe('tokenize', () => {
     expect(tokenize('café')).toEqual(['café'])
     // 归一只发生在分词内部，全角标点仍是分隔符
     expect(tokenize('你好，ｗｏｒｌｄ！')).toEqual(['你好', 'world'])
+  })
+
+  it('analyzeText 同时给出检索词与 bigram 文字的每个字', () => {
+    expect(analyzeText('凛去哪了')).toMatchObject({ terms: ['凛去', '去哪', '哪了'], chars: ['凛', '去', '哪', '了'] })
+    // 单字切不出 bigram，但仍作为单字保留
+    expect(analyzeText('樱')).toMatchObject({ terms: [], chars: ['樱'] })
+    expect(analyzeText('我喜欢apple派')).toMatchObject({ terms: ['我喜', '喜欢', 'apple'], chars: ['我', '喜', '欢', '派'] })
+    // 重复的字逐次保留，供索引统计词频
+    expect(analyzeText('妹妹').chars).toEqual(['妹', '妹'])
+    // 整词文字不拆成单字
+    expect(analyzeText('Hello, world 42')).toEqual({ terms: ['hello', 'world', '42'], chars: [], initials: [], finals: [], words: [], sides: [],
+      lefts: [], rights: [], lone: false })
+    expect(analyzeText('Привет').chars).toEqual([])
+    // 归一发生在切分之前
+    expect(analyzeText('ｶﾞｲﾄﾞ')).toMatchObject({ terms: ['ガイ', 'イド'], chars: ['ガ', 'イ', 'ド'] })
+    for (const text of ['', ' ，。 ', '我喜欢apple派', '안녕하세요 world', 'café 魔法塔']) {
+      expect(analyzeText(text).terms).toEqual(tokenize(text))
+    }
+  })
+
+  it('analyzeText 记下每段 bigram 文字的首字与尾字', () => {
+    // 标点、空白和别的文字都是段的边界；单字成段时首尾是同一个字
+    expect(analyzeText('凛的妹妹叫樱，住在冬木。')).toMatchObject({ initials: ['凛', '住'], finals: ['樱', '木'] })
+    expect(analyzeText('Nova的剑 樱')).toMatchObject({ initials: ['的', '樱'], finals: ['剑', '樱'] })
+    expect(analyzeText('')).toEqual({ terms: [], chars: [], initials: [], finals: [], words: [], sides: [], lefts: [], rights: [], lone: true })
+  })
+
+  it('analyzeText 找出单独成词的字：两侧都是标点、段首尾或虚词', () => {
+    // 凛：句首 + 的；樱：叫 + 逗号；住：逗号 + 在；妹妹、冬木各自相连，虚词自己两侧是实字，都不算
+    expect(analyzeText('凛的妹妹叫樱，住在冬木。').words).toEqual(['凛', '樱', '住'])
+    // 「打听」「开始」里的字两侧有实字
+    expect(analyzeText('去打听几点开始').words).toEqual([])
+    // 泛义字不当边界：今天、后面、一直里的字不因此算单独成词
+    expect(analyzeText('今天后面一直很吵').words).toEqual(['吵'])
+    // 单字成段
+    expect(analyzeText('樱 药').words).toEqual(['樱', '药'])
+    // 引出名字的字后面跟一个字再跟边界：绰号鲸，——句中的「三号库房」不算，句末的「三号库」会被误算
+    expect(analyzeText('头领绰号鲸，守着三号库房').words).toEqual(['鲸', '守'])
+    expect(analyzeText('三号库').words).toEqual(['库'])
+    expect(analyzeText('他姓秦。').words).toEqual(['秦'])
+  })
+
+  it('analyzeText 找出至少一侧是边界的字', () => {
+    // 句首的雪、句末的吗；「今天吃东西」中间的字两侧都是实字或泛义字
+    expect(analyzeText('雪今天吃东西了吗').sides).toEqual(['雪', '西', '了', '吗'])
+    expect(analyzeText('几点开始放').sides).toEqual(['几', '放'])
+    expect(new Set(analyzeText('凛的妹妹叫樱，').sides)).toEqual(new Set(['凛', '妹', '樱']))
+  })
+
+  it('撇号后面的词尾不算词，别处的单个字母照常保留', () => {
+    expect(tokenize("It's Mara's key, don't touch")).toEqual(['it', 'mara', 'key', 'don', 'touch'])
+    expect(tokenize('I\u2019d say we\u2019ll know when they\u2019re back, I\u2019ve seen it, I\u2019m sure')).toEqual(
+      ['i', 'say', 'we', 'know', 'when', 'they', 'back', 'i', 'seen', 'it', 'i', 'sure'])
+    // 全角撇号归一后同样处理
+    expect(tokenize('Mara\uff07s key')).toEqual(['mara', 'key'])
+    // 字母本身是名字：不在撇号后面就保留；撇号前面的也保留
+    expect(tokenize('M gave T the file')).toEqual(['m', 'gave', 't', 'the', 'file'])
+    expect(tokenize("D's plan")).toEqual(['d', 'plan'])
+    expect(tokenize("O'Brien and D'Artagnan")).toEqual(['o', 'brien', 'and', 'd', 'artagnan'])
+    expect(tokenize('小S和T先生')).toEqual(['s', 't', '先生'])
+    // 开头的撇号前面没有词，不当作词尾
+    expect(tokenize("'s Morgens")).toEqual(['s', 'morgens'])
+    expect(tokenize("rock 'n' roll")).toEqual(['rock', 'n', 'roll'])
+  })
+
+  it('analyzeText 分别记下左侧、右侧是边界的字', () => {
+    // 豆在句首，柯在虚词「过」之后；伤在「过」之前，文在句末
+    expect(analyzeText('豆抓伤过柯文')).toMatchObject({ lefts: ['豆', '柯'], rights: ['伤', '文'] })
+    // 「流浪猫豆是」里的豆只有右侧是边界
+    expect(analyzeText('流浪猫豆是随船来的')).toMatchObject({ lefts: ['流', '随'], rights: ['豆', '来', '的'] })
+    // 两者的并集就是 sides
+    for (const text of ['雪今天吃东西了吗', '凛的妹妹叫樱，住在冬木。', '头领绰号鲸，守着三号库房']) {
+      const tokens = analyzeText(text)
+      expect(new Set([...tokens.lefts, ...tokens.rights])).toEqual(new Set(tokens.sides))
+      // 两侧都是边界的字就是 words
+      expect(tokens.words.every((char) => tokens.lefts.includes(char) && tokens.rights.includes(char))).toBe(true)
+    }
+  })
+
+  it('analyzeText 判断整段是否只有被虚词或标点隔开的单个字', () => {
+    for (const text of ['豆在哪', '药呢？', '岚的腿', '樱 药', '我走了', '樱']) expect(analyzeText(text).lone, text).toBe(true)
+    // 两个相邻的非虚词字、泛义字挨着实字、整词文字都不算
+    for (const text of ['豆今天吃了吗', '豆去哪了', '钥匙', '翡翠钥匙在哪', 'Nova呢', '樱 Nova']) expect(analyzeText(text).lone, text).toBe(false)
+  })
+
+  it('isBigramTerm 只认两个字都是 bigram 文字的词，isKana 只认假名', () => {
+    expect(['魔法', 'かな', '안녕', '猫が'].every(isBigramTerm)).toBe(true)
+    expect(['ab', 'a1', '魔', '魔法塔', 'x魔', ''].some(isBigramTerm)).toBe(false)
+    expect(['か', 'カ', 'ー', 'ㇰ'].every(isKana)).toBe(true)
+    expect(['魔', '안', 'a', '1'].some(isKana)).toBe(false)
   })
 
   it('多语种正文都能产出 token（BM25 去重与检索不会静默失效）', () => {

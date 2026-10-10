@@ -13,7 +13,7 @@ import type { LlmRuntime, Message } from '@deepseek-ai/dsh-llm'
 import { defaultPreset, type AssembledPrompt } from '../core/assemble.js'
 import { BOUND_DISCIPLINE, TURN_PLAYBOOK, isSyntheticUserText, turnTailHeader } from '../core/dshPrompt.js'
 import { hashToSeed } from '../core/macros.js'
-import { memoryCandidateCount, memorySearchOptions, selectMemoryBodies } from '../core/memoryRetrieval.js'
+import { memoryCandidateCount, memoryQuery, memorySearchOptions, selectMemoryBodies } from '../core/memoryRetrieval.js'
 import { clipToTokenBudget, estimateTokens } from '../core/tokenize.js'
 import type { ChatMessage, WIEngineResult, WorldDelta, WorldInfoEntry } from '../core/types.js'
 import { EMPTY_TIMER_STATE } from '../core/types.js'
@@ -335,16 +335,16 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
   {
     deltas = lore.deltas
 
-    // 记忆检索：本轮输入 + 最近 N 条历史做查询
-    const queryMessages = chatMessages.slice(-config.memory.queryMessages).map((m) => m.content)
-      .filter((t) => t.trim())
-      .join('\n')
+    // 记忆检索：本轮输入 + 最近 N 条历史做查询，本轮输入里的词额外加权；
+    // 角色名和用户人设名是确知的名字，即使正好由功能字组成（七、月、日向）也照常参与
+    const { query: queryMessages, boost } = memoryQuery(chatMessages, config.memory.queryMessages)
     memories = []
     const candidateCount = memoryCandidateCount(config.memory.retrievalTopK)
     if (queryMessages.trim() && candidateCount > 0 && Number.isFinite(config.memory.retrievalTokenBudget) && config.memory.retrievalTokenBudget >= 1) {
       const hits = await ws.memory.search(
         queryMessages,
-        { ...memorySearchOptions(candidateCount, config.memory.halfLifeDays), includeSummarySources: true },
+        { ...memorySearchOptions(candidateCount, config.memory.halfLifeDays), includeSummarySources: true, ...(boost ? { boost } : {}),
+          names: persona?.name ? [charName, persona.name] : [charName] },
       )
       memories = selectMemoryBodies(hits, config.memory.retrievalTokenBudget, config.memory.retrievalTopK)
     }

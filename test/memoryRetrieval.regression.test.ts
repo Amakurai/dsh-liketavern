@@ -1,10 +1,11 @@
 /**
  * 记忆入模选择的边界回归：空正文不能吞掉截断兜底，重复正文不能挤占其它事实的预算。
  * 只验证选择视图，不修改输入或把相似但不同的事实当作重复记忆。
+ * 另含自动入模查询的构造：取最近若干条消息，并只在合适的时候强调最新用户输入。
  */
 import assert from 'node:assert/strict'
 import { describe, it } from 'vitest'
-import { memoryCandidateCount, memorySearchOptions, selectMemoryBodies } from '../src/core/memoryRetrieval.js'
+import { MEMORY_FOCUS_BOOST, memoryCandidateCount, memoryQuery, memorySearchOptions, selectMemoryBodies } from '../src/core/memoryRetrieval.js'
 import { estimateTokens } from '../src/core/tokenize.js'
 
 const hit = (body: string) => ({ entry: { body } })
@@ -61,6 +62,46 @@ describe('记忆检索预算边界', () => {
       assert.equal(new Set(selected.map((body) => body.trim())).size, selected.length)
       assert.ok(selected.reduce((sum, body) => sum + estimateTokens(body), 0) <= budget)
     }
+  })
+})
+
+describe('自动入模的查询构造', () => {
+  const user = (content: string) => ({ role: 'user', content })
+  const assistant = (content: string) => ({ role: 'assistant', content })
+
+  it('取最近 N 条非空消息拼接，最后一条用户输入作为强调片段', () => {
+    const messages = [user('最早的话'), assistant('第一段叙述'), user(''), assistant('第二段叙述'), user('钥匙在哪')]
+    assert.deepEqual(memoryQuery(messages, 4), {
+      query: '第一段叙述\n第二段叙述\n钥匙在哪',
+      boost: { query: '钥匙在哪', weight: MEMORY_FOCUS_BOOST },
+    })
+  })
+
+  it('续写或重新生成时最后一条是助手，不强调任何片段', () => {
+    assert.deepEqual(memoryQuery([user('钥匙在哪'), assistant('一段叙述')], 4), { query: '钥匙在哪\n一段叙述' })
+  })
+
+  it('窗口里只有这一条输入时不强调：全部词等比放大不改变排序', () => {
+    assert.deepEqual(memoryQuery([user('钥匙在哪')], 4), { query: '钥匙在哪' })
+    assert.deepEqual(memoryQuery([assistant('一段叙述'), user('钥匙在哪')], 1), { query: '钥匙在哪' })
+    assert.deepEqual(memoryQuery([assistant('  '), user('钥匙在哪')], 4), { query: '钥匙在哪' })
+  })
+
+  it('最新输入为空白（例如只有图片）时不强调，空历史返回空查询', () => {
+    assert.deepEqual(memoryQuery([assistant('一段叙述'), assistant('又一段'), user('  ')], 4), { query: '一段叙述\n又一段' })
+    assert.deepEqual(memoryQuery([], 4), { query: '' })
+  })
+
+  it('条数按正整数处理，非法值退回 1 条', () => {
+    const messages = [assistant('甲'), assistant('乙'), user('丙')]
+    assert.equal(memoryQuery(messages, 2.9).query, '乙\n丙')
+    for (const count of [0, -3, Number.NaN, Infinity]) assert.equal(memoryQuery(messages, count).query, '丙')
+  })
+
+  it('不修改传入的消息', () => {
+    const messages = Object.freeze([Object.freeze(assistant('一段叙述')), Object.freeze(user('钥匙在哪'))])
+    memoryQuery(messages, 4)
+    assert.deepEqual(messages, [assistant('一段叙述'), user('钥匙在哪')])
   })
 })
 

@@ -133,7 +133,10 @@ const edgeDeclared = (token: string): string => `=${token}`
 /** 一段只含一个字或一个词的文本所声明的那个词；多于一个词时不声明任何东西。 */
 function declaredToken(tokens: TextTokens): string | undefined {
   if (tokens.terms.length === 0 && tokens.chars.length === 1) return tokens.chars[0]
-  return tokens.terms.length === 1 ? tokens.terms[0] : undefined
+  if (tokens.terms.length !== 1) return undefined
+  const term = tokens.terms[0]!
+  // bigram 必须正好覆盖两个字；整词旁不能再有单字片段（如 I型、现在 凛）。
+  return tokens.chars.length === (isBigramTerm(term) ? 2 : 0) ? term : undefined
 }
 
 /** 名字里的分隔符：空白与间隔号。「艾琳·冯」「日向 夏帆」的每一段各自声明。 */
@@ -142,6 +145,63 @@ const NAME_SEPARATORS = /[\s·・•‧]+/u
 /** 分数降序；并列按 id 字典序升序，保证结果确定可复现。 */
 function byScoreThenId(a: Bm25Hit, b: Bm25Hit): number {
   return b.score - a.score || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+}
+
+/** 与 slice(0, topK) 的有效上限一致；Infinity 取全量，NaN/负数/不足一条提前返回。 */
+function resultLimit(topK: number, size: number): number {
+  return Number.isNaN(topK) ? 0 : Math.min(size, Math.max(0, Math.floor(topK)))
+}
+
+/**
+ * 只保留最优 K 条：堆顶是当前最差项，同分时较大的 id 更差。
+ * 先完成衰减和全部加分再提交；最终只排序留下的 K 条，避免为大量落选项创建结果对象。
+ * K 已覆盖所有候选时直接收集，省去维护堆的成本。
+ */
+class TopHits<D> {
+  private readonly hits: Array<Bm25Hit<D>> = []
+  private readonly bounded: boolean
+  private readonly limit: number
+  constructor(limit: number, candidates: number) {
+    this.limit = limit
+    this.bounded = limit < candidates
+  }
+
+  add(entry: DocEntry<D>, score: number): void {
+    const { hits, limit } = this
+    if (hits.length === limit) {
+      const worst = hits[0]!
+      if (score < worst.score || (score === worst.score && entry.id >= worst.id)) return
+      const hit: Bm25Hit<D> = { id: entry.id, score }
+      if (entry.data !== undefined) hit.data = entry.data
+      let position = 0
+      // 沿更差的子节点下沉，直到新项不优于任何子节点。
+      while (position * 2 + 1 < hits.length) {
+        let child = position * 2 + 1
+        if (child + 1 < hits.length && byScoreThenId(hits[child + 1]!, hits[child]!) > 0) child++
+        if (byScoreThenId(hit, hits[child]!) >= 0) break
+        hits[position] = hits[child]!
+        position = child
+      }
+      hits[position] = hit
+      return
+    }
+    const hit: Bm25Hit<D> = { id: entry.id, score }
+    if (entry.data !== undefined) hit.data = entry.data
+    let position = hits.length
+    hits.push(hit)
+    if (!this.bounded) return
+    while (position > 0) {
+      const parent = (position - 1) >>> 1
+      if (byScoreThenId(hit, hits[parent]!) <= 0) break
+      hits[position] = hits[parent]!
+      position = parent
+    }
+    hits[position] = hit
+  }
+
+  sorted(): Array<Bm25Hit<D>> {
+    return this.hits.sort(byScoreThenId)
+  }
 }
 
 export class Bm25Index<D = unknown> {
@@ -360,7 +420,7 @@ export class Bm25Index<D = unknown> {
   }
 
   search(query: string, options?: Bm25SearchOptions): Array<Bm25Hit<D>> {
-    const topK = options?.topK ?? 10
+    const topK = resultLimit(options?.topK ?? 10, this.docs.size)
     const halfLifeMs = options?.halfLifeMs ?? 0
     const now = options?.now ?? Date.now()
     const docCount = this.docs.size
@@ -385,21 +445,24 @@ export class Bm25Index<D = unknown> {
     /** 主证据的单字与只加分的单字；一个字在主查询或强调片段任一处算主证据，就整体按主证据计。 */
     const charWeights = new Map<string, number>()
     const extraWeights = new Map<string, number>()
-    const weigh = (tokens: TextTokens, weight: number): void => {
-      // 功能 bigram 里的字属于那个功能词（「现在」的现、「知道」的知），不再单独作证据
+    const weigh = (text: string, weight: number): void => {
+      const tokens = analyzeText(text)
+      // 功能 bigram 所在位置不再提供单字证据，但不能连带屏蔽其它位置的同字。
       const functional = new Set<string>()
       for (const term of new Set(tokens.terms)) {
         const scale = this.termScale(term, declared(term))
         if (scale > 0) termWeights.set(term, (termWeights.get(term) ?? 0) + weight * scale)
-        else if (isBigramTerm(term)) functional.add(term[0]!).add(term[1]!)
+        else if (isBigramTerm(term)) functional.add(term)
       }
+      const evidenceTokens = functional.size > 0 ? analyzeText(text, functional) : tokens
+      const eligibleChars = new Set(evidenceTokens.chars)
       const isolated = tokens.terms.length === 0
-      const words = new Set(tokens.words)
-      const sides = new Set(tokens.sides)
+      const words = new Set(evidenceTokens.words)
+      const sides = new Set(evidenceTokens.sides)
       for (const char of new Set(tokens.chars)) {
         // 被单字 key 声明过的字例外：「七点」是数词接量词，但「七」是名字
         const known = declared(char)
-        if (functional.has(char) && !known) continue
+        if (!known && !eligibleChars.has(char)) continue
         const evidence = this.charEvidence(char, { declared: known, explicit, isolated, lone: tokens.lone, word: words.has(char), edge: sides.has(char) })
         if (!evidence) continue
         const added = weight * CHAR_WEIGHT
@@ -412,8 +475,8 @@ export class Bm25Index<D = unknown> {
         }
       }
     }
-    weigh(analyzeText(query), 1)
-    if (boost) weigh(analyzeText(boost.query), boost.weight)
+    weigh(query, 1)
+    if (boost) weigh(boost.query, boost.weight)
     if (termWeights.size === 0 && charWeights.size === 0) return []
 
     if (this.seen.length < this.slots.length) {
@@ -426,7 +489,6 @@ export class Bm25Index<D = unknown> {
     const avgdl = this.totalLength / docCount
     /** 首次命中顺序；只为这些槽位产出结果，不扫全库。 */
     const touched: number[] = []
-    const hits: Array<Bm25Hit<D>> = []
     const accumulate = (posting: Posting, weight: number): void => {
       const { slots, tfs } = posting
       const df = slots.length
@@ -453,14 +515,26 @@ export class Bm25Index<D = unknown> {
       for (const [char, weight] of extraWeights) {
         const { slots, tfs } = this.charPostings.get(char)!
         const idf = this.idf(slots.length)
-        for (let i = 0; i < slots.length; i++) {
-          const slot = slots[i]!
-          if (seen[slot] === 0) continue
-          const tf = tfs[i]!
-          scores[slot] = scores[slot]! + weight * ((idf * tf * (k1 + 1)) / (tf + k1 * norms[slot]!))
+        // 主证据很稀疏时，只核对已有候选的单字位置；否则顺序遍历短倒排表。
+        // Map 查询比数组访问贵，只有候选显著更少时才切换，且两路都不新增命中。
+        if (touched.length * 4 < slots.length) {
+          for (const slot of touched) {
+            const position = this.slots[slot]!.charPositions.get(char)
+            if (position === undefined) continue
+            const tf = tfs[position]!
+            scores[slot] = scores[slot]! + weight * ((idf * tf * (k1 + 1)) / (tf + k1 * norms[slot]!))
+          }
+        } else {
+          for (let i = 0; i < slots.length; i++) {
+            const slot = slots[i]!
+            if (seen[slot] === 0) continue
+            const tf = tfs[i]!
+            scores[slot] = scores[slot]! + weight * ((idf * tf * (k1 + 1)) / (tf + k1 * norms[slot]!))
+          }
         }
       }
 
+      const hits = new TopHits<D>(topK, touched.length)
       for (const slot of touched) {
         const score = scores[slot]!
         if (score <= 0) continue
@@ -473,19 +547,15 @@ export class Bm25Index<D = unknown> {
             finalScore = score * Math.pow(0.5, elapsed / halfLifeMs)
           }
         }
-        const hit: Bm25Hit<D> = { id: entry.id, score: finalScore }
-        if (entry.data !== undefined) hit.data = entry.data
-        hits.push(hit)
+        hits.add(entry, finalScore)
       }
+      return hits.sorted()
     } finally {
       for (const slot of touched) {
         scores[slot] = 0
         seen[slot] = 0
       }
     }
-
-    hits.sort(byScoreThenId)
-    return hits.slice(0, topK)
   }
 
   /**
@@ -499,7 +569,7 @@ export class Bm25Index<D = unknown> {
    * 不做时间衰减；词频、keys 加权、单字词与功能词表都不参与，只看 bigram 与整词的有无。
    */
   similarity(query: string, options?: { topK?: number }): Array<Bm25Hit<D>> {
-    const topK = options?.topK ?? 10
+    const topK = resultLimit(options?.topK ?? 10, this.docs.size)
     const docCount = this.docs.size
     if (docCount === 0 || topK <= 0) return []
     const terms = [...new Set(tokenize(query))]
@@ -530,7 +600,7 @@ export class Bm25Index<D = unknown> {
       }
     }
 
-    const hits: Array<Bm25Hit<D>> = []
+    const hits = new TopHits<D>(topK, touched.length)
     for (const slot of touched) {
       const entry = this.slots[slot]!
       const overlap = shared[slot]!
@@ -540,12 +610,9 @@ export class Bm25Index<D = unknown> {
       // 求和顺序不同会差几个末位；舍入到 1e-12，使相同正文恰好得 1。
       const score = Math.min(1, Math.round(Math.min(overlap / queryWeight, overlap / docWeight) * 1e12) / 1e12)
       if (score <= 0) continue
-      const hit: Bm25Hit<D> = { id: entry.id, score }
-      if (entry.data !== undefined) hit.data = entry.data
-      hits.push(hit)
+      hits.add(entry, score)
     }
 
-    hits.sort(byScoreThenId)
-    return hits.slice(0, topK)
+    return hits.sorted()
   }
 }

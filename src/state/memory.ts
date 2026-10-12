@@ -150,6 +150,23 @@ async function settleLimited<T, R>(
 /** Windows 的文件名别名共用来源身份；条目本身保留原文件名，大小写敏感系统仍区分文件。 */
 function memoryIdentity(id: string): string { return process.platform === 'win32' ? id.toLowerCase() : id }
 
+/** 别名按文件身份对齐；旧文件中同身份记录有冲突时丢弃派生别名，留待重新生成。 */
+function aliasRecordsByIdentity(source: ReadonlyMap<string, AliasRecord>): ReadonlyMap<string, AliasRecord> {
+  if (process.platform !== 'win32') return source
+  const records = new Map<string, AliasRecord>()
+  const conflicts = new Set<string>()
+  for (const [id, record] of source) {
+    const identity = memoryIdentity(id)
+    if (conflicts.has(identity)) continue
+    const previous = records.get(identity)
+    if (previous && (previous.hash !== record.hash || !sameList(previous.aliases, record.aliases))) {
+      records.delete(identity)
+      conflicts.add(identity)
+    } else records.set(identity, record)
+  }
+  return records
+}
+
 /** 迭代展开摘要的完整叶来源；避免多代摘要递归爆栈，也拒绝循环来源伪装成独立事实。 */
 function summarySourceIds(id: string, entries: ReadonlyMap<string, MemoryEntry>): string[] {
   const leaves = new Set<string>()
@@ -376,14 +393,14 @@ export class MemoryStore {
     const cached = this.aliasCache
     if (cached && sameStat(cached.stat, stat) && !writtenSince(ledger, ALIAS_PATH, cached.revision)) return cached.records
     const text = stat ? await this.fs.readText(ALIAS_PATH) : null
-    const records = text === null ? NO_ALIASES : parseAliasFile(text)
+    const records = text === null ? NO_ALIASES : aliasRecordsByIdentity(parseAliasFile(text))
     this.aliasCache = { stat, revision, records }
     return records
   }
 
   /** 这条记忆当前有效的别名：指纹与正文对得上、且不为空。 */
   private aliasesOf(entry: MemoryEntry, records: ReadonlyMap<string, AliasRecord>): readonly string[] | undefined {
-    const record = records.get(entry.id)
+    const record = records.get(memoryIdentity(entry.id))
     return record && record.aliases.length > 0 && record.hash === this.hashOf(entry) ? record.aliases : undefined
   }
 
@@ -398,7 +415,7 @@ export class MemoryStore {
       const pending: MemoryEntry[] = []
       for (let i = entries.length - 1; i >= 0 && pending.length < limit; i--) {
         const entry = entries[i]!
-        if (entry.body.trim() && records.get(entry.id)?.hash !== this.hashOf(entry)) pending.push(entry)
+        if (entry.body.trim() && records.get(memoryIdentity(entry.id))?.hash !== this.hashOf(entry)) pending.push(entry)
       }
       return pending
     })
@@ -412,18 +429,18 @@ export class MemoryStore {
   async saveAliases(items: ReadonlyArray<{ entry: MemoryEntry; aliases: readonly string[] }>): Promise<number> {
     if (this.fs.currentFloor !== null) throw new Error('记忆别名是派生数据，不能在楼层内写入')
     return withWorkspaceLock(this.fs.root, async () => {
-      const current = new Map((await this.listNow()).map((entry) => [entry.id, entry]))
+      const current = new Map((await this.listNow()).map((entry) => [memoryIdentity(entry.id), entry]))
       const records = new Map(await this.loadAliases())
       let saved = 0
       for (const item of items) {
-        const live = current.get(item.entry.id)
+        const live = current.get(memoryIdentity(item.entry.id))
         if (!live || live.body !== item.entry.body) continue
-        records.set(live.id, { hash: this.hashOf(live), aliases: [...item.aliases] })
+        records.set(memoryIdentity(live.id), { hash: this.hashOf(live), aliases: [...item.aliases] })
         saved++
       }
       if (saved === 0) return 0
       const archived = new Set((await this.fs.list(ARCHIVE_DIR, { recursive: false }))
-        .filter((name) => name.endsWith('.md')).map((name) => name.slice(0, -3)))
+        .filter((name) => name.endsWith('.md')).map((name) => memoryIdentity(name.slice(0, -3))))
       for (const id of [...records.keys()]) if (!current.has(id) && !archived.has(id)) records.delete(id)
       await this.fs.writeText(ALIAS_PATH, serializeAliasFile(records))
       return saved

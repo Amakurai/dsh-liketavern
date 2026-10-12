@@ -7,7 +7,7 @@ import { mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it } from 'vitest'
-import { MemoryStore } from '../src/state/memory.js'
+import { MemoryStore, serializeMemory } from '../src/state/memory.js'
 import { Wal } from '../src/state/wal.js'
 import { WorkspaceFs } from '../src/state/workspaceFs.js'
 
@@ -30,6 +30,85 @@ afterEach(async () => { await rm(root, { recursive: true, force: true }) })
 
 const PILLS = '医务室的止痛剂上个月少了两箱，值班记录被人改过。'
 const ids = async (store: MemoryStore, query: string): Promise<string[]> => (await store.search(query, { topK: 50 })).map((hit) => hit.entry.id)
+
+/** 手工导入的合法文件名，与自动生成的 m- 前缀 ID 遵守同一存储契约。 */
+async function namedMemory(id: string, body = PILLS) {
+  const meta = { created: '2026-01-01T00:00:00.000Z', updated: '2026-01-01T00:00:00.000Z',
+    sourceRange: '', tags: [], keys: [] }
+  await fs.writeText(`memory/${id}.md`, serializeMemory(meta, body))
+  return (await writer.get(id))!
+}
+
+it('原型属性同名的记忆能保存并检索别名，不会反复成为待生成候选', async () => {
+  const entry = await namedMemory('__proto__')
+  expect(await writer.saveAliases([{ entry, aliases: ['偷药'] }])).toBe(1)
+  expect(await ids(reader, '偷药')).toEqual([entry.id])
+  expect(await reader.aliasCandidates(10)).toEqual([])
+  expect(await ids(new MemoryStore(fs), '偷药')).toEqual([entry.id])
+})
+
+it.runIf(process.platform === 'win32')('Windows 活跃记忆经大小写别名读取后仍能保存别名，热索引同步更新', async () => {
+  const entry = await namedMemory('Source')
+  await writer.saveAliases([{ entry, aliases: ['失窃'] }])
+  expect(await ids(reader, '失窃')).toEqual(['Source'])
+  const alternate = (await writer.get('SOURCE'))!
+  expect(await writer.saveAliases([{ entry: alternate, aliases: ['偷药'] }])).toBe(1)
+  expect(await ids(reader, '偷药')).toEqual(['Source'])
+  expect(await ids(reader, '失窃')).toEqual([])
+  expect(await reader.aliasCandidates(10)).toEqual([])
+})
+
+it.runIf(process.platform === 'win32')('Windows 摘要用另一种大小写引用归档来源时，原有别名仍可检索且不会被清理', async () => {
+  const entry = await namedMemory('Source')
+  await writer.saveAliases([{ entry, aliases: ['偷药'] }])
+  expect(await ids(reader, '偷药')).toEqual(['Source'])
+  await writer.mergeBatch([entry], '旧事摘要', 'compress')
+  const summary = (await writer.list())[0]!
+  await fs.writeText(`memory/${summary.id}.md`, serializeMemory({ ...summary, sourceRange: 'compress:SOURCE' }, summary.body))
+  expect((await reader.search('偷药')).map((hit) => [hit.entry.body, hit.entry.archived])).toEqual([[PILLS, true]])
+  await writer.saveAliases([{ entry: summary, aliases: ['旧事'] }])
+  expect((await reader.search('偷药')).map((hit) => hit.entry.body)).toEqual([PILLS])
+  expect((await new MemoryStore(fs).search('偷药')).map((hit) => hit.entry.body)).toEqual([PILLS])
+})
+
+it.runIf(process.platform !== 'win32')('大小写敏感系统保留同名不同大小写记忆各自的别名', async () => {
+  const first = await namedMemory('Source')
+  const second = await namedMemory('source', '北门每晚亥时落锁。')
+  await writer.saveAliases([{ entry: first, aliases: ['偷药'] }, { entry: second, aliases: ['宵禁'] }])
+  expect(await ids(reader, '偷药')).toEqual(['Source'])
+  expect(await ids(reader, '宵禁')).toEqual(['source'])
+  expect(await reader.aliasCandidates(10)).toEqual([])
+})
+
+it.runIf(process.platform === 'win32')('Windows 兼容旧文件的原大小写键，相同记录合并，冲突记录作废后可重新生成', async () => {
+  const entry = await namedMemory('Source')
+  const gate = await writer.write({ body: '北门每晚亥时落锁。' })
+  await writer.saveAliases([{ entry, aliases: ['偷药'] }, { entry: gate, aliases: ['宵禁'] }])
+  const file = JSON.parse(await readFile(join(root, 'memory', 'aliases.json'), 'utf8')) as {
+    entries: Record<string, { hash: string; aliases: string[] }>
+  }
+  const record = file.entries.source!
+  const save = async (rows: Array<[string, { hash: string; aliases: string[] }]>) => {
+    await fs.writeText('memory/aliases.json', JSON.stringify({ version: 1,
+      entries: Object.fromEntries([...rows, [gate.id, file.entries[gate.id]!]]) }))
+  }
+  // 已有版本可能留下原文件名作键；重复拼写的同值记录也不会触发重建请求。
+  await save([['Source', record], ['SOURCE', record]])
+  expect(await ids(reader, '偷药')).toEqual(['Source'])
+  expect(await reader.aliasCandidates(10)).toEqual([])
+  // 有歧义的派生记录不能靠 JSON 中的先后顺序覆盖；第三个同值副本也不能复活它。
+  for (const conflicting of [{ ...record, aliases: ['换锁'] }, { ...record, hash: 'stale-hash' }]) {
+    await save([['Source', record], ['source', conflicting], ['SOURCE', record]])
+    expect(await ids(reader, '偷药')).toEqual([])
+    expect(await ids(reader, '换锁')).toEqual([])
+    expect((await reader.aliasCandidates(10)).map((candidate) => candidate.id)).toEqual(['Source'])
+    expect(await ids(reader, '宵禁')).toEqual([gate.id])
+  }
+  await writer.saveAliases([{ entry, aliases: ['失窃'] }])
+  expect(await ids(reader, '失窃')).toEqual(['Source'])
+  expect(await ids(reader, '宵禁')).toEqual([gate.id])
+  expect(await reader.aliasCandidates(10)).toEqual([])
+})
 
 it('保存别名后，另一个长期存活的实例不必作废缓存就能按别名检索', async () => {
   const pills = await writer.write({ body: PILLS })

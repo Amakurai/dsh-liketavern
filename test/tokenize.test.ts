@@ -134,6 +134,9 @@ describe('tokenize', () => {
       ['i', 'say', 'we', 'know', 'when', 'they', 'back', 'i', 'seen', 'it', 'i', 'sure'])
     // 全角撇号归一后同样处理
     expect(tokenize('Mara\uff07s key')).toEqual(['mara', 'key'])
+    // U+02BC 本身属于 Unicode 字母，也必须按撇号处理，不能吞进人名或缩写。
+    expect(tokenize('Maraʼs key, itʼs hidden')).toEqual(['mara', 'key', 'it', 'hidden'])
+    expect(tokenize('OʼBrien and DʼArtagnan')).toEqual(tokenize("O'Brien and D'Artagnan"))
     // 字母本身是名字：不在撇号后面就保留；撇号前面的也保留
     expect(tokenize('M gave T the file')).toEqual(['m', 'gave', 't', 'the', 'file'])
     expect(tokenize("D's plan")).toEqual(['d', 'plan'])
@@ -162,6 +165,19 @@ describe('tokenize', () => {
     for (const text of ['豆在哪', '药呢？', '岚的腿', '樱 药', '我走了', '樱']) expect(analyzeText(text).lone, text).toBe(true)
     // 两个相邻的非虚词字、泛义字挨着实字、整词文字都不算
     for (const text of ['豆今天吃了吗', '豆去哪了', '钥匙', '翡翠钥匙在哪', 'Nova呢', '樱 Nova']) expect(analyzeText(text).lone, text).toBe(false)
+  })
+
+  it('查询忽略的 bigram 只移除所在位置的单字证据，不制造新的词边界', () => {
+    const text = '不知道，道的剑；隧道工程'
+    const ignored = new Set(['知道'])
+    const tokens = analyzeText(text, ignored)
+    expect(tokens.terms).toEqual(tokenize(text))
+    expect(tokens.lone).toBe(analyzeText(text).lone)
+    expect(tokens.chars.filter((char) => char === '道')).toHaveLength(2)
+    expect(tokens.words.filter((char) => char === '道')).toEqual(['道'])
+    expect(analyzeText('不知道，隧道工程', ignored).sides).not.toContain('道')
+    expect(analyzeText('知道', ignored)).toMatchObject({ chars: [], words: [], sides: [], initials: [], finals: [] })
+    expect(analyzeText('不知道', ignored).finals).toEqual([])
   })
 
   it('isBigramTerm 只认两个字都是 bigram 文字的词，isKana 只认假名', () => {

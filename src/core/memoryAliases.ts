@@ -112,7 +112,7 @@ export function parseAliasFile(text: string): Map<string, AliasRecord> {
 }
 
 export function serializeAliasFile(records: ReadonlyMap<string, AliasRecord>): string {
-  const entries: Record<string, AliasRecord> = {}
-  for (const id of [...records.keys()].sort()) entries[id] = records.get(id)!
+  // fromEntries 创建自有属性，合法 ID __proto__ 不能触发普通对象的原型 setter 而丢失记录。
+  const entries: Record<string, AliasRecord> = Object.fromEntries([...records.keys()].sort().map((id) => [id, records.get(id)!]))
   return JSON.stringify({ version: 1, entries }, null, 2) + '\n'
 }

@@ -64,6 +64,14 @@ describe('normalizeAliases', () => {
 })
 
 describe('别名文件', () => {
+  it('原型属性同名的合法记忆 ID 序列化后不会丢失或影响其它记录', () => {
+    const records = new Map(['__proto__', 'constructor', 'toString', 'normal'].map((id) =>
+      [id, { hash: id, aliases: ['宵禁'] }] as const))
+    const text = serializeAliasFile(records)
+    expect([...parseAliasFile(text)].sort()).toEqual([...records].sort())
+    expect(Object.keys(JSON.parse(text).entries).sort()).toEqual([...records.keys()].sort())
+  })
+
   it('往返一致，记录按 id 排序', () => {
     const records = new Map([['m-b', { hash: 'bb', aliases: ['药', '失窃'] }], ['m-a', { hash: 'aa', aliases: [] }]])
     const text = serializeAliasFile(records)

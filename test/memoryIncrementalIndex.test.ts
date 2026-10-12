@@ -102,3 +102,21 @@ it('写入一条记忆后只对这一条分词入索引，未变的条目不重�
   // 检索索引与去重索引各加一次
   expect(add.mock.calls.map(([doc]) => doc.id)).toEqual([written.id, written.id])
 })
+
+it('停用词同字和撇号变体在活跃与归档来源中都可检索，来源撤销后不残留命中', async () => {
+  const dao = await memory.write({ body: '道是守桥人，曾经救过船长' })
+  const mara = await memory.write({ body: 'Maraʼs brass key' })
+  const queries = [['不知道，道去哪了', dao.id], ["Mara's", mara.id]] as const
+  for (const [query, id] of queries) {
+    expect((await memory.search(query, { topK: 1 })).map((hit) => [hit.entry.id, hit.entry.archived])).toEqual([[id, false]])
+  }
+  expect((await memory.findSimilar("Mara's brass key", []))[0]?.score).toBe(1)
+  await memory.mergeBatch([dao, mara], '巡逻日志', 'compress')
+  const summary = (await memory.list())[0]!
+  for (const [query, id] of queries) {
+    expect((await memory.search(query, { topK: 1 })).map((hit) => [hit.entry.id, hit.entry.archived])).toEqual([[id, true]])
+  }
+  // 另一个实例删除活跃摘要后，长期存活的索引必须撤销已不可达的旧事实。
+  await new MemoryStore(fs).delete(summary.id)
+  for (const [query] of queries) expect(await memory.search(query, { topK: 1 })).toEqual([])
+})

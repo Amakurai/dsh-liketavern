@@ -56,8 +56,12 @@ export interface TextTokens {
 export declare function isBigramTerm(term: string): boolean;
 /** 平假名、片假名及其音标扩展：单个假名不构成词。 */
 export declare function isKana(char: string): boolean;
-/** 同时切出检索词与单字；归一和分段规则与 tokenize 完全一致。 */
-export declare function analyzeText(text: string): TextTokens;
+/**
+ * 同时切出检索词与单字；归一和分段规则与 tokenize 完全一致。
+ * 查询可指定不提供单字证据的 bigram：只屏蔽与该词重叠的位置及其边界特征，
+ * 不屏蔽别处出现的同字，也不改变 terms、lone 或原来的分段边界。建索引不传此参数。
+ */
+export declare function analyzeText(text: string, ignoredCharBigrams?: ReadonlySet<string>): TextTokens;
 /**
  * 确定性粗估 token 数：CJK 字符每个计 1，其余字符累计后 ÷4 向上取整，两部分相加。
  * 只用于预算分配，不追求与具体模型 tokenizer 对齐；口径固定，不跟随分词的 bigram 文字范围。

@@ -13,7 +13,10 @@ import { analyzeText, isBigramTerm, isKana } from '../src/core/tokenize.js'
 
 /** 一段只含一个字或一个词的文本所声明的词。 */
 function single(tokens: ReturnType<typeof analyzeText>): string[] {
-  return tokens.terms.length === 0 && tokens.chars.length === 1 ? [tokens.chars[0]!] : tokens.terms.length === 1 ? [tokens.terms[0]!] : []
+  if (tokens.terms.length === 0 && tokens.chars.length === 1) return [tokens.chars[0]!]
+  if (tokens.terms.length !== 1) return []
+  const term = tokens.terms[0]!
+  return tokens.chars.length === (isBigramTerm(term) ? 2 : 0) ? [term] : []
 }
 
 function scanSearch<D>(
@@ -82,19 +85,21 @@ function scanSearch<D>(
   const extraWeights = new Map<string, number>()
   const weigh = (text: string, weight: number): void => {
     const tokens = analyzeText(text)
-    // 被剔除的功能 bigram 里的字不再单独作证据
+    // 被剔除的功能 bigram 所在位置不再单独作证据，其它位置的同字保留。
     const functional = new Set<string>()
     for (const term of new Set(tokens.terms)) {
       if ((isStopBigram(term) || isStopWord(term)) && !declared(term)) {
-        if (isBigramTerm(term)) for (const char of term) functional.add(char)
+        if (isBigramTerm(term)) functional.add(term)
         continue
       }
       termWeights.set(term, (termWeights.get(term) ?? 0) + weight * (isWeakBigram(term) && !declared(term) ? 0.5 : 1))
     }
-    const words = new Set(tokens.words)
-    const sides = new Set(tokens.sides)
+    const evidenceTokens = analyzeText(text, functional)
+    const eligibleChars = new Set(evidenceTokens.chars)
+    const words = new Set(evidenceTokens.words)
+    const sides = new Set(evidenceTokens.sides)
     for (const char of new Set(tokens.chars)) {
-      if (functional.has(char) && !declared(char)) continue
+      if (!eligibleChars.has(char) && !declared(char)) continue
       const kind = evidence(char, tokens.terms.length === 0, tokens.lone, words.has(char), sides.has(char))
       if (!kind) continue
       // 任一段文本里算主证据，就整体按主证据计
@@ -268,6 +273,27 @@ describe('BM25 倒排索引', () => {
           assert.deepEqual(index.search(query, options), scanSearch([...docs.values()], query, options, parameters.k1, parameters.b))
         }
       }
+    }
+  })
+
+  it('稀疏命中的次级单字加分与全扫描一致，不让只含构词成分的记忆进入结果', () => {
+    const docs = Array.from({ length: 240 }, (_, i) => ({
+      id: `m-${i}`, text: `topic${i % 19} ${i % 5 < 2 ? ['草药箱', '取药筒', '汤药罐'][i % 3] : '旁观者'}`,
+    }))
+    const index = new Bm25Index()
+    docs.forEach((doc) => index.add(doc))
+    for (const removed of [0, 1, 19, 20, 57, 60]) index.remove(`m-${removed}`)
+    const remaining = docs.filter((doc) => index.has(doc.id))
+    const expected = scanSearch(remaining, 'topic0 火药桶', { topK: 5 })
+    expectSecondaryBonus()
+    assert.deepEqual(index.search('topic0 火药桶', { topK: 5 }), expected)
+    assert.deepEqual(index.search('火药桶'), [])
+
+    function expectSecondaryBonus(): void {
+      const plain = new Map(index.search('topic0', { topK: Infinity }).map((hit) => [hit.id, hit.score]))
+      const boosted = index.search('topic0 火药桶', { topK: Infinity })
+      assert.deepEqual(new Set(boosted.map((hit) => hit.id)), new Set(plain.keys()))
+      assert.ok(boosted.some((hit) => hit.score > plain.get(hit.id)!))
     }
   })
 })

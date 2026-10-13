@@ -9,6 +9,8 @@ import { openLedger } from '../src/state/writeLedger.js'
 import { loadTemplateDocumentPaths, prepareTemplateDocument, readTemplateDocument, readTemplateDocumentPaths, TEMPLATE_DATA_PATH, writeTemplateBlocks } from '../src/state/templateStorage.js'
 
 const roots:string[]=[],path='state/selection.json'
+/** 600 楼夹具需实际刷盘数千个块；CI 磁盘耗时不属于被测读取预算，读取效率仍由访问块数断言。 */
+const largeFixtureTimeout=60_000
 afterEach(async()=> {vi.restoreAllMocks();for(const root of roots.splice(0))await rm(root,{recursive:true,force:true})})
 async function fixture(value:unknown) {
   const root=await mkdtemp(join(tmpdir(),'tavern-template-selection-'));roots.push(root)
@@ -38,7 +40,7 @@ it('冷读身份和变量不展开历史回复、消息变量或生成计划，�
   read.mockClear()
   expect(await readTemplateDocumentPaths(fs,path,paths)).toEqual([1,'prepared',237,value.variables])
   expect(read).not.toHaveBeenCalled()
-},30000)
+},largeFixtureTimeout)
 
 it('按消息键选择仅扫描键页，未选中的坏正文不影响局部读取，但完整读取仍拒绝',async()=> {
   const value=history(600),{fs,document}=await fixture(value)
@@ -52,7 +54,7 @@ it('按消息键选择仅扫描键页，未选中的坏正文不影响局部读�
   expect(accessed.length).toBeLessThan(document.blocks.size/10)
   await expect(readTemplateDocument(fs,path)).rejects.toThrow(/校验失败/)
   await expect(readTemplateDocumentPaths(fs,path,[['outputs','123']])).rejects.toThrow(/校验失败/)
-},30000)
+},largeFixtureTimeout)
 
 it('连续打开不同消息复用已核对的键页，只读取新消息的快照索引与正文',async()=> {
   const value=history(600),{fs,document}=await fixture(value)
@@ -71,7 +73,7 @@ it('连续打开不同消息复用已核对的键页，只读取新消息的快�
   read.mockClear()
   expect(await readTemplateDocumentPaths(fs,path,[['outputs','124']])).toEqual([value.outputs['124']])
   expect(read.mock.calls.flatMap(([items])=>items)).toHaveLength(2)
-},30000)
+},largeFixtureTimeout)
 
 it('被选中的正文或根块改写后丢弃暖缓存，不把旧选择结果当作成功',async()=> {
   const value=history(40),{fs,document}=await fixture(value)

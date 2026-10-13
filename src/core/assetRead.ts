@@ -29,8 +29,8 @@ export function resolveReadableAssetPath(raw: string): { ok: true; path: string 
   const lower = path.toLowerCase()
   if (lower === '.archive.json') return { ok: false, error: '不读取角色生命周期元数据' }
   if (lower === 'stories' || lower.startsWith('stories/') || lower === 'story.json') return { ok: false, error: '不读取其它剧情或内部元数据' }
-  if (lower === 'state/wal' || lower.startsWith('state/wal/')) return { ok: false, error: '不读取 WAL 快照' }
-  if (lower === 'state/template.json') return { ok: false, error: '不读取内部模板状态与回复快照' }
+  if (lower === 'state/wal' || lower.startsWith('state/wal/') || lower === 'state/wal-coverage.json') return { ok: false, error: '不读取 WAL 快照' }
+  if (lower === 'state/template.json' || ['state/template-data', 'state/template-generation'].some((dir) => lower === dir || lower.startsWith(`${dir}/`))) return { ok: false, error: '不读取内部模板状态与回复快照' }
   if (lower === 'state/helper.json' || lower === 'state/helper-mvu-abandon.json') return { ok: false, error: '不读取内部酒馆助手状态' }
   if (/\.(png|jpe?g|webp|gif|bin)$/i.test(path)) return { ok: false, error: '不读取二进制资源' }
   if (!TEXT_EXT.test(path)) return { ok: false, error: '只允许 md / json / jsonl / txt' }

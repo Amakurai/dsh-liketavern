@@ -31,11 +31,26 @@ export declare const WAL_BINARY_MARK = "binary-base64:";
  * 按未开始处理；缺元数据但有记录或回滚游标仍是损坏，照常拒绝。doctor 共用同一判定。
  */
 export declare const WAL_FLOOR_MARKERS: readonly ["meta.json", "records.jsonl", "rollback-progress.json"];
+/** 独立于 WAL 目录保存已知楼层，删除日志不能被误认为剧情从未写入。 */
+export declare const WAL_COVERAGE_PATH = "state/wal-coverage.json";
 export declare class Wal {
     private readonly rootDir;
     private readonly logFs;
+    private readonly hasCoverage;
+    /** 最近一次确认已登记的楼层身份。 */
+    private covered;
     /** rootDir 为工作区的 state/wal/ 目录；不存在则在首次操作时创建。 */
     constructor(rootDir: string);
+    private readCoverage;
+    private writeCoverage;
+    private writeCoverageFloors;
+    private recordCoverage;
+    /**
+     * 开层前核对已登记楼层的日志目录仍在（回滚副本同样算数），被清理后不能继续开新层。
+     * 普通新层只比目录名；重用已登记 id 时只核对该身份的回滚完成证明，不能用新开始时间洗掉丢日志的证据。
+     * 其它楼层的元数据与开始时间完整检查仍留给列举、回退与分支。
+     */
+    private assertCoveredFloorDirs;
     private assertLogPath;
     /** 开始新的楼层事务；已有楼层必须显式 reopen 或先回滚，不能覆盖原始镜像。 */
     beginFloor(floor: string): Promise<void>;
@@ -45,12 +60,29 @@ export declare class Wal {
     recordAfter(floor: string, path: string, after: string | null, afterEncoding?: 'utf8' | 'base64'): Promise<void>;
     /** 每次修改独立记录 before/after，必须在正文原子替换之前持久化。 */
     recordChange(floor: string, path: string, before: string | null, after: string | null, beforeEncoding: 'utf8' | 'base64', afterEncoding: 'utf8' | 'base64'): Promise<void>;
+    /**
+     * 一批修改一次追加，序号按入参顺序连续；全部记录持久化后调用方才能替换其中任何正文。
+     * 追加要重读并原子重写整份日志，逐条记录的代价随同层记录数平方增长。
+     */
+    recordChanges(floor: string, changes: ReadonlyArray<{
+        path: string;
+        before: string | null;
+        after: string | null;
+        beforeEncoding: 'utf8' | 'base64';
+        afterEncoding: 'utf8' | 'base64';
+    }>): Promise<void>;
     /** 提交楼层：meta.committed=true 并记录 committedAt。 */
     commitFloor(floor: string): Promise<void>;
     /** 已完成楼层追加受控事务前重新标记未收口；保留全部快照和时间，先验证整层，不能用旧 committed 掩盖新写入失败。 */
     reopenFloor(floor: string): Promise<void>;
     /** 逆序回放本楼层快照：before 为字符串写回（先确保父目录存在），为 null 删除文件；随后目录改名保留。 */
     rollbackFloor(floor: string, workspaceRoot: string): Promise<string[]>;
+    /**
+     * 只读推算指定正文在完整撤销本层后的最终字节，用于回收根不再需要的生成恢复正文。
+     * 调用方须持有工作区锁，使传入的当前正文与日志一致；按正式回滚相同规则保留楼层外修订。
+     * 这里只处理给定路径，不执行模板块保留、记忆展开或索引重建，不能代替实际回滚。
+     */
+    rollbackSnapshot(floor: string, path: string, current: Uint8Array | null): Promise<Uint8Array | null>;
     /** 按传入顺序的逆序逐个回滚（「回退到第 N 楼」= 撤销其后所有楼层）；不存在的楼层记入 skipped。 */
     rollbackAfter(floors: string[], workspaceRoot: string): Promise<RollbackAfterResult>;
     /** 列出全部楼层（含已回滚，rolledBack: true），按 startedAt 升序。 */

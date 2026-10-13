@@ -38,12 +38,12 @@ import { loadBoundLoreEntries, runTavernPipeline } from './pipeline.js'
 import { hasEjs } from '../core/template.js'
 import { templateCardData } from '../core/templateAssets.js'
 import { characterPromptName } from '../core/characterData.js'
-import { loadTemplateState, templateTextHash } from '../state/template.js'
+import { loadTemplateMetadata, loadTemplateOutputs, templateTextHash } from '../state/template.js'
 import { loadTemplateAvatars } from './templateAvatar.js'
 import { sessionCacheUsage } from './requestDiagnostics.js'
 import { hasNativeMvuEntry } from '../core/cardScript.js'
 import { displaySessionEventAt, displaySessionHasUserMessage, readDisplaySessionEvents } from './sessionEvents.js'
-import { continuationDisplayText } from '../core/continuationDisplay.js'
+import { continuationDisplaySources, continuationDisplayText } from '../core/continuationDisplay.js'
 import {getHelperWorldbookContext,helperWorldbookOperation,rebindHelperWorldbooks} from './helperWorldbook.js'
 import {editHelperMessages} from './helperChatEdits.js'
 import { getHelperDisplayContext, getHelperSnapshot, commitHelperVariables, getHelperScriptBundle, sessionHelperLibraries } from './helperRuntime.js'
@@ -559,8 +559,7 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
     let named = expandIdentityMacros(text, names)
     let templateParts: TemplateDisplayPart[] | undefined
     const story = await this.state.storyWorkspace(binding.cardId, binding.storyId)
-    const templates = await loadTemplateState(story.fs)
-    const cached = request.messageId === undefined ? undefined : templates.outputs[String(request.messageId)]
+    const cached = request.messageId === undefined ? undefined : (await loadTemplateOutputs(story.fs,[request.messageId]))[String(request.messageId)]
     if (cached && cached.hash === templateTextHash(text)) {
       named = expandIdentityMacros(cached.text, names)
       templateParts = cached.parts
@@ -577,6 +576,7 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
       if (request.messageId !== undefined && !greeting) throw new Error('该回复的模板未成功提交或已被编辑；请查看触发日志，不会在刷新时重新执行写入')
       // 开场白/独立展示没有楼层，仅执行临时副本；浏览器传入文本永远不能落盘变量。
       const preset = binding.presetId ? await this.state.loadPreset(binding.presetId) : null
+      const templates = await loadTemplateMetadata(story.fs)
       const result = await isolated('template', { texts: [named], context: {
         variables: templates.variables, ...names, card: ws ? templateCardData(ws.card) : {name:names.char},
         ...await loadTemplateAvatars(this.state,binding.cardId,persona),
@@ -588,11 +588,14 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
       templateParts = result.parts[0]
     }
     // 机读 opener 与未完成卡面可能在前文；只读已提交模板快照，不能借续写重跑旧模板。
-    if(request.messageId!==undefined){
+    const messageId=request.messageId
+    if(messageId!==undefined){
       const events=liveEvents??await readDisplaySessionEvents(this.ctx,request.sessionId)
-      const continued=continuationDisplayText(events,request.messageId,text,named,event=>{
+      // 续写只沿实际来源读取快照；冷启动也不展开其他楼层的正文数据块。
+      const outputs=await loadTemplateOutputs(story.fs,continuationDisplaySources(events,messageId,text).map(event=>event.seq))
+      const continued=continuationDisplayText(events,messageId,text,named,event=>{
         const raw=event.data.message.content.filter(block=>block.type==='text').map(block=>block.text).join('\n')
-        const previous=templates.outputs[String(event.seq)]
+        const previous=outputs[String(event.seq)]
         if(previous?.hash===templateTextHash(raw))return expandIdentityMacros(previous.text,names)
         return hasEjs(raw)?undefined:expandIdentityMacros(raw,names)
       })

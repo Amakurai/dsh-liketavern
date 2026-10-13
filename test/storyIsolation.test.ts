@@ -89,6 +89,19 @@ it('连续重生成兄弟分支：原会话的事实不变，兄弟新事实不�
   expect((await state.workspace(cardId)).fs.root).not.toBe((await workspace('parent')).fs.root)
 })
 
+it('清理 WAL 后不能发布带有未来事实的回退分支，源剧情与宿主会话不变',async()=> {
+  addSession('parent',[...turn(1),...turn(2)])
+  await writeFact('parent',1,'第一层事实')
+  await writeFact('parent',2,'第二层未来事实')
+  const ws=await workspace('parent')
+  await rm(join(ws.fs.root,'state/wal'),{recursive:true,force:true})
+  const stories=await state.listStories(cardId)
+  await expect(rollbackToFloor({ctx,state},'parent',undefined,1)).rejects.toThrow(/WAL.*缺失/)
+  expect(created).not.toHaveBeenCalled()
+  expect(await state.listStories(cardId)).toEqual(stories)
+  expect((await ws.memory.list()).map(item=>item.body).sort()).toEqual(['第一层事实','第二层未来事实'].sort())
+})
+
 it('导航清理与新分支登记并发时保留新分支，只删除已确认的悬空记录', async () => {
   addSession('old-child', turn(1))
   const fork = (childSessionId: string) => ({ parentSessionId: 'parent', childSessionId, turn: 1, createdAt: '2026-01-01' })

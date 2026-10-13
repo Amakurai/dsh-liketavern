@@ -10,6 +10,15 @@ import { isolated } from './isolated.js'
 import type { TavernState } from './state.js'
 import { mergeTemplateMessageVariables, visibleTemplateMessageVariables } from '../core/templateMessageVariables.js'
 import { TEMPLATE_DISPLAY_PARTS_VERSION } from '../core/templateDisplay.js'
+import { assertActiveTemplateRuntime } from './templateRuntimeGuard.js'
+
+/** 计算已成功但提交未确认：保留原 prepared 与 WAL，不能按模板脚本异常放弃回复。 */
+export class TemplateOutputCommitError extends Error {
+  constructor(cause:unknown) {
+    super(`模板回复尚未保存，将保留原楼层供重试或回退：${cause instanceof Error?cause.message:String(cause)}`,{cause})
+    this.name='TemplateOutputCommitError'
+  }
+}
 
 export async function completeTemplateOutput(state:TavernState,session:Pick<Session,'id'|'snapshotEvents'>):Promise<void> {
   const events = session.snapshotEvents()
@@ -33,6 +42,8 @@ export async function completeTemplateOutput(state:TavernState,session:Pick<Sess
     const context = plan?.result.templateContext ?? (ownGeneration && generation.status==='prepared' ? templateGenerationContext(generation) : undefined)
     const replay = plan?.result.templateReplay ?? (ownGeneration && generation.status==='prepared' ? generation.replay : undefined)
     const floor = open?.floor ?? (ownGeneration ? generation.floor : undefined)
+    // 生命周期首检和回复计算分属两次持锁；维护恢复的新根不能被旧缓存执行后覆盖。
+    await assertActiveTemplateRuntime(stored,session.id,replay)
     if (!context || !floor) return
     if (floor!==`${session.id}#t${turn}`) throw new Error('模板回复恢复楼层与宿主结束帧不一致')
     await ws.wal.validateFloor(floor)
@@ -64,13 +75,15 @@ export async function completeTemplateOutput(state:TavernState,session:Pick<Sess
       context:{...context,history,historyIdentities,messageVariables:historyIdentities ? visibleTemplateMessageVariables(stored.messageVariables,historyIdentities) : undefined,
         renderMessages:pending.map(candidate=>candidate.metadata),variables:stored.variables,phase:'render'}})
     if (result.texts.length!==pending.length || result.parts.length!==pending.length) throw new Error('模板回复结果与宿主消息数量不一致')
-    stored.variables = result.variables
-    if(result.templateContinuation) stored.continuation=result.templateContinuation
-    if(historyIdentities) stored.messageVariables=mergeTemplateMessageVariables(stored.messageVariables,result.messageVariables,historyIdentities)
-    pending.forEach((candidate,index)=>{ stored.outputs[candidate.id] = {hash:templateTextHash(candidate.text),text:result.texts[index]!,parts:result.parts[index],partsVersion:TEMPLATE_DISPLAY_PARTS_VERSION} })
-    if (ownGeneration) closeTemplateGenerationState(stored,'completed')
-    const latest = await state.loadBinding(session.id)
-    if (latest?.cardId!==binding.cardId || latest.storyId!==binding.storyId) throw new Error('模板回复提交前剧情绑定已变化')
-    await saveTemplateState(ws.fs.withFloor(floor),stored)
+    try {
+      stored.variables = result.variables
+      if(result.templateContinuation) stored.continuation=result.templateContinuation
+      if(historyIdentities) stored.messageVariables=mergeTemplateMessageVariables(stored.messageVariables,result.messageVariables,historyIdentities)
+      pending.forEach((candidate,index)=>{ stored.outputs[candidate.id] = {hash:templateTextHash(candidate.text),text:result.texts[index]!,parts:result.parts[index],partsVersion:TEMPLATE_DISPLAY_PARTS_VERSION} })
+      if (ownGeneration) closeTemplateGenerationState(stored,'completed')
+      const latest = await state.loadBinding(session.id)
+      if (latest?.cardId!==binding.cardId || latest.storyId!==binding.storyId) throw new Error('模板回复提交前剧情绑定已变化')
+      await saveTemplateState(ws.fs.withFloor(floor),stored)
+    } catch(error) {throw new TemplateOutputCommitError(error)}
   })
 }

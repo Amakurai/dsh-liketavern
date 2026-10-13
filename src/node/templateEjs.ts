@@ -53,7 +53,7 @@ async function evalTemplate(text,data={},compileOptions={}) {
       };
     }
     const result=await __TavernTemplateLibraries.ejs.compile(String(text),opts)(locals);
-    if(result.length>1024*1024) throw Error('模板输出超过 1 MiB 上限');
+    if(result.length>templateOutputLimit) throw Error('模板输出净增超过 1 MiB 上限');
     return result;
   } finally {depth--;}
 }

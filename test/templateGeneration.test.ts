@@ -22,6 +22,17 @@ function request(lore:Record<string,unknown>[],main='MAIN|',history:ChatMessage[
 }
 
 describe('GENERATE 顺序上下文',()=> {
+  it('空历史中只有人设包含模板时仍启动沙箱，不因定向正文检测漏掉来源',async()=> {
+    const input=request([],'',[])
+    input.preset.entries=defaultPreset().entries.filter(entry=>entry.identifier==='personaDescription')
+    input.templates!.presets=input.preset.entries
+    input.personaDescription='<% incvar("personaRuns") %>PERSONA'
+    const result=await isolated('assemble',input)
+    expect(result.templateVariables?.message.personaRuns).toBe(1)
+    expect(result.messages.some(message=>message.content.includes('PERSONA'))).toBe(true)
+    expect(result.messages.some(message=>message.content.includes('<%'))).toBe(false)
+  })
+
   it('完整原始序列包含预设和历史，buffer 按全局前置、消息前置、正文、消息后置顺序推进',async()=> {
     const input=request([
       {comment:'global-before',content:'@@generate_before\n<% setvar("raw",generateData);setvar("globalBefore",generateBuffer) %>G|'},

@@ -2,6 +2,6 @@
 import type { TemplateSandbox } from './templateSandbox.js';
 import type { TemplateContext } from '../core/template.js';
 import type { TemplateContinuation } from '../core/templateContinuation.js';
-export declare function prepareContinuedTemplate(Sandbox: typeof TemplateSandbox, context: TemplateContext, value?: TemplateContinuation): Promise<TemplateSandbox>;
+export declare function prepareContinuedTemplate(Sandbox: typeof TemplateSandbox, context: TemplateContext, value?: TemplateContinuation, restoreCached?: () => TemplateSandbox | undefined): Promise<TemplateSandbox>;
 export declare function exportTemplateContinuation(sandbox: TemplateSandbox, context: TemplateContext, includeReplay?: boolean): TemplateContinuation;
 export declare const TEMPLATE_CONTINUATION: string;

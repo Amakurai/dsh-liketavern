@@ -1,5 +1,6 @@
 /** 有序展示片段契约：HTML 永远交给隔离卡面，Markdown 与 HTML 的前后位置、折叠标题独立保存。 */
 import { locateRenderedHtml } from './regex.js'
+import { TEMPLATE_REPLAY_MAX_CHARS } from './templateBudget.js'
 import {
   htmlSourceFallback,
   mergeDetachedCardStyles,
@@ -11,7 +12,8 @@ import {
 export type TemplateDisplayPart = {kind:'markdown';text:string} | {kind:'html';text:string;title?:string}
 export const TEMPLATE_DISPLAY_PARTS_VERSION=1 as const
 const MAX_PARTS=128
-const MAX_TEXT=1024*1024
+// 单条已存在的回复可以超过旧 1 MiB；脚本扩张在隔离器控制，存储解析只守住文档资源边界。
+const MAX_TEXT=TEMPLATE_REPLAY_MAX_CHARS
 
 export function parseTemplateDisplayParts(value:unknown):TemplateDisplayPart[] {
   if(!Array.isArray(value) || value.length>MAX_PARTS) throw new Error('模板展示片段必须是最多 128 项的数组')
@@ -20,7 +22,7 @@ export function parseTemplateDisplayParts(value:unknown):TemplateDisplayPart[] {
     if(!part || typeof part!=='object' || !('kind' in part) || !('text' in part) || typeof part.text!=='string'
       || !['markdown','html'].includes(String(part.kind)) || Object.keys(part).some(key=>!['kind','text','title'].includes(key))) throw new Error('模板展示片段损坏')
     size+=part.text.length
-    if(size>MAX_TEXT) throw new Error('模板展示片段超过 1 MiB 上限')
+    if(size>MAX_TEXT) throw new Error('模板展示片段超过资源容量')
     if('title' in part && (part.kind!=='html' || typeof part.title!=='string' || part.title.length>4096)) throw new Error('模板展示标题无效')
     return part.kind==='html' ? {kind:'html',text:part.text,...('title' in part ? {title:part.title as string} : {})} : {kind:'markdown',text:part.text}
   })
@@ -28,7 +30,7 @@ export function parseTemplateDisplayParts(value:unknown):TemplateDisplayPart[] {
 
 /** 利用已有 HTML 识别规则定位原始子串，再分别拆分两侧，避免聚合 htmls 时将尾部卡面移到前面。 */
 export function splitTemplateDisplay(text:string,preserveMeta=false):TemplateDisplayPart[] {
-  if(text.length>MAX_TEXT) throw new Error('模板展示片段超过 1 MiB 上限')
+  if(text.length>MAX_TEXT) throw new Error('模板展示片段超过资源容量')
   const parts:TemplateDisplayPart[]=[]
   const visit=(source:string,depth=0):void=>{
     if(!source.trim()) return

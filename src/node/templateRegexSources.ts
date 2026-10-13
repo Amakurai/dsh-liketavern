@@ -1,11 +1,13 @@
 /** 全消息正则的来源区间映射；所有匹配、捕获替换与回调均在 QuickJS 内执行，来源身份跨主动激活重组保持稳定。 */
-export interface TemplateRegexSource {key:string;text:string;start:number}
+import type { TemplateReplayRegexSource } from '../core/templateReplay.js'
+import { TEMPLATE_INPUT_MAX_CHARS } from '../core/templateBudget.js'
+export type TemplateRegexSource = TemplateReplayRegexSource
 
 export const TEMPLATE_REGEX_SOURCES=String.raw`
 const templateRegexMatchCache=new Map();
 let templateRegexCacheChars=0;
 function resetTemplateRegexSources() {templateRegexMatchCache.clear();templateRegexCacheChars=0;}
-globalThis.__applyTemporaryRegexSources=(inputParts,stage,meta,namespace)=> {
+function applyTemporaryRegexSources(inputParts,stage,meta,namespace,rules) {
   if(typeof namespace!=='string' || namespace.length>4096) throw Error('正则来源命名空间无效或超限');
   const validate=parts=> {
     if(!Array.isArray(parts)||parts.length>4096) throw Error('正则来源超过 4096 段上限');
@@ -15,11 +17,12 @@ globalThis.__applyTemporaryRegexSources=(inputParts,stage,meta,namespace)=> {
         || typeof part.text!=='string' || !Number.isSafeInteger(part.start) || part.start<0) throw Error('正则来源区间无效');
       size+=part.text.length;
     }
-    if(size>1024*1024) throw Error('正则来源正文超过 1 MiB 上限');
+    if(size>${TEMPLATE_INPUT_MAX_CHARS}) throw Error('正则来源正文超过安全资源容量');
   };
   validate(inputParts);
+  const outputLimit=inputParts.reduce((sum,part)=>sum+part.text.length,0)+1024*1024;
   let parts=inputParts.map(part=>({...part})),matches=0,work=0;
-  for(const rule of templateRegexRulesForStage(stage,meta)) {
+  for(const rule of rules) {
     const text=parts.map(part=>part.text).join('');
     const offsets=[];
     let total=0;
@@ -58,7 +61,7 @@ globalThis.__applyTemporaryRegexSources=(inputParts,stage,meta,namespace)=> {
     const append=part=> {
       if(!part.text) return;
       resultChars+=part.text.length;
-      if(resultChars>1024*1024) throw Error('临时正则输出超过 1 MiB 上限');
+      if(resultChars>outputLimit) throw Error('临时正则输出净增超过 1 MiB 额度');
       const last=result[result.length-1];
       if(last && last.key===part.key && last.start+last.text.length===part.start) last.text+=part.text;
       else result.push(part);
@@ -95,5 +98,26 @@ globalThis.__applyTemporaryRegexSources=(inputParts,stage,meta,namespace)=> {
     validate(parts);
   }
   return parts;
+}
+// 旧 render 包装日志继续调用原入口；新调用一次筛选后直接返回有界 JSON，不再编译 EJS 包装。
+globalThis.__applyTemporaryRegexSources=(parts,stage,meta,namespace)=>applyTemporaryRegexSources(parts,stage,meta,namespace,templateRegexRulesForStage(stage,meta));
+globalThis.__runTemporaryRegexSources=(parts,stage,meta,namespace)=> {
+  const rules=templateRegexRulesForStage(stage,meta);
+  return JSON.stringify({applied:rules.length>0,parts:applyTemporaryRegexSources(parts,stage,meta,namespace,rules)});
+};
+globalThis.__runBasicRegexSourcesBatch=(items,namespace)=> {
+  if(!Array.isArray(items)||items.length>4096)throw Error('basic 正则消息批次超过 4096 条上限');
+  let applied=false;
+  let inputChars=0,outputChars=0;
+  for(const item of items)for(const part of item.parts)inputChars+=part.text.length;
+  const parts=items.map(item=> {
+    const rules=templateRegexRulesForStage('basic',item.meta);
+    applied=applied||rules.length>0;
+    const result=applyTemporaryRegexSources(item.parts,'basic',item.meta,namespace,rules);
+    for(const part of result)outputChars+=part.text.length;
+    if(outputChars>inputChars+1024*1024)throw Error('basic 正则批次输出净增超过 1 MiB 额度');
+    return result;
+  });
+  return JSON.stringify({applied,parts});
 };
 `;

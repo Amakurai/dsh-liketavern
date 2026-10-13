@@ -5,16 +5,15 @@ import type { TemplateContinuation } from '../core/templateContinuation.js'
 import { hasTemplateStickyClosures } from '../core/templateSticky.js'
 import { parseTemplateContinuation,templatePreloadRevision } from '../state/templateContinuation.js'
 
-export async function prepareContinuedTemplate(Sandbox:typeof TemplateSandbox,context:TemplateContext,value?:TemplateContinuation):Promise<TemplateSandbox> {
+export async function prepareContinuedTemplate(Sandbox:typeof TemplateSandbox,context:TemplateContext,value?:TemplateContinuation,restoreCached?:()=>TemplateSandbox|undefined):Promise<TemplateSandbox> {
   const carry=value && parseTemplateContinuation(value)
   const refresh=!carry || carry.preloadRevision!==templatePreloadRevision(context)
   if(carry?.replay) {
-    let sandbox=await Sandbox.rebuild(carry.replay)
+    let sandbox=restoreCached?.() ?? await Sandbox.rebuild(carry.replay)
     let disposed=false
     try {
       if(JSON.stringify(sandbox.stickyState())!==JSON.stringify(carry.state)) throw new Error('sticky 注册表与闭包重放不一致')
-      sandbox.resume(context,refresh)
-      const remaining=sandbox.sticky('begin')
+      const remaining=sandbox.advanceGeneration(context,refresh)
       if(!hasTemplateStickyClosures(remaining)) {
         sandbox.dispose()
         disposed=true

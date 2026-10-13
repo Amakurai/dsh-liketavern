@@ -4,7 +4,7 @@ import { isDeepStrictEqual } from 'node:util'
 import { templatePreloadAssets,type TemplateContinuation } from '../core/templateContinuation.js'
 import type { TemplateContext } from '../core/template.js'
 import { validateTemplateJson } from '../core/template.js'
-import { templateReplayGenerationContext, type TemplateReplay } from '../core/templateReplay.js'
+import { templateReplayGenerationContext, templateReplayLatestContext, type TemplateReplay } from '../core/templateReplay.js'
 import { parseTemplateMessageVariables, visibleTemplateMessageVariables } from '../core/templateMessageVariables.js'
 import { parseTemplateStickyState,type TemplateStickyState } from '../core/templateSticky.js'
 import { parseTemplateReplay,closeTemplateGeneration } from './templateGeneration.js'
@@ -41,7 +41,7 @@ export function parseTemplateContinuation(value:unknown):TemplateContinuation {
 }
 
 /** 仅在当前剧情内解析引用；不会因为回执缺失而重新执行某个旧生成阶段。 */
-export function resolveTemplateContinuation(stored:TemplateState):TemplateContinuation|undefined {
+export function resolveTemplateContinuation(stored:Pick<TemplateState,'continuation'|'generation'|'variables'|'messageVariables'>):TemplateContinuation|undefined {
   const carry=stored.continuation
   if(!carry) return undefined
   if(!templateStickyHasClosures(carry.state)) return carry
@@ -49,8 +49,7 @@ export function resolveTemplateContinuation(stored:TemplateState):TemplateContin
   if(!replay) throw new Error('跨轮闭包缺少可恢复的执行日志')
   validateContinuationReplayRevision(carry.preloadRevision,replay)
   if(!isDeepStrictEqual(replay.variables,stored.variables)) throw new Error('模板跨轮执行日志与已提交变量不一致')
-  const lastPhase=[...replay.operations].reverse().find(operation=>operation.kind==='phase')
-  const context=lastPhase?.kind==='phase' ? lastPhase.context : replay.context
+  const context=templateReplayLatestContext(replay)
   if(context.historyIdentities) {
     const visible=parseTemplateMessageVariables(visibleTemplateMessageVariables(stored.messageVariables,context.historyIdentities))
     const fingerprint=createHash('sha256').update(JSON.stringify(visible)).digest('hex')

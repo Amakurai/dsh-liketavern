@@ -132,6 +132,30 @@ describe('模板冻结计划恢复',()=> {
     expect(stored.variables.message.runs).toBe(1)
   })
 
+  it('回复存储失败阻止无原文的新轮，带正常结束帧的新轮先补交旧回复再开层',async()=> {
+    const {state,ws,run,fresh}=await setup()
+    await run()
+    const write=WorkspaceFs.prototype.writeText
+    const fault=vi.spyOn(WorkspaceFs.prototype,'writeText').mockImplementation(async function(path,text){
+      if(path===TEMPLATE_STATE_PATH)throw new Error('工厂容量或写入故障')
+      return write.call(this,path,text)
+    })
+    await expect(onTurnEnd(state,'s1',ending())).rejects.toThrow(/尚未保存/)
+    expect((await ws.wal.validateFloor('s1#t1')).committed).toBe(false)
+    expect(state.openFloors.get('s1')?.floor).toBe('s1#t1')
+    await expect(onTurnStart(await fresh(),'s1',2)).rejects.toThrow(/尚未保存/)
+    fault.mockRestore()
+    const restarted=await fresh(),old=ending()
+    const session={id:old.id,snapshotEvents:()=>[...old.snapshotEvents(),{type:'turn/start',seq:7,time:0,data:{turn:2}}] as SessionEvent[]}
+    await onTurnStart(restarted,'s1',2,session)
+    const stored=await loadTemplateState(ws.fs)
+    expect(stored.outputs['5']?.text).toBe('frozen1/frozen2')
+    expect(stored.variables.message.runs).toBe(1)
+    expect(stored.generation?.status).toBe('completed')
+    expect((await ws.wal.validateFloor('s1#t1')).committed).toBe(true)
+    expect(restarted.openFloors.get('s1')?.floor).toBe('s1#t2')
+  })
+
   it('回复已替换但读回也失败时，完成回执保证重启不再执行闭包且仍提交原 WAL',async()=> {
     const {ws,run,fresh} = await setup()
     await run()

@@ -1,6 +1,6 @@
 {
   "name": "dsh-liketavern",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "description": "Tavern mode for dsh web — SillyTavern character cards, prompt presets, lorebooks, personas and regex on the dsh agent runtime.",
   "license": "MIT",
   "repository": {
@@ -58,7 +58,7 @@
     }
   },
   "scripts": {
-    "build": "node scripts/build-template-vendor.mjs && node scripts/build-card-vendor.mjs && tsc -p tsconfig.json && node scripts/build-client.mjs",
+    "build": "node scripts/build-checkpoint-engine.mjs && node scripts/build-template-vendor.mjs && node scripts/build-card-vendor.mjs && tsc -p tsconfig.json && node scripts/build-client.mjs",
     "test": "vitest run",
     "doctor": "node lib/doctor.js",
     "doctor:check": "node scripts/verify-doctor.mjs",

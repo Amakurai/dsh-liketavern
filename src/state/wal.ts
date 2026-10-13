@@ -22,6 +22,7 @@ import { expandAffectedMemories } from './memoryRollback.js'
 import { WorkspaceFs } from './workspaceFs.js'
 import { rebuildIndex } from './workspace.js'
 import { estimateTokens } from '../core/tokenize.js'
+import { readTemplateDocument, TEMPLATE_DATA_PATH } from './templateStorage.js'
 
 // ---------------------------------------------------------------------------
 // 磁盘格式
@@ -100,6 +101,8 @@ function recordPathIdentity(path: string): string { return process.platform === 
  * 按未开始处理；缺元数据但有记录或回滚游标仍是损坏，照常拒绝。doctor 共用同一判定。
  */
 export const WAL_FLOOR_MARKERS = ['meta.json', 'records.jsonl', 'rollback-progress.json'] as const
+/** 独立于 WAL 目录保存已知楼层，删除日志不能被误认为剧情从未写入。 */
+export const WAL_COVERAGE_PATH = 'state/wal-coverage.json'
 
 async function isUnstartedDir(dir: string): Promise<boolean> {
   for (const name of WAL_FLOOR_MARKERS) {
@@ -184,6 +187,9 @@ function rollbackTarget(rec: RecordLine, current: string | null): { restore: tru
 export class Wal {
   private readonly rootDir: string
   private readonly logFs: WorkspaceFs
+  private readonly hasCoverage: boolean
+  /** 最近一次确认已登记的楼层身份。 */
+  private covered: string | undefined
 
   /** rootDir 为工作区的 state/wal/ 目录；不存在则在首次操作时创建。 */
   constructor(rootDir: string) {
@@ -194,6 +200,84 @@ export class Wal {
     const anchor = basename(state).toLowerCase() === 'state' && basename(this.rootDir).toLowerCase() === 'wal'
       ? dirname(state) : this.rootDir
     this.logFs = new WorkspaceFs(anchor, null)
+    this.hasCoverage=anchor!==this.rootDir
+  }
+
+  private async readCoverage():Promise<Array<Pick<WalFloorInfo,'floor'|'startedAt'>>|null> {
+    if(!this.hasCoverage) return null
+    const info=await this.logFs.stat(WAL_COVERAGE_PATH)
+    if(info && info.size>4*1024*1024) throw new Error('WAL 楼层清单超过上限')
+    const raw=await this.logFs.readText(WAL_COVERAGE_PATH)
+    if(raw===null) return null
+    if(Buffer.byteLength(raw)>4*1024*1024) throw new Error('WAL 楼层清单超过上限')
+    const value:unknown=JSON.parse(raw)
+    if(!isRecord(value) || value.version!==1 || Object.keys(value).some(key=>!['version','floors'].includes(key))
+      || !Array.isArray(value.floors) || value.floors.some(floor=>!isRecord(floor)
+        || Object.keys(floor).some(key=>!['floor','startedAt'].includes(key))
+        || typeof floor.floor!=='string'||!floor.floor||floor.floor.length>512
+        || typeof floor.startedAt!=='string'||!Number.isFinite(Date.parse(floor.startedAt)))
+      || new Set(value.floors.map(floor=>floor.floor)).size!==value.floors.length) throw new Error('WAL 楼层清单损坏')
+    return value.floors as Array<Pick<WalFloorInfo,'floor'|'startedAt'>>
+  }
+
+  private async writeCoverage(floors:WalFloorInfo[]):Promise<void> {
+    await this.writeCoverageFloors(floors.filter(floor=>!floor.rolledBack).map(({floor,startedAt})=>({floor,startedAt})))
+  }
+
+  private async writeCoverageFloors(floors:Array<Pick<WalFloorInfo,'floor'|'startedAt'>>):Promise<void> {
+    if(!this.hasCoverage) return
+    const raw=JSON.stringify({version:1,floors:[...floors].sort((a,b)=>a.floor.localeCompare(b.floor))})
+    if(Buffer.byteLength(raw)>4*1024*1024) throw new Error('WAL 楼层清单超过上限')
+    const path=join(this.logFs.root,WAL_COVERAGE_PATH)
+    await this.assertLogPath(path)
+    // 由 WAL 队列串行化；这里不能反向认领工作区锁，否则会与正文写入形成锁序倒置。
+    if(raw!==await this.logFs.readText(WAL_COVERAGE_PATH)) await atomicWrite(path,raw)
+  }
+
+  private async recordCoverage(meta:FloorMeta):Promise<void> {
+    if(!this.hasCoverage) return
+    // 同一楼层连续写入只核对一次；楼层身份含开始时间，重生成的同名楼层会重新登记。
+    const identity=JSON.stringify([meta.floor,meta.startedAt])
+    if(this.covered===identity) return
+    const coverage=await this.readCoverage()
+    if(!coverage?.some(floor=>floor.floor===meta.floor && floor.startedAt===meta.startedAt)) {
+      // 旧剧情首次登记才完整列举。已有清单只追加或替换本层，其它楼层的登记原样保留：
+      // 每次开层都重新列举既随楼层数变慢，也不该由磁盘现状重建已有的登记。
+      if(coverage===null) await this.writeCoverage(await this.doListFloors())
+      else await this.writeCoverageFloors([...coverage.filter(floor=>floor.floor!==meta.floor),{floor:meta.floor,startedAt:meta.startedAt}])
+    }
+    this.covered=identity
+  }
+
+  /**
+   * 开层前核对已登记楼层的日志目录仍在（回滚副本同样算数），被清理后不能继续开新层。
+   * 普通新层只比目录名；重用已登记 id 时只核对该身份的回滚完成证明，不能用新开始时间洗掉丢日志的证据。
+   * 其它楼层的元数据与开始时间完整检查仍留给列举、回退与分支。
+   */
+  private async assertCoveredFloorDirs(targetFloor:string):Promise<void> {
+    const coverage=await this.readCoverage()
+    if(!coverage?.length) return
+    const directories=(await readdir(this.rootDir,{withFileTypes:true})).filter(entry=>entry.isDirectory())
+    const names=new Set(directories.map(entry=>entry.name.split(ROLLED_BACK_MARK)[0]!))
+    for(const floor of coverage) {
+      if(!names.has(sanitizeFloor(floor.floor))) throw new Error(`WAL 楼层缺失：${floor.floor}；请恢复完整日志，不能继续回退或分支`)
+    }
+    const previous=coverage.find(floor=>floor.floor===targetFloor)
+    if(!previous) return
+    // 空目录可能是首次开层前的崩溃遗留，也可能是已有层的日志被清空。
+    // 清单已登记的身份只有完成回滚后才能替换；更早一次同名层的副本不能充当当前层的证明。
+    const prefix=sanitizeFloor(targetFloor)+ROLLED_BACK_MARK
+    for(const entry of directories) {
+      if(!entry.name.startsWith(prefix)) continue
+      const dir=join(this.rootDir,entry.name)
+      const meta=await this.readMeta(dir)
+      if(meta?.floor!==previous.floor || meta.startedAt!==previous.startedAt) continue
+      const records=await this.readRecords(dir)
+      const progress=await this.readRollbackProgress(dir,records)
+      if(typeof meta.rolledBackAt==='string' && Number.isFinite(Date.parse(meta.rolledBackAt))
+        && progress.next===-1 && !progress.pending) return
+    }
+    throw new Error(`WAL 已登记楼层缺失或未完成回滚：${targetFloor}；请恢复完整日志，不能重新开始`)
   }
 
   private async assertLogPath(target = this.rootDir): Promise<void> {
@@ -218,21 +302,33 @@ export class Wal {
   /** 每次修改独立记录 before/after，必须在正文原子替换之前持久化。 */
   recordChange(floor: string, path: string, before: string | null, after: string | null,
     beforeEncoding: 'utf8' | 'base64', afterEncoding: 'utf8' | 'base64'): Promise<void> {
+    return this.recordChanges(floor, [{ path, before, after, beforeEncoding, afterEncoding }])
+  }
+
+  /**
+   * 一批修改一次追加，序号按入参顺序连续；全部记录持久化后调用方才能替换其中任何正文。
+   * 追加要重读并原子重写整份日志，逐条记录的代价随同层记录数平方增长。
+   */
+  recordChanges(floor: string, changes: ReadonlyArray<{ path: string; before: string | null; after: string | null
+    beforeEncoding: 'utf8' | 'base64'; afterEncoding: 'utf8' | 'base64' }>): Promise<void> {
     return this.enqueue(async () => {
+      if (!changes.length) return
       const dirName = sanitizeFloor(floor)
       const dir = join(this.rootDir, dirName)
       await this.assertLogPath(dir)
       if (!(await isDir(dir))) throw new Error(`楼层 "${floor}" 未开始（或已回滚），无法记录写入快照`)
       await this.assertNotRecovering(dir)
-      await this.readFloorMeta(dir, floor)
+      const meta=await this.readFloorMeta(dir, floor)
+      await this.recordCoverage(meta)
       const state = await this.loadState(dirName)
       const file = join(dir, 'records.jsonl')
       const text = await readFile(file, 'utf8').catch((error: unknown) => {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') return ''
         throw error
       })
-      const record: RecordLine = { seq: state.seq + 1, path: path.replace(/\\/g, '/'), before, after, beforeEncoding, afterEncoding }
-      await atomicWrite(file, text + (text && !text.endsWith('\n') ? '\n' : '') + JSON.stringify(record) + '\n')
+      const lines = changes.map((change, index) => JSON.stringify({ seq: state.seq + 1 + index, path: change.path.replace(/\\/g, '/'),
+        before: change.before, after: change.after, beforeEncoding: change.beforeEncoding, afterEncoding: change.afterEncoding } satisfies RecordLine))
+      await atomicWrite(file, text + (text && !text.endsWith('\n') ? '\n' : '') + lines.join('\n') + '\n')
     })
   }
 
@@ -263,6 +359,30 @@ export class Wal {
       await this.preflightRollback([floor], workspaceRoot)
       return this.doRollbackFloor(floor, workspaceRoot)
     }))
+  }
+
+  /**
+   * 只读推算指定正文在完整撤销本层后的最终字节，用于回收根不再需要的生成恢复正文。
+   * 调用方须持有工作区锁，使传入的当前正文与日志一致；按正式回滚相同规则保留楼层外修订。
+   * 这里只处理给定路径，不执行模板块保留、记忆展开或索引重建，不能代替实际回滚。
+   */
+  rollbackSnapshot(floor:string,path:string,current:Uint8Array|null):Promise<Uint8Array|null> {
+    const identity=recordPathIdentity(path.replace(/\\/g,'/'))
+    let snapshot=current===null?null:Buffer.from(current).toString('base64')
+    return this.enqueue(async()=> {
+      const dir=join(this.rootDir,sanitizeFloor(floor))
+      await this.assertLogPath(dir)
+      await this.readFloorMeta(dir,floor)
+      await this.assertNotRecovering(dir)
+      const records=await this.readRecords(dir)
+      for(let index=records.length-1;index>=0;index--) {
+        const record=records[index]!
+        if(recordPathIdentity(record.path)!==identity) continue
+        const target=rollbackTarget(record,snapshot)
+        if(target.restore) snapshot=target.value
+      }
+      return snapshot===null?null:Buffer.from(snapshot,'base64')
+    })
   }
 
   /** 按传入顺序的逆序逐个回滚（「回退到第 N 楼」= 撤销其后所有楼层）；不存在的楼层记入 skipped。 */
@@ -457,8 +577,12 @@ export class Wal {
       // 已完成层的受控追加使用 reopenFloor；重生成先回滚再开新层。
       throw new Error(`楼层 "${floor}" 已存在，拒绝重复开始；追加写入请显式重新打开，重新生成请先回滚`)
     }
+    // 先核对旧清单，不能在日志被清理后继续开新层。
+    await this.assertCoveredFloorDirs(floor)
     await mkdir(dir, { recursive: true })
-    await this.writeMeta(dir, { floor, startedAt: new Date().toISOString(), committed: false })
+    const meta={floor,startedAt:new Date().toISOString(),committed:false}
+    await this.writeMeta(dir,meta)
+    await this.recordCoverage(meta)
   }
 
   private async doRecord(floor: string, path: string, before: string | null, beforeEncoding?: 'utf8' | 'base64'): Promise<void> {
@@ -583,10 +707,19 @@ export class Wal {
       await checkpoint()
     }
     if (progress.pending) await applyPending()
+    let templateBlocks:Set<string>|undefined
     for (let i = progress.next; i >= 0; i--) {
       const rec = records[i]!
       const current = await currentBytes(rec.path)
-      const target = rollbackTarget(rec, current)
+      const path=recordPathIdentity(rec.path)
+      if(path==='state/template.json') templateBlocks=undefined
+      if(path.startsWith(TEMPLATE_DATA_PATH+'/') && !templateBlocks) {
+        // 手动维护可能发布新根并复用旧块；保留根时不能随后删掉它仍引用的内容。
+        const references=new Set<string>()
+        await readTemplateDocument(bodyFs,'state/template.json',references)
+        templateBlocks=new Set([...references].map(recordPathIdentity))
+      }
+      const target = templateBlocks?.has(path) ? {restore:false as const} : rollbackTarget(rec, current)
       if (!target.restore) {
         progress.preserved.push(rec.path)
         progress.next = i - 1
@@ -718,10 +851,16 @@ export class Wal {
       })
     }
     floors.sort((a, b) => a.startedAt.localeCompare(b.startedAt))
+    // 同一 id 重生成后仍可能有旧回滚副本；清单还须匹配开始时间，不能拿旧副本充当当前日志。
+    const identity=(floor:Pick<WalFloorInfo,'floor'|'startedAt'>)=>JSON.stringify([floor.floor,floor.startedAt])
+    const present=new Set(floors.map(identity))
+    for(const floor of await this.readCoverage() ?? []) if(!present.has(identity(floor))) throw new Error(`WAL 楼层缺失：${floor.floor}；请恢复完整日志，不能继续回退或分支`)
     return floors
   }
 
   private async doPrune(options: { keepRolledBackDays?: number }): Promise<number> {
+    // 先从清单移除已完成回滚的楼层，再清理调试副本；中断也不会留下假缺失。
+    if(this.hasCoverage) await this.writeCoverage(await this.doListFloors())
     const keepDays = options.keepRolledBackDays ?? 7
     await mkdir(this.rootDir, { recursive: true })
     const cutoff = Date.now() - keepDays * 24 * 60 * 60 * 1000

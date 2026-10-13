@@ -8,6 +8,7 @@ import type { TavernSettingsScope } from '../src/node/config.js'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import { createAssistantMessage } from '@deepseek-ai/dsh-llm'
 import { emptyTemplateScopes, type TemplateContext } from '../src/core/template.js'
+import { TEMPLATE_REPLAY_MAX_CHARS } from '../src/core/templateBudget.js'
 import {
   disableInteractiveParts,
   parseTemplateDisplayParts,
@@ -90,7 +91,7 @@ describe('有序展示与真实消息格式化',()=>{
     ])
     const styled='<style>.status{color:red}</style><p class="status">正常</p>'
     expect(splitTemplateDisplay(styled)).toEqual([{kind:'html',text:styled}])
-    for(const bad of [[{kind:'script',text:'x'}],[{kind:'markdown',text:'x',title:'bad'}],[{kind:'html',text:'x',title:8}],[{kind:'html',text:'x'.repeat(1024*1024+1)}],Array.from({length:129},()=>({kind:'markdown',text:'x'}))]) expect(()=>parseTemplateDisplayParts(bad)).toThrow()
+    for(const bad of [[{kind:'script',text:'x'}],[{kind:'markdown',text:'x',title:'bad'}],[{kind:'html',text:'x',title:8}],[{kind:'html',text:'x'.repeat(TEMPLATE_REPLAY_MAX_CHARS+1)}],Array.from({length:129},()=>({kind:'markdown',text:'x'}))]) expect(()=>parseTemplateDisplayParts(bad)).toThrow()
   })
   it('展示正则产出的独立样式跨片段与后续组件共用沙箱',()=>{
     const style='<style>.status{color:red}</style>',card='<div class="status">状态</div>'

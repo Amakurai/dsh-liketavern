@@ -3,7 +3,7 @@ import { expect,it } from 'vitest'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { createAssistantMessage,createUserMessage } from '@deepseek-ai/dsh-llm'
 import { CONTINUE_INSTRUCTION_PREFIX } from '../src/core/dshPrompt.js'
-import { continuationDisplayText } from '../src/core/continuationDisplay.js'
+import { continuationDisplaySources, continuationDisplayText } from '../src/core/continuationDisplay.js'
 import { presentRenderedOutput } from '../src/core/displaySanitize.js'
 
 function fixture(owned=true,prefix="普通台词<UpdateVariable>_.add('hp',"){
@@ -35,6 +35,18 @@ it('连续续写保持机读状态，已完成的第一步之后不重复借用�
   expect(continuationDisplayText(f.events,seq,text,text)).toBe('最后台词')
   const step=f.assistant(3,'第二步台词')
   expect(continuationDisplayText(f.events,step,'第二步台词','第二步台词')).toBe('第二步台词')
+})
+
+it('按需快照只选真实续写链，普通历史和独立预览不读取前文',()=>{
+  const f=fixture();const first=f.events.find(event=>event.type==='assistant/message')!.seq
+  f.next(2);const second=f.assistant(2,'2);','max-tokens');f.add('turn/end',{turn:2,reason:{kind:'completed'}})
+  f.next(3);const raw='</UpdateVariable>最后台词',third=f.assistant(3,raw)
+  expect(continuationDisplaySources(f.events,third,raw).map(event=>event.seq)).toEqual([second,first])
+  expect(continuationDisplaySources(f.events,third,'独立预览')).toEqual([])
+  const ordinary=fixture(false);ordinary.next(2);const seq=ordinary.assistant(2,'普通用户接话')
+  expect(continuationDisplaySources(ordinary.events,seq,'普通用户接话')).toEqual([])
+  f.add('turn/end',{turn:3,reason:{kind:'completed'}});f.next(4);const fourth=f.assistant(4,'下一轮')
+  expect(continuationDisplaySources(f.events,fourth,'下一轮').map(event=>event.seq)).toEqual([third])
 })
 
 it('展示使用已提交模板结果，仅收起跨消息协议，不重跑或吞掉卡面',()=>{

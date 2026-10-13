@@ -11,7 +11,7 @@ import { cp, mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { Wal } from '../src/state/wal.js'
+import { Wal, WAL_COVERAGE_PATH } from '../src/state/wal.js'
 import { WorkspaceFs } from '../src/state/workspaceFs.js'
 import { sweepOrphanTemps } from '../src/state/atomicWrite.js'
 
@@ -71,14 +71,14 @@ function open(): { wal: Wal; fs: WorkspaceFs } {
   return { wal, fs: new WorkspaceFs(root, wal) }
 }
 
-/** 工作区可见内容（排除 WAL 自身）；崩溃遗留的原子写临时文件单独返回，不混入业务内容比较。 */
+/** 工作区可见内容（排除 WAL 及其独立清单）；原子写临时文件单独返回，不混入业务内容比较。 */
 async function snapshot(): Promise<{ files: Record<string, string>; orphans: string[] }> {
   const files: Record<string, string> = {}
   const orphans: string[] = []
   const walk = async (rel: string): Promise<void> => {
     for (const entry of await readdir(join(root, rel), { withFileTypes: true })) {
       const path = rel ? `${rel}/${entry.name}` : entry.name
-      if (path === WAL_DIR) continue
+      if (path === WAL_DIR || path === WAL_COVERAGE_PATH) continue
       if (entry.isDirectory()) await walk(path)
       else if (/\.[0-9a-f-]{36}\.tmp$/.test(entry.name)) orphans.push(path)
       else files[path] = (await readFile(join(root, path))).toString('base64')
@@ -97,7 +97,7 @@ async function seed(): Promise<void> {
   await fs.writeBytes('avatar.png', binary(1))
 }
 
-/** 一层完整的楼层事务：同路径两次修改、新建、删除、二进制替换，最后提交。 */
+/** 一层完整的楼层事务：同路径多次修改、新建、删除、二进制替换与一次批量写入，最后提交。 */
 async function floorTransaction(floor: string, tag: string): Promise<void> {
   const { wal, fs } = open()
   await wal.beginFloor(floor)
@@ -106,6 +106,8 @@ async function floorTransaction(floor: string, tag: string): Promise<void> {
   await scoped.writeText(`notes/${tag}.md`, `${tag} 新建\n`)
   await scoped.delete('state/gone.md')
   await scoped.writeBytes('avatar.png', binary(tag.length + 7))
+  // 批量写入：一次日志追加覆盖多个文件，其中既有再次修改也有新建；正文并发落盘，崩溃可能落在任意一个上。
+  await scoped.writeTextMany([['notes/a.md', `${tag}：批量版\n`], [`notes/${tag}-batch.md`, `${tag} 批量新建\n`], ['state/batch.json', '{"batch":true}\n']])
   await scoped.writeText('notes/a.md', `${tag}：第三版\n`)
   await wal.commitFloor(floor)
 }
@@ -133,6 +135,8 @@ async function pendingFloors(floors: string[]): Promise<string[]> {
 async function recover(floors: string[]): Promise<void> {
   const pending = await pendingFloors(floors)
   if (pending.length) await open().wal.rollbackAfter(pending, root)
+  // 独立清单虽不属于剧情正文，恢复后仍须与磁盘日志一致，不能留下假缺失。
+  expect((await open().wal.listFloors()).filter(floor => !floor.rolledBack)).toEqual([])
 }
 
 /**

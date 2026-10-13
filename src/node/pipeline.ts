@@ -24,7 +24,7 @@ import type { PromptLayout } from '../core/promptLayout.js'
 import { DEFAULT_USER_NAME } from '../core/persona.js'
 import { parseLorebook } from '../state/lorebook.js'
 import { withWorkspaceLock } from '../state/workspaceLock.js'
-import { loadTemplateState, saveTemplateState } from '../state/template.js'
+import { loadTemplateMetadata, saveTemplateMetadata } from '../state/template.js'
 import { loadHelperState } from '../state/helper.js'
 import { latestTemplateHelperMvu, projectTemplateHelperMvu } from '../core/templateHelperMvu.js'
 import { currentHelperMvuTemplateData } from './helperMvuTemplateSnapshot.js'
@@ -33,7 +33,8 @@ import { type TemplateContext } from '../core/template.js'
 import { templateCardData } from '../core/templateAssets.js'
 import { characterPromptName } from '../core/characterData.js'
 import { normalizeTemplateLore } from '../core/templateLore.js'
-import { assertTemplateReplayFormatter, type TemplateReplay } from '../core/templateReplay.js'
+import type { TemplateReplay } from '../core/templateReplay.js'
+import { assertActiveTemplateRuntime, assertTemplateReplayRuntime } from './templateRuntimeGuard.js'
 import { buildTemplateMessageHistory } from './templateMessageHistory.js'
 import { mergeTemplateMessageVariables, visibleTemplateMessageVariables, type TemplateMessageIdentity } from '../core/templateMessageVariables.js'
 import { loadTemplateAvatars } from './templateAvatar.js'
@@ -183,9 +184,14 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
   if (input.mode === 'live' && openFloor && (activeTurn === undefined || openFloor.floor !== `${sessionId}#t${activeTurn}`)) {
     throw new Error('提示词楼层与当前轮次不一致，请先恢复上一楼层提交')
   }
+  // 同轮缓存仍需核对最新根；metadata 的路径缓存避开历史 outputs 和重复解析大型日志。
+  const ws = await state.storyWorkspace(binding.cardId, binding.storyId)
+  const templateState = await loadTemplateMetadata(ws.fs)
+  if(input.mode==='live')await assertActiveTemplateRuntime(templateState,sessionId)
   const previous = state.turnPlans.get(sessionId)
   if (input.mode === 'live' && activeTurn !== undefined && previous?.turn === activeTurn) {
     if (previous.cardId !== binding.cardId || previous.storyId !== binding.storyId) throw new Error('生成期间绑定已变化，请在下一轮继续')
+    await assertTemplateReplayRuntime(previous.result.templateReplay)
     return previous.result
   }
   const pendingPlan = state.pendingTurnPlans.get(sessionId)
@@ -196,8 +202,6 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
     }
     state.pendingTurnPlans.delete(sessionId)
   }
-  const ws = await state.storyWorkspace(binding.cardId, binding.storyId)
-  const templateState = await loadTemplateState(ws.fs)
   const generation = templateState.generation
   if (input.mode==='live' && generation?.sessionId===sessionId && generation.cardId===binding.cardId && generation.storyId===binding.storyId) {
     let recoveryTurn = activeTurn
@@ -209,7 +213,6 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
     }
     if (recoveryTurn===generation.turn) {
       if (generation.status!=='prepared') throw new Error('该轮模板已经结束，请开启新一轮，不能重复执行')
-      assertTemplateReplayFormatter(generation.replay)
       const floor = await ws.wal.validateFloor(generation.floor)
       if (floor.committed) throw new Error('模板计划恢复缺少未提交的原剧情楼层')
       const open = state.openFloors.get(sessionId)
@@ -372,7 +375,7 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
     },
     preset,
     promptPreferences: config.prompts,
-    card,
+    card:{...promptCard,pngBytes:null},
     personaDescription: persona?.description ?? '',
     history: scanMessages,
     historyMessageIds: [
@@ -450,18 +453,21 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
   } : undefined
   // 变量发生变化时，定时器必须与变量同文件提交；否则第二个 rename 失败会让重试多 tick 一次。
   // 先冻结待提交闭包，但不发布 turnPlans。提交报错后保留绝对快照，重试不再运行第三方代码。
-  const publish = async (): Promise<PipelineResult> => {
+  const publish = (): Promise<PipelineResult> => withWorkspaceLock(ws.fs.root,async()=> {
     if (writable) {
       const latestBinding = await state.loadBinding(sessionId)
       const latestFloor = state.openFloors.get(sessionId)
       if (latestBinding?.cardId !== binding.cardId || latestBinding?.storyId !== binding.storyId
         || latestFloor?.floor !== entry.floor || latestFloor.cardId !== binding.cardId || latestFloor.storyId !== binding.storyId
         || (cacheable && (state.currentTurns.get(sessionId) !== turn || entry.floor!==`${sessionId}#t${turn}`))) throw new Error('模板提交前剧情绑定或楼层已变化')
+      // 失败后的重试可能已跨过一次维护恢复。只沿用冻结计算结果，发布基底和兼容性必须来自当前根。
+      const latestState=await loadTemplateMetadata(ws.fs)
+      await assertActiveTemplateRuntime(latestState,sessionId,result.templateReplay)
       if (variablesChanged || persistedGeneration || assembled.templateMessageVariables) {
-        await saveTemplateState(ws.fs.withFloor(entry.floor), { ...templateState, variables: assembled.templateVariables ?? templateState.variables,
-          ...(assembled.templateMessageVariables ? {messageVariables:mergeTemplateMessageVariables(templateState.messageVariables,assembled.templateMessageVariables,historyIdentities)} : {}),
+        await saveTemplateMetadata(ws.fs.withFloor(entry.floor), { ...latestState, variables: assembled.templateVariables ?? latestState.variables,
+          ...(assembled.templateMessageVariables ? {messageVariables:mergeTemplateMessageVariables(latestState.messageVariables,assembled.templateMessageVariables,historyIdentities)} : {}),
           ...(assembled.templateContinuation ? {continuation:assembled.templateContinuation} : {}),
-          wiTimers: { ...templateState.wiTimers, [sessionId]: wi.timerState },
+          wiTimers: { ...latestState.wiTimers, [sessionId]: wi.timerState },
           ...(persistedGeneration ? {generation:persistedGeneration} : {}) })
       } else {
         await state.saveTimers(binding.cardId, sessionId, wi.timerState, entry.floor, binding.storyId)
@@ -474,7 +480,7 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
       state.pendingTurnPlans.delete(sessionId)
     }
     return result
-  }
+  })
   if (cacheable && writable) state.pendingTurnPlans.set(sessionId, { turn, cardId: binding.cardId, storyId: binding.storyId, floor: entry.floor, publish })
   return publish()
 }

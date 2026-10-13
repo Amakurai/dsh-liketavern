@@ -4,6 +4,9 @@ export declare const NON_FLOOR = "non-floor";
 /** 工作区读写拒绝磁盘链接，避免安全的相对路径实际指向 WAL、兄弟剧情或工作区外。 */
 export declare class WorkspaceLinkError extends Error {
 }
+/** 批量读取遇到超过调用方上限的文件：不把内容读进内存，由调用方给出业务含义。 */
+export declare class WorkspaceSizeError extends Error {
+}
 export declare class WorkspaceFs {
     readonly root: string;
     private readonly wal;
@@ -23,6 +26,8 @@ export declare class WorkspaceFs {
      * 用它在楼层内读写：快照记进本实例的 floor，不影响共享句柄与其它会话的实例。
      */
     withFloor(floor: string | null): WorkspaceFs;
+    /** 已持有工作区锁时推算本层回滚后的文本；只读且不推进恢复游标，供依赖正文的安全清理使用。 */
+    rollbackSnapshot(relPath: string, current: string | null): Promise<string | null>;
     private abs;
     /**
      * WAL 记录用的规范相对路径：正斜杠、去掉 `.` 与空段。读路径可以宽松（normalize 会折叠它们），
@@ -60,6 +65,26 @@ export declare class WorkspaceFs {
         mtimeMs: number;
         size: number;
     } | null>>;
+    /** 多个目录到根的链接检查：公共祖先只查一次。 */
+    private assertNoLinksAmong;
+    /**
+     * 批量读取文本，顺序与入参一致，不存在的为 null。与逐个 readText 结果相同，系统调用少得多：
+     * 父目录到根的链接检查每个目录只做一次，文件本身用一次 lstat 拒绝链接并核对体积。
+     * 分块保存的状态一次要读上千个小文件，逐个读取是每个文件十余次调用。
+     */
+    readTextMany(relPaths: readonly string[], maxBytes?: number): Promise<Array<string | null>>;
+    /**
+     * 批量事务写入：全部前后镜像一次写进 WAL，再替换各文件正文；与逐个 writeText 的落盘结果相同。
+     * 逐条记录每次都要重读并重写整份楼层日志，一次保存产生上百个新文件时代价随记录数平方增长。
+     * 日志仍先于任何正文持久化；中途失败留下的记录在回滚时按「正文与写后镜像不符」保留现状。
+     */
+    writeTextMany(entries: ReadonlyArray<readonly [relPath: string, content: string]>): Promise<void>;
+    /**
+     * 从另一个工作区按相同相对路径批量复制普通文件，来源不存在的跳过；来源是链接或目录时以 reject 给出的错误拒绝。
+     * 每个文件仍然原子替换并刷盘，只是并发进行：剧情快照要复制上千个小文件，逐个写入的耗时取决于刷盘次数。
+     * 不记 WAL，只用于尚未发布的草稿工作区。
+     */
+    copyFrom(source: WorkspaceFs, relPaths: readonly string[], reject: (relPath: string) => Error): Promise<void>;
     /** 父路径已确认不经过链接时，对文件本身的一次检查：是链接就拒绝，不存在返回 null。 */
     private lstatFile;
     /** 确保目录存在（递归创建）。目录创建幂等且无内容副作用，不纳入 WAL。 */

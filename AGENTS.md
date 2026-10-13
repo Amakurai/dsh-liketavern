@@ -14,12 +14,16 @@ dsh-liketavern 为 DeepSeek Harness 的 Tavern 插件。角色卡、预设、世
 
 1. **角色资产共享，剧情状态隔离。** `workspace(cardId)` 是角色资产与新会话初始状态；运行中的会话必须经绑定的 `storyId` 使用 `storyWorkspace(cardId, storyId)`。记忆、变化层、笔记、聊天世界书、定时器与 WAL 都属于剧情。不得让 agent、维护或楼层操作退回 cardId 共享可变状态。
 2. **分支先准备，后发布。** 锁住来源剧情做文件快照，在草稿内回滚未继承楼层，成功后原子发布，再创建/绑定宿主子会话。不得回滚原会话状态。编辑 assistant 正文撤销该层及后续的派生事实，不自动重新提取事实；用户随后接话或手动修订。
-3. **每次楼层写入先 WAL 后正文。** 每轮用 `withFloor(floor)` 派生句柄；共享句柄 floor 恒为 null。面板与维护用 `plainWorkspace(cardId, storyId)`。完整读改写、分支快照与回滚共用工作区锁。损坏日志必须在整批回滚前拒绝；恢复游标必须先于正文替换持久化。不要用“跳过坏行并标记成功”处理故障。
+3. **每次楼层写入先 WAL 后正文。** 每轮用 `withFloor(floor)` 派生句柄；共享句柄 floor 恒为 null。面板与维护用 `plainWorkspace(cardId, storyId)`。完整读改写、分支快照与回滚共用工作区锁。损坏日志必须在整批回滚前拒绝；恢复游标必须先于正文替换持久化。不要用“跳过坏行并标记成功”处理故障。唯一不记 WAL 的楼层写入是未结束轮次的生成恢复正文（`state/template-generation/`）：它每轮整体替换，按内容摘要由根引用，必须先于引用它的根落盘；根里的归属与摘要照常经 WAL 提交和回滚，回滚算法不读取正文。清理必须保留当前根及本层最终回滚根引用的正文，尤其不能删除楼层外手动维护打断连续写入后仍可恢复的 prepared 正文；无法确认可达性时保守保留。
 4. **归档来源是数据，摘要是派生视图。** 自动摘要只接受正常 stop 终止帧，错误、截断、无终止帧或超时不能归档原文。失败保留 pending 标记等下一次 idle。检索包含活跃摘要可达的归档来源；去重只查活跃条目。回滚先展开受影响来源链，再撤销事实。
 5. **模型请求遵守宿主边界。** standing 是工具说明后的 `tavern:standing`（`getSectionOrder('TOOLS_SDK') + 10`），turn 是 runtime context `tavern:turn`；绝不使用 complete 段盖掉工具前缀，不改 llm/stream 冻结请求。DeepSeek 官方普通聊天可由自持有的公开 DeepSeekAdapter 装饰器进行预设布局投影，仍由同一个 AgentLoop 发信。布局由合法 user/message 的可扩展来源元数据持久化，按消息 ID 定位并保留图片、工具与原始历史；不把插件 assistant 条目伪造为模型日志。适配器复用公开宿主配置和凭证，同代 prepareCall 不重新进入 llm/stream。其它通道沿用两段映射，历史后/depth=0 位于每轮 turn 尾。ST 全量序列仍是模拟，不能称为实际入模消息；实际投影诊断须标记边界。input/send、prompt/assemble、prompt/send 的历史改写只用于模拟与代答；live 展示规则是 output/render。
 
    预设投影必须使用同次 prepareCall 冻结的模型能力：`systemPromptUpdate=in-history` 的每条 system 是完整快照，不能让后置预设替代 SDK；未声明该能力时系统条目合并到唯一首条并提供兼容说明。完整快照可能增加请求长度，拼接前须有累计上限；不得把逻辑布局中的独立 system 条目直接当作供应商已支持的增量系统消息。
 6. **第三方正则与模板不得在 host 主线程执行。** node 调用 `isolated()` 执行 WI、组装与渲染；EJS JavaScript 仅在 worker 内的 QuickJS/WASM 中执行，不暴露 Node、DOM、网络或模块加载器。超时、异常退出、超量输入/输出必须明确失败。core 保持纯函数，静态正则启发式只是提前拒绝，不能代替隔离。模板变量和回复快照属于剧情，预览/重绘不得写入，正常 stop 回复在 turn/end 内只提交一次。
+
+   持久 VM 检查点只允许专属 WASM 实例、精确引擎与包装器布局、无宿主函数引用且调用栈已退出的静止点。v1 引擎的 JS 胶水、包装器、FFI 与 WASM 整包冻结在 `vendor/checkpoint-engine-v1/`；普通构建只校验并复制到发布目录，不从当前 npm 依赖重建或就地替换，新增引擎另开版本目录。模板 helper/vendor 的实现指纹与宿主通信 ABI 分别记录：仅当前受信指纹或已登记的旧指纹可按相应 ABI 恢复，保存后续检查点仍保留该堆实际运行的旧指纹；旧 helper/vendor 随旧堆保留到环境结束，不重新运行新 bootstrap 覆盖闭包。未知、已撤销或 ABI 不匹配的运行时须在开层、恢复计划和提交前拒绝；任意未来不兼容引擎仍需独立适配或迁移。
+
+   缩减映像前须完整校验固定 dlmalloc 布局；仅清除快照副本中已释放块的载荷，保留分配器元数据和全部活对象。最高地址的连续空闲区可在副本中裁剪，至少保留 4 KiB top 并同步更新相关分配器元数据；内部空闲碎片不搬移，不能承诺无限恒定大小。v2 映像用 null 表示零页，读取仍兼容 v1。不为保存额外触发 GC，不改变 Promise 队列或 WeakRef 的原有行为。摘要校验不是存档认证；必须保留封闭宿主导入、有界解压、WASM 内存边界及 worker 超时。continuation 检查点的分页属于普通剧情状态，照常记 WAL，不能按临时生成正文删除。
 7. **每轮冻结完整提示词计划。** 角色/预设/人设、修订指纹、宏时钟、检索结果与采样在首次成功组装后缓存；后续步骤重放同一份快照。资产编辑下一轮生效，不得把旧内容钉在新修订号下。工具写成功通过 notice 确认，不在同轮重评 WI。`STANDING_PIN_VERSION` 在纪律或段布局变化时递增。
 8. **不把第三方代码提升到主页面权限。** 交互卡 iframe 为 `sandbox="allow-scripts"`，不加 allow-same-origin；CSP 默认禁止 connect，允许 http/https/data 图片与字体。卡面桥只开放枚举的业务操作与高度通知，不增加任意 remote 调用、文件路径或主窗口 DOM 桥，不伪造父窗口 Vue/SillyTavern。各桥共同遵守：
    - 校验事件来源窗口与事件运行时；sessionId 与宿主消息 seq 由气泡固定，写入复核 storyId、历史修订与生成状态，经剧情锁和 WAL。绑定变化或运行时切换后，旧令牌、许可与回执失效。

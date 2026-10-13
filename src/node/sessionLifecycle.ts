@@ -1,26 +1,21 @@
 /** 宿主会话事件的副作用：开启/提交剧情 WAL，持久模板恢复及每轮缓存清理。调用方负责按会话排队。 */
 import type { TavernState } from './state.js'
 import type { Session } from '@deepseek-ai/dsh-session'
-import { completeTemplateOutput } from './templateOutput.js'
-import { loadTemplateState, saveTemplateState, type TemplateState } from '../state/template.js'
-import { closeTemplateGenerationState, resolveTemplateContinuation } from '../state/templateContinuation.js'
-import { assertTemplateReplayFormatter } from '../core/templateReplay.js'
+import { completeTemplateOutput, TemplateOutputCommitError } from './templateOutput.js'
+import { loadTemplateGenerationIdentity, loadTemplateMetadata, loadTemplateState, saveTemplateState } from '../state/template.js'
+import { closeTemplateGenerationState } from '../state/templateContinuation.js'
 import { withWorkspaceLock } from '../state/workspaceLock.js'
 import { helperMvuPending, queueHelperMvuTurn } from './helperMvu.js'
 import { helperMvuHasAssistant } from './helperMvuLifecycle.js'
 import { hasNormalAssistantStop } from './assistantStream.js'
+import { assertActiveTemplateRuntime, TemplateRuntimeCompatibilityError } from './templateRuntimeGuard.js'
 
 /** 暂缓开层只标记当前宿主轮，不能用它收口旧 MVU 楼层或抹掉待恢复输入。 */
 const deferredTurns = new WeakMap<TavernState, Map<string, number>>()
 
-/** 只在运行时拒绝旧引擎活动日志；普通读取和备份仍允许保存有效旧状态。调用点必须持有剧情锁。 */
-function assertActiveTemplateFormatter(stored:TemplateState,sessionId:string):void {
-  const carried=resolveTemplateContinuation(stored)?.replay
-  if(carried) assertTemplateReplayFormatter(carried)
-  if(stored.generation?.status==='prepared' && stored.generation.sessionId===sessionId) assertTemplateReplayFormatter(stored.generation.replay)
-}
-
 export async function onTurnStart(state:TavernState,sessionId:string,turn:number,session?:Pick<Session,'id'|'snapshotEvents'>):Promise<void> {
+  if(session && session.id!==sessionId) throw new Error('模板开始事件与目标会话不一致')
+  if(session) await recoverTemplateCommit(state,sessionId,turn,session)
   // 收口提交失败保留的句柄仍属于旧楼层；新宿主事件不能覆盖它或把旧 WAL 当作新轮写入目标。
   const open=state.openFloors.get(sessionId)
   if(open&&open.floor!==`${sessionId}#t${turn}`){
@@ -41,8 +36,8 @@ export async function onTurnStart(state:TavernState,sessionId:string,turn:number
   const ws = await state.storyWorkspace(binding.cardId,binding.storyId)
   await withWorkspaceLock(ws.fs.root,async()=> {
     const floor = `${sessionId}#t${turn}`
-    const stored = await loadTemplateState(ws.fs)
-    assertActiveTemplateFormatter(stored,sessionId)
+    const stored = await loadTemplateMetadata(ws.fs)
+    await assertActiveTemplateRuntime(stored,sessionId)
     const generation = stored.generation
     if (generation?.sessionId===sessionId) {
       if (generation.cardId!==binding.cardId || generation.storyId!==binding.storyId) throw new Error('模板轮次恢复的剧情归属不一致')
@@ -54,15 +49,41 @@ export async function onTurnStart(state:TavernState,sessionId:string,turn:number
         return
       }
       if (generation.status==='prepared') {
-        await ws.wal.validateFloor(generation.floor)
-        closeTemplateGenerationState(stored,'terminated')
-        await saveTemplateState(ws.fs.withFloor(generation.floor),stored)
+        const previous=await ws.wal.validateFloor(generation.floor)
+        const events=session?.snapshotEvents()
+        const ending=events?.find(event=>event.type==='turn/end' && event.data.turn===generation.turn)
+        if(!previous.committed && (!ending || ending.type==='turn/end' && ending.data.reason.kind==='completed'
+          && events?.some(event=>event.type==='assistant/message' && event.data.turn===generation.turn && hasNormalAssistantStop(event)))) {
+          throw new Error('上一楼层回复尚未保存，请重试原结束事件或回退剧情，不能终止待提交回复')
+        }
+        // 只有确实要改写整份状态时才取历史输出，不能把只读投影作为持久化正文。
+        const complete=await loadTemplateState(ws.fs)
+        closeTemplateGenerationState(complete,'terminated')
+        await saveTemplateState(ws.fs.withFloor(generation.floor),complete)
         await ws.wal.commitFloor(generation.floor)
       }
     }
     await ws.wal.beginFloor(floor)
     state.openFloors.set(sessionId,{cardId:binding.cardId,storyId:binding.storyId,floor})
   })
+}
+
+/** 新轮开始前用旧正常结束帧恢复提交；冻结计划与消息原文仍来自原楼层，不重新请求模型。 */
+async function recoverTemplateCommit(state:TavernState,sessionId:string,turn:number,session:Pick<Session,'id'|'snapshotEvents'>):Promise<void> {
+  const binding=await state.loadBinding(sessionId)
+  if(!binding) return
+  const ws=await state.storyWorkspace(binding.cardId,binding.storyId)
+  const generation=await loadTemplateGenerationIdentity(ws.fs)
+  if(!generation || generation.sessionId!==sessionId || generation.turn>=turn) return
+  if(generation.cardId!==binding.cardId || generation.storyId!==binding.storyId) throw new Error('模板轮次恢复的剧情归属不一致')
+  const floor=await ws.wal.validateFloor(generation.floor)
+  if(floor.committed) return
+  const events=session.snapshotEvents()
+  const boundary=events.findIndex(event=>event.type==='turn/end' && event.data.turn===generation.turn)
+  const ending=events[boundary]
+  if(ending?.type!=='turn/end' || ending.data.reason.kind!=='completed') return
+  const previous={id:session.id,snapshotEvents:()=>events.slice(0,boundary+1)}
+  await onTurnEnd(state,sessionId,previous)
 }
 
 export async function onTurnEnd(state:TavernState,sessionId:string,session?:Pick<Session,'id'|'snapshotEvents'>):Promise<void> {
@@ -103,13 +124,17 @@ async function finishTurn(state:TavernState,sessionId:string,session?:Pick<Sessi
     const binding=state.openFloors.get(sessionId)??await state.loadBinding(sessionId)
     if(binding) {
       const ws=await state.storyWorkspace(binding.cardId,binding.storyId)
-      await withWorkspaceLock(ws.fs.root,async()=>assertActiveTemplateFormatter(await loadTemplateState(ws.fs),sessionId))
+      await withWorkspaceLock(ws.fs.root,async()=>{await assertActiveTemplateRuntime(await loadTemplateMetadata(ws.fs),sessionId)})
     }
   }
   let templateError:unknown,helperQueueError:unknown
   if(session){
     try{await completeTemplateOutput(state,session)}
-    catch(error){templateError=error}
+    catch(error){
+      // 缓存日志也可能在首检后才被选中；兼容性失败保留缓存和原 WAL，修复安装或回滚后才能重试。
+      if(error instanceof TemplateRuntimeCompatibilityError)throw error
+      templateError=error
+    }
     if(!templateError)try{await queueHelperMvuTurn(state,sessionId,session)}
     catch(error){templateError=error;helperQueueError=error}
     if(templateError)state.recordTriggerLog(sessionId,[...(state.turnPlans.get(sessionId)?.result.logLines ?? []),`[template:error] ${String(templateError)}`])
@@ -120,7 +145,7 @@ async function finishTurn(state:TavernState,sessionId:string,session?:Pick<Sessi
     const binding = await state.loadBinding(sessionId)
     if (binding) {
       const ws = await state.storyWorkspace(binding.cardId,binding.storyId)
-      const generation = (await loadTemplateState(ws.fs)).generation
+      const generation = await loadTemplateGenerationIdentity(ws.fs)
       if (generation?.sessionId===sessionId && generation.turn===ending.data.turn) {
         if (generation.cardId!==binding.cardId || generation.storyId!==binding.storyId) throw new Error('模板结束恢复的剧情归属不一致')
         await ws.wal.validateFloor(generation.floor)
@@ -128,23 +153,28 @@ async function finishTurn(state:TavernState,sessionId:string,session?:Pick<Sessi
       }
     }
   }
-  state.currentTurns.delete(sessionId)
-  state.currentSteps.delete(sessionId)
-  state.stepNoticeMarks.delete(sessionId)
-  state.wiCache.delete(sessionId)
-  state.turnPlans.delete(sessionId)
-  state.pendingTurnPlans.delete(sessionId)
-  state.pendingInputs.delete(sessionId)
-  state.pendingTemplateInputs.delete(sessionId)
+  const clearTurn=()=> {
+    state.currentTurns.delete(sessionId)
+    state.currentSteps.delete(sessionId)
+    state.stepNoticeMarks.delete(sessionId)
+    state.wiCache.delete(sessionId)
+    state.turnPlans.delete(sessionId)
+    state.pendingTurnPlans.delete(sessionId)
+    state.pendingInputs.delete(sessionId)
+    state.pendingTemplateInputs.delete(sessionId)
+  }
   if (entry) {
     const ws = await state.storyWorkspace(entry.cardId,entry.storyId)
     await withWorkspaceLock(ws.fs.root,async()=> {
       // 开始预检与最终提交分属两次持锁；复核最新状态，不能将间隙恢复的旧日志按通用错误路径收口。
-      assertActiveTemplateFormatter(await loadTemplateState(ws.fs),sessionId)
+      const metadata=await loadTemplateMetadata(ws.fs)
+      await assertActiveTemplateRuntime(metadata,sessionId)
+      // 回复结束后的维护恢复也可能改变兼容性；最后一次预检成功前仍保留本轮缓存和待发布计划。
+      clearTurn()
       await ws.wal.validateFloor(entry.floor)
       if (!templateError) {
         try {
-          const stored = await loadTemplateState(ws.fs), generation = stored.generation
+          const generation = metadata.generation
           if (generation?.status==='prepared' && generation.sessionId===sessionId && generation.cardId===entry.cardId
             && generation.storyId===entry.storyId && generation.floor===entry.floor) {
             const completed = ending?.type==='turn/end' && ending.data.turn===generation.turn && ending.data.reason.kind==='completed'
@@ -152,15 +182,17 @@ async function finishTurn(state:TavernState,sessionId:string,session?:Pick<Sessi
                 if (event.type!=='assistant/message' || event.data.turn!==generation.turn || event.data.interrupted || event.seq>=ending.seq) return false
                 return hasNormalAssistantStop(event)
               })
+            const stored = await loadTemplateState(ws.fs)
             closeTemplateGenerationState(stored,completed?'completed':'terminated')
             await saveTemplateState(ws.fs.withFloor(entry.floor),stored)
           }
         } catch (error) { templateError = error }
       }
       // MVU 登记失败时必须保留未提交楼层，后台可从正常 stop 原文重建任务；提交会把故障伪装成成功并放行下一轮。
+      if(templateError instanceof TemplateOutputCommitError) throw templateError
       if(!helperQueueError)await ws.wal.commitFloor(entry.floor)
     })
-  }
+  } else clearTurn()
   // 最终校验或提交失败时保留原楼层归属，供同一结束事件重试。没有模板 generation
   // 的普通楼层无法从模板恢复；提前清掉句柄会让重试虚报成功却漏掉 WAL 提交。
   state.openFloors.delete(sessionId)

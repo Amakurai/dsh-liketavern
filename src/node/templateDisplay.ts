@@ -10,15 +10,17 @@ import { applyRegexRules, type RegexApplyResult } from '../core/regex.js'
 import { stripOpaqueDisplayMetaParts } from '../core/displaySanitize.js'
 import type { DisplayRegexDiagnostics } from '../remote.js'
 import type { TemplateSandbox } from './templateSandbox.js'
+import { TEMPLATE_INPUT_MAX_CHARS, TEMPLATE_OUTPUT_MAX_CHARS } from '../core/templateBudget.js'
 
 export const TEMPLATE_DISPLAY=String.raw`
 let messageConverter;
 function formatTemplateMessage(value) {
   const text=String(value ?? '');
-  if(text.length>1024*1024) throw Error('消息格式化输入超过 1 MiB 上限');
+  if(text.length>${TEMPLATE_INPUT_MAX_CHARS}) throw Error('消息格式化输入超过资源容量');
   messageConverter ||= __TavernTemplateLibraries.createMessageFormatter();
   const output=messageConverter(text);
-  if(output.length>1024*1024) throw Error('消息格式化输出超过 1 MiB 上限');
+  // HTML 转义和标签是可信格式化器的线性扩张，不占第三方脚本的新增正文额度。
+  if(output.length>Math.min(${TEMPLATE_OUTPUT_MAX_CHARS},text.length*16+1024*1024)) throw Error('消息格式化输出超过资源容量');
   return output;
 }
 globalThis.__formatTemplateMessage=formatTemplateMessage;

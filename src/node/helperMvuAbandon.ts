@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto'
 import { parseHelperMvuState } from '../core/helperMvu.js'
 import { helperRecord } from '../core/helperRuntime.js'
 import { loadHelperState, saveHelperState, type HelperState } from '../state/helper.js'
-import { loadTemplateState } from '../state/template.js'
+import { loadTemplateGenerationIdentity } from '../state/template.js'
 import { withWorkspaceLock } from '../state/workspaceLock.js'
 import { revokeHelperMvuLease } from './helperMvu.js'
 import type { TavernState } from './state.js'
@@ -43,7 +43,7 @@ export async function abandonHelperMvu(state: TavernState, request: Request): Pr
     if (!binding || binding.cardId !== first.cardId || binding.storyId !== request.storyId) throw new Error('自动 MVU 剧情绑定已改变')
     const saved = await loadHelperState(workspace.fs), mvu = parseHelperMvuState(saved.mvu)
     const open = state.openFloors.get(request.sessionId)
-    const generation = (await loadTemplateState(workspace.fs)).generation
+    const generation = await loadTemplateGenerationIdentity(workspace.fs)
     if (generation?.status === 'prepared' && !(open?.floor === generation.floor && open.cardId === generation.cardId && open.storyId === generation.storyId && generation.sessionId === request.sessionId)) throw new Error('模板楼层尚未收口，请先恢复宿主生成；不能通过放弃 MVU 绕过')
     const recovery = parseRecovery(await workspace.fs.readText(HELPER_MVU_ABANDON_PATH))
     const floors = await workspace.wal.listFloors()

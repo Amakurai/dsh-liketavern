@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "engine": "quickjs-emscripten@0.32.0/release-sync",
+  "upstream": {
+    "quickjs-emscripten-core": "0.32.0",
+    "@jitl/quickjs-ffi-types": "0.32.0",
+    "@jitl/quickjs-wasmfile-release-sync": "0.32.0"
+  },
+  "quickjs": "2025-09-13+f1139494d18a2053630c5ed3384a42bb70db3c53",
+  "esbuild": "0.25.12",
+  "files": {
+    "engine.js": "1d4ea4f8afe25475133e15a7f560dff6d73d7c898033cf1e83a7cc96340b3f79",
+    "engine.wasm": "105c3bed22d457e43e3d1c3c1c6959fda62a8fe06f0fc8a985303c3a2be72232",
+    "LICENSE": "446a69ae534aa8612d8b16d3bfc670c5a5050597dca3ce9820441a60d5d04fbb"
+  }
+}

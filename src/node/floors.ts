@@ -23,7 +23,7 @@ import { SessionLogOffset, type Session, type SessionEvent } from '@deepseek-ai/
 import { basename, join } from 'node:path'
 import { lstat } from 'node:fs/promises'
 import { Wal } from '../state/wal.js'
-import { copyTemplateTimers } from '../state/template.js'
+import { copyTemplateTimers, loadTemplateGenerationIdentity } from '../state/template.js'
 import { estimateTokens } from '../core/tokenize.js'
 import { rebuildIndex } from '../state/workspace.js'
 import { cardGreetingVariants, greetingFloorState, isGreetingOnlyBlank, pickGreetingText, sessionHasUserMessage, TAVERN_GREETING_SOURCE } from '../core/greetingLog.js'
@@ -407,6 +407,12 @@ async function prepareBranchStory(
   const wal = new Wal(join(fs.root, 'state', 'wal'))
   if (rollbackFromTurn !== undefined) {
     const floors = (await wal.listFloors()).filter((item) => !item.rolledBack).map((item) => item.floor)
+    if(!floors.length) {
+      // 旧版本尚无独立楼层清单；完成回执仍能证明被截断的楼层写过剧情状态。
+      const generation=await loadTemplateGenerationIdentity(fs)
+      const owners=new Set([sourceId,...(binding.walLineage??[]).map(owner=>owner.sessionId)])
+      if(generation && owners.has(generation.sessionId) && generation.turn>=rollbackFromTurn) throw new Error('WAL 楼层缺失，无法撤销被截断楼层的剧情状态；请恢复完整日志')
+    }
     await wal.rollbackAfter(floorNamesForLineageRollback(floors, binding, sourceId, rollbackFromTurn), fs.root)
   }
   const boundaryTurn = rollbackFromTurn !== undefined ? rollbackFromTurn - 1 : inheritedThroughTurn(seed) ?? 0

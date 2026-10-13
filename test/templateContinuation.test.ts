@@ -1,5 +1,6 @@
 /** 跨轮模板续存行为：真实隔离 worker 经 JSON 往返重建注册表与共享闭包，验证计数、时钟、资产刷新和失败边界。 */
 import { describe, expect, it } from 'vitest'
+import { createHash } from 'node:crypto'
 import { defaultPreset } from '../src/core/assemble.js'
 import { emptyTemplateScopes, type TemplateContext } from '../src/core/template.js'
 import { emptyTemplateMessageVariables, visibleTemplateMessageVariables } from '../src/core/templateMessageVariables.js'
@@ -11,6 +12,7 @@ import { isolated } from '../src/node/isolated.js'
 import { parseLorebook } from '../src/state/lorebook.js'
 import { parseTemplateContinuation, resolveTemplateContinuation, templatePreloadRevision } from '../src/state/templateContinuation.js'
 import { parseTemplateReplay } from '../src/state/templateGeneration.js'
+import { templateReplayData, templateReplayGenerationContext, templateReplayLatestContext } from '../src/core/templateReplay.js'
 import type { TemplateState } from '../src/state/template.js'
 
 const json=<T>(value:T):T=>JSON.parse(JSON.stringify(value)) as T
@@ -45,6 +47,106 @@ async function reply(input:ComputeJobs['assemble']['input'],generation:Generatio
 }
 
 describe('跨轮 sticky 续存',()=>{
+  it('同一规则反复替换回调不会耗尽历史槽位，仍被脚本引用的旧函数能重新激活',async()=> {
+    const main=`<% for(let i=0;i<1500;i++){const n=i;activateRegex(/T[O]KEN/g,()=>String(n),{uuid:'same',message:true,sticky:2})} %>ROOT`
+    let carry:TemplateContinuation|undefined,variables=emptyTemplateScopes(),messageVariables=emptyTemplateMessageVariables()
+    let last:Generation|undefined,lastInput:ComputeJobs['assemble']['input']|undefined
+    for(let turn=0;turn<3;turn++) {
+      const input=request(main,[],{variables,messageVariables},carry)
+      const result=await isolated('assemble',input)
+      expect(result.templateContinuation?.state.regex.message).toHaveLength(1)
+      carry=afterGeneration(result);variables=result.templateVariables!;messageVariables=result.templateMessageVariables!
+      last=result;lastInput=input
+    }
+    expect((await reply(lastInput!,last!,'TOKEN')).result.texts).toEqual(['1499'])
+    const saved=request(`<% let n=0;const old=()=>String(++n);activateRegex(/T[O]KEN/g,old,{uuid:'same',message:true,sticky:2});activateRegex(/T[O]KEN/g,()=> 'new',{uuid:'same',message:true,sticky:2});activateRegex(/T[O]KEN/g,old,{uuid:'same',message:true,sticky:2}); %>ROOT`)
+    const generation=await isolated('assemble',saved)
+    expect((await reply(saved,generation,'TOKEN TOKEN')).result.texts).toEqual(['1 2'])
+  },30000)
+
+  it('超过旧 4096 操作边界的闭包可完整恢复，到期后仍释放旧日志',async()=> {
+    for(const sticky of [1,2]) {
+      const main=`<% if(!getvar('registered')){setvar('registered',true);activateRegex(/T[O]KEN/g,()=> 'ok',{uuid:'last',message:true,sticky:${sticky}})} %>ROOT`
+      const first=await isolated('assemble',request(main)),carry=afterGeneration(first)
+      const replay=carry.replay!,hash=createHash('sha256').update(JSON.stringify(replay.variables)).digest('hex')
+      while(replay.operations.length<4200)replay.operations.push({kind:'variables',hash})
+      const next=request(main,[],{variables:first.templateVariables!,messageVariables:first.templateMessageVariables},carry)
+      if(sticky===2) {
+        const result=await isolated('assemble',next)
+        expect(result.templateContinuation!.state.regex.message).toHaveLength(1)
+        expect(result.templateReplay!.checkpoint).toBeDefined()
+        expect(result.templateReplay!.operations.length).toBeLessThan(256)
+        expect((await reply(next,result,'TOKEN')).result.texts).toEqual(['ok'])
+      }
+      else {
+        const result=await isolated('assemble',next)
+        expect(result.templateContinuation?.state.regex.message).toEqual([])
+        expect(result.templateReplay!.operations.length).toBeLessThan(100)
+      }
+    }
+  },30000)
+
+  it('跨轮 phase 共享历史数组前缀，闭包捕获旧历史而当前时钟与变量继续推进，旧展开日志一致',async()=> {
+    const main=`<% incvar('round');if(!getvar('registered')){setvar('registered',true);const bornHistory=generateData.map(message=>message.content),bornClock=Date.now(),bornRound=getvar('round');let n=0;activateRegex(/T[O]KEN/g,function(){return JSON.stringify([++n,bornHistory.at(-1),bornClock,bornRound,Date.now(),getvar('round'),this.lastUserMessage])},{uuid:'history',message:true,sticky:100})} %>ROOT`
+    let carry:TemplateContinuation|undefined,variables=emptyTemplateScopes(),messageVariables=emptyTemplateMessageVariables()
+    let history:ChatMessage[]=[],historyIdentities:NonNullable<TemplateContext['historyIdentities']>=[]
+    let latest:Generation|undefined,lastInput:ComputeJobs['assemble']['input']|undefined
+    for(let turn=1;turn<=8;turn++) {
+      const user='第'+turn+'轮'+('正文'.repeat(250))
+      history=[...history,{role:'user',content:user}];historyIdentities=[...historyIdentities,{messageId:'user-'+turn,swipeId:0}]
+      const input=request(main,[],{variables,messageVariables,history,historyIdentities,now:turn*1000},carry)
+      const generation=await isolated('assemble',input),rendered=await reply(input,generation,'TOKEN',turn)
+      const result=JSON.parse(rendered.result.texts[0]!) as unknown[]
+      expect(result).toEqual([turn,'第1轮'+('正文'.repeat(250)),1000,1,turn*1000,turn,user])
+      variables=rendered.result.variables;messageVariables=rendered.result.messageVariables;carry=json(rendered.result.templateContinuation!)
+      history=rendered.context.history;historyIdentities=rendered.context.historyIdentities!
+      latest=generation;lastInput=input
+    }
+    const replay=carry!.replay!,expand=templateReplayData(replay)
+    const phases=replay.operations.filter(operation=>operation.kind==='phaseData')
+    const historyRefs=phases.map(operation=>operation.kind==='phaseData' && operation.refs?.history).filter(Array.isArray)
+    expect(historyRefs.length).toBeGreaterThan(8)
+    expect(new Set(historyRefs.map(ref=>ref[0])).size).toBe(1)
+    expect(templateReplayGenerationContext(replay).now).toBe(8000)
+    expect(templateReplayLatestContext(replay).phase).toBe('render')
+    const {shared:_shared,...plain}=replay
+    const legacy=json({...plain,operations:replay.operations.map(operation=> {
+      if(!('data' in operation)) return operation
+      const data=expand(operation)
+      if(operation.kind==='phaseData')return {kind:'phase' as const,context:data as unknown as TemplateContext,refreshPreload:operation.refreshPreload,hash:operation.hash}
+      const {refs:_refs,...inline}=operation
+      return {...inline,data}
+    })})
+    expect(JSON.stringify(replay).length).toBeLessThan(JSON.stringify(legacy).length*0.7)
+    // 两种日志均从上一轮生成点恢复同一闭包，避免把旧 render 末态当作下一次 generate 上下文。
+    const generationReplay=latest!.templateReplay!,generationData=templateReplayData(generationReplay)
+    const {shared:_generationShared,...generationPlain}=generationReplay
+    const inlineGeneration=json({...generationPlain,operations:generationReplay.operations.map(operation=> {
+      if(!('data' in operation))return operation
+      const data=generationData(operation)
+      if(operation.kind==='phaseData')return {kind:'phase' as const,context:data as unknown as TemplateContext,refreshPreload:operation.refreshPreload,hash:operation.hash}
+      const {refs:_refs,...inline}=operation;return {...inline,data}
+    })})
+    const oldGeneration={...latest!,templateReplay:inlineGeneration}
+    const oldReply=(await reply(lastInput!,oldGeneration,'TOKEN',8)).result,newReply=(await reply(lastInput!,latest!,'TOKEN',8)).result
+    expect(oldReply.texts).toEqual(newReply.texts)
+    expect(oldReply.variables).toEqual(newReply.variables)
+    expect(oldReply.messageVariables).toEqual(newReply.messageVariables)
+    expect(oldReply.templateContinuation!.state).toEqual(newReply.templateContinuation!.state)
+    expect(parseTemplateReplay(legacy).operations.some(operation=>operation.kind==='phase')).toBe(true)
+  },60000)
+
+  it('预加载序号回退后旧函数重新注册不冒用新回调身份，重建回复保留两个不同闭包',async()=> {
+    const lore=[{comment:'preload',content:`@@only_preload\n<% for(let i=0;i<3+(getvar('extra')||0);i++){const n=i,callback=()=>String(n);if(i===3)define('saved',callback);activateRegex(/INIT/g,callback,{uuid:'init',message:true,sticky:1})} %>`}]
+    const main=`<% if(!getvar('ready')){setvar('ready',true);setvar('extra',2)}else{activateRegex(/NEW/g,()=> 'N',{uuid:'new',message:true,sticky:2});activateRegex(/OLD/g,saved,{uuid:'old',message:true,sticky:2})} %>ROOT`
+    const first=await isolated('assemble',request(main,lore))
+    const next=request(main,lore,{variables:first.templateVariables!,messageVariables:first.templateMessageVariables},afterGeneration(first))
+    const second=await isolated('assemble',next)
+    const ids=second.templateContinuation!.state.regex.message.map(rule=>rule.replacement.kind==='callback'?rule.replacement.id:0)
+    expect(new Set(ids).size).toBe(2)
+    expect((await reply(next,second,'NEW OLD')).result.texts).toEqual(['N 3'])
+  })
+
   it('prompt sticky=1 覆盖两次生成，重建 preload 不续期、不复活，资产真实刷新才注册新值',async()=>{
     const main='<%- getPromptsInjected("p") %>|BASE'
     const lore=[{comment:'preload',content:'@@only_preload\n<% injectPrompt("p","OLD",100,1,"id") %>'}]

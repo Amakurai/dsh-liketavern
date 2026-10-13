@@ -2,7 +2,7 @@
 import type {Context} from '@deepseek-ai/cordis'
 import type {TavernMethodRequests,TavernMethodResults} from '../remote.js'
 import {withWorkspaceLock} from '../state/workspaceLock.js'
-import {loadTemplateState} from '../state/template.js'
+import {loadTemplateGenerationIdentity} from '../state/template.js'
 import {helperHistoryOf,helperHistoryRevision} from './helperRuntime.js'
 import {readDisplaySessionEvents} from './sessionEvents.js'
 import type {TavernState} from './state.js'
@@ -25,7 +25,7 @@ export async function getHelperEventState(ctx:Context,state:TavernState,request:
       if(receipt.error!==undefined)throw new Error('剧情收口失败：'+receipt.error)
       const meta=await ws.wal.validateFloor(floor)
       if(!meta.committed)throw new Error('事件楼层尚未完成 WAL 提交')
-      const generation=(await loadTemplateState(ws.fs)).generation
+      const generation=await loadTemplateGenerationIdentity(ws.fs)
       if(generation?.sessionId===request.sessionId&&generation.turn===ending.data.turn&&generation.status==='prepared')throw new Error('事件轮次模板尚未收口')
     }
     const lastBoundary=[...events].reverse().find(event=>event.type==='turn/start'||event.type==='turn/end')

@@ -79,7 +79,7 @@ export async function snapshotStory(options: {
     const dest = new WorkspaceFs(staging, null)
     try {
       // 先检查所有可遍历的父目录，不能只检查末级文件：目录 junction 也会越界。
-      for (const directory of ['', 'memory', 'assets', 'state', 'state/wi-timers', 'state/wal']) {
+      for (const directory of ['', 'memory', 'assets', 'state', 'state/wi-timers', 'state/template-data', 'state/template-generation', 'state/wal']) {
         const info = await lstat(join(options.sourceRoot, directory)).catch((error: NodeJS.ErrnoException) => {
           if (error.code === 'ENOENT') return null
           throw error
@@ -90,22 +90,14 @@ export async function snapshotStory(options: {
       const paths = ['journal.md', 'assets/chat-lorebook.json', 'state/world-delta.jsonl', 'state/template.json', 'state/helper.json',
         // 放弃 MVU 的恢复标记也是 WAL 管理的剧情正文。继承日志却漏掉它会让子剧情
         // 下一次写入记录错误的 before 镜像，之后无法完整还原祖先恢复状态。
-        ...(options.includeWal ? ['state/helper-mvu-abandon.json'] : [])]
-      for (const directory of ['memory', 'state/wi-timers', ...(options.includeWal ? ['state/wal'] : [])]) {
+        ...(options.includeWal ? ['state/helper-mvu-abandon.json', 'state/wal-coverage.json'] : [])]
+      // 根引用的生成恢复正文与根一起继承；根仍指向它时子剧情才能在回退后读回该状态。
+      for (const directory of ['memory', 'state/wi-timers', 'state/template-data', 'state/template-generation', ...(options.includeWal ? ['state/wal'] : [])]) {
         // 资产目录可忽略链接，但剧情快照必须明确拒绝，避免静默发布丢失文件的分支。
         for (const file of await source.list(directory, { rejectLinks: true })) paths.push(`${directory}/${file}`)
       }
-      for (const path of paths) {
-        // 外部链接不属于快照；避免本机手改的 junction/symlink 把其它目录带进分支。
-        const info = await lstat(join(options.sourceRoot, path)).catch((error: NodeJS.ErrnoException) => {
-          if (error.code === 'ENOENT') return null
-          throw error
-        })
-        if (!info) continue
-        if (!info.isFile() || info.isSymbolicLink()) throw new Error(`剧情快照不支持链接或目录文件：${path}`)
-        const bytes = await source.readBytes(path)
-        if (bytes !== null) await dest.writeBytes(path, bytes)
-      }
+      // 外部链接不属于快照；避免本机手改的 junction/symlink 把其它目录带进分支。
+      await dest.copyFrom(source, paths, (path) => new Error(`剧情快照不支持链接或目录文件：${path}`))
       await options.prepare?.(dest)
       await rebuildIndex(dest, estimateTokens)
       await dest.writeText('story.json', JSON.stringify({ version: 1, id: options.id,

@@ -474,7 +474,7 @@ export function registerTavernTools(ctx: Context, state: TavernState): void {
         // 整棵走完再过滤会让本工具随数据积累越来越慢。state/ 下其余可读文件
         // （world-delta.jsonl、wi-timers）仍在白名单内，保持 list 与 read 口径一致。
         const readable = (
-          [...(await ws.fs.list('', { skipDir: (dir) => dir === 'state/wal' || dir === 'memory/archive' })).filter(isStoryPath),
+          [...(await ws.fs.list('', { skipDir: (dir) => dir === 'state/wal' || dir === 'state/template-data' || dir === 'state/template-generation' || dir === 'memory/archive' })).filter(isStoryPath),
             ...(await resolved.assetFs.list('', { skipDir: (dir) => dir === 'stories' || dir === 'state' || dir === 'memory' })).filter((p) => !isStoryPath(p))]
         ).filter((p) => { const path = resolveReadableAssetPath(p); return path.ok && path.path === p })
         const files = budgetAssetFiles(readable, 900)

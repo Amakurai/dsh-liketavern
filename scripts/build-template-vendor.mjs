@@ -5,8 +5,11 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { isDeepStrictEqual } from 'node:util'
 import * as faker from '@faker-js/faker'
+import { optimizeEmojiMatcherSource } from './emoji-regex-source.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
+const emojiVersion = JSON.parse(await readFile(join(root, 'node_modules/markdown-it-emoji/package.json'), 'utf8')).version
+let emojiMatcherOptimized = false
 // 保存所有语言原始数据，但延迟 JSON.parse；普通模板无需展开语言数据或实例。
 const fakerLocaleJson = Object.fromEntries(Object.entries(faker.allLocales).map(([code,locale])=>[code,JSON.stringify(locale)]))
 const fakerFallbacks = {}
@@ -54,7 +57,13 @@ const result = await build({
   stdin:{contents:'export { z } from "zod"; export { default as lodash } from "lodash"; export { jsonrepair } from "jsonrepair"; export { default as ejs } from "ejs"; export { createMessageFormatter } from "./src/node/templateMarkdown.ts"; export { default as ejsUtils } from "tavern-ejs-utils";',resolveDir:root,sourcefile:'template-libraries-entry.js'},
   bundle:true,format:'iife',globalName:'__TavernTemplateLibraries',platform:'browser',target:'es2022',
   write:false,minify:true,legalComments:'inline',
-  plugins:[{name:'ejs-virtual-files',setup(builder) {
+  plugins:[{name:'tavern-emoji-matcher',setup(builder) {
+    builder.onLoad({filter:/[\\/]markdown-it-emoji[\\/]lib[\\/]normalize_opts\.mjs$/},async args=> {
+      const contents=optimizeEmojiMatcherSource(await readFile(args.path,'utf8'),emojiVersion)
+      emojiMatcherOptimized=true
+      return {contents,loader:'js'}
+    })
+  }},{name:'ejs-virtual-files',setup(builder) {
     builder.onResolve({filter:/^tavern-ejs-utils$/},()=>({path:join(root,'node_modules/ejs/lib/esm/utils.js')}))
     builder.onResolve({filter:/^node:(fs|path)$/},args=>({path:args.path,namespace:'ejs-virtual-files'}))
     builder.onLoad({filter:/.*/,namespace:'ejs-virtual-files'},args=>({loader:'js',contents:args.path==='node:fs'
@@ -74,6 +83,7 @@ const result = await build({
       `}))
   }}],
 })
+if(!emojiMatcherOptimized) throw new Error('markdown-it-emoji 模块入口改变，必须重新审查 QuickJS 匹配器优化')
 const fakerResult=await build({
   stdin:{contents:`export * as fakerCore from "tavern-faker-core";
     export const fakerLocaleJson=${JSON.stringify(fakerLocaleJson)};

@@ -69,7 +69,8 @@ describe('官方 EJS 编译参数',()=>{
     await expect(evaluate('x',{},'{localsName:"a.b"}')).rejects.toThrow(/identifier/)
     await expect(evaluate('<%= value %>',{value:'x'},'{escape:()=>{while(true){}}}')).rejects.toThrow(/interrupt|超时/)
     await expect(evaluate('<%- await include("x") %>',{},'{includer:()=>{while(true){}}}')).rejects.toThrow(/interrupt|超时/)
-    await expect(evaluate('<%= "x".repeat(1048577) %>')).rejects.toThrow(/1 MiB|memory/)
+    // 限额现在约束相对于已有输入的净扩张，测试值须超过输入自身大小加 1 MiB。
+    await expect(evaluate('<%= "x".repeat(1100000) %>')).rejects.toThrow(/1 MiB|memory/)
     const recur='<%- await evalTemplate(next,{next}) %>'
     await expect(evaluate(recur,{next:recur})).rejects.toThrow(/16 层/)
     expect(await evaluate('<%= typeof process %>|<%= typeof require %>|<%= typeof fetch %>')).toBe('undefined|undefined|undefined')

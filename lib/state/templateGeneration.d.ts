@@ -107,8 +107,32 @@ export type TemplateGeneration = z.infer<typeof generation>;
 export type PreparedTemplateGeneration = Extract<TemplateGeneration, {
     status: 'prepared';
 }>;
+/** 大型状态里 prepared 记录在根中的形状：只留归属与正文摘要，冻结计划与重放另存。 */
+declare const detached: z.ZodObject<{
+    version: z.ZodLiteral<1>;
+    sessionId: z.ZodString;
+    cardId: z.ZodString;
+    storyId: z.ZodString;
+    turn: z.ZodNumber;
+    floor: z.ZodString;
+    status: z.ZodLiteral<"prepared">;
+    payload: z.ZodObject<{
+        hash: z.ZodString;
+        bytes: z.ZodNumber;
+    }, z.core.$strict>;
+}, z.core.$strict>;
+export type DetachedTemplateGeneration = z.infer<typeof detached>;
 export declare function parseTemplateReplay(value: unknown): TemplateReplay;
 export declare function parseTemplateGeneration(value: unknown): TemplateGeneration;
+export declare function isDetachedTemplateGeneration(value: unknown): boolean;
+export declare function parseDetachedTemplateGeneration(value: unknown): DetachedTemplateGeneration;
+/** 拆出每轮整体替换的正文；归属字段留在根里，随楼层日志提交与回滚。 */
+export declare function detachTemplateGeneration(value: PreparedTemplateGeneration): {
+    identity: Omit<DetachedTemplateGeneration, 'payload'>;
+    body: Record<string, unknown>;
+};
+/** 正文来自单独的文件：归属以根为准，合并后按完整 prepared 记录重新校验。 */
+export declare function attachTemplateGeneration(value: DetachedTemplateGeneration, body: unknown): PreparedTemplateGeneration;
 /** 收口保留少量归属回执，删除大段闭包重放数据；中途重启也能幂等完成楼层提交。 */
 export declare function closeTemplateGeneration(value: TemplateGeneration, status: 'completed' | 'terminated'): TemplateGeneration;
 /** 最终回复选择标记与初始资产分别存一次；重建给隔离器的冻结上下文。 */

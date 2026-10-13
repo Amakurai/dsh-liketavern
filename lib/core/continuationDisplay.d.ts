@@ -4,6 +4,8 @@ type Assistant = SessionEvent<'assistant/message'>;
 /** undefined 表示该来源的模板没有可用提交快照，不能借显示刷新重新求值。 */
 type SourceText = (event: Assistant) => string | undefined;
 export declare function continuationDisplayText(events: readonly SessionEvent[], seq: number, raw: string, rendered: string, sourceText?: SourceText): string;
+/** 先列出实际续写来源，存储层即可只读这些消息的物化快照，无需装载整份回复表。 */
+export declare function continuationDisplaySources(events: readonly SessionEvent[], seq: number, raw: string): Assistant[];
 /** 流式正文还没有持久 seq；只读公开事件快照中的真实续写 notice 和此前消息。 */
 export declare function continuationStreamText(events: readonly SessionEvent[], turnNumber: number, seq: number | undefined, rendered: string, sourceText?: SourceText): string;
 export {};

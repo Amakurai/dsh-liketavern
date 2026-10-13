@@ -12,7 +12,9 @@ Desktop.ini
 .env.*
 
 # 本机包链接与包管理器缓存，不进 git
-/vendor/
+/vendor/*
+# 唯一入库的 vendor 源是受信固定恢复引擎；其它本机包链接仍然忽略。
+!/vendor/checkpoint-engine-v1/
 .npm/
 .npm-cache/
 *.tgz

@@ -78,24 +78,37 @@ export function continuationDisplayText(events:readonly SessionEvent[],seq:numbe
   return continuationStreamText(events,target.data.turn,seq,rendered,sourceText)
 }
 
+/** 先列出实际续写来源，存储层即可只读这些消息的物化快照，无需装载整份回复表。 */
+export function continuationDisplaySources(events:readonly SessionEvent[],seq:number,raw:string):Assistant[] {
+  const index=indexOf(events),target=index.messages.get(seq)
+  return !target || body(target)!==raw ? [] : continuationSources(index,{turn:target.data.turn,seq})
+}
+
+function continuationSources(index:Index,target:{turn:number;seq:number}):Assistant[] {
+  const sources:Assistant[]=[]
+  for(;;){
+    const turn=index.turns.get(target.turn)
+    if(turn?.notice===undefined||turn.notice>=target.seq||turn.firstStop!==undefined&&turn.firstStop<target.seq||!turn.previous)break
+    if(sources.length>=64)throw new Error('续写展示来源超过 64 层预算')
+    sources.push(turn.previous)
+    // 正常 stop 是旧续写链的收口；仍检查该条回复自身的 opener。
+    if(hasNormalAssistantStop(turn.previous))break
+    target={turn:turn.previous.data.turn,seq:turn.previous.seq}
+  }
+  return sources
+}
+
 /** 流式正文还没有持久 seq；只读公开事件快照中的真实续写 notice 和此前消息。 */
 export function continuationStreamText(events:readonly SessionEvent[],turnNumber:number,seq:number|undefined,rendered:string,sourceText?:SourceText):string {
   const index=indexOf(events)
-  let target={turn:turnNumber,seq:seq??Infinity}
   const prefix:{text:string;unavailable:boolean}[]=[]
   const encoder=new TextEncoder()
   let bytes=encoder.encode(rendered).length
-  for(let depth=0;;depth++){
-    const turn=index.turns.get(target.turn)
-    if(turn?.notice===undefined||turn.notice>=target.seq||turn.firstStop!==undefined&&turn.firstStop<target.seq||!turn.previous)break
-    if(depth>=64)throw new Error('续写展示来源超过 64 层预算')
-    const raw=body(turn.previous),materialized=sourceText?sourceText(turn.previous):raw,text=materialized??raw
+  for(const previous of continuationSources(index,{turn:turnNumber,seq:seq??Infinity})){
+    const raw=body(previous),materialized=sourceText?sourceText(previous):raw,text=materialized??raw
     bytes+=encoder.encode(text).length
     if(bytes>256*1024)throw new Error('续写展示正文超过 256 KiB')
     prefix.push({text,unavailable:materialized===undefined})
-    // 正常 stop 是旧续写链的收口；仍检查这条回复自身的 opener，但不累计更早的完整历史。
-    if(hasNormalAssistantStop(turn.previous))break
-    target={turn:turn.previous.data.turn,seq:turn.previous.seq}
   }
   if(!prefix.length)return rendered
   const parts=stripContinuedDisplayMetaParts([...prefix.reverse(),{text:rendered,unavailable:false}])

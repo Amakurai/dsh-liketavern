@@ -45,7 +45,8 @@ function activateRegex(pattern,replacement,opts={}) {
   const channels=['basic','generate','message'].filter(channel=>options[channel]);
   for(const channel of channels) if(!temporaryRegex[channel].has(uuid)&&temporaryRegex[channel].size>=4096) throw Error('临时正则条目超过上限');
   if(!channels.length)return;
-  const callbackId=typeof replacement==='function'?stickyCallbackId(replacement):undefined;
+  const replaced=channels.map(channel=>temporaryRegex[channel].get(uuid)?.callbackId).filter(id=>id!==undefined);
+  const callbackId=typeof replacement==='function'?stickyCallbackId(replacement,channels,uuid):undefined;
   const revision=stickyNextRevision();
   for(const channel of channels) {
     const selected={...options,basic:channel==='basic',generate:channel==='generate',message:channel==='message'};
@@ -53,6 +54,7 @@ function activateRegex(pattern,replacement,opts={}) {
     temporaryRegex[channel].set(uuid,{expression:new RegExp(expression.source,expression.flags),replacement,options:selected,sticky,revision,callbackId,identity});
     stickyTombstones[channel].delete(uuid);
   }
+  pruneStickyCallbacks(replaced);
 }
 function deactivateRegex(selector={},count=1) {
   if(!selector||typeof selector!=='object'||Array.isArray(selector)||Object.keys(selector).some(key=>!['uuid','basic','generate','message'].includes(key))) throw Error('临时正则选择器无效');
@@ -75,6 +77,7 @@ function deactivateRegex(selector={},count=1) {
       if(channel==='basic'||next<=0) {rememberStickyRemoval(channel,uuid);temporaryRegex[channel].delete(uuid);}
       else rule.sticky=next;
   }
+  pruneStickyCallbacks();
 }
 function templateRegexRulesForStage(stage,meta) {
   if(!['basic','generate','message','after'].includes(stage))throw Error('未知临时正则阶段');
@@ -88,19 +91,29 @@ function templateRegexRulesForStage(stage,meta) {
   }));
 }
 function applyTemporaryRegex(text,stage,meta) {
+  const outputLimit=text.length+1024*1024;
   for(const rule of templateRegexRulesForStage(stage,meta)) {
     rule.expression.lastIndex=0;
     const replacement=typeof rule.replacement==='function'
       ? (...args)=> {const value=rule.replacement.apply(api,args);if(value&&typeof value.then==='function')throw Error('正则替换回调必须同步返回');return String(value);}
       : rule.replacement;
     text=text.replace(rule.expression,replacement);
-    if(text.length>1024*1024)throw Error('临时正则输出超过 1 MiB 上限');
+    if(text.length>outputLimit)throw Error('临时正则输出净增超过 1 MiB 额度');
   }
   return text;
 }
 api.activateRegex=activateRegex;
 for(const rule of input.regexRules || []) activateRegex(new RegExp(rule.source,rule.flags),rule.replacement,rule.options);
 globalThis.__applyTemporaryRegex=applyTemporaryRegex;
+// 只读：与实际应用共用同一筛选，宿主据此跳过没有任何规则的消息。
+globalThis.__templateRegexRuleCount=(stage,meta)=>templateRegexRulesForStage(stage,meta).length;
+// 只读：不看消息元数据的阶段规则总数；为 0 时该阶段对任何消息都不会有规则。
+globalThis.__templateRegexStageSize=stage=> {
+  if(!['basic','generate','message','after'].includes(stage))throw Error('未知临时正则阶段');
+  if(stage==='basic')return (frozenBasicRegex!==null?frozenBasicRegex:temporaryRegex.basic).size;
+  if(stage==='generate')return (basicRegexPhaseClosed?0:temporaryRegex.basic.size)+temporaryRegex.generate.size;
+  return temporaryRegex.message.size;
+};
 globalThis.__hasMessageRegex=()=>temporaryRegex.message.size>0;
 globalThis.__regexDescriptors=()=>JSON.stringify([...temporaryRegex.message].filter(([,rule])=>typeof rule.replacement==='string')
   .map(([uuid,rule])=>({source:rule.expression.source,flags:rule.expression.flags,replacement:rule.replacement,options:{...rule.options,uuid,sticky:rule.sticky}})));

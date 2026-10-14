@@ -2,388 +2,249 @@
 
 # dsh-liketavern
 
-**Tavern-style roleplay in DeepSeek Harness Desktop or `dsh web`, with character cards, lorebooks, and long-term memory.**
+**SillyTavern roleplay on the native DeepSeek Harness Agent runtime**
 
 [![Release](https://img.shields.io/badge/version-v0.5.3-blue.svg)](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.5.3)
 [![dsh](https://img.shields.io/badge/dsh-0.2.0--rc.2-informational.svg)](https://deepseek-harness.github.io/deepseek-harness/)
 [![Node.js](https://img.shields.io/badge/node-%E2%89%A524-brightgreen.svg)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-[中文](./README.md) | English
-
-[Features](#features) · [Key concepts](#key-concepts) · [Installation & upgrade](#installation--upgrade) · [Getting started](#getting-started) · [Everyday use](#everyday-use)
-
-[Compatibility](#compatibility) · [Data & backups](#data--backups) · [FAQ & diagnostics](#faq--diagnostics) · [Documentation](#documentation) · [Development & debugging](#development--debugging) · [Contributing](#contributing)
+[中文](./README.md) · English · [Changelog](./CHANGELOG.md)
 
 </div>
 
----
+`dsh-liketavern` brings the SillyTavern (ST) ecosystem—character cards, prompt presets, lorebooks, regex scripts, EJS prompt templates, and interactive HTML cards—into [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`). Rather than bolting on a separate request pipeline, it runs directly inside `dsh`'s native session and Agent loop: the host manages model connectivity, long-context history, and tool execution, while the plugin handles prompt orchestration, sandboxed rendering, and transactional story state.
 
-**dsh-liketavern** is a dedicated roleplay plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`). It enables you to directly import SillyTavern (ST) character cards and prompt presets, manage settings, advance storylines, branch dialogues, and perform lossless state rollbacks inside dsh's native agent runtime.
+## Why dsh-liketavern
 
-- **Host responsibility**: Model connectivity, long-context chat history, tool execution, and Agent runtime.
-- **Plugin responsibility**: Character asset management, ST preset & prompt assembly, isolated story state (memory / delta layer / variables), and sandboxed interactive cards & scripts.
-- **Out of the box**: Built-in EJS prompt template engine, Tavern Helper API subset, native MVU support; interface language automatically follows the host.
+### 1. True Branch Isolation & Transactional State Rollback
+In many roleplay frontends, regenerating or rewinding chat history leaves long-term memories, world state, and card variables stuck in the future—contaminating earlier branches.
 
-> 💡 **First time here?** Start with [Requirements & installation](#installation--upgrade) and follow the [5-step quick start](#getting-started). When migrating existing ST assets, check [Key concepts](#key-concepts) and [Compatibility](#compatibility).
+`dsh-liketavern` strictly separates **shared static assets** (Character Cards, Presets, Personas) from **branch-isolated story state** (`Story`). Every floor write is guarded by a Write-Ahead Log (WAL) before touching state files. Whether you regenerate a turn, edit an AI reply, or fork a conversation from the host message bar, the plugin snapshots the parent story, rolls back uninherited memories, world-state deltas, and variables inside a draft workspace, and atomically binds the new child session—leaving the original timeline untouched.
 
----
+### 2. Unobtrusive Agent Memory & Dynamic World State
+Long-running stories are backed by a three-tier context architecture:
+- **Three-Level Lorebooks**: Global, Character-specific, and Story-private lorebooks supporting constant entries, recursive scanning, secondary keys, exclusions, and boolean AND/OR activation.
+- **World State Delta Layer**: Tracks newly introduced, modified, and invalidated world facts as the plot unfolds, allowing static lore to evolve naturally.
+- **BM25 Long-Term Memory**: Combines lexical relevance with time-decay weighting. During ordinary roleplay, the model streams replies directly; **only when lore is missing or newly established facts need to be persisted** does it invoke `tavern_*` tools via native Programmatic Tool Calling (PTC). When memory capacity is exceeded, background idle maintenance compresses older entries into verifiable source-linked summaries.
 
-## Features
+### 3. Out-of-the-Box ST Ecosystem: EJS, Tavern Helper & Native MVU
+- **Cards & Presets**: Import and export V1 / V2 / V3 PNG and JSON character cards with multiple greetings, embedded lorebooks, and ST prompt presets. The official DeepSeek API-key route projects frozen preset layouts directly onto model messages.
+- **EJS Templates & VM Checkpoints**: Built-in ST-compatible EJS engine supporting conditionals, loops, async macros, worldbook decorators, and bundled utilities (`lodash`, `zod`, `faker`, `jsonrepair`), backed by persistent QuickJS VM checkpoints across turns.
+- **Tavern Helper Subset & Native MVU**: Supports Global / Preset / Character script libraries, story variable persistence, in-page event buses, and partial message refreshes, plus a built-in native MVU (Model-View-Update) runner for complex status-bar cards.
 
-| Area | Capabilities & Highlights |
-| :--- | :--- |
-| **🎭 Character Cards & Personas** | • Import/export V1, V2, and V3 PNG and JSON character cards<br>• Multiple greetings, embedded lorebooks, card regex, and interactive HTML cards<br>• Recoverable archive bin and reference-protected permanent deletion; personas provide global/session `{{user}}` identity definitions |
-| **📖 Lorebooks & World State** | • Three-tiered lorebook hierarchy: Global, Character-specific, and Session-private<br>• Keyword activation (secondary keys, exclusions, logic AND/OR), constant entries, and recursive scanning<br>• Story Delta Layer tracks new, modified, and invalidated world facts across the story |
-| **🧠 Intelligent Long-Term Memory** | • BM25 retrieval with time-decay weighting; model reads and writes autonomously during roleplay<br>• Background idle auto-summarization when capacity is exceeded, preserving verifiable source archives |
-| **🌿 Story Branching & Safe Rollback** | • Regenerating, editing AI replies, or rolling back automatically forks an independent child session<br>• Automatically revokes uninherited memories and variables while leaving the original timeline intact |
-| **⚡ EJS Template Engine** | • Secure isolated sandbox evaluation for conditions, loops, async macros, and decorators<br>• Supports story/message variables, JSON/YAML initializers, JSON Patch, Zod, Lodash, and Faker |
-| **📦 Interactive Cards & Scripts** | • Strict iframe sandboxing with 3 script library scopes (Global / Preset / Character)<br>• Story variable persistence, same-page events, lorebook CRUD, and live message partial refresh |
-| **🔄 Native MVU Support** | • Optional auto-initialization and post-reply variable update runner<br>• Failed tasks remain in a retry queue; compatible with status bar placeholders declared via display regex |
-| **🛠️ Model Tools & Impersonation** | • 7 dedicated PTC tools (memory search/write/update, lorebook entry read, world-state update, asset list/read)<br>• Supports AI impersonation (generates user dialogue and copies to clipboard) and context continuation |
-
-> 🧩 **Smart Tool Calling**: Ordinary roleplay replies directly and fluidly. The model calls tools only when key details are missing or established facts need to be persisted, keeping conversations immersive and consistent.
-
----
-
-## Key Concepts
-
-Understanding the relationship between assets and runtime state helps you make the most of the plugin:
-
-```mermaid
-flowchart LR
-    subgraph Shared["Shared Assets (Reusable)"]
-        Card["Character Card"]
-        Preset["Prompt Preset"]
-        Persona["User Persona"]
-    end
-
-    subgraph Runtime["Runtime (Isolated)"]
-        Session["Host Session"] --> Story["Isolated Story State"]
-        Story --> Mem["Long-term Memory / Delta Layer"]
-        Story --> Vars["Card Variables / Session Lorebook"]
-        Story --> WAL["Transaction Rollback Log (WAL)"]
-    end
-
-    Shared -.->|"Bound to"| Runtime
-```
-
-| Term | Purpose & Distinction |
-| :--- | :--- |
-| **Tavern mode** | The dsh session preset that activates this plugin's roleplay Agent runtime. Select it when creating a new session. |
-| **Prompt preset** | ST prompt template configurations managed under Tavern → Presets. Bind them to sessions or use the built-in default. |
-| **Character vs Persona** | A **Character Card** defines who the AI plays; a **Persona** defines who you are and supplies `{{user}}` in prompts. |
-| **Lorebook / Memory / World State** | **Lorebooks** supply background lore; **Memory** records narrative facts; **World State** tracks dynamic state changes in the world. |
-| **Session vs Story Branch** | A **Session** stores linear chat messages; a **Story** holds plugin state (memories, variables, WAL). Regenerating forks a child session and an independent story. |
-| **Native MVU** | Model-View-Update variable state framework. The plugin provides a safe native runner for data-driven cards. |
+### 4. Zero-Trust Sandboxing for Third-Party Code
+Regex rules, prompt templates, and HTML card scripts bundled inside third-party cards are treated as untrusted input:
+- Prompt assembly, lorebook evaluation, regex replacement, Markdown rendering, and EJS execution run inside terminable Worker threads and QuickJS/WASM sandboxes with no access to Node APIs, the DOM, network sockets, or module loaders.
+- Interactive HTML cards render inside opaque-origin `sandbox="allow-scripts"` iframes and communicate solely through an enumerated postMessage bridge, preventing privilege escalation into the host window.
 
 ---
 
 ## Installation & Upgrade
 
-### Requirements
+> **Prerequisites**: Node.js `>= 24.0.0`, DeepSeek Harness `0.2.0-rc.2`, `pnpm`, and at least one configured model in `dsh`. If you are new to `dsh`, see the [DeepSeek Harness Documentation](https://deepseek-harness.github.io/deepseek-harness/) first. Precompiled `lib/` bundles are committed to the repository, so no local build is required during installation.
 
-| Component | Minimum Requirement | Notes |
-| :--- | :--- | :--- |
-| **Node.js** | `≥ 24.0.0` | Development and CI environments use Node 24 |
-| **dsh CLI / Host** | **`0.2.0-rc.2`** | Peer dependencies are pinned to this host version |
-| **pnpm** | Any modern version | Used by `dsh plugin` to resolve and install dependencies |
-| **Model** | Configured in dsh | Ensure you can start an ordinary conversation in dsh |
+### Desktop Installation
 
-> 📌 First time with dsh? Refer to the [DeepSeek Harness Documentation](https://deepseek-harness.github.io/deepseek-harness/) and run `dsh web` once to complete initialization.
-
----
-
-### Desktop: Install and Upgrade from GitHub
-
-Open **Plugins → Add plugin**, enter this GitHub URL, and install:
+Open **Plugins → Add plugin** in the `dsh` desktop app, enter the following repository tag URL, and restart the app once installed:
 
 ```text
 https://github.com/Amakurai/dsh-liketavern.git#v0.5.3
 ```
 
-To upgrade, uninstall the old Tavern plugin from the Plugins page, add the new version's tag, then fully quit and restart the desktop app. **Settings → Tavern → About → Check for updates** only checks stable releases and host compatibility; installation is handled by the desktop Plugins page. The repository includes precompiled `lib/` files, so no local build is needed.
-
-### Web / CLI: Install via dsh plugin
-
-Run these commands in your terminal to install the pinned stable release:
+### Web / CLI Online Installation
 
 ```bash
-# 1. Add plugin to web profile
+# Install the plugin into the web profile
 dsh plugin --profile web add github:Amakurai/dsh-liketavern#v0.5.3
 
-# 2. Verify installation
+# Verify installation
 dsh plugin --profile web list --depth 0
 
-# 3. Launch dsh web (stop any running instance first)
+# Start (or restart) dsh web
 dsh web
 ```
 
-*Pre-compiled `lib/` bundles are included in this repository. No local TypeScript compilation is required for normal installation.*
+### Offline Release Tarball Installation
 
----
-
-### Option 2: Install from Release Tarball (Offline)
-
-1. Download `dsh-liketavern-0.5.3.tgz` from the [v0.5.3 Release](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.5.3) (with `SHA256SUMS.txt` for integrity verification).
-2. In the download directory, run:
+Download `dsh-liketavern-0.5.3.tgz` from the [v0.5.3 Release](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.5.3) (verify against `SHA256SUMS.txt` if desired) and run:
 
 ```bash
 dsh plugin --profile web add ./dsh-liketavern-0.5.3.tgz
 dsh web
 ```
 
----
-
 ### Checking for Updates & Upgrading
 
-- **In-App Check**: Open **Settings → Tavern → About** in dsh to view current versions and check for new GitHub releases.
-- **Desktop Upgrade**: Review the [Changelog](./CHANGELOG.md), back up your data, uninstall the old plugin, and enter the new GitHub tag URL in Add plugin. Fully restart the desktop app after installation.
-- **Web / CLI Upgrade**: Run the new `dsh plugin add` command and restart `dsh web`.
-- Existing data directories are preserved seamlessly across upgrades (see [Data & backups](#data--backups)).
+- **Check for Updates**: Navigate to **Settings → Tavern → About** to view the installed version and check the latest GitHub release and host compatibility.
+- **Desktop Upgrade**: Check [CHANGELOG.md](./CHANGELOG.md) and back up your data. In the desktop **Plugins** page, uninstall the older Tavern plugin, add the new version tag URL, and **fully quit and restart the desktop app** (the About page only queries release metadata; actual installation is handled by the Plugins page).
+- **Web / CLI Upgrade**: Run `dsh plugin --profile web add` with the new version tag and restart `dsh web`. Existing data directories are preserved automatically.
 
 ---
 
-## Getting Started
+## Quick Start
 
-Start your Tavern roleplay in 5 simple steps:
-
-```text
-  1. Import Card   ➔    2. New Session   ➔    3. Verify Setup   ➔    4. Start Chat   ➔    5. Explore Branches
- (PNG / JSON file)     (Select Tavern)       (Preset/Lorebooks)       (Pick Greeting)      (Retry/Edit/Impersonate)
-```
-
-1. **Prepare a Character Card**
-   Go to **Settings → Tavern → Characters** and click **Import Character** to load a PNG or JSON card. Review the static compatibility report and save.
-2. **Create a Story Session**
-   Create a new session, choose **Tavern 模式** (Tavern Mode), and click your imported character card.
-3. **Configure Session Settings**
-   Click the **Character entry** at the top of the conversation to fine-tune the prompt preset, persona, or attached lorebooks for this story (defaults work out of the box).
-4. **Choose a Greeting and Begin**
-   If the card contains multiple greetings, use `‹ ›` to pick your opening scenario, click **Start chat**, and send your first message.
-5. **Adjust & Explore Branches**
-   Want to change the narrative direction? Use the actions on any AI reply:
-   - 🔄 **Regenerate / ✏️ Edit**: Automatically forks a new child timeline branch. Switch between branches at any time using `‹ n/m ›`.
-   - ⏩ **Continue**: Directs the AI to keep writing from where it left off.
-   - 🎭 **AI Impersonation**: Asks the AI to compose the next user response (copied to your clipboard).
-
-> 🔍 **Inspect Prompts**: After the first reply, click the top character entry and select **Prompt preview → Last request** to inspect the exact prompt structure sent to the model.
+1. **Import a Character Card**  
+   Open **Settings → Tavern → Characters** and click **Import Character** to load a PNG or JSON card. Review the static compatibility report and choose whether to import any embedded lorebook.
+2. **Start a Tavern Session**  
+   Create a new session, switch the session preset to **Tavern 模式** (Tavern Mode), and select a character card on the hero screen (new sessions never force-bind a default card automatically).
+3. **Select a Greeting & Begin**  
+   If the card provides multiple greetings, cycle through them with `‹ ›`, click **Start chat**, and send your opening line.
+4. **Branch, Continue, or Impersonate**  
+   - **Regenerate / Edit**: Use the action bar on any AI message to retry or edit. The plugin automatically forks a new child branch with rolled-back state; switch between sibling timelines anytime via `‹ n/m ›`.
+   - **Continue**: Extend the current AI reply from where it stopped.
+   - **AI Impersonation**: Let the model draft the next `{{user}}` reply and copy it straight to your clipboard.
 
 ---
 
-## Everyday Use
+## Everyday Usage Guide
 
 ### Configuration Entry Points & Scope
 
-| Task | Location | Scope & Behavior |
-| :--- | :--- | :--- |
-| **Global Asset Management** (Cards / Presets / Lorebooks / Personas) | `Settings → Tavern → Respective Pages` | **Global Shared Assets**: Changes apply to subsequent turns across all sessions using them |
-| **Default Template for New Sessions** | `Settings → Tavern → Settings → Defaults` | **Global Defaults**: Applied when picking a character in a new session; existing sessions are unaffected |
-| **Current Story Configuration** (Preset / Persona / Author's Note) | `Character control at top of chat` | **Current Session**: Changes apply to future turns in this story |
-| **Story-Private Lorebook** | `Top character control → Edit session lorebook` | **Story Private**: Inherited and rolled back with branches; does not pollute global lorebooks |
-| **View & Edit Long-term Memories** | `Top character control → Memory` or `Tavern → Memory` | **Selected Story**: Editing an active story takes effect immediately; "Initial state" affects only future stories |
-| **Regex & Script Configuration** | `Tavern → Regex` / `Tavern → Settings → Scripts` | Applies to the selected scope (Global / Preset / Character) |
-| **Prompt Assembly & Trigger Verification** | `Top character control → Prompt preview` | **Read-only**: Inspect current turn prompt layout and activated lorebook entries |
+```mermaid
+flowchart LR
+    subgraph Assets["Global Shared Assets ($DSH_HOME/dsh-tavern/)"]
+        Card["Character Cards"]
+        Preset["Prompt Presets"]
+        Persona["User Personas"]
+        GlobalWI["Global / Card Lorebooks"]
+    end
 
-> 🌐 **Interface Language**: Follows dsh host locale by default (Chinese for zh-*, English otherwise). You can lock it to English or Chinese in Settings → Tavern → Interface → Language.
+    subgraph StoryScope["Isolated Story State (stories/<storyId>/)"]
+        Session["Host Session Stream"] --> Story["Story Workspace"]
+        Story --> Memory["BM25 Memories & Archives"]
+        Story --> Delta["World State Delta & Story Lorebook"]
+        Story --> Vars["EJS / Card Variables & Checkpoints"]
+        Story --> WAL["Floor Transaction Log (WAL)"]
+    end
 
----
-
-### Story Branching & Safe Rollback
-
-Unlike standard linear chat, dsh-liketavern provides **fine-grained state snapshots and transaction rollback isolation**:
-
-```text
-[Main Timeline] ─── Turn 1 ─── Turn 2 (Obtained Key) ─── Turn 3 (Unlocked Door)
-                                   │
-                                   └── [Regenerate Turn 2] ─── Branch 2 (Key broke, memories rolled back)
+    Assets -.->|"Session Binding"| StoryScope
 ```
 
-- **Branch Safety**: When regenerating from Turn 2, the plugin creates an isolated child session and automatically revokes derived memories, world state, and variables after Turn 2.
-- **Timeline Preservation**: The main timeline retains the "Obtained Key" fact, while Branch 2 develops independently with fresh state.
-- **Editing AI Replies**: Similarly forks into a clean branch, revoking downstream facts and letting you continue seamlessly.
+| Goal | Where to Configure | Scope & Behavior |
+| :--- | :--- | :--- |
+| Manage cards, presets, lorebooks, and user personas | `Settings → Tavern → Characters / Presets / Lorebooks / User` | **Global Shared**: Edits apply to all bound sessions starting on their next turn |
+| Set default preset & persona for new sessions | `Settings → Tavern → Settings → Defaults` | **New Session Seed**: Applied only when selecting a character in a brand-new session |
+| Override preset, persona, or Author's Note for one chat | `Character entry at top of chat` | **Current Session**: Applies to subsequent turns in this conversation only |
+| Edit lore exclusive to the current storyline | `Top character entry → Edit session lorebook` | **Story Private**: Cloned and rolled back across branches without touching global lorebooks |
+| Inspect or edit long-term memories | `Top character entry → Memory` or `Settings → Tavern → Memory` | **Selected Story**: Selecting an active story applies immediately; **Initial state** affects future stories only |
+| Configure regex rules and card script libraries | `Settings → Tavern → Regex`<br>`Settings → Tavern → Settings → Scripts` | Scoped to Global, Preset, or Character as selected |
+| Lock plugin UI language (Chinese / English) | `Settings → Tavern → Settings → Interface → Language` | Follows `dsh` host locale by default; manual overrides take effect immediately |
+| Inspect the exact payload sent to the model | `Top character entry → Prompt preview → Last request` | **Read-Only Diagnostic**: **Last request** shows the real captured payload; other tabs show static ST simulations |
+
+### Prompt Projection & Sampling Behavior
+
+- **Per-Turn Plan Freezing**: On the first step of each turn, the assembled character, preset, persona, macro clock, retrieved memories, and sampling parameters are frozen into a snapshot and replayed across any subsequent tool steps in that turn. Asset edits take effect on the next turn.
+- **Route Projection**:
+  - **Official DeepSeek API-Key Route**: Projects the frozen preset layout directly via a dedicated adapter decorator. When the target model does not advertise mid-history `system` updates (`systemPromptUpdate=in-history`), mid-history `system` entries are merged into the leading system message with a compatibility notice.
+  - **DeepSeek Account & Other Model Routes**: Map prompts into the host's two-section layout (`tavern:standing` after SDK tool definitions and `tavern:turn` for per-turn context and `depth=0` entries).
+- **Sampling Passthrough**: Forwards `temperature`, `maxTokens`, `stop`, and model-supported `reasoningEffort`. `top_p` and penalty parameters are recorded with informational notices; when a deployment locks thinking mode to disabled, the plugin respects that boundary.
 
 ---
 
-## Compatibility
+## Data Storage & Backups
 
-### Third-Party Cards, Templates & Scripts
-
-- **Tavern Helper Support**: Variables, script libraries, lorebook CRUD, and core message operations are supported. Advanced APIs (`generateRaw`, cross-tab broadcast) are in progressive adaptation. See [Tavern Helper Compatibility](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/TAVERN_HELPER.md).
-- **Built-in EJS Templates**: Full support for standard ST template expressions without extra extensions. See [Prompt Templates](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/PROMPT_TEMPLATES.md).
-- **Rendering & Markdown Security**: Uses `markdown-it` in place of vulnerable legacy formatters. HTML cards run in strict `sandbox` iframes with restricted DOM and network access.
-- **Native MVU**: Supports standard official MVU imports and native execution; custom frameworks retain original code.
-
----
-
-### Prompts, Sampling & PTC
-
-| Item | Actual Behavior |
-| :--- | :--- |
-| **Sampling Parameters** | Supports `temperature`, `maxTokens`, `stop`, and published `reasoningEffort`. `top_p` and penalty parameters are logged with informative notices. |
-| **Preset Layout Projection** | The DeepSeek API-key route projects the frozen preset layout. Unsupported mid-history system positions are merged into the leading system prompt with a diagnostic; adjacent same-role messages may be merged. DeepSeek account and other routes use the standing/turn mapping. |
-| **Dynamic Macros & Formats** | Full support for `wi_format`, `scenario_format`, `personality_format`, and macros such as `{{lastmessage}}` and `{{charPrompt}}`. |
-| **PTC Tool Calls** | Built on dsh native Programmatic Tool Calling (PTC), supporting multi-tool combinations in a single code run and parallel queries. Writes are protected by story floor transactions. |
-
----
-
-## Data & Backups
-
-### Storage Architecture
-
-All plugin data is stored in `$DSH_HOME/dsh-tavern/` (defaults to `~/.dsh/dsh-tavern/` or `%USERPROFILE%\.dsh\dsh-tavern\` on Windows):
+All runtime data lives under `$DSH_HOME/dsh-tavern/` (`~/.dsh/dsh-tavern/` by default, or `%USERPROFILE%\.dsh\dsh-tavern\` on Windows) and is never written into the source tree or npm package:
 
 ```text
 $DSH_HOME/dsh-tavern/
-├── characters/         # Character metadata and private assets
+├── characters/         # Character metadata, avatars, and private character assets
 ├── presets/            # Prompt presets
 ├── lorebooks/          # Global and character lorebooks
 ├── personas/           # User personas
-├── stories/            # Isolated story workspaces (memories, variables, WAL logs)
-└── editor-drafts/      # Unsaved editor drafts
+├── stories/            # Branch-isolated story workspaces (memories, deltas, variables, WAL)
+└── editor-drafts/      # Unsaved editor draft recovery snapshots (up to 2 MiB each)
 ```
 
-> 🛡️ **Core Principle: Character assets are shared; story states are isolated.** Each story and branch owns private state storage and Write-Ahead Logs (WAL).
+### Full CLI Backup & Recovery (Recommended)
 
----
-
-### Backup Methods Comparison
-
-| Method | Contents | Use Case & Limits |
-| :--- | :--- | :--- |
-| **📱 Card Variables Export** | Persisted variables of the active story (up to 1 MiB) | Export/import in Settings → Cards & Data for single-card state archival |
-| **📝 Editor Draft Backup** | Unsaved edits across characters, presets, lorebooks, etc. | Auto-recovered when reopening editor after unexpected browser tab closure (up to 2 MiB) |
-| **💾 Verifiable Directory Backup** | Full plugin data, host sessions, and configuration manifest with SHA-256 | **Recommended**. Created via CLI tool for offline migration and structural verification |
-
----
-
-### Command-Line Backup & Recovery
-
-Run the backup CLI tool from the plugin directory or installed environment:
+The built-in backup CLI captures plugin data, host sessions, and configuration manifests with SHA-256 verification:
 
 ```bash
-# 1. Create full backup (--offline declares writers are stopped)
+# 1. Create a full offline backup (stop dsh first and pass --offline)
 node lib/backup.js create --home "C:/data/dsh-home" --backup "D:/backups/dsh-2026-09-19" --offline
 
-# 2. Verify backup integrity and structure
+# 2. Verify manifest structure and SHA-256 digests
 node lib/backup.js verify --backup "D:/backups/dsh-2026-09-19"
 
-# 3. Restore into a new destination directory
+# 3. Restore into a target directory
 node lib/backup.js restore --backup "D:/backups/dsh-2026-09-19" --target "C:/data/dsh-restored" --offline
 ```
 
-*If available on your command PATH, use `dsh-tavern-backup` in place of `node lib/backup.js`.*
+> To export or restore persisted card variables for a single story (up to 1 MiB), use **Settings → Tavern → Settings → Cards & Data**.
 
 ---
 
-## FAQ & Diagnostics
+## Troubleshooting & Diagnostics
+
+### Read-Only Doctor CLI
+
+Run the built-in diagnostic command to inspect host version compatibility, directory health, and issue codes (**strictly redacted—never outputs chat text, local paths, or secrets**):
+
+```bash
+dsh plugin --profile web exec dsh-tavern-doctor
+# Or emit structured JSON:
+dsh plugin --profile web exec dsh-tavern-doctor --json
+```
 
 ### Common Questions
 
 <details>
-<summary><b>Q1: No "Tavern 模式" or settings entry after installation?</b></summary>
+<summary><b>"Tavern 模式" or the Tavern settings tab is missing after installation?</b></summary>
 
-1. Run `dsh --version` to verify host version is `0.2.0-rc.2`.
-2. Run `dsh plugin --profile web list --depth 0` to confirm plugin is installed in `web` profile.
-3. Restart `dsh web` and check the terminal log for plugin loading errors.
+1. Run `dsh --version` and confirm the host version is `0.2.0-rc.2`.
+2. Run `dsh plugin --profile web list --depth 0` to verify the plugin is installed in the `web` profile.
+3. Restart `dsh web` (or the desktop app) and check the terminal output for startup errors.
 </details>
 
 <details>
-<summary><b>Q2: Changing the default preset didn't change my ongoing conversation?</b></summary>
+<summary><b>The card renders, but interactive buttons, scripts, or MVU status bars do not update?</b></summary>
 
-"Defaults" only apply when **selecting a character in a new session**. For existing sessions, modify settings via the **character control at the top of the conversation**.
+1. Verify **Allow interactive cards** is enabled for the character.
+2. In **Settings → Tavern → Settings → Scripts**, confirm both the script and its parent folder are **Enabled**.
+3. When a card (or global/preset script library) includes the official MVU entry and has not been manually disabled, native MVU activates automatically once the session is idle. If it was turned off previously, click **Enable native MVU** in the Scripts settings tab or check **Enable native MVU updates** in the top session character menu. Keep the session page open while MVU executes.
 </details>
 
 <details>
-<summary><b>Q3: Card renders fine, but buttons, scripts, or MVU don't respond?</b></summary>
+<summary><b>Why didn't changing "Defaults" or editing "Initial state" memories affect my current chat?</b></summary>
 
-1. Confirm "Allow interactive cards" is enabled in Character Settings.
-2. Go to **Settings → Tavern → Scripts** and ensure the script and its folder are **Enabled**.
-3. When the card (or the global/preset script library) enables the official MVU entry and native MVU was never turned off, it turns on automatically once the session is idle. For sessions where it was turned off, click "Enable native MVU" in Settings → Tavern → Scripts, or check "Enable native MVU updates" in the session character config. MVU runs in the page, so keep it open.
-</details>
-
-<details>
-<summary><b>Q4: Memory page is empty, or edits don't affect the current story?</b></summary>
-
-1. Verify that the character and story selected at the top match your active session.
-2. If "Initial state" is selected, changes will only apply to future new stories.
-3. Long-term memory is extracted autonomously by the model or added manually; chat text is not blindly duplicated into memory.
-</details>
-
-<details>
-<summary><b>Q5: Prompt preview doesn't match the model's actual behavior?</b></summary>
-
-Check the **"Last request"** tab in prompt preview. This reflects the actual captured payload sent to the model. Other tabs show static ST simulations.
+- **Defaults** are applied only when you first pick a character card in a new session. To change presets or personas in an active chat, use the **character entry at the top of the conversation**.
+- **Initial state** in the Memory tab edits the seed template for future stories of that character; select your active story from the top dropdown to edit memories for the ongoing conversation.
 </details>
 
 ---
 
-### Read-Only Diagnostic Tool
+## Architecture & Deep-Dive Documentation
 
-When troubleshooting issues, run the read-only doctor CLI to check environment health and issue codes (**never outputs private text, paths, or tokens**):
-
-```bash
-# In an installed environment
-dsh plugin --profile web exec dsh-tavern-doctor
-
-# Output structured JSON
-dsh plugin --profile web exec dsh-tavern-doctor --json
-```
-
----
-
-## Documentation
-
-Detailed guides and architecture specifications (recommended for card authors and developers):
-
-| Category | Description | Link |
+| Topic | Summary | Links |
 | :--- | :--- | :--- |
-| **Changelog** | Version history and host requirements | [CHANGELOG.md](./CHANGELOG.md) |
-| **API Compatibility** | Card, script, variable, lorebook, and MVU APIs | [Tavern Helper Compatibility](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/TAVERN_HELPER.md) |
-| **Template Guide** | EJS syntax, macro variables, and worldbook decorators | [Prompt Templates](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/PROMPT_TEMPLATES.md) |
-| **Integration Progress** | API coverage matrices and acceptance criteria | [Tavern Helper Integration](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/TAVERN_HELPER_INTEGRATION.md) · [ST Template Audit](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/ST_COMPATIBILITY_AUDIT.md) |
-| **Architecture** | Story isolation, transaction WAL, and memory pipelines | [Architecture Design](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/ARCHITECTURE.md) |
-| **Host Compatibility** | dsh version behavior matrix and UI smoke test checklist | [Host Compatibility](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/HOST_COMPATIBILITY.md) |
-| **Security Audit** | Vulnerability management, sandbox boundaries, and isolation | [Dependency Security](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/DEPENDENCY_SECURITY.md) |
-| **Conventions** | Code conventions, test contracts, and package review | [Development Conventions](https://github.com/Amakurai/dsh-liketavern/blob/main/AGENTS.md) · [Release Review](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/RELEASING.md) |
+| **System Architecture** | Story isolation model, WAL transaction & recovery protocol, prompt projection, BM25 memory pipeline | [docs/ARCHITECTURE.md](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/ARCHITECTURE.md) |
+| **Tavern Helper & Bridges** | Sandboxed iframe bridge protocol, script scopes, variable & lorebook APIs, native MVU lifecycle | [docs/TAVERN_HELPER.md](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/TAVERN_HELPER.md) · [Integration Matrix](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/TAVERN_HELPER_INTEGRATION.md) |
+| **EJS Prompt Templates** | Template syntax, built-in macros & helpers, worldbook decorators, QuickJS VM checkpoints | [docs/PROMPT_TEMPLATES.md](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/PROMPT_TEMPLATES.md) · [ST Audit](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/ST_COMPATIBILITY_AUDIT.md) |
+| **Host Compatibility & Security** | `dsh` upgrade checklist, dependency security audit, sandbox boundaries, release package allowlist | [docs/HOST_COMPATIBILITY.md](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/HOST_COMPATIBILITY.md) · [docs/DEPENDENCY_SECURITY.md](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/DEPENDENCY_SECURITY.md) · [docs/RELEASING.md](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/RELEASING.md) |
+| **Maintainer Conventions** | Nine architectural invariants, host / agent / client contracts, and testing requirements | [AGENTS.md](https://github.com/Amakurai/dsh-liketavern/blob/main/AGENTS.md) |
 
 ---
 
-## Development & Debugging
+## Local Development & Contributing
 
-### Local Build & Validation
-
-Built with TypeScript ESM (NodeNext), React 18, and Vitest:
+Built with TypeScript ESM (`NodeNext`), React 18, and Vitest across four layers:
+- `src/core/`: Pure functions (prompt assembly, lorebook activation, regex heuristics, BM25 ranking, format parsers)
+- `src/state/`: File storage (character assets, isolated story workspaces, memory indices, VM checkpoints, WAL)
+- `src/node/`: Host orchestration (lifecycle hooks, typert services, preset projection adapter, QuickJS workers, idle maintenance)
+- `src/client/`: Frontend UI (settings panels, chat header controls, floor actions, sandboxed card iframes, script runtime)
 
 ```bash
-# 1. Install dependencies
-npm ci
-
-# 2. Build output
-npm run build
-
-# 3. Run full test suite (150+ test files)
-npm test
-
-# 4. Package integrity pre-check
-npm run package:check
+npm ci                  # Install locked dependencies
+npm run build           # Build vendor runtimes, TypeScript output, and client bundle (lib/ is tracked)
+npm test                # Run the full Vitest suite
+npm run package:check   # Verify npm tarball allowlist and relative markdown links
 ```
 
-| Command | Description |
-| :--- | :--- |
-| `npm run dev` | Launch local dsh web development instance with `cordis.patch.yml` |
-| `npm run doctor` | Execute read-only health checks on current `DSH_HOME` |
-| `npm run doctor:check` | Verify doctor CLI entry point and JSON output schema |
-| `npm run package:check` | Strict release package allowlist and link validation |
-
----
-
-### Local Development Linking
-
 <details>
-<summary><b>Expand Windows / macOS / Linux linking instructions</b></summary>
+<summary><b>Link local source checkout into dsh for live development</b></summary>
 
-Run `dsh web` once to initialize profile directory, then link the repository to `$DSH_HOME/profiles/node_modules/dsh-liketavern`:
+Run `dsh web` once to initialize `~/.dsh`, then symlink (or create a Windows Junction) from this repository to `$DSH_HOME/profiles/node_modules/dsh-liketavern`:
 
 ```powershell
 # Windows (PowerShell, run from repository root)
@@ -397,47 +258,11 @@ mkdir -p ~/.dsh/profiles/node_modules
 ln -s "$(pwd)" ~/.dsh/profiles/node_modules/dsh-liketavern
 ```
 
-Once linked, run `npm run dev` to start with local sources. Run `npm run build` after editing `src/` to update bundles.
-
+Start the local instance via `npm run dev` (`dsh web --patch ./cordis.patch.yml`). After editing `src/`, run `npm run build` and restart the dev instance.
 </details>
 
----
-
-### Repository Layout
-
-```text
-src/
-├── core/     # Pure functions: prompt assembly, lorebook logic, regex, BM25 retrieval
-├── state/    # File storage: character assets, isolated story workspaces, memory, WAL logs
-├── node/     # Host orchestration: lifecycle, services, projection pipeline, maintenance
-├── client/   # Frontend: React management pages, chat controls, sandboxed cards & scripts
-├── index.ts  # Host plugin entry point
-├── agent.ts  # Agent runtime and tool configuration
-└── remote.ts # Type-safe frontend/backend RPC contract
-```
-
----
-
-## Contributing
-
-### Reporting Issues
-
-Found a bug? Open a [GitHub Issue](https://github.com/Amakurai/dsh-liketavern/issues) with:
-
-1. **Environment**: Plugin version, dsh version, Node.js version, OS, and install method.
-2. **Reproduction Steps**: Pages involved, sequence of actions, expected vs actual behavior (attach `dsh-tavern-doctor` output if helpful).
-3. **Minimal Reproduction**: Sanitized character card or minimal test card.
-4. *Note: Strip API keys, private conversations, and personal information before submitting logs or screenshots.*
-
-### Code & Documentation
-
-- Contributions for third-party card API adapters, bug fixes, reproduction test cases, and documentation errata (such as broken links or typos) are welcome via PR.
-- For new features or architectural changes, please open an issue to discuss design and use cases first.
-- Please review the [Development Conventions](https://github.com/Amakurai/dsh-liketavern/blob/main/AGENTS.md) before starting.
-- Ensure `npm test` and `npm run package:check` pass, and keep English and Chinese documentation synchronized.
-
----
+Bug reports and pull requests are welcome via [GitHub Issues](https://github.com/Amakurai/dsh-liketavern/issues) (please include environment versions, reproduction steps, and sanitized samples—never share API keys or private chats). Review [AGENTS.md](https://github.com/Amakurai/dsh-liketavern/blob/main/AGENTS.md) before submitting a PR.
 
 ## License
 
-This project is licensed under the [MIT License](./LICENSE).
+[MIT License](./LICENSE)

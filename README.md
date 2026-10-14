@@ -2,388 +2,249 @@
 
 # dsh-liketavern
 
-**在 DeepSeek Harness 桌面端或 `dsh web` 中使用角色卡、世界书与长期记忆，开启 Tavern 式角色扮演。**
+**基于 DeepSeek Harness 原生 Agent 运行时的 SillyTavern 角色扮演插件**
 
 [![Release](https://img.shields.io/badge/version-v0.5.3-blue.svg)](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.5.3)
 [![dsh](https://img.shields.io/badge/dsh-0.2.0--rc.2-informational.svg)](https://deepseek-harness.github.io/deepseek-harness/)
 [![Node.js](https://img.shields.io/badge/node-%E2%89%A524-brightgreen.svg)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-中文 | [English](./README.en.md)
-
-[功能特性](#功能特性) · [核心概念](#核心概念) · [安装与升级](#安装与升级) · [快速上手](#快速上手) · [日常使用](#日常使用)
-
-[兼容范围](#兼容范围) · [数据与备份](#数据与备份) · [常见问题与诊断](#常见问题与诊断) · [文档指南](#文档指南) · [开发与调试](#开发与调试) · [参与贡献](#参与贡献)
+中文 · [English](./README.en.md) · [更新日志](./CHANGELOG.md)
 
 </div>
 
----
+`dsh-liketavern` 将 SillyTavern（ST）的角色卡、提示词预设、世界书、正则、EJS 模板与前端交互卡生态引入 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）。它不另起独立的发信通道，而是直接运行在 `dsh` 的会话与 Agent 管线之上——由宿主负责模型连接、长上下文历史与工具调度，由插件负责提示词编排、沙箱渲染与事务级剧情状态管理。
 
-**dsh-liketavern** 是为 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（简称 dsh）打造的角色扮演插件。你可以直接导入 SillyTavern（简称 ST）规范的角色卡和提示词预设，在 dsh 原生环境中管理设定、推进剧情、分支出行和无损回滚。
+## 为什么选择 dsh-liketavern
 
-- **宿主负责**：模型接入、长上下文聊天历史、工具调度与 Agent 运行时。
-- **插件负责**：角色资产管理、ST 预设与提示词组装、剧情状态隔离（记忆/世界状态/变量）、交互卡与脚本沙箱。
-- **开箱即用**：内置 EJS 模板引擎、酒馆助手接口子集、原生 MVU 支持；界面默认跟随宿主语言。
+### 1. 剧情状态与分支真正隔离，重试绝不“串味”
+传统角色扮演工具在重新生成或回退历史消息时，长期记忆、世界状态与卡片变量往往停留在最新轮次，导致旧分支带入“未来记忆”。
 
-> 💡 **第一次使用？** 建议先阅读[环境要求与安装](#安装与升级)并跟随[快速上手 5 步走](#快速上手)体验第一场对话；若需迁移现有 ST 资产，请先核对[核心概念](#核心概念)与[兼容范围](#兼容范围)。
+在 `dsh-liketavern` 中，**角色资产（角色卡 / 预设 / 人设）全局共享，而剧情状态（Story）严格按分支隔离**。每一轮楼层写入均先记录预写式日志（WAL）再落盘正文。无论是重新生成、编辑 AI 回复，还是通过宿主消息栏「在新对话中分支」，系统都会先在独立草稿中回滚未继承楼层的派生记忆、世界状态与变量，再原子发布并绑定子会话——原时间线与新分支互不干扰。
 
----
+### 2. 不打断叙事的 Agent 长期记忆与动态世界观
+插件围绕长线剧情构建了三层上下文机制：
+- **三级世界书（Lorebooks）**：支持全局、角色专属与当前剧情私有世界书，兼容常驻条目、递归扫描、次要关键词、反向排除与逻辑与/或触发。
+- **世界变化层（World State Delta）**：记录设定在故事推进中的新增、变更与失效，使静态设定随剧情自然演进。
+- **BM25 长期记忆**：融合词频相关性与时间衰减权重。日常对话中模型直接流式回复，**仅在缺少设定或需要固化已确定事实时**，才通过宿主原生 PTC（程序化工具调用）按需调用 `tavern_*` 工具读写记忆与设定；超出容量后在会话空闲期自动生成可溯源的归档摘要。
 
-## 功能特性
+### 3. 开箱即用的 ST 生态兼容：EJS、酒馆助手与原生 MVU
+- **角色卡与预设**：支持 V1 / V2 / V3 规范的 PNG 与 JSON 角色卡导入导出、多开场白切换、内嵌世界书与 ST 提示词预设。DeepSeek 官方 API Key 通道支持按冻结的预设布局直接投影消息结构。
+- **EJS 模板与持久检查点**：内置兼容 ST 语法的 EJS 提示词模板引擎，支持条件、循环、异步宏、世界书装饰器及 `lodash`、`zod`、`faker`、`jsonrepair` 等工具库，并支持跨步骤的 QuickJS 虚拟机快照恢复。
+- **酒馆助手子集与原生 MVU**：支持全局 / 预设 / 角色三级脚本库、剧情变量持久化、同页事件通信与局部消息刷新；内置原生 MVU（Model-View-Update）状态更新执行器，兼容数据流驱动的复杂状态栏角色卡。
 
-| 模块 | 特性与能力支持 |
-| :--- | :--- |
-| **🎭 角色卡与人设** | • 导入/导出 V1、V2、V3 规范的 PNG 与 JSON 角色卡<br>• 支持多开场白切换、内嵌世界书、卡内正则与 HTML 交互卡面<br>• 可恢复的收纳箱与防误删引用保护；人设提供全局/会话级 `{{user}}` 身份定义 |
-| **📖 世界书与世界状态** | • 全局、角色专属、当前会话私有三级世界书体系<br>• 关键词触发（次要关键词/反向排除/逻辑与或）、常驻条目与递归扫描<br>• 剧情变化层（Delta Layer）自动记录设定在剧情中的新增、变更与失效 |
-| **🧠 智能长期记忆** | • 基于 BM25 检索与时间衰减权重，模型在对话中按需自主读写<br>• 容量超限时在后台空闲期自动摘要压缩，并完整保留可溯源的原始归档 |
-| **🌿 剧情分支与无损回滚** | • 重新生成、修改 AI 发言或回退时自动创建独立子会话<br>• 自动撤销未继承楼层的记忆、变量等剧情状态，原始会话与历史分支完好无损 |
-| **⚡ EJS 模板引擎** | • 内置沙箱执行条件、循环、异步宏与装饰器<br>• 支持剧情/消息级变量、JSON/YAML 初值、JSON Patch、Zod、Lodash、Faker |
-| **📦 交互卡与脚本沙箱** | • 严格隔离的 iframe 卡面沙箱，支持三类脚本库（全局/预设/角色）<br>• 剧情变量自动持久化，支持同页剧情事件、世界书读写与消息局部刷新 |
-| **🔄 原生 MVU 支持** | • 可选自动初始化与回复收口后的变量更新执行器<br>• 更新任务失败保留重试队列；兼容角色展示正则声明的状态栏占位符 |
-| **🛠️ 模型工具与辅助生成** | • 7 个专用 PTC 工具（记忆检索/写入/更新、世界书按条读取、世界状态更新、资产列表/读取）<br>• 支持 AI 代答（生成用户发言并一键复制）与沿上下文继续生成 |
-
-> 🧩 **智能工具调用**：角色扮演默认直接流畅回复；仅在缺失关键设定或需要固化重要剧情事实时，模型才会精准调用工具，兼顾沉浸感与长期一致性。
-
----
-
-## 核心概念
-
-在开始使用前，了解以下核心概念有助于更好地理解插件的运作机制：
-
-```mermaid
-flowchart LR
-    subgraph Shared["共享资产 (复用)"]
-        Card["角色卡 (Character)"]
-        Preset["提示词预设 (Preset)"]
-        Persona["用户人设 (Persona)"]
-    end
-
-    subgraph Runtime["运行时 (隔离)"]
-        Session["宿主会话 (Session)"] --> Story["独立剧情状态 (Story)"]
-        Story --> Mem["长期记忆 / 变化层"]
-        Story --> Vars["卡片变量 / 局部世界书"]
-        Story --> WAL["事务回滚日志 (WAL)"]
-    end
-
-    Shared -.->|"绑定到"| Runtime
-```
-
-| 概念 | 说明与边界 |
-| :--- | :--- |
-| **Tavern 模式** | dsh 的专用会话预设，用于激活本插件的角色扮演 Agent 运行时。新建会话时选择即可开启。 |
-| **提示词预设** | 在「Tavern → 预设」中管理的 ST 提示词模板与结构配置。可绑定到会话，也可直接使用内置默认预设。 |
-| **角色卡 vs 人设** | **角色卡**定义 AI 扮演的角色身份与背景；**人设**定义你在故事中的身份，并为提示词提供 `{{user}}` 的姓名与设定。 |
-| **世界书 / 记忆 / 世界状态** | **世界书**提供静态世界观；**记忆**记录发生的剧情事实；**世界状态**动态维护世界设定在故事中的新增与失效。 |
-| **会话 vs 剧情分支** | **会话**记录线性的聊天消息；**剧情**保存插件内部的记忆、变量与状态。重新生成等操作会派生出子会话与独立子剧情。 |
-| **原生 MVU** | Model-View-Update 变量更新框架。插件内置了安全的轻量执行器，支持依赖数据流驱动的复杂角色卡。 |
+### 4. 默认零信任的第三方代码隔离
+角色卡附带的正则、模板与 HTML 脚本均视为不受信任输入：
+- 提示词组装、世界书评估、正则替换、Markdown 渲染与 EJS 模板统一在可超时终止的 Worker 线程及 QuickJS/WASM 沙箱内执行，不暴露 Node、DOM、网络或模块加载器。
+- HTML 交互卡面运行在无同源权限的 `sandbox="allow-scripts"` iframe 中，仅通过受控桥接协议执行枚举业务操作与高度同步，杜绝第三方卡面脚本逃逸至宿主主窗口。
 
 ---
 
 ## 安装与升级
 
-### 环境要求
+> **前置要求**：Node.js `>= 24.0.0`、DeepSeek Harness `0.2.0-rc.2`、`pnpm`，且已在 `dsh` 中配置好可用的模型。首次使用请先参阅 [DeepSeek Harness 官方文档](https://deepseek-harness.github.io/deepseek-harness/)。仓库已内置预编译的 `lib/` 产物，安装时无需本地构建。
 
-| 依赖项 | 最低要求 | 说明 |
-| :--- | :--- | :--- |
-| **Node.js** | `≥ 24.0.0` | 开发与 CI 环境均基于 Node 24 |
-| **dsh CLI / 宿主** | **`0.2.0-rc.2`** | 插件的宿主 Peer 依赖锁定此版本 |
-| **pnpm** | 任意主流版本 | 用于 `dsh plugin` 自动拉取与管理依赖 |
-| **模型配置** | 已在 dsh 中完成配置 | 确保在宿主中可以正常发起对话 |
+### 桌面端安装
 
-> 📌 首次接触 dsh？建议先查阅 [DeepSeek Harness 官方文档](https://deepseek-harness.github.io/deepseek-harness/)，运行一次 `dsh web` 完成基础配置。
-
----
-
-### 桌面端：从 GitHub 安装与升级
-
-打开 **「插件 → 添加插件」**，在输入框填写以下 GitHub 地址并安装：
+打开 `dsh` 桌面端 **「插件 → 添加插件」**，填入以下仓库标签地址并安装，完成后重启桌面端：
 
 ```text
 https://github.com/Amakurai/dsh-liketavern.git#v0.5.3
 ```
 
-升级时先在「插件」页面卸载旧 Tavern，再用新版本标签重新添加，最后完全退出并重启桌面端。「设置 → Tavern → 关于」中的「检查更新」只查询正式发布与宿主兼容性；安装由桌面端插件管理页面完成。仓库已包含预编译的 `lib/`，无需本地构建。
-
-### Web / CLI：通过 dsh plugin 安装
-
-在终端中执行以下命令，固定安装到最新稳定标签：
+### Web / CLI 在线安装
 
 ```bash
-# 1. 添加插件到 web profile
+# 安装插件到 web profile
 dsh plugin --profile web add github:Amakurai/dsh-liketavern#v0.5.3
 
-# 2. 检查安装状态
+# 确认安装状态
 dsh plugin --profile web list --depth 0
 
-# 3. 启动 dsh web（若已在运行，请先停止再启动）
+# 启动（或重启）dsh web
 dsh web
 ```
 
-*本仓库已包含预编译的 `lib/` 产物，无需本地配置 TypeScript 构建环境。*
+### Release 离线包安装
 
----
-
-### 方式二：通过 Release 安装包（离线环境）
-
-1. 从 [v0.5.3 Release](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.5.3) 下载 `dsh-liketavern-0.5.3.tgz`（发布页附带 `SHA256SUMS.txt` 校验和）。
-2. 在压缩包所在目录执行：
+从 [v0.5.3 Release](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.5.3) 下载 `dsh-liketavern-0.5.3.tgz`（可配合同页的 `SHA256SUMS.txt` 校验完整性），在下载目录执行：
 
 ```bash
 dsh plugin --profile web add ./dsh-liketavern-0.5.3.tgz
 dsh web
 ```
 
----
+### 版本检查与升级
 
-### 检查与升级
-
-- **图形界面检查**：在 dsh 内打开 **「设置 → Tavern → 关于」**，可查看当前版本并一键检测 GitHub 最新发布。
-- **桌面端升级**：核对 [更新日志](./CHANGELOG.md) 中的兼容说明，备份数据后卸载旧插件，再通过「添加插件」填写新版 GitHub 标签地址，安装后完整重启桌面端。
-- **Web / CLI 升级**：在终端运行新版本的 `dsh plugin add` 命令并重启 `dsh web`。
-- 升级过程会自动沿用现有数据目录（详见[数据与备份](#数据与备份)）。
+- **检查更新**：在 `dsh` 内进入 **「设置 → Tavern → 关于」**，可查看当前版本并检测 GitHub 最新正式发布与宿主版本兼容性。
+- **桌面端升级**：先查阅 [CHANGELOG.md](./CHANGELOG.md) 并备份数据；在桌面端「插件」管理页卸载旧版本，再用新版标签地址重新添加，安装后**完全退出并重启桌面端**（「关于」页仅提供版本查询，不直接执行覆盖安装）。
+- **Web / CLI 升级**：使用新版标签重新执行 `dsh plugin --profile web add` 并重启 `dsh web`。升级会自动沿用既有数据目录。
 
 ---
 
 ## 快速上手
 
-只需要 5 步，即可体验完整的 Tavern 角色扮演：
-
-```text
-  1. 导入角色卡    ➔    2. 新建会话    ➔    3. 配置设定    ➔    4. 开始对话    ➔    5. 探索分支
-(PNG / JSON 导入)   (选择 Tavern 模式)   (绑定预设/世界书)     (切换开场白)     (重试/回退/代答)
-```
-
-1. **准备角色卡**
-   进入「设置 → Tavern → 角色」，点击「导入角色」选择 PNG 或 JSON 文件。系统会展示**静态兼容性检查报告**，确认后即可保存。
-2. **新建剧情会话**
-   点击新建会话，选择 **「Tavern 模式」**，在弹出的列表中点选刚刚导入的角色卡。
-3. **确认会话设定**
-   点击会话顶部的**角色入口**，可为当前会话单独微调提示词预设、人设或附加世界书（初次体验保持默认即可）。
-4. **选择开场白并开局**
-   若角色卡包含多条开场白，使用左右箭头 `‹ ›` 挑选心仪的开局，点击「开始对话」并发送第一句台词。
-5. **自由调整与分支探索**
-   对 AI 的回答不满意？使用消息右侧的操作栏：
-   - 🔄 **重新生成 / ✏️ 编辑**：自动创建独立时间线分支，随时通过 `‹ n/m ›` 在多条分支间无缝切换。
-   - ⏩ **继续生成**：让 AI 顺着当前文本继续扩写。
-   - 🎭 **AI 代答**：让 AI 替你构思下一句回应（自动复制到剪贴板）。
-
-> 🔍 **调试提示词**：第一轮对话完成后，可点击会话顶部角色入口的 **「提示词预览 → 最近请求」**，查看实际发送给模型的完整请求结构与上下文。
+1. **导入角色卡**  
+   打开 **「设置 → Tavern → 角色」**，点击「导入角色」选择 PNG 或 JSON 角色卡。导入前会先展示静态兼容性检查报告，若卡片内嵌世界书可一并选择是否导入。
+2. **创建 Tavern 会话**  
+   新建会话时将模式切换为 **「Tavern 模式」**，在欢迎页点选要扮演的角色卡（新会话不会强制自动绑定默认卡）。
+3. **选择开场白并开局**  
+   若角色卡带有多条开场白，通过 `‹ ›` 切换心仪的开局场景，点击「开始对话」即可发送第一条消息。
+4. **在对话中分支、续写与代答**  
+   - **重新生成 / 编辑回复**：在任意 AI 消息操作栏点击重试或编辑，插件会自动切入新分支并回滚后续楼层状态，随时可通过消息下方的 `‹ n/m ›` 在兄弟分支间切换。
+   - **继续生成**：顺着当前回复末尾继续扩写。
+   - **AI 代答**：让模型以 `{{user}}` 视角草拟下一句台词并自动复制到剪贴板。
 
 ---
 
-## 日常使用
+## 日常使用指南
 
-### 配置入口与生效范围
+### 配置入口与作用域
 
-| 操作目标 | 推荐入口 | 生效范围与机制 |
+```mermaid
+flowchart LR
+    subgraph Assets["全局共享资产 ($DSH_HOME/dsh-tavern/)"]
+        Card["角色卡 (Characters)"]
+        Preset["提示词预设 (Presets)"]
+        Persona["用户人设 (Personas)"]
+        GlobalWI["全局/角色世界书"]
+    end
+
+    subgraph StoryScope["单条剧情隔离状态 (stories/<storyId>/)"]
+        Session["宿主会话消息流"] --> Story["剧情工作区 (Story)"]
+        Story --> Memory["BM25 长期记忆 & 归档"]
+        Story --> Delta["世界状态变化层 & 剧情世界书"]
+        Story --> Vars["EJS / 卡面变量 & 检查点"]
+        Story --> WAL["楼层事务日志 (WAL)"]
+    end
+
+    Assets -.->|"会话绑定"| StoryScope
+```
+
+| 我想做什么 | 入口位置 | 生效范围 |
 | :--- | :--- | :--- |
-| **全局资产管理**（角色/预设/世界书/人设） | `设置 → Tavern → 各管理页` | **全局共享资产**：修改后在所有引用该资产的新老会话后续轮次生效 |
-| **新会话默认模板** | `设置 → Tavern → 设置 → 默认配置` | **全局默认值**：仅在新会话初次点选角色时套用，已有会话不受影响 |
-| **当前会话专属设定**（预设/人设/作者注释） | `会话顶部角色卡入口` | **当前会话**：修改仅对本条剧情后续轮次生效 |
-| **当前剧情独占世界书** | `会话顶部角色卡入口 → 编辑本会话世界书` | **当前剧情私有**：随分支独立复制与回滚，不污染全局世界书 |
-| **查看与修订剧情记忆** | `会话顶部入口 → 记忆` 或 `Tavern → 记忆` | **所选剧情**：选择具体剧情修改即时生效；选择「初始状态」仅影响未来新剧情 |
-| **正则表达式与脚本配置** | `Tavern → 正则` / `Tavern → 设置 → 脚本` | 按所选作用域（全局 / 预设 / 角色）生效 |
-| **提示词与世界书命中检查** | `会话顶部角色卡入口 → 提示词预览` | **只读查看**：检查当前轮次的实际组装结果与命中条目 |
+| 管理角色卡、预设、世界书、用户人设 | `设置 → Tavern → 角色 / 预设 / 世界书 / 用户` | **全局共享**：修改后对所有绑定该资产的会话在下一轮生效 |
+| 设置新建会话时的默认预设与人设 | `设置 → Tavern → 设置 → 默认配置` | **新会话初值**：仅在新会话首次点选角色卡时套用，不影响已有会话 |
+| 调整当前对话的预设、人设或作者注释 | `会话顶部角色入口` | **当前会话**：仅对当前剧情的后续轮次生效 |
+| 编写当前剧情专属的临时设定 | `会话顶部角色入口 → 编辑本会话世界书` | **当前剧情私有**：随子分支复制与回滚，不污染全局世界书 |
+| 查看或手动修订长期记忆 | `会话顶部角色入口 → 记忆` 或 `设置 → Tavern → 记忆` | **所选剧情**：选择具体剧情时立即生效；选「初始状态」仅作用于未来新开剧情 |
+| 管理正则规则与交互卡脚本库 | `设置 → Tavern → 正则`<br>`设置 → Tavern → 设置 → 脚本` | 按所选作用域（全局 / 预设 / 角色）生效 |
+| 固定插件界面语言（中文 / English） | `设置 → Tavern → 设置 → 界面 → 界面语言` | 默认跟随 `dsh` 宿主语言，手动指定后立即生效 |
+| 核对实际发送给模型的请求上下文 | `会话顶部角色入口 → 提示词预览 → 最近请求` | **只读诊断**：「最近请求」展示上一轮真实入模载荷；其余页签为静态 ST 模拟 |
 
-> 🌐 **多语言界面**：插件界面语言默认跟随 dsh 宿主；你也可以在「Tavern → 设置 → 界面 → 界面语言」中手动固定为中文或 English。
+### 提示词投影与采样说明
 
----
-
-### 剧情分支与回滚机制
-
-不同于传统单线对话，dsh-liketavern 具备**细粒度的状态快照与回滚隔离能力**：
-
-```text
-[主线剧情] ─── 第 1 轮 ─── 第 2 轮（获得钥匙） ─── 第 3 轮（开启大门）
-                                  │
-                                  └── [重新生成第 2 轮] ─── 分支 2（钥匙断裂，记忆自动回滚）
-```
-
-- **分支安全**：在第 2 轮重新生成时，插件会自动建立独立子会话，并撤销第 2 轮之后产生的所有派生记忆与世界状态。
-- **互不干扰**：主线依然保留「获得钥匙」的事实，分支 2 则拥有全新的剧情状态，两者独立演进。
-- **编辑 AI 回复**：同样会安全切入新分支，撤销该楼层后的派生事实，等待你继续交互或手动调整。
+- **轮次计划冻结**：每轮对话在首次完成提示词组装后会冻结角色、预设、人设、宏时钟、记忆检索结果与采样参数快照，同一轮工具调用后续步骤严格重放该快照；对资产的编辑在下一轮对话生效。
+- **通道布局映射**：
+  - **DeepSeek 官方 API Key 通道**：由插件持有的适配器装饰器按冻结的预设布局直接投影消息。若目标模型未声明支持历史中途更新 `system`，中途的 `system` 条目会自动合并至首条系统消息并附带兼容诊断说明。
+  - **DeepSeek 账号通道与其他模型通道**：沿用宿主 `tavern:standing`（常驻设定）与 `tavern:turn`（当轮上下文与 depth=0 尾注）两段式映射。
+- **采样参数透传**：透传 `temperature`、`maxTokens`、`stop` 以及模型公开支持的 `reasoningEffort`（思考档位）；`top_p` 与惩罚项仅作记录与兼容提示，当部署侧锁定关闭思考模式时插件不会强行开启。
 
 ---
 
-## 兼容范围
+## 数据存储与备份
 
-### 第三方卡片、模板与脚本
-
-- **酒馆助手（Tavern Helper）**：已支持变量存储、脚本库加载、世界书读写及主要消息操作接口。部分高级功能（如 `generateRaw`、跨页面事件广播）正在逐步适配中。详情请查阅 [酒馆助手兼容说明](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/TAVERN_HELPER.md)。
-- **EJS 提示词模板**：原生内置，兼容常见的 ST 模板表达式，无需额外安装扩展插件。详见 [提示词模板说明](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/PROMPT_TEMPLATES.md)。
-- **渲染安全与 Markdown**：全面采用 `markdown-it` 替代存在安全风险的历史解析器。HTML 交互卡面运行在严格的 `sandbox` iframe 中，阻止主页面 DOM 与敏感接口逃逸。
-- **原生 MVU 支持**：支持纯官方规范的 MVU 导入与原生执行；自定义框架保留原代码运行。
-
----
-
-### 提示词与采样机制
-
-| 项目 | 实际处理机制 |
-| :--- | :--- |
-| **采样参数** | 支持 `temperature`、`maxTokens`、`stop` 及模型公布的思考档位（`reasoningEffort`）。`top_p` 与各类惩罚项做记录与友好提示。 |
-| **预设位置投影** | DeepSeek API-key 官方通道按冻结布局投影预设；Messages 不支持的中途 system 位置合并到首条并显示兼容说明，相邻同角色消息可能合并。DeepSeek 账号通道与其他通道沿用 standing/turn 两段映射。 |
-| **动态宏与格式** | 完整支持 `wi_format`、`scenario_format`、`personality_format` 以及 `{{lastmessage}}`、`{{charPrompt}}` 等常用宏。 |
-| **PTC 工具调用** | 基于 dsh 原生程序化工具调用（PTC），支持单次多工具组合执行与并发查询。写入操作受当前剧情的楼层事务锁保护。 |
-
----
-
-## 数据与备份
-
-### 数据存储架构
-
-所有插件数据均存放在 `$DSH_HOME/dsh-tavern/`（默认路径为 `~/.dsh/dsh-tavern/`，Windows 下为 `%USERPROFILE%\.dsh\dsh-tavern\`）：
+所有业务数据均保存在本地 `$DSH_HOME/dsh-tavern/` 下（默认路径为 `~/.dsh/dsh-tavern/`，Windows 为 `%USERPROFILE%\.dsh\dsh-tavern\`），绝不混入源码或 npm 包：
 
 ```text
 $DSH_HOME/dsh-tavern/
-├── characters/         # 角色卡元数据与私有资产
+├── characters/         # 角色卡元数据、头像与角色私有资产
 ├── presets/            # 提示词预设
-├── lorebooks/          # 全局与角色世界书
+├── lorebooks/          # 全局与角色级世界书
 ├── personas/           # 用户人设
-├── stories/            # 独立剧情数据（记忆、变量、WAL 日志）
-└── editor-drafts/      # 未保存编辑草稿暂存
+├── stories/            # 按剧情隔离的状态工作区（记忆、变化层、变量、WAL 日志）
+└── editor-drafts/      # 编辑器未保存草稿自动暂存（单份上限 2 MiB）
 ```
 
-> 🛡️ **核心原则：角色资产共享，剧情状态隔离。** 每个故事和分支都拥有专属的状态存储与写前日志（WAL），多分支间绝不相互污染。
+### 命令行全量备份与恢复（推荐）
 
----
-
-### 备份方式对比
-
-| 备份类型 | 涵盖范围 | 适用场景与限制 |
-| :--- | :--- | :--- |
-| **📱 交互卡变量导出** | 当前剧情的持久化变量（上限 1 MiB） | 在「设置 → 卡片与数据」导出/导入，用于单卡状态存档与迁移 |
-| **📝 编辑器草稿暂存** | 角色、预设、世界书等未保存的编辑内容 | 浏览器异常关闭后重开编辑器自动提示恢复（单份上限 2 MiB） |
-| **💾 可校验全量目录备份** | 完整的插件数据、宿主会话与配置清单（带 SHA-256） | **推荐**。使用 CLI 工具创建，支持离线完整迁移与数据校验 |
-
----
-
-### 命令行备份与恢复
-
-在插件目录或安装环境中，提供了可靠的备份与恢复 CLI 工具：
+插件内置了带 SHA-256 校验清单的离线全量备份工具，可同时备份插件数据、宿主会话与配置：
 
 ```bash
-# 1. 创建完整备份（--offline 声明停止写入）
+# 1. 创建完整备份（请先停止正在运行的 dsh，并通过 --offline 声明无并发写入）
 node lib/backup.js create --home "C:/data/dsh-home" --backup "D:/backups/dsh-2026-09-19" --offline
 
-# 2. 校验备份文件完整性与结构合法性
+# 2. 校验备份包结构与文件 SHA-256 完整性
 node lib/backup.js verify --backup "D:/backups/dsh-2026-09-19"
 
-# 3. 恢复到指定的新目录
+# 3. 恢复至目标目录
 node lib/backup.js restore --backup "D:/backups/dsh-2026-09-19" --target "C:/data/dsh-restored" --offline
 ```
 
-*若全局安装了工具，可直接使用 `dsh-tavern-backup` 命令代替 `node lib/backup.js`。*
+> 此外，若只需单独存档某条剧情的交互卡变量（上限 1 MiB），可在 **「设置 → Tavern → 设置 → 卡片与数据」** 中直接导出或粘贴 JSON 备份恢复。
 
 ---
 
-## 常见问题与诊断
-
-### 常见问题排查
-
-<details>
-<summary><b>Q1: 安装后在新建会话中找不到「Tavern 模式」或设置入口？</b></summary>
-
-1. 执行 `dsh --version` 确认宿主版本是否为 `0.2.0-rc.2`。
-2. 执行 `dsh plugin --profile web list --depth 0` 确认插件已正确安装到 `web` profile。
-3. 重启 `dsh web`，并检查启动终端中是否有插件加载异常报错。
-</details>
-
-<details>
-<summary><b>Q2: 修改了默认预设，但当前正在进行的对话没有变化？</b></summary>
-
-「默认配置」仅在**新会话初次选择角色**时自动套用。正在进行的会话请直接点击**会话顶部角色入口**进行修改并保存。
-</details>
-
-<details>
-<summary><b>Q3: 卡面渲染正常，但交互按钮、脚本或 MVU 不响应？</b></summary>
-
-1. 确认卡片管理中已开启「允许交互式卡面」。
-2. 进入「设置 → Tavern → 脚本」，检查对应脚本及所属文件夹是否处于**启用**状态。
-3. 卡片（或全局、预设脚本库）启用了官方 MVU 入口且从未手动关闭时，原生 MVU 会在会话空闲时自动开启；手动关闭过的会话可在「设置 → Tavern → 脚本」点「开启原生 MVU」，或在会话角色配置中勾选「启用原生 MVU 自动更新」。MVU 在页面内执行，需保持页面打开。
-</details>
-
-<details>
-<summary><b>Q4: 记忆页面为空，或者修改记忆后当前剧情没有反应？</b></summary>
-
-1. 确认记忆管理页顶部选择的角色和剧情是否匹配。
-2. 若选择了「初始状态」，修改仅对未来新建的剧情生效。
-3. 长期记忆由模型根据对话自主提取写入或手动添加，不会机械复制全部聊天记录。
-</details>
-
-<details>
-<summary><b>Q5: 提示词预览中的内容与模型实际表现似乎不一致？</b></summary>
-
-请在提示词预览中查看 **「最近请求」** 标签页，这是上一轮实际捕获的入模数据；其他标签页为静态 ST 模拟运算，仅供参考。
-</details>
-
----
+## 故障排查与诊断
 
 ### 一键只读诊断
 
-当遇到难以排查的异常时，可在终端运行只读诊断工具，快速获取环境状态与问题码（**绝不输出任何隐私数据、路径或正文**）：
+遇到环境异常时，可运行内置的只读诊断工具检查宿主版本、目录健康度与问题码（**严格脱敏，不输出任何对话正文、本地私有路径或密钥**）：
 
 ```bash
-# 线上安装环境运行
 dsh plugin --profile web exec dsh-tavern-doctor
-
-# 输出结构化 JSON
+# 或输出结构化 JSON：
 dsh plugin --profile web exec dsh-tavern-doctor --json
 ```
 
----
-
-## 文档指南
-
-更多进阶指南与底层架构设计文档（推荐卡片作者与开发者查阅）：
-
-| 文档分类 | 内容说明 | 链接 |
-| :--- | :--- | :--- |
-| **版本记录** | 版本更新历程与宿主要求 | [CHANGELOG.md](./CHANGELOG.md) |
-| **接口兼容** | 卡面、脚本、变量、世界书与 MVU API 详述 | [酒馆助手兼容说明](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/TAVERN_HELPER.md) |
-| **模板进阶** | EJS 模板语法、宏变量与世界书装饰器 | [提示词模板说明](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/PROMPT_TEMPLATES.md) |
-| **适配进度** | 接口覆盖率清单与验收标准 | [酒馆助手适配进度](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/TAVERN_HELPER_INTEGRATION.md) · [ST 模板审计](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/ST_COMPATIBILITY_AUDIT.md) |
-| **系统架构** | 剧情隔离、事务 WAL、提示词投影与记忆管线 | [架构设计说明](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/ARCHITECTURE.md) |
-| **宿主兼容** | dsh 版本行为矩阵与 UI 冒烟测试清单 | [宿主兼容记录](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/HOST_COMPATIBILITY.md) |
-| **安全审计** | 依赖漏洞管理、沙箱边界与隔离机制 | [依赖安全记录](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/DEPENDENCY_SECURITY.md) |
-| **发布与规范** | 代码规范、测试契约与发布审核流程 | [开发约定](https://github.com/Amakurai/dsh-liketavern/blob/main/AGENTS.md) · [发布包审核指南](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/RELEASING.md) |
-
----
-
-## 开发与调试
-
-### 本地构建与验证
-
-项目采用 TypeScript ESM（NodeNext）、React 18 与 Vitest：
-
-```bash
-# 1. 安装依赖
-npm ci
-
-# 2. 编译产物
-npm run build
-
-# 3. 运行完整测试套件 (150+ 测试套件)
-npm test
-
-# 4. 发布包完整性预检
-npm run package:check
-```
-
-| 脚本命令 | 说明 |
-| :--- | :--- |
-| `npm run dev` | 使用本地 `cordis.patch.yml` 启动 dsh web 开发实例 |
-| `npm run doctor` | 对当前 `DSH_HOME` 执行只读诊断 |
-| `npm run doctor:check` | 验证诊断 CLI 的安装链接与 JSON 输出格式 |
-| `npm run package:check` | 严格检查发布白名单与文档相对链接安全性 |
-
----
-
-### 本地开发环境挂载
+### 常见问题
 
 <details>
-<summary><b>展开 Windows / macOS / Linux 本地挂载步骤</b></summary>
+<summary><b>安装后新建会话看不到「Tavern 模式」或设置页没有 Tavern 入口？</b></summary>
 
-先运行一次 `dsh web` 初始化 profile 目录，然后将源码仓库目录链接至 `$DSH_HOME/profiles/node_modules/dsh-liketavern`：
+1. 运行 `dsh --version`，确认宿主版本严格为 `0.2.0-rc.2`。
+2. 运行 `dsh plugin --profile web list --depth 0`，确认插件已安装在 `web` profile 下。
+3. 完全重启 `dsh web` 或桌面端，并检查启动终端是否有加载报错。
+</details>
+
+<details>
+<summary><b>角色卡画面正常显示，但点击按钮、扩展脚本或 MVU 状态栏不更新？</b></summary>
+
+1. 在角色管理或卡片设置中确认已开启 **「允许交互式卡面」**。
+2. 进入 **「设置 → Tavern → 设置 → 脚本」**，确认目标脚本及其上级文件夹均已处于启用状态。
+3. 若卡片（或全局 / 预设脚本库）包含官方 MVU 入口且未被手动关闭，原生 MVU 会在会话空闲时自动启用；若此前手动关闭过，可在脚本设置页点击 **「开启原生 MVU」**，或在会话顶部角色配置中勾选 **「启用原生 MVU 自动更新」**。MVU 在前端页面内执行，运行期间需保持当前会话页打开。
+</details>
+
+<details>
+<summary><b>为什么修改了「默认配置」里的预设，或者编辑了「初始状态」记忆，当前对话没有变化？</b></summary>
+
+- 「默认配置」仅在新会话**首次点选角色卡**时写入会话绑定；已有会话请直接通过**会话顶部的角色入口**切换预设或人设。
+- 记忆管理页顶部的「初始状态」代表该角色卡的新开局模板，修改后仅对未来新创建的剧情生效；要调整正在进行的对话，请在顶部下拉框中选中对应的具体剧情。
+</details>
+
+---
+
+## 深入阅读与架构文档
+
+| 主题 | 说明 | 文档链接 |
+| :--- | :--- | :--- |
+| **系统架构** | 剧情隔离模型、WAL 事务与恢复协议、提示词投影管线、BM25 记忆检索与归档 | [docs/ARCHITECTURE.md](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/ARCHITECTURE.md) |
+| **酒馆助手与桥接** | 卡面沙箱桥接协议、脚本库作用域、变量与世界书 API、原生 MVU 生命周期 | [docs/TAVERN_HELPER.md](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/TAVERN_HELPER.md) · [适配矩阵](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/TAVERN_HELPER_INTEGRATION.md) |
+| **EJS 提示词模板** | 模板语法、内置宏与辅助函数、世界书装饰器、QuickJS 检查点机制 | [docs/PROMPT_TEMPLATES.md](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/PROMPT_TEMPLATES.md) · [ST 兼容审计](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/ST_COMPATIBILITY_AUDIT.md) |
+| **宿主兼容与安全** | `dsh` 版本升级核对清单、依赖漏洞审计、沙箱边界与发布包白名单规范 | [docs/HOST_COMPATIBILITY.md](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/HOST_COMPATIBILITY.md) · [docs/DEPENDENCY_SECURITY.md](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/DEPENDENCY_SECURITY.md) · [docs/RELEASING.md](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/RELEASING.md) |
+| **维护者约定** | 必须保持的九条架构边界、三面契约（host / agent / client）与测试准则 | [AGENTS.md](https://github.com/Amakurai/dsh-liketavern/blob/main/AGENTS.md) |
+
+---
+
+## 本地开发与贡献
+
+项目采用 TypeScript ESM（`NodeNext`）、React 18 与 Vitest，代码按四层划分：
+- `src/core/`：纯函数层（提示词组装、世界书触发、正则启发式检查、BM25 检索与格式解析）
+- `src/state/`：存储层（角色资产、剧情隔离工作区、记忆索引、模板检查点与 WAL 事务日志）
+- `src/node/`：宿主编排层（插件生命周期、typert 服务、预设投影适配器、QuickJS Worker 调度与后台维护）
+- `src/client/`：前端界面层（设置面板、会话顶部控制条、消息操作栏、沙箱 iframe 卡面与脚本运行时）
+
+```bash
+npm ci                  # 安装锁定依赖
+npm run build           # 构建 vendor 运行时、TypeScript 产物与客户端 bundle（lib/ 入库）
+npm test                # 运行完整 Vitest 测试套件
+npm run package:check   # 校验 npm 发布文件白名单与文档相对链接
+```
+
+<details>
+<summary><b>在本地 dsh 环境中挂载源码调试</b></summary>
+
+先运行一次 `dsh web` 初始化 `~/.dsh` 目录，然后将仓库根目录软链接（或 Windows Junction）至 `$DSH_HOME/profiles/node_modules/dsh-liketavern`：
 
 ```powershell
 # Windows (PowerShell，在仓库根目录执行)
@@ -397,47 +258,11 @@ mkdir -p ~/.dsh/profiles/node_modules
 ln -s "$(pwd)" ~/.dsh/profiles/node_modules/dsh-liketavern
 ```
 
-挂载完成后运行 `npm run dev` 即可自动附加本地源码。每次修改 `src/` 后执行 `npm run build` 并重启开发实例即可查看效果。
-
+挂载后执行 `npm run dev`（即 `dsh web --patch ./cordis.patch.yml`）即可加载本地源码。修改 `src/` 后请运行 `npm run build` 并重启开发实例。
 </details>
 
----
-
-### 目录结构概览
-
-```text
-src/
-├── core/     # 纯函数层：提示词组装、世界书逻辑、正则引擎、BM25 检索与兼容解析
-├── state/    # 文件存储层：角色资产、剧情隔离工作区、记忆持久化与 WAL 事务日志
-├── node/     # 宿主编排层：生命周期配置、服务注册、请求投影管线与后台维护
-├── client/   # 界面层：React 管理页面、会话操作栏、沙箱卡面与脚本宿主
-├── index.ts  # 插件主入口 (Host Plugin Entry)
-├── agent.ts  # Agent 运行时与工具装配入口
-└── remote.ts # 前后端强类型 RPC 契约
-```
-
----
-
-## 参与贡献
-
-### 问题反馈
-
-若遇到问题，欢迎前往 [GitHub Issues](https://github.com/Amakurai/dsh-liketavern/issues) 提交反馈。为便于快速定位，请在描述中附带：
-
-1. **运行环境**：插件版本、dsh 版本、Node.js 版本、操作系统与安装方式。
-2. **复现步骤**：涉及的页面、操作顺序、预期表现与实际异常现象（可附带只读诊断输出）。
-3. **最小复现样本**：脱敏后的角色卡或手写测试卡（若涉及第三方卡片特殊脚本）。
-4. *提示：截图与日志请务必剔除 API Key、私人对话与个人敏感信息。*
-
-### 代码与文档贡献
-
-- 欢迎提交第三方卡片接口适配、Bug 修复、复现测试用例与文档纠错（如失效链接/勘误）PR。
-- 涉及新特性或底层架构调整，请先在 Issue 中讨论设计方案与使用场景。
-- 开始开发前请查阅 [开发约定](https://github.com/Amakurai/dsh-liketavern/blob/main/AGENTS.md)。
-- 提交 PR 前请确保 `npm test` 与 `npm run package:check` 全项通过，并保持中英文文档同步。
-
----
+欢迎通过 [GitHub Issues](https://github.com/Amakurai/dsh-liketavern/issues) 反馈问题（请附上环境版本、复现步骤与脱敏样本，切勿包含 API Key 或私人对话），或在阅读 [AGENTS.md](https://github.com/Amakurai/dsh-liketavern/blob/main/AGENTS.md) 后提交 PR。
 
 ## 开源协议
 
-本项目采用 [MIT License](./LICENSE) 开源。
+[MIT License](./LICENSE)

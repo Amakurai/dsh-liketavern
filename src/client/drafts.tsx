@@ -14,7 +14,7 @@ export function useDraftGuard(dirty: boolean, busy = false, clearChildren?: () =
   const id = useId()
   const discard = usePersistentDraftStatus(id, dirty, busy)
   // 确认放弃和保存后立即关闭都可同步清理；不能依赖卸载前再提交一次 dirty=false。
-  const clearDraft = useCallback(() => { discard?.(); clearChildren?.() }, [discard, clearChildren])
+  const clearDraft = useCallback(() => { clearChildren?.(); discard?.() }, [discard, clearChildren])
   const t = useT()
   const [pending, setPending] = useState<(() => void) | null>(null)
   useEffect(() => {

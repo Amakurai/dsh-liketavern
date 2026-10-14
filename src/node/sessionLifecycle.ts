@@ -186,7 +186,7 @@ async function finishTurn(state:TavernState,sessionId:string,session?:Pick<Sessi
             closeTemplateGenerationState(stored,completed?'completed':'terminated')
             await saveTemplateState(ws.fs.withFloor(entry.floor),stored)
           }
-        } catch (error) { templateError = error }
+        } catch (error) { templateError = new TemplateOutputCommitError(error) }
       }
       // MVU 登记失败时必须保留未提交楼层，后台可从正常 stop 原文重建任务；提交会把故障伪装成成功并放行下一轮。
       if(templateError instanceof TemplateOutputCommitError) throw templateError

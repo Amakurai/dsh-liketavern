@@ -440,7 +440,7 @@ async function forkAt(
     await options?.prepareEdits?.(fs,childId)
     await options?.verifySource?.()
   },options?.beforePublish)
-  const throughTurn = inheritedThroughTurn(seed)
+  const throughTurn = options?.rollbackFromTurn === 0 ? null : inheritedThroughTurn(seed)
   const walLineage = childWalLineage(binding, source.id, throughTurn)
   let created: { dispose(): Promise<void> } | undefined
   pluginForkIds.add(childId)

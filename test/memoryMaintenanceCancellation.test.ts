@@ -89,3 +89,51 @@ it.each(['stream', 'workspace-lock'] as const)('用户取消维护时迟到 stop
   expect(await ws.fs.list('memory/archive')).toHaveLength(2)
   expect(state.pendingMemoryCompress.has(binding.storyId!)).toBe(false)
 })
+
+it('别名扩充等待剧情锁期间被取消时不写入 aliases.json，下一轮仍能补齐别名', async () => {
+  root = await mkdtemp(join(tmpdir(), 'memory-alias-cancel-'))
+  const state = new TavernState({ root, characters: join(root, 'characters'), lorebooks: join(root, 'library/lorebooks'),
+    presets: join(root, 'library/presets'), personas: join(root, 'personas'), regexDir: join(root, 'regex'), sessions: join(root, 'sessions') },
+  () => resolveConfig({ memory: { maxEntries: 10, aliasExpansion: true } }))
+  await state.init()
+  const { cardId } = await state.createCharacter('取消别名工厂角色')
+  await state.saveBinding({ sessionId: 'cancel-alias', cardId, presetId: null, personaId: null, lorebookIds: [],
+    characterLorebookId: null, interactiveCards: false, greetingIndex: 0, createdAt: new Date(0).toISOString() })
+  const binding = (await state.loadBinding('cancel-alias'))!, ws = await state.storyWorkspace(cardId, binding.storyId)
+  await ws.memory.write({ body: '止痛剂少了两箱' })
+  ctx = new Context()
+  new SessionStore(ctx); new AgentRegistry(ctx); new SessionProjectionRegistry(ctx); new SystemPrompt(ctx, {})
+  const loop = new AgentLoop(ctx, AgentLoop.Config({ agents: [] }))
+  agent = await loop.create(SessionId('cancel-alias'), { provider: 'factory', model: 'factory' })
+  const entered = Promise.withResolvers<Readonly<GenerateOptions>>(), release = Promise.withResolvers<void>()
+  let calls = 0
+  const llm = { async *stream(options: GenerateOptions) {
+    calls++; entered.resolve(options)
+    await release.promise
+    yield { type: 'text-delta' as const, text: '1: 药品、失窃、偷药' }
+    yield { type: 'finish' as const, reason: { kind: 'stop' as const } }
+  } } as unknown as LlmRuntime
+  registerMemoryMaintenance(ctx, state, llm)
+  agent.session.append('turn/start', { turn: 1 }); agent.session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
+  ctx.emit('agent/status', { agent, status: 'idle' })
+  const options = await entered.promise
+  const held = Promise.withResolvers<void>(), unlock = Promise.withResolvers<void>(), queued = Promise.withResolvers<void>()
+  const holder = withWorkspaceLock(ws.fs.root, async () => { held.resolve(); await unlock.promise })
+  await held.promise
+  lockProbe.root = ws.fs.root; lockProbe.queued = queued.resolve
+  release.resolve()
+  await queued.promise
+  agent.cancel({ kind: 'user' })
+  unlock.resolve(); await holder
+  lockProbe.root = ''; lockProbe.queued = null
+  await state.waitForSessionTasks(agent.id); await agent.whenIdle()
+  expect(options.signal?.aborted).toBe(true)
+  expect(await ws.fs.readText('memory/aliases.json')).toBeNull()
+  expect(await ws.memory.aliasCandidates(1)).toHaveLength(1)
+  agent.session.append('turn/start', { turn: 2 }); agent.session.append('turn/end', { turn: 2, reason: { kind: 'completed' } })
+  ctx.emit('agent/status', { agent, status: 'idle' })
+  await state.waitForSessionTasks(agent.id); await agent.whenIdle()
+  expect(calls).toBe(2)
+  expect(await ws.fs.readText('memory/aliases.json')).toContain('偷药')
+  expect(await ws.memory.aliasCandidates(1)).toHaveLength(0)
+})

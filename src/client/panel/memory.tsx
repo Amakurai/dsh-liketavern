@@ -50,6 +50,7 @@ function MemoryEditor(props: { remote: TavernRemote; cardId: string; storyId?: s
       else {
         setTags(splitList(tags).join(', '))
         setKeys(splitList(keys).join(', '))
+        guard.clearDraft()
         props.onDone()
       }
     }) } finally { saving.current = false }

@@ -14,7 +14,7 @@ interface DraftRegistry {
   field(key: string, token: object, value: unknown): void
   remove(key: string, token: object): void
   report(id: string, status: Status | null): void
-  discard(): void
+  discard(id?: string): void
 }
 const PersistenceContext = createContext<DraftRegistry | null>(null)
 const queues = new Map<string, Promise<unknown>>()
@@ -140,13 +140,33 @@ function DraftSession(props: { remote: TavernRemote; scope: string; owner: strin
         capture()
         schedule()
       },
-      remove(key, token) { if (fields.get(key)?.token === token) fields.delete(key); schedule() },
-      report(id, status) {
-        if (status) { statuses.set(id, status); capture() }
-        else statuses.delete(id)
+      remove(key, token) {
+        if (fields.get(key)?.token === token) {
+          fields.delete(key)
+          queueMicrotask(() => { if (mounted) capture() })
+        }
         schedule()
       },
-      discard() {
+      report(id, status) {
+        if (status) { statuses.set(id, status); capture() }
+        else {
+          statuses.delete(id)
+          queueMicrotask(() => { if (mounted) capture() })
+        }
+        schedule()
+      },
+      discard(id?: string) {
+        if (id !== undefined) {
+          const current = statuses.get(id)
+          if (current) statuses.set(id, { ...current, dirty: false })
+        } else {
+          for (const [key, current] of statuses) if (current.dirty) statuses.set(key, { ...current, dirty: false })
+        }
+        if ([...statuses.values()].some((s) => s.dirty)) {
+          capture()
+          schedule()
+          return
+        }
         for (const key of Object.keys(restored)) delete restored[key]
         last = null
         seenDirty = false
@@ -155,7 +175,7 @@ function DraftSession(props: { remote: TavernRemote; scope: string; owner: strin
     }
     return { registry, flush, start() { mounted = true }, stop() { mounted = false; flush() } }
   })
-  useEffect(() => {
+  useLayoutEffect(() => {
     session.start()
     const flush = () => session.flush()
     if (typeof window !== 'undefined') window.addEventListener('pagehide', flush)
@@ -205,5 +225,6 @@ export function usePersistentDraftStatus(id: string, dirty: boolean, busy: boole
     registry?.report(id, { dirty, busy })
     return () => registry?.report(id, null)
   }, [registry, id, dirty, busy])
-  return registry?.discard
+  const discard = useCallback(() => registry?.discard(id), [registry, id])
+  return registry ? discard : undefined
 }

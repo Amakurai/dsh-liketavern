@@ -10,7 +10,7 @@ import {apply as applySessionInvariant} from '@deepseek-ai/dsh-session/invariant
 import {createAssistantMessage,createUserMessage,createToolResultMessage,ToolCallId} from '@deepseek-ai/dsh-llm'
 import {TavernState} from '../src/node/state.js'
 import {resolveConfig} from '../src/node/config.js'
-import {commitHelperVariables,getHelperSnapshot,helperHistoryOf} from '../src/node/helperRuntime.js'
+import {commitHelperVariables,getHelperScriptBundle,getHelperSnapshot,helperHistoryOf} from '../src/node/helperRuntime.js'
 import {editHelperMessages} from '../src/node/helperChatEdits.js'
 import {parseHelperMessageEdits} from '../src/core/helperChatEdits.js'
 import {editedHistorySeed} from '../src/node/helperChatSeed.js'
@@ -319,14 +319,15 @@ it('删除用户和 assistant 消息同时移除工具配对及过时摘要，�
   expect((await ws.memory.list()).map(row=>row.body)).toEqual(['fact-1']);expect(followup).not.toHaveBeenCalled()
 })
 it('删除后按稳定 seq 映射其它修改；旧导入消息数据和完整页在子剧情清除，来源保留',async()=>{
-  const input=await request(),history=helperHistoryOf(source.snapshotEvents(),{char:'c',user:'u'}),removed=history[3]!.identity,ws=await state.storyWorkspace(cardId,input.storyId)
-  // 模拟无楼层日志的旧导入数据，删除不能仅依赖回滚碰巧清除它。
-  await ws.fs.writeText('state/helper.json',JSON.stringify({version:1,scopes:{[JSON.stringify(['message',removed])]:{old:1}},extras:{[removed]:{old:2}},swipes:{[removed]:{active:0,pages:[{message:'assistant-2',data:{old:1},extra:{old:2}}]}}}))
+  const input=await request(),history=helperHistoryOf(source.snapshotEvents(),{char:'c',user:'u'}),removed=history[3]!.identity,edited=history[5]!.identity,ws=await state.storyWorkspace(cardId,input.storyId)
+  // 模拟无楼层日志的旧导入数据，删除和正文改写都不能仅依赖回滚碰巧清除旧 identity。
+  await ws.fs.writeText('state/helper.json',JSON.stringify({version:1,scopes:{[JSON.stringify(['message',removed])]:{old:1},[JSON.stringify(['message',edited])]:{stale:1}},extras:{[removed]:{old:2},[edited]:{stale:2}},swipes:{[removed]:{active:0,pages:[{message:'assistant-2',data:{old:1},extra:{old:2}}]},[edited]:{active:0,pages:[{message:'assistant-3',data:{stale:1},extra:{stale:2}}]}}}))
   const result=await edit([{message_id:2,delete:true},{message_id:3,delete:true},{message_id:5,message:'kept edit',data:{hp:9}}]),child=sessions.get(result.branch!.childSessionId)!
   const next=await getHelperSnapshot(ctx,state,child.id,input.messageId),childWs=await state.storyWorkspace(cardId,next.storyId),stored=await loadHelperState(childWs.fs)
   expect(next.messages[3]).toMatchObject({message:'kept edit',data:{hp:9}});expect(next.messages).toHaveLength(4)
   expect(stored.scopes[JSON.stringify(['message',removed])]).toBeUndefined();expect(stored.extras[removed]).toBeUndefined();expect(stored.swipes?.[removed]).toBeUndefined()
-  expect((await loadHelperState(ws.fs)).extras[removed]).toEqual({old:2})
+  expect(stored.scopes[JSON.stringify(['message',edited])]).toBeUndefined();expect(stored.extras[edited]).toBeUndefined();expect(stored.swipes?.[edited]).toBeUndefined()
+  expect((await loadHelperState(ws.fs)).extras[removed]).toEqual({old:2});expect((await loadHelperState(ws.fs)).extras[edited]).toEqual({stale:2})
   await childWs.wal.validateFloor(child.id+'#t3')
 })
 it('可以删除包括当前卡面在内的全部可见消息，子会话仍能继续新回合',async()=>{
@@ -359,4 +360,20 @@ it('删除有流式片段的消息不残留旧文本；不存在的 seq 和共�
   const one=shared.append('assistant/message',{stream: [], turn:1,step:1,message:createAssistantMessage({source:{provider:'test',model:'test'},content:[{type:'text',text:'one'}]})},{surfaceOp:'append'})
   shared.append('assistant/message',{stream: [], turn:1,step:1,message:createAssistantMessage({source:{provider:'test',model:'test'},content:[{type:'text',text:'two'}]})},{surfaceOp:'append'});shared.append('step/end',{turn:1,step:1});shared.append('turn/end',{turn:1,reason:{kind:'completed'}})
   expect(()=>editedHistorySeed(shared.snapshotEvents(),new Map(),new Set([one.seq]))).toThrow(/共用步骤/)
+})
+it('非 MVU 脚本包跳过纯工具或空白 assistant/message，不因无文本节点抛错',async()=>{
+  const library=await state.getHelperScriptLibrary({type:'character',cardId})
+  await state.saveHelperScriptLibrary({type:'character',cardId},library.revision,[{type:'script',id:'s1',name:'测试脚本',enabled:true,content:'console.log(1)',info:'',button:{enabled:false,buttons:[]},data:{}}])
+  const lastVisibleSeq=(await request()).messageId
+  source.append('turn/start',{turn:4});source.append('step/start',{turn:4,step:1})
+  const callId=ToolCallId('call-4')
+  source.append('assistant/message',{stream:[],turn:4,step:1,message:createAssistantMessage({content:[{type:'tool-call',id:callId,name:'fixture_tool',arguments:'{}'}],source:{provider:'test',model:'test'}})},{surfaceOp:'append'})
+  const bundle=await getHelperScriptBundle(ctx,state,source.id)
+  expect(bundle.messageId).toBe(lastVisibleSeq);expect(bundle.snapshot?.currentMessageId).toBe(5)
+  const toolOnly=Session.create('session-tool-only' as Session['id']);toolOnly.append('turn/start',{turn:1});toolOnly.append('step/start',{turn:1,step:1})
+  toolOnly.append('assistant/message',{stream:[],turn:1,step:1,message:createAssistantMessage({content:[{type:'tool-call',id:ToolCallId('call-only'),name:'fixture_tool',arguments:'{}'}],source:{provider:'test',model:'test'}})},{surfaceOp:'append'})
+  sessions.set(toolOnly.id,toolOnly)
+  await state.saveBinding({sessionId:toolOnly.id,cardId,presetId:null,personaId:null,lorebookIds:[],characterLorebookId:null,interactiveCards:true,helperMvu:false,greetingIndex:0,createdAt:'now'})
+  const emptyBundle=await getHelperScriptBundle(ctx,state,toolOnly.id)
+  expect(emptyBundle.messageId).toBeNull();expect(emptyBundle.snapshot).toBeUndefined()
 })

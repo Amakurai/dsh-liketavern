@@ -192,7 +192,7 @@ export async function getHelperScriptBundle(ctx:Context,state:TavernState,sessio
   if(base.helperMvu)messageId=await ensureHelperMvuScriptAnchor(ctx,state,sessionId,binding.storyId)
   else{
     const events=await readDisplaySessionEvents(ctx,sessionId)
-    messageId=[...events].reverse().find(event=>event.type==='assistant/message'&&(!('surfaceOp' in event)||event.surfaceOp===undefined||event.surfaceOp==='append'))?.seq??null
+    messageId=[...events].reverse().find(event=>event.type==='assistant/message'&&(!('surfaceOp' in event)||event.surfaceOp===undefined||event.surfaceOp==='append')&&event.data.message.content.some(block=>block.type==='text'&&block.text.trim()))?.seq??null
   }
   if(messageId===null)return {...base,messageId:null}
   const snapshot=await getHelperSnapshot(ctx,state,sessionId,messageId)

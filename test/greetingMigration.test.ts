@@ -14,7 +14,7 @@ import type { SessionFormatArtifact, SessionFormatEvent, SessionFormatMigrationC
 import { createSessionFormatV3ToV4, RELEASED_V3_EVENT_TYPES, restoreReleasedV4Artifact } from '@deepseek-ai/dsh-session-format-v3-to-v4'
 import { TavernState } from '../src/node/state.js'
 import { resolveConfig } from '../src/node/config.js'
-import { ensureGreeting, enterGreetingConversation, getGreetingSwipe, sessionPrefixEvents, swipeGreeting } from '../src/node/floors.js'
+import { ensureGreeting, enterGreetingConversation, getGreetingSwipe, sessionPrefixEvents, swipeGreeting, timerOwnerAtTurn } from '../src/node/floors.js'
 import { greetingTurnEvents } from '../src/node/greetingSeed.js'
 import { reserveHelperMvuMaintenance } from '../src/node/helperMvuLifecycle.js'
 import { WorkspaceFs } from '../src/state/workspaceFs.js'
@@ -217,4 +217,11 @@ it('开场白为空、只有备选开场白的卡：进入会话写入第一条�
   expect(JSON.stringify(greetings[0])).toContain('备选一')
   const floor = await getGreetingSwipe({ ctx, state }, agent.id, greetings[0]!.id)
   expect(floor).toMatchObject({ isGreeting: true, swipe: { index: 0, total: 2 } })
+  const get = ctx.get.bind(ctx)
+  vi.spyOn(ctx, 'get').mockImplementation((key: string) =>
+    key === 'agentPresets' ? { composedPreset: () => 'tavern', resolve: async () => ({ id: 'tavern' }), mount: vi.fn() } : get(key as never))
+  const swiped = await swipeGreeting({ ctx, state }, agent.id, 1)
+  const childBinding = (await state.loadBinding(swiped.childSessionId))!
+  expect(childBinding.walLineage).toEqual([])
+  expect(timerOwnerAtTurn(childBinding, swiped.childSessionId, 1)).toBe(swiped.childSessionId)
 })

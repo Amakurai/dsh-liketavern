@@ -129,8 +129,11 @@ export async function expandMemoryAliases(
   const parsed = await requestMemoryAliases(llm, provider, model, batch.map((entry) => entry.body), maintenanceSignal)
   if (parsed === null || maintenanceSignal?.aborted) return null
   const items = batch.map((entry, index) => ({ entry, aliases: parsed[index] ?? [] }))
-  const saved = await ws.memory.saveAliases(items)
-  return { saved, named: items.filter((item) => item.aliases.length > 0).length }
+  return withWorkspaceLock(ws.fs.root, async () => {
+    if (maintenanceSignal?.aborted) return null
+    const saved = await ws.memory.saveAliases(items)
+    return { saved, named: items.filter((item) => item.aliases.length > 0).length }
+  })
 }
 
 /**

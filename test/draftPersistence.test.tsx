@@ -9,7 +9,7 @@ import type { ReactTestRenderer } from 'react-test-renderer'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PersistentEditor, useDraftState } from '../src/client/draftPersistence.js'
 import { HelperScriptEditorBody } from '../src/client/helperScriptEditor.js'
-import { useDraftGuard } from '../src/client/drafts.js'
+import { DraftScope, useDraftGuard } from '../src/client/drafts.js'
 import { setTavernLocale } from '../src/client/i18n.js'
 import { Btn, ConfirmDialog } from '../src/client/util.js'
 import type { Envelope, TavernRemote } from '../src/client/types.js'
@@ -302,5 +302,119 @@ describe('编辑草稿持久化', () => {
     await advance()
     expect(env.save).not.toHaveBeenCalled()
     expect(env.stored()).toEqual(snapshot('读取恢复内容'))
+  })
+
+  it('父组件 useDraftState 控制条件子编辑器时，放弃并离开后立即关闭面板不会复活草稿', async () => {
+    const env = environment()
+    function ChildEditor(props: { onClose: () => void }) {
+      const [body, setBody] = useDraftState('child:body', 'base')
+      const guard = useDraftGuard(body !== 'base')
+      return <>
+        <input aria-label="子正文" value={body} onChange={(e) => setBody(e.target.value)} />
+        <button data-action="child-cancel" onClick={() => guard.request(() => { setBody('base'); props.onClose() })}>取消编辑</button>
+        {guard.confirmation}
+      </>
+    }
+    function ParentWithChild() {
+      const [editingId, setEditingId] = useDraftState<string | null>('parent:editingId', 'm1')
+      return <>{editingId && <ChildEditor onClose={() => setEditingId(null)} />}</>
+    }
+    let view!: ReactTestRenderer
+    await act(async () => { view = create(<PersistentEditor remote={env.api} scope={env.scope}><ParentWithChild /></PersistentEditor>) })
+    mounted.push(view)
+    await change(view, '待放弃的子修改')
+    await advance()
+    expect(env.stored()).toEqual({ version: 1, fields: { 'parent:editingId': 'm1', 'child:body': '待放弃的子修改' } })
+    await action(view, 'child-cancel')
+    await act(async () => view.root.findAllByType(ConfirmDialog).find((dialog) => dialog.props.open)!.props.onConfirm())
+    // 未等 500ms 防抖结束立即关闭面板，不能把已放弃的草稿重新写回服务端。
+    await unmount(view)
+    await advance(600)
+    expect(env.stored()).toBeNull()
+    expect(env.remove).toHaveBeenCalledTimes(1)
+  })
+
+  it('同一 PersistentEditor 下多个同级编辑器并存时，单个编辑器 clearDraft 不会清空另一脏编辑器的草稿，也不会提前刷入重置前的旧快照', async () => {
+    const env = environment()
+    function Sibling(props: { id: string }) {
+      const [text, setText] = useDraftState(`${props.id}:text`, 'base')
+      const [baseline, setBaseline] = useDraftState(`${props.id}:baseline`, 'base')
+      const guard = useDraftGuard(text !== baseline)
+      return <>
+        <input data-input={props.id} value={text} onChange={(e) => setText(e.target.value)} />
+        <button data-action={`save-${props.id}`} onClick={() => { setBaseline(text); guard.clearDraft() }}>保存</button>
+      </>
+    }
+    let view!: ReactTestRenderer
+    await act(async () => {
+      view = create(<PersistentEditor remote={env.api} scope={env.scope}><Sibling id="a" /><Sibling id="b" /></PersistentEditor>)
+    })
+    mounted.push(view)
+    await act(async () => view.root.findByProps({ 'data-input': 'a' }).props.onChange({ target: { value: '修改A' } }))
+    await act(async () => view.root.findByProps({ 'data-input': 'b' }).props.onChange({ target: { value: '修改B' } }))
+    await action(view, 'save-a')
+    // save-a 时 setBaseline 尚未提交，部分放弃分支只重排防抖，不能先把 a:baseline='base' 的旧快照刷到服务端。
+    expect(env.save).not.toHaveBeenCalled()
+    await advance()
+    expect(env.save).toHaveBeenCalledTimes(1)
+    expect(env.remove).not.toHaveBeenCalled()
+    expect(env.stored()).toEqual({ version: 1, fields: { 'a:text': '修改A', 'a:baseline': '修改A', 'b:text': '修改B', 'b:baseline': 'base' } })
+    await action(view, 'save-b')
+    await advance()
+    expect(env.stored()).toBeNull()
+    expect(env.remove).toHaveBeenCalledTimes(1)
+  })
+
+  it('外层 DraftScope 与内层编辑器共用 PersistentEditor 时，单个编辑器放弃不会先把重置前的旧内容写到服务端', async () => {
+    const env = environment()
+    function ScopedEditor() {
+      const [text, setText] = useDraftState('scoped:text', 'base')
+      const guard = useDraftGuard(text !== 'base')
+      return <>
+        <input value={text} onChange={(e) => setText(e.target.value)} />
+        <button data-action="reset" onClick={() => guard.request(() => setText('base'))}>放弃修改</button>
+        {guard.confirmation}
+      </>
+    }
+    let view!: ReactTestRenderer
+    await act(async () => {
+      view = create(<PersistentEditor remote={env.api} scope={env.scope}><DraftScope>{() => <ScopedEditor />}</DraftScope></PersistentEditor>)
+    })
+    mounted.push(view)
+    await change(view, '未防抖落盘的临时输入')
+    await action(view, 'reset')
+    await act(async () => view.root.findAllByType(ConfirmDialog).find((dialog) => dialog.props.open)!.props.onConfirm())
+    expect(env.save).not.toHaveBeenCalled()
+    await advance()
+    expect(env.save).not.toHaveBeenCalled()
+    expect(env.stored()).toBeNull()
+  })
+
+  it('条件子编辑器变脏后先卸载，500ms 内关闭 PersistentEditor 会删除草稿而非重存过期脏快照', async () => {
+    const env = environment()
+    function Child() {
+      const [text, setText] = useDraftState('child:text', 'base')
+      useDraftGuard(text !== 'base')
+      return <input value={text} onChange={(e) => setText(e.target.value)} />
+    }
+    function Parent() {
+      const [open, setOpen] = useState(true)
+      return <>
+        <button data-action="close-child" onClick={() => setOpen(false)}>关闭子编辑器</button>
+        {open && <Child />}
+      </>
+    }
+    let view!: ReactTestRenderer
+    await act(async () => { view = create(<PersistentEditor remote={env.api} scope={env.scope}><Parent /></PersistentEditor>) })
+    mounted.push(view)
+    await change(view, '子编辑器脏内容')
+    await advance()
+    expect(env.stored()).toEqual({ version: 1, fields: { 'child:text': '子编辑器脏内容' } })
+    await action(view, 'close-child')
+    await advance(100)
+    await unmount(view)
+    await advance(600)
+    expect(env.stored()).toBeNull()
+    expect(env.remove).toHaveBeenCalledTimes(1)
   })
 })

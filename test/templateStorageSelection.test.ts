@@ -1,21 +1,35 @@
 /** 冷启动路径读取只核对所需模板子图；不读无关正文，局部缓存不冒充完整校验，旧文件与损坏边界保持明确。 */
 import { createHash } from 'node:crypto'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { afterEach, expect, it, vi } from 'vitest'
+import { dirname, join } from 'node:path'
+import { afterAll, afterEach, expect, it, vi } from 'vitest'
 import { WorkspaceFs } from '../src/state/workspaceFs.js'
+import { withWorkspaceLock } from '../src/state/workspaceLock.js'
 import { openLedger } from '../src/state/writeLedger.js'
-import { loadTemplateDocumentPaths, prepareTemplateDocument, readTemplateDocument, readTemplateDocumentPaths, TEMPLATE_DATA_PATH, writeTemplateBlocks } from '../src/state/templateStorage.js'
+import { loadTemplateDocumentPaths, prepareTemplateDocument, readTemplateDocument, readTemplateDocumentPaths, TEMPLATE_DATA_PATH, writeTemplateBlocks, type TemplateDocumentWrite } from '../src/state/templateStorage.js'
 
 const roots:string[]=[],path='state/selection.json'
-/** 600 楼夹具需实际刷盘数千个块；CI 磁盘耗时不属于被测读取预算，读取效率仍由访问块数断言。 */
+/** 600 楼夹具需实际落盘数千个块；直接初始化并复用只读夹具文件，每例递增账本代次重测冷读，读取效率由访问块数断言。 */
 const largeFixtureTimeout=60_000
-afterEach(async()=> {vi.restoreAllMocks();for(const root of roots.splice(0))await rm(root,{recursive:true,force:true})})
+let sharedLarge:{root:string;document:TemplateDocumentWrite}|undefined
+const cleanRoot=(root:string)=>withWorkspaceLock(root,()=>rm(root,{recursive:true,force:true,maxRetries:3,retryDelay:50}))
+afterEach(async()=> {
+  vi.restoreAllMocks()
+  for(const root of roots.splice(0)) await cleanRoot(root)
+})
+afterAll(async()=> {
+  if(sharedLarge) {const {root}=sharedLarge;sharedLarge=undefined;await cleanRoot(root)}
+})
+async function seedFiles(root:string,files:ReadonlyArray<readonly [string,string]>) {
+  const dirs=new Set(files.map(([relPath])=>dirname(join(root,relPath))))
+  await Promise.all([...dirs].map(dir=>mkdir(dir,{recursive:true})))
+  for(let i=0;i<files.length;i+=32) await Promise.all(files.slice(i,i+32).map(([relPath,raw])=>writeFile(join(root,relPath),raw)))
+}
 async function fixture(value:unknown) {
   const root=await mkdtemp(join(tmpdir(),'tavern-template-selection-'));roots.push(root)
   const fs=new WorkspaceFs(root,null),document=prepareTemplateDocument(value)
-  await writeTemplateBlocks(fs,document,null);await fs.writeText(path,document.raw)
+  await seedFiles(root,[[path,document.raw],...[...document.blocks].map(([hash,raw]):[string,string]=>[blockPath(hash),raw])])
   openLedger(root).epoch++
   return {fs,document,root}
 }
@@ -24,9 +38,19 @@ const history=(floors:number)=>({version:1,variables:{global:{day:3},local:{},me
   generation:{status:'prepared',turn:237,plan:{messages:['冻结计划正文'.repeat(10000)]}},
   outputs:Object.fromEntries(Array.from({length:floors},(_,i)=>[String(i),{hash:`hash-${i}`,text:`reply-${i}:`+'正文'.repeat(3000)}])),
   messageVariables:{version:1,snapshots:Object.fromEntries(Array.from({length:floors},(_,i)=>[`message-${i}`,{values:{mood:`snapshot-${i}:`+'记忆'.repeat(2000)}}]))}})
+async function largeFixture() {
+  const value=history(600)
+  if(!sharedLarge) {
+    const root=await mkdtemp(join(tmpdir(),'tavern-template-selection-large-')),document=prepareTemplateDocument(value)
+    await seedFiles(root,[[path,document.raw],...[...document.blocks].map(([hash,raw]):[string,string]=>[blockPath(hash),raw])])
+    sharedLarge={root,document}
+  }
+  openLedger(sharedLarge.root).epoch++
+  return {value,fs:new WorkspaceFs(sharedLarge.root,null),document:sharedLarge.document,root:sharedLarge.root}
+}
 
 it('冷读身份和变量不展开历史回复、消息变量或生成计划，暖读只返回独立的选择副本',async()=> {
-  const value=history(600),{fs,document,root}=await fixture(value)
+  const {value,fs,document,root}=await largeFixture()
   expect(document.blocks.size).toBeGreaterThan(1200)
   const read=vi.spyOn(WorkspaceFs.prototype,'readTextMany')
   const paths=[['version'],['generation','status'],['generation','turn'],['variables']] as const
@@ -43,21 +67,26 @@ it('冷读身份和变量不展开历史回复、消息变量或生成计划，�
 },largeFixtureTimeout)
 
 it('按消息键选择仅扫描键页，未选中的坏正文不影响局部读取，但完整读取仍拒绝',async()=> {
-  const value=history(600),{fs,document}=await fixture(value)
-  const damaged=[...document.blocks].find(([,raw])=>raw.startsWith('["json"') && raw.includes('reply-123:'))![0]
-  await fs.writeText(blockPath(damaged),'[]')
-  const read=vi.spyOn(WorkspaceFs.prototype,'readTextMany')
-  expect(await readTemplateDocumentPaths(fs,path,[['outputs','456'],['outputs','599'],['outputs','missing']])).toEqual([value.outputs['456'],value.outputs['599'],undefined])
-  const accessed=read.mock.calls.flatMap(([items])=>items)
-  expect(accessed).not.toContain(blockPath(damaged))
-  expect(accessed.length).toBeLessThan(80)
-  expect(accessed.length).toBeLessThan(document.blocks.size/10)
-  await expect(readTemplateDocument(fs,path)).rejects.toThrow(/校验失败/)
-  await expect(readTemplateDocumentPaths(fs,path,[['outputs','123']])).rejects.toThrow(/校验失败/)
+  const {value,fs,document,root}=await largeFixture()
+  const [damaged,original]=[...document.blocks].find(([,raw])=>raw.startsWith('["json"') && raw.includes('reply-123:'))!
+  try {
+    await fs.writeText(blockPath(damaged),'[]')
+    const read=vi.spyOn(WorkspaceFs.prototype,'readTextMany')
+    expect(await readTemplateDocumentPaths(fs,path,[['outputs','456'],['outputs','599'],['outputs','missing']])).toEqual([value.outputs['456'],value.outputs['599'],undefined])
+    const accessed=read.mock.calls.flatMap(([items])=>items)
+    expect(accessed).not.toContain(blockPath(damaged))
+    expect(accessed.length).toBeLessThan(80)
+    expect(accessed.length).toBeLessThan(document.blocks.size/10)
+    await expect(readTemplateDocument(fs,path)).rejects.toThrow(/校验失败/)
+    await expect(readTemplateDocumentPaths(fs,path,[['outputs','123']])).rejects.toThrow(/校验失败/)
+  } finally {
+    await writeFile(join(root,blockPath(damaged)),original)
+    openLedger(root).epoch++
+  }
 },largeFixtureTimeout)
 
 it('连续打开不同消息复用已核对的键页，只读取新消息的快照索引与正文',async()=> {
-  const value=history(600),{fs,document}=await fixture(value)
+  const {value,fs,document}=await largeFixture()
   const read=vi.spyOn(WorkspaceFs.prototype,'readTextMany')
   expect(await readTemplateDocumentPaths(fs,path,[['outputs','456'],['outputs','599']])).toEqual([value.outputs['456'],value.outputs['599']])
   const initial=new Set(read.mock.calls.flatMap(([items])=>items))
@@ -143,7 +172,7 @@ it('内联 JSON 块中的选择结果也受根声明的展开体积约束',async
 })
 
 it('穿过不同字段的分页深度累计检查，不能每次下钻重新得到一份引用预算',async()=> {
-  const {fs}=await fixture({version:1}),blocks:Array<[string,string]>=[]
+  const {fs,root:dir}=await fixture({version:1}),blocks:Array<[string,string]>=[]
   const block=(value:unknown)=> {
     const raw=JSON.stringify(value),hash=createHash('sha256').update(raw).digest('hex')
     blocks.push([blockPath(hash),raw]);return {ref:hash}
@@ -152,8 +181,8 @@ it('穿过不同字段的分页深度累计检查，不能每次下钻重新得�
   for(let i=0;i<300;i++)child=block(['object-pages',[child]])
   let root=block(['object',[['nested',child]]])
   for(let i=0;i<300;i++)root=block(['object-pages',[root]])
-  await fs.writeTextMany(blocks)
-  await fs.writeText(path,JSON.stringify({version:2,storage:'tavern-template',root:root.ref,bytes:22}))
+  await seedFiles(dir,[[path,JSON.stringify({version:2,storage:'tavern-template',root:root.ref,bytes:22})],...blocks])
+  openLedger(dir).epoch++
   await expect(readTemplateDocumentPaths(fs,path,[['nested','value']])).rejects.toThrow(/展开超过上限/)
   await expect(readTemplateDocumentPaths(fs,path,[['nested']])).rejects.toThrow(/展开超过上限/)
 },30000)

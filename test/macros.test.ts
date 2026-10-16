@@ -69,6 +69,16 @@ describe('trim 与时间宏', () => {
     expect(expandMacros('a {{trim}} b', ctx)).toBe('a  b')
   })
 
+  it('{{trim}} 对齐 ST：连同两侧换行一起删除，含变量与 {{newline}} 展开出的换行', () => {
+    expect(expandMacros('第一段\n\n{{trim}}\r\n第二段', ctx)).toBe('第一段第二段')
+    expect(expandMacros('{{setvar::x::1}}\n{{trim}}\n正文', ctx)).toBe('正文')
+    expect(expandMacros('A{{newline}}{{ trim }}{{newline}}B', ctx)).toBe('AB')
+    const store = new Map<string, string>()
+    expect(expandMacros('{{setvar::v::a\n{{trim}}\nb}}{{getvar::v}}', { ...ctx, store })).toBe('ab')
+    // 共享变量表不能残留本次调用的内部占位符
+    expect(store.get('v')).toBe('ab')
+  })
+
   it('{{time}}/{{date}} 默认取当前时间，可经 vars 覆盖为固定值', () => {
     const c: MacroContext = { ...ctx, vars: { time: '10:20', date: '2024-01-02' } }
     expect(expandMacros('{{time}} {{date}}', c)).toBe('10:20 2024-01-02')
@@ -292,6 +302,16 @@ describe('random / pick', () => {
     expect(expandMacros('{{pick:1,3}}', { ...ctx, random: () => 0.5 })).toBe('3')
   })
 
+  it('选项切分对齐 ST：保留空选项，逗号列表支持 \\, 转义并修剪，:: 列表不修剪', () => {
+    // 「有时什么都不加」的空选项必须可能被抽中，不能被丢掉后恒定输出另一项
+    expect(expandMacros('[{{random::醒来::}}]', { ...ctx, random: () => 0.99 })).toBe('[]')
+    expect(expandMacros('[{{random:a,,b}}]', { ...ctx, random: () => 0.5 })).toBe('[]')
+    expect(expandMacros('{{random:a\\, b, c}}', { ...ctx, random: () => 0 })).toBe('a, b')
+    expect(expandMacros('{{random:a\\, b, c}}', { ...ctx, random: () => 0.99 })).toBe('c')
+    expect(expandMacros('[{{random::x:: y}}]', { ...ctx, random: () => 0.99 })).toBe('[ y]')
+    expect(expandMacros('[{{random::}}]', { ...ctx, random: () => 0 })).toBe('[]')
+  })
+
   it('同一种子两份流各自从同样起点掷', () => {
     const left = expandMacros('{{pick::X,Y,Z}} {{pick::X,Y,Z}}', { ...ctx, random: createTurnRandom(42) })
     const right = expandMacros('{{pick::X,Y,Z}} {{pick::X,Y,Z}}', { ...ctx, random: createTurnRandom(42) })
@@ -357,6 +377,16 @@ describe('ST 常用宏补全', () => {
     expect(expandMacros('第{{incvar::day}}天', { ...ctx, store: new Map([['day', '3']]) })).toBe('第4天')
     expect(expandMacros('{{hasvar::x}}|{{setvar::x::1}}{{hasvar::x}}', { ...ctx })).toBe('true|true')
     expect(expandMacros('{{hasvar::y}}', { ...ctx })).toBe('false')
+  })
+
+  it('addvar 对齐 ST addLocalVariable：文本拼接、JSON 数组追加、数值相加', () => {
+    // 原值是文本时拼接，不能被覆盖成数字丢掉原文
+    expect(expandMacros('{{setvar::log::A}}{{addvar::log::B}}{{getvar::log}}', { ...ctx })).toBe('AB')
+    expect(expandMacros('{{addvar::fresh::开场}}{{getvar::fresh}}', { ...ctx })).toBe('开场')
+    expect(expandMacros('{{setvar::n::2}}{{addvar::n::x}}{{getvar::n}}', { ...ctx })).toBe('2x')
+    expect(expandMacros('{{setvar::list::["a"]}}{{addvar::list::b}}{{getvar::list}}', { ...ctx })).toBe('["a","b"]')
+    expect(expandMacros('{{setvar::n::2}}{{addvar::n::3}}{{getvar::n}}|{{addvar::m::-1.5}}{{getvar::m}}', { ...ctx })).toBe('5|-1.5')
+    expect(expandMacros('{{setvar::w::第}}{{incvar::w}}', { ...ctx })).toBe('第1')
   })
 
   it('add/inc/dec/has 的 global 拼写与 setglobalvar 共用同一变量表', () => {

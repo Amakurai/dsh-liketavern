@@ -10,14 +10,14 @@
  * - `{{charPrompt}}` / `{{charInstruction}}`：角色卡 Main / PHI 覆盖正文
  * - `{{outlet::Name}}`：世界书 Outlet；未匹配为空串。替换结果不再扫描（禁止嵌套 outlet）
  * - `{{time}}` / `{{date}}` / `{{datetime}}` / `{{weekday}}`：当前时间（可经 vars 覆盖）
- * - `{{trim}}` / `{{noop}}`：删除
+ * - `{{trim}}`：连同两侧换行一起删除（对齐 ST）；`{{noop}}`：删除
  * - `{{//…}}`：注释，删除（社区预设用来写作者说明）
  * - `{{setvar::name::value}}` / `{{getvar::name}}`：一次组装内的变量表
  *   （setlocalvar/setglobalvar 视为 setvar；get* 同 getvar。不落盘。）
  * - `{{lastUserMessage}}`：最近一条用户消息
  * - `{{lastMessage}}`：最近一条真实用户或 assistant 消息（本轮宏，禁止进 standing）
  * - `{{lastCharMessage}}`：最近一条 assistant 消息（本轮宏，禁止进 standing）
- * - `{{random::A::B}}` / `{{random:1,10}}`：掷骰（本轮宏，禁止进 standing）
+ * - `{{random::A::B}}` / `{{random:1,10}}`：掷骰（本轮宏，禁止进 standing）；空选项保留，逗号列表支持 `\,` 转义
  * - `{{pick::A::B}}` / `{{pick:A,B}}`：给定 pickSeed（聊天身份）时按「聊天 + 所在文本 + 选项 + 第几次出现」
  *   确定，同一聊天及其分支、重新生成保持同一结果（对齐 ST），可进 standing；未给定时退回 random
  * - `<USER>` / `<BOT>` / `<CHAR>` / `<CHARIFNOTGROUP>` / `<GROUP>`：ST 旧式宏（大小写不敏感），单角色会话里后四者即角色名
@@ -25,6 +25,7 @@
  * - `{{isodate}}` / `{{isotime}}`：ISO 日期与时间（本轮宏）
  * - `{{incvar::x}}` / `{{decvar::x}}`：自增、自减并返回新值；`{{hasvar::x}}`：存在判断（true/false）
  *   （add/inc/dec/has 的 local/global 拼写同样视为同一变量表）
+ * - `{{addvar::x::v}}`：对齐 ST——旧值为 JSON 数组则追加，旧值或 v 非数字则拼接文本，否则数值相加
  * - `{{space}}` / `{{reverse:文本}}` / `{{banned "词"}}`（删除）/ `{{charJailbreak}}`（同 charInstruction）
  * - `{{group}}` / `{{groupNotMuted}}`：单角色会话即角色名；`{{notChar}}`：用户名
  *

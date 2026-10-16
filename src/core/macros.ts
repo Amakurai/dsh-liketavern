@@ -10,14 +10,14 @@
  * - `{{charPrompt}}` / `{{charInstruction}}`：角色卡 Main / PHI 覆盖正文
  * - `{{outlet::Name}}`：世界书 Outlet；未匹配为空串。替换结果不再扫描（禁止嵌套 outlet）
  * - `{{time}}` / `{{date}}` / `{{datetime}}` / `{{weekday}}`：当前时间（可经 vars 覆盖）
- * - `{{trim}}` / `{{noop}}`：删除
+ * - `{{trim}}`：连同两侧换行一起删除（对齐 ST）；`{{noop}}`：删除
  * - `{{//…}}`：注释，删除（社区预设用来写作者说明）
  * - `{{setvar::name::value}}` / `{{getvar::name}}`：一次组装内的变量表
  *   （setlocalvar/setglobalvar 视为 setvar；get* 同 getvar。不落盘。）
  * - `{{lastUserMessage}}`：最近一条用户消息
  * - `{{lastMessage}}`：最近一条真实用户或 assistant 消息（本轮宏，禁止进 standing）
  * - `{{lastCharMessage}}`：最近一条 assistant 消息（本轮宏，禁止进 standing）
- * - `{{random::A::B}}` / `{{random:1,10}}`：掷骰（本轮宏，禁止进 standing）
+ * - `{{random::A::B}}` / `{{random:1,10}}`：掷骰（本轮宏，禁止进 standing）；空选项保留，逗号列表支持 `\,` 转义
  * - `{{pick::A::B}}` / `{{pick:A,B}}`：给定 pickSeed（聊天身份）时按「聊天 + 所在文本 + 选项 + 第几次出现」
  *   确定，同一聊天及其分支、重新生成保持同一结果（对齐 ST），可进 standing；未给定时退回 random
  * - `<USER>` / `<BOT>` / `<CHAR>` / `<CHARIFNOTGROUP>` / `<GROUP>`：ST 旧式宏（大小写不敏感），单角色会话里后四者即角色名
@@ -25,6 +25,7 @@
  * - `{{isodate}}` / `{{isotime}}`：ISO 日期与时间（本轮宏）
  * - `{{incvar::x}}` / `{{decvar::x}}`：自增、自减并返回新值；`{{hasvar::x}}`：存在判断（true/false）
  *   （add/inc/dec/has 的 local/global 拼写同样视为同一变量表）
+ * - `{{addvar::x::v}}`：对齐 ST——旧值为 JSON 数组则追加，旧值或 v 非数字则拼接文本，否则数值相加
  * - `{{space}}` / `{{reverse:文本}}` / `{{banned "词"}}`（删除）/ `{{charJailbreak}}`（同 charInstruction）
  * - `{{group}}` / `{{groupNotMuted}}`：单角色会话即角色名；`{{notChar}}`：用户名
  *
@@ -53,14 +54,14 @@ function expandLegacyMacros(text: string, ctx: Pick<MacroContext, 'char' | 'user
     return postProcess ? postProcess(value) : value
   })
 }
-/** 冻结标记必须避开本次所有文本来源，私用区字符本身也可能是角色使用的图标。 */
-function frozenOpenFor(text: string, ctx: MacroContext): string {
+/** 内部占位标记必须避开本次所有文本来源，私用区字符本身也可能是角色使用的图标。 */
+function markerFor(name: string, text: string, ctx: MacroContext): string {
   const reserved = [text, ...Object.values(ctx).filter((value): value is string => typeof value === 'string'),
     ...Object.values(ctx.vars ?? {}), ...Object.values(ctx.outlets ?? {}), ...(ctx.store?.values() ?? []),
     ctx.readonlyStatData === undefined ? '' : JSON.stringify(ctx.readonlyStatData)].join('\n')
   let index = 0
-  let marker = `\uE000tavernFrozenOpen${index}\uE001`
-  while (reserved.includes(marker)) marker = `\uE000tavernFrozenOpen${++index}\uE001`
+  let marker = `\uE000tavern${name}${index}\uE001`
+  while (reserved.includes(marker)) marker = `\uE000tavern${name}${++index}\uE001`
   return marker
 }
 
@@ -125,12 +126,15 @@ function rollChoice(options: string[], random: () => number, numericRange: boole
 }
 
 function parseChoiceMacro(inner: string): { kind: 'random' | 'pick'; options: string[] } | null {
-  const match = /^(random|pick)\s*(::|:)\s*(.*)$/i.exec(inner.trim())
+  const match = /^(random|pick)\s*(::|:)([\s\S]*)$/i.exec(inner.trim())
   if (!match) return null
   const kind = match[1]!.toLowerCase() === 'pick' ? 'pick' : 'random'
   const rest = match[3] ?? ''
-  const parts = rest.includes('::') ? rest.split('::') : rest.split(',')
-  return { kind, options: parts.map((s) => s.trim()).filter(Boolean) }
+  // 对齐 ST：`::` 列表原样切分不修剪；逗号列表支持 `\,` 转义并逐项修剪。两者都保留空选项——
+  // 卡片常写 {{random::，偶尔::}} 表示「有时什么都不加」，丢掉空项会让它恒定输出非空那一项。
+  if (rest.includes('::')) return { kind, options: rest.split('::') }
+  const options = rest.split(/(?<!\\),/).map((s) => s.trim().replaceAll('\\,', ','))
+  return { kind, options: options.length === 1 && options[0] === '' ? [] : options }
 }
 
 /** ST 骰子：NdM±K、dM 或纯数字 M（= 1dM）。个数与面数有界，非法返回 null。 */
@@ -242,22 +246,44 @@ function applyCommand(inner: string, ctx: MacroContext, clock: Record<string, st
   if (HAS_VAR_COMMANDS.includes(cmd)) return storeOf(ctx).has(rest.trim()) ? 'true' : 'false'
   // 对齐 ST：incvar/decvar 返回新值（addvar 返回空串）。
   if (INC_VAR_COMMANDS.includes(cmd) || DEC_VAR_COMMANDS.includes(cmd)) {
-    const key = rest.trim()
-    const prev = Number(storeOf(ctx).get(key) ?? '0')
-    const next = String((Number.isFinite(prev) ? prev : 0) + (INC_VAR_COMMANDS.includes(cmd) ? 1 : -1))
-    storeOf(ctx).set(key, next)
-    return next
+    return addVariable(storeOf(ctx), rest.trim(), INC_VAR_COMMANDS.includes(cmd) ? '1' : '-1')
   }
   if (ADD_VAR_COMMANDS.includes(cmd)) {
-    const [name, deltaRaw] = splitOnce(rest)
-    const key = name.trim()
-    const prev = Number(storeOf(ctx).get(key) ?? '0')
-    const delta = Number(deltaRaw)
-    const next = (Number.isFinite(prev) ? prev : 0) + (Number.isFinite(delta) ? delta : 0)
-    storeOf(ctx).set(key, String(next))
+    const [name, value] = splitOnce(rest)
+    addVariable(storeOf(ctx), name.trim(), value)
     return ''
   }
   return undefined
+}
+
+/**
+ * ST addLocalVariable：旧值是 JSON 数组则追加一项；旧值或增量不是数字时按字符串拼接
+ * （{{addvar::log::B}} 累积文本，不能把原有文本覆盖成数字）；否则数值相加。返回新值。
+ */
+function addVariable(store: Map<string, string>, key: string, value: string): string {
+  const previous = store.get(key) ?? ''
+  const current = previous || '0'
+  try {
+    const parsed: unknown = JSON.parse(current)
+    if (Array.isArray(parsed)) {
+      parsed.push(value)
+      const next = JSON.stringify(parsed)
+      store.set(key, next)
+      return String(parsed)
+    }
+  } catch {
+    // 不是 JSON：按数字或字符串处理。
+  }
+  const increment = Number(value)
+  if (Number.isNaN(increment) || Number.isNaN(Number(current))) {
+    const next = previous + value
+    store.set(key, next)
+    return next
+  }
+  const sum = Number(current) + increment
+  if (Number.isNaN(sum)) return ''
+  store.set(key, String(sum))
+  return String(sum)
 }
 
 /**
@@ -277,9 +303,12 @@ export function expandMacros(
   const legacy = expandLegacyMacros(text, ctx, postProcess)
   if (!legacy.includes('{{')) return legacy
   const clock = { ...defaultVars(now), ...ctx.vars }
-  const frozenOpen = frozenOpenFor(legacy, ctx)
+  const frozenOpen = markerFor('FrozenOpen', legacy, ctx)
   const frozenClose = `${frozenOpen}close`
-  const thaw = (value: string): string => value.replaceAll(frozenClose, '}').replaceAll(frozenOpen, '{')
+  // ST 的 {{trim}} 连同两侧换行一起删除，且在变量与 {{newline}} 之后求值：先留占位，全部展开后再收掉。
+  const trimMarker = markerFor('Trim', legacy, ctx)
+  const trimRe = new RegExp(`(?:\\r?\\n)*${trimMarker}(?:\\r?\\n)*`, 'g')
+  const thaw = (value: string): string => value.replace(trimRe, '').replaceAll(frozenClose, '}').replaceAll(frozenOpen, '{')
   let current = legacy
   // 原文哈希让不同条目里的同一组选项互相独立；同一段原文里同组选项按出现次序各取一次。
   // 不用字符偏移：其它宏（如本轮台词）展开后长度会变，偏移会让结果跨轮漂移。
@@ -296,6 +325,7 @@ export function expandMacros(
   const replaceInnermost = (skipGet: boolean, unknowns: string[] | null): void => {
     current = current.replace(MACRO_RE, (raw, inner: string) => {
       if (skipGet && isGetVar(inner)) return raw
+      if (inner.trim().toLowerCase() === 'trim') return trimMarker
       const applied = applyCommand(inner, ctx, clock, pickRandom)
       if (applied !== undefined) {
         const value = postProcess ? postProcess(applied) : applied
@@ -326,7 +356,7 @@ export function expandMacros(
   } finally {
     // setvar 可以捕获 outlet 内容；调用结束不能把本次内部占位符留在共享变量表里。
     for (const [key, value] of ctx.store ?? []) {
-      if (value.includes(frozenOpen)) ctx.store!.set(key, thaw(value))
+      if (value.includes(frozenOpen) || value.includes(trimMarker)) ctx.store!.set(key, thaw(value))
     }
   }
 }

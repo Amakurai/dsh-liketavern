@@ -42,7 +42,7 @@
 
 ## 安装与升级
 
-> **前置要求**：Node.js `>= 24.0.0`、DeepSeek Harness `0.2.1-rc.1`、`pnpm`，且已在 `dsh` 中配置好可用的模型。首次使用请先参阅 [DeepSeek Harness 官方文档](https://deepseek-harness.github.io/deepseek-harness/)。仓库已内置预编译的 `lib/` 产物，安装时无需本地构建。
+> **前置要求**：Node.js `>= 24.0.0`、DeepSeek Harness `0.2.1-rc.2`、`pnpm`，且已在 `dsh` 中配置好可用的模型。首次使用请先参阅 [DeepSeek Harness 官方文档](https://deepseek-harness.github.io/deepseek-harness/)。仓库已内置预编译的 `lib/` 产物，安装时无需本地构建。
 
 ### 桌面端安装
 
@@ -192,7 +192,7 @@ dsh plugin --profile web exec dsh-tavern-doctor --json
 <details>
 <summary><b>安装后新建会话看不到「Tavern 模式」或设置页没有 Tavern 入口？</b></summary>
 
-1. 运行 `dsh --version`，确认宿主版本严格为 `0.2.1-rc.1`。
+1. 运行 `dsh --version`，确认宿主版本严格为 `0.2.1-rc.2`。
 2. 运行 `dsh plugin --profile web list --depth 0`，确认插件已安装在 `web` profile 下。
 3. 完全重启 `dsh web` 或桌面端，并检查启动终端是否有加载报错。
 </details>

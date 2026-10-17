@@ -1,4 +1,4 @@
-/** 自动 MVU 门控集成：真实 0.2.1-rc.1 AgentLoop/Inbox、工厂 Session 和真实剧情 WAL 验证等待、取消与输入恢复。 */
+/** 自动 MVU 门控集成：真实 0.2.1-rc.2 AgentLoop/Inbox、工厂 Session 和真实剧情 WAL 验证等待、取消与输入恢复。 */
 import { mkdtemp, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'

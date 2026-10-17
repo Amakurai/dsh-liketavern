@@ -1,6 +1,16 @@
 # 宿主兼容记录
 
-当前源码基线为 dsh 0.2.1-rc.1。以下按版本记录观测结果，升级时重新核对，不是永久架构要求。
+当前源码基线为 dsh 0.2.1-rc.2。以下按版本记录观测结果，升级时重新核对，不是永久架构要求。
+
+## 0.2.1-rc.2 升级核对（2026-10-17）
+
+公开 npm 上已有锁定的全部宿主包的 `0.2.1-rc.2` 版本，没有包被移除或改名。`@deepseek-ai/cordis` 仍为 `4.0.5`，`@deepseek-ai/schemastery` 仍为 `3.18.5`，`cordis-plugin-*` 版本也没变。`peerDependencies`、`overrides`、`devDependencies` 统一改为精确 `0.2.1-rc.2`，`allowScripts` 同步改为 `@deepseek-ai/dsh-subprocess-local@0.2.1-rc.2`。
+
+用 `npm diff` 比较了插件源码与测试导入的宿主包，连同 `dsh-web-app`、`dsh-agent-preset` 共 44 个。差异只有 package.json 中的版本号和依赖版本，`lib/` 与类型声明没有变化。web profile 的 `cordis.patch.yml` 新增客户端插件 `@deepseek-ai/dsh-client-ui-deepseek-model-label-1017`，即官方 DeepSeek Flash 模型标签的临时徽标。`dsh-agent-preset` 的参考文档新增 `dsh-web-deepseek-api` 条目。这两项都不涉及插件使用的 slot、system-prompt、事件时序或适配器接口，所以源码无需修改，重建后 `lib/` 内容保持一致。
+
+验证：Windows / Node 24.18.0 下，`npm audit` 为 0 已知漏洞，`npm run build` 通过。全量 254 个测试文件、3372 项测试通过，11 项按平台或能力跳过。`doctor:check`、`backup:check` 与 `package:check`（511 个白名单文件）通过。
+
+在独立的临时 `DSH_HOME` 中，用 0.2.1-rc.2 CLI 执行 `dsh plugin --profile web add`，安装本地 tgz。`--dump-config` 能看到 `dsh-tavern` 条目。启动 `dsh --profile web` 后，鉴权首页返回 200，并加载了 `dsh-liketavern/client.js`；`dsh-tavern/` 数据目录完整初始化，日志中没有插件加载错误。pnpm 的 missing peer 提示来自宿主在运行时提供的 peer，与以往一致。测试宿主按 PID 与命令行核对后结束，3080 端口经 netstat 确认已释放，临时目录已清理。这次没有调用真实模型，也没有做浏览器 UI 交互验收。
 
 ## 0.2.1-rc.1 升级核对（2026-10-17）
 

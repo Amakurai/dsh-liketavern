@@ -42,7 +42,7 @@ Regex rules, prompt templates, and HTML card scripts bundled inside third-party 
 
 ## Installation & Upgrade
 
-> **Prerequisites**: Node.js `>= 24.0.0`, DeepSeek Harness `0.2.1-rc.1`, `pnpm`, and at least one configured model in `dsh`. If you are new to `dsh`, see the [DeepSeek Harness Documentation](https://deepseek-harness.github.io/deepseek-harness/) first. Precompiled `lib/` bundles are committed to the repository, so no local build is required during installation.
+> **Prerequisites**: Node.js `>= 24.0.0`, DeepSeek Harness `0.2.1-rc.2`, `pnpm`, and at least one configured model in `dsh`. If you are new to `dsh`, see the [DeepSeek Harness Documentation](https://deepseek-harness.github.io/deepseek-harness/) first. Precompiled `lib/` bundles are committed to the repository, so no local build is required during installation.
 
 ### Desktop Installation
 
@@ -192,7 +192,7 @@ dsh plugin --profile web exec dsh-tavern-doctor --json
 <details>
 <summary><b>"Tavern 模式" or the Tavern settings tab is missing after installation?</b></summary>
 
-1. Run `dsh --version` and confirm the host version is `0.2.1-rc.1`.
+1. Run `dsh --version` and confirm the host version is `0.2.1-rc.2`.
 2. Run `dsh plugin --profile web list --depth 0` to verify the plugin is installed in the `web` profile.
 3. Restart `dsh web` (or the desktop app) and check the terminal output for startup errors.
 </details>

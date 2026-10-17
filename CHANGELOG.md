@@ -4,7 +4,7 @@
 
 ## 未发布
 
-- 升级适配 **dsh `0.2.1-rc.1`、Node.js ≥ 24**（`@deepseek-ai/cordis` `4.0.5`、`@deepseek-ai/schemastery` `3.18.5`）：适配 `ReactLoopAgent` 步骤内 `systemPrompt.refreshContext` 对 `tavern:turn` 运行时上下文与预设请求投影计划载体的刷新行为，实现 `LlmAdapter.imageRequestTarget` 委托，支持 `conversation.chat.node` 的 `loadImage` / `conversation.images.content` 图片渲染契约，并同步持久化插件与 PTC 工作目录服务契约。
+- 升级适配 **dsh `0.2.1-rc.2`、Node.js ≥ 24**（`@deepseek-ai/cordis` `4.0.5`、`@deepseek-ai/schemastery` `3.18.5`）。rc.2 相对 rc.1 仅同步宿主包版本并在 web profile 新增模型标签徽标客户端插件，插件所用接口无变化；以下为 rc.1 起的适配：适配 `ReactLoopAgent` 步骤内 `systemPrompt.refreshContext` 对 `tavern:turn` 运行时上下文与预设请求投影计划载体的刷新行为，实现 `LlmAdapter.imageRequestTarget` 委托，支持 `conversation.chat.node` 的 `loadImage` / `conversation.images.content` 图片渲染契约，并同步持久化插件与 PTC 工作目录服务契约。
 
 ## 0.5.3（2026-10-13）
 

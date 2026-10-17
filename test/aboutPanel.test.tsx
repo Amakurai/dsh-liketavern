@@ -96,10 +96,10 @@ describe('关于页与按需更新检查', () => {
   })
 
   it.each([null, COMMAND])('桌面端读到宿主版本后启用检查，指向插件页面且隐藏 web 命令：%s', async command => {
-    const f = fixture(about({ hostVersion: '0.2.1-rc.1', desktopHost: true }))
+    const f = fixture(about({ hostVersion: '0.2.1-rc.2', desktopHost: true }))
     f.checkPluginUpdate.mockResolvedValue(ok(update({ command })))
     const view = await render(<AboutSection remote={f.remote} />)
-    expect(content(view)).toContain('0.2.1-rc.1')
+    expect(content(view)).toContain('0.2.1-rc.2')
     expect(content(view)).toContain(t('about.desktopNote'))
     expect(content(view)).not.toContain(t('about.cliNote'))
     await click(view, t('about.check'))

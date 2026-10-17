@@ -22,14 +22,14 @@ v0.2.6 发布前本地验收：`npm run build`、全量 **140 文件 / 1986 项�
 
 ## 已更新的依赖
 
-- `js-yaml` 从 4.3.1 更新到 4.3.2，根级 `overrides` 固定补丁版本，锁文件同步更新。该版本修复恶意空映射合并绕过工作量限制的问题（[GHSA-2883-xcg3-v3hh](https://github.com/advisories/GHSA-2883-xcg3-v3hh)）。本仓库通过开发用 dsh / Cordis 依赖引入它；当前宿主基线为 0.2.1-rc.1。
+- `js-yaml` 从 4.3.1 更新到 4.3.2，根级 `overrides` 固定补丁版本，锁文件同步更新。该版本修复恶意空映射合并绕过工作量限制的问题（[GHSA-2883-xcg3-v3hh](https://github.com/advisories/GHSA-2883-xcg3-v3hh)）。本仓库通过开发用 dsh / Cordis 依赖引入它；当前宿主基线为 0.2.1-rc.2。
 - `vitest` 从 3.2.7 更新并固定为 4.1.11，相关 `@vitest/*` 包同步更新，修复 redirect mock 越界文件读取（[GHSA-82fw-gwwq-j7x9](https://github.com/advisories/GHSA-82fw-gwwq-j7x9)）。本项目只用 `vitest run` 执行测试，不向外提供 mock 开发服务器；升级仍需运行全量 React、文件系统和 worker 用例。
 
 这些版本约束只作用于本仓库的 npm 安装。发布包不带开发依赖，依赖包的根级 `overrides` 也不会替使用者覆盖其独立安装的 dsh。实际宿主的 `js-yaml` 版本应在宿主安装目录通过 `npm explain js-yaml`（或对应包管理器命令）核对，由宿主依赖升级到兼容的已修复版本；更新本仓库锁文件不等于更新其他安装环境。
 
 ## 安装脚本与上游弃用提示
 
-npm 11.16 的安装脚本提醒已逐包审阅，并在项目 `allowScripts` 中仅记录这六个实际版本：`@deepseek-ai/dsh-subprocess-local@0.2.1-rc.1`、`@google/genai@2.21.0`、`esbuild@0.25.12`、`koffi@3.1.1`、`node-pty@1.2.0-beta.15`、`protobufjs@7.6.6`。不使用全局放行或通配符；以后版本变化需要重新审阅。此字段是脚本审批记录，不是脚本权限沙箱，旧 npm 可能不读取它。见 [npm 官方说明](https://docs.npmjs.com/cli/v11/commands/npm-approve-scripts/)。
+npm 11.16 的安装脚本提醒已逐包审阅，并在项目 `allowScripts` 中仅记录这六个实际版本：`@deepseek-ai/dsh-subprocess-local@0.2.1-rc.2`、`@google/genai@2.21.0`、`esbuild@0.25.12`、`koffi@3.1.1`、`node-pty@1.2.0-beta.15`、`protobufjs@7.6.6`。不使用全局放行或通配符；以后版本变化需要重新审阅。此字段是脚本审批记录，不是脚本权限沙箱，旧 npm 可能不读取它。见 [npm 官方说明](https://docs.npmjs.com/cli/v11/commands/npm-approve-scripts/)。
 
 已检查脚本行为：dsh 调整包内 spawn-helper 执行权限；esbuild 准备/验证同版本平台二进制，缺包时从配置的 npm registry 安装并可回退官方 registry；koffi 选择平台预编译包或本地 CMake 构建；node-pty 准备包内 prebuild/ConPTY，缺失时由 node-gyp 构建，可能下载 Node headers；protobufjs 只检查依赖版本写法；Google preinstall 仅输出 no-op。
 

@@ -17,6 +17,7 @@ import { SessionId, SessionStore } from '@deepseek-ai/dsh-session'
 import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection'
 import { SystemPrompt } from '@deepseek-ai/dsh-system-prompt'
 import { ToolRuntime } from '@deepseek-ai/dsh-tools'
+import { WorkingDirectoryService } from '@deepseek-ai/dsh-working-directory'
 import { parse } from 'yaml'
 import { apply as applyAgent } from '../src/agent.js'
 import { TavernState } from '../src/node/state.js'
@@ -50,6 +51,7 @@ beforeEach(async () => {
   ctx = new Context()
   new SessionStore(ctx); new AgentRegistry(ctx); new SessionProjectionRegistry(ctx); new SystemPrompt(ctx, {}); new ToolRuntime(ctx)
   new LocalFileSystem(ctx, LocalFileSystem.Config({}))
+  new WorkingDirectoryService(ctx, WorkingDirectoryService.Config({ defaultDirectory: root }))
   new LocalSubprocessRuntime(ctx)
   new LocalSandboxProvider(ctx, LocalSandboxProvider.Config({}))
   // 仅执行本文件手写程序，不运行第三方脚本；测试使用真实 Node PTC 子进程。

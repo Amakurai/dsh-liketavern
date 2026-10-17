@@ -6,7 +6,7 @@
 
 dsh-liketavern 为 DeepSeek Harness 的 Tavern 插件。角色卡、预设、世界书、人设、正则、记忆、世界变化层和分支操作共用 dsh agent 运行时。普通扮演不另起发信通道；AI 代答是明确的辅助调用。
 
-当前基线：dsh / @deepseek-ai 包 0.2.0-rc.2、Node 24、Windows；CI 为 Ubuntu。TypeScript ESM，NodeNext，strict + noUncheckedIndexedAccess，相对导入显式 `.js`。
+当前基线：dsh / @deepseek-ai 包 0.2.1-rc.1、Node 24、Windows；CI 为 Ubuntu。TypeScript ESM，NodeNext，strict + noUncheckedIndexedAccess，相对导入显式 `.js`。
 
 查宿主机制先看 [官方文档](https://deepseek-harness.github.io/deepseek-harness/) 和已安装包的 `lib/`、`.d.ts`，先核对各包 package.json；不要凭旧版本记忆推断 slot、profile、patch、system-prompt 或事件时序。
 
@@ -68,7 +68,7 @@ dsh-liketavern 为 DeepSeek Harness 的 Tavern 插件。角色卡、预设、世
 
 remote 经 `$mount(TYPERT_REMOTE)` 安装，调用 `ctx.get('remote.tavern')`，不要在 inject 里声明 remote.tavern。交互组件用宿主 primitives（封装在 util.tsx）；不用原生 select 或 window.confirm。确认用 ConfirmDialog，表单用 SettingsRow/SaveBar，反馈用 Toast，加载用 Skeleton，页签用 Tabs。
 
-样式集中 styles.ts，只用已有 --dsw-* / --tavern-accent-* 变量。动效遵守 prefers-reduced-motion。文案走 useT 与 client/locales 分模块字典，zh/en 同键完整。消息图片用 owner renderMessageImages；MarkdownText 的 labels 与 fileMentions 必须符合宿主真实类型。
+样式集中 styles.ts，只用已有 --dsw-* / --tavern-accent-* 变量。动效遵守 prefers-reduced-motion。文案走 useT 与 client/locales 分模块字典，zh/en 同键完整。消息图片用 owner loadImage 与 conversation.images.content（兼容回退 renderMessageImages）；MarkdownText 的 labels 与 fileMentions 必须符合宿主真实类型。
 
 ## 验证与交付
 

@@ -5,8 +5,8 @@ import {join} from 'node:path'
 import {createHash} from 'node:crypto'
 import {afterEach,beforeEach,expect,it,vi} from 'vitest'
 import type {Context} from '@deepseek-ai/cordis'
-import {Session,SessionSeq,type SessionEvent} from '@deepseek-ai/dsh-session'
-import {apply as applySessionInvariant} from '@deepseek-ai/dsh-session/invariant'
+import {interruptedTurnClosers,Session,SessionSeq,ToolCallRecovery,type SessionEvent} from '@deepseek-ai/dsh-session'
+import {validateStoredEvents} from '@deepseek-ai/dsh-session-persistence'
 import {createAssistantMessage,createUserMessage,createToolResultMessage,ToolCallId} from '@deepseek-ai/dsh-llm'
 import {TavernState} from '../src/node/state.js'
 import {resolveConfig} from '../src/node/config.js'
@@ -300,10 +300,19 @@ it('坏页集合、页字段矛盾与写失败不落部分数据，也不会提�
   expect((await request()).messages[5]?.swipe?.pages).toHaveLength(1)
 })
 
-/** 调用宿主实际关系不变量伴随插件，检查删改 seed 的 turn/step 和工具结果配对，而非自写镜像校验器。 */
+/** 调用宿主公开持久化校验、Session 恢复与 ToolCallRecovery/interruptedTurnClosers，检查删改 seed 的 turn/step 和工具结果配对。 */
 async function assertHostTrace(session:Session){
-  const adapter={sessions:{list:()=>[session]},on:vi.fn(),invariants:{register:(_name:string,install:(ctx:Context,fail:(message:string)=>never)=>void)=>{install(adapter as unknown as Context,message=>{throw Error(message)});return ()=>{}}}}
-  await applySessionInvariant(adapter as unknown as Context)
+  const events=session.snapshotEvents()
+  validateStoredEvents(session.header,events.map(event=>structuredClone(event)))
+  const restored=Session.create(session.id,events,session.header,session.inheritedEventCount)
+  expect(restored.deriveMessages()).toEqual(session.deriveMessages())
+  const recovery=new ToolCallRecovery()
+  for(const event of events){
+    if(event.type==='step/end'||event.type==='turn/end'||event.type==='turn/start')expect(recovery.results()).toEqual([])
+    recovery.observe(event)
+  }
+  expect(recovery.results()).toEqual([])
+  expect(interruptedTurnClosers(events)).toEqual([])
 }
 it('删除用户和 assistant 消息同时移除工具配对及过时摘要，保留后续历史与原会话',async()=>{
   await assertHostTrace(source)

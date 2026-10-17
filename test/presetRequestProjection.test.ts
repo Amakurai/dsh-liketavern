@@ -118,6 +118,10 @@ it('附在真实用户上的计划保留图片内容块，并将尾条放在该�
   expect(retained.content).toEqual(f.current.content)
   expect(output.messages.at(-2)?.id).toBe(f.current.id)
   expect(textOf(output.messages.at(-1)!)).toBe('TAIL')
+  session.append('user/message', f.snapshot, { surfaceOp: 'append' })
+  const withContext = projectPresetRequest({ ...f.request(), messages: session.deriveMessages() }, session)
+  expect(withContext.messages.at(-2)?.id).toBe(f.snapshot.id)
+  expect(textOf(withContext.messages.at(-1)!)).toBe('TAIL')
 })
 
 it('官方 DeepSeek HTTP 序列化忽略附加 source 元数据，未投影路由发送原正文且不泄漏布局 JSON', async () => {

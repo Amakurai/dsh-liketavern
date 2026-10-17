@@ -245,6 +245,12 @@ export class TavernState {
    * 按重算结果建计划会让投影每轮都找不到 standing 而失败。
    */
   readonly appliedStanding = new Map<string, string>()
+  /**
+   * 本步 system-prompt/assemble 实际组装的 runtime context `tavern:turn` 文本。
+   * 0.2.1-rc.1 起 ReactLoopAgent.step 在 pre-step 后调用 SystemPrompt.refreshContext 重新求值已注册的
+   * context provider（不重跑 assemble waterfall）；provider 函数直接返回该文本以保持字节一致。
+   */
+  readonly appliedTurnContext = new Map<string, string>()
   /** standing 依赖资产的进程内修订号：经本类写方法编辑/删除即 bump，standing 指纹随内容变化失效重算。 */
   private readonly assetRevs = new Map<string, number>()
   /**
@@ -1386,6 +1392,7 @@ export class TavernState {
   /** 清掉会话全部场景的 standing 钉位（换绑/回收绑定时）。 */
   private clearStandingPins(sessionId: string): void {
     this.appliedStanding.delete(sessionId)
+    this.appliedTurnContext.delete(sessionId)
     const prefix = `${sessionId}\0`
     for (const key of [...this.standingPins.keys()]) {
       if (key.startsWith(prefix)) this.standingPins.delete(key)

@@ -200,9 +200,15 @@ it('向同代 delegate 转交官方 provider、原图片对象和工具结构，
   const abort = new AbortController()
   const prepared = await llm.prepareCall({ provider: PRESET_ADAPTER_PROVIDER, model: 'factory' }, abort.signal)
   const original = request(prepared.config, abort.signal)
-  original.messages.push(createUserMessage({ source: { kind: 'user' }, content: [{ type: 'image', attachment: {
-    attachmentId: AttachmentId('a'.repeat(64)), mediaType: 'image/png', bytes: 32, width: 1, height: 1, name: 'factory.png',
-  } }] }))
+  const targetSpy = vi.spyOn(DeepSeekAdapter.prototype, 'imageRequestTarget')
+  const imageRef = {
+    attachmentId: AttachmentId('a'.repeat(64)), mediaType: 'image/png' as const, bytes: 32, width: 1, height: 1, name: 'factory.png',
+  }
+  expect(llm.imageRequestTarget(PRESET_ADAPTER_PROVIDER, 'factory', imageRef)).toEqual({
+    width: 1, height: 1, maxBytes: 2 * 1024 * 1024,
+  })
+  expect(targetSpy).toHaveBeenCalledExactlyOnceWith(PRESET_ADAPTER_SOURCE_PROVIDER, 'factory', imageRef)
+  original.messages.push(createUserMessage({ source: { kind: 'user' }, content: [{ type: 'image', attachment: imageRef }] }))
   await collect(prepared.stream(original))
   expect(spy).toHaveBeenCalledExactlyOnceWith(PRESET_ADAPTER_SOURCE_PROVIDER, 'factory', abort.signal)
   expect(delegated?.provider).toBe(PRESET_ADAPTER_SOURCE_PROVIDER)

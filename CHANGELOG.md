@@ -2,6 +2,10 @@
 
 本插件与 dsh 宿主版本一一绑定（peerDependency 锁定精确版本），升级 dsh 前请先确认有适配的插件版本。
 
+## 未发布
+
+- 升级适配 **dsh `0.2.1-rc.1`、Node.js ≥ 24**（`@deepseek-ai/cordis` `4.0.5`、`@deepseek-ai/schemastery` `3.18.5`）：适配 `ReactLoopAgent` 步骤内 `systemPrompt.refreshContext` 对 `tavern:turn` 运行时上下文与预设请求投影计划载体的刷新行为，实现 `LlmAdapter.imageRequestTarget` 委托，支持 `conversation.chat.node` 的 `loadImage` / `conversation.images.content` 图片渲染契约，并同步持久化插件与 PTC 工作目录服务契约。
+
 ## 0.5.3（2026-10-13）
 
 继续适配 **dsh `0.2.0-rc.2`、Node.js ≥ 24**。本次修复长剧情模板状态和重放日志增长问题，加入可跨重启恢复闭包的持久检查点，并汇总记忆检索边界优化。关联 [issue #12](https://github.com/Amakurai/dsh-liketavern/issues/12)。

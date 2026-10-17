@@ -25,11 +25,22 @@ interface AssistantNode {
         };
     };
 }
-/** 宿主 owner props 里的图片渲染器（rc.2 起替代 loadImage，见 conversation.chat.node 契约）。 */
+/** 宿主 owner props 里的会话图片加载器（0.2.1-rc.1 起配合 conversation.images.content factory 渲染消息图片）。 */
+type MessageImageLoader = (attachmentId: string, signal?: AbortSignal) => Promise<unknown>;
+/** 宿主 Slot 注入的 Factory 渲染器（调用 conversation.images.content）。 */
+type RenderImagesFactorySlot = (name: 'conversation.images.content', props: {
+    images: readonly {
+        attachment: unknown;
+    }[];
+    loadImage?: MessageImageLoader;
+    align: 'start' | 'end';
+}) => ReactNode;
+/** 兼容直接传入图片渲染回调的测试与辅助调用。 */
 type RenderMessageImages = (owner: {
     images: readonly {
         attachment: unknown;
     }[];
+    loadImage?: MessageImageLoader;
     align: 'start' | 'end';
 }) => ReactNode;
 /** fileMentions 的入参（宿主 AssistantNodeView 同款：turn-tail owner）。 */
@@ -51,6 +62,8 @@ export declare function TavernAssistantNode(props: {
      * （折叠时隐藏但仍挂载），response 段是正文。忽略它会在折叠区里再挂一整份卡面与脚本。
      */
     groupPart?: string;
+    loadImage?: MessageImageLoader;
+    renderFactorySlot?: RenderImagesFactorySlot;
     renderMessageImages?: RenderMessageImages;
     useTurnData?: (key: string) => unknown;
     openFile?: (path: string) => void;

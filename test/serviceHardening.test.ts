@@ -81,19 +81,19 @@ it('关于 remote 服务传递本次桌面 profile，两个宿主实例的版本
   const own = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as { version: string }
   const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async url => new Response(JSON.stringify(
     String(url).endsWith('/releases/latest') ? { tag_name: `v${own.version}`, draft: false, prerelease: false }
-      : { name: 'dsh-liketavern', version: own.version, peerDependencies: { '@deepseek-ai/dsh': '0.2.0-rc.2' } },
+      : { name: 'dsh-liketavern', version: own.version, peerDependencies: { '@deepseek-ai/dsh': '0.2.1-rc.1' } },
   )))
   vi.stubGlobal('fetch', fetch)
   try {
     const hosts: TavernService[] = []
-    for (const version of ['0.2.0-rc.2', '9.8.7']) {
+    for (const version of ['0.2.1-rc.1', '9.8.7']) {
       const directory = join(root, version), installAnchor = join(directory, 'package.json')
       await mkdir(directory)
       await writeFile(installAnchor, JSON.stringify({ name: '@deepseek-ai/dsh', version }))
       const ctx = { reflect: { provide: () => {} }, get: (key: string) => key === 'profileContext' ? { name: 'desktop', installAnchor } : undefined } as unknown as Context
       hosts.push(new TavernService(ctx, state, { get: () => settingsRaw } as TavernSettingsScope))
     }
-    expect(await hosts[0]!.getPluginAbout({})).toMatchObject({ hostVersion: '0.2.0-rc.2', desktopHost: true })
+    expect(await hosts[0]!.getPluginAbout({})).toMatchObject({ hostVersion: '0.2.1-rc.1', desktopHost: true })
     expect(await hosts[1]!.getPluginAbout({})).toMatchObject({ hostVersion: '9.8.7', desktopHost: true })
     expect(fetch).not.toHaveBeenCalled()
     const [compatible, incompatible] = await Promise.all(hosts.map(host => host.checkPluginUpdate({})))

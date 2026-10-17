@@ -28,6 +28,11 @@ export declare function formatTurnStepNotice(step: number): string;
  * 不能当 {{lastusermessage}}，也不能拿去扫世界书。
  */
 export declare function isRuntimeContextSnapshot(text: string): boolean;
+export declare function isRuntimeContextMessage(message: {
+    source?: {
+        kind?: string;
+    };
+}): boolean;
 /** 同轮工具写入后经 agent.inject 的确认；不当作用户台词，也不扫世界书。 */
 export declare const TURN_WRITE_ACK_PREFIX = "\u3010Tavern \u540C\u8F6E\u5199\u5165\u3011";
 export declare function isTurnWriteAck(text: string): boolean;

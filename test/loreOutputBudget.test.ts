@@ -17,6 +17,7 @@ import { SessionId, SessionStore } from '@deepseek-ai/dsh-session'
 import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection'
 import { SystemPrompt } from '@deepseek-ai/dsh-system-prompt'
 import { ToolRuntime } from '@deepseek-ai/dsh-tools'
+import { WorkingDirectoryService } from '@deepseek-ai/dsh-working-directory'
 import { TavernState } from '../src/node/state.js'
 import { resolveConfig } from '../src/node/config.js'
 import { registerTavernTools } from '../src/node/tools.js'
@@ -34,7 +35,7 @@ beforeEach(async () => {
     characterLorebookId: null, interactiveCards: false, greetingIndex: 0, createdAt: new Date(0).toISOString() })
   ctx = new Context()
   new SessionStore(ctx); new AgentRegistry(ctx); new SessionProjectionRegistry(ctx); new SystemPrompt(ctx, {}); new ToolRuntime(ctx)
-  new LocalFileSystem(ctx, LocalFileSystem.Config({})); new LocalSubprocessRuntime(ctx)
+  new LocalFileSystem(ctx, LocalFileSystem.Config({})); new WorkingDirectoryService(ctx, WorkingDirectoryService.Config({ defaultDirectory: root })); new LocalSubprocessRuntime(ctx)
   new LocalSandboxProvider(ctx, LocalSandboxProvider.Config({}))
   // 仅执行手写 PTC 程序；世界书字段始终作为数据，不运行第三方脚本或模型。
   new SandboxPolicyService(ctx, { mode: 'danger-full-access', workspaceRoot: root })

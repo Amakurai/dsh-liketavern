@@ -8,7 +8,7 @@ import { assertUsableApiKey, callConfigEquals, LlmAdapter, LlmError, resolveImag
 import { DeepSeekAdapter, DeepSeekFileStore, catalogModelInfo } from '@deepseek-ai/dsh-llm-deepseek'
 import { Config as DeepSeekConfig, plainOptions, resolveAdapterOptions, type ResolvedDeepSeekOptions } from '@deepseek-ai/dsh-llm-deepseek-api-key'
 import { deepFreeze } from '@deepseek-ai/dsh-util-values'
-import type {} from '@deepseek-ai/dsh-attachment'
+import type { ImageAttachmentRef, ImageRequestTarget } from '@deepseek-ai/dsh-attachment'
 import type {} from '@deepseek-ai/dsh-credentials'
 import type {} from '@deepseek-ai/dsh-deepseek-llm-api-extensions'
 import type {} from '@deepseek-ai/dsh-fs'
@@ -33,6 +33,9 @@ class PresetAdapter extends LlmAdapter {
   override providerInfo(provider: string) { return { id: provider, name: 'DeepSeek (Tavern)' } }
   override providerRetryPolicy(): ResolvedRetryPolicy { return this.delegate.providerRetryPolicy(PRESET_ADAPTER_SOURCE_PROVIDER) }
   override imageRequestPricing(_provider: string, model: string) { return this.delegate.imageRequestPricing(PRESET_ADAPTER_SOURCE_PROVIDER, model) }
+  override imageRequestTarget(_provider: string, model: string, image: ImageAttachmentRef): ImageRequestTarget {
+    return this.delegate.imageRequestTarget(PRESET_ADAPTER_SOURCE_PROVIDER, model, image)
+  }
   override async listModels(provider: string): Promise<readonly LlmModelInfo[]> {
     return (await this.delegate.listModels(PRESET_ADAPTER_SOURCE_PROVIDER)).map(model => ({ ...model, provider }))
   }

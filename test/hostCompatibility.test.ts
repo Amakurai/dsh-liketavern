@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import { createAssistantMessage, createUserMessage, ToolCallId, type AssistantStreamRecord } from '@deepseek-ai/dsh-llm'
 import { Session, SessionId, SessionStore, type SessionEvent } from '@deepseek-ai/dsh-session'
-import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
+import { apply as applyJsonlSessionPersistence, Config as JsonlSessionPersistenceConfig } from '@deepseek-ai/dsh-session-persistence-jsonl'
 import { afterEach, expect, it, vi } from 'vitest'
 import { hasNormalAssistantStop } from '../src/node/assistantStream.js'
 import { displaySessionEventAt, displaySessionHasUserMessage, readDisplaySessionEvents } from '../src/node/sessionEvents.js'
@@ -86,7 +86,8 @@ async function artifacts(root: string) {
 it('真实 JSONL 冷会话使用 read 句柄，连续展示不更改磁盘，缺失会话返回空历史', async () => {
   const root = await mkdtemp(join(tmpdir(), 'tavern-host-contract-')); roots.push(root)
   const ctx = new Context(); new SessionStore(ctx)
-  const persistence = new JsonlSessionPersistence(ctx, { root, compression: 'none' })
+  await applyJsonlSessionPersistence(ctx, JsonlSessionPersistenceConfig({ root, compression: 'none' }))
+  const persistence = ctx.sessionPersistence
   try {
     const { session } = reply([text, stop])
     const writer = await persistence.create(session.header)

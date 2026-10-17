@@ -1,6 +1,19 @@
 # 宿主兼容记录
 
-当前源码基线为 dsh 0.2.0-rc.2。以下按版本记录观测结果，升级时重新核对，不是永久架构要求。
+当前源码基线为 dsh 0.2.1-rc.1。以下按版本记录观测结果，升级时重新核对，不是永久架构要求。
+
+## 0.2.1-rc.1 升级核对（2026-10-17）
+
+公开 npm 上 `0.2.1-rc.1` 发布了新的宿主与基础包版本：`peerDependencies`、`overrides`、`devDependencies` 统一升级为精确 `0.2.1-rc.1`，`@deepseek-ai/cordis` 升至 `4.0.5`、`@deepseek-ai/schemastery` 升至 `3.18.5`，`@deepseek-ai/cordis-plugin-*` 同步更新；移除 0.2.1-rc.1 已裁撤的 `@deepseek-ai/dsh-invariants` 与 `@deepseek-ai/dsh-subagent-in-process-driver`，补入 `dsh-tools` 在 Agent PTC `run_code` 路径下依赖的 `@deepseek-ai/dsh-working-directory@0.2.1-rc.1`。
+
+逐包核对 0.2.1-rc.1 的 `package.json`、`lib/` 与类型声明并完成适配：
+
+- `SystemPrompt` 与 `ReactLoopAgent.step()`：0.2.1-rc.1 在 `agent/pre-step` 返回后调用 `systemPrompt.refreshContext(agent)`，用重新求值的快照替换 `decision.messages` 中的 `runtime-context` 消息。插件注册 `tavern:turn` context 时提供 `text` 回调，从 `state.appliedTurnContext` 返回本轮已组装的 turn 文本，避免 `refreshContext` 将 `tavern:turn` 重置为空；同时 `agent/pre-step` 将 `attachPresetPlanMessage` 挂在 `decision.messages` 最后一个非 `runtime-context` 的 `UserMessage` 上（防止 `refreshContext` 替换 `runtime-context` 时丢弃 `tavernPresetPlan`），`presetRequestProjection` 的 `frontierAt` 在命中载体消息后跨过同批次紧随的连续 `runtime-context` 消息，保持请求边界、尾部 runtime context 吸收与历史深度一致。
+- `LlmAdapter` 新增抽象方法 `imageRequestTarget(provider, model, image)`：`TavernPresetDeepSeekAdapter` 将其委托给持有的公开 `DeepSeekAdapter`（固定 `PRESET_ADAPTER_SOURCE_PROVIDER`）。
+- 客户端 `conversation.chat.node` 图片渲染：0.2.1-rc.1 的 `ChatMessageOwnerProps` 改为提供 `loadImage` 并经 `conversation.images.content` 工厂 slot 渲染图片网格；`assistant.tsx` 优先使用 `owner.loadImage` + `renderFactorySlot('conversation.images.content', ...)`，并保留 `renderMessageImages` 兼容回退。
+- 测试与持久化插件契约：`@deepseek-ai/dsh-session-persistence-jsonl` 改为导出函数式插件 `apply` 与 `Config`；`@deepseek-ai/dsh-session/invariant` 移除后，消息编辑集成测试改用公开 `validateStoredEvents`、`Session.create`、`ToolCallRecovery` 与 `interruptedTurnClosers` 校验存储契约、surface 转换与 turn/step/工具调用配对；独立 PTC 集成测试显式挂载 `WorkingDirectoryService`。
+
+验证：Windows / Node 24.18.0 下，`npm audit` 为 0 已知漏洞，`npm run build` 通过，全量 254 个测试文件 / 3372 项测试全部通过（11 项按平台或能力跳过），`doctor:check`、`backup:check` 与 `package:check`（511 个白名单文件）通过。在独立临时 `DSH_HOME` 中使用 0.2.1-rc.1 CLI 执行 `dsh plugin --profile web add` 安装本地 tgz，核对 `--dump-config` 合并配置后启动 `dsh --profile web`，鉴权首页返回 200 且包含 `dsh-liketavern` 客户端模块，`dsh-tavern/` 数据目录完整初始化，无插件加载错误，临时目录已清理。
 
 ## 0.2.0-rc.2 依赖安全与 v0.5.2 安装复核（2026-10-10）
 

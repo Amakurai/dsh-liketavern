@@ -10,7 +10,7 @@ import type {} from '@deepseek-ai/dsh-agent-loop'
 import type {} from '@deepseek-ai/dsh-compaction-basic'
 import { joinContextSections } from '@deepseek-ai/dsh-system-prompt'
 import { z } from 'zod'
-import { BOUND_DISCIPLINE, TURN_PLAYBOOK, turnTailHeader } from '../core/dshPrompt.js'
+import { BOUND_DISCIPLINE, TURN_PLAYBOOK, isRuntimeContextMessage, turnTailHeader } from '../core/dshPrompt.js'
 import { PromptLayoutSchema, type PromptHistoryAnchor, type PromptLayout, type PromptLayoutEntry } from '../core/promptLayout.js'
 import { estimateTokens } from '../core/tokenize.js'
 
@@ -400,10 +400,12 @@ export function projectPresetRequest(options: Readonly<GenerateOptions>, session
   }
   // 载体在首次接收批次末尾：后续工具步骤保留在它之后，尾条绝不重新附到工具结果之后。
   const carrierIndex = requestMessages.findIndex(message => message.id === carrier.id)
-  /** 某条载体所在输入批次之后的边界（历史轮与本轮同一算法）。 */
+  /** 某条载体所在输入批次之后的边界（历史轮与本轮同一算法，覆盖同批次紧随其后的 runtime-context）。 */
   const frontierAt = (index: number): number => {
+    let batchEnd = index
+    while (requestMessages[batchEnd + 1] && isRuntimeContextMessage(requestMessages[batchEnd + 1]!)) batchEnd++
     let end = 1
-    for (const message of requestMessages.slice(0, index + 1)) {
+    for (const message of requestMessages.slice(0, batchEnd + 1)) {
       const at = positions.get(message.id)
       if (at !== undefined) end = Math.max(end, at + 1)
     }

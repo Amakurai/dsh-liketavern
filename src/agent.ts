@@ -23,7 +23,7 @@ import type { TavernService } from './node/service.js'
 import type { TavernState } from './node/state.js'
 import { registerTavernTools } from './node/tools.js'
 import { mergeTavernCallConfig, resolveTavernReasoningEffort, type AdvertisedReasoningInfo } from './core/callConfig.js'
-import { BOUND_DISCIPLINE, TURN_PLAYBOOK, UNBOUND_STANDING, isContinueInstruction, isTurnScopedNotice, neutralizeDshMustache } from './core/dshPrompt.js'
+import { BOUND_DISCIPLINE, TURN_PLAYBOOK, UNBOUND_STANDING, isContinueInstruction, isRuntimeContextMessage, isTurnScopedNotice, neutralizeDshMustache } from './core/dshPrompt.js'
 import type { SamplingSettings } from './core/types.js'
 import { PRESET_ADAPTER_PROVIDER, PRESET_ADAPTER_SOURCE_PROVIDER } from './node/presetAdapter.js'
 import { attachPresetPlanMessage, createPresetPlanMessage, hasPresetPlanMessage } from './node/presetRequestProjection.js'
@@ -39,7 +39,14 @@ function applyStanding(result: { sections: Array<{ name: string; text: string }>
   if (index !== -1) result.sections[index]!.text = text
 }
 
-function applyTurnContext(result: { contexts: Array<{ name: string; text: string }> }, text: string): void {
+function applyTurnContext(
+  result: { contexts: Array<{ name: string; text: string }> },
+  state: TavernState,
+  sessionId: string,
+  text: string,
+): void {
+  if (text) state.appliedTurnContext.set(sessionId, text)
+  else state.appliedTurnContext.delete(sessionId)
   const index = result.contexts.findIndex((c) => c.name === TURN_CONTEXT)
   if (index !== -1) result.contexts[index]!.text = text
   else if (text.trim()) result.contexts.push({ name: TURN_CONTEXT, text })
@@ -88,7 +95,11 @@ export function apply(ctx: Context): void {
 
   // rc.1 的 PTC SDK order=5000；旧 order=210 会把角色文本放到 SDK 前，损失工具前缀缓存。
   ctx.systemPrompt.section({ name: STANDING_SECTION, order: ctx.systemPrompt.getSectionOrder('TOOLS_SDK') + 10, text: UNBOUND_STANDING })
-  ctx.systemPrompt.context({ name: TURN_CONTEXT, order: 20, text: '' })
+  ctx.systemPrompt.context({
+    name: TURN_CONTEXT,
+    order: 20,
+    text: (context) => (context.agent ? state.appliedTurnContext.get(context.agent.id) ?? '' : ''),
+  })
 
   ctx.on('agent/pre-step', async (payload, next) => {
     if (isHelperMvuBlocked(payload.agent, payload.turn)) {
@@ -115,16 +126,22 @@ export function apply(ctx: Context): void {
       ...(pipeline.cacheFirstLayout === undefined ? {} : {cacheFirst:pipeline.cacheFirstLayout})}
     // 最终路由到 agent/request 才确定。先给正常输入附加模型不可见元数据，
     // 不猜旧 header，也不给其它供应商增加一条人工台词。
-    const last = decision.messages.at(-1)
-    const messages = last ? [...decision.messages.slice(0,-1),attachPresetPlanMessage(last,plan)] : [createPresetPlanMessage(plan)]
+    let targetIndex = -1
+    for (let index = decision.messages.length - 1; index >= 0; index--) {
+      if (!isRuntimeContextMessage(decision.messages[index]!)) { targetIndex = index; break }
+    }
+    const messages = targetIndex >= 0
+      ? decision.messages.map((message, index) => index === targetIndex ? attachPresetPlanMessage(message, plan) : message)
+      : [createPresetPlanMessage(plan), ...decision.messages]
     return {...decision,messages}
   })
 
   ctx.on('system-prompt/assemble', async (_assembly, context, next) => {
     const agent = context.agent
     if (!agent) return next()
-    // 每步重新记录；未绑定、阻塞或失败的步骤不能沿用上一步的 standing。
+    // 每步重新记录；未绑定、阻塞或失败的步骤不能沿用上一步的 standing 与 turn context。
     state.appliedStanding.delete(agent.id)
+    state.appliedTurnContext.delete(agent.id)
     const blocked = await blockHelperMvuAssembly(state, agent, context.signal)
     let result
     try { result = await next() }
@@ -135,7 +152,7 @@ export function apply(ctx: Context): void {
     }
     if (blocked) {
       applyStanding(result, UNBOUND_STANDING)
-      applyTurnContext(result, '')
+      applyTurnContext(result, state, agent.id, '')
       return result
     }
     // 首次门控可能延后了开层；变量回执已完成后才建立新 WAL，再冻结本轮提示词。
@@ -146,14 +163,14 @@ export function apply(ctx: Context): void {
     // 其它 assemble 插件或延后开层期间可能出现初始化任务；冻结计划前再核验一次。
     if (await blockHelperMvuAssembly(state, agent, context.signal)) {
       applyStanding(result, UNBOUND_STANDING)
-      applyTurnContext(result, '')
+      applyTurnContext(result, state, agent.id, '')
       return result
     }
 
     const binding = await state.loadBinding(agent.id)
     if (!binding) {
       applyStanding(result, UNBOUND_STANDING)
-      applyTurnContext(result, '')
+      applyTurnContext(result, state, agent.id, '')
       return result
     }
     // 本轮是续写轮（continueFloor 的合成指令在 pendingInputs 里，turn/end 才清）时
@@ -164,7 +181,7 @@ export function apply(ctx: Context): void {
       const pipeline = await runTavernPipeline({ state, sessionId: agent.id, agent, llm, mode: 'live', generationType })
       if (!pipeline) {
         applyStanding(result, UNBOUND_STANDING)
-        applyTurnContext(result, '')
+        applyTurnContext(result, state, agent.id, '')
         return result
       }
       const standing = neutralizeDshMustache([BOUND_DISCIPLINE, pipeline.standing].filter((p) => p.trim()).join('\n\n'))
@@ -184,7 +201,7 @@ export function apply(ctx: Context): void {
       ])
       // playbook 固定不随 step 变化：宿主对 runtime context 快照按字节去重，
       // 同轮后续步骤的快照一个字节都不变 ⇒ 不再重复追加，前缀缓存全保。
-      applyTurnContext(result, neutralizeDshMustache(joinPromptParts([TURN_PLAYBOOK, pipeline.turnContext])))
+      applyTurnContext(result, state, agent.id, neutralizeDshMustache(joinPromptParts([TURN_PLAYBOOK, pipeline.turnContext])))
     } catch (error) {
       ctx.logger.warn(`dsh-tavern: 提示词组装失败：${error instanceof Error ? error.message : String(error)}`)
       // 超时、损坏资产等不能悄悄变成缺设定的一轮；让宿主显示失败并允许用户修复后重试。

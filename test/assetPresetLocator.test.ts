@@ -17,6 +17,7 @@ import { SessionId, SessionStore } from '@deepseek-ai/dsh-session'
 import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection'
 import { SystemPrompt } from '@deepseek-ai/dsh-system-prompt'
 import { ToolRuntime } from '@deepseek-ai/dsh-tools'
+import { WorkingDirectoryService } from '@deepseek-ai/dsh-working-directory'
 import { parse } from 'yaml'
 import { apply as applyAgent } from '../src/agent.js'
 import { defaultPreset } from '../src/core/assemble.js'
@@ -49,7 +50,7 @@ describe('原生 PTC 预设定位', () => {
       interactiveCards: null, greetingIndex: 0, createdAt: new Date(0).toISOString() })
     ctx = new Context()
     new SessionStore(ctx); new AgentRegistry(ctx); new SessionProjectionRegistry(ctx); new SystemPrompt(ctx, {}); new ToolRuntime(ctx)
-    new LocalFileSystem(ctx, LocalFileSystem.Config({})); new LocalSubprocessRuntime(ctx)
+    new LocalFileSystem(ctx, LocalFileSystem.Config({})); new WorkingDirectoryService(ctx, WorkingDirectoryService.Config({ defaultDirectory: root })); new LocalSubprocessRuntime(ctx)
     new LocalSandboxProvider(ctx, LocalSandboxProvider.Config({}))
     new SandboxPolicyService(ctx, { mode: 'danger-full-access', workspaceRoot: root })
     new NodePtcRuntime(ctx, NodePtcRuntime.Config({ timeoutMs: 10000, maxTimeoutMs: 10000, maxOutputBytes: 1_048_576, maxOldGenerationSizeMb: 128 }))

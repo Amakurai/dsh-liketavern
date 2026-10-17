@@ -311,26 +311,31 @@ describe('assistant 楼层绑定刷新', () => {
     invalidateCharacter(cardId)
   })
 
-  it('文本与图片混合的绑定消息仍走角色气泡，并保留宿主图片渲染器', async () => {
+  it('文本与图片混合的绑定消息仍走角色气泡，并通过宿主 conversation.images.content factory 传递 loadImage', async () => {
     const sessionId = 'assistant-card-with-images'
     const env = environment(sessionId)
     const mixedNode = { ...node, data: { ...node.data, blocks: [
       { kind: 'text', text: '<div>角色卡正文</div>' },
       { kind: 'image', attachment: { id: 'image-1' } },
     ] } }
-    const renderMessageImages = vi.fn(() => <div data-owner-images="true" />)
+    const loadImage = vi.fn(async () => ({}))
+    const renderFactorySlot = vi.fn(() => <div data-owner-images="true" />)
     const useSessions = (select: (state: unknown) => unknown) => select({ byId: {
       [sessionId]: { projectionValues: { agentPreset: 'tavern' } },
     } })
     let view!: ReactTestRenderer
     await act(async () => { view = create(<TavernAssistantNode remote={env.remote} sessionId={sessionId} node={mixedNode}
-      useSessions={useSessions as never} renderMessageImages={renderMessageImages} />) })
+      useSessions={useSessions as never} loadImage={loadImage} renderFactorySlot={renderFactorySlot} />) })
     mounted.push(view)
     await env.change(defaultBinding(sessionId, 'card-a'))
     expect(view.root.findByProps({ 'data-bubble': 'card-a' })).toBeDefined()
     expect(bubble.props?.rawText).toBe('<div>角色卡正文</div>')
     expect(view.root.findByProps({ 'data-owner-images': 'true' })).toBeDefined()
-    expect(renderMessageImages).toHaveBeenLastCalledWith({ images: [{ attachment: { id: 'image-1' } }], align: 'start' })
+    expect(renderFactorySlot).toHaveBeenLastCalledWith('conversation.images.content', {
+      images: [{ attachment: { id: 'image-1' } }],
+      loadImage,
+      align: 'start',
+    })
   })
 
   it('图片夹在两段正文之间时回退宿主保序渲染，不把图片错误挪到末尾', async () => {
@@ -341,13 +346,16 @@ describe('assistant 楼层绑定刷新', () => {
       { kind: 'image', attachment: { id: 'image-middle' } },
       { kind: 'text', text: '图片后' },
     ] } }
-    const renderMessageImages = vi.fn(({ images }: { images: Array<{ attachment: { id: string } }> }) => <div data-owner-images={images[0]!.attachment.id} />)
+    const loadImage = vi.fn(async () => ({}))
+    const renderFactorySlot = vi.fn((_name: 'conversation.images.content', { images }: { images: readonly { attachment: unknown }[] }) => (
+      <div data-owner-images={(images[0]!.attachment as { id: string }).id} />
+    ))
     const useSessions = (select: (state: unknown) => unknown) => select({ byId: {
       [sessionId]: { projectionValues: { agentPreset: 'tavern' } },
     } })
     let view!: ReactTestRenderer
     await act(async () => { view = create(<TavernAssistantNode remote={env.remote} sessionId={sessionId} node={mixedNode}
-      useSessions={useSessions as never} renderMessageImages={renderMessageImages as never} />) })
+      useSessions={useSessions as never} loadImage={loadImage} renderFactorySlot={renderFactorySlot} />) })
     mounted.push(view)
     await env.change(defaultBinding(sessionId, 'card-a'))
     expect(view.root.findAllByProps({ 'data-bubble': 'card-a' })).toHaveLength(0)

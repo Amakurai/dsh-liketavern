@@ -9,7 +9,7 @@ import { AgentLoop } from '@deepseek-ai/dsh-agent-loop'
 import { createAssistantMessage, createSystemMessage, createUserMessage, LlmAdapter, LlmRuntime, type GenerateOptions, type LlmResolvedModelInfo, type StreamChunk } from '@deepseek-ai/dsh-llm'
 import { SessionId, SessionLogOffset, SessionStore, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection'
-import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
+import { apply as applyJsonlSessionPersistence, Config as JsonlSessionPersistenceConfig } from '@deepseek-ai/dsh-session-persistence-jsonl'
 import { SystemPrompt } from '@deepseek-ai/dsh-system-prompt'
 import { ToolRuntime } from '@deepseek-ai/dsh-tools'
 import { apply as applyAgent } from '../src/agent.js'
@@ -122,10 +122,10 @@ async function child(id = 'native-child'): Promise<Agent> {
 async function idle(agent: Agent): Promise<void> {
   await agent.whenIdle(); await state.waitForSessionTasks(agent.id)
 }
-function runtime(): AgentLoop {
+async function runtime(): Promise<AgentLoop> {
   ctx = new Context()
   new SessionStore(ctx); new AgentRegistry(ctx); new SessionProjectionRegistry(ctx); new SystemPrompt(ctx, {}); new ToolRuntime(ctx)
-  new JsonlSessionPersistence(ctx, { root: join(root, 'host-sessions'), compression: 'none' })
+  await applyJsonlSessionPersistence(ctx, JsonlSessionPersistenceConfig({ root: join(root, 'host-sessions'), compression: 'none' }))
   new LlmRuntime(ctx).registerAdapter(['factory'], new FactoryAdapter())
   return new AgentLoop(ctx, AgentLoop.Config({ agents: [] }))
 }
@@ -153,7 +153,7 @@ async function coldResume(original: Agent): Promise<Agent> {
   const paths = state.paths
   await ctx.fiber.dispose()
   state = new TavernState(paths, () => resolveConfig({})); await state.init()
-  runtime(); plugin()
+  await runtime(); plugin()
   return (await ctx.agents.resume({ resumeSessionId: original.id, agentOptions: { provider: 'factory', model: 'factory' } })).agent
 }
 beforeEach(async () => {
@@ -169,7 +169,7 @@ beforeEach(async () => {
   await state.saveBinding({ sessionId: 'native-parent', cardId: cardA, presetId: null, personaId: null, lorebookIds: [],
     characterLorebookId: null, interactiveCards: false, greetingIndex: 0, createdAt: new Date(0).toISOString() })
   storyA = (await state.loadBinding('native-parent'))!.storyId!
-  const loop = runtime()
+  const loop = await runtime()
   parent = await loop.create(SessionId('native-parent'), { provider: 'factory', model: 'factory' })
   parent.session.append('agent-preset/selected', { agentPreset: 'tavern' })
   history(1); await fact(1, '继承边界内事实'); seed = parent.session.snapshotEvents()
@@ -493,7 +493,7 @@ it('原来源卡目录被真实 junction 替换时冷恢复在准备剧情之前
   const paths = state.paths
   await ctx.fiber.dispose()
   state = new TavernState(paths, () => resolveConfig({})); await state.init()
-  runtime(); plugin()
+  await runtime(); plugin()
   const preparing = vi.spyOn(state, 'forkStory')
   const restored = (await ctx.agents.resume({ resumeSessionId: original.id, agentOptions: { provider: 'factory', model: 'factory' } })).agent
   await expect(adoptions.get(restored.id)).rejects.toThrow('链接')

@@ -71,6 +71,10 @@ export function isRuntimeContextSnapshot(text: string): boolean {
   return text.startsWith('Current runtime context.') || text.startsWith('Current runtime context:')
 }
 
+export function isRuntimeContextMessage(message: { source?: { kind?: string } }): boolean {
+  return message.source?.kind === 'runtime-context'
+}
+
 /** 同轮工具写入后经 agent.inject 的确认；不当作用户台词，也不扫世界书。 */
 export const TURN_WRITE_ACK_PREFIX = '【Tavern 同轮写入】'
 

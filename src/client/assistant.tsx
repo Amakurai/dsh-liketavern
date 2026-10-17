@@ -52,11 +52,44 @@ function displayBindingRevision(binding: SessionBinding): string {
   ])
 }
 
-/** 宿主 owner props 里的图片渲染器（rc.2 起替代 loadImage，见 conversation.chat.node 契约）。 */
+/** 宿主 owner props 里的会话图片加载器（0.2.1-rc.1 起配合 conversation.images.content factory 渲染消息图片）。 */
+type MessageImageLoader = (attachmentId: string, signal?: AbortSignal) => Promise<unknown>
+
+/** 宿主 Slot 注入的 Factory 渲染器（调用 conversation.images.content）。 */
+type RenderImagesFactorySlot = (
+  name: 'conversation.images.content',
+  props: {
+    images: readonly { attachment: unknown }[]
+    loadImage?: MessageImageLoader
+    align: 'start' | 'end'
+  },
+) => ReactNode
+
+/** 兼容直接传入图片渲染回调的测试与辅助调用。 */
 type RenderMessageImages = (owner: {
   images: readonly { attachment: unknown }[]
+  loadImage?: MessageImageLoader
   align: 'start' | 'end'
 }) => ReactNode
+
+function renderAssistantImages(
+  images: readonly { attachment: unknown }[],
+  renderFactorySlot?: RenderImagesFactorySlot,
+  loadImage?: MessageImageLoader,
+  renderMessageImages?: RenderMessageImages,
+): ReactNode {
+  if (images.length === 0) return null
+  if (renderFactorySlot && loadImage) {
+    return renderFactorySlot('conversation.images.content', { images, loadImage, align: 'start' })
+  }
+  if (renderMessageImages) {
+    return renderMessageImages({ images, ...(loadImage ? { loadImage } : {}), align: 'start' })
+  }
+  if (renderFactorySlot) {
+    return renderFactorySlot('conversation.images.content', { images, loadImage, align: 'start' })
+  }
+  return null
+}
 
 /** fileMentions 的入参（宿主 AssistantNodeView 同款：turn-tail owner）。 */
 interface TurnTailOwner {
@@ -115,6 +148,8 @@ export function TavernAssistantNode(props: {
    * （折叠时隐藏但仍挂载），response 段是正文。忽略它会在折叠区里再挂一整份卡面与脚本。
    */
   groupPart?: string
+  loadImage?: MessageImageLoader
+  renderFactorySlot?: RenderImagesFactorySlot
   renderMessageImages?: RenderMessageImages
   useTurnData?: (key: string) => unknown
   openFile?: (path: string) => void
@@ -219,11 +254,13 @@ export function TavernAssistantNode(props: {
     ) : null
 
   if (binding && text && supportsBubbleBlocks && !hasInterleavedImages && !hasLateReasoning) {
-    const images = hasImages && props.renderMessageImages
-      ? props.renderMessageImages({
-          images: node.data.blocks.filter((block) => block.kind === 'image').map(({ attachment }) => ({ attachment })),
-          align: 'start',
-        })
+    const images = hasImages
+      ? renderAssistantImages(
+          node.data.blocks.filter((block) => block.kind === 'image').map(({ attachment }) => ({ attachment })),
+          props.renderFactorySlot,
+          props.loadImage,
+          props.renderMessageImages,
+        )
       : null
     return (
       <div>
@@ -270,6 +307,8 @@ export function TavernAssistantNode(props: {
 
 function NativeAssistantFallback(props: {
   node: AssistantNode
+  loadImage?: MessageImageLoader
+  renderFactorySlot?: RenderImagesFactorySlot
   renderMessageImages?: RenderMessageImages
   useTurnData?: (key: string) => unknown
   openFile?: (path: string) => void
@@ -280,7 +319,7 @@ function NativeAssistantFallback(props: {
   stripMeta?: boolean
   groupPart?: string
 }) {
-  const { node, renderMessageImages, mentions, streaming, interrupted, stripMeta, groupPart } = props
+  const { node, loadImage, renderFactorySlot, renderMessageImages, mentions, streaming, interrupted, stripMeta, groupPart } = props
   const t = useT()
   const markdownLabels = useMarkdownLabels()
   const rendered: ReactNode[] = []
@@ -313,12 +352,14 @@ function NativeAssistantFallback(props: {
         group.push(next)
         i += 1
       }
-      if (renderMessageImages) {
-        rendered.push(
-          <Fragment key={i}>
-            {renderMessageImages({ images: group.map(({ attachment }) => ({ attachment })), align: 'start' })}
-          </Fragment>,
-        )
+      const imageNodes = renderAssistantImages(
+        group.map(({ attachment }) => ({ attachment })),
+        renderFactorySlot,
+        loadImage,
+        renderMessageImages,
+      )
+      if (imageNodes) {
+        rendered.push(<Fragment key={i}>{imageNodes}</Fragment>)
       }
     } else if (block.kind === 'tool-call') {
       continue

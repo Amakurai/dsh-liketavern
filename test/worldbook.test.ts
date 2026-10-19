@@ -9,7 +9,7 @@
  * 落选回滚（未注入条目清本轮写入的 sticky/cooldown；sticky 延续条目被预算裁掉也清 stickyLeft、保留 cooldown）、
  * 预算截断（优先级/本句提到优先于作者 order/ignoreBudget/overflowWarning；固定预算为绝对上限、百分比按 128K 基数
  * 折算并扣减 reservedTokens；standing 侧常驻豁免计费，被裁条目进 truncated 清单）、
- * 位置分桶、多来源排序、includeNames、
+ * 位置分桶、多来源排序、includeNames（含各类键共用扫描文本、扩深时的名前缀与身份宏）、
  * 键安全（超长键与灾难回溯正则键永不命中；绕过归一化的非字符串键塌缩不炸）。
  *
  * 定时语义约定（types.ts）：sticky=N = 激活后再保持 N 轮；cooldown=N = 激活后 N 轮内不再触发。
@@ -801,6 +801,36 @@ describe('includeNames', () => {
 
   it('关闭时同样的键不命中（正文不含名前缀）', () => {
     expect(activatedKeys(run({ entries: [entry], messages, settings: makeSettings({ includeNames: false }) }))).toEqual([])
+  })
+
+  it('同一扫描文本被各类键共用：小写比对不影响大小写敏感键与正则键看到的原文', () => {
+    const entries = [
+      makeEntry({ key: 'insensitive', keys: ['APPLE'] }),
+      makeEntry({ key: 'sensitive', keys: ['Apple'], caseSensitive: true }),
+      makeEntry({ key: 'sensitive-miss', keys: ['apple'], caseSensitive: true }),
+      makeEntry({ key: 'regex-raw', keys: ['/^Apple/'] }),
+      makeEntry({ key: 'regex-lower-miss', keys: ['/^apple/'] }),
+      makeEntry({ key: 'named', keys: ['/^Bob: Apple/'] }),
+      makeEntry({ key: 'whole', keys: ['PIE'], matchWholeWords: true }),
+    ]
+    const res = run({ entries, messages: [userMsg('Apple Pie', 'Bob')], settings: makeSettings({ includeNames: true }), macroCtx: { char: 'Alice', user: 'Bob' } })
+    expect(activatedKeys(res).sort()).toEqual(['insensitive', 'named', 'regex-raw', 'sensitive', 'whole'])
+  })
+
+  it('绕过归一化的小数或 NaN scanDepth 按 slice(-depth) 口径取消息', () => {
+    const entry = (scanDepth: number) => makeEntry({ key: 'e', keys: ['old'], scanDepth })
+    const messages = [userMsg('old'), userMsg('mid'), userMsg('new')]
+    expect(activatedKeys(run({ entries: [entry(2.5)], messages }))).toEqual([])
+    expect(activatedKeys(run({ entries: [entry(3.5)], messages }))).toEqual(['e'])
+    expect(activatedKeys(run({ entries: [entry(Number.NaN)], messages }))).toEqual(['e'])
+  })
+
+  it('最少激活扩深到更早消息时，名前缀与正文身份宏仍按原口径展开', () => {
+    const entries = [makeEntry({ key: 'char', keys: ['alice'] }), makeEntry({ key: 'prefixed', keys: ['/^\\x01Bob: /'] })]
+    const messages = [userMsg('{{char}} 在场', 'Bob'), userMsg('无关'), userMsg('仍无关')]
+    const settings = makeSettings({ includeNames: true, scanDepth: 1, minActivations: 2, recursiveScan: false })
+    expect(activatedKeys(run({ entries, messages, settings, macroCtx: { char: 'Alice', user: 'Bob' } })).sort()).toEqual(['char', 'prefixed'])
+    expect(activatedKeys(run({ entries, messages, settings: { ...settings, minActivations: 0 }, macroCtx: { char: 'Alice', user: 'Bob' } }))).toEqual([])
   })
 })
 

@@ -89,11 +89,29 @@ function ident(text: string, ctx?: Pick<MacroContext, 'char' | 'user'>): string 
 const NO_SPACE_SCRIPTS = '\\p{scx=Han}\\p{scx=Hiragana}\\p{scx=Katakana}\\p{scx=Hangul}\\p{scx=Thai}\\p{scx=Lao}\\p{scx=Khmer}\\p{scx=Myanmar}'
 const WHOLE_WORD_CHAR = `(?:(?![${NO_SPACE_SCRIPTS}])[\\p{L}\\p{N}\\p{M}_])`
 
+/**
+ * 扫描单元：原文与按需缓存的小写形式。大小写不敏感的明文键每条都要小写比对，
+ * 若逐键调用 toLowerCase，几百条键 × 扩深后的几十条长消息会把整段历史重复小写上万次。
+ */
+class ScanText {
+  readonly raw: string
+  private lowered: string | undefined
+  // worker 测试经 Node 类型剥离加载 src，不支持参数属性，字段需显式声明
+  constructor(raw: string) {
+    this.raw = raw
+  }
+  get lower(): string {
+    return (this.lowered ??= this.raw.toLowerCase())
+  }
+}
+
+type KeyTest = (text: ScanText) => boolean
+
 /** 单条触发键编译：返回 (text) => boolean。明文键支持整词/大小写选项；/.../ 为 JS 正则键。 */
 function compileKey(
   key: string,
   options: { caseSensitive: boolean; matchWholeWords: boolean },
-): ((text: string) => boolean) | null {
+): KeyTest | null {
   const trimmed = key.trim()
   if (!trimmed) return null
   // 超长键永不命中（防 DoS；归一化侧 lorebook.ts 同值直接拒绝导入）
@@ -109,7 +127,7 @@ function compileKey(
       // 交替漏掉。每次判断都从头开始，保持条目匹配的纯函数语义。
       return (text) => {
         re.lastIndex = 0
-        return re.test(text)
+        return re.test(text.raw)
       }
     } catch {
       return null // 非法正则键视为永不命中
@@ -122,31 +140,24 @@ function compileKey(
       const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
       // JS 的 \b 只识别 ASCII 词字符，会漏掉带重音字母及西里尔字母的独立词。
       const re = new RegExp(`(?<!${WHOLE_WORD_CHAR})${escaped}(?!${WHOLE_WORD_CHAR})`, options.caseSensitive ? 'u' : 'iu')
-      return (text) => re.test(text)
+      return (text) => re.test(text.raw)
     } catch {
       return null
     }
   }
-  return (text) => (options.caseSensitive ? text : text.toLowerCase()).includes(needle)
+  return options.caseSensitive ? (text) => text.raw.includes(needle) : (text) => text.lower.includes(needle)
 }
 
-/** 扫描单元：把消息拍平成可匹配的文本（含名前缀变体）。 */
-function scanTexts(
-  messages: readonly ChatMessage[],
+/** 扫描单元：把一条消息拍平成可匹配的文本（含名前缀变体）。 */
+function messageScanTexts(
+  msg: ChatMessage,
   includeNames: boolean,
   macroCtx?: Pick<MacroContext, 'char' | 'user'>,
-): string[] {
-  const out: string[] = []
-  for (const msg of messages) {
-    const content = ident(msg.content, macroCtx)
-    out.push(content)
-    if (includeNames && msg.name) {
-      out.push(`${msg.name}: ${content}`)
-      // 兼容 SillyTavern 的 \x01Name: 前缀匹配
-      out.push(`\x01${msg.name}: ${content}`)
-    }
-  }
-  return out
+): ScanText[] {
+  const content = ident(msg.content, macroCtx)
+  if (!includeNames || !msg.name) return [new ScanText(content)]
+  // 兼容 SillyTavern 的 \x01Name: 前缀匹配
+  return [new ScanText(content), new ScanText(`${msg.name}: ${content}`), new ScanText(`\x01${msg.name}: ${content}`)]
 }
 
 interface Candidate {
@@ -166,9 +177,11 @@ interface Candidate {
 interface CompiledEntry {
   entry: WorldInfoEntry
   /** 编译成功的主键（raw 保留用于 matchedKeys 日志）。 */
-  primary: Array<{ raw: string; test: (text: string) => boolean }>
+  primary: Array<{ raw: string; test: KeyTest }>
   /** 编译成功的次级键（AndAll/NotAll 的分母与原语义一致：编译失败的键不计数）。 */
-  secondary: Array<(text: string) => boolean>
+  secondary: KeyTest[]
+  /** isStandingSafeEntry 的结果：扫描、扩深与预算各轮反复用到，且需检查正文宏。 */
+  standingSafe: boolean
 }
 
 function compileEntry(
@@ -188,14 +201,14 @@ function compileEntry(
     : []
   const primary = rawKeys
     .map((k) => ({ raw: k, test: compileKey(ident(k, macroCtx), opts) }))
-    .filter((k): k is { raw: string; test: (text: string) => boolean } => k.test !== null)
+    .filter((k): k is { raw: string; test: KeyTest } => k.test !== null)
   const secondary = rawSecondary
     .map((k) => compileKey(ident(k, macroCtx), opts))
-    .filter((t): t is (text: string) => boolean => t !== null)
-  return { entry, primary, secondary }
+    .filter((t): t is KeyTest => t !== null)
+  return { entry, primary, secondary, standingSafe: isStandingSafeEntry(entry) }
 }
 
-function matchCompiled(c: CompiledEntry, texts: readonly string[]): string[] | null {
+function matchCompiled(c: CompiledEntry, texts: readonly ScanText[]): string[] | null {
   const matched: string[] = []
   for (const k of c.primary) {
     if (texts.some((t) => k.test(t))) matched.push(k.raw)
@@ -215,19 +228,29 @@ function matchCompiled(c: CompiledEntry, texts: readonly string[]): string[] | n
   return ok ? matched : null
 }
 
-function textsAtDepth(
-  cache: Map<number, string[]>,
+/**
+ * 最近 depth 条消息的扫描单元。每条消息只展开宏、建单元一次：minActivations 逐条扩深时
+ * 各深度共享同一批单元（及其小写缓存），不再随深度重复处理整段历史。
+ */
+function createDepthTexts(
   messages: readonly ChatMessage[],
-  depth: number,
   includeNames: boolean,
   macroCtx?: Pick<MacroContext, 'char' | 'user'>,
-): string[] {
-  if (depth <= 0) return []
-  const cached = cache.get(depth)
-  if (cached) return cached
-  const texts = scanTexts(messages.slice(-depth), includeNames, macroCtx)
-  cache.set(depth, texts)
-  return texts
+): (depth: number) => readonly ScanText[] {
+  const perMessage: Array<ScanText[] | undefined> = []
+  const byDepth = new Map<number, ScanText[]>()
+  return (depth) => {
+    if (depth <= 0) return []
+    const cached = byDepth.get(depth)
+    if (cached) return cached
+    const texts: ScanText[] = []
+    // 起点沿用 slice(-depth) 的取整口径：绕过归一化的小数/NaN 深度与原实现一致，不产生小数下标。
+    for (let i = messages.length - messages.slice(-depth).length; i < messages.length; i++) {
+      texts.push(...(perMessage[i] ??= messageScanTexts(messages[i]!, includeNames, macroCtx)))
+    }
+    byDepth.set(depth, texts)
+    return texts
+  }
 }
 
 /** 组内加权随机挑选（groupWeight 为权重；全零权重取第一条）。 */
@@ -287,9 +310,17 @@ export function evaluateWorldInfo(input: WIEngineInput): WIEngineResult {
   })
   // 键预编译一次，全部递归轮复用（compileEntry 不消费 random，加权随机的消费顺序不受影响）。
   const compiled = entries.map((entry) => compileEntry(entry, settings, input.macroCtx))
+  const standingSafe = new Map(compiled.map((c) => [c.entry, c.standingSafe]))
+  // 扩深轮与预算截断会反复计费同一批已激活条目，按条目缓存估算结果。
+  const costs = new Map<WorldInfoEntry, number>()
+  const costOf = (entry: WorldInfoEntry): number => {
+    let cost = costs.get(entry)
+    if (cost === undefined) costs.set(entry, (cost = input.estimateTokens(worldInfoBudgetText(entry.content))))
+    return cost
+  }
 
   // 扫描文本：全局/条目 scanDepth 0 = 该条关键词不扫消息（常驻与递归仍可活）
-  const depthTexts = new Map<number, string[]>()
+  const textsAtDepth = createDepthTexts(input.messages, settings.includeNames, input.macroCtx)
 
   const activated: Candidate[] = []
   const activatedKeys = new Set<string>()
@@ -376,7 +407,7 @@ export function evaluateWorldInfo(input: WIEngineInput): WIEngineResult {
     return true
   }
 
-  const evaluate = (texts: readonly string[], level: number): Candidate[] => {
+  const evaluate = (texts: readonly ScanText[], level: number): Candidate[] => {
     const fresh: Candidate[] = []
     for (const c of compiled) {
       const entry = c.entry
@@ -385,7 +416,7 @@ export function evaluateWorldInfo(input: WIEngineInput): WIEngineResult {
       if (level > 0 && entry.excludeRecursion) continue
       if (entry.delayUntilRecursion > level) continue
       // 条目编辑为确定常驻后，旧配置留下的计时器不能改变稳定段是否存在。
-      if (isStandingSafeEntry(entry)) {
+      if (c.standingSafe) {
         delete timer.stickyLeft[entry.key]
         delete timer.cooldownLeft[entry.key]
         if (tryActivate(entry, [], 'constant', level)) fresh.push(activated[activated.length - 1]!)
@@ -415,14 +446,14 @@ export function evaluateWorldInfo(input: WIEngineInput): WIEngineResult {
       if (entry.keys.length === 0) continue
       const scanTextsForEntry =
         level === 0
-          ? textsAtDepth(depthTexts, input.messages, entry.scanDepth ?? expandedDepth, settings.includeNames, input.macroCtx)
+          ? textsAtDepth(entry.scanDepth ?? expandedDepth)
           : texts
       const matched = matchCompiled(c, scanTextsForEntry)
       if (matched === null) continue
       if (tryActivate(entry, matched, level === 0 ? 'keyword' : 'recursion', level)) {
         const candidate = activated[activated.length - 1]!
         if (level === 0) {
-          const newest = textsAtDepth(depthTexts, input.messages, 1, settings.includeNames, input.macroCtx)
+          const newest = textsAtDepth(1)
           candidate.mentionedNow = c.primary.some((k) => newest.some((t) => k.test(t)))
         }
         fresh.push(candidate)
@@ -452,6 +483,7 @@ export function evaluateWorldInfo(input: WIEngineInput): WIEngineResult {
       .filter((c) => !c.entry.preventRecursion && !groupLosers.has(c.entry.key))
       .map((c) => (typeof c.entry.content === 'string' ? ident(c.entry.content, input.macroCtx) : ''))
       .filter((t) => t.trim().length > 0)
+      .map((t) => new ScanText(t))
     // 没有可递归文本就不消耗递归步数：空内容轮提前 break 时 level 不 +1，
     // 后续 minActivations 扩展轮的「总扫描轮数」预算不被空轮挤占。
     if (recursionTexts.length === 0) break
@@ -467,8 +499,8 @@ export function evaluateWorldInfo(input: WIEngineInput): WIEngineResult {
   const scanBudget=settings.tokenBudget>0?settings.tokenBudget:Math.max(0,Math.floor(Math.min(input.contextWindowTokens,WI_PERCENT_WINDOW_BASE)*settings.contextPercent/100)-Math.max(0,input.reservedTokens))
   const surviving=()=>activated.filter(c=>!groupLosers.has(c.entry.key))
   while(settings.minActivations>0&&surviving().length<settings.minActivations&&expandedDepth<expansionLimit&&(maxSteps===0||scanSteps<maxSteps)){
-    const counted=surviving().filter(c=>!isStandingSafeEntry(c.entry))
-    if(counted.reduce((sum,c)=>sum+input.estimateTokens(worldInfoBudgetText(c.entry.content)),0)>scanBudget)break
+    const counted=surviving().filter(c=>!standingSafe.get(c.entry))
+    if(counted.reduce((sum,c)=>sum+costOf(c.entry),0)>scanBudget)break
     expandedDepth++
     scanSteps++
     // 扩展轮是新的直接扫描：递归 level 归零重起，delayUntilRecursion 门槛与首轮路径
@@ -529,11 +561,11 @@ export function evaluateWorldInfo(input: WIEngineInput): WIEngineResult {
   for (const c of sorted) {
     // 落 standing 的常驻条目豁免计费：它们走钉死的 system 段、命中前缀缓存，
     // 不随快照每轮重付；体积由 assemble 的总窗口预算兜底（trimmedSections）。
-    if (isStandingSafeEntry(c.entry)) {
+    if (standingSafe.get(c.entry)) {
       kept.push(c)
       continue
     }
-    const cost = input.estimateTokens(worldInfoBudgetText(c.entry.content))
+    const cost = costOf(c.entry)
     if (!c.entry.ignoreBudget && used + cost > limit) {
       overflowed = true
       truncated.push({

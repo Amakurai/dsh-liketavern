@@ -4,8 +4,8 @@
 
 **基于 DeepSeek Harness 原生 Agent 运行时的 SillyTavern 角色扮演插件**
 
-[![Release](https://img.shields.io/badge/version-v0.5.3-blue.svg)](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.5.3)
-[![dsh](https://img.shields.io/badge/dsh-0.2.1--rc.1-informational.svg)](https://deepseek-harness.github.io/deepseek-harness/)
+[![Release](https://img.shields.io/badge/version-v0.5.4-blue.svg)](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.5.4)
+[![dsh](https://img.shields.io/badge/dsh-0.2.1--rc.2-informational.svg)](https://deepseek-harness.github.io/deepseek-harness/)
 [![Node.js](https://img.shields.io/badge/node-%E2%89%A524-brightgreen.svg)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
@@ -49,14 +49,14 @@
 打开 `dsh` 桌面端 **「插件 → 添加插件」**，填入以下仓库标签地址并安装，完成后重启桌面端：
 
 ```text
-https://github.com/Amakurai/dsh-liketavern.git#v0.5.3
+https://github.com/Amakurai/dsh-liketavern.git#v0.5.4
 ```
 
 ### Web / CLI 在线安装
 
 ```bash
 # 安装插件到 web profile
-dsh plugin --profile web add github:Amakurai/dsh-liketavern#v0.5.3
+dsh plugin --profile web add github:Amakurai/dsh-liketavern#v0.5.4
 
 # 确认安装状态
 dsh plugin --profile web list --depth 0
@@ -67,10 +67,10 @@ dsh web
 
 ### Release 离线包安装
 
-从 [v0.5.3 Release](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.5.3) 下载 `dsh-liketavern-0.5.3.tgz`（可配合同页的 `SHA256SUMS.txt` 校验完整性），在下载目录执行：
+从 [v0.5.4 Release](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.5.4) 下载 `dsh-liketavern-0.5.4.tgz`（可配合同页的 `SHA256SUMS.txt` 校验完整性），在下载目录执行：
 
 ```bash
-dsh plugin --profile web add ./dsh-liketavern-0.5.3.tgz
+dsh plugin --profile web add ./dsh-liketavern-0.5.4.tgz
 dsh web
 ```
 

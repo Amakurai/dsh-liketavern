@@ -2,8 +2,13 @@
 
 本插件与 dsh 宿主版本一一绑定（peerDependency 锁定精确版本），升级 dsh 前请先确认有适配的插件版本。
 
-## 未发布
+## 0.5.4（2026-10-20）
 
+适配 **dsh `0.2.1-rc.2`、Node.js ≥ 24**。修复 [issue #13](https://github.com/Amakurai/dsh-liketavern/issues/13) 反馈的正式安装标签仍依赖旧宿主的问题：`v0.5.3` 保留原有 `0.2.0-rc.2` 依赖，升级新宿主请使用 `v0.5.4` 标签或同版 Release 附件，安装后完整重启宿主。
+
+- 同步插件版本、锁文件、中英文安装标签与宿主版本徽标；后续发布同时核对 Git 标签、Release、附件和安装说明。
+- 修复编辑器关闭、放弃与异步子编辑器恢复时的草稿持久化边界；人工修改助手正文后清理旧消息身份关联的脚本状态，维护取消后不再提交迟到的记忆别名。
+- 宏 `trim`、`random` / `pick` 选项与 `addvar` 按 SillyTavern 语义处理；世界书扫描复用小写文本、消息扫描单元和预算估算，减少长历史与扩深时的重复计算。
 - WAL 记录必须从 1 连续编号，缺少首条或中间记录时在整批回滚前拒绝，追加、提交与只读诊断也使用相同判定，避免残留未来事实却报告回滚成功；旧版 before-only 日志和空白行继续兼容。现有格式无法仅凭序号发现尾部整行丢失或整份日志消失。
 - 临时文件回收先检查清理入口及递归目录，不沿目录链接进入另一工作区删除文件；带末尾分隔符的入口同样受保护，安装路径祖先的正常挂载继续可用。
 - 升级适配 **dsh `0.2.1-rc.2`、Node.js ≥ 24**（`@deepseek-ai/cordis` `4.0.5`、`@deepseek-ai/schemastery` `3.18.5`）。rc.2 相对 rc.1 仅同步宿主包版本并在 web profile 新增模型标签徽标客户端插件，插件所用接口无变化；以下为 rc.1 起的适配：适配 `ReactLoopAgent` 步骤内 `systemPrompt.refreshContext` 对 `tavern:turn` 运行时上下文与预设请求投影计划载体的刷新行为，实现 `LlmAdapter.imageRequestTarget` 委托，支持 `conversation.chat.node` 的 `loadImage` / `conversation.images.content` 图片渲染契约，并同步持久化插件与 PTC 工作目录服务契约。

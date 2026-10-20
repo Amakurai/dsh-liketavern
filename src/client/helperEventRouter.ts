@@ -128,6 +128,9 @@ class Endpoint {
     } catch(error) {return {action:'helperEventResult',requestId,ok:false,error:error instanceof Error?error.message:String(error),args:data}}
   }
 }
+/** 预览帧不支持的事件操作：必须回明确失败，不能静默丢弃让卡面 Promise 永久 pending。 */
+const PREVIEW_REJECTED_EVENT_ACTIONS=new Set(['helperEventEmit','helperEventSubscribe','helperEventUnsubscribe'])
+
 /** 预览只建立本帧身份租约；没有剧情分组，不接收跨卡监听、发送或业务授权。 */
 export function attachCardBridgeRuntime(send:(message:Message)=>void,retiredRuntimes?:Set<string>) {
   const endpoint=new Endpoint({endpoints:new Set(),listeners:[],inflight:0},send,undefined,retiredRuntimes)
@@ -136,7 +139,15 @@ export function attachCardBridgeRuntime(send:(message:Message)=>void,retiredRunt
     runtimeId:()=>endpoint.runtimeId,
     post:(message:Message)=>endpoint.post(message),
     setHostEventsEnabled:(enabled:boolean)=>{endpoint.hostEventsEnabled=enabled},
-    receive:(value:unknown)=>{if(helperRecord(value)&&value.source==='dsh-tavern-card'&&(value.action==='helperEventConnect'||value.action==='helperEventDisconnect'))endpoint.receive(value)},
+    receive:(value:unknown)=>{
+      if(!helperRecord(value)||value.source!=='dsh-tavern-card')return
+      if(value.action==='helperEventConnect'||value.action==='helperEventDisconnect'){endpoint.receive(value);return}
+      // 独立预览不接入剧情业务租约或共享事件；但仍要回执，否则卡面 await 事件调用会永久挂起。
+      if(typeof value.action==='string'&&PREVIEW_REJECTED_EVENT_ACTIONS.has(value.action)){
+        endpoint.post({...(typeof value.requestId==='string'?{requestId:value.requestId}:{}),action:'helperEventResult',ok:false,args:[],
+          error:'独立预览不接入剧情事件桥：事件发送与监听仅在真实会话卡面可用'})
+      }
+    },
     dispose:()=>{if(endpoint.runtimeId)endpoint.retiredRuntimes.add(endpoint.runtimeId);endpoint.active=false;endpoint.reset('卡面运行时已卸载')},
   }
 }

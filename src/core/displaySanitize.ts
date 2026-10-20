@@ -987,14 +987,89 @@ function stripHtmlComments(text: string): string {
   return text.replace(/<!--[\s\S]*?-->/g, '')
 }
 
-/** 去掉展示不该看见的机读块与小部件；角色正文保留。 */
+/**
+ * 展示净化不得改写的 Markdown 代码区间：围栏（含开闭行）与行内代码。
+ * 代码示例里的 `<style>`/`<details>`/`think`/协议标签是作者给模型看的正文，不是机读块。
+ */
+function markdownCodeRanges(text: string): TextRange[] {
+  const code = markdownCodeScanner(text)
+  const ranges: TextRange[] = []
+  const tokens = /`+|~{3,}/g
+  const keep = (start: number, end: number) => { if (tagsBalanced(text.slice(start, end))) ranges.push({ start, end }) }
+  for (let token = tokens.exec(text); token; token = tokens.exec(text)) {
+    const at = token.index
+    const fence = code.fence(at)
+    if (fence) {
+      // 围栏区间不含闭合行后的换行：换行属于正文排版，仍交给 tidy 收尾。
+      let end = fence.end
+      while (end > at && (text[end - 1] === '\n' || text[end - 1] === '\r')) end--
+      keep(at, end)
+      tokens.lastIndex = Math.max(fence.end, at + 1)
+      continue
+    }
+    const end = code.inlineEnd(at)
+    if (end !== null) {
+      keep(at, end)
+      tokens.lastIndex = end
+    }
+  }
+  return ranges
+}
+
+const VOID_TAGS = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'source', 'track', 'wbr'])
+
+/**
+ * 代码区间不能吞进外层块的闭合标签：未闭合围栏（延伸到文末）或跨行配对的反引号可能盖住
+ * `</think>` 等闭合标签，遮罩后外层块变成「未闭合」被截到文末，连同正文一起消失。
+ * 区间内出现没有在区间内开启的闭合标签时不保护，交给原有规则判定；只有开标签（半截示例）仍保护。
+ */
+function tagsBalanced(segment: string): boolean {
+  const open = new Map<string, number>()
+  for (const match of segment.matchAll(/<(\/?)([A-Za-z][\w:-]*)[^<>]*?(\/?)>/g)) {
+    const name = match[2]!.toLowerCase()
+    if (match[3] || VOID_TAGS.has(name)) continue
+    const count = open.get(name) ?? 0
+    if (match[1]) {
+      if (count === 0) return false
+      open.set(name, count - 1)
+    } else open.set(name, count + 1)
+  }
+  return true
+}
+
+/**
+ * 把代码区间换成占位符后跑整段净化管线，再原样还原：
+ * 跨段状态（「从开标签切到文末」的截断、整篇 tidy）仍按整篇判定，
+ * 但代码示例的字节不会被任何删除/截断规则改写。占位符前缀会先确认不在原文中出现。
+ */
+function protectMarkdownCode(text: string): { masked: string; restore: (value: string) => string } {
+  const ranges = markdownCodeRanges(text)
+  if (ranges.length === 0) return { masked: text, restore: value => value }
+  let prefix = '\uE000tavernCode'
+  while (text.includes(prefix)) prefix += 'X'
+  const suffix = '\uE001'
+  const parts: string[] = []
+  let masked = ''
+  let cursor = 0
+  for (const [index, range] of ranges.entries()) {
+    masked += text.slice(cursor, range.start) + `${prefix}${index}${suffix}`
+    parts.push(text.slice(range.start, range.end))
+    cursor = range.end
+  }
+  masked += text.slice(cursor)
+  const pattern = new RegExp(`${prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\d+)${suffix}`, 'g')
+  return { masked, restore: value => value.replace(pattern, (_raw, index: string) => parts[Number(index)] ?? '') }
+}
+
+/** 去掉展示不该看见的机读块与小部件；角色正文与 Markdown 代码示例保留。 */
 export function stripDisplayMeta(text: string): string {
   if (!text) return text
-  const visible = stripOpaqueDisplayMeta(text)
-  if (isCoverHtml(visible)) return visible
-  return tidy(
+  const protectedCode = protectMarkdownCode(text)
+  const visible = stripOpaqueDisplayMeta(protectedCode.masked)
+  if (isCoverHtml(visible)) return protectedCode.restore(visible)
+  return protectedCode.restore(tidy(
     stripProtocolTags(stripWidgetTail(stripUnclosedMeta(stripClosedAndEmpty(stripHtmlComments(visible))))),
-  )
+  ))
 }
 
 /**

@@ -70,7 +70,10 @@ async function compute(request: typeof workerData):Promise<void> {
           input.personaDescription, input.wi, input.regexRules, input.macroCtx, input.templates.variables,
           input.templates.messageVariables, input.templates.entries, input.templates.presets].some(hasTemplateText) || input.templates.entries.some((raw:WorldInfoEntry) => {
         const entry=normalizeTemplateLore(raw)
-        return entry.enabled && (entry.templatePreload || entry.templateCondition || parseTemplatePlacement(entry.comment)
+        // 预处理必须计入：仅靠 @@preprocessing（正文装饰器）或 [Preprocessing]（注释标记）触发的条目
+        // 可能完全没有 EJS，漏判会让预处理静默不执行（键与正文不展开），而不是明确失败。
+        return entry.enabled && (entry.templatePreload || entry.templatePreprocessing || /^\[Preprocessing\]/i.test(entry.comment)
+          || entry.templateCondition || parseTemplatePlacement(entry.comment)
           || /^\[(InitialVariables|RENDER:BEFORE|RENDER:AFTER)\]/i.test(entry.comment))
       }))
     const templateClass = needsTemplates ? (await import('./templateSandbox.js')).TemplateSandbox : null
@@ -146,7 +149,9 @@ async function compute(request: typeof workerData):Promise<void> {
     send({ value, cacheKey, cacheHit })
   } catch (error) {
     sandboxCache.clear()
-    send({ error: error instanceof Error ? error.message : String(error) })
+    // 空消息错误不能被 host 当成成功：这里保证 error 字段始终是非空失败原因。
+    const message=error instanceof Error ? (error.message || error.name || '模板计算失败') : (String(error) || '模板计算失败')
+    send({ error: message })
   }
 }
 

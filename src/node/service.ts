@@ -34,7 +34,7 @@ import { parseJsonCard, parsePngCard } from '../state/card.js'
 import { characterEditRevision, jsonEditRevision, personaEditRevision, presetEditRevision, regexEditRevision } from '../state/characterRevision.js'
 import { FloorError, continueFloor, discardHostForkAdoptionPlan, editAssistantMessage, editUserMessage, enterGreetingConversation, getFloorAssistantMessage, getFloorSiblings, getFloorUserMessage, getGreetingSwipe, regenerate, rollbackToFloor, swipeGreeting } from './floors.js'
 import { impersonate } from './impersonate.js'
-import { loadBoundLoreEntries, runTavernPipeline } from './pipeline.js'
+import { CHAT_BOOK_CORRUPT_MESSAGE, loadBoundLoreEntries, runTavernPipeline } from './pipeline.js'
 import { hasEjs } from '../core/template.js'
 import { templateCardData } from '../core/templateAssets.js'
 import { characterPromptName } from '../core/characterData.js'
@@ -558,6 +558,8 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
     // SillyTavern：先 substituteParams 再跑展示正则，开场白里的 {{user}} 才能被按名字匹配。
     let named = expandIdentityMacros(text, names)
     let templateParts: TemplateDisplayPart[] | undefined
+    // 展示路径遇坏聊天书只降级（不整条渲染失败），但要在输出里留下可见标记与明确诊断。
+    let chatBookCorrupt = false
     const story = await this.state.storyWorkspace(binding.cardId, binding.storyId)
     const cached = request.messageId === undefined ? undefined : (await loadTemplateOutputs(story.fs,[request.messageId]))[String(request.messageId)]
     if (cached && cached.hash === templateTextHash(text)) {
@@ -577,10 +579,16 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
       // 开场白/独立展示没有楼层，仅执行临时副本；浏览器传入文本永远不能落盘变量。
       const preset = binding.presetId ? await this.state.loadPreset(binding.presetId) : null
       const templates = await loadTemplateMetadata(story.fs)
+      // 只读展示：坏聊天书降级为「本次未注入」并回传标记，不因一本坏书让整条气泡渲染失败。
+      const lore = await loadBoundLoreEntries(this.state, binding, { onCorruptChatBook: 'report' })
+      chatBookCorrupt = lore.chatBookCorrupt
+      if (chatBookCorrupt) {
+        try { this.ctx.logger.warn(`dsh-tavern: 展示渲染降级：${CHAT_BOOK_CORRUPT_MESSAGE}`) } catch { /* 日志失败不阻断展示 */ }
+      }
       const result = await isolated('template', { texts: [named], context: {
         variables: templates.variables, ...names, card: ws ? templateCardData(ws.card) : {name:names.char},
         ...await loadTemplateAvatars(this.state,binding.cardId,persona),
-        entries: (await loadBoundLoreEntries(this.state, binding)).entries,
+        entries: lore.entries,
         presets: preset?.entries.filter(e => e.enabled) ?? [], history: [], now: Date.now(), seed: 1, phase: 'render',
         sessionId: request.sessionId, cardId: binding.cardId,
       } })
@@ -646,7 +654,8 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
       ...(htmls.length && request.messageId !== undefined ? {helperScripts:await this.state.getSessionHelperScripts(request.sessionId,binding.storyId!),helperWorldbooks:await getHelperWorldbookContext(this.state,request.sessionId,binding.storyId!)} : {}),
       html: htmls[0] ?? null,
       htmls,
-      text: presented.text,
+      // 坏聊天书时在展示正文尾部追加可见降级标记（不写日志、不改历史，修好后自动消失）。
+      text: chatBookCorrupt ? `${presented.text}${presented.text ? '\n\n' : ''}[Tavern] ${CHAT_BOOK_CORRUPT_MESSAGE}` : presented.text,
       ...(presented.pendingHtml?{pendingHtml:true as const}:{}),
       interactiveCards: settings.interactiveCards,
       whitelist,
@@ -804,6 +813,21 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
   }
 
   /** 无 LLM 的确定性归并：原文逐条保留，只减少条目数，不宣称减少 token。 */
+  async getStoryRecovery(request: { cardId: string; storyId?: string }): Promise<TavernMethodResults['getStoryRecovery']> {
+    const ws = await this.state.storyWorkspace(request.cardId, request.storyId)
+    return { floors: await ws.wal.recoveringFloors() }
+  }
+
+  /** 恢复反复失败时的受控出口：只删游标与标记，不跳过撤销；调用方仍须重新回退该楼层。 */
+  async resetStoryRecovery(request: { cardId: string; storyId?: string }): Promise<TavernMethodResults['resetStoryRecovery']> {
+    const ws = await this.state.storyWorkspace(request.cardId, request.storyId)
+    return withWorkspaceLock(ws.fs.root, async () => {
+      const floors = await ws.wal.recoveringFloors()
+      for (const floor of floors) await ws.wal.resetRollbackCursor(floor)
+      return { reset: floors }
+    })
+  }
+
   async compressMemories(request: { cardId: string; storyId?: string }): Promise<TavernMethodResults['compressMemories']> {
     // 面板写路径走 plainWorkspace（理由同 saveMemory）。
     const ws = await this.state.plainWorkspace(request.cardId, request.storyId)

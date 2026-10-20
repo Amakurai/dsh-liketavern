@@ -62,6 +62,18 @@ function toStrArr(value: unknown): string[] {
   return Array.isArray(value) ? value.map(toStr) : []
 }
 
+/** 原型污染键：裸赋值会触发 `__proto__` setter，字段丢失且对象原型被替换。 */
+const POLLUTION_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
+
+/** 污染键必须落成自有数据属性（defineProperty），其余键保持普通赋值（同 core/characterData.ts）。 */
+function setExtensionField(target: Record<string, unknown>, key: string, value: unknown): void {
+  if (POLLUTION_KEYS.has(key)) {
+    Object.defineProperty(target, key, { value, writable: true, enumerable: true, configurable: true })
+    return
+  }
+  target[key] = value
+}
+
 /** spec 判定：json.spec 优先，其次 PNG chunk 关键字 hint，再按 data 包装/顶层平铺推断。 */
 function detectSpec(obj: Record<string, unknown>, hint: 'chara_card_v3' | null): CardSpec {
   const spec = obj.spec
@@ -289,10 +301,14 @@ function normalizeCardInternal(
   if (name === '') throw new CardParseError('角色卡缺少 name')
 
   // 未识别的其余字段（V3 新增字段、自定义字段）一律进 extensions。
+  // `__proto__`/`constructor`/`prototype` 这类键必须落成自有数据属性：裸赋值会触发原型 setter，
+  // 字段静默丢失并把 extensions 的原型改成外来对象（与 core/characterData.ts 同一口径）。
   const extensions: Record<string, unknown> = {}
-  if (isRecord(data.extensions)) Object.assign(extensions, data.extensions)
+  if (isRecord(data.extensions)) {
+    for (const [key, value] of Object.entries(data.extensions)) setExtensionField(extensions, key, value)
+  }
   for (const [key, value] of Object.entries(data)) {
-    if (!isKnownCharacterDataKey(key, value)) extensions[key] = value
+    if (!isKnownCharacterDataKey(key, value)) setExtensionField(extensions, key, value)
   }
 
   return {

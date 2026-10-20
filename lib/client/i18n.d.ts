@@ -6,6 +6,12 @@ export declare function setTavernLocale(id: TavernLocalePreference): void;
 export declare function setTavernHostLocale(active: string): void;
 /** 取当前语言文案；en 缺失时回退 zh（字典齐全性由 test/i18n.test.ts 保证，兜底仅为防白屏）。 */
 export declare function t(key: string, params?: Record<string, string | number>): string;
+/**
+ * 字典（zh 为键全集源）是否含该键。
+ * 动态拼接的键族（如 `characters.compatibility.<code>.title`）应改用静态映射表并在测试里核对，
+ * 因为 t() 对缺失键是静默回退键名；本帮手让这类核对有稳定入口。
+ */
+export declare function hasTavernKey(key: string): boolean;
 /** 组件内取文案的唯一入口：订阅语言切换，切语言时触发重渲染。 */
 export declare function useT(): typeof t;
 /**

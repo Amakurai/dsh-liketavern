@@ -11,6 +11,7 @@
  * host 在 turn/start 直接 `wal.beginFloor(floor)`，turn/end 按 openFloors 记录的
  * entry 提交，不再触碰共享句柄的 floor。
  */
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { Buffer } from 'node:buffer'
 import { lstat, mkdir, readFile, readdir, rm, stat } from 'node:fs/promises'
 import { dirname, join, normalize, relative, resolve, sep } from 'node:path'
@@ -21,6 +22,64 @@ import { withWorkspaceLock } from './workspaceLock.js'
 
 /** 历史占位：旧版曾把非会话写入记入名为 non-floor 的 WAL 单元。现已不再使用。 */
 export const NON_FLOOR = 'non-floor'
+
+/** 工作区级回滚恢复标记（相对工作区根）：存在期间任何正文写入都必须被拒绝。 */
+export const WAL_RECOVERY_PATH = 'state/wal-recovery.json'
+/** 恢复期间所有写入入口统一使用的中文拒绝原因（含「回滚恢复」，供上层提示与测试匹配）。 */
+export const WORKSPACE_RECOVERING_MESSAGE =
+  '剧情正在回滚恢复：请先重新执行回退完成恢复；反复失败时可在「记忆」面板选择该剧情并重置回滚游标。本次写入未执行'
+
+/**
+ * 回滚自身需要写正文（替换、摘要展开、索引重建）。内部恢复流程通过这个上下文放行，
+ * 外部/面板/其它楼层的写入拿不到它，从而在恢复游标存在期间被写屏障挡住。
+ */
+const recoveryWriteAccess = new AsyncLocalStorage<true>()
+
+/** 仅限 Wal 回滚内部使用：本上下文内的 WorkspaceFs 写入跳过恢复写屏障。 */
+export function withRecoveryWriteAccess<T>(task: () => Promise<T>): Promise<T> {
+  return recoveryWriteAccess.run(true, task)
+}
+
+async function existsFile(path: string): Promise<boolean> {
+  try { await lstat(path); return true } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+    throw error
+  }
+}
+
+/** 工作区根是否存在回滚恢复标记；读取路径不受屏障影响，恢复流程仍可读盘。 */
+export async function hasRecoveryMarker(root: string): Promise<boolean> {
+  return existsFile(join(root, WAL_RECOVERY_PATH))
+}
+
+/**
+ * 标记是否仍代表进行中的恢复：标记登记的任一楼层目录里还留着恢复游标即为活跃。
+ * 崩溃落在「回滚已归档、标记未注销」之间时游标随目录改名消失，此时标记失效、不再阻断写入
+ * （Wal 的下一次操作会顺手删除它）。标记无法解析或是链接时保守视为活跃。
+ */
+async function recoveryMarkerActive(root: string): Promise<boolean> {
+  const marker = join(root, WAL_RECOVERY_PATH)
+  let raw: string
+  try {
+    if ((await lstat(marker)).isSymbolicLink()) return true
+    raw = await readFile(marker, 'utf8')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+    throw error
+  }
+  let value: unknown
+  try { value = JSON.parse(raw) } catch { return true }
+  if (typeof value !== 'object' || value === null || !Array.isArray((value as { dirs?: unknown }).dirs)) return true
+  const { dirs, walDir } = value as { dirs: unknown[]; walDir?: unknown }
+  const walDirs = [join(root, 'state', 'wal'), ...(typeof walDir === 'string' ? [walDir] : [])]
+  for (const dir of dirs) {
+    if (typeof dir !== 'string' || !dir || dir.includes('/') || dir.includes('\\') || dir === '.' || dir === '..') return true
+    for (const base of walDirs) {
+      if (await existsFile(join(base, dir, 'rollback-progress.json'))) return true
+    }
+  }
+  return false
+}
 
 /** 严格 UTF-8 解码器：非法字节序列抛错；ignoreBOM 保留开头的 BOM 字符，确保快照可还原原始字节。 */
 const STRICT_UTF8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true })
@@ -151,6 +210,15 @@ export class WorkspaceFs {
     await this.assertNoLinks(this.abs(relPath))
   }
 
+  /**
+   * 回滚恢复写屏障：本工作区存在恢复标记（或有旧版遗留游标）时，任何写/删都必须明确失败。
+   * Wal 回滚自身的正文替换、摘要展开与索引重建经 withRecoveryWriteAccess 放行。
+   */
+  private async assertWritable(): Promise<void> {
+    if (recoveryWriteAccess.getStore()) return
+    if (await recoveryMarkerActive(this.root)) throw new Error(WORKSPACE_RECOVERING_MESSAGE)
+  }
+
   async readText(relPath: string, _options?: { rejectLinks?: boolean }): Promise<string | null> {
     try {
       const abs = this.abs(relPath)
@@ -259,6 +327,7 @@ export class WorkspaceFs {
   async writeTextMany(entries: ReadonlyArray<readonly [relPath: string, content: string]>): Promise<void> {
     if (!entries.length) return
     await withWorkspaceLock(this.root, async () => {
+      await this.assertWritable()
       const targets = entries.map(([relPath, content]) => ({ relPath, abs: this.abs(relPath), content }))
       if (new Set(targets.map((target) => ledgerKey(target.relPath))).size !== targets.length) throw new Error('批量写入包含重复路径')
       await this.assertNoLinksAmong(new Set(targets.map((target) => dirname(target.abs))))
@@ -291,6 +360,7 @@ export class WorkspaceFs {
   async copyFrom(source: WorkspaceFs, relPaths: readonly string[], reject: (relPath: string) => Error): Promise<void> {
     if (this.wal && this.floor) throw new Error('批量复制不记录楼层快照，不能用于楼层写入')
     await withWorkspaceLock(this.root, async () => {
+      await this.assertWritable()
       const targets = relPaths.map((relPath) => ({ relPath, from: source.abs(relPath), to: this.abs(relPath) }))
       await source.assertNoLinksAmong(new Set(targets.map((target) => dirname(target.from))))
       await this.assertNoLinksAmong(new Set(targets.map((target) => dirname(target.to))))
@@ -342,6 +412,7 @@ export class WorkspaceFs {
   /** 事务写入：每次修改先持久化 before/after，再原子替换正文；与回退共享工作区锁。 */
   async writeText(relPath: string, content: string): Promise<void> {
     await withWorkspaceLock(this.root, async () => {
+      await this.assertWritable()
       const abs = this.abs(relPath)
       await this.assertNoLinks(abs)
       if (this.wal && this.floor) {
@@ -361,6 +432,7 @@ export class WorkspaceFs {
    */
   async writeBytes(relPath: string, bytes: Uint8Array): Promise<void> {
     await withWorkspaceLock(this.root, async () => {
+      await this.assertWritable()
       const abs = this.abs(relPath)
       await this.assertNoLinks(abs)
       if (this.wal && this.floor) {
@@ -381,6 +453,7 @@ export class WorkspaceFs {
    */
   async delete(relPath: string): Promise<void> {
     await withWorkspaceLock(this.root, async () => {
+      await this.assertWritable()
       const abs = this.abs(relPath)
       await this.assertNoLinks(abs)
       if (this.wal && this.floor) {

@@ -169,7 +169,7 @@ export declare class TavernState {
     /** warn 是非致命维护问题的日志出口；host 传入 ctx.logger.warn，测试缺省静默。 */
     constructor(paths: TavernPaths, getConfig: () => TavernConfig, warn?: (message: string) => void);
     init(): Promise<void>;
-    /** 清理崩溃遗留的原子写临时文件；只是回收空间，失败不能阻断启动或打开剧情。 */
+    /** 清理崩溃遗留的原子写临时文件与草稿目录；只是回收空间，失败不能阻断启动或打开剧情。 */
     private sweepTemps;
     worldInfoFor(binding: SessionBinding): {
         scanDepth: number;

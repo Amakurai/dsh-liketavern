@@ -19,6 +19,16 @@ export declare function worldInfoBudgetText(content: string): string;
  */
 export declare function isStandingSafeEntry(entry: WorldInfoEntry): boolean;
 /**
+ * 引擎计费与组装分流共用的 standing 判定（两处必须调用同一函数，不得各自实现）。
+ *
+ * 组装侧（assemble.ts）传入自己的宏依赖判定 isDynamic，能精确识别「本轮才变」的条目；
+ * 引擎侧在求值阶段拿不到组装期的变量依赖图，传 undefined 时按「正文不读取任何变量」的
+ * 保守口径：宁可把静态 getvar 条目也计费，也不能把组装会改送 turn 的条目当 standing 豁免——
+ * 否则 tokenBudget 对实际注入的正文失效（条目豁免了预算却每轮全价进 runtime context 快照）。
+ * 残留差异只在「条目引用角色字段、而该字段自身含变量读取」这一种情况（引擎看不到字段值）。
+ */
+export declare function isStandingBudgetSafe(entry: WorldInfoEntry, isDynamic?: (text: string) => boolean): boolean;
+/**
  * 求值一轮世界书触发。返回激活条目（按位置分桶）、触发日志与新的定时状态。
  * 纯函数：不修改入参；timerState 的持久化由调用方经事务层完成。
  */

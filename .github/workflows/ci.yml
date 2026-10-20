@@ -54,6 +54,17 @@ jobs:
             exit 1
           fi
 
+      # presets/ 是运行期必读资产（presetInstall 读 agent.cordis.yml 与 preset.yml），
+      # 但它不像 lib/ 有构建产物可对照；缺失或被本机改动时在这里拦下来。
+      - name: 校验 presets/ 无未跟踪产物
+        run: |
+          status=$(git status --porcelain -- presets/)
+          if [ -n "$status" ]; then
+            echo "presets/ 存在未跟踪或未提交的资产："
+            echo "$status"
+            exit 1
+          fi
+
       # lib/ 已完成构建与一致性检查；此处禁用生命周期并生成一次真实 tarball。
       # 审核及后续发布都应使用这一份字节流，不重新打包。
       - name: 生成并校验待审核 npm 包
@@ -99,6 +110,17 @@ jobs:
 
       - name: 备份恢复安装入口冒烟
         run: npm run backup:check
+
+      # presets/ 是运行期必读资产，但没有构建产物可对照；缺失或本机改动在这里拦下来。
+      - name: 校验 presets/ 无未跟踪产物（Windows）
+        shell: pwsh
+        run: |
+          $status = git status --porcelain -- presets/
+          if ($status) {
+            Write-Output "presets/ 存在未跟踪或未提交的资产："
+            Write-Output $status
+            exit 1
+          }
 
       # 直接运行 Node 脚本（不经 npm run），覆盖 Windows 的 npm.cmd 安全拉起分支。
       - name: 校验 npm 包边界（Windows）

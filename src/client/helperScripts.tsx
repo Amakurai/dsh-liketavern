@@ -17,6 +17,15 @@ import { useLoader } from './util.js'
 import { CARD_VARIABLE_STYLES } from './styles.js'
 import type { TavernRemote } from './types.js'
 
+/** 等待首条消息的退避重试：1s 起、最长 15s、最多 20 次；之后只靠剧情通知唤醒。 */
+const WAIT_MESSAGE_BASE_DELAY_MS=1_000
+const WAIT_MESSAGE_MAX_DELAY_MS=15_000
+const WAIT_MESSAGE_MAX_ATTEMPTS=20
+/** 未表态 MVU 跟随的退避重试：5s 起、最长 30s、最多 12 次；剧情通知会重置计数。 */
+const MVU_FOLLOW_BASE_DELAY_MS=5_000
+const MVU_FOLLOW_MAX_DELAY_MS=30_000
+const MVU_FOLLOW_MAX_ATTEMPTS=12
+
 export function HelperScripts(props:{remote:TavernRemote;sessionId:string;cardId?:string;sessions?:{open(id:string):void;refresh?:()=>Promise<void>};onCancel?:()=>Promise<void>}) {
   const {remote,sessionId}=props,t=useT()
   const loader=useLoader(()=>remote.getHelperScriptBundle({sessionId}),[sessionId],true)
@@ -31,6 +40,9 @@ export function HelperScripts(props:{remote:TavernRemote;sessionId:string;cardId
   const [mvuState,setMvu]=useState<{version:string;error:string|null;busy:boolean}>({version:runtimeVersion,error:null,busy:false})
   const mvu=mvuState.version===runtimeVersion?mvuState:{error:null,busy:false}
   const retryMvu=useRef<{version:string;run:()=>void}>({version:'',run:()=>{}})
+  /** 退避重试计数按会话+剧情保留：bundle 重拉会重建 effect，计数不能随之归零（否则退化成固定 1s/5s 轮询）。 */
+  const waitAttempts=useRef<{key:string;count:number}>({key:'',count:0})
+  const followAttempts=useRef<{key:string;count:number}>({key:'',count:0})
   const mvuStatus=useCallback((value:{error:string|null;busy:boolean;retry:()=>void})=>{if(currentRuntime.current!==runtimeVersion)return;retryMvu.current={version:runtimeVersion,run:value.retry};setMvu(current=>current.version===runtimeVersion&&current.error===value.error&&current.busy===value.busy?current:{version:runtimeVersion,error:value.error,busy:value.busy})},[runtimeVersion])
   useEffect(()=>{
     if(bundle)return
@@ -55,10 +67,21 @@ export function HelperScripts(props:{remote:TavernRemote;sessionId:string;cardId
     // 首条消息出现后启动等待中的脚本；已运行的沙箱自行刷新数据，不因普通剧情通知重启。
     let requested=false
     const stop=watchHelperStory(sessionId,bundle.storyId,()=>{if(!requested){requested=true;loader.reload()}})
-    const timer=setInterval(()=>loader.reload(),1000)
-    return()=>{stop();clearInterval(timer)}
+    // 退避重试：1s 起、最长 15s，最多 20 次（约 4 分钟）；之后交给剧情通知唤醒，不再 1Hz 空转。
+    // 计数放在 ref 里：loader 重拉会让 waitingForMessage 短暂翻转并重建 effect，计数不能随之归零。
+    const key=`${sessionId}\0${bundle.storyId}`
+    if(waitAttempts.current.key!==key)waitAttempts.current={key,count:0}
+    const counter=waitAttempts.current
+    let timer:ReturnType<typeof setTimeout>|undefined
+    const schedule=()=>{
+      if(counter.count>=WAIT_MESSAGE_MAX_ATTEMPTS)return
+      const delay=Math.min(WAIT_MESSAGE_MAX_DELAY_MS,WAIT_MESSAGE_BASE_DELAY_MS*2**counter.count)
+      timer=setTimeout(()=>{counter.count++;loader.reload();schedule()},delay)
+    }
+    schedule()
+    return()=>{stop();if(timer!==undefined)clearTimeout(timer)}
   },[sessionId,bundle?.storyId,waitingForMessage,loader.reload])
-  // 从未表态的绑定跟随卡片：宿主忙时开启会被 idle 认领拒绝，随剧情通知与定时重试，直到开启或不再适用。
+  // 从未表态的绑定跟随卡片：宿主忙时开启会被 idle 认领拒绝，随剧情通知与退避重试，直到开启或不再适用。
   const enableMvu=useCallback(async(mode:'follow'|'explicit')=>{
     if(!bundle)throw new Error(t('settings.scripts.nativeUnavailable'))
     const result=await remote.enableHelperMvu({sessionId,storyId:bundle.storyId,mode})
@@ -69,12 +92,22 @@ export function HelperScripts(props:{remote:TavernRemote;sessionId:string;cardId
   const follow=bundle?.helperMvuFollow===true
   useEffect(()=>{
     if(!follow||!bundle)return
-    let active=true,running=false
+    let active=true,running=false,timer:ReturnType<typeof setTimeout>|undefined
     const attempt=()=>{if(!active||running)return;running=true;void enableMvu('follow').catch(()=>{}).finally(()=>{running=false})}
+    // 退避重试：5s 起、最长 30s，最多 12 次（约 4 分钟）；之后靠剧情通知重试。
+    // 计数同样放 ref：bundle 重拉会换掉 enableMvu 身份并重建 effect。
+    const key=`${sessionId}\0${bundle.storyId}`
+    if(followAttempts.current.key!==key)followAttempts.current={key,count:0}
+    const counter=followAttempts.current
+    const schedule=()=>{
+      if(counter.count>=MVU_FOLLOW_MAX_ATTEMPTS)return
+      const delay=Math.min(MVU_FOLLOW_MAX_DELAY_MS,MVU_FOLLOW_BASE_DELAY_MS*2**counter.count)
+      timer=setTimeout(()=>{counter.count++;attempt();schedule()},delay)
+    }
     attempt()
-    const stop=watchHelperStory(sessionId,bundle.storyId,attempt)
-    const timer=setInterval(attempt,5000)
-    return()=>{active=false;stop();clearInterval(timer)}
+    const stop=watchHelperStory(sessionId,bundle.storyId,()=>{counter.count=0;attempt()})
+    schedule()
+    return()=>{active=false;stop();if(timer!==undefined)clearTimeout(timer)}
   },[follow,sessionId,bundle?.storyId,enableMvu])
   const scriptVersion=JSON.stringify(libraries.map(library=>[library.target,library.revision]))
   useEffect(()=>watchHelperScriptAssets(target=>{if(libraries.some(library=>JSON.stringify(library.target)===JSON.stringify(target)))loader.reload()}),[loader.reload,scriptVersion,bundle?.cardId])

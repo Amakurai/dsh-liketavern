@@ -1,11 +1,25 @@
 /** 设置中的脚本资产管理：无需绑定会话，按全局、角色与预设选择独立脚本库，复用带草稿保护的编辑器。 */
 import { useRef, useState,useSyncExternalStore } from 'react'
-import {scriptStatusStore,retryScriptMvu,enableScriptMvu,isScriptWindowAccessError} from '../helperScriptStatus.js'
+import {scriptStatusStore,retryScriptMvu,enableScriptMvu,isScriptWindowAccessError,type ScriptRuntimeStatus} from '../helperScriptStatus.js'
 import type { HelperScriptAsset, HelperScriptTarget } from '../../core/helperScripts.js'
 import type { TavernRemote } from '../types.js'
 import { HelperScriptEditor } from '../helperScriptEditor.js'
 import { useT } from '../i18n.js'
 import { Btn, Err, Muted, Section, Select, Skeleton, useLoader } from '../util.js'
+
+/**
+ * 运行状态文案映射：状态枚举新增而这里漏配时编译期报错，
+ * 不再出现 t() 静默把 `settings.scripts.runtime.*` 键名渲染给用户。
+ */
+const RUNTIME_STATE_KEYS: Record<ScriptRuntimeStatus['state'] | 'ready' | 'incompatible', string> = {
+  loading: 'settings.scripts.runtime.loading',
+  disabled: 'settings.scripts.runtime.disabled',
+  waiting: 'settings.scripts.runtime.waiting',
+  running: 'settings.scripts.runtime.running',
+  error: 'settings.scripts.runtime.error',
+  ready: 'settings.scripts.runtime.ready',
+  incompatible: 'settings.scripts.runtime.incompatible',
+}
 
 export function ScriptSettings({remote}:{remote:TavernRemote}) {
   const t=useT()
@@ -35,7 +49,7 @@ export function ScriptSettings({remote}:{remote:TavernRemote}) {
       {!runtimes.length&&<Muted>{t('settings.scripts.noRuntime')}</Muted>}
       {runtimes.map(runtime=><div key={runtime.sessionId}>
         <strong>{characters.state.status==='ready'?characters.state.value.items.find(card=>card.cardId===runtime.cardId)?.name??t('settings.scripts.current'):t('settings.scripts.current')}</strong>
-        <Muted>{t(`settings.scripts.runtime.${runtime.state}`)}</Muted><Err message={runtime.error??null}/>
+        <Muted>{t(RUNTIME_STATE_KEYS[runtime.state])}</Muted><Err message={runtime.error??null}/>
         {runtime.scripts.some(script=>script.native)&&<Muted>{t(runtime.nativeMvu?'settings.scripts.nativeOn':runtime.mvuFollow?'settings.scripts.nativeFollow':'settings.scripts.nativeOff')}</Muted>}
         {runtime.scripts.some(script=>script.native)&&!runtime.nativeMvu&&runtime.state!=='disabled'&&<NativeMvuEnable sessionId={runtime.sessionId}/>}
         {runtime.nativeMvu&&<Muted>{t(runtime.mvuError?'speech.mvuRetry':runtime.mvuBusy?'speech.mvuRunning':runtime.scripts.every(script=>script.state==='ready')?'speech.mvuReady':'speech.mvuWaiting')}</Muted>}
@@ -43,7 +57,7 @@ export function ScriptSettings({remote}:{remote:TavernRemote}) {
         {runtime.mvuError&&<Btn onClick={()=>retryScriptMvu(runtime.sessionId)}>{t('speech.mvuRetry')}</Btn>}
         <ul>{runtime.scripts.map(script=>{
           const incompatible=script.state==='error'&&isScriptWindowAccessError(script.error)
-          return <li key={script.id}><span>{script.name}</span><span className="dsh-tavern-scriptRuntimeStatus">{t(`settings.scripts.runtime.${incompatible?'incompatible':script.state}`)}</span>
+          return <li key={script.id}><span>{script.name}</span><span className="dsh-tavern-scriptRuntimeStatus">{t(RUNTIME_STATE_KEYS[incompatible?'incompatible':script.state])}</span>
             {incompatible&&<Muted>{t('settings.scripts.windowAccess')}</Muted>}
             {script.error&&<Err message={script.error}/>}
           </li>

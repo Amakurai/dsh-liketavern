@@ -133,6 +133,10 @@ function MemoryContextSection(props: { remote: TavernRemote; cardId: string; sto
   const memories = useLoader(() => remote.getMemories({ cardId, storyId }), [cardId, storyId], cardId !== '')
   const deltas = useLoader(() => remote.getWorldDeltas({ cardId, storyId }), [cardId, storyId], cardId !== '')
   const journal = useLoader(() => remote.getJournal({ cardId, storyId }), [cardId, storyId], cardId !== '')
+  // 回滚恢复未完成时整个剧情拒绝写入；这里给出可见状态与受控重置出口，避免永久卡死。
+  const recovery = useLoader(() => remote.getStoryRecovery({ cardId, storyId }), [cardId, storyId], cardId !== '')
+  const [confirmReset, setConfirmReset] = useState(false)
+  const recoveringFloors = recovery.state.status === 'ready' ? recovery.state.value.floors : []
 
   /**
    * 写操作统一外壳：busy 防连击（快速双击重复创建/并发压缩）；
@@ -244,6 +248,15 @@ function MemoryContextSection(props: { remote: TavernRemote; cardId: string; sto
       }
     })
 
+  const resetRecovery = () =>
+    op(async () => {
+      const r = await remote.resetStoryRecovery({ cardId, storyId })
+      const err = errOf(r)
+      if (err) setError(err)
+      else toast.show(t('memory.recoveryReset', { count: r.ok ? r.value.reset.length : 0 }))
+      recovery.reload()
+    })
+
   return (
     <Section title={t('section.memory')} description={t('memory.desc')}>
       {toast.node}
@@ -251,6 +264,9 @@ function MemoryContextSection(props: { remote: TavernRemote; cardId: string; sto
       <ConfirmDialog open={deleteId !== null} title={t('memory.deleteEntry')} description={t('memory.deleteConfirm')}
         confirmLabel={t('action.delete')} danger busy={busy} onCancel={() => { if (!busy) setDeleteId(null) }}
         onConfirm={() => { if (deleteId) void deleteMemory(deleteId).then(() => setDeleteId(null)) }} />
+      <ConfirmDialog open={confirmReset} title={t('memory.resetRecovery')} description={t('memory.resetRecoveryConfirm')}
+        confirmLabel={t('memory.resetRecovery')} danger busy={busy} onCancel={() => { if (!busy) setConfirmReset(false) }}
+        onConfirm={() => void resetRecovery().then(() => setConfirmReset(false))} />
       <SettingsRow title={t('memory.character')} description={t('memory.characterDesc')}>
         <Select
           size="md"
@@ -271,6 +287,11 @@ function MemoryContextSection(props: { remote: TavernRemote; cardId: string; sto
         <span>{t(storyId ? 'memory.scopeStoryDesc' : 'memory.scopeInitialDesc')}</span>
         {storyId && <span className="dsh-tavern-muted">{stories.state.status === 'ready'
           ? stories.state.value.items.find((s) => s.id === storyId)?.sessionId ?? storyId : storyId}</span>}
+      </div>}
+      {cardId && recoveringFloors.length > 0 && <div role="alert" className="dsh-tavern-storyContext">
+        <strong>{t('memory.recovering', { floors: recoveringFloors.join(', ') })}</strong>
+        <Muted>{t('memory.recoveringDesc')}</Muted>
+        <Btn disabled={busy} onClick={() => setConfirmReset(true)}>{t('memory.resetRecovery')}</Btn>
       </div>}
       <Err message={chars.state.status === 'error' ? chars.state.message : stories.state.status === 'error' ? stories.state.message : error} />
       {chars.state.status === 'error' && <Btn disabled={busy} onClick={chars.reload}>{t('action.retry')}</Btn>}

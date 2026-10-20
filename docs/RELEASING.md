@@ -8,7 +8,7 @@ CI 的 Ubuntu 全门禁会在构建、测试及 `lib/` 一致性检查完成后�
 
 1. 只接受目标提交的 CI 全部通过后产生的 artifact。
 2. 下载并解压 artifact，使用 SHA-256 文件核对 tarball 内容未发生变化。
-3. 检查包版本、变更记录及 `npm pack` 文件边界；确认两平台的全量 `npm audit`、`doctor:check` 已通过，包含实际编译命令的直接入口、安装链接、JSON 输出和只读导入检查。
+3. 检查包版本、变更记录及 `npm pack` 文件边界；确认两平台的全量 `npm audit`、`doctor:check`、`backup:check` 与 `presets/` 资产跟踪检查已通过，包含实际编译命令的直接入口、安装链接、JSON 输出和只读导入检查。
 4. 后续发布流程直接发布已审核的 `.tgz`；不要再次运行 `npm pack`，否则审核对象与发布对象不再是同一份字节流。
 
 创建新标签时固定到已验证的完整提交 SHA。发布前用独立 `DSH_HOME` 安装待发布包，检查实际宿主启动、关于页版本与关键 UI；发布后再核对 `releases/latest`、标签中的 manifest、附件版本和 SHA-256，确保安装入口真正指向本次验证的版本。

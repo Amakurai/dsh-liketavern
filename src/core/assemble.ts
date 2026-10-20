@@ -41,7 +41,7 @@ import { isSyntheticUserText } from './dshPrompt.js'
 import { expandIdentityMacros, expandMacros, hasUnevaluatedScript, type MacroContext } from './macros.js'
 import { createMacroDependencyTracker, type MacroDependencySource } from './macroDependencies.js'
 import { applyRegexToMessages } from './regex.js'
-import { isStandingSafeEntry } from './worldbook.js'
+import { isStandingBudgetSafe } from './worldbook.js'
 import { hasEjs } from './template.js'
 import { createPromptLayout, promptDepthPlacement, promptHistoryAnchors, type PromptLayout, type PromptLayoutFragment, type PromptMessageProvenance } from './promptLayout.js'
 import {
@@ -404,8 +404,8 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
       // delta 内容由 worldState marker 统一落位；这里仍保留它参与引擎匹配/递归的结果。
       if (a.entry.source === 'delta') continue
       if (skipScript(`世界书「${a.entry.key}」`, a.entry.content)) continue
-      // standing/turn 分流与引擎的预算豁免共用同一判定（isStandingSafeEntry），不得漂移。
-      const standingSafe = isStandingSafeEntry(a.entry) && !dynamic(a.entry.content)
+      // standing/turn 分流与引擎的预算豁免共用同一判定（isStandingBudgetSafe），不得漂移。
+      const standingSafe = isStandingBudgetSafe(a.entry, dynamic)
       const text = (standingSafe ? expandStanding(a.entry.content, standingCtx, a.entry.key) : expandTurn(a.entry.content, a.entry.key)).trim()
       if (!text) continue
       if (standingSafe) { standingParts.push(text); standingSources.push(a.entry.key) }
@@ -625,7 +625,7 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
   }
   for (const a of wiAt(WIPosition.AtDepth)) {
     if (skipScript(`世界书 @D「${a.entry.key}」`, a.entry.content)) continue
-    const stable = isStandingSafeEntry(a.entry) && !dynamic(a.entry.content)
+    const stable = isStandingBudgetSafe(a.entry, dynamic)
     const content = (stable ? expandStanding(a.entry.content, standingCtx, a.entry.key) : expandTurn(a.entry.content, a.entry.key)).trim()
     if (!content) continue
     depthInjections.push({

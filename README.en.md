@@ -149,10 +149,13 @@ All runtime data lives under `$DSH_HOME/dsh-tavern/` (`~/.dsh/dsh-tavern/` by de
 ```text
 $DSH_HOME/dsh-tavern/
 ├── characters/         # Character metadata, avatars, and private character assets
-├── presets/            # Prompt presets
-├── lorebooks/          # Global and character lorebooks
+│   └── <cardId>/stories/<storyId>/   # Branch-isolated story workspaces (memories, deltas, variables, WAL)
+├── library/
+│   ├── presets/        # Prompt presets
+│   └── lorebooks/      # Global and character lorebooks
 ├── personas/           # User personas
-├── stories/            # Branch-isolated story workspaces (memories, deltas, variables, WAL)
+├── regex/              # Global regex rules (rules.json)
+├── sessions/           # Session bindings (<sessionId>.json)
 └── editor-drafts/      # Unsaved editor draft recovery snapshots (up to 2 MiB each)
 ```
 

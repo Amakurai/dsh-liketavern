@@ -122,7 +122,8 @@ function compute<K extends keyof ComputeJobs>(slot:WorkerSlot,kind:K,input:Compu
         if(remaining[phase]<=0){expired();return}
         phase=next;phaseStarted=now
         timer=setTimeout(expired,remaining[phase])
-      } else if(message.error)finish(new Error(message.error))
+      } else if(message.error!==undefined&&message.error!==null)finish(new Error(String(message.error)||'提示词 worker 返回失败但未提供原因'))
+      else if(message.value===undefined)finish(new Error('提示词 worker 返回了空结果，拒绝按成功收口'))
       else {
         slot.cacheKey=message.cacheKey
         if(message.cacheHit)cacheHits++

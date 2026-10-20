@@ -172,6 +172,8 @@ function budgetLoreItems<T extends { metadataTruncated?: boolean; truncated?: bo
     result.ok = false
     result.error = 'lore-output-too-large：完整定位字段超过输出预算，请选择其它条目或缩小阅读范围'
     stampAssetTokens(result)
+    // 结构化拒绝是业务结果：错误文本本身可能顶过预算，不能再用末尾的 throw 把它盖掉。
+    return result
   }
   if (result.tokensUsed > limit) throw new Error('世界书完整输出超过预算')
   return result

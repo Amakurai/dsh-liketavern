@@ -48,5 +48,10 @@ export declare const zh: {
     readonly 'memory.saveJournal': "保存笔记";
     readonly 'memory.journalSaved': "已保存角色笔记";
     readonly 'memory.opFailed': "操作失败：{message}";
+    readonly 'memory.recovering': "该剧情有未完成的回滚恢复（{floors}），恢复完成前所有写入都会被拒绝。";
+    readonly 'memory.recoveringDesc': "通常重新执行一次回退即可完成恢复；若反复失败，可重置恢复游标后再回退一次。";
+    readonly 'memory.resetRecovery': "重置回滚游标";
+    readonly 'memory.resetRecoveryConfirm': "重置后写屏障解除，但未撤销完的楼层仍需重新回退才能撤销。确定重置？";
+    readonly 'memory.recoveryReset': "已重置 {count} 个楼层的回滚游标";
 };
 export declare const en: Record<keyof typeof zh, string>;

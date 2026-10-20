@@ -26,6 +26,18 @@ import { cardGreetingVariants } from '../core/greetingLog.js'
 import { DEFAULT_USER_NAME } from '../core/persona.js'
 import './styles.js'
 
+/** 英雄区写操作的有界等待：宿主 RPC 可能永不返回，超时必须明确失败而不是无限等待。 */
+const HERO_WRITE_TIMEOUT_MS = 20_000
+
+/** race 出结果或超时后立即清掉定时器；卸载后不再排队。 */
+function withWriteTimeout<T>(pending: Promise<T>, ms: number, onTimeout: () => Error): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  return Promise.race([
+    pending,
+    new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(onTimeout()), ms) }),
+  ]).finally(() => { if (timer !== undefined) clearTimeout(timer) })
+}
+
 /** 开场白只读展示与聊天共用服务端处理；互动 HTML 只提示，避免源码泄露或提前执行脚本。 */
 function GreetingPreview(props: { remote: TavernRemote; sessionId: string; text: string }) {
   const t = useT()
@@ -164,13 +176,18 @@ function HeroCharacterSession(props: HeroProps) {
 
   /** 用户正在点选角色：不要把刚写入的绑定当成「上次留下的」清掉。 */
   const picking = useRef(false)
-  const clearing = useRef(false)
-  /** 每个空白会话只清一次陈旧绑定；之后用户点选的角色要留着预览。 */
+  /** 进行中的陈旧绑定清扫；点选角色要等它结束（有界），不再用定时器轮询。 */
+  const clearing = useRef<Promise<void> | null>(null)
+  const clearingSerial = useRef(0)
+  /** 每个空白会话只清一次陈旧绑定；失败不算完成，可显式重试。 */
   const sweptSession = useRef<string | null>(null)
+  const [sweepRetry, setSweepRetry] = useState(0)
+  const [sweepFailed, setSweepFailed] = useState(false)
 
   useEffect(() => {
     sweptSession.current = null
     picking.current = false
+    setSweepFailed(false)
   }, [sessionId])
 
   // 新对话常会复用仍空白的 Tavern 会话；清掉上次留下的角色绑定，才能切回其他模式。
@@ -184,30 +201,35 @@ function HeroCharacterSession(props: HeroProps) {
     if (sweptSession.current === sessionId) return
     sweptSession.current = sessionId
     if (!binding) return
-    clearing.current = true
-    void (async () => {
+    const serial = ++clearingSerial.current
+    clearing.current = (async () => {
       try {
         if (picking.current) return
-        const r = await remote.clearSessionBinding({ sessionId, onlyIfBlank: true })
+        // 宿主写入可能永不返回；有界等待，超时明确失败而不是无上限轮询。
+        const r = await withWriteTimeout(remote.clearSessionBinding({ sessionId, onlyIfBlank: true }), HERO_WRITE_TIMEOUT_MS, () => new Error(t('util.loadTimeout')))
         if (picking.current) return
         const err = errOf(r)
         if (err) {
+          sweptSession.current = null
+          setSweepFailed(true)
           setError(err)
           return
         }
         if (r.ok && !r.value.cleared) setEntered(true)
+        setSweepFailed(false)
         invalidateSessionBinding(sessionId)
         window.dispatchEvent(new CustomEvent(BINDING_CHANGED_EVENT, { detail: sessionId }))
         bindingLoader.reload()
       } catch (cause) {
+        // 失败不能消费一次性标记：留出重试入口，避免陈旧绑定继续被用来开始对话。
+        sweptSession.current = null
+        setSweepFailed(true)
         setError(cause instanceof Error ? cause.message : String(cause))
-      } finally {
-        clearing.current = false
       }
-    })()
+    })().finally(() => { if (clearingSerial.current === serial) clearing.current = null })
     // reload 随 loader 每次 render 换新引用；只跟空白会话上的陈旧绑定走。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showHero, bindingLoader.state.status, binding?.cardId, sessionId])
+  }, [showHero, bindingLoader.state.status, binding?.cardId, sessionId, sweepRetry])
 
   useLayoutEffect(() => {
     if (!showHero) {
@@ -268,12 +290,14 @@ function HeroCharacterSession(props: HeroProps) {
     setBusy(true)
     setError(null)
     try {
-      while (clearing.current) await new Promise((resolve) => setTimeout(resolve, 20))
+      // 等待进行中的清扫结束（清扫自身有界）；不再用 20ms 定时器轮询，卸载后立即退出。
+      const pending = clearing.current
+      if (pending) await pending
       if (!alive.current) return
       // 点选角色始终重新读取默认配置；不能复用清扫请求发出前 render 闭包里的陈旧 binding。
-      const next = await bindingFromDefaults(remote, sessionId, cardId)
+      const next = await withWriteTimeout(bindingFromDefaults(remote, sessionId, cardId), HERO_WRITE_TIMEOUT_MS, () => new Error(t('util.loadTimeout')))
       if (!alive.current) return
-      const saved = await remote.setSessionBinding({ binding: next })
+      const saved = await withWriteTimeout(remote.setSessionBinding({ binding: next }), HERO_WRITE_TIMEOUT_MS, () => new Error(t('util.loadTimeout')))
       const saveErr = errOf(saved)
       if (saveErr) {
         setError(saveErr)
@@ -369,7 +393,12 @@ function HeroCharacterSession(props: HeroProps) {
       {chipHost ? createPortal(chip, chipHost) : chip}
       {open && <CharacterPicker remote={remote} selectedId={binding?.cardId} busy={busy} error={error}
         onPick={(id) => void pickCharacter(id)} onClose={() => setOpen(false)} />}
-      {error && <div className="dsh-tavern-hero-error">{error}</div>}
+      {error && (sweepFailed
+        ? <div role="alert" className="dsh-tavern-hero-error">
+            {error}
+            <Btn disabled={busy} onClick={() => { setSweepFailed(false); setError(null); setSweepRetry((n) => n + 1) }}>{t('action.retry')}</Btn>
+          </div>
+        : <div className="dsh-tavern-hero-error">{error}</div>)}
       {bindingLoader.state.status === 'error' && <div role="alert" className="dsh-tavern-hero-error">
         {bindingLoader.state.message}
         <Btn onClick={bindingLoader.reload} disabled={busy}>{t('action.retry')}</Btn>

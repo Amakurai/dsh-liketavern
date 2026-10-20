@@ -17,8 +17,9 @@ export declare class FloorError extends Error {
  * 本插件在 create 后立刻 followup，来不及等 UI 再装 selection，必须在 create 时写上
  * provider/model，否则 system-prompt 插值 `{{model}}` 会抛「has no value」。
  *
- * 优先会话最新 request/header（用户中途换模也跟得上），其次父 agent.options，
- * 再次最近一条非开场白 assistant 的 source。
+ * 复用会话最新路由口径（modelRoute.sessionModelRoute）：尚未被请求消费的 model/selection
+ * 优先，其次最近 request/header，再回退创建时 options / 最近一条非开场白 assistant 的 source。
+ * 只看 request/header 会让换模后第一轮的分支仍用旧模型（且与窗口/模板 model 变量的口径分叉）。
  * 输出上限只继承父 agent.options 的明确配置；header 已混入 Tavern 预设采样，
  * 不能把临时覆盖升级成子会话默认值，否则随后清空预设上限仍会恢复旧值。
  */

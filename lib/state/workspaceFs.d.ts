@@ -1,6 +1,14 @@
 import type { Wal } from './wal.js';
 /** 历史占位：旧版曾把非会话写入记入名为 non-floor 的 WAL 单元。现已不再使用。 */
 export declare const NON_FLOOR = "non-floor";
+/** 工作区级回滚恢复标记（相对工作区根）：存在期间任何正文写入都必须被拒绝。 */
+export declare const WAL_RECOVERY_PATH = "state/wal-recovery.json";
+/** 恢复期间所有写入入口统一使用的中文拒绝原因（含「回滚恢复」，供上层提示与测试匹配）。 */
+export declare const WORKSPACE_RECOVERING_MESSAGE = "\u5267\u60C5\u6B63\u5728\u56DE\u6EDA\u6062\u590D\uFF1A\u8BF7\u5148\u91CD\u65B0\u6267\u884C\u56DE\u9000\u5B8C\u6210\u6062\u590D\uFF1B\u53CD\u590D\u5931\u8D25\u65F6\u53EF\u5728\u300C\u8BB0\u5FC6\u300D\u9762\u677F\u9009\u62E9\u8BE5\u5267\u60C5\u5E76\u91CD\u7F6E\u56DE\u6EDA\u6E38\u6807\u3002\u672C\u6B21\u5199\u5165\u672A\u6267\u884C";
+/** 仅限 Wal 回滚内部使用：本上下文内的 WorkspaceFs 写入跳过恢复写屏障。 */
+export declare function withRecoveryWriteAccess<T>(task: () => Promise<T>): Promise<T>;
+/** 工作区根是否存在回滚恢复标记；读取路径不受屏障影响，恢复流程仍可读盘。 */
+export declare function hasRecoveryMarker(root: string): Promise<boolean>;
 /** 工作区读写拒绝磁盘链接，避免安全的相对路径实际指向 WAL、兄弟剧情或工作区外。 */
 export declare class WorkspaceLinkError extends Error {
 }
@@ -41,6 +49,11 @@ export declare class WorkspaceFs {
      * 但一旦进入指定工作区，链接不得改写剧情边界；WAL 整批预检也复用此只读检查。
      */
     assertSafePath(relPath: string): Promise<void>;
+    /**
+     * 回滚恢复写屏障：本工作区存在恢复标记（或有旧版遗留游标）时，任何写/删都必须明确失败。
+     * Wal 回滚自身的正文替换、摘要展开与索引重建经 withRecoveryWriteAccess 放行。
+     */
+    private assertWritable;
     readText(relPath: string, _options?: {
         rejectLinks?: boolean;
     }): Promise<string | null>;

@@ -7,6 +7,7 @@ import {cardVariableLabels} from '../cardVariableLabels.js'
 import { useDraftGuard } from '../drafts.js'
 import { buildCardSrcDoc } from '../../core/cardFrame.js'
 import { cardGreetingVariants } from '../../core/greetingLog.js'
+import type { CharacterCompatibilityCode, CharacterCompatibilityStatus } from '../../core/characterCompatibility.js'
 import { CARD_VARIABLE_STYLES } from '../styles.js'
 import { PersistentEditor, useDraftRestored, useDraftState } from '../draftPersistence.js'
 import { useEffect, useRef, useState } from 'react'
@@ -16,6 +17,33 @@ import { matchesCharacterSearch } from '../characterSearch.js'
 import { useT } from '../i18n.js'
 import type { CharacterDetail, CharacterInspect, CharacterSummary, TavernRemote } from '../types.js'
 import { Avatar, Btn, ConfirmDialog, Dialog, Err, Field, FileBtn, IconBtn, ListInput, Muted, NumInput, SearchEmpty, SearchInput, Section, Select, Skeleton, Tabs, clickableProps, downloadBase64, downloadJson, errOf, fileToBase64, runAsync, useLoader, useToast } from '../util.js'
+
+/**
+ * 兼容性报告的动态键映射：core 新增 code/status 而这里漏配时编译期报错，
+ * 不再出现 t() 静默把键名渲染给用户的情况。
+ */
+const COMPATIBILITY_KEYS: Record<CharacterCompatibilityCode, { title: string; desc: string }> = {
+  cardFields: { title: 'characters.compatibility.cardFields.title', desc: 'characters.compatibility.cardFields.desc' },
+  regex: { title: 'characters.compatibility.regex.title', desc: 'characters.compatibility.regex.desc' },
+  templates: { title: 'characters.compatibility.templates.title', desc: 'characters.compatibility.templates.desc' },
+  html: { title: 'characters.compatibility.html.title', desc: 'characters.compatibility.html.desc' },
+  scripts: { title: 'characters.compatibility.scripts.title', desc: 'characters.compatibility.scripts.desc' },
+  invalidScripts: { title: 'characters.compatibility.invalidScripts.title', desc: 'characters.compatibility.invalidScripts.desc' },
+  nativeMvu: { title: 'characters.compatibility.nativeMvu.title', desc: 'characters.compatibility.nativeMvu.desc' },
+  customMvu: { title: 'characters.compatibility.customMvu.title', desc: 'characters.compatibility.customMvu.desc' },
+  unsupportedApi: { title: 'characters.compatibility.unsupportedApi.title', desc: 'characters.compatibility.unsupportedApi.desc' },
+  parentAccess: { title: 'characters.compatibility.parentAccess.title', desc: 'characters.compatibility.parentAccess.desc' },
+  network: { title: 'characters.compatibility.network.title', desc: 'characters.compatibility.network.desc' },
+  externalScript: { title: 'characters.compatibility.externalScript.title', desc: 'characters.compatibility.externalScript.desc' },
+  externalMedia: { title: 'characters.compatibility.externalMedia.title', desc: 'characters.compatibility.externalMedia.desc' },
+  vectorLore: { title: 'characters.compatibility.vectorLore.title', desc: 'characters.compatibility.vectorLore.desc' },
+  scanLimit: { title: 'characters.compatibility.scanLimit.title', desc: 'characters.compatibility.scanLimit.desc' },
+}
+const COMPATIBILITY_STATUS_KEYS: Record<CharacterCompatibilityStatus, string> = {
+  supported: 'characters.compatibility.status.supported',
+  unsupported: 'characters.compatibility.status.unsupported',
+  review: 'characters.compatibility.status.review',
+}
 
 /** 按 cardId 拉头像 dataURL 的 Avatar 包装（失败时回落首字符/图标）；头像走进程内缓存。 */
 function CardAvatar(props: { remote: TavernRemote; cardId: string; name: string; size: number }) {
@@ -599,10 +627,10 @@ function CharactersSectionContent(props: { remote: TavernRemote }) {
             {(['unsupported', 'review', 'supported'] as const).map(status => {
               const findings = pending.preview.compatibility.findings.filter(item => item.status === status)
               return findings.length > 0 && <div key={status}>
-                <h3>{t(`characters.compatibility.status.${status}`)}</h3>
+                <h3>{t(COMPATIBILITY_STATUS_KEYS[status])}</h3>
                 <ul>{findings.map(item => <li key={item.code}>
-                  <strong>{t(`characters.compatibility.${item.code}.title`)}</strong>
-                  <span>{t(`characters.compatibility.${item.code}.desc`)}</span>
+                  <strong>{t(COMPATIBILITY_KEYS[item.code].title)}</strong>
+                  <span>{t(COMPATIBILITY_KEYS[item.code].desc)}</span>
                   <small>{t('characters.compatibility.locations', { count: item.count, locations: item.locations.join(', ') })}</small>
                 </li>)}</ul>
               </div>

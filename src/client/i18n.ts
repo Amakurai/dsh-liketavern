@@ -56,6 +56,15 @@ export function t(key: string, params?: Record<string, string | number>): string
   return raw.replace(/\{(\w+)\}/g, (match, name: string) => (name in params ? String(params[name]) : match))
 }
 
+/**
+ * 字典（zh 为键全集源）是否含该键。
+ * 动态拼接的键族（如 `characters.compatibility.<code>.title`）应改用静态映射表并在测试里核对，
+ * 因为 t() 对缺失键是静默回退键名；本帮手让这类核对有稳定入口。
+ */
+export function hasTavernKey(key: string): boolean {
+  return Object.hasOwn(zh, key)
+}
+
 /** 组件内取文案的唯一入口：订阅语言切换，切语言时触发重渲染。 */
 export function useT(): typeof t {
   useSyncExternalStore(

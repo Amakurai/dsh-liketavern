@@ -149,10 +149,13 @@ flowchart LR
 ```text
 $DSH_HOME/dsh-tavern/
 ├── characters/         # 角色卡元数据、头像与角色私有资产
-├── presets/            # 提示词预设
-├── lorebooks/          # 全局与角色级世界书
+│   └── <cardId>/stories/<storyId>/   # 按剧情隔离的状态工作区（记忆、变化层、变量、WAL 日志）
+├── library/
+│   ├── presets/        # 提示词预设
+│   └── lorebooks/      # 全局与角色级世界书
 ├── personas/           # 用户人设
-├── stories/            # 按剧情隔离的状态工作区（记忆、变化层、变量、WAL 日志）
+├── regex/              # 全局正则规则（rules.json）
+├── sessions/           # 会话绑定（<sessionId>.json）
 └── editor-drafts/      # 编辑器未保存草稿自动暂存（单份上限 2 MiB）
 ```
 

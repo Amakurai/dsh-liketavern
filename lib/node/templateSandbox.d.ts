@@ -59,6 +59,22 @@ export declare class TemplateSandbox {
     private evaluate;
     /** 纯 JSON 作为 QuickJS 字符串值传输，固定源码不再重复解析转义后的大历史。 */
     private evaluateInput;
+    /** 同 evaluateInput，但把完成值句柄留给调用方（渲染状态必须由宿主持有，不能经全局中转）。 */
+    private evaluateHandle;
+    /** 只读取闭包状态；不经过模板可命名的全局，也不调用任何模板可补丁的函数。 */
+    private readRenderState;
+    /** 真实错误优先于期限：QuickJS 的 OOM/内部错误不能被一律报成超时，只有中断本身按超期收口。 */
+    private renderFailure;
+    /** 冻结宿主命令入口；对已冻结属性幂等，旧堆里的可写实现会被一并收紧。 */
+    private hardenProtocol;
+    /**
+     * 宿主侧直接读取内部状态并在主线程比较：不再经过模板可命名的 __conditionState，
+     * 也不使用 VM 内可被补丁的 JSON.stringify。vm.dump 走 JSON 语义会调用对象的 toJSON，
+     * 模板可借此让快照恒定；因此对 dump 结果里的每个对象节点回查句柄，带 toJSON 的状态直接拒绝。
+     */
+    private conditionState;
+    /** dump 结果里的对象节点必须没有 toJSON（含原型链），其键集合才是真实的可枚举自有属性。 */
+    private assertPlainState;
     private growResources;
     /** 受信装载结束后收紧到第三方计算预算；后续阶段（resume/继续轮）重置同一预算。 */
     private beginComputation;

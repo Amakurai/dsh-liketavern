@@ -1,5 +1,5 @@
 /** EJS 在 QuickJS/WASM 中执行；不向脚本提供 Node、网络、DOM、宿主函数或模块加载器。 */
-import type { QuickJSContext } from 'quickjs-emscripten'
+import type { QuickJSContext, QuickJSHandle } from 'quickjs-emscripten'
 import { parseDocument } from 'yaml'
 import { createHash } from 'node:crypto'
 import { parseTemplateHelperMvu } from '../core/templateHelperMvu.js'
@@ -39,6 +39,35 @@ let templateFakerSource: string | undefined
 let templateRuntimeHash: string | undefined
 /** 仅供 worker 编排计时，不暴露给 QuickJS 脚本。 */
 let computationPhase: ((phase: 'loading' | 'computing') => void) | undefined
+
+/**
+ * 渲染包装：完成状态与结果只存在于这个 IIFE 的闭包内，模板既不能按名字访问也不能枚举；
+ * evalCode 的完成值就是这个状态对象，宿主直接持有句柄读取，因此不再依赖任何可写全局。
+ * 拒绝值即使为空串也保留可读原因，不能退化成“输出无效”。
+ */
+const RENDER_WRAPPER = `(()=>{
+const state={done:false,error:null,result:null};
+const call=parseTemplateInput(__tavernCallInput);
+(async()=>{
+try{state.result=await __render(call.text,__sourceData(call.source,call.data))}
+catch(error){state.error=(String(error)||'EJS 模板以空值拒绝')}
+finally{state.done=true}
+})();
+return state;
+})()`
+/**
+ * 宿主命令入口的不可写化清单：这些全局只在 bootstrap 里赋值一次，冻结后模板无法用同名全局
+ * 替换命令实现来伪造状态或结果。可被后续重新赋值的入口（如 __resetTemplateFaker）不在此列。
+ */
+const PROTOCOL_ENTRIES = ['__conditionState','__export','__exportMessageVariables','__exportTemplateStickyState','__restoreTemplateStickyState',
+  '__render','__setTemplateMessageContext','__refreshTemplateContext','__resolveTemplateOutlets','__setTemplateOutletsDeferred',
+  '__applyTemporaryRegex','__applyTemporaryRegexSources','__runTemporaryRegexSources','__runBasicRegexSourcesBatch','__regexDescriptors','__hasMessageRegex',
+  '__templateRegexRuleCount','__templateRegexStageSize','__prepareTemplateBasicRegex','__clearTemplateBasicRegex','__activationRequests','__formatTemplateMessage',
+  '__continueTemplateGeneration','__resumeTemplateReply','__beginTemplateGeneration','__finishTemplateGeneration','__hasLiveTemplateClosures',
+  '__deactivateTemplateRegex','__deactivateTemplatePromptInjection','__sourceData','__bindTemplateDefinitions','__setPreparing'] as const
+const HARDEN_PROTOCOL = `(()=>{for(const name of ${JSON.stringify(PROTOCOL_ENTRIES)}){try{
+const value=globalThis[name];if(typeof value!=='function')continue;
+Object.defineProperty(globalThis,name,{value,writable:false,configurable:false})}catch{}}return undefined})()`
 
 export class TemplateSandbox {
   private readonly renderedSources = new Map<string, string>()
@@ -125,6 +154,8 @@ export class TemplateSandbox {
       const limitHandle=vm.newNumber(contextChars+1024*1024)
       try {vm.setProp(vm.global,'__tavernOutputLimit',limitHandle)} finally {limitHandle.dispose()}
       sandbox.evaluate(BOOTSTRAP.replace('/* TEMPLATE_VENDOR */',()=>templateLibrarySource!))
+      // 任何第三方代码（含 preload）之前冻结宿主命令入口；模板不能替换命令实现来伪造状态或结果。
+      sandbox.hardenProtocol()
       if(bootstrap?.preload==='refresh') sandbox.sticky('restore',bootstrap.state)
       sandbox.beginComputation()
       sandbox.preload(input)
@@ -194,6 +225,8 @@ export class TemplateSandbox {
       owner.vm.runtime.setMemoryLimit(templateExecutionBudget(resourceChars).quickJsMemoryBytes)
       owner.vm.runtime.setMaxStackSize(512*1024)
       owner.vm.runtime.setInterruptHandler(()=>Date.now()>sandbox.deadline)
+      // 旧检查点可能来自未冻结的运行时；恢复后同样冻结入口（对已冻结属性是幂等的）。
+      sandbox.hardenProtocol()
       sandbox.initialContext=structuredClone(replay.context)
       sandbox.generationContext=structuredClone(replay.context)
       sandbox.currentContext=structuredClone(checkpoint.context)
@@ -348,6 +381,87 @@ export class TemplateSandbox {
       handle.dispose()
     }
   }
+
+  /** 同 evaluateInput，但把完成值句柄留给调用方（渲染状态必须由宿主持有，不能经全局中转）。 */
+  private evaluateHandle(code:string,input:unknown):QuickJSHandle {
+    // 与 evaluate(code,false) 同语义：包装里会执行第三方代码，可能改动临时正则表，必须失效阶段缓存。
+    this.regexStageEmpty.clear()
+    const json=JSON.stringify(input)
+    if(json.length>TEMPLATE_INPUT_MAX_CHARS) throw new Error('模板调用输入超过安全资源容量')
+    this.growResources(json.length)
+    const handle=this.vm.newString(json)
+    try {
+      this.vm.setProp(this.vm.global,'__tavernCallInput',handle)
+      const result=this.vm.evalCode(code)
+      if(result.error) {
+        const error:unknown=this.vm.dump(result.error)
+        result.error.dispose()
+        throw new Error(`EJS 模板失败：${JSON.stringify(error)}`)
+      }
+      return result.value
+    } finally {
+      this.vm.setProp(this.vm.global,'__tavernCallInput',this.vm.undefined)
+      handle.dispose()
+    }
+  }
+
+  /** 只读取闭包状态；不经过模板可命名的全局，也不调用任何模板可补丁的函数。 */
+  private readRenderState(state:QuickJSHandle):{done:boolean;error:string|null;result:unknown} {
+    const read=(key:string):unknown=> {
+      const handle=this.vm.getProp(state,key)
+      try { return this.vm.dump(handle) } finally { handle.dispose() }
+    }
+    const done=read('done'),error=read('error')
+    return {done:done===true,error:typeof error==='string'&&error ? error : null,result:read('result')}
+  }
+
+  /** 真实错误优先于期限：QuickJS 的 OOM/内部错误不能被一律报成超时，只有中断本身按超期收口。 */
+  private renderFailure(message:string):Error {
+    if(/interrupt/i.test(message) && Date.now()>this.deadline) return new Error('EJS 模板计算超时')
+    return new Error(`EJS 模板失败：${message}`)
+  }
+
+  /** 冻结宿主命令入口；对已冻结属性幂等，旧堆里的可写实现会被一并收紧。 */
+  private hardenProtocol():void { this.evaluate(HARDEN_PROTOCOL) }
+
+  /**
+   * 宿主侧直接读取内部状态并在主线程比较：不再经过模板可命名的 __conditionState，
+   * 也不使用 VM 内可被补丁的 JSON.stringify。vm.dump 走 JSON 语义会调用对象的 toJSON，
+   * 模板可借此让快照恒定；因此对 dump 结果里的每个对象节点回查句柄，带 toJSON 的状态直接拒绝。
+   */
+  private conditionState():string {
+    // 读取属性会触发 getter/Proxy 等模板代码；与 evaluate 一致失效阶段缓存。
+    this.regexStageEmpty.clear()
+    const object=this.vm.evalCode('({scopes,variables,initial,messageSnapshots})')
+    if(object.error) {
+      const error:unknown=this.vm.dump(object.error)
+      object.error.dispose()
+      throw new Error(`@@if 条件状态读取失败：${JSON.stringify(error)}`)
+    }
+    try {
+      let dumped:unknown
+      try { dumped=this.vm.dump(object.value) }
+      catch(error) { throw new Error(`@@if 条件状态读取失败：${error instanceof Error?error.message:String(error)}`) }
+      this.assertPlainState(object.value,dumped,0,{nodes:200_000})
+      try { return JSON.stringify(dumped) }
+      catch { throw new Error('@@if 条件状态不可序列化，拒绝求值') }
+    } finally { object.value.dispose() }
+  }
+
+  /** dump 结果里的对象节点必须没有 toJSON（含原型链），其键集合才是真实的可枚举自有属性。 */
+  private assertPlainState(handle:QuickJSHandle,dumped:unknown,depth:number,budget:{nodes:number}):void {
+    if(typeof dumped!=='object'||dumped===null) return
+    if(--budget.nodes<0||depth>256) throw new Error('@@if 条件状态过大，拒绝求值')
+    const toJson=this.vm.getProp(handle,'toJSON')
+    try { if(this.vm.typeof(toJson)==='function') throw new Error('@@if 条件状态含自定义 toJSON，拒绝求值') }
+    finally { toJson.dispose() }
+    for(const [key,value] of Object.entries(dumped)) {
+      if(typeof value!=='object'||value===null) continue
+      const child=this.vm.getProp(handle,Array.isArray(dumped)?Number(key):key)
+      try { this.assertPlainState(child,value,depth+1,budget) } finally { child.dispose() }
+    }
+  }
+
   private growResources(inputChars:number):void {
     if(inputChars>this.outputInputChars) {
       this.outputInputChars=inputChars
@@ -458,26 +572,32 @@ export class TemplateSandbox {
   }
 
   render(text: string, data: Record<string,unknown> = {}, source?:string): string {
-    this.evaluateInput(`globalThis.__done=false; globalThis.__error=null; globalThis.__result=null;
-      {const call=parseTemplateInput(__tavernCallInput);
-      __render(call.text,__sourceData(call.source,call.data)).then(v=>{globalThis.__result=v;globalThis.__done=true},e=>{globalThis.__error=String(e);globalThis.__done=true});} undefined;`,{text,data,source})
-    while (this.vm.runtime.hasPendingJob()) {
-      if (Date.now() > this.deadline) throw new Error('EJS 模板计算超时')
-      const result = this.vm.runtime.executePendingJobs(1)
-      if (result.error) {
-        const error: unknown = this.vm.dump(result.error)
-        result.error.dispose()
-        throw new Error(`EJS 异步任务失败：${JSON.stringify(error)}`)
+    // 完成状态只存在于包装闭包内；模板写 globalThis.__done/__result 一类同名全局不再有任何作用。
+    const state=this.evaluateHandle(RENDER_WRAPPER,{text,data,source})
+    try {
+      while (this.vm.runtime.hasPendingJob()) {
+        if (Date.now() > this.deadline) {
+          const pending=this.readRenderState(state)
+          if (pending.error) throw this.renderFailure(pending.error)
+          throw new Error('EJS 模板计算超时')
+        }
+        const result = this.vm.runtime.executePendingJobs(1)
+        if (result.error) {
+          const error: unknown = this.vm.dump(result.error)
+          result.error.dispose()
+          throw new Error(`EJS 异步任务失败：${JSON.stringify(error)}`)
+        }
       }
-    }
-    if (Date.now() > this.deadline) throw new Error('EJS 模板计算超时')
-    if (!this.evaluate('__done')) throw new Error('EJS 异步任务未完成（不允许外部 I/O）')
-    const error = this.evaluate('__error')
-    if (error) throw new Error(`EJS 模板失败：${String(error)}`)
-    const value = this.evaluate('__result')
-    if (typeof value !== 'string' || value.length > this.outputInputChars+1024*1024) throw new Error('EJS 输出无效或净增超过 1 MiB 上限')
-    this.record({kind:'render',text,data,source},value)
-    return value
+      // 先读真实结果：期限已过但脚本已明确失败时必须报真实原因（OOM/内部错误），不能一律报超时。
+      const outcome = this.readRenderState(state)
+      if (outcome.error) throw this.renderFailure(outcome.error)
+      if (Date.now() > this.deadline) throw new Error('EJS 模板计算超时')
+      if (!outcome.done) throw new Error('EJS 异步任务未完成（不允许外部 I/O）')
+      const value = outcome.result
+      if (typeof value !== 'string' || value.length > this.outputInputChars+1024*1024) throw new Error('EJS 输出无效或净增超过 1 MiB 上限')
+      this.record({kind:'render',text,data,source},value)
+      return value
+    } finally { state.dispose() }
   }
 
   /** 重组同轮计划时只重放已求值的来源，避免 activewi 引起脚本重复写变量。 */
@@ -594,9 +714,9 @@ export class TemplateSandbox {
   }
   /** 条件在 WI 预算和分组前求值；拒绝写变量，避免预选阶段产生未提交或重复副作用。 */
   condition(expression: string): boolean {
-    const before = this.evaluate('__conditionState()')
+    const before = this.conditionState()
     const result = this.render(`<%- Boolean(${expression}) %>`)
-    if (this.evaluate('__conditionState()') !== before) throw new Error('@@if 条件必须只读，不能修改变量')
+    if (this.conditionState() !== before) throw new Error('@@if 条件必须只读，不能修改变量')
     return result === 'true'
   }
   dispose(): void { this.vm.dispose() }

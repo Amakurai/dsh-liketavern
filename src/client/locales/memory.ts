@@ -49,6 +49,11 @@ export const zh = {
   'memory.saveJournal': '保存笔记',
   'memory.journalSaved': '已保存角色笔记',
   'memory.opFailed': '操作失败：{message}',
+  'memory.recovering': '该剧情有未完成的回滚恢复（{floors}），恢复完成前所有写入都会被拒绝。',
+  'memory.recoveringDesc': '通常重新执行一次回退即可完成恢复；若反复失败，可重置恢复游标后再回退一次。',
+  'memory.resetRecovery': '重置回滚游标',
+  'memory.resetRecoveryConfirm': '重置后写屏障解除，但未撤销完的楼层仍需重新回退才能撤销。确定重置？',
+  'memory.recoveryReset': '已重置 {count} 个楼层的回滚游标',
 } as const
 
 export const en: Record<keyof typeof zh, string> = {
@@ -100,4 +105,9 @@ export const en: Record<keyof typeof zh, string> = {
   'memory.saveJournal': 'Save journal',
   'memory.journalSaved': 'Character journal saved',
   'memory.opFailed': 'Operation failed: {message}',
+  'memory.recovering': 'This story has an unfinished rollback recovery ({floors}); all writes are rejected until it completes.',
+  'memory.recoveringDesc': 'Running the rollback again usually completes it. If it keeps failing, reset the rollback cursor and roll back again.',
+  'memory.resetRecovery': 'Reset rollback cursor',
+  'memory.resetRecoveryConfirm': 'Resetting lifts the write barrier, but floors that were not fully undone must be rolled back again. Reset?',
+  'memory.recoveryReset': 'Reset the rollback cursor of {count} floor(s)',
 }

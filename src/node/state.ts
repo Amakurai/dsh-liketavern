@@ -38,7 +38,7 @@ import {
   type CharacterWorkspace,
 } from '../state/workspace.js'
 import { WorkspaceFs } from '../state/workspaceFs.js'
-import { sweepOrphanTemps } from '../state/atomicWrite.js'
+import { DRAFT_PREFIXES, sweepOrphanTemps } from '../state/atomicWrite.js'
 import { resolveStaleBinding } from '../core/binding.js'
 import { parsePersona, pickPersona, type Persona } from '../core/persona.js'
 import { pinStandingText, stableFingerprintHash, standingPinKey, type StandingPin } from '../core/standingPin.js'
@@ -295,12 +295,14 @@ export class TavernState {
   async init(): Promise<void> {
     await ensurePaths(this.paths)
     // 角色与剧情目录较大，改在各自首次打开时清理；这里只覆盖绑定、资产库与草稿。
-    await this.sweepTemps(this.paths.root, (rel) => rel === 'characters')
+    await this.sweepTemps(this.paths.root, { skipDir: (rel) => rel === 'characters' })
+    // characters 本层的崩溃草稿（.importing-<uuid>）被上面的 skipDir 排除，只能在父层显式回收。
+    await this.sweepTemps(this.paths.characters, { draftPrefixes: DRAFT_PREFIXES, recursive: false })
   }
 
-  /** 清理崩溃遗留的原子写临时文件；只是回收空间，失败不能阻断启动或打开剧情。 */
-  private async sweepTemps(dir: string, skipDir?: (relDir: string) => boolean): Promise<void> {
-    await sweepOrphanTemps(dir, { skipDir }).catch((error: unknown) => {
+  /** 清理崩溃遗留的原子写临时文件与草稿目录；只是回收空间，失败不能阻断启动或打开剧情。 */
+  private async sweepTemps(dir: string, options?: { skipDir?: (relDir: string) => boolean; draftPrefixes?: readonly string[]; recursive?: boolean }): Promise<void> {
+    await sweepOrphanTemps(dir, options).catch((error: unknown) => {
       this.warn(`dsh-tavern: 清理临时文件失败：${error instanceof Error ? error.message : String(error)}`)
     })
   }
@@ -347,7 +349,10 @@ export class TavernState {
     const fs = new WorkspaceFs(root, wal)
     const handle: WorkspaceHandle = { fs, wal, memory: new MemoryStore(fs), deltas: new WorldDeltaStore(fs) }
     this.workspaces.set(cardId, handle)
-    await this.sweepTemps(root, (rel) => rel === 'stories')
+    await this.sweepTemps(root, { skipDir: (rel) => rel === 'stories' })
+    // stories 本层的崩溃草稿（.preparing-<uuid>）被上面的 skipDir 排除，只能在父层显式回收；
+    // 只删点号前缀且 mtime 超龄的目录，已发布的 story-<uuid>/legacy-<hex> 不在删除范围内。
+    await this.sweepTemps(join(root, 'stories'), { draftPrefixes: DRAFT_PREFIXES, recursive: false })
     return handle
   }
 

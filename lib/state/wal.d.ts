@@ -100,6 +100,43 @@ export declare class Wal {
     private readFloorMeta;
     /** 恢复游标绑定原始记录集合；中断后只能继续回滚，追加或提交会使游标失效或误报已完成。 */
     private assertNotRecovering;
+    /** 工作区级恢复标记的绝对路径；非标准日志根（无 state/wal 布局）退回日志目录内。 */
+    private recoveryMarkerPath;
+    /** 读恢复标记中的楼层清单；文件缺失或损坏按空处理（标记是自有的保护信息，不参与回滚数据）。 */
+    private readRecoveryFloors;
+    /**
+     * 标记同时记下日志目录与各层净化后的目录名，WorkspaceFs 据此只凭标记即可判断游标是否仍在，
+     * 失效标记（回滚已归档、未注销）不会挡住正文写入。非标准日志根时正文工作区另写一份副本，
+     * 否则 WorkspaceFs（只看 <root>/state/wal-recovery.json）看不到屏障。
+     */
+    private writeRecoveryFloors;
+    /** 回滚开始前登记本层：先写标记再写恢复游标，任何游标存在期间工作区都有写屏障。 */
+    private markRecovering;
+    /** 回滚完成后注销本层；没有其它恢复中楼层时删除标记。顺手丢掉已随归档消失的陈旧条目。 */
+    private clearRecovering;
+    /** 标记里仍“活着”的恢复楼层：活动目录存在且游标还在；已改名归档/被删除的条目算失效。 */
+    private activeRecoveryFloors;
+    /**
+     * 清理崩溃窗口留下的失效标记条目（回滚已改名归档、但还没来得及注销标记）。
+     * 只保留活动目录里仍有游标的楼层；没有剩余时删除标记文件。
+     */
+    private reconcileRecoveryMarker;
+    /**
+     * 普通写入只查标记文件（一次 stat），标记存在时顺带清掉失效条目再判断。
+     * `scanCursors` 供开层/分支快照等低频入口使用，兜底识别旧版本崩溃遗留、还没有标记文件的恢复游标；
+     * 已改名归档的回滚副本不算恢复中（它的游标只是完成回滚后的历史记录，`ROLLED_BACK_MARK` 目录一律跳过）。
+     */
+    private assertWorkspaceReady;
+    /** 供分支快照等外部入口复用：有未完成恢复（或旧版遗留游标）时明确拒绝，并清理失效标记。 */
+    assertWorkspaceWritable(): Promise<void>;
+    /** 列出当前处于回滚恢复中的楼层（标记清单 + 磁盘游标），供面板/诊断决定是否提示重置。 */
+    recoveringFloors(): Promise<string[]>;
+    /**
+     * 受控重置：删除本层恢复游标并注销标记，让冲突/损坏的恢复不再是永久死锁。
+     * 下一次回滚会从当前磁盘状态重新回放（已还原的正文按既有「保留人工修订」语义处理），
+     * 因此这不是“跳过回滚”，调用方仍必须重新执行回滚才能撤销本层。
+     */
+    resetRollbackCursor(floor: string): Promise<void>;
     private readRecords;
     /** 预检与执行共用同一套只读校验，任何坏游标都必须在修改批次中首个文件前被发现。 */
     private readRollbackProgress;

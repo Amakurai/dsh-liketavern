@@ -1,6 +1,6 @@
 /**
  * 会话导航端口：宿主 0.1.7 的 ISessions 没有 open，必须经 uiWorkspace.openSession 显示会话；
- * 旧宿主回退 sessions.open，两者都缺时明确报错。端口转发保持宿主方法的 this。
+ * 两者都缺时明确报错。端口转发保持宿主方法的 this。
  */
 import { describe, expect, it, vi } from 'vitest'
 import { createSessionsPort, openSessionView } from '../src/client/navigation.js'
@@ -15,12 +15,6 @@ describe('openSessionView', () => {
     openSessionView({ get: name => name === 'uiWorkspace' ? ui : undefined, sessions: { open: legacy, list } }, 'child')
     expect(ui.calls).toEqual(['child'])
     expect(legacy).not.toHaveBeenCalled()
-  })
-
-  it('旧宿主没有 uiWorkspace 时回退 sessions.open', () => {
-    const open = vi.fn()
-    openSessionView({ get: () => undefined, sessions: { open, list } }, 'child')
-    expect(open).toHaveBeenCalledWith('child')
   })
 
   it('两条导航路径都缺失时明确失败，不让分支切换静默无效', () => {

@@ -268,6 +268,15 @@ export declare class TavernService extends TypertRemoteService implements Tavern
         id: string;
     }): Promise<TavernMethodResults['deleteMemory']>;
     /** 无 LLM 的确定性归并：原文逐条保留，只减少条目数，不宣称减少 token。 */
+    getStoryRecovery(request: {
+        cardId: string;
+        storyId?: string;
+    }): Promise<TavernMethodResults['getStoryRecovery']>;
+    /** 恢复反复失败时的受控出口：只删游标与标记，不跳过撤销；调用方仍须重新回退该楼层。 */
+    resetStoryRecovery(request: {
+        cardId: string;
+        storyId?: string;
+    }): Promise<TavernMethodResults['resetStoryRecovery']>;
     compressMemories(request: {
         cardId: string;
         storyId?: string;

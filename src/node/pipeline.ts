@@ -120,7 +120,27 @@ async function resolveContextWindow(input: PipelineInput, route: SessionModelRou
   }
 }
 
-export async function loadBoundLoreEntries(state: TavernState, binding: NonNullable<Awaited<ReturnType<TavernState['loadBinding']>>>): Promise<{ entries: WorldInfoEntry[]; deltas: WorldDelta[] }> {
+/** 聊天世界书损坏时的可见诊断文案（组装路径直接失败；展示/工具路径降级并回传标记）。 */
+export const CHAT_BOOK_CORRUPT_MESSAGE = '聊天世界书损坏，本次未注入：assets/chat-lorebook.json；请在面板修复或删除后重试'
+
+export interface BoundLoreEntries {
+  entries: WorldInfoEntry[]
+  deltas: WorldDelta[]
+  /** 聊天世界书损坏且按 report 降级跳过；组装路径（throw）不会返回 true。 */
+  chatBookCorrupt: boolean
+}
+
+/**
+ * 读取绑定世界书。
+ * 聊天世界书损坏时：组装/模型输入路径必须显式失败（默认 'throw'，与 getChatLorebook 口径一致）；
+ * 只读展示与工具路径传 'report'，跳过整本书但用 chatBookCorrupt 标记与「这本书本来就是空的」区分。
+ */
+export async function loadBoundLoreEntries(
+  state: TavernState,
+  binding: NonNullable<Awaited<ReturnType<TavernState['loadBinding']>>>,
+  options?: { onCorruptChatBook?: 'throw' | 'report' },
+): Promise<BoundLoreEntries> {
+  const onCorruptChatBook = options?.onCorruptChatBook ?? 'throw'
   const ws = await state.storyWorkspace(binding.cardId, binding.storyId)
   const groups: WorldInfoEntry[][] = []
 
@@ -139,12 +159,16 @@ export async function loadBoundLoreEntries(state: TavernState, binding: NonNulla
     if(id!==binding.characterLorebookId)groups.push(await state.loadLorebookEntries(id,'character'))
   }
   // 聊天世界书（会话级，存工作区）
+  let chatBookCorrupt = false
   const chatRaw = await ws.fs.readText('assets/chat-lorebook.json')
   if (chatRaw !== null) {
     try {
       groups.push(parseLorebook(JSON.parse(chatRaw), { source: 'chat', sourceRef: 'chat-lorebook' }))
-    } catch {
-      // 坏文件跳过
+    } catch (cause) {
+      // 损坏的聊天世界书不能静默当空书：否则整本书的 WI 与模板 world_info 会无声消失，
+      // 与 getChatLorebook / helperWorldbook 的严格口径也不一致。
+      if (onCorruptChatBook === 'throw') throw new Error(CHAT_BOOK_CORRUPT_MESSAGE, { cause })
+      chatBookCorrupt = true
     }
   }
   // 人设世界书
@@ -161,7 +185,7 @@ export async function loadBoundLoreEntries(state: TavernState, binding: NonNulla
     return bySource('character') ?? base.find((e) => e.uid === ref)?.order ?? null
   }
   const deltaEntries = ws.deltas.toEngineEntries(deltas, resolveRefOrder)
-  return { entries: [...base, ...deltaEntries], deltas }
+  return { entries: [...base, ...deltaEntries], deltas, chatBookCorrupt }
 }
 
 /** 组装一次 Tavern 提示词。绑定缺失或角色不存在时返回 null。 */
@@ -323,7 +347,8 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
   let deltas: WorldDelta[]
   let lastCharMessage: string
   let journalText: string
-  const lore = await loadBoundLoreEntries(state, binding)
+  // 组装/模型输入路径：聊天世界书损坏必须显式失败，不能静默少注入整本书。
+  const lore = await loadBoundLoreEntries(state, binding, { onCorruptChatBook: 'throw' })
   lore.entries = lore.entries.map(normalizeTemplateLore)
   const templateContext: TemplateContext = {
     variables: templateState.variables, char: charName, user: userName,

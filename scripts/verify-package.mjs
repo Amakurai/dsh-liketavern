@@ -58,7 +58,10 @@ const required = new Set([
   'lib/vendor/checkpoint-engine-v1/LICENSE',
   'lib/vendor/checkpoint-engine-v1/manifest.json',
   'cordis.patch.yml',
+  // presets/tavern 两个文件都是运行期必读：presetInstall 先读 agent.cordis.yml 组装插件清单，
+  // 再读 preset.yml 取 name/description/order；缺 preset.yml 时安装只留一条 warn，预设永远装不上。
   'presets/tavern/agent.cordis.yml',
+  'presets/tavern/preset.yml',
   'README.md',
   'README.en.md',
   'CHANGELOG.md',

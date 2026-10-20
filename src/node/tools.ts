@@ -50,7 +50,7 @@ import { WorkspaceLinkError } from '../state/workspaceFs.js'
 import { withWorkspaceLock } from '../state/workspaceLock.js'
 import type { WorkspaceFs } from '../state/workspaceFs.js'
 import type { SessionBinding } from './bindings.js'
-import { loadBoundLoreEntries } from './pipeline.js'
+import { loadBoundLoreEntries, CHAT_BOOK_CORRUPT_MESSAGE } from './pipeline.js'
 import type { TavernState } from './state.js'
 import { TOOL_OUTPUTS, type TavernToolOutput } from './toolOutputs.js'
 
@@ -367,14 +367,18 @@ export function registerTavernTools(ctx: Context, state: TavernState): void {
           source: asOptionalString(args.source),
           topK: typeof args.topK === 'number' ? args.topK : undefined,
         }
-        const { entries } = await loadBoundLoreEntries(state, resolved.binding)
+        // 只读工具路径：坏聊天书降级跳过，但必须用 hint 明确标记，不能与「这本书本来就是空的」不可区分。
+        const { entries, chatBookCorrupt } = await loadBoundLoreEntries(state, resolved.binding, { onCorruptChatBook: 'report' })
+        const report = <T extends { hint?: string }>(value: T): T => chatBookCorrupt
+          ? { ...value, hint: value.hint ? `${value.hint} ${CHAT_BOOK_CORRUPT_MESSAGE}` : CHAT_BOOK_CORRUPT_MESSAGE }
+          : value
         if (isLoreCatalogQuery(q)) {
           const source = q.source?.trim()
           const scoped = source ? entries.filter((e) => e.source === source) : entries
-          return budgetLoreCatalog(scoped)
+          return report(budgetLoreCatalog(scoped))
         }
         const selected = selectLoreEntries(entries, q)
-        return clipLoreContents(selected)
+        return report(clipLoreContents(selected))
       },
     }),
   )

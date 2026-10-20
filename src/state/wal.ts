@@ -19,7 +19,7 @@ import { undoWorldDelta } from '../core/walUndo.js'
 import { atomicWrite } from './atomicWrite.js'
 import { withWorkspaceLock } from './workspaceLock.js'
 import { expandAffectedMemories } from './memoryRollback.js'
-import { WorkspaceFs } from './workspaceFs.js'
+import { hasRecoveryMarker, WAL_RECOVERY_PATH, withRecoveryWriteAccess, WorkspaceFs, WORKSPACE_RECOVERING_MESSAGE } from './workspaceFs.js'
 import { rebuildIndex } from './workspace.js'
 import { estimateTokens } from '../core/tokenize.js'
 import { readTemplateDocument, TEMPLATE_DATA_PATH } from './templateStorage.js'
@@ -318,6 +318,7 @@ export class Wal {
       await this.assertLogPath(dir)
       if (!(await isDir(dir))) throw new Error(`楼层 "${floor}" 未开始（或已回滚），无法记录写入快照`)
       await this.assertNotRecovering(dir)
+      await this.assertWorkspaceReady()
       const meta=await this.readFloorMeta(dir, floor)
       await this.recordCoverage(meta)
       const state = await this.loadState(dirName)
@@ -344,6 +345,7 @@ export class Wal {
       await this.assertLogPath(dir)
       if (!(await isDir(dir))) throw new Error(`WAL 楼层缺失或已回滚：${floor}`)
       await this.assertNotRecovering(dir)
+      await this.assertWorkspaceReady()
       const meta = await this.readFloorMeta(dir, floor)
       await this.readRecords(dir)
       if (!meta.committed) return
@@ -403,6 +405,7 @@ export class Wal {
       if (!(await isDir(dir))) throw new Error(`WAL 楼层缺失或已回滚：${floor}`)
       const meta = await this.readFloorMeta(dir, floor)
       await this.assertNotRecovering(dir)
+      await this.assertWorkspaceReady()
       await this.readRecords(dir)
       return { floor, committed: meta.committed, startedAt: meta.startedAt, rolledBack: false }
     })
@@ -459,6 +462,158 @@ export class Wal {
       throw error
     })
     if (progress) throw new Error(`WAL 楼层正在回滚恢复，完成恢复前不能追加或提交：${dir}`)
+  }
+
+  /** 工作区级恢复标记的绝对路径；非标准日志根（无 state/wal 布局）退回日志目录内。 */
+  private recoveryMarkerPath(): string {
+    return this.hasCoverage ? join(this.logFs.root, WAL_RECOVERY_PATH) : join(this.rootDir, 'wal-recovery.json')
+  }
+
+  /** 读恢复标记中的楼层清单；文件缺失或损坏按空处理（标记是自有的保护信息，不参与回滚数据）。 */
+  private async readRecoveryFloors(): Promise<string[]> {
+    const path = this.recoveryMarkerPath()
+    await this.assertLogPath(path)
+    const raw = await readFile(path, 'utf8').catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return null
+      throw error
+    })
+    if (raw === null) return []
+    try {
+      const value: unknown = JSON.parse(raw)
+      if (!isRecord(value) || !Array.isArray(value.floors)) return []
+      return value.floors.filter((floor): floor is string => typeof floor === 'string' && floor.length > 0)
+    } catch { return [] }
+  }
+
+  /**
+   * 标记同时记下日志目录与各层净化后的目录名，WorkspaceFs 据此只凭标记即可判断游标是否仍在，
+   * 失效标记（回滚已归档、未注销）不会挡住正文写入。非标准日志根时正文工作区另写一份副本，
+   * 否则 WorkspaceFs（只看 <root>/state/wal-recovery.json）看不到屏障。
+   */
+  private async writeRecoveryFloors(floors: readonly string[], bodyRoot?: string): Promise<void> {
+    const path = this.recoveryMarkerPath()
+    await this.assertLogPath(path)
+    const unique = [...new Set(floors)]
+    const bodyMarker = !this.hasCoverage && bodyRoot ? join(resolve(bodyRoot), WAL_RECOVERY_PATH) : null
+    if (!unique.length) {
+      await rm(path, { force: true })
+      if (bodyMarker) await rm(bodyMarker, { force: true })
+      return
+    }
+    const text = JSON.stringify({ version: 1, floors: unique, dirs: unique.map(sanitizeFloor), walDir: this.rootDir }) + '\n'
+    await atomicWrite(path, text)
+    if (bodyMarker) await atomicWrite(bodyMarker, text)
+  }
+
+  /** 回滚开始前登记本层：先写标记再写恢复游标，任何游标存在期间工作区都有写屏障。 */
+  private async markRecovering(floor: string, bodyRoot: string): Promise<void> {
+    await this.writeRecoveryFloors([...(await this.readRecoveryFloors()), floor], bodyRoot)
+  }
+
+  /** 回滚完成后注销本层；没有其它恢复中楼层时删除标记。顺手丢掉已随归档消失的陈旧条目。 */
+  private async clearRecovering(floor: string, bodyRoot?: string): Promise<void> {
+    const remaining = (await this.readRecoveryFloors()).filter((item) => item !== floor)
+    await this.writeRecoveryFloors(await this.activeRecoveryFloors(remaining), bodyRoot)
+  }
+
+  /** 标记里仍“活着”的恢复楼层：活动目录存在且游标还在；已改名归档/被删除的条目算失效。 */
+  private async activeRecoveryFloors(floors: readonly string[]): Promise<string[]> {
+    const active: string[] = []
+    for (const floor of floors) {
+      const dir = join(this.rootDir, sanitizeFloor(floor))
+      if (!(await isDir(dir))) continue
+      const progress = await stat(join(dir, 'rollback-progress.json')).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === 'ENOENT') return null
+        throw error
+      })
+      if (progress) active.push(floor)
+    }
+    return active
+  }
+
+  /**
+   * 清理崩溃窗口留下的失效标记条目（回滚已改名归档、但还没来得及注销标记）。
+   * 只保留活动目录里仍有游标的楼层；没有剩余时删除标记文件。
+   */
+  private async reconcileRecoveryMarker(): Promise<string[]> {
+    const floors = await this.readRecoveryFloors()
+    if (!floors.length) {
+      await this.writeRecoveryFloors([])
+      return []
+    }
+    const active = await this.activeRecoveryFloors(floors)
+    if (active.length !== floors.length) await this.writeRecoveryFloors(active)
+    return active
+  }
+
+  /**
+   * 普通写入只查标记文件（一次 stat），标记存在时顺带清掉失效条目再判断。
+   * `scanCursors` 供开层/分支快照等低频入口使用，兜底识别旧版本崩溃遗留、还没有标记文件的恢复游标；
+   * 已改名归档的回滚副本不算恢复中（它的游标只是完成回滚后的历史记录，`ROLLED_BACK_MARK` 目录一律跳过）。
+   */
+  private async assertWorkspaceReady(options?: { scanCursors?: boolean }): Promise<void> {
+    const markerRoot = this.hasCoverage ? this.logFs.root : this.rootDir
+    if (await hasRecoveryMarker(markerRoot)) {
+      if ((await this.reconcileRecoveryMarker()).length) throw new Error(WORKSPACE_RECOVERING_MESSAGE)
+    }
+    if (!options?.scanCursors) return
+    const entries = await readdir(this.rootDir, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return []
+      throw error
+    })
+    for (const entry of entries) {
+      if (!entry.isDirectory() || entry.name.includes(ROLLED_BACK_MARK)) continue
+      const progress = await stat(join(this.rootDir, entry.name, 'rollback-progress.json')).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === 'ENOENT') return null
+        throw error
+      })
+      if (progress) throw new Error(WORKSPACE_RECOVERING_MESSAGE)
+    }
+  }
+
+  /** 供分支快照等外部入口复用：有未完成恢复（或旧版遗留游标）时明确拒绝，并清理失效标记。 */
+  assertWorkspaceWritable(): Promise<void> {
+    return this.enqueue(() => this.assertWorkspaceReady({ scanCursors: true }))
+  }
+
+  /** 列出当前处于回滚恢复中的楼层（标记清单 + 磁盘游标），供面板/诊断决定是否提示重置。 */
+  async recoveringFloors(): Promise<string[]> {
+    return this.enqueue(async () => {
+      const floors = new Set(await this.reconcileRecoveryMarker())
+      const entries = await readdir(this.rootDir, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === 'ENOENT') return []
+        throw error
+      })
+      for (const entry of entries) {
+        if (!entry.isDirectory() || entry.name.includes(ROLLED_BACK_MARK)) continue
+        const progress = await stat(join(this.rootDir, entry.name, 'rollback-progress.json')).catch((error: NodeJS.ErrnoException) => {
+          if (error.code === 'ENOENT') return null
+          throw error
+        })
+        if (progress) {
+          const meta = await this.readMeta(join(this.rootDir, entry.name))
+          if (meta) floors.add(meta.floor)
+        }
+      }
+      return [...floors]
+    })
+  }
+
+  /**
+   * 受控重置：删除本层恢复游标并注销标记，让冲突/损坏的恢复不再是永久死锁。
+   * 下一次回滚会从当前磁盘状态重新回放（已还原的正文按既有「保留人工修订」语义处理），
+   * 因此这不是“跳过回滚”，调用方仍必须重新执行回滚才能撤销本层。
+   */
+  resetRollbackCursor(floor: string): Promise<void> {
+    return this.enqueue(async () => {
+      const dir = join(this.rootDir, sanitizeFloor(floor))
+      await this.assertLogPath(dir)
+      if (!(await isDir(dir))) throw new Error(`楼层 "${floor}" 不存在或已回滚，无法重置回滚游标`)
+      await this.readFloorMeta(dir, floor)
+      await this.assertLogPath(join(dir, 'rollback-progress.json'))
+      await rm(join(dir, 'rollback-progress.json'), { force: true })
+      await this.clearRecovering(floor)
+    })
   }
 
   private async readRecords(dir: string): Promise<RecordLine[]> {
@@ -543,10 +698,12 @@ export class Wal {
   }
 
   /** 每次从当前日志读取序号和去重路径；其它实例追加及替换后报错都不能复用旧缓存。 */
-  private async loadState(dirName: string): Promise<{ paths: Set<string>; seq: number }> {
-    const state = { paths: new Set<string>(), seq: 0 }
+  private async loadState(dirName: string): Promise<{ paths: Set<string>; afterPaths: Set<string>; seq: number }> {
+    const state = { paths: new Set<string>(), afterPaths: new Set<string>(), seq: 0 }
     for (const rec of await this.readRecords(join(this.rootDir, dirName))) {
       state.paths.add(rec.path)
+      // 已有 after 的记录来自新协议 recordChanges；遗留 record/recordAfter 不能与它混用。
+      if ('after' in rec) state.afterPaths.add(rec.path)
       state.seq = Math.max(state.seq, rec.seq)
     }
     return state
@@ -582,6 +739,9 @@ export class Wal {
     }
     // 先核对旧清单，不能在日志被清理后继续开新层。
     await this.assertCoveredFloorDirs(floor)
+    // 恢复游标存在期间禁止开新层：部分撤销的正文不能被新楼层当作基线写入。
+    // 这里同时兜底扫描旧版本崩溃遗留、还没有标记文件的游标（只在开层这种低频入口做）。
+    await this.assertWorkspaceReady({ scanCursors: true })
     await mkdir(dir, { recursive: true })
     const meta={floor,startedAt:new Date().toISOString(),committed:false}
     await this.writeMeta(dir,meta)
@@ -597,12 +757,19 @@ export class Wal {
       throw new Error(`楼层 "${floor}" 未开始（或已回滚），无法记录写入快照`)
     }
     await this.assertNotRecovering(dir)
+    await this.assertWorkspaceReady()
     await this.readFloorMeta(dir, floor)
     const normPath = path.replace(/\\/g, '/')
     const state = await this.loadState(dirName)
-    if (state.paths.has(normPath)) return // 同层同路径只留首次快照
+    if (state.paths.has(normPath)) {
+      // 遗留 record() 只保留首次快照；若该路径已有新协议记录（带 after），混用会让回滚
+      // 把本层后续写入误判成人工修改而静默漏撤，直接拒绝。
+      if (state.afterPaths.has(normPath)) throw new Error(`楼层 "${floor}" 的路径 "${normPath}" 已有新协议 WAL 记录，不能混用遗留 record()；请改用 WorkspaceFs 写入`)
+      return // 同层同路径只留首次快照
+    }
     // 序号和去重均基于当前磁盘，追加失败后的重试不会误认路径已快照。
     // 读写全程持有共享日志锁，另一个实例不能在中间插入记录。
+    // 遗留协议继续用 appendFile（旧调用方与既有故障注入依赖它）；新写入一律走 recordChanges 的原子重写。
     const seq = state.seq + 1
     const line: RecordLine = {
       seq,
@@ -619,6 +786,7 @@ export class Wal {
     await this.assertLogPath(dir)
     if (!(await isDir(dir))) throw new Error(`楼层 "${floor}" 未开始（或已回滚），无法记录写入后快照`)
     await this.assertNotRecovering(dir)
+    await this.assertWorkspaceReady()
     await this.readFloorMeta(dir, floor)
     await this.readRecords(dir)
     const file = join(dir, 'records.jsonl')
@@ -633,12 +801,18 @@ export class Wal {
     }
     const normPath = path.replace(/\\/g, '/')
     let found = false
+    let duplicates = 0
+    let alreadyAfter = false
     const lines = text.split('\n').map((line) => {
       if (!line.trim()) return line
       try {
         const record = JSON.parse(line) as RecordLine
         if (record.path !== normPath) return line
         found = true
+        duplicates += 1
+        // 新协议 recordChanges 每次写入都带 after；对这类记录再补遗留 after 会把较早记录
+        // 的 after 一起改写，回滚时被误判为人工修改而静默漏撤。同路径多条也拒绝（遗留协议只认一条）。
+        if ('after' in record) alreadyAfter = true
         return JSON.stringify({
           ...record,
           after,
@@ -650,6 +824,8 @@ export class Wal {
       }
     })
     if (!found) throw new Error(`楼层 "${floor}" 没有路径 "${normPath}" 的 WAL 记录`)
+    if (alreadyAfter) throw new Error(`楼层 "${floor}" 的路径 "${normPath}" 已有新协议写后镜像，拒绝混用遗留 recordAfter()；请改用 WorkspaceFs 写入`)
+    if (duplicates > 1) throw new Error(`楼层 "${floor}" 的路径 "${normPath}" 有多条 WAL 记录，遗留 recordAfter() 无法确定归属；请改用 WorkspaceFs 写入`)
     await atomicWrite(file, lines.join('\n'))
   }
 
@@ -658,6 +834,7 @@ export class Wal {
     const dir = join(this.rootDir, sanitizeFloor(floor))
     const meta = await this.readFloorMeta(dir, floor)
     await this.assertNotRecovering(dir)
+    await this.assertWorkspaceReady()
     // 提交是完成证明，不能让读取/回滚均拒绝的日志得到 committed=true。
     await this.readRecords(dir)
     meta.committed = true
@@ -681,6 +858,11 @@ export class Wal {
     const bodyFs = new WorkspaceFs(workspaceRoot, null)
     const progressFile = join(dir, 'rollback-progress.json')
     const progress = await this.readRollbackProgress(dir, records)
+    // 先登记工作区级恢复标记，再写恢复游标：标记存在期间所有外部/面板/其它楼层写入都被拒绝，
+    // 恢复自身的正文替换与摘要展开经 withRecoveryWriteAccess 放行。崩溃遗留的标记会在下一次
+    // 回滚重试时继续生效，完成后才注销；受控重置用 resetRollbackCursor。
+    await this.markRecovering(floor, workspaceRoot)
+    return await withRecoveryWriteAccess(async () => {
     const checkpoint = async () => {
       await this.assertLogPath(progressFile)
       await atomicWrite(progressFile, JSON.stringify(progress) + '\n')
@@ -746,7 +928,10 @@ export class Wal {
     await this.assertLogPath(dir)
     await this.assertLogPath(archived)
     await rename(dir, archived)
+    // 只有整层改名归档后才注销恢复标记；中途失败保留标记，重试仍受同一屏障保护。
+    await this.clearRecovering(floor, workspaceRoot)
     return restored
+    })
   }
 
   /** 整批先校验；不能在撤销较新楼层后才发现较旧日志损坏。 */
@@ -835,6 +1020,9 @@ export class Wal {
 
   private async doListFloors(): Promise<WalFloorInfo[]> {
     await mkdir(this.rootDir, { recursive: true })
+    // 崩溃可能落在「回滚已改名归档、标记还没注销」之间；列举是恢复流程的固定入口，顺手清掉失效标记，
+    // 否则残留的标记会一直挡住后续写入与分支。
+    if (await hasRecoveryMarker(this.hasCoverage ? this.logFs.root : this.rootDir)) await this.reconcileRecoveryMarker()
     const entries = await readdir(this.rootDir, { withFileTypes: true })
     const floors: WalFloorInfo[] = []
     for (const entry of entries) {

@@ -843,6 +843,22 @@ export declare const METHODS: {
         value: import("zod/mini").ZodMiniUnknown;
         summary: string;
     };
+    getStoryRecovery: {
+        req: import("zod/mini").ZodMiniObject<{
+            storyId: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
+            cardId: import("zod/mini").ZodMiniString<string>;
+        }, import("zod/v4/core").$strip>;
+        value: import("zod/mini").ZodMiniUnknown;
+        summary: string;
+    };
+    resetStoryRecovery: {
+        req: import("zod/mini").ZodMiniObject<{
+            storyId: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
+            cardId: import("zod/mini").ZodMiniString<string>;
+        }, import("zod/v4/core").$strip>;
+        value: import("zod/mini").ZodMiniUnknown;
+        summary: string;
+    };
     getWorldDeltas: {
         req: import("zod/mini").ZodMiniObject<{
             storyId: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
@@ -1286,6 +1302,12 @@ export interface TavernMethodResults {
     };
     compressMemories: {
         merged: number;
+    };
+    getStoryRecovery: {
+        floors: string[];
+    };
+    resetStoryRecovery: {
+        reset: string[];
     };
     getWorldDeltas: {
         items: WorldDelta[];
@@ -1748,6 +1770,12 @@ export declare const TYPERT_HOST: {
                     cardId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     id: import("zod/mini").ZodMiniString<string>;
+                    storyId: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
+                    cardId: import("zod/mini").ZodMiniString<string>;
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                    storyId: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
+                    cardId: import("zod/mini").ZodMiniString<string>;
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     storyId: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
                     cardId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
@@ -2249,6 +2277,12 @@ export declare const TYPERT_REMOTE: {
                     cardId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     id: import("zod/mini").ZodMiniString<string>;
+                    storyId: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
+                    cardId: import("zod/mini").ZodMiniString<string>;
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                    storyId: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
+                    cardId: import("zod/mini").ZodMiniString<string>;
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     storyId: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
                     cardId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{

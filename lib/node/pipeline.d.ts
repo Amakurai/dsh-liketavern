@@ -66,9 +66,21 @@ export interface PipelineResult {
 }
 /** deriveMessages 拍平：只取 text 块拼成纯文本；空消息丢弃。 */
 export declare function flattenMessages(messages: readonly Message[], charName: string, userName: string): ChatMessage[];
-export declare function loadBoundLoreEntries(state: TavernState, binding: NonNullable<Awaited<ReturnType<TavernState['loadBinding']>>>): Promise<{
+/** 聊天世界书损坏时的可见诊断文案（组装路径直接失败；展示/工具路径降级并回传标记）。 */
+export declare const CHAT_BOOK_CORRUPT_MESSAGE = "\u804A\u5929\u4E16\u754C\u4E66\u635F\u574F\uFF0C\u672C\u6B21\u672A\u6CE8\u5165\uFF1Aassets/chat-lorebook.json\uFF1B\u8BF7\u5728\u9762\u677F\u4FEE\u590D\u6216\u5220\u9664\u540E\u91CD\u8BD5";
+export interface BoundLoreEntries {
     entries: WorldInfoEntry[];
     deltas: WorldDelta[];
-}>;
+    /** 聊天世界书损坏且按 report 降级跳过；组装路径（throw）不会返回 true。 */
+    chatBookCorrupt: boolean;
+}
+/**
+ * 读取绑定世界书。
+ * 聊天世界书损坏时：组装/模型输入路径必须显式失败（默认 'throw'，与 getChatLorebook 口径一致）；
+ * 只读展示与工具路径传 'report'，跳过整本书但用 chatBookCorrupt 标记与「这本书本来就是空的」区分。
+ */
+export declare function loadBoundLoreEntries(state: TavernState, binding: NonNullable<Awaited<ReturnType<TavernState['loadBinding']>>>, options?: {
+    onCorruptChatBook?: 'throw' | 'report';
+}): Promise<BoundLoreEntries>;
 /** 组装一次 Tavern 提示词。绑定缺失或角色不存在时返回 null。 */
 export declare function runTavernPipeline(input: PipelineInput): Promise<PipelineResult | null>;

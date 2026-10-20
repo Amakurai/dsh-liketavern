@@ -17,7 +17,7 @@ import { join } from 'node:path'
 import { compileCardRegexScripts } from '../core/regex.js'
 import { estimateTokens } from '../core/tokenize.js'
 import type { CharacterCard } from '../core/types.js'
-import { cardToStJson, embedCardInPng, hydrateStoredCard, normalizeBook, withoutEmbeddedCharacterBook } from './card.js'
+import { cardToStJson, embedCardInPng, hydrateStoredCard, normalizeBook, serializeStoredCard, withoutEmbeddedCharacterBook } from './card.js'
 import { WorkspaceFs } from './workspaceFs.js'
 import { withWorkspaceLock } from './workspaceLock.js'
 
@@ -137,6 +137,9 @@ export async function importCard(dataRoot: string, card: CharacterCard, opts?: I
   const importedCard = !importWorldBook && cleanedCard.pngBytes
     ? { ...cleanedCard, pngBytes: embedCardInPng(cleanedCard.pngBytes, cleanedPngMetadata, cleanedCard.spec) }
     : cleanedCard
+  // 先按存储上限序列化：超限的卡在建立任何临时目录前拒绝。
+  const { pngBytes, ...cardJson } = importedCard
+  const cardText = serializeStoredCard(cardJson)
   const cardId = newCardId(card.name)
   const root = join(dataRoot, cardId)
   // 点号前缀不是合法 cardId，列表和 RPC 均看不到准备中的工作区。
@@ -147,8 +150,7 @@ export async function importCard(dataRoot: string, card: CharacterCard, opts?: I
     await fs.ensureDir('memory/archive')
     await fs.ensureDir('state/wal')
 
-    const { pngBytes, ...cardJson } = importedCard
-    await fs.writeText('card.json', JSON.stringify(cardJson, null, 2) + '\n')
+    await fs.writeText('card.json', cardText)
     if (pngBytes) await fs.writeBytes('card.png', pngBytes)
 
     if (importWorldBook && importedCard.characterBook && importedCard.characterBook.entries.length > 0) {

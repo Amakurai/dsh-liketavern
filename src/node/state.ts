@@ -13,7 +13,7 @@ import type { LlmResolvedModelInfo, LlmRuntime } from '@deepseek-ai/dsh-llm'
 import { estimateTokens } from '../core/tokenize.js'
 import { type CharacterCard, type MemoryEntry, type PromptPreset, type RegexRule, type WIEngineResult, type WITimerState, type WorldDelta, type WorldInfoEntry } from '../core/types.js'
 import { compileCardRegexScripts, compilePresetRegexScripts } from '../core/regex.js'
-import { normalizeBook, parseJsonCard, parsePngCard, regexScriptsOf, applyCharacterPatch, cardToStJson, createBlankCard, embedCardInPng, withoutEmbeddedCharacterBook } from '../state/card.js'
+import { normalizeBook, parseJsonCard, parsePngCard, regexScriptsOf, applyCharacterPatch, cardToStJson, createBlankCard, embedCardInPng, serializeStoredCard, withoutEmbeddedCharacterBook } from '../state/card.js'
 import { parseLorebook } from '../state/lorebook.js'
 import { parseStoredPreset } from '../state/presetStore.js'
 import { MemoryStore } from '../state/memory.js'
@@ -569,10 +569,11 @@ export class TavernState {
         ? embedCardInPng(currentPng, metadata, next.spec)
         : null
       const { pngBytes: _png, ...cardJson } = next
+      const cardText = serializeStoredCard(cardJson)
       beforeWrite?.()
       try {
         await fs.delete('assets/character-book.json')
-        await fs.writeText('card.json', JSON.stringify(cardJson, null, 2) + '\n')
+        await fs.writeText('card.json', cardText)
         if (rewrittenPng) await fs.writeBytes('card.png', rewrittenPng)
       } finally { this.bumpAssetRev(`charlore:${cardId}`) }
     })
@@ -633,10 +634,12 @@ export class TavernState {
         raw: attachCharacterBookMetadata(cleaned, book),
       }
       const { pngBytes: _png, ...cardJson } = next
+      // 先过存储上限，避免只写出独立世界书而 card.json 被拒绝。
+      const cardText = serializeStoredCard(cardJson)
       beforeWrite?.()
       try {
         await fs.writeText('assets/character-book.json', JSON.stringify(json, null, 2) + '\n')
-        await fs.writeText('card.json', JSON.stringify(cardJson, null, 2) + '\n')
+        await fs.writeText('card.json', cardText)
       } finally { this.bumpAssetRev(`charlore:${cardId}`) }
       return { name: book.name ?? charWs.card.name, entryCount: book.entries.length, revision: jsonEditRevision(json) }
     })
@@ -658,7 +661,7 @@ export class TavernState {
       if (patch.name !== undefined && !patch.name.trim()) throw new Error('角色名不能为空')
       const next = applyCharacterPatch(charWs.card, patch)
       const { pngBytes: _png, ...cardJson } = next
-      await this.plainFs(cardId).writeText('card.json', JSON.stringify(cardJson, null, 2) + '\n')
+      await this.plainFs(cardId).writeText('card.json', serializeStoredCard(cardJson))
       this.bumpAssetRev(`card:${cardId}`)
       return { cardId, name: next.name, revision: characterEditRevision(next) }
     })
@@ -695,8 +698,9 @@ export class TavernState {
       const extensions:Record<string,unknown>={...workspace.card.extensions,tavern_helper:{...characterHelperSettings(workspace.card.extensions),scripts:trees}}
       delete extensions.TavernHelper_scripts
       const {pngBytes:_png,...card}=workspace.card
+      const cardText=serializeStoredCard({...card,extensions})
       beforeWrite?.()
-      try{await this.plainFs(cardId).writeText('card.json',JSON.stringify({...card,extensions},null,2)+'\n')}
+      try{await this.plainFs(cardId).writeText('card.json',cardText)}
       finally{this.bumpAssetRev(`card:${cardId}`)}
       return this.getCharacterHelperScripts(cardId)
     })

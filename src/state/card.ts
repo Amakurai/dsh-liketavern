@@ -249,6 +249,25 @@ function parseDepthPrompt(ext: Record<string, unknown>): DepthPrompt | null {
   return { prompt, depth: Math.max(0, Math.round(depth)), role }
 }
 
+/**
+ * 工作区 card.json 的 UTF-8 字节上限，写入侧与 doctor/backup 共用，保证「运行时写得出，诊断读得进」。
+ * 推导：导入闸 MAX_CARD_JSON_CHARS 按紧凑 JSON 的 UTF-16 码元计，每码元 UTF-8 至多 3 字节
+ * （代理对 2 码元 → 4 字节），单份卡数据 ≤ 24 MiB；card.json 同时保存 raw、归一化字段与
+ * characterBook（entries 与 raw 各序列化一次），世界书文本最多出现 3 份 → ≤ 72 MiB；
+ * 再加 2 空格缩进与换行（随嵌套深度增长）取 128 MiB。世界书、脚本库等编辑可使 card.json
+ * 超出导入时体积，故所有写入都经 serializeStoredCard 执行同一上限，超限在任何写入前明确拒绝。
+ */
+export const MAX_STORED_CARD_JSON_BYTES = 128 * 1024 * 1024
+
+/** 序列化待落盘的 card.json（剔除 pngBytes 后的卡）；超出 MAX_STORED_CARD_JSON_BYTES 抛错。 */
+export function serializeStoredCard(cardJson: Record<string, unknown>): string {
+  const text = JSON.stringify(cardJson, null, 2) + '\n'
+  if (Buffer.byteLength(text, 'utf8') > MAX_STORED_CARD_JSON_BYTES) {
+    throw new CardParseError(`角色卡数据超过存储上限（${MAX_STORED_CARD_JSON_BYTES / 1024 / 1024}MB），未写入`)
+  }
+  return text
+}
+
 /** 工作区 card.json 是归一化卡；旧文件可能只有 extensions.depth_prompt。 */
 export function hydrateStoredCard(record: Record<string, unknown>): CharacterCard {
   const card = { ...record, pngBytes: null } as unknown as CharacterCard

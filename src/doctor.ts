@@ -14,6 +14,7 @@ import { createRequire } from 'node:module'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { dshHomeDisplay, resolveDshHome } from '@deepseek-ai/dsh-home-paths'
+import { MAX_STORED_CARD_JSON_BYTES } from './state/card.js'
 import { CHARACTER_ARCHIVE_FILE, isValidCardId } from './state/workspace.js'
 import { storyRoot } from './state/story.js'
 import { WAL_BINARY_MARK, WAL_COVERAGE_PATH, WAL_FLOOR_MARKERS } from './state/wal.js'
@@ -22,7 +23,11 @@ import { tavernPaths } from './node/paths.js'
 const REQUIRED_NODE_MAJOR = 24
 const MAX_JSON_BYTES = 16 * 1024 * 1024
 const MAX_WAL_BYTES = 128 * 1024 * 1024
-const MAX_TOTAL_READ_BYTES = 256 * 1024 * 1024
+/**
+ * 累计读取预算只限制扫描耗时，单文件内存仍由各自上限约束。card.json 上限为 128 MiB，
+ * 预算需容纳多张满额角色卡与 WAL，否则备份会把运行时合法写出的数据判成检查不完整。
+ */
+const MAX_TOTAL_READ_BYTES = 1024 * 1024 * 1024
 const READ_CHUNK_BYTES = 64 * 1024
 const MAX_SCANNED_ENTRIES = 100_000
 const MAX_SCAN_DEPTH = 32
@@ -602,6 +607,7 @@ async function inspectCharacters(
   issues: IssueCounter,
   budget: ReadBudget,
   scanBudget: ScanBudget,
+  inspectedCards: Map<string, ReadJsonResult['status']>,
 ): Promise<void> {
   let entries
   try { entries = await readDirectoryEntries(charactersRoot, scanBudget) } catch {
@@ -624,11 +630,13 @@ async function inspectCharacters(
       continue
     }
     const cardRoot = `${charactersRoot}/${entry.name}`
-    const card = await readBoundedJson(`${cardRoot}/card.json`, MAX_JSON_BYTES, budget)
+    // card.json 与运行时写入共用存储上限；通用扫描复用本次结果计数，不再重复读取。
+    const card = await readBoundedJson(`${cardRoot}/card.json`, MAX_STORED_CARD_JSON_BYTES, budget)
     if (card.status === 'budget') {
       stats.characters.uninspected += 1
       break
     }
+    inspectedCards.set(resolve(cardRoot, 'card.json'), card.status)
     let healthy = card.status === 'ok' && isObject(card.value)
     if (!healthy) issues.add(card.status === 'oversized' ? 'CHARACTER_METADATA_TOO_LARGE' : 'CHARACTER_METADATA_INVALID', 'error')
 
@@ -662,6 +670,7 @@ async function inspectFiles(
   issues: IssueCounter,
   budget: ReadBudget,
   scanBudget: ScanBudget,
+  inspectedCards: ReadonlyMap<string, ReadJsonResult['status']>,
 ): Promise<void> {
   const pending: Array<{ path: string; depth: number }> = [{ path: root, depth: 0 }]
   while (pending.length > 0 && !scanBudget.exhausted && !budget.exhausted) {
@@ -691,7 +700,8 @@ async function inspectFiles(
         stats.total += 1
         if (entry.name.toLowerCase().endsWith('.json')) {
           stats.json += 1
-          const json = await readBoundedJson(child, MAX_JSON_BYTES, budget)
+          const cached = inspectedCards.get(resolve(child))
+          const json = cached !== undefined ? { status: cached } : await readBoundedJson(child, MAX_JSON_BYTES, budget)
           if (json.status === 'oversized') stats.oversizedJson += 1
           else if (json.status === 'invalid') stats.invalidJson += 1
           else if (json.status === 'budget') {
@@ -838,8 +848,9 @@ export async function runDoctor(options: RunDoctorOptions = {}): Promise<DoctorR
       if (directories[name] === 'missing') issues.add('STANDARD_DIRECTORY_MISSING', 'warning')
       else if (directories[name] !== 'directory') issues.add('STANDARD_DIRECTORY_INVALID', 'error')
     }
-    if (directories.characters === 'directory') await inspectCharacters(paths.characters, statistics, issues, budget, scanBudget)
-    await inspectFiles(paths.root, statistics.files, issues, budget, scanBudget)
+    const inspectedCards = new Map<string, ReadJsonResult['status']>()
+    if (directories.characters === 'directory') await inspectCharacters(paths.characters, statistics, issues, budget, scanBudget, inspectedCards)
+    await inspectFiles(paths.root, statistics.files, issues, budget, scanBudget, inspectedCards)
   }
   if (scanBudget.exhausted) {
     statistics.files.scanTruncated = true

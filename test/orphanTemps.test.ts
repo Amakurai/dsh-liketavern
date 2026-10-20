@@ -3,7 +3,7 @@
  * 只删本模块命名格式且超龄的文件，新写入中的临时文件、相似名称的用户文件与正文保持原样；
  * 角色根不越过 stories/，兄弟剧情等到各自打开时才清理。全部使用临时目录与手写数据。
  */
-import { mkdir, mkdtemp, readdir, rm, utimes, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -67,6 +67,31 @@ describe('sweepOrphanTemps', () => {
     await file(join(home, 'state/.dsh-tavern-write.not-a-uuid.tmp'), old, '用户文件')
     expect(await sweepOrphanTemps(home)).toBe(2)
     expect(await names(home)).toEqual([`memory/${short}`, 'state/.dsh-tavern-write.not-a-uuid.tmp'])
+  })
+
+  it('清理根是目录链接时不进入目标，带末尾分隔符也不能删除另一工作区的文件', async () => {
+    const target = join(home, 'target')
+    const linked = join(home, 'linked')
+    const orphan = await file(join(target, orphanName('journal.md')), old, '目标工作区的临时正文')
+    await symlink(target, linked, process.platform === 'win32' ? 'junction' : 'dir')
+
+    expect(await sweepOrphanTemps(linked)).toBe(0)
+    expect(await sweepOrphanTemps(linked + '/')).toBe(0)
+    expect(await readFile(orphan, 'utf8')).toBe('目标工作区的临时正文')
+  })
+
+  it('内部目录链接不清理，安装祖先的正常挂载仍可回收本工作区', async () => {
+    const installed = join(home, 'installed')
+    const mounted = join(home, 'mounted')
+    const target = join(home, 'foreign')
+    const foreign = await file(join(target, orphanName('journal.md')), old, '另一工作区')
+    await file(join(installed, 'workspace', orphanName('own.md')), old)
+    await symlink(target, join(installed, 'workspace', 'linked'), process.platform === 'win32' ? 'junction' : 'dir')
+    await symlink(installed, mounted, process.platform === 'win32' ? 'junction' : 'dir')
+
+    expect(await sweepOrphanTemps(join(mounted, 'workspace'))).toBe(1)
+    expect(await readFile(foreign, 'utf8')).toBe('另一工作区')
+    expect(await readdir(join(installed, 'workspace'))).toEqual(['linked'])
   })
 })
 

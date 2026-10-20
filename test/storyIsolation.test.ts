@@ -1,5 +1,5 @@
 /** 剧情隔离集成：真实文件存储 + 模拟宿主，覆盖分支、编辑、迁移、失败发布、并发卡片修改。 */
-import { mkdir, mkdtemp, rm, readFile, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, readFile, readdir, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -216,6 +216,30 @@ it('源 WAL 损坏时拒绝分支，宿主尚未创建子会话且原状态完�
   expect(created).not.toHaveBeenCalled()
   expect((await (await workspace('parent')).memory.list())[0]!.body).toBe('门打开了')
   expect(await state.listStories(cardId)).toHaveLength(1)
+})
+
+it.each([0, 1])('源 WAL 缺少第 %i 条记录时，不发布草稿或创建宿主子会话，来源事实完整保留', async index => {
+  const ws = await workspace('parent')
+  const floor = 'parent#t1'
+  await ws.wal.beginFloor(floor)
+  const store = new MemoryStore(ws.fs.withFloor(floor))
+  const facts = ['门打开了', '钥匙丢了', '守卫离开了']
+  for (const body of facts) await store.write({ body })
+  await ws.wal.commitFloor(floor)
+  const file = join(ws.fs.root, 'state/wal/parent_t1/records.jsonl')
+  const lines = (await readFile(file, 'utf8')).trimEnd().split('\n')
+  lines.splice(index, 1)
+  const damaged = lines.join('\n') + '\n'
+  await writeFile(file, damaged)
+  const stories = join(state.paths.characters, cardId, 'stories')
+  const before = await readdir(stories)
+
+  await expect(regenerate({ ctx, state }, 'parent')).rejects.toThrow(/WAL.*序号/)
+  expect(created).not.toHaveBeenCalled()
+  expect(await readdir(stories)).toEqual(before)
+  expect((await ws.memory.list()).map(item => item.body).sort()).toEqual(facts.sort())
+  expect(await readFile(file, 'utf8')).toBe(damaged)
+  expect((await ws.wal.listFloors())[0]).toMatchObject({ committed: true, rolledBack: false })
 })
 
 it('来源剧情含链接目录时拒绝分支，不悄悄发布缺文件的子剧情', async () => {

@@ -4,6 +4,8 @@
 
 ## 未发布
 
+- WAL 记录必须从 1 连续编号，缺少首条或中间记录时在整批回滚前拒绝，追加、提交与只读诊断也使用相同判定，避免残留未来事实却报告回滚成功；旧版 before-only 日志和空白行继续兼容。现有格式无法仅凭序号发现尾部整行丢失或整份日志消失。
+- 临时文件回收先检查清理入口及递归目录，不沿目录链接进入另一工作区删除文件；带末尾分隔符的入口同样受保护，安装路径祖先的正常挂载继续可用。
 - 升级适配 **dsh `0.2.1-rc.2`、Node.js ≥ 24**（`@deepseek-ai/cordis` `4.0.5`、`@deepseek-ai/schemastery` `3.18.5`）。rc.2 相对 rc.1 仅同步宿主包版本并在 web profile 新增模型标签徽标客户端插件，插件所用接口无变化；以下为 rc.1 起的适配：适配 `ReactLoopAgent` 步骤内 `systemPrompt.refreshContext` 对 `tavern:turn` 运行时上下文与预设请求投影计划载体的刷新行为，实现 `LlmAdapter.imageRequestTarget` 委托，支持 `conversation.chat.node` 的 `loadImage` / `conversation.images.content` 图片渲染契约，并同步持久化插件与 PTC 工作目录服务契约。
 
 ## 0.5.3（2026-10-13）

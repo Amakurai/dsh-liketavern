@@ -5,7 +5,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import { lstat, mkdir, open, readdir, rename, rm } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 
 /** 只匹配本模块生成的临时文件名，不碰用户或其它程序的 .tmp。 */
 const ORPHAN_TEMP = /\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.tmp$/
@@ -47,7 +47,12 @@ export async function sweepOrphanTemps(dir: string, options?: { now?: number; ma
   let removed = 0
   const walk = async (abs: string, rel: string): Promise<void> => {
     let entries
-    try { entries = await readdir(abs, { withFileTypes: true }) } catch (error) {
+    try {
+      // readdir 会跟随入口链接；根目录也必须检查，递归时再复核一次目录身份。
+      // 只检查本工作区入口，不拒绝安装路径祖先的正常挂载。
+      if ((await lstat(abs)).isSymbolicLink()) return
+      entries = await readdir(abs, { withFileTypes: true })
+    } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
       throw error
     }
@@ -68,6 +73,7 @@ export async function sweepOrphanTemps(dir: string, options?: { now?: number; ma
       removed += 1
     }
   }
-  await walk(dir, '')
+  // 去掉末尾分隔符，避免 lstat 在部分平台把链接入口当成目标目录。
+  await walk(resolve(dir), '')
   return removed
 }

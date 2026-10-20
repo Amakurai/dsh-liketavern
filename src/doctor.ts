@@ -337,13 +337,12 @@ async function validateWalArtifacts(directory: string, budget: ReadBudget): Prom
   if (recordsRead.status === 'unsafe' || recordsRead.status === 'invalid' || recordsRead.status === 'unreadable') return 'unhealthy'
   const records: Record<string, unknown>[] = []
   if (recordsRead.status === 'ok') {
-    let previous = 0
     for (const line of recordsRead.text.split('\n')) {
       if (!line.trim()) continue
       let record: unknown
       try { record = JSON.parse(line) as unknown } catch { return 'unhealthy' }
       if (!isObject(record) || !safeWalPath(record.path) || !Number.isSafeInteger(record.seq)
-        || (record.seq as number) < 1 || (record.seq as number) <= previous
+        || record.seq !== records.length + 1
         || !(record.before === null || typeof record.before === 'string')
         || ('after' in record && !(record.after === null || typeof record.after === 'string'))
         || (record.beforeEncoding !== undefined && record.beforeEncoding !== 'utf8' && record.beforeEncoding !== 'base64')
@@ -352,7 +351,6 @@ async function validateWalArtifacts(directory: string, budget: ReadBudget): Prom
         ? record.before.slice(WAL_BINARY_MARK.length) : record.before
       if ((before !== null && (record.beforeEncoding === 'base64' || before !== record.before) && !isBase64(before))
         || (record.afterEncoding === 'base64' && record.after !== null && !isBase64(record.after))) return 'unhealthy'
-      previous = record.seq as number
       records.push(record)
     }
   }

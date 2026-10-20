@@ -476,10 +476,13 @@ export class Wal {
       let rec: RecordLine
       try { rec = JSON.parse(line) as RecordLine } catch { throw new Error(`WAL 记录损坏：${dir}`) }
       if (!isRecord(rec)) throw new Error(`WAL 记录形状损坏：${dir}`)
+      // 所有写入协议都从 1 连续编号；只验证递增会把丢失首条或中间行的日志误认完整，
+      // 回滚后残留被漏记的事实，却已撤销其它楼层并标记成功。空白行不占序号。
+      if (!Number.isSafeInteger(rec.seq) || rec.seq !== records.length + 1) throw new Error(`WAL 记录序号损坏：${dir}`)
       const safePath = typeof rec.path === 'string' && rec.path.length > 0 && !rec.path.includes('\\')
         && !rec.path.includes(':') && !rec.path.startsWith('/') && rec.path.split('/').every((part) => part !== '..' && part !== '.' && part !== '')
         && !rec.path.toLowerCase().startsWith('state/wal/')
-      if (!safePath || !Number.isSafeInteger(rec.seq) || rec.seq < 1 || rec.seq <= (records.at(-1)?.seq ?? 0)
+      if (!safePath
         || !(rec.before === null || typeof rec.before === 'string')
         || ('after' in rec && !(rec.after === null || typeof rec.after === 'string'))
         || (rec.beforeEncoding !== undefined && !['utf8', 'base64'].includes(rec.beforeEncoding))

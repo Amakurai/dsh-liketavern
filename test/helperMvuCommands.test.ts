@@ -73,6 +73,8 @@ it('set 支持普通 JSON、旧值装饰参数、默认 VWD 与可空数值，�
   expect(result.delta_data).toEqual({ hp: '10->12 ', pair: '10->null ', flag: 'false->true ', profile: '{"name":"旧名"}->{"name":"新名"} ' })
   expect(before).toEqual(saved)
   expect(apply({ pair: [1, '描述'] }, `_.set('pair','3');`).stat_data.pair).toEqual([3, '描述'])
+  expect(apply({ hp: 10, pair: [10, '描述'], blank: 5 }, `_.set('hp','full'); _.set('pair','MAX'); _.set('blank','');`).stat_data).toEqual({ hp: 'full', pair: ['MAX', '描述'], blank: '' })
+  expect(apply({ pair: [10, '描述'] }, `_.set('pair',true);`).stat_data.pair).toEqual([true, '描述'])
 })
 
 it('两个字符串的列表形似 VWD：set 新数组是整体替换，不写成 [[新列表], 原第二项]；标量 set 仍更新 VWD 值位', () => {
@@ -136,6 +138,9 @@ it('JSON Patch replace 保留值类型且不把两项数组当 VWD，根替换�
   ]))
   expect(result.stat_data).toEqual({ hp: '2', tuple: [3, 'new'] })
   expect(apply({ old: 1 }, patch([{ op: 'add', path: '', value: { next: 2 } }])).stat_data).toEqual({ next: 2 })
+  const replaced = apply({ a: [1, 2] }, patch([{ op: 'replace', path: '', value: { a: { b: 1 } } }, { op: 'replace', path: '/a/b', value: 2 }]))
+  expect(replaced.stat_data).toEqual({ a: { b: 2 } })
+  expect((replaced.display_data.a as Record<string, unknown>).b).toBe('1->2 (json_patch)')
   expect(() => apply({ old: 1 }, patch([{ op: 'replace', path: '', value: [] }]))).toThrow(/根必须/)
   expect(() => apply({ old: 1 }, patch([{ op: 'remove', path: '' }]))).toThrow(/删除.*根对象/)
 })

@@ -377,19 +377,20 @@ export function createHelperMvuCommandCodec(json: (value: unknown, maxBytes?: nu
   const logAt = (root: Table, parts: string[], text: string) => {
     const keys = parts.length ? parts : ['']; let container: Table | unknown[] = root
     for (let i = 0; i < keys.length; i++) {
-      const key = keys[i]!
+      const key = keys[i]!, nextIsIndex = i < keys.length - 1 && /^(0|[1-9][0-9]*)$/.test(keys[i + 1]!)
       if (Array.isArray(container)) {
+        if (!/^(0|[1-9][0-9]*)$/.test(key)) throw new Error('MVU 显示路径数组下标越界')
         const index = Number(key)
         if (!Number.isSafeInteger(index) || index < 0 || index > 65536) throw new Error('MVU 显示路径数组下标越界')
         while (container.length <= index) container.push(null)
         if (i === keys.length - 1) { container[index] = text; return }
         const child = container[index]
-        if (!record(child) && !Array.isArray(child)) container[index] = {}
+        if (!record(child) && (!Array.isArray(child) || !nextIsIndex)) container[index] = {}
         container = container[index] as Table | unknown[]
       } else {
         if (i === keys.length - 1) { container[key] = text; return }
         const child = container[key]
-        if (!record(child) && !Array.isArray(child)) container[key] = {}
+        if (!record(child) && (!Array.isArray(child) || !nextIsIndex)) container[key] = {}
         container = container[key] as Table | unknown[]
       }
     }
@@ -422,7 +423,7 @@ export function createHelperMvuCommandCodec(json: (value: unknown, maxBytes?: nu
           // 日期字符串和数学式需要原版额外解释器，不能在这个 JSON 适配里按字符串连接或隐式日期解析。
           if (typeof oldValue !== 'number' || typeof value !== 'number') throw new Error('MVU add 仅支持有限数字；暂不支持日期或表达式')
           value = Number((oldValue + value).toPrecision(12))
-        } else if (!isPatch && typeof oldValue === 'number' && value !== null && (wrapped || typeof value === 'string')) value = Number(value)
+        } else if (!isPatch && typeof oldValue === 'number' && typeof value === 'string' && value.trim() !== '') { const num = Number(value); if (Number.isFinite(num)) value = num }
         value = copy(value)
         if (wrapped) previous[0] = value
         else stat = write(stat, parts, value, false)

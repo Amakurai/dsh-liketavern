@@ -248,6 +248,11 @@ function HeaderChipSession(props: HeaderChipProps) {
   const [open, setOpen] = useState(false)
   const usageLoader = useLoader(() => remote.getContextUsage({ sessionId }), [sessionId, open], tavern && open)
   const usage = usageLoader.state.status === 'ready' ? usageLoader.state.value.usage : null
+  const staleTurn = usageLoader.state.status === 'ready' ? usageLoader.state.value.staleTurnContext : null
+  const staleTurnLine = staleTurn && staleTurn.snapshots > 0
+    ? <Muted>{t(staleTurn.projected ? 'chip.usage.staleTurnProjected' : 'chip.usage.staleTurn',
+      { count: staleTurn.snapshots, tokens: fmtTokens(staleTurn.tokens) })}</Muted>
+    : null
   const [lists, setLists] = useState<Lists | null>(null)
   const [draft, setDraft] = useState<SessionBinding | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -660,8 +665,10 @@ function HeaderChipSession(props: HeaderChipProps) {
                       ? ` · ${t('chip.usage.breakdown', { system: fmtTokens(usage.systemTokens), tools: fmtTokens(usage.toolsTokens), messages: fmtTokens(usage.messageTokens) })}`
                       : ''}
                   </Muted>
+                  {staleTurnLine}
                 </div>
               )}
+              {!usage && staleTurnLine && <div className="dsh-tavern-usageBar">{staleTurnLine}</div>}
             </>
           )}
           </div>

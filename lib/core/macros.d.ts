@@ -28,6 +28,10 @@
  * - `{{addvar::x::v}}`：对齐 ST——旧值为 JSON 数组则追加，旧值或 v 非数字则拼接文本，否则数值相加
  * - `{{space}}` / `{{reverse:文本}}` / `{{banned "词"}}`（删除）/ `{{charJailbreak}}`（同 charInstruction）
  * - `{{group}}` / `{{groupNotMuted}}`：单角色会话即角色名；`{{notChar}}`：用户名
+ * - ST 新版宏名：`{{charDescription}}` / `{{charPersonality}}` / `{{charScenario}}` / `{{greeting}}` 同上述卡字段；
+ *   `{{charVersion}}`、`{{charCreatorNotes}}`（`{{creatorNotes}}`）、`{{charDepthPrompt}}`、
+ *   `{{mesExamplesRaw}}`（`{{mesExamples}}` 同取原文，不做 ST 的 <START> 格式化）
+ * - `{{deletevar::x}}` / `{{flushvar::x}}`（及 global 拼写）：删除变量；`{{varexists::x}}` 同 hasvar
  *
  * 这是组装前预处理：setvar 条目展开后变空，不进模型；getvar 处变成真正的写作规则。
  * 不是把 ST 宏引擎原样扔给模型。

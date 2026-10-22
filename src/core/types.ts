@@ -57,6 +57,14 @@ export interface MacroContext {
   personality?: string
   /** {{scenario}}：角色场景；缺省空串。 */
   scenario?: string
+  /** {{charVersion}}：角色卡版本；缺省空串。 */
+  charVersion?: string
+  /** {{charCreatorNotes}} / {{creatorNotes}}：作者备注；缺省空串。 */
+  creatorNotes?: string
+  /** {{charDepthPrompt}}：角色备注（深度提示词）正文；缺省空串。 */
+  charDepthPrompt?: string
+  /** {{mesExamplesRaw}} / {{mesExamples}}：对话示例原文；缺省空串。 */
+  mesExamples?: string
   /** {{persona}}：当前用户人设描述；缺省空串。 */
   persona?: string
   /** {{charFirstMessage}} / {{firstMessage}}：角色开场白；缺省空串。 */

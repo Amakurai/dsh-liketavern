@@ -880,6 +880,27 @@ describe('inclusion group', () => {
     expect(activatedKeys(run({ entries, messages: [userMsg('x')], random: () => 0 }))).toEqual(['b'])
   })
 
+  it('对齐 ST：多条 groupOverride 时确定性取 order 最大者，不看随机与权重', () => {
+    // ST #5748 场景：完整档案（order 9999、优先）必须稳定压过精简档案，与随机源无关。
+    const entries = [
+      makeEntry({ key: 'short', keys: ['x'], group: 'g', groupOverride: true, order: 0, groupWeight: 10000 }),
+      makeEntry({ key: 'full', keys: ['x'], group: 'g', groupOverride: true, order: 9999, groupWeight: 1 }),
+    ]
+    for (const roll of [0, 0.5, 0.999]) {
+      expect(activatedKeys(run({ entries, messages: [userMsg('x')], random: () => roll }))).toEqual(['full'])
+    }
+  })
+
+  it('对齐 ST：group 用逗号列出多个组，在任一组落选即不注入', () => {
+    const entries = [
+      makeEntry({ key: 'both', keys: ['x'], group: 'A, B' }),
+      makeEntry({ key: 'a-prio', keys: ['x'], group: 'A', groupOverride: true }),
+      makeEntry({ key: 'b-only', keys: ['x'], group: 'B' }),
+    ]
+    // both 在 A 输给优先条目；B 组只剩 b-only。
+    expect(activatedKeys(run({ entries, messages: [userMsg('x')], random: () => 0 })).sort()).toEqual(['a-prio', 'b-only'])
+  })
+
   it('useGroupScoring 按命中键数挑选，不看随机', () => {
     const entries = [
       makeEntry({ key: 'a', keys: ['x'], group: 'g' }),

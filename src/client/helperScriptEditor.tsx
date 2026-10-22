@@ -7,6 +7,7 @@ import { PersistentEditor,useDraftState } from './draftPersistence.js'
 import { useT } from './i18n.js'
 import { Btn,ConfirmDialog,Dialog,Err,FileBtn,Muted,SaveBar,SearchInput,Select,SettingsRow,Tabs,Toggle,downloadJson,useToast } from './util.js'
 import type { TavernRemote } from './types.js'
+import { randomUuid } from '../core/secureRandom.js'
 
 type ScriptEditorProps={label?:string;remote:TavernRemote;library:HelperScriptLibrary|HelperScriptAsset;onClose:()=>void;onSaved:()=>void}
 const libraryTarget=(library:ScriptEditorProps['library']):HelperScriptTarget=>'target' in library?library.target:{type:'character',cardId:library.cardId}
@@ -54,7 +55,7 @@ export function HelperScriptEditorBody(props:ScriptEditorProps) {
     }
   }
   const add=(folder:boolean)=>{
-    const id=crypto.randomUUID()
+    const id=randomUuid()
     const next=parseHelperScriptTrees([{id,type:folder?'folder':'script',name:t(folder?'speech.scriptNewFolder':'speech.scriptNew'),enabled:false}])[0]!
     if(!folder&&current?.type==='folder')update(current.id,tree=>tree.type==='folder'?{...tree,scripts:[...tree.scripts,next as HelperScript]}:tree)
     else setTrees(items=>[...items,next])

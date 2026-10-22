@@ -23,7 +23,7 @@ import type { TavernService } from './node/service.js'
 import type { TavernState } from './node/state.js'
 import { registerTavernTools } from './node/tools.js'
 import { mergeTavernCallConfig, resolveTavernReasoningEffort, type AdvertisedReasoningInfo } from './core/callConfig.js'
-import { BOUND_DISCIPLINE, TURN_PLAYBOOK, UNBOUND_STANDING, isContinueInstruction, isRuntimeContextMessage, isTurnScopedNotice, neutralizeDshMustache } from './core/dshPrompt.js'
+import { BOUND_DISCIPLINE, TURN_PLAYBOOK, UNBOUND_STANDING, isContinueInstruction, isRuntimeContextMessage, isTurnScopedNotice } from './core/dshPrompt.js'
 import type { SamplingSettings } from './core/types.js'
 import { PRESET_ADAPTER_PROVIDER, PRESET_ADAPTER_SOURCE_PROVIDER } from './node/presetAdapter.js'
 import { attachPresetPlanMessage, createPresetPlanMessage, hasPresetPlanMessage } from './node/presetRequestProjection.js'
@@ -40,7 +40,7 @@ function applyStanding(result: { sections: Array<{ name: string; text: string }>
 }
 
 function applyTurnContext(
-  result: { contexts: Array<{ name: string; text: string }> },
+  result: { contexts: Array<{ name: string; text: string; interpolate?: boolean }> },
   state: TavernState,
   sessionId: string,
   text: string,
@@ -49,7 +49,7 @@ function applyTurnContext(
   else state.appliedTurnContext.delete(sessionId)
   const index = result.contexts.findIndex((c) => c.name === TURN_CONTEXT)
   if (index !== -1) result.contexts[index]!.text = text
-  else if (text.trim()) result.contexts.push({ name: TURN_CONTEXT, text })
+  else if (text.trim()) result.contexts.push({ name: TURN_CONTEXT, text, interpolate: false })
 }
 
 function joinPromptParts(parts: string[]): string {
@@ -94,10 +94,13 @@ export function apply(ctx: Context): void {
   const llm = ctx.get('llm') as LlmRuntime | undefined
 
   // rc.1 的 PTC SDK order=5000；旧 order=210 会把角色文本放到 SDK 前，损失工具前缀缓存。
-  ctx.systemPrompt.section({ name: STANDING_SECTION, order: ctx.systemPrompt.getSectionOrder('TOOLS_SDK') + 10, text: UNBOUND_STANDING })
+  // 角色卡/预设/世界书原文常含 {{user}}、Handlebars 或代码示例：宿主默认插值遇到未注册变量会让整次
+  // 渲染抛错，命中 cwd/model/provider 又会被静默替换。两段都声明 interpolate: false，原样入模。
+  ctx.systemPrompt.section({ name: STANDING_SECTION, order: ctx.systemPrompt.getSectionOrder('TOOLS_SDK') + 10, text: UNBOUND_STANDING, interpolate: false })
   ctx.systemPrompt.context({
     name: TURN_CONTEXT,
     order: 20,
+    interpolate: false,
     text: (context) => (context.agent ? state.appliedTurnContext.get(context.agent.id) ?? '' : ''),
   })
 
@@ -119,9 +122,9 @@ export function apply(ctx: Context): void {
     }
     if (hasPlan) return decision
     // 优先使用同一步组装真正写入 system 的钉位文本；缺失时（旧流程）才按本轮结果重算。
-    const standing = state.appliedStanding.get(payload.agent.id) ?? neutralizeDshMustache(joinPromptParts([BOUND_DISCIPLINE, pipeline.standing]))
+    const standing = state.appliedStanding.get(payload.agent.id) ?? joinPromptParts([BOUND_DISCIPLINE, pipeline.standing])
     const plan = {version:1 as const,sessionId:payload.agent.id,turn:payload.turn,layout:pipeline.layout,
-      standingText:standing,contextText:neutralizeDshMustache(joinPromptParts([TURN_PLAYBOOK,pipeline.turnContext])),
+      standingText:standing,contextText:joinPromptParts([TURN_PLAYBOOK,pipeline.turnContext]),
       // 旧恢复计划缺字段时沿用原位置；新计划只读取首次成功组装冻结的设置。
       ...(pipeline.cacheFirstLayout === undefined ? {} : {cacheFirst:pipeline.cacheFirstLayout})}
     // 最终路由到 agent/request 才确定。先给正常输入附加模型不可见元数据，
@@ -184,7 +187,7 @@ export function apply(ctx: Context): void {
         applyTurnContext(result, state, agent.id, '')
         return result
       }
-      const standing = neutralizeDshMustache([BOUND_DISCIPLINE, pipeline.standing].filter((p) => p.trim()).join('\n\n'))
+      const standing = [BOUND_DISCIPLINE, pipeline.standing].filter((p) => p.trim()).join('\n\n')
       const pin = state.pinStanding(
         agent.id,
         generationType,
@@ -201,7 +204,7 @@ export function apply(ctx: Context): void {
       ])
       // playbook 固定不随 step 变化：宿主对 runtime context 快照按字节去重，
       // 同轮后续步骤的快照一个字节都不变 ⇒ 不再重复追加，前缀缓存全保。
-      applyTurnContext(result, state, agent.id, neutralizeDshMustache(joinPromptParts([TURN_PLAYBOOK, pipeline.turnContext])))
+      applyTurnContext(result, state, agent.id, joinPromptParts([TURN_PLAYBOOK, pipeline.turnContext]))
     } catch (error) {
       ctx.logger.warn(`dsh-tavern: 提示词组装失败：${error instanceof Error ? error.message : String(error)}`)
       // 超时、损坏资产等不能悄悄变成缺设定的一轮；让宿主显示失败并允许用户修复后重试。

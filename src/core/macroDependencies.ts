@@ -35,7 +35,10 @@ export function createMacroDependencyTracker(initial: MacroContext, potentialSou
       ...context.vars,
       char: context.char, charname: context.char, user: context.user, username: context.user,
       description: context.description, personality: context.personality, scenario: context.scenario,
-      persona: context.persona, firstmessage: context.firstMessage, charfirstmessage: context.firstMessage,
+      chardescription: context.description, charpersonality: context.personality, charscenario: context.scenario,
+      charversion: context.charVersion, charcreatornotes: context.creatorNotes, creatornotes: context.creatorNotes,
+      chardepthprompt: context.charDepthPrompt, mesexamples: context.mesExamples, mesexamplesraw: context.mesExamples,
+      persona: context.persona, firstmessage: context.firstMessage, charfirstmessage: context.firstMessage, greeting: context.firstMessage,
       charprompt: context.charPrompt, charinstruction: context.charInstruction, charjailbreak: context.charInstruction,
       group: context.char, groupnotmuted: context.char, notchar: context.user,
     }
@@ -45,20 +48,20 @@ export function createMacroDependencyTracker(initial: MacroContext, potentialSou
       const current = pending.pop()!
       if (hasTurnLocalMacros(current)) result.dynamic = true
       // 扫描宏开头而不吞掉整个正文，嵌套 set/get 同样能逐个看到；不执行随机数与写入。
-      for (const match of current.matchAll(/\{\{\s*(get|has)(?:local|global)?var\s*::([^{}]*)(?=\{\{|\}\})/gi)) {
-        const key = match[2]!.trim()
+      for (const match of current.matchAll(/\{\{\s*(?:(?:get|has)(?:local|global)?var|(?:global)?varexists)\s*::([^{}]*)(?=\{\{|\}\})/gi)) {
+        const key = match[1]!.trim()
         const computed = current.slice(match.index + match[0].length, match.index + match[0].length + 2) === '{{'
         result.reads.add(key)
         if (computed || unknownDynamicWrite || dynamicVariables.has(key) || potentialVariables.has(key)) result.dynamic = true
       }
-      for (const match of current.matchAll(/\{\{\s*(set|add|inc|dec)(?:local|global)?var\s*::([^{}]*?)(?=::|\{\{|\}\})/gi)) {
+      for (const match of current.matchAll(/\{\{\s*(set|add|inc|dec|delete|flush)(?:local|global)?var\s*::([^{}]*?)(?=::|\{\{|\}\})/gi)) {
         const key = match[2]!.trim()
         const computed = current.slice(match.index + match[0].length, match.index + match[0].length + 2) === '{{'
         if (computed) result.unknownWrite = true
         else if (key) {
           result.writes.add(key)
           // 增减类写入以旧值为输入：读写都要记，动态旧值会把结果一起带入本轮通道。
-          if (match[1]!.toLowerCase() !== 'set') {
+          if (!['set', 'delete', 'flush'].includes(match[1]!.toLowerCase())) {
             result.reads.add(key)
             if (unknownDynamicWrite || dynamicVariables.has(key) || potentialVariables.has(key)) result.dynamic = true
           }

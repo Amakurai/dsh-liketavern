@@ -18,6 +18,13 @@ import { type TavernPaths } from './paths.js';
 import { type StorySummary } from '../state/story.js';
 export type { Persona } from '../core/persona.js';
 /** 永久删除前的持久化引用快照；两类引用都为空才允许移除卡目录。 */
+export interface CharacterDeletePlan {
+    stories: Array<StorySummary & {
+        bound: boolean;
+    }>;
+    boundSessionCount: number;
+    corruptBindingCount: number;
+}
 export interface CharacterReferences {
     sessionIds: string[];
     stories: StorySummary[];
@@ -208,13 +215,21 @@ export declare class TavernState {
     restoreCharacter(cardId: string): Promise<void>;
     loadCharacter(cardId: string): Promise<CharacterWorkspace | null>;
     /**
+     * 永久删除前的只读预检：列出角色的全部剧情并标注是否仍被会话绑定。
+     * 宿主没有会话删除事件，删掉宿主会话后剧情会残留；面板据此让用户确认一并删除。
+     */
+    characterDeletePlan(cardId: string): Promise<CharacterDeletePlan>;
+    /**
      * 永久删除角色。会话锁先于卡锁，与 saveBinding（绑定 → 剧情快照）同序；
      * 有效收纳标记、引用检查与 rm 处在同一临界区，避免恢复后旧确认或预检后新绑定插入。
-     * 任一绑定、已发布 story 或无法归属的损坏 session JSON 存在时
-     * 明确拒绝，不再像旧实现那样连带清掉绑定。cascadeDeleteEmbeddedBook=false 时只在
+     * 任一绑定或无法归属的损坏 session JSON 存在时明确拒绝，不再像旧实现那样连带清掉绑定。
+     * 无绑定引用的剧情只有逐个出现在 discardStoryIds（用户在确认框里看到的清单）中才随卡删除；
+     * 预检之后新出现的剧情不在清单里，同样拒绝。cascadeDeleteEmbeddedBook=false 时只在
      * 预检通过后把内嵌书抢救到世界书库，失败请求不产生半成品抢救文件。
      */
-    deleteCharacter(cardId: string): Promise<{
+    deleteCharacter(cardId: string, options?: {
+        discardStoryIds?: readonly string[];
+    }): Promise<{
         salvagedLorebook: string | null;
     }>;
     /** 抢救的分配与写入共用资产锁；按实际路径探测占位，不复用同身份旧后缀或 Windows 别名。 */

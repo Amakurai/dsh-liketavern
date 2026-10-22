@@ -9,6 +9,7 @@ import {notifyHelperStory} from './helperNotifications.js'
 import {useT} from './i18n.js'
 import {Btn,Err,Muted} from './util.js'
 import type {TavernRemote} from './types.js'
+import { randomUuid, sha256Hex } from '../core/secureRandom.js'
 
 export function HelperMvuRunner(props:{remote:TavernRemote;sessionId:string;storyId:string;snapshot:HelperSnapshot;ready:boolean;onStatus?:(status:{error:string|null;busy:boolean;retry:()=>void})=>void;onCancel?:()=>Promise<void>}){
   const t=useT(),frame=useRef<HTMLIFrameElement|null>(null),live=useRef(props)
@@ -27,7 +28,7 @@ export function HelperMvuRunner(props:{remote:TavernRemote;sessionId:string;stor
   useLayoutEffect(()=>{
     let active=true,frameRuntime='',running=false,polling=false,failed=false,committing=false
     let work:HelperMvuWork|undefined,result:unknown,deadline=0,renewAt=0,requestId='',restart=false
-    const runtimeId=crypto.randomUUID(),{sessionId,storyId}=props
+    const runtimeId=randomUuid(),{sessionId,storyId}=props
     const requests=new Set<()=>void>()
     // RPC 无响应也必须释放本地在途锁；迟到响应只结束原 Promise，不能覆盖重试后的任务。
     const request=async<T,>(call:()=>Promise<T>):Promise<T>=>{
@@ -76,9 +77,8 @@ export function HelperMvuRunner(props:{remote:TavernRemote;sessionId:string;stor
           if(next.job?.id!==work.job?.id||next.token!==work.token){
             const previous=work,receipt=next.completed?.find(item=>item.id===previous.job?.id)
             if(receipt&&result!==undefined){
-              const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify(helperJson(result))))
+              const hex=await sha256Hex(JSON.stringify(helperJson(result)))
               if(!active||work!==previous)return
-              const hex=Array.from(new Uint8Array(digest),byte=>byte.toString(16).padStart(2,'0')).join('')
               if(hex===receipt.digest){complete();return}
             }
             restart=true;setRestartRequired(true)
@@ -88,7 +88,7 @@ export function HelperMvuRunner(props:{remote:TavernRemote;sessionId:string;stor
         }
         setBusy(next.status==='waiting')
         if(failed||!live.current.ready||next.status!=='pending'||!next.job||!next.token||!next.snapshot)return
-        work=next;running=true;deadline=Date.now()+300000;requestId=crypto.randomUUID();setBusy(true);setError(null)
+        work=next;running=true;deadline=Date.now()+300000;requestId=randomUuid();setBusy(true);setError(null)
         send({action:'helperMvuRun',runtimeId:frameRuntime,requestId,work:next})
       }catch(value){if(work===expectedWork)fail(value)}finally{polling=false}
     }

@@ -2,6 +2,19 @@
 
 本插件与 dsh 宿主版本一一绑定（peerDependency 锁定精确版本），升级 dsh 前请先确认有适配的插件版本。
 
+## 未发布
+
+宿主依赖不变（dsh `0.2.1-rc.2`）。对照 SillyTavern 与同类 dsh 酒馆插件的已知问题做的一轮修复。
+
+- 角色卡 `card.json` 缺失或损坏（例如手改出错）时，读取会话绑定明确报错，不再当成「角色已删除」自愈：此前库里只剩另一张卡时会话会被静默改绑到那张卡并新建剧情，多张卡时绑定文件被直接删除。卡目录真正不存在时仍按唯一同名卡接回。
+- 正则 `markdownOnly`（仅格式显示）对齐 SillyTavern：作用楼层仍由 placement 决定。「用户输入 + 仅格式显示」的用户气泡美化正则不再套到 AI 回复上（常见的 `^(.*)$` 包裹正则此前会把每条回复整段包进去）；仅世界书 placement 的显示正则不再作用于任何气泡。
+- 玩过的角色现在可以永久删除。宿主没有会话删除事件，删除宿主会话或换卡后剧情会残留，此前只要有剧情就一律拒绝。删除确认框会列出全部剧情并标注是否仍被会话绑定：没有绑定的剧情随角色一并删除；仍有会话绑定或绑定文件损坏时继续拒绝；确认框打开后新产生的剧情不在确认清单里，同样拒绝。
+- 用手机等设备经局域网 `http://` 打开宿主时（非安全上下文，浏览器不提供 `crypto.randomUUID` 与 `crypto.subtle`），气泡渲染、脚本运行器、MVU 回执校验和卡面桥接不再整段报错：主页面改用 `getRandomValues` 生成 ID、摘要回退到纯 JS SHA-256，卡面 iframe 补上 `crypto.randomUUID`。
+- 补齐 SillyTavern 新版宏名：`{{charDescription}}`、`{{charPersonality}}`、`{{charScenario}}`、`{{greeting}}`、`{{charVersion}}`、`{{charCreatorNotes}}`（`{{creatorNotes}}`）、`{{charDepthPrompt}}`、`{{mesExamplesRaw}}`（`{{mesExamples}}`），此前未识别时会原样发给模型；新增 `{{deletevar}}`/`{{flushvar}}`（含 global 拼写）与 `{{varexists}}`/`{{globalvarexists}}`，删除与读取按出现顺序执行。
+- 世界书包含组对齐 SillyTavern：多条「组内优先」时确定性地取排序（order）最大者，不再在其中随机；`group` 字段可用逗号列出多个组，条目在任一组落选即不注入。
+- 会话芯片的上下文用量新增一行诊断：历史里仍在模型可见面上的旧本轮（`tavern:turn`）快照份数与估算 token。宿主每轮追加新快照而不替换旧的，非 DeepSeek 供应商会把它们全部发给模型；DeepSeek 通道发信前已剔除，会标注出来。
+- `tavern:standing` 与 `tavern:turn` 向宿主声明 `interpolate: false`：角色卡、预设与世界书里的 `{{…}}`（未知宏、Handlebars 模板、代码示例）原样入模，不再改写成全角 `｛｛…｝｝`，`{{cwd}}`/`{{model}}` 也不会被宿主替换。standing 钉位版本递增，升级后首轮会重新钉死一次。
+
 ## 0.5.5（2026-10-20）
 
 继续适配 **dsh `0.2.1-rc.2`、Node.js ≥ 24**，宿主依赖不变。本版汇总一轮代码审计发现的分支、回滚恢复、展示与沙箱边界问题，并修复备份工具拒绝合法大角色卡的问题。升级前请备份数据，安装后完整重启宿主。

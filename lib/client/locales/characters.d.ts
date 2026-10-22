@@ -2,7 +2,7 @@
 export declare const zh: {
     readonly 'characters.detail.greetingNumber': "备选开场白 {index}";
     readonly 'characters.detail.addGreeting': "添加开场白";
-    readonly 'characters.section.desc': "导入或新建角色卡。暂时不用的卡可移入收纳箱，历史剧情与记忆仍保留；永久删除只在没有任何引用时开放。";
+    readonly 'characters.section.desc': "导入或新建角色卡。暂时不用的卡可移入收纳箱，历史剧情与记忆仍保留；收纳后可永久删除，没有会话绑定的剧情会一并清理。";
     readonly 'characters.collectionLabel': "角色卡列表";
     readonly 'characters.collection.active': "活跃角色";
     readonly 'characters.collection.archived': "收纳箱";
@@ -106,7 +106,12 @@ export declare const zh: {
     readonly 'characters.delete.title': "删除角色卡？";
     readonly 'characters.delete.desc': "确定删除角色「{name}」？";
     readonly 'characters.deletePermanently.title': "永久删除角色卡？";
-    readonly 'characters.deletePermanently.desc': "这会永久删除「{name}」及其剧情工作区，无法撤销。只要仍有会话或剧情引用它，操作就会被拒绝。";
+    readonly 'characters.deletePermanently.desc': "这会永久删除「{name}」及其剧情工作区，无法撤销。仍有会话绑定它时，操作会被拒绝。";
+    readonly 'characters.deletePermanently.orphanStories': "以下 {count} 条剧情已没有会话绑定，将随角色一并删除：";
+    readonly 'characters.deletePermanently.blocked': "仍有 {count} 个会话绑定此角色，请先在这些会话中换卡或解除绑定。";
+    readonly 'characters.deletePermanently.corrupt': "有 {count} 个会话绑定文件损坏、无法确认归属，暂不能删除。";
+    readonly 'characters.deletePermanently.story': "剧情 · 创建于 {date}";
+    readonly 'characters.deletePermanently.storyBound': "剧情 · 创建于 {date}（仍被会话绑定）";
     readonly 'characters.deletePermanently.confirm': "永久删除";
     readonly 'characters.create.title': "新建空白角色卡";
     readonly 'characters.create.desc': "先建一张只有名字和默认开场白的卡，再点进去填描述。";

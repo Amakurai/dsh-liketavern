@@ -163,7 +163,8 @@ export const METHODS = {
     value: anyValue,
     summary: '导入角色卡（PNG/JSON，base64）',
   },
-  deleteCharacter: { req: object({ ...cardIdField }), value: anyValue, summary: '永久删除无会话或剧情引用的角色卡工作区' },
+  getCharacterDeletePlan: { req: object({ ...cardIdField }), value: anyValue, summary: '永久删除前列出角色剧情及其绑定状态' },
+  deleteCharacter: { req: object({ ...cardIdField, discardStoryIds: optional(array(nonEmpty())) }), value: anyValue, summary: '永久删除无会话绑定的角色卡工作区，连同用户确认的剧情' },
   getCharacterDetail: { req: object({ ...cardIdField }), value: anyValue, summary: '角色卡详情（归一化卡 + 开场白列表）' },
   saveCharacter: {
     req: object({
@@ -505,6 +506,16 @@ export interface ContextUsage {
   messageTokens: number | null
 }
 
+/**
+ * 历史里仍在模型可见面上的旧 tavern:turn 快照（token 为本地估算）。projected=true 表示本会话走
+ * DeepSeek 预设投影，这些旧快照在发信前已被剔除，不占实际请求。
+ */
+export interface StaleTurnContextUsage {
+  snapshots: number
+  tokens: number
+  projected: boolean
+}
+
 /** 方法名 → 裸业务结果类型。加/改 remote 方法时必须与 METHODS、service 实现、client 镜像同步。 */
 export interface TavernMethodResults {
   getPluginAbout: PluginAbout
@@ -524,6 +535,7 @@ export interface TavernMethodResults {
   restoreCharacter: { restored: boolean }
   inspectCharacter: CharacterInspect
   importCharacter: { cardId: string; name: string }
+  getCharacterDeletePlan: import('./node/state.js').CharacterDeletePlan
   deleteCharacter: { deleted: boolean; salvagedLorebook: string | null }
   getCharacterDetail: CharacterDetail
   saveCharacter: { cardId: string; name: string; revision: string }
@@ -606,7 +618,7 @@ export interface TavernMethodResults {
   // 调试
   getTriggerLog: { log: { at: string; lines: string[] } | null }
   previewPrompt: PromptPreview
-  getContextUsage: { usage: ContextUsage | null }
+  getContextUsage: { usage: ContextUsage | null; staleTurnContext: StaleTurnContextUsage | null }
   getDataInfo: { dataHome: string }
   // 设置
   getSettings: { settings: TavernConfigRaw }

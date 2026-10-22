@@ -116,6 +116,20 @@ export function tavernCardBridgeScript(options: Omit<CardFrameOptions, 'connectH
       get length() { return Object.keys(map).length; }
     };
   }
+  // 局域网 http 打开宿主时 iframe 也不是安全上下文，crypto.randomUUID 不存在；桥接代码与卡片脚本
+  // 都会调用它。getRandomValues 不受限制，用它补一个 v4 实现。
+  (function () {
+    var c = window.crypto;
+    if (!c || typeof c.randomUUID === 'function' || typeof c.getRandomValues !== 'function') return;
+    try {
+      Object.defineProperty(c, 'randomUUID', { configurable: true, writable: true, value: function () {
+        var b = c.getRandomValues(new Uint8Array(16)), h = '';
+        b[6] = (b[6] & 15) | 64; b[8] = (b[8] & 63) | 128;
+        for (var i = 0; i < 16; i++) h += (b[i] + 256).toString(16).slice(1);
+        return h.slice(0, 8) + '-' + h.slice(8, 12) + '-' + h.slice(12, 16) + '-' + h.slice(16, 20) + '-' + h.slice(20);
+      } });
+    } catch (e) {}
+  })();
   function shimStorage(name) {
     try {
       var nativeStore = window[name];

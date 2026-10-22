@@ -279,6 +279,16 @@ function createDepthTexts(
   }
 }
 
+/** 对齐 ST：group 字段可用逗号列出多个组，条目在任一组落选即不注入。 */
+function inclusionGroupsOf(entry: WorldInfoEntry): string[] {
+  return typeof entry.group === 'string' ? [...new Set(entry.group.split(/,\s*/).map((name) => name.trim()).filter(Boolean))] : []
+}
+
+/** 对齐 ST：多条「组内优先」时确定性地取 order 最大者，并列取先出现者，不再随机。 */
+function pickGroupOverride(pool: Candidate[]): Candidate {
+  return pool.reduce((best, candidate) => candidate.entry.order > best.entry.order ? candidate : best)
+}
+
 /** 组内加权随机挑选（groupWeight 为权重；全零权重取第一条）。 */
 function pickGroupWeighted(pool: Candidate[], random: () => number): Candidate {
   const weights = pool.map((c) => Math.max(0, c.entry.groupWeight))
@@ -369,15 +379,18 @@ export function evaluateWorldInfo(input: WIEngineInput): WIEngineResult {
   const adjudicateGroups = (fresh: Candidate[]): void => {
     const newcomers = new Map<string, Candidate[]>()
     for (const c of fresh) {
-      const name = typeof c.entry.group === 'string' ? c.entry.group.trim() : ''
-      if (!name || groupLosers.has(c.entry.key)) continue
-      const list = newcomers.get(name) ?? []
-      list.push(c)
-      newcomers.set(name, list)
+      if (groupLosers.has(c.entry.key)) continue
+      for (const name of inclusionGroupsOf(c.entry)) {
+        const list = newcomers.get(name) ?? []
+        list.push(c)
+        newcomers.set(name, list)
+      }
     }
     for (const [group, members] of newcomers) {
       const incumbents = groupWinners.get(group) ?? []
-      const pool = [...incumbents, ...members]
+      // 多组条目可能刚在前一个组落选，不能再参与本组角逐。
+      const pool = [...incumbents, ...members].filter((m) => !groupLosers.has(m.entry.key))
+      if (pool.length === 0) continue
       const sticky = pool.filter((m) => m.via === 'sticky')
       let winners: Candidate[]
       if (sticky.length > 0) {
@@ -389,8 +402,7 @@ export function evaluateWorldInfo(input: WIEngineInput): WIEngineResult {
         const maxScore=Math.max(...pool.map(candidate=>candidate.matchedKeys.length))
         const scored=pool.filter(candidate=>!(candidate.entry.useGroupScoring??settings.useGroupScoring)||candidate.matchedKeys.length===maxScore)
         const overrides = scored.filter((m) => m.entry.groupOverride)
-        const contenders = overrides.length > 0 ? overrides : scored
-        winners = [contenders.length===1?contenders[0]!:pickGroupWeighted(contenders, random)]
+        winners = [overrides.length > 0 ? pickGroupOverride(overrides) : scored.length === 1 ? scored[0]! : pickGroupWeighted(scored, random)]
       }
       groupWinners.set(group, winners)
       const winnerKeys = new Set(winners.map((w) => w.entry.key))

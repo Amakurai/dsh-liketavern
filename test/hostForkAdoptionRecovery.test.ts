@@ -597,6 +597,21 @@ it('公开宿主连续分支在父接管尚未发布时等待父剧情，不持 
   expect(state.openFloors.has(leaf.id)).toBe(false)
 })
 
+it('来源绑定因陈旧卡自愈清理且 skip 写入中断后，重试与冷恢复不误判来源已换绑', async () => {
+  await new WorkspaceFs(state.paths.sessions, null).writeText(`${parent.id}.json`, JSON.stringify({
+    sessionId: parent.id, cardId: 'deleted-card-00000000', cardName: '已删角色', presetId: null, personaId: null,
+    lorebookIds: [], characterLorebookId: null, interactiveCards: false, greetingIndex: 0, createdAt: new Date(0).toISOString(),
+  }))
+  faults.rename = join(root, hostForkAdoptionFile('native-child')); faults.renameCountdown = 4
+  const original = await child()
+  await expect(adoptions.get(original.id)).rejects.toThrow('工厂子绑定发布失败')
+  expect(await state.loadBinding(original.id)).toBeNull()
+  const restored = await coldResume(original)
+  expect(await adoptions.get(restored.id)).toBe(false)
+  restored.followup(message('陈旧来源自愈后作为普通会话发信')); await idle(restored)
+  expect(errors).toEqual([]); expect(requests).toHaveLength(1)
+})
+
 it('来源确实未绑定的合法跳过仍返回 null，允许普通会话发信', async () => {
   await state.clearBinding(parent.id)
   const agent = await child()

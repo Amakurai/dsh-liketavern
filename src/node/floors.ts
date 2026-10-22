@@ -600,15 +600,17 @@ export async function adoptHostFork({ ctx, state }: FloorDeps, child: Session): 
     // 文件 ID 与纳秒时间在同一绑定锁内检查；宿主 Session.seq 不包含换卡，不能据它推断绑定未变。
     const file = sessionFile(state.paths, pending.parentId)
     const fs = new WorkspaceFs(state.paths.sessions, null)
-    let checkpoint: string | null
-    try {
+    const readCheckpoint = async (): Promise<string | null> => {
       await fs.assertSafePath(basename(file))
       const info = await lstat(file, { bigint: true }).catch((error: NodeJS.ErrnoException) => {
         if (error.code === 'ENOENT') return null
         throw error
       })
       if (info && !info.isFile()) throw new FloorError('fork-source-unavailable', '来源绑定文件类型不确定，请从来源会话重新创建分支')
-      checkpoint = info ? `${info.dev}:${info.ino}:${info.size}:${info.mtimeNs}:${info.ctimeNs}` : null
+      return info ? `${info.dev}:${info.ino}:${info.size}:${info.mtimeNs}:${info.ctimeNs}` : null
+    }
+    let checkpoint: string | null
+    try { checkpoint = await readCheckpoint()
     } catch (error) {
       if (pending.sourceCheckpoint === undefined) pending.sourceUncertain = true
       throw error
@@ -619,6 +621,11 @@ export async function adoptHostFork({ ctx, state }: FloorDeps, child: Session): 
     pending.sourceCheckpoint = checkpoint
     await writeHostForkAdoption(state.paths, pending)
     const loaded = await state.loadBindingUnwaited(pending.parentId, true)
+    const afterCheckpoint = await readCheckpoint()
+    if (afterCheckpoint !== checkpoint) {
+      pending.sourceCheckpoint = afterCheckpoint
+      await writeHostForkAdoption(state.paths, pending)
+    }
     if (!loaded) {
       if (await fs.exists(basename(file))) throw new FloorError('fork-source-unavailable', '来源会话绑定损坏，请修复后重新读取分支')
       return

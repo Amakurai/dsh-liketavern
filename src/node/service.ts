@@ -467,20 +467,22 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
       && binding.interactiveCards !== false && hasNativeMvuEntry(await sessionHelperLibraries(this.state, binding))) binding = { ...binding, helperMvu: true }
     // fork WAL 祖先由 host 维护；同卡编辑绑定时保留，换卡则清空，不能信任客户端自报。
     // createdAt 由 parseSessionBinding 保证必填非空，无需再兜底。
-    const save=()=>withWorkspaceLock(this.state.paths.sessions,async()=>{
+    const save=(claimedEnable:boolean)=>withWorkspaceLock(this.state.paths.sessions,async()=>{
       // 远程请求的前置读取可能已过时；实际提交在同一绑定锁内继承当前剧情和祖先，不能换回并发请求的旧身份。
       const current=await this.state.loadBindingUnwaited(binding.sessionId,true)
       const sameCard=current!==null&&(process.platform==='win32'
         ?current.cardId.toLowerCase()===binding.cardId.toLowerCase():current.cardId===binding.cardId)
+      if(!claimedEnable&&binding.helperMvu===true&&(current?.helperMvu!==true||!sameCard||current.interactiveCards===false&&binding.interactiveCards!==false))return false
       await this.state.saveBinding({
         ...binding,
         ...(sameCard?{cardId:current.cardId}:{}),
         storyId:sameCard?current.storyId:undefined,
         walLineage:sameCard?current.walLineage:undefined,
       },(previous,next)=>this.cancelChangedBinding(binding.sessionId,previous,next))
+      return true
     })
-    if(binding.helperMvu===true&&(existing?.helperMvu!==true||existing.cardId!==binding.cardId||existing.interactiveCards===false&&binding.interactiveCards!==false))await runHelperMvuEnable(this.ctx,this.state,binding.sessionId,save)
-    else await save()
+    if(binding.helperMvu===true&&(existing?.helperMvu!==true||existing.cardId!==binding.cardId||existing.interactiveCards===false&&binding.interactiveCards!==false))await runHelperMvuEnable(this.ctx,this.state,binding.sessionId,()=>save(true))
+    else if(!(await save(false)))await runHelperMvuEnable(this.ctx,this.state,binding.sessionId,()=>save(true))
     return { saved: true }
   }
 

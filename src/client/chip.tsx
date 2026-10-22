@@ -501,7 +501,7 @@ function HeaderChipSession(props: HeaderChipProps) {
                         onChange={(cardId) => {
                           if (!cardId) return
                           const picked = lists.characters.find((c) => c.cardId === cardId)
-                          setDraft({ ...draft, cardId, cardName: picked?.name ?? draft.cardName })
+                          setDraft({ ...draft, cardId, cardName: picked?.name ?? draft.cardName, ...(cardId === draft.cardId ? {} : { storyId: undefined, greetingIndex: 0, helperMvu: undefined }) })
                         }}
                         options={[
                           { value: '', label: t('chip.field.selectCharacter') },

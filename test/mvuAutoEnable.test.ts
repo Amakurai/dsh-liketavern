@@ -133,3 +133,32 @@ it('宿主正在生成时拒绝开启且不改绑定，空闲后跟随成功', a
   expect(await busy.enableHelperMvu({ sessionId: 'session-busy', storyId, mode: 'follow' })).toEqual({ enabled: true, changed: true })
   expect((await state.loadBinding('session-busy'))?.helperMvu).toBe(true)
 })
+
+it('前置读取时已开启但锁内并发关闭时，保存开启仍受生成中空闲认领约束', async () => {
+  const cardId = await card(MVU_IMPORT)
+  await bind('session-race', cardId)
+  const saved = (await state.loadBinding('session-race'))!
+  expect(saved.helperMvu).toBe(true)
+  const origLoad = state.loadBinding.bind(state)
+  state.loadBinding = async (id: string, resolveStale?: boolean) => {
+    const pre = await origLoad(id, resolveStale)
+    state.loadBinding = origLoad
+    await state.saveBinding({ ...saved, helperMvu: false })
+    return pre
+  }
+  const agent = { status: 'running' as string, runMaintenance: async (task: (signal: AbortSignal) => Promise<unknown>) => task(new AbortController().signal) }
+  const busyCtx = { reflect: { provide: () => {} }, sessions: { get: () => undefined }, get: () => undefined, agents: { get: () => agent } } as unknown as Context
+  const busy = new TavernService(busyCtx, state, settings)
+  await expect(busy.setSessionBinding({ binding: { ...saved, helperMvu: true } })).rejects.toThrow('请等待当前生成')
+  expect((await state.loadBinding('session-race'))?.helperMvu).toBe(false)
+  agent.status = 'idle'
+  await busy.setSessionBinding({ binding: { ...saved, helperMvu: true } })
+  expect((await state.loadBinding('session-race'))?.helperMvu).toBe(true)
+  // 芯片换卡草稿在切换卡片后重置 helperMvu: undefined，目标卡含 MVU 入口时自动开启
+  const plainCard = await card("console.log('plain')")
+  await bind('session-switch', plainCard, { helperMvu: false })
+  expect((await state.loadBinding('session-switch'))?.helperMvu).toBe(false)
+  await bind('session-switch', cardId, { storyId: undefined, greetingIndex: 0, helperMvu: undefined })
+  expect((await state.loadBinding('session-switch'))?.helperMvu).toBe(true)
+
+})

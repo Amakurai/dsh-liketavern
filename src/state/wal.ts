@@ -115,9 +115,16 @@ async function isUnstartedDir(dir: string): Promise<boolean> {
   return true
 }
 
+let lastWalTimeMs = 0
+function nextWalIsoTime(): string {
+  const now = Date.now()
+  lastWalTimeMs = now > lastWalTimeMs ? now : lastWalTimeMs + 1
+  return new Date(lastWalTimeMs).toISOString()
+}
+
 /** 目录改名用时间戳：纯数字（毫秒精度），避开 Windows 文件名非法字符。 */
 function timestamp(): string {
-  return new Date().toISOString().replace(/[^0-9]/g, '')
+  return nextWalIsoTime().replace(/[^0-9]/g, '')
 }
 
 async function isDir(p: string): Promise<boolean> {
@@ -744,7 +751,7 @@ export class Wal {
     // 这里同时兜底扫描旧版本崩溃遗留、还没有标记文件的游标（只在开层这种低频入口做）。
     await this.assertWorkspaceReady({ scanCursors: true })
     await mkdir(dir, { recursive: true })
-    const meta={floor,startedAt:new Date().toISOString(),committed:false}
+    const meta={floor,startedAt:nextWalIsoTime(),committed:false}
     await this.writeMeta(dir,meta)
     await this.recordCoverage(meta)
   }
@@ -839,7 +846,7 @@ export class Wal {
     // 提交是完成证明，不能让读取/回滚均拒绝的日志得到 committed=true。
     await this.readRecords(dir)
     meta.committed = true
-    meta.committedAt = new Date().toISOString()
+    meta.committedAt = nextWalIsoTime()
     await this.writeMeta(dir, meta)
   }
 
@@ -922,7 +929,7 @@ export class Wal {
       await rebuildIndex(new WorkspaceFs(workspaceRoot, null), estimateTokens)
     }
     const meta = (await this.readMeta(dir)) ?? { floor, startedAt: new Date().toISOString(), committed: false }
-    meta.rolledBackAt = new Date().toISOString()
+    meta.rolledBackAt = nextWalIsoTime()
     meta.preservedPaths = [...preserved]
     await this.writeMeta(dir, meta)
     const archived = join(this.rootDir, `${dirName}${ROLLED_BACK_MARK}${timestamp()}`)
@@ -952,8 +959,8 @@ export class Wal {
       await this.assertLogPath(join(this.rootDir, directory.name))
       for (const marker of WAL_FLOOR_MARKERS) await this.assertLogPath(join(this.rootDir, directory.name, marker))
     }
-    const selected = new Set(floors)
-    const changes: { rec: RecordLine; startedAt: number | null }[] = []
+    const lastStep = new Map(floors.map((floor, index) => [floor, index]))
+    const changes: { rec: RecordLine; startedAt: number | null; step: number }[] = []
     let expandsMemory = false
     let rebuildsIndex = false
     for (const floor of floors) {
@@ -969,7 +976,7 @@ export class Wal {
         const path = recordPathIdentity(rec.path)
         expandsMemory ||= path.startsWith('memory/')
         rebuildsIndex ||= path.startsWith('memory/') || path === 'state/world-delta.jsonl'
-        if (!isNoopRecord(rec)) changes.push({ rec, startedAt })
+        if (!isNoopRecord(rec)) changes.push({ rec, startedAt, step: lastStep.get(floor)! })
       }
     }
     // 摘要展开与索引重建读写记录外的路径；整批准备时检查，不能等较新楼层已恢复才失败。
@@ -985,14 +992,16 @@ export class Wal {
     // 每轮重写相同定时器、标志位来回切换的普通剧情都会让旧楼层出现同值 before，若不分先后，
     // 第三层起就再也无法只重生成最新楼层。
     for (const floor of await this.doListFloors()) {
-      if (floor.rolledBack || selected.has(floor.floor)) continue
+      const otherStep = lastStep.get(floor.floor)
+      if (floor.rolledBack) continue
       const dir = join(this.rootDir, sanitizeFloor(floor.floor))
       const meta = await this.readMeta(dir)
       const completedAt = meta?.committed && meta.committedAt ? Date.parse(meta.committedAt) : NaN
       const records = await this.readRecords(dir)
       for (const rec of records) {
         if (isNoopRecord(rec)) continue
-        if (changes.some(({ rec: change, startedAt }) => (startedAt === null || !Number.isFinite(completedAt) || completedAt >= startedAt)
+        if (changes.some(({ rec: change, startedAt, step }) => (otherStep === undefined || otherStep < step)
+          && (startedAt === null || !Number.isFinite(completedAt) || completedAt >= startedAt)
           && recordPathIdentity(change.path) === recordPathIdentity(rec.path) && 'after' in change
           && (recordPathIdentity(rec.path) === 'state/world-delta.jsonl'
             ? deltaChangesDependOn(change, rec)

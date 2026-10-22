@@ -216,6 +216,33 @@ it.each(['text', 'bytes'] as const)('世界状态中插入其它条目不掩盖�
   expect(await shared.readText(path)).toBe(manual)
 })
 
+it('批量回滚传入反序楼层时在预检阶段拒绝，不先撤销较旧楼层破坏恢复链', async () => {
+  await turn('s#t1', { 'journal.md': '第一层' })
+  await turn('s#t2', { 'journal.md': '第二层' })
+  await expect(wal.rollbackAfter(['s#t2', 's#t1'], root)).rejects.toThrow('后继依赖')
+  expect(await shared.readText('journal.md')).toBe('第二层')
+  expect((await wal.listFloors()).every(floor => !floor.rolledBack)).toBe(true)
+  await wal.rollbackAfter(['s#t1', 's#t2'], root)
+  expect(await shared.readText('journal.md')).toBeNull()
+})
+
+it('同毫秒连续提交与开层来回切换文件值时，单调时钟不误判旧层为后继依赖且支持同毫秒重复回滚', async () => {
+  await shared.writeText('flag.txt', 'A')
+  await wal.beginFloor('s#t1')
+  await shared.withFloor('s#t1').writeText('flag.txt', 'B')
+  await wal.commitFloor('s#t1')
+  await wal.beginFloor('s#t2')
+  await shared.withFloor('s#t2').writeText('flag.txt', 'A')
+  await wal.commitFloor('s#t2')
+  await wal.rollbackFloor('s#t2', root)
+  expect(await shared.readText('flag.txt')).toBe('B')
+  await wal.beginFloor('s#t2')
+  await shared.withFloor('s#t2').writeText('flag.txt', 'A')
+  await wal.commitFloor('s#t2')
+  await wal.rollbackFloor('s#t2', root)
+  expect(await shared.readText('flag.txt')).toBe('B')
+})
+
 it('世界状态同一 id 经人工修订后不再依赖原楼层，回滚保留人工内容', async () => {
   const path = 'state/world-delta.jsonl'
   const original = '{"id":"d1","content":"模型事实"}\n'
@@ -229,3 +256,4 @@ it('世界状态同一 id 经人工修订后不再依赖原楼层，回滚保留
   await wal.rollbackFloor('s#t2', root)
   expect(await shared.readText(path)).toBe(manual)
 })
+

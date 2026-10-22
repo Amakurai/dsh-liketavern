@@ -16,6 +16,8 @@
 - 依赖安全：`markdown-it` 升至 15.0.3，修复两项二次方复杂度公告；开发依赖 `vitest` 4.1.12、`vite` 8.2.4、`@modelcontextprotocol/client` 2.3.1。模板运行时指纹随之变化，v0.5.3–v0.5.5 保存的模板检查点仍按原指纹恢复。详见 [依赖安全记录](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/DEPENDENCY_SECURITY.md)。
 - `tavern:standing` 与 `tavern:turn` 向宿主声明 `interpolate: false`：角色卡、预设与世界书里的 `{{…}}`（未知宏、Handlebars 模板、代码示例）原样入模，不再改写成全角 `｛｛…｝｝`，`{{cwd}}`/`{{model}}` 也不会被宿主替换。standing 钉位版本递增，升级后首轮会重新钉死一次。
 
+- 发版纪律：新增 `scripts/release.mjs`，所有能拒绝发版的事（脏工作树、非 main、版本不前进、本地/远端 tag 重名、CHANGELOG 缺本版段）都在改版本、提交、打 tag、push 之前完成，支持 `--dry-run`；push 出的 `v*` tag 触发 `.github/workflows/release.yml` 作为唯一发布点，重跑构建、测试与包边界，用 CHANGELOG 生成 Release notes，版本已在线时跳过发布。两项脚本都有真 git + 裸远端的集成测试。
+
 ## 0.5.5（2026-10-20）
 
 继续适配 **dsh `0.2.1-rc.2`、Node.js ≥ 24**，宿主依赖不变。本版汇总一轮代码审计发现的分支、回滚恢复、展示与沙箱边界问题，并修复备份工具拒绝合法大角色卡的问题。升级前请备份数据，安装后完整重启宿主。

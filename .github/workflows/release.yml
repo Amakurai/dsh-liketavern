@@ -1,0 +1,88 @@
+name: release
+
+# 推 v* tag 触发，是本仓库唯一执行 npm publish 与 GitHub Release 的地方。
+# tag 由 scripts/release.mjs 创建（本地已跑过同一批守卫）；这里重跑，防止手工打 tag 或
+# 把未构建的 lib/ 发出去：tag 与 package.json 一致、lib/ 与源码同步、测试通过、CHANGELOG 有本版段。
+#
+# 前提（本文件配不了）：npm 端为该包启用 Trusted publishing，指向本仓库与本工作流。
+# 否则 `npm publish --provenance` 会以身份错误失败；OIDC 铸凭据靠下方 id-token: write。
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          cache: npm
+
+      # OIDC 信任发布与 --provenance 需要 npm 11.5.1+，比 Node 24 自带的更稳。
+      - run: npm install -g npm@11
+
+      - name: 安装依赖
+        run: npm ci
+
+      # lib/ 刻意入库；发版前必须确认 tarball 里的产物就是从这份源码构建出来的。
+      - name: 构建并校验入库产物
+        run: |
+          npm run build
+          git diff --exit-code --stat -- lib/
+          status=$(git status --porcelain -- lib/)
+          if [ -n "$status" ]; then
+            echo "lib/ 与源码不同步（存在未跟踪产物）："
+            echo "$status"
+            exit 1
+          fi
+
+      - name: 测试
+        run: npm test
+
+      - name: tag 与 package.json 版本一致
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          PKG="$(node -p "require('./package.json').version")"
+          if [ "$VERSION" != "$PKG" ]; then
+            echo "tag v$VERSION 与 package.json $PKG 不一致" >&2
+            exit 1
+          fi
+
+      - name: 校验 npm 包边界
+        run: npm run package:check
+
+      # 段缺失或为空即失败：宁可不发版，也不发一个没有说明的版本。
+      - name: 从 CHANGELOG 生成本版 release notes
+        run: node scripts/release-notes.mjs "${GITHUB_REF_NAME#v}" CHANGELOG.md release-notes.md
+
+      # 幂等：版本已在线上则跳过，registry 故障后手工补发不会因为重复发布变红。
+      - name: 发布到 npm（版本已在线则跳过）
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          NAME="$(node -p "require('./package.json').name")"
+          if npm view "$NAME@$VERSION" version >/dev/null 2>&1; then
+            echo "$NAME@$VERSION 已在 registry，跳过发布。"
+          else
+            npm publish --provenance --access public
+          fi
+
+      - name: 用 tag 与 CHANGELOG 建 GitHub Release（已存在则跳过）
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "Release $GITHUB_REF_NAME 已存在，跳过。"
+          else
+            gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file release-notes.md
+          fi

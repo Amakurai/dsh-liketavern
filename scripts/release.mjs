@@ -1,0 +1,116 @@
+#!/usr/bin/env node
+/**
+ * 一键发版脚本。原则：所有能拒绝发版的事，都在不可逆动作（改版本 / 提交 / 打 tag / push）之前完成。
+ *
+ *   node scripts/release.mjs 0.6.0
+ *   node scripts/release.mjs patch|minor|major
+ *   node scripts/release.mjs 0.6.0 --dry-run     只跑守卫，不改任何东西
+ *
+ * 本脚本**不发布**：push 出 v* tag 后由 .github/workflows/release.yml 唯一执行 npm publish
+ * 与 GitHub Release，避免本地与 CI 双发竞争。tag 之前请先确认 CI 在 main 上是绿的。
+ *
+ * 退出码：0 成功或 --dry-run 通过；1 任一守卫拒绝（stderr 带原因）。
+ */
+import { spawnSync } from 'node:child_process'
+import { readFileSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const root = join(dirname(fileURLToPath(import.meta.url)), '..')
+
+function fail(message) {
+  console.error(`\nRelease stopped: ${message}\n`)
+  process.exit(1)
+}
+
+/** 统一捕获 stdout/stderr，让 git 的拒绝理由原样出现在报错里。 */
+function git(args, { allowFailure = false } = {}) {
+  const result = spawnSync('git', args, { cwd: root, encoding: 'utf8' })
+  if (result.error) fail(`无法运行 git：${result.error.message}`)
+  if (result.status !== 0 && !allowFailure) {
+    fail(`git ${args.join(' ')} 失败：${(result.stderr || result.stdout || '').trim()}`)
+  }
+  return { ok: result.status === 0, out: (result.stdout ?? '').trim(), err: (result.stderr ?? '').trim() }
+}
+
+function parseArgs(argv) {
+  const options = { version: undefined, dryRun: false, branch: 'main', remote: 'origin' }
+  for (let index = 0; index < argv.length; index++) {
+    const arg = argv[index]
+    if (arg === '--dry-run') options.dryRun = true
+    else if (arg === '--branch') options.branch = argv[++index] ?? fail('--branch 需要参数')
+    else if (arg === '--remote') options.remote = argv[++index] ?? fail('--remote 需要参数')
+    else if (arg.startsWith('--')) fail(`未知参数 ${arg}`)
+    else if (options.version === undefined) options.version = arg
+    else fail(`多余的参数 ${arg}`)
+  }
+  return options
+}
+
+function nextVersion(current, requested) {
+  const parts = current.split('.').map(Number)
+  if (parts.length !== 3 || parts.some(part => !Number.isInteger(part))) fail(`package.json 版本不是 x.y.z：${current}`)
+  const [major, minor, patch] = parts
+  if (requested === 'major') return `${major + 1}.0.0`
+  if (requested === 'minor') return `${major}.${minor + 1}.0`
+  if (requested === 'patch') return `${major}.${minor}.${patch + 1}`
+  if (!/^\d+\.\d+\.\d+$/.test(requested)) fail(`"${requested}" 既不是版本号也不是 patch/minor/major`)
+  const [na, nb, nc] = requested.split('.').map(Number)
+  const forward = na > major || (na === major && (nb > minor || (nb === minor && nc > patch)))
+  if (!forward) fail(`"${requested}" 不高于当前版本 ${current}`)
+  return requested
+}
+
+/** CHANGELOG 段标题允许 `## 1.2.3`、`## 1.2.3（日期）`、`## [1.2.3]` 三种写法。 */
+function hasChangelogSection(changelog, version) {
+  return changelog.split(/\r?\n/).some(line => {
+    const text = line.trim()
+    return text === `## ${version}` || text.startsWith(`## ${version} `) || text.startsWith(`## ${version}（`)
+      || text.startsWith(`## [${version}]`)
+  })
+}
+
+const options = parseArgs(process.argv.slice(2))
+if (!options.version) fail('用法：node scripts/release.mjs <x.y.z|patch|minor|major> [--dry-run] [--branch main] [--remote origin]')
+
+const pkgPath = join(root, 'package.json')
+const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'))
+const next = nextVersion(pkg.version, options.version)
+const tag = `v${next}`
+
+// ── 守卫：任何一条不满足都不碰工作树 ────────────────────────────────────────────
+const status = git(['status', '--porcelain']).out
+if (status) fail(`工作树有未提交改动，先提交再发版：\n${status}`)
+
+const branch = git(['rev-parse', '--abbrev-ref', 'HEAD']).out
+if (branch !== options.branch) fail(`当前在 ${branch}，发版只允许 ${options.branch}`)
+
+if (git(['tag', '--list', tag]).out) fail(`本地已存在 tag ${tag}`)
+
+git(['fetch', options.remote, options.branch])
+const upstream = `${options.remote}/${options.branch}`
+if (!git(['merge-base', '--is-ancestor', upstream, 'HEAD'], { allowFailure: true }).ok) {
+  fail(`本地 ${options.branch} 落后或偏离 ${upstream}，先同步`)
+}
+if (git(['ls-remote', '--tags', options.remote, `refs/tags/${tag}`]).out) fail(`远端已存在 tag ${tag}`)
+
+const changelog = readFileSync(join(root, 'CHANGELOG.md'), 'utf8')
+if (!hasChangelogSection(changelog, next)) {
+  fail(`CHANGELOG.md 缺少 "## ${next}" 段；release workflow 用它生成 Release notes`)
+}
+
+if (options.dryRun) {
+  console.log(`\n[dry-run] 守卫全部通过：${pkg.version} → ${next}，将提交、打 ${tag} 并推送到 ${options.remote}/${options.branch}。未做任何改动。\n`)
+  process.exit(0)
+}
+
+// ── 不可逆动作 ────────────────────────────────────────────────────────────────
+pkg.version = next
+writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`)
+
+git(['add', 'package.json', 'CHANGELOG.md'])
+git(['commit', '-m', `发布：${tag}`])
+git(['tag', tag])
+git(['push', options.remote, `HEAD:refs/heads/${options.branch}`, `refs/tags/${tag}`])
+
+console.log(`\n已提交并推送 ${tag}。.github/workflows/release.yml 会用同一段 CHANGELOG 发布 npm 并建 GitHub Release。\n`)

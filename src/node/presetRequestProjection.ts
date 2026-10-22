@@ -12,6 +12,7 @@ import { joinContextSections } from '@deepseek-ai/dsh-system-prompt'
 import { z } from 'zod'
 import { BOUND_DISCIPLINE, TURN_PLAYBOOK, isRuntimeContextMessage, turnTailHeader } from '../core/dshPrompt.js'
 import { PromptLayoutSchema, type PromptHistoryAnchor, type PromptLayout, type PromptLayoutEntry } from '../core/promptLayout.js'
+import { assertNoControlTokens, mayContainControlTokens } from '../core/promptSafety.js'
 import { estimateTokens } from '../core/tokenize.js'
 
 export const PRESET_PLAN_MESSAGE_TEXT = '【Tavern 提示词布局快照】'
@@ -184,6 +185,19 @@ function pluginMessage(plan: PresetRequestPlan, key: string, role: 'system' | 'u
   return freezeMessage({ ...fields, role, source: { kind: 'dsh-tavern', tavernProjection: true } })
 }
 
+/**
+ * 宿主 system 必须留在首条。适配器靠"开头连续的 system"识别系统提示（pi-ai 的 splitSystemPrompt、
+ * DeepSeek Messages 的 in-history 判定）；一旦被插件消息挤到历史中段，系统提示就被降级成普通
+ * system 更新或历史消息——请求照样发得出去，行为却变了。这种偏移必须在投影时当场失败。
+ */
+function assertHostSystemLeading(original: readonly Message[], projected: readonly Message[]): void {
+  const host = original[0]
+  if (!host || host.role !== 'system' || host.source?.kind !== 'system-prompt') return
+  if ('tavernProjection' in host.source) return
+  if (projected[0] === host) return
+  throw new Error('Tavern 提示词布局把宿主系统提示挤出了请求首条；已拒绝投影，避免适配器把系统提示降级成历史消息')
+}
+
 /** in-history 的每条 system 是完整快照；旧模型只读首条，因此不能直接发送增量 system 片段。 */
 function applySystemPolicy(messages: readonly Message[], projection: PresetProjectionOptions): Message[] {
   if (!projection.model) return [...messages]
@@ -337,6 +351,11 @@ export function projectPresetRequest(options: Readonly<GenerateOptions>, session
   })
   const { plan, carrier } = currentPlan(requestMessages, session)
   const entries = plan.layout.entries
+  // 冻结期已拦过一次；这里兜住旧布局、手写计划与外部写入的正文。
+  // 投影副本一样会进请求，不能因为"只是副本"就放行。
+  for (const entry of entries) {
+    if (mayContainControlTokens(entry.content)) assertNoControlTokens(entry.content, `Tavern 布局条目 ${entry.key}（${entry.role}）`)
+  }
   if (entries.some(entry => entry.compatibilityFallback)) throw new Error('Tavern 冻结布局缺少模板精确位置，不能用于真实请求；请修订模板后开启下一轮')
   const messages = hostMessages(requestMessages, plan)
   const positions = new Map<string, number>()
@@ -534,13 +553,13 @@ export function projectPresetRequest(options: Readonly<GenerateOptions>, session
   // 丢掉旧尾块会让前缀断在上一轮输入之后，其后的回复与工具结果每轮全价重付。
   // 载体已被压缩的轮次不再重放；元数据损坏只放弃这一轮的缓存重放，不阻断当前请求。
   if (plan.cacheFirst) {
-    const replayed = new Set([`${plan.sessionId} ${plan.turn}`])
+    const replayed = new Set([`${plan.sessionId}\u0000${plan.turn}`])
     requestMessages.forEach((message, index) => {
       if (index === carrierIndex) return
       let past: PresetRequestPlan | undefined
       try { past = planFromMessage(message) } catch { return }
       if (!past?.cacheFirst) return
-      const key = `${past.sessionId} ${past.turn}`
+      const key = `${past.sessionId}\u0000${past.turn}`
       if (replayed.has(key)) return
       replayed.add(key)
       const tail = turnTailMessages(past)
@@ -556,6 +575,7 @@ export function projectPresetRequest(options: Readonly<GenerateOptions>, session
     const message = messages[index]
     if (message) projected.push(message)
   }
+  assertHostSystemLeading(messages, projected)
   const effective = applySystemPolicy(projected, projection)
   if (projection.model) {
     const contextWindow = projection.model.context?.contextWindow

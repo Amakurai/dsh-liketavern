@@ -1,0 +1,26 @@
+/**
+ * 入模控制标记检测。
+ *
+ * 预设、模板与卡片可以把分词器控制标记（`<|im_start|>`、`<｜Assistant｜>`、`[INST]` 等）
+ * 当作普通文字塞进提示词。对把 `<｜…｜>` 当特殊词元处理的供应商，这等于伪造轮次边界或
+ * 续写前缀；对不这么处理的供应商，它只是无意义的噪声，却也让同一份预设在不同通道上
+ * 行为分叉。两种结果都不能接受，因此在**冻结布局**与**请求投影**两处都拒绝。
+ *
+ * 只认真正的控制标记形状；HTML、Markdown 表格与数学里的 `<`、`>`、`|` 不受影响。
+ */
+/** 一处控制标记命中。index 是 UTF-16 字符位置，仅用于报错定位。 */
+export interface ControlTokenFinding {
+    token: string;
+    index: number;
+}
+/** 便宜的预筛：没有候选开头就不跑正则，热路径上绝大多数条目在第一轮就被排除。 */
+export declare function mayContainControlTokens(text: string): boolean;
+/** 找出文本里的控制标记，按出现位置排序；limit 防止恶意长文本制造无界结果。 */
+export declare function findControlTokens(text: string, limit?: number): ControlTokenFinding[];
+/** 文本里是否含有控制标记；调用方只关心真假时用它，不构造数组。 */
+export declare function hasControlToken(text: string): boolean;
+/**
+ * 命中即失败。错误文案要能直接指导用户改哪一条：写明位置、标记原文与字符偏移。
+ * 这里不提供"静默剥离"选项——改写用户正文后若不出现在轨迹里，比拒绝更难排查。
+ */
+export declare function assertNoControlTokens(text: string, where: string): void;

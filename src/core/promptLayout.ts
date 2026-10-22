@@ -3,6 +3,7 @@
  * 布局在每轮首次组装后冻结；适配器将它投影到当前 Message[]，不重新求值宏、模板或世界书。
  */
 import { isSyntheticUserText } from './dshPrompt.js'
+import { assertNoControlTokens } from './promptSafety.js'
 import type { ChatMessage, ChatRole } from './types.js'
 import { z } from 'zod'
 
@@ -109,6 +110,10 @@ export function createPromptLayout(history: readonly PromptHistoryAnchor[], frag
     history: history.map(anchor => ({ ...anchor })),
     entries: fragments.filter(fragment => fragment.content.trim()).map((fragment, index) => {
       const placement = fragment.placement
+      // 冻结时就拒绝：控制标记一旦进入布局，会被每轮投影重复送进请求。
+      // 报错点名角色与来源，用户能直接找到是预设、模板还是世界书写了这一段。
+      assertNoControlTokens(fragment.content,
+        `提示词布局条目 #${index + 1}（${fragment.role}，来源 ${fragment.sourceKeys.slice(0, 3).join(' / ') || '未标注'}）`)
       return {
         ...fragment, key: `entry:${index}`, sourceKeys: [...fragment.sourceKeys],
         placement: placement.kind === 'entry-relative' ? { ...placement } : placement.kind === 'depth'

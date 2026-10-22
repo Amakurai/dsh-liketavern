@@ -143,6 +143,8 @@ live standing 在模拟预算裁剪前构造，历史增长不再导致角色定
 
 assistant 预设条目只存在于请求副本，携带 tavernProjection 标记，绝不写入持久 assistant/message 或伪造历史模型输出；末尾 assistant 不代表供应商专用 prefill/prefix，当前未实现该协议。代答仍使用独立的 system/history 请求，采用历史正则结果，不等同于模拟完整角色序列。
 
+预设与模板条目在冻结布局与请求投影两处都跑控制标记检查：`<｜…｜>`、`<|im_start|>`、`[INST]`、`<start_of_turn>` 等模型控制标记一旦出现即明确失败，并点名条目角色与来源；不提供静默剥离，因为改写过的正文若不出现在轨迹里比拒绝更难排查。普通 Markdown、HTML 与 `<think>` 不受影响。投影还会断言宿主 system 仍是请求首条：适配器靠“开头连续的 system”识别系统提示，插件条目一旦把它挤进历史中段，system 会降级成普通 system 更新或历史消息——请求照样发得出去，行为却已改变，因此当场失败而不是降级。
+
 Tavern 模式经 `dsh-agent-preset-registry` 注册和撤销，不再生成 `.agent-presets` 文件。设置通过宿主 volatile Config 与 SettingsForms 更新当前 profile；固定 entry id `dsh-tavern` 让宿主可迁移旧 settings.yaml 的同名节。
 
 Tavern 预设挂载官方 `dsh-agent-tool-presentation` 的 `mode: ptc`。七个业务工具由宿主生成 SDK，模型只直接调用 `run_code`；工具规范输出由 schema 验证。独立只读工具声明 `isConcurrencySafe`，可在同一程序内并行；写工具不声明并行，使用宿主独占屏障。依赖前项结果的操作依次 await，中间结果只有程序返回/打印的部分进入模型历史，子调用仍由宿主记录。步骤 notice 按模型 step 去重，不按 PTC 子调用累加；写入确认仍保留。模型编写的 PTC 程序使用宿主 `dsh-ptc-runtime-node` 的子进程运行时，第三方卡片/EJS 继续使用原有隔离边界，不能把第三方脚本转交 PTC 执行。

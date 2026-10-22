@@ -69,6 +69,8 @@ it('普通 Markdown、HTML 与 <think> 不误伤，正文原样进入布局', ()
   expect(layout.entries[0]!.content).toBe(content)
   expect(hasControlToken(content)).toBe(false)
   expect(findControlTokens('a < b | c')).toEqual([])
+  expect(hasControlToken('颜文字 <|-_-|> 与 <|._.|>')).toBe(false)
+  expect(findControlTokens('<|reserved_special_token_0|>').map(finding => finding.token)).toEqual(['<|reserved_special_token_0|>'])
 })
 
 it('投影兜住绕过冻结期的条目（旧布局、手写计划、外部写入）', () => {

@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { expect, it } from 'vitest'
+import { extractReleaseNotes, extractReleaseTitle } from '../scripts/release-notes.mjs'
 
 const releaseScript = fileURLToPath(new URL('../scripts/release.mjs', import.meta.url))
 const notesScript = fileURLToPath(new URL('../scripts/release-notes.mjs', import.meta.url))
@@ -29,8 +30,11 @@ async function makeRepo() {
   await cp(releaseScript, join(work, 'scripts', 'release.mjs'))
   await cp(notesScript, join(work, 'scripts', 'release-notes.mjs'))
   await writeFile(join(work, 'package.json'), `${JSON.stringify({ name: 'dsh-liketavern', version: '0.5.5' }, null, 2)}\n`)
+  await writeFile(join(work, 'package-lock.json'), `${JSON.stringify({ name: 'dsh-liketavern', version: '0.5.5',
+    lockfileVersion: 3, requires: true, packages: { '': { name: 'dsh-liketavern', version: '0.5.5' } } }, null, 2)}\n`)
   await writeFile(join(work, 'CHANGELOG.md'), [
     '# 更新日志', '', '## 未发布', '', '- 进行中的条目', '',
+    '## 0.6.0', '',
     '## 0.5.6（2026-10-22）', '', '- 新版本条目', '',
     '## 0.5.5（2026-10-20）', '', '- 旧版本条目', '',
   ].join('\n'))
@@ -60,6 +64,10 @@ it('守卫全部通过时：改版本、提交、打 tag、推到裸远端', { t
     expect(result.stderr).toBe('')
     expect(result.status).toBe(0)
     expect(await version(repo.work)).toBe('0.5.6')
+    // 锁文件根版本随发布提交一起前进，工作树不留下未提交改动。
+    const lock = JSON.parse(await readFile(join(repo.work, 'package-lock.json'), 'utf8'))
+    expect([lock.version, lock.packages[''].version]).toEqual(['0.5.6', '0.5.6'])
+    expect(git(repo.work, 'status', '--porcelain')).toBe('')
     expect(git(repo.work, 'log', '-1', '--pretty=%s')).toBe('发布：v0.5.6')
     expect(git(repo.work, 'tag', '--list')).toBe('v0.5.6')
     // 远端真的收到了提交与 tag，而不是只在本机成功。
@@ -92,6 +100,19 @@ it('CHANGELOG 缺本版段时拒绝发版', { timeout: 120_000 }, async () => {
     const result = release(repo.work, '0.5.7')
     expect(result.status).toBe(1)
     expect(result.stderr).toContain('缺少 "## 0.5.7"')
+    expect(git(repo.work, 'tag', '--list')).toBe('')
+  } finally {
+    await rm(repo.base, { recursive: true, force: true })
+  }
+})
+
+it('CHANGELOG 本版段为空时本地就拒绝，不把 tag 推给必然失败的 CI', { timeout: 120_000 }, async () => {
+  const repo = await makeRepo()
+  try {
+    const result = release(repo.work, '0.6.0')
+    expect(result.status).toBe(1)
+    expect(result.stderr).toContain('段内容为空')
+    expect(await version(repo.work)).toBe('0.5.5')
     expect(git(repo.work, 'tag', '--list')).toBe('')
   } finally {
     await rm(repo.base, { recursive: true, force: true })
@@ -155,15 +176,18 @@ it('--dry-run 只跑守卫，不写版本、不提交、不推 tag；未跟踪�
   }
 })
 
-it('release-notes 从真实 CHANGELOG 抽段，缺段即失败', { timeout: 60_000 }, async () => {
+it('release-notes 从真实 CHANGELOG 抽段并生成 Release 标题，缺段即失败', { timeout: 60_000 }, async () => {
   const base = await mkdtemp(join(tmpdir(), 'tavern-notes-'))
   try {
     const out = join(base, 'notes.md')
-    const ok = spawnSync(process.execPath, [notesScript, '0.5.5', 'CHANGELOG.md', out], { cwd: repoRoot, encoding: 'utf8' })
+    const titlePath = join(base, 'title.txt')
+    const ok = spawnSync(process.execPath, [notesScript, '0.5.5', 'CHANGELOG.md', out, titlePath],
+      { cwd: repoRoot, encoding: 'utf8' })
     expect(ok.status).toBe(0)
     const notes = await readFile(out, 'utf8')
     expect(notes.length).toBeGreaterThan(200)
     expect(notes).not.toContain('未发布')
+    expect((await readFile(titlePath, 'utf8')).trim()).toBe('v0.5.5')
 
     const missing = spawnSync(process.execPath, [notesScript, '9.9.9', 'CHANGELOG.md', join(base, 'none.md')],
       { cwd: repoRoot, encoding: 'utf8' })
@@ -172,4 +196,20 @@ it('release-notes 从真实 CHANGELOG 抽段，缺段即失败', { timeout: 60_0
   } finally {
     await rm(base, { recursive: true, force: true })
   }
+})
+
+it('版本段标题的说明文字成为 Release 标题；空段返回 null', () => {
+  const changelog = [
+    '## 未发布', '', '- 进行中', '',
+    '## 0.5.6（2026-10-22）预设注入加固与发版纪律', '', '- 条目 A', '',
+    '## [0.7.0] - 大版本', '', '- 条目 B', '',
+    '## 0.8.0', '', '- 条目 C', '',
+  ].join('\n')
+  expect(extractReleaseTitle(changelog, '0.5.6')).toBe('v0.5.6：预设注入加固与发版纪律')
+  expect(extractReleaseTitle(changelog, '0.7.0')).toBe('v0.7.0：大版本')
+  expect(extractReleaseTitle(changelog, '0.8.0')).toBe('v0.8.0')
+  expect(extractReleaseTitle(changelog, '9.9.9')).toBe('v9.9.9')
+  expect(extractReleaseNotes(changelog, '0.5.6')).toBe('- 条目 A')
+  expect(extractReleaseNotes(changelog, '9.9.9')).toBeNull()
+  expect(extractReleaseNotes('## 0.9.0\n\n## 0.8.0\n\n- x', '0.9.0')).toBeNull()
 })

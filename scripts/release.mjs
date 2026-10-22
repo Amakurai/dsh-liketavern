@@ -12,9 +12,10 @@
  * 退出码：0 成功或 --dry-run 通过；1 任一守卫拒绝（stderr 带原因）。
  */
 import { spawnSync } from 'node:child_process'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { extractReleaseNotes } from './release-notes.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -61,15 +62,6 @@ function nextVersion(current, requested) {
   return requested
 }
 
-/** CHANGELOG 段标题允许 `## 1.2.3`、`## 1.2.3（日期）`、`## [1.2.3]` 三种写法。 */
-function hasChangelogSection(changelog, version) {
-  return changelog.split(/\r?\n/).some(line => {
-    const text = line.trim()
-    return text === `## ${version}` || text.startsWith(`## ${version} `) || text.startsWith(`## ${version}（`)
-      || text.startsWith(`## [${version}]`)
-  })
-}
-
 const options = parseArgs(process.argv.slice(2))
 if (!options.version) fail('用法：node scripts/release.mjs <x.y.z|patch|minor|major> [--dry-run] [--branch main] [--remote origin]')
 
@@ -96,9 +88,10 @@ if (!git(['merge-base', '--is-ancestor', upstream, 'HEAD'], { allowFailure: true
 }
 if (git(['ls-remote', '--tags', options.remote, `refs/tags/${tag}`]).out) fail(`远端已存在 tag ${tag}`)
 
+// 与 CI 用同一个抽取函数：本地放行而 CI 拒绝，意味着 tag 已推出去才红灯。
 const changelog = readFileSync(join(root, 'CHANGELOG.md'), 'utf8')
-if (!hasChangelogSection(changelog, next)) {
-  fail(`CHANGELOG.md 缺少 "## ${next}" 段；release workflow 用它生成 Release notes`)
+if (extractReleaseNotes(changelog, next) === null) {
+  fail(`CHANGELOG.md 缺少 "## ${next}" 段或段内容为空；release workflow 用它生成 Release notes`)
 }
 
 if (options.dryRun) {
@@ -109,10 +102,21 @@ if (options.dryRun) {
 // ── 不可逆动作 ────────────────────────────────────────────────────────────────
 pkg.version = next
 writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`)
+// 锁文件根版本与 package.json 同步，和 npm version 的行为一致；否则发布提交留下过期锁文件。
+const lockPath = join(root, 'package-lock.json')
+const staged = ['package.json', 'CHANGELOG.md']
+if (existsSync(lockPath)) {
+  const lock = JSON.parse(readFileSync(lockPath, 'utf8'))
+  lock.version = next
+  if (lock.packages?.['']) lock.packages[''].version = next
+  writeFileSync(lockPath, `${JSON.stringify(lock, null, 2)}\n`)
+  staged.push('package-lock.json')
+}
 
-git(['add', 'package.json', 'CHANGELOG.md'])
+git(['add', ...staged])
 git(['commit', '-m', `发布：${tag}`])
 git(['tag', tag])
-git(['push', options.remote, `HEAD:refs/heads/${options.branch}`, `refs/tags/${tag}`])
+// --atomic：分支被拒（远端已前进）时 tag 也不落地，否则 CI 会发布一个不在 main 上的提交。
+git(['push', '--atomic', options.remote, `HEAD:refs/heads/${options.branch}`, `refs/tags/${tag}`])
 
 console.log(`\n已提交并推送 ${tag}。.github/workflows/release.yml 会用同一段 CHANGELOG 发布 npm 并建 GitHub Release。\n`)

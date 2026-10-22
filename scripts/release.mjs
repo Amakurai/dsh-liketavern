@@ -6,8 +6,9 @@
  *   node scripts/release.mjs patch|minor|major
  *   node scripts/release.mjs 0.6.0 --dry-run     只跑守卫，不改任何东西
  *
- * 本脚本**不发布**：push 出 v* tag 后由 .github/workflows/release.yml 唯一执行 npm publish
- * 与 GitHub Release，避免本地与 CI 双发竞争。tag 之前请先确认 CI 在 main 上是绿的。
+ * 本脚本**不发布**：push 出 v* tag 后由 .github/workflows/release.yml 唯一创建 GitHub Release
+ * 并附上 npm pack 产物（分发走 tag + Release，不走 npm），避免本地与 CI 双发竞争。
+ * tag 之前请先确认 CI 在 main 上是绿的。
  *
  * 退出码：0 成功或 --dry-run 通过；1 任一守卫拒绝（stderr 带原因）。
  */
@@ -119,4 +120,4 @@ git(['tag', tag])
 // --atomic：分支被拒（远端已前进）时 tag 也不落地，否则 CI 会发布一个不在 main 上的提交。
 git(['push', '--atomic', options.remote, `HEAD:refs/heads/${options.branch}`, `refs/tags/${tag}`])
 
-console.log(`\n已提交并推送 ${tag}。.github/workflows/release.yml 会用同一段 CHANGELOG 发布 npm 并建 GitHub Release。\n`)
+console.log(`\n已提交并推送 ${tag}。.github/workflows/release.yml 会用同一段 CHANGELOG 建 GitHub Release 并附上安装包。\n`)

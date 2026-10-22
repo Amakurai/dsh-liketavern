@@ -5,6 +5,8 @@
  */
 import { describe, expect, it } from 'vitest'
 import { attachHelperEvents } from '../../src/client/helperEventRouter.js'
+import { closeHelperFrame } from '../../src/node/helperFrameLease.js'
+import type { TavernState } from '../../src/node/state.js'
 import { METHODS } from '../../src/remote.js'
 
 const base = { sessionId: 's', messageId: 0, storyId: 'st', frameId: 'frame-12345678', epoch: 1, readOnly: false }
@@ -43,5 +45,9 @@ describe('卡面运行时身份校验口径', () => {
     }).success
     expect(edit('short')).toBe(false)
     expect(edit('token-1234')).toBe(true)
+    const dummyState = {} as TavernState
+    expect(() => closeHelperFrame(dummyState, { ...base, runtimeId: 'a' })).not.toThrow()
+    expect(() => closeHelperFrame(dummyState, { ...base, runtimeId: '' })).toThrow('卡面运行时身份无效')
+    expect(() => closeHelperFrame(dummyState, { ...base, frameId: 'short', runtimeId: 'a' })).toThrow('卡面运行时身份无效')
   })
 })

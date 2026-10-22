@@ -15,6 +15,7 @@ export function undoWorldDelta(before: string | null, after: string | null, curr
   for (const id of new Set([...previous.keys(), ...written.keys()])) {
     if (previous.get(id) !== written.get(id) && actual.get(id) === written.get(id)) restore.set(id, previous.get(id))
   }
+  if (restore.size === 0) return current
   const result: string[] = []
   for (const line of lines(current)) {
     const id = idOf(line)

@@ -180,6 +180,7 @@ function rollbackTarget(rec: RecordLine, current: string | null): { restore: tru
     }
     const merged = undoWorldDelta(rec.before, rec.after ?? null, current === null ? null : Buffer.from(current, 'base64').toString('utf8'))
     desired = merged === null ? null : Buffer.from(merged).toString('base64')
+    if (desired === current) return { restore: false }
   }
   return { restore: true, value: desired }
 }

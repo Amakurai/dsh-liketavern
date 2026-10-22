@@ -107,6 +107,18 @@ describe('人工修订与楼层逆操作', () => {
     await rollback()
     expect((await panel.deltas.list()).map((item) => item.content)).toEqual(['会话 B'])
   })
+
+  it('世界状态变更全部被后续人工删除或改写时，回滚不复活空文件且记入 preservedPaths', async () => {
+    const { ws, panel, deltas, rollback } = await setup()
+    await panel.fs.writeText('state/world-delta.jsonl', '')
+    const created = await deltas.append(delta('模型写入'))
+    await ws.wal.commitFloor('s#t1')
+    await panel.fs.delete('state/world-delta.jsonl')
+    const restored = await rollback()
+    expect(restored).toEqual([])
+    expect(await panel.fs.readText('state/world-delta.jsonl')).toBeNull()
+    expect((await ws.wal.listFloors())[0]?.rolledBack).toBe(true)
+  })
 })
 
 describe('原子写入与失败恢复', () => {

@@ -7,6 +7,7 @@ Desktop.ini
 # 编辑器与本机覆盖，不进仓库
 .idea/
 .vscode/
+.claude/
 *.local
 .env
 .env.*

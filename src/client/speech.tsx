@@ -700,7 +700,7 @@ function SpeechBubbleSession(props: SpeechBubbleProps) {
           },
           published:()=>{
             if(record.settled||stageRef.current!==record||record.phase!=='publishing')return
-            record.settled=true;clearTimeout(record.timer)
+            record.settled=true;clearTimeout(record.timer);release()
             setDisplay({base:record.base,value:record.value,id:record.id});stageRef.current=null;setStage(null);resolve()
           }}
         return {check,after:()=>after,current:()=>alive&&renderLatest.current.status==='ready'&&renderLatest.current.value===next.value,

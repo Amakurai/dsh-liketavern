@@ -29,8 +29,9 @@ export async function prepareHelperDisplay(sessionId:string,request:HelperDispla
     let active=true
     const check=()=>{if(!active)throw new HelperDisplayError('stale');for(const lease of leases)lease.check()}
     const cancel=()=>{if(!active)return;active=false;for(const lease of leases)lease.cancel();busy.delete(sessionId)}
-    return {check,cancel,commit:()=>{try{check();for(const lease of leases)lease.commit()
-      if(request.ids===null)void Promise.all(leases.map(lease=>lease.after?.())).then(()=>emitHelperHostEvent(sessionId,request.storyId,'chat_id_changed',[request.storyId],()=>leases.every(lease=>lease.current?.()!==false))).catch(error=>reportHelperHostEventError(sessionId,request.storyId,error))
-    }catch(error){cancel();throw error}finally{active=false;busy.delete(sessionId)}}}
+    return {check,cancel,commit:()=>{let after:Promise<unknown>[]=[];try{check();for(const lease of leases)lease.commit()
+      after=leases.flatMap(lease=>{const pending=lease.after?.();return pending?[pending]:[]})
+      if(request.ids===null)void Promise.all(after).then(()=>emitHelperHostEvent(sessionId,request.storyId,'chat_id_changed',[request.storyId],()=>leases.every(lease=>lease.current?.()!==false))).catch(error=>reportHelperHostEventError(sessionId,request.storyId,error))
+    }catch(error){cancel();throw error}finally{active=false;if(after.length)void Promise.allSettled(after).finally(()=>busy.delete(sessionId));else busy.delete(sessionId)}}}
   }catch(error){for(const lease of leases)lease.cancel();busy.delete(sessionId);throw error}finally{clearTimeout(timer)}
 }

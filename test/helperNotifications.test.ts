@@ -47,3 +47,32 @@ it('显示准备超时可取消挂起读取，迟到成功不能再发布，下�
     stop();const retry=await prepareHelperDisplay('timeout',{storyId:'story',historyRevision:'v',ids:[]});retry.commit()
   }finally{stop();vi.useRealTimers()}
 })
+
+it('隐藏候选投影尚未完成发布或中止前保持会话 busy 锁，避免并发刷新侵入其它气泡',async()=>{
+  const {registerHelperDisplay,prepareHelperDisplay}=await import('../src/client/helperDisplay.js')
+  let finishStage!:()=>void
+  const stagedDriver=vi.fn(async()=>({
+    check:()=>{},
+    commit:()=>{},
+    cancel:()=>{},
+    after:()=>new Promise<void>(resolve=>{finishStage=resolve}),
+  }))
+  const siblingDriver=vi.fn(async()=>({check:()=>{},commit:()=>{},cancel:()=>{}}))
+  const stops=[registerHelperDisplay('staging-busy',stagedDriver),registerHelperDisplay('staging-busy',siblingDriver)]
+  const request={storyId:'story',historyRevision:'v',ids:[0]}
+  try{
+    const lease=await prepareHelperDisplay('staging-busy',request)
+    expect(stagedDriver).toHaveBeenCalledTimes(1)
+    expect(siblingDriver).toHaveBeenCalledTimes(1)
+    lease.commit()
+    await expect(prepareHelperDisplay('staging-busy',{storyId:'story',historyRevision:'v',ids:[1]})).rejects.toThrow('busy')
+    expect(stagedDriver).toHaveBeenCalledTimes(1)
+    expect(siblingDriver).toHaveBeenCalledTimes(1)
+    finishStage()
+    await Promise.resolve()
+    await Promise.resolve()
+    const next=await prepareHelperDisplay('staging-busy',{storyId:'story',historyRevision:'v',ids:[1]})
+    expect(siblingDriver).toHaveBeenCalledTimes(2)
+    next.cancel()
+  }finally{for(const stop of stops)stop()}
+})

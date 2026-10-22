@@ -24,6 +24,8 @@ export declare function assertBindingFileIdentity(paths: TavernPaths, sessionId:
  */
 export interface BindingReferenceScan {
     sessionIds: string[];
+    /** 合法绑定实际使用的剧情；旧绑定未记录 storyId 时按首次读取会迁移出的 legacy 剧情计。 */
+    storyIds: string[];
     corruptFiles: string[];
 }
 export declare function listBindingReferencesForCard(paths: TavernPaths, cardId: string): Promise<BindingReferenceScan>;

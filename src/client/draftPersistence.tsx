@@ -4,6 +4,7 @@ import type { Dispatch, ReactNode, SetStateAction } from 'react'
 import type { TavernRemote } from './types.js'
 import { useT } from './i18n.js'
 import { Btn, Err, Skeleton } from './util.js'
+import { randomUuid } from '../core/secureRandom.js'
 
 type Fields = Record<string, unknown>
 type Snapshot = { version: 1; fields: Fields }
@@ -25,12 +26,12 @@ function ownerId(): string {
     const key = 'dsh-tavern-editor-owner'
     const existing = window.sessionStorage.getItem(key)
     if (existing && /^[a-zA-Z0-9_-]{8,80}$/.test(existing)) return existing
-    const owner = crypto.randomUUID()
+    const owner = randomUuid()
     window.sessionStorage.setItem(key, owner)
     return owner
   } catch {
     // 禁用浏览器存储时仍可在当前页面暂存；不会把用户内容放进本地存储。
-    return fallbackOwner ??= crypto.randomUUID()
+    return fallbackOwner ??= randomUuid()
   }
 }
 

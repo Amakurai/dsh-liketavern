@@ -34,6 +34,7 @@ import { emitHelperHostEvent,hasHelperEventAudience } from './helperEventRouter.
 import { attachHelperEvents,attachCardBridgeRuntime } from './helperEventRouter.js'
 import type { RenderedOutput } from '../remote.js'
 import type { HelperFrameLease } from '../core/helperFrame.js'
+import { randomUuid } from '../core/secureRandom.js'
 type FrameWrite<T> = T & { frameLease?: HelperFrameLease }
 
 function displayFailure(error:unknown,t:ReturnType<typeof useT>):string{
@@ -69,7 +70,7 @@ export function SpeechHtmlFrame(props: {
 }) {
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
   // 私有 frameId、epoch 和服务端令牌仅留在可信宿主，不发送给卡面。
-  const frameId = useRef(crypto.randomUUID()), frameEpoch = useRef(0), retiredRuntimes = useRef(new Set<string>())
+  const frameId = useRef(randomUuid()), frameEpoch = useRef(0), retiredRuntimes = useRef(new Set<string>())
   const fixedFrameIdentity=useRef(JSON.stringify([props.helperBinding?.sessionId,props.helperMessageId]))
   const [frameH, setFrameH] = useState<number | null>(null)
   const t = useT()
@@ -87,7 +88,7 @@ export function SpeechHtmlFrame(props: {
 
   useLayoutEffect(() => {
     const fixedIdentity=JSON.stringify([props.helperBinding?.sessionId,props.helperMessageId])
-    if(fixedFrameIdentity.current!==fixedIdentity){frameId.current=crypto.randomUUID();frameEpoch.current=0;fixedFrameIdentity.current=fixedIdentity}
+    if(fixedFrameIdentity.current!==fixedIdentity){frameId.current=randomUuid();frameEpoch.current=0;fixedFrameIdentity.current=fixedIdentity}
     let active=true
     const send=(message:Record<string,unknown>)=>{if(active)iframeRef.current?.contentWindow?.postMessage(message,'*')}
     const eventEndpoint=props.helperBinding?attachHelperEvents(props.helperBinding.sessionId,props.helperBinding.storyId,send,undefined,retiredRuntimes.current):attachCardBridgeRuntime(send,retiredRuntimes.current)
@@ -138,7 +139,7 @@ export function SpeechHtmlFrame(props: {
     let editPending=false,editFinished=false,frameReady=false,legacyHeight=false
     const pending=new Set<string>(),scriptReceipts=new Set<string>(),editReceipts=new Map<string,NonNullable<HelperMessageEditResult['branch']>>()
     let displayBusy=false,guardSerial=0
-    const heldGuards=new Set<string>(),guardEpoch=crypto.randomUUID()
+    const heldGuards=new Set<string>(),guardEpoch=randomUuid()
     const displayReceipts=new Map<string,{lease:HelperDisplayLease;timer:ReturnType<typeof setTimeout>}>()
     const guards=new Map<string,{resolve:(lease:HelperDisplayLease)=>void;reject:(error:Error)=>void;timer:ReturnType<typeof setTimeout>;runtimeId:string}>()
     const unlock=(id:string,runtimeId:string)=>iframeRef.current?.contentWindow?.postMessage({source:'dsh-tavern-card',action:'helperDisplayUnlock',requestId:id,runtimeId},'*')

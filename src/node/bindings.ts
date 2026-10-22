@@ -12,7 +12,7 @@ import { assertValidCardId } from '../state/workspace.js'
 import type { SessionBinding, WalLineageEntry } from '../core/binding.js'
 import {helperWorldbookSettingsCodec} from '../core/helperWorldbookSettings.js'
 import { atomicWrite } from '../state/atomicWrite.js'
-import { storyRoot } from '../state/story.js'
+import { legacyStoryId, storyRoot } from '../state/story.js'
 import { withWorkspaceLock } from '../state/workspaceLock.js'
 
 export type { SessionBinding, WalLineageEntry } from '../core/binding.js'
@@ -198,6 +198,8 @@ export async function assertBindingFileIdentity(paths: TavernPaths, sessionId: s
  */
 export interface BindingReferenceScan {
   sessionIds: string[]
+  /** 合法绑定实际使用的剧情；旧绑定未记录 storyId 时按首次读取会迁移出的 legacy 剧情计。 */
+  storyIds: string[]
   corruptFiles: string[]
 }
 
@@ -236,10 +238,11 @@ export async function listBindingReferencesForCard(paths: TavernPaths, cardId: s
   try {
     entries = await readdir(paths.sessions, { withFileTypes: true })
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { sessionIds: [], corruptFiles: [] }
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { sessionIds: [], storyIds: [], corruptFiles: [] }
     throw error
   }
   const references: string[] = []
+  const storyIds: string[] = []
   const corruptFiles: string[] = []
   for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
     const file = entry.name
@@ -309,7 +312,10 @@ export async function listBindingReferencesForCard(paths: TavernPaths, cardId: s
     const expected = sessionFile(paths, parsed.sessionId)
     const sameFile = process.platform === 'win32' ? actual.toLowerCase() === expected.toLowerCase() : actual === expected
     if (!sameFile) corruptFiles.push(file)
-    if (isTargetCard(parsed.cardId)) references.push(parsed.sessionId)
+    if (isTargetCard(parsed.cardId)) {
+      references.push(parsed.sessionId)
+      storyIds.push(parsed.storyId ?? legacyStoryId(parsed.sessionId))
+    }
   }
-  return { sessionIds: [...new Set(references)].sort(), corruptFiles: [...new Set(corruptFiles)].sort() }
+  return { sessionIds: [...new Set(references)].sort(), storyIds: [...new Set(storyIds)].sort(), corruptFiles: [...new Set(corruptFiles)].sort() }
 }

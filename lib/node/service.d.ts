@@ -61,8 +61,12 @@ export declare class TavernService extends TypertRemoteService implements Tavern
         dataBase64: string;
         importWorldBook?: boolean;
     }): Promise<TavernMethodResults['importCharacter']>;
+    getCharacterDeletePlan(request: {
+        cardId: string;
+    }): Promise<TavernMethodResults['getCharacterDeletePlan']>;
     deleteCharacter(request: {
         cardId: string;
+        discardStoryIds?: string[];
     }): Promise<TavernMethodResults['deleteCharacter']>;
     getCharacterDetail(request: {
         cardId: string;

@@ -12,6 +12,9 @@ import type { TavernServiceContract } from '../remote.js'
 import type { Context } from '@deepseek-ai/cordis'
 import type { LlmRuntime } from '@deepseek-ai/dsh-llm'
 import type { Session } from '@deepseek-ai/dsh-session'
+import { sessionModelRoute } from './modelRoute.js'
+import { PRESET_ADAPTER_SOURCE_PROVIDER } from './presetAdapter.js'
+import { measureStaleTurnContext } from './turnContextDiagnostics.js'
 import type { TavernSettingsScope } from './config.js'
 import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import { estimateTokens } from '../core/tokenize.js'
@@ -155,8 +158,12 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
     return { cardId: ws.cardId, name: ws.card.name }
   }
 
-  async deleteCharacter(request: { cardId: string }): Promise<TavernMethodResults['deleteCharacter']> {
-    const { salvagedLorebook } = await this.state.deleteCharacter(request.cardId)
+  async getCharacterDeletePlan(request: { cardId: string }): Promise<TavernMethodResults['getCharacterDeletePlan']> {
+    return this.state.characterDeletePlan(request.cardId)
+  }
+
+  async deleteCharacter(request: { cardId: string; discardStoryIds?: string[] }): Promise<TavernMethodResults['deleteCharacter']> {
+    const { salvagedLorebook } = await this.state.deleteCharacter(request.cardId, { discardStoryIds: request.discardStoryIds })
     return { deleted: true, salvagedLorebook }
   }
 
@@ -926,14 +933,21 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
    */
   getContextUsage(request: { sessionId: string }): TavernMethodResults['getContextUsage'] {
     const session = this.ctx.sessions.get(request.sessionId as Session['id'])
-    if (!session) return { usage: null }
+    if (!session) return { usage: null, staleTurnContext: null }
+    // 旧 tavern:turn 快照只在非 DeepSeek 投影通道真正发给模型；投影通道仍报告数量，标记为已剔除。
+    const agent = this.ctx.agents?.get(request.sessionId as Session['id'])
+    const projected = Boolean(this.state.presetAdapter) && agent !== undefined
+      && sessionModelRoute(agent).provider === PRESET_ADAPTER_SOURCE_PROVIDER
+    // 辅助诊断不能拖垮用量本身：读取会话历史失败时只是不报告累积。
+    let staleTurnContext: TavernMethodResults['getContextUsage']['staleTurnContext'] = null
+    try { staleTurnContext = { ...measureStaleTurnContext(session), projected } } catch { staleTurnContext = null }
     const projections = this.ctx.get('sessionProjections') as
       | { stateOf?(s: Session, key: string): unknown }
       | undefined
     const pressure = projections?.stateOf?.(session, 'contextPressure') as
       | { contextWindow?: number; pressureTokens?: number; surfaceTokens?: number }
       | undefined
-    if (!pressure || typeof pressure.surfaceTokens !== 'number') return { usage: null }
+    if (!pressure || typeof pressure.surfaceTokens !== 'number') return { usage: null, staleTurnContext }
     // token-meter 的状态是 { nodes, breakdown: {...} }；此前按扁平对象读取，三项恒为 null。
     const breakdown = (projections?.stateOf?.(session, 'contextBreakdown') as
       | { breakdown?: { systemTokens?: number; toolsTokens?: number; messageTokens?: number } }
@@ -952,6 +966,7 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
         toolsTokens: breakdown?.toolsTokens ?? null,
         messageTokens: breakdown?.messageTokens ?? null,
       },
+      staleTurnContext,
     }
   }
 

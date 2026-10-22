@@ -148,8 +148,16 @@ export declare const METHODS: {
         value: import("zod/mini").ZodMiniUnknown;
         summary: string;
     };
+    getCharacterDeletePlan: {
+        req: import("zod/mini").ZodMiniObject<{
+            cardId: import("zod/mini").ZodMiniString<string>;
+        }, import("zod/v4/core").$strip>;
+        value: import("zod/mini").ZodMiniUnknown;
+        summary: string;
+    };
     deleteCharacter: {
         req: import("zod/mini").ZodMiniObject<{
+            discardStoryIds: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniArray<import("zod/mini").ZodMiniString<string>>>;
             cardId: import("zod/mini").ZodMiniString<string>;
         }, import("zod/v4/core").$strip>;
         value: import("zod/mini").ZodMiniUnknown;
@@ -601,11 +609,11 @@ export declare const METHODS: {
             bindingRevision: import("zod/mini").ZodMiniString<string>;
             name: import("zod/mini").ZodMiniString<string>;
             operation: import("zod/mini").ZodMiniEnum<{
+                delete: "delete";
                 replace: "replace";
                 get: "get";
                 create: "create";
                 upsert: "upsert";
-                delete: "delete";
             }>;
             revision: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
             entries: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniUnknown>;
@@ -1064,6 +1072,15 @@ export interface ContextUsage {
     toolsTokens: number | null;
     messageTokens: number | null;
 }
+/**
+ * 历史里仍在模型可见面上的旧 tavern:turn 快照（token 为本地估算）。projected=true 表示本会话走
+ * DeepSeek 预设投影，这些旧快照在发信前已被剔除，不占实际请求。
+ */
+export interface StaleTurnContextUsage {
+    snapshots: number;
+    tokens: number;
+    projected: boolean;
+}
 /** 方法名 → 裸业务结果类型。加/改 remote 方法时必须与 METHODS、service 实现、client 镜像同步。 */
 export interface TavernMethodResults {
     getPluginAbout: PluginAbout;
@@ -1110,6 +1127,7 @@ export interface TavernMethodResults {
         cardId: string;
         name: string;
     };
+    getCharacterDeletePlan: import('./node/state.js').CharacterDeletePlan;
     deleteCharacter: {
         deleted: boolean;
         salvagedLorebook: string | null;
@@ -1330,6 +1348,7 @@ export interface TavernMethodResults {
     previewPrompt: PromptPreview;
     getContextUsage: {
         usage: ContextUsage | null;
+        staleTurnContext: StaleTurnContextUsage | null;
     };
     getDataInfo: {
         dataHome: string;
@@ -1403,6 +1422,9 @@ export declare const TYPERT_HOST: {
                     dataBase64: import("zod/mini").ZodMiniString<string>;
                     importWorldBook: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniBoolean<boolean>>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                    cardId: import("zod/mini").ZodMiniString<string>;
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                    discardStoryIds: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniArray<import("zod/mini").ZodMiniString<string>>>;
                     cardId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     cardId: import("zod/mini").ZodMiniString<string>;
@@ -1644,11 +1666,11 @@ export declare const TYPERT_HOST: {
                     bindingRevision: import("zod/mini").ZodMiniString<string>;
                     name: import("zod/mini").ZodMiniString<string>;
                     operation: import("zod/mini").ZodMiniEnum<{
+                        delete: "delete";
                         replace: "replace";
                         get: "get";
                         create: "create";
                         upsert: "upsert";
-                        delete: "delete";
                     }>;
                     revision: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
                     entries: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniUnknown>;
@@ -1912,6 +1934,9 @@ export declare const TYPERT_REMOTE: {
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     cardId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                    discardStoryIds: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniArray<import("zod/mini").ZodMiniString<string>>>;
+                    cardId: import("zod/mini").ZodMiniString<string>;
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     cardId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     expectedRevision: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
@@ -2151,11 +2176,11 @@ export declare const TYPERT_REMOTE: {
                     bindingRevision: import("zod/mini").ZodMiniString<string>;
                     name: import("zod/mini").ZodMiniString<string>;
                     operation: import("zod/mini").ZodMiniEnum<{
+                        delete: "delete";
                         replace: "replace";
                         get: "get";
                         create: "create";
                         upsert: "upsert";
-                        delete: "delete";
                     }>;
                     revision: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
                     entries: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniUnknown>;

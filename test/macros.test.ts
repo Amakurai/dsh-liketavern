@@ -428,3 +428,37 @@ describe('ST 常用宏补全', () => {
     expect(tracker.isDynamic('{{hasvar::hp}}', ctx)).toBe(true)
   })
 })
+
+describe('SillyTavern 新版宏名与变量删除', () => {
+  const card: MacroContext = { ...ctx, description: 'DESC', personality: 'PERS', scenario: 'SCEN', firstMessage: 'HELLO {{char}}',
+    charVersion: 'v2', creatorNotes: 'NOTES', charDepthPrompt: 'DEPTH', mesExamples: '<START>\n{{char}}: hi' }
+
+  it('charDescription/charPersonality/charScenario/greeting 等别名取卡字段，不再原样漏给模型', () => {
+    const unknown = vi.fn()
+    const out = expandMacros('{{charDescription}}|{{charPersonality}}|{{charScenario}}|{{greeting}}|{{charVersion}}|{{creatorNotes}}|{{charCreatorNotes}}|{{charDepthPrompt}}|{{mesExamplesRaw}}',
+      { ...card, onUnknown: unknown })
+    expect(out).toBe('DESC|PERS|SCEN|HELLO Alice|v2|NOTES|NOTES|DEPTH|<START>\nAlice: hi')
+    expect(unknown).not.toHaveBeenCalled()
+  })
+
+  it('deletevar/flushvar 删除变量，varexists 同 hasvar', () => {
+    const store = new Map<string, string>()
+    expect(expandMacros('{{setvar::a::1}}{{setglobalvar::b::2}}{{varexists::a}}{{deletevar::a}}{{varexists::a}}|{{flushglobalvar::b}}{{globalvarexists::b}}', { ...ctx, store }))
+      .toBe('truefalse|false')
+    expect([...store.keys()]).toEqual([])
+  })
+
+  it('依赖分析识别 varexists 读取与 deletevar 写入，卡字段别名沿用字段依赖', () => {
+    const c: MacroContext = { ...ctx, description: '{{lastMessage}}' }
+    expect(createMacroDependencyTracker(c).isDynamic('{{charDescription}}', c)).toBe(true)
+    const tracker = createMacroDependencyTracker(ctx, [{ text: '{{deletevar::flag}}', turnLocal: true }])
+    expect(tracker.isDynamic('{{varexists::flag}}', ctx)).toBe(true)
+    expect(tracker.isDynamic('{{varexists::other}}', ctx)).toBe(false)
+  })
+})
+
+it('先读后清：flushvar 不早于同段 getvar 执行', () => {
+  const store = new Map([['once', 'X']])
+  expect(expandMacros('[{{getvar::once}}]{{flushvar::once}}[{{getvar::once}}]', { ...ctx, store })).toBe('[X][]')
+  expect(store.has('once')).toBe(false)
+})

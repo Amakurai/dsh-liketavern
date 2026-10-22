@@ -59,6 +59,12 @@ const TRIGGER_LOG_SESSIONS_MAX = 64
 const STANDING_PINS_MAX = 256
 
 /** 永久删除前的持久化引用快照；两类引用都为空才允许移除卡目录。 */
+export interface CharacterDeletePlan {
+  stories: Array<StorySummary & { bound: boolean }>
+  boundSessionCount: number
+  corruptBindingCount: number
+}
+
 export interface CharacterReferences {
   sessionIds: string[]
   stories: StorySummary[]
@@ -430,15 +436,35 @@ export class TavernState {
   }
 
   /**
-   * 永久删除角色。会话锁先于卡锁，与 saveBinding（绑定 → 剧情快照）同序；
-   * 有效收纳标记、引用检查与 rm 处在同一临界区，避免恢复后旧确认或预检后新绑定插入。
-   * 任一绑定、已发布 story 或无法归属的损坏 session JSON 存在时
-   * 明确拒绝，不再像旧实现那样连带清掉绑定。cascadeDeleteEmbeddedBook=false 时只在
-   * 预检通过后把内嵌书抢救到世界书库，失败请求不产生半成品抢救文件。
+   * 永久删除前的只读预检：列出角色的全部剧情并标注是否仍被会话绑定。
+   * 宿主没有会话删除事件，删掉宿主会话后剧情会残留；面板据此让用户确认一并删除。
    */
-  async deleteCharacter(cardId: string): Promise<{ salvagedLorebook: string | null }> {
+  async characterDeletePlan(cardId: string): Promise<CharacterDeletePlan> {
     assertValidCardId(cardId)
     const cardRoot = join(this.paths.characters, cardId)
+    return withWorkspaceLock(this.paths.sessions, () => withWorkspaceLock(cardRoot, async () => {
+      const bindingScan = await listBindingReferencesForCard(this.paths, cardId)
+      const bound = new Set(bindingScan.storyIds)
+      return {
+        stories: (await listStories(cardRoot)).map(story => ({ ...story, bound: bound.has(story.id) })),
+        boundSessionCount: bindingScan.sessionIds.length,
+        corruptBindingCount: bindingScan.corruptFiles.length,
+      }
+    }))
+  }
+
+  /**
+   * 永久删除角色。会话锁先于卡锁，与 saveBinding（绑定 → 剧情快照）同序；
+   * 有效收纳标记、引用检查与 rm 处在同一临界区，避免恢复后旧确认或预检后新绑定插入。
+   * 任一绑定或无法归属的损坏 session JSON 存在时明确拒绝，不再像旧实现那样连带清掉绑定。
+   * 无绑定引用的剧情只有逐个出现在 discardStoryIds（用户在确认框里看到的清单）中才随卡删除；
+   * 预检之后新出现的剧情不在清单里，同样拒绝。cascadeDeleteEmbeddedBook=false 时只在
+   * 预检通过后把内嵌书抢救到世界书库，失败请求不产生半成品抢救文件。
+   */
+  async deleteCharacter(cardId: string, options: { discardStoryIds?: readonly string[] } = {}): Promise<{ salvagedLorebook: string | null }> {
+    assertValidCardId(cardId)
+    const cardRoot = join(this.paths.characters, cardId)
+    const confirmed = new Set(options.discardStoryIds ?? [])
     return withWorkspaceLock(this.paths.sessions, () => withWorkspaceLock(cardRoot, async () => {
       let archived: Awaited<ReturnType<typeof readCharacterArchiveMetadata>> = null
       let archiveFailure: unknown
@@ -446,9 +472,12 @@ export class TavernState {
       if (!archived) throw new CharacterNotArchivedError(archiveFailure)
 
       const bindingScan = await listBindingReferencesForCard(this.paths, cardId)
+      const stories = await listStories(cardRoot)
+      const blocked = bindingScan.sessionIds.length > 0 || bindingScan.corruptFiles.length > 0
       const references: CharacterReferences = {
         sessionIds: bindingScan.sessionIds,
-        stories: await listStories(cardRoot),
+        // 有绑定时整卡不能删，剧情全部计入引用；否则只报告用户未确认的剧情。
+        stories: blocked ? stories : stories.filter(story => !confirmed.has(story.id)),
         corruptBindingFiles: bindingScan.corruptFiles,
       }
       if (references.sessionIds.length > 0 || references.stories.length > 0 || references.corruptBindingFiles.length > 0) {
@@ -1283,6 +1312,11 @@ export class TavernState {
     // 快路径：cardId 对应工作区仍在时直接用（resolveStaleBinding 对在册卡只做 cardName 同步），
     // 不必每次读绑定都全库扫描角色目录。只有 cardId 失效（卡被删）才需要全量列表做接回。
     const live = await this.loadCharacter(parsed.cardId)
+    // 「卡不可读」不等于「卡已删除」：目录仍在而 card.json 缺失/损坏时自愈会把会话改绑到
+    // 别的角色或删掉绑定，修好文件后也找不回原剧情。只有目录确实不存在才允许接回。
+    if (!live && await new WorkspaceFs(this.paths.characters, null).exists(parsed.cardId)) {
+      throw new Error(`角色卡 ${parsed.cardName ?? parsed.cardId} 的 card.json 缺失或损坏，无法读取；请修复或从备份恢复后重试`)
+    }
     const resolved = live
       ? parsed.cardName === live.card.name
         ? parsed

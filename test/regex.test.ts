@@ -507,25 +507,38 @@ describe('compileCardRegexScripts', () => {
     expect(compileCardRegexScripts([{ ...base, placement: [0, 3, 4, 6] }], 'c')).toEqual([])
   })
 
-  it('markdownOnly 覆盖为仅 output/render', () => {
+  it('markdownOnly 覆盖为仅 output/render，作用楼层仍随 placement', () => {
     const rules = compileCardRegexScripts([{ ...base, placement: [1, 5], markdownOnly: true }], 'c')
     expect(rules).toHaveLength(1)
     expect(rules[0]!.scopes).toEqual(['output'])
     expect(rules[0]!.timing).toEqual(['render'])
+    expect(rules[0]!.roles).toEqual(['user'])
   })
 
-  it('markdownOnly 把 placement:[1] 的 roles 从 user 复核成 assistant，规则不再永不命中', () => {
-    const rules = compileCardRegexScripts([{ ...base, placement: [1], markdownOnly: true }], 'c')
-    expect(rules[0]!.scopes).toEqual(['output'])
-    expect(rules[0]!.roles).toEqual(['assistant'])
-    const res = applyRegexToMessages(
-      [{ role: 'assistant', content: 'cat' }],
-      rules,
-      { scope: 'output', timing: 'render' },
-      CTX,
-    )
-    expect(res.messages.map((m) => m.content)).toEqual(['dog'])
-    expect(res.applied).toEqual([rules[0]!.id])
+  it('对齐 ST：placement:[1] + markdownOnly 是用户楼层显示美化，不改写 AI 回复', () => {
+    // 社区卡常见的用户气泡包裹正则；旧实现把 roles 改成 assistant，每条回复都被整段包裹。
+    const wrap = { ...base, findRegex: '/^([\\s\\S]*)$/', replaceString: '<div class="user-bubble">$1</div>' }
+    for (const source of ['card', 'preset'] as const) {
+      const rules = source === 'card'
+        ? compileCardRegexScripts([{ ...wrap, placement: [1], markdownOnly: true }], 'c')
+        : compilePresetRegexScripts([{ ...wrap, placement: [1], markdownOnly: true }], 'p')
+      expect(rules[0]!.roles).toEqual(['user'])
+      expect(applyRegexRules('cat', rules, { scope: 'output', timing: 'render' }, CTX).text).toBe('cat')
+      expect(applyRegexToMessages([{ role: 'assistant', content: 'cat' }], rules, { scope: 'output', timing: 'render' }, CTX)
+        .messages[0]!.content).toBe('cat')
+    }
+  })
+
+  it('对齐 ST：仅世界书 placement 的 markdownOnly 不作用于任何气泡', () => {
+    expect(compileCardRegexScripts([{ ...base, placement: [5], markdownOnly: true }], 'c')).toEqual([])
+    const both = compilePresetRegexScripts([{ ...base, placement: [5], markdownOnly: true, promptOnly: true }], 'p')
+    expect(both[0]!.scopes).toEqual(['prompt'])
+    expect(applyRegexRules('cat', both, { scope: 'output', timing: 'render' }, CTX).text).toBe('cat')
+  })
+
+  it('placement:[1,2] + markdownOnly 仍改写 AI 回复显示', () => {
+    const rules = compileCardRegexScripts([{ ...base, placement: [1, 2], markdownOnly: true }], 'c')
+    expect(applyRegexRules('cat', rules, { scope: 'output', timing: 'render' }, CTX).text).toBe('dog')
   })
 
   it('promptOnly 覆盖为 prompt 作用域（assemble + send）', () => {
@@ -565,7 +578,8 @@ describe('compileCardRegexScripts', () => {
     expect(rules[0]!.enabled).toBe(true)
     expect(rules[0]!.scopes).toEqual(['output'])
     expect(rules[0]!.timing).toEqual(['render'])
-    expect(rules[0]!.roles).toEqual(['assistant'])
+    expect(rules[0]!.roles).toEqual(['user', 'assistant'])
+    expect(applyRegexRules('a', rules, { scope: 'output', timing: 'render' }, CTX).text).toBe('b')
   })
 
   it('substituteRegex 按 ST 的 Number() 口径：0/1/2 保留，旧版布尔 true/false 为 1/0，缺省与未知值不代入', () => {

@@ -15,8 +15,8 @@ import { Button, IconArchiveOutlineMedium, IconDownloadOutlineMedium, IconRefres
 import { cachedAvatar, cachedCharacterDetail, invalidateCharacter, notifyCharacterChanged } from '../cache.js'
 import { matchesCharacterSearch } from '../characterSearch.js'
 import { useT } from '../i18n.js'
-import type { CharacterDetail, CharacterInspect, CharacterSummary, TavernRemote } from '../types.js'
-import { Avatar, Btn, ConfirmDialog, Dialog, Err, Field, FileBtn, IconBtn, ListInput, Muted, NumInput, SearchEmpty, SearchInput, Section, Select, Skeleton, Tabs, clickableProps, downloadBase64, downloadJson, errOf, fileToBase64, runAsync, useLoader, useToast } from '../util.js'
+import type { CharacterDeletePlan, CharacterDetail, CharacterInspect, CharacterSummary, TavernRemote } from '../types.js'
+import { Avatar, Btn, ConfirmDialog, Dialog, Err, Field, FileBtn, IconBtn, ListInput, Muted, NumInput, SearchEmpty, SearchInput, Section, Select, Skeleton, Tabs, clickableProps, downloadBase64, downloadJson, errOf, fileToBase64, runAsync, useLoader, useToast, type LoadState } from '../util.js'
 
 /**
  * 兼容性报告的动态键映射：core 新增 code/status 而这里漏配时编译期报错，
@@ -382,6 +382,35 @@ export function CharactersSection(props: { remote: TavernRemote }) {
   return <PersistentEditor remote={props.remote} scope="characters"><CharactersSectionContent {...props} /></PersistentEditor>
 }
 
+/** 永久删除确认框正文：无绑定剧情随卡删除；仍有绑定或损坏绑定时说明原因并禁止确认。 */
+function CharacterDeletePlanView(props: { state: LoadState<CharacterDeletePlan>; busy: boolean; onRetry: () => void }) {
+  const t = useT()
+  if (props.state.status === 'loading' || props.state.status === 'idle') return <Skeleton height={40} />
+  if (props.state.status === 'error') {
+    return <><Err message={props.state.message} /><Btn disabled={props.busy} onClick={props.onRetry}>{t('action.retry')}</Btn></>
+  }
+  const plan = props.state.value
+  const blocked = plan.boundSessionCount > 0 || plan.corruptBindingCount > 0
+  if (!blocked && plan.stories.length === 0) return null
+  return (
+    <div className="dsh-tavern-compatibility">
+      {plan.boundSessionCount > 0 && <p className="dsh-tavern-compatibilityNote">{t('characters.deletePermanently.blocked', { count: plan.boundSessionCount })}</p>}
+      {plan.corruptBindingCount > 0 && <p className="dsh-tavern-compatibilityNote">{t('characters.deletePermanently.corrupt', { count: plan.corruptBindingCount })}</p>}
+      {!blocked && <p className="dsh-tavern-compatibilityNote">{t('characters.deletePermanently.orphanStories', { count: plan.stories.length })}</p>}
+      {plan.stories.length > 0 && (
+        <ul>
+          {plan.stories.map((story) => (
+            <li key={story.id}>
+              <span>{t(story.bound ? 'characters.deletePermanently.storyBound' : 'characters.deletePermanently.story', { date: new Date(story.createdAt).toLocaleString() })}</span>
+              <small>{story.sessionId}</small>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
 function CharactersSectionContent(props: { remote: TavernRemote }) {
   const { remote } = props
   const t = useT()
@@ -395,6 +424,10 @@ function CharactersSectionContent(props: { remote: TavernRemote }) {
   const [detailId, setDetailId] = useDraftState<string | null>('characters:detailId', null)
   const [pending, setPending] = useState<{ name: string; dataBase64: string; preview: CharacterInspect } | null>(null)
   const [toDelete, setToDelete] = useState<CharacterSummary | null>(null)
+  // 永久删除前的预检：列出全部剧情及绑定状态，确认时只提交用户看到的剧情 ID。
+  const deletePlan = useLoader(() => remote.getCharacterDeletePlan({ cardId: toDelete?.cardId ?? '' }), [toDelete?.cardId], toDelete !== null)
+  const deleteReady = deletePlan.state.status === 'ready'
+    && deletePlan.state.value.boundSessionCount === 0 && deletePlan.state.value.corruptBindingCount === 0
   const [creating, setCreating] = useDraftState('characters:creating', false)
   const [newName, setNewName] = useDraftState('characters:newName', '')
   const creatingPending = useRef(false)
@@ -478,7 +511,8 @@ function CharactersSectionContent(props: { remote: TavernRemote }) {
       refreshAfterError(message)
     }
     await runAsync(setBusy, setError, async () => {
-      const r = await remote.deleteCharacter({ cardId: toDelete.cardId })
+      const plan = deletePlan.state.status === 'ready' ? deletePlan.state.value : null
+      const r = await remote.deleteCharacter({ cardId: toDelete.cardId, discardStoryIds: plan ? plan.stories.map((story) => story.id) : [] })
       const err = errOf(r)
       if (err) failed(err)
       else {
@@ -648,9 +682,12 @@ function CharactersSectionContent(props: { remote: TavernRemote }) {
         confirmLabel={t('characters.deletePermanently.confirm')}
         danger
         busy={busy}
+        confirmDisabled={!deleteReady}
         onCancel={() => setToDelete(null)}
         onConfirm={() => void onDelete()}
-      />
+      >
+        <CharacterDeletePlanView state={deletePlan.state} busy={busy} onRetry={deletePlan.reload} />
+      </ConfirmDialog>
       <Dialog
         open={creating}
         title={t('characters.create.title')}

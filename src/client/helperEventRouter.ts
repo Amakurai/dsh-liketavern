@@ -1,6 +1,7 @@
 /** 同页面剧情事件路由：固定会话/剧情分组，串行调用监听并回传 JSON 修改；第三方函数始终留在各自 iframe。 */
 import { helperJson,helperRecord } from '../core/helperRuntime.js'
 import type {HelperSnapshot} from '../core/helperRuntime.js'
+import { randomUuid } from '../core/secureRandom.js'
 type NativeMvu={current:()=>boolean;snapshot:()=>HelperSnapshot|undefined}
 type Message=Record<string,unknown>
 type Entry={endpoint:Endpoint;id:string;event:string;once:boolean}
@@ -174,7 +175,7 @@ export async function emitHelperHostEvent(sessionId:string,storyId:string,event:
   if(!group)return
   if(group.inflight>=64)throw new Error('事件发送超过并发预算')
   let payload=args(data)
-  const id='host:'+crypto.randomUUID(),deadline=Date.now()+45000
+  const id='host:'+randomUuid(),deadline=Date.now()+45000
   group.inflight++
   try{
     for(const entry of [...group.listeners]){

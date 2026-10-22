@@ -158,7 +158,7 @@ export declare function clickableProps(onClick: () => void): {
         preventDefault: () => void;
     }) => void;
 };
-type LoadState<T> = {
+export type LoadState<T> = {
     status: 'idle';
 } | {
     status: 'loading';
@@ -206,8 +206,11 @@ export declare function ConfirmDialog(props: {
     confirmLabel?: string;
     danger?: boolean;
     busy?: boolean;
+    /** 确认按钮额外的禁用条件（例如预检未完成）；Esc 与取消不受影响。 */
+    confirmDisabled?: boolean;
     onCancel: () => void;
     onConfirm: () => void;
+    children?: ReactNode;
 }): import("react").JSX.Element;
 /** 数字输入保留未完成文本；空值不误提交为 0，失焦时显示有效值，外部重置及时同步。 */
 export declare function NumInput(props: {
@@ -248,4 +251,3 @@ export declare function LineListInput(props: {
     onChange: (items: string[]) => void;
     style?: CSSProperties;
 }): import("react").JSX.Element;
-export {};

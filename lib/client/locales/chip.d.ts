@@ -54,6 +54,8 @@ export declare const zh: {
     readonly 'chip.usage.full': "{used} / {window}（{percent}%）";
     readonly 'chip.usage.approx': "约 {tokens} token";
     readonly 'chip.usage.breakdown': "系统 {system} · 工具 {tools} · 消息 {messages}";
+    readonly 'chip.usage.staleTurn': "历史中的旧本轮快照：{count} 份，约 {tokens} token，仍随每次请求发送给模型";
+    readonly 'chip.usage.staleTurnProjected': "历史中的旧本轮快照：{count} 份，约 {tokens} token；DeepSeek 通道发信前已剔除";
     readonly 'chip.preview.title': "提示词预览";
     readonly 'chip.preview.empty': "（空）";
     readonly 'chip.preview.noLog': "（无触发日志）";

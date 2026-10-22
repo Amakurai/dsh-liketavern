@@ -16,6 +16,7 @@ import {cardVariableLabels} from './cardVariableLabels.js'
 import { useLoader } from './util.js'
 import { CARD_VARIABLE_STYLES } from './styles.js'
 import type { TavernRemote } from './types.js'
+import { randomUuid } from '../core/secureRandom.js'
 
 /** 等待首条消息的退避重试：1s 起、最长 15s、最多 20 次；之后只靠剧情通知唤醒。 */
 const WAIT_MESSAGE_BASE_DELAY_MS=1_000
@@ -31,7 +32,7 @@ export function HelperScripts(props:{remote:TavernRemote;sessionId:string;cardId
   const loader=useLoader(()=>remote.getHelperScriptBundle({sessionId}),[sessionId],true)
   const bundle=loader.state.status==='ready'?loader.state.value:undefined
   // RPC 每次成功载入的是一组新沙箱；内容修订相同也不代表旧运行时仍在。
-  const runtimeVersion=useMemo(()=>crypto.randomUUID(),[bundle])
+  const runtimeVersion=useMemo(()=>randomUuid(),[bundle])
   const currentRuntime=useRef(runtimeVersion)
   currentRuntime.current=runtimeVersion
   const [ready,setReady]=useState<Record<string,string>>({})

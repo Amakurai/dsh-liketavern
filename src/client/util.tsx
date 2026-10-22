@@ -500,7 +500,7 @@ export function clickableProps(onClick: () => void) {
   }
 }
 
-type LoadState<T> = { status: 'idle' } | { status: 'loading' } | { status: 'ready'; value: T } | { status: 'error'; message: string }
+export type LoadState<T> = { status: 'idle' } | { status: 'loading' } | { status: 'ready'; value: T } | { status: 'error'; message: string }
 
 /** 拉取一个 remote 读取；reload() 触发重拉；enabled=false 时挂起（idle）。 */
 export function useLoader<T>(load: () => Promise<Envelope<T>>, deps: readonly unknown[] = [], enabled = true, timeoutMs = 20_000) {
@@ -671,8 +671,11 @@ export function ConfirmDialog(props: {
   confirmLabel?: string
   danger?: boolean
   busy?: boolean
+  /** 确认按钮额外的禁用条件（例如预检未完成）；Esc 与取消不受影响。 */
+  confirmDisabled?: boolean
   onCancel: () => void
   onConfirm: () => void
+  children?: ReactNode
 }) {
   const t = useT()
   // 请求已经提交后，Esc/遮罩和按钮必须遵守同一 busy 闸门；仅禁用 footer
@@ -681,7 +684,7 @@ export function ConfirmDialog(props: {
     if (!props.busy) props.onCancel()
   }
   const confirm = () => {
-    if (!props.busy) props.onConfirm()
+    if (!props.busy && !props.confirmDisabled) props.onConfirm()
   }
   return (
     <Modal
@@ -690,6 +693,7 @@ export function ConfirmDialog(props: {
       title={props.title}
       description={props.description}
       closeLabel={t('action.cancel')}
+      {...(props.children ? { contentClassName: 'dsh-tavern-modalContent dsh-tavern-modalHasFooter' } : {})}
       footer={
         <div className="dsh-tavern-modalActions">
           <Button type="button" variant="outline" size="md" disabled={props.busy} onClick={cancel}>
@@ -699,7 +703,7 @@ export function ConfirmDialog(props: {
             type="button"
             variant="primary"
             size="md"
-            disabled={props.busy}
+            disabled={props.busy || props.confirmDisabled}
             onClick={confirm}
             style={props.danger ? { background: 'var(--dsw-alias-state-error-primary, #ec1313)', borderColor: 'transparent' } : undefined}
           >
@@ -707,7 +711,9 @@ export function ConfirmDialog(props: {
           </Button>
         </div>
       }
-    />
+    >
+      {props.children ? <div className="dsh-tavern-ui dsh-tavern-modalBody">{props.children}</div> : null}
+    </Modal>
   )
 }
 

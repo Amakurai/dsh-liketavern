@@ -79,6 +79,7 @@ async function fixture() {
     archiveCharacter: vi.fn(async (request: Parameters<TavernRemote['archiveCharacter']>[0]) => ok(await service.archiveCharacter(request))),
     restoreCharacter: vi.fn(async (request: Parameters<TavernRemote['restoreCharacter']>[0]) => ok(await service.restoreCharacter(request))),
     deleteCharacter: vi.fn(async (request: Parameters<TavernRemote['deleteCharacter']>[0]) => ok(await service.deleteCharacter(request))),
+    getCharacterDeletePlan: vi.fn(async (request: Parameters<TavernRemote['getCharacterDeletePlan']>[0]) => ok(await service.getCharacterDeletePlan(request))),
     inspectCharacter: vi.fn(async (request: Parameters<TavernRemote['inspectCharacter']>[0]) => ok(await service.inspectCharacter(request))),
     importCharacter: vi.fn(async (request: Parameters<TavernRemote['importCharacter']>[0]) => ok(await service.importCharacter(request))),
     getAvatar: async () => ok({ dataUrl: null }),
@@ -465,6 +466,29 @@ describe('角色卡收纳箱交互', () => {
     )
     expect(await f.state.loadCharacter(created.cardId)).toBeNull()
     expect((await f.state.listArchivedCharacters())).toEqual([])
+  })
+
+  it('玩过的角色：确认框列出已无绑定的剧情，确认后连同剧情一起删除', async () => {
+    const f = await fixture()
+    const created = await f.state.createCharacter('玩过的角色')
+    await f.state.saveBinding({ sessionId: 's-played', cardId: created.cardId, presetId: null, personaId: null, lorebookIds: [], characterLorebookId: null,
+      greetingIndex: 0, interactiveCards: false, helperMvu: false, createdAt: new Date(0).toISOString() })
+    await f.state.clearBinding('s-played')
+    await f.state.archiveCharacter(created.cardId)
+    const view = await render(<CharactersSection remote={f.remote} />)
+    await settle(() => view.root.findByType(Tabs).props.onChange('archived'), () => completed(f.remote.listArchivedCharacters))
+    await settle(
+      () => view.root.findByProps({ 'aria-label': t('characters.card.deletePermanently') }).props.onClick({ stopPropagation: () => {} }),
+      () => completed(f.remote.getCharacterDeletePlan),
+    )
+    const dialog = () => view.root.findAllByType(ConfirmDialog).find(item => item.props.open && item.props.danger)!
+    expect(dialog().props.confirmDisabled).toBe(false)
+    const text = dialog().findAll(node => typeof node.type === 'string').flatMap(node => node.children.filter(child => typeof child === 'string')).join(' ')
+    expect(text).toContain(t('characters.deletePermanently.orphanStories', { count: 1 }))
+    expect(text).toContain('s-played')
+    await settle(() => dialog().props.onConfirm(), () => completed(f.remote.deleteCharacter))
+    expect(vi.mocked(f.remote.deleteCharacter).mock.calls.at(-1)![0].discardStoryIds).toHaveLength(1)
+    expect(await f.state.loadCharacter(created.cardId)).toBeNull()
   })
 
   it.each(['envelope', 'transport'] as const)('永久删除 %s 失败后关闭确认框、显示错误并刷新，保留卡片供重试', async failure => {

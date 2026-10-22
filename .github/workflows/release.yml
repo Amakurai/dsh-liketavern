@@ -1,11 +1,12 @@
 name: release
 
-# 推 v* tag 触发，是本仓库唯一执行 npm publish 与 GitHub Release 的地方。
-# tag 由 scripts/release.mjs 创建（本地已跑过同一批守卫）；这里重跑，防止手工打 tag 或
-# 把未构建的 lib/ 发出去：tag 与 package.json 一致、lib/ 与源码同步、测试通过、CHANGELOG 有本版段。
+# 推 v* tag 触发，是本仓库唯一创建 GitHub Release 的地方。
+# 分发方式是 GitHub tag + Release 附件里的 tarball（README 的安装命令按 tag 拉取），不走 npm：
+# 包名从未在 npm 发布，也没有配置 trusted publishing / NPM_TOKEN，npm publish 只会让发布卡住。
 #
-# 前提（本文件配不了）：npm 端为该包启用 Trusted publishing，指向本仓库与本工作流。
-# 否则 `npm publish --provenance` 会以身份错误失败；OIDC 铸凭据靠下方 id-token: write。
+# tag 由 scripts/release.mjs 创建（本地已跑过同一批守卫）；这里重跑，防止手工打 tag 或把
+# 未构建的 lib/ 发出去：tag 与 package.json 一致、lib/ 与源码同步、全量测试通过、包边界合法、
+# CHANGELOG 有非空的本版段。
 
 on:
   push:
@@ -14,10 +15,9 @@ on:
 
 permissions:
   contents: write
-  id-token: write
 
 jobs:
-  publish:
+  release:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -26,11 +26,7 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
-          registry-url: https://registry.npmjs.org
           cache: npm
-
-      # OIDC 信任发布与 --provenance 需要 npm 11.5.1+，比 Node 24 自带的更稳。
-      - run: npm install -g npm@11
 
       - name: 安装依赖
         run: npm ci
@@ -63,26 +59,25 @@ jobs:
         run: npm run package:check
 
       # 段缺失或为空即失败：宁可不发版，也不发一个没有说明的版本。
-      - name: 从 CHANGELOG 生成本版 release notes
-        run: node scripts/release-notes.mjs "${GITHUB_REF_NAME#v}" CHANGELOG.md release-notes.md
+      - name: 从 CHANGELOG 生成本版 notes 与标题
+        run: node scripts/release-notes.mjs "${GITHUB_REF_NAME#v}" CHANGELOG.md release-notes.md release-title.txt
 
-      # 幂等：版本已在线上则跳过，registry 故障后手工补发不会因为重复发布变红。
-      - name: 发布到 npm（版本已在线则跳过）
+      # prepack 会再跑一次构建；tar 包内容由 verify-package 的白名单约束过。
+      - name: 打安装包
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          NAME="$(node -p "require('./package.json').name")"
-          if npm view "$NAME@$VERSION" version >/dev/null 2>&1; then
-            echo "$NAME@$VERSION 已在 registry，跳过发布。"
-          else
-            npm publish --provenance --access public
-          fi
+          npm pack --silent
+          ls -l "dsh-liketavern-${GITHUB_REF_NAME#v}.tgz"
 
-      - name: 用 tag 与 CHANGELOG 建 GitHub Release（已存在则跳过）
+      # 幂等：Release 已存在则跳过（registry/Actions 故障后手工补建不会因为重复变红）。
+      - name: 建 GitHub Release 并附上 tarball
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             echo "Release $GITHUB_REF_NAME 已存在，跳过。"
-          else
-            gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file release-notes.md
+            exit 0
           fi
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$(cat release-title.txt)" \
+            --notes-file release-notes.md \
+            "dsh-liketavern-${GITHUB_REF_NAME#v}.tgz"

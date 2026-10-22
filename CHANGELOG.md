@@ -2,7 +2,7 @@
 
 本插件与 dsh 宿主版本一一绑定（peerDependency 锁定精确版本），升级 dsh 前请先确认有适配的插件版本。
 
-## 未发布
+## 0.5.6（2026-10-22）预设注入加固与发版纪律
 
 宿主依赖不变（dsh `0.2.1-rc.2`）。对照 SillyTavern 与同类 dsh 酒馆插件的已知问题做的一轮修复。
 
@@ -16,9 +16,9 @@
 - 依赖安全：`markdown-it` 升至 15.0.3，修复两项二次方复杂度公告；开发依赖 `vitest` 4.1.12、`vite` 8.2.4、`@modelcontextprotocol/client` 2.3.1。模板运行时指纹随之变化，v0.5.3–v0.5.5 保存的模板检查点仍按原指纹恢复。详见 [依赖安全记录](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/DEPENDENCY_SECURITY.md)。
 - `tavern:standing` 与 `tavern:turn` 向宿主声明 `interpolate: false`：角色卡、预设与世界书里的 `{{…}}`（未知宏、Handlebars 模板、代码示例）原样入模，不再改写成全角 `｛｛…｝｝`，`{{cwd}}`/`{{model}}` 也不会被宿主替换。standing 钉位版本递增，升级后首轮会重新钉死一次。
 
-- 预设布局拒绝模型控制标记：`<｜Assistant｜>`、`<|im_start|>`、`[INST]`、`<start_of_turn>` 等一旦出现在预设或模板条目里，冻结与请求投影两处都会明确失败并点名条目角色与来源，不再把伪造的轮次边界原样发给模型。普通 Markdown、HTML 与 `<think>` 不受影响。
+- 预设布局拒绝模型控制标记：`<｜Assistant｜>`、`<|im_start|>`、`[INST]`、`<start_of_turn>` 等一旦出现在预设或模板条目里，冻结与请求投影两处都会明确失败并点名条目角色与来源，不再把伪造的轮次边界原样发给模型。普通 Markdown、HTML、`<think>` 与 `<|-_-|>` 一类颜文字不受影响（ASCII 标记要求首字符是字母，`<|reserved_special_token_0|>` 仍然拦截）。
 - 投影断言宿主 system 仍在请求首条：布局若把系统提示挤进历史中段（适配器会把 system 降级成历史消息，请求照样能发但行为已变），直接拒绝投影而不是静默降级。顺带把 `presetRequestProjection.ts` 里两处字面 NUL 分隔符改成 `\u0000` 转义，源码恢复为可编辑文本。
-- 发版纪律：新增 `scripts/release.mjs`，所有能拒绝发版的事（脏工作树、非 main、版本不前进、本地/远端 tag 重名、CHANGELOG 缺本版段）都在改版本、提交、打 tag、push 之前完成，支持 `--dry-run`；push 出的 `v*` tag 触发 `.github/workflows/release.yml` 作为唯一发布点，重跑构建、测试与包边界，用 CHANGELOG 生成 Release notes，版本已在线时跳过发布。两项脚本都有真 git + 裸远端的集成测试。
+- 发版纪律：新增 `scripts/release.mjs`，所有能拒绝发版的事（脏工作树、非 main、版本不前进、本地/远端 tag 重名、CHANGELOG 缺本版段或段为空）都在改版本、提交、打 tag、push 之前完成，支持 `--dry-run`。push 出的 `v*` tag 触发 `.github/workflows/release.yml` 作为唯一发布点：重跑构建、测试与包边界，从 CHANGELOG 生成本版 notes 与标题，把 `npm pack` 产物附到 GitHub Release（分发走 tag + Release，不走 npm）。notes 与标题由本地脚本和 workflow 共用同一个抽取函数；发布提交同步 `package-lock.json` 根版本，`--atomic` 推送保证分支被拒时 tag 也不落地。两项脚本都有真 git + 裸远端的集成测试。
 
 ## 0.5.5（2026-10-20）
 

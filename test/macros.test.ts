@@ -132,6 +132,8 @@ describe('卡字段与人设宏', () => {
 
   it('{{description}}/{{personality}}/{{scenario}} 取卡字段，内嵌宏随多轮展开', () => {
     expect(expandMacros('{{description}}|{{personality}}|{{scenario}}', rich)).toBe('DESC Bob|PERS|SCEN')
+    expect(expandMacros('{{description}}|{{personality}}', { ...rich, description: '<BOT> 看着 <USER>', personality: '<CHAR> 微笑' }))
+      .toBe('Alice 看着 Bob|Alice 微笑')
   })
 
   it('{{persona}} 取当前用户人设描述；{{charFirstMessage}} 取开场白', () => {
@@ -418,7 +420,7 @@ describe('ST 常用宏补全', () => {
   it('字段别名内的动态宏与变量写入继续参与依赖传播', () => {
     const context = { ...ctx, charInstruction: '{{setvar::topic::{{lastMessage}}}}', char: '{{isodate}}', user: '{{lastUserMessage}}' }
     const tracker = createMacroDependencyTracker(context, [{ text: '{{charJailbreak}}', turnLocal: false }])
-    for (const text of ['{{charJailbreak}}', '{{group}}', '{{groupNotMuted}}', '{{notChar}}', '{{getvar::topic}}']) {
+    for (const text of ['{{charJailbreak}}', '{{group}}', '{{groupNotMuted}}', '{{notChar}}', '<CHAR>', '<USER>', '{{getvar::topic}}']) {
       expect(tracker.isDynamic(text, context), text).toBe(true)
     }
     const stable = { ...ctx, charInstruction: '固定规则' }

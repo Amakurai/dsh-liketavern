@@ -68,8 +68,8 @@ export function createMacroDependencyTracker(initial: MacroContext, potentialSou
         }
       }
       // 字段与 original 可以继续引用字段或变量。每个名称只访问一次，循环不递归展开。
-      for (const match of current.matchAll(/\{\{\s*([^{}:]+?)\s*\}\}/g)) {
-        const name = match[1]!.trim().toLowerCase()
+      for (const match of current.matchAll(/\{\{\s*([^{}:]+?)\s*\}\}|<(USER|BOT|CHAR|CHARIFNOTGROUP|GROUP)>/gi)) {
+        const name = (match[1] ?? (match[2]!.toLowerCase() === 'user' ? 'user' : 'char')).trim().toLowerCase()
         if (visited.has(name) || !Object.hasOwn(fields, name)) continue
         visited.add(name)
         if (fields[name]) pending.push(fields[name])

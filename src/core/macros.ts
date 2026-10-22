@@ -344,9 +344,11 @@ export function expandMacros(
       if (inner.trim().toLowerCase() === 'trim') return trimMarker
       const applied = applyCommand(inner, ctx, clock, pickRandom)
       if (applied !== undefined) {
-        const value = postProcess ? postProcess(applied) : applied
+        const isOutlet = inner.trim().toLowerCase().startsWith('outlet::')
+        const resolved = isOutlet ? applied : expandLegacyMacros(applied, ctx)
+        const value = postProcess ? postProcess(resolved) : resolved
         // 转义等后处理先作用于原文，再冻结双向花括号，避免截断外层 setvar。
-        return inner.trim().toLowerCase().startsWith('outlet::')
+        return isOutlet
           ? value.replaceAll('{', frozenOpen).replaceAll('}', frozenClose) : value
       }
       unknowns?.push(inner.trim())

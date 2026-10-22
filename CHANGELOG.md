@@ -13,7 +13,7 @@
 - 补齐 SillyTavern 新版宏名：`{{charDescription}}`、`{{charPersonality}}`、`{{charScenario}}`、`{{greeting}}`、`{{charVersion}}`、`{{charCreatorNotes}}`（`{{creatorNotes}}`）、`{{charDepthPrompt}}`、`{{mesExamplesRaw}}`（`{{mesExamples}}`），此前未识别时会原样发给模型；新增 `{{deletevar}}`/`{{flushvar}}`（含 global 拼写）与 `{{varexists}}`/`{{globalvarexists}}`，删除与读取按出现顺序执行。
 - 世界书包含组对齐 SillyTavern：多条「组内优先」时确定性地取排序（order）最大者，不再在其中随机；`group` 字段可用逗号列出多个组，条目在任一组落选即不注入。
 - 会话芯片的上下文用量新增一行诊断：历史里仍在模型可见面上的旧本轮（`tavern:turn`）快照份数与估算 token。宿主每轮追加新快照而不替换旧的，非 DeepSeek 供应商会把它们全部发给模型；DeepSeek 通道发信前已剔除，会标注出来。
-- 依赖安全：`markdown-it` 升至 15.0.3，修复两项二次方复杂度公告；开发依赖 `vitest` 4.1.12、`vite` 8.2.4、`@modelcontextprotocol/client` 2.3.1。模板运行时指纹随之变化，v0.5.3–v0.5.5 保存的模板检查点仍按原指纹恢复。详见 [依赖安全记录](docs/DEPENDENCY_SECURITY.md)。
+- 依赖安全：`markdown-it` 升至 15.0.3，修复两项二次方复杂度公告；开发依赖 `vitest` 4.1.12、`vite` 8.2.4、`@modelcontextprotocol/client` 2.3.1。模板运行时指纹随之变化，v0.5.3–v0.5.5 保存的模板检查点仍按原指纹恢复。详见 [依赖安全记录](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/DEPENDENCY_SECURITY.md)。
 - `tavern:standing` 与 `tavern:turn` 向宿主声明 `interpolate: false`：角色卡、预设与世界书里的 `{{…}}`（未知宏、Handlebars 模板、代码示例）原样入模，不再改写成全角 `｛｛…｝｝`，`{{cwd}}`/`{{model}}` 也不会被宿主替换。standing 钉位版本递增，升级后首轮会重新钉死一次。
 
 ## 0.5.5（2026-10-20）

@@ -320,13 +320,17 @@ function replaceWithGroupTrim(text: string, re: RegExp, template: string, rule: 
     // 回调实参是 [match, ...捕获组, offset, subject]（有命名组时末尾再多一个 groups 对象）。
     // 越界的 $N 会读到 offset（数字）或整段原文，必须挡掉：原生 replace 对越界 $N 原样输出字面量。
     const groupCount = args.length - (groups ? 4 : 3)
-    return tpl.replace(/\$\$|\$(\d+)|\$<([^>]+)>/g, (_m: string, num: string | undefined, name: string | undefined) => {
+    return tpl.replace(/\$\$|\$&|\$(\d+)|\$<([^>]+)>/g, (_m: string, num: string | undefined, name: string | undefined) => {
       if (_m === '$$') return '$' // 宏值中的字面美元符号，不再扫描回调返回值。
       let value: unknown
-      if (num !== undefined) {
+      if (_m === '$&') value = args[0]
+      else if (num !== undefined) {
         if (Number(num) > groupCount) return _m
         value = args[Number(num)]
-      } else if (name && groups) value = groups[name]
+      } else if (name !== undefined) {
+        if (!groups) return _m
+        value = groups[name]
+      }
       if (value === undefined) return '' // 未命中的组（含可选组）代入空串，对齐 ST；'' 与 '0' 是真值，必须留下
       if (typeof value !== 'string') return _m
       return filterCapturedGroup(value, rule, trimRes, macroCtx)

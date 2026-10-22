@@ -99,6 +99,13 @@ describe('替换串', () => {
     expect(res.text).toBe('a <cat|$&> b')
   })
 
+  it('带 trimStrings 时 $& 代入修剪后的整体匹配，无命名组正则保留字面 $<name>', () => {
+    const res = run('a [cat] b', [
+      makeRule({ id: 'r', find: '/\\[cat\\]/', replace: '<$&|$<literal>|{{user}}>', trimStrings: ['[', ']'] }),
+    ], { ...CTX, user: '$&' })
+    expect(res.text).toBe('a <cat|$<literal>|$&> b')
+  })
+
   it('先展开身份宏再匹配：开场白里的 {{user}} 才能被人设名命中', () => {
     const named = expandIdentityMacros('{{user}}，你好。', CTX)
     const res = applyRegexRules(

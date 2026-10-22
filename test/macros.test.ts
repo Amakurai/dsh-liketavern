@@ -253,6 +253,7 @@ describe('setvar / getvar / 注释', () => {
   it('由内向外展开：setvar 值里的 {{char}}', () => {
     const c: MacroContext = { ...ctx, store: new Map() }
     expect(expandMacros('{{setvar::who::{{char}}}}{{getvar::who}}', c)).toBe('Alice')
+    expect(expandMacros('A{{setvar::nl::{{newline}}}}{{getvar::nl}}B', c)).toBe('A\nB')
   })
 
   it('{{lastusermessage}} 取 ctx.lastUserMessage', () => {
@@ -309,6 +310,7 @@ describe('random / pick', () => {
     expect(expandMacros('{{random:a\\, b, c}}', { ...ctx, random: () => 0 })).toBe('a, b')
     expect(expandMacros('{{random:a\\, b, c}}', { ...ctx, random: () => 0.99 })).toBe('c')
     expect(expandMacros('[{{random::x:: y}}]', { ...ctx, random: () => 0.99 })).toBe('[ y]')
+    expect(expandMacros('[{{random::x:: y }}]', { ...ctx, random: () => 0.99 })).toBe('[ y ]')
     expect(expandMacros('[{{random::}}]', { ...ctx, random: () => 0 })).toBe('[]')
   })
 
@@ -387,6 +389,9 @@ describe('ST 常用宏补全', () => {
     expect(expandMacros('{{setvar::list::["a"]}}{{addvar::list::b}}{{getvar::list}}', { ...ctx })).toBe('["a","b"]')
     expect(expandMacros('{{setvar::n::2}}{{addvar::n::3}}{{getvar::n}}|{{addvar::m::-1.5}}{{getvar::m}}', { ...ctx })).toBe('5|-1.5')
     expect(expandMacros('{{setvar::w::第}}{{incvar::w}}', { ...ctx })).toBe('第1')
+    expect(expandMacros('{{setvar::pad::  }}{{addvar::pad::  }}[{{getvar::pad}}]', { ...ctx })).toBe('[    ]')
+    expect(expandMacros('{{setvar::n::5}}{{addvar::n:: }}[{{getvar::n}}]', { ...ctx })).toBe('[5 ]')
+    expect(expandMacros('{{addvar::empty::}}[{{getvar::empty}}]', { ...ctx })).toBe('[]')
   })
 
   it('add/inc/dec/has 的 global 拼写与 setglobalvar 共用同一变量表', () => {

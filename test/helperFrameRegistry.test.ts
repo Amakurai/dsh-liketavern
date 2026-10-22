@@ -131,7 +131,7 @@ it('损坏绑定 JSON 与实际 I/O 故障拒绝新连接，旧 token 不会作�
 
 it('无效数字和过短/过长运行时标识在读绑定前拒绝，不撤销合法现有许可',async()=>{
   const input=request(),{token}=await openHelperFrame(ctx,state,input),read=vi.spyOn(state,'loadBindingUnwaited')
-  for(const changes of [{sessionId:''},{messageId:-1},{messageId:0.5},{messageId:NaN},{epoch:0},{epoch:1.5},{epoch:2147483648},{frameId:'short'},{frameId:'f'.repeat(97)},{runtimeId:'short'},{runtimeId:'r'.repeat(97)}]){
+  for(const changes of [{sessionId:''},{messageId:-1},{messageId:0.5},{messageId:NaN},{epoch:0},{epoch:1.5},{epoch:2147483648},{frameId:'short'},{frameId:'f'.repeat(97)},{runtimeId:''},{runtimeId:'r'.repeat(97)}]){
     await expect(openHelperFrame(ctx,state,request(changes))).rejects.toThrow('身份无效')
   }
   expect(read).not.toHaveBeenCalled();expect(()=>guard(input,token)(binding)).not.toThrow()

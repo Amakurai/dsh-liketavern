@@ -34,6 +34,15 @@ it('共用判定：读变量的常驻条目不算 standing 豁免，静态常驻
   const plain = entry({ content: '静态设定正文' })
   expect(isStandingSafeEntry(dynamic)).toBe(true) // 旧口径（只看正文宏）仍认为是常驻
   expect(isStandingBudgetSafe(dynamic)).toBe(false) // 新口径：读变量 → 组装会送 turn，必须计费
+  for (const macro of [
+    '{{varexists::mood}}',
+    '{{globalvarexists::mood}}',
+    '{{incvar::day}}',
+    '{{decglobalvar::day}}',
+    '{{addlocalvar::log::x}}',
+  ]) {
+    expect(isStandingBudgetSafe(entry({ content: `${macro} 设定正文` })), macro).toBe(false)
+  }
   expect(isStandingBudgetSafe(plain)).toBe(true)
   // 组装侧传入自己的依赖判定时，口径与引擎一致
   expect(isStandingBudgetSafe(dynamic, () => true)).toBe(false)

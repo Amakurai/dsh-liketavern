@@ -347,9 +347,15 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
   const expandStanding = (text: string, ctx: MacroContext = standingCtx, source = text) => {
     const turnLocal = dynamic(text, ctx)
     const effective = turnLocal ? { ...ctx, ...macroCtx, vars: { ...macroCtx.vars, ...(ctx.vars?.original === undefined ? {} : { original: ctx.vars.original }) } } : ctx
-    return expandTracked(renderTemplate(expandTracked(text, effective, turnLocal), source, effective), effective, turnLocal)
+    const first = expandTracked(text, effective, turnLocal)
+    const rendered = renderTemplate(first, source, effective)
+    return rendered === first || input.processTemplateSequence ? rendered : expandTracked(rendered, effective, turnLocal)
   }
-  const expandTurn = (text: string, source = text) => expandTracked(renderTemplate(expandTracked(text, macroCtx, true), source, macroCtx), macroCtx, true)
+  const expandTurn = (text: string, source = text) => {
+    const first = expandTracked(text, macroCtx, true)
+    const rendered = renderTemplate(first, source, macroCtx)
+    return rendered === first || input.processTemplateSequence ? rendered : expandTracked(rendered, macroCtx, true)
+  }
   /**
    * turn 侧消息按对象身份追踪，不按内容字节：两条展开后同字节的消息若分属 standing/turn，
    * 按字节匹配会把 standing 那条误踢进每轮重付的 turn 层（前缀缓存白丢）。

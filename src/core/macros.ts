@@ -155,6 +155,11 @@ function rollDice(expression: string, random: () => number): string | null {
   return String(total)
 }
 
+const FIELD_MACRO_COMMANDS = new Set([
+  'description', 'chardescription', 'personality', 'charpersonality', 'scenario', 'charscenario',
+  'persona', 'charfirstmessage', 'firstmessage', 'greeting', 'charversion', 'charcreatornotes',
+  'creatornotes', 'chardepthprompt', 'mesexamplesraw', 'mesexamples', 'charprompt', 'charinstruction', 'charjailbreak',
+])
 const GET_VAR_COMMANDS = ['getvar', 'getlocalvar', 'getglobalvar']
 const HAS_VAR_COMMANDS = ['hasvar', 'haslocalvar', 'hasglobalvar', 'varexists', 'globalvarexists']
 const DELETE_VAR_COMMANDS = ['deletevar', 'flushvar', 'deleteglobalvar', 'flushglobalvar']
@@ -345,7 +350,8 @@ export function expandMacros(
       const applied = applyCommand(inner, ctx, clock, pickRandom)
       if (applied !== undefined) {
         const isOutlet = inner.trim().toLowerCase().startsWith('outlet::')
-        const resolved = isOutlet ? applied : expandLegacyMacros(applied, ctx)
+        const isFieldMacro = FIELD_MACRO_COMMANDS.has(inner.trim().toLowerCase())
+        const resolved = isFieldMacro ? expandLegacyMacros(applied, ctx) : applied
         const value = postProcess ? postProcess(resolved) : resolved
         // 转义等后处理先作用于原文，再冻结双向花括号，避免截断外层 setvar。
         return isOutlet

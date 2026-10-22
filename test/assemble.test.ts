@@ -618,6 +618,16 @@ describe('深度注入', () => {
     const res = assemblePrompt(makeInput({ preset, wi }))
     expect(contents(res.messages)).toContain('面板:HP 10 Alice/')
   })
+
+  it('无 EJS 时不二次展开已冻结的宏或 outlet 内容中的字面宏与 <USER>/<BOT>', () => {
+    const wi = wiOf({}, {
+      stats: [act(makeWiEntry({ key: 'o1', content: 'HP {{user}}' }))],
+    })
+    const preset = defaultPreset()
+    preset.entries.push(presetEntry({ identifier: 'panel', content: '面板:{{outlet::stats}}', order: 95 }))
+    const res = assemblePrompt(makeInput({ preset, wi, macroCtx: { char: 'Alice', user: '<BOT>' } }))
+    expect(contents(res.messages)).toContain('面板:HP <BOT>')
+  })
 })
 
 // ---------------------------------------------------------------------------

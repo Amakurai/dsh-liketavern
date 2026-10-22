@@ -373,6 +373,21 @@ describe('mergeDeltasForExport', () => {
     expect(reparsed.find((entry) => entry.content === '城门已关闭')?.constant).toBe(true)
   })
 
+  it('新增变化的导出 uid 不覆盖原书条目，碰撞后仍可无损往返', () => {
+    const book = parseLorebook({ entries: {
+      'delta-3': { content: '原书第一条' },
+      'delta-3#1': { content: '原书第二条' },
+    } }, { source: 'character', sourceRef: 'c' })
+    const merged = mergeDeltasForExport(book, [
+      delta({ id: '3', type: 'add', content: '新增设定' }),
+      delta({ id: '4', type: 'update', ref: 'delta-3', content: '修订原书第一条' }),
+    ])
+    expect(new Set(merged.map(entry => entry.uid)).size).toBe(3)
+    const reparsed = parseLorebook(exportLorebook(merged, 'c'), { source: 'character', sourceRef: 'c' })
+    expect(reparsed.map(entry => entry.content)).toEqual(['修订原书第一条', '原书第二条', '新增设定'])
+    expect(book.map(entry => entry.content)).toEqual(['原书第一条', '原书第二条'])
+  })
+
   it('revoked 与已过期的 delta 忽略', () => {
     const merged = mergeDeltasForExport(originals, [
       delta({ id: '1', type: 'update', ref: '1', content: '已撤销', revoked: true }),

@@ -2,6 +2,16 @@
 
 本记录说明依赖告警的处理结果与剩余边界，最近复核日期为 2026-10-10。v0.5.2 的干净 `npm ci` 后，全量 `npm audit` 与生产依赖审计均为 **0 项已知漏洞**。审计或测试通过都不能解释为不存在未知漏洞。
 
+## 2026-10-22 新公告处理
+
+推送 `0c6d9e2` 后两平台 CI 的 `npm audit` 报告 7 项（5 moderate、2 high），均为当天前后新公布的公告，与该提交的代码改动无关。按既有做法固定已修复的公开版本并更新锁文件，干净安装后全量审计归零：
+
+- **运行依赖** `markdown-it` 15.0.2 → **15.0.3**：修复启用 html 时行内 HTML 解析的二次方复杂度（[GHSA-vfgh-jcmw-g37q](https://github.com/advisories/GHSA-vfgh-jcmw-g37q)）与多行链接引用定义的二次方渲染（[GHSA-gfr2-rv44-r23c](https://github.com/advisories/GHSA-gfr2-rv44-r23c)）。它只在可终止 worker 的 QuickJS 中运行，原有输入/输出上限与执行预算不变，此前的影响是耗尽渲染预算后明确失败。
+  - 升级改变模板 vendor，运行时指纹由 `47c22ed5…`（v0.5.3–v0.5.5 相同）变为新值；`47c22ed5…` 已登记为受信 v1 旧运行时，旧检查点按原指纹恢复、旧堆保留原 vendor 直到环境结束。`test/templateCheckpointUpgrade.test.ts` 用升级前 vendor 原文（压缩夹具）生成真实旧堆，再由新安装包恢复。
+- 开发依赖 `vitest` / `@vitest/*` 4.1.11 → **4.1.12**：修复手动 mock 注册代码注入与 Windows 反斜杠绕过 redirect 白名单（[GHSA-qxg6-89mg-rqv8](https://github.com/advisories/GHSA-qxg6-89mg-rqv8)、[GHSA-xp26-3454-mjgp](https://github.com/advisories/GHSA-xp26-3454-mjgp)）。本项目只用 `vitest run`。
+- 开发链 `vitest → vite` 经根级 `overrides` 固定 **8.2.4**：修复 launch-editor 参数转义与 dev server 跨源/越界读取（GHSA-9jrq-w75r-8gcw 等 6 项）。本项目不启动 vite dev server。
+- 开发宿主链 `@deepseek-ai/dsh → dsh-mcp-client → @modelcontextprotocol/client` 的 overrides 由 2.2.0 改为 **2.3.1**（core 同步 2.3.1）：修复 HTTP 传输与 OAuth 请求跟随跨源重定向时重发自定义头与请求体（[GHSA-6prh-2h8m-c8cw](https://github.com/advisories/GHSA-6prh-2h8m-c8cw)）。`test/dependencySecurity.test.ts` 的真实 MCP 握手与调用继续通过。宿主自身安装的版本需在其安装目录另行升级。
+
 ## v0.5.2 发布复核（2026-10-10）
 
 本次修复前，全量 `npm audit` 报告 **5 项 high**，对应三个公告，均位于本仓库的开发宿主和测试链。根级 `overrides` 固定以下公开 npm 版本，锁文件同步更新，干净安装后全量审计归零：

@@ -2,6 +2,7 @@
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { Worker } from 'node:worker_threads'
 import { afterEach, expect, it } from 'vitest'
 import { TEMPLATE_RUNTIME_ABI } from '../src/core/templateRuntimeAbi.js'
@@ -11,8 +12,24 @@ const LEGACY_HASH='77f29556bf365b33ddb9d006fc8ea78f6088c36fd3c464a0ef2c4c036dc0a
 const roots:string[]=[]
 const QUERIES=96
 
-/** 只复原已登记版本的两行差异；旧 hash 必须由真实旧源码计算，不能改检查点头冒充兼容。 */
+/**
+ * 只复原已登记版本的两行差异与当时的 vendor；旧 hash 必须由真实旧源码计算，不能改检查点头冒充兼容。
+ * markdown-it 15.0.3 安全升级后当前 vendor 已变，旧版 template-libraries.js 原文以压缩夹具保存
+ * （取自升级前提交，LF），只在旧版 worker 里替换这一个文件的读取。
+ */
+const LEGACY_LIBRARIES=fileURLToPath(new URL('./templateLibrariesV055.fixture.js.gz',import.meta.url))
 const legacyLoader=String.raw`
+{
+  const fsp=require('node:fs/promises'),{readFileSync}=require('node:fs'),{gunzipSync}=require('node:zlib');
+  const legacyLibraries=gunzipSync(readFileSync(${JSON.stringify(LEGACY_LIBRARIES)})).toString('utf8');
+  const currentReadFile=fsp.readFile;
+  fsp.readFile=function(path,...rest){
+    const name=(path instanceof URL?path.pathname:String(path)).replaceAll('\\','/');
+    if(name.endsWith('/lib/vendor/template-libraries.js'))return Promise.resolve(legacyLibraries);
+    return currentReadFile.call(this,path,...rest);
+  };
+  require('node:module').syncBuiltinESMExports();
+}
 {
   const {registerHooks}=require('node:module');
   registerHooks({load(url,context,next){

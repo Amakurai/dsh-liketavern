@@ -23,6 +23,9 @@ export const TEMPLATE_LEGACY_RUNTIME_ABIS:Readonly<Record<string,TemplateRuntime
   'c69564d6829235e24ac370e0ff5fe623fcdaa65f4ce667a03db1b4424e759178':TEMPLATE_RUNTIME_ABI,
   '983b21d0af3f482bb6021c66ed58990823bdac23a05c5a706eb6da8ae077bf60':TEMPLATE_RUNTIME_ABI,
   '5969cbc13c8beb5483d655aa10e5ae82a7f12f98b6133e7f4bde6bbec171a236':TEMPLATE_RUNTIME_ABI,
+  // v0.5.3–v0.5.5 发布的规范化指纹（三者 vendor 与 bootstrap 相同）。其后 markdown-it 15.0.2 → 15.0.3
+  // 修复 GHSA-vfgh-jcmw-g37q / GHSA-gfr2-rv44-r23c，命令契约未变；旧堆保留其原 vendor 直到环境结束。
+  '47c22ed5bb3551a8e6c5ab766fd66f2d009a9004033a4058d64e3fcd07f703cb':TEMPLATE_RUNTIME_ABI,
 })
 
 /** 仅登记确实需要禁止恢复的运行时；撤销优先于 current 和 legacy，不用虚构版本占位。 */

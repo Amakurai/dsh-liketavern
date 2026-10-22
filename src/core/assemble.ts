@@ -618,6 +618,7 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
       const resolved = markerContent(id, entry.role)
       if (resolved === null || resolved.length === 0) continue
       for (const m of resolved) {
+        if (!m.content.trim()) continue
         depthInjections.push({ depth: entry.depth, order: entry.order, role: m.role, content: m.content, turn: turnMessages.has(m),worldinfo:worldInfoPromptMessages.has(m),
           sourceKeys: [`preset:${entry.identifier}`, ...(messageSources.get(m) ?? [])] })
       }
@@ -777,6 +778,9 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
     }
   }
   const liveOutsideHistory = [...beforeHistory, ...tail]
+  for (let index = depthInjections.length - 1; index >= 0; index--) {
+    if (!depthInjections[index]!.content.trim()) depthInjections.splice(index, 1)
+  }
   // 在模拟裁剪前保留尾部的真实内容。后置条目即使完全静态也不能回到 system 前缀。
   const liveTail = [...tail]
   // 实际请求计划在模拟预算裁剪前保存插件正文；它只引用历史 ID，不携带经过正则的历史副本。

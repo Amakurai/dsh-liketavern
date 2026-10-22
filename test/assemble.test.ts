@@ -1359,5 +1359,13 @@ describe('EM 条目丢弃告警的 position 口径', () => {
     expect(dropped.some((d) => d.includes('丢弃 EM 条目 em-after'))).toBe(true)
     // 条目本身仍不注入（对齐 ST 栈位锚定语义）。
     expect(res.messages.every((m) => !m.content.includes('EM-BEFORE'))).toBe(true)
+    const preset2 = defaultPreset()
+    preset2.formatting = { personality: '{{setvar::savedPers::{{personality}}}}' }
+    const persEntry = preset2.entries.find((e) => e.markerId === Marker.CharPersonality)!
+    persEntry.position = 'in-chat'
+    persEntry.depth = 2
+    persEntry.role = 'user'
+    const emptyRes = assemblePrompt(makeInput({ preset: preset2 }))
+    expect(emptyRes.log.filter((l) => l.kind === 'live-compatibility')).toEqual([])
   })
 })

@@ -138,9 +138,10 @@ it('不在 main 分支时拒绝', { timeout: 120_000 }, async () => {
   }
 })
 
-it('--dry-run 只跑守卫，不写版本、不提交、不推 tag', { timeout: 120_000 }, async () => {
+it('--dry-run 只跑守卫，不写版本、不提交、不推 tag；未跟踪笔记不挡发版', { timeout: 120_000 }, async () => {
   const repo = await makeRepo()
   try {
+    await writeFile(join(repo.work, 'notes.md'), '本地笔记，不入库\n')
     const before = git(repo.work, 'rev-parse', 'HEAD')
     const result = release(repo.work, '0.5.6', '--dry-run')
     expect(result.status).toBe(0)

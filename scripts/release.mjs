@@ -79,7 +79,9 @@ const next = nextVersion(pkg.version, options.version)
 const tag = `v${next}`
 
 // ── 守卫：任何一条不满足都不碰工作树 ────────────────────────────────────────────
-const status = git(['status', '--porcelain']).out
+// 只看已跟踪改动：本地笔记、日志、临时目录不该拦住发版。未跟踪的 lib/ 新产物由 CI 的
+// 「构建后 git status 校验」兜住，那里才是产物完整性的权威检查。
+const status = git(['status', '--porcelain', '--untracked-files=no']).out
 if (status) fail(`工作树有未提交改动，先提交再发版：\n${status}`)
 
 const branch = git(['rev-parse', '--abbrev-ref', 'HEAD']).out

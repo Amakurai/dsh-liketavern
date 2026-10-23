@@ -74,6 +74,7 @@ export function isStandingSafeEntry(entry: WorldInfoEntry): boolean {
     && !(entry.delay && entry.delay > 0) && entry.delayUntilRecursion === 0
     && entry.source !== 'delta'
     && entry.position !== WIPosition.AuthorNoteTop && entry.position !== WIPosition.AuthorNoteBottom && entry.position !== WIPosition.Outlet
+    && !(entry.position === WIPosition.AtDepth && entry.depth === 0)
 }
 
 /** 变量读取宏（get/has 及 local/global 变体）：读到变量就可能随轮变化。 */
@@ -445,6 +446,7 @@ export function evaluateWorldInfo(input: WIEngineInput): WIEngineResult {
     return true
   }
 
+  const loggedSkip = new Set<string>()
   const evaluate = (texts: readonly ScanText[], level: number): Candidate[] => {
     const fresh: Candidate[] = []
     for (const c of compiled) {
@@ -469,12 +471,18 @@ export function evaluateWorldInfo(input: WIEngineInput): WIEngineResult {
       // 冷却
       const cooldownLeft = timer.cooldownLeft[entry.key] ?? 0
       if (cooldownLeft > 0) {
-        log.push({ kind: 'cooldown-skip', entryKey: entry.key, detail: `剩余 ${cooldownLeft} 轮` })
+        if (!loggedSkip.has(entry.key)) {
+          loggedSkip.add(entry.key)
+          log.push({ kind: 'cooldown-skip', entryKey: entry.key, detail: `剩余 ${cooldownLeft} 轮` })
+        }
         continue
       }
       // delay：聊天记录不足 N 条不可激活
       if (entry.delay && entry.delay > 0 && input.messages.length < entry.delay) {
-        log.push({ kind: 'delay-skip', entryKey: entry.key, detail: `需要 ${entry.delay} 条消息，当前 ${input.messages.length}` })
+        if (!loggedSkip.has(entry.key)) {
+          loggedSkip.add(entry.key)
+          log.push({ kind: 'delay-skip', entryKey: entry.key, detail: `需要 ${entry.delay} 条消息，当前 ${input.messages.length}` })
+        }
         continue
       }
       if (entry.constant) {
@@ -597,6 +605,7 @@ export function evaluateWorldInfo(input: WIEngineInput): WIEngineResult {
   let used = 0
   let overflowed = false
   for (const c of sorted) {
+    if (c.entry.position === WIPosition.Outlet && !c.entry.outletName?.trim()) continue
     // 落 standing 的常驻条目豁免计费：它们走钉死的 system 段、命中前缀缓存，
     // 不随快照每轮重付；体积由 assemble 的总窗口预算兜底（trimmedSections）。
     if (standingSafe.get(c.entry)) {

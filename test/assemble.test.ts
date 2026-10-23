@@ -17,8 +17,10 @@
  */
 import { describe, expect, it } from 'vitest'
 import { assemblePrompt, defaultPreset, splitExampleMessages, type AssembleInput } from '../src/core/assemble.js'
+import { evaluateWorldInfo, isStandingSafeEntry } from '../src/core/worldbook.js'
 import { exportStPreset, parseStPreset } from '../src/state/presetStore.js'
 import {
+  DEFAULT_WI_SETTINGS,
   EMPTY_TIMER_STATE,
   Marker,
   WIPosition,
@@ -1377,5 +1379,45 @@ describe('EM 条目丢弃告警的 position 口径', () => {
     persEntry.role = 'user'
     const emptyRes = assemblePrompt(makeInput({ preset: preset2 }))
     expect(emptyRes.log.filter((l) => l.kind === 'live-compatibility')).toEqual([])
+
+    // depth=0 的常驻 @D 落入 turnContext 尾，不作为 standingSafe 豁免世界书预算
+    const d0Entry = makeWiEntry({ key: 'd0-const', content: 'D0-CONST {{lastusermessage}}'.replace(' {{lastusermessage}}', ''), constant: true, position: WIPosition.AtDepth, depth: 0 })
+    expect(isStandingSafeEntry(d0Entry)).toBe(false)
+    const unnamedOutlet = makeWiEntry({ key: 'unnamed-outlet', content: 'X'.repeat(500), constant: true, position: WIPosition.Outlet, outletName: '   ', order: 1 })
+    const validAfter = makeWiEntry({ key: 'valid-after', content: 'VALID-ENTRY', constant: true, position: WIPosition.AfterCharDefs, order: 2, useProbability: true, probability: 50 })
+    const evalRes = evaluateWorldInfo({
+      entries: [d0Entry, unnamedOutlet, validAfter],
+      messages: [{ role: 'user', content: 'hi' }],
+      settings: { ...DEFAULT_WI_SETTINGS, budgetPercent: 0, budgetCap: 50 },
+      timerState: EMPTY_TIMER_STATE,
+      contextWindowTokens: 100,
+      reservedTokens: 0,
+      estimateTokens: (s) => s.length,
+      random: () => 0.1,
+    })
+    expect(evalRes.budget.used).toBeGreaterThan(0)
+    expect(evalRes.activated.some((a) => a.entry.key === 'valid-after')).toBe(true)
+
+    // wi.outlets 脚本跳过与二阶段宏展开；processTemplateSequence 缺省保留 originalContent
+    const outletPreset = defaultPreset()
+    outletPreset.entries.push(presetEntry({ identifier: 'use-outlet', content: '{{outlet::myOut}}', order: 15 }))
+    const wiWithEjsOutlet = wiOf({}, { myOut: [act(makeWiEntry({ key: 'out-ejs', content: '<% bad() %>', position: WIPosition.Outlet, outletName: 'myOut' }))] })
+    const droppedOutletRes = assemblePrompt(makeInput({ preset: outletPreset, wi: wiWithEjsOutlet }))
+    expect(droppedOutletRes.log.some((l) => l.kind === 'dropped-script' && l.detail.includes('out-ejs'))).toBe(true)
+
+    const wiWithMacroOutlet = wiOf({}, { myOut: [act(makeWiEntry({ key: 'out-macro', content: '<%= "{{char}}" %>', position: WIPosition.Outlet, outletName: 'myOut' }))] })
+    const renderedOutletRes = assemblePrompt(makeInput({
+      preset: outletPreset,
+      wi: wiWithMacroOutlet,
+      renderTemplate: () => '{{char}}',
+    }))
+    expect(renderedOutletRes.turnContext).toContain('Alice')
+
+    const seqRes = assemblePrompt(makeInput({
+      renderTemplate: (t) => t,
+      processTemplateSequence: () => ({}),
+    }))
+    expect(seqRes.standing).toContain('SYS Alice')
+    expect(seqRes.turnContext).not.toContain('SYS Alice')
   })
 })

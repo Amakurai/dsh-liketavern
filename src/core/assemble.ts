@@ -329,7 +329,16 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
       // outlet 内容同样做宏展开（与定位条目一致）；此处 macroCtx.outlets 尚未赋值，
       // 故内容中嵌套的 {{outlet::X}} 不会递归解析（对齐「禁止嵌套 outlet」）。
       outlets[name] = joinContents(
-        acts.map((a) => (hasUnevaluatedScript(a.entry.content) && !hasEjs(a.entry.content) ? '' : renderTemplate(expandTracked(a.entry.content, macroCtx, true), a.entry.key))),
+        acts.map((a) => {
+          const label = `世界书 Outlet「${a.entry.key}」`
+          if (!(hasEjs(a.entry.content) && input.renderTemplate) && hasUnevaluatedScript(a.entry.content)) {
+            log.push({ kind: 'dropped-script', detail: `${label} 含未执行 EJS/STscript，已跳过注入` })
+            return ''
+          }
+          const first = expandTracked(a.entry.content, macroCtx, true)
+          const rendered = renderTemplate(first, a.entry.key, macroCtx)
+          return rendered === first || input.processTemplateSequence ? rendered : expandTracked(rendered, macroCtx, true)
+        }),
       )
     }
   }
@@ -753,7 +762,7 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
   let templateTailInsertions: string[] | undefined
   if(input.processTemplateSequence) {
     const sequence=[...beforeHistory,...history,...tail]
-    const items:TemplateSequenceMessage[]=sequence.map(message=>({message,
+    const items:TemplateSequenceMessage[]=sequence.map(message=>({message,originalContent:message.content,
       worldinfo:worldInfoPromptMessages.has(message) || depthBindings.get(message)?.worldinfo===true,
       depth:depthBindings.get(message)?.depth ?? historyDepth.get(message) ?? 0,
       history:originalHistory.has(message),

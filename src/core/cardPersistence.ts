@@ -116,6 +116,13 @@ export function installCardPersistence(snapshot:HelperSnapshot,source:string,_la
           if(equal(holder.scopes[key]??{},baseline)) holder.scopes[key]=clone(scopes[key]??{})
         }
         persistent.confirmed=clone(scopes)
+        snapshot.scopes=clone(scopes)
+        for(const msg of snapshot.messages){
+          const nextData=clone(scopes[JSON.stringify(['message',msg.message_id])]??{})
+          msg.data=nextData
+          const activePage=msg.swipe?.pages[msg.swipe.active]
+          if(activePage)activePage.data=clone(nextData)
+        }
       }
       setStatus('saved')
     } catch(error) {failure=error instanceof Error?error:new Error(String(error));if(active){setStatus('error');report(failure)};throw failure}

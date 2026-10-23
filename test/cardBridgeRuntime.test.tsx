@@ -15,6 +15,7 @@ import { resolveConfig } from '../src/node/config.js'
 import { getHelperSnapshot } from '../src/node/helperRuntime.js'
 import { HELPER_STATE_PATH } from '../src/state/helper.js'
 import { installCardPersistence } from '../src/core/cardPersistence.js'
+import { normalizeHelperMessageInputs } from '../src/core/helperMessageInputs.js'
 import { installCardEvents } from '../src/core/cardEvents.js'
 import { registerHelperDisplay } from '../src/client/helperDisplay.js'
 import type { TavernRemote } from '../src/client/types.js'
@@ -364,4 +365,105 @@ it('同一卡面组件换宿主消息时关闭旧 frameId，以新私有身份�
   expect(current).toMatchObject({sessionId:'runtime-session',messageId:17,runtimeId:'current-runtime',epoch:1})
   expect(writes).toHaveBeenCalledOnce()
   expect((writes.mock.calls[0]![0] as {frameLease:HelperFrameLease}).frameLease).toMatchObject({frameId:current.frameId,runtimeId:'current-runtime',epoch:1})
+})
+
+it('追加新 swipe 页并设置 data/extra 不误判冲突，且本地变量保存后同值刷新不重复派发通知', async () => {
+  const edited = normalizeHelperMessageInputs(
+    [{
+      message_id: 0,
+      name: '运行时工厂角色',
+      role: 'assistant',
+      is_hidden: false,
+      message: '工厂正文',
+      data: { hp: 20 },
+      extra: { note: 'new-page' },
+      swipe_id: 1,
+      swipes: ['工厂正文', '第二页正文'],
+      swipes_data: [{}],
+      swipes_info: [{}],
+    }],
+    () => ({
+      message_id: 0,
+      name: '运行时工厂角色',
+      role: 'assistant',
+      is_hidden: false,
+      message: '工厂正文',
+      data: {},
+      extra: {},
+      swipe_id: 0,
+      swipes: ['工厂正文'],
+      swipes_data: [{}],
+      swipes_info: [{}],
+    }),
+  )
+  expect(edited).toHaveLength(1)
+  expect(edited[0]?.pages).toEqual({
+    active: 1,
+    pages: [
+      { message: '工厂正文', data: {}, extra: {} },
+      { message: '第二页正文', data: { hp: 20 }, extra: { note: 'new-page' } },
+    ],
+  })
+
+  const rootWindow = eventTarget as unknown as Record<string, unknown>
+  const emitLocal = vi.fn()
+  const parent = {
+    postMessage: vi.fn((payload: Record<string, unknown>) => {
+      if (payload.action === 'helperVariablesCommit') {
+        const reply = new Event('message')
+        Object.defineProperties(reply, {
+          source: { value: parent },
+          data: {
+            value: {
+              source: 'dsh-tavern-card',
+              runtimeId: payload.runtimeId,
+              requestId: payload.requestId,
+              action: 'helperVariablesResult',
+              ok: true,
+              scopes: { '["message",0]': { hp: 20 } },
+            },
+          },
+        })
+        eventTarget.dispatchEvent(reply)
+      } else if (payload.action === 'helperSnapshotGet') {
+        const reply = new Event('message')
+        Object.defineProperties(reply, {
+          source: { value: parent },
+          data: {
+            value: {
+              source: 'dsh-tavern-card',
+              runtimeId: payload.runtimeId,
+              requestId: payload.requestId,
+              action: 'helperSnapshotResult',
+              ok: true,
+              snapshot: {
+                ...initialSnapshot,
+                scopes: { '["message",0]': { hp: 20 } },
+                messages: initialSnapshot.messages.map((m) => ({
+                  ...m,
+                  data: { hp: 20 },
+                  swipe: m.swipe ? { ...m.swipe, pages: m.swipe.pages.map((p, i) => i === m.swipe!.active ? { ...p, data: { hp: 20 } } : p) } : undefined,
+                })),
+              },
+            },
+          },
+        })
+        eventTarget.dispatchEvent(reply)
+      }
+    }),
+  }
+  vi.stubGlobal('parent', parent)
+  const initialSnapshot = await getHelperSnapshot(ctx, state, 'runtime-session', 0)
+  const stopEvents = installCardEvents(true)
+  rootWindow.__dshTavernEmitLocal = emitLocal
+  rootWindow.__dshTavernVariables = { scopes: { '["message",0]': { hp: 20 } } }
+  const stopPersistence = installCardPersistence(structuredClone(initialSnapshot), 'dsh-tavern-card', { saving: '', saved: '', failed: '' })
+  try {
+    await (rootWindow.flushHelperVariables as () => Promise<void>)()
+    await (rootWindow.refreshHelperSnapshot as () => Promise<unknown>)()
+    expect(emitLocal).not.toHaveBeenCalledWith('dsh_helper_snapshot_refreshed')
+  } finally {
+    stopPersistence()
+    stopEvents()
+  }
 })

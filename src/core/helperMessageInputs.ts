@@ -30,7 +30,7 @@ export function normalizeHelperMessageInputs(input:unknown,lookup:(id:number)=>R
       const direct=aliases.filter(key=>Object.hasOwn(row,key)).map(key=>row[key])
       const returnedObject=['name','role','is_hidden'].every(key=>Object.hasOwn(row,key))
       const changes=direct.filter(value=>next.active!==base.active&&!returnedObject||!equal(value,target[field]))
-      if(Object.hasOwn(row,arrayKey)&&(!base.pages[next.active]||!equal(selected[field],base.pages[next.active]![field])))changes.push(selected[field])
+      if(Object.hasOwn(row,arrayKey)&&next.active<(row[arrayKey] as unknown[]).length&&(!base.pages[next.active]||!equal(selected[field],base.pages[next.active]![field])))changes.push(selected[field])
       if(changes.some(value=>!equal(value,changes[0])))throw new Error('消息字段与别名或 swipe 页的修改互相冲突：'+field)
       if(changes.length){if(field==='message')selected.message=changes[0] as string;else selected[field]=changes[0] as Record<string,unknown>}
       if(direct.length||Object.hasOwn(row,arrayKey)||next.active!==base.active){

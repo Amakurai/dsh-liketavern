@@ -9,6 +9,9 @@
  *   <root>/<floor>/records.jsonl  每次修改的 before/after 及其显式编码
  * 回滚后楼层目录改名为 <floor>.rolled-back-<timestamp>，保留供调试（UI 不展示）。
  */
+import type { WalRecord } from '../core/types.js';
+/** records.jsonl 单行形状（floor 由所在目录承载，行内不重复）。after/编码字段兼容旧记录。 */
+type RecordLine = Omit<WalRecord, 'floor'>;
 /** listFloors() 返回元素。 */
 export interface WalFloorInfo {
     floor: string;
@@ -33,6 +36,13 @@ export declare const WAL_BINARY_MARK = "binary-base64:";
 export declare const WAL_FLOOR_MARKERS: readonly ["meta.json", "records.jsonl", "rollback-progress.json"];
 /** 独立于 WAL 目录保存已知楼层，删除日志不能被误认为剧情从未写入。 */
 export declare const WAL_COVERAGE_PATH = "state/wal-coverage.json";
+/** 从同一记录与撤销前正文推导恢复目标；执行与恢复游标预检共用，禁止游标自行提供新正文。 */
+export declare function rollbackTarget(rec: RecordLine, current: string | null): {
+    restore: true;
+    value: string | null;
+} | {
+    restore: false;
+};
 export declare class Wal {
     private readonly rootDir;
     private readonly logFs;
@@ -154,3 +164,4 @@ export declare class Wal {
     private doListFloors;
     private doPrune;
 }
+export {};

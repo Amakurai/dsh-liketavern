@@ -17,7 +17,7 @@ import { dshHomeDisplay, resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 import { MAX_STORED_CARD_JSON_BYTES } from './state/card.js'
 import { CHARACTER_ARCHIVE_FILE, isValidCardId } from './state/workspace.js'
 import { storyRoot } from './state/story.js'
-import { WAL_BINARY_MARK, WAL_COVERAGE_PATH, WAL_FLOOR_MARKERS } from './state/wal.js'
+import { rollbackTarget, WAL_BINARY_MARK, WAL_COVERAGE_PATH, WAL_FLOOR_MARKERS } from './state/wal.js'
 import { tavernPaths } from './node/paths.js'
 
 const REQUIRED_NODE_MAJOR = 24
@@ -338,7 +338,7 @@ function safeWalPath(value: unknown): value is string {
 }
 
 /** WAL 楼层只消费首次有界快照；活跃与已回滚目录使用同一套事务格式约束。 */
-async function validateWalArtifacts(directory: string, budget: ReadBudget): Promise<ValidationResult> {
+async function validateWalArtifacts(directory: string, budget: ReadBudget, rolledBack = false): Promise<ValidationResult | 'recovering'> {
   const recordsRead = await readBoundedText(`${directory}/records.jsonl`, MAX_WAL_BYTES, budget)
   if (recordsRead.status === 'oversized' || recordsRead.status === 'budget') return 'uninspected'
   if (recordsRead.status === 'unsafe' || recordsRead.status === 'invalid' || recordsRead.status === 'unreadable') return 'unhealthy'
@@ -363,7 +363,7 @@ async function validateWalArtifacts(directory: string, budget: ReadBudget): Prom
   }
 
   const progressRead = await readBoundedJson(`${directory}/rollback-progress.json`, MAX_JSON_BYTES, budget)
-  if (progressRead.status === 'missing') return 'healthy'
+  if (progressRead.status === 'missing') return rolledBack && records.length > 0 ? 'unhealthy' : 'healthy'
   if (progressRead.status === 'oversized' || progressRead.status === 'budget') return 'uninspected'
   if (progressRead.status !== 'ok' || !isObject(progressRead.value)) return 'unhealthy'
   const progress = progressRead.value
@@ -374,10 +374,26 @@ async function validateWalArtifacts(directory: string, budget: ReadBudget): Prom
   if (progress.hash !== hash || !Number.isSafeInteger(progress.next) || (progress.next as number) < -1
     || (progress.next as number) >= records.length || !isPaths(progress.restored) || !isPaths(progress.preserved)
     || progress.restored.length + progress.preserved.length !== records.length - (progress.next as number) - 1) return 'unhealthy'
+  const remaining = new Map<string, number>()
+  for (const record of records.slice((progress.next as number) + 1)) {
+    const path = record.path as string
+    remaining.set(path, (remaining.get(path) ?? 0) + 1)
+  }
+  for (const path of [...progress.restored, ...progress.preserved]) {
+    const count = remaining.get(path) ?? 0
+    if (!count) return 'unhealthy'
+    remaining.set(path, count - 1)
+  }
   if ('pending' in progress) {
     const pending = progress.pending
     if (!isObject(pending) || typeof pending.path !== 'string' || pending.path !== records[progress.next as number]?.path
       || !(pending.from === null || isBase64(pending.from)) || !(pending.to === null || isBase64(pending.to))) return 'unhealthy'
+    const target = rollbackTarget(records[progress.next as number] as never, pending.from)
+    if (!target.restore || pending.to !== target.value) return 'unhealthy'
+  }
+  if (rolledBack) return (progress.next as number) === -1 && !('pending' in progress) ? 'healthy' : 'unhealthy'
+  if (!rolledBack) return 'recovering'
+  if (false) {
   }
   return 'healthy'
 }
@@ -506,19 +522,23 @@ async function inspectWalRoot(
     const meta = metaRead.value
     const baseName = entry.name.split(ROLLED_BACK_MARK)[0]
     if (typeof meta.floor !== 'string' || !meta.floor || sanitizeFloor(meta.floor) !== baseName
-      || !validDate(meta.startedAt) || typeof meta.committed !== 'boolean') {
+      || !validDate(meta.startedAt) || typeof meta.committed !== 'boolean'
+      || (rolledBack && !validDate(meta.rolledBackAt))) {
       stats.unhealthy += 1
       issues.add('WAL_INVALID', 'error')
       continue
     }
-    if (meta.committed) stats.committed += 1
+
     // 已成功回滚的目录是终态（meta.committed 保持回滚前的值），不是遗留未收口事务。
-    else if (!rolledBack) stats.pending += 1
+
     // 清单身份与 Wal.doListFloors 一致：元数据有效的楼层（含回滚副本）才算「日志仍在」。
     presentIdentities.add(JSON.stringify([meta.floor, meta.startedAt]))
 
-    const validation = await validateWalArtifacts(directory, budget)
-    if (validation === 'healthy') stats.healthy += 1
+    const validation = await validateWalArtifacts(directory, budget, rolledBack)
+    if (!rolledBack && (validation === 'recovering' || !meta.committed)) stats.pending += 1
+    else if (meta.committed) stats.committed += 1
+    if (validation === 'healthy' || validation === 'recovering') stats.healthy += 1
+
     else if (validation === 'uninspected') {
       stats.uninspected += 1
       issues.add('WAL_VALIDATION_LIMIT_EXCEEDED', 'warning')

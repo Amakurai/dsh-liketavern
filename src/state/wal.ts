@@ -179,7 +179,7 @@ function isNoopRecord(rec: RecordLine): boolean {
 }
 
 /** 从同一记录与撤销前正文推导恢复目标；执行与恢复游标预检共用，禁止游标自行提供新正文。 */
-function rollbackTarget(rec: RecordLine, current: string | null): { restore: true; value: string | null } | { restore: false } {
+export function rollbackTarget(rec: RecordLine, current: string | null): { restore: true; value: string | null } | { restore: false } {
   let desired = snapshotBytes(rec, 'before')
   if ('after' in rec && current !== snapshotBytes(rec, 'after')) {
     if (recordPathIdentity(rec.path) !== 'state/world-delta.jsonl' || rec.beforeEncoding === 'base64' || rec.afterEncoding === 'base64') {

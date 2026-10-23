@@ -2,6 +2,7 @@
  * 只读 doctor 回归：覆盖未初始化目录、真实角色/剧情/WAL、损坏聚合、隐私输出与
  * 无修复副作用与扫描入口链接拒绝。测试数据全部由工厂生成，不读取真实 DSH_HOME。
  */
+import { createHash } from 'node:crypto'
 import { appendFile, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, truncate, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -134,6 +135,71 @@ describe('doctor 聚合报告', () => {
     expect(stuck.ok).toBe(false)
     expect(stuck.statistics.wal).toMatchObject({ floors: 2, healthy: 1, unhealthy: 1 })
     expect(stuck.issues.map(issue => issue.code)).toContain('WAL_INVALID')
+  })
+
+  it('回滚恢复游标校验已完成路径多重集、pending 目标与已回滚目录终态，且回滚中断的已提交楼层计入 pending', async () => {
+    const root = await makeStandardDirectories()
+    const cardRoot = join(root, 'characters', 'cursor-card-a1b2c3d4')
+    const storyId = 'story-00000000-0000-4000-8000-000000000002'
+    const story = join(cardRoot, 'stories', storyId)
+    await mkdir(story, { recursive: true })
+    await writeFile(join(cardRoot, 'card.json'), JSON.stringify({ name: '游标诊断' }))
+    await writeFile(join(story, 'story.json'), JSON.stringify({
+      version: 1, id: storyId, sessionId: 's', createdAt: new Date(0).toISOString(), migrated: false,
+    }))
+    const wal = new Wal(join(story, 'state/wal'))
+    const fs = new WorkspaceFs(story, wal)
+    await fs.writeText('a.txt', '原文')
+    await wal.beginFloor('s#t1')
+    await fs.withFloor('s#t1').writeText('a.txt', '第一层')
+    await fs.withFloor('s#t1').writeText('b.txt', 'B1')
+    await fs.withFloor('s#t1').writeText('b.txt', 'B2')
+    await wal.commitFloor('s#t1')
+
+    const floorDir = join(story, 'state/wal/s_t1')
+    const records = (await readFile(join(floorDir, 'records.jsonl'), 'utf8')).trim().split('\n').map(l => JSON.parse(l))
+    const hash = createHash('sha256').update(JSON.stringify(records)).digest('hex')
+    const b64 = (s: string) => Buffer.from(s, 'utf8').toString('base64')
+
+    // 1. 合法的回滚中断游标（meta.committed=true 但处于回滚中）：应计入 pending 而非 committed，报 WAL_UNCOMMITTED
+    await writeFile(join(floorDir, 'rollback-progress.json'), JSON.stringify({
+      hash, next: 0, restored: ['b.txt', 'b.txt'], preserved: [],
+      pending: { path: 'a.txt', from: b64('第一层'), to: b64('原文') },
+    }))
+    const recoveringReport = await runDoctor({ home, nodeVersion: '24.0.0', pluginVersion: '9.8.7' })
+    expect(recoveringReport.ok).toBe(true)
+    expect(recoveringReport.statistics.wal).toMatchObject({ floors: 1, healthy: 1, committed: 0, pending: 1 })
+    expect(recoveringReport.issues).toContainEqual({ code: 'WAL_UNCOMMITTED', severity: 'warning', count: 1 })
+
+    // 2. 伪造 pending.to 目标（合法 base64 但与记录 before 不符）：应报 WAL_INVALID
+    await writeFile(join(floorDir, 'rollback-progress.json'), JSON.stringify({
+      hash, next: 0, restored: ['b.txt', 'b.txt'], preserved: [],
+      pending: { path: 'a.txt', from: b64('第一层'), to: b64('伪造目标') },
+    }))
+    const forgedPending = await runDoctor({ home, nodeVersion: '24.0.0', pluginVersion: '9.8.7' })
+    expect(forgedPending.ok).toBe(false)
+    expect(forgedPending.statistics.wal).toMatchObject({ floors: 1, healthy: 0, unhealthy: 1 })
+    expect(forgedPending.issues.map(i => i.code)).toContain('WAL_INVALID')
+
+    // 3. restored/preserved 路径总数匹配但多重集与已处理后缀不符：应报 WAL_INVALID
+    await writeFile(join(floorDir, 'rollback-progress.json'), JSON.stringify({
+      hash, next: 0, restored: ['a.txt', 'b.txt'], preserved: [],
+    }))
+    const badMultiset = await runDoctor({ home, nodeVersion: '24.0.0', pluginVersion: '9.8.7' })
+    expect(badMultiset.ok).toBe(false)
+    expect(badMultiset.statistics.wal).toMatchObject({ floors: 1, healthy: 0, unhealthy: 1 })
+
+    // 4. 已回滚目录游标未完成（next !== -1）或 rolledBackAt 无效：应报 WAL_INVALID
+    await rm(join(floorDir, 'rollback-progress.json'))
+    await wal.rollbackFloor('s#t1', story)
+    const rolledName = (await readdir(join(story, 'state/wal'))).find(n => n.startsWith('s_t1.rolled-back-'))!
+    const rolledDir = join(story, 'state/wal', rolledName)
+    await writeFile(join(rolledDir, 'rollback-progress.json'), JSON.stringify({
+      hash, next: 0, restored: ['b.txt', 'b.txt'], preserved: [],
+    }))
+    const incompleteRolled = await runDoctor({ home, nodeVersion: '24.0.0', pluginVersion: '9.8.7' })
+    expect(incompleteRolled.ok).toBe(false)
+    expect(incompleteRolled.statistics.wal).toMatchObject({ floors: 1, healthy: 0, unhealthy: 1 })
   })
 
   it('缺失标准目录只告警且诊断前后目录结构和修改时间不变', async () => {

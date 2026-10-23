@@ -15,6 +15,9 @@ import { resolveConfig } from '../src/node/config.js'
 import { getHelperSnapshot } from '../src/node/helperRuntime.js'
 import { HELPER_STATE_PATH } from '../src/state/helper.js'
 import { installCardPersistence } from '../src/core/cardPersistence.js'
+import { installCardVariables } from '../src/core/cardVariables.js'
+import { buildCardSrcDoc } from '../src/core/cardFrame.js'
+import { helperWorldbookSettingsCodec } from '../src/core/helperWorldbookSettings.js'
 import { normalizeHelperMessageInputs } from '../src/core/helperMessageInputs.js'
 import { installCardEvents } from '../src/core/cardEvents.js'
 import { registerHelperDisplay } from '../src/client/helperDisplay.js'
@@ -365,6 +368,36 @@ it('同一卡面组件换宿主消息时关闭旧 frameId，以新私有身份�
   expect(current).toMatchObject({sessionId:'runtime-session',messageId:17,runtimeId:'current-runtime',epoch:1})
   expect(writes).toHaveBeenCalledOnce()
   expect((writes.mock.calls[0]![0] as {frameLease:HelperFrameLease}).frameLease).toMatchObject({frameId:current.frameId,runtimeId:'current-runtime',epoch:1})
+})
+
+it('卡面变量独立作用域拒绝非法消息序号、事件重绑更新 once 且世界书原生补丁拒绝非数字策略', async () => {
+  vi.stubGlobal('document', { readyState: 'loading', addEventListener: vi.fn() })
+  vi.stubGlobal('parent', { postMessage: vi.fn() })
+  installCardVariables()
+  const rootWindow = eventTarget as unknown as Record<string, unknown>
+  delete rootWindow.__dshTavernSnapshot
+  expect(() => (rootWindow.getVariables as (opt?: unknown) => unknown)({ type: 'message', message_id: -2 })).toThrow('Message variable index out of range')
+  expect(() => (rootWindow.getVariables as (opt?: unknown) => unknown)({ type: 'message', message_id: 1.5 })).toThrow('Message variable index out of range')
+  expect((rootWindow.getVariables as (opt?: unknown) => unknown)({ type: 'message', message_id: -1 })).toEqual({})
+
+  const stopEvents = installCardEvents(false)
+  try {
+    const eventOn = rootWindow.eventOn as (e: string, fn: () => void) => void
+    const eventOnce = rootWindow.eventOnce as (e: string, fn: () => void) => void
+    const eventEmit = rootWindow.eventEmit as (e: string) => Promise<void>
+    let count = 0
+    const fn = () => { count += 1 }
+    eventOn('ping', fn)
+    eventOnce('ping', fn)
+    await eventEmit('ping')
+    await eventEmit('ping')
+    expect(count).toBe(1)
+  } finally {
+    stopEvents()
+  }
+
+  expect(() => helperWorldbookSettingsCodec.nativePatch({ characterStrategy: 'evenly' })).toThrow('世界书插入策略无效')
+  expect(buildCardSrcDoc('<div>card</div>', {})).toContain('/<body[\\s>]/i.test(chunk)')
 })
 
 it('追加新 swipe 页并设置 data/extra 不误判冲突，且本地变量保存后同值刷新不重复派发通知', async () => {

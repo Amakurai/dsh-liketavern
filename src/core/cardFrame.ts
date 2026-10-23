@@ -341,7 +341,7 @@ export function tavernCardBridgeScript(options: Omit<CardFrameOptions, 'connectH
   document.write = function () {
     var chunk = Array.prototype.join.call(arguments, '');
     if (writeBuf === null) {
-      if (/<!DOCTYPE/i.test(chunk) || /<html[\\s>]/i.test(chunk)) {
+      if (/<!DOCTYPE/i.test(chunk) || /<html[\\s>]/i.test(chunk) || /<body[\\s>]/i.test(chunk)) {
         writeBuf = chunk;
         deferFlush();
         return;

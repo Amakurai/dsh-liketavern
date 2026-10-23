@@ -106,6 +106,11 @@ describe('隔离定位注入',()=> {
     request.budget.maxTokens=100
     await expect(isolated('assemble',request)).rejects.toThrow(/超过可用窗口/)
   })
+  it('普通世界书正文中间包含 @INJECT 字样时不误判为未支持注入指令，首部 @INJECT 仍拒绝',async()=> {
+    const allowed=await run([{comment:'普通说明',content:'当正文中间提及 @INJECT 语法时应作为普通世界书文本保留'}])
+    expect(allowed.standing).toContain('提及 @INJECT 语法')
+    await expect(run([{comment:'无定位标题',content:'  @INJECT pos=0\n越界指令'}])).rejects.toThrow(/尚未支持的 ST 模板注入定位/)
+  })
   it('灾难回溯定位正则由 worker 超时终止',async()=> {
     const request=input([{comment:'@INJECT regex="(a+)+$"',content:'x'}],[{role:'user',content:'a'.repeat(100)+'!'}])
     await expect(isolated('assemble',request)).rejects.toThrow(/超时/)

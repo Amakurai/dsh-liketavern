@@ -125,12 +125,16 @@ export function installCardEvents(shared=false): () => void {
     const existing = entries.find(entry => entry.listener === listener)
     if (!existing && [...listeners.values()].reduce((sum, list) => sum + list.length, 0) >= 1024) throw new Error('Card event listener limit exceeded')
     if (!existing || position) {
+      if (existing) existing.once = once
       const next = entries.filter(entry => entry !== existing)
       const entry = existing ?? { listener, once,id:`listener-${++serial}` }
       if (position === 'first') next.unshift(entry)
       else next.push(entry)
       listeners.set(event, next)
       if(shared)post('helperEventSubscribe',{listenerId:entry.id,event,once:entry.once,position:position??'normal'})
+    } else if (existing.once !== once) {
+      existing.once = once
+      if(shared)post('helperEventSubscribe',{listenerId:existing.id,event,once:existing.once,position:'normal'})
     }
     return { stop: () => eventRemoveListener(event, listener) }
   }

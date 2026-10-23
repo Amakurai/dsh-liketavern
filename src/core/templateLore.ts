@@ -59,7 +59,7 @@ export function templateLoreEntries(entries: WorldInfoEntry[]): WorldInfoEntry[]
     if (entry.templateOnlyPreload || /^\[InitialVariables\]/i.test(label) || /^\[RENDER:(BEFORE|AFTER)\]/i.test(label)) return { ...entry, enabled:false }
     const placement=parseTemplatePlacement(label)
     if (placement) return {...entry,constant:placement.kind==='insert'||entry.constant,content:`<% /* positioned template */ %>${entry.content}`}
-    if (/^\[(?:GENERATE|RENDER|PRELOAD)\b/i.test(label) || /@INJECT\b/.test(entry.content) || /^@INJECT\b/i.test(label)) {
+    if (/^\[(?:GENERATE|RENDER|PRELOAD)\b/i.test(label) || /^\s*@INJECT\b/.test(entry.content) || /^@INJECT\b/i.test(label)) {
       throw new Error(`世界书「${label}」使用尚未支持的 ST 模板注入定位`)
     }
     return entry

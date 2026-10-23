@@ -110,6 +110,7 @@ export function installCardVariables(labels: CardVariableLabels, styles = '', me
       else if(typeof id==='number'&&id<0) id=count+id
       if(typeof id!=='number'||!Number.isSafeInteger(id)||id<0||id>=count) throw new Error('Message variable index out of range')
     } else if (type === 'message' && (id === 'latest' || id === 'current' || id === -1)) id = messageId ?? 'current'
+    if (type === 'message' && id !== 'current' && (typeof id !== 'number' || !Number.isSafeInteger(id) || id < 0)) throw new Error('Message variable index out of range')
     if (typeof id !== 'string' && typeof id !== 'number') throw new Error('Invalid variable scope id')
     if (typeof id === 'number' && !Number.isFinite(id)) throw new Error('Invalid variable scope id')
     return JSON.stringify([type, id])

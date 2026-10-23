@@ -2,6 +2,8 @@ import { type UseSessions } from './mode.js';
 import type { SessionBinding, TavernRemote, TavernSettings } from './types.js';
 export declare function defaultBinding(sessionId: string, cardId: string, defaults?: TavernSettings['defaults']): SessionBinding;
 export declare function bindingFromDefaults(remote: TavernRemote, sessionId: string, cardId: string): Promise<SessionBinding>;
+/** 草稿换卡：换到别的卡清空剧情、开场白与 MVU；切回已保存绑定的卡时恢复它原有的这三项，避免 A→B→A 丢失开场白选择。 */
+export declare function draftWithCard(draft: SessionBinding, saved: SessionBinding | null, cardId: string, cardName?: string): SessionBinding;
 /** 独立于脚本运行器和全局交互开关的恢复入口；只在确认后放弃任务，不触碰宿主输入队列。 */
 export declare function HelperMvuAbandonAction(props: {
     remote: TavernRemote;

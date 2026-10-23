@@ -7,7 +7,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { Session } from '@deepseek-ai/dsh-session'
 import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { TavernHeaderChip, defaultBinding } from '../src/client/chip.js'
+import { TavernHeaderChip, defaultBinding, draftWithCard } from '../src/client/chip.js'
 import { cachedSessionBinding, invalidateCharacter, invalidateSessionBinding } from '../src/client/cache.js'
 import { BINDING_CHANGED_EVENT } from '../src/client/actions.js'
 import { setTavernLocale, t } from '../src/client/i18n.js'
@@ -239,4 +239,15 @@ it('真实 FS 与 TavernService 中保存途中解除被拦截，顺序完成后
     expect(await state.loadBinding(SESSION)).toBeNull()
     expect((await cachedSessionBinding(f.remote, SESSION))).toMatchObject({ ok: true, value: { binding: null } })
   } finally { await rm(directory, { recursive: true, force: true }) }
+})
+
+it('草稿换到别的卡清空剧情、开场白与 MVU，切回已保存的卡恢复原值', () => {
+  const saved: SessionBinding = { ...defaultBinding(SESSION, CARD), storyId: 'story-a', greetingIndex: 2, helperMvu: true, authorNote: '保留' }
+  const other = draftWithCard(saved, saved, 'chip-other', '别的卡')
+  expect(other).toMatchObject({ cardId: 'chip-other', cardName: '别的卡', storyId: undefined, greetingIndex: 0, helperMvu: undefined, authorNote: '保留' })
+  const back = draftWithCard({ ...other, authorNote: '改过' }, saved, CARD, '灯塔')
+  expect(back).toMatchObject({ cardId: CARD, cardName: '灯塔', storyId: 'story-a', greetingIndex: 2, helperMvu: true, authorNote: '改过' })
+  // 未保存过绑定时没有可恢复的值；重选同一张卡不改动草稿里已调整的开场白。
+  expect(draftWithCard(other, null, CARD)).toMatchObject({ storyId: undefined, greetingIndex: 0 })
+  expect(draftWithCard({ ...back, greetingIndex: 1 }, saved, CARD)).toMatchObject({ greetingIndex: 1, storyId: 'story-a' })
 })

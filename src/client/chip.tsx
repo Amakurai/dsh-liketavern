@@ -46,6 +46,14 @@ export async function bindingFromDefaults(remote: TavernRemote, sessionId: strin
   return defaultBinding(sessionId, cardId, r.value.settings.defaults)
 }
 
+/** 草稿换卡：换到别的卡清空剧情、开场白与 MVU；切回已保存绑定的卡时恢复它原有的这三项，避免 A→B→A 丢失开场白选择。 */
+export function draftWithCard(draft: SessionBinding, saved: SessionBinding | null, cardId: string, cardName?: string): SessionBinding {
+  const next = { ...draft, cardId, cardName: cardName ?? draft.cardName }
+  if (cardId === draft.cardId) return next
+  if (saved && cardId === saved.cardId) return { ...next, storyId: saved.storyId, greetingIndex: saved.greetingIndex, helperMvu: saved.helperMvu }
+  return { ...next, storyId: undefined, greetingIndex: 0, helperMvu: undefined }
+}
+
 /** 独立于脚本运行器和全局交互开关的恢复入口；只在确认后放弃任务，不触碰宿主输入队列。 */
 export function HelperMvuAbandonAction(props: { remote: TavernRemote; sessionId: string; storyId: string; onChanged: () => void }) {
   const t = useT(), pending = useRef(false)
@@ -501,7 +509,7 @@ function HeaderChipSession(props: HeaderChipProps) {
                         onChange={(cardId) => {
                           if (!cardId) return
                           const picked = lists.characters.find((c) => c.cardId === cardId)
-                          setDraft({ ...draft, cardId, cardName: picked?.name ?? draft.cardName, ...(cardId === draft.cardId ? {} : { storyId: undefined, greetingIndex: 0, helperMvu: undefined }) })
+                          setDraft(draftWithCard(draft, binding, cardId, picked?.name))
                         }}
                         options={[
                           { value: '', label: t('chip.field.selectCharacter') },

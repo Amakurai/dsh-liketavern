@@ -245,6 +245,7 @@ export declare class TavernState {
      * 返回目录中的实际拼写，身份字符串仍严格比较；调用方持有整个资产读改写锁。
      */
     private resolveAssetWriteId;
+    private resolveExistingAssetId;
     /** 文件名比较遵守宿主文件系统，目录清单保留实际拼写以便修订号与缓存定位一致。 */
     private assetFileKey;
     private assetFileIds;

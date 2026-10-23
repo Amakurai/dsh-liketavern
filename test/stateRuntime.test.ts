@@ -965,5 +965,36 @@ describe('assetFileId 净化冲突检测', () => {
     expect((await state.listPersonas()).map(item => item.id).sort()).toEqual(['旅人_甲', '旅人_甲-2'])
     expect((await state.loadPersona('旅人_甲'))?.name).toBe('甲（改名）')
     expect((await state.loadPersona('旅人_甲-2'))?.name).toBe('乙')
+    expect((await state.loadPersona('旅人?甲'))?.name).toBe('乙')
+    expect(await state.deletePersona('旅人?甲')).toBe('旅人_甲-2')
+    expect((await state.listPersonas()).map(item => item.id)).toEqual(['旅人_甲'])
+    expect(await state.loadPersona('旅人?甲')).toBeNull()
+  })
+
+  it('按未净化名读取和删除带后缀去重的世界书与预设时精准命中目标文件，且损坏绑定保留 storyId 引用', async () => {
+    await state.saveLorebook('主线 设定', { entries: { '1': { key: ['剑'], content: '断剑' } } })
+    await state.saveLorebook('主线?设定', { entries: { '2': { key: ['门'], content: '门后' } } })
+    expect((await state.loadLorebookEntries('主线?设定', 'global')).map(e => e.content)).toEqual(['门后'])
+    await state.deleteLorebook('主线?设定')
+    expect(await state.listLorebooks()).toEqual(['主线_设定'])
+
+    await state.savePreset({ name: '预设甲', identifier: '我的 预设', entries: [] } as PromptPreset)
+    await state.savePreset({ name: '预设丙', identifier: '我的?预设', entries: [] } as PromptPreset)
+    expect((await state.loadPreset('我的?预设'))?.name).toBe('预设丙')
+    await state.deletePreset('我的?预设')
+    expect(await state.listPresets()).toEqual(['我的_预设'])
+
+    const { cardId } = await state.createCharacter('损坏绑定引用角色')
+    await state.saveBinding(makeBinding({ sessionId: 's-corrupt-story', cardId }))
+    const bound = (await state.loadBinding('s-corrupt-story'))!
+    const fsRaw = await import('node:fs/promises')
+    await fsRaw.writeFile(
+      join(paths.sessions, 's-corrupt-story.json'),
+      JSON.stringify({ ...bound, greetingIndex: -1 }),
+      'utf8',
+    )
+    const plan = await state.characterDeletePlan(cardId)
+    expect(plan.corruptBindingCount).toBe(1)
+    expect(plan.stories.find(s => s.id === bound.storyId)?.bound).toBe(true)
   })
 })

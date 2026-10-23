@@ -427,7 +427,7 @@ export class TavernState {
   async loadCharacter(cardId: string): Promise<CharacterWorkspace | null> {
     // 解析缓存：card.json 的全部写路径（saveCharacter / saveCharacterLorebook /
     // deleteCharacterLorebook）都 bump card:/charlore: 修订号，tag 变化即失效重读。
-    const tag = `${this.assetRevs.get(`card:${cardId}`) ?? 0}:${this.assetRevs.get(`charlore:${cardId}`) ?? 0}`
+    const tag = `${this.assetRevision(`card:${cardId}`)}:${this.assetRevision(`charlore:${cardId}`)}`
     const cached = this.cardCache.get(cardId)
     if (cached && cached.tag === tag) return cached.value
     const value = await loadCharacter(this.paths.characters, cardId)
@@ -577,6 +577,31 @@ export class TavernState {
     if (matches.length > 1) throw new Error('资产身份对应多个文件，请按实际文件 ID 打开后保存')
     if (matches.length === 1) return matches[0]!
     return this.probeAvailableAssetId(base, async candidate => await fs.readText(`${dir}/${candidate}.json`) !== null)
+  }
+
+  private async resolveExistingAssetId(fs: WorkspaceFs, dir: string, name: string): Promise<string | null> {
+    const base = this.assetFileId(name)
+    if (base === name) return base
+    const baseKey = this.assetFileKey(base)
+    let fallbackLegacy: string | null = null
+    for (const candidate of await this.assetFileIds(fs, dir)) {
+      const key = this.assetFileKey(candidate)
+      if (key !== baseKey && !(key.startsWith(`${baseKey}-`) && /^\d+$/.test(key.slice(baseKey.length + 1)))) continue
+      const raw = await fs.readText(`${dir}/${candidate}.json`)
+      if (raw === null) continue
+      let existing: string | null = null
+      let existingSourceId: string | null = null
+      try {
+        const json: unknown = JSON.parse(raw)
+        existing = stringField(json, 'identifier') ?? stringField(json, 'id') ?? stringField(json, 'name')
+        existingSourceId = stringField(json, 'sourceId')
+      } catch {
+        existing = null
+      }
+      if (existingSourceId === name || existing === name) return candidate
+      if (key === baseKey && existing === null && existingSourceId === null) fallbackLegacy = candidate
+    }
+    return fallbackLegacy
   }
 
   /** 文件名比较遵守宿主文件系统，目录清单保留实际拼写以便修订号与缓存定位一致。 */
@@ -882,6 +907,7 @@ export class TavernState {
 
   /** 读取世界书原始 JSON（供设置面板编辑）；不存在或损坏返回 null。 */
   async loadLorebookJson(name: string): Promise<unknown | null> {
+    if (this.assetFileId(name) !== name) { const resolved = await this.resolveExistingAssetId(await this.rootFs(), 'library/lorebooks', name); if (!resolved) return null; name = resolved }
     const id = this.assetFileId(name)
     const fs = await this.rootFs()
     const raw = await fs.readText(`library/lorebooks/${id}.json`)
@@ -894,6 +920,7 @@ export class TavernState {
   }
 
   async loadLorebookEntries(name: string, source: WorldInfoEntry['source']): Promise<WorldInfoEntry[]> {
+    if (this.assetFileId(name) !== name) { const resolved = await this.resolveExistingAssetId(await this.rootFs(), 'library/lorebooks', name); if (!resolved) return []; name = resolved }
     const id = this.assetFileId(name)
     // rev-keyed 解析缓存（source 参与归一化，一并进 key）；归一化抛错不缓存，行为与直读一致。
     const cacheKey = `${id}\0${source}`
@@ -961,7 +988,9 @@ export class TavernState {
     const fs = await this.rootFs()
     await withWorkspaceLock(fs.root,async()=>{
       beforeWrite?.()
-      try{await fs.delete(`library/lorebooks/${id}.json`)}finally{this.bumpAssetRev(`lore:${id}`)}
+      const target = await this.resolveExistingAssetId(fs, 'library/lorebooks', name)
+      const resolved = target ?? id
+      try{if (target) await fs.delete(`library/lorebooks/${target}.json`)}finally{this.bumpAssetRev(`lore:${resolved}`)}
     })
   }
 
@@ -989,9 +1018,10 @@ export class TavernState {
   }
 
   async loadPreset(id: string): Promise<PromptPreset | null> {
+    if (this.assetFileId(id) !== id) { const resolved = await this.resolveExistingAssetId(await this.rootFs(), 'library/presets', id); if (!resolved) return null; id = resolved }
     // rev-keyed 解析缓存。解析失败按 null 缓存并回退默认预设——
     // 损坏的预设文件不该打崩每一步组装（对比 loadLorebookJson / listPersonas 的同类容错）。
-    const key = this.assetFileId(id)
+    let key = this.assetFileId(id)
     const rev = this.assetRevision(`preset:${key}`)
     const cached = this.presetCache.get(key)
     if (cached && cached.rev === rev) return cached.value
@@ -1055,7 +1085,9 @@ export class TavernState {
     const safe = this.assetFileId(id)
     const fs = await this.rootFs()
     await withWorkspaceLock(fs.root,async()=>{
-      try{await fs.delete(`library/presets/${safe}.json`)}finally{this.bumpAssetRev(`preset:${safe}`)}
+      const target = await this.resolveExistingAssetId(fs, 'library/presets', id)
+      const resolved = target ?? safe
+      try{if (target) await fs.delete(`library/presets/${target}.json`)}finally{this.bumpAssetRev(`preset:${resolved}`)}
     })
   }
 
@@ -1078,10 +1110,11 @@ export class TavernState {
   }
 
   async loadPersona(id: string | null): Promise<Persona | null> {
+    if (id && this.assetFileId(id) !== id) { const resolved = await this.resolveExistingAssetId(await this.rootFs(), 'personas', id); if (!resolved) return null; id = resolved }
     if (!id) return null
     // rev-keyed 解析缓存：resolvePersona 每 step 会被调两次（loadBinding 自愈 + pipeline），
     // 每次都读 1–2 个人设文件。写方法 bump `persona:<id>`，绕开本类手改文件不捕获（重启即清）。
-    const key = this.assetFileId(id)
+    let key = this.assetFileId(id)
     const rev = this.assetRevision(`persona:${key}`)
     const cached = this.personaCache.get(key)
     if (cached && cached.rev === rev) return cached.value
@@ -1141,10 +1174,13 @@ export class TavernState {
   }
 
   async deletePersona(id: string): Promise<string> {
-    const key = this.assetFileId(id)
+    let key = this.assetFileId(id)
     const fs = await this.rootFs()
     return withWorkspaceLock(fs.root, async () => {
-      try { await fs.delete(`personas/${key}.json`) }
+      try {
+        const target = await this.resolveExistingAssetId(fs, 'personas', id)
+        if (target) { key = target; await fs.delete(`personas/${target}.json`) }
+      }
       finally { this.bumpAssetRev(`persona:${key}`) }
       return key
     })
@@ -1453,7 +1489,7 @@ export class TavernState {
 
   /** 共享库资产的 Windows 别名共享修订；缓存与展示继续保留各自请求/实际文件拼写。 */
   private assetRevisionKey(key: string): string {
-    return process.platform === 'win32' && /^(?:preset|lore|persona):/.test(key) ? key.toLowerCase() : key
+    return process.platform === 'win32' && /^(?:preset|lore|persona|card|charlore|chatlore):/.test(key) ? key.toLowerCase() : key
   }
 
   private assetRevision(key: string): number {
@@ -1483,9 +1519,9 @@ export class TavernState {
       ? `lore:${this.assetFileId(binding.characterLorebookId)}`
       : `charlore:${binding.cardId}`
     tags.push(`${charKey}=${this.assetRevision(charKey)}`)
-    tags.push(`card:${binding.cardId}=${this.assetRevs.get(`card:${binding.cardId}`) ?? 0}`)
+    tags.push(`card:${binding.cardId}=${this.assetRevision(`card:${binding.cardId}`)}`)
     const chatKey = `chatlore:${binding.cardId}${binding.storyId ? ':' + binding.storyId : ''}`
-    tags.push(`${chatKey}=${this.assetRevs.get(chatKey) ?? 0}`)
+    tags.push(`${chatKey}=${this.assetRevision(chatKey)}`)
     if (extra?.personaLorebookId) {
       const key = `lore:${this.assetFileId(extra.personaLorebookId)}`
       tags.push(`${key}=${this.assetRevision(key)}`)

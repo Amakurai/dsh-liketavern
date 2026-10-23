@@ -304,7 +304,13 @@ export async function listBindingReferencesForCard(paths: TavernPaths, cardId: s
       corruptFiles.push(file)
       // 虽然整体损坏，cardId 若仍明确，对内诊断仍保留该引用身份。
       if (record && isTargetCard(record.cardId)) {
-        references.push(typeof record.sessionId === 'string' && record.sessionId ? record.sessionId : file.replace(/\.json$/, ''))
+        const sessionId = typeof record.sessionId === 'string' && record.sessionId ? record.sessionId : file.replace(/\.json$/i, '')
+        references.push(sessionId)
+        if (typeof record.storyId === 'string') {
+          try { storyRoot('.', record.storyId); storyIds.push(record.storyId) } catch { /* ignore invalid storyId */ }
+        } else if (record.storyId === undefined && sessionId) {
+          storyIds.push(legacyStoryId(sessionId))
+        }
       }
       continue
     }

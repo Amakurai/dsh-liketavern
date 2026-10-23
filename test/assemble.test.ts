@@ -1404,6 +1404,7 @@ describe('EM 条目丢弃告警的 position 口径', () => {
     const wiWithEjsOutlet = wiOf({}, { myOut: [act(makeWiEntry({ key: 'out-ejs', content: '<% bad() %>', position: WIPosition.Outlet, outletName: 'myOut' }))] })
     const droppedOutletRes = assemblePrompt(makeInput({ preset: outletPreset, wi: wiWithEjsOutlet }))
     expect(droppedOutletRes.log.some((l) => l.kind === 'dropped-script' && l.detail.includes('out-ejs'))).toBe(true)
+    expect(droppedOutletRes.turnContext).toContain('已跳过 1 条未展开的脚本条目')
 
     const wiWithMacroOutlet = wiOf({}, { myOut: [act(makeWiEntry({ key: 'out-macro', content: '<%= "{{char}}" %>', position: WIPosition.Outlet, outletName: 'myOut' }))] })
     const renderedOutletRes = assemblePrompt(makeInput({

@@ -323,6 +323,7 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
     macroDependencies.record(text, ctx, turnLocal)
     return expandMacros(text, ctx)
   }
+  const skippedScripts = new Set<string>()
   const outlets: Record<string, string> = {}
   if (wi) {
     for (const [name, acts] of Object.entries(wi.outlets)) {
@@ -332,7 +333,10 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
         acts.map((a) => {
           const label = `世界书 Outlet「${a.entry.key}」`
           if (!(hasEjs(a.entry.content) && input.renderTemplate) && hasUnevaluatedScript(a.entry.content)) {
-            log.push({ kind: 'dropped-script', detail: `${label} 含未执行 EJS/STscript，已跳过注入` })
+            if (!skippedScripts.has(label)) {
+              skippedScripts.add(label)
+              log.push({ kind: 'dropped-script', detail: `${label} 含未执行 EJS/STscript，已跳过注入` })
+            }
             return ''
           }
           const first = expandTracked(a.entry.content, macroCtx, true)
@@ -374,7 +378,7 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
     if (message.content.trim()) turnMessages.add(message)
     return message
   }
-  const skippedScripts = new Set<string>()
+
   const memoryPromptMessages = new Set<ChatMessage>()
   const worldStatePromptMessages = new Set<ChatMessage>()
   const worldInfoPromptMessages = new Set<ChatMessage>()

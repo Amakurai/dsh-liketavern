@@ -345,5 +345,7 @@ describe('审查修复回归：交互卡回退', () => {
     expect(stripDisplayMeta(inlineStray)).toBe('前文 `<UpdateVariable>代码示例</UpdateVariable>` 中间后文 `尾码`')
     const fenceStray = '<think>\n```\n未闭合围栏\n</think>\n正文 `<UpdateVariable>代码示例</UpdateVariable>`\n<UpdateVariable>真实补丁</UpdateVariable>'
     expect(stripDisplayMeta(fenceStray)).toBe('正文 `<UpdateVariable>代码示例</UpdateVariable>`')
+    const fenceBlockAfterStray = '<think>\n```\n未闭合围栏\n</think>\n正文\n```\n<UpdateVariable>代码示例</UpdateVariable>\n```\n<UpdateVariable>真实补丁</UpdateVariable>'
+    expect(stripDisplayMeta(fenceBlockAfterStray)).toBe('正文\n```\n<UpdateVariable>代码示例</UpdateVariable>\n```')
   })
 })

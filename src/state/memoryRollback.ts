@@ -14,6 +14,7 @@ export async function expandAffectedMemories(root: string, paths: readonly strin
   const fs = new WorkspaceFs(root, null)
   const names = new Map<string, string>()
   const rawEntries = new Map<string, { id: string; sources: string[] }>()
+  const corrupted = new Set<string>()
   // 摘要图必须完整：跳过链接来源会把相关摘要误判为独立事实，回滚应在写入前明确失败。
   for (const file of await fs.list('memory', { rejectLinks: true })) {
     const fileMatch = /^(?:archive\/)?([^/]+)\.md$/.exec(file)
@@ -25,7 +26,16 @@ export async function expandAffectedMemories(root: string, paths: readonly strin
     if (text === null) continue
     let entry
     try { entry = parseMemory(file, text) }
-    catch { continue /* 损坏条目交由既有读取容错处理。 */ }
+    catch {
+      if (!file.startsWith('archive/')) {
+        corrupted.delete(identity)
+        rawEntries.set(identity, { id: fileMatch[1], sources: [] })
+      } else if (!rawEntries.has(identity)) {
+        corrupted.add(identity)
+      }
+      continue /* 损坏条目交由既有读取容错处理。 */
+    }
+    if (!file.startsWith('archive/')) corrupted.delete(identity)
     // 来源损坏必须在展开写入之前失败，不能把摘要误作独立事实后继续撤销来源。
     const sources = memorySourceIds(entry.sourceRange)
     // 归档删除中断可能留下双份。活跃副本即使已被人工修订为无来源，也必须覆盖
@@ -37,6 +47,8 @@ export async function expandAffectedMemories(root: string, paths: readonly strin
     .map(({ id, sources }) => [canonicalId(id), sources.map(canonicalId)]))
   for (const [id, sources] of summaries) {
     if (sources.some(source => memoryIdentity(source) === memoryIdentity(id))) throw new Error('记忆归并来源存在循环，已停止回滚')
+    const broken = sources.find(source => corrupted.has(memoryIdentity(source)))
+    if (broken) throw new Error(`记忆归并来源 ${broken} 损坏，已停止回滚`)
   }
   const invalid = new Set<string>()
   let grew = true

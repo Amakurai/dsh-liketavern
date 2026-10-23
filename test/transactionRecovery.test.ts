@@ -446,6 +446,29 @@ it.each(['commit','preflight'] as const)('上一轮收口失败时新轮次不�
   await onTurnEnd(state,session.id)
 })
 
+it('摘要归档来源文件损坏时回滚在修改前拒绝，而人工改为无 frontmatter 的活跃副本不被旧归档谱系误删', async () => {
+  const { ws, panel, memory, rollback } = await setup()
+  const item = await memory.write({ body: '本层事实' })
+  await panel.memory.mergeBatch([item], '中间摘要', 'compress')
+  const middle = (await panel.memory.list())[0]!
+  await panel.memory.mergeBatch([middle], '顶层摘要', 'merge')
+  await ws.fs.writeText(`memory/archive/${middle.id}.md`, '损坏的归档中间摘要，无 frontmatter')
+  await expect(rollback()).rejects.toThrow(`记忆归并来源 ${middle.id} 损坏`)
+  expect((await ws.wal.listFloors())[0]?.rolledBack).toBe(false)
+
+})
+
+it('顶层摘要归档删除中断后人工改为无 frontmatter 纯文本时，回滚不被旧归档谱系误删活跃正文', async () => {
+  const second = await setup()
+  const fact = await second.memory.write({ body: '第二处事实' })
+  await second.panel.memory.mergeBatch([fact], '顶层摘要', 'compress')
+  const top = (await second.panel.memory.list())[0]!
+  await second.ws.fs.writeText(`memory/archive/${top.id}.md`, (await second.ws.fs.readText(`memory/${top.id}.md`))!)
+  await second.ws.fs.writeText(`memory/${top.id}.md`, '人工纯文本笔记，无 frontmatter')
+  await second.rollback()
+  expect(await second.ws.fs.readText(`memory/${top.id}.md`)).toBe('人工纯文本笔记，无 frontmatter')
+})
+
 it('宿主重用已完成轮号时拒绝开层，原剧情仍能完整回滚',async()=>{
   const {cardId}=await state.createCharacter('工厂角色')
   await state.saveBinding({sessionId:'collision',cardId,presetId:null,personaId:null,lorebookIds:[],characterLorebookId:null,interactiveCards:null,greetingIndex:0,createdAt:new Date(0).toISOString()})

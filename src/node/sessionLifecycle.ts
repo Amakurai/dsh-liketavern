@@ -92,6 +92,16 @@ export async function onTurnEnd(state:TavernState,sessionId:string,session?:Pick
   const key=ending?.type==='turn/end'?sessionId+'#t'+ending.data.turn:undefined
   if(ending?.type==='turn/end' && deferredTurns.get(state)?.get(sessionId)===ending.data.turn) {
     deferredTurns.get(state)?.delete(sessionId)
+    state.stepNoticeMarks.delete(sessionId)
+    state.wiCache.delete(sessionId)
+    state.turnPlans.delete(sessionId)
+    state.pendingTurnPlans.delete(sessionId)
+    if(key) {
+      const deferredStoryId=state.openFloors.get(sessionId)?.storyId??(await state.loadBinding(sessionId))?.storyId
+      state.helperTurnClosures.delete(key)
+      state.helperTurnClosures.set(key,{seq:ending.seq,storyId:deferredStoryId,deferred:true})
+      while(state.helperTurnClosures.size>256)state.helperTurnClosures.delete(state.helperTurnClosures.keys().next().value!)
+    }
     state.currentTurns.delete(sessionId)
     state.currentSteps.delete(sessionId)
     // 门控已把未进入模型的原输入放回宿主队列；下次 claim 会按新轮重新发布。

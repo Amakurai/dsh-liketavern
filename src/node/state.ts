@@ -289,7 +289,7 @@ export class TavernState {
    */
   private readonly sessionTaskTails = new Map<string, Promise<void>>()
   /** 实时助手事件的收口回执；只保留最近 256 轮，历史加载不依赖或回放这些回执。 */
-  readonly helperTurnClosures = new Map<string, { seq:number; storyId:string|undefined; error?:string }>()
+  readonly helperTurnClosures = new Map<string, { seq:number; storyId:string|undefined; error?:string; deferred?:boolean }>()
 
   /** warn 是非致命维护问题的日志出口；host 传入 ctx.logger.warn，测试缺省静默。 */
   constructor(

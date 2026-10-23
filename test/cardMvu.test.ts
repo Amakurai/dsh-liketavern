@@ -175,6 +175,29 @@ it('实际剧情事务保存 MVU 消息变量，重建宿主仍可读且同卡�
     const ws=await restarted.storyWorkspace(cardId,before.storyId)
     const wal=JSON.parse((await ws.fs.readText('state/wal/mvu-session_t1/meta.json'))!)
     expect(wal.committed).toBe(true)
+    expect(wal.committed).toBe(true)
+    const {onTurnStart,onTurnEnd}=await import('../src/node/sessionLifecycle.js')
+    const {getHelperEventState}=await import('../src/node/helperEventState.js')
+    await restarted.saveBinding({...((await restarted.loadBinding('other'))!),helperMvu:true})
+    const deferredEvents=[
+      {type:'turn/start',seq:0,time:0,data:{turn:1}},
+      {type:'assistant/message',seq:1,time:0,surfaceOp:'append',data:{stream:[],turn:0,step:1,message:createAssistantMessage({source:{provider:'factory',model:'factory'},content:[{type:'text',text:'开场'}]})}},
+      {type:'turn/end',seq:2,time:0,data:{turn:1,reason:{kind:'completed'}}},
+      {type:'turn/start',seq:3,time:1,data:{turn:2}},
+      {type:'turn/end',seq:4,time:2,data:{turn:2,reason:{kind:'failed',error:'blocked'}}},
+    ] as unknown as SessionEvent[]
+    const deferredSession={id:'other' as SessionEvent['type'] & string,snapshotEvents:()=>deferredEvents}
+    restarted.stepNoticeMarks.set('other',1)
+    restarted.wiCache.set('other',{key:'k',result:{activated:[],timedEffects:{sticky:{},cooldown:{}},budgetUsed:0,log:[]}})
+    await onTurnStart(restarted,'other',2,deferredSession as never)
+    expect(restarted.openFloors.has('other')).toBe(false)
+    await onTurnEnd(restarted,'other',deferredSession as never)
+    expect(restarted.stepNoticeMarks.has('other')).toBe(false)
+    expect(restarted.wiCache.has('other')).toBe(false)
+    const otherStoryId=(await restarted.loadBinding('other'))!.storyId!
+    const otherCtx={sessions:{get:()=>({snapshotEvents:()=>deferredEvents})},get:()=>undefined} as unknown as Context
+    const eventState=await getHelperEventState(otherCtx,restarted,{sessionId:'other',storyId:otherStoryId,closedSeq:4})
+    expect(eventState.closedThrough).toBe(4)
     f.close()
   }finally{await rm(root,{recursive:true,force:true})}
 })

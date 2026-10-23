@@ -172,6 +172,7 @@ export declare class TavernState {
         seq: number;
         storyId: string | undefined;
         error?: string;
+        deferred?: boolean;
     }>;
     /** warn 是非致命维护问题的日志出口；host 传入 ctx.logger.warn，测试缺省静默。 */
     constructor(paths: TavernPaths, getConfig: () => TavernConfig, warn?: (message: string) => void);

@@ -311,8 +311,22 @@ function filterCapturedGroup(value: string, rule: RegexRule, trimRes: readonly R
 }
 
 /** 带 trim 的规则走 ST 同款手工代入：$0/$1..$N/$<name>，代入前先过滤组值。 */
+function expandRegexReplacement(replace: string, macroCtx: MacroContext, matchToken: '$&' | '$0'): string {
+  if (!replace.includes('{{match}}')) {
+    return expandMacros(replace, macroCtx, undefined, escapeReplacementDollars)
+  }
+  const reserved = [replace, ...Object.values(macroCtx).filter((v): v is string => typeof v === 'string'),
+    ...Object.values(macroCtx.vars ?? {}), ...Object.values(macroCtx.outlets ?? {}), ...(macroCtx.store?.values() ?? [])].join('\n')
+  let index = 0
+  let marker = `\uE000tavernMatch${index}\uE001`
+  while (reserved.includes(marker)) marker = `\uE000tavernMatch${++index}\uE001`
+  const expanded = expandMacros(replace.replaceAll('{{match}}', marker), macroCtx, undefined, escapeReplacementDollars)
+  const re = new RegExp(`(\\$*)${escapeRegExp(marker)}`, 'g')
+  return expanded.replace(re, (_raw, dollars: string) => `${dollars.length % 2 === 1 ? `${dollars}$` : dollars}${matchToken}`)
+}
+
 function replaceWithGroupTrim(text: string, re: RegExp, template: string, rule: RegexRule, trimRes: readonly RegExp[], macroCtx: MacroContext): string {
-  const tpl = template.replaceAll('{{match}}', '$0')
+  const tpl = template
   return text.replace(re, (...args: unknown[]) => {
     const maybeGroups = args[args.length - 1]
     const groups =
@@ -368,16 +382,16 @@ export function applyRegexRules(
           trimRes.push(compileTrimRegex(source))
         }
         // 捕获组扫描发生在宏展开之后；宏值必须转义，扫描器用 $$ 还原字面美元符号。
-        const replacement = expandMacros(rule.replace, macroCtx, undefined, escapeReplacementDollars)
-        next = replaceWithGroupTrim(out, re, replacement, rule, trimRes, macroCtx)
+
+        next = replaceWithGroupTrim(out, re, expandRegexReplacement(rule.replace, macroCtx, '$0'), rule, trimRes, macroCtx)
       } else {
         // replace 先宏展开（对齐 ST：substituteParams 后再 replace），捕获组由原生 replace 处理。
         // 宏展开出来的值逐个把 `$` 翻倍：人设名 "Cash$$Money"、getvar 里的 "$1" 都是字面文本。
         // 注意：String.replace 不认识 $0（会输出字面量），整体匹配须用 $&；
         // 且 replaceAll 的替换串里 $& 也有特殊含义，故用函数形式写入字面 '$&'。
         // {{match}} 不是已知宏，展开时原样留下，翻倍不到它头上，这里再换成 $&。
-        const replacement = expandMacros(rule.replace, macroCtx, undefined, escapeReplacementDollars)
-        next = out.replace(re, replacement.replaceAll('{{match}}', () => '$&'))
+
+        next = out.replace(re, expandRegexReplacement(rule.replace, macroCtx, '$&'))
       }
       if (next !== out) applied.push(rule.id)
       out = next
@@ -429,11 +443,11 @@ function applyPreparedRule(text: string, p: PreparedRule, macroCtx: MacroContext
   p.re.lastIndex = 0
   if (p.trimRes) {
     // 与单文本路径相同：宏字面值不得被捕获组扫描器二次解释。
-    const replacement = expandMacros(p.rule.replace, macroCtx, undefined, escapeReplacementDollars)
-    return replaceWithGroupTrim(text, p.re, replacement, p.rule, p.trimRes, macroCtx)
+
+    return replaceWithGroupTrim(text, p.re, expandRegexReplacement(p.rule.replace, macroCtx, '$0'), p.rule, p.trimRes, macroCtx)
   }
-  const replacement = expandMacros(p.rule.replace, macroCtx, undefined, escapeReplacementDollars)
-  return text.replace(p.re, replacement.replaceAll('{{match}}', () => '$&'))
+
+  return text.replace(p.re, expandRegexReplacement(p.rule.replace, macroCtx, '$&'))
 }
 
 /**

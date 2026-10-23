@@ -803,5 +803,20 @@ describe('审查修复回归：正则宏值', () => {
   it('显式 $$1 是字面量，捕获组仍按 trim 规则过滤', () => {
     const rule = makeRule({ id: 'review-escape', find: '/(f#oo)/g', replace: '$$1:$1', trimStrings: ['#'] })
     expect(run('f#oo', [rule]).text).toBe('$1:foo')
+    const unknowns: string[] = []
+    const onUnknown = (name: string) => { unknowns.push(name) }
+    const context: MacroContext = { char: '角色', user: 'Alice', onUnknown }
+    const literalMatchContext: MacroContext = { char: '角色', user: '字面{{match}}' }
+    const plainRule = makeRule({ id: 'dollar-match', find: '/(\\d+)/g', replace: '{{user}}={{match}}=>${{match}}' })
+    const trimRule = { ...plainRule, trimStrings: ['0'] }
+    expect(run('100', [plainRule], context).text).toBe('Alice=100=>$100')
+    expect(run('100', [trimRule], context).text).toBe('Alice=1=>$1')
+    expect(run('100', [plainRule], literalMatchContext).text).toBe('字面{{match}}=100=>$100')
+    expect(run('100', [trimRule], literalMatchContext).text).toBe('字面{{match}}=1=>$1')
+    expect(applyRegexToMessages([{ role: 'assistant', content: '100' }], [plainRule], FILTER, literalMatchContext).messages[0]?.content)
+      .toBe('字面{{match}}=100=>$100')
+    expect(applyRegexToMessages([{ role: 'assistant', content: '100' }], [trimRule], FILTER, literalMatchContext).messages[0]?.content)
+      .toBe('字面{{match}}=1=>$1')
+    expect(unknowns).toEqual([])
   })
 })

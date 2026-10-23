@@ -467,5 +467,20 @@ describe('SillyTavern 新版宏名与变量删除', () => {
 it('先读后清：flushvar 不早于同段 getvar 执行', () => {
   const store = new Map([['once', 'X']])
   expect(expandMacros('[{{getvar::once}}]{{flushvar::once}}[{{getvar::once}}]', { ...ctx, store })).toBe('[X][]')
+
+  expect(expandMacros('{{original}}', { ...ctx, vars: { original: 'Preset for <USER> & <BOT>' } })).toBe('Preset for Bob & Alice')
+  const escapeRegex = (v: string) => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const nestedStore = new Map<string, string>()
+  const nestedCtx: MacroContext = {
+    char: 'A+B',
+    user: '$1',
+    description: 'Hello {{char}} and <USER>',
+    store: nestedStore,
+  }
+  expect(expandMacros('^({{description}})|{{reverse:{{char}}}}$', nestedCtx, undefined, escapeRegex))
+    .toBe('^(Hello A\\+B and \\$1)|B\\+A$')
+  const escapeDollar = (v: string) => v.replace(/\$/g, '$$$$')
+  expect(expandMacros('{{setvar::saved::{{user}}}}{{getvar::saved}}', nestedCtx, undefined, escapeDollar)).toBe('$$1')
+  expect(nestedStore.get('saved')).toBe('$1')
   expect(store.has('once')).toBe(false)
 })

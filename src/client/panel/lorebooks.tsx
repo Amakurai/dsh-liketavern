@@ -100,6 +100,7 @@ function LorebooksSectionContent(props: { remote: TavernRemote }) {
 
   const remove = async () => {
     if (!toDelete) return
+    cancelOpening()
     await runAsync(setBusy, setError, async () => {
       const r = await remote.deleteLorebook({ name: toDelete })
       const err = errOf(r)
@@ -116,11 +117,13 @@ function LorebooksSectionContent(props: { remote: TavernRemote }) {
   const removeEmbedded = async () => {
     const target = toDeleteEmbedded
     if (!target) return
+    cancelOpening()
     await runAsync(setBusy, setError, async () => {
       const r = await remote.deleteEmbeddedLorebook({ cardId: target.cardId })
       const err = errOf(r)
       if (err) setError(err)
       else {
+        if (opened?.target.kind === 'character' && opened.target.cardId === target.cardId) setOpened(null)
         toast.show(t('lorebooks.embeddedDeleted', { name: target.name }))
         setToDeleteEmbedded(null)
         chars.reload()

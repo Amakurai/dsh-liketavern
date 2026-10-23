@@ -446,6 +446,20 @@ describe('设置中的卡面变量管理',()=>{
     await act(async()=>confirmation(view).props.onCancel())
     expect(view.root.findByType('textarea').props.value).toBe(text)
   })
+  it('确认放弃备份草稿并刷新时清空输入与错误提示',async()=>{
+    const commit=vi.fn(async()=>({ok:false,error:{code:'conflict',message:'变量已经改变'}})),refresh=vi.fn()
+    const text=JSON.stringify({version:1,scopes:{'["chat",""]':{hp:2}}})
+    const view=await render(<VariableBackupEditor remote={{commitHelperVariables:commit} as unknown as TavernRemote} sessionId="session-one" messageId={17} snapshot={snapshot} onRefresh={refresh}/>)
+    await act(async()=>view.root.findByType('textarea').props.onChange({target:{value:text}}))
+    await act(async()=>button(view,'恢复卡内备份').props.onClick())
+    await act(async()=>confirmation(view).props.onConfirm())
+    expect(view.root.findByProps({role:'alert'}).children.join('')).toContain('变量已经改变')
+    await act(async()=>button(view,'刷新剧情数据').props.onClick())
+    await act(async()=>confirmation(view).props.onConfirm())
+    expect(refresh).toHaveBeenCalledTimes(1)
+    expect(view.root.findByType('textarea').props.value).toBe('')
+    expect(view.root.findAllByProps({role:'alert'})).toHaveLength(0)
+  })
   it('读取最后一条角色消息的宿主 seq，并拒绝不同剧情的快照',async()=>{
     const get=vi.fn(async()=>ok({...snapshot,storyId:'wrong-story'}))
     const remote={getHelperEventState:async()=>ok({messages:[{seq:7,message_id:0,role:'assistant'},{seq:20,message_id:1,role:'user'},{seq:29,message_id:2,role:'assistant'}]}),getHelperSnapshot:get} as unknown as TavernRemote

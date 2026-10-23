@@ -1,5 +1,5 @@
 /** 设置页的剧情变量管理：显式选择角色和剧情，备份已保存快照；恢复经原有楼层 WAL/CAS，草稿及失败留在设置。 */
-import {useState} from 'react'
+import {useEffect,useState} from 'react'
 import {parseHelperVariableBackup,helperVariableRestoreChanges} from '../../core/helperVariableBackup.js'
 import type {HelperSnapshot} from '../../core/helperRuntime.js'
 import type {HelperScriptAsset} from '../../core/helperScripts.js'
@@ -75,6 +75,7 @@ export function StoryVariableSettings(props:{remote:TavernRemote;cardId:string;s
 export function VariableBackupEditor(props:{remote:TavernRemote;sessionId:string;messageId:number;snapshot:HelperSnapshot;onRefresh:()=>void}){
   const t=useT(),toast=useToast()
   const [snapshot,setSnapshot]=useState(props.snapshot)
+  useEffect(()=>{setSnapshot(props.snapshot)},[props.snapshot])
   const [text,setText]=useDraftState(`card-data:backup:${JSON.stringify([props.sessionId,snapshot.storyId])}`,'')
   const [error,setError]=useState<string|null>(null),[busy,setBusy]=useState(false),[confirm,setConfirm]=useState(false)
   const guard=useDraftGuard(Boolean(text.trim()),busy)
@@ -104,13 +105,13 @@ export function VariableBackupEditor(props:{remote:TavernRemote;sessionId:string
   return <>
     {toast.node}{guard.confirmation}
     <Muted>{t(snapshot.writable?'settings.cards.variableLoaded':'settings.cards.variableReadOnly')}</Muted>
-    <SettingsRow title={t('speech.helperRefresh')} description={t('settings.cards.variableRefreshDesc')}><Btn disabled={busy} onClick={()=>guard.request(props.onRefresh)}>{t('speech.helperRefresh')}</Btn></SettingsRow>
+    <SettingsRow title={t('speech.helperRefresh')} description={t('settings.cards.variableRefreshDesc')}><Btn disabled={busy} onClick={()=>guard.request(()=>{setText('');setError(null);props.onRefresh()})}>{t('speech.helperRefresh')}</Btn></SettingsRow>
     <SettingsRow title={t('settings.cards.variableExport')}><Btn disabled={busy} onClick={()=>downloadJson('tavern-variables.json',{version:1,scopes:snapshot.scopes},0)}>{t('settings.cards.variableExport')}</Btn></SettingsRow>
     <SettingsRow stacked title={t('speech.cardDataRestore')} description={t('settings.cards.variableRestoreDesc')}>
       <textarea className="dsh-tavern-input dsh-tavern-textarea dsh-tavern-codeFont" aria-label={t('speech.cardDataText')} value={text} disabled={busy} onChange={event=>setText(event.target.value)}/>
     </SettingsRow>
     <Err message={error}/>
-    <SaveBar><Btn disabled={busy||!text.trim()} onClick={()=>guard.request(()=>setText(''))}>{t('action.cancel')}</Btn>
+    <SaveBar><Btn disabled={busy||!text.trim()} onClick={()=>guard.request(()=>{setText('');setError(null)})}>{t('action.cancel')}</Btn>
       <Btn primary disabled={busy||!snapshot.writable||!text.trim()} onClick={()=>{try{helperVariableRestoreChanges(snapshot.scopes,parseHelperVariableBackup(text,snapshot.currentMessageId));setError(null);setConfirm(true)}catch(error){setError(error instanceof Error?error.message:String(error))}}}>{t('speech.cardDataRestore')}</Btn></SaveBar>
     <ConfirmDialog open={confirm} title={t('speech.cardDataRestore')} description={t('settings.cards.variableRestoreConfirm')} busy={busy}
       onCancel={()=>setConfirm(false)} onConfirm={()=>void restore()}/>

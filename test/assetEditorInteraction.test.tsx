@@ -204,6 +204,26 @@ it('世界书新建失败后原地重试，实际目录只新增一次目标文�
   expect(f.remote.saveLorebook).toHaveBeenLastCalledWith({ name: '港口重试', json: { entries: {} }, expectedRevision: null })
 })
 
+it('删除角色内嵌世界书时取消在途打开请求，迟到响应不重新打开编辑器', async () => {
+  const f = await fixture()
+  const { cardId } = await f.state.createCharacter('带内嵌书角色')
+  await f.state.saveCharacterLorebook(cardId, { name: '角色内嵌书', entries: { 1: { uid: 1, key: ['灯塔'], content: '内嵌设定' } } })
+  const snapshot = await f.service.getCharacterLorebook({ cardId })
+  const pending = deferred<Envelope<typeof snapshot>>()
+  f.remote.listLorebooks = vi.fn(async () => ok(await f.service.listLorebooks({})))
+  f.remote.getCharacterLorebook = vi.fn(() => pending.promise)
+  f.remote.deleteEmbeddedLorebook = vi.fn(async request => ok(await f.service.deleteEmbeddedLorebook(request)))
+  const view = await render(<LorebooksSection remote={f.remote} />)
+  await settle(() => {}, () => completed(f.remote.listLorebooks) && completed(f.remote.listCharacters))
+  await act(async () => view.root.findAllByType(IconBtn).find(item => item.props.label === t('lorebooks.deleteEmbedded'))!.props.onClick())
+  await act(async () => view.root.findByProps({ className: 'dsh-tavern-tile' }).props.onClick())
+  expect(f.remote.getCharacterLorebook).toHaveBeenCalledTimes(1)
+  await settle(() => view.root.findAllByType(ConfirmDialog).find(item => item.props.open && item.props.danger)!.props.onConfirm(),
+    () => completed(f.remote.deleteEmbeddedLorebook))
+  await act(async () => pending.resolve(ok(snapshot)))
+  expect(view.root.findAllByType(LorebookEditor)).toHaveLength(0)
+})
+
 /** 世界书编辑经真实文件存储回读，并在隔离 worker 内验证含逗号的正则主/次级键仍能触发。 */
 it('已有正则关键词追加普通词后保存，不拆坏量词与字符类中的逗号', async () => {
   const f = await fixture(), name = '正则关键词', primary = '/\\d{1,3}/', secondary = '/coin[,，]gold/i'

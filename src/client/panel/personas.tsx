@@ -65,7 +65,7 @@ export function PersonasSection(props: { remote: TavernRemote }) {
       const err = errOf(r)
       if (err) setError(err)
       else {
-        if (editing?.id === toDelete.id) setEditing(null)
+        if (editing?.id === toDelete.id) { setEditing(null); setBaseline(null) }
         setToDelete(null)
         reload()
       }
@@ -183,7 +183,7 @@ export function PersonasSection(props: { remote: TavernRemote }) {
           </Field>
           <SaveBar>
             <Btn disabled={busy} onClick={() => void save()} primary>{t('action.save')}</Btn>
-            <Btn onClick={() => guard.request(() => setEditing(null))}>{t('action.close')}</Btn>
+            <Btn onClick={() => guard.request(() => { setEditing(null); setBaseline(null) })}>{t('action.close')}</Btn>
           </SaveBar>
         </fieldset>
       )}

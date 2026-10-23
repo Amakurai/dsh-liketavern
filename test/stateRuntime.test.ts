@@ -912,6 +912,44 @@ describe('面板写路径不记 WAL', () => {
 })
 
 describe('assetFileId 净化冲突检测', () => {
+  it.each(['世界书', '预设', '人设'])('%s 的原始身份匹配多份文件时拒绝猜测读取或删除，实际文件 ID 仍可操作', async (kind) => {
+    const name = '重复?资产'
+    let id: string, directory: string
+    let load: (name: string) => Promise<unknown>
+    let remove: (name: string) => Promise<unknown>
+    if (kind === '世界书') {
+      id = await state.saveLorebook(name, { entries: {} })
+      directory = paths.lorebooks
+      load = name => state.loadLorebookJson(name)
+      remove = name => state.deleteLorebook(name)
+    } else if (kind === '预设') {
+      id = await state.savePreset({ name: '同身份预设', identifier: name, entries: [] })
+      directory = paths.presets
+      load = name => state.loadPreset(name)
+      remove = name => state.deletePreset(name)
+    } else {
+      id = await state.savePersona({ id: name, name: '同身份人设', description: '', avatar: null })
+      directory = paths.personas
+      load = name => state.loadPersona(name)
+      remove = name => state.deletePersona(name)
+    }
+    // 模拟从备份恢复的同身份副本；读删不能依赖目录枚举顺序挑选其中一份。
+    const original = join(directory, id + '.json'), duplicate = join(directory, id + '-2.json')
+    const raw = await readFile(original, 'utf8')
+    await writeFile(duplicate, raw)
+    await expect(load(name)).rejects.toThrow('资产身份对应多个文件')
+    if (kind === '世界书') await expect(state.loadLorebookEntries(name, 'global')).rejects.toThrow('资产身份对应多个文件')
+    await expect(remove(name)).rejects.toThrow('资产身份对应多个文件')
+    expect(await readFile(original, 'utf8')).toBe(raw)
+    expect(await readFile(duplicate, 'utf8')).toBe(raw)
+    await expect(load(id)).resolves.not.toBeNull()
+    await expect(load(id + '-2')).resolves.not.toBeNull()
+    await remove(id + '-2')
+    await expect(readFile(duplicate)).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(await readFile(original, 'utf8')).toBe(raw)
+    await expect(load(name)).resolves.not.toBeNull()
+  })
+
   it('世界书：不同显示名净化成同一 id 时另起 -2；同名再保存与面板回存仍是编辑', async () => {
     // 「主线 设定」与「主线?设定」都净化成「主线_设定」：后者不得静默覆盖前者
     expect(await state.saveLorebook('主线 设定', { entries: { '1': { key: ['剑'], content: '断剑' } } })).toBe('主线_设定')

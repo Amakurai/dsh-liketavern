@@ -87,6 +87,8 @@ class Endpoint {
         const existing=this.group.listeners.find(entry=>entry.endpoint===this&&entry.id===value.listenerId)
         if(existing&&existing.event!==value.event)throw new Error('事件监听身份冲突')
         if(!existing&&(this.group.listeners.length>=4096||this.group.listeners.filter(entry=>entry.endpoint===this).length>=1024))throw new Error('剧情事件监听超过预算')
+        // 重绑同步 once，但 normal 保持原有顺序和在途交付的条目身份。
+        if(existing)existing.once=value.once
         if(existing&&value.position==='normal')return
         this.group.listeners=this.group.listeners.filter(entry=>entry!==existing)
         const entry=existing??{endpoint:this,id:value.listenerId,event:value.event,once:value.once}

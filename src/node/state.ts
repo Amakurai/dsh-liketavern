@@ -583,6 +583,7 @@ export class TavernState {
     const base = this.assetFileId(name)
     if (base === name) return base
     const baseKey = this.assetFileKey(base)
+    const matches: string[] = []
     let fallbackLegacy: string | null = null
     for (const candidate of await this.assetFileIds(fs, dir)) {
       const key = this.assetFileKey(candidate)
@@ -598,10 +599,12 @@ export class TavernState {
       } catch {
         existing = null
       }
-      if (existingSourceId === name || existing === name) return candidate
+      if (existingSourceId === name || existing === name) matches.push(candidate)
       if (key === baseKey && existing === null && existingSourceId === null) fallbackLegacy = candidate
     }
-    return fallbackLegacy
+    // 原始身份不是文件定位信息；多份匹配时与保存入口一致，必须由调用方明确选择。
+    if (matches.length > 1) throw new Error('资产身份对应多个文件，请按实际文件 ID 打开后操作')
+    return matches[0] ?? fallbackLegacy
   }
 
   /** 文件名比较遵守宿主文件系统，目录清单保留实际拼写以便修订号与缓存定位一致。 */

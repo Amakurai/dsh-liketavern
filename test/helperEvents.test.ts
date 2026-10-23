@@ -87,6 +87,25 @@ it('once 和 stop 跨卡面只调用预期次数，其他会话或剧情不参�
   b.run('listener.stop()');await a.run('eventEmit("two")')
   expect(b.run('n')).toBe(1)
 })
+it.each(['eventOn','eventMakeFirst','eventMakeLast'])('once 改用 %s 重绑后普通、宿主与 MVU 事件持续调用，顺序与卡面一致',async(method)=>{
+  const a=frame(),b=frame(),c=frame()
+  const mvu=frame('session','story',{current:()=>true,snapshot:()=>mvuSnapshot})
+  a.run('eventOn("message_received",d=>d.steps.push("a"))')
+  b.run('window.n=0;window.listener=d=>{n++;d.steps.push("b")};eventOnce("message_received",listener)')
+  c.run('eventOn("message_received",d=>d.steps.push("c"))')
+  b.run(method+'("message_received",listener)')
+  await settle()
+  const expected=method==='eventMakeFirst'?['b','a','c']:method==='eventMakeLast'?['a','c','b']:['a','b','c']
+  for(let i=0;i<2;i++){
+    await a.run('window.data={steps:[]};eventEmit("message_received",data)')
+    expect(a.run('data.steps')).toEqual(expected)
+    await emitHelperHostEvent('session','story','message_received',[{steps:[]}])
+    expect(b.run('n')).toBe(i*3+2)
+    await mvu.run('window.data={steps:[]};eventEmit("message_received",data)')
+    expect(mvu.run('data.steps')).toEqual(expected)
+  }
+  expect(b.run('n')).toBe(6)
+})
 it('监听抛错传播给发送方，先前与失败监听的 JSON 修改仍可见',async()=>{
   const a=frame(),b=frame(),c=frame()
   a.run('window.data={n:0}')

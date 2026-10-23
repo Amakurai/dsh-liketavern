@@ -1,5 +1,7 @@
 /** 延迟命名注入：QuickJS 内收集后展开，worker 最后统一处理提示词通道并重新核对体积。 */
 import type { AssembledPrompt } from '../core/assemble.js'
+import { assertPromptLayoutNoControlTokens } from '../core/promptLayout.js'
+import { assertNoControlTokens } from '../core/promptSafety.js'
 import { estimateTokens } from '../core/tokenize.js'
 import { TEMPLATE_INPUT_MAX_CHARS, TEMPLATE_OUTPUT_MAX_CHARS } from '../core/templateBudget.js'
 
@@ -79,6 +81,9 @@ export function finalizeTemplateOutlets<T extends AssembledPrompt>(
     turnContext = [standing,turnContext].filter(Boolean).join('\n\n')
     standing = ''
   }
+  if (layout) assertPromptLayoutNoControlTokens(layout)
+  assertNoControlTokens(standing, '提示词稳定前缀（standing）')
+  assertNoControlTokens(turnContext, '本轮提示词上下文（turnContext）')
   const tokensAfter = messages.reduce((total,message)=>total+estimateTokens(message.content),0)
   const system = [standing,turnContext].filter(Boolean).join('\n\n')
   if (tokensAfter>budget || estimateTokens(system)>budget) throw new Error('延迟注入展开后的提示词超过可用窗口，请缩减注入或提高上下文容量')

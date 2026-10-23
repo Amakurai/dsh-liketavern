@@ -103,17 +103,21 @@ export function promptDepthPlacement(history: readonly PromptHistoryAnchor[], de
   return { kind: 'depth', depth, order, ...(previous ? { previous: { ...previous } } : {}), ...(next ? { next: { ...next } } : {}) }
 }
 
+/** 校验布局条目不含分词器控制标记；供初始冻结及定位注入、延迟出口展开后复核共用。 */
+export function assertPromptLayoutNoControlTokens(layout: Pick<PromptLayout, 'entries'>): void {
+  layout.entries.forEach((entry, index) => {
+    assertNoControlTokens(entry.content,
+      `提示词布局条目 #${index + 1}（${entry.role}，来源 ${entry.sourceKeys.slice(0, 3).join(' / ') || '未标注'}）`)
+  })
+}
+
 /** 拷贝所有可变元数据，防止后面的模拟预算裁剪或调用方改写污染可持久化快照。 */
 export function createPromptLayout(history: readonly PromptHistoryAnchor[], fragments: readonly PromptLayoutFragment[]): PromptLayout {
-  return {
+  const layout: PromptLayout = {
     version: 1,
     history: history.map(anchor => ({ ...anchor })),
     entries: fragments.filter(fragment => fragment.content.trim()).map((fragment, index) => {
       const placement = fragment.placement
-      // 冻结时就拒绝：控制标记一旦进入布局，会被每轮投影重复送进请求。
-      // 报错点名角色与来源，用户能直接找到是预设、模板还是世界书写了这一段。
-      assertNoControlTokens(fragment.content,
-        `提示词布局条目 #${index + 1}（${fragment.role}，来源 ${fragment.sourceKeys.slice(0, 3).join(' / ') || '未标注'}）`)
       return {
         ...fragment, key: `entry:${index}`, sourceKeys: [...fragment.sourceKeys],
         placement: placement.kind === 'entry-relative' ? { ...placement } : placement.kind === 'depth'
@@ -122,4 +126,8 @@ export function createPromptLayout(history: readonly PromptHistoryAnchor[], frag
       }
     }),
   }
+  // 冻结时就拒绝：控制标记一旦进入布局，会被每轮投影重复送进请求。
+  // 报错点名角色与来源，用户能直接找到是预设、模板还是世界书写了这一段。
+  assertPromptLayoutNoControlTokens(layout)
+  return layout
 }

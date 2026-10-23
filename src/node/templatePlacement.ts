@@ -6,7 +6,7 @@ import { expandMacros } from '../core/macros.js'
 import { estimateTokens } from '../core/tokenize.js'
 import type { TemplateSandbox } from './templateSandbox.js'
 import { createHash } from 'node:crypto'
-import type { PromptLayoutEntry, PromptLayoutPlacement, PromptMessageProvenance } from '../core/promptLayout.js'
+import { assertPromptLayoutNoControlTokens, type PromptLayoutEntry, type PromptLayoutPlacement, type PromptMessageProvenance } from '../core/promptLayout.js'
 
 interface LocatedEntry {entry:WorldInfoEntry;placement:TemplatePlacement;order:number}
 interface Insertion {at:number;item:LocatedEntry;text:string;entryKey?:string}
@@ -161,6 +161,7 @@ export function applyTemplatePlacements(
     if(text.trim()) {regexes.push({at,item,text});record(item,at,text)}
   }
   apply(regexes)
+  assertPromptLayoutNoControlTokens(layout)
   const tokensAfter=messages.reduce((total,m)=>total+estimateTokens(m.content),0)
   if(tokensAfter>budget) throw new Error('定位注入后的模拟提示词超过可用窗口，请缩减注入或提高上下文容量')
   const turnContext=[assembled.turnContext,...live].filter(Boolean).join('\n\n')

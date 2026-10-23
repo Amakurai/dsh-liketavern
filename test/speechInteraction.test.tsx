@@ -104,6 +104,9 @@ it('无效脚本初始变量在保存前报错，不调用资产写入',async()=
   await act(async()=>click('保存并重新加载'))
   expect(saveCharacterHelperScripts).not.toHaveBeenCalled()
   expect(view!.root.findByProps({'aria-label':'初始变量（JSON 对象）'}).props.value).toBe('{"broken":')
+  await act(async()=>view!.root.findByProps({'aria-label':'初始变量（JSON 对象）'}).props.onChange({target:{value:'{}'}}))
+  await act(async()=>click('格式化 JSON'))
+  expect(view!.root.findByProps({role:'status'}).children.join('')).toBe('所有修改已保存')
 })
 
 it('脚本跨文件夹移动保留源码、变量草稿和邻居，移回顶层不产生重复项',async()=>{

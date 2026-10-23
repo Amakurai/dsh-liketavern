@@ -39,7 +39,7 @@ export function HelperScriptEditorBody(props:ScriptEditorProps) {
   const matches=(item:HelperScriptTree)=>item.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())
   const visible=trees.filter(tree=>matches(tree)||tree.type==='folder'&&tree.scripts.some(matches))
   const scriptCount=flat.filter(tree=>tree.type==='script').length
-  const dirty=JSON.stringify(trees)!==baseline||Object.keys(dataTexts).length>0
+  const dirty=JSON.stringify(trees)!==baseline||Object.entries(dataTexts).some(([id,text])=>{const item=flat.find(tree=>tree.type==='script'&&tree.id===id);return !item||item.type!=='script'||text!==JSON.stringify(item.data,null,2)})
   const guard=useDraftGuard(dirty,busy)
   const update=(id:string,change:(tree:HelperScriptTree)=>HelperScriptTree)=>setTrees(items=>items.map(tree=>tree.id===id?change(tree):tree.type==='folder'?{...tree,scripts:tree.scripts.map(script=>script.id===id?change(script) as HelperScript:script)}:tree))
   const materialize=()=>parseHelperScriptTrees(trees.map(tree=>tree.type==='script'?scriptData(tree):{...tree,scripts:tree.scripts.map(scriptData)}))
@@ -73,9 +73,10 @@ export function HelperScriptEditorBody(props:ScriptEditorProps) {
   const moveToFolder=(folderId:string)=>{
     if(current?.type!=='script')return
     setTrees(items=>{
-      if(folderId&&!items.some(tree=>tree.type==='folder'&&tree.id===folderId))return items
+      const moving=items.flatMap(tree=>tree.type==='folder'?tree.scripts:[tree]).find((tree):tree is HelperScript=>tree.type==='script'&&tree.id===current.id)
+      if(!moving||(folderId&&!items.some(tree=>tree.type==='folder'&&tree.id===folderId)))return items
       const rest=items.filter(tree=>tree.id!==current.id).map(tree=>tree.type==='folder'?{...tree,scripts:tree.scripts.filter(script=>script.id!==current.id)}:tree)
-      return folderId?rest.map(tree=>tree.type==='folder'&&tree.id===folderId?{...tree,scripts:[...tree.scripts,current]}:tree):[...rest,current]
+      return folderId?rest.map(tree=>tree.type==='folder'&&tree.id===folderId?{...tree,scripts:[...tree.scripts,moving]}:tree):[...rest,moving]
     })
   }
   const save=async()=>{
@@ -90,18 +91,18 @@ export function HelperScriptEditorBody(props:ScriptEditorProps) {
       guard.clearDraft();toast.show(t('speech.scriptSaved'));props.onSaved()
     } catch(error){setError(error instanceof Error?error.message:String(error))}finally{saving.current=false;setBusy(false)}
   }
-  const reload=()=>guard.request(()=>{setBusy(true);setError(null);void (target.type==='character'?props.remote.getCharacterHelperScripts({cardId:target.cardId}):props.remote.getHelperScriptLibrary({target})).then(result=>{
+  const reload=()=>{if(saving.current)return;guard.request(()=>{if(saving.current)return;saving.current=true;setBusy(true);setError(null);void (target.type==='character'?props.remote.getCharacterHelperScripts({cardId:target.cardId}):props.remote.getHelperScriptLibrary({target})).then(result=>{
     if(!result.ok)throw new Error(result.error.message)
     setTrees(result.value.trees);setRevision(result.value.revision);setBaseline(JSON.stringify(result.value.trees));setDataTexts({});setQuery('');setSelected(result.value.trees[0]?.id??null)
-  }).catch(error=>setError(String(error instanceof Error?error.message:error))).finally(()=>setBusy(false))})
+  }).catch(error=>setError(String(error instanceof Error?error.message:error))).finally(()=>{saving.current=false;setBusy(false)})})}
   const importFile=async(file:File)=>{
-    setBusy(true);setError(null)
+    if(saving.current)return;saving.current=true;setBusy(true);setError(null)
     try{
       if(file.size>4*1024*1024)throw new Error(t('speech.scriptFileLarge'))
       const input:unknown=JSON.parse(await file.text())
       const parsed=importHelperScriptFile(input)
       guard.request(()=>{setTrees(parsed);setDataTexts({});setQuery('');setSelected(parsed[0]?.id??null)})
-    }catch(error){setError(error instanceof Error?error.message:String(error))}finally{setBusy(false)}
+    }catch(error){setError(error instanceof Error?error.message:String(error))}finally{saving.current=false;setBusy(false)}
   }
   return <>
     {guard.confirmation}{toast.node}
@@ -149,17 +150,17 @@ export function HelperScriptEditorBody(props:ScriptEditorProps) {
             </div><div hidden={section!=='data'}>
             <SettingsRow stacked title={t('speech.scriptData')}><textarea className="dsh-tavern-input" aria-label={t('speech.scriptData')} value={dataTexts[current.id]??JSON.stringify(current.data,null,2)} disabled={busy} spellCheck={false} onChange={event=>setDataTexts(values=>({...values,[current.id]:event.target.value}))}/></SettingsRow>
             <Btn disabled={busy} onClick={()=>{try{const data=scriptData(current).data;setDataTexts(values=>({...values,[current.id]:JSON.stringify(data,null,2)}));setError(null)}catch(error){setError(error instanceof Error?error.message:String(error))}}}>{t('speech.scriptFormatData')}</Btn>
-            <SettingsRow title={t('speech.scriptExportData')}><Toggle title={t('speech.scriptExportData')} checked={current.export_with.data} disabled={busy} onChange={data=>update(current.id,item=>({...item,export_with:{...current.export_with,data}}))}/></SettingsRow>
+            <SettingsRow title={t('speech.scriptExportData')}><Toggle title={t('speech.scriptExportData')} checked={current.export_with.data} disabled={busy} onChange={data=>update(current.id,item=>item.type==='script'?{...item,export_with:{...item.export_with,data}}:item)}/></SettingsRow>
 
             </div><div hidden={section!=='buttons'}>
-            <SettingsRow title={t('speech.scriptExportButtons')}><Toggle title={t('speech.scriptExportButtons')} checked={current.export_with.button} disabled={busy} onChange={button=>update(current.id,item=>({...item,export_with:{...current.export_with,button}}))}/></SettingsRow>
-            <SettingsRow title={t('speech.scriptButtons')}><Toggle title={t('speech.scriptButtons')} checked={current.button.enabled} disabled={busy} onChange={enabled=>update(current.id,item=>({...item,button:{...current.button,enabled}}))}/></SettingsRow>
+            <SettingsRow title={t('speech.scriptExportButtons')}><Toggle title={t('speech.scriptExportButtons')} checked={current.export_with.button} disabled={busy} onChange={button=>update(current.id,item=>item.type==='script'?{...item,export_with:{...item.export_with,button}}:item)}/></SettingsRow>
+            <SettingsRow title={t('speech.scriptButtons')}><Toggle title={t('speech.scriptButtons')} checked={current.button.enabled} disabled={busy} onChange={enabled=>update(current.id,item=>item.type==='script'?{...item,button:{...item.button,enabled}}:item)}/></SettingsRow>
             {current.button.buttons.map((button,index)=><div className="dsh-tavern-scriptTools" key={index}>
-              <input className="dsh-tavern-input" aria-label={t('speech.scriptButtonName')} value={button.name} disabled={busy} onChange={event=>update(current.id,item=>({...item,button:{...current.button,buttons:current.button.buttons.map((old,i)=>i===index?{...old,name:event.target.value}:old)}}))}/>
-              <Toggle title={`${t('speech.scriptButtonVisible')}: ${button.name}`} checked={button.visible} disabled={busy} onChange={visible=>update(current.id,item=>({...item,button:{...current.button,buttons:current.button.buttons.map((old,i)=>i===index?{...old,visible}:old)}}))}/>
-              <Btn disabled={busy} onClick={()=>update(current.id,item=>({...item,button:{...current.button,buttons:current.button.buttons.filter((_,i)=>i!==index)}}))}>{t('speech.scriptRemove')}</Btn>
+              <input className="dsh-tavern-input" aria-label={t('speech.scriptButtonName')} value={button.name} disabled={busy} onChange={event=>update(current.id,item=>item.type==='script'?{...item,button:{...item.button,buttons:item.button.buttons.map((old,i)=>i===index?{...old,name:event.target.value}:old)}}:item)}/>
+              <Toggle title={`${t('speech.scriptButtonVisible')}: ${button.name}`} checked={button.visible} disabled={busy} onChange={visible=>update(current.id,item=>item.type==='script'?{...item,button:{...item.button,buttons:item.button.buttons.map((old,i)=>i===index?{...old,visible}:old)}}:item)}/>
+              <Btn disabled={busy} onClick={()=>update(current.id,item=>item.type==='script'?{...item,button:{...item.button,buttons:item.button.buttons.filter((_,i)=>i!==index)}}:item)}>{t('speech.scriptRemove')}</Btn>
             </div>)}
-            <Btn disabled={busy} onClick={()=>update(current.id,item=>({...item,button:{...current.button,buttons:[...current.button.buttons,{name:'',visible:true}]}}))}>{t('speech.scriptAddButton')}</Btn>
+            <Btn disabled={busy} onClick={()=>update(current.id,item=>item.type==='script'?{...item,button:{...item.button,buttons:[...item.button.buttons,{name:'',visible:true}]}}:item)}>{t('speech.scriptAddButton')}</Btn>
             </div></div>
           </>}
         </>}</div>

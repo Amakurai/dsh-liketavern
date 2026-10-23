@@ -339,4 +339,11 @@ describe('审查修复回归：交互卡回退', () => {
       + '&amp;amp;lt;&amp;amp;sol;think&amp;amp;gt;VISIBLE'
     expect(stripOpaqueDisplayMeta(rendered)).toBe('VISIBLE')
   })
+
+  it('机读块内未闭合反引号或围栏被拒绝后不翻转后续行内代码奇偶配对', () => {
+    const inlineStray = '<think>思考 `未闭合反引号</think>前文 `<UpdateVariable>代码示例</UpdateVariable>` 中间<UpdateVariable>真实补丁</UpdateVariable>后文 `尾码`'
+    expect(stripDisplayMeta(inlineStray)).toBe('前文 `<UpdateVariable>代码示例</UpdateVariable>` 中间后文 `尾码`')
+    const fenceStray = '<think>\n```\n未闭合围栏\n</think>\n正文 `<UpdateVariable>代码示例</UpdateVariable>`\n<UpdateVariable>真实补丁</UpdateVariable>'
+    expect(stripDisplayMeta(fenceStray)).toBe('正文 `<UpdateVariable>代码示例</UpdateVariable>`')
+  })
 })

@@ -1004,11 +1004,11 @@ function markdownCodeRanges(text: string): TextRange[] {
       let end = fence.end
       while (end > at && (text[end - 1] === '\n' || text[end - 1] === '\r')) end--
       keep(at, end)
-      tokens.lastIndex = Math.max(fence.end, at + 1)
+      if (ranges.at(-1)?.start === at || fence.closed) tokens.lastIndex = Math.max(fence.end, at + 1)
       continue
     }
     const end = code.inlineEnd(at)
-    if (end !== null) {
+    if (end !== null && tagsBalanced(text.slice(at, end))) {
       keep(at, end)
       tokens.lastIndex = end
     }

@@ -565,6 +565,8 @@ export class TavernState {
       try {
         const json: unknown = JSON.parse(raw)
         existing = stringField(json, 'identifier') ?? stringField(json, 'id') ?? stringField(json, 'name')
+        const existingSourceId = stringField(json, 'sourceId')
+        if (existingSourceId !== null && sameAsset(existingSourceId)) existing = existingSourceId
       } catch {
         existing = null
       }
@@ -1115,8 +1117,13 @@ export class TavernState {
     return withWorkspaceLock(fs.root, async () => {
       // 人设身份是 id（客户端生成，编辑器内不可改，name 可改）：改名是编辑不是冲突。
       // 文件内的 id 是落盘时改写过的净化 id，故原始 id 与净化 id 都认作同一资产。
-      const clean = this.assetFileId(persona.id)
-      const id = await this.resolveAssetWriteId(fs, 'personas', persona.id, (existing) => existing === persona.id || existing === clean)
+      // 文件内的 id 是落盘时改写过的净化 id，原始未净化 id 记在 sourceId，避免不同未净化 id 撞车互盖。
+      const id = await this.resolveAssetWriteId(fs, 'personas', persona.id, (existing) => existing === persona.id)
+      const existingRaw = await fs.readText(`personas/${id}.json`)
+      let previousSourceId: string | null = null
+      if (existingRaw !== null) {
+        try { previousSourceId = stringField(JSON.parse(existingRaw), 'sourceId') } catch { previousSourceId = null }
+      }
       if (expectedRevision !== undefined) {
         const raw = await fs.readText(`personas/${id}.json`)
         const existing = raw === null ? null : parsePersona(JSON.parse(raw))
@@ -1126,18 +1133,20 @@ export class TavernState {
       }
       // 修订号属于编辑协议；即使内部调用传来列表对象也不污染持久化的人设数据。
       const { revision: _revision, ...value } = persona as Persona & { revision?: unknown }
-      try { await fs.writeText(`personas/${id}.json`, JSON.stringify({ ...value, id }, null, 2) + '\n') }
+      const sourceId = persona.id !== id ? persona.id : previousSourceId
+      try { await fs.writeText(`personas/${id}.json`, JSON.stringify({ ...value, id, ...(sourceId ? { sourceId } : {}) }, null, 2) + '\n') }
       finally { this.bumpAssetRev(`persona:${id}`) }
       return id
     })
   }
 
-  async deletePersona(id: string): Promise<void> {
+  async deletePersona(id: string): Promise<string> {
     const key = this.assetFileId(id)
     const fs = await this.rootFs()
-    await withWorkspaceLock(fs.root, async () => {
+    return withWorkspaceLock(fs.root, async () => {
       try { await fs.delete(`personas/${key}.json`) }
       finally { this.bumpAssetRev(`persona:${key}`) }
+      return key
     })
   }
 

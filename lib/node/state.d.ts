@@ -335,7 +335,7 @@ export declare class TavernState {
     resolvePersona(personaId: string | null): Promise<Persona | null>;
     /** 落盘并返回磁盘上的 id；id 被净化过（含冲突后缀）时连同 JSON 里的 id 一起改写，避免文件名和内容各说各话。 */
     savePersona(persona: Persona, expectedRevision?: string | null): Promise<string>;
-    deletePersona(id: string): Promise<void>;
+    deletePersona(id: string): Promise<string>;
     listRegexRules(): Promise<RegexRule[]>;
     /** 编辑读取不使用热缓存的损坏容错：不能把损坏文件伪装成空列表并授权覆盖。 */
     getRegexRulesSnapshot(): Promise<{

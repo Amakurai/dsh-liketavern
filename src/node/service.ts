@@ -393,9 +393,10 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
   }
 
   async deletePersona(request: { id: string }): Promise<TavernMethodResults['deletePersona']> {
-    await this.state.deletePersona(request.id)
+    const id = await this.state.deletePersona(request.id)
     const settings = this.settingsScope.get()
-    if (settings.defaults?.personaId === request.id) {
+    const defaultId = settings.defaults?.personaId
+    if (defaultId && (defaultId === request.id || defaultId === id || (process.platform === 'win32' && defaultId.toLowerCase() === id.toLowerCase()))) {
       await this.settingsScope.update({
         defaults: { ...settings.defaults, personaId: '' },
       })

@@ -574,6 +574,9 @@ describe('回显实际净化 id', () => {
     expect((await service.listPersonas({})).items[0]!.revision).toBe(r.revision)
 
     await service.savePersona({ persona: { id: 'p2', name: '第二', description: '', avatar: null } })
+    await service.deletePersona({ id: 'p 1!' })
+    expect(settingsRaw.defaults.personaId).toBe('')
+    await service.savePersona({ persona: { id: 'p 1!', name: '重建', description: '', avatar: null } })
     expect(settingsRaw.defaults.personaId).toBe('p_1_')
   })
 

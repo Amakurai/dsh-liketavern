@@ -28,7 +28,8 @@ const personaSchema = looseObject({
 
 /** 人设存储边界：合法 JSON 也要验证字段，避免坏资产进入列表、默认人设解析与提示词。 */
 export function parsePersona(value: unknown): Persona {
-  return personaSchema.parse(value)
+  const { sourceId: _sourceId, ...persona } = personaSchema.parse(value) as Persona & { sourceId?: unknown }
+  return persona
 }
 
 /**

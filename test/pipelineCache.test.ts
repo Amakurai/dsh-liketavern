@@ -138,6 +138,47 @@ describe('缓存字节稳定性守卫', () => {
     expect(result?.standing).not.toContain('模型身份=资产展示名')
     expect(result?.templateContext?.char).toBe('剧情昵称')
     expect((await state.loadCharacter(cardId))?.card.name).toBe('资产展示名')
+
+    await state.saveLorebook('nick-wi', {
+      entries: {
+        '1': { uid: 1, key: ['{{char}}: 欢迎回来'], content: 'NICKNAME-INCLUDE-NAMES-HIT', constant: false, include_names: true },
+      },
+    })
+    await saveBinding(paths, {
+      sessionId: 'nickname-agent', cardId, cardName: card.name, presetId: null, personaId: null,
+      lorebookIds: ['nick-wi'], characterLorebookId: null, interactiveCards: null, greetingIndex: 0,
+      createdAt: new Date(0).toISOString(),
+    })
+    const mockAgent = {
+      id: 'nickname-agent',
+      options: {},
+      session: {
+        id: 'nickname-agent',
+        deriveMessages: () => [
+          {
+            id: 'm-user-1',
+            role: 'user' as const,
+            content: [{ type: 'text' as const, text: '你好' }],
+            source: { kind: 'user' as const },
+          },
+          {
+            id: 'm-asst-1',
+            role: 'assistant' as const,
+            content: [{ type: 'text' as const, text: '欢迎回来' }],
+            source: { kind: 'model' as const, provider: 'test', model: 'test' },
+          },
+        ],
+        snapshotEvents: () => [],
+        requestHeader: () => undefined,
+      },
+    }
+    const agentResult = await runTavernPipeline({
+      state, sessionId: 'nickname-agent',
+      agent: mockAgent as unknown as Parameters<typeof runTavernPipeline>[0]['agent'],
+      mode: 'preview',
+    })
+    expect(agentResult?.turnContext).toContain('NICKNAME-INCLUDE-NAMES-HIT')
+    expect(agentResult?.templateContext?.history.find(m => m.role === 'assistant')?.name).toBe('剧情昵称')
   })
 
   it('跨轮 standing 字节一致；同轮两步快照字节一致；常驻条目恒定注入', async () => {

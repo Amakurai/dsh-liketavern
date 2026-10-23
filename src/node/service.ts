@@ -261,7 +261,7 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
   }
 
   async importPreset(request: { name: string; json: unknown }): Promise<TavernMethodResults['importPreset']> {
-    const { preset, warnings } = parseStPreset(request.json)
+    const { preset, warnings } = parseStPreset(request.json, request.name)
     if (request.name && preset.name === '未命名预设') preset.name = request.name
     // 回显用落盘后的实际 id（identifier 含非法字符时会被净化），UI 按它打开才与磁盘一致。
     const id = await this.state.savePreset(preset)

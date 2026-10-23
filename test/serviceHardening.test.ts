@@ -765,6 +765,15 @@ describe('审查修复回归：服务边界', () => {
     await service.saveCharacter({ cardId, name: '新名字', expectedRevision: revision })
     expect((await state.loadCharacter(cardId))?.card.characterBook?.entries[0]?.content).toBe('在柜子里')
   })
+  it('导入无顶层 identifier/name 的标准 ST 预设时用文件名区分身份，不互相覆盖，且拒绝超长 identifier', async () => {
+    const first = await service.importPreset({ name: 'Preset A', json: { prompts: [{ identifier: 'main', name: 'Main', role: 'system', content: 'A' }] } })
+    const second = await service.importPreset({ name: 'Preset B', json: { prompts: [{ identifier: 'main', name: 'Main', role: 'system', content: 'B' }] } })
+    expect(first.id).toBe('Preset_A')
+    expect(second.id).toBe('Preset_B')
+    expect((await service.getPreset({ id: first.id })).preset.entries[0]?.content).toBe('A')
+    expect((await service.getPreset({ id: second.id })).preset.entries[0]?.content).toBe('B')
+    await expect(service.importPreset({ name: 'x'.repeat(3000), json: { prompts: [] } })).rejects.toThrow(/identifier 过长/)
+  })
   it.each([false, true])('关闭交互卡保留模板缓存中的 HTML 段，原始快照不变：cached=%s', async cached => {
     const { loadTemplateState, templateTextHash } = await import('../src/state/template.js')
     const { cardId } = await state.createCharacter('模板回退')

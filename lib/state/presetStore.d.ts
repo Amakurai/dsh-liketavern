@@ -10,4 +10,4 @@ export interface ParseStPresetResult {
  * 解析 ST 预设 JSON。缺 prompts 数组时抛中文错误；
  * 无法映射的条目不中断导入，记入 warnings。
  */
-export declare function parseStPreset(json: unknown): ParseStPresetResult;
+export declare function parseStPreset(json: unknown, fallbackName?: string): ParseStPresetResult;

@@ -505,7 +505,7 @@ describe('卡内世界书导出格式', () => {
     expect(book).toEqual(v2.data.character_book)
   })
 
-  it('编辑器保存的原生世界书形态导出为 ST 可读的 V2 数组，并能无损再导入', () => {
+  it('编辑器保存的原生世界书形态导出为 ST 可读的 V2 数组，并能无损再导入', async () => {
     const card = parseJsonCard(v2)
     const entries = parseLorebook(card.characterBook!.raw, { source: 'character', sourceRef: 'A' })
     entries[0]!.content = 'An edited sword'
@@ -518,5 +518,70 @@ describe('卡内世界书导出格式', () => {
     expect(book.entries[1]).toMatchObject({ id: 1, enabled: false, position: 'after_char', extensions: { position: 4, depth: 6 } })
     const reimported = parseLorebook(book, { source: 'character', sourceRef: 'A' })
     expect(reimported).toEqual(entries)
+    const { withoutEmbeddedCharacterBook } = await import('../src/state/card.js')
+    const v1WithCustomData = parseJsonCard({
+      spec: 'chara_card_v1',
+      name: 'V1 角色',
+      data: { customField: 1 },
+      lorebook: { name: 'V1Book', entries: [{ keys: ['k'], content: 'c' }] },
+    })
+    expect(v1WithCustomData.spec).toBe('chara_card_v1')
+    const stripped = withoutEmbeddedCharacterBook(v1WithCustomData)
+    expect(stripped.characterBook).toBeNull()
+    expect(stripped.extensions).not.toHaveProperty('lorebook')
+    const { mkdtemp, rm } = await import('node:fs/promises')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const { WorkspaceFs } = await import('../src/state/workspaceFs.js')
+    const { Wal } = await import('../src/state/wal.js')
+    const { saveTemplateState, loadTemplateState, TEMPLATE_GENERATION_PATH } = await import('../src/state/template.js')
+    const { emptyTemplateScopes } = await import('../src/core/template.js')
+    const dir = await mkdtemp(join(tmpdir(), 'tavern-gen-floor-'))
+    try {
+      const wal = new Wal(join(dir, 'state', 'wal'))
+      const fs = new WorkspaceFs(dir, wal)
+      await wal.beginFloor('session.1#t1')
+      await wal.beginFloor('session_1#t1')
+      const makeGen = (sessionId: string, floor: string, marker: string) => ({
+        version: 1 as const,
+        status: 'prepared' as const,
+        sessionId,
+        cardId: 'card-a',
+        storyId: 'story-00000000-0000-0000-0000-000000000001',
+        turn: 1,
+        floor,
+        replay: {
+          version: 2 as const,
+          context: { variables: emptyTemplateScopes(), char: 'A', user: 'B', card: {}, entries: [], presets: [], history: [], now: 0, seed: 1, phase: 'generate' as const, sessionId, cardId: 'card-a' },
+          variables: emptyTemplateScopes(),
+          messageVariablesHash: '0'.repeat(64),
+          operations: [],
+        },
+        plan: {
+          standingKey: 'k',
+          standing: marker.repeat(70_000),
+          turnContext: '',
+          messages: [],
+          history: [],
+          logLines: [],
+          userName: 'B',
+          personaDescription: '',
+          personaLorebookId: null,
+          wiBudget: { limit: 1000, used: 0, overflowed: false },
+          sampling: { temperature: 1, topP: 1, maxTokens: null, stop: [], presencePenalty: 0, frequencyPenalty: 0, thinking: 'disabled' as const },
+          assembleLog: [],
+          stats: { tokensBefore: 0, tokensAfter: 0, trimmedSections: [] },
+        },
+      })
+      await saveTemplateState(fs.withFloor('session.1#t1'), { version: 1, variables: emptyTemplateScopes(), outputs: {}, generation: makeGen('session.1', 'session.1#t1', 'X') })
+      await saveTemplateState(fs.withFloor('session_1#t1'), { version: 1, variables: emptyTemplateScopes(), outputs: {}, generation: makeGen('session_1', 'session_1#t1', 'Y') })
+      await saveTemplateState(fs.withFloor('session_1#t1'), { version: 1, variables: emptyTemplateScopes(), outputs: {}, generation: makeGen('session_1', 'session_1#t1', 'Z') })
+      const files = await fs.list(TEMPLATE_GENERATION_PATH, { recursive: false })
+      expect(files.some(name => name.startsWith('session_1_t1-') && files.length >= 2)).toBe(true)
+      const loaded = await loadTemplateState(fs)
+      expect(loaded.generation?.floor).toBe('session_1#t1')
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
   })
 })

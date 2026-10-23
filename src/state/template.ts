@@ -23,7 +23,10 @@ export const TEMPLATE_STATE_PATH = 'state/template.json'
  */
 export const TEMPLATE_GENERATION_PATH = 'state/template-generation'
 /** 文件名带所属楼层：收口或重新生成同一楼层时，只清理这一层自己留下的正文。 */
-const generationFloor = (floor:string):string => `${floor.replace(/[^A-Za-z0-9_-]/g,'_')}.`
+const generationFloor = (floor:string):string => {
+  const base = floor.replace(/[^A-Za-z0-9_-]/g,'_')
+  return /^[A-Za-z0-9-]+#t\d+$/.test(floor) ? `${base}.` : `${base}-${templateTextHash(floor).slice(0,12)}.`
+}
 const generationPath = (floor:string,hash:string):string => `${TEMPLATE_GENERATION_PATH}/${generationFloor(floor)}${hash}.json`
 export interface TemplateState {
   version: 1

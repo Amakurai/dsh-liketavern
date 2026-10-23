@@ -323,7 +323,10 @@ function HeaderChipSession(props: HeaderChipProps) {
       return
     }
     if (draft !== null) return
-    if (binding) setDraft({ ...binding, lorebookIds: [...binding.lorebookIds] })
+    if (binding) {
+      characterRequest.current += 1
+      setDraft({ ...binding, lorebookIds: [...binding.lorebookIds] })
+    }
   }, [open, binding, draft, sessionId])
 
   if (!tavern) return null
@@ -545,7 +548,17 @@ function HeaderChipSession(props: HeaderChipProps) {
                       <Select
                         width="100%"
                         value={draft.characterLorebookId ?? (draft.useEmbeddedLorebook===false?'@dsh/no-main-worldbook':'')}
-                        onChange={(v) => setDraft({ ...draft, characterLorebookId: v===''||v==='@dsh/no-main-worldbook'?null:v,useEmbeddedLorebook:v!=='@dsh/no-main-worldbook' })}
+                        onChange={(v) => {
+                          const nextMain = v === '' || v === '@dsh/no-main-worldbook' ? null : v
+                          setDraft({
+                            ...draft,
+                            characterLorebookId: nextMain,
+                            useEmbeddedLorebook: v !== '@dsh/no-main-worldbook',
+                            ...(nextMain && draft.characterLorebookIds?.includes(nextMain)
+                              ? { characterLorebookIds: draft.characterLorebookIds.filter((id) => id !== nextMain) }
+                              : {}),
+                          })
+                        }}
                         options={[
                           { value: '', label: embeddedBookLabel },
                             {value:'@dsh/no-main-worldbook',label:t('chip.field.none')},

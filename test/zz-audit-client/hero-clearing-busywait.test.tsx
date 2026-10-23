@@ -43,6 +43,43 @@ afterEach(async () => {
 
 const ok = <T,>(value: T) => ({ ok: true as const, value })
 
+it('清扫在途期间选角保存失败时，同步刷新已被清扫的绑定状态并复位选角标记', async () => {
+  let clearedOnServer = false
+  const clearGate = Promise.withResolvers<{ ok: true; value: { cleared: boolean } }>()
+  const getSessionBinding = vi.fn(async ({ sessionId }: { sessionId: string }) =>
+    ok({ binding: clearedOnServer ? null : { sessionId, cardId: 'card', greetingIndex: 0 }, userName: '旅人', canSwipeGreeting: true, conversationStarted: false }))
+  const setSessionBinding = vi.fn(async () => ({ ok: false as const, error: { code: 'ERR', message: '选角写入失败' } }))
+  const remote = {
+    renderOutputText: vi.fn(async ({ text }: { text: string }) => ok({ text, htmls: [] as string[] })),
+    getSessionBinding,
+    listCharacters: async () => ok({ items: [] }),
+    setSessionBinding,
+    clearSessionBinding: vi.fn(async () => {
+      const res = await clearGate.promise
+      clearedOnServer = true
+      return res
+    }),
+  } as unknown as TavernRemote
+  const sessions = { open: vi.fn(), refresh: vi.fn(async () => {}) }
+  await act(async () => {
+    view = create(<TavernHeroCharacter remote={remote} sessionId="clearing-pick-fail" sessions={sessions}
+      session={{ blank: true }} useSessions={() => 'tavern'} />)
+  })
+  await act(async () => { await Promise.resolve() })
+  expect(getSessionBinding).toHaveBeenCalledTimes(1)
+
+  const chip = view!.root.findByProps({ 'data-tavern-hero-seat': '' }).findByType('button')
+  await act(async () => { chip.props.onClick() })
+  const pickPromise = act(async () => {
+    view!.root.findByType(CharacterPicker).props.onPick('card')
+    clearGate.resolve(ok({ cleared: true }))
+  })
+  await pickPromise
+  expect(setSessionBinding).toHaveBeenCalledTimes(1)
+  expect(getSessionBinding.mock.calls.length).toBeGreaterThanOrEqual(2)
+  expect(JSON.stringify(view!.toJSON())).not.toContain('灯塔')
+})
+
 it('清扫悬挂时选角等待有界超时后继续，卸载后不再排队定时器', async () => {
   const setSessionBinding = vi.fn(async () => ok({ saved: true }))
   const remote = {

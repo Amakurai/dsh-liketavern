@@ -12,7 +12,7 @@ import { cachedSessionBinding, invalidateCharacter, invalidateSessionBinding } f
 import { BINDING_CHANGED_EVENT } from '../src/client/actions.js'
 import { setTavernLocale, t } from '../src/client/i18n.js'
 import { TavernSeatChip } from '../src/client/seatChip.js'
-import { Btn, ConfirmDialog, Dialog } from '../src/client/util.js'
+import { Btn, ConfirmDialog, Dialog, Select } from '../src/client/util.js'
 import type { CharacterDetail, SessionBinding, TavernRemote } from '../src/client/types.js'
 import { resolveConfig, type TavernSettingsScope } from '../src/node/config.js'
 import { TavernService } from '../src/node/service.js'
@@ -239,6 +239,19 @@ it('真实 FS 与 TavernService 中保存途中解除被拦截，顺序完成后
     expect(await state.loadBinding(SESSION)).toBeNull()
     expect((await cachedSessionBinding(f.remote, SESSION))).toMatchObject({ ok: true, value: { binding: null } })
   } finally { await rm(directory, { recursive: true, force: true }) }
+})
+
+it('主世界书选中已在附加世界书中的条目时自动从附加列表移除重复项', async () => {
+  const f = fixture()
+  f.save({ ...defaultBinding(SESSION, CARD), characterLorebookIds: ['主线书', '支线书'] })
+  f.remote.listLorebooks = async () => ok({ items: ['主线书', '支线书'] })
+  const view = await render(f)
+  const selects = bindingDialog(view).findAllByType(Select)
+  const mainLoreSelect = selects.find((s) => s.props.options.some((o: { value: string }) => o.value === '@dsh/no-main-worldbook'))!
+  await act(async () => mainLoreSelect.props.onChange('主线书'))
+  await act(async () => button(view, 'binding.save').props.onClick())
+  expect(f.binding()?.characterLorebookId).toBe('主线书')
+  expect(f.binding()?.characterLorebookIds).toEqual(['支线书'])
 })
 
 it('草稿换到别的卡清空剧情、开场白与 MVU，切回已保存的卡恢复原值', () => {

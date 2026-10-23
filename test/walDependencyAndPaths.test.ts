@@ -5,10 +5,10 @@
  * 楼层写入的路径先规范化再记录，模型给出的记忆 id 不能是路径；世界状态坏行不让预检抛原始解析错误。
  * 全部使用临时目录与手写内容，不调用真实模型。
  */
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, expect, it } from 'vitest'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { Wal } from '../src/state/wal.js'
 import { WorkspaceFs } from '../src/state/workspaceFs.js'
 import { saveTemplateTimers } from '../src/state/template.js'
@@ -241,6 +241,22 @@ it('同毫秒连续提交与开层来回切换文件值时，单调时钟不误�
   await wal.commitFloor('s#t2')
   await wal.rollbackFloor('s#t2', root)
   expect(await shared.readText('flag.txt')).toBe('B')
+})
+
+it('系统时钟回拨时回滚未开始的空楼层，补写的开层与回滚时间仍晚于已提交楼层', async () => {
+  await turn('s#t1', { 'journal.md': '第一层' })
+  const committed = JSON.parse(await readFile(join(root, 'state', 'wal', 's_t1', 'meta.json'), 'utf8')) as { committedAt: string }
+  // 开层在写元数据前中断只留下空目录；回滚它时没有元数据可读，只能补写时间。
+  await mkdir(join(root, 'state', 'wal', 's_t2'))
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(Date.parse(committed.committedAt) - 3_600_000)
+  try { await wal.rollbackFloor('s#t2', root) } finally { vi.useRealTimers() }
+  const archived = (await readdir(join(root, 'state', 'wal'))).find(name => name.startsWith('s_t2.rolled-back-'))
+  expect(archived).toBeDefined()
+  const meta = JSON.parse(await readFile(join(root, 'state', 'wal', archived!, 'meta.json'), 'utf8')) as { startedAt: string; rolledBackAt: string }
+  expect(Date.parse(meta.startedAt)).toBeGreaterThan(Date.parse(committed.committedAt))
+  expect(Date.parse(meta.rolledBackAt)).toBeGreaterThan(Date.parse(meta.startedAt))
+  expect(await shared.readText('journal.md')).toBe('第一层')
 })
 
 it('世界状态同一 id 经人工修订后不再依赖原楼层，回滚保留人工内容', async () => {

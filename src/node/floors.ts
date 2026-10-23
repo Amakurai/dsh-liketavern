@@ -293,7 +293,8 @@ function replayMessage(messages: readonly UserMessage[]): UserMessage {
 
 /** turn N 内的第一条用户消息（编辑对话框预填用）。 */
 function firstUserMessageOf(events: readonly SessionEvent[], turn: number): UserMessage | null {
-  return userMessagesOf(events, turn)[0] ?? null
+  const first = userMessagesOf(events, turn)[0]
+  return first && !isSyntheticUserText(userMessageText(first)) ? first : null
 }
 
 /**
@@ -473,6 +474,9 @@ async function forkAt(
     await options?.verifySource?.()
   },options?.beforePublish)
   const throughTurn = options?.rollbackFromTurn === 0 ? null : inheritedThroughTurn(seed)
+
+
+
   const walLineage = childWalLineage(binding, source.id, throughTurn)
   let created: { dispose(): Promise<void> } | undefined
   pluginForkIds.add(childId)
@@ -779,8 +783,13 @@ export async function editUserMessage(
   const seq = turnStartSeq(source.snapshotEvents(), turn)
   if (seq === null) throw new FloorError('no-turn', `会话中没有 turn ${turn}`)
   const userMessages = userMessagesOf(source.snapshotEvents(), turn)
-  if (userMessages.length === 0) throw new FloorError('no-user-message', `turn ${turn} 内没有用户消息可编辑`)
+  if (userMessages.length === 0 || isSyntheticUserText(userMessageText(userMessages[0]!))) {
+    throw new FloorError('no-user-message', `turn ${turn} 内没有用户消息可编辑`)
+  }
+
   if (!newText.trim()) throw new FloorError('empty-text', '编辑后的正文不能为空')
+  if (isSyntheticUserText(newText)) throw new FloorError('invalid-text', '用户正文不能改为宿主保留的合成指令')
+
 
   const loadedBinding = await state.loadBinding(sessionId)
   const binding = loadedBinding ? inferLiveWalLineage(ctx, source, loadedBinding) : null
@@ -788,7 +797,7 @@ export async function editUserMessage(
   const childId = await forkAt(ctx, state, source, binding, seq - 1, { forkTurn: turn, rollbackFromTurn: turn })
   // 编辑框预填的是首条驱动输入：它换成新文本，同 turn 后续追加的用户输入按原顺序并入同一条消息。
   const edited = replayMessage([
-    createUserMessage({ content: [{ type: 'text', text: newText }], source: { kind: 'user' } }),
+    createUserMessage({ content: [{ type: 'text', text: newText }, ...userMessages[0]!.content.filter((part) => part.type !== 'text')], source: { kind: 'user' } }),
     ...userMessages.slice(1),
   ])
   await resumeAndDrive(ctx, childId, edited)
@@ -856,6 +865,7 @@ export async function editAssistantMessage(
   const endSeq = turnEndSeq(source.snapshotEvents(), turn)
   if (endSeq === null) throw new FloorError('turn-open', `turn ${turn} 尚未完结，不能编辑`)
   if (!newText.trim()) throw new FloorError('empty-text', '编辑后的正文不能为空')
+
 
   const seed = withEditedAssistantMessage(sessionPrefixEvents(source.snapshotEvents(), endSeq), messageId, newText)
   if (!seed) throw new FloorError('no-message', '这条消息不在当前会话中（可能已过期）')

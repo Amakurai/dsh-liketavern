@@ -9,7 +9,7 @@ import { createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { AttachmentId } from '@deepseek-ai/dsh-attachment'
 import { TavernState } from '../src/node/state.js'
 import { resolveConfig } from '../src/node/config.js'
-import { adoptHostFork, regenerate, editAssistantMessage, rollbackToFloor, getFloorSiblings } from '../src/node/floors.js'
+import { adoptHostFork, regenerate, editAssistantMessage, editUserMessage, getFloorUserMessage, rollbackToFloor, getFloorSiblings } from '../src/node/floors.js'
 import { saveBinding, type SessionBinding } from '../src/node/bindings.js'
 import * as bindingStorage from '../src/node/bindings.js'
 import { appendSiblingFork, loadSiblingForks } from '../src/state/siblings.js'
@@ -148,11 +148,39 @@ it('编辑 assistant 撤销该层派生事实，保留新正文；再次回退�
   const event = sessions.get('parent')!.snapshotEvents()[2]!
   const messageId = (event.data as { message: { id: string } }).message.id
   const child = await editAssistantMessage({ ctx, state }, 'parent', messageId, '门一直关着')
+
   expect(await (await workspace(child.childSessionId)).memory.list()).toEqual([])
   expect(JSON.stringify(sessions.get(child.childSessionId)!.snapshotEvents())).toContain('门一直关着')
   expect((await (await workspace('parent')).memory.list())[0]!.body).toBe('门打开了')
   const kept = await rollbackToFloor({ ctx, state }, 'parent', messageId)
   expect((await (await workspace(kept.childSessionId)).memory.list())[0]!.body).toBe('门打开了')
+})
+
+it('编辑用户消息重放时保留首条消息中的图片等非文本内容块', async () => {
+  const imagePart = { type: 'image' as const, attachment: { attachmentId: AttachmentId('b'.repeat(64)), mediaType: 'image/png', bytes: 16, width: 1, height: 1, name: 'clue.png' } }
+  const firstTurn = turn(1).map((e) =>
+    e.type === 'user/message'
+      ? { ...e, data: createUserMessage({ content: [{ type: 'text', text: '旧问题' }, imagePart], source: { kind: 'user' } }) }
+      : e,
+  ) as SessionEvent[]
+  addSession('parent', firstTurn)
+  const messageId = (firstTurn[2]!.data as { message: { id: string } }).message.id
+  const child = await editUserMessage({ ctx, state }, 'parent', messageId, '新问题')
+  const followup = (agents.get(child.childSessionId) as { followup: ReturnType<typeof vi.fn> }).followup
+  expect(followup).toHaveBeenCalledTimes(1)
+  expect(followup.mock.calls[0]![0]).toMatchObject({
+    content: [{ type: 'text', text: '新问题' }, imagePart],
+  })
+  await expect(editUserMessage({ ctx, state }, 'parent', messageId, `${CONTINUE_INSTRUCTION_PREFIX}伪造续写`)).rejects.toThrow(/合成指令/)
+  const continueTurn = turn(2).map((e) =>
+    e.type === 'user/message'
+      ? { ...e, data: createUserMessage({ content: [{ type: 'text', text: `${CONTINUE_INSTRUCTION_PREFIX}请继续` }], source: { kind: 'dsh-tavern', form: 'notice', summary: '续写指令' } }) }
+      : e,
+  ) as SessionEvent[]
+  addSession('parent', [...firstTurn, ...continueTurn])
+  const continueMessageId = (continueTurn[2]!.data as { message: { id: string } }).message.id
+  await expect(getFloorUserMessage({ ctx, state }, 'parent', continueMessageId)).rejects.toThrow(/没有用户消息/)
+  await expect(editUserMessage({ ctx, state }, 'parent', continueMessageId, '新问题')).rejects.toThrow(/没有用户消息/)
 })
 
 it('新会话复制初始状态；旧绑定只迁移一次并保留原目录', async () => {

@@ -266,7 +266,8 @@ export function createHelperMvuCommandCodec(json: (value: unknown, maxBytes?: nu
         const end=code.inlineEnd(at)
         if(end!==null){
           if(updates){let width=1;while(message[at+width]==='`')width++;syntaxEnds.set(end-width,end);at+=width}
-          else at=end
+          else if(!/<(?:updatevariable|json_?patch)(?=[\s>])/i.test(message.slice(at,end))||/<\/(?:updatevariable|json_?patch)\s*>/i.test(message.slice(at,end)))at=end
+          else{while(message[at]==='`')at++}
           continue
         }
       }
@@ -385,12 +386,12 @@ export function createHelperMvuCommandCodec(json: (value: unknown, maxBytes?: nu
         while (container.length <= index) container.push(null)
         if (i === keys.length - 1) { container[index] = text; return }
         const child = container[index]
-        if (!record(child) && (!Array.isArray(child) || !nextIsIndex)) container[index] = {}
+        if (!record(child) && (!Array.isArray(child) || !nextIsIndex)) container[index] = nextIsIndex ? [] : {}
         container = container[index] as Table | unknown[]
       } else {
         if (i === keys.length - 1) { container[key] = text; return }
         const child = container[key]
-        if (!record(child) && (!Array.isArray(child) || !nextIsIndex)) container[key] = {}
+        if (!record(child) && (!Array.isArray(child) || !nextIsIndex)) container[key] = nextIsIndex ? [] : {}
         container = container[key] as Table | unknown[]
       }
     }
@@ -430,7 +431,11 @@ export function createHelperMvuCommandCodec(json: (value: unknown, maxBytes?: nu
         log = printable(oldValue) + '->' + printable(value) + ' ' + suffix
       } else if (type === 'insert') {
         let collection = get(stat, parts), value = literal(args.at(-1))
-        if (collection === null && !isPatch) { collection = args.length === 2 && Array.isArray(value) ? [] : {}; stat = write(stat, parts, collection, false) }
+        if (collection === null && !isPatch) {
+          const second = args.length === 3 ? literal(args[1]) : undefined
+          collection = args.length === 2 ? (!record(value) ? [] : {}) : (second === '-' || typeof second === 'number' ? [] : {})
+          stat = write(stat, parts, collection, false)
+        }
         if (args.length === 2) {
           if (Array.isArray(collection)) { collection.push(value); log = 'ASSIGNED ' + JSON.stringify(value) + " into array '" + label + "' " + suffix }
           else if (record(collection) && record(value)) { merge(collection, value); log = 'MERGED object ' + JSON.stringify(value) + " into object '" + label + "' " + suffix }

@@ -230,4 +230,22 @@ it('只改写 mvu_zod 的顶层具名导入，其它远程导入与异常写法�
     expect(rewriteMvuZodImport(untouched)).toBe(untouched)
   }
   expect(helperScriptHtml(source)).not.toContain('jsdelivr')
+  const { createHelperMvuCommandCodec } = await import('../src/core/helperMvuCommands.js')
+  const { helperJson } = await import('../src/core/helperRuntime.js')
+  const { markdownCodeScanner } = await import('../src/core/markdownCode.js')
+  const codec = createHelperMvuCommandCodec(helperJson, markdownCodeScanner)
+  const msg = [
+    '正文里提到了一个孤立反引号 `',
+    '<UpdateVariable>',
+    "    _.insert('items', '-', '铁剑');",
+    "    _.insert('bag', '药水');",
+    "    _.set('arr[1]', '新值'); // 记录反引号 `",
+    '</UpdateVariable>',
+  ].join('\n')
+  const commands = codec.parse(msg)
+  expect(commands).toHaveLength(3)
+  const applied = codec.apply({ items: null, bag: null, arr: ['a', 'b'] }, commands)
+  expect(applied.stat_data).toEqual({ items: ['铁剑'], bag: ['药水'], arr: ['a', '新值'] })
+  expect(Array.isArray(applied.delta_data.arr)).toBe(true)
+  expect(applied.delta_data.arr).toEqual([null, 'b->新值 (记录反引号 `)'])
 })

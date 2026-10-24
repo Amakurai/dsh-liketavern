@@ -61,6 +61,7 @@ dsh-liketavern 为 DeepSeek Harness 的 Tavern 插件。角色卡、预设、世
 - runtime context、同轮写入、续写和步骤 notice 均经 isSyntheticUserText 过滤，不当作用户台词，不参与 WI、lastusermessage 或正则 depth。
 - 步骤收口 notice 只在工具执行时 inject，不放 agent/pre-step，否则宿主可能多拉出孤儿步骤。
 - 采样只透传 temperature/maxTokens/stop 和模型公布的 reasoningEffort；top_p、penalty 仅记录。部署锁定 thinking disabled 时插件不能强开。
+- Tavern 的 DeepSeek 适配器跟随宿主 `/models` 列表：目录广告用 `offered`、请求解析用 `resolution`，需升级或不支持的 listed 模型沿用宿主 `CLIENT_UPGRADE_REQUIRED`/`MODEL_UNSUPPORTED`。列表请求只读公开 endpoint，失败退回内置目录；设置变更后重新解析 endpoint、目录与是否继续跟随。
 
 ## UI 与类型
 

@@ -188,12 +188,10 @@ it('实际剧情事务保存 MVU 消息变量，重建宿主仍可读且同卡�
     ] as unknown as SessionEvent[]
     const deferredSession={id:'other' as SessionEvent['type'] & string,snapshotEvents:()=>deferredEvents}
     restarted.stepNoticeMarks.set('other',1)
-    restarted.wiCache.set('other',{key:'k',result:{activated:[],timedEffects:{sticky:{},cooldown:{}},budgetUsed:0,log:[]}})
     await onTurnStart(restarted,'other',2,deferredSession as never)
     expect(restarted.openFloors.has('other')).toBe(false)
     await onTurnEnd(restarted,'other',deferredSession as never)
     expect(restarted.stepNoticeMarks.has('other')).toBe(false)
-    expect(restarted.wiCache.has('other')).toBe(false)
     const otherStoryId=(await restarted.loadBinding('other'))!.storyId!
     const otherCtx={sessions:{get:()=>({snapshotEvents:()=>deferredEvents})},get:()=>undefined} as unknown as Context
     const eventState=await getHelperEventState(otherCtx,restarted,{sessionId:'other',storyId:otherStoryId,closedSeq:4})

@@ -199,7 +199,7 @@ it('磁盘 prepared 健康但实际选择的 warm 日志未知，正常结束帧
 it('回复已成功保存后最终提交前维护恢复未知 prepared，最终预检拒绝且不能先清理楼层缓存',async()=>{
   const {state,ws,run}=await liveFixture()
   await run()
-  const healthy=await loadTemplateState(ws.fs),open=state.openFloors.get('s1'),plan=state.turnPlans.get('s1'),wi=state.wiCache.get('s1')
+  const healthy=await loadTemplateState(ws.fs),open=state.openFloors.get('s1'),plan=state.turnPlans.get('s1')
   let maintainedDisk:Awaited<ReturnType<typeof disk>>|undefined
   const complete=templateOutputModule.completeTemplateOutput
   // 先完成真实回复与 WAL 写入，再模拟两次持锁之间的楼层外维护；最终提交必须复核这个新根。
@@ -218,7 +218,6 @@ it('回复已成功保存后最终提交前维护恢复未知 prepared，最终�
   expect(state.openFloors.get('s1')).toBe(open)
   expect(state.currentTurns.get('s1')).toBe(1)
   expect(state.turnPlans.get('s1')).toBe(plan)
-  expect(state.wiCache.get('s1')).toBe(wi)
   expect((await ws.wal.validateFloor('s1#t1')).committed).toBe(false)
 })
 

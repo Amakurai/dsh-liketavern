@@ -26,13 +26,25 @@ function liveFrameCount(map:Map<string,FrameRecord>):number{
   for(const value of map.values())if(!value.closed)live++
   return live
 }
+/** 墓碑总量与活动连接共用同一总量上界：超限时淘汰最旧墓碑，断开风暴不能让记录无界增长。 */
+function evictStaleTombstones(map:Map<string,FrameRecord>):void{
+  while(map.size>=MAX_FRAMES){
+    let oldest:string|undefined
+    for(const [key,value] of map)if(value.closed){oldest=key;break}
+    if(oldest===undefined)break
+    map.delete(oldest)
+  }
+}
 export async function openHelperFrame(ctx:Context,state:TavernState,request:HelperFrameOpen):Promise<{token:string}>{
   identity(request)
   const map=mapFor(state),old=map.get(request.frameId)
   if(old&&(old.sessionId!==request.sessionId||old.messageId!==request.messageId||request.epoch<=old.epoch))throw new Error('卡面运行时连接已失效')
-  // 已关闭的墓碑只用于拒绝迟到旧连接（CLOSED_RETENTION_MS 内），不占接口预算：
+  // 已关闭的墓碑只用于拒绝迟到旧连接（CLOSED_RETENTION_MS 内），不占连接预算：
   // 卡面刷新会不断产生新 frameId，把墓碑计入会让关闭旧卡面也释放不了预算，新帧被误拒。
-  if(!old&&map.size>=MAX_FRAMES&&liveFrameCount(map)>=MAX_FRAMES)throw new Error('卡面运行时连接超过 1024 个的接口预算，请关闭旧卡面后重试')
+  if(!old&&map.size>=MAX_FRAMES){
+    if(liveFrameCount(map)>=MAX_FRAMES)throw new Error('卡面运行时连接超过 1024 个的接口预算，请关闭旧卡面后重试')
+    evictStaleTombstones(map)
+  }
   // 先替换记录，不能把失效操作排到旧写入占用的剧情/会话队列之后。
   const record:FrameRecord={...request,closed:false,closedAt:Date.now()};map.set(request.frameId,record)
   try{

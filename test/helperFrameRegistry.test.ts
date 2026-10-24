@@ -147,7 +147,7 @@ it('只读候选能注册但不能取得写许可；同运行时更高 epoch 可
   expect(()=>guard(writable,current.token)(binding)).not.toThrow();expect(()=>guard(input,token)(binding)).toThrow('租约已失效')
 })
 
-it('1024 条记录预算拒绝溢出并保留活动许可；断开墓碑满 15 分钟后回收且不影响其它活动卡面',async()=>{
+it('1024 条活动连接预算拒绝溢出并保留活动许可；关闭一条立即释放预算',async()=>{
   let now=Date.now();vi.spyOn(Date,'now').mockImplementation(()=>now)
   const frames:FrameRequest[]=[],tokens:string[]=[]
   for(let index=0;index<1024;index++){
@@ -157,23 +157,26 @@ it('1024 条记录预算拒绝溢出并保留活动许可；断开墓碑满 15 �
   const first=frames[0]!,last=frames.at(-1)!,extra=request({frameId:'frame-budget-extra'})
   await expect(openHelperFrame(ctx,state,extra)).rejects.toThrow('1024')
   expect(()=>guard(first,tokens[0]!)(binding)).not.toThrow();expect(()=>guard(last,tokens.at(-1)!)(binding)).not.toThrow()
+  // 已关闭的墓碑不占连接预算：关闭一条后新帧立即可连，且旧令牌随之失效
   closeHelperFrame(state,{...first,token:tokens[0]!})
-  await expect(openHelperFrame(ctx,state,extra)).rejects.toThrow('1024')
-  now+=15*60*1000;await expect(openHelperFrame(ctx,state,extra)).rejects.toThrow('1024')
-  now++;const current=await openHelperFrame(ctx,state,extra)
-  expect(()=>guard(extra,current.token)(binding)).not.toThrow();expect(()=>guard(first,tokens[0]!)(binding)).toThrow('租约已失效')
+  const current=await openHelperFrame(ctx,state,extra)
+  expect(()=>guard(extra,current.token)(binding)).not.toThrow()
+  expect(()=>guard(first,tokens[0]!)(binding)).toThrow('租约已失效')
   expect(()=>guard(last,tokens.at(-1)!)(binding)).not.toThrow()
 },60_000)
 
-it('失败连接墓碑也有总记录预算与定时回收；另一 TavernState 的正常连接不受影响',async()=>{
+it('失败连接墓碑不占连接预算但总量有界；另一 TavernState 的正常连接不受影响',async()=>{
   let now=Date.now();vi.spyOn(Date,'now').mockImplementation(()=>now)
   for(let index=0;index<1024;index++){
     await expect(openHelperFrame(ctx,state,request({frameId:'frame-failed-'+String(index).padStart(4,'0'),storyId:'wrong-story'}))).rejects.toThrow('绑定已经改变')
   }
-  const extra=request({frameId:'frame-after-failure'})
-  await expect(openHelperFrame(ctx,state,extra)).rejects.toThrow('1024')
+  const extra=request({frameId:'frame-after-failure'}),current=await openHelperFrame(ctx,state,extra)
+  expect(()=>guard(extra,current.token)(binding)).not.toThrow()
+  // 记录总量超上限时淘汰最旧墓碑而不是拒绝新连接
+  const more=request({frameId:'frame-after-failure-2'}),second=await openHelperFrame(ctx,state,more)
+  expect(()=>guard(more,second.token)(binding)).not.toThrow()
   const otherState=new TavernState(state.paths,()=>resolveConfig({})),other=await openHelperFrame(ctx,otherState,extra)
   expect(()=>helperFrameWriteGuard(otherState,{sessionId:source.id,messageId,storyId:extra.storyId},lease(extra,other.token))!(binding)).not.toThrow()
-  now+=15*60*1000+1;const current=await openHelperFrame(ctx,state,extra)
-  expect(()=>guard(extra,current.token)(binding)).not.toThrow()
+  now+=15*60*1000+1;const after=await openHelperFrame(ctx,state,{...extra,epoch:2,runtimeId:'runtime-factory-2'})
+  expect(()=>guard({...extra,epoch:2,runtimeId:'runtime-factory-2'},after.token)(binding)).not.toThrow()
 },60_000)

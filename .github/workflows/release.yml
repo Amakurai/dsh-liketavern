@@ -31,6 +31,10 @@ jobs:
       - name: 安装依赖
         run: npm ci
 
+      # 附件里的 peer 必须与锁文件、allowScripts 指向同一个宿主版本；这里拒绝版本脱节的 tag。
+      - name: 宿主版本对齐
+        run: npm run host:check
+
       # lib/ 刻意入库；发版前必须确认 tarball 里的产物就是从这份源码构建出来的。
       - name: 构建并校验入库产物
         run: |
@@ -63,13 +67,16 @@ jobs:
         run: node scripts/release-notes.mjs "${GITHUB_REF_NAME#v}" CHANGELOG.md release-notes.md release-title.txt
 
       # prepack 会再跑一次构建；tar 包内容由 verify-package 的白名单约束过。
+      # 同目录生成 SHA256SUMS.txt，与 README 的完整性校验说明对应。
       - name: 打安装包
         run: |
           npm pack --silent
           ls -l "dsh-liketavern-${GITHUB_REF_NAME#v}.tgz"
+          sha256sum "dsh-liketavern-${GITHUB_REF_NAME#v}.tgz" > SHA256SUMS.txt
+          cat SHA256SUMS.txt
 
       # 幂等：Release 已存在则跳过（registry/Actions 故障后手工补建不会因为重复变红）。
-      - name: 建 GitHub Release 并附上 tarball
+      - name: 建 GitHub Release 并附上 tarball 与校验和
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -80,4 +87,5 @@ jobs:
           gh release create "$GITHUB_REF_NAME" \
             --title "$(cat release-title.txt)" \
             --notes-file release-notes.md \
-            "dsh-liketavern-${GITHUB_REF_NAME#v}.tgz"
+            "dsh-liketavern-${GITHUB_REF_NAME#v}.tgz" \
+            SHA256SUMS.txt

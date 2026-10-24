@@ -23,6 +23,11 @@ jobs:
       - name: 安装依赖
         run: npm ci
 
+      # peer / dev / overrides / allowScripts / 锁文件必须指向同一个宿主版本，
+      # 否则 tag 与 Release 附件会在安装后才暴露版本脱节（issue #13）。
+      - name: 宿主版本对齐
+        run: npm run host:check
+
       - name: 依赖安全审计
         run: npm audit
 
@@ -95,6 +100,9 @@ jobs:
 
       - name: 安装依赖
         run: npm ci
+
+      - name: 宿主版本对齐
+        run: npm run host:check
 
       - name: 依赖安全审计
         run: npm audit

@@ -65,6 +65,7 @@
     "backup": "node lib/backup.js",
     "backup:check": "node scripts/verify-backup.mjs",
     "package:check": "node scripts/verify-package.mjs --dry-run",
+    "host:check": "node scripts/verify-host-alignment.mjs",
     "release": "node scripts/release.mjs",
     "release:notes": "node scripts/release-notes.mjs",
     "prepack": "npm run build",

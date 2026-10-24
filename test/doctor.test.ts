@@ -366,7 +366,7 @@ describe('doctor CLI', () => {
     expect(packageJson.bin).toMatchObject({ 'dsh-tavern-doctor': './lib/doctor.js' })
     expect(packageJson.exports['./doctor']).toEqual({ types: './lib/doctor.d.ts', default: './lib/doctor.js' })
     expect(packageJson.scripts.doctor).toBe('node lib/doctor.js')
-    expect(packageJson.peerDependencies['@deepseek-ai/dsh']).toBe('0.2.1-rc.2')
+    expect(packageJson.peerDependencies['@deepseek-ai/dsh']).toBe('0.2.1-rc.3')
   })
 
   it('只接受只读参数，未知修复参数直接拒绝', () => {
@@ -398,7 +398,7 @@ describe('doctor 宿主版本', () => {
 
   it('精确匹配 peer 版本时报告兼容', async () => {
     const report = await runDoctor({ home, nodeVersion: '24.0.0', pluginVersion: '9.8.7' })
-    expect(report.runtime.dsh).toEqual({ installedVersion: '0.2.1-rc.2', expectedVersion: '0.2.1-rc.2', compatible: true })
+    expect(report.runtime.dsh).toEqual({ installedVersion: '0.2.1-rc.3', expectedVersion: '0.2.1-rc.3', compatible: true })
     expect(areDshVersionsCompatible('0.2.1-rc.2+host', '0.2.1-rc.2+plugin')).toBe(true)
   })
 

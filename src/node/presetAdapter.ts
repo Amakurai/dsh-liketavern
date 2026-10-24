@@ -169,7 +169,10 @@ export function registerPresetAdapter(ctx: Context, project: PresetRequestProjec
     // 设置对象可能原地更新：先丢弃解析缓存，再按新快照判断跟随状态与重试策略。
     lastRaw = undefined; connection = undefined
     followListing()
-    if (registration) ensureRegistered()
+    if (!registration) return
+    // 非法设置只应影响下一次请求，不能让设置页的重注册失败中断整次更新。
+    try { ensureRegistered() }
+    catch (error) { ctx.logger.warn(`dsh-tavern: DeepSeek 布局通道设置暂不可用：${String(error)}`) }
   })
   ctx.effect(() => () => listings.dispose(), 'dsh-tavern: DeepSeek model listing')
   return { ensureRegistered }

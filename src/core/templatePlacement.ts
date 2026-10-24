@@ -36,7 +36,9 @@ function parameters(text:string):Map<string,string> {
       while(at<text.length) {
         const char=text[at++]!
         if(char===quote) {closed=true;break}
-        if(char==='\\' && text[at]===quote) value+=text[at++]
+        // 引号内同时认 \"（\'）与 \\：否则以反斜杠结尾的值（正则匹配字面反斜杠）
+        // 会让第二个反斜杠吞掉闭合引号，连带吞掉后续参数报「引号未闭合」。
+        if(char==='\\' && (text[at]==='\\'||text[at]===quote)) value+=text[at++]
         else value+=char
       }
       if(!closed) throw new Error('@INJECT 引号未闭合')
@@ -45,7 +47,11 @@ function parameters(text:string):Map<string,string> {
       const rest=text.slice(at)
       const boundary=/[,\s]+(?=[a-zA-Z]+\s*=)/.exec(rest)
       const length=boundary?.index ?? rest.length
-      value=rest.slice(0,length).trim().replace(/,$/,'');at+=length
+      const trimmed=rest.slice(0,length).trim()
+      // 尾随分隔符容忍（pos=1,）只对非 regex 键剥一个尾逗号：
+      // 未引号的正则以字面逗号结尾时（regex=price:\d+,），该逗号只可能是模式的一部分。
+      value=name==='regex' ? trimmed : trimmed.replace(/,$/,'')
+      at+=length
     }
     if(result.has(name)||!value) throw new Error(`重复或空注入参数：${name}`)
     result.set(name,value)

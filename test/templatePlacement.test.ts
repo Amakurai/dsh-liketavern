@@ -30,6 +30,17 @@ describe('定位参数解析',()=> {
     expect(parseTemplatePlacement('[GENERATE:REGEX:x]')).toMatchObject({mode:'regex',regex:'x'})
     expect(parseTemplatePlacement('ordinary')).toBeNull()
   })
+  it('未引号正则的字面尾逗号是模式的一部分，不因尾随分隔符容忍被剥掉',()=> {
+    expect(parseTemplatePlacement('@INJECT regex=price:\\d+,')).toMatchObject({mode:'regex',regex:'price:\\d+,'})
+    expect(parseTemplatePlacement('@INJECT regex="price:\\d+,"')).toMatchObject({mode:'regex',regex:'price:\\d+,'})
+    // 非正则键仍容忍尾随分隔符（pos=1, 与 pos=1 等价）。
+    expect(parseTemplatePlacement('@INJECT pos=1,')).toMatchObject({mode:'pos',pos:1})
+  })
+  it('引号内双反斜杠转义为单个反斜杠，值可以反斜杠结尾且不吞闭合引号',()=> {
+    expect(parseTemplatePlacement('@INJECT regex="end\\\\"')).toMatchObject({mode:'regex',regex:'end\\'})
+    expect(parseTemplatePlacement('@INJECT regex="a\\\\,b",role=user')).toMatchObject({mode:'regex',regex:'a\\,b',role:'user'})
+    expect(parseTemplatePlacement('@INJECT regex="a\\"b"')).toMatchObject({mode:'regex',regex:'a"b'})
+  })
   it.each(['@INJECT','@INJECT pos=1,target=user','@INJECT pos=1,role=tool','@INJECT pos=1,pos=2','@INJECT pos=1,unknown=2','@INJECT pos=1.5','@INJECT pos=9007199254740992','@INJECT pos=1,at=after','@INJECT target=user,at=middle','@INJECT regex="open','[GENERATE:REGEX:]'])('拒绝错误参数 %s',label=> {
     expect(()=>parseTemplatePlacement(label)).toThrow()
   })
@@ -62,6 +73,12 @@ describe('隔离定位注入',()=> {
     ])
     expect(result.messages.map(m=>m.content)).toEqual(['NEW','found','first','answer','last'])
     expect(result.log.some(l=>l.detail.includes('未找到目标'))).toBe(true)
+  })
+  it('以字面逗号结尾的未引号正则匹配含逗号的那条消息，不因尾逗号剥离而错位',async()=> {
+    const result=await isolated('assemble',input([
+      {comment:'@INJECT regex=price:\\d+,',content:'FOUND'},
+    ],[{role:'user',content:'这东西 price:9'},{role:'assistant',content:'好的 price:9,可以议价'}]))
+    expect(result.messages.map(m=>m.content)).toEqual(['这东西 price:9','FOUND','好的 price:9,可以议价'])
   })
   it('GENERATE 下标追加正文，正则忽略大小写匹配每条且传入局部消息',async()=> {
     const result=await run([

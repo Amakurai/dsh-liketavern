@@ -2,6 +2,15 @@
 
 本记录说明依赖告警的处理结果与剩余边界，最近复核日期为 2026-10-10。v0.5.2 的干净 `npm ci` 后，全量 `npm audit` 与生产依赖审计均为 **0 项已知漏洞**。审计或测试通过都不能解释为不存在未知漏洞。
 
+## 2026-10-24 新公告处理
+
+推送 `ca72bdd` 后两平台 CI 的 `npm audit` 报告 68 项（3 moderate、65 high），对应三个新公布公告，与该提交的代码改动无关。固定已修复的公开版本并更新锁文件，干净安装后全量审计归零：
+
+- **运行依赖与宿主传递依赖** `zod` 4.4.3 → **4.6.7**（`dependencies` 与根级 `overrides` 同步固定）：修复校验超大受限集合时可能耗尽内存的告警（[GHSA-mrhx-c7xc-m3w5](https://github.com/advisories/GHSA-mrhx-c7xc-m3w5)）。
+  - 升级改变模板 vendor，v0.5.6 运行时指纹 `daccaaf4…` 已登记为受信 v1 旧运行时，旧检查点按原指纹恢复、旧堆保留原 vendor 直到环境结束。
+- 开发宿主链 `@deepseek-ai/dsh-http-proxy` 与 `@deepseek-ai/dsh-web-fetch-http` 锁定的 `undici` 经根级 `overrides` 固定 **8.12.3**：修复 EventSource 解析器无界内存、SRI 算法标记大小写绕过及过多 `content-encoding` 未捕获异常（[GHSA-4qv8-2p9j-2685](https://github.com/advisories/GHSA-4qv8-2p9j-2685)、[GHSA-f72v-6w45-q472](https://github.com/advisories/GHSA-f72v-6w45-q472)、[GHSA-xjj6-f33q-929c](https://github.com/advisories/GHSA-xjj6-f33q-929c)）。
+- 开发宿主链 `@deepseek-ai/dsh-app-boot → ajv → fast-uri` 经根级 `overrides` 固定 **3.1.9**：修复 URI scheme 百分号解码欺骗、相对引用路径规范化、WHATWG host 混淆及后缀引用冒号注入（[GHSA-w74x-v6f9-j3xg](https://github.com/advisories/GHSA-w74x-v6f9-j3xg)、[GHSA-xhq7-xmqj-769h](https://github.com/advisories/GHSA-xhq7-xmqj-769h)、[GHSA-wjr9-j795-jxcr](https://github.com/advisories/GHSA-wjr9-j795-jxcr)、[GHSA-333x-w4r6-6crp](https://github.com/advisories/GHSA-333x-w4r6-6crp)）。
+
 ## 2026-10-22 新公告处理
 
 推送 `0c6d9e2` 后两平台 CI 的 `npm audit` 报告 7 项（5 moderate、2 high），均为当天前后新公布的公告，与该提交的代码改动无关。按既有做法固定已修复的公开版本并更新锁文件，干净安装后全量审计归零：

@@ -451,12 +451,12 @@ export declare const METHODS: {
                 }, import("zod/v4/core").$strip>>;
                 interactiveCards: import("zod/mini").ZodMiniNullable<import("zod/mini").ZodMiniBoolean<boolean>>;
                 helperMvu: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniBoolean<boolean>>;
-                greetingIndex: import("zod/mini").ZodMiniNumberFormat;
+                greetingIndex: import("zod/mini").ZodMiniInt;
                 authorNote: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
                 injectJournal: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniBoolean<boolean>>;
                 walLineage: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniArray<import("zod/mini").ZodMiniObject<{
                     sessionId: import("zod/mini").ZodMiniString<string>;
-                    throughTurn: import("zod/mini").ZodMiniNumberFormat;
+                    throughTurn: import("zod/mini").ZodMiniInt;
                 }, import("zod/v4/core").$strip>>>;
                 createdAt: import("zod/mini").ZodMiniString<string>;
             }, import("zod/v4/core").$strip>;
@@ -490,7 +490,7 @@ export declare const METHODS: {
     renderOutputText: {
         req: import("zod/mini").ZodMiniObject<{
             text: import("zod/mini").ZodMiniString<string>;
-            messageId: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNumberFormat>;
+            messageId: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniInt>;
             sessionId: import("zod/mini").ZodMiniString<string>;
         }, import("zod/v4/core").$strip>;
         value: import("zod/mini").ZodMiniUnknown;
@@ -499,7 +499,7 @@ export declare const METHODS: {
     getHelperEventState: {
         req: import("zod/mini").ZodMiniObject<{
             storyId: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
-            closedSeq: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNumberFormat>;
+            closedSeq: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniInt>;
             sessionId: import("zod/mini").ZodMiniString<string>;
         }, import("zod/v4/core").$strip>;
         value: import("zod/mini").ZodMiniUnknown;
@@ -507,7 +507,7 @@ export declare const METHODS: {
     };
     getHelperSnapshot: {
         req: import("zod/mini").ZodMiniObject<{
-            messageId: import("zod/mini").ZodMiniNumberFormat;
+            messageId: import("zod/mini").ZodMiniInt;
             sessionId: import("zod/mini").ZodMiniString<string>;
         }, import("zod/v4/core").$strip>;
         value: import("zod/mini").ZodMiniUnknown;
@@ -529,11 +529,11 @@ export declare const METHODS: {
     };
     openHelperFrame: {
         req: import("zod/mini").ZodMiniObject<{
-            messageId: import("zod/mini").ZodMiniNumberFormat;
+            messageId: import("zod/mini").ZodMiniInt;
             storyId: import("zod/mini").ZodMiniString<string>;
             frameId: import("zod/mini").ZodMiniString<string>;
             runtimeId: import("zod/mini").ZodMiniString<string>;
-            epoch: import("zod/mini").ZodMiniNumberFormat;
+            epoch: import("zod/mini").ZodMiniInt;
             readOnly: import("zod/mini").ZodMiniBoolean<boolean>;
             sessionId: import("zod/mini").ZodMiniString<string>;
         }, import("zod/v4/core").$strip>;
@@ -542,10 +542,10 @@ export declare const METHODS: {
     };
     closeHelperFrame: {
         req: import("zod/mini").ZodMiniObject<{
-            messageId: import("zod/mini").ZodMiniNumberFormat;
+            messageId: import("zod/mini").ZodMiniInt;
             frameId: import("zod/mini").ZodMiniString<string>;
             runtimeId: import("zod/mini").ZodMiniString<string>;
-            epoch: import("zod/mini").ZodMiniNumberFormat;
+            epoch: import("zod/mini").ZodMiniInt;
             token: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
             sessionId: import("zod/mini").ZodMiniString<string>;
         }, import("zod/v4/core").$strip>;
@@ -554,7 +554,7 @@ export declare const METHODS: {
     };
     editHelperMessages: {
         req: import("zod/mini").ZodMiniObject<{
-            messageId: import("zod/mini").ZodMiniNumberFormat;
+            messageId: import("zod/mini").ZodMiniInt;
             storyId: import("zod/mini").ZodMiniString<string>;
             historyRevision: import("zod/mini").ZodMiniString<string>;
             edits: import("zod/mini").ZodMiniUnknown;
@@ -562,7 +562,7 @@ export declare const METHODS: {
             frameLease: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniObject<{
                 frameId: import("zod/mini").ZodMiniString<string>;
                 runtimeId: import("zod/mini").ZodMiniString<string>;
-                epoch: import("zod/mini").ZodMiniNumberFormat;
+                epoch: import("zod/mini").ZodMiniInt;
                 token: import("zod/mini").ZodMiniString<string>;
             }, import("zod/v4/core").$strip>>;
             sessionId: import("zod/mini").ZodMiniString<string>;
@@ -572,7 +572,7 @@ export declare const METHODS: {
     };
     rebindHelperWorldbooks: {
         req: import("zod/mini").ZodMiniObject<{
-            messageId: import("zod/mini").ZodMiniNumberFormat;
+            messageId: import("zod/mini").ZodMiniInt;
             storyId: import("zod/mini").ZodMiniString<string>;
             bindingRevision: import("zod/mini").ZodMiniString<string>;
             kind: import("zod/mini").ZodMiniEnum<{
@@ -586,7 +586,7 @@ export declare const METHODS: {
             frameLease: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniObject<{
                 frameId: import("zod/mini").ZodMiniString<string>;
                 runtimeId: import("zod/mini").ZodMiniString<string>;
-                epoch: import("zod/mini").ZodMiniNumberFormat;
+                epoch: import("zod/mini").ZodMiniInt;
                 token: import("zod/mini").ZodMiniString<string>;
             }, import("zod/v4/core").$strip>>;
             sessionId: import("zod/mini").ZodMiniString<string>;
@@ -604,7 +604,7 @@ export declare const METHODS: {
     };
     helperWorldbookOperation: {
         req: import("zod/mini").ZodMiniObject<{
-            messageId: import("zod/mini").ZodMiniNumberFormat;
+            messageId: import("zod/mini").ZodMiniInt;
             storyId: import("zod/mini").ZodMiniString<string>;
             bindingRevision: import("zod/mini").ZodMiniString<string>;
             name: import("zod/mini").ZodMiniString<string>;
@@ -621,7 +621,7 @@ export declare const METHODS: {
             frameLease: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniObject<{
                 frameId: import("zod/mini").ZodMiniString<string>;
                 runtimeId: import("zod/mini").ZodMiniString<string>;
-                epoch: import("zod/mini").ZodMiniNumberFormat;
+                epoch: import("zod/mini").ZodMiniInt;
                 token: import("zod/mini").ZodMiniString<string>;
             }, import("zod/v4/core").$strip>>;
             sessionId: import("zod/mini").ZodMiniString<string>;
@@ -651,7 +651,7 @@ export declare const METHODS: {
             frameLease: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniObject<{
                 frameId: import("zod/mini").ZodMiniString<string>;
                 runtimeId: import("zod/mini").ZodMiniString<string>;
-                epoch: import("zod/mini").ZodMiniNumberFormat;
+                epoch: import("zod/mini").ZodMiniInt;
                 token: import("zod/mini").ZodMiniString<string>;
             }, import("zod/v4/core").$strip>>;
             sessionId: import("zod/mini").ZodMiniString<string>;
@@ -702,14 +702,14 @@ export declare const METHODS: {
     };
     commitHelperVariables: {
         req: import("zod/mini").ZodMiniObject<{
-            messageId: import("zod/mini").ZodMiniNumberFormat;
+            messageId: import("zod/mini").ZodMiniInt;
             storyId: import("zod/mini").ZodMiniString<string>;
             historyRevision: import("zod/mini").ZodMiniString<string>;
             changes: import("zod/mini").ZodMiniUnknown;
             frameLease: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniObject<{
                 frameId: import("zod/mini").ZodMiniString<string>;
                 runtimeId: import("zod/mini").ZodMiniString<string>;
-                epoch: import("zod/mini").ZodMiniNumberFormat;
+                epoch: import("zod/mini").ZodMiniInt;
                 token: import("zod/mini").ZodMiniString<string>;
             }, import("zod/v4/core").$strip>>;
             sessionId: import("zod/mini").ZodMiniString<string>;
@@ -719,11 +719,11 @@ export declare const METHODS: {
     };
     swipeGreeting: {
         req: import("zod/mini").ZodMiniObject<{
-            index: import("zod/mini").ZodMiniNumberFormat;
+            index: import("zod/mini").ZodMiniInt;
             frameLease: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniObject<{
                 frameId: import("zod/mini").ZodMiniString<string>;
                 runtimeId: import("zod/mini").ZodMiniString<string>;
-                epoch: import("zod/mini").ZodMiniNumberFormat;
+                epoch: import("zod/mini").ZodMiniInt;
                 token: import("zod/mini").ZodMiniString<string>;
             }, import("zod/v4/core").$strip>>;
             sessionId: import("zod/mini").ZodMiniString<string>;
@@ -734,7 +734,7 @@ export declare const METHODS: {
     regenerate: {
         req: import("zod/mini").ZodMiniObject<{
             messageId: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
-            turn: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNumberFormat>;
+            turn: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniInt>;
             sessionId: import("zod/mini").ZodMiniString<string>;
         }, import("zod/v4/core").$strip>;
         value: import("zod/mini").ZodMiniUnknown;
@@ -743,7 +743,7 @@ export declare const METHODS: {
     rollbackToFloor: {
         req: import("zod/mini").ZodMiniObject<{
             messageId: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
-            turn: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNumberFormat>;
+            turn: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniInt>;
             sessionId: import("zod/mini").ZodMiniString<string>;
         }, import("zod/v4/core").$strip>;
         value: import("zod/mini").ZodMiniUnknown;
@@ -794,14 +794,14 @@ export declare const METHODS: {
     getFloorSiblings: {
         req: import("zod/mini").ZodMiniObject<{
             messageId: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
-            turn: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNumberFormat>;
+            turn: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniInt>;
             sessionId: import("zod/mini").ZodMiniString<string>;
         }, import("zod/v4/core").$strip>;
         value: import("zod/mini").ZodMiniObject<{
             swipe: import("zod/mini").ZodMiniNullable<import("zod/mini").ZodMiniObject<{
-                turn: import("zod/mini").ZodMiniNumberFormat;
-                index: import("zod/mini").ZodMiniNumberFormat;
-                total: import("zod/mini").ZodMiniNumberFormat;
+                turn: import("zod/mini").ZodMiniInt;
+                index: import("zod/mini").ZodMiniInt;
+                total: import("zod/mini").ZodMiniInt;
                 siblings: import("zod/mini").ZodMiniArray<import("zod/mini").ZodMiniString<string>>;
             }, import("zod/v4/core").$strip>>;
         }, import("zod/v4/core").$strip>;
@@ -1578,12 +1578,12 @@ export declare const TYPERT_HOST: {
                         }, import("zod/v4/core").$strip>>;
                         interactiveCards: import("zod/mini").ZodMiniNullable<import("zod/mini").ZodMiniBoolean<boolean>>;
                         helperMvu: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniBoolean<boolean>>;
-                        greetingIndex: import("zod/mini").ZodMiniNumberFormat;
+                        greetingIndex: import("zod/mini").ZodMiniInt;
                         authorNote: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
                         injectJournal: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniBoolean<boolean>>;
                         walLineage: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniArray<import("zod/mini").ZodMiniObject<{
                             sessionId: import("zod/mini").ZodMiniString<string>;
-                            throughTurn: import("zod/mini").ZodMiniNumberFormat;
+                            throughTurn: import("zod/mini").ZodMiniInt;
                         }, import("zod/v4/core").$strip>>>;
                         createdAt: import("zod/mini").ZodMiniString<string>;
                     }, import("zod/v4/core").$strip>;
@@ -1597,36 +1597,36 @@ export declare const TYPERT_HOST: {
                     sessionId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     text: import("zod/mini").ZodMiniString<string>;
-                    messageId: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNumberFormat>;
+                    messageId: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniInt>;
                     sessionId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     storyId: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
-                    closedSeq: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNumberFormat>;
+                    closedSeq: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniInt>;
                     sessionId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
-                    messageId: import("zod/mini").ZodMiniNumberFormat;
+                    messageId: import("zod/mini").ZodMiniInt;
                     sessionId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     sessionId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     cardId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
-                    messageId: import("zod/mini").ZodMiniNumberFormat;
+                    messageId: import("zod/mini").ZodMiniInt;
                     storyId: import("zod/mini").ZodMiniString<string>;
                     frameId: import("zod/mini").ZodMiniString<string>;
                     runtimeId: import("zod/mini").ZodMiniString<string>;
-                    epoch: import("zod/mini").ZodMiniNumberFormat;
+                    epoch: import("zod/mini").ZodMiniInt;
                     readOnly: import("zod/mini").ZodMiniBoolean<boolean>;
                     sessionId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
-                    messageId: import("zod/mini").ZodMiniNumberFormat;
+                    messageId: import("zod/mini").ZodMiniInt;
                     frameId: import("zod/mini").ZodMiniString<string>;
                     runtimeId: import("zod/mini").ZodMiniString<string>;
-                    epoch: import("zod/mini").ZodMiniNumberFormat;
+                    epoch: import("zod/mini").ZodMiniInt;
                     token: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
                     sessionId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
-                    messageId: import("zod/mini").ZodMiniNumberFormat;
+                    messageId: import("zod/mini").ZodMiniInt;
                     storyId: import("zod/mini").ZodMiniString<string>;
                     historyRevision: import("zod/mini").ZodMiniString<string>;
                     edits: import("zod/mini").ZodMiniUnknown;
@@ -1634,12 +1634,12 @@ export declare const TYPERT_HOST: {
                     frameLease: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniObject<{
                         frameId: import("zod/mini").ZodMiniString<string>;
                         runtimeId: import("zod/mini").ZodMiniString<string>;
-                        epoch: import("zod/mini").ZodMiniNumberFormat;
+                        epoch: import("zod/mini").ZodMiniInt;
                         token: import("zod/mini").ZodMiniString<string>;
                     }, import("zod/v4/core").$strip>>;
                     sessionId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
-                    messageId: import("zod/mini").ZodMiniNumberFormat;
+                    messageId: import("zod/mini").ZodMiniInt;
                     storyId: import("zod/mini").ZodMiniString<string>;
                     bindingRevision: import("zod/mini").ZodMiniString<string>;
                     kind: import("zod/mini").ZodMiniEnum<{
@@ -1653,7 +1653,7 @@ export declare const TYPERT_HOST: {
                     frameLease: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniObject<{
                         frameId: import("zod/mini").ZodMiniString<string>;
                         runtimeId: import("zod/mini").ZodMiniString<string>;
-                        epoch: import("zod/mini").ZodMiniNumberFormat;
+                        epoch: import("zod/mini").ZodMiniInt;
                         token: import("zod/mini").ZodMiniString<string>;
                     }, import("zod/v4/core").$strip>>;
                     sessionId: import("zod/mini").ZodMiniString<string>;
@@ -1661,7 +1661,7 @@ export declare const TYPERT_HOST: {
                     storyId: import("zod/mini").ZodMiniString<string>;
                     sessionId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
-                    messageId: import("zod/mini").ZodMiniNumberFormat;
+                    messageId: import("zod/mini").ZodMiniInt;
                     storyId: import("zod/mini").ZodMiniString<string>;
                     bindingRevision: import("zod/mini").ZodMiniString<string>;
                     name: import("zod/mini").ZodMiniString<string>;
@@ -1678,7 +1678,7 @@ export declare const TYPERT_HOST: {
                     frameLease: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniObject<{
                         frameId: import("zod/mini").ZodMiniString<string>;
                         runtimeId: import("zod/mini").ZodMiniString<string>;
-                        epoch: import("zod/mini").ZodMiniNumberFormat;
+                        epoch: import("zod/mini").ZodMiniInt;
                         token: import("zod/mini").ZodMiniString<string>;
                     }, import("zod/v4/core").$strip>>;
                     sessionId: import("zod/mini").ZodMiniString<string>;
@@ -1698,7 +1698,7 @@ export declare const TYPERT_HOST: {
                     frameLease: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniObject<{
                         frameId: import("zod/mini").ZodMiniString<string>;
                         runtimeId: import("zod/mini").ZodMiniString<string>;
-                        epoch: import("zod/mini").ZodMiniNumberFormat;
+                        epoch: import("zod/mini").ZodMiniInt;
                         token: import("zod/mini").ZodMiniString<string>;
                     }, import("zod/v4/core").$strip>>;
                     sessionId: import("zod/mini").ZodMiniString<string>;
@@ -1729,33 +1729,33 @@ export declare const TYPERT_HOST: {
                     revision: import("zod/mini").ZodMiniString<string>;
                     trees: import("zod/mini").ZodMiniUnknown;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
-                    messageId: import("zod/mini").ZodMiniNumberFormat;
+                    messageId: import("zod/mini").ZodMiniInt;
                     storyId: import("zod/mini").ZodMiniString<string>;
                     historyRevision: import("zod/mini").ZodMiniString<string>;
                     changes: import("zod/mini").ZodMiniUnknown;
                     frameLease: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniObject<{
                         frameId: import("zod/mini").ZodMiniString<string>;
                         runtimeId: import("zod/mini").ZodMiniString<string>;
-                        epoch: import("zod/mini").ZodMiniNumberFormat;
+                        epoch: import("zod/mini").ZodMiniInt;
                         token: import("zod/mini").ZodMiniString<string>;
                     }, import("zod/v4/core").$strip>>;
                     sessionId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
-                    index: import("zod/mini").ZodMiniNumberFormat;
+                    index: import("zod/mini").ZodMiniInt;
                     frameLease: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniObject<{
                         frameId: import("zod/mini").ZodMiniString<string>;
                         runtimeId: import("zod/mini").ZodMiniString<string>;
-                        epoch: import("zod/mini").ZodMiniNumberFormat;
+                        epoch: import("zod/mini").ZodMiniInt;
                         token: import("zod/mini").ZodMiniString<string>;
                     }, import("zod/v4/core").$strip>>;
                     sessionId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     messageId: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
-                    turn: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNumberFormat>;
+                    turn: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniInt>;
                     sessionId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     messageId: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
-                    turn: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNumberFormat>;
+                    turn: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniInt>;
                     sessionId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     messageId: import("zod/mini").ZodMiniString<string>;
@@ -1776,7 +1776,7 @@ export declare const TYPERT_HOST: {
                     sessionId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     messageId: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
-                    turn: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNumberFormat>;
+                    turn: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniInt>;
                     sessionId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     sessionId: import("zod/mini").ZodMiniString<string>;
@@ -1843,9 +1843,9 @@ export declare const TYPERT_HOST: {
             typeSymbol: string;
             create: () => import("zod/mini").ZodMiniUnknown | import("zod/mini").ZodMiniObject<{
                 swipe: import("zod/mini").ZodMiniNullable<import("zod/mini").ZodMiniObject<{
-                    turn: import("zod/mini").ZodMiniNumberFormat;
-                    index: import("zod/mini").ZodMiniNumberFormat;
-                    total: import("zod/mini").ZodMiniNumberFormat;
+                    turn: import("zod/mini").ZodMiniInt;
+                    index: import("zod/mini").ZodMiniInt;
+                    total: import("zod/mini").ZodMiniInt;
                     siblings: import("zod/mini").ZodMiniArray<import("zod/mini").ZodMiniString<string>>;
                 }, import("zod/v4/core").$strip>>;
             }, import("zod/v4/core").$strip>;
@@ -2088,12 +2088,12 @@ export declare const TYPERT_REMOTE: {
                         }, import("zod/v4/core").$strip>>;
                         interactiveCards: import("zod/mini").ZodMiniNullable<import("zod/mini").ZodMiniBoolean<boolean>>;
                         helperMvu: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniBoolean<boolean>>;
-                        greetingIndex: import("zod/mini").ZodMiniNumberFormat;
+                        greetingIndex: import("zod/mini").ZodMiniInt;
                         authorNote: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
                         injectJournal: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniBoolean<boolean>>;
                         walLineage: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniArray<import("zod/mini").ZodMiniObject<{
                             sessionId: import("zod/mini").ZodMiniString<string>;
-                            throughTurn: import("zod/mini").ZodMiniNumberFormat;
+                            throughTurn: import("zod/mini").ZodMiniInt;
                         }, import("zod/v4/core").$strip>>>;
                         createdAt: import("zod/mini").ZodMiniString<string>;
                     }, import("zod/v4/core").$strip>;
@@ -2107,36 +2107,36 @@ export declare const TYPERT_REMOTE: {
                     sessionId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     text: import("zod/mini").ZodMiniString<string>;
-                    messageId: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNumberFormat>;
+                    messageId: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniInt>;
                     sessionId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     storyId: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
-                    closedSeq: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNumberFormat>;
+                    closedSeq: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniInt>;
                     sessionId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
-                    messageId: import("zod/mini").ZodMiniNumberFormat;
+                    messageId: import("zod/mini").ZodMiniInt;
                     sessionId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     sessionId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     cardId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
-                    messageId: import("zod/mini").ZodMiniNumberFormat;
+                    messageId: import("zod/mini").ZodMiniInt;
                     storyId: import("zod/mini").ZodMiniString<string>;
                     frameId: import("zod/mini").ZodMiniString<string>;
                     runtimeId: import("zod/mini").ZodMiniString<string>;
-                    epoch: import("zod/mini").ZodMiniNumberFormat;
+                    epoch: import("zod/mini").ZodMiniInt;
                     readOnly: import("zod/mini").ZodMiniBoolean<boolean>;
                     sessionId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
-                    messageId: import("zod/mini").ZodMiniNumberFormat;
+                    messageId: import("zod/mini").ZodMiniInt;
                     frameId: import("zod/mini").ZodMiniString<string>;
                     runtimeId: import("zod/mini").ZodMiniString<string>;
-                    epoch: import("zod/mini").ZodMiniNumberFormat;
+                    epoch: import("zod/mini").ZodMiniInt;
                     token: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
                     sessionId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
-                    messageId: import("zod/mini").ZodMiniNumberFormat;
+                    messageId: import("zod/mini").ZodMiniInt;
                     storyId: import("zod/mini").ZodMiniString<string>;
                     historyRevision: import("zod/mini").ZodMiniString<string>;
                     edits: import("zod/mini").ZodMiniUnknown;
@@ -2144,12 +2144,12 @@ export declare const TYPERT_REMOTE: {
                     frameLease: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniObject<{
                         frameId: import("zod/mini").ZodMiniString<string>;
                         runtimeId: import("zod/mini").ZodMiniString<string>;
-                        epoch: import("zod/mini").ZodMiniNumberFormat;
+                        epoch: import("zod/mini").ZodMiniInt;
                         token: import("zod/mini").ZodMiniString<string>;
                     }, import("zod/v4/core").$strip>>;
                     sessionId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
-                    messageId: import("zod/mini").ZodMiniNumberFormat;
+                    messageId: import("zod/mini").ZodMiniInt;
                     storyId: import("zod/mini").ZodMiniString<string>;
                     bindingRevision: import("zod/mini").ZodMiniString<string>;
                     kind: import("zod/mini").ZodMiniEnum<{
@@ -2163,7 +2163,7 @@ export declare const TYPERT_REMOTE: {
                     frameLease: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniObject<{
                         frameId: import("zod/mini").ZodMiniString<string>;
                         runtimeId: import("zod/mini").ZodMiniString<string>;
-                        epoch: import("zod/mini").ZodMiniNumberFormat;
+                        epoch: import("zod/mini").ZodMiniInt;
                         token: import("zod/mini").ZodMiniString<string>;
                     }, import("zod/v4/core").$strip>>;
                     sessionId: import("zod/mini").ZodMiniString<string>;
@@ -2171,7 +2171,7 @@ export declare const TYPERT_REMOTE: {
                     storyId: import("zod/mini").ZodMiniString<string>;
                     sessionId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
-                    messageId: import("zod/mini").ZodMiniNumberFormat;
+                    messageId: import("zod/mini").ZodMiniInt;
                     storyId: import("zod/mini").ZodMiniString<string>;
                     bindingRevision: import("zod/mini").ZodMiniString<string>;
                     name: import("zod/mini").ZodMiniString<string>;
@@ -2188,7 +2188,7 @@ export declare const TYPERT_REMOTE: {
                     frameLease: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniObject<{
                         frameId: import("zod/mini").ZodMiniString<string>;
                         runtimeId: import("zod/mini").ZodMiniString<string>;
-                        epoch: import("zod/mini").ZodMiniNumberFormat;
+                        epoch: import("zod/mini").ZodMiniInt;
                         token: import("zod/mini").ZodMiniString<string>;
                     }, import("zod/v4/core").$strip>>;
                     sessionId: import("zod/mini").ZodMiniString<string>;
@@ -2208,7 +2208,7 @@ export declare const TYPERT_REMOTE: {
                     frameLease: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniObject<{
                         frameId: import("zod/mini").ZodMiniString<string>;
                         runtimeId: import("zod/mini").ZodMiniString<string>;
-                        epoch: import("zod/mini").ZodMiniNumberFormat;
+                        epoch: import("zod/mini").ZodMiniInt;
                         token: import("zod/mini").ZodMiniString<string>;
                     }, import("zod/v4/core").$strip>>;
                     sessionId: import("zod/mini").ZodMiniString<string>;
@@ -2239,33 +2239,33 @@ export declare const TYPERT_REMOTE: {
                     revision: import("zod/mini").ZodMiniString<string>;
                     trees: import("zod/mini").ZodMiniUnknown;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
-                    messageId: import("zod/mini").ZodMiniNumberFormat;
+                    messageId: import("zod/mini").ZodMiniInt;
                     storyId: import("zod/mini").ZodMiniString<string>;
                     historyRevision: import("zod/mini").ZodMiniString<string>;
                     changes: import("zod/mini").ZodMiniUnknown;
                     frameLease: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniObject<{
                         frameId: import("zod/mini").ZodMiniString<string>;
                         runtimeId: import("zod/mini").ZodMiniString<string>;
-                        epoch: import("zod/mini").ZodMiniNumberFormat;
+                        epoch: import("zod/mini").ZodMiniInt;
                         token: import("zod/mini").ZodMiniString<string>;
                     }, import("zod/v4/core").$strip>>;
                     sessionId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
-                    index: import("zod/mini").ZodMiniNumberFormat;
+                    index: import("zod/mini").ZodMiniInt;
                     frameLease: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniObject<{
                         frameId: import("zod/mini").ZodMiniString<string>;
                         runtimeId: import("zod/mini").ZodMiniString<string>;
-                        epoch: import("zod/mini").ZodMiniNumberFormat;
+                        epoch: import("zod/mini").ZodMiniInt;
                         token: import("zod/mini").ZodMiniString<string>;
                     }, import("zod/v4/core").$strip>>;
                     sessionId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     messageId: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
-                    turn: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNumberFormat>;
+                    turn: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniInt>;
                     sessionId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     messageId: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
-                    turn: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNumberFormat>;
+                    turn: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniInt>;
                     sessionId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     messageId: import("zod/mini").ZodMiniString<string>;
@@ -2286,7 +2286,7 @@ export declare const TYPERT_REMOTE: {
                     sessionId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     messageId: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
-                    turn: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNumberFormat>;
+                    turn: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniInt>;
                     sessionId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     sessionId: import("zod/mini").ZodMiniString<string>;
@@ -2353,9 +2353,9 @@ export declare const TYPERT_REMOTE: {
             typeSymbol: string;
             create: () => import("zod/mini").ZodMiniUnknown | import("zod/mini").ZodMiniObject<{
                 swipe: import("zod/mini").ZodMiniNullable<import("zod/mini").ZodMiniObject<{
-                    turn: import("zod/mini").ZodMiniNumberFormat;
-                    index: import("zod/mini").ZodMiniNumberFormat;
-                    total: import("zod/mini").ZodMiniNumberFormat;
+                    turn: import("zod/mini").ZodMiniInt;
+                    index: import("zod/mini").ZodMiniInt;
+                    total: import("zod/mini").ZodMiniInt;
                     siblings: import("zod/mini").ZodMiniArray<import("zod/mini").ZodMiniString<string>>;
                 }, import("zod/v4/core").$strip>>;
             }, import("zod/v4/core").$strip>;

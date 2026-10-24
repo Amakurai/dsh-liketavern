@@ -4,8 +4,8 @@
 
 **SillyTavern roleplay on the native DeepSeek Harness Agent runtime**
 
-[![Release](https://img.shields.io/badge/version-v0.5.6-blue.svg)](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.5.6)
-[![dsh](https://img.shields.io/badge/dsh-0.2.1--rc.2-informational.svg)](https://deepseek-harness.github.io/deepseek-harness/)
+[![Release](https://img.shields.io/badge/version-v0.5.7-blue.svg)](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.5.7)
+[![dsh](https://img.shields.io/badge/dsh-0.2.1--rc.3-informational.svg)](https://deepseek-harness.github.io/deepseek-harness/)
 [![Node.js](https://img.shields.io/badge/node-%E2%89%A524-brightgreen.svg)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
@@ -42,21 +42,21 @@ Regex rules, prompt templates, and HTML card scripts bundled inside third-party 
 
 ## Installation & Upgrade
 
-> **Prerequisites**: Node.js `>= 24.0.0`, DeepSeek Harness `0.2.1-rc.2`, `pnpm`, and at least one configured model in `dsh`. If you are new to `dsh`, see the [DeepSeek Harness Documentation](https://deepseek-harness.github.io/deepseek-harness/) first. Precompiled `lib/` bundles are committed to the repository, so no local build is required during installation.
+> **Prerequisites**: Node.js `>= 24.0.0`, DeepSeek Harness `0.2.1-rc.3`, `pnpm`, and at least one configured model in `dsh`. If you are new to `dsh`, see the [DeepSeek Harness Documentation](https://deepseek-harness.github.io/deepseek-harness/) first. Precompiled `lib/` bundles are committed to the repository, so no local build is required during installation.
 
 ### Desktop Installation
 
 Open **Plugins → Add plugin** in the `dsh` desktop app, enter the following repository tag URL, and restart the app once installed:
 
 ```text
-https://github.com/Amakurai/dsh-liketavern.git#v0.5.6
+https://github.com/Amakurai/dsh-liketavern.git#v0.5.7
 ```
 
 ### Web / CLI Online Installation
 
 ```bash
 # Install the plugin into the web profile
-dsh plugin --profile web add github:Amakurai/dsh-liketavern#v0.5.6
+dsh plugin --profile web add github:Amakurai/dsh-liketavern#v0.5.7
 
 # Verify installation
 dsh plugin --profile web list --depth 0
@@ -67,10 +67,10 @@ dsh web
 
 ### Offline Release Tarball Installation
 
-Download `dsh-liketavern-0.5.6.tgz` from the [v0.5.6 Release](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.5.6) (verify against `SHA256SUMS.txt` if desired) and run:
+Download `dsh-liketavern-0.5.7.tgz` from the [v0.5.7 Release](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.5.7) (verify against `SHA256SUMS.txt` if desired) and run:
 
 ```bash
-dsh plugin --profile web add ./dsh-liketavern-0.5.6.tgz
+dsh plugin --profile web add ./dsh-liketavern-0.5.7.tgz
 dsh web
 ```
 
@@ -195,7 +195,7 @@ dsh plugin --profile web exec dsh-tavern-doctor --json
 <details>
 <summary><b>"Tavern 模式" or the Tavern settings tab is missing after installation?</b></summary>
 
-1. Run `dsh --version` and confirm the host version is `0.2.1-rc.2`.
+1. Run `dsh --version` and confirm the host version is `0.2.1-rc.3`.
 2. Run `dsh plugin --profile web list --depth 0` to verify the plugin is installed in the `web` profile.
 3. Restart `dsh web` (or the desktop app) and check the terminal output for startup errors.
 </details>

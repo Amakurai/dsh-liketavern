@@ -2,6 +2,18 @@
 
 本插件与 dsh 宿主版本一一绑定（peerDependency 锁定精确版本），升级 dsh 前请先确认有适配的插件版本。
 
+## 0.5.7（2026-10-24）适配 dsh 0.2.1-rc.3 与模型列表跟随
+
+升级适配 **dsh `0.2.1-rc.3`、Node.js ≥ 24**。`@deepseek-ai/cordis` 仍为 `4.0.5`、`@deepseek-ai/schemastery` 仍为 `3.18.5`；`peerDependencies`、`overrides`、`devDependencies` 与 `allowScripts` 统一改为精确 rc.3，锁文件只重解析宿主条目。升级后请完整重启宿主。
+
+- rc.3 相对 rc.2 只有四个包的实现有变化：`dsh-llm-deepseek` 新增 `/models` 模型列表、`dsh-llm-deepseek-api-key` 接线、`dsh-client-ui-primitives` 的 Tooltip/Menu 增量与 `dsh-client-ui-settings-general` 的桌面埋点；其余宿主包只有版本号变化。
+- Tavern 的 DeepSeek 通道跟随宿主模型列表：列表里的新模型会出现在 Tavern 分组，上下文窗口、输出上限、图片能力与系统提示模式按列表声明投影。此前这些模型会拿到 1e6/256k 的回退能力、图片被误判为不支持，也不会产生宿主同款的拒绝。
+- 需要更高客户端版本或本构建不支持的模型，现在会在发出网络请求前给出与宿主相同的 `CLIENT_UPGRADE_REQUIRED` / `MODEL_UNSUPPORTED`；上下文用量与压缩阈值也不再按回退窗口计算。
+- 列表请求只读公开 `/models`，沿用宿主凭证引用与当次 `prepareCall` 的取消信号；请求失败或取消之外的故障退回内置目录，现有内置模型不受影响。设置变化后重新解析 endpoint、目录与是否继续跟随，dispose 时中止在途请求。
+- 依赖安全：干净 `npm ci` 安装 649 个包，`npm audit` 为 0 项已知漏洞；锁文件未引入新的第三方运行库，也未顺带漂移无关传输。
+- 发版纪律：新增 `npm run host:check`，peer / dev / overrides / allowScripts / 锁文件必须指向同一个精确宿主版本，CI 两个平台与 release workflow 都先执行，避免再次出现 tag 与附件版本脱节；Release 附件同时提供 `SHA256SUMS.txt`，与 README 的完整性校验说明一致。
+- 验证：构建通过，297 个测试文件、3596 项通过、11 项按平台或能力跳过、0 失败；`doctor:check`、`backup:check` 与 519 文件发布白名单通过。独立临时 `DSH_HOME` 用 rc.3 CLI 安装本地 tgz 并启动 `dsh --profile web`：鉴权首页 200、加载 `dsh-liketavern/client.js`、`dsh-tavern/` 数据目录完整初始化、日志无插件加载错误。未调用真实模型，也未做浏览器交互验收。
+
 ## 0.5.6（2026-10-22）预设注入加固与发版纪律
 
 宿主依赖不变（dsh `0.2.1-rc.2`）。对照 SillyTavern 与同类 dsh 酒馆插件的已知问题做的一轮修复。

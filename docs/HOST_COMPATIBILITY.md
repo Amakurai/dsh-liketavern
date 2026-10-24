@@ -1,6 +1,28 @@
 # 宿主兼容记录
 
-当前源码基线为 dsh 0.2.1-rc.2。以下按版本记录观测结果，升级时重新核对，不是永久架构要求。
+当前源码基线为 dsh 0.2.1-rc.3。以下按版本记录观测结果，升级时重新核对，不是永久架构要求。
+
+## 0.2.1-rc.3 升级核对（2026-10-24）
+
+公开 npm 上锁定的全部宿主包都有 `0.2.1-rc.3`，没有包被移除或改名；`@deepseek-ai/cordis` 仍为 `4.0.5`、`@deepseek-ai/schemastery` 仍为 `3.18.5`，`cordis-plugin-*` 也没变。`peerDependencies`、`overrides`、`devDependencies` 统一改为精确 `0.2.1-rc.3`，`allowScripts` 同步改为 `@deepseek-ai/dsh-subprocess-local@0.2.1-rc.3`。锁文件只重解析 `@deepseek-ai` 宿主条目，其余依赖保持原解析结果，避免这一版顺带漂移无关传输。
+
+用 `npm diff` 比较插件源码与测试导入的宿主包，只有四个包的 `lib/` 有实现变化，其余只有 package.json 版本号：
+
+- `@deepseek-ai/dsh-llm-deepseek`：新增 `/models` 模型列表（listing / listing-config / listing-cache / listed-catalog），导出 `requestModelListing`、`ModelListingCache`、`resolveListedCatalog`、`refuseListedModel`、`isBuiltInCatalog`、`resolveListingTiming` 等；`DeepSeekAdapter` 的公开方法、`connect`/`admit` 可选依赖与内置目录条目都没有变。
+- `@deepseek-ai/dsh-llm-deepseek-api-key`：`resolveAdapterOptions` 在「官方 origin + 内置目录」时给连接附加 `listing`，provider 注册改用 `connect`/`admit`，`discoverModels` 走列表；设置新增 `modelsTimeoutMs`/`modelsMaxAgeMs`。
+- `@deepseek-ai/dsh-client-ui-primitives`：Tooltip 新增 `left` 与自动翻转（`tooltip-placement`）、Menu 新增 `minWidthFromAnchor`、MenuItemButton 新增 `current`、新增 `IconAppsAddOutline*`。
+- `@deepseek-ai/dsh-client-ui-settings-general`：开发者工具开关新增桌面埋点与版本字面量；与插件无关。
+
+适配与结论：
+
+- 升级不阻断：`DeepSeekAdapter` 只读连接里的已知字段，多余的 `listing` 会被忽略；插件此前只传 `options`，内置模型路径与 rc.2 一致。重建后的 `lib/` 与旧基线相同，说明这次类型增量没有改变产物。
+- 补齐 rc.3 的模型目录语义：Tavern 自建适配器用公开 `ModelListingCache` + `resolveListedCatalog` + `refuseListedModel` 折叠同一份列表。`discoverModels` 广告 `offered`（Tavern 分组能看到列表里的新模型），请求解析用 `resolution`（含列表未列出但本构建仍支持的内置模型），`admit` 在网络 I/O 前给出与宿主相同的 `CLIENT_UPGRADE_REQUIRED`/`MODEL_UNSUPPORTED`。此前 listed 模型会拿到 1e6/256k 的回退能力、图片被误判为不支持，也不产生这两个错误码。
+- 列表请求沿用同一凭证与 `prepareCall` 的取消信号，只读公开 `/models`；失败与宿主一致退回内置目录，本已可用的模型不受影响。设置变化后丢弃解析快照并按新快照判断是否继续跟随，`ctx.effect` 负责 dispose。
+- primitives 的改动是纯增量：插件只用到 `label`/`side="bottom"` 的 Tooltip 与已有 Menu 属性，客户端 tsc 与全量测试覆盖。
+
+验证：Windows / Node 24.18.0 下干净 `npm ci`（649 个包，`npm audit` 0 项已知漏洞），`npm run build` 通过。全量 297 个测试文件、3596 项通过、11 项按平台或能力跳过、0 失败（含新增的列表跟随与宿主版本对齐回归）。`host:check`、`doctor:check`、`backup:check` 与 `package:check`（519 个白名单文件）通过。
+
+安装冒烟：独立临时 `DSH_HOME`（`.tmp/smoke-rc3-20261024`）中用 rc.3 CLI 执行 `dsh plugin --profile web add` 安装本地 tgz，`plugin list --depth 0` 与 `--dump-config` 都显示 `dsh-tavern`；启动 `dsh --profile web` 后鉴权首页返回 200 并加载 `dsh-liketavern/client.js`，`dsh-tavern/` 数据目录完整初始化，stdout/stderr 没有插件加载错误。宿主按 PID 结束，端口经 netstat 确认释放。这次冒烟没有调用真实模型，也没有做浏览器交互验收；正式 Release 附件仍以目标提交两平台 CI 通过后的原始制品为准。
 
 ## v0.5.5 审计修复（2026-10-20）
 
@@ -239,7 +261,7 @@ v0.3.0 本地最终构建通过，154 个测试文件 / 2187 项通过，Windows
 升级 dsh 的检查清单：
 
 - 模板回复处理依赖 `assistant/chunk` 的唯一末尾 `finish.reason.kind=stop`、`assistant/message` 的 seq/turn/step 与 `turn/end.reason.kind=completed`。必须在当前楼层关闭前保存展示快照；client 的 finalNode.seq 传给只读渲染接口。升级时核对这些真实字段和 turn 状态，不能在刷新回调中执行持久脚本。
-- `package.json` 三处版本同步：`peerDependencies`、`overrides`、`devDependencies`（全部精确版本，不带 `^`）。
+- `package.json` 四处版本同步：`peerDependencies`、`overrides`、`devDependencies`、`allowScripts`（全部精确版本，不带 `^`），锁文件只重解析宿主条目；`npm run host:check` 会拦住漏改，CI 与 release workflow 都执行它。
 - 逐条复查上面注记在新宿主上是否仍成立，失效的改掉并从本节删除。
 - 对照官方文档的 breaking changes：slot、profile/bundle、patch 层顺序、system-prompt 瀑布、agent 事件、session 读取 API、client seed 模块表。
 - `npm install` → `npm run build` → `npm test` → `npm pack --dry-run`，再 `npm run dev` 实机冒烟（peer 缺失只会在宿主 boot 时暴露）。

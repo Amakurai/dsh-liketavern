@@ -4,8 +4,8 @@
 
 **基于 DeepSeek Harness 原生 Agent 运行时的 SillyTavern 角色扮演插件**
 
-[![Release](https://img.shields.io/badge/version-v0.5.6-blue.svg)](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.5.6)
-[![dsh](https://img.shields.io/badge/dsh-0.2.1--rc.2-informational.svg)](https://deepseek-harness.github.io/deepseek-harness/)
+[![Release](https://img.shields.io/badge/version-v0.5.7-blue.svg)](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.5.7)
+[![dsh](https://img.shields.io/badge/dsh-0.2.1--rc.3-informational.svg)](https://deepseek-harness.github.io/deepseek-harness/)
 [![Node.js](https://img.shields.io/badge/node-%E2%89%A524-brightgreen.svg)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
@@ -42,21 +42,21 @@
 
 ## 安装与升级
 
-> **前置要求**：Node.js `>= 24.0.0`、DeepSeek Harness `0.2.1-rc.2`、`pnpm`，且已在 `dsh` 中配置好可用的模型。首次使用请先参阅 [DeepSeek Harness 官方文档](https://deepseek-harness.github.io/deepseek-harness/)。仓库已内置预编译的 `lib/` 产物，安装时无需本地构建。
+> **前置要求**：Node.js `>= 24.0.0`、DeepSeek Harness `0.2.1-rc.3`、`pnpm`，且已在 `dsh` 中配置好可用的模型。首次使用请先参阅 [DeepSeek Harness 官方文档](https://deepseek-harness.github.io/deepseek-harness/)。仓库已内置预编译的 `lib/` 产物，安装时无需本地构建。
 
 ### 桌面端安装
 
 打开 `dsh` 桌面端 **「插件 → 添加插件」**，填入以下仓库标签地址并安装，完成后重启桌面端：
 
 ```text
-https://github.com/Amakurai/dsh-liketavern.git#v0.5.6
+https://github.com/Amakurai/dsh-liketavern.git#v0.5.7
 ```
 
 ### Web / CLI 在线安装
 
 ```bash
 # 安装插件到 web profile
-dsh plugin --profile web add github:Amakurai/dsh-liketavern#v0.5.6
+dsh plugin --profile web add github:Amakurai/dsh-liketavern#v0.5.7
 
 # 确认安装状态
 dsh plugin --profile web list --depth 0
@@ -67,10 +67,10 @@ dsh web
 
 ### Release 离线包安装
 
-从 [v0.5.6 Release](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.5.6) 下载 `dsh-liketavern-0.5.6.tgz`（可配合同页的 `SHA256SUMS.txt` 校验完整性），在下载目录执行：
+从 [v0.5.7 Release](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.5.7) 下载 `dsh-liketavern-0.5.7.tgz`（可配合同页的 `SHA256SUMS.txt` 校验完整性），在下载目录执行：
 
 ```bash
-dsh plugin --profile web add ./dsh-liketavern-0.5.6.tgz
+dsh plugin --profile web add ./dsh-liketavern-0.5.7.tgz
 dsh web
 ```
 
@@ -195,7 +195,7 @@ dsh plugin --profile web exec dsh-tavern-doctor --json
 <details>
 <summary><b>安装后新建会话看不到「Tavern 模式」或设置页没有 Tavern 入口？</b></summary>
 
-1. 运行 `dsh --version`，确认宿主版本严格为 `0.2.1-rc.2`。
+1. 运行 `dsh --version`，确认宿主版本严格为 `0.2.1-rc.3`。
 2. 运行 `dsh plugin --profile web list --depth 0`，确认插件已安装在 `web` profile 下。
 3. 完全重启 `dsh web` 或桌面端，并检查启动终端是否有加载报错。
 </details>

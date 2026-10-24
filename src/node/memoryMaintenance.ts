@@ -136,6 +136,18 @@ export async function expandMemoryAliases(
   })
 }
 
+/** attempted 登记表上限：与 triggerLogs/helperTurnClosures 的有界淘汰口径一致，剧情数量增长不让进程内登记无界膨胀。 */
+export const ATTEMPTED_KEYS_MAX = 256
+
+/** 「每个已结束轮次只尝试一次」的登记表更新；超限时淘汰最旧 key（Map 迭代序 = 插入序）。 */
+export function noteAttemptedMarker(attempted: Map<string, string>, key: string, marker: string, max: number = ATTEMPTED_KEYS_MAX): void {
+  if (attempted.size >= max && !attempted.has(key)) {
+    const oldest = attempted.keys().next().value
+    if (oldest !== undefined) attempted.delete(oldest)
+  }
+  attempted.set(key, marker)
+}
+
 /**
  * agent 面注册：turn 结束（status → idle）且本会话工作区有压缩标记、或有记忆还没有检索别名时，runMaintenance 执行维护。
  * runMaintenance 在 turn-driving 时会同步 throw（与本事件的 idle 之间存在输入竞态）——
@@ -168,7 +180,7 @@ export function registerMemoryMaintenance(ctx: Context, state: TavernState, llm:
       }
       const marker = `${agent.id}#t${closedTurn}`
       if (attempted.get(key) === marker) return
-      attempted.set(key, marker)
+      noteAttemptedMarker(attempted, key, marker)
       let ran = false
       try {
         await agent.runMaintenance(async (signal) => {

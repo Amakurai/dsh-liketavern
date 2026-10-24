@@ -110,6 +110,22 @@ describe('selectLoreEntries', () => {
     expect(selectLoreEntries(entries, { query: '北', source: 'character' }).map((e) => e.uid)).toEqual(['city'])
     expect(selectLoreEntries(entries, { query: '北', source: 'global' })).toEqual([])
   })
+
+  it('无效来源不会把限定查询扩大为所有来源', () => {
+    expect(selectLoreEntries(entries, { query: '长剑', source: 'typo' })).toEqual([])
+    expect(selectLoreEntries(entries, { uid: 'sword', source: 'typo' })).toEqual([])
+  })
+
+  it('正小数 topK 至少保留一项，不把命中结果变成未匹配', () => {
+    expect(selectLoreEntries(entries, { query: '长剑', topK: 0.5 }).map(entry => entry.uid)).toEqual(['sword'])
+  })
+
+  it('空白字符也可构成精确 uid，读取时不能误入目录模式', () => {
+    const entry = makeEntry({ key: 'global:book: ', uid: ' ', content: '正文而非目录摘要' })
+    expect(isLoreCatalogQuery({ uid: ' ' })).toBe(false)
+    expect(selectLoreEntries([entry], { uid: ' ' })).toEqual([entry])
+    expect(selectLoreEntries(entries, { uid: ' ' })).toEqual([])
+  })
 })
 
 describe('toLoreCatalogItem / clipLoreContents', () => {

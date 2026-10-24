@@ -30,6 +30,8 @@ describe('resolveReadableAssetPath', () => {
     expect(resolveReadableAssetPath('C:\\abs.md').ok).toBe(false)
     expect(resolveReadableAssetPath('/etc/passwd').ok).toBe(false)
     expect(resolveReadableAssetPath('state/wal/1.json').ok).toBe(false)
+    expect(resolveReadableAssetPath('state/wal-recovery.json').ok).toBe(false)
+    expect(resolveReadableAssetPath('./STATE/./WAL-RECOVERY.JSON').ok).toBe(false)
     expect(resolveReadableAssetPath('.archive.json').ok).toBe(false)
     expect(resolveReadableAssetPath('card.png').ok).toBe(false)
     expect(resolveReadableAssetPath('journal.md:private.txt').ok).toBe(false)

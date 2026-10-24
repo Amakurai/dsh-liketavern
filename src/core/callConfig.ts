@@ -28,7 +28,7 @@ const DEEPSEEK_OFFICIAL_PROVIDERS = new Set(['deepseek-official', 'tavern-deepse
  * 按 Tavern「深度思考」设置挑选 reasoningEffort。
  * disabled → 公布的 off 档（没有则 undefined，调用方不得瞎填）；
  * low/high/max → 模型公布了该档则显式指定，否则回退自动；
- * enabled → 自动：保留会话已选的非 off 档，否则模型默认，否则第一个非 off 档。
+ * enabled → 自动：保留会话已选的非 off 档，否则模型默认，否则第一个非 off 档；部署仅允许关闭时选 off。
  */
 export function pickReasoningEffort(
   thinking: SamplingSettings['thinking'],
@@ -47,7 +47,8 @@ export function pickReasoningEffort(
 
   if (current && !isOffEffort(current) && advertised(current)) return current
   if (defaultEffort && !isOffEffort(defaultEffort) && advertised(defaultEffort)) return defaultEffort
-  return ids.find((id) => !isOffEffort(id))
+  // 部署可能只公布 off；明确写回关闭档，覆盖请求头里遗留的 high/max。
+  return ids.find((id) => !isOffEffort(id)) ?? ids.find((id) => isOffEffort(id))
 }
 
 /**

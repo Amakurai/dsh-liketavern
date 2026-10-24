@@ -51,6 +51,11 @@ describe('pickReasoningEffort', () => {
 })
 
 describe('resolveTavernReasoningEffort', () => {
+  it.each(['enabled', 'low', 'high', 'max'] as const)('部署仅允许 off 时 %s 不能沿用旧请求的 high', thinking => {
+    const effort = resolveTavernReasoningEffort(thinking, { efforts: [{ id: 'off' }], defaultEffort: 'off' }, 'high', 'deepseek-official')
+    expect(mergeTavernCallConfig({ reasoningEffort: 'high' }, { ...DEFAULT_SAMPLING, thinking }, effort).reasoningEffort).toBe('off')
+  })
+
   it('模型公布了档位时与 pickReasoningEffort 一致', () => {
     const info = { efforts: DEEPSEEK, defaultEffort: 'high' }
     expect(resolveTavernReasoningEffort('disabled', info, 'max', 'deepseek-official')).toBe('off')

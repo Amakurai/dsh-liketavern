@@ -36,6 +36,13 @@ const workspace = () => state.storyWorkspace(cardId, storyId)
 const run = (code: string) => ctx.tools.execute({ agent, callId: ToolCallId(`ptc-${++call}`),
   name: 'run_code', arguments: { code, description: '验证 Tavern 工具组合' }, signal: signal() })
 
+/** 只挂接当前剧情的手写世界书，验证实际 SDK 的检索结果。 */
+async function bindLorebook(entries: Record<string, unknown>): Promise<void> {
+  const book = await state.saveLorebook('检索边界工厂', { entries })
+  const binding = (await state.loadBinding(agent.id))!
+  await state.saveBinding({ ...binding, lorebookIds: [book] })
+}
+
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'tavern-ptc-'))
   state = new TavernState({ root, characters: join(root, 'characters'), lorebooks: join(root, 'lorebooks'),
@@ -77,6 +84,34 @@ afterEach(async () => {
   await ctx?.fiber.dispose()
   vi.restoreAllMocks()
   await rm(root, { recursive: true, force: true })
+})
+
+it('来源参数错误时给出业务拒绝，目录和正文查询均不扩大到其它来源', async () => {
+  await bindLorebook({ sword: { key: ['长剑'], content: '不应出现在错误来源查询中的正文' } })
+  const result = await run(`return await Promise.all([
+    tools.tavern_lore_read({source:'typo'}),
+    tools.tavern_lore_read({source:'typo',query:'长剑'})
+  ]);`)
+  expect(result.isError, JSON.stringify(result.content)).toBe(false)
+  const values = (result.value as { result: Array<{ ok: boolean; error?: string }> }).result
+  expect(values).toHaveLength(2)
+  for (const value of values) expect(value).toMatchObject({ ok: false, error: expect.stringContaining('source') })
+  expect(JSON.stringify(values)).not.toContain('不应出现在错误来源查询中的正文')
+})
+
+it('正小数 topK 读取真实世界书仍返回一项命中', async () => {
+  await bindLorebook({ sword: { key: ['长剑'], content: '长剑在北门' } })
+  const result = await run(`return await tools.tavern_lore_read({query:'长剑',topK:0.5});`)
+  expect(result.isError, JSON.stringify(result.content)).toBe(false)
+  expect(result.value).toMatchObject({ result: { ok: true, entries: [{ uid: 'sword', content: '长剑在北门' }] } })
+})
+
+it('空白 uid 通过真实 SDK 读取正文，不被目录预览替代', async () => {
+  const content = '需要按身份取出的完整正文'.repeat(20)
+  await bindLorebook({ ' ': { key: ['空白身份'], content } })
+  const result = await run(`return await tools.tavern_lore_read({uid:' '});`)
+  expect(result.isError, JSON.stringify(result.content)).toBe(false)
+  expect(result.value).toMatchObject({ result: { ok: true, mode: 'content', entries: [{ uid: ' ', content }] } })
 })
 
 it('只暴露 run_code 与结构化 SDK；普通模式不受影响，原生直呼不能绕过 PTC', async () => {

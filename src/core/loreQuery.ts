@@ -36,7 +36,7 @@ export interface LoreReadQuery {
 
 export function clampLoreTopK(value: number | undefined): number {
   if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return LORE_READ_DEFAULT_TOPK
-  return Math.min(LORE_READ_MAX_TOPK, Math.floor(value))
+  return Math.min(LORE_READ_MAX_TOPK, Math.max(1, Math.floor(value)))
 }
 
 export function toLoreCatalogItem(entry: WorldInfoEntry): LoreCatalogItem {
@@ -53,11 +53,6 @@ export function toLoreCatalogItem(entry: WorldInfoEntry): LoreCatalogItem {
     tokens: estimateTokens(entry.content),
     preview,
   }
-}
-
-function sourceOf(raw: string | undefined): WISource | undefined {
-  if (raw === 'chat' || raw === 'persona' || raw === 'character' || raw === 'global' || raw === 'delta') return raw
-  return undefined
 }
 
 function scoreLore(entry: WorldInfoEntry, needle: string): number {
@@ -78,13 +73,14 @@ function matchesUid(entry: WorldInfoEntry, uid: string): boolean {
   return entry.uid === uid || entry.key === uid || entry.key.endsWith(`:${uid}`)
 }
 
-/** uid / query 都空 = 目录模式（返回全部摘要，截到 LORE_CATALOG_MAX）。 */
+/** uid 不裁剪：空白也是合法存储身份；仅缺省/空串 uid 且无查询才进入目录。 */
 export function isLoreCatalogQuery(q: LoreReadQuery): boolean {
-  return !q.uid?.trim() && !q.query?.trim()
+  return !q.uid && !q.query?.trim()
 }
 
 export function selectLoreEntries(entries: readonly WorldInfoEntry[], q: LoreReadQuery): WorldInfoEntry[] {
-  const source = sourceOf(q.source?.trim())
+  // 未识别的非空来源仍是限定条件，不能静默扩大到全部来源；工具入口另给明确参数错误。
+  const source = q.source?.trim()
   const scoped = source ? entries.filter((e) => e.source === source) : [...entries]
   if (q.uid) {
     // 完整 key 是跨书身份，优先于同名 uid/后缀；先保留原始身份，未命中才兼容去空白查询。
@@ -98,6 +94,7 @@ export function selectLoreEntries(entries: readonly WorldInfoEntry[], q: LoreRea
     if (exact.length) return exact
     const uid = q.uid.trim()
     if (uid) return byIdentity(uid)
+    return []
   }
   const query = q.query?.trim()
   if (!query) return scoped

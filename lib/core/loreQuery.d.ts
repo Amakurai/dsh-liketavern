@@ -26,7 +26,7 @@ export interface LoreReadQuery {
 }
 export declare function clampLoreTopK(value: number | undefined): number;
 export declare function toLoreCatalogItem(entry: WorldInfoEntry): LoreCatalogItem;
-/** uid / query 都空 = 目录模式（返回全部摘要，截到 LORE_CATALOG_MAX）。 */
+/** uid 不裁剪：空白也是合法存储身份；仅缺省/空串 uid 且无查询才进入目录。 */
 export declare function isLoreCatalogQuery(q: LoreReadQuery): boolean;
 export declare function selectLoreEntries(entries: readonly WorldInfoEntry[], q: LoreReadQuery): WorldInfoEntry[];
 export interface LoreContentItem {

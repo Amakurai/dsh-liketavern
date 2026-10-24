@@ -16,7 +16,7 @@ export interface AdvertisedReasoningInfo {
  * 按 Tavern「深度思考」设置挑选 reasoningEffort。
  * disabled → 公布的 off 档（没有则 undefined，调用方不得瞎填）；
  * low/high/max → 模型公布了该档则显式指定，否则回退自动；
- * enabled → 自动：保留会话已选的非 off 档，否则模型默认，否则第一个非 off 档。
+ * enabled → 自动：保留会话已选的非 off 档，否则模型默认，否则第一个非 off 档；部署仅允许关闭时选 off。
  */
 export declare function pickReasoningEffort(thinking: SamplingSettings['thinking'], efforts: readonly AdvertisedReasoning[] | undefined, defaultEffort: string | undefined, current: string | undefined): string | undefined;
 /**

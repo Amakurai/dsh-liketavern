@@ -1,5 +1,5 @@
 /** 资产路径的原生 PTC 边界：不可表示路径返回有界业务错误，合法长路径可读，真实 I/O 故障仍明确失败。 */
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -56,6 +56,22 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await ctx?.fiber.dispose(); vi.restoreAllMocks(); await rm(root, { recursive: true, force: true })
+})
+
+it('WAL 恢复标记不能被模型列出或读取，避免泄漏内部楼层与本机日志路径', async () => {
+  const ws = await workspace()
+  const marker = { version: 1, floors: ['private-session#t1'], dirs: [], walDir: join(ws.fs.root, 'state', 'wal') }
+  await ws.fs.ensureDir('state')
+  await writeFile(join(ws.fs.root, 'state', 'wal-recovery.json'), JSON.stringify(marker))
+  const result = await run(`return {
+    file: await tools.tavern_asset_read({path:'state/wal-recovery.json'}),
+    catalog: await tools.tavern_asset_list({})
+  };`)
+  expect(result.isError, JSON.stringify(result.content)).toBe(false)
+  expect(result.value).toMatchObject({ result: { file: { ok: false, error: expect.stringContaining('WAL') } } })
+  expect(JSON.stringify(result.value)).not.toContain('wal-recovery.json')
+  expect(JSON.stringify(result.value)).not.toContain('private-session')
+  expect(JSON.stringify(result.value)).not.toContain('walDir')
 })
 
 it('任一文件系统阶段的 ENAMETOOLONG 不回显系统路径，也不终止同批正常读取', async () => {

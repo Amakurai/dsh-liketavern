@@ -6,7 +6,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { AgentRegistry, type Agent } from '@deepseek-ai/dsh-agent'
 import { AgentLoop } from '@deepseek-ai/dsh-agent-loop'
-import { createUserMessage, LlmAdapter, LlmRuntime, type GenerateOptions, type LlmResolvedModelInfo, type StreamChunk } from '@deepseek-ai/dsh-llm'
+import { createUserMessage, LlmAdapter, LlmRuntime, ReasoningEffortId, type GenerateOptions, type LlmResolvedModelInfo, type StreamChunk } from '@deepseek-ai/dsh-llm'
 import { SessionId, SessionStore } from '@deepseek-ai/dsh-session'
 import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection'
 import { SystemPrompt } from '@deepseek-ai/dsh-system-prompt'
@@ -102,6 +102,17 @@ async function send(text: string) {
   agent.followup(createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text }] }))
   await agent.whenIdle(); await state.waitForSessionTasks(agent.id)
 }
+
+it('真实请求在部署只允许 off 时覆盖旧 high，不因插件开启思考而发出不支持的档位', async () => {
+  vi.spyOn(state, 'config', 'get').mockReturnValue(resolveConfig({ sampling: { thinking: 'enabled' } }))
+  vi.spyOn(FactoryAdapter.prototype, 'resolveModel').mockResolvedValue({ provider: 'factory', id: 'factory', name: 'factory',
+    inputModalities: ['text'], context: { contextWindow: 64_000 }, reasoning: { efforts: [{ id: 'off', name: '关闭' }], defaultEffort: 'off' } })
+  agent.options.reasoningEffort = ReasoningEffortId('high')
+  await send('验证部署关闭思考')
+  expect(errors).toEqual([])
+  expect(requests).toHaveLength(1)
+  expect(requests[0]!.reasoningEffort).toBe('off')
+})
 function changeDuring(stage: 'pre-step' | 'request' | 'reasoning', change: () => Promise<void>) {
   let changed = false
   const mutate = async () => { if (!changed) { changed = true; await change() } }

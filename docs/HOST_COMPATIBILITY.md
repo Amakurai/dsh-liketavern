@@ -24,6 +24,8 @@
 
 安装冒烟：独立临时 `DSH_HOME`（`.tmp/smoke-rc3-20261024`）中用 rc.3 CLI 执行 `dsh plugin --profile web add` 安装本地 tgz，`plugin list --depth 0` 与 `--dump-config` 都显示 `dsh-tavern`；启动 `dsh --profile web` 后鉴权首页返回 200 并加载 `dsh-liketavern/client.js`，`dsh-tavern/` 数据目录完整初始化，stdout/stderr 没有插件加载错误。宿主按 PID 结束，端口经 netstat 确认释放。这次冒烟没有调用真实模型，也没有做浏览器交互验收；正式 Release 附件仍以目标提交两平台 CI 通过后的原始制品为准。
 
+v0.5.7 发布后另下载 Release 附件复核：`dsh-liketavern-0.5.7.tgz` 的 SHA-256 与同页 `SHA256SUMS.txt` 及 GitHub 附件 digest 一致，tarball 仍是 519 个白名单文件、不含 src/test/node_modules，安装后的 manifest 为 0.5.7 且 peer 精确指向 `0.2.1-rc.3`。把它装入新的临时 `DSH_HOME` 后 `plugin list` 显示 `dsh-liketavern@0.5.7`，`--dump-config` 有 `dsh-tavern`，鉴权首页 200 并加载同一 client bundle，`dsh-tavern/` 数据目录完整初始化，日志无插件加载错误；宿主按 PID 结束、端口释放。
+
 ## v0.5.5 审计修复（2026-10-20）
 
 宿主仍为 0.2.1-rc.2，未改动依赖或宿主接口用法。Windows / Node 24.18.0 下构建、287 个测试文件通过（3481 项通过、11 项跳过），511 文件发布白名单通过。核对 0.2.1-rc.2 的 `ReactLoopInbox.claim`：每个 turn 只认领一条 next-turn 输入，因此楼层重放必须合并为单条 followup；runtime context 与 inject 的插件 notice 都以 user/message 记入日志，重放前必须过滤。打包后的本地 tgz 经桌面端自带 CLI 装入 desktop profile，依赖解析与只读诊断正常；桌面端 UI 冒烟由维护者在真实环境完成，正式附件仍以目标提交两平台 CI 制品为准。

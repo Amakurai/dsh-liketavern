@@ -93,7 +93,6 @@ export async function onTurnEnd(state:TavernState,sessionId:string,session?:Pick
   if(ending?.type==='turn/end' && deferredTurns.get(state)?.get(sessionId)===ending.data.turn) {
     deferredTurns.get(state)?.delete(sessionId)
     state.stepNoticeMarks.delete(sessionId)
-    state.wiCache.delete(sessionId)
     state.turnPlans.delete(sessionId)
     state.pendingTurnPlans.delete(sessionId)
     if(key) {
@@ -167,7 +166,6 @@ async function finishTurn(state:TavernState,sessionId:string,session?:Pick<Sessi
     state.currentTurns.delete(sessionId)
     state.currentSteps.delete(sessionId)
     state.stepNoticeMarks.delete(sessionId)
-    state.wiCache.delete(sessionId)
     state.turnPlans.delete(sessionId)
     state.pendingTurnPlans.delete(sessionId)
     state.pendingInputs.delete(sessionId)

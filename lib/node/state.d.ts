@@ -1,7 +1,7 @@
 import { RemoteError } from '@deepseek-ai/dsh-typert-protocol';
 import { type HelperScriptLibrary, type HelperScriptAsset, type HelperScriptTarget, type HelperScriptContext, type HelperScriptCommit, type HelperScriptView } from '../core/helperScripts.js';
 import type { LlmResolvedModelInfo, LlmRuntime } from '@deepseek-ai/dsh-llm';
-import { type MemoryEntry, type PromptPreset, type RegexRule, type WIEngineResult, type WITimerState, type WorldDelta, type WorldInfoEntry } from '../core/types.js';
+import { type MemoryEntry, type PromptPreset, type RegexRule, type WITimerState, type WorldDelta, type WorldInfoEntry } from '../core/types.js';
 import { applyCharacterPatch } from '../state/card.js';
 import { MemoryStore } from '../state/memory.js';
 import type { PipelineResult } from './pipeline.js';
@@ -99,20 +99,6 @@ export declare class TavernState {
         cardId: string;
         storyId?: string;
         floor: string;
-    }>;
-    /**
-     * 每 turn 一次的 WI/记忆/变化层评估缓存（turn/end 清除）。
-     * lastCharMessage / journalText 同轮冻结：第 1 步之后 history 会多出 assistant 文本、
-     * journal.md 可能被面板编辑，二者若随步变化会让含 {{lastcharmessage}} 的 turn 侧条目
-     * 或 journal 段字节漂移，宿主快照按字节去重即失效——同轮后续步复用第 1 步的值。
-     */
-    readonly wiCache: Map<string, {
-        turn: number;
-        wi: WIEngineResult;
-        memories: string[];
-        deltas: WorldDelta[];
-        lastCharMessage: string;
-        journalText: string;
     }>;
     /** 本轮已认领尚未入日志的输入（agent/inbox/claimed 按 turn 经会话队列发布；turn/end 清除）。 */
     readonly pendingInputs: Map<string, string[]>;

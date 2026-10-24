@@ -500,7 +500,6 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
     }
     state.recordTriggerLog(sessionId, logLines)
     if (cacheable) {
-      state.wiCache.set(sessionId, { turn, wi, memories, deltas, lastCharMessage, journalText })
       state.turnPlans.set(sessionId, { turn, cardId: binding.cardId, storyId: binding.storyId, result })
       state.pendingTurnPlans.delete(sessionId)
     }

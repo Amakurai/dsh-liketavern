@@ -57,6 +57,8 @@ export function installTavernSeatWatch(ctx: ClientContext, views: Pick<SessionVi
   let baselineDone = false
   let lastTavern = false
   let coolingDown = false
+  /** 上次补偿后尚未确认成功（无会话出现）：冷却结束时复查目标状态，失败不永久丢失。 */
+  let armed = false
   let timer: ReturnType<typeof setTimeout> | undefined
   let observer: MutationObserver | undefined
 
@@ -70,14 +72,26 @@ export function installTavernSeatWatch(ctx: ClientContext, views: Pick<SessionVi
       lastTavern = tavern
       return
     }
-    if (tavern === lastTavern) return
+    // armed 时不算边沿也继续：冷却结束的复查从这里进（lastTavern 未变也仍需确认是否成功）。
+    if (tavern === lastTavern && !armed) return
     lastTavern = tavern
-    if (!tavern || coolingDown) return
-    // 已有会话在显示：宿主自己会处理。0.1.7 起列表不含 current，由会话作用域组件登记。
-    if (views.hasShownSession()) return
+    // 用户切走即放弃补偿；会话出现说明上次补偿已成功。
+    if (!tavern || views.hasShownSession()) {
+      armed = false
+      return
+    }
+    if (coolingDown) {
+      // 冷却中的真边沿不能吞掉：标记待复查，冷却结束后目标状态仍满足就再补一次。
+      armed = true
+      return
+    }
+    armed = true
     coolingDown = true
     setTimeout(() => {
       coolingDown = false
+      // 宿主可能静默失败（无工作区/基线未就绪，页面刚加载就快速选模式的主场景）：
+      // 冷却结束时主动复查一次，不能只等下一次 DOM 边沿（被冷却吞掉的边沿不会再出现）。
+      if (armed) schedule()
     }, 1500)
     try {
       // 0.1.2 起「新对话」动作从 ctx.workspaces 迁到 ctx.uiWorkspace（IWorkspaces 已移除
@@ -87,7 +101,7 @@ export function installTavernSeatWatch(ctx: ClientContext, views: Pick<SessionVi
       if (uiWorkspace && typeof uiWorkspace.startSession === 'function') uiWorkspace.startSession()
       else ctx.workspaces.startSession?.()
     } catch {
-      // 与宿主「新对话」一致：失败静默（无工作区/基线未就绪），用户仍可手动点。
+      // 与宿主「新对话」一致：失败静默（无工作区/基线未就绪），冷却结束的复查兜底。
     }
   }
 

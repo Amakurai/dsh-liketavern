@@ -20,6 +20,9 @@ import type { ClientContext } from './types.js'
 /** 与 presets/tavern/preset.yml 的 name 保持一致。 */
 const TAVERN_SEAT_LABEL = 'Tavern 模式'
 
+/** 一次真边沿之后冷却结束复查补发的上限（不含边沿本身那次）。 */
+export const SEAT_RETRY_MAX = 3
+
 /**
  * 宿主 seatHint 的中英文案（dsh-client-ui-agent-preset 的 locale 表）。
  * 0.1.7 改为「新任务」措辞，旧文案保留给 0.1.5 及更早宿主；只认旧文案会让补偿静默失效。
@@ -59,7 +62,10 @@ export function installTavernSeatWatch(ctx: ClientContext, views: Pick<SessionVi
   let coolingDown = false
   /** 上次补偿后尚未确认成功（无会话出现）：冷却结束时复查目标状态，失败不永久丢失。 */
   let armed = false
+  /** 本次真边沿之后已做的复查补发次数；宿主持续静默失败时到上限即放弃，等下一次真边沿。 */
+  let retries = 0
   let timer: ReturnType<typeof setTimeout> | undefined
+  let cooldownTimer: ReturnType<typeof setTimeout> | undefined
   let observer: MutationObserver | undefined
 
   const check = () => {
@@ -73,21 +79,33 @@ export function installTavernSeatWatch(ctx: ClientContext, views: Pick<SessionVi
       return
     }
     // armed 时不算边沿也继续：冷却结束的复查从这里进（lastTavern 未变也仍需确认是否成功）。
-    if (tavern === lastTavern && !armed) return
+    const edge = tavern !== lastTavern
+    if (!edge && !armed) return
     lastTavern = tavern
     // 用户切走即放弃补偿；会话出现说明上次补偿已成功。
     if (!tavern || views.hasShownSession()) {
       armed = false
       return
     }
+    // 用户的真边沿是新的意图，复查额度重新计算。
+    if (edge) retries = 0
     if (coolingDown) {
       // 冷却中的真边沿不能吞掉：标记待复查，冷却结束后目标状态仍满足就再补一次。
       armed = true
       return
     }
+    if (!edge) {
+      // 无工作区等持续失败时不能每个冷却周期无限补发，否则条件迟后满足会凭空建出会话。
+      if (retries >= SEAT_RETRY_MAX) {
+        armed = false
+        return
+      }
+      retries++
+    }
     armed = true
     coolingDown = true
-    setTimeout(() => {
+    cooldownTimer = setTimeout(() => {
+      cooldownTimer = undefined
       coolingDown = false
       // 宿主可能静默失败（无工作区/基线未就绪，页面刚加载就快速选模式的主场景）：
       // 冷却结束时主动复查一次，不能只等下一次 DOM 边沿（被冷却吞掉的边沿不会再出现）。
@@ -123,5 +141,7 @@ export function installTavernSeatWatch(ctx: ClientContext, views: Pick<SessionVi
     document.removeEventListener('DOMContentLoaded', start)
     observer?.disconnect()
     if (timer !== undefined) clearTimeout(timer)
+    // 冷却定时器会触发复查补发：卸载后不能再代为开会话。
+    if (cooldownTimer !== undefined) clearTimeout(cooldownTimer)
   }
 }

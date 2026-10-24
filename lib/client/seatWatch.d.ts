@@ -16,6 +16,8 @@
  */
 import { type SessionViewsPort } from './sessionViews.js';
 import type { ClientContext } from './types.js';
+/** 一次真边沿之后冷却结束复查补发的上限（不含边沿本身那次）。 */
+export declare const SEAT_RETRY_MAX = 3;
 /** 判定一个菜单按钮是否为宿主的预设 seat chip（纯函数，便于脱离 DOM 测试）。 */
 export declare function isSeatChip(title: string | null, className: string): boolean;
 /** 安装监听；返回清理函数（挂进 ctx.effect）。 */

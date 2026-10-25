@@ -42,7 +42,7 @@ describe('TURN_PLAYBOOK', () => {
   })
 
   it('内容固定不随 step 变化（宿主按字节去重，多步后续零快照开销）', () => {
-    expect(TURN_PLAYBOOK).toContain('【本轮】')
+    expect(TURN_PLAYBOOK).toContain('【本轮材料】')
     expect(TURN_PLAYBOOK).toContain('够用就直接以角色身份回复')
     expect(TURN_PLAYBOOK).toContain('按条补读')
     expect(TURN_PLAYBOOK).toContain('不重复追加')

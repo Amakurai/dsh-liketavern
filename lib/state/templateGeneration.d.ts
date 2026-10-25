@@ -17,8 +17,8 @@ declare const generation: z.ZodDiscriminatedUnion<[z.ZodObject<{
         turnContext: z.ZodString;
         messages: z.ZodArray<z.ZodObject<{
             role: z.ZodEnum<{
-                system: "system";
                 user: "user";
+                system: "system";
                 assistant: "assistant";
             }>;
             content: z.ZodString;
@@ -26,8 +26,8 @@ declare const generation: z.ZodDiscriminatedUnion<[z.ZodObject<{
         }, z.core.$strict>>;
         history: z.ZodArray<z.ZodObject<{
             role: z.ZodEnum<{
-                system: "system";
                 user: "user";
+                system: "system";
                 assistant: "assistant";
             }>;
             content: z.ZodString;
@@ -36,6 +36,10 @@ declare const generation: z.ZodDiscriminatedUnion<[z.ZodObject<{
         logLines: z.ZodArray<z.ZodString>;
         layout: z.ZodOptional<z.ZodType<import("../core/promptLayout.js").PromptLayout, unknown, z.core.$ZodTypeInternals<import("../core/promptLayout.js").PromptLayout, unknown>>>;
         cacheFirstLayout: z.ZodOptional<z.ZodBoolean>;
+        requestCleanup: z.ZodOptional<z.ZodObject<{
+            hideHarnessIdentity: z.ZodBoolean;
+            dropWorkspaceInstructions: z.ZodBoolean;
+        }, z.core.$strict>>;
         userName: z.ZodString;
         personaDescription: z.ZodString;
         personaLorebookId: z.ZodNullable<z.ZodString>;

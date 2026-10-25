@@ -190,8 +190,8 @@ export declare const METHODS: {
                 prompt: import("zod/mini").ZodMiniString<string>;
                 depth: import("zod/mini").ZodMiniNumber<number>;
                 role: import("zod/mini").ZodMiniEnum<{
-                    system: "system";
                     user: "user";
+                    system: "system";
                     assistant: "assistant";
                 }>;
             }, import("zod/v4/core").$strip>>>;
@@ -402,8 +402,8 @@ export declare const METHODS: {
                     preset: "preset";
                 }>;
                 roles: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniArray<import("zod/mini").ZodMiniEnum<{
-                    system: "system";
                     user: "user";
+                    system: "system";
                     assistant: "assistant";
                 }>>>;
                 trimStrings: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniArray<import("zod/mini").ZodMiniString<string>>>;
@@ -1447,8 +1447,8 @@ export declare const TYPERT_HOST: {
                         prompt: import("zod/mini").ZodMiniString<string>;
                         depth: import("zod/mini").ZodMiniNumber<number>;
                         role: import("zod/mini").ZodMiniEnum<{
-                            system: "system";
                             user: "user";
+                            system: "system";
                             assistant: "assistant";
                         }>;
                     }, import("zod/v4/core").$strip>>>;
@@ -1539,8 +1539,8 @@ export declare const TYPERT_HOST: {
                             preset: "preset";
                         }>;
                         roles: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniArray<import("zod/mini").ZodMiniEnum<{
-                            system: "system";
                             user: "user";
+                            system: "system";
                             assistant: "assistant";
                         }>>>;
                         trimStrings: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniArray<import("zod/mini").ZodMiniString<string>>>;
@@ -1957,8 +1957,8 @@ export declare const TYPERT_REMOTE: {
                         prompt: import("zod/mini").ZodMiniString<string>;
                         depth: import("zod/mini").ZodMiniNumber<number>;
                         role: import("zod/mini").ZodMiniEnum<{
-                            system: "system";
                             user: "user";
+                            system: "system";
                             assistant: "assistant";
                         }>;
                     }, import("zod/v4/core").$strip>>>;
@@ -2049,8 +2049,8 @@ export declare const TYPERT_REMOTE: {
                             preset: "preset";
                         }>;
                         roles: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniArray<import("zod/mini").ZodMiniEnum<{
-                            system: "system";
                             user: "user";
+                            system: "system";
                             assistant: "assistant";
                         }>>>;
                         trimStrings: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniArray<import("zod/mini").ZodMiniString<string>>>;

@@ -198,8 +198,23 @@ it('首次组装后修改缓存布局设置，本轮沿用已冻结位置，下�
   expect(planMessages(requests[1]!.messages).at(-1)?.source).toMatchObject({ tavernPromptPlan: { cacheFirst: true } })
 })
 
+it('首次组装后修改请求清理设置，本轮沿用已冻结开关，下一轮才删除宿主身份句', async () => {
+  configRaw = { prompts: { cacheFirstLayout: false, hideHarnessIdentity: false } }
+  ctx.on('agent/pre-step', async (payload, next) => {
+    if (payload.turn === 1 && payload.step === 1) configRaw = { prompts: { cacheFirstLayout: false, hideHarnessIdentity: true } }
+    return next()
+  })
+  await send(await user('FROZEN-CLEANUP-ONE'))
+  expect(wires[0]!.system).toContain('You are an AI agent powered by DeepSeek Harness.')
+  expect(planMessages(requests[0]!.messages)[0]?.source).toMatchObject({ tavernPromptPlan: { cleanup: { hideHarnessIdentity: false } } })
+  await send(await user('FROZEN-CLEANUP-TWO'))
+  expect(wires[1]!.system).not.toContain('You are an AI agent powered by DeepSeek Harness.')
+  expect(wires[1]!.system).toContain('PRESET-MAIN')
+  expect(planMessages(requests[1]!.messages).at(-1)?.source).toMatchObject({ tavernPromptPlan: { cleanup: { hideHarnessIdentity: true } } })
+})
+
 it('缓存优先：真实 wire 首条 system 不含深度条目，深度注入改以 user 送到本轮输入之后', async () => {
-  configRaw = {}
+  configRaw = { prompts: { cacheFirstLayout: true } }
   await send(await user('INPUT-ONE'))
   expect(wires).toHaveLength(1)
   for (const text of ['FACTORY-SDK-PREFIX', 'PRESET-MAIN']) expect(wires[0]!.system).toContain(text)
@@ -217,7 +232,7 @@ it('缓存优先：真实 wire 首条 system 不含深度条目，深度注入�
 })
 
 it('缓存优先：真实 wire 的下一轮请求以上一轮请求开头，上一轮回复紧随其后', async () => {
-  configRaw = {}
+  configRaw = { prompts: { cacheFirstLayout: true } }
   await send(await user('INPUT-ONE'))
   await send(await user('INPUT-TWO'))
   expect(wires).toHaveLength(2)

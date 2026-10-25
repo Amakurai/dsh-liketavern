@@ -66,6 +66,8 @@ export interface PipelineInput {
 export interface PipelineResult {
   /** 首次组装的布局偏好；旧持久计划缺省保留原位置，不读取升级后的当前设置。 */
   cacheFirstLayout?: boolean
+  /** 首次组装冻结的请求副本清理开关；旧计划缺省不清理，同轮各步骤一致。 */
+  requestCleanup?: { hideHarnessIdentity: boolean; dropWorkspaceInstructions: boolean }
   /** 本轮冻结的模板输入；回复处理只使用这份资产与时钟快照。 */
   templateContext?: TemplateContext
   templateReplay?:TemplateReplay
@@ -317,6 +319,8 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
   const lastUserMessage = [...chatMessages].reverse().find((m) => m.role === 'user')?.content ?? ''
   const config = state.config
   const cacheFirstLayout = config.prompts.cacheFirstLayout
+  const requestCleanup = { hideHarnessIdentity: config.prompts.hideHarnessIdentity,
+    dropWorkspaceInstructions: config.prompts.dropWorkspaceInstructions }
   const sampling = resolvePresetSampling(config.sampling, preset.sampling)
   // 会话内换模不回写 agent.options；窗口与模板 model 取会话最近实际路由。
   const route = input.agent ? sessionModelRoute(input.agent) : {}
@@ -445,6 +449,7 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
   }
   const result: PipelineResult = {
     cacheFirstLayout,
+    requestCleanup,
     templateContext,
     templateReplay:assembled.templateReplay,
     standingKey,
@@ -472,6 +477,7 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
     regexRules:templateContext.regexRules,hasMessageRegex:templateContext.hasMessageRegex,
     plan:{standingKey:result.standingKey,sampling:result.sampling,standing:result.standing,turnContext:result.turnContext,messages:result.messages,
       cacheFirstLayout:result.cacheFirstLayout,
+      ...(result.requestCleanup ? {requestCleanup:result.requestCleanup} : {}),
       ...(result.layout ? {layout:result.layout} : {}),
       history:result.history,logLines:result.logLines,userName:result.userName,personaDescription:result.personaDescription,
       personaLorebookId:result.personaLorebookId,wiBudget:result.wiBudget,assembleLog:result.assembled.log,stats:result.assembled.stats},

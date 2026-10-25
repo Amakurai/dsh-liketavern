@@ -11,13 +11,29 @@ export declare const TavernConfigSchema: z<Schemastery.ObjectS<NoInfer<{
     prompts: z<Schemastery.ObjectS<NoInfer<{
         preferCharacterPrompt: z<boolean, boolean, "defined">;
         preferCharacterInstructions: z<boolean, boolean, "defined">;
-        /** DeepSeek 官方布局通道：本轮动态条目与深度注入移到请求尾部，保护历史前缀缓存。 */
+        /**
+         * DeepSeek 官方布局通道。默认关闭 = 按 ST 原位置投影（深度注入、历史前条目各就各位），
+         * 扮演效果优先，代价是这些条目每轮变化或随历史漂移，其后的历史几乎每轮重新计费；
+         * 开启则把它们移到请求尾部，换历史前缀缓存命中率，代价是位置语义改变。两种模式都只改请求副本。
+         */
         cacheFirstLayout: z<boolean, boolean, "defined">;
+        /** 投影副本里删掉宿主身份句（`You are an AI agent powered by DeepSeek Harness.`），让预设独占扮演框架。 */
+        hideHarnessIdentity: z<boolean, boolean, "defined">;
+        /** 投影副本里剔除宿主注入的工作区指令（AGENTS.md 基线），Tavern 会话不需要它每轮抢解释权。 */
+        dropWorkspaceInstructions: z<boolean, boolean, "defined">;
     }>>, Schemastery.ObjectT<NoInfer<{
         preferCharacterPrompt: z<boolean, boolean, "defined">;
         preferCharacterInstructions: z<boolean, boolean, "defined">;
-        /** DeepSeek 官方布局通道：本轮动态条目与深度注入移到请求尾部，保护历史前缀缓存。 */
+        /**
+         * DeepSeek 官方布局通道。默认关闭 = 按 ST 原位置投影（深度注入、历史前条目各就各位），
+         * 扮演效果优先，代价是这些条目每轮变化或随历史漂移，其后的历史几乎每轮重新计费；
+         * 开启则把它们移到请求尾部，换历史前缀缓存命中率，代价是位置语义改变。两种模式都只改请求副本。
+         */
         cacheFirstLayout: z<boolean, boolean, "defined">;
+        /** 投影副本里删掉宿主身份句（`You are an AI agent powered by DeepSeek Harness.`），让预设独占扮演框架。 */
+        hideHarnessIdentity: z<boolean, boolean, "defined">;
+        /** 投影副本里剔除宿主注入的工作区指令（AGENTS.md 基线），Tavern 会话不需要它每轮抢解释权。 */
+        dropWorkspaceInstructions: z<boolean, boolean, "defined">;
     }>>, "defined">;
     sampling: z<Schemastery.ObjectS<NoInfer<{
         /** 0–2，默认 1（DeepSeek 官方）。thinking 模式下不生效。 */
@@ -151,13 +167,29 @@ export declare const TavernConfigSchema: z<Schemastery.ObjectS<NoInfer<{
     prompts: z<Schemastery.ObjectS<NoInfer<{
         preferCharacterPrompt: z<boolean, boolean, "defined">;
         preferCharacterInstructions: z<boolean, boolean, "defined">;
-        /** DeepSeek 官方布局通道：本轮动态条目与深度注入移到请求尾部，保护历史前缀缓存。 */
+        /**
+         * DeepSeek 官方布局通道。默认关闭 = 按 ST 原位置投影（深度注入、历史前条目各就各位），
+         * 扮演效果优先，代价是这些条目每轮变化或随历史漂移，其后的历史几乎每轮重新计费；
+         * 开启则把它们移到请求尾部，换历史前缀缓存命中率，代价是位置语义改变。两种模式都只改请求副本。
+         */
         cacheFirstLayout: z<boolean, boolean, "defined">;
+        /** 投影副本里删掉宿主身份句（`You are an AI agent powered by DeepSeek Harness.`），让预设独占扮演框架。 */
+        hideHarnessIdentity: z<boolean, boolean, "defined">;
+        /** 投影副本里剔除宿主注入的工作区指令（AGENTS.md 基线），Tavern 会话不需要它每轮抢解释权。 */
+        dropWorkspaceInstructions: z<boolean, boolean, "defined">;
     }>>, Schemastery.ObjectT<NoInfer<{
         preferCharacterPrompt: z<boolean, boolean, "defined">;
         preferCharacterInstructions: z<boolean, boolean, "defined">;
-        /** DeepSeek 官方布局通道：本轮动态条目与深度注入移到请求尾部，保护历史前缀缓存。 */
+        /**
+         * DeepSeek 官方布局通道。默认关闭 = 按 ST 原位置投影（深度注入、历史前条目各就各位），
+         * 扮演效果优先，代价是这些条目每轮变化或随历史漂移，其后的历史几乎每轮重新计费；
+         * 开启则把它们移到请求尾部，换历史前缀缓存命中率，代价是位置语义改变。两种模式都只改请求副本。
+         */
         cacheFirstLayout: z<boolean, boolean, "defined">;
+        /** 投影副本里删掉宿主身份句（`You are an AI agent powered by DeepSeek Harness.`），让预设独占扮演框架。 */
+        hideHarnessIdentity: z<boolean, boolean, "defined">;
+        /** 投影副本里剔除宿主注入的工作区指令（AGENTS.md 基线），Tavern 会话不需要它每轮抢解释权。 */
+        dropWorkspaceInstructions: z<boolean, boolean, "defined">;
     }>>, "defined">;
     sampling: z<Schemastery.ObjectS<NoInfer<{
         /** 0–2，默认 1（DeepSeek 官方）。thinking 模式下不生效。 */
@@ -293,13 +325,29 @@ export declare const Config: z<Schemastery.ObjectS<NoInfer<{
     prompts: z<NoInfer<Schemastery.ObjectS<NoInfer<{
         preferCharacterPrompt: z<boolean, boolean, "defined">;
         preferCharacterInstructions: z<boolean, boolean, "defined">;
-        /** DeepSeek 官方布局通道：本轮动态条目与深度注入移到请求尾部，保护历史前缀缓存。 */
+        /**
+         * DeepSeek 官方布局通道。默认关闭 = 按 ST 原位置投影（深度注入、历史前条目各就各位），
+         * 扮演效果优先，代价是这些条目每轮变化或随历史漂移，其后的历史几乎每轮重新计费；
+         * 开启则把它们移到请求尾部，换历史前缀缓存命中率，代价是位置语义改变。两种模式都只改请求副本。
+         */
         cacheFirstLayout: z<boolean, boolean, "defined">;
+        /** 投影副本里删掉宿主身份句（`You are an AI agent powered by DeepSeek Harness.`），让预设独占扮演框架。 */
+        hideHarnessIdentity: z<boolean, boolean, "defined">;
+        /** 投影副本里剔除宿主注入的工作区指令（AGENTS.md 基线），Tavern 会话不需要它每轮抢解释权。 */
+        dropWorkspaceInstructions: z<boolean, boolean, "defined">;
     }>>>, NoInfer<Schemastery.ObjectT<NoInfer<{
         preferCharacterPrompt: z<boolean, boolean, "defined">;
         preferCharacterInstructions: z<boolean, boolean, "defined">;
-        /** DeepSeek 官方布局通道：本轮动态条目与深度注入移到请求尾部，保护历史前缀缓存。 */
+        /**
+         * DeepSeek 官方布局通道。默认关闭 = 按 ST 原位置投影（深度注入、历史前条目各就各位），
+         * 扮演效果优先，代价是这些条目每轮变化或随历史漂移，其后的历史几乎每轮重新计费；
+         * 开启则把它们移到请求尾部，换历史前缀缓存命中率，代价是位置语义改变。两种模式都只改请求副本。
+         */
         cacheFirstLayout: z<boolean, boolean, "defined">;
+        /** 投影副本里删掉宿主身份句（`You are an AI agent powered by DeepSeek Harness.`），让预设独占扮演框架。 */
+        hideHarnessIdentity: z<boolean, boolean, "defined">;
+        /** 投影副本里剔除宿主注入的工作区指令（AGENTS.md 基线），Tavern 会话不需要它每轮抢解释权。 */
+        dropWorkspaceInstructions: z<boolean, boolean, "defined">;
     }>>>, "volatile-defined">;
     sampling: z<NoInfer<Schemastery.ObjectS<NoInfer<{
         /** 0–2，默认 1（DeepSeek 官方）。thinking 模式下不生效。 */
@@ -428,13 +476,29 @@ export declare const Config: z<Schemastery.ObjectS<NoInfer<{
     prompts: z<NoInfer<Schemastery.ObjectS<NoInfer<{
         preferCharacterPrompt: z<boolean, boolean, "defined">;
         preferCharacterInstructions: z<boolean, boolean, "defined">;
-        /** DeepSeek 官方布局通道：本轮动态条目与深度注入移到请求尾部，保护历史前缀缓存。 */
+        /**
+         * DeepSeek 官方布局通道。默认关闭 = 按 ST 原位置投影（深度注入、历史前条目各就各位），
+         * 扮演效果优先，代价是这些条目每轮变化或随历史漂移，其后的历史几乎每轮重新计费；
+         * 开启则把它们移到请求尾部，换历史前缀缓存命中率，代价是位置语义改变。两种模式都只改请求副本。
+         */
         cacheFirstLayout: z<boolean, boolean, "defined">;
+        /** 投影副本里删掉宿主身份句（`You are an AI agent powered by DeepSeek Harness.`），让预设独占扮演框架。 */
+        hideHarnessIdentity: z<boolean, boolean, "defined">;
+        /** 投影副本里剔除宿主注入的工作区指令（AGENTS.md 基线），Tavern 会话不需要它每轮抢解释权。 */
+        dropWorkspaceInstructions: z<boolean, boolean, "defined">;
     }>>>, NoInfer<Schemastery.ObjectT<NoInfer<{
         preferCharacterPrompt: z<boolean, boolean, "defined">;
         preferCharacterInstructions: z<boolean, boolean, "defined">;
-        /** DeepSeek 官方布局通道：本轮动态条目与深度注入移到请求尾部，保护历史前缀缓存。 */
+        /**
+         * DeepSeek 官方布局通道。默认关闭 = 按 ST 原位置投影（深度注入、历史前条目各就各位），
+         * 扮演效果优先，代价是这些条目每轮变化或随历史漂移，其后的历史几乎每轮重新计费；
+         * 开启则把它们移到请求尾部，换历史前缀缓存命中率，代价是位置语义改变。两种模式都只改请求副本。
+         */
         cacheFirstLayout: z<boolean, boolean, "defined">;
+        /** 投影副本里删掉宿主身份句（`You are an AI agent powered by DeepSeek Harness.`），让预设独占扮演框架。 */
+        hideHarnessIdentity: z<boolean, boolean, "defined">;
+        /** 投影副本里剔除宿主注入的工作区指令（AGENTS.md 基线），Tavern 会话不需要它每轮抢解释权。 */
+        dropWorkspaceInstructions: z<boolean, boolean, "defined">;
     }>>>, "volatile-defined">;
     sampling: z<NoInfer<Schemastery.ObjectS<NoInfer<{
         /** 0–2，默认 1（DeepSeek 官方）。thinking 模式下不生效。 */
@@ -569,6 +633,8 @@ export interface TavernPromptPreferences {
     preferCharacterPrompt: boolean;
     preferCharacterInstructions: boolean;
     cacheFirstLayout: boolean;
+    hideHarnessIdentity: boolean;
+    dropWorkspaceInstructions: boolean;
 }
 export interface TavernSessionDefaults {
     cardId: string;

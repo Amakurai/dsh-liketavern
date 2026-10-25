@@ -10,7 +10,8 @@ import type {} from '@deepseek-ai/dsh-agent-loop'
 import type {} from '@deepseek-ai/dsh-compaction-basic'
 import { joinContextSections } from '@deepseek-ai/dsh-system-prompt'
 import { z } from 'zod'
-import { BOUND_DISCIPLINE, TURN_PLAYBOOK, isRuntimeContextMessage, turnTailHeader } from '../core/dshPrompt.js'
+import { BOUND_DISCIPLINE, TURN_PLAYBOOK, isRuntimeContextMessage, isWorkspaceInstructionMessage,
+  stripHarnessIdentity, turnTailHeader } from '../core/dshPrompt.js'
 import { PromptLayoutSchema, type PromptHistoryAnchor, type PromptLayout, type PromptLayoutEntry } from '../core/promptLayout.js'
 import { assertNoControlTokens, mayContainControlTokens } from '../core/promptSafety.js'
 import { estimateTokens } from '../core/tokenize.js'
@@ -32,6 +33,8 @@ export interface PresetRequestPlan {
    * 随计划冻结，同轮各步骤一致；旧计划缺省按原位置投影。
    */
   cacheFirst?: boolean
+  /** 请求副本清理开关，随计划冻结；同轮中途改设置不改变后续步骤，旧计划缺省不清理。 */
+  cleanup?: PresetRequestCleanup
 }
 
 export type PresetProjectionDiagnostic = {
@@ -39,6 +42,10 @@ export type PresetProjectionDiagnostic = {
   messageId: string
   summaryMessageId: string
 } | { kind: 'leading-system-only' } | { kind: 'messages-system-layout' } | {
+  kind: 'request-cleanup'
+  hideHarnessIdentity: boolean
+  droppedWorkspaceInstructions: number
+} | {
   kind: 'text-budget'
   beforeTextTokens: number
   afterTextTokens: number
@@ -49,6 +56,14 @@ export type PresetProjectionDiagnostic = {
 }
 
 type ProjectionModel = Pick<LlmResolvedModelInfo, 'systemPromptUpdate' | 'context' | 'defaultMaxTokens'>
+
+/** 请求副本清理：只影响这次发信，不改宿主历史、段注册与 Session 日志。 */
+export interface PresetRequestCleanup {
+  /** 从宿主 system 里删掉 `You are an AI agent powered by DeepSeek Harness.`，让预设独占扮演框架。 */
+  hideHarnessIdentity?: boolean
+  /** 剔除宿主注入的工作区指令（AGENTS.md 基线）user 消息；Tavern 会话里它与角色设定竞争。 */
+  dropWorkspaceInstructions?: boolean
+}
 
 export interface PresetProjectionOptions {
   onDiagnostic?: (diagnostic: PresetProjectionDiagnostic) => void
@@ -67,7 +82,9 @@ declare module '@deepseek-ai/dsh-llm' {
 // 来源元数据会经过磁盘与分支恢复；不能把 TypeScript 类型当作 JSON 校验。
 const textSchema = z.string().max(2_000_000)
 const planSchema = z.strictObject({ version: z.literal(1), sessionId: z.string().min(1).max(4096), turn: z.number().int().nonnegative(),
-  standingText: textSchema.min(1), contextText: textSchema, cacheFirst: z.boolean().optional(), layout: PromptLayoutSchema })
+  standingText: textSchema.min(1), contextText: textSchema, cacheFirst: z.boolean().optional(),
+  cleanup: z.strictObject({ hideHarnessIdentity: z.boolean().optional(), dropWorkspaceInstructions: z.boolean().optional() }).optional(),
+  layout: PromptLayoutSchema })
 
 function parsePlan(value: unknown): PresetRequestPlan {
   const result = planSchema.safeParse(value)
@@ -142,7 +159,13 @@ function plainText(message: Message): string {
 }
 
 /** 只重写宿主声明的段；其它来源、图片、工具与模型 replayState 保留同一 Message 对象。 */
-function hostMessages(messages: readonly Message[], plan: PresetRequestPlan): Message[] {
+function hostMessages(messages: readonly Message[], plan: PresetRequestPlan): {
+  messages: Message[]
+  identityStripped: boolean
+  /** 待剔除的工作区指令消息；定位与插入阶段仍保留，最终输出时才跳过，模板锚点不会因此失配。 */
+  workspaceInstructions: ReadonlySet<Message>
+} {
+  const cleanup = plan.cleanup
   const systems = messages.filter(message => message.role === 'system'
     && message.source.kind === 'system-prompt')
   const latest = systems.at(-1)
@@ -152,12 +175,21 @@ function hostMessages(messages: readonly Message[], plan: PresetRequestPlan): Me
   if (at < 0 || at !== systemText.lastIndexOf(plan.standingText) || !plan.standingText.includes(BOUND_DISCIPLINE)) {
     throw new Error('Tavern standing 与冻结布局不匹配，不能安全移除旧段；请开启下一轮')
   }
-  const cleanedSystem = freezeMessage({ ...latest, content: [{ type: 'text' as const,
-    text: systemText.slice(0, at) + BOUND_DISCIPLINE + systemText.slice(at + plan.standingText.length) }] })
+  const replaced = systemText.slice(0, at) + BOUND_DISCIPLINE + systemText.slice(at + plan.standingText.length)
+  const cleaned = cleanup?.hideHarnessIdentity === true ? stripHarnessIdentity(replaced) : replaced
+  const cleanedSystem = freezeMessage({ ...latest, content: [{ type: 'text' as const, text: cleaned }] })
   const result: Message[] = [cleanedSystem]
+  const workspaceInstructions = new Set<Message>()
   for (const original of messages) {
     if (original.source.kind === 'tavern-prompt-plan') continue
     const message = stripPlanMetadata(original)
+    // 工作区指令是宿主以 user 消息注入的，不属于本轮对话，也不该和角色设定抢解释权。
+    // 它仍在冻结历史里，可能是模板片段的锚点，因此只标记，由最终输出跳过。
+    if (cleanup?.dropWorkspaceInstructions === true && isWorkspaceInstructionMessage(message)) {
+      workspaceInstructions.add(message)
+      result.push(message)
+      continue
+    }
     if (message.role === 'system' && message.source.kind === 'system-prompt') continue
     // runtime-context 的来源声明未由宿主包入口导出；校验真实数据，避免伪造模块类型。
     if (message.role === 'user') {
@@ -173,7 +205,7 @@ function hostMessages(messages: readonly Message[], plan: PresetRequestPlan): Me
     }
     result.push(message)
   }
-  return result
+  return { messages: result, identityStripped: cleaned !== replaced, workspaceInstructions }
 }
 
 function pluginMessage(plan: PresetRequestPlan, key: string, role: 'system' | 'user' | 'assistant', content: string): Message {
@@ -357,7 +389,12 @@ export function projectPresetRequest(options: Readonly<GenerateOptions>, session
     if (mayContainControlTokens(entry.content)) assertNoControlTokens(entry.content, `Tavern 布局条目 ${entry.key}（${entry.role}）`)
   }
   if (entries.some(entry => entry.compatibilityFallback)) throw new Error('Tavern 冻结布局缺少模板精确位置，不能用于真实请求；请修订模板后开启下一轮')
-  const messages = hostMessages(requestMessages, plan)
+  const host = hostMessages(requestMessages, plan)
+  const messages = host.messages
+  if (host.identityStripped || host.workspaceInstructions.size > 0) {
+    projection.onDiagnostic?.({ kind: 'request-cleanup', hideHarnessIdentity: host.identityStripped,
+      droppedWorkspaceInstructions: host.workspaceInstructions.size })
+  }
   const positions = new Map<string, number>()
   messages.forEach((message, index) => {
     if (positions.has(message.id)) throw new Error('Tavern 请求消息 ID 重复，不能可靠定位历史')
@@ -573,7 +610,8 @@ export function projectPresetRequest(options: Readonly<GenerateOptions>, session
   for (let index = 0; index <= messages.length; index++) {
     projected.push(...(slots.get(index) ?? []))
     const message = messages[index]
-    if (message) projected.push(message)
+    // 剔除的工作区指令只在此处跳过：锚在它前后的条目已按原间隙落位，顺序不变。
+    if (message && !host.workspaceInstructions.has(message)) projected.push(message)
   }
   assertHostSystemLeading(messages, projected)
   const effective = applySystemPolicy(projected, projection)

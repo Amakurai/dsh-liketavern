@@ -18,6 +18,8 @@ export interface PresetRequestPlan {
      * 随计划冻结，同轮各步骤一致；旧计划缺省按原位置投影。
      */
     cacheFirst?: boolean;
+    /** 请求副本清理开关，随计划冻结；同轮中途改设置不改变后续步骤，旧计划缺省不清理。 */
+    cleanup?: PresetRequestCleanup;
 }
 export type PresetProjectionDiagnostic = {
     kind: 'compaction-clamp';
@@ -28,6 +30,10 @@ export type PresetProjectionDiagnostic = {
 } | {
     kind: 'messages-system-layout';
 } | {
+    kind: 'request-cleanup';
+    hideHarnessIdentity: boolean;
+    droppedWorkspaceInstructions: number;
+} | {
     kind: 'text-budget';
     beforeTextTokens: number;
     afterTextTokens: number;
@@ -37,6 +43,13 @@ export type PresetProjectionDiagnostic = {
     exceedsAvailable: boolean;
 };
 type ProjectionModel = Pick<LlmResolvedModelInfo, 'systemPromptUpdate' | 'context' | 'defaultMaxTokens'>;
+/** 请求副本清理：只影响这次发信，不改宿主历史、段注册与 Session 日志。 */
+export interface PresetRequestCleanup {
+    /** 从宿主 system 里删掉 `You are an AI agent powered by DeepSeek Harness.`，让预设独占扮演框架。 */
+    hideHarnessIdentity?: boolean;
+    /** 剔除宿主注入的工作区指令（AGENTS.md 基线）user 消息；Tavern 会话里它与角色设定竞争。 */
+    dropWorkspaceInstructions?: boolean;
+}
 export interface PresetProjectionOptions {
     onDiagnostic?: (diagnostic: PresetProjectionDiagnostic) => void;
     /** 未提供时只生成逻辑布局；真实适配器必须提供本次 prepareCall 冻结的模型能力。 */

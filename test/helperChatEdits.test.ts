@@ -5,7 +5,9 @@ import {join} from 'node:path'
 import {createHash} from 'node:crypto'
 import {afterEach,beforeEach,expect,it,vi} from 'vitest'
 import type {Context} from '@deepseek-ai/cordis'
-import {interruptedTurnClosers,Session,SessionSeq,ToolCallRecovery,type SessionEvent} from '@deepseek-ai/dsh-session'
+import {interruptedTurnClosers,KNOWN_SESSION_EVENT_TYPES,Session,SessionSeq,ToolCallRecovery,type SessionEvent} from '@deepseek-ai/dsh-session'
+import {CompactionId,compactCheckpointSource} from '@deepseek-ai/dsh-compaction'
+import {assertReleasedV4Relationships} from '@deepseek-ai/dsh-session-format-v3-to-v4'
 import {validateStoredEvents} from '@deepseek-ai/dsh-session-persistence'
 import {createAssistantMessage,createUserMessage,createToolResultMessage,ToolCallId} from '@deepseek-ai/dsh-llm'
 import {TavernState} from '../src/node/state.js'
@@ -300,10 +302,11 @@ it('坏页集合、页字段矛盾与写失败不落部分数据，也不会提�
   expect((await request()).messages[5]?.swipe?.pages).toHaveLength(1)
 })
 
-/** 调用宿主公开持久化校验、Session 恢复与 ToolCallRecovery/interruptedTurnClosers，检查删改 seed 的 turn/step 和工具结果配对。 */
+/** 调用宿主公开持久化校验、V4 关系校验、Session 恢复与 ToolCallRecovery/interruptedTurnClosers，检查删改 seed 的 turn/step、压缩与工具结果配对。 */
 async function assertHostTrace(session:Session){
   const events=session.snapshotEvents()
   validateStoredEvents(session.header,events.map(event=>structuredClone(event)))
+  assertReleasedV4Relationships({header:{delegationDepth:0,...session.header},inheritedEventCount:session.inheritedEventCount,events:events.map(event=>structuredClone(event))},KNOWN_SESSION_EVENT_TYPES)
   const restored=Session.create(session.id,events,session.header,session.inheritedEventCount)
   expect(restored.deriveMessages()).toEqual(session.deriveMessages())
   const recovery=new ToolCallRecovery()
@@ -314,6 +317,55 @@ async function assertHostTrace(session:Session){
   expect(recovery.results()).toEqual([])
   expect(interruptedTurnClosers(events)).toEqual([])
 }
+it('修改或删除压缩点之后的消息保留前置压缩事务与工具裁剪，持久化重载不丢 compaction/start',async()=>{
+  const raw=Session.create('session-compact-before-edit' as Session['id']);raw.append('agent-preset/selected',{agentPreset:'tavern'})
+  raw.append('turn/start',{turn:1})
+  const firstUser=raw.append('user/message',createUserMessage({content:[{type:'text',text:'user-1'}],source:{kind:'user'}}),{surfaceOp:'append'})
+  raw.append('step/start',{turn:1,step:1})
+  const callId=ToolCallId('call-1')
+  const firstAssistant=raw.append('assistant/message',{stream:[],turn:1,step:1,message:createAssistantMessage({content:[{type:'text',text:'assistant-1'},{type:'tool-call',id:callId,name:'fixture_tool',arguments:'{}'}],source:{provider:'test',model:'test'}})},{surfaceOp:'append'})
+  raw.append('tool/call',{turn:1,step:1,callId,name:'fixture_tool',arguments:'{}'})
+  const toolResult=raw.append('tool/result',{turn:1,step:1,message:createToolResultMessage({callId,content:[{type:'text',text:'long tool result'}],isError:false})},{surfaceOp:'append'})
+  raw.append('step/end',{turn:1,step:1});raw.append('turn/end',{turn:1,reason:{kind:'completed'}})
+  raw.append('session/title-llm-request',{messageSeqs:[firstUser.seq],messages:[createUserMessage({content:[{type:'text',text:'user-1'}],source:{kind:'dsh-session-title-llm'}})]})
+  raw.append('session/title',{title:'首轮标题',source:{kind:'auto'},messageSeqs:[firstUser.seq]})
+  const compactionId=CompactionId('compact-1'),shadowedSeqs=[firstUser.seq,firstAssistant.seq,toolResult.seq]
+  const start=raw.append('compaction/start',{compactionId,turn:null})
+  const summary=raw.append('compaction/summary',{compactionId,shadowedRange:{start:firstUser.seq,end:toolResult.seq},shadowedSeqs,shadowedTokenCount:30,summary:[{type:'text',text:'summary-1'}],rawInput:{messages:[]},rawOutput:[{type:'text',text:'summary-1'}]})
+  const checkpoint=raw.append('user/message',createUserMessage({content:[{type:'text',text:'<compacted-summary>summary-1</compacted-summary>'}],source:compactCheckpointSource(compactionId)}),{surfaceOp:{op:'replace',startSeq:firstUser.seq,endSeq:toolResult.seq},sourceEventSeqs:[start.seq,summary.seq,...shadowedSeqs]})
+  raw.append('compaction/end',{compactionId,turn:null})
+  raw.append('turn/start',{turn:2})
+  raw.append('user/message',createUserMessage({content:[{type:'text',text:'user-2'}],source:{kind:'user'}}),{surfaceOp:'append'})
+  raw.append('step/start',{turn:2,step:1})
+  const call2=ToolCallId('call-2')
+  raw.append('assistant/message',{stream:[],turn:2,step:1,message:createAssistantMessage({content:[{type:'text',text:'assistant-2'},{type:'tool-call',id:call2,name:'fixture_tool',arguments:'{}'}],source:{provider:'test',model:'test'}})},{surfaceOp:'append'})
+  raw.append('tool/call',{turn:2,step:1,callId:call2,name:'fixture_tool',arguments:'{}'})
+  const tool2=raw.append('tool/result',{turn:2,step:1,message:createToolResultMessage({callId:call2,content:[{type:'text',text:'verbose output 2'}],isError:false})},{surfaceOp:'append'})
+  raw.append('step/end',{turn:2,step:1})
+  raw.append('compaction/prune',{shadowedRange:{start:tool2.seq,end:tool2.seq},shadowedSeqs:[tool2.seq],shadowedTokenCount:12})
+  raw.append('tool/result',{...tool2.data,message:{...tool2.data.message,content:[{type:'text',text:'pruned output 2'}]}},{surfaceOp:{op:'replace',startSeq:tool2.seq,endSeq:tool2.seq},sourceEventSeqs:[tool2.seq]})
+  raw.append('turn/end',{turn:2,reason:{kind:'completed'}})
+  raw.append('turn/start',{turn:3})
+  const user3=raw.append('user/message',createUserMessage({content:[{type:'text',text:'user-3'}],source:{kind:'user'}}),{surfaceOp:'append'})
+  raw.append('step/start',{turn:3,step:1})
+  const assistant3=raw.append('assistant/message',{stream:[],turn:3,step:1,message:createAssistantMessage({content:[{type:'text',text:'assistant-3'}],source:{provider:'test',model:'test'}})},{surfaceOp:'append'})
+  raw.append('step/end',{turn:3,step:1})
+  const staleId=CompactionId('compact-stale')
+  const staleStart=raw.append('compaction/start',{compactionId:staleId,turn:3})
+  raw.append('turn/end',{turn:3,reason:{kind:'completed'}})
+  const seed=editedHistorySeed(raw.snapshotEvents(),new Map([[assistant3.seq,'assistant-3-edited']]),new Set([user3.seq]))
+  expect(seed[start.seq]?.type).toBe('compaction/start')
+  expect(seed[summary.seq]?.type).toBe('compaction/summary')
+  expect(seed[checkpoint.seq]?.type).toBe('user/message')
+  expect(seed[staleStart.seq]).toMatchObject({type:'tavern/message-edit-marker',ignorable:true,data:{originalType:'compaction/start',reason:'stale-compaction'}})
+  const child=Session.create('session-compact-child' as Session['id'],seed)
+  await assertHostTrace(child)
+  expect(texts(child)).toEqual(['<compacted-summary>summary-1</compacted-summary>','user-2','assistant-2','assistant-3-edited'])
+  const deletedFirstSeed=editedHistorySeed(raw.snapshotEvents(),new Map(),new Set([firstUser.seq]))
+  const deletedFirstChild=Session.create('session-compact-deleted-first' as Session['id'],deletedFirstSeed)
+  await assertHostTrace(deletedFirstChild)
+  expect(texts(deletedFirstChild)).toEqual(['assistant-1','user-2','assistant-2','user-3','assistant-3'])
+})
 it('删除用户和 assistant 消息同时移除工具配对及过时摘要，保留后续历史与原会话',async()=>{
   await assertHostTrace(source)
   const nodes=source.snapshotEvents().filter(event=>'surfaceOp' in event&&event.surfaceOp==='append')

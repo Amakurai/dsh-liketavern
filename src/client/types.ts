@@ -22,7 +22,9 @@ export type CharacterDeletePlan = TavernMethodResults['getCharacterDeletePlan']
 export const DEFAULT_PROMPT_PREFERENCES: TavernSettings['prompts'] = {
   preferCharacterPrompt: true,
   preferCharacterInstructions: true,
-  cacheFirstLayout: true,
+  cacheFirstLayout: false,
+  hideHarnessIdentity: true,
+  dropWorkspaceInstructions: true,
 }
 
 export const EMPTY_SESSION_DEFAULTS: TavernSettings['defaults'] = {

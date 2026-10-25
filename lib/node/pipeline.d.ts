@@ -35,6 +35,11 @@ export interface PipelineInput {
 export interface PipelineResult {
     /** 首次组装的布局偏好；旧持久计划缺省保留原位置，不读取升级后的当前设置。 */
     cacheFirstLayout?: boolean;
+    /** 首次组装冻结的请求副本清理开关；旧计划缺省不清理，同轮各步骤一致。 */
+    requestCleanup?: {
+        hideHarnessIdentity: boolean;
+        dropWorkspaceInstructions: boolean;
+    };
     /** 本轮冻结的模板输入；回复处理只使用这份资产与时钟快照。 */
     templateContext?: TemplateContext;
     templateReplay?: TemplateReplay;

@@ -3,7 +3,11 @@
  * dsh 会对段文本再做一轮严格 {{variable}} 插值；ST 残留宏必须先中性化。
  */
 export declare const UNBOUND_STANDING: string;
-/** 稳定段纪律：绑定不变则钉死。工具时机写在固定的 turn playbook，步骤收口走 inject 通知，避免每步打穿 KV。 */
+/**
+ * 稳定段纪律：绑定不变则钉死。工具时机写在固定的 turn playbook，步骤收口走 inject 通知，避免每步打穿 KV。
+ * 文案以「角色本人」开场而不是「你正在进行角色扮演 / 你是助手」，减少与宿主身份、工具框架互相拉扯：
+ * 这段是请求里最后一段固定设定，语气会直接决定模型把自己当角色还是当执行器。
+ */
 export declare const BOUND_DISCIPLINE: string;
 /**
  * 本轮 runtime context 头：**内容固定，不随 step 变化**。宿主对快照按字节去重——
@@ -13,6 +17,10 @@ export declare const BOUND_DISCIPLINE: string;
  */
 /** 本轮尾块标题；两条通道共用，让模型把其后的内容识别为系统材料而非用户台词。 */
 export declare function turnTailHeader(turn: number): string;
+/**
+ * 同一份内容在压缩：原来的 11 条详细规程里有大量「程序、返回值、重试」措辞，会把模型推回执行器人格；
+ * 保留协议要点（无损 JSON、批量、检查 ok、同轮写入不重做），删掉重复的解释性段落。
+ */
 export declare const TURN_PLAYBOOK: string;
 /** 多步收口通知（agent.inject，form: notice）；不当作用户台词，也不扫世界书。 */
 export declare const TURN_STEP_NOTICE_PREFIX = "\u3010Tavern \u6B65\u9AA4\u3011";
@@ -57,3 +65,20 @@ export declare function isContinueInstruction(text: string): boolean;
 export declare function isSyntheticUserText(text: string): boolean;
 /** 把残留 `{{…}}` 换成全角花括号，避免 dsh section 插值把 ST 宏当成变量抛错。 */
 export declare function neutralizeDshMustache(text: string): string;
+/** 宿主身份段原文（`harness:identity`）。投影副本可选择移除，避免与角色身份正面竞争。 */
+export declare const HARNESS_IDENTITY_TEXT = "You are an AI agent powered by DeepSeek Harness.";
+/**
+ * 从请求副本的 system 文本里删掉宿主身份句。
+ * 只做精确句匹配，连同宿主段间分隔符 `\n\n` 一起删；其它字节一律不动，宿主改文案时自动变成 no-op。
+ */
+export declare function stripHarnessIdentity(text: string): string;
+/**
+ * 工作区指令（AGENTS.md / CLAUDE.md 基线）由宿主以 user 消息注入，不在 system 段里。
+ * Tavern 扮演会话里它每轮都与角色设定竞争，默认在投影副本中剔除，可在设置里关掉。
+ */
+export declare function isWorkspaceInstructionMessage(message: {
+    role?: string;
+    source?: {
+        kind?: string;
+    };
+}): boolean;

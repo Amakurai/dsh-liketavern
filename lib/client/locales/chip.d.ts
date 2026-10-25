@@ -9,7 +9,7 @@ export declare const zh: {
     readonly 'chip.preview.actual': "最近请求";
     readonly 'chip.preview.noActual': "尚未捕获请求。先发送一轮消息；重启或缓存淘汰后旧请求不可用。";
     readonly 'chip.preview.actualTruncated': "（请求超过显示上限，内容已截断）";
-    readonly 'chip.preview.notice': "DeepSeek 官方通道按预设布局发送；开启「缓存优先布局」时，本轮动态条目、深度注入与历史后指令放在最新输入之后，保护历史前缀缓存；关闭时 system 深度取决于模型能力，只支持首条 system 的模型会合并系统指令。最近请求显示处理后的消息和兼容说明。其他通道沿用两段提示词。ST 模拟独立计算；历史正则改写和供应商专用助手预填尚未接入普通聊天。";
+    readonly 'chip.preview.notice': "DeepSeek 官方通道按预设布局发送；「缓存优先布局」默认关闭，深度注入与历史前条目按预设原位置投影；开启时本轮动态条目、深度注入与历史后指令放在最新输入之后，保护历史前缀缓存；system 深度仍取决于模型能力，只支持首条 system 的模型会合并系统指令。最近请求显示处理后的消息和兼容说明。其他通道沿用两段提示词。ST 模拟独立计算；历史正则改写和供应商专用助手预填尚未接入普通聊天。";
     readonly 'chip.characterFallback': "角色";
     readonly 'chip.dialog.title': "Tavern 绑定";
     readonly 'chip.group.binding': "绑定";

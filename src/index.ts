@@ -50,13 +50,18 @@ export async function apply(ctx: Context, config: ReturnType<typeof Config>): Pr
     const session = ctx.sessions.get(options.sessionId)
     if (session && !isTavernRuntimeSession(ctx,session)) return options
     const notes = new Set<string>()
-    const projector = createPresetRequestProjector(ctx,{onDiagnostic:diagnostic => {
+    // 请求副本清理开关随本轮计划冻结（plan.cleanup），这里不读当前设置。
+    const projector = createPresetRequestProjector(ctx,{
+      onDiagnostic:diagnostic => {
       if (diagnostic.kind === 'text-budget') {
         if (notes.size >= 128) notes.delete(notes.values().next().value!)
         const window = diagnostic.contextWindow === undefined ? '模型窗口未知'
           : `模型窗口 ${diagnostic.contextWindow}，输出预留 ${diagnostic.reservedOutputTokens}，可用 ${diagnostic.availableTextTokens}`
         notes.add(`文本估算：投影前≈${diagnostic.beforeTextTokens} tokens，投影后≈${diagnostic.afterTextTokens} tokens；${window}。不含图片、工具编码和供应商消息封装。`
           + (diagnostic.exceedsAvailable ? '估算已超过可用窗口，可能请求失败；请缩短预设、减少深度 system 或清理历史。' : ''))
+      } else if (diagnostic.kind === 'request-cleanup') {
+        if (notes.size < 128) notes.add(`请求清理：${diagnostic.hideHarnessIdentity ? '已删除宿主身份句' : '保留宿主身份句'}；`
+          + `${diagnostic.droppedWorkspaceInstructions > 0 ? `已剔除 ${diagnostic.droppedWorkspaceInstructions} 条工作区指令` : '无工作区指令'}。`)
       } else if (notes.size < 128) notes.add(diagnostic.kind === 'compaction-clamp'
         ? `历史消息 ${diagnostic.messageId} 已压缩，提示词位置映射至摘要 ${diagnostic.summaryMessageId} 的边界。`
         : diagnostic.kind === 'messages-system-layout'

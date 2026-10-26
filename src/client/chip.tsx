@@ -226,9 +226,25 @@ function HeaderChipSession(props: HeaderChipProps) {
   useSessionView(sessionId, tavern)
   const bindingLoader = useLoader(() => cachedSessionBinding(remote, sessionId), [sessionId], tavern)
   useEffect(()=>{const changed=(event:Event)=>{if((event as CustomEvent).detail===sessionId)bindingLoader.reload()};window.addEventListener(BINDING_CHANGED_EVENT,changed);return()=>window.removeEventListener(BINDING_CHANGED_EVENT,changed)},[sessionId,bindingLoader.reload])
-  const binding = bindingLoader.state.status === 'ready' ? bindingLoader.state.value.binding : null
+  const lastBinding = useRef<{ sessionId: string; binding: SessionBinding | null; canSwipeGreeting: boolean } | null>(null)
+  if (bindingLoader.state.status === 'ready') {
+    lastBinding.current = {
+      sessionId,
+      binding: bindingLoader.state.value.binding,
+      canSwipeGreeting: bindingLoader.state.value.canSwipeGreeting !== false,
+    }
+  }
+  const binding = bindingLoader.state.status === 'ready'
+    ? bindingLoader.state.value.binding
+    : (bindingLoader.state.status === 'loading' || bindingLoader.state.status === 'error') && lastBinding.current?.sessionId === sessionId
+      ? lastBinding.current.binding
+      : null
   const canSwipeGreeting =
-    bindingLoader.state.status === 'ready' ? bindingLoader.state.value.canSwipeGreeting !== false : false
+    bindingLoader.state.status === 'ready'
+      ? bindingLoader.state.value.canSwipeGreeting !== false
+      : (bindingLoader.state.status === 'loading' || bindingLoader.state.status === 'error') && lastBinding.current?.sessionId === sessionId
+        ? lastBinding.current.canSwipeGreeting
+        : false
   const detail = useLoader(
     async () => {
       const [d, a] = await Promise.all([cachedCharacterDetail(remote, binding!.cardId), cachedAvatar(remote, binding!.cardId)])

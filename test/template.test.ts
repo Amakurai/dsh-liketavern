@@ -250,6 +250,14 @@ describe('剧情模板集成', () => {
     await onTurnStart(state,'s1',1)
     await expect(run()).rejects.toThrow(/条件必须只读/)
     expect(await ws.fs.readText(TEMPLATE_STATE_PATH)).toBeNull()
+    await state.saveCharacter(cardId,{characterBook:{entries:[
+      {uid:1,comment:'self deleting toJSON',constant:true,content:'@@if (variables.secret=1, variables.toJSON=function(){delete this.toJSON;delete this.secret;return {...this}}, true)\n正文'},
+    ]}})
+    await expect(run()).rejects.toThrow(/toJSON|条件/)
+    await state.saveCharacter(cardId,{characterBook:{entries:[
+      {uid:1,comment:'non json value in condition',constant:true,content:'@@if (variables.hiddenFn=()=>1, true)\n正文'},
+    ]}})
+    await expect(run()).rejects.toThrow(/不可序列化|条件/)
     await state.saveCharacter(cardId,{characterBook:{entries:[]}})
     await run()
     const prepared=await ws.fs.readText(TEMPLATE_STATE_PATH)

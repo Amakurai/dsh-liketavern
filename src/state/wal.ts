@@ -766,7 +766,8 @@ export class Wal {
     }
     await this.assertNotRecovering(dir)
     await this.assertWorkspaceReady()
-    await this.readFloorMeta(dir, floor)
+    const meta = await this.readFloorMeta(dir, floor)
+    await this.recordCoverage(meta)
     const normPath = path.replace(/\\/g, '/')
     const state = await this.loadState(dirName)
     if (state.paths.has(normPath)) {
@@ -997,11 +998,15 @@ export class Wal {
       const dir = join(this.rootDir, sanitizeFloor(floor.floor))
       const meta = await this.readMeta(dir)
       const completedAt = meta?.committed && meta.committedAt ? Date.parse(meta.committedAt) : NaN
+      const otherStartedAt = meta ? Date.parse(meta.startedAt) : NaN
       const records = await this.readRecords(dir)
       for (const rec of records) {
         if (isNoopRecord(rec)) continue
         if (changes.some(({ rec: change, startedAt, step }) => (otherStep === undefined || otherStep < step)
-          && (startedAt === null || !Number.isFinite(completedAt) || completedAt >= startedAt)
+          && (startedAt === null
+            || (Number.isFinite(completedAt)
+              ? completedAt >= startedAt
+              : otherStep === undefined || !Number.isFinite(otherStartedAt) || otherStartedAt >= startedAt))
           && recordPathIdentity(change.path) === recordPathIdentity(rec.path) && 'after' in change
           && (recordPathIdentity(rec.path) === 'state/world-delta.jsonl'
             ? deltaChangesDependOn(change, rec)

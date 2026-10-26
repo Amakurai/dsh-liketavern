@@ -76,7 +76,7 @@ export declare class TemplateSandbox {
      * 模板可借此让快照恒定；因此 dump 后用新求值的纯语法检查遍历同一状态，带 toJSON 的状态直接拒绝。
      */
     private conditionState;
-    /** 状态里的对象节点必须没有 toJSON（含原型链），dump 的键集合才是真实的可枚举属性。 */
+    /** 状态里的对象节点必须没有 toJSON（含原型链）或非 JSON 值，dump 的键集合才是真实的可枚举属性。 */
     private assertPlainState;
     private growResources;
     /** 受信装载结束后收紧到第三方计算预算；后续阶段（resume/继续轮）重置同一预算。 */

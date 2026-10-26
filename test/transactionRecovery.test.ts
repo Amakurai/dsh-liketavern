@@ -484,3 +484,18 @@ it('宿主重用已完成轮号时拒绝开层，原剧情仍能完整回滚',as
   await ws.wal.rollbackFloor('collision#t1',ws.fs.root)
   expect(await ws.fs.readText('journal.md')).toBe('原文')
 })
+
+it('较早未收口楼层与后续同值往返楼层按顺序批量回滚时不发生后继依赖死锁，单独回滚旧层仍拒绝',async()=>{
+  const { ws, panel } = await setup()
+  await panel.fs.writeText('journal.md', 'V0')
+  await ws.fs.withFloor('s#t1').writeText('journal.md', 'V1')
+  // s#t1 故意保持未 commit，随后开启 s#t2 将值改回 V0（构成 V0 -> V1 -> V0 往返）
+  await new Promise(resolve => setTimeout(resolve, 5))
+  await ws.wal.beginFloor('s#t2')
+  await ws.fs.withFloor('s#t2').writeText('journal.md', 'V0')
+  await ws.wal.commitFloor('s#t2')
+  await expect(ws.wal.rollbackFloor('s#t1', ws.fs.root)).rejects.toThrow('后继依赖')
+  await ws.wal.rollbackAfter(['s#t1', 's#t2'], ws.fs.root)
+  expect(await panel.fs.readText('journal.md')).toBe('V0')
+  expect((await ws.wal.listFloors()).every(f => f.rolledBack)).toBe(true)
+})

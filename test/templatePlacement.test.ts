@@ -128,6 +128,19 @@ describe('隔离定位注入',()=> {
     expect(allowed.standing).toContain('提及 @INJECT 语法')
     await expect(run([{comment:'无定位标题',content:'  @INJECT pos=0\n越界指令'}])).rejects.toThrow(/尚未支持的 ST 模板注入定位/)
   })
+  it('@INJECT target+at=after 传入命中消息上下文，且在存在后置预设条目时仍锚定在命中历史消息之后',async()=> {
+    const req=input([
+      {comment:'@INJECT target=user,index=1,at=after,role=system',content:'<%- matched_message_role %>:<%- matched_message_index %>:<%- matched_message %>'},
+      {comment:'@INJECT target=user,index=-1,at=after,role=assistant',content:'AFTER-LAST-USER'},
+    ])
+    req.preset.entries.push({identifier:'jailbreak',name:'JB',role:'system',enabled:true,position:'relative',depth:0,order:200,content:'POST-HISTORY-JB',marker:false})
+    const result=await isolated('assemble',req)
+    expect(result.messages.map(m=>m.content)).toEqual(['first','user:0:first','answer','last','AFTER-LAST-USER','POST-HISTORY-JB'])
+    const inserted=result.layout?.entries.find(e=>e.content==='AFTER-LAST-USER')
+    expect(inserted?.placement).toEqual({kind:'history-relative',anchor:expect.objectContaining({inputIndex:2,role:'user',chat:true}),side:'after'})
+    const entries=result.layout?.entries ?? []
+    expect(entries.findIndex(e=>e.content==='AFTER-LAST-USER')).toBeLessThan(entries.findIndex(e=>e.content==='POST-HISTORY-JB'))
+  })
   it('灾难回溯定位正则由 worker 超时终止',async()=> {
     const request=input([{comment:'@INJECT regex="(a+)+$"',content:'x'}],[{role:'user',content:'a'.repeat(100)+'!'}])
     await expect(isolated('assemble',request)).rejects.toThrow(/超时/)

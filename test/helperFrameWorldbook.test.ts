@@ -145,3 +145,17 @@ it('只读候选许可可以读取现代世界书，CRUD 和绑定写入明确�
   await expect(service.rebindHelperWorldbooks({sessionId:source.id,messageId,storyId:input.storyId,bindingRevision:context.bindingRevision,frameLease,kind:'chat',selection:'source-book'})).rejects.toThrow(/租约已失效/)
   expect(await files()).toEqual(before)
 })
+
+it('持有租约的卡面自身重绑全局/角色世界书或修改世界书设置后，自身租约持续可用而其它卡面旧租约失效',async()=>{
+  const inputA=await frameRequest(1,false)
+  const inputB={...inputA,frameId:'other-worldbook-frame',runtimeId:'other-runtime-1'}
+  await seedBook('source-book',inputA.storyId)
+  const leaseA=await lease(inputA),leaseB=await lease(inputB),context0=await bookContext(inputA.storyId)
+
+  // leaseA 重绑全局世界书后，leaseA 自身使用新 bindingRevision 仍可继续操作，而 leaseB 因绑定已变失效
+  const context1=await service.rebindHelperWorldbooks({sessionId:source.id,messageId,storyId:inputA.storyId,bindingRevision:context0.bindingRevision,frameLease:leaseA,kind:'global',selection:['source-book']})
+  const snap=(await book('source-book',inputA.storyId,leaseA)).snapshot!
+  await service.helperWorldbookOperation({sessionId:source.id,messageId,storyId:inputA.storyId,bindingRevision:context1.bindingRevision,frameLease:leaseA,name:'source-book',operation:'replace',revision:snap.revision,entries:[{...snap.entries[0]!,content:'同租约后续修改'}]})
+  expect((await book('source-book',inputA.storyId,leaseA)).snapshot!.entries[0]?.content).toBe('同租约后续修改')
+  await expect(service.rebindHelperWorldbooks({sessionId:source.id,messageId,storyId:inputA.storyId,bindingRevision:context1.bindingRevision,frameLease:leaseB,kind:'global',selection:[]})).rejects.toThrow(/租约已失效/)
+})

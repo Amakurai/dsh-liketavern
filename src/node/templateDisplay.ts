@@ -8,7 +8,7 @@ import {
 import type { WorldInfoEntry, MacroContext, RegexRule } from '../core/types.js'
 import { applyRegexRules, type RegexApplyResult } from '../core/regex.js'
 import { markdownCodeScanner } from '../core/markdownCode.js'
-import { stripOpaqueDisplayMetaParts } from '../core/displaySanitize.js'
+import { findIncompleteHtmlStart, stripOpaqueDisplayMetaParts } from '../core/displaySanitize.js'
 import type { DisplayRegexDiagnostics } from '../remote.js'
 import type { TemplateSandbox } from './templateSandbox.js'
 import { TEMPLATE_INPUT_MAX_CHARS, TEMPLATE_OUTPUT_MAX_CHARS } from '../core/templateBudget.js'
@@ -83,7 +83,15 @@ export function renderTemplateDisplay(text:string,entries:WorldInfoEntry[],sandb
       }
       for(const part of splitTemplateDisplay(source.text,true)) {
       if(part.kind==='html') parts.push(part)
-      else if(hasFragmentHtml(part.text)) parts.push({kind:'html',text:sandbox.formatMessage(part.text)})
+      else if(hasFragmentHtml(part.text)) {
+        const incomplete=findIncompleteHtmlStart(part.text)
+        if(incomplete===null) parts.push({kind:'html',text:sandbox.formatMessage(part.text)})
+        else {
+          const prefix=part.text.slice(0,incomplete)
+          if(hasFragmentHtml(prefix)) parts.push({kind:'html',text:sandbox.formatMessage(prefix)},{kind:'markdown',text:part.text.slice(incomplete)})
+          else parts.push(part)
+        }
+      }
       else parts.push(part)
       }
     }

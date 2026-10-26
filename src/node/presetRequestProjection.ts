@@ -344,6 +344,9 @@ function toolSpans(messages: readonly Message[]): ToolSpan[] {
 function turnTailMessages(plan: PresetRequestPlan): Message[] {
   if (!plan.cacheFirst) return []
   const entries = plan.layout.entries
+  for (const entry of entries) {
+    if (mayContainControlTokens(entry.content)) assertNoControlTokens(entry.content, `Tavern 布局条目 ${entry.key}（${entry.role}）`)
+  }
   const byKey = new Map(entries.map(entry => [entry.key, entry]))
   const inTail = (entry: PromptLayoutEntry): boolean => {
     let root: PromptLayoutEntry | undefined = entry
@@ -364,11 +367,15 @@ function turnTailMessages(plan: PresetRequestPlan): Message[] {
     else target.set(entry.placement.entryKey, [entry])
   }
   const out: Message[] = []
+  const visiting = new Set<string>()
   const emit = (entry: PromptLayoutEntry, depth = 0): void => {
+    if (visiting.has(entry.key)) throw new Error('Tavern 模板插入位置出现循环引用')
     if (depth >= 512) throw new Error('Tavern 模板插入位置嵌套超过 512 层')
+    visiting.add(entry.key)
     for (const child of before.get(entry.key) ?? []) emit(child, depth + 1)
     if (inTail(entry) && entry.content.trim()) out.push(pluginMessage(plan, entry.key, entry.role === 'system' ? 'user' : entry.role, entry.content))
     for (const child of after.get(entry.key) ?? []) emit(child, depth + 1)
+    visiting.delete(entry.key)
   }
   for (const entry of entries) if (entry.placement.kind !== 'entry-relative') emit(entry)
   return out.length ? [pluginMessage(plan, 'host:turn-tail-header', 'user', turnTailHeader(plan.turn)), ...out] : []
@@ -456,7 +463,9 @@ export function projectPresetRequest(options: Readonly<GenerateOptions>, session
     throw new Error('Tavern 历史锚点已缺失且没有合法压缩映射；不会恢复旧正文，请开启下一轮')
   }
   // 载体在首次接收批次末尾：后续工具步骤保留在它之后，尾条绝不重新附到工具结果之后。
-  const carrierIndex = requestMessages.findIndex(message => message.id === carrier.id)
+  const requestIndexById = new Map<string, number>()
+  requestMessages.forEach((message, index) => requestIndexById.set(message.id, index))
+  const carrierIndex = requestIndexById.get(carrier.id) ?? -1
   /** 某条载体所在输入批次之后的边界（历史轮与本轮同一算法，覆盖同批次紧随其后的 runtime-context）。 */
   const frontierAt = (index: number): number => {
     let batchEnd = index
@@ -489,6 +498,7 @@ export function projectPresetRequest(options: Readonly<GenerateOptions>, session
         result = side === 'before' ? span.start : span.end + 1
       }
     }
+    while (side === 'after' && messages[result]?.role === 'developer') result++
     safeGaps[side].set(gap, result)
     return result
   }
@@ -542,7 +552,12 @@ export function projectPresetRequest(options: Readonly<GenerateOptions>, session
         if (placement.anchor) locate(placement.anchor)
         gap = safeGap(frontier(), 'after'); break
       }
-      case 'history-relative': gap = safeGap(locate(placement.anchor).index + (placement.side === 'after' ? 1 : 0), placement.side); break
+      case 'history-relative': {
+        const target = locate(placement.anchor)
+        const requestIndex = !target.compacted && placement.anchor.messageId !== undefined ? requestIndexById.get(placement.anchor.messageId) : undefined
+        gap = safeGap(placement.side === 'after' && requestIndex !== undefined ? frontierAt(requestIndex) : target.index + (placement.side === 'after' ? 1 : 0), placement.side)
+        break
+      }
       case 'depth': {
         const previous = placement.previous ? locate(placement.previous) : undefined
         const next = placement.next ? locate(placement.next) : undefined
@@ -583,6 +598,7 @@ export function projectPresetRequest(options: Readonly<GenerateOptions>, session
     if (entry.content.trim() && !inTurnTail(entry)) append(gapFor(entry), pluginMessage(plan, entry.key, entry.role, entry.content))
     for (const child of after.get(entry.key) ?? []) emit(child, depth + 1)
   }
+  for (const entry of entries) if (entry.placement.kind !== 'entry-relative') emit(entry)
   // 尾块会并入玩家输入所在的 user 轮；标题与非 DeepSeek 通道一致，标明其后是系统材料。
   const currentTail = turnTailMessages(plan)
   if (currentTail.length) {
@@ -597,18 +613,20 @@ export function projectPresetRequest(options: Readonly<GenerateOptions>, session
     requestMessages.forEach((message, index) => {
       if (index === carrierIndex) return
       let past: PresetRequestPlan | undefined
-      try { past = planFromMessage(message) } catch { return }
-      if (!past?.cacheFirst) return
+      let tail: Message[]
+      try {
+        past = planFromMessage(message)
+        if (!past?.cacheFirst) return
+        tail = turnTailMessages(past)
+      } catch { return }
       const key = `${past.sessionId}\u0000${past.turn}`
       if (replayed.has(key)) return
       replayed.add(key)
-      const tail = turnTailMessages(past)
       if (!tail.length) return
       const gap = safeGap(frontierAt(index), 'after')
       for (const tailMessage of tail) append(gap, tailMessage)
     })
   }
-  for (const entry of entries) if (entry.placement.kind !== 'entry-relative') emit(entry)
   const projected: Message[] = []
   for (let index = 0; index <= messages.length; index++) {
     projected.push(...(slots.get(index) ?? []))

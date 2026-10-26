@@ -50,7 +50,8 @@ export async function editHelperMessages(ctx:Context,state:TavernState,sessionId
       if(selected)for(const key of ['message','data','extra'] as const)if(edit[key]!==undefined&&!equal(edit[key],selected[key]))throw new Error('选中页与消息字段不一致')
       const text=selected?.message??edit.message
       if(text!==undefined&&target.role==='user'&&isSyntheticUserText(text))throw new Error('用户正文不能改为宿主保留的合成指令')
-      seen.add(index);if(text!==undefined&&(target.message!==text||edit.pages&&edit.pages.active!==currentBook.active)){changed.set(target.seq,text);deletedIdentities.add(target.identity)}
+      const pageSwitched=edit.pages!==undefined&&edit.pages.active!==currentBook.active&&(edit.pages.pages.length===currentBook.pages.length||!equal(selected,currentBook.pages[currentBook.active]))
+      seen.add(index);if(text!==undefined&&(target.message!==text||pageSwitched)){changed.set(target.seq,text);deletedIdentities.add(target.identity)}
       if(edit.data!==undefined||edit.extra!==undefined||edit.pages!==undefined){
         const old=expected.find(row=>row.message_id===edit.message_id)
         if(!old||old.message!==undefined||Object.hasOwn(old,'data')!==Object.hasOwn(edit,'data')||Object.hasOwn(old,'extra')!==Object.hasOwn(edit,'extra')||Object.hasOwn(old,'pages')!==Object.hasOwn(edit,'pages'))throw new Error('消息数据编辑缺少原值，请刷新后重试')

@@ -77,7 +77,10 @@ Object.defineProperty(globalThis,name,{value,writable:false,configurable:false})
  * 循环已由先行的 dump 拒绝，节点与深度上限沿用原口径。返回 0 通过、1 过大、2 含 toJSON。
  */
 const CONDITION_STATE_CHECK = `(state)=>{let nodes=200000;
-const visit=(value,depth)=>{if(typeof value!=='object'||value===null)return 0;
+const visit=(value,depth)=>{
+if(value===null||typeof value==='string'||typeof value==='boolean')return 0;
+if(typeof value==='number')return value===value&&value!==1/0&&value!==-1/0?0:3;
+if(typeof value!=='object')return 3;
 if(--nodes<0||depth>256)return 1;
 if(typeof value.toJSON==='function')return 2;
 for(const key in value){const found=visit(value[key],depth+1);if(found)return found}
@@ -459,16 +462,16 @@ export class TemplateSandbox {
       throw new Error(`@@if 条件状态读取失败：${JSON.stringify(error)}`)
     }
     try {
+      this.assertPlainState(object.value)
       let dumped:unknown
       try { dumped=this.vm.dump(object.value) }
       catch(error) { throw new Error(`@@if 条件状态读取失败：${error instanceof Error?error.message:String(error)}`) }
-      this.assertPlainState(object.value)
       try { return JSON.stringify(dumped) }
       catch { throw new Error('@@if 条件状态不可序列化，拒绝求值') }
     } finally { object.value.dispose() }
   }
 
-  /** 状态里的对象节点必须没有 toJSON（含原型链），dump 的键集合才是真实的可枚举属性。 */
+  /** 状态里的对象节点必须没有 toJSON（含原型链）或非 JSON 值，dump 的键集合才是真实的可枚举属性。 */
   private assertPlainState(state:QuickJSHandle):void {
     const check=this.vm.evalCode(CONDITION_STATE_CHECK)
     if(check.error) {
@@ -486,6 +489,7 @@ export class TemplateSandbox {
       const code=this.vm.getNumber(result.value)
       result.value.dispose()
       if(code===1) throw new Error('@@if 条件状态过大，拒绝求值')
+      if(code===3) throw new Error('@@if 条件状态不可序列化，拒绝求值')
       if(code!==0) throw new Error('@@if 条件状态含自定义 toJSON，拒绝求值')
     } finally { check.value.dispose() }
   }
@@ -558,6 +562,15 @@ export class TemplateSandbox {
     this.beginComputation()
     const normalized=TemplateSandbox.normalizeContext(context)
     if(context.phase==='generate') {
+      if(normalized.messageVariables) {
+        const known=new Set([
+          ...(this.currentContext.historyIdentities?.map(item=>item.messageId) ?? this.currentContext.history.map((_,index)=>`preview:${index}`)),
+          ...Object.keys(this.currentContext.messageVariables?.snapshots ?? {}),
+        ])
+        if(Object.keys(normalized.messageVariables.snapshots).some(id=>!known.has(id))) {
+          throw new Error('模板跨轮历史变量与已提交状态不一致')
+        }
+      }
       this.evaluateInput('__continueTemplateGeneration(parseTemplateInput(__tavernCallInput))',normalized)
       this.renderedSources.clear()
       if(refreshPreload) this.preload(normalized)

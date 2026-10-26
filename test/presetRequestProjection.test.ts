@@ -700,3 +700,50 @@ it('developer 工具增删消息不触发 messages-system-layout 降级，同批
   expect(output.messages.at(-1)?.role).toBe('assistant')
 
 })
+
+it('history-relative 后置条目越过同批次宿主注入与 developer 消息，且在尾块之前发射；旧轮损坏尾块不阻断或污染当前请求', () => {
+  const session = Session.create(SessionId('history-relative-after-batch'))
+  const standingText = `${BOUND_DISCIPLINE}\n\nSTANDING`
+  const header = session.append('request/header', { header: { config: { provider: 'factory', model: 'factory' },
+    tools: [{ name: 'run_code', description: 'run', parameters: { type: 'object' }, deferLoading: true }] }, reason: 'initial' })
+  session.append('turn/start', { turn: 1 })
+  session.append('step/start', { turn: 1, step: 1 })
+  session.append('system/message', { turn: 1, step: 1, message: createSystemMessage(`HOST\n\n${standingText}`, hostPlugin) }, { surfaceOp: 'append' })
+  const first = user('第一轮玩家输入')
+  const firstHistory = [{ inputIndex: 0, messageId: first.id, role: 'user' as const, chat: true }]
+  // 历史轮计划故意构造循环 entry-relative，验证缓存重放跳过损坏旧尾块而不拖垮当前轮。
+  const brokenPast: PresetRequestPlan = { version: 1, sessionId: session.id, turn: 1, standingText, contextText: TURN_PLAYBOOK, cacheFirst: true,
+    layout: { version: 1, history: firstHistory, entries: [
+      entry('CYCLE-A', 'system', { kind: 'entry-relative', entryKey: 'CYCLE-B', side: 'before' }),
+      entry('CYCLE-B', 'system', { kind: 'entry-relative', entryKey: 'CYCLE-A', side: 'before' }),
+    ] } }
+  session.append('user/message', attachPresetPlanMessage(first, brokenPast), { surfaceOp: 'append' })
+  const reply = createAssistantMessage({ source: { provider: 'factory', model: 'factory' }, content: [{ type: 'text', text: '第一轮回复' }] })
+  session.append('assistant/message', { turn: 1, step: 1, message: reply, stream: [] }, { surfaceOp: 'append' })
+  session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
+
+  session.append('turn/start', { turn: 2 })
+  session.append('step/start', { turn: 2, step: 1 })
+  session.append('system/message', { turn: 2, step: 1, message: createSystemMessage(`HOST\n\n${standingText}`, hostPlugin) }, { surfaceOp: 'append' })
+  const second = user('第二轮玩家输入')
+  const history = [first, reply, second].map((m, inputIndex) => ({ inputIndex, messageId: m.id, role: m.role, chat: true }))
+  const plan: PresetRequestPlan = { version: 1, sessionId: session.id, turn: 2, standingText, contextText: TURN_PLAYBOOK, cacheFirst: true,
+    cleanup: { dropWorkspaceInstructions: false },
+    layout: { version: 1, history, entries: [
+      entry('HISTORY-AFTER-ASSISTANT', 'assistant', { kind: 'history-relative', anchor: history[2]!, side: 'after' }),
+      entry('TAIL-JAILBREAK', 'system', { kind: 'after-history', anchor: history[2]! }),
+    ] } }
+  session.append('user/message', attachPresetPlanMessage(second, plan), { surfaceOp: 'append' })
+  const workspace = { ...user('WORKSPACE-BASELINE'), source: { kind: 'agent-instructions' } } as unknown as Message
+  session.append('user/message', workspace as never, { surfaceOp: 'append' })
+  session.append('developer/message', { turn: 2, step: 1, headerSeq: header.seq,
+    message: createDeveloperMessage({ source: { kind: 'tool-registry' }, content: [{ type: 'tool-addition', toolName: 'run_code' }] }) }, { surfaceOp: 'append' })
+  const output = projectPresetRequest({ provider: 'factory', model: 'factory', sessionId: session.id, messages: session.deriveMessages() },
+    session, { messagesApi: true, model: { systemPromptUpdate: 'in-history' } })
+  const devIndex = output.messages.findIndex(m => m.role === 'developer')
+  const historyAfterIndex = output.messages.findIndex(m => textOf(m) === 'HISTORY-AFTER-ASSISTANT')
+  const tailHeaderIndex = output.messages.findIndex(m => textOf(m) === '【Tavern 本轮提示：第 2 轮】')
+  expect(devIndex).toBeGreaterThan(output.messages.findIndex(m => m.id === second.id))
+  expect(historyAfterIndex).toBeGreaterThan(devIndex)
+  expect(tailHeaderIndex).toBeGreaterThan(historyAfterIndex)
+})

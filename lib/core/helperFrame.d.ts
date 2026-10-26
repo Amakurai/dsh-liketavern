@@ -18,4 +18,4 @@ export interface HelperFrameOpen {
 export interface HelperFrameClose extends Omit<HelperFrameOpen, 'storyId' | 'readOnly'> {
     token?: string;
 }
-export type HelperFrameWriteGuard = (binding: SessionBinding) => void;
+export type HelperFrameWriteGuard = (binding: SessionBinding, nextBinding?: SessionBinding) => void;

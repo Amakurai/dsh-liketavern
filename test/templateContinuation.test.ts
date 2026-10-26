@@ -250,6 +250,8 @@ describe('跨轮 sticky 续存',()=>{
     await expect(isolated('assemble',request(main,[],{...patch,messageVariables:emptyTemplateMessageVariables()},carry))).rejects.toThrow(/历史变量.*不一致/)
     const changed=json(first.templateMessageVariables!);changed.snapshots.old!.values.registered=false
     await expect(isolated('assemble',request(main,[],{...patch,messageVariables:changed},carry))).rejects.toThrow(/历史变量.*不一致/)
+    const injected=json(first.templateMessageVariables!);injected.snapshots.new={values:{forged:true},initialized:true}
+    await expect(isolated('assemble',request(main,[],{...patch,messageVariables:injected},carry))).rejects.toThrow(/历史变量.*不一致/)
     const clipped=await isolated('assemble',request(main,[],{variables:first.templateVariables!,history:[{role:'user',content:'next'}],
       historyIdentities:[{messageId:'new',swipeId:0}],messageVariables:emptyTemplateMessageVariables()},carry))
     expect(Object.keys(clipped.templateMessageVariables!.snapshots)).toEqual(['new'])

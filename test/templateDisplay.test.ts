@@ -419,6 +419,10 @@ describe('有序展示与真实消息格式化',()=>{
     const result=await isolated('display',{parts:[{kind:'markdown',text:'前文\n[record]\n后文'}],rules:[rule],macroCtx:{char:'A',user:'B',outlets:{}}})
     expect(result.parts).toEqual([{kind:'markdown',text:'前文'},{kind:'html',text:widget},{kind:'markdown',text:'后文'}])
   })
+  it('未闭合 HTML 尾部在模板展示投影中保持 markdown 片段以便流式隐藏，不误升级为完整卡面',async()=>{
+    const result=await render('前文\n<div class="card">未闭合卡面')
+    expect(result.parts[0]).toEqual([{kind:'markdown',text:'前文\n<div class="card">未闭合卡面'}])
+  })
 })
 
 const roots:string[]=[]
@@ -452,6 +456,10 @@ it('真实剧情落盘后按顺序重绘，资产修改和重复读取不重跑�
   const ctx={reflect:{provide:()=>{}},get:(key:string)=>key==='sessionPersistence'?persistence:undefined,sessions:{get:()=>live}} as unknown as Context
   const service=new TavernService(ctx,state,{get:()=>config} as unknown as TavernSettingsScope)
   for(let i=0;i<2;i++) expect((await service.renderOutputText({sessionId:'s1',text,messageId:5})).parts).toEqual(stored.outputs['5']?.parts)
+  const pendingPreview=await service.renderOutputText({sessionId:'s1',text:'<%- "前文\\n<div>完整容器</div>\\n<script>const x=1" %>'})
+  expect(pendingPreview.htmls).toEqual([])
+  expect(pendingPreview.text).toBe('前文')
+  expect(pendingPreview.pendingHtml).toBe(true)
   config.interactiveCards=false
   const disabled=await service.renderOutputText({sessionId:'s1',text,messageId:5})
   expect(disabled.userName).toBe('User')

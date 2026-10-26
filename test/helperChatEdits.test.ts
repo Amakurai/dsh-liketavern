@@ -682,3 +682,23 @@ it('楼层重生成、编辑用户消息、开场白判定与历史投影忽略�
   expect(followup.mock.calls[0]![0].content).toEqual([{type:'text',text:'updated player input'}])
 
 })
+
+it('删除选中页之前的未选中页且保持当前页内容不变时不误分叉或丢失消息变量',async()=>{
+  const first=await request(),base=first.messages[5]!
+  const book={active:0,pages:[{message:base.message,data:{hp:1},extra:{}},{message:'selected-page',data:{hp:2},extra:{tag:'keep'}}]}
+  await edit([{message_id:5,pages:book}])
+  const switched=await edit([{message_id:5,pages:{...book,active:1}}]),child=sessions.get(switched.branch!.childSessionId)!
+  created.mockReset()
+  const snap=await getHelperSnapshot(ctx,state,child.id,first.messageId)
+  // 删除 index 0 的非活动页后，原 active=1 变为 active=0，但选中页内容与数据完全未变，不应分叉或丢失消息变量。
+  const pruned=await editHelperMessages(ctx,state,child.id,first.messageId,{
+    storyId:snap.storyId,
+    historyRevision:snap.historyRevision,
+    edits:[{message_id:5,pages:{active:0,pages:[book.pages[1]!]}}],
+    before:[{message_id:5,pages:snap.messages[5]!.swipe!}],
+  })
+  expect(pruned.branch).toBeNull()
+  expect(created).not.toHaveBeenCalled()
+  expect(pruned.snapshot?.messages[5]?.data).toEqual({hp:2})
+  expect(pruned.snapshot?.messages[5]?.extra).toEqual({tag:'keep'})
+})

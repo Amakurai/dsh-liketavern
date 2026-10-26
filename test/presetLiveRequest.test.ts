@@ -310,3 +310,18 @@ it('只把插件自身的轮内通知判为遗留；用户同名文本与续写�
   expect(isTurnScopedNotice(tavern('记忆压缩任务'))).toBe(false)
   expect(isTurnScopedNotice({ source: { kind: 'user' }, content: [{ type: 'text', text: formatTurnStepNotice(2) }] })).toBe(false)
 })
+
+it('挂载 presetAdapter 时，仅剩遗留轮内通知的空首步直接按 completed 收口，不伪造布局快照消息单独发信', async () => {
+  state.presetAdapter = {} as never
+  const notice = (text: string, summary: string) => createUserMessage({ content: [{ type: 'text', text }],
+    source: { kind: 'dsh-tavern', form: 'notice', summary } } as unknown as Parameters<typeof createUserMessage>[0])
+  // 模拟仅剩遗留轮内通知进入新一轮首步：dropStaleTurnNotices 清空批次后直接按空首步收口。
+  agent.followup(notice(formatTurnStepNotice(2), '多步收口提示'))
+  await agent.whenIdle()
+  await state.waitForSessionTasks(agent.id)
+  expect(requests).toHaveLength(0)
+  expect(errors).toEqual([])
+  const end = agent.session.snapshotEvents().filter(event => event.type === 'turn/end').at(-1)
+  expect(end?.data.reason.kind).toBe('completed')
+  expect(agent.session.snapshotEvents().filter(event => event.type === 'user/message')).toHaveLength(0)
+})

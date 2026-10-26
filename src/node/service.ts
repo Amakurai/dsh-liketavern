@@ -724,14 +724,25 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
       if(presented.htmls.length) parts = splitTemplateDisplay(hideIncompleteHtml(stripOpaqueDisplayMeta(rendered.text)).text)
     } else {
       let pendingHtml=false
-      if(allowHtml)parts=parts.map(part=>{
-        if(part.kind!=='markdown')return part
-        const visible=hideIncompleteHtml(part.text)
-        pendingHtml ||= visible.pendingHtml===true
-        return {...part,text:visible.text}
-      })
+      if(allowHtml){
+        const visibleParts:TemplateDisplayPart[]=[]
+        for(const part of parts){
+          if(part.kind!=='markdown'){visibleParts.push(part);continue}
+          const visible=hideIncompleteHtml(part.text)
+          if(visible.pendingHtml===true){
+            pendingHtml=true
+            const previous=visibleParts.at(-1)
+            if(!visible.text.trim()&&/^\s*<(?:script|style|template)(?=[\s/>]|$)/i.test(part.text)
+              &&previous?.kind==='html'&&previous.title===undefined){
+              visibleParts.pop()
+            }
+          }
+          visibleParts.push({...part,text:visible.text})
+        }
+        parts=visibleParts
+      }
       presented = { htmls: allowHtml ? parts.filter(part => part.kind === 'html').map(part => part.text) : [],
-        text: parts.filter(part => part.kind === 'markdown').map(part => part.text).join('\n') || (pendingHtml?'':presentRenderedOutput(named, false).text),
+        text: parts.filter(part => part.kind === 'markdown' && Boolean(part.text)).map(part => part.text).join('\n') || (pendingHtml?'':presentRenderedOutput(named, false).text),
         ...(pendingHtml?{pendingHtml:true as const}:{}) }
     }
     const htmls = presented.htmls

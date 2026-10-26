@@ -64,9 +64,10 @@ function joinPromptParts(parts: string[]): string {
  */
 function dropStaleTurnNotices<D extends { kind: 'enter'; messages: UserMessage[] }>(claimed: readonly UserMessage[], decision: D): D {
   const stale = new Set(claimed.filter(isTurnScopedNotice).map((message) => message.id))
-  if (stale.size === 0) return decision
   const kept = claimed.some((message) => !stale.has(message.id))
-  return { ...decision, messages: kept ? decision.messages.filter((message) => !stale.has(message.id)) : [] }
+  if (!kept) return { ...decision, messages: [] }
+  if (stale.size === 0) return decision
+  return { ...decision, messages: decision.messages.filter((message) => !stale.has(message.id)) }
 }
 
 /** 解析模型公布的 reasoning 档；无 llm 或解析失败一律返回 undefined，回退交给 resolveTavernReasoningEffort。 */
@@ -112,7 +113,7 @@ export function apply(ctx: Context): void {
     state.currentSteps.set(payload.agent.id, payload.step)
     const proposed = await next()
     const decision = payload.step === 1 && proposed.kind === 'enter' ? dropStaleTurnNotices(payload.messages, proposed) : proposed
-    if (decision.kind !== 'enter' || !state.presetAdapter) return decision
+    if (decision.kind !== 'enter' || decision.messages.length === 0 || !state.presetAdapter) return decision
     const pipeline = state.turnPlans.get(payload.agent.id)?.result
     if (!pipeline?.layout) return decision
     let hasPlan = false

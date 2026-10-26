@@ -9,7 +9,7 @@ import { createHash } from 'node:crypto'
 import { assertPromptLayoutNoControlTokens, type PromptLayoutEntry, type PromptLayoutPlacement, type PromptMessageProvenance } from '../core/promptLayout.js'
 
 interface LocatedEntry {entry:WorldInfoEntry;placement:TemplatePlacement;order:number}
-interface Insertion {at:number;item:LocatedEntry;text:string;entryKey?:string}
+interface Insertion {at:number;anchorIndex:number;side:'before'|'after';item:LocatedEntry;text:string;entryKey?:string}
 
 export function applyTemplatePlacements(
   assembled:AssembledPrompt, entries:WorldInfoEntry[], sandbox:TemplateSandbox,
@@ -53,6 +53,16 @@ export function applyTemplatePlacements(
         if(sibling>=0) index=sibling
       }
       layout.entries.splice(index+(placement.side==='after'?1:0),0,entry)
+    } else if(placement.kind==='history-relative') {
+      let nextLayoutIndex=layout.entries.length
+      for(let cursor=at+1;cursor<provenance.length;cursor++) {
+        const candidate=provenance[cursor]
+        if(candidate?.kind==='layout') {
+          const found=layout.entries.findIndex(value=>value.key===candidate.entryKey)
+          if(found>=0) {nextLayoutIndex=found;break}
+        }
+      }
+      layout.entries.splice(nextLayoutIndex,0,entry)
     } else layout.entries.push(entry)
     return key
   }
@@ -123,7 +133,10 @@ export function applyTemplatePlacements(
       group.push(insertion)
       groups.set(insertion.at,group)
     }
-    for(const insertion of queue) insertion.entryKey=addLayout(insertion.item,insertion.text,insertion.at)
+    for(const insertion of queue) {
+      const useAnchor=insertion.side==='after'&&provenance[insertion.anchorIndex]?.kind==='history'
+      insertion.entryKey=addLayout(insertion.item,insertion.text,useAnchor?insertion.anchorIndex:insertion.at,useAnchor?'after':'before')
+    }
     provenance=Array.from({length:messages.length+1},(_,index)=>[
       ...(groups.get(index) ?? []).map(insertion=>({kind:'layout' as const,entryKey:insertion.entryKey!})),
       ...(provenance[index]?[provenance[index]!]:[]),
@@ -137,16 +150,22 @@ export function applyTemplatePlacements(
   for(const item of located) {
     const p=item.placement
     if(p.kind!=='insert'||p.mode==='regex') continue
-    let at:number
-    if(p.mode==='pos') at=Math.min(messages.length,Math.max(0,p.pos<0?messages.length+p.pos:Math.max(0,p.pos-1)))
-    else {
+    let at:number, anchorIndex:number, side:'before'|'after'
+    if(p.mode==='pos') {
+      at=Math.min(messages.length,Math.max(0,p.pos<0?messages.length+p.pos:Math.max(0,p.pos-1)))
+      anchorIndex=at
+      side=at>=messages.length?'after':'before'
+    } else {
       const targets=messages.flatMap((m,i)=>m.role===p.target?[i]:[])
       const target=targets[p.index<0?targets.length+p.index:Math.max(0,p.index-1)]
       if(target===undefined) {missing(item);continue}
       at=target+(p.at==='after'?1:0)
+      anchorIndex=target
+      side=p.at
     }
-    const text=render(item,at,messages[Math.min(at,messages.length-1)])
-    if(text.trim()) {positions.push({at,item,text});record(item,at,text)}
+    const matchedIndex=p.mode==='pos'?Math.min(at,messages.length-1):anchorIndex
+    const text=render(item,p.mode==='pos'?at:anchorIndex,messages[matchedIndex])
+    if(text.trim()) {positions.push({at,anchorIndex,side,item,text});record(item,at,text)}
   }
   apply(positions)
   const regexes:Insertion[]=[]
@@ -158,7 +177,7 @@ export function applyTemplatePlacements(
     if(match<0) {missing(item);continue}
     const at=match+(p.at==='after'?1:0)
     const text=render(item,match,messages[match])
-    if(text.trim()) {regexes.push({at,item,text});record(item,at,text)}
+    if(text.trim()) {regexes.push({at,anchorIndex:match,side:p.at,item,text});record(item,at,text)}
   }
   apply(regexes)
   assertPromptLayoutNoControlTokens(layout)

@@ -4,4 +4,4 @@ import type {SessionBinding} from './binding.js'
 export interface HelperFrameLease {frameId:string;runtimeId:string;epoch:number;token:string}
 export interface HelperFrameOpen {sessionId:string;messageId:number;storyId:string;frameId:string;runtimeId:string;epoch:number;readOnly:boolean}
 export interface HelperFrameClose extends Omit<HelperFrameOpen,'storyId'|'readOnly'> {token?:string}
-export type HelperFrameWriteGuard = (binding:SessionBinding)=>void
+export type HelperFrameWriteGuard = (binding:SessionBinding,nextBinding?:SessionBinding)=>void

@@ -548,7 +548,9 @@ function DisplayProjection(props: DisplayProjectionProps) {
       onWorldbookBind={props.messageId === undefined ? undefined : async request => {
         const result = await remote.rebindHelperWorldbooks({ ...request, sessionId, messageId: props.messageId! })
         if (!result.ok) throw new Error(result.error.message)
-        invalidateSessionBinding(sessionId);window.dispatchEvent(new CustomEvent(BINDING_CHANGED_EVENT, { detail: sessionId }))
+        if (request.kind !== 'chat' && request.kind !== 'ensure-chat') {
+          invalidateSessionBinding(sessionId);window.dispatchEvent(new CustomEvent(BINDING_CHANGED_EVENT, { detail: sessionId }))
+        }
         return result.value
       }}
       onWorldbookRequest={props.messageId === undefined ? undefined : async request => {

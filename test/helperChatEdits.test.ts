@@ -9,7 +9,7 @@ import {interruptedTurnClosers,KNOWN_SESSION_EVENT_TYPES,Session,SessionSeq,Tool
 import {CompactionId,compactCheckpointSource} from '@deepseek-ai/dsh-compaction'
 import {assertReleasedV4Relationships} from '@deepseek-ai/dsh-session-format-v3-to-v4'
 import {validateStoredEvents} from '@deepseek-ai/dsh-session-persistence'
-import {createAssistantMessage,createUserMessage,createToolResultMessage,ToolCallId} from '@deepseek-ai/dsh-llm'
+import {createAssistantMessage,createSystemMessage,createUserMessage,createToolResultMessage,ToolCallId} from '@deepseek-ai/dsh-llm'
 import {TavernState} from '../src/node/state.js'
 import {resolveConfig} from '../src/node/config.js'
 import {commitHelperVariables,getHelperScriptBundle,getHelperSnapshot,helperHistoryOf} from '../src/node/helperRuntime.js'
@@ -437,4 +437,91 @@ it('非 MVU 脚本包跳过纯工具或空白 assistant/message，不因无文�
   await state.saveBinding({sessionId:toolOnly.id,cardId,presetId:null,personaId:null,lorebookIds:[],characterLorebookId:null,interactiveCards:true,helperMvu:false,greetingIndex:0,createdAt:'now'})
   const emptyBundle=await getHelperScriptBundle(ctx,state,toolOnly.id)
   expect(emptyBundle.messageId).toBeNull();expect(emptyBundle.snapshot).toBeUndefined()
+})
+
+it('保留系统提示词单节点替换与完整种子压缩，清理前置图片卸载、手动 /compact、残缺压缩及删除步骤的 PTC 子调用',async()=>{
+  const raw=Session.create('session-system-ptc-compact' as Session['id']);raw.append('agent-preset/selected',{agentPreset:'tavern'})
+  raw.append('turn/start',{turn:1});raw.append('step/start',{turn:1,step:1})
+  const sys0=raw.append('system/message',{turn:1,step:1,message:createSystemMessage('')},{surfaceOp:'append'})
+  const greeting=raw.append('assistant/message',{stream:[],turn:1,step:1,message:createAssistantMessage({content:[{type:'text',text:'greeting-1'}],source:{provider:'test',model:'test'}})},{surfaceOp:'append'})
+  raw.append('step/end',{turn:1,step:1});raw.append('turn/end',{turn:1,reason:{kind:'completed'}})
+  raw.append('turn/start',{turn:2})
+  const user2=raw.append('user/message',createUserMessage({content:[{type:'text',text:'user-2'}],source:{kind:'user'}}),{surfaceOp:'append'})
+  raw.append('step/start',{turn:2,step:1})
+  const sys1=raw.append('system/message',{turn:2,step:1,message:createSystemMessage('standing system prompt')},{surfaceOp:{op:'replace',startSeq:sys0.seq,endSeq:sys0.seq},sourceEventSeqs:[sys0.seq]})
+  const ptcCall=ToolCallId('call-ptc-2'),subCall=ToolCallId('sub-ptc-2')
+  const assistant2=raw.append('assistant/message',{stream:[],turn:2,step:1,message:createAssistantMessage({content:[{type:'text',text:'assistant-2'},{type:'tool-call',id:ptcCall,name:'run_code',arguments:'{"code":"1"}'}],source:{provider:'test',model:'test'}})},{surfaceOp:'append'})
+  raw.append('tool/call',{turn:2,step:1,callId:ptcCall,name:'run_code',arguments:'{"code":"1"}'})
+  const ptcStart={type:'tool/ptc-dispatch-start',seq:SessionSeq(raw.seq),time:1,data:{rootCallId:ptcCall,parentCallId:ptcCall,subCallId:subCall,name:'tavern_memory_search',arguments:'{"query":"q"}'}} as unknown as SessionEvent
+  raw.append(ptcStart.type,ptcStart.data as never)
+  const ptcDone={type:'tool/ptc-dispatch',seq:SessionSeq(raw.seq),time:1,data:{rootCallId:ptcCall,parentCallId:ptcCall,subCallId:subCall,name:'tavern_memory_search',arguments:'{"query":"q"}',content:[{type:'text',text:'[]'}],isError:false,durationMs:1}} as unknown as SessionEvent
+  raw.append(ptcDone.type,ptcDone.data as never)
+  const ptcResult=raw.append('tool/result',{turn:2,step:1,message:createToolResultMessage({callId:ptcCall,content:[{type:'text',text:'ptc done'}],isError:false})},{surfaceOp:'append'})
+  raw.append('step/end',{turn:2,step:1});raw.append('turn/end',{turn:2,reason:{kind:'completed'}})
+  raw.append('turn/start',{turn:3})
+  const user3=raw.append('user/message',createUserMessage({content:[{type:'text',text:'user-3'}],source:{kind:'user'}}),{surfaceOp:'append'})
+  raw.append('step/start',{turn:3,step:1})
+  const sysInHistory=raw.append('system/message',{turn:3,step:1,message:createSystemMessage('in-history sys 3')},{surfaceOp:'append'})
+  const assistant3=raw.append('assistant/message',{stream:[],turn:3,step:1,message:createAssistantMessage({content:[{type:'text',text:'assistant-3'}],source:{provider:'test',model:'test'}})},{surfaceOp:'append'})
+  raw.append('step/end',{turn:3,step:1});raw.append('turn/end',{turn:3,reason:{kind:'completed'}})
+
+  // 1. 编辑首轮开场白（first < sys1.seq）：保留第 2 轮的 system/message 单节点替换，不把系统提示词打回空串。
+  const editedGreetingSeed=editedHistorySeed(raw.snapshotEvents(),new Map([[greeting.seq,'greeting-1-edited']]))
+  expect(editedGreetingSeed[sys1.seq]?.type).toBe('system/message')
+  const editedGreetingChild=Session.create('session-sys-preserved' as Session['id'],editedGreetingSeed)
+  await assertHostTrace(editedGreetingChild)
+  expect(editedGreetingChild.deriveMessages()[0]).toMatchObject({role:'system',content:[{type:'text',text:'standing system prompt'}]})
+
+  // 2. 删除含 run_code 的 assistant 步骤：同步移除 tool/ptc-dispatch-start 与 tool/ptc-dispatch，通过 V4 关系校验。
+  const deletedPtcSeed=editedHistorySeed(raw.snapshotEvents(),new Map(),new Set([user2.seq,assistant2.seq]))
+  expect(deletedPtcSeed[ptcStart.seq]).toMatchObject({type:'tavern/message-edit-marker',ignorable:true,data:{originalType:'tool/ptc-dispatch-start',reason:'deleted-message'}})
+  expect(deletedPtcSeed[ptcDone.seq]).toMatchObject({type:'tavern/message-edit-marker',ignorable:true,data:{originalType:'tool/ptc-dispatch',reason:'deleted-message'}})
+  const deletedPtcChild=Session.create('session-ptc-deleted' as Session['id'],deletedPtcSeed)
+  await assertHostTrace(deletedPtcChild)
+
+  // 3. 前置 image/offload、不完整压缩（缺 checkpoint）与修改点之后的手动 /compact（command/run + command/done）均转为可忽略标记。
+  const baseEvents=raw.snapshotEvents()
+  const offloadSeq=baseEvents.length
+  const brokenStartSeq=offloadSeq+1,brokenSummarySeq=offloadSeq+2,brokenEndSeq=offloadSeq+3
+  const cmdRunSeq=offloadSeq+4,cmdStartSeq=offloadSeq+5,cmdSummarySeq=offloadSeq+6,cmdCheckpointSeq=offloadSeq+7,cmdEndSeq=offloadSeq+8,cmdDoneSeq=offloadSeq+9
+  const turn4StartSeq=offloadSeq+10,user4Seq=offloadSeq+11,step4StartSeq=offloadSeq+12,sys4Seq=offloadSeq+13,step4EndSeq=offloadSeq+14,turn4EndSeq=offloadSeq+15
+  const brokenId=CompactionId('compact-broken'),cmdCompactId=CompactionId('compact-cmd'),commandId='cmd-compact-1'
+  const cmdShadowed=[greeting.seq,user2.seq,assistant2.seq,ptcResult.seq,user3.seq,sysInHistory.seq,assistant3.seq]
+  const extendedEvents:SessionEvent[]=[
+    ...baseEvents,
+    {type:'image/offload',seq:SessionSeq(offloadSeq),time:1,data:{targets:[{seq:user2.seq,imageIndexes:[0]}]}} as unknown as SessionEvent,
+    {type:'compaction/start',seq:SessionSeq(brokenStartSeq),time:1,data:{compactionId:brokenId,turn:null}},
+    {type:'compaction/summary',seq:SessionSeq(brokenSummarySeq),time:1,data:{compactionId:brokenId,shadowedRange:{start:greeting.seq,end:ptcResult.seq},shadowedSeqs:[greeting.seq,user2.seq,assistant2.seq,ptcResult.seq],shadowedTokenCount:20,summary:[{type:'text',text:'broken'}],rawInput:{messages:[]},rawOutput:[{type:'text',text:'broken'}]}},
+    {type:'compaction/end',seq:SessionSeq(brokenEndSeq),time:1,data:{compactionId:brokenId,turn:null}},
+    {type:'command/run',seq:SessionSeq(cmdRunSeq),time:1,data:{name:'compact',args:'',commandId}} as unknown as SessionEvent,
+    {type:'compaction/start',seq:SessionSeq(cmdStartSeq),time:1,data:{compactionId:cmdCompactId,turn:null,sourceCommandId:commandId}},
+    {type:'compaction/summary',seq:SessionSeq(cmdSummarySeq),time:1,data:{compactionId:cmdCompactId,sourceCommandId:commandId,shadowedRange:{start:greeting.seq,end:assistant3.seq},shadowedSeqs:cmdShadowed,shadowedTokenCount:40,summary:[{type:'text',text:'cmd-summary'}],rawInput:{messages:[]},rawOutput:[{type:'text',text:'cmd-summary'}]}},
+    {type:'user/message',seq:SessionSeq(cmdCheckpointSeq),time:1,surfaceOp:{op:'replace',startSeq:SessionSeq(greeting.seq),endSeq:SessionSeq(assistant3.seq)},sourceEventSeqs:[SessionSeq(cmdStartSeq),SessionSeq(cmdSummarySeq),...cmdShadowed],data:createUserMessage({content:[{type:'text',text:'<compacted-summary>cmd-summary</compacted-summary>'}],source:compactCheckpointSource(cmdCompactId,commandId as never)})},
+    {type:'compaction/end',seq:SessionSeq(cmdEndSeq),time:1,data:{compactionId:cmdCompactId,turn:null,sourceCommandId:commandId}},
+    {type:'command/done',seq:SessionSeq(cmdDoneSeq),time:1,data:{name:'compact',commandId,kind:'success',result:'ok',sourceEventSeq:SessionSeq(cmdSummarySeq)}} as unknown as SessionEvent,
+    {type:'turn/start',seq:SessionSeq(turn4StartSeq),time:1,data:{turn:4}},
+    {type:'user/message',seq:SessionSeq(user4Seq),time:1,surfaceOp:'append',data:createUserMessage({content:[{type:'text',text:'user-4'}],source:{kind:'user'}})},
+    {type:'step/start',seq:SessionSeq(step4StartSeq),time:1,data:{turn:4,step:1}},
+    {type:'system/message',seq:SessionSeq(sys4Seq),time:1,surfaceOp:{op:'replace',startSeq:sys1.seq,endSeq:sys1.seq},sourceEventSeqs:[sys1.seq],data:{turn:4,step:1,message:createSystemMessage('normalized sys 4')}},
+    {type:'step/end',seq:SessionSeq(step4EndSeq),time:1,data:{turn:4,step:1}},
+    {type:'turn/end',seq:SessionSeq(turn4EndSeq),time:1,data:{turn:4,reason:{kind:'completed'}}}
+  ]
+  // 编辑第 4 轮用户消息（first = user4Seq）：保留完整手动 /compact，清理前置 image/offload 与残缺 broken 压缩。
+  const keepCmdSeed=editedHistorySeed(extendedEvents,new Map([[user4Seq,'user-4-edited']]))
+  expect(keepCmdSeed[offloadSeq]).toMatchObject({type:'tavern/message-edit-marker',ignorable:true,data:{originalType:'image/offload',reason:'stale-compaction'}})
+  expect(keepCmdSeed[brokenStartSeq]).toMatchObject({type:'tavern/message-edit-marker',ignorable:true,data:{originalType:'compaction/start',reason:'stale-compaction'}})
+  expect(keepCmdSeed[brokenSummarySeq]).toMatchObject({type:'tavern/message-edit-marker',ignorable:true,data:{originalType:'compaction/summary',reason:'stale-compaction'}})
+  expect(keepCmdSeed[brokenEndSeq]).toMatchObject({type:'tavern/message-edit-marker',ignorable:true,data:{originalType:'compaction/end',reason:'stale-compaction'}})
+  expect(keepCmdSeed[cmdRunSeq]?.type).toBe('command/run')
+  expect(keepCmdSeed[cmdDoneSeq]?.type).toBe('command/done')
+  await assertHostTrace(Session.create('session-keep-cmd-compact' as Session['id'],keepCmdSeed))
+
+  // 编辑第 3 轮回复（first = assistant3.seq < cmdRunSeq）：过时手动 /compact 连同被其折叠且已被第 4 轮 head 归一替代的 in-history system 一起转为可忽略标记。
+  const staleCmdSeed=editedHistorySeed(extendedEvents,new Map([[assistant3.seq,'assistant-3-edited']]))
+  for(const seq of [sysInHistory.seq,cmdRunSeq,cmdStartSeq,cmdSummarySeq,cmdCheckpointSeq,cmdEndSeq,cmdDoneSeq]){
+    expect(staleCmdSeed[seq]).toMatchObject({type:'tavern/message-edit-marker',ignorable:true,data:{reason:'stale-compaction'}})
+  }
+  const staleCmdChild=Session.create('session-stale-cmd-compact' as Session['id'],staleCmdSeed)
+  await assertHostTrace(staleCmdChild)
+  expect(texts(staleCmdChild)).toEqual(['normalized sys 4','greeting-1','user-2','assistant-2','user-3','assistant-3-edited','user-4'])
 })

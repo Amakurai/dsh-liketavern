@@ -4,7 +4,7 @@
 
 **SillyTavern roleplay on the native DeepSeek Harness Agent runtime**
 
-[![Release](https://img.shields.io/badge/version-v0.5.7-blue.svg)](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.5.7)
+[![Release](https://img.shields.io/badge/version-v0.5.8-blue.svg)](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.5.8)
 [![dsh](https://img.shields.io/badge/dsh-0.2.1--rc.3-informational.svg)](https://deepseek-harness.github.io/deepseek-harness/)
 [![Node.js](https://img.shields.io/badge/node-%E2%89%A524-brightgreen.svg)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
@@ -49,14 +49,14 @@ Regex rules, prompt templates, and HTML card scripts bundled inside third-party 
 Open **Plugins → Add plugin** in the `dsh` desktop app, enter the following repository tag URL, and restart the app once installed:
 
 ```text
-https://github.com/Amakurai/dsh-liketavern.git#v0.5.7
+https://github.com/Amakurai/dsh-liketavern.git#v0.5.8
 ```
 
 ### Web / CLI Online Installation
 
 ```bash
 # Install the plugin into the web profile
-dsh plugin --profile web add github:Amakurai/dsh-liketavern#v0.5.7
+dsh plugin --profile web add github:Amakurai/dsh-liketavern#v0.5.8
 
 # Verify installation
 dsh plugin --profile web list --depth 0
@@ -67,10 +67,10 @@ dsh web
 
 ### Offline Release Tarball Installation
 
-Download `dsh-liketavern-0.5.7.tgz` from the [v0.5.7 Release](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.5.7) (verify against `SHA256SUMS.txt` if desired) and run:
+Download `dsh-liketavern-0.5.8.tgz` from the [v0.5.8 Release](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.5.8) (verify against `SHA256SUMS.txt` if desired) and run:
 
 ```bash
-dsh plugin --profile web add ./dsh-liketavern-0.5.7.tgz
+dsh plugin --profile web add ./dsh-liketavern-0.5.8.tgz
 dsh web
 ```
 

@@ -20,7 +20,7 @@ import type { SessionBinding } from './core/binding.js'
 import type { GreetingFloorState } from './core/greetingLog.js'
 import type { TemplateDisplayPart } from './core/templateDisplay.js'
 import type {HelperMessageEditResult} from './core/helperChatEdits.js'
-import type { HelperDisplayContext, HelperSnapshot } from './core/helperRuntime.js'
+import type { HelperDisplayContext, HelperSnapshot, HelperSnapshotBase } from './core/helperRuntime.js'
 import type {HelperMvuWork} from './core/helperMvu.js'
 import type {HelperWorldbookContext,HelperWorldbookResult} from './core/helperWorldbook.js'
 import type { HelperScriptBundle,HelperScriptLibrary,HelperScriptAsset,HelperScriptContext,HelperScriptView } from './core/helperScripts.js'
@@ -49,6 +49,8 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
   }
 }
 
+/** renderOutputTexts 单批上限；客户端超出时拆成多批。 */
+export const RENDER_OUTPUT_BATCH_MAX = 64
 /** 非空字符串（原 `z.string().min(1)`）。 */
 const nonEmpty = () => string().check(minLength(1))
 /** 楼层 turn 号：正整数（原 `z.number().int().min(1)`）。 */
@@ -253,6 +255,11 @@ export const METHODS = {
     req: object({ ...sessionIdField, text: string(), messageId: optional(int().check(minimum(0))) }),
     value: anyValue,
     summary: '对展示文本应用 output/render 正则并抽出 HTML',
+  },
+  renderOutputTexts: {
+    req: object({ ...sessionIdField, items: array(object({ text: string(), messageId: optional(int().check(minimum(0))) })).check(minLength(1), maxLength(RENDER_OUTPUT_BATCH_MAX)) }),
+    value: anyValue,
+    summary: '批量渲染同一会话的展示文本；卡面快照、脚本库与世界书在批次内只传一份',
   },
   getHelperEventState: {
     req: object({...sessionIdField,storyId:optional(nonEmpty()),closedSeq:optional(int().check(minimum(0)))}),value:anyValue,
@@ -481,6 +488,22 @@ export interface RenderedOutput {
   canSwipeGreeting: boolean
 }
 
+/** renderOutputTexts 的单项：卡面快照、脚本库与世界书改为引用批次共享部分。 */
+export type RenderedOutputBatchItem = Omit<RenderedOutput, 'helper' | 'helperScripts' | 'helperWorldbooks'> & {
+  /** 存在时该项带卡面快照：批次 helperBase 加上这个 currentMessageId。 */
+  helperMessageId?: number
+  /** 存在时该项带批次共享的 helperScripts 与 helperWorldbooks。 */
+  helperExtras?: true
+}
+
+/** renderOutputTexts：同一会话一批气泡的展示结果；单项失败只携带该项错误。 */
+export interface RenderedOutputBatch {
+  items: Array<{ ok: true; value: RenderedOutputBatchItem } | { ok: false; error: string }>
+  helperBase?: HelperSnapshotBase
+  helperScripts?: HelperScriptContext
+  helperWorldbooks?: HelperWorldbookContext
+}
+
 /** previewPrompt 的完整提示词预览（仅预览通道，live 插不进会话日志中间）。 */
 export interface PromptPreview {
   actualRequest: { text: string; truncated: boolean } | null
@@ -576,6 +599,7 @@ export interface TavernMethodResults {
   ensureGreeting: { created: boolean; conversationStarted: boolean }
   getGreetingSwipe: GreetingFloorState
   renderOutputText: RenderedOutput
+  renderOutputTexts: RenderedOutputBatch
   getHelperEventState: {storyId:string;historyRevision:string;messages:{seq:number;message_id:number;role:'user'|'assistant'}[];writable:boolean;closedThrough:number}
   getHelperSnapshot: HelperSnapshot
   openHelperFrame:{token:string}

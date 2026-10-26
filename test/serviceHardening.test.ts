@@ -697,6 +697,40 @@ it('原生 MVU 补出卡片原有状态栏，重复展示不改写历史或剧�
   await state.saveBinding({...binding,helperMvu:false});expect((await service.renderOutputText(request)).htmls).toEqual([])
 })
 
+/** 长历史首屏合批：重组后的每项与逐条渲染相同，共享部分只出现一次，单项失败不拖累其它项。 */
+it('批量展示与逐条渲染结果一致，快照、脚本库与世界书只回传一份',async()=>{
+  const {cardId}=await importCard(paths.characters,makeCard())
+  const session=Session.create('session-batch-display' as Session['id']);sessions.set(session.id,session)
+  await state.saveBinding(makeBinding({sessionId:session.id,cardId,interactiveCards:true}))
+  const reply=(turn:number,text:string)=>{
+    session.append('turn/start',{turn})
+    session.append('user/message',createUserMessage({content:[{type:'text',text:`第${turn}句`}]}),{surfaceOp:'append'})
+    const event=session.append('assistant/message',{turn,step:1,message:createAssistantMessage({content:[{type:'text',text}],source:{provider:'test',model:'test'}}),stream:[{type:'chunk',time:0,chunk:{type:'finish',reason:{kind:'stop'}}}]},{surfaceOp:'append'})
+    session.append('turn/end',{turn,reason:{kind:'completed'}})
+    return {messageId:event.seq,text}
+  }
+  const items=[reply(1,'台词一<div class="status">状态一</div>'),reply(2,'纯文本台词'),reply(3,'台词三<div class="status">状态三</div>'),{messageId:99999,text:'<div class="status">不存在</div>'},{text:'独立预览'}]
+  const batch=await service.renderOutputTexts({sessionId:session.id,items})
+  const {expandRenderedOutputBatch}=await import('../src/client/renderBatch.js')
+  const expanded=expandRenderedOutputBatch(batch)
+  for(const [index,item] of items.entries()){
+    const single=await service.renderOutputText({sessionId:session.id,...item}).then(value=>({ok:true as const,value}),(error:Error)=>({ok:false as const,message:error.message}))
+    const result=expanded[index]!
+    if(single.ok){expect(result).toEqual({ok:true,value:single.value})}
+    else{expect(result).toEqual({ok:false,error:{code:'render-failed',message:single.message}})}
+  }
+  expect(expanded[3]).toMatchObject({ok:false,error:{message:'卡面消息不在当前剧情中'}})
+  // 两张卡共用同一份 messages/scopes，响应里历史只出现一次。
+  const first=expanded[0]!,third=expanded[2]!
+  if(!first.ok||!third.ok)throw new Error('卡面项应成功')
+  expect(first.value.helper!.messages).toBe(third.value.helper!.messages)
+  expect([first.value.helper!.currentMessageId,third.value.helper!.currentMessageId]).toEqual([1,5])
+  expect(first.value.helperScripts).toBe(third.value.helperScripts)
+  // 用户台词只在共享历史里：消息本身与其默认页各一次，不随卡面数量重复。
+  expect(JSON.stringify(batch).split('第1句').length-1).toBe(2)
+  expect(batch.items.every(item=>!item.ok||!('helper' in item.value))).toBe(true)
+})
+
 /** 纯文本只提供选项/显示事件所需的紧凑身份，不按气泡重复回传整段历史。 */
 it('纯文本回复只携带当前剧情读上下文，HTML 仍携带完整快照',async()=>{
   const {cardId}=await importCard(paths.characters,makeCard())
@@ -870,4 +904,43 @@ describe('审查修复回归：服务边界', () => {
     expect(await workspace.fs.readText('state/template.json')).toBe(before)
     expect(session.snapshotEvents()).toEqual(history)
   })
+})
+
+/** 空闲记忆维护会发一次辅助模型请求；展示读取只等楼层提交，不能被它挡住。 */
+it('展示读取等待已排入的楼层提交，但不等待其后的后台维护；维护之后的提交仍按顺序等待',async()=>{
+  const sessionId='display-barrier'
+  const settled=(promise:Promise<unknown>)=>Promise.race([promise.then(()=>true,()=>true),new Promise<boolean>(resolve=>setTimeout(()=>resolve(false),50))])
+  let commit!:()=>void,maintenance!:()=>void
+  const committed=state.enqueueSessionTask(sessionId,()=>new Promise<void>(resolve=>{commit=resolve}))
+  const maintained=state.enqueueSessionTask(sessionId,()=>new Promise<void>(resolve=>{maintenance=resolve}),{background:true})
+  // 楼层提交未完成：渲染必须等待，否则会读到尚未提交的模板快照。
+  const pendingRender=service.renderOutputText({sessionId,text:'台词'})
+  expect(await settled(pendingRender)).toBe(false)
+  commit();await committed
+  // 提交完成而维护仍在跑：渲染立即返回，完整队列仍在等维护。
+  expect((await pendingRender).text).toBe('台词')
+  expect(await settled(service.renderOutputText({sessionId,text:'第二条'}))).toBe(true)
+  expect(await settled(state.waitForSessionCommits(sessionId))).toBe(true)
+  expect(await settled(state.waitForSessionTasks(sessionId))).toBe(false)
+  // 维护之后排入的楼层任务仍串行在维护之后，展示屏障也随之等待。
+  const next=state.enqueueSessionTask(sessionId,()=>'next')
+  expect(await settled(state.waitForSessionCommits(sessionId))).toBe(false)
+  maintenance();await maintained
+  expect(await next).toBe('next')
+  expect(await settled(state.waitForSessionCommits(sessionId))).toBe(true)
+})
+
+it('MVU 准备与提交只等楼层提交，不等后台维护；维护慢时不会撞上客户端请求超时',async()=>{
+  const sessionId='mvu-barrier',request={sessionId,storyId:'story',runtimeId:'runtime'}
+  const settled=(promise:Promise<unknown>)=>Promise.race([promise.then(()=>true,()=>true),new Promise<boolean>(resolve=>setTimeout(()=>resolve(false),50))])
+  let commit!:()=>void,maintenance!:()=>void
+  const committed=state.enqueueSessionTask(sessionId,()=>new Promise<void>(resolve=>{commit=resolve}))
+  void state.enqueueSessionTask(sessionId,()=>new Promise<void>(resolve=>{maintenance=resolve}),{background:true})
+  const prepare=service.prepareHelperMvuJob(request)
+  expect(await settled(prepare)).toBe(false)
+  commit();await committed
+  // 越过屏障后由业务校验裁决（此会话没有绑定），而不是继续挂在维护后面。
+  await expect(prepare).rejects.toThrow('自动 MVU 剧情绑定已改变')
+  await expect(service.commitHelperMvuJob({...request,jobId:'job',token:'token',data:{stat_data:{}}})).rejects.toThrow('自动 MVU 剧情绑定已改变')
+  maintenance()
 })

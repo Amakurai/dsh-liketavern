@@ -20,7 +20,7 @@ import { presentRenderedOutput } from '../src/core/displaySanitize.js'
 vi.mock('../src/client/styles.js', () => ({ CARD_VARIABLE_STYLES: '' }))
 vi.mock('../src/client/cache.js', () => ({
   CHARACTER_CHANGED_EVENT:'dsh-tavern:character-changed',
-  cachedAvatar: async () => ({ ok: true, value: { dataUrl: null } }),
+  cachedAvatar: vi.fn(async () => ({ ok: true, value: { dataUrl: null } })),
   invalidateSessionBinding:vi.fn(),
 }))
 vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
@@ -333,6 +333,81 @@ it('流式卡面保留前文并等待结束后才运行；普通代码示例仍�
   expect(renderOutputText).toHaveBeenCalledTimes(1)
   expect(view!.root.findByType('iframe').props.srcDoc).toContain('<p>测试卡</p>')
   expect(JSON.stringify(view!.toJSON())).not.toContain('生成完成后显示卡片')
+})
+
+/** 流式结束到 output/render 回包之间不收成骨架屏；历史消息首屏仍等处理结果，避免闪原文。 */
+it('流式结束后的后处理期间保留已输出正文，回包后再换成处理结果',async()=>{
+  let finish!:(value:Awaited<ReturnType<TavernRemote['renderOutputText']>>)=>void
+  const renderOutputText=vi.fn<TavernRemote['renderOutputText']>(()=>new Promise(resolve=>{finish=resolve}))
+  const rpc={...frameLeaseRpc,renderOutputText} as unknown as TavernRemote
+  const raw='台词说完了。<UpdateVariable>_.set("hp",1)</UpdateVariable>\n<html><body><button>卡面</button></body></html>'
+  const bubble=(streaming:boolean)=><SpeechBubble remote={rpc} sessionId="handoff" cardId="card" name="角色" rawText={raw} messageId={3} streaming={streaming}/>
+  const visible=()=>view!.root.findAllByType(MarkdownText).map(item=>item.props.text).join('\n')
+  await mount(bubble(true))
+  expect(visible()).toBe('台词说完了。')
+  await act(async()=>view!.update(bubble(false)))
+  expect(renderOutputText).toHaveBeenCalledOnce()
+  expect(visible()).toBe('台词说完了。')
+  expect(JSON.stringify(view!.toJSON())).toContain('生成完成后显示卡片')
+  expect(view!.root.findAllByType('iframe')).toHaveLength(0)
+  await act(async()=>finish({ok:true,value:{text:'处理后的台词',html:null,htmls:[],interactiveCards:true,whitelist:[],greetings:[],greetingIndex:0,canSwipeGreeting:false}}))
+  expect(visible()).toBe('处理后的台词')
+  expect(JSON.stringify(view!.toJSON())).not.toContain('生成完成后显示卡片')
+
+  // 新挂载的历史消息没有流式前文：仍显示骨架，不把未处理原文交给 Markdown。
+  await act(async()=>view!.unmount())
+  await mount(<SpeechBubble remote={rpc} sessionId="history" cardId="card" name="角色" rawText={raw} messageId={4}/>)
+  expect(view!.root.findAllByType(MarkdownText)).toHaveLength(0)
+  await act(async()=>finish({ok:true,value:{text:'历史台词',html:null,htmls:[],interactiveCards:true,whitelist:[],greetings:[],greetingIndex:0,canSwipeGreeting:false}}))
+  expect(visible()).toBe('历史台词')
+
+  // 跨消息续写在流式结束后的后处理等待期仍沿用前文边界，不闪现半截闭合指令。
+  const {MutableSessionEventSource}=await import('../node_modules/@deepseek-ai/dsh-api-session-controller/lib/types/client/contract/events.js')
+  const {createAssistantMessage,createUserMessage}=await import('@deepseek-ai/dsh-llm')
+  const {CONTINUE_INSTRUCTION_PREFIX}=await import('../src/core/dshPrompt.js')
+  const streamSource=new MutableSessionEventSource()
+  let seq=0
+  const append=(type:string,data:unknown)=>{
+    const event={type,data,seq:seq++,time:0,...(type.endsWith('/message')?{surfaceOp:'append'}:{})}
+    streamSource.append({type:'event',event:event as never})
+    return event.seq
+  }
+  append('turn/start',{turn:1})
+  append('assistant/message',{turn:1,step:1,message:createAssistantMessage({content:[{type:'text',text:"前文<UpdateVariable>_.add('hp',"}],source:{provider:'fixture',model:'fixture'}}),stream:[{type:'chunk',time:0,chunk:{type:'finish',reason:{kind:'max-tokens'}}}]})
+  append('turn/end',{turn:1,reason:{kind:'completed'}})
+  append('turn/start',{turn:2})
+  append('user/message',createUserMessage({content:[{type:'text',text:CONTINUE_INSTRUCTION_PREFIX+'继续'}],source:{kind:'dsh-tavern',form:'notice',summary:'续写'}}))
+  const contText='2);</UpdateVariable>续写正文'
+  await act(async()=>view!.unmount())
+  await mount(<SpeechBubble remote={rpc} sessionId="cont-handoff" cardId="card" name="角色" rawText={contText} turn={2} streamSource={streamSource} streaming={true}/>)
+  expect(visible()).toBe('续写正文')
+  const contSeq=append('assistant/message',{turn:2,step:1,message:createAssistantMessage({content:[{type:'text',text:contText}],source:{provider:'fixture',model:'fixture'}}),stream:[{type:'chunk',time:0,chunk:{type:'finish',reason:{kind:'stop'}}}]})
+  await act(async()=>view!.update(<SpeechBubble remote={rpc} sessionId="cont-handoff" cardId="card" name="角色" rawText={contText} turn={2} messageId={contSeq} streamSource={streamSource} streaming={false}/>))
+  expect(visible()).toBe('续写正文')
+  await act(async()=>finish({ok:true,value:{text:'续写正文',html:null,htmls:[],interactiveCards:true,whitelist:[],greetings:[],greetingIndex:0,canSwipeGreeting:false}}))
+  expect(visible()).toBe('续写正文')
+})
+
+it('头像与名字默认关闭只画正文，不拉取头像；打开即显示标题行',async()=>{
+  const {setSpeakerHeader}=await import('../src/client/displayPrefs.js')
+  const avatarCalls=vi.mocked((await import('../src/client/cache.js')).cachedAvatar)
+  avatarCalls.mockClear()
+  const rpc={...frameLeaseRpc,renderOutputText:async()=>({ok:true,value:{text:'正文',html:null,htmls:[],interactiveCards:true,whitelist:[],greetings:[],greetingIndex:0,canSwipeGreeting:false}})} as unknown as TavernRemote
+  try{
+    // 未保存过该项时默认关闭：配置解析与客户端初值都应是原生样式。
+    const {resolveConfig}=await import('../src/node/config.js')
+    expect(resolveConfig({}).speakerHeader).toBe(false)
+    await mount(<SpeechBubble remote={rpc} sessionId="plain" cardId="card" name="灯塔" rawText="正文"/>)
+    const json=()=>JSON.stringify(view!.toJSON())
+    expect(view!.root.findAllByProps({className:'dsh-tavern-speechName'})).toHaveLength(0)
+    expect(view!.root.findAllByProps({className:'dsh-tavern-speechCopy'})).toHaveLength(0)
+    expect(json()).not.toContain('灯塔')
+    expect(json()).toContain('正文')
+    expect(avatarCalls).not.toHaveBeenCalled()
+    await act(async()=>setSpeakerHeader(true))
+    expect(view!.root.findByProps({className:'dsh-tavern-speechName'}).children).toEqual(['灯塔'])
+    expect(avatarCalls).toHaveBeenCalledOnce()
+  }finally{setSpeakerHeader(false)}
 })
 
 it('结束后仍未闭合的卡片显示续写提示；补全后只在当前消息运行完整卡面',async()=>{

@@ -127,6 +127,37 @@ it('导航清理与新分支登记并发时保留新分支，只删除已确认�
   } finally { release(); probe.mockRestore() }
 })
 
+it('长历史并发兄弟查询复用已确认的分支绑定：结果与逐条查询一致，删除绑定后当场复核并剪枝', async () => {
+  addSession('parent', [...turn(1), ...turn(2), ...turn(3)])
+  addSession('live-child', turn(1))
+  await state.saveBinding(binding('offline-child'))
+  const fork = (childSessionId: string, floor: number) => ({ parentSessionId: 'parent', childSessionId, turn: floor, createdAt: '2026-01-01' })
+  await appendSiblingFork(root, fork('live-child', 1))
+  await appendSiblingFork(root, fork('offline-child', 2))
+  await appendSiblingFork(root, fork('missing-child', 3))
+  const original = bindingStorage.loadBinding
+  let offlineProbes = 0
+  const probe = vi.spyOn(bindingStorage, 'loadBinding').mockImplementation(async (paths, sessionId) => {
+    if (sessionId === 'offline-child') offlineProbes++
+    return original(paths, sessionId)
+  })
+  try {
+    const floors = Array.from({ length: 24 }, (_, index) => (index % 3) + 1)
+    const concurrent = await Promise.all(floors.map((floor) => getFloorSiblings({ ctx, state }, 'parent', undefined, floor)))
+    // 已确认存在的离线绑定不再随每个楼层重读；缺失的分支每次都会重新确认。
+    expect(offlineProbes).toBe(1)
+    const sequential = []
+    for (const floor of [1, 2, 3]) sequential.push(await getFloorSiblings({ ctx, state }, 'parent', undefined, floor))
+    expect(concurrent).toEqual(floors.map((floor) => sequential[floor - 1]))
+    expect(sequential.map((result) => result.swipe?.siblings)).toEqual([['parent', 'live-child'], ['parent', 'offline-child'], undefined])
+    expect((await loadSiblingForks(root)).map((item) => item.childSessionId).sort()).toEqual(['live-child', 'offline-child'])
+    await state.clearBinding('offline-child')
+    expect((await getFloorSiblings({ ctx, state }, 'parent', undefined, 2)).swipe).toBeNull()
+    expect(offlineProbes).toBe(2)
+    expect((await loadSiblingForks(root)).map((item) => item.childSessionId)).toEqual(['live-child'])
+  } finally { probe.mockRestore() }
+})
+
 it('重生成续写轮时驱动消息保留插件 notice 来源，不把续写指令变成用户台词', async () => {
   const instruction = createUserMessage({ content: [{ type: 'text', text: `${CONTINUE_INSTRUCTION_PREFIX}请继续` }],
     source: { kind: 'plugin', plugin: 'dsh-tavern', form: 'notice', summary: '续写指令' } })

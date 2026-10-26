@@ -336,7 +336,7 @@ describe('规则容错', () => {
   })
 })
 
-describe('正则 DoS 防护（规则在主事件循环执行，灾难性回溯会冻结 host）', () => {
+describe('正则 DoS 防护（必然指数回溯的构造编译前拒绝，其余由 worker 期限兜底）', () => {
   const EVIL_INPUT = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaab'
 
   it('嵌套量词 (a+)+ / (a*)* / (a+)* / (\\d{2,})+ 一律拒绝：规则跳过、记 errors、文本不动', () => {
@@ -394,6 +394,21 @@ describe('正则 DoS 防护（规则在主事件循环执行，灾难性回溯�
     const klass = run('a++b', [makeRule({ id: 'cls', find: '/([+])+b/', replace: 'x' })])
     expect(klass.errors).toEqual([])
     expect(klass.text).toBe('ax')
+  })
+
+  it('迭代边界由必需内容固定的常见展示正则照常生效', () => {
+    const cases: Array<[find: string, replace: string, input: string, expected: string]> = [
+      ['/(<br>\\s*)+/g', '<br>', '甲<br> <br>\n<br>乙', '甲<br>乙'],
+      ['/(\\s*\\n){3,}/g', '\n\n', '甲\n\n\n \n乙', '甲\n\n乙'],
+      ['/(<p>.*?<\\/p>)+/g', '[P]', '<p>a</p><p>b</p>尾', '[P]尾'],
+      ['/(\\w+\\s+)+/g', '#', 'ab cd 尾', '#尾'],
+      ['/(?:cat|c)+/g', '!', 'catccat-', '!-'],
+    ]
+    for (const [find, replace, input, expected] of cases) {
+      const res = run(input, [makeRule({ id: 'ok', find, replace })])
+      expect(res.errors, find).toEqual([])
+      expect(res.text, find).toBe(expected)
+    }
   })
 })
 

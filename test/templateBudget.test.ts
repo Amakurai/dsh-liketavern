@@ -23,10 +23,16 @@ describe('模板 JSON 计量', () => {
   })
 })
 
-it('小输入保留原预算，长输入获得资源而所有默认预算仍封顶，显式期限不被放宽', () => {
+it('小输入取档位基础预算，长输入获得资源而所有默认预算仍封顶，显式期限不被放宽', () => {
   const small = templateExecutionBudget(1024), large = templateExecutionBudget(4 * 1024 * 1024), maximum = templateExecutionBudget(TEMPLATE_INPUT_MAX_CHARS)
-  expect(small.computingMs).toBe(1000)
-  expect(small.sandboxMs).toBe(750)
+  // 第三方 EJS 在 QuickJS 中解释执行，需要容下整轮渲染；纯 V8 展示正则保留短期限以尽快释放槽位。
+  expect(small.computingMs).toBe(5000)
+  expect(small.sandboxMs).toBe(4000)
+  const display = templateExecutionBudget(1024, undefined, 'display')
+  expect(display.computingMs).toBe(1000)
+  expect(display.sandboxMs).toBe(750)
+  expect(templateExecutionBudget(4 * 1024 * 1024, undefined, 'display').computingMs).toBeGreaterThan(display.computingMs)
+  expect(templateExecutionBudget(TEMPLATE_INPUT_MAX_CHARS, undefined, 'display').computingMs).toBeLessThanOrEqual(30_000)
   expect(small.quickJsMemoryBytes).toBe(32 * 1024 * 1024)
   expect(small.workerMemoryMb).toBe(128)
   expect(large.computingMs).toBeGreaterThan(small.computingMs)

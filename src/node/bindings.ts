@@ -161,11 +161,18 @@ export async function saveBinding(paths: TavernPaths, binding: SessionBinding): 
   })
 }
 
+/** 进程内绑定删除代数：依赖“绑定仍存在”的缓存据此整体失效（同一 DSH_HOME 只允许一个宿主进程写）。 */
+let bindingDeletions = 0
+export function bindingDeletionGeneration(): number {
+  return bindingDeletions
+}
+
 export async function deleteBinding(paths: TavernPaths, sessionId: string): Promise<void> {
   await withWorkspaceLock(paths.sessions, async () => {
     await assertBindingFileIdentity(paths, sessionId)
     try { await unlink(sessionFile(paths, sessionId)) }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+    finally { bindingDeletions++ }
   })
 }
 

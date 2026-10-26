@@ -19,9 +19,9 @@
  * 引擎只返回新字符串/新数组，绝不原地修改——「作用于 prompt 的规则不得改写
  * 会话中存储的原始消息」由调用方据此天然满足。
  *
- * 安全闸：规则直接在主事件循环执行，(a+)+$ 类灾难性回溯会冻结整个 host。
- * 编译前一律过保守静态检查（超长 pattern + 嵌套量词/交叠分支启发式，
- * 见 findUnsafeRegexConstruct）；被拒绝的规则跳过并把原因记入 errors。
+ * 安全闸：规则只在有期限的 worker 内执行，灾难性回溯的最终兜底是终止 worker。
+ * 编译前另有静态检查（超长 pattern + 必然可切分的嵌套量词/交叠分支，见 findUnsafeRegexConstruct），
+ * 只为教科书式构造提前给出单条规则的诊断：被拒绝的规则跳过并把原因记入 errors，其余规则照常生效。
  * 落盘规则文件（regex/rules.json）可被手改：形状非法（缺 find/scopes/timing）
  * 的规则同样跳过并记录，绝不让 .includes() 处炸在主循环里。
  */
@@ -48,7 +48,7 @@ export interface RegexApplyResult {
 const REGEX_LITERAL_RE = /^\/(.*)\/([a-z]*)$/s
 
 // ---------------------------------------------------------------------------
-// 正则 DoS 防护（规则在主事件循环同步执行，无 worker 隔离）
+// 正则 DoS 防护（worker 期限兜底；静态检查只提前拒绝必然指数回溯的构造）
 // ---------------------------------------------------------------------------
 
 /** 单条 pattern 字符数上限：超长 pattern 编译/回溯成本都不可控，直接拒绝。 */
@@ -71,26 +71,6 @@ function skipCharClass(source: string, i: number): number {
     i++
   }
   return i
-}
-
-/** 去掉 `\x` 转义与 `[...]` 字符类，留下结构字符视图（仅用于构造检测，索引不可回指原文）。 */
-function stripEscapesAndClasses(text: string): string {
-  let out = ''
-  let i = 0
-  while (i < text.length) {
-    const ch = text[i]!
-    if (ch === '\\') {
-      i += 2
-      continue
-    }
-    if (ch === '[') {
-      i = skipCharClass(text, i)
-      continue
-    }
-    out += ch
-    i++
-  }
-  return out
 }
 
 /** 从 open（'(' 的下标）找匹配闭括号；括号不闭合返回 -1（交给 new RegExp 报语法错）。 */
@@ -117,71 +97,180 @@ function findGroupClose(source: string, open: number): number {
   return -1
 }
 
-/** 组闭括号后是否紧跟可重复量词（+ / * / {m,n}）；? 至多重复一次，不构成回溯爆炸，放过。 */
-function groupFollowedByQuantifier(source: string, close: number): boolean {
-  const ch = source[close + 1]
-  if (ch === '+' || ch === '*') return true
-  if (ch === '{') {
-    const end = source.indexOf('}', close + 1)
-    return end > close + 1 && /^\{\d+,?\d*\}$/.test(source.slice(close + 1, end + 1))
-  }
-  return false
+const QUANTIFIER_RE = /\{(\d+)(?:(,)(\d*))?\}/y
+
+/** i 处的量词（* + ? {n} {n,} {n,m}，含惰性 ?）；不构成量词的 `{` 在非 u 模式下是字面量。 */
+function readQuantifier(source: string, i: number): { min: number; max: number; end: number } | null {
+  let quantifier: { min: number; max: number; end: number }
+  const ch = source[i]
+  if (ch === '*') quantifier = { min: 0, max: Infinity, end: i + 1 }
+  else if (ch === '+') quantifier = { min: 1, max: Infinity, end: i + 1 }
+  else if (ch === '?') quantifier = { min: 0, max: 1, end: i + 1 }
+  else if (ch === '{') {
+    QUANTIFIER_RE.lastIndex = i
+    const match = QUANTIFIER_RE.exec(source)
+    if (!match) return null
+    const min = Number(match[1])
+    quantifier = { min, max: match[2] === undefined ? min : match[3] ? Number(match[3]) : Infinity, end: QUANTIFIER_RE.lastIndex }
+  } else return null
+  if (source[quantifier.end] === '?') quantifier.end++
+  return quantifier
 }
 
+/** i（'\' 的下标）处整个转义的结束下标：\uXXXX、\u{…}、\xXX、\cX、\p{…}、\k<…>、多位反向引用。 */
+function escapeEnd(source: string, i: number): number {
+  const next = source[i + 1]
+  const braced = (open: string, close: string) => {
+    if (source[i + 2] !== open) return i + 2
+    const end = source.indexOf(close, i + 3)
+    return end < 0 ? i + 2 : end + 1
+  }
+  if (next === 'u') return source[i + 2] === '{' ? braced('{', '}') : /^[0-9a-fA-F]{4}$/.test(source.slice(i + 2, i + 6)) ? i + 6 : i + 2
+  if (next === 'x') return /^[0-9a-fA-F]{2}$/.test(source.slice(i + 2, i + 4)) ? i + 4 : i + 2
+  if (next === 'c') return /^[A-Za-z]$/.test(source[i + 2] ?? '') ? i + 3 : i + 2
+  if (next === 'p' || next === 'P') return braced('{', '}')
+  if (next === 'k') return braced('<', '>')
+  if (next !== undefined && next >= '1' && next <= '9') {
+    let end = i + 2
+    while ((source[end] ?? '') >= '0' && (source[end] ?? '') <= '9') end++
+    return end
+  }
+  return i + 2
+}
+
+const ESCAPED_LITERALS: Record<string, string> = { n: '\n', r: '\r', t: '\t', f: '\f', v: '\v', '0': '\0' }
+
 /**
- * 组前缀：`?:`、`?<name>`、`?=?!`、`?<=?<!`、修饰符 `?i:`。它只描述组的种类，不改变组体内容；
- * 比较顶层分支前必须剥掉，否则 `(?:a|a)+` 的第一个分支会变成 `?:a`，与 `a` 既不相等也不互为前缀，
- * 交叠分支检测整类漏判——而 `(?:…)` 正是 ST 预设与角色卡最常用的写法。
+ * 组前缀：`?:`、`?<name>`、修饰符 `?i:` 只描述组的种类，比较分支前必须剥掉，否则 `(?:a|a)+` 的
+ * 首个分支会变成 `?:a` 而漏判——`(?:…)` 正是 ST 预设与角色卡最常用的写法。前瞻/后顾是零宽断言。
  */
-const GROUP_PREFIX_RE = /^\?(?:[:=!]|<[=!]?[^>]*>|[a-z]+:)/
-
-function stripGroupPrefix(body: string): string {
-  const match = GROUP_PREFIX_RE.exec(body)
-  return match ? body.slice(match[0].length) : body
+function groupBody(inner: string): { lookaround: boolean; body: string } {
+  const lookaround = /^\?(?:=|!|<=|<!)/.exec(inner)
+  if (lookaround) return { lookaround: true, body: inner.slice(lookaround[0].length) }
+  const prefix = /^\?(?::|<[^=!>][^>]*>|[a-zA-Z-]+:)/.exec(inner)
+  return { lookaround: false, body: prefix ? inner.slice(prefix[0].length) : inner }
 }
 
-/** 组体（去转义/字符类后）是否含量词构造 → 嵌套量词（(a+)+、(a*)*、(a{2})+）。 */
-function bodyHasNestedQuantifier(body: string): boolean {
-  return /[+*]|\{\d/.test(stripEscapesAndClasses(body))
-}
-
-/** 组体顶层 | 分支有重复或互为前缀 → 交叠分支（(a|a)+、(?:a|aa)+、(?<n>a|a)+）。嵌套组内的 | 与本组无关。 */
-function bodyHasOverlappingBranches(body: string): boolean {
-  const clean = stripEscapesAndClasses(stripGroupPrefix(body))
+/** 组体按顶层 | 切成分支源码；嵌套组、字符类与转义里的 | 不参与切分。 */
+function splitBranches(body: string): string[] {
   const branches: string[] = []
-  let depth = 0
-  let current = ''
-  for (const ch of clean) {
-    if (ch === '(') depth++
-    else if (ch === ')') depth--
-    if (ch === '|' && depth === 0) {
-      branches.push(current)
-      current = ''
+  let start = 0
+  let i = 0
+  while (i < body.length) {
+    const ch = body[i]!
+    if (ch === '\\') i = escapeEnd(body, i)
+    else if (ch === '[') i = skipCharClass(body, i)
+    else if (ch === '(') {
+      const close = findGroupClose(body, i)
+      i = close < 0 ? body.length : close + 1
     } else {
-      current += ch
+      if (ch === '|') {
+        branches.push(body.slice(start, i))
+        start = i + 1
+      }
+      i++
     }
   }
-  branches.push(current)
-  if (branches.length < 2) return false
-  for (let a = 0; a < branches.length; a++) {
-    for (let b = a + 1; b < branches.length; b++) {
-      const x = branches[a]!
-      const y = branches[b]!
-      if (x === '' || y === '') continue // 空分支（(a|)）至多制造一次短路，不构成指数回溯
-      if (x === y || x.startsWith(y) || y.startsWith(x)) return true
-    }
-  }
-  return false
+  branches.push(body.slice(start))
+  return branches
 }
 
 /**
- * 灾难性回溯启发式（保守口径）：命中的 pattern 在恶意输入上可能指数级回溯、冻结主进程。
- * 逐个扫描分组（正确跳过转义与字符类），组后紧跟可重复量词时：
- * - 组内含量词构造 → 嵌套量词，如 (a+)+ / (a*)* / (a{2})+；
- * - 组内顶层分支重复或互为前缀 → 交叠分支，如 (a|a)+ / (a|aa)+ / (?:a|a)+ / (?<n>a|a)+
- *   （组前缀 `?:`、`?<name>`、`?=` 等先剥掉再比较，见 stripGroupPrefix）。
- * 已知误伤面（字符类里的量词字符已排除，但仍偏保守）：(cat|c)+ 这类前缀分支实际线性也会被拒。
- * 拒绝代价只是该规则跳过并记 error，可接受；放行代价是冻结整个 host，不可接受。
+ * 一个可被量词修饰的单位。nullable：能匹配空串（零宽断言、下限为 0 的量词或可空组体）；
+ * repeating：单个单位就能吞下同一段文本的不同长度并在迭代间切分（量词上限 > 1，或组体本身可切分）；
+ * literal：未加量词的单字符字面量，用于判定字面分支能否由其它分支拼出。
+ */
+interface RegexAtom {
+  nullable: boolean
+  repeating: boolean
+  literal?: string
+}
+
+function parseAtoms(branch: string): RegexAtom[] {
+  const atoms: RegexAtom[] = []
+  let i = 0
+  while (i < branch.length) {
+    const ch = branch[i]!
+    let atom: RegexAtom
+    let end: number
+    if (ch === '\\') {
+      end = escapeEnd(branch, i)
+      const next = branch[i + 1] ?? ''
+      if (next === 'b' || next === 'B') atom = { nullable: true, repeating: false }
+      else if (end === i + 2 && Object.hasOwn(ESCAPED_LITERALS, next)) atom = { nullable: false, repeating: false, literal: ESCAPED_LITERALS[next] }
+      else if (end === i + 2 && next !== '' && !/[A-Za-z0-9]/.test(next)) atom = { nullable: false, repeating: false, literal: next }
+      // \d \w \s、反向引用与 Unicode 属性等按必需的非字面单位处理，不推断其能否为空。
+      else atom = { nullable: false, repeating: false }
+    } else if (ch === '[') {
+      end = skipCharClass(branch, i)
+      atom = { nullable: false, repeating: false }
+    } else if (ch === '(') {
+      const close = findGroupClose(branch, i)
+      if (close < 0) break
+      end = close + 1
+      const { lookaround, body } = groupBody(branch.slice(i + 1, close))
+      if (lookaround) atom = { nullable: true, repeating: false }
+      else {
+        const branches = splitBranches(body).map(parseAtoms)
+        atom = { nullable: branches.some(atoms => atoms.every(item => item.nullable)), repeating: branches.some(splittable) }
+      }
+    } else if (ch === '^' || ch === '$') {
+      end = i + 1
+      atom = { nullable: true, repeating: false }
+    } else {
+      end = i + 1
+      atom = ch === '.' ? { nullable: false, repeating: false } : { nullable: false, repeating: false, literal: ch }
+    }
+    const quantifier = readQuantifier(branch, end)
+    if (quantifier) {
+      atom = { nullable: atom.nullable || quantifier.min === 0, repeating: atom.repeating || quantifier.max > 1 }
+      end = quantifier.end
+    }
+    atoms.push(atom)
+    i = end
+  }
+  return atoms
+}
+
+/**
+ * 分支能否把同一段文本切成一次或多次迭代：存在一个可重复单位，且其余单位都可为空。
+ * (a+)+、(\w+\s*)*、(\d+,?)+ 命中；(<br>\s*)+、(\s*\n)+、(\w+\s+)+ 的迭代边界由必需内容固定，放行。
+ */
+function splittable(atoms: RegexAtom[]): boolean {
+  return atoms.some((atom, index) => atom.repeating && atoms.every((other, at) => at === index || other.nullable))
+}
+
+/**
+ * 分支交叠：两个分支完全相同（(a|a)+），或全由字面量组成的分支可由更短的字面分支拼出（(a|aa)+、(a|b|ab)+）。
+ * 仅前缀相同的 (cat|c)+ 每次迭代的边界唯一，放行；含字符类等非字面分支只判重复，其余交给 worker 期限。
+ */
+function branchesOverlap(branches: string[]): boolean {
+  const seen = new Set<string>()
+  for (const branch of branches) {
+    if (branch && seen.has(branch)) return true
+    seen.add(branch)
+  }
+  const literals = branches.map(parseAtoms)
+    .filter(atoms => atoms.length > 0 && atoms.every(atom => atom.literal !== undefined))
+    .map(atoms => atoms.map(atom => atom.literal).join(''))
+  return literals.some(word => {
+    const pieces = literals.filter(piece => piece.length < word.length)
+    const reachable = [true]
+    for (let at = 0; at < word.length; at++) {
+      if (!reachable[at]) continue
+      for (const piece of pieces) if (word.startsWith(piece, at)) reachable[at + piece.length] = true
+    }
+    return reachable[word.length] === true
+  })
+}
+
+/**
+ * 灾难性回溯静态检查：只拒绝必然可在迭代间切分的教科书构造，为该规则给出明确诊断。
+ * 逐个扫描分组（正确跳过转义与字符类），组后紧跟上限 > 1 的量词时：
+ * - 某分支只有一个可重复单位、其余都可为空 → 嵌套量词，如 (a+)+ / (a*)* / (\d{2,})+ / (\w+\s*)*；
+ * - 分支重复或字面分支可由其它分支拼出 → 交叠分支，如 (a|a)+ / (a|aa)+ / (?:a|a)+ / (?<n>a|a)+。
+ * 迭代边界由必需内容固定的常见展示正则（(<br>\s*)+、(\s*\n)+、(<p>.*?<\/p>)+、(cat|c)+）放行：
+ * 规则只在有期限的 worker 内执行，其余病态输入的回溯由期限终止。
  * 返回命中构造的片段（写进 error 便于定位），无问题返回 null。
  * 世界书 /regex/ 键复用同一判定（worldbook.ts 的 compileKey）。
  */
@@ -190,7 +279,7 @@ export function findUnsafeRegexConstruct(source: string): string | null {
   while (i < source.length) {
     const ch = source[i]!
     if (ch === '\\') {
-      i += 2
+      i = escapeEnd(source, i)
       continue
     }
     if (ch === '[') {
@@ -200,10 +289,13 @@ export function findUnsafeRegexConstruct(source: string): string | null {
     if (ch === '(') {
       const close = findGroupClose(source, i)
       if (close < 0) return null
-      if (groupFollowedByQuantifier(source, close)) {
-        const body = source.slice(i + 1, close)
-        if (bodyHasNestedQuantifier(body)) return `嵌套量词 ${source.slice(i, close + 2)}`
-        if (bodyHasOverlappingBranches(body)) return `交叠分支 ${source.slice(i, close + 2)}`
+      const quantifier = readQuantifier(source, close + 1)
+      const { lookaround, body } = groupBody(source.slice(i + 1, close))
+      if (quantifier && quantifier.max > 1 && !lookaround) {
+        const branches = splitBranches(body)
+        const fragment = source.slice(i, quantifier.end)
+        if (branches.some(branch => splittable(parseAtoms(branch)))) return `嵌套量词 ${fragment}`
+        if (branchesOverlap(branches)) return `交叠分支 ${fragment}`
       }
       // 不跳过组体：嵌套组（如 (x|(a+)+) 的内层）仍需逐个检查
     }

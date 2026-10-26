@@ -57,6 +57,9 @@ describe('有序展示与真实消息格式化',()=>{
     expect(rendered.parts[0]?.[1]?.kind).toBe('html')
     const generated=await isolated('template',{context:context({phase:'generate'}),texts:[source]})
     expect(generated.texts).toEqual(['**加粗**'])
+    const codeOnly='示例：`<div>` 与 `<p>行内</p>`\n```js\nconst snippet = "<span>代码块</span>";\n```\n普通正文'
+    const keepMarkdown=await render(codeOnly)
+    expect(keepMarkdown.parts[0]).toEqual([{kind:'markdown',text:codeOnly}])
   })
   it('格式化 iframe 保留折叠标题；原始 HTML 和混合输出不会进入 Markdown 主页面',async()=>{
     const result=await render('前 <%= "**粗体**" %> <%- "<details><summary>内层</summary>内容</details>" %> 后',[

@@ -5,7 +5,7 @@ import type { SessionBinding } from './core/binding.js';
 import type { GreetingFloorState } from './core/greetingLog.js';
 import type { TemplateDisplayPart } from './core/templateDisplay.js';
 import type { HelperMessageEditResult } from './core/helperChatEdits.js';
-import type { HelperDisplayContext, HelperSnapshot } from './core/helperRuntime.js';
+import type { HelperDisplayContext, HelperSnapshot, HelperSnapshotBase } from './core/helperRuntime.js';
 import type { HelperMvuWork } from './core/helperMvu.js';
 import type { HelperWorldbookContext, HelperWorldbookResult } from './core/helperWorldbook.js';
 import type { HelperScriptBundle, HelperScriptLibrary, HelperScriptAsset, HelperScriptContext, HelperScriptView } from './core/helperScripts.js';
@@ -32,6 +32,8 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
         };
     }
 }
+/** renderOutputTexts 单批上限；客户端超出时拆成多批。 */
+export declare const RENDER_OUTPUT_BATCH_MAX = 64;
 /** method → [request shape, value schema, 简介] */
 export declare const METHODS: {
     abandonHelperMvu: {
@@ -491,6 +493,17 @@ export declare const METHODS: {
         req: import("zod/mini").ZodMiniObject<{
             text: import("zod/mini").ZodMiniString<string>;
             messageId: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniInt>;
+            sessionId: import("zod/mini").ZodMiniString<string>;
+        }, import("zod/v4/core").$strip>;
+        value: import("zod/mini").ZodMiniUnknown;
+        summary: string;
+    };
+    renderOutputTexts: {
+        req: import("zod/mini").ZodMiniObject<{
+            items: import("zod/mini").ZodMiniArray<import("zod/mini").ZodMiniObject<{
+                text: import("zod/mini").ZodMiniString<string>;
+                messageId: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniInt>;
+            }, import("zod/v4/core").$strip>>;
             sessionId: import("zod/mini").ZodMiniString<string>;
         }, import("zod/v4/core").$strip>;
         value: import("zod/mini").ZodMiniUnknown;
@@ -1046,6 +1059,26 @@ export interface RenderedOutput {
     greetingIndex: number;
     canSwipeGreeting: boolean;
 }
+/** renderOutputTexts 的单项：卡面快照、脚本库与世界书改为引用批次共享部分。 */
+export type RenderedOutputBatchItem = Omit<RenderedOutput, 'helper' | 'helperScripts' | 'helperWorldbooks'> & {
+    /** 存在时该项带卡面快照：批次 helperBase 加上这个 currentMessageId。 */
+    helperMessageId?: number;
+    /** 存在时该项带批次共享的 helperScripts 与 helperWorldbooks。 */
+    helperExtras?: true;
+};
+/** renderOutputTexts：同一会话一批气泡的展示结果；单项失败只携带该项错误。 */
+export interface RenderedOutputBatch {
+    items: Array<{
+        ok: true;
+        value: RenderedOutputBatchItem;
+    } | {
+        ok: false;
+        error: string;
+    }>;
+    helperBase?: HelperSnapshotBase;
+    helperScripts?: HelperScriptContext;
+    helperWorldbooks?: HelperWorldbookContext;
+}
 /** previewPrompt 的完整提示词预览（仅预览通道，live 插不进会话日志中间）。 */
 export interface PromptPreview {
     actualRequest: {
@@ -1253,6 +1286,7 @@ export interface TavernMethodResults {
     };
     getGreetingSwipe: GreetingFloorState;
     renderOutputText: RenderedOutput;
+    renderOutputTexts: RenderedOutputBatch;
     getHelperEventState: {
         storyId: string;
         historyRevision: string;
@@ -1598,6 +1632,12 @@ export declare const TYPERT_HOST: {
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     text: import("zod/mini").ZodMiniString<string>;
                     messageId: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniInt>;
+                    sessionId: import("zod/mini").ZodMiniString<string>;
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                    items: import("zod/mini").ZodMiniArray<import("zod/mini").ZodMiniObject<{
+                        text: import("zod/mini").ZodMiniString<string>;
+                        messageId: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniInt>;
+                    }, import("zod/v4/core").$strip>>;
                     sessionId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     storyId: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
@@ -2108,6 +2148,12 @@ export declare const TYPERT_REMOTE: {
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     text: import("zod/mini").ZodMiniString<string>;
                     messageId: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniInt>;
+                    sessionId: import("zod/mini").ZodMiniString<string>;
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                    items: import("zod/mini").ZodMiniArray<import("zod/mini").ZodMiniObject<{
+                        text: import("zod/mini").ZodMiniString<string>;
+                        messageId: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniInt>;
+                    }, import("zod/v4/core").$strip>>;
                     sessionId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     storyId: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;

@@ -31,6 +31,9 @@ export declare class TemplateSandbox {
     private readonly structuredArrayKeys;
     /** 阶段 → 是否完全没有临时正则；任何非只读求值都会清空。 */
     private readonly regexStageEmpty;
+    /** 每次可能运行 VM 代码的求值都会递增；@@if 末态快照仅在其后没有任何求值时作为下一条条件的起点。 */
+    private vmEpoch;
+    private conditionSnapshot?;
     private constructor();
     /** 仅预热受信任的 WASM 模块；不解析或执行第三方输入。 */
     static prepare(onPhase?: (phase: 'loading' | 'computing') => void): Promise<void>;
@@ -70,10 +73,10 @@ export declare class TemplateSandbox {
     /**
      * 宿主侧直接读取内部状态并在主线程比较：不再经过模板可命名的 __conditionState，
      * 也不使用 VM 内可被补丁的 JSON.stringify。vm.dump 走 JSON 语义会调用对象的 toJSON，
-     * 模板可借此让快照恒定；因此对 dump 结果里的每个对象节点回查句柄，带 toJSON 的状态直接拒绝。
+     * 模板可借此让快照恒定；因此 dump 后用新求值的纯语法检查遍历同一状态，带 toJSON 的状态直接拒绝。
      */
     private conditionState;
-    /** dump 结果里的对象节点必须没有 toJSON（含原型链），其键集合才是真实的可枚举自有属性。 */
+    /** 状态里的对象节点必须没有 toJSON（含原型链），dump 的键集合才是真实的可枚举属性。 */
     private assertPlainState;
     private growResources;
     /** 受信装载结束后收紧到第三方计算预算；后续阶段（resume/继续轮）重置同一预算。 */

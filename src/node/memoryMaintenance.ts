@@ -152,12 +152,20 @@ export function noteAttemptedMarker(attempted: Map<string, string>, key: string,
  * agent 面注册：turn 结束（status → idle）且本会话工作区有压缩标记、或有记忆还没有检索别名时，runMaintenance 执行维护。
  * runMaintenance 在 turn-driving 时会同步 throw（与本事件的 idle 之间存在输入竞态）——
  * 任务未执行则保留标记待下次 idle；失败保留 pending，但每个已结束轮次只尝试一次。
+ * 别名补全遇到新输入立即取消让路，不计为本轮尝试；压缩照常完成。
  */
 export function registerMemoryMaintenance(ctx: Context, state: TavernState, llm: LlmRuntime | undefined): void {
   const attempted = new Map<string, string>()
+  // 进行中的别名补全。宿主在维护结束前把新输入留在收件箱，别名只是检索增强，用户接话时让路；
+  // 压缩不让路：它是容量保护，频繁接话也必须能推进。
+  const yieldingAliases = new Map<string, AbortController>()
+  ctx.on('agent/inbox/inserted', ({ agent }) => {
+    yieldingAliases.get(agent.id)?.abort(new Error('用户输入到达，记忆检索别名让路'))
+  })
   ctx.on('agent/status', ({ agent, status }) => {
     if (status !== 'idle') return
     // 排在 turn/end 的 commitFloor 后执行；若新 turn 已进入队列，也会等维护退出后再 beginFloor。
+    // 标为后台任务：展示类只读接口只等楼层提交，不等这次辅助模型请求。
     void state.enqueueSessionTask(agent.id, async () => {
       const binding = await state.loadBinding(agent.id)
       if (!binding) return
@@ -188,7 +196,20 @@ export function registerMemoryMaintenance(ctx: Context, state: TavernState, llm:
           // agent.options 是创建时的全局默认模型，会话内换模后可能已不可用；按会话实际路由压缩。
           const route = sessionModelRoute(agent)
           if (!compress) {
-            const expanded = await expandMemoryAliases(state, llm, binding.cardId, route.provider, route.model, binding.storyId, signal)
+            const yielded = new AbortController()
+            yieldingAliases.set(agent.id, yielded)
+            let expanded: Awaited<ReturnType<typeof expandMemoryAliases>>
+            try {
+              expanded = await expandMemoryAliases(state, llm, binding.cardId, route.provider, route.model, binding.storyId, AbortSignal.any([signal, yielded.signal]))
+            } finally {
+              if (yieldingAliases.get(agent.id) === yielded) yieldingAliases.delete(agent.id)
+            }
+            if (yielded.signal.aborted && !signal.aborted) {
+              // 让路不算本轮的一次尝试：输入若被取消、会话回到空闲，同一结束轮次仍可再补。
+              if (attempted.get(key) === marker) attempted.delete(key)
+              ctx.logger.info('dsh-tavern: 用户输入到达，记忆检索别名让路，下一次空闲再补')
+              return
+            }
             if (!expanded) ctx.logger.warn('dsh-tavern: 记忆检索别名未生成；后续轮次再试')
             else if (expanded.saved > 0 && expanded.named === 0) ctx.logger.warn('dsh-tavern: 模型回复里没有可用的检索别名，这批记忆不再重复请求')
             else if (expanded.saved > 0) ctx.logger.info(`dsh-tavern: 已为 ${expanded.named} 条记忆补充检索别名（${binding.cardId}）`)
@@ -204,6 +225,6 @@ export function registerMemoryMaintenance(ctx: Context, state: TavernState, llm:
         if (!ran) attempted.delete(key)
         ctx.logger.warn(`dsh-tavern: 记忆维护失败：${error instanceof Error ? error.message : String(error)}`)
       }
-    }).catch((error) => ctx.logger.warn(`dsh-tavern: 记忆维护调度失败：${String(error)}`))
+    }, { background: true }).catch((error) => ctx.logger.warn(`dsh-tavern: 记忆维护调度失败：${String(error)}`))
   })
 }

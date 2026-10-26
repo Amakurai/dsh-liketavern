@@ -6,7 +6,7 @@ import {activeGreetingIndex,cardGreetingVariants} from '../core/greetingLog.js'
 import { createHash } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
-import { helperJson, helperChanges, helperScopeKey, type HelperDisplayContext, type HelperScopes, type HelperSnapshot } from '../core/helperRuntime.js'
+import { helperJson, helperChanges, helperScopeKey, type HelperDisplayContext, type HelperScopes, type HelperSnapshot, type HelperSnapshotBase } from '../core/helperRuntime.js'
 import { isHostInjectedUserMessage, isSyntheticUserText } from '../core/dshPrompt.js'
 import { DEFAULT_USER_NAME } from '../core/persona.js'
 import { applyHelperChanges, commitHelperChanges, loadHelperScopes, loadHelperState, type HelperState } from '../state/helper.js'
@@ -94,7 +94,8 @@ export function helperHistoryOf(events: readonly SessionEvent[], names: {char:st
 export function helperHistoryRevision(history:ReturnType<typeof helperHistoryOf>):string{
   return createHash('sha256').update(JSON.stringify(history.map(({seq,identity,message})=>[seq,identity,message]))).digest('hex')
 }
-async function helperContext(ctx:Context,state:TavernState,sessionId:string,messageId:number) {
+/** 不依赖具体消息的剧情历史上下文；绑定、工作区与 writable 每次重新读取，不进入缓存。 */
+async function helperHistoryContext(ctx:Context,state:TavernState,sessionId:string) {
   const binding=await state.loadBinding(sessionId)
   if (!binding?.storyId) throw new Error('会话未绑定可用剧情')
   const events=await readDisplaySessionEvents(ctx,sessionId)
@@ -103,14 +104,18 @@ async function helperContext(ctx:Context,state:TavernState,sessionId:string,mess
   const names={char:card?.card.name??'Assistant',user:persona?.name??DEFAULT_USER_NAME}
   const bindingKey=`${binding.cardId}\0${binding.storyId}\0${binding.personaId??''}`
   const cached=cachedHelperHistory(state,sessionId,events,bindingKey,names)
-  const history=cached.history,currentMessageId=cached.assistantIndexBySeq.get(messageId)??-1
-  if (currentMessageId<0) throw new Error('卡面消息不在当前剧情中')
   const turn=cached.lastBoundary?.type==='turn/end'?cached.lastBoundary.turn:0
   const writable=!state.openFloors.has(sessionId) && cached.lastBoundary?.type!=='turn/start'
-  const historyRevision=cached.historyRevision
   const ws=await state.storyWorkspace(binding.cardId,binding.storyId)
   const greetings=card?cardGreetingVariants(card.card.firstMes,card.card.alternateGreetings).map(text=>expandIdentityMacros(text,{char:charName,user:persona?.name??DEFAULT_USER_NAME})):[]
-  return {binding,history,currentMessageId,historyRevision,indexByIdentity:cached.indexByIdentity,ws,writable,turn,greetings}
+  return {binding,history:cached.history,historyRevision:cached.historyRevision,indexByIdentity:cached.indexByIdentity,
+    assistantIndexBySeq:cached.assistantIndexBySeq,ws,writable,turn,greetings}
+}
+async function helperContext(ctx:Context,state:TavernState,sessionId:string,messageId:number) {
+  const context=await helperHistoryContext(ctx,state,sessionId)
+  const currentMessageId=context.assistantIndexBySeq.get(messageId)??-1
+  if (currentMessageId<0) throw new Error('卡面消息不在当前剧情中')
+  return {...context,currentMessageId}
 }
 function publicScopes(scopes:HelperScopes,indexByIdentity:ReadonlyMap<string,number>):HelperScopes {
   const result:HelperScopes={}
@@ -124,15 +129,46 @@ function publicScopes(scopes:HelperScopes,indexByIdentity:ReadonlyMap<string,num
   }
   return result
 }
+function snapshotMessages(context:Awaited<ReturnType<typeof helperHistoryContext>>,exposed:HelperScopes,extras:HelperState['extras'],swipes:Record<string,HelperSwipeSet>):HelperSnapshot['messages'] {
+  return context.history.map((message,index)=>{
+    const data=exposed[JSON.stringify(['message',index])]??{},extra=extras[message.identity]??{}
+    const initial=index===0&&message.role==='assistant'&&context.greetings.length?{active:activeGreetingIndex(context.binding.greetingIndex,context.greetings.length),pages:context.greetings.map(text=>({message:text,data:{},extra:{}}))}:undefined
+    return {message_id:index,name:message.name,role:message.role,is_hidden:false,message:message.message,data,extra,
+      swipe:effectiveHelperSwipes({message:message.message,data,extra},swipes[message.identity]??initial)}
+  })
+}
 function snapshot(context:Awaited<ReturnType<typeof helperContext>>,scopes:HelperScopes,extras:HelperState['extras']={},swipes:Record<string,HelperSwipeSet>={}):HelperSnapshot {
   const exposed=publicScopes(scopes,context.indexByIdentity)
   return {storyId:context.binding.storyId!,historyRevision:context.historyRevision,currentMessageId:context.currentMessageId,
-    writable:context.writable,scopes:exposed,messages:context.history.map((message,index)=>{
-      const data=exposed[JSON.stringify(['message',index])]??{},extra=extras[message.identity]??{}
-      const initial=index===0&&message.role==='assistant'&&context.greetings.length?{active:activeGreetingIndex(context.binding.greetingIndex,context.greetings.length),pages:context.greetings.map(text=>({message:text,data:{},extra:{}}))}:undefined
-      return {message_id:index,name:message.name,role:message.role,is_hidden:false,message:message.message,data,extra,
-        swipe:effectiveHelperSwipes({message:message.message,data,extra},swipes[message.identity]??initial)}
-    })}
+    writable:context.writable,scopes:exposed,messages:snapshotMessages(context,exposed,extras,swipes)}
+}
+/**
+ * 同一次展示批次共享的剧情读视图：剧情锁内只读取、校验一次历史与变量，再按消息 seq 派生
+ * 各气泡的上下文或快照公共部分。逐条请求时每条都重读变量文件、重建整段消息列表，
+ * 长历史首屏会退化为 O(消息数²)。
+ */
+export interface HelperDisplaySet {
+  context(seq: number): HelperDisplayContext
+  /** 仅 withSnapshot=true 时存在；各气泡只差 currentMessageId，messages/scopes 共用引用。 */
+  base?: HelperSnapshotBase
+}
+export async function loadHelperDisplaySet(ctx:Context,state:TavernState,sessionId:string,withSnapshot:boolean):Promise<HelperDisplaySet> {
+  const first=await helperHistoryContext(ctx,state,sessionId)
+  return withWorkspaceLock(first.ws.fs.root,async()=>{
+    const current=await helperHistoryContext(ctx,state,sessionId)
+    if(current.ws.fs.root!==first.ws.fs.root)throw new Error('卡面剧情绑定已经改变')
+    let base:HelperSnapshotBase|undefined
+    if(withSnapshot){
+      const saved=await loadHelperState(current.ws.fs),exposed=publicScopes(saved.scopes,current.indexByIdentity)
+      base={storyId:current.binding.storyId!,historyRevision:current.historyRevision,writable:current.writable,scopes:exposed,
+        messages:snapshotMessages(current,exposed,saved.extras,saved.swipes??{})}
+    }
+    return {...(base?{base}:{}),context:seq=>{
+      const index=current.assistantIndexBySeq.get(seq)??-1,message=current.history[index]
+      if(index<0||!message)throw new Error('卡面消息不在当前剧情中')
+      return {storyId:current.binding.storyId!,historyRevision:current.historyRevision,currentMessageId:index,currentMessageRole:message.role}
+    }}
+  })
 }
 /**
  * 纯文本展示只返回剧情/历史身份与当前消息角色；仍在剧情锁内二次读取，

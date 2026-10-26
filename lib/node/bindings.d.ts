@@ -9,6 +9,7 @@ export type { SessionBinding, WalLineageEntry } from '../core/binding.js';
 export declare function parseSessionBinding(input: unknown): SessionBinding;
 export declare function loadBinding(paths: TavernPaths, sessionId: string, strictRead?: boolean): Promise<SessionBinding | null>;
 export declare function saveBinding(paths: TavernPaths, binding: SessionBinding): Promise<void>;
+export declare function bindingDeletionGeneration(): number;
 export declare function deleteBinding(paths: TavernPaths, sessionId: string): Promise<void>;
 /**
  * 净化后的文件名与 Windows 大小写别名可能碰撞；不能把另一会话的绑定当未绑定后覆盖/删除。

@@ -7,6 +7,7 @@ import {
 } from '../core/templateDisplay.js'
 import type { WorldInfoEntry, MacroContext, RegexRule } from '../core/types.js'
 import { applyRegexRules, type RegexApplyResult } from '../core/regex.js'
+import { markdownCodeScanner } from '../core/markdownCode.js'
 import { stripOpaqueDisplayMetaParts } from '../core/displaySanitize.js'
 import type { DisplayRegexDiagnostics } from '../remote.js'
 import type { TemplateSandbox } from './templateSandbox.js'
@@ -28,6 +29,27 @@ __templateEscaper=(value,_locals)=>input.phase==='generate' ? String(value ?? ''
 `;
 
 const FRAGMENT_HTML=/<\/?(?:p|div|span|strong|em|b|i|u|s|del|a|img|br|hr|h[1-6]|table|thead|tbody|tr|th|td|ul|ol|li|blockquote|pre|code|details|summary|section|article|main|button|input|form|svg|canvas|iframe)\b/i
+const FRAGMENT_HTML_TOKENS=/<!--[\s\S]*?(?:-->|$)|<\/?(?:p|div|span|strong|em|b|i|u|s|del|a|img|br|hr|h[1-6]|table|thead|tbody|tr|th|td|ul|ol|li|blockquote|pre|code|details|summary|section|article|main|button|input|form|svg|canvas|iframe)\b|`+|~{3,}/gi
+
+/** 仅当 Markdown 代码围栏与行内反引号之外存在 HTML 片段标签时，才走沙箱消息格式化。 */
+function hasFragmentHtml(text:string):boolean {
+  if(!FRAGMENT_HTML.test(text)) return false
+  const code=markdownCodeScanner(text)
+  const tokens=new RegExp(FRAGMENT_HTML_TOKENS.source,FRAGMENT_HTML_TOKENS.flags)
+  for(let token=tokens.exec(text);token;token=tokens.exec(text)) {
+    const raw=token[0],at=token.index
+    if(raw.startsWith('<!--')) continue
+    if(raw[0]==='`' || raw[0]==='~') {
+      const end=code.fence(at)?.end ?? code.inlineEnd(at)
+      if(end!==null) tokens.lastIndex=end
+      continue
+    }
+    const line=text.slice(text.lastIndexOf('\n',at-1)+1,at)
+    if(/^(?: {4}|\t)/.test(line)) continue
+    return true
+  }
+  return false
+}
 
 export function renderTemplateDisplay(text:string,entries:WorldInfoEntry[],sandbox:TemplateSandbox,
   meta:{role:string;worldinfo:boolean;depth:number},decorate:boolean):{text:string;parts:TemplateDisplayPart[]} {
@@ -61,7 +83,7 @@ export function renderTemplateDisplay(text:string,entries:WorldInfoEntry[],sandb
       }
       for(const part of splitTemplateDisplay(source.text,true)) {
       if(part.kind==='html') parts.push(part)
-      else if(FRAGMENT_HTML.test(part.text)) parts.push({kind:'html',text:sandbox.formatMessage(part.text)})
+      else if(hasFragmentHtml(part.text)) parts.push({kind:'html',text:sandbox.formatMessage(part.text)})
       else parts.push(part)
       }
     }

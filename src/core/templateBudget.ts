@@ -85,17 +85,29 @@ export interface TemplateExecutionBudget {
   sandboxMs: number
 }
 
-/** 小输入保留原预算；长输入的复制、解析和重放获得线性余量，脚本不能自行延长截止时间。 */
-export function templateExecutionBudget(inputChars: number, timeoutOverride?: number): TemplateExecutionBudget {
+/**
+ * template：第三方 EJS 在 QuickJS 中解释执行，lodash/zod 类工作常比浏览器 V8 慢一个数量级以上，
+ * 小输入也要容下整轮预加载、条件与渲染。display：output/render 展示正则只在 V8 中运行，
+ * 保留短期限，灾难回溯能尽快释放槽位，不拖住整屏气泡。
+ */
+export type TemplateBudgetProfile = 'template' | 'display'
+const BASE_MS: Readonly<Record<TemplateBudgetProfile, { computing: number; sandbox: number }>> = {
+  template: { computing: 5000, sandbox: 4000 },
+  display: { computing: 1000, sandbox: 750 },
+}
+
+/** 小输入取档位基础预算；长输入的复制、解析和重放获得线性余量，脚本不能自行延长截止时间。 */
+export function templateExecutionBudget(inputChars: number, timeoutOverride?: number, profile: TemplateBudgetProfile = 'template'): TemplateExecutionBudget {
   if (!Number.isSafeInteger(inputChars) || inputChars < 0 || inputChars > TEMPLATE_INPUT_MAX_CHARS) throw new Error('提示词计算输入超过资源容量')
   if (timeoutOverride !== undefined && (!Number.isFinite(timeoutOverride) || timeoutOverride <= 0)) throw new Error('提示词计算超时预算无效')
   const extraMiB = Math.max(0, (inputChars - MIB / 4) / MIB)
+  const base = BASE_MS[profile]
   return {
     inputChars,
     outputChars: Math.min(TEMPLATE_OUTPUT_MAX_CHARS, Math.max(16 * MIB, inputChars * 2 + 16 * MIB)),
     workerMemoryMb: Math.min(1536, 128 + Math.ceil(extraMiB * 12)),
     quickJsMemoryBytes: Math.min(512, 32 + Math.ceil(extraMiB * 8)) * MIB,
-    computingMs: timeoutOverride ?? Math.min(30_000, Math.ceil(1000 + extraMiB * 4000)),
-    sandboxMs: Math.min(15_000, Math.ceil(750 + extraMiB * 3000)),
+    computingMs: timeoutOverride ?? Math.min(30_000, Math.ceil(base.computing + extraMiB * 4000)),
+    sandboxMs: Math.min(15_000, Math.ceil(base.sandbox + extraMiB * 3000)),
   }
 }

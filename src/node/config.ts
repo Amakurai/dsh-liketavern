@@ -123,6 +123,8 @@ export const TavernConfigSchema = z.object({
   defaults: SessionDefaultsSchema,
   /** 交互卡全局开关（关闭则一律纯文本渲染）。 */
   interactiveCards: z.boolean().default(true),
+  /** 角色消息上方显示头像与卡名；默认关闭，按宿主原生回复样式只画正文（仍套 output/render 与交互卡）。 */
+  speakerHeader: z.boolean().default(false),
   /** 删除角色卡时连同其内嵌世界书一起删除；关闭则删卡前把内嵌书抢救到世界书库。 */
   cascadeDeleteEmbeddedBook: z.boolean().default(true),
   /** 交互卡脚本信任的主机（放宽 connect-src 与 script-src；`*` = 全部放行。img/font 默认已放行 https）。 */
@@ -142,6 +144,7 @@ export const Config = z.object({
   memory: MemorySchema.volatile(),
   defaults: SessionDefaultsSchema.volatile(),
   interactiveCards: z.boolean().default(true).volatile(),
+  speakerHeader: z.boolean().default(false).volatile(),
   cascadeDeleteEmbeddedBook: z.boolean().default(true).volatile(),
   cardNetworkWhitelist: z.array(String).default([]).volatile(),
   triggerLogMax: z.number().min(10).default(200).volatile(),
@@ -188,6 +191,7 @@ export interface TavernConfig {
   }
   defaults: TavernSessionDefaults
   interactiveCards: boolean
+  speakerHeader: boolean
   cascadeDeleteEmbeddedBook: boolean
   cardNetworkWhitelist: string[]
   triggerLogMax: number
@@ -213,6 +217,7 @@ export function resolveConfig(raw: unknown): TavernConfig {
       characterLorebookId: value.defaults.characterLorebookId,
     },
     interactiveCards: value.interactiveCards,
+    speakerHeader: value.speakerHeader,
     cascadeDeleteEmbeddedBook: value.cascadeDeleteEmbeddedBook,
     cardNetworkWhitelist: [...value.cardNetworkWhitelist],
     triggerLogMax: value.triggerLogMax,

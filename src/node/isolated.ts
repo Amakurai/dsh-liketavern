@@ -7,8 +7,11 @@ import { templateWorkerCacheKey } from './templateWorkerCache.js'
 
 let active = 0, requestSerial = 0, workersStarted = 0, cacheHits = 0
 const waiting: Array<() => void> = []
-const IDLE_MS = 60_000
-const CACHED_IDLE_MS = 5 * 60_000
+// 冷启动 worker 并装载 QuickJS 约需半秒，空闲实例常驻约 30–60 MiB；扮演两轮之间常隔数分钟，空闲期按此取舍。
+const IDLE_MS = 10 * 60_000
+const CACHED_IDLE_MS = 15 * 60_000
+// 等待项只是唤醒回调，输入仍由调用方持有；长历史首屏会为每个气泡各发一次只读展示，上限须容下整屏突发。
+const MAX_WAITING = 256
 interface WorkerSlot {
   worker:Worker
   memoryMb:number
@@ -84,7 +87,7 @@ function releaseWorker(slot:WorkerSlot):void {
   if(slot.retired)return
   slot.busy=false
   slot.lastUsed=performance.now()
-  // 长思考回复通常超过一分钟；仅有可续接 VM 的 worker 保留五分钟，仍受两个实例的总数限制。
+  // 长思考回复与阅读常超过数分钟；可续接 VM 的 worker 多留一些时间，仍受两个实例的总数限制。
   slot.idleTimer=setTimeout(()=>{void retire(slot)},slot.cacheKey ? CACHED_IDLE_MS : IDLE_MS)
   slot.idleTimer.unref()
   slot.worker.unref()
@@ -143,12 +146,12 @@ export async function isolated<K extends keyof ComputeJobs>(kind: K, input: Comp
   const replayWork = 'replay' in input && input.replay ? measureTemplateReplayWork(input.replay) : 0
   const continuationWork = 'templateContinuation' in input && input.templateContinuation?.replay
     ? measureTemplateReplayWork(input.templateContinuation.replay) : 0
-  const budget = templateExecutionBudget(Math.max(inputChars, replayWork, continuationWork), timeoutMs)
+  const budget = templateExecutionBudget(Math.max(inputChars, replayWork, continuationWork), timeoutMs, kind === 'render' || kind === 'display' ? 'display' : 'template')
   const replay='replay' in input ? input.replay : 'templateContinuation' in input ? input.templateContinuation?.replay : undefined
   const context='context' in input ? input.context : 'templates' in input ? input.templates : undefined
   const key=templateWorkerCacheKey(replay,context)
   if (active >= 2) {
-    if (waiting.length >= 16) throw new Error('提示词计算队列已满，请稍后重试')
+    if (waiting.length >= MAX_WAITING) throw new Error('提示词计算队列已满，请稍后重试')
     await new Promise<void>((resolve) => waiting.push(resolve))
   } else active++
   let slot:WorkerSlot|undefined

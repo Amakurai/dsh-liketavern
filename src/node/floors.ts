@@ -40,7 +40,7 @@ import { withWorkspaceLock } from '../state/workspaceLock.js'
 import { WorkspaceFs } from '../state/workspaceFs.js'
 import { sessionFile } from './paths.js'
 import { assertHostForkSource, deleteHostForkAdoption, hostForkSeedHash, readHostForkAdoption, writeHostForkAdoption, type HostForkAdoptionPlan } from './hostForkAdoption.js'
-import { loadBinding, type SessionBinding, type WalLineageEntry } from './bindings.js'
+import { bindingDeletionGeneration, loadBinding, type SessionBinding, type WalLineageEntry } from './bindings.js'
 import { sessionModelRoute } from './modelRoute.js'
 import type { TavernState } from './state.js'
 
@@ -1007,11 +1007,15 @@ export async function getFloorSiblings(
       ids.add(f.childSessionId)
     }
     const existing = new Set<string>([sessionId])
+    const confirmed = confirmedBindingIds(state)
     // 并行探测存在性：兄弟索引会随分支数增长，串行 await loadBinding 让每次导航查询线性变慢。
     await Promise.all(
       [...ids].map(async (id) => {
-        if (ctx.sessions.get(id as Session['id']) !== undefined || (await loadBinding(state.paths, id)) !== null) {
+        if (ctx.sessions.get(id as Session['id']) !== undefined || confirmed.has(id)) {
           existing.add(id)
+        } else if ((await loadBinding(state.paths, id)) !== null) {
+          existing.add(id)
+          confirmed.add(id)
         }
       }),
     )
@@ -1028,6 +1032,22 @@ export async function getFloorSiblings(
     if (!swipe) return none
     return { swipe: { turn, ...swipe } }
   })
+}
+
+/**
+ * 已确认仍有绑定的离线分支。长历史首屏每个楼层操作栏都查询一次，每次重读全部分支绑定会
+ * 占满 I/O 线程池，后来的查询连自身绑定都读不到。只缓存“存在”，任何绑定删除后整体失效；
+ * “不存在”每次当场复核后才剪枝，缓存永远不会导致误删分支记录。
+ */
+const confirmedBindings = new WeakMap<TavernState, { generation: number; ids: Set<string> }>()
+function confirmedBindingIds(state: TavernState): Set<string> {
+  const generation = bindingDeletionGeneration()
+  let entry = confirmedBindings.get(state)
+  if (!entry || entry.generation !== generation) {
+    entry = { generation, ids: new Set() }
+    confirmedBindings.set(state, entry)
+  }
+  return entry.ids
 }
 
 /**

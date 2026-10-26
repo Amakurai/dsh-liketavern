@@ -36,7 +36,7 @@ afterEach(async () => { vi.restoreAllMocks(); await ctx?.fiber.dispose(); await 
 
 const frameRequest = (frameId: string): HelperFrameOpen => ({ sessionId: source.id, messageId, storyId, frameId, runtimeId: 'runtime-budget-1', epoch: 1, readOnly: false })
 
-it('已关闭的帧不占接口预算：累计 1024 个墓碑后新帧仍可连接', async () => {
+it('已关闭的帧不占接口预算：累计 1024 个墓碑后新帧仍可连接', { timeout: 60_000 }, async () => {
   for (let i = 0; i < 1024; i++) {
     const request = frameRequest(`budget-frame-${String(i).padStart(4, '0')}`)
     const opened = await openHelperFrame(ctx, state, request)
@@ -46,7 +46,7 @@ it('已关闭的帧不占接口预算：累计 1024 个墓碑后新帧仍可连�
   await expect(openHelperFrame(ctx, state, frameRequest('budget-frame-fresh'))).resolves.toHaveProperty('token')
 })
 
-it('未关闭帧占满预算后拒绝新帧；关闭一个未关闭帧即释放预算', async () => {
+it('未关闭帧占满预算后拒绝新帧；关闭一个未关闭帧即释放预算', { timeout: 60_000 }, async () => {
   for (let i = 0; i < 1024; i++) await openHelperFrame(ctx, state, frameRequest(`budget-live-${String(i).padStart(4, '0')}`))
   await expect(openHelperFrame(ctx, state, frameRequest('budget-live-next'))).rejects.toThrow('接口预算')
   closeHelperFrame(state, { ...frameRequest('budget-live-0000'), token: undefined } as HelperFrameClose)

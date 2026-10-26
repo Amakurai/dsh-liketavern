@@ -278,6 +278,8 @@ export class TavernState {
    * 但 beginFloor / 开场白 / commitFloor / idle maintenance 必须保持事件发生顺序。
    */
   private readonly sessionTaskTails = new Map<string, Promise<void>>()
+  /** 最近一个非后台任务的队尾；它在队列中也等待之前的全部任务，但不等之后排入的后台维护。 */
+  private readonly sessionCommitTails = new Map<string, Promise<void>>()
   /** 实时助手事件的收口回执；只保留最近 256 轮，历史加载不依赖或回放这些回执。 */
   readonly helperTurnClosures = new Map<string, { seq:number; storyId:string|undefined; error?:string; deferred?:boolean }>()
 
@@ -313,7 +315,7 @@ export class TavernState {
    * 把一个副作用接到同会话队尾；前一任务失败不会毒死后续队列，调用方仍会收到本次异常。
    * 不同会话互不等待，避免把全局运行时退化成单线程。
    */
-  enqueueSessionTask<T>(sessionId: string, task: () => Promise<T> | T): Promise<T> {
+  enqueueSessionTask<T>(sessionId: string, task: () => Promise<T> | T, options?: { background?: boolean }): Promise<T> {
     const previous = this.sessionTaskTails.get(sessionId) ?? Promise.resolve()
     const result = previous.then(task)
     const tail = result.then(
@@ -324,12 +326,27 @@ export class TavernState {
     void tail.finally(() => {
       if (this.sessionTaskTails.get(sessionId) === tail) this.sessionTaskTails.delete(sessionId)
     })
+    // 后台维护（空闲记忆压缩/别名补全）仍与楼层任务串行，但不进入展示读取的提交屏障。
+    if (options?.background !== true) {
+      this.sessionCommitTails.set(sessionId, tail)
+      void tail.finally(() => {
+        if (this.sessionCommitTails.get(sessionId) === tail) this.sessionCommitTails.delete(sessionId)
+      })
+    }
     return result
   }
 
   /** 等待调用时已经排入该会话的副作用完成。 */
   async waitForSessionTasks(sessionId: string): Promise<void> {
     await (this.sessionTaskTails.get(sessionId) ?? Promise.resolve())
+  }
+
+  /**
+   * 只读展示用的屏障：等待调用时已排入的楼层提交、开场白与编辑等非后台任务落定，
+   * 不等待其后排入的后台维护。维护的模型请求可能持续数十秒，展示正文不应被它挡住。
+   */
+  async waitForSessionCommits(sessionId: string): Promise<void> {
+    await (this.sessionCommitTails.get(sessionId) ?? Promise.resolve())
   }
 
   // ── 角色工作区 ────────────────────────────────────────────────────────────

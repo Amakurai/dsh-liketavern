@@ -153,6 +153,8 @@ export declare class TavernState {
      * 但 beginFloor / 开场白 / commitFloor / idle maintenance 必须保持事件发生顺序。
      */
     private readonly sessionTaskTails;
+    /** 最近一个非后台任务的队尾；它在队列中也等待之前的全部任务，但不等之后排入的后台维护。 */
+    private readonly sessionCommitTails;
     /** 实时助手事件的收口回执；只保留最近 256 轮，历史加载不依赖或回放这些回执。 */
     readonly helperTurnClosures: Map<string, {
         seq: number;
@@ -185,9 +187,16 @@ export declare class TavernState {
      * 把一个副作用接到同会话队尾；前一任务失败不会毒死后续队列，调用方仍会收到本次异常。
      * 不同会话互不等待，避免把全局运行时退化成单线程。
      */
-    enqueueSessionTask<T>(sessionId: string, task: () => Promise<T> | T): Promise<T>;
+    enqueueSessionTask<T>(sessionId: string, task: () => Promise<T> | T, options?: {
+        background?: boolean;
+    }): Promise<T>;
     /** 等待调用时已经排入该会话的副作用完成。 */
     waitForSessionTasks(sessionId: string): Promise<void>;
+    /**
+     * 只读展示用的屏障：等待调用时已排入的楼层提交、开场白与编辑等非后台任务落定，
+     * 不等待其后排入的后台维护。维护的模型请求可能持续数十秒，展示正文不应被它挡住。
+     */
+    waitForSessionCommits(sessionId: string): Promise<void>;
     workspace(cardId: string): Promise<WorkspaceHandle>;
     /** 资产初始状态与独立剧情状态共用文件面；storyId 缺省仅供初始状态面板及旧数据迁移。 */
     storyWorkspace(cardId: string, storyId?: string): Promise<WorkspaceHandle>;

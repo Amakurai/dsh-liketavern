@@ -11,11 +11,11 @@ import {needsMvuStatusPlaceholder,MVU_STATUS_PLACEHOLDER} from '../core/mvuStatu
 import type { TavernServiceContract } from '../remote.js'
 import type { Context } from '@deepseek-ai/cordis'
 import type { LlmRuntime } from '@deepseek-ai/dsh-llm'
-import type { Session } from '@deepseek-ai/dsh-session'
+import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import { sessionModelRoute } from './modelRoute.js'
 import { PRESET_ADAPTER_SOURCE_PROVIDER } from './presetAdapter.js'
 import { measureStaleTurnContext } from './turnContextDiagnostics.js'
-import type { TavernSettingsScope } from './config.js'
+import type { TavernConfigRaw, TavernSettingsScope } from './config.js'
 import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import { estimateTokens } from '../core/tokenize.js'
 import { inspectCharacterCompatibility } from '../core/characterCompatibility.js'
@@ -49,7 +49,10 @@ import { displaySessionEventAt, displaySessionHasUserMessage, readDisplaySession
 import { continuationDisplaySources, continuationDisplayText } from '../core/continuationDisplay.js'
 import {getHelperWorldbookContext,helperWorldbookOperation,rebindHelperWorldbooks} from './helperWorldbook.js'
 import {editHelperMessages} from './helperChatEdits.js'
-import { getHelperDisplayContext, getHelperSnapshot, commitHelperVariables, getHelperScriptBundle, sessionHelperLibraries } from './helperRuntime.js'
+import { getHelperSnapshot, commitHelperVariables, getHelperScriptBundle, loadHelperDisplaySet, sessionHelperLibraries, type HelperDisplaySet } from './helperRuntime.js'
+import { helperSnapshotAt } from '../core/helperRuntime.js'
+import type { HelperScriptContext } from '../core/helperScripts.js'
+import type { HelperWorldbookContext } from '../core/helperWorldbook.js'
 import {prepareHelperMvuJob,commitHelperMvuJob} from './helperMvu.js'
 import {runHelperMvuEnable} from './helperMvuLifecycle.js'
 import {abandonHelperMvu} from './helperMvuAbandon.js'
@@ -57,13 +60,39 @@ import {enableHelperMvu} from './helperMvuEnable.js'
 import {getHelperEventState} from './helperEventState.js'
 import {openHelperFrame,closeHelperFrame,helperFrameWriteGuard} from './helperFrameLease.js'
 import type { TavernState } from './state.js'
-import type { TavernMethodResults,TavernMethodRequests } from '../remote.js'
+import type { RenderedOutput, TavernMethodResults,TavernMethodRequests } from '../remote.js'
 import { deleteEditorDraft, getEditorDraft, saveEditorDraft } from './editorDrafts.js'
 import { createPluginAboutReader, type PluginAboutReader } from './pluginAbout.js'
 import { withWorkspaceLock } from '../state/workspaceLock.js'
 
 /** 头像缓存条数上限：卡删除/再导入会产生新 cardId，旧条目无人主动清，超上限淘汰最旧（只多一次重读，无正确性影响）。 */
 const AVATAR_CACHE_MAX = 32
+
+/** 一批展示请求共享的只读加载（见 TavernService.displayScope）。 */
+interface DisplayScope {
+  sessionId: string
+  settings: TavernConfigRaw
+  liveEvents: readonly SessionEvent[] | undefined
+  canSwipeGreeting: boolean
+  binding: () => Promise<SessionBinding | null>
+  assets: () => Promise<{
+    rules: Awaited<ReturnType<TavernState['rulesFor']>>
+    ws: Awaited<ReturnType<TavernState['loadCharacter']>>
+    persona: Awaited<ReturnType<TavernState['resolvePersona']>>
+    names: { char: string; user: string }
+    story: Awaited<ReturnType<TavernState['storyWorkspace']>>
+  }>
+  displayEvents: () => Promise<readonly SessionEvent[]>
+  helperSet: (withSnapshot: boolean) => Promise<HelperDisplaySet>
+  helperExtras: () => Promise<{ helperScripts: HelperScriptContext; helperWorldbooks: HelperWorldbookContext }>
+}
+
+/** 单个气泡的展示结果；卡面快照与脚本库、世界书只标记需要，由调用方按单条或批次组装。 */
+interface DisplayDraft {
+  output: Omit<RenderedOutput, 'helper' | 'helperScripts' | 'helperWorldbooks'>
+  helperMessageId?: number
+  helperExtras?: boolean
+}
 
 export class TavernService extends TypertRemoteService implements TavernServiceContract {
   constructor(
@@ -533,24 +562,83 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
     return getGreetingSwipe(this.floorDeps(), request.sessionId, request.messageId)
   }
 
-  /** 分支兄弟导航是只读查询：等排队中的楼层任务落定即可，不进串行队列。 */
+  /** 分支兄弟导航是只读查询：等排队中的楼层任务落定即可，不进串行队列，也不等空闲记忆维护。 */
   async getFloorSiblings(request: { sessionId: string; messageId?: string; turn?: number }): Promise<TavernMethodResults['getFloorSiblings']> {
-    await this.state.waitForSessionTasks(request.sessionId)
+    await this.state.waitForSessionCommits(request.sessionId)
     return getFloorSiblings(this.floorDeps(), request.sessionId, request.messageId, request.turn)
   }
 
   async renderOutputText(request: { sessionId: string; text: string; messageId?: number }): Promise<TavernMethodResults['renderOutputText']> {
-    await this.state.waitForSessionTasks(request.sessionId)
-    const text = request.text ?? ''
+    await this.state.waitForSessionCommits(request.sessionId)
+    const scope = this.displayScope(request.sessionId)
+    const { output, helperMessageId, helperExtras } = await this.renderDisplayDraft(request, scope)
+    return {
+      ...output,
+      ...(helperMessageId === undefined ? {} : { helper: helperSnapshotAt((await scope.helperSet(true)).base!, helperMessageId) }),
+      ...(helperExtras ? await scope.helperExtras() : {}),
+    }
+  }
+
+  /**
+   * 长历史首屏一次挂载几十个气泡：合并为一批共享绑定、资产、历史与变量的读取，卡面快照、
+   * 脚本库与世界书在响应中只出现一次，由客户端按引用重组。单项失败只影响该项。
+   */
+  async renderOutputTexts(request: TavernMethodRequests['renderOutputTexts']): Promise<TavernMethodResults['renderOutputTexts']> {
+    await this.state.waitForSessionCommits(request.sessionId)
+    const scope = this.displayScope(request.sessionId)
+    const drafts = await Promise.allSettled(request.items.map((item) => this.renderDisplayDraft({ sessionId: request.sessionId, ...item }, scope)))
+    const batch: TavernMethodResults['renderOutputTexts'] = { items: [] }
+    for (const result of drafts) {
+      if (result.status === 'rejected') {
+        batch.items.push({ ok: false, error: result.reason instanceof Error ? result.reason.message : String(result.reason) })
+        continue
+      }
+      const { output, helperMessageId, helperExtras } = result.value
+      // 两类共享部分已在草稿内成功加载过；这里只取同一份备忘结果。
+      if (helperMessageId !== undefined) batch.helperBase ??= (await scope.helperSet(true)).base!
+      if (helperExtras && !batch.helperScripts) Object.assign(batch, await scope.helperExtras())
+      batch.items.push({ ok: true, value: { ...output, ...(helperMessageId === undefined ? {} : { helperMessageId }), ...(helperExtras ? { helperExtras: true as const } : {}) } })
+    }
+    return batch
+  }
+
+  /** 同一批展示请求共享的只读加载：每类惰性读取一次，批内各气泡复用同一结果。 */
+  private displayScope(sessionId: string): DisplayScope {
+    const once = <T,>(load: () => Promise<T>) => { let value: Promise<T> | undefined; return () => (value ??= load()) }
     const settings = this.settingsScope.get()
+    const liveEvents = this.ctx.sessions.get(sessionId as Session['id'])?.snapshotEvents()
+    const binding = once(() => this.state.loadBinding(sessionId))
+    const helperSets = [once(() => loadHelperDisplaySet(this.ctx, this.state, sessionId, false)), once(() => loadHelperDisplaySet(this.ctx, this.state, sessionId, true))] as const
+    return {
+      sessionId, settings, liveEvents,
+      canSwipeGreeting: Boolean(liveEvents && !displaySessionHasUserMessage(liveEvents)),
+      binding,
+      assets: once(async () => {
+        const current = (await binding())!
+        const rules = await this.state.rulesFor(current)
+        const ws = await this.state.loadCharacter(current.cardId)
+        const persona = await this.state.resolvePersona(current.personaId)
+        const names = { char: ws ? characterPromptName(ws.card) : 'Assistant', user: persona?.name ?? DEFAULT_USER_NAME }
+        const story = await this.state.storyWorkspace(current.cardId, current.storyId)
+        return { rules, ws, persona, names, story }
+      }),
+      displayEvents: once(() => readDisplaySessionEvents(this.ctx, sessionId)),
+      helperSet: (withSnapshot) => helperSets[withSnapshot ? 1 : 0](),
+      helperExtras: once(async () => {
+        const storyId = (await binding())!.storyId!
+        return { helperScripts: await this.state.getSessionHelperScripts(sessionId, storyId), helperWorldbooks: await getHelperWorldbookContext(this.state, sessionId, storyId) }
+      }),
+    }
+  }
+
+  private async renderDisplayDraft(request: { sessionId: string; text: string; messageId?: number }, scope: DisplayScope): Promise<DisplayDraft> {
+    const text = request.text ?? ''
+    const { settings, liveEvents, canSwipeGreeting } = scope
     const whitelist = [...settings.cardNetworkWhitelist]
-    const session = this.ctx.sessions.get(request.sessionId as Session['id'])
-    const liveEvents=session?.snapshotEvents()
-    const canSwipeGreeting = Boolean(liveEvents && !displaySessionHasUserMessage(liveEvents))
-    const binding = await this.state.loadBinding(request.sessionId)
+    const binding = await scope.binding()
     if (!binding) {
       const presented = presentRenderedOutput(text, settings.interactiveCards)
-      return {
+      return { output: {
         ...presented,
         ...(presented.htmls.length ? {parts:splitTemplateDisplay(hideIncompleteHtml(stripOpaqueDisplayMeta(text)).text)} : {}),
         interactiveCards: settings.interactiveCards,
@@ -558,19 +646,15 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
         greetings: [] as string[],
         greetingIndex: 0,
         canSwipeGreeting: false,
-      }
+      } }
     }
     const allowHtml = settings.interactiveCards && binding.interactiveCards !== false
-    const rules = await this.state.rulesFor(binding)
-    const ws = await this.state.loadCharacter(binding.cardId)
-    const persona = await this.state.resolvePersona(binding.personaId)
-    const names = { char: ws ? characterPromptName(ws.card) : 'Assistant', user: persona?.name ?? DEFAULT_USER_NAME }
+    const { rules, ws, persona, names, story } = await scope.assets()
     // SillyTavern：先 substituteParams 再跑展示正则，开场白里的 {{user}} 才能被按名字匹配。
     let named = expandIdentityMacros(text, names)
     let templateParts: TemplateDisplayPart[] | undefined
     // 展示路径遇坏聊天书只降级（不整条渲染失败），但要在输出里留下可见标记与明确诊断。
     let chatBookCorrupt = false
-    const story = await this.state.storyWorkspace(binding.cardId, binding.storyId)
     const cached = request.messageId === undefined ? undefined : (await loadTemplateOutputs(story.fs,[request.messageId]))[String(request.messageId)]
     if (cached && cached.hash === templateTextHash(text)) {
       named = expandIdentityMacros(cached.text, names)
@@ -583,7 +667,7 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
     }
     else if (hasEjs(named)) {
       // 只有未物化 EJS 才需要核对开场白事件；普通历史气泡不再重复读取完整会话。
-      const displayEvents=await readDisplaySessionEvents(this.ctx,request.sessionId)
+      const displayEvents=await scope.displayEvents()
       const greeting = request.messageId !== undefined && isTavernGreetingEvent(displaySessionEventAt(displayEvents,request.messageId)??{type:''})
       if (request.messageId !== undefined && !greeting) throw new Error('该回复的模板未成功提交或已被编辑；请查看触发日志，不会在刷新时重新执行写入')
       // 开场白/独立展示没有楼层，仅执行临时副本；浏览器传入文本永远不能落盘变量。
@@ -608,7 +692,7 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
     // 机读 opener 与未完成卡面可能在前文；只读已提交模板快照，不能借续写重跑旧模板。
     const messageId=request.messageId
     if(messageId!==undefined){
-      const events=liveEvents??await readDisplaySessionEvents(this.ctx,request.sessionId)
+      const events=liveEvents??await scope.displayEvents()
       // 续写只沿实际来源读取快照；冷启动也不展开其他楼层的正文数据块。
       const outputs=await loadTemplateOutputs(story.fs,continuationDisplaySources(events,messageId,text).map(event=>event.seq))
       const continued=continuationDisplayText(events,messageId,text,named,event=>{
@@ -654,14 +738,18 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
     const greetings = (ws ? cardGreetingVariants(ws.card.firstMes, ws.card.alternateGreetings) : []).map((g) =>
       expandIdentityMacros(g, names),
     )
-    return {
+    // 纯文本消息也承载后台脚本发布的选项，但不应为历史中的每个气泡重复传输完整消息与变量快照。
+    // 卡面快照与脚本库、世界书只在这里校验能否读取；组装时引用批次共享的同一份结果。
+    const helperMessageId = allowHtml && messageId !== undefined && htmls.length
+      ? (await scope.helperSet(true)).context(messageId).currentMessageId : undefined
+    const helperContext = allowHtml && messageId !== undefined && !htmls.length
+      ? (await scope.helperSet(false)).context(messageId) : undefined
+    const helperExtras = htmls.length > 0 && messageId !== undefined
+    if (helperExtras) await scope.helperExtras()
+    return { helperMessageId, helperExtras, output: {
       ...(parts === undefined ? {} : { parts }),
       ...(regexDiagnostics ? { regexDiagnostics } : {}),
-      // 纯文本消息也承载后台脚本发布的选项，但不应为历史中的每个气泡重复传输完整消息与变量快照。
-      ...(allowHtml && request.messageId !== undefined ? htmls.length
-        ? {helper:await getHelperSnapshot(this.ctx,this.state,request.sessionId,request.messageId)}
-        : {helperContext:await getHelperDisplayContext(this.ctx,this.state,request.sessionId,request.messageId)} : {}),
-      ...(htmls.length && request.messageId !== undefined ? {helperScripts:await this.state.getSessionHelperScripts(request.sessionId,binding.storyId!),helperWorldbooks:await getHelperWorldbookContext(this.state,request.sessionId,binding.storyId!)} : {}),
+      ...(helperContext ? { helperContext } : {}),
       html: htmls[0] ?? null,
       htmls,
       // 坏聊天书时在展示正文尾部追加可见降级标记（不写日志、不改历史，修好后自动消失）。
@@ -674,11 +762,11 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
       canSwipeGreeting,
       userName: names.user,
       characterName: names.char,
-    }
+    } }
   }
 
   async getHelperEventState(request:TavernMethodRequests['getHelperEventState']):Promise<TavernMethodResults['getHelperEventState']>{
-    await this.state.waitForSessionTasks(request.sessionId)
+    await this.state.waitForSessionCommits(request.sessionId)
     return getHelperEventState(this.ctx,this.state,request)
   }
   openHelperFrame(request:TavernMethodRequests['openHelperFrame']):Promise<TavernMethodResults['openHelperFrame']>{
@@ -688,11 +776,13 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
     closeHelperFrame(this.state,request)
   }
   async getHelperSnapshot(request: {sessionId:string;messageId:number}): Promise<TavernMethodResults['getHelperSnapshot']> {
-    await this.state.waitForSessionTasks(request.sessionId)
+    await this.state.waitForSessionCommits(request.sessionId)
     return getHelperSnapshot(this.ctx,this.state,request.sessionId,request.messageId)
   }
+  // MVU 准备与提交在剧情锁内经楼层 WAL 写入，只需等楼层提交；不等空闲记忆维护的辅助请求，
+  // 否则客户端 20 秒请求超时会把正常排队误报为失败，状态栏也要等维护结束才更新。
   async prepareHelperMvuJob(request:TavernMethodRequests['prepareHelperMvuJob']):Promise<TavernMethodResults['prepareHelperMvuJob']>{
-    await this.state.waitForSessionTasks(request.sessionId)
+    await this.state.waitForSessionCommits(request.sessionId)
     return prepareHelperMvuJob(this.ctx,this.state,request)
   }
   async enableHelperMvu(request:TavernMethodRequests['enableHelperMvu']):Promise<TavernMethodResults['enableHelperMvu']>{
@@ -704,11 +794,11 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
     return abandonHelperMvu(this.state,request)
   }
   async commitHelperMvuJob(request:TavernMethodRequests['commitHelperMvuJob']):Promise<TavernMethodResults['commitHelperMvuJob']>{
-    await this.state.waitForSessionTasks(request.sessionId)
+    await this.state.waitForSessionCommits(request.sessionId)
     return commitHelperMvuJob(this.ctx,this.state,request)
   }
   async getHelperScriptBundle(request:{sessionId:string}):Promise<TavernMethodResults['getHelperScriptBundle']> {
-    await this.state.waitForSessionTasks(request.sessionId)
+    await this.state.waitForSessionCommits(request.sessionId)
     const result=await getHelperScriptBundle(this.ctx,this.state,request.sessionId)
     return result.snapshot?{...result,worldbooks:await getHelperWorldbookContext(this.state,request.sessionId,result.storyId)}:result
   }
@@ -752,7 +842,7 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
   }
 
   async getFloorUserMessage(request: { sessionId: string; messageId: string }): Promise<TavernMethodResults['getFloorUserMessage']> {
-    await this.state.waitForSessionTasks(request.sessionId)
+    await this.state.waitForSessionCommits(request.sessionId)
     return getFloorUserMessage(this.floorDeps(), request.sessionId, request.messageId)
   }
 
@@ -763,7 +853,7 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
   }
 
   async getFloorAssistantMessage(request: { sessionId: string; messageId: string }): Promise<TavernMethodResults['getFloorAssistantMessage']> {
-    await this.state.waitForSessionTasks(request.sessionId)
+    await this.state.waitForSessionCommits(request.sessionId)
     return getFloorAssistantMessage(this.floorDeps(), request.sessionId, request.messageId)
   }
 

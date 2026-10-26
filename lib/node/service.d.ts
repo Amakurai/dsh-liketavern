@@ -173,7 +173,7 @@ export declare class TavernService extends TypertRemoteService implements Tavern
         sessionId: string;
         messageId: string;
     }): Promise<TavernMethodResults['getGreetingSwipe']>;
-    /** 分支兄弟导航是只读查询：等排队中的楼层任务落定即可，不进串行队列。 */
+    /** 分支兄弟导航是只读查询：等排队中的楼层任务落定即可，不进串行队列，也不等空闲记忆维护。 */
     getFloorSiblings(request: {
         sessionId: string;
         messageId?: string;
@@ -184,6 +184,14 @@ export declare class TavernService extends TypertRemoteService implements Tavern
         text: string;
         messageId?: number;
     }): Promise<TavernMethodResults['renderOutputText']>;
+    /**
+     * 长历史首屏一次挂载几十个气泡：合并为一批共享绑定、资产、历史与变量的读取，卡面快照、
+     * 脚本库与世界书在响应中只出现一次，由客户端按引用重组。单项失败只影响该项。
+     */
+    renderOutputTexts(request: TavernMethodRequests['renderOutputTexts']): Promise<TavernMethodResults['renderOutputTexts']>;
+    /** 同一批展示请求共享的只读加载：每类惰性读取一次，批内各气泡复用同一结果。 */
+    private displayScope;
+    private renderDisplayDraft;
     getHelperEventState(request: TavernMethodRequests['getHelperEventState']): Promise<TavernMethodResults['getHelperEventState']>;
     openHelperFrame(request: TavernMethodRequests['openHelperFrame']): Promise<TavernMethodResults['openHelperFrame']>;
     closeHelperFrame(request: TavernMethodRequests['closeHelperFrame']): Promise<void>;

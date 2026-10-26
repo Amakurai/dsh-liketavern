@@ -1,5 +1,5 @@
 /**
- * 角色发言条：头像 + 名字 + 正文。正文经 output/render 正则后，
+ * 角色发言条：头像 + 名字 + 正文（设置可关闭头像与名字，按原生样式只画正文）。正文经 output/render 正则后，
  * 再收起 UpdateVariable 等机读标签；整页 HTML 进沙箱 iframe，其余走 Markdown。
  *
  * 封面 iframe：允许 https 图片/字体；注入 ST getChatMessages/setChatMessage stub，
@@ -20,6 +20,8 @@ import { isFullHtmlDocument } from '../core/htmlFragment.js'
 import { cachedAvatar,invalidateSessionBinding } from './cache.js'
 import {BINDING_CHANGED_EVENT} from './actions.js'
 import { getTavernLocale, useT, useMarkdownLabels } from './i18n.js'
+import { useSpeakerHeader } from './displayPrefs.js'
+import { renderOutputBatched } from './renderBatch.js'
 import { Avatar, Btn, Err, IconBtn, Skeleton, useLoader, useToast } from './util.js'
 import type { TavernRemote } from './types.js'
 import { CARD_VARIABLE_STYLES } from './styles.js'
@@ -611,13 +613,20 @@ function SpeechBubbleSession(props: SpeechBubbleProps) {
   const { remote, sessionId, cardId, name, rawText, streaming, onSwipeGreeting } = props
   const t = useT()
   const markdownLabels = useMarkdownLabels()
+  const showSpeaker = useSpeakerHeader()
   // 头像走进程内缓存（key=cardId，TTL 60s）：同一会话的 N 条气泡不再各传一次 dataURL。
-  const avatar = useLoader(() => cachedAvatar(remote, cardId), [cardId], Boolean(cardId))
+  const avatar = useLoader(() => cachedAvatar(remote, cardId), [cardId], Boolean(cardId) && showSpeaker)
   const loaded = useLoader(
-    () => remote.renderOutputText({ sessionId, text: rawText, messageId: props.messageId }),
+    // 同时挂载的气泡合批请求，长历史首屏不再逐条回传整段快照（见 renderBatch.ts）。
+    () => renderOutputBatched(remote, { sessionId, text: rawText, messageId: props.messageId }),
     [sessionId, rawText, props.messageId, props.interactiveCards,props.bindingRevision],
     Boolean(rawText) && !streaming,
   )
+  // 刚结束流式的气泡在首个 output/render 回包前沿用流式展示，不收成骨架屏再展开；
+  // 回包（成功或失败）后交回常规投影。历史消息首屏仍用骨架，避免先闪未处理原文。
+  const streamHandoff=useRef(false)
+  if(streaming)streamHandoff.current=true
+  else if(loaded.state.status==='ready'||loaded.state.status==='error')streamHandoff.current=false
   const knownCharacterRevision=useRef<string|undefined>(undefined)
   useEffect(()=>{
     const revision=props.characterRevision
@@ -721,8 +730,9 @@ function SpeechBubbleSession(props: SpeechBubbleProps) {
   // 封面 iframe；正文若已随抽取变空，回退原始文本，对齐全局关闭的「纯文本显示」。
   const interactive =
     props.interactiveCards ?? (rendered.state.status === 'ready' ? rendered.state.value.interactiveCards : true)
-  const continuation=useContinuationStream(streaming?props.streamSource:undefined,props.turn,props.messageId,rawText)
-  const streamDisplay = useMemo(() => streaming ? presentStreamingOutput(continuation.text, interactive) : null, [streaming, continuation.text, interactive])
+  const handoffActive=!streaming&&rendered.state.status==='loading'&&streamHandoff.current
+  const continuation=useContinuationStream(streaming||handoffActive?props.streamSource:undefined,props.turn,props.messageId,rawText)
+  const streamDisplay = useMemo(() => (streaming||handoffActive) ? presentStreamingOutput(continuation.text, interactive) : null, [streaming, handoffActive, continuation.text, interactive])
   const text =
     !streaming && rendered.state.status === 'ready'
       ? interactive || rendered.state.value.text || rendered.state.value.parts !== undefined
@@ -794,6 +804,12 @@ function SpeechBubbleSession(props: SpeechBubbleProps) {
       onComplete={()=>{}}
       onFailure={error=>setLifecycleError(displayFailure(error,t))}
       onSwipe={swipeGreeting}/>)
+  }else if(rendered.state.status==='loading'&&streamHandoff.current){
+    const handoff=streamDisplay??presentStreamingOutput(rawText,interactive)
+    if(handoff.text||!handoff.pendingHtml)projectionNodes.push(<MarkdownText key="handoff-text" text={handoff.text||' '} streaming={false} labels={markdownLabels} fileMentions={props.fileMentions}/>)
+    if(handoff.pendingHtml)projectionNodes.push(<div key="handoff-card" role="status">
+      <span className="dsh-tavern-muted">{t('speech.cardPending')}</span><Skeleton height={48}/>
+    </div>)
   }else if(rendered.state.status!=='ready'){
     projectionNodes.push(!streaming&&rendered.state.status==='loading'&&failedProjection.current!==projectionIdentity
       ? <Skeleton key="loading" height={48}/>
@@ -812,13 +828,13 @@ function SpeechBubbleSession(props: SpeechBubbleProps) {
   }
 
   return (
-    <div className="dsh-tavern-speech dsh-tavern-rise">
-      <Avatar url={avatarUrl} name={name} size={40} className="dsh-tavern-speechAvatar" />
+    <div className={`dsh-tavern-speech dsh-tavern-rise${showSpeaker?'':' is-plain'}`}>
+      {showSpeaker&&<Avatar url={avatarUrl} name={name} size={40} className="dsh-tavern-speechAvatar" />}
       <div className="dsh-tavern-speechBody">
-        <div className="dsh-tavern-speechName">{name}</div>
+        {showSpeaker&&<div className="dsh-tavern-speechName">{name}</div>}
         <Err message={swipeError} />
         <Err message={lifecycleError} />
-        {streaming&&continuation.error&&<Err message={t('speech.continuationFailed',{error:continuation.error})}/>}
+        {(streaming||handoffActive)&&continuation.error&&<Err message={t('speech.continuationFailed',{error:continuation.error})}/>}
         {loaded.state.status === 'error'&&<div>
           <Err message={t('speech.renderFailed',{error:loaded.state.message})}/>
           <Btn onClick={loaded.reload}>{t('speech.retryRender')}</Btn>
@@ -832,11 +848,12 @@ function SpeechBubbleSession(props: SpeechBubbleProps) {
         {props.media}
         {!streaming&&loaded.state.status==='ready'&&rendered.state.status==='ready'&&(rendered.state.value.helper??rendered.state.value.helperContext)&&<ScriptChoices sessionId={sessionId} context={(rendered.state.value.helper??rendered.state.value.helperContext)!}/>}
       </div>
-      <div className="dsh-tavern-speechCopy">
+      {/* 原生样式没有标题行可承载浮动复制钮，会压住首行正文；宿主回合尾操作栏自带复制。 */}
+      {showSpeaker&&<div className="dsh-tavern-speechCopy">
         <IconBtn label={t('speech.copy')} onClick={() => void onCopy()}>
           <IconCopyOutlineMedium />
         </IconBtn>
-      </div>
+      </div>}
       {toast.node}
     </div>
   )

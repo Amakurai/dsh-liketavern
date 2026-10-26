@@ -20,6 +20,12 @@ export interface HelperSnapshot {
   scopes: HelperScopes
   writable: boolean
 }
+/** 一批展示气泡共用的快照公共部分；各气泡只差 currentMessageId。 */
+export type HelperSnapshotBase = Omit<HelperSnapshot, 'currentMessageId'>
+/** 由共享公共部分派生单个气泡快照：messages/scopes 共用引用，字段顺序与逐条快照一致。 */
+export function helperSnapshotAt(base: HelperSnapshotBase, currentMessageId: number): HelperSnapshot {
+  return { storyId: base.storyId, historyRevision: base.historyRevision, currentMessageId, writable: base.writable, scopes: base.scopes, messages: base.messages }
+}
 /**
  * 普通文本气泡只需这些不可写身份字段来匹配脚本选项并发送展示事件。
  * 完整消息、变量和写能力只随真正的 iframe 卡面传输，避免历史列表按气泡重复回传。

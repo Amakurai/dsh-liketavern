@@ -61,7 +61,8 @@ async function compute(request: typeof workerData):Promise<void> {
     const { kind, input } = request
     const budget: TemplateExecutionBudget = request.budget ?? templateExecutionBudget(Math.max(measureTemplateJson(input),
       input.replay ? measureTemplateReplayWork(input.replay) : 0,
-      input.templateContinuation?.replay ? measureTemplateReplayWork(input.templateContinuation.replay) : 0))
+      input.templateContinuation?.replay ? measureTemplateReplayWork(input.templateContinuation.replay) : 0), undefined,
+      kind === 'render' || kind === 'display' ? 'display' : 'template')
     const needsTemplates = kind === 'template' || kind === 'wi' && input.templates && input.entries.some((e: {templateCondition?: string}) => e.templateCondition)
       || kind === 'assemble' && input.templates
       && (input.templateContinuation || input.templates.historyIdentities?.length

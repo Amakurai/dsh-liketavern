@@ -4,6 +4,7 @@
  */
 import { expect, it } from 'vitest'
 import { emptyTemplateScopes, type TemplateContext } from '../../src/core/template.js'
+import { templateExecutionBudget } from '../../src/core/templateBudget.js'
 import { isolated } from '../../src/node/isolated.js'
 import { TemplateSandbox } from '../../src/node/templateSandbox.js'
 
@@ -41,7 +42,8 @@ it('A6：内存压力下的失控脚本仍显式失败（观察耗时）', async
   const cpu = await run('<% while(true) {} %>', 8000)
   expect(cpu.ok).toBe(false)
   expect(cpu.message).toMatch(/计算超时/)
-  expect(cpu.ms).toBeLessThan(3000)
+  // QuickJS 自身的阶段期限（小输入 4s）先于宿主 8s 显式期限终止死循环。
+  expect(cpu.ms).toBeLessThan(templateExecutionBudget(0).sandboxMs + 2000)
   const bomb = await run("<% const a=[]; for(;;) a.push('x'.repeat(1000000)) %>", 8000)
   expect(bomb.ok).toBe(false)
   console.info(JSON.stringify({ probe: 'memory-classification', cpuMs: cpu.ms, cpuMessage: cpu.message, bombMs: bomb.ms, bombMessage: bomb.message }))

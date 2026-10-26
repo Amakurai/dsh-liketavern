@@ -155,6 +155,8 @@ export declare const TavernConfigSchema: z<Schemastery.ObjectS<NoInfer<{
     }>>, "defined">;
     /** 交互卡全局开关（关闭则一律纯文本渲染）。 */
     interactiveCards: z<boolean, boolean, "defined">;
+    /** 角色消息上方显示头像与卡名；默认关闭，按宿主原生回复样式只画正文（仍套 output/render 与交互卡）。 */
+    speakerHeader: z<boolean, boolean, "defined">;
     /** 删除角色卡时连同其内嵌世界书一起删除；关闭则删卡前把内嵌书抢救到世界书库。 */
     cascadeDeleteEmbeddedBook: z<boolean, boolean, "defined">;
     /** 交互卡脚本信任的主机（放宽 connect-src 与 script-src；`*` = 全部放行。img/font 默认已放行 https）。 */
@@ -311,6 +313,8 @@ export declare const TavernConfigSchema: z<Schemastery.ObjectS<NoInfer<{
     }>>, "defined">;
     /** 交互卡全局开关（关闭则一律纯文本渲染）。 */
     interactiveCards: z<boolean, boolean, "defined">;
+    /** 角色消息上方显示头像与卡名；默认关闭，按宿主原生回复样式只画正文（仍套 output/render 与交互卡）。 */
+    speakerHeader: z<boolean, boolean, "defined">;
     /** 删除角色卡时连同其内嵌世界书一起删除；关闭则删卡前把内嵌书抢救到世界书库。 */
     cascadeDeleteEmbeddedBook: z<boolean, boolean, "defined">;
     /** 交互卡脚本信任的主机（放宽 connect-src 与 script-src；`*` = 全部放行。img/font 默认已放行 https）。 */
@@ -468,6 +472,7 @@ export declare const Config: z<Schemastery.ObjectS<NoInfer<{
         characterLorebookId: z<string, string, "defined">;
     }>>>, "volatile-defined">;
     interactiveCards: z<boolean, boolean, "volatile-defined">;
+    speakerHeader: z<boolean, boolean, "volatile-defined">;
     cascadeDeleteEmbeddedBook: z<boolean, boolean, "volatile-defined">;
     cardNetworkWhitelist: z<NoInfer<string[]>, NoInfer<string[]>, "volatile-defined">;
     triggerLogMax: z<number, number, "volatile-defined">;
@@ -619,6 +624,7 @@ export declare const Config: z<Schemastery.ObjectS<NoInfer<{
         characterLorebookId: z<string, string, "defined">;
     }>>>, "volatile-defined">;
     interactiveCards: z<boolean, boolean, "volatile-defined">;
+    speakerHeader: z<boolean, boolean, "volatile-defined">;
     cascadeDeleteEmbeddedBook: z<boolean, boolean, "volatile-defined">;
     cardNetworkWhitelist: z<NoInfer<string[]>, NoInfer<string[]>, "volatile-defined">;
     triggerLogMax: z<number, number, "volatile-defined">;
@@ -661,6 +667,7 @@ export interface TavernConfig {
     };
     defaults: TavernSessionDefaults;
     interactiveCards: boolean;
+    speakerHeader: boolean;
     cascadeDeleteEmbeddedBook: boolean;
     cardNetworkWhitelist: string[];
     triggerLogMax: number;

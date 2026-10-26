@@ -2,7 +2,7 @@
  * 设置面板分区：二级子导航拆成八组——界面 / 默认配置 / 提示词 / 采样与思考 / 世界书引擎 / 记忆 / 脚本 / 卡片与数据。
  * 每组一个 Section（页面头 + 设置行 + 自己的 SaveBar），一次只看一组，不再一页堆到底。
  * 排版对齐通用设置：标题 + 说明 + 右侧 36px 胶囊控件；瞬时保存反馈走 useToast，上下文错误用 Err。
- * 「界面」组只有语言一项：选择即写设置并 setTavernLocale 立即生效，不走 SaveBar。
+ * 「界面」组有语言与消息头像两项：改动即写设置并立即生效，不走 SaveBar。
  */
 import { ScriptSettings } from './scripts.js'
 import { CardDataSettings } from './cardData.js'
@@ -10,6 +10,7 @@ import { DraftScope, useDraftGuard } from '../drafts.js'
 import { useDraftRestored, useDraftState } from '../draftPersistence.js'
 import { useEffect, useId, useRef, useState } from 'react'
 import { MAX_PRESET_STOP_CHARS, MAX_PRESET_STOP_SEQUENCES } from '../../core/presetSampling.js'
+import { setSpeakerHeader } from '../displayPrefs.js'
 import { setTavernLocale, useT } from '../i18n.js'
 import { DEFAULT_PROMPT_PREFERENCES, EMPTY_SESSION_DEFAULTS, type PresetSummary, type TavernRemote, type TavernSettings } from '../types.js'
 import { Btn, CheckChips, Err, LineListInput, Muted, NumInput, SaveBar, Section, Select, SettingsRow, Skeleton, Tabs, Toggle, runAsync, useLoader, useToast } from '../util.js'
@@ -126,6 +127,28 @@ export function SettingsSection(props: { remote: TavernRemote }) {
     })
   }
 
+  /** 头像与卡名开关：与语言同样先本地生效再持久化，失败回退。 */
+  const changeSpeakerHeader = (speakerHeader: boolean) => {
+    if (!draft || pending.current || speakerHeader === (draft.speakerHeader === true)) return
+    const prev = draft.speakerHeader === true
+    setDraft({ ...draft, speakerHeader })
+    setSpeakerHeader(speakerHeader)
+    void run(async () => {
+      try {
+        const r = await remote.updateSettings({ patch: { speakerHeader } })
+        if (!r.ok) throw new Error(r.error.message)
+        const saved = r.value.settings.speakerHeader === true
+        setBaseline((current) => current ? { ...current, speakerHeader: saved } : current)
+        setDraft((current) => current ? { ...current, speakerHeader: saved } : current)
+        setSpeakerHeader(saved)
+      } catch (error) {
+        setDraft((current) => (current ? { ...current, speakerHeader: prev } : current))
+        setSpeakerHeader(prev)
+        throw new Error(`${t('settings.interface.speakerHeaderFailed')}: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    })
+  }
+
   if (state.status === 'loading')
     return (
       <Section title={t('settings.title')}>
@@ -199,6 +222,9 @@ export function SettingsSection(props: { remote: TavernRemote }) {
                   { value: 'zh', label: '中文' },
                 ]}
               />
+            </SettingsRow>
+            <SettingsRow title={t('settings.interface.speakerHeader')} description={t('settings.interface.speakerHeaderDesc')}>
+              <Toggle checked={draft.speakerHeader === true} onChange={changeSpeakerHeader} />
             </SettingsRow>
           </Section>
         )}

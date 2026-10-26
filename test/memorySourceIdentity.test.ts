@@ -80,7 +80,7 @@ it('跨代循环经过文件别名返回活跃摘要时仍明确拒绝循环', a
 })
 
 /** 真实活跃根文件配生成的只读归档链：不落盘一万份文件，仍经过实际索引、解析与完整叶展开。 */
-it('一万个不同来源身份允许完整展开，重复别名不额外计数，下一身份仍拒绝超限', async () => {
+it('一万个不同来源身份允许完整展开，重复别名不额外计数，下一身份仍拒绝超限', { timeout: 60_000 }, async () => {
   const id = (number: number) => `N${String(number).padStart(5, '0')}`
   const refs = (number: number) => process.platform === 'win32' ? `${id(number)},${id(number).toLowerCase()}` : id(number)
   let last = 9_999

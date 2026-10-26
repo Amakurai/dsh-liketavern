@@ -46,5 +46,6 @@ export declare function noteAttemptedMarker(attempted: Map<string, string>, key:
  * agent 面注册：turn 结束（status → idle）且本会话工作区有压缩标记、或有记忆还没有检索别名时，runMaintenance 执行维护。
  * runMaintenance 在 turn-driving 时会同步 throw（与本事件的 idle 之间存在输入竞态）——
  * 任务未执行则保留标记待下次 idle；失败保留 pending，但每个已结束轮次只尝试一次。
+ * 别名补全遇到新输入立即取消让路，不计为本轮尝试；压缩照常完成。
  */
 export declare function registerMemoryMaintenance(ctx: Context, state: TavernState, llm: LlmRuntime | undefined): void;

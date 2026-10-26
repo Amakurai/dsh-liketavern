@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { createContext, runInContext } from 'node:vm'
 import { webcrypto } from 'node:crypto'
 import { buildCardSrcDoc, CARD_BRIDGE_SOURCE, parseCardBridgeMessage, tavernCardBridgeScript } from '../src/core/cardFrame.js'
+import type { HelperSnapshot } from '../src/core/helperRuntime.js'
 
 /** 可控的浏览器帧队列：测试同一帧合并与卸载取消，不用真实计时器制造竞态。 */
 function animationFrames() {
@@ -376,4 +377,57 @@ it('受限滚动区的后代矩形按容器裁切，允许外溢时仍可扩展'
   panel.style.overflowY='visible';callbacks.get('load')?.();frames.flush()
   expect(postMessage.mock.calls.map(([message])=>message).filter(message=>message.action==='resize').map(message=>message.height)).toEqual([120,920])
   runInContext('window.__dshTavernBridgeCleanup()',context)
+})
+
+/** 长历史卡面内嵌快照：共享对象只序列化一次，默认页集合省略后在卡面代码运行前逐字段还原。 */
+describe('卡面内嵌快照', () => {
+  const page = (message: string, data: Record<string, unknown>) => ({ message, data, extra: {} })
+  function factorySnapshot(): HelperSnapshot {
+    const first = { stat_data: { 时间: '第1天' } }, second = { stat_data: { 时间: '第2天' } }
+    return {
+      storyId: 'story', historyRevision: 'revision', currentMessageId: 1, writable: true,
+      scopes: { '["chat",""]': { 好感: 3 } },
+      messages: [
+        { message_id: 0, name: '灯塔', role: 'assistant', is_hidden: false, message: '开场白', data: first, extra: {},
+          swipe: { active: 1, pages: [page('备选开场', {}), page('开场白', first)] } },
+        { message_id: 1, name: '旅人', role: 'user', is_hidden: false, message: '你好', data: {}, extra: {}, swipe: { active: 0, pages: [page('你好', {})] } },
+        { message_id: 2, name: '灯塔', role: 'assistant', is_hidden: false, message: '<b>欢迎</b> ', data: second, extra: { source: 'factory' },
+          swipe: { active: 0, pages: [{ message: '<b>欢迎</b> ', data: second, extra: { source: 'factory' } }] } },
+      ],
+    }
+  }
+  /** 只执行桥脚本中的配置与还原段，得到卡面代码实际看到的快照。 */
+  function embedded(snapshot: HelperSnapshot): { cfg: { helperSnapshot: HelperSnapshot }; script: string } {
+    const script = tavernCardBridgeScript({ greetings: [], greetingIndex: 0, helperSnapshot: snapshot })
+    const start = script.indexOf('var cfg = '), end = script.indexOf('// 先固定本次运行时')
+    const cfg = runInContext(script.slice(start, end) + ';cfg', createContext({ JSON })) as { helperSnapshot: HelperSnapshot }
+    return { cfg, script }
+  }
+
+  it('还原后与逐字段内嵌的旧快照完全相同，默认页的数据是独立副本', () => {
+    const snapshot = factorySnapshot()
+    const { cfg, script } = embedded(snapshot)
+    expect(cfg.helperSnapshot).toEqual(JSON.parse(JSON.stringify(snapshot)))
+    expect(Object.keys(cfg.helperSnapshot)).not.toContain('swipeDefaults')
+    const restored = cfg.helperSnapshot.messages[2]!
+    expect(restored.swipe!.pages[0]!.data).not.toBe(restored.data)
+    restored.swipe!.pages[0]!.data.stat_data = '改写'
+    expect(restored.data).toEqual({ stat_data: { 时间: '第2天' } })
+    // 多页集合原样保留；默认页正文只内嵌一次，转义规则不变。
+    expect(script.split('备选开场').length - 1).toBe(1)
+    expect(script.split('\\u003cb>欢迎').length - 1).toBe(1)
+    expect(script).not.toContain(' ')
+  })
+
+  it('批量展示共用 messages/scopes 时多个卡面只序列化一次，内容变化后重新序列化', () => {
+    const snapshot = factorySnapshot()
+    let serialized = 0
+    Object.defineProperty(snapshot.scopes, 'toJSON', { enumerable: false, value() { serialized++; return { '["chat",""]': { 好感: 3 } } } })
+    for (let id = 0; id < 3; id++) embedded({ ...snapshot, currentMessageId: id })
+    expect(serialized).toBe(1)
+    const { cfg } = embedded({ ...snapshot, currentMessageId: 2 })
+    expect(cfg.helperSnapshot.currentMessageId).toBe(2)
+    expect(serialized).toBe(1)
+    expect(embedded({ ...snapshot, scopes: { '["chat",""]': { 好感: 9 } } }).cfg.helperSnapshot.scopes).toEqual({ '["chat",""]': { 好感: 9 } })
+  })
 })

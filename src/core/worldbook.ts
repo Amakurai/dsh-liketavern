@@ -138,7 +138,7 @@ function compileKey(
   if (trimmed.length > MAX_WI_KEY_CHARS) return null
   const literal = REGEX_KEY_RE.exec(trimmed)
   if (literal) {
-    // 灾难性回溯构造（(a+)+$ 类）在主事件循环上会冻结整个 host：与非法正则同口径，永不命中
+    // 必然指数回溯的构造（(a+)+$ 类）与非法正则同口径，永不命中；其余病态输入由 worker 期限终止
     if (findUnsafeRegexConstruct(literal[1]!) !== null) return null
     try {
       const re = new RegExp(literal[1]!, literal[2] ?? '')

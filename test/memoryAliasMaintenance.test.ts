@@ -1,7 +1,8 @@
 /**
  * 空闲时补记忆检索别名的集成回归：真实 AgentLoop 的维护通道与剧情文件，模型用手写的工厂适配器代替。
  * 验证：一次空闲只发一次辅助请求，成功后换说法的问法能检索到；截断、取消、出错不保存任何东西并在下一个结束的轮次重试；
- * 回复不合格式时不反复请求；压缩优先于别名；设置关闭后不发请求。
+ * 回复不合格式时不反复请求；压缩优先于别名；设置关闭后不发请求；用户接话时别名让路而压缩照常完成；
+ * 维护进行中展示屏障只等楼层提交。
  */
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -204,4 +205,80 @@ it('设置关闭后不发送别名请求，已有别名继续生效', async () =
   expect(await found(ws, '谁在偷药')).toEqual([PILLS])
   await idle()
   expect(requests).toHaveLength(0)
+})
+
+it('空闲维护的辅助请求进行中，展示屏障只等楼层提交，不等维护结束', async () => {
+  const { ws } = await setup()
+  await ws.memory.write({ body: PILLS })
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  replies = [async function* () {
+    entered.resolve()
+    await release.promise
+    yield { type: 'text-delta', text: '1: 药、失窃' } as StreamChunk
+    yield { type: 'finish', reason: { kind: 'stop' } } as StreamChunk
+  }]
+  // 模拟 turn/end 的楼层提交先入队，随后进入空闲触发维护。
+  const commit = state.enqueueSessionTask(agent.id, async () => 'committed')
+  turn++
+  agent.session.append('turn/start', { turn }); agent.session.append('turn/end', { turn, reason: { kind: 'completed' } })
+  ctx.emit('agent/status', { agent, status: 'idle' })
+  await entered.promise
+  expect(await commit).toBe('committed')
+  let all = false
+  void state.waitForSessionTasks(agent.id).then(() => { all = true })
+  await state.waitForSessionCommits(agent.id)
+  expect(all).toBe(false)
+  release.resolve()
+  await state.waitForSessionTasks(agent.id); await agent.whenIdle()
+  expect(all).toBe(true)
+  expect(await found(ws, '谁在偷药')).toEqual([PILLS])
+})
+
+it('别名补全进行中用户接话时立即让路，不保存半截结果；同一结束轮次回到空闲后重新补', async () => {
+  const { ws } = await setup()
+  await ws.memory.write({ body: PILLS })
+  const entered = Promise.withResolvers<void>()
+  replies = [async function* () {
+    entered.resolve()
+    // 工厂适配器故意忽略取消信号且永不返回：让路必须靠取消本身结束维护。
+    await new Promise(() => {})
+    yield { type: 'finish', reason: { kind: 'stop' } } as StreamChunk
+  }]
+  turn++
+  agent.session.append('turn/start', { turn }); agent.session.append('turn/end', { turn, reason: { kind: 'completed' } })
+  ctx.emit('agent/status', { agent, status: 'idle' })
+  await entered.promise
+  ctx.emit('agent/inbox/inserted', { agent, message: { id: 'user-reply', role: 'user', content: [{ type: 'text', text: '我回来了' }] } as never })
+  await state.waitForSessionTasks(agent.id); await agent.whenIdle()
+  expect(requests).toHaveLength(1)
+  expect(requests[0]!.signal?.aborted).toBe(true)
+  expect(await ws.fs.exists('memory/aliases.json')).toBe(false)
+  // 输入若被撤回、会话回到空闲：同一结束轮次不算已尝试，重新补别名。
+  replies = [text('1: 药、失窃')]
+  ctx.emit('agent/status', { agent, status: 'idle' })
+  await state.waitForSessionTasks(agent.id); await agent.whenIdle()
+  expect(requests).toHaveLength(2)
+  expect(await found(ws, '谁在偷药')).toEqual([PILLS])
+})
+
+it('记忆压缩是容量保护，用户接话时不让路，照常归档', async () => {
+  const { ws } = await setup({ maxEntries: 1, compressBatch: 2 })
+  await ws.memory.write({ body: PILLS })
+  await ws.memory.write({ body: HE })
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  replies = [async function* () {
+    entered.resolve()
+    await release.promise
+    yield { type: 'text-delta', text: '止痛剂少了两箱；禾对合成蛋白过敏。' } as StreamChunk
+    yield { type: 'finish', reason: { kind: 'stop' } } as StreamChunk
+  }]
+  turn++
+  agent.session.append('turn/start', { turn }); agent.session.append('turn/end', { turn, reason: { kind: 'completed' } })
+  ctx.emit('agent/status', { agent, status: 'idle' })
+  await entered.promise
+  ctx.emit('agent/inbox/inserted', { agent, message: { id: 'user-reply', role: 'user', content: [{ type: 'text', text: '我回来了' }] } as never })
+  release.resolve()
+  await state.waitForSessionTasks(agent.id); await agent.whenIdle()
+  expect(requests[0]!.signal?.aborted).toBe(false)
+  expect((await ws.memory.list()).map((entry) => entry.body)).toEqual(['止痛剂少了两箱；禾对合成蛋白过敏。'])
 })

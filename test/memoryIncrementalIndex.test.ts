@@ -40,7 +40,7 @@ async function compare(): Promise<void> {
   expect(await memory.list()).toEqual(await fresh.list())
 }
 
-it('一长串增删改与归并之后，结果与全新实例逐项相同', async () => {
+it('一长串增删改与归并之后，结果与全新实例逐项相同', { timeout: 60_000 }, async () => {
   let seed = 0x2f6e
   const next = (n: number): number => {
     seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0

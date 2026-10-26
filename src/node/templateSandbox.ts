@@ -34,6 +34,9 @@ function sharedTextSegments(text:string):string[] {
   return segments
 }
 
+/** 一次 FFI 调用最多执行的微任务数；期限仍由批间检查与中断处理器共同保证。 */
+const PENDING_JOB_BATCH = 256
+
 let templateLibrarySource: string | undefined
 let templateFakerSource: string | undefined
 let templateRuntimeHash: string | undefined
@@ -68,6 +71,18 @@ const PROTOCOL_ENTRIES = ['__conditionState','__export','__exportMessageVariable
 const HARDEN_PROTOCOL = `(()=>{for(const name of ${JSON.stringify(PROTOCOL_ENTRIES)}){try{
 const value=globalThis[name];if(typeof value!=='function')continue;
 Object.defineProperty(globalThis,name,{value,writable:false,configurable:false})}catch{}}return undefined})()`
+/**
+ * @@if 状态的 toJSON 检查：每次新求值，只用 typeof、属性读取、for-in 与局部函数，不调用任何全局或原型方法，
+ * 模板替换 Object/JSON/Array 也不能让它漏检。一次调用走完整棵状态，代替逐节点句柄往返；
+ * 循环已由先行的 dump 拒绝，节点与深度上限沿用原口径。返回 0 通过、1 过大、2 含 toJSON。
+ */
+const CONDITION_STATE_CHECK = `(state)=>{let nodes=200000;
+const visit=(value,depth)=>{if(typeof value!=='object'||value===null)return 0;
+if(--nodes<0||depth>256)return 1;
+if(typeof value.toJSON==='function')return 2;
+for(const key in value){const found=visit(value[key],depth+1);if(found)return found}
+return 0};
+return visit(state,0)}`
 
 export class TemplateSandbox {
   private readonly renderedSources = new Map<string, string>()
@@ -96,6 +111,9 @@ export class TemplateSandbox {
   private readonly structuredArrayKeys=new Set<string>()
   /** 阶段 → 是否完全没有临时正则；任何非只读求值都会清空。 */
   private readonly regexStageEmpty=new Map<string,boolean>()
+  /** 每次可能运行 VM 代码的求值都会递增；@@if 末态快照仅在其后没有任何求值时作为下一条条件的起点。 */
+  private vmEpoch=0
+  private conditionSnapshot?:{epoch:number;state:string}
   private constructor(owner:Awaited<ReturnType<typeof createTemplateCheckpointVm>>, deadline: number, resourceChars:number,outputInputChars:number,runtimeIdentity:TemplateRuntimeIdentity) {
     this.owner=owner;this.vm = owner.vm;this.deadline=deadline;this.resourceChars=resourceChars;this.outputInputChars=outputInputChars
     this.runtimeIdentity=runtimeIdentity
@@ -357,6 +375,7 @@ export class TemplateSandbox {
 
   /** readonly 仅用于不改变沙箱状态的固定查询；其余求值都可能运行第三方代码并改动规则表。 */
   private evaluate(code: string, readonly = false): unknown {
+    this.vmEpoch++
     if (!readonly) this.regexStageEmpty.clear()
     const result = this.vm.evalCode(code)
     if (result.error) {
@@ -385,6 +404,7 @@ export class TemplateSandbox {
   /** 同 evaluateInput，但把完成值句柄留给调用方（渲染状态必须由宿主持有，不能经全局中转）。 */
   private evaluateHandle(code:string,input:unknown):QuickJSHandle {
     // 与 evaluate(code,false) 同语义：包装里会执行第三方代码，可能改动临时正则表，必须失效阶段缓存。
+    this.vmEpoch++
     this.regexStageEmpty.clear()
     const json=JSON.stringify(input)
     if(json.length>TEMPLATE_INPUT_MAX_CHARS) throw new Error('模板调用输入超过安全资源容量')
@@ -427,7 +447,7 @@ export class TemplateSandbox {
   /**
    * 宿主侧直接读取内部状态并在主线程比较：不再经过模板可命名的 __conditionState，
    * 也不使用 VM 内可被补丁的 JSON.stringify。vm.dump 走 JSON 语义会调用对象的 toJSON，
-   * 模板可借此让快照恒定；因此对 dump 结果里的每个对象节点回查句柄，带 toJSON 的状态直接拒绝。
+   * 模板可借此让快照恒定；因此 dump 后用新求值的纯语法检查遍历同一状态，带 toJSON 的状态直接拒绝。
    */
   private conditionState():string {
     // 读取属性会触发 getter/Proxy 等模板代码；与 evaluate 一致失效阶段缓存。
@@ -442,24 +462,32 @@ export class TemplateSandbox {
       let dumped:unknown
       try { dumped=this.vm.dump(object.value) }
       catch(error) { throw new Error(`@@if 条件状态读取失败：${error instanceof Error?error.message:String(error)}`) }
-      this.assertPlainState(object.value,dumped,0,{nodes:200_000})
+      this.assertPlainState(object.value)
       try { return JSON.stringify(dumped) }
       catch { throw new Error('@@if 条件状态不可序列化，拒绝求值') }
     } finally { object.value.dispose() }
   }
 
-  /** dump 结果里的对象节点必须没有 toJSON（含原型链），其键集合才是真实的可枚举自有属性。 */
-  private assertPlainState(handle:QuickJSHandle,dumped:unknown,depth:number,budget:{nodes:number}):void {
-    if(typeof dumped!=='object'||dumped===null) return
-    if(--budget.nodes<0||depth>256) throw new Error('@@if 条件状态过大，拒绝求值')
-    const toJson=this.vm.getProp(handle,'toJSON')
-    try { if(this.vm.typeof(toJson)==='function') throw new Error('@@if 条件状态含自定义 toJSON，拒绝求值') }
-    finally { toJson.dispose() }
-    for(const [key,value] of Object.entries(dumped)) {
-      if(typeof value!=='object'||value===null) continue
-      const child=this.vm.getProp(handle,Array.isArray(dumped)?Number(key):key)
-      try { this.assertPlainState(child,value,depth+1,budget) } finally { child.dispose() }
+  /** 状态里的对象节点必须没有 toJSON（含原型链），dump 的键集合才是真实的可枚举属性。 */
+  private assertPlainState(state:QuickJSHandle):void {
+    const check=this.vm.evalCode(CONDITION_STATE_CHECK)
+    if(check.error) {
+      const error:unknown=this.vm.dump(check.error)
+      check.error.dispose()
+      throw new Error(`@@if 条件状态读取失败：${JSON.stringify(error)}`)
     }
+    try {
+      const result=this.vm.callFunction(check.value,this.vm.undefined,state)
+      if(result.error) {
+        const error:unknown=this.vm.dump(result.error)
+        result.error.dispose()
+        throw new Error(`@@if 条件状态读取失败：${JSON.stringify(error)}`)
+      }
+      const code=this.vm.getNumber(result.value)
+      result.value.dispose()
+      if(code===1) throw new Error('@@if 条件状态过大，拒绝求值')
+      if(code!==0) throw new Error('@@if 条件状态含自定义 toJSON，拒绝求值')
+    } finally { check.value.dispose() }
   }
 
   private growResources(inputChars:number):void {
@@ -581,11 +609,14 @@ export class TemplateSandbox {
           if (pending.error) throw this.renderFailure(pending.error)
           throw new Error('EJS 模板计算超时')
         }
-        const result = this.vm.runtime.executePendingJobs(1)
+        // 成批执行微任务，批间复查期限；批内超期由中断处理器终止当前任务，不必逐个往返 FFI。
+        const result = this.vm.runtime.executePendingJobs(PENDING_JOB_BATCH)
         if (result.error) {
           const error: unknown = this.vm.dump(result.error)
           result.error.dispose()
-          throw new Error(`EJS 异步任务失败：${JSON.stringify(error)}`)
+          const message = JSON.stringify(error)
+          if (/interrupt/i.test(message) && Date.now() > this.deadline) throw new Error('EJS 模板计算超时')
+          throw new Error(`EJS 异步任务失败：${message}`)
         }
       }
       // 先读真实结果：期限已过但脚本已明确失败时必须报真实原因（OOM/内部错误），不能一律报超时。
@@ -714,9 +745,13 @@ export class TemplateSandbox {
   }
   /** 条件在 WI 预算和分组前求值；拒绝写变量，避免预选阶段产生未提交或重复副作用。 */
   condition(expression: string): boolean {
-    const before = this.conditionState()
+    // 上一条条件之后没有任何求值时，VM 状态未变，其末态快照即本条起点；连续的 WI 条件每条只取一次快照。
+    const cached = this.conditionSnapshot
+    const before = cached && cached.epoch === this.vmEpoch ? cached.state : this.conditionState()
     const result = this.render(`<%- Boolean(${expression}) %>`)
-    if (this.conditionState() !== before) throw new Error('@@if 条件必须只读，不能修改变量')
+    const after = this.conditionState()
+    if (after !== before) throw new Error('@@if 条件必须只读，不能修改变量')
+    this.conditionSnapshot = { epoch: this.vmEpoch, state: after }
     return result === 'true'
   }
   dispose(): void { this.vm.dispose() }

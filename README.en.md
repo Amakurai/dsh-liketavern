@@ -130,6 +130,7 @@ flowchart LR
 | Inspect or edit long-term memories | `Top character entry → Memory` or `Settings → Tavern → Memory` | **Selected Story**: Selecting an active story applies immediately; **Initial state** affects future stories only |
 | Configure regex rules and card script libraries | `Settings → Tavern → Regex`<br>`Settings → Tavern → Settings → Scripts` | Scoped to Global, Preset, or Character as selected |
 | Lock plugin UI language (Chinese / English) | `Settings → Tavern → Settings → Interface → Language` | Follows `dsh` host locale by default; manual overrides take effect immediately |
+| Show avatar and name on character messages | `Settings → Tavern → Settings → Interface → Character avatar and name` | Off by default: only the reply body is shown, like native host replies. On: the character avatar and card name appear above each message. Regex and interactive cards apply either way |
 | Inspect the exact payload sent to the model | `Top character entry → Prompt preview → Last request` | **Read-Only Diagnostic**: **Last request** shows the real captured payload; other tabs show static ST simulations |
 
 ### Prompt Projection & Sampling Behavior

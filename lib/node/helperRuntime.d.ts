@@ -1,6 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis';
 import type { SessionEvent } from '@deepseek-ai/dsh-session';
-import { type HelperDisplayContext, type HelperSnapshot } from '../core/helperRuntime.js';
+import { type HelperDisplayContext, type HelperSnapshot, type HelperSnapshotBase } from '../core/helperRuntime.js';
 import type { WorkspaceFs } from '../state/workspaceFs.js';
 import type { TavernState } from './state.js';
 import { type HelperScriptAsset, type HelperScriptBundle } from '../core/helperScripts.js';
@@ -17,6 +17,17 @@ export declare function helperHistoryOf(events: readonly SessionEvent[], names: 
     message: string;
 }[];
 export declare function helperHistoryRevision(history: ReturnType<typeof helperHistoryOf>): string;
+/**
+ * 同一次展示批次共享的剧情读视图：剧情锁内只读取、校验一次历史与变量，再按消息 seq 派生
+ * 各气泡的上下文或快照公共部分。逐条请求时每条都重读变量文件、重建整段消息列表，
+ * 长历史首屏会退化为 O(消息数²)。
+ */
+export interface HelperDisplaySet {
+    context(seq: number): HelperDisplayContext;
+    /** 仅 withSnapshot=true 时存在；各气泡只差 currentMessageId，messages/scopes 共用引用。 */
+    base?: HelperSnapshotBase;
+}
+export declare function loadHelperDisplaySet(ctx: Context, state: TavernState, sessionId: string, withSnapshot: boolean): Promise<HelperDisplaySet>;
 /**
  * 纯文本展示只返回剧情/历史身份与当前消息角色；仍在剧情锁内二次读取，
  * 与完整 HelperSnapshot 保持同一套绑定和历史修订校验，但不读取、复制变量表。

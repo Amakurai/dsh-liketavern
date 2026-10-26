@@ -4,8 +4,11 @@
  * 「新对话」却仍复用该会话，表现为永远卡在 Tavern。
  */
 
+import { isHostInjectedUserMessage } from './dshPrompt.js'
+
 export interface GreetingLogEvent {
   type: string
+  surfaceOp?: unknown
   data?: unknown
 }
 
@@ -31,7 +34,14 @@ export function isGreetingOnlyBlank(events: readonly GreetingLogEvent[]): boolea
 }
 
 export function sessionHasUserMessage(events: readonly GreetingLogEvent[]): boolean {
-  return events.some((event) => event.type === 'user/message')
+  return events.some((event) => {
+    if (event.type !== 'user/message') return false
+    if ('surfaceOp' in event && event.surfaceOp !== undefined && event.surfaceOp !== 'append') return false
+    if (event.data !== null && typeof event.data === 'object' && isHostInjectedUserMessage(event.data as { role?: string; source?: { kind?: string } })) {
+      return false
+    }
+    return true
+  })
 }
 
 /**

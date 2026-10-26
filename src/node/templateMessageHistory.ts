@@ -4,7 +4,7 @@ import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { deriveEventMessage } from '@deepseek-ai/dsh-session/surface'
 import type { ChatMessage } from '../core/types.js'
 import type { TemplateMessageIdentity } from '../core/templateMessageVariables.js'
-import { isSyntheticUserText } from '../core/dshPrompt.js'
+import { isHostInjectedUserMessage, isSyntheticUserText } from '../core/dshPrompt.js'
 
 export function buildTemplateMessageHistory(messages:readonly Message[],pending:readonly {id:string;text:string;hasImage?:boolean}[],charName:string,userName:string,events:readonly SessionEvent[]=[]) {
   const visible=new Set(messages.map(message=>String(message.id)))
@@ -20,7 +20,7 @@ export function buildTemplateMessageHistory(messages:readonly Message[],pending:
     const seq=seqs.get(id)
     identities.push({messageId:id,swipeId:0,...(seq!==undefined ? {hostMessageId:seq} : {})})
   }
-  for(const message of messages) if(message.role!=='tool' && message.role!=='developer') add(message.id,message.role,message.content.filter(block=>block.type==='text').map(block=>block.text).join('\n'),message.content.some(block=>block.type==='image'))
+  for(const message of messages) if(message.role!=='tool' && message.role!=='developer' && !(isHostInjectedUserMessage(message) && message.source.kind!=='compact-checkpoint')) add(message.id,message.role,message.content.filter(block=>block.type==='text').map(block=>block.text).join('\n'),message.content.some(block=>block.type==='image'))
   for(const message of pending) add(message.id,'user',message.text,message.hasImage)
   return {history,identities}
 }

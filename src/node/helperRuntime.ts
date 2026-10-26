@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { helperJson, helperChanges, helperScopeKey, type HelperDisplayContext, type HelperScopes, type HelperSnapshot } from '../core/helperRuntime.js'
-import { isSyntheticUserText } from '../core/dshPrompt.js'
+import { isHostInjectedUserMessage, isSyntheticUserText } from '../core/dshPrompt.js'
 import { DEFAULT_USER_NAME } from '../core/persona.js'
 import { applyHelperChanges, commitHelperChanges, loadHelperScopes, loadHelperState, type HelperState } from '../state/helper.js'
 import type { WorkspaceFs } from '../state/workspaceFs.js'
@@ -80,6 +80,7 @@ export function helperHistoryOf(events: readonly SessionEvent[], names: {char:st
     if (event.type !== 'user/message' && event.type !== 'assistant/message') continue
     // 摘要替换是模型视图，用户实际见过的 append 原文仍属于聊天历史。
     if ('surfaceOp' in event && event.surfaceOp !== undefined && event.surfaceOp !== 'append') continue
+    if (event.type === 'user/message' && isHostInjectedUserMessage(event.data)) continue
     const message = event.type === 'user/message' ? event.data : event.data.message
     const text = message.content.filter(block=>block.type==='text').map(block=>block.text).join('\n')
     if (!text.trim() || event.type==='user/message' && isSyntheticUserText(text)) continue

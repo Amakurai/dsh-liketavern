@@ -138,3 +138,12 @@ export function stripHarnessIdentity(text: string): string {
 export function isWorkspaceInstructionMessage(message: { role?: string; source?: { kind?: string } }): boolean {
   return message.role === 'user' && message.source?.kind === 'agent-instructions'
 }
+
+const HOST_INJECTED_USER_KINDS = new Set(['runtime-context', 'agent-instructions', 'model-selection', 'compact-checkpoint', 'tavern-prompt-plan'])
+
+/** 宿主或插件注入的非玩家台词 user 消息（含 runtime-context、AGENTS.md 指令、换模提示、压缩检查点与布局载体）。 */
+export function isHostInjectedUserMessage(message: { role?: string; source?: { kind?: string } }): boolean {
+  if (message.role !== undefined && message.role !== 'user') return false
+  return typeof message.source?.kind === 'string' && HOST_INJECTED_USER_KINDS.has(message.source.kind)
+
+}

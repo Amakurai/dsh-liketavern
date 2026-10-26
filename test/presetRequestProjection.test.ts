@@ -7,7 +7,7 @@ import { expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import type { AnonymousUserId } from '@deepseek-ai/dsh-anonymous-user-id'
 import { AttachmentId } from '@deepseek-ai/dsh-attachment'
-import { createAssistantMessage, createSystemMessage, createToolResultMessage, createUserMessage, ToolCallId,
+import { createAssistantMessage, createDeveloperMessage, createSystemMessage, createToolResultMessage, createUserMessage, ToolCallId,
   type GenerateOptions, type Message } from '@deepseek-ai/dsh-llm'
 import { Session, SessionId, SessionStore, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { Config as DeepSeekConfig, plainOptions, DeepSeekAdapter, resolveAdapterOptions } from '@deepseek-ai/dsh-llm-deepseek'
@@ -660,4 +660,43 @@ it('未开启缓存优先的计划不重放旧轮尾块', () => {
   const texts = projectPresetRequest({ provider: 'factory', model: 'factory', sessionId: session.id, messages: session.deriveMessages() }, session).messages.map(textOf)
   expect(texts).not.toContain('TAIL-1')
   expect(texts).toContain('TAIL-2')
+})
+
+it('developer 工具增删消息不触发 messages-system-layout 降级，同批次工作区指令与换模提示在尾块之前', () => {
+  const session = Session.create(SessionId('developer-and-batch-frontier'))
+  const standingText = `${BOUND_DISCIPLINE}\n\nSTANDING`
+  const header = session.append('request/header', { header: { config: { provider: 'factory', model: 'factory' },
+    tools: [{ name: 'run_code', description: 'run', parameters: { type: 'object' }, deferLoading: true }] }, reason: 'initial' })
+  session.append('turn/start', { turn: 1 })
+  session.append('step/start', { turn: 1, step: 1 })
+  session.append('system/message', { turn: 1, step: 1, message: createSystemMessage(`HOST\n\n${standingText}`, hostPlugin) }, { surfaceOp: 'append' })
+  const input = user('玩家输入')
+  const history = [{ inputIndex: 0, messageId: input.id, role: 'user' as const, chat: true }]
+  const plan: PresetRequestPlan = { version: 1, sessionId: session.id, turn: 1, standingText, contextText: TURN_PLAYBOOK,
+    cleanup: { dropWorkspaceInstructions: false },
+    layout: { version: 1, history, entries: [
+      entry('DEPTH-0-SYS', 'system', { kind: 'depth', depth: 0, order: 10, previous: history[0]! }),
+      entry('ASSISTANT-PREFILL', 'assistant', { kind: 'after-history', anchor: history[0]! }),
+    ] } }
+  session.append('user/message', attachPresetPlanMessage(input, plan), { surfaceOp: 'append' })
+  const modelSelect = { ...user('MODEL-SWITCH'), source: { kind: 'model-selection' } } as unknown as Message
+  const workspace = { ...user('WORKSPACE-BASELINE'), source: { kind: 'agent-instructions' } } as unknown as Message
+  const runtime = createUserMessage({ source: { kind: 'runtime-context', form: 'snapshot', sections: [{ name: 'tavern:turn', text: TURN_PLAYBOOK }] },
+    content: [{ type: 'text', text: joinContextSections([{ name: 'tavern:turn', text: TURN_PLAYBOOK }]) }] })
+  session.append('user/message', modelSelect as never, { surfaceOp: 'append' })
+  session.append('user/message', workspace as never, { surfaceOp: 'append' })
+  session.append('user/message', runtime, { surfaceOp: 'append' })
+  session.append('developer/message', { turn: 1, step: 1, headerSeq: header.seq,
+    message: createDeveloperMessage({ source: { kind: 'tool-registry' }, content: [{ type: 'tool-addition', toolName: 'run_code' }] }) }, { surfaceOp: 'append' })
+  const diagnostics: PresetProjectionDiagnostic[] = []
+  const output = projectPresetRequest({ provider: 'factory', model: 'factory', sessionId: session.id, messages: session.deriveMessages() },
+    session, { messagesApi: true, model: { systemPromptUpdate: 'in-history' }, onDiagnostic: d => diagnostics.push(d) })
+  expect(diagnostics.some(d => d.kind === 'messages-system-layout')).toBe(false)
+  const texts = output.messages.map(textOf)
+  expect(texts.indexOf('MODEL-SWITCH')).toBeGreaterThan(texts.indexOf('玩家输入'))
+  expect(texts.indexOf('WORKSPACE-BASELINE')).toBeGreaterThan(texts.indexOf('MODEL-SWITCH'))
+  const tailIndex = output.messages.findIndex(m => m.role === 'system' && textOf(m).includes('DEPTH-0-SYS'))
+  expect(tailIndex).toBeGreaterThan(texts.indexOf('WORKSPACE-BASELINE'))
+  expect(output.messages.at(-1)?.role).toBe('assistant')
+
 })

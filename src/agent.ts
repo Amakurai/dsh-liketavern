@@ -23,7 +23,7 @@ import type { TavernService } from './node/service.js'
 import type { TavernState } from './node/state.js'
 import { registerTavernTools } from './node/tools.js'
 import { mergeTavernCallConfig, resolveTavernReasoningEffort, type AdvertisedReasoningInfo } from './core/callConfig.js'
-import { BOUND_DISCIPLINE, TURN_PLAYBOOK, UNBOUND_STANDING, isContinueInstruction, isRuntimeContextMessage, isTurnScopedNotice } from './core/dshPrompt.js'
+import { BOUND_DISCIPLINE, TURN_PLAYBOOK, UNBOUND_STANDING, isContinueInstruction, isHostInjectedUserMessage, isTurnScopedNotice } from './core/dshPrompt.js'
 import type { SamplingSettings } from './core/types.js'
 import { PRESET_ADAPTER_PROVIDER, PRESET_ADAPTER_SOURCE_PROVIDER } from './node/presetAdapter.js'
 import { attachPresetPlanMessage, createPresetPlanMessage, hasPresetPlanMessage } from './node/presetRequestProjection.js'
@@ -132,13 +132,13 @@ export function apply(ctx: Context): void {
     // 不猜旧 header，也不给其它供应商增加一条人工台词。
     let targetIndex = -1
     for (let index = decision.messages.length - 1; index >= 0; index--) {
-      if (!isRuntimeContextMessage(decision.messages[index]!)) { targetIndex = index; break }
+      if (!isHostInjectedUserMessage(decision.messages[index]!)) { targetIndex = index; break }
     }
     const messages = targetIndex >= 0
       ? decision.messages.map((message, index) => index === targetIndex ? attachPresetPlanMessage(message, plan) : message)
       : [createPresetPlanMessage(plan), ...decision.messages]
     return {...decision,messages}
-  })
+  }, { prepend: true })
 
   ctx.on('system-prompt/assemble', async (_assembly, context, next) => {
     const agent = context.agent

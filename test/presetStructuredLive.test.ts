@@ -433,3 +433,28 @@ it.each([false, true])('最终走其它供应商时只附元数据，不增加�
   expect(wires).toHaveLength(0)
   expect(projected).toHaveLength(0)
 })
+
+it('与宿主工作区指令和换模提示同批入列时，布局载体仍附在真实用户消息上且顺序不倒置', async () => {
+  configRaw = { prompts: { cacheFirstLayout: false, dropWorkspaceInstructions: false } }
+  let claimedFoundIndex = -1
+  ctx.on('agent/pre-step', async ({ messages }, next) => {
+    const decision = await next()
+    if (decision.kind !== 'enter') return decision
+    claimedFoundIndex = decision.messages.findLastIndex(message => messages.includes(message))
+    const instructions = { ...createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: 'WORKSPACE-INSTRUCTIONS' }] }),
+      source: { kind: 'agent-instructions' } } as unknown as UserMessage
+    const modelNotice = { ...createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: 'MODEL-SELECTION-NOTICE' }] }),
+      source: { kind: 'model-selection' } } as unknown as UserMessage
+    return { ...decision, messages: decision.messages.toSpliced(claimedFoundIndex + 1, 0, modelNotice, instructions) }
+  })
+  const input = await user('USER-WITH-HOST-NOTICES')
+  await send(input)
+  expect(claimedFoundIndex).toBe(0)
+  const carriers = planMessages(requests[0]!.messages)
+  expect(carriers).toHaveLength(1)
+  expect(carriers[0]!.id).toBe(input.id)
+  const requestTexts = requests[0]!.messages.map(textOf)
+  expect(requestTexts.indexOf('USER-WITH-HOST-NOTICES')).toBeLessThan(requestTexts.indexOf('MODEL-SELECTION-NOTICE'))
+  expect(requestTexts.indexOf('MODEL-SELECTION-NOTICE')).toBeLessThan(requestTexts.indexOf('WORKSPACE-INSTRUCTIONS'))
+
+})

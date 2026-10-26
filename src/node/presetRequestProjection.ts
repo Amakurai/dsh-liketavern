@@ -10,7 +10,7 @@ import type {} from '@deepseek-ai/dsh-agent-loop'
 import type {} from '@deepseek-ai/dsh-compaction-basic'
 import { joinContextSections } from '@deepseek-ai/dsh-system-prompt'
 import { z } from 'zod'
-import { BOUND_DISCIPLINE, TURN_PLAYBOOK, isRuntimeContextMessage, isWorkspaceInstructionMessage,
+import { BOUND_DISCIPLINE, TURN_PLAYBOOK, isHostInjectedUserMessage, isWorkspaceInstructionMessage,
   stripHarnessIdentity, turnTailHeader } from '../core/dshPrompt.js'
 import { PromptLayoutSchema, type PromptHistoryAnchor, type PromptLayout, type PromptLayoutEntry } from '../core/promptLayout.js'
 import { assertNoControlTokens, mayContainControlTokens } from '../core/promptSafety.js'
@@ -251,6 +251,7 @@ function applySystemPolicy(messages: readonly Message[], projection: PresetProje
   if (projection.messagesApi) {
     let previous: Message['role'] | undefined, pending = false
     for (const message of messages) {
+      if (message.role === 'developer') continue
       if (message.role === 'system') {
         if (previous !== undefined) {
           pending = true
@@ -459,7 +460,9 @@ export function projectPresetRequest(options: Readonly<GenerateOptions>, session
   /** 某条载体所在输入批次之后的边界（历史轮与本轮同一算法，覆盖同批次紧随其后的 runtime-context）。 */
   const frontierAt = (index: number): number => {
     let batchEnd = index
-    while (requestMessages[batchEnd + 1] && isRuntimeContextMessage(requestMessages[batchEnd + 1]!)) batchEnd++
+    while (requestMessages[batchEnd + 1] && (requestMessages[batchEnd + 1]!.role === 'developer'
+      || isHostInjectedUserMessage(requestMessages[batchEnd + 1]!)
+      && requestMessages[batchEnd + 1]!.source.kind !== 'compact-checkpoint')) batchEnd++
     let end = 1
     for (const message of requestMessages.slice(0, batchEnd + 1)) {
       const at = positions.get(message.id)

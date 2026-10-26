@@ -16,7 +16,10 @@ import {commitHelperVariables,getHelperScriptBundle,getHelperSnapshot,helperHist
 import {editHelperMessages} from '../src/node/helperChatEdits.js'
 import {parseHelperMessageEdits} from '../src/core/helperChatEdits.js'
 import {editedHistorySeed} from '../src/node/helperChatSeed.js'
-import {editAssistantMessage} from '../src/node/floors.js'
+import {editAssistantMessage,editUserMessage,getFloorUserMessage,regenerate} from '../src/node/floors.js'
+import {sessionHasUserMessage,TAVERN_GREETING_SOURCE} from '../src/core/greetingLog.js'
+import {attachPresetPlanMessage} from '../src/node/presetRequestProjection.js'
+import {buildTemplateMessageHistory} from '../src/node/templateMessageHistory.js'
 import {WorkspaceFs} from '../src/state/workspaceFs.js'
 import {loadHelperState,saveHelperState,type HelperState} from '../src/state/helper.js'
 import {MemoryStore} from '../src/state/memory.js'
@@ -524,4 +527,158 @@ it('保留系统提示词单节点替换与完整种子压缩，清理前置图�
   const staleCmdChild=Session.create('session-stale-cmd-compact' as Session['id'],staleCmdSeed)
   await assertHostTrace(staleCmdChild)
   expect(texts(staleCmdChild)).toEqual(['normalized sys 4','greeting-1','user-2','assistant-2','user-3','assistant-3-edited','user-4'])
+})
+
+it('残缺压缩不污染后续合法压缩的 in-history system，同文本 head 轮次、孤立工具裁剪与多步删除均满足 V4 校验',async()=>{
+  const raw=Session.create('session-edge-compactions' as Session['id']);raw.append('agent-preset/selected',{agentPreset:'tavern'})
+  raw.append('turn/start',{turn:1});raw.append('step/start',{turn:1,step:1})
+  const sys0=raw.append('system/message',{turn:1,step:1,message:createSystemMessage('initial head')},{surfaceOp:'append'})
+  const user1=raw.append('user/message',createUserMessage({content:[{type:'text',text:'u1'}],source:{kind:'user'}}),{surfaceOp:'append'})
+  const call1=ToolCallId('call-edge-1')
+  const assistant1=raw.append('assistant/message',{stream:[],turn:1,step:1,message:createAssistantMessage({content:[{type:'text',text:'a1'},{type:'tool-call',id:call1,name:'fixture_tool',arguments:'{}'}],source:{provider:'test',model:'test'}})},{surfaceOp:'append'})
+  raw.append('tool/call',{turn:1,step:1,callId:call1,name:'fixture_tool',arguments:'{}'})
+  const tool1=raw.append('tool/result',{turn:1,step:1,message:createToolResultMessage({callId:call1,content:[{type:'text',text:'tool-out-1'}],isError:false})},{surfaceOp:'append'})
+  raw.append('step/end',{turn:1,step:1});raw.append('turn/end',{turn:1,reason:{kind:'completed'}})
+  raw.append('turn/start',{turn:2});raw.append('step/start',{turn:2,step:1})
+  const sys2=raw.append('system/message',{turn:2,step:1,message:createSystemMessage('in-history prompt 2')},{surfaceOp:'append'})
+  const user2=raw.append('user/message',createUserMessage({content:[{type:'text',text:'u2'}],source:{kind:'user'}}),{surfaceOp:'append'})
+  const assistant2=raw.append('assistant/message',{stream:[],turn:2,step:1,message:createAssistantMessage({content:[{type:'text',text:'a2'}],source:{provider:'test',model:'test'}})},{surfaceOp:'append'})
+  raw.append('step/end',{turn:2,step:1});raw.append('turn/end',{turn:2,reason:{kind:'completed'}})
+  const base=raw.snapshotEvents()
+
+  // 1. 失败压缩（无 checkpoint）曾把 sys2 列入 shadowedSeqs；随后合法压缩折叠了 sys2 且第 3 轮替换了 head：编辑第 3 轮时不能把 sys2 标为 stale。
+  const failId=CompactionId('compact-fail-sys2'),validId=CompactionId('compact-valid-sys2')
+  const validShadowed=[user1.seq,assistant1.seq,tool1.seq,sys2.seq,user2.seq,assistant2.seq]
+  const s=base.length
+  const eventsWithFailedThenValid:SessionEvent[]=[
+    ...base,
+    {type:'compaction/start',seq:SessionSeq(s),time:1,data:{compactionId:failId,turn:null}},
+    {type:'compaction/summary',seq:SessionSeq(s+1),time:1,data:{compactionId:failId,shadowedRange:{start:user1.seq,end:assistant2.seq},shadowedSeqs:validShadowed,shadowedTokenCount:30,summary:[{type:'text',text:'fail'}],rawInput:{messages:[]},rawOutput:[{type:'text',text:'fail'}]}},
+    {type:'compaction/end',seq:SessionSeq(s+2),time:1,data:{compactionId:failId,turn:null,error:{message:'aborted'}}},
+    {type:'compaction/start',seq:SessionSeq(s+3),time:1,data:{compactionId:validId,turn:null}},
+    {type:'compaction/summary',seq:SessionSeq(s+4),time:1,data:{compactionId:validId,shadowedRange:{start:user1.seq,end:assistant2.seq},shadowedSeqs:validShadowed,shadowedTokenCount:30,summary:[{type:'text',text:'valid'}],rawInput:{messages:[]},rawOutput:[{type:'text',text:'valid'}]}},
+    {type:'user/message',seq:SessionSeq(s+5),time:1,surfaceOp:{op:'replace',startSeq:user1.seq,endSeq:assistant2.seq},sourceEventSeqs:[SessionSeq(s+3),SessionSeq(s+4),...validShadowed],data:createUserMessage({content:[{type:'text',text:'<compacted-summary>valid</compacted-summary>'}],source:compactCheckpointSource(validId)})},
+    {type:'compaction/end',seq:SessionSeq(s+6),time:1,data:{compactionId:validId,turn:null}},
+    {type:'turn/start',seq:SessionSeq(s+7),time:1,data:{turn:3}},
+    {type:'user/message',seq:SessionSeq(s+8),time:1,surfaceOp:'append',data:createUserMessage({content:[{type:'text',text:'u3'}],source:{kind:'user'}})},
+    {type:'step/start',seq:SessionSeq(s+9),time:1,data:{turn:3,step:1}},
+    {type:'system/message',seq:SessionSeq(s+10),time:1,surfaceOp:{op:'replace',startSeq:sys0.seq,endSeq:sys0.seq},sourceEventSeqs:[sys0.seq],data:{turn:3,step:1,message:createSystemMessage('head 3')}},
+    {type:'assistant/message',seq:SessionSeq(s+11),time:1,surfaceOp:'append',data:{turn:3,step:1,stream:[],message:createAssistantMessage({content:[{type:'text',text:'a3'}],source:{provider:'test',model:'test'}})}},
+    {type:'step/end',seq:SessionSeq(s+12),time:1,data:{turn:3,step:1}},
+    {type:'turn/end',seq:SessionSeq(s+13),time:1,data:{turn:3,reason:{kind:'completed'}}},
+  ]
+  const seed1=editedHistorySeed(eventsWithFailedThenValid,new Map([[s+11,'a3-edited']]))
+  expect(seed1[sys2.seq]?.type).toBe('system/message')
+  expect(seed1[s+5]?.type).toBe('user/message')
+  await assertHostTrace(Session.create('session-failed-then-valid' as Session['id'],seed1))
+
+  // 2. 过时压缩之后的轮次若系统提示词与 head 相同（未发射 system/message 替换），被该压缩遮蔽的 sys2 仍须清除，避免旧 in-history 复活。
+  const eventsSameHead:SessionEvent[]=[
+    ...base,
+    {type:'compaction/start',seq:SessionSeq(s),time:1,data:{compactionId:validId,turn:null}},
+    {type:'compaction/summary',seq:SessionSeq(s+1),time:1,data:{compactionId:validId,shadowedRange:{start:user1.seq,end:assistant2.seq},shadowedSeqs:validShadowed,shadowedTokenCount:30,summary:[{type:'text',text:'valid'}],rawInput:{messages:[]},rawOutput:[{type:'text',text:'valid'}]}},
+    {type:'user/message',seq:SessionSeq(s+2),time:1,surfaceOp:{op:'replace',startSeq:user1.seq,endSeq:assistant2.seq},sourceEventSeqs:[SessionSeq(s),SessionSeq(s+1),...validShadowed],data:createUserMessage({content:[{type:'text',text:'<compacted-summary>valid</compacted-summary>'}],source:compactCheckpointSource(validId)})},
+    {type:'compaction/end',seq:SessionSeq(s+3),time:1,data:{compactionId:validId,turn:null}},
+    {type:'turn/start',seq:SessionSeq(s+4),time:1,data:{turn:3}},
+    {type:'user/message',seq:SessionSeq(s+5),time:1,surfaceOp:'append',data:createUserMessage({content:[{type:'text',text:'u3'}],source:{kind:'user'}})},
+    {type:'step/start',seq:SessionSeq(s+6),time:1,data:{turn:3,step:1}},
+    {type:'assistant/message',seq:SessionSeq(s+7),time:1,surfaceOp:'append',data:{turn:3,step:1,stream:[],message:createAssistantMessage({content:[{type:'text',text:'a3'}],source:{provider:'test',model:'test'}})}},
+    {type:'step/end',seq:SessionSeq(s+8),time:1,data:{turn:3,step:1}},
+    {type:'turn/end',seq:SessionSeq(s+9),time:1,data:{turn:3,reason:{kind:'completed'}}},
+  ]
+  const seed2=editedHistorySeed(eventsSameHead,new Map([[assistant2.seq,'a2-edited']]))
+  expect(seed2[sys2.seq]).toMatchObject({type:'tavern/message-edit-marker',ignorable:true,data:{originalType:'system/message',reason:'stale-compaction'}})
+  const child2=Session.create('session-same-head' as Session['id'],seed2)
+  await assertHostTrace(child2)
+  expect(texts(child2)).not.toContain('in-history prompt 2')
+
+  // 3. 修改点之前的孤立 tool/result replace 被标为 stale 时，引用该替换节点的后续压缩事务也级联转为 stale。
+  const orphanToolSeq=s
+  const cascadeShadowed=[user1.seq,assistant1.seq,orphanToolSeq,sys2.seq,user2.seq,assistant2.seq]
+  const eventsOrphanPrune:SessionEvent[]=[
+    ...base,
+    {type:'tool/result',seq:SessionSeq(orphanToolSeq),time:1,surfaceOp:{op:'replace',startSeq:tool1.seq,endSeq:tool1.seq},sourceEventSeqs:[tool1.seq],data:{...tool1.data,message:{...tool1.data.message,content:[{type:'text',text:'orphan pruned'}]}}},
+    {type:'compaction/start',seq:SessionSeq(s+1),time:1,data:{compactionId:validId,turn:null}},
+    {type:'compaction/summary',seq:SessionSeq(s+2),time:1,data:{compactionId:validId,shadowedRange:{start:user1.seq,end:assistant2.seq},shadowedSeqs:cascadeShadowed,shadowedTokenCount:30,summary:[{type:'text',text:'cascade'}],rawInput:{messages:[]},rawOutput:[{type:'text',text:'cascade'}]}},
+    {type:'user/message',seq:SessionSeq(s+3),time:1,surfaceOp:{op:'replace',startSeq:user1.seq,endSeq:assistant2.seq},sourceEventSeqs:[SessionSeq(s+1),SessionSeq(s+2),...cascadeShadowed],data:createUserMessage({content:[{type:'text',text:'<compacted-summary>cascade</compacted-summary>'}],source:compactCheckpointSource(validId)})},
+    {type:'compaction/end',seq:SessionSeq(s+4),time:1,data:{compactionId:validId,turn:null}},
+    {type:'turn/start',seq:SessionSeq(s+5),time:1,data:{turn:3}},
+    {type:'user/message',seq:SessionSeq(s+6),time:1,surfaceOp:'append',data:createUserMessage({content:[{type:'text',text:'u3'}],source:{kind:'user'}})},
+    {type:'step/start',seq:SessionSeq(s+7),time:1,data:{turn:3,step:1}},
+    {type:'assistant/message',seq:SessionSeq(s+8),time:1,surfaceOp:'append',data:{turn:3,step:1,stream:[],message:createAssistantMessage({content:[{type:'text',text:'a3'}],source:{provider:'test',model:'test'}})}},
+    {type:'step/end',seq:SessionSeq(s+9),time:1,data:{turn:3,step:1}},
+    {type:'turn/end',seq:SessionSeq(s+10),time:1,data:{turn:3,reason:{kind:'completed'}}},
+  ]
+  const seed3=editedHistorySeed(eventsOrphanPrune,new Map([[s+8,'a3-edited']]))
+  expect(seed3[orphanToolSeq]).toMatchObject({type:'tavern/message-edit-marker',ignorable:true})
+  expect(seed3[s+3]).toMatchObject({type:'tavern/message-edit-marker',ignorable:true})
+  await assertHostTrace(Session.create('session-orphan-cascade' as Session['id'],seed3))
+
+  // 4. 删除多步 turn 的唯一可见回复时，同轮前置纯工具步骤一并清除；非法编辑目标（压缩检查点、工作区指令）直接拒绝。
+  const multi=Session.create('session-multistep-delete' as Session['id']);multi.append('agent-preset/selected',{agentPreset:'tavern'})
+  multi.append('turn/start',{turn:1})
+  const mUser=multi.append('user/message',createUserMessage({content:[{type:'text',text:'m-u1'}],source:{kind:'user'}}),{surfaceOp:'append'})
+  const wsNotice=multi.append('user/message',{...createUserMessage({content:[{type:'text',text:'AGENTS.md'}],source:{kind:'user'}}),source:{kind:'agent-instructions'}} as never,{surfaceOp:'append'})
+  multi.append('step/start',{turn:1,step:1})
+  const mCall=ToolCallId('m-call-1')
+  const step1ToolOnly=multi.append('assistant/message',{stream:[],turn:1,step:1,message:createAssistantMessage({content:[{type:'tool-call',id:mCall,name:'fixture_tool',arguments:'{}'}],source:{provider:'test',model:'test'}})},{surfaceOp:'append'})
+  multi.append('tool/call',{turn:1,step:1,callId:mCall,name:'fixture_tool',arguments:'{}'})
+  const step1Result=multi.append('tool/result',{turn:1,step:1,message:createToolResultMessage({callId:mCall,content:[{type:'text',text:'m-tool-res'}],isError:false})},{surfaceOp:'append'})
+  multi.append('step/end',{turn:1,step:1})
+  multi.append('step/start',{turn:1,step:2})
+  const step2Reply=multi.append('assistant/message',{stream:[],turn:1,step:2,message:createAssistantMessage({content:[{type:'text',text:'m-final-reply'}],source:{provider:'test',model:'test'}})},{surfaceOp:'append'})
+  multi.append('step/end',{turn:1,step:2});multi.append('turn/end',{turn:1,reason:{kind:'completed'}})
+  expect(()=>editedHistorySeed(multi.snapshotEvents(),new Map([[999,'bad']]))).toThrow(/不在日志/)
+  expect(()=>editedHistorySeed(multi.snapshotEvents(),new Map([[wsNotice.seq,'bad']]))).toThrow(/不是可见消息/)
+  expect(()=>editedHistorySeed(eventsSameHead,new Map([[s+2,'bad']]))).toThrow(/不是可见消息/)
+  const multiDeletedSeed=editedHistorySeed(multi.snapshotEvents(),new Map(),new Set([mUser.seq,step2Reply.seq]))
+  expect(multiDeletedSeed[step1ToolOnly.seq]).toMatchObject({type:'tavern/message-edit-marker',ignorable:true,data:{reason:'deleted-message'}})
+  expect(multiDeletedSeed[step1Result.seq]).toMatchObject({type:'tavern/message-edit-marker',ignorable:true,data:{reason:'deleted-message'}})
+  const multiChild=Session.create('session-multistep-child' as Session['id'],multiDeletedSeed)
+  await assertHostTrace(multiChild)
+  expect(multiChild.deriveMessages().filter(m=>m.role==='assistant'||m.role==='tool')).toEqual([])
+})
+
+it('楼层重生成、编辑用户消息、开场白判定与历史投影忽略宿主注入消息并剥离旧布局载体',async()=>{
+  const raw=Session.create(source.id);raw.append('agent-preset/selected',{agentPreset:'tavern'})
+  const greeting=raw.append('assistant/message',{stream:[],turn:0,step:0,message:createAssistantMessage({content:[{type:'text',text:'greeting'}],source:TAVERN_GREETING_SOURCE})},{surfaceOp:'append'})
+  const wsMsg={...createUserMessage({content:[{type:'text',text:'<system-reminder>AGENTS.md</system-reminder>'}],source:{kind:'user'}}),source:{kind:'agent-instructions'}} as never
+  const modelMsg={...createUserMessage({content:[{type:'text',text:'<system-reminder>switched model</system-reminder>'}],source:{kind:'user'}}),source:{kind:'model-selection'}} as never
+  raw.append('user/message',wsMsg,{surfaceOp:'append'})
+  raw.append('user/message',modelMsg,{surfaceOp:'append'})
+  expect(sessionHasUserMessage(raw.snapshotEvents())).toBe(false)
+
+  raw.append('turn/start',{turn:1})
+  const realUser=attachPresetPlanMessage(createUserMessage({content:[{type:'text',text:'real player input'}],source:{kind:'user'}}),{
+    version:1,sessionId:source.id,turn:1,standingText:'standing',contextText:'context',layout:{version:1,history:[],entries:[]},
+  })
+  const userEv=raw.append('user/message',realUser,{surfaceOp:'append'})
+  raw.append('user/message',wsMsg,{surfaceOp:'append'})
+  raw.append('user/message',modelMsg,{surfaceOp:'append'})
+  raw.append('step/start',{turn:1,step:1})
+  const replyEv=raw.append('assistant/message',{stream:[],turn:1,step:1,message:createAssistantMessage({content:[{type:'text',text:'reply-1'}],source:{provider:'test',model:'test'}})},{surfaceOp:'append'})
+  raw.append('step/end',{turn:1,step:1})
+  const cid=CompactionId('compact-in-turn'),inTurnShadowed=[...raw.surface.nodes]
+  const cStart=raw.append('compaction/start',{compactionId:cid,turn:1})
+  const cSum=raw.append('compaction/summary',{compactionId:cid,shadowedRange:{start:greeting.seq,end:replyEv.seq},shadowedSeqs:inTurnShadowed,shadowedTokenCount:10,summary:[{type:'text',text:'sum'}],rawInput:{messages:[]},rawOutput:[{type:'text',text:'sum'}]})
+  raw.append('user/message',createUserMessage({content:[{type:'text',text:'<compacted-summary>sum</compacted-summary>'}],source:compactCheckpointSource(cid)}),{surfaceOp:{op:'replace',startSeq:greeting.seq,endSeq:replyEv.seq},sourceEventSeqs:[cStart.seq,cSum.seq,...inTurnShadowed]})
+  raw.append('compaction/end',{compactionId:cid,turn:1})
+  raw.append('turn/end',{turn:1,reason:{kind:'completed'}})
+  source=raw;sessions.set(source.id,source)
+
+  expect(helperHistoryOf(source.snapshotEvents(),{char:'c',user:'u'}).map(row=>row.message)).toEqual(['greeting','real player input','reply-1'])
+  expect(buildTemplateMessageHistory(source.deriveMessages(),[],'c','u',source.snapshotEvents()).history.map(row=>row.content)).toEqual(['<compacted-summary>sum</compacted-summary>'])
+  expect(await getFloorUserMessage({ctx,state},source.id,replyEv.data.message.id)).toEqual({turn:1,text:'real player input'})
+
+  await regenerate({ctx,state},source.id,replyEv.data.message.id)
+  expect(followup).toHaveBeenCalledOnce()
+  const replayed=followup.mock.calls[0]![0]
+  expect(replayed.content).toEqual([{type:'text',text:'real player input'}])
+  expect(replayed.source).not.toHaveProperty('tavernPromptPlan')
+
+  followup.mockReset()
+  await editUserMessage({ctx,state},source.id,replyEv.data.message.id,'updated player input')
+  expect(followup).toHaveBeenCalledOnce()
+  expect(followup.mock.calls[0]![0].content).toEqual([{type:'text',text:'updated player input'}])
+
 })

@@ -28,7 +28,7 @@ import { estimateTokens } from '../core/tokenize.js'
 import { rebuildIndex } from '../state/workspace.js'
 import { cardGreetingVariants, greetingFloorState, isGreetingOnlyBlank, pickGreetingText, sessionHasUserMessage, TAVERN_GREETING_SOURCE } from '../core/greetingLog.js'
 import { expandMacros } from '../core/macros.js'
-import { CONTINUE_INSTRUCTION_PREFIX, isContinueInstruction, isSyntheticUserText } from '../core/dshPrompt.js'
+import { CONTINUE_INSTRUCTION_PREFIX, isContinueInstruction, isHostInjectedUserMessage, isSyntheticUserText } from '../core/dshPrompt.js'
 import { DEFAULT_USER_NAME } from '../core/persona.js'
 import { characterPromptName } from '../core/characterData.js'
 import { appendGreetingTurn, greetingTurnEvents } from './greetingSeed.js'
@@ -261,7 +261,7 @@ function closedTurns(events: readonly SessionEvent[]): { turns: number[]; openTu
  * 续写指令是该轮的驱动消息，必须保留。
  */
 function isReplayableInput(message: UserMessage): boolean {
-  if ((message.source as { kind?: string }).kind === 'runtime-context') return false
+  if (isHostInjectedUserMessage(message)) return false
   const text = userMessageText(message)
   return isContinueInstruction(text) || !isSyntheticUserText(text)
 }
@@ -276,7 +276,7 @@ function userMessagesOf(events: readonly SessionEvent[], turn: number): UserMess
   for (const e of events) {
     if (e.type === 'turn/start') inTurn = (e.data as { turn: number }).turn === turn
     else if (e.type === 'turn/end' && (e.data as { turn: number }).turn === turn) inTurn = false
-    else if (inTurn && e.type === 'user/message' && isReplayableInput(e.data as UserMessage)) out.push(e.data as UserMessage)
+    else if (inTurn && e.type === 'user/message' && (!('surfaceOp' in e) || e.surfaceOp === undefined || e.surfaceOp === 'append') && isReplayableInput(e.data as UserMessage)) out.push(e.data as UserMessage)
   }
   return out
 }
@@ -288,7 +288,8 @@ function userMessagesOf(events: readonly SessionEvent[], turn: number): UserMess
 function replayMessage(messages: readonly UserMessage[]): UserMessage {
   const [first, ...rest] = messages
   if (!first) throw new FloorError('no-user-message', '没有可重放的用户输入')
-  return createUserMessage({ content: [...first.content, ...rest.flatMap((message) => message.content)], source: first.source })
+  const { tavernPromptPlan: _plan, ...cleanSource } = first.source as UserMessage['source'] & { tavernPromptPlan?: unknown }
+  return createUserMessage({ content: [...first.content, ...rest.flatMap((message) => message.content)], source: cleanSource as UserMessage['source'] })
 }
 
 /** turn N 内的第一条用户消息（编辑对话框预填用）。 */

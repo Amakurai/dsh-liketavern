@@ -5,6 +5,7 @@
  */
 export interface GreetingLogEvent {
     type: string;
+    surfaceOp?: unknown;
     data?: unknown;
 }
 /** ensureGreeting / swipeGreeting 写入的开场白来源标记。 */

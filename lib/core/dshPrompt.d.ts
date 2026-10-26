@@ -82,3 +82,10 @@ export declare function isWorkspaceInstructionMessage(message: {
         kind?: string;
     };
 }): boolean;
+/** 宿主或插件注入的非玩家台词 user 消息（含 runtime-context、AGENTS.md 指令、换模提示、压缩检查点与布局载体）。 */
+export declare function isHostInjectedUserMessage(message: {
+    role?: string;
+    source?: {
+        kind?: string;
+    };
+}): boolean;

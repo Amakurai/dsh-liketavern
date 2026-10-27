@@ -32,6 +32,7 @@ export function resolveReadableAssetPath(raw: string): { ok: true; path: string 
   if (lower === 'state/wal' || lower.startsWith('state/wal/') || lower === 'state/wal-coverage.json' || lower === 'state/wal-recovery.json') return { ok: false, error: '不读取 WAL 快照' }
   if (lower === 'state/template.json' || ['state/template-data', 'state/template-generation'].some((dir) => lower === dir || lower.startsWith(`${dir}/`))) return { ok: false, error: '不读取内部模板状态与回复快照' }
   if (lower === 'state/helper.json' || lower === 'state/helper-mvu-abandon.json') return { ok: false, error: '不读取内部酒馆助手状态' }
+  if (lower === 'memory/aliases.json') return { ok: false, error: '不读取内部记忆别名索引' }
   if (/\.(png|jpe?g|webp|gif|bin)$/i.test(path)) return { ok: false, error: '不读取二进制资源' }
   if (!TEXT_EXT.test(path)) return { ok: false, error: '只允许 md / json / jsonl / txt' }
   return { ok: true, path }
@@ -65,7 +66,12 @@ export function toPresetCatalogItem(entry: PresetEntry): PresetCatalogItem {
     marker: entry.marker,
     markerId: entry.markerId ?? null,
     tokens: estimateTokens(entry.content),
-    preview: entry.content.replace(/\s+/g, ' ').trim().slice(0, PRESET_CATALOG_PREVIEW),
+    preview: (() => {
+      const normalized = entry.content.replace(/\s+/g, ' ').trim()
+      let end = PRESET_CATALOG_PREVIEW
+      if (end < normalized.length && end > 0 && /[\uD800-\uDBFF]/.test(normalized[end - 1]!) && /[\uDC00-\uDFFF]/.test(normalized[end] ?? '')) end--
+      return normalized.slice(0, end)
+    })(),
   }
 }
 
@@ -92,7 +98,8 @@ export function assetOutputTokens(value: unknown): number {
 
 /** 文本按 JSON 字符串而非原文计费，避免控制字符被转义后膨胀；返回 tokens 仍是原文粗估。 */
 export function clipAssetJsonText(text: string, budget: number): ReturnType<typeof clipToTokenBudget> {
-  const limit = Math.max(0, Math.floor(budget))
+  if (!text) return { text: '', truncated: false, tokens: 0 }
+  const limit = Number.isNaN(budget) ? 0 : Math.max(0, Math.floor(budget))
   if (assetOutputTokens(text) <= limit) return { text, truncated: false, tokens: estimateTokens(text) }
   const suffix = '…（已截断）'
   if (assetOutputTokens(suffix) > limit) return { text: '', truncated: true, tokens: 0 }

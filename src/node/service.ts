@@ -460,7 +460,7 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
     const session = this.ctx.sessions.get(request.sessionId as Session['id'])
     const canSwipeGreeting = Boolean(binding && session && !displaySessionHasUserMessage(session.snapshotEvents()))
     const conversationStarted = await this.conversationStarted(request.sessionId)
-    return { binding, userName: persona?.name ?? DEFAULT_USER_NAME, canSwipeGreeting, conversationStarted }
+    return { binding, userName: persona?.name.trim() || DEFAULT_USER_NAME, canSwipeGreeting, conversationStarted }
   }
 
   /** 剧情归属变更先同步取消当前宿主请求，覆盖 agent/request 之后 prepareCall 的异步准备；未来输入仍留在原生队列。 */
@@ -559,6 +559,7 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
   }
 
   async getGreetingSwipe(request: { sessionId: string; messageId: string }): Promise<TavernMethodResults['getGreetingSwipe']> {
+    await this.state.waitForSessionCommits(request.sessionId)
     return getGreetingSwipe(this.floorDeps(), request.sessionId, request.messageId)
   }
 

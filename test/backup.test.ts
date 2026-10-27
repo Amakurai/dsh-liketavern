@@ -155,6 +155,19 @@ describe('拒绝损坏与越界', () => {
     expect((await create()).offlineVerified).toBe(false)
     await expect(restoreBackup({ backup, target, offline: false })).rejects.toMatchObject({ code: 'OFFLINE_DECLARATION_REQUIRED' })
   })
+  it('允许 @dsh/character 占位绑定与碰撞后缀的预设/世界书引用', async () => {
+    const cardId = 'collision-a1b2c3d4', sessionId = 'session-col', storyId = 'story-00000000-0000-4000-8000-000000000009'
+    const card = join(home, 'dsh-tavern/characters', cardId), story = join(card, 'stories', storyId)
+    await mkdir(story, { recursive: true }); await mkdir(join(home, 'dsh-tavern/sessions'), { recursive: true })
+    await mkdir(join(home, 'dsh-tavern/library/lorebooks'), { recursive: true })
+    await save(join(card, 'card.json'), { name: 'test' })
+    await save(join(story, 'story.json'), { version: 1, id: storyId, sessionId, createdAt: new Date(0).toISOString(), migrated: false })
+    await save(join(home, 'dsh-tavern/library/lorebooks/a_b-2.json'), { sourceId: 'a:b', name: 'book', entries: {} })
+    await save(join(home, 'dsh-tavern/sessions', `${sessionId}.json`), { sessionId, cardId, storyId,
+      presetId: null, personaId: null, lorebookIds: ['a:b'], characterLorebookId: '@dsh/character', characterLorebookIds: ['@dsh/character'],
+      interactiveCards: null, greetingIndex: 0, createdAt: new Date(0).toISOString() })
+    await expect(create()).resolves.toMatchObject({ operation: 'create' })
+  })
 })
 
 describe('失败原子性与 CLI', () => {

@@ -184,7 +184,7 @@ describe('tokenize', () => {
     expect(['魔法', 'かな', '안녕', '猫が'].every(isBigramTerm)).toBe(true)
     expect(['ab', 'a1', '魔', '魔法塔', 'x魔', ''].some(isBigramTerm)).toBe(false)
     expect(['か', 'カ', 'ー', 'ㇰ'].every(isKana)).toBe(true)
-    expect(['魔', '안', 'a', '1'].some(isKana)).toBe(false)
+    expect(['魔', '안', 'a', '1', 'かな', ''].some(isKana)).toBe(false)
   })
 
   it('多语种正文都能产出 token（BM25 去重与检索不会静默失效）', () => {
@@ -241,6 +241,7 @@ describe('estimateTokens', () => {
 describe('clipToTokenBudget', () => {
   it('未超预算原样返回', () => {
     expect(clipToTokenBudget('你好', 10)).toEqual({ text: '你好', truncated: false, tokens: 2 })
+    expect(clipToTokenBudget('你好', Number.NaN)).toEqual({ text: '', truncated: true, tokens: 0 })
   })
 
   it('超预算截断并标记', () => {

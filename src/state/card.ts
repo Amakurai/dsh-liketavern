@@ -191,7 +191,7 @@ function stripExtensionBooks(input: Record<string, unknown>): Record<string, unk
 
 function stripRawCharacterBooks(value: unknown): unknown {
   if (!isRecord(value)) return value
-  const hasWrappedData = isRecord(value.data)
+  const hasWrappedData = detectSpec(value, null) !== 'chara_card_v1' && isRecord(value.data)
   const rawData = hasWrappedData ? value.data as Record<string, unknown> : value
   const root = stripDirectBooks(value)
   const data = hasWrappedData ? stripDirectBooks(rawData) : root
@@ -327,7 +327,8 @@ function normalizeCardInternal(
     for (const [key, value] of Object.entries(data.extensions)) setExtensionField(extensions, key, value)
   }
   for (const [key, value] of Object.entries(data)) {
-    if (!isKnownCharacterDataKey(key, value)) setExtensionField(extensions, key, value)
+    if ((data === json && (key === 'spec' || key === 'spec_version')) || isKnownCharacterDataKey(key, value)) continue
+    setExtensionField(extensions, key, value)
   }
 
   return {
@@ -623,7 +624,7 @@ export function cardToStJson(card: CharacterCard): unknown {
   if (card.regexScripts.length > 0) data.regex_scripts = card.regexScripts
   const spec = card.spec === 'chara_card_v1' || card.spec === 'unknown' ? 'chara_card_v2' : card.spec
   const raw = card.raw && typeof card.raw === 'object' && !Array.isArray(card.raw) ? card.raw as Record<string, unknown> : {}
-  const envelopeExtras = raw.data && typeof raw.data === 'object' && !Array.isArray(raw.data)
+  const envelopeExtras = card.spec !== 'chara_card_v1' && raw.data && typeof raw.data === 'object' && !Array.isArray(raw.data)
     ? Object.fromEntries(Object.entries(raw).filter(([k]) => !['spec', 'spec_version', 'data', 'character_book', 'lorebook', 'characterBook', 'world'].includes(k)))
     : {}
   return {

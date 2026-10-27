@@ -76,6 +76,7 @@ describe('WorldDeltaStore', () => {
   it('revoke 行内标记 revoked: true，不物理删除', async () => {
     const d = await store.append({ ...base, type: 'invalidate', ref: 'uid-9', content: '作废' })
     expect(await store.revoke(d.id)).toBe(true)
+    expect(await store.revoke(d.id)).toBe(false)
     expect(await store.revoke('d-9999')).toBe(false)
     expect(await store.list()).toEqual([])
 

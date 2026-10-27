@@ -9,7 +9,7 @@
 
 import { createHash, randomBytes } from 'node:crypto'
 import { Bm25Index, type Bm25SearchOptions } from '../core/bm25.js'
-import { parseAliasFile, serializeAliasFile, type AliasRecord } from '../core/memoryAliases.js'
+import { normalizeAliases, parseAliasFile, serializeAliasFile, type AliasRecord } from '../core/memoryAliases.js'
 import { estimateTokens } from '../core/tokenize.js'
 import type { MemoryEntry } from '../core/types.js'
 import type { WorkspaceFs } from './workspaceFs.js'
@@ -63,7 +63,7 @@ export interface MemoryUpdateOptions {
 /** 序列化为 md 文本：frontmatter 字段行 + 空行 + 正文，文件以单个换行结尾。 */
 export function serializeMemory(meta: MemoryMeta, body: string): string {
   // 标量值内的换行会破坏行式解析，序列化时压平
-  const scalar = (value: string): string => value.replace(/[\r\n]+/g, ' ').trim()
+  const scalar = (value: string): string => value.replace(/[\r\n\u2028\u2029]+/g, ' ').trim()
   return (
     [
       '---',
@@ -230,7 +230,7 @@ function memorySourceRange(kind: 'compress' | 'merge', ids: string[]): string {
  * 缺少 frontmatter、created 缺失/非法、数组字段非 JSON 字符串数组时抛错。
  */
 export function parseMemory(file: string, text: string): MemoryEntry {
-  const lines = text.replace(/\r\n/g, '\n').split('\n')
+  const lines = text.replace(/\r\n?/g, '\n').split('\n')
   if (lines[0] !== '---') throw new Error(`记忆文件缺少 frontmatter: ${file}`)
   let end = -1
   for (let i = 1; i < lines.length; i++) {
@@ -244,7 +244,7 @@ export function parseMemory(file: string, text: string): MemoryEntry {
   const fields = new Map<string, string>()
   for (const line of lines.slice(1, end)) {
     if (!line.trim()) continue
-    const match = /^([A-Za-z_][\w-]*):\s*(.*)$/.exec(line)
+    const match = /^([A-Za-z_][\w-]*):\s*([\s\S]*)$/.exec(line)
     if (!match) throw new Error(`frontmatter 字段行无法解析: ${file}: ${line}`)
     fields.set(match[1]!, match[2]!)
   }
@@ -435,7 +435,7 @@ export class MemoryStore {
       for (const item of items) {
         const live = current.get(memoryIdentity(item.entry.id))
         if (!live || live.body !== item.entry.body) continue
-        records.set(memoryIdentity(live.id), { hash: this.hashOf(live), aliases: [...item.aliases] })
+        records.set(memoryIdentity(live.id), { hash: this.hashOf(live), aliases: normalizeAliases(item.aliases, live.body) })
         saved++
       }
       if (saved === 0) return 0
@@ -517,7 +517,8 @@ export class MemoryStore {
     keys?: string[]
     sourceRange?: string
   }): Promise<MemoryWriteResult> {
-    const now = new Date().toISOString()
+    return withWorkspaceLock(this.fs.root, async () => {
+      const now = new Date().toISOString()
     // id = `m-<36 进制毫秒>-<随机 6 hex>`（对齐 worlddelta）：同毫秒只留 2 位 base36
     // 会碰撞静默覆盖（同轮连写两条记忆不罕见），随机段必须够宽。
     const id = `m-${Date.now().toString(36)}-${randomBytes(3).toString('hex')}`
@@ -528,14 +529,22 @@ export class MemoryStore {
       tags: input.tags ?? [],
       keys: input.keys ?? [],
     }
-    await this.fs.writeText(this.pathOf(id), serializeMemory(meta, input.body))
+      const content = serializeMemory(meta, input.body)
+      await this.fs.writeText(this.pathOf(id), content)
+      const entry = parseMemory(`${id}.md`, content)
+      return {
+        ...entry,
+        overLength: entry.body.length > MEMORY_BODY_SOFT_LIMIT,
+      }
+    })
+    /*
     return {
       id,
       file: `${id}.md`,
       ...meta,
-      body: input.body,
-      archived: false,
-      overLength: input.body.length > MEMORY_BODY_SOFT_LIMIT,
+      body: input.body, archived: false } */
+    /* unused */ void {
+
     }
   }
 
@@ -549,7 +558,7 @@ export class MemoryStore {
   }
 
   private async updateNow(id: string, patch: { body?: string; tags?: string[]; keys?: string[] }, options?: MemoryUpdateOptions): Promise<MemoryEntry | null> {
-    const existing = await this.get(id)
+    const existing = await this.getNow(id)
     if (!existing) return null
     const lists = options?.listMode ?? 'merge'
     const updateList = (current: string[], next: string[] | undefined): string[] => {
@@ -565,8 +574,10 @@ export class MemoryStore {
       keys: updateList(existing.keys, patch.keys),
     }
     const body = patch.body ?? existing.body
-    await this.fs.writeText(this.pathOf(id), serializeMemory(meta, body))
-    return { ...existing, ...meta, body }
+    const content = serializeMemory(meta, body)
+    await this.fs.writeText(this.pathOf(id), content)
+    return parseMemory(`${id}.md`, content)
+
   }
 
   /** 事务删除（经 fs.delete）；不存在返回 false。 */

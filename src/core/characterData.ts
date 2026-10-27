@@ -30,7 +30,7 @@ const MODELED_DATA_KEYS = new Set([
 
 /** 已被内嵌世界书归一化消费的历史别名；不能在删除世界书后从 raw 复活。 */
 const CONSUMED_DATA_ALIASES = new Set(['lorebook', 'characterBook'])
-const ENVELOPE_KEYS = new Set(['spec', 'spec_version', 'data'])
+
 
 /** 与卡解析器一致：别名只在真能归一化为非空世界书时才具有业务语义。 */
 export function isNonEmptyCharacterBook(value: unknown): boolean {
@@ -95,13 +95,14 @@ function setExtraField(target: Record<string, unknown>, key: string, value: unkn
  */
 export function characterDataExtras(card: CharacterCard): CharacterDataExtras {
   const raw = record(card.raw) ? card.raw : {}
-  const rawData = record(raw.data) ? raw.data : raw
+  const rawData = card.spec !== 'chara_card_v1' && record(raw.data) ? raw.data : raw
+  const hasWrappedData = rawData !== raw
   const rawExtensions = record(rawData.extensions) ? rawData.extensions : {}
   const fields: Record<string, unknown> = {}
   const directKeys = new Set<string>()
 
   for (const key of Object.keys(rawData)) {
-    if (isKnownCharacterDataKey(key, rawData[key]) || ENVELOPE_KEYS.has(key)) continue
+    if (isKnownCharacterDataKey(key, rawData[key]) || (!hasWrappedData && (key === 'spec' || key === 'spec_version' || (card.spec !== 'chara_card_v1' && key === 'data')))) continue
     directKeys.add(key)
     // 归一化必然把此类字段镜像进 extensions；当前镜像消失表示后续编辑已删除，
     // 不能 fallback raw 复活（典型场景是脚本库升级后删除 TavernHelper_scripts）。

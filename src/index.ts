@@ -94,8 +94,17 @@ export async function apply(ctx: Context, config: ReturnType<typeof Config>): Pr
       ctx.logger.warn(`dsh-tavern: 解除写脏空白会话失败：${error instanceof Error ? error.message : String(error)}`)
     }
   }
-  for (const session of ctx.sessions.list()) retireStuckBlank(session)
-  ctx.on('session/created', retireStuckBlank)
+  const adoptOrRetireSession = (session: Session) => {
+    let isFork = false
+    try { isFork = Boolean(session.header.parentSession) && isTavernRuntimeSession(ctx, session) } catch { return }
+    if (!isFork) { retireStuckBlank(session); return }
+    void state.trackBindingAdoption(session.id, () => adoptHostFork({ ctx, state }, session))
+      .then((adopted) => { if (adopted) ctx.logger.info(`dsh-tavern: 已为宿主分支 ${session.id} 准备独立剧情`); retireStuckBlank(session) })
+      .catch((error) => ctx.logger.warn(`dsh-tavern: 宿主分支绑定剧情失败：${error instanceof Error ? error.message : String(error)}`))
+  }
+  for (const session of ctx.sessions.list()) adoptOrRetireSession(session)
+  ctx.on('session/created', adoptOrRetireSession)
+
 
   // 宿主原生「在新对话中分支」只复制日志：为已绑定来源的子会话准备独立剧情并绑定。
   // 同步登记接管，客户端或首轮随后读取绑定时会等它完成。

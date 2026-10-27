@@ -580,6 +580,10 @@ describe('卡内世界书导出格式', () => {
       expect(files.some(name => name.startsWith('session_1_t1-') && files.length >= 2)).toBe(true)
       const loaded = await loadTemplateState(fs)
       expect(loaded.generation?.floor).toBe('session_1#t1')
+      const v1 = parseJsonCard({ spec: 'chara_card_v1', name: 'V1卡', description: 'desc', data: { customRootData: 42 } })
+      expect(v1.spec).toBe('chara_card_v1')
+      expect(v1.extensions.data).toEqual({ customRootData: 42 })
+      expect(cardToStJson(v1).data).toMatchObject({ name: 'V1卡', data: { customRootData: 42 } })
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

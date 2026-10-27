@@ -26,7 +26,7 @@ import { Wal } from '../state/wal.js'
 import { copyTemplateTimers, loadTemplateGenerationIdentity } from '../state/template.js'
 import { estimateTokens } from '../core/tokenize.js'
 import { rebuildIndex } from '../state/workspace.js'
-import { cardGreetingVariants, greetingFloorState, isGreetingOnlyBlank, pickGreetingText, sessionHasUserMessage, TAVERN_GREETING_SOURCE } from '../core/greetingLog.js'
+import { cardGreetingVariants, greetingFloorState, isGreetingOnlyBlank, isTavernGreetingEvent, pickGreetingText, sessionHasUserMessage, TAVERN_GREETING_SOURCE } from '../core/greetingLog.js'
 import { expandMacros } from '../core/macros.js'
 import { CONTINUE_INSTRUCTION_PREFIX, isContinueInstruction, isHostInjectedUserMessage, isSyntheticUserText } from '../core/dshPrompt.js'
 import { DEFAULT_USER_NAME } from '../core/persona.js'
@@ -41,6 +41,7 @@ import { WorkspaceFs } from '../state/workspaceFs.js'
 import { sessionFile } from './paths.js'
 import { assertHostForkSource, deleteHostForkAdoption, hostForkSeedHash, readHostForkAdoption, writeHostForkAdoption, type HostForkAdoptionPlan } from './hostForkAdoption.js'
 import { bindingDeletionGeneration, loadBinding, type SessionBinding, type WalLineageEntry } from './bindings.js'
+import { PRESET_ADAPTER_PROVIDER, PRESET_ADAPTER_SOURCE_PROVIDER } from './presetAdapter.js'
 import { sessionModelRoute } from './modelRoute.js'
 import type { TavernState } from './state.js'
 
@@ -97,21 +98,24 @@ function presentRoute(value: string | undefined): value is string {
  */
 export function forkAgentOptions(parent: Pick<Agent, 'options'> | undefined, source: Session): AgentOptions {
   const out: AgentOptions = { ...(parent?.options ?? {}) }
-  const route = sessionModelRoute({ options: out, session: source })
-  if (presentRoute(route.provider)) out.provider = route.provider
-  if (presentRoute(route.model)) out.model = route.model
-  if (!presentRoute(out.provider) || !presentRoute(out.model)) {
-    const events = source.snapshotEvents()
-    for (let i = events.length - 1; i >= 0; i--) {
-      const event = events[i]!
-      if (event.type !== 'assistant/message') continue
-      const src = (event.data as { message?: { source?: { provider?: string; model?: string } } }).message?.source
-      if (!presentRoute(src?.provider) || !presentRoute(src.model)) continue
-      if (src.provider === TAVERN_GREETING_SOURCE.provider && src.model === TAVERN_GREETING_SOURCE.model) continue
-      if (!presentRoute(out.provider)) out.provider = src.provider
-      if (!presentRoute(out.model)) out.model = src.model
-      break
-    }
+  delete out.provider
+  delete out.model
+  const route = sessionModelRoute({ options: parent?.options ?? {}, session: source })
+  if (presentRoute(route.provider) && presentRoute(route.model)) {
+    out.provider = route.provider
+    out.model = route.model
+    return out
+  }
+  const events = source.snapshotEvents()
+  for (let i = events.length - 1; i >= 0; i--) {
+    const event = events[i]!
+    if (event.type !== 'assistant/message') continue
+    const src = (event.data as { message?: { source?: { provider?: string; model?: string } } }).message?.source
+    if (!presentRoute(src?.provider) || !presentRoute(src.model)) continue
+    if (src.provider === TAVERN_GREETING_SOURCE.provider && src.model === TAVERN_GREETING_SOURCE.model) continue
+    out.provider = src.provider === PRESET_ADAPTER_PROVIDER ? PRESET_ADAPTER_SOURCE_PROVIDER : src.provider
+    out.model = src.model
+    break
   }
   return out
 }
@@ -394,16 +398,19 @@ export function inheritedThroughTurn(seed: readonly SessionEvent[]): number | nu
  * 补回祖先边界。新 fork 会直接持久化 walLineage；这里只在旧绑定缺字段且父会话仍在线时尽力迁移。
  */
 function inferLiveWalLineage(ctx: Context, source: Session, binding: SessionBinding): SessionBinding {
-  if ((binding.walLineage?.length ?? 0) > 0 || !source.header.parentSession) return binding
+  if (binding.walLineage !== undefined || !source.header.parentSession) return binding
   const reverse: WalLineageEntry[] = []
   const seen = new Set<string>()
   let child = source
+  let maxTurn = Number.POSITIVE_INFINITY
   while (child.header.parentSession && !seen.has(child.header.parentSession)) {
     const parentId = child.header.parentSession
     seen.add(parentId)
     const seedLength = Number.isSafeInteger(child.inheritedEventCount) ? child.inheritedEventCount : 0
     const throughTurn = inheritedThroughTurn(child.snapshotEvents().slice(0, seedLength))
-    if (throughTurn !== null) reverse.push({ sessionId: parentId, throughTurn })
+    if (throughTurn === null) break
+    maxTurn = Math.min(maxTurn, throughTurn)
+    reverse.push({ sessionId: parentId, throughTurn: maxTurn })
     const parent = ctx.sessions.get(parentId)
     if (!parent) break
     child = parent
@@ -724,11 +731,17 @@ export async function regenerate({ ctx, state }: FloorDeps, sessionId: string, m
   const userMessages = userMessagesOf(source.snapshotEvents(), target)
   if (userMessages.length === 0) throw new FloorError('no-user-message', `turn ${target} 内找不到用户消息`)
 
+  const revision = source.seq
+  const assertSource = (): void => {
+    if (liveSession(ctx, sessionId) !== source || source.seq !== revision) throw new FloorError('history-changed', '对话已改变，请刷新后再重新生成')
+    if (closedTurns(source.snapshotEvents()).openTurn !== null || state.openFloors?.has(sessionId)) throw new FloorError('turn-open', '生成仍在进行中，请等待完成后再重新生成')
+  }
   const loadedBinding = await state.loadBinding(sessionId)
   const binding = loadedBinding ? inferLiveWalLineage(ctx, source, loadedBinding) : null
   if (!binding) throw new FloorError('no-binding', '当前会话未绑定 Tavern 角色卡')
+  assertSource()
   // fork/挂工作区/保存子绑定全部成功后才改 WAL；这些步骤失败时源工作区保持原状。
-  const childId = await forkAt(ctx, state, source, binding, seq - 1, { forkTurn: target, rollbackFromTurn: target })
+  const childId = await forkAt(ctx, state, source, binding, seq - 1, { forkTurn: target, rollbackFromTurn: target, verifySource: async () => assertSource(), beforePublish: assertSource })
   // 保留原消息来源：重生成一个续写轮时驱动消息仍是插件 notice，宿主不会把续写指令当用户台词渲染，
   // 自动 MVU 的续写核对（按 source 识别）也仍能把新片段接回被截断的上一条回复。
   await resumeAndDrive(ctx, childId, replayMessage(userMessages))
@@ -745,12 +758,21 @@ export async function rollbackToFloor({ ctx, state }: FloorDeps, sessionId: stri
   const turn = resolveFloorTurn(source.snapshotEvents(), messageId, floorTurn)
   if (turn === null) throw new FloorError('no-message', '这条消息不在当前会话中（可能已过期）')
   const endSeq = turnEndSeq(source.snapshotEvents(), turn)
+    ?? (turn === 0 && messageId !== undefined
+      ? source.snapshotEvents().find((e) => e.type === 'assistant/message' && (e.data as { message?: { id?: string } }).message?.id === messageId)?.seq ?? null
+      : null)
   if (endSeq === null) throw new FloorError('turn-open', `turn ${turn} 尚未完结，不能作为回退边界`)
 
+  const revision = source.seq
+  const assertSource = (): void => {
+    if (liveSession(ctx, sessionId) !== source || source.seq !== revision) throw new FloorError('history-changed', '对话已改变，请刷新后再回退')
+    if (closedTurns(source.snapshotEvents()).openTurn !== null || state.openFloors?.has(sessionId)) throw new FloorError('turn-open', '生成仍在进行中')
+  }
   const loadedBinding = await state.loadBinding(sessionId)
   const binding = loadedBinding ? inferLiveWalLineage(ctx, source, loadedBinding) : null
   if (!binding) throw new FloorError('no-binding', '当前会话未绑定 Tavern 角色卡')
-  const childId = await forkAt(ctx, state, source, binding, endSeq, { forkTurn: turn, rollbackFromTurn: turn + 1 })
+  assertSource()
+  const childId = await forkAt(ctx, state, source, binding, endSeq, { forkTurn: turn, rollbackFromTurn: turn + 1, verifySource: async () => assertSource(), beforePublish: assertSource })
   return { childSessionId: childId, title: await branchTitle(state, binding, `回退到第 ${turn} 层`) }
 }
 
@@ -792,10 +814,16 @@ export async function editUserMessage(
   if (isSyntheticUserText(newText)) throw new FloorError('invalid-text', '用户正文不能改为宿主保留的合成指令')
 
 
+  const revision = source.seq
+  const assertSource = (): void => {
+    if (liveSession(ctx, sessionId) !== source || source.seq !== revision) throw new FloorError('history-changed', '对话已改变，请刷新后再编辑')
+    if (closedTurns(source.snapshotEvents()).openTurn !== null || state.openFloors?.has(sessionId)) throw new FloorError('turn-open', '生成仍在进行中')
+  }
   const loadedBinding = await state.loadBinding(sessionId)
   const binding = loadedBinding ? inferLiveWalLineage(ctx, source, loadedBinding) : null
   if (!binding) throw new FloorError('no-binding', '当前会话未绑定 Tavern 角色卡')
-  const childId = await forkAt(ctx, state, source, binding, seq - 1, { forkTurn: turn, rollbackFromTurn: turn })
+  assertSource()
+  const childId = await forkAt(ctx, state, source, binding, seq - 1, { forkTurn: turn, rollbackFromTurn: turn, verifySource: async () => assertSource(), beforePublish: assertSource })
   // 编辑框预填的是首条驱动输入：它换成新文本，同 turn 后续追加的用户输入按原顺序并入同一条消息。
   const edited = replayMessage([
     createUserMessage({ content: [{ type: 'text', text: newText }, ...userMessages[0]!.content.filter((part) => part.type !== 'text')], source: { kind: 'user' } }),
@@ -871,10 +899,16 @@ export async function editAssistantMessage(
   const seed = withEditedAssistantMessage(sessionPrefixEvents(source.snapshotEvents(), endSeq), messageId, newText)
   if (!seed) throw new FloorError('no-message', '这条消息不在当前会话中（可能已过期）')
 
+  const revision = source.seq
+  const assertSource = (): void => {
+    if (liveSession(ctx, sessionId) !== source || source.seq !== revision) throw new FloorError('history-changed', '对话已改变，请刷新后再编辑')
+    if (closedTurns(source.snapshotEvents()).openTurn !== null || state.openFloors?.has(sessionId)) throw new FloorError('turn-open', '生成仍在进行中')
+  }
   const loadedBinding = await state.loadBinding(sessionId)
   const binding = loadedBinding ? inferLiveWalLineage(ctx, source, loadedBinding) : null
   if (!binding) throw new FloorError('no-binding', '当前会话未绑定 Tavern 角色卡')
-  const childId = await forkAt(ctx, state, source, binding, endSeq, { seedOverride: seed, forkTurn: turn, rollbackFromTurn: turn })
+  assertSource()
+  const childId = await forkAt(ctx, state, source, binding, endSeq, { seedOverride: seed, forkTurn: turn, rollbackFromTurn: turn, verifySource: async () => assertSource(), beforePublish: assertSource })
   return { childSessionId: childId, title: await branchTitle(state, binding, `编辑第 ${turn} 层回复`) }
 }
 
@@ -897,6 +931,8 @@ export async function continueFloor(
   if (openTurn !== null) throw new FloorError('turn-open', `turn ${openTurn} 仍在进行中，请等待完成后再续写`)
   const turn = turnOfAssistantMessage(source.snapshotEvents(), messageId)
   if (turn === null) throw new FloorError('no-message', '这条消息不在当前会话中（可能已过期）')
+  const hit = source.snapshotEvents().find((e) => e.type === 'assistant/message' && (e.data as { message?: { id?: string } }).message?.id === messageId)
+  if (hit && isTavernGreetingEvent(hit)) throw new FloorError('greeting-floor', '开场白楼层不支持续写')
   const last = turns.at(-1)
   if (last === undefined || turn !== last) throw new FloorError('not-last-floor', '只能续写最后一层回复')
   const binding = await state.loadBinding(sessionId)
@@ -1013,9 +1049,16 @@ export async function getFloorSiblings(
       [...ids].map(async (id) => {
         if (ctx.sessions.get(id as Session['id']) !== undefined || confirmed.has(id)) {
           existing.add(id)
-        } else if ((await loadBinding(state.paths, id)) !== null) {
-          existing.add(id)
-          confirmed.add(id)
+        } else {
+          try {
+            if ((await loadBinding(state.paths, id, true)) !== null) {
+              existing.add(id)
+              confirmed.add(id)
+            }
+          } catch {
+            // 临时 I/O 故障不能当成已解绑而把有效离线分支从 siblings.json 永久剪掉。
+            existing.add(id)
+          }
         }
       }),
     )

@@ -297,4 +297,13 @@ describe('resolveFloorTurn（中断楼层按 turn 号定位）', () => {
     await expect(rollbackToFloor(deps, session.id, undefined, 3)).rejects.toMatchObject({ code: 'no-message' })
     await expect(rollbackToFloor(deps, session.id)).rejects.toMatchObject({ code: 'no-message' })
   })
+
+  it('forkAgentOptions 丢弃父 options 的半边路由，并将 assistant/message 的 tavern-deepseek 归一为 deepseek', () => {
+    const s = sessionOf({ events: [assistant('tavern-deepseek', 'deepseek-chat')] })
+    expect(forkAgentOptions({ options: { provider: 'openai', maxTokens: 512 } }, s)).toEqual({
+      provider: 'deepseek-official',
+      model: 'deepseek-chat',
+      maxTokens: 512,
+    })
+  })
 })

@@ -119,7 +119,21 @@ async function references(home: string, entries: BackupEntry[]): Promise<DoctorI
     }
     for (const [id, directory] of [[binding.presetId, 'library/presets'], [binding.personaId, 'personas'],
       ...[...binding.lorebookIds, ...(binding.characterLorebookIds ?? []), binding.characterLorebookId].map(id => [id, 'library/lorebooks'])] as Array<[string | null, string]>) {
-      if (id && !paths.has(`dsh-tavern/${directory}/${id.replace(/[^A-Za-z0-9_一-鿿.-]/g, '_')}.json`)) add('BINDING_ASSET_MISSING')
+      if (!id || (directory === 'library/lorebooks' && id === '@dsh/character')) continue
+      const safe = id.replace(/[^A-Za-z0-9_一-鿿.-]/g, '_')
+      if (paths.has(`dsh-tavern/${directory}/${safe}.json`)) continue
+      let matched = false
+      if (safe !== id) {
+        const prefix = `dsh-tavern/${directory}/${safe}-`
+        for (const [candidate, file] of files) {
+          if (!candidate.startsWith(prefix) || !/^\d+\.json$/.test(candidate.slice(prefix.length))) continue
+          budget -= file.size
+          if (budget < 0) fail('REFERENCE_CHECK_LIMIT')
+          const raw = await boundedJson(checkedPath(home, candidate), 1024 * 1024).catch(() => null)
+          if (object(raw) && [raw.sourceId, raw.identifier, raw.id, raw.name].some(v => typeof v === 'string' && v.trim() === id)) { matched = true; break }
+        }
+      }
+      if (!matched) add('BINDING_ASSET_MISSING')
     }
   }
   return [...issues.values()]

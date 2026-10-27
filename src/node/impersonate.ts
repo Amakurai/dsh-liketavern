@@ -10,6 +10,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import {
   ReasoningEffortId,
   createAssistantMessage,
+  createSystemMessage,
   createUserMessage,
   type GenerateOptions,
   type LlmRuntime,
@@ -72,7 +73,7 @@ export async function impersonate({ ctx, state }: ImpersonateDeps, sessionId: st
   const messages: Message[] = pipeline.history.filter(message=>message.content.trim()).map((m) =>
     m.role === 'assistant'
       ? createAssistantMessage({ content: [{ type: 'text', text: m.content }], source: { provider, model } })
-      : createUserMessage({ content: [{ type: 'text', text: m.content }], source: { kind: 'user' } }),
+      : m.role === 'system' ? createSystemMessage(m.content) : createUserMessage({ content: [{ type: 'text', text: m.content }], source: { kind: 'user' } }),
   )
   messages.push(
     createUserMessage({
@@ -96,6 +97,10 @@ export async function impersonate({ ctx, state }: ImpersonateDeps, sessionId: st
     system: pipeline.system,
     ...(reasoningEffort !== undefined ? { reasoningEffort: ReasoningEffortId(reasoningEffort) } : {}),
   }, sampling, undefined, agent.options.maxTokens)
+  const latestBinding = await state.loadBinding(sessionId)
+  if (!latestBinding || latestBinding.cardId !== binding.cardId || latestBinding.storyId !== binding.storyId) {
+    throw new FloorError('binding-changed', '代答准备期间剧情绑定已改变')
+  }
   const signal = AbortSignal.timeout(60_000)
   const text = await collectCompleteText(llm.stream({ ...options, signal }), signal)
   if (!text) throw new FloorError('empty-result', '模型没有产出台词，请重试')

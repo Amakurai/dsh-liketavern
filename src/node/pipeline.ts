@@ -257,7 +257,7 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
 
   const preset = (binding.presetId ? await state.loadPreset(binding.presetId) : null) ?? defaultPreset()
   const persona = await state.resolvePersona(binding.personaId)
-  const userName = persona?.name ?? DEFAULT_USER_NAME
+  const userName = persona?.name.trim() || DEFAULT_USER_NAME
   // 修订号可能在上述异步读取期间更新；实际已读取资产的内容才是这份快照的身份。
   // 加入正文指纹后，旧正文与新修订号即使同时出现，也不会挡住下一轮的新正文；图片不参与组装。
   const { pngBytes: _png, ...promptCard } = card
@@ -376,7 +376,7 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
       const hits = await ws.memory.search(
         queryMessages,
         { ...memorySearchOptions(candidateCount, config.memory.halfLifeDays), includeSummarySources: true, ...(boost ? { boost } : {}),
-          names: persona?.name ? [charName, persona.name] : [charName] },
+          names: persona?.name.trim() ? [charName, persona.name.trim()] : [charName] },
       )
       memories = selectMemoryBodies(hits, config.memory.retrievalTokenBudget, config.memory.retrievalTopK)
     }

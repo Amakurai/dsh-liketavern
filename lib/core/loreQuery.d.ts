@@ -54,6 +54,6 @@ export interface LoreBudgetResult<T> {
     hint?: string;
     error?: string;
 }
-export declare function budgetLoreCatalog(entries: readonly WorldInfoEntry[], budget?: number): LoreBudgetResult<LoreCatalogItem>;
+export declare function budgetLoreCatalog(entries: readonly WorldInfoEntry[], budget?: number, extraHint?: string): LoreBudgetResult<LoreCatalogItem>;
 /** 正文按实际序列化响应拟合；控制字符转义、Unicode 代理对和字段计数都不能突破整份预算。 */
-export declare function clipLoreContents(entries: readonly WorldInfoEntry[], budget?: number): LoreBudgetResult<LoreContentItem>;
+export declare function clipLoreContents(entries: readonly WorldInfoEntry[], budget?: number, extraHint?: string): LoreBudgetResult<LoreContentItem>;

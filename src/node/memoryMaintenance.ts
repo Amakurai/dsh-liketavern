@@ -65,7 +65,7 @@ export async function compressOldestMemories(
   const batch = await ws.memory.oldest(state.config.memory.compressBatch)
   if (batch.length === 0) return null
   const merged = await compressMemoryBatch(llm, provider, model, batch.map((b) => b.body), maintenanceSignal)
-  if (merged === null || maintenanceSignal?.aborted) return null
+  if (!merged || !merged.trim() || maintenanceSignal?.aborted) return null
   // 顺序必须是先落合并条目再归档：若先 archive，write/rebuildIndex 抛错会让整批
   // 记忆从活跃库消失而合并条目没落盘（丢事实，且 registerMemoryMaintenance 清标记后
   // 永不重试）。反过来 write 失败时批次原样保留、下次压缩原样重试；archive 中途失败的
@@ -217,7 +217,12 @@ export function registerMemoryMaintenance(ctx: Context, state: TavernState, llm:
           }
           // 宿主取消维护必须取消这次辅助流；不能等待迟到的 stop 后继续归档原文。
           const result = await compressOldestMemories(state, llm, binding.cardId, route.provider, route.model, binding.storyId, signal)
-          if (result) state.pendingMemoryCompress.delete(binding.storyId ?? binding.cardId)
+          if (result) {
+            const after = await memory.stats()
+            if (after.count <= state.config.memory.maxEntries && after.tokens <= state.config.memory.maxTokens) {
+              state.pendingMemoryCompress.delete(binding.storyId ?? binding.cardId)
+            }
+          }
           if (!result) ctx.logger.warn('dsh-tavern: 记忆压缩未完成，原文与待处理标记已保留；后续轮次再试')
           if (result) ctx.logger.info(`dsh-tavern: 记忆压缩完成（${binding.cardId}，归档 ${result.archived} 条）`)
         })

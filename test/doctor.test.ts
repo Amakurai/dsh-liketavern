@@ -321,6 +321,27 @@ describe('doctor 聚合报告', () => {
     expect(report.statistics.characters).toMatchObject({ directories: 1, healthy: 0, unhealthy: 0, uninspected: 1 })
     expect(report.statistics.files.scanTruncated).toBe(true)
     expect(report.issues).toContainEqual({ code: 'READ_BUDGET_EXCEEDED', severity: 'warning', count: 1 })
+  })
+
+  it('剧情目录下的 .preparing-* 链接报告 STORY_LINK_SKIPPED 并遵守目录项上限', async () => {
+    const root = await makeStandardDirectories()
+    const cardRoot = join(root, 'characters', 'prep-link-a1b2c3d4')
+    const storiesRoot = join(cardRoot, 'stories')
+    const target = join(home, 'external-prep')
+    await mkdir(storiesRoot, { recursive: true })
+    await mkdir(target, { recursive: true })
+    await writeFile(join(cardRoot, 'card.json'), JSON.stringify({ name: '有界角色' }))
+    try {
+      await symlink(target, join(storiesRoot, '.preparing-ext'), process.platform === 'win32' ? 'junction' : 'dir')
+    } catch (error) {
+      if (['EPERM', 'EACCES', 'ENOTSUP'].includes((error as NodeJS.ErrnoException).code ?? '')) return
+      throw error
+    }
+    for (let i = 0; i < 2; i++) {
+      await mkdir(join(storiesRoot, `story-00000000-0000-4000-8000-00000000000${i}`), { recursive: true })
+    }
+    const report = await runDoctor({ home, nodeVersion: '24.0.0', scanEntryLimit: 2 })
+    expect(report.issues).toContainEqual({ code: 'STORY_LINK_SKIPPED', severity: 'error', count: 1 })
     expect(JSON.stringify(report)).not.toContain('预算内不应回显')
   })
 
@@ -358,6 +379,41 @@ describe('doctor 聚合报告', () => {
     expect(report.statistics.files.scanTruncated).toBe(true)
     expect(report.issues).toContainEqual({ code: 'FILE_SCAN_LIMIT_REACHED', severity: 'warning', count: 1 })
   })
+
+  it('坏 card.json 后读取 .archive.json 耗尽预算时仍计入 unhealthy 而非 uninspected', async () => {
+    const root = await makeStandardDirectories()
+    const cardRoot = join(root, 'characters', 'bad-card-budget-a1b2c3d4')
+    await mkdir(cardRoot)
+    await writeFile(join(cardRoot, 'card.json'), '{}')
+    await writeFile(join(cardRoot, '.archive.json'), JSON.stringify({ archivedAt: new Date(0).toISOString(), pad: 'x'.repeat(200) }))
+    const report = await runDoctor({ home, nodeVersion: '24.0.0', readBudgetBytes: 300 })
+    expect(report.ok).toBe(false)
+    expect(report.statistics.characters).toMatchObject({ directories: 1, healthy: 0, unhealthy: 1, uninspected: 0 })
+    expect(report.issues).toContainEqual({ code: 'READ_BUDGET_EXCEEDED', severity: 'warning', count: 1 })
+  })
+
+  it('剧情目录下的 .preparing-* 链接报告 STORY_LINK_SKIPPED 并遵守目录项上限', async () => {
+    const root = await makeStandardDirectories()
+    const cardRoot = join(root, 'characters', 'prep-link-a1b2c3d4')
+    const storiesRoot = join(cardRoot, 'stories')
+    const target = join(home, 'external-prep')
+    await mkdir(storiesRoot, { recursive: true })
+    await mkdir(target, { recursive: true })
+    await writeFile(join(cardRoot, 'card.json'), JSON.stringify({ name: '有界角色' }))
+    try {
+      await symlink(target, join(storiesRoot, '.preparing-ext'), process.platform === 'win32' ? 'junction' : 'dir')
+    } catch (error) {
+      if (['EPERM', 'EACCES', 'ENOTSUP'].includes((error as NodeJS.ErrnoException).code ?? '')) return
+      throw error
+    }
+    for (let i = 0; i < 2; i++) {
+      await mkdir(join(storiesRoot, `story-00000000-0000-4000-8000-00000000000${i}`), { recursive: true })
+    }
+    const report = await runDoctor({ home, nodeVersion: '24.0.0', scanEntryLimit: 2 })
+    expect(report.issues).toContainEqual({ code: 'STORY_LINK_SKIPPED', severity: 'error', count: 1 })
+    expect(report.statistics.files.scanTruncated).toBe(true)
+    expect(report.issues).toContainEqual({ code: 'FILE_SCAN_LIMIT_REACHED', severity: 'warning', count: 1 })
+  })
 })
 
 describe('doctor CLI', () => {
@@ -371,7 +427,11 @@ describe('doctor CLI', () => {
 
   it('只接受只读参数，未知修复参数直接拒绝', () => {
     expect(parseDoctorArguments(['--json', '--home', home])).toEqual({ json: true, help: false, version: false, home })
+    expect(parseDoctorArguments(['--json', '--home', home])).toEqual({ json: true, help: false, version: false, home })
     expect(() => parseDoctorArguments(['--fix'])).toThrow('invalid arguments')
+    expect(() => parseDoctorArguments(['--home'])).toThrow('invalid arguments')
+    expect(() => parseDoctorArguments(['--home', '--json'])).toThrow('invalid arguments')
+    expect(() => parseDoctorArguments(['--home', home, '--home', home])).toThrow('invalid arguments')
   })
 
   it('JSON CLI 使用健康状态决定退出码且不回显输入路径', async () => {

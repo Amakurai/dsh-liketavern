@@ -1419,6 +1419,23 @@ describe('EM 条目丢弃告警的 position 口径', () => {
       processTemplateSequence: () => ({}),
     }))
     expect(seqRes.standing).toContain('SYS Alice')
+    expect(seqRes.standing).toContain('SYS Alice')
     expect(seqRes.turnContext).not.toContain('SYS Alice')
+
+    // 同主触发词的不同世界书条目各自走 renderTemplate，不因 key[0] 相同串用缓存；示例消息前后 WI 遵循 formatting.worldInfo
+    const wiSamePrimary = wiOf({
+      [WIPosition.BeforeExampleMessages]: [
+        act(makeWiEntry({ key: 'wi-1', keys: ['sharedKey'], content: '<%="E1"%>' })),
+        act(makeWiEntry({ key: 'wi-2', keys: ['sharedKey'], content: '<%="E2"%>' })),
+      ],
+    })
+    const formattedPreset = defaultPreset()
+    formattedPreset.formatting = { ...formattedPreset.formatting, worldInfo: '[WI:{0}]' }
+    const sameKeyRes = assemblePrompt(makeInput({
+      preset: formattedPreset,
+      wi: wiSamePrimary,
+      renderTemplate: (t) => (t.includes('E1') ? 'OUT-1' : 'OUT-2'),
+    }))
+    expect(sameKeyRes.turnContext).toContain('[WI:OUT-1\n\nOUT-2]')
   })
 })

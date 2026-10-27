@@ -583,7 +583,7 @@ async function inspectStories(
     if (budget.exhausted) break
     if (entry.name.startsWith('.preparing-')) {
       if (entry.isDirectory()) stats.stories.drafts += 1
-      else if (entry.isSymbolicLink()) stats.stories.unsafeEntries += 1
+      else if (entry.isSymbolicLink()) { stats.stories.unsafeEntries += 1; issues.add('STORY_LINK_SKIPPED', 'error') }
       continue
     }
     if (entry.isSymbolicLink()) {
@@ -652,8 +652,8 @@ async function inspectCharacters(
     const cardRoot = `${charactersRoot}/${entry.name}`
     // card.json 与运行时写入共用存储上限；通用扫描复用本次结果计数，不再重复读取。
     const card = await readBoundedJson(`${cardRoot}/card.json`, MAX_STORED_CARD_JSON_BYTES, budget)
-    if (card.status === 'budget') {
-      stats.characters.uninspected += 1
+    if (card.status === 'budget') { stats.characters.uninspected += 1
+
       break
     }
     inspectedCards.set(resolve(cardRoot, 'card.json'), card.status)
@@ -661,8 +661,8 @@ async function inspectCharacters(
     if (!healthy) issues.add(card.status === 'oversized' ? 'CHARACTER_METADATA_TOO_LARGE' : 'CHARACTER_METADATA_INVALID', 'error')
 
     const archive = await readBoundedJson(`${cardRoot}/${CHARACTER_ARCHIVE_FILE}`, 64 * 1024, budget)
-    if (archive.status === 'budget') {
-      stats.characters.uninspected += 1
+    if (archive.status === 'budget') { if (!healthy) stats.characters.unhealthy += 1; else stats.characters.uninspected += 1
+
       break
     }
     if (archive.status === 'ok') {
@@ -930,7 +930,7 @@ export function parseDoctorArguments(args: string[]): CliArguments {
     else if (arg === '--version' || arg === '-v') parsed.version = true
     else if (arg === '--home') {
       const value = args[++index]
-      if (!value) throw new Error('invalid arguments')
+      if (!value || value.startsWith('-') || parsed.home !== undefined) throw new Error('invalid arguments')
       parsed.home = value
     } else throw new Error('invalid arguments')
   }

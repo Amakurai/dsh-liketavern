@@ -146,5 +146,6 @@ describe('完整 JSON 资产预算', () => {
     const path = `state/${'长路径'.repeat(130)}.md`
     expect(budgetAssetFiles([path], 900).files).toEqual([path])
     expect(budgetAssetIndex({ files: [{ path, summary: '短摘要', tokens: 3 }] }, [path], 900)?.files).toContainEqual({ path, summary: '短摘要', tokens: 3, truncated: false })
+    expect(resolveReadableAssetPath('memory/aliases.json')).toEqual({ ok: false, error: '不读取内部记忆别名索引' })
   })
 })

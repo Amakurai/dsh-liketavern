@@ -375,3 +375,18 @@ it('预设内非法脚本设置不能通过导入或保存验证',()=>{
   expect(()=>parseStPreset({prompts:[],extensions:{tavern_helper:{scripts:[{id:'duplicate'},{id:'duplicate'}]}}})).toThrow(/重复/)
   expect(()=>exportStPreset({identifier:'invalid',name:'invalid',entries:[],helperSettings:[] as unknown as Record<string,unknown>})).toThrow(/对象/)
 })
+it('导入预设时裁剪条目 identifier/name 空白，并归一正则空串/null 深度',()=>{
+  const {preset}=parseStPreset({
+    name:'  预设名  ',
+    identifier:'  preset-id  ',
+    prompts:[{identifier:'entry-1',name:'  条目名  ',content:'x'}],
+    prompt_order:[{character_id:100001,order:[{identifier:'entry-1',enabled:true}]}],
+    extensions:{regex_scripts:[{id:'r1',scriptName:'s',findRegex:'a',replaceString:'b',placement:[1],minDepth:'' as unknown as number,maxDepth:null as unknown as number}]},
+  })
+  expect(preset.identifier).toBe('preset-id')
+  expect(preset.name).toBe('预设名')
+  expect(preset.entries[0]?.identifier).toBe('entry-1')
+  expect(preset.entries[0]?.name).toBe('条目名')
+  expect(preset.regexScripts?.[0]?.minDepth).toBeNull()
+  expect(preset.regexScripts?.[0]?.maxDepth).toBeNull()
+})

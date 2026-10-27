@@ -76,7 +76,15 @@ export function parseStoredPreset(value: unknown): PromptPreset {
   if (new Set(preset.entries.map(entry => entry.identifier)).size !== preset.entries.length) {
     throw new Error('预设条目的 identifier 重复')
   }
-  for (const entry of preset.entries) validateInChatDepth(entry)
+  if (!preset.identifier.trim()) throw new Error('预设 identifier 不能为空白')
+  for (const entry of preset.entries) {
+    validateInChatDepth(entry)
+    if (entry.injectionTrigger !== undefined) {
+      const triggers = entry.injectionTrigger.map(t => t.trim().toLowerCase()).filter(Boolean)
+      if (triggers.length > 0) entry.injectionTrigger = triggers
+      else delete entry.injectionTrigger
+    }
+  }
   return { ...preset, ...(helperSettings !== undefined ? { helperSettings: helperScriptSettings(helperSettings) } : {}),
     ...(sampling !== undefined ? { sampling: parsePresetSampling(sampling) } : {}),
     ...(formatting !== undefined ? { formatting: parsePresetFormatting(formatting) } : {}) }
@@ -208,11 +216,31 @@ function collectPromptEmbeddedRegex(rawPrompts: unknown[]): CardRegexScript[] {
  * 旧版 ST 的 substituteRegex 是布尔（true = 原样代入），也可能是数字字符串；按 ST 的 Number() 口径
  * 归一为 0/1/2 再存。否则存储校验只收数字，整份预设会因一条旧脚本导入失败。
  */
+function normalizeDepthBound(value: unknown): number | null | undefined {
+  if (value === undefined) return undefined
+  if (value === null || value === '') return null
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null
+  if (typeof value === 'string' && value.trim() !== '') {
+    const n = Number(value)
+    return Number.isFinite(n) ? n : null
+  }
+  return null
+}
+
 function normalizeImportedRegexScript(script: CardRegexScript): CardRegexScript {
-  const value: unknown = isRecord(script) ? script.substituteRegex : undefined
-  if (value === undefined || typeof value === 'number') return script
-  const substitute = Number(value)
-  return { ...script, substituteRegex: substitute === 1 || substitute === 2 ? substitute : 0 }
+  const rawSubstitute: unknown = isRecord(script) ? script.substituteRegex : undefined
+  const substitute = typeof rawSubstitute === 'number' && Number.isFinite(rawSubstitute) ? rawSubstitute : rawSubstitute === undefined ? undefined : Number(rawSubstitute)
+  const minDepth = isRecord(script) ? normalizeDepthBound(script.minDepth) : undefined
+  const maxDepth = isRecord(script) ? normalizeDepthBound(script.maxDepth) : undefined
+  return {
+    ...script,
+    ...(substitute !== undefined ? { substituteRegex: substitute === 1 || substitute === 2 ? substitute : 0 } : {}),
+    ...(minDepth !== undefined ? { minDepth } : {}),
+    ...(maxDepth !== undefined ? { maxDepth } : {}),
+
+
+
+  }
 }
 
 function parsePromptEntry(raw: Record<string, unknown>, index: number, warnings: string[]): PresetEntry | null {
@@ -232,7 +260,7 @@ function parsePromptEntry(raw: Record<string, unknown>, index: number, warnings:
   const position: PresetEntry['position'] = toNum(raw.injection_position, 0) === 1 ? 'in-chat' : 'relative'
   const entry: PresetEntry = {
     identifier,
-    name: toStr(raw.name) || identifier,
+    name: toStr(raw.name).trim() || identifier,
     enabled: true,
     role: toRole(raw),
     position,
@@ -329,12 +357,12 @@ export function parseStPreset(json: unknown, fallbackName?: string): ParseStPres
   assignRelativeOrder(entries)
 
   const fallback = toStr(fallbackName).trim()
-  const identifier = toStr(json.identifier) || toStr(json.name) || fallback || 'imported-preset'
+  const identifier = toStr(json.identifier).trim() || toStr(json.name).trim() || fallback || 'imported-preset'
   if (identifier.length > MAX_WI_KEY_CHARS) {
     throw new Error(`预设 identifier 过长（>${MAX_WI_KEY_CHARS} 字符）`)
   }
   const preset: PromptPreset = {
-    name: toStr(json.name) || fallback || '未命名预设',
+    name: toStr(json.name).trim() || fallback || '未命名预设',
     identifier,
 
 

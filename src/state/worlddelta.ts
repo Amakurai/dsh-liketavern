@@ -95,7 +95,7 @@ export class WorldDeltaStore {
       let found = false
       const next = lines.map((line) => {
         const delta = WorldDeltaStore.parseLine(line)
-        if (!delta || delta.id !== id) return line
+        if (!delta || delta.id !== id || delta.revoked) return line
         found = true
         return JSON.stringify({ ...delta, revoked: true })
       })

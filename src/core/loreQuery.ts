@@ -40,7 +40,10 @@ export function clampLoreTopK(value: number | undefined): number {
 }
 
 export function toLoreCatalogItem(entry: WorldInfoEntry): LoreCatalogItem {
-  const preview = entry.content.replace(/\s+/g, ' ').trim().slice(0, LORE_CATALOG_PREVIEW)
+  const normalized = entry.content.replace(/\s+/g, ' ').trim()
+  let end = LORE_CATALOG_PREVIEW
+  if (end < normalized.length && end > 0 && /[\uD800-\uDBFF]/.test(normalized[end - 1]!) && /[\uDC00-\uDFFF]/.test(normalized[end] ?? '')) end--
+  const preview = normalized.slice(0, end)
   return {
     uid: entry.uid,
     key: entry.key,
@@ -147,14 +150,16 @@ function boundedLoreMetadata(entry: WorldInfoEntry) {
 function budgetLoreItems<T extends { metadataTruncated?: boolean; truncated?: boolean }>(
   entries: readonly WorldInfoEntry[], mode: 'catalog' | 'content', budget: number,
   build: (entry: WorldInfoEntry) => T,
-  fill?: (item: T, entry: WorldInfoEntry, make: () => LoreBudgetResult<T>, limit: number) => void,
+  fill?: (item: T, entry: WorldInfoEntry, make: () => LoreBudgetResult<T>, limit: number) => void, extraHint?: string,
 ): LoreBudgetResult<T> {
   const limit = Math.max(0, Math.floor(budget)), out: T[] = []
+  const baseHint = mode === 'catalog' ? '用 uid 或完整 key 取正文；disabled 条目仍可读。' : entries.length === 0 ? '无匹配。先不带参数看目录。' : ''
+  const mergedHint = extraHint ? (baseHint ? `${baseHint} ${extraHint}` : extraHint) : baseHint
   const make = () => stampAssetTokens({ ok: true, mode, count: entries.length, entries: out, tokensUsed: 0,
     omitted: entries.length - out.length,
     truncated: entries.length > out.length || out.some(item => item.metadataTruncated || item.truncated),
-    ...(mode === 'catalog' ? { hint: '用 uid 或完整 key 取正文；disabled 条目仍可读。' }
-      : entries.length === 0 ? { hint: '无匹配。先不带参数看目录。' } : {}),
+    ...(mergedHint ? { hint: mergedHint } : {}),
+
   } as LoreBudgetResult<T>)
   if (make().tokensUsed > limit) throw new Error('世界书输出预算不足以容纳响应元数据')
   for (const entry of entries) {
@@ -176,16 +181,16 @@ function budgetLoreItems<T extends { metadataTruncated?: boolean; truncated?: bo
   return result
 }
 
-export function budgetLoreCatalog(entries: readonly WorldInfoEntry[], budget = LORE_READ_TOKEN_BUDGET): LoreBudgetResult<LoreCatalogItem> {
+export function budgetLoreCatalog(entries: readonly WorldInfoEntry[], budget = LORE_READ_TOKEN_BUDGET, extraHint?: string): LoreBudgetResult<LoreCatalogItem> {
   return budgetLoreItems(entries, 'catalog', budget, entry => {
     const preview = clipAssetJsonText(toLoreCatalogItem(entry).preview, 80), metadata = boundedLoreMetadata(entry)
     return { ...metadata, tokens: estimateTokens(entry.content), preview: preview.text,
       metadataTruncated: preview.truncated || metadata.metadataTruncated }
-  })
+  }, undefined, extraHint)
 }
 
 /** 正文按实际序列化响应拟合；控制字符转义、Unicode 代理对和字段计数都不能突破整份预算。 */
-export function clipLoreContents(entries: readonly WorldInfoEntry[], budget = LORE_READ_TOKEN_BUDGET): LoreBudgetResult<LoreContentItem> {
+export function clipLoreContents(entries: readonly WorldInfoEntry[], budget = LORE_READ_TOKEN_BUDGET, extraHint?: string): LoreBudgetResult<LoreContentItem> {
   return budgetLoreItems<LoreContentItem>(entries, 'content', budget, entry => ({ ...boundedLoreMetadata(entry), content: '', truncated: false }),
     (item, entry, make, limit) => {
       item.content = entry.content
@@ -203,5 +208,5 @@ export function clipLoreContents(entries: readonly WorldInfoEntry[], budget = LO
       }
       if (lo > 0 && /[\uD800-\uDBFF]/.test(entry.content[lo - 1]!) && /[\uDC00-\uDFFF]/.test(entry.content[lo] ?? '')) lo--
       item.content = `${entry.content.slice(0, lo)}${suffix}`
-    })
+    }, extraHint)
 }

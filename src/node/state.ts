@@ -132,7 +132,7 @@ function preferredCardMetadata(card: CharacterCard): Record<string, unknown> {
 function attachCharacterBookMetadata(card: CharacterCard, book: NonNullable<CharacterCard['characterBook']>): Record<string, unknown> {
   const metadata = preferredCardMetadata(card)
   const payload = book.raw ?? { name: book.name ?? card.name, entries: book.entries }
-  if (metadata.data && typeof metadata.data === 'object' && !Array.isArray(metadata.data)) {
+  if (card.spec !== 'chara_card_v1' && metadata.data && typeof metadata.data === 'object' && !Array.isArray(metadata.data)) {
     return { ...metadata, data: { ...(metadata.data as Record<string, unknown>), character_book: payload } }
   }
   return { ...metadata, character_book: payload }
@@ -559,6 +559,7 @@ export class TavernState {
     dir: string,
     name: string,
     sameAsset: (existingIdentity: string) => boolean,
+    expectedRevision?: string | null,
   ): Promise<string> {
     const base = this.assetFileId(name)
     const baseKey = this.assetFileKey(base)
@@ -573,7 +574,7 @@ export class TavernState {
         const json: unknown = JSON.parse(raw)
         existing = stringField(json, 'identifier') ?? stringField(json, 'id') ?? stringField(json, 'name')
         const existingSourceId = stringField(json, 'sourceId')
-        if (existingSourceId !== null && sameAsset(existingSourceId)) existing = existingSourceId
+        if (existingSourceId !== null && (sameAsset(existingSourceId) || expectedRevision === null)) existing = existingSourceId
       } catch {
         existing = null
       }
@@ -1163,7 +1164,7 @@ export class TavernState {
       // 人设身份是 id（客户端生成，编辑器内不可改，name 可改）：改名是编辑不是冲突。
       // 文件内的 id 是落盘时改写过的净化 id，故原始 id 与净化 id 都认作同一资产。
       // 文件内的 id 是落盘时改写过的净化 id，原始未净化 id 记在 sourceId，避免不同未净化 id 撞车互盖。
-      const id = await this.resolveAssetWriteId(fs, 'personas', persona.id, (existing) => existing === persona.id)
+      const id = await this.resolveAssetWriteId(fs, 'personas', persona.id, (existing) => existing === persona.id, expectedRevision)
       const existingRaw = await fs.readText(`personas/${id}.json`)
       let previousSourceId: string | null = null
       if (existingRaw !== null) {

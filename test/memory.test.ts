@@ -246,6 +246,22 @@ describe('MemoryStore', () => {
     await fs.writeText('memory/no-date.md', '---\ntags: []\n---\n\nx\n')
     expect((await store.list()).map((e) => e.id)).toEqual([good.id])
     expect((await store.stats()).count).toBe(1)
+  })
+
+  it('serializeMemory 与 parseMemory 兼容 U+2028/U+2029，write/update 返回归一化后的正文', async () => {
+    const raw = serializeMemory(
+      { created: '2026-08-01T00:00:00.000Z', updated: '2026-08-01T00:00:00.000Z', sourceRange: 'a\u2028b', tags: ['t\u20281'], keys: ['k\u20291'] },
+      '\n\r\n第一行\r\n\n',
+    )
+    const parsed = parseMemory('m-u.md', raw)
+    expect(parsed.sourceRange).toBe('a b')
+    expect(parsed.tags).toEqual(['t\u20281'])
+    expect(parsed.keys).toEqual(['k\u20291'])
+    expect(parsed.body).toBe('第一行')
+    const written = await store.write({ body: '\n\r\n写盘正文\r\n\n' })
+    expect(written.body).toBe('写盘正文')
+    const updated = await store.update(written.id, { body: '\n更新正文\n' })
+    expect(updated?.body).toBe('更新正文')
     expect(await store.get('broken')).toBeNull()
   })
 
@@ -364,5 +380,21 @@ describe('MemoryStore 解析/索引缓存', () => {
     store.invalidate()
     expect((await store.list()).map((e) => e.id)).toEqual([entry.id])
     expect((await store.stats()).count).toBe(1)
+  })
+
+  it('serializeMemory 与 parseMemory 兼容 U+2028/U+2029，write/update 返回归一化后的正文', async () => {
+    const raw = serializeMemory(
+      { created: '2026-08-01T00:00:00.000Z', updated: '2026-08-01T00:00:00.000Z', sourceRange: 'a\u2028b', tags: ['t\u20281'], keys: ['k\u20291'] },
+      '\n\r\n第一行\r\n\n',
+    )
+    const parsed = parseMemory('m-u.md', raw)
+    expect(parsed.sourceRange).toBe('a b')
+    expect(parsed.tags).toEqual(['t\u20281'])
+    expect(parsed.keys).toEqual(['k\u20291'])
+    expect(parsed.body).toBe('第一行')
+    const written = await store.write({ body: '\n\r\n写盘正文\r\n\n' })
+    expect(written.body).toBe('写盘正文')
+    const updated = await store.update(written.id, { body: '\n更新正文\n' })
+    expect(updated?.body).toBe('更新正文')
   })
 })

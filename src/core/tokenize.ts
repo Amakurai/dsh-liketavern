@@ -122,6 +122,7 @@ export function isBigramTerm(term: string): boolean {
 
 /** 平假名、片假名及其音标扩展：单个假名不构成词。 */
 export function isKana(char: string): boolean {
+  if (char.length !== 1) return false
   const code = char.charCodeAt(0)
   return (code >= 0x3040 && code <= 0x30ff) || (code >= 0x31f0 && code <= 0x31ff)
 }
@@ -192,7 +193,7 @@ export function estimateTokens(text: string): number {
 
 /** 按估算 token 预算截断；超限时在末尾加省略标记。 */
 export function clipToTokenBudget(text: string, budget: number): { text: string; truncated: boolean; tokens: number } {
-  const limit = Math.max(0, Math.floor(budget))
+  const limit = Number.isNaN(budget) ? 0 : Math.max(0, Math.floor(budget))
   const tokens = estimateTokens(text)
   if (tokens <= limit) return { text, truncated: false, tokens }
   if (limit === 0) return { text: '', truncated: true, tokens: 0 }

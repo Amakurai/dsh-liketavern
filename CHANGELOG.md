@@ -2,6 +2,30 @@
 
 本插件与 dsh 宿主版本一一绑定（peerDependency 锁定精确版本），升级 dsh 前请先确认有适配的插件版本。
 
+## 0.5.9（2026-10-27）全链路审计修复与边界加固
+
+宿主依赖不变（dsh `0.2.1-rc.3`）。本版汇总四轮代码审计发现的提示词投影、WAL 事务回滚、模板沙箱、酒馆助手桥接、诊断备份与状态存储边界修复。
+
+- **提示词组装、请求投影与消息过滤**：
+  - 过滤宿主注入的 `system-prompt` 消息，不再将其当作用户台词参与世界书扫描、`{{lastusermessage}}` 或正则深度计数。
+  - 修复预设请求投影与模板摆放中锚点定位、同深度多条目稳定排序、工作区指令剔除后锚点保留及累计长度预算边界。
+  - 修复 `assemblePrompt` 中相同主触发词的世界书条目共享 `templateCache` 导致渲染串用的问题；`DialogueExamples` 前后的世界书条目现遵循 `preset.formatting.worldInfo` 格式模板。
+  - 完善宏展开、世界书概率/递归/分组边界及正则深度（空串/`null`/数字字符串）归一化。
+- **楼层分支、WAL 回滚与宿主分支接管**：
+  - 修复 WAL 循环覆盖写与回滚游标校验边界；`WorldDeltaStore.revoke` 对已撤销条目返回 `false` 而不重复改写日志。
+  - 宿主分支接管（`adoptHostFork`）统一先于空白会话退役（`retireStuckBlank`）执行，防止未接管的分支子会话被误写入空轮次事件。
+  - `regenerate`、`rollbackToFloor`、`editUserMessage`、`editAssistantMessage` 在快照准备与原子发布前复核源会话 `seq` 与开层状态；`continueFloor` 拒绝在开场白楼层上续写；`getFloorSiblings` 对非 `ENOENT` 的瞬时读取错误保守保留兄弟分支记录。
+  - `forkAgentOptions` 清理父 `options` 半边模型路由，并在回退读取助手消息来源时将 `tavern-deepseek` 归一为 `deepseek-official`；`inferLiveWalLineage` 保留开场白切换持久化的显式空世系 `[]`。
+  - AI 代答（`impersonate`）保留历史中的 `system` 角色消息并在调用流前复核会话绑定。
+- **模板沙箱、卡面桥接与客户端交互**：
+  - 加固隔离 Worker 启动握手、超时淘汰与模板运行时预算校验；修复模板展示净化与重放缓存键边界。
+  - 修复卡面租约释放、世界书桥接、助手消息历史编辑与 MVU 轮次恢复/取消边界；修复客户端芯片、语音、世界书编辑器与脚本面板的状态同步细节。
+- **角色卡、记忆维护、工具预算与诊断备份**：
+  - 仅在 `card.spec !== 'chara_card_v1'` 时解包 `raw.data`；平铺卡归一化跳过顶层 `spec`/`spec_version`；人设保存碰撞消解纳入已有文件的 `sourceId`。
+  - `MemoryStore` 序列化与解析兼容 `U+2028`/`U+2029` 行分隔符，`write`/`update` 返回经解析归一化的正文，`saveAliases` 统一归一化别名；空闲压缩拒绝空白摘要并在压缩后复核容量是否回落至阈值内。
+  - `resolveReadableAssetPath` 拒绝读取内部 `memory/aliases.json`；目录预览截断避免切裂 UTF-16 代理对；`tavern_lore_read` 损坏聊天书提示纳入输出 token 预算；`tavern_worldstate_update` 严格校验 `expiresAt` 日历日期合法性。
+  - `doctor` 检查剧情目录下的 `.preparing-*` 链接并报告 `STORY_LINK_SKIPPED`，修复坏 `card.json` 后读取 `.archive.json` 超预算的统计归类，并严格校验 `--home` CLI 参数；`backup` 引用检查兼容 `@dsh/character` 占位与带碰撞后缀的资产文件。
+
 ## 0.5.8（2026-10-26）压缩后历史编辑修复与请求清理
 
 宿主依赖不变（dsh `0.2.1-rc.3`）。

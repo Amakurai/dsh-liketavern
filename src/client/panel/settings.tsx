@@ -199,7 +199,7 @@ export function SettingsSection(props: { remote: TavernRemote }) {
           这里的内层作用域只保护子组内随切换卸载的嵌套编辑器（脚本库、卡片数据），不会为设置自身的草稿弹放弃确认。 */}
       <DraftScope>{(request) => <>
       <Tabs
-        id={tabsId} panelId={`${tabsId}-panel`} label={t('settings.title')}
+        id={tabsId} panelId={`${tabsId}-panel`} label={t('settings.title')} size="sm"
         items={SUBS.map((s) => ({ id: s.id, label: t(s.labelKey) }))}
         value={sub}
         onChange={(id) => {
@@ -320,6 +320,7 @@ export function SettingsSection(props: { remote: TavernRemote }) {
 
         {sub === 'sampling' && (
           <Section title={t('settings.sampling.title')} description={t('settings.sampling.desc')}>
+            <div className="dsh-tavern-rowGrid">
             <SettingsRow title="temperature" description={t('settings.sampling.temperatureDesc')}>
               <NumInput step="0.05" value={draft.sampling.temperature} onChange={(v) => setSampling({ temperature: v })} />
             </SettingsRow>
@@ -335,6 +336,7 @@ export function SettingsSection(props: { remote: TavernRemote }) {
             <SettingsRow title="frequencyPenalty">
               <NumInput step="0.1" value={draft.sampling.frequencyPenalty} onChange={(v) => setSampling({ frequencyPenalty: v })} />
             </SettingsRow>
+            </div>
             <SettingsRow title={t('settings.sampling.thinking')} description={t('settings.sampling.thinkingDesc')}>
               <Select
                 size="md"

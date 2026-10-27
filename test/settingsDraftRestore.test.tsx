@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SettingsSection } from '../src/client/panel/settings.js'
 import { getTavernLocale, setTavernLocale } from '../src/client/i18n.js'
 import { getSpeakerHeader, setSpeakerHeader } from '../src/client/displayPrefs.js'
-import { Btn, ConfirmDialog, NumInput, Select, Tabs, Toggle } from '../src/client/util.js'
+import { Btn, ConfirmDialog, NumInput, Select, SettingsRow, Tabs, Toggle } from '../src/client/util.js'
 import { TavernConfigSchema, type TavernConfigRaw } from '../src/node/config.js'
 import type { TavernRemote } from '../src/client/types.js'
 
@@ -222,5 +222,18 @@ describe('设置草稿恢复', () => {
     await act(async () => area().props.onChange({ target: { value: tooMany } }))
     expect(save().props.disabled).toBe(true)
     expect(view.root.findByProps({ role: 'alert' }).children.join('')).toContain('16')
+  })
+
+  it('设置子导航使用紧凑二级尺寸，采样数值项按双列网格分组而思考与停止序列保持独立行', async () => {
+    snapshot.initial = { 'settings:sub': 'sampling' }
+    const view = await render(remote(async () => ok({ settings: settings(0.7) })))
+    expect(view.root.findByType(Tabs).props.size).toBe('sm')
+    expect(view.root.findByProps({ role: 'tablist' }).props.className).toContain('is-sub')
+    const grid = view.root.findByProps({ className: 'dsh-tavern-rowGrid' })
+    expect(grid.findAllByType(SettingsRow).map((row) => row.props.title)).toEqual([
+      'temperature', 'topP', 'maxTokens', 'presencePenalty', 'frequencyPenalty',
+    ])
+    expect(grid.findAllByType(NumInput)).toHaveLength(5)
+    expect(grid.findAllByType(Select)).toHaveLength(0)
   })
 })

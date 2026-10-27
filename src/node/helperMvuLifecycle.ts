@@ -5,6 +5,7 @@ import type { Session, SessionEvent, UserMessage } from '@deepseek-ai/dsh-sessio
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { setTimeout as delay } from 'node:timers/promises'
 import { helperMvuPending, queueHelperMvuStop } from './helperMvu.js'
+import { isTurnDeferred } from './sessionLifecycle.js'
 import { isTavernGreetingEvent } from '../core/greetingLog.js'
 import { hasNormalAssistantStop } from './assistantStream.js'
 import type { TavernState } from './state.js'
@@ -172,7 +173,7 @@ export async function blockHelperMvuAssembly(state: TavernState, agent: Agent, s
     await state.waitForSessionTasks(agent.id)
     // 全局交互设置可能在已开层的一轮中启用；空初始化延后到该轮 stop，真实 pending 仍强制等待。
     const opened = state.openFloors.get(agent.id)?.floor === agent.id + '#t' + turn
-    blocked = await helperMvuPending(state, agent.id, !opened && helperMvuHasAssistant(agent.session))
+    blocked = isTurnDeferred(state, agent.id, turn) || await helperMvuPending(state, agent.id, !opened && helperMvuHasAssistant(agent.session))
   } catch (error) {
     state.recordTriggerLog(agent.id, [`[mvu:blocked] 变量状态读取失败，输入已保留：${String(error)}`])
     blocked = true

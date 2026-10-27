@@ -403,7 +403,7 @@ function filterCapturedGroup(value: string, rule: RegexRule, trimRes: readonly R
 }
 
 /** 带 trim 的规则走 ST 同款手工代入：$0/$1..$N/$<name>，代入前先过滤组值。 */
-function expandRegexReplacement(replace: string, macroCtx: MacroContext, matchToken: '$&' | '$0'): string {
+function expandRegexReplacement(replace: string, macroCtx: MacroContext, _matchToken: '$&' | '$0' = '$&'): string {
   if (!replace.includes('{{match}}')) {
     return expandMacros(replace, macroCtx, undefined, escapeReplacementDollars)
   }
@@ -414,7 +414,7 @@ function expandRegexReplacement(replace: string, macroCtx: MacroContext, matchTo
   while (reserved.includes(marker)) marker = `\uE000tavernMatch${++index}\uE001`
   const expanded = expandMacros(replace.replaceAll('{{match}}', marker), macroCtx, undefined, escapeReplacementDollars)
   const re = new RegExp(`(\\$*)${escapeRegExp(marker)}`, 'g')
-  return expanded.replace(re, (_raw, dollars: string) => `${dollars.length % 2 === 1 ? `${dollars}$` : dollars}${matchToken}`)
+  return expanded.replace(re, (_raw, dollars: string) => `${dollars.length % 2 === 1 ? `${dollars}$` : dollars}$&`)
 }
 
 function replaceWithGroupTrim(text: string, re: RegExp, template: string, rule: RegexRule, trimRes: readonly RegExp[], macroCtx: MacroContext): string {

@@ -483,3 +483,16 @@ it('状态损坏和临时数据拒绝，楼层回滚同时撤销数据及完成�
   await expect(helperMvuPending(state,'session')).rejects.toThrow(/损坏/)
   expect(()=>parseHelperMvuState({version:1,initialized:false,pending:[],completed:Array(257).fill({})})).toThrow(/损坏/)
 })
+
+it('后续被拦轮次追加空 turn/end 后，prepare 仍能按未登记楼层轮次恢复原正常完成回复',async()=>{
+  await initialize();await start();append('turn/end',{turn:1,reason:{kind:'completed'}})
+  const workspace=await ws(),original=workspace.wal.recordChange.bind(workspace.wal)
+  vi.spyOn(workspace.wal,'recordChange').mockImplementationOnce(async()=>{throw new Error('factory queue write failed')})
+  await expect(onTurnEnd(state,'session',snapshot())).rejects.toThrow('factory queue write failed')
+  vi.mocked(workspace.wal.recordChange).mockImplementation(original)
+  append('turn/start',{turn:2});append('turn/end',{turn:2,reason:{kind:'aborted'}})
+  const recovered=await prepare('recovered-after-aborted-turn')
+  expect(recovered.job).toMatchObject({kind:'update',turn:1,floor:'session#t1'})
+  await commit(recovered,{stat_data:{hp:11}},'recovered-after-aborted-turn')
+  expect((await workspace.wal.validateFloor('session#t1')).committed).toBe(true)
+})

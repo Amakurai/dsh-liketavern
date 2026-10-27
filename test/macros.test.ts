@@ -481,6 +481,7 @@ it('先读后清：flushvar 不早于同段 getvar 执行', () => {
     .toBe('^(Hello A\\+B and \\$1)|B\\+A$')
   const escapeDollar = (v: string) => v.replace(/\$/g, '$$$$')
   expect(expandMacros('{{setvar::saved::{{user}}}}{{getvar::saved}}', nestedCtx, undefined, escapeDollar)).toBe('$$1')
+  expect(expandMacros('{{setvar::y::hello}}{{setvar::x::{{getvar::y}}}}{{getvar::x}}', { ...ctx, store: new Map() })).toBe('hello')
   expect(nestedStore.get('saved')).toBe('$1')
   expect(store.has('once')).toBe(false)
 })

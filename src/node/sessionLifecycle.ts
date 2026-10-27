@@ -12,6 +12,9 @@ import { assertActiveTemplateRuntime, TemplateRuntimeCompatibilityError } from '
 
 /** 暂缓开层只标记当前宿主轮，不能用它收口旧 MVU 楼层或抹掉待恢复输入。 */
 const deferredTurns = new WeakMap<TavernState, Map<string, number>>()
+export function isTurnDeferred(state: TavernState, sessionId: string, turn: number): boolean {
+  return deferredTurns.get(state)?.get(sessionId) === turn
+}
 
 export async function onTurnStart(state:TavernState,sessionId:string,turn:number,session?:Pick<Session,'id'|'snapshotEvents'>):Promise<void> {
   if(session && session.id!==sessionId) throw new Error('模板开始事件与目标会话不一致')

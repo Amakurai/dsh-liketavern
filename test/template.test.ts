@@ -367,4 +367,21 @@ describe('剧情模板集成', () => {
     expect((await loadTemplateState(ws.fs)).variables.message.visits).toBe(1)
     await onTurnEnd(state,'s1')
   })
+  it('正则整段删除含 outlet 的父来源时冻结根来源 key，同轮 activewi 重组不复活被删 outlet 脚本', async () => {
+    const {state,ws,run,cardId} = await setup()
+    await state.saveCharacter(cardId,{
+      characterBook:{entries:[
+        {uid:1,comment:'[GENERATE:BEFORE]',constant:true,content:'<% activateRegex(/^【世界书·本轮触发】\\n[\\s\\S]*?OUTLET_BODY$/,"",{worldinfo:true,basic:false,generate:true}); %>'},
+        {uid:2,comment:'outlet_entry',constant:true,position:7,outletName:'out1',content:'<% setvar("revived",1) %>OUTLET_BODY'},
+        {uid:3,comment:'host_entry',constant:true,position:0,order:10,content:'{{outlet::out1}}'},
+        {uid:4,comment:'trigger_entry',constant:true,position:1,order:20,content:'<% await activewi("extra_entry") %>TRIGGER'},
+        {uid:5,comment:'extra_entry',key:['never'],position:0,order:5,content:'PREFIX_SHIFT'},
+      ]},
+    })
+    await onTurnStart(state,'s1',1)
+    await run()
+    expect((await loadTemplateState(ws.fs)).variables.message.revived).toBeUndefined()
+    expect((await loadTemplateState(ws.fs)).variables.message.visits).toBe(1)
+    await onTurnEnd(state,'s1')
+  })
 })

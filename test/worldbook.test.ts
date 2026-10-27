@@ -291,6 +291,10 @@ describe('selective 次级键逻辑', () => {
   it('AND ALL(3)：次级键全部命中才可激活', () => {
     expect(activatedKeys(run({ entries: [entry(3)], messages: [userMsg('apple pie crust')] }))).toEqual(['e'])
     expect(activatedKeys(run({ entries: [entry(3)], messages: [userMsg('apple pie')] }))).toEqual([])
+    const invalidAndAll = makeEntry({ key: 'and-all-invalid', keys: ['apple'], secondaryKeys: ['pie', '/(a+)+$/'], selective: true, selectiveLogic: WISelectiveLogic.AndAll })
+    expect(activatedKeys(run({ entries: [invalidAndAll], messages: [userMsg('apple pie')] }))).toEqual([])
+    const invalidNotAll = makeEntry({ key: 'not-all-invalid', keys: ['apple'], secondaryKeys: ['pie', '/(a+)+$/'], selective: true, selectiveLogic: WISelectiveLogic.NotAll })
+    expect(activatedKeys(run({ entries: [invalidNotAll], messages: [userMsg('apple pie')] }))).toEqual(['not-all-invalid'])
   })
 })
 

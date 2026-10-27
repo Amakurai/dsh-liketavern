@@ -8,7 +8,7 @@ import {HelperMvuRunner} from './helperMvuRunner.js'
 import {openChildSession} from './openChild.js'
 import { SpeechHtmlFrame } from './speech.js'
 import {CHARACTER_CHANGED_EVENT,invalidateSessionBinding} from './cache.js'
-import {BINDING_CHANGED_EVENT} from './actions.js'
+import {BINDING_CHANGED_EVENT,BRANCH_CHANGED_EVENT} from './actions.js'
 import { watchHelperScripts,watchHelperScriptAssets } from './helperScriptNotifications.js'
 import { notifyHelperStory,watchHelperStory } from './helperNotifications.js'
 import { useT } from './i18n.js'
@@ -141,7 +141,7 @@ export function HelperScripts(props:{remote:TavernRemote;sessionId:string;cardId
             onScriptReady={value=>{if(currentRuntime.current===runtimeVersion)setReady(current=>current[script.id]===(value?runtimeVersion:'')?current:{...current,[script.id]:value?runtimeVersion:''})}}
             remote={remote} helperMessageId={messageId}
             helperBinding={{sessionId,storyId:snapshot.storyId}}
-            onMessageBranch={props.sessions?async branch=>{await openChildSession(props.sessions!,branch.childSessionId,branch.title,props.sessionId)}:undefined}
+            onMessageBranch={props.sessions?async branch=>{window.dispatchEvent(new CustomEvent(BRANCH_CHANGED_EVENT,{detail:props.sessionId}));await openChildSession(props.sessions!,branch.childSessionId,branch.title,props.sessionId)}:undefined}
             onMessageEdit={async request=>{const result=await remote.editHelperMessages({...request,sessionId,messageId});if(!result.ok)throw new Error(result.error.message);if(result.value.snapshot)notifyHelperStory(sessionId,result.value.snapshot.storyId);return result.value}}
             onWorldbookBind={async request=>{const result=await remote.rebindHelperWorldbooks({...request,sessionId,messageId});if(!result.ok)throw new Error(result.error.message);if(request.kind!=='chat'&&request.kind!=='ensure-chat'){invalidateSessionBinding(sessionId);window.dispatchEvent(new CustomEvent(BINDING_CHANGED_EVENT,{detail:sessionId}))}return result.value}}
             onWorldbookRequest={async request=>{const result=await remote.helperWorldbookOperation({...request,sessionId,messageId});if(!result.ok)throw new Error(result.error.message);return result.value}}

@@ -179,6 +179,22 @@ describe('缓存字节稳定性守卫', () => {
     })
     expect(agentResult?.turnContext).toContain('NICKNAME-INCLUDE-NAMES-HIT')
     expect(agentResult?.templateContext?.history.find(m => m.role === 'assistant')?.name).toBe('剧情昵称')
+    const withHostSystem = await runTavernPipeline({
+      state, sessionId: 'nickname-agent',
+      agent: {
+        session: {
+          deriveMessages: () => [
+            { id: 'sys-0', role: 'system', content: [{ type: 'text', text: 'HOST-SYSTEM-PROMPT-DO-NOT-LEAK' }], source: { kind: 'system-prompt' } },
+            ...mockAgent.session.deriveMessages(),
+          ],
+          snapshotEvents: () => [],
+          requestHeader: () => undefined,
+        },
+      } as unknown as Parameters<typeof runTavernPipeline>[0]['agent'],
+      mode: 'preview',
+    })
+    expect(withHostSystem?.history.map(m => m.content)).not.toContain('HOST-SYSTEM-PROMPT-DO-NOT-LEAK')
+    expect(withHostSystem?.templateContext?.history.map(m => m.content)).not.toContain('HOST-SYSTEM-PROMPT-DO-NOT-LEAK')
   })
 
   it('跨轮 standing 字节一致；同轮两步快照字节一致；常驻条目恒定注入', async () => {

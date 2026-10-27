@@ -388,10 +388,15 @@ export function expandMacros(
     return createTurnRandom(hashToSeed(`${pickSeed}\0${textSeed}\0${inner}\0${occurrence}`))
   }
 
-  const replaceInnermost = (skipGet: boolean, unknowns: string[] | null): void => {
-    current = current.replace(MACRO_RE, (raw, inner: string) => {
+  const replaceInnermost = (mode: 'non-get' | 'nested-get' | 'all', unknowns: string[] | null): void => {
+    current = current.replace(MACRO_RE, (raw, inner: string, offset: number) => {
       if (postOpen && postClose) inner = inner.replaceAll(postOpen, '').replaceAll(postClose, '')
-      if (skipGet && isGetVar(inner)) return raw
+      if (mode === 'non-get' && isGetVar(inner)) return raw
+      if (mode === 'nested-get') {
+        if (!isGetVar(inner)) return raw
+        const prefix = current.slice(0, offset)
+        if (prefix.lastIndexOf('{{') <= prefix.lastIndexOf('}}') || current.indexOf('}}', offset + raw.length) < 0) return raw
+      }
       if (inner.trim().toLowerCase() === 'trim') return trimMarker
       const applied = applyCommand(inner, ctx, clock, pickRandom)
       if (applied !== undefined) {
@@ -413,11 +418,13 @@ export function expandMacros(
     for (let pass = 0; pass < MAX_PASSES && current.includes('{{'); pass++) {
       const before = current
       // 先展开 setvar/char 等，避免同串里 {{getvar}} 在写入前被读成空。
-      replaceInnermost(true, null)
+      replaceInnermost('non-get', null)
+      if (current !== before) continue
+      replaceInnermost('nested-get', null)
       if (current !== before) continue
 
       const unknowns: string[] = []
-      replaceInnermost(false, unknowns)
+      replaceInnermost('all', unknowns)
       if (current === before || pass === MAX_PASSES - 1) {
         for (const name of unknowns) ctx.onUnknown?.(name)
         break

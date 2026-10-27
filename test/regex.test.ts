@@ -833,5 +833,8 @@ describe('审查修复回归：正则宏值', () => {
     expect(applyRegexToMessages([{ role: 'assistant', content: '100' }], [trimRule], FILTER, literalMatchContext).messages[0]?.content)
       .toBe('字面{{match}}=1=>$1')
     expect(unknowns).toEqual([])
+    const matchDigitRule = makeRule({ find: '/foo/g', replace: '{{match}}1', trimStrings: ['o'] })
+    expect(run('foo', [matchDigitRule], literalMatchContext).text).toBe('f1')
+    expect(applyRegexToMessages([{ role: 'assistant', content: 'foo' }], [matchDigitRule], FILTER, literalMatchContext).messages[0]?.content).toBe('f1')
   })
 })

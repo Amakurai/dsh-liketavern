@@ -131,7 +131,7 @@ async function unfinalizedReceipt(state:TavernState,binding:SessionBinding,sessi
   return !(open?.floor===job.floor&&open.cardId===binding.cardId&&open.storyId===binding.storyId)
 }
 /** turn/end 登记失败会留下未提交楼层；只有没有任务/回执认领的关闭楼层才属于待恢复登记。 */
-async function unregisteredFloor(state:TavernState,binding:SessionBinding,sessionId:string,mvu:ReturnType<typeof parseHelperMvuState>):Promise<boolean>{
+async function findUnregisteredFloor(state:TavernState,binding:SessionBinding,sessionId:string,mvu:ReturnType<typeof parseHelperMvuState>):Promise<{floor:string;turn:number}|null>{
   const ws=await state.storyWorkspace(binding.cardId,binding.storyId),open=state.openFloors.get(sessionId)
   const linked=new Set([...mvu.pending.map(job=>job.floor),...mvu.completed.map(receipt=>receipt.floor)])
   for(const floor of await ws.wal.listFloors()){
@@ -140,16 +140,29 @@ async function unregisteredFloor(state:TavernState,binding:SessionBinding,sessio
     if(!match)continue
     const turn=Number(match[2]),owner=match[1]
     if(owner!==sessionId&&!(binding.walLineage??[]).some(entry=>entry.sessionId===owner&&entry.throughTurn>=turn))continue
-    await ws.wal.validateFloor(floor.floor)
-    return true
+    await ws.wal.validateFloor(floor.floor);if(floor.floor)return {floor:floor.floor,turn};break}return null;if(false){if(false){if(false){
+
   }
-  return false
+
 }
-async function queue(state:TavernState,sessionId:string,session:Snapshot,live:boolean):Promise<void>{
+  }
+  return null
+}
+async function unregisteredFloor(state:TavernState,binding:SessionBinding,sessionId:string,mvu:ReturnType<typeof parseHelperMvuState>):Promise<boolean>{
+  return (await findUnregisteredFloor(state,binding,sessionId,mvu))!==null
+}
+async function resolveTurnFloor(ws:{wal:import('../state/wal.js').Wal},binding:SessionBinding,sessionId:string,turn:number):Promise<string>{
+  const suffix='#t'+turn,active=(await ws.wal.listFloors()).filter(item=>!item.rolledBack&&item.floor.endsWith(suffix))
+  const direct=active.find(item=>item.floor===sessionId+suffix)
+  if(direct)return direct.floor
+  const inherited=active.find(item=>{const owner=item.floor.slice(0,-suffix.length);return (binding.walLineage??[]).some(entry=>entry.sessionId===owner&&entry.throughTurn>=turn)})
+  return inherited?.floor??sessionId+suffix
+}
+async function queue(state:TavernState,sessionId:string,session:Snapshot,live:boolean,recovery?:{floor:string;turn:number}):Promise<void>{
   if(session.id!==sessionId)throw new Error('自动 MVU 结束来源与会话不一致')
   const binding=await state.loadBinding(sessionId)
   if(!enabled(state,binding))return
-  const events=session.snapshotEvents(),boundary=[...events].reverse().find(event=>event.type==='turn/start'||event.type==='turn/end')
+  const events=session.snapshotEvents(),boundary=[...events].reverse().find((event):event is SessionEvent<'turn/start'|'turn/end'>=>recovery?event.type==='turn/end'&&event.data.turn===recovery.turn:event.type==='turn/start'||event.type==='turn/end')
   if(!boundary||!live&&(boundary.type!=='turn/end'||boundary.data.reason.kind!=='completed'))return
   if(live&&boundary.type==='turn/end')return queue(state,sessionId,session,false)
   const turn=boundary.data.turn,open=state.openFloors.get(sessionId)
@@ -160,7 +173,7 @@ async function queue(state:TavernState,sessionId:string,session:Snapshot,live:bo
   await withWorkspaceLock(ws.fs.root,()=>withWorkspaceLock(state.paths.sessions,async()=>{
     const current=await state.loadBinding(sessionId)
     if(!enabled(state,current)||hash(current)!==hash(binding))throw new Error('自动 MVU 登记期间剧情绑定已改变')
-    const saved=await loadHelperState(ws.fs),mvu=parseHelperMvuState(saved.mvu),floor=open?.floor??sessionId+'#t'+turn
+    const saved=await loadHelperState(ws.fs),mvu=parseHelperMvuState(saved.mvu),floor=recovery?.floor??open?.floor??sessionId+'#t'+turn
     const selected=mvu.initialized?items:items.slice(-1);let added=false
     for(const item of selected){
       const job=makeJob(item,mvu.initialized?'update':'initialize',floor)
@@ -251,8 +264,9 @@ export async function ensureHelperMvuScriptAnchor(ctx:Context,state:TavernState,
       }
       if(!latest)return null
       const open=state.openFloors.get(sessionId)
-      if(!mvu.initialized&&open&&open.floor!==sessionId+'#t'+latest.data.turn)return null
-      job=makeJob(latest,mvu.initialized?'update':'initialize',sessionId+'#t'+latest.data.turn)
+      const targetFloor=await resolveTurnFloor(ws,binding,sessionId,latest.data.turn)
+      if(open&&open.floor!==targetFloor)return null
+      job=makeJob(latest,mvu.initialized?'update':'initialize',targetFloor)
       register=!mvu.initialized
     }
     verifyTarget(events,job)
@@ -279,10 +293,11 @@ export async function prepareHelperMvuJob(ctx:Context,state:TavernState,request:
       const job=receiptFloor(mvu.completed.at(-1)!.floor),ready=await floorReady(state,binding,request.sessionId,job)
       if(!ready.open)await ready.ws.wal.commitFloor(job.floor)
     }
-    if(!mvu.pending.length&&await unregisteredFloor(state,binding,request.sessionId,mvu)){
+    const unregistered=!mvu.pending.length?await findUnregisteredFloor(state,binding,request.sessionId,mvu):null
+    if(unregistered){
       const session=ctx.sessions.get(request.sessionId as Session['id'])
       if(!session)throw new Error('自动 MVU 登记恢复缺少当前宿主会话')
-      await queue(state,request.sessionId,session,false)
+      await queue(state,request.sessionId,session,false,unregistered)
       saved=await loadHelperState(ws.fs);mvu=parseHelperMvuState(saved.mvu)
       if(!mvu.pending.length)throw new Error('自动 MVU 登记恢复未找到正常完成回复')
     }
@@ -292,8 +307,9 @@ export async function prepareHelperMvuJob(ctx:Context,state:TavernState,request:
       const latest=latestCompleted(events)
       if(!latest)return {...baseWork,status:'waiting'}
       const open=state.openFloors.get(request.sessionId)
-      if(open&&open.floor!==request.sessionId+'#t'+latest.data.turn)return {...baseWork,status:'waiting'}
-      const job=makeJob(latest,'initialize',request.sessionId+'#t'+latest.data.turn)
+      const targetFloor=await resolveTurnFloor(ws,binding,request.sessionId,latest.data.turn)
+      if(open&&open.floor!==targetFloor)return {...baseWork,status:'waiting'}
+      const job=makeJob(latest,'initialize',targetFloor)
       verifyContinuation(events,job,mvu,saved.scopes)
       const ready=await floorReady(state,binding,request.sessionId,job,true)
       await seedScripts(state,request.sessionId,request.storyId,saved)

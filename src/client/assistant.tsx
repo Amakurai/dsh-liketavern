@@ -13,7 +13,7 @@ import { CHARACTER_CHANGED_EVENT, cachedCharacterDetail, cachedSessionBinding, i
 import { useMarkdownLabels, useT } from './i18n.js'
 import { isTavernSession, type UseSessions } from './mode.js'
 import { openChildSession } from './openChild.js'
-import { BINDING_CHANGED_EVENT, TavernInterruptedFloorActions } from './actions.js'
+import { BINDING_CHANGED_EVENT, BRANCH_CHANGED_EVENT, TavernInterruptedFloorActions } from './actions.js'
 import { SpeechBubble } from './speech.js'
 import type { TavernSessions } from './navigation.js'
 import type { CharacterDetail, SessionBinding, TavernRemote } from './types.js'
@@ -282,7 +282,7 @@ export function TavernAssistantNode(props: {
           streamSource={eventBinding?.sessionId===sessionId?eventBinding.eventSource:undefined}
           turn={node.location?.turn?.turn}
           interactiveCards={binding.interactiveCards}
-          onMessageBranch={async branch=>{if(!sessions)throw new Error(t('speech.navigationUnavailable'));await openChildSession(sessions,branch.childSessionId,branch.title,sessionId)}}
+          onMessageBranch={async branch=>{if(!sessions)throw new Error(t('speech.navigationUnavailable'));window.dispatchEvent(new CustomEvent(BRANCH_CHANGED_EVENT,{detail:sessionId}));await openChildSession(sessions,branch.childSessionId,branch.title,sessionId)}}
           onSwipeGreeting={async (index, frameLease) => {
             if (!sessions) throw new Error(t('speech.navigationUnavailable'))
             const r = await remote.swipeGreeting({ sessionId, index, ...(frameLease?{frameLease}:{}) })

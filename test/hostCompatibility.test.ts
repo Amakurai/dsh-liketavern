@@ -3,6 +3,7 @@ import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
+import { CompactionId, compactCheckpointSource } from '@deepseek-ai/dsh-compaction'
 import { createAssistantMessage, createUserMessage, ToolCallId, type AssistantStreamRecord } from '@deepseek-ai/dsh-llm'
 import { Session, SessionId, SessionStore, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { apply as applyJsonlSessionPersistence, Config as JsonlSessionPersistenceConfig } from '@deepseek-ai/dsh-session-persistence-jsonl'
@@ -10,6 +11,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { hasNormalAssistantStop } from '../src/node/assistantStream.js'
 import { displaySessionEventAt, displaySessionHasUserMessage, readDisplaySessionEvents } from '../src/node/sessionEvents.js'
 import { withEditedAssistantMessage } from '../src/node/floors.js'
+import { editedHistorySeed } from '../src/node/helperChatSeed.js'
 
 const stop: AssistantStreamRecord = { type: 'chunk', time: 2, chunk: { type: 'finish', reason: { kind: 'stop' } } }
 const text: AssistantStreamRecord = { type: 'text-chunks', time0: 1, index: 0, dt: [0], texts: ['原始回复'] }
@@ -98,6 +100,39 @@ it('真实 JSONL 冷会话使用 read 句柄，连续展示不更改磁盘，缺
     expect(open.mock.calls.every(([, access]) => access === 'read')).toBe(true)
     expect(await artifacts(root)).toEqual(before)
     expect(await readDisplaySessionEvents(ctx, 'session-missing')).toEqual([])
+  } finally { await ctx.fiber.dispose() }
+})
+
+it('压缩后编辑的子会话经真实 JSONL 持久化冷读，摘要事务和编辑正文完整恢复', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'tavern-compact-edit-')); roots.push(root)
+  const ctx = new Context(); new SessionStore(ctx)
+  await applyJsonlSessionPersistence(ctx, JsonlSessionPersistenceConfig({ root, compression: 'none' }))
+  try {
+    const source = Session.create(SessionId('session-compact-parent'))
+    source.append('turn/start', { turn: 1 })
+    const user = source.append('user/message', createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: '旧消息' }] }), { surfaceOp: 'append' })
+    source.append('step/start', { turn: 1, step: 1 })
+    const assistant = source.append('assistant/message', { turn: 1, step: 1, stream: [], message: createAssistantMessage({ source: { provider: 'factory', model: 'factory' }, content: [{ type: 'text', text: '旧回复' }] }) }, { surfaceOp: 'append' })
+    source.append('step/end', { turn: 1, step: 1 }); source.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
+    const compactionId = CompactionId('compact-fixture'), shadowedSeqs = [user.seq, assistant.seq]
+    const start = source.append('compaction/start', { compactionId, turn: null })
+    const summary = source.append('compaction/summary', { compactionId, shadowedRange: { start: user.seq, end: assistant.seq }, shadowedSeqs, shadowedTokenCount: 2, summary: [{ type: 'text', text: '摘要' }], rawInput: { messages: [] }, rawOutput: [{ type: 'text', text: '摘要' }] })
+    source.append('user/message', createUserMessage({ source: compactCheckpointSource(compactionId), content: [{ type: 'text', text: '摘要' }] }), { surfaceOp: { op: 'replace', startSeq: user.seq, endSeq: assistant.seq }, sourceEventSeqs: [start.seq, summary.seq, ...shadowedSeqs] })
+    source.append('compaction/end', { compactionId, turn: null })
+    source.append('turn/start', { turn: 2 })
+    source.append('user/message', createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: '新消息' }] }), { surfaceOp: 'append' })
+    source.append('step/start', { turn: 2, step: 1 })
+    const edited = source.append('assistant/message', { turn: 2, step: 1, stream: [], message: createAssistantMessage({ source: { provider: 'factory', model: 'factory' }, content: [{ type: 'text', text: '新回复' }] }) }, { surfaceOp: 'append' })
+    source.append('step/end', { turn: 2, step: 1 }); source.append('turn/end', { turn: 2, reason: { kind: 'completed' } })
+    const child = Session.create(SessionId('session-compact-child'), editedHistorySeed(source.snapshotEvents(), new Map([[edited.seq, '编辑后回复']])))
+    const writer = await ctx.sessionPersistence.create(child.header)
+    try { await writer.append(child.snapshotEvents()); await writer.flush() } finally { await writer.close() }
+    const events = await readDisplaySessionEvents(ctx, child.id)
+    const restored = Session.create(child.id, events, child.header)
+    expect(restored.deriveMessages()).toEqual(child.deriveMessages())
+    expect(events.filter(event => event.type.startsWith('compaction/')).map(event => event.type)).toEqual(['compaction/start', 'compaction/summary', 'compaction/end'])
+    expect(JSON.stringify(restored.deriveMessages())).toContain('编辑后回复')
+    expect(JSON.stringify(source.deriveMessages())).toContain('新回复')
   } finally { await ctx.fiber.dispose() }
 })
 

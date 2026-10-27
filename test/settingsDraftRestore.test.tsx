@@ -5,6 +5,7 @@ import type { ReactTestRenderer } from 'react-test-renderer'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SettingsSection } from '../src/client/panel/settings.js'
 import { getTavernLocale, setTavernLocale } from '../src/client/i18n.js'
+import { getSpeakerHeader, setSpeakerHeader } from '../src/client/displayPrefs.js'
 import { Btn, ConfirmDialog, NumInput, Select, Tabs, Toggle } from '../src/client/util.js'
 import { TavernConfigSchema, type TavernConfigRaw } from '../src/node/config.js'
 import type { TavernRemote } from '../src/client/types.js'
@@ -56,10 +57,33 @@ async function render(api: TavernRemote) {
   mounted.push(view)
   return view
 }
-beforeEach(() => { snapshot.initial = {}; snapshot.observed = {}; setTavernLocale('zh') })
-afterEach(async () => { for (const view of mounted.splice(0)) await act(async () => view.unmount()) })
+beforeEach(() => { snapshot.initial = {}; snapshot.observed = {}; setTavernLocale('zh'); setSpeakerHeader(false) })
+afterEach(async () => { for (const view of mounted.splice(0)) await act(async () => view.unmount()); setSpeakerHeader(false) })
 
 describe('设置草稿恢复', () => {
+  it('设置读取恢复后同步头像开关与消息显示，旧草稿不覆盖已保存的即时设置，保存失败回退', async () => {
+    const saved = { ...settings(0.4), speakerHeader: true }
+    const staleDraft = { ...settings(0.9), speakerHeader: false }
+    snapshot.initial = { 'settings:sub': 'interface', 'settings:draft': staleDraft, 'settings:baseline': settings(0.4) }
+    const api = remote(async () => ok({ settings: saved }))
+    const view = await render(api)
+    expect(getSpeakerHeader()).toBe(true)
+    expect(view.root.findByType(Toggle).props.checked).toBe(true)
+    expect((snapshot.observed['settings:draft'] as TavernConfigRaw).sampling.temperature).toBe(0.9)
+    expect((snapshot.observed['settings:baseline'] as TavernConfigRaw).speakerHeader).toBe(true)
+    vi.mocked(api.updateSettings).mockResolvedValueOnce({ ok: false, error: { code: 'TEST', message: '连接中断' } })
+    await act(async () => view.root.findByType(Toggle).props.onChange(false))
+    expect(api.updateSettings).toHaveBeenCalledWith({ patch: { speakerHeader: false } })
+    expect(getSpeakerHeader()).toBe(true)
+    expect(view.root.findByType(Toggle).props.checked).toBe(true)
+    expect(view.root.findByProps({ role: 'alert' }).children.join('')).toContain('连接中断')
+    vi.mocked(api.updateSettings).mockResolvedValueOnce(ok({ settings: { ...saved, speakerHeader: false } }))
+    await act(async () => view.root.findByType(Toggle).props.onChange(false))
+    expect(getSpeakerHeader()).toBe(false)
+    expect(view.root.findByType(Toggle).props.checked).toBe(false)
+    expect((snapshot.observed['settings:baseline'] as TavernConfigRaw).speakerHeader).toBe(false)
+    expect((snapshot.observed['settings:draft'] as TavernConfigRaw).sampling.temperature).toBe(0.9)
+  })
   it('角色提示词偏好只保存 prompts 分区，失败保留草稿，成功同步真实回显', async () => {
     const initial = settings(0.4)
     snapshot.initial = { 'settings:sub': 'prompts' }

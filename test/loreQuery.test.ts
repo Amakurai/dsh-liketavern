@@ -129,6 +129,19 @@ describe('selectLoreEntries', () => {
 })
 
 describe('toLoreCatalogItem / clipLoreContents', () => {
+  it('定位字段过大时，错误响应也必须遵守预算', () => {
+    const entry = makeEntry({ key: 'x'.repeat(10000), uid: 'x'.repeat(10000) })
+    for (const read of [budgetLoreCatalog, clipLoreContents]) {
+      const roomy = read([entry], 2500)
+      expect(roomy).toMatchObject({ ok: false, error: expect.stringContaining('lore-output-too-large') })
+      expect(roomy.tokensUsed).toBeLessThanOrEqual(2500)
+      // 提示或说明过长时保留错误码，并确保最终 JSON 仍在预算内。
+      const tight = read([entry], 60)
+      expect(tight).toMatchObject({ ok: false, error: expect.stringContaining('lore-output-too-large') })
+      expect(tight.tokensUsed).toBe(estimateTokens(JSON.stringify(tight, null, 2)))
+      expect(tight.tokensUsed).toBeLessThanOrEqual(60)
+    }
+  })
   it('目录只有预览不含全文', () => {
     const item = toLoreCatalogItem(makeEntry({ key: 'k', uid: 'k', content: '全文很长'.repeat(20), comment: '注' }))
     expect(item.preview.length).toBeLessThanOrEqual(80)

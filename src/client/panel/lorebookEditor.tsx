@@ -140,7 +140,7 @@ type LorebookEditorProps = {
   entries: WorldInfoEntry[]
   revision?: string
   onClose: () => void
-  onSaved: () => void
+  onSaved: (entries: WorldInfoEntry[], revision?: string) => void
   save: (json: unknown, expectedRevision?: string) => Promise<Envelope<unknown>>
 }
 
@@ -227,9 +227,11 @@ function LorebookEditorContent(props: LorebookEditorProps & { draftKey: string }
       const err = errOf(r)
       if (err) setError(err)
       else {
+        let nextRevision: string | null = null
         if (r.ok) {
           const value = r.value
-          setRevision(value && typeof value === 'object' && 'revision' in value && typeof value.revision === 'string' ? value.revision : null)
+          nextRevision = value && typeof value === 'object' && 'revision' in value && typeof value.revision === 'string' ? value.revision : null
+          setRevision(nextRevision)
         }
         savedEntries.current = saved
         // 保存飞行期间继续键入的内容没有落盘：只有当前值仍等于已保存快照才清 dirty，
@@ -239,7 +241,7 @@ function LorebookEditorContent(props: LorebookEditorProps & { draftKey: string }
         if (JSON.stringify(entriesRef.current) === JSON.stringify(saved)) {
           setDirty(false)
           guard.clearDraft()
-          props.onSaved()
+          props.onSaved(saved, nextRevision ?? undefined)
         }
       }
     }) } finally { saving.current = false }

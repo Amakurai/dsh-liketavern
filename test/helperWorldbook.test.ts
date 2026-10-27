@@ -286,3 +286,12 @@ it.each(['replace','chat'] as const)('聊天世界书 %s 写后解绑不跳过�
   expect(invalidate).toHaveBeenCalledWith(cardId,storyId)
   expect(await state.loadBinding('a')).toBeNull()
 })
+it('已删除的全局书不残留于 settings.selected_global_lorebooks，不会阻塞后续仅修改 scan_depth 的设置保存',async()=>{
+  await op('record-book','create',[{uid:42,name:'custom-uid',content:'BODY'}])
+  await bindBooks('global',['record-book'])
+  await state.deleteLorebook('record-book')
+  const binding=(await state.loadBinding('a'))!
+  const context=await getHelperWorldbookContext(state,'a',binding.storyId!)
+  expect(context.settings?.selected_global_lorebooks).toEqual([])
+  await expect(bindBooks('settings',{scan_depth:3})).resolves.toMatchObject({settings:{scan_depth:3,selected_global_lorebooks:[]}})
+})

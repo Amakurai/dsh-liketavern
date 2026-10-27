@@ -195,7 +195,8 @@ function LorebooksSectionContent(props: { remote: TavernRemote }) {
           entries={opened.entries}
           revision={opened.revision}
           onClose={() => setOpened(null)}
-          onSaved={() => {
+          onSaved={(savedEntries, nextRevision) => {
+            setOpened((prev) => prev ? { ...prev, entries: savedEntries, revision: nextRevision ?? prev.revision } : null)
             toast.show(t('lorebooks.saved', { name: opened.target.name }))
             chars.reload()
             reload()

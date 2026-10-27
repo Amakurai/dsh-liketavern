@@ -519,8 +519,8 @@ export class TemplateSandbox {
 
   /** 精确日志命中后开始新的隔离任务；只重置执行预算，保留已验证日志所对应的词法环境。 */
   restartBudget(resourceChars:number):void {
-    this.resourceChars=resourceChars
-    this.vm.runtime.setMemoryLimit(templateExecutionBudget(resourceChars).quickJsMemoryBytes)
+    this.resourceChars=Math.max(this.resourceChars,resourceChars)
+    this.vm.runtime.setMemoryLimit(templateExecutionBudget(this.resourceChars).quickJsMemoryBytes)
     this.beginComputation()
   }
 

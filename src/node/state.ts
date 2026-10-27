@@ -769,7 +769,8 @@ export class TavernState {
       const extensions:Record<string,unknown>={...workspace.card.extensions,tavern_helper:{...characterHelperSettings(workspace.card.extensions),scripts:trees}}
       delete extensions.TavernHelper_scripts
       const {pngBytes:_png,...card}=workspace.card
-      const cardText=serializeStoredCard({...card,extensions})
+      const nextCard={...card,extensions}
+      const cardText=serializeStoredCard({...nextCard,raw:cardToStJson({...nextCard,pngBytes:null})})
       beforeWrite?.()
       try{await this.plainFs(cardId).writeText('card.json',cardText)}
       finally{this.bumpAssetRev(`card:${cardId}`)}
@@ -799,8 +800,9 @@ export class TavernState {
       if(raw!==null)input=JSON.parse(raw)
     } else if(target.type==='preset') {
       if(!target.presetId)throw new Error('预设 ID 不能为空')
-      const id=this.assetFileId(target.presetId),preset=await this.loadPreset(id)
-      if(!preset)throw new Error('预设不存在或无法读取')
+      const resolved=this.assetFileId(target.presetId)!==target.presetId?await this.resolveExistingAssetId(await this.rootFs(),'library/presets',target.presetId):this.assetFileId(target.presetId)
+      const id=resolved,preset=id?await this.loadPreset(id):null
+      if(!id||!preset)throw new Error('预设不存在或无法读取')
       input=helperScriptSettings(preset.helperSettings??{}).scripts;target={type:'preset',presetId:id}
     } else throw new Error('脚本库类型无效')
     const trees=parseHelperScriptTrees(input)
@@ -821,7 +823,7 @@ export class TavernState {
       if(current.target.type==='global')await fs.writeText('library/helper-scripts.json',JSON.stringify(trees,null,2)+'\n')
       else if(current.target.type==='preset') {
         const id=current.target.presetId,preset=await this.loadPreset(id)
-        if(!preset)throw new Error('预设不存在或无法读取')
+        if(!id||!preset)throw new Error('预设不存在或无法读取')
         beforeWrite?.()
         try{await fs.writeText(`library/presets/${id}.json`,JSON.stringify({...preset,helperSettings:{...preset.helperSettings,scripts:trees}},null,2)+'\n')}
         finally{this.bumpAssetRev(`preset:${id}`)}

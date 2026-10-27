@@ -93,6 +93,22 @@ describe('greetingFloorState', () => {
       swipe: null,
     })
   })
+
+  it('真实 SessionEvent 的 data.message 嵌套宿主注入消息不算对话已开始，保留开场白 swipe', () => {
+    const events = [
+      greet('a'),
+      { type: 'user/message', data: { message: { id: 'm1', role: 'user', source: { kind: 'model-selection' } } } },
+      { type: 'user/message', data: { message: { id: 'm2', role: 'user', source: { kind: 'runtime-context' } } } },
+      { type: 'user/message', data: { message: { id: 'm3', role: 'user', source: { kind: 'agent-instructions' } } } },
+      { type: 'user/message', data: { message: { id: 'm4', role: 'user', source: { kind: 'tavern-prompt-plan' } } } },
+    ]
+    expect(sessionHasUserMessage(events)).toBe(false)
+    expect(greetingFloorState(events, 'a', 1, 3)).toEqual({
+      isGreeting: true,
+      started: false,
+      swipe: { index: 1, total: 3 },
+    })
+  })
 })
 
 describe('activeGreetingIndex', () => {

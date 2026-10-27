@@ -17,11 +17,26 @@ import { createTemplateGeneration, validateTemplateGenerationBudget } from './te
 export function assembleTemplatePlan(input: ComputeJobs['assemble']['input'], sandbox: TemplateSandbox | null): ComputeJobs['assemble']['output'] {
   sandbox?.setOutletsDeferred(true)
   const generationRegexCache=new Map<string,string>()
+  const baseMacroCtx = {
+    ...input.macroCtx,
+    description: input.macroCtx.description ?? input.card?.description ?? '',
+    personality: input.macroCtx.personality ?? input.card?.personality ?? '',
+    scenario: input.macroCtx.scenario ?? input.card?.scenario ?? '',
+    persona: input.macroCtx.persona ?? input.personaDescription,
+    firstMessage: input.macroCtx.firstMessage ?? input.card?.firstMes ?? '',
+    charVersion: input.macroCtx.charVersion ?? input.card?.characterVersion ?? '',
+    creatorNotes: input.macroCtx.creatorNotes ?? input.card?.creatorNotes ?? '',
+    charDepthPrompt: input.macroCtx.charDepthPrompt ?? input.card?.depthPrompt?.prompt ?? '',
+    mesExamples: input.macroCtx.mesExamples ?? input.card?.mesExample ?? '',
+    charPrompt: input.promptPreferences?.preferCharacterPrompt === false ? '' : input.macroCtx.charPrompt ?? input.card?.systemPrompt ?? '',
+    charInstruction: input.promptPreferences?.preferCharacterInstructions === false ? '' : input.macroCtx.charInstruction ?? input.card?.postHistoryInstructions ?? '',
+  }
   const evaluation = input.wiEvaluation
   if (!evaluation) {
+    const turnMacroCtx = { ...baseMacroCtx, store: new Map(input.macroCtx.store), random: createTurnRandom(input.seed) }
     let assembled=assemblePrompt({ ...input, estimateTokens,
-    ...(sandbox ? createTemplateGeneration(sandbox,[],input.macroCtx,generationRegexCache) : {}),
-    macroCtx:{...input.macroCtx,random:createTurnRandom(input.seed)} })
+    ...(sandbox ? createTemplateGeneration(sandbox,[],turnMacroCtx,generationRegexCache) : {}),
+    macroCtx:turnMacroCtx })
     if(sandbox) {
       assembled=finalizeTemplateOutlets(assembled,sandbox,input.budget.maxTokens-input.budget.reserveForOutput)
       validateTemplateGenerationBudget(assembled,input.budget.maxTokens-input.budget.reserveForOutput)
@@ -30,7 +45,7 @@ export function assembleTemplatePlan(input: ComputeJobs['assemble']['input'], sa
     return {...assembled,...(sandbox ? {templateVariables:sandbox.variables()} : {})}
   }
 
-  const macroCtx = {...input.macroCtx,random:createTurnRandom(input.seed)}
+  const macroCtx = {...baseMacroCtx,store:new Map(input.macroCtx.store),random:createTurnRandom(input.seed)}
   const normalizedEntries = evaluation.entries.map(normalizeTemplateLore)
   // 必须在条件求值、预处理及 WI 命中筛选之前收集写入来源。未命中的来源以后仍可能
   // 修改同名变量，若仅观察本轮激活结果，首轮空/default 读取会被 standing pin 留住。
@@ -38,13 +53,14 @@ export function assembleTemplatePlan(input: ComputeJobs['assemble']['input'], sa
     turnLocal: !entry.enabled || !isStandingSafeEntry(entry) || Boolean(entry.templateCondition
       || entry.templatePreprocessing || parseTemplatePlacement(entry.comment)) }))
   const entries = normalizedEntries.map(entry=> {
-    const preprocessing = entry.enabled && (entry.templatePreprocessing || /^\[Preprocessing\]/i.test(entry.comment))
+    const preprocessing = entry.enabled && !entry.templateDontActivate && (entry.templatePreprocessing || /^\[Preprocessing\]/i.test(entry.comment))
     if (!preprocessing) return entry
     // 预处理条目没有 EJS 时也曾被 needsTemplates 漏判；缺沙箱必须明确失败，不能静默跳过预处理。
     if (!sandbox) throw new Error(`世界书「${entry.comment}」需要模板预处理，但本轮没有可用的模板沙箱`)
     if (entry.templateCondition && !sandbox.condition(entry.templateCondition)) return {...entry,enabled:false}
     const render = (text:string,source:string) => expandMacros(sandbox.renderSource(expandMacros(text,macroCtx),source),macroCtx)
     return {...entry,
+      templateCondition:undefined,
       content:`<% /* preprocessed */ %>${render(entry.content,entry.key)}`,
       keys:entry.keys.map((text,i)=>render(text,`${entry.key}:key:${i}`)),
       secondaryKeys:entry.secondaryKeys.map((text,i)=>render(text,`${entry.key}:secondary:${i}`)),
@@ -75,16 +91,17 @@ export function assembleTemplatePlan(input: ComputeJobs['assemble']['input'], sa
       byPosition:Object.fromEntries(Object.entries(wi.byPosition).map(([key,acts])=>[key,ordinary(acts)])),
       outlets:Object.fromEntries(Object.entries(wi.outlets).map(([key,acts])=>[key,ordinary(acts)])),
     }
+    const attemptMacroCtx = {...baseMacroCtx,store:new Map(macroCtx.store),random:createTurnRandom(input.seed)}
     const assemblyInput = {...input,wi:regularWi,worldDeltas:deltaClip.kept,estimateTokens,potentialMacroSources,
-      ...(sandbox ? createTemplateGeneration(sandbox,placements,macroCtx,generationRegexCache) : {}),
-      macroCtx:{...input.macroCtx,random:createTurnRandom(input.seed)} } satisfies Parameters<typeof assemblePrompt>[0]
+      ...(sandbox ? createTemplateGeneration(sandbox,placements,attemptMacroCtx,generationRegexCache) : {}),
+      macroCtx:attemptMacroCtx } satisfies Parameters<typeof assemblePrompt>[0]
     let assembled = assemblePrompt(assemblyInput)
     const next = sandbox?.activationRequests() ?? []
     if (JSON.stringify(next)!==JSON.stringify(requests)) {requests=next;continue}
     const insertions=placements.filter(entry=>parseTemplatePlacement(entry.comment)?.kind==='insert')
     if(insertions.length) {
       if(!sandbox) throw new Error('定位注入需要模板沙箱')
-      assembled=applyTemplatePlacements(assembled,insertions,sandbox,macroCtx,input.budget.maxTokens-input.budget.reserveForOutput)
+      assembled=applyTemplatePlacements(assembled,insertions,sandbox,attemptMacroCtx,input.budget.maxTokens-input.budget.reserveForOutput)
       const next=sandbox.activationRequests()
       if(JSON.stringify(next)!==JSON.stringify(requests)) {requests=next;continue}
     }

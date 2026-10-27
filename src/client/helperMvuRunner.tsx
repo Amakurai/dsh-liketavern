@@ -22,7 +22,7 @@ export function HelperMvuRunner(props:{remote:TavernRemote;sessionId:string;stor
     try{await props.onCancel()}catch(value){setCancelError(String(value instanceof Error?value.message:value))}
     finally{cancelPending.current=false;setCanceling(false)}
   }
-  const retry=useRef<()=>void>(()=>{})
+  const retry=useRef<()=>void>(()=>{}),pollRef=useRef<()=>void>(()=>{})
   useEffect(()=>{props.onStatus?.({error,busy,retry:()=>retry.current()})},[error,busy,props.onStatus])
   const srcDoc=useMemo(()=>buildCardSrcDoc('',{greetings:[],greetingIndex:0,helperSnapshot:props.snapshot,mvuRunner:true}),[props.sessionId,props.storyId])
   useLayoutEffect(()=>{
@@ -114,10 +114,12 @@ export function HelperMvuRunner(props:{remote:TavernRemote;sessionId:string;stor
       else if(result!==undefined){setBusy(true);void commit().catch(fail)}
       else{work=undefined;running=false;renewAt=0;void poll()}
     }
+    pollRef.current=()=>{void poll()}
     window.addEventListener('message',receive)
     const timer=setInterval(()=>{void poll()},1000)
-    return()=>{active=false;clearInterval(timer);for(const cancel of requests)cancel();endpoint.dispose();window.removeEventListener('message',receive);retry.current=()=>{}}
+    return()=>{active=false;clearInterval(timer);for(const cancel of requests)cancel();endpoint.dispose();window.removeEventListener('message',receive);retry.current=()=>{};pollRef.current=()=>{}}
   },[props.sessionId,props.storyId,srcDoc])
+  useEffect(()=>{if(props.ready)pollRef.current()},[props.ready])
   return <span>
     <Muted>{t(!props.ready?'speech.mvuWaiting':busy?'speech.mvuRunning':'speech.mvuReady')}</Muted>
     <Err message={error}/>

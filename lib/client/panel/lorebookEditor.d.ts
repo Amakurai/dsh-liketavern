@@ -19,7 +19,7 @@ type LorebookEditorProps = {
     entries: WorldInfoEntry[];
     revision?: string;
     onClose: () => void;
-    onSaved: () => void;
+    onSaved: (entries: WorldInfoEntry[], revision?: string) => void;
     save: (json: unknown, expectedRevision?: string) => Promise<Envelope<unknown>>;
 };
 export declare function LorebookEditor(props: LorebookEditorProps): import("react").JSX.Element;

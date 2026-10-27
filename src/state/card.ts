@@ -622,8 +622,13 @@ export function cardToStJson(card: CharacterCard): unknown {
   }
   if (card.regexScripts.length > 0) data.regex_scripts = card.regexScripts
   const spec = card.spec === 'chara_card_v1' || card.spec === 'unknown' ? 'chara_card_v2' : card.spec
+  const raw = card.raw && typeof card.raw === 'object' && !Array.isArray(card.raw) ? card.raw as Record<string, unknown> : {}
+  const envelopeExtras = raw.data && typeof raw.data === 'object' && !Array.isArray(raw.data)
+    ? Object.fromEntries(Object.entries(raw).filter(([k]) => !['spec', 'spec_version', 'data', 'character_book', 'lorebook', 'characterBook', 'world'].includes(k)))
+    : {}
   return {
     spec,
+    ...envelopeExtras,
     spec_version: spec === 'chara_card_v3' ? '3.0' : '2.0',
     data,
   }

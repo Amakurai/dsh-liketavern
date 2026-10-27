@@ -46,8 +46,8 @@ function startWorker(memoryMb:number):WorkerSlot {
   const entry = new URL(sourceMode ? './computeWorker.ts' : './computeWorker.js', import.meta.url).href
   // 源码测试仅映射本源码树相对导入；交付 worker 只加载 lib。
   const bootstrap = sourceMode ? `
-    const { registerHooks } = require('node:module');
-    const { workerData } = require('node:worker_threads');
+    const { registerHooks } = process.getBuiltinModule('node:module');
+    const { workerData } = process.getBuiltinModule('node:worker_threads');
     registerHooks({ resolve(specifier, context, next) {
       if (specifier.startsWith('.') && specifier.endsWith('.js') && context.parentURL?.startsWith(workerData.sourceRoot)) {
         return next(specifier.slice(0, -3) + '.ts', context);
@@ -55,8 +55,9 @@ function startWorker(memoryMb:number):WorkerSlot {
       return next(specifier, context);
     }});
     import(workerData.entry);
-  ` : `import(require('node:worker_threads').workerData.entry);`
-  const worker=new Worker(bootstrap,{eval:true,workerData:{entry,sourceRoot:new URL('../',import.meta.url).href},
+  ` : `import(process.getBuiltinModule('node:worker_threads').workerData.entry);`
+  const execArgv=process.execArgv.filter((arg,index,list)=>!arg.startsWith('--input-type')&&list[index-1]!=='--input-type')
+  const worker=new Worker(bootstrap,{eval:true,execArgv,workerData:{entry,sourceRoot:new URL('../',import.meta.url).href},
     resourceLimits:{maxOldGenerationSizeMb:memoryMb,stackSizeMb:4}})
   const slot:WorkerSlot={worker,memoryMb,busy:true,retired:false,lastUsed:performance.now()}
   // 空闲期间意外退出也要失效；任务期间的监听器负责向调用者返回错误。
@@ -71,6 +72,7 @@ function startWorker(memoryMb:number):WorkerSlot {
 async function acquireWorker(memoryMb:number,key?:string):Promise<WorkerSlot> {
   const idle=[...pool].filter(slot=>!slot.busy&&!slot.retired).sort((a,b)=>a.lastUsed-b.lastUsed)
   let slot=idle.find(item=>item.memoryMb>=memoryMb&&key!==undefined&&item.cacheKey===key)
+    ?? idle.find(item=>item.memoryMb>=memoryMb&&!item.cacheKey)
     ?? idle.find(item=>item.memoryMb>=memoryMb)
   if(!slot) {
     if(idle[0])await retire(idle[0])

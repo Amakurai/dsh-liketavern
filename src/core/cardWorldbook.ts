@@ -68,7 +68,7 @@ export function installCardWorldbook(initial:HelperWorldbookContext,json:(value:
     const result=clone(response.result as HelperWorldbookResult)
     if(!result||typeof result!=='object')throw new Error('世界书回执无效')
     if(result.context)applyContext(result.context)
-    if(result.snapshot){cache.set(book,clone(result.snapshot));cache.set(result.snapshot.name,clone(result.snapshot));if(!metadata.names.includes(result.snapshot.name))metadata={...metadata,names:[...metadata.names,result.snapshot.name]}}
+    if(result.snapshot){cache.set(book,clone(result.snapshot));cache.set(result.snapshot.name,clone(result.snapshot));if(!result.snapshot.name.startsWith('@dsh/')&&!metadata.names.includes(result.snapshot.name))metadata={...metadata,names:[...metadata.names,result.snapshot.name]}}
     if(result.deleted){const id=cache.get(book)?.name??book;cache.delete(book);cache.delete(id);metadata={...metadata,names:metadata.names.filter(name=>name!==id),global:metadata.global.filter(name=>name!==id),chat:metadata.chat===id?null:metadata.chat,character:{primary:metadata.character.primary===id?null:metadata.character.primary,additional:metadata.character.additional.filter(name=>name!==id)}}}
     if(kind!=='get')versions.set(book,(versions.get(book)??0)+1)
     return result
@@ -137,7 +137,7 @@ export function installCardWorldbook(initial:HelperWorldbookContext,json:(value:
     getCharWorldbookNames:(character:string)=>{if(character!=='current'&&character!==metadata.characterName)throw new Error('只能查询当前角色的世界书绑定');return clone(metadata.character)},
     getChatWorldbookName:(chat:string)=>{if(chat!=='current')throw new Error('只能查询当前剧情世界书');return metadata.chat},
     rebindGlobalWorldbooks:async(input:unknown)=>{const value=json(input,16384);await bind('global',()=>value)},
-    rebindCharWorldbooks:async(character:string,input:unknown,partial=false)=>{if(character!=='current')throw new Error('只能修改当前角色世界书');const value=json(input,16384);if(!value||typeof value!=='object'||Array.isArray(value))throw new Error('角色世界书绑定无效');await bind('character',()=>partial?{...metadata.character,...value}:value)},
+    rebindCharWorldbooks:async(character:string,input:unknown,partial=false)=>{if(character!=='current'&&character!==metadata.characterName)throw new Error('只能修改当前角色世界书');const value=json(input,16384);if(!value||typeof value!=='object'||Array.isArray(value))throw new Error('角色世界书绑定无效');await bind('character',()=>partial?{...metadata.character,...value}:value)},
     rebindChatWorldbook:async(chat:string,input:unknown)=>{if(chat!=='current')throw new Error('只能修改当前聊天世界书');const value=json(input,16384);await bind('chat',()=>value)},
     getWorldbook,replaceWorldbook,updateWorldbookWith,createWorldbookEntries,deleteWorldbookEntries,refreshHelperWorldbooks,
     createWorldbook:async(book:string,entries:unknown=[])=>Boolean((await operation(book,'create',entries)).created),

@@ -123,6 +123,7 @@ export function installCardPersistence(snapshot:HelperSnapshot,source:string,_la
           const activePage=msg.swipe?.pages[msg.swipe.active]
           if(activePage)activePage.data=clone(nextData)
         }
+
       }
       setStatus('saved')
     } catch(error) {failure=error instanceof Error?error:new Error(String(error));if(active){setStatus('error');report(failure)};throw failure}

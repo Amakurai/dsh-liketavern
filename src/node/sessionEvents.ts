@@ -2,6 +2,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import { SessionPersistenceNotFoundError } from '@deepseek-ai/dsh-session-persistence'
+import { sessionHasUserMessage } from '../core/greetingLog.js'
 
 /**
  * Session.snapshotEvents() 返回在下次 append 前复用的不可变数组。长聊天首屏会同时渲染
@@ -20,7 +21,7 @@ function currentSnapshot<T>(events:readonly SessionEvent[],cached:EventSnapshotC
 export function displaySessionHasUserMessage(events:readonly SessionEvent[]):boolean {
   const cached=userMessagePresence.get(events)
   if(currentSnapshot(events,cached))return cached.value
-  const value=events.some(event=>event.type==='user/message')
+  const value=sessionHasUserMessage(events)
   const last=events.at(-1)
   userMessagePresence.set(events,{length:events.length,last,lastSeq:last?.seq,value})
   return value

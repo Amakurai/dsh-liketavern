@@ -384,4 +384,22 @@ describe('剧情模板集成', () => {
     expect((await loadTemplateState(ws.fs)).variables.message.visits).toBe(1)
     await onTurnEnd(state,'s1')
   })
+  it('[Preprocessing] 写入初始化变量后不会被二次 @@if 评估吞掉，且 [GENERATE:AFTER] 可读角色字段与组装阶段宏变量', async () => {
+    const {state,ws,run,cardId} = await setup('<% incvar("visits"); setvar("from_assemble","ASSEMBLE_VAL") %>{{setvar::from_macro::MACRO_VAL}}')
+    await state.saveCharacter(cardId,{
+      scenario:'舞台场景',
+      characterBook:{entries:[
+        {uid:1,comment:'[Preprocessing] init once',constant:true,content:'@@if !getvar("inited")\n<% setvar("inited",1) %>PREP_ONCE_MARKER'},
+        {uid:2,comment:'[GENERATE:AFTER]',constant:true,content:'AFTER_RESULT={{scenario}}|{{getvar::from_macro}}|<%- getvar("from_assemble") %>'},
+      ]},
+    })
+    await onTurnStart(state,'s1',1)
+    const plan = await run()
+    expect(`${plan?.standing}\n${plan?.turnContext}`).toContain('PREP_ONCE_MARKER')
+    expect(plan?.turnContext).toContain('AFTER_RESULT=舞台场景|MACRO_VAL|ASSEMBLE_VAL')
+    const saved = await loadTemplateState(ws.fs)
+    expect(saved.variables.message.inited).toBe(1)
+    expect((await loadTemplateState(ws.fs)).variables.message.visits).toBe(1)
+    await onTurnEnd(state,'s1')
+  })
 })

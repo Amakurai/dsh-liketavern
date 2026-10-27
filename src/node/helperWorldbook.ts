@@ -45,7 +45,7 @@ async function rawBook(state:TavernState,binding:SessionBinding,value:string,cha
 }
 async function contextFrom(state:TavernState,binding:SessionBinding,chat:ChatWorldbooks):Promise<HelperWorldbookContext>{
   const items=await names(state),card=await state.loadCharacter(binding.cardId),embedded=await rawBook(state,binding,CHARACTER,chat)
-  return {storyId:binding.storyId!,bindingRevision:bindingRevision(state,binding,chat),names:[...items,...(embedded.raw!==null?[CHARACTER]:[]),...Array.from(chat.books.keys(),chatWorldbookRef)],global:binding.lorebookIds.filter(id=>items.includes(id)),characterName:card?.card.name??'',settings:helperWorldbookSettingsCodec.fromNative(state.worldInfoFor(binding),binding.lorebookIds),
+  return {storyId:binding.storyId!,bindingRevision:bindingRevision(state,binding,chat),names:[...items,...(embedded.raw!==null?[CHARACTER]:[]),...Array.from(chat.books.keys(),chatWorldbookRef)],global:binding.lorebookIds.filter(id=>items.includes(id)),characterName:card?.card.name??'',settings:helperWorldbookSettingsCodec.fromNative(state.worldInfoFor(binding),binding.lorebookIds.filter(id=>items.includes(id))),
     character:{primary:binding.characterLorebookId?(items.includes(binding.characterLorebookId)?binding.characterLorebookId:null):(binding.useEmbeddedLorebook!==false&&embedded.raw!==null?CHARACTER:null),additional:(binding.characterLorebookIds??[]).filter(id=>items.includes(id)&&id!==binding.characterLorebookId)},chat:chat.active===null?null:chatWorldbookRef(chat.active)}
 }
 export async function getHelperWorldbookContext(state:TavernState,sessionId:string,storyId:string):Promise<HelperWorldbookContext>{

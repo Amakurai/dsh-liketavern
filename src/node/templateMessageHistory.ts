@@ -21,6 +21,6 @@ export function buildTemplateMessageHistory(messages:readonly Message[],pending:
     identities.push({messageId:id,swipeId:0,...(seq!==undefined ? {hostMessageId:seq} : {})})
   }
   for(const message of messages) if(message.role!=='tool' && message.role!=='developer' && !isHostSystemPromptMessage(message) && !(isHostInjectedUserMessage(message) && message.source.kind!=='compact-checkpoint')) add(message.id,message.role,message.content.filter(block=>block.type==='text').map(block=>block.text).join('\n'),message.content.some(block=>block.type==='image'))
-  for(const message of pending) add(message.id,'user',message.text,message.hasImage)
+  for(const message of pending) if(!visible.has(message.id)) add(message.id,'user',message.text,message.hasImage)
   return {history,identities}
 }

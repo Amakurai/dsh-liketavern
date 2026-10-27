@@ -37,8 +37,12 @@ export function sessionHasUserMessage(events: readonly GreetingLogEvent[]): bool
   return events.some((event) => {
     if (event.type !== 'user/message') return false
     if ('surfaceOp' in event && event.surfaceOp !== undefined && event.surfaceOp !== 'append') return false
-    if (event.data !== null && typeof event.data === 'object' && isHostInjectedUserMessage(event.data as { role?: string; source?: { kind?: string } })) {
-      return false
+    if (event.data !== null && typeof event.data === 'object') {
+      const record = event.data as { message?: unknown; role?: string; source?: { kind?: string } }
+      const message = record.message !== null && typeof record.message === 'object'
+        ? (record.message as { role?: string; source?: { kind?: string } })
+        : record
+      if (isHostInjectedUserMessage(message)) return false
     }
     return true
   })

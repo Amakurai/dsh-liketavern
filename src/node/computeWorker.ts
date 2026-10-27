@@ -85,7 +85,7 @@ async function compute(request: typeof workerData):Promise<void> {
     const incomingReplay=kind==='assemble' ? input.templateContinuation?.replay : kind==='template' ? input.replay : undefined
     const incomingContext=kind==='assemble' ? input.templates : input.context
     const incomingKey=templateWorkerCacheKey(incomingReplay,incomingContext)
-    if(kind==='render'||kind==='display')cacheKey=sandboxCache.key
+    if(!needsTemplates||kind==='render'||kind==='display')cacheKey=sandboxCache.key
     else if(!incomingKey)sandboxCache.clear()
     const restoreCached=()=> {
       const cached=sandboxCache.take(incomingKey,incomingReplay,budget.inputChars)

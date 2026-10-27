@@ -111,7 +111,7 @@ export function characterDataExtras(card: CharacterCard): CharacterDataExtras {
   const extensions: Record<string, unknown> = {}
   for (const key of directKeys) {
     // 解析时 direct 会覆盖同名 nested 镜像；保留 raw nested，避免往返静默丢掉另一份数据。
-    if (Object.hasOwn(rawExtensions, key)) setExtraField(extensions, key, rawExtensions[key])
+    if (Object.hasOwn(card.extensions, key) && Object.hasOwn(rawExtensions, key)) setExtraField(extensions, key, rawExtensions[key])
   }
   for (const [key, value] of Object.entries(card.extensions)) {
     if (directKeys.has(key)) continue

@@ -43,6 +43,7 @@ export function restoreCardVariableBackup(srcDoc: string, text: string): string 
     if (!['chat', 'global', 'character', 'preset', 'message', 'script', 'extension'].includes(type)
       || (typeof id !== 'string' && typeof id !== 'number')
       || (['chat', 'global', 'character', 'preset'].includes(type) && id !== '')
+      || (type === 'message' && id !== 'current' && (typeof id !== 'number' || !Number.isSafeInteger(id) || id < 0))
       || JSON.stringify(parts) !== key) throw new Error('Invalid scope')
   }
   const seed = JSON.stringify({ scopes: parsed.scopes }).replace(/</g, '\\u003c').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029')
@@ -176,18 +177,18 @@ export function installCardVariables(labels: CardVariableLabels, styles = '', me
       parent = (parent as Table)[key]
     }
     const key = parts[parts.length - 1]!
-    const occurred = (record(parent) || Array.isArray(parent)) && Object.hasOwn(parent, key)
-    if (occurred) delete (parent as Table)[key]
+    const occurred = Array.isArray(parent) ? /^\d+$/.test(key) && Number(key) < parent.length : record(parent) && Object.hasOwn(parent, key)
+    if (occurred) { if (Array.isArray(parent)) parent.splice(Number(key), 1); else delete (parent as Table)[key] }
     return { variables: occurred ? replaceVariables(value, option) : value, delete_occurred: occurred }
   }
   function getAllVariables(): Table {
     const currentId=(root.__dshTavernSnapshot as {currentMessageId:number}|undefined)?.currentMessageId??messageId
     const result: Table = {}
-    for (const type of ['global', 'character', 'chat']) merge(result, getVariables({ type }), false)
+    for (const type of ['global', 'preset', 'character', 'chat']) merge(result, getVariables({ type }), false)
     // 按当前快照顺序合入到本卡面为止的消息变量。
     const messages = Object.entries(holder.scopes).map(([key, value]) => ({ parts: JSON.parse(key) as [string, string | number], value }))
       .filter(({ parts: [type, id] }) => type === 'message' && (id === 'current' || typeof id === 'number' && (currentId === undefined || id <= currentId)))
-      .sort((a, b) => Number(a.parts[1]) - Number(b.parts[1]))
+      .sort((a, b) => (a.parts[1] === 'current' ? Number.MAX_SAFE_INTEGER : Number(a.parts[1])) - (b.parts[1] === 'current' ? Number.MAX_SAFE_INTEGER : Number(b.parts[1])))
     for (const message of messages) merge(result, clone(message.value), false)
     return clone(result)
   }

@@ -24,10 +24,12 @@ type Variables = {
   insertOrAssignVariables(value: unknown, option?: unknown): Record<string, unknown>
   insertVariables(value: unknown, option?: unknown): Record<string, unknown>
   updateVariablesWith(updater: (value: Record<string, unknown>) => Record<string, unknown> | Promise<Record<string, unknown>>, option?: unknown): Record<string, unknown> | Promise<Record<string, unknown>>
+  deleteVariable(path: string, option?: unknown): { variables: Record<string, unknown>; delete_occurred: boolean }
+  getAllVariables(): Record<string, unknown>
 }
 function frame(seed?: string, showTools = true) {
   const body = new Element()
-  const window = {} as Variables
+  const window = { _: { toPath: (p: string) => p.replace(/\[(\d+)\]/g, '.$1').split('.').filter(Boolean) } } as unknown as Variables
   const postMessage = vi.fn()
   const context = { window, labels, TextEncoder, parent: { postMessage }, document: {
     readyState: 'complete', body, getElementById: (id: string) => body.children.find((n) => n.id === id), createElement: () => new Element(),
@@ -145,5 +147,39 @@ describe('隔离的卡内变量', () => {
   })
   it('不使用变量的普通 HTML 装饰卡不显示备份工具', () => {
     expect(frame().body.children).toHaveLength(0)
+  })
+  it('getAllVariables 合并 preset 作用域且保持 current 消息优先级最高，deleteVariable 安全处理数组路径', () => {
+    const { api } = frame()
+    api.replaceVariables({ rank: 'global', g: 1 }, { type: 'global' })
+    api.replaceVariables({ rank: 'preset', p: 2 }, { type: 'preset' })
+    api.replaceVariables({ rank: 'character', c: 3 }, { type: 'character' })
+    api.replaceVariables({ rank: 'chat', ch: 4 }, { type: 'chat' })
+    api.replaceVariables({ rank: 'm2', order: 'two' }, { type: 'message', message_id: 2 })
+    api.replaceVariables({ rank: 'current', cur: 9 }, { type: 'message', message_id: 'current' })
+    api.replaceVariables({ rank: 'm1', order: 'one' }, { type: 'message', message_id: 1 })
+    expect(api.getAllVariables()).toEqual({
+      rank: 'current',
+      g: 1,
+      p: 2,
+      c: 3,
+      ch: 4,
+      order: 'two',
+      cur: 9,
+    })
+    api.replaceVariables({ items: ['a', 'b', 'c'] })
+    expect(api.deleteVariable('items.length')).toEqual({
+      variables: { items: ['a', 'b', 'c'] },
+      delete_occurred: false,
+    })
+    expect(api.deleteVariable('items[1]')).toEqual({
+      variables: { items: ['a', 'c'] },
+      delete_occurred: true,
+    })
+  })
+  it('恢复入口拒绝非法 message 作用域 ID（负数或任意字符串）', () => {
+    const original = buildCardSrcDoc('<p>工厂卡</p>', { greetings: [], greetingIndex: 0 })
+    for (const key of ['["message",-1]', '["message","bad"]', '["message",1.5]']) {
+      expect(() => restoreCardVariableBackup(original, JSON.stringify({ version: 1, scopes: { [key]: { hp: 1 } } }))).toThrow()
+    }
   })
 })

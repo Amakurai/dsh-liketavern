@@ -2,11 +2,13 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { TavernState } from './state.js'
 import { isTavernRuntimeSession } from './tavernSession.js'
+import { isHostInjectedUserMessage } from '../core/dshPrompt.js'
 
 export function registerPromptInputTracking(ctx: Context, state: TavernState): void {
   ctx.on('agent/inbox/claimed', ({ agent, message, turn }) => {
     const session = ctx.sessions.get(agent.id)
     if (!session || !isTavernRuntimeSession(ctx, session)) return
+    if (isHostInjectedUserMessage(message) && message.source.kind !== 'compact-checkpoint') return
     const text = message.content.filter(block => block.type === 'text').map(block => block.text).join('\n')
     const hasImage = message.content.some(block => block.type === 'image')
     if (!text.trim() && !hasImage) return

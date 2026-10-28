@@ -29,6 +29,8 @@ export const TEMPLATE_LEGACY_RUNTIME_ABIS:Readonly<Record<string,TemplateRuntime
   // v0.5.6 发布的规范化指纹。其后 zod 4.4.3 → 4.6.7 修复 GHSA-mrhx-c7xc-m3w5，命令契约未变；
   // 旧堆保留其原 vendor 直到环境结束。
   'daccaaf41aeb4f613f97ca128307110a98fa22e5f17a4bfd39bb9f515175a75c':TEMPLATE_RUNTIME_ABI,
+  // v0.5.9 发布的规范化指纹；来源映射实现优化未改变宿主通信契约，旧堆继续使用原实现。
+  '14eb40ac012bfbbc29d615b5996315c2e2fc81f8a80f16b98a04b6651e2b384e':TEMPLATE_RUNTIME_ABI,
 })
 
 /** 仅登记确实需要禁止恢复的运行时；撤销优先于 current 和 legacy，不用虚构版本占位。 */

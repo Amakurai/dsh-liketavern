@@ -27,20 +27,30 @@ function applyTemporaryRegexSources(inputParts,stage,meta,namespace,rules) {
     const offsets=[];
     let total=0;
     for(const part of parts) {offsets.push(total);total+=part.text.length;}
-    const at=position=> {
-      for(let index=0;index<parts.length;index++) {
+    // offsets 单调不减；定位与切片都二分首个 finish>position 的段，避免每个匹配从段头线性扫描。
+    const firstAfter=position=> {
+      let lo=0,hi=parts.length;
+      while(lo<hi) {
         if(++work>1000000) throw Error('正则来源映射工作量超过上限');
-        const part=parts[index],start=offsets[index];
-        if(position<start+part.text.length || index===parts.length-1) return {key:part.key,start:part.start+Math.min(part.text.length,Math.max(0,position-start))};
+        const mid=(lo+hi)>>>1;
+        if(offsets[mid]+parts[mid].text.length<=position)lo=mid+1;
+        else hi=mid;
       }
-      return {key:'empty:'+namespace,start:0};
+      return lo;
+    };
+    const at=position=> {
+      const index=Math.min(firstAfter(position),parts.length-1);
+      if(index<0)return {key:'empty:'+namespace,start:0};
+      const part=parts[index],start=offsets[index];
+      return {key:part.key,start:part.start+Math.min(part.text.length,Math.max(0,position-start))};
     };
     const slice=(start,end)=> {
       const output=[];
-      for(let index=0;index<parts.length;index++) {
+      if(end<=start)return output;
+      for(let index=firstAfter(start);index<parts.length;index++) {
         if(++work>1000000) throw Error('正则来源映射工作量超过上限');
         const part=parts[index],begin=offsets[index],finish=begin+part.text.length;
-        if(finish<=start || begin>=end) continue;
+        if(begin>=end)break;
         const left=Math.max(start,begin),right=Math.min(end,finish);
         output.push({key:part.key,text:part.text.slice(left-begin,right-begin),start:part.start+left-begin});
       }

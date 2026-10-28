@@ -10,10 +10,10 @@ import { cardGreetingVariants } from '../../core/greetingLog.js'
 import type { CharacterCompatibilityCode, CharacterCompatibilityStatus } from '../../core/characterCompatibility.js'
 import { CARD_VARIABLE_STYLES } from '../styles.js'
 import { PersistentEditor, useDraftRestored, useDraftState } from '../draftPersistence.js'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Button, IconArchiveOutlineMedium, IconDownloadOutlineMedium, IconRefreshOutlineMedium, IconTrashOutlineMedium, IconUserOutlineMedium, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
 import { cachedAvatar, cachedCharacterDetail, invalidateCharacter, notifyCharacterChanged } from '../cache.js'
-import { matchesCharacterSearch } from '../characterSearch.js'
+import { filterCharacters } from '../characterSearch.js'
 import { useT } from '../i18n.js'
 import type { CharacterDeletePlan, CharacterDetail, CharacterInspect, CharacterSummary, TavernRemote } from '../types.js'
 import { Avatar, Btn, ConfirmDialog, Dialog, Err, Field, FileBtn, IconBtn, ListInput, Muted, NumInput, SearchEmpty, SearchInput, Section, Select, Skeleton, Tabs, clickableProps, downloadBase64, downloadJson, errOf, fileToBase64, runAsync, useLoader, useToast, type LoadState } from '../util.js'
@@ -556,7 +556,7 @@ function CharactersSectionContent(props: { remote: TavernRemote }) {
   const items = state.status === 'ready' ? state.value.items : []
   // 卡多或已有搜索内容时显示搜索框；删卡与刷新不能隐藏仍生效的筛选。
   const q = query.trim().toLowerCase()
-  const filtered = items.filter((c) => matchesCharacterSearch(c, query))
+  const filtered = useMemo(() => filterCharacters(items, query), [items, query])
   return (
     <Section title={t('section.characters')} description={t('characters.section.desc')}>
       {toast.node}

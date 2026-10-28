@@ -6,7 +6,7 @@ import type { ReactNode } from 'react'
 import { act, create } from 'react-test-renderer'
 import type { ReactTestRenderer } from 'react-test-renderer'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { CharacterPicker } from '../src/client/characterPicker.js'
+import { CharacterPicker, rememberCharacter } from '../src/client/characterPicker.js'
 import { CharactersSection } from '../src/client/panel/characters.js'
 import { Btn, SearchInput } from '../src/client/util.js'
 import { setTavernLocale } from '../src/client/i18n.js'
@@ -88,6 +88,29 @@ it.each(['management', 'picker'] as const)('%s 支持标签/作者/书名搜索�
   expect(cards()).toHaveLength(0)
   await act(async () => view.root.findByType(SearchInput).props.onChange(''))
   expect(cards()).toHaveLength(6)
+})
+
+it('选择器在筛选和重新渲染后保持最近使用顺序，并读取更新后的最近记录', async () => {
+  const items: CharacterSummary[] = ['甲', '乙', '丙'].map((name, index) => ({
+    cardId: `recent-${index}`, name, hasAvatar: false, hasCharacterBook: false,
+    characterBookName: null, characterBookEntryCount: 0,
+  }))
+  const remote = { listCharacters: async () => ({ ok: true, value: { items } }) } as unknown as TavernRemote
+  rememberCharacter(remote, 'recent-1')
+  rememberCharacter(remote, 'recent-2')
+  const picker = (busy: boolean) => <CharacterPicker remote={remote} busy={busy} error={null} onPick={() => {}} onClose={() => {}} />
+  let view!: ReactTestRenderer
+  await act(async () => { view = create(picker(false)) })
+  mounted.push(view)
+  const names = () => view.root.findAllByProps({ className: 'dsh-tavern-pickerItem' }).map(card => card.findByType('strong').children.join(''))
+  expect(names()).toEqual(['丙', '乙', '甲'])
+  await act(async () => view.root.findByType(SearchInput).props.onChange('甲'))
+  expect(names()).toEqual(['甲'])
+  rememberCharacter(remote, 'recent-0')
+  await act(async () => { view.update(picker(true)) })
+  await act(async () => view.root.findByType(SearchInput).props.onChange(''))
+  expect(names()).toEqual(['甲', '丙', '乙'])
+  expect(items.map(item => item.name)).toEqual(['甲', '乙', '丙'])
 })
 
 it('角色详情读取失败时保留弹窗和重试入口，恢复后显示真实字段', async () => {

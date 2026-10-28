@@ -9,16 +9,29 @@ import { TEMPLATE_RUNTIME_ABI } from '../src/core/templateRuntimeAbi.js'
 import type { TemplateState } from '../src/state/template.js'
 
 const LEGACY_HASH='77f29556bf365b33ddb9d006fc8ea78f6088c36fd3c464a0ef2c4c036dc0a3f1'
+const PREVIOUS_HASH='14eb40ac012bfbbc29d615b5996315c2e2fc81f8a80f16b98a04b6651e2b384e'
 const roots:string[]=[]
 const QUERIES=96
 
 /**
- * 只复原已登记版本的两行差异与当时的 vendor；旧 hash 必须由真实旧源码计算，不能改检查点头冒充兼容。
+ * 复原旧正则源码、两行 bootstrap 差异与当时的 vendor；旧 hash 必须由真实旧源码计算，不能改检查点头冒充兼容。
  * markdown-it 15.0.3 安全升级后当前 vendor 已变，旧版 template-libraries.js 原文以压缩夹具保存
  * （取自升级前提交，LF），只在旧版 worker 里替换这一个文件的读取。
  */
 const LEGACY_LIBRARIES=fileURLToPath(new URL('./templateLibrariesV055.fixture.js.gz',import.meta.url))
-const legacyLoader=String.raw`
+const PREVIOUS_REGEX=fileURLToPath(new URL('./templateRegexSourcesV059.fixture.txt',import.meta.url))
+/** 从优化前真实源码生成旧堆，不能用当前实现冒充旧指纹。 */
+const previousRegexLoader=String.raw`
+{
+  const {readFileSync}=require('node:fs'),{registerHooks}=require('node:module');
+  const previousSource=readFileSync(${JSON.stringify(PREVIOUS_REGEX)},'utf8');
+  registerHooks({load(url,context,next){
+    const loaded=next(url,context);
+    return url.endsWith('/node/templateRegexSources.ts')?{...loaded,source:previousSource}:loaded;
+  }});
+}
+`
+const legacyLoader=previousRegexLoader+String.raw`
 {
   const fsp=require('node:fs/promises'),{readFileSync}=require('node:fs'),{gunzipSync}=require('node:zlib');
   const legacyLibraries=gunzipSync(readFileSync(${JSON.stringify(LEGACY_LIBRARIES)})).toString('utf8');
@@ -174,8 +187,8 @@ if(workerData.mode==='legacy') {
     const initialCheckpoint=Boolean(state.continuation.replay?.checkpoint);
     const advanced=await advance(state),generated=checkpoint(advanced.state);
     const rendered=await reply(advanced.state);state=rendered.state;
-    // 旧版本没有 ABI 头；省略的只是后来新增的声明，真实堆和真实代码指纹保持原样。
-    if(workerData.mode==='legacy')delete checkpoint(state).runtimeAbi;
+    // 最早的旧版本没有 ABI 头；后续版本保留它实际声明的 ABI。
+    if(workerData.mode==='legacy'&&!workerData.legacyHasAbi)delete checkpoint(state).runtimeAbi;
     await wal.beginFloor(workerData.floor);
     await saveTemplateState(fs.withFloor(workerData.floor),state);
     await wal.commitFloor(workerData.floor);
@@ -187,11 +200,13 @@ if(workerData.mode==='legacy') {
 })().catch(error=>parentPort.postMessage({error:error.stack||String(error)}));
 `
 
-async function run(mode:'legacy'|'resume'|'fresh',root:string,exportPath:string):Promise<Result> {
+async function run(mode:'legacy'|'resume'|'fresh',root:string,exportPath:string,fixture:'legacy'|'previous'):Promise<Result> {
   const old=mode==='legacy',fresh=mode==='fresh'
+  const sourceLoader=fixture==='legacy'?legacyLoader:previousRegexLoader
+  const legacyHash=fixture==='legacy'?LEGACY_HASH:PREVIOUS_HASH
   return new Promise((resolve,reject)=> {
-    const worker=new Worker((old?legacyLoader:'')+'\n'+workerSource,{eval:true,workerData:{mode,root,exportPath,legacyHash:LEGACY_HASH,
-      legacyLoader,sourceRoot:new URL('../src/',import.meta.url).href,queries:QUERIES,script:template(fresh?1000:0,fresh?'current':'legacy'),
+    const worker=new Worker((old?sourceLoader:'')+'\n'+workerSource,{eval:true,workerData:{mode,root,exportPath,legacyHash,
+      legacyLoader:sourceLoader,legacyHasAbi:fixture==='previous',sourceRoot:new URL('../src/',import.meta.url).href,queries:QUERIES,script:template(fresh?1000:0,fresh?'current':'legacy'),
       tag:fresh?'current':'legacy',floor:old?'story#t1':fresh?'story#t3':'story#t2'},resourceLimits:{maxOldGenerationSizeMb:512}})
     let settled=false
     const timer=setTimeout(()=>{settled=true;void worker.terminate();reject(Error('运行时升级测试 worker 超时'))},45000)
@@ -203,44 +218,47 @@ async function run(mode:'legacy'|'resume'|'fresh',root:string,exportPath:string)
 
 afterEach(async()=>{for(const root of roots.splice(0))await rm(root,{recursive:true,force:true})})
 
-it('真实旧代码堆经新安装包冷恢复仍用原函数，重做检查点保留旧身份，闭包到期后新堆才使用当前身份',async()=> {
+it.each([
+  {fixture:'legacy' as const,hash:LEGACY_HASH,abi:null},
+  {fixture:'previous' as const,hash:PREVIOUS_HASH,abi:TEMPLATE_RUNTIME_ABI},
+])('真实旧代码堆 $fixture 经新安装包冷恢复并保留旧身份，闭包到期后才切换当前运行时',async({fixture,hash,abi})=> {
   const root=await mkdtemp(join(tmpdir(),'tavern-checkpoint-upgrade-'));roots.push(root)
   const workspace=join(root,'story'),exportPath=join(root,'legacy.json')
-  const legacy=await run('legacy',workspace,exportPath)
+  const legacy=await run('legacy',workspace,exportPath,fixture)
   expect(legacy.error).toBeUndefined()
-  expect(legacy.runtimeHash).toBe(LEGACY_HASH)
-  expect(legacy.checkpointHash).toBe(LEGACY_HASH)
+  expect(legacy.runtimeHash).toBe(hash)
+  expect(legacy.checkpointHash).toBe(hash)
   expect(legacy.initialCheckpoint).toBe(false)
   expect(legacy.operations).toBeLessThan(256)
   expect([legacy.first,legacy.last]).toEqual(['1','96'])
-  expect(legacy.observation).toEqual({count:96,helper:'captured-old-helper',shared:true,abi:null,
+  expect(legacy.observation).toEqual({count:96,helper:'captured-old-helper',shared:true,abi,
     events:['sync:95','micro:95','sync:96','micro:96']})
   expect(legacy.reply).toEqual(['97 98'])
   expect(legacy.sticky).toEqual(['legacy'])
   expect(legacy.inheritedHeap).toBe(false)
   const exported=JSON.parse(await readFile(exportPath,'utf8')) as TemplateState
-  expect(exported.continuation!.replay!.checkpoint!.runtimeHash).toBe(LEGACY_HASH)
-  expect(exported.continuation!.replay!.checkpoint!.runtimeAbi).toBeUndefined()
+  expect(exported.continuation!.replay!.checkpoint!.runtimeHash).toBe(hash)
+  expect(exported.continuation!.replay!.checkpoint!.runtimeAbi).toBe(abi??undefined)
 
-  const resumed=await run('resume',workspace,exportPath)
+  const resumed=await run('resume',workspace,exportPath,fixture)
   expect(resumed.error).toBeUndefined()
-  expect(resumed.runtimeHash).not.toBe(LEGACY_HASH)
-  expect(resumed.inputCheckpointHash).toBe(LEGACY_HASH)
-  expect(resumed.inputCheckpointAbi).toBeUndefined()
+  expect(resumed.runtimeHash).not.toBe(hash)
+  expect(resumed.inputCheckpointHash).toBe(hash)
+  expect(resumed.inputCheckpointAbi).toBe(abi??undefined)
   expect(resumed.initialCheckpoint).toBe(true)
   expect(resumed.operations).toBeLessThan(256)
-  expect(resumed.checkpointHash).toBe(LEGACY_HASH)
+  expect(resumed.checkpointHash).toBe(hash)
   expect(resumed.checkpointAbi).toBe(TEMPLATE_RUNTIME_ABI)
   expect([resumed.first,resumed.last]).toEqual(['99','194'])
-  expect(resumed.observation).toEqual({count:194,helper:'captured-old-helper',shared:true,abi:null,
+  expect(resumed.observation).toEqual({count:194,helper:'captured-old-helper',shared:true,abi,
     events:['sync:193','micro:193','sync:194','micro:194']})
   expect(resumed.reply).toEqual(['195 196'])
   expect(resumed.sticky).toEqual(['legacy'])
 
-  const fresh=await run('fresh',workspace,exportPath)
+  const fresh=await run('fresh',workspace,exportPath,fixture)
   expect(fresh.error).toBeUndefined()
   expect(fresh.runtimeHash).toBe(resumed.runtimeHash)
-  expect(fresh.inputCheckpointHash).toBe(LEGACY_HASH)
+  expect(fresh.inputCheckpointHash).toBe(hash)
   expect(fresh.inputCheckpointAbi).toBe(TEMPLATE_RUNTIME_ABI)
   expect(fresh.initialCheckpoint).toBe(false)
   expect(fresh.operations).toBeLessThan(256)

@@ -32,11 +32,12 @@ it.each(legacyHashes)('已核对旧换行指纹 %s 恢复后仍保留原身份�
   expect(()=>resolveTemplateRuntimeIdentity({runtimeHash,runtimeAbi:'unknown-abi'},current)).toThrow(/ABI 不匹配/)
 })
 
-it('v0.5.3–v0.5.6 的检查点在模板依赖安全升级后仍按原指纹恢复，且不等同当前版本',async()=> {
+it('v0.5.3–v0.5.6 与 v0.5.9 的检查点在运行时更新后仍按原指纹恢复',async()=> {
   const {hash}=await loadTemplateRuntime()
   for(const released of [
     '47c22ed5bb3551a8e6c5ab766fd66f2d009a9004033a4058d64e3fcd07f703cb',
     'daccaaf41aeb4f613f97ca128307110a98fa22e5f17a4bfd39bb9f515175a75c',
+    '14eb40ac012bfbbc29d615b5996315c2e2fc81f8a80f16b98a04b6651e2b384e',
   ]) {
     expect(hash).not.toBe(released)
     expect(resolveTemplateRuntimeIdentity({runtimeHash:released},hash)).toEqual({runtimeHash:released,runtimeAbi:TEMPLATE_RUNTIME_ABI})

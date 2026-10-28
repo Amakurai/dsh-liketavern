@@ -38,6 +38,39 @@ describe('全文正则来源映射',()=> {
     expect(result.variables.message.calls).toBe(4)
   })
 
+  it('跨空段匹配的回调按完整来源身份缓存',async()=> {
+    const parts=[{key:'a',text:'ab',start:7},{key:'empty',text:'',start:5},{key:'b',text:'cd',start:20}]
+    const changed=[parts[0]!,{...parts[1]!,key:'other-empty'},parts[2]!]
+    const result=await isolated('template',{context:context(),texts:[
+      `<% activateRegex(/bc/g,()=>incvar('calls'),{uuid:'same',generate:true,worldinfo:true}); %><%- ${call(parts)} %>`,
+      `<%- ${call(parts)} %>`,
+      `<%- ${call(changed)} %>`,
+    ]})
+    expect(result.texts).toEqual(['a1d','a1d','a2d'])
+    expect(result.variables.message.calls).toBe(2)
+  })
+
+  it('零宽匹配在段内、空段边界和末尾保持来源锚点',async()=> {
+    const parts=[{key:'a',text:'ab',start:7},{key:'empty',text:'',start:5},{key:'b',text:'cd',start:20},{key:'tail',text:'',start:99}]
+    const expression=`JSON.stringify(__applyTemporaryRegexSources(${JSON.stringify(parts)},'generate',{role:'system',worldinfo:true,depth:0},'zero'))`
+    const result=await isolated('template',{context:context(),texts:[
+      `<% activateRegex(/(?=b)|(?=c)|$/g,'X',{generate:true,worldinfo:true}); %><%- ${expression} %>`,
+    ]})
+    expect(JSON.parse(result.texts[0]!)).toEqual([
+      {key:'a',text:'aX',start:7},{key:'a',text:'b',start:8},
+      {key:'b',text:'X',start:20},{key:'b',text:'cd',start:20},{key:'tail',text:'X',start:99},
+    ])
+  })
+
+  it('大量相邻来源段的全文匹配保持身份映射，不随匹配数重复全表扫描',async()=> {
+    const parts=Array.from({length:2000},(_,index)=>({key:`message-${index}`,text:'x',start:index}))
+    const expression=`JSON.stringify(__applyTemporaryRegexSources(${JSON.stringify(parts)},'generate',{role:'system',worldinfo:true,depth:0},'dense'))`
+    const result=await isolated('template',{context:context(),texts:[
+      `<% activateRegex(/x/g,'y',{generate:true,worldinfo:true}); %><%- ${expression} %>`,
+    ]})
+    expect(JSON.parse(result.texts[0]!)).toEqual(parts.map(part=>({...part,text:'y'})))
+  })
+
   it('错误来源、过多零宽匹配、异步回调和扩张输出明确失败',async()=> {
     await expect(isolated('template',{context:context(),texts:[`<%- ${call([{key:'bad',text:'x',start:-1}])} %>`]})).rejects.toThrow(/来源/)
     await expect(isolated('template',{context:context(),texts:[`<% activateRegex(/(?:)/g,'x',{generate:true,worldinfo:true}) %><%- ${call([{key:'a',text:'x'.repeat(4100),start:0}])} %>`]})).rejects.toThrow(/4096/)

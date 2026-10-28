@@ -266,7 +266,7 @@ export function createHelperMvuCommandCodec(json: (value: unknown, maxBytes?: nu
         const end=code.inlineEnd(at)
         if(end!==null){
           if(updates){let width=1;while(message[at+width]==='`')width++;syntaxEnds.set(end-width,end);at+=width}
-          else if(!/<(?:updatevariable|json_?patch)(?=[\s>])/i.test(message.slice(at,end))||/<\/(?:updatevariable|json_?patch)\s*>/i.test(message.slice(at,end)))at=end
+          else if(!/<(?:updatevariable|json_?patch)(?=[\s>])/i.test(message.slice(at,end))||/<\/(?:updatevariable|json_?patch)\s*>/i.test(message.slice(at,end))||/^`+\s*<(?:updatevariable|json_?patch)(?:\s[^<>]*)?>\s*`+$/i.test(message.slice(at,end))||!/<\/(?:updatevariable|json_?patch)\s*>/i.test(message.slice(end)))at=end
           else{while(message[at]==='`')at++}
           continue
         }

@@ -63,19 +63,24 @@ async function compute(request: typeof workerData):Promise<void> {
       input.replay ? measureTemplateReplayWork(input.replay) : 0,
       input.templateContinuation?.replay ? measureTemplateReplayWork(input.templateContinuation.replay) : 0), undefined,
       kind === 'render' || kind === 'display' ? 'display' : 'template')
-    const needsTemplates = kind === 'template' || kind === 'wi' && input.templates && input.entries.some((e: {templateCondition?: string}) => e.templateCondition)
+    const needsTemplates = kind === 'template' || kind === 'wi' && input.templates && input.entries.some((raw: WorldInfoEntry) => {
+        const entry = normalizeTemplateLore(raw)
+        return entry.enabled && Boolean(entry.templateCondition)
+      })
       || kind === 'assemble' && input.templates
-      && (input.templateContinuation || input.templates.historyIdentities?.length
-        || [input.card, input.preset, input.personaDescription, input.history, input.wi, input.macroCtx,
+      && (input.templateContinuation || input.templates.historyIdentities?.length || input.templates.regexRules?.length
+        || [input.card, input.preset, input.personaDescription, input.history, input.wi, input.wiEvaluation?.entries,
           input.memories, input.worldDeltas, input.authorNote, input.journalText,
-          input.personaDescription, input.wi, input.regexRules, input.macroCtx, input.templates.variables,
-          input.templates.messageVariables, input.templates.entries, input.templates.presets].some(hasTemplateText) || input.templates.entries.some((raw:WorldInfoEntry) => {
+          input.regexRules, input.macroCtx, input.templates.variables,
+          input.templates.messageVariables, input.templates.entries, input.templates.presets].some(hasTemplateText)
+        || [...input.templates.entries, ...(input.wiEvaluation?.entries ?? [])].some((raw:WorldInfoEntry) => {
         const entry=normalizeTemplateLore(raw)
         // 预处理必须计入：仅靠 @@preprocessing（正文装饰器）或 [Preprocessing]（注释标记）触发的条目
         // 可能完全没有 EJS，漏判会让预处理静默不执行（键与正文不展开），而不是明确失败。
         return entry.enabled && (entry.templatePreload || entry.templatePreprocessing || /^\[Preprocessing\]/i.test(entry.comment)
           || entry.templateCondition || parseTemplatePlacement(entry.comment)
-          || /^\[(InitialVariables|RENDER:BEFORE|RENDER:AFTER)\]/i.test(entry.comment))
+          || /^\[(InitialVariables|RENDER:BEFORE|RENDER:AFTER)\]/i.test(entry.comment)
+          || /^\[(?:GENERATE|RENDER|PRELOAD)\b/i.test(entry.comment) || /^\s*@INJECT\b/.test(entry.content) || /^@INJECT\b/i.test(entry.comment))
       }))
     const templateClass = needsTemplates ? (await import('./templateSandbox.js')).TemplateSandbox : null
     // 输入解析、预加载与重放都计入计算预算；只有受信依赖和沙箱初始化走装载预算。
@@ -135,7 +140,7 @@ async function compute(request: typeof workerData):Promise<void> {
       const sandbox = templateClass ? await templateClass.create(input.templates) : null
       beginComputing()
       try {
-        const entries = input.entries.map((entry: import('../core/types.js').WorldInfoEntry) => {
+        const entries = (input.templates ? input.entries.map(normalizeTemplateLore) : input.entries).map((entry: import('../core/types.js').WorldInfoEntry) => {
           if (!entry.enabled || !entry.templateCondition) return entry
           if (!sandbox!.condition(entry.templateCondition)) return { ...entry, enabled:false }
           return { ...entry, content:`<% /* conditional lore */ %>${entry.content}` }

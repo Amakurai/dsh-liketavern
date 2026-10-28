@@ -18,6 +18,7 @@ import { MAX_STORED_CARD_JSON_BYTES } from './state/card.js'
 import { CHARACTER_ARCHIVE_FILE, isValidCardId } from './state/workspace.js'
 import { storyRoot } from './state/story.js'
 import { rollbackTarget, WAL_BINARY_MARK, WAL_COVERAGE_PATH, WAL_FLOOR_MARKERS } from './state/wal.js'
+import { isReservedWalPath, WAL_RECOVERY_PATH } from './state/workspaceFs.js'
 import { tavernPaths } from './node/paths.js'
 
 const REQUIRED_NODE_MAJOR = 24
@@ -334,7 +335,7 @@ function isBase64(value: unknown): value is string {
 function safeWalPath(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0 && !value.includes('\\') && !value.includes(':')
     && !value.startsWith('/') && value.split('/').every(part => part !== '..' && part !== '.' && part !== '')
-    && !value.toLowerCase().startsWith('state/wal/')
+    && !isReservedWalPath(value)
 }
 
 /** WAL 楼层只消费首次有界快照；活跃与已回滚目录使用同一套事务格式约束。 */
@@ -456,6 +457,35 @@ async function inspectWalCoverage(
   if (missing > 0) issues.add('WAL_FLOOR_MISSING', 'error', missing)
 }
 
+function validWalRecovery(value: unknown): boolean {
+  if (!isObject(value) || value.version !== 1) return false
+  const { floors, dirs, walDir, bodyRoot } = value
+  if (!Array.isArray(floors) || !Array.isArray(dirs)) return false
+  if (!floors.length || floors.length !== dirs.length) return false
+  if (walDir !== undefined && typeof walDir !== 'string') return false
+  if (bodyRoot !== undefined && typeof bodyRoot !== 'string') return false
+  return floors.every((floor, i) => typeof floor === 'string' && floor.length > 0 && floor.length <= 512 && dirs[i] === sanitizeFloor(floor))
+}
+
+async function inspectWalRecovery(
+  root: string,
+  stats: DoctorReport['statistics']['wal'],
+  issues: IssueCounter,
+  budget: ReadBudget,
+): Promise<void> {
+  const path = join(dirname(dirname(root)), ...WAL_RECOVERY_PATH.split('/'))
+  const read = await readBoundedJson(path, MAX_WAL_COVERAGE_BYTES, budget)
+  if (read.status === 'missing') return
+  if (read.status === 'budget') {
+    stats.uninspected += 1
+    issues.add('WAL_VALIDATION_LIMIT_EXCEEDED', 'warning')
+    return
+  }
+  if (read.status !== 'ok' || !validWalRecovery(read.value)) {
+    issues.add('WAL_INVALID', 'error')
+  }
+}
+
 async function inspectWalRoot(
   root: string,
   stats: DoctorReport['statistics']['wal'],
@@ -468,6 +498,7 @@ async function inspectWalRoot(
   if (status === 'missing') {
     // 日志目录被整体删除时清单仍可能登记着楼层；没有可枚举的身份，全部按缺失报告。
     await inspectWalCoverage(root, new Set(), new Set(), stats, issues, budget)
+    await inspectWalRecovery(root, stats, issues, budget)
     return
   }
   if (status === 'link') {
@@ -550,6 +581,7 @@ async function inspectWalRoot(
   // 只在完整枚举后对账：预算耗尽或目录项被截断时不能断言某层日志已丢失。
   if (enumerationComplete && !budget.exhausted && !scanBudget.exhausted) {
     await inspectWalCoverage(root, presentIdentities, unresolvedFloors, stats, issues, budget)
+    await inspectWalRecovery(root, stats, issues, budget)
   }
   if (stats.pending > pendingBefore) issues.add('WAL_UNCOMMITTED', 'warning', stats.pending - pendingBefore)
 }

@@ -111,7 +111,7 @@ export function HelperMvuRunner(props:{remote:TavernRemote;sessionId:string;stor
     retry.current=()=>{
       failed=false;setError(null)
       if(restart){restart=false;setRestartRequired(false);result=undefined;work=undefined;running=false;renewAt=0;void poll()}
-      else if(result!==undefined){setBusy(true);void commit().catch(fail)}
+      else if(result!==undefined){renewAt=0;setBusy(true);void commit().catch(error=>{renewAt=0;fail(error);void poll()})}
       else{work=undefined;running=false;renewAt=0;void poll()}
     }
     pollRef.current=()=>{void poll()}

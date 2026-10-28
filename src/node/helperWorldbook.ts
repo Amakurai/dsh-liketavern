@@ -86,7 +86,8 @@ export async function helperWorldbookOperation(ctx:Context,state:TavernState,ses
         if(next===null)await state.deleteCharacterLorebook(binding.cardId,()=>beforeWrite?.(binding))
         else await state.saveCharacterLorebook(binding.cardId,{...(next as Record<string,unknown>),name:CHARACTER},undefined,()=>beforeWrite?.(binding))
         const saved=await rawBook(state,binding,CHARACTER,chat)
-        return saved.raw===null?{deleted:true}:{created:current.raw===null,snapshot:snapshot(saved.raw)}
+        const context=await contextFrom(state,binding,chat)
+        return saved.raw===null?{deleted:true,context}:{created:current.raw===null,snapshot:snapshot(saved.raw),context}
       }
       if(next===null){await state.deleteLorebook(current.id,()=>beforeWrite?.(binding));return {deleted:true}}
       const id=await state.saveLorebook(current.raw===null?request.name:current.id,next,()=>beforeWrite?.(binding)),saved=await rawBook(state,binding,id,chat)

@@ -243,5 +243,14 @@ describe('模板计划持久化', () => {
     expect((await state.loadTimers(cardId,child.childSessionId,childBinding.storyId)).cooldownLeft.waiting).toBe(3)
     expect((await loadTemplateState(ws.fs)).variables.message.runs).toBe(2)
     expect((await state.loadTimers(cardId,'s1',binding.storyId)).cooldownLeft.waiting).toBe(3)
+    await onTurnEnd(state,child.childSessionId)
+
+    // 多跳分支：从保留第 2 轮的中间分支再回退到第 1 轮时，中间祖先的 wi-timers 镜像同样回退，不会复活第 2 轮计时。
+    const mid = await rollbackToFloor({ctx,state},'s1',messages[1]!.id)
+    const grand = await rollbackToFloor({ctx,state},mid.childSessionId,messages[0]!.id)
+    const grandBinding = (await state.loadBinding(grand.childSessionId))!
+    const grandWs = await state.storyWorkspace(cardId,grandBinding.storyId)
+    expect((await state.loadTimers(cardId,grand.childSessionId,grandBinding.storyId)).cooldownLeft.waiting).toBe(4)
+    expect((await loadTemplateTimers(grandWs.fs,mid.childSessionId)).cooldownLeft.waiting).toBe(4)
   })
 })

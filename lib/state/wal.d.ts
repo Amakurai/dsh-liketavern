@@ -112,8 +112,8 @@ export declare class Wal {
     private assertNotRecovering;
     /** 工作区级恢复标记的绝对路径；非标准日志根（无 state/wal 布局）退回日志目录内。 */
     private recoveryMarkerPath;
-    /** 读恢复标记中的楼层清单；文件缺失或损坏按空处理（标记是自有的保护信息，不参与回滚数据）。 */
-    private readRecoveryFloors;
+    /** 读恢复标记中的楼层清单及形状有效性；缺失返回 null，损坏返回 valid: false 以便对账重写或删除。 */
+    private readRecoveryMarker;
     /**
      * 标记同时记下日志目录与各层净化后的目录名，WorkspaceFs 据此只凭标记即可判断游标是否仍在，
      * 失效标记（回滚已归档、未注销）不会挡住正文写入。非标准日志根时正文工作区另写一份副本，

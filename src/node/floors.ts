@@ -459,6 +459,16 @@ async function prepareBranchStory(
   const boundaryTurn = rollbackFromTurn !== undefined ? rollbackFromTurn - 1 : inheritedThroughTurn(seed) ?? 0
   const owner = timerOwnerAtTurn(binding, sourceId, boundaryTurn)
   await copyTemplateTimers(fs, owner, childId)
+  if (rollbackFromTurn !== undefined) {
+    // 截断回滚但保留更高层 seed（如改写历史消息）时，同步祖先的旧路径定时器快照，避免孙分支按 throughTurn 复活已撤销的计时状态。
+    const truncatedOwners = new Set<string>([sourceId])
+    for (const entry of binding.walLineage ?? []) {
+      if (entry.throughTurn === null || entry.throughTurn >= rollbackFromTurn) truncatedOwners.add(entry.sessionId)
+    }
+    for (const ancestorId of truncatedOwners) {
+      if (ancestorId !== owner && ancestorId !== childId) await copyTemplateTimers(fs, owner, ancestorId)
+    }
+  }
   await rebuildIndex(fs, estimateTokens)
 }
 

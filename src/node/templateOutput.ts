@@ -2,6 +2,7 @@
 import type { Session } from '@deepseek-ai/dsh-session'
 import { hasNormalAssistantStop } from './assistantStream.js'
 import { hasEjs, type TemplateMessageMetadata } from '../core/template.js'
+import { normalizeTemplateLore } from '../core/templateLore.js'
 import { loadTemplateState, saveTemplateState, templateTextHash } from '../state/template.js'
 import { templateGenerationContext } from '../state/templateGeneration.js'
 import { closeTemplateGenerationState } from '../state/templateContinuation.js'
@@ -59,8 +60,9 @@ export async function completeTemplateOutput(state:TavernState,session:Pick<Sess
       historyIdentities?.push({messageId:event.data.message.id,hostMessageId:event.seq,swipeId:0})
       candidates.push({id:String(event.seq),text,metadata,step:event.data.step,seq:event.seq})
     }
-    const before = context.entries.filter(entry=>entry.enabled && !entry.templateOnlyPreload && /^\[RENDER:BEFORE\]/i.test(entry.comment))
-    const after = context.entries.filter(entry=>entry.enabled && !entry.templateOnlyPreload && /^\[RENDER:AFTER\]/i.test(entry.comment))
+    const normalizedEntries = context.entries.map(normalizeTemplateLore)
+    const before = normalizedEntries.filter(entry=>entry.enabled && !entry.templateOnlyPreload && /^\[RENDER:BEFORE\]/i.test(entry.comment))
+    const after = normalizedEntries.filter(entry=>entry.enabled && !entry.templateOnlyPreload && /^\[RENDER:AFTER\]/i.test(entry.comment))
     const pending:typeof candidates = []
     for (const candidate of candidates) {
       const message = events.find(event=>event.seq===candidate.seq)

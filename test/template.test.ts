@@ -59,8 +59,12 @@ describe('隔离 EJS', () => {
     expect((await render('<%- getvar("world.affinity") %>/<%- variables.world.items[1] %>',{entries})).texts).toEqual(['12/pear'])
     entries[0]!.content = 'world: &loop\n  next: *loop'
     await expect(render('x',{entries})).rejects.toThrow()
+    entries[0]!.content = 'created: !!timestamp 2026-01-01T00:00:00Z'
+    await expect(render('x',{entries})).rejects.toThrow(/JSON/)
+    expect(() => parseTemplateScopes({ global: { created: new Date(0) }, local: {}, message: {} })).toThrow(/JSON/)
     await expect(render('<% setvar("bad", Infinity) %>')).rejects.toThrow(/JSON/)
     await expect(render('<% setvar("bad", ()=>1) %>')).rejects.toThrow(/JSON/)
+    await expect(render('<% throw Promise.resolve("boom") %>')).rejects.toThrow(/模板失败/)
   })
   it('不给第三方脚本 Node、模块、网络或浏览器权限', async () => {
     const result = await render('<%- [typeof process,typeof require,typeof fetch,typeof window,typeof WebAssembly,Function("return typeof process")()].join(",") %>')
@@ -401,5 +405,22 @@ describe('剧情模板集成', () => {
     expect(saved.variables.message.inited).toBe(1)
     expect((await loadTemplateState(ws.fs)).variables.message.visits).toBe(1)
     await onTurnEnd(state,'s1')
+  })
+  it('正文首部 @@if 与 @@render_before/@@render_after 装饰器在无 <% 的普通回复中生效', async () => {
+    const {state,ws,run,cardId} = await setup('普通角色描述')
+    await state.saveCharacter(cardId,{
+      characterBook:{entries:[
+        {uid:1,comment:'conditional',constant:true,content:'@@if false\nHIDDEN_WI'},
+        {uid:2,comment:'shown',constant:true,content:'@@if true\nSHOWN_WI'},
+        {uid:3,comment:'render hook',constant:true,content:'@@render_after\n<% setvar("rendered_hook", 7) %>'},
+      ]},
+    })
+    await onTurnStart(state,'s1',1)
+    const plan = await run()
+    const combined = `${plan?.standing}\n${plan?.turnContext}`
+    expect(combined).toContain('SHOWN_WI')
+    expect(combined).not.toContain('HIDDEN_WI')
+    await onTurnEnd(state,'s1',sessionOutput('不含EJS标签的普通回复'))
+    expect((await loadTemplateState(ws.fs)).variables.message.rendered_hook).toBe(7)
   })
 })

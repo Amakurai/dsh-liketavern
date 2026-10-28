@@ -655,9 +655,10 @@ function SpeechBubbleSession(props: SpeechBubbleProps) {
   }
   const remembered=lastReady.current?.identity===projectionIdentity?lastReady.current:null
   const baseProjectionId=remembered?.id??0
+  const currentBase=loaded.state.status==='ready'?loaded.state:remembered?.source
   const visibleState=loaded.state.status==='ready'?loaded.state:remembered?.state??loaded.state
-  const validDisplay = display?.base === (loaded.state.status==='ready'?loaded.state:remembered?.source) ? display : null
-  const validStage = stage?.base === loaded.state ? stage : null
+  const validDisplay = display?.base === currentBase ? display : null
+  const validStage = stage?.base === currentBase ? stage : null
   const activeOverride = validStage?.phase === 'publishing' ? validStage : validDisplay
   const rendered = { state: useMemo(() => activeOverride
     ? { status: 'ready' as const, value: activeOverride.value }
@@ -703,7 +704,7 @@ function SpeechBubbleSession(props: SpeechBubbleProps) {
           reject(error)
           if(report&&alive)setLifecycleError(displayFailure(error,t))
         }
-        record={id:++projectionSerial.current,base:loaded.state,value:next.value,phase:'preparing',after,settled:false,
+        record={id:++projectionSerial.current,base:currentBase??loaded.state,value:next.value,phase:'preparing',after,settled:false,
           abort,
           ready:()=>{
             if(record.settled||stageRef.current!==record||record.phase!=='preparing')return
@@ -724,8 +725,8 @@ function SpeechBubbleSession(props: SpeechBubbleProps) {
 
       }catch(error){for(const lease of leases)lease.cancel();throw error}
     })
-    return()=>{alive=false;const pending=stageRef.current;if(pending?.base===loaded.state)pending.abort(new HelperDisplayError('stale'),false);stop()}
-  },[sessionId,props.messageId,rawText,streaming,loaded.state])
+    return()=>{alive=false;const pending=stageRef.current;if(pending?.base===(currentBase??loaded.state))pending.abort(new HelperDisplayError('stale'),false);stop()}
+  },[sessionId,props.messageId,rawText,streaming,currentBase??loaded.state])
   const avatarUrl = avatar.state.status === 'ready' ? avatar.state.value.dataUrl : null
   // 交互卡渲染决策：会话绑定有值时优先于全局设置（renderOutputText 回包的
   // interactiveCards 即全局值）。HTML 抽取在服务端按全局开关做，会话关 → 不渲染

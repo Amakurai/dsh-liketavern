@@ -375,6 +375,7 @@ export async function saveTemplateTimers(fs: WorkspaceFs, sessionId: string, tim
 
 /** 分支草稿把边界定时器复制到子会话旧路径；不改祖先模板镜像，跨分支 WAL 才能逐层撤销。 */
 export async function copyTemplateTimers(fs: WorkspaceFs, fromSessionId: string, toSessionId: string): Promise<void> {
+  if (fromSessionId === toSessionId) return
   await withWorkspaceLock(fs.root, async () => {
     const timers=await readTemplateTimer(fs,fromSessionId)
     if(timers) {
@@ -386,6 +387,8 @@ export async function copyTemplateTimers(fs: WorkspaceFs, fromSessionId: string,
         try { parseTimerState(JSON.parse(raw)) }
         catch (cause) { throw new Error('模板定时状态损坏', { cause }) }
         await fs.writeText(legacyTimerPath(toSessionId), raw)
+      } else {
+        await fs.delete(legacyTimerPath(toSessionId))
       }
     }
   })

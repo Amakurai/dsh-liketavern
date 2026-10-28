@@ -3,6 +3,8 @@ import type { Wal } from './wal.js';
 export declare const NON_FLOOR = "non-floor";
 /** 工作区级回滚恢复标记（相对工作区根）：存在期间任何正文写入都必须被拒绝。 */
 export declare const WAL_RECOVERY_PATH = "state/wal-recovery.json";
+/** WAL 目录及控制元数据（清单与恢复标记）不可作为普通楼层快照目标写入或回放。 */
+export declare function isReservedWalPath(path: string): boolean;
 /** 恢复期间所有写入入口统一使用的中文拒绝原因（含「回滚恢复」，供上层提示与测试匹配）。 */
 export declare const WORKSPACE_RECOVERING_MESSAGE = "\u5267\u60C5\u6B63\u5728\u56DE\u6EDA\u6062\u590D\uFF1A\u8BF7\u5148\u91CD\u65B0\u6267\u884C\u56DE\u9000\u5B8C\u6210\u6062\u590D\uFF1B\u53CD\u590D\u5931\u8D25\u65F6\u53EF\u5728\u300C\u8BB0\u5FC6\u300D\u9762\u677F\u9009\u62E9\u8BE5\u5267\u60C5\u5E76\u91CD\u7F6E\u56DE\u6EDA\u6E38\u6807\u3002\u672C\u6B21\u5199\u5165\u672A\u6267\u884C";
 /** 仅限 Wal 回滚内部使用：本上下文内的 WorkspaceFs 写入跳过恢复写屏障。 */

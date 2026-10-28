@@ -295,3 +295,9 @@ it('已删除的全局书不残留于 settings.selected_global_lorebooks，不�
   expect(context.settings?.selected_global_lorebooks).toEqual([])
   await expect(bindBooks('settings',{scan_depth:3})).resolves.toMatchObject({settings:{scan_depth:3,selected_global_lorebooks:[]}})
 })
+it('通过 @dsh/character 占位名修改角色世界书时返回更新后的上下文',async()=>{
+  const updated=await op('@dsh/character','create',[{content:'CHAR-ENTRY'}])
+  expect(updated.context).toBeDefined()
+  expect(updated.context?.character).toEqual({primary:'@dsh/character',additional:[]})
+  expect(updated.snapshot?.name).toBe('@dsh/character')
+})

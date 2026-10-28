@@ -19,7 +19,7 @@ import { undoWorldDelta } from '../core/walUndo.js'
 import { atomicWrite } from './atomicWrite.js'
 import { withWorkspaceLock } from './workspaceLock.js'
 import { expandAffectedMemories } from './memoryRollback.js'
-import { hasRecoveryMarker, WAL_RECOVERY_PATH, withRecoveryWriteAccess, WorkspaceFs, WORKSPACE_RECOVERING_MESSAGE } from './workspaceFs.js'
+import { hasRecoveryMarker, isReservedWalPath, WAL_RECOVERY_PATH, withRecoveryWriteAccess, WorkspaceFs, WORKSPACE_RECOVERING_MESSAGE } from './workspaceFs.js'
 import { rebuildIndex } from './workspace.js'
 import { estimateTokens } from '../core/tokenize.js'
 import { readTemplateDocument, TEMPLATE_DATA_PATH } from './templateStorage.js'
@@ -477,20 +477,28 @@ export class Wal {
     return this.hasCoverage ? join(this.logFs.root, WAL_RECOVERY_PATH) : join(this.rootDir, 'wal-recovery.json')
   }
 
-  /** 读恢复标记中的楼层清单；文件缺失或损坏按空处理（标记是自有的保护信息，不参与回滚数据）。 */
-  private async readRecoveryFloors(): Promise<string[]> {
+  /** 读恢复标记中的楼层清单及形状有效性；缺失返回 null，损坏返回 valid: false 以便对账重写或删除。 */
+  private async readRecoveryMarker(): Promise<{ floors: string[]; bodyRoot?: string; valid: boolean } | null> {
     const path = this.recoveryMarkerPath()
     await this.assertLogPath(path)
     const raw = await readFile(path, 'utf8').catch((error: NodeJS.ErrnoException) => {
       if (error.code === 'ENOENT') return null
       throw error
     })
-    if (raw === null) return []
+    if (raw === null) return null
     try {
       const value: unknown = JSON.parse(raw)
-      if (!isRecord(value) || !Array.isArray(value.floors)) return []
-      return value.floors.filter((floor): floor is string => typeof floor === 'string' && floor.length > 0)
-    } catch { return [] }
+      if (!isRecord(value)) return { floors: [], valid: false }
+      const rawFloors = Array.isArray(value.floors) ? value.floors : []
+      const floors = rawFloors.filter((floor): floor is string => typeof floor === 'string' && floor.length > 0 && floor.length <= 512)
+      const expectedDirs = floors.map(sanitizeFloor)
+      const valid = value.version === 1 && Array.isArray(value.floors) && Array.isArray(value.dirs)
+        && floors.length > 0 && floors.length === value.floors.length
+        && value.dirs.length === expectedDirs.length && value.dirs.every((dir, i) => dir === expectedDirs[i])
+        && (value.walDir === undefined || typeof value.walDir === 'string')
+        && (value.bodyRoot === undefined || typeof value.bodyRoot === 'string')
+      return { floors, ...(typeof value.bodyRoot === 'string' && value.bodyRoot ? { bodyRoot: value.bodyRoot } : {}), valid }
+    } catch { return { floors: [], valid: false } }
   }
 
   /**
@@ -502,26 +510,35 @@ export class Wal {
     const path = this.recoveryMarkerPath()
     await this.assertLogPath(path)
     const unique = [...new Set(floors)]
-    const bodyMarker = !this.hasCoverage && bodyRoot ? join(resolve(bodyRoot), WAL_RECOVERY_PATH) : null
+    const resolvedBody = !this.hasCoverage && bodyRoot ? resolve(bodyRoot) : undefined
+    const bodyMarker = resolvedBody ? join(resolvedBody, WAL_RECOVERY_PATH) : null
     if (!unique.length) {
       await rm(path, { force: true })
       if (bodyMarker) await rm(bodyMarker, { force: true })
       return
     }
-    const text = JSON.stringify({ version: 1, floors: unique, dirs: unique.map(sanitizeFloor), walDir: this.rootDir }) + '\n'
+    const text = JSON.stringify({
+      version: 1,
+      floors: unique,
+      dirs: unique.map(sanitizeFloor),
+      walDir: this.rootDir,
+      ...(resolvedBody ? { bodyRoot: resolvedBody } : {}),
+    }) + '\n'
     await atomicWrite(path, text)
     if (bodyMarker) await atomicWrite(bodyMarker, text)
   }
 
   /** 回滚开始前登记本层：先写标记再写恢复游标，任何游标存在期间工作区都有写屏障。 */
   private async markRecovering(floor: string, bodyRoot: string): Promise<void> {
-    await this.writeRecoveryFloors([...(await this.readRecoveryFloors()), floor], bodyRoot)
+    const marker = await this.readRecoveryMarker()
+    await this.writeRecoveryFloors([...(marker?.floors ?? []), floor], bodyRoot || marker?.bodyRoot)
   }
 
   /** 回滚完成后注销本层；没有其它恢复中楼层时删除标记。顺手丢掉已随归档消失的陈旧条目。 */
   private async clearRecovering(floor: string, bodyRoot?: string): Promise<void> {
-    const remaining = (await this.readRecoveryFloors()).filter((item) => item !== floor)
-    await this.writeRecoveryFloors(await this.activeRecoveryFloors(remaining), bodyRoot)
+    const marker = await this.readRecoveryMarker()
+    const remaining = (marker?.floors ?? []).filter((item) => item !== floor)
+    await this.writeRecoveryFloors(await this.activeRecoveryFloors(remaining), bodyRoot ?? marker?.bodyRoot)
   }
 
   /** 标记里仍“活着”的恢复楼层：活动目录存在且游标还在；已改名归档/被删除的条目算失效。 */
@@ -544,13 +561,32 @@ export class Wal {
    * 只保留活动目录里仍有游标的楼层；没有剩余时删除标记文件。
    */
   private async reconcileRecoveryMarker(): Promise<string[]> {
-    const floors = await this.readRecoveryFloors()
-    if (!floors.length) {
-      await this.writeRecoveryFloors([])
+    const marker = await this.readRecoveryMarker()
+    if (!marker) return []
+    const candidates = new Set(marker.floors)
+    if (!marker.valid) {
+      const entries = await readdir(this.rootDir, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === 'ENOENT') return []
+        throw error
+      })
+      for (const entry of entries) {
+        if (!entry.isDirectory() || entry.name.includes(ROLLED_BACK_MARK)) continue
+        const progress = await stat(join(this.rootDir, entry.name, 'rollback-progress.json')).catch((error: NodeJS.ErrnoException) => {
+          if (error.code === 'ENOENT') return null
+          throw error
+        })
+        if (progress) {
+          const meta = await this.readMeta(join(this.rootDir, entry.name))
+          if (meta) candidates.add(meta.floor)
+        }
+      }
+    }
+    if (!candidates.size) {
+      await this.writeRecoveryFloors([], marker.bodyRoot)
       return []
     }
-    const active = await this.activeRecoveryFloors(floors)
-    if (active.length !== floors.length) await this.writeRecoveryFloors(active)
+    const active = await this.activeRecoveryFloors([...candidates])
+    if (!marker.valid || active.length !== marker.floors.length) await this.writeRecoveryFloors(active, marker.bodyRoot)
     return active
   }
 
@@ -587,7 +623,8 @@ export class Wal {
   /** 列出当前处于回滚恢复中的楼层（标记清单 + 磁盘游标），供面板/诊断决定是否提示重置。 */
   async recoveringFloors(): Promise<string[]> {
     return this.enqueue(async () => {
-      const floors = new Set(await this.reconcileRecoveryMarker())
+      const reconciled = await this.reconcileRecoveryMarker()
+      const floors = new Set(reconciled)
       const entries = await readdir(this.rootDir, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
         if (error.code === 'ENOENT') return []
         throw error
@@ -603,6 +640,7 @@ export class Wal {
           if (meta) floors.add(meta.floor)
         }
       }
+      if (floors.size !== reconciled.length) await this.writeRecoveryFloors([...floors])
       return [...floors]
     })
   }
@@ -644,7 +682,7 @@ export class Wal {
       if (!Number.isSafeInteger(rec.seq) || rec.seq !== records.length + 1) throw new Error(`WAL 记录序号损坏：${dir}`)
       const safePath = typeof rec.path === 'string' && rec.path.length > 0 && !rec.path.includes('\\')
         && !rec.path.includes(':') && !rec.path.startsWith('/') && rec.path.split('/').every((part) => part !== '..' && part !== '.' && part !== '')
-        && !rec.path.toLowerCase().startsWith('state/wal/')
+        && !isReservedWalPath(rec.path)
       if (!safePath
         || !(rec.before === null || typeof rec.before === 'string')
         || ('after' in rec && !(rec.after === null || typeof rec.after === 'string'))

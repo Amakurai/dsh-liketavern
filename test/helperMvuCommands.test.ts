@@ -201,6 +201,8 @@ it('格式错误不是静默忽略；普通方括号叙述仍可提取后续命�
   for (const text of [`_.set('hp',1)`, `_.set('hp',1;`, `_.set('hp',,1);`, `_.set('hp', [1});`, '<jsonpatch>[]']) expect(() => codec.parse(text)).toThrow()
   expect(codec.parse('[她叹了口气]\n_.set("hp",2);')).toHaveLength(1)
   expect(codec.parse('没有更新命令')).toEqual([])
+  expect(codec.parse('说明：请勿直接输出 `<UpdateVariable>` 或 `<JSONPatch>` 标签。\n_.set("hp", 5);')).toHaveLength(1)
+  expect(apply({ hp: 1 }, '说明：请勿直接输出 `<UpdateVariable>` 标签。\n_.set("hp", 5);').stat_data).toEqual({ hp: 5 })
   expect(() => apply({ hp: 1 }, '_.set("hp",`value ${Math.random()}`);')).toThrow(/模板字符串/)
 })
 

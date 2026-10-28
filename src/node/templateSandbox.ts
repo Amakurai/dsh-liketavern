@@ -378,17 +378,21 @@ export class TemplateSandbox {
     this.sharedTexts.clear();this.sharedArrays.clear();this.prefixArrayKeys.clear();this.structuredArrayKeys.clear()
   }
 
+  /** QuickJS 的 dump(promise) 会内部释放句柄；统一在此安全导出并释放，避免二次 dispose 触发 UseAfterFree。 */
+  private dumpAndDispose(handle: QuickJSHandle): unknown {
+    try { return this.vm.dump(handle) } finally { if (handle.alive) handle.dispose() }
+  }
+
   /** readonly 仅用于不改变沙箱状态的固定查询；其余求值都可能运行第三方代码并改动规则表。 */
   private evaluate(code: string, readonly = false): unknown {
     this.vmEpoch++
     if (!readonly) this.regexStageEmpty.clear()
     const result = this.vm.evalCode(code)
     if (result.error) {
-      const error: unknown = this.vm.dump(result.error)
-      result.error.dispose()
+      const error: unknown = this.dumpAndDispose(result.error)
       throw new Error(`EJS 模板失败：${JSON.stringify(error)}`)
     }
-    try { return this.vm.dump(result.value) } finally { result.value.dispose() }
+    return this.dumpAndDispose(result.value)
   }
 
   /** 纯 JSON 作为 QuickJS 字符串值传输，固定源码不再重复解析转义后的大历史。 */
@@ -419,8 +423,7 @@ export class TemplateSandbox {
       this.vm.setProp(this.vm.global,'__tavernCallInput',handle)
       const result=this.vm.evalCode(code)
       if(result.error) {
-        const error:unknown=this.vm.dump(result.error)
-        result.error.dispose()
+        const error:unknown=this.dumpAndDispose(result.error)
         throw new Error(`EJS 模板失败：${JSON.stringify(error)}`)
       }
       return result.value
@@ -432,10 +435,7 @@ export class TemplateSandbox {
 
   /** 只读取闭包状态；不经过模板可命名的全局，也不调用任何模板可补丁的函数。 */
   private readRenderState(state:QuickJSHandle):{done:boolean;error:string|null;result:unknown} {
-    const read=(key:string):unknown=> {
-      const handle=this.vm.getProp(state,key)
-      try { return this.vm.dump(handle) } finally { handle.dispose() }
-    }
+    const read=(key:string):unknown=> this.dumpAndDispose(this.vm.getProp(state,key))
     const done=read('done'),error=read('error')
     return {done:done===true,error:typeof error==='string'&&error ? error : null,result:read('result')}
   }
@@ -466,8 +466,7 @@ export class TemplateSandbox {
     this.regexStageEmpty.clear()
     const object=this.vm.evalCode('({scopes,variables,initial,messageSnapshots})')
     if(object.error) {
-      const error:unknown=this.vm.dump(object.error)
-      object.error.dispose()
+      const error:unknown=this.dumpAndDispose(object.error)
       throw new Error(`@@if 条件状态读取失败：${JSON.stringify(error)}`)
     }
     try {
@@ -477,22 +476,20 @@ export class TemplateSandbox {
       catch(error) { throw new Error(`@@if 条件状态读取失败：${error instanceof Error?error.message:String(error)}`) }
       try { return JSON.stringify(dumped) }
       catch { throw new Error('@@if 条件状态不可序列化，拒绝求值') }
-    } finally { object.value.dispose() }
+    } finally { if (object.value.alive) object.value.dispose() }
   }
 
   /** 状态里的对象节点必须没有 toJSON（含原型链）或非 JSON 值，dump 的键集合才是真实的可枚举属性。 */
   private assertPlainState(state:QuickJSHandle):void {
     const check=this.vm.evalCode(CONDITION_STATE_CHECK)
     if(check.error) {
-      const error:unknown=this.vm.dump(check.error)
-      check.error.dispose()
+      const error:unknown=this.dumpAndDispose(check.error)
       throw new Error(`@@if 条件状态读取失败：${JSON.stringify(error)}`)
     }
     try {
       const result=this.vm.callFunction(check.value,this.vm.undefined,state)
       if(result.error) {
-        const error:unknown=this.vm.dump(result.error)
-        result.error.dispose()
+        const error:unknown=this.dumpAndDispose(result.error)
         throw new Error(`@@if 条件状态读取失败：${JSON.stringify(error)}`)
       }
       const code=this.vm.getNumber(result.value)
@@ -500,7 +497,7 @@ export class TemplateSandbox {
       if(code===1) throw new Error('@@if 条件状态过大，拒绝求值')
       if(code===3) throw new Error('@@if 条件状态不可序列化，拒绝求值')
       if(code!==0) throw new Error('@@if 条件状态含自定义 toJSON，拒绝求值')
-    } finally { check.value.dispose() }
+    } finally { if (check.value.alive) check.value.dispose() }
   }
 
   private growResources(inputChars:number):void {
@@ -636,8 +633,7 @@ export class TemplateSandbox {
         // 成批执行微任务，批间复查期限；批内超期由中断处理器终止当前任务，不必逐个往返 FFI。
         const result = this.vm.runtime.executePendingJobs(PENDING_JOB_BATCH)
         if (result.error) {
-          const error: unknown = this.vm.dump(result.error)
-          result.error.dispose()
+          const error: unknown = this.dumpAndDispose(result.error)
           const message = JSON.stringify(error)
           if (/interrupt/i.test(message) && Date.now() > this.deadline) throw new Error('EJS 模板计算超时')
           throw new Error(`EJS 异步任务失败：${message}${this.deadlineInterrupted ? '（执行期间触发计算超时中断）' : ''}`)

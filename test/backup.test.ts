@@ -167,6 +167,10 @@ describe('拒绝损坏与越界', () => {
       presetId: null, personaId: null, lorebookIds: ['a:b'], characterLorebookId: '@dsh/character', characterLorebookIds: ['@dsh/character'],
       interactiveCards: null, greetingIndex: 0, createdAt: new Date(0).toISOString() })
     await expect(create()).resolves.toMatchObject({ operation: 'create' })
+    await rm(backup, { recursive: true, force: true })
+    await rm(join(home, 'dsh-tavern/library/lorebooks/a_b-2.json'))
+    await save(join(home, 'dsh-tavern/library/lorebooks/a_b.json'), { sourceId: 'a_b', name: 'other', entries: {} })
+    await expect(create()).rejects.toMatchObject({ code: 'STRUCTURE_INVALID' })
   })
 })
 

@@ -70,7 +70,11 @@ export function installCardWorldbook(initial:HelperWorldbookContext,json:(value:
     if(result.context)applyContext(result.context)
     if(result.snapshot){cache.set(book,clone(result.snapshot));cache.set(result.snapshot.name,clone(result.snapshot));if(!result.snapshot.name.startsWith('@dsh/')&&!metadata.names.includes(result.snapshot.name))metadata={...metadata,names:[...metadata.names,result.snapshot.name]}}
     if(result.deleted){const id=cache.get(book)?.name??book;cache.delete(book);cache.delete(id);metadata={...metadata,names:metadata.names.filter(name=>name!==id),global:metadata.global.filter(name=>name!==id),chat:metadata.chat===id?null:metadata.chat,character:{primary:metadata.character.primary===id?null:metadata.character.primary,additional:metadata.character.additional.filter(name=>name!==id)}}}
-    if(kind!=='get')versions.set(book,(versions.get(book)??0)+1)
+    if(kind!=='get'){
+      const id=result.snapshot?.name??cache.get(book)?.name
+      versions.set(book,(versions.get(book)??0)+1)
+      if(id&&id!==book)versions.set(id,(versions.get(id)??0)+1)
+    }
     return result
   }
   async function readSnapshot(book:string):Promise<HelperWorldbookSnapshot>{const result=await operation(book,'get');if(!result.snapshot)throw new Error(result.missing?'世界书不存在':'世界书回执缺少条目');return result.snapshot}
@@ -79,8 +83,8 @@ export function installCardWorldbook(initial:HelperWorldbookContext,json:(value:
   async function replaceWorldbook(book:string,entries:unknown):Promise<void>{const current=await ensure(book);await operation(book,'replace',entries,current.revision)}
   async function updateWorldbookWith(book:string,updater:(entries:HelperWorldbookEntry[])=>unknown):Promise<HelperWorldbookEntry[]>{
     if(typeof updater!=='function')throw new Error('世界书更新器必须为函数')
-    const current=await readSnapshot(book),before=generation,version=versions.get(book)??0,result=await updater(clone(current.entries))
-    if(!active||generation!==before||(versions.get(book)??0)!==version)throw new Error('等待期间世界书已改变')
+    const current=await readSnapshot(book),before=generation,version=versions.get(book)??0,canonicalVersion=versions.get(current.name)??0,result=await updater(clone(current.entries))
+    if(!active||generation!==before||(versions.get(book)??0)!==version||(versions.get(current.name)??0)!==canonicalVersion)throw new Error('等待期间世界书已改变')
     return clone((await operation(book,'replace',result,current.revision)).snapshot!.entries)
   }
   async function createWorldbookEntries(book:string,input:unknown){

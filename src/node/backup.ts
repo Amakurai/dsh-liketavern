@@ -102,7 +102,10 @@ async function references(home: string, entries: BackupEntry[]): Promise<DoctorI
     if (budget < 0) fail('REFERENCE_CHECK_LIMIT')
     let binding: ReturnType<typeof parseSessionBinding>
     try { binding = parseSessionBinding(await boundedJson(checkedPath(home, entry.path), 1024 * 1024)) }
-    catch { add('BINDING_INVALID'); continue }
+    catch (error) {
+      if (error instanceof BackupError && error.code !== 'INVALID_JSON') throw error
+      add('BINDING_INVALID'); continue
+    }
     const expected = `dsh-tavern/sessions/${binding.sessionId.replace(/[^A-Za-z0-9_.-]/g, '_')}.json`
     if (expected !== entry.path) add('BINDING_IDENTITY_INVALID')
     const card = `dsh-tavern/characters/${binding.cardId}`
@@ -121,19 +124,26 @@ async function references(home: string, entries: BackupEntry[]): Promise<DoctorI
       ...[...binding.lorebookIds, ...(binding.characterLorebookIds ?? []), binding.characterLorebookId].map(id => [id, 'library/lorebooks'])] as Array<[string | null, string]>) {
       if (!id || (directory === 'library/lorebooks' && id === '@dsh/character')) continue
       const safe = id.replace(/[^A-Za-z0-9_一-鿿.-]/g, '_')
-      if (paths.has(`dsh-tavern/${directory}/${safe}.json`)) continue
-      let matched = false
-      if (safe !== id) {
-        const prefix = `dsh-tavern/${directory}/${safe}-`
-        for (const [candidate, file] of files) {
-          if (!candidate.startsWith(prefix) || !/^\d+\.json$/.test(candidate.slice(prefix.length))) continue
-          budget -= file.size
-          if (budget < 0) fail('REFERENCE_CHECK_LIMIT')
-          const raw = await boundedJson(checkedPath(home, candidate), 1024 * 1024).catch(() => null)
-          if (object(raw) && [raw.sourceId, raw.identifier, raw.id, raw.name].some(v => typeof v === 'string' && v.trim() === id)) { matched = true; break }
-        }
+      const baseFile = `dsh-tavern/${directory}/${safe}.json`
+      if (safe === id) {
+        if (!paths.has(baseFile)) add('BINDING_ASSET_MISSING')
+        continue
       }
-      if (!matched) add('BINDING_ASSET_MISSING')
+      const prefix = `dsh-tavern/${directory}/${safe}-`
+      let matches = 0, fallback = false
+      for (const [candidate, file] of files) {
+        if (candidate !== baseFile && (!candidate.startsWith(prefix) || !/^\d+\.json$/.test(candidate.slice(prefix.length)))) continue
+        budget -= file.size
+        if (budget < 0) fail('REFERENCE_CHECK_LIMIT')
+        let raw: unknown = null
+        try { raw = await boundedJson(checkedPath(home, candidate), 16 * 1024 * 1024) }
+        catch (error) { if (error instanceof BackupError && error.code !== 'INVALID_JSON') throw error }
+        if (!object(raw)) continue
+        const identities = [raw.sourceId, raw.identifier, raw.id, raw.name].filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
+        if (identities.some(v => v.trim() === id)) matches++
+        else if (candidate === baseFile && identities.length === 0) fallback = true
+      }
+      if (!(matches === 1 || (matches === 0 && fallback))) add('BINDING_ASSET_MISSING')
     }
   }
   return [...issues.values()]

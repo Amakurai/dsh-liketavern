@@ -499,3 +499,16 @@ it('较早未收口楼层与后续同值往返楼层按顺序批量回滚时不�
   expect(await panel.fs.readText('journal.md')).toBe('V0')
   expect((await ws.wal.listFloors()).every(f => f.rolledBack)).toBe(true)
 })
+
+it('拒绝将 WAL 内部保留路径写入楼层日志，且旧回滚游标与损坏恢复标记在扫描时自愈', async () => {
+  const { ws, panel } = await setup()
+  const floorFs = ws.fs.withFloor('s#t1')
+  for (const reserved of ['state/wal/s_t1/meta.json', 'state/wal-coverage.json', 'state/wal-recovery.json']) {
+    await expect(floorFs.writeText(reserved, '{}')).rejects.toThrow(/无法记录快照/)
+  }
+  await floorFs.writeText('journal.md', 'V1')
+  await ws.wal.commitFloor('s#t1')
+  await panel.fs.writeText('state/wal-recovery.json', '{"broken":true}')
+  expect(await ws.wal.recoveringFloors()).toEqual([])
+  expect(await panel.fs.readText('state/wal-recovery.json')).toBeNull()
+})

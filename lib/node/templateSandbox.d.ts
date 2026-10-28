@@ -60,6 +60,8 @@ export declare class TemplateSandbox {
     private adoptShared;
     replay(): TemplateReplay;
     private captureCheckpoint;
+    /** QuickJS 的 dump(promise) 会内部释放句柄；统一在此安全导出并释放，避免二次 dispose 触发 UseAfterFree。 */
+    private dumpAndDispose;
     /** readonly 仅用于不改变沙箱状态的固定查询；其余求值都可能运行第三方代码并改动规则表。 */
     private evaluate;
     /** 纯 JSON 作为 QuickJS 字符串值传输，固定源码不再重复解析转义后的大历史。 */

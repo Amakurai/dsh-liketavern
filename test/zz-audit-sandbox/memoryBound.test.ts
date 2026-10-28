@@ -1,6 +1,6 @@
 /**
  * A6 修复验证：失败分类诚实——真实错误（含 QuickJS OOM）优先于期限上报，
- * 只有中断本身且期限已过才报“计算超时”；宿主仍会终止失控 worker（观察项记录耗时）。
+ * 实际触发中断后如另有错误，保留原始原因并同时报告中断；宿主仍会终止失控 worker。
  */
 import { expect, it } from 'vitest'
 import { emptyTemplateScopes, type TemplateContext } from '../../src/core/template.js'
@@ -35,6 +35,34 @@ it('A6：分类规则——真实错误优先，中断且超期才算超时', as
     expect(rule.renderFailure('InternalError: interrupted').message).toMatch(/计算超时/)
     rule.deadline = Date.now() + 60_000
     expect(rule.renderFailure('InternalError: interrupted').message).toMatch(/EJS 模板失败/)
+  } finally { sandbox.dispose() }
+}, 30_000)
+
+it('中断后出现其他错误时同时保留原始错误和中断事实', async () => {
+  await TemplateSandbox.prepare()
+  const sandbox = await TemplateSandbox.create(context(), false)
+  try {
+    const rule = sandbox as unknown as {
+      deadline:number; interruptIfExpired:()=>boolean; renderFailure:(message:string)=>Error
+    }
+    rule.deadline = Date.now() + 60_000
+    expect(rule.interruptIfExpired()).toBe(false)
+    expect(rule.renderFailure('TypeError: not a function').message).toBe('EJS 模板失败：TypeError: not a function')
+    rule.deadline = Date.now() - 1
+    // 仅超期尚不足以改变真实错误；QuickJS 确实调用中断处理器后才附加中断事实。
+    expect(rule.renderFailure('InternalError: out of memory').message).not.toMatch(/超时/)
+    expect(rule.interruptIfExpired()).toBe(true)
+    expect(rule.renderFailure('TypeError: not a function').message).toMatch(/TypeError: not a function.*超时中断/)
+    expect(rule.renderFailure('InternalError: out of memory').message).toMatch(/out of memory.*超时中断/)
+  } finally { sandbox.dispose() }
+}, 30_000)
+
+it('正常脚本错误不会被误报成中断', async () => {
+  await TemplateSandbox.prepare()
+  const sandbox = await TemplateSandbox.create(context(), false)
+  try {
+    expect(() => sandbox.render('<% throw new TypeError("actual error") %>')).toThrow(/TypeError:[\s\S]*actual error/)
+    expect(() => sandbox.render('<% throw new TypeError("actual error") %>')).not.toThrow(/超时/)
   } finally { sandbox.dispose() }
 }, 30_000)
 

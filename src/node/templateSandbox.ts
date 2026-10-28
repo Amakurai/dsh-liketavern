@@ -93,6 +93,8 @@ export class TemplateSandbox {
   private readonly owner:Awaited<ReturnType<typeof createTemplateCheckpointVm>>
   private readonly runtimeIdentity:TemplateRuntimeIdentity
   private deadline: number
+  /** 本次渲染中宿主是否实际要求 QuickJS 中断；错误文字可能在中断后的清理期间变化。 */
+  private deadlineInterrupted=false
   private resourceChars: number
   private outputInputChars:number
   private computationStarted=0
@@ -163,7 +165,7 @@ export class TemplateSandbox {
     vm.runtime.setMaxStackSize(512 * 1024)
     // 受信装载（vendor 库求值、上下文初始化）给宽裕期限；第三方执行前由 beginComputation 收紧。
     const sandbox = new TemplateSandbox(owner, Date.now() + 10_000,resourceChars,contextChars,identity)
-    vm.runtime.setInterruptHandler(() => Date.now() > sandbox.deadline)
+    vm.runtime.setInterruptHandler(() => sandbox.interruptIfExpired())
     try {
       if (!templateLibrarySource) throw new Error('模板依赖产物缺失，请先运行 npm run build')
       if (!templateFakerSource) throw new Error('Faker 模板依赖产物缺失，请先运行 npm run build')
@@ -245,7 +247,7 @@ export class TemplateSandbox {
     try {
       owner.vm.runtime.setMemoryLimit(templateExecutionBudget(resourceChars).quickJsMemoryBytes)
       owner.vm.runtime.setMaxStackSize(512*1024)
-      owner.vm.runtime.setInterruptHandler(()=>Date.now()>sandbox.deadline)
+      owner.vm.runtime.setInterruptHandler(()=>sandbox.interruptIfExpired())
       // 旧检查点可能来自未冻结的运行时；恢复后同样冻结入口（对已冻结属性是幂等的）。
       sandbox.hardenProtocol()
       sandbox.initialContext=structuredClone(replay.context)
@@ -438,10 +440,17 @@ export class TemplateSandbox {
     return {done:done===true,error:typeof error==='string'&&error ? error : null,result:read('result')}
   }
 
-  /** 真实错误优先于期限：QuickJS 的 OOM/内部错误不能被一律报成超时，只有中断本身按超期收口。 */
+  /** 只记录实际发出的中断，不把单纯超过墙钟期限等同于中断。 */
+  private interruptIfExpired():boolean {
+    if(Date.now()<=this.deadline) return false
+    this.deadlineInterrupted=true
+    return true
+  }
+
+  /** 保留真实错误；若执行时确实触发过中断，同时报告该事实，不猜测两者的因果关系。 */
   private renderFailure(message:string):Error {
     if(/interrupt/i.test(message) && Date.now()>this.deadline) return new Error('EJS 模板计算超时')
-    return new Error(`EJS 模板失败：${message}`)
+    return new Error(`EJS 模板失败：${message}${this.deadlineInterrupted ? '（执行期间触发计算超时中断）' : ''}`)
   }
 
   /** 冻结宿主命令入口；对已冻结属性幂等，旧堆里的可写实现会被一并收紧。 */
@@ -514,6 +523,7 @@ export class TemplateSandbox {
   private beginComputation(): void {
     computationPhase?.('computing')
     this.computationStarted=Date.now()
+    this.deadlineInterrupted=false
     this.deadline = this.computationStarted+templateExecutionBudget(this.resourceChars).sandboxMs
   }
 
@@ -614,6 +624,7 @@ export class TemplateSandbox {
 
   render(text: string, data: Record<string,unknown> = {}, source?:string): string {
     // 完成状态只存在于包装闭包内；模板写 globalThis.__done/__result 一类同名全局不再有任何作用。
+    this.deadlineInterrupted=false
     const state=this.evaluateHandle(RENDER_WRAPPER,{text,data,source})
     try {
       while (this.vm.runtime.hasPendingJob()) {
@@ -629,7 +640,7 @@ export class TemplateSandbox {
           result.error.dispose()
           const message = JSON.stringify(error)
           if (/interrupt/i.test(message) && Date.now() > this.deadline) throw new Error('EJS 模板计算超时')
-          throw new Error(`EJS 异步任务失败：${message}`)
+          throw new Error(`EJS 异步任务失败：${message}${this.deadlineInterrupted ? '（执行期间触发计算超时中断）' : ''}`)
         }
       }
       // 先读真实结果：期限已过但脚本已明确失败时必须报真实原因（OOM/内部错误），不能一律报超时。

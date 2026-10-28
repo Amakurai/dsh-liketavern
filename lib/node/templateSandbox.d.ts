@@ -10,6 +10,8 @@ export declare class TemplateSandbox {
     private readonly owner;
     private readonly runtimeIdentity;
     private deadline;
+    /** 本次渲染中宿主是否实际要求 QuickJS 中断；错误文字可能在中断后的清理期间变化。 */
+    private deadlineInterrupted;
     private resourceChars;
     private outputInputChars;
     private computationStarted;
@@ -66,7 +68,9 @@ export declare class TemplateSandbox {
     private evaluateHandle;
     /** 只读取闭包状态；不经过模板可命名的全局，也不调用任何模板可补丁的函数。 */
     private readRenderState;
-    /** 真实错误优先于期限：QuickJS 的 OOM/内部错误不能被一律报成超时，只有中断本身按超期收口。 */
+    /** 只记录实际发出的中断，不把单纯超过墙钟期限等同于中断。 */
+    private interruptIfExpired;
+    /** 保留真实错误；若执行时确实触发过中断，同时报告该事实，不猜测两者的因果关系。 */
     private renderFailure;
     /** 冻结宿主命令入口；对已冻结属性幂等，旧堆里的可写实现会被一并收紧。 */
     private hardenProtocol;

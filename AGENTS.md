@@ -6,7 +6,7 @@
 
 dsh-liketavern 为 DeepSeek Harness 的 Tavern 插件。角色卡、预设、世界书、人设、正则、记忆、世界变化层和分支操作共用 dsh agent 运行时。普通扮演不另起发信通道；AI 代答是明确的辅助调用。
 
-当前基线：dsh / @deepseek-ai 包 0.2.1-rc.3、Node 24、Windows；CI 为 Ubuntu。TypeScript ESM，NodeNext，strict + noUncheckedIndexedAccess，相对导入显式 `.js`。
+当前基线：dsh / @deepseek-ai 包 0.2.1-rc.3、Node 24、Windows；CI 为 Ubuntu 与 Windows。TypeScript ESM，NodeNext，strict + noUncheckedIndexedAccess，相对导入显式 `.js`。
 
 查宿主机制先看 [官方文档](https://deepseek-harness.github.io/deepseek-harness/) 和已安装包的 `lib/`、`.d.ts`，先核对各包 package.json；不要凭旧版本记忆推断 slot、profile、patch、system-prompt 或事件时序。
 
@@ -83,6 +83,7 @@ npm pack --dry-run
 - 改 core/state 必须有对应行为测试。涉及宿主事件、分支、请求或故障时，补真实文件系统 + 模拟宿主/适配器的集成测试；不得以“host/UI 不测”为由跳过关键路径。
 - 重点回归：storyIsolation、transactionRecovery、robustBoundaries、pipelineCache、floorConcurrency、i18n。测试用手写工厂数据，不调用真实模型。
 - tests 直接 import src；Node 24 下 worker 源码测试使用类型剥离，交付运行只用 lib JS。正则超时测试必须在隔离 worker 中进行。
+- CI 每个平台分两片独立 runner，片内仍 maxWorkers=1；不得用同机增加 worker 或全局重试掩盖产品墙钟限额。JSON/JUnit 与慢用例摘要在失败时也保留；发布复用同一套双平台检查，只上传本次验证过的原始 tarball。流程与本地复现见 [CI 与测试](docs/CI.md)。
 - 每个源文件和测试用中文块注释说明职责；标识符英文。测试验证业务结果与失败边界，避免只镜像实现。
 - 运行依赖为 zod、quickjs-emscripten、yaml、lodash、jsonrepair、@faker-js/faker、ejs、markdown-it、markdown-it-emoji、jquery；jquery 仅随卡面库脚本文本打包，在 opaque-origin iframe 内执行，不能在宿主或主页面执行。模板库用于实际兼容编译参数、消息格式化、schema、Lodash、模型 JSON 修复与 Faker 全语言数据，构建为带原始及传递依赖许可证的 QuickJS 内部脚本，不桥接 Node 函数。Markdown 格式化仅在可终止 worker 的 QuickJS 中执行，不生成 metadata 完整文档或标题 ID；HTML 产物只能交给原有沙箱 iframe，不能放入主页面。已移除无公开补丁的 Showdown；格式化器升级使用 replay.formatterVersion 边界，旧活动日志不能静默改 hash、丢闭包或在拒绝前推进 WAL。隔离 JavaScript、有界初值解析与新增兼容库固定公开 npm 版本，不用 node:vm 冒充安全边界。宿主包走精确 peer，开发依赖公开 npm 精确版本。禁止 file:、绝对路径或链接依赖；开发挂载仓库的 junction/symlink 是另一件事。
 - lib/ 刻意入库。所有 src 改动必须重建；CI 会拦过期、缺失和未跟踪产物。不要忽略 lib/。

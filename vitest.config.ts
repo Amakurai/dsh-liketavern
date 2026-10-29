@@ -1,11 +1,19 @@
 /** 隔离运行时按墙钟限时；限制测试文件并发，避免大量测试沙箱争抢 CPU 产生假超时，不放宽产品限额。 */
 import { availableParallelism } from 'node:os'
-import { defineConfig } from 'vitest/config'
+import { configDefaults, defineConfig } from 'vitest/config'
 
 export default defineConfig({test:{
   // 只收集仓库 test/；.tmp 等被忽略目录里的旧版冒烟副本不能混进本地全量运行。
   include:['test/**/*.test.{ts,tsx}'],
   setupFiles:['test/setupComputeWorkers.ts'],
+  // 显式配置 reporter 时默认的 GitHub 注解不会自动追加，必须一并保留。
+  reporters:process.env.GITHUB_ACTIONS === 'true' ? [
+    'default', 'github-actions',
+    'json',
+    ['junit',{includeConsoleOutput:false}],
+  ] : configDefaults.reporters,
+  // 放在全局选项，保留 CLI --outputFile.json/junit 对并行本地诊断的覆盖能力。
+  outputFile:{json:'.vitest/results.json',junit:'.vitest/junit.xml'},
   // CI 共享机器串行运行文件，避免多个 QuickJS 实例争抢 CPU 耗尽产品的墙钟预算。
   maxWorkers:process.env.CI ? 1 : Math.min(4,availableParallelism()),
   // 集成用例会依次启动多个 worker；整条用例的时限独立于每次隔离计算的产品限额。

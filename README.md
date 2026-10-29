@@ -245,6 +245,8 @@ npm test                # 运行完整 Vitest 测试套件
 npm run package:check   # 校验 npm 发布文件白名单与文档相对链接
 ```
 
+CI 在 Ubuntu、Windows 上各运行两片完整覆盖的测试，并保留 JSON/JUnit 报告和慢用例摘要。Release 复用同一套检查，直接发布已校验的安装包。分片复现、报告定位与发布恢复见 [CI 与测试说明](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/CI.md)。
+
 <details>
 <summary><b>在本地 dsh 环境中挂载源码调试</b></summary>
 

@@ -4,38 +4,87 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+  # 发版复用同一批检查，不能只在 Ubuntu 上通过就发布 Windows 用户的安装包。
+  workflow_call:
 
 permissions:
   contents: read
 
-jobs:
-  ubuntu-full:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+# CI 与调用它的 release 使用不同组，避免 reusable workflow 取消自己的调用方。
+# tag 验证不因重跑而中断；普通分支/PR 只保留最新一轮。
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+jobs:
+  verify:
+    name: verify (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # 下载固定版本并核对独立 SHA-256，不通过浮动第三方 action 执行检查。
+      - name: 校验 CI 与发布 workflow
+        if: runner.os == 'Linux'
+        run: |
+          curl --fail --silent --show-error --location \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz \
+            --output "$RUNNER_TEMP/actionlint.tar.gz"
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  $RUNNER_TEMP/actionlint.tar.gz" | sha256sum --check
+          tar -xzf "$RUNNER_TEMP/actionlint.tar.gz" -C "$RUNNER_TEMP" actionlint
+          "$RUNNER_TEMP/actionlint"
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: npm
 
-      - name: 安装依赖
-        run: npm ci
+      # 先拒绝坏 tag/空发布说明，避免跑完整套测试后才发现不能发版。
+      - name: 校验发布元数据
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          test "$RELEASE_TAG" = "v$VERSION"
+          node scripts/release-notes.mjs "$VERSION" CHANGELOG.md "$RUNNER_TEMP/release-notes.md" "$RUNNER_TEMP/release-title.txt"
 
-      # peer / dev / overrides / allowScripts / 锁文件必须指向同一个宿主版本，
-      # 否则 tag 与 Release 附件会在安装后才暴露版本脱节（issue #13）。
+      - name: 安装依赖
+        run: npm ci --no-audit --no-fund
+
       - name: 宿主版本对齐
         run: npm run host:check
 
+      # 锁文件相同，审计无需在每个系统与分片重复请求 registry。
       - name: 依赖安全审计
-        run: npm audit
+        if: runner.os == 'Linux'
+        run: npm audit --package-lock-only
 
       - name: 构建（tsc + client bundle）
         run: npm run build
 
-      - name: 测试
-        run: npm test
+      # lib/ 刻意入库；两个平台都验证已跟踪差异和遗漏的新产物。
+      # 测试分片直接使用这份已验证的 checkout，不再重复构建。
+      - name: 校验 lib/ 与 presets/ 完整且未变化
+        run: |
+          git diff --exit-code --stat -- lib/ presets/
+          status=$(git status --porcelain --untracked-files=all -- lib/ presets/)
+          if [ -n "$status" ]; then
+            echo "lib/ 或 presets/ 存在未跟踪或未提交的产物："
+            echo "$status"
+            exit 1
+          fi
 
       - name: 诊断命令安装入口冒烟
         run: npm run doctor:check
@@ -43,93 +92,87 @@ jobs:
       - name: 备份恢复安装入口冒烟
         run: npm run backup:check
 
-      # lib/ 刻意入库，GitHub/git 安装路径的用户拿到的就是这份产物。
-      # 提交前忘了 npm run build 的话，这里会拦下来。
-      - name: 校验 lib/ 与提交一致
-        run: git diff --exit-code --stat -- lib/
-
-      # git diff 拦不住未跟踪的新产物（新增 src 文件但漏提交其 lib/ 编译产物），
-      # 这里用 porcelain 兜底：lib/ 下有任何未跟踪/未暂存改动即失败。
-      - name: 校验 lib/ 无未跟踪产物
-        run: |
-          status=$(git status --porcelain -- lib/)
-          if [ -n "$status" ]; then
-            echo "lib/ 存在未跟踪或未提交的产物："
-            echo "$status"
-            exit 1
-          fi
-
-      # presets/ 是运行期必读资产（presetInstall 读 agent.cordis.yml 与 preset.yml），
-      # 但它不像 lib/ 有构建产物可对照；缺失或被本机改动时在这里拦下来。
-      - name: 校验 presets/ 无未跟踪产物
-        run: |
-          status=$(git status --porcelain -- presets/)
-          if [ -n "$status" ]; then
-            echo "presets/ 存在未跟踪或未提交的资产："
-            echo "$status"
-            exit 1
-          fi
-
-      # lib/ 已完成构建与一致性检查；此处禁用生命周期并生成一次真实 tarball。
-      # 审核及后续发布都应使用这一份字节流，不重新打包。
+      # 只打包一次，校验和与发布都使用这份字节流，不再触发 prepack 重建。
       - name: 生成并校验待审核 npm 包
+        if: runner.os == 'Linux'
         id: package
         run: node scripts/verify-package.mjs
 
+      # 直接运行覆盖 Windows 的 npm.cmd 安全拉起分支。
+      - name: 校验 npm 包边界（Windows）
+        if: runner.os == 'Windows'
+        run: node scripts/verify-package.mjs --dry-run
+
       - name: 上传待审核 npm 包
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: npm-package-${{ github.sha }}
           path: |
             ${{ steps.package.outputs.tarball }}
             ${{ steps.package.outputs.checksum }}
           if-no-files-found: error
+          overwrite: true
           retention-days: 14
           compression-level: 0
 
-  windows-core:
-    runs-on: windows-latest
-    timeout-minutes: 30
+  tests:
+    name: test (${{ matrix.os }}, ${{ matrix.shard }}/2)
+    needs: verify
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      # 一个分片失败仍收集其它分片，避免一次只看到一个平台的问题。
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        shard: [1, 2]
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: npm
 
       - name: 安装依赖
-        run: npm ci
+        run: npm ci --no-audit --no-fund
 
-      - name: 宿主版本对齐
-        run: npm run host:check
-
-      - name: 依赖安全审计
-        run: npm audit
-
-      - name: 构建（tsc + client bundle）
-        run: npm run build
-
+      # 分片放到独立 runner；每台仍 maxWorkers=1，保留 QuickJS 的墙钟隔离纪律。
       - name: 测试
-        run: npm test
+        run: npm test -- --shard=${{ matrix.shard }}/2
 
-      - name: 诊断命令安装入口冒烟
-        run: npm run doctor:check
+      - name: 测试结果与耗时摘要
+        if: ${{ !cancelled() }}
+        env:
+          TEST_LABEL: ${{ runner.os }} shard ${{ matrix.shard }}/2
+        run: node scripts/summarize-tests.mjs .vitest/results.json
 
-      - name: 备份恢复安装入口冒烟
-        run: npm run backup:check
+      - name: 上传测试报告
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-results-${{ runner.os }}-${{ matrix.shard }}
+          path: |
+            .vitest/results.json
+            .vitest/junit.xml
+          include-hidden-files: true
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 14
 
-      # presets/ 是运行期必读资产，但没有构建产物可对照；缺失或本机改动在这里拦下来。
-      - name: 校验 presets/ 无未跟踪产物（Windows）
-        shell: pwsh
-        run: |
-          $status = git status --porcelain -- presets/
-          if ($status) {
-            Write-Output "presets/ 存在未跟踪或未提交的资产："
-            Write-Output $status
-            exit 1
-          }
-
-      # 直接运行 Node 脚本（不经 npm run），覆盖 Windows 的 npm.cmd 安全拉起分支。
-      - name: 校验 npm 包边界（Windows）
-        run: node scripts/verify-package.mjs --dry-run
+  # 给分支保护一个稳定的总闸；依赖被跳过/取消也不能显示绿灯。
+  ci:
+    name: CI checks
+    if: always()
+    needs: [verify, tests]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: 所有构建与测试必须成功
+        env:
+          VERIFY_RESULT: ${{ needs.verify.result }}
+          TEST_RESULT: ${{ needs.tests.result }}
+        run: test "$VERIFY_RESULT" = success && test "$TEST_RESULT" = success

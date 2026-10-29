@@ -104,7 +104,8 @@ it.each(['memory_write', 'memory_update', 'worldstate_update'] as const)(
     else expect(await ws.memory.list()).toEqual([])
   })
 
-it('正常索引保持原回执与通知，索引字段按真实事实更新，全部事实同层回滚', async () => {
+// 三次真实 PTC 写入之后还要刷盘并回放 WAL；只增加本用例的总时限，不放宽 PTC 的 10 秒期限。
+it('正常索引保持原回执与通知，索引字段按真实事实更新，全部事实同层回滚', { timeout: 30_000 }, async () => {
   const inject = vi.spyOn(agent, 'inject').mockImplementation(() => undefined), ws = await workspace()
   const indexBefore = await ws.fs.readText('index.json')
   const result = await run(`const first = await tools.tavern_memory_write({body:'旅人持有北门钥匙'});

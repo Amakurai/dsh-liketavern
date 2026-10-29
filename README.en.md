@@ -245,6 +245,8 @@ npm test                # Run the full Vitest suite
 npm run package:check   # Verify npm tarball allowlist and relative markdown links
 ```
 
+CI runs the full suite across two shards on each of Ubuntu and Windows, retaining JSON/JUnit reports and slow-test summaries. Releases reuse those checks and publish the verified tarball directly. See the [CI and testing guide (Chinese)](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/CI.md) for shard reproduction, diagnostics, and release recovery.
+
 <details>
 <summary><b>Link local source checkout into dsh for live development</b></summary>
 

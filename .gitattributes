@@ -1,5 +1,8 @@
 # 文本文件入库一律归一化为 LF，保证 Linux CI 上「重建 lib/ 后 git diff 校验产物一致性」可复现。
 * text=auto
+# 生成的 JS/声明由构建器写 LF；首次 Windows 检出也必须一致，避免 diff 无差异但 status 报脏。
+lib/**/*.js text eol=lf
+lib/**/*.d.ts text eol=lf
 *.png binary
 # 固定引擎按发布字节校验 SHA，Windows 检出也不得转换行尾。
 vendor/checkpoint-engine-v1/** -text

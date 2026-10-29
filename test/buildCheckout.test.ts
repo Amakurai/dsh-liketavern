@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { expect, it } from 'vitest'
 import { parse } from 'yaml'
+import ts from 'typescript'
 
 const attributes = await readFile(new URL('../.gitattributes', import.meta.url), 'utf8')
 const workflow = parse(await readFile(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8'))
@@ -12,8 +13,10 @@ const steps = workflow.jobs.verify.steps as Array<{ name?: string; run?: string 
 const guard = steps.find(step => step.name === '校验 lib/ 与 presets/ 完整且未变化')!.run!
 const bash = process.platform === 'win32'
   ? resolve(spawnSync('git', ['--exec-path'], { encoding: 'utf8' }).stdout.trim(), '../../..', 'bin/bash.exe') : 'bash'
+const source = '/** 工厂多行模板，编译器必须看到与入库相同的原始换行。 */\nexport const ready = String.raw`first\nsecond`;\n'
+const compile = (input: string) => ts.transpileModule(input, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext, newLine: ts.NewLineKind.LineFeed } }).outputText
 const generated = new Map([
-  ['lib/index.js', '/** 工厂生成正文。 */\nexport const ready = true;\n'],
+  ['lib/index.js', compile(source)],
   ['lib/index.d.ts', '/** 工厂声明。 */\nexport declare const ready: boolean;\n'],
   ['lib/nested/client.js', '/** 工厂嵌套产物。 */\nexport const client = true;\n'],
   ['lib/nested/client.d.ts', '/** 工厂嵌套声明。 */\nexport declare const client: boolean;\n'],
@@ -47,6 +50,7 @@ it.each(['true', 'false'])('首次检出 core.autocrlf=%s 后重建保持干净�
     git(seed, 'init')
     git(seed, 'config', 'core.autocrlf', 'false')
     await write(seed, '.gitattributes', attributes)
+    await write(seed, 'src/index.ts', source)
     for (const [path, content] of generated) await write(seed, path, content)
     await write(seed, 'presets/tavern/preset.yml', 'name: factory\n')
     await write(seed, 'lib/vendor/checkpoint-engine-v1/engine.js', engineSource)
@@ -58,6 +62,9 @@ it.each(['true', 'false'])('首次检出 core.autocrlf=%s 后重建保持干净�
     git(root, 'clone', '--no-hardlinks', '--config', `core.autocrlf=${autocrlf}`, seed, checkout)
     expect(git(checkout, 'config', '--get', 'core.autocrlf').trim()).toBe(autocrlf)
     for (const [path, content] of generated) await write(checkout, path, content)
+    const checkedOutSource = await readFile(join(checkout, 'src/index.ts'), 'utf8')
+    expect(checkedOutSource).toBe(source)
+    await write(checkout, 'lib/index.js', compile(checkedOutSource))
     for (const base of ['lib/vendor', 'vendor']) {
       expect(await readFile(join(checkout, base, 'checkpoint-engine-v1/engine.js'), 'utf8')).toBe(engineSource)
       expect(await readFile(join(checkout, base, 'checkpoint-engine-v1/engine.wasm'))).toEqual(engineBytes)

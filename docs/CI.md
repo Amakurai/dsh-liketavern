@@ -12,7 +12,7 @@
 
 同一分支或 PR 的新提交会取消旧 CI；Release 与复用的验证使用不同 concurrency 组，同一 tag 的发布不会互相取消。矩阵 `fail-fast: false`，一次失败仍能收集其它片的结果。
 
-`.gitattributes` 将生成的 `lib/**/*.js` 与 `lib/**/*.d.ts` 固定为 LF，确保 Windows 首次检出与构建输出一致；固定检查点引擎仍由后置 `-text` 规则保留原始字节。不能只在已有工作区里重建验证：`buildCheckout.test.ts` 使用真实 Git 首次 clone，分别覆盖 `core.autocrlf=true/false`，并执行 workflow 的原始守卫，确认真实内容变动、缺失文件和未跟踪产物仍被拒绝。
+`.gitattributes` 将文本源码、脚本与生成产物的检出统一为 LF，确保 Windows 首次检出与构建输出一致。只固定 `lib/` 不够：TypeScript 会保留多行模板源码的原始行尾，仍可能输出混合换行。二进制自动识别保持开启，固定检查点引擎仍由后置 `-text` 规则保留原始字节。不能只在已有工作区里重建验证：`buildCheckout.test.ts` 使用真实 Git 首次 clone，分别覆盖 `core.autocrlf=true/false`，实际编译检出的多行模板并执行 workflow 原始守卫，确认真实内容变动、缺失文件和未跟踪产物仍被拒绝。
 
 ## 本地复现
 

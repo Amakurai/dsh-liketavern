@@ -189,7 +189,9 @@ function DraftSession(props: { remote: TavernRemote; scope: string; owner: strin
         capture()
         if (last === undefined) return
         serialized = JSON.stringify(last)
-        if (queuedWrite?.serialized === serialized || (!queuedWrite && activeWrite?.serialized === serialized)) return
+        // 超限后缩回在途的同一正文也须重新登记，不能让旧失败标记吞掉本次合法修改。
+        if (!props.channel.pending?.unavailable
+          && (queuedWrite?.serialized === serialized || (!queuedWrite && activeWrite?.serialized === serialized))) return
         if (!queuedWrite && !activeWrite && serialized === persisted && !props.channel.pending) return
         recovery = stageDraftRecovery(props.channel, serialized)
       } catch (cause) {

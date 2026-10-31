@@ -653,6 +653,33 @@ describe('编辑草稿持久化', () => {
     expect(env.get).toHaveBeenCalledTimes(4)
   })
 
+  it.each([false, true])('超限后改回正在暂存的合法内容，关闭重开不应继续显示无法恢复的旧失败标记（排队=%s）', async queued => {
+    const env = environment(), gate = Promise.withResolvers<void>()
+    env.save.mockImplementationOnce(async request => { await gate.promise; return env.write(request) })
+    const view = await render(env)
+    try {
+      if (queued) { await change(view, '正在阻塞队列的旧内容'); await advance() }
+      await change(view, '正在暂存的合法内容'); await advance()
+      await change(view, '界'.repeat(700_000)); await advance()
+      expect(JSON.stringify(view.toJSON())).toContain('超过 2 MiB')
+      await change(view, '正在暂存的合法内容'); await advance()
+      await action(view, 'host-close')
+      await act(async () => gate.resolve())
+      await action(view, 'host-open')
+      expect(view.root.findByType('input').props.value).toBe('正在暂存的合法内容')
+      expect(JSON.stringify(view.toJSON())).not.toContain('超过 2 MiB')
+      expect(env.stored()).toEqual(snapshot('正在暂存的合法内容'))
+    } finally {
+      gate.resolve()
+      const restore = view.root.findAllByType(Btn).find(button => button.props.children === '恢复上一份草稿')
+      if (restore) {
+        await act(async () => restore.props.onClick())
+        await act(async () => view.root.findByType(ConfirmDialog).props.onConfirm())
+        await advance()
+      }
+    }
+  })
+
   it('读取失败可以重试，成功后恢复内容且不新建空草稿覆盖原记录', async () => {
     const env = environment()
     env.seed('读取恢复内容')

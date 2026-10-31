@@ -1158,7 +1158,8 @@ export class TavernState {
     return parsed.filter((p): p is Persona => p !== null).sort((a, b) => a.name.localeCompare(b.name))
   }
 
-  async loadPersona(id: string | null): Promise<Persona | null> {
+  /** 列表等普通读取保留坏资产容错；绑定/默认项解析须区分损坏与缺失，不能凭空换成人设回写。 */
+  async loadPersona(id: string | null, strictRead = false): Promise<Persona | null> {
     if (id && this.assetFileId(id) !== id) { const resolved = await this.resolveExistingAssetId(await this.rootFs(), 'personas', id); if (!resolved) return null; id = resolved }
     if (!id) return null
     // rev-keyed 解析缓存：resolvePersona 每 step 会被调两次（loadBinding 自愈 + pipeline），
@@ -1166,7 +1167,8 @@ export class TavernState {
     let key = this.assetFileId(id)
     const rev = this.assetRevision(`persona:${key}`)
     const cached = this.personaCache.get(key)
-    if (cached && cached.rev === rev) return cached.value
+    // 容错路径缓存的 null 可能来自坏 JSON；严格读取须重查，修复文件后也能直接恢复。
+    if (cached && cached.rev === rev && (!strictRead || cached.value !== null)) return cached.value
     const fs = await this.rootFs()
     const raw = await fs.readText(`personas/${key}.json`)
     let value: Persona | null = null
@@ -1174,6 +1176,7 @@ export class TavernState {
       try {
         value = parsePersona(JSON.parse(raw))
       } catch {
+        if (strictRead) throw new Error(`用户人设 ${id} 的数据损坏，无法读取；请修复或从备份恢复后重试`)
         value = null
       }
     }
@@ -1186,9 +1189,10 @@ export class TavernState {
    * 只建了人设、没在芯片/默认页勾选时，{{user}} 仍应展开成人设名而不是 User。
    */
   async resolvePersona(personaId: string | null): Promise<Persona | null> {
-    const bound = await this.loadPersona(personaId)
-    const fallback = await this.loadPersona(this.config.defaults.personaId || null)
-    if (bound || fallback) return pickPersona(bound, fallback, [])
+    const bound = await this.loadPersona(personaId, true)
+    if (bound) return bound
+    const fallback = await this.loadPersona(this.config.defaults.personaId || null, true)
+    if (fallback) return fallback
     return pickPersona(null, null, await this.listPersonas())
   }
 

@@ -329,7 +329,8 @@ export declare class TavernState {
     }>;
     deletePreset(id: string): Promise<void>;
     listPersonas(): Promise<Persona[]>;
-    loadPersona(id: string | null): Promise<Persona | null>;
+    /** 列表等普通读取保留坏资产容错；绑定/默认项解析须区分损坏与缺失，不能凭空换成人设回写。 */
+    loadPersona(id: string | null, strictRead?: boolean): Promise<Persona | null>;
     /**
      * 本会话实际用人设：绑定指定 > 默认页 > 库里只剩一条。
      * 只建了人设、没在芯片/默认页勾选时，{{user}} 仍应展开成人设名而不是 User。

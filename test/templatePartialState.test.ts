@@ -12,7 +12,7 @@ import { prepareTemplateDocument, TEMPLATE_DATA_PATH } from '../src/state/templa
 
 const roots:string[]=[]
 afterEach(async()=>{for(const root of roots.splice(0))await rm(root,{recursive:true,force:true})})
-async function fixture() {
+async function fixture(format:'paged'|'legacy'='paged') {
   const root=await mkdtemp(join(tmpdir(),'tavern-partial-state-'));roots.push(root)
   const wal=new Wal(join(root,'state/wal')),fs=new WorkspaceFs(root,wal)
   const state:TemplateState={version:1,variables:{global:{count:7},local:{},message:{}},
@@ -22,7 +22,11 @@ async function fixture() {
       const text=`旧正文-${index}:`+'内容'.repeat(3000)
       return [String(index),{hash:templateTextHash(text),text}]
     }))}
-  await wal.beginFloor('s#t1');await saveTemplateState(fs.withFloor('s#t1'),state);await wal.commitFloor('s#t1')
+  await wal.beginFloor('s#t1')
+  // 旧内联用例直接准备旧格式，不先生成随后就被丢弃的上百个分页和对应 WAL；分页完整性由前一用例覆盖。
+  if(format==='legacy')await fs.withFloor('s#t1').writeText('state/template.json',JSON.stringify(state))
+  else await saveTemplateState(fs.withFloor('s#t1'),state)
+  await wal.commitFloor('s#t1')
   return {root,fs,wal,state}
 }
 
@@ -48,8 +52,7 @@ it('冷读归属、定时器、元数据和单条回复不访问其它回复正�
 },30000)
 
 it('旧内联状态同样选择消息，新增坏定时器不能回退旧文件',async()=> {
-  const {fs,state}=await fixture()
-  await fs.withFloor(null).writeText('state/template.json',JSON.stringify(state))
+  const {fs,state}=await fixture('legacy')
   expect(await loadTemplateOutputs(fs,[3,12])).toEqual({'3':state.outputs['3'],'12':state.outputs['12']})
   await expect(loadTemplateOutputs(fs,[-1])).rejects.toThrow(/身份无效/)
   await fs.withFloor(null).writeText('state/wi-timers/s.json',JSON.stringify({stickyLeft:{old:4},cooldownLeft:{}}))

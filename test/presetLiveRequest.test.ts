@@ -179,6 +179,26 @@ it('人设在工具步骤损坏不影响本轮冻结请求和收口，下一轮�
   expect((await state.loadBinding(agent.id))?.storyId).toBe(storyId)
 })
 
+it('旧人设 JSON 的 id 不改变真实请求的所选身份，面板读取后下一轮仍沿原文件和剧情', async () => {
+  const selected = { id: 'selected-persona-file', name: '所选玩家', description: 'SELECTED-PERSONA-FILE-DETAIL', avatar: null }
+  const other = { id: 'other-persona-file', name: '另一玩家', description: 'OTHER-PERSONA-FILE-DETAIL', avatar: null }
+  await state.savePersona(selected); await state.savePersona(other)
+  await state.saveBinding({ ...(await state.loadBinding(agent.id))!, personaId: selected.id })
+  await state.deletePersona(selected.id)
+  await writeFile(join(state.paths.personas, `${selected.id}.json`), JSON.stringify({ ...selected, id: other.id }))
+  const preset = (await state.loadPreset(presetId, true))!
+  await state.savePreset({ ...preset, entries: [...preset.entries, defaultPreset().entries.find(entry => entry.identifier === 'personaDescription')!] })
+  await send(userMessage('使用所选人设'))
+  expect((await state.loadBinding(agent.id))?.personaId).toBe(selected.id)
+  await send(userMessage('读取面板绑定后继续'))
+  expect(requests).toHaveLength(2)
+  for (const request of requests) {
+    expect(JSON.stringify(request)).toContain(selected.description)
+    expect(JSON.stringify(request)).not.toContain(other.description)
+  }
+  expect((await state.loadBinding(agent.id))?.storyId).toBe(storyId)
+})
+
 it('每轮把同字节后置规则追加到新用户之后，覆盖卡级槽位且保留宿主图片消息', async () => {
   const first = userMessage('第一轮输入', true)
   await send(first)

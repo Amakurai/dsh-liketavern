@@ -9,6 +9,7 @@
  * 否则仍会吃到旧缓存）；模型工具、其它页签等外部写入会在组件下一次重载时收敛。
  * 失败（reject 或错误信封）不缓存，下次调用立即重试。
  * 每类缓存最多保留 128 项（包含飞行请求），优先淘汰最久未读项；每次读取清理过期项。
+ * 头像另限缓存字符串的保守体积为 64 MiB；单张超限仍返回给当前读取，但不常驻缓存。
  *
  * 已知让步：getSessionBinding 的结果带 canSwipeGreeting（取决于会话是否已有用户
  * 消息），首条用户消息发出后最长 TTL 秒内可能仍读到 true；服务端仍是最终闸门。
@@ -23,6 +24,8 @@ const AVATAR_TTL_MS = 60_000
 const PENDING_TTL_MS = 20_000
 /** 大量角色列表与断线 RPC 同样需要容量边界，不能只等待某次成功回包触发清理。 */
 const MAX_CACHE_ENTRIES = 128
+/** 按 UTF-16 每字符两字节保守估算，仅约束缓存持有的 dataURL，不包括已挂载图片的浏览器内存。 */
+const MAX_AVATAR_CACHE_BYTES = 64 * 1024 * 1024
 
 /**
  * 同页角色资产变更广播。仅清 Map 不会重新触发已经挂载的 useLoader；气泡、开场预览
@@ -39,11 +42,25 @@ interface CacheEntry<T> {
   pending?: Promise<Envelope<T>>
 }
 
+interface CacheBudget<T> { maxBytes: number; bytes(value: T): number }
+
+/** 体积和条数独立限额；只淘汰已返回值，不因另一个大头像清掉无关的飞行请求。 */
+function trimValues<T>(map: Map<string, CacheEntry<T>>, budget: CacheBudget<T>): void {
+  let total = 0
+  for (const entry of map.values()) if (entry.value?.ok) total += budget.bytes(entry.value.value)
+  for (const [key, entry] of map) {
+    if (total <= budget.maxBytes) break
+    if (!entry.value?.ok) continue
+    total -= budget.bytes(entry.value.value)
+    map.delete(key)
+  }
+}
+
 /**
  * 读一条缓存：限时共享 in-flight > TTL 内命中 > 重拉。只缓存成功信封——错误信封多为
  * 上下文性失败（未绑定/服务未就绪），下次应真打 remote；reject 同理不留痕迹。
  */
-function read<T>(map: Map<string, CacheEntry<T>>, key: string, ttlMs: number, load: () => Promise<Envelope<T>>): Promise<Envelope<T>> {
+function read<T>(map: Map<string, CacheEntry<T>>, key: string, ttlMs: number, load: () => Promise<Envelope<T>>, budget?: CacheBudget<T>): Promise<Envelope<T>> {
   const now = Date.now()
   for (const [cachedKey, entry] of map) {
     const age = now - entry.at
@@ -64,7 +81,9 @@ function read<T>(map: Map<string, CacheEntry<T>>, key: string, ttlMs: number, lo
         // invalidate 可能在请求飞行期间发生；只有当前槽位仍属于本次请求时才允许回填。
         // 否则旧请求晚到会把新请求已经写入的值覆盖回去。
         if (map.get(key)?.pending !== pending) return r
+        if (budget && budget.bytes(r.value) > budget.maxBytes) { map.delete(key); return r }
         map.set(key, { at: Date.now(), value: r })
+        if (budget) trimValues(map, budget)
       } else if (map.get(key)?.pending === pending) {
         map.delete(key)
       }
@@ -118,9 +137,14 @@ export function cachedCharacterDetail(remote: TavernRemote, cardId: string) {
   return read(cacheFor(remote).details, cardId, META_TTL_MS, () => remote.getCharacterDetail({ cardId }))
 }
 
+/** 头像缓存按字符串的最坏占用估算；正常 dataURL 为 ASCII，也不能因此依赖引擎压缩字符串。 */
+const avatarBudget: CacheBudget<ResultOf<'getAvatar'>> = {
+  maxBytes: MAX_AVATAR_CACHE_BYTES,
+  bytes: value => typeof value?.dataUrl === 'string' ? value.dataUrl.length * 2 : 0,
+}
 /** 头像 dataURL（key=cardId）。 */
 export function cachedAvatar(remote: TavernRemote, cardId: string) {
-  return read(cacheFor(remote).avatars, cardId, AVATAR_TTL_MS, () => remote.getAvatar({ cardId }))
+  return read(cacheFor(remote).avatars, cardId, AVATAR_TTL_MS, () => remote.getAvatar({ cardId }), avatarBudget)
 }
 
 /** setSessionBinding / clearSessionBinding 成功后调用（先于 reload / 广播）。 */

@@ -106,3 +106,51 @@ it('悬挂请求也受容量限制；淘汰后重新读取，迟到回包不覆�
     await old
   }
 })
+
+it('未到条数上限的大头像也受总量约束，持续读取的头像优先保留', async () => {
+  vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000)
+  const dataUrl = 'data:image/png;base64,' + 'A'.repeat(8 * 1024 * 1024)
+  const getAvatar = vi.fn(async () => ({ ok: true as const, value: { dataUrl } }))
+  const remote = { getAvatar } as unknown as TavernRemote
+  await cachedAvatar(remote, 'large-old')
+  await cachedAvatar(remote, 'large-active')
+  for (let index = 0; index < 10; index++) {
+    await cachedAvatar(remote, `large-${index}`)
+    await cachedAvatar(remote, 'large-active')
+  }
+  const before = getAvatar.mock.calls.length
+  await cachedAvatar(remote, 'large-active'); await cachedAvatar(remote, 'large-9')
+  expect(getAvatar).toHaveBeenCalledTimes(before)
+  await cachedAvatar(remote, 'large-old')
+  expect(getAvatar).toHaveBeenCalledTimes(before + 1)
+})
+
+it('单张超出缓存预算的头像仍正常返回，但不挤掉已缓存的正常头像', async () => {
+  const huge = 'data:image/png;base64,' + 'A'.repeat(32 * 1024 * 1024)
+  const getAvatar = vi.fn(async ({ cardId }: { cardId: string }) => ({ ok: true as const, value: { dataUrl: cardId === 'huge' ? huge : 'normal-avatar' } }))
+  const remote = { getAvatar } as unknown as TavernRemote
+  await cachedAvatar(remote, 'normal')
+  for (let index = 0; index < 2; index++) {
+    const pending = cachedAvatar(remote, 'huge')
+    expect(cachedAvatar(remote, 'huge')).toBe(pending)
+    const result = await pending
+    expect(result.ok && result.value.dataUrl?.length).toBe(huge.length)
+    await cachedAvatar(remote, 'normal')
+  }
+  expect(getAvatar).toHaveBeenCalledTimes(3)
+})
+
+it('按体积淘汰已返回头像时，不取消另一张头像正在共享的读取', async () => {
+  vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000)
+  const delayed = Promise.withResolvers<Awaited<ReturnType<TavernRemote['getAvatar']>>>()
+  const dataUrl = 'data:image/png;base64,' + 'A'.repeat(8 * 1024 * 1024)
+  const getAvatar = vi.fn(async ({ cardId }: { cardId: string }) => cardId === 'still-loading' ? delayed.promise : { ok: true as const, value: { dataUrl } })
+  const remote = { getAvatar } as unknown as TavernRemote
+  const loading = cachedAvatar(remote, 'still-loading')
+  try {
+    for (let index = 0; index < 10; index++) await cachedAvatar(remote, `pressure-${index}`)
+    expect(cachedAvatar(remote, 'still-loading')).toBe(loading)
+    expect(getAvatar.mock.calls.filter(([request]) => request.cardId === 'still-loading')).toHaveLength(1)
+  } finally { delayed.resolve({ ok: true, value: { dataUrl: 'loaded-avatar' } }); await loading }
+  expect(await cachedAvatar(remote, 'still-loading')).toEqual({ ok: true, value: { dataUrl: 'loaded-avatar' } })
+})

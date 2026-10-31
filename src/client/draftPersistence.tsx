@@ -120,6 +120,8 @@ function DraftSession(props: { remote: TavernRemote; scope: string; owner: strin
     const flush = () => {
       if (timer) clearTimeout(timer)
       timer = undefined
+      // 字段注册只更新引用；完整 JSON 快照在防抖、重试、pagehide 或卸载时才编码，避免每次输入复制整份大草稿。
+      capture()
       if (last === undefined) return
       const serialized = JSON.stringify(last)
       if (queuedWrite?.serialized === serialized || (!queuedWrite && activeWrite?.serialized === serialized)) return
@@ -148,7 +150,7 @@ function DraftSession(props: { remote: TavernRemote; scope: string; owner: strin
     const schedule = () => {
       if (!mounted) return
       if (timer) clearTimeout(timer)
-      timer = setTimeout(() => { capture(); flush() }, 500)
+      timer = setTimeout(flush, 500)
     }
     const registry: DraftRegistry = {
       remote: props.remote,
@@ -156,22 +158,17 @@ function DraftSession(props: { remote: TavernRemote; scope: string; owner: strin
       field(key, token, value) {
         fields.set(key, { token, value })
         delete restored[key]
-        capture()
         schedule()
       },
       remove(key, token) {
         if (fields.get(key)?.token === token) {
           fields.delete(key)
-          queueMicrotask(() => { if (mounted) capture() })
         }
         schedule()
       },
       report(id, status) {
-        if (status) { statuses.set(id, status); capture() }
-        else {
-          statuses.delete(id)
-          queueMicrotask(() => { if (mounted) capture() })
-        }
+        if (status) { statuses.set(id, status); seenDirty ||= status.dirty }
+        else statuses.delete(id)
         schedule()
       },
       discard(id?: string) {
@@ -182,7 +179,6 @@ function DraftSession(props: { remote: TavernRemote; scope: string; owner: strin
           for (const [key, current] of statuses) if (current.dirty) statuses.set(key, { ...current, dirty: false })
         }
         if ([...statuses.values()].some((s) => s.dirty)) {
-          capture()
           schedule()
           return
         }

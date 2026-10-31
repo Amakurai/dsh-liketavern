@@ -241,6 +241,32 @@ describe('编辑草稿持久化', () => {
     expect([...browserStorage.values()]).toEqual([owner])
   })
 
+  it.each(['close', 'pagehide'] as const)('大草稿持续输入时不重复编码完整快照，%s 时仍保存最后正文', async exit => {
+    const env = environment(), padding = '界'.repeat(128 * 1024)
+    function LargeEditor() {
+      const [text, setText] = useDraftState('large:text', 'base')
+      useDraftState('large:padding', padding)
+      useDraftGuard(text !== 'base')
+      return <input value={text} onChange={event => setText(event.target.value)}/>
+    }
+    let view!: ReactTestRenderer
+    await act(async () => { view = create(<PersistentEditor remote={env.api} scope={env.scope}><LargeEditor/></PersistentEditor>) })
+    mounted.push(view)
+    // 只统计完整草稿编码，不能用机器墙钟门槛把 runner 性能差异当成产品回归。
+    const encode = vi.spyOn(JSON, 'stringify')
+    const fullEncodes = () => encode.mock.calls.filter(([value]) => value !== null && typeof value === 'object'
+      && 'fields' in value && value.fields !== null && typeof value.fields === 'object' && Object.hasOwn(value.fields, 'large:padding')).length
+    try {
+      for (let index = 1; index <= 20; index++) await change(view, `连续输入 ${index}`)
+      expect(env.save).not.toHaveBeenCalled()
+      expect(fullEncodes()).toBe(0)
+      if (exit === 'close') await unmount(view)
+      else await act(async () => { window.dispatchEvent(new Event('pagehide')) })
+      expect(env.stored()).toEqual({ version: 1, fields: { 'large:text': '连续输入 20', 'large:padding': padding } })
+      expect(fullEncodes()).toBeLessThanOrEqual(2)
+    } finally { encode.mockRestore() }
+  })
+
   it('业务保存成功后移除草稿，重开不会恢复已经提交的编辑', async () => {
     const env = environment()
     const view = await render(env)

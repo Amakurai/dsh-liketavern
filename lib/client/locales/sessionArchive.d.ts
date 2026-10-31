@@ -7,6 +7,12 @@ export declare const zh: {
     'sessionArchive.workspace': string;
     'sessionArchive.chooseWorkspace': string;
     'sessionArchive.chooseFile': string;
+    'sessionArchive.clearFile': string;
+    'sessionArchive.reading': string;
+    'sessionArchive.exporting': string;
+    'sessionArchive.importing': string;
+    'sessionArchive.opening': string;
+    'sessionArchive.openImported': string;
     'sessionArchive.import': string;
     'sessionArchive.confirm': string;
     'sessionArchive.tooLarge': string;

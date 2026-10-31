@@ -1,5 +1,5 @@
 /** 设置页的剧情变量管理：显式选择角色和剧情，备份已保存快照；恢复经原有楼层 WAL/CAS，草稿及失败留在设置。 */
-import {useEffect,useRef,useState} from 'react'
+import {useCallback,useEffect,useRef,useState} from 'react'
 import {parseHelperVariableBackup,helperVariableRestoreChanges} from '../../core/helperVariableBackup.js'
 import type {HelperSnapshot} from '../../core/helperRuntime.js'
 import type {HelperScriptAsset} from '../../core/helperScripts.js'
@@ -45,32 +45,48 @@ export function SessionTransfer({remote,sessions,sessionId}:{remote:TavernRemote
   const active=useRef(true),pending=useRef(false)
   useEffect(()=>{active.current=true;return()=>{active.current=false}},[])
   const [workspaceId,setWorkspaceId]=useState(''),[archive,setArchive]=useState<{name:string;text:string}|null>(null)
-  const [busy,setBusy]=useState(false),[error,setError]=useState<string|null>(null),[confirm,setConfirm]=useState(false)
+  const [phase,setPhase]=useState<'reading'|'exporting'|'importing'|'opening'|null>(null)
+  const [error,setError]=useState<string|null>(null),[confirm,setConfirm]=useState(false),[restoredSessionId,setRestoredSessionId]=useState<string|null>(null)
+  const busy=phase!==null
+  // 迁移文件可达 192 MiB，只在当前页面内持有；离开前保护输入，明确放弃后立即释放。
+  const clearArchive=useCallback(()=>{setArchive(null);setConfirm(false)},[])
+  const guard=useDraftGuard(archive!==null,busy,clearArchive)
   const exportSession=async()=>{
     if(!sessionId||pending.current)return
     pending.current=true
-    setBusy(true);setError(null)
+    setPhase('exporting');setError(null)
     try{const result=await remote.exportSessionArchive({sessionId});if(!result.ok)throw new Error(result.error.message);if(active.current)downloadJson('tavern-session.json',result.value.archive,0)}
-    catch(e){if(active.current)setError(e instanceof Error?e.message:String(e))}finally{pending.current=false;if(active.current)setBusy(false)}
+    catch(e){if(active.current)setError(e instanceof Error?e.message:String(e))}finally{pending.current=false;if(active.current)setPhase(null)}
   }
   const choose=async(file:File)=>{
     if(pending.current)return
-    setError(null);setArchive(null)
+    setError(null)
     if(file.size>192*1024*1024){setError(t('sessionArchive.tooLarge'));return}
-    pending.current=true;setBusy(true)
-    try{const text=await file.text();if(active.current)setArchive({name:file.name,text})}
-    catch(e){if(active.current)setError(e instanceof Error?e.message:String(e))}finally{pending.current=false;if(active.current)setBusy(false)}
+    pending.current=true;setPhase('reading')
+    // 新文件完整读入后才替换原输入，读取失败仍可用原文件恢复中断的导入。
+    try{const text=await file.text();if(active.current){setArchive({name:file.name,text});setConfirm(false)}}
+    catch(e){if(active.current)setError(e instanceof Error?e.message:String(e))}finally{pending.current=false;if(active.current)setPhase(null)}
+  }
+  const openRestored=async(id:string)=>{
+    if(!sessions)return
+    try{await openChildSession({...sessions,open:target=>{if(active.current)sessions.open(target)}},id)}
+    catch{if(active.current)setError(t('sessionArchive.navigationFailed'))}
+  }
+  const reopen=async()=>{
+    if(!restoredSessionId||!sessions||pending.current)return
+    pending.current=true;setPhase('opening');setError(null)
+    try{await openRestored(restoredSessionId)}finally{pending.current=false;if(active.current)setPhase(null)}
   }
   const restore=async()=>{
     if(!archive||!workspaceId||pending.current)return
     pending.current=true
-    setConfirm(false);setBusy(true);setError(null)
+    setConfirm(false);setPhase('importing');setError(null)
     try{
       const result=await remote.importSessionArchive({workspaceId,archiveJson:archive.text})
       if(!result.ok)throw new Error(result.error.message)
-      if(active.current){setArchive(null);toast.show(t('sessionArchive.imported'))}
-      if(sessions&&active.current)try{await openChildSession({...sessions,open:id=>{if(active.current)sessions.open(id)}},result.value.sessionId)}catch{if(active.current)setError(t('sessionArchive.navigationFailed'))}
-    }catch(e){if(active.current)setError(e instanceof Error?e.message:String(e))}finally{pending.current=false;if(active.current)setBusy(false)}
+      if(active.current){guard.clearDraft();setRestoredSessionId(result.value.sessionId);toast.show(t('sessionArchive.imported'))}
+      if(sessions&&active.current){setPhase('opening');await openRestored(result.value.sessionId)}
+    }catch(e){if(active.current)setError(e instanceof Error?e.message:String(e))}finally{pending.current=false;if(active.current)setPhase(null)}
   }
   const items=workspaces.state.status==='ready'?workspaces.state.value.items:[]
   return <Section title={t('sessionArchive.title')} description={t('sessionArchive.desc')}>
@@ -83,9 +99,14 @@ export function SessionTransfer({remote,sessions,sessionId}:{remote:TavernRemote
         options={[{value:'',label:t('sessionArchive.chooseWorkspace')},...items.map(item=>({value:item.id,label:item.title}))]} onChange={setWorkspaceId}/>
     </SettingsRow>
     <SettingsRow title={t('sessionArchive.chooseFile')} description={archive?.name}>
-      <FileBtn accept="application/json,.json" disabled={busy} onFile={file=>void choose(file)}>{t('sessionArchive.chooseFile')}</FileBtn>
+      <FileBtn accept="application/json,.json" disabled={busy||confirm} onFile={file=>void choose(file)}>{t('sessionArchive.chooseFile')}</FileBtn>
+      {archive&&<Btn disabled={busy||confirm} onClick={()=>{if(!pending.current){clearArchive();setError(null)}}}>{t('sessionArchive.clearFile')}</Btn>}
       <Btn primary disabled={busy||!archive||!workspaceId} onClick={()=>setConfirm(true)}>{t('sessionArchive.import')}</Btn>
     </SettingsRow>
+    {phase&&<div role="status"><Muted>{t(`sessionArchive.${phase}`)}</Muted></div>}
+    {restoredSessionId&&<SettingsRow title={t('sessionArchive.imported')}>
+      {sessions&&<Btn disabled={busy} onClick={()=>void reopen()}>{t('sessionArchive.openImported')}</Btn>}
+    </SettingsRow>}
     <Err message={error??(workspaces.state.status==='error'?workspaces.state.message:null)}/>
     {workspaces.state.status==='error'&&<Btn onClick={workspaces.reload}>{t('action.retry')}</Btn>}
     <ConfirmDialog open={confirm} title={t('sessionArchive.import')} description={t('sessionArchive.confirm')} busy={busy}

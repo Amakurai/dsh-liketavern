@@ -4,6 +4,7 @@
  */
 import { useDraftGuard } from '../drafts.js'
 import { useDraftState } from '../draftPersistence.js'
+import { randomUuid } from '../../core/secureRandom.js'
 import { useRef, useState } from 'react'
 import { IconEditOutlineMedium, IconTrashOutlineMedium, IconUserOutlineMedium } from '@deepseek-ai/dsh-client-ui-primitives'
 import { useT } from '../i18n.js'
@@ -85,7 +86,7 @@ export function PersonasSection(props: { remote: TavernRemote }) {
 
   const createNew = () => {
     setBaseline('null')
-    setEditing({ id: `persona-${Date.now().toString(36)}`, name: '', description: '', avatar: null, lorebookId: null })
+    setEditing({ id: `persona-${randomUuid()}`, name: '', description: '', avatar: null, lorebookId: null })
   }
 
   const setAsDefault = async (id: string) => {

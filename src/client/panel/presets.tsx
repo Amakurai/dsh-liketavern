@@ -3,6 +3,7 @@
  * 卡片可键盘触发（clickableProps）；保存/导入/设默认等瞬时反馈走 useToast，上下文错误用 Err。
  */
 import { exportStPreset } from '../../core/presetExport.js'
+import { randomUuid } from '../../core/secureRandom.js'
 import { useDraftGuard } from '../drafts.js'
 import { useDraftState } from '../draftPersistence.js'
 import { useEffect, useRef, useState } from 'react'
@@ -266,7 +267,7 @@ export function PresetsSection(props: { remote: TavernRemote }) {
   const createNew = () => {
     if (pending.current) return
     cancelOpening()
-    const id = `preset-${Date.now().toString(36)}`
+    const id = `preset-${randomUuid()}`
     setEditing({ name: t('presets.newPresetName'), identifier: id, entries: [newEntry(100)] })
     setEditingId(null)
     setRevision(null)

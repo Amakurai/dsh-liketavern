@@ -33,6 +33,7 @@ afterEach(async () => {
   for (const view of mounted.splice(0)) await act(async () => view.unmount())
   for (const ctx of contexts.splice(0)) await ctx.fiber.dispose()
   for (const root of directories.splice(0)) await rm(root, { recursive: true, force: true })
+  vi.restoreAllMocks()
 })
 
 async function fixture() {
@@ -58,11 +59,11 @@ async function fixture() {
   } as unknown as TavernRemote
   return { state, service, remote }
 }
-async function render(node: ReactNode) {
+async function render(node: ReactNode, waitItems = true) {
   let view!: ReactTestRenderer
   await act(async () => { view = create(node) })
   mounted.push(view)
-  await act(async () => { await vi.waitFor(() => expect(view.root.findAllByProps({ className: 'dsh-tavern-tile' }).length).toBeGreaterThan(0)) })
+  if (waitItems) await act(async () => { await vi.waitFor(() => expect(view.root.findAllByProps({ className: 'dsh-tavern-tile' }).length).toBeGreaterThan(0)) })
   return view
 }
 const button = (view: ReactTestRenderer, label: string) => view.root.findAllByType(Btn).find(item => item.props.children === label)!
@@ -141,4 +142,23 @@ it.each(['persona', 'preset'] as const)('%s 删除确认同批触发两次仍只
     expect(f.remote.updateSettings).not.toHaveBeenCalled()
   } finally { await act(async () => { gate.resolve(); await vi.mocked(remove).mock.results[0]!.value }) }
   expect(kind === 'persona' ? await f.state.loadPersona('port') : await f.state.loadPreset('port')).toBeNull()
+})
+
+it.each(['persona', 'preset'] as const)('两个窗口同毫秒新建 %s，保存为独立资产且不产生自身版本冲突', async kind => {
+  const f = await fixture()
+  vi.spyOn(Date, 'now').mockReturnValue(1_793_444_000_000)
+  const Component = kind === 'persona' ? PersonasSection : PresetsSection
+  const views = [await render(<Component remote={f.remote}/>, false), await render(<Component remote={f.remote}/>, false)]
+  for (const [index, view] of views.entries()) {
+    await act(async () => button(view, t(kind === 'persona' ? 'personas.new' : 'presets.new')).props.onClick())
+    await act(async () => view.root.findAllByType('input')[0]!.props.onChange({ target: { value: `新建资产 ${index}` } }))
+  }
+  const save = kind === 'persona' ? f.remote.savePersona : f.remote.savePreset
+  await act(async () => {
+    for (const view of views) button(view, t(kind === 'persona' ? 'action.save' : 'presets.save')).props.onClick()
+    await Promise.allSettled(vi.mocked(save).mock.results.map(result => result.value))
+  })
+  const items = kind === 'persona' ? await f.state.listPersonas() : (await f.service.listPresets({})).items
+  expect(items.map(item => item.name).sort()).toEqual(['新建资产 0', '新建资产 1'])
+  for (const view of views) expect(view.root.findAllByProps({ role: 'alert' })).toHaveLength(0)
 })

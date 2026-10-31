@@ -34,7 +34,7 @@ export async function onTurnStart(state:TavernState,sessionId:string,turn:number
   deferred.set(sessionId,turn)
   if (await helperMvuPending(state,sessionId,!session || helperMvuHasAssistant(session))) return
   deferredTurns.get(state)?.delete(sessionId)
-  const binding = await state.loadBinding(sessionId)
+  const binding = await state.loadStoryBinding(sessionId)
   if (!binding) return
   const ws = await state.storyWorkspace(binding.cardId,binding.storyId)
   await withWorkspaceLock(ws.fs.root,async()=> {
@@ -74,7 +74,7 @@ export async function onTurnStart(state:TavernState,sessionId:string,turn:number
 
 /** 新轮开始前用旧正常结束帧恢复提交；冻结计划与消息原文仍来自原楼层，不重新请求模型。 */
 async function recoverTemplateCommit(state:TavernState,sessionId:string,turn:number,session:Pick<Session,'id'|'snapshotEvents'>):Promise<void> {
-  const binding=await state.loadBinding(sessionId)
+  const binding=await state.loadStoryBinding(sessionId)
   if(!binding) return
   const ws=await state.storyWorkspace(binding.cardId,binding.storyId)
   const generation=await loadTemplateGenerationIdentity(ws.fs)
@@ -100,7 +100,7 @@ export async function onTurnEnd(state:TavernState,sessionId:string,session?:Pick
     state.turnPlans.delete(sessionId)
     state.pendingTurnPlans.delete(sessionId)
     if(key) {
-      const deferredStoryId=state.openFloors.get(sessionId)?.storyId??(await state.loadBinding(sessionId))?.storyId
+      const deferredStoryId=state.openFloors.get(sessionId)?.storyId??(await state.loadStoryBinding(sessionId))?.storyId
       state.helperTurnClosures.delete(key)
       state.helperTurnClosures.set(key,{seq:ending.seq,storyId:deferredStoryId,deferred:true})
       while(state.helperTurnClosures.size>256)state.helperTurnClosures.delete(state.helperTurnClosures.keys().next().value!)
@@ -116,7 +116,7 @@ export async function onTurnEnd(state:TavernState,sessionId:string,session?:Pick
   // 重复投递的旧结束帧不能借当前 openFloors 收口后来的轮次，也不能覆写旧成功回执。
   const active=state.openFloors.get(sessionId)
   if(active && active.floor!==key)throw new Error('宿主结束帧与当前楼层不一致')
-  const storyId=state.openFloors.get(sessionId)?.storyId??(await state.loadBinding(sessionId))?.storyId
+  const storyId=state.openFloors.get(sessionId)?.storyId??(await state.loadStoryBinding(sessionId))?.storyId
   const record=(error?:unknown)=>{
     if(!key||ending?.type!=='turn/end')return
     state.helperTurnClosures.delete(key)
@@ -134,7 +134,7 @@ async function finishTurn(state:TavernState,sessionId:string,session?:Pick<Sessi
   // 只有宿主结束帧可能处理持久回复；无事件清理不新增绑定 I/O。已有开层仍由最终提交锁内预检保护。
   if(ending?.type==='turn/end') {
     // 换绑取消仍在结束原楼层；新剧情的坏模板不能阻止旧 WAL 收口，下一轮会独立校验新剧情。
-    const binding=state.openFloors.get(sessionId)??await state.loadBinding(sessionId)
+    const binding=state.openFloors.get(sessionId)??await state.loadStoryBinding(sessionId)
     if(binding) {
       const ws=await state.storyWorkspace(binding.cardId,binding.storyId)
       await withWorkspaceLock(ws.fs.root,async()=>{await assertActiveTemplateRuntime(await loadTemplateMetadata(ws.fs),sessionId)})
@@ -155,7 +155,7 @@ async function finishTurn(state:TavernState,sessionId:string,session?:Pick<Sessi
   // 优先原开层归属；进程重启后只接受当前剧情内同会话同结束帧的持久回执。
   let entry = state.openFloors.get(sessionId)
   if (!entry && session?.id===sessionId && ending?.type==='turn/end') {
-    const binding = await state.loadBinding(sessionId)
+    const binding = await state.loadStoryBinding(sessionId)
     if (binding) {
       const ws = await state.storyWorkspace(binding.cardId,binding.storyId)
       const generation = await loadTemplateGenerationIdentity(ws.fs)

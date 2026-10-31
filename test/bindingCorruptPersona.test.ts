@@ -52,6 +52,7 @@ it.each(['{"id":', JSON.stringify({ ...chosen, name: 42 })])('明确绑定的人
   const restarted = await open()
   // 普通列表/容错读取可以跳过坏资产，但这条空结果不能授权绑定恢复换成人设 fallback。
   expect(await restarted.loadPersona(chosen.id)).toBeNull()
+  expect(await restarted.loadStoryBinding(sessionId)).toEqual(binding)
   await expect(service(restarted).getSessionBinding({ sessionId })).rejects.toThrow(/人设.*损坏/)
   expect(await readFile(sessionFile(paths, sessionId), 'utf8')).toBe(before)
   await writeFile(file, original)

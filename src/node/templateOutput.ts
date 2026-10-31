@@ -26,7 +26,7 @@ export async function completeTemplateOutput(state:TavernState,session:Pick<Sess
   const ending = [...events].reverse().find(event=>event.type==='turn/start'||event.type==='turn/end')
   if (ending?.type!=='turn/end' || ending.data.reason.kind!=='completed') return
   const turn = ending.data.turn
-  const binding = await state.loadBinding(session.id)
+  const binding = await state.loadStoryBinding(session.id)
   if (!binding) return
   const ws = await state.storyWorkspace(binding.cardId,binding.storyId)
   await withWorkspaceLock(ws.fs.root,async()=> {
@@ -83,7 +83,7 @@ export async function completeTemplateOutput(state:TavernState,session:Pick<Sess
       if(historyIdentities) stored.messageVariables=mergeTemplateMessageVariables(stored.messageVariables,result.messageVariables,historyIdentities)
       pending.forEach((candidate,index)=>{ stored.outputs[candidate.id] = {hash:templateTextHash(candidate.text),text:result.texts[index]!,parts:result.parts[index],partsVersion:TEMPLATE_DISPLAY_PARTS_VERSION} })
       if (ownGeneration) closeTemplateGenerationState(stored,'completed')
-      const latest = await state.loadBinding(session.id)
+      const latest = await state.loadStoryBinding(session.id)
       if (latest?.cardId!==binding.cardId || latest.storyId!==binding.storyId) throw new Error('模板回复提交前剧情绑定已变化')
       await saveTemplateState(ws.fs.withFloor(floor),stored)
     } catch(error) {throw new TemplateOutputCommitError(error)}

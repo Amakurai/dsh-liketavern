@@ -167,7 +167,7 @@ export function registerMemoryMaintenance(ctx: Context, state: TavernState, llm:
     // 排在 turn/end 的 commitFloor 后执行；若新 turn 已进入队列，也会等维护退出后再 beginFloor。
     // 标为后台任务：展示类只读接口只等楼层提交，不等这次辅助模型请求。
     void state.enqueueSessionTask(agent.id, async () => {
-      const binding = await state.loadBinding(agent.id)
+      const binding = await state.loadStoryBinding(agent.id)
       if (!binding) return
       const key = binding.storyId ?? binding.cardId
       const memory = (await state.storyWorkspace(binding.cardId, binding.storyId)).memory

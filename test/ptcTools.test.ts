@@ -122,6 +122,25 @@ it('预设读取故障以有界业务错误返回，不把本机路径交给模�
   expect(JSON.stringify(result.value)).not.toContain('private-profile')
 })
 
+it('人设损坏不改变工具的剧情归属，同层读写仍经过 WAL 并可完整撤销', async () => {
+  const persona = { id: 'ptc-frozen-persona', name: '工具玩家', description: '工厂人设', avatar: null }
+  await state.savePersona(persona)
+  await state.saveBinding({ ...(await state.loadBinding(agent.id))!, personaId: persona.id })
+  await state.deletePersona(persona.id)
+  await writeFile(join(state.paths.personas, `${persona.id}.json`), '{}')
+  const result = await run(`const written = await tools.tavern_memory_write({body:'蓝色钥匙保存在北门',keys:['蓝色钥匙']});
+    const found = await tools.tavern_memory_search({query:'蓝色钥匙'}); return {written,found};`)
+  expect(result.isError, JSON.stringify(result.content)).toBe(false)
+  const values = (result.value as { result: { written: { ok: boolean }; found: { ok: boolean } } }).result
+  expect(values.written.ok).toBe(true); expect(values.found.ok).toBe(true)
+  expect(JSON.stringify(result.value)).toContain('蓝色钥匙保存在北门')
+  const ws = await workspace(), floor = `${agent.id}#t1`
+  expect((await ws.memory.stats()).count).toBe(1)
+  await ws.wal.rollbackFloor(floor, ws.fs.root)
+  expect((await ws.memory.stats()).count).toBe(0)
+  expect(await state.loadStoryBinding(agent.id)).toMatchObject({ storyId, personaId: persona.id })
+})
+
 it('来源参数错误时给出业务拒绝，目录和正文查询均不扩大到其它来源', async () => {
   await bindLorebook({ sword: { key: ['长剑'], content: '不应出现在错误来源查询中的正文' } })
   const result = await run(`return await Promise.all([

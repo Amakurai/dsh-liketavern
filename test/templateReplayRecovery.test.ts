@@ -1,5 +1,5 @@
 /** 跨阶段恢复集成：真实临时剧情/WAL、重建宿主运行时、落盘故障与分支边界，不调用模型或读取用户数据。 */
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -45,6 +45,30 @@ async function setup(description=script,configRaw:Record<string,unknown>={}) {
 }
 
 describe('模板冻结计划恢复',()=> {
+  it.each([false,true])('人设文件损坏后重建运行时仍按原计划重放和收口，不重选人设（先重放=%s）',async replay=> {
+    const {state,ws,run,fresh,binding,paths}=await setup()
+    const persona={id:'frozen-recovery-persona',name:'恢复前玩家',description:'FROZEN-RECOVERY-PERSONA',avatar:null}
+    await state.savePersona(persona)
+    await state.saveBinding({...binding,personaId:persona.id})
+    const first=(await run())!
+    await state.deletePersona(persona.id)
+    await writeFile(join(paths.personas,`${persona.id}.json`),'{}')
+    const restarted=await fresh()
+    if(replay){
+      await onTurnStart(restarted,'s1',1)
+      const restored=(await run(restarted))!
+      expect(restored.userName).toBe(persona.name)
+      expect(restored.personaDescription).toBe(persona.description)
+      expect(restored.turnContext).toBe(first.turnContext)
+    }
+    await onTurnEnd(restarted,'s1',ending())
+    const stored=await loadTemplateState(ws.fs)
+    expect(stored.outputs['5']?.text).toBe('frozen1/frozen2')
+    expect(stored.generation?.status).toBe('completed')
+    expect((await ws.wal.validateFloor('s1#t1')).committed).toBe(true)
+    await expect((await fresh()).loadBinding('s1')).rejects.toThrow(/人设.*损坏/)
+  })
+
   it.each([false,true])('重建运行时恢复冻结布局偏好，旧计划缺字段时保持原位置（旧计划=%s）',async legacy=> {
     const configRaw={prompts:{cacheFirstLayout:false}}
     const {ws,run,fresh}=await setup(script,configRaw)

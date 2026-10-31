@@ -172,7 +172,7 @@ export function apply(ctx: Context): void {
       return result
     }
 
-    const binding = await state.loadBinding(agent.id)
+    const binding = await state.loadStoryBinding(agent.id)
     if (!binding) {
       applyStanding(result, UNBOUND_STANDING)
       applyTurnContext(result, state, agent.id, '')
@@ -217,7 +217,7 @@ export function apply(ctx: Context): void {
 
   ctx.on('agent/request', async (payload, next) => {
     const config = await next()
-    const binding = await state.loadBinding(payload.agent.id)
+    const binding = await state.loadStoryBinding(payload.agent.id)
     const plan = state.turnPlans.get(payload.agent.id)
     // assemble 与请求 waterfall 之间仍可换绑；旧角色的 standing/布局不能在新剧情归属下发信。
     // 仅核对轮次与 card/story，预设、人设等同剧情编辑仍在下一轮才应用。
@@ -227,7 +227,7 @@ export function apply(ctx: Context): void {
     const sampling = plan!.result.sampling
     const reasoningEffort = await resolveRequestReasoningEffort(state, llm, config, sampling, payload.signal)
     // 元数据解析也可能异步等待；最终采用请求配置前复读归属，不把等待期间解除/换绑漏过去。
-    const latest = await state.loadBinding(payload.agent.id), current = state.turnPlans.get(payload.agent.id)
+    const latest = await state.loadStoryBinding(payload.agent.id), current = state.turnPlans.get(payload.agent.id)
     if (latest?.cardId !== plan!.cardId || latest.storyId !== plan!.storyId || current?.turn !== payload.turn
       || current.result !== plan!.result) throw new Error('请求计划等待期间剧情绑定已变化，请在下一轮继续')
     const merged = mergeTavernCallConfig(config, sampling, reasoningEffort, payload.agent.options.maxTokens)

@@ -110,7 +110,7 @@ async function resolveCtx(
     // 上一轮提交失败会保留恢复句柄；宿主即使继续执行新轮，也不能把新事实写进旧 WAL。
     return { error: 'floor-stale：遗留楼层不属于当前轮次，已拒绝写入；请先完成旧楼层恢复再重试' }
   }
-  const binding = await state.loadBinding(sessionId)
+  const binding = await state.loadStoryBinding(sessionId)
   if (!binding) return { error: 'no-binding：当前会话未绑定 Tavern 角色卡' }
   // 生成中换绑：楼层还开在换绑前那张卡上，按新绑定写入会把别的卡的快照记进本楼层
   // （回滚时跨卡回放），或绕过 WAL 不可回滚——拒绝写入，等下一轮在新卡上开新楼层。
@@ -139,7 +139,7 @@ async function withWriteCtx<T extends { ok: boolean }>(
   if ('error' in resolved) return boundedToolError(resolved.error)
   return withWorkspaceLock(resolved.ws.fs.root, () => withWorkspaceLock(state.paths.sessions, async () => {
     // resolveCtx 的队列/adoption 等待只能放在锁外，锁内等待会卡住需要剧情锁的结束事件。
-    const binding = await state.loadBindingUnwaited(resolved.sessionId)
+    const binding = await state.loadStoryBinding(resolved.sessionId, { waitForAdoption: false })
     if (!binding || binding.cardId !== resolved.binding.cardId || binding.storyId !== resolved.binding.storyId) {
       return boundedToolError('binding-changed：工具排队期间剧情绑定已更换，已拒绝写入旧剧情')
     }

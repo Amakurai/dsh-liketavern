@@ -18,6 +18,7 @@ import { forkAgentOptions } from '../src/node/floors.js'
 import { onTurnEnd, onTurnStart } from '../src/node/sessionLifecycle.js'
 import { TavernState } from '../src/node/state.js'
 import { parseStPreset } from '../src/state/presetStore.js'
+import { defaultPreset } from '../src/core/assemble.js'
 import { CONTINUE_INSTRUCTION_PREFIX, TURN_STEP_NOTICE_PREFIX, TURN_WRITE_ACK_PREFIX, formatTurnStepNotice, isTurnScopedNotice } from '../src/core/dshPrompt.js'
 
 vi.mock('../src/node/tools.js', () => ({ registerTavernTools: vi.fn() }))
@@ -143,6 +144,38 @@ it('选中预设损坏时真实 AgentLoop 不进入模型适配器，修复后�
   expect(requests).toHaveLength(1)
   expect(requests[0]?.temperature).toBe(0.37)
   expect(textOf(requests[0]!.messages.at(-1)!)).toContain('PRESET-TAIL')
+  expect((await state.loadBinding(agent.id))?.storyId).toBe(storyId)
+})
+
+it('人设在工具步骤损坏不影响本轮冻结请求和收口，下一轮明确拒绝，修复后继续原剧情', async () => {
+  const persona = { id: 'live-frozen-persona', name: '冻结玩家', description: 'FROZEN-PERSONA-DETAIL', avatar: null }
+  await state.savePersona(persona)
+  await state.saveBinding({ ...(await state.loadBinding(agent.id))!, personaId: persona.id })
+  const preset = (await state.loadPreset(presetId, true))!
+  await state.savePreset({ ...preset, entries: [...preset.entries, defaultPreset().entries.find(entry => entry.identifier === 'personaDescription')!] })
+  firstStepTool = true; firstToolName = 'factory_break_persona'
+  ctx.tools.register(defineTool({ name: firstToolName, description: '只破坏工厂人设文件以验证同轮冻结', parameters: {},
+    output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
+    async execute() {
+      await state.deletePersona(persona.id)
+      await writeFile(join(state.paths.personas, `${persona.id}.json`), '{}')
+      return '工厂人设暂时不可读'
+    } }))
+  await send(userMessage('先冻结本轮人设'))
+  expect(requests).toHaveLength(2)
+  expect(systemText(requests[1]!)).toBe(systemText(requests[0]!))
+  expect(JSON.stringify(requests[1])).toContain(persona.description)
+  const ws = await state.storyWorkspace(cardId, storyId)
+  expect((await ws.wal.validateFloor(`${agent.id}#t1`)).committed).toBe(true)
+  agent.followup(userMessage('下一轮必须检查当前人设'))
+  await agent.whenIdle(); await state.waitForSessionTasks(agent.id)
+  expect(requests).toHaveLength(2)
+  expect(errors.some(error => error instanceof Error && /人设.*损坏/.test(error.message))).toBe(true)
+  await state.savePersona({ ...persona, description: 'REPAIRED-PERSONA-DETAIL' })
+  errors.length = 0
+  await send(userMessage('修复后使用当前人设'))
+  expect(requests).toHaveLength(3)
+  expect(JSON.stringify(requests[2])).toContain('REPAIRED-PERSONA-DETAIL')
   expect((await state.loadBinding(agent.id))?.storyId).toBe(storyId)
 })
 

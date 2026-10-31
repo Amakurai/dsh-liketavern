@@ -193,7 +193,7 @@ export async function loadBoundLoreEntries(
 /** 组装一次 Tavern 提示词。绑定缺失或角色不存在时返回 null。 */
 export async function runTavernPipeline(input: PipelineInput): Promise<PipelineResult | null> {
   await input.state.waitForSessionTasks(input.sessionId)
-  const binding = await input.state.loadBinding(input.sessionId)
+  const binding = await input.state.loadStoryBinding(input.sessionId)
   if (!binding) return null
   const ws = await input.state.storyWorkspace(binding.cardId, binding.storyId)
   return withWorkspaceLock(ws.fs.root, () => runTavernPipelineLocked(input, binding))
@@ -202,7 +202,7 @@ export async function runTavernPipeline(input: PipelineInput): Promise<PipelineR
 async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId: string; storyId?: string }): Promise<PipelineResult | null> {
   const { state, sessionId } = input
   // turn/start 的监听器异步开 WAL；提示词/工具热路径必须等它完成后才能产生工作区写入。
-  const binding = await state.loadBinding(sessionId)
+  const binding = await state.loadStoryBinding(sessionId)
   if (!binding) return null
   if (binding.cardId !== expected.cardId || binding.storyId !== expected.storyId) throw new Error('组装排队期间剧情绑定已变化')
   const activeTurn = state.currentTurns.get(sessionId)
@@ -486,7 +486,7 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
   // 先冻结待提交闭包，但不发布 turnPlans。提交报错后保留绝对快照，重试不再运行第三方代码。
   const publish = (): Promise<PipelineResult> => withWorkspaceLock(ws.fs.root,async()=> {
     if (writable) {
-      const latestBinding = await state.loadBinding(sessionId)
+      const latestBinding = await state.loadStoryBinding(sessionId)
       const latestFloor = state.openFloors.get(sessionId)
       if (latestBinding?.cardId !== binding.cardId || latestBinding?.storyId !== binding.storyId
         || latestFloor?.floor !== entry.floor || latestFloor.cardId !== binding.cardId || latestFloor.storyId !== binding.storyId

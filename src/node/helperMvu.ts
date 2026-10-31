@@ -160,7 +160,7 @@ async function resolveTurnFloor(ws:{wal:import('../state/wal.js').Wal},binding:S
 }
 async function queue(state:TavernState,sessionId:string,session:Snapshot,live:boolean,recovery?:{floor:string;turn:number}):Promise<void>{
   if(session.id!==sessionId)throw new Error('自动 MVU 结束来源与会话不一致')
-  const binding=await state.loadBinding(sessionId)
+  const binding=await state.loadStoryBinding(sessionId)
   if(!enabled(state,binding))return
   const events=session.snapshotEvents(),boundary=[...events].reverse().find((event):event is SessionEvent<'turn/start'|'turn/end'>=>recovery?event.type==='turn/end'&&event.data.turn===recovery.turn:event.type==='turn/start'||event.type==='turn/end')
   if(!boundary||!live&&(boundary.type!=='turn/end'||boundary.data.reason.kind!=='completed'))return
@@ -171,7 +171,7 @@ async function queue(state:TavernState,sessionId:string,session:Snapshot,live:bo
   if(!items.length)return
   const ws=await state.storyWorkspace(binding!.cardId,binding!.storyId)
   await withWorkspaceLock(ws.fs.root,()=>withWorkspaceLock(state.paths.sessions,async()=>{
-    const current=await state.loadBinding(sessionId)
+    const current=await state.loadStoryBinding(sessionId)
     if(!enabled(state,current)||hash(current)!==hash(binding))throw new Error('自动 MVU 登记期间剧情绑定已改变')
     const saved=await loadHelperState(ws.fs),mvu=parseHelperMvuState(saved.mvu),floor=recovery?.floor??open?.floor??sessionId+'#t'+turn
     const selected=mvu.initialized?items:items.slice(-1);let added=false
@@ -193,7 +193,7 @@ async function queue(state:TavernState,sessionId:string,session:Snapshot,live:bo
 export const queueHelperMvuTurn=(state:TavernState,sessionId:string,session:Snapshot):Promise<void>=>queue(state,sessionId,session,false)
 export const queueHelperMvuStop=(state:TavernState,sessionId:string,session:Snapshot):Promise<void>=>queue(state,sessionId,session,true)
 export async function helperMvuPending(state:TavernState,sessionId:string,includeInitialization=true):Promise<boolean>{
-  const binding=await state.loadBinding(sessionId)
+  const binding=await state.loadStoryBinding(sessionId)
   if(!enabled(state,binding))return false
   const ws=await state.storyWorkspace(binding!.cardId,binding!.storyId)
   return withWorkspaceLock(ws.fs.root,async()=>{const mvu=parseHelperMvuState((await loadHelperState(ws.fs)).mvu);return includeInitialization&&!mvu.initialized||mvu.pending.length>0||await unfinalizedReceipt(state,binding!,sessionId,mvu)||await unregisteredFloor(state,binding!,sessionId,mvu)})

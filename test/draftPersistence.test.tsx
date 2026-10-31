@@ -35,8 +35,8 @@ function snapshot(text: string, baseline = 'base') {
   return { version: 1, fields: { 'test:text': text, 'test:baseline': baseline } }
 }
 
-function environment() {
-  const scope = `test-editor-${++sequence}`
+function environment(sharedScope?: string) {
+  const scope = sharedScope ?? `test-editor-${++sequence}`
   const storage = new Map<string, Stored>()
   const storageKey = (request: { owner: string; key: string }) => `${request.owner}:${request.key}`
   const write = async (request: TavernMethodRequests['saveEditorDraft']): Promise<Envelope<TavernMethodResults['saveEditorDraft']>> => {
@@ -116,6 +116,77 @@ afterEach(async () => {
 })
 
 describe('编辑草稿持久化', () => {
+  it('切换宿主立即隔离旧草稿，读取完成后只展示新宿主快照，保存也不串写', async () => {
+    const oldHost = environment(), newHost = environment(oldHost.scope), delayed = Promise.withResolvers<Awaited<ReturnType<TavernRemote['getEditorDraft']>>>()
+    oldHost.seed('旧宿主私有草稿')
+    newHost.get.mockImplementationOnce(() => delayed.promise)
+    const view = await render(oldHost)
+    expect(view.root.findByType('input').props.value).toBe('旧宿主私有草稿')
+    await act(async () => view.update(<Harness api={newHost.api} scope={newHost.scope}/>))
+    expect(view.root.findAllByType('input')).toHaveLength(0)
+    await act(async () => { delayed.resolve(ok({ draft: { value: snapshot('新宿主独立草稿'), updatedAt: new Date(0).toISOString() } })) })
+    expect(view.root.findByType('input').props.value).toBe('新宿主独立草稿')
+    await change(view, '只保存到新宿主')
+    await advance()
+    expect(newHost.stored()).toEqual(snapshot('只保存到新宿主'))
+    expect(oldHost.stored()).toEqual(snapshot('旧宿主私有草稿'))
+  })
+
+  it('相同 owner 与 scope 在另一宿主有悬挂写入时，仍能独立加载和保存', async () => {
+    const oldHost = environment(), newHost = environment(oldHost.scope), gate = Promise.withResolvers<void>()
+    // 生产 scope 是固定的 panel 等标识，不随宿主改变。
+    const scope = oldHost.scope
+    oldHost.save.mockImplementationOnce(async request => { await gate.promise; return oldHost.write(request) })
+    const view = await render(oldHost)
+    await change(view, '旧宿主正在保存')
+    await advance()
+    expect(oldHost.save).toHaveBeenCalledOnce()
+    try {
+      await act(async () => view.update(<Harness api={newHost.api} scope={scope}/>))
+      expect(newHost.get).toHaveBeenCalledOnce()
+      expect(view.root.findByType('input').props.value).toBe('base')
+      await change(view, '新宿主的正文')
+      await advance()
+      expect(newHost.save).toHaveBeenCalledWith({ owner, key: scope, value: snapshot('新宿主的正文') })
+    } finally { await act(async () => gate.resolve()) }
+    expect(view.root.findByType('input').props.value).toBe('新宿主的正文')
+  })
+
+  it.each([false, true])('嵌套编辑器只复用同一宿主的草稿范围，不同宿主：%s', async separateHost => {
+    const parent = environment(), child = separateHost ? environment() : parent
+    const childScope = separateHost ? child.scope : `${parent.scope}:nested`
+    parent.seed('父宿主草稿')
+    if (separateHost) child.seed('子宿主草稿')
+    let view!: ReactTestRenderer
+    await act(async () => { view = create(<PersistentEditor remote={parent.api} scope={parent.scope}>
+      <PersistentEditor remote={child.api} scope={childScope}><Editor leave={() => {}}/></PersistentEditor>
+    </PersistentEditor>) })
+    mounted.push(view)
+    expect(child.get).toHaveBeenCalledOnce()
+    expect(view.root.findByType('input').props.value).toBe(separateHost ? '子宿主草稿' : '父宿主草稿')
+    await change(view, '保存子编辑器')
+    await advance()
+    expect(child.stored()).toEqual(snapshot('保存子编辑器'))
+    if (separateHost) expect(parent.stored()).toEqual(snapshot('父宿主草稿'))
+  })
+
+  it.each([false, true])('旧宿主读取迟到不会覆盖新宿主界面与保存目标，旧读取失败：%s', async failed => {
+    const oldHost = environment(), newHost = environment(oldHost.scope)
+    const delayed = Promise.withResolvers<Awaited<ReturnType<TavernRemote['getEditorDraft']>>>()
+    oldHost.get.mockImplementationOnce(() => delayed.promise)
+    const view = await render(oldHost)
+    await act(async () => view.update(<Harness api={newHost.api} scope={newHost.scope}/>))
+    expect(newHost.get).toHaveBeenCalledOnce()
+    await change(view, '新宿主已编辑')
+    await act(async () => { delayed.resolve(failed ? fail('旧宿主读取故障')
+      : ok({ draft: { value: snapshot('迟到的旧宿主私有内容'), updatedAt: new Date(0).toISOString() } })) })
+    await advance()
+    expect(view.root.findByType('input').props.value).toBe('新宿主已编辑')
+    expect(newHost.stored()).toEqual(snapshot('新宿主已编辑'))
+    expect(oldHost.save).not.toHaveBeenCalled()
+    expect(view.root.findAllByProps({ role: 'alert' })).toHaveLength(0)
+  })
+
   it.each([false, true])('子编辑器延迟加载时暂存保留尚未消费的恢复字段，父编辑已保存：%s', async savedParent => {
     const env = environment()
     const fields = { ...snapshot('恢复的父草稿').fields, 'lazy:text': '尚未加载的子草稿', 'lazy:baseline': 'base' }

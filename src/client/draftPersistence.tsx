@@ -11,6 +11,7 @@ type Snapshot = { version: 1; fields: Fields }
 type Status = { dirty: boolean; busy: boolean }
 type WriteState = 'idle' | 'restored' | 'saving' | 'saved' | 'error'
 interface DraftRegistry {
+  remote: TavernRemote
   restored: Fields
   field(key: string, token: object, value: unknown): void
   remove(key: string, token: object): void
@@ -18,8 +19,16 @@ interface DraftRegistry {
   discard(id?: string): void
 }
 const PersistenceContext = createContext<DraftRegistry | null>(null)
-const queues = new Map<string, Promise<unknown>>()
+const remotes = new WeakMap<TavernRemote, { id: number; queues: Map<string, Promise<unknown>> }>()
+let remoteSequence = 0
 let fallbackOwner: string | undefined
+
+/** remote 决定宿主身份；相同浏览器标识与面板名不能让不同宿主共享快照或飞行请求。 */
+function draftRemote(remote: TavernRemote) {
+  let value = remotes.get(remote)
+  if (!value) { value = { id: ++remoteSequence, queues: new Map() }; remotes.set(remote, value) }
+  return value
+}
 
 function ownerId(): string {
   try {
@@ -36,7 +45,8 @@ function ownerId(): string {
 }
 
 /** 同一页面在关闭后立即重开，先完成上一实例的写入，再读取草稿。 */
-function enqueue<T>(key: string, operation: () => Promise<T>): Promise<T> {
+function enqueue<T>(remote: TavernRemote, key: string, operation: () => Promise<T>): Promise<T> {
+  const queues = draftRemote(remote).queues
   const previous = queues.get(key) ?? Promise.resolve()
   const next = previous.catch(() => {}).then(operation)
   queues.set(key, next)
@@ -54,9 +64,10 @@ function readSnapshot(value: unknown): Snapshot {
 /** 分区独立入口可复用；设置面板内的分区共用父级快照，保留页签与所选角色/剧情。 */
 export function PersistentEditor(props: { remote?: TavernRemote; scope: string; children: ReactNode }) {
   const parent = useContext(PersistenceContext)
+  if (parent && (!props.remote || parent.remote === props.remote)) return <>{props.children}</>
   // 未安装 remote 的隔离渲染环境仍保留普通编辑能力。
-  if (parent || !props.remote?.getEditorDraft) return <>{props.children}</>
-  return <DraftLoader key={props.scope} remote={props.remote} scope={props.scope}>{props.children}</DraftLoader>
+  if (!props.remote?.getEditorDraft) return <PersistenceContext.Provider value={null}>{props.children}</PersistenceContext.Provider>
+  return <DraftLoader key={JSON.stringify([draftRemote(props.remote).id, props.scope])} remote={props.remote} scope={props.scope}>{props.children}</DraftLoader>
 }
 
 function DraftLoader(props: { remote: TavernRemote; scope: string; children: ReactNode }) {
@@ -69,7 +80,7 @@ function DraftLoader(props: { remote: TavernRemote; scope: string; children: Rea
   useEffect(() => {
     let cancelled = false
     setError(null)
-    void enqueue(queueKey, () => props.remote.getEditorDraft({ owner, key: props.scope })).then((result) => {
+    void enqueue(props.remote, queueKey, () => props.remote.getEditorDraft({ owner, key: props.scope })).then((result) => {
       if (cancelled) return
       if (!result.ok) throw new Error(result.error.message)
       setLoaded({ snapshot: result.value.draft ? readSnapshot(result.value.draft.value) : null })
@@ -117,7 +128,7 @@ function DraftSession(props: { remote: TavernRemote; scope: string; owner: strin
       const current = ++revision
       pendingWrites++
       if (mounted) { setWriteState('saving'); setError(null) }
-      void enqueue(queueKey, async () => {
+      void enqueue(props.remote, queueKey, async () => {
         const result = snapshot
           ? await props.remote.saveEditorDraft({ owner: props.owner, key: props.scope, value: snapshot })
           : await props.remote.deleteEditorDraft({ owner: props.owner, key: props.scope })
@@ -134,6 +145,7 @@ function DraftSession(props: { remote: TavernRemote; scope: string; owner: strin
       timer = setTimeout(() => { capture(); flush() }, 500)
     }
     const registry: DraftRegistry = {
+      remote: props.remote,
       restored,
       field(key, token, value) {
         fields.set(key, { token, value })

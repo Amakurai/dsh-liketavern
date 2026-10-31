@@ -7,6 +7,7 @@ export interface DraftRecoveryRecord {
 export declare class DraftRecoveryChannel {
     readonly holders: Set<object>;
     readonly weak: WeakRef<this>;
+    generation: number;
     pending: DraftRecoveryRecord | undefined;
 }
 export declare class DraftRecoveryTooLargeError extends Error {

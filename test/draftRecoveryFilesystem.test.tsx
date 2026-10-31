@@ -1,4 +1,4 @@
-/** 草稿恢复的真实文件故障集成：React 编辑器经 TavernService 与磁盘交互，原子替换失败后重开保留本页正文，重试确认后才更新宿主。 */
+/** 草稿恢复的真实文件故障与并发集成：React 编辑器经 TavernService 与磁盘交互，失败重开保留正文，迟到旧读取不能覆盖已确认的新文件。 */
 import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -106,4 +106,37 @@ it.each([false, true])('磁盘连续写入失败后恢复最新正文，明确�
   await act(async () => { retry.props.onClick(); await drain() })
   expect((await service.getEditorDraft({ owner, key: scope })).draft?.value).toEqual(snapshot('真实磁盘失败后的最新正文'))
   expect(JSON.stringify(view!.toJSON())).not.toContain('工厂暂存磁盘故障')
+})
+
+it('真实宿主确认新草稿后，旧文件的迟到读取重新获取最新磁盘内容，不反向覆盖', async () => {
+  await service.saveEditorDraft({ owner, key: scope, value: snapshot('真实磁盘中的旧草稿') })
+  const release = Promise.withResolvers<void>(), firstWrite = Promise.withResolvers<void>()
+  let readCount = 0
+  const api = { getEditorDraft: (request: TavernMethodRequests['getEditorDraft']) => {
+    const response = invoke(() => service.getEditorDraft(request))
+    return ++readCount === 2 ? response.then(async value => { await release.promise; return value }) : response
+  }, saveEditorDraft: (request: TavernMethodRequests['saveEditorDraft']) => {
+    firstWrite.resolve()
+    return invoke(() => service.saveEditorDraft(request))
+  }, deleteEditorDraft: (request: TavernMethodRequests['deleteEditorDraft']) => invoke(() => service.deleteEditorDraft(request)) } as unknown as TavernRemote
+  const render = (second: boolean) => <>
+    <PersistentEditor key="first" remote={api} scope={scope}><Editor /></PersistentEditor>
+    {second && <PersistentEditor key="second" remote={api} scope={scope}><Editor /></PersistentEditor>}
+  </>
+  try {
+    await act(async () => { view = create(render(false)); await drain() })
+    await act(async () => { view!.update(render(true)); await drain() })
+    expect(readCount).toBe(2)
+    await act(async () => view!.root.findByType('input').props.onChange({ target: { value: '真实磁盘中刚确认的新草稿' } }))
+    await act(async () => { await firstWrite.promise; await drain() })
+    expect((await service.getEditorDraft({ owner, key: scope })).draft?.value).toEqual(snapshot('真实磁盘中刚确认的新草稿'))
+    await act(async () => { release.resolve(); await drain() })
+    expect(readCount).toBe(3)
+    const editors = view!.root.findAllByType('input')
+    expect(editors).toHaveLength(2)
+    expect(editors.map(editor => editor.props.value)).toEqual(['真实磁盘中刚确认的新草稿', '真实磁盘中刚确认的新草稿'])
+    expect((await service.getEditorDraft({ owner, key: scope })).draft?.value).toEqual(snapshot('真实磁盘中刚确认的新草稿'))
+  } finally {
+    release.resolve()
+  }
 })

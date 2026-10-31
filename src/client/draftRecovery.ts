@@ -10,6 +10,7 @@ export interface DraftRecoveryRecord {
 export class DraftRecoveryChannel {
   readonly holders = new Set<object>()
   readonly weak = new WeakRef(this)
+  generation = 0
   pending: DraftRecoveryRecord | undefined
 }
 export class DraftRecoveryTooLargeError extends Error {}
@@ -79,6 +80,7 @@ function fits(serialized: string): boolean {
 export function stageDraftRecovery(channel: DraftRecoveryChannel, serialized: string): DraftRecoveryRecord {
   if (!fits(serialized)) throw new DraftRecoveryTooLargeError()
   const record: DraftRecoveryRecord = { serialized }
+  channel.generation++
   channel.pending = record
   syncUnload()
   return record
@@ -89,6 +91,7 @@ export function failDraftRecovery(channel: DraftRecoveryChannel, record: DraftRe
 /** 超限或无法编码时只保留上一份有界快照并明确标记失败，不能将旧内容伪装为最新恢复。 */
 export function unavailableDraftRecovery(channel: DraftRecoveryChannel, message: string, fallback?: string): void {
   const previous = channel.pending?.serialized ?? fallback
+  channel.generation++
   channel.pending = { unavailable: true, error: message.slice(0, 2000), serialized: previous !== undefined && fits(previous) ? previous : undefined }
   syncUnload()
 }
@@ -101,6 +104,7 @@ export function confirmDraftRecovery(remote: object, key: string, channel: Draft
 /** 确认只作用于仍在显示的失败标记；别的编辑器提交了更新快照时，旧确认不能清掉它。 */
 export function restorePreviousDraftRecovery(remote: object, key: string, channel: DraftRecoveryChannel, record: DraftRecoveryRecord): void {
   if (channel.pending !== record) return
+  channel.generation++
   channel.pending = record.serialized === undefined ? undefined : { serialized: record.serialized }
   dropIdle(remote, key, channel)
   syncUnload()

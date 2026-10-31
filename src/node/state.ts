@@ -531,9 +531,9 @@ export class TavernState {
     const fs = await this.rootFs()
     return withWorkspaceLock(fs.root, async () => {
       const clean = this.assetFileId(base.trim() || 'embedded-book')
-      const id = await this.probeAvailableAssetId(clean, candidate => fs.exists(`library/lorebooks/${candidate}.json`))
+      const id = await this.probeAvailableAssetId(clean, candidate => fs.exists(`library/lorebooks/${candidate}.json`), await this.assetFileIds(fs, 'library/lorebooks'))
       const path = `library/lorebooks/${id}.json`
-      // 时间戳兜底也必须确认空闲；抢救失败可重试，但绝不能覆盖已有正文。
+      // 写入前再次确认占位；抢救失败可重试，但绝不能覆盖已有正文。
       if (await fs.exists(path)) throw new Error('抢救世界书没有可用的空闲文件名，请保留角色并重试')
       const content = stringField(json, 'name') === null && json !== null && typeof json === 'object' && !Array.isArray(json)
         ? { ...(json as Record<string, unknown>), name: id } : json
@@ -543,14 +543,13 @@ export class TavernState {
     })
   }
 
-  /** 占用探测：base 被占用时顺次试 -2/-3…（至多 99），再不行退回时间戳后缀。 */
-  private async probeAvailableAssetId(base: string, taken: (id: string) => Promise<boolean>): Promise<string> {
-    if (!(await taken(base))) return base
-    for (let i = 2; i < 100; i++) {
-      const candidate = `${base}-${i}`
-      if (!(await taken(candidate))) return candidate
+  /** 资产锁内按目录占位选择数字后缀，跳过已有文件后复核候选；不依赖时钟，也不重复读取占位正文。 */
+  private async probeAvailableAssetId(base: string, taken: (id: string) => Promise<boolean>, occupiedIds: readonly string[]): Promise<string> {
+    const occupied = new Set(occupiedIds.map(id => this.assetFileKey(id)))
+    for (let suffix = 1; ; suffix++) {
+      const candidate = suffix === 1 ? base : `${base}-${suffix}`
+      if (!occupied.has(this.assetFileKey(candidate)) && !(await taken(candidate))) return candidate
     }
-    return `${base}-${Date.now()}`
   }
 
   /**
@@ -570,7 +569,8 @@ export class TavernState {
     const base = this.assetFileId(name)
     const baseKey = this.assetFileKey(base)
     const matches: string[] = []
-    for (const candidate of await this.assetFileIds(fs, dir)) {
+    const ids = await this.assetFileIds(fs, dir)
+    for (const candidate of ids) {
       const key = this.assetFileKey(candidate)
       if (key !== baseKey && !(key.startsWith(`${baseKey}-`) && /^\d+$/.test(key.slice(baseKey.length + 1)))) continue
       const raw = await fs.readText(`${dir}/${candidate}.json`)
@@ -590,7 +590,7 @@ export class TavernState {
     }
     if (matches.length > 1) throw new Error('资产身份对应多个文件，请按实际文件 ID 打开后保存')
     if (matches.length === 1) return matches[0]!
-    return this.probeAvailableAssetId(base, async candidate => await fs.readText(`${dir}/${candidate}.json`) !== null)
+    return this.probeAvailableAssetId(base, async candidate => await fs.readText(`${dir}/${candidate}.json`) !== null, ids)
   }
 
   private async resolveExistingAssetId(fs: WorkspaceFs, dir: string, name: string): Promise<string | null> {

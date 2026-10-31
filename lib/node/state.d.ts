@@ -230,7 +230,7 @@ export declare class TavernState {
     }>;
     /** 抢救的分配与写入共用资产锁；按实际路径探测占位，不复用同身份旧后缀或 Windows 别名。 */
     private salvageLorebook;
-    /** 占用探测：base 被占用时顺次试 -2/-3…（至多 99），再不行退回时间戳后缀。 */
+    /** 资产锁内按目录占位选择数字后缀，跳过已有文件后复核候选；不依赖时钟，也不重复读取占位正文。 */
     private probeAvailableAssetId;
     /**
      * assetFileId 多对一净化的冲突检测（问题5修复）：不同显示名可能净化成同一文件 id

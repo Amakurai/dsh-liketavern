@@ -153,7 +153,8 @@ export const Config = z.object({
 /** 业务服务只读当前值并通过宿主表单写入，不保留失效的旧 SettingsScope。 */
 export interface TavernSettingsScope {
   get(): TavernConfigRaw
-  update(patch: object): Promise<void>
+  revision(): number
+  update(patch: object, expectedRevision?: number): Promise<void>
 }
 
 /** 全局卡级覆盖偏好；当前轮冻结计划不因设置保存而重算。 */

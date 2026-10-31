@@ -33,7 +33,13 @@ export class FileSettings {
     this.loader.builtins[ns] = plugin
     await this.loader.root.update([...this.loader.root.data, { id: ns, name: `cordis:${ns}`, config: { ...options.base, ...saved[ns] } }])
     await this.loader.await()
-    return { get: () => this.get(ns) as T, update: (patch: object) => this.forms.update(ns, patch) }
+    return { get: () => this.get(ns) as T,
+      revision: () => {
+        const descriptor = this.forms.describe().find(item => item.ns === ns)
+        if (!descriptor) throw new Error('测试设置命名空间不存在')
+        return descriptor.revision
+      },
+      update: (patch: object, expectedRevision?: number) => this.forms.update(ns, patch, expectedRevision) }
   }
   get(ns: string): unknown { return this.forms.describe().find(item => item.ns === ns)?.value }
   describe() { return this.forms.describe() }

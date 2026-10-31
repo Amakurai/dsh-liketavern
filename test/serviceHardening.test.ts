@@ -62,8 +62,10 @@ beforeEach(async () => {
   settingsRaw = (TavernConfigSchema as (input: unknown) => TavernConfigRaw)({})
   const settingsScope = {
     get: () => settingsRaw,
+    revision: () => 0,
     update: async (patch: object) => {
-      settingsRaw = { ...settingsRaw, ...(patch as Partial<TavernConfigRaw>) }
+      const values = patch as Partial<TavernConfigRaw>
+      settingsRaw = { ...settingsRaw, ...values, defaults: { ...settingsRaw.defaults, ...values.defaults } }
     },
   } as unknown as TavernSettingsScope
   sessions.clear()
@@ -584,6 +586,7 @@ describe('回显实际净化 id', () => {
     const persona = { id: 'saved-despite-default', name: '已保存', description: '不丢失正文', avatar: null }
     const failing = new TavernService({ reflect: { provide: () => {} } } as unknown as Context, state, {
       get: () => settingsRaw,
+      revision: () => 0,
       update: async () => { throw new Error('配置只读') },
     } as unknown as TavernSettingsScope)
     const result = await failing.savePersona({ persona, expectedRevision: null })

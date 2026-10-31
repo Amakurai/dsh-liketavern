@@ -149,7 +149,7 @@ it('真实 FS 与 TavernService 中重复保存只写一次宿主配置并保留
     const f = fixture(), profile = join(directory, 'profile.json'), gate = Promise.withResolvers<void>()
     await writeFile(profile, JSON.stringify(f.settings()), 'utf8')
     const update = vi.fn<TavernSettingsScope['update']>(async patch => { await writeFile(profile, JSON.stringify(f.apply(patch)), 'utf8') })
-    const scope: TavernSettingsScope = { get: () => f.settings(), update }
+    const scope: TavernSettingsScope = { get: () => f.settings(), revision: () => 0, update }
     const state = new TavernState({ root: directory, characters: join(directory, 'characters'), lorebooks: join(directory, 'lorebooks'),
       presets: join(directory, 'presets'), personas: join(directory, 'personas'), regexDir: join(directory, 'regex'), sessions: join(directory, 'sessions') }, () => resolveConfig(scope.get()))
     await state.init()

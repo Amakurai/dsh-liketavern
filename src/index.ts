@@ -31,7 +31,12 @@ export async function apply(ctx: Context, config: ReturnType<typeof Config>): Pr
   ctx.effect(() => ctx.settings.configure({ auto: false }), 'dsh-tavern settings')
   const scope = {
     get: () => TavernConfigSchema(Object.fromEntries(Object.entries(config).map(([key, value]) => [key, value.get()]))),
-    update: (patch: object) => ctx.settings.update(ns, patch),
+    revision: () => {
+      const descriptor = ctx.settings.describe().find(item => item.ns === ns)
+      if (!descriptor || !Number.isSafeInteger(descriptor.revision)) throw new Error('宿主未提供 Tavern 设置修订号')
+      return descriptor.revision
+    },
+    update: (patch: object, expectedRevision?: number) => ctx.settings.update(ns, patch, expectedRevision),
   }
   const state = new TavernState(tavernPaths(), () => resolveConfig(scope.get()), (message) => ctx.logger.warn(message))
   await state.init()

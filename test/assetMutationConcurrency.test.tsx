@@ -13,7 +13,8 @@ import { TavernService } from '../src/node/service.js'
 import { PersonasSection } from '../src/client/panel/personas.js'
 import { PresetsSection } from '../src/client/panel/presets.js'
 import { RegexSection } from '../src/client/panel/regex.js'
-import { Btn, ConfirmDialog, Field, IconBtn, Select } from '../src/client/util.js'
+import { TavernPanel } from '../src/client/panel/index.js'
+import { Btn, ConfirmDialog, Field, IconBtn, Select, Tabs } from '../src/client/util.js'
 import { setTavernLocale, t } from '../src/client/i18n.js'
 import type { TavernRemote } from '../src/client/types.js'
 
@@ -48,6 +49,7 @@ async function fixture() {
   await state.init()
   const service = new TavernService(ctx, state, scope)
   const remote = {
+    listCharacters: async () => ok(await service.listCharacters({})),
     listPersonas: vi.fn<TavernRemote['listPersonas']>(async request => ok(await service.listPersonas(request))),
     listLorebooks: async () => ok({ items: ['迟到的世界书'] }),
     savePersona: vi.fn<TavernRemote['savePersona']>(async request => ok(await service.savePersona(request))),
@@ -202,4 +204,27 @@ it('同毫秒新增的两条正则规则使用独立身份，保存后删除一�
   await act(async () => view.root.findAllByType(IconBtn).find(item => item.props.label === t('regex.deleteRule'))!.props.onClick())
   await act(async () => { button(view, t('regex.saveAll')).props.onClick(); await vi.mocked(f.remote.saveRegexRules).mock.results[1]!.value })
   expect((await f.service.listRegexRules({})).rules.map(rule => [rule.id, rule.find])).toEqual([[rules[1]!.id, 'source-1']])
+})
+
+it.each(['zh', 'en'] as const)('无脏草稿的后台操作也显示处理中反馈，完成后解除切页保护：%s', async locale => {
+  setTavernLocale(locale)
+  const f = await fixture(), gate = Promise.withResolvers<void>()
+  await f.state.savePersona({ id: 'port', name: '港口', description: '', avatar: null })
+  vi.mocked(f.remote.updateSettings).mockImplementationOnce(async request => { await gate.promise; return ok(await f.service.updateSettings(request)) })
+  const view = await render(<TavernPanel remote={f.remote}/>, false)
+  const tabs = () => view.root.findAllByType(Tabs).find(item => item.props.label === t('settings.label'))!
+  await act(async () => tabs().props.onChange('personas'))
+  await act(async () => { await vi.waitFor(() => expect(button(view, t('personas.setDefault'))).toBeDefined()) })
+  try {
+    await act(async () => button(view, t('personas.setDefault')).props.onClick())
+    const status = view.root.findAllByProps({ className: 'dsh-tavern-draftStatus' })
+    expect(status).toHaveLength(1)
+    expect(status[0]!.props.role).toBe('status')
+    expect(JSON.stringify(view.toJSON())).toContain(t('draft.working'))
+    await act(async () => tabs().props.onChange('characters'))
+    expect(tabs().props.value).toBe('personas')
+  } finally { await act(async () => { gate.resolve(); await vi.mocked(f.remote.updateSettings).mock.results[0]!.value }) }
+  expect(view.root.findAllByProps({ className: 'dsh-tavern-draftStatus' })).toHaveLength(0)
+  await act(async () => tabs().props.onChange('characters'))
+  expect(tabs().props.value).toBe('characters')
 })

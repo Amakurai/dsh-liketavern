@@ -59,7 +59,7 @@ function PanelContent(props: { remote: TavernRemote; sessions?: SessionsPort }) 
   }, [])
   return (
     <DraftScope>{(request, dirty, busy) => <div ref={panelRef} className="dsh-tavern-ui dsh-tavern-panel" style={{ width: '100%', maxWidth: '100%', fontSize: 14, boxSizing: 'border-box' }}>
-      {dirty && <div className="dsh-tavern-draftStatus" role="status"><Badge accent>{t(busy ? 'draft.saving' : 'draft.unsaved')}</Badge></div>}
+      {(dirty || busy) && <div className="dsh-tavern-draftStatus" role="status"><Badge accent>{t(busy ? 'draft.working' : 'draft.unsaved')}</Badge></div>}
       <Tabs
         id={tabsId} panelId={`${tabsId}-panel`} label={t('settings.label')}
         items={TABS.map((tab_) => ({ id: tab_.id, label: t(tab_.labelKey) }))}

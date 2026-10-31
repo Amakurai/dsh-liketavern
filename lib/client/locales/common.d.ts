@@ -9,6 +9,7 @@ export declare const zh: {
     readonly 'draft.leaveDesc': "离开后，这些修改将丢失。取消可返回继续编辑并保存。";
     readonly 'draft.discard': "放弃修改并离开";
     readonly 'draft.saving': "保存中…";
+    readonly 'draft.working': "正在处理，请稍候…";
     readonly 'draft.loadFailed': "未能读取编辑草稿。";
     readonly 'draft.restored': "已恢复上次编辑草稿，请检查后保存。";
     readonly 'draft.autosaving': "正在暂存草稿…";

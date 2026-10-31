@@ -103,6 +103,24 @@ async function send(text: string) {
   await agent.whenIdle(); await state.waitForSessionTasks(agent.id)
 }
 
+it('时钟回拨后真实请求刷新能力，部署从允许 high 改成只允许 off 时不沿用旧档位', async () => {
+  let now = 1_700_000_000_000, high = true
+  vi.spyOn(Date, 'now').mockImplementation(() => now)
+  vi.spyOn(state, 'config', 'get').mockReturnValue(resolveConfig({ sampling: { thinking: 'high' } }))
+  vi.spyOn(FactoryAdapter.prototype, 'resolveModel').mockImplementation(async (provider, model) => ({ provider, id: model, name: model,
+    inputModalities: ['text'], context: { contextWindow: high ? 64_000 : 32_000 },
+    reasoning: { efforts: high ? [{ id: 'off', name: '关闭' }, { id: 'high', name: '高' }] : [{ id: 'off', name: '关闭' }], defaultEffort: 'off' } }))
+  await send('先使用公布的 high 能力')
+  expect(errors).toEqual([])
+  expect(requests[0]?.reasoningEffort).toBe('high')
+  high = false; now -= 86_400_000
+  await send('回拨后使用当前部署能力')
+  expect(errors).toEqual([])
+  expect(requests).toHaveLength(2)
+  expect(requests[1]?.reasoningEffort).toBe('off')
+  expect((await state.loadBinding(agent.id))?.storyId).toBe(storyA)
+})
+
 it('真实请求在部署只允许 off 时覆盖旧 high，不因插件开启思考而发出不支持的档位', async () => {
   vi.spyOn(state, 'config', 'get').mockReturnValue(resolveConfig({ sampling: { thinking: 'enabled' } }))
   vi.spyOn(FactoryAdapter.prototype, 'resolveModel').mockResolvedValue({ provider: 'factory', id: 'factory', name: 'factory',

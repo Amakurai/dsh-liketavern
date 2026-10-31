@@ -408,7 +408,7 @@ export declare class TavernState {
     }): string[];
     /**
      * 模型元数据解析缓存：同 provider+model 复用一次解析结果（含 reasoning 档与上下文窗口），
-     * TTL 过期重解析（provider 配置热更后不再拿旧窗口）。失败不缓存（删掉条目让下次重试）；
+     * TTL 过期或时钟回拨后重解析（provider 配置热更后不再拿旧窗口）。失败不缓存（删掉条目让下次重试）；
      * signal 只作用于首次真实解析。
      */
     resolveModelInfoCached(llm: LlmRuntime, provider: string, model: string, signal?: AbortSignal): Promise<LlmResolvedModelInfo>;

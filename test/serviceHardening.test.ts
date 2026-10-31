@@ -147,6 +147,16 @@ function makeBinding(overrides: Partial<SessionBinding> = {}): SessionBinding {
   }
 }
 
+it.each(['inspectCharacter', 'importCharacter'] as const)('%s 在分配 PNG 上传缓冲前拒绝超过现有上限的 Base64，不产生资产', async method => {
+  const request = { name: 'large.PNG', dataBase64: 'A'.repeat(Math.ceil(32 * 1024 * 1024 / 3) * 4 + 4) }
+  const decode = vi.spyOn(Buffer, 'from')
+  try {
+    await expect(service[method](request)).rejects.toThrow(/32.*M/)
+    expect(decode.mock.calls.length).toBe(0)
+  } finally { decode.mockRestore() }
+  expect(await state.listCharacters()).toEqual([])
+})
+
 describe('角色卡局部保存', () => {
   it('只修改描述时保留其它字段，重新读取和导出仍得到完整角色卡', async () => {
     const original = makeCard({ name: '局部编辑', personality: '谨慎', firstMes: '初次见面',

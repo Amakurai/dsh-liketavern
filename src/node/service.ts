@@ -19,6 +19,7 @@ import type { TavernConfigRaw, TavernSettingsScope } from './config.js'
 import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import { estimateTokens } from '../core/tokenize.js'
 import { inspectCharacterCompatibility } from '../core/characterCompatibility.js'
+import { MAX_CARD_PNG_BASE64_CHARS, MAX_CARD_PNG_BYTES } from '../core/cardLimits.js'
 import { isolated } from './isolated.js'
 import { collectDisplayRegexDiagnostics } from './templateDisplay.js'
 import { hideIncompleteHtml, presentRenderedOutput, stripOpaqueDisplayMeta } from '../core/displaySanitize.js'
@@ -178,9 +179,17 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
     return { restored: true }
   }
 
+  /** 读取前端之外的调用也先守住 PNG 编码体积；不能等 Buffer 分配完成后才在解析器拒绝。 */
+  private decodeCharacterUpload(request: { name: string; dataBase64: string }): Buffer {
+    if (/\.png$/i.test(request.name) && request.dataBase64.length > MAX_CARD_PNG_BASE64_CHARS) {
+      throw new FloorError('invalid-card', `PNG 角色卡超过大小上限（${MAX_CARD_PNG_BYTES / 1024 / 1024}MiB）`)
+    }
+    return Buffer.from(request.dataBase64, 'base64')
+  }
+
   async inspectCharacter(request: { name: string; dataBase64: string }): Promise<TavernMethodResults['inspectCharacter']> {
     try {
-      const bytes = Buffer.from(request.dataBase64, 'base64')
+      const bytes = this.decodeCharacterUpload(request)
       const card = /\.png$/i.test(request.name)
         ? parsePngCard(bytes)
         : parseJsonCard(JSON.parse(new TextDecoder().decode(bytes)) as unknown)
@@ -200,7 +209,7 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
   }
 
   async importCharacter(request: { name: string; dataBase64: string; importWorldBook?: boolean }): Promise<TavernMethodResults['importCharacter']> {
-    const bytes = Buffer.from(request.dataBase64, 'base64')
+    const bytes = this.decodeCharacterUpload(request)
     const ws = await this.state.importCharacter(request.name, bytes, { importWorldBook: request.importWorldBook !== false })
     return { cardId: ws.cardId, name: ws.card.name }
   }

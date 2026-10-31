@@ -9,6 +9,7 @@
 import { Buffer } from 'node:buffer'
 import { inflateSync } from 'node:zlib'
 import { characterDataExtras, isKnownCharacterDataKey } from '../core/characterData.js'
+import { MAX_CARD_PNG_BYTES } from '../core/cardLimits.js'
 import { exportCharacterBook, isSpecCharacterBook, parseLorebook } from './lorebook.js'
 import type { CardRegexScript, CharacterCard, ChatRole, DepthPrompt, LorebookFile } from '../core/types.js'
 
@@ -24,11 +25,8 @@ export class CardParseError extends Error {
 const PNG_SIGNATURE = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
 
 // ---------------------------------------------------------------------------
-// 导入硬上限（常量只在本文件内部消化，不进公共契约）
+// 解析阶段的其余硬上限
 // ---------------------------------------------------------------------------
-
-/** PNG 卡文件字节数上限：头像图占体积大头，正常卡 <5MB，32MB 已远超合理范围。 */
-const MAX_CARD_PNG_BYTES = 32 * 1024 * 1024
 
 /** 卡 JSON 文本字符数上限（PNG 内嵌 base64 解码后与独立 JSON 卡共用）：纯文本字段，正常卡 <1MB。 */
 const MAX_CARD_JSON_CHARS = 8 * 1024 * 1024

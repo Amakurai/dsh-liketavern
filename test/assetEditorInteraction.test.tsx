@@ -324,6 +324,20 @@ describe('角色卡导入失败恢复', () => {
   const choose = (view: ReactTestRenderer, importBook: boolean) => dialog(view)!.findAllByType(Button).find(item =>
     item.props.children === t(importBook ? 'characters.importBook.import' : 'characters.importBook.skip'))!
 
+  it('超限 PNG 在读取和编码前拒绝，随后可选择正常文件进入预检且不落盘', async () => {
+    const f = await fixture(), view = await render(<CharactersSection remote={f.remote}/>)
+    // 只模拟浏览器提供的长度，不能为了验证前置拒绝而实际分配超大文件。
+    const oversized = new File([], 'large.PNG', { type: 'image/png' })
+    Object.defineProperty(oversized, 'size', { value: 32 * 1024 * 1024 + 1 })
+    await act(async () => view.root.findByType(FileBtn).props.onFile(oversized))
+    expect(fileToBase64).not.toHaveBeenCalled()
+    expect(f.remote.inspectCharacter).not.toHaveBeenCalled()
+    expect(view.root.findAllByType(Err).some(item => /32 MiB/.test(item.props.message ?? ''))).toBe(true)
+    await settle(() => view.root.findByType(FileBtn).props.onFile(file()), () => completed(f.remote.inspectCharacter))
+    expect(dialog(view)).toBeDefined()
+    expect(await f.state.listCharacters()).toEqual([])
+  })
+
   it.each([true, false])('导入失败后原地重试，沿用文件并尊重内嵌书选择：%s', async importBook => {
     const f = await fixture(), pending = deferred<Envelope<Awaited<ReturnType<TavernService['importCharacter']>>>>()
     vi.mocked(f.remote.importCharacter).mockImplementationOnce(() => importBook ? pending.promise : Promise.reject(new Error('导入暂时失败')))

@@ -8,6 +8,7 @@ export declare const zh: {
     readonly 'characters.collection.archived': "收纳箱";
     readonly 'characters.what': "角色卡";
     readonly 'characters.importFile': "导入 PNG / JSON";
+    readonly 'characters.pngFileTooLarge': "PNG 角色卡超过 {limit} MiB 大小上限，请选择较小的文件。";
     readonly 'characters.newCard': "新建空白卡";
     readonly 'characters.searchLabel': "搜索角色卡";
     readonly 'characters.searchPlaceholder': "搜索角色名 / 标签 / 作者 / 内嵌书名";

@@ -55,6 +55,8 @@ export declare class TavernService extends TypertRemoteService implements Tavern
     restoreCharacter(request: {
         cardId: string;
     }): Promise<TavernMethodResults['restoreCharacter']>;
+    /** 读取前端之外的调用也先守住 PNG 编码体积；不能等 Buffer 分配完成后才在解析器拒绝。 */
+    private decodeCharacterUpload;
     inspectCharacter(request: {
         name: string;
         dataBase64: string;

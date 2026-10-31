@@ -7,6 +7,7 @@ import {cardVariableLabels} from '../cardVariableLabels.js'
 import { useDraftGuard } from '../drafts.js'
 import { buildCardSrcDoc } from '../../core/cardFrame.js'
 import { cardGreetingVariants } from '../../core/greetingLog.js'
+import { MAX_CARD_PNG_BYTES } from '../../core/cardLimits.js'
 import type { CharacterCompatibilityCode, CharacterCompatibilityStatus } from '../../core/characterCompatibility.js'
 import { CARD_VARIABLE_STYLES } from '../styles.js'
 import { PersistentEditor, useDraftRestored, useDraftState } from '../draftPersistence.js'
@@ -483,6 +484,9 @@ function CharactersSectionContent(props: { remote: TavernRemote }) {
     setBusy(true)
     setError(null)
     try {
+      if (/\.png$/i.test(file.name) && file.size > MAX_CARD_PNG_BYTES) {
+        throw new Error(t('characters.pngFileTooLarge', { limit: MAX_CARD_PNG_BYTES / 1024 / 1024 }))
+      }
       const dataBase64 = await fileToBase64(file)
       const inspected = await remote.inspectCharacter({ name: file.name, dataBase64 })
       if (!inspected.ok) {

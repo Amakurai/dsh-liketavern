@@ -8,7 +8,7 @@ import { useDraftState } from '../draftPersistence.js'
 import { useEffect, useRef, useState } from 'react'
 import { IconDownloadOutlineMedium, IconEditOutlineMedium, IconFolderOpenOutlineMedium, IconListPenOutlineMedium, IconTrashOutlineMedium } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { CardRegexScript, ChatRole, PresetEntry, PromptPreset } from '../../core/types.js'
-import { EMPTY_SESSION_DEFAULTS, type PresetSummary, type TavernRemote } from '../types.js'
+import type { PresetSummary, TavernRemote } from '../types.js'
 import { t as tBare, useT } from '../i18n.js'
 import { Badge, Btn, ConfirmDialog, Err, Field, FileBtn, IconBtn, Muted, NumInput, RegexScriptRow, SaveBar, SearchEmpty, SearchInput, Section, Select, Skeleton, Toggle, clickableProps, downloadJson, errOf, readJsonFile, runAsync, useLoader, useToast } from '../util.js'
 
@@ -237,13 +237,8 @@ export function PresetsSection(props: { remote: TavernRemote }) {
 
   const setAsDefault = async (id: string) => {
     await runAsync(setBusy, setError, async () => {
-      const current = await remote.getSettings({})
-      if (!current.ok) {
-        setError(current.error.message)
-        return
-      }
-      const defaults = { ...EMPTY_SESSION_DEFAULTS, ...current.value.settings.defaults, presetId: id }
-      const r = await remote.updateSettings({ patch: { defaults } })
+      // 只更新用户点选的默认预设，保留其它窗口刚保存的默认角色、人设和世界书。
+      const r = await remote.updateSettings({ patch: { defaults: { presetId: id } } })
       const err = errOf(r)
       if (err) setError(err)
       else toast.show(t('presets.setDefaultDone'))

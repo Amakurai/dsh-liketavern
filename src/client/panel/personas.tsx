@@ -8,7 +8,6 @@ import { useState } from 'react'
 import { IconEditOutlineMedium, IconTrashOutlineMedium, IconUserOutlineMedium } from '@deepseek-ai/dsh-client-ui-primitives'
 import { useT } from '../i18n.js'
 import type { Persona, TavernRemote } from '../types.js'
-import { EMPTY_SESSION_DEFAULTS } from '../types.js'
 import { Badge, Btn, ConfirmDialog, Err, Field, IconBtn, SaveBar, SearchEmpty, SearchInput, Section, Select, Skeleton, clickableProps, errOf, runAsync, useLoader, useToast } from '../util.js'
 
 /** 编辑器保留读取时的版本；旧版恢复草稿缺少版本时必须重新打开，不能借刷新结果授权覆盖。 */
@@ -79,13 +78,8 @@ export function PersonasSection(props: { remote: TavernRemote }) {
 
   const setAsDefault = async (id: string) => {
     await runAsync(setBusy, setError, async () => {
-      const current = await remote.getSettings({})
-      if (!current.ok) {
-        setError(current.error.message)
-        return
-      }
-      const defaults = { ...EMPTY_SESSION_DEFAULTS, ...current.value.settings.defaults, personaId: id }
-      const r = await remote.updateSettings({ patch: { defaults } })
+      // 宿主按字段合并；不能把旧默认快照中的角色、预设和世界书写回去。
+      const r = await remote.updateSettings({ patch: { defaults: { personaId: id } } })
       const err = errOf(r)
       if (err) setError(err)
       else toast.show(t('personas.defaultSet'))

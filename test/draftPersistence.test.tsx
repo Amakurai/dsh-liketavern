@@ -325,6 +325,73 @@ describe('编辑草稿持久化', () => {
     expect(env.save).toHaveBeenCalledTimes(2)
   })
 
+  it.each([false, true])('慢速暂存期间持续编辑只保留最新待写快照，关闭重开仍等待最新内容，首写失败：%s', async firstFailed => {
+    const env = environment(), gate = Promise.withResolvers<void>()
+    env.save.mockImplementationOnce(async request => {
+      await gate.promise
+      return firstFailed ? fail('旧快照写入失败') : env.write(request)
+    })
+    const view = await render(env)
+    await change(view, '首个正在写入的版本')
+    await advance()
+    try {
+      for (let index = 1; index <= 40; index++) {
+        await change(view, `最新正文 ${index}`)
+        await advance()
+      }
+      expect(env.save).toHaveBeenCalledOnce()
+      await action(view, 'host-close')
+      await action(view, 'host-open')
+      expect(env.get).toHaveBeenCalledOnce()
+      expect(view.root.findAllByType('input')).toHaveLength(0)
+    } finally { await act(async () => gate.resolve()) }
+    expect(env.save).toHaveBeenCalledTimes(2)
+    expect(env.get).toHaveBeenCalledTimes(2)
+    expect(view.root.findByType('input').props.value).toBe('最新正文 40')
+    expect(env.stored()).toEqual(snapshot('最新正文 40'))
+    expect(view.root.findAllByProps({ role: 'alert' })).toHaveLength(0)
+  })
+
+  it('暂存尚未返回时业务保存可以用删除替换待写旧草稿，立即重开不恢复已提交内容', async () => {
+    const env = environment(), gate = Promise.withResolvers<void>()
+    env.save.mockImplementationOnce(async request => { await gate.promise; return env.write(request) })
+    const view = await render(env)
+    await change(view, '正在暂存的正文')
+    await advance()
+    try {
+      await change(view, '已经提交的最终正文')
+      await advance()
+      await action(view, 'save-business')
+      await advance()
+      await action(view, 'host-close')
+      await action(view, 'host-open')
+    } finally { await act(async () => gate.resolve()) }
+    expect(env.save).toHaveBeenCalledOnce()
+    expect(env.remove).toHaveBeenCalledOnce()
+    expect(env.stored()).toBeNull()
+    expect(view.root.findByType('input').props.value).toBe('base')
+  })
+
+  it('合并后的最新暂存失败仍显示重试，重试只提交当前正文', async () => {
+    const env = environment(), gate = Promise.withResolvers<void>()
+    env.save.mockImplementationOnce(async request => { await gate.promise; return env.write(request) })
+      .mockImplementationOnce(async () => fail('最新草稿保存失败'))
+    const view = await render(env)
+    await change(view, '旧的正在写入版本')
+    await advance()
+    try {
+      for (const text of ['中间修改', '最终保留的正文']) { await change(view, text); await advance() }
+    } finally { await act(async () => gate.resolve()) }
+    expect(env.save).toHaveBeenCalledTimes(2)
+    expect(view.root.findByType('input').props.value).toBe('最终保留的正文')
+    expect(JSON.stringify(view.toJSON())).toContain('最新草稿保存失败')
+    const retry = view.root.findAllByType(Btn).find(button => button.props.children === '重试')!
+    await act(async () => retry.props.onClick())
+    expect(env.save).toHaveBeenCalledTimes(3)
+    expect(env.stored()).toEqual(snapshot('最终保留的正文'))
+    expect(JSON.stringify(view.toJSON())).not.toContain('最新草稿保存失败')
+  })
+
   it('嵌在面板快照里的脚本库编辑器按目标身份区分草稿，全局库的未保存脚本不会被当成另一张卡的草稿', async () => {
     const env = environment()
     const global = { target: { type: 'global' as const }, trees: [], revision: 'r-global' }

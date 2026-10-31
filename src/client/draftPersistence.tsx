@@ -9,6 +9,7 @@ import { remoteIdentity } from './remoteIdentity.js'
 
 type Fields = Record<string, unknown>
 type Snapshot = { version: 1; fields: Fields }
+type PendingWrite = { snapshot: Snapshot | null; serialized: string; revision: number }
 type Status = { dirty: boolean; busy: boolean }
 type WriteState = 'idle' | 'restored' | 'saving' | 'saved' | 'error'
 interface DraftRegistry {
@@ -106,7 +107,8 @@ function DraftSession(props: { remote: TavernRemote; scope: string; owner: strin
     let last: Snapshot | null | undefined = props.snapshot ?? undefined
     let revision = 0
     let persisted = JSON.stringify(last)
-    let pendingWrites = 0
+    let activeWrite: PendingWrite | undefined
+    let queuedWrite: PendingWrite | undefined
     const queueKey = `${props.owner}:${props.scope}`
     const capture = () => {
       const dirty = [...statuses.values()].some((s) => s.dirty)
@@ -123,21 +125,28 @@ function DraftSession(props: { remote: TavernRemote; scope: string; owner: strin
       timer = undefined
       if (last === undefined) return
       const serialized = JSON.stringify(last)
-      if (serialized === persisted && pendingWrites === 0) return
-      const snapshot = last
-      const current = ++revision
-      pendingWrites++
+      if (queuedWrite?.serialized === serialized || (!queuedWrite && activeWrite?.serialized === serialized)) return
+      if (!queuedWrite && !activeWrite && serialized === persisted) return
+      const latest: PendingWrite = { snapshot: last, serialized, revision: ++revision }
       if (mounted) { setWriteState('saving'); setError(null) }
+      // 等待中的任务始终占住原队列位置，关闭重开会在它之后读；慢请求期间只替换其快照，不积压每次编辑。
+      if (queuedWrite) { Object.assign(queuedWrite, latest); return }
+      const write = queuedWrite = latest
       void enqueue(props.remote, queueKey, async () => {
-        const result = snapshot
-          ? await props.remote.saveEditorDraft({ owner: props.owner, key: props.scope, value: snapshot })
-          : await props.remote.deleteEditorDraft({ owner: props.owner, key: props.scope })
-        if (!result.ok) throw new Error(result.error.message)
-        persisted = serialized
-        if (mounted && current === revision) setWriteState(snapshot ? 'saved' : 'idle')
+        queuedWrite = undefined
+        activeWrite = write
+        const { snapshot, serialized, revision: current } = write
+        try {
+          const result = snapshot
+            ? await props.remote.saveEditorDraft({ owner: props.owner, key: props.scope, value: snapshot })
+            : await props.remote.deleteEditorDraft({ owner: props.owner, key: props.scope })
+          if (!result.ok) throw new Error(result.error.message)
+          persisted = serialized
+          if (mounted && current === revision) setWriteState(snapshot ? 'saved' : 'idle')
+        } finally { if (activeWrite === write) activeWrite = undefined }
       }).catch((cause: unknown) => {
-        if (mounted && current === revision) { setWriteState('error'); setError(cause instanceof Error ? cause.message : String(cause)) }
-      }).finally(() => { pendingWrites-- })
+        if (mounted && write.revision === revision) { setWriteState('error'); setError(cause instanceof Error ? cause.message : String(cause)) }
+      })
     }
     const schedule = () => {
       if (!mounted) return

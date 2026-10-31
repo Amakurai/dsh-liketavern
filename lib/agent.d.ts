@@ -8,8 +8,8 @@
  *    standing 排在宿主 TOOLS_SDK 段之后：即使骨架仍有残余抖动，
  *    稳定的工具说明仍能命中 DeepSeek 前缀缓存。绝不把整包 ST 预设改成 complete 段。
  * 2. 在 agent/request waterfall 中合入采样参数（temperature/maxTokens/stop）
- *    与 thinking→reasoningEffort（只写模型公布的档位；模型元数据经
- *    state.resolveModelInfoCached 进程内缓存，每步调用不重复解析）。
+ *    与 thinking→reasoningEffort（每次请求读取当前公布的档位，不用预算缓存替代部署能力；
+ *    宿主随后仍在 prepareCall 中冻结并校验实际能力）。
  * 3. 注册七个 Tavern 模型工具；agent/status 转入 idle 时 runMaintenance
  *    执行记忆超容量压缩（memoryMaintenance.ts，不记 WAL）。
  */

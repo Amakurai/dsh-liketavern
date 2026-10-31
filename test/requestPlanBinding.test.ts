@@ -17,6 +17,7 @@ import { TavernService } from '../src/node/service.js'
 import { TavernState } from '../src/node/state.js'
 import { onTurnEnd, onTurnStart } from '../src/node/sessionLifecycle.js'
 import { registerPromptInputTracking } from '../src/node/pendingInputs.js'
+import { impersonate } from '../src/node/impersonate.js'
 import { sessionFile } from '../src/node/paths.js'
 import { defaultPreset } from '../src/core/assemble.js'
 
@@ -103,22 +104,78 @@ async function send(text: string) {
   await agent.whenIdle(); await state.waitForSessionTasks(agent.id)
 }
 
-it('时钟回拨后真实请求刷新能力，部署从允许 high 改成只允许 off 时不沿用旧档位', async () => {
-  let now = 1_700_000_000_000, high = true
-  vi.spyOn(Date, 'now').mockImplementation(() => now)
+function changingDeployment() {
+  let high = true
   vi.spyOn(state, 'config', 'get').mockReturnValue(resolveConfig({ sampling: { thinking: 'high' } }))
   vi.spyOn(FactoryAdapter.prototype, 'resolveModel').mockImplementation(async (provider, model) => ({ provider, id: model, name: model,
     inputModalities: ['text'], context: { contextWindow: high ? 64_000 : 32_000 },
     reasoning: { efforts: high ? [{ id: 'off', name: '关闭' }, { id: 'high', name: '高' }] : [{ id: 'off', name: '关闭' }], defaultEffort: 'off' } }))
+  return () => { high = false }
+}
+async function checkDeploymentRefresh(elapsed: number) {
+  let now = 1_700_000_000_000
+  vi.spyOn(Date, 'now').mockImplementation(() => now)
+  const disable = changingDeployment()
   await send('先使用公布的 high 能力')
   expect(errors).toEqual([])
   expect(requests[0]?.reasoningEffort).toBe('high')
-  high = false; now -= 86_400_000
-  await send('回拨后使用当前部署能力')
+  disable(); now += elapsed
+  await send('使用当前部署能力')
   expect(errors).toEqual([])
   expect(requests).toHaveLength(2)
   expect(requests[1]?.reasoningEffort).toBe('off')
   expect((await state.loadBinding(agent.id))?.storyId).toBe(storyA)
+}
+
+it('时钟回拨后真实请求刷新能力，部署从允许 high 改成只允许 off 时不沿用旧档位', async () => {
+  await checkDeploymentRefresh(-86_400_000)
+})
+
+it.each([0, 1, 299_999])('正常时钟经过 %s ms 后真实请求也读取当前部署档位，不能等五分钟缓存过期', async elapsed => {
+  await checkDeploymentRefresh(elapsed)
+})
+
+it.each([0, 1])('AI 代答在正常时钟经过 %s ms 后读取当前部署档位，不增加会话事件或楼层', async elapsed => {
+  let now = 1_700_000_000_000
+  vi.spyOn(Date, 'now').mockImplementation(() => now)
+  const disable = changingDeployment()
+  await send('先建立可用剧情和模型能力')
+  expect(errors).toEqual([])
+  expect(requests[0]?.reasoningEffort).toBe('high')
+  const events = agent.session.snapshotEvents(), ws = await state.storyWorkspace(cardA, storyA), floors = await ws.wal.listFloors()
+  disable(); now += elapsed
+  await expect(impersonate({ ctx, state }, agent.id)).resolves.toEqual({ text: '工厂正常回复' })
+  expect(requests).toHaveLength(2)
+  expect(requests[1]?.reasoningEffort).toBe('off')
+  expect(agent.session.snapshotEvents()).toEqual(events)
+  expect(await ws.wal.listFloors()).toEqual(floors)
+})
+
+it('AI 代答的能力查询取消后及时退出，不进入模型请求或追加会话事件', async () => {
+  await send('建立代答前的剧情')
+  expect(errors).toEqual([])
+  const events = agent.session.snapshotEvents(), controller = new AbortController(), failure = new Error('工厂代答能力查询取消')
+  const timeout = AbortSignal.timeout.bind(AbortSignal)
+  vi.spyOn(AbortSignal, 'timeout').mockImplementation(ms => ms === 60_000 ? controller.signal : timeout(ms))
+  const llm = ctx.get('llm') as LlmRuntime, resolve = llm.resolveModelInfo.bind(llm)
+  const entered = Promise.withResolvers<AbortSignal | undefined>()
+  vi.spyOn(llm, 'resolveModelInfo').mockImplementation(async (provider, model, signal) => {
+    entered.resolve(signal)
+    if (!signal) return resolve(provider, model)
+    signal.throwIfAborted()
+    return new Promise<LlmResolvedModelInfo>((_resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }))
+  })
+  const result = impersonate({ ctx, state }, agent.id).catch((error: unknown) => error)
+  try {
+    expect(await entered.promise).toBe(controller.signal)
+    controller.abort(failure)
+    expect(await result).toBe(failure)
+    expect(requests).toHaveLength(1)
+    expect(agent.session.snapshotEvents()).toEqual(events)
+  } finally {
+    controller.abort(failure)
+    await result
+  }
 })
 
 it('真实请求在部署只允许 off 时覆盖旧 high，不因插件开启思考而发出不支持的档位', async () => {
@@ -135,9 +192,9 @@ function changeDuring(stage: 'pre-step' | 'request' | 'reasoning', change: () =>
   let changed = false
   const mutate = async () => { if (!changed) { changed = true; await change() } }
   if (stage === 'reasoning') {
-    const resolve = state.resolveModelInfoCached.bind(state)
+    const llm = ctx.get('llm') as LlmRuntime, resolve = llm.resolveModelInfo.bind(llm)
     let calls = 0
-    vi.spyOn(state, 'resolveModelInfoCached').mockImplementation(async (...args) => {
+    vi.spyOn(llm, 'resolveModelInfo').mockImplementation(async (...args) => {
       if (++calls === 2) await mutate()
       return resolve(...args)
     })

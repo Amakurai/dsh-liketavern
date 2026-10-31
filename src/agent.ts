@@ -8,8 +8,8 @@
  *    standing 排在宿主 TOOLS_SDK 段之后：即使骨架仍有残余抖动，
  *    稳定的工具说明仍能命中 DeepSeek 前缀缓存。绝不把整包 ST 预设改成 complete 段。
  * 2. 在 agent/request waterfall 中合入采样参数（temperature/maxTokens/stop）
- *    与 thinking→reasoningEffort（只写模型公布的档位；模型元数据经
- *    state.resolveModelInfoCached 进程内缓存，每步调用不重复解析）。
+ *    与 thinking→reasoningEffort（每次请求读取当前公布的档位，不用预算缓存替代部署能力；
+ *    宿主随后仍在 prepareCall 中冻结并校验实际能力）。
  * 3. 注册七个 Tavern 模型工具；agent/status 转入 idle 时 runMaintenance
  *    执行记忆超容量压缩（memoryMaintenance.ts，不记 WAL）。
  */
@@ -72,7 +72,6 @@ function dropStaleTurnNotices<D extends { kind: 'enter'; messages: UserMessage[]
 
 /** 解析模型公布的 reasoning 档；无 llm 或解析失败一律返回 undefined，回退交给 resolveTavernReasoningEffort。 */
 async function resolveRequestReasoningEffort(
-  state: TavernState,
   llm: LlmRuntime | undefined,
   config: LlmCallConfig,
   sampling: SamplingSettings,
@@ -81,7 +80,7 @@ async function resolveRequestReasoningEffort(
   let reasoning: AdvertisedReasoningInfo | undefined
   if (llm) {
     try {
-      reasoning = (await state.resolveModelInfoCached(llm, config.provider, config.model, signal)).reasoning
+      reasoning = (await llm.resolveModelInfo(config.provider, config.model, signal)).reasoning
     } catch {
       // 解析失败不阻断采样合入
     }
@@ -225,7 +224,7 @@ export function apply(ctx: Context): void {
       || binding && !plan) throw new Error('请求计划与当前剧情绑定不一致，请在下一轮继续')
     if (!binding) return config.provider === PRESET_ADAPTER_PROVIDER ? { ...config, provider: PRESET_ADAPTER_SOURCE_PROVIDER } : config
     const sampling = plan!.result.sampling
-    const reasoningEffort = await resolveRequestReasoningEffort(state, llm, config, sampling, payload.signal)
+    const reasoningEffort = await resolveRequestReasoningEffort(llm, config, sampling, payload.signal)
     // 元数据解析也可能异步等待；最终采用请求配置前复读归属，不把等待期间解除/换绑漏过去。
     const latest = await state.loadStoryBinding(payload.agent.id), current = state.turnPlans.get(payload.agent.id)
     if (latest?.cardId !== plan!.cardId || latest.storyId !== plan!.storyId || current?.turn !== payload.turn

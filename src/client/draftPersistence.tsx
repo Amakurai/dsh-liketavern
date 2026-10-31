@@ -3,7 +3,7 @@ import { createContext, useCallback, useContext, useEffect, useLayoutEffect, use
 import type { Dispatch, ReactNode, SetStateAction } from 'react'
 import type { TavernRemote } from './types.js'
 import { useT } from './i18n.js'
-import { Btn, Err, Skeleton } from './util.js'
+import { Btn, Err, Skeleton, useLoader } from './util.js'
 import { randomUuid } from '../core/secureRandom.js'
 import { remoteIdentity } from './remoteIdentity.js'
 
@@ -45,7 +45,7 @@ function ownerId(): string {
   }
 }
 
-/** 同一页面在关闭后立即重开，先完成上一实例的写入，再读取草稿。 */
+/** 写入与删除跨编辑器实例串行，保留关闭后立即重开的最终写入顺序。 */
 function enqueue<T>(remote: TavernRemote, key: string, operation: () => Promise<T>): Promise<T> {
   const queues = draftRemote(remote).queues
   const previous = queues.get(key) ?? Promise.resolve()
@@ -53,6 +53,11 @@ function enqueue<T>(remote: TavernRemote, key: string, operation: () => Promise<
   queues.set(key, next)
   void next.finally(() => { if (queues.get(key) === next) queues.delete(key) }).catch(() => {})
   return next
+}
+
+/** 读取等待此前的写入，但不占写队列；已挂起的只读请求不能挡住超时后的重试。 */
+function readAfterWrites<T>(remote: TavernRemote, key: string, operation: () => Promise<T>): Promise<T> {
+  return (draftRemote(remote).queues.get(key) ?? Promise.resolve()).catch(() => {}).then(operation)
 }
 
 function readSnapshot(value: unknown): Snapshot {
@@ -74,23 +79,15 @@ export function PersistentEditor(props: { remote?: TavernRemote; scope: string; 
 function DraftLoader(props: { remote: TavernRemote; scope: string; children: ReactNode }) {
   const t = useT()
   const [owner] = useState(ownerId)
-  const [attempt, retry] = useState(0)
-  const [loaded, setLoaded] = useState<{ snapshot: Snapshot | null } | null>(null)
-  const [error, setError] = useState<string | null>(null)
   const queueKey = `${owner}:${props.scope}`
-  useEffect(() => {
-    let cancelled = false
-    setError(null)
-    void enqueue(props.remote, queueKey, () => props.remote.getEditorDraft({ owner, key: props.scope })).then((result) => {
-      if (cancelled) return
-      if (!result.ok) throw new Error(result.error.message)
-      setLoaded({ snapshot: result.value.draft ? readSnapshot(result.value.draft.value) : null })
-    }).catch((cause: unknown) => { if (!cancelled) setError(cause instanceof Error ? cause.message : String(cause)) })
-    return () => { cancelled = true }
-  }, [props.remote, props.scope, queueKey, owner, attempt])
-  if (error) return <div className="dsh-tavern-ui"><Err message={`${t('draft.loadFailed')} ${error}`} /><Btn onClick={() => retry((n) => n + 1)}>{t('action.retry')}</Btn></div>
-  if (!loaded) return <Skeleton />
-  return <DraftSession remote={props.remote} scope={props.scope} owner={owner} snapshot={loaded.snapshot}>{props.children}</DraftSession>
+  const loaded = useLoader(async () => {
+    const result = await readAfterWrites(props.remote, queueKey, () => props.remote.getEditorDraft({ owner, key: props.scope }))
+    if (!result.ok) return result
+    return { ok: true as const, value: { snapshot: result.value.draft ? readSnapshot(result.value.draft.value) : null } }
+  }, [props.remote, props.scope, owner])
+  if (loaded.state.status === 'error') return <div className="dsh-tavern-ui"><Err message={`${t('draft.loadFailed')} ${loaded.state.message}`} /><Btn onClick={loaded.reload}>{t('action.retry')}</Btn></div>
+  if (loaded.state.status !== 'ready') return <Skeleton />
+  return <DraftSession remote={props.remote} scope={props.scope} owner={owner} snapshot={loaded.state.value.snapshot}>{props.children}</DraftSession>
 }
 
 function DraftSession(props: { remote: TavernRemote; scope: string; owner: string; snapshot: Snapshot | null; children: ReactNode }) {

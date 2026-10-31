@@ -442,6 +442,64 @@ describe('编辑草稿持久化', () => {
     expect(env.stored()).toEqual(snapshot('读取恢复内容'))
   })
 
+  it.each([false, true])('悬挂的只读草稿请求超时后可独立重试，旧回包不覆盖新编辑，旧读取失败：%s', async failed => {
+    const env = environment(), delayed = Promise.withResolvers<Awaited<ReturnType<TavernRemote['getEditorDraft']>>>()
+    env.seed('服务器保留的正文')
+    env.get.mockImplementationOnce(() => delayed.promise)
+    const view = await render(env)
+    try {
+      await advance(20_001)
+      expect(view.root.findAllByType('input')).toHaveLength(0)
+      const retry = view.root.findAllByType(Btn).find(button => button.props.children === '重试')
+      expect(retry).toBeDefined()
+      await act(async () => retry!.props.onClick())
+      expect(env.get).toHaveBeenCalledTimes(2)
+      expect(view.root.findByType('input').props.value).toBe('服务器保留的正文')
+      await change(view, '重试后正在编辑')
+    } finally {
+      await act(async () => failed ? delayed.reject(new Error('旧读取连接中断'))
+        : delayed.resolve(ok({ draft: { value: snapshot('迟到的旧正文'), updatedAt: new Date(0).toISOString() } })))
+    }
+    expect(view.root.findByType('input').props.value).toBe('重试后正在编辑')
+    await advance()
+    expect(env.stored()).toEqual(snapshot('重试后正在编辑'))
+    expect(view.root.findAllByProps({ role: 'alert' })).toHaveLength(0)
+  })
+
+  it('重开等待保存超时后重试仍遵守写入屏障，只恢复最终待写正文', async () => {
+    const env = environment(), gate = Promise.withResolvers<void>()
+    env.save.mockImplementationOnce(async request => { await gate.promise; return env.write(request) })
+    const view = await render(env)
+    await change(view, '首个在途版本'); await advance()
+    try {
+      await change(view, '关闭前最终版本'); await advance()
+      await action(view, 'host-close'); await action(view, 'host-open')
+      await advance(20_001)
+      const retry = view.root.findAllByType(Btn).find(button => button.props.children === '重试')
+      expect(retry).toBeDefined()
+      await act(async () => retry!.props.onClick())
+      expect(env.get).toHaveBeenCalledOnce()
+      expect(view.root.findAllByType('input')).toHaveLength(0)
+    } finally { await act(async () => gate.resolve()) }
+    expect(view.root.findByType('input').props.value).toBe('关闭前最终版本')
+    expect(env.stored()).toEqual(snapshot('关闭前最终版本'))
+    expect(env.save).toHaveBeenCalledTimes(2)
+  })
+
+  it('读取超时后原请求正常返回也能自动恢复，不留下错误或写入空草稿', async () => {
+    const env = environment(), delayed = Promise.withResolvers<Awaited<ReturnType<TavernRemote['getEditorDraft']>>>()
+    env.get.mockImplementationOnce(() => delayed.promise)
+    const view = await render(env)
+    await advance(20_001)
+    expect(view.root.findAllByProps({ role: 'alert' })).toHaveLength(1)
+    await act(async () => delayed.resolve(ok({ draft: { value: snapshot('稍后恢复的正文'), updatedAt: new Date(0).toISOString() } })))
+    expect(view.root.findByType('input').props.value).toBe('稍后恢复的正文')
+    expect(view.root.findAllByProps({ role: 'alert' })).toHaveLength(0)
+    await advance()
+    expect(env.save).not.toHaveBeenCalled()
+    expect(env.remove).not.toHaveBeenCalled()
+  })
+
   it('父组件 useDraftState 控制条件子编辑器时，放弃并离开后立即关闭面板不会复活草稿', async () => {
     const env = environment()
     function ChildEditor(props: { onClose: () => void }) {

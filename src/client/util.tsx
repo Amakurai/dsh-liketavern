@@ -480,7 +480,8 @@ export function useToast() {
   const counter = useRef(0)
   const [item, setItem] = useState<{ key: number; text: string } | null>(null)
   const show = useCallback((text: string) => { counter.current += 1; setItem({ key: counter.current, text }) }, [])
-  const node = item ? <Toast key={item.key} text={item.text} onDone={() => setItem(null)} /> : null
+  // 宿主在普通 effect 清理计时器；旧回调若已进入事件队列，只能关闭当时的那条提示。
+  const node = item ? <Toast key={item.key} text={item.text} onDone={() => setItem(current => current?.key === item.key ? null : current)} /> : null
   return { show, node }
 }
 

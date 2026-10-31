@@ -70,7 +70,7 @@ function PresetSamplingSummary({ sampling, onChange }: { sampling: PromptPreset[
   </Field>
 }
 
-function EntryEditor(props: { entry: PresetEntry; onChange: (e: PresetEntry) => void; onDelete: () => void }) {
+function EntryEditor(props: { entry: PresetEntry; disabled: boolean; onChange: (e: PresetEntry) => void; onDelete: () => void }) {
   const { entry } = props
   const t = useT()
   const set = (patch: Partial<PresetEntry>) => props.onChange({ ...entry, ...patch })
@@ -81,6 +81,7 @@ function EntryEditor(props: { entry: PresetEntry; onChange: (e: PresetEntry) => 
         <input aria-label={t('presets.name')} className="dsh-tavern-input" style={{ width: 160 }} value={entry.name} placeholder={t('presets.name')} onChange={(e) => set({ name: e.target.value })} />
         <Select
           value={entry.role}
+          disabled={props.disabled}
           onChange={(v) => set({ role: v as ChatRole })}
           options={[
             { value: 'system', label: 'system' },
@@ -90,6 +91,7 @@ function EntryEditor(props: { entry: PresetEntry; onChange: (e: PresetEntry) => 
         />
         <Select
           value={entry.position}
+          disabled={props.disabled}
           onChange={(v) => set({ position: v as PresetEntry['position'] })}
           options={[
             { value: 'relative', label: 'relative' },
@@ -134,7 +136,7 @@ export function PresetsSection(props: { remote: TavernRemote }) {
   // identifier 保留导入原值，磁盘 id 可能经过净化或带冲突后缀；草稿同时保存实际资产身份。
   const [editingId, setEditingId] = useDraftState<string | null>('presets:editingId', null)
   const [revision, setRevision] = useDraftState<string | null>('presets:revision', null)
-  const saving = useRef(false)
+  const pending = useRef(false)
   /** 同批点选可能先于 busy 提交；只让最后的读取更新目标、正文、版本与等待状态。 */
   const openRequest = useRef(0)
   const opening = useRef(false)
@@ -144,6 +146,17 @@ export function PresetsSection(props: { remote: TavernRemote }) {
   const toast = useToast()
   const t = useT()
   const guard = useDraftGuard(editing !== null && JSON.stringify(editing) !== baseline, busy)
+  const requestEditor = (action: () => void) => { if (!pending.current) guard.request(action) }
+  /** 保存、删除、导入导出与默认项共用同步屏障，读取期间也不能用旧编辑器开始写入。 */
+  const perform = async (operation: () => Promise<void>) => {
+    if (pending.current || opening.current) return
+    pending.current = true
+    try { await runAsync(setBusy, setError, operation) } finally { pending.current = false }
+  }
+  const edit = (change: (current: PromptPreset) => PromptPreset) => {
+    if (pending.current || opening.current) return
+    setEditing(current => current ? change(current) : current)
+  }
 
   const items: PresetSummary[] = state.status === 'ready' ? state.value.items : []
   const q = query.trim().toLowerCase()
@@ -154,17 +167,17 @@ export function PresetsSection(props: { remote: TavernRemote }) {
     if (opening.current) { opening.current = false; setBusy(false) }
   }
 
-  const closeEditor = () => {
-    if (saving.current) return
+  const resetEditor = () => {
     cancelOpening()
     setEditing(null)
     setEditingId(null)
     setRevision(null)
     setBaseline(null)
   }
+  const closeEditor = () => { if (!pending.current) resetEditor() }
 
   const open = async (id: string) => {
-    if (saving.current) return
+    if (pending.current) return
     const request = ++openRequest.current
     opening.current = true
     setBusy(true)
@@ -182,10 +195,9 @@ export function PresetsSection(props: { remote: TavernRemote }) {
   }
 
   const save = async () => {
-    if (!editing || saving.current || opening.current) return
+    if (!editing || pending.current || opening.current) return
     if (baseline !== 'null' && !revision) { setError(t('presets.missingRevision')); return }
-    saving.current = true
-    try { await runAsync(setBusy, setError, async () => {
+    await perform(async () => {
       const r = await remote.savePreset({ preset: editing, ...(baseline !== 'null' && editingId ? { id: editingId } : {}), expectedRevision: baseline === 'null' ? null : revision })
       if (!r.ok) setError(r.error.message)
       else {
@@ -195,17 +207,17 @@ export function PresetsSection(props: { remote: TavernRemote }) {
         toast.show(t('presets.saved', { name: editing.name }))
         reload()
       }
-    }) } finally { saving.current = false }
+    })
   }
 
   const remove = async () => {
     if (!toDelete) return
-    await runAsync(setBusy, setError, async () => {
+    await perform(async () => {
       const r = await remote.deletePreset({ id: toDelete })
       const err = errOf(r)
       if (err) setError(err)
       else {
-        if ((editingId ?? editing?.identifier) === toDelete) closeEditor()
+        if ((editingId ?? editing?.identifier) === toDelete) resetEditor()
         setToDelete(null)
         reload()
       }
@@ -213,9 +225,7 @@ export function PresetsSection(props: { remote: TavernRemote }) {
   }
 
   const onImportFile = async (file: File) => {
-    setBusy(true)
-    setError(null)
-    try {
+    await perform(async () => {
       const json = await readJsonFile(file)
       const name = file.name.replace(/\.json$/i, '')
       const r = await remote.importPreset({ name, json })
@@ -228,15 +238,11 @@ export function PresetsSection(props: { remote: TavernRemote }) {
         )
         reload()
       }
-    } catch (err2) {
-      setError(err2 instanceof Error ? err2.message : String(err2))
-    } finally {
-      setBusy(false)
-    }
+    })
   }
 
   const setAsDefault = async (id: string) => {
-    await runAsync(setBusy, setError, async () => {
+    await perform(async () => {
       // 只更新用户点选的默认预设，保留其它窗口刚保存的默认角色、人设和世界书。
       const r = await remote.updateSettings({ patch: { defaults: { presetId: id } } })
       const err = errOf(r)
@@ -246,7 +252,7 @@ export function PresetsSection(props: { remote: TavernRemote }) {
   }
 
   const exportPreset = async (id: string, name: string) => {
-    await runAsync(setBusy, setError, async () => {
+    await perform(async () => {
       const r = await remote.getPreset({ id })
       if (!r.ok) {
         setError(r.error.message)
@@ -258,7 +264,7 @@ export function PresetsSection(props: { remote: TavernRemote }) {
   }
 
   const createNew = () => {
-    if (saving.current) return
+    if (pending.current) return
     cancelOpening()
     const id = `preset-${Date.now().toString(36)}`
     setEditing({ name: t('presets.newPresetName'), identifier: id, entries: [newEntry(100)] })
@@ -268,10 +274,11 @@ export function PresetsSection(props: { remote: TavernRemote }) {
   }
 
   const setEntry = (index: number, entry: PresetEntry) => {
-    if (!editing) return
-    const entries = editing.entries.slice()
-    entries[index] = entry
-    setEditing({ ...editing, entries })
+    edit(current => {
+      const entries = current.entries.slice()
+      entries[index] = entry
+      return { ...current, entries }
+    })
   }
 
   return (
@@ -282,7 +289,7 @@ export function PresetsSection(props: { remote: TavernRemote }) {
         <FileBtn accept=".json" disabled={busy} onFile={(file) => void onImportFile(file)}>
           {t('presets.importFile')}
         </FileBtn>
-        <Btn size="md" disabled={busy} onClick={() => guard.request(createNew)}>{t('presets.new')}</Btn>
+        <Btn size="md" disabled={busy} onClick={() => requestEditor(createNew)}>{t('presets.new')}</Btn>
         <Btn size="md" onClick={reload} disabled={busy}>{t('action.refresh')}</Btn>
         {(items.length >= 5 || query !== '') && (
           <SearchInput label={t('presets.searchLabel')} value={query} onChange={setQuery} placeholder={t('presets.searchPlaceholder')} width={220} />
@@ -311,7 +318,7 @@ export function PresetsSection(props: { remote: TavernRemote }) {
       )}
       <div className="dsh-tavern-list" style={{ marginBottom: 12 }}>
         {filtered.map((item) => (
-          <div key={item.id} className="dsh-tavern-tile" {...clickableProps(() => guard.request(() => void open(item.id)))}>
+          <div key={item.id} className="dsh-tavern-tile" {...clickableProps(() => requestEditor(() => void open(item.id)))}>
             <span className="dsh-tavern-tileIcon">
               <IconListPenOutlineMedium size={18} />
             </span>
@@ -323,14 +330,14 @@ export function PresetsSection(props: { remote: TavernRemote }) {
               <span className="dsh-tavern-tileSub">{item.id}</span>
             </div>
             <div className="dsh-tavern-tileActions">
-              <IconBtn label={t('action.edit')} disabled={busy} onClick={() => guard.request(() => void open(item.id))}>
+              <IconBtn label={t('action.edit')} disabled={busy} onClick={() => requestEditor(() => void open(item.id))}>
                 <IconEditOutlineMedium />
               </IconBtn>
               <IconBtn label={t('presets.export')} disabled={busy} onClick={() => void exportPreset(item.id, item.name)}>
                 <IconDownloadOutlineMedium />
               </IconBtn>
               <Btn size="sm" disabled={busy} onClick={() => void setAsDefault(item.id)}>{t('presets.setAsDefault')}</Btn>
-              <IconBtn label={t('presets.delete')} danger disabled={busy} onClick={() => setToDelete(item.id)}>
+              <IconBtn label={t('presets.delete')} danger disabled={busy} onClick={() => { if (!pending.current && !opening.current) setToDelete(item.id) }}>
                 <IconTrashOutlineMedium />
               </IconBtn>
             </div>
@@ -344,26 +351,26 @@ export function PresetsSection(props: { remote: TavernRemote }) {
         confirmLabel={t('action.delete')}
         danger
         busy={busy}
-        onCancel={() => setToDelete(null)}
+        onCancel={() => { if (!pending.current) setToDelete(null) }}
         onConfirm={() => void remove()}
       />
       {editing && (
         <fieldset disabled={busy} className="dsh-tavern-editorFields dsh-tavern-card" style={{ marginBottom: 12 }}>
           <Field label={t('presets.name')}>
-            <input className="dsh-tavern-input" style={{ flex: 1 }} value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} />
+            <input className="dsh-tavern-input" style={{ flex: 1 }} value={editing.name} onChange={({ target: { value: name } }) => edit(current => ({ ...current, name }))} />
           </Field>
           <Field label={t('presets.identifier')}>
             <Muted>{editing.identifier}</Muted>
           </Field>
-          <PresetSamplingSummary sampling={editing.sampling} onChange={() => {
-            const next = { ...editing }
+          <PresetSamplingSummary sampling={editing.sampling} onChange={() => edit(current => {
+            const next = { ...current }
             delete next.sampling
-            setEditing(next)
-          }} />
+            return next
+          })} />
           {(editing.regexScripts?.length ?? 0) > 0 && (
             <PresetRegexList
               scripts={editing.regexScripts!}
-              onChange={(scripts) => setEditing({ ...editing, regexScripts: scripts })}
+              onChange={(scripts) => edit(current => ({ ...current, regexScripts: scripts }))}
             />
           )}
           <div className="dsh-tavern-list" style={{ margin: '8px 0' }}>
@@ -371,16 +378,17 @@ export function PresetsSection(props: { remote: TavernRemote }) {
               <EntryEditor
                 key={entry.identifier}
                 entry={entry}
+                disabled={busy}
                 onChange={(e2) => setEntry(i, e2)}
-                onDelete={() => setEditing({ ...editing, entries: editing.entries.filter((_, j) => j !== i) })}
+                onDelete={() => edit(current => ({ ...current, entries: current.entries.filter((_, j) => j !== i) }))}
               />
             ))}
           </div>
           <SaveBar>
             <span className="dsh-tavern-muted">{JSON.stringify(editing) !== baseline ? t('draft.unsaved') : ''}</span>
-            <Btn onClick={() => setEditing({ ...editing, entries: [...editing.entries, newEntry(editing.entries.length * 100 + 100)] })}>{t('presets.addEntry')}</Btn>
+            <Btn onClick={() => edit(current => ({ ...current, entries: [...current.entries, newEntry(current.entries.length * 100 + 100)] }))}>{t('presets.addEntry')}</Btn>
             <Btn disabled={busy} onClick={() => void save()} primary>{t('presets.save')}</Btn>
-            <Btn onClick={() => guard.request(closeEditor)}>{t('action.close')}</Btn>
+            <Btn onClick={() => requestEditor(closeEditor)}>{t('action.close')}</Btn>
           </SaveBar>
         </fieldset>
       )}

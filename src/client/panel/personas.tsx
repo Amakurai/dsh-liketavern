@@ -4,7 +4,7 @@
  */
 import { useDraftGuard } from '../drafts.js'
 import { useDraftState } from '../draftPersistence.js'
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { IconEditOutlineMedium, IconTrashOutlineMedium, IconUserOutlineMedium } from '@deepseek-ai/dsh-client-ui-primitives'
 import { useT } from '../i18n.js'
 import type { Persona, TavernRemote } from '../types.js'
@@ -20,20 +20,32 @@ export function PersonasSection(props: { remote: TavernRemote }) {
   const lore = useLoader(() => remote.listLorebooks({}), [])
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const pending = useRef(false)
   const [baseline, setBaseline] = useDraftState<string | null>('personas:baseline', null)
   const [editing, setEditing] = useDraftState<PersonaDraft | null>('personas:editing', null)
   const [toDelete, setToDelete] = useState<Persona | null>(null)
   const [query, setQuery] = useState('')
   const toast = useToast()
   const guard = useDraftGuard(editing !== null && JSON.stringify(editing) !== baseline, busy)
-  const openPersona = (p: Persona) => guard.request(() => { setEditing({ ...p }); setBaseline(JSON.stringify(p)) })
+  const requestEditor = (action: () => void) => { if (!pending.current) guard.request(action) }
+  const openPersona = (p: Persona) => requestEditor(() => { setEditing({ ...p }); setBaseline(JSON.stringify(p)) })
+  /** 先同步占住写入，再提交 busy；同批事件与已打开弹层不能穿透保存边界。 */
+  const perform = async (operation: () => Promise<void>) => {
+    if (pending.current) return
+    pending.current = true
+    try { await runAsync(setBusy, setError, operation) } finally { pending.current = false }
+  }
+  const edit = (patch: Partial<PersonaDraft>) => {
+    if (pending.current) return
+    setEditing(current => current ? { ...current, ...patch } : current)
+  }
 
   const items = state.status === 'ready' ? state.value.items : []
   const q = query.trim().toLowerCase()
   const filtered = q === '' ? items : items.filter((p) => p.name.toLowerCase().includes(q) || p.description.toLowerCase().includes(q))
 
   const save = async () => {
-    if (!editing) return
+    if (!editing || pending.current) return
     if (baseline === null || (baseline !== 'null' && !editing.revision)) {
       setError(t('personas.missingRevision'))
       return
@@ -42,7 +54,7 @@ export function PersonasSection(props: { remote: TavernRemote }) {
       setError(t('personas.nameRequired'))
       return
     }
-    await runAsync(setBusy, setError, async () => {
+    await perform(async () => {
       const r = await remote.savePersona({ persona: editing, expectedRevision: baseline === 'null' ? null : editing.revision! })
       const err = errOf(r)
       if (err) setError(err)
@@ -59,7 +71,7 @@ export function PersonasSection(props: { remote: TavernRemote }) {
 
   const remove = async () => {
     if (!toDelete) return
-    await runAsync(setBusy, setError, async () => {
+    await perform(async () => {
       const r = await remote.deletePersona({ id: toDelete.id })
       const err = errOf(r)
       if (err) setError(err)
@@ -77,7 +89,7 @@ export function PersonasSection(props: { remote: TavernRemote }) {
   }
 
   const setAsDefault = async (id: string) => {
-    await runAsync(setBusy, setError, async () => {
+    await perform(async () => {
       // 宿主按字段合并；不能把旧默认快照中的角色、预设和世界书写回去。
       const r = await remote.updateSettings({ patch: { defaults: { personaId: id } } })
       const err = errOf(r)
@@ -91,7 +103,7 @@ export function PersonasSection(props: { remote: TavernRemote }) {
       {toast.node}
       {guard.confirmation}
       <div className="dsh-tavern-toolbar">
-        <Btn size="md" disabled={busy} onClick={() => guard.request(createNew)}>{t('personas.new')}</Btn>
+        <Btn size="md" disabled={busy} onClick={() => requestEditor(createNew)}>{t('personas.new')}</Btn>
         <Btn size="md" onClick={() => { reload(); lore.reload() }} disabled={busy}>{t('action.refresh')}</Btn>
         {(items.length >= 5 || query !== '') && (
           <SearchInput label={t('personas.searchLabel')} value={query} onChange={setQuery} placeholder={t('personas.searchPlaceholder')} width={220} />
@@ -130,11 +142,11 @@ export function PersonasSection(props: { remote: TavernRemote }) {
               <span className="dsh-tavern-tileSub">{p.description.trim() || t('personas.noDescription')}</span>
             </div>
             <div className="dsh-tavern-tileActions">
-              <IconBtn label={t('action.edit')} onClick={() => openPersona(p)}>
+              <IconBtn label={t('action.edit')} disabled={busy} onClick={() => openPersona(p)}>
                 <IconEditOutlineMedium />
               </IconBtn>
               <Btn size="sm" disabled={busy} onClick={() => void setAsDefault(p.id)}>{t('personas.setDefault')}</Btn>
-              <IconBtn label={t('personas.delete')} danger disabled={busy} onClick={() => setToDelete(p)}>
+              <IconBtn label={t('personas.delete')} danger disabled={busy} onClick={() => { if (!pending.current) setToDelete(p) }}>
                 <IconTrashOutlineMedium />
               </IconBtn>
             </div>
@@ -148,27 +160,27 @@ export function PersonasSection(props: { remote: TavernRemote }) {
         confirmLabel={t('action.delete')}
         danger
         busy={busy}
-        onCancel={() => setToDelete(null)}
+        onCancel={() => { if (!pending.current) setToDelete(null) }}
         onConfirm={() => void remove()}
       />
       {editing && (
         <fieldset disabled={busy} className="dsh-tavern-editorFields dsh-tavern-card" style={{ marginBottom: 12 }}>
           <Field label={t('personas.field.name')}>
-            <input className="dsh-tavern-input" style={{ flex: 1 }} value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} />
+            <input className="dsh-tavern-input" style={{ flex: 1 }} value={editing.name} onChange={(e) => edit({ name: e.target.value })} />
           </Field>
           <Field label={t('personas.field.description')}>
             <textarea
               className="dsh-tavern-input dsh-tavern-textarea"
               value={editing.description}
-              onChange={(e) => setEditing({ ...editing, description: e.target.value })}
+              onChange={(e) => edit({ description: e.target.value })}
             />
           </Field>
           <Field label={t('personas.field.lorebook')}>
             <Select
               width="100%"
               value={editing.lorebookId ?? ''}
-              disabled={lore.state.status !== 'ready'}
-              onChange={(v) => setEditing({ ...editing, lorebookId: v || null })}
+              disabled={busy || lore.state.status !== 'ready'}
+              onChange={(v) => edit({ lorebookId: v || null })}
               options={[
                 { value: '', label: t('personas.lorebookNone') },
                 ...(lore.state.status === 'ready' ? lore.state.value.items.map((n) => ({ value: n, label: n })) : []),
@@ -177,7 +189,7 @@ export function PersonasSection(props: { remote: TavernRemote }) {
           </Field>
           <SaveBar>
             <Btn disabled={busy} onClick={() => void save()} primary>{t('action.save')}</Btn>
-            <Btn onClick={() => guard.request(() => { setEditing(null); setBaseline(null) })}>{t('action.close')}</Btn>
+            <Btn onClick={() => requestEditor(() => { setEditing(null); setBaseline(null) })}>{t('action.close')}</Btn>
           </SaveBar>
         </fieldset>
       )}

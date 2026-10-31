@@ -15,6 +15,13 @@ export declare const zh: {
     readonly 'draft.autosaving': "正在暂存草稿…";
     readonly 'draft.autosaved': "草稿已暂存，刷新后可恢复；修改仍需点击保存。";
     readonly 'draft.autosaveFailed': "草稿暂存失败，编辑内容仍保留在当前页面。";
+    readonly 'draft.localOnly': "已恢复本页草稿，尚未确认暂存到宿主。";
+    readonly 'draft.recoveryCapacity': "本页最多保留 {count} 个在用或未暂存的编辑分区。请先保存或关闭其它编辑器，再重试。";
+    readonly 'draft.recoveryTooLarge': "草稿超过 2 MiB 自动暂存上限。请减少内容或先保存业务数据；超限修改无法在关闭后自动恢复。";
+    readonly 'draft.recoveryUnavailable': "上次编辑未能在本页保留，不能将旧记录当作最新草稿。可明确放弃未暂存的修改，恢复上一份可用草稿。";
+    readonly 'draft.recoveryPrevious': "恢复上一份草稿";
+    readonly 'draft.recoveryDiscardDesc': "这将放弃无法暂存的修改，并恢复上一份可用草稿。宿主已有的记录不会被删除。";
+    readonly 'draft.recoveryDiscard': "放弃未暂存修改并恢复";
     readonly 'settings.label': "Tavern";
     readonly 'section.characters': "角色卡";
     readonly 'section.presets': "提示词预设";

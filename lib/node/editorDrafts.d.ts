@@ -1,4 +1,4 @@
-export declare const EDITOR_DRAFT_MAX_BYTES: number;
+export { EDITOR_DRAFT_MAX_BYTES } from '../core/editorDraftLimits.js';
 export interface EditorDraft {
     value: unknown;
     updatedAt: string;

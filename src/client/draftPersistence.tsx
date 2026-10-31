@@ -1,17 +1,21 @@
-/** 编辑器自动草稿：内容只经 remote 存在宿主数据目录；浏览器只保留本标签页的随机标识。 */
+/** 编辑器自动草稿：宿主持久化与本页有界未确认恢复；浏览器持久存储只保存本标签页标识。 */
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { Dispatch, ReactNode, SetStateAction } from 'react'
 import type { TavernRemote } from './types.js'
 import { useT } from './i18n.js'
-import { Btn, Err, Skeleton, useLoader } from './util.js'
+import { Btn, ConfirmDialog, Err, Skeleton, useLoader } from './util.js'
 import { randomUuid } from '../core/secureRandom.js'
 import { remoteIdentity } from './remoteIdentity.js'
+import { acquireDraftRecovery, confirmDraftRecovery, DRAFT_RECOVERY_SCOPE_LIMIT, DraftRecoveryTooLargeError,
+  failDraftRecovery, releaseDraftRecovery, restorePreviousDraftRecovery, stageDraftRecovery, unavailableDraftRecovery,
+  type DraftRecoveryChannel, type DraftRecoveryRecord } from './draftRecovery.js'
 
 type Fields = Record<string, unknown>
 type Snapshot = { version: 1; fields: Fields }
-type PendingWrite = { snapshot: Snapshot | null; serialized: string; revision: number }
+type LoadedDraft = { channel: DraftRecoveryChannel; snapshot: Snapshot | null; recovery?: DraftRecoveryRecord }
+type PendingWrite = { snapshot: Snapshot | null; serialized: string; revision: number; recovery: DraftRecoveryRecord }
 type Status = { dirty: boolean; busy: boolean }
-type WriteState = 'idle' | 'restored' | 'saving' | 'saved' | 'error'
+type WriteState = 'idle' | 'restored' | 'local' | 'saving' | 'saved' | 'error'
 interface DraftRegistry {
   remote: TavernRemote
   restored: Fields
@@ -80,20 +84,69 @@ function DraftLoader(props: { remote: TavernRemote; scope: string; children: Rea
   const t = useT()
   const [owner] = useState(ownerId)
   const queueKey = `${owner}:${props.scope}`
-  const loaded = useLoader(async () => {
-    const result = await readAfterWrites(props.remote, queueKey, () => props.remote.getEditorDraft({ owner, key: props.scope }))
-    if (!result.ok) return result
-    return { ok: true as const, value: { snapshot: result.value.draft ? readSnapshot(result.value.draft.value) : null } }
+  const holder = useRef({}), channelRef = useRef<DraftRecoveryChannel | null>(null), alive = useRef(false)
+  const [restoreConfirmation, setRestoreConfirmation] = useState(false)
+  useLayoutEffect(() => {
+    alive.current = true
+    return () => {
+      alive.current = false
+      if (channelRef.current) releaseDraftRecovery(props.remote, queueKey, channelRef.current, holder.current)
+    }
+  }, [props.remote, queueKey])
+  const loaded = useLoader<LoadedDraft>(async () => {
+    if (!alive.current) throw new Error('Editor is closed')
+    const channel = channelRef.current ?? acquireDraftRecovery(props.remote, queueKey, holder.current)
+    if (!channel) throw new Error(t('draft.recoveryCapacity', { count: DRAFT_RECOVERY_SCOPE_LIMIT }))
+    channelRef.current = channel
+    const local = () => {
+      const recovery = channel.pending
+      if (!recovery) return null
+      const snapshot = recovery.unavailable ? null : readSnapshotOrNull(recovery.serialized)
+      return { ok: true as const, value: { channel, snapshot, recovery } }
+    }
+    return readAfterWrites(props.remote, queueKey, async () => {
+      const pending = local()
+      if (pending) return pending
+      try {
+        const result = await props.remote.getEditorDraft({ owner, key: props.scope })
+        const latest = local()
+        if (latest) return latest
+        if (!result.ok) return result
+        return { ok: true as const, value: { channel, snapshot: result.value.draft ? readSnapshot(result.value.draft.value) : null, recovery: undefined } }
+      } catch (cause) {
+        const latest = local()
+        if (latest) return latest
+        throw cause
+      }
+    })
   }, [props.remote, props.scope, owner])
   if (loaded.state.status === 'error') return <div className="dsh-tavern-ui"><Err message={`${t('draft.loadFailed')} ${loaded.state.message}`} /><Btn onClick={loaded.reload}>{t('action.retry')}</Btn></div>
   if (loaded.state.status !== 'ready') return <Skeleton />
-  return <DraftSession remote={props.remote} scope={props.scope} owner={owner} snapshot={loaded.state.value.snapshot}>{props.children}</DraftSession>
+  const value = loaded.state.value
+  if (value.recovery?.unavailable) return <div className="dsh-tavern-ui">
+    <Err message={value.recovery.error ?? t('draft.recoveryUnavailable')} />
+    <p>{t('draft.recoveryUnavailable')}</p>
+    <Btn onClick={() => setRestoreConfirmation(true)}>{t('draft.recoveryPrevious')}</Btn>
+    <ConfirmDialog open={restoreConfirmation} title={t('draft.recoveryPrevious')} description={t('draft.recoveryDiscardDesc')}
+      confirmLabel={t('draft.recoveryDiscard')} danger onCancel={() => setRestoreConfirmation(false)} onConfirm={() => {
+        setRestoreConfirmation(false)
+        restorePreviousDraftRecovery(props.remote, queueKey, value.channel, value.recovery!)
+        loaded.reload()
+      }} />
+  </div>
+  return <DraftSession remote={props.remote} scope={props.scope} owner={owner} snapshot={value.snapshot} channel={value.channel} recovery={value.recovery}>{props.children}</DraftSession>
 }
 
-function DraftSession(props: { remote: TavernRemote; scope: string; owner: string; snapshot: Snapshot | null; children: ReactNode }) {
+function readSnapshotOrNull(serialized: string | undefined): Snapshot | null {
+  if (serialized === undefined) throw new Error('Invalid recovery record')
+  const value: unknown = JSON.parse(serialized)
+  return value === null ? null : readSnapshot(value)
+}
+
+function DraftSession(props: { remote: TavernRemote; scope: string; owner: string; snapshot: Snapshot | null; channel: DraftRecoveryChannel; recovery?: DraftRecoveryRecord; children: ReactNode }) {
   const t = useT()
-  const [writeState, setWriteState] = useState<WriteState>(props.snapshot ? 'restored' : 'idle')
-  const [error, setError] = useState<string | null>(null)
+  const [writeState, setWriteState] = useState<WriteState>(props.recovery ? props.recovery.error ? 'error' : 'local' : props.snapshot ? 'restored' : 'idle')
+  const [error, setError] = useState<string | null>(props.recovery?.error ?? null)
   const [session] = useState(() => {
     const fields = new Map<string, { token: object; value: unknown }>()
     const statuses = new Map<string, Status>()
@@ -101,9 +154,9 @@ function DraftSession(props: { remote: TavernRemote; scope: string; owner: strin
     let timer: ReturnType<typeof setTimeout> | undefined
     let mounted = true
     let seenDirty = false
-    let last: Snapshot | null | undefined = props.snapshot ?? undefined
+    let last: Snapshot | null | undefined = props.recovery ? props.snapshot : props.snapshot ?? undefined
     let revision = 0
-    let persisted = JSON.stringify(last)
+    let persisted = props.recovery ? undefined : JSON.stringify(last)
     let activeWrite: PendingWrite | undefined
     let queuedWrite: PendingWrite | undefined
     const queueKey = `${props.owner}:${props.scope}`
@@ -121,12 +174,22 @@ function DraftSession(props: { remote: TavernRemote; scope: string; owner: strin
       if (timer) clearTimeout(timer)
       timer = undefined
       // 字段注册只更新引用；完整 JSON 快照在防抖、重试、pagehide 或卸载时才编码，避免每次输入复制整份大草稿。
-      capture()
-      if (last === undefined) return
-      const serialized = JSON.stringify(last)
-      if (queuedWrite?.serialized === serialized || (!queuedWrite && activeWrite?.serialized === serialized)) return
-      if (!queuedWrite && !activeWrite && serialized === persisted) return
-      const latest: PendingWrite = { snapshot: last, serialized, revision: ++revision }
+      let serialized: string, recovery: DraftRecoveryRecord
+      try {
+        capture()
+        if (last === undefined) return
+        serialized = JSON.stringify(last)
+        if (queuedWrite?.serialized === serialized || (!queuedWrite && activeWrite?.serialized === serialized)) return
+        if (!queuedWrite && !activeWrite && serialized === persisted && !props.channel.pending) return
+        recovery = stageDraftRecovery(props.channel, serialized)
+      } catch (cause) {
+        revision++
+        const message = cause instanceof DraftRecoveryTooLargeError ? t('draft.recoveryTooLarge') : cause instanceof Error ? cause.message : String(cause)
+        unavailableDraftRecovery(props.channel, message, persisted)
+        if (mounted) { setWriteState('error'); setError(message) }
+        return
+      }
+      const latest: PendingWrite = { snapshot: last, serialized, revision: ++revision, recovery }
       if (mounted) { setWriteState('saving'); setError(null) }
       // 等待中的任务始终占住原队列位置，关闭重开会在它之后读；慢请求期间只替换其快照，不积压每次编辑。
       if (queuedWrite) { Object.assign(queuedWrite, latest); return }
@@ -141,9 +204,11 @@ function DraftSession(props: { remote: TavernRemote; scope: string; owner: strin
             : await props.remote.deleteEditorDraft({ owner: props.owner, key: props.scope })
           if (!result.ok) throw new Error(result.error.message)
           persisted = serialized
+          confirmDraftRecovery(props.remote, queueKey, props.channel, write.recovery)
           if (mounted && current === revision) setWriteState(snapshot ? 'saved' : 'idle')
         } finally { if (activeWrite === write) activeWrite = undefined }
       }).catch((cause: unknown) => {
+        failDraftRecovery(props.channel, write.recovery, cause instanceof Error ? cause.message : String(cause))
         if (mounted && write.revision === revision) { setWriteState('error'); setError(cause instanceof Error ? cause.message : String(cause)) }
       })
     }
@@ -198,8 +263,9 @@ function DraftSession(props: { remote: TavernRemote; scope: string; owner: strin
   }, [session])
   return <PersistenceContext.Provider value={session.registry}>
     {writeState !== 'idle' && <div className="dsh-tavern-ui dsh-tavern-draftStatus" role="status">
-      <span>{t(writeState === 'restored' ? 'draft.restored' : writeState === 'saving' ? 'draft.autosaving' : writeState === 'error' ? 'draft.autosaveFailed' : 'draft.autosaved')}</span>
-      {error && <><Err message={error} /><Btn onClick={session.flush}>{t('action.retry')}</Btn></>}
+      <span>{t(writeState === 'restored' ? 'draft.restored' : writeState === 'local' ? 'draft.localOnly' : writeState === 'saving' ? 'draft.autosaving' : writeState === 'error' ? 'draft.autosaveFailed' : 'draft.autosaved')}</span>
+      {error && <Err message={error} />}
+      {(error || writeState === 'local') && <Btn onClick={session.flush}>{t('action.retry')}</Btn>}
     </div>}
     {props.children}
   </PersistenceContext.Provider>

@@ -162,6 +162,8 @@ $DSH_HOME/dsh-tavern/
 └── editor-drafts/      # Unsaved editor draft recovery snapshots (up to 2 MiB each)
 ```
 
+Editors automatically back up unsaved changes. If backup fails, reopening within the same page and host connection restores the latest draft with an error and retry action. A page reload can only restore records already saved on the host. Persistent browser storage holds a tab identifier, never draft contents. A page supports 16 open or unconfirmed editor sections without evicting older drafts; save or close other editors before retrying when full. Drafts over 2 MiB show an explicit error. After closing, discarding those oversized changes requires confirmation before restoring the last available draft.
+
 ### Transfer one Tavern session
 
 In **Settings → Tavern → Settings → Cards & Data**, select a character and story, then export the selected session. On the destination, choose a workspace and the exported JSON in the same section and confirm import; the session list refreshes and opens it. Wait for generation to finish before exporting. The file includes host history and attachments, the story's memories, world changes, variables, worldbook timers and WAL, and its referenced character and library assets.

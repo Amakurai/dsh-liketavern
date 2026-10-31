@@ -2,7 +2,8 @@
  * 持久草稿前端回归：真实 PersistentEditor/useDraftState/useDraftGuard，
  * 仅用模拟宿主原语和内存 remote，验证恢复、保存、放弃、关闭重开及延迟写入竞态。
  */
-import { useState } from 'react'
+import { setMaxListeners } from 'node:events'
+import { StrictMode, useState } from 'react'
 import type { ReactNode } from 'react'
 import { act, create } from 'react-test-renderer'
 import type { ReactTestRenderer } from 'react-test-renderer'
@@ -320,6 +321,27 @@ describe('编辑草稿持久化', () => {
     expect(second.root.findByType('input').props.value).toBe('跨刷新正文')
   })
 
+  it.each([false, true])('连续暂存失败后关闭重开仍保留本页最新内容，不被宿主旧记录覆盖（旧记录=%s）', async seeded => {
+    const env = environment()
+    if (seeded) env.seed('宿主中的旧草稿')
+    env.save.mockImplementation(async () => fail('宿主暂时不可写'))
+    const view = await render(env)
+    try {
+      await change(view, '仍未成功暂存的最新内容')
+      await advance()
+      expect(JSON.stringify(view.toJSON())).toContain('宿主暂时不可写')
+      await action(view, 'host-close')
+      await action(view, 'host-open')
+      expect(view.root.findByType('input').props.value).toBe('仍未成功暂存的最新内容')
+      expect(env.stored()).toEqual(seeded ? snapshot('宿主中的旧草稿') : null)
+      expect(JSON.stringify(view.toJSON())).toContain('宿主暂时不可写')
+    } finally {
+      env.save.mockImplementation(env.write)
+      await action(view, 'host-open')
+      await advance()
+    }
+  })
+
   it('暂存失败显示重试并保留当前内容，重试成功写入相同正文', async () => {
     const env = environment()
     env.save.mockImplementationOnce(async () => fail('暂存连接失败'))
@@ -333,6 +355,127 @@ describe('编辑草稿持久化', () => {
     await act(async () => retry.props.onClick())
     expect(env.stored()).toEqual(snapshot('失败后仍保留'))
     expect(env.save).toHaveBeenCalledTimes(2)
+  })
+
+  it('删除草稿失败后重开保留删除意图，不恢复已经放弃的宿主旧草稿', async () => {
+    const env = environment(), remove = env.remove.getMockImplementation()!
+    env.seed('已放弃的旧草稿')
+    env.remove.mockImplementation(async () => fail('宿主暂时不能删除'))
+    const view = await render(env)
+    try {
+      await action(view, 'leave')
+      await act(async () => view.root.findByType(ConfirmDialog).props.onConfirm())
+      expect(view.root.findAllByType('input')).toHaveLength(0)
+      await action(view, 'host-open')
+      expect(view.root.findByType('input').props.value).toBe('base')
+      expect(env.stored()).toEqual(snapshot('已放弃的旧草稿'))
+      expect(JSON.stringify(view.toJSON())).toContain('宿主暂时不能删除')
+    } finally {
+      env.remove.mockImplementation(remove)
+    }
+  })
+
+  it('宿主关闭后未确认的草稿仍阻止页面意外离开，恢复并确认暂存后解除保护', async () => {
+    const env = environment(), view = await render(env)
+    env.save.mockImplementation(async () => fail('暂存未确认'))
+    try {
+      await change(view, '本页必须保留的正文'); await advance()
+      await action(view, 'host-close')
+      const pending = new Event('beforeunload', { cancelable: true })
+      window.dispatchEvent(pending)
+      expect(pending.defaultPrevented).toBe(true)
+      env.save.mockImplementation(env.write)
+      await action(view, 'host-open')
+      const retry = view.root.findAllByType(Btn).find(button => button.props.children === '重试')!
+      await act(async () => retry.props.onClick())
+      expect(env.stored()).toEqual(snapshot('本页必须保留的正文'))
+      await action(view, 'host-close')
+      const confirmed = new Event('beforeunload', { cancelable: true })
+      window.dispatchEvent(confirmed)
+      expect(confirmed.defaultPrevented).toBe(false)
+    } finally {
+      env.save.mockImplementation(env.write)
+    }
+  })
+
+  it('StrictMode 重放挂载后仍保留失败草稿，重试确认并关闭后释放离开保护', async () => {
+    const env = environment()
+    let view!: ReactTestRenderer
+    await act(async () => { view = create(<StrictMode><Harness api={env.api} scope={env.scope} /></StrictMode>) })
+    mounted.push(view)
+    env.save.mockImplementation(async () => fail('严格模式暂存失败'))
+    try {
+      await change(view, '严格模式恢复正文'); await advance()
+      await action(view, 'host-close'); await action(view, 'host-open')
+      expect(view.root.findByType('input').props.value).toBe('严格模式恢复正文')
+      expect(JSON.stringify(view.toJSON())).toContain('严格模式暂存失败')
+      env.save.mockImplementation(env.write)
+      const retry = view.root.findAllByType(Btn).find(button => button.props.children === '重试')!
+      await act(async () => retry.props.onClick())
+      expect(env.stored()).toEqual(snapshot('严格模式恢复正文'))
+      await action(view, 'host-close')
+      const event = new Event('beforeunload', { cancelable: true })
+      window.dispatchEvent(event)
+      expect(event.defaultPrevented).toBe(false)
+    } finally {
+      env.save.mockImplementation(env.write)
+    }
+  })
+
+  it('本页恢复记录按宿主连接隔离，失败的旧宿主内容不会进入新宿主', async () => {
+    const oldHost = environment(), newHost = environment(oldHost.scope)
+    newHost.seed('新宿主私有草稿')
+    oldHost.save.mockImplementation(async () => fail('旧宿主不可写'))
+    const view = await render(oldHost)
+    try {
+      await change(view, '旧宿主未确认正文'); await advance()
+      await act(async () => view.update(<Harness api={newHost.api} scope={newHost.scope} />))
+      expect(view.root.findByType('input').props.value).toBe('新宿主私有草稿')
+      expect(newHost.stored()).toEqual(snapshot('新宿主私有草稿'))
+      oldHost.save.mockImplementation(oldHost.write)
+      await act(async () => view.update(<Harness api={oldHost.api} scope={oldHost.scope} />))
+      expect(view.root.findByType('input').props.value).toBe('旧宿主未确认正文')
+      await advance()
+      expect(oldHost.stored()).toEqual(snapshot('旧宿主未确认正文'))
+    } finally {
+      oldHost.save.mockImplementation(oldHost.write)
+    }
+  })
+
+  it('恢复槽位用满时明确拒绝新编辑器，关闭空闲编辑器后可重试且原编辑器不丢内容', async () => {
+    // 此用例故意同时挂载 16 个编辑器；Node 事件替身的默认 10 个监听器限制并非浏览器限制。
+    setMaxListeners(16, window)
+    const views: ReactTestRenderer[] = []
+    for (let index = 0; index < 16; index++) views.push(await render(environment()))
+    const extra = environment(), blocked = await render(extra)
+    expect(blocked.root.findAllByType('input')).toHaveLength(0)
+    expect(JSON.stringify(blocked.toJSON())).toContain('最多保留 16')
+    expect(extra.get).not.toHaveBeenCalled()
+    await unmount(views[0]!)
+    const retry = blocked.root.findAllByType(Btn).find(button => button.props.children === '重试')!
+    await act(async () => retry.props.onClick())
+    expect(blocked.root.findByType('input').props.value).toBe('base')
+    for (const view of views.slice(1)) expect(view.root.findByType('input').props.value).toBe('base')
+  })
+
+  it.each([false, true])('超限修改不能伪装成已恢复，明确确认后才读取上一份可用草稿（旧记录=%s）', async seeded => {
+    const env = environment()
+    if (seeded) env.seed('上一份可用草稿')
+    const view = await render(env)
+    await change(view, '界'.repeat(700_000)); await advance()
+    expect(JSON.stringify(view.toJSON())).toContain('超过 2 MiB')
+    expect(env.save).not.toHaveBeenCalled()
+    await action(view, 'host-close'); await action(view, 'host-open')
+    expect(view.root.findAllByType('input')).toHaveLength(0)
+    expect(env.stored()).toEqual(seeded ? snapshot('上一份可用草稿') : null)
+    const restore = () => view.root.findAllByType(Btn).find(button => button.props.children === '恢复上一份草稿')!
+    await act(async () => restore().props.onClick())
+    await act(async () => view.root.findByType(ConfirmDialog).props.onCancel())
+    expect(view.root.findAllByType('input')).toHaveLength(0)
+    await act(async () => restore().props.onClick())
+    await act(async () => view.root.findByType(ConfirmDialog).props.onConfirm())
+    expect(view.root.findByType('input').props.value).toBe(seeded ? '上一份可用草稿' : 'base')
+    expect([...browserStorage.values()]).toEqual([owner])
   })
 
   it('前一次写入未完成时改回已恢复版本，最后仍保存最新想保留的版本', async () => {

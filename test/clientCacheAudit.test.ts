@@ -1,9 +1,44 @@
 /** 元数据缓存故障恢复审查：断线时未返回的旧 RPC 不能阻止用户重试。 */
 import { afterEach, expect, it, vi } from 'vitest'
-import { cachedAvatar, invalidateCharacter } from '../src/client/cache.js'
+import { cachedAvatar, cachedCharacterDetail, cachedSessionBinding, invalidateCharacter } from '../src/client/cache.js'
 import type { TavernRemote } from '../src/client/types.js'
 
 afterEach(() => vi.restoreAllMocks())
+
+it('系统时钟回拨后重新读取绑定、角色详情和头像，不把负年龄当作长期有效', async () => {
+  const now = vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000)
+  let label = '旧结果'
+  const remote = {
+    getSessionBinding: vi.fn(async () => ({ ok: true, value: { binding: null, userName: label, canSwipeGreeting: false } })),
+    getCharacterDetail: vi.fn(async () => ({ ok: true, value: { cardId: 'clock-card', name: label } })),
+    getAvatar: vi.fn(async () => ({ ok: true, value: { dataUrl: label } })),
+  } as unknown as TavernRemote
+  await cachedSessionBinding(remote, 'clock-session'); await cachedCharacterDetail(remote, 'clock-card'); await cachedAvatar(remote, 'clock-card')
+  label = '时钟校正后的结果'
+  now.mockReturnValue(1_699_999_000_000)
+  expect(await cachedSessionBinding(remote, 'clock-session')).toMatchObject({ ok: true, value: { userName: label } })
+  expect(await cachedCharacterDetail(remote, 'clock-card')).toMatchObject({ ok: true, value: { name: label } })
+  expect(await cachedAvatar(remote, 'clock-card')).toEqual({ ok: true, value: { dataUrl: label } })
+  await cachedSessionBinding(remote, 'clock-session'); await cachedCharacterDetail(remote, 'clock-card'); await cachedAvatar(remote, 'clock-card')
+  for (const method of [remote.getSessionBinding, remote.getCharacterDetail, remote.getAvatar]) expect(method).toHaveBeenCalledTimes(2)
+})
+
+it('时钟回拨不会让悬挂请求永久占住重试入口，迟到结果不能覆盖重试内容', async () => {
+  const now = vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000)
+  const delayed = Promise.withResolvers<Awaited<ReturnType<TavernRemote['getAvatar']>>>()
+  const getAvatar = vi.fn().mockImplementationOnce(() => delayed.promise).mockResolvedValue({ ok: true, value: { dataUrl: 'fresh-avatar' } })
+  const remote = { getAvatar } as unknown as TavernRemote
+  const old = cachedAvatar(remote, 'clock-pending-card')
+  try {
+    now.mockReturnValue(1_699_999_000_000)
+    const retry = cachedAvatar(remote, 'clock-pending-card')
+    expect(retry).not.toBe(old)
+    expect(await retry).toEqual({ ok: true, value: { dataUrl: 'fresh-avatar' } })
+    delayed.resolve({ ok: true, value: { dataUrl: 'stale-avatar' } })
+    await old
+    expect(await cachedAvatar(remote, 'clock-pending-card')).toEqual({ ok: true, value: { dataUrl: 'fresh-avatar' } })
+  } finally { delayed.resolve({ ok: true, value: { dataUrl: 'stale-avatar' } }); await old }
+})
 
 it('读取超时后允许重试，并且旧回包不能覆盖重试结果', async () => {
   const now = vi.spyOn(Date, 'now')

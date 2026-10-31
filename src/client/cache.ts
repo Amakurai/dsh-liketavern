@@ -46,7 +46,9 @@ interface CacheEntry<T> {
 function read<T>(map: Map<string, CacheEntry<T>>, key: string, ttlMs: number, load: () => Promise<Envelope<T>>): Promise<Envelope<T>> {
   const now = Date.now()
   for (const [cachedKey, entry] of map) {
-    if (now - entry.at >= (entry.pending ? PENDING_TTL_MS : ttlMs)) map.delete(cachedKey)
+    const age = now - entry.at
+    // 系统时间校正到记录之前时失效；负年龄不能把旧值或挂起 RPC 延长到时钟追上为止。
+    if (age < 0 || age >= (entry.pending ? PENDING_TTL_MS : ttlMs)) map.delete(cachedKey)
   }
   const hit = map.get(key)
   if (hit) {

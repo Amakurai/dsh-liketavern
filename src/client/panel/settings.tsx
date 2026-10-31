@@ -13,6 +13,7 @@ import { useEffect, useId, useRef, useState } from 'react'
 import { MAX_PRESET_STOP_CHARS, MAX_PRESET_STOP_SEQUENCES } from '../../core/presetSampling.js'
 import { setSpeakerHeader } from '../displayPrefs.js'
 import { setTavernLocale, useT } from '../i18n.js'
+import { applySettingsPatch, changedSettingsPatch } from '../settingsPatch.js'
 import { DEFAULT_PROMPT_PREFERENCES, EMPTY_SESSION_DEFAULTS, type PresetSummary, type TavernRemote, type TavernSettings } from '../types.js'
 import { Btn, CheckChips, Err, LineListInput, Muted, NumInput, SaveBar, Section, Select, SettingsRow, Skeleton, Tabs, Toggle, runAsync, useLoader, useToast } from '../util.js'
 
@@ -90,7 +91,8 @@ export function SettingsSection(props: { remote: TavernRemote; sessions?: Sessio
 
   const save = (patch: Record<string, unknown>, toastText: string) =>
     run(async () => {
-      const r = await remote.updateSettings({ patch })
+      const previous = baseline ? toDraft(baseline) : null
+      const r = await remote.updateSettings({ patch: changedSettingsPatch(patch, previous) })
       if (!r.ok) {
         setError(r.error.message)
         return
@@ -100,13 +102,9 @@ export function SettingsSection(props: { remote: TavernRemote; sessions?: Sessio
       // 保存区接收服务器结果；其它区只保留实际编辑的草稿，未编辑字段同步最新值，避免凭空产生脏状态。
       setDraft((current) => {
         if (!current) return saved
-        const next = { ...saved }
-        for (const key of Object.keys(current) as Array<keyof TavernSettings>) {
-          if (!Object.hasOwn(patch, key) && JSON.stringify(current[key]) !== JSON.stringify(baseline?.[key])) {
-            ;(next as unknown as Record<string, unknown>)[key] = structuredClone(current[key])
-          }
-        }
-        return next
+        const unsaved = changedSettingsPatch(current, previous)
+        for (const key of Object.keys(patch)) delete unsaved[key]
+        return applySettingsPatch(saved, unsaved)
       })
       toast.show(toastText)
     })
@@ -115,7 +113,7 @@ export function SettingsSection(props: { remote: TavernRemote; sessions?: Sessio
   const changeLocale = (locale: 'auto' | 'en' | 'zh') => {
     if (!draft || pending.current || locale === draft.locale) return
     const prev = draft.locale
-    setDraft({ ...draft, locale })
+    setDraft((current) => current ? { ...current, locale } : current)
     setTavernLocale(locale)
     void run(async () => {
       try {
@@ -137,7 +135,7 @@ export function SettingsSection(props: { remote: TavernRemote; sessions?: Sessio
   const changeSpeakerHeader = (speakerHeader: boolean) => {
     if (!draft || pending.current || speakerHeader === (draft.speakerHeader === true)) return
     const prev = draft.speakerHeader === true
-    setDraft({ ...draft, speakerHeader })
+    setDraft((current) => current ? { ...current, speakerHeader } : current)
     setSpeakerHeader(speakerHeader)
     void run(async () => {
       try {
@@ -186,11 +184,14 @@ export function SettingsSection(props: { remote: TavernRemote; sessions?: Sessio
         : null
 
   const promptPreferences = { ...DEFAULT_PROMPT_PREFERENCES, ...draft.prompts }
-  const setPrompts = (patch: Partial<TavernSettings['prompts']>) => setDraft({ ...draft, prompts: { ...promptPreferences, ...patch } })
-  const setSampling = (patch: Partial<TavernSettings['sampling']>) => setDraft({ ...draft, sampling: { ...draft.sampling, ...patch } })
-  const setWorldInfo = (patch: Partial<TavernSettings['worldInfo']>) => setDraft({ ...draft, worldInfo: { ...draft.worldInfo, ...patch } })
-  const setMemory = (patch: Partial<TavernSettings['memory']>) => setDraft({ ...draft, memory: { ...draft.memory, ...patch } })
-  const setDefaults = (patch: Partial<TavernSettings['defaults']>) => setDraft({ ...draft, defaults: { ...draft.defaults, ...patch } })
+  const editDraft = (edit: (current: TavernSettings) => TavernSettings) => {
+    if (!pending.current) setDraft((current) => current ? edit(current) : current)
+  }
+  const setPrompts = (patch: Partial<TavernSettings['prompts']>) => editDraft((current) => ({ ...current, prompts: { ...DEFAULT_PROMPT_PREFERENCES, ...current.prompts, ...patch } }))
+  const setSampling = (patch: Partial<TavernSettings['sampling']>) => editDraft((current) => ({ ...current, sampling: { ...current.sampling, ...patch } }))
+  const setWorldInfo = (patch: Partial<TavernSettings['worldInfo']>) => editDraft((current) => ({ ...current, worldInfo: { ...current.worldInfo, ...patch } }))
+  const setMemory = (patch: Partial<TavernSettings['memory']>) => editDraft((current) => ({ ...current, memory: { ...current.memory, ...patch } }))
+  const setDefaults = (patch: Partial<TavernSettings['defaults']>) => editDraft((current) => ({ ...current, defaults: { ...current.defaults, ...patch } }))
 
   return (
     <>
@@ -221,6 +222,7 @@ export function SettingsSection(props: { remote: TavernRemote; sessions?: Sessio
               <Select
                 size="md"
                 value={draft.locale}
+                disabled={busy}
                 onChange={(v) => changeLocale(v === 'zh' ? 'zh' : v === 'en' ? 'en' : 'auto')}
                 options={[
                   { value: 'auto', label: t('settings.interface.localeAuto') },
@@ -243,7 +245,7 @@ export function SettingsSection(props: { remote: TavernRemote; sessions?: Sessio
               <Select
                 size="md"
                 value={draft.defaults.presetId}
-                disabled={presets.state.status !== 'ready'}
+                disabled={busy || presets.state.status !== 'ready'}
                 onChange={(presetId) => setDefaults({ presetId })}
                 options={[
                   { value: '', label: t('settings.defaults.builtinPreset') },
@@ -258,7 +260,7 @@ export function SettingsSection(props: { remote: TavernRemote; sessions?: Sessio
               <Select
                 size="md"
                 value={draft.defaults.personaId}
-                disabled={personas.state.status !== 'ready'}
+                disabled={busy || personas.state.status !== 'ready'}
                 onChange={(personaId) => setDefaults({ personaId })}
                 options={[{ value: '', label: t('settings.defaults.noPersona') }, ...personaItems.map((p) => ({ value: p.id, label: p.name }))]}
               />
@@ -267,7 +269,7 @@ export function SettingsSection(props: { remote: TavernRemote; sessions?: Sessio
               <Select
                 size="md"
                 value={draft.defaults.characterLorebookId}
-                disabled={lore.state.status !== 'ready'}
+                disabled={busy || lore.state.status !== 'ready'}
                 onChange={(characterLorebookId) => setDefaults({ characterLorebookId })}
                 options={[{ value: '', label: t('settings.defaults.embeddedLore') }, ...lorebooks.map((n) => ({ value: n, label: n }))]}
               />
@@ -342,6 +344,7 @@ export function SettingsSection(props: { remote: TavernRemote; sessions?: Sessio
               <Select
                 size="md"
                 value={draft.sampling.thinking}
+                disabled={busy}
                 onChange={(v) => setSampling({ thinking: v as TavernSettings['sampling']['thinking'] })}
                 options={[
                   { value: 'disabled', label: t('settings.sampling.thinking.disabled') },
@@ -389,6 +392,7 @@ export function SettingsSection(props: { remote: TavernRemote; sessions?: Sessio
               <Select
                 size="md"
                 value={String(draft.worldInfo.characterStrategy)}
+                disabled={busy}
                 onChange={(v) => setWorldInfo({ characterStrategy: Number(v) as 0 | 1 | 2 })}
                 options={[
                   { value: '0', label: 'Sorted Evenly' },
@@ -460,19 +464,19 @@ export function SettingsSection(props: { remote: TavernRemote; sessions?: Sessio
           <>
             <Section title={t('settings.cards.title')} description={t('settings.cards.desc')}>
               <SettingsRow title={t('settings.cards.cascadeDelete')} description={t('settings.cards.cascadeDeleteDesc')}>
-                <Toggle checked={draft.cascadeDeleteEmbeddedBook} onChange={(cascadeDeleteEmbeddedBook) => setDraft({ ...draft, cascadeDeleteEmbeddedBook })} />
+                <Toggle checked={draft.cascadeDeleteEmbeddedBook} onChange={(cascadeDeleteEmbeddedBook) => editDraft((current) => ({ ...current, cascadeDeleteEmbeddedBook }))} />
               </SettingsRow>
               <SettingsRow title={t('settings.cards.interactiveCards')} description={t('settings.cards.interactiveCardsDesc')}>
-                <Toggle checked={draft.interactiveCards} onChange={(interactiveCards) => setDraft({ ...draft, interactiveCards })} />
+                <Toggle checked={draft.interactiveCards} onChange={(interactiveCards) => editDraft((current) => ({ ...current, interactiveCards }))} />
               </SettingsRow>
               <SettingsRow title={t('settings.cards.triggerLogMax')}>
-                <NumInput value={draft.triggerLogMax} onChange={(v) => setDraft({ ...draft, triggerLogMax: Math.max(10, Math.round(v)) })} />
+                <NumInput value={draft.triggerLogMax} onChange={(v) => editDraft((current) => ({ ...current, triggerLogMax: Math.max(10, Math.round(v)) }))} />
               </SettingsRow>
               <SettingsRow title={t('settings.cards.whitelist')} description={t('settings.cards.whitelistDesc')} stacked>
                 <LineListInput
                   style={{ minHeight: 64 }}
                   value={draft.cardNetworkWhitelist}
-                  onChange={(cardNetworkWhitelist) => setDraft({ ...draft, cardNetworkWhitelist })}
+                  onChange={(cardNetworkWhitelist) => editDraft((current) => ({ ...current, cardNetworkWhitelist }))}
                 />
               </SettingsRow>
               <SaveBar>

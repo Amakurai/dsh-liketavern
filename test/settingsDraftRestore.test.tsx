@@ -106,7 +106,7 @@ describe('设置草稿恢复', () => {
     const saved = { ...initial, prompts: expected }
     vi.mocked(api.updateSettings).mockResolvedValueOnce(ok({ settings: saved }))
     await act(async () => save())
-    expect(api.updateSettings).toHaveBeenLastCalledWith({ patch: { prompts: expected } })
+    expect(api.updateSettings).toHaveBeenLastCalledWith({ patch: { prompts: { preferCharacterPrompt: false, preferCharacterInstructions: false } } })
     expect(snapshot.observed['settings:draft']).toEqual(saved)
     expect(snapshot.observed['settings:baseline']).toEqual(saved)
   })
@@ -119,8 +119,7 @@ describe('设置草稿恢复', () => {
     expect(view.root.findAllByType(Toggle).map(toggle => toggle.props.checked)).toEqual([true, true, false, true, true])
     await act(async () => view.root.findAllByType(Toggle)[0]!.props.onChange(false))
     await act(async () => view.root.findAllByType(Btn).find(button => button.props.primary)!.props.onClick())
-    expect(api.updateSettings).toHaveBeenCalledWith({ patch: { prompts: { preferCharacterPrompt: false, preferCharacterInstructions: true, cacheFirstLayout: false,
-      hideHarnessIdentity: true, dropWorkspaceInstructions: true } } })
+    expect(api.updateSettings).toHaveBeenCalledWith({ patch: { prompts: { preferCharacterPrompt: false } } })
   })
 
   it.each([false, true])('分区保存同步其它未编辑字段，并保留实际编辑的草稿：%s', async (hasOtherDraft) => {
@@ -168,7 +167,7 @@ describe('设置草稿恢复', () => {
     expect(snapshot.observed['settings:draft']).toEqual(edited)
     const save = view.root.findAllByType(Btn).find((button) => button.props.primary)!
     await act(async () => save.props.onClick())
-    expect(api.updateSettings).toHaveBeenCalledWith({ patch: { sampling: edited.sampling } })
+    expect(api.updateSettings).toHaveBeenCalledWith({ patch: { sampling: { temperature: edited.sampling.temperature } } })
     expect(snapshot.observed['settings:baseline']).toEqual(settings(0.9))
   })
 

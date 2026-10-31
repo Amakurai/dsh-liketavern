@@ -86,7 +86,8 @@ function DraftLoader(props: { remote: TavernRemote; scope: string; children: Rea
   const queueKey = `${owner}:${props.scope}`
   const holder = useRef({}), channelRef = useRef<DraftRecoveryChannel | null>(null), alive = useRef(false)
   const [restoreConfirmation, setRestoreConfirmation] = useState(false)
-  useLayoutEffect(() => {
+  // Suspense 隐藏时只退出布局 effect，仍保留组件状态；恢复槽位跟随实际卸载，不能在隐藏时丢弃。
+  useEffect(() => {
     alive.current = true
     return () => {
       alive.current = false

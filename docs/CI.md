@@ -48,6 +48,8 @@ node scripts/summarize-tests.mjs .vitest/results.json
 
 正常全量运行不需要设置这些环境变量，仍使用原来的本地 worker 数与终端 reporter。没有统一重试；测试失败应保留，不能通过自动重跑隐藏。
 
+布局 effect 的生命周期使用 `draftDomLifecycle.test.tsx` 的真实 React DOM 回归：React 18 测试渲染器不会执行浏览器 Suspense 隐藏时的布局清理，也不能替代并发根下的 StrictMode 重放。该文件使用锁定的 jsdom 开发依赖，先验证故障场景确实清理并恢复布局 effect，再断言草稿恢复、宿主回执与页面离开保护；普通编辑器回归继续使用轻量渲染器。当前 jsdom 要求 Node 24.15 或更新的 24.x，双平台 CI 使用当前 Node 24；它不进入运行 bundle。
+
 ## 失败诊断
 
 每片的 Actions Summary 包含通过/失败/跳过计数、失败用例、失败文件以及耗时最高的十个文件和用例。即使测试失败，也上传 `test-results-<系统>-<分片>`，保留 14 天：

@@ -398,7 +398,7 @@ describe('编辑草稿持久化', () => {
     }
   })
 
-  it('StrictMode 重放挂载后仍保留失败草稿，重试确认并关闭后释放离开保护', async () => {
+  it('StrictMode 下仍保留失败草稿，重试确认并关闭后释放离开保护', async () => {
     const env = environment()
     let view!: ReactTestRenderer
     await act(async () => { view = create(<StrictMode><Harness api={env.api} scope={env.scope} /></StrictMode>) })

@@ -144,11 +144,7 @@ export declare class TavernService extends TypertRemoteService implements Tavern
         cardId: string;
         storyId?: string;
     }): Promise<TavernMethodResults['getJournal']>;
-    saveJournal(request: {
-        cardId: string;
-        storyId?: string;
-        text: string;
-    }): Promise<TavernMethodResults['saveJournal']>;
+    saveJournal(request: TavernMethodRequests['saveJournal']): Promise<TavernMethodResults['saveJournal']>;
     listPersonas(_request: Record<string, never>): Promise<TavernMethodResults['listPersonas']>;
     /** 自动默认项必须由同一修订的判断授权；只在真实配置冲突后重读，不能覆盖排队期间的用户选择。 */
     private updateDefaultPersona;

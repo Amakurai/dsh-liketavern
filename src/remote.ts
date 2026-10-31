@@ -235,7 +235,7 @@ export const METHODS = {
   // json：会话世界书，宽松传输，state/lorebook 归一化时严格校验。
   saveChatLorebook: { req: object({ ...storyScope, json: anyValue, expectedRevision: optional(nonEmpty()) }), value: anyValue, summary: '保存会话世界书' },
   getJournal: { req: object({ ...storyScope }), value: anyValue, summary: '读取角色笔记 journal.md' },
-  saveJournal: { req: object({ ...storyScope, text: string() }), value: anyValue, summary: '保存角色笔记 journal.md' },
+  saveJournal: { req: object({ ...storyScope, text: string(), expectedRevision: optional(nonEmpty()) }), value: anyValue, summary: '按读取版本保存角色笔记 journal.md' },
   // 人设
   listPersonas: { req: object({}), value: anyValue, summary: '列出人设' },
   savePersona: { req: object({ persona: persona(), expectedRevision: optional(nullable(nonEmpty())) }), value: anyValue, summary: '保存人设' },
@@ -588,8 +588,8 @@ export interface TavernMethodResults {
   deleteEmbeddedLorebook: { deleted: boolean }
   getChatLorebook: { json: unknown; revision: string }
   saveChatLorebook: { saved: boolean; revision: string }
-  getJournal: { text: string }
-  saveJournal: { saved: boolean }
+  getJournal: { text: string; revision: string }
+  saveJournal: { saved: boolean; revision: string }
   // 人设
   listPersonas: { items: Array<Persona & { revision: string }> }
   savePersona: { id: string; revision: string; defaultWarning?: string }

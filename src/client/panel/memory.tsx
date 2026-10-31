@@ -122,8 +122,12 @@ function MemoryContextSection(props: { remote: TavernRemote; cardId: string; sto
   const setEditingId = (id: string | null) => { editing.current = id; setStoredEditingId(id) }
   const [newBody, setNewBody] = useDraftState(`${draftKey}:newBody`, '')
   const [journalText, setJournalText] = useDraftState(`${draftKey}:journalText`, '')
+  const [journalRevision, setJournalRevision] = useDraftState<string | null>(`${draftKey}:journalRevision`, null)
   const journalRestored = useDraftRestored(`${draftKey}:journalText`)
+  // 只保留已保存标记，避免为并发基线再复制整份笔记、挤占自动草稿的体积预算；旧草稿未知则保守保护。
+  const [journalUnsaved, setJournalUnsaved] = useDraftState<boolean | null>(`${draftKey}:journalUnsaved`, journalRestored ? null : false)
   const firstJournal = useRef(true)
+  const [confirmJournalReload, setConfirmJournalReload] = useState(false)
   const [deltaType, setDeltaType] = useDraftState<'add' | 'update' | 'invalidate'>(`${draftKey}:deltaType`, 'add')
   const [deltaContent, setDeltaContent] = useDraftState(`${draftKey}:deltaContent`, '')
   const [deltaRef, setDeltaRef] = useDraftState(`${draftKey}:deltaRef`, '')
@@ -154,10 +158,14 @@ function MemoryContextSection(props: { remote: TavernRemote; cardId: string; sto
   const charItems = chars.state.status === 'ready' ? chars.state.value.items : []
   const memoryItems = memories.state.status === 'ready' ? memories.state.value.items : []
   const deltaItems = deltas.state.status === 'ready' ? deltas.state.value.items : []
-  // keyed 上下文首挂时字段已从对应剧情恢复；首次查询不能覆盖它，后续保存重拉正常同步。
+  // 首次查询保护真正未保存的正文与版本；其它草稿附带的已保存笔记则正常刷新，不制造过期草稿。
   useEffect(() => {
     if (journal.state.status !== 'ready') return
-    if (!firstJournal.current || !journalRestored) setJournalText(journal.state.value.text)
+    if (!firstJournal.current || !journalRestored || journalUnsaved === false) {
+      setJournalText(journal.state.value.text)
+      setJournalRevision(journal.state.value.revision)
+      setJournalUnsaved(false)
+    }
     firstJournal.current = false
   }, [journal.state])
   useEffect(() => {
@@ -219,14 +227,24 @@ function MemoryContextSection(props: { remote: TavernRemote; cardId: string; sto
 
   const saveJournal = () =>
     op(async () => {
-      const r = await remote.saveJournal({ cardId, storyId, text: journalText })
-      const err = errOf(r)
-      if (err) setError(err)
+      if (!journalRevision) { setError(t('memory.journalMissingRevision')); return }
+      const r = await remote.saveJournal({ cardId, storyId, text: journalText, expectedRevision: journalRevision })
+      if (!r.ok) setError(r.error.message)
       else {
+        setJournalRevision(r.value.revision)
+        setJournalUnsaved(false)
         toast.show(t('memory.journalSaved'))
         journal.reload()
       }
     })
+
+  // 只放弃笔记，不清除同一剧情中尚未提交的新记忆或世界状态草稿。
+  const reloadJournal = () => {
+    if (pending.current || editing.current !== null) return
+    firstJournal.current = false
+    setError(null)
+    journal.reload()
+  }
 
   const addDelta = () =>
     op(async () => {
@@ -261,6 +279,9 @@ function MemoryContextSection(props: { remote: TavernRemote; cardId: string; sto
     <Section title={t('section.memory')} description={t('memory.desc')}>
       {toast.node}
       {guard.confirmation}
+      <ConfirmDialog open={confirmJournalReload} title={t('memory.reloadJournal')} description={t('memory.reloadJournalConfirm')}
+        confirmLabel={t('memory.reloadJournal')} danger busy={busy} onCancel={() => setConfirmJournalReload(false)}
+        onConfirm={() => { if (pending.current) return; setConfirmJournalReload(false); reloadJournal() }} />
       <ConfirmDialog open={deleteId !== null} title={t('memory.deleteEntry')} description={t('memory.deleteConfirm')}
         confirmLabel={t('action.delete')} danger busy={busy} onCancel={() => { if (!busy) setDeleteId(null) }}
         onConfirm={() => { if (deleteId) void deleteMemory(deleteId).then(() => setDeleteId(null)) }} />
@@ -465,7 +486,10 @@ function MemoryContextSection(props: { remote: TavernRemote; cardId: string; sto
                   style={{ minHeight: 180 }}
                   disabled={busy}
                   value={journalText}
-                  onChange={(e) => setJournalText(e.target.value)}
+                  onChange={(e) => {
+                    setJournalText(e.target.value)
+                    setJournalUnsaved(journal.state.status !== 'ready' || e.target.value !== journal.state.value.text)
+                  }}
                 />
               ) : journal.state.status === 'error' ? (
                 <><Err message={journal.state.message} /><Btn disabled={busy} onClick={journal.reload}>{t('action.retry')}</Btn></>
@@ -473,6 +497,11 @@ function MemoryContextSection(props: { remote: TavernRemote; cardId: string; sto
                 <Skeleton height={180} />
               )}
               <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                <Btn disabled={busy || journal.state.status !== 'ready'} onClick={() => {
+                  if (pending.current) return
+                  if (journalDirty) setConfirmJournalReload(true)
+                  else reloadJournal()
+                }}>{t('memory.reloadJournal')}</Btn>
                 <Btn primary disabled={busy || !journalDirty || journal.state.status !== 'ready' || !cardId} onClick={() => void saveJournal()}>{t('memory.saveJournal')}</Btn>
               </div>
             </div>

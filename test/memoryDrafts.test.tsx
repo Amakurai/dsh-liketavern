@@ -11,6 +11,7 @@ import { Btn, ConfirmDialog, IconBtn, Select } from '../src/client/util.js'
 import type { TavernRemote } from '../src/client/types.js'
 import { resolveConfig } from '../src/node/config.js'
 import { TavernState } from '../src/node/state.js'
+import { jsonEditRevision } from '../src/state/characterRevision.js'
 
 vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
   Button: (p: { children?: ReactNode }) => <button>{p.children}</button>,
@@ -35,8 +36,8 @@ const ok = <T,>(value: T) => ({ ok: true as const, value })
 const contextKey = (storyId: string | null) => `memory:context:${JSON.stringify(['card-a', storyId])}`
 function fixture(fields: Record<string, unknown>, restoreScope?: string) {
   let journalText = '已存笔记'
-  const saveJournal = vi.fn(async (request: { text: string }) => { journalText = request.text.trim(); return ok({ saved: true }) })
-  const getJournal = vi.fn(async () => ok({ text: journalText }))
+  const saveJournal = vi.fn<TavernRemote['saveJournal']>(async request => { journalText = request.text.trim(); return ok({ saved: true, revision: jsonEditRevision(journalText) }) })
+  const getJournal = vi.fn<TavernRemote['getJournal']>(async () => ok({ text: journalText, revision: jsonEditRevision(journalText) }))
   const saveMemory = vi.fn(async () => ok({ id: 'entry-a' }))
   const compressMemories = vi.fn(async () => ok({ merged: 1 }))
   const getEditorDraft = vi.fn(async ({ key }: { key: string }) => ok({ draft: !restoreScope || key === restoreScope
@@ -60,12 +61,90 @@ async function click(label: string) {
 
 it('首次服务器笔记查询不覆盖恢复正文，保存带原剧情并回填保存后的正文', async () => {
   const key = contextKey('story-a')
-  const f = fixture({ 'memory:cardId': 'card-a', 'memory:storyId': 'story-a', [`${key}:tab`]: 'journal', [`${key}:journalText`]: ' 待保存笔记 ' })
+  const f = fixture({ 'memory:cardId': 'card-a', 'memory:storyId': 'story-a', [`${key}:tab`]: 'journal', [`${key}:journalText`]: ' 待保存笔记 ', [`${key}:journalRevision`]: jsonEditRevision('已存笔记') })
   await mount(component(f.remote))
   expect(view!.root.findByType('textarea').props.value).toBe(' 待保存笔记 ')
   await click('保存笔记')
-  expect(f.saveJournal).toHaveBeenCalledWith({ cardId: 'card-a', storyId: 'story-a', text: ' 待保存笔记 ' })
+  expect(f.saveJournal).toHaveBeenCalledWith({ cardId: 'card-a', storyId: 'story-a', text: ' 待保存笔记 ', expectedRevision: jsonEditRevision('已存笔记') })
   expect(view!.root.findByType('textarea').props.value).toBe('待保存笔记')
+})
+
+it('其它草稿附带的已保存笔记不应恢复为过期未保存内容，首次读取跟随最新正文和版本', async () => {
+  const key = contextKey('story-a')
+  const f = fixture({ 'memory:cardId': 'card-a', 'memory:storyId': 'story-a', [`${key}:tab`]: 'journal',
+    [`${key}:journalText`]: '以前保存过的笔记', [`${key}:journalUnsaved`]: false,
+    [`${key}:journalRevision`]: jsonEditRevision('以前保存过的笔记'), [`${key}:newBody`]: '仍需恢复的新记忆' })
+  await mount(component(f.remote))
+  expect(view!.root.findByType('textarea').props.value).toBe('已存笔记')
+  await act(async () => view!.root.findByType('textarea').props.onChange({ target: { value: '基于最新正文的新编辑' } }))
+  await click('保存笔记')
+  expect(f.saveJournal).toHaveBeenCalledWith({ cardId: 'card-a', storyId: 'story-a', text: '基于最新正文的新编辑', expectedRevision: jsonEditRevision('已存笔记') })
+})
+
+it('大笔记修改后的自动草稿不重复保存整份基线，正常体积内关闭仍能暂存正文', async () => {
+  const key = contextKey('story-a'), original = '工'.repeat(400_000), edited = original + '新'
+  const f = fixture({ 'memory:cardId': 'card-a', 'memory:storyId': 'story-a', [`${key}:tab`]: 'journal' })
+  f.getJournal.mockResolvedValue(ok({ text: original, revision: jsonEditRevision(original) }))
+  const saveDraft = vi.fn<TavernRemote['saveEditorDraft']>(async () => ok({ saved: true }))
+  await mount(component({ ...f.remote, saveEditorDraft: saveDraft }))
+  await act(async () => view!.root.findByType('textarea').props.onChange({ target: { value: edited } }))
+  await act(async () => view!.unmount())
+  view = undefined
+  expect(saveDraft).toHaveBeenCalledOnce()
+  expect(saveDraft.mock.calls[0]![0].value).toMatchObject({ version: 1, fields: { [`${key}:journalText`]: edited } })
+})
+
+it('遗留笔记草稿缺少版本时拒绝保存，明确确认重读后可合并并保存', async () => {
+  const key = contextKey('story-a')
+  const f = fixture({ 'memory:cardId': 'card-a', 'memory:storyId': 'story-a', [`${key}:tab`]: 'journal', [`${key}:journalText`]: '缺少版本的旧草稿' })
+  await mount(component(f.remote))
+  await click('保存笔记')
+  expect(f.saveJournal).not.toHaveBeenCalled()
+  expect(view!.root.findByType('textarea').props.value).toBe('缺少版本的旧草稿')
+  expect(JSON.stringify(view!.toJSON())).toContain('笔记草稿缺少保存版本')
+  await click('重新读取笔记')
+  expect(f.getJournal).toHaveBeenCalledOnce()
+  let dialog = view!.root.findAllByType(ConfirmDialog).find(item => item.props.open)!
+  await act(async () => dialog.props.onCancel())
+  expect(view!.root.findByType('textarea').props.value).toBe('缺少版本的旧草稿')
+  await click('重新读取笔记')
+  dialog = view!.root.findAllByType(ConfirmDialog).find(item => item.props.open)!
+  await act(async () => dialog.props.onConfirm())
+  expect(view!.root.findByType('textarea').props.value).toBe('已存笔记')
+  await act(async () => view!.root.findByType('textarea').props.onChange({ target: { value: '手动合并后的笔记' } }))
+  await click('保存笔记')
+  expect(f.saveJournal).toHaveBeenCalledWith({ cardId: 'card-a', storyId: 'story-a', text: '手动合并后的笔记', expectedRevision: jsonEditRevision('已存笔记') })
+})
+
+it('恢复草稿保留旧版本，首次读取不能授权它覆盖更新的笔记，冲突后保留原稿', async () => {
+  const key = contextKey('story-a'), oldRevision = jsonEditRevision('更早的笔记')
+  const f = fixture({ 'memory:cardId': 'card-a', 'memory:storyId': 'story-a', [`${key}:tab`]: 'journal',
+    [`${key}:journalText`]: '基于旧内容编辑的草稿', [`${key}:journalRevision`]: oldRevision, [`${key}:journalUnsaved`]: true })
+  f.saveJournal.mockResolvedValue({ ok: false, error: { code: 'conflict', message: '笔记已被另一窗口或剧情修改' } })
+  await mount(component(f.remote))
+  await click('保存笔记')
+  expect(f.saveJournal).toHaveBeenLastCalledWith({ cardId: 'card-a', storyId: 'story-a', text: '基于旧内容编辑的草稿', expectedRevision: oldRevision })
+  expect(view!.root.findByType('textarea').props.value).toBe('基于旧内容编辑的草稿')
+  expect(JSON.stringify(view!.toJSON())).toContain('笔记已被另一窗口或剧情修改')
+  await click('保存笔记')
+  expect(f.saveJournal.mock.calls.map(([request]) => request.expectedRevision)).toEqual([oldRevision, oldRevision])
+})
+
+it('确认重新读取只替换笔记，尚未提交的记忆和世界状态草稿继续保留', async () => {
+  const key = contextKey('story-a')
+  const f = fixture({ 'memory:cardId': 'card-a', 'memory:storyId': 'story-a', [`${key}:tab`]: 'journal',
+    [`${key}:journalText`]: '待放弃的笔记', [`${key}:journalRevision`]: jsonEditRevision('旧笔记'),
+    [`${key}:newBody`]: '仍需保留的新记忆', [`${key}:deltaContent`]: '仍需保留的世界变化' })
+  await mount(component(f.remote))
+  await click('重新读取笔记')
+  const dialog = view!.root.findAllByType(ConfirmDialog).find(item => item.props.open)!
+  await act(async () => dialog.props.onConfirm())
+  expect(view!.root.findByType('textarea').props.value).toBe('已存笔记')
+  await act(async () => view!.root.findAllByType('button').find(item => item.props.children === '记忆（1）')!.props.onClick())
+  expect(view!.root.findByType('textarea').props.value).toBe('仍需保留的新记忆')
+  await act(async () => view!.root.findAllByType('button').find(item => item.props.children === '世界状态（0）')!.props.onClick())
+  expect(view!.root.findByType('textarea').props.value).toBe('仍需保留的世界变化')
+  expect(f.saveJournal).not.toHaveBeenCalled()
 })
 
 it('更换聊天入口卸载原范围，旧剧情的恢复草稿不能进入新剧情', async () => {
@@ -98,12 +177,12 @@ it('恢复单条记忆编辑并保护取消；明确放弃后重开读取原条�
 
 it('恢复已选择的初始状态，不因省略 undefined 又回到聊天入口剧情', async () => {
   const key = contextKey(null)
-  const f = fixture({ 'memory:cardId': 'card-a', 'memory:storyId': '', [`${key}:tab`]: 'journal', [`${key}:journalText`]: '初始状态草稿' })
+  const f = fixture({ 'memory:cardId': 'card-a', 'memory:storyId': '', [`${key}:tab`]: 'journal', [`${key}:journalText`]: '初始状态草稿', [`${key}:journalRevision`]: jsonEditRevision('已存笔记') })
   await mount(component(f.remote))
   expect(view!.root.findAllByType(Select)[1]!.props.value).toBe('')
   expect(view!.root.findByType('textarea').props.value).toBe('初始状态草稿')
   await click('保存笔记')
-  expect(f.saveJournal).toHaveBeenCalledWith({ cardId: 'card-a', storyId: undefined, text: '初始状态草稿' })
+  expect(f.saveJournal).toHaveBeenCalledWith({ cardId: 'card-a', storyId: undefined, text: '初始状态草稿', expectedRevision: jsonEditRevision('已存笔记') })
 })
 
 it('保存世界变化期间冻结完整表单，失败保留原稿并恢复编辑', async () => {

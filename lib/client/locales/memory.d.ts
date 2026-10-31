@@ -47,6 +47,9 @@ export declare const zh: {
     readonly 'memory.journalHint': "写在角色工作区 journal.md。会话芯片打开「注入角色笔记」后才会进本轮 turn。";
     readonly 'memory.saveJournal': "保存笔记";
     readonly 'memory.journalSaved': "已保存角色笔记";
+    readonly 'memory.journalMissingRevision': "笔记草稿缺少保存版本。请先复制内容，再重新读取笔记并合并修改。";
+    readonly 'memory.reloadJournal': "重新读取笔记";
+    readonly 'memory.reloadJournalConfirm': "这会放弃当前笔记草稿并读取已保存的笔记，其他记忆和世界状态草稿会保留。请先复制需要合并的内容。";
     readonly 'memory.opFailed': "操作失败：{message}";
     readonly 'memory.recovering': "该剧情有未完成的回滚恢复（{floors}），恢复完成前所有写入都会被拒绝。";
     readonly 'memory.recoveringDesc': "通常重新执行一次回退即可完成恢复；若反复失败，可重置恢复游标后再回退一次。";

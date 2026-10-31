@@ -412,15 +412,16 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
     if ((await this.state.loadCharacter(request.cardId)) === null) {
       throw new FloorError('card-not-found', `角色 ${request.cardId} 不存在`)
     }
-    return { text: await this.state.getJournal(request.cardId, request.storyId) }
+    const text = await this.state.getJournal(request.cardId, request.storyId)
+    return { text, revision: jsonEditRevision(text) }
   }
 
-  async saveJournal(request: { cardId: string; storyId?: string; text: string }): Promise<TavernMethodResults['saveJournal']> {
+  async saveJournal(request: TavernMethodRequests['saveJournal']): Promise<TavernMethodResults['saveJournal']> {
     if ((await this.state.loadCharacter(request.cardId)) === null) {
       throw new FloorError('card-not-found', `角色 ${request.cardId} 不存在`)
     }
-    await this.state.saveJournal(request.cardId, request.text ?? '', request.storyId)
-    return { saved: true }
+    const revision = await this.state.saveJournal(request.cardId, request.text, request.storyId, request.expectedRevision ?? null)
+    return { saved: true, revision }
   }
 
   // ── 人设 ─────────────────────────────────────────────────────────────────

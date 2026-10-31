@@ -292,7 +292,8 @@ export declare class TavernState {
     getSessionHelperScripts(sessionId: string, storyId: string): Promise<HelperScriptContext>;
     commitSessionHelperScripts(sessionId: string, request: HelperScriptCommit, beforeWrite?: (binding: SessionBinding) => void): Promise<HelperScriptView>;
     getJournal(cardId: string, storyId?: string): Promise<string>;
-    saveJournal(cardId: string, text: string, storyId?: string): Promise<void>;
+    /** 面板保存核对实际读取的正文版本；检查、正文与索引共用剧情锁，内部明确覆盖仍可省略版本。 */
+    saveJournal(cardId: string, text: string, storyId?: string, expectedRevision?: string | null): Promise<string>;
     getChatLorebook(cardId: string, storyId?: string): Promise<unknown>;
     invalidateChatLorebook(cardId: string, storyId: string): void;
     saveChatLorebook(cardId: string, json: unknown, storyId?: string, expectedRevision?: string): Promise<string>;

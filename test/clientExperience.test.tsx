@@ -15,6 +15,7 @@ import { TavernHeaderChip, defaultBinding } from '../src/client/chip.js'
 import { TavernSeatChip } from '../src/client/seatChip.js'
 import { Btn, CheckChips, ConfirmDialog, Dialog, IconBtn, Select } from '../src/client/util.js'
 import type { CharacterDetail, CharacterSummary, TavernRemote } from '../src/client/types.js'
+import { jsonEditRevision } from '../src/state/characterRevision.js'
 
 /** 仅替换宿主平台原语；被测组件的 hooks、草稿、remote 调用与状态更新都运行真实实现。 */
 vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
@@ -242,12 +243,12 @@ describe('编辑草稿保护', () => {
 
 describe('剧情上下文', () => {
   function remoteForStory() {
-    const saveJournal = vi.fn(async (_request: unknown) => ok({}))
+    const saveJournal = vi.fn(async (_request: unknown) => ok({ saved: true, revision: jsonEditRevision('新笔记') }))
     const remote = {
       listCharacters: async () => ok({ items: [summary('card-a', '灯塔守望者')] }),
       listStories: async () => ok({ items: [{ id: 'story-a', sessionId: 'session-a', createdAt: '2026-09-05', migrated: false }] }),
       getMemories: vi.fn(async () => ok({ items: [] })), getWorldDeltas: async () => ok({ items: [] }),
-      getJournal: async () => ok({ text: '旧笔记' }), saveJournal,
+      getJournal: async () => ok({ text: '旧笔记', revision: jsonEditRevision('旧笔记') }), saveJournal,
     }
     return { remote: remote as unknown as TavernRemote, saveJournal, getMemories: remote.getMemories }
   }
@@ -259,7 +260,7 @@ describe('剧情上下文', () => {
     await act(async () => tabs.find((b) => b.props.children === '角色笔记')!.props.onClick())
     await act(async () => view.root.findByType('textarea').props.onChange({ target: { value: '新笔记' } }))
     await act(async () => button(view, '保存笔记').props.onClick())
-    expect(saveJournal).toHaveBeenCalledWith({ cardId: 'card-a', storyId: 'story-a', text: '新笔记' })
+    expect(saveJournal).toHaveBeenCalledWith({ cardId: 'card-a', storyId: 'story-a', text: '新笔记', expectedRevision: jsonEditRevision('旧笔记') })
   })
   it('有草稿时取消切换初始状态，仍保持原剧情', async () => {
     const { remote } = remoteForStory()

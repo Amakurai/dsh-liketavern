@@ -360,6 +360,7 @@ export declare const METHODS: {
     saveJournal: {
         req: import("zod/mini").ZodMiniObject<{
             text: import("zod/mini").ZodMiniString<string>;
+            expectedRevision: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
             storyId: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
             cardId: import("zod/mini").ZodMiniString<string>;
         }, import("zod/v4/core").$strip>;
@@ -1275,9 +1276,11 @@ export interface TavernMethodResults {
     };
     getJournal: {
         text: string;
+        revision: string;
     };
     saveJournal: {
         saved: boolean;
+        revision: string;
     };
     listPersonas: {
         items: Array<Persona & {
@@ -1571,6 +1574,7 @@ export declare const TYPERT_HOST: {
                     cardId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     text: import("zod/mini").ZodMiniString<string>;
+                    expectedRevision: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
                     storyId: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
                     cardId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{}, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
@@ -2092,6 +2096,7 @@ export declare const TYPERT_REMOTE: {
                     cardId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     text: import("zod/mini").ZodMiniString<string>;
+                    expectedRevision: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
                     storyId: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
                     cardId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{}, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{

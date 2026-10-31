@@ -918,10 +918,22 @@ export class TavernState {
     return (await handle.fs.readText('journal.md')) ?? ''
   }
 
-  async saveJournal(cardId: string, text: string, storyId?: string): Promise<void> {
+  /** 面板保存核对实际读取的正文版本；检查、正文与索引共用剧情锁，内部明确覆盖仍可省略版本。 */
+  async saveJournal(cardId: string, text: string, storyId?: string, expectedRevision?: string | null): Promise<string> {
+    // Markdown 按 UTF-8 落盘；版本与幂等比较须使用同一编码后的正文，而不是无法编码的孤立代理项。
+    text = Buffer.from(text, 'utf8').toString('utf8')
     const { fs } = await this.plainWorkspace(cardId, storyId)
-    await fs.writeText('journal.md', text)
-    await rebuildIndex(fs, estimateTokens)
+    return withWorkspaceLock(fs.root, async () => {
+      if (expectedRevision === null) throw new Error('笔记缺少保存版本，请复制草稿并重新读取后合并修改')
+      const current = (await fs.readText('journal.md')) ?? ''
+      // 正文已落盘而索引重建失败时，同一保存可重试收口；不能让失败回执把自己的新正文变成冲突。
+      if (expectedRevision !== undefined && jsonEditRevision(current) !== expectedRevision && current !== text) {
+        throw new Error('笔记已被另一窗口或剧情修改，请保留草稿并重新读取后合并修改')
+      }
+      await fs.writeText('journal.md', text)
+      await rebuildIndex(fs, estimateTokens)
+      return jsonEditRevision(text)
+    })
   }
 
   async getChatLorebook(cardId: string, storyId?: string): Promise<unknown> {

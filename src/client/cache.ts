@@ -8,6 +8,7 @@
  * 轮询器。本端已知写路径在成功后显式 invalidate 并广播（必须先失效再 reload，
  * 否则仍会吃到旧缓存）；模型工具、其它页签等外部写入会在组件下一次重载时收敛。
  * 失败（reject 或错误信封）不缓存，下次调用立即重试。
+ * 每类缓存最多保留 128 项（包含飞行请求），优先淘汰最久未读项；每次读取清理过期项。
  *
  * 已知让步：getSessionBinding 的结果带 canSwipeGreeting（取决于会话是否已有用户
  * 消息），首条用户消息发出后最长 TTL 秒内可能仍读到 true；服务端仍是最终闸门。
@@ -20,6 +21,8 @@ const META_TTL_MS = 30_000
 const AVATAR_TTL_MS = 60_000
 /** 与读取界面的 20s 超时一致；断线悬挂的 RPC 不能永久占住重试入口。 */
 const PENDING_TTL_MS = 20_000
+/** 大量角色列表与断线 RPC 同样需要容量边界，不能只等待某次成功回包触发清理。 */
+const MAX_CACHE_ENTRIES = 128
 
 /**
  * 同页角色资产变更广播。仅清 Map 不会重新触发已经挂载的 useLoader；气泡、开场预览
@@ -41,21 +44,25 @@ interface CacheEntry<T> {
  * 上下文性失败（未绑定/服务未就绪），下次应真打 remote；reject 同理不留痕迹。
  */
 function read<T>(map: Map<string, CacheEntry<T>>, key: string, ttlMs: number, load: () => Promise<Envelope<T>>): Promise<Envelope<T>> {
+  const now = Date.now()
+  for (const [cachedKey, entry] of map) {
+    if (now - entry.at >= (entry.pending ? PENDING_TTL_MS : ttlMs)) map.delete(cachedKey)
+  }
   const hit = map.get(key)
-  if (hit?.pending && Date.now() - hit.at < PENDING_TTL_MS) return hit.pending
-  if (hit?.value && Date.now() - hit.at < ttlMs) return Promise.resolve(hit.value)
+  if (hit) {
+    // Map 顺序表示最近读取顺序；命中不延长 TTL 或悬挂请求的重试期限。
+    map.delete(key)
+    map.set(key, hit)
+    if (hit.pending) return hit.pending
+    if (hit.value) return Promise.resolve(hit.value)
+  }
   const pending = load().then(
     (r) => {
       if (r.ok) {
         // invalidate 可能在请求飞行期间发生；只有当前槽位仍属于本次请求时才允许回填。
         // 否则旧请求晚到会把新请求已经写入的值覆盖回去。
         if (map.get(key)?.pending !== pending) return r
-        // 顺手清扫同表过期项：进程内缓存没有淘汰事件，头像 dataURL 这类大值不能无限滞留。
-        const now = Date.now()
-        for (const [k, entry] of map) {
-          if (!entry.pending && entry.value && now - entry.at >= ttlMs) map.delete(k)
-        }
-        map.set(key, { at: now, value: r })
+        map.set(key, { at: Date.now(), value: r })
       } else if (map.get(key)?.pending === pending) {
         map.delete(key)
       }
@@ -66,7 +73,8 @@ function read<T>(map: Map<string, CacheEntry<T>>, key: string, ttlMs: number, lo
       throw err
     },
   )
-  map.set(key, { at: Date.now(), pending })
+  map.set(key, { at: now, pending })
+  if (map.size > MAX_CACHE_ENTRIES) map.delete(map.keys().next().value!)
   return pending
 }
 

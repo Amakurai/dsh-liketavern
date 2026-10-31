@@ -64,7 +64,7 @@ export function SessionTransfer({remote,sessions,sessionId}:{remote:TavernRemote
     if(file.size>192*1024*1024){setError(t('sessionArchive.tooLarge'));return}
     pending.current=true;setPhase('reading')
     // 新文件完整读入后才替换原输入，读取失败仍可用原文件恢复中断的导入。
-    try{const text=await file.text();if(active.current){setArchive({name:file.name,text});setConfirm(false)}}
+    try{const text=await file.text();if(active.current){setArchive({name:file.name,text});setConfirm(false);setRestoredSessionId(null)}}
     catch(e){if(active.current)setError(e instanceof Error?e.message:String(e))}finally{pending.current=false;if(active.current)setPhase(null)}
   }
   const openRestored=async(id:string)=>{

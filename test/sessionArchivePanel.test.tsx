@@ -119,5 +119,9 @@ it('导入成功但导航失败时可重新打开，不能再次导入同一文�
   expect(sessions.open).toHaveBeenLastCalledWith('restored')
   expect(sessions.open).toHaveBeenCalledTimes(3)
   expect(remote.importSessionArchive).toHaveBeenCalledOnce()
+  // 新一轮迁移不能通过上一轮的导航入口绕过所选文件的离开保护。
+  await act(async () => { view.root.findByType(FileBtn).props.onFile(new File(['next-archive'], 'next.json')) })
+  expect(view.root.findAllByType(Btn).some(item => item.props.children === '打开已导入会话')).toBe(false)
+  expect(view.root.findAllByType(Btn).find(item => item.props.primary)!.props.disabled).toBe(false)
   await act(async () => view.unmount())
 })

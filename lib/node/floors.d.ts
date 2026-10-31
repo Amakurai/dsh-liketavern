@@ -108,6 +108,14 @@ export declare function continueFloor({ ctx, state }: FloorDeps, sessionId: stri
 /** 角色的全部开场白变体（0 = first_mes）。 */
 export declare function greetingVariants(state: TavernState, cardId: string): Promise<string[]>;
 /**
+ * agent-loop 的 lastTurn 只在构造时从 turnBoundary 投影读取；补 turn 后把空闲相位对齐，避免下一句抢号。
+ * maintenance 相位同样要对齐：runMaintenance 结束时恢复的是相位对象上捕获的 lastTurn
+ * （dsh-agent-loop 0.1.2 的 maintenance.lastTurn 与 phase.lastTurn 同源），在窗口内改写即随恢复生效。
+ * 否则首条输入触发的维护（如 reserveHelperMvuMaintenance）会把开场白 turn 1 的对齐吞掉，
+ * 锁存唤醒再开 turn 1 撞号，进而清空已提交开场白楼层的 WAL 记录。
+ */
+export declare function syncIdleAgentLastTurn(ctx: Context | undefined, sessionId: string): void;
+/**
  * 把「只有开场白、从未 turn/start」的会话标成已开聊，这样「新对话」不会再复用它。
  * dsh 的 blank 只看 turn/start；assistant/message 不够。inbox 补偿必须在维护门控内
  * 等待会话队列后调用，不能与已经启动的 agent loop 抢 turn 号。

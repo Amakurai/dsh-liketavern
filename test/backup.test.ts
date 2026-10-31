@@ -84,6 +84,12 @@ describe('完整用户数据快照', () => {
 })
 
 describe('拒绝损坏与越界', () => {
+  it('会话迁移存在未完成回执时不能把中间状态备份为成功', async () => {
+    await mkdir(join(home, 'dsh-tavern/session-imports'), { recursive: true })
+    await writeFile(join(home, 'dsh-tavern/session-imports', `${'a'.repeat(64)}.json`), '{}')
+    await expect(create()).rejects.toMatchObject({ code: 'SESSION_IMPORT_INCOMPLETE' })
+    expect(await readdir(scratch)).not.toContain('backup')
+  })
   it.each(['../outside', '/absolute', 'C:/drive', 'a\\b', 'x/../y', 'file:stream', 'CON', 'trailing.', 'double//slash'])('拒绝清单中的非法路径 %s', async path => {
     await writeFile(join(home, 'safe'), 'safe'); await create()
     const data = await manifest(); (data.entries as Array<{ path: string }>)[0]!.path = path

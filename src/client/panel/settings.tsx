@@ -6,6 +6,7 @@
  */
 import { ScriptSettings } from './scripts.js'
 import { CardDataSettings } from './cardData.js'
+import type { SessionsPort } from '../openChild.js'
 import { DraftScope, useDraftGuard } from '../drafts.js'
 import { useDraftRestored, useDraftState } from '../draftPersistence.js'
 import { useEffect, useId, useRef, useState } from 'react'
@@ -37,7 +38,7 @@ function stopSequencesError(stop: readonly string[]): 'count' | 'length' | null 
   return stop.some((item) => item.length > MAX_PRESET_STOP_CHARS) ? 'length' : null
 }
 
-export function SettingsSection(props: { remote: TavernRemote }) {
+export function SettingsSection(props: { remote: TavernRemote; sessions?: SessionsPort }) {
   const { remote } = props
   const t = useT()
   const tabsId = useId()
@@ -495,7 +496,7 @@ export function SettingsSection(props: { remote: TavernRemote }) {
                 </Btn>
               </SaveBar>
             </Section>
-            <CardDataSettings remote={remote} />
+            <CardDataSettings remote={remote} sessions={props.sessions} />
             <div className="dsh-tavern-groupHead">{t('settings.cards.dataHome')}</div>
             {dataInfo.state.status === 'error' ? <>
               <Err message={dataInfo.state.message} />

@@ -1,5 +1,5 @@
 /** 设置页的剧情变量管理：显式选择角色和剧情，备份已保存快照；恢复经原有楼层 WAL/CAS，草稿及失败留在设置。 */
-import {useEffect,useState} from 'react'
+import {useEffect,useRef,useState} from 'react'
 import {parseHelperVariableBackup,helperVariableRestoreChanges} from '../../core/helperVariableBackup.js'
 import type {HelperSnapshot} from '../../core/helperRuntime.js'
 import type {HelperScriptAsset} from '../../core/helperScripts.js'
@@ -10,9 +10,10 @@ import {notifyHelperStory} from '../helperNotifications.js'
 import {notifyHelperScripts} from '../helperScriptNotifications.js'
 import {useT} from '../i18n.js'
 import type {TavernRemote} from '../types.js'
-import {Btn,ConfirmDialog,Err,Muted,SaveBar,Section,Select,SettingsRow,Skeleton,downloadJson,useLoader,useToast} from '../util.js'
+import {openChildSession,type SessionsPort} from '../openChild.js'
+import {Btn,ConfirmDialog,Err,FileBtn,Muted,SaveBar,Section,Select,SettingsRow,Skeleton,downloadJson,useLoader,useToast} from '../util.js'
 
-export function CardDataSettings({remote}:{remote:TavernRemote}){
+export function CardDataSettings({remote,sessions}:{remote:TavernRemote;sessions?:SessionsPort}){
   const t=useT()
   const [cardId,setCardId]=useDraftState('card-data:card','')
   const [storyId,setStoryId]=useDraftState('card-data:story','')
@@ -32,8 +33,63 @@ export function CardDataSettings({remote}:{remote:TavernRemote}){
       {(chars.state.status==='loading'||stories.state.status==='loading')&&<Skeleton height={40}/>}
       <Err message={chars.state.status==='error'?chars.state.message:stories.state.status==='error'?stories.state.message:null}/>
       {(chars.state.status==='error'||stories.state.status==='error')&&<Btn onClick={()=>{chars.reload();stories.reload()}}>{t('action.retry')}</Btn>}
+      <SessionTransfer remote={remote} sessions={sessions} sessionId={story?.sessionId}/>
       {story?<StoryVariableSettings key={JSON.stringify([cardId,storyId,story.sessionId])} remote={remote} cardId={cardId} storyId={storyId} sessionId={story.sessionId}/>:<Muted>{t('settings.cards.variableChooseStory')}</Muted>}
     </>}</DraftScope>
+  </Section>
+}
+
+/** 导出当前选中剧情；导入必须选择现有工作区并先确认，失败保留文件以便重试。 */
+export function SessionTransfer({remote,sessions,sessionId}:{remote:TavernRemote;sessions?:SessionsPort;sessionId?:string}){
+  const t=useT(),toast=useToast(),workspaces=useLoader(()=>remote.listSessionImportWorkspaces({}),[remote])
+  const active=useRef(true),pending=useRef(false)
+  useEffect(()=>{active.current=true;return()=>{active.current=false}},[])
+  const [workspaceId,setWorkspaceId]=useState(''),[archive,setArchive]=useState<{name:string;text:string}|null>(null)
+  const [busy,setBusy]=useState(false),[error,setError]=useState<string|null>(null),[confirm,setConfirm]=useState(false)
+  const exportSession=async()=>{
+    if(!sessionId||pending.current)return
+    pending.current=true
+    setBusy(true);setError(null)
+    try{const result=await remote.exportSessionArchive({sessionId});if(!result.ok)throw new Error(result.error.message);if(active.current)downloadJson('tavern-session.json',result.value.archive,0)}
+    catch(e){if(active.current)setError(e instanceof Error?e.message:String(e))}finally{pending.current=false;if(active.current)setBusy(false)}
+  }
+  const choose=async(file:File)=>{
+    if(pending.current)return
+    setError(null);setArchive(null)
+    if(file.size>192*1024*1024){setError(t('sessionArchive.tooLarge'));return}
+    pending.current=true;setBusy(true)
+    try{const text=await file.text();if(active.current)setArchive({name:file.name,text})}
+    catch(e){if(active.current)setError(e instanceof Error?e.message:String(e))}finally{pending.current=false;if(active.current)setBusy(false)}
+  }
+  const restore=async()=>{
+    if(!archive||!workspaceId||pending.current)return
+    pending.current=true
+    setConfirm(false);setBusy(true);setError(null)
+    try{
+      const result=await remote.importSessionArchive({workspaceId,archiveJson:archive.text})
+      if(!result.ok)throw new Error(result.error.message)
+      if(active.current){setArchive(null);toast.show(t('sessionArchive.imported'))}
+      if(sessions&&active.current)try{await openChildSession({...sessions,open:id=>{if(active.current)sessions.open(id)}},result.value.sessionId)}catch{if(active.current)setError(t('sessionArchive.navigationFailed'))}
+    }catch(e){if(active.current)setError(e instanceof Error?e.message:String(e))}finally{pending.current=false;if(active.current)setBusy(false)}
+  }
+  const items=workspaces.state.status==='ready'?workspaces.state.value.items:[]
+  return <Section title={t('sessionArchive.title')} description={t('sessionArchive.desc')}>
+    {toast.node}
+    <SettingsRow title={t('sessionArchive.export')} description={!sessionId?t('sessionArchive.chooseStory'):undefined}>
+      <Btn disabled={!sessionId||busy} onClick={()=>void exportSession()}>{t('sessionArchive.export')}</Btn>
+    </SettingsRow>
+    <SettingsRow title={t('sessionArchive.workspace')}>
+      <Select value={workspaceId} title={t('sessionArchive.workspace')} disabled={busy||workspaces.state.status!=='ready'}
+        options={[{value:'',label:t('sessionArchive.chooseWorkspace')},...items.map(item=>({value:item.id,label:item.title}))]} onChange={setWorkspaceId}/>
+    </SettingsRow>
+    <SettingsRow title={t('sessionArchive.chooseFile')} description={archive?.name}>
+      <FileBtn accept="application/json,.json" disabled={busy} onFile={file=>void choose(file)}>{t('sessionArchive.chooseFile')}</FileBtn>
+      <Btn primary disabled={busy||!archive||!workspaceId} onClick={()=>setConfirm(true)}>{t('sessionArchive.import')}</Btn>
+    </SettingsRow>
+    <Err message={error??(workspaces.state.status==='error'?workspaces.state.message:null)}/>
+    {workspaces.state.status==='error'&&<Btn onClick={workspaces.reload}>{t('action.retry')}</Btn>}
+    <ConfirmDialog open={confirm} title={t('sessionArchive.import')} description={t('sessionArchive.confirm')} busy={busy}
+      onCancel={()=>setConfirm(false)} onConfirm={()=>void restore()}/>
   </Section>
 }
 

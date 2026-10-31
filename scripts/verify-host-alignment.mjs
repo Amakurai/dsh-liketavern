@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 /**
- * 宿主版本对齐检查：插件把宿主锁成精确 peer，升级时漏改任何一处（peer / dev / overrides /
- * allowScripts / 锁文件）都只会在安装后才暴露。本脚本在 CI 与发布前做同一份判断。
+ * 宿主版本对齐检查：运行 peer 共用兼容范围，开发依赖和锁文件保持精确基线。
  *
  *   node scripts/verify-host-alignment.mjs
  *   node scripts/verify-host-alignment.mjs --package pkg.json --lock package-lock.json
@@ -11,11 +10,14 @@
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { satisfies, subset, validRange } from 'semver'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 /** 宿主发布包统一前缀；cordis / schemastery / cordis-plugin-* 另有自己的版本线，不参与对齐。 */
 const HOST_PREFIX = '@deepseek-ai/dsh'
 const EXACT_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/
+// 旧版和新版均以真实安装冒烟确认；上限包含下一条小版本线，升级时仍须核对宿主接口。
+const HOST_BOUND = '>=0.2.0-rc.1 <0.4.0-0'
 
 /**
  * 检查一份 package.json 与锁文件的宿主版本对齐。
@@ -26,7 +28,7 @@ const EXACT_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/
 export function inspectHostAlignment(pkg, lock) {
   const errors = []
   const versions = new Map()
-  /** 收集一处依赖表里的宿主包；范围版本直接拒绝，避免 `^` 掩盖漏改。 */
+  /** 开发依赖与 overrides 固定基线；公开 peer 另行检查范围。 */
   const collect = (label, table) => {
     for (const [name, spec] of Object.entries(table ?? {})) {
       if (!name.startsWith(HOST_PREFIX)) continue
@@ -39,14 +41,43 @@ export function inspectHostAlignment(pkg, lock) {
       versions.set(name, spec)
     }
   }
-  collect('peerDependencies', pkg.peerDependencies)
   collect('devDependencies', pkg.devDependencies)
   collect('overrides', pkg.overrides)
 
   const baseline = versions.get('@deepseek-ai/dsh')
-  if (baseline === undefined) errors.push('peerDependencies 缺少 @deepseek-ai/dsh')
+  if (baseline === undefined) errors.push('devDependencies 缺少 @deepseek-ai/dsh')
   for (const [name, version] of versions) {
     if (baseline !== undefined && version !== baseline) errors.push(`${name} 为 ${version}，与宿主基线 ${baseline} 不一致`)
+  }
+  const peers = Object.entries(pkg.peerDependencies ?? {}).filter(([name]) => name.startsWith(HOST_PREFIX))
+  const range = pkg.peerDependencies?.['@deepseek-ai/dsh']
+  if (typeof range !== 'string' || validRange(range) === null) errors.push('peerDependencies 缺少有效的 @deepseek-ai/dsh 兼容范围')
+  if (typeof range === 'string' && validRange(range) !== null) {
+    if (!subset(range, HOST_BOUND, { includePrerelease: true })) errors.push(`宿主 peer 范围越界，应限制在 ${HOST_BOUND}`)
+    const engine = pkg.engines?.dsh
+    if (engine !== undefined && (typeof engine !== 'string' || validRange(engine) === null
+      || !subset(engine, range, { includePrerelease: true }) || !subset(range, engine, { includePrerelease: true }))) {
+      errors.push('engines.dsh 与宿主 peer 的兼容范围不一致')
+    }
+    if (engine !== undefined && lock && lock.packages?.['']?.engines?.dsh !== engine) errors.push('锁文件的 engines.dsh 与清单不一致')
+  }
+  for (const [name, spec] of peers) {
+    if (spec !== range) errors.push(`${name} 的 peer 范围与 @deepseek-ai/dsh 不一致`)
+    if (typeof spec !== 'string' || validRange(spec) === null || (baseline && !satisfies(baseline, spec))) errors.push(`${name} 的 peer 范围不包含宿主基线 ${baseline}`)
+    if (!versions.has(name)) errors.push(`${name} 缺少精确开发基线`)
+    if (lock && lock.packages?.['']?.peerDependencies?.[name] !== spec) errors.push(`锁文件的 ${name} peer 范围与清单不一致`)
+  }
+
+  // 宿主会投影同一份 Cordis / Schemastery；其发布版本线与 dsh 分开，按各自边界核对。
+  for (const [name, bound] of [['@deepseek-ai/cordis', '>=4.0.4 <5.0.0-0'], ['@deepseek-ai/schemastery', '>=3.18.4 <4.0.0-0']]) {
+    const spec = pkg.peerDependencies?.[name]
+    if (spec === undefined) continue
+    if (typeof spec !== 'string' || validRange(spec) === null || !subset(spec, bound, { includePrerelease: true })) {
+      errors.push(`${name} 的 peer 范围无效或越界，应限制在 ${bound}`)
+    } else if (pkg.devDependencies?.[name] && !satisfies(pkg.devDependencies[name], spec)) {
+      errors.push(`${name} 的 peer 范围不包含开发基线`)
+    }
+    if (lock && lock.packages?.['']?.peerDependencies?.[name] !== spec) errors.push(`锁文件的 ${name} peer 范围与清单不一致`)
   }
 
   // allowScripts 只记录实际跑过安装脚本的版本；宿主升级后这里最容易留下旧版本。

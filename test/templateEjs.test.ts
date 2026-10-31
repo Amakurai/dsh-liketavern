@@ -64,16 +64,23 @@ describe('官方 EJS 编译参数',()=>{
     await expect(evaluate('<%- await include("x") %>',{},'{includer:()=>({filename:"/private/data.json"})}')).rejects.toThrow(/include|文件/)
     await expect(evaluate('<%- await include("x") %>',{},'{includer:async()=>({template:"wrong"})}')).rejects.toThrow(/同步/)
   })
-  it('错误选项、恶意escape/includer、超量输出和嵌套递归明确失败',async()=>{
+  it('错误选项明确失败',async()=>{
     await expect(evaluate('x',{},'{outputFunctionName:"bad-name"}')).rejects.toThrow(/identifier/)
     await expect(evaluate('x',{},'{localsName:"a.b"}')).rejects.toThrow(/identifier/)
+  })
+  it('恶意 escape 在隔离 worker 中超时失败',async()=>{
     await expect(evaluate('<%= value %>',{value:'x'},'{escape:()=>{while(true){}}}')).rejects.toThrow(/interrupt|超时/)
+  })
+  it('恶意 includer 在隔离 worker 中超时失败',async()=>{
     await expect(evaluate('<%- await include("x") %>',{},'{includer:()=>{while(true){}}}')).rejects.toThrow(/interrupt|超时/)
+  })
+  it('超量输出和嵌套递归明确失败',async()=>{
     // 限额现在约束相对于已有输入的净扩张，测试值须超过输入自身大小加 1 MiB。
     await expect(evaluate('<%= "x".repeat(1100000) %>')).rejects.toThrow(/1 MiB|memory/)
     const recur='<%- await evalTemplate(next,{next}) %>'
     await expect(evaluate(recur,{next:recur})).rejects.toThrow(/16 层/)
+  })
+  it('模板无法访问 Node 或网络',async()=>{
     expect(await evaluate('<%= typeof process %>|<%= typeof require %>|<%= typeof fetch %>')).toBe('undefined|undefined|undefined')
-  // 七次独立 worker 启动包含两次刻意耗尽执行预算；保留产品超时，仅为整组断言留出墙钟时间。
-  },15_000)
+  })
 })

@@ -135,6 +135,9 @@ const editorDraftScope = {
 
 /** method → [request shape, value schema, 简介] */
 export const METHODS = {
+  listSessionImportWorkspaces: { req: object({}), value: anyValue, summary: '列出可导入会话的工作区' },
+  exportSessionArchive: { req: object({ sessionId: string().check(minLength(1), maxLength(256)) }), value: anyValue, summary: '导出会话及其独立剧情' },
+  importSessionArchive: { req: object({ workspaceId: string().check(minLength(1), maxLength(256)), archiveJson: string().check(maxLength(192 * 1024 * 1024)) }), value: anyValue, summary: '校验并导入会话及其独立剧情' },
   abandonHelperMvu:{req:object({sessionId:string().check(minLength(1),maxLength(256)),storyId:string().check(minLength(1),maxLength(256))}),value:anyValue,summary:'显式放弃待处理 MVU 任务并关闭本会话自动更新'},
   enableHelperMvu:{req:object({sessionId:string().check(minLength(1),maxLength(256)),storyId:string().check(minLength(1),maxLength(256)),mode:enum_(['follow','explicit'])}),value:anyValue,summary:'开启本会话原生 MVU：follow 仅在未表态且脚本含官方入口时开启，explicit 为用户点选'},
   prepareHelperMvuJob:{req:object({...sessionIdField,storyId:nonEmpty(),runtimeId:helperRuntimeId()}),value:anyValue,summary:'准备当前剧情的原生 MVU 任务'},
@@ -541,6 +544,9 @@ export interface StaleTurnContextUsage {
 
 /** 方法名 → 裸业务结果类型。加/改 remote 方法时必须与 METHODS、service 实现、client 镜像同步。 */
 export interface TavernMethodResults {
+  listSessionImportWorkspaces: { items: Array<{ id: string; title: string }> }
+  exportSessionArchive: { archive: unknown }
+  importSessionArchive: { sessionId: string }
   getPluginAbout: PluginAbout
   checkPluginUpdate: PluginUpdate
   abandonHelperMvu:{disabled:true;abandoned:number}

@@ -87,7 +87,7 @@ export async function apply(ctx: ClientContext) {
   }
 
   // A. 设置面板（root 作用域；导入卡/预设不依赖当前会话模式）
-  mount('settings.section', { id: 'tavern', order: 50, label: 'Tavern', inject: () => ({ remote }) }, TavernPanel)
+  mount('settings.section', { id: 'tavern', order: 50, label: 'Tavern', inject: () => ({ remote, sessions }) }, TavernPanel)
 
   // B. assistant 消息操作条（session 作用域；组件内再按 Tavern 模式显隐）
   mount(

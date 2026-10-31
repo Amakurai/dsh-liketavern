@@ -988,11 +988,11 @@ async function expandGreeting(state: TavernState, binding: SessionBinding, text:
  * 否则首条输入触发的维护（如 reserveHelperMvuMaintenance）会把开场白 turn 1 的对齐吞掉，
  * 锁存唤醒再开 turn 1 撞号，进而清空已提交开场白楼层的 WAL 记录。
  */
-function syncIdleAgentLastTurn(ctx: Context | undefined, sessionId: string): void {
+export function syncIdleAgentLastTurn(ctx: Context | undefined, sessionId: string): void {
   const agent = (ctx as { agents?: { get(id: string): unknown } } | undefined)?.agents?.get(sessionId)
   const phase = (agent as { phase?: { kind?: string; lastTurn?: number } } | undefined)?.phase
   if (!phase || (phase.kind !== 'idle' && phase.kind !== 'maintenance') || typeof phase.lastTurn !== 'number') return
-  phase.lastTurn = 1
+  if (phase.lastTurn < 1) phase.lastTurn = 1
 }
 
 /**

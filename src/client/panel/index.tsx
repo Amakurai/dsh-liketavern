@@ -5,6 +5,7 @@
 import { useId, useLayoutEffect, useRef } from 'react'
 import { useT } from '../i18n.js'
 import type { TavernRemote } from '../types.js'
+import type { SessionsPort } from '../openChild.js'
 import { DraftScope } from '../drafts.js'
 import { PersistentEditor, useDraftState } from '../draftPersistence.js'
 import { Badge, Tabs } from '../util.js'
@@ -33,11 +34,11 @@ type TabId = (typeof TABS)[number]['id']
 /** 面板重挂（切走再切回设置页）后停在用户上次看的页签。 */
 let lastTab: TabId | undefined
 
-export function TavernPanel(props: { remote: TavernRemote }) {
+export function TavernPanel(props: { remote: TavernRemote; sessions?: SessionsPort }) {
   return <PersistentEditor remote={props.remote} scope="panel"><PanelContent {...props} /></PersistentEditor>
 }
 
-function PanelContent(props: { remote: TavernRemote }) {
+function PanelContent(props: { remote: TavernRemote; sessions?: SessionsPort }) {
   const { remote } = props
   const t = useT()
   const tabsId = useId()
@@ -76,7 +77,7 @@ function PanelContent(props: { remote: TavernRemote }) {
         {tab === 'personas' && <PersonasSection remote={remote} />}
         {tab === 'regex' && <RegexSection remote={remote} />}
         {tab === 'memory' && <MemorySection remote={remote} />}
-        {tab === 'sampling' && <SettingsSection remote={remote} />}
+        {tab === 'sampling' && <SettingsSection remote={remote} sessions={props.sessions} />}
         {tab === 'about' && <AboutSection remote={remote} />}
       </div>
     </div>}</DraftScope>

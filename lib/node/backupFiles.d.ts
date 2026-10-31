@@ -35,6 +35,8 @@ export declare function inventory(root: string, excludedDependencies?: string[])
 /** 固定位置分块读取，完整检查前后文件身份；输出文件独占创建且同步后关闭。 */
 export declare function transferFile(root: string, entry: BackupEntry, destination?: string): Promise<string>;
 export declare function boundedJson(path: string, maxBytes?: number): Promise<unknown>;
+/** 会话迁移读原始字节：限额在读取前后都生效，并复核句柄与目录项仍为同一普通文件。 */
+export declare function boundedBytes(path: string, maxBytes: number): Promise<Buffer>;
 export declare function createDirectories(root: string, entries: BackupEntry[]): Promise<void>;
 /** 失败草稿可能已经套用源目录的只读权限；仅在自有、无链接草稿内恢复清理所需权限。 */
 export declare function discardTemporary(root: string): Promise<void>;

@@ -5,8 +5,8 @@ import { launchEnvironmentOf } from '@deepseek-ai/dsh-launch-environment'
 import { assertUsableApiKey, callConfigEquals, LlmAdapter, LlmError, resolveImageAttachmentAccess,
   type AdapterRegistrationHandle, type GenerateOptions, type LlmModelInfo, type LlmResolvedModelInfo,
   type PreparedAdapterCall, type ResolvedRetryPolicy, type StreamChunk } from '@deepseek-ai/dsh-llm'
-import { DeepSeekAdapter, DeepSeekFileStore, ModelListingCache, catalogModelInfo, requestModelListing,
-  type ListingView } from '@deepseek-ai/dsh-llm-deepseek'
+import * as deepSeekCatalog from '@deepseek-ai/dsh-llm-deepseek'
+import { DeepSeekAdapter, DeepSeekFileStore, catalogModelInfo, type ListingView } from '@deepseek-ai/dsh-llm-deepseek'
 import { Config as DeepSeekConfig, plainOptions, resolveAdapterOptions, type ResolvedDeepSeekOptions } from '@deepseek-ai/dsh-llm-deepseek-api-key'
 import { deepFreeze } from '@deepseek-ai/dsh-util-values'
 import type { ImageAttachmentRef, ImageRequestTarget } from '@deepseek-ai/dsh-attachment'
@@ -97,24 +97,37 @@ export function registerPresetAdapter(ctx: Context, project: PresetRequestProjec
     }
   }
   // 列表缓存与宿主同源：只请求公开 `/models`，凭证仍来自 credentials 服务；失败退回内置目录。
-  const listings = new ModelListingCache({
+  const listings = typeof deepSeekCatalog.ModelListingCache === 'function' && typeof deepSeekCatalog.requestModelListing === 'function'
+    ? new deepSeekCatalog.ModelListingCache({
+    // 新宿主的缓存通过这两个回调读取最新设置并通知目录变化；旧版构造器会忽略额外字段。
+    ...{
+      settings: () => settingsConnection().listing,
+      // 基线宿主的类型尚未声明这个后来新增的事件；运行时按新宿主的公开事件契约发送。
+      changed: () => Reflect.apply(ctx.emit, ctx, ['llm/models-updated', PRESET_ADAPTER_PROVIDER]),
+    },
     credential: async () => presentKey(settingsConnection()),
-    load: (url, apiKey, signal) => requestModelListing(url, { 'x-api-key': apiKey }, signal),
+    load: (url, apiKey, signal) => deepSeekCatalog.requestModelListing(url, { 'x-api-key': apiKey }, signal),
     now: () => Date.now(),
     info: message => ctx.logger.info(`dsh-tavern: DeepSeek 模型列表：${message}`),
     warn: message => ctx.logger.warn(`dsh-tavern: DeepSeek 模型列表：${message}`),
-  })
+  }) : undefined
+  const listingCache = () => {
+    if (!listings) throw new LlmError('The host cannot provide its configured DeepSeek model listing.', 'PRESET_ADAPTER_UNAVAILABLE')
+    return listings
+  }
   /** 无 I/O 的同步视图：请求解析与图片投影读它，保证已冻结的 prepareCall 不再取设置。 */
   const options = (): PresetConnection => {
     const base = settingsConnection()
-    return withPresetCatalog(base, base.listing === undefined ? undefined : listings.current())
+    return withPresetCatalog(base, base.listing === undefined ? undefined : listingCache().current())
   }
   /** 首次访问或过期时加载列表；取消原样上抛，其它故障与宿主一致退回内置目录。 */
   const connect = async (signal?: AbortSignal): Promise<PresetConnection> => {
     const base = settingsConnection()
     if (base.listing === undefined) return withPresetCatalog(base, undefined)
+    // 缺少宿主接口不是列表请求故障；不能把它吞掉后绕过列表声明的拒绝项。
+    const cache = listingCache()
     let view: ListingView
-    try { view = await listings.view(base.listing, signal) }
+    try { view = await cache.view(base.listing, signal) }
     catch (error) {
       if (signal?.aborted === true) throw error
       return withPresetCatalog(base, undefined)
@@ -130,8 +143,11 @@ export function registerPresetAdapter(ctx: Context, project: PresetRequestProjec
       if (base.listing === undefined) {
         return (await presentKey(base)) === undefined ? [] : base.models.map(model => catalogModelInfo(provider, model))
       }
-      const view = await listings.view(base.listing)
-      return view.authenticated ? withPresetCatalog(base, view).offered.map(model => catalogModelInfo(provider, model)) : []
+      const view = await listingCache().view(base.listing)
+      if (!view.authenticated) return []
+      const catalog = withPresetCatalog(base, view)
+      // 新宿主支持第三个徽标参数；旧宿主的公开函数忽略额外参数。
+      return catalog.offered.map(model => Reflect.apply(catalogModelInfo, undefined, [provider, model, catalog.badges?.get(model.id)]) as LlmModelInfo)
     },
     options,
     connect,
@@ -161,7 +177,7 @@ export function registerPresetAdapter(ctx: Context, project: PresetRequestProjec
   const followListing = () => {
     let next: boolean
     try { next = settingsConnection().listing !== undefined } catch { return }
-    if (next !== following) listings.invalidate()
+    if (next !== following) listings?.invalidate()
     following = next
   }
   followListing()
@@ -174,6 +190,6 @@ export function registerPresetAdapter(ctx: Context, project: PresetRequestProjec
     try { ensureRegistered() }
     catch (error) { ctx.logger.warn(`dsh-tavern: DeepSeek 布局通道设置暂不可用：${String(error)}`) }
   })
-  ctx.effect(() => () => listings.dispose(), 'dsh-tavern: DeepSeek model listing')
+  ctx.effect(() => () => listings?.dispose(), 'dsh-tavern: DeepSeek model listing')
   return { ensureRegistered }
 }

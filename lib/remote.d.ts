@@ -36,6 +36,26 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
 export declare const RENDER_OUTPUT_BATCH_MAX = 64;
 /** method → [request shape, value schema, 简介] */
 export declare const METHODS: {
+    listSessionImportWorkspaces: {
+        req: import("zod/mini").ZodMiniObject<{}, import("zod/v4/core").$strip>;
+        value: import("zod/mini").ZodMiniUnknown;
+        summary: string;
+    };
+    exportSessionArchive: {
+        req: import("zod/mini").ZodMiniObject<{
+            sessionId: import("zod/mini").ZodMiniString<string>;
+        }, import("zod/v4/core").$strip>;
+        value: import("zod/mini").ZodMiniUnknown;
+        summary: string;
+    };
+    importSessionArchive: {
+        req: import("zod/mini").ZodMiniObject<{
+            workspaceId: import("zod/mini").ZodMiniString<string>;
+            archiveJson: import("zod/mini").ZodMiniString<string>;
+        }, import("zod/v4/core").$strip>;
+        value: import("zod/mini").ZodMiniUnknown;
+        summary: string;
+    };
     abandonHelperMvu: {
         req: import("zod/mini").ZodMiniObject<{
             sessionId: import("zod/mini").ZodMiniString<string>;
@@ -1116,6 +1136,18 @@ export interface StaleTurnContextUsage {
 }
 /** 方法名 → 裸业务结果类型。加/改 remote 方法时必须与 METHODS、service 实现、client 镜像同步。 */
 export interface TavernMethodResults {
+    listSessionImportWorkspaces: {
+        items: Array<{
+            id: string;
+            title: string;
+        }>;
+    };
+    exportSessionArchive: {
+        archive: unknown;
+    };
+    importSessionArchive: {
+        sessionId: string;
+    };
     getPluginAbout: PluginAbout;
     checkPluginUpdate: PluginUpdate;
     abandonHelperMvu: {
@@ -1414,7 +1446,12 @@ export declare const TYPERT_HOST: {
             codec: {
                 mode: "strict";
                 typeSymbol: string;
-                create: () => import("zod/mini").ZodMiniObject<{
+                create: () => import("zod/mini").ZodMiniObject<{}, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                    sessionId: import("zod/mini").ZodMiniString<string>;
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                    workspaceId: import("zod/mini").ZodMiniString<string>;
+                    archiveJson: import("zod/mini").ZodMiniString<string>;
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     sessionId: import("zod/mini").ZodMiniString<string>;
                     storyId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
@@ -1930,7 +1967,12 @@ export declare const TYPERT_REMOTE: {
             codec: {
                 mode: "strict";
                 typeSymbol: string;
-                create: () => import("zod/mini").ZodMiniObject<{
+                create: () => import("zod/mini").ZodMiniObject<{}, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                    sessionId: import("zod/mini").ZodMiniString<string>;
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                    workspaceId: import("zod/mini").ZodMiniString<string>;
+                    archiveJson: import("zod/mini").ZodMiniString<string>;
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     sessionId: import("zod/mini").ZodMiniString<string>;
                     storyId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{

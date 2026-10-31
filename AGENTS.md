@@ -61,7 +61,7 @@ dsh-liketavern 为 DeepSeek Harness 的 Tavern 插件。角色卡、预设、世
 - runtime context、同轮写入、续写和步骤 notice 均经 isSyntheticUserText 过滤，不当作用户台词，不参与 WI、lastusermessage 或正则 depth。
 - 步骤收口 notice 只在工具执行时 inject，不放 agent/pre-step，否则宿主可能多拉出孤儿步骤。
 - 采样只透传 temperature/maxTokens/stop 和模型公布的 reasoningEffort；top_p、penalty 仅记录。部署锁定 thinking disabled 时插件不能强开。
-- Tavern 的 DeepSeek 适配器跟随宿主 `/models` 列表：目录广告用 `offered`、请求解析用 `resolution`，需升级或不支持的 listed 模型沿用宿主 `CLIENT_UPGRADE_REQUIRED`/`MODEL_UNSUPPORTED`。列表请求只读公开 endpoint，失败退回内置目录；设置变更后重新解析 endpoint、目录与是否继续跟随。
+- Tavern 的 DeepSeek 适配器跟随宿主 `/models` 列表：目录广告用 `offered`、请求解析用 `resolution`，需升级或不支持的 listed 模型沿用宿主 `CLIENT_UPGRADE_REQUIRED`/`MODEL_UNSUPPORTED`。列表请求只读公开 endpoint，失败退回内置目录；设置变更后重新解析 endpoint、目录与是否继续跟随。已验证的旧宿主若未提供列表 API，沿用该宿主内置目录，不引入不存在的静态导出。
 
 ## UI 与类型
 
@@ -85,7 +85,7 @@ npm pack --dry-run
 - tests 直接 import src；Node 24 下 worker 源码测试使用类型剥离，交付运行只用 lib JS。正则超时测试必须在隔离 worker 中进行。
 - CI 每个平台分两片独立 runner，片内仍 maxWorkers=1；不得用同机增加 worker 或全局重试掩盖产品墙钟限额。JSON/JUnit 与慢用例摘要在失败时也保留；发布复用同一套双平台检查，只上传本次验证过的原始 tarball。流程与本地复现见 [CI 与测试](docs/CI.md)。
 - 每个源文件和测试用中文块注释说明职责；标识符英文。测试验证业务结果与失败边界，避免只镜像实现。
-- 运行依赖为 zod、quickjs-emscripten、yaml、lodash、jsonrepair、@faker-js/faker、ejs、markdown-it、markdown-it-emoji、jquery；jquery 仅随卡面库脚本文本打包，在 opaque-origin iframe 内执行，不能在宿主或主页面执行。模板库用于实际兼容编译参数、消息格式化、schema、Lodash、模型 JSON 修复与 Faker 全语言数据，构建为带原始及传递依赖许可证的 QuickJS 内部脚本，不桥接 Node 函数。Markdown 格式化仅在可终止 worker 的 QuickJS 中执行，不生成 metadata 完整文档或标题 ID；HTML 产物只能交给原有沙箱 iframe，不能放入主页面。已移除无公开补丁的 Showdown；格式化器升级使用 replay.formatterVersion 边界，旧活动日志不能静默改 hash、丢闭包或在拒绝前推进 WAL。隔离 JavaScript、有界初值解析与新增兼容库固定公开 npm 版本，不用 node:vm 冒充安全边界。宿主包走精确 peer，开发依赖公开 npm 精确版本。禁止 file:、绝对路径或链接依赖；开发挂载仓库的 junction/symlink 是另一件事。
+- 运行依赖为 zod、quickjs-emscripten、yaml、lodash、jsonrepair、@faker-js/faker、ejs、markdown-it、markdown-it-emoji、jquery、semver；jquery 仅随卡面库脚本文本打包，在 opaque-origin iframe 内执行，不能在宿主或主页面执行。模板库用于实际兼容编译参数、消息格式化、schema、Lodash、模型 JSON 修复与 Faker 全语言数据，构建为带原始及传递依赖许可证的 QuickJS 内部脚本，不桥接 Node 函数。Markdown 格式化仅在可终止 worker 的 QuickJS 中执行，不生成 metadata 完整文档或标题 ID；HTML 产物只能交给原有沙箱 iframe，不能放入主页面。已移除无公开补丁的 Showdown；格式化器升级使用 replay.formatterVersion 边界，旧活动日志不能静默改 hash、丢闭包或在拒绝前推进 WAL。隔离 JavaScript、有界初值解析与新增兼容库固定公开 npm 版本，不用 node:vm 冒充安全边界。宿主公开 peer 使用一致的有界兼容范围，dev、overrides 与锁文件仍固定经验证的精确基线；诊断按宿主 includePrerelease 语义判断，升级按兼容清单验证。禁止 file:、绝对路径或链接依赖；开发挂载仓库的 junction/symlink 是另一件事。
 - lib/ 刻意入库。所有 src 改动必须重建；CI 会拦过期、缺失和未跟踪产物。不要忽略 lib/。
 - npm 包白名单：lib、cordis.patch.yml、presets、README 两种语言、CHANGELOG、LICENSE。禁止 src/test/node_modules/本机数据。
 - 宿主升级按 [版本核对清单](docs/HOST_COMPATIBILITY.md) 执行；构建/测试不能代替安装环境的 boot 与 UI 冒烟。

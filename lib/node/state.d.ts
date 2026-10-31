@@ -241,6 +241,12 @@ export declare class TavernState {
      */
     private resolveAssetWriteId;
     private resolveExistingAssetId;
+    /** 会话迁移只收集绑定实际引用的共享资产；调用方持有根资产锁直到快照完成。 */
+    sessionArchiveAssetPaths(binding: SessionBinding): Promise<string[]>;
+    /** 迁移发布新共享文件后作废已缓存的缺失资产；既有资产从不被导入覆盖。 */
+    invalidateSessionArchiveAssets(paths: readonly string[]): void;
+    /** 角色目录可能此前被查询并缓存为缺失；迁移发布后必须使该缓存和卡级正则失效。 */
+    invalidateSessionArchiveCard(cardId: string): void;
     /** 文件名比较遵守宿主文件系统，目录清单保留实际拼写以便修订号与缓存定位一致。 */
     private assetFileKey;
     private assetFileIds;

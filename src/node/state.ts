@@ -45,6 +45,7 @@ import { pinStandingText, stableFingerprintHash, standingPinKey, type StandingPi
 import { assertBindingFileIdentity, deleteBinding, listBindingReferencesForCard, loadBinding, parseSessionBinding, saveBinding, type SessionBinding } from './bindings.js'
 import type { TavernConfig } from './config.js'
 import { ensurePaths, sessionFile, type TavernPaths } from './paths.js'
+import { assertSessionImportComplete } from './sessionArchiveMarker.js'
 import { withWorkspaceLock } from '../state/workspaceLock.js'
 import { discardStory, legacyStoryId, newStoryId, readStory, snapshotStory, storyRoot, listStories, type StorySummary } from '../state/story.js'
 
@@ -613,6 +614,41 @@ export class TavernState {
     // 原始身份不是文件定位信息；多份匹配时与保存入口一致，必须由调用方明确选择。
     if (matches.length > 1) throw new Error('资产身份对应多个文件，请按实际文件 ID 打开后操作')
     return matches[0] ?? fallbackLegacy
+  }
+
+  /** 会话迁移只收集绑定实际引用的共享资产；调用方持有根资产锁直到快照完成。 */
+  async sessionArchiveAssetPaths(binding: SessionBinding): Promise<string[]> {
+    const fs = await this.rootFs(), paths = new Set<string>()
+    const add = async (directory: 'library/presets' | 'library/lorebooks' | 'personas', id: string | null | undefined) => {
+      if (!id || id === '@dsh/character') return
+      const resolved = await this.resolveExistingAssetId(fs, directory, id)
+      if (!resolved || !(await fs.exists(`${directory}/${resolved}.json`))) throw new Error('会话引用的共享资产不存在，无法完整导出')
+      paths.add(`${directory}/${resolved}.json`)
+      if (directory === 'personas' && await fs.exists(`${directory}/${resolved}.png`)) paths.add(`${directory}/${resolved}.png`)
+    }
+    await add('library/presets', binding.presetId)
+    await add('personas', binding.personaId)
+    const persona = await this.loadPersona(binding.personaId)
+    for (const id of new Set([...binding.lorebookIds, ...(binding.characterLorebookIds ?? []), binding.characterLorebookId, persona?.lorebookId])) {
+      await add('library/lorebooks', id)
+    }
+    for (const path of ['library/helper-scripts.json', 'regex/rules.json']) if (await fs.exists(path)) paths.add(path)
+    return [...paths].sort()
+  }
+
+  /** 迁移发布新共享文件后作废已缓存的缺失资产；既有资产从不被导入覆盖。 */
+  invalidateSessionArchiveAssets(paths: readonly string[]): void {
+    for (const path of paths) {
+      const match = /^(library\/presets|library\/lorebooks|personas)\/([^/]+)\.json$/.exec(path)
+      if (match) this.bumpAssetRev(`${match[1] === 'library/presets' ? 'preset' : match[1] === 'library/lorebooks' ? 'lore' : 'persona'}:${match[2]}`)
+      if (path === 'regex/rules.json') this.bumpAssetRev('regex:global')
+    }
+  }
+
+  /** 角色目录可能此前被查询并缓存为缺失；迁移发布后必须使该缓存和卡级正则失效。 */
+  invalidateSessionArchiveCard(cardId: string): void {
+    this.bumpAssetRev(`card:${cardId}`)
+    this.invalidateCardRegex(cardId)
   }
 
   /** 文件名比较遵守宿主文件系统，目录清单保留实际拼写以便修订号与缓存定位一致。 */
@@ -1365,6 +1401,7 @@ export class TavernState {
   }
 
   private async loadBindingNow(sessionId: string, strictRead = false): Promise<SessionBinding | null> {
+    await assertSessionImportComplete(this.paths, sessionId)
     const parsed = await loadBinding(this.paths, sessionId, strictRead)
     if (!parsed) return null
     // 快路径：cardId 对应工作区仍在时直接用（resolveStaleBinding 对在册卡只做 cardName 同步），

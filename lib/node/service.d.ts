@@ -20,6 +20,9 @@ export declare class TavernService extends TypertRemoteService implements Tavern
     constructor(ctx: Context, 
     /** 运行时中枢（agent 面插件经 ctx.tavern 访问）。 */
     state: TavernState, settingsScope: TavernSettingsScope);
+    listSessionImportWorkspaces(_request: TavernMethodRequests['listSessionImportWorkspaces']): Promise<TavernMethodResults['listSessionImportWorkspaces']>;
+    exportSessionArchive(request: TavernMethodRequests['exportSessionArchive']): Promise<TavernMethodResults['exportSessionArchive']>;
+    importSessionArchive(request: TavernMethodRequests['importSessionArchive']): Promise<TavernMethodResults['importSessionArchive']>;
     /**
      * 头像 dataURL 进程内缓存：getAvatar 每次调用都全文读盘 + Base64 编码整图，
      * 与会话头/英雄区的渲染频率不匹配。指纹用 WorkspaceFs.stat('card.png') 的

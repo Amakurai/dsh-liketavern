@@ -20,6 +20,7 @@ import * as personas from './locales/personas.js'
 import * as presets from './locales/presets.js'
 import * as regex from './locales/regex.js'
 import * as settings from './locales/settings.js'
+import * as sessionArchive from './locales/sessionArchive.js'
 import * as speech from './locales/speech.js'
 import * as util from './locales/util.js'
 
@@ -37,6 +38,7 @@ export const zh: Record<string, string> = {
   ...util.zh,
   ...panel.zh,
   ...settings.zh,
+  ...sessionArchive.zh,
   ...characters.zh,
   ...presets.zh,
   ...lorebooks.zh,
@@ -57,6 +59,7 @@ export const en: Record<string, string> = {
   ...util.en,
   ...panel.en,
   ...settings.en,
+  ...sessionArchive.en,
   ...characters.en,
   ...presets.en,
   ...lorebooks.en,

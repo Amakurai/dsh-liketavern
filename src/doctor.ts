@@ -14,6 +14,7 @@ import { createRequire } from 'node:module'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { dshHomeDisplay, resolveDshHome } from '@deepseek-ai/dsh-home-paths'
+import { hostVersionSatisfies, manifestHostRange, safeHostRange } from './core/hostVersion.js'
 import { MAX_STORED_CARD_JSON_BYTES } from './state/card.js'
 import { CHARACTER_ARCHIVE_FILE, isValidCardId } from './state/workspace.js'
 import { storyRoot } from './state/story.js'
@@ -791,10 +792,9 @@ async function ownPackageInfo(): Promise<OwnPackageInfo> {
   try {
     const read = await readBoundedJson(fileURLToPath(new URL('../package.json', import.meta.url)), 1024 * 1024)
     if (read.status !== 'ok' || !isObject(read.value)) return { pluginVersion: 'unknown', dshExpectedVersion: 'unknown' }
-    const peers = isObject(read.value.peerDependencies) ? read.value.peerDependencies : null
     return {
       pluginVersion: safeVersion(read.value.version),
-      dshExpectedVersion: safeVersion(peers?.['@deepseek-ai/dsh']),
+      dshExpectedVersion: manifestHostRange(read.value),
     }
   } catch {
     return { pluginVersion: 'unknown', dshExpectedVersion: 'unknown' }
@@ -814,11 +814,7 @@ async function installedDshVersion(): Promise<string> {
 }
 
 export function areDshVersionsCompatible(installedVersion: string, expectedVersion: string): boolean {
-  const installed = safeVersion(installedVersion)
-  const expected = safeVersion(expectedVersion)
-  // 精确 peer 是本项目的宿主纪律；SemVer build metadata 不参与版本优先级与兼容判断。
-  return installed !== 'unknown' && expected !== 'unknown'
-    && installed.split('+')[0] === expected.split('+')[0]
+  return hostVersionSatisfies(installedVersion, expectedVersion)
 }
 
 async function ownPackageVersion(): Promise<string> {
@@ -846,7 +842,7 @@ export async function runDoctor(options: RunDoctorOptions = {}): Promise<DoctorR
   const packageInfo = await ownPackageInfo()
   const pluginVersion = safeVersion(options.pluginVersion ?? packageInfo.pluginVersion)
   if (pluginVersion === 'unknown') issues.add('PLUGIN_VERSION_UNKNOWN', 'warning')
-  const dshExpectedVersion = safeVersion(options.dshExpectedVersion ?? packageInfo.dshExpectedVersion)
+  const dshExpectedVersion = safeHostRange(options.dshExpectedVersion ?? packageInfo.dshExpectedVersion)
   const dshInstalledVersion = safeVersion(options.dshInstalledVersion ?? await installedDshVersion())
   const dshCompatible = areDshVersionsCompatible(dshInstalledVersion, dshExpectedVersion)
   if (dshExpectedVersion === 'unknown') issues.add('DSH_EXPECTED_VERSION_UNKNOWN', 'warning')

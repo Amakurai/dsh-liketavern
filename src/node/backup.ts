@@ -4,6 +4,7 @@ import { chmod, lstat, mkdir, open, readdir, rename } from 'node:fs/promises'
 import { basename, dirname, join, resolve } from 'node:path'
 import { runDoctor, type DoctorIssue } from '../doctor.js'
 import { parseSessionBinding } from './bindings.js'
+import { safeHostRange } from '../core/hostVersion.js'
 import { BACKUP_LIMITS, BackupError, assertAbsent, assertDirectory, assertSeparate, boundedJson, checkedPath,
   createDirectories, discardTemporary, fail, inventory, isDependencyPath, safeRelative, transferFile, type BackupEntry } from './backupFiles.js'
 
@@ -43,7 +44,8 @@ export function parseBackupManifest(raw: unknown): BackupManifest {
   if (!object(raw) || raw.schemaVersion !== 1 || raw.format !== 'dsh-tavern-directory-backup'
     || raw.scope !== 'dsh-home-data-without-installed-dependencies' || raw.versionSource !== 'backup-runtime' || typeof raw.createdAt !== 'string'
     || !Number.isFinite(Date.parse(raw.createdAt)) || !object(raw.versions)
-    || !['node', 'plugin', 'dsh', 'expectedDsh'].every(key => version((raw.versions as Record<string, unknown>)[key]))
+    || !['node', 'plugin', 'dsh'].every(key => version((raw.versions as Record<string, unknown>)[key]))
+    || (raw.versions.expectedDsh !== 'unknown' && safeHostRange(raw.versions.expectedDsh) === 'unknown')
     || !Array.isArray(raw.entries) || raw.entries.length > BACKUP_LIMITS.entries || !Array.isArray(raw.exclusions)) fail('INVALID_MANIFEST')
   const entries: BackupEntry[] = []
   const seen = new Set<string>()
@@ -149,6 +151,8 @@ async function references(home: string, entries: BackupEntry[]): Promise<DoctorI
   return [...issues.values()]
 }
 async function inspect(home: string, entries: BackupEntry[]): Promise<{ versions: BackupManifest['versions']; issues: DoctorIssue[] }> {
+  // 迁移中断可能已发布不完整会话；整库备份不能把这个恢复中间态报告为可用快照。
+  if (entries.some(entry => entry.kind === 'file' && /^dsh-tavern\/session-imports\/[a-f0-9]{64}\.json$/i.test(entry.path))) fail('SESSION_IMPORT_INCOMPLETE')
   const doctor = await runDoctor({ home })
   const issues = [...doctor.issues, ...await references(home, entries)]
   // 节点/安装版本由清单记录；结构失败或检查预算不足不能伪装为完整验证。

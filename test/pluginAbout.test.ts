@@ -69,10 +69,10 @@ describe('关于元数据', () => {
     expect(await reader.getPluginAbout()).toMatchObject({ hostVersion: 'unknown', desktopHost: true })
   })
   it('真实源码读取自身版本，但 Vitest 启动入口不能伪装成插件旁的开发宿主', async () => {
-    const own = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as { version: string; peerDependencies: Record<string, string> }
+    const own = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as { version: string; engines: { dsh: string } }
     const checkout = await lstat(fileURLToPath(new URL('../.git', import.meta.url))).then(() => true, () => false)
     const result = await getPluginAbout()
-    expect(result).toEqual({ version: own.version, hostVersion: 'unknown', expectedHostVersion: own.peerDependencies['@deepseek-ai/dsh'],
+    expect(result).toEqual({ version: own.version, hostVersion: 'unknown', expectedHostVersion: own.engines.dsh,
       repositoryUrl: REPOSITORY, releasesUrl: `${REPOSITORY}/releases`, sourceCheckout: checkout, desktopHost: false })
     expect(JSON.stringify(result)).not.toContain(fileURLToPath(new URL('../', import.meta.url)))
   })
@@ -83,6 +83,16 @@ describe('关于元数据', () => {
     expect(fetch).not.toHaveBeenCalled()
     await reader.checkPluginUpdate()
     expect(fetch).toHaveBeenCalledTimes(2)
+  })
+  it('本地与发布清单均优先使用 engines.dsh，旧 peer 不会覆盖它', async () => {
+    const required = '>=0.2.0-rc.1 <0.4.0-0'
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(response(release()))
+      .mockResolvedValueOnce(response({ ...pkg('0.2.6', '0.1.0'), engines: { dsh: required } }))
+    const reader = createPluginAboutReader({ fetch, readMetadata: async () => ({
+      plugin: { ...pkg(), engines: { dsh: required } }, host: { name: '@deepseek-ai/dsh', version: '0.2.2-alpha.2' }, sourceCheckout: false,
+    }) })
+    expect(await reader.getPluginAbout()).toMatchObject({ expectedHostVersion: required })
+    expect(await reader.checkPluginUpdate()).toMatchObject({ status: 'available', requiredHostVersion: required })
   })
   it('本地元数据损坏或读取异常不泄露底层文件路径', async () => {
     const reader = createPluginAboutReader({ fetch: vi.fn(), readMetadata: async () => { throw Error('C:/private/config secret-token') } })
@@ -150,6 +160,13 @@ describe('明确且有界的更新检查', () => {
     expect(await factory({ host: '0.1.5-rc.10' }).reader.checkPluginUpdate()).toMatchObject({ status: 'incompatible', command: null, requiredHostVersion: HOST })
     expect(await factory({ host: `${HOST}+local`, requiredHost: `${HOST}+release` }).reader.checkPluginUpdate()).toMatchObject({ status: 'available', command: expect.any(String) })
   })
+  it('更新检查使用目标发布的 npm peer 范围，支持旧精确版本及预发布规则', async () => {
+    const range = '>=0.2.1-rc.3 <0.3.0-0 || >=0.2.2-0 <0.3.0-0'
+    expect(await factory({ host: '0.2.1-rc.5', requiredHost: range }).reader.checkPluginUpdate()).toMatchObject({ status: 'available', requiredHostVersion: range })
+    expect(await factory({ host: '0.2.2-alpha.2', requiredHost: range }).reader.checkPluginUpdate()).toMatchObject({ status: 'available' })
+    expect(await factory({ host: '0.2.3-alpha.1', requiredHost: range }).reader.checkPluginUpdate()).toMatchObject({ status: 'available' })
+    expect(await factory({ host: '0.3.0', requiredHost: range }).reader.checkPluginUpdate()).toMatchObject({ status: 'incompatible', command: null })
+  })
   it('源码检出仍报告可用版本但绝不给出覆盖开发挂载的安装命令', async () => {
     const { reader } = factory({ sourceCheckout: true })
     expect((await reader.getPluginAbout()).sourceCheckout).toBe(true)
@@ -188,7 +205,7 @@ describe('不可信远端信息与网络故障', () => {
     expect(fetch).toHaveBeenCalledTimes(1)
   })
   it.each([
-    { ...pkg('0.2.6'), name: 'another-package' }, pkg('0.2.7'), pkg('0.2.6', '^0.1.5-rc.2'), pkg('0.2.6', '0.1.5-rc.02'),
+    { ...pkg('0.2.6'), name: 'another-package' }, pkg('0.2.7'), pkg('0.2.6', 'bad / private'), pkg('0.2.6', '0.1.5-rc.02'),
     { name: 'dsh-liketavern', version: '0.2.6' },
   ])('目标 tag 的 package 身份/版本/peer 必须准确 %j', async target => {
     const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(response(release())).mockResolvedValueOnce(response(target))

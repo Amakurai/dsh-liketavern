@@ -26,6 +26,7 @@ import * as personas from '../src/client/locales/personas.js'
 import * as presets from '../src/client/locales/presets.js'
 import * as regex from '../src/client/locales/regex.js'
 import * as settings from '../src/client/locales/settings.js'
+import * as sessionArchive from '../src/client/locales/sessionArchive.js'
 import * as speech from '../src/client/locales/speech.js'
 import * as util from '../src/client/locales/util.js'
 
@@ -45,6 +46,7 @@ const FRAGMENTS = {
   presets,
   regex,
   settings,
+  sessionArchive,
   speech,
   util,
 }

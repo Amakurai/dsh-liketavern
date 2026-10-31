@@ -147,6 +147,27 @@ export async function boundedJson(path: string, maxBytes = BACKUP_LIMITS.manifes
     try { return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown } catch { return fail('INVALID_JSON') }
   } finally { await handle.close() }
 }
+/** 会话迁移读原始字节：限额在读取前后都生效，并复核句柄与目录项仍为同一普通文件。 */
+export async function boundedBytes(path: string, maxBytes: number): Promise<Buffer> {
+  await assertDirectory(dirname(path))
+  const before = await lstat(path)
+  if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1) fail('LINK_NOT_ALLOWED')
+  if (before.size > maxBytes) fail('SIZE_LIMIT')
+  const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
+  try {
+    if (!sameFile(before, await handle.stat())) fail('SOURCE_CHANGED')
+    const chunks: Buffer[] = []
+    let position = 0
+    while (position <= before.size) {
+      const buffer = Buffer.allocUnsafe(Math.min(64 * 1024, before.size + 1 - position))
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, position)
+      if (!bytesRead) break
+      chunks.push(buffer.subarray(0, bytesRead)); position += bytesRead
+    }
+    if (position !== before.size || !sameFile(before, await handle.stat()) || !sameFile(before, await lstat(path))) fail('SOURCE_CHANGED')
+    return Buffer.concat(chunks, position)
+  } finally { await handle.close() }
+}
 export async function createDirectories(root: string, entries: BackupEntry[]): Promise<void> {
   for (const entry of entries) if (entry.kind === 'directory') await mkdir(checkedPath(root, entry.path), { mode: 0o700 })
 }

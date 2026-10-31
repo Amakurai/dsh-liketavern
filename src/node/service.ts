@@ -64,6 +64,8 @@ import type { RenderedOutput, TavernMethodResults,TavernMethodRequests } from '.
 import { deleteEditorDraft, getEditorDraft, saveEditorDraft } from './editorDrafts.js'
 import { createPluginAboutReader, type PluginAboutReader } from './pluginAbout.js'
 import { withWorkspaceLock } from '../state/workspaceLock.js'
+import { snapshotSessionArchive } from './sessionArchiveSnapshot.js'
+import { importSessionArchive } from './sessionArchiveImport.js'
 
 /** 头像缓存条数上限：卡删除/再导入会产生新 cardId，旧条目无人主动清，超上限淘汰最旧（只多一次重读，无正确性影响）。 */
 const AVATAR_CACHE_MAX = 32
@@ -102,6 +104,22 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
     private readonly settingsScope: TavernSettingsScope,
   ) {
     super(ctx, 'tavern')
+  }
+
+  async listSessionImportWorkspaces(_request: TavernMethodRequests['listSessionImportWorkspaces']): Promise<TavernMethodResults['listSessionImportWorkspaces']> {
+    const registry = this.ctx.get('workspaceRegistry') as { list(): Array<{ id: string; title: string }> } | undefined
+    if (!registry) throw new Error('宿主工作区服务不可用')
+    return { items: registry.list().map(({ id, title }) => ({ id, title })) }
+  }
+
+  async exportSessionArchive(request: TavernMethodRequests['exportSessionArchive']): Promise<TavernMethodResults['exportSessionArchive']> {
+    return { archive: await snapshotSessionArchive(this.ctx, this.state, request.sessionId) }
+  }
+
+  async importSessionArchive(request: TavernMethodRequests['importSessionArchive']): Promise<TavernMethodResults['importSessionArchive']> {
+    let input: unknown
+    try { input = JSON.parse(request.archiveJson) as unknown } catch { throw new Error('会话迁移文件不是有效的 JSON') }
+    return importSessionArchive(this.ctx, this.state, input, request.workspaceId)
   }
 
   /**

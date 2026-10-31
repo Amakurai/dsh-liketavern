@@ -1,0 +1,29 @@
+/** 单会话迁移的中英文文案：说明独立剧情、大小限制和冲突处理。 */
+export const zh = {
+  'sessionArchive.title': '会话迁移',
+  'sessionArchive.desc': '导出所选会话、附件、记忆和回滚日志，不包含其它分支或子会话。生成结束后再导出；文件包含私人对话，请妥善保管。',
+  'sessionArchive.export': '导出所选会话',
+  'sessionArchive.chooseStory': '请先选择上方的角色和剧情。',
+  'sessionArchive.workspace': '导入到工作区',
+  'sessionArchive.chooseWorkspace': '选择工作区',
+  'sessionArchive.chooseFile': '选择会话文件',
+  'sessionArchive.import': '导入会话',
+  'sessionArchive.confirm': '将会在所选工作区恢复该会话及其独立剧情；同 ID 会话或不同内容的共享资产会拒绝覆盖。',
+  'sessionArchive.tooLarge': '文件超过 192 MiB，无法导入。',
+  'sessionArchive.imported': '会话已导入。',
+  'sessionArchive.navigationFailed': '会话已导入，但未能自动打开；请刷新会话列表后打开。',
+}
+export const en: Record<keyof typeof zh, string> = {
+  'sessionArchive.title': 'Session transfer',
+  'sessionArchive.desc': 'Export the selected session with attachments, memories and rollback history; other branches and child sessions are not included. Wait for generation to finish first and protect the file as private conversation data.',
+  'sessionArchive.export': 'Export selected session',
+  'sessionArchive.chooseStory': 'Choose a character and story above first.',
+  'sessionArchive.workspace': 'Import into workspace',
+  'sessionArchive.chooseWorkspace': 'Choose a workspace',
+  'sessionArchive.chooseFile': 'Choose session file',
+  'sessionArchive.import': 'Import session',
+  'sessionArchive.confirm': 'The session and its separate story will be restored in the selected workspace. Existing sessions or conflicting shared assets will not be overwritten.',
+  'sessionArchive.tooLarge': 'The file exceeds the 192 MiB import limit.',
+  'sessionArchive.imported': 'Session imported.',
+  'sessionArchive.navigationFailed': 'The session was imported, but could not be opened automatically. Refresh the session list and open it manually.',
+}

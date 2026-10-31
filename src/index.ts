@@ -7,7 +7,8 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Session } from '@deepseek-ai/dsh-session'
 import '@deepseek-ai/dsh-typert-registry'
 import { Config, TAVERN_NS, TavernConfigSchema, resolveConfig } from './node/config.js'
-import { adoptHostFork, ensureGreeting, retireGreetingOnlyBlankSession } from './node/floors.js'
+import { adoptHostFork, ensureGreeting } from './node/floors.js'
+import { createGreetingRetirement } from './node/greetingRetirement.js'
 import { tavernPaths } from './node/paths.js'
 import { installTavernPreset } from './node/presetInstall.js'
 import { createTavernService } from './node/service.js'
@@ -84,26 +85,18 @@ export async function apply(ctx: Context, config: ReturnType<typeof Config>): Pr
   registerHelperMvuLifecycle(ctx)
   ctx.effect(() => ctx.typert.register(TYPERT_HOST), 'dsh-tavern.typert')
 
-  const retireStuckBlank = (session: Session) => {
-    try {
-      if (!isTavernRuntimeSession(ctx, session)) return
-      if (retireGreetingOnlyBlankSession(session, ctx)) {
-        ctx.logger.info(`dsh-tavern: 已解除被开场白写脏的空白会话 ${session.id}`)
-      }
-    } catch (error) {
-      ctx.logger.warn(`dsh-tavern: 解除写脏空白会话失败：${error instanceof Error ? error.message : String(error)}`)
-    }
-  }
+  const greetingRetirement = createGreetingRetirement(ctx)
   const adoptOrRetireSession = (session: Session) => {
     let isFork = false
     try { isFork = Boolean(session.header.parentSession) && isTavernRuntimeSession(ctx, session) } catch { return }
-    if (!isFork) { retireStuckBlank(session); return }
+    if (!isFork) { greetingRetirement.schedule(session); return }
     void state.trackBindingAdoption(session.id, () => adoptHostFork({ ctx, state }, session))
-      .then((adopted) => { if (adopted) ctx.logger.info(`dsh-tavern: 已为宿主分支 ${session.id} 准备独立剧情`); retireStuckBlank(session) })
+      .then((adopted) => { if (adopted) ctx.logger.info(`dsh-tavern: 已为宿主分支 ${session.id} 准备独立剧情`); greetingRetirement.afterAdoption(session) })
       .catch((error) => ctx.logger.warn(`dsh-tavern: 宿主分支绑定剧情失败：${error instanceof Error ? error.message : String(error)}`))
   }
   for (const session of ctx.sessions.list()) adoptOrRetireSession(session)
   ctx.on('session/created', adoptOrRetireSession)
+  ctx.on('agent/created', ({ agent }) => { greetingRetirement.agentCreated(agent); return undefined })
 
   // 楼层 WAL 与每 turn 检索缓存：只碰 Tavern 模式会话，普通 dsh 助手不受影响。
   ctx.on('session/event', (session: Session, event) => {

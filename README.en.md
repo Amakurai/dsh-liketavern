@@ -42,7 +42,7 @@ Regex rules, prompt templates, and HTML card scripts bundled inside third-party 
 
 ## Installation & Upgrade
 
-> **Prerequisites**: Node.js `>= 24.0.0`, DeepSeek Harness `0.2.1-rc.3`, `pnpm`, and at least one configured model in `dsh`. If you are new to `dsh`, see the [DeepSeek Harness Documentation](https://deepseek-harness.github.io/deepseek-harness/) first. Precompiled `lib/` bundles are committed to the repository, so no local build is required during installation.
+> **Prerequisites**: Node.js `>= 24.0.0`, DeepSeek Harness `>=0.2.0-rc.1 <0.4.0-0`, `pnpm`, and at least one configured model in `dsh`. The development baseline is `0.2.1-rc.3`; the host loader includes prereleases in this range. Back up and verify newer, untested host versions before relying on them. If you are new to `dsh`, see the [DeepSeek Harness Documentation](https://deepseek-harness.github.io/deepseek-harness/) first. Precompiled `lib/` bundles are committed to the repository, so no local build is required during installation.
 
 ### Desktop Installation
 
@@ -64,6 +64,8 @@ dsh plugin --profile web list --depth 0
 # Start (or restart) dsh web
 dsh web
 ```
+
+On the tested `0.2.0-rc.1` and `0.2.2-alpha.2` hosts, pnpm may warn that the isolated profile lacks host peer dependencies. The running dsh host supplies those packages, so this warning alone does not mean installation failed. Check that the host version is in range and that the plugin loads after startup; do not assume other peer conflicts are harmless.
 
 ### Offline Release Tarball Installation
 
@@ -160,6 +162,12 @@ $DSH_HOME/dsh-tavern/
 └── editor-drafts/      # Unsaved editor draft recovery snapshots (up to 2 MiB each)
 ```
 
+### Transfer one Tavern session
+
+In **Settings → Tavern → Settings → Cards & Data**, select a character and story, then export the selected session. On the destination, choose a workspace and the exported JSON in the same section and confirm import; the session list refreshes and opens it. Wait for generation to finish before exporting. The file includes host history and attachments, the story's memories, world changes, variables, worldbook timers and WAL, and its referenced character and library assets.
+
+This is Tavern's own single-session format, not the host `/export` ZIP. Other branches and child sessions are not included; use the full backup below for a complete session tree. Import preserves session and story IDs and refuses to overwrite an existing session or different shared assets. Global regex and scripts affect other sessions, so they are not added automatically when the destination already has sessions. If the destination's image policy would change an attachment's identity, import stops before publishing the story; adjust that policy and retry. If import is interrupted, the session is protected from use until you retry with **the same file and workspace**. The content limit is 128 MiB and the JSON upload limit is 192 MiB; use the full backup below for larger data. Files contain private conversation and original workspace information. Digests detect corruption but do not authenticate the source, so protect the file and import only trusted data.
+
 ### Full CLI Backup & Recovery (Recommended)
 
 The built-in backup CLI captures plugin data, host sessions, and configuration manifests with SHA-256 verification:
@@ -196,7 +204,7 @@ dsh plugin --profile web exec dsh-tavern-doctor --json
 <details>
 <summary><b>"Tavern 模式" or the Tavern settings tab is missing after installation?</b></summary>
 
-1. Run `dsh --version` and confirm the host version is `0.2.1-rc.3`.
+1. Run `dsh --version` and confirm the host is in the compatible range above; use doctor when needed.
 2. Run `dsh plugin --profile web list --depth 0` to verify the plugin is installed in the `web` profile.
 3. Restart `dsh web` (or the desktop app) and check the terminal output for startup errors.
 </details>

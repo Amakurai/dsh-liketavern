@@ -1,9 +1,11 @@
-import { type CatalogRefusal, type DeepSeekCatalogModel, type ListingView } from '@deepseek-ai/dsh-llm-deepseek';
+import type { CatalogRefusal, DeepSeekCatalogModel, ListingView } from '@deepseek-ai/dsh-llm-deepseek';
 import type { ResolvedDeepSeekOptions } from '@deepseek-ai/dsh-llm-deepseek-api-key';
 /** 一次请求解析使用的连接快照：offered 只用于目录广告，models 已含 listed 模型。 */
 export interface PresetConnection extends ResolvedDeepSeekOptions {
     readonly offered: readonly DeepSeekCatalogModel[];
     readonly refusals: ReadonlyMap<string, CatalogRefusal>;
+    /** 新宿主可能提供模型徽标；旧宿主没有此字段。 */
+    readonly badges?: ReadonlyMap<string, unknown>;
 }
 /**
  * 把列表视图折叠进连接。没有视图（未跟随列表、尚未加载或加载失败）时与宿主一致：

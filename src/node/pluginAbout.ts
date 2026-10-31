@@ -3,6 +3,7 @@ import { lstat, open, realpath } from 'node:fs/promises'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { ProfileContext } from '@deepseek-ai/dsh-app-boot'
+import { hostVersionSatisfies, manifestHostRange } from '../core/hostVersion.js'
 
 export interface PluginAbout {
   version: string
@@ -74,9 +75,11 @@ function compare(left: SemVer, right: SemVer): number {
   }
   return 0
 }
-function packageVersions(value: unknown, error: string): { version: SemVer; host: SemVer } {
-  if (!object(value) || value.name !== 'dsh-liketavern' || !object(value.peerDependencies)) throw new Error(error)
-  return { version: semver(value.version, error), host: semver(value.peerDependencies['@deepseek-ai/dsh'], error) }
+function packageVersions(value: unknown, error: string): { version: SemVer; host: string } {
+  if (!object(value) || value.name !== 'dsh-liketavern') throw new Error(error)
+  const host = manifestHostRange(value)
+  if (host === 'unknown') throw new Error(error)
+  return { version: semver(value.version, error), host }
 }
 async function localJson(path: string): Promise<unknown> {
   const file = await open(path, 'r')
@@ -190,7 +193,7 @@ export function createPluginAboutReader(options: PluginAboutReaderOptions = {}):
       const raw = await metadata(), current = packageVersions(raw.plugin, METADATA_ERROR)
       if ((raw.host !== null && (!object(raw.host) || raw.host.name !== '@deepseek-ai/dsh')) || typeof raw.sourceCheckout !== 'boolean') throw new Error(METADATA_ERROR)
       return { version: current.version.value, hostVersion: raw.host === null ? 'unknown' : semver((raw.host as Record<string, unknown>).version, METADATA_ERROR).value,
-        expectedHostVersion: current.host.value, repositoryUrl: REPOSITORY, releasesUrl: `${REPOSITORY}/releases`, sourceCheckout: raw.sourceCheckout,
+        expectedHostVersion: current.host, repositoryUrl: REPOSITORY, releasesUrl: `${REPOSITORY}/releases`, sourceCheckout: raw.sourceCheckout,
         desktopHost: hostProfile?.name === 'desktop' }
     } catch { throw new Error(METADATA_ERROR) }
   }
@@ -220,10 +223,10 @@ export function createPluginAboutReader(options: PluginAboutReaderOptions = {}):
       if (latest.prerelease.length) throw new Error(INVALID_RELEASE_ERROR)
       const target = packageVersions(await request(`${RAW_PACKAGE_ROOT}${encodeURIComponent(tag)}/package.json`), INVALID_RELEASE_ERROR)
       if (target.version.value !== latest.value) throw new Error(INVALID_RELEASE_ERROR)
-      const compatible = compare(semver(current.hostVersion, METADATA_ERROR), target.host) === 0
+      const compatible = hostVersionSatisfies(current.hostVersion, target.host)
       const order = compare(latest, semver(current.version, METADATA_ERROR))
       const status = !compatible ? 'incompatible' : order > 0 ? 'available' : order < 0 ? 'ahead' : 'current'
-      return { status, latestVersion: latest.value, requiredHostVersion: target.host.value,
+      return { status, latestVersion: latest.value, requiredHostVersion: target.host,
         releaseUrl: `${REPOSITORY}/releases/tag/${encodeURIComponent(tag)}`,
         command: status === 'available' && !current.sourceCheckout && !current.desktopHost ? `dsh plugin --profile web add github:Amakurai/dsh-liketavern#${tag}` : null }
     }

@@ -4,6 +4,7 @@
  */
 import { useDraftGuard } from '../drafts.js'
 import { useDraftState } from '../draftPersistence.js'
+import { randomUuid } from '../../core/secureRandom.js'
 import { useEffect, useRef, useState } from 'react'
 import { IconTrashOutlineMedium } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PromptPreset, RegexRule, RegexScope, RegexTiming } from '../../core/types.js'
@@ -26,7 +27,7 @@ type PresetDraft = PromptPreset & { editId: string; editRevision?: string }
 
 function newRule(): RegexRule {
   return {
-    id: `rule-${Date.now().toString(36)}`,
+    id: `rule-${randomUuid()}`,
     name: tOnce('regex.newRuleName'),
     find: '',
     replace: '',

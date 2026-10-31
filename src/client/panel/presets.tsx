@@ -15,7 +15,7 @@ import { Badge, Btn, ConfirmDialog, Err, Field, FileBtn, IconBtn, Muted, NumInpu
 
 function newEntry(order: number): PresetEntry {
   return {
-    identifier: `entry-${Date.now().toString(36)}-${order}`,
+    identifier: `entry-${randomUuid()}`,
     name: tBare('presets.newEntryName'),
     enabled: true,
     role: 'system',

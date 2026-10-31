@@ -12,7 +12,8 @@ import { TavernState } from '../src/node/state.js'
 import { TavernService } from '../src/node/service.js'
 import { PersonasSection } from '../src/client/panel/personas.js'
 import { PresetsSection } from '../src/client/panel/presets.js'
-import { Btn, ConfirmDialog, IconBtn, Select } from '../src/client/util.js'
+import { RegexSection } from '../src/client/panel/regex.js'
+import { Btn, ConfirmDialog, Field, IconBtn, Select } from '../src/client/util.js'
 import { setTavernLocale, t } from '../src/client/i18n.js'
 import type { TavernRemote } from '../src/client/types.js'
 
@@ -161,4 +162,44 @@ it.each(['persona', 'preset'] as const)('两个窗口同毫秒新建 %s，保存
   const items = kind === 'persona' ? await f.state.listPersonas() : (await f.service.listPresets({})).items
   expect(items.map(item => item.name).sort()).toEqual(['新建资产 0', '新建资产 1'])
   for (const view of views) expect(view.root.findAllByProps({ role: 'alert' })).toHaveLength(0)
+})
+
+it('同毫秒删除早先条目后新增预设条目，仍保留独立身份且可以保存两份正文', async () => {
+  const f = await fixture()
+  vi.spyOn(Date, 'now').mockReturnValue(1_793_444_000_000)
+  const view = await render(<PresetsSection remote={f.remote}/>, false)
+  await act(async () => button(view, t('presets.new')).props.onClick())
+  await act(async () => button(view, t('presets.addEntry')).props.onClick())
+  await act(async () => view.root.findAllByType(IconBtn).find(item => item.props.label === t('presets.entry.delete'))!.props.onClick())
+  await act(async () => button(view, t('presets.addEntry')).props.onClick())
+  for (let index = 0; index < 2; index++) await act(async () => view.root.findAllByType('textarea')[index]!.props.onChange({ target: { value: `正文 ${index}` } }))
+  await act(async () => {
+    button(view, t('presets.save')).props.onClick()
+    await Promise.allSettled(vi.mocked(f.remote.savePreset).mock.results.map(result => result.value))
+  })
+  const saved = await f.service.listPresets({})
+  expect(saved.items).toHaveLength(1)
+  const preset = (await f.service.getPreset({ id: saved.items[0]!.id })).preset
+  expect(preset.entries.map(entry => entry.content)).toEqual(['正文 0', '正文 1'])
+  expect(new Set(preset.entries.map(entry => entry.identifier)).size).toBe(2)
+  expect(view.root.findAllByProps({ role: 'alert' })).toHaveLength(0)
+})
+
+it('同毫秒新增的两条正则规则使用独立身份，保存后删除一条不会串到另一条', async () => {
+  const f = await fixture()
+  f.remote.listRegexRules = vi.fn(async request => ok(await f.service.listRegexRules(request)))
+  f.remote.saveRegexRules = vi.fn(async request => ok(await f.service.saveRegexRules(request)))
+  vi.spyOn(Date, 'now').mockReturnValue(1_793_444_000_000)
+  const view = await render(<RegexSection remote={f.remote}/>, false)
+  await act(async () => { await vi.waitFor(() => expect(button(view, t('regex.new'))).toBeDefined()) })
+  for (let index = 0; index < 2; index++) {
+    await act(async () => button(view, t('regex.new')).props.onClick())
+    await act(async () => view.root.findAllByType(Field).filter(field => field.props.label === t('regex.find'))[index]!.findByType('input').props.onChange({ target: { value: `source-${index}` } }))
+  }
+  await act(async () => { button(view, t('regex.saveAll')).props.onClick(); await vi.mocked(f.remote.saveRegexRules).mock.results[0]!.value })
+  const rules = (await f.service.listRegexRules({})).rules
+  expect(new Set(rules.map(rule => rule.id)).size).toBe(2)
+  await act(async () => view.root.findAllByType(IconBtn).find(item => item.props.label === t('regex.deleteRule'))!.props.onClick())
+  await act(async () => { button(view, t('regex.saveAll')).props.onClick(); await vi.mocked(f.remote.saveRegexRules).mock.results[1]!.value })
+  expect((await f.service.listRegexRules({})).rules.map(rule => [rule.id, rule.find])).toEqual([[rules[1]!.id, 'source-1']])
 })

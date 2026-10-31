@@ -5,6 +5,7 @@ import type { TavernRemote } from './types.js'
 import { useT } from './i18n.js'
 import { Btn, Err, Skeleton } from './util.js'
 import { randomUuid } from '../core/secureRandom.js'
+import { remoteIdentity } from './remoteIdentity.js'
 
 type Fields = Record<string, unknown>
 type Snapshot = { version: 1; fields: Fields }
@@ -20,13 +21,12 @@ interface DraftRegistry {
 }
 const PersistenceContext = createContext<DraftRegistry | null>(null)
 const remotes = new WeakMap<TavernRemote, { id: number; queues: Map<string, Promise<unknown>> }>()
-let remoteSequence = 0
 let fallbackOwner: string | undefined
 
 /** remote 决定宿主身份；相同浏览器标识与面板名不能让不同宿主共享快照或飞行请求。 */
 function draftRemote(remote: TavernRemote) {
   let value = remotes.get(remote)
-  if (!value) { value = { id: ++remoteSequence, queues: new Map() }; remotes.set(remote, value) }
+  if (!value) { value = { id: remoteIdentity(remote), queues: new Map() }; remotes.set(remote, value) }
   return value
 }
 

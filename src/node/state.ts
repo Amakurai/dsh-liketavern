@@ -1066,14 +1066,14 @@ export class TavernState {
     return out.sort((a, b) => a.name.localeCompare(b.name, 'zh'))
   }
 
-  async loadPreset(id: string): Promise<PromptPreset | null> {
+  /** 库目录允许跳过坏内容；实际选中预设的读取须拒绝损坏，不能冒充内建默认条目。 */
+  async loadPreset(id: string, strictRead = false): Promise<PromptPreset | null> {
     if (this.assetFileId(id) !== id) { const resolved = await this.resolveExistingAssetId(await this.rootFs(), 'library/presets', id); if (!resolved) return null; id = resolved }
-    // rev-keyed 解析缓存。解析失败按 null 缓存并回退默认预设——
-    // 损坏的预设文件不该打崩每一步组装（对比 loadLorebookJson / listPersonas 的同类容错）。
+    // 普通读取的坏内容按 null 缓存；严格读取不能用这条空结果替换用户选中的预设。
     let key = this.assetFileId(id)
     const rev = this.assetRevision(`preset:${key}`)
     const cached = this.presetCache.get(key)
-    if (cached && cached.rev === rev) return cached.value
+    if (cached && cached.rev === rev && (!strictRead || cached.value !== null)) return cached.value
     const fs = await this.rootFs()
     const raw = await fs.readText(`library/presets/${key}.json`)
     let value: PromptPreset | null = null
@@ -1081,6 +1081,7 @@ export class TavernState {
       try {
         value = parseStoredPreset(JSON.parse(raw))
       } catch {
+        if (strictRead) throw new Error(`预设 ${id} 的数据损坏，无法读取；请修复或重新导入后重试`)
         value = null
       }
     }

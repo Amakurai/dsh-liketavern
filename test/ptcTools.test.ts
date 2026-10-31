@@ -86,6 +86,42 @@ afterEach(async () => {
   await rm(root, { recursive: true, force: true })
 })
 
+it.each(['{"entries":', '{}'])('绑定预设损坏时目录和预设正文明确失败，独立剧情文件仍可读：%s', async broken => {
+  const preset = defaultPreset(); preset.identifier = 'broken-selected-preset'
+  const id = await state.savePreset(preset)
+  await state.saveBinding({ ...(await state.loadBinding(agent.id))!, presetId: id })
+  const file = join(state.paths.root, 'library', 'presets', `${id}.json`)
+  await state.deletePreset(id)
+  await writeFile(file, broken)
+  expect(await state.loadPreset(id)).toBeNull()
+  await (await workspace()).fs.withFloor(null).writeText('journal.md', '当前剧情可独立读取')
+  const result = await run(`return await Promise.all([
+    tools.tavern_asset_list({}), tools.tavern_asset_read({preset:'list'}), tools.tavern_asset_read({path:'journal.md'})
+  ]);`)
+  expect(result.isError, JSON.stringify(result.content)).toBe(false)
+  const values = (result.value as { result: Array<{ ok: boolean; error?: string; file?: { content: string } }> }).result
+  expect(values.map(value => value.ok)).toEqual([false, false, true])
+  for (const value of values.slice(0, 2)) expect(value.error).toMatch(/预设.*损坏/)
+  expect(values[2]?.file?.content).toBe('当前剧情可独立读取')
+  expect(await readFile(file, 'utf8')).toBe(broken)
+})
+
+it('预设读取故障以有界业务错误返回，不把本机路径交给模型', async () => {
+  const preset = defaultPreset(); preset.identifier = 'unreadable-selected-preset'
+  const presetId = await state.savePreset(preset)
+  await state.saveBinding({ ...(await state.loadBinding(agent.id))!, presetId })
+  vi.spyOn(state, 'loadPreset').mockRejectedValue(new Error('EACCES: C:\\private-profile\\library\\presets\\private.json'))
+  const result = await run(`return await Promise.all([tools.tavern_asset_list({}), tools.tavern_asset_read({preset:'list'})]);`)
+  expect(result.isError, JSON.stringify(result.content)).toBe(false)
+  const values = (result.value as { result: Array<{ ok: boolean; error?: string }> }).result
+  expect(values.map(value => value.ok)).toEqual([false, false])
+  for (const value of values) {
+    expect(value.error).toContain('preset-unreadable')
+    expect(assetOutputTokens(value)).toBeLessThanOrEqual(3000)
+  }
+  expect(JSON.stringify(result.value)).not.toContain('private-profile')
+})
+
 it('来源参数错误时给出业务拒绝，目录和正文查询均不扩大到其它来源', async () => {
   await bindLorebook({ sword: { key: ['长剑'], content: '不应出现在错误来源查询中的正文' } })
   const result = await run(`return await Promise.all([

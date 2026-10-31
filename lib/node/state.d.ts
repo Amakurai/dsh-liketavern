@@ -314,7 +314,8 @@ export declare class TavernState {
         name: string;
         regexCount: number;
     }>>;
-    loadPreset(id: string): Promise<PromptPreset | null>;
+    /** 库目录允许跳过坏内容；实际选中预设的读取须拒绝损坏，不能冒充内建默认条目。 */
+    loadPreset(id: string, strictRead?: boolean): Promise<PromptPreset | null>;
     /** 落盘并 bump 修订号，返回磁盘上的 id（identifier 含非法字符时与 preset.identifier 不同）。 */
     savePreset(preset: PromptPreset, options?: {
         preserveHelperSettings?: boolean;

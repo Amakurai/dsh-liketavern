@@ -1,5 +1,5 @@
-/** 预设真实请求回归：rc.2 AgentLoop、Session、工厂适配器与真实剧情 WAL 验证后置落位、逐轮刷新、采样冻结及宿主消息保真。 */
-import { mkdtemp, rm } from 'node:fs/promises'
+/** 预设真实请求回归：锁定宿主的 AgentLoop、Session、工厂适配器与真实剧情 WAL 验证后置落位、逐轮刷新、采样冻结、损坏拒绝及宿主消息保真。 */
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -122,6 +122,28 @@ afterEach(async () => {
   if (state && agent) await state.waitForSessionTasks(agent.id)
   await ctx?.fiber.dispose()
   await rm(root, { recursive: true, force: true })
+})
+
+it('选中预设损坏时真实 AgentLoop 不进入模型适配器，修复后仍在原剧情正常发信', async () => {
+  const file = join(state.paths.presets, `${presetId}.json`), original = await readFile(file, 'utf8')
+  await state.deletePreset(presetId)
+  await writeFile(file, '{"entries":')
+  agent.followup(userMessage('坏预设不能作为默认配置发信'))
+  await agent.whenIdle()
+  await state.waitForSessionTasks(agent.id)
+  expect(requests).toHaveLength(0)
+  expect(errors).toHaveLength(1)
+  expect(errors[0] instanceof Error && errors[0].message).toMatch(/预设.*损坏/)
+  const end = agent.session.snapshotEvents().filter(event => event.type === 'turn/end').at(-1)
+  expect(end?.data.reason.kind).not.toBe('completed')
+  expect(state.turnPlans.has(agent.id)).toBe(false)
+  await writeFile(file, original)
+  errors.length = 0
+  await send(userMessage('修复后继续原剧情'))
+  expect(requests).toHaveLength(1)
+  expect(requests[0]?.temperature).toBe(0.37)
+  expect(textOf(requests[0]!.messages.at(-1)!)).toContain('PRESET-TAIL')
+  expect((await state.loadBinding(agent.id))?.storyId).toBe(storyId)
 })
 
 it('每轮把同字节后置规则追加到新用户之后，覆盖卡级槽位且保留宿主图片消息', async () => {

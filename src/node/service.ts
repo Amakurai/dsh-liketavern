@@ -341,7 +341,7 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
   }
 
   async getPreset(request: { id: string }): Promise<TavernMethodResults['getPreset']> {
-    const preset = await this.state.loadPreset(request.id)
+    const preset = await this.state.loadPreset(request.id, true)
     if (!preset) throw new FloorError('preset-not-found', `预设 ${request.id} 不存在`)
     return { preset, revision: presetEditRevision(preset) }
   }

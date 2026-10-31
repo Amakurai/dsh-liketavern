@@ -30,6 +30,7 @@ import {
   stampAssetTokens,
 } from '../core/assetRead.js'
 import { defaultPreset } from '../core/assemble.js'
+import type { PromptPreset } from '../core/types.js'
 import { TURN_WRITE_ACK_PREFIX, formatTurnStepNotice, neutralizeDshMustache } from '../core/dshPrompt.js'
 import { memorySearchOptions } from '../core/memoryRetrieval.js'
 import { budgetMemorySearch, MEMORY_SEARCH_NO_MATCH_HINT } from '../core/memoryToolBudget.js'
@@ -73,6 +74,15 @@ interface ToolCtx {
 }
 
 type ToolResultValue = Record<string, unknown>
+
+/** 预设目录和正文始终对应当前选择；坏文件明确拒绝，错误不向模型回显本机路径。 */
+async function loadToolPreset(state: TavernState, binding: Pick<SessionBinding, 'presetId'>): Promise<{ preset: PromptPreset } | { error: string }> {
+  try {
+    return { preset: (binding.presetId ? await state.loadPreset(binding.presetId, true) : null) ?? defaultPreset() }
+  } catch {
+    return { error: 'preset-unreadable：绑定的预设无法读取或数据损坏，请修复或重新选择后重试' }
+  }
+}
 
 function text(value: ToolResultValue): { type: 'text'; text: string }[] {
   return [{ type: 'text', text: JSON.stringify(value, null, 2) }]
@@ -482,7 +492,9 @@ export function registerTavernTools(ctx: Context, state: TavernState): void {
           }
         }
         const memStats = await resolved.memoryReader.stats()
-        const preset = (binding.presetId ? await state.loadPreset(binding.presetId) : null) ?? defaultPreset()
+        const selectedPreset = await loadToolPreset(state, binding)
+        if ('error' in selectedPreset) return boundedToolError(selectedPreset.error)
+        const preset = selectedPreset.preset
         // 目录必须与 tavern_asset_read 的可读白名单一致：同一个 resolveReadableAssetPath 过滤，
         // 否则会向模型广告 state/wal/*、回滚残留目录、card.png 这些 asset_read 一律拒绝的路径。
         // 遍历时直接跳过 state/wal 与 memory/archive（skipDir）：两者只增不查、随时间单调增长，
@@ -552,7 +564,9 @@ export function registerTavernTools(ctx: Context, state: TavernState): void {
         const contents: Array<{ source: string; apply: (clipped: ReturnType<typeof clipAssetJsonText>) => void }> = []
 
         if (presetArg !== undefined || exactIdentifierArg !== undefined) {
-          const preset = (resolved.binding.presetId ? await state.loadPreset(resolved.binding.presetId) : null) ?? defaultPreset()
+          const selectedPreset = await loadToolPreset(state, resolved.binding)
+          if ('error' in selectedPreset) return boundedToolError(selectedPreset.error)
+          const preset = selectedPreset.preset
           if (exactIdentifierArg === undefined && presetArg !== undefined && isPresetCatalogToken(presetArg)) {
             const catalog = budgetPresetCatalog(preset, ASSET_OUTPUT_TOKEN_BUDGET - (pathArg?.trim() ? 1200 : 64))
             out.preset = { ...catalog, mode: 'catalog' }

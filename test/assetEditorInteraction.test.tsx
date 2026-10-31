@@ -379,6 +379,49 @@ describe('角色卡导入失败恢复', () => {
     expect(await f.state.listCharacters()).toHaveLength(0)
   })
 
+  it.each([true, false])('同批重复导入、关闭和重选文件只创建一张卡，保留内嵌书选择：%s', async importBook => {
+    const f = await fixture(), gate = Promise.withResolvers<void>()
+    vi.mocked(f.remote.importCharacter).mockImplementation(async request => { await gate.promise; return ok(await f.service.importCharacter(request)) })
+    const view = await render(<CharactersSection remote={f.remote}/>)
+    await settle(() => view.root.findByType(FileBtn).props.onFile(file()), () => completed(f.remote.inspectCharacter))
+    const preview = dialog(view)!, submit = choose(view, importBook).props.onClick
+    const cancel = preview.findAllByType(Button).find(item => item.props.children === t('action.cancel'))!.props.onClick
+    try {
+      await act(async () => {
+        submit(); submit(); preview.props.onClose(); cancel()
+        view.root.findByType(FileBtn).props.onFile(file())
+      })
+      expect(f.remote.importCharacter).toHaveBeenCalledOnce()
+      expect(f.remote.inspectCharacter).toHaveBeenCalledOnce()
+      expect(dialog(view)).toBeDefined()
+    } finally {
+      await act(async () => { gate.resolve(); await Promise.allSettled(vi.mocked(f.remote.importCharacter).mock.results.map(result => result.value)) })
+    }
+    const items = await f.state.listCharacters()
+    expect(items).toHaveLength(1)
+    expect(items[0]!.hasCharacterBook).toBe(importBook)
+    expect(dialog(view)).toBeUndefined()
+  })
+
+  it('角色收纳中的重复操作和新文件读取不能交叉解锁，完成后可重新选择文件', async () => {
+    const f = await fixture(), gate = Promise.withResolvers<void>()
+    const created = await f.state.createCharacter('等待收纳的角色')
+    vi.mocked(f.remote.archiveCharacter).mockImplementation(async request => { await gate.promise; return ok(await f.service.archiveCharacter(request)) })
+    const view = await render(<CharactersSection remote={f.remote}/>)
+    await settle(() => {}, () => view.root.findAllByProps({ 'aria-label': t('characters.card.archive') }).length === 1)
+    const archive = view.root.findByProps({ 'aria-label': t('characters.card.archive') }).props.onClick
+    try {
+      await act(async () => { archive({ stopPropagation: () => {} }); archive({ stopPropagation: () => {} }); view.root.findByType(FileBtn).props.onFile(file()) })
+      expect(f.remote.archiveCharacter).toHaveBeenCalledOnce()
+      expect(fileToBase64).not.toHaveBeenCalled()
+      expect(f.remote.inspectCharacter).not.toHaveBeenCalled()
+    } finally { await act(async () => { gate.resolve(); await Promise.allSettled(vi.mocked(f.remote.archiveCharacter).mock.results.map(result => result.value)) }) }
+    expect((await f.state.listArchivedCharacters()).map(item => item.cardId)).toEqual([created.cardId])
+    await settle(() => view.root.findByType(FileBtn).props.onFile(file()), () => completed(f.remote.inspectCharacter))
+    expect(dialog(view)).toBeDefined()
+    expect(await f.state.listCharacters()).toEqual([])
+  })
+
   it('无内嵌书也先预检，取消不创建资产，导入失败可保留报告原地重试', async () => {
     const f = await fixture()
     const plain = new File([JSON.stringify({ name: '无书角色', first_mes: '<div>预检</div>' })], 'plain.json')

@@ -431,13 +431,19 @@ function CharactersSectionContent(props: { remote: TavernRemote }) {
     && deletePlan.state.value.boundSessionCount === 0 && deletePlan.state.value.corruptBindingCount === 0
   const [creating, setCreating] = useDraftState('characters:creating', false)
   const [newName, setNewName] = useDraftState('characters:newName', '')
-  const creatingPending = useRef(false)
+  const operationPending = useRef(false)
   const [createError, setCreateError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const toast = useToast()
   const createGuard = useDraftGuard(creating && !!newName.trim(), busy)
+  /** 预检与写操作共用同步屏障，防止确认连点、重选文件或其它操作提前解除 busy。 */
+  const perform = async (operation: () => Promise<void>, failure = setError, onError?: (message: string) => void) => {
+    if (operationPending.current) return
+    operationPending.current = true
+    try { await runAsync(setBusy, failure, operation, onError) } finally { operationPending.current = false }
+  }
   const closeCreate = () => {
-    if (creatingPending.current) return
+    if (operationPending.current) return
     createGuard.request(() => {
       setCreating(false)
       setNewName('')
@@ -448,9 +454,8 @@ function CharactersSectionContent(props: { remote: TavernRemote }) {
   /** 创建回调在 React 更新前也必须互斥；等待时保留弹窗和输入，失败反馈留在弹窗内。 */
   const createCharacter = async () => {
     const name = newName.trim()
-    if (!name || creatingPending.current) return
-    creatingPending.current = true
-    try { await runAsync(setBusy, setCreateError, async () => {
+    if (!name || operationPending.current) return
+    await perform(async () => {
       const result = await remote.createCharacter({ name })
       if (!result.ok) { setCreateError(result.error.message); return }
       toast.show(t('characters.created', { name: result.value.name }))
@@ -458,13 +463,11 @@ function CharactersSectionContent(props: { remote: TavernRemote }) {
       setNewName('')
       reload()
       setDetailId(result.value.cardId)
-    }) } finally { creatingPending.current = false }
+    }, setCreateError)
   }
 
   const doImport = async (name: string, dataBase64: string, importWorldBook: boolean) => {
-    setBusy(true)
-    setError(null)
-    try {
+    await perform(async () => {
       const r = await remote.importCharacter({ name, dataBase64, importWorldBook })
       const err = errOf(r)
       if (err) setError(err)
@@ -473,17 +476,11 @@ function CharactersSectionContent(props: { remote: TavernRemote }) {
         toast.show(t(importWorldBook ? 'characters.importedWithBook' : 'characters.imported'))
         reload()
       }
-    } catch (err2) {
-      setError(err2 instanceof Error ? err2.message : String(err2))
-    } finally {
-      setBusy(false)
-    }
+    })
   }
 
   const onImportFile = async (file: File) => {
-    setBusy(true)
-    setError(null)
-    try {
+    await perform(async () => {
       if (/\.png$/i.test(file.name) && file.size > MAX_CARD_PNG_BYTES) {
         throw new Error(t('characters.pngFileTooLarge', { limit: MAX_CARD_PNG_BYTES / 1024 / 1024 }))
       }
@@ -494,11 +491,7 @@ function CharactersSectionContent(props: { remote: TavernRemote }) {
         return
       }
       setPending({ name: file.name, dataBase64, preview: inspected.value })
-    } catch (err2) {
-      setError(err2 instanceof Error ? err2.message : String(err2))
-    } finally {
-      setBusy(false)
-    }
+    })
   }
 
   // 写入失败可能只是回执丢失，也可能是另一窗口改了收纳状态；重读列表恢复真实状态，保留错误供重试判断。
@@ -514,7 +507,7 @@ function CharactersSectionContent(props: { remote: TavernRemote }) {
       setToDelete(null)
       refreshAfterError(message)
     }
-    await runAsync(setBusy, setError, async () => {
+    await perform(async () => {
       const plan = deletePlan.state.status === 'ready' ? deletePlan.state.value : null
       const r = await remote.deleteCharacter({ cardId: toDelete.cardId, discardStoryIds: plan ? plan.stories.map((story) => story.id) : [] })
       const err = errOf(r)
@@ -529,11 +522,11 @@ function CharactersSectionContent(props: { remote: TavernRemote }) {
         setToDelete(null)
         reload()
       }
-    }, failed)
+    }, setError, failed)
   }
 
   const onArchive = async (item: CharacterSummary) => {
-    await runAsync(setBusy, setError, async () => {
+    await perform(async () => {
       const r = await remote.archiveCharacter({ cardId: item.cardId })
       const err = errOf(r)
       if (err) refreshAfterError(err)
@@ -542,11 +535,11 @@ function CharactersSectionContent(props: { remote: TavernRemote }) {
         if (detailId === item.cardId) setDetailId(null)
         reload()
       }
-    }, refreshAfterError)
+    }, setError, refreshAfterError)
   }
 
   const onRestore = async (item: CharacterSummary) => {
-    await runAsync(setBusy, setError, async () => {
+    await perform(async () => {
       const r = await remote.restoreCharacter({ cardId: item.cardId })
       const err = errOf(r)
       if (err) refreshAfterError(err)
@@ -554,7 +547,7 @@ function CharactersSectionContent(props: { remote: TavernRemote }) {
         toast.show(t('characters.restored', { name: item.name }))
         reload()
       }
-    }, refreshAfterError)
+    }, setError, refreshAfterError)
   }
 
   const items = state.status === 'ready' ? state.value.items : []
@@ -569,6 +562,7 @@ function CharactersSectionContent(props: { remote: TavernRemote }) {
         value={collection}
         label={t('characters.collectionLabel')}
         onChange={(value) => {
+          if (operationPending.current) return
           setCollection(value as 'active' | 'archived')
           setError(null)
           setToDelete(null)
@@ -583,7 +577,7 @@ function CharactersSectionContent(props: { remote: TavernRemote }) {
           <FileBtn accept=".png,.json" disabled={busy} onFile={(file) => void onImportFile(file)}>
             {t('characters.importFile')}
           </FileBtn>
-          <Btn size="md" disabled={busy} onClick={() => { if (!creatingPending.current) { setCreateError(null); setCreating(true) } }}>{t('characters.newCard')}</Btn>
+          <Btn size="md" disabled={busy} onClick={() => { if (!operationPending.current) { setCreateError(null); setCreating(true) } }}>{t('characters.newCard')}</Btn>
         </>}
         <Btn size="md" onClick={reload} disabled={busy}>{t('action.refresh')}</Btn>
         {(items.length >= 5 || query !== '') && (
@@ -620,8 +614,8 @@ function CharactersSectionContent(props: { remote: TavernRemote }) {
       <div className="dsh-tavern-charGrid">
         {filtered.map((item) => (
           <CharacterCard key={item.cardId} remote={remote} item={item} busy={busy} archived={collection === 'archived'}
-            onOpen={collection === 'active' ? setDetailId : undefined} onArchive={(card) => void onArchive(card)}
-            onRestore={(card) => void onRestore(card)} onDelete={setToDelete} />
+            onOpen={collection === 'active' ? id => { if (!operationPending.current) setDetailId(id) } : undefined} onArchive={(card) => void onArchive(card)}
+            onRestore={(card) => void onRestore(card)} onDelete={item => { if (!operationPending.current) setToDelete(item) }} />
         ))}
       </div>
       {detailId && (
@@ -644,10 +638,10 @@ function CharactersSectionContent(props: { remote: TavernRemote }) {
               ? t('characters.importBook.descNamed', { name: pending.preview.name, book: pending.preview.characterBookName, count: pending.preview.entryCount })
               : t('characters.importBook.desc', { name: pending.preview.name, count: pending.preview.entryCount })
           }
-          onClose={() => { if (!busy) setPending(null) }}
+          onClose={() => { if (!operationPending.current) setPending(null) }}
           footer={
             <div className="dsh-tavern-modalActions">
-              <Button type="button" variant="outline" size="md" disabled={busy} onClick={() => { setPending(null); setError(null) }}>
+              <Button type="button" variant="outline" size="md" disabled={busy} onClick={() => { if (!operationPending.current) { setPending(null); setError(null) } }}>
                 {t('action.cancel')}
               </Button>
               {pending.preview.hasCharacterBook && <Button type="button" variant="outline" size="md" disabled={busy} onClick={() => void doImport(pending.name, pending.dataBase64, false)}>
@@ -687,7 +681,7 @@ function CharactersSectionContent(props: { remote: TavernRemote }) {
         danger
         busy={busy}
         confirmDisabled={!deleteReady}
-        onCancel={() => setToDelete(null)}
+        onCancel={() => { if (!operationPending.current) setToDelete(null) }}
         onConfirm={() => void onDelete()}
       >
         <CharacterDeletePlanView state={deletePlan.state} busy={busy} onRetry={deletePlan.reload} />
@@ -719,7 +713,7 @@ function CharactersSectionContent(props: { remote: TavernRemote }) {
             disabled={busy}
             value={newName}
             placeholder={t('characters.create.namePlaceholder')}
-            onChange={(e) => setNewName(e.target.value)}
+            onChange={(e) => { if (!operationPending.current) setNewName(e.target.value) }}
           />
         </Field>
       </Dialog>

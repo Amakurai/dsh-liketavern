@@ -11,6 +11,8 @@ const faults = vi.hoisted(() => ({
   syncError: undefined as Error | undefined,
   closeError: undefined as Error | undefined,
   renameError: undefined as Error | undefined,
+  renameFailures: null as number | null,
+  renameCalls: 0,
   cleanupError: undefined as Error | undefined,
 }))
 
@@ -43,7 +45,8 @@ vi.mock('node:fs/promises', async importOriginal => {
       return handle
     },
     rename: async (...args: Parameters<typeof actual.rename>) => {
-      if (faults.renameError) throw faults.renameError
+      faults.renameCalls++
+      if (faults.renameError && (faults.renameFailures === null || faults.renameFailures-- > 0)) throw faults.renameError
       return actual.rename(...args)
     },
     rm: async (...args: Parameters<typeof actual.rm>) => {
@@ -57,7 +60,7 @@ vi.mock('node:fs/promises', async importOriginal => {
 let root: string
 const reset = () => Object.assign(faults, {
   collision: false, tempPath: '', cleanupCalls: 0,
-  writeError: undefined, syncError: undefined, closeError: undefined, renameError: undefined, cleanupError: undefined,
+  writeError: undefined, syncError: undefined, closeError: undefined, renameError: undefined, renameFailures: null, renameCalls: 0, cleanupError: undefined,
 })
 beforeEach(async () => { reset(); root = await mkdtemp(join(tmpdir(), 'tavern-atomic-boundary-')) })
 afterEach(async () => { reset(); await rm(root, { recursive: true, force: true }) })
@@ -73,6 +76,28 @@ it.each([
   await atomicWrite(path, '更新后')
   expect(await readFile(path, 'utf8')).toBe('更新后')
   expect(await readdir(root)).toEqual([name])
+})
+
+it.runIf(process.platform === 'win32').each(['EPERM', 'EACCES', 'EBUSY'])('Windows 短暂 %s 后仍原子保存同一正文，成功不留下临时文件', async code => {
+  const path = join(root, 'busy-note.md')
+  await writeFile(path, '原正文')
+  faults.renameError = Object.assign(new Error('短暂占用'), { code })
+  faults.renameFailures = 2
+  await atomicWrite(path, '完整新正文')
+  expect(await readFile(path, 'utf8')).toBe('完整新正文')
+  expect(await readdir(root)).toEqual(['busy-note.md'])
+  expect(faults.renameCalls).toBeGreaterThan(1)
+})
+
+it.runIf(process.platform === 'win32')('Windows 持续拒绝替换仍保留原正文，并只清理当前写入拥有的临时文件', async () => {
+  const path = join(root, 'busy-note.md')
+  await writeFile(path, '原正文')
+  faults.renameError = Object.assign(new Error('持续拒绝'), { code: 'EPERM' })
+  await expect(atomicWrite(path, '新正文')).rejects.toBe(faults.renameError)
+  expect(await readFile(path, 'utf8')).toBe('原正文')
+  expect(await readdir(root)).toEqual(['busy-note.md'])
+  expect(faults.cleanupCalls).toBe(1)
+  expect(faults.renameCalls).toBeGreaterThan(1); expect(faults.renameCalls).toBeLessThanOrEqual(8)
 })
 
 it('独占创建冲突不删除其它写入已占用的文件，也不修改原正文', async () => {

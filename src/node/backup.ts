@@ -1,7 +1,8 @@
 /** 用户数据离线快照与恢复：清单校验后发布新目录；依赖安装树明确排除，宿主历史与插件状态一起保存。 */
 import { randomUUID } from 'node:crypto'
-import { chmod, lstat, mkdir, open, readdir, rename } from 'node:fs/promises'
+import { chmod, lstat, mkdir, open, readdir } from 'node:fs/promises'
 import { basename, dirname, join, resolve } from 'node:path'
+import { renameWithRetry } from '../state/rename.js'
 import { runDoctor, type DoctorIssue } from '../doctor.js'
 import { parseSessionBinding } from './bindings.js'
 import { safeHostRange } from '../core/hostVersion.js'
@@ -205,7 +206,7 @@ async function stage(target: string, action: (temporary: string) => Promise<void
     await action(temporary)
     await hooks?.beforePublish?.()
     await assertDirectory(dirname(target)); await assertAbsent(target)
-    await rename(temporary, target)
+    await renameWithRetry(temporary, target)
   } finally {
     // 唯一生成的同级临时目录；只删除已确认不是链接且仍位于原父目录的目录。
     if (dirname(resolve(temporary)) !== dirname(resolve(target))) fail('UNSAFE_CLEANUP')

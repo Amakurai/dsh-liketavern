@@ -1,12 +1,13 @@
 /** 剧情状态快照：角色资产共享，记忆/变化层/笔记/聊天世界书/WAL 按剧情隔离；先准备再原子发布。 */
 import { randomUUID, createHash } from 'node:crypto'
-import { lstat, readdir, rename, rm } from 'node:fs/promises'
+import { lstat, readdir, rm } from 'node:fs/promises'
 import { join, resolve, sep } from 'node:path'
 import { rebuildIndex } from './workspace.js'
 import { estimateTokens } from '../core/tokenize.js'
 import { WorkspaceFs } from './workspaceFs.js'
 import { Wal } from './wal.js'
 import { withWorkspaceLock } from './workspaceLock.js'
+import { renameWithRetry } from './rename.js'
 
 export interface StorySummary {
   id: string
@@ -108,7 +109,7 @@ export async function snapshotStory(options: {
       await dest.writeText('story.json', JSON.stringify({ version: 1, id: options.id,
         sessionId: options.sessionId, createdAt: new Date().toISOString(), migrated: options.migrated ?? false }) + '\n')
       options.beforePublish?.()
-      await rename(staging, target)
+      await renameWithRetry(staging, target)
     } finally {
       // 只清理本次生成且确认位于 stories 内的草稿，已发布状态从不在失败清理中删除。
       const base = resolve(options.cardRoot, 'stories') + sep

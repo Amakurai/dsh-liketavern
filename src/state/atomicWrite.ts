@@ -8,8 +8,9 @@
  * 不把已经提交的写入改报为失败。
  */
 import { randomUUID } from 'node:crypto'
-import { lstat, mkdir, open, readdir, rename, rm, stat } from 'node:fs/promises'
+import { lstat, mkdir, open, readdir, rm, stat } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
+import { renameWithRetry } from './rename.js'
 
 /** 只匹配本模块生成的临时文件名，不碰用户或其它程序的 .tmp。 */
 const ORPHAN_TEMP = /\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.tmp$/
@@ -51,7 +52,7 @@ export async function atomicWrite(path: string, data: string | Uint8Array): Prom
       throw error
     }
     await file.close()
-    await rename(temp, path)
+    await renameWithRetry(temp, path)
     // rename 已经移走临时文件并提交正文；随后的目录 fsync 只做尽力而为，失败不改报结果。
     await syncDirectory(dir)
   } catch (error) {

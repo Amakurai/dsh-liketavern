@@ -12,7 +12,7 @@
  */
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import type { Dirent } from 'node:fs'
-import { readdir, rename, rm } from 'node:fs/promises'
+import { readdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { compileCardRegexScripts } from '../core/regex.js'
 import { estimateTokens } from '../core/tokenize.js'
@@ -20,6 +20,7 @@ import type { CharacterCard } from '../core/types.js'
 import { cardToStJson, embedCardInPng, hydrateStoredCard, normalizeBook, serializeStoredCard, withoutEmbeddedCharacterBook } from './card.js'
 import { WorkspaceFs } from './workspaceFs.js'
 import { withWorkspaceLock } from './workspaceLock.js'
+import { renameWithRetry } from './rename.js'
 
 export interface CharacterWorkspace {
   cardId: string
@@ -164,7 +165,7 @@ export async function importCard(dataRoot: string, card: CharacterCard, opts?: I
     if ((await fs.readText('journal.md')) === null) await fs.writeText('journal.md', '')
 
     await rebuildIndex(fs, estimateTokens)
-    await rename(staging, root)
+    await renameWithRetry(staging, root)
 
     return {
       cardId,

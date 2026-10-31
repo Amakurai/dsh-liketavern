@@ -12,11 +12,12 @@
 
 import { createHash } from 'node:crypto'
 import { Buffer } from 'node:buffer'
-import { appendFile, mkdir, readFile, readdir, rename, rm, stat } from 'node:fs/promises'
+import { appendFile, mkdir, readFile, readdir, rm, stat } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import type { WalRecord } from '../core/types.js'
 import { undoWorldDelta } from '../core/walUndo.js'
 import { atomicWrite } from './atomicWrite.js'
+import { renameWithRetry } from './rename.js'
 import { withWorkspaceLock } from './workspaceLock.js'
 import { expandAffectedMemories } from './memoryRollback.js'
 import { hasRecoveryMarker, isReservedWalPath, WAL_RECOVERY_PATH, withRecoveryWriteAccess, WorkspaceFs, WORKSPACE_RECOVERING_MESSAGE } from './workspaceFs.js'
@@ -974,7 +975,7 @@ export class Wal {
     const archived = join(this.rootDir, `${dirName}${ROLLED_BACK_MARK}${timestamp()}`)
     await this.assertLogPath(dir)
     await this.assertLogPath(archived)
-    await rename(dir, archived)
+    await renameWithRetry(dir, archived)
     // 只有整层改名归档后才注销恢复标记；中途失败保留标记，重试仍受同一屏障保护。
     await this.clearRecovering(floor, workspaceRoot)
     return restored

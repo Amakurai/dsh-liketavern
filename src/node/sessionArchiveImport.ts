@@ -1,6 +1,6 @@
 /** 会话迁移导入：预检冲突并准备独立剧情，持久化可重试标记后发布，绝不覆盖已有会话或共享资产。 */
 import { createHash, randomUUID } from 'node:crypto'
-import { lstat, mkdir, readdir, rename, rm } from 'node:fs/promises'
+import { lstat, mkdir, readdir, rm } from 'node:fs/promises'
 import { dirname, join, resolve, sep } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import type { Context } from '@deepseek-ai/cordis'
@@ -11,6 +11,7 @@ import { storyRoot } from '../state/story.js'
 import { loadCharacter } from '../state/workspace.js'
 import { withWorkspaceLock } from '../state/workspaceLock.js'
 import { atomicWrite, sweepOrphanTemps } from '../state/atomicWrite.js'
+import { renameWithRetry } from '../state/rename.js'
 import { assertBindingFileIdentity, loadBinding, saveBinding } from './bindings.js'
 import { sessionFile } from './paths.js'
 import { assertDirectory, boundedBytes, boundedJson } from './backupFiles.js'
@@ -166,7 +167,7 @@ export async function importSessionArchive(ctx: Context, state: TavernState, inp
         // 若共享文件写到一半失败，已落盘的条目同样不能继续命中旧的缺失缓存。
         try { await writeFiles(state.paths.root, missingGlobals) }
         finally { state.invalidateSessionArchiveAssets(missingGlobals.map(file => file.path)) }
-        if (!(await present(story))) await rename(stage, cardExists ? story : cardRoot)
+        if (!(await present(story))) await renameWithRetry(stage, cardExists ? story : cardRoot)
         state.invalidateSessionArchiveCard(binding.cardId)
         if (!existingBinding) await saveBinding(state.paths, binding)
         const handle = existingSession ? await persistence.open(binding.sessionId as Session['id'], 'write')

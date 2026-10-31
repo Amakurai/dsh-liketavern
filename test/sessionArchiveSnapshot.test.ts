@@ -13,8 +13,10 @@ import { resolveConfig } from '../src/node/config.js'
 import { TavernState } from '../src/node/state.js'
 import { deriveLegacyLineage, snapshotSessionArchive } from '../src/node/sessionArchiveSnapshot.js'
 import { importSessionArchive } from '../src/node/sessionArchiveImport.js'
-import { parseSessionArchive } from '../src/node/sessionArchiveFormat.js'
+import { parseSessionArchive, SESSION_ARCHIVE_MAX_FILES } from '../src/node/sessionArchiveFormat.js'
 import { withWorkspaceLock } from '../src/state/workspaceLock.js'
+import { WorkspaceFs } from '../src/state/workspaceFs.js'
+import * as backupFiles from '../src/node/backupFiles.js'
 import type { SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
 
 let root: string, state: TavernState, ctx: Context, fake: Context, cardId: string
@@ -32,7 +34,46 @@ beforeEach(async () => {
   const persistence = { open: async () => ({ header: session.header, inheritedEventCount: 0, read: async () => ({ events: session.snapshotEvents() }), close: async () => {} }) }
   fake = { sessions: { get: () => session, flush: async () => true }, get: (name: string) => name === 'sessionPersistence' ? persistence : undefined } as unknown as Context
 })
-afterEach(async () => { await ctx.fiber.dispose(); await rm(root, { recursive: true, force: true }) })
+afterEach(async () => { vi.restoreAllMocks(); await ctx.fiber.dispose(); await rm(root, { recursive: true, force: true }) })
+
+/** 数量压力使用虚拟目录清单和正文，剧情元数据、绑定与宿主历史仍取真实临时文件，避免创建两万文件拖慢双平台 CI。 */
+it.each([0, 1])('会话文件恰好到数量上限可导出，超限 %s 个时在读取大量正文前拒绝', async extra => {
+  const baseline = await snapshotSessionArchive(fake, state, 'session-one')
+  const ws = await state.storyWorkspace(cardId, baseline.binding.storyId)
+  const originalPaths = baseline.files.filter(file => file.area === 'story').map(file => file.path)
+  const virtualPaths = Array.from({ length: SESSION_ARCHIVE_MAX_FILES - baseline.files.length + extra }, (_, index) => `memory/count-budget-${index}.md`)
+  const absolute = new Set(virtualPaths.map(path => join(ws.fs.root, ...path.split('/'))))
+  const list = WorkspaceFs.prototype.list, read = backupFiles.boundedBytes
+  let reads = 0
+  vi.spyOn(WorkspaceFs.prototype, 'list').mockImplementation(function (this: WorkspaceFs, ...args) {
+    return this.root === ws.fs.root && !args[0] ? Promise.resolve([...originalPaths, ...virtualPaths]) : list.apply(this, args)
+  })
+  vi.spyOn(backupFiles, 'boundedBytes').mockImplementation(async (path, limit) => {
+    if (absolute.has(path)) { reads++; return Buffer.from('synthetic memory') }
+    return read(path, limit)
+  })
+  if (extra) {
+    await expect(snapshotSessionArchive(fake, state, 'session-one')).rejects.toThrow(/文件数量.*全量备份/)
+    expect(reads).toBe(0)
+  } else {
+    const archive = await snapshotSessionArchive(fake, state, 'session-one')
+    expect(archive.files).toHaveLength(SESSION_ARCHIVE_MAX_FILES)
+    expect(reads).toBe(virtualPaths.length)
+    expect(archive.files.some(file => file.path === virtualPaths.at(-1))).toBe(true)
+  }
+})
+
+it('附件数量超限时明确提示全量备份，不启动附件正文读取', async () => {
+  const attachmentId = `sha256:${createHash('sha256').update('').digest('hex')}` as const
+  const content = Array.from({ length: SESSION_ARCHIVE_MAX_FILES + 1 }, (_, index) => ({
+    type: 'file' as const, attachment: { attachmentId, bytes: 0, name: `file-${index}.txt` },
+  }))
+  ctx.sessions.get(SessionId('session-one'))!.append('user/message', createUserMessage({ source: { kind: 'user' }, content }), { surfaceOp: 'append' })
+  const readFileStream = vi.fn(async function* () { throw new Error('不应读取超限附件正文') })
+  const sourceCtx = { sessions: fake.sessions, get: (name: string) => name === 'attachments' ? { readFileStream } : fake.get(name) } as unknown as Context
+  await expect(snapshotSessionArchive(sourceCtx, state, 'session-one')).rejects.toThrow(/附件数量.*全量备份/)
+  expect(readFileStream).not.toHaveBeenCalled()
+})
 
 /** 模拟剧情写入在持有剧情锁时再获取绑定锁；超时后释放剧情锁，避免错误锁序挂死整个测试。 */
 async function storyWriter(story: string) {

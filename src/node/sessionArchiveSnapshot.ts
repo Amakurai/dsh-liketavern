@@ -8,7 +8,7 @@ import { readStory, storyRoot } from '../state/story.js'
 import { withWorkspaceLock } from '../state/workspaceLock.js'
 import { boundedBytes } from './backupFiles.js'
 import { sessionAttachmentReferences } from './sessionArchiveAttachments.js'
-import { archiveFile, sealSessionArchive, SESSION_ARCHIVE_MAX_BYTES, SESSION_ARCHIVE_MAX_JSON_BYTES, type SessionArchive, type SessionArchiveAttachment, type SessionArchiveFile } from './sessionArchiveFormat.js'
+import { archiveFile, sealSessionArchive, SESSION_ARCHIVE_MAX_BYTES, SESSION_ARCHIVE_MAX_FILES, SESSION_ARCHIVE_MAX_JSON_BYTES, type SessionArchive, type SessionArchiveAttachment, type SessionArchiveFile } from './sessionArchiveFormat.js'
 import type { TavernState } from './state.js'
 import type { WalLineageEntry } from './bindings.js'
 import { assertArchiveWalComplete } from './sessionArchiveWal.js'
@@ -73,6 +73,20 @@ export async function snapshotSessionArchive(ctx: Context, state: TavernState, s
       const history = JSON.stringify(session.events)
       if (session.header.id !== sessionId || hasOpenTurn(session.events) || state.openFloors.has(sessionId)
         || (live && JSON.stringify(live.snapshotEvents()) !== history)) throw new Error('会话正在生成或历史尚未稳定，请稍后重试')
+      // 先核对可迁移数量，再读取正文和附件；不能在全部编码完之后把超限误报为文件损坏。
+      const cardFs = new WorkspaceFs(cardRoot, null)
+      const cardPaths = ['card.json', ...(await cardFs.exists('card.png') ? ['card.png'] : []),
+        ...(await cardFs.list('assets', { rejectLinks: true })).map(path => `assets/${path}`).filter(path => path.toLowerCase() !== 'assets/chat-lorebook.json')]
+      const storyFs = new WorkspaceFs(story, null)
+      const storyPaths = await storyFs.list('', { rejectLinks: true })
+      const globalPaths = await state.sessionArchiveAssetPaths(binding)
+      if (cardPaths.length + storyPaths.length + globalPaths.length > SESSION_ARCHIVE_MAX_FILES) {
+        throw new Error(`会话迁移文件数量超过 ${SESSION_ARCHIVE_MAX_FILES} 个上限，请使用全量备份`)
+      }
+      const refs = sessionAttachmentReferences(session.events)
+      if (refs.images.size + refs.files.size > SESSION_ARCHIVE_MAX_FILES) {
+        throw new Error(`会话迁移附件数量超过 ${SESSION_ARCHIVE_MAX_FILES} 个上限，请使用全量备份`)
+      }
       let remaining = SESSION_ARCHIVE_MAX_BYTES - Buffer.byteLength(history)
       const files: SessionArchiveFile[] = []
       const add = async (area: SessionArchiveFile['area'], root: string, path: string) => {
@@ -81,15 +95,10 @@ export async function snapshotSessionArchive(ctx: Context, state: TavernState, s
         remaining -= bytes.length
         files.push(archiveFile(area, path, bytes))
       }
-      const cardFs = new WorkspaceFs(cardRoot, null)
-      for (const path of ['card.json', ...(await cardFs.exists('card.png') ? ['card.png'] : []),
-        ...(await cardFs.list('assets', { rejectLinks: true })).map(path => `assets/${path}`).filter(path => path.toLowerCase() !== 'assets/chat-lorebook.json')]) {
-        await add('card', cardRoot, path)
-      }
-      const storyFs = new WorkspaceFs(story, null)
-      for (const path of await storyFs.list('', { rejectLinks: true })) await add('story', story, path)
-      for (const path of await state.sessionArchiveAssetPaths(binding)) await add('global', state.paths.root, path)
-      const refs = sessionAttachmentReferences(session.events), attachments: SessionArchiveAttachment[] = []
+      for (const path of cardPaths) await add('card', cardRoot, path)
+      for (const path of storyPaths) await add('story', story, path)
+      for (const path of globalPaths) await add('global', state.paths.root, path)
+      const attachments: SessionArchiveAttachment[] = []
       const store = ctx.get('attachments')
       if ((refs.images.size || refs.files.size) && !store) throw new Error('宿主附件服务不可用')
       for (const ref of refs.images.values()) {

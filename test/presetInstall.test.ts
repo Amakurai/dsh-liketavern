@@ -58,10 +58,39 @@ describe('installTavernPreset', () => {
     expect(register).toHaveBeenCalledWith(expect.objectContaining({ id: 'tavern', plugins: [
       { id: 'tavern', name: agentModulePath() },
       { id: 'tool-presentation', name: '@deepseek-ai/dsh-agent-tool-presentation', config: { mode: 'ptc' } },
+      { id: 'compaction', name: 'cordis:group', group: true, isolate: { compaction: true, toolResultPruner: true }, config: [
+        { id: 'tool-result-pruner', name: '@deepseek-ai/dsh-compaction-tool-result-pruner' },
+        { id: 'compaction-basic', name: '@deepseek-ai/dsh-compaction-basic' },
+        { id: 'command-compact', name: '@deepseek-ai/dsh-command-compact' },
+      ] },
     ] }))
     expect(dispose).not.toHaveBeenCalled()
     await release()
     expect(dispose).toHaveBeenCalledOnce()
+  })
+  it('预设与 cordis.patch.yml 引用的宿主插件包均已在 package.json 声明 peerDependencies 与 devDependencies', async () => {
+    const [presetYaml, patchYaml, pkgText] = await Promise.all([
+      readFile(TEMPLATE_URL, 'utf8'),
+      readFile(new URL('../cordis.patch.yml', import.meta.url), 'utf8'),
+      readFile(new URL('../package.json', import.meta.url), 'utf8'),
+    ])
+    const pkg = JSON.parse(pkgText) as {
+      peerDependencies?: Record<string, string>
+      devDependencies?: Record<string, string>
+    }
+    const referenced = new Set<string>()
+    for (const source of [presetYaml, patchYaml]) {
+      for (const match of source.matchAll(/@deepseek-ai\/[a-z0-9-]+/g)) {
+        const name = match[0]!
+        // cordis:group 等内建不带 @deepseek-ai/ 前缀；包级子路径（如无）取包名本身
+        referenced.add(name)
+      }
+    }
+    expect(referenced.size).toBeGreaterThan(0)
+    for (const name of referenced) {
+      expect(pkg.peerDependencies?.[name], `${name} 缺少 peerDependencies 声明`).toBeDefined()
+      expect(pkg.devDependencies?.[name], `${name} 缺少 devDependencies 声明`).toBeDefined()
+    }
   })
   it('注册失败向调用者传播，不把没有安装的预设报告为成功', async () => {
     const ctx = { agentPresets: { register: async () => { throw new Error('注册失败') } } } as unknown as Pick<Context, 'agentPresets'>

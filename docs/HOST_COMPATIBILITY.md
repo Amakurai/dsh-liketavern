@@ -26,7 +26,7 @@
 
 `0.2.2-alpha.2` 在同步 `session/created` 期间禁止追加事件；旧开场白会话的轮次标记因此改在公告结束后写入，再在 Agent 入册时对齐空闲或维护相位的计数。用真实新版 AgentLoop 和合成旧日志验证，补偿后下一次输入从 turn 2 开始。不过宿主针对冷会话的复用检查发生在这个微任务之前，仍可能先把只有开场白的旧会话视为空白；此外缺少原始 turn/step 的游离 assistant 消息不符合宿主 V4 日志约束，补充空轮次无法修复其持久历史。此补偿不承诺修复或安全迁移这类损坏日志；正常新开场白使用完整轮次，不受该限制。
 
-最后使用仓库外的 `0.2.0-rc.1` 与 `0.2.2-alpha.2` 宿主安装构建包并启动两个全新 web profile，经真实 gateway 双向迁移合成开场白与记忆：会话和剧情身份一致；篡改轮次关系的文件先被拒绝，随后同一原文件可成功导入。两边安装器的 pnpm 均报告 profile 缺少 25 个宿主 peer；`pnpm peers check` 的这 25 项全部为 missing peer，实际运行由宿主提供，启动和上述迁移成功。该观察不适用于其它类型的 peer 冲突。
+最后使用仓库外的 `0.2.0-rc.1` 与 `0.2.2-alpha.2` 宿主安装构建包并启动两个全新 web profile，经真实 gateway 双向迁移合成开场白与记忆：会话和剧情身份一致；篡改轮次关系的文件先被拒绝，随后同一原文件可成功导入。两边安装器的 pnpm 均报告 profile 缺少宿主 peer；`pnpm peers check` 的各项全部为 missing peer（含 Tavern 预设挂载的 `@deepseek-ai/dsh-compaction-tool-result-pruner`、`@deepseek-ai/dsh-compaction-basic` 与 `@deepseek-ai/dsh-command-compact`），实际运行由宿主提供，启动和上述迁移成功。该观察不适用于其它类型的 peer 冲突。
 
 本轮 Windows / Node 24 回归覆盖 313 个测试文件：先前第一片 1934 项通过，最终第二片 1814 项通过、11 项条件跳过；新增文件和第一片受最后修改影响的文件另补跑 153 项通过。干净安装、构建、发布包白名单、host/doctor/backup 检查通过；Linux CI 和真实模型未在本轮运行。
 

@@ -806,8 +806,8 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
   // 实际请求计划在模拟预算裁剪前保存插件正文；它只引用历史 ID，不携带经过正则的历史副本。
   const layoutFragments: PromptLayoutFragment[] = []
   const layoutMessageIndices = new Map<ChatMessage, number>()
-  const firstChat = layoutHistory.find(anchor=>anchor.chat)
-  const lastChat = [...layoutHistory].reverse().find(anchor=>anchor.chat)
+  const firstHistory = layoutHistory[0]
+  const lastHistory = [...layoutHistory].reverse().find(anchor=>anchor.chat) ?? layoutHistory.at(-1)
   const tailSet = new Set(tail)
   for (const message of [...beforeHistory, ...history, ...tail]) {
     const anchor = historyAnchors.get(message)
@@ -829,7 +829,7 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
       turnLocal: injection?.turn ?? turnMessages.has(message),
       placement: injection ? promptDepthPlacement(layoutHistory, injection.depth, injection.order)
         : { kind: after ? 'after-history' : 'before-history',
-          ...((after ? lastChat : firstChat) ? { anchor: (after ? lastChat : firstChat)! } : {}),
+          ...((after ? lastHistory : firstHistory) ? { anchor: (after ? lastHistory : firstHistory)! } : {}),
           ...(relativeOrders.has(message) ? { order: relativeOrders.get(message)! } : {}) },
     })
   }
@@ -838,7 +838,7 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
   if (!preciseTemplateHistory || (!layoutHistory.length && templateTailInsertions===undefined)) {
     for (const content of templateTurnContext) layoutFragments.push({ role: 'system', content,
       sourceKeys: ['template:legacy-turn-context'], turnLocal: true, compatibilityFallback: true,
-      placement: { kind: 'after-history', ...(lastChat ? { anchor: lastChat } : {}) } })
+      placement: { kind: 'after-history', ...(lastHistory ? { anchor: lastHistory } : {}) } })
   }
   const layout = createPromptLayout(layoutHistory, layoutFragments)
   const estimate = (m: ChatMessage) => input.estimateTokens(m.content)

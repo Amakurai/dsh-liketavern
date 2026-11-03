@@ -96,6 +96,7 @@ dsh web
    - **Regenerate / Edit**: Use the action bar on any AI message to retry or edit. The plugin automatically forks a new child branch with rolled-back state; switch between sibling timelines anytime via `‹ n/m ›`.
    - **Continue**: Extend the current AI reply from where it stopped.
    - **AI Impersonation**: Let the model draft the next `{{user}}` reply and copy it straight to your clipboard.
+   - **Context Compaction (`/compact`)**: Tavern Mode mounts the host `@deepseek-ai/dsh-compaction-tool-result-pruner`, `@deepseek-ai/dsh-compaction-basic`, and `@deepseek-ai/dsh-command-compact` plugins, enabling manual `/compact` and automatic context compaction independently of the plugin's own story memory archive.
 
 ---
 

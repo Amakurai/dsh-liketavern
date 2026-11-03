@@ -1,4 +1,4 @@
-# Tavern 模式的 agent 面组合：Tavern 业务工具 + 宿主原生 PTC 呈现。
+# Tavern 模式的 agent 面组合：Tavern 业务工具、宿主原生 PTC 呈现与上下文压缩。
 # 该模块注册 tavern 工具集、Tavern 系统指令段与 agent/pre-step 组装管线；
 # 全部状态按 SessionId 键控，多个 Tavern 会话共享此 standing mount。
 # __AGENT_MODULE__ 占位符由插件启动时替换为本包 agent 入口的绝对路径或包名子路径。
@@ -11,3 +11,20 @@
   name: '@deepseek-ai/dsh-agent-tool-presentation'
   config:
     mode: ptc
+
+# Web 宿主将工具结果修剪、压缩后端与命令交给各预设加载，不会自动继承 standard/ptc 的配置。
+# 三个模块共用预设内的隔离服务：压力与超窗压缩会先调用 toolResultPruner 修剪旧工具输出，
+# 自动压缩与 /compact 操作同一会话，不向宿主根或其它预设暴露服务；tokenMeter、commands 与 sessions 仍复用宿主。
+- id: compaction
+  name: cordis:group
+  group: true
+  isolate:
+    compaction: true
+    toolResultPruner: true
+  config:
+    - id: tool-result-pruner
+      name: '@deepseek-ai/dsh-compaction-tool-result-pruner'
+    - id: compaction-basic
+      name: '@deepseek-ai/dsh-compaction-basic'
+    - id: command-compact
+      name: '@deepseek-ai/dsh-command-compact'

@@ -524,6 +524,7 @@ export function projectPresetRequest(options: Readonly<GenerateOptions>, session
   // 本轮尾块：移来的条目与原本就在历史后的条目，都位于本轮输入之后。
   const inTurnTail = (entry: PromptLayoutEntry): boolean => movesToTail(entry)
     || (plan.cacheFirst === true && rootEntry(entry)?.placement.kind === 'after-history')
+  const firstHistory = plan.layout.history[0]
   const gaps = new Map<string, number>()
   const resolving = new Set<string>()
   const gapFor = (entry: PromptLayoutEntry): number => {
@@ -547,7 +548,12 @@ export function projectPresetRequest(options: Readonly<GenerateOptions>, session
         gap = gapFor(target)
         break
       }
-      case 'before-history': gap = placement.anchor ? safeGap(locate(placement.anchor).index, 'before') : 1; break
+      case 'before-history': {
+        if (placement.anchor) locate(placement.anchor)
+        const target = firstHistory ?? placement.anchor
+        gap = target ? safeGap(locate(target).index, 'before') : 1
+        break
+      }
       case 'after-history': {
         if (placement.anchor) locate(placement.anchor)
         gap = safeGap(frontier(), 'after'); break
@@ -580,8 +586,7 @@ export function projectPresetRequest(options: Readonly<GenerateOptions>, session
     if (slot) slot.push(message)
     else slots.set(gap, [message])
   }
-  const firstChat = plan.layout.history.find(anchor => anchor.chat)
-  const playbookGap = firstChat ? safeGap(locate(firstChat).index, 'before') : 1
+  const playbookGap = firstHistory ? safeGap(locate(firstHistory).index, 'before') : 1
   append(playbookGap, pluginMessage(plan, 'host:turn-playbook', 'system', TURN_PLAYBOOK))
   const before = new Map<string, PromptLayoutEntry[]>(), after = new Map<string, PromptLayoutEntry[]>()
   for (const entry of entries) {

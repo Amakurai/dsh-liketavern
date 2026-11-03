@@ -22,7 +22,11 @@ const present = (value: unknown): value is string => typeof value === 'string' &
 function pairOf(value: unknown): RoutePair | undefined {
   if (value === null || typeof value !== 'object') return undefined
   const { provider, model } = value as { provider?: unknown; model?: unknown }
-  return present(provider) && present(model) ? { provider, model } : undefined
+  if (!present(provider) || !present(model)) return undefined
+  return {
+    provider: provider === PRESET_ADAPTER_PROVIDER ? PRESET_ADAPTER_SOURCE_PROVIDER : provider,
+    model,
+  }
 }
 
 /** 对齐宿主 applyModelSelectionProjection：请求用过同一路由后，待用选择即消耗。 */
@@ -47,7 +51,5 @@ function loggedRoute(session: Partial<Pick<Agent['session'], 'snapshotEvents' | 
 }
 
 export function sessionModelRoute(agent: Pick<Agent, 'options' | 'session'>): SessionModelRoute {
-  const route = loggedRoute(agent.session) ?? pairOf(agent.options)
-  if (!route) return {}
-  return { provider: route.provider === PRESET_ADAPTER_PROVIDER ? PRESET_ADAPTER_SOURCE_PROVIDER : route.provider, model: route.model }
+  return loggedRoute(agent.session) ?? pairOf(agent.options) ?? {}
 }

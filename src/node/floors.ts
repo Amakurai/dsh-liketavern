@@ -179,6 +179,8 @@ async function forkChildSession(ctx: Context, source: Session, seed: readonly Se
       // clear 只向未发布的子日志追加取消记录，宿主在发布前落盘；来源会话及历史序号不变。
       // 必须早于预设挂载，以免取消预设为新分支合法添加的输入；显式重跑在 create 完成后提交。
       child.inbox.clear()
+      const controller = ctx.get('sessionController') as { agents?: { selectionFor?(agent: Agent): unknown } } | undefined
+      try { controller?.agents?.selectionFor?.(child) } catch { /* 单测未挂 modelSelection 投影时忽略 */ }
       await presets.mount(agentCtx, resolvedId)
     },
   }

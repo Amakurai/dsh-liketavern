@@ -87,6 +87,7 @@ export async function apply(ctx: Context, config: ReturnType<typeof Config>): Pr
   }
   preparePresetAdapter()
   ctx.on('llm/adapters-updated', preparePresetAdapter)
+  ctx.on('settings/document-updated', preparePresetAdapter)
   registerHelperMvuLifecycle(ctx)
   ctx.effect(() => ctx.typert.register(TYPERT_HOST), 'dsh-tavern.typert')
 

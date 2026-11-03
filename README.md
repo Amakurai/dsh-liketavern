@@ -96,6 +96,7 @@ dsh web
    - **重新生成 / 编辑回复**：在任意 AI 消息操作栏点击重试或编辑，插件会自动切入新分支并回滚后续楼层状态，随时可通过消息下方的 `‹ n/m ›` 在兄弟分支间切换。
    - **继续生成**：顺着当前回复末尾继续扩写。
    - **AI 代答**：让模型以 `{{user}}` 视角草拟下一句台词并自动复制到剪贴板。
+   - **上下文压缩（`/compact`）**：Tavern 模式挂载宿主 `@deepseek-ai/dsh-compaction-tool-result-pruner`、`@deepseek-ai/dsh-compaction-basic` 与 `@deepseek-ai/dsh-command-compact`，支持宿主 `/compact` 手动与阈值自动压缩，独立于插件自身的剧情记忆归档。
 
 ---
 

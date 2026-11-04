@@ -1481,14 +1481,15 @@ export class TavernState {
     // 会让运行中的两个会话共享可变状态；自愈落盘和任何开层之前必须复核实际归属。
     const story = await readStory(join(this.paths.characters, next.cardId), next.storyId!)
     if (story.sessionId !== sessionId) throw new Error('剧情状态属于另一会话，必须通过分支快照继承')
-    if (next.cardId !== parsed.cardId || next.cardName !== parsed.cardName || next.personaId !== parsed.personaId || next.storyId !== parsed.storyId) {
+    const personaStale = parsed.personaId !== null && next.personaId !== parsed.personaId
+    if (next.cardId !== parsed.cardId || next.cardName !== parsed.cardName || personaStale || next.storyId !== parsed.storyId) {
       // 自愈是读路径上的写：loadBinding 是热路径且不走 enqueueSessionTask，
       // 从 loadBinding 读到落盘之间用户可能已经换了卡。落盘前复读一次比对，
       // 只有磁盘仍是我们读到的那份才写回；否则丢弃本次自愈（下次读会重新算），
       // 免得在途自愈把用户刚选的角色悄悄覆盖回旧绑定。
       const current = await loadBinding(this.paths, sessionId, strictRead)
       if (current && current.cardId === parsed.cardId && current.personaId === parsed.personaId) {
-        await saveBinding(this.paths, next)
+        await saveBinding(this.paths, personaStale ? next : { ...next, personaId: parsed.personaId })
       }
     }
     return next
@@ -1661,9 +1662,37 @@ export class TavernState {
     return promise
   }
 
-  /** 清掉会话绑定文件；空白新对话复用旧会话时用来去掉上次留下的角色卡。 */
-  async clearBinding(sessionId: string): Promise<void> {
+  /** 清理会话在内存中的全部运行期状态与缓存。 */
+  clearSessionRuntime(sessionId: string): void {
     this.clearStandingPins(sessionId)
+    this.openFloors.delete(sessionId)
+    this.currentTurns.delete(sessionId)
+    this.currentSteps.delete(sessionId)
+    this.stepNoticeMarks.delete(sessionId)
+    this.turnPlans.delete(sessionId)
+    this.pendingTurnPlans.delete(sessionId)
+    this.pendingInputs.delete(sessionId)
+    this.pendingTemplateInputs.delete(sessionId)
+    this.triggerLogs.delete(sessionId)
+    this.requestDiagnostics.delete(sessionId)
+    this.sessionTaskTails.delete(sessionId)
+    this.sessionCommitTails.delete(sessionId)
+    this.helperTurnClosures.delete(sessionId)
+    const floorPrefix = `${sessionId}#`
+    for (const key of [...this.helperTurnClosures.keys()]) {
+      if (key.startsWith(floorPrefix)) this.helperTurnClosures.delete(key)
+    }
+    this.bindingAdoptions.delete(sessionId)
+    this.bindingAdoptionRetries.delete(sessionId)
+  }
+
+  /** 清掉会话绑定文件与运行期内存状态；空白新对话复用旧会话时用来去掉上次留下的角色卡与状态。 */
+  async clearBinding(sessionId: string): Promise<void> {
+    if (this.openFloors.get(sessionId)?.storyId) {
+      this.clearStandingPins(sessionId)
+    } else {
+      this.clearSessionRuntime(sessionId)
+    }
     await deleteBinding(this.paths, sessionId)
   }
 

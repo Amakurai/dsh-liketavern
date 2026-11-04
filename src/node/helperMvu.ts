@@ -14,7 +14,7 @@ import {loadHelperState,saveHelperState,type HelperState} from '../state/helper.
 import {withWorkspaceLock} from '../state/workspaceLock.js'
 import {getHelperSnapshot,helperHistoryOf,helperHistoryRevision} from './helperRuntime.js'
 import {readDisplaySessionEvents} from './sessionEvents.js'
-import {hasNormalAssistantStop} from './assistantStream.js'
+import {hasNormalAssistantStop} from '../core/assistantStream.js'
 import type {TavernState} from './state.js'
 
 type Snapshot=Pick<Session,'id'|'snapshotEvents'>
@@ -140,11 +140,8 @@ async function findUnregisteredFloor(state:TavernState,binding:SessionBinding,se
     if(!match)continue
     const turn=Number(match[2]),owner=match[1]
     if(owner!==sessionId&&!(binding.walLineage??[]).some(entry=>entry.sessionId===owner&&entry.throughTurn>=turn))continue
-    await ws.wal.validateFloor(floor.floor);if(floor.floor)return {floor:floor.floor,turn};break}return null;if(false){if(false){if(false){
-
-  }
-
-}
+    await ws.wal.validateFloor(floor.floor)
+    return {floor:floor.floor,turn}
   }
   return null
 }
@@ -171,7 +168,7 @@ async function queue(state:TavernState,sessionId:string,session:Snapshot,live:bo
   if(!items.length)return
   const ws=await state.storyWorkspace(binding!.cardId,binding!.storyId)
   await withWorkspaceLock(ws.fs.root,()=>withWorkspaceLock(state.paths.sessions,async()=>{
-    const current=await state.loadStoryBinding(sessionId)
+    const current=await state.loadStoryBinding(sessionId,{waitForAdoption:false})
     if(!enabled(state,current)||hash(current)!==hash(binding))throw new Error('自动 MVU 登记期间剧情绑定已改变')
     const saved=await loadHelperState(ws.fs),mvu=parseHelperMvuState(saved.mvu),floor=recovery?.floor??open?.floor??sessionId+'#t'+turn
     const selected=mvu.initialized?items:items.slice(-1);let added=false
@@ -200,7 +197,7 @@ export async function helperMvuPending(state:TavernState,sessionId:string,includ
 }
 /** 脚本加载阶段允许先播种数据；任务一经登记，普通变量/消息/世界书写必须等待本批事务完成。 */
 export async function assertHelperMvuWritable(state:TavernState,sessionId:string):Promise<void>{
-  const binding=await state.loadBinding(sessionId)
+  const binding=await state.loadStoryBinding(sessionId)
   if(!enabled(state,binding))return
   const ws=await state.storyWorkspace(binding!.cardId,binding!.storyId)
   await withWorkspaceLock(ws.fs.root,async()=>{const mvu=parseHelperMvuState((await loadHelperState(ws.fs)).mvu);if(mvu.pending.length||await unfinalizedReceipt(state,binding!,sessionId,mvu)||await unregisteredFloor(state,binding!,sessionId,mvu))throw new Error('自动 MVU 正在更新当前剧情，请等待事务完成')})
@@ -230,11 +227,11 @@ function latestCompleted(events:readonly SessionEvent[]){
 }
 async function locked<T>(state:TavernState,request:Request,run:(binding:SessionBinding)=>Promise<T>):Promise<T>{
   requestIdentity(request)
-  const first=await state.loadBinding(request.sessionId)
+  const first=await state.loadStoryBinding(request.sessionId)
   if(!first?.storyId||first.storyId!==request.storyId)throw new Error('自动 MVU 剧情绑定已改变')
   const ws=await state.storyWorkspace(first.cardId,first.storyId)
   return withWorkspaceLock(ws.fs.root,()=>withWorkspaceLock(state.paths.sessions,async()=>{
-    const binding=await state.loadBinding(request.sessionId)
+    const binding=await state.loadStoryBinding(request.sessionId,{waitForAdoption:false})
     if(!binding||binding.storyId!==request.storyId||binding.cardId!==first.cardId)throw new Error('自动 MVU 剧情绑定已改变')
     return run(binding)
   }))

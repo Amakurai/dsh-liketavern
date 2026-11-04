@@ -17,11 +17,11 @@ import {withWorkspaceLock} from '../state/workspaceLock.js'
 import type {TavernState} from './state.js'
 import type {HelperFrameWriteGuard} from '../core/helperFrame.js'
 export async function editHelperMessages(ctx:Context,state:TavernState,sessionId:string,messageId:number,request:HelperMessageEditRequest,beforeWrite?:HelperFrameWriteGuard):Promise<HelperMessageEditResult>{
-  const edits=parseHelperMessageEdits(request.edits),initial=await state.loadBinding(sessionId)
+  const edits=parseHelperMessageEdits(request.edits),initial=await state.loadStoryBinding(sessionId)
   if(!initial?.storyId||initial.storyId!==request.storyId)throw new Error('消息编辑剧情绑定已改变')
   const ws=await state.storyWorkspace(initial.cardId,initial.storyId)
   return withWorkspaceLock(ws.fs.root,()=>withWorkspaceLock(state.paths.sessions,async()=>{
-    const binding=await state.loadBinding(sessionId),source=ctx.sessions.get(sessionId as Session['id'])
+    const binding=await state.loadStoryBinding(sessionId,{waitForAdoption:false}),source=ctx.sessions.get(sessionId as Session['id'])
     if(!source)throw new Error('消息编辑需要当前会话在线')
     if(!binding||binding.cardId!==initial.cardId||binding.storyId!==request.storyId)throw new Error('消息编辑剧情绑定已改变')
     if(!state.config.interactiveCards||binding.interactiveCards===false)throw new Error('交互卡已关闭')
@@ -32,7 +32,7 @@ export async function editHelperMessages(ctx:Context,state:TavernState,sessionId
     const events=source.snapshotEvents(),history=helperHistoryOf(events,{char:'',user:''}),changed=new Map<number,string>(),deleted=new Set<number>(),deletedIdentities=new Set<string>(),seen=new Set<number>()
     if(helperHistoryRevision(history)!==snapshot.historyRevision)throw new Error('读取快照期间聊天历史已改变')
     const verify=async()=>{
-      const current=await state.loadBinding(sessionId)
+      const current=await state.loadStoryBinding(sessionId,{waitForAdoption:false})
       if(current?.storyId!==binding.storyId||current?.cardId!==binding.cardId||source.snapshotEvents().length!==events.length||state.openFloors.has(sessionId))throw new Error('消息编辑期间会话已改变')
       beforeWrite?.(current)
     }

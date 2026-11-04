@@ -413,7 +413,9 @@ export declare class TavernState {
      * signal 只作用于首次真实解析。
      */
     resolveModelInfoCached(llm: LlmRuntime, provider: string, model: string, signal?: AbortSignal): Promise<LlmResolvedModelInfo>;
-    /** 清掉会话绑定文件；空白新对话复用旧会话时用来去掉上次留下的角色卡。 */
+    /** 清理会话在内存中的全部运行期状态与缓存。 */
+    clearSessionRuntime(sessionId: string): void;
+    /** 清掉会话绑定文件与运行期内存状态；空白新对话复用旧会话时用来去掉上次留下的角色卡与状态。 */
     clearBinding(sessionId: string): Promise<void>;
     loadTimers(cardId: string, sessionId: string, storyId?: string): Promise<WITimerState>;
     saveTimers(cardId: string, sessionId: string, state: WITimerState, floor?: string | null, storyId?: string): Promise<void>;

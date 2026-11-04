@@ -35,11 +35,11 @@ function orderOf(floor: string, binding: SessionBinding): { turn: number; owner:
 
 export async function abandonHelperMvu(state: TavernState, request: Request): Promise<{ disabled: true; abandoned: number }> {
   if (!request.sessionId || request.sessionId.length > 256 || !request.storyId || request.storyId.length > 256) throw new Error('自动 MVU 剧情身份无效')
-  const first = await state.loadBinding(request.sessionId)
+  const first = await state.loadStoryBinding(request.sessionId)
   if (!first?.storyId || first.storyId !== request.storyId) throw new Error('自动 MVU 剧情绑定已改变')
   const workspace = await state.storyWorkspace(first.cardId, first.storyId)
   return withWorkspaceLock(workspace.fs.root, () => withWorkspaceLock(state.paths.sessions, async () => {
-    const binding = await state.loadBinding(request.sessionId)
+    const binding = await state.loadStoryBinding(request.sessionId, { waitForAdoption: false })
     if (!binding || binding.cardId !== first.cardId || binding.storyId !== request.storyId) throw new Error('自动 MVU 剧情绑定已改变')
     const saved = await loadHelperState(workspace.fs), mvu = parseHelperMvuState(saved.mvu)
     const open = state.openFloors.get(request.sessionId)

@@ -8,11 +8,11 @@ import {readDisplaySessionEvents} from './sessionEvents.js'
 import type {TavernState} from './state.js'
 
 export async function getHelperEventState(ctx:Context,state:TavernState,request:TavernMethodRequests['getHelperEventState']):Promise<TavernMethodResults['getHelperEventState']>{
-  const initial=await state.loadBinding(request.sessionId)
+  const initial=await state.loadStoryBinding(request.sessionId)
   if(!initial?.storyId)throw new Error('会话未绑定可用剧情')
   const ws=await state.storyWorkspace(initial.cardId,initial.storyId)
   return withWorkspaceLock(ws.fs.root,()=>withWorkspaceLock(state.paths.sessions,async()=>{
-    const binding=await state.loadBinding(request.sessionId)
+    const binding=await state.loadStoryBinding(request.sessionId,{waitForAdoption:false})
     if(!binding||binding.cardId!==initial.cardId||binding.storyId!==initial.storyId||request.storyId!==undefined&&request.storyId!==binding.storyId)throw new Error('事件剧情绑定已经改变')
     if(!state.config.interactiveCards||binding.interactiveCards===false)throw new Error('当前剧情未启用交互卡')
     const events=await readDisplaySessionEvents(ctx,request.sessionId)

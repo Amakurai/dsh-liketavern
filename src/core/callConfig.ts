@@ -92,8 +92,9 @@ export function mergeTavernCallConfig<T extends CallConfigPatch>(
   const merged = {
     ...config,
     temperature: sampling.temperature,
-    ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
   }
+  if (reasoningEffort === undefined) delete merged.reasoningEffort
+  else merged.reasoningEffort = reasoningEffort
   const maxTokens = sampling.maxTokens ?? hostMaxTokens
   if (maxTokens === undefined) delete merged.maxTokens
   else merged.maxTokens = maxTokens

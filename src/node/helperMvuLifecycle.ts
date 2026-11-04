@@ -7,7 +7,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { helperMvuPending, queueHelperMvuStop } from './helperMvu.js'
 import { isTurnDeferred } from './sessionLifecycle.js'
 import { isTavernGreetingEvent } from '../core/greetingLog.js'
-import { hasNormalAssistantStop } from './assistantStream.js'
+import { hasNormalAssistantStop } from '../core/assistantStream.js'
 import type { TavernState } from './state.js'
 
 type Snapshot = Pick<Session, 'id' | 'snapshotEvents'>

@@ -394,10 +394,7 @@ async function validateWalArtifacts(directory: string, budget: ReadBudget, rolle
     if (!target.restore || pending.to !== target.value) return 'unhealthy'
   }
   if (rolledBack) return (progress.next as number) === -1 && !('pending' in progress) ? 'healthy' : 'unhealthy'
-  if (!rolledBack) return 'recovering'
-  if (false) {
-  }
-  return 'healthy'
+  return 'recovering'
 }
 
 /**

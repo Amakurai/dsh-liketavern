@@ -17,7 +17,7 @@ type Verdict = { kind: 'on' | 'skip' } | { kind: 'enable'; binding: SessionBindi
 
 export async function enableHelperMvu(ctx: Context, state: TavernState, request: { sessionId: string; storyId: string; mode: HelperMvuEnableMode }): Promise<HelperMvuEnableResult> {
   const check = async (): Promise<Verdict> => {
-    const binding = await state.loadBinding(request.sessionId)
+    const binding = await state.loadStoryBinding(request.sessionId)
     if (!binding?.storyId || binding.storyId !== request.storyId) throw new Error('会话剧情绑定已改变，请刷新后重试')
     if (binding.helperMvu === true) return { kind: 'on' }
     if (!state.config.interactiveCards || binding.interactiveCards === false) {

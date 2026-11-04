@@ -218,7 +218,6 @@ export class Wal {
     if(info && info.size>4*1024*1024) throw new Error('WAL 楼层清单超过上限')
     const raw=await this.logFs.readText(WAL_COVERAGE_PATH)
     if(raw===null) return null
-    if(Buffer.byteLength(raw)>4*1024*1024) throw new Error('WAL 楼层清单超过上限')
     const value:unknown=JSON.parse(raw)
     if(!isRecord(value) || value.version!==1 || Object.keys(value).some(key=>!['version','floors'].includes(key))
       || !Array.isArray(value.floors) || value.floors.some(floor=>!isRecord(floor)

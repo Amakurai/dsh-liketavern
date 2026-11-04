@@ -228,6 +228,7 @@ export function apply(ctx: Context): void {
       return result
     }
     // 首次门控可能延后了开层；变量回执已完成后才建立新 WAL，再冻结本轮提示词。
+    await state.waitForSessionTasks(agent.id)
     const turn = state.currentTurns.get(agent.id)
     if (turn !== undefined && !state.openFloors.has(agent.id)) {
       await state.enqueueSessionTask(agent.id, () => onTurnStart(state, agent.id, turn, agent.session))

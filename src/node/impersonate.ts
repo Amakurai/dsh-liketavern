@@ -36,8 +36,8 @@ export interface ImpersonateDeps {
 export async function impersonate({ ctx, state }: ImpersonateDeps, sessionId: string): Promise<{ text: string }> {
   const session = ctx.sessions.get(sessionId as Session['id'])
   if (!session) throw new FloorError('session-not-live', `会话 ${sessionId} 不在线（仅支持当前打开的会话）`)
-  if (!isTavernRuntimeSession(ctx, session)) throw new FloorError('not-tavern', '当前会话不是 Tavern 模式')
-  const binding = await state.loadBinding(sessionId)
+  if (!isTavernRuntimeSession(ctx, session)) throw new FloorError('not-tavern', '当前会话不是 Tavern模式')
+  const binding = await state.loadStoryBinding(sessionId)
   if (!binding) throw new FloorError('no-binding', '当前会话未绑定 Tavern 角色卡')
   const agent = ctx.agents.get(session.id)
   if (!agent) throw new FloorError('session-not-live', `会话 ${sessionId} 的 agent 不在线（仅支持当前打开的会话）`)
@@ -100,7 +100,7 @@ export async function impersonate({ ctx, state }: ImpersonateDeps, sessionId: st
     system: pipeline.system,
     ...(reasoningEffort !== undefined ? { reasoningEffort: ReasoningEffortId(reasoningEffort) } : {}),
   }, sampling, undefined, agent.options.maxTokens)
-  const latestBinding = await state.loadBinding(sessionId)
+  const latestBinding = await state.loadStoryBinding(sessionId)
   if (!latestBinding || latestBinding.cardId !== binding.cardId || latestBinding.storyId !== binding.storyId) {
     throw new FloorError('binding-changed', '代答准备期间剧情绑定已改变')
   }

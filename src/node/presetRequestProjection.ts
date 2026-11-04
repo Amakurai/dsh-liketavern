@@ -524,7 +524,11 @@ export function projectPresetRequest(options: Readonly<GenerateOptions>, session
   // 本轮尾块：移来的条目与原本就在历史后的条目，都位于本轮输入之后。
   const inTurnTail = (entry: PromptLayoutEntry): boolean => movesToTail(entry)
     || (plan.cacheFirst === true && rootEntry(entry)?.placement.kind === 'after-history')
-  const firstHistory = plan.layout.history[0]
+  const firstHistory = plan.layout.history.find(anchor => {
+    const at = anchor.messageId === undefined ? undefined : positions.get(anchor.messageId)
+    const msg = at === undefined ? undefined : messages[at]
+    return !(msg?.role === 'system' && msg.source?.kind === 'system-prompt' && !anchor.chat)
+  }) ?? plan.layout.history[0]
   const gaps = new Map<string, number>()
   const resolving = new Set<string>()
   const gapFor = (entry: PromptLayoutEntry): number => {

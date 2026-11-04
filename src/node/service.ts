@@ -19,7 +19,6 @@ import type { TavernConfigRaw, TavernSettingsScope } from './config.js'
 import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import { estimateTokens } from '../core/tokenize.js'
 import { inspectCharacterCompatibility } from '../core/characterCompatibility.js'
-import { MAX_CARD_PNG_BASE64_CHARS, MAX_CARD_PNG_BYTES } from '../core/cardLimits.js'
 import { isolated } from './isolated.js'
 import { collectDisplayRegexDiagnostics } from './templateDisplay.js'
 import { hideIncompleteHtml, presentRenderedOutput, stripOpaqueDisplayMeta } from '../core/displaySanitize.js'
@@ -34,6 +33,7 @@ import { parseStoredPreset, parseStPreset } from '../state/presetStore.js'
 import { rebuildIndex } from '../state/workspace.js'
 import { assertBindingFileIdentity, parseSessionBinding, type SessionBinding } from './bindings.js'
 import { writeHostForkSkipped } from './hostForkAdoption.js'
+import { MAX_CARD_PNG_BASE64_CHARS, MAX_CARD_PNG_BYTES } from '../core/cardLimits.js'
 import { parseJsonCard, parsePngCard } from '../state/card.js'
 import { characterEditRevision, jsonEditRevision, personaEditRevision, presetEditRevision, regexEditRevision } from '../state/characterRevision.js'
 import { FloorError, continueFloor, discardHostForkAdoptionPlan, editAssistantMessage, editUserMessage, enterGreetingConversation, getFloorAssistantMessage, getFloorSiblings, getFloorUserMessage, getGreetingSwipe, regenerate, rollbackToFloor, swipeGreeting } from './floors.js'
@@ -433,7 +433,7 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
   /** 自动默认项必须由同一修订的判断授权；只在真实配置冲突后重读，不能覆盖排队期间的用户选择。 */
   private async updateDefaultPersona(shouldUpdate: (id: string) => boolean, personaId: string): Promise<void> {
     for (let attempt = 0; attempt < 3; attempt++) {
-      const revision = this.settingsScope.revision()
+      const revision = typeof this.settingsScope.revision === 'function' ? this.settingsScope.revision() : undefined
       if (!shouldUpdate(this.settingsScope.get().defaults?.personaId ?? '')) return
       try {
         await this.settingsScope.update({ defaults: { personaId } }, revision)

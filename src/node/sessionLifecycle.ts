@@ -7,7 +7,7 @@ import { closeTemplateGenerationState } from '../state/templateContinuation.js'
 import { withWorkspaceLock } from '../state/workspaceLock.js'
 import { helperMvuPending, queueHelperMvuTurn } from './helperMvu.js'
 import { helperMvuHasAssistant } from './helperMvuLifecycle.js'
-import { hasNormalAssistantStop } from './assistantStream.js'
+import { hasNormalAssistantStop } from '../core/assistantStream.js'
 import { assertActiveTemplateRuntime, TemplateRuntimeCompatibilityError } from './templateRuntimeGuard.js'
 
 /** 暂缓开层只标记当前宿主轮，不能用它收口旧 MVU 楼层或抹掉待恢复输入。 */
@@ -20,8 +20,13 @@ export async function onTurnStart(state:TavernState,sessionId:string,turn:number
   if(session && session.id!==sessionId) throw new Error('模板开始事件与目标会话不一致')
   if(session) await recoverTemplateCommit(state,sessionId,turn,session)
   // 收口提交失败保留的句柄仍属于旧楼层；新宿主事件不能覆盖它或把旧 WAL 当作新轮写入目标。
-  const open=state.openFloors.get(sessionId)
-  if(open&&open.floor!==`${sessionId}#t${turn}`){
+  const floor = `${sessionId}#t${turn}`
+  const open = state.openFloors.get(sessionId)
+  if (open && open.floor === floor) {
+    state.currentTurns.set(sessionId, turn)
+    return
+  }
+  if (open && open.floor !== floor) {
     // 收口前置校验失败可能仍保留旧轮号；新宿主轮已到来，旧句柄只能重试收口、不能再写。
     state.currentTurns.delete(sessionId)
     state.currentSteps.delete(sessionId)
@@ -38,7 +43,6 @@ export async function onTurnStart(state:TavernState,sessionId:string,turn:number
   if (!binding) return
   const ws = await state.storyWorkspace(binding.cardId,binding.storyId)
   await withWorkspaceLock(ws.fs.root,async()=> {
-    const floor = `${sessionId}#t${turn}`
     const stored = await loadTemplateMetadata(ws.fs)
     await assertActiveTemplateRuntime(stored,sessionId)
     const generation = stored.generation
@@ -67,6 +71,17 @@ export async function onTurnStart(state:TavernState,sessionId:string,turn:number
         await ws.wal.commitFloor(generation.floor)
       }
     }
+    // 普通楼层崩溃自愈：若当前楼层未提交但无生成正文，校验该层完整性并复用
+    try {
+      const existing = await ws.wal.validateFloor(floor)
+      if (!existing.committed) {
+        state.openFloors.set(sessionId, { cardId: binding.cardId, storyId: binding.storyId, floor })
+        return
+      }
+    } catch {
+      // 楼层尚不存在或已回滚，正常开启新楼层
+    }
+
     await ws.wal.beginFloor(floor)
     state.openFloors.set(sessionId,{cardId:binding.cardId,storyId:binding.storyId,floor})
   })
@@ -163,6 +178,16 @@ async function finishTurn(state:TavernState,sessionId:string,session?:Pick<Sessi
         if (generation.cardId!==binding.cardId || generation.storyId!==binding.storyId) throw new Error('模板结束恢复的剧情归属不一致')
         await ws.wal.validateFloor(generation.floor)
         entry = {cardId:generation.cardId,storyId:generation.storyId,floor:generation.floor}
+      } else if (!generation) {
+        const floor = `${sessionId}#t${ending.data.turn}`
+        try {
+          const original = await ws.wal.validateFloor(floor)
+          if (!original.committed) {
+            entry = { cardId: binding.cardId, storyId: binding.storyId, floor }
+          }
+        } catch {
+          // 楼层不存在或已回滚
+        }
       }
     }
   }

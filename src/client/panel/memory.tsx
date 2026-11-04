@@ -158,7 +158,7 @@ function MemoryContextSection(props: { remote: TavernRemote; cardId: string; sto
   const charItems = chars.state.status === 'ready' ? chars.state.value.items : []
   const memoryItems = memories.state.status === 'ready' ? memories.state.value.items : []
   const deltaItems = deltas.state.status === 'ready' ? deltas.state.value.items : []
-  // 首次查询保护真正未保存的正文与版本；其它草稿附带的已保存笔记则正常刷新，不制造过期草稿。
+  // keyed 上下文首挂时字段已从对应剧情恢复；首次查询不能覆盖它，后续保存重拉正常同步。
   useEffect(() => {
     if (journal.state.status !== 'ready') return
     if (!firstJournal.current || !journalRestored || journalUnsaved === false) {
@@ -279,15 +279,15 @@ function MemoryContextSection(props: { remote: TavernRemote; cardId: string; sto
     <Section title={t('section.memory')} description={t('memory.desc')}>
       {toast.node}
       {guard.confirmation}
-      <ConfirmDialog open={confirmJournalReload} title={t('memory.reloadJournal')} description={t('memory.reloadJournalConfirm')}
-        confirmLabel={t('memory.reloadJournal')} danger busy={busy} onCancel={() => setConfirmJournalReload(false)}
-        onConfirm={() => { if (pending.current) return; setConfirmJournalReload(false); reloadJournal() }} />
       <ConfirmDialog open={deleteId !== null} title={t('memory.deleteEntry')} description={t('memory.deleteConfirm')}
         confirmLabel={t('action.delete')} danger busy={busy} onCancel={() => { if (!busy) setDeleteId(null) }}
         onConfirm={() => { if (deleteId) void deleteMemory(deleteId).then(() => setDeleteId(null)) }} />
       <ConfirmDialog open={confirmReset} title={t('memory.resetRecovery')} description={t('memory.resetRecoveryConfirm')}
         confirmLabel={t('memory.resetRecovery')} danger busy={busy} onCancel={() => { if (!busy) setConfirmReset(false) }}
         onConfirm={() => void resetRecovery().then(() => setConfirmReset(false))} />
+      <ConfirmDialog open={confirmJournalReload} title={t('memory.reloadJournal')} description={t('memory.reloadJournalConfirm')}
+        confirmLabel={t('memory.reloadJournal')} danger busy={busy} onCancel={() => setConfirmJournalReload(false)}
+        onConfirm={() => { if (pending.current) return; setConfirmJournalReload(false); reloadJournal() }} />
       <SettingsRow title={t('memory.character')} description={t('memory.characterDesc')}>
         <Select
           size="md"
@@ -496,7 +496,7 @@ function MemoryContextSection(props: { remote: TavernRemote; cardId: string; sto
               ) : (
                 <Skeleton height={180} />
               )}
-              <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
                 <Btn disabled={busy || journal.state.status !== 'ready'} onClick={() => {
                   if (pending.current) return
                   if (journalDirty) setConfirmJournalReload(true)

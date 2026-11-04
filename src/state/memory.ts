@@ -537,15 +537,6 @@ export class MemoryStore {
         overLength: entry.body.length > MEMORY_BODY_SOFT_LIMIT,
       }
     })
-    /*
-    return {
-      id,
-      file: `${id}.md`,
-      ...meta,
-      body: input.body, archived: false } */
-    /* unused */ void {
-
-    }
   }
 
   /** 更新正文与 tags/keys、刷新 updated；默认合并列表，replace 模式允许 UI 删除或清空列表项。 */

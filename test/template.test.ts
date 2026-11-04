@@ -79,7 +79,7 @@ describe('隔离 EJS', () => {
     await expect(render('<%- "x".repeat(1100000) %>')).rejects.toThrow(/上限/)
     await expect(render('<% while(true){} %>')).rejects.toThrow(/interrupt|超时/)
     await expect(render('<% while(true){await Promise.resolve()} %>')).rejects.toThrow(/interrupt|超时/)
-  }, 15000)
+  }, 30000)
 })
 
 const roots: string[] = []

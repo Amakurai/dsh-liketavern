@@ -17,7 +17,7 @@ function revision(value:unknown):string{return createHash('sha256').update(JSON.
 function bindingRevision(state:TavernState,binding:SessionBinding,chat:ChatWorldbooks):string{return revision([binding.storyId,binding.cardId,binding.lorebookIds,binding.characterLorebookId,binding.useEmbeddedLorebook!==false,binding.characterLorebookIds??[],chat.active,state.worldInfoFor(binding)])}
 async function chatBooks(state:TavernState,binding:SessionBinding):Promise<ChatWorldbooks>{const fs=(await state.storyWorkspace(binding.cardId,binding.storyId)).fs,text=await fs.readText(CHAT_WORLDBOOK_PATH);return parseChatWorldbookFile(text)}
 async function selected(state:TavernState,sessionId:string,storyId:string,expected?:string){
-  const binding=await state.loadBinding(sessionId)
+  const binding=await state.loadStoryBinding(sessionId)
   if(!binding?.storyId||binding.storyId!==storyId)throw new Error('世界书会话绑定已改变，请刷新')
   if(!state.config.interactiveCards||binding.interactiveCards===false)throw new Error('交互卡已关闭')
   const chat=await chatBooks(state,binding)

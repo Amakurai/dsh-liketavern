@@ -139,7 +139,14 @@ export function isWorkspaceInstructionMessage(message: { role?: string; source?:
   return message.role === 'user' && message.source?.kind === 'agent-instructions'
 }
 
-const HOST_INJECTED_USER_KINDS = new Set(['runtime-context', 'agent-instructions', 'model-selection', 'compact-checkpoint', 'tavern-prompt-plan'])
+const HOST_INJECTED_USER_KINDS = new Set([
+  'runtime-context',
+  'agent-instructions',
+  'model-selection',
+  'compact-checkpoint',
+  'tavern-prompt-plan',
+  'dsh-tavern',
+])
 
 /** 宿主 AgentLoop 写入会话表面的 system-prompt 快照，不属于聊天历史消息。 */
 export function isHostSystemPromptMessage(message: { role?: string; source?: { kind?: string } }): boolean {

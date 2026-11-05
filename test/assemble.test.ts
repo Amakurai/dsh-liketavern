@@ -1437,5 +1437,18 @@ describe('EM 条目丢弃告警的 position 口径', () => {
       renderTemplate: (t) => (t.includes('E1') ? 'OUT-1' : 'OUT-2'),
     }))
     expect(sameKeyRes.turnContext).toContain('[WI:OUT-1\n\nOUT-2]')
+
+  })
+
+  it('同一来源正文在 standing/turn 两条通道各渲染一次，模板缓存按宏上下文隔离', () => {
+    // 角色定义与作者注释恰好用同一段 EJS 正文、同一 source：宏上下文不同，
+    // 结果不能共用缓存，否则 turn 通道的渲染会被钉进 standing 前缀。
+    const shared = '<%="X"%>'
+    const seen: unknown[] = []
+    const mixedRes = assemblePrompt(makeInput({ card: makeCard({ description: shared }), authorNote: shared,
+      renderTemplate: (_text, _source, context) => { seen.push(context); return `RENDER-${seen.length}` } }))
+    expect(seen).toHaveLength(2)
+    expect(seen[0]).not.toBe(seen[1])
+    expect(`${mixedRes.standing}\n${mixedRes.turnContext}`).toContain('RENDER-1')
   })
 })

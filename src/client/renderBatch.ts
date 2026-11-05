@@ -46,13 +46,16 @@ function flush(remote: TavernRemote): void {
     for (let start = 0; start < pending.length; start += RENDER_OUTPUT_BATCH_MAX) {
       const chunk = pending.slice(start, start + RENDER_OUTPUT_BATCH_MAX)
       const items = chunk.map(({ request }) => ({ text: request.text, ...(request.messageId === undefined ? {} : { messageId: request.messageId }) }))
+      // 用 .catch 收口而不是 .then 的第二参数：重组跨网关的 unknown 响应可能抛错，
+      // onFulfilled 内抛出的异常不属于原 Promise 的拒绝，第二参数接不住，会让整批气泡永久 pending。
       void Promise.resolve()
         .then(() => remote.renderOutputTexts({ sessionId, items }))
         .then((response) => {
           if (!response.ok) { for (const item of chunk) item.resolve(response); return }
           const outputs = expandRenderedOutputBatch(response.value)
           chunk.forEach((item, index) => item.resolve(outputs[index] ?? failure('批量展示结果缺少该消息')))
-        }, (error: unknown) => { for (const item of chunk) item.resolve(failure(errorText(error))) })
+        })
+        .catch((error: unknown) => { for (const item of chunk) item.resolve(failure(errorText(error))) })
     }
   }
 }

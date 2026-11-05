@@ -263,9 +263,12 @@ export class TavernState {
   private readonly presetCache = new Map<string, { rev: number; value: PromptPreset | null }>()
   private readonly loreCache = new Map<string, { rev: number; value: WorldInfoEntry[] }>()
   private readonly cardCache = new Map<string, { tag: string; value: CharacterWorkspace | null }>()
+  private readonly charLoreCache = new Map<string, { tag: string; value: WorldInfoEntry[] }>()
   private readonly personaCache = new Map<string, { rev: number; value: Persona | null }>()
   /** 全局正则规则解析缓存（rulesFor 每 step 调一次；saveRegexRules bump `regex:global`）。 */
   private globalRegexCache: { rev: number; value: RegexRule[] } | null = null
+  /** 预设内嵌正则编译缓存：以 loadPreset 返回的预设对象为弱引用键，预设修订更新或删除后随旧对象自动释放。 */
+  private readonly presetRegexCache = new WeakMap<PromptPreset, { sourceRef: string; value: RegexRule[] }>()
   /**
    * 卡级正则解析缓存（assets/regex-scripts.json），按 mtime+size 的 stat 指纹失效。
    * 为什么不用 assetRevs 修订号：该文件的写入点都绕开本类写方法——导入走 workspace.ts 的
@@ -526,6 +529,9 @@ export class TavernState {
       for (const key of this.cardCache.keys()) {
         if (storageKey(key) === deletedKey) this.cardCache.delete(key)
       }
+      for (const key of this.charLoreCache.keys()) {
+        if (storageKey(key) === deletedKey) this.charLoreCache.delete(key)
+      }
       for (const key of this.cardRegexCache.keys()) {
         if (storageKey(key) === deletedKey) this.cardRegexCache.delete(key)
       }
@@ -703,6 +709,8 @@ export class TavernState {
   async importCharacter(fileName: string, bytes: Uint8Array, opts?: { importWorldBook?: boolean }): Promise<CharacterWorkspace> {
     const card: CharacterCard = /\.png$/i.test(fileName) ? parsePngCard(bytes) : parseJsonCard(JSON.parse(new TextDecoder().decode(bytes)))
     const ws = await importCardToWorkspace(this.paths.characters, card, opts)
+    this.bumpAssetRev(`card:${ws.cardId}`)
+    this.invalidateCardRegex(ws.cardId)
     return ws
   }
 
@@ -729,6 +737,17 @@ export class TavernState {
     } catch {
       return null
     }
+  }
+
+  /** 读取并缓存角色卡内嵌世界书归一化条目（card:/charlore: 修订号变化即失效重算）。 */
+  async loadCharacterLorebookEntries(cardId: string): Promise<WorldInfoEntry[]> {
+    const tag = `${this.assetRevision(`card:${cardId}`)}:${this.assetRevision(`charlore:${cardId}`)}`
+    const cached = this.charLoreCache.get(cardId)
+    if (cached && cached.tag === tag) return cached.value
+    const embedded = await this.loadCharacterLorebookRaw(cardId)
+    const value = embedded ? parseLorebook(embedded.json, { source: 'character', sourceRef: cardId }) : []
+    this.charLoreCache.set(cardId, { tag, value })
+    return value
   }
 
   async saveCharacterLorebook(cardId: string, json: unknown, expectedRevision?: string | null, beforeWrite?:()=>void): Promise<{ name: string; entryCount: number; revision: string }> {
@@ -1334,7 +1353,13 @@ export class TavernState {
     if (binding.presetId) {
       const preset = await this.loadPreset(binding.presetId)
       if (preset?.regexScripts && preset.regexScripts.length > 0) {
-        presetRules = compilePresetRegexScripts(preset.regexScripts, binding.presetId)
+        const cached = this.presetRegexCache.get(preset)
+        if (cached && cached.sourceRef === binding.presetId) {
+          presetRules = cached.value
+        } else {
+          presetRules = compilePresetRegexScripts(preset.regexScripts, binding.presetId)
+          this.presetRegexCache.set(preset, { sourceRef: binding.presetId, value: presetRules })
+        }
       }
     }
     return [...global, ...cardRules, ...presetRules]

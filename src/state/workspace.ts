@@ -228,14 +228,18 @@ async function characterSummary(dataRoot: string, cardId: string): Promise<Chara
   const fs = new WorkspaceFs(ws.root, null)
   const bookName = ws.card.characterBook?.name ?? null
   const entryCount = Array.isArray(ws.card.characterBook?.entries) ? ws.card.characterBook!.entries.length : 0
+  const [hasAvatar, hasBookFile] = await Promise.all([
+    fs.exists('card.png'),
+    entryCount > 0 ? Promise.resolve(true) : fs.exists('assets/character-book.json'),
+  ])
   return {
     cardId,
     name: ws.card.name,
     // 旧版/手工维护的 card.json 不保证新摘要字段的形状；元数据异常不能让整张卡从列表消失。
     creator: typeof ws.card.creator === 'string' ? ws.card.creator : '',
     tags: Array.isArray(ws.card.tags) ? ws.card.tags.filter((tag): tag is string => typeof tag === 'string') : [],
-    hasAvatar: await fs.exists('card.png'),
-    hasCharacterBook: entryCount > 0 || (await fs.exists('assets/character-book.json')),
+    hasAvatar,
+    hasCharacterBook: entryCount > 0 || hasBookFile,
     characterBookName: bookName,
     characterBookEntryCount: entryCount,
   }
@@ -243,18 +247,19 @@ async function characterSummary(dataRoot: string, cardId: string): Promise<Chara
 
 export async function listCharacters(dataRoot: string): Promise<CharacterSummary[]> {
   const cardIds = await characterDirectoryIds(dataRoot)
-  const out: CharacterSummary[] = []
-  for (const cardId of cardIds) {
-    try {
-      if (await readCharacterArchiveMetadata(dataRoot, cardId)) continue
-      // card.json 缺失/损坏时 characterSummary 返回 null，即「探测」口径
-      const summary = await characterSummary(dataRoot, cardId)
-      if (summary) out.push(summary)
-    } catch {
-      continue // 坏目录跳过
-    }
-  }
-  return out
+  // 并行读取各角色目录（保持已排序 cardIds 的输出顺序，坏目录独立跳过），避免多卡列表串行放大磁盘 I/O。
+  const items = await Promise.all(
+    cardIds.map(async (cardId): Promise<CharacterSummary | null> => {
+      try {
+        if (await readCharacterArchiveMetadata(dataRoot, cardId)) return null
+        // card.json 缺失/损坏时 characterSummary 返回 null，即「探测」口径
+        return await characterSummary(dataRoot, cardId)
+      } catch {
+        return null // 坏目录跳过
+      }
+    }),
+  )
+  return items.filter((item): item is CharacterSummary => item !== null)
 }
 
 /**
@@ -262,28 +267,30 @@ export async function listCharacters(dataRoot: string): Promise<CharacterSummary
  * 这样角色不会误回活动库，也不会从两个列表同时消失，用户仍能点击恢复清掉坏标记。
  */
 export async function listArchivedCharacters(dataRoot: string): Promise<ArchivedCharacterSummary[]> {
-  const out: ArchivedCharacterSummary[] = []
-  for (const cardId of await characterDirectoryIds(dataRoot)) {
-    try {
-      const root = join(dataRoot, cardId)
-      const fs = new WorkspaceFs(root, null)
-      let archivedAt: string
+  const cardIds = await characterDirectoryIds(dataRoot)
+  const items = await Promise.all(
+    cardIds.map(async (cardId): Promise<ArchivedCharacterSummary | null> => {
       try {
-        const archived = await readCharacterArchiveMetadata(dataRoot, cardId)
-        if (!archived) continue
-        archivedAt = archived.archivedAt
+        const root = join(dataRoot, cardId)
+        const fs = new WorkspaceFs(root, null)
+        let archivedAt: string
+        try {
+          const archived = await readCharacterArchiveMetadata(dataRoot, cardId)
+          if (!archived) return null
+          archivedAt = archived.archivedAt
+        } catch {
+          const marker = await fs.stat(CHARACTER_ARCHIVE_FILE)
+          if (!marker) return null
+          archivedAt = new Date(marker.mtimeMs).toISOString()
+        }
+        const summary = await characterSummary(dataRoot, cardId)
+        return summary ? { ...summary, archivedAt } : null
       } catch {
-        const marker = await fs.stat(CHARACTER_ARCHIVE_FILE)
-        if (!marker) continue
-        archivedAt = new Date(marker.mtimeMs).toISOString()
+        return null
       }
-      const summary = await characterSummary(dataRoot, cardId)
-      if (summary) out.push({ ...summary, archivedAt })
-    } catch {
-      continue
-    }
-  }
-  return out
+    }),
+  )
+  return items.filter((item): item is ArchivedCharacterSummary => item !== null)
 }
 
 /** 读取角色工作区；card.json 缺失或损坏返回 null。 */
@@ -381,17 +388,20 @@ export async function rebuildIndex(
 ): Promise<void> {
   // 索引是多文件派生视图；扫描到写回必须同占工作区锁，不能让并发编辑插在两者之间。
   await withWorkspaceLock(fs.root, async () => {
-    const files: WorkspaceIndexFile[] = []
-
     // 非递归列举：archive/ 不进清单，递归走一遍再丢掉会让每次写入后的重建随归档量变慢。
-    const memoryFiles = await fs.list('memory', { recursive: false })
-    for (const rel of memoryFiles) {
-      if (!rel.endsWith('.md')) continue
-      const content = (await fs.readText(`memory/${rel}`)) ?? ''
-      files.push({ path: `memory/${rel}`, summary: summarizeMarkdown(content), tokens: estimateTokens(content) })
-    }
+    const mdRels = (await fs.list('memory', { recursive: false })).filter((rel) => rel.endsWith('.md'))
+    const [memoryEntries, delta, journal] = await Promise.all([
+      Promise.all(
+        mdRels.map(async (rel): Promise<WorkspaceIndexFile> => {
+          const content = (await fs.readText(`memory/${rel}`)) ?? ''
+          return { path: `memory/${rel}`, summary: summarizeMarkdown(content), tokens: estimateTokens(content) }
+        }),
+      ),
+      fs.readText('state/world-delta.jsonl'),
+      fs.readText('journal.md'),
+    ])
+    const files: WorkspaceIndexFile[] = [...memoryEntries]
 
-    const delta = await fs.readText('state/world-delta.jsonl')
     if (delta !== null) {
       const count = delta.split('\n').filter((line) => line.trim() !== '').length
       files.push({
@@ -401,7 +411,6 @@ export async function rebuildIndex(
       })
     }
 
-    const journal = await fs.readText('journal.md')
     if (journal !== null) {
       files.push({ path: 'journal.md', summary: summarizeMarkdown(journal), tokens: estimateTokens(journal) })
     }

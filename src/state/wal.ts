@@ -72,6 +72,21 @@ export interface RollbackAfterResult {
 /** 回滚目录名标记：<floor>.rolled-back-<timestamp>。 */
 const ROLLED_BACK_MARK = '.rolled-back-'
 
+/**
+ * 副本目录的严格后缀：标记后跟纯数字时间戳（timestamp() 只保留数字）。
+ * 楼层 id 自身可能含 `.rolled-back-` 子串（sanitizeFloor 允许点和连字符），
+ * 用 includes 判断会把活跃楼层当成回滚副本，进而漏记清单、拒绝开层乃至 prune 删掉完整日志。
+ */
+const ROLLED_BACK_SUFFIX = /\.rolled-back-\d+$/
+
+/** 目录名是否为回滚副本；活跃楼层名中段的同名子串不算。 */
+function isRolledBackDir(name: string): boolean { return ROLLED_BACK_SUFFIX.test(name) }
+
+/** 副本目录去掉后缀得到原楼层目录名；活跃目录原样返回。 */
+function baseFloorDir(name: string): string {
+  return isRolledBackDir(name) ? name.replace(ROLLED_BACK_SUFFIX, '') : name
+}
+
 /** 旧版本 records.jsonl 中二进制 before 快照的前缀；新记录使用 beforeEncoding 字段。 */
 export const WAL_BINARY_MARK = 'binary-base64:'
 
@@ -269,7 +284,7 @@ export class Wal {
       if(error.code==='ENOENT') return []
       throw error
     })).filter(entry=>entry.isDirectory())
-    const names=new Set(directories.map(entry=>entry.name.split(ROLLED_BACK_MARK)[0]!))
+    const names=new Set(directories.map(entry=>baseFloorDir(entry.name)))
     for(const floor of coverage) {
       if(!names.has(sanitizeFloor(floor.floor))) throw new Error(`WAL 楼层缺失：${floor.floor}；请恢复完整日志，不能继续回退或分支`)
     }
@@ -578,7 +593,7 @@ export class Wal {
         throw error
       })
       for (const entry of entries) {
-        if (!entry.isDirectory() || entry.name.includes(ROLLED_BACK_MARK)) continue
+        if (!entry.isDirectory() || isRolledBackDir(entry.name)) continue
         const progress = await stat(join(this.rootDir, entry.name, 'rollback-progress.json')).catch((error: NodeJS.ErrnoException) => {
           if (error.code === 'ENOENT') return null
           throw error
@@ -614,7 +629,7 @@ export class Wal {
       throw error
     })
     for (const entry of entries) {
-      if (!entry.isDirectory() || entry.name.includes(ROLLED_BACK_MARK)) continue
+      if (!entry.isDirectory() || isRolledBackDir(entry.name)) continue
       const progress = await stat(join(this.rootDir, entry.name, 'rollback-progress.json')).catch((error: NodeJS.ErrnoException) => {
         if (error.code === 'ENOENT') return null
         throw error
@@ -638,7 +653,7 @@ export class Wal {
         throw error
       })
       for (const entry of entries) {
-        if (!entry.isDirectory() || entry.name.includes(ROLLED_BACK_MARK)) continue
+        if (!entry.isDirectory() || isRolledBackDir(entry.name)) continue
         const progress = await stat(join(this.rootDir, entry.name, 'rollback-progress.json')).catch((error: NodeJS.ErrnoException) => {
           if (error.code === 'ENOENT') return null
           throw error
@@ -1094,12 +1109,12 @@ export class Wal {
       for (const marker of WAL_FLOOR_MARKERS) await this.assertLogPath(join(dir, marker))
       if (await isUnstartedDir(dir)) continue
       const meta = await this.readMeta(dir)
-      if (!meta || sanitizeFloor(meta.floor) !== entry.name.split(ROLLED_BACK_MARK)[0]) throw new Error(`WAL 元数据缺失或目录不匹配：${entry.name}`)
+      if (!meta || sanitizeFloor(meta.floor) !== baseFloorDir(entry.name)) throw new Error(`WAL 元数据缺失或目录不匹配：${entry.name}`)
       floors.push({
         floor: meta.floor,
         committed: meta.committed,
         startedAt: meta.startedAt,
-        rolledBack: entry.name.includes(ROLLED_BACK_MARK),
+        rolledBack: isRolledBackDir(entry.name),
       })
     }
     floors.sort((a, b) => a.startedAt.localeCompare(b.startedAt))
@@ -1119,7 +1134,7 @@ export class Wal {
     const entries = await readdir(this.rootDir, { withFileTypes: true })
     let removed = 0
     for (const entry of entries) {
-      if (!entry.isDirectory() || !entry.name.includes(ROLLED_BACK_MARK)) continue
+      if (!entry.isDirectory() || !isRolledBackDir(entry.name)) continue
       const dir = join(this.rootDir, entry.name)
       await this.assertLogPath(dir)
       const meta = await this.readMeta(dir)

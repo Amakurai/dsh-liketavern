@@ -100,7 +100,8 @@ export function HelperMvuRunner(props:{remote:TavernRemote;sessionId:string;stor
         if(frameRuntime&&frameRuntime!==value.runtimeId){fail(t('speech.mvuSandboxChanged'));return}
         frameRuntime=String(value.runtimeId);void poll();return
       }
-      if(value.action==='helperSnapshotGet'&&typeof value.requestId==='string'&&value.storyId===storyId){
+      // 快照读取与其它业务回执同口径：卡面重建后的旧运行时迟到请求不能拿到当前剧情快照。
+      if(value.action==='helperSnapshotGet'&&typeof value.requestId==='string'&&value.storyId===storyId&&endpoint.matchesRuntime(value.runtimeId)){
         send({action:'helperSnapshotResult',requestId:value.requestId,ok:true,snapshot:work?.snapshot??live.current.snapshot});return
       }
       if(value.action!=='helperMvuResult'||!endpoint.matchesRuntime(value.runtimeId)||value.requestId!==requestId||!running||result!==undefined)return

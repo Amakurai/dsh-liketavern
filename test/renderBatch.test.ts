@@ -76,3 +76,22 @@ it('重组时卡面共享同一份历史；声明了共享部分却缺失的项�
   expect(expandRenderedOutputBatch({ helperBase: base, items: [{ ok: true, value: { ...plain('缺脚本'), helperExtras: true } }] })[0])
     .toMatchObject({ ok: false, error: { message: '批量展示结果缺少脚本库或世界书上下文' } })
 })
+
+it('批量响应正文畸形导致重组抛错时，整批请求明确失败，不留下永久 pending 的气泡', async () => {
+  // 网关返回值是 unknown：声明成功但 items 里混入 null 会让重组函数在 onFulfilled 内抛错。
+  const malformed = {
+    renderOutputText: vi.fn(),
+    renderOutputTexts: vi.fn(async () => ({ ok: true as const, value: { items: [null, null] } })),
+  } as unknown as TavernRemote
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    const results = await Promise.race([
+      Promise.all([
+        renderOutputBatched(malformed, { sessionId: 's', text: '1' }),
+        renderOutputBatched(malformed, { sessionId: 's', text: '2' }),
+      ]),
+      new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error('批量展示请求永久挂起')), 1000) }),
+    ])
+    expect(results.every(result => !result.ok && result.error.code === 'render-failed')).toBe(true)
+  } finally { if (timer) clearTimeout(timer) }
+})

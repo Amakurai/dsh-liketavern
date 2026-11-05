@@ -338,6 +338,22 @@ describe('Wal', () => {
     expect(await wal.prune({})).toBe(0)
   })
 
+  it('楼层 id 含 .rolled-back- 子串仍是活跃楼层，不被误判为回滚副本或清理删除', async () => {
+    // 只有真正的 <floor>.rolled-back-<纯数字时间戳> 后缀才是副本；名字中段的同名子串不算。
+    const floor = 's.rolled-back-1#t1'
+    const dir = join(walDir, 's.rolled-back-1_t1')
+    const file = join(workspace, 'value.txt')
+    await writeFile(file, 'old')
+    await wal.beginFloor(floor)
+    await wal.recordChange(floor, 'value.txt', 'old', 'new', 'utf8', 'utf8')
+    await writeFile(file, 'new')
+    await wal.commitFloor(floor)
+    expect(await wal.listFloors()).toContainEqual(expect.objectContaining({ floor, committed: true, rolledBack: false }))
+    expect(await wal.prune({ keepRolledBackDays: 0 })).toBe(0)
+    expect(await exists(dir)).toBe(true)
+    expect(await readFile(file, 'utf8')).toBe('new')
+  })
+
   it('record 落盘失败不污染内存状态：重试仍写下 before 镜像，回滚可还原', async () => {
     await writeFile(join(workspace, 'mem.md'), 'v1')
     await wal.beginFloor('f1')

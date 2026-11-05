@@ -124,3 +124,12 @@ it('提交已成功但回执丢失，租约结束后按任务摘要确认完成�
   expect(view!.root.findAllByType(Btn)).toHaveLength(0)
   digestSpy.mockRestore()
 })
+it('卡面重建后的旧运行时请求快照被忽略，当前运行时仍能读取',async()=>{
+  await mount();await connect()
+  const replies=()=>source.postMessage.mock.calls.map(call=>call[0] as Record<string,unknown>).filter(value=>value.action==='helperSnapshotResult')
+  await message({action:'helperSnapshotGet',requestId:'stale-read',storyId:'story',runtimeId:'old-runtime'})
+  expect(replies()).toHaveLength(0)
+  await message({action:'helperSnapshotGet',requestId:'fresh-read',storyId:'story'})
+  expect(replies()).toHaveLength(1)
+  expect(replies()[0]).toMatchObject({requestId:'fresh-read',ok:true})
+})

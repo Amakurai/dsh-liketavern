@@ -437,6 +437,13 @@ describe('trimStrings / trimStringsRegex（ST 语义：从代入的捕获组值�
     expect(res.text).toBe('')
   })
 
+  it('trimStringsRegex 与 trimStrings 同口径先宏展开，单文本与预编译两条路径一致', () => {
+    const rule = makeRule({ id: 'r', find: '/Alice 说 (.*?) 走了/', replace: '$1', trimStringsRegex: ['/{{char}}/'] })
+    expect(run('Alice 说 AliceAlice 走了', [rule]).text).toBe('')
+    const batched = applyRegexToMessages([{ role: 'assistant', content: 'Alice 说 AliceAlice 走了' }], [rule], FILTER, CTX)
+    expect(batched.messages.map(message => message.content)).toEqual([''])
+  })
+
   it('trimStringsRegex 从组值里删正则命中片段，缺省全局', () => {
     const res = run('数据 hp12mp34', [
       makeRule({ id: 'r', find: '/数据 (\\w+)/', replace: '[$1]', trimStringsRegex: ['\\d+'] }),

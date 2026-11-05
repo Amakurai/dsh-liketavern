@@ -292,17 +292,21 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
 
   // ── 2. 世界书结果分桶 ────────────────────────────────────────────────────
   const wi = input.wi
-  const templateCache = new Map<string, string>()
+  // 模板结果依赖宏上下文：standing 的冻结时钟/空 lastUserMessage 与 turn 的本轮上下文不同。
+  // 按上下文对象身份分桶，同 key + 同正文也不能把 turn 的渲染结果钉进 standing 前缀。
+  const templateCache = new Map<MacroContext, Map<string, string>>()
   const renderTemplate = (text: string, source = text, context: MacroContext = macroCtx): string => {
     if (!hasEjs(text) && !input.processTemplateSequence) return text
     if (!input.renderTemplate) throw new Error('EJS 模板需要隔离执行器')
     const cacheKey = `${source}\0${text}`
-    const cached = templateCache.get(cacheKey)
+    let cache = templateCache.get(context)
+    if (!cache) { cache = new Map<string, string>(); templateCache.set(context, cache) }
+    const cached = cache.get(cacheKey)
     if (cached !== undefined) return cached
     let rendered: string
     try { rendered = input.renderTemplate(text, source, context) }
     catch (error) { throw new Error(`模板「${source === text ? '文本' : source}」：${error instanceof Error ? error.message : String(error)}`) }
-    templateCache.set(cacheKey, rendered)
+    cache.set(cacheKey, rendered)
     return rendered
   }
   // 历史 EJS 仅处理模拟副本，真实宿主消息不在这个函数的写入范围。

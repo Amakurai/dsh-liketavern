@@ -132,9 +132,12 @@ export declare class TavernState {
     private readonly presetCache;
     private readonly loreCache;
     private readonly cardCache;
+    private readonly charLoreCache;
     private readonly personaCache;
     /** 全局正则规则解析缓存（rulesFor 每 step 调一次；saveRegexRules bump `regex:global`）。 */
     private globalRegexCache;
+    /** 预设内嵌正则编译缓存：以 loadPreset 返回的预设对象为弱引用键，预设修订更新或删除后随旧对象自动释放。 */
+    private readonly presetRegexCache;
     /**
      * 卡级正则解析缓存（assets/regex-scripts.json），按 mtime+size 的 stat 指纹失效。
      * 为什么不用 assetRevs 修订号：该文件的写入点都绕开本类写方法——导入走 workspace.ts 的
@@ -270,6 +273,8 @@ export declare class TavernState {
         json: unknown;
         entryCount: number;
     } | null>;
+    /** 读取并缓存角色卡内嵌世界书归一化条目（card:/charlore: 修订号变化即失效重算）。 */
+    loadCharacterLorebookEntries(cardId: string): Promise<WorldInfoEntry[]>;
     saveCharacterLorebook(cardId: string, json: unknown, expectedRevision?: string | null, beforeWrite?: () => void): Promise<{
         name: string;
         entryCount: number;

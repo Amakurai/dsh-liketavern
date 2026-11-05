@@ -3,6 +3,7 @@
  * 卡片可键盘触发（clickableProps）；导入/保存等瞬时反馈走 useToast，上下文错误用 Err。
  */
 import { useEffect, useRef, useState } from 'react'
+import { notifyCharacterChanged } from '../cache.js'
 import { PersistentEditor, useDraftState } from '../draftPersistence.js'
 import { useDraftGuard } from '../drafts.js'
 import { IconDownloadOutlineMedium, IconEditOutlineMedium, IconFolderOpenOutlineMedium, IconTrashOutlineMedium } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -123,6 +124,7 @@ function LorebooksSectionContent(props: { remote: TavernRemote }) {
       const err = errOf(r)
       if (err) setError(err)
       else {
+        notifyCharacterChanged(target.cardId)
         if (opened?.target.kind === 'character' && opened.target.cardId === target.cardId) setOpened(null)
         toast.show(t('lorebooks.embeddedDeleted', { name: target.name }))
         setToDeleteEmbedded(null)
@@ -196,6 +198,7 @@ function LorebooksSectionContent(props: { remote: TavernRemote }) {
           revision={opened.revision}
           onClose={() => setOpened(null)}
           onSaved={(savedEntries, nextRevision) => {
+            if (opened.target.kind === 'character') notifyCharacterChanged(opened.target.cardId)
             setOpened((prev) => prev ? { ...prev, entries: savedEntries, revision: nextRevision ?? prev.revision } : null)
             toast.show(t('lorebooks.saved', { name: opened.target.name }))
             chars.reload()

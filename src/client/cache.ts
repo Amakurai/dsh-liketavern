@@ -163,7 +163,7 @@ export function invalidateCharacter(cardId: string): void {
 /** 本端确认角色写入成功后，先失效缓存再通知所有仍挂载的消费者。 */
 export function notifyCharacterChanged(cardId: string): void {
   invalidateCharacter(cardId)
-  if (typeof window !== 'undefined') {
+  if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function' && typeof CustomEvent === 'function') {
     window.dispatchEvent(new CustomEvent(CHARACTER_CHANGED_EVENT, { detail: cardId }))
   }
 }

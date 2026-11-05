@@ -219,10 +219,11 @@ export declare function NumInput(props: {
     step?: string;
     width?: number;
 }): import("react").JSX.Element;
-/** 可空数字输入（null ↔ 空串）。 */
+/** 可空数字输入（null ↔ 空串）：保留未完成输入与中间态文本，失焦时收敛到有效值，外部重置即时同步。 */
 export declare function NullableNumInput(props: {
     value: number | null;
     onChange: (v: number | null) => void;
+    step?: string;
     width?: number;
 }): import("react").JSX.Element;
 /** 以逗号或换行分隔的字符串列表。全角逗号与半角逗号等价，空项忽略。 */

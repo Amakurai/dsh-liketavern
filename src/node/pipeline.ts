@@ -147,18 +147,19 @@ export async function loadBoundLoreEntries(
   const groups: WorldInfoEntry[][] = []
 
   // 全局世界书
-  for (const id of binding.lorebookIds) {
-    groups.push(await state.loadLorebookEntries(id, 'global'))
+  if (binding.lorebookIds.length > 0) {
+    groups.push(...(await Promise.all(binding.lorebookIds.map((id) => state.loadLorebookEntries(id, 'global')))))
   }
   // 主世界书（Character Lore）：绑定指定库文件 > 卡内嵌书（card.json / assets/character-book.json）
   if (binding.characterLorebookId) {
     groups.push(await state.loadLorebookEntries(binding.characterLorebookId, 'character'))
-  } else if(binding.useEmbeddedLorebook!==false) {
-    const embedded = await state.loadCharacterLorebookRaw(binding.cardId)
-    if (embedded) groups.push(parseLorebook(embedded.json, { source: 'character', sourceRef: binding.cardId }))
+  } else if (binding.useEmbeddedLorebook !== false) {
+    const embeddedEntries = await state.loadCharacterLorebookEntries(binding.cardId)
+    if (embeddedEntries.length > 0) groups.push(embeddedEntries)
   }
-  for(const id of new Set(binding.characterLorebookIds??[])){
-    if(id!==binding.characterLorebookId)groups.push(await state.loadLorebookEntries(id,'character'))
+  const additionalIds = [...new Set(binding.characterLorebookIds ?? [])].filter((id) => id !== binding.characterLorebookId)
+  if (additionalIds.length > 0) {
+    groups.push(...(await Promise.all(additionalIds.map((id) => state.loadLorebookEntries(id, 'character')))))
   }
   // 聊天世界书（会话级，存工作区）
   let chatBookCorrupt = false

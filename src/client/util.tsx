@@ -755,10 +755,20 @@ export function NumInput(props: { value: number; onChange: (v: number) => void; 
   )
 }
 
-/** 可空数字输入（null ↔ 空串）。 */
-export function NullableNumInput(props: { value: number | null; onChange: (v: number | null) => void; width?: number }) {
+/** 可空数字输入（null ↔ 空串）：保留未完成输入与中间态文本，失焦时收敛到有效值，外部重置即时同步。 */
+export function NullableNumInput(props: { value: number | null; onChange: (v: number | null) => void; step?: string; width?: number }) {
   const t = useT()
   const label = useContext(ControlLabel)
+  const value = props.value !== null && Number.isFinite(props.value) ? props.value : null
+  const display = (v: number | null) => (v === null ? '' : String(v))
+  const [draft, setDraft] = useState(() => ({ value, text: display(value), pending: false }))
+  let text = draft.text
+  if (draft.pending) {
+    setDraft({ value, text, pending: false })
+  } else if (!Object.is(draft.value, value)) {
+    text = display(value)
+    setDraft({ value, text, pending: false })
+  }
   return (
     <input
       type="number"
@@ -766,14 +776,25 @@ export function NullableNumInput(props: { value: number | null; onChange: (v: nu
       aria-describedby={label?.descriptionId}
       className="dsh-tavern-input"
       style={{ width: props.width ?? 90 }}
-      value={props.value ?? ''}
+      value={text}
+      step={props.step ?? 'any'}
       placeholder={t('common.unlimited')}
       onChange={(e) => {
         const raw = e.target.value
-        if (raw === '') return props.onChange(null)
+        if (raw.trim() === '') {
+          setDraft({ value, text: raw, pending: true })
+          props.onChange(null)
+          return
+        }
         const v = Number(raw)
-        if (Number.isFinite(v)) props.onChange(v)
+        if (!Number.isFinite(v)) {
+          setDraft({ value, text: raw, pending: true })
+          return
+        }
+        setDraft({ value, text: raw, pending: true })
+        props.onChange(v)
       }}
+      onBlur={() => setDraft({ value, text: display(value), pending: false })}
     />
   )
 }

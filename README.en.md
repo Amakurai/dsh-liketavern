@@ -42,7 +42,7 @@ Regex rules, prompt templates, and HTML card scripts bundled inside third-party 
 
 ## Installation & Upgrade
 
-> **Prerequisites**: Node.js `>= 24.0.0`, DeepSeek Harness `>=0.2.0-rc.1 <0.4.0-0`, `pnpm`, and at least one configured model in `dsh`. The development baseline is `0.2.1-rc.3`; the host loader includes prereleases in this range. Back up and verify newer, untested host versions before relying on them. If you are new to `dsh`, see the [DeepSeek Harness Documentation](https://deepseek-harness.github.io/deepseek-harness/) first. Precompiled `lib/` bundles are committed to the repository, so no local build is required during installation.
+> **Prerequisites**: Node.js `>= 24.0.0`, any DeepSeek Harness version (`engines.dsh` and the host peers are declared as `*`, so the loader never rejects a version), `pnpm`, and at least one configured model in `dsh`. Builds and tests still pin a verified development baseline; when host interfaces change, subsystems degrade and log the reason instead of throwing into the host. If you are new to `dsh`, see the [DeepSeek Harness Documentation](https://deepseek-harness.github.io/deepseek-harness/) first. Precompiled `lib/` bundles are committed to the repository, so no local build is required during installation.
 
 ### Desktop Installation
 

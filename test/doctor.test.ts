@@ -460,7 +460,7 @@ describe('doctor 宿主版本', () => {
     const report = await runDoctor({ home, nodeVersion: '24.0.0', pluginVersion: '9.8.7' })
     const { engines } = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))
     const range = engines.dsh as string
-    expect(report.runtime.dsh).toEqual({ installedVersion: '0.2.1-rc.3', expectedVersion: range, compatible: true })
+    expect(report.runtime.dsh).toEqual({ installedVersion: '0.2.2-rc.1', expectedVersion: range, compatible: true })
     expect(areDshVersionsCompatible('0.2.1-rc.2+host', '0.2.1-rc.2+plugin')).toBe(true)
     expect(areDshVersionsCompatible('0.2.1-rc.5', range)).toBe(true)
     expect(areDshVersionsCompatible('0.2.2-alpha.2', range)).toBe(true)
@@ -468,7 +468,10 @@ describe('doctor 宿主版本', () => {
     expect(areDshVersionsCompatible('0.2.0-rc.1', range)).toBe(true)
     expect(areDshVersionsCompatible('0.2.1-rc.2', range)).toBe(true)
     expect(areDshVersionsCompatible('0.3.0', range)).toBe(true)
-    expect(areDshVersionsCompatible('0.4.0', range)).toBe(false)
+    expect(areDshVersionsCompatible('0.4.0', range)).toBe(true)
+    // 公开范围放开为 * 后不会再有“上限外宿主”；显式收窄的范围仍须如实报告不兼容。
+    expect(areDshVersionsCompatible('1.0.0', range)).toBe(true)
+    expect(areDshVersionsCompatible('0.4.0', '>=0.2.0-rc.1 <0.4.0-0')).toBe(false)
   })
 
   it('已安装版本不匹配时固定报错并影响健康状态', async () => {

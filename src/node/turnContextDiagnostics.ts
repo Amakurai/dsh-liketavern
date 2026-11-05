@@ -9,6 +9,7 @@
 import { z } from 'zod'
 import type { Session } from '@deepseek-ai/dsh-session'
 import { estimateTokens } from '../core/tokenize.js'
+import './modelRoute.js'
 
 const TURN_CONTEXT = 'tavern:turn'
 const snapshotSource = z.object({ kind: z.literal('runtime-context'), form: z.literal('snapshot'),

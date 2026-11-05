@@ -42,7 +42,7 @@
 
 ## 安装与升级
 
-> **前置要求**：Node.js `>= 24.0.0`、DeepSeek Harness `>=0.2.0-rc.1 <0.4.0-0`、`pnpm`，且已在 `dsh` 中配置好可用的模型。开发基线为 `0.2.1-rc.3`；宿主加载器将范围内的预发布版本纳入判断，较新且尚未验证的宿主应先备份并验证。首次使用请先参阅 [DeepSeek Harness 官方文档](https://deepseek-harness.github.io/deepseek-harness/)。仓库已内置预编译的 `lib/` 产物，安装时无需本地构建。
+> **前置要求**：Node.js `>= 24.0.0`、任意版本的 DeepSeek Harness（`engines.dsh` 与宿主 peer 均声明为 `*`，加载器不会按版本号拒绝）、`pnpm`，且已在 `dsh` 中配置好可用的模型。构建与测试仍固定经验证的开发基线；宿主接口变动时插件按子系统降级并把原因写进日志，不把异常抛回宿主。首次使用请先参阅 [DeepSeek Harness 官方文档](https://deepseek-harness.github.io/deepseek-harness/)。仓库已内置预编译的 `lib/` 产物，安装时无需本地构建。
 
 ### 桌面端安装
 

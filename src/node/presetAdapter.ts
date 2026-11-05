@@ -97,13 +97,43 @@ export function registerPresetAdapter(ctx: Context, project: PresetRequestProjec
     }
   }
   // 列表缓存与宿主同源：只请求公开 `/models`，凭证仍来自 credentials 服务；失败退回内置目录。
+  let lastListingChange = 0
+  let listingChangeTimer: ReturnType<typeof setTimeout> | undefined
+  const notifyListingChanged = () => {
+    lastListingChange = Date.now()
+    Reflect.apply(ctx.emit, ctx, ['llm/models-updated', PRESET_ADAPTER_PROVIDER])
+  }
+  const onListingChanged = () => {
+    const now = Date.now()
+    const elapsed = now - lastListingChange
+    if (elapsed < 50) {
+      if (listingChangeTimer === undefined) {
+        listingChangeTimer = setTimeout(() => {
+          listingChangeTimer = undefined
+          notifyListingChanged()
+        }, 50 - elapsed)
+      }
+      return
+    }
+    if (listingChangeTimer !== undefined) {
+      clearTimeout(listingChangeTimer)
+      listingChangeTimer = undefined
+    }
+    notifyListingChanged()
+  }
+  ctx.effect(() => () => {
+    if (listingChangeTimer !== undefined) {
+      clearTimeout(listingChangeTimer)
+      listingChangeTimer = undefined
+    }
+  }, 'preset listing throttle')
   const listings = typeof deepSeekCatalog.ModelListingCache === 'function' && typeof deepSeekCatalog.requestModelListing === 'function'
     ? new deepSeekCatalog.ModelListingCache({
     // 新宿主的缓存通过这两个回调读取最新设置并通知目录变化；旧版构造器会忽略额外字段。
     ...{
       settings: () => settingsConnection().listing,
       // 基线宿主的类型尚未声明这个后来新增的事件；运行时按新宿主的公开事件契约发送。
-      changed: () => Reflect.apply(ctx.emit, ctx, ['llm/models-updated', PRESET_ADAPTER_PROVIDER]),
+      changed: () => onListingChanged(),
     },
     credential: async () => presentKey(settingsConnection()),
     load: (url, apiKey, signal) => deepSeekCatalog.requestModelListing(url, { 'x-api-key': apiKey }, signal),

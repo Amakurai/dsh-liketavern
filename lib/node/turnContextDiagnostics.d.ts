@@ -1,4 +1,5 @@
 import type { Session } from '@deepseek-ai/dsh-session';
+import './modelRoute.js';
 export interface StaleTurnContext {
     /** 最新快照之前仍在 surface 上、含 tavern:turn 段的快照数。 */
     snapshots: number;

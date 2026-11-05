@@ -69,6 +69,7 @@ export declare function discardHostForkAdoptionPlan(state: TavernState, sessionI
  * 子剧情后再绑定。前缀停在某轮中途且该轮之后仍有模型或工具事件时，该轮写入可能不属于子会话，
  * 保守地一并撤销。插件自身分支、子代理与已绑定会话跳过；准备失败时不发布子剧情。
  */
+export declare function resolveForkParentFromLiveSessions(ctx: Context, child: Session): string | undefined;
 export declare function adoptHostFork({ ctx, state }: FloorDeps, child: Session): Promise<boolean>;
 /** 重新生成：回滚目标楼层并重跑。messageId（assistant 消息 id）或 floorTurn 指定楼层，都缺省取最后一个已关闭 turn。进行中的 turn 拒绝。 */
 export declare function regenerate({ ctx, state }: FloorDeps, sessionId: string, messageId?: string, floorTurn?: number): Promise<ForkResult>;

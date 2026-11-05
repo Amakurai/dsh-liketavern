@@ -19,7 +19,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Agent, AgentOptions, CreateAgentOptions } from '@deepseek-ai/dsh-agent'
 import type { AgentPresetRegistry } from '@deepseek-ai/dsh-agent-preset-registry'
 import { createUserMessage, type AssistantMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
-import { SessionLogOffset, type Session, type SessionEvent } from '@deepseek-ai/dsh-session'
+import { SessionId, SessionLogOffset, type Session, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { basename, join } from 'node:path'
 import { lstat } from 'node:fs/promises'
 import { Wal } from '../state/wal.js'
@@ -43,7 +43,10 @@ import { assertHostForkSource, deleteHostForkAdoption, hostForkSeedHash, readHos
 import { bindingDeletionGeneration, loadBinding, type SessionBinding, type WalLineageEntry } from './bindings.js'
 import { PRESET_ADAPTER_PROVIDER, PRESET_ADAPTER_SOURCE_PROVIDER } from './presetAdapter.js'
 import { sessionModelRoute } from './modelRoute.js'
+import { forkedSessionParents, installSessionForkTracking } from './sessionArchiveSnapshot.js'
 import type { TavernState } from './state.js'
+
+installSessionForkTracking()
 
 export interface FloorDeps {
   ctx: Context
@@ -567,8 +570,56 @@ export function discardHostForkAdoptionPlan(state: TavernState, sessionId: strin
  * 子剧情后再绑定。前缀停在某轮中途且该轮之后仍有模型或工具事件时，该轮写入可能不属于子会话，
  * 保守地一并撤销。插件自身分支、子代理与已绑定会话跳过；准备失败时不发布子剧情。
  */
+export function resolveForkParentFromLiveSessions(ctx: Context, child: Session): string | undefined {
+  if (!child.header.isSeeded || !child.inheritedEventCount || child.inheritedEventCount <= 0) return undefined
+  const childEvents = child.snapshotEvents().slice(0, child.inheritedEventCount)
+  if (childEvents.length === 0) return undefined
+  try {
+    const sessions = ctx.sessions?.list?.() ?? []
+    let bestCandidate: { id: string; createdAt: number } | undefined
+    for (const session of sessions) {
+      if (session.id === child.id) continue
+      if (child.header.createdAt && session.header.createdAt > child.header.createdAt) continue
+      const parentEvents = session.snapshotEvents()
+      if (parentEvents.length < childEvents.length) continue
+      let matches = true
+      for (let i = 0; i < childEvents.length; i++) {
+        const ce = childEvents[i]
+        const pe = parentEvents[i]
+        if (!ce || !pe) {
+          matches = false
+          break
+        }
+        if (ce.type !== pe.type || ce.seq !== pe.seq) {
+          matches = false
+          break
+        }
+        if (typeof ce.time === 'number' && typeof pe.time === 'number' && ce.time !== pe.time) {
+          matches = false
+          break
+        }
+        const cMsgId = (ce.data as any)?.message?.id
+        const pMsgId = (pe.data as any)?.message?.id
+        if (cMsgId !== undefined && pMsgId !== undefined && cMsgId !== pMsgId) {
+          matches = false
+          break
+        }
+      }
+      if (matches) {
+        const createdAt = session.header.createdAt ?? 0
+        if (!bestCandidate || createdAt > bestCandidate.createdAt) {
+          bestCandidate = { id: session.id, createdAt }
+        }
+      }
+    }
+    return bestCandidate?.id
+  } catch {}
+  return undefined
+}
+
 export async function adoptHostFork({ ctx, state }: FloorDeps, child: Session): Promise<boolean> {
-  const parentId = child.header.parentSession
+  const rawParentId = child.header.parentSession ?? forkedSessionParents.get(child.id) ?? resolveForkParentFromLiveSessions(ctx, child)
+  const parentId = rawParentId ? SessionId(rawParentId) : undefined
   const depth = (child.header as { delegationDepth?: number }).delegationDepth ?? 0
   if (!parentId || child.header.isSeeded !== true || depth > 0 || pluginForkIds.has(child.id)) return false
   // 已发布的独立子剧情不依赖旧来源；残留接管记录的清理不能要求原剧情仍可读。
@@ -595,6 +646,7 @@ export async function adoptHostFork({ ctx, state }: FloorDeps, child: Session): 
     || plan.seedHash !== hostForkSeedHash(child.snapshotEvents().slice(0, plan.inheritedCount))) {
     throw new FloorError('fork-source-changed', '原生分支身份或继承历史已变化，请重新创建分支')
   }
+  if (!plan) return false
   if ('error' in childRead) {
     if (plan.sourceCheckpoint === undefined && !plan.binding) {
       plan.sourceUncertain = true
@@ -602,7 +654,7 @@ export async function adoptHostFork({ ctx, state }: FloorDeps, child: Session): 
     }
     throw childRead.error
   }
-  const pending = plan
+  const pending: LiveHostForkAdoptionPlan = plan
   // skip 是经首次严格读取确认的合法未绑定，不再沿后来改变的父绑定推断来源。
   if (pending.status === 'skipped') {
     await writeHostForkAdoption(state.paths, pending)

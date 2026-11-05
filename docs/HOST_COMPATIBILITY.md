@@ -1,8 +1,96 @@
 # 宿主兼容记录
 
-当前源码基线为 dsh 0.2.1-rc.3。以下按版本记录观测结果，升级时重新核对，不是永久架构要求。
+当前源码基线为 dsh 0.2.2-rc.1。以下按版本记录观测结果，升级时重新核对，不是永久架构要求。
 
-`engines.dsh` 与公开 peer 声明 `>=0.2.0-rc.1 <0.4.0-0`；开发依赖、overrides、安装脚本许可和锁文件继续固定 `0.2.1-rc.3` 基线，避免构建漂移。较新宿主优先使用 `engines.dsh`，较旧宿主沿用 peer；两者以 `includePrerelease: true` 判断时范围一致，关于页与 doctor 同步遵守此顺序。npm 默认只匹配已显式列出的补丁号预发布版，peer 因此额外覆盖 `0.2.1`–`0.2.9` 和 `0.3.0`–`0.3.9`；更远的预发布补丁线可能需要更新 peer 范围，但不会被宿主加载器按版本拒绝。声明范围包含尚未发布的版本，不能替代对新宿主的接口核对、安装启动及 UI 冒烟。
+`engines.dsh` 与全部 `@deepseek-ai/*` 公开 peer 声明为 `*`：宿主加载器（`evaluatePluginCompatibility`）优先读 `engines.dsh`，没有该字段的旧宿主读 peer，两者都以 `includePrerelease: true` 判断，因此过去与未来的任意宿主版本都不会再因版本号被拒。开发依赖、overrides、安装脚本许可和锁文件继续固定经验证的精确基线，构建与测试只针对该基线；`npm run host:check` 现在同时校验“门槛必须是 `*`”与“开发基线必须一致”，防止有人重新钉住版本号。放开版本号不等于保证接口兼容：真正的兼容由运行时守卫承担（见下节）。
+
+## 宿主版本兼容矩阵
+
+| 宿主版本 (DSH Runtime) | 插件版本 (Plugin Version) | 兼容状态 | 门槛与加载机制 | 运行时策略与注意事项 |
+|---|---|---|---|---|
+| **0.2.2-rc.1** | **当前构建 (post-v0.5.9)** | **原生支持 (已验证基线)** | `engines.dsh: "*"` 原生满足；加载器无需豁免 | 55 项宿主依赖精确对齐；适配 `parentSession` 移除、模型路由断言与单参 `installModelSelection`；全量通过生产检查与回归测试 |
+| **0.2.2-rc.1** | **旧版 release (<= v0.5.9)** | **支持 (需 Profile 豁免)** | 无 `engines.dsh`，peer 钉死 `0.2.1-rc.3`；需 `<profile>/compatibility.json` 豁免或 `cordis.patch.yml` | Cordis 4.1.0 与 Schemastery 3.19.0 保持接口向后兼容；UI 插槽完备；开场白追加限制由原有 `try/catch` 保障无崩溃 |
+| 0.2.1-rc.5 | 当前构建 (post-v0.5.9) | 兼容 (已验证) | `engines.dsh: "*"` 自动满足 | 运行时守卫 `hostCompat.ts` 优雅降级；支持模型列表、会话迁移 |
+| 0.2.1-rc.3 | 当前构建 / v0.5.7–v0.5.9 | 兼容 (已验证) | 旧基线，旧版原生匹配，新版经 `*` 门槛满足 | 完整支持模型列表跟随、PTC 写入与剧情分支隔离 |
+| 0.2.0-rc.1 ~ 0.2.1-rc.2 | 当前构建 / v0.5.0–v0.5.6 | 兼容 (已验证) | 经开放门槛加载 | 适配器自动回退至内置模型目录；支持完整角色/剧情/WAL 操作 |
+| < 0.2.0 (如 0.1.x) | 任意版本 | 不兼容 (已废弃) | Session V3 架构与早期 PTC 运行时不兼容 | 宿主底层大幅重构，不建议且不支持跨代运行 |
+| >= 0.2.3 / 0.3.x / 未来版本 | 当前构建 (post-v0.5.9) | 开放支持 (待冒烟) | `engines.dsh: "*"` 保证不被宿主加载器按版本号拦截 | 依靠 `src/node/hostCompat.ts` 的服务与方法探测进行阶段降级，需进行启动与 UI 冒烟核对 |
+
+## 0.2.2-rc.1 升级与兼容核对（2026-11-05）
+
+### 依赖对齐与基线升级
+
+公开 npm 上全量宿主依赖发布 `0.2.2-rc.1`：
+- `devDependencies` 中 55 个 `@deepseek-ai/*` 宿主包全部由 `0.2.1-rc.3` 升级至精确 `0.2.2-rc.1`。
+- `overrides` 中 10 个 `@deepseek-ai/*` 覆盖项同步更新至 `0.2.2-rc.1`。
+- `@deepseek-ai/cordis` 升级至 `4.1.0`，`@deepseek-ai/schemastery` 升级至 `~3.19.0`，Cordis 插件组（group, include, loader）升级至 `~1.1.0`。
+- `allowScripts` 中的子进程许可同步更新为 `@deepseek-ai/dsh-subprocess-local@0.2.2-rc.1`。
+- 静态对齐验证：`npm run host:check` 校验通过，确认 55 个包及锁文件与基线完全一致。
+
+### 旧版本 Release（<= v0.5.9）在 DSH 0.2.2-rc.1 宿主上的兼容策略
+
+针对已发布的历史旧版本（如 `v0.5.7`、`v0.5.8`、`v0.5.9`）：
+1. **宿主静态检查拦截根因**：
+   - 历史 release 的 `package.json` 未声明 `engines.dsh`，且在 `peerDependencies` 中将 `@deepseek-ai/dsh` 等 22 个包精确钉在 `0.2.1-rc.3`。
+   - DSH 宿主加载器（`@deepseek-ai/dsh-app-boot/lib/index.js` 中的 `evaluatePluginCompatibility`）在缺少 `engines.dsh` 时，会逐项核对 `@deepseek-ai/dsh*` peerDependencies。在 `0.2.2-rc.1` 宿主下，`0.2.1-rc.3` 的精确要求无法满足，评估器默认返回 `{ unfulfilledRequirements: [...], exempted: false }`。
+   - 宿主在 profile loader 阶段判定未豁免（`!issue.exempted`）时跳过加载（`skippedBundles.push`），并在 Cordis loader preflight 中标记 `row.disabled = true`，导致旧插件被拒载。
+2. **免重打包运行方案（Profile Exemption & Patch）**：
+   - **方式一（官方豁免机制）**：DSH 宿主提供了原生配置豁免能力。在用户配置目录的 `<profile>/compatibility.json` 中配置版本豁免：
+     ```json
+     {
+       "dsh-liketavern@0.5.9": ["0.2.2-rc.1"]
+     }
+     ```
+     或直接使用 CLI 命令授权：
+     ```bash
+     dsh plugin allow-version dsh-liketavern@0.5.9 --dsh-version 0.2.2-rc.1 --accept-risk
+     ```
+     设置后，宿主加载器判定 `issue.exempted === true`，不再跳过插件加载，Cordis 正常激活插件。
+   - **方式二（配置层启用）**：在 profile 的 `cordis.patch.yml` 中声明插件条目并确保加载标志为启用。
+3. **运行时安全性验证**：
+   - **底层服务兼容**：Cordis `4.1.0` 与 Schemastery `3.19.0` 对插件服务注入（`ctx.inject`）、事件注册（`ctx.on` / `ctx.emit`）及设置 Schema 保持严格后向兼容，已废除或变更的方法未在旧版关键链路中使用。
+   - **UI 插槽完备**：宿主 0.2.2-rc.1 依然完整挂载全部 5 个核心插槽（`conversation.chat.node`、`conversation.chat.assistant-actions`、`conversation.input.dock`、`conversation.session.header.actions`、`settings.section`），旧版客户端组件能够正常挂载。
+   - **同步追加异常防护**：在 `0.2.2-rc.1` 中，`dsh-session` 禁止在 `session/created` 广播完成前追加事件（抛出 `cannot append before session/created completes`）。旧版 release 中的 `retireStuckBlank` 具备完备的 `try/catch` 守卫，会捕获该错误并仅记录警告日志，不会导致主进程崩溃。
+
+### 现行版本策略（Version Policy）
+
+- **完全放开公开门槛**：`engines.dsh` 与全部 `@deepseek-ai/*` peer 均声明为 `*`。宿主加载器优先通过 `semver.satisfies(runtimeVersion, engines.dsh, { includePrerelease: true })` 判断，`*` 使得任何历史版（`0.1.0`+）、当前版（`0.2.2-rc.1`）以及未来版本（`0.3.x`、`1.0.0`）均能在预检中 100% 通过（返回 `undefined`）。
+- **严格锁定开发基线**：`devDependencies` 与 `overrides` 固定为当前经过完整冒烟与测试验证的精确版本（`0.2.2-rc.1`），避免非确定性依赖提升造成构建污染。
+- **守卫层级化解耦**：将版本号静态判断转变为运行时接口守卫（`src/node/hostCompat.ts`），利用 `optionalService` 与 `hasMethod` 探测宿主能力，实现优雅降级。
+
+### 0.2.2-rc.1 运行时接口变更与适配
+
+1. **Session Fork 世系追踪（`parentSession` 变更）**：
+   - **现象与宿主行为**：在 `dsh-session@0.2.2-rc.1` 中，`SessionStore.prototype.fork()` 在特定分支创建场景中不再显式持久化 `session.header.parentSession`，仅设置 `session.header.isSeeded = true`。
+   - **插件适配实现**：
+     - 在 `src/index.ts`、`src/node/floors.ts` 与 `src/node/sessionArchiveSnapshot.ts` 中安装 `installSessionForkTracking()`，在运行时挂钩 `SessionStore.prototype.fork`，动态记录子会话到父会话的映射表 `forkedSessionParents`。
+     - 调整 `adoptHostFork`、`deriveLegacyLineage` 及 `snapshotSessionArchive`：当 `parentSession` 为 undefined 时，结合 `session.header.isSeeded === true` 与追踪缓存解析真实的父会话身份，确保分支剧情接管、楼层回滚与归档快照导出的世系链条完整无损。
+2. **模型选择通知简化（`installModelSelection` 变动）**：
+   - **现象与宿主行为**：`@deepseek-ai/dsh-agent@0.2.2-rc.1` 中，`installModelSelection(agentCtx)` 简化为单参数通知生成器，废除旧版传入第二个 `legacySelection` 参数的调用方式。
+   - **插件适配实现**：插件端对齐单参数调用契约；同时在测试与兼容上下文中提供后向兼容 polyfill，自动处理单参/双参转发，保障平滑过渡。
+3. **严格模型路由断言与透明请求投影（`dsh-agent-loop`）**：
+   - **现象与宿主行为**：`ReactLoopAgent.prototype.preStep` 强化了前置断言，在执行提示词组装（prompt assembly）前严格要求 `this.model.current() !== undefined`；同时在 `agent/request` 钩子中，严格断言返回的 `proposedConfig.provider` 必须与当前的 `selection.provider` 保持一致。
+   - **插件适配实现**：
+     - 严格遵守 AGENTS.md 约束 5：在 `src/agent.ts` 的 `agent/request` 阶段，保持 `proposedConfig.provider` 为 `'deepseek-official'`，绝不将宿主可见的 provider 篡改为 `'tavern-deepseek'`，在此基础上进行透明的预设请求投影。
+     - 引入安全探测机制：支持 `agent/request` probe（`payload.probe === true`）。在 `preStep` 阶段，若 `this.model.current()` 尚未确立（例如空选项创建的 agent），主动探测或回退至 `sessionModelRoute` / `deepseek-official / deepseek-chat`，防止在提示词组装前发生致命断言崩溃。
+     - 动态同步路由：在 `prepareRequest` 中，若检测到 `proposedConfig` 变更了路由，同步调用 `this.model.select()` 保持状态一致。
+4. **工具批量调用支持（`dsh-tools`）**：
+   - `dsh-tools@0.2.2-rc.1` 的 `ToolsService.prototype.execute` 期望 `{ calls: ToolCall[] }` 的批处理结构。插件在兼容层中增加了单调用对象（`{ agent, callId, name, arguments, signal }`）到批调用的规范化兼容转换。
+
+## 放开版本门槛（2026-11-05）
+
+背景：桌面端从 `0.2.1-rc.3` 自动升级到 `0.2.1-rc.5` 后，插件面板报告“不兼容（要求 0.2.1-rc.3）”并拒绝加载。原因是已安装的 v0.5.9 构建把 22 个宿主包 peer 精确钉在 `0.2.1-rc.3`，且清单没有 `engines.dsh`；宿主按 peer 逐项判断后拒绝整个插件。报废的根因是版本门槛，不是代码真的不兼容。
+
+改动：
+
+- `engines.dsh` 与全部 `@deepseek-ai/*` peer 改为 `*`，`engines.node` 保持 `>=24`。
+- 开发依赖与 overrides 仍固定精确基线；`scripts/verify-host-alignment.mjs` 改为校验“门槛必须放开 + 基线必须一致 + 锁文件同步”，`test/hostAlignment.test.ts` 用宿主真实的 `evaluatePluginCompatibility` 逐版本断言。
+- 新增 `src/node/hostCompat.ts`：阶段级守卫（`guardPhase`/`guardPhaseAsync`）、可选服务探测（`optionalService`）、方法探测（`hasMethod`）与有界降级记录。`src/index.ts` 的注入表从 6 项收缩为核心 3 项（`settings`、`sessions`、`agents`），`agentPresets`、`workspaceRegistry`、`typert` 改为缺失即跳过；`src/agent.ts` 在宿主不提供 `getSectionOrder` 时把 `TOOLS_SDK` 段序回退到 5000，工具注册与空闲维护各自独立降级；`src/client/index.tsx` 先挂 remote，再逐块注册 slot，任何一块失败只跳过该块。
+- 任何阶段失败只写一条 `dsh-tavern: <阶段> 已跳过（宿主接口可能已变更）` 日志，不抛回 Cordis，宿主与其它插件继续可用。
+
+验证：用宿主自身 `dsh-app-boot` 的 `evaluatePluginCompatibility`（runtime `0.2.1-rc.5`）对改后清单逐版本检查 `0.1.0`、`0.2.0-alpha.1`、`0.2.0-rc.1`、`0.2.1-rc.3`、`0.2.1-rc.5`、`0.2.2-alpha.2`、`0.2.9-rc.1`、`0.3.0`、`0.3.9`、`0.4.0-alpha.1`、`0.4.0`、`0.5.0`、`1.0.0`、`2.5.3-rc.1`，全部接受；另外核对 `0.2.0-rc.1` 与 `0.2.1-rc.3` 的 app-boot 实现，两代都以 `includePrerelease: true` 判断，语义一致。桌面端 profile 已用 `dsh plugin --profile desktop update dsh-liketavern` 重新解析到 `origin/main`，宿主同款评估器对安装后的清单返回兼容。
+
+放开范围意味着插件会在未验证的宿主上尝试运行，因此“能装”不等于“已验证”；升级后仍应检查日志里的降级行，并做启动与界面冒烟。
 
 ## 设置条件写入核对（2026-10-31）
 

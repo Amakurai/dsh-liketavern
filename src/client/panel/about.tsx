@@ -31,7 +31,7 @@ export function AboutSection({ remote }: { remote: TavernRemote }) {
   const visible = check?.owner === owner ? check : undefined
   const info = state.status === 'ready' ? state.value : undefined
   const result = visible?.result
-  const version = (value: string) => value === 'unknown' ? t('about.unknown') : value
+  const version = (value: string) => value === 'unknown' ? t('about.unknown') : value === '*' ? t('about.hostAny') : value
 
   const checkUpdate = async () => {
     if (owner.busy || !info || info.hostVersion === 'unknown') return

@@ -6,6 +6,7 @@ export declare const zh: {
     readonly 'about.version': "当前插件版本";
     readonly 'about.host': "当前宿主版本";
     readonly 'about.hostRequired': "此插件适配 dsh {version}。";
+    readonly 'about.hostAny': "任意版本（不按版本号限制）";
     readonly 'about.unknown': "无法读取";
     readonly 'about.hostUnknown': "无法确认当前启动的宿主版本，暂不能判断更新兼容性。可先查看发布说明。";
     readonly 'about.source': "源码开发版";

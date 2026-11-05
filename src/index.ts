@@ -22,13 +22,32 @@ import { registerPromptInputTracking } from './node/pendingInputs.js'
 import { registerHelperMvuLifecycle, reserveHelperMvuMaintenance } from './node/helperMvuLifecycle.js'
 import { TavernState } from './node/state.js'
 import { isTavernRuntimeSession } from './node/tavernSession.js'
+import { forkedSessionParents, installSessionForkTracking } from './node/sessionArchiveSnapshot.js'
 import { TYPERT_HOST } from './remote.js'
+import { errorMessage, guardPhase, guardPhaseAsync, hasMethod, withHost } from './node/hostCompat.js'
+
+installSessionForkTracking()
 
 export const name = 'dsh-liketavern'
 export { Config }
-export const inject = ['settings', 'sessions', 'agents', 'typert', 'workspaceRegistry', 'agentPresets']
+/**
+ * 只把真正必需的服务写进 inject：宿主缺少可选服务时插件仍要加载并降级，
+ * 而不是因为一个服务缺失就永远停在 waiting 状态。
+ * `typert` / `workspaceRegistry` / `agentPresets` 全部经 ctx.get 探测。
+ */
+export const inject = ['settings', 'sessions', 'agents']
 
 export async function apply(ctx: Context, config: ReturnType<typeof Config>): Promise<void> {
+  try {
+    await startTavern(ctx, config)
+  } catch (error) {
+    // 宿主接口变更时不能让加载器把整个插件判死：记录一条错误，宿主与其它插件继续可用。
+    ctx.logger.error(`dsh-tavern: 初始化失败，插件已降级（宿主接口可能已变更）：${errorMessage(error)}`)
+  }
+}
+
+async function startTavern(ctx: Context, config: ReturnType<typeof Config>): Promise<void> {
+  const host = withHost(ctx)
   const ns = ctx.fiber.entry?.options.id ?? TAVERN_NS
   ctx.effect(() => ctx.settings.configure({ auto: false }), 'dsh-tavern settings')
   const scope = {
@@ -44,35 +63,45 @@ export async function apply(ctx: Context, config: ReturnType<typeof Config>): Pr
   await state.init()
   createTavernService(ctx, state, scope)
 
-  try {
-    const disposePreset = await installTavernPreset(ctx)
-    ctx.effect(() => disposePreset, 'dsh-tavern preset')
-  } catch (error) {
-    ctx.logger.warn(`dsh-tavern: agent 预设安装失败：${error instanceof Error ? error.message : String(error)}`)
+  // 预设服务是可选能力：宿主没有 agentPresets（旧版改名或未来版本移除）时只跳过注册。
+  const presets = host.get<Parameters<typeof installTavernPreset>[0]['agentPresets']>('agentPresets')
+  if (presets) {
+    const disposePreset = await guardPhaseAsync(ctx, 'agent 预设注册', () => installTavernPreset({ agentPresets: presets }))
+    if (disposePreset) ctx.effect(() => disposePreset, 'dsh-tavern preset')
+  } else {
+    ctx.logger.info('dsh-tavern: 宿主未提供 agentPresets，跳过 Agent 预设注册')
   }
 
-  installTavernModelSelectionCompat(ctx)
-  registerRequestDiagnostics(ctx, state)
-  state.presetAdapter = registerPresetAdapter(ctx, (options, model) =>
+  guardPhase(ctx, '模型选择兼容', () => installTavernModelSelectionCompat(ctx))
+  guardPhase(ctx, '请求诊断', () => registerRequestDiagnostics(ctx, state))
+  state.presetAdapter = guardPhase(ctx, 'DeepSeek 布局通道', () => registerPresetAdapter(ctx, (options, model) =>
     projectTavernAdapterRequest(ctx, state, options, model),
-  )
+  ))
   const preparePresetAdapter = () => {
+    if (!state.presetAdapter) return
     const providers = ctx.get('llm')?.listProviders() ?? []
     if (providers.some(provider => provider.id === PRESET_ADAPTER_PROVIDER)
       || !providers.some(provider => provider.id === PRESET_ADAPTER_SOURCE_PROVIDER)) return
-    try { state.presetAdapter!.ensureRegistered() }
+    try { state.presetAdapter.ensureRegistered() }
     catch (error) { ctx.logger.warn(`dsh-tavern: DeepSeek 布局通道尚未就绪：${String(error)}`) }
   }
   preparePresetAdapter()
   ctx.on('llm/adapters-updated', preparePresetAdapter)
   ctx.on('settings/document-updated', preparePresetAdapter)
-  registerHelperMvuLifecycle(ctx)
-  ctx.effect(() => ctx.typert.register(TYPERT_HOST), 'dsh-tavern.typert')
+  guardPhase(ctx, 'MVU 生命周期', () => registerHelperMvuLifecycle(ctx))
+  // typert 可选：老宿主可能没有该服务，客户端 remote 会自行降级；宿主侧其它功能照常。
+  const typert = host.get<{ register(value: unknown): () => void }>('typert')
+  if (typert && hasMethod(typert, 'register')) {
+    guardPhase(ctx, 'typert remote', () => ctx.effect(() => typert.register(TYPERT_HOST), 'dsh-tavern.typert'))
+  }
 
   const greetingRetirement = createGreetingRetirement(ctx)
   const adoptOrRetireSession = (session: Session) => {
     let isFork = false
-    try { isFork = Boolean(session.header.parentSession) && isTavernRuntimeSession(ctx, session) } catch { return }
+    try {
+      const parentId = session.header.parentSession ?? forkedSessionParents.get(session.id)
+      isFork = (Boolean(parentId) || session.header.isSeeded === true) && isTavernRuntimeSession(ctx, session)
+    } catch { return }
     if (!isFork) { greetingRetirement.schedule(session); return }
     void state.trackBindingAdoption(session.id, () => adoptHostFork({ ctx, state }, session))
       .then((adopted) => { if (adopted) ctx.logger.info(`dsh-tavern: 已为宿主分支 ${session.id} 准备独立剧情`); greetingRetirement.afterAdoption(session) })
@@ -105,10 +134,17 @@ export async function apply(ctx: Context, config: ReturnType<typeof Config>): Pr
       }
       return
     }
+    forkedSessionParents.delete(sessionId)
     await state.clearBinding(sessionId).catch((err) => ctx.logger.warn(`dsh-tavern: 会话解绑清理失败：${String(err)}`))
   }
-  ctx.on('session/disposed', (session: Session) => { void disposeSession(session.id, session) })
-  ctx.on('api-session/removed' as any, (sessionId: string) => { void disposeSession(sessionId) })
+  ctx.on('session/disposed', (session: Session) => {
+    forkedSessionParents.delete(session.id)
+    void disposeSession(session.id, session)
+  })
+  ctx.on('api-session/removed' as any, (sessionId: string) => {
+    forkedSessionParents.delete(sessionId)
+    void disposeSession(sessionId)
+  })
 
   // 楼层 WAL 与每 turn 检索缓存：只碰 Tavern 模式会话，普通 dsh 助手不受影响。
   ctx.on('session/event', (session: Session, event) => {
@@ -132,7 +168,7 @@ export async function apply(ctx: Context, config: ReturnType<typeof Config>): Pr
   })
 
   // 宿主认领后才把尚未入日志的消息交给本轮扫描；未来排队输入不能提前触发设定。
-  registerPromptInputTracking(ctx, state)
+  guardPhase(ctx, '输入追踪', () => registerPromptInputTracking(ctx, state))
   // 第一条真正发出时写入开场白，避免空白会话被写脏后无法换模式 / 无法新对话。
   ctx.on('agent/inbox/inserted', ({ agent }) => {
     const session = ctx.sessions.get(agent.id)

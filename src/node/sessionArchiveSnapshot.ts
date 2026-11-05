@@ -1,7 +1,7 @@
 /** 会话迁移快照：锁住绑定、共享资产和剧情，读取宿主持久历史及其附件，并复核历史未变化。 */
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
-import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
+import { SessionId, SessionStore, type Session, type SessionEvent } from '@deepseek-ai/dsh-session'
 import type { SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
 import { WorkspaceFs } from '../state/workspaceFs.js'
 import { readStory, storyRoot } from '../state/story.js'
@@ -12,6 +12,66 @@ import { archiveFile, sealSessionArchive, SESSION_ARCHIVE_MAX_BYTES, SESSION_ARC
 import type { TavernState } from './state.js'
 import type { WalLineageEntry } from './bindings.js'
 import { assertArchiveWalComplete } from './sessionArchiveWal.js'
+
+export class BoundedSessionParentMap extends Map<string, SessionId> {
+  private readonly maxEntries: number
+  constructor(maxEntries = 1024) {
+    super()
+    this.maxEntries = maxEntries
+  }
+  override set(key: string, value: SessionId): this {
+    if (this.size >= this.maxEntries && !this.has(key)) {
+      const firstKey = this.keys().next().value
+      if (firstKey !== undefined) this.delete(firstKey)
+    }
+    return super.set(key, value)
+  }
+}
+
+export const forkedSessionParents = new BoundedSessionParentMap(1024)
+
+let installedForkTracking = false
+export function installSessionForkTracking(): void {
+  if (installedForkTracking) return
+  installedForkTracking = true
+  if (typeof (SessionStore as any)?.prototype?.fork === 'function') {
+    const origFork = (SessionStore as any).prototype.fork
+    ;(SessionStore as any).prototype.fork = function (source: any, boundary?: any, childSessionId?: any) {
+      let rawParentId: string | undefined
+      try {
+        const liveSource = this._resolveForkSource?.(source)
+        rawParentId = liveSource?.id ?? (typeof source === 'string' ? source : source?.id)
+      } catch {
+        rawParentId = typeof source === 'string' ? source : source?.id
+      }
+      const parentId = rawParentId ? SessionId(rawParentId) : undefined
+      const origCreate = this.create
+      try {
+        if (parentId) {
+          this.create = function (id: any, options: any) {
+            if (options?.meta && !options.meta.parentSession) {
+              options.meta = { ...options.meta, parentSession: parentId }
+            }
+            return origCreate.call(this, id, options)
+          }
+        }
+        const child = origFork.call(this, source, boundary, childSessionId)
+        if (child && parentId) {
+          forkedSessionParents.set(child.id, parentId)
+          if (!child.header.parentSession) {
+            try {
+              ;(child.header as any).parentSession = parentId
+            } catch {}
+          }
+        }
+        return child
+      } finally {
+        this.create = origCreate
+      }
+    }
+  }
+}
+installSessionForkTracking()
 
 function hasOpenTurn(events: readonly SessionEvent[]): boolean {
   const open = new Set<number>()
@@ -26,8 +86,8 @@ function hasOpenTurn(events: readonly SessionEvent[]): boolean {
 export async function deriveLegacyLineage(persistence: SessionPersistence, root: SessionArchive['session']): Promise<WalLineageEntry[]> {
   const reverse: WalLineageEntry[] = [], seen = new Set<string>([root.header.id])
   let child = root, maxTurn = Number.POSITIVE_INFINITY
-  while (child.header.parentSession) {
-    const parentId = child.header.parentSession
+  while (child.header.parentSession || forkedSessionParents.get(child.header.id)) {
+    const parentId = child.header.parentSession ?? forkedSessionParents.get(child.header.id)!
     if (seen.has(parentId)) throw new Error('会话祖先关系循环，不能导出')
     seen.add(parentId)
     let inheritedTurn: number | undefined
@@ -37,7 +97,12 @@ export async function deriveLegacyLineage(persistence: SessionPersistence, root:
     maxTurn = Math.min(maxTurn, inheritedTurn)
     reverse.push({ sessionId: parentId, throughTurn: maxTurn })
     const handle = await persistence.open(parentId, 'read')
-    try { child = { header: handle.header, inheritedEventCount: handle.inheritedEventCount, events: [...(await handle.read()).events] } }
+    try {
+      const read = await handle.read()
+      const rawNextParent = handle.header.parentSession ?? forkedSessionParents.get(handle.header.id)
+      const nextParent = rawNextParent ? SessionId(rawNextParent) : undefined
+      child = { header: { ...handle.header, ...(nextParent ? { parentSession: nextParent } : {}) }, inheritedEventCount: handle.inheritedEventCount, events: [...read.events] }
+    }
     finally { await handle.close() }
   }
   return reverse.reverse()
@@ -118,8 +183,13 @@ export async function snapshotSessionArchive(ctx: Context, state: TavernState, s
         remaining -= bytes
         attachments.push({ kind: 'file', ref, data: Buffer.concat(chunks, bytes).toString('base64') })
       }
-      const preservedBinding = binding.walLineage === undefined && session.header.parentSession
-        ? { ...binding, walLineage: await deriveLegacyLineage(persistence, session) } : binding
+      const rawParentId = session.header.parentSession ?? forkedSessionParents.get(session.header.id)
+      const parentId = rawParentId ? SessionId(rawParentId) : undefined
+      const sessionWithParent = parentId && !session.header.parentSession
+        ? { ...session, header: { ...session.header, parentSession: parentId } }
+        : session
+      const preservedBinding = binding.walLineage === undefined && (parentId || (session.header.isSeeded && session.inheritedEventCount > 0))
+        ? { ...binding, walLineage: await deriveLegacyLineage(persistence, sessionWithParent) } : binding
       const archive = sealSessionArchive({ format: 'dsh-tavern-session', version: 1, binding: preservedBinding, session, files, attachments })
       if (Buffer.byteLength(JSON.stringify(archive)) > SESSION_ARCHIVE_MAX_JSON_BYTES) throw new Error('会话迁移文件超过 JSON 大小上限')
       if (!live) {

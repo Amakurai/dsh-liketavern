@@ -24,10 +24,11 @@ import type { TavernState } from './node/state.js'
 import { registerTavernTools } from './node/tools.js'
 import { mergeTavernCallConfig, resolveTavernReasoningEffort, type AdvertisedReasoningInfo } from './core/callConfig.js'
 import { BOUND_DISCIPLINE, TURN_PLAYBOOK, UNBOUND_STANDING, isContinueInstruction, isHostInjectedUserMessage, isTurnScopedNotice } from './core/dshPrompt.js'
-import type { SamplingSettings } from './core/types.js'
+import { DEFAULT_SAMPLING, type SamplingSettings } from './core/types.js'
 import { PRESET_ADAPTER_PROVIDER, PRESET_ADAPTER_SOURCE_PROVIDER } from './node/presetAdapter.js'
 import { installTavernModelSelectionCompat } from './node/modelRoute.js'
 import { attachPresetPlanMessage, createPresetPlanMessage, hasPresetPlanMessage } from './node/presetRequestProjection.js'
+import { guardPhase } from './node/hostCompat.js'
 
 export const name = 'dsh-tavern-agent'
 export const inject = ['tavern', 'systemPrompt', 'tools', 'llm']
@@ -150,6 +151,27 @@ async function resolveRequestReasoningEffort(
 }
 
 export function apply(ctx: Context): void {
+  try {
+    mountTavernAgent(ctx)
+  } catch (error) {
+    // 宿主接口漂移时不让预设整体失效：记录原因，宿主继续运行。
+    ctx.logger.error(`dsh-tavern: agent 面挂载失败（宿主接口可能已变更）：${error instanceof Error ? error.message : String(error)}`)
+  }
+}
+
+/** 宿主 0.2.x 的 TOOLS_SDK 段序；取不到段序时按该值兜底，保持工具前缀缓存友好的相对位置。 */
+const TOOLS_SDK_ORDER_FALLBACK = 5000
+
+function standingOrder(systemPrompt: Context['systemPrompt']): number {
+  try {
+    const order = (systemPrompt as { getSectionOrder?: (name: string) => unknown }).getSectionOrder?.('TOOLS_SDK')
+    return (typeof order === 'number' && Number.isFinite(order) ? order : TOOLS_SDK_ORDER_FALLBACK) + 10
+  } catch {
+    return TOOLS_SDK_ORDER_FALLBACK + 10
+  }
+}
+
+function mountTavernAgent(ctx: Context): void {
   const service = ctx.get('tavern') as TavernService
   const state = service.state
   const llm = ctx.get('llm') as LlmRuntime | undefined
@@ -158,7 +180,7 @@ export function apply(ctx: Context): void {
   // rc.1 的 PTC SDK order=5000；旧 order=210 会把角色文本放到 SDK 前，损失工具前缀缓存。
   // 角色卡/预设/世界书原文常含 {{user}}、Handlebars 或代码示例：宿主默认插值遇到未注册变量会让整次
   // 渲染抛错，命中 cwd/model/provider 又会被静默替换。两段都声明 interpolate: false，原样入模。
-  ctx.systemPrompt.section({ name: STANDING_SECTION, order: ctx.systemPrompt.getSectionOrder('TOOLS_SDK') + 10, text: UNBOUND_STANDING, interpolate: false })
+  ctx.systemPrompt.section({ name: STANDING_SECTION, order: standingOrder(ctx.systemPrompt), text: UNBOUND_STANDING, interpolate: false })
   ctx.systemPrompt.context({
     name: TURN_CONTEXT,
     order: 20,
@@ -300,6 +322,19 @@ export function apply(ctx: Context): void {
   ctx.on('agent/request', async (payload, next) => {
     const config = await next()
     const binding = await state.loadStoryBinding(payload.agent.id)
+    if ((payload as any)?.probe) {
+      if (binding && state.presetAdapter && (config.provider === PRESET_ADAPTER_SOURCE_PROVIDER || config.provider === PRESET_ADAPTER_PROVIDER || !config.provider)) {
+        const preset = binding.presetId ? await state.loadPreset(binding.presetId) : null
+        const sampling: SamplingSettings = { ...DEFAULT_SAMPLING, ...preset?.sampling }
+        const effort = await resolveRequestReasoningEffort(llm, { ...config, provider: PRESET_ADAPTER_PROVIDER }, sampling, payload.signal)
+        return {
+          ...config,
+          provider: PRESET_ADAPTER_PROVIDER,
+          ...(effort !== undefined ? { reasoningEffort: ReasoningEffortId(effort) } : {}),
+        }
+      }
+      return config
+    }
     const plan = state.turnPlans.get(payload.agent.id)
     // assemble 与请求 waterfall 之间仍可换绑；旧角色的 standing/布局不能在新剧情归属下发信。
     // 仅核对轮次与 card/story，预设、人设等同剧情编辑仍在下一轮才应用。
@@ -323,7 +358,9 @@ export function apply(ctx: Context): void {
     return resolved
   }, { prepend: true })
 
-  registerTavernTools(ctx, state)
+  // 工具与空闲维护是可选能力：宿主工具 API 变更时只跳过这一段，提示词与运行时不跟着失效。
+  const guard = <T>(label: string, run: () => T): T | undefined => guardPhase(ctx, label, run)
+  guard('Tavern 工具注册', () => registerTavernTools(ctx, state))
   ctx.on('agent/turn-stopping', ({ agent, signal }) => stopForHelperMvu(state, agent, signal))
-  registerMemoryMaintenance(ctx, state, llm)
+  guard('空闲维护', () => registerMemoryMaintenance(ctx, state, llm))
 }

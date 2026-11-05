@@ -155,6 +155,11 @@ export declare class TavernState {
     private readonly sessionTaskTails;
     /** 最近一个非后台任务的队尾；它在队列中也等待之前的全部任务，但不等之后排入的后台维护。 */
     private readonly sessionCommitTails;
+    private readonly activeTaskPromises;
+    /** 轮次进行中请求清理运行态的标记；待当前开层在 finishTurn 收口后再彻底清空。 */
+    readonly pendingRuntimeClear: Set<string>;
+    /** 暂缓开层只标记当前宿主轮，不能用它收口旧 MVU 楼层或抹掉待恢复输入。 */
+    readonly deferredTurns: Map<string, number>;
     /** 实时助手事件的收口回执；只保留最近 256 轮，历史加载不依赖或回放这些回执。 */
     readonly helperTurnClosures: Map<string, {
         seq: number;
@@ -374,6 +379,7 @@ export declare class TavernState {
     loadBindingUnwaited(sessionId: string, strictRead?: boolean): Promise<SessionBinding | null>;
     private readonly bindingAdoptions;
     private readonly bindingAdoptionRetries;
+    private readonly clearedAdoptions;
     /** 登记宿主原生分支的绑定接管；同步登记，使随后任何 loadBinding 都先等它结束。 */
     trackBindingAdoption<T>(sessionId: string, work: () => Promise<T>): Promise<T>;
     private loadBindingNow;
@@ -393,7 +399,7 @@ export declare class TavernState {
      */
     peekStanding(sessionId: string, generationType: string, cardId: string): string | undefined;
     /** 清掉会话全部场景的 standing 钉位（换绑/回收绑定时）。 */
-    private clearStandingPins;
+    clearStandingPins(sessionId: string): void;
     /** 共享库资产的 Windows 别名共享修订；缓存与展示继续保留各自请求/实际文件拼写。 */
     private assetRevisionKey;
     private assetRevision;

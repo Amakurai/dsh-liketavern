@@ -286,6 +286,11 @@ export class TavernState {
   private readonly sessionTaskTails = new Map<string, Promise<void>>()
   /** 最近一个非后台任务的队尾；它在队列中也等待之前的全部任务，但不等之后排入的后台维护。 */
   private readonly sessionCommitTails = new Map<string, Promise<void>>()
+  private readonly activeTaskPromises = new WeakSet<Promise<unknown>>()
+  /** 轮次进行中请求清理运行态的标记；待当前开层在 finishTurn 收口后再彻底清空。 */
+  readonly pendingRuntimeClear = new Set<string>()
+  /** 暂缓开层只标记当前宿主轮，不能用它收口旧 MVU 楼层或抹掉待恢复输入。 */
+  readonly deferredTurns = new Map<string, number>()
   /** 实时助手事件的收口回执；只保留最近 256 轮，历史加载不依赖或回放这些回执。 */
   readonly helperTurnClosures = new Map<string, { seq:number; storyId:string|undefined; error?:string; deferred?:boolean }>()
 
@@ -328,8 +333,10 @@ export class TavernState {
       () => undefined,
       () => undefined,
     )
+    this.activeTaskPromises.add(tail)
     this.sessionTaskTails.set(sessionId, tail)
     void tail.finally(() => {
+      this.activeTaskPromises.delete(tail)
       if (this.sessionTaskTails.get(sessionId) === tail) this.sessionTaskTails.delete(sessionId)
     })
     // 后台维护（空闲记忆压缩/别名补全）仍与楼层任务串行，但不进入展示读取的提交屏障。
@@ -1423,23 +1430,30 @@ export class TavernState {
 
   private readonly bindingAdoptions = new Map<string, Promise<unknown>>()
   private readonly bindingAdoptionRetries = new Map<string, () => Promise<unknown>>()
+  private readonly clearedAdoptions = new Set<string>()
 
   /** 登记宿主原生分支的绑定接管；同步登记，使随后任何 loadBinding 都先等它结束。 */
   trackBindingAdoption<T>(sessionId: string, work: () => Promise<T>): Promise<T> {
     const pending = this.bindingAdoptions.get(sessionId)
     if (pending) return pending as Promise<T>
+    this.clearedAdoptions.delete(sessionId)
     this.bindingAdoptionRetries.delete(sessionId)
     const run = Promise.resolve().then(work)
     const tracked = run.then(value => {
+      this.activeTaskPromises.delete(tracked)
       if (this.bindingAdoptions.get(sessionId) === tracked) this.bindingAdoptions.delete(sessionId)
       return value
     }, error => {
+      this.activeTaskPromises.delete(tracked)
       if (this.bindingAdoptions.get(sessionId) === tracked) {
         this.bindingAdoptions.delete(sessionId)
-        this.bindingAdoptionRetries.set(sessionId, work)
+        if (!this.clearedAdoptions.has(sessionId)) {
+          this.bindingAdoptionRetries.set(sessionId, work)
+        }
       }
       throw error
     })
+    this.activeTaskPromises.add(tracked)
     this.bindingAdoptions.set(sessionId, tracked)
     return tracked
   }
@@ -1536,6 +1550,7 @@ export class TavernState {
           const next = { ...binding, storyId: id, cardName: ws.card.name }
           // 全部归属校验通过后才通知运行时；同步回调在实际发布之前取消旧请求，不能留下落盘后的异步发信窗口。
           beforePublish?.(existing, next)
+          this.pendingRuntimeClear.delete(binding.sessionId)
           await saveBinding(this.paths, next)
         } catch (error) {
           // 只清理本次创建、落盘后仍未绑定的剧情；原剧情与调用方预先准备的分支都保留。
@@ -1574,7 +1589,7 @@ export class TavernState {
   }
 
   /** 清掉会话全部场景的 standing 钉位（换绑/回收绑定时）。 */
-  private clearStandingPins(sessionId: string): void {
+  clearStandingPins(sessionId: string): void {
     this.appliedStanding.delete(sessionId)
     this.appliedTurnContext.delete(sessionId)
     const prefix = `${sessionId}\0`
@@ -1665,6 +1680,8 @@ export class TavernState {
   /** 清理会话在内存中的全部运行期状态与缓存。 */
   clearSessionRuntime(sessionId: string): void {
     this.clearStandingPins(sessionId)
+    this.pendingRuntimeClear.delete(sessionId)
+    this.deferredTurns.delete(sessionId)
     this.openFloors.delete(sessionId)
     this.currentTurns.delete(sessionId)
     this.currentSteps.delete(sessionId)
@@ -1675,22 +1692,28 @@ export class TavernState {
     this.pendingTemplateInputs.delete(sessionId)
     this.triggerLogs.delete(sessionId)
     this.requestDiagnostics.delete(sessionId)
-    this.sessionTaskTails.delete(sessionId)
-    this.sessionCommitTails.delete(sessionId)
+    const taskTail = this.sessionTaskTails.get(sessionId)
+    if (taskTail && !this.activeTaskPromises.has(taskTail)) this.sessionTaskTails.delete(sessionId)
+    const commitTail = this.sessionCommitTails.get(sessionId)
+    if (commitTail && !this.activeTaskPromises.has(commitTail)) this.sessionCommitTails.delete(sessionId)
     this.helperTurnClosures.delete(sessionId)
     const floorPrefix = `${sessionId}#`
     for (const key of [...this.helperTurnClosures.keys()]) {
       if (key.startsWith(floorPrefix)) this.helperTurnClosures.delete(key)
     }
-    this.bindingAdoptions.delete(sessionId)
+    this.clearedAdoptions.add(sessionId)
+    const adoption = this.bindingAdoptions.get(sessionId)
+    if (adoption && !this.activeTaskPromises.has(adoption)) this.bindingAdoptions.delete(sessionId)
     this.bindingAdoptionRetries.delete(sessionId)
   }
 
   /** 清掉会话绑定文件与运行期内存状态；空白新对话复用旧会话时用来去掉上次留下的角色卡与状态。 */
   async clearBinding(sessionId: string): Promise<void> {
     if (this.openFloors.get(sessionId)?.storyId) {
+      this.pendingRuntimeClear.add(sessionId)
       this.clearStandingPins(sessionId)
     } else {
+      this.pendingRuntimeClear.delete(sessionId)
       this.clearSessionRuntime(sessionId)
     }
     await deleteBinding(this.paths, sessionId)

@@ -1,16 +1,5 @@
 /**
- * Empirical Challenger M3 Adversarial Stress Harness
- * 
- * Specifically probing:
- * 1. Zero disk writes on session file with personaId: null across complete turn lifecycles,
- *    prompt assembly pipeline, multiple sequential turns, and concurrent turn start.
- * 2. Self-healing writeback when a bound persona is deleted:
- *    - Mid-turn loadStoryBinding preserves frozen turn persona without disk write.
- *    - Reading via loadBinding / service.getSessionBinding heals the disk file to fallback/default persona.
- *    - Healing to personaId: null when no fallback exists, followed by zero subsequent disk writes.
- *    - Concurrent readers racing during self-healing writeback (atomic rename / lock safety).
- * 3. High-concurrency rapid floor operations, aborts, and concurrent session deletions/disposals.
- * 4. Memory leak oracle: verifying total eviction across all state maps upon clearSessionRuntime / session disposal.
+ * 会话绑定人设自愈、空人设零写盘、并发楼层中断与会话销毁内存释放对抗压力测试。
  */
 import { mkdtemp, readFile, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'

@@ -10,7 +10,7 @@ import type {} from '@deepseek-ai/dsh-agent-loop'
 import type {} from '@deepseek-ai/dsh-compaction-basic'
 import { joinContextSections } from '@deepseek-ai/dsh-system-prompt'
 import { z } from 'zod'
-import { BOUND_DISCIPLINE, TURN_PLAYBOOK, isHostInjectedUserMessage, isWorkspaceInstructionMessage,
+import { BOUND_DISCIPLINE, TURN_PLAYBOOK, isHostInjectedUserMessage, isTurnScopedNotice, isWorkspaceInstructionMessage,
   stripHarnessIdentity, turnTailHeader } from '../core/dshPrompt.js'
 import { PromptLayoutSchema, type PromptHistoryAnchor, type PromptLayout, type PromptLayoutEntry } from '../core/promptLayout.js'
 import { assertNoControlTokens, mayContainControlTokens } from '../core/promptSafety.js'
@@ -417,9 +417,15 @@ export function projectPresetRequest(options: Readonly<GenerateOptions>, session
   const events = session.snapshotEvents()
   const eventBySeq = new Map(events.map(event => [event.seq, event]))
   const seqByMessageId = new Map<string, SessionSeq>()
+  const turnByMessageId = new Map<string, number>()
+  let currentEventTurn: number | undefined
   for (const event of events) {
+    if (event.type === 'turn/start') currentEventTurn = event.data.turn
     const message = deriveEventMessage(event)
-    if (message) seqByMessageId.set(message.id, event.seq)
+    if (message) {
+      seqByMessageId.set(message.id, event.seq)
+      if (currentEventTurn !== undefined) turnByMessageId.set(message.id, currentEventTurn)
+    }
   }
   const replacements = new Map<SessionSeq, SessionSeq>()
   for (const replacement of foldSurface(events).replacements) {
@@ -468,10 +474,28 @@ export function projectPresetRequest(options: Readonly<GenerateOptions>, session
   const carrierIndex = requestIndexById.get(carrier.id) ?? -1
   /** 某条载体所在输入批次之后的边界（历史轮与本轮同一算法，覆盖同批次紧随其后的 runtime-context）。 */
   const frontierAt = (index: number): number => {
+    const baseMessage = requestMessages[index]
+    const baseTurn = baseMessage ? turnByMessageId.get(baseMessage.id) : undefined
     let batchEnd = index
-    while (requestMessages[batchEnd + 1] && (requestMessages[batchEnd + 1]!.role === 'developer'
-      || isHostInjectedUserMessage(requestMessages[batchEnd + 1]!)
-      && requestMessages[batchEnd + 1]!.source.kind !== 'compact-checkpoint')) batchEnd++
+    while (requestMessages[batchEnd + 1]) {
+      const next = requestMessages[batchEnd + 1]!
+      const nextTurn = turnByMessageId.get(next.id)
+      if (baseTurn !== undefined && nextTurn !== undefined && nextTurn !== baseTurn) break
+      if (planFromMessage(next) !== undefined) break
+      if (next.source.kind === 'dsh-tavern') {
+        if (batchEnd === index && baseMessage?.source.kind === 'tavern-prompt-plan' && !isTurnScopedNotice(next)) {
+          batchEnd++
+          continue
+        }
+        break
+      }
+      if (next.role === 'developer'
+        || (isHostInjectedUserMessage(next) && next.source.kind !== 'compact-checkpoint')) {
+        batchEnd++
+        continue
+      }
+      break
+    }
     let end = 1
     for (const message of requestMessages.slice(0, batchEnd + 1)) {
       const at = positions.get(message.id)

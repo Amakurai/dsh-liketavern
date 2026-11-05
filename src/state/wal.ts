@@ -265,7 +265,10 @@ export class Wal {
   private async assertCoveredFloorDirs(targetFloor:string):Promise<void> {
     const coverage=await this.readCoverage()
     if(!coverage?.length) return
-    const directories=(await readdir(this.rootDir,{withFileTypes:true})).filter(entry=>entry.isDirectory())
+    const directories=(await readdir(this.rootDir,{withFileTypes:true}).catch((error:NodeJS.ErrnoException)=> {
+      if(error.code==='ENOENT') return []
+      throw error
+    })).filter(entry=>entry.isDirectory())
     const names=new Set(directories.map(entry=>entry.name.split(ROLLED_BACK_MARK)[0]!))
     for(const floor of coverage) {
       if(!names.has(sanitizeFloor(floor.floor))) throw new Error(`WAL 楼层缺失：${floor.floor}；请恢复完整日志，不能继续回退或分支`)
@@ -410,7 +413,12 @@ export class Wal {
     return this.enqueue(async () => {
       const dir = join(this.rootDir, sanitizeFloor(floor))
       await this.assertLogPath(dir)
-      if (!(await isDir(dir))) throw new Error(`WAL 楼层缺失或已回滚：${floor}`)
+      for (const marker of WAL_FLOOR_MARKERS) await this.assertLogPath(join(dir, marker))
+      if (!(await isDir(dir)) || (await isUnstartedDir(dir))) {
+        await this.assertWorkspaceReady()
+        await this.assertCoveredFloorDirs(floor)
+        throw new Error(`WAL 楼层缺失或已回滚：${floor}`)
+      }
       const meta = await this.readFloorMeta(dir, floor)
       await this.assertNotRecovering(dir)
       await this.assertWorkspaceReady()

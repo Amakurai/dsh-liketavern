@@ -1,5 +1,5 @@
 /**
- * Adversarial Challenger M3: Session Disposal, clearBinding Edge Cases & Memory Leak Tests
+ * 会话销毁、绑定清理边界条件与运行期内存状态无残留压力回归测试。
  */
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'

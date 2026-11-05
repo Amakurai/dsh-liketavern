@@ -26,6 +26,7 @@ import { mergeTavernCallConfig, resolveTavernReasoningEffort, type AdvertisedRea
 import { BOUND_DISCIPLINE, TURN_PLAYBOOK, UNBOUND_STANDING, isContinueInstruction, isHostInjectedUserMessage, isTurnScopedNotice } from './core/dshPrompt.js'
 import type { SamplingSettings } from './core/types.js'
 import { PRESET_ADAPTER_PROVIDER, PRESET_ADAPTER_SOURCE_PROVIDER } from './node/presetAdapter.js'
+import { installTavernModelSelectionCompat } from './node/modelRoute.js'
 import { attachPresetPlanMessage, createPresetPlanMessage, hasPresetPlanMessage } from './node/presetRequestProjection.js'
 
 export const name = 'dsh-tavern-agent'
@@ -152,6 +153,7 @@ export function apply(ctx: Context): void {
   const service = ctx.get('tavern') as TavernService
   const state = service.state
   const llm = ctx.get('llm') as LlmRuntime | undefined
+  installTavernModelSelectionCompat(ctx)
 
   // rc.1 的 PTC SDK order=5000；旧 order=210 会把角色文本放到 SDK 前，损失工具前缀缓存。
   // 角色卡/预设/世界书原文常含 {{user}}、Handlebars 或代码示例：宿主默认插值遇到未注册变量会让整次
@@ -164,7 +166,15 @@ export function apply(ctx: Context): void {
     text: (context) => (context.agent ? state.appliedTurnContext.get(context.agent.id) ?? '' : ''),
   })
 
-  let outerNoticeGuardInstalled = false
+  let disposeOuterNoticeGuard: (() => void) | undefined
+  const refreshOuterNoticeGuard = () => {
+    disposeOuterNoticeGuard?.()
+    disposeOuterNoticeGuard = ctx.on(
+      'agent/pre-step',
+      async (_payload, innerNext) => normalizeModelSelectionNotices(await innerNext()),
+      { prepend: true },
+    )
+  }
   ctx.on('agent/pre-step', async (payload, next) => {
     if (isHelperMvuBlocked(payload.agent, payload.turn)) {
       restoreHelperMvuInputs(payload.agent, payload.turn, payload.messages)
@@ -193,19 +203,23 @@ export function apply(ctx: Context): void {
     // 不猜旧 header，也不给其它供应商增加一条人工台词。
     let targetIndex = -1
     for (let index = decision.messages.length - 1; index >= 0; index--) {
-      if (!isHostInjectedUserMessage(decision.messages[index]!)) { targetIndex = index; break }
+      const candidate = decision.messages[index]!
+      const text = candidate.content.filter((block) => block.type === 'text').map((block) => block.text).join('\n')
+      if (!isHostInjectedUserMessage(candidate) || isContinueInstruction(text)) { targetIndex = index; break }
     }
     const messages = targetIndex >= 0
       ? decision.messages.map((message, index) => index === targetIndex ? attachPresetPlanMessage(message, plan) : message)
       : [createPresetPlanMessage(plan), ...decision.messages]
     return {...decision,messages}
   }, { prepend: true })
+  refreshOuterNoticeGuard()
+  ctx.on('agent/created', () => {
+    refreshOuterNoticeGuard()
+    return undefined
+  })
 
   ctx.on('system-prompt/assemble', async (_assembly, context, next) => {
-    if (!outerNoticeGuardInstalled) {
-      outerNoticeGuardInstalled = true
-      ctx.on('agent/pre-step', async (_payload, innerNext) => normalizeModelSelectionNotices(await innerNext()), { prepend: true })
-    }
+    refreshOuterNoticeGuard()
     const agent = context.agent
     if (!agent) return next()
     // 每步重新记录；未绑定、阻塞或失败的步骤不能沿用上一步的 standing 与 turn context。

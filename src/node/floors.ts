@@ -267,9 +267,10 @@ function closedTurns(events: readonly SessionEvent[]): { turns: number[]; openTu
  * 续写指令是该轮的驱动消息，必须保留。
  */
 function isReplayableInput(message: UserMessage): boolean {
-  if (isHostInjectedUserMessage(message)) return false
   const text = userMessageText(message)
-  return isContinueInstruction(text) || !isSyntheticUserText(text)
+  if (isContinueInstruction(text)) return true
+  if (isHostInjectedUserMessage(message)) return false
+  return !isSyntheticUserText(text)
 }
 
 /**

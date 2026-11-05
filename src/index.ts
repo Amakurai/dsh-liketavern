@@ -16,6 +16,7 @@ import { createTavernService } from './node/service.js'
 import { recordRequestDiagnostics, registerRequestDiagnostics } from './node/requestDiagnostics.js'
 import { PRESET_ADAPTER_PROVIDER, PRESET_ADAPTER_SOURCE_PROVIDER, registerPresetAdapter } from './node/presetAdapter.js'
 import { createPresetRequestProjector } from './node/presetRequestProjection.js'
+import { installTavernModelSelectionCompat } from './node/modelRoute.js'
 import { onTurnStart, onTurnEnd } from './node/sessionLifecycle.js'
 import { registerPromptInputTracking } from './node/pendingInputs.js'
 import { registerHelperMvuLifecycle, reserveHelperMvuMaintenance } from './node/helperMvuLifecycle.js'
@@ -50,6 +51,7 @@ export async function apply(ctx: Context, config: ReturnType<typeof Config>): Pr
     ctx.logger.warn(`dsh-tavern: agent 预设安装失败：${error instanceof Error ? error.message : String(error)}`)
   }
 
+  installTavernModelSelectionCompat(ctx)
   registerRequestDiagnostics(ctx, state)
   state.presetAdapter = registerPresetAdapter(ctx, (options, model) =>
     projectTavernAdapterRequest(ctx, state, options, model),
@@ -80,11 +82,32 @@ export async function apply(ctx: Context, config: ReturnType<typeof Config>): Pr
   ctx.on('session/created', adoptOrRetireSession)
   ctx.on('agent/created', ({ agent }) => { greetingRetirement.agentCreated(agent); return undefined })
 
-  const disposeSession = async (sessionId: string) => {
-    state.clearSessionRuntime(sessionId)
+  let lastPersistence = ctx.get('sessionPersistence') as { stat?(id: string): Promise<unknown> } | undefined
+  const disposeSession = async (sessionId: string, disposedSession?: Session) => {
+    const initialLive = disposedSession ?? ctx.sessions.get(sessionId as Session['id'])
+    await state.waitForBindingAdoption(sessionId).catch(() => {})
+    await state.waitForSessionTasks(sessionId).catch(() => {})
+    const persistence = (ctx.get('sessionPersistence') as { stat?(id: string): Promise<unknown> } | undefined) ?? lastPersistence
+    if (persistence) lastPersistence = persistence
+    let persisted = false
+    if (persistence?.stat) {
+      try { persisted = (await persistence.stat(sessionId)) !== undefined }
+      catch (err) { persisted = (err as NodeJS.ErrnoException | undefined)?.code !== 'ENOENT' }
+    }
+    const currentLive = ctx.sessions.get(sessionId as Session['id'])
+    if (currentLive && currentLive !== initialLive) return
+    if (persisted) {
+      if (state.openFloors.get(sessionId)?.storyId) {
+        state.pendingRuntimeClear.add(sessionId)
+        state.clearStandingPins(sessionId)
+      } else {
+        state.clearSessionRuntime(sessionId)
+      }
+      return
+    }
     await state.clearBinding(sessionId).catch((err) => ctx.logger.warn(`dsh-tavern: 会话解绑清理失败：${String(err)}`))
   }
-  ctx.on('session/disposed', (session: Session) => { void disposeSession(session.id) })
+  ctx.on('session/disposed', (session: Session) => { void disposeSession(session.id, session) })
   ctx.on('api-session/removed' as any, (sessionId: string) => { void disposeSession(sessionId) })
 
   // 楼层 WAL 与每 turn 检索缓存：只碰 Tavern 模式会话，普通 dsh 助手不受影响。

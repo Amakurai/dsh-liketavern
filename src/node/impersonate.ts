@@ -36,7 +36,7 @@ export interface ImpersonateDeps {
 export async function impersonate({ ctx, state }: ImpersonateDeps, sessionId: string): Promise<{ text: string }> {
   const session = ctx.sessions.get(sessionId as Session['id'])
   if (!session) throw new FloorError('session-not-live', `会话 ${sessionId} 不在线（仅支持当前打开的会话）`)
-  if (!isTavernRuntimeSession(ctx, session)) throw new FloorError('not-tavern', '当前会话不是 Tavern模式')
+  if (!isTavernRuntimeSession(ctx, session)) throw new FloorError('not-tavern', '当前会话不是 Tavern 模式')
   const binding = await state.loadStoryBinding(sessionId)
   if (!binding) throw new FloorError('no-binding', '当前会话未绑定 Tavern 角色卡')
   const agent = ctx.agents.get(session.id)

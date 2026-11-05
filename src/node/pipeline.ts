@@ -11,7 +11,7 @@
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { LlmRuntime, Message } from '@deepseek-ai/dsh-llm'
 import { defaultPreset, type AssembledPrompt } from '../core/assemble.js'
-import { BOUND_DISCIPLINE, TURN_PLAYBOOK, isHostSystemPromptMessage, isSyntheticUserText, turnTailHeader } from '../core/dshPrompt.js'
+import { BOUND_DISCIPLINE, TURN_PLAYBOOK, isHostInjectedUserMessage, isHostSystemPromptMessage, isSyntheticUserText, turnTailHeader } from '../core/dshPrompt.js'
 import { hashToSeed } from '../core/macros.js'
 import { memoryCandidateCount, memoryQuery, memorySearchOptions, selectMemoryBodies } from '../core/memoryRetrieval.js'
 import { clipToTokenBudget, estimateTokens } from '../core/tokenize.js'
@@ -266,7 +266,8 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
       `snapshot=${stableFingerprintHash({ card: promptCard, preset, persona })}`], input.generationType ?? 'normal')
   const hostMessages = input.agent?.session.deriveMessages() ?? []
   const hostHistory = hostMessages.flatMap(message => {
-    if (message.role === 'tool' || message.role === 'developer' || isHostSystemPromptMessage(message)) return []
+    if (message.role === 'tool' || message.role === 'developer' || isHostSystemPromptMessage(message)
+      || (isHostInjectedUserMessage(message) && message.source.kind !== 'compact-checkpoint')) return []
     const text = flattenMessages([message], charName, userName)[0]
     // 无文字图片仍是一条聊天消息，深度计算不能把它吞掉。
     const chat = text ?? (message.content.some(block => block.type === 'image')

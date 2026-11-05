@@ -6,9 +6,16 @@
  * 口径取值：尚未被请求使用的最新选择优先，其次最近请求头，日志都没有时才回退 options。
  * 请求头可能记录本插件的 DeepSeek 布局通道；辅助调用没有提示词布局，映射回同凭证的官方 provider。
  */
+import type { Context } from '@deepseek-ai/cordis';
 import type { Agent } from '@deepseek-ai/dsh-agent';
 export interface SessionModelRoute {
     provider?: string;
     model?: string;
 }
 export declare function sessionModelRoute(agent: Pick<Agent, 'options' | 'session'>): SessionModelRoute;
+/**
+ * 对齐宿主 modelSelection 投影与 SessionController.consumeSelection：
+ * Tavern 将 deepseek-official 请求重写为内部布局通道 tavern-deepseek 后，request/header 记录
+ * provider='tavern-deepseek'。在此将其映射回 deepseek-official 结算，避免 pending/picked 悬空导致跨轮/跨重启重复换模通知。
+ */
+export declare function installTavernModelSelectionCompat(ctx: Context): void;

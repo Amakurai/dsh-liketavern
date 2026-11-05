@@ -10,10 +10,12 @@ import { helperMvuHasAssistant } from './helperMvuLifecycle.js'
 import { hasNormalAssistantStop } from '../core/assistantStream.js'
 import { assertActiveTemplateRuntime, TemplateRuntimeCompatibilityError } from './templateRuntimeGuard.js'
 
-/** 暂缓开层只标记当前宿主轮，不能用它收口旧 MVU 楼层或抹掉待恢复输入。 */
-const deferredTurns = new WeakMap<TavernState, Map<string, number>>()
+function isFloorMissingError(error: unknown, floor: string): boolean {
+  return error instanceof Error && error.message === `WAL 楼层缺失或已回滚：${floor}`
+}
+
 export function isTurnDeferred(state: TavernState, sessionId: string, turn: number): boolean {
-  return deferredTurns.get(state)?.get(sessionId) === turn
+  return state.deferredTurns.get(sessionId) === turn
 }
 
 export async function onTurnStart(state:TavernState,sessionId:string,turn:number,session?:Pick<Session,'id'|'snapshotEvents'>):Promise<void> {
@@ -34,11 +36,9 @@ export async function onTurnStart(state:TavernState,sessionId:string,turn:number
   }
   state.currentTurns.set(sessionId,turn)
   state.currentSteps.set(sessionId,1)
-  let deferred=deferredTurns.get(state)
-  if(!deferred){deferred=new Map();deferredTurns.set(state,deferred)}
-  deferred.set(sessionId,turn)
+  state.deferredTurns.set(sessionId,turn)
   if (await helperMvuPending(state,sessionId,!session || helperMvuHasAssistant(session))) return
-  deferredTurns.get(state)?.delete(sessionId)
+  state.deferredTurns.delete(sessionId)
   const binding = await state.loadStoryBinding(sessionId)
   if (!binding) return
   const ws = await state.storyWorkspace(binding.cardId,binding.storyId)
@@ -71,15 +71,19 @@ export async function onTurnStart(state:TavernState,sessionId:string,turn:number
         await ws.wal.commitFloor(generation.floor)
       }
     }
-    // 普通楼层崩溃自愈：若当前楼层未提交但无生成正文，校验该层完整性并复用
-    try {
-      const existing = await ws.wal.validateFloor(floor)
-      if (!existing.committed) {
-        state.openFloors.set(sessionId, { cardId: binding.cardId, storyId: binding.storyId, floor })
-        return
+    // 普通楼层崩溃自愈：若当前楼层未提交且本轮尚未结束、非待恢复收口楼层，校验该层完整性并复用
+    const turnEnded = state.helperTurnClosures.has(floor)
+      || (session?.snapshotEvents().some(event => event.type === 'turn/end' && event.data.turn === turn) ?? false)
+    if (!turnEnded) {
+      try {
+        const existing = await ws.wal.validateFloor(floor)
+        if (!existing.committed) {
+          state.openFloors.set(sessionId, { cardId: binding.cardId, storyId: binding.storyId, floor })
+          return
+        }
+      } catch (error) {
+        if (!isFloorMissingError(error, floor)) throw error
       }
-    } catch {
-      // 楼层尚不存在或已回滚，正常开启新楼层
     }
 
     await ws.wal.beginFloor(floor)
@@ -107,39 +111,45 @@ async function recoverTemplateCommit(state:TavernState,sessionId:string,turn:num
 
 export async function onTurnEnd(state:TavernState,sessionId:string,session?:Pick<Session,'id'|'snapshotEvents'>):Promise<void> {
   if(session && session.id!==sessionId)throw new Error('模板结束事件与目标会话不一致')
-  const ending=[...(session?.snapshotEvents()??[])].reverse().find(event=>event.type==='turn/start'||event.type==='turn/end')
-  const key=ending?.type==='turn/end'?sessionId+'#t'+ending.data.turn:undefined
-  if(ending?.type==='turn/end' && deferredTurns.get(state)?.get(sessionId)===ending.data.turn) {
-    deferredTurns.get(state)?.delete(sessionId)
-    state.stepNoticeMarks.delete(sessionId)
-    state.turnPlans.delete(sessionId)
-    state.pendingTurnPlans.delete(sessionId)
-    if(key) {
-      const deferredStoryId=state.openFloors.get(sessionId)?.storyId??(await state.loadStoryBinding(sessionId))?.storyId
+  try {
+    const ending=[...(session?.snapshotEvents()??[])].reverse().find(event=>event.type==='turn/start'||event.type==='turn/end')
+    const key=ending?.type==='turn/end'?sessionId+'#t'+ending.data.turn:undefined
+    if(ending?.type==='turn/end' && state.deferredTurns.get(sessionId)===ending.data.turn) {
+      state.deferredTurns.delete(sessionId)
+      state.stepNoticeMarks.delete(sessionId)
+      state.turnPlans.delete(sessionId)
+      state.pendingTurnPlans.delete(sessionId)
+      if(key) {
+        const deferredStoryId=state.openFloors.get(sessionId)?.storyId??(await state.loadStoryBinding(sessionId))?.storyId
+        state.helperTurnClosures.delete(key)
+        state.helperTurnClosures.set(key,{seq:ending.seq,storyId:deferredStoryId,deferred:true})
+        while(state.helperTurnClosures.size>256)state.helperTurnClosures.delete(state.helperTurnClosures.keys().next().value!)
+      }
+      state.currentTurns.delete(sessionId)
+      state.currentSteps.delete(sessionId)
+      // 门控已把未进入模型的原输入放回宿主队列；下次 claim 会按新轮重新发布。
+      state.pendingInputs.delete(sessionId)
+      state.pendingTemplateInputs.delete(sessionId)
+      return
+    }
+    if(!key)return await finishTurn(state,sessionId,session)
+    // 重复投递的旧结束帧不能借当前 openFloors 收口后来的轮次，也不能覆写旧成功回执。
+    const active=state.openFloors.get(sessionId)
+    if(active && active.floor!==key)throw new Error('宿主结束帧与当前楼层不一致')
+    const storyId=state.openFloors.get(sessionId)?.storyId??(await state.loadStoryBinding(sessionId))?.storyId
+    const record=(error?:unknown)=>{
+      if(!key||ending?.type!=='turn/end')return
       state.helperTurnClosures.delete(key)
-      state.helperTurnClosures.set(key,{seq:ending.seq,storyId:deferredStoryId,deferred:true})
+      state.helperTurnClosures.set(key,{seq:ending.seq,storyId,...(error===undefined?{}:{error:String(error instanceof Error?error.message:error).slice(0,2000)})})
       while(state.helperTurnClosures.size>256)state.helperTurnClosures.delete(state.helperTurnClosures.keys().next().value!)
     }
-    state.currentTurns.delete(sessionId)
-    state.currentSteps.delete(sessionId)
-    // 门控已把未进入模型的原输入放回宿主队列；下次 claim 会按新轮重新发布。
-    state.pendingInputs.delete(sessionId)
-    state.pendingTemplateInputs.delete(sessionId)
-    return
+    try{await finishTurn(state,sessionId,session);record()}
+    catch(error){record(error);throw error}
+  } finally {
+    if (!state.openFloors.has(sessionId) && state.pendingRuntimeClear.delete(sessionId)) {
+      state.clearSessionRuntime(sessionId)
+    }
   }
-  if(!key)return finishTurn(state,sessionId,session)
-  // 重复投递的旧结束帧不能借当前 openFloors 收口后来的轮次，也不能覆写旧成功回执。
-  const active=state.openFloors.get(sessionId)
-  if(active && active.floor!==key)throw new Error('宿主结束帧与当前楼层不一致')
-  const storyId=state.openFloors.get(sessionId)?.storyId??(await state.loadStoryBinding(sessionId))?.storyId
-  const record=(error?:unknown)=>{
-    if(!key||ending?.type!=='turn/end')return
-    state.helperTurnClosures.delete(key)
-    state.helperTurnClosures.set(key,{seq:ending.seq,storyId,...(error===undefined?{}:{error:String(error instanceof Error?error.message:error).slice(0,2000)})})
-    while(state.helperTurnClosures.size>256)state.helperTurnClosures.delete(state.helperTurnClosures.keys().next().value!)
-  }
-  try{await finishTurn(state,sessionId,session);record()}
-  catch(error){record(error);throw error}
 }
 
 async function finishTurn(state:TavernState,sessionId:string,session?:Pick<Session,'id'|'snapshotEvents'>):Promise<void> {
@@ -178,15 +188,15 @@ async function finishTurn(state:TavernState,sessionId:string,session?:Pick<Sessi
         if (generation.cardId!==binding.cardId || generation.storyId!==binding.storyId) throw new Error('模板结束恢复的剧情归属不一致')
         await ws.wal.validateFloor(generation.floor)
         entry = {cardId:generation.cardId,storyId:generation.storyId,floor:generation.floor}
-      } else if (!generation) {
+      } else if (!generation || (generation.status!=='prepared' && (generation.sessionId!==sessionId || generation.turn<ending.data.turn))) {
         const floor = `${sessionId}#t${ending.data.turn}`
         try {
           const original = await ws.wal.validateFloor(floor)
           if (!original.committed) {
             entry = { cardId: binding.cardId, storyId: binding.storyId, floor }
           }
-        } catch {
-          // 楼层不存在或已回滚
+        } catch (error) {
+          if (!isFloorMissingError(error, floor)) throw error
         }
       }
     }

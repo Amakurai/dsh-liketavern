@@ -385,6 +385,12 @@ function LorebooksSectionContent(props: { remote: TavernRemote }) {
           disabled={busy}
           placeholder={t('lorebooks.namePlaceholder')}
           onChange={(e) => setNewName(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.nativeEvent?.isComposing && !busy && newName.trim()) {
+              e.preventDefault?.()
+              void createEmpty()
+            }
+          }}
         />
       </Dialog>
     </Section>

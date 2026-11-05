@@ -35,6 +35,8 @@ export declare function cachedAvatar(remote: TavernRemote, cardId: string): Prom
 }>>;
 /** setSessionBinding / clearSessionBinding 成功后调用（先于 reload / 广播）。 */
 export declare function invalidateSessionBinding(sessionId: string): void;
+/** 人设或默认设置变更可能改变任意会话解析出的 personaId / userName；清空绑定缓存并通知已挂载消费者重拉。 */
+export declare function notifyAllSessionBindingsChanged(): void;
 /** 角色卡保存 / 删除后调用（详情与头像一起失效；删除时宿主侧绑定已清，会话绑定缓存靠 TTL 收敛）。 */
 export declare function invalidateCharacter(cardId: string): void;
 /** 本端确认角色写入成功后，先失效缓存再通知所有仍挂载的消费者。 */

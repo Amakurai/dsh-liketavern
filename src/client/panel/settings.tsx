@@ -11,6 +11,7 @@ import { DraftScope, useDraftGuard } from '../drafts.js'
 import { useDraftRestored, useDraftState } from '../draftPersistence.js'
 import { useEffect, useId, useRef, useState } from 'react'
 import { MAX_PRESET_STOP_CHARS, MAX_PRESET_STOP_SEQUENCES } from '../../core/presetSampling.js'
+import { notifyAllSessionBindingsChanged } from '../cache.js'
 import { setSpeakerHeader } from '../displayPrefs.js'
 import { setTavernLocale, useT } from '../i18n.js'
 import { applySettingsPatch, changedSettingsPatch } from '../settingsPatch.js'
@@ -106,6 +107,7 @@ export function SettingsSection(props: { remote: TavernRemote; sessions?: Sessio
         for (const key of Object.keys(patch)) delete unsaved[key]
         return applySettingsPatch(saved, unsaved)
       })
+      if ('defaults' in patch || 'interactiveCards' in patch) notifyAllSessionBindingsChanged()
       toast.show(toastText)
     })
 

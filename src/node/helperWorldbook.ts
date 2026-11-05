@@ -30,8 +30,9 @@ async function names(state:TavernState){const result=await state.listLorebooks()
 async function resolveBook(state:TavernState,value:string):Promise<string|null>{
   name(value);const ids=await names(state)
   if(ids.includes(value))return value
+  const raws=await Promise.all(ids.map(id=>state.loadLorebookJson(id)))
   let found:string|null=null
-  for(const id of ids){const raw=await state.loadLorebookJson(id);if(helperRecord(raw)&&raw.name===value){if(found!==null)throw new Error('世界书名称不唯一，请使用目录中的文件标识');found=id}}
+  for(const [index,id] of ids.entries()){const raw=raws[index];if(helperRecord(raw)&&raw.name===value){if(found!==null)throw new Error('世界书名称不唯一，请使用目录中的文件标识');found=id}}
   return found
 }
 async function rawBook(state:TavernState,binding:SessionBinding,value:string,chat:ChatWorldbooks):Promise<{id:string;raw:unknown|null}> {
@@ -44,7 +45,7 @@ async function rawBook(state:TavernState,binding:SessionBinding,value:string,cha
   return {id,raw:raw===null?null:JSON.parse(raw)}
 }
 async function contextFrom(state:TavernState,binding:SessionBinding,chat:ChatWorldbooks):Promise<HelperWorldbookContext>{
-  const items=await names(state),card=await state.loadCharacter(binding.cardId),embedded=await rawBook(state,binding,CHARACTER,chat)
+  const [items,card,embedded]=await Promise.all([names(state),state.loadCharacter(binding.cardId),rawBook(state,binding,CHARACTER,chat)])
   return {storyId:binding.storyId!,bindingRevision:bindingRevision(state,binding,chat),names:[...items,...(embedded.raw!==null?[CHARACTER]:[]),...Array.from(chat.books.keys(),chatWorldbookRef)],global:binding.lorebookIds.filter(id=>items.includes(id)),characterName:card?.card.name??'',settings:helperWorldbookSettingsCodec.fromNative(state.worldInfoFor(binding),binding.lorebookIds.filter(id=>items.includes(id))),
     character:{primary:binding.characterLorebookId?(items.includes(binding.characterLorebookId)?binding.characterLorebookId:null):(binding.useEmbeddedLorebook!==false&&embedded.raw!==null?CHARACTER:null),additional:(binding.characterLorebookIds??[]).filter(id=>items.includes(id)&&id!==binding.characterLorebookId)},chat:chat.active===null?null:chatWorldbookRef(chat.active)}
 }

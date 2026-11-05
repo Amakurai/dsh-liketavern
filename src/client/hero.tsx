@@ -166,7 +166,8 @@ function HeroCharacterSession(props: HeroProps) {
   useEffect(() => {
     if (!showHero) return
     const onChanged = (e: Event) => {
-      if ((e as CustomEvent<string>).detail === sessionId) bindingLoader.reload()
+      const target = (e as CustomEvent<string | undefined>).detail
+      if (!target || target === sessionId) bindingLoader.reload()
     }
     window.addEventListener(BINDING_CHANGED_EVENT, onChanged)
     return () => window.removeEventListener(BINDING_CHANGED_EVENT, onChanged)
@@ -263,7 +264,7 @@ function HeroCharacterSession(props: HeroProps) {
   const detail = detailLoader.state.status === 'ready' ? detailLoader.state.value : null
   const avatar = avatarLoader.state.status === 'ready' ? avatarLoader.state.value.dataUrl : null
   const selected = binding ? characters.find((c) => c.cardId === binding.cardId) : undefined
-  const chipLabel = binding ? (detail?.name ?? selected?.name ?? t('hero.characterFallback')) : t('hero.pickCharacter')
+  const chipLabel = binding ? (detail?.name ?? selected?.name ?? binding.cardName ?? t('hero.characterFallback')) : t('hero.pickCharacter')
   const variants = detail ? greetingVariants(detail) : []
   // 编辑角色卡会缩短开场白列表，旧空白会话仍可能保存着原下标。预览、计数与
   // 键盘翻页都以同一安全下标为准，避免正文回退到第一条却显示成“8/2”。

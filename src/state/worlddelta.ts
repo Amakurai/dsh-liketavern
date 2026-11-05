@@ -14,8 +14,13 @@ import { array, boolean, enum as enum_, looseObject, minLength, nullable, number
 import type { WorldDelta, WorldInfoEntry } from '../core/types.js'
 import type { WorkspaceFs } from './workspaceFs.js'
 import { withWorkspaceLock } from './workspaceLock.js'
+import { openLedger, writtenSince, type WriteLedger } from './writeLedger.js'
 
 const DELTA_FILE = 'state/world-delta.jsonl'
+
+function sameStat(a: { mtimeMs: number; size: number } | null, b: { mtimeMs: number; size: number } | null): boolean {
+  return a === null || b === null ? a === b : a.mtimeMs === b.mtimeMs && a.size === b.size
+}
 /** 磁盘 JSON 必须满足实际业务形状，不能仅凭 id 就把错型字段送入引擎或编辑器。 */
 const deltaSchema = looseObject({
   id: string().check(minLength(1)), ts: string(), type: enum_(['add', 'update', 'invalidate']),
@@ -29,7 +34,12 @@ const deltaSchema = looseObject({
  */
 
 export class WorldDeltaStore {
-  constructor(private readonly fs: WorkspaceFs) {}
+  private readonly ledger: WriteLedger
+  private cache: { stat: { mtimeMs: number; size: number } | null; revision: number; epoch: number; parsed: readonly WorldDelta[] } | null = null
+
+  constructor(private readonly fs: WorkspaceFs) {
+    this.ledger = openLedger(fs.root)
+  }
 
   private enqueue<T>(task: () => Promise<T>): Promise<T> {
     return withWorkspaceLock(this.fs.root, task)
@@ -49,6 +59,36 @@ export class WorldDeltaStore {
     } catch {
       return null
     }
+  }
+
+  private async readParsedDeltas(): Promise<readonly WorldDelta[]> {
+    const revision = this.ledger.counter
+    const epoch = this.ledger.epoch
+    const stat = await this.fs.stat(DELTA_FILE)
+    if (
+      this.cache &&
+      this.cache.epoch === epoch &&
+      !writtenSince(this.ledger, DELTA_FILE, this.cache.revision) &&
+      sameStat(this.cache.stat, stat)
+    ) {
+      return this.cache.parsed
+    }
+    if (stat === null) {
+      if (!writtenSince(this.ledger, DELTA_FILE, revision) && this.ledger.epoch === epoch) {
+        this.cache = { stat: null, revision, epoch, parsed: [] }
+      }
+      return []
+    }
+    const parsed: WorldDelta[] = []
+    for (const line of await this.readRawLines()) {
+      const delta = WorldDeltaStore.parseLine(line)
+      if (delta) parsed.push(delta)
+    }
+    const afterStat = await this.fs.stat(DELTA_FILE)
+    if (sameStat(stat, afterStat) && !writtenSince(this.ledger, DELTA_FILE, revision) && this.ledger.epoch === epoch) {
+      this.cache = { stat, revision, epoch, parsed }
+    }
+    return parsed
   }
 
   /** 追加一条变化：id = `d-<36 进制毫秒>-<随机 6 hex>`（不依赖行数，回滚后不复用旧 id）；ts 默认当前 ISO。 */
@@ -75,9 +115,7 @@ export class WorldDeltaStore {
   private async listNow(options?: { includeRevoked?: boolean; now?: Date }): Promise<WorldDelta[]> {
     const now = options?.now ?? new Date()
     const out: WorldDelta[] = []
-    for (const line of await this.readRawLines()) {
-      const delta = WorldDeltaStore.parseLine(line)
-      if (!delta) continue
+    for (const delta of await this.readParsedDeltas()) {
       if (!options?.includeRevoked && delta.revoked) continue
       if (delta.expires) {
         const expires = Date.parse(delta.expires)

@@ -90,7 +90,8 @@ function useTavernBound(remote: TavernRemote, sessionId: string, enabled: boolea
     }
     void load()
     const onChanged = (e: Event) => {
-      if ((e as CustomEvent<string>).detail === sessionId) void load()
+      const target = (e as CustomEvent<string | undefined>).detail
+      if (!target || target === sessionId) void load()
     }
     window.addEventListener(BINDING_CHANGED_EVENT, onChanged)
     return () => {

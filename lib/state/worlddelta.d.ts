@@ -16,11 +16,14 @@ import type { WorkspaceFs } from './workspaceFs.js';
  */
 export declare class WorldDeltaStore {
     private readonly fs;
+    private readonly ledger;
+    private cache;
     constructor(fs: WorkspaceFs);
     private enqueue;
     /** 读出全部非空原始行（保留原文，重写时不丢无法解析的行）。 */
     private readRawLines;
     private static parseLine;
+    private readParsedDeltas;
     /** 追加一条变化：id = `d-<36 进制毫秒>-<随机 6 hex>`（不依赖行数，回滚后不复用旧 id）；ts 默认当前 ISO。 */
     append(input: Omit<WorldDelta, 'id' | 'ts'> & {
         ts?: string;

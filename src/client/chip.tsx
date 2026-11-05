@@ -225,7 +225,7 @@ function HeaderChipSession(props: HeaderChipProps) {
   // 会话头部只随被显示的会话挂载：宿主 0.1.7 不再公开 current，由这里登记当前视图。
   useSessionView(sessionId, tavern)
   const bindingLoader = useLoader(() => cachedSessionBinding(remote, sessionId), [sessionId], tavern)
-  useEffect(()=>{const changed=(event:Event)=>{if((event as CustomEvent).detail===sessionId)bindingLoader.reload()};window.addEventListener(BINDING_CHANGED_EVENT,changed);return()=>window.removeEventListener(BINDING_CHANGED_EVENT,changed)},[sessionId,bindingLoader.reload])
+  useEffect(()=>{const changed=(event:Event)=>{const target=(event as CustomEvent<string|undefined>).detail;if(!target||target===sessionId)bindingLoader.reload()};window.addEventListener(BINDING_CHANGED_EVENT,changed);return()=>window.removeEventListener(BINDING_CHANGED_EVENT,changed)},[sessionId,bindingLoader.reload])
   const lastBinding = useRef<{ sessionId: string; binding: SessionBinding | null; canSwipeGreeting: boolean } | null>(null)
   if (bindingLoader.state.status === 'ready') {
     lastBinding.current = {
@@ -466,7 +466,7 @@ function HeaderChipSession(props: HeaderChipProps) {
     <span className="dsh-tavern-ui" style={{ display: 'inline-flex' }}>
       {binding?.storyId&&<HelperScripts key={helperRuntimeKey(sessionId,binding)} remote={remote} sessionId={sessionId} cardId={binding.cardId} sessions={sessions} onCancel={props.onCancel}/>}
       <TavernSeatChip
-        label={binding ? (name ?? listedName ?? t('chip.characterFallback')) : t('hero.pickCharacter')}
+        label={binding ? (name ?? listedName ?? binding.cardName ?? t('chip.characterFallback')) : t('hero.pickCharacter')}
         title={t('hero.pickCharacter')}
         avatarUrl={avatar}
         open={open}

@@ -36,11 +36,12 @@ interface AssistantNode {
 }
 
 /** 同一卡片内会改变 output/render、宏或剧情 helper 身份的绑定字段。 */
-function displayBindingRevision(binding: SessionBinding): string {
+function displayBindingRevision(binding: SessionBinding, userName?: string): string {
   return JSON.stringify([
     binding.storyId,
     binding.presetId,
     binding.personaId,
+    userName ?? '',
     binding.interactiveCards,
     binding.helperMvu === true,
     binding.lorebookIds,
@@ -165,17 +166,23 @@ export function TavernAssistantNode(props: {
   useEffect(() => {
     if (!tavern || typeof window === 'undefined') return
     const changed = (event: Event) => {
-      if ((event as CustomEvent<string>).detail === sessionId) bindingLoader.reload()
+      const target = (event as CustomEvent<string | undefined>).detail
+      if (!target || target === sessionId) bindingLoader.reload()
     }
     window.addEventListener(BINDING_CHANGED_EVENT, changed)
     return () => window.removeEventListener(BINDING_CHANGED_EVENT, changed)
   }, [tavern, sessionId, bindingLoader.reload])
   // 重拉与读取失败时沿用同一会话上次确认的绑定，避免短暂故障卸载互动卡；成功解绑仍立即生效。
-  const lastBinding = useRef<{ sessionId: string; binding: SessionBinding | null } | null>(null)
-  if (bindingLoader.state.status === 'ready') lastBinding.current = { sessionId, binding: bindingLoader.state.value.binding }
+  const lastBinding = useRef<{ sessionId: string; binding: SessionBinding | null; userName?: string } | null>(null)
+  if (bindingLoader.state.status === 'ready') {
+    lastBinding.current = { sessionId, binding: bindingLoader.state.value.binding, userName: bindingLoader.state.value.userName }
+  }
   const binding = bindingLoader.state.status === 'ready'
     ? bindingLoader.state.value.binding
     : (bindingLoader.state.status === 'loading' || bindingLoader.state.status === 'error') && lastBinding.current?.sessionId === sessionId ? lastBinding.current.binding : null
+  const userName = bindingLoader.state.status === 'ready'
+    ? bindingLoader.state.value.userName
+    : (bindingLoader.state.status === 'loading' || bindingLoader.state.status === 'error') && lastBinding.current?.sessionId === sessionId ? lastBinding.current.userName : undefined
   const detail = useLoader(
     () => cachedCharacterDetail(remote, binding!.cardId),
     [binding?.cardId],
@@ -273,7 +280,7 @@ export function TavernAssistantNode(props: {
           cardId={binding.cardId}
           name={name || t('assistant.characterFallback')}
           characterRevision={currentDetail?.revision}
-          bindingRevision={displayBindingRevision(binding)}
+          bindingRevision={displayBindingRevision(binding, userName)}
           rawText={text}
           fileMentions={mentions}
           media={images}

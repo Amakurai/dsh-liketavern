@@ -7,6 +7,7 @@ import { useDraftState } from '../draftPersistence.js'
 import { randomUuid } from '../../core/secureRandom.js'
 import { useRef, useState } from 'react'
 import { IconEditOutlineMedium, IconTrashOutlineMedium, IconUserOutlineMedium } from '@deepseek-ai/dsh-client-ui-primitives'
+import { notifyAllSessionBindingsChanged } from '../cache.js'
 import { useT } from '../i18n.js'
 import type { Persona, TavernRemote } from '../types.js'
 import { Badge, Btn, ConfirmDialog, Err, Field, IconBtn, SaveBar, SearchEmpty, SearchInput, Section, Select, Skeleton, clickableProps, errOf, runAsync, useLoader, useToast } from '../util.js'
@@ -64,6 +65,7 @@ export function PersonasSection(props: { remote: TavernRemote }) {
         setEditing(saved)
         setBaseline(JSON.stringify(saved))
         if (r.value.defaultWarning) setError(t('personas.defaultFailed', { message: r.value.defaultWarning }))
+        notifyAllSessionBindingsChanged()
         toast.show(t('personas.saved', { name: editing.name }))
         reload()
       }
@@ -79,6 +81,7 @@ export function PersonasSection(props: { remote: TavernRemote }) {
       else {
         if (editing?.id === toDelete.id) { setEditing(null); setBaseline(null) }
         setToDelete(null)
+        notifyAllSessionBindingsChanged()
         reload()
       }
     })
@@ -95,7 +98,10 @@ export function PersonasSection(props: { remote: TavernRemote }) {
       const r = await remote.updateSettings({ patch: { defaults: { personaId: id } } })
       const err = errOf(r)
       if (err) setError(err)
-      else toast.show(t('personas.defaultSet'))
+      else {
+        notifyAllSessionBindingsChanged()
+        toast.show(t('personas.defaultSet'))
+      }
     })
   }
 

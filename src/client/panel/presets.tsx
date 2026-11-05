@@ -10,6 +10,7 @@ import { useEffect, useRef, useState } from 'react'
 import { IconDownloadOutlineMedium, IconEditOutlineMedium, IconFolderOpenOutlineMedium, IconListPenOutlineMedium, IconTrashOutlineMedium } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { CardRegexScript, ChatRole, PresetEntry, PromptPreset } from '../../core/types.js'
 import type { PresetSummary, TavernRemote } from '../types.js'
+import { notifyAllSessionBindingsChanged } from '../cache.js'
 import { t as tBare, useT } from '../i18n.js'
 import { Badge, Btn, ConfirmDialog, Err, Field, FileBtn, IconBtn, Muted, NumInput, RegexScriptRow, SaveBar, SearchEmpty, SearchInput, Section, Select, Skeleton, Toggle, clickableProps, downloadJson, errOf, readJsonFile, runAsync, useLoader, useToast } from '../util.js'
 
@@ -219,6 +220,7 @@ export function PresetsSection(props: { remote: TavernRemote }) {
       if (err) setError(err)
       else {
         if ((editingId ?? editing?.identifier) === toDelete) resetEditor()
+        notifyAllSessionBindingsChanged()
         setToDelete(null)
         reload()
       }
@@ -248,7 +250,10 @@ export function PresetsSection(props: { remote: TavernRemote }) {
       const r = await remote.updateSettings({ patch: { defaults: { presetId: id } } })
       const err = errOf(r)
       if (err) setError(err)
-      else toast.show(t('presets.setDefaultDone'))
+      else {
+        notifyAllSessionBindingsChanged()
+        toast.show(t('presets.setDefaultDone'))
+      }
     })
   }
 

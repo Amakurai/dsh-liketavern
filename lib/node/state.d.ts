@@ -48,6 +48,21 @@ interface WorkspaceHandle {
     wal: Wal;
     memory: MemoryStore;
     deltas: WorldDeltaStore;
+    plain?: {
+        fs: WorkspaceFs;
+        memory: MemoryStore;
+        deltas: WorldDeltaStore;
+    };
+    chatLoreCache?: {
+        rev: number;
+        stat: {
+            mtimeMs: number;
+            size: number;
+        } | null;
+        revision: number;
+        epoch: number;
+        entries: WorldInfoEntry[];
+    };
 }
 export declare class TavernState {
     readonly paths: TavernPaths;
@@ -306,6 +321,11 @@ export declare class TavernState {
     saveJournal(cardId: string, text: string, storyId?: string, expectedRevision?: string | null): Promise<string>;
     getChatLorebook(cardId: string, storyId?: string): Promise<unknown>;
     invalidateChatLorebook(cardId: string, storyId: string): void;
+    /**
+     * 读取并缓存剧情聊天世界书归一化条目（结合修订号、WriteLedger 与 stat 指纹，捕获面板保存、卡面桥与 WAL 回滚）。
+     * 损坏文件不进缓存，直接抛出供上层决定报错或降级。
+     */
+    loadChatLorebookEntries(cardId: string, storyId?: string, existingHandle?: WorkspaceHandle): Promise<WorldInfoEntry[]>;
     saveChatLorebook(cardId: string, json: unknown, storyId?: string, expectedRevision?: string): Promise<string>;
     listLorebooks(): Promise<string[]>;
     /** 读取世界书原始 JSON（供设置面板编辑）；不存在或损坏返回 null。 */
@@ -450,7 +470,7 @@ export declare class TavernState {
     private plainFs;
     /**
      * 面板/服务层写路径专用的工作区句柄：floor 恒为 null 的文件面（绝不记 WAL），
-     * memory/deltas 建在这个无楼层文件面上。供 service 面板写路径使用；
+     * memory/deltas 建在这个无楼层文件面上并随工作区句柄缓存复用，避免面板编辑与后台维护每次丢失解析缓存；
      * turn 流程内的写路径仍走 workspace(cardId) + withFloor(openFloors 的 entry.floor)。
      */
     plainWorkspace(cardId: string, storyId?: string): Promise<{

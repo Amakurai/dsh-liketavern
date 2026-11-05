@@ -13,7 +13,7 @@ import { CARD_VARIABLE_STYLES } from '../styles.js'
 import { PersistentEditor, useDraftRestored, useDraftState } from '../draftPersistence.js'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Button, IconArchiveOutlineMedium, IconDownloadOutlineMedium, IconRefreshOutlineMedium, IconTrashOutlineMedium, IconUserOutlineMedium, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
-import { cachedAvatar, cachedCharacterDetail, invalidateCharacter, notifyCharacterChanged } from '../cache.js'
+import { cachedAvatar, cachedCharacterDetail, invalidateCharacter, notifyAllSessionBindingsChanged, notifyCharacterChanged } from '../cache.js'
 import { filterCharacters } from '../characterSearch.js'
 import { useT } from '../i18n.js'
 import type { CharacterDeletePlan, CharacterDetail, CharacterInspect, CharacterSummary, TavernRemote } from '../types.js'
@@ -519,6 +519,7 @@ function CharactersSectionContent(props: { remote: TavernRemote }) {
             : t('characters.deleted', { name: toDelete.name }),
         )
         invalidateCharacter(toDelete.cardId)
+        notifyAllSessionBindingsChanged()
         setToDelete(null)
         reload()
       }
@@ -714,6 +715,12 @@ function CharactersSectionContent(props: { remote: TavernRemote }) {
             value={newName}
             placeholder={t('characters.create.namePlaceholder')}
             onChange={(e) => { if (!operationPending.current) setNewName(e.target.value) }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.nativeEvent?.isComposing && !busy && newName.trim()) {
+                e.preventDefault?.()
+                void createCharacter()
+              }
+            }}
           />
         </Field>
       </Dialog>

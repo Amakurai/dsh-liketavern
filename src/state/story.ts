@@ -53,12 +53,12 @@ export async function listStories(cardRoot: string): Promise<StorySummary[]> {
     if (error.code === 'ENOENT') return []
     throw error
   })
-  const items: StorySummary[] = []
-  for (const entry of entries) {
-    if (!entry.isDirectory() || !/^(story-|legacy-)/.test(entry.name)) continue
-    // 已发布状态损坏必须报告；.preparing-* 是未发布草稿，不会列为可选剧情。
-    items.push(await readStory(cardRoot, entry.name))
-  }
+  // 已发布状态损坏必须报告；.preparing-* 是未发布草稿，不会列为可选剧情。
+  const items = await Promise.all(
+    entries
+      .filter((entry) => entry.isDirectory() && /^(story-|legacy-)/.test(entry.name))
+      .map((entry) => readStory(cardRoot, entry.name)),
+  )
   return items.sort((a, b) => a.createdAt.localeCompare(b.createdAt))
 }
 

@@ -47,6 +47,7 @@ import type { TavernConfig } from './config.js'
 import { ensurePaths, sessionFile, type TavernPaths } from './paths.js'
 import { assertSessionImportComplete } from './sessionArchiveMarker.js'
 import { withWorkspaceLock } from '../state/workspaceLock.js'
+import { openLedger, writtenSince } from '../state/writeLedger.js'
 import { discardStory, legacyStoryId, newStoryId, readStory, snapshotStory, storyRoot, listStories, type StorySummary } from '../state/story.js'
 
 // Persona 是纯数据形状，定义在 core/persona（remote 契约引用），此处 re-export 保持现有 import 不断。
@@ -207,6 +208,8 @@ interface WorkspaceHandle {
   wal: Wal
   memory: MemoryStore
   deltas: WorldDeltaStore
+  plain?: { fs: WorkspaceFs; memory: MemoryStore; deltas: WorldDeltaStore }
+  chatLoreCache?: { rev: number; stat: { mtimeMs: number; size: number } | null; revision: number; epoch: number; entries: WorldInfoEntry[] }
 }
 
 export class TavernState {
@@ -583,10 +586,14 @@ export class TavernState {
     const baseKey = this.assetFileKey(base)
     const matches: string[] = []
     const ids = await this.assetFileIds(fs, dir)
-    for (const candidate of ids) {
+    const candidates = ids.filter((candidate) => {
       const key = this.assetFileKey(candidate)
-      if (key !== baseKey && !(key.startsWith(`${baseKey}-`) && /^\d+$/.test(key.slice(baseKey.length + 1)))) continue
-      const raw = await fs.readText(`${dir}/${candidate}.json`)
+      return key === baseKey || (key.startsWith(`${baseKey}-`) && /^\d+$/.test(key.slice(baseKey.length + 1)))
+    })
+    const raws = candidates.length > 0 ? await fs.readTextMany(candidates.map((candidate) => `${dir}/${candidate}.json`)) : []
+    for (const [index, candidate] of candidates.entries()) {
+      const key = this.assetFileKey(candidate)
+      const raw = raws[index] ?? null
       if (raw === null) continue
       let existing: string | null = null
       try {
@@ -612,10 +619,14 @@ export class TavernState {
     const baseKey = this.assetFileKey(base)
     const matches: string[] = []
     let fallbackLegacy: string | null = null
-    for (const candidate of await this.assetFileIds(fs, dir)) {
+    const candidates = (await this.assetFileIds(fs, dir)).filter((candidate) => {
       const key = this.assetFileKey(candidate)
-      if (key !== baseKey && !(key.startsWith(`${baseKey}-`) && /^\d+$/.test(key.slice(baseKey.length + 1)))) continue
-      const raw = await fs.readText(`${dir}/${candidate}.json`)
+      return key === baseKey || (key.startsWith(`${baseKey}-`) && /^\d+$/.test(key.slice(baseKey.length + 1)))
+    })
+    const raws = candidates.length > 0 ? await fs.readTextMany(candidates.map((candidate) => `${dir}/${candidate}.json`)) : []
+    for (const [index, candidate] of candidates.entries()) {
+      const key = this.assetFileKey(candidate)
+      const raw = raws[index] ?? null
       if (raw === null) continue
       let existing: string | null = null
       let existingSourceId: string | null = null
@@ -973,6 +984,55 @@ export class TavernState {
 
   invalidateChatLorebook(cardId:string,storyId:string):void {assertValidCardId(cardId);this.bumpAssetRev('chatlore:'+cardId+':'+storyId)}
 
+  /**
+   * 读取并缓存剧情聊天世界书归一化条目（结合修订号、WriteLedger 与 stat 指纹，捕获面板保存、卡面桥与 WAL 回滚）。
+   * 损坏文件不进缓存，直接抛出供上层决定报错或降级。
+   */
+  async loadChatLorebookEntries(cardId: string, storyId?: string, existingHandle?: WorkspaceHandle): Promise<WorldInfoEntry[]> {
+    const handle = existingHandle ?? (await this.storyWorkspace(cardId, storyId))
+    const ledger = openLedger(handle.fs.root)
+    const rev = this.assetRevision(`chatlore:${cardId}${storyId ? ':' + storyId : ''}`)
+    const revision = ledger.counter
+    const epoch = ledger.epoch
+    const stat = await handle.fs.stat(CHAT_WORLDBOOK_PATH)
+    const cached = handle.chatLoreCache
+    if (
+      cached &&
+      cached.rev === rev &&
+      cached.epoch === epoch &&
+      !writtenSince(ledger, CHAT_WORLDBOOK_PATH, cached.revision) &&
+      (cached.stat === null || stat === null ? cached.stat === stat : cached.stat.mtimeMs === stat.mtimeMs && cached.stat.size === stat.size)
+    ) {
+      return cached.entries
+    }
+    if (stat === null) {
+      if (!writtenSince(ledger, CHAT_WORLDBOOK_PATH, revision) && ledger.epoch === epoch) {
+        handle.chatLoreCache = { rev, stat: null, revision, epoch, entries: [] }
+      }
+      return []
+    }
+    const raw = await handle.fs.readText(CHAT_WORLDBOOK_PATH)
+    if (raw === null) {
+      const afterStat = await handle.fs.stat(CHAT_WORLDBOOK_PATH)
+      if (afterStat === null && !writtenSince(ledger, CHAT_WORLDBOOK_PATH, revision) && ledger.epoch === epoch) {
+        handle.chatLoreCache = { rev, stat: null, revision, epoch, entries: [] }
+      }
+      return []
+    }
+    const entries = parseLorebook(JSON.parse(raw), { source: 'chat', sourceRef: 'chat-lorebook' })
+    const afterStat = await handle.fs.stat(CHAT_WORLDBOOK_PATH)
+    if (
+      afterStat !== null &&
+      afterStat.mtimeMs === stat.mtimeMs &&
+      afterStat.size === stat.size &&
+      !writtenSince(ledger, CHAT_WORLDBOOK_PATH, revision) &&
+      ledger.epoch === epoch
+    ) {
+      handle.chatLoreCache = { rev, stat, revision, epoch, entries }
+    }
+    return entries
+  }
+
   async saveChatLorebook(cardId: string, json: unknown, storyId?: string, expectedRevision?: string): Promise<string> {
     parseLorebook(json, { source: 'chat', sourceRef: 'chat-lorebook' })
     const { fs } = await this.plainWorkspace(cardId, storyId)
@@ -1188,14 +1248,21 @@ export class TavernState {
   async listPersonas(): Promise<Persona[]> {
     const fs = await this.rootFs()
     const ids = (await this.assetFileIds(fs, 'personas')).filter(id => id && id !== '.' && id !== '..' && this.assetFileId(id) === id)
-    // 并行读取：人设是设置面板与芯片的高频列表，串行 await 会线性放大 I/O 等待。
+    // 并行读取并复用修订缓存：人设是设置面板、芯片与默认解析的高频列表，已缓存条目免去重复读盘解析。
     const parsed = await Promise.all(
       ids.map(async (id) => {
+        const rev = this.assetRevision(`persona:${id}`)
+        const cached = this.personaCache.get(id)
+        if (cached && cached.rev === rev && cached.value !== null) return cached.value
+        let value: Persona | null = null
         try {
-          return parseStoredPersona(JSON.parse((await fs.readText(`personas/${id}.json`))!), id)
+          const raw = await fs.readText(`personas/${id}.json`)
+          if (raw !== null) value = parseStoredPersona(JSON.parse(raw), id)
         } catch {
-          return null // 坏文件跳过
+          value = null // 坏文件跳过
         }
+        if (value !== null) this.personaCache.set(id, { rev, value })
+        return value
       }),
     )
     return parsed.filter((p): p is Persona => p !== null).sort((a, b) => a.name.localeCompare(b.name))
@@ -1346,20 +1413,19 @@ export class TavernState {
 
   /** 某会话生效的全部正则（全局 + 当前角色卡内嵌 + 当前预设内嵌）。 */
   async rulesFor(binding: SessionBinding): Promise<RegexRule[]> {
-    const global = await this.listRegexRules()
-    const ws = await this.workspace(binding.cardId)
-    const cardRules = await this.cardRegexRules(binding.cardId, ws)
+    const [global, cardRules, preset] = await Promise.all([
+      this.listRegexRules(),
+      this.workspace(binding.cardId).then((ws) => this.cardRegexRules(binding.cardId, ws)),
+      binding.presetId ? this.loadPreset(binding.presetId) : Promise.resolve(null),
+    ])
     let presetRules: RegexRule[] = []
-    if (binding.presetId) {
-      const preset = await this.loadPreset(binding.presetId)
-      if (preset?.regexScripts && preset.regexScripts.length > 0) {
-        const cached = this.presetRegexCache.get(preset)
-        if (cached && cached.sourceRef === binding.presetId) {
-          presetRules = cached.value
-        } else {
-          presetRules = compilePresetRegexScripts(preset.regexScripts, binding.presetId)
-          this.presetRegexCache.set(preset, { sourceRef: binding.presetId, value: presetRules })
-        }
+    if (binding.presetId && preset?.regexScripts && preset.regexScripts.length > 0) {
+      const cached = this.presetRegexCache.get(preset)
+      if (cached && cached.sourceRef === binding.presetId) {
+        presetRules = cached.value
+      } else {
+        presetRules = compilePresetRegexScripts(preset.regexScripts, binding.presetId)
+        this.presetRegexCache.set(preset, { sourceRef: binding.presetId, value: presetRules })
       }
     }
     return [...global, ...cardRules, ...presetRules]
@@ -1803,13 +1869,16 @@ export class TavernState {
 
   /**
    * 面板/服务层写路径专用的工作区句柄：floor 恒为 null 的文件面（绝不记 WAL），
-   * memory/deltas 建在这个无楼层文件面上。供 service 面板写路径使用；
+   * memory/deltas 建在这个无楼层文件面上并随工作区句柄缓存复用，避免面板编辑与后台维护每次丢失解析缓存；
    * turn 流程内的写路径仍走 workspace(cardId) + withFloor(openFloors 的 entry.floor)。
    */
   async plainWorkspace(cardId: string, storyId?: string): Promise<{ fs: WorkspaceFs; memory: MemoryStore; deltas: WorldDeltaStore }> {
     const handle = await this.storyWorkspace(cardId, storyId)
-    const fs = new WorkspaceFs(handle.fs.root, null)
-    return { fs, memory: new MemoryStore(fs), deltas: new WorldDeltaStore(fs) }
+    if (!handle.plain) {
+      const fs = new WorkspaceFs(handle.fs.root, null)
+      handle.plain = { fs, memory: new MemoryStore(fs), deltas: new WorldDeltaStore(fs) }
+    }
+    return handle.plain
   }
 }
 

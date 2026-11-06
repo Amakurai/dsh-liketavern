@@ -184,6 +184,14 @@ async function forkChildSession(ctx: Context, source: Session, seed: readonly Se
       child.inbox.clear()
       const controller = ctx.get('sessionController') as { agents?: { selectionFor?(agent: Agent): unknown } } | undefined
       try { controller?.agents?.selectionFor?.(child) } catch { /* 单测未挂 modelSelection 投影时忽略 */ }
+      if (copied?.provider && copied?.model) {
+        try {
+          ;(child as { model?: { select?(sel: { provider: string; model: string }): void } }).model?.select?.({
+            provider: copied.provider,
+            model: copied.model,
+          })
+        } catch { /* 单测未挂 modelSelection 投影或旧宿主无 child.model 时忽略 */ }
+      }
       await presets.mount(agentCtx, resolvedId)
     },
   }

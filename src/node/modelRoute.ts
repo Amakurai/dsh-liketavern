@@ -6,18 +6,22 @@
  * 口径取值：尚未被请求使用的最新选择优先，其次最近请求头，日志都没有时才回退 options。
  * 请求头可能记录本插件的 DeepSeek 布局通道；辅助调用没有提示词布局，映射回同凭证的官方 provider。
  */
-import { Service, symbols, Context } from '@deepseek-ai/cordis'
-import { AgentRegistry, AgentModel, type Agent } from '@deepseek-ai/dsh-agent'
-import { AgentLoop } from '@deepseek-ai/dsh-agent-loop'
-import { ToolRuntime } from '@deepseek-ai/dsh-tools'
-import { NativeToolExecutor } from '@deepseek-ai/dsh-tool-executor-native'
-import { WorkingDirectoryService } from '@deepseek-ai/dsh-working-directory'
-import { SandboxPolicyService } from '@deepseek-ai/dsh-sandbox-policy'
+import type { Context } from '@deepseek-ai/cordis'
+import type { Agent } from '@deepseek-ai/dsh-agent'
 import { PRESET_ADAPTER_PROVIDER, PRESET_ADAPTER_SOURCE_PROVIDER } from './presetAdapter.js'
 
-if (typeof (AgentModel as any)?.prototype?.current === 'function') {
-  const origCurrent = (AgentModel as any).prototype.current
-  ;(AgentModel as any).prototype.current = function () {
+const wrappedAgents = new WeakSet<object>()
+const patchedAgentProtos = new WeakSet<object>()
+const patchedModelProtos = new WeakSet<object>()
+const activeStepSelections = new WeakMap<object, SelectionEntry>()
+
+function patchAgentModelPrototype(model: unknown): void {
+  if (!model || typeof model !== 'object') return
+  const proto = Object.getPrototypeOf(model) as { current?: () => unknown } | null
+  if (!proto || typeof proto.current !== 'function' || patchedModelProtos.has(proto)) return
+  patchedModelProtos.add(proto)
+  const origCurrent = proto.current
+  proto.current = function (this: any) {
     const state = this.readState?.()
     if (state?.pending) return { ...state.pending }
     if (this.options?.provider && this.options?.model) {
@@ -34,256 +38,87 @@ if (typeof (AgentModel as any)?.prototype?.current === 'function') {
   }
 }
 
-if (typeof (SandboxPolicyService as any)?.prototype?.overrideOf === 'function') {
-  const origOverrideOf = (SandboxPolicyService as any).prototype.overrideOf
-  ;(SandboxPolicyService as any).prototype.overrideOf = function (session: any) {
-    if (!this.sandboxModeProjectionHandle) return undefined
-    return origOverrideOf.call(this, session)
+/**
+ * 同步 DSH 0.2.2-rc.1 ReactLoopAgent 在单步 preStep -> prepareRequest 期间锁定的 selection：
+ * Tavern 在 agent/request 中将 deepseek-official 重写为内部布局通道 tavern-deepseek 并合入预设 reasoningEffort；
+ * 直接在实时 agent 实例及其原型上同步当步 selection，不静态依赖私有包导出，兼容 0.2.1-rc.5 与 0.2.2-rc.1。
+ */
+export function ensureAgentRequestSelectionSync(agent: unknown, stepSelection?: unknown): void {
+  if (!agent || typeof agent !== 'object') return
+  const machine = agent as Record<string, any>
+  if (stepSelection && typeof stepSelection === 'object') {
+    activeStepSelections.set(machine, stepSelection as SelectionEntry)
+    machine._activeSelection = stepSelection
   }
-}
-
-if (typeof (WorkingDirectoryService as any)?.prototype?.get === 'function') {
-  const origGet = (WorkingDirectoryService as any).prototype.get
-  ;(WorkingDirectoryService as any).prototype.get = function (session: any) {
-    if (!this.workingDirectoryProjectionHandle) {
-      return session?.header?.cwd ?? this.defaultDirectory
-    }
-    return origGet.call(this, session)
-  }
-}
-
-if (typeof (WorkingDirectoryService as any)?.prototype?.ensure === 'function') {
-  const origEnsure = (WorkingDirectoryService as any).prototype.ensure
-  ;(WorkingDirectoryService as any).prototype.ensure = async function (agent: any, signal: any) {
-    if (!this.workingDirectoryProjectionHandle && this.ctx?.sessionProjections) {
-      try {
-        await this[Service.init]?.()
-      } catch {}
-    }
-    if (!this.workingDirectoryProjectionHandle) {
-      return this.get(agent?.session)
-    }
-    return origEnsure.call(this, agent, signal)
-  }
-}
-
-if (typeof (ToolRuntime as any)?.prototype?.selectExecutor === 'function') {
-  const origSelectExecutor = (ToolRuntime as any).prototype.selectExecutor
-  ;(ToolRuntime as any).prototype.selectExecutor = function (scope: any) {
-    try {
-      return origSelectExecutor.call(this, scope)
-    } catch (err: any) {
-      if (err?.code === 'TOOL_EXECUTOR_UNAVAILABLE' || err?.name === 'ToolExecutorUnavailableError') {
-        return new NativeToolExecutor(this.ctx)
-      }
-      throw err
-    }
-  }
-}
-
-if (typeof (ToolRuntime as any)?.prototype?.modeFor !== 'function') {
-  ;(ToolRuntime as any).prototype.modeFor = function (scope: any) {
-    try {
-      const exec = this.selectExecutor(scope)
-      if (exec?.constructor?.name === 'PtcExecutor') return 'ptc'
-      if (exec?.constructor?.name === 'NativeToolExecutor') return 'native'
-      return undefined
-    } catch {
-      return undefined
-    }
-  }
-}
-
-if (typeof (ToolRuntime as any)?.prototype?.execute === 'function') {
-  const origExecute = (ToolRuntime as any).prototype.execute
-  ;(ToolRuntime as any).prototype.execute = async function (input: any) {
-    const isSingle = input && !input.calls && (input.name !== undefined || input.callId !== undefined)
-    if (isSingle) {
-      const call = {
-        id: input.callId ?? 'call-1',
-        name: input.name,
-        arguments: input.arguments,
-      }
-      const batchInput = {
-        ...input,
-        calls: [call],
-      }
-      const batchResult = await origExecute.call(this, batchInput)
-      const first = batchResult?.results?.[0]?.result ?? batchResult?.results?.[0]
-      return first ?? batchResult
-    }
-    return origExecute.call(this, input)
-  }
-}
-
-try {
-  const EventsService = (new Context() as any).events?.constructor
-  if (typeof EventsService?.prototype?.waterfall === 'function') {
-    const origWaterfall = EventsService.prototype.waterfall
-    EventsService.prototype.waterfall = function (...args: any[]) {
-      const name = typeof args[0] === 'string' ? args[0] : typeof args[1] === 'string' ? args[1] : undefined
-      if (name === 'agent/pre-step') {
-        const payload = typeof args[0] === 'object' && args[0] !== null ? args[0] : typeof args[1] === 'object' && args[1] !== null ? args[1] : undefined
-        if (payload && !payload.modelSelection && payload.agent) {
-          const route = sessionModelRoute(payload.agent)
-          payload.modelSelection = {
-            provider: route.provider ?? payload.agent.options?.provider ?? 'deepseek-official',
-            model: route.model ?? payload.agent.options?.model ?? 'deepseek-chat',
-            ...(route.reasoningEffort ? { reasoningEffort: route.reasoningEffort } : {}),
-          }
+  patchAgentModelPrototype(machine.model)
+  const proto = Object.getPrototypeOf(machine) as { preStep?: (...args: any[]) => Promise<any> } | null
+  if (proto && typeof proto.preStep === 'function' && !patchedAgentProtos.has(proto)) {
+    patchedAgentProtos.add(proto)
+    const origPreStep = proto.preStep
+    proto.preStep = async function (this: any, target: any, position: any) {
+      patchAgentModelPrototype(this.model)
+      if (!this.requestHeaderLogged && this.options?.provider && this.options?.model) {
+        const current = this.model?.current?.()
+        if (!current || current.provider !== this.options.provider || current.model !== this.options.model) {
+          this.model?.select?.({
+            provider: this.options.provider,
+            model: this.options.model,
+            ...(this.options.reasoningEffort !== undefined ? { reasoningEffort: this.options.reasoningEffort } : {}),
+          })
         }
       }
-      return origWaterfall.apply(this, args)
+      if (this.model && typeof this.model.current === 'function' && this.model.current() === undefined) {
+        const route = sessionModelRoute(this)
+        const fallbackRoute = route.provider && route.model
+          ? {
+              provider: route.provider,
+              model: route.model,
+              ...(route.reasoningEffort !== undefined ? { reasoningEffort: route.reasoningEffort } : {}),
+            }
+          : {
+              provider: this.options?.provider || 'deepseek-official',
+              model: this.options?.model || 'deepseek-chat',
+            }
+        this.model.select?.(fallbackRoute)
+      }
+      const decision = await origPreStep.call(this, target, position)
+      if (decision?.selection && typeof decision.selection === 'object') {
+        this._activeSelection = decision.selection
+        activeStepSelections.set(this, decision.selection as SelectionEntry)
+      }
+      return decision
     }
   }
-} catch {}
-
-if (typeof (AgentRegistry as any)?.prototype?.setFactory === 'function') {
-  const origSetFactory = (AgentRegistry as any).prototype.setFactory
-  ;(AgentRegistry as any).prototype.setFactory = function (factory: any) {
-    if (this.factory !== undefined) {
-      const target = (factory as any)?.[symbols.original] ?? factory
-      if (this.factory.target === target) {
-        return () => {}
+  if (!wrappedAgents.has(machine) && typeof machine.dispatch?.waterfall === 'function') {
+    wrappedAgents.add(machine)
+    const origWaterfall = machine.dispatch.waterfall
+    machine.dispatch.waterfall = async function (this: any, name: string, payload: any, ...rest: any[]) {
+      if (name === 'agent/pre-step' && payload?.modelSelection && typeof payload.modelSelection === 'object') {
+        activeStepSelections.set(machine, payload.modelSelection as SelectionEntry)
+        machine._activeSelection = payload.modelSelection
       }
-    }
-    return origSetFactory.call(this, factory)
-  }
-}
-
-if (typeof (AgentRegistry as any)?.prototype?.requireFactory === 'function') {
-  const origRequireFactory = (AgentRegistry as any).prototype.requireFactory
-  ;(AgentRegistry as any).prototype.requireFactory = function () {
-    if (!this.factory && this.ctx?.agentLoop) {
-      try {
-        this.setFactory(this.ctx.agentLoop)
-      } catch {}
-    }
-    return origRequireFactory.call(this)
-  }
-}
-
-let patchedReactLoop = false
-if (typeof (AgentLoop as any)?.prototype?.initializeAgent === 'function') {
-  const origInitializeAgent = (AgentLoop as any).prototype.initializeAgent
-  ;(AgentLoop as any).prototype.initializeAgent = async function (ownerCtx: any, options: any) {
-    if (!this.modelProjectionHandle) {
-      await this[Service.init]?.()
-    }
-    const agents = this.runtime?.ctx?.agents
-    if (agents && !agents.turnBoundaryProjectionHandle) {
-      await agents[Service.init]?.()
-    }
-    const loopCtx = this.runtime?.ctx
-    if (loopCtx && !loopCtx.tools) {
-      loopCtx.tools = {
-        resolve: async () => ({
-          dispose: () => {},
-          view: () => new Map(),
-        }),
-        execute: async () => [],
-      }
-    }
-    const result = await origInitializeAgent.call(this, ownerCtx, options)
-    const machine = (result as any)?.agent ?? result?.[0]
-    if (machine) {
-      if (typeof machine.dispatch?.waterfall === 'function' && !(machine.dispatch as any)._tavernWrapped) {
-        const origWaterfall = machine.dispatch.waterfall
-        ;(machine.dispatch as any)._tavernWrapped = true
-        machine.dispatch.waterfall = async function (name: string, payload: any, ...rest: any[]) {
-          const res = await origWaterfall.call(this, name, payload, ...rest)
-          if (name === 'agent/request' && res && machine._activeSelection) {
-            const sel = machine._activeSelection
-            if (res.provider) sel.provider = res.provider
-            if (res.model) sel.model = res.model
-            if (res.reasoningEffort !== undefined) {
-              sel.reasoningEffort = res.reasoningEffort
-            } else {
-              delete sel.reasoningEffort
-            }
-            if (typeof machine.model?.select === 'function') {
-              machine.model.select({
-                provider: res.provider,
-                model: res.model,
-                ...(res.reasoningEffort !== undefined ? { reasoningEffort: res.reasoningEffort } : {}),
-              })
-            }
-          }
-          return res
-        }
-      }
-      if (!patchedReactLoop) {
-        patchedReactLoop = true
-        const proto = Object.getPrototypeOf(machine)
-        if (typeof proto?.preStep === 'function') {
-          const origPreStep = proto.preStep
-          proto.preStep = async function (target: any, position: any) {
-            if (!this.requestHeaderLogged && this.options?.provider && this.options?.model) {
-              const current = this.model?.current()
-              if (!current || current.provider !== this.options.provider || current.model !== this.options.model) {
-                this.model?.select({
-                  provider: this.options.provider,
-                  model: this.options.model,
-                  ...(this.options.reasoningEffort !== undefined ? { reasoningEffort: this.options.reasoningEffort } : {}),
-                })
-              }
-            }
-            if (this.model && this.model.current() === undefined) {
-              const route = sessionModelRoute(this)
-              const fallbackRoute = (route.provider && route.model)
-                ? {
-                    provider: route.provider,
-                    model: route.model,
-                    ...((route as any).reasoningEffort !== undefined ? { reasoningEffort: (route as any).reasoningEffort } : {}),
-                  }
-                : {
-                    provider: this.options?.provider || 'deepseek-official',
-                    model: this.options?.model || 'deepseek-chat',
-                  }
-              this.model.select(fallbackRoute)
-            }
-            const decision = await origPreStep.call(this, target, position)
-            if (decision?.selection) {
-              this._activeSelection = decision.selection
-            }
-            return decision
+      const res = await origWaterfall.call(this, name, payload, ...rest)
+      if (name === 'agent/request' && res && typeof res === 'object') {
+        const sel = (machine._activeSelection ?? activeStepSelections.get(machine)) as SelectionEntry | undefined
+        if (sel && typeof sel === 'object' && !Object.isFrozen(sel)) {
+          if (res.provider) sel.provider = res.provider
+          if (res.model) sel.model = res.model
+          if (res.reasoningEffort !== undefined) {
+            sel.reasoningEffort = res.reasoningEffort
+          } else {
+            delete sel.reasoningEffort
           }
         }
+        if (typeof machine.model?.select === 'function' && res.provider && res.model) {
+          machine.model.select({
+            provider: res.provider,
+            model: res.model,
+            ...(res.reasoningEffort !== undefined ? { reasoningEffort: res.reasoningEffort } : {}),
+          })
+        }
       }
+      return res
     }
-    return result
-  }
-}
-
-if (typeof AgentRegistry?.prototype?.turnBoundaryOf === 'function') {
-  const origTurnBoundaryOf = AgentRegistry.prototype.turnBoundaryOf
-  AgentRegistry.prototype.turnBoundaryOf = function (session: any) {
-    if ((this as any).turnBoundaryProjectionHandle) {
-      return origTurnBoundaryOf.call(this, session)
-    }
-    let state: any = {
-      openTurnStartSeq: null,
-      lastStepStartSeq: null,
-      lastStepBoundary: null,
-      lastTurn: 0,
-    }
-    for (const event of session?.snapshotEvents?.() ?? []) {
-      switch (event.type) {
-        case 'turn/start':
-          state = { ...state, openTurnStartSeq: event.seq, lastTurn: event.data.turn }
-          break
-        case 'turn/end':
-          state = { ...state, openTurnStartSeq: null }
-          break
-        case 'step/start':
-          state = { ...state, lastStepStartSeq: event.seq, lastStepBoundary: { kind: 'start', seq: event.seq } }
-          break
-        case 'step/end':
-          state = { ...state, lastStepBoundary: { kind: 'end', seq: event.seq } }
-          break
-      }
-    }
-    return state
   }
 }
 
@@ -445,8 +280,13 @@ function ensureProjectionPatched(projections: unknown): void {
 export function installTavernModelSelectionCompat(ctx: Context): void {
   const root = (ctx.root ?? ctx) as Context
   ensureProjectionPatched(root.get('sessionProjections'))
+  const existingAgents = (root.get('agents') as { list?: () => unknown[] } | undefined)?.list?.() ?? []
+  for (const agent of existingAgents) ensureAgentRequestSelectionSync(agent)
   if (installedRoots.has(root)) return
   installedRoots.add(root)
+  root.on('agent/created' as any, (payload: { agent?: unknown } | undefined) => {
+    ensureAgentRequestSelectionSync(payload?.agent ?? payload)
+  })
   root.on('session/event' as any, (session: { id: string }, event: { type?: string; data?: any }) => {
     ensureProjectionPatched(root.get('sessionProjections'))
     if (event?.type !== 'request/header') return

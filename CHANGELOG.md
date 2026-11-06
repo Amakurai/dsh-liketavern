@@ -1,10 +1,13 @@
 # 更新日志
 
-当前开发基线为 dsh `0.2.1-rc.3`；公开门槛（`engines.dsh` 与宿主 peer）已放开为 `*`，任意宿主版本都能加载，各版本验证情况见 [宿主兼容记录](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/HOST_COMPATIBILITY.md)。升级宿主前请备份并核对对应版本。
+当前开发基线为 dsh `0.2.2-rc.1`，同时完整支持 `0.2.1-rc.5` 与 `0.2.2-rc.1`；公开门槛（`engines.dsh` 与宿主 peer）已放开为 `*`，任意宿主版本都能加载，各版本验证情况见 [宿主兼容记录](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/HOST_COMPATIBILITY.md)。升级宿主前请备份并核对对应版本。
 
-## 未发布
+## 0.5.10（2026-11-06）适配 dsh 0.2.2-rc.1 与 0.2.1-rc.5 双版本兼容及会话迁移
 
-- **宿主版本不再卡死插件**：`engines.dsh` 与全部 `@deepseek-ai/*` peer 改为 `*`，宿主自动升级到任何过去或未来版本都不会再被判为不兼容而拒绝加载；开发依赖与 overrides 仍固定经验证的精确基线，`host:check` 同时保证“门槛必须放开”和“基线必须一致”。此前桌面端升级到 `0.2.1-rc.5` 后，v0.5.9 因 peer 精确钉在 `0.2.1-rc.3` 被整插件拒绝，即由此修复。
+同时支持 **dsh `0.2.1-rc.5` 与 `0.2.2-rc.1`、Node.js ≥ 24**。开发依赖与 `overrides` 升级对齐至 `0.2.2-rc.1`，公开门槛（`engines.dsh` 与 `@deepseek-ai/*` peer）统一放开为 `*`。升级后请完整重启宿主。
+
+- **dsh `0.2.2-rc.1` 与 `0.2.1-rc.5` 双版本无缝运行**：适配 `0.2.2-rc.1` 的 `ReactLoopAgent` 单步模型路由锁定（`prepareRequest` 在 `agent/request` 后同步 `selection` 与 `reasoningEffort`）、`SessionStore.fork` 多维父子会话消歧（按 `seq`、毫秒时间戳与消息 ID 邻近度匹配）、有界会话父子映射（1024 项 FIFO 淘汰并随 `session/disposed` / `api-session/removed` 即时释放）及模型目录刷新尾沿（trailing-edge）节流，同时保持 `lib/` 零私有包静态导入，在 `0.2.1-rc.5` 与 `0.2.2-rc.1` 上均可直接加载运行。
+- **宿主版本不再卡死插件**：`engines.dsh` 与全部 `@deepseek-ai/*` peer 改为 `*`，宿主自动升级到任何过去或未来版本都不会再被判为不兼容而拒绝加载；开发依赖与 overrides 仍固定经验证的精确基线，`host:check` 同时保证“门槛必须放开”和“基线必须一致”。此前桌面端升级到 `0.2.1-rc.5` 或 `0.2.2-rc.1` 后，v0.5.9 因 peer 精确钉在 `0.2.1-rc.3` 被整插件拒绝，即由此修复（旧版 release 亦可通过宿主 `<profile>/compatibility.json` 或 `dsh plugin allow-version` 豁免后在新宿主运行）。
 - **接口漂移按子系统降级**：新增 `src/node/hostCompat.ts`（阶段守卫、可选服务与方法探测、有界降级记录）。`agentPresets`、`workspaceRegistry`、`typert` 不再写进 inject，缺失即跳过；`TOOLS_SDK` 段序在宿主不提供 `getSectionOrder` 时回退；工具注册、空闲维护、模型选择兼容、请求诊断、预设注册各自独立失败并写一条 `已跳过（宿主接口可能已变更）` 日志，不再把异常抛回 Cordis。client 侧先挂 remote，再逐块注册 slot，单块失败只跳过该块。
 - 修复 Tavern 预设遗漏宿主上下文压缩组件（`tool-result-pruner`、`compaction-basic`、`command-compact`）的问题：默认启用宿主自动摘要压缩与工具输出修剪，可在会话空闲时通过 `/compact` 手动压缩聊天历史；同时修复压缩后预设 `before-history` 与 `TURN_PLAYBOOK` 错位到摘要之后，以及内部 `tavern-deepseek` 路由触发伪造换模提示的问题。更新后需完整重启宿主。
 - 角色笔记读取和保存携带内容版本，版本核对、正文替换与索引重建共用剧情锁，防止旧窗口覆盖另一窗口或剧情中刚更新的笔记。冲突保留草稿，支持确认后仅重新读取笔记；旧草稿缺少版本时提示先复制内容再合并，不借首次刷新授权覆盖。正文落盘后索引失败可重试收口。

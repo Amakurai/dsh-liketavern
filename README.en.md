@@ -4,8 +4,8 @@
 
 **SillyTavern roleplay on the native DeepSeek Harness Agent runtime**
 
-[![Release](https://img.shields.io/badge/version-v0.5.9-blue.svg)](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.5.9)
-[![dsh](https://img.shields.io/badge/dsh-0.2.1--rc.3-informational.svg)](https://deepseek-harness.github.io/deepseek-harness/)
+[![Release](https://img.shields.io/badge/version-v0.5.10-blue.svg)](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.5.10)
+[![dsh](https://img.shields.io/badge/dsh-0.2.1--rc.5%20%7C%200.2.2--rc.1-informational.svg)](https://deepseek-harness.github.io/deepseek-harness/)
 [![Node.js](https://img.shields.io/badge/node-%E2%89%A524-brightgreen.svg)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
@@ -49,14 +49,14 @@ Regex rules, prompt templates, and HTML card scripts bundled inside third-party 
 Open **Plugins → Add plugin** in the `dsh` desktop app, enter the following repository tag URL, and restart the app once installed:
 
 ```text
-https://github.com/Amakurai/dsh-liketavern.git#v0.5.9
+https://github.com/Amakurai/dsh-liketavern.git#v0.5.10
 ```
 
 ### Web / CLI Online Installation
 
 ```bash
 # Install the plugin into the web profile
-dsh plugin --profile web add github:Amakurai/dsh-liketavern#v0.5.9
+dsh plugin --profile web add github:Amakurai/dsh-liketavern#v0.5.10
 
 # Verify installation
 dsh plugin --profile web list --depth 0
@@ -69,10 +69,10 @@ On the tested `0.2.0-rc.1` and `0.2.2-alpha.2` hosts, pnpm may warn that the iso
 
 ### Offline Release Tarball Installation
 
-Download `dsh-liketavern-0.5.9.tgz` from the [v0.5.9 Release](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.5.9) (verify against `SHA256SUMS.txt` if desired) and run:
+Download `dsh-liketavern-0.5.10.tgz` from the [v0.5.10 Release](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.5.10) (verify against `SHA256SUMS.txt` if desired) and run:
 
 ```bash
-dsh plugin --profile web add ./dsh-liketavern-0.5.9.tgz
+dsh plugin --profile web add ./dsh-liketavern-0.5.10.tgz
 dsh web
 ```
 

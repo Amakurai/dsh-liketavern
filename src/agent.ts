@@ -26,7 +26,7 @@ import { mergeTavernCallConfig, resolveTavernReasoningEffort, type AdvertisedRea
 import { BOUND_DISCIPLINE, TURN_PLAYBOOK, UNBOUND_STANDING, isContinueInstruction, isHostInjectedUserMessage, isTurnScopedNotice } from './core/dshPrompt.js'
 import { DEFAULT_SAMPLING, type SamplingSettings } from './core/types.js'
 import { PRESET_ADAPTER_PROVIDER, PRESET_ADAPTER_SOURCE_PROVIDER } from './node/presetAdapter.js'
-import { installTavernModelSelectionCompat } from './node/modelRoute.js'
+import { ensureAgentRequestSelectionSync, installTavernModelSelectionCompat } from './node/modelRoute.js'
 import { attachPresetPlanMessage, createPresetPlanMessage, hasPresetPlanMessage } from './node/presetRequestProjection.js'
 import { guardPhase } from './node/hostCompat.js'
 
@@ -198,6 +198,7 @@ function mountTavernAgent(ctx: Context): void {
     )
   }
   ctx.on('agent/pre-step', async (payload, next) => {
+    ensureAgentRequestSelectionSync(payload.agent, (payload as { modelSelection?: unknown }).modelSelection)
     if (isHelperMvuBlocked(payload.agent, payload.turn)) {
       restoreHelperMvuInputs(payload.agent, payload.turn, payload.messages)
       return { kind: 'reject' }
@@ -235,7 +236,8 @@ function mountTavernAgent(ctx: Context): void {
     return {...decision,messages}
   }, { prepend: true })
   refreshOuterNoticeGuard()
-  ctx.on('agent/created', () => {
+  ctx.on('agent/created', (payload) => {
+    ensureAgentRequestSelectionSync((payload as { agent?: unknown } | undefined)?.agent ?? payload)
     refreshOuterNoticeGuard()
     return undefined
   })
@@ -244,6 +246,7 @@ function mountTavernAgent(ctx: Context): void {
     refreshOuterNoticeGuard()
     const agent = context.agent
     if (!agent) return next()
+    ensureAgentRequestSelectionSync(agent, (context as { modelSelection?: unknown }).modelSelection)
     // 每步重新记录；未绑定、阻塞或失败的步骤不能沿用上一步的 standing 与 turn context。
     state.appliedStanding.delete(agent.id)
     state.appliedTurnContext.delete(agent.id)
@@ -320,6 +323,7 @@ function mountTavernAgent(ctx: Context): void {
   }, { prepend: true })
 
   ctx.on('agent/request', async (payload, next) => {
+    ensureAgentRequestSelectionSync(payload.agent)
     const config = await next()
     const binding = await state.loadStoryBinding(payload.agent.id)
     if ((payload as any)?.probe) {

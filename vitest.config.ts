@@ -73,7 +73,8 @@ import { ToolRuntime } from '@deepseek-ai/dsh-tools'
 import { NativeToolExecutor } from '@deepseek-ai/dsh-tool-executor-native'
 import { WorkingDirectoryService } from '@deepseek-ai/dsh-working-directory'
 import { SandboxPolicyService } from '@deepseek-ai/dsh-sandbox-policy'
-import { ensureAgentRequestSelectionSync, sessionModelRoute } from '${fileURLToPath(new URL('./src/node/modelRoute.ts', import.meta.url)).replace(/\\/g, '/')}'
+// setup 只安装宿主测试桩；业务模块等测试文件注册 vi.mock 后再加载，避免提前缓存真实适配器。
+const loadModelRoute = () => import('${fileURLToPath(new URL('./src/node/modelRoute.ts', import.meta.url)).replace(/\\/g, '/')}')
 
 if (typeof AgentModel?.prototype?.current === 'function') {
   const origCurrent = AgentModel.prototype.current
@@ -179,14 +180,18 @@ try {
       if (name === 'agent/pre-step') {
         const payload = typeof args[0] === 'object' && args[0] !== null ? args[0] : typeof args[1] === 'object' && args[1] !== null ? args[1] : undefined
         if (payload && !payload.modelSelection && payload.agent) {
-          const route = sessionModelRoute(payload.agent)
-          payload.modelSelection = {
-            provider: route.provider ?? payload.agent.options?.provider ?? 'deepseek-official',
-            model: route.model ?? payload.agent.options?.model ?? 'deepseek-chat',
-            ...(route.reasoningEffort ? { reasoningEffort: route.reasoningEffort } : {}),
-          }
+          return loadModelRoute().then(({ sessionModelRoute }) => {
+            const route = sessionModelRoute(payload.agent)
+            payload.modelSelection = {
+              provider: route.provider ?? payload.agent.options?.provider ?? 'deepseek-official',
+              model: route.model ?? payload.agent.options?.model ?? 'deepseek-chat',
+              ...(route.reasoningEffort ? { reasoningEffort: route.reasoningEffort } : {}),
+            }
+            return origWaterfall.apply(this, args)
+          })
         }
       }
+      // 仅异步的 agent/pre-step 等待模块；llm/stream、设置更新等事件保持原有返回类型。
       return origWaterfall.apply(this, args)
     }
   }
@@ -235,7 +240,10 @@ if (typeof AgentLoop?.prototype?.initializeAgent === 'function') {
     }
     const result = await origInitializeAgent.call(this, ownerCtx, options)
     const machine = result?.agent ?? result?.[0]
-    if (machine) ensureAgentRequestSelectionSync(machine)
+    if (machine) {
+      const { ensureAgentRequestSelectionSync } = await loadModelRoute()
+      ensureAgentRequestSelectionSync(machine)
+    }
     return result
   }
 }

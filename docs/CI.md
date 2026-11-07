@@ -59,6 +59,8 @@ node scripts/summarize-tests.mjs .vitest/results.json
 
 显式 reporter 列表保留 `github-actions`，失败仍能生成源代码注解。若测试进程在生成报告前崩溃，摘要和上传步骤明确失败，并保留此前的测试错误；不会输出一个空的成功摘要。
 
+全局 setup 的宿主兼容桩只安装宿主侧补偿，插件模型路由等到实际创建 Agent 或处理 `agent/pre-step` 时动态加载。提前加载 `modelRoute -> presetAdapter` 会让测试文件的 `vi.mock` 失效；`presetAdapterLegacy.test.ts` 与 `presetAdapterNewHost.test.ts` 覆盖缺失列表接口与扩展徽标等行为。异步等待只用于该事件分支，其它 waterfall 的返回类型（例如 `llm/stream` 的异步迭代器）保持原样。
+
 `Test timed out` 只证明超过用例时限，不能直接认定业务回归或 runner 抖动。对比相邻用例耗时、上次同文件结果，并用相同平台单 worker 复跑。产品超时、WAL 持久化和隔离 worker 终止边界都必须保留。
 
 ## 发布与恢复

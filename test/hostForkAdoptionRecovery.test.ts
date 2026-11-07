@@ -14,8 +14,11 @@ import { SystemPrompt } from '@deepseek-ai/dsh-system-prompt'
 import { ToolRuntime } from '@deepseek-ai/dsh-tools'
 import { apply as applyAgent } from '../src/agent.js'
 import { resolveConfig, type TavernSettingsScope } from '../src/node/config.js'
-import { adoptHostFork } from '../src/node/floors.js'
-import { hostForkAdoptionFile } from '../src/node/hostForkAdoption.js'
+import { adoptHostFork, discardHostForkAdoptionPlan } from '../src/node/floors.js'
+import { captureHostForkRequests } from '../src/node/hostForkCapture.js'
+import { hostForkAdoptionFile, writeHostForkSkipped } from '../src/node/hostForkAdoption.js'
+import { writeHostForkIdentity } from '../src/node/hostForkIdentity.js'
+import { forkedSessionParents } from '../src/node/sessionArchiveSnapshot.js'
 import { sessionFile } from '../src/node/paths.js'
 import { registerPromptInputTracking } from '../src/node/pendingInputs.js'
 import { onTurnEnd, onTurnStart } from '../src/node/sessionLifecycle.js'
@@ -132,7 +135,7 @@ async function runtime(): Promise<AgentLoop> {
 function plugin(): void {
   new TavernService(ctx, state, {} as TavernSettingsScope)
   ctx.on('session/created', session => {
-    if (!session.header.parentSession || !isTavernRuntimeSession(ctx, session)) return
+    if (!(session.header.parentSession || session.header.isSeeded) || !isTavernRuntimeSession(ctx, session)) return
     const task = state.trackBindingAdoption(session.id, () => adoptHostFork({ ctx, state }, session))
     adoptions.set(session.id, task)
     void task.catch(error => adoptionErrors.push(error))
@@ -181,6 +184,91 @@ afterEach(async () => {
   for (const agent of ctx.agents.list()) agent.cancel({ kind: 'disposed' }, { keepInbox: true })
   for (const agent of ctx.agents.list()) await idle(agent)
   await ctx.fiber.dispose(); await rm(root, { recursive: true, force: true })
+})
+
+it('没有可信父会话身份时不按相同历史猜测来源或发布子剧情', async () => {
+  const childSession = ctx.sessions.create(SessionId('native-child-no-parent'), {
+    seed,
+    inheritedEventCount: SessionLogOffset(seed.length),
+    meta: { isSeeded: true, agentPreset: 'tavern' },
+  })
+  await expect(adoptions.get(childSession.id)).rejects.toThrow('无法确认')
+  expect(await state.loadBindingUnwaited(childSession.id)).toBeNull()
+})
+
+it('宿主原生分支请求并发时按各自来源创建持久子会话和独立剧情', async () => {
+  const other = ctx.sessions.create(SessionId('native-parent-b'), { seed, meta: { agentPreset: 'tavern' } })
+  await state.saveBinding({ ...(await state.loadBinding(parent.id))!, sessionId: other.id, cardId: cardB, storyId: undefined })
+  const controller = { async fork(request: { sessionId: string; childId: string }) {
+    await Promise.resolve()
+    return ctx.agents.create({ sessionId: SessionId(request.childId), seed,
+      inheritedEventCount: SessionLogOffset(seed.length), meta: { isSeeded: true, agentPreset: 'tavern' },
+      agentOptions: { provider: 'factory', model: 'factory' } })
+  } }
+  const dispose = captureHostForkRequests(
+    controller as unknown as Parameters<typeof captureHostForkRequests>[0],
+    ctx.agents as unknown as Parameters<typeof captureHostForkRequests>[1], () => false,
+    (childId, parentId, prefix) => writeHostForkIdentity(state.paths, childId, parentId, prefix),
+  )
+  try {
+    const [first, second] = await Promise.all([
+      controller.fork({ sessionId: parent.id, childId: 'native-parallel-a' }),
+      controller.fork({ sessionId: other.id, childId: 'native-parallel-b' }),
+    ])
+    expect(first.agent.session.header.parentSession).toBeUndefined()
+    expect(second.agent.session.header.parentSession).toBeUndefined()
+    const [firstBinding, secondBinding] = await Promise.all([state.loadBinding(first.agent.id), state.loadBinding(second.agent.id)])
+    expect(firstBinding?.cardId).toBe(cardA)
+    expect(secondBinding?.cardId).toBe(cardB)
+    expect(firstBinding?.storyId).not.toBe(storyA)
+    for (const agent of [first.agent, second.agent]) {
+      await ctx.sessions.flush(agent.session)
+      const persisted = await ctx.sessionPersistence.open(agent.id, 'read')
+      try { expect(persisted.header.parentSession).toBeUndefined() } finally { await persisted.close() }
+    }
+    // 已绑定分支解除绑定后重启也不能重新猜测并接管来源剧情。
+    await writeHostForkSkipped(state.paths, first.agent.session)
+    await state.clearBinding(first.agent.id)
+    forkedSessionParents.delete(first.agent.id)
+    discardHostForkAdoptionPlan(state, first.agent.id)
+    await expect(adoptHostFork({ ctx, state }, first.agent.session)).resolves.toBe(false)
+    expect(await state.loadBindingUnwaited(first.agent.id)).toBeNull()
+  } finally { dispose() }
+})
+
+it('可信运行时来源在会话头缺失时可校验已保存的接管计划并重试', async () => {
+  const ws = await source(), path = 'state/wal/native-parent_t2/meta.json', valid = await ws.fs.readText(path)
+  await ws.fs.writeText(path, '{broken')
+  const session = ctx.sessions.create(SessionId('native-child-tracked-parent'), {
+    seed, inheritedEventCount: SessionLogOffset(seed.length), meta: { isSeeded: true, agentPreset: 'tavern' },
+  })
+  forkedSessionParents.set(session.id, parent.id)
+  try {
+    await expect(adoptions.get(session.id)).rejects.toThrow('WAL 元数据损坏')
+    discardHostForkAdoptionPlan(state, session.id)
+    forkedSessionParents.delete(session.id)
+    await ws.fs.writeText(path, valid!)
+    expect((await state.loadBinding(session.id))?.cardId).toBe(cardA)
+  } finally { forkedSessionParents.delete(session.id) }
+})
+
+it('底层 SessionStore.fork 的宿主会话头不新增父字段，仍能接管正确剧情', async () => {
+  const session = ctx.sessions.fork(parent.session, undefined, SessionId('native-store-fork'))
+  expect(session.header.parentSession).toBeUndefined()
+  const binding = await state.loadBinding(session.id)
+  expect(binding?.cardId).toBe(cardA)
+  expect(binding?.storyId).not.toBe(storyA)
+})
+
+it('迁入的已绑定旧分支没有来源记录时，明确解除后不会再次猜测并接管', async () => {
+  const session = ctx.sessions.prepare(SessionId('native-imported-without-identity'), {
+    seed, inheritedEventCount: SessionLogOffset(seed.length), meta: { isSeeded: true, agentPreset: 'tavern' },
+  })
+  await state.saveBinding({ ...(await state.loadBinding(parent.id))!, sessionId: session.id, storyId: undefined })
+  await writeHostForkSkipped(state.paths, session)
+  await state.clearBinding(session.id)
+  await expect(adoptHostFork({ ctx, state }, session)).resolves.toBe(false)
+  expect(await state.loadBindingUnwaited(session.id)).toBeNull()
 })
 
 it('接管坏 WAL 失败后真实继承会话拒绝发信，修复后新读重试并按独立剧情正常发信', async () => {

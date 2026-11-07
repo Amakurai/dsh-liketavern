@@ -11,7 +11,9 @@ import { sessionAttachmentReferences } from './sessionArchiveAttachments.js'
 import { archiveFile, sealSessionArchive, SESSION_ARCHIVE_MAX_BYTES, SESSION_ARCHIVE_MAX_FILES, SESSION_ARCHIVE_MAX_JSON_BYTES, type SessionArchive, type SessionArchiveAttachment, type SessionArchiveFile } from './sessionArchiveFormat.js'
 import type { TavernState } from './state.js'
 import type { WalLineageEntry } from './bindings.js'
-import { assertArchiveWalComplete } from './sessionArchiveWal.js'
+import { assertArchiveWalComplete, assertWalLineageComplete } from './sessionArchiveWal.js'
+import { readHostForkIdentity, type HostForkIdentitySource } from './hostForkIdentity.js'
+import type { TavernPaths } from './paths.js'
 
 export class BoundedSessionParentMap extends Map<string, SessionId> {
   private readonly maxEntries: number
@@ -45,29 +47,9 @@ export function installSessionForkTracking(): void {
         rawParentId = typeof source === 'string' ? source : source?.id
       }
       const parentId = rawParentId ? SessionId(rawParentId) : undefined
-      const origCreate = this.create
-      try {
-        if (parentId) {
-          this.create = function (id: any, options: any) {
-            if (options?.meta && !options.meta.parentSession) {
-              options.meta = { ...options.meta, parentSession: parentId }
-            }
-            return origCreate.call(this, id, options)
-          }
-        }
-        const child = origFork.call(this, source, boundary, childSessionId)
-        if (child && parentId) {
-          forkedSessionParents.set(child.id, parentId)
-          if (!child.header.parentSession) {
-            try {
-              ;(child.header as any).parentSession = parentId
-            } catch {}
-          }
-        }
-        return child
-      } finally {
-        this.create = origCreate
-      }
+      const child = origFork.call(this, source, boundary, childSessionId)
+      if (child && parentId) forkedSessionParents.set(child.id, parentId)
+      return child
     }
   }
 }
@@ -82,12 +64,25 @@ function hasOpenTurn(events: readonly SessionEvent[]): boolean {
   return open.size > 0
 }
 
+/** 合并会话头、同进程追踪和已校验的插件来源；明确解绑后的记录不能再次推断继承。 */
+export async function resolveLegacyForkParent(paths: TavernPaths | undefined, child: HostForkIdentitySource): Promise<Session['id'] | undefined> {
+  const saved = paths ? await readHostForkIdentity(paths, child) : null
+  if (saved?.skipped) return undefined
+  const header = child.header.parentSession, tracked = forkedSessionParents.get(child.id)
+  if ((header && tracked && header !== tracked) || (saved?.parentId && (header ?? tracked) && saved.parentId !== (header ?? tracked))) {
+    throw new Error('分支来源身份不一致，无法恢复 WAL 继承关系')
+  }
+  return header ?? tracked ?? saved?.parentId ?? undefined
+}
+
 /** 旧分支未保存 WAL 世系时，从真实祖先的持久化继承边界重建；缺失祖先不能猜测。 */
-export async function deriveLegacyLineage(persistence: SessionPersistence, root: SessionArchive['session']): Promise<WalLineageEntry[]> {
+export async function deriveLegacyLineage(persistence: SessionPersistence, root: SessionArchive['session'], paths?: TavernPaths): Promise<WalLineageEntry[]> {
   const reverse: WalLineageEntry[] = [], seen = new Set<string>([root.header.id])
   let child = root, maxTurn = Number.POSITIVE_INFINITY
-  while (child.header.parentSession || forkedSessionParents.get(child.header.id)) {
-    const parentId = child.header.parentSession ?? forkedSessionParents.get(child.header.id)!
+  while (true) {
+    const parentId = await resolveLegacyForkParent(paths, { id: child.header.id, header: child.header,
+      inheritedEventCount: child.inheritedEventCount, snapshotEvents: () => child.events })
+    if (!parentId) break
     if (seen.has(parentId)) throw new Error('会话祖先关系循环，不能导出')
     seen.add(parentId)
     let inheritedTurn: number | undefined
@@ -99,9 +94,7 @@ export async function deriveLegacyLineage(persistence: SessionPersistence, root:
     const handle = await persistence.open(parentId, 'read')
     try {
       const read = await handle.read()
-      const rawNextParent = handle.header.parentSession ?? forkedSessionParents.get(handle.header.id)
-      const nextParent = rawNextParent ? SessionId(rawNextParent) : undefined
-      child = { header: { ...handle.header, ...(nextParent ? { parentSession: nextParent } : {}) }, inheritedEventCount: handle.inheritedEventCount, events: [...read.events] }
+      child = { header: handle.header, inheritedEventCount: handle.inheritedEventCount, events: [...read.events] }
     }
     finally { await handle.close() }
   }
@@ -183,13 +176,10 @@ export async function snapshotSessionArchive(ctx: Context, state: TavernState, s
         remaining -= bytes
         attachments.push({ kind: 'file', ref, data: Buffer.concat(chunks, bytes).toString('base64') })
       }
-      const rawParentId = session.header.parentSession ?? forkedSessionParents.get(session.header.id)
-      const parentId = rawParentId ? SessionId(rawParentId) : undefined
-      const sessionWithParent = parentId && !session.header.parentSession
-        ? { ...session, header: { ...session.header, parentSession: parentId } }
-        : session
-      const preservedBinding = binding.walLineage === undefined && (parentId || (session.header.isSeeded && session.inheritedEventCount > 0))
-        ? { ...binding, walLineage: await deriveLegacyLineage(persistence, sessionWithParent) } : binding
+      const preservedBinding = binding.walLineage === undefined && (session.header.parentSession || session.header.isSeeded || forkedSessionParents.has(session.header.id))
+        ? { ...binding, walLineage: await deriveLegacyLineage(persistence, session, state.paths) } : binding
+      const activeFloors = (await workspace.wal.listFloors()).filter(floor => !floor.rolledBack).map(floor => floor.floor)
+      assertWalLineageComplete(activeFloors, preservedBinding, sessionId)
       const archive = sealSessionArchive({ format: 'dsh-tavern-session', version: 1, binding: preservedBinding, session, files, attachments })
       if (Buffer.byteLength(JSON.stringify(archive)) > SESSION_ARCHIVE_MAX_JSON_BYTES) throw new Error('会话迁移文件超过 JSON 大小上限')
       if (!live) {

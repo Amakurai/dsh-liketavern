@@ -11,6 +11,7 @@ const workflow = parse(await readFile(new URL('../.github/workflows/release.yml'
 const steps = workflow.jobs.release.steps as Array<{ name?: string; run?: string }>
 const publish = steps.find(step => step.name === '发布已验证安装包')!.run!
 const metadata = steps.find(step => step.name === '校验待发布包并生成说明')!.run!
+const ensureTag = steps.find(step => step.name === '创建已验证标签（手动发布）')!.run!
 // Windows PATH 上的 bash 可能是 WSL 启动器；定位实际 git 安装携带的 Git Bash。
 const bash = process.platform === 'win32'
   ? resolve(spawnSync('git', ['--exec-path'], { encoding: 'utf8' }).stdout.trim(), '../../..', 'bin/bash.exe') : 'bash'
@@ -54,10 +55,10 @@ async function fixture(task: (root: string) => Promise<void>) {
   } finally { await rm(root, { recursive: true, force: true }) }
 }
 
-function run(root: string, script: string, scenario = '') {
-  return spawnSync(bash, ['--noprofile', '--norc', '-e', '-o', 'pipefail', '-c', `${factoryGh}\n${script}`], {
+function run(root: string, script: string, scenario = '', options: { factory?: string; env?: Record<string, string> } = {}) {
+  return spawnSync(bash, ['--noprofile', '--norc', '-e', '-o', 'pipefail', '-c', `${options.factory ?? factoryGh}\n${script}`], {
     cwd: root, encoding: 'utf8', windowsHide: true, timeout: 10_000,
-    env: { ...process.env, SCENARIO: scenario, RELEASE_TAG: 'v1.2.3', RUNNER_TEMP: root.replace(/\\/g, '/'), CALL_LOG: join(root, 'calls.txt').replace(/\\/g, '/') },
+    env: { ...process.env, SCENARIO: scenario, RELEASE_TAG: 'v1.2.3', RUNNER_TEMP: root.replace(/\\/g, '/'), CALL_LOG: join(root, 'calls.txt').replace(/\\/g, '/'), ...options.env },
   })
 }
 
@@ -70,6 +71,46 @@ it.each([
     const result = run(root, publish, scenario)
     expect(result.status, result.stderr || result.error?.message).toBe(0)
     expect((await readFile(join(root, 'calls.txt'), 'utf8')).trim().split('\n')).toEqual(commands.map(command => `release ${command}`))
+  })
+})
+
+/** 手动入口只允许当前已验证提交：真实 Bash 执行标签创建逻辑，gh 仅记录请求。 */
+const tagFactory = `
+gh() {
+  printf '%s\\n' "$*" >> "$CALL_LOG"
+  case "$*" in
+    'api repos/factory/repo/git/ref/tags/v1.2.3')
+      if [ "$SCENARIO" = new-tag ]; then return 1; fi ;;
+    'api repos/factory/repo/commits/v1.2.3 --jq .sha')
+      if [ "$SCENARIO" = changed-tag ]; then echo bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb; else echo "$GITHUB_SHA"; fi ;;
+    'api --method POST repos/factory/repo/git/refs -f ref=refs/tags/v1.2.3 -f sha=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa') ;;
+    *) return 99 ;;
+  esac
+}
+`
+const manualEnvironment = { GITHUB_REF: 'refs/heads/main', GITHUB_REPOSITORY: 'factory/repo', GITHUB_SHA: 'a'.repeat(40) }
+
+it.each(['new-tag', 'existing-tag'])('手动发布 %s：新标签固定当前 SHA，相同标签幂等且不移动', async scenario => {
+  await fixture(async root => {
+    const result = run(root, ensureTag, scenario, { factory: tagFactory, env: manualEnvironment })
+    expect(result.status, result.stderr || result.error?.message).toBe(0)
+    const calls = await readFile(join(root, 'calls.txt'), 'utf8')
+    expect(calls.includes('--method POST')).toBe(scenario === 'new-tag')
+    expect(calls).not.toContain('--method PATCH')
+  })
+})
+
+it('手动发布遇到指向其他提交的旧标签时拒绝，不覆盖或移动', async () => {
+  await fixture(async root => {
+    expect(run(root, ensureTag, 'changed-tag', { factory: tagFactory, env: manualEnvironment }).status).not.toBe(0)
+    expect(await readFile(join(root, 'calls.txt'), 'utf8')).not.toContain('--method POST')
+  })
+})
+
+it.each([{ GITHUB_REF: 'refs/heads/another' }, { RELEASE_TAG: 'v9.9.9' }])('手动发布前拒绝错误分支或版本 %j，不创建标签', async invalid => {
+  await fixture(async root => {
+    expect(run(root, ensureTag, 'new-tag', { factory: tagFactory, env: { ...manualEnvironment, ...invalid } }).status).not.toBe(0)
+    await expect(readFile(join(root, 'calls.txt'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
 })
 

@@ -22,7 +22,7 @@ beforeEach(async () => {
   turn = 0; requests.length = 0
   ctx = new Context()
   new SessionStore(ctx); new AgentRegistry(ctx); new SessionProjectionRegistry(ctx); new SystemPrompt(ctx, {})
-  agent = await new AgentLoop(ctx, AgentLoop.Config({ agents: [] })).create(SessionId('stale-turn-context'))
+  agent = await new AgentLoop(ctx, AgentLoop.Config({ agents: [] })).create(SessionId('stale-turn-context'), { provider: 'factory', model: 'factory' })
   class FactoryAdapter extends LlmAdapter {
     async *stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
       requests.push(JSON.stringify(options.messages))

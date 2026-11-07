@@ -19,6 +19,7 @@ import { CONTINUE_INSTRUCTION_PREFIX } from '../src/core/dshPrompt.js'
 import { onTurnStart, onTurnEnd } from '../src/node/sessionLifecycle.js'
 import { registerMemoryMaintenance } from '../src/node/memoryMaintenance.js'
 import { recordRequestDiagnostics, registerRequestDiagnostics } from '../src/node/requestDiagnostics.js'
+import { writeHostForkIdentity } from '../src/node/hostForkIdentity.js'
 
 let root: string, state: TavernState, cardId: string, ctx: Context
 const sessions = new Map<string, Session>()
@@ -485,4 +486,29 @@ it('来源未绑定、子代理或已有绑定的会话不接管', async () => {
   const before = (await state.loadBinding('bound-child'))!.storyId
   expect(await adoptHostFork({ ctx, state }, hostFork('bound-child', turn(1), 4))).toBe(false)
   expect((await state.loadBinding('bound-child'))!.storyId).toBe(before)
+})
+
+it.each([false, true])('旧分支来源记录可用=%s 时只在确认祖先 WAL 后发布回退剧情', async recorded => {
+  const events = [...turn(1), ...turn(2)]
+  addSession('parent', events, { agentPreset: 'tavern' })
+  const parent = sessions.get('parent')!
+  Object.assign(parent, { header: { agentPreset: 'tavern', isSeeded: true }, inheritedEventCount: events.length })
+  const ws = await workspace('parent'), floor = 'ancestor#t2'
+  await ws.wal.beginFloor(floor)
+  await new MemoryStore(ws.fs.withFloor(floor)).write({ body: '祖先第二轮事实' })
+  await ws.wal.commitFloor(floor)
+  if (recorded) await writeHostForkIdentity(state.paths, parent.id, 'ancestor', events)
+  const stories = await state.listStories(cardId)
+  if (!recorded) {
+    await expect(rollbackToFloor({ ctx, state }, 'parent', undefined, 1)).rejects.toThrow(/WAL.*来源/)
+    expect(created).not.toHaveBeenCalled()
+    expect(await state.listStories(cardId)).toEqual(stories)
+  } else {
+    const child = await rollbackToFloor({ ctx, state }, 'parent', undefined, 1)
+    expect(await (await workspace(child.childSessionId)).memory.list()).toEqual([])
+    expect((await state.loadBinding(child.childSessionId))!.walLineage).toEqual([
+      { sessionId: 'ancestor', throughTurn: 1 }, { sessionId: 'parent', throughTurn: 1 },
+    ])
+  }
+  expect((await ws.memory.list()).map(item => item.body)).toEqual(['祖先第二轮事实'])
 })

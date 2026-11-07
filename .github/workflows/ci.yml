@@ -7,6 +7,12 @@ on:
   workflow_dispatch:
   # 发版复用同一批检查，不能只在 Ubuntu 上通过就发布 Windows 用户的安装包。
   workflow_call:
+    inputs:
+      release_tag:
+        description: 手动发布时校验的完整版本标签
+        type: string
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -14,8 +20,8 @@ permissions:
 # CI 与调用它的 release 使用不同组，避免 reusable workflow 取消自己的调用方。
 # tag 验证不因重跑而中断；普通分支/PR 只保留最新一轮。
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+  group: ci-${{ github.workflow }}-${{ inputs.release_tag || github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ inputs.release_tag == '' && !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
   verify:
@@ -52,10 +58,13 @@ jobs:
 
       # 先拒绝坏 tag/空发布说明，避免跑完整套测试后才发现不能发版。
       - name: 校验发布元数据
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') || inputs.release_tag != ''
         env:
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
         run: |
+          if [[ "$GITHUB_REF" != refs/tags/* ]]; then
+            test "$GITHUB_REF" = refs/heads/main
+          fi
           VERSION="$(node -p "require('./package.json').version")"
           test "$RELEASE_TAG" = "v$VERSION"
           node scripts/release-notes.mjs "$VERSION" CHANGELOG.md "$RUNNER_TEMP/release-notes.md" "$RUNNER_TEMP/release-title.txt"

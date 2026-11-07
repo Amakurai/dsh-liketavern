@@ -26,7 +26,7 @@ if(process.argv.includes('--verify-upstream')) {
     const installed=JSON.parse(await readFile(join(root,'node_modules',name,'package.json'),'utf8'))
     if(installed.version!==version)throw new Error(`上游复现要求 ${name}@${version}；普通构建不需要当前依赖仍是该版本`)
   }
-  const {build,version}=await import('esbuild')
+  const {build,version}=await import('esbuild-vendor')
   if(version!==manifest.esbuild)throw new Error(`上游复现要求 esbuild@${manifest.esbuild}`)
   const entry=`import { newQuickJSWASMModuleFromVariant, newVariant } from 'quickjs-emscripten-core';
 import RELEASE_SYNC from '@jitl/quickjs-wasmfile-release-sync';

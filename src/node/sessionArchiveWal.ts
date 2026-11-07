@@ -1,5 +1,18 @@
 /** 会话迁移共用 WAL 预检：不导出或发布恢复中、未完成或记录损坏的剧情。 */
 import { Wal } from '../state/wal.js'
+import type { SessionBinding } from './bindings.js'
+
+/** 只允许把已确认属于本剧情的活动楼层带入分支或迁移包。 */
+export function assertWalLineageComplete(floors: readonly string[], binding: Pick<SessionBinding, 'walLineage'>, sessionId: string): void {
+  for (const floor of floors) {
+    const match = /^(.+)#t([0-9]+)$/.exec(floor)
+    const turn = match ? Number(match[2]) : NaN
+    if (!match || !Number.isSafeInteger(turn)
+      || (match[1] !== sessionId && !(binding.walLineage ?? []).some(entry => entry.sessionId === match[1] && turn <= entry.throughTurn))) {
+      throw new Error('无法确认活动 WAL 楼层的来源，不能安全回退或导出；请恢复原会话的继承记录')
+    }
+  }
+}
 
 export async function assertArchiveWalComplete(wal: Wal): Promise<void> {
   await wal.assertWorkspaceWritable()

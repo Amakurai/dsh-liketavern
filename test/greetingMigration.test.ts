@@ -30,7 +30,7 @@ beforeEach(async () => {
   await state.saveCharacter(cardId, { firstMes: '开场白' })
   ctx = new Context()
   new SessionStore(ctx); new AgentRegistry(ctx); new SessionProjectionRegistry(ctx); new SystemPrompt(ctx, {})
-  agent = await new AgentLoop(ctx, AgentLoop.Config({ agents: [] })).create(SessionId('session-greeting-migration'))
+  agent = await new AgentLoop(ctx, AgentLoop.Config({ agents: [] })).create(SessionId('session-greeting-migration'), { provider: 'factory', model: 'factory' })
   agent.session.append('agent-preset/selected', { agentPreset: 'tavern' })
   await state.saveBinding({ sessionId: agent.id, cardId, presetId: null, personaId: null, lorebookIds: [], characterLorebookId: null, greetingIndex: 0, interactiveCards: false, helperMvu: false, createdAt: new Date(0).toISOString() })
   class FactoryAdapter extends LlmAdapter {
@@ -68,7 +68,8 @@ async function migrate(events: readonly unknown[], inheritedEventCount = 0): Pro
 it.each(['点击进入', '首条输入补偿', '切换开场白'] as const)('%s：开场白、真实生成、回退前缀均可迁移重载', async mode => {
   if (mode === '点击进入') expect(await enterGreetingConversation({ ctx, state }, agent.id)).toBe(true)
   if (mode === '切换开场白') {
-    const handle = await ctx.agents.create({ sessionId: SessionId('session-greeting-swipe'), seed: greetingTurnEvents('另一个开场白') })
+    const handle = await ctx.agents.create({ sessionId: SessionId('session-greeting-swipe'), seed: greetingTurnEvents('另一个开场白'),
+      agentOptions: { provider: 'factory', model: 'factory' } })
     agent = handle.agent
   }
   if (mode === '首条输入补偿') ctx.on('agent/inbox/inserted', ({ agent: source }) => {
@@ -89,7 +90,8 @@ it.each(['点击进入', '首条输入补偿', '切换开场白'] as const)('%s�
   const end = events.find(e => e.type === 'turn/end')!
   const prefix = sessionPrefixEvents(events, end.seq)
   const child = await ctx.agents.create({ sessionId: SessionId('session-greeting-rollback'), seed: prefix,
-    inheritedEventCount: prefix.length as typeof agent.session.inheritedEventCount, meta: { isSeeded: true } })
+    inheritedEventCount: prefix.length as typeof agent.session.inheritedEventCount, meta: { isSeeded: true },
+    agentOptions: { provider: 'factory', model: 'factory' } })
   await migrate(child.agent.session.snapshotEvents(), prefix.length)
   await child.dispose()
   // 重现旧顺序：删去首部占位系统消息，后续系统消息仍然存在；校验器必须识别此缺陷。

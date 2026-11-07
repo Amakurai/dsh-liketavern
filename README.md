@@ -4,7 +4,7 @@
 
 **基于 DeepSeek Harness 原生 Agent 运行时的 SillyTavern 角色扮演插件**
 
-[![Release](https://img.shields.io/badge/version-v0.5.10-blue.svg)](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.5.10)
+[![Release](https://img.shields.io/badge/version-v0.5.11-blue.svg)](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.5.11)
 [![dsh](https://img.shields.io/badge/dsh-0.2.1--rc.5%20%7C%200.2.2--rc.1-informational.svg)](https://deepseek-harness.github.io/deepseek-harness/)
 [![Node.js](https://img.shields.io/badge/node-%E2%89%A524-brightgreen.svg)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
@@ -42,21 +42,21 @@
 
 ## 安装与升级
 
-> **前置要求**：Node.js `>= 24.0.0`、任意版本的 DeepSeek Harness（`engines.dsh` 与宿主 peer 均声明为 `*`，加载器不会按版本号拒绝）、`pnpm`，且已在 `dsh` 中配置好可用的模型。构建与测试仍固定经验证的开发基线；宿主接口变动时插件按子系统降级并把原因写进日志，不把异常抛回宿主。首次使用请先参阅 [DeepSeek Harness 官方文档](https://deepseek-harness.github.io/deepseek-harness/)。仓库已内置预编译的 `lib/` 产物，安装时无需本地构建。
+> **前置要求**：Node.js `>= 24.0.0`、DeepSeek Harness、`pnpm`，且已在 `dsh` 中配置好可用的模型。当前开发基线为 `0.2.2-rc.1`；`engines.dsh` 与宿主 peer 声明为 `*`，只表示加载器不会按版本号拒绝，并不保证任意宿主的接口兼容。各版本的验证情况和限制见[宿主兼容记录](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/HOST_COMPATIBILITY.md)。首次使用请先参阅 [DeepSeek Harness 官方文档](https://deepseek-harness.github.io/deepseek-harness/)。仓库已内置预编译的 `lib/` 产物，安装时无需本地构建。
 
 ### 桌面端安装
 
 打开 `dsh` 桌面端 **「插件 → 添加插件」**，填入以下仓库标签地址并安装，完成后重启桌面端：
 
 ```text
-https://github.com/Amakurai/dsh-liketavern.git#v0.5.10
+https://github.com/Amakurai/dsh-liketavern.git#v0.5.11
 ```
 
 ### Web / CLI 在线安装
 
 ```bash
 # 安装插件到 web profile
-dsh plugin --profile web add github:Amakurai/dsh-liketavern#v0.5.10
+dsh plugin --profile web add github:Amakurai/dsh-liketavern#v0.5.11
 
 # 确认安装状态
 dsh plugin --profile web list --depth 0
@@ -69,18 +69,20 @@ dsh web
 
 ### Release 离线包安装
 
-从 [v0.5.10 Release](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.5.10) 下载 `dsh-liketavern-0.5.10.tgz`（可配合同页的 `SHA256SUMS.txt` 校验完整性），在下载目录执行：
+从 [v0.5.11 Release](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.5.11) 下载 `dsh-liketavern-0.5.11.tgz`（可配合同页的 `SHA256SUMS.txt` 校验完整性），在下载目录执行：
 
 ```bash
-dsh plugin --profile web add ./dsh-liketavern-0.5.10.tgz
+dsh plugin --profile web add ./dsh-liketavern-0.5.11.tgz
 dsh web
 ```
 
 ### 版本检查与升级
 
-- **检查更新**：在 `dsh` 内进入 **「设置 → Tavern → 关于」**，可查看当前版本并检测 GitHub 最新正式发布与宿主版本兼容性。
-- **桌面端升级**：先查阅 [CHANGELOG.md](./CHANGELOG.md) 并备份数据；在桌面端「插件」管理页卸载旧版本，再用新版标签地址重新添加，安装后**完全退出并重启桌面端**（「关于」页仅提供版本查询，不直接执行覆盖安装）。
+- **检查更新**：进入 **「设置 → Tavern → 关于」**，分别查看当前插件与最新发布的宿主版本要求、开发验证基线和兼容记录。有新版时点击 **「更新到…」** 查看安装步骤；宿主版本未知也可查询，兼容性会显示为待确认。
+- **桌面端升级**：先查阅 [CHANGELOG.md](./CHANGELOG.md) 并备份数据；点击关于页的 **「更新到… → 复制安装地址」**，在桌面端「插件 → 添加插件」中使用新版标签地址安装，完成后**完全退出并重启桌面端**。安装由宿主插件管理器处理。
 - **Web / CLI 升级**：使用新版标签重新执行 `dsh plugin --profile web add` 并重启 `dsh web`。升级会自动沿用既有数据目录。
+
+当前 dsh `0.2.2-rc.1` 的原生版本列表与一键更新面向 registry 来源。本项目通过 Git 标签与 Release 分发，固定的旧标签不会自动切换到新标签，因此关于页提供独立的 GitHub 发布检查和明确的新安装地址。**v0.5.9 及更早版本的旧检查器只识别精确宿主 peer，不能解析新版开放范围；首次升级请直接使用上方的 v0.5.11 地址安装一次。** 新版将安装门槛与实际验证范围分别展示；满足版本要求不等于所有功能已在该宿主实测。
 
 ---
 

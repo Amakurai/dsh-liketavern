@@ -11,7 +11,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent';
 /**
  * 同步 DSH 0.2.2-rc.1 ReactLoopAgent 在单步 preStep -> prepareRequest 期间锁定的 selection：
  * Tavern 在 agent/request 中将 deepseek-official 重写为内部布局通道 tavern-deepseek 并合入预设 reasoningEffort；
- * 直接在实时 agent 实例及其原型上同步当步 selection，不静态依赖私有包导出，兼容 0.2.1-rc.5 与 0.2.2-rc.1。
+ * 仅处理已挂载 Tavern 预设的实例，不改宿主共享原型或覆盖会话已有的模型选择。
  */
 export declare function ensureAgentRequestSelectionSync(agent: unknown, stepSelection?: unknown): void;
 export interface SessionModelRoute {

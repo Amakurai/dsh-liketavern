@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import { sessionModelRoute } from '../src/node/modelRoute.js'
+import { ensureAgentRequestSelectionSync, sessionModelRoute } from '../src/node/modelRoute.js'
 
 const agentWith = (options: object, header?: object) => ({
   options,
@@ -50,4 +50,38 @@ describe('sessionModelRoute', () => {
       .toEqual({ provider: 'deepseek-official', model: 'deepseek-v4' })
     expect(sessionModelRoute(agentWith({}, undefined))).toEqual({})
   })
+})
+
+it('安装 Tavern 请求兼容时不改变其它会话的模型选择，也不覆盖首轮前已选择的模型', async () => {
+  type Selection = { provider: string; model: string }
+  class Model {
+    state: { pending: Selection | null; lastUsed: Selection | null }
+    readonly calls: Selection[] = []
+    readonly session = { ownEvents: () => [] }
+    constructor(readonly options: Selection, pending: Selection | null, lastUsed: Selection | null) {
+      this.state = { pending, lastUsed }
+    }
+    readState() { return this.state }
+    current() { return this.state.pending ?? this.state.lastUsed ?? this.options }
+    select(selection: Selection) { this.calls.push(selection); this.state.pending = selection }
+  }
+  class Machine {
+    readonly requestHeaderLogged = false
+    readonly dispatch = { waterfall: async () => ({ provider: 'unused', model: 'unused' }) }
+    readonly session = { snapshotEvents: () => [] }
+    constructor(readonly options: Selection, readonly model: Model) {}
+    async preStep() { return { kind: 'enter', selection: this.model.current() } }
+  }
+  const defaults = { provider: 'factory', model: 'default' }
+  const chosen = { provider: 'factory', model: 'chosen' }
+  const inherited = { provider: 'factory', model: 'inherited' }
+  const tavern = new Machine(defaults, new Model(defaults, chosen, null))
+  const other = new Machine(defaults, new Model(defaults, null, inherited))
+
+  ensureAgentRequestSelectionSync(tavern)
+  expect(other.model.current()).toEqual(inherited)
+  expect((await other.preStep()).selection).toEqual(inherited)
+  expect(other.model.calls).toEqual([])
+  expect((await tavern.preStep()).selection).toEqual(chosen)
+  expect(tavern.model.calls).toEqual([])
 })

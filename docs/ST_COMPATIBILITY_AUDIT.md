@@ -30,6 +30,12 @@
 
 完整 ST DOM、事件总线、其他扩展 API、跨剧情共享可变状态、任意重写真实宿主历史不能直接映射。沙箱展示、历史查询和消息快照通过项目自身接口实现；上表列出的功能有对应行为测试，真实消息角色和排列仍遵守 dsh 宿主约束。全文 generate 正则的匹配范围是普通模拟消息；GENERATE 钩子与 `@INJECT` 分别按条目处理，不跨多个钩子或注入条目匹配。
 
+## 尚未覆盖的上游版本差异（2026-11-06）
+
+- [SillyTavern 1.19.0](https://github.com/SillyTavern/SillyTavern/releases/tag/1.19.0) 增加了角色表情相关的 `{{defaultExpression}}`、`{{lastExpression}}` 和 `{{availableExpressions}}`。当前宏引擎不提供这些值；未知宏会保留原文并进入组装诊断。实现前需要先定义与角色表情状态对应的数据来源，不能伪造空值并宣称兼容。
+- [Character Card V3 规范](https://github.com/kwaroran/character-card-spec-v3/blob/main/SPEC_V3.md) 还描述了 CHARX 和卡内资源引用。当前导入仅支持 PNG / JSON，不解析 CHARX 归档，也不解析 `embeded://` 或 `__asset:` 引用。新增支持需要限制解压大小、文件数量和路径，并保持现有沙箱及资产边界。
+- 本文上方的 ST-Prompt-Template 对照固定到指定 commit，不代表之后的上游改动已经逐项核对。升级兼容目标时应记录新 commit，按功能与失败边界复验，而不是仅凭版本字符串宣布兼容。
+
 ## 维护约束
 
 - sticky 必须区分三类注册表：prompt 在成功生成组装、出口展开后递减并于 `<0` 删除；generate 正则同一时点递减并于 `<=0` 删除；message 正则在下一次非预览生成开始递减。basic 在全局 BEFORE 后处理整包正文，随后清空活动表并关闭该阶段；首次规则快照只供同轮重组使用，生成结束再清理后注册的 basic。同 UUID 的 generate/message 是独立记录，重新注册才重置计数。不能让每次沙箱 preload 重建都算一次新业务注册，否则过期规则会复活。

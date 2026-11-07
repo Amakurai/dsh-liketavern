@@ -52,6 +52,9 @@ async function click(view: ReactTestRenderer, label: string) {
   expect(target.props.disabled).not.toBe(true)
   await act(async () => target.props.onClick({ stopPropagation() {} }))
 }
+async function openUpdate(view: ReactTestRenderer, version = '0.2.6') {
+  await click(view, t('about.updateAction', { version }))
+}
 const status = (view: ReactTestRenderer) => view.root.findByProps({ 'aria-live': 'polite' })
 const content = (view: ReactTestRenderer) => JSON.stringify(view.toJSON())
 const toasts = (view: ReactTestRenderer) => view.root.findAllByProps({ 'data-toast': true }).map(node => node.children.join(''))
@@ -140,8 +143,9 @@ describe('关于页与按需更新检查', () => {
     expect(f.checkPluginUpdate).not.toHaveBeenCalled()
   })
 
-  it('无法确认启动宿主时保留插件信息与发布说明，禁用并守卫更新检查', async () => {
+  it('无法确认启动宿主仍可查询新版，展示待确认状态并隐藏安装命令', async () => {
     const f = fixture(about({ hostVersion: 'unknown' }))
+    f.checkPluginUpdate.mockResolvedValue(ok(update({ versionStatus: 'available', hostCompatibility: 'unknown', command: null, installSpec: null })))
     const view = await render(<AboutSection remote={f.remote} />)
     expect(content(view)).toContain('0.2.5')
     expect(content(view)).toContain(t('about.unknown'))
@@ -151,11 +155,11 @@ describe('关于页与按需更新检查', () => {
     expect(release.type).toBe('a')
     expect(release.children.join('')).toBe(t('about.releases'))
     const check = button(view, t('about.check'))
-    expect(check.props.disabled).toBe(true)
-    // 模拟已排队的点击回调：不能仅依赖 DOM disabled 阻止错误兼容性检查。
+    expect(check.props.disabled).not.toBe(true)
     await act(async () => check.props.onClick({ stopPropagation() {} }))
-    expect(f.checkPluginUpdate).not.toHaveBeenCalled()
-    expect(status(view).findAllByType('p')).toEqual([])
+    expect(f.checkPluginUpdate).toHaveBeenCalledExactlyOnceWith({})
+    expect(content(view)).toContain(t('about.compatibilityUnknown'))
+    await openUpdate(view)
     expect(button(view, t('about.copyCommand'))).toBeUndefined()
   })
 
@@ -172,6 +176,56 @@ describe('关于页与按需更新检查', () => {
     expect(status(view).findByType('p').children.join('')).toBe(t('about.current', { version: '0.2.6' }))
   })
 
+  it('桌面新版明确提供更新按钮与安装地址，点击只展示步骤，复制后不执行安装', async () => {
+    const installSpec = 'github:Amakurai/dsh-liketavern#v0.2.6'
+    const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
+    const f = fixture(about({ desktopHost: true, expectedHostVersion: '*', hostCompatibility: 'compatible', developmentHostVersion: '0.2.2-rc.1' }))
+    f.checkPluginUpdate.mockResolvedValue(ok(update({ command: null, versionStatus: 'available', hostCompatibility: 'compatible', installSpec })))
+    const view = await render(<AboutSection remote={f.remote} />)
+    expect(content(view)).toContain(t('about.compatible'))
+    expect(content(view)).toContain('0.2.2-rc.1')
+    expect(view.root.findByProps({ href: `${PROJECT}/blob/main/docs/HOST_COMPATIBILITY.md` }).type).toBe('a')
+    await click(view, t('about.check'))
+    expect(button(view, t('about.updateAction', { version: '0.2.6' }))).toBeDefined()
+    expect(button(view, t('about.copyTarget'))).toBeUndefined()
+    await openUpdate(view)
+    expect(view.root.findAllByType('code').map(node => node.children.join(''))).toEqual([installSpec])
+    expect(button(view, t('about.copyCommand'))).toBeUndefined()
+    await click(view, t('about.copyTarget'))
+    expect(writeText).toHaveBeenCalledExactlyOnceWith(installSpec)
+    expect(toasts(view)).toEqual([t('about.targetCopied')])
+    expect(f.checkPluginUpdate).toHaveBeenCalledOnce()
+  })
+
+  it('最新版与宿主不匹配也显示版本新旧及适配建议，拒绝显示被伪造的安装命令', async () => {
+    const f = fixture()
+    f.checkPluginUpdate.mockResolvedValue(ok(update({ status: 'incompatible', versionStatus: 'available',
+      hostCompatibility: 'incompatible', installSpec: 'github:Amakurai/dsh-liketavern#v0.2.6' })))
+    const view = await render(<AboutSection remote={f.remote} />)
+    await click(view, t('about.check'))
+    expect(status(view).findByType('p').children.join('')).toBe(t('about.available', { version: '0.2.6' }))
+    expect(content(view)).toContain(t('about.notCompatible'))
+    await openUpdate(view)
+    expect(content(view)).toContain(t('about.updateBlocked'))
+    expect(view.root.findAllByType('code')).toEqual([])
+    expect(button(view, t('about.copyCommand'))).toBeUndefined()
+    expect(button(view, t('about.copyTarget'))).toBeUndefined()
+    expect(view.root.findByProps({ href: 'https://github.com/deepseek-ai/deepseek-harness/releases' }).type).toBe('a')
+  })
+
+  it('当前插件已比正式发布更新时，旧发布不兼容不会再掩盖版本信息或引导降级', async () => {
+    const f = fixture(about({ version: '0.5.10', expectedHostVersion: '*', hostCompatibility: 'compatible' }))
+    f.checkPluginUpdate.mockResolvedValue(ok(update({ status: 'incompatible', versionStatus: 'ahead', latestVersion: '0.5.9',
+      hostCompatibility: 'incompatible', command: null, installSpec: null })))
+    const view = await render(<AboutSection remote={f.remote} />)
+    await click(view, t('about.check'))
+    expect(status(view).findByType('p').children.join('')).toBe(t('about.ahead', { version: '0.5.9' }))
+    expect(content(view)).toContain(t('about.compatible'))
+    expect(content(view)).toContain(t('about.notCompatible'))
+    expect(button(view, t('about.updateAction', { version: '0.5.9' }))).toBeUndefined()
+  })
+
   it('正确说明四种版本状态，只有可更新且有命令的安装版展示更新步骤', async () => {
     const cases: Array<{ status: PluginUpdate['status']; command: string | null; source: boolean; copy: boolean }> = [
       { status: 'current', command: COMMAND, source: false, copy: false },
@@ -186,6 +240,7 @@ describe('关于页与按需更新检查', () => {
       f.checkPluginUpdate.mockResolvedValue(ok(update({ status: item.status, command: item.command })))
       const view = await render(<AboutSection remote={f.remote} />)
       await click(view, t('about.check'))
+      if (item.copy) await openUpdate(view)
       expect(status(view).findByType('p').children.join('')).toBe(t(`about.${item.status}`, { version: '0.2.6', host: '0.1.5-rc.2' }))
       expect(Boolean(button(view, t('about.copyCommand')))).toBe(item.copy)
       expect(view.root.findAllByType('code').map(node => node.children.join(''))).toEqual(item.copy ? [COMMAND] : [])
@@ -201,6 +256,7 @@ describe('关于页与按需更新检查', () => {
     vi.stubGlobal('navigator', { clipboard: { writeText } })
     const f = fixture(), view = await render(<AboutSection remote={f.remote} />)
     await click(view, t('about.check'))
+    await openUpdate(view)
     await click(view, t('about.copyCommand'))
     expect(writeText).toHaveBeenCalledExactlyOnceWith(COMMAND)
     expect(toasts(view)).toEqual([])
@@ -223,6 +279,7 @@ describe('关于页与按需更新检查', () => {
       expect(button(view, t('about.copyCommand'))).toBeUndefined()
     }
     await click(view, t('about.check'))
+    await openUpdate(view)
     expect(content(view)).not.toContain(t('about.checkFailed'))
     expect(button(view, t('about.copyCommand'))).toBeDefined()
     expect(f.checkPluginUpdate).toHaveBeenCalledTimes(3)
@@ -267,6 +324,7 @@ describe('关于页与按需更新检查', () => {
     latest.checkPluginUpdate.mockResolvedValue(ok(update({ status: 'current', latestVersion: '0.3.0', command: null })))
     const view = await render(<AboutSection remote={old.remote} />)
     await click(view, t('about.check'))
+    await openUpdate(view)
     await click(view, t('about.copyCommand'))
     await click(view, t('about.check'))
     await act(async () => view.update(<AboutSection remote={latest.remote} />))
@@ -286,6 +344,7 @@ describe('关于页与按需更新检查', () => {
     f.checkPluginUpdate.mockResolvedValueOnce(ok(update())).mockReturnValueOnce(pending.promise)
     const view = await render(<AboutSection remote={f.remote} />)
     await click(view, t('about.check'))
+    await openUpdate(view)
     await click(view, t('about.copyCommand'))
     await click(view, t('about.check'))
     await unmount(view)

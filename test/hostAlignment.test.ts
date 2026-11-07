@@ -36,6 +36,21 @@ function fixture() {
   }
 }
 
+it('锁文件中的遥测与构建工具满足实际版本范围，并保留检查点原构建器', () => {
+  const pkg = readJson('package.json'), lock = readJson('package-lock.json').packages
+  const api = lock['node_modules/@opentelemetry/api'].version as string
+  for (const [path, entry] of Object.entries(lock) as Array<[string, Record<string, any>]>) {
+    const range = entry.peerDependencies?.['@opentelemetry/api']
+    if (range) expect(satisfies(api, range), `${path} 要求 ${range}`).toBe(true)
+  }
+  expect(satisfies(api, lock['node_modules/@deepseek-ai/dsh-otel'].dependencies['@opentelemetry/api'])).toBe(true)
+  expect(pkg.overrides['@opentelemetry/api']).toBe(api)
+  expect(satisfies(lock['node_modules/esbuild'].version, lock['node_modules/vite'].peerDependencies.esbuild)).toBe(true)
+  const pinned = readJson('vendor/checkpoint-engine-v1/manifest.json').esbuild as string
+  expect(pkg.devDependencies['esbuild-vendor']).toBe(`npm:esbuild@${pinned}`)
+  expect(lock['node_modules/esbuild-vendor'].version).toBe(pinned)
+})
+
 /** 从过去的 alpha 到未来的大版本：宿主加载器都必须接受这份清单。 */
 const HOST_VERSIONS = ['0.1.0', '0.2.0-alpha.1', '0.2.0-rc.1', '0.2.1-rc.3', '0.2.1-rc.5',
   '0.2.2-alpha.2', '0.2.9-rc.1', '0.3.0', '0.3.9', '0.4.0-alpha.1', '0.4.0', '1.0.0', '2.5.3-rc.1']

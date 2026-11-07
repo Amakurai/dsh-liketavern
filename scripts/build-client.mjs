@@ -3,7 +3,7 @@
  * 宿主提供的模块保持 external（bundle 内为 require(...)），产物外包 ModuleLoader 注册壳。
  * 用法：node scripts/build-client.mjs（须在 npx tsc 之后运行，npm run build 已串好）。
  */
-import { build } from 'esbuild'
+import { build } from 'esbuild-vendor'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'

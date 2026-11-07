@@ -11,7 +11,8 @@ import { createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { resolveConfig } from '../src/node/config.js'
 import { TavernState } from '../src/node/state.js'
-import { deriveLegacyLineage, snapshotSessionArchive } from '../src/node/sessionArchiveSnapshot.js'
+import { deriveLegacyLineage, forkedSessionParents, snapshotSessionArchive } from '../src/node/sessionArchiveSnapshot.js'
+import { deleteHostForkIdentity, writeHostForkIdentity } from '../src/node/hostForkIdentity.js'
 import { importSessionArchive } from '../src/node/sessionArchiveImport.js'
 import { parseSessionArchive, SESSION_ARCHIVE_MAX_FILES } from '../src/node/sessionArchiveFormat.js'
 import { withWorkspaceLock } from '../src/state/workspaceLock.js'
@@ -386,4 +387,31 @@ it('真实 fork 会话的继承边界和祖先 WAL 在新宿主中保留', async
   await imported.close()
   expect((await target.loadBinding(child.id))!.walLineage).toEqual(archive.binding.walLineage)
   await targetCtx.fiber.dispose()
+})
+
+it('旧绑定导出在冷启动后使用已验证的来源记录，缺少来源时不伪造空继承关系', async () => {
+  const parent = ctx.sessions.get(SessionId('session-one'))!
+  parent.append('turn/start', { turn: 1 }); parent.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
+  const child = ctx.sessions.fork(parent, undefined, SessionId('session-legacy-cold'))
+  await state.saveBinding({ sessionId: child.id, cardId, presetId: null, personaId: null, lorebookIds: [],
+    characterLorebookId: null, interactiveCards: false, greetingIndex: 0, createdAt: new Date(0).toISOString() })
+  const ws = await state.storyWorkspace(cardId, (await state.loadBinding(child.id))!.storyId)
+  await ws.wal.beginFloor('session-one#t1')
+  await ws.fs.withFloor('session-one#t1').writeText('memory/inherited.md', '继承事实')
+  await ws.wal.commitFloor('session-one#t1')
+  await writeHostForkIdentity(state.paths, child.id, parent.id, child.snapshotEvents().slice(0, child.inheritedEventCount))
+  forkedSessionParents.delete(child.id)
+  const persistence = { open: async (id: string) => {
+    const session = ctx.sessions.get(SessionId(id)); if (!session) throw new Error('missing ancestor')
+    return { header: session.header, inheritedEventCount: session.inheritedEventCount,
+      read: async () => ({ events: session.snapshotEvents() }), close: async () => {} }
+  } }
+  const sourceCtx = { sessions: { get: (id: string) => ctx.sessions.get(SessionId(id)), flush: async () => true },
+    get: (name: string) => name === 'sessionPersistence' ? persistence : undefined } as unknown as Context
+  const archive = await snapshotSessionArchive(sourceCtx, state, child.id)
+  expect(archive.binding.walLineage).toEqual([{ sessionId: parent.id, throughTurn: 1 }])
+  expect(archive.session.header.parentSession).toBeUndefined()
+  await deleteHostForkIdentity(state.paths, child.id)
+  await expect(snapshotSessionArchive(sourceCtx, state, child.id)).rejects.toThrow(/WAL.*来源/)
+  expect(await ws.fs.readText('memory/inherited.md')).toBe('继承事实')
 })

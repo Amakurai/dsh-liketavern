@@ -73,7 +73,7 @@ beforeEach(async () => {
   storyId = (await state.loadBinding('mvu-factory'))!.storyId!
   ctx = new Context()
   new SessionStore(ctx); new AgentRegistry(ctx); new SessionProjectionRegistry(ctx); new SystemPrompt(ctx, {})
-  const loop = new AgentLoop(ctx, AgentLoop.Config({ agents: [] })); agent = await loop.create(SessionId('mvu-factory'))
+  const loop = new AgentLoop(ctx, AgentLoop.Config({ agents: [] })); agent = await loop.create(SessionId('mvu-factory'), { provider: 'factory', model: 'factory' })
   agent.session.append('agent-preset/selected', { agentPreset: 'tavern' })
   ctx.provide('tavern', { state })
   registerHelperMvuLifecycle(ctx)
@@ -149,7 +149,8 @@ describe('宿主自动 MVU 门控', () => {
   it('真实 turn 1 来源标记开场白没有 finish chunk，仍在首条输入前等待初始化', async () => {
     const binding = (await state.loadBinding(agent.id))!
     await state.saveBinding({ ...binding, sessionId: 'seed-greeting', storyId: undefined })
-    const handle = await ctx.agents.create({ sessionId: SessionId('seed-greeting'), seed: greetingTurnEvents('实际 seed 开场白') })
+    const handle = await ctx.agents.create({ sessionId: SessionId('seed-greeting'), seed: greetingTurnEvents('实际 seed 开场白'),
+      agentOptions: { provider: 'factory', model: 'factory' } })
     agent = handle.agent; storyId = (await state.loadBinding(agent.id))!.storyId!
     reserveOnInsert(); const input = message('开场白后首条真实输入')
     expect(events().filter(event => event.type === 'assistant/message').every(event => event.data.stream.length === 0)).toBe(true)
@@ -369,7 +370,7 @@ describe('宿主自动 MVU 门控', () => {
     const release = Promise.withResolvers<void>(), save = vi.fn(async () => {})
     const task = state.enqueueSessionTask(coldId, async () => release.promise)
     const saving = runHelperMvuEnable(ctx, state, coldId, save)
-    const handle = await ctx.agents.create({ sessionId: coldId })
+    const handle = await ctx.agents.create({ sessionId: coldId, agentOptions: { provider: 'factory', model: 'factory' } })
     release.resolve(); await task
     await expect(saving).rejects.toThrow('请等待当前生成和维护结束')
     expect(save).not.toHaveBeenCalled(); expect((await state.loadBinding(coldId))!.helperMvu).toBe(false)

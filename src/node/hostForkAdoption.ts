@@ -6,6 +6,7 @@ import { WorkspaceFs } from '../state/workspaceFs.js'
 import { readStory } from '../state/story.js'
 import { parseSessionBinding, type SessionBinding } from './bindings.js'
 import type { TavernPaths } from './paths.js'
+import { skipHostForkIdentity } from './hostForkIdentity.js'
 
 export interface HostForkAdoptionPlan {
   version: 1
@@ -31,8 +32,9 @@ export function hostForkSeedHash(prefix: readonly SessionEvent[]): string {
 
 /** 服务已在绑定锁内验证合法 current 后保存明确解除意图；未知接管失败不能调用此入口绕过屏障。 */
 export async function writeHostForkSkipped(paths: TavernPaths, child: Session): Promise<void> {
-  const parentId = child.header.parentSession
-  if (!parentId || child.header.isSeeded !== true || (child.header.delegationDepth ?? 0) > 0) return
+  if (child.header.isSeeded !== true || (child.header.delegationDepth ?? 0) > 0) return
+  const parentId = await skipHostForkIdentity(paths, child)
+  if (!parentId) return
   await writeHostForkAdoption(paths, { version: 1, status: 'skipped', sessionId: child.id, parentId,
     inheritedCount: child.inheritedEventCount, seedHash: hostForkSeedHash(child.snapshotEvents().slice(0, child.inheritedEventCount)) })
 }
@@ -42,7 +44,7 @@ function invalidPlan(): never {
 }
 
 /** 记录按原始会话 ID 哈希定位；字段、来源绑定与种子指纹全部验证，不按宽松 null 处理损坏。 */
-export async function readHostForkAdoption(paths: TavernPaths, child: Session, prefix: readonly SessionEvent[]): Promise<HostForkAdoptionPlan | null> {
+export async function readHostForkAdoption(paths: TavernPaths, child: Session, prefix: readonly SessionEvent[], parentId: Session['id']): Promise<HostForkAdoptionPlan | null> {
   const fs = new WorkspaceFs(paths.root, null), file = hostForkAdoptionFile(child.id)
   const info = await fs.stat(file)
   if (info && info.size > MAX_PLAN_BYTES) invalidPlan()
@@ -53,14 +55,15 @@ export async function readHostForkAdoption(paths: TavernPaths, child: Session, p
   try { input = JSON.parse(text) } catch { invalidPlan() }
   if (!input || typeof input !== 'object' || Array.isArray(input)) invalidPlan()
   const raw = input as Record<string, unknown>
-  if (raw.version !== 1 || raw.sessionId !== child.id || raw.parentId !== child.header.parentSession
+  if (raw.version !== 1 || raw.sessionId !== child.id || raw.parentId !== parentId
+    || (child.header.parentSession !== undefined && child.header.parentSession !== parentId)
     || raw.inheritedCount !== child.inheritedEventCount || raw.seedHash !== hostForkSeedHash(prefix)) invalidPlan()
   if (Object.keys(raw).some(key => !['version', 'status', 'sessionId', 'parentId', 'inheritedCount', 'seedHash', 'sourceCheckpoint', 'sourceUncertain', 'binding', 'rollbackFromTurn'].includes(key))) invalidPlan()
   if (typeof raw.status !== 'string' || !['unverified', 'checkpoint', 'ready', 'skipped'].includes(raw.status)) invalidPlan()
   if (raw.sourceCheckpoint !== undefined && raw.sourceCheckpoint !== null
     && (typeof raw.sourceCheckpoint !== 'string' || !/^\d+:\d+:\d+:-?\d+:-?\d+$/.test(raw.sourceCheckpoint))) invalidPlan()
   if (raw.sourceUncertain !== undefined && typeof raw.sourceUncertain !== 'boolean') invalidPlan()
-  const result: HostForkAdoptionPlan = { version: 1, status: raw.status as HostForkAdoptionPlan['status'], sessionId: child.id, parentId: child.header.parentSession!,
+  const result: HostForkAdoptionPlan = { version: 1, status: raw.status as HostForkAdoptionPlan['status'], sessionId: child.id, parentId,
     inheritedCount: child.inheritedEventCount, seedHash: raw.seedHash as string }
   if (raw.status === 'skipped') {
     if (['sourceCheckpoint', 'sourceUncertain', 'binding', 'rollbackFromTurn'].some(key => raw[key] !== undefined)) invalidPlan()

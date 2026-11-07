@@ -5,18 +5,26 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 与 main 的 package.json 一致的新版本标签（例如 v0.5.11）
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 # 同一 tag 只允许一次发布；不取消已经开始的上传/发布操作。
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
   validate:
     uses: ./.github/workflows/ci.yml
+    with:
+      release_tag: ${{ inputs.tag || '' }}
 
   release:
     needs: validate
@@ -43,7 +51,7 @@ jobs:
 
       - name: 校验待发布包并生成说明
         env:
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           VERSION="$(node -p "require('./package.json').version")"
           test "$RELEASE_TAG" = "v$VERSION"
@@ -53,12 +61,31 @@ jobs:
           # 保留 README 对外约定的附件名，内容沿用打包时的原始校验和。
           cp "dsh-liketavern-$VERSION.tgz.sha256" SHA256SUMS.txt
 
+      # 无本机 Git 凭据时可从 Actions 手动发布；验证和包校验成功后才创建标签。
+      # GITHUB_TOKEN 创建的标签不再触发另一次 push workflow，避免重复发布。
+      - name: 创建已验证标签（手动发布）
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          test "$GITHUB_REF" = refs/heads/main
+          VERSION="$(node -p "require('./package.json').version")"
+          test "$RELEASE_TAG" = "v$VERSION"
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" >/dev/null 2>&1; then
+            TAG_SHA=$(gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG" --jq .sha)
+            test "$TAG_SHA" = "$GITHUB_SHA"
+          else
+            gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
+              -f "ref=refs/tags/$RELEASE_TAG" -f "sha=$GITHUB_SHA"
+          fi
+
       # 先草稿、后附件、最后发布：上传中断可重跑，避免公开一个缺包的 Release。
       # 已公开的同名 Release 必须逐字节一致，不能因为名字存在就冒充本次成功。
       - name: 发布已验证安装包
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           TARBALL="dsh-liketavern-${RELEASE_TAG#v}.tgz"
           if DRAFT=$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft 2>/dev/null); then

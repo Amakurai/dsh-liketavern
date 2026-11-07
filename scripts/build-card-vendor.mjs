@@ -1,5 +1,5 @@
 /** 将卡面依赖编译成脚本文本；宿主只传递文本，第三方库只在无同源权限的 iframe 内执行。 */
-import { build } from 'esbuild'
+import { build } from 'esbuild-vendor'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'

@@ -23,6 +23,8 @@ import { registerHelperMvuLifecycle, reserveHelperMvuMaintenance } from './node/
 import { TavernState } from './node/state.js'
 import { isTavernRuntimeSession } from './node/tavernSession.js'
 import { forkedSessionParents, installSessionForkTracking } from './node/sessionArchiveSnapshot.js'
+import { installHostForkCapture } from './node/hostForkCapture.js'
+import { deleteHostForkIdentity } from './node/hostForkIdentity.js'
 import { TYPERT_HOST } from './remote.js'
 import { errorMessage, guardPhase, guardPhaseAsync, hasMethod, withHost } from './node/hostCompat.js'
 
@@ -62,6 +64,7 @@ async function startTavern(ctx: Context, config: ReturnType<typeof Config>): Pro
   const state = new TavernState(tavernPaths(), () => resolveConfig(scope.get()), (message) => ctx.logger.warn(message))
   await state.init()
   createTavernService(ctx, state, scope)
+  guardPhase(ctx, '宿主分支身份追踪', () => installHostForkCapture(ctx, state.paths))
 
   // 预设服务是可选能力：宿主没有 agentPresets（旧版改名或未来版本移除）时只跳过注册。
   const presets = host.get<Parameters<typeof installTavernPreset>[0]['agentPresets']>('agentPresets')
@@ -135,7 +138,10 @@ async function startTavern(ctx: Context, config: ReturnType<typeof Config>): Pro
       return
     }
     forkedSessionParents.delete(sessionId)
-    await state.clearBinding(sessionId).catch((err) => ctx.logger.warn(`dsh-tavern: 会话解绑清理失败：${String(err)}`))
+    try {
+      await state.clearBinding(sessionId)
+      await deleteHostForkIdentity(state.paths, sessionId)
+    } catch (err) { ctx.logger.warn(`dsh-tavern: 会话解绑或分支来源清理失败：${String(err)}`) }
   }
   ctx.on('session/disposed', (session: Session) => {
     forkedSessionParents.delete(session.id)

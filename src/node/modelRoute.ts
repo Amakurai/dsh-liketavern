@@ -11,37 +11,12 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import { PRESET_ADAPTER_PROVIDER, PRESET_ADAPTER_SOURCE_PROVIDER } from './presetAdapter.js'
 
 const wrappedAgents = new WeakSet<object>()
-const patchedAgentProtos = new WeakSet<object>()
-const patchedModelProtos = new WeakSet<object>()
 const activeStepSelections = new WeakMap<object, SelectionEntry>()
-
-function patchAgentModelPrototype(model: unknown): void {
-  if (!model || typeof model !== 'object') return
-  const proto = Object.getPrototypeOf(model) as { current?: () => unknown } | null
-  if (!proto || typeof proto.current !== 'function' || patchedModelProtos.has(proto)) return
-  patchedModelProtos.add(proto)
-  const origCurrent = proto.current
-  proto.current = function (this: any) {
-    const state = this.readState?.()
-    if (state?.pending) return { ...state.pending }
-    if (this.options?.provider && this.options?.model) {
-      const hasOwnRequest = Boolean(this.session?.ownEvents?.()?.some((e: any) => e.type === 'request/header'))
-      if (!hasOwnRequest) {
-        return {
-          provider: this.options.provider,
-          model: this.options.model,
-          ...(this.options.reasoningEffort !== undefined ? { reasoningEffort: this.options.reasoningEffort } : {}),
-        }
-      }
-    }
-    return origCurrent.call(this)
-  }
-}
 
 /**
  * 同步 DSH 0.2.2-rc.1 ReactLoopAgent 在单步 preStep -> prepareRequest 期间锁定的 selection：
  * Tavern 在 agent/request 中将 deepseek-official 重写为内部布局通道 tavern-deepseek 并合入预设 reasoningEffort；
- * 直接在实时 agent 实例及其原型上同步当步 selection，不静态依赖私有包导出，兼容 0.2.1-rc.5 与 0.2.2-rc.1。
+ * 仅处理已挂载 Tavern 预设的实例，不改宿主共享原型或覆盖会话已有的模型选择。
  */
 export function ensureAgentRequestSelectionSync(agent: unknown, stepSelection?: unknown): void {
   if (!agent || typeof agent !== 'object') return
@@ -49,45 +24,6 @@ export function ensureAgentRequestSelectionSync(agent: unknown, stepSelection?: 
   if (stepSelection && typeof stepSelection === 'object') {
     activeStepSelections.set(machine, stepSelection as SelectionEntry)
     machine._activeSelection = stepSelection
-  }
-  patchAgentModelPrototype(machine.model)
-  const proto = Object.getPrototypeOf(machine) as { preStep?: (...args: any[]) => Promise<any> } | null
-  if (proto && typeof proto.preStep === 'function' && !patchedAgentProtos.has(proto)) {
-    patchedAgentProtos.add(proto)
-    const origPreStep = proto.preStep
-    proto.preStep = async function (this: any, target: any, position: any) {
-      patchAgentModelPrototype(this.model)
-      if (!this.requestHeaderLogged && this.options?.provider && this.options?.model) {
-        const current = this.model?.current?.()
-        if (!current || current.provider !== this.options.provider || current.model !== this.options.model) {
-          this.model?.select?.({
-            provider: this.options.provider,
-            model: this.options.model,
-            ...(this.options.reasoningEffort !== undefined ? { reasoningEffort: this.options.reasoningEffort } : {}),
-          })
-        }
-      }
-      if (this.model && typeof this.model.current === 'function' && this.model.current() === undefined) {
-        const route = sessionModelRoute(this)
-        const fallbackRoute = route.provider && route.model
-          ? {
-              provider: route.provider,
-              model: route.model,
-              ...(route.reasoningEffort !== undefined ? { reasoningEffort: route.reasoningEffort } : {}),
-            }
-          : {
-              provider: this.options?.provider || 'deepseek-official',
-              model: this.options?.model || 'deepseek-chat',
-            }
-        this.model.select?.(fallbackRoute)
-      }
-      const decision = await origPreStep.call(this, target, position)
-      if (decision?.selection && typeof decision.selection === 'object') {
-        this._activeSelection = decision.selection
-        activeStepSelections.set(this, decision.selection as SelectionEntry)
-      }
-      return decision
-    }
   }
   if (!wrappedAgents.has(machine) && typeof machine.dispatch?.waterfall === 'function') {
     wrappedAgents.add(machine)
@@ -280,13 +216,8 @@ function ensureProjectionPatched(projections: unknown): void {
 export function installTavernModelSelectionCompat(ctx: Context): void {
   const root = (ctx.root ?? ctx) as Context
   ensureProjectionPatched(root.get('sessionProjections'))
-  const existingAgents = (root.get('agents') as { list?: () => unknown[] } | undefined)?.list?.() ?? []
-  for (const agent of existingAgents) ensureAgentRequestSelectionSync(agent)
   if (installedRoots.has(root)) return
   installedRoots.add(root)
-  root.on('agent/created' as any, (payload: { agent?: unknown } | undefined) => {
-    ensureAgentRequestSelectionSync(payload?.agent ?? payload)
-  })
   root.on('session/event' as any, (session: { id: string }, event: { type?: string; data?: any }) => {
     ensureProjectionPatched(root.get('sessionProjections'))
     if (event?.type !== 'request/header') return

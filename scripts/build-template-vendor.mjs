@@ -1,5 +1,5 @@
 /** 将受信任的模板库打包为只在 QuickJS 中求值的脚本；固定依赖来自锁文件，保留许可证。 */
-import { build } from 'esbuild'
+import { build } from 'esbuild-vendor'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'

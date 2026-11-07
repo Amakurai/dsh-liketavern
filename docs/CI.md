@@ -4,6 +4,8 @@
 
 `.github/workflows/ci.yml` 同时用于 main push、PR、手动运行和 Release 的 `workflow_call`。
 
+Release 也支持在 Actions 的 `release` 页面手动运行：选择 `main`，填写与包版本一致的新标签（例如 `v0.5.11`）。复用的 CI 会先校验分支、版本和发布说明，再运行完整双平台检查。只有这些检查及 artifact 校验全部成功，发布 job 才把新标签固定到本次已验证的 SHA，并发布该 run 的原始安装包；已有标签只能指向相同提交，绝不移动旧标签。手动入口与 tag push 按同一标签串行，均不会取消已开始的发布验证。
+
 1. `verify` 在 Ubuntu、Windows 分别安装锁定依赖，检查宿主版本、构建产物与预设资产，执行 doctor/backup 安装入口冒烟。Ubuntu 先用固定版本、固定 SHA-256 的 actionlint 检查两个 workflow，再执行一次 `npm audit --package-lock-only`，审计完整锁文件而非当前平台安装子集，生成真实 tarball 并验证发布白名单；Windows 验证直接调用 Node 脚本时的 `npm.cmd` 分支。
 2. 两个平台的 verify 均成功后，启动四台独立 runner：每个平台各运行 `--shard=1/2` 和 `--shard=2/2`。每台 runner 内仍只跑一个 Vitest worker，两片合起来覆盖该平台的全部测试。测试直接使用刚由 verify 验证与源码一致的入库 `lib/`，不重复构建。
 3. `CI checks` 汇总全部结果；失败、跳过或取消均不能通过。分支保护可选择这个稳定名称，原来的 `ubuntu-full` / `windows-core` 已替换。

@@ -13,13 +13,24 @@ export interface PluginAbout {
   releasesUrl: string
   sourceCheckout: boolean
   desktopHost: boolean
+  /** 安装门槛与开发基线分别展示，不能把放开版本号当作完整功能保证。 */
+  hostCompatibility?: HostCompatibility
+  developmentHostVersion?: string
 }
+export type HostCompatibility = 'compatible' | 'incompatible' | 'unknown'
+export type PluginVersionStatus = 'current' | 'available' | 'ahead'
 export interface PluginUpdate {
   status: 'current' | 'available' | 'ahead' | 'incompatible'
   latestVersion: string
   requiredHostVersion: string
   releaseUrl: string
   command: string | null
+  /** 新旧判断独立于宿主兼容性；status 保留旧客户端的拒绝语义。 */
+  versionStatus?: PluginVersionStatus
+  hostCompatibility?: HostCompatibility
+  developmentHostVersion?: string
+  /** 交给宿主插件管理器的明确安装目标，不在检查时执行。 */
+  installSpec?: string | null
 }
 export interface PluginAboutMetadata { plugin: unknown; host: unknown; sourceCheckout: boolean }
 export interface PluginAboutReaderOptions {
@@ -75,11 +86,18 @@ function compare(left: SemVer, right: SemVer): number {
   }
   return 0
 }
-function packageVersions(value: unknown, error: string): { version: SemVer; host: string } {
+function packageVersions(value: unknown, error: string): { version: SemVer; host: string; baseline: string } {
   if (!object(value) || value.name !== 'dsh-liketavern') throw new Error(error)
   const host = manifestHostRange(value)
   if (host === 'unknown') throw new Error(error)
-  return { version: semver(value.version, error), host }
+  let baseline = 'unknown'
+  if (object(value.devDependencies)) {
+    try { baseline = semver(value.devDependencies['@deepseek-ai/dsh'], error).value } catch { /* 历史包未声明开发基线仍可检查。 */ }
+  }
+  return { version: semver(value.version, error), host, baseline }
+}
+function compatibility(host: string, required: string): HostCompatibility {
+  return host === 'unknown' ? 'unknown' : hostVersionSatisfies(host, required) ? 'compatible' : 'incompatible'
 }
 async function localJson(path: string): Promise<unknown> {
   const file = await open(path, 'r')
@@ -192,14 +210,15 @@ export function createPluginAboutReader(options: PluginAboutReaderOptions = {}):
     try {
       const raw = await metadata(), current = packageVersions(raw.plugin, METADATA_ERROR)
       if ((raw.host !== null && (!object(raw.host) || raw.host.name !== '@deepseek-ai/dsh')) || typeof raw.sourceCheckout !== 'boolean') throw new Error(METADATA_ERROR)
-      return { version: current.version.value, hostVersion: raw.host === null ? 'unknown' : semver((raw.host as Record<string, unknown>).version, METADATA_ERROR).value,
+      const hostVersion = raw.host === null ? 'unknown' : semver((raw.host as Record<string, unknown>).version, METADATA_ERROR).value
+      return { version: current.version.value, hostVersion,
         expectedHostVersion: current.host, repositoryUrl: REPOSITORY, releasesUrl: `${REPOSITORY}/releases`, sourceCheckout: raw.sourceCheckout,
-        desktopHost: hostProfile?.name === 'desktop' }
+        desktopHost: hostProfile?.name === 'desktop', hostCompatibility: compatibility(hostVersion, current.host),
+        developmentHostVersion: current.baseline }
     } catch { throw new Error(METADATA_ERROR) }
   }
   const check = async (): Promise<PluginUpdate> => {
     const current = await getPluginAbout()
-    if (current.hostVersion === 'unknown') throw new Error('无法确认当前运行宿主版本，请通过 dsh 正常启动后重试')
     const controller = new AbortController()
     let timeout: ReturnType<typeof setTimeout> | undefined
     const expired = new Promise<never>((_, reject) => {
@@ -223,12 +242,16 @@ export function createPluginAboutReader(options: PluginAboutReaderOptions = {}):
       if (latest.prerelease.length) throw new Error(INVALID_RELEASE_ERROR)
       const target = packageVersions(await request(`${RAW_PACKAGE_ROOT}${encodeURIComponent(tag)}/package.json`), INVALID_RELEASE_ERROR)
       if (target.version.value !== latest.value) throw new Error(INVALID_RELEASE_ERROR)
-      const compatible = hostVersionSatisfies(current.hostVersion, target.host)
+      const hostCompatibility = compatibility(current.hostVersion, target.host)
       const order = compare(latest, semver(current.version, METADATA_ERROR))
-      const status = !compatible ? 'incompatible' : order > 0 ? 'available' : order < 0 ? 'ahead' : 'current'
+      const versionStatus: PluginVersionStatus = order > 0 ? 'available' : order < 0 ? 'ahead' : 'current'
+      const status = hostCompatibility === 'incompatible' ? 'incompatible' : versionStatus
+      const installSpec = versionStatus === 'available' && hostCompatibility === 'compatible' && !current.sourceCheckout
+        ? `github:Amakurai/dsh-liketavern#${tag}` : null
       return { status, latestVersion: latest.value, requiredHostVersion: target.host,
         releaseUrl: `${REPOSITORY}/releases/tag/${encodeURIComponent(tag)}`,
-        command: status === 'available' && !current.sourceCheckout && !current.desktopHost ? `dsh plugin --profile web add github:Amakurai/dsh-liketavern#${tag}` : null }
+        versionStatus, hostCompatibility, developmentHostVersion: target.baseline, installSpec,
+        command: installSpec && !current.desktopHost ? `dsh plugin --profile web add ${installSpec}` : null }
     }
     try { return await Promise.race([operation(), expired]) }
     finally { if (timeout !== undefined) clearTimeout(timeout) }

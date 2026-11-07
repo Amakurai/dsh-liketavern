@@ -7,13 +7,24 @@ export interface PluginAbout {
     releasesUrl: string;
     sourceCheckout: boolean;
     desktopHost: boolean;
+    /** 安装门槛与开发基线分别展示，不能把放开版本号当作完整功能保证。 */
+    hostCompatibility?: HostCompatibility;
+    developmentHostVersion?: string;
 }
+export type HostCompatibility = 'compatible' | 'incompatible' | 'unknown';
+export type PluginVersionStatus = 'current' | 'available' | 'ahead';
 export interface PluginUpdate {
     status: 'current' | 'available' | 'ahead' | 'incompatible';
     latestVersion: string;
     requiredHostVersion: string;
     releaseUrl: string;
     command: string | null;
+    /** 新旧判断独立于宿主兼容性；status 保留旧客户端的拒绝语义。 */
+    versionStatus?: PluginVersionStatus;
+    hostCompatibility?: HostCompatibility;
+    developmentHostVersion?: string;
+    /** 交给宿主插件管理器的明确安装目标，不在检查时执行。 */
+    installSpec?: string | null;
 }
 export interface PluginAboutMetadata {
     plugin: unknown;

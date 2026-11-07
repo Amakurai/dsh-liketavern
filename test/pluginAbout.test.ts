@@ -69,11 +69,12 @@ describe('关于元数据', () => {
     expect(await reader.getPluginAbout()).toMatchObject({ hostVersion: 'unknown', desktopHost: true })
   })
   it('真实源码读取自身版本，但 Vitest 启动入口不能伪装成插件旁的开发宿主', async () => {
-    const own = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as { version: string; engines: { dsh: string } }
+    const own = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as { version: string; engines: { dsh: string }; devDependencies: { '@deepseek-ai/dsh': string } }
     const checkout = await lstat(fileURLToPath(new URL('../.git', import.meta.url))).then(() => true, () => false)
     const result = await getPluginAbout()
     expect(result).toEqual({ version: own.version, hostVersion: 'unknown', expectedHostVersion: own.engines.dsh,
-      repositoryUrl: REPOSITORY, releasesUrl: `${REPOSITORY}/releases`, sourceCheckout: checkout, desktopHost: false })
+      repositoryUrl: REPOSITORY, releasesUrl: `${REPOSITORY}/releases`, sourceCheckout: checkout, desktopHost: false,
+      hostCompatibility: 'unknown', developmentHostVersion: own.devDependencies['@deepseek-ai/dsh'] })
     expect(JSON.stringify(result)).not.toContain(fileURLToPath(new URL('../', import.meta.url)))
   })
   it('初始化和读取关于信息不联网，只有显式检查才调用 fetch', async () => {
@@ -99,12 +100,13 @@ describe('关于元数据', () => {
     await expect(reader.getPluginAbout()).rejects.toThrow('插件或宿主版本元数据无效')
     await expect(createPluginAboutReader({ readMetadata: async () => ({ ...metadata(), plugin: pkg('01.2.3') }) }).getPluginAbout()).rejects.toThrow('版本元数据无效')
   })
-  it('无法确认运行宿主时关于页仍可读，更新检查明确拒绝且不联网', async () => {
-    const fetch = vi.fn<typeof globalThis.fetch>()
+  it('无法确认运行宿主时仍能查询新版，兼容性明确未知且不提供安装目标', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(response(release())).mockResolvedValueOnce(response(pkg('0.2.6')))
     const reader = createPluginAboutReader({ fetch, readMetadata: async () => ({ ...metadata(), host: null }) })
     expect(await reader.getPluginAbout()).toMatchObject({ version: '0.2.5', hostVersion: 'unknown', expectedHostVersion: HOST })
-    await expect(reader.checkPluginUpdate()).rejects.toThrow('无法确认当前运行宿主版本')
-    expect(fetch).not.toHaveBeenCalled()
+    expect(await reader.checkPluginUpdate()).toMatchObject({ status: 'available', versionStatus: 'available',
+      hostCompatibility: 'unknown', command: null, installSpec: null })
+    expect(fetch).toHaveBeenCalledTimes(2)
   })
   it('以实际全局/本地入口选择两个不同版本，目录 junction 先解析真实入口', async () => {
     const root = await mkdtemp(join(tmpdir(), 'tavern-host-entry-')); roots.push(root)
@@ -142,7 +144,9 @@ describe('明确且有界的更新检查', () => {
   it('固定域名、拒绝重定向，忽略发布者输入的跳转链接，只生成明确 web 安装命令', async () => {
     const { reader, fetch } = factory()
     expect(await reader.checkPluginUpdate()).toEqual({ status: 'available', latestVersion: '0.2.6', requiredHostVersion: HOST,
-      releaseUrl: `${REPOSITORY}/releases/tag/v0.2.6`, command: 'dsh plugin --profile web add github:Amakurai/dsh-liketavern#v0.2.6' })
+      releaseUrl: `${REPOSITORY}/releases/tag/v0.2.6`, command: 'dsh plugin --profile web add github:Amakurai/dsh-liketavern#v0.2.6',
+      versionStatus: 'available', hostCompatibility: 'compatible', developmentHostVersion: 'unknown',
+      installSpec: 'github:Amakurai/dsh-liketavern#v0.2.6' })
     expect(fetch.mock.calls.map(call => call[0])).toEqual([API, 'https://raw.githubusercontent.com/Amakurai/dsh-liketavern/v0.2.6/package.json'])
     for (const [, init] of fetch.mock.calls) expect(init).toMatchObject({ method: 'GET', redirect: 'error', credentials: 'omit', signal: expect.any(AbortSignal) })
   })
@@ -175,8 +179,28 @@ describe('明确且有界的更新检查', () => {
   it('桌面安装版也可检查兼容性，但不提供 CLI 覆盖桌面 profile 的命令', async () => {
     const { reader } = factory({ desktopHost: true })
     expect(await reader.getPluginAbout()).toMatchObject({ sourceCheckout: false, desktopHost: true })
-    expect(await reader.checkPluginUpdate()).toMatchObject({ status: 'available', command: null })
+    expect(await reader.checkPluginUpdate()).toMatchObject({ status: 'available', command: null,
+      installSpec: 'github:Amakurai/dsh-liketavern#v0.2.6', hostCompatibility: 'compatible' })
     expect(await factory({ desktopHost: true, requiredHost: '9.8.7' }).reader.checkPluginUpdate()).toMatchObject({ status: 'incompatible', command: null })
+  })
+  it('当前开放门槛与最新旧发布的精确门槛各自判断，旧发布不匹配不掩盖当前版本已经更新', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(response(release('v0.5.9')))
+      .mockResolvedValueOnce(response(pkg('0.5.9', '0.2.1-rc.3')))
+    const reader = createPluginAboutReader({ fetch, readMetadata: async () => ({
+      plugin: { ...pkg('0.5.10', '0.2.1-rc.3'), engines: { dsh: '*' }, devDependencies: { '@deepseek-ai/dsh': '0.2.2-rc.1' } },
+      host: { name: '@deepseek-ai/dsh', version: '0.2.2-rc.1' }, sourceCheckout: false,
+    }) })
+    expect(await reader.getPluginAbout()).toMatchObject({ hostCompatibility: 'compatible', expectedHostVersion: '*', developmentHostVersion: '0.2.2-rc.1' })
+    expect(await reader.checkPluginUpdate()).toMatchObject({ status: 'incompatible', versionStatus: 'ahead',
+      hostCompatibility: 'incompatible', latestVersion: '0.5.9', command: null, installSpec: null })
+  })
+  it.each(['0.2.0-rc.1', '0.2.1-rc.3', '0.2.1-rc.5', '0.2.2-alpha.3', '0.2.2-rc.1', '0.3.0'])('开放清单在宿主 %s 上允许更新，精确旧 peer 不会重新阻断', async host => {
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(response(release('v0.5.11')))
+      .mockResolvedValueOnce(response({ ...pkg('0.5.11', '0.2.1-rc.3'), engines: { dsh: '*' },
+        devDependencies: { '@deepseek-ai/dsh': '0.2.2-rc.1' } }))
+    const reader = createPluginAboutReader({ fetch, readMetadata: async () => metadata('0.5.9', host) })
+    expect(await reader.checkPluginUpdate()).toMatchObject({ versionStatus: 'available', hostCompatibility: 'compatible',
+      requiredHostVersion: '*', developmentHostVersion: '0.2.2-rc.1', installSpec: 'github:Amakurai/dsh-liketavern#v0.5.11' })
   })
   it('同时多次点击共用一轮请求，完成后可以重新检查', async () => {
     let resolveRelease!: (value: Response) => void

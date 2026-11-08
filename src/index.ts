@@ -6,7 +6,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
 import type { Session } from '@deepseek-ai/dsh-session'
-import '@deepseek-ai/dsh-typert-registry'
+import type {} from '@deepseek-ai/dsh-typert-registry'
 import { Config, TAVERN_NS, TavernConfigSchema, resolveConfig } from './node/config.js'
 import { adoptHostFork, ensureGreeting } from './node/floors.js'
 import { createGreetingRetirement } from './node/greetingRetirement.js'

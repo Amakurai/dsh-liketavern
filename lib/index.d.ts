@@ -5,7 +5,6 @@
  */
 import type { Context } from '@deepseek-ai/cordis';
 import type { GenerateOptions } from '@deepseek-ai/dsh-llm';
-import '@deepseek-ai/dsh-typert-registry';
 import { Config } from './node/config.js';
 import { createPresetRequestProjector } from './node/presetRequestProjection.js';
 import { TavernState } from './node/state.js';

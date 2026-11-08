@@ -1,4 +1,4 @@
-import type { WISource, WorldDelta, WorldInfoEntry } from '../core/types.js';
+import { type WISource, type WorldDelta, type WorldInfoEntry } from '../core/types.js';
 /** 单文件条目数上限：社区大书在千级，2000 已留足余量。预设（presetStore）同口径复用。 */
 export declare const MAX_LOREBOOK_ENTRIES = 2000;
 /**

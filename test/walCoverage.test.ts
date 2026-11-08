@@ -149,3 +149,21 @@ it.each(['records.jsonl','meta.json','rollback-progress.json'])('只读回滚预
   expect(await fs.readText('2.txt')).toBe('2')
   expect(await fs.readText(`state/wal/s_t2/${name}`)).toBe('{broken')
 })
+
+it('旧回滚副本不能掩盖同名活跃楼层日志缺失，也不能阻止正常的下一层开始',async()=> {
+  const {root,wal,fs}=await fixture()
+  await wal.rollbackFloor('s#t2',root)
+  await new Promise(resolve=>setTimeout(resolve,5))
+  await wal.beginFloor('s#t2')
+  await fs.withFloor('s#t2').writeText('2.txt','重新生成')
+  await wal.commitFloor('s#t2')
+  // 清单已用新 startedAt 登记 s#t2；此时旧回滚副本仍在目录里，合法的下一层必须能开始。
+  await wal.beginFloor('s#t3')
+  await fs.withFloor('s#t3').writeText('3.txt','第三层')
+  await wal.commitFloor('s#t3')
+  await rm(join(root,'state/wal/s_t2'),{recursive:true,force:true})
+  const restarted=new Wal(join(root,'state/wal'))
+  await expect(restarted.beginFloor('s#t4')).rejects.toThrow(/WAL.*缺失/)
+  await expect(restarted.listFloors()).rejects.toThrow(/WAL.*缺失/)
+  expect(await fs.readText('1.txt')).toBe('1')
+})

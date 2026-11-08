@@ -708,3 +708,28 @@ it('来源确实未绑定的合法跳过仍返回 null，允许普通会话发�
   agent.followup(message('合法未绑定会话')); await idle(agent)
   expect(errors).toEqual([]); expect(requests).toHaveLength(1)
 })
+
+it('原生分支准备剧情期间解除绑定，释放后不得被迟到接管重新发布', async () => {
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  const original = state.forkStory.bind(state)
+  const preparing = vi.spyOn(state, 'forkStory').mockImplementationOnce(async (...args) => {
+    entered.resolve()
+    await release.promise
+    return original(...args)
+  })
+  const agent = await child()
+  await entered.promise
+  const service = ctx.get('tavern') as TavernService
+  let cleared = false
+  const clearing = service.clearSessionBinding({ sessionId: agent.id }).then(value => { cleared = true; return value })
+  await new Promise(resolve => setTimeout(resolve, 30))
+  // adoption 仍停在 forkStory 准备阶段，解除不能先返回成功。
+  expect(cleared).toBe(false)
+  release.resolve()
+  expect(await clearing).toEqual({ cleared: true })
+  expect(await state.loadBindingUnwaited(agent.id)).toBeNull()
+  expect(await adoptions.get(agent.id)).toBe(true)
+  const plan = JSON.parse((await new WorkspaceFs(root, null).readText(hostForkAdoptionFile(agent.id)))!)
+  expect(plan.status).toBe('skipped')
+  expect(preparing).toHaveBeenCalledTimes(1)
+})

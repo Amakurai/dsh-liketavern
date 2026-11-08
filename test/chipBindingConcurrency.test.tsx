@@ -108,7 +108,7 @@ it('保存已经在途时不能解除，完成后正常解除且旧保存不能�
   await clear(view)
   expect(f.setSessionBinding).toHaveBeenCalledOnce()
   expect(f.clearSessionBinding).toHaveBeenCalledOnce()
-  expect(f.getSessionBinding).toHaveBeenCalledTimes(3)
+  expect(f.getSessionBinding).toHaveBeenCalledTimes(4)
   expect(f.binding()).toBeNull()
 })
 
@@ -263,4 +263,30 @@ it('草稿换到别的卡清空剧情、开场白与 MVU，切回已保存的卡
   // 未保存过绑定时没有可恢复的值；重选同一张卡不改动草稿里已调整的开场白。
   expect(draftWithCard(other, null, CARD)).toMatchObject({ storyId: undefined, greetingIndex: 0 })
   expect(draftWithCard({ ...back, greetingIndex: 1 }, saved, CARD)).toMatchObject({ greetingIndex: 1, storyId: 'story-a' })
+})
+
+it('首次保存自动开启 helperMvu 后，二次保存必须携带服务端权威值', async () => {
+  const f = fixture()
+  let first = true
+  f.setSessionBinding.mockImplementation(async request => {
+    const binding = request.binding as SessionBinding
+    if (first) {
+      first = false
+      // 模拟服务端首次绑定带官方 MVU 入口的卡：自动开启 MVU 并创建剧情/规范化卡名。
+      f.save({ ...binding, helperMvu: true, storyId: 'story-auto', cardName: '权威卡名' })
+    } else f.save(binding)
+    return ok({ saved: true })
+  })
+  const view = await render(f)
+  await act(async () => button(view, 'binding.save').props.onClick())
+  await act(async () => { await Promise.resolve() })
+  expect(f.setSessionBinding).toHaveBeenCalledTimes(1)
+  expect(button(view, 'binding.save').props.disabled).not.toBe(true)
+
+  await act(async () => button(view, 'binding.save').props.onClick())
+  expect(f.setSessionBinding).toHaveBeenCalledTimes(2)
+  const second = f.setSessionBinding.mock.calls[1]![0] as { binding: SessionBinding }
+  expect(second.binding.helperMvu).toBe(true)
+  expect(second.binding.storyId).toBe('story-auto')
+  expect(second.binding.cardName).toBe('权威卡名')
 })

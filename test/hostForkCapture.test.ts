@@ -1,5 +1,5 @@
 /** 宿主分支请求的身份捕获：普通会话、服务生命周期和冲突来源均不得串改。 */
-import { Context } from '@deepseek-ai/cordis'
+import { Context, Service } from '@deepseek-ai/cordis'
 import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -98,4 +98,41 @@ it('来源记录写入失败时不创建宿主子会话', async () => {
     await expect(controller.fork({ sessionId: 'session-source' })).rejects.toThrow('identity write failed')
     expect(create).not.toHaveBeenCalled()
   } finally { dispose() }
+})
+
+it('宿主创建失败时清理本次来源记录，不留下孤儿身份', async () => {
+  const agents = { create: vi.fn(async (_options: unknown): Promise<unknown> => { throw new Error('host create failed') }) }
+  const controller = { async fork(_request: unknown) {
+    return agents.create({ sessionId: 'session-orphan', seed: [1], inheritedEventCount: 1,
+      meta: { isSeeded: true, agentPreset: 'tavern' } })
+  } }
+  const deleteIdentity = vi.fn(async (_childId: string) => {})
+  const dispose = captureHostForkRequests(controller, agents, () => false, async () => {}, deleteIdentity)
+  try {
+    await expect(controller.fork({ sessionId: 'session-source' })).rejects.toThrow('host create failed')
+    expect(deleteIdentity).toHaveBeenCalledWith('session-orphan')
+  } finally { dispose() }
+})
+
+it('真实 Cordis Service 上卸载时恢复被包装的宿主方法', async () => {
+  const ctx = new Context(); contexts.push(ctx)
+  const root = await mkdtemp(join(tmpdir(), 'tavern-fork-capture-service-')); roots.push(root)
+  class TestAgents extends Service {
+    constructor(ctx: Context) { super(ctx, 'agents') }
+    async create(options: unknown) { return options }
+  }
+  class TestController extends Service {
+    constructor(ctx: Context) { super(ctx, 'sessionController') }
+    async fork(request: unknown) { return request }
+  }
+  const agents = new TestAgents(ctx), controller = new TestController(ctx)
+  const originalCreate = agents.create, originalFork = controller.fork
+  installHostForkCapture(ctx, { root } as Parameters<typeof installHostForkCapture>[1])
+  await vi.waitFor(() => {
+    expect(agents.create).not.toBe(originalCreate)
+    expect(controller.fork).not.toBe(originalFork)
+  })
+  await ctx.fiber.dispose(); contexts.pop()
+  expect(agents.create).toBe(originalCreate)
+  expect(controller.fork).toBe(originalFork)
 })

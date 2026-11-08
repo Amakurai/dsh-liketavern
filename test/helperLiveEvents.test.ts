@@ -320,3 +320,18 @@ it('非 Tavern 模式不订阅；binding 延迟出现后随列表建立基线；
   const legacy = { ...f.sessions, binding: undefined }; const stop = installHelperLiveEvents(legacy, { getHelperEventState: f.getHelperEventState }, f.views); stop()
   expect(f.sessions.open).not.toHaveBeenCalled()
 })
+
+it('turn/end 先于 settle-assistant 到达时仍按轮次补发接收事件且顺序正确', async () => {
+  const f = fixture(); await settle()
+  f.source.append(start(0), user(1))
+  // 宿主先发布结束帧，再补发持久结算（同一轮 assistant seq 更小）。
+  f.source.append(end(3))
+  const attemptId = 'late-settle' as Parameters<MutableSessionEventSource['settleAssistant']>[0]
+  f.source.host.settleAssistant(attemptId, { type: 'event', event: assistant(2) })
+  await settle()
+  expect(events()).toEqual([
+    ['generation_started', ['normal', {}, false]], ['message_sent', [0]],
+    ['message_received', [1, 'normal']], ['generation_ended', [1]],
+  ])
+  expect(reportHelperHostEventError).not.toHaveBeenCalled()
+})

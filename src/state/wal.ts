@@ -284,9 +284,20 @@ export class Wal {
       if(error.code==='ENOENT') return []
       throw error
     })).filter(entry=>entry.isDirectory())
-    const names=new Set(directories.map(entry=>baseFloorDir(entry.name)))
+    // 活跃目录按目录名直接核对；回滚副本只能作为清单里旧楼层的身份证明。
+    // 不能只按 baseFloorDir 名称集合判断：旧副本会掩盖同名活跃楼层被删除的事实。
+    const activeNames=new Set(directories.filter(entry=>!isRolledBackDir(entry.name)).map(entry=>entry.name))
+    const rolledBack=directories.filter(entry=>isRolledBackDir(entry.name))
     for(const floor of coverage) {
-      if(!names.has(sanitizeFloor(floor.floor))) throw new Error(`WAL 楼层缺失：${floor.floor}；请恢复完整日志，不能继续回退或分支`)
+      const dirName=sanitizeFloor(floor.floor)
+      if(activeNames.has(dirName)) continue
+      let proven=false
+      for(const entry of rolledBack) {
+        if(baseFloorDir(entry.name)!==dirName) continue
+        const meta=await this.readMeta(join(this.rootDir,entry.name))
+        if(meta?.floor===floor.floor && meta.startedAt===floor.startedAt) { proven=true; break }
+      }
+      if(!proven) throw new Error(`WAL 楼层缺失：${floor.floor}；请恢复完整日志，不能继续回退或分支`)
     }
     const previous=coverage.find(floor=>floor.floor===targetFloor)
     if(!previous) return

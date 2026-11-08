@@ -1,9 +1,9 @@
 /** 捕获宿主原生分支请求的确切来源，在宿主创建子会话之前持久化插件侧来源凭据。 */
 import { AsyncLocalStorage } from 'node:async_hooks'
-import type { Context } from '@deepseek-ai/cordis'
+import { symbols, type Context } from '@deepseek-ai/cordis'
 import { isTavernPresetId } from '../core/tavernMode.js'
 import { guardPhase } from './hostCompat.js'
-import { writeHostForkIdentity } from './hostForkIdentity.js'
+import { deleteHostForkIdentity, writeHostForkIdentity } from './hostForkIdentity.js'
 import type { TavernPaths } from './paths.js'
 import { forkedSessionParents } from './sessionArchiveSnapshot.js'
 import { isTavernRuntimeSession } from './tavernSession.js'
@@ -24,11 +24,20 @@ interface ForkCapture {
   used: boolean
 }
 
+/** ctx.get() 返回 traceable Proxy；恢复宿主方法时必须落到其底层 Service 实例，plain object 原样返回。 */
+function unwrapService<T extends object>(service: T): T {
+  const original = (service as unknown as Record<PropertyKey, unknown>)[symbols.original]
+  return (original && typeof original === 'object' ? original : service) as T
+}
+
 /** 只包装当前服务实例；并发分支各用独立异步上下文，来源仅记录在插件状态中。 */
 export function captureHostForkRequests(controller: HostMethods, agents: AgentMethods, sourceIsTavern: (id: string) => boolean,
-  saveIdentity: (childId: string, parentId: string, prefix: readonly unknown[]) => Promise<void>): () => void {
+  saveIdentity: (childId: string, parentId: string, prefix: readonly unknown[]) => Promise<void>,
+  deleteIdentity?: (childId: string) => Promise<void>): () => void {
   const context = new AsyncLocalStorage<ForkCapture>()
-  const originalFork = controller.fork, originalCreate = agents.create
+  // 包装和恢复都直接操作底层 Service 实例；traceable Proxy 每次读取都是新包装，引用比较恒不等。
+  const serviceController = unwrapService(controller), serviceAgents = unwrapService(agents)
+  const originalFork = serviceController.fork, originalCreate = serviceAgents.create
   const create = function (this: unknown, options: unknown): unknown {
     const capture = context.getStore()
     if (!capture?.active || capture.used || !options || typeof options !== 'object' || Array.isArray(options)) {
@@ -53,9 +62,16 @@ export function captureHostForkRequests(controller: HostMethods, agents: AgentMe
     // 旧宿主已持久化正确父身份；保留它自己的创建时序，不增加额外写入。
     if (fields.parentSession === capture.parentId) return Reflect.apply(originalCreate, this, [options])
     const childId = input.sessionId, prefix = input.seed.slice(0, count as number)
-    return saveIdentity(childId, capture.parentId, prefix).then(() => {
+    return saveIdentity(childId, capture.parentId, prefix).then(async () => {
       forkedSessionParents.set(childId, SessionId(capture.parentId))
-      return Reflect.apply(originalCreate, this, [options])
+      try {
+        return await Reflect.apply(originalCreate, this, [options])
+      } catch (error) {
+        // 宿主创建事务失败时清理本次写入的来源记录；deleteIdentity 失败不能掩盖原始创建错误。
+        forkedSessionParents.delete(childId)
+        await deleteIdentity?.(childId).catch(() => {})
+        throw error
+      }
     })
   }
   const fork = function (this: unknown, request: unknown): unknown {
@@ -70,15 +86,16 @@ export function captureHostForkRequests(controller: HostMethods, agents: AgentMe
     })
   }
   try {
-    agents.create = create
-    controller.fork = fork
+    serviceAgents.create = create
+    serviceController.fork = fork
   } catch (error) {
-    if (agents.create === create) agents.create = originalCreate
+    if (serviceAgents.create === create) serviceAgents.create = originalCreate
+    if (serviceController.fork === fork) serviceController.fork = originalFork
     throw error
   }
   return () => {
-    if (agents.create === create) agents.create = originalCreate
-    if (controller.fork === fork) controller.fork = originalFork
+    if (serviceAgents.create === create) serviceAgents.create = originalCreate
+    if (serviceController.fork === fork) serviceController.fork = originalFork
     context.disable()
   }
 }
@@ -98,7 +115,8 @@ export function installHostForkCapture(ctx: Context, paths: TavernPaths): void {
           const session = sessions?.get(id as Parameters<Context['sessions']['get']>[0])
           return session ? isTavernRuntimeSession(scope, session) : false
         } catch { return false }
-      }, (childId, parentId, prefix) => writeHostForkIdentity(paths, childId, parentId, prefix)), 'dsh-tavern host fork capture')
+      }, (childId, parentId, prefix) => writeHostForkIdentity(paths, childId, parentId, prefix),
+      childId => deleteHostForkIdentity(paths, childId)), 'dsh-tavern host fork capture')
     })
   })
 }

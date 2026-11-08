@@ -302,6 +302,33 @@ describe('导入硬上限与错型拒绝（统一拒绝口径，不做静默截�
     expect(ok).toHaveLength(1)
   })
 
+  it('AtDepth 的非法 depth 回退默认 4，合法 depth 保持原值', () => {
+    const depthOf = (depth: unknown, position: unknown, native = true): number => {
+      const parsed = native
+        ? parseLorebook({ entries: { '1': { key: ['a'], content: 'c', position, depth } } }, OPTS)
+        : parseLorebook({ entries: [{ keys: ['a'], content: 'c', extensions: { position, depth } }] }, OPTS)
+      return parsed[0]!.depth
+    }
+    // position=4 是 AtDepth；负数、小数和超安全整数都不能进入 PromptLayoutSchema。
+    expect(depthOf(-1, 4)).toBe(4)
+    expect(depthOf(1.5, 4)).toBe(4)
+    expect(depthOf(Number.MAX_SAFE_INTEGER + 1, 4)).toBe(4)
+    expect(depthOf(0, 4)).toBe(0)
+    expect(depthOf(9, 4)).toBe(9)
+    // character_book 形态（keys + extensions.position 数值）同样归一化。
+    expect(depthOf(1.5, 4, false)).toBe(4)
+    expect(depthOf(9, 4, false)).toBe(9)
+  })
+
+  it('超长 uid 仍可保存，读取工具按完整输出预算处理', () => {
+    // 世界书工具允许长定位；布局 sourceKeys 的 4096 上限由组装/定位边界消化，不能在这里拒绝导入。
+    const long = 'u'.repeat(5000)
+    const parsed = parseLorebook({ entries: { [long]: { key: ['a'], content: 'c' } } }, OPTS)
+    expect(parsed).toHaveLength(1)
+    expect(parsed[0]!.uid).toBe(long)
+    expect(parsed[0]!.key).toBe(`${OPTS.source}:${OPTS.sourceRef}:${long}`)
+  })
+
   it('合法 JSON 但字段错型在归一化时抛错，而不是落盘后在 .includes()/.map() 才炸', () => {
     // key 给字符串而不是数组：旧口径会被 toStrArr 静默塌缩成 []，现在直接拒绝
     expect(() => parseLorebook({ entries: [{ key: 'not-array', content: 'c' }] }, OPTS)).toThrow(/不是数组/)

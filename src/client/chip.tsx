@@ -366,8 +366,21 @@ function HeaderChipSession(props: HeaderChipProps) {
     if (err) setError(err)
     else {
       toast.show(t('chip.saved'))
-      // 先失效进程内缓存再 reload/广播，否则重拉吃到旧绑定（见 cache.ts TTL 口径）。
+      // 先失效进程内缓存再读取权威绑定/reload/广播，否则重拉吃到旧绑定（见 cache.ts TTL 口径）。
       invalidateSessionBinding(sessionId)
+      // 服务端在首次绑定/换卡时可能自动开启原生 MVU、创建 story 或规范化卡名；
+      // 这些不属于用户刚编辑的草稿字段。若不回填，第二次保存会把服务端值写回旧草稿的 undefined。
+      const fresh = typeof remote.getSessionBinding === 'function'
+        ? await remote.getSessionBinding({ sessionId }).catch(() => null) : null
+      if (fresh && fresh.ok && fresh.value.binding && fresh.value.binding.cardId === draft.cardId) {
+        const authoritative = fresh.value.binding
+        setDraft(previous => previous && previous.cardId === authoritative.cardId ? {
+          ...previous,
+          helperMvu: authoritative.helperMvu,
+          storyId: authoritative.storyId,
+          cardName: authoritative.cardName ?? previous.cardName,
+        } : previous)
+      }
       bindingLoader.reload()
       // 通知操作条等按绑定显隐的组件刷新
       window.dispatchEvent(new CustomEvent(BINDING_CHANGED_EVENT, { detail: sessionId }))

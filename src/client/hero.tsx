@@ -339,7 +339,7 @@ function HeroCharacterSession(props: HeroProps) {
         setError(t('hero.error.noGreetingInput'))
         return
       }
-      const entered = await remote.ensureGreeting({ sessionId })
+      const entered = await withWriteTimeout(remote.ensureGreeting({ sessionId }), HERO_WRITE_TIMEOUT_MS, () => new Error(t('util.loadTimeout')))
       const enterErr = errOf(entered)
       if (enterErr) setError(enterErr)
       else if (entered.ok) {
@@ -369,7 +369,7 @@ function HeroCharacterSession(props: HeroProps) {
     setBusy(true)
     setError(null)
     try {
-      const saved = await remote.setSessionBinding({ binding: { ...binding, greetingIndex: index } })
+      const saved = await withWriteTimeout(remote.setSessionBinding({ binding: { ...binding, greetingIndex: index } }), HERO_WRITE_TIMEOUT_MS, () => new Error(t('util.loadTimeout')))
       const saveErr = errOf(saved)
       if (saveErr) setError(saveErr)
       else {

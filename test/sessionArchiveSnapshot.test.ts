@@ -415,3 +415,27 @@ it('旧绑定导出在冷启动后使用已验证的来源记录，缺少来源�
   await expect(snapshotSessionArchive(sourceCtx, state, child.id)).rejects.toThrow(/WAL.*来源/)
   expect(await ws.fs.readText('memory/inherited.md')).toBe('继承事实')
 })
+
+it('seeded 且继承历史但无来源、无活动祖先 WAL 时导出保留 undefined 世系', async () => {
+  const parent = ctx.sessions.get(SessionId('session-one'))!
+  parent.append('turn/start', { turn: 1 }); parent.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
+  const inherited = parent.snapshotEvents()
+  const child = ctx.sessions.create(SessionId('session-seeded-no-identity'), {
+    seed: inherited, inheritedEventCount: inherited.length as never, meta: { isSeeded: true },
+  })
+  await state.saveBinding({ sessionId: child.id, cardId, presetId: null, personaId: null, lorebookIds: [],
+    characterLorebookId: null, interactiveCards: false, greetingIndex: 0, createdAt: new Date(0).toISOString() })
+  const sourceCtx = { sessions: ctx.sessions,
+    get: (name: string) => name === 'sessionPersistence'
+      ? { open: async (id: string) => {
+        const session = id === child.id ? child : id === parent.id ? parent : undefined
+        if (!session) throw new Error('missing session')
+        return { header: session.header, inheritedEventCount: session.inheritedEventCount,
+          read: async () => ({ events: session.snapshotEvents() }), close: async () => {} }
+      } } : undefined } as unknown as Context
+  const archive = await snapshotSessionArchive(sourceCtx, state, child.id)
+  expect(archive.binding.walLineage).toBeUndefined()
+  await writeHostForkIdentity(state.paths, child.id, parent.id, child.snapshotEvents().slice(0, child.inheritedEventCount))
+  const derived = await snapshotSessionArchive(sourceCtx, state, child.id)
+  expect(derived.binding.walLineage).toEqual([{ sessionId: parent.id, throughTurn: 1 }])
+})

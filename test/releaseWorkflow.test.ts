@@ -56,7 +56,10 @@ async function fixture(task: (root: string) => Promise<void>) {
 }
 
 function run(root: string, script: string, scenario = '', options: { factory?: string; env?: Record<string, string> } = {}) {
-  return spawnSync(bash, ['--noprofile', '--norc', '-e', '-o', 'pipefail', '-c', `${options.factory ?? factoryGh}\n${script}`], {
+  // 统一转成 Git Bash 的 POSIX 路径；仅替换反斜杠会让 mkdir -p 探测 Windows 用户父目录，在受限环境中失败。
+  const preparePaths = process.platform === 'win32'
+    ? 'RUNNER_TEMP="$(cygpath -u "$RUNNER_TEMP")"\nCALL_LOG="$(cygpath -u "$CALL_LOG")"\n' : ''
+  return spawnSync(bash, ['--noprofile', '--norc', '-e', '-o', 'pipefail', '-c', `${preparePaths}${options.factory ?? factoryGh}\n${script}`], {
     cwd: root, encoding: 'utf8', windowsHide: true, timeout: 10_000,
     env: { ...process.env, SCENARIO: scenario, RELEASE_TAG: 'v1.2.3', RUNNER_TEMP: root.replace(/\\/g, '/'), CALL_LOG: join(root, 'calls.txt').replace(/\\/g, '/'), ...options.env },
   })

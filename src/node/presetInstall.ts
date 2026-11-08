@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import type { Context } from '@deepseek-ai/cordis'
-import { entryListProblem, type PresetDefinition } from '@deepseek-ai/dsh-agent-preset-registry'
+import type { PresetDefinition } from '@deepseek-ai/dsh-agent-preset-registry'
 import { parse } from 'yaml'
 
 export const TAVERN_PRESET_ID = 'tavern'
@@ -36,6 +36,8 @@ export function escapeYamlSingleQuoted(value: string): string {
 
 /** 新宿主从声明注册预设，不再扫描 .agent-presets；注册跟随插件生命周期撤销。 */
 export async function installTavernPreset(ctx: Pick<Context, 'agentPresets'>): Promise<() => Promise<void>> {
+  // 注册表是可选宿主能力；只在实际安装预设时加载，缺包或导出变更由调用方的阶段守卫处理。
+  const { entryListProblem } = await import('@deepseek-ai/dsh-agent-preset-registry')
   const templateDir = join(packageRoot(), 'presets', TAVERN_PRESET_ID)
   const plugins: unknown = parse((await readFile(join(templateDir, 'agent.cordis.yml'), 'utf8'))
     .replaceAll('__AGENT_MODULE__', escapeYamlSingleQuoted(agentModulePath())))

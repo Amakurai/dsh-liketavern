@@ -43,6 +43,7 @@ import { createMacroDependencyTracker, type MacroDependencySource } from './macr
 import { applyRegexToMessages } from './regex.js'
 import { isStandingBudgetSafe } from './worldbook.js'
 import { hasEjs } from './template.js'
+import { joinPromptParts } from './promptText.js'
 import { createPromptLayout, promptDepthPlacement, promptHistoryAnchors, type PromptLayout, type PromptLayoutFragment, type PromptMessageProvenance } from './promptLayout.js'
 import {
   Marker,
@@ -149,12 +150,8 @@ const WI_ROLE_MAP: Record<WIRole, ChatRole> = {
   [WIRole.Assistant]: 'assistant',
 }
 
-function joinContents(parts: string[]): string {
-  return parts.filter((p) => p.trim().length > 0).join('\n\n')
-}
-
 /** 预设未提供 new_example_chat_prompt 时的示例分隔（ST 出厂值）；显式空串表示不加分隔。 */
-export const DEFAULT_EXAMPLE_CHAT_SEPARATOR = '[Example Chat]'
+const DEFAULT_EXAMPLE_CHAT_SEPARATOR = '[Example Chat]'
 
 /** mes_example 按 <START> 切块（对齐 SillyTavern）。 */
 export function splitExampleMessages(mesExample: string): string[] {
@@ -185,10 +182,6 @@ const CLOCK_FROZEN = { time: '', date: '', datetime: '', weekday: '', isodate: '
 
 /** 快照尾部「命中但未注入」清单最多列出的条数（超出折叠为「等 N 条」）。 */
 const WI_TRUNCATED_HINT_MAX = 8
-
-function joinPromptParts(parts: string[]): string {
-  return parts.filter((p) => p.trim().length > 0).join('\n\n')
-}
 
 /** 跳过 dsh runtime-context 快照，避免把每轮变化的 user 消息当成 {{lastusermessage}}。 */
 function lastRealUserMessage(history: ChatMessage[]): string {
@@ -334,7 +327,7 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
     for (const [name, acts] of Object.entries(wi.outlets)) {
       // outlet 内容同样做宏展开（与定位条目一致）；此处 macroCtx.outlets 尚未赋值，
       // 故内容中嵌套的 {{outlet::X}} 不会递归解析（对齐「禁止嵌套 outlet」）。
-      outlets[name] = joinContents(
+      outlets[name] = joinPromptParts(
         acts.map((a) => {
           const label = `世界书 Outlet「${a.entry.key}」`
           if (!(hasEjs(a.entry.content) && input.renderTemplate) && hasUnevaluatedScript(a.entry.content)) {
@@ -439,7 +432,7 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
       if (standingSafe) { standingParts.push(text); standingSources.push(a.entry.key) }
       else { turnParts.push(text); turnSources.push(a.entry.key) }
     }
-    return { standing: joinContents(standingParts), turn: joinContents(turnParts), standingSources, turnSources }
+    return { standing: joinPromptParts(standingParts), turn: joinPromptParts(turnParts), standingSources, turnSources }
   }
   const wiMessages = (pos: WIPosition, role: ChatRole): ChatMessage[] => {
     const { standing, turn, standingSources, turnSources } = wiChunks(pos)
@@ -471,7 +464,7 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
   const wiText = (pos: WIPosition): string => {
     const { standing, turn, standingSources, turnSources } = wiChunks(pos)
     wiTextSources.set(pos, [...standingSources, ...turnSources])
-    return joinContents([standing, turn])
+    return joinPromptParts([standing, turn])
   }
 
   // ── 3. marker 内容解析 ───────────────────────────────────────────────────
@@ -484,12 +477,12 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
     if (delta.type === 'invalidate') return `【当前状态·已失效】${delta.content}`
     return delta.content
   }
-  const deltaText = joinContents(
+  const deltaText = joinPromptParts(
     input.worldDeltas
       .filter((delta) => isDeltaRenderedInTurn(delta, activatedDeltaIds))
       .map((delta) => expandTurn(formatDelta(delta))),
   )
-  const memoryBodies = joinContents(input.memories.map((m) => expandTurn(m)))
+  const memoryBodies = joinPromptParts(input.memories.map((m) => expandTurn(m)))
   // 检索记忆同样加来源标签（与世界书标签同一目的：让模型识别为事实层而非叙述）。
   const memoryText = memoryBodies ? `【检索记忆】\n${memoryBodies}` : ''
   // 记忆/变化层永远进 turn：在创建消息处（markerContent / insertFallbackMarkers）按对象标记。
@@ -845,22 +838,30 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
       placement: { kind: 'after-history', ...(lastHistory ? { anchor: lastHistory } : {}) } })
   }
   const layout = createPromptLayout(layoutHistory, layoutFragments)
-  const estimate = (m: ChatMessage) => input.estimateTokens(m.content)
+  const messageTokenCache = new WeakMap<ChatMessage, number>()
+  const estimate = (m: ChatMessage): number => {
+    let cached = messageTokenCache.get(m)
+    if (cached === undefined) {
+      cached = input.estimateTokens(m.content)
+      messageTokenCache.set(m, cached)
+    }
+    return cached
+  }
   const totalBudget = Math.max(0, input.budget.maxTokens - input.budget.reserveForOutput)
   const tokensOf = (msgs: ChatMessage[]) => msgs.reduce((s, m) => s + estimate(m), 0)
   const tokensBefore = tokensOf(beforeHistory) + tokensOf(history) + tokensOf(tail)
+  let currentTokens = tokensBefore
   const trimmedSections: string[] = []
 
   // 非历史裁剪优先级（先裁动态）：agentMemory → worldState → worldInfo → 角色定义/示例
   const trimNonHistory = (predicate: (m: ChatMessage) => boolean, label: string) => {
-    let tokens = tokensOf(beforeHistory) + tokensOf(history) + tokensOf(tail)
-    if (tokens <= totalBudget) return
+    if (currentTokens <= totalBudget) return
     for (const bucket of [beforeHistory, tail]) {
-      for (let i = bucket.length - 1; i >= 0 && tokens > totalBudget; i--) {
+      for (let i = bucket.length - 1; i >= 0 && currentTokens > totalBudget; i--) {
         const m = bucket[i]!
         if (!predicate(m)) continue
         bucket.splice(i, 1)
-        tokens -= estimate(m)
+        currentTokens -= estimate(m)
         trimmedSections.push(label)
       }
     }
@@ -871,17 +872,14 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
   trimNonHistory((m) => examplePromptMessages.has(m), 'dialogueExamples')
   trimNonHistory((m) => characterDefinitionMessages.has(m), 'characterDefinitions')
   // 历史裁剪：丢最旧的消息（保留最新用户输入）
-  {
-    let tokens = tokensOf(beforeHistory) + tokensOf(history) + tokensOf(tail)
-    while (tokens > totalBudget && history.length > 1) {
-      const dropped = history.shift()!
-      tokens -= estimate(dropped)
-      trimmedSections.push('history')
-    }
+  while (currentTokens > totalBudget && history.length > 1) {
+    const dropped = history.shift()!
+    currentTokens -= estimate(dropped)
+    trimmedSections.push('history')
   }
 
   const messages = [...beforeHistory, ...history, ...tail]
-  const tokensAfter = tokensOf(messages)
+  const tokensAfter = currentTokens
   for (const label of trimmedSections) log.push({ kind: 'trim', detail: label })
 
   // ── 8. dsh 通道：standing（稳定前缀）与 turnContext（本轮触发层）分开 ──

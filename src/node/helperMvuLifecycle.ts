@@ -71,7 +71,7 @@ async function abortable<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
     if (signal.aborted) abort()
   })
 }
-export async function waitForHelperMvu(state: TavernState, agent: Agent, signal: AbortSignal, includeInitialization = true): Promise<void> {
+async function waitForHelperMvu(state: TavernState, agent: Agent, signal: AbortSignal, includeInitialization = true): Promise<void> {
   let announced = false
   while (await abortable(helperMvuPending(state, agent.id, includeInitialization), signal)) {
     if (!announced) {
@@ -115,7 +115,7 @@ export async function stopForHelperMvu(state: TavernState, agent: Agent, signal:
 }
 
 /** 只从公开 claim 删除记录取得原目标；取消删除带 outcome=canceled，不被当作待恢复输入。 */
-export function observeHelperMvuSessionEvent(agent: Agent, event: SessionEvent): void {
+function observeHelperMvuSessionEvent(agent: Agent, event: SessionEvent): void {
   const gate = gateFor(agent)
   if (event.type === 'agent/inbox/spliced') {
     // 新宿主在 session/event 通知前推进 inbox 投影；从日志游标折叠变更前的队列，不能拿变更后的下标找已移除输入。
@@ -146,7 +146,7 @@ export function observeHelperMvuSessionEvent(agent: Agent, event: SessionEvent):
     gate.removed.clear()
   }
 }
-export function observeHelperMvuClaim(agent: Agent, message: UserMessage, turn: number): void {
+function observeHelperMvuClaim(agent: Agent, message: UserMessage, turn: number): void {
   const gate = gateFor(agent), target = gate.removed.get(message.id)
   gate.removed.delete(message.id)
   if (target) gate.claimed.set(message.id, { message, target, turn })

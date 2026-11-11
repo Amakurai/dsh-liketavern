@@ -497,9 +497,11 @@ describe('面板写路径不记 WAL（plainWorkspace）', () => {
     const m1 = await service.saveMemory({ cardId, body: '旧记忆一' })
     const m2 = await service.saveMemory({ cardId, body: '旧记忆二' })
 
-    // 模拟 turn/start～turn/end 之间：共享句柄 floor 非 null（host 侧 beginFloor）
+    // 模拟 turn/start～turn/end 之间：WAL 已开层、派生楼层句柄在场（共享句柄 floor 恒为 null）
     const shared = await state.workspace(cardId)
-    await shared.fs.beginFloor('s1#t1')
+    await shared.wal.beginFloor('s1#t1')
+    const floorFs = shared.fs.withFloor('s1#t1')
+    expect(floorFs.currentFloor).toBe('s1#t1')
 
     // 面板操作：增/改/删记忆、加/撤世界状态
     const m3 = await service.saveMemory({ cardId, body: '面板新增记忆', tags: ['面板'] })
@@ -518,7 +520,7 @@ describe('面板写路径不记 WAL（plainWorkspace）', () => {
     await expect(readFile(join(walDir, 's1_t1', 'records.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
 
     // 提交并回滚该楼层：无记录可回放，面板编辑原样保留
-    await shared.fs.commitFloor()
+    await shared.wal.commitFloor('s1#t1')
     expect(await shared.wal.rollbackFloor('s1#t1', join(root, 'characters', cardId))).toEqual([])
     expect((await service.getMemories({ cardId })).items.map((e) => e.body).sort()).toEqual(['面板改写记忆', '面板新增记忆'])
   })

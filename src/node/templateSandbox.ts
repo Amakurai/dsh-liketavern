@@ -38,8 +38,32 @@ function sharedTextSegments(text:string):string[] {
 const PENDING_JOB_BATCH = 256
 
 let templateLibrarySource: string | undefined
+let templateBootstrapSource: string | undefined
 let templateFakerSource: string | undefined
 let templateRuntimeHash: string | undefined
+
+/** 单次递归清理 undefined 字段并深拷贝普通 JSON，避免对数兆检查点与共享段做 JSON.stringify + JSON.parse。 */
+function cleanPlainJson<T>(value: T): T {
+  if (typeof value === 'number') return (Number.isFinite(value) ? (value === 0 ? 0 : value) : null) as T
+  if (value === null || typeof value !== 'object') return value
+  if (Array.isArray(value)) {
+    const out = new Array<unknown>(value.length)
+    for (let i = 0; i < value.length; i++) {
+      const item = value[i]
+      out[i] = item === undefined ? null : cleanPlainJson(item)
+    }
+    return out as T
+  }
+  const src = value as Record<string, unknown>
+  const out: Record<string, unknown> = {}
+  const keys = Object.keys(src)
+  for (let i = 0; i < keys.length; i++) {
+    const k = keys[i]!
+    const v = src[k]
+    if (v !== undefined) out[k] = cleanPlainJson(v)
+  }
+  return out as T
+}
 /** 仅供 worker 编排计时，不暴露给 QuickJS 脚本。 */
 let computationPhase: ((phase: 'loading' | 'computing') => void) | undefined
 
@@ -127,6 +151,9 @@ export class TemplateSandbox {
   static async prepare(onPhase?: (phase: 'loading' | 'computing') => void): Promise<void> {
     computationPhase = onPhase
     const [,runtime]=await Promise.all([prepareTemplateCheckpointVm(),loadTemplateRuntime()])
+    if (templateLibrarySource !== runtime.librarySource || !templateBootstrapSource) {
+      templateBootstrapSource = BOOTSTRAP.replace('/* TEMPLATE_VENDOR */', () => runtime.librarySource)
+    }
     templateLibrarySource=runtime.librarySource;templateFakerSource=runtime.fakerSource;templateRuntimeHash=runtime.hash
   }
 
@@ -176,7 +203,7 @@ export class TemplateSandbox {
       try { vm.setProp(vm.global,'__input',inputHandle) } finally { inputHandle.dispose() }
       const limitHandle=vm.newNumber(contextChars+1024*1024)
       try {vm.setProp(vm.global,'__tavernOutputLimit',limitHandle)} finally {limitHandle.dispose()}
-      sandbox.evaluate(BOOTSTRAP.replace('/* TEMPLATE_VENDOR */',()=>templateLibrarySource!))
+      sandbox.evaluate(templateBootstrapSource ?? BOOTSTRAP.replace('/* TEMPLATE_VENDOR */',()=>templateLibrarySource!))
       // 任何第三方代码（含 preload）之前冻结宿主命令入口；模板不能替换命令实现来伪造状态或结果。
       sandbox.hardenProtocol()
       if(bootstrap?.preload==='refresh') sandbox.sticky('restore',bootstrap.state)
@@ -362,7 +389,7 @@ export class TemplateSandbox {
       ...(this.checkpoint ? {checkpoint:this.checkpoint} : {}),
       ...(this.bootstrap ? {bootstrap:this.bootstrap} : {})}
     measureTemplateReplay(replay)
-    return JSON.parse(JSON.stringify(replay)) as TemplateReplay
+    return cleanPlainJson(replay)
   }
 
   private captureCheckpoint():void {

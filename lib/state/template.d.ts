@@ -29,6 +29,8 @@ export interface TemplateState {
     generation?: TemplateGeneration;
 }
 export declare const templateTextHash: (text: string) => string;
+/** 清理临时草稿或已删除剧情的模板内存缓存，避免挤占活跃剧情槽位。 */
+export declare function evictTemplateCaches(root: string): void;
 export declare function loadTemplateState(fs: WorkspaceFs): Promise<TemplateState>;
 /** 生成归属用于生命周期判断，不必为查一个楼层复制整份冻结计划和历史回复。 */
 export type TemplateGenerationIdentity = Pick<TemplateGeneration, 'version' | 'status' | 'sessionId' | 'cardId' | 'storyId' | 'turn' | 'floor'>;

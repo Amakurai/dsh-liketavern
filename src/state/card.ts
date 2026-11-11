@@ -12,6 +12,9 @@ import { characterDataExtras, isKnownCharacterDataKey } from '../core/characterD
 import { exportCharacterBook, isSpecCharacterBook, parseLorebook } from './lorebook.js'
 import type { CardRegexScript, CharacterCard, ChatRole, DepthPrompt, LorebookFile } from '../core/types.js'
 import { MAX_CARD_PNG_BYTES } from '../core/cardLimits.js'
+import { isRecord } from '../core/guards.js'
+import { setOwnField } from '../core/objectSafety.js'
+import { toNum } from './coerce.js'
 
 /** 角色卡解析失败时抛出，消息使用中文。 */
 export class CardParseError extends Error {
@@ -39,10 +42,6 @@ const MAX_INFLATE_OUTPUT_BYTES = 4 * 1024 * 1024
 
 type CardSpec = CharacterCard['spec']
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
 /** 字段容错转 string：数字/布尔转字符串，对象 JSON.stringify，null/undefined → ''。 */
 function toStr(value: unknown): string {
   if (typeof value === 'string') return value
@@ -58,18 +57,6 @@ function toStr(value: unknown): string {
 /** 字段容错转 string[]：非数组一律 []，元素逐个走 toStr。 */
 function toStrArr(value: unknown): string[] {
   return Array.isArray(value) ? value.map(toStr) : []
-}
-
-/** 原型污染键：裸赋值会触发 `__proto__` setter，字段丢失且对象原型被替换。 */
-const POLLUTION_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
-
-/** 污染键必须落成自有数据属性（defineProperty），其余键保持普通赋值（同 core/characterData.ts）。 */
-function setExtensionField(target: Record<string, unknown>, key: string, value: unknown): void {
-  if (POLLUTION_KEYS.has(key)) {
-    Object.defineProperty(target, key, { value, writable: true, enumerable: true, configurable: true })
-    return
-  }
-  target[key] = value
 }
 
 /** spec 判定：json.spec 优先，其次 PNG chunk 关键字 hint，再按 data 包装/顶层平铺推断。 */
@@ -276,15 +263,6 @@ export function hydrateStoredCard(record: Record<string, unknown>): CharacterCar
   return card
 }
 
-function toNum(value: unknown, fallback: number): number {
-  if (typeof value === 'number' && Number.isFinite(value)) return value
-  if (typeof value === 'string' && value.trim() !== '') {
-    const n = Number(value)
-    if (Number.isFinite(n)) return n
-  }
-  return fallback
-}
-
 /** Pygmalion/Gradio 旧卡字段 → V1 字段（对齐 ST 导入）；这些卡没有 spec/name，只有 char_* 字段。 */
 const GRADIO_FIELDS = [
   ['char_name', 'name'], ['char_persona', 'description'], ['world_scenario', 'scenario'],
@@ -322,11 +300,11 @@ function normalizeCardInternal(
   // 字段静默丢失并把 extensions 的原型改成外来对象（与 core/characterData.ts 同一口径）。
   const extensions: Record<string, unknown> = {}
   if (isRecord(data.extensions)) {
-    for (const [key, value] of Object.entries(data.extensions)) setExtensionField(extensions, key, value)
+    for (const [key, value] of Object.entries(data.extensions)) setOwnField(extensions, key, value)
   }
   for (const [key, value] of Object.entries(data)) {
     if ((data === json && (key === 'spec' || key === 'spec_version')) || isKnownCharacterDataKey(key, value)) continue
-    setExtensionField(extensions, key, value)
+    setOwnField(extensions, key, value)
   }
 
   return {

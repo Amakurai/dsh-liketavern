@@ -1,5 +1,6 @@
 /** 后台脚本的沙箱专属上下文和按钮；正文作为模块执行，按钮事件仅在该 iframe 内触发。 */
 import { enabledHelperLibraries,type HelperScript,type HelperScriptButton,type HelperScriptTree,type HelperScriptType } from './helperScripts.js'
+import { escapeScriptJson } from './scriptJson.js'
 export interface CardScriptContext {script:HelperScript;trees:HelperScriptTree[];libraryType?:HelperScriptType;libraries?:{type:'global'|'preset'|'character';trees:HelperScriptTree[]}[]}
 export function installCardScript(context:CardScriptContext):()=>void {
   const root=window as unknown as Record<string,unknown>
@@ -100,7 +101,7 @@ export function installCardScript(context:CardScriptContext):()=>void {
 /** 用可信脚本创建内联 module 元素，JSON 编码避免正文中的结束标签逃出容器；模块网络仍受现有 CSP 限制。 */
 export function helperScriptHtml(content:string):string {
   const executable=isNativeMvuFramework(content)?"await waitGlobalInitialized('Mvu');":rewriteMvuZodImport(content)
-  const encoded=JSON.stringify(executable+'\n;await window.__dshTavernScriptReady();').replace(/</g,'\\u003c').replace(/\u2028/g,'\\u2028').replace(/\u2029/g,'\\u2029')
+  const encoded=escapeScriptJson(executable+'\n;await window.__dshTavernScriptReady();')
   return `<script>var dshScript=document.createElement('script');dshScript.type='module';dshScript.textContent=${encoded};document.head.append(dshScript);</script>`
 }
 

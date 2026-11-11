@@ -15,6 +15,7 @@
  * - 被中断楼层若尚未进入宿主 turn-tail 的持久消息操作栏，才由 chat.node 补挂
  *   TavernInterruptedFloorActions（重新生成/回退/兄弟导航，按 turn 号定位）。
  */
+import { describeError } from '../core/guards.js'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { IconBranchOutlineMedium, IconChevronLeftOutlineMedium, IconChevronRightOutlineMedium, IconEditOutlineMedium, IconListPenOutlineMedium, IconLoadingOutlineMedium, IconPlayOutlineMedium, IconRefreshOutlineMedium, IconUserOutlineMedium, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ReactNode } from 'react'
@@ -67,6 +68,71 @@ export const BINDING_CHANGED_EVENT = 'dsh-tavern:binding-changed'
 /** 分支变更广播（fork 操作成功后以源会话 id dispatch，兄弟导航据此重拉）。 */
 export const BRANCH_CHANGED_EVENT = 'dsh-tavern:branch-changed'
 
+type SessionEventCallback = () => void
+interface WindowEventChannel {
+  readonly bySession: Map<string, Set<SessionEventCallback>>
+  readonly wildcard: Set<SessionEventCallback>
+  readonly handler: (event: Event) => void
+}
+const windowEventChannels = new WeakMap<EventTarget, Map<string, WindowEventChannel>>()
+
+/**
+ * 长历史同时挂载 N 条操作条时，不在 window 上重复挂 3N 个监听器：每个事件名只挂 1 个分发器，
+ * 按 sessionId（以及无 detail 的全局失效广播）O(1) 路由；按 window 实例 WeakMap 隔离以兼容测试替换。
+ */
+function subscribeSessionWindowEvent(
+  eventName: string,
+  sessionId: string,
+  acceptEmptyDetail: boolean,
+  callback: SessionEventCallback,
+): () => void {
+  if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return () => {}
+  const target: EventTarget = window
+  let channels = windowEventChannels.get(target)
+  if (!channels) {
+    channels = new Map()
+    windowEventChannels.set(target, channels)
+  }
+  let channel = channels.get(eventName)
+  if (!channel) {
+    const bySession = new Map<string, Set<SessionEventCallback>>()
+    const wildcard = new Set<SessionEventCallback>()
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<string | undefined>).detail
+      if (!detail) {
+        for (const fn of [...wildcard]) fn()
+        return
+      }
+      const listeners = bySession.get(detail)
+      if (listeners) for (const fn of [...listeners]) fn()
+    }
+    channel = { bySession, wildcard, handler }
+    channels.set(eventName, channel)
+    target.addEventListener(eventName, handler)
+  }
+  let sessionSet = channel.bySession.get(sessionId)
+  if (!sessionSet) {
+    sessionSet = new Set()
+    channel.bySession.set(sessionId, sessionSet)
+  }
+  sessionSet.add(callback)
+  if (acceptEmptyDetail) channel.wildcard.add(callback)
+  return () => {
+    const activeChannel = channels?.get(eventName)
+    if (!activeChannel) return
+    const set = activeChannel.bySession.get(sessionId)
+    if (set) {
+      set.delete(callback)
+      if (set.size === 0) activeChannel.bySession.delete(sessionId)
+    }
+    if (acceptEmptyDetail) activeChannel.wildcard.delete(callback)
+    if (activeChannel.bySession.size === 0 && activeChannel.wildcard.size === 0) {
+      channels?.delete(eventName)
+      target.removeEventListener(eventName, activeChannel.handler)
+    }
+  }
+}
+
 /** 查询会话是否已绑定角色卡；null = 尚未加载完成（先不渲染，避免闪烁）。非 Tavern 不打 remote。绑定读进程内缓存：每条 assistant 消息的操作条共享一次 RPC。 */
 function useTavernBound(remote: TavernRemote, sessionId: string, enabled: boolean): boolean | null {
   const [bound, setBound] = useState<{ remote: TavernRemote; sessionId: string; enabled: boolean; value: boolean | null } | null>(null)
@@ -89,14 +155,10 @@ function useTavernBound(remote: TavernRemote, sessionId: string, enabled: boolea
         })
     }
     void load()
-    const onChanged = (e: Event) => {
-      const target = (e as CustomEvent<string | undefined>).detail
-      if (!target || target === sessionId) void load()
-    }
-    window.addEventListener(BINDING_CHANGED_EVENT, onChanged)
+    const unsubscribe = subscribeSessionWindowEvent(BINDING_CHANGED_EVENT, sessionId, true, () => { void load() })
     return () => {
       alive = false
-      window.removeEventListener(BINDING_CHANGED_EVENT, onChanged)
+      unsubscribe()
     }
   }, [remote, sessionId, enabled])
   // 会话/remote 切换的本次渲染就关掉旧权限，不能等 effect 或新读取完成才收起操作条。
@@ -167,17 +229,11 @@ function FloorActions(props: FloorActionsProps) {
   )
   useEffect(() => {
     if (bound !== true || !messageId) return
-    const onChanged = (event: Event) => {
-      if ((event as CustomEvent<string>).detail === sessionId) swipeLoader.reload()
-    }
-    const onBranchChanged = (event: Event) => {
-      if ((event as CustomEvent<string>).detail === sessionId) siblingLoader.reload()
-    }
-    window.addEventListener(BINDING_CHANGED_EVENT, onChanged)
-    window.addEventListener(BRANCH_CHANGED_EVENT, onBranchChanged)
+    const offBinding = subscribeSessionWindowEvent(BINDING_CHANGED_EVENT, sessionId, false, () => swipeLoader.reload())
+    const offBranch = subscribeSessionWindowEvent(BRANCH_CHANGED_EVENT, sessionId, false, () => siblingLoader.reload())
     return () => {
-      window.removeEventListener(BINDING_CHANGED_EVENT, onChanged)
-      window.removeEventListener(BRANCH_CHANGED_EVENT, onBranchChanged)
+      offBinding()
+      offBranch()
     }
     // reload 随 loader render 更新；事件回调只需跟会话、消息和启用状态重挂。
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -209,7 +265,7 @@ function FloorActions(props: FloorActionsProps) {
         await openChildSession(navigation, r.value.childSessionId, r.value.title, sessionId)
       } else setFailure(r.error.message)
     } catch (e) {
-      setFailure(e instanceof Error ? e.message : String(e))
+      setFailure(describeError(e))
     } finally {
       submitting.current = false
       setOperation(null)
@@ -255,7 +311,7 @@ function FloorActions(props: FloorActionsProps) {
       if (r.ok) setEdit({ turn: r.value.turn, text: r.value.text, original: r.value.text })
       else setFailure(r.error.message)
     } catch (e) {
-      setFailure(e instanceof Error ? e.message : String(e))
+      setFailure(describeError(e))
     } finally {
       submitting.current = false
       setOperation(null)
@@ -279,7 +335,7 @@ function FloorActions(props: FloorActionsProps) {
         setEditFailure(r.error.message)
       }
     } catch (e) {
-      setEditFailure(e instanceof Error ? e.message : String(e))
+      setEditFailure(describeError(e))
     } finally {
       submitting.current = false
       setOperation(null)
@@ -297,7 +353,7 @@ function FloorActions(props: FloorActionsProps) {
       if (!active.current) return
       if (!r.ok) setFailure(r.error.message)
     } catch (e) {
-      setFailure(e instanceof Error ? e.message : String(e))
+      setFailure(describeError(e))
     } finally {
       submitting.current = false
       setOperation(null)
@@ -316,7 +372,7 @@ function FloorActions(props: FloorActionsProps) {
       if (r.ok) setEditAi({ turn: r.value.turn, text: r.value.text, original: r.value.text })
       else setFailure(r.error.message)
     } catch (e) {
-      setFailure(e instanceof Error ? e.message : String(e))
+      setFailure(describeError(e))
     } finally {
       submitting.current = false
       setOperation(null)
@@ -340,7 +396,7 @@ function FloorActions(props: FloorActionsProps) {
         setEditAiFailure(r.error.message)
       }
     } catch (e) {
-      setEditAiFailure(e instanceof Error ? e.message : String(e))
+      setEditAiFailure(describeError(e))
     } finally {
       submitting.current = false
       setOperation(null)
@@ -367,7 +423,7 @@ function FloorActions(props: FloorActionsProps) {
         if (active.current) setImpersonated(r.value.text)
       }
     } catch (e) {
-      setFailure(e instanceof Error ? e.message : String(e))
+      setFailure(describeError(e))
     } finally {
       submitting.current = false
       setOperation(null)
@@ -516,11 +572,7 @@ function InterruptedFloorActions(props: InterruptedFloorActionsProps) {
   const submitting = useRef(false)
   const siblingLoader = useLoader(() => remote.getFloorSiblings({ sessionId, turn }), [sessionId, turn])
   useEffect(() => {
-    const onBranchChanged = (event: Event) => {
-      if ((event as CustomEvent<string>).detail === sessionId) siblingLoader.reload()
-    }
-    window.addEventListener(BRANCH_CHANGED_EVENT, onBranchChanged)
-    return () => window.removeEventListener(BRANCH_CHANGED_EVENT, onBranchChanged)
+    return subscribeSessionWindowEvent(BRANCH_CHANGED_EVENT, sessionId, false, () => siblingLoader.reload())
     // reload 随 loader render 更新；事件回调只需跟会话重挂。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId])
@@ -544,7 +596,7 @@ function InterruptedFloorActions(props: InterruptedFloorActionsProps) {
         await openChildSession(navigation, r.value.childSessionId, r.value.title, sessionId)
       } else setFailure(r.error.message)
     } catch (e) {
-      setFailure(e instanceof Error ? e.message : String(e))
+      setFailure(describeError(e))
     } finally {
       submitting.current = false
       setOperation(null)

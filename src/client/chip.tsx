@@ -2,6 +2,7 @@
  * 会话头部角色 chip（slot conversation.session.header.actions，session 作用域）。
  * 显示当前会话绑定的角色；点击展开绑定编辑 / 开场白 / 调试小面板。
  */
+import { describeError } from '../core/guards.js'
 import { DraftScope } from './drafts.js'
 import { MemorySection } from './panel/memory.js'
 import { useEffect, useId, useRef, useState } from 'react'
@@ -66,7 +67,7 @@ export function HelperMvuAbandonAction(props: { remote: TavernRemote; sessionId:
       const result = await props.remote.abandonHelperMvu({ sessionId: props.sessionId, storyId: props.storyId })
       if (!result.ok) throw new Error(result.error.message)
       setConfirm(false); setDone(true)
-    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
+    } catch (cause) { setError(describeError(cause)) }
     finally { pending.current = false; setBusy(false); props.onChanged() }
   }
   return <div className="dsh-tavern-mvuRecovery">
@@ -323,7 +324,7 @@ function HeaderChipSession(props: HeaderChipProps) {
         })
       } catch (cause) {
         // RPC 传输/校验失败是 reject 而非错误信封；不兜会停在骨架屏
-        if (alive) setError(cause instanceof Error ? cause.message : String(cause))
+        if (alive) setError(describeError(cause))
       }
     })()
     return () => {
@@ -435,7 +436,7 @@ function HeaderChipSession(props: HeaderChipProps) {
     } catch (error) {
       // typert 传输失败/入参校验不过时是 reject 而非错误信封：不收起确认框会永久卡死。
       setConfirmUnbind(false)
-      setError(error instanceof Error ? error.message : String(error))
+      setError(describeError(error))
     }
   }
 
@@ -471,7 +472,7 @@ function HeaderChipSession(props: HeaderChipProps) {
         revision: r.value.revision,
       })
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      setError(describeError(err))
     }
   }
 
@@ -636,7 +637,7 @@ function HeaderChipSession(props: HeaderChipProps) {
                           setDraft({ ...next, cardName: picked?.name })
                         }).catch((cause) => {
                           if (characterRequest.current === request) {
-                            setError(cause instanceof Error ? cause.message : String(cause))
+                            setError(describeError(cause))
                           }
                         })
                       }}

@@ -10,10 +10,10 @@ import { join } from 'node:path'
 import { atomicWrite } from '../state/atomicWrite.js'
 import { withWorkspaceLock } from '../state/workspaceLock.js'
 import { EDITOR_DRAFT_MAX_BYTES } from '../core/editorDraftLimits.js'
+import { POLLUTION_KEYS } from '../core/objectSafety.js'
 
 export { EDITOR_DRAFT_MAX_BYTES } from '../core/editorDraftLimits.js'
 const MAX_DEPTH = 128
-const POLLUTION_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
 
 export interface EditorDraft {
   value: unknown

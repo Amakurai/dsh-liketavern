@@ -8,6 +8,8 @@ import { WorkspaceFs } from './workspaceFs.js'
 import { Wal } from './wal.js'
 import { withWorkspaceLock } from './workspaceLock.js'
 import { renameWithRetry } from './rename.js'
+import { closeLedger } from './writeLedger.js'
+import { evictTemplateCaches } from './template.js'
 
 export interface StorySummary {
   id: string
@@ -114,6 +116,8 @@ export async function snapshotStory(options: {
       // 只清理本次生成且确认位于 stories 内的草稿，已发布状态从不在失败清理中删除。
       const base = resolve(options.cardRoot, 'stories') + sep
       if (!resolve(staging).startsWith(base)) throw new Error('剧情草稿清理路径越界')
+      evictTemplateCaches(staging)
+      closeLedger(staging)
       await rm(staging, { recursive: true, force: true })
     }
   })
@@ -125,5 +129,7 @@ export async function discardStory(cardRoot: string, id: string, sessionId: stri
   if (metadata.sessionId !== sessionId || metadata.migrated) throw new Error('拒绝清理不属于本次分支的剧情')
   const target = resolve(storyRoot(cardRoot, id))
   if (!target.startsWith(resolve(cardRoot, 'stories') + sep)) throw new Error('剧情清理路径越界')
+  evictTemplateCaches(target)
+  closeLedger(target)
   await rm(target, { recursive: true, force: true })
 }

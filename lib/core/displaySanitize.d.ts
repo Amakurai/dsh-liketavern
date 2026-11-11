@@ -1,4 +1,3 @@
-export declare const DISPLAY_META_TAGS: readonly ["initvar", "UpdateVariable", "JSONPatch", "Analysis", "think", "thinking", "StatusPlaceHolderImpl"];
 /** 只删除机读块及其内容；不 trim，也不处理 details/style/widget/透明协议壳。 */
 export declare function stripOpaqueDisplayMeta(text: string, removeComments?: boolean): string;
 /** 跨有序片段延续机读标签状态，再把保留内容映射回原 kind/title。 */

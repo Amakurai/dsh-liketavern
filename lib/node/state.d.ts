@@ -35,23 +35,22 @@ export declare class CharacterInUseError extends RemoteError<'tavern/character-i
     readonly references: CharacterReferences;
     constructor(references: CharacterReferences);
 }
-/** 永久删除只接受当前仍持有有效收纳标记的角色，阻断旧确认框与直接 RPC。 */
-export declare class CharacterNotArchivedError extends RemoteError<'tavern/character-not-archived'> {
-    constructor(cause?: unknown);
-}
-/** 收纳后只允许原会话原 story 更新选项，不允许新绑定绕过活动列表。 */
-export declare class CharacterArchivedError extends RemoteError<'tavern/character-archived'> {
-    constructor();
-}
 interface WorkspaceHandle {
     fs: WorkspaceFs;
+    plainFs: WorkspaceFs;
     wal: Wal;
     memory: MemoryStore;
     deltas: WorldDeltaStore;
-    plain?: {
+    plain: {
         fs: WorkspaceFs;
         memory: MemoryStore;
         deltas: WorldDeltaStore;
+    };
+    storyStat?: {
+        mtimeMs: number;
+        size: number;
+        revision: number;
+        epoch: number;
     };
     chatLoreCache?: {
         rev: number;
@@ -221,6 +220,7 @@ export declare class TavernState {
      */
     waitForSessionCommits(sessionId: string): Promise<void>;
     workspace(cardId: string): Promise<WorkspaceHandle>;
+    private evictInactiveWorkspaces;
     /** 资产初始状态与独立剧情状态共用文件面；storyId 缺省仅供初始状态面板及旧数据迁移。 */
     storyWorkspace(cardId: string, storyId?: string): Promise<WorkspaceHandle>;
     discardUnboundStory(cardId: string, storyId: string, sessionId: string): Promise<void>;

@@ -20,7 +20,6 @@ export declare const zh: {
     readonly 'characters.deleted': "已删除「{name}」";
     readonly 'characters.deletedSalvaged': "已删除「{name}」，内嵌世界书已保留到世界书库：{book}";
     readonly 'characters.created': "已创建「{name}」";
-    readonly 'characters.card.delete': "删除角色卡";
     readonly 'characters.card.archive': "移入收纳箱";
     readonly 'characters.card.restore': "恢复角色卡";
     readonly 'characters.card.deletePermanently': "永久删除";
@@ -57,7 +56,6 @@ export declare const zh: {
     readonly 'characters.detail.exportJson': "导出 JSON";
     readonly 'characters.detail.interactiveTitle': "交互卡：{name}";
     readonly 'characters.detail.interactiveFrame': "交互卡";
-    readonly 'characters.importBook.title': "导入内嵌世界书？";
     readonly 'characters.importBook.desc': "角色卡「{name}」内嵌世界书，共 {count} 条。导入后会作为该卡的主世界书。";
     readonly 'characters.importBook.descNamed': "角色卡「{name}」内嵌世界书「{book}」，共 {count} 条。导入后会作为该卡的主世界书。";
     readonly 'characters.importBook.skip': "跳过";
@@ -104,8 +102,6 @@ export declare const zh: {
     readonly 'characters.compatibility.scanLimit.desc': "卡片超过文本、结构深度或节点检查预算。这里只显示已扫描部分的信号，其余内容需额外验证。";
     readonly 'characters.archive.emptyTitle': "收纳箱是空的";
     readonly 'characters.archive.emptyDesc': "从活跃角色列表收纳的角色会出现在这里，并可随时恢复。";
-    readonly 'characters.delete.title': "删除角色卡？";
-    readonly 'characters.delete.desc': "确定删除角色「{name}」？";
     readonly 'characters.deletePermanently.title': "永久删除角色卡？";
     readonly 'characters.deletePermanently.desc': "这会永久删除「{name}」及其剧情工作区，无法撤销。仍有会话绑定它时，操作会被拒绝。";
     readonly 'characters.deletePermanently.orphanStories': "以下 {count} 条剧情已没有会话绑定，将随角色一并删除：";

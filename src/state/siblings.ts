@@ -8,11 +8,46 @@
  * 所有读改写（追加登记 / 读路径剪枝）必须经 mutateSiblingForks：模块级互斥串行化，
  * 否则不同会话的并发 fork 登记 / 剪枝落盘会互相覆盖丢记录。
  */
-import { readFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { readFile, stat } from 'node:fs/promises'
+import { join, resolve } from 'node:path'
 import { normalizeSiblingForks, recordSiblingFork, type SiblingFork } from '../core/siblings.js'
 import { atomicWrite } from './atomicWrite.js'
+import { rootIdentity } from './pathIdentity.js'
 import { withWorkspaceLock } from './workspaceLock.js'
+
+interface SiblingStat {
+  mtimeMs: number
+  ctimeMs: number
+  size: number
+  ino: number
+}
+
+interface SiblingCacheEntry {
+  stat: SiblingStat | null
+  forks: readonly SiblingFork[]
+}
+
+const MAX_SIBLINGS_CACHE = 32
+const siblingsCache = new Map<string, SiblingCacheEntry>()
+/** 写路径代数：无锁并发读取跨越一次原子保存时不得用旧读结果覆盖新缓存。 */
+let writeGeneration = 0
+
+function toSiblingStat(st: { mtimeMs: number; ctimeMs: number; size: number; ino: number }): SiblingStat {
+  return { mtimeMs: st.mtimeMs, ctimeMs: st.ctimeMs, size: st.size, ino: st.ino }
+}
+
+function sameSiblingStat(a: SiblingStat | null, b: SiblingStat): boolean {
+  return Boolean(a && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs && a.size === b.size && a.ino === b.ino)
+}
+
+function setSiblingsCache(key: string, entry: SiblingCacheEntry): void {
+  if (siblingsCache.has(key)) siblingsCache.delete(key)
+  else if (siblingsCache.size >= MAX_SIBLINGS_CACHE) {
+    const oldest = siblingsCache.keys().next().value
+    if (oldest !== undefined) siblingsCache.delete(oldest)
+  }
+  siblingsCache.set(key, entry)
+}
 
 export function siblingsFile(rootDir: string): string {
   return join(rootDir, 'siblings.json')
@@ -20,19 +55,46 @@ export function siblingsFile(rootDir: string): string {
 
 /** 读取索引并区分「文件缺失」与「文件损坏」：读路径两者都当空索引，写路径不得把损坏覆盖成空。 */
 async function readSiblingForks(rootDir: string): Promise<{ forks: SiblingFork[]; corrupt: boolean }> {
+  const file = resolve(siblingsFile(rootDir))
+  const key = rootIdentity(file)
+  const generation = writeGeneration
+  let info: SiblingStat | null = null
+  try {
+    info = toSiblingStat(await stat(file))
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      if (writeGeneration === generation) setSiblingsCache(key, { stat: null, forks: [] })
+      return { forks: [], corrupt: false }
+    }
+    throw error
+  }
+  const cached = siblingsCache.get(key)
+  if (cached && sameSiblingStat(cached.stat, info)) {
+    return { forks: cached.forks.map((f) => ({ ...f })), corrupt: false }
+  }
   let raw: string
   try {
-    raw = await readFile(siblingsFile(rootDir), 'utf8')
+    raw = await readFile(file, 'utf8')
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { forks: [], corrupt: false }
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      if (writeGeneration === generation) setSiblingsCache(key, { stat: null, forks: [] })
+      return { forks: [], corrupt: false }
+    }
     throw error
   }
   try {
     const value: unknown = JSON.parse(raw)
     const forks = normalizeSiblingForks(value)
     // JSON 可解析不等于索引完整；写路径不能借容错归一化静默删除坏记录。
-    return { forks, corrupt: !Array.isArray(value) || forks.length !== value.length }
+    const corrupt = !Array.isArray(value) || forks.length !== value.length
+    if (corrupt) {
+      if (writeGeneration === generation) siblingsCache.delete(key)
+    } else if (writeGeneration === generation) {
+      setSiblingsCache(key, { stat: info, forks: forks.map((f) => ({ ...f })) })
+    }
+    return { forks, corrupt }
   } catch {
+    if (writeGeneration === generation) siblingsCache.delete(key)
     return { forks: [], corrupt: true }
   }
 }
@@ -43,8 +105,22 @@ export async function loadSiblingForks(rootDir: string): Promise<SiblingFork[]> 
 }
 
 /** 原子替换：崩溃不会留下截断的索引文件（截断后读成空索引，再一次登记就把全部导航记录永久抹掉）。 */
-export async function saveSiblingForks(rootDir: string, forks: readonly SiblingFork[]): Promise<void> {
-  await atomicWrite(siblingsFile(rootDir), JSON.stringify(forks, null, 2) + '\n')
+async function saveSiblingForks(rootDir: string, forks: readonly SiblingFork[]): Promise<void> {
+  const file = resolve(siblingsFile(rootDir))
+  const key = rootIdentity(file)
+  writeGeneration++
+  siblingsCache.delete(key)
+  await atomicWrite(file, JSON.stringify(forks, null, 2) + '\n')
+  writeGeneration++
+  try {
+    const st = await stat(file)
+    setSiblingsCache(key, {
+      stat: toSiblingStat(st),
+      forks: forks.map((f) => ({ ...f })),
+    })
+  } catch {
+    siblingsCache.delete(key)
+  }
 }
 
 /**

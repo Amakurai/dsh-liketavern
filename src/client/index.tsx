@@ -6,6 +6,7 @@
  * conversation.chat.node / assistant-step 是 keyed 覆盖位：登记就会挡住原生
  * AssistantNodeView。因此只在当前会话是 Tavern 模式时才挂上，切走即卸掉。
  */
+import { describeError } from '../core/guards.js'
 import type {Context} from '@deepseek-ai/cordis'
 import type {IConversation} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import {installChoiceInput} from './helperChoices.js'
@@ -37,7 +38,7 @@ export async function apply(ctx: ClientContext) {
   // 宿主 client API 版本不设限（package.json engines.dsh = *），因此每一块 UI 独立注册：
   // 某一块 slot 或服务在老/新宿主上消失时只跳过该块，不中断其余面板。
   const warn = (label: string, error: unknown) => {
-    const text = `dsh-tavern: ${label} 已跳过（宿主界面接口可能已变更）：${error instanceof Error ? error.message : String(error)}`
+    const text = `dsh-tavern: ${label} 已跳过（宿主界面接口可能已变更）：${describeError(error)}`
     try { (ctx as unknown as { logger?: { warn?(m: string): void } }).logger?.warn?.(text) } catch { /* 日志失败不再制造失败 */ }
     if (!(ctx as unknown as { logger?: unknown }).logger) console.warn(text)
   }

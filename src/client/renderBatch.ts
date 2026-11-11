@@ -4,6 +4,7 @@
  * 重组为各气泡的 RenderedOutput，messages/scopes 共用同一份对象，不逐条复制。
  * 只有一个待发请求、或宿主没有批量方法时沿用 renderOutputText，行为与逐条请求一致。
  */
+import { describeError } from '../core/guards.js'
 import { helperSnapshotAt } from '../core/helperRuntime.js'
 import { RENDER_OUTPUT_BATCH_MAX, type RenderedOutput, type RenderedOutputBatch } from '../remote.js'
 import type { Envelope, TavernRemote } from './types.js'
@@ -61,7 +62,7 @@ function flush(remote: TavernRemote): void {
 }
 
 function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
+  return describeError(error)
 }
 
 /** 按引用重组批次结果；声明了共享部分却缺失时该项明确失败，不静默丢掉卡面数据。 */

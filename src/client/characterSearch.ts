@@ -7,10 +7,6 @@ function matchesNeedle(card: CharacterSummary, needle: string): boolean {
     .some((value) => value.toLowerCase().includes(needle))
 }
 
-export function matchesCharacterSearch(card: CharacterSummary, query: string): boolean {
-  return matchesNeedle(card, query.trim().toLowerCase())
-}
-
 /** 批量筛选只归一化一次查询，避免角色数放大重复的 trim/lowercase。 */
 export function filterCharacters(cards: readonly CharacterSummary[], query: string): CharacterSummary[] {
   const needle = query.trim().toLowerCase()

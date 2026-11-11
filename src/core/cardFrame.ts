@@ -30,12 +30,39 @@ import { helperJson,helperRecord } from './helperRuntime.js'
 import { parseHelperScriptTrees,type HelperScriptContext } from './helperScripts.js'
 import { installCardScript,type CardScriptContext } from './cardScript.js'
 import { isFullHtmlDocument } from './htmlFragment.js'
+import { escapeScriptJson } from './scriptJson.js'
 
 export const CARD_BRIDGE_SOURCE = 'dsh-tavern-card'
 
 // 兼容库超过 600 KiB；转义结果在模块内只构造一次。纯静态卡没有任何可执行入口，
 // 不需要为每个历史 iframe 复制并初始化 jQuery/Lodash/Zod/YAML/jsonrepair。
 const CARD_LIBRARY_TAG = `<script data-dsh-tavern-libraries>${CARD_LIBRARIES.replace(/<\/script/gi, '<\\/script')}</script>`
+
+// 桥接安装函数在进程内恒定：模块装载期只序列化一次，避免每个历史卡面重复 21 次 Function.toString()。
+const HELPER_RECORD_SRC = helperRecord.toString()
+const HELPER_JSON_SRC = helperJson.toString()
+const INSTALL_EVENTS_SRC = installCardEvents.toString()
+const INSTALL_PERSISTENCE_SRC = installCardPersistence.toString()
+const INSTALL_VARIABLES_SRC = installCardVariables.toString()
+const INSTALL_HELPER_SRC = installCardHelper.toString()
+const INSTALL_MVU_SRC = installCardMvu.toString()
+const CREATE_MVU_CODEC_SRC = createHelperMvuCommandCodec.toString()
+const MARKDOWN_SCANNER_SRC = markdownCodeScanner.toString()
+const INSTALL_MVU_RUNNER_SRC = installCardMvuRunner.toString()
+const CREATE_MVU_INITIAL_SRC = createHelperMvuInitialData.toString()
+const PARSE_SCRIPT_TREES_SRC = parseHelperScriptTrees.toString()
+const INSTALL_SCRIPT_LIBS_SRC = installCardScriptLibraries.toString()
+const INSTALL_WORLDBOOK_SRC = installCardWorldbook.toString()
+const CREATE_WB_SETTINGS_CODEC_SRC = createHelperWorldbookSettingsCodec.toString()
+const INSTALL_LOREBOOK_SRC = installCardLorebook.toString()
+const CREATE_LOREBOOK_CODEC_SRC = createHelperLorebookCodec.toString()
+const PARSE_SWIPES_SRC = parseHelperSwipes.toString()
+const PARSE_MSG_EDITS_SRC = parseHelperMessageEdits.toString()
+const NORMALIZE_MSG_INPUTS_SRC = normalizeHelperMessageInputs.toString()
+const INSTALL_CHAT_EDITS_SRC = installCardChatEdits.toString()
+const INSTALL_DISPLAY_SRC = installCardDisplay.toString()
+const INSTALL_LEGACY_CHAT_SRC = installCardLegacyChat.toString()
+const INSTALL_CARD_SCRIPT_SRC = installCardScript.toString()
 
 export interface CardFrameOptions {
   /** 开场白变体（0 = first_mes）。供 getChatMessages / swipe_id 使用。 */
@@ -57,10 +84,6 @@ export interface CardFrameOptions {
    * 空数组 = 脚本不能 fetch/XHR，也不能加载外部脚本；`*` = 全部放行。
    */
   connectHosts?: string[]
-}
-
-function escapeScriptJson(value: unknown): string {
-  return JSON.stringify(value).replace(/</g, '\\u003c').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029')
 }
 
 /**
@@ -199,11 +222,11 @@ export function tavernCardBridgeScript(options: Omit<CardFrameOptions, 'connectH
     }
   })(cfg.helperSnapshot);
   // 先固定本次运行时，所有业务桥随后捕获它；document.write 重建后旧异步任务不能认领新身份。
-  var cleanupEvents = (${installCardEvents.toString()})(Boolean(cfg.helperSnapshot));
+  var HELPER_MAX_BYTES = 1024 * 1024, helperRecord = (${HELPER_RECORD_SRC}), helperJson = (${HELPER_JSON_SRC});
+  var cleanupEvents = (${INSTALL_EVENTS_SRC})(Boolean(cfg.helperSnapshot));
   var runtimeId = window.__dshTavernEventRuntimeId;
-  var cleanupPersistence = cfg.helperSnapshot ? (${installCardPersistence.toString()})(cfg.helperSnapshot,cfg.source,
-    ${escapeScriptJson(options.persistenceLabels ?? {saving:'Saving story variables…',saved:'Story variables saved',failed:'Story variable save failed; keep a backup and refresh'})}) : function () {};
-  (${installCardVariables.toString()})(${escapeScriptJson(options.variableLabels ?? {
+  var cleanupPersistence = ${options.helperSnapshot ? `(${INSTALL_PERSISTENCE_SRC})(cfg.helperSnapshot,cfg.source,${escapeScriptJson(options.persistenceLabels ?? {saving:'Saving story variables…',saved:'Story variables saved',failed:'Story variable save failed; keep a backup and refresh'})})` : 'function () {}'};
+  (${INSTALL_VARIABLES_SRC})(${escapeScriptJson(options.variableLabels ?? {
     title: 'Card variables / backup', note: options.helperSnapshot ? 'Variables save to this story. Wait for the saved status before leaving; keep a backup if saving fails. Restoring also updates story variables.' : 'Card variables stay in this preview only. Copy a backup before leaving or refreshing.',
     backup: 'Select backup text', text: 'Card variable backup',
   })}, ${escapeScriptJson(options.variableStyles ?? '')}, cfg.helperSnapshot ? cfg.helperSnapshot.currentMessageId : ${escapeScriptJson(options.helperContext?.messageId ?? 0)}, cfg.helperSnapshot ? cfg.helperSnapshot.messages.length : undefined);
@@ -212,43 +235,35 @@ export function tavernCardBridgeScript(options: Omit<CardFrameOptions, 'connectH
     if (extra) for (var k in extra) if (Object.prototype.hasOwnProperty.call(extra, k)) msg[k] = extra[k];
     try { parent.postMessage(msg, '*'); } catch (e) {}
   }
-  var cleanupHelper = (${installCardHelper.toString()})(Object.assign(${escapeScriptJson(options.helperContext ?? {})},{snapshot:cfg.helperSnapshot}), cfg.greetings, cfg.greetingIndex, cfg.source,
+  var cleanupHelper = (${INSTALL_HELPER_SRC})(Object.assign(${escapeScriptJson(options.helperContext ?? {})},{snapshot:cfg.helperSnapshot}), cfg.greetings, cfg.greetingIndex, cfg.source,
     ${escapeScriptJson(options.helperLabels ?? { diagnostics: "Card script messages", unsupported: "Not available in this card sandbox" })});
-  var cleanupMvu=(function(){
-    var HELPER_MAX_BYTES=1024*1024,helperRecord=(${helperRecord.toString()}),helperJson=(${helperJson.toString()});
-    return (${installCardMvu.toString()})((${createHelperMvuCommandCodec.toString()})(helperJson,(${markdownCodeScanner.toString()})),helperJson);
-  })();
-  var cleanupMvuRunner=${options.mvuRunner ? `(function(){var HELPER_MAX_BYTES=1024*1024,helperRecord=(${helperRecord.toString()}),helperJson=(${helperJson.toString()});return (${installCardMvuRunner.toString()})((${createHelperMvuInitialData.toString()}),helperJson);})()` : 'function(){}'};
+  var cleanupMvu = (${INSTALL_MVU_SRC})((${CREATE_MVU_CODEC_SRC})(helperJson,(${MARKDOWN_SCANNER_SRC})),helperJson);
+  var cleanupMvuRunner = ${options.mvuRunner ? `(${INSTALL_MVU_RUNNER_SRC})((${CREATE_MVU_INITIAL_SRC}),helperJson)` : 'function(){}'};
   var ro = null, mo = null, timers = [], lastHeight = 0;
   var heightFrame = null, heightFrameKind = '', heightActive = true;
   var scriptContext=${escapeScriptJson(options.scriptContext??null)};
   var scriptLibraries=${options.scriptLibraries?cachedScriptJson(options.scriptLibraries,()=>escapeScriptJson(options.scriptLibraries)):'null'};
-  var cleanupScriptLibraries=scriptLibraries?(function(){
-    var HELPER_MAX_BYTES=1024*1024;
-    var helperRecord=(${helperRecord.toString()});
-    var helperJson=(${helperJson.toString()});
-    var parseScriptTrees=(${parseHelperScriptTrees.toString()});
+  var cleanupScriptLibraries=${options.scriptLibraries ? `(function(){
+    var parseScriptTrees=(${PARSE_SCRIPT_TREES_SRC});
     var normalize=function(input){return parseScriptTrees(input,helperJson,helperRecord);};
-    return (${installCardScriptLibraries.toString()})(scriptLibraries,normalize,helperJson,${escapeScriptJson(options.scriptLibraryLabels??{saving:'Saving script library…',saved:'Script library saved',failed:'Script library save failed; keep your edits and refresh'})});
-  })():function(){};
+    return (${INSTALL_SCRIPT_LIBS_SRC})(scriptLibraries,normalize,helperJson,${escapeScriptJson(options.scriptLibraryLabels??{saving:'Saving script library…',saved:'Script library saved',failed:'Script library save failed; keep your edits and refresh'})});
+  })()` : 'function(){}'};
   var worldbooks=${options.worldbooks?cachedScriptJson(options.worldbooks,()=>escapeScriptJson(options.worldbooks)):'null'};
-  var cleanupWorldbooks=worldbooks?(function(){
-    var HELPER_MAX_BYTES=1024*1024,helperRecord=(${helperRecord.toString()}),helperJson=(${helperJson.toString()});
-    var cleanup=(${installCardWorldbook.toString()})(worldbooks,helperJson,(${createHelperWorldbookSettingsCodec.toString()})(helperJson));
-    (${installCardLorebook.toString()})(window.TavernHelper,(${createHelperLorebookCodec.toString()})(helperJson));
+  var cleanupWorldbooks=${options.worldbooks ? `(function(){
+    var cleanup=(${INSTALL_WORLDBOOK_SRC})(worldbooks,helperJson,(${CREATE_WB_SETTINGS_CODEC_SRC})(helperJson));
+    (${INSTALL_LOREBOOK_SRC})(window.TavernHelper,(${CREATE_LOREBOOK_CODEC_SRC})(helperJson));
     return cleanup;
-  })():function(){};
-  var cleanupChatEdits=cfg.helperSnapshot?(function(){
-    var HELPER_MAX_BYTES=1024*1024,helperRecord=(${helperRecord.toString()}),helperJson=(${helperJson.toString()});
-    var parseHelperSwipes=(${parseHelperSwipes.toString()});
-    var parseHelperMessageEdits=(${parseHelperMessageEdits.toString()});
-    var normalizeHelperMessageInputs=(${normalizeHelperMessageInputs.toString()});
-    var cleanup=(${installCardChatEdits.toString()})(function(input,lookup){return parseHelperMessageEdits(normalizeHelperMessageInputs(input,lookup,helperJson,parseHelperSwipes),helperJson,parseHelperSwipes);},helperJson);
-    var cleanupDisplay=(${installCardDisplay.toString()})();
-    var cleanupLegacy=(${installCardLegacyChat.toString()})(helperJson);
+  })()` : 'function(){}'};
+  var cleanupChatEdits=${options.helperSnapshot ? `(function(){
+    var parseHelperSwipes=(${PARSE_SWIPES_SRC});
+    var parseHelperMessageEdits=(${PARSE_MSG_EDITS_SRC});
+    var normalizeHelperMessageInputs=(${NORMALIZE_MSG_INPUTS_SRC});
+    var cleanup=(${INSTALL_CHAT_EDITS_SRC})(function(input,lookup){return parseHelperMessageEdits(normalizeHelperMessageInputs(input,lookup,helperJson,parseHelperSwipes),helperJson,parseHelperSwipes);},helperJson);
+    var cleanupDisplay=(${INSTALL_DISPLAY_SRC})();
+    var cleanupLegacy=(${INSTALL_LEGACY_CHAT_SRC})(helperJson);
     return function(){cleanupDisplay();cleanupLegacy();cleanup();};
-  })():function(){};
-  var cleanupScript=scriptContext?(${installCardScript.toString()})(scriptContext):function(){};
+  })()` : 'function(){}'};
+  var cleanupScript=${options.scriptContext ? `(${INSTALL_CARD_SCRIPT_SRC})(scriptContext)` : 'function(){}'};
   function reportHeight() {
     try {
       var h = 0;

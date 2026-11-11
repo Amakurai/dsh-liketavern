@@ -12,12 +12,13 @@ import { Bm25Index, type Bm25SearchOptions } from '../core/bm25.js'
 import { normalizeAliases, parseAliasFile, serializeAliasFile, type AliasRecord } from '../core/memoryAliases.js'
 import { estimateTokens } from '../core/tokenize.js'
 import type { MemoryEntry } from '../core/types.js'
+import { caseIdentity } from './pathIdentity.js'
 import type { WorkspaceFs } from './workspaceFs.js'
 import { withWorkspaceLock } from './workspaceLock.js'
 import { dirWrittenSince, openLedger, writtenSince, type WriteLedger } from './writeLedger.js'
 
 /** 正文软上限（字）：超过不拒绝，write 返回值带 overLength: true，治理提示由工具层做。 */
-export const MEMORY_BODY_SOFT_LIMIT = 200
+const MEMORY_BODY_SOFT_LIMIT = 200
 
 const MEMORY_DIR = 'memory'
 const ARCHIVE_PREFIX = 'archive/'
@@ -148,7 +149,7 @@ async function settleLimited<T, R>(
 }
 
 /** Windows 的文件名别名共用来源身份；条目本身保留原文件名，大小写敏感系统仍区分文件。 */
-function memoryIdentity(id: string): string { return process.platform === 'win32' ? id.toLowerCase() : id }
+const memoryIdentity = caseIdentity
 
 /** 别名按文件身份对齐；旧文件中同身份记录有冲突时丢弃派生别名，留待重新生成。 */
 function aliasRecordsByIdentity(source: ReadonlyMap<string, AliasRecord>): ReadonlyMap<string, AliasRecord> {
@@ -199,7 +200,7 @@ function summarySourceIds(id: string, entries: ReadonlyMap<string, MemoryEntry>)
 }
 
 /** 来源格式共用入口：旧逗号列表继续可读，特殊文件名用独立 JSON 标记避免逗号与换行歧义。 */
-export function isMemorySummary(sourceRange: string): boolean {
+function isMemorySummary(sourceRange: string): boolean {
   return /^(?:compress|merge)(?:-json)?:/.test(sourceRange)
 }
 

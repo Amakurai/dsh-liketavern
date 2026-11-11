@@ -1,13 +1,12 @@
 /** 工作区级进程内互斥：楼层、面板、归并和回滚共享；嵌套文件操作可重入。 */
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { resolve } from 'node:path'
+import { rootIdentity } from './pathIdentity.js'
 
 const tails = new Map<string, Promise<unknown>>()
 const owners = new AsyncLocalStorage<ReadonlyMap<string, { active: boolean }>>()
 
 export function withWorkspaceLock<T>(root: string, task: () => Promise<T>): Promise<T> {
-  const absolute = resolve(root)
-  const key = process.platform === 'win32' ? absolute.toLowerCase() : absolute
+  const key = rootIdentity(root)
   const held = owners.getStore()
   if (held?.get(key)?.active) return task()
   const run = (tails.get(key) ?? Promise.resolve()).then(() => {

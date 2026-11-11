@@ -2,6 +2,7 @@
  * 设置面板分区：世界书库与角色卡内嵌书。卡片网格展示，点开后按条目开关/编辑。
  * 卡片可键盘触发（clickableProps）；导入/保存等瞬时反馈走 useToast，上下文错误用 Err。
  */
+import { describeError } from '../../core/guards.js'
 import { useEffect, useRef, useState } from 'react'
 import { notifyCharacterChanged } from '../cache.js'
 import { PersistentEditor, useDraftState } from '../draftPersistence.js'
@@ -68,7 +69,7 @@ function LorebooksSectionContent(props: { remote: TavernRemote }) {
       const book = await load()
       if (openRequest.current === request) setOpened(book)
     } catch (err) {
-      if (openRequest.current === request) setError(err instanceof Error ? err.message : String(err))
+      if (openRequest.current === request) setError(describeError(err))
     } finally {
       if (openRequest.current === request) setOpening(null)
     }
@@ -154,7 +155,7 @@ function LorebooksSectionContent(props: { remote: TavernRemote }) {
         reload()
       }
     } catch (err2) {
-      setError(err2 instanceof Error ? err2.message : String(err2))
+      setError(describeError(err2))
     } finally {
       setBusy(false)
     }

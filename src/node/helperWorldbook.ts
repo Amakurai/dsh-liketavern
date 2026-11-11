@@ -27,19 +27,27 @@ async function selected(state:TavernState,sessionId:string,storyId:string,expect
 function name(value:unknown):string{if(typeof value!=='string'||!value.trim()||value.length>256)throw new Error('世界书名称无效');return value}
 async function names(state:TavernState){const result=await state.listLorebooks();if(result.length>512)throw new Error('世界书目录超过 512 本的接口预算');return result}
 /** 公共书只通过目录 ID 或唯一原名解析，剧情书标识只索引当前文件中的 Map，不拼成路径。 */
-async function resolveBook(state:TavernState,value:string):Promise<string|null>{
-  name(value);const ids=await names(state)
-  if(ids.includes(value))return value
-  const raws=await Promise.all(ids.map(id=>state.loadLorebookJson(id)))
-  let found:string|null=null
-  for(const [index,id] of ids.entries()){const raw=raws[index];if(helperRecord(raw)&&raw.name===value){if(found!==null)throw new Error('世界书名称不唯一，请使用目录中的文件标识');found=id}}
-  return found
+function createBookResolver(state:TavernState):(value:string)=>Promise<string|null>{
+  let idsPromise:Promise<string[]>|null=null
+  let rawsPromise:Promise<readonly unknown[]>|null=null
+  return async(value:string):Promise<string|null>=>{
+    name(value)
+    const ids=await (idsPromise??=names(state))
+    if(ids.includes(value))return value
+    const raws=await (rawsPromise??=Promise.all(ids.map(id=>state.loadLorebookJson(id))))
+    let found:string|null=null
+    for(const [index,id] of ids.entries()){const raw=raws[index];if(helperRecord(raw)&&raw.name===value){if(found!==null)throw new Error('世界书名称不唯一，请使用目录中的文件标识');found=id}}
+    return found
+  }
 }
-async function rawBook(state:TavernState,binding:SessionBinding,value:string,chat:ChatWorldbooks):Promise<{id:string;raw:unknown|null}> {
+async function resolveBook(state:TavernState,value:string):Promise<string|null>{
+  return createBookResolver(state)(value)
+}
+async function rawBook(state:TavernState,binding:SessionBinding,value:string,chat:ChatWorldbooks,resolve:(v:string)=>Promise<string|null>=v=>resolveBook(state,v)):Promise<{id:string;raw:unknown|null}> {
   const privateId=chatWorldbookId(value)
   if(privateId!==null)return {id:chatWorldbookRef(privateId),raw:chat.books.get(privateId)??null}
   if(value===CHARACTER){const fs=(await state.workspace(binding.cardId)).fs,raw=await fs.readText('assets/character-book.json');if(raw!==null)return {id:CHARACTER,raw:JSON.parse(raw)};const card=await state.loadCharacter(binding.cardId),book=card?.card.characterBook;return {id:CHARACTER,raw:book?(book.raw??{entries:book.entries}):null}}
-  const id=await resolveBook(state,value)
+  const id=await resolve(value)
   if(id===null)return {id:value,raw:null}
   const raw=await new WorkspaceFs(state.paths.root,null).readText('library/lorebooks/'+id+'.json')
   return {id,raw:raw===null?null:JSON.parse(raw)}
@@ -115,7 +123,8 @@ export async function rebindHelperWorldbooks(ctx:Context,state:TavernState,sessi
   const run=async(writeChat?:(raw:unknown|null,binding:SessionBinding)=>Promise<void>)=>withWorkspaceLock(state.paths.sessions,async()=>{
     const {binding,chat}=await selected(state,sessionId,request.storyId,request.bindingRevision)
     return withWorkspaceLock(state.paths.root,async()=>{
-      const shared=async(input:unknown)=>{const ref=name(input);if(chatWorldbookId(ref)!==null)throw new Error('剧情书不能作为共享角色或全局绑定');const id=await resolveBook(state,ref);if(id===null)throw new Error('绑定的世界书不存在');const book=await rawBook(state,binding,id,chat);if(book.raw===null)throw new Error('绑定的世界书不存在');readHelperWorldbook(book.raw);return id}
+      const resolve=createBookResolver(state)
+      const shared=async(input:unknown)=>{const ref=name(input);if(chatWorldbookId(ref)!==null)throw new Error('剧情书不能作为共享角色或全局绑定');const id=await resolve(ref);if(id===null)throw new Error('绑定的世界书不存在');const book=await rawBook(state,binding,id,chat,async()=>id);if(book.raw===null)throw new Error('绑定的世界书不存在');readHelperWorldbook(book.raw);return id}
       const sharedList=async(input:unknown)=>{if(!Array.isArray(input)||input.length>64)throw new Error('世界书绑定列表必须至多 64 项');const result:string[]=[];for(const item of input){const id=await shared(item);if(!result.includes(id))result.push(id)}return result}
       if(request.kind==='settings'){
         const patch=helperWorldbookSettingsCodec.patch(value),worldInfo={...binding.worldInfo,...helperWorldbookSettingsCodec.toNative(patch)}

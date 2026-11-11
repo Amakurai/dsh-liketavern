@@ -3,12 +3,23 @@ export declare const TEMPLATE_DATA_PATH = "state/template-data";
 export declare const TEMPLATE_DOCUMENT_LIMIT: number;
 /** 不超过该字节数的状态整份留在根文件里，不分块。 */
 export declare const TEMPLATE_INLINE_LIMIT: number;
-/** raw 是要发布的根文件原文，json 是文档本身的序列化（内联时两者相同）。 */
+type Value = null | boolean | number | string | Value[] | {
+    [key: string]: Value;
+};
+/** raw 是要发布的根文件原文，json 是文档本身的序列化（内联时两者相同），value 是归一化后的 JSON 值。 */
 export interface TemplateDocumentWrite {
     raw: string;
-    json: string;
+    readonly json: string;
+    readonly value: Value;
+    readonly bytes: number;
     blocks: Map<string, string>;
 }
+/** 与 V8 JSON.stringify 完全一致的字符串 UTF-8 字节数（含引号与孤立代理项转义），零字符串分配。 */
+export declare function jsonStringByteLength(text: string): number;
+/** 快速判断任意值经 JSON.stringify 后的 UTF-8 字节数是否超过上限，超限即提前退出，不分配大字符串。 */
+export declare function exceedsJsonBytes(root: unknown, limit: number): boolean;
+/** 清理临时草稿或已废弃剧情目录的分块缓存，避免分支准备挤掉活跃剧情的解析结果。 */
+export declare function evictTemplateStoryCache(root: string): void;
 /** 全部预算和结构先在内存检查，拒绝时尚未开始任何正文或 WAL 写入。 */
 export declare function prepareTemplateDocument(value: unknown): TemplateDocumentWrite;
 /**
@@ -46,3 +57,4 @@ export declare function loadTemplateDocumentPaths<T>(fs: WorkspaceFs, path: stri
  */
 export declare function loadTemplateDocument<T>(fs: WorkspaceFs, path: string, parse: (value: unknown | null) => T): Promise<T>;
 export declare function loadTemplateDocument<T, R>(fs: WorkspaceFs, path: string, parse: (value: unknown | null) => T, project: (value: Readonly<T>) => R): Promise<R>;
+export {};

@@ -43,6 +43,12 @@
  */
 import type { MacroContext } from './types.js';
 export type { MacroContext };
+/**
+ * 内部占位标记必须避开本次所有文本来源，私用区字符本身也可能是角色使用的图标。
+ * 所有占位标记均以 `\uE000tavern` 开头且不含换行，因此只需收集含该前缀的来源片段；
+ * 常规调用零数组拼接、每个只读 MVU 快照对象最多序列化一次。
+ */
+export declare function createMacroMarkerAllocator(text: string, ctx: MacroContext): (name: string, extraText?: string) => string;
 /** 同一种子每次调用生成独立流；同一 turn 多步组装应各拿一份新流。 */
 export declare function createTurnRandom(seed: number): () => number;
 export declare function hashToSeed(text: string): number;

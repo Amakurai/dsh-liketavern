@@ -1,4 +1,5 @@
 /** 编辑器自动草稿：宿主持久化与本页有界未确认恢复；浏览器持久存储只保存本标签页标识。 */
+import { describeError } from '../core/guards.js'
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { Dispatch, ReactNode, SetStateAction } from 'react'
 import type { TavernRemote } from './types.js'
@@ -197,7 +198,7 @@ function DraftSession(props: { remote: TavernRemote; scope: string; owner: strin
         recovery = stageDraftRecovery(props.channel, serialized)
       } catch (cause) {
         revision++
-        const message = cause instanceof DraftRecoveryTooLargeError ? t('draft.recoveryTooLarge') : cause instanceof Error ? cause.message : String(cause)
+        const message = cause instanceof DraftRecoveryTooLargeError ? t('draft.recoveryTooLarge') : describeError(cause)
         unavailableDraftRecovery(props.channel, message, persisted)
         if (mounted) { setWriteState('error'); setError(message) }
         return
@@ -221,8 +222,8 @@ function DraftSession(props: { remote: TavernRemote; scope: string; owner: strin
           if (mounted && current === revision) setWriteState(snapshot ? 'saved' : 'idle')
         } finally { if (activeWrite === write) activeWrite = undefined }
       }).catch((cause: unknown) => {
-        failDraftRecovery(props.channel, write.recovery, cause instanceof Error ? cause.message : String(cause))
-        if (mounted && write.revision === revision) { setWriteState('error'); setError(cause instanceof Error ? cause.message : String(cause)) }
+        failDraftRecovery(props.channel, write.recovery, describeError(cause))
+        if (mounted && write.revision === revision) { setWriteState('error'); setError(describeError(cause)) }
       })
     }
     const schedule = () => {

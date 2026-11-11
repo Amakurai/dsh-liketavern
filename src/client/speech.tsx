@@ -32,16 +32,16 @@ import { notifyHelperScripts } from './helperScriptNotifications.js'
 import {parseHelperScriptTrees,type HelperScriptCommit,type HelperScriptContext,type HelperScriptView} from '../core/helperScripts.js'
 import {parseHelperMessageEdits,type HelperMessageEditRequest,type HelperMessageEditResult} from '../core/helperChatEdits.js'
 import {prepareHelperDisplay,registerHelperDisplay,waitHelperDisplay,HelperDisplayError,type HelperDisplayLease,type HelperDisplayRequest} from './helperDisplay.js'
-import { emitHelperHostEvent,hasHelperEventAudience } from './helperEventRouter.js'
-import { attachHelperEvents,attachCardBridgeRuntime } from './helperEventRouter.js'
+import { emitHelperHostEvent,hasHelperEventAudience,attachHelperEvents,attachCardBridgeRuntime } from './helperEventRouter.js'
 import type { RenderedOutput } from '../remote.js'
 import type { HelperFrameLease } from '../core/helperFrame.js'
 import { randomUuid } from '../core/secureRandom.js'
+import { describeError } from '../core/guards.js'
 type FrameWrite<T> = T & { frameLease?: HelperFrameLease }
 
 function displayFailure(error:unknown,t:ReturnType<typeof useT>):string{
   if(error instanceof HelperDisplayError)return t(error.code==='busy'?'speech.helperDisplayBusy':error.code==='timeout'?'speech.helperDisplayTimeout':'speech.helperDisplayStale')
-  return error instanceof Error?error.message:String(error)
+  return describeError(error)
 }
 export function SpeechHtmlFrame(props: {
   onFrameReady?:()=>void
@@ -82,8 +82,9 @@ export function SpeechHtmlFrame(props: {
   const [branchError,setBranchError]=useState<string|null>(null)
   const srcDoc = props.srcDoc
   // 普通 React 重绘不销毁正在等待的回执；只有卡面文档替换或卸载才取消回复。
-  const handlers = useRef({ readOnly:Boolean(props.readOnly),onReadOnlyViolation:props.onReadOnlyViolation,onFrameReady:props.onFrameReady,onScriptError:props.onScriptError,onScriptReady:props.onScriptReady,onMessageEdit:props.onMessageEdit,onMessageBranch:props.onMessageBranch,onSwipeGreeting: props.onSwipeGreeting, onHelperCommit: props.onHelperCommit, onHelperRefresh:props.onHelperRefresh,onScriptCommit:props.onScriptCommit,onScriptRefresh:props.onScriptRefresh,onWorldbookRequest:props.onWorldbookRequest,onWorldbookRefresh:props.onWorldbookRefresh,onWorldbookBind:props.onWorldbookBind, t })
-  handlers.current = { readOnly:Boolean(props.readOnly),onReadOnlyViolation:props.onReadOnlyViolation,onFrameReady:props.onFrameReady,onScriptError:props.onScriptError,onScriptReady:props.onScriptReady,onMessageEdit:props.onMessageEdit,onMessageBranch:props.onMessageBranch,onSwipeGreeting: props.onSwipeGreeting, onHelperCommit: props.onHelperCommit, onHelperRefresh:props.onHelperRefresh,onScriptCommit:props.onScriptCommit,onScriptRefresh:props.onScriptRefresh,onWorldbookRequest:props.onWorldbookRequest,onWorldbookRefresh:props.onWorldbookRefresh,onWorldbookBind:props.onWorldbookBind, t }
+  const latestHandlers = { readOnly:Boolean(props.readOnly),onReadOnlyViolation:props.onReadOnlyViolation,onFrameReady:props.onFrameReady,onScriptError:props.onScriptError,onScriptReady:props.onScriptReady,onMessageEdit:props.onMessageEdit,onMessageBranch:props.onMessageBranch,onSwipeGreeting: props.onSwipeGreeting, onHelperCommit: props.onHelperCommit, onHelperRefresh:props.onHelperRefresh,onScriptCommit:props.onScriptCommit,onScriptRefresh:props.onScriptRefresh,onWorldbookRequest:props.onWorldbookRequest,onWorldbookRefresh:props.onWorldbookRefresh,onWorldbookBind:props.onWorldbookBind, t }
+  const handlers = useRef(latestHandlers)
+  handlers.current = latestHandlers
   useEffect(() => {
     setFrameH(null)
   }, [srcDoc])
@@ -119,7 +120,7 @@ export function SpeechHtmlFrame(props: {
         if(!active||registration!==current||!eventEndpoint.matchesRuntime(runtimeId))throw new Error(handlers.current.t('speech.helperStoryChanged'))
         return {frameId:current.frameId,runtimeId,epoch,token:result.value.token}
       })()
-      void current.promise.catch(error=>{if(active&&registration===current&&eventEndpoint.matchesRuntime(runtimeId))handlers.current.onScriptError?.(error instanceof Error?error.message:String(error))})
+      void current.promise.catch(error=>{if(active&&registration===current&&eventEndpoint.matchesRuntime(runtimeId))handlers.current.onScriptError?.(describeError(error))})
     }
     const leaseFor=async(runtimeId:unknown,write=true):Promise<{frameLease?:HelperFrameLease}>=>{
       if(!active||!eventEndpoint.matchesRuntime(runtimeId))throw new Error(handlers.current.t('speech.helperStoryChanged'))
@@ -757,7 +758,7 @@ function SpeechBubbleSession(props: SpeechBubbleProps) {
     try {
       await onSwipeGreeting(index,frameLease)
     } catch (cause) {
-      setSwipeError(cause instanceof Error ? cause.message : String(cause))
+      setSwipeError(describeError(cause))
     } finally {
       swipeBusy.current = false
     }

@@ -99,12 +99,6 @@ export const zh = {
   'speech.mvuLeaseChanged':'MVU 租约已改变，请重新读取任务；未提交的变量钩子将重新执行。',
   'speech.mvuSandboxChanged':'MVU 执行沙箱已重建。',
   'speech.mvuTaskChanged':'MVU 任务或脚本就绪状态已改变。',
-  'speech.scriptsTitle':'后台脚本',
-  'speech.scriptsReload':'重新加载脚本',
-  'speech.scriptsPause':'暂停',
-  'speech.scriptsResume':'启动',
-  'speech.scriptsDisabled':'交互卡已关闭，后台脚本未运行。',
-  'speech.scriptsWaiting':'尚无可用的角色消息或启用脚本。消息出现后可重新加载。',
   'speech.scriptsBudget':'启用脚本超过 32 个，请先减少启用数量。',
   'speech.helperDisplayBusy':'消息显示仍在刷新，请等待完成。',
   'speech.helperDisplayTimeout':'消息显示准备超时，原显示已保留。',
@@ -128,9 +122,7 @@ export const zh = {
   'speech.cardDataNote': '只备份卡片通过变量接口保存的数据，不包含未保存的输入。切换会话或刷新前请生成并复制备份，之后用卡片下方的恢复按钮载入；数据不写入角色资产或剧情记忆。',
   'speech.cardDataBackup': '生成并选中备份',
   'speech.cardDataRestore': '恢复卡内备份',
-  'speech.cardDataRestoreDesc': '粘贴此前复制的完整备份。确认后会重新打开卡面并替换变量；真实会话会将恢复的变量保存到当前剧情，预览只修改临时数据。',
   'speech.cardDataText': '卡内变量备份文本',
-  'speech.cardDataFailed': '备份无效或超过 1 MiB，原数据未改动。',
 } as const
 
 export const en: Record<keyof typeof zh, string> = {
@@ -232,12 +224,6 @@ export const en: Record<keyof typeof zh, string> = {
   'speech.mvuLeaseChanged':'The MVU lease changed. Reload the task; uncommitted variable hooks will run again.',
   'speech.mvuSandboxChanged':'The MVU sandbox was rebuilt.',
   'speech.mvuTaskChanged':'The MVU task or script readiness changed.',
-  'speech.scriptsTitle':'Background scripts',
-  'speech.scriptsReload':'Reload scripts',
-  'speech.scriptsPause':'Pause',
-  'speech.scriptsResume':'Start',
-  'speech.scriptsDisabled':'Interactive cards are disabled. Background scripts are stopped.',
-  'speech.scriptsWaiting':'No character message or enabled script is available. Reload after a message appears.',
   'speech.scriptsBudget':'More than 32 scripts are enabled. Reduce the enabled script count first.',
   'speech.helperDisplayBusy':'Message display refresh is still in progress.',
   'speech.helperDisplayTimeout':'Display preparation timed out. The original display was kept.',
@@ -261,7 +247,5 @@ export const en: Record<keyof typeof zh, string> = {
   'speech.cardDataNote': 'Backups contain data saved through the card variable API, excluding unsaved inputs. Copy a backup before switching sessions or refreshing, then use Restore below the card. Character assets and story memory are separate.',
   'speech.cardDataBackup': 'Generate and select backup',
   'speech.cardDataRestore': 'Restore card backup',
-  'speech.cardDataRestoreDesc': 'Paste a complete backup. Confirming reopens the card and replaces its variables. Real sessions save the restored variables to the current story; previews only change temporary data.',
   'speech.cardDataText': 'Card variable backup text',
-  'speech.cardDataFailed': 'Invalid backup or larger than 1 MiB. Existing data was kept.',
 }

@@ -97,12 +97,6 @@ export declare const zh: {
     readonly 'speech.mvuLeaseChanged': "MVU 租约已改变，请重新读取任务；未提交的变量钩子将重新执行。";
     readonly 'speech.mvuSandboxChanged': "MVU 执行沙箱已重建。";
     readonly 'speech.mvuTaskChanged': "MVU 任务或脚本就绪状态已改变。";
-    readonly 'speech.scriptsTitle': "后台脚本";
-    readonly 'speech.scriptsReload': "重新加载脚本";
-    readonly 'speech.scriptsPause': "暂停";
-    readonly 'speech.scriptsResume': "启动";
-    readonly 'speech.scriptsDisabled': "交互卡已关闭，后台脚本未运行。";
-    readonly 'speech.scriptsWaiting': "尚无可用的角色消息或启用脚本。消息出现后可重新加载。";
     readonly 'speech.scriptsBudget': "启用脚本超过 32 个，请先减少启用数量。";
     readonly 'speech.helperDisplayBusy': "消息显示仍在刷新，请等待完成。";
     readonly 'speech.helperDisplayTimeout': "消息显示准备超时，原显示已保留。";
@@ -126,8 +120,6 @@ export declare const zh: {
     readonly 'speech.cardDataNote': "只备份卡片通过变量接口保存的数据，不包含未保存的输入。切换会话或刷新前请生成并复制备份，之后用卡片下方的恢复按钮载入；数据不写入角色资产或剧情记忆。";
     readonly 'speech.cardDataBackup': "生成并选中备份";
     readonly 'speech.cardDataRestore': "恢复卡内备份";
-    readonly 'speech.cardDataRestoreDesc': "粘贴此前复制的完整备份。确认后会重新打开卡面并替换变量；真实会话会将恢复的变量保存到当前剧情，预览只修改临时数据。";
     readonly 'speech.cardDataText': "卡内变量备份文本";
-    readonly 'speech.cardDataFailed': "备份无效或超过 1 MiB，原数据未改动。";
 };
 export declare const en: Record<keyof typeof zh, string>;

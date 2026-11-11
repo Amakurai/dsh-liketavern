@@ -4,6 +4,7 @@ import {createHash} from 'node:crypto'
 import {afterEach,beforeEach,expect,it,vi} from 'vitest'
 import type {ReactNode} from 'react'
 import {HelperMvuRunner} from '../src/client/helperMvuRunner.js'
+import {notifyHelperStory} from '../src/client/helperNotifications.js'
 import {Btn} from '../src/client/util.js'
 import type {TavernRemote} from '../src/client/types.js'
 import type {HelperMvuWork} from '../src/core/helperMvu.js'
@@ -132,4 +133,21 @@ it('卡面重建后的旧运行时请求快照被忽略，当前运行时仍能�
   await message({action:'helperSnapshotGet',requestId:'fresh-read',storyId:'story'})
   expect(replies()).toHaveLength(1)
   expect(replies()[0]).toMatchObject({requestId:'fresh-read',ok:true})
+})
+it('空闲无待办时指数退避降低轮询频率，收到同剧情变更通知立即唤醒认领',async()=>{
+  prepare.mockResolvedValue({ok:true,value:{storyId:'story',enabled:true,status:'idle'}})
+  await mount();await connect()
+  expect(prepare).toHaveBeenCalledTimes(1)
+  // 1s tick 不重拉（首次退避 2s）；90s 内按 2+4+8+16+30+30 退避而非 90 次 1Hz 轮询
+  await act(async()=>vi.advanceTimersByTimeAsync(1000))
+  expect(prepare).toHaveBeenCalledTimes(1)
+  await act(async()=>vi.advanceTimersByTimeAsync(89000))
+  const idleCalls=prepare.mock.calls.length
+  expect(idleCalls).toBeGreaterThanOrEqual(6)
+  expect(idleCalls).toBeLessThanOrEqual(8)
+  // 正在 30s 退避窗口中收到同剧情通知：零等待立即重拉并启动新任务
+  prepare.mockResolvedValueOnce({ok:true,value:structuredClone(work)})
+  await act(async()=>{notifyHelperStory('session','story')})
+  expect(prepare).toHaveBeenCalledTimes(idleCalls+1)
+  expect(runs()).toHaveLength(1)
 })

@@ -301,3 +301,16 @@ it('通过 @dsh/character 占位名修改角色世界书时返回更新后的上
   expect(updated.context?.character).toEqual({primary:'@dsh/character',additional:[]})
   expect(updated.snapshot?.name).toBe('@dsh/character')
 })
+it('批量绑定多本世界书时复用同次目录列表与原名解析',async()=>{
+  await op('book-one','create',[{content:'ONE'}])
+  await op('book-two','create',[{content:'TWO'}])
+  const binding=(await state.loadBinding('a'))!
+  const before=await getHelperWorldbookContext(state,'a',binding.storyId!)
+  const listSpy=vi.spyOn(state,'listLorebooks')
+  try{
+    const context=await rebindHelperWorldbooks(ctx,state,'a',1,{storyId:binding.storyId!,bindingRevision:before.bindingRevision,kind:'global',selection:['book-one','book-two']})
+    expect(context.global).toEqual(['book-one','book-two'])
+    // 一次 rebindHelperWorldbooks 内：sharedList 解析一次目录 + contextFrom 构建返回上下文读取一次目录
+    expect(listSpy.mock.calls.length).toBeLessThanOrEqual(2)
+  }finally{listSpy.mockRestore()}
+})

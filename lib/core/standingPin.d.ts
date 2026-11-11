@@ -14,8 +14,6 @@
  * 钉死的字节，既不互相覆盖重算，也不会让 continue 轮拿到 normal 轮钉死的文本。
  */
 export declare const STANDING_PIN_VERSION = 28;
-/** 场景值归一化：空/缺省视为 normal（与 assemble.ts 的 generationType 缺省一致）。 */
-export declare function normalizeGenerationType(generationType?: string): string;
 /** 钉死键：会话 × 生成场景。 */
 export declare function standingPinKey(sessionId: string, generationType?: string): string;
 export declare function standingFingerprint(binding: {
@@ -36,7 +34,7 @@ export interface StandingPin {
 }
 /**
  * djb2（无符号 32 位）→ 8 位十六进制。用来把「会改变 standing 字节的设置项」压成一个短标记
- * 并入指纹，不作安全用途；纯函数、无 I/O，调用方自己挑要哪些键。
+ * 并入指纹，不作安全用途；按稳定键序直接流式哈希，避免大型角色卡/预设逐层拼接整份 JSON 字符串。
  */
 export declare function stableFingerprintHash(value: unknown): string;
 /** 指纹未变则返回已钉死的文本；换卡/换预设/换人设才接受新计算结果。 */

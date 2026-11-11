@@ -9,6 +9,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { Wal, WAL_BINARY_MARK } from '../src/state/wal.js'
 import { WorkspaceFs } from '../src/state/workspaceFs.js'
+import { appendLegacyRecord } from './legacyWalFactory.js'
 
 let root: string
 let wal: Wal
@@ -64,7 +65,7 @@ describe('快照编码完整性', () => {
     await wal.beginFloor('f3')
     await fs.withFloor('f3').writeBytes('binary.bin', Buffer.from([1, 2]))
     await fs.withFloor('f3').writeBytes('empty.bin', Buffer.from([3]))
-    await wal.record('f3', 'legacy.bin', WAL_BINARY_MARK + binary.toString('base64'))
+    await appendLegacyRecord(join(root, 'state/wal'), 'f3', 'legacy.bin', WAL_BINARY_MARK + binary.toString('base64'))
     await fs.writeBytes('legacy.bin', Buffer.from([4]))
     await wal.commitFloor('f3')
     await wal.rollbackFloor('f3', root)
@@ -143,7 +144,7 @@ describe('批量回滚预检恢复游标', () => {
 
   it('旧 before-only 记录的合法 pending 仍可恢复原文', async () => {
     await wal.beginFloor('f3')
-    await wal.record('f3', 'legacy.txt', '旧协议原文')
+    await appendLegacyRecord(join(root, 'state/wal'), 'f3', 'legacy.txt', '旧协议原文')
     await fs.writeText('legacy.txt', '旧协议正文')
     await wal.commitFloor('f3')
     await putPending('f3', { path: 'legacy.txt', from: bytes('旧协议正文'), to: bytes('旧协议原文') })

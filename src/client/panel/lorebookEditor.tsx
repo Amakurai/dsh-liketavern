@@ -5,7 +5,7 @@
  */
 import { useDraftGuard } from '../drafts.js'
 import { PersistentEditor, useDraftState } from '../draftPersistence.js'
-import { useId, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useId, useMemo, useRef, useState } from 'react'
 import {
   IconChevronDownOutlineMedium,
   IconPlusOutlineMedium,
@@ -57,6 +57,16 @@ const triValue = (v: boolean | null): string => (v === null ? '' : String(v))
 const triFrom = (v: string): boolean | null => (v === '' ? null : v === 'true')
 
 type FilterId = 'all' | 'on' | 'off' | 'constant'
+
+const entryHaystackCache = new WeakMap<WorldInfoEntry, string>()
+function getEntryHaystack(entry: WorldInfoEntry): string {
+  let cached = entryHaystackCache.get(entry)
+  if (cached === undefined) {
+    cached = `${entry.comment}\n${entry.keys.join(' ')}\n${entry.secondaryKeys.join(' ')}\n${entry.content.slice(0, 400)}`.toLowerCase()
+    entryHaystackCache.set(entry, cached)
+  }
+  return cached
+}
 
 function entryTitle(t: TFunc, entry: WorldInfoEntry): string {
   const comment = entry.comment.trim()
@@ -185,9 +195,13 @@ function LorebookEditorContent(props: LorebookEditorProps & { draftKey: string }
     setDirty(true)
   }
 
-  const patch = (uid: string, partial: Partial<WorldInfoEntry>) => {
-    mark(entries.map((e) => (e.uid === uid ? { ...e, ...partial } : e)))
-  }
+  const entriesRef = useRef(entries)
+  entriesRef.current = entries
+
+  const patch = useCallback((uid: string, partial: Partial<WorldInfoEntry>) => {
+    setEntries(entriesRef.current.map((e) => (e.uid === uid ? { ...e, ...partial } : e)))
+    setDirty(true)
+  }, [setEntries, setDirty])
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -196,22 +210,25 @@ function LorebookEditorContent(props: LorebookEditorProps & { draftKey: string }
       if (filter === 'off' && e.enabled) return false
       if (filter === 'constant' && !e.constant) return false
       if (!q) return true
-      const hay = `${e.comment}\n${e.keys.join(' ')}\n${e.secondaryKeys.join(' ')}\n${e.content.slice(0, 400)}`.toLowerCase()
-      return hay.includes(q)
+      return getEntryHaystack(e).includes(q)
     })
   }, [entries, filter, query])
 
   const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
   const safePage = Math.min(page, pageCount - 1)
   const pageItems = filtered.slice(safePage * PAGE_SIZE, safePage * PAGE_SIZE + PAGE_SIZE)
-  const enabledCount = entries.filter((e) => e.enabled).length
-  const constantCount = entries.filter((e) => e.constant).length
+  const { enabledCount, constantCount } = useMemo(() => {
+    let enabled = 0, constant = 0
+    for (const e of entries) {
+      if (e.enabled) enabled++
+      if (e.constant) constant++
+    }
+    return { enabledCount: enabled, constantCount: constant }
+  }, [entries])
 
   // 整段包进 runAsync：typert 传输失败或入参严格校验不过时是 reject 而非错误信封，
   // 传输层 reject 也必须解锁按钮——否则 busy 卡死，两个「保存」都点不动，
   // 编辑器里这一批未写回的条目全部作废。
-  const entriesRef = useRef(entries)
-  entriesRef.current = entries
   const save = async () => {
     if (saving.current) return
     if (props.remote && !revision) { setError(t('lorebookEditor.missingRevision')); return }
@@ -378,8 +395,8 @@ function LorebookEditorContent(props: LorebookEditorProps & { draftKey: string }
                       entry={entry}
                       advanced={advanced}
                       onAdvanced={setAdvanced}
-                      onChange={(partial) => patch(entry.uid, partial)}
-                      onDelete={() => setToDelete(entry.uid)}
+                      onPatch={patch}
+                      onRequestDelete={setToDelete}
                     />
                   </div>
                 </div>
@@ -446,16 +463,16 @@ function LorebookEditorContent(props: LorebookEditorProps & { draftKey: string }
   )
 }
 
-function EntryForm(props: {
+const EntryForm = memo(function EntryForm(props: {
   entry: WorldInfoEntry
   advanced: boolean
   onAdvanced: (v: boolean) => void
-  onChange: (partial: Partial<WorldInfoEntry>) => void
-  onDelete: () => void
+  onPatch: (uid: string, partial: Partial<WorldInfoEntry>) => void
+  onRequestDelete: (uid: string) => void
 }) {
   const t = useT()
-  const { entry } = props
-  const set = props.onChange
+  const { entry, onPatch, onRequestDelete } = props
+  const set = (partial: Partial<WorldInfoEntry>) => onPatch(entry.uid, partial)
   return (
     <div className="dsh-tavern-entryBody" onClick={(e) => e.stopPropagation()}>
       <label className="dsh-tavern-field">
@@ -653,10 +670,10 @@ function EntryForm(props: {
       ) : null}
 
       <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-        <IconBtn label={t('lorebookEditor.deleteEntry')} danger onClick={props.onDelete}>
+        <IconBtn label={t('lorebookEditor.deleteEntry')} danger onClick={() => onRequestDelete(entry.uid)}>
           <IconTrashOutlineMedium />
         </IconBtn>
       </div>
     </div>
   )
-}
+})

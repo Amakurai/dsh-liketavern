@@ -1,4 +1,5 @@
 /** 设置中的脚本资产管理：无需绑定会话，按全局、角色与预设选择独立脚本库，复用带草稿保护的编辑器。 */
+import { describeError } from '../../core/guards.js'
 import { useRef, useState,useSyncExternalStore } from 'react'
 import {scriptStatusStore,retryScriptMvu,enableScriptMvu,isScriptWindowAccessError,type ScriptRuntimeStatus} from '../helperScriptStatus.js'
 import type { HelperScriptAsset, HelperScriptTarget } from '../../core/helperScripts.js'
@@ -38,7 +39,7 @@ export function ScriptSettings({remote}:{remote:TavernRemote}) {
       const result=await remote.getHelperScriptLibrary({target})
       if(!result.ok)throw new Error(result.error.message)
       setEditing(result.value)
-    }catch(error){setError(error instanceof Error?error.message:String(error))}finally{opening.current=false;setOpeningType(null);setBusy(false)}
+    }catch(error){setError(describeError(error))}finally{opening.current=false;setOpeningType(null);setBusy(false)}
   }
   const target=editing?.target
   const editorLabel=target?.type==='character'&&characters.state.status==='ready'?characters.state.value.items.find(card=>card.cardId===target.cardId)?.name:target?.type==='preset'&&presets.state.status==='ready'?presets.state.value.items.find(preset=>preset.id===target.presetId)?.name:undefined
@@ -100,7 +101,7 @@ function NativeMvuEnable({sessionId}:{sessionId:string}) {
   const enable=()=>{
     if(busy)return
     setBusy(true);setError(null)
-    enableScriptMvu(sessionId).then(found=>{if(!found)setError(t('settings.scripts.nativeUnavailable'))},cause=>setError(cause instanceof Error?cause.message:String(cause))).finally(()=>setBusy(false))
+    enableScriptMvu(sessionId).then(found=>{if(!found)setError(t('settings.scripts.nativeUnavailable'))},cause=>setError(describeError(cause))).finally(()=>setBusy(false))
   }
   return <><Btn disabled={busy} onClick={enable}>{t('settings.scripts.nativeEnable')}</Btn><Err message={error}/></>
 }

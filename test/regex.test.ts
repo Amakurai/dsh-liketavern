@@ -844,4 +844,21 @@ describe('审查修复回归：正则宏值', () => {
     expect(run('foo', [matchDigitRule], literalMatchContext).text).toBe('f1')
     expect(applyRegexToMessages([{ role: 'assistant', content: 'foo' }], [matchDigitRule], FILTER, literalMatchContext).messages[0]?.content).toBe('f1')
   })
+
+  it('replace 含 {{match}} 时避开 readonlyStatData 中的私用区占位符，且无有效规则时保留原消息并汇报错误', () => {
+    const statCtx: MacroContext = {
+      char: 'Alice',
+      user: 'Bob',
+      readonlyStatData: { icon: '\uE000tavernMatch0\uE001' },
+    }
+    const rule = makeRule({ id: 'mvu-match', find: '/cat/g', replace: '[{{match}}|{{getvar::stat_data.icon}}]' })
+    expect(run('cat', [rule], statCtx).text).toBe('[cat|\uE000tavernMatch0\uE001]')
+
+    const badRule = makeRule({ id: 'bad-re', find: '/[unclosed/', replace: 'x' })
+    const res = applyRegexToMessages([{ role: 'user', content: 'hello' }], [badRule], FILTER, statCtx)
+    expect(res.messages).toEqual([{ role: 'user', content: 'hello' }])
+    expect(res.applied).toEqual([])
+    expect(res.errors).toHaveLength(1)
+    expect(res.errors[0]?.ruleId).toBe('bad-re')
+  })
 })

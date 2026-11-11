@@ -24,20 +24,6 @@ export declare function compressOldestMemories(state: TavernState, llm: LlmRunti
     merged: string;
     archived: number;
 } | null>;
-/**
- * 请模型为一批记忆写检索别名；返回与输入等长的数组（没有对应行的位置为 null）。
- * 只接受正常 stop 终止帧：超时、截断、取消、出错都返回 null，调用方不保存任何东西。
- */
-export declare function requestMemoryAliases(llm: LlmRuntime, provider: string, model: string, bodies: string[], maintenanceSignal?: AbortSignal): Promise<Array<string[] | null> | null>;
-/**
- * 为最新的一批还没有别名的记忆生成并保存别名。
- * 无模型、取消或请求失败返回 null（什么都不保存，以后重试）；成功返回保存的条数与其中拿到别名的条数。
- * 正常结束的回复里没有对应行的记忆记为空列表：不为同一段正文反复请求。
- */
-export declare function expandMemoryAliases(state: TavernState, llm: LlmRuntime | undefined, cardId: string, provider: string | undefined, model: string | undefined, storyId?: string, maintenanceSignal?: AbortSignal): Promise<{
-    saved: number;
-    named: number;
-} | null>;
 /** attempted 登记表上限：与 triggerLogs/helperTurnClosures 的有界淘汰口径一致，剧情数量增长不让进程内登记无界膨胀。 */
 export declare const ATTEMPTED_KEYS_MAX = 256;
 /** 「每个已结束轮次只尝试一次」的登记表更新；超限时淘汰最旧 key（Map 迭代序 = 插入序）。 */

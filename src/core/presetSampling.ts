@@ -8,7 +8,7 @@ import type { PresetSamplingSettings, SamplingSettings } from './types.js'
 
 export const MAX_PRESET_STOP_SEQUENCES = 16
 export const MAX_PRESET_STOP_CHARS = 1024
-export const MAX_PRESET_OUTPUT_TOKENS = 2_000_000
+const MAX_PRESET_OUTPUT_TOKENS = 2_000_000
 
 const samplingSchema = strictObject({
   temperature: optional(number().check(minimum(0), maximum(2))),

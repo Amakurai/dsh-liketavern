@@ -86,6 +86,7 @@ export interface BoundLoreEntries {
  */
 export declare function loadBoundLoreEntries(state: TavernState, binding: NonNullable<Awaited<ReturnType<TavernState['loadBinding']>>>, options?: {
     onCorruptChatBook?: 'throw' | 'report';
+    persona?: Awaited<ReturnType<TavernState['resolvePersona']>>;
 }): Promise<BoundLoreEntries>;
 /** 组装一次 Tavern 提示词。绑定缺失或角色不存在时返回 null。 */
 export declare function runTavernPipeline(input: PipelineInput): Promise<PipelineResult | null>;

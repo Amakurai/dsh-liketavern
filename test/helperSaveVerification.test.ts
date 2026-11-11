@@ -4,7 +4,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { saveHelperState, loadHelperState, HELPER_STATE_PATH, type HelperState } from '../src/state/helper.js'
+import { Wal } from '../src/state/wal.js'
 import { WorkspaceFs } from '../src/state/workspaceFs.js'
+import { closeLedger } from '../src/state/writeLedger.js'
 
 describe('saveHelperState verification guard', () => {
   let root: string
@@ -95,5 +97,49 @@ describe('saveHelperState verification guard', () => {
       extras: {},
     }
     await expect(saveHelperState(fs, oversizedState)).rejects.toThrow(/酒馆助手(数据超过预算|状态文件超限)/)
+  })
+
+  it('loadHelperState 命中缓存时不重复读盘，返回独立副本，且在写入或 WAL 回滚后立即失效', async () => {
+    const wal = new Wal(join(root, 'state/wal'))
+    const fs1 = new WorkspaceFs(root, wal).withFloor('session#t1')
+    await wal.beginFloor('session#t1')
+    await saveHelperState(fs1, {
+      scopes: { '["chat",""]': { hp: 10 } },
+      extras: { '1': { note: 'init' } },
+    })
+
+    const plain = new WorkspaceFs(root, null)
+    const first = await loadHelperState(plain)
+    expect(first.scopes['["chat",""]']).toEqual({ hp: 10 })
+    // 调用方原地修改返回值不得污染缓存
+    ;(first.scopes['["chat",""]'] as Record<string, unknown>).hp = 999
+
+    const readSpy = vi.spyOn(plain, 'readText')
+    const second = await loadHelperState(plain)
+    expect(readSpy).not.toHaveBeenCalled()
+    expect(second.scopes['["chat",""]']).toEqual({ hp: 10 })
+    readSpy.mockRestore()
+
+    const fs2 = new WorkspaceFs(root, wal).withFloor('session#t2')
+    await wal.beginFloor('session#t2')
+    await saveHelperState(fs2, {
+      scopes: { '["chat",""]': { hp: 25 } },
+      extras: { '1': { note: 'updated' } },
+    })
+    expect((await loadHelperState(plain)).scopes['["chat",""]']).toEqual({ hp: 25 })
+
+    await wal.rollbackFloor('session#t2', root)
+    expect((await loadHelperState(plain)).scopes['["chat",""]']).toEqual({ hp: 10 })
+
+    // 目录关闭账本并在同一路径重建写入等长同刻度内容后，新账本 epoch 单调递增，不会命中旧缓存
+    closeLedger(root)
+    await rm(root, { recursive: true, force: true })
+    const recreatedWal = new Wal(join(root, 'state/wal'))
+    await recreatedWal.beginFloor('session#t1')
+    await saveHelperState(new WorkspaceFs(root, recreatedWal).withFloor('session#t1'), {
+      scopes: { '["chat",""]': { hp: 77 } },
+      extras: { '1': { note: 'init' } },
+    })
+    expect((await loadHelperState(new WorkspaceFs(root, null))).scopes['["chat",""]']).toEqual({ hp: 77 })
   })
 })

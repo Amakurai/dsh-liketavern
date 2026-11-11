@@ -476,6 +476,7 @@ async function prepareBranchStory(
     }
     await wal.rollbackAfter(floorNamesForLineageRollback(floors, binding, sourceId, rollbackFromTurn), fs.root)
   }
+  await wal.prune({ keepRolledBackDays: 7 })
   const boundaryTurn = rollbackFromTurn !== undefined ? rollbackFromTurn - 1 : inheritedThroughTurn(seed) ?? 0
   const owner = timerOwnerAtTurn(binding, sourceId, boundaryTurn)
   await copyTemplateTimers(fs, owner, childId)
@@ -762,11 +763,12 @@ export async function regenerate({ ctx, state }: FloorDeps, sessionId: string, m
   const source = liveSession(ctx, sessionId)
   if (!source) throw new FloorError('session-not-live', `会话 ${sessionId} 不在线（仅支持当前打开的会话）`)
   requireTavernSession(ctx, source)
-  const { turns, openTurn } = closedTurns(source.snapshotEvents())
+  const events = source.snapshotEvents()
+  const { turns, openTurn } = closedTurns(events)
   if (openTurn !== null) throw new FloorError('turn-open', `turn ${openTurn} 仍在进行中，请等待完成后再重新生成`)
   let target: number
   if (messageId !== undefined || floorTurn !== undefined) {
-    const turn = resolveFloorTurn(source.snapshotEvents(), messageId, floorTurn)
+    const turn = resolveFloorTurn(events, messageId, floorTurn)
     if (turn === null) throw new FloorError('no-message', '这条消息不在当前会话中（可能已过期）')
     if (!turns.includes(turn)) throw new FloorError('turn-open', `turn ${turn} 尚未完结，不能重新生成`)
     target = turn
@@ -775,11 +777,11 @@ export async function regenerate({ ctx, state }: FloorDeps, sessionId: string, m
     if (last === undefined) throw new FloorError('no-turns', '会话还没有可重新生成的楼层')
     target = last
   }
-  const seq = turnStartSeq(source.snapshotEvents(), target)
+  const seq = turnStartSeq(events, target)
   // seq 0 合法：turn/start 是日志第一条时，前缀为空（sessionPrefixEvents(..., -1) → []），即重跑第一层。
   if (seq === null) throw new FloorError('bad-boundary', `turn ${target} 的边界不可回退`)
   // 宿主一步可认领一批输入；该 turn 的每条用户消息都要按原顺序重放，只取第一条会静默丢输入。
-  const userMessages = userMessagesOf(source.snapshotEvents(), target)
+  const userMessages = userMessagesOf(events, target)
   if (userMessages.length === 0) throw new FloorError('no-user-message', `turn ${target} 内找不到用户消息`)
 
   const revision = source.seq
@@ -804,13 +806,14 @@ export async function rollbackToFloor({ ctx, state }: FloorDeps, sessionId: stri
   const source = liveSession(ctx, sessionId)
   if (!source) throw new FloorError('session-not-live', `会话 ${sessionId} 不在线`)
   requireTavernSession(ctx, source)
-  const { openTurn } = closedTurns(source.snapshotEvents())
+  const events = source.snapshotEvents()
+  const { openTurn } = closedTurns(events)
   if (openTurn !== null) throw new FloorError('turn-open', `turn ${openTurn} 仍在进行中`)
-  const turn = resolveFloorTurn(source.snapshotEvents(), messageId, floorTurn)
+  const turn = resolveFloorTurn(events, messageId, floorTurn)
   if (turn === null) throw new FloorError('no-message', '这条消息不在当前会话中（可能已过期）')
-  const endSeq = turnEndSeq(source.snapshotEvents(), turn)
+  const endSeq = turnEndSeq(events, turn)
     ?? (turn === 0 && messageId !== undefined
-      ? source.snapshotEvents().find((e) => e.type === 'assistant/message' && (e.data as { message?: { id?: string } }).message?.id === messageId)?.seq ?? null
+      ? events.find((e) => e.type === 'assistant/message' && (e.data as { message?: { id?: string } }).message?.id === messageId)?.seq ?? null
       : null)
   if (endSeq === null) throw new FloorError('turn-open', `turn ${turn} 尚未完结，不能作为回退边界`)
 
@@ -832,9 +835,10 @@ export async function getFloorUserMessage({ ctx }: FloorDeps, sessionId: string,
   const source = liveSession(ctx, sessionId)
   if (!source) throw new FloorError('session-not-live', `会话 ${sessionId} 不在线`)
   requireTavernSession(ctx, source)
-  const turn = turnOfAssistantMessage(source.snapshotEvents(), messageId)
+  const events = source.snapshotEvents()
+  const turn = turnOfAssistantMessage(events, messageId)
   if (turn === null) throw new FloorError('no-message', '这条消息不在当前会话中（可能已过期）')
-  const userMessage = firstUserMessageOf(source.snapshotEvents(), turn)
+  const userMessage = firstUserMessageOf(events, turn)
   if (!userMessage) throw new FloorError('no-user-message', `turn ${turn} 内没有用户消息`)
   return { turn, text: userMessageText(userMessage) }
 }
@@ -850,13 +854,14 @@ export async function editUserMessage(
   const source = liveSession(ctx, sessionId)
   if (!source) throw new FloorError('session-not-live', `会话 ${sessionId} 不在线`)
   requireTavernSession(ctx, source)
-  const { openTurn } = closedTurns(source.snapshotEvents())
+  const events = source.snapshotEvents()
+  const { openTurn } = closedTurns(events)
   if (openTurn !== null) throw new FloorError('turn-open', `turn ${openTurn} 仍在进行中`)
-  const turn = turnOfAssistantMessage(source.snapshotEvents(), messageId)
+  const turn = turnOfAssistantMessage(events, messageId)
   if (turn === null) throw new FloorError('no-message', '这条消息不在当前会话中（可能已过期）')
-  const seq = turnStartSeq(source.snapshotEvents(), turn)
+  const seq = turnStartSeq(events, turn)
   if (seq === null) throw new FloorError('no-turn', `会话中没有 turn ${turn}`)
-  const userMessages = userMessagesOf(source.snapshotEvents(), turn)
+  const userMessages = userMessagesOf(events, turn)
   if (userMessages.length === 0 || isSyntheticUserText(userMessageText(userMessages[0]!))) {
     throw new FloorError('no-user-message', `turn ${turn} 内没有用户消息可编辑`)
   }
@@ -910,9 +915,10 @@ export async function getFloorAssistantMessage(
   const source = liveSession(ctx, sessionId)
   if (!source) throw new FloorError('session-not-live', `会话 ${sessionId} 不在线`)
   requireTavernSession(ctx, source)
-  const turn = turnOfAssistantMessage(source.snapshotEvents(), messageId)
+  const events = source.snapshotEvents()
+  const turn = turnOfAssistantMessage(events, messageId)
   if (turn === null) throw new FloorError('no-message', '这条消息不在当前会话中（可能已过期）')
-  const hit = source.snapshotEvents().find(
+  const hit = events.find(
     (e) => e.type === 'assistant/message' && (e.data as { message?: { id?: string } }).message?.id === messageId,
   )
   const message = (hit?.data as { message?: AssistantMessage } | undefined)?.message
@@ -938,16 +944,17 @@ export async function editAssistantMessage(
   const source = liveSession(ctx, sessionId)
   if (!source) throw new FloorError('session-not-live', `会话 ${sessionId} 不在线`)
   requireTavernSession(ctx, source)
-  const { openTurn } = closedTurns(source.snapshotEvents())
+  const events = source.snapshotEvents()
+  const { openTurn } = closedTurns(events)
   if (openTurn !== null) throw new FloorError('turn-open', `turn ${openTurn} 仍在进行中`)
-  const turn = turnOfAssistantMessage(source.snapshotEvents(), messageId)
+  const turn = turnOfAssistantMessage(events, messageId)
   if (turn === null) throw new FloorError('no-message', '这条消息不在当前会话中（可能已过期）')
-  const endSeq = turnEndSeq(source.snapshotEvents(), turn)
+  const endSeq = turnEndSeq(events, turn)
   if (endSeq === null) throw new FloorError('turn-open', `turn ${turn} 尚未完结，不能编辑`)
   if (!newText.trim()) throw new FloorError('empty-text', '编辑后的正文不能为空')
 
 
-  const seed = withEditedAssistantMessage(sessionPrefixEvents(source.snapshotEvents(), endSeq), messageId, newText)
+  const seed = withEditedAssistantMessage(sessionPrefixEvents(events, endSeq), messageId, newText)
   if (!seed) throw new FloorError('no-message', '这条消息不在当前会话中（可能已过期）')
 
   const revision = source.seq
@@ -978,11 +985,12 @@ export async function continueFloor(
   if (!source) throw new FloorError('session-not-live', `会话 ${sessionId} 不在线（仅支持当前打开的会话）`)
   requireTavernSession(ctx, source)
   const revision = source.seq
-  const { turns, openTurn } = closedTurns(source.snapshotEvents())
+  const events = source.snapshotEvents()
+  const { turns, openTurn } = closedTurns(events)
   if (openTurn !== null) throw new FloorError('turn-open', `turn ${openTurn} 仍在进行中，请等待完成后再续写`)
-  const turn = turnOfAssistantMessage(source.snapshotEvents(), messageId)
+  const turn = turnOfAssistantMessage(events, messageId)
   if (turn === null) throw new FloorError('no-message', '这条消息不在当前会话中（可能已过期）')
-  const hit = source.snapshotEvents().find((e) => e.type === 'assistant/message' && (e.data as { message?: { id?: string } }).message?.id === messageId)
+  const hit = events.find((e) => e.type === 'assistant/message' && (e.data as { message?: { id?: string } }).message?.id === messageId)
   if (hit && isTavernGreetingEvent(hit)) throw new FloorError('greeting-floor', '开场白楼层不支持续写')
   const last = turns.at(-1)
   if (last === undefined || turn !== last) throw new FloorError('not-last-floor', '只能续写最后一层回复')
@@ -1060,6 +1068,9 @@ export async function getGreetingSwipe(
   if (!binding || !messageId) return none
   const session = liveSession(ctx, sessionId)
   if (!session || !isTavernRuntimeSession(ctx, session)) return none
+  // 非开场白楼层或已进入正式对话时，swipe 恒为 null，无需为每个楼层重读角色卡变体列表。
+  const probe = greetingFloorState(session.snapshotEvents(), messageId, binding.greetingIndex, 0)
+  if (!probe.isGreeting || probe.started) return probe
   const variants = await greetingVariants(state, binding.cardId)
   return greetingFloorState(session.snapshotEvents(), messageId, binding.greetingIndex, variants.length)
 }
@@ -1083,6 +1094,9 @@ export async function getFloorSiblings(
   if (!session || !isTavernRuntimeSession(ctx, session)) return none
   const turn = resolveFloorTurn(session.snapshotEvents(), messageId, floorTurn)
   if (turn === null) return none
+  // 绝大部分未分支会话不在 siblings.json 中：先用 stat 缓存无锁快筛，命中 0 分支直接返回，避免长历史首屏排队抢锁。
+  const quickForks = await loadSiblingForks(state.paths.root)
+  if (!quickForks.some((f) => f.parentSessionId === sessionId || f.childSessionId === sessionId)) return none
 
   // 存在性探测也是读改写的一部分：只锁最终写入会把期间新增、尚未探测的分支误删。
   return withWorkspaceLock(siblingsFile(state.paths.root), async () => {
@@ -1114,15 +1128,18 @@ export async function getFloorSiblings(
       }),
     )
     const exists = (id: string) => existing.has(id)
-    try {
-      await mutateSiblingForks(state.paths.root, (current) => {
-        const pruned = pruneSiblingForks(current, exists)
-        return pruned.changed ? pruned.forks : current
-      })
-    } catch {
-      // 落盘失败不影响本次查询；下次读取再剪。
+    const pruned = pruneSiblingForks(forks, exists)
+    if (pruned.changed) {
+      try {
+        await mutateSiblingForks(state.paths.root, (current) => {
+          const next = pruneSiblingForks(current, exists)
+          return next.changed ? next.forks : current
+        })
+      } catch {
+        // 落盘失败不影响本次查询；下次读取再剪。
+      }
     }
-    const swipe = siblingSwipe(pruneSiblingForks(forks, exists).forks, sessionId, turn, exists)
+    const swipe = siblingSwipe(pruned.forks, sessionId, turn, exists)
     if (!swipe) return none
     return { swipe: { turn, ...swipe } }
   })
@@ -1154,12 +1171,13 @@ export async function enterGreetingConversation({ ctx, state }: FloorDeps, sessi
   if (!binding) return false
   const session = liveSession(ctx, sessionId)
   if (!session || !isTavernRuntimeSession(ctx, session)) return false
-  if (sessionHasUserMessage(session.snapshotEvents())) return false
-  if (session.snapshotEvents().some((e) => e.type === 'assistant/message')) {
+  const initialEvents = session.snapshotEvents()
+  if (sessionHasUserMessage(initialEvents)) return false
+  if (initialEvents.some((e) => e.type === 'assistant/message')) {
     retireGreetingOnlyBlankSession(session, ctx)
     return false
   }
-  if (session.snapshotEvents().some((e) => e.type === 'turn/start')) return false
+  if (initialEvents.some((e) => e.type === 'turn/start')) return false
   const variants = await greetingVariants(state, binding.cardId)
   const raw = pickGreetingText(variants, binding.greetingIndex)
   if (!raw) return false
@@ -1194,7 +1212,7 @@ export async function swipeGreeting({ ctx, state }: FloorDeps, sessionId: string
     if (liveSession(ctx, sessionId) !== source || source.seq !== revision) {
       throw new FloorError('history-changed', '对话已改变，请刷新后再切换开场白')
     }
-    if (closedTurns(source.snapshotEvents()).openTurn !== null) {
+    if (closedTurns(source.snapshotEvents()).openTurn !== null || state.openFloors?.has(sessionId)) {
       throw new FloorError('turn-open', '生成期间不能切换开场白')
     }
   }
@@ -1231,7 +1249,7 @@ export async function forkEditedHistory(deps:FloorDeps,sessionId:string,storyId:
   const {ctx,state}=deps,source=liveSession(ctx,sessionId)
   if(!source)throw new FloorError('session-not-live','消息编辑需要当前会话在线')
   requireTavernSession(ctx,source)
-  if(closedTurns(source.snapshotEvents()).openTurn!==null)throw new FloorError('turn-open','生成期间不能编辑聊天消息')
+  if(closedTurns(source.snapshotEvents()).openTurn!==null||state.openFloors?.has(sessionId))throw new FloorError('turn-open','生成期间不能编辑聊天消息')
   const loaded=await state.loadBinding(sessionId)
   if(!loaded||loaded.storyId!==storyId)throw new FloorError('binding-changed','剧情绑定已改变')
   const binding=await inferLiveWalLineage(ctx,state,source,loaded)

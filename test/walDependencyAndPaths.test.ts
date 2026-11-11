@@ -13,6 +13,7 @@ import { Wal } from '../src/state/wal.js'
 import { WorkspaceFs } from '../src/state/workspaceFs.js'
 import { saveTemplateTimers } from '../src/state/template.js'
 import { MemoryStore } from '../src/state/memory.js'
+import { appendLegacyRecord, patchLegacyAfter } from './legacyWalFactory.js'
 
 let root: string
 let wal: Wal
@@ -100,9 +101,9 @@ it.each(['legacy', 'text-to-bytes', 'bytes-to-text'] as const)('不同快照编�
   await shared.writeText('journal.md', '原文')
   await wal.beginFloor('s#t1')
   if (mode === 'legacy') {
-    await wal.record('s#t1', 'journal.md', '原文')
+    await appendLegacyRecord(join(root, 'state', 'wal'), 's#t1', 'journal.md', '原文')
     await shared.writeText('journal.md', '待撤销事实')
-    await wal.recordAfter('s#t1', 'journal.md', '待撤销事实')
+    await patchLegacyAfter(join(root, 'state', 'wal'), 's#t1', 'journal.md', '待撤销事实')
   } else if (mode === 'bytes-to-text') {
     await shared.withFloor('s#t1').writeBytes('journal.md', Buffer.from('待撤销事实'))
   } else await shared.withFloor('s#t1').writeText('journal.md', '待撤销事实')

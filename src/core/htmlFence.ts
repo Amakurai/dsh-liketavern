@@ -2,8 +2,9 @@
 import { findHtmlDocument, findHtmlFragment, findHtmlOpaqueEnd, LENIENT_OPAQUE } from './htmlFragment.js'
 import { markdownCodeScanner } from './markdownCode.js'
 
-export function findHtmlFence(text:string):{start:number;end:number;contentStart:number;contentEnd:number}|null {
-  const code=markdownCodeScanner(text)
+export function findHtmlFence(text:string,code?:ReturnType<typeof markdownCodeScanner>):{start:number;end:number;contentStart:number;contentEnd:number}|null {
+  if(!text.includes('```')&&!text.includes('~~~'))return null
+  const scanner=code??markdownCodeScanner(text)
   const tokens=/<!--[\s\S]*?(?:-->|$)|<(script|style|textarea|title|pre|code|template|noscript)\b(?:[^"'<>]|"[^"]*"|'[^']*')*>|`+|~{3,}/gi
   for(let token=tokens.exec(text);token;token=tokens.exec(text)) {
     const raw=token[0]
@@ -13,9 +14,9 @@ export function findHtmlFence(text:string):{start:number;end:number;contentStart
       if(end===null){if(LENIENT_OPAQUE.has(token[1].toLowerCase()))continue;return null}
       tokens.lastIndex=end;continue
     }
-    const fence=code.fence(token.index)
+    const fence=scanner.fence(token.index)
     if(!fence) {
-      const end=code.inlineEnd(token.index)
+      const end=scanner.inlineEnd(token.index)
       if(end!==null)tokens.lastIndex=end
       continue
     }
@@ -27,7 +28,12 @@ export function findHtmlFence(text:string):{start:number;end:number;contentStart
     const content=text.slice(fence.contentStart,fence.contentEnd),trimmed=content.trim()
     // 明确标成 html/xml 的围栏本身就是作者给出的执行边界。button、p、自定义元素等
     // 不需要再伪装成 div 才能进入沙箱；无语言/text 围栏仍走结构识别，避免把普通代码提升为卡面。
-    if(!trimmed||(!['html','xml'].includes(info)&&!findHtmlDocument(trimmed)&&!findHtmlFragment(trimmed)))continue
+    if(!trimmed)continue
+    if(!['html','xml'].includes(info)) {
+      if(!trimmed.includes('<'))continue
+      const innerCode=markdownCodeScanner(trimmed)
+      if(!findHtmlDocument(trimmed,innerCode)&&!findHtmlFragment(trimmed,innerCode))continue
+    }
     const start=fence.contentStart+content.indexOf(trimmed)
     return {start:token.index,end:fence.end,contentStart:start,contentEnd:start+trimmed.length}
   }

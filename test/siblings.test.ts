@@ -124,4 +124,19 @@ describe('siblings.json 存储', () => {
       await rm(root, { recursive: true, force: true })
     }
   })
+
+  it('重复读取返回独立副本，不会因调用方原地修改污染后续读取', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'tavern-siblings-cache-'))
+    try {
+      await appendSiblingFork(root, makeFork('A', 1, 'B'))
+      const first = await loadSiblingForks(root)
+      expect(first).toHaveLength(1)
+      ;(first[0] as { childSessionId: string }).childSessionId = 'MUTATED'
+      first.push(makeFork('A', 1, 'FAKE'))
+      const second = await loadSiblingForks(root)
+      expect(second.map((f) => f.childSessionId)).toEqual(['B'])
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
 })

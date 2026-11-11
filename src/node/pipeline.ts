@@ -139,7 +139,10 @@ export interface BoundLoreEntries {
 export async function loadBoundLoreEntries(
   state: TavernState,
   binding: NonNullable<Awaited<ReturnType<TavernState['loadBinding']>>>,
-  options?: { onCorruptChatBook?: 'throw' | 'report' },
+  options?: {
+    onCorruptChatBook?: 'throw' | 'report'
+    persona?: Awaited<ReturnType<TavernState['resolvePersona']>>
+  },
 ): Promise<BoundLoreEntries> {
   const onCorruptChatBook = options?.onCorruptChatBook ?? 'throw'
   const ws = await state.storyWorkspace(binding.cardId, binding.storyId)
@@ -172,17 +175,26 @@ export async function loadBoundLoreEntries(
     chatBookCorrupt = true
   }
   // 人设世界书
-  const persona = await state.resolvePersona(binding.personaId)
+  const persona = options && 'persona' in options ? options.persona : await state.resolvePersona(binding.personaId)
   if (persona?.lorebookId) {
     groups.push(await state.loadLorebookEntries(persona.lorebookId, 'persona'))
   }
 
   const base = groups.flat()
-  // 变化层：ref 的 order 解析先查 character 条目，再查其余
+  // 变化层：ref 的 order 解析先查 character 条目，再查其余（预建索引避免 O(|deltas| * |base|) 线性扫描）
   const deltas = await ws.deltas.list()
+  let charOrderByUid: Map<string, number> | null = null
+  let anyOrderByUid: Map<string, number> | null = null
   const resolveRefOrder = (ref: string): number | null => {
-    const bySource = (source: WorldInfoEntry['source']) => base.find((e) => e.source === source && e.uid === ref)?.order
-    return bySource('character') ?? base.find((e) => e.uid === ref)?.order ?? null
+    if (!charOrderByUid || !anyOrderByUid) {
+      charOrderByUid = new Map()
+      anyOrderByUid = new Map()
+      for (const e of base) {
+        if (e.source === 'character' && !charOrderByUid.has(e.uid)) charOrderByUid.set(e.uid, e.order)
+        if (!anyOrderByUid.has(e.uid)) anyOrderByUid.set(e.uid, e.order)
+      }
+    }
+    return charOrderByUid.get(ref) ?? anyOrderByUid.get(ref) ?? null
   }
   const deltaEntries = ws.deltas.toEngineEntries(deltas, resolveRefOrder)
   return { entries: [...base, ...deltaEntries], deltas, chatBookCorrupt }
@@ -339,19 +351,16 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
     readonlyStatData: latestTemplateHelperMvu(helperMvu,historyIdentities),
   }
 
-  // ── WI / 记忆 / 变化层：每 turn 评估一次并缓存 ──
-  // 缓存只服务「live 且已知 turn 号」的评估：
+  // ── WI / 记忆 / 变化层 ──
+  // 本函数每次执行都重新评估；同轮复用靠下方发布的整轮计划（turnPlans / pendingTurnPlans）。
+  // 该计划缓存只服务「live 且已知 turn 号」的评估：
   // preview（预览提示词 / 代答）用空定时器评估，既不能复用本轮 live 的结果，也绝不能写进缓存——
   // 否则本 turn 的 live 评估会沿用这份无定时器的结果，sticky/cooldown 被免定时器地决定且永不落盘。
   // 且 idle 时 turn 恒为 -1，各次预览之间也不该互相复用（绑定/世界书/记忆随时可能被编辑）。
   // 代价是每次预览/代答多评估一次世界书——正确且便宜。
   const cacheable = input.mode === 'live' && turn >= 0
-  let memories: string[]
-  let deltas: WorldDelta[]
-  let lastCharMessage: string
-  let journalText: string
   // 组装/模型输入路径：聊天世界书损坏必须显式失败，不能静默少注入整本书。
-  const lore = await loadBoundLoreEntries(state, binding, { onCorruptChatBook: 'throw' })
+  const lore = await loadBoundLoreEntries(state, binding, { onCorruptChatBook: 'throw', persona })
   lore.entries = lore.entries.map(normalizeTemplateLore)
   const templateContext: TemplateContext = {
     variables: templateState.variables, char: charName, user: userName,
@@ -363,33 +372,29 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
     now: macroCtx.now.getTime(), seed: turnSeed, phase: 'generate',
     sessionId, cardId: binding.cardId, generationType: input.generationType ?? 'normal', model:route.model ?? '',
   }
-  {
-    deltas = lore.deltas
+  const deltas: WorldDelta[] = lore.deltas
 
-    // 记忆检索：本轮输入 + 最近 N 条历史做查询，本轮输入里的词额外加权；
-    // 角色名和用户人设名是确知的名字，即使正好由功能字组成（七、月、日向）也照常参与
-    const { query: queryMessages, boost } = memoryQuery(chatMessages, config.memory.queryMessages)
-    memories = []
-    const candidateCount = memoryCandidateCount(config.memory.retrievalTopK)
-    if (queryMessages.trim() && candidateCount > 0 && Number.isFinite(config.memory.retrievalTokenBudget) && config.memory.retrievalTokenBudget >= 1) {
-      const hits = await ws.memory.search(
-        queryMessages,
-        { ...memorySearchOptions(candidateCount, config.memory.halfLifeDays), includeSummarySources: true, ...(boost ? { boost } : {}),
-          names: persona?.name.trim() ? [charName, persona.name.trim()] : [charName] },
-      )
-      memories = selectMemoryBodies(hits, config.memory.retrievalTokenBudget, config.memory.retrievalTopK)
-    }
+  // 记忆检索：本轮输入 + 最近 N 条历史做查询，本轮输入里的词额外加权；
+  // 角色名和用户人设名是确知的名字，即使正好由功能字组成（七、月、日向）也照常参与
+  const { query: queryMessages, boost } = memoryQuery(chatMessages, config.memory.queryMessages)
+  let memories: string[] = []
+  const candidateCount = memoryCandidateCount(config.memory.retrievalTopK)
+  if (queryMessages.trim() && candidateCount > 0 && Number.isFinite(config.memory.retrievalTokenBudget) && config.memory.retrievalTokenBudget >= 1) {
+    const hits = await ws.memory.search(
+      queryMessages,
+      { ...memorySearchOptions(candidateCount, config.memory.halfLifeDays), includeSummarySources: true, ...(boost ? { boost } : {}),
+        names: persona?.name.trim() ? [charName, persona.name.trim()] : [charName] },
+    )
+    memories = selectMemoryBodies(hits, config.memory.retrievalTokenBudget, config.memory.retrievalTopK)
+  }
 
-    // 同轮冻结的宏输入：第 1 步取当前 history 的最近 assistant 正文（{{lastcharmessage}} 用），
-    // 后续步 history 增长也不变；journal 同理只在本轮首次评估读一次盘。
-    lastCharMessage = [...chatMessages].reverse().find((m) => m.role === 'assistant')?.content ?? ''
-    journalText = ''
-    if (binding.injectJournal) {
-      const rawJournal = await ws.fs.readText('journal.md')
-      if (rawJournal?.trim()) journalText = clipToTokenBudget(rawJournal, 800).text
-    }
-
-
+  // 同轮冻结的宏输入：第 1 步取当前 history 的最近 assistant 正文（{{lastcharmessage}} 用），
+  // 后续步 history 增长也不变；journal 同理只在本轮首次评估读一次盘。
+  const lastCharMessage = [...chatMessages].reverse().find((m) => m.role === 'assistant')?.content ?? ''
+  let journalText = ''
+  if (binding.injectJournal) {
+    const rawJournal = await ws.fs.readText('journal.md')
+    if (rawJournal?.trim()) journalText = clipToTokenBudget(rawJournal, 800).text
   }
 
   const assembled = await isolated('assemble', {

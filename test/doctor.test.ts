@@ -392,6 +392,25 @@ describe('doctor 聚合报告', () => {
     expect(report.issues).toContainEqual({ code: 'READ_BUDGET_EXCEEDED', severity: 'warning', count: 1 })
   })
 
+  it('读取预算耗尽后继续统计剩余角色与剧情目录，计入 uninspected 保持目录总数守恒', async () => {
+    const root = await makeStandardDirectories()
+    const cardA = join(root, 'characters', 'budget-a-11111111')
+    const cardB = join(root, 'characters', 'budget-b-22222222')
+    await mkdir(join(cardA, 'stories', 'story-00000000-0000-4000-8000-000000000001'), { recursive: true })
+    await mkdir(join(cardA, 'stories', 'story-00000000-0000-4000-8000-000000000002'), { recursive: true })
+    await mkdir(cardB, { recursive: true })
+    await writeFile(join(cardA, 'card.json'), JSON.stringify({ name: '角色甲' }))
+    await writeFile(join(cardB, 'card.json'), JSON.stringify({ name: '角色乙' }))
+    await writeFile(
+      join(cardA, 'stories', 'story-00000000-0000-4000-8000-000000000001', 'story.json'),
+      JSON.stringify({ version: 1, storyId: 'story-00000000-0000-4000-8000-000000000001', cardId: 'budget-a-11111111', createdAt: '2026-01-01T00:00:00.000Z', pad: 'x'.repeat(220) }),
+    )
+    const report = await runDoctor({ home, nodeVersion: '24.0.0', readBudgetBytes: 120 })
+    expect(report.statistics.characters).toMatchObject({ directories: 2, healthy: 1, unhealthy: 0, uninspected: 1 })
+    expect(report.statistics.stories).toMatchObject({ directories: 2, healthy: 0, unhealthy: 0, uninspected: 2 })
+    expect(report.issues).toContainEqual({ code: 'READ_BUDGET_EXCEEDED', severity: 'warning', count: 1 })
+  })
+
   it('剧情目录下的 .preparing-* 链接报告 STORY_LINK_SKIPPED 并遵守目录项上限', async () => {
     const root = await makeStandardDirectories()
     const cardRoot = join(root, 'characters', 'prep-link-a1b2c3d4')

@@ -1,6 +1,4 @@
 import type { Wal } from './wal.js';
-/** 历史占位：旧版曾把非会话写入记入名为 non-floor 的 WAL 单元。现已不再使用。 */
-export declare const NON_FLOOR = "non-floor";
 /** 工作区级回滚恢复标记（相对工作区根）：存在期间任何正文写入都必须被拒绝。 */
 export declare const WAL_RECOVERY_PATH = "state/wal-recovery.json";
 /** WAL 目录及控制元数据（清单与恢复标记）不可作为普通楼层快照目标写入或回放。 */
@@ -23,13 +21,6 @@ export declare class WorkspaceFs {
     /** 本实例的楼层；null 表示非会话期写入（不走 WAL）。构造后只能经 withFloor 派生改出。 */
     private floor;
     constructor(root: string, wal: Wal | null);
-    /**
-     * 遗留兼容：直接改本实例的 floor。host 路径已改用 withFloor 派生实例 +
-     * wal.beginFloor/commitFloor（见文件头「楼层隔离模型」）；保留仅为既有测试与
-     * 旧调用点不 break，新代码不要再用——共享句柄上的可变 floor 会让同卡并发会话
-     * 互相覆盖楼层上下文。
-     */
-    setFloor(floor: string | null): void;
     get currentFloor(): string | null;
     /**
      * 派生一个共享 root 与 wal、floor 独立的新实例。会话楼层（含读路径口径统一）
@@ -143,11 +134,4 @@ export declare class WorkspaceFs {
         mtimeMs: number;
         size: number;
     }>>;
-    /**
-     * 遗留兼容：开始一个楼层事务并把本实例的 floor 指过去（WAL 存在时）。
-     * host 路径已改为 `wal.beginFloor(floor)` + `withFloor(floor)` 派生实例；保留仅为既有测试。
-     */
-    beginFloor(floor: string): Promise<void>;
-    /** 遗留兼容：提交本实例当前楼层并清除楼层上下文。host 路径已改为 `wal.commitFloor(floor)`。 */
-    commitFloor(): Promise<void>;
 }

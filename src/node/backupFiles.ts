@@ -10,7 +10,7 @@ export class BackupError extends Error {
   constructor(readonly code: string) { super(code); this.name = 'BackupError' }
 }
 export function fail(code: string): never { throw new BackupError(code) }
-export function errorCode(error: unknown): string | undefined { return (error as NodeJS.ErrnoException | undefined)?.code }
+function errorCode(error: unknown): string | undefined { return (error as NodeJS.ErrnoException | undefined)?.code }
 export function safeRelative(path: unknown): path is string {
   if (typeof path !== 'string' || !path || path.length > 4096 || path.includes('\\') || isAbsolute(path)) return false
   const parts = path.split('/')

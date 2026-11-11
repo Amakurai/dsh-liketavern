@@ -8,7 +8,6 @@ export type TemplateReplayJsonShared = {
 } | {
     jsonObjectPages: number[];
 };
-export declare const TEMPLATE_REPLAY_JSON_PAGE = 64;
 export declare function templateReplayJsonVisits(value: unknown, limit?: number): number;
 /** 内容摘要只用于相等节点去重；节点保留原键序，分页根只复制少量页引用。 */
 export declare class TemplateReplayJsonWriter {

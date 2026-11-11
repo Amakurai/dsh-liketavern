@@ -20,5 +20,3 @@ export declare function presentTemplateDisplayResult(parts: TemplateDisplayPart[
     parts: TemplateDisplayPart[];
     regexDiagnostics?: DisplayRegexDiagnostics;
 };
-/** 保留旧的纯片段投影 API；主展示链使用结果版本，把错误一并带回界面。 */
-export declare function presentTemplateDisplay(parts: TemplateDisplayPart[], rules: RegexRule[], macroCtx: MacroContext): TemplateDisplayPart[];

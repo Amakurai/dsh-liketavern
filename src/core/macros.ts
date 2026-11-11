@@ -58,15 +58,55 @@ function expandLegacyMacros(text: string, ctx: Pick<MacroContext, 'char' | 'user
     return postProcess ? postProcess(value) : value
   })
 }
-/** 内部占位标记必须避开本次所有文本来源，私用区字符本身也可能是角色使用的图标。 */
-function markerFor(name: string, text: string, ctx: MacroContext): string {
-  const reserved = [text, ...Object.values(ctx).filter((value): value is string => typeof value === 'string'),
-    ...Object.values(ctx.vars ?? {}), ...Object.values(ctx.outlets ?? {}), ...(ctx.store?.values() ?? []),
-    ctx.readonlyStatData === undefined ? '' : JSON.stringify(ctx.readonlyStatData)].join('\n')
-  let index = 0
-  let marker = `\uE000tavern${name}${index}\uE001`
-  while (reserved.includes(marker)) marker = `\uE000tavern${name}${++index}\uE001`
-  return marker
+const MARKER_PREFIX = '\uE000tavern'
+const readonlyStatHazardCache = new WeakMap<object, string | null>()
+const MACRO_CONTEXT_STRING_KEYS = [
+  'char', 'user', 'pickSeed', 'lastMessage', 'lastUserMessage', 'lastCharMessage',
+  'description', 'personality', 'scenario', 'charVersion', 'creatorNotes',
+  'charDepthPrompt', 'mesExamples', 'persona', 'firstMessage', 'charPrompt', 'charInstruction',
+] as const
+
+function readonlyStatHazard(statData: Readonly<Record<string, unknown>> | undefined): string | null {
+  if (statData === undefined) return null
+  if (readonlyStatHazardCache.has(statData)) return readonlyStatHazardCache.get(statData)!
+  const serialized = JSON.stringify(statData)
+  const hazard = serialized?.includes(MARKER_PREFIX) ? serialized : null
+  readonlyStatHazardCache.set(statData, hazard)
+  return hazard
+}
+
+/**
+ * 内部占位标记必须避开本次所有文本来源，私用区字符本身也可能是角色使用的图标。
+ * 所有占位标记均以 `\uE000tavern` 开头且不含换行，因此只需收集含该前缀的来源片段；
+ * 常规调用零数组拼接、每个只读 MVU 快照对象最多序列化一次。
+ */
+export function createMacroMarkerAllocator(text: string, ctx: MacroContext): (name: string, extraText?: string) => string {
+  let hazards: string[] | null = null
+  const getHazards = (): string[] => {
+    if (hazards !== null) return hazards
+    hazards = []
+    const pushIf = (value: string | undefined | null) => {
+      if (value && value.includes(MARKER_PREFIX)) hazards!.push(value)
+    }
+    pushIf(text)
+    for (const key of MACRO_CONTEXT_STRING_KEYS) pushIf(ctx[key])
+    if (ctx.vars) for (const key in ctx.vars) pushIf(ctx.vars[key])
+    if (ctx.outlets) for (const key in ctx.outlets) pushIf(ctx.outlets[key])
+    if (ctx.store) for (const value of ctx.store.values()) pushIf(value)
+    pushIf(readonlyStatHazard(ctx.readonlyStatData))
+    return hazards
+  }
+  return (name: string, extraText?: string): string => {
+    const list = getHazards()
+    const checkExtra = Boolean(extraText && extraText !== text && extraText.includes(MARKER_PREFIX))
+    if (list.length === 0 && !checkExtra) return `${MARKER_PREFIX}${name}0\uE001`
+    let index = 0
+    let marker = `${MARKER_PREFIX}${name}${index}\uE001`
+    while (list.some((s) => s.includes(marker)) || (checkExtra && extraText!.includes(marker))) {
+      marker = `${MARKER_PREFIX}${name}${++index}\uE001`
+    }
+    return marker
+  }
 }
 
 function pad2s(n: number): string {
@@ -360,15 +400,16 @@ export function expandMacros(
 ): string {
   // ST 先替换旧式宏（preEnvMacros），值同样经过 postProcess。
   if (!text.includes('{{')) return expandLegacyMacros(text, ctx, postProcess)
-  const postOpen = postProcess ? markerFor('PostOpen', text, ctx) : undefined
-  const postClose = postProcess ? markerFor('PostClose', text, ctx) : undefined
+  const markerFor = createMacroMarkerAllocator(text, ctx)
+  const postOpen = postProcess ? markerFor('PostOpen') : undefined
+  const postClose = postProcess ? markerFor('PostClose') : undefined
   const legacy = expandLegacyMacros(text, ctx, postOpen && postClose ? (v) => v ? `${postOpen}${v}${postClose}` : v : undefined)
   if (!legacy.includes('{{')) return legacy
   const clock = { ...defaultVars(now), ...ctx.vars }
-  const frozenOpen = markerFor('FrozenOpen', legacy, ctx)
+  const frozenOpen = markerFor('FrozenOpen', legacy)
   const frozenClose = `${frozenOpen}close`
   // ST 的 {{trim}} 连同两侧换行一起删除，且在变量与 {{newline}} 之后求值：先留占位，全部展开后再收掉。
-  const trimMarker = markerFor('Trim', legacy, ctx)
+  const trimMarker = markerFor('Trim', legacy)
   const trimRe = new RegExp(`(?:\\r?\\n)*${trimMarker}(?:\\r?\\n)*`, 'g')
   const thawRaw = (value: string): string => value.replace(trimRe, '').replaceAll(frozenClose, '}').replaceAll(frozenOpen, '{')
   const thaw = (value: string): string => {

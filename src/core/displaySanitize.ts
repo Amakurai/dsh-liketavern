@@ -9,7 +9,7 @@ import { collectRenderedHtml, locateRenderedHtml } from './regex.js'
 import { findHtmlOpaqueEnd, HTML_CARD_CONTAINERS, LENIENT_OPAQUE } from './htmlFragment.js'
 import { markdownCodeScanner } from './markdownCode.js'
 
-export const DISPLAY_META_TAGS = [
+const DISPLAY_META_TAGS = [
   'initvar',
   'UpdateVariable',
   'JSONPatch',
@@ -507,6 +507,10 @@ function collectTagInteriorMeta(
   stack: MetaStackEntry[],
   ranges: TextRange[],
 ): void {
+  if (start >= limit) return
+  const lt = text.indexOf('<', start)
+  const amp = text.indexOf('&', start)
+  if ((lt < 0 || lt >= limit) && (amp < 0 || amp >= limit)) return
   const attributes = analyzeAttributeValues(text, start, limit)
   ranges.push(...attributes.dangerous)
   const resume = text[limit] === '>' ? limit + 1 : limit
@@ -557,10 +561,16 @@ function collectLiteralMeta(
   stack: MetaStackEntry[],
   ranges: TextRange[],
 ): void {
+  if (start >= end) return
+  const lt = text.indexOf('<', start)
+  const hasLt = lt >= 0 && lt < end
+  const amp = decodeEntities ? text.indexOf('&', start) : -1
+  const hasAmp = amp >= 0 && amp < end
+  if (!hasLt && !hasAmp) return
   const source = text.slice(start, end)
-  const lightweight = decodeEntities && needsReferenceDecode(source) ? decodeReferenceText(source) : source
+  const lightweight = decodeEntities && hasAmp && needsReferenceDecode(source) ? decodeReferenceText(source) : source
   const decode = lightweight !== source && lightweight.includes('<')
-  if (!source.includes('<') && !decode) return
+  if (!hasLt && !decode) return
   const decoded = decode ? decodeReferences(source, start) : null
   const visible = decoded?.text ?? source
   const map = (range: TextRange): TextRange => decoded
@@ -704,6 +714,7 @@ function opaqueDisplayMetaRanges(
   removeComments: boolean,
   segments: readonly TextRange[] = [{ start: 0, end: text.length }],
 ): TextRange[] {
+  if (!text.includes('<') && !text.includes('&')) return []
   const ranges: TextRange[] = []
   const stack: MetaStackEntry[] = []
   const streamEnd = segments.at(-1)?.end ?? text.length
@@ -835,6 +846,7 @@ function opaqueDisplayMetaRanges(
 }
 
 function removeRanges(text: string, ranges: readonly TextRange[], offset = 0): string {
+  if (ranges.length === 0) return text
   const end = offset + text.length
   let cursor = offset
   const out: string[] = []
@@ -907,13 +919,25 @@ function isCoverHtml(text: string): boolean {
   return /<!DOCTYPE\s+html/i.test(text) || /<html[\s>]/i.test(text) || /<body[\s>]/i.test(text)
 }
 
+const CLOSED_EMPTY_META_RES = DISPLAY_META_TAGS.map((tag) => ({
+  selfClosing: new RegExp(`<${tag}(?=[\\t\\n\\f\\r />])[^>]*/[\\t\\n\\f\\r ]*>`, 'gi'),
+  paired: new RegExp(`<${tag}(?=[\\t\\n\\f\\r />])[^>]*>[\\s\\S]*?</${tag}[\\t\\n\\f\\r ]*>`, 'gi'),
+}))
+const UNCLOSED_META_RES = DISPLAY_META_TAGS.map((tag) => new RegExp(`<${tag}(?=[\\t\\n\\f\\r />])`, 'i'))
+const WIDGET_TAIL_MARKERS = [
+  /<div\b[^>]*\bstream-log\b/i,
+  /<details\b[^>]*\b[\w-]*-box\b/i,
+  /<div\b[^>]*\b[\w-]*-box\b/i,
+  /<style\b/i,
+] as const
+
 function stripClosedAndEmpty(text: string): string {
   let out = text
   for (let pass = 0; pass < 8; pass++) {
     let next = out
-    for (const tag of DISPLAY_META_TAGS) {
-      next = next.replace(new RegExp(`<${tag}(?=[\\t\\n\\f\\r />])[^>]*/[\\t\\n\\f\\r ]*>`, 'gi'), '')
-      next = next.replace(new RegExp(`<${tag}(?=[\\t\\n\\f\\r />])[^>]*>[\\s\\S]*?</${tag}[\\t\\n\\f\\r ]*>`, 'gi'), '')
+    for (const { selfClosing, paired } of CLOSED_EMPTY_META_RES) {
+      next = next.replace(selfClosing, '')
+      next = next.replace(paired, '')
     }
     next = next.replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, '')
     next = next.replace(/<details\b[^>]*>[\s\S]*?<\/details>/gi, '')
@@ -926,8 +950,7 @@ function stripClosedAndEmpty(text: string): string {
 /** 未闭合的协议标签（流式输出到一半）从开标签切到文末。 */
 function stripUnclosedMeta(text: string): string {
   let cut = -1
-  for (const tag of DISPLAY_META_TAGS) {
-    const re = new RegExp(`<${tag}(?=[\\t\\n\\f\\r />])`, 'gi')
+  for (const re of UNCLOSED_META_RES) {
     const match = re.exec(text)
     if (match && (cut < 0 || match.index < cut)) cut = match.index
   }
@@ -939,14 +962,8 @@ function stripUnclosedMeta(text: string): string {
  * 从第一个特征开标签切到文末，避免半截 HTML 露出来。
  */
 function stripWidgetTail(text: string): string {
-  const markers = [
-    /<div\b[^>]*\bstream-log\b/i,
-    /<details\b[^>]*\b[\w-]*-box\b/i,
-    /<div\b[^>]*\b[\w-]*-box\b/i,
-    /<style\b/i,
-  ]
   let cut = -1
-  for (const re of markers) {
+  for (const re of WIDGET_TAIL_MARKERS) {
     const match = re.exec(text)
     if (match && (cut < 0 || match.index < cut)) cut = match.index
   }
@@ -992,6 +1009,7 @@ function stripHtmlComments(text: string): string {
  * 代码示例里的 `<style>`/`<details>`/`think`/协议标签是作者给模型看的正文，不是机读块。
  */
 function markdownCodeRanges(text: string): TextRange[] {
+  if (!text.includes('`') && !text.includes('~~~')) return []
   const code = markdownCodeScanner(text)
   const ranges: TextRange[] = []
   const tokens = /`+|~{3,}/g
@@ -1008,9 +1026,10 @@ function markdownCodeRanges(text: string): TextRange[] {
       continue
     }
     const end = code.inlineEnd(at)
-    if (end !== null && tagsBalanced(text.slice(at, end))) {
+    if (end !== null) {
+      const before = ranges.length
       keep(at, end)
-      tokens.lastIndex = end
+      if (ranges.length > before) tokens.lastIndex = end
     }
   }
   return ranges
@@ -1024,6 +1043,7 @@ const VOID_TAGS = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'i
  * 区间内出现没有在区间内开启的闭合标签时不保护，交给原有规则判定；只有开标签（半截示例）仍保护。
  */
 function tagsBalanced(segment: string): boolean {
+  if (!segment.includes('<')) return true
   const open = new Map<string, number>()
   for (const match of segment.matchAll(/<(\/?)([A-Za-z][\w:-]*)[^<>]*?(\/?)>/g)) {
     const name = match[2]!.toLowerCase()
@@ -1066,11 +1086,15 @@ export function stripDisplayMeta(text: string): string {
   if (!text) return text
   const protectedCode = protectMarkdownCode(text)
   const visible = stripOpaqueDisplayMeta(protectedCode.masked)
+  if (!visible.includes('<')) return protectedCode.restore(tidy(visible))
   if (isCoverHtml(visible)) return protectedCode.restore(visible)
   return protectedCode.restore(tidy(
     stripProtocolTags(stripWidgetTail(stripUnclosedMeta(stripClosedAndEmpty(stripHtmlComments(visible))))),
   ))
 }
+
+const STREAMING_HTML_TAG_NAMES = [...HTML_CARD_CONTAINERS, 'html', 'body', 'style', 'script', 'template'] as const
+const STREAMING_HTML_TAG_SET: ReadonlySet<string> = new Set(STREAMING_HTML_TAG_NAMES)
 
 /**
  * 只识别正在生成的卡面起点，不执行模板或第三方正则。未闭合 HTML 不能送入 iframe，
@@ -1078,6 +1102,7 @@ export function stripDisplayMeta(text: string): string {
  * 与正式抽取共用容器集合和 Markdown 代码边界，普通代码示例不当成半张卡片。
  */
 function streamingHtmlStart(text: string, scanMarkdown = true): number | null {
+  if (!text.includes('<') && (!scanMarkdown || (!text.includes('```') && !text.includes('~~~')))) return null
   const code = scanMarkdown ? markdownCodeScanner(text) : null
   const tokens = /<|`+|~{3,}/g
   let lineStart = 0, nextLine = text.indexOf('\n')
@@ -1106,16 +1131,15 @@ function streamingHtmlStart(text: string, scanMarkdown = true): number | null {
     const indented = /^(?: {4}|\t)/.test(text.slice(lineStart, at))
     // 行首的卡面标签也可能在标签名内部截断；代码/注释已在上面跳过。
     // 单独的 < 仍按普通文字保留，不能把比较符号当成已确定的 HTML。
-    if (!indented && !text.slice(lineStart, at).trim()) {
+    if (!indented && !text.slice(lineStart, at).trim() && text.length - at <= 32 && text.indexOf('>', at + 1) < 0) {
       const tail=text.slice(at).toLowerCase()
-      if (/^<[a-z]+$/.test(tail) && [...HTML_CARD_CONTAINERS,'html','body','style','script','template'].some(tag=>tag.startsWith(tail.slice(1)))) return at
+      if (/^<[a-z]+$/.test(tail) && STREAMING_HTML_TAG_NAMES.some(tag=>tag.startsWith(tail.slice(1)))) return at
       if (/^<![a-z]+(?:\s+[a-z]*)?$/.test(tail) && '<!doctype html'.startsWith(tail.replace(/\s+/g,' '))) return at
     }
     if (!indented && /^<!doctype(?:\s+html\b|$)/i.test(text.slice(at, at + 20))) return at
     const head = tagHead(text, at)
     if (!head) continue
-    if (!indented && !head.closing && (HTML_CARD_CONTAINERS.has(head.name)
-      || ['html', 'body', 'style', 'script', 'template'].includes(head.name))) return at
+    if (!indented && !head.closing && STREAMING_HTML_TAG_SET.has(head.name)) return at
     const end = htmlTagEnd(text, at)
     if (end < 0) break
     tokens.lastIndex = end

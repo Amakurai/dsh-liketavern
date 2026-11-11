@@ -8,6 +8,7 @@ import { parseSessionBinding } from './bindings.js'
 import { safeHostRange } from '../core/hostVersion.js'
 import { BACKUP_LIMITS, BackupError, assertAbsent, assertDirectory, assertSeparate, boundedJson, checkedPath,
   createDirectories, discardTemporary, fail, inventory, isDependencyPath, safeRelative, transferFile, type BackupEntry } from './backupFiles.js'
+import { isRecord } from '../core/guards.js'
 
 export interface BackupManifest {
   schemaVersion: 1
@@ -38,13 +39,12 @@ export interface BackupHooks {
   afterCopy?: () => Promise<void>
   beforePublish?: () => Promise<void>
 }
-function object(value: unknown): value is Record<string, unknown> { return value !== null && typeof value === 'object' && !Array.isArray(value) }
 function version(value: unknown): value is string { return typeof value === 'string' && /^(?:unknown|\d+\.\d+\.\d+(?:[-+][\w.-]+)?)$/.test(value) }
 
 export function parseBackupManifest(raw: unknown): BackupManifest {
-  if (!object(raw) || raw.schemaVersion !== 1 || raw.format !== 'dsh-tavern-directory-backup'
+  if (!isRecord(raw) || raw.schemaVersion !== 1 || raw.format !== 'dsh-tavern-directory-backup'
     || raw.scope !== 'dsh-home-data-without-installed-dependencies' || raw.versionSource !== 'backup-runtime' || typeof raw.createdAt !== 'string'
-    || !Number.isFinite(Date.parse(raw.createdAt)) || !object(raw.versions)
+    || !Number.isFinite(Date.parse(raw.createdAt)) || !isRecord(raw.versions)
     || !['node', 'plugin', 'dsh'].every(key => version((raw.versions as Record<string, unknown>)[key]))
     || (raw.versions.expectedDsh !== 'unknown' && safeHostRange(raw.versions.expectedDsh) === 'unknown')
     || !Array.isArray(raw.entries) || raw.entries.length > BACKUP_LIMITS.entries || !Array.isArray(raw.exclusions)) fail('INVALID_MANIFEST')
@@ -54,7 +54,7 @@ export function parseBackupManifest(raw: unknown): BackupManifest {
   let total = 0
   let pathBytes = 0
   for (const value of raw.entries) {
-    if (!object(value) || !safeRelative(value.path) || (value.kind !== 'file' && value.kind !== 'directory')
+    if (!isRecord(value) || !safeRelative(value.path) || (value.kind !== 'file' && value.kind !== 'directory')
       || typeof value.size !== 'number' || !Number.isSafeInteger(value.size) || value.size < 0 || value.size > BACKUP_LIMITS.fileBytes
       || typeof value.mode !== 'number' || !Number.isSafeInteger(value.mode) || value.mode < 0 || value.mode > 0o777
       || (value.kind === 'directory' && (value.size !== 0 || value.sha256 !== undefined))
@@ -120,7 +120,7 @@ async function references(home: string, entries: BackupEntry[]): Promise<DoctorI
         budget -= files.get(story)!.size
         if (budget < 0) fail('REFERENCE_CHECK_LIMIT')
         const metadata = await boundedJson(checkedPath(home, story), 1024 * 1024)
-        if (!object(metadata) || metadata.sessionId !== binding.sessionId) add('BINDING_STORY_IDENTITY_INVALID')
+        if (!isRecord(metadata) || metadata.sessionId !== binding.sessionId) add('BINDING_STORY_IDENTITY_INVALID')
       }
     }
     for (const [id, directory] of [[binding.presetId, 'library/presets'], [binding.personaId, 'personas'],
@@ -141,7 +141,7 @@ async function references(home: string, entries: BackupEntry[]): Promise<DoctorI
         let raw: unknown = null
         try { raw = await boundedJson(checkedPath(home, candidate), 16 * 1024 * 1024) }
         catch (error) { if (error instanceof BackupError && error.code !== 'INVALID_JSON') throw error }
-        if (!object(raw)) continue
+        if (!isRecord(raw)) continue
         const identities = [raw.sourceId, raw.identifier, raw.id, raw.name].filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
         if (identities.some(v => v.trim() === id)) matches++
         else if (candidate === baseFile && identities.length === 0) fallback = true

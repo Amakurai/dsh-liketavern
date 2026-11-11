@@ -4,8 +4,6 @@
  * 导出与模板快照必须借助 raw 还原来源，不能因此把 data.assets 搬成 data.extensions.assets。
  */
 import type { CharacterCard } from './types.js';
-/** 与卡解析器一致：别名只在真能归一化为非空世界书时才具有业务语义。 */
-export declare function isNonEmptyCharacterBook(value: unknown): boolean;
 /**
  * 归一化时判定字段是否已消费；无效 lorebook/characterBook 只是厂商自定义字段，
  * 必须像其它未知 V3 字段一样镜像并保留原位置。

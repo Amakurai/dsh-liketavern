@@ -235,14 +235,6 @@ const STYLE = `
     transform var(--ds-transition-duration-fast, .1s) var(--ds-ease-in-out, ease),
     box-shadow var(--ds-transition-duration-fast, .1s) var(--ds-ease-in-out, ease)}
 .dsh-tavern-card:hover{border-color:var(--dsw-alias-label-dimmed, #888)}
-.dsh-tavern-card.is-clickable{cursor:pointer}
-/* 可点卡片 hover 轻抬升一像素 + 一层浅阴影，:active 落回，给出「这张卡能点」的物理反馈 */
-.dsh-tavern-card.is-clickable:hover,.dsh-tavern-card.is-clickable:focus-visible{
-  border-color:var(--tavern-accent-border, rgba(65,118,230,.32));
-  transform:translateY(-1px);box-shadow:var(--dsw-shadow-lv1, 0 2px 4px rgba(0,0,0,.05))}
-.dsh-tavern-card.is-clickable:active{transform:none;box-shadow:none}
-.dsh-tavern-card.is-selected{border-color:var(--tavern-accent-border, rgba(65,118,230,.32));
-  background:var(--tavern-accent-softer, rgba(65,118,230,.07))}
 .dsh-tavern-cardName{flex:1;min-width:0;font-size:14px;font-weight:500;line-height:22px;
   color:var(--dsw-alias-label-primary, inherit);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dsh-tavern-badge{display:inline-flex;align-items:center;flex:none;height:20px;padding:0 8px;border-radius:999px;

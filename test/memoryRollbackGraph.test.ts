@@ -6,6 +6,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { MemoryStore, serializeMemory } from '../src/state/memory.js'
 import { Wal } from '../src/state/wal.js'
 import { WorkspaceFs } from '../src/state/workspaceFs.js'
+import { appendLegacyRecord, patchLegacyAfter } from './legacyWalFactory.js'
 
 let root: string
 let fs: WorkspaceFs
@@ -54,8 +55,8 @@ it.each(['text', 'bytes', 'legacy'] as const)('同值来源写入回滚保留完
   if (mode === 'text') await fs.withFloor('s#t1').writeText(path, original)
   else if (mode === 'bytes') await fs.withFloor('s#t1').writeBytes(path, Buffer.from(original))
   else {
-    await wal.record('s#t1', path, original)
-    await wal.recordAfter('s#t1', path, original)
+    await appendLegacyRecord(join(root, 'state/wal'), 's#t1', path, original)
+    await patchLegacyAfter(join(root, 'state/wal'), 's#t1', path, original)
   }
   await wal.commitFloor('s#t1')
   const memory = new MemoryStore(fs)

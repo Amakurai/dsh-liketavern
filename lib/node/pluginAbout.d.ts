@@ -47,4 +47,3 @@ export interface PluginAboutReader {
 export declare function readHostEntryMetadata(entry: string | undefined): Promise<unknown | null>;
 export declare function createPluginAboutReader(options?: PluginAboutReaderOptions): PluginAboutReader;
 export declare const getPluginAbout: () => Promise<PluginAbout>;
-export declare const checkPluginUpdate: () => Promise<PluginUpdate>;

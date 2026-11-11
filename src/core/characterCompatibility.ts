@@ -5,6 +5,7 @@
 import { isNativeMvuFramework } from './cardScript.js'
 import { characterHelperScripts } from './helperScripts.js'
 import type { CharacterCard } from './types.js'
+import { isRecord } from './guards.js'
 
 export const CHARACTER_COMPATIBILITY_CODES = [
   'cardFields', 'regex', 'templates', 'html', 'scripts', 'invalidScripts', 'nativeMvu', 'customMvu',
@@ -32,7 +33,6 @@ const MAX_STRING = 256 * 1024
 const MAX_NODES = 16_384
 const MAX_DEPTH = 24
 const MAX_LOCATIONS = 3
-const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value)
 
 /** 这些 API 在现有卡面桥中仍明确拒绝；已实现的消息/世界书/脚本库接口不列入。 */
 const UNSUPPORTED_API = /\b(?:generate|generateRaw|injectPrompts|uninjectPrompts|createChatMessages|rotateChatMessages|getTavernRegexes|replaceTavernRegexes|getPreset|replacePreset|getCharacter)\s*\(/
@@ -104,9 +104,9 @@ export function inspectCharacterCompatibility(card: CharacterCard): CharacterCom
 
   // 世界书向量标记只读取条目及其 extensions，避免把普通剧情变量同名键误报成引擎能力。
   for (const [index, entry] of (card.characterBook?.entries ?? []).slice(0, MAX_NODES).entries()) {
-    if (!record(entry)) continue
-    const ext = record(entry.extensions) ? entry.extensions : {}
-    if (entry.vectorized === true || ext.vectorized === true || record(entry.strategy) && entry.strategy.type === 'vectorized') {
+    if (!isRecord(entry)) continue
+    const ext = isRecord(entry.extensions) ? entry.extensions : {}
+    if (entry.vectorized === true || ext.vectorized === true || isRecord(entry.strategy) && entry.strategy.type === 'vectorized') {
       add('vectorLore', 'unsupported', `characterBook[${index}]`)
     }
   }

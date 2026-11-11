@@ -29,6 +29,7 @@ import { PRESET_ADAPTER_PROVIDER, PRESET_ADAPTER_SOURCE_PROVIDER } from './node/
 import { ensureAgentRequestSelectionSync, installTavernModelSelectionCompat } from './node/modelRoute.js'
 import { attachPresetPlanMessage, createPresetPlanMessage, hasPresetPlanMessage } from './node/presetRequestProjection.js'
 import { guardPhase } from './node/hostCompat.js'
+import { joinPromptParts } from './core/promptText.js'
 
 export const name = 'dsh-tavern-agent'
 export const inject = ['tavern', 'systemPrompt', 'tools', 'llm']
@@ -52,10 +53,6 @@ function applyTurnContext(
   const index = result.contexts.findIndex((c) => c.name === TURN_CONTEXT)
   if (index !== -1) result.contexts[index]!.text = text
   else if (text.trim()) result.contexts.push({ name: TURN_CONTEXT, text, interpolate: false })
-}
-
-function joinPromptParts(parts: string[]): string {
-  return parts.filter((p) => p.trim().length > 0).join('\n\n')
 }
 
 /**
@@ -251,21 +248,23 @@ function mountTavernAgent(ctx: Context): void {
     state.appliedStanding.delete(agent.id)
     state.appliedTurnContext.delete(agent.id)
     const blocked = await blockHelperMvuAssembly(state, agent, context.signal)
-    let result
+    let result: Awaited<ReturnType<typeof next>>
     try { result = await next() }
     catch (error) {
       const turn = state.currentTurns.get(agent.id)
       if (blocked && turn !== undefined) restoreHelperMvuInputs(agent, turn)
       throw error
     }
-    if (result.variables['provider'] === PRESET_ADAPTER_PROVIDER) {
-      result.variables['provider'] = PRESET_ADAPTER_SOURCE_PROVIDER
-    }
-    if (blocked) {
+    // 未绑定、阻塞或无计划时安装固定短 standing，并清空本步 turn context。
+    const unbound = () => {
       applyStanding(result, UNBOUND_STANDING)
       applyTurnContext(result, state, agent.id, '')
       return result
     }
+    if (result.variables['provider'] === PRESET_ADAPTER_PROVIDER) {
+      result.variables['provider'] = PRESET_ADAPTER_SOURCE_PROVIDER
+    }
+    if (blocked) return unbound()
     // 首次门控可能延后了开层；变量回执已完成后才建立新 WAL，再冻结本轮提示词。
     await state.waitForSessionTasks(agent.id)
     const turn = state.currentTurns.get(agent.id)
@@ -273,30 +272,18 @@ function mountTavernAgent(ctx: Context): void {
       await state.enqueueSessionTask(agent.id, () => onTurnStart(state, agent.id, turn, agent.session))
     }
     // 其它 assemble 插件或延后开层期间可能出现初始化任务；冻结计划前再核验一次。
-    if (await blockHelperMvuAssembly(state, agent, context.signal)) {
-      applyStanding(result, UNBOUND_STANDING)
-      applyTurnContext(result, state, agent.id, '')
-      return result
-    }
+    if (await blockHelperMvuAssembly(state, agent, context.signal)) return unbound()
 
     const binding = await state.loadStoryBinding(agent.id)
-    if (!binding) {
-      applyStanding(result, UNBOUND_STANDING)
-      applyTurnContext(result, state, agent.id, '')
-      return result
-    }
+    if (!binding) return unbound()
     // 本轮是续写轮（continueFloor 的合成指令在 pendingInputs 里，turn/end 才清）时
     // 按 continue 场景组装：injection_trigger 过滤不同，standing 按场景分别钉死。
     // 提前到 try 外：组装失败时 catch 兜底还要按同一场景找钉位。
     const generationType = (state.pendingInputs.get(agent.id) ?? []).some(isContinueInstruction) ? 'continue' : 'normal'
     try {
       const pipeline = await runTavernPipeline({ state, sessionId: agent.id, agent, llm, mode: 'live', generationType })
-      if (!pipeline) {
-        applyStanding(result, UNBOUND_STANDING)
-        applyTurnContext(result, state, agent.id, '')
-        return result
-      }
-      const standing = [BOUND_DISCIPLINE, pipeline.standing].filter((p) => p.trim()).join('\n\n')
+      if (!pipeline) return unbound()
+      const standing = joinPromptParts([BOUND_DISCIPLINE, pipeline.standing])
       const pin = state.pinStanding(
         agent.id,
         generationType,

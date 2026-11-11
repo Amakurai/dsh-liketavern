@@ -13,22 +13,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { floorNamesForLineageRollback, floorNamesForRollback } from '../src/node/floors.js'
 import { Wal } from '../src/state/wal.js'
 import { WorkspaceFs } from '../src/state/workspaceFs.js'
+import { appendLegacyRecord } from './legacyWalFactory.js'
 
-/** 注入式磁盘故障开关：置 true 后下一次 appendFile 抛错并自动复位。 */
-const diskFault = vi.hoisted(() => ({ failNextAppend: false }))
+/** 注入式磁盘故障开关：置 true 后下一次 records.jsonl 原子替换抛错并自动复位。 */
+const diskFault = vi.hoisted(() => ({ failNextRename: false }))
 
-// 只包 appendFile，其余 node:fs/promises 导出照原样透传（测试自身也要用 mkdtemp/readFile 等）
+// 只包 rename，其余 node:fs/promises 导出照原样透传（测试自身也要用 mkdtemp/readFile 等）
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>()
   return {
     ...actual,
     default: actual,
-    appendFile: async (...args: Parameters<typeof actual.appendFile>) => {
-      if (diskFault.failNextAppend) {
-        diskFault.failNextAppend = false
-        throw new Error('appendFile 失败（测试注入）')
+    rename: async (...args: Parameters<typeof actual.rename>) => {
+      if (diskFault.failNextRename && String(args[1]).endsWith('records.jsonl')) {
+        diskFault.failNextRename = false
+        throw new Error('atomicWrite rename 失败（测试注入）')
       }
-      return actual.appendFile(...args)
+      return actual.rename(...args)
     },
   }
 })
@@ -47,7 +48,7 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
-  diskFault.failNextAppend = false
+  diskFault.failNextRename = false
   await rm(root, { recursive: true, force: true })
 })
 
@@ -100,7 +101,7 @@ async function rolledBackDirName(sanitized: string): Promise<string | undefined>
 }
 
 describe('Wal', () => {
-  it('begin → record → commit：磁盘上的文件形态', async () => {
+  it('begin → recordChange → commit：磁盘上的文件形态', async () => {
     await wal.beginFloor('floor/1') // 含非法字符，目录名净化为 floor_1
     const dir = join(walDir, 'floor_1')
 
@@ -109,13 +110,13 @@ describe('Wal', () => {
     expect(meta.committed).toBe(false)
     expect(typeof meta.startedAt).toBe('string')
 
-    await wal.record('floor/1', 'memory/a.md', null)
-    await wal.record('floor/1', 'index.json', '{"v":1}')
+    await wal.recordChange('floor/1', 'memory/a.md', null, 'a-after', 'utf8', 'utf8')
+    await wal.recordChange('floor/1', 'index.json', '{"v":1}', '{"v":2}', 'utf8', 'utf8')
 
     const lines = await readLines(join(dir, 'records.jsonl'))
     expect(lines).toEqual([
-      { seq: 1, path: 'memory/a.md', before: null },
-      { seq: 2, path: 'index.json', before: '{"v":1}' },
+      { seq: 1, path: 'memory/a.md', before: null, after: 'a-after', beforeEncoding: 'utf8', afterEncoding: 'utf8' },
+      { seq: 2, path: 'index.json', before: '{"v":1}', after: '{"v":2}', beforeEncoding: 'utf8', afterEncoding: 'utf8' },
     ])
 
     await wal.commitFloor('floor/1')
@@ -135,37 +136,34 @@ describe('Wal', () => {
 
   it('元数据缺失的已有楼层拒绝覆盖，原记录保留供恢复', async () => {
     await wal.beginFloor('f1')
-    await wal.record('f1', 'a.md', 'before')
+    await appendLegacyRecord(walDir, 'f1', 'a.md', 'before')
     await rm(join(walDir, 'f1', 'meta.json'))
     await expect(wal.beginFloor('f1')).rejects.toThrow(/已存在/)
     expect(await readLines(join(walDir, 'f1', 'records.jsonl'))).toEqual([{ seq: 1, path: 'a.md', before: 'before' }])
   })
 
-  it('同层同路径重复 record 只保留首次快照', async () => {
+  it('recordChange 保留连续变更记录并把反斜杠归一化为正斜杠', async () => {
     await wal.beginFloor('f1')
-    await wal.record('f1', 'a.md', 'first')
-    await wal.record('f1', 'a.md', 'second') // 忽略
-    await wal.record('f1', 'sub\\b.md', 'win-path') // 反斜杠归一化为正斜杠
+    await wal.recordChange('f1', 'a.md', 'first', 'second', 'utf8', 'utf8')
+    await wal.recordChange('f1', 'sub\\b.md', 'win-path', 'win-next', 'utf8', 'utf8') // 反斜杠归一化为正斜杠
     const lines = await readLines(join(walDir, 'f1', 'records.jsonl'))
     expect(lines).toEqual([
-      { seq: 1, path: 'a.md', before: 'first' },
-      { seq: 2, path: 'sub/b.md', before: 'win-path' },
+      { seq: 1, path: 'a.md', before: 'first', after: 'second', beforeEncoding: 'utf8', afterEncoding: 'utf8' },
+      { seq: 2, path: 'sub/b.md', before: 'win-path', after: 'win-next', beforeEncoding: 'utf8', afterEncoding: 'utf8' },
     ])
   })
 
-  it('rollbackFloor 恢复被改文件、删除新建文件、恢复多次修改的最初内容', async () => {
+  it('rollbackFloor 恢复被改文件、删除新建文件、恢复多次修改的最初内容（含旧 before-only 日志）', async () => {
     await writeFile(join(workspace, 'mem.md'), 'v1')
     await wal.beginFloor('f1')
-    // 楼层内：mem.md 被改两次（第二次 record 应被忽略，回滚须回到 v1）
-    await wal.record('f1', 'mem.md', 'v1')
-    await writeFile(join(workspace, 'mem.md'), 'v2')
-    await wal.record('f1', 'mem.md', 'v2')
+    // 历史 before-only 记录逆序回放须回到最初 v1
+    await appendLegacyRecord(walDir, 'f1', 'mem.md', 'v1')
     await writeFile(join(workspace, 'mem.md'), 'v3')
     // 楼层内新建的文件
-    await wal.record('f1', 'new.md', null)
+    await appendLegacyRecord(walDir, 'f1', 'new.md', null)
     await writeFile(join(workspace, 'new.md'), 'created')
     // 写回时父目录不存在：回放前需先创建
-    await wal.record('f1', 'sub/deep.md', 'deep-before')
+    await appendLegacyRecord(walDir, 'f1', 'sub/deep.md', 'deep-before')
 
     const restored = await wal.rollbackFloor('f1', workspace)
 
@@ -175,8 +173,10 @@ describe('Wal', () => {
     expect(restored).toEqual(['sub/deep.md', 'new.md', 'mem.md']) // 逆序回放
   })
 
-  it('对不存在或已回滚的楼层回滚抛错', async () => {
+  it('对不存在或已回滚的楼层回滚抛错，且活跃后缀形似 .rolled-back-foo 不误报已回滚', async () => {
     await expect(wal.rollbackFloor('nope', workspace)).rejects.toThrow(/不存在/)
+    await wal.beginFloor('f1.rolled-back-note')
+    await expect(wal.rollbackFloor('f1', workspace)).rejects.toThrow(/不存在/)
     await wal.beginFloor('f1')
     await wal.rollbackFloor('f1', workspace)
     await expect(wal.rollbackFloor('f1', workspace)).rejects.toThrow(/已回滚/)
@@ -186,17 +186,17 @@ describe('Wal', () => {
     await writeFile(join(workspace, 'a.md'), 'v1')
     // f1：a.md v1 → v2；f2：a.md v2 → v3；f3：新建 b.md
     await wal.beginFloor('f1')
-    await wal.record('f1', 'a.md', 'v1')
+    await wal.recordChange('f1', 'a.md', 'v1', 'v2', 'utf8', 'utf8')
     await writeFile(join(workspace, 'a.md'), 'v2')
     await wal.commitFloor('f1')
 
     await wal.beginFloor('f2')
-    await wal.record('f2', 'a.md', 'v2')
+    await wal.recordChange('f2', 'a.md', 'v2', 'v3', 'utf8', 'utf8')
     await writeFile(join(workspace, 'a.md'), 'v3')
     await wal.commitFloor('f2')
 
     await wal.beginFloor('f3')
-    await wal.record('f3', 'b.md', null)
+    await wal.recordChange('f3', 'b.md', null, 'created', 'utf8', 'utf8')
     await writeFile(join(workspace, 'b.md'), 'created')
     await wal.commitFloor('f3')
 
@@ -217,7 +217,7 @@ describe('Wal', () => {
     ] as const) {
       const floor = `${sessionId}#t${turn}`
       await wal.beginFloor(floor)
-      await wal.record(floor, 'state.txt', before)
+      await wal.recordChange(floor, 'state.txt', before, after, 'utf8', 'utf8')
       await writeFile(join(workspace, 'state.txt'), after)
       await wal.commitFloor(floor)
     }
@@ -241,7 +241,7 @@ describe('Wal', () => {
       ['current#t4', 'v3', 'v4'],
     ] as const) {
       await wal.beginFloor(floor)
-      await wal.record(floor, 'state.txt', before)
+      await wal.recordChange(floor, 'state.txt', before, after, 'utf8', 'utf8')
       await writeFile(join(workspace, 'state.txt'), after)
       await wal.commitFloor(floor)
     }
@@ -258,7 +258,7 @@ describe('Wal', () => {
 
   it('rollbackAfter 跳过已不存在的楼层并记入 skipped', async () => {
     await wal.beginFloor('f1')
-    await wal.record('f1', 'x.md', null)
+    await wal.recordChange('f1', 'x.md', null, 'created', 'utf8', 'utf8')
     await writeFile(join(workspace, 'x.md'), 'created')
 
     const result = await wal.rollbackAfter(['gone', 'f1'], workspace)
@@ -270,12 +270,12 @@ describe('Wal', () => {
   it('整批 WAL 提前校验：任一行损坏均拒绝，所有正文保持不变', async () => {
     await writeFile(join(workspace, 'a.md'), 'v1')
     await wal.beginFloor('f1')
-    await wal.record('f1', 'a.md', 'v1')
+    await wal.recordChange('f1', 'a.md', 'v1', 'v2', 'utf8', 'utf8')
     await writeFile(join(workspace, 'a.md'), 'v2')
     await wal.commitFloor('f1')
 
     await wal.beginFloor('f2')
-    await wal.record('f2', 'b.md', null)
+    await wal.recordChange('f2', 'b.md', null, 'created', 'utf8', 'utf8')
     await writeFile(join(workspace, 'b.md'), 'created')
     await wal.commitFloor('f2')
 
@@ -291,7 +291,7 @@ describe('Wal', () => {
 
   it('元数据损坏也必须在整批回滚前拒绝，不静默隐藏楼层', async () => {
     await wal.beginFloor('f1')
-    await wal.record('f1', 'a.md', null)
+    await wal.recordChange('f1', 'a.md', null, '保留', 'utf8', 'utf8')
     await writeFile(join(workspace, 'a.md'), '保留')
     await writeFile(join(walDir, 'f1', 'meta.json'), '{broken')
     await expect(wal.rollbackAfter(['f1'], workspace)).rejects.toThrow('WAL 元数据损坏')
@@ -300,7 +300,7 @@ describe('Wal', () => {
 
   it('已回滚目录保留于磁盘且 listFloors 标记 rolledBack', async () => {
     await wal.beginFloor('f1')
-    await wal.record('f1', 'a.md', null)
+    await wal.recordChange('f1', 'a.md', null, 'created', 'utf8', 'utf8')
     await wal.commitFloor('f1')
     await wal.rollbackFloor('f1', workspace)
 
@@ -354,20 +354,19 @@ describe('Wal', () => {
     expect(await readFile(file, 'utf8')).toBe('new')
   })
 
-  it('record 落盘失败不污染内存状态：重试仍写下 before 镜像，回滚可还原', async () => {
+  it('recordChange 落盘失败不污染内存状态：重试仍写下快照且序号不跳号，回滚可还原', async () => {
     await writeFile(join(workspace, 'mem.md'), 'v1')
     await wal.beginFloor('f1')
 
-    diskFault.failNextAppend = true
-    await expect(wal.record('f1', 'mem.md', 'v1')).rejects.toThrow(/测试注入/)
+    diskFault.failNextRename = true
+    await expect(wal.recordChange('f1', 'mem.md', 'v1', 'v2', 'utf8', 'utf8')).rejects.toThrow(/测试注入/)
 
-    // 重试同一路径：不能被「同层同路径只留首次快照」的快路径吞掉
-    await wal.record('f1', 'mem.md', 'v1')
+    // 重试同一路径：seq 不能因失败的那次而跳号
+    await wal.recordChange('f1', 'mem.md', 'v1', 'v2', 'utf8', 'utf8')
     await writeFile(join(workspace, 'mem.md'), 'v2')
 
-    // seq 也不能因失败的那次而跳号
     expect(await readLines(join(walDir, 'f1', 'records.jsonl'))).toEqual([
-      { seq: 1, path: 'mem.md', before: 'v1' },
+      { seq: 1, path: 'mem.md', before: 'v1', after: 'v2', beforeEncoding: 'utf8', afterEncoding: 'utf8' },
     ])
 
     await wal.rollbackFloor('f1', workspace)
@@ -387,15 +386,16 @@ describe('Wal', () => {
   it('并发调用经队列串行化，记录不丢失且 seq 单调', async () => {
     await wal.beginFloor('f1')
     await Promise.all([
-      wal.record('f1', 'a.md', '1'),
-      wal.record('f1', 'b.md', null),
-      wal.record('f1', 'a.md', 'ignored'), // 串行化后落在 a.md 首次快照之后，被忽略
+      wal.recordChange('f1', 'a.md', '1', '2', 'utf8', 'utf8'),
+      wal.recordChange('f1', 'b.md', null, 'b', 'utf8', 'utf8'),
+      wal.recordChange('f1', 'a.md', '2', '3', 'utf8', 'utf8'),
       wal.commitFloor('f1'),
     ])
     const lines = await readLines(join(walDir, 'f1', 'records.jsonl'))
     expect(lines).toEqual([
-      { seq: 1, path: 'a.md', before: '1' },
-      { seq: 2, path: 'b.md', before: null },
+      { seq: 1, path: 'a.md', before: '1', after: '2', beforeEncoding: 'utf8', afterEncoding: 'utf8' },
+      { seq: 2, path: 'b.md', before: null, after: 'b', beforeEncoding: 'utf8', afterEncoding: 'utf8' },
+      { seq: 3, path: 'a.md', before: '2', after: '3', beforeEncoding: 'utf8', afterEncoding: 'utf8' },
     ])
     const meta = await readJson(join(walDir, 'f1', 'meta.json'))
     expect(meta.committed).toBe(true)
@@ -405,10 +405,11 @@ describe('Wal', () => {
     // 导入期写入（wal 传 null）不留快照
     await new WorkspaceFs(workspace, null).writeBytes('avatar.png', new Uint8Array([0x89, 0x50, 0xff]))
     const wfs = new WorkspaceFs(workspace, wal)
-    await wfs.beginFloor('f1')
-    await wfs.writeBytes('avatar.png', new Uint8Array([1, 2, 3, 4])) // 覆盖已有二进制
-    await wfs.writeBytes('new.bin', new Uint8Array([9])) // 楼层内新建
-    await wfs.commitFloor()
+    await wal.beginFloor('f1')
+    const scoped = wfs.withFloor('f1')
+    await scoped.writeBytes('avatar.png', new Uint8Array([1, 2, 3, 4])) // 覆盖已有二进制
+    await scoped.writeBytes('new.bin', new Uint8Array([9])) // 楼层内新建
+    await wal.commitFloor('f1')
     expect(new Uint8Array(await readFile(join(workspace, 'avatar.png')))).toEqual(new Uint8Array([1, 2, 3, 4]))
 
     await wal.rollbackFloor('f1', workspace)
@@ -421,9 +422,9 @@ describe('Wal', () => {
     const original = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0xff, 0xfe, 0x00, 0x01])
     await new WorkspaceFs(workspace, null).writeBytes('avatar.png', original)
     const wfs = new WorkspaceFs(workspace, wal)
-    await wfs.beginFloor('f1')
-    await wfs.delete('avatar.png')
-    await wfs.commitFloor()
+    await wal.beginFloor('f1')
+    await wfs.withFloor('f1').delete('avatar.png')
+    await wal.commitFloor('f1')
     expect(await exists(join(workspace, 'avatar.png'))).toBe(false)
 
     await wal.rollbackFloor('f1', workspace)
@@ -433,9 +434,9 @@ describe('Wal', () => {
   it('delete 文本文件仍按原文记快照（回滚恢复内容）', async () => {
     const wfs = new WorkspaceFs(workspace, wal)
     await wfs.writeText('journal.md', '第一版正文\n第二行')
-    await wfs.beginFloor('f1')
-    await wfs.delete('journal.md')
-    await wfs.commitFloor()
+    await wal.beginFloor('f1')
+    await wfs.withFloor('f1').delete('journal.md')
+    await wal.commitFloor('f1')
     const records = await readLines(join(walDir, 'f1', 'records.jsonl'))
     expect(records[0]).toMatchObject({ path: 'journal.md', before: '第一版正文\n第二行' })
 
@@ -446,12 +447,12 @@ describe('Wal', () => {
   it('回滚前发现楼层外修改时保留人工编辑', async () => {
     const wfs = new WorkspaceFs(workspace, wal)
     await wfs.writeText('journal.md', '原始内容')
-    await wfs.beginFloor('f1')
-    await wfs.writeText('journal.md', '模型写入')
+    await wal.beginFloor('f1')
+    await wfs.withFloor('f1').writeText('journal.md', '模型写入')
 
     // 面板使用无楼层文件面，编辑发生在模型写入之后。
     await new WorkspaceFs(workspace, null).writeText('journal.md', '面板修订')
-    await wfs.commitFloor()
+    await wal.commitFloor('f1')
     await wal.rollbackFloor('f1', workspace)
 
     expect(await readFile(join(workspace, 'journal.md'), 'utf8')).toBe('面板修订')
@@ -462,9 +463,9 @@ describe('Wal', () => {
     const plain = new WorkspaceFs(workspace, null)
     await plain.writeText('marker.txt', markerText)
     const wfs = new WorkspaceFs(workspace, wal)
-    await wfs.beginFloor('f1')
-    await wfs.writeText('marker.txt', 'changed')
-    await wfs.commitFloor()
+    await wal.beginFloor('f1')
+    await wfs.withFloor('f1').writeText('marker.txt', 'changed')
+    await wal.commitFloor('f1')
     await wal.rollbackFloor('f1', workspace)
 
     expect(await readFile(join(workspace, 'marker.txt'), 'utf8')).toBe(markerText)
@@ -472,9 +473,9 @@ describe('Wal', () => {
 
   it('delete 不存在的文件不记快照（无楼层时也不抛）', async () => {
     const wfs = new WorkspaceFs(workspace, wal)
-    await wfs.beginFloor('f1')
-    await wfs.delete('missing.md')
-    await wfs.commitFloor()
+    await wal.beginFloor('f1')
+    await wfs.withFloor('f1').delete('missing.md')
+    await wal.commitFloor('f1')
     // 没有任何 record，records.jsonl 根本不会被创建
     expect(await exists(join(walDir, 'f1', 'records.jsonl'))).toBe(false)
 

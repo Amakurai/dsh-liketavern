@@ -54,6 +54,14 @@ export interface RegexApplyResult {
 export declare function findUnsafeRegexConstruct(source: string): string | null;
 /** 顺序应用规则；单条规则编译/执行失败不中断后续规则，记入 errors。 */
 export declare function applyRegexRules(text: string, rules: readonly RegexRule[], filter: RegexFilter, macroCtx: MacroContext): RegexApplyResult;
+/** 是否存在需要在隔离环境中执行或报告错误的规则；全不命中且无畸形项时可零开销跳过。 */
+export declare function hasApplicableOrMalformedRegex(rules: readonly RegexRule[], filter: RegexFilter): boolean;
+/** 同一条消息的多段展示文本共享一次规则预编译；替换串宏展开仍逐段进行。 */
+export declare function applyRegexRulesBatch(texts: readonly string[], rules: readonly RegexRule[], filter: RegexFilter, macroCtx: MacroContext): {
+    texts: string[];
+    applied: string[];
+    errors: RegexApplyResult['errors'];
+};
 /**
  * 对消息数组按深度应用规则。depth 从 0（最新真实消息）计，跳过 dsh runtime-context 快照；
  * 规则的 minDepth/maxDepth（null 或负数 = 不限）过滤作用区间。返回新数组。

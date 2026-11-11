@@ -5,11 +5,14 @@ import {helperJson,helperRecord} from '../core/helperRuntime.js'
 import type {HelperMvuWork} from '../core/helperMvu.js'
 import type {HelperSnapshot} from '../core/helperRuntime.js'
 import {attachHelperEvents} from './helperEventRouter.js'
-import {notifyHelperStory} from './helperNotifications.js'
+import {notifyHelperStory,watchHelperStory} from './helperNotifications.js'
 import {useT} from './i18n.js'
 import {Btn,Err,Muted} from './util.js'
 import type {TavernRemote} from './types.js'
 import { randomUuid, sha256Hex } from '../core/secureRandom.js'
+
+const IDLE_POLL_BASE_DELAY_MS=2_000
+const IDLE_POLL_MAX_DELAY_MS=30_000
 
 export function HelperMvuRunner(props:{remote:TavernRemote;sessionId:string;storyId:string;snapshot:HelperSnapshot;ready:boolean;onStatus?:(status:{error:string|null;busy:boolean;retry:()=>void})=>void;onCancel?:()=>Promise<void>}){
   const t=useT(),frame=useRef<HTMLIFrameElement|null>(null),live=useRef(props)
@@ -26,8 +29,8 @@ export function HelperMvuRunner(props:{remote:TavernRemote;sessionId:string;stor
   useEffect(()=>{props.onStatus?.({error,busy,retry:()=>retry.current()})},[error,busy,props.onStatus])
   const srcDoc=useMemo(()=>buildCardSrcDoc('',{greetings:[],greetingIndex:0,helperSnapshot:props.snapshot,mvuRunner:true}),[props.sessionId,props.storyId])
   useLayoutEffect(()=>{
-    let active=true,frameRuntime='',running=false,polling=false,failed=false,committing=false
-    let work:HelperMvuWork|undefined,result:unknown,deadline=0,renewAt=0,requestId='',restart=false
+    let active=true,frameRuntime='',running=false,polling=false,failed=false,committing=false,wakeQueued=false,selfNotifying=false
+    let work:HelperMvuWork|undefined,result:unknown,deadline=0,renewAt=0,idlePollAt=0,idleAttempts=0,requestId='',restart=false
     const runtimeId=randomUuid(),{sessionId,storyId}=props
     const requests=new Set<()=>void>()
     // RPC 无响应也必须释放本地在途锁；迟到响应只结束原 Promise，不能覆盖重试后的任务。
@@ -44,9 +47,13 @@ export function HelperMvuRunner(props:{remote:TavernRemote;sessionId:string;stor
     const valid=()=>active&&running&&!failed&&live.current.ready&&Boolean(work?.job)&&Date.now()<deadline
     const endpoint=attachHelperEvents(sessionId,storyId,send,{current:valid,snapshot:()=>work?.snapshot})
     const fail=(value:unknown)=>{if(active){failed=true;running=false;setBusy(false);setError(String(value instanceof Error?value.message:value).slice(0,2000))}}
-    const complete=()=>{
-      work=undefined;result=undefined;running=false;failed=false;restart=false;setRestartRequired(false);setBusy(false);setError(null)
-      notifyHelperStory(sessionId,storyId)
+    const complete=(next?:Partial<HelperMvuWork>)=>{
+      work=undefined;result=undefined;running=false;failed=false;restart=false
+      if(next&&next.status==='idle'&&!next.awaitingTurnEnd){idleAttempts=1;idlePollAt=Date.now()+IDLE_POLL_BASE_DELAY_MS}
+      else{idleAttempts=0;idlePollAt=0}
+      setRestartRequired(false);setBusy(false);setError(null)
+      selfNotifying=true
+      try{notifyHelperStory(sessionId,storyId)}finally{selfNotifying=false}
     }
     const commit=async()=>{
       if(!work?.job||!work.token||result===undefined||committing)return
@@ -57,14 +64,15 @@ export function HelperMvuRunner(props:{remote:TavernRemote;sessionId:string;stor
         const response=await request(()=>live.current.remote.commitHelperMvuJob(payload))
         if(!response.ok)throw new Error(response.error.message)
         if(!active)return
-        complete()
-      }finally{committing=false}
+        complete(response.value)
+      }finally{committing=false;if(wakeQueued&&active){wakeQueued=false;void poll()}}
     }
     const poll=async()=>{
       if(!active||polling||committing||!frameRuntime||!live.current.ready)return
       if(failed&&result===undefined)return
       if(running&&Date.now()>deadline){fail(t('speech.mvuExecutionTimeout'));return}
       if(work&&Date.now()<renewAt)return
+      if(!work&&Date.now()<idlePollAt)return
       polling=true
       const expectedWork=work
       try{
@@ -87,18 +95,28 @@ export function HelperMvuRunner(props:{remote:TavernRemote;sessionId:string;stor
           return
         }
         setBusy(next.status==='waiting')
-        if(failed||!live.current.ready||next.status!=='pending'||!next.job||!next.token||!next.snapshot)return
+        if(failed||!live.current.ready||next.status!=='pending'||!next.job||!next.token||!next.snapshot){
+          if(next.status==='waiting'||next.awaitingTurnEnd){idleAttempts=0;idlePollAt=Date.now()+1000}
+          else{
+            const delay=Math.min(IDLE_POLL_MAX_DELAY_MS,IDLE_POLL_BASE_DELAY_MS*2**Math.min(idleAttempts,4))
+            idleAttempts++
+            idlePollAt=Date.now()+delay
+          }
+          return
+        }
+        idleAttempts=0;idlePollAt=0
         work=next;running=true;deadline=Date.now()+300000;requestId=randomUuid();setBusy(true);setError(null)
         send({action:'helperMvuRun',runtimeId:frameRuntime,requestId,work:next})
-      }catch(value){if(work===expectedWork)fail(value)}finally{polling=false}
+      }catch(value){if(work===expectedWork)fail(value)}finally{polling=false;if(wakeQueued&&active){wakeQueued=false;void poll()}}
     }
+    const wake=()=>{if(selfNotifying)return;idleAttempts=0;idlePollAt=0;if(polling||committing){wakeQueued=true;return}void poll()}
     const receive=(event:MessageEvent)=>{
       if(!active||event.source!==frame.current?.contentWindow||!helperRecord(event.data)||event.data.source!=='dsh-tavern-card')return
       const value=event.data
       if(typeof value.action==='string'&&value.action.startsWith('helperEvent')){endpoint.receive(value);return}
       if(value.action==='helperMvuReady'&&endpoint.matchesRuntime(value.runtimeId)){
         if(frameRuntime&&frameRuntime!==value.runtimeId){fail(t('speech.mvuSandboxChanged'));return}
-        frameRuntime=String(value.runtimeId);void poll();return
+        frameRuntime=String(value.runtimeId);wake();return
       }
       // 快照读取与其它业务回执同口径：卡面重建后的旧运行时迟到请求不能拿到当前剧情快照。
       if(value.action==='helperSnapshotGet'&&typeof value.requestId==='string'&&value.storyId===storyId&&endpoint.matchesRuntime(value.runtimeId)){
@@ -110,15 +128,16 @@ export function HelperMvuRunner(props:{remote:TavernRemote;sessionId:string;stor
       try{result=helperJson(value.data);void commit().catch(fail)}catch(error){fail(error)}
     }
     retry.current=()=>{
-      failed=false;setError(null)
+      failed=false;setError(null);idleAttempts=0;idlePollAt=0
       if(restart){restart=false;setRestartRequired(false);result=undefined;work=undefined;running=false;renewAt=0;void poll()}
       else if(result!==undefined){renewAt=0;setBusy(true);void commit().catch(error=>{renewAt=0;fail(error);void poll()})}
       else{work=undefined;running=false;renewAt=0;void poll()}
     }
-    pollRef.current=()=>{void poll()}
+    pollRef.current=wake
+    const stopWatch=watchHelperStory(sessionId,storyId,wake)
     window.addEventListener('message',receive)
     const timer=setInterval(()=>{void poll()},1000)
-    return()=>{active=false;clearInterval(timer);for(const cancel of requests)cancel();endpoint.dispose();window.removeEventListener('message',receive);retry.current=()=>{};pollRef.current=()=>{}}
+    return()=>{active=false;clearInterval(timer);stopWatch();for(const cancel of requests)cancel();endpoint.dispose();window.removeEventListener('message',receive);retry.current=()=>{};pollRef.current=()=>{}}
   },[props.sessionId,props.storyId,srcDoc])
   useEffect(()=>{if(props.ready)pollRef.current()},[props.ready])
   return <span>

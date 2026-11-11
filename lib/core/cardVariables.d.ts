@@ -1,4 +1,3 @@
-/** 卡内变量兼容：完全运行于无同源权限的 iframe；维护同步变量快照，并提供文本备份/恢复；真实会话通过独立持久层提交。 */
 export interface CardVariableLabels {
     title: string;
     note: string;

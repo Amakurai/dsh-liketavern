@@ -85,8 +85,18 @@ const planSchema = z.strictObject({ version: z.literal(1), sessionId: z.string()
   standingText: textSchema.min(1), contextText: textSchema, cacheFirst: z.boolean().optional(),
   cleanup: z.strictObject({ hideHarnessIdentity: z.boolean().optional(), dropWorkspaceInstructions: z.boolean().optional() }).optional(),
   layout: PromptLayoutSchema })
+const runtimeContextSnapshotSchema = z.object({
+  kind: z.literal('runtime-context'),
+  form: z.literal('snapshot'),
+  sections: z.array(z.object({ name: z.string(), text: z.string() })),
+})
+const validatedPlanCache = new WeakMap<object, PresetRequestPlan>()
 
 function parsePlan(value: unknown): PresetRequestPlan {
+  if (value !== null && typeof value === 'object') {
+    const cached = validatedPlanCache.get(value)
+    if (cached && Object.isFrozen(value)) return cached
+  }
   const result = planSchema.safeParse(value)
   if (!result.success) throw new Error(`Tavern 提示词布局快照无效：${result.error.issues[0]?.message ?? '未知格式'}`)
   // 分块计数避免先为超量布局分配一整份巨大 JSON 字符串。
@@ -96,18 +106,26 @@ function parsePlan(value: unknown): PresetRequestPlan {
     if (bytes > 8 * 1024 * 1024) throw new Error('Tavern 提示词布局快照超过 8 MiB 上限')
   }
   if (bytes > 8 * 1024 * 1024) throw new Error('Tavern 提示词布局快照超过 8 MiB 上限')
+  if (value !== null && typeof value === 'object' && Object.isFrozen(value)) {
+    validatedPlanCache.set(value, result.data)
+  }
+  if (Object.isFrozen(result.data)) validatedPlanCache.set(result.data, result.data)
   return result.data
 }
 
 /** 交给 pre-step 的正常接收批次；本函数不写日志、不自行注入或创建模型调用。 */
 export function createPresetPlanMessage(plan: PresetRequestPlan): UserMessage {
-  return createUserMessage({ source: { kind: 'tavern-prompt-plan', plan: parsePlan(plan) },
+  const validated = Object.freeze(parsePlan(plan))
+  validatedPlanCache.set(validated, validated)
+  return createUserMessage({ source: { kind: 'tavern-prompt-plan', plan: validated },
     content: [{ type: 'text', text: PRESET_PLAN_MESSAGE_TEXT }] })
 }
 
 /** 在宿主已接收的最后一条用户消息附加非正文元数据；不改身份、角色、来源 kind 或任何内容块。 */
 export function attachPresetPlanMessage(message: UserMessage, plan: PresetRequestPlan): UserMessage {
-  return freezeMessage({ ...message, source: { ...message.source, tavernPromptPlan: parsePlan(plan) } })
+  const validated = Object.freeze(parsePlan(plan))
+  validatedPlanCache.set(validated, validated)
+  return freezeMessage({ ...message, source: { ...message.source, tavernPromptPlan: validated } })
 }
 
 function planFromMessage(message: Message): PresetRequestPlan | undefined {
@@ -192,9 +210,8 @@ function hostMessages(messages: readonly Message[], plan: PresetRequestPlan): {
     }
     if (message.role === 'system' && message.source.kind === 'system-prompt') continue
     // runtime-context 的来源声明未由宿主包入口导出；校验真实数据，避免伪造模块类型。
-    if (message.role === 'user') {
-      const snapshot = z.object({ kind: z.literal('runtime-context'), form: z.literal('snapshot'),
-        sections: z.array(z.object({ name: z.string(), text: z.string() })) }).safeParse(message.source)
+    if (message.role === 'user' && (message.source as { kind?: unknown })?.kind === 'runtime-context') {
+      const snapshot = runtimeContextSnapshotSchema.safeParse(message.source)
       if (snapshot.success) {
         const sections = snapshot.data.sections.filter(section => section.name !== 'tavern:turn')
         if (sections.length === snapshot.data.sections.length) { result.push(message); continue }
@@ -470,7 +487,14 @@ export function projectPresetRequest(options: Readonly<GenerateOptions>, session
   }
   // 载体在首次接收批次末尾：后续工具步骤保留在它之后，尾条绝不重新附到工具结果之后。
   const requestIndexById = new Map<string, number>()
-  requestMessages.forEach((message, index) => requestIndexById.set(message.id, index))
+  const prefixMaxEnd = new Array<number>(requestMessages.length)
+  let runningMaxEnd = 1
+  requestMessages.forEach((message, index) => {
+    requestIndexById.set(message.id, index)
+    const at = positions.get(message.id)
+    if (at !== undefined && at + 1 > runningMaxEnd) runningMaxEnd = at + 1
+    prefixMaxEnd[index] = runningMaxEnd
+  })
   const carrierIndex = requestIndexById.get(carrier.id) ?? -1
   /** 某条载体所在输入批次之后的边界（历史轮与本轮同一算法，覆盖同批次紧随其后的 runtime-context）。 */
   const frontierAt = (index: number): number => {
@@ -496,12 +520,7 @@ export function projectPresetRequest(options: Readonly<GenerateOptions>, session
       }
       break
     }
-    let end = 1
-    for (const message of requestMessages.slice(0, batchEnd + 1)) {
-      const at = positions.get(message.id)
-      if (at !== undefined) end = Math.max(end, at + 1)
-    }
-    return end
+    return batchEnd >= 0 ? (prefixMaxEnd[batchEnd] ?? 1) : 1
   }
   let frontierEnd: number | undefined
   const frontier = (): number => {

@@ -9,8 +9,6 @@
 import { type Bm25SearchOptions } from '../core/bm25.js';
 import type { MemoryEntry } from '../core/types.js';
 import type { WorkspaceFs } from './workspaceFs.js';
-/** 正文软上限（字）：超过不拒绝，write 返回值带 overLength: true，治理提示由工具层做。 */
-export declare const MEMORY_BODY_SOFT_LIMIT = 200;
 /** 落盘的 frontmatter 元数据；id 由文件名推导、archived 由路径推导，均不写入文件。 */
 export interface MemoryMeta {
     created: string;
@@ -38,8 +36,6 @@ export declare function serializeMemory(meta: MemoryMeta, body: string): string;
  * 只挡越出目录与 WAL 记不下来的形状；本类生成的 `m-<base36>-<hex>` 与手放的普通文件名都通过。
  */
 export declare function isMemoryId(id: unknown): id is string;
-/** 来源格式共用入口：旧逗号列表继续可读，特殊文件名用独立 JSON 标记避免逗号与换行歧义。 */
-export declare function isMemorySummary(sourceRange: string): boolean;
 export declare function memorySourceIds(sourceRange: string): string[];
 /**
  * 解析 md 文本为 MemoryEntry。file 为相对 memory/ 目录的路径（如 `m-x.md`、`archive/m-x.md`）。

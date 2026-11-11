@@ -13,6 +13,7 @@ type SourceText=(event:Assistant)=>string|undefined
 interface Turn { previous?: Assistant; notice?: number; firstStop?: number }
 interface Index { length:number; last?:SessionEvent; turns:Map<number,Turn>; messages:Map<number,Assistant> }
 const indexes=new WeakMap<readonly SessionEvent[],Index>()
+const UTF8_ENCODER=new TextEncoder()
 const body=(event:Assistant)=>event.data.message.content.filter(block=>block.type==='text').map(block=>block.text).join('\n')
 
 /** 一份宿主快照只索引一次，打开长聊天不会为每个气泡再次遍历全部消息。 */
@@ -101,16 +102,16 @@ function continuationSources(index:Index,target:{turn:number;seq:number}):Assist
 /** 流式正文还没有持久 seq；只读公开事件快照中的真实续写 notice 和此前消息。 */
 export function continuationStreamText(events:readonly SessionEvent[],turnNumber:number,seq:number|undefined,rendered:string,sourceText?:SourceText):string {
   const index=indexOf(events)
+  const sources=continuationSources(index,{turn:turnNumber,seq:seq??Infinity})
+  if(!sources.length)return rendered
   const prefix:{text:string;unavailable:boolean}[]=[]
-  const encoder=new TextEncoder()
-  let bytes=encoder.encode(rendered).length
-  for(const previous of continuationSources(index,{turn:turnNumber,seq:seq??Infinity})){
+  let bytes=UTF8_ENCODER.encode(rendered).length
+  for(const previous of sources){
     const raw=body(previous),materialized=sourceText?sourceText(previous):raw,text=materialized??raw
-    bytes+=encoder.encode(text).length
+    bytes+=UTF8_ENCODER.encode(text).length
     if(bytes>256*1024)throw new Error('续写展示正文超过 256 KiB')
     prefix.push({text,unavailable:materialized===undefined})
   }
-  if(!prefix.length)return rendered
   const parts=stripContinuedDisplayMetaParts([...prefix.reverse(),{text:rendered,unavailable:false}])
   const before=parts.slice(0,-1),previous=before.map(part=>part.text).join(''),current=parts.at(-1)!.text
   const code=continuedMarkdown(previous,current),html=continuedHtml(previous,current,code?.start)

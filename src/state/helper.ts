@@ -2,16 +2,58 @@
 import { helperChanges, helperRecord, helperScopeKey, helperTable, type HelperScopes, type HelperVariableChange } from '../core/helperRuntime.js'
 import {parseHelperSwipes,type HelperSwipeSet} from '../core/helperSwipes.js'
 import {parseHelperMvuState,type HelperMvuState} from '../core/helperMvu.js'
+import { rootIdentity } from './pathIdentity.js'
 import type { WorkspaceFs } from './workspaceFs.js'
 import { withWorkspaceLock } from './workspaceLock.js'
+import { openLedger, writtenSince } from './writeLedger.js'
 
 export const HELPER_STATE_PATH = 'state/helper.json'
 export interface HelperState {scopes:HelperScopes;extras:Record<string,Record<string,unknown>>;swipes?:Record<string,HelperSwipeSet>;mvu?:HelperMvuState}
+
+const MAX_HELPER_CACHE_ROOTS = 64
+interface CachedHelperState {
+  stat: { mtimeMs: number; size: number } | null
+  revision: number
+  epoch: number
+  state: HelperState
+}
+const helperStateCache = new Map<string, CachedHelperState>()
+const helperCacheKey = rootIdentity
+function sameStat(a: { mtimeMs: number; size: number } | null, b: { mtimeMs: number; size: number } | null): boolean {
+  return a === null || b === null ? a === b : a.mtimeMs === b.mtimeMs && a.size === b.size
+}
+function rememberHelperState(key: string, entry: CachedHelperState): void {
+  helperStateCache.delete(key)
+  helperStateCache.set(key, entry)
+  if (helperStateCache.size > MAX_HELPER_CACHE_ROOTS) {
+    helperStateCache.delete(helperStateCache.keys().next().value!)
+  }
+}
+
 export async function loadHelperState(fs: WorkspaceFs): Promise<HelperState> {
+  const key = helperCacheKey(fs.root)
+  const ledger = openLedger(fs.root)
+  const revision = ledger.counter
+  const epoch = ledger.epoch
   const info = await fs.stat(HELPER_STATE_PATH)
   if (info && info.size > 4 * 1024 * 1024) throw new Error('酒馆助手状态文件超限')
+  const cached = helperStateCache.get(key)
+  if (
+    cached &&
+    cached.epoch === epoch &&
+    !writtenSince(ledger, HELPER_STATE_PATH, cached.revision) &&
+    sameStat(cached.stat, info)
+  ) {
+    rememberHelperState(key, cached)
+    return cached.stat === null ? { scopes: {}, extras: {} } : structuredClone(cached.state)
+  }
   const raw = await fs.readText(HELPER_STATE_PATH)
-  if (raw === null) return {scopes:{},extras:{}}
+  if (raw === null) {
+    if (info === null && !writtenSince(ledger, HELPER_STATE_PATH, revision) && ledger.epoch === epoch) {
+      rememberHelperState(key, { stat: null, revision, epoch, state: { scopes: {}, extras: {} } })
+    }
+    return {scopes:{},extras:{}}
+  }
   const parsed: unknown = JSON.parse(raw)
   if (!helperRecord(parsed) || parsed.version !== 1 || !helperRecord(parsed.scopes)) throw new Error('酒馆助手状态文件损坏')
   const scopes = helperTable(parsed.scopes) as HelperScopes
@@ -20,7 +62,12 @@ export async function loadHelperState(fs: WorkspaceFs): Promise<HelperState> {
   for(const [id,table] of Object.entries(extras)){if(!id||id.length>256)throw new Error('消息身份无效');helperTable(table)}
   const rawSwipes=helperTable(parsed.swipes===undefined?{}:parsed.swipes),swipes:Record<string,HelperSwipeSet>={}
   for(const [id,value] of Object.entries(rawSwipes)){if(!id||id.length>256)throw new Error('消息身份无效');swipes[id]=parseHelperSwipes(value)}
-  return {scopes,extras,swipes,...(parsed.mvu===undefined?{}:{mvu:parseHelperMvuState(parsed.mvu)})}
+  const state: HelperState = {scopes,extras,swipes,...(parsed.mvu===undefined?{}:{mvu:parseHelperMvuState(parsed.mvu)})}
+  const afterStat = await fs.stat(HELPER_STATE_PATH)
+  if (info !== null && sameStat(info, afterStat) && !writtenSince(ledger, HELPER_STATE_PATH, revision) && ledger.epoch === epoch) {
+    rememberHelperState(key, { stat: info, revision, epoch, state })
+  }
+  return structuredClone(state)
 }
 export async function loadHelperScopes(fs:WorkspaceFs):Promise<HelperScopes>{return (await loadHelperState(fs)).scopes}
 /** 同文件保存变量与 extra，整批在一次原子正文替换中生效。 */

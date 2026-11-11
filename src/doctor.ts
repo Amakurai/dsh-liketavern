@@ -14,12 +14,17 @@ import { createRequire } from 'node:module'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { dshHomeDisplay, resolveDshHome } from '@deepseek-ai/dsh-home-paths'
+import { isRecord } from './core/guards.js'
 import { hostVersionSatisfies, manifestHostRange, safeHostRange } from './core/hostVersion.js'
 import { MAX_STORED_CARD_JSON_BYTES } from './state/card.js'
 import { CHARACTER_ARCHIVE_FILE, isValidCardId } from './state/workspace.js'
 import { storyRoot } from './state/story.js'
-import { rollbackTarget, WAL_BINARY_MARK, WAL_COVERAGE_PATH, WAL_FLOOR_MARKERS } from './state/wal.js'
-import { isReservedWalPath, WAL_RECOVERY_PATH } from './state/workspaceFs.js'
+import { WAL_COVERAGE_PATH, WAL_FLOOR_MARKERS } from './state/wal.js'
+import {
+  baseFloorDir, checkRollbackProgress, isFloorMetaShape, isRolledBackDir, MAX_WAL_COVERAGE_BYTES, parseRecoveryMarker,
+  parseWalCoverage, recordLineIssue, sanitizeFloor, type RecordLine,
+} from './state/walFormat.js'
+import { WAL_RECOVERY_PATH } from './state/workspaceFs.js'
 import { tavernPaths } from './node/paths.js'
 
 const REQUIRED_NODE_MAJOR = 24
@@ -33,9 +38,6 @@ const MAX_TOTAL_READ_BYTES = 1024 * 1024 * 1024
 const READ_CHUNK_BYTES = 64 * 1024
 const MAX_SCANNED_ENTRIES = 100_000
 const MAX_SCAN_DEPTH = 32
-const ROLLED_BACK_MARK = '.rolled-back-'
-/** 独立楼层清单的大小上限；与 Wal.readCoverage 一致，超过即运行时拒绝继续。 */
-const MAX_WAL_COVERAGE_BYTES = 4 * 1024 * 1024
 
 export type DoctorSeverity = 'info' | 'warning' | 'error'
 export type DoctorDirectoryStatus = 'missing' | 'directory' | 'file' | 'link' | 'unreadable'
@@ -165,10 +167,6 @@ class IssueCounter {
     const rank: Record<DoctorSeverity, number> = { error: 0, warning: 1, info: 2 }
     return [...this.issues.values()].sort((a, b) => rank[a.severity] - rank[b.severity] || a.code.localeCompare(b.code))
   }
-}
-
-function isObject(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
 function errno(error: unknown): string | undefined {
@@ -317,105 +315,42 @@ function validDate(value: unknown): value is string {
 }
 
 function validStoryMetadata(value: unknown, id: string): boolean {
-  return isObject(value) && value.version === 1 && value.id === id && typeof value.sessionId === 'string'
+  return isRecord(value) && value.version === 1 && value.id === id && typeof value.sessionId === 'string'
     && typeof value.createdAt === 'string' && typeof value.migrated === 'boolean'
 }
 
 function validArchiveMetadata(value: unknown): boolean {
-  return isObject(value) && value.version === 1 && validDate(value.archivedAt)
+  return isRecord(value) && value.version === 1 && validDate(value.archivedAt)
 }
 
-function sanitizeFloor(floor: string): string {
-  return floor.replace(/[^A-Za-z0-9_.-]/g, '_')
-}
-
-function isBase64(value: unknown): value is string {
-  return typeof value === 'string' && Buffer.from(value, 'base64').toString('base64') === value
-}
-
-function safeWalPath(value: unknown): value is string {
-  return typeof value === 'string' && value.length > 0 && !value.includes('\\') && !value.includes(':')
-    && !value.startsWith('/') && value.split('/').every(part => part !== '..' && part !== '.' && part !== '')
-    && !isReservedWalPath(value)
-}
-
-/** WAL 楼层只消费首次有界快照；活跃与已回滚目录使用同一套事务格式约束。 */
+/**
+ * WAL 楼层只消费首次有界快照；活跃与已回滚目录使用同一套事务格式约束。
+ * 记录行与恢复游标的判定与运行时共用（state/walFormat.ts），诊断不能比运行时更宽或更严。
+ */
 async function validateWalArtifacts(directory: string, budget: ReadBudget, rolledBack = false): Promise<ValidationResult | 'recovering'> {
   const recordsRead = await readBoundedText(`${directory}/records.jsonl`, MAX_WAL_BYTES, budget)
   if (recordsRead.status === 'oversized' || recordsRead.status === 'budget') return 'uninspected'
   if (recordsRead.status === 'unsafe' || recordsRead.status === 'invalid' || recordsRead.status === 'unreadable') return 'unhealthy'
-  const records: Record<string, unknown>[] = []
+  const records: RecordLine[] = []
   if (recordsRead.status === 'ok') {
     for (const line of recordsRead.text.split('\n')) {
       if (!line.trim()) continue
       let record: unknown
       try { record = JSON.parse(line) as unknown } catch { return 'unhealthy' }
-      if (!isObject(record) || !safeWalPath(record.path) || !Number.isSafeInteger(record.seq)
-        || record.seq !== records.length + 1
-        || !(record.before === null || typeof record.before === 'string')
-        || ('after' in record && !(record.after === null || typeof record.after === 'string'))
-        || (record.beforeEncoding !== undefined && record.beforeEncoding !== 'utf8' && record.beforeEncoding !== 'base64')
-        || (record.afterEncoding !== undefined && record.afterEncoding !== 'utf8' && record.afterEncoding !== 'base64')) return 'unhealthy'
-      const before = record.beforeEncoding === undefined && typeof record.before === 'string' && record.before.startsWith(WAL_BINARY_MARK)
-        ? record.before.slice(WAL_BINARY_MARK.length) : record.before
-      if ((before !== null && (record.beforeEncoding === 'base64' || before !== record.before) && !isBase64(before))
-        || (record.afterEncoding === 'base64' && record.after !== null && !isBase64(record.after))) return 'unhealthy'
-      records.push(record)
+      if (recordLineIssue(record, records.length + 1)) return 'unhealthy'
+      records.push(record as RecordLine)
     }
   }
 
   const progressRead = await readBoundedJson(`${directory}/rollback-progress.json`, MAX_JSON_BYTES, budget)
   if (progressRead.status === 'missing') return rolledBack && records.length > 0 ? 'unhealthy' : 'healthy'
   if (progressRead.status === 'oversized' || progressRead.status === 'budget') return 'uninspected'
-  if (progressRead.status !== 'ok' || !isObject(progressRead.value)) return 'unhealthy'
-  const progress = progressRead.value
+  if (progressRead.status !== 'ok') return 'unhealthy'
   const hash = createHash('sha256').update(JSON.stringify(records)).digest('hex')
-  const paths = new Set(records.map(record => record.path as string))
-  const isPaths = (items: unknown): items is string[] => Array.isArray(items)
-    && items.every(item => typeof item === 'string' && paths.has(item))
-  if (progress.hash !== hash || !Number.isSafeInteger(progress.next) || (progress.next as number) < -1
-    || (progress.next as number) >= records.length || !isPaths(progress.restored) || !isPaths(progress.preserved)
-    || progress.restored.length + progress.preserved.length !== records.length - (progress.next as number) - 1) return 'unhealthy'
-  const remaining = new Map<string, number>()
-  for (const record of records.slice((progress.next as number) + 1)) {
-    const path = record.path as string
-    remaining.set(path, (remaining.get(path) ?? 0) + 1)
-  }
-  for (const path of [...progress.restored, ...progress.preserved]) {
-    const count = remaining.get(path) ?? 0
-    if (!count) return 'unhealthy'
-    remaining.set(path, count - 1)
-  }
-  if ('pending' in progress) {
-    const pending = progress.pending
-    if (!isObject(pending) || typeof pending.path !== 'string' || pending.path !== records[progress.next as number]?.path
-      || !(pending.from === null || isBase64(pending.from)) || !(pending.to === null || isBase64(pending.to))) return 'unhealthy'
-    const target = rollbackTarget(records[progress.next as number] as never, pending.from)
-    if (!target.restore || pending.to !== target.value) return 'unhealthy'
-  }
-  if (rolledBack) return (progress.next as number) === -1 && !('pending' in progress) ? 'healthy' : 'unhealthy'
+  const checked = checkRollbackProgress(progressRead.value, records, hash)
+  if (!checked.ok) return 'unhealthy'
+  if (rolledBack) return checked.progress.next === -1 && !checked.progress.pending ? 'healthy' : 'unhealthy'
   return 'recovering'
-}
-
-/**
- * 独立楼层清单（state/wal-coverage.json）的形状校验，规则与 Wal.readCoverage 一致：
- * 版本、字段白名单、楼层名长度、开始时间可解析、同名楼层不重复。返回 null 表示损坏。
- */
-function validWalCoverage(value: unknown): Array<{ floor: string; startedAt: string }> | null {
-  if (!isObject(value) || value.version !== 1) return null
-  if (Object.keys(value).some(key => key !== 'version' && key !== 'floors')) return null
-  if (!Array.isArray(value.floors)) return null
-  const floors: Array<{ floor: string; startedAt: string }> = []
-  const seen = new Set<string>()
-  for (const item of value.floors) {
-    if (!isObject(item) || Object.keys(item).some(key => key !== 'floor' && key !== 'startedAt')) return null
-    if (typeof item.floor !== 'string' || !item.floor || item.floor.length > 512) return null
-    if (!validDate(item.startedAt)) return null
-    if (seen.has(item.floor)) return null
-    seen.add(item.floor)
-    floors.push({ floor: item.floor, startedAt: item.startedAt })
-  }
-  return floors
 }
 
 /**
@@ -423,6 +358,7 @@ function validWalCoverage(value: unknown): Array<{ floor: string; startedAt: str
  * 判定与 Wal.doListFloors 相同（含已回滚副本；被清空日志的目录不贡献身份）。
  * 运行时在开层/回退/分支前会拒绝这种数据，只读诊断不能把它算成健康——
  * 否则 backup 会把「哈希自洽但恢复后不可用」的副本判为可恢复。
+ * 清单形状（版本、字段白名单、楼层名长度、开始时间、同名不重复）与 Wal.readCoverage 共用 parseWalCoverage。
  */
 async function inspectWalCoverage(
   root: string,
@@ -441,7 +377,7 @@ async function inspectWalCoverage(
     issues.add('WAL_VALIDATION_LIMIT_EXCEEDED', 'warning')
     return
   }
-  const floors = read.status === 'ok' ? validWalCoverage(read.value) : null
+  const floors = read.status === 'ok' ? parseWalCoverage(read.value) : null
   if (floors === null) {
     issues.add('WAL_COVERAGE_INVALID', 'error')
     return
@@ -453,16 +389,6 @@ async function inspectWalCoverage(
     if (!presentIdentities.has(JSON.stringify([floor.floor, floor.startedAt]))) missing += 1
   }
   if (missing > 0) issues.add('WAL_FLOOR_MISSING', 'error', missing)
-}
-
-function validWalRecovery(value: unknown): boolean {
-  if (!isObject(value) || value.version !== 1) return false
-  const { floors, dirs, walDir, bodyRoot } = value
-  if (!Array.isArray(floors) || !Array.isArray(dirs)) return false
-  if (!floors.length || floors.length !== dirs.length) return false
-  if (walDir !== undefined && typeof walDir !== 'string') return false
-  if (bodyRoot !== undefined && typeof bodyRoot !== 'string') return false
-  return floors.every((floor, i) => typeof floor === 'string' && floor.length > 0 && floor.length <= 512 && dirs[i] === sanitizeFloor(floor))
 }
 
 async function inspectWalRecovery(
@@ -479,7 +405,7 @@ async function inspectWalRecovery(
     issues.add('WAL_VALIDATION_LIMIT_EXCEEDED', 'warning')
     return
   }
-  if (read.status !== 'ok' || !validWalRecovery(read.value)) {
+  if (read.status !== 'ok' || !parseRecoveryMarker(read.value).valid) {
     issues.add('WAL_INVALID', 'error')
   }
 }
@@ -520,15 +446,16 @@ async function inspectWalRoot(
   let enumerationComplete = !budget.exhausted && !scanBudget.exhausted
   for (const entry of entries) {
     if (budget.exhausted) { enumerationComplete = false; break }
-    const entryBaseName = entry.name.split(ROLLED_BACK_MARK)[0] ?? entry.name
+    // 回滚副本按运行时的严格后缀识别：楼层 id 中段含 `.rolled-back-` 的活跃目录不是副本。
+    const rolledBack = isRolledBackDir(entry.name)
+    const baseName = baseFloorDir(entry.name)
     if (entry.isSymbolicLink()) {
-      unresolvedFloors.add(entryBaseName)
+      unresolvedFloors.add(baseName)
       stats.unsafeEntries += 1
       issues.add('WAL_LINK_SKIPPED', 'error')
       continue
     }
     if (!entry.isDirectory()) continue
-    const rolledBack = entry.name.includes(ROLLED_BACK_MARK)
     // 与 Wal 相同：开始楼层时崩溃遗留的空目录不是损坏，宿主会跳过并允许重新开始。
     if (!rolledBack && await isUnstartedFloor(`${root}/${entry.name}`)) continue
     stats.floors += 1
@@ -538,20 +465,13 @@ async function inspectWalRoot(
     const directory = `${root}/${entry.name}`
     const metaRead = await readBoundedJson(`${directory}/meta.json`, 64 * 1024, budget)
     if (metaRead.status === 'oversized' || metaRead.status === 'budget') {
-      unresolvedFloors.add(entryBaseName)
+      unresolvedFloors.add(baseName)
       stats.uninspected += 1
       issues.add('WAL_VALIDATION_LIMIT_EXCEEDED', 'warning')
       continue
     }
-    if (metaRead.status !== 'ok' || !isObject(metaRead.value)) {
-      stats.unhealthy += 1
-      issues.add('WAL_INVALID', 'error')
-      continue
-    }
-    const meta = metaRead.value
-    const baseName = entry.name.split(ROLLED_BACK_MARK)[0]
-    if (typeof meta.floor !== 'string' || !meta.floor || sanitizeFloor(meta.floor) !== baseName
-      || !validDate(meta.startedAt) || typeof meta.committed !== 'boolean'
+    const meta = metaRead.status === 'ok' ? metaRead.value : undefined
+    if (!isFloorMetaShape(meta) || sanitizeFloor(meta.floor) !== baseName
       || (rolledBack && !validDate(meta.rolledBackAt))) {
       stats.unhealthy += 1
       issues.add('WAL_INVALID', 'error')
@@ -610,7 +530,6 @@ async function inspectStories(
     return
   }
   for (const entry of entries) {
-    if (budget.exhausted) break
     if (entry.name.startsWith('.preparing-')) {
       if (entry.isDirectory()) stats.stories.drafts += 1
       else if (entry.isSymbolicLink()) { stats.stories.unsafeEntries += 1; issues.add('STORY_LINK_SKIPPED', 'error') }
@@ -623,6 +542,10 @@ async function inspectStories(
     }
     if (!entry.isDirectory()) continue
     stats.stories.directories += 1
+    if (budget.exhausted) {
+      stats.stories.uninspected += 1
+      continue
+    }
     let root: string
     try { root = storyRoot(cardRoot, entry.name) } catch {
       stats.stories.unhealthy += 1
@@ -665,7 +588,6 @@ async function inspectCharacters(
     return
   }
   for (const entry of entries) {
-    if (budget.exhausted) break
     if (entry.isSymbolicLink()) {
       stats.characters.unsafeEntries += 1
       issues.add('CHARACTER_LINK_SKIPPED', 'error')
@@ -673,6 +595,10 @@ async function inspectCharacters(
     }
     if (!entry.isDirectory()) continue
     stats.characters.directories += 1
+    if (budget.exhausted) {
+      stats.characters.uninspected += 1
+      continue
+    }
     if (!isValidCardId(entry.name)) {
       stats.characters.invalidIds += 1
       stats.characters.unhealthy += 1
@@ -682,18 +608,19 @@ async function inspectCharacters(
     const cardRoot = `${charactersRoot}/${entry.name}`
     // card.json 与运行时写入共用存储上限；通用扫描复用本次结果计数，不再重复读取。
     const card = await readBoundedJson(`${cardRoot}/card.json`, MAX_STORED_CARD_JSON_BYTES, budget)
-    if (card.status === 'budget') { stats.characters.uninspected += 1
-
-      break
+    if (card.status === 'budget') {
+      stats.characters.uninspected += 1
+      continue
     }
     inspectedCards.set(resolve(cardRoot, 'card.json'), card.status)
-    let healthy = card.status === 'ok' && isObject(card.value)
+    let healthy = card.status === 'ok' && isRecord(card.value)
     if (!healthy) issues.add(card.status === 'oversized' ? 'CHARACTER_METADATA_TOO_LARGE' : 'CHARACTER_METADATA_INVALID', 'error')
 
     const archive = await readBoundedJson(`${cardRoot}/${CHARACTER_ARCHIVE_FILE}`, 64 * 1024, budget)
-    if (archive.status === 'budget') { if (!healthy) stats.characters.unhealthy += 1; else stats.characters.uninspected += 1
-
-      break
+    if (archive.status === 'budget') {
+      if (!healthy) stats.characters.unhealthy += 1
+      else stats.characters.uninspected += 1
+      continue
     }
     if (archive.status === 'ok') {
       if (validArchiveMetadata(archive.value)) stats.characters.archived += 1
@@ -788,7 +715,7 @@ interface OwnPackageInfo {
 async function ownPackageInfo(): Promise<OwnPackageInfo> {
   try {
     const read = await readBoundedJson(fileURLToPath(new URL('../package.json', import.meta.url)), 1024 * 1024)
-    if (read.status !== 'ok' || !isObject(read.value)) return { pluginVersion: 'unknown', dshExpectedVersion: 'unknown' }
+    if (read.status !== 'ok' || !isRecord(read.value)) return { pluginVersion: 'unknown', dshExpectedVersion: 'unknown' }
     return {
       pluginVersion: safeVersion(read.value.version),
       dshExpectedVersion: manifestHostRange(read.value),
@@ -804,7 +731,7 @@ async function installedDshVersion(): Promise<string> {
     const require = createRequire(import.meta.url)
     const packagePath = require.resolve('@deepseek-ai/dsh/package.json')
     const json = await readBoundedJson(packagePath, 1024 * 1024)
-    return json.status === 'ok' && isObject(json.value) ? safeVersion(json.value.version) : 'unknown'
+    return json.status === 'ok' && isRecord(json.value) ? safeVersion(json.value.version) : 'unknown'
   } catch {
     return 'unknown'
   }

@@ -8,7 +8,7 @@ export type TemplateReplayJsonShared =
   | {jsonArrayPages:number[]}
   | {jsonObjectPages:number[]}
 
-export const TEMPLATE_REPLAY_JSON_PAGE = 64
+const TEMPLATE_REPLAY_JSON_PAGE = 64
 const MAX_VISITS=8*1024*1024
 interface Shape {chars:number;visits:number;depth:number;physical:number;count:number;kind:'value'|'array'|'object'|'prefix'}
 export function templateReplayJsonVisits(value:unknown,limit=MAX_VISITS):number {

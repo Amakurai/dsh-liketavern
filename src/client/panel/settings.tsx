@@ -4,6 +4,7 @@
  * 排版对齐通用设置：标题 + 说明 + 右侧 36px 胶囊控件；瞬时保存反馈走 useToast，上下文错误用 Err。
  * 「界面」组有语言与消息头像两项：改动即写设置并立即生效，不走 SaveBar。
  */
+import { describeError } from '../../core/guards.js'
 import { ScriptSettings } from './scripts.js'
 import { CardDataSettings } from './cardData.js'
 import type { SessionsPort } from '../openChild.js'
@@ -128,7 +129,7 @@ export function SettingsSection(props: { remote: TavernRemote; sessions?: Sessio
       } catch (error) {
         setDraft((current) => (current ? { ...current, locale: prev } : current))
         setTavernLocale(prev)
-        throw new Error(`${t('settings.interface.languageFailed')}: ${error instanceof Error ? error.message : String(error)}`)
+        throw new Error(`${t('settings.interface.languageFailed')}: ${describeError(error)}`)
       }
     })
   }
@@ -150,7 +151,7 @@ export function SettingsSection(props: { remote: TavernRemote; sessions?: Sessio
       } catch (error) {
         setDraft((current) => (current ? { ...current, speakerHeader: prev } : current))
         setSpeakerHeader(prev)
-        throw new Error(`${t('settings.interface.speakerHeaderFailed')}: ${error instanceof Error ? error.message : String(error)}`)
+        throw new Error(`${t('settings.interface.speakerHeaderFailed')}: ${describeError(error)}`)
       }
     })
   }

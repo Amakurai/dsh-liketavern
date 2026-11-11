@@ -3,6 +3,7 @@
  * 样式集中在 ./styles.js（模块加载即注入）；颜色一律走宿主 --dsw-* 令牌 + Tavern 蓝色 accent。
  * 原生 select 的 option 弹层用 Menu 实现（避开 Windows 系统白底白字）。
  */
+import { describeError } from '../core/guards.js'
 import { Children, cloneElement, createContext, isValidElement, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Button, IconChevronDownOutlineMedium, IconSearchOutlineMedium, IconUserOutlineMedium, Menu, Modal, Toast, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { AriaAttributes, CSSProperties, ReactNode } from 'react'
@@ -331,8 +332,8 @@ export function IconBtn(props: {
   )
 }
 
-/** 对齐通用设置：标题 + 说明 + 右侧控件。stacked = 宽控件（checkbox 列表等）换成纵向满宽。inline 已废弃（现在默认就是行式）。 */
-export function SettingsRow(props: { title: string; description?: string; stacked?: boolean; inline?: boolean; children?: ReactNode }) {
+/** 对齐通用设置：标题 + 说明 + 右侧控件。stacked = 宽控件（checkbox 列表等）换成纵向满宽。 */
+export function SettingsRow(props: { title: string; description?: string; stacked?: boolean; children?: ReactNode }) {
   const id = useId(), labelId = `${id}-label`, descriptionId = props.description ? `${id}-description` : undefined
   return (
     <div className={`dsh-tavern-row${props.stacked ? ' is-stacked' : ''}`}>
@@ -484,7 +485,7 @@ export function useToast() {
   return { show, node }
 }
 
-/** 让卡片等元素可键盘触发（Enter/Space），配合 .is-clickable。 */
+/** 让卡片等元素可键盘触发（Enter/Space）；用于 .dsh-tavern-charCard / .dsh-tavern-tile，其悬停样式由各自规则提供。 */
 export function clickableProps(onClick: () => void) {
   return {
     role: 'button',
@@ -538,7 +539,7 @@ export function useLoader<T>(load: () => Promise<Envelope<T>>, deps: readonly un
       })
       .catch((e) => {
         settle()
-        if (alive) setState({ status: 'error', message: e instanceof Error ? e.message : String(e) })
+        if (alive) setState({ status: 'error', message: describeError(e) })
       })
     return () => {
       alive = false
@@ -575,7 +576,7 @@ export async function runAsync(
   try {
     await fn()
   } catch (e) {
-    const message = e instanceof Error ? e.message : String(e)
+    const message = describeError(e)
     if (onError) onError(message)
     else setError(message)
   } finally {

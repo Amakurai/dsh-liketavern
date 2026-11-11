@@ -8,7 +8,11 @@
  *
  * 只有读的一方打开过登记的根目录才会记录：分支准备时的临时目录没有读者，不必为它们留账。
  */
-import { resolve } from 'node:path'
+import { sep } from 'node:path'
+import { caseIdentity, rootIdentity } from './pathIdentity.js'
+
+const MAX_TRACKED_FILES = 4096
+const MAX_TRACKED_DIRS = 1024
 
 export interface WriteLedger {
   /** 显式作废的次数；变化时读的一方清空全部缓存。 */
@@ -22,24 +26,21 @@ export interface WriteLedger {
 }
 
 const ledgers = new Map<string, WriteLedger>()
-
-function rootKey(root: string): string {
-  const absolute = resolve(root)
-  return process.platform === 'win32' ? absolute.toLowerCase() : absolute
-}
+/** 全局单调 epoch：closeLedger 删除后再在同一路径重建目录，新账本也不会撞上旧缓存的 epoch。 */
+let nextLedgerEpoch = 0
 
 /** 相对路径的身份：正斜杠、去掉空段与 `.`；Windows 上文件名不分大小写。 */
 export function ledgerKey(relPath: string): string {
   const key = relPath.replace(/\\/g, '/').split('/').filter((segment) => segment !== '' && segment !== '.').join('/')
-  return process.platform === 'win32' ? key.toLowerCase() : key
+  return caseIdentity(key)
 }
 
 /** 读的一方打开登记；此后这个根目录下的写入才会被记录。 */
 export function openLedger(root: string): WriteLedger {
-  const key = rootKey(root)
+  const key = rootIdentity(root)
   let ledger = ledgers.get(key)
   if (!ledger) {
-    ledger = { epoch: 0, counter: 0, files: new Map(), dirs: new Map() }
+    ledger = { epoch: ++nextLedgerEpoch, counter: 0, files: new Map(), dirs: new Map() }
     ledgers.set(key, ledger)
   }
   return ledger
@@ -50,13 +51,34 @@ export function openLedger(root: string): WriteLedger {
  * 没有读者打开过的根目录直接忽略。
  */
 export function noteWrite(root: string, relPath: string): void {
-  const ledger = ledgers.get(rootKey(root))
+  const ledger = ledgers.get(rootIdentity(root))
   if (!ledger) return
+  if (ledger.files.size >= MAX_TRACKED_FILES || ledger.dirs.size >= MAX_TRACKED_DIRS) {
+    nextLedgerEpoch = Math.max(nextLedgerEpoch, ledger.epoch) + 1
+    ledger.epoch = nextLedgerEpoch
+    ledger.files.clear()
+    ledger.dirs.clear()
+  }
   const key = ledgerKey(relPath)
   const order = ++ledger.counter
   ledger.files.set(key, order)
   const slash = key.lastIndexOf('/')
   ledger.dirs.set(slash < 0 ? '' : key.slice(0, slash), order)
+}
+
+/** 释放临时草稿或已删除工作区的写入登记；推进 epoch 使仍持有引用的读取方一并失效。 */
+export function closeLedger(root: string, options?: { prefix?: boolean }): void {
+  const target = rootIdentity(root)
+  const prefix = target + sep
+  for (const [key, ledger] of [...ledgers]) {
+    if (key === target || (options?.prefix && key.startsWith(prefix))) {
+      nextLedgerEpoch = Math.max(nextLedgerEpoch, ledger.epoch) + 1
+      ledger.epoch = nextLedgerEpoch
+      ledger.files.clear()
+      ledger.dirs.clear()
+      ledgers.delete(key)
+    }
+  }
 }
 
 /** 给定序号之后，这个文件是否又被本进程写过。 */

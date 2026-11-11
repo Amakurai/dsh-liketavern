@@ -101,3 +101,20 @@ it('楼层外维护保留了新根时，回滚不能删除它复用的旧块',as
   await wal.rollbackFloor('s1#t1',root)
   expect(await loadTemplateState(fs)).toEqual({...first,wiTimers:{s1:timers}})
 },30000)
+
+it('流式字节计量对孤立代理项、Emoji、控制字符与大分页文档保持精确往返一致',async()=> {
+  const {wal,fs}=await fixture()
+  const state=largeState()
+  state.variables.local={
+    surrogate:'prefix-\ud800-middle-\udfff-end',
+    astral:'🌟🎭🚀'.repeat(400),
+    controls:'\u0000\u001f\n\t"\\',
+    zero:-0,
+  }
+  await wal.beginFloor('s1#t1')
+  await saveTemplateState(fs.withFloor('s1#t1'),state)
+  await wal.commitFloor('s1#t1')
+  const loaded=await loadTemplateState(fs)
+  expect(loaded).toEqual(JSON.parse(JSON.stringify(state)))
+  expect(Object.is((loaded.variables.local as {zero:number}).zero,-0)).toBe(false)
+},30000)

@@ -484,4 +484,30 @@ it('先读后清：flushvar 不早于同段 getvar 执行', () => {
   expect(expandMacros('{{setvar::y::hello}}{{setvar::x::{{getvar::y}}}}{{getvar::x}}', { ...ctx, store: new Map() })).toBe('hello')
   expect(nestedStore.get('saved')).toBe('$1')
   expect(store.has('once')).toBe(false)
+  let toJsonCalls = 0
+  const readonlyStatData = {
+    marker: '\uE000tavernFrozenOpen0\uE001|\uE000tavernTrim0\uE001|\uE000tavernPostOpen0\uE001',
+    nested: {
+      toJSON() {
+        toJsonCalls++
+        return { icon: '\uE000tavernPostClose0\uE001', hp: 42 }
+      },
+    },
+  }
+  const mvuCtx: MacroContext = {
+    ...ctx,
+    readonlyStatData,
+    outlets: { Box: '{keep}' },
+  }
+  const first = expandMacros(
+    '{{outlet::Box}}\n{{trim}}\n{{getvar::stat_data.marker}}|{{char}}',
+    mvuCtx,
+    undefined,
+    (v) => v,
+  )
+  expect(first).toBe('{keep}\uE000tavernFrozenOpen0\uE001|\uE000tavernTrim0\uE001|\uE000tavernPostOpen0\uE001|Alice')
+  expect(toJsonCalls).toBe(1)
+  const second = expandMacros('{{outlet::Box}} {{user}}', mvuCtx, undefined, (v) => v)
+  expect(second).toBe('{keep} Bob')
+  expect(toJsonCalls).toBe(1)
 })

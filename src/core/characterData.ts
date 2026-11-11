@@ -4,9 +4,8 @@
  * 导出与模板快照必须借助 raw 还原来源，不能因此把 data.assets 搬成 data.extensions.assets。
  */
 import type { CharacterCard } from './types.js'
-
-const record = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value)
+import { isRecord } from './guards.js'
+import { setOwnField } from './objectSafety.js'
 
 /** 已被 CharacterCard 显式建模、由调用方以当前值覆盖的 ST data 字段。 */
 const MODELED_DATA_KEYS = new Set([
@@ -33,7 +32,7 @@ const CONSUMED_DATA_ALIASES = new Set(['lorebook', 'characterBook'])
 
 
 /** 与卡解析器一致：别名只在真能归一化为非空世界书时才具有业务语义。 */
-export function isNonEmptyCharacterBook(value: unknown): boolean {
+function isNonEmptyCharacterBook(value: unknown): boolean {
   let current = value
   // JSON 字符串是旧卡常见别名；用循环限制嵌套，避免恶意多重字符串耗尽栈。
   for (let depth = 0; typeof current === 'string' && depth < 32; depth++) {
@@ -42,9 +41,9 @@ export function isNonEmptyCharacterBook(value: unknown): boolean {
   }
   if (typeof current === 'string') return false
   if (Array.isArray(current)) return current.length > 0
-  if (!record(current)) return false
+  if (!isRecord(current)) return false
   return Array.isArray(current.entries) ? current.entries.length > 0
-    : record(current.entries) && Object.keys(current.entries).length > 0
+    : isRecord(current.entries) && Object.keys(current.entries).length > 0
 }
 
 /**
@@ -74,30 +73,15 @@ export function characterPromptName(card: CharacterCard): string {
 }
 
 /**
- * 卡 JSON 里可能出现的污染键。这些名字若用普通赋值写进 `{}`，会走 Object.prototype 上的
- * `__proto__` setter：字段本身静默丢失，返回对象的原型还会被外来对象替换。
- */
-const POLLUTION_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
-
-/** 污染键必须落成自有数据属性（defineProperty），其余键保持普通赋值。 */
-function setExtraField(target: Record<string, unknown>, key: string, value: unknown): void {
-  if (POLLUTION_KEYS.has(key)) {
-    Object.defineProperty(target, key, { value, writable: true, enumerable: true, configurable: true })
-    return
-  }
-  target[key] = value
-}
-
-/**
  * 从原始卡片记住未建模字段的原位置，再用当前 extensions 中的镜像值覆盖。
  * raw 只负责判定来源，不能作为普通 nested 扩展的值回退，否则用户删掉的旧脚本会复活；
  * 唯一例外是 direct/nested 同名冲突，此时扁平镜像只能表达 direct，raw 才是 nested 的唯一副本。
  */
 export function characterDataExtras(card: CharacterCard): CharacterDataExtras {
-  const raw = record(card.raw) ? card.raw : {}
-  const rawData = card.spec !== 'chara_card_v1' && record(raw.data) ? raw.data : raw
+  const raw = isRecord(card.raw) ? card.raw : {}
+  const rawData = card.spec !== 'chara_card_v1' && isRecord(raw.data) ? raw.data : raw
   const hasWrappedData = rawData !== raw
-  const rawExtensions = record(rawData.extensions) ? rawData.extensions : {}
+  const rawExtensions = isRecord(rawData.extensions) ? rawData.extensions : {}
   const fields: Record<string, unknown> = {}
   const directKeys = new Set<string>()
 
@@ -106,17 +90,17 @@ export function characterDataExtras(card: CharacterCard): CharacterDataExtras {
     directKeys.add(key)
     // 归一化必然把此类字段镜像进 extensions；当前镜像消失表示后续编辑已删除，
     // 不能 fallback raw 复活（典型场景是脚本库升级后删除 TavernHelper_scripts）。
-    if (Object.hasOwn(card.extensions, key)) setExtraField(fields, key, card.extensions[key])
+    if (Object.hasOwn(card.extensions, key)) setOwnField(fields, key, card.extensions[key])
   }
 
   const extensions: Record<string, unknown> = {}
   for (const key of directKeys) {
     // 解析时 direct 会覆盖同名 nested 镜像；保留 raw nested，避免往返静默丢掉另一份数据。
-    if (Object.hasOwn(card.extensions, key) && Object.hasOwn(rawExtensions, key)) setExtraField(extensions, key, rawExtensions[key])
+    if (Object.hasOwn(card.extensions, key) && Object.hasOwn(rawExtensions, key)) setOwnField(extensions, key, rawExtensions[key])
   }
   for (const [key, value] of Object.entries(card.extensions)) {
     if (directKeys.has(key)) continue
-    setExtraField(extensions, key, value)
+    setOwnField(extensions, key, value)
   }
   return { fields, extensions }
 }

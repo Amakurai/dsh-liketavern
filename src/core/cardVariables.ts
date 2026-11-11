@@ -1,4 +1,6 @@
 /** 卡内变量兼容：完全运行于无同源权限的 iframe；维护同步变量快照，并提供文本备份/恢复；真实会话通过独立持久层提交。 */
+import { escapeScriptJson } from './scriptJson.js'
+
 export interface CardVariableLabels {
   title: string
   note: string
@@ -46,7 +48,7 @@ export function restoreCardVariableBackup(srcDoc: string, text: string): string 
       || (type === 'message' && id !== 'current' && (typeof id !== 'number' || !Number.isSafeInteger(id) || id < 0))
       || JSON.stringify(parts) !== key) throw new Error('Invalid scope')
   }
-  const seed = JSON.stringify({ scopes: parsed.scopes }).replace(/</g, '\\u003c').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029')
+  const seed = escapeScriptJson({ scopes: parsed.scopes })
   const marker = '<script data-dsh-tavern-bridge>'
   if (!srcDoc.includes(marker)) throw new Error('Missing card bridge')
   return srcDoc.replace(marker, () => `<script>window.__dshTavernVariables=${seed};</script>${marker}`)

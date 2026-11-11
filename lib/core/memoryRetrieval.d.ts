@@ -2,8 +2,6 @@
  * 长期记忆检索的纯函数治理：构造自动入模的查询、统一时间衰减参数，并在 token 预算内挑选正文。
  */
 import type { MemoryEntry } from './types.js';
-/** 自动入模超取有界；最终条数仍由 retrievalTopK 单独限制。 */
-export declare const MEMORY_CANDIDATE_LIMIT = 200;
 /** 只对入模候选超取，手动 memory_search 仍使用 memorySearchOptions 的原始 topK。 */
 export declare function memoryCandidateCount(topK: number): number;
 /**

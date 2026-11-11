@@ -5,6 +5,7 @@
  * 选中角色卡后先预览开场白，点「开始对话」再写入日志；封面 HTML 在聊天区渲染。
  * 开场白 swipe 也可在进入对话之后的 assistant 工具栏右侧使用。
  */
+import { describeError } from '../core/guards.js'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
@@ -225,7 +226,7 @@ function HeroCharacterSession(props: HeroProps) {
         // 失败不能消费一次性标记：留出重试入口，避免陈旧绑定继续被用来开始对话。
         sweptSession.current = null
         setSweepFailed(true)
-        setError(cause instanceof Error ? cause.message : String(cause))
+        setError(describeError(cause))
       }
     })().finally(() => { if (clearingSerial.current === serial) clearing.current = null })
     // reload 随 loader 每次 render 换新引用；只跟空白会话上的陈旧绑定走。
@@ -319,7 +320,7 @@ function HeroCharacterSession(props: HeroProps) {
       rememberCharacter(remote, cardId)
       setOpen(false)
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause))
+      setError(describeError(cause))
     } finally {
       setBusy(false)
     }
@@ -357,7 +358,7 @@ function HeroCharacterSession(props: HeroProps) {
         } else setError(t('hero.error.enterFailed'))
       }
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause))
+      setError(describeError(cause))
     } finally {
       setBusy(false)
     }
@@ -378,7 +379,7 @@ function HeroCharacterSession(props: HeroProps) {
         bindingLoader.reload()
       }
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause))
+      setError(describeError(cause))
     } finally {
       setBusy(false)
     }

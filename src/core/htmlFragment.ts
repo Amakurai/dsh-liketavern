@@ -46,8 +46,9 @@ export function findHtmlOpaqueEnd(text:string,contentStart:number,tag:string):nu
 }
 
 /** 完整文档也按标签扫描；注释、代码示例与 script/style 字符串不参与文档边界判断。 */
-export function findHtmlDocument(text:string):{start:number;end:number}|null {
-  const code=markdownCodeScanner(text)
+export function findHtmlDocument(text:string,code?:ReturnType<typeof markdownCodeScanner>):{start:number;end:number}|null {
+  if(!text.includes('<'))return null
+  const scanner=code??markdownCodeScanner(text)
   const tokens=/<!--[\s\S]*?(?:-->|$)|<!doctype\s+html\b[^>]*>|<\/?([A-Za-z][A-Za-z0-9:-]*)(?=[\s/>])(?:[^"'<>]|"[^"]*"|'[^']*')*>|`+|~{3,}/gi
   let start=-1,root=''
   for(let token=tokens.exec(text);token;token=tokens.exec(text)) {
@@ -55,7 +56,7 @@ export function findHtmlDocument(text:string):{start:number;end:number}|null {
     if(raw.startsWith('<!--'))continue
     if(raw.startsWith('`')||raw.startsWith('~')) {
       if(start<0) {
-        const end=code.fence(at)?.end??code.inlineEnd(at)
+        const end=scanner.fence(at)?.end??scanner.inlineEnd(at)
         if(end!==null)tokens.lastIndex=end
       }
       continue
@@ -88,8 +89,9 @@ export function isFullHtmlDocument(text:string):boolean {
   return findHtmlDocument(text)!==null
 }
 
-export function findHtmlFragment(text: string): { start: number; end: number } | null {
-  const code=markdownCodeScanner(text)
+export function findHtmlFragment(text: string, code?: ReturnType<typeof markdownCodeScanner>): { start: number; end: number } | null {
+  if (!text.includes('<')) return null
+  const scanner=code??markdownCodeScanner(text)
   // 属性引号内的 > 或 </div> 不参与闭合计数；各分支首字符互斥，避免嵌套回溯。
   const tokens = /<!--[\s\S]*?(?:-->|$)|<!doctype\s+html\b[^>]*>|<\/?([A-Za-z][A-Za-z0-9:-]*)(?=[\s/>])(?:[^"'<>]|"[^"]*"|'[^']*')*>|`+|~{3,}/gi
   let root = '', depth = 0, start = -1, end = -1, inertStart = -1, inertEnd = -1
@@ -102,7 +104,7 @@ export function findHtmlFragment(text: string): { start: number; end: number } |
     }
     if (raw.startsWith('`') || raw.startsWith('~')) {
       if (!depth) {
-        const codeEnd = code.fence(at)?.end??code.inlineEnd(at)
+        const codeEnd = scanner.fence(at)?.end??scanner.inlineEnd(at)
         if (codeEnd !== null) tokens.lastIndex = codeEnd
       }
       continue

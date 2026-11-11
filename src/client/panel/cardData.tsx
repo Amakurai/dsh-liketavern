@@ -1,4 +1,5 @@
 /** 设置页的剧情变量管理：显式选择角色和剧情，备份已保存快照；恢复经原有楼层 WAL/CAS，草稿及失败留在设置。 */
+import { describeError } from '../../core/guards.js'
 import {useCallback,useEffect,useRef,useState} from 'react'
 import {parseHelperVariableBackup,helperVariableRestoreChanges} from '../../core/helperVariableBackup.js'
 import type {HelperSnapshot} from '../../core/helperRuntime.js'
@@ -56,7 +57,7 @@ export function SessionTransfer({remote,sessions,sessionId}:{remote:TavernRemote
     pending.current=true
     setPhase('exporting');setError(null)
     try{const result=await remote.exportSessionArchive({sessionId});if(!result.ok)throw new Error(result.error.message);if(active.current)downloadJson('tavern-session.json',result.value.archive,0)}
-    catch(e){if(active.current)setError(e instanceof Error?e.message:String(e))}finally{pending.current=false;if(active.current)setPhase(null)}
+    catch(e){if(active.current)setError(describeError(e))}finally{pending.current=false;if(active.current)setPhase(null)}
   }
   const choose=async(file:File)=>{
     if(pending.current)return
@@ -65,7 +66,7 @@ export function SessionTransfer({remote,sessions,sessionId}:{remote:TavernRemote
     pending.current=true;setPhase('reading')
     // 新文件完整读入后才替换原输入，读取失败仍可用原文件恢复中断的导入。
     try{const text=await file.text();if(active.current){setArchive({name:file.name,text});setConfirm(false);setRestoredSessionId(null)}}
-    catch(e){if(active.current)setError(e instanceof Error?e.message:String(e))}finally{pending.current=false;if(active.current)setPhase(null)}
+    catch(e){if(active.current)setError(describeError(e))}finally{pending.current=false;if(active.current)setPhase(null)}
   }
   const openRestored=async(id:string)=>{
     if(!sessions)return
@@ -86,7 +87,7 @@ export function SessionTransfer({remote,sessions,sessionId}:{remote:TavernRemote
       if(!result.ok)throw new Error(result.error.message)
       if(active.current){guard.clearDraft();setRestoredSessionId(result.value.sessionId);toast.show(t('sessionArchive.imported'))}
       if(sessions&&active.current){setPhase('opening');await openRestored(result.value.sessionId)}
-    }catch(e){if(active.current)setError(e instanceof Error?e.message:String(e))}finally{pending.current=false;if(active.current)setPhase(null)}
+    }catch(e){if(active.current)setError(describeError(e))}finally{pending.current=false;if(active.current)setPhase(null)}
   }
   const items=workspaces.state.status==='ready'?workspaces.state.value.items:[]
   return <Section title={t('sessionArchive.title')} description={t('sessionArchive.desc')}>
@@ -135,7 +136,7 @@ export function StoryVariableSettings(props:{remote:TavernRemote;cardId:string;s
       const result=await remote.getHelperScriptLibrary({target:{type:'character',cardId:props.cardId}})
       if(!result.ok)throw new Error(result.error.message)
       setLibrary(result.value)
-    }catch(error){setScriptError(error instanceof Error?error.message:String(error))}finally{setScriptBusy(false)}
+    }catch(error){setScriptError(describeError(error))}finally{setScriptBusy(false)}
   }
   return <>
     {scriptGuard.confirmation}
@@ -177,7 +178,7 @@ export function VariableBackupEditor(props:{remote:TavernRemote;sessionId:string
         setSnapshot(fresh.value)
       }
       setText('');guard.clearDraft();toast.show(t(changes.length?'speech.variableSaved':'settings.cards.variableUnchanged'))
-    }catch(error){setError(error instanceof Error?error.message:String(error))}finally{setBusy(false)}
+    }catch(error){setError(describeError(error))}finally{setBusy(false)}
   }
   return <>
     {toast.node}{guard.confirmation}
@@ -189,7 +190,7 @@ export function VariableBackupEditor(props:{remote:TavernRemote;sessionId:string
     </SettingsRow>
     <Err message={error}/>
     <SaveBar><Btn disabled={busy||!text.trim()} onClick={()=>guard.request(()=>{setText('');setError(null)})}>{t('action.cancel')}</Btn>
-      <Btn primary disabled={busy||!snapshot.writable||!text.trim()} onClick={()=>{try{helperVariableRestoreChanges(snapshot.scopes,parseHelperVariableBackup(text,snapshot.currentMessageId));setError(null);setConfirm(true)}catch(error){setError(error instanceof Error?error.message:String(error))}}}>{t('speech.cardDataRestore')}</Btn></SaveBar>
+      <Btn primary disabled={busy||!snapshot.writable||!text.trim()} onClick={()=>{try{helperVariableRestoreChanges(snapshot.scopes,parseHelperVariableBackup(text,snapshot.currentMessageId));setError(null);setConfirm(true)}catch(error){setError(describeError(error))}}}>{t('speech.cardDataRestore')}</Btn></SaveBar>
     <ConfirmDialog open={confirm} title={t('speech.cardDataRestore')} description={t('settings.cards.variableRestoreConfirm')} busy={busy}
       onCancel={()=>setConfirm(false)} onConfirm={()=>void restore()}/>
   </>

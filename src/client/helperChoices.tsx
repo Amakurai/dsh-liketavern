@@ -1,4 +1,5 @@
 /** 脚本只能提交有界文本选项；可信按钮经宿主公开草稿接口填入，第三方代码不接触主页面。 */
+import { describeError } from '../core/guards.js'
 import {useRef,useState,useSyncExternalStore} from 'react'
 import type {SessionInput} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {HelperDisplayContext,HelperSnapshot} from '../core/helperRuntime.js'
@@ -48,7 +49,7 @@ function ScriptChoicesMessage({sessionId,context}:ScriptChoicesProps) {
       const written=input.state.getSnapshot()
       previous.current={draft:written.draft,revision:written.draftRev,text:choice.text}
       setError(null)
-    } catch(value) {setError(value instanceof Error?value.message:String(value))}
+    } catch(value) {setError(describeError(value))}
   }
   return <div className="dsh-tavern-messageChoices" aria-label={t('speech.scriptChoices')}><div>{choices.map((choice,index)=><Btn key={index} title={choice.text} onClick={()=>pick(choice)}>{choice.label}</Btn>)}</div><Err message={error}/></div>
 }

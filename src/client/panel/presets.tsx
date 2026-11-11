@@ -2,6 +2,7 @@
  * 设置面板分区：提示词预设（卡片网格 / 导入 / 导出 / 删除 / 条目表格编辑）。
  * 卡片可键盘触发（clickableProps）；保存/导入/设默认等瞬时反馈走 useToast，上下文错误用 Err。
  */
+import { describeError } from '../../core/guards.js'
 import { exportStPreset } from '../../core/presetExport.js'
 import { randomUuid } from '../../core/secureRandom.js'
 import { useDraftGuard } from '../drafts.js'
@@ -190,7 +191,7 @@ export function PresetsSection(props: { remote: TavernRemote }) {
       if (r.ok) { setEditing(structuredClone(r.value.preset)); setEditingId(id); setRevision(r.value.revision ?? null); setBaseline(JSON.stringify(r.value.preset)) }
       else setError(r.error.message)
     } catch (cause) {
-      if (openRequest.current === request) setError(cause instanceof Error ? cause.message : String(cause))
+      if (openRequest.current === request) setError(describeError(cause))
     } finally {
       if (openRequest.current === request) { opening.current = false; setBusy(false) }
     }

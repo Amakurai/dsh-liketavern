@@ -242,6 +242,39 @@ describe('clipToTokenBudget', () => {
   it('未超预算原样返回', () => {
     expect(clipToTokenBudget('你好', 10)).toEqual({ text: '你好', truncated: false, tokens: 2 })
     expect(clipToTokenBudget('你好', Number.NaN)).toEqual({ text: '', truncated: true, tokens: 0 })
+    const referenceClip = (text: string, budget: number) => {
+      const limit = Number.isNaN(budget) ? 0 : Math.max(0, Math.floor(budget))
+      const tokens = estimateTokens(text)
+      if (tokens <= limit) return { text, truncated: false, tokens }
+      if (limit === 0) return { text: '', truncated: true, tokens: 0 }
+      const suffix = '…（已截断）'
+      if (estimateTokens(suffix) > limit) {
+        const fallback = estimateTokens('…') <= limit ? '…' : ''
+        return { text: fallback, truncated: true, tokens: estimateTokens(fallback) }
+      }
+      let lo = 0
+      let hi = text.length
+      while (lo < hi) {
+        const mid = Math.ceil((lo + hi) / 2)
+        const candidate = mid > 0 ? `${text.slice(0, mid)}\n${suffix}` : suffix
+        if (estimateTokens(candidate) <= limit) lo = mid
+        else hi = mid - 1
+      }
+      if (lo > 0 && /[\uD800-\uDBFF]/.test(text[lo - 1]!) && /[\uDC00-\uDFFF]/.test(text[lo] ?? '')) lo--
+      const out = lo > 0 ? `${text.slice(0, lo)}\n${suffix}` : suffix
+      return { text: out, truncated: true, tokens: estimateTokens(out) }
+    }
+    for (const sample of ['', 'a', '你好world', `前缀${'😀汉ab'.repeat(20)}`, `${'𠮷'.repeat(25)}tail`]) {
+      for (let budget = -1; budget <= 45; budget++) {
+        expect(clipToTokenBudget(sample, budget)).toEqual(referenceClip(sample, budget))
+      }
+    }
+    const huge = '汉abcd'.repeat(200_000)
+    const started = performance.now()
+    const clipped = clipToTokenBudget(huge, 12)
+    expect(performance.now() - started).toBeLessThan(50)
+    expect(clipped.truncated).toBe(true)
+    expect(clipped.tokens).toBeLessThanOrEqual(12)
   })
 
   it('超预算截断并标记', () => {

@@ -167,3 +167,11 @@ it('旧回滚副本不能掩盖同名活跃楼层日志缺失，也不能阻止�
   await expect(restarted.listFloors()).rejects.toThrow(/WAL.*缺失/)
   expect(await fs.readText('1.txt')).toBe('1')
 })
+
+it('空工作区或无到期回滚副本时 prune 不凭空创建 state/wal 与 wal-coverage.json',async()=> {
+  const emptyRoot=await mkdtemp(join(tmpdir(),'tavern-wal-prune-empty-'));roots.push(emptyRoot)
+  const emptyWal=new Wal(join(emptyRoot,'state/wal')),emptyFs=new WorkspaceFs(emptyRoot,emptyWal)
+  expect(await emptyWal.prune({keepRolledBackDays:7})).toBe(0)
+  expect(await emptyFs.exists('state/wal')).toBe(false)
+  expect(await emptyFs.exists(WAL_COVERAGE_PATH)).toBe(false)
+})

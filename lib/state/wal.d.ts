@@ -2,16 +2,14 @@
  * 事务层（WAL）：楼层级写入快照与回滚。
  * agent 每次写入先经 recordChange() 持久化前后镜像，再原子替换正文。
  * 回退逆序撤销本层修改，保留后续手动编辑；世界状态按条目合并撤销。
- * record()/recordAfter() 仅保留旧调用兼容，新写入不得使用后补快照协议。
+ * 旧版 record()/recordAfter() 后补快照协议已删除；读取侧仍兼容其留下的 before-only 记录与二进制前缀。
  *
  * 磁盘布局（rootDir 为工作区的 state/wal/ 目录）：
  *   <root>/<floor>/meta.json      楼层事务元数据（committed/时间戳）
  *   <root>/<floor>/records.jsonl  每次修改的 before/after 及其显式编码
  * 回滚后楼层目录改名为 <floor>.rolled-back-<timestamp>，保留供调试（UI 不展示）。
  */
-import type { WalRecord } from '../core/types.js';
-/** records.jsonl 单行形状（floor 由所在目录承载，行内不重复）。after/编码字段兼容旧记录。 */
-type RecordLine = Omit<WalRecord, 'floor'>;
+export { rollbackTarget, WAL_BINARY_MARK } from './walFormat.js';
 /** listFloors() 返回元素。 */
 export interface WalFloorInfo {
     floor: string;
@@ -26,8 +24,6 @@ export interface RollbackAfterResult {
     /** 已不存在（含已回滚）而被跳过的楼层。 */
     skipped: string[];
 }
-/** 旧版本 records.jsonl 中二进制 before 快照的前缀；新记录使用 beforeEncoding 字段。 */
-export declare const WAL_BINARY_MARK = "binary-base64:";
 /**
  * 楼层目录中表明楼层已开始的文件。建目录后、写 meta 前崩溃会留下这些文件都不存在的目录：
  * 记录只在元数据存在后追加，回滚也先写游标再改正文，这种目录不可能关联任何正文修改，
@@ -36,13 +32,6 @@ export declare const WAL_BINARY_MARK = "binary-base64:";
 export declare const WAL_FLOOR_MARKERS: readonly ["meta.json", "records.jsonl", "rollback-progress.json"];
 /** 独立于 WAL 目录保存已知楼层，删除日志不能被误认为剧情从未写入。 */
 export declare const WAL_COVERAGE_PATH = "state/wal-coverage.json";
-/** 从同一记录与撤销前正文推导恢复目标；执行与恢复游标预检共用，禁止游标自行提供新正文。 */
-export declare function rollbackTarget(rec: RecordLine, current: string | null): {
-    restore: true;
-    value: string | null;
-} | {
-    restore: false;
-};
 export declare class Wal {
     private readonly rootDir;
     private readonly logFs;
@@ -64,10 +53,6 @@ export declare class Wal {
     private assertLogPath;
     /** 开始新的楼层事务；已有楼层必须显式 reopen 或先回滚，不能覆盖原始镜像。 */
     beginFloor(floor: string): Promise<void>;
-    /** 在即将写入 path 前记录快照；同层同路径只留首次快照，重复调用忽略。path 统一为正斜杠相对路径。 */
-    record(floor: string, path: string, before: string | null, beforeEncoding?: 'utf8' | 'base64'): Promise<void>;
-    /** 写入完成后补记 after 快照，用于回滚前识别楼层外的人工修改。 */
-    recordAfter(floor: string, path: string, after: string | null, afterEncoding?: 'utf8' | 'base64'): Promise<void>;
     /** 每次修改独立记录 before/after，必须在正文原子替换之前持久化。 */
     recordChange(floor: string, path: string, before: string | null, after: string | null, beforeEncoding: 'utf8' | 'base64', afterEncoding: 'utf8' | 'base64'): Promise<void>;
     /**
@@ -147,15 +132,12 @@ export declare class Wal {
      * 因此这不是“跳过回滚”，调用方仍必须重新执行回滚才能撤销本层。
      */
     resetRollbackCursor(floor: string): Promise<void>;
+    private readRecordsWithText;
     private readRecords;
     /** 预检与执行共用同一套只读校验，任何坏游标都必须在修改批次中首个文件前被发现。 */
     private readRollbackProgress;
-    /** 每次从当前日志读取序号和去重路径；其它实例追加及替换后报错都不能复用旧缓存。 */
-    private loadState;
     private hasRolledBackDir;
     private doBeginFloor;
-    private doRecord;
-    private doRecordAfter;
     private doCommitFloor;
     private doRollbackFloor;
     /** 整批先校验；不能在撤销较新楼层后才发现较旧日志损坏。 */
@@ -164,4 +146,3 @@ export declare class Wal {
     private doListFloors;
     private doPrune;
 }
-export {};

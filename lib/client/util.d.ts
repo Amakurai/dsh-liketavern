@@ -85,12 +85,11 @@ export declare function IconBtn(props: {
     onClick: () => void;
     children?: ReactNode;
 }): import("react").JSX.Element;
-/** 对齐通用设置：标题 + 说明 + 右侧控件。stacked = 宽控件（checkbox 列表等）换成纵向满宽。inline 已废弃（现在默认就是行式）。 */
+/** 对齐通用设置：标题 + 说明 + 右侧控件。stacked = 宽控件（checkbox 列表等）换成纵向满宽。 */
 export declare function SettingsRow(props: {
     title: string;
     description?: string;
     stacked?: boolean;
-    inline?: boolean;
     children?: ReactNode;
 }): import("react").JSX.Element;
 export declare function Field(props: {
@@ -146,7 +145,7 @@ export declare function useToast(): {
     show: (text: string) => void;
     node: import("react").JSX.Element | null;
 };
-/** 让卡片等元素可键盘触发（Enter/Space），配合 .is-clickable。 */
+/** 让卡片等元素可键盘触发（Enter/Space）；用于 .dsh-tavern-charCard / .dsh-tavern-tile，其悬停样式由各自规则提供。 */
 export declare function clickableProps(onClick: () => void): {
     role: string;
     tabIndex: number;

@@ -6,7 +6,7 @@ import {
   type TemplateDisplayPart,
 } from '../core/templateDisplay.js'
 import type { WorldInfoEntry, MacroContext, RegexRule } from '../core/types.js'
-import { applyRegexRules, type RegexApplyResult } from '../core/regex.js'
+import { applyRegexRulesBatch, type RegexApplyResult } from '../core/regex.js'
 import { markdownCodeScanner } from '../core/markdownCode.js'
 import { findIncompleteHtmlStart, stripOpaqueDisplayMetaParts } from '../core/displaySanitize.js'
 import type { DisplayRegexDiagnostics } from '../remote.js'
@@ -146,11 +146,10 @@ export function presentTemplateDisplayResult(parts:TemplateDisplayPart[],rules:R
   const output:TemplateDisplayPart[]=[]
   const diagnostics = displayRegexDiagnosticCollector(rules)
   // 旧缓存或外部输入可能把开闭标签分在不同 part；必须先整体清理，再逐片跑展示正则。
-  const rendered=sanitizeTemplateDisplayParts(parts).map(part=>{
-    const result=applyRegexRules(part.text,rules,{scope:'output',timing:'render'},macroCtx)
-    diagnostics.add(result.errors)
-    return {...part,text:result.text}
-  })
+  const sanitized=sanitizeTemplateDisplayParts(parts)
+  const batch=applyRegexRulesBatch(sanitized.map(part=>part.text),rules,{scope:'output',timing:'render'},macroCtx)
+  diagnostics.add(batch.errors)
+  const rendered=sanitized.map((part,index)=>({...part,text:batch.texts[index]!}))
   // 展示正则可能在不同既有片段中生成开闭标签；整体清理后才能安全拆分新生成的 HTML。
   for(const part of stripOpaqueDisplayMetaParts(parseTemplateDisplayParts(rendered))) {
     if(part.kind==='html') {
@@ -160,9 +159,4 @@ export function presentTemplateDisplayResult(parts:TemplateDisplayPart[],rules:R
   }
   const regexDiagnostics = diagnostics.result()
   return {parts:sanitizeTemplateDisplayParts(output),...(regexDiagnostics ? {regexDiagnostics} : {})}
-}
-
-/** 保留旧的纯片段投影 API；主展示链使用结果版本，把错误一并带回界面。 */
-export function presentTemplateDisplay(parts:TemplateDisplayPart[],rules:RegexRule[],macroCtx:MacroContext):TemplateDisplayPart[] {
-  return presentTemplateDisplayResult(parts,rules,macroCtx).parts
 }

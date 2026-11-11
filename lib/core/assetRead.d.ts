@@ -4,7 +4,6 @@
  */
 import { clipToTokenBudget } from './tokenize.js';
 import type { PresetEntry, PromptPreset } from './types.js';
-export declare const ASSET_READ_TOKEN_BUDGET = 3000;
 /** 资产工具的完整 JSON 输出预算；包括目录、正文、元数据、转义与展示缩进。 */
 export declare const ASSET_OUTPUT_TOKEN_BUDGET = 3000;
 export declare const ASSET_CATALOG_MAX = 200;
@@ -34,7 +33,6 @@ export declare function listPresetCatalog(preset: PromptPreset): PresetCatalogIt
 export declare function findPresetEntry(preset: PromptPreset, identifier: string, options?: {
     exact?: boolean;
 }): PresetEntry | undefined;
-export declare function clipAssetText(text: string, budget?: number): ReturnType<typeof clipToTokenBudget>;
 /** 与工具 render 的 pretty JSON 同口径；控制字符的转义也参与预算。 */
 export declare function assetOutputTokens(value: unknown): number;
 /** 文本按 JSON 字符串而非原文计费，避免控制字符被转义后膨胀；返回 tokens 仍是原文粗估。 */

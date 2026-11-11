@@ -564,4 +564,15 @@ describe('审查修复回归：角色导入原子发布', () => {
     } finally { release.resolve(); await pending; spy.mockRestore() }
     expect(await listCharacters(charactersDir)).toHaveLength(1)
   })
+  it('旧 card.json 缺省 characterBook 或条目为空且无内嵌书文件时，hasCharacterBook 保持 false', async () => {
+    const emptyBook = await importCard(charactersDir, makeCard({ name: '空内嵌书', characterBook: { name: '空书', entries: [] } }))
+    const legacy = await importCard(charactersDir, makeCard({ name: '旧版缺字段', characterBook: null }))
+    const raw = await readJson(join(legacy.root, 'card.json'))
+    delete raw.characterBook
+    await writeFile(join(legacy.root, 'card.json'), JSON.stringify(raw))
+    const listed = await listCharacters(charactersDir)
+    const byId = new Map(listed.map((item) => [item.cardId, item]))
+    expect(byId.get(emptyBook.cardId)?.hasCharacterBook).toBe(false)
+    expect(byId.get(legacy.cardId)?.hasCharacterBook).toBe(false)
+  })
 })

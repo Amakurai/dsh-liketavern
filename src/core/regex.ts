@@ -25,9 +25,10 @@
  * 落盘规则文件（regex/rules.json）可被手改：形状非法（缺 find/scopes/timing）
  * 的规则同样跳过并记录，绝不让 .includes() 处炸在主循环里。
  */
-import { expandMacros, type MacroContext } from './macros.js'
+import { createMacroMarkerAllocator, expandMacros, type MacroContext } from './macros.js'
 import { findHtmlDocument, findHtmlFragment } from './htmlFragment.js'
 import { findHtmlFence } from './htmlFence.js'
+import { markdownCodeScanner } from './markdownCode.js'
 import { isSyntheticUserText } from './dshPrompt.js'
 import type { CardRegexScript, ChatMessage, ChatRole, RegexRule, RegexScope, RegexTiming } from './types.js'
 
@@ -404,14 +405,11 @@ function filterCapturedGroup(value: string, rule: RegexRule, trimRes: readonly R
 
 /** 带 trim 的规则走 ST 同款手工代入：$0/$1..$N/$<name>，代入前先过滤组值。 */
 function expandRegexReplacement(replace: string, macroCtx: MacroContext, _matchToken: '$&' | '$0' = '$&'): string {
+  if (!replace.includes('{{') && !replace.includes('<')) return replace
   if (!replace.includes('{{match}}')) {
     return expandMacros(replace, macroCtx, undefined, escapeReplacementDollars)
   }
-  const reserved = [replace, ...Object.values(macroCtx).filter((v): v is string => typeof v === 'string'),
-    ...Object.values(macroCtx.vars ?? {}), ...Object.values(macroCtx.outlets ?? {}), ...(macroCtx.store?.values() ?? [])].join('\n')
-  let index = 0
-  let marker = `\uE000tavernMatch${index}\uE001`
-  while (reserved.includes(marker)) marker = `\uE000tavernMatch${++index}\uE001`
+  const marker = createMacroMarkerAllocator(replace, macroCtx)('Match')
   const expanded = expandMacros(replace.replaceAll('{{match}}', marker), macroCtx, undefined, escapeReplacementDollars)
   const re = new RegExp(`(\\$*)${escapeRegExp(marker)}`, 'g')
   return expanded.replace(re, (_raw, dollars: string) => `${dollars.length % 2 === 1 ? `${dollars}$` : dollars}$&`)
@@ -544,6 +542,60 @@ function applyPreparedRule(text: string, p: PreparedRule, macroCtx: MacroContext
   return text.replace(p.re, expandRegexReplacement(p.rule.replace, macroCtx, '$&'))
 }
 
+/** 是否存在需要在隔离环境中执行或报告错误的规则；全不命中且无畸形项时可零开销跳过。 */
+export function hasApplicableOrMalformedRegex(rules: readonly RegexRule[], filter: RegexFilter): boolean {
+  for (const rule of rules) {
+    if (!isWellFormedRule(rule)) return true
+    if (!rule.enabled) continue
+    if (!rule.scopes.includes(filter.scope) || !rule.timing.includes(filter.timing)) continue
+    if (filter.scope === 'output' && rule.roles?.length && !rule.roles.includes('assistant')) continue
+    return true
+  }
+  return false
+}
+
+/** 同一条消息的多段展示文本共享一次规则预编译；替换串宏展开仍逐段进行。 */
+export function applyRegexRulesBatch(
+  texts: readonly string[],
+  rules: readonly RegexRule[],
+  filter: RegexFilter,
+  macroCtx: MacroContext,
+): { texts: string[]; applied: string[]; errors: RegexApplyResult['errors'] } {
+  if (texts.length === 0) return { texts: [], applied: [], errors: [] }
+  const applied: string[] = []
+  const errors: RegexApplyResult['errors'] = []
+  const prepared: PreparedRule[] = []
+  for (const rule of rules) {
+    if (!isWellFormedRule(rule)) {
+      errors.push({ ruleId: ruleIdOf(rule), message: MALFORMED_RULE_MESSAGE })
+      continue
+    }
+    if (!rule.enabled) continue
+    if (!rule.scopes.includes(filter.scope) || !rule.timing.includes(filter.timing)) continue
+    if (filter.scope === 'output' && rule.roles?.length && !rule.roles.includes('assistant')) continue
+    const item = prepareRegexRule(rule, macroCtx)
+    if (item.error !== undefined) errors.push({ ruleId: rule.id, message: item.error })
+    else prepared.push(item)
+  }
+  if (prepared.length === 0) return { texts: [...texts], applied, errors }
+  const out = texts.map((text) => {
+    let current = text
+    for (const p of prepared) {
+      try {
+        const next = applyPreparedRule(current, p, macroCtx)
+        if (next !== current) {
+          applied.push(p.rule.id)
+          current = next
+        }
+      } catch (error) {
+        errors.push({ ruleId: p.rule.id, message: error instanceof Error ? error.message : String(error) })
+      }
+    }
+    return current
+  })
+  return { texts: out, applied, errors }
+}
+
 /**
  * 对消息数组按深度应用规则。depth 从 0（最新真实消息）计，跳过 dsh runtime-context 快照；
  * 规则的 minDepth/maxDepth（null 或负数 = 不限）过滤作用区间。返回新数组。
@@ -570,6 +622,9 @@ export function applyRegexToMessages(
   }
   for (const p of prepared) {
     if (p.error !== undefined) errors.push({ ruleId: p.rule.id, message: p.error })
+  }
+  if (!prepared.some((p) => p.error === undefined)) {
+    return { messages: [...messages], applied, errors }
   }
   const n = messages.length
   const depths: Array<number | null> = Array.from({ length: n }, () => null)
@@ -745,9 +800,13 @@ export function compilePresetRegexScripts(scripts: readonly CardRegexScript[], p
  */
 export function locateRenderedHtml(text: string): { html: string; rest: string; start: number; fence?:{start:number;end:number} } | null {
   if (!text) return null
-  const fence = findHtmlFence(text)
-  const fragment = findHtmlFragment(text)
-  const document = findHtmlDocument(text)
+  const hasFenceTokens = text.includes('```') || text.includes('~~~')
+  const hasAngle = text.includes('<')
+  if (!hasFenceTokens && !hasAngle) return null
+  const code = markdownCodeScanner(text)
+  const fence = hasFenceTokens ? findHtmlFence(text, code) : null
+  const fragment = hasAngle ? findHtmlFragment(text, code) : null
+  const document = hasAngle ? findHtmlDocument(text, code) : null
   // 从组件容器开始保留相邻 CSS/JS，不能从中间的 style 起切，更不能吞入下一张完整文档。
   const range = fragment && (!document || fragment.start < document.start) ? fragment : document
   if(fence&&(!range||fence.start<range.start))return {html:text.slice(fence.contentStart,fence.contentEnd),rest:[text.slice(0,fence.start).trim(),text.slice(fence.end).trim()].filter(Boolean).join('\n'),start:fence.contentStart,fence:{start:fence.start,end:fence.end}}

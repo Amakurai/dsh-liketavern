@@ -15,6 +15,8 @@
  */
 import { MAX_WI_KEY_CHARS } from '../core/worldbook.js'
 import { WIPosition, type WIRole, type WISelectiveLogic, type WISource, type WorldDelta, type WorldInfoEntry } from '../core/types.js'
+import { isRecord } from '../core/guards.js'
+import { toBool, toNum, toStr } from './coerce.js'
 
 /** 单文件条目数上限：社区大书在千级，2000 已留足余量。预设（presetStore）同口径复用。 */
 export const MAX_LOREBOOK_ENTRIES = 2000
@@ -34,29 +36,10 @@ export interface ParseLorebookOptions {
 // 容错转换
 // ---------------------------------------------------------------------------
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-function toStr(value: unknown): string {
-  if (typeof value === 'string') return value
-  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
-  return ''
-}
-
 /** 字符串数组：非数组 → []，元素容错转字符串并丢弃空串。 */
 function toStrArr(value: unknown): string[] {
   if (!Array.isArray(value)) return []
   return value.map(toStr).filter((s) => s !== '')
-}
-
-function toNum(value: unknown, fallback: number): number {
-  if (typeof value === 'number' && Number.isFinite(value)) return value
-  if (typeof value === 'string' && value.trim() !== '') {
-    const n = Number(value)
-    if (Number.isFinite(n)) return n
-  }
-  return fallback
 }
 
 /** 可空数字：null/undefined → null；旧格式布尔容错（true → 1，false → null）。 */
@@ -69,18 +52,6 @@ function toNumOrNull(value: unknown): number | null {
     if (Number.isFinite(n)) return n
   }
   return null
-}
-
-function toBool(value: unknown, fallback: boolean): boolean {
-  if (typeof value === 'boolean') return value
-  if (typeof value === 'number') return value !== 0
-  if (typeof value === 'string') {
-    const s = value.trim().toLowerCase()
-    if (s === 'true' || s === '1') return true
-    if (s === 'false' || s === '0' || s === '') return false
-  }
-  if (value === null || value === undefined) return fallback
-  return Boolean(value)
 }
 
 /** 可空布尔：null/undefined → null（跟随全局）。 */

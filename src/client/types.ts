@@ -14,6 +14,12 @@ export type { CharacterDetail, CharacterInspect, PresetSummary } from '../remote
 
 export type Envelope<T> = { ok: true; value: T } | { ok: false; error: { code: string; message: string } }
 
+/** 拆开 remote 信封：失败时抛出携带原 error.message 的 Error，成功返回业务值。 */
+export function unwrap<T>(result: Envelope<T>): T {
+  if (!result.ok) throw new Error(result.error.message)
+  return result.value
+}
+
 /** 设置命名空间 dsh-tavern 的原始（schemastery 解析后）形状；单一来源是 host 侧 TavernConfigRaw；maxTokens 为数字，0 = 不限。 */
 export type TavernSettings = TavernMethodResults['getSettings']['settings']
 export type CharacterDeletePlan = TavernMethodResults['getCharacterDeletePlan']

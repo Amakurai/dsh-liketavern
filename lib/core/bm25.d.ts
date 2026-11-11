@@ -72,12 +72,13 @@ export declare class Bm25Index<D = unknown> {
     private readonly leaders;
     private totalLength;
     /**
-     * search 复用的按槽位寻址的缓冲。每次查询结束只把用过的槽位清零，
-     * 稀疏查询不必为全库分配并清零一遍。search 是同步的，不会重入。
+     * search / similarity 复用的按槽位寻址缓冲。每次查询结束只把用过的槽位清零，
+     * 稀疏查询不必为全库分配并清零一遍。两者均为同步方法，不会重入。
      */
     private scores;
     private norms;
     private seen;
+    private ensureScratch;
     constructor(options?: {
         k1?: number;
         b?: number;

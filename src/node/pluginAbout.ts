@@ -4,6 +4,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { ProfileContext } from '@deepseek-ai/dsh-app-boot'
 import { hostVersionSatisfies, manifestHostRange } from '../core/hostVersion.js'
+import { isRecord } from '../core/guards.js'
 
 export interface PluginAbout {
   version: string
@@ -60,7 +61,6 @@ const PUBLIC_NETWORK_ERRORS = new Set([NETWORK_ERROR, TIMEOUT_ERROR, INVALID_REL
 const VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/
 interface SemVer { value: string; core: string[]; prerelease: string[] }
 
-function object(value: unknown): value is Record<string, unknown> { return value !== null && typeof value === 'object' && !Array.isArray(value) }
 function semver(value: unknown, message: string): SemVer {
   if (typeof value !== 'string' || value.length > 256) throw new Error(message)
   const match = VERSION.exec(value)
@@ -87,11 +87,11 @@ function compare(left: SemVer, right: SemVer): number {
   return 0
 }
 function packageVersions(value: unknown, error: string): { version: SemVer; host: string; baseline: string } {
-  if (!object(value) || value.name !== 'dsh-liketavern') throw new Error(error)
+  if (!isRecord(value) || value.name !== 'dsh-liketavern') throw new Error(error)
   const host = manifestHostRange(value)
   if (host === 'unknown') throw new Error(error)
   let baseline = 'unknown'
-  if (object(value.devDependencies)) {
+  if (isRecord(value.devDependencies)) {
     try { baseline = semver(value.devDependencies['@deepseek-ai/dsh'], error).value } catch { /* 历史包未声明开发基线仍可检查。 */ }
   }
   return { version: semver(value.version, error), host, baseline }
@@ -133,7 +133,7 @@ async function readHostInstallationMetadata(installAnchor: string): Promise<unkn
   try {
     if (!isAbsolute(installAnchor)) return null
     const manifest = await localJson(await realpath(installAnchor))
-    if (!object(manifest) || manifest.name !== '@deepseek-ai/dsh') return null
+    if (!isRecord(manifest) || manifest.name !== '@deepseek-ai/dsh') return null
     semver(manifest.version, METADATA_ERROR)
     return manifest
   } catch { return null }
@@ -155,7 +155,7 @@ export async function readHostEntryMetadata(entry: string | undefined): Promise<
         continue
       }
       // 最近的包拥有入口；不穿过自定义 launcher 的 package.json 再猜它可能加载了哪个宿主。
-      if (!object(manifest) || manifest.name !== '@deepseek-ai/dsh' || !object(manifest.bin)
+      if (!isRecord(manifest) || manifest.name !== '@deepseek-ai/dsh' || !isRecord(manifest.bin)
         || typeof manifest.bin.dsh !== 'string' || !manifest.bin.dsh || isAbsolute(manifest.bin.dsh)) return null
       const declared = resolve(directory, manifest.bin.dsh), child = relative(directory, declared)
       if (!child || child === '..' || child.startsWith(`..${sep}`) || isAbsolute(child)) return null
@@ -209,7 +209,7 @@ export function createPluginAboutReader(options: PluginAboutReaderOptions = {}):
   const getPluginAbout = async (): Promise<PluginAbout> => {
     try {
       const raw = await metadata(), current = packageVersions(raw.plugin, METADATA_ERROR)
-      if ((raw.host !== null && (!object(raw.host) || raw.host.name !== '@deepseek-ai/dsh')) || typeof raw.sourceCheckout !== 'boolean') throw new Error(METADATA_ERROR)
+      if ((raw.host !== null && (!isRecord(raw.host) || raw.host.name !== '@deepseek-ai/dsh')) || typeof raw.sourceCheckout !== 'boolean') throw new Error(METADATA_ERROR)
       const hostVersion = raw.host === null ? 'unknown' : semver((raw.host as Record<string, unknown>).version, METADATA_ERROR).value
       return { version: current.version.value, hostVersion,
         expectedHostVersion: current.host, repositoryUrl: REPOSITORY, releasesUrl: `${REPOSITORY}/releases`, sourceCheckout: raw.sourceCheckout,
@@ -237,7 +237,7 @@ export function createPluginAboutReader(options: PluginAboutReaderOptions = {}):
     }
     const operation = async (): Promise<PluginUpdate> => {
       const release = await request(RELEASE_API)
-      if (!object(release) || release.draft !== false || release.prerelease !== false || typeof release.tag_name !== 'string') throw new Error(INVALID_RELEASE_ERROR)
+      if (!isRecord(release) || release.draft !== false || release.prerelease !== false || typeof release.tag_name !== 'string') throw new Error(INVALID_RELEASE_ERROR)
       const tag = release.tag_name, latest = semver(tag.startsWith('v') ? tag.slice(1) : tag, INVALID_RELEASE_ERROR)
       if (latest.prerelease.length) throw new Error(INVALID_RELEASE_ERROR)
       const target = packageVersions(await request(`${RAW_PACKAGE_ROOT}${encodeURIComponent(tag)}/package.json`), INVALID_RELEASE_ERROR)
@@ -261,4 +261,3 @@ export function createPluginAboutReader(options: PluginAboutReaderOptions = {}):
 
 const installedReader = createPluginAboutReader()
 export const getPluginAbout = (): Promise<PluginAbout> => installedReader.getPluginAbout()
-export const checkPluginUpdate = (): Promise<PluginUpdate> => installedReader.checkPluginUpdate()

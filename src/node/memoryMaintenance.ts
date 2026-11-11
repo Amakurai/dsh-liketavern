@@ -85,7 +85,7 @@ export async function compressOldestMemories(
  * 请模型为一批记忆写检索别名；返回与输入等长的数组（没有对应行的位置为 null）。
  * 只接受正常 stop 终止帧：超时、截断、取消、出错都返回 null，调用方不保存任何东西。
  */
-export async function requestMemoryAliases(
+async function requestMemoryAliases(
   llm: LlmRuntime,
   provider: string,
   model: string,
@@ -112,7 +112,7 @@ export async function requestMemoryAliases(
  * 无模型、取消或请求失败返回 null（什么都不保存，以后重试）；成功返回保存的条数与其中拿到别名的条数。
  * 正常结束的回复里没有对应行的记忆记为空列表：不为同一段正文反复请求。
  */
-export async function expandMemoryAliases(
+async function expandMemoryAliases(
   state: TavernState,
   llm: LlmRuntime | undefined,
   cardId: string,
@@ -156,6 +156,8 @@ export function noteAttemptedMarker(attempted: Map<string, string>, key: string,
  */
 export function registerMemoryMaintenance(ctx: Context, state: TavernState, llm: LlmRuntime | undefined): void {
   const attempted = new Map<string, string>()
+  const lastWalPrunedAt = new Map<string, number>()
+  const WAL_PRUNE_INTERVAL_MS = 60 * 60 * 1000
   // 进行中的别名补全。宿主在维护结束前把新输入留在收件箱，别名只是检索增强，用户接话时让路；
   // 压缩不让路：它是容量保护，频繁接话也必须能推进。
   const yieldingAliases = new Map<string, AbortController>()
@@ -170,7 +172,19 @@ export function registerMemoryMaintenance(ctx: Context, state: TavernState, llm:
       const binding = await state.loadStoryBinding(agent.id)
       if (!binding) return
       const key = binding.storyId ?? binding.cardId
-      const memory = (await state.storyWorkspace(binding.cardId, binding.storyId)).memory
+      const ws = await state.storyWorkspace(binding.cardId, binding.storyId)
+      const now = Date.now()
+      if ((lastWalPrunedAt.get(key) ?? 0) + WAL_PRUNE_INTERVAL_MS <= now && !state.openFloors.has(agent.id)) {
+        if (lastWalPrunedAt.size >= ATTEMPTED_KEYS_MAX && !lastWalPrunedAt.has(key)) {
+          const oldest = lastWalPrunedAt.keys().next().value
+          if (oldest !== undefined) lastWalPrunedAt.delete(oldest)
+        }
+        lastWalPrunedAt.set(key, now)
+        await withWorkspaceLock(ws.fs.root, async () => {
+          if (!state.openFloors.has(agent.id)) await ws.wal.prune({ keepRolledBackDays: 7 })
+        }).catch(() => {})
+      }
+      const memory = ws.memory
       // pending 是可重建状态：重启后也能从实际容量找回尚未完成的压缩。
       if (!state.pendingMemoryCompress.has(key)) {
         const stats = await memory.stats()

@@ -1,4 +1,5 @@
 /** 共享脚本库编辑器：草稿、导入导出、文件夹及持久开关；保存走资产修订校验，运行变量不写回共享资产。 */
+import { describeError } from '../core/guards.js'
 import { useEffect, useId, useRef, useState } from 'react'
 import { notifyHelperScriptAssets } from './helperScriptNotifications.js'
 import { parseHelperScriptTrees,importHelperScriptFile,exportHelperScriptTrees,type HelperScript,type HelperScriptLibrary,type HelperScriptTree,type HelperScriptAsset,type HelperScriptTarget } from '../core/helperScripts.js'
@@ -89,7 +90,7 @@ export function HelperScriptEditorBody(props:ScriptEditorProps) {
       setTrees(result.value.trees);setRevision(result.value.revision);setBaseline(JSON.stringify(result.value.trees));setDataTexts({})
       notifyHelperScriptAssets(target)
       guard.clearDraft();toast.show(t('speech.scriptSaved'));props.onSaved()
-    } catch(error){setError(error instanceof Error?error.message:String(error))}finally{saving.current=false;setBusy(false)}
+    } catch(error){setError(describeError(error))}finally{saving.current=false;setBusy(false)}
   }
   const reload=()=>{if(saving.current)return;guard.request(()=>{if(saving.current)return;saving.current=true;setBusy(true);setError(null);void (target.type==='character'?props.remote.getCharacterHelperScripts({cardId:target.cardId}):props.remote.getHelperScriptLibrary({target})).then(result=>{
     if(!result.ok)throw new Error(result.error.message)
@@ -102,7 +103,7 @@ export function HelperScriptEditorBody(props:ScriptEditorProps) {
       const input:unknown=JSON.parse(await file.text())
       const parsed=importHelperScriptFile(input)
       guard.request(()=>{setTrees(parsed);setDataTexts({});setQuery('');setSelected(parsed[0]?.id??null)})
-    }catch(error){setError(error instanceof Error?error.message:String(error))}finally{saving.current=false;setBusy(false)}
+    }catch(error){setError(describeError(error))}finally{saving.current=false;setBusy(false)}
   }
   return <>
     {guard.confirmation}{toast.node}
@@ -149,7 +150,7 @@ export function HelperScriptEditorBody(props:ScriptEditorProps) {
             <details><summary>{t('speech.scriptInfo')}</summary><SettingsRow stacked title={t('speech.scriptInfo')}><textarea className="dsh-tavern-input" aria-label={t('speech.scriptInfo')} value={current.info} disabled={busy} onChange={event=>update(current.id,item=>({...item,info:event.target.value}))}/></SettingsRow></details>
             </div><div hidden={section!=='data'}>
             <SettingsRow stacked title={t('speech.scriptData')}><textarea className="dsh-tavern-input" aria-label={t('speech.scriptData')} value={dataTexts[current.id]??JSON.stringify(current.data,null,2)} disabled={busy} spellCheck={false} onChange={event=>setDataTexts(values=>({...values,[current.id]:event.target.value}))}/></SettingsRow>
-            <Btn disabled={busy} onClick={()=>{try{const data=scriptData(current).data;setDataTexts(values=>({...values,[current.id]:JSON.stringify(data,null,2)}));setError(null)}catch(error){setError(error instanceof Error?error.message:String(error))}}}>{t('speech.scriptFormatData')}</Btn>
+            <Btn disabled={busy} onClick={()=>{try{const data=scriptData(current).data;setDataTexts(values=>({...values,[current.id]:JSON.stringify(data,null,2)}));setError(null)}catch(error){setError(describeError(error))}}}>{t('speech.scriptFormatData')}</Btn>
             <SettingsRow title={t('speech.scriptExportData')}><Toggle title={t('speech.scriptExportData')} checked={current.export_with.data} disabled={busy} onChange={data=>update(current.id,item=>item.type==='script'?{...item,export_with:{...item.export_with,data}}:item)}/></SettingsRow>
 
             </div><div hidden={section!=='buttons'}>

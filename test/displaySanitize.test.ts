@@ -348,4 +348,13 @@ describe('审查修复回归：交互卡回退', () => {
     const fenceBlockAfterStray = '<think>\n```\n未闭合围栏\n</think>\n正文\n```\n<UpdateVariable>代码示例</UpdateVariable>\n```\n<UpdateVariable>真实补丁</UpdateVariable>'
     expect(stripDisplayMeta(fenceBlockAfterStray)).toBe('正文\n```\n<UpdateVariable>代码示例</UpdateVariable>\n```')
   })
+
+  it('无标签纯 Markdown 与流式输出快速路径保持排版与闭合/未闭合协议清理一致', () => {
+    expect(stripDisplayMeta('第一段  \n\n\n第二段 `inline code` 尾')).toBe('第一段\n\n第二段 `inline code` 尾')
+    expect(presentStreamingOutput('正在输出普通 Markdown `code` 片段', true)).toEqual({
+      text: '正在输出普通 Markdown `code` 片段',
+      pendingHtml: false,
+    })
+    expect(stripDisplayMeta('前文<initvar/>中<Analysis>一</Analysis>后<JSONPatch>未闭合')).toBe('前文中后')
+  })
 })

@@ -1,3 +1,5 @@
+/** 识别没有文档外壳的卡面片段：闭合容器与相邻样式/脚本共用沙箱，保留原字节并跳过代码示例。 */
+import { markdownCodeScanner } from './markdownCode.js';
 export declare const HTML_CARD_CONTAINERS: ReadonlySet<string>;
 /**
  * code/pre 只是代码示例的启发式边界，浏览器里仍是普通元素：正文提到未闭合的 `<code>`
@@ -11,13 +13,13 @@ export declare const LENIENT_OPAQUE: Set<string>;
  */
 export declare function findHtmlOpaqueEnd(text: string, contentStart: number, tag: string): number | null;
 /** 完整文档也按标签扫描；注释、代码示例与 script/style 字符串不参与文档边界判断。 */
-export declare function findHtmlDocument(text: string): {
+export declare function findHtmlDocument(text: string, code?: ReturnType<typeof markdownCodeScanner>): {
     start: number;
     end: number;
 } | null;
 /** 是否包含真实完整文档边界；扫描会跳过注释、Markdown 代码及 script/style 字符串。 */
 export declare function isFullHtmlDocument(text: string): boolean;
-export declare function findHtmlFragment(text: string): {
+export declare function findHtmlFragment(text: string, code?: ReturnType<typeof markdownCodeScanner>): {
     start: number;
     end: number;
 } | null;

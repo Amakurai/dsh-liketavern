@@ -1,7 +1,6 @@
 import type { PresetSamplingSettings, SamplingSettings } from './types.js';
 export declare const MAX_PRESET_STOP_SEQUENCES = 16;
 export declare const MAX_PRESET_STOP_CHARS = 1024;
-export declare const MAX_PRESET_OUTPUT_TOKENS = 2000000;
 /** 导入、存储、导出共用严格校验；不靠 TypeScript 类型信任外部 JSON。 */
 export declare function parsePresetSampling(value: unknown): PresetSamplingSettings;
 /** 顶层 stop 是兼容扩展；也接收随文件附带的 ST custom_stopping_strings JSON 数组字符串。 */

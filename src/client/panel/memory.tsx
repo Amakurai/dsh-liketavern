@@ -10,29 +10,22 @@ import { IconEditOutlineMedium, IconTrashOutlineMedium } from '@deepseek-ai/dsh-
 import type { MemoryEntry, WorldDelta } from '../../core/types.js'
 import { useT } from '../i18n.js'
 import type { TavernRemote } from '../types.js'
-import { Badge, Btn, ConfirmDialog, Err, IconBtn, Muted, Section, Select, SettingsRow, Skeleton, downloadJson, errOf, runAsync, useLoader, useToast } from '../util.js'
+import { Badge, Btn, ConfirmDialog, Err, IconBtn, Muted, Section, Select, SettingsRow, Skeleton, downloadJson, errOf, joinListText, runAsync, splitListText, useLoader, useToast } from '../util.js'
 
 /** 变化层类型徽标/选项对应的 i18n 键；渲染处经 t() 取文案。 */
 const DELTA_TYPE_KEY: Record<WorldDelta['type'], string> = { add: 'memory.deltaType.add', update: 'memory.deltaType.update', invalidate: 'memory.deltaType.invalidate' }
-
-function splitList(text: string): string[] {
-  return text
-    .split(/[，,\n]/)
-    .map((s) => s.trim())
-    .filter(Boolean)
-}
 
 function MemoryEditor(props: { remote: TavernRemote; cardId: string; storyId?: string; entry: MemoryEntry; onDone: () => void }) {
   const { entry } = props
   const t = useT()
   const draftKey = `memory:entry:${JSON.stringify([props.cardId, props.storyId ?? null, entry.id])}`
   const [body, setBody] = useDraftState(`${draftKey}:body`, entry.body)
-  const [tags, setTags] = useDraftState(`${draftKey}:tags`, entry.tags.join(', '))
-  const [keys, setKeys] = useDraftState(`${draftKey}:keys`, entry.keys.join(', '))
+  const [tags, setTags] = useDraftState(`${draftKey}:tags`, joinListText(entry.tags))
+  const [keys, setKeys] = useDraftState(`${draftKey}:keys`, joinListText(entry.keys))
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const saving = useRef(false)
-  const guard = useDraftGuard(body !== entry.body || tags !== entry.tags.join(', ') || keys !== entry.keys.join(', '), busy)
+  const guard = useDraftGuard(body !== entry.body || tags !== joinListText(entry.tags) || keys !== joinListText(entry.keys), busy)
   const save = async () => {
     if (saving.current || !body.trim()) return
     saving.current = true
@@ -42,14 +35,14 @@ function MemoryEditor(props: { remote: TavernRemote; cardId: string; storyId?: s
         storyId: props.storyId,
         id: entry.id,
         body,
-        tags: splitList(tags),
-        keys: splitList(keys),
+        tags: splitListText(tags),
+        keys: splitListText(keys),
       })
       const err = errOf(r)
       if (err) setError(err)
       else {
-        setTags(splitList(tags).join(', '))
-        setKeys(splitList(keys).join(', '))
+        setTags(joinListText(splitListText(tags)))
+        setKeys(joinListText(splitListText(keys)))
         guard.clearDraft()
         props.onDone()
       }
@@ -57,8 +50,8 @@ function MemoryEditor(props: { remote: TavernRemote; cardId: string; storyId?: s
   }
   const cancel = () => { if (saving.current) return; guard.request(() => {
     setBody(entry.body)
-    setTags(entry.tags.join(', '))
-    setKeys(entry.keys.join(', '))
+    setTags(joinListText(entry.tags))
+    setKeys(joinListText(entry.keys))
     props.onDone()
   }) }
   return (
@@ -253,7 +246,7 @@ function MemoryContextSection(props: { remote: TavernRemote; cardId: string; sto
         type: deltaType,
         content: deltaContent.trim(),
         ref: deltaRef.trim() || null,
-        keys: splitList(deltaKeys),
+        keys: splitListText(deltaKeys),
       })
       const err = errOf(r)
       if (err) setError(err)

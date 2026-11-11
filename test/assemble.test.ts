@@ -1451,4 +1451,30 @@ describe('EM 条目丢弃告警的 position 口径', () => {
     expect(seen[0]).not.toBe(seen[1])
     expect(`${mixedRes.standing}\n${mixedRes.turnContext}`).toContain('RENDER-1')
   })
+
+  it('多级预算裁剪期间每条组装消息的 token 估算最多执行一次', () => {
+    let estimateCalls = 0
+    const res = assemblePrompt(makeInput({
+      memories: ['记忆一'],
+      worldDeltas: [
+        { id: 'd1', ts: '', type: 'add', ref: null, content: '世界变化一', keys: [], order: 1, sourceRange: '', expires: null },
+      ],
+      wi: wiOf({
+        [WIPosition.BeforeCharDefs]: [act(makeWiEntry({ key: 'w1', content: '世界书一', constant: false }))],
+      }),
+      history: [
+        { role: 'user', content: '第一轮提问' },
+        { role: 'assistant', content: '第一轮回答' },
+        { role: 'user', content: '最新提问' },
+      ],
+      budget: { maxTokens: 30, reserveForOutput: 10 },
+      estimateTokens: (text) => {
+        estimateCalls++
+        return text.length
+      },
+    }))
+    expect(res.stats.tokensAfter).toBeLessThanOrEqual(20)
+    // 总消息数约 10 条；缓存后不应在 6 轮裁剪中重复估算数十次
+    expect(estimateCalls).toBeLessThanOrEqual(15)
+  })
 })

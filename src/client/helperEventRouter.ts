@@ -1,4 +1,5 @@
 /** 同页面剧情事件路由：固定会话/剧情分组，串行调用监听并回传 JSON 修改；第三方函数始终留在各自 iframe。 */
+import { describeError } from '../core/guards.js'
 import { helperJson,helperRecord } from '../core/helperRuntime.js'
 import type {HelperSnapshot} from '../core/helperRuntime.js'
 import { randomUuid } from '../core/secureRandom.js'
@@ -105,7 +106,7 @@ class Endpoint {
         }).catch(()=>{}).finally(()=>{this.inflight--;this.group.inflight--})
       }
     } catch(error) {
-      this.post({action:'helperEventResult',requestId:value.requestId,ok:false,error:error instanceof Error?error.message:String(error),args:[]})
+      this.post({action:'helperEventResult',requestId:value.requestId,ok:false,error:describeError(error),args:[]})
     }
   }
   async emit(requestId:string,event:string,data:unknown[],excludeSelf:boolean):Promise<Message> {
@@ -128,7 +129,7 @@ class Endpoint {
       }
       if(!current())throw new Error('事件发送卡面或 MVU 任务已改变')
       return {action:'helperEventResult',requestId,ok:true,args:data}
-    } catch(error) {return {action:'helperEventResult',requestId,ok:false,error:error instanceof Error?error.message:String(error),args:data}}
+    } catch(error) {return {action:'helperEventResult',requestId,ok:false,error:describeError(error),args:data}}
   }
 }
 /** 预览帧不支持的事件操作：必须回明确失败，不能静默丢弃让卡面 Promise 永久 pending。 */

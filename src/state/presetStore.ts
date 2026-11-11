@@ -23,6 +23,8 @@ import { pickRegexScripts } from './card.js'
 import { characterHelperSettings,helperScriptSettings } from '../core/helperScripts.js'
 import { importStPresetSampling, parsePresetSampling } from '../core/presetSampling.js'
 import { isStSystemPrompt } from '../core/presetExport.js'
+import { isRecord } from '../core/guards.js'
+import { toBool, toNum, toStr } from './coerce.js'
 export { exportStPreset } from '../core/presetExport.js'
 
 /** 格式模板只接收有界文本字段；字符串按原样保存，空串表示明确禁用包装。 */
@@ -107,25 +109,6 @@ interface OrderItem {
   enabled: boolean
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-function toStr(value: unknown): string {
-  if (typeof value === 'string') return value
-  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
-  return ''
-}
-
-function toNum(value: unknown, fallback: number): number {
-  if (typeof value === 'number' && Number.isFinite(value)) return value
-  if (typeof value === 'string' && value.trim() !== '') {
-    const n = Number(value)
-    if (Number.isFinite(n)) return n
-  }
-  return fallback
-}
-
 /** 深度必须能映射到完整聊天边界；导入和保存都提前拒绝，避免到请求布局持久化时才失败。 */
 function validateInChatDepth(entry: Pick<PresetEntry, 'identifier' | 'position' | 'depth'>): void {
   if (entry.position === 'in-chat' && (!Number.isSafeInteger(entry.depth) || entry.depth < 0)) {
@@ -133,22 +116,9 @@ function validateInChatDepth(entry: Pick<PresetEntry, 'identifier' | 'position' 
   }
 }
 
-function toBool(value: unknown, fallback: boolean): boolean {
-  if (typeof value === 'boolean') return value
-  if (typeof value === 'number') return value !== 0
-  if (typeof value === 'string') {
-    const s = value.trim().toLowerCase()
-    if (s === 'true' || s === '1') return true
-    if (s === 'false' || s === '0' || s === '') return false
-  }
-  if (value === null || value === undefined) return fallback
-  return Boolean(value)
-}
-
 /** role 以条目自身 role 为准；缺省时 system_prompt=true 才回落 system。 */
 function toRole(raw: Record<string, unknown>): ChatRole {
   if (raw.role === 'user' || raw.role === 'assistant' || raw.role === 'system') return raw.role
-  if (toBool(raw.system_prompt, false)) return 'system'
   return 'system'
 }
 

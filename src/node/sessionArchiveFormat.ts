@@ -8,6 +8,7 @@ import { parseSessionBinding, type SessionBinding } from './bindings.js'
 import { safeRelative } from './backupFiles.js'
 import { isStoryPath } from '../state/story.js'
 import { sessionAttachmentReferences } from './sessionArchiveAttachments.js'
+import { isRecord } from '../core/guards.js'
 
 export const SESSION_ARCHIVE_MAX_BYTES = 128 * 1024 * 1024
 export const SESSION_ARCHIVE_MAX_JSON_BYTES = 192 * 1024 * 1024
@@ -25,7 +26,6 @@ export interface SessionArchive {
   manifestSha256: string
 }
 
-function record(value: unknown): value is Record<string, unknown> { return typeof value === 'object' && value !== null && !Array.isArray(value) }
 function invalid(): never { throw new Error('会话迁移文件无效或已损坏') }
 
 /** 所有路径均相对格式内的固定作用域；大小写折叠避免跨平台别名。 */
@@ -46,7 +46,7 @@ export function archiveFile(area: SessionArchiveArea, path: string, bytes: Uint8
 
 /** 先完成整份校验，再交给调用方准备导入；摘要用于检测损坏，不是存档认证。 */
 function normalizeSessionArchive(input: unknown, seal: boolean): SessionArchive {
-  if (!record(input) || input.format !== 'dsh-tavern-session' || input.version !== 1 || !record(input.session)
+  if (!isRecord(input) || input.format !== 'dsh-tavern-session' || input.version !== 1 || !isRecord(input.session)
     || !Array.isArray(input.files) || input.files.length > SESSION_ARCHIVE_MAX_FILES || !Array.isArray(input.attachments)
     || input.attachments.length > SESSION_ARCHIVE_MAX_FILES) invalid()
   let binding: SessionBinding
@@ -80,7 +80,7 @@ function normalizeSessionArchive(input: unknown, seal: boolean): SessionArchive 
   const paths = new Set<string>()
   let total = Buffer.byteLength(JSON.stringify({ binding, session: { header, inheritedEventCount: inherited, events } }))
   for (const entry of input.files) {
-    if (!record(entry) || (entry.area !== 'card' && entry.area !== 'story' && entry.area !== 'global')
+    if (!isRecord(entry) || (entry.area !== 'card' && entry.area !== 'story' && entry.area !== 'global')
       || typeof entry.path !== 'string' || !validArchiveFilePath(entry.area, entry.path)
       || typeof entry.data !== 'string' || typeof entry.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(entry.sha256)
       || !Number.isSafeInteger(entry.size) || (entry.size as number) < 0 || (entry.size as number) > SESSION_ARCHIVE_MAX_BYTES) invalid()
@@ -99,7 +99,7 @@ function normalizeSessionArchive(input: unknown, seal: boolean): SessionArchive 
   const attachments: SessionArchiveAttachment[] = []
   const seenAttachments = new Set<string>()
   for (const item of input.attachments) {
-    if (!record(item) || (item.kind !== 'image' && item.kind !== 'file') || !record(item.ref)
+    if (!isRecord(item) || (item.kind !== 'image' && item.kind !== 'file') || !isRecord(item.ref)
       || typeof item.ref.attachmentId !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(item.ref.attachmentId)
       || !Number.isSafeInteger(item.ref.bytes) || (item.ref.bytes as number) < 0
       || typeof item.data !== 'string') invalid()
@@ -129,7 +129,7 @@ function normalizeSessionArchive(input: unknown, seal: boolean): SessionArchive 
   if (!files.some(file => file.area === 'card' && file.path === 'card.json') || !storyMeta) invalid()
   try {
     const meta: unknown = JSON.parse(Buffer.from(storyMeta.data, 'base64').toString('utf8'))
-    if (!record(meta) || meta.version !== 1 || meta.id !== binding.storyId || meta.sessionId !== binding.sessionId
+    if (!isRecord(meta) || meta.version !== 1 || meta.id !== binding.storyId || meta.sessionId !== binding.sessionId
       || typeof meta.createdAt !== 'string' || typeof meta.migrated !== 'boolean') invalid()
   } catch { invalid() }
   const body = { format: 'dsh-tavern-session' as const, version: 1 as const, binding,

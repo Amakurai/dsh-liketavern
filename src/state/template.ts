@@ -12,7 +12,7 @@ import { parseTemplateDisplayParts, TEMPLATE_DISPLAY_PARTS_VERSION, type Templat
 import { parseTemplateContinuation,resolveTemplateContinuation } from './templateContinuation.js'
 import { parseTemplateMessageVariables, type TemplateMessageVariables } from '../core/templateMessageVariables.js'
 import type { TemplateContinuation } from '../core/templateContinuation.js'
-import { adoptTemplateDocument, loadTemplateDocument, loadTemplateDocumentPaths, prepareTemplateDocument, readTemplateDocumentPaths, readTemplateDocumentText, writeTemplateBlocks, TEMPLATE_DATA_PATH, TEMPLATE_DOCUMENT_LIMIT, TEMPLATE_INLINE_LIMIT } from './templateStorage.js'
+import { adoptTemplateDocument, evictTemplateStoryCache, exceedsJsonBytes, loadTemplateDocument, loadTemplateDocumentPaths, prepareTemplateDocument, readTemplateDocumentPaths, readTemplateDocumentText, writeTemplateBlocks, TEMPLATE_DATA_PATH, TEMPLATE_DOCUMENT_LIMIT, TEMPLATE_INLINE_LIMIT } from './templateStorage.js'
 import { ledgerKey, openLedger, writtenSince } from './writeLedger.js'
 
 export const TEMPLATE_STATE_PATH = 'state/template.json'
@@ -87,6 +87,14 @@ function knownGenerationBody(fs:WorkspaceFs,path:string):GenerationBody|undefine
   const body=generationBodies.get(bodyKey(fs.root)),ledger=openLedger(fs.root)
   // 工作区内改写或删除过这份正文就重新读盘核对。
   return body && body.path===path && body.epoch===ledger.epoch && !writtenSince(ledger,path,body.revision) ? body : undefined
+}
+
+/** 清理临时草稿或已删除剧情的模板内存缓存，避免挤占活跃剧情槽位。 */
+export function evictTemplateCaches(root:string):void {
+  const key=bodyKey(root)
+  generationBodies.delete(key)
+  generationReferences.delete(key)
+  evictTemplateStoryCache(root)
 }
 
 async function readGenerationBody(fs:WorkspaceFs,detached:DetachedTemplateGeneration):Promise<PreparedTemplateGeneration> {
@@ -257,7 +265,7 @@ async function writeTemplateState(fs: WorkspaceFs, state: TemplateState): Promis
   // 小状态整份内联，与旧格式一致；大型状态的 prepared 正文不进入分块历史。
   let stored:Omit<TemplateState,'generation'>&{generation?:TemplateGeneration|DetachedTemplateGeneration}=state
   let detached:{generation:DetachedTemplateGeneration;text:string}|undefined
-  if(state.generation?.status==='prepared' && Buffer.byteLength(JSON.stringify(state))>TEMPLATE_INLINE_LIMIT) {
+  if(state.generation?.status==='prepared' && exceedsJsonBytes(state,TEMPLATE_INLINE_LIMIT)) {
     const parts=detachTemplateGeneration(state.generation),text=JSON.stringify(parts.body),bytes=Buffer.byteLength(text)
     if(bytes>TEMPLATE_DOCUMENT_LIMIT) throw new Error('模板生成恢复数据超过 64 MiB 上限，原状态未替换；请压缩历史，或从较早楼层创建分支后继续')
     detached={generation:{...parts.identity,payload:{hash:templateTextHash(text),bytes}},text}
@@ -288,7 +296,7 @@ async function writeTemplateState(fs: WorkspaceFs, state: TemplateState): Promis
   // 根只在全部新块落盘后发布；读回即为 raw 说明这些块都已在磁盘。解析结果与之后从磁盘读取所得相同；
   // 状态此时已经提交，解析不出来就留给下次读取从磁盘报告，不能把已提交的保存改报失败。
   let parsed:StoredTemplateState|undefined
-  if(document.blocks.size) try {parsed=parseStoredTemplateState(JSON.parse(document.json))} catch {parsed=undefined}
+  if(document.blocks.size) try {parsed=parseStoredTemplateState(document.value)} catch {parsed=undefined}
   adoptTemplateDocument(fs,TEMPLATE_STATE_PATH,document,parsed)
   const ledger=openLedger(fs.root)
   // 锁内本次写入只发布已验证的不可变块与新根，既有根的正文引用结论仍然成立。

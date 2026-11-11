@@ -33,6 +33,46 @@ export function createHelperMvuCommandCodec(json: (value: unknown, maxBytes?: nu
     if (Array.isArray(value)) for (const item of value) checkMetadata(item, depth + 1)
     else if (record(value)) for (const key of Object.keys(value)) { checkKey(key); checkMetadata(value[key], depth + 1) }
   }
+  const strJsonBytes = (s: string): number => {
+    let bytes = 2
+    for (let i = 0; i < s.length; i++) {
+      const code = s.charCodeAt(i)
+      if (code === 0x22 || code === 0x5c || code === 0x08 || code === 0x09 || code === 0x0a || code === 0x0c || code === 0x0d) bytes += 2
+      else if (code < 0x20) bytes += 6
+      else if (code < 0x80) bytes += 1
+      else if (code < 0x800) bytes += 2
+      else if (code >= 0xd800 && code <= 0xdbff) {
+        const next = i + 1 < s.length ? s.charCodeAt(i + 1) : 0
+        if (next >= 0xdc00 && next <= 0xdfff) { bytes += 4; i++ }
+        else bytes += 6
+      } else if (code >= 0xdc00 && code <= 0xdfff) bytes += 6
+      else bytes += 3
+    }
+    return bytes
+  }
+  const assertOutputBudget = (value: unknown, maxBytes: number): void => {
+    let bytes = 0
+    const walk = (item: unknown, depth: number): void => {
+      if (depth > DEPTH) throw new Error('酒馆助手数据嵌套超过 64 层')
+      if (item === null || typeof item === 'boolean') bytes += 5
+      else if (typeof item === 'string') bytes += strJsonBytes(item)
+      else if (typeof item === 'number' && Number.isFinite(item)) bytes += String(item).length
+      else if (Array.isArray(item)) {
+        bytes += 2
+        for (let i = 0; i < item.length; i++) { bytes++; walk(item[i], depth + 1) }
+      } else if (record(item)) {
+        bytes += 2
+        const keys = Object.keys(item)
+        for (let i = 0; i < keys.length; i++) {
+          const key = keys[i]!
+          bytes += strJsonBytes(key) + 2
+          walk(item[key], depth + 1)
+        }
+      } else throw new Error('酒馆助手只接受普通 JSON 数据')
+      if (bytes > maxBytes) throw new Error('酒馆助手数据超过预算')
+    }
+    walk(value, 0)
+  }
   const copy = (value: unknown) => { const result = json(value, OUTPUT); checkMetadata(result); return result }
   const table = (value: unknown): Table => {
     const result = copy(value)
@@ -480,8 +520,8 @@ export function createHelperMvuCommandCodec(json: (value: unknown, maxBytes?: nu
       }
       checkMetadata(stat)
       logAt(display, logPath, log); logAt(delta, logPath, log)
-      // 每一步都执行总输出预算，防止中间 insert/copy 膨胀后再删除掩盖超量。
-      json({ stat_data: stat, display_data: display, delta_data: delta }, OUTPUT)
+      // 每一步都执行总输出预算，防止中间 insert/copy 膨胀后再删除掩盖超量（零分配计量，末尾统一深拷贝归一化）。
+      assertOutputBudget({ stat_data: stat, display_data: display, delta_data: delta }, OUTPUT)
     }
     return json({ stat_data: stat, display_data: display, delta_data: delta }, OUTPUT) as ReturnType<HelperMvuCommandCodec['apply']>
   }

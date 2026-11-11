@@ -1,9 +1,10 @@
 /** 回滚前展开受影响的归并谱系：摘要可重建，来源事实随原楼层撤销，旧格式同样适用。 */
 import { isMemoryId, memorySourceIds, parseMemory } from './memory.js'
+import { caseIdentity } from './pathIdentity.js'
 import { WorkspaceFs } from './workspaceFs.js'
 
 /** Windows 的同名文件不区分大小写；只规范图节点身份，旧来源正文与 WAL 镜像保持原样。 */
-function memoryIdentity(id: string): string { return process.platform === 'win32' ? id.toLowerCase() : id }
+const memoryIdentity = caseIdentity
 
 export async function expandAffectedMemories(root: string, paths: readonly string[]): Promise<void> {
   const changed = new Set(paths.flatMap((path) => {

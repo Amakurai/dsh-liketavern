@@ -16,7 +16,7 @@
 export const STANDING_PIN_VERSION = 28
 
 /** 场景值归一化：空/缺省视为 normal（与 assemble.ts 的 generationType 缺省一致）。 */
-export function normalizeGenerationType(generationType?: string): string {
+function normalizeGenerationType(generationType?: string): string {
   const value = (generationType ?? 'normal').trim().toLowerCase()
   return value || 'normal'
 }
@@ -55,25 +55,42 @@ export interface StandingPin {
   text: string
 }
 
-/** 键排序 JSON：同一份对象无论键序如何都得到同一字符串（指纹要稳定，不能跟着对象字面量顺序抖）。 */
-function stableStringify(value: unknown): string {
-  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null'
-  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`
-  const record = value as Record<string, unknown>
-  const parts = Object.keys(record)
-    .sort()
-    .map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`)
-  return `{${parts.join(',')}}`
-}
-
 /**
  * djb2（无符号 32 位）→ 8 位十六进制。用来把「会改变 standing 字节的设置项」压成一个短标记
- * 并入指纹，不作安全用途；纯函数、无 I/O，调用方自己挑要哪些键。
+ * 并入指纹，不作安全用途；按稳定键序直接流式哈希，避免大型角色卡/预设逐层拼接整份 JSON 字符串。
  */
 export function stableFingerprintHash(value: unknown): string {
-  const json = stableStringify(value)
   let hash = 5381
-  for (let i = 0; i < json.length; i++) hash = ((hash * 33) ^ json.charCodeAt(i)) >>> 0
+  const feed = (text: string): void => {
+    for (let i = 0; i < text.length; i++) hash = ((hash * 33) ^ text.charCodeAt(i)) >>> 0
+  }
+  const walk = (item: unknown): void => {
+    if (item === null || typeof item !== 'object') {
+      feed(JSON.stringify(item) ?? 'null')
+      return
+    }
+    if (Array.isArray(item)) {
+      feed('[')
+      for (let i = 0; i < item.length; i++) {
+        if (i > 0) feed(',')
+        walk(item[i])
+      }
+      feed(']')
+      return
+    }
+    const record = item as Record<string, unknown>
+    const keys = Object.keys(record).sort()
+    feed('{')
+    for (let i = 0; i < keys.length; i++) {
+      const key = keys[i]!
+      if (i > 0) feed(',')
+      feed(JSON.stringify(key))
+      feed(':')
+      walk(record[key])
+    }
+    feed('}')
+  }
+  walk(value)
   return hash.toString(16).padStart(8, '0')
 }
 

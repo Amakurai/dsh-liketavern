@@ -219,6 +219,12 @@ it('开场白为空、只有备选开场白的卡：进入会话写入第一条�
   expect(JSON.stringify(greetings[0])).toContain('备选一')
   const floor = await getGreetingSwipe({ ctx, state }, agent.id, greetings[0]!.id)
   expect(floor).toMatchObject({ isGreeting: true, swipe: { index: 0, total: 2 } })
+  const loadCharSpy = vi.spyOn(state, 'loadCharacter')
+  const nonGreeting = await getGreetingSwipe({ ctx, state }, agent.id, 'non-greeting-msg')
+  expect(nonGreeting).toEqual({ isGreeting: false, started: false, swipe: null })
+  // 仅 loadBinding 校验一次角色存在性，不额外走 greetingVariants 重读角色卡。
+  expect(loadCharSpy).toHaveBeenCalledTimes(1)
+  loadCharSpy.mockRestore()
   const get = ctx.get.bind(ctx)
   vi.spyOn(ctx, 'get').mockImplementation((key: string) =>
     key === 'agentPresets' ? { composedPreset: () => 'tavern', resolve: async () => ({ id: 'tavern' }), mount: vi.fn() } : get(key as never))

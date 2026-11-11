@@ -12,7 +12,6 @@ export declare class BackupError extends Error {
     constructor(code: string);
 }
 export declare function fail(code: string): never;
-export declare function errorCode(error: unknown): string | undefined;
 export declare function safeRelative(path: unknown): path is string;
 export declare function checkedPath(root: string, path: string): string;
 /** 包括传入根的祖先，避免中间的 junction 把显式目录解析到其它数据树。 */

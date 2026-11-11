@@ -2,8 +2,6 @@ import type { WISource, WorldInfoEntry } from './types.js';
 export declare const LORE_READ_DEFAULT_TOPK = 6;
 export declare const LORE_READ_MAX_TOPK = 20;
 export declare const LORE_READ_TOKEN_BUDGET = 2500;
-export declare const LORE_CATALOG_PREVIEW = 80;
-export declare const LORE_CATALOG_MAX = 400;
 export interface LoreCatalogItem {
     uid: string;
     key: string;

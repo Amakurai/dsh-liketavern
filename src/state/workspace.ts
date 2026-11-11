@@ -18,9 +18,11 @@ import { compileCardRegexScripts } from '../core/regex.js'
 import { estimateTokens } from '../core/tokenize.js'
 import type { CharacterCard } from '../core/types.js'
 import { cardToStJson, embedCardInPng, hydrateStoredCard, normalizeBook, serializeStoredCard, withoutEmbeddedCharacterBook } from './card.js'
+import { rootIdentity } from './pathIdentity.js'
 import { WorkspaceFs } from './workspaceFs.js'
 import { withWorkspaceLock } from './workspaceLock.js'
 import { renameWithRetry } from './rename.js'
+import { closeLedger, openLedger, writtenSince } from './writeLedger.js'
 
 export interface CharacterWorkspace {
   cardId: string
@@ -221,44 +223,150 @@ export async function readCharacterArchiveMetadata(dataRoot: string, cardId: str
   return { version: 1, archivedAt: record.archivedAt }
 }
 
-/** 单次读取列表摘要，供活动列表与收纳箱共用。 */
-async function characterSummary(dataRoot: string, cardId: string): Promise<CharacterSummary | null> {
-  const ws = await loadCharacter(dataRoot, cardId)
-  if (!ws) return null
-  const fs = new WorkspaceFs(ws.root, null)
-  const bookName = ws.card.characterBook?.name ?? null
-  const entryCount = Array.isArray(ws.card.characterBook?.entries) ? ws.card.characterBook!.entries.length : 0
-  const [hasAvatar, hasBookFile] = await Promise.all([
-    fs.exists('card.png'),
-    entryCount > 0 ? Promise.resolve(true) : fs.exists('assets/character-book.json'),
-  ])
-  return {
-    cardId,
-    name: ws.card.name,
-    // 旧版/手工维护的 card.json 不保证新摘要字段的形状；元数据异常不能让整张卡从列表消失。
-    creator: typeof ws.card.creator === 'string' ? ws.card.creator : '',
-    tags: Array.isArray(ws.card.tags) ? ws.card.tags.filter((tag): tag is string => typeof tag === 'string') : [],
-    hasAvatar,
-    hasCharacterBook: entryCount > 0 || hasBookFile,
-    characterBookName: bookName,
-    characterBookEntryCount: entryCount,
+type FileStat = { mtimeMs: number; size: number }
+function sameStat(a: FileStat | null, b: FileStat | null): boolean {
+  return a === null || b === null ? a === b : a.mtimeMs === b.mtimeMs && a.size === b.size
+}
+const cacheRootKey = rootIdentity
+const SUMMARY_CONCURRENCY = 16
+const MAX_SUMMARY_CACHE = 512
+interface CachedCharacterInspect {
+  epoch: number
+  revision: number
+  archiveStat: FileStat | null
+  cardStat: FileStat | null
+  avatarStat: FileStat | null
+  bookStat: FileStat | null
+  archiveState: 'none' | 'archived' | 'corrupt'
+  archivedAt?: string
+  summaryLoaded: boolean
+  summary: CharacterSummary | null
+}
+const characterSummaryCache = new Map<string, CachedCharacterInspect>()
+
+async function mapDirectoryIds<R>(cardIds: readonly string[], worker: (cardId: string) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(cardIds.length)
+  let next = 0
+  const run = async (): Promise<void> => {
+    while (next < cardIds.length) {
+      const idx = next++
+      results[idx] = await worker(cardIds[idx]!)
+    }
   }
+  await Promise.all(Array.from({ length: Math.min(SUMMARY_CONCURRENCY, cardIds.length) }, run))
+  return results
+}
+
+function cloneSummary(summary: CharacterSummary | null): CharacterSummary | null {
+  return summary ? { ...summary, ...(summary.tags ? { tags: [...summary.tags] } : {}) } : null
+}
+
+/** 单次读取列表摘要，供活动列表与收纳箱共用；按磁盘 stat + WriteLedger 缓存避免重复解析大卡。 */
+async function inspectCharacterSummary(
+  dataRoot: string,
+  cardId: string,
+  mode: 'active' | 'archived',
+): Promise<{ summary: CharacterSummary | null; archivedAt?: string }> {
+  const root = join(dataRoot, cardId)
+  const key = cacheRootKey(root)
+  const fs = new WorkspaceFs(root, null)
+  const ledger = openLedger(root)
+  const epoch = ledger.epoch
+  const revision = ledger.counter
+  const [archiveStat, cardStat, avatarStat, bookStat] = await Promise.all([
+    fs.stat(CHARACTER_ARCHIVE_FILE),
+    fs.stat('card.json'),
+    fs.stat('card.png'),
+    fs.stat('assets/character-book.json'),
+  ])
+  const watchedPaths = [CHARACTER_ARCHIVE_FILE, 'card.json', 'card.png', 'assets/character-book.json']
+  let entry = characterSummaryCache.get(key)
+  const valid = Boolean(
+    entry &&
+    entry.epoch === epoch &&
+    !watchedPaths.some((p) => writtenSince(ledger, p, entry!.revision)) &&
+    sameStat(entry.archiveStat, archiveStat) &&
+    sameStat(entry.cardStat, cardStat) &&
+    sameStat(entry.avatarStat, avatarStat) &&
+    sameStat(entry.bookStat, bookStat),
+  )
+  if (!valid) {
+    let archiveState: 'none' | 'archived' | 'corrupt' = 'none'
+    let archivedAt: string | undefined
+    if (archiveStat !== null) {
+      try {
+        const parsed = await readCharacterArchiveMetadata(dataRoot, cardId)
+        if (parsed) {
+          archiveState = 'archived'
+          archivedAt = parsed.archivedAt
+        }
+      } catch {
+        archiveState = 'corrupt'
+      }
+    }
+    entry = {
+      epoch,
+      revision,
+      archiveStat,
+      cardStat,
+      avatarStat,
+      bookStat,
+      archiveState,
+      archivedAt,
+      summaryLoaded: cardStat === null,
+      summary: null,
+    }
+  }
+  const needSummary = mode === 'active' ? entry!.archiveState === 'none' : entry!.archiveState !== 'none'
+  if (needSummary && !entry!.summaryLoaded) {
+    const ws = cardStat === null ? null : await loadCharacter(dataRoot, cardId)
+    let summary: CharacterSummary | null = null
+    if (ws) {
+      const bookName = ws.card.characterBook?.name ?? null
+      const entryCount = Array.isArray(ws.card.characterBook?.entries) ? ws.card.characterBook!.entries.length : 0
+      summary = {
+        cardId,
+        name: ws.card.name,
+        // 旧版/手工维护的 card.json 不保证新摘要字段的形状；元数据异常不能让整张卡从列表消失。
+        creator: typeof ws.card.creator === 'string' ? ws.card.creator : '',
+        tags: Array.isArray(ws.card.tags) ? ws.card.tags.filter((tag): tag is string => typeof tag === 'string') : [],
+        hasAvatar: avatarStat !== null,
+        hasCharacterBook: entryCount > 0 || bookStat !== null,
+        characterBookName: bookName,
+        characterBookEntryCount: entryCount,
+      }
+    }
+    entry = { ...entry!, summary, summaryLoaded: true }
+  }
+  if (ledger.epoch === epoch && !watchedPaths.some((p) => writtenSince(ledger, p, revision))) {
+    characterSummaryCache.delete(key)
+    characterSummaryCache.set(key, entry!)
+    while (characterSummaryCache.size > MAX_SUMMARY_CACHE) {
+      const oldest = characterSummaryCache.keys().next().value
+      if (oldest === undefined) break
+      characterSummaryCache.delete(oldest)
+    }
+  }
+  if (mode === 'active') {
+    return { summary: entry!.archiveState === 'none' ? cloneSummary(entry!.summary) : null }
+  }
+  if (entry!.archiveState === 'none') return { summary: null }
+  const resolvedArchivedAt = entry!.archiveState === 'archived'
+    ? entry!.archivedAt!
+    : new Date(archiveStat!.mtimeMs).toISOString()
+  return { summary: cloneSummary(entry!.summary), archivedAt: resolvedArchivedAt }
 }
 
 export async function listCharacters(dataRoot: string): Promise<CharacterSummary[]> {
   const cardIds = await characterDirectoryIds(dataRoot)
-  // 并行读取各角色目录（保持已排序 cardIds 的输出顺序，坏目录独立跳过），避免多卡列表串行放大磁盘 I/O。
-  const items = await Promise.all(
-    cardIds.map(async (cardId): Promise<CharacterSummary | null> => {
-      try {
-        if (await readCharacterArchiveMetadata(dataRoot, cardId)) return null
-        // card.json 缺失/损坏时 characterSummary 返回 null，即「探测」口径
-        return await characterSummary(dataRoot, cardId)
-      } catch {
-        return null // 坏目录跳过
-      }
-    }),
-  )
+  // 有界并发读取各角色目录（保持已排序 cardIds 的输出顺序，坏目录独立跳过）。
+  const items = await mapDirectoryIds(cardIds, async (cardId): Promise<CharacterSummary | null> => {
+    try {
+      return (await inspectCharacterSummary(dataRoot, cardId, 'active')).summary
+    } catch {
+      return null // 坏目录跳过
+    }
+  })
   return items.filter((item): item is CharacterSummary => item !== null)
 }
 
@@ -268,28 +376,14 @@ export async function listCharacters(dataRoot: string): Promise<CharacterSummary
  */
 export async function listArchivedCharacters(dataRoot: string): Promise<ArchivedCharacterSummary[]> {
   const cardIds = await characterDirectoryIds(dataRoot)
-  const items = await Promise.all(
-    cardIds.map(async (cardId): Promise<ArchivedCharacterSummary | null> => {
-      try {
-        const root = join(dataRoot, cardId)
-        const fs = new WorkspaceFs(root, null)
-        let archivedAt: string
-        try {
-          const archived = await readCharacterArchiveMetadata(dataRoot, cardId)
-          if (!archived) return null
-          archivedAt = archived.archivedAt
-        } catch {
-          const marker = await fs.stat(CHARACTER_ARCHIVE_FILE)
-          if (!marker) return null
-          archivedAt = new Date(marker.mtimeMs).toISOString()
-        }
-        const summary = await characterSummary(dataRoot, cardId)
-        return summary ? { ...summary, archivedAt } : null
-      } catch {
-        return null
-      }
-    }),
-  )
+  const items = await mapDirectoryIds(cardIds, async (cardId): Promise<ArchivedCharacterSummary | null> => {
+    try {
+      const inspected = await inspectCharacterSummary(dataRoot, cardId, 'archived')
+      return inspected.summary && inspected.archivedAt ? { ...inspected.summary, archivedAt: inspected.archivedAt } : null
+    } catch {
+      return null
+    }
+  })
   return items.filter((item): item is ArchivedCharacterSummary => item !== null)
 }
 
@@ -355,7 +449,10 @@ export async function restoreCharacter(dataRoot: string, cardId: string): Promis
 /** 删除角色工作区整目录（rm -rf；本模块唯一直接使用 node:fs 的位置）。 */
 export async function deleteCharacter(dataRoot: string, cardId: string): Promise<void> {
   assertValidCardId(cardId)
-  await rm(join(dataRoot, cardId), { recursive: true, force: true })
+  const root = join(dataRoot, cardId)
+  closeLedger(root, { prefix: true })
+  characterSummaryCache.delete(cacheRootKey(root))
+  await rm(root, { recursive: true, force: true })
 }
 
 // ---------------------------------------------------------------------------
@@ -378,6 +475,46 @@ function summarizeMarkdown(content: string): string {
   return ''
 }
 
+interface CachedIndexEntry {
+  mtimeMs: number
+  size: number
+  revision: number
+  summary: string
+  tokens: number
+}
+interface CachedIndexWorkspace {
+  epoch: number
+  files: Map<string, CachedIndexEntry>
+}
+const MAX_INDEX_WORKSPACES = 64
+const indexCaches = new WeakMap<(text: string) => number, Map<string, CachedIndexWorkspace>>()
+
+function getIndexWorkspaceCache(
+  estimator: (text: string) => number,
+  root: string,
+  epoch: number,
+): CachedIndexWorkspace {
+  let byRoot = indexCaches.get(estimator)
+  if (!byRoot) {
+    byRoot = new Map()
+    indexCaches.set(estimator, byRoot)
+  }
+  const key = cacheRootKey(root)
+  let wsCache = byRoot.get(key)
+  if (!wsCache || wsCache.epoch !== epoch) {
+    wsCache = { epoch, files: new Map() }
+  } else {
+    byRoot.delete(key)
+  }
+  byRoot.set(key, wsCache)
+  while (byRoot.size > MAX_INDEX_WORKSPACES) {
+    const oldest = byRoot.keys().next().value
+    if (oldest === undefined) break
+    byRoot.delete(oldest)
+  }
+  return wsCache
+}
+
 /**
  * 重建 index.json：扫描 memory/*.md（不含 archive 子目录）、state/world-delta.jsonl 与
  * journal.md，每个文件记录 {path, summary, tokens}（tokens 由注入的估算函数计算）。
@@ -388,31 +525,96 @@ export async function rebuildIndex(
 ): Promise<void> {
   // 索引是多文件派生视图；扫描到写回必须同占工作区锁，不能让并发编辑插在两者之间。
   await withWorkspaceLock(fs.root, async () => {
-    // 非递归列举：archive/ 不进清单，递归走一遍再丢掉会让每次写入后的重建随归档量变慢。
-    const mdRels = (await fs.list('memory', { recursive: false })).filter((rel) => rel.endsWith('.md'))
-    const [memoryEntries, delta, journal] = await Promise.all([
-      Promise.all(
-        mdRels.map(async (rel): Promise<WorkspaceIndexFile> => {
-          const content = (await fs.readText(`memory/${rel}`)) ?? ''
-          return { path: `memory/${rel}`, summary: summarizeMarkdown(content), tokens: estimateTokens(content) }
-        }),
-      ),
-      fs.readText('state/world-delta.jsonl'),
-      fs.readText('journal.md'),
-    ])
-    const files: WorkspaceIndexFile[] = [...memoryEntries]
+    const ledger = openLedger(fs.root)
+    const epoch = ledger.epoch
+    const revision = ledger.counter
+    const wsCache = getIndexWorkspaceCache(estimateTokens, fs.root, epoch)
 
-    if (delta !== null) {
-      const count = delta.split('\n').filter((line) => line.trim() !== '').length
-      files.push({
-        path: 'state/world-delta.jsonl',
-        summary: delta.trim() === '' ? '' : `${count} 条变化`,
-        tokens: estimateTokens(delta),
-      })
+    // 非递归列举 stat：未改动的记忆文件直接复用摘要与 token，避免每次写一条记忆重读全库。
+    const mdStats = (await fs.listStats('memory')).filter((entry) => entry.name.endsWith('.md'))
+    const [deltaStat, journalStat] = await Promise.all([
+      fs.stat('state/world-delta.jsonl'),
+      fs.stat('journal.md'),
+    ])
+
+    const activePaths = new Set<string>()
+    const missingPaths: string[] = []
+    const memSlots = mdStats.map((stat) => {
+      const path = `memory/${stat.name}`
+      activePaths.add(path)
+      const cached = wsCache.files.get(path)
+      if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size && !writtenSince(ledger, path, cached.revision)) {
+        return { path, stat, cached, missingIndex: -1 }
+      }
+      const missingIndex = missingPaths.length
+      missingPaths.push(path)
+      return { path, stat, cached: undefined, missingIndex }
+    })
+
+    const deltaPath = 'state/world-delta.jsonl'
+    const cachedDelta = deltaStat ? wsCache.files.get(deltaPath) : undefined
+    const deltaHit = Boolean(
+      deltaStat && cachedDelta &&
+      cachedDelta.mtimeMs === deltaStat.mtimeMs &&
+      cachedDelta.size === deltaStat.size &&
+      !writtenSince(ledger, deltaPath, cachedDelta.revision),
+    )
+    if (deltaStat) activePaths.add(deltaPath)
+
+    const journalPath = 'journal.md'
+    const cachedJournal = journalStat ? wsCache.files.get(journalPath) : undefined
+    const journalHit = Boolean(
+      journalStat && cachedJournal &&
+      cachedJournal.mtimeMs === journalStat.mtimeMs &&
+      cachedJournal.size === journalStat.size &&
+      !writtenSince(ledger, journalPath, cachedJournal.revision),
+    )
+    if (journalStat) activePaths.add(journalPath)
+
+    const [missingContents, delta, journal] = await Promise.all([
+      missingPaths.length > 0 ? fs.readTextMany(missingPaths) : Promise.resolve([]),
+      deltaStat && !deltaHit ? fs.readText(deltaPath) : Promise.resolve(null),
+      journalStat && !journalHit ? fs.readText(journalPath) : Promise.resolve(null),
+    ])
+
+    for (const key of [...wsCache.files.keys()]) {
+      if (!activePaths.has(key)) wsCache.files.delete(key)
     }
 
-    if (journal !== null) {
-      files.push({ path: 'journal.md', summary: summarizeMarkdown(journal), tokens: estimateTokens(journal) })
+    const files: WorkspaceIndexFile[] = memSlots.map((slot) => {
+      if (slot.cached) {
+        return { path: slot.path, summary: slot.cached.summary, tokens: slot.cached.tokens }
+      }
+      const content = missingContents[slot.missingIndex] ?? ''
+      const summary = summarizeMarkdown(content)
+      const tokens = estimateTokens(content)
+      if (ledger.epoch === epoch && !writtenSince(ledger, slot.path, revision)) {
+        wsCache.files.set(slot.path, { mtimeMs: slot.stat.mtimeMs, size: slot.stat.size, revision, summary, tokens })
+      }
+      return { path: slot.path, summary, tokens }
+    })
+
+    if (deltaHit && cachedDelta) {
+      files.push({ path: deltaPath, summary: cachedDelta.summary, tokens: cachedDelta.tokens })
+    } else if (delta !== null && deltaStat) {
+      const count = delta.split('\n').filter((line) => line.trim() !== '').length
+      const summary = delta.trim() === '' ? '' : `${count} 条变化`
+      const tokens = estimateTokens(delta)
+      if (ledger.epoch === epoch && !writtenSince(ledger, deltaPath, revision)) {
+        wsCache.files.set(deltaPath, { mtimeMs: deltaStat.mtimeMs, size: deltaStat.size, revision, summary, tokens })
+      }
+      files.push({ path: deltaPath, summary, tokens })
+    }
+
+    if (journalHit && cachedJournal) {
+      files.push({ path: journalPath, summary: cachedJournal.summary, tokens: cachedJournal.tokens })
+    } else if (journal !== null && journalStat) {
+      const summary = summarizeMarkdown(journal)
+      const tokens = estimateTokens(journal)
+      if (ledger.epoch === epoch && !writtenSince(ledger, journalPath, revision)) {
+        wsCache.files.set(journalPath, { mtimeMs: journalStat.mtimeMs, size: journalStat.size, revision, summary, tokens })
+      }
+      files.push({ path: journalPath, summary, tokens })
     }
 
     const index: WorkspaceIndex = { files, updatedAt: new Date().toISOString() }

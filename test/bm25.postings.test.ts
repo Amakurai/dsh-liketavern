@@ -296,4 +296,20 @@ describe('BM25 倒排索引', () => {
       assert.ok(boosted.some((hit) => hit.score > plain.get(hit.id)!))
     }
   })
+
+  it('similarity 在扩容与连续查询间复用工作区，不残留上一轮得分', () => {
+    const index = new Bm25Index()
+    index.add({ id: 'a', text: '北门 守卫 换岗 夜间 巡逻', keys: ['北门'] })
+    index.add({ id: 'b', text: '港口 货船 补给 盐巴', keys: ['港口'] })
+    const first = index.similarity('北门 守卫 夜间', { keys: ['北门'] })
+    assert.equal(first[0]?.id, 'a')
+    assert.equal(first.some((hit) => hit.id === 'b'), false)
+
+    for (let i = 0; i < 40; i++) {
+      index.add({ id: `extra-${i}`, text: `哨塔 记录 ${i}` })
+    }
+    const second = index.similarity('港口 货船 补给', { keys: ['港口'] })
+    assert.equal(second[0]?.id, 'b')
+    assert.equal(second.some((hit) => hit.id === 'a'), false)
+  })
 })

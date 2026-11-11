@@ -81,7 +81,7 @@
     "markdown-it": "15.0.3",
     "markdown-it-emoji": "3.1.0",
     "quickjs-emscripten": "0.32.0",
-    "semver": "7.8.5",
+    "semver": "7.8.6",
     "yaml": "2.9.0",
     "zod": "4.6.7"
   },

@@ -15,13 +15,13 @@ const CachePolicy = require('http-cache-semantics') as new (
 
 it('MCP OAuth 在发送凭证前拒绝不同 issuer，正确 issuer 仍能取得令牌', async () => {
   const issuer = 'https://issuer.factory.invalid'
-  const provider = new ClientCredentialsProvider({ clientId: 'factory-client', clientSecret: 'factory-secret', expectedIssuer: issuer })
-  const fetchFn = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ access_token: 'factory-token', token_type: 'Bearer' }), { headers: { 'content-type': 'application/json' } }))
+  const provider = new ClientCredentialsProvider({ clientId: 'factory-client', clientSecret: 'example-secret', expectedIssuer: issuer })
+  const fetchFn = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ access_token: 'example-token', token_type: 'Bearer' }), { headers: { 'content-type': 'application/json' } }))
   await expect(fetchToken(provider, 'https://other.factory.invalid', { fetchFn })).rejects.toBeInstanceOf(AuthorizationServerMismatchError)
   expect(fetchFn).not.toHaveBeenCalled()
-  await expect(fetchToken(provider, issuer, { fetchFn })).resolves.toMatchObject({ access_token: 'factory-token' })
+  await expect(fetchToken(provider, issuer, { fetchFn })).resolves.toMatchObject({ access_token: 'example-token' })
   expect(String(fetchFn.mock.calls[0]![0])).toBe(`${issuer}/token`)
-  expect(new Headers(fetchFn.mock.calls[0]![1]?.headers).get('authorization')).toBe(`Basic ${Buffer.from('factory-client:factory-secret').toString('base64')}`)
+  expect(new Headers(fetchFn.mock.calls[0]![1]?.headers).get('authorization')).toBe(`Basic ${Buffer.from('factory-client:example-secret').toString('base64')}`)
 })
 
 it('max-stale 不能绕过 must-revalidate，普通可共享过期响应保留兼容行为', () => {

@@ -232,9 +232,9 @@ describe('有序展示与真实消息格式化',()=>{
   })
   it('属性值经实体解码或二次展示也不能恢复机读内容',()=>{
     const samples=[
-      '<style>.x::after{content:attr(data-secret)}</style><div class="x" data-secret="<think>SECRET</think>">VISIBLE</div>',
+      '<style>.x::after{content:attr(data-hidden)}</style><div class="x" data-hidden="<think>SECRET</think>">VISIBLE</div>',
       '<input value="&lt;t&#104;ink&gt;SECRET&lt;/think&gt;">VISIBLE',
-      '<div data-secret="&lt;think&Tab;x&gt;SECRET&lt;/think&gt;">VISIBLE</div>',
+      '<div data-hidden="&lt;think&Tab;x&gt;SECRET&lt;/think&gt;">VISIBLE</div>',
       '<iframe srcdoc="&amp;lt;think&amp;gt;SECRET&amp;lt;/think&amp;gt;"></iframe>VISIBLE',
       '<iframe srcdoc="&#38;lt;think&#38;gt;SECRET&#38;lt;/think&#38;gt;"></iframe>VISIBLE',
       '<iframe srcdoc="&#x26;lt;think&#x26;gt;SECRET&#x26;lt;/think&#x26;gt;"></iframe>VISIBLE',

@@ -17,7 +17,7 @@ let view:ReactTestRenderer|undefined,events:EventTarget
 const source={postMessage:vi.fn()}
 const snapshot:HelperSnapshot={storyId:'story',historyRevision:'history',currentMessageId:0,writable:false,
   scopes:{},messages:[{message_id:0,name:'角色',role:'assistant',is_hidden:false,message:'hello',data:{},extra:{}}]}
-const work:HelperMvuWork={storyId:'story',enabled:true,status:'pending',token:'lease-token',
+const work:HelperMvuWork={storyId:'story',enabled:true,status:'pending',token:'example-lease-token',
   job:{id:'a'.repeat(64),identity:'message-1',seq:3,kind:'initialize',text:'hello',turn:0,floor:'session#t0'},snapshot,base:{}}
 const prepare=vi.fn(),commit=vi.fn()
 const remote={prepareHelperMvuJob:prepare,commitHelperMvuJob:commit} as unknown as TavernRemote
@@ -44,7 +44,7 @@ it('脚本就绪之前不认领任务；固定来源和运行时才能启动，�
   await message({action:'helperMvuResult',requestId:runs()[0]!.requestId,ok:true,data:{stat_data:{hp:20}}},{})
   expect(commit).not.toHaveBeenCalled()
   await result();expect(commit).toHaveBeenCalledTimes(1)
-  expect(commit.mock.calls[0]![0]).toMatchObject({sessionId:'session',storyId:'story',jobId:work.job!.id,token:'lease-token',data:{stat_data:{hp:10}}})
+  expect(commit.mock.calls[0]![0]).toMatchObject({sessionId:'session',storyId:'story',jobId:work.job!.id,token:'example-lease-token',data:{stat_data:{hp:10}}})
 })
 it('通信失败保留计算结果，用户重试只补交回执，不重跑变量钩子',async()=>{
   commit.mockRejectedValueOnce(new Error('连接中断'))
@@ -65,7 +65,7 @@ it('读取任务无响应后显示超时并可重试，迟到响应不覆盖新�
   expect(runs()).toHaveLength(1)
   await act(async()=>pending.resolve({ok:true,value:{...work,token:'stale'}}))
   expect(runs()).toHaveLength(1)
-  await result();expect(commit.mock.calls[0]![0].token).toBe('lease-token')
+  await result();expect(commit.mock.calls[0]![0].token).toBe('example-lease-token')
 })
 it('提交无响应后可补交同一份结果，重复沙箱结果不能覆盖待确认的计算',async()=>{
   const pending=Promise.withResolvers<unknown>()
@@ -105,14 +105,14 @@ it('续租在途时提交已完成，迟到的旧任务回包不能重新执行�
 it('断网后租约已替换，明确重新读取任务并使用新 token，旧结果不冒充新任务结果',async()=>{
   commit.mockRejectedValueOnce(new Error('连接中断'))
   await mount();await connect();await result()
-  prepare.mockResolvedValue({ok:true,value:{...structuredClone(work),token:'new-token'}})
+  prepare.mockResolvedValue({ok:true,value:{...structuredClone(work),token:'example-new-token'}})
   await act(async()=>vi.advanceTimersByTimeAsync(91000))
   expect(commit).toHaveBeenCalledTimes(1);expect(runs()).toHaveLength(1)
   const button=view!.root.findAllByType(Btn).find(node=>String(node.props.children).includes('Reload')||String(node.props.children).includes('重新读取'))!
   expect(button).toBeDefined()
   await act(async()=>button.props.onClick())
   expect(runs()).toHaveLength(2)
-  await result();expect(commit.mock.calls[1]![0]).toMatchObject({token:'new-token'})
+  await result();expect(commit.mock.calls[1]![0]).toMatchObject({token:'example-new-token'})
 })
 it('提交已成功但回执丢失，租约结束后按任务摘要确认完成，不重复执行或保存',async()=>{
   commit.mockRejectedValueOnce(new Error('回执丢失'))

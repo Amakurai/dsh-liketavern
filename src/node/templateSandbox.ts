@@ -40,7 +40,22 @@ const PENDING_JOB_BATCH = 256
 let templateLibrarySource: string | undefined
 let templateBootstrapSource: string | undefined
 let templateFakerSource: string | undefined
+let templateFakerData: string | undefined
 let templateRuntimeHash: string | undefined
+
+const FAKER_DATA_MARKER = '\n/* __TAVERN_FAKER_DATA__\n'
+const FAKER_DATA_TRAILER = '\n*/\n'
+function splitTemplateFakerVendor(source: string): { coreSource: string; dataJson: string } {
+  const normalized = source.replaceAll('\r\n', '\n')
+  const markerAt = normalized.indexOf(FAKER_DATA_MARKER)
+  if (markerAt < 0 || !normalized.endsWith(FAKER_DATA_TRAILER)) {
+    throw new Error('Faker 模板依赖产物缺失，请先运行 npm run build')
+  }
+  return {
+    coreSource: normalized.slice(0, markerAt),
+    dataJson: normalized.slice(markerAt + FAKER_DATA_MARKER.length, -FAKER_DATA_TRAILER.length),
+  }
+}
 
 /** 单次递归清理 undefined 字段并深拷贝普通 JSON，避免对数兆检查点与共享段做 JSON.stringify + JSON.parse。 */
 function cleanPlainJson<T>(value: T): T {
@@ -151,8 +166,10 @@ export class TemplateSandbox {
   static async prepare(onPhase?: (phase: 'loading' | 'computing') => void): Promise<void> {
     computationPhase = onPhase
     const [,runtime]=await Promise.all([prepareTemplateCheckpointVm(),loadTemplateRuntime()])
-    if (templateLibrarySource !== runtime.librarySource || !templateBootstrapSource) {
-      templateBootstrapSource = BOOTSTRAP.replace('/* TEMPLATE_VENDOR */', () => runtime.librarySource)
+    if (templateLibrarySource !== runtime.librarySource || templateFakerSource !== runtime.fakerSource || !templateBootstrapSource || !templateFakerData) {
+      const { coreSource, dataJson } = splitTemplateFakerVendor(runtime.fakerSource)
+      templateFakerData = dataJson
+      templateBootstrapSource = BOOTSTRAP.replace('/* TEMPLATE_VENDOR */', () => `${runtime.librarySource}\n${coreSource}`)
     }
     templateLibrarySource=runtime.librarySource;templateFakerSource=runtime.fakerSource;templateRuntimeHash=runtime.hash
   }
@@ -195,15 +212,15 @@ export class TemplateSandbox {
     vm.runtime.setInterruptHandler(() => sandbox.interruptIfExpired())
     try {
       if (!templateLibrarySource) throw new Error('模板依赖产物缺失，请先运行 npm run build')
-      if (!templateFakerSource) throw new Error('Faker 模板依赖产物缺失，请先运行 npm run build')
-      const fakerSourceHandle=vm.newString(templateFakerSource)
-      try { vm.setProp(vm.global,'__tavernFakerSource',fakerSourceHandle) } finally { fakerSourceHandle.dispose() }
+      if (!templateFakerData || !templateBootstrapSource) throw new Error('Faker 模板依赖产物缺失，请先运行 npm run build')
+      const fakerDataHandle=vm.newString(templateFakerData)
+      try { vm.setProp(vm.global,'__tavernFakerData',fakerDataHandle) } finally { fakerDataHandle.dispose() }
       // 大历史作为字符串值传入，避免把 JSON 再转义成源码后交给 QuickJS 解析一次。
       const inputHandle=vm.newString(JSON.stringify(input))
       try { vm.setProp(vm.global,'__input',inputHandle) } finally { inputHandle.dispose() }
       const limitHandle=vm.newNumber(contextChars+1024*1024)
       try {vm.setProp(vm.global,'__tavernOutputLimit',limitHandle)} finally {limitHandle.dispose()}
-      sandbox.evaluate(templateBootstrapSource ?? BOOTSTRAP.replace('/* TEMPLATE_VENDOR */',()=>templateLibrarySource!))
+      sandbox.evaluate(templateBootstrapSource)
       // 任何第三方代码（含 preload）之前冻结宿主命令入口；模板不能替换命令实现来伪造状态或结果。
       sandbox.hardenProtocol()
       if(bootstrap?.preload==='refresh') sandbox.sticky('restore',bootstrap.state)

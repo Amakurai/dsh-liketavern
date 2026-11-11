@@ -218,9 +218,9 @@ describe('doctor 聚合报告', () => {
   it('DSH home 本身为链接时不跟随扫描目标数据', async () => {
     const target = join(home, 'linked-target')
     const linkedHome = join(home, 'linked-home')
-    const secret = '链接目标中的私密角色'
+    const hiddenCardName = '链接目标中的私密角色'
     await mkdir(join(target, 'dsh-tavern', 'characters', 'linked-card-a1b2c3d4'), { recursive: true })
-    await writeFile(join(target, 'dsh-tavern', 'characters', 'linked-card-a1b2c3d4', 'card.json'), JSON.stringify({ name: secret }))
+    await writeFile(join(target, 'dsh-tavern', 'characters', 'linked-card-a1b2c3d4', 'card.json'), JSON.stringify({ name: hiddenCardName }))
     try {
       await symlink(target, linkedHome, process.platform === 'win32' ? 'junction' : 'dir')
     } catch (error) {
@@ -236,7 +236,7 @@ describe('doctor 聚合报告', () => {
     expect(report.statistics.characters.directories).toBe(0)
     expect(report.statistics.files.total).toBe(0)
     expect(report.issues).toContainEqual({ code: 'DATA_ROOT_LINK_SKIPPED', severity: 'error', count: 1 })
-    expect(JSON.stringify(report)).not.toContain(secret)
+    expect(JSON.stringify(report)).not.toContain(hiddenCardName)
   })
 
   it('JSON 形状正确但 archivedAt 日期无效的收纳标记仍报告损坏', async () => {
@@ -467,8 +467,8 @@ describe('doctor CLI', () => {
 
 describe('doctor 宿主版本', () => {
   it('异常 Node 版本也归一化，不能回显注入内容或因数字前缀误判兼容', async () => {
-    const secret = '24.0.0\nprivate C:/runtime/secret'
-    const report = await runDoctor({ home, nodeVersion: secret })
+    const injectedVersion = '24.0.0\nprivate C:/runtime/secret'
+    const report = await runDoctor({ home, nodeVersion: injectedVersion })
     expect(report.ok).toBe(false)
     expect(report.runtime).toMatchObject({ nodeVersion: 'unknown', nodeSupported: false })
     expect(report.issues).toContainEqual({ code: 'NODE_VERSION_UNSUPPORTED', severity: 'error', count: 1 })
@@ -503,16 +503,16 @@ describe('doctor 宿主版本', () => {
   })
 
   it('无法安全解析的版本折叠为 unknown，不回显元数据内容', async () => {
-    const secret = 'invalid-version-C:/private/host'
+    const malformedVersion = 'invalid-version-C:/private/host'
     const report = await runDoctor({ home, nodeVersion: '24.0.0', pluginVersion: '9.8.7',
-      dshInstalledVersion: secret, dshExpectedVersion: secret })
+      dshInstalledVersion: malformedVersion, dshExpectedVersion: malformedVersion })
     expect(report.ok).toBe(true)
     expect(report.runtime.dsh).toEqual({ installedVersion: 'unknown', expectedVersion: 'unknown', compatible: false })
     expect(report.issues.map(issue => issue.code)).toEqual(expect.arrayContaining([
       'DSH_EXPECTED_VERSION_UNKNOWN', 'DSH_INSTALLED_VERSION_UNKNOWN',
     ]))
-    expect(JSON.stringify(report)).not.toContain(secret)
-    expect(formatDoctorText(report)).not.toContain(secret)
+    expect(JSON.stringify(report)).not.toContain(malformedVersion)
+    expect(formatDoctorText(report)).not.toContain(malformedVersion)
   })
 
   it('损坏的 wal-recovery.json 与指向 WAL 保留路径的日志记录报告 WAL_INVALID', async () => {

@@ -254,7 +254,7 @@ it('可信宿主登记固定消息并等待私有许可，轮换期间旧请求�
   const remote={openHelperFrame,closeHelperFrame} as unknown as TavernRemote
   const {snapshot}=await mount({remote,helperMessageId:0,onHelperCommit:writes})
   const message={requestId:'waiting-write',storyId:snapshot.storyId,historyRevision:snapshot.historyRevision,
-    sessionId:'forged-session',messageId:999,frameLease:{frameId:'forged-frame',runtimeId:'old-runtime',epoch:77,token:'forged-token'},
+    sessionId:'forged-session',messageId:999,frameLease:{frameId:'forged-frame',runtimeId:'old-runtime',epoch:77,token:'example-forged-token'},
     changes:[{key:'["chat",""]',before:{},value:{saved:1}}]}
   await act(async()=>{dispatch('helperEventConnect','old-runtime');dispatch('helperVariablesCommit','old-runtime',message)})
   expect(writes).not.toHaveBeenCalled()
@@ -264,12 +264,12 @@ it('可信宿主登记固定消息并等待私有许可，轮换期间旧请求�
   await act(async()=>{dispatch('helperEventConnect','current-runtime');dispatch('helperVariablesCommit','current-runtime',message)})
   expect(closeHelperFrame.mock.calls[0]![0]).toMatchObject({sessionId:'runtime-session',messageId:0,frameId:first.frameId,runtimeId:'old-runtime',epoch:1})
   expect(openHelperFrame.mock.calls[1]![0]).toMatchObject({frameId:first.frameId,runtimeId:'current-runtime',epoch:2})
-  await act(async()=>oldOpen.resolve({ok:true,value:{token:'old-private-token'}}))
+  await act(async()=>oldOpen.resolve({ok:true,value:{token:'example-old-private-token'}}))
   expect(writes).not.toHaveBeenCalled()
-  await act(async()=>newOpen.resolve({ok:true,value:{token:'current-private-token'}}))
+  await act(async()=>newOpen.resolve({ok:true,value:{token:'example-current-private-token'}}))
   expect(writes).toHaveBeenCalledOnce()
   expect(writes.mock.calls[0]![0]).toMatchObject({storyId:snapshot.storyId,historyRevision:snapshot.historyRevision,
-    frameLease:{frameId:first.frameId,runtimeId:'current-runtime',epoch:2,token:'current-private-token'},changes:message.changes})
+    frameLease:{frameId:first.frameId,runtimeId:'current-runtime',epoch:2,token:'example-current-private-token'},changes:message.changes})
   expect(JSON.stringify(source.postMessage.mock.calls)).not.toContain('private-token')
   expect(JSON.stringify(source.postMessage.mock.calls)).not.toContain(first.frameId)
 })
@@ -292,11 +292,11 @@ it('只读候选发布时保留运行时，可信宿主增 epoch 获取写许可
     helperBinding={{sessionId:'runtime-session',storyId:snapshot.storyId}}/>))
   expect(openHelperFrame).toHaveBeenCalledTimes(2)
   expect(openHelperFrame.mock.calls[1]![0]).toMatchObject({frameId:first.frameId,runtimeId:'candidate-runtime',readOnly:false,epoch:2})
-  await act(async()=>{dispatch('helperVariablesCommit','candidate-runtime',{...request,requestId:'published-write'});readonlyOpen.resolve({ok:true,value:{token:'readonly-private-token'}})})
+  await act(async()=>{dispatch('helperVariablesCommit','candidate-runtime',{...request,requestId:'published-write'});readonlyOpen.resolve({ok:true,value:{token:'example-readonly-private-token'}})})
   expect(writes).not.toHaveBeenCalled()
-  await act(async()=>writableOpen.resolve({ok:true,value:{token:'published-private-token'}}))
+  await act(async()=>writableOpen.resolve({ok:true,value:{token:'example-published-private-token'}}))
   expect(writes).toHaveBeenCalledOnce()
-  expect((writes.mock.calls[0]![0] as {frameLease:HelperFrameLease}).frameLease).toEqual({frameId:first.frameId,runtimeId:'candidate-runtime',epoch:2,token:'published-private-token'})
+  expect((writes.mock.calls[0]![0] as {frameLease:HelperFrameLease}).frameLease).toEqual({frameId:first.frameId,runtimeId:'candidate-runtime',epoch:2,token:'example-published-private-token'})
 })
 
 it('同一 iframe 替换 srcDoc 后仍记住退役运行时，迟到 Connect 不能恢复旧读取身份',async()=>{
@@ -315,7 +315,7 @@ it('同一 iframe 替换 srcDoc 后仍记住退役运行时，迟到 Connect 不
 
 
 it('新运行时登记失败也立即关闭旧许可，当前写入不得回退到旧令牌',async()=>{
-  const openHelperFrame=vi.fn().mockResolvedValueOnce({ok:true,value:{token:'previous-private-token'}})
+  const openHelperFrame=vi.fn().mockResolvedValueOnce({ok:true,value:{token:'example-previous-private-token'}})
     .mockResolvedValueOnce({ok:false,error:{message:'运行时身份不合法'}})
   const closeHelperFrame=vi.fn(async()=>({ok:true as const,value:undefined})),writes=vi.fn(async()=>snapshot)
   const {snapshot}=await mount({remote:{openHelperFrame,closeHelperFrame} as unknown as TavernRemote,helperMessageId:0,onHelperCommit:writes})
@@ -323,7 +323,7 @@ it('新运行时登记失败也立即关闭旧许可，当前写入不得回退�
   await act(async()=>{dispatch('helperEventConnect','x');dispatch('helperVariablesCommit','x',{requestId:'failed-open',
     storyId:snapshot.storyId,historyRevision:snapshot.historyRevision,changes:[{key:'["chat",""]',before:{},value:{lost:true}}]})})
   expect(closeHelperFrame).toHaveBeenCalledOnce()
-  expect(closeHelperFrame.mock.calls[0]![0]).toMatchObject({runtimeId:'old-runtime',epoch:1,token:'previous-private-token'})
+  expect(closeHelperFrame.mock.calls[0]![0]).toMatchObject({runtimeId:'old-runtime',epoch:1,token:'example-previous-private-token'})
   expect(writes).not.toHaveBeenCalled()
   expect(source.postMessage.mock.calls.filter(call=>call[0].action==='helperVariablesResult').map(call=>call[0])).toEqual([
     {source:'dsh-tavern-card',action:'helperVariablesResult',runtimeId:'x',requestId:'failed-open',ok:false,error:'运行时身份不合法'},
@@ -331,7 +331,7 @@ it('新运行时登记失败也立即关闭旧许可，当前写入不得回退�
 })
 
 it('运行时退休预算耗尽会关闭最后许可并拒绝旧业务，不保留可写卡面身份',async()=>{
-  const openHelperFrame=vi.fn(async()=>({ok:true as const,value:{token:'budget-private-token'}}))
+  const openHelperFrame=vi.fn(async()=>({ok:true as const,value:{token:'example-budget-private-token'}}))
   const closeHelperFrame=vi.fn(async()=>({ok:true as const,value:undefined})),writes=vi.fn(async()=>snapshot)
   const {snapshot}=await mount({remote:{openHelperFrame,closeHelperFrame} as unknown as TavernRemote,helperMessageId:0,onHelperCommit:writes})
   await act(async()=>{
@@ -348,7 +348,7 @@ it('运行时退休预算耗尽会关闭最后许可并拒绝旧业务，不保�
 
 
 it('同一卡面组件换宿主消息时关闭旧 frameId，以新私有身份登记且仍拒绝旧 Connect',async()=>{
-  const openHelperFrame=vi.fn(async()=>({ok:true as const,value:{token:'fixed-message-token'}}))
+  const openHelperFrame=vi.fn(async()=>({ok:true as const,value:{token:'example-fixed-message-token'}}))
   const closeHelperFrame=vi.fn(async()=>({ok:true as const,value:undefined})),writes=vi.fn(async()=>snapshot)
   const remote={openHelperFrame,closeHelperFrame} as unknown as TavernRemote
   const {snapshot}=await mount({remote,helperMessageId:0,onHelperCommit:writes})

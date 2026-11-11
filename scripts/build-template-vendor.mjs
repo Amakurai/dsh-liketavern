@@ -10,6 +10,7 @@ import { optimizeEmojiMatcherSource } from './emoji-regex-source.mjs'
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const emojiVersion = JSON.parse(await readFile(join(root, 'node_modules/markdown-it-emoji/package.json'), 'utf8')).version
 let emojiMatcherOptimized = false
+let ejsFeatureDetectionPatched = false
 // 保存所有语言原始数据，但延迟 JSON.parse；普通模板无需展开语言数据或实例。
 const fakerLocaleJson = Object.fromEntries(Object.entries(faker.allLocales).map(([code,locale])=>[code,JSON.stringify(locale)]))
 const fakerFallbacks = {}
@@ -56,7 +57,7 @@ export function btoa(value) {
 const result = await build({
   stdin:{contents:'export { z } from "zod"; export { default as lodash } from "lodash"; export { jsonrepair } from "jsonrepair"; export { default as ejs } from "ejs"; export { createMessageFormatter } from "./src/node/templateMarkdown.ts"; export { default as ejsUtils } from "tavern-ejs-utils";',resolveDir:root,sourcefile:'template-libraries-entry.js'},
   bundle:true,format:'iife',globalName:'__TavernTemplateLibraries',platform:'browser',target:'es2022',
-  write:false,minify:true,legalComments:'inline',
+  write:false,minify:true,legalComments:'inline',charset:'utf8',
   plugins:[{name:'tavern-emoji-matcher',setup(builder) {
     builder.onLoad({filter:/[\\/]markdown-it-emoji[\\/]lib[\\/]normalize_opts\.mjs$/},async args=> {
       const contents=optimizeEmojiMatcherSource(await readFile(args.path,'utf8'),emojiVersion)
@@ -64,6 +65,21 @@ const result = await build({
       return {contents,loader:'js'}
     })
   }},{name:'ejs-virtual-files',setup(builder) {
+    // QuickJS 已原生支持 ES2022 globalThis 与 async function，直接替换 EJS 针对旧运行时的字符串探测。
+    builder.onLoad({filter:/[\\/]ejs[\\/]lib[\\/]esm[\\/]ejs\.js$/},async args=> {
+      let source=(await readFile(args.path,'utf8')).replaceAll('\r\n','\n')
+      const rewrites=[
+        [/^ejs\.promiseImpl = .+return this;.+Promise;$/m,'ejs.promiseImpl = globalThis.Promise;'],
+        [/^(\s*)ctor = .+return \(async function\(\)\{\}\)\.constructor;.+\(\);$/m,'$1ctor = (async function(){}).constructor;'],
+      ]
+      for(const [pattern,after] of rewrites) {
+        if(!pattern.test(source)) throw new Error('EJS 特性探测源码与已固定版本不一致')
+        source=source.replace(pattern,after)
+      }
+      if(/\bFunction\s*\(/.test(source)) throw new Error('EJS 源码仍含未审查的动态构造调用')
+      ejsFeatureDetectionPatched=true
+      return {contents:source,loader:'js'}
+    })
     builder.onResolve({filter:/^tavern-ejs-utils$/},()=>({path:join(root,'node_modules/ejs/lib/esm/utils.js')}))
     builder.onResolve({filter:/^node:(fs|path)$/},args=>({path:args.path,namespace:'ejs-virtual-files'}))
     builder.onLoad({filter:/.*/,namespace:'ejs-virtual-files'},args=>({loader:'js',contents:args.path==='node:fs'
@@ -84,12 +100,12 @@ const result = await build({
   }}],
 })
 if(!emojiMatcherOptimized) throw new Error('markdown-it-emoji 模块入口改变，必须重新审查 QuickJS 匹配器优化')
+if(!ejsFeatureDetectionPatched) throw new Error('ejs 模块入口改变，必须重新审查 QuickJS 特性探测补丁')
 const fakerResult=await build({
-  stdin:{contents:`export * as fakerCore from "tavern-faker-core";
-    export const fakerLocaleJson=${JSON.stringify(fakerLocaleJson)};
-    export const fakerFallbacks=${JSON.stringify(fakerFallbacks)};
-    export const fakerInstanceNames=${JSON.stringify(fakerInstanceNames)};`,resolveDir:root,sourcefile:'template-faker-entry.js'},
+  stdin:{contents:`export * as fakerCore from "tavern-faker-core";`,resolveDir:root,sourcefile:'template-faker-entry.js'},
   bundle:true,format:'iife',globalName:'__TavernFakerLibraries',platform:'browser',target:'es2022',
+  banner:{js:'globalThis.__createTavernFakerCore=()=>{var __TavernFakerLibraries;'},
+  footer:{js:'return __TavernFakerLibraries.fakerCore;};'},
   write:false,minify:true,legalComments:'inline',charset:'utf8',
   inject:['tavern-faker-encoding'],
   plugins:[{name:'tavern-faker',setup(builder) {
@@ -97,6 +113,7 @@ const fakerResult=await build({
     builder.onLoad({filter:/.*/,namespace:'tavern-faker'},args=>({contents:args.path==='tavern-faker-core'?fakerCoreSource:encodingSource,resolveDir:root,loader:'js'}))
   }}],
 })
+const fakerDataComment=`\n/* __TAVERN_FAKER_DATA__\n${JSON.stringify({fakerLocaleJson,fakerFallbacks,fakerInstanceNames}).replaceAll('*/','\\u002a/')}\n*/\n`
 const licenses=new Map()
 const markdownPackages=['markdown-it','markdown-it-emoji','mdurl','entities','uc.micro','linkify-it','punycode.js']
 for (const name of ['zod','lodash','jsonrepair','ejs',...markdownPackages,'@faker-js/faker']) {
@@ -105,8 +122,11 @@ for (const name of ['zod','lodash','jsonrepair','ejs',...markdownPackages,'@fake
   const version = JSON.parse(await readFile(join(root,'node_modules',name,'package.json'),'utf8')).version
   licenses.set(name,`/* ${name} ${version}\n${license.replaceAll('*/','* /')}\n*/`)
 }
-for(const [filename,bundle,names] of [['template-libraries.js',result,['zod','lodash','jsonrepair','ejs',...markdownPackages]],['template-faker.js',fakerResult,['@faker-js/faker']]]) {
-  const source = `/** 模板沙箱依赖产物，由 scripts/build-template-vendor.mjs 生成。 */\n${names.map(name=>licenses.get(name)).join('\n')}\n${bundle.outputFiles[0].text}`
+for(const [filename,text,names] of [
+  ['template-libraries.js',result.outputFiles[0].text,['zod','lodash','jsonrepair','ejs',...markdownPackages]],
+  ['template-faker.js',`${fakerResult.outputFiles[0].text}${fakerDataComment}`,['@faker-js/faker']],
+]) {
+  const source = `/** 模板沙箱依赖产物，由 scripts/build-template-vendor.mjs 生成。 */\n${names.map(name=>licenses.get(name)).join('\n')}\n${text}`
   const destination = join(root,'lib/vendor',filename)
   await mkdir(dirname(destination),{recursive:true})
   await writeFile(destination,source,'utf8')

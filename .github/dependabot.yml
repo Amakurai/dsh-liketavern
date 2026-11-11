@@ -1,0 +1,19 @@
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    ignore:
+      # 宿主开发基线需整组对齐并通过 npm run host:check 验证，避免单包漂移破坏构建。
+      - dependency-name: "@deepseek-ai/*"
+      # 模板检查点引擎固定精确 WASM ABI，升级须同步核对引擎清单与旧检查点兼容。
+      - dependency-name: "quickjs-emscripten*"
+      - dependency-name: "@jitl/quickjs-*"

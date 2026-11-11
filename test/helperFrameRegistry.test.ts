@@ -41,7 +41,7 @@ it('有效租约绑定实际剧情及宿主消息；伪造任一身份拒绝，�
   for(const scope of [{sessionId:'another-session',messageId,storyId:input.storyId},{sessionId:source.id,messageId:messageId+1,storyId:input.storyId},{sessionId:source.id,messageId,storyId:'wrong-story'}]){
     expect(()=>guard(input,token,scope)(binding)).toThrow('租约已失效')
   }
-  for(const change of [{frameId:'frame-forged-000'},{runtimeId:'runtime-forged-1'},{epoch:2},{token:'forged-token'}]){
+  for(const change of [{frameId:'frame-forged-000'},{runtimeId:'runtime-forged-1'},{epoch:2},{token:'example-forged-token'}]){
     const forged={...lease(input,token),...change}
     expect(()=>helperFrameWriteGuard(state,{sessionId:source.id,messageId,storyId:input.storyId},forged)!(binding)).toThrow('租约已失效')
   }
@@ -71,7 +71,7 @@ it('失败的新连接保留撤销墓碑；乱序低 epoch 与旧断开不能恢
   const latest=request({epoch:3,runtimeId:'runtime-factory-3'}),current=await openHelperFrame(ctx,state,latest),check=guard(latest,current.token)
   await expect(openHelperFrame(ctx,state,request({epoch:2,runtimeId:'runtime-factory-2'}))).rejects.toThrow('连接已失效')
   closeHelperFrame(state,{...first,token:old.token});expect(()=>check(binding)).not.toThrow()
-  for(const change of [{sessionId:'another-session'},{messageId:messageId+1},{frameId:'frame-another-000'},{runtimeId:'runtime-another-1'},{epoch:2},{token:'wrong-token'}]){
+  for(const change of [{sessionId:'another-session'},{messageId:messageId+1},{frameId:'frame-another-000'},{runtimeId:'runtime-another-1'},{epoch:2},{token:'example-wrong-token'}]){
     closeHelperFrame(state,{...latest,token:current.token,...change});expect(()=>check(binding)).not.toThrow()
   }
   closeHelperFrame(state,{...latest,token:current.token});expect(()=>check(binding)).toThrow('租约已失效')

@@ -48,7 +48,7 @@ function connectFrame(from:unknown=source){
   dispatchBridge(event)
 }
 const frameLeaseRpc={
-  openHelperFrame:async()=>({ok:true as const,value:{token:'fixture-private-frame-token'}}),
+  openHelperFrame:async()=>({ok:true as const,value:{token:'example-private-frame-token'}}),
   closeHelperFrame:async()=>({ok:true as const,value:undefined}),
 }
 const remote = {...frameLeaseRpc, renderOutputText: async () => ({ ok: true, value: { text: '', htmls: ['<p>测试卡</p>'], interactiveCards: true,

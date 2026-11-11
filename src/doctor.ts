@@ -287,7 +287,7 @@ async function probeDirectory(path: string, boundary?: string): Promise<DoctorDi
   }
 }
 
-/** 目录项本身也有累计上限，避免结构检查的 readdir 在正文预算生效前耗尽内存。 */
+/** 目录项本身也有累计上限，避免结构检查的 readdir 在正文预算生效前耗尽内存；返回前按名称排序保证跨平台预算截断一致。 */
 async function readDirectoryEntries(path: string, budget: ScanBudget): Promise<Dirent[]> {
   if (budget.remaining <= 0) {
     budget.exhausted = true
@@ -307,7 +307,7 @@ async function readDirectoryEntries(path: string, budget: ScanBudget): Promise<D
   } finally {
     await directory.close().catch(() => undefined)
   }
-  return entries
+  return entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
 }
 
 function validDate(value: unknown): value is string {
@@ -659,6 +659,7 @@ async function inspectFiles(
       continue
     }
     try {
+      const subdirs: Array<{ path: string; depth: number }> = []
       for (const entry of entries) {
         if (entry.isSymbolicLink()) {
           stats.skippedLinks += 1
@@ -666,7 +667,7 @@ async function inspectFiles(
         }
         const child = `${current.path}/${entry.name}`
         if (entry.isDirectory()) {
-          if (current.depth < MAX_SCAN_DEPTH) pending.push({ path: child, depth: current.depth + 1 })
+          if (current.depth < MAX_SCAN_DEPTH) subdirs.push({ path: child, depth: current.depth + 1 })
           else {
             stats.scanTruncated = true
             issues.add('FILE_SCAN_LIMIT_REACHED', 'warning')
@@ -688,6 +689,7 @@ async function inspectFiles(
           else if (json.status !== 'ok') stats.unreadable += 1
         }
       }
+      for (let i = subdirs.length - 1; i >= 0; i--) pending.push(subdirs[i]!)
     } catch {
       stats.unreadable += 1
       issues.add('FILE_TREE_UNREADABLE', 'error')

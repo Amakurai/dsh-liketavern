@@ -43,6 +43,21 @@ export interface ComputeJobs {
     input: {parts:TemplateDisplayPart[];rules:Parameters<typeof applyRegexRules>[1];macroCtx:SerializableMacros}
     output: ReturnType<typeof presentTemplateDisplayResult>
   }
+  renderBatch: {
+    input: {
+      rules: Parameters<typeof applyRegexRules>[1]
+      macroCtx: SerializableMacros
+      items: Array<
+        | { kind: 'render'; text: string }
+        | { kind: 'display'; parts: TemplateDisplayPart[] }
+      >
+    }
+    output: Array<
+      | { ok: true; kind: 'render'; value: ReturnType<typeof applyRegexRules> }
+      | { ok: true; kind: 'display'; value: ReturnType<typeof presentTemplateDisplayResult> }
+      | { ok: false; error: string }
+    >
+  }
 }
 
 /** 只检查会成为正文的字段，避免为检测标记把包含重复长历史的整个任务编码两遍。 */
@@ -62,7 +77,7 @@ async function compute(request: typeof workerData):Promise<void> {
     const budget: TemplateExecutionBudget = request.budget ?? templateExecutionBudget(Math.max(measureTemplateJson(input),
       input.replay ? measureTemplateReplayWork(input.replay) : 0,
       input.templateContinuation?.replay ? measureTemplateReplayWork(input.templateContinuation.replay) : 0), undefined,
-      kind === 'render' || kind === 'display' ? 'display' : 'template')
+      kind === 'render' || kind === 'display' || kind === 'renderBatch' ? 'display' : 'template')
     const needsTemplates = kind === 'template' || kind === 'wi' && input.templates && input.entries.some((raw: WorldInfoEntry) => {
         const entry = normalizeTemplateLore(raw)
         return entry.enabled && Boolean(entry.templateCondition)
@@ -89,8 +104,8 @@ async function compute(request: typeof workerData):Promise<void> {
     beginComputing()
     const incomingReplay=kind==='assemble' ? input.templateContinuation?.replay : kind==='template' ? input.replay : undefined
     const incomingContext=kind==='assemble' ? input.templates : input.context
-    const incomingKey=templateWorkerCacheKey(incomingReplay,incomingContext)
-    if(!needsTemplates||kind==='render'||kind==='display')cacheKey=sandboxCache.key
+    const incomingKey='incomingKey' in request ? (request.incomingKey as string | undefined) : templateWorkerCacheKey(incomingReplay,incomingContext)
+    if(!needsTemplates||kind==='render'||kind==='display'||kind==='renderBatch')cacheKey=sandboxCache.key
     else if(!incomingKey)sandboxCache.clear()
     const restoreCached=()=> {
       const cached=sandboxCache.take(incomingKey,incomingReplay,budget.inputChars)
@@ -150,6 +165,20 @@ async function compute(request: typeof workerData):Promise<void> {
     }
     else if (kind === 'render') { beginComputing(); value = applyRegexRules(input.text, input.rules, { scope: 'output', timing: 'render' }, input.macroCtx) }
     else if (kind === 'display') { beginComputing(); value = presentTemplateDisplayResult(input.parts,input.rules,input.macroCtx) }
+    else if (kind === 'renderBatch') {
+      beginComputing()
+      value = input.items.map((item: ComputeJobs['renderBatch']['input']['items'][number]) => {
+        try {
+          if (item.kind === 'render') {
+            return { ok: true as const, kind: 'render' as const, value: applyRegexRules(item.text, input.rules, { scope: 'output', timing: 'render' }, input.macroCtx) }
+          }
+          return { ok: true as const, kind: 'display' as const, value: presentTemplateDisplayResult(item.parts, input.rules, input.macroCtx) }
+        } catch (error) {
+          const message = error instanceof Error ? (error.message || error.name || '展示正则计算失败') : (String(error) || '展示正则计算失败')
+          return { ok: false as const, error: message }
+        }
+      })
+    }
     else throw new Error('未知提示词任务')
     measureTemplateJson(value, budget.outputChars)
     send({ value, cacheKey, cacheHit })

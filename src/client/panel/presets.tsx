@@ -7,7 +7,7 @@ import { exportStPreset } from '../../core/presetExport.js'
 import { randomUuid } from '../../core/secureRandom.js'
 import { useDraftGuard } from '../drafts.js'
 import { useDraftState } from '../draftPersistence.js'
-import { useEffect, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { IconDownloadOutlineMedium, IconEditOutlineMedium, IconFolderOpenOutlineMedium, IconListPenOutlineMedium, IconTrashOutlineMedium } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { CardRegexScript, ChatRole, PresetEntry, PromptPreset } from '../../core/types.js'
 import type { PresetSummary, TavernRemote } from '../types.js'
@@ -73,10 +73,16 @@ function PresetSamplingSummary({ sampling, onChange }: { sampling: PromptPreset[
   </Field>
 }
 
-function EntryEditor(props: { entry: PresetEntry; disabled: boolean; onChange: (e: PresetEntry) => void; onDelete: () => void }) {
-  const { entry } = props
+const EntryEditor = memo(function EntryEditor(props: {
+  index: number
+  entry: PresetEntry
+  disabled: boolean
+  onChange: (index: number, e: PresetEntry) => void
+  onDelete: (index: number) => void
+}) {
+  const { index, entry, onChange, onDelete } = props
   const t = useT()
-  const set = (patch: Partial<PresetEntry>) => props.onChange({ ...entry, ...patch })
+  const set = (patch: Partial<PresetEntry>) => onChange(index, { ...entry, ...patch })
   return (
     <div className="dsh-tavern-entry">
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', padding: '12px 16px 8px' }}>
@@ -116,7 +122,7 @@ function EntryEditor(props: { entry: PresetEntry; disabled: boolean; onChange: (
           <input aria-label={t('presets.entry.markerId')} className="dsh-tavern-input" style={{ width: 140 }} value={entry.markerId ?? ''} placeholder="markerId" onChange={(e) => set({ markerId: e.target.value })} />
         )}
         <span style={{ flex: 1 }} />
-        <IconBtn label={t('presets.entry.delete')} danger onClick={props.onDelete}>
+        <IconBtn label={t('presets.entry.delete')} danger onClick={() => onDelete(index)}>
           <IconTrashOutlineMedium />
         </IconBtn>
       </div>
@@ -127,7 +133,7 @@ function EntryEditor(props: { entry: PresetEntry; disabled: boolean; onChange: (
       )}
     </div>
   )
-}
+})
 
 export function PresetsSection(props: { remote: TavernRemote }) {
   const { remote } = props
@@ -150,7 +156,8 @@ export function PresetsSection(props: { remote: TavernRemote }) {
   const [query, setQuery] = useState('')
   const toast = useToast()
   const t = useT()
-  const guard = useDraftGuard(editing !== null && JSON.stringify(editing) !== baseline, busy)
+  const dirty = useMemo(() => editing !== null && JSON.stringify(editing) !== baseline, [editing, baseline])
+  const guard = useDraftGuard(dirty, busy)
   const requestEditor = (action: () => void) => { if (!pending.current) guard.request(action) }
   /** 保存、删除、导入导出与默认项共用同步屏障，读取期间也不能用旧编辑器开始写入。 */
   const perform = async (operation: () => Promise<void>) => {
@@ -158,10 +165,10 @@ export function PresetsSection(props: { remote: TavernRemote }) {
     pending.current = true
     try { await runAsync(setBusy, setError, operation) } finally { pending.current = false }
   }
-  const edit = (change: (current: PromptPreset) => PromptPreset) => {
+  const edit = useCallback((change: (current: PromptPreset) => PromptPreset) => {
     if (pending.current || opening.current) return
     setEditing(current => current ? change(current) : current)
-  }
+  }, [setEditing])
 
   const items: PresetSummary[] = state.status === 'ready' ? state.value.items : []
   const q = query.trim().toLowerCase()
@@ -283,13 +290,17 @@ export function PresetsSection(props: { remote: TavernRemote }) {
     setBaseline('null')
   }
 
-  const setEntry = (index: number, entry: PresetEntry) => {
+  const setEntry = useCallback((index: number, entry: PresetEntry) => {
     edit(current => {
       const entries = current.entries.slice()
       entries[index] = entry
       return { ...current, entries }
     })
-  }
+  }, [edit])
+
+  const deleteEntry = useCallback((index: number) => {
+    edit(current => ({ ...current, entries: current.entries.filter((_, j) => j !== index) }))
+  }, [edit])
 
   return (
     <Section title={t('section.presets')} description={t('presets.section.desc')}>
@@ -393,15 +404,16 @@ export function PresetsSection(props: { remote: TavernRemote }) {
             {editing.entries.map((entry, i) => (
               <EntryEditor
                 key={entry.identifier}
+                index={i}
                 entry={entry}
                 disabled={busy}
-                onChange={(e2) => setEntry(i, e2)}
-                onDelete={() => edit(current => ({ ...current, entries: current.entries.filter((_, j) => j !== i) }))}
+                onChange={setEntry}
+                onDelete={deleteEntry}
               />
             ))}
           </div>
           <SaveBar>
-            <span className="dsh-tavern-muted">{JSON.stringify(editing) !== baseline ? t('draft.unsaved') : ''}</span>
+            <span className="dsh-tavern-muted">{dirty ? t('draft.unsaved') : ''}</span>
             <Btn onClick={() => edit(current => ({ ...current, entries: [...current.entries, newEntry(current.entries.length * 100 + 100)] }))}>{t('presets.addEntry')}</Btn>
             <Btn disabled={busy} onClick={() => void save()} primary>{t('presets.save')}</Btn>
             <Btn onClick={() => requestEditor(closeEditor)}>{t('action.close')}</Btn>

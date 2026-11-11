@@ -10,6 +10,7 @@ import {openChildSession} from './openChild.js'
 import { SpeechHtmlFrame } from './speech.js'
 import {CHARACTER_CHANGED_EVENT,invalidateSessionBinding} from './cache.js'
 import {BINDING_CHANGED_EVENT,BRANCH_CHANGED_EVENT} from './actions.js'
+import { subscribeKeyedWindowEvent } from './windowEvents.js'
 import { watchHelperScripts,watchHelperScriptAssets } from './helperScriptNotifications.js'
 import { notifyHelperStory,watchHelperStory } from './helperNotifications.js'
 import { useT } from './i18n.js'
@@ -56,9 +57,7 @@ export function HelperScripts(props:{remote:TavernRemote;sessionId:string;cardId
   useEffect(()=>{
     if(!watchedCardId)return
     // HeaderChip 传入绑定中的稳定 cardId；重拉期间 bundle 暂时为空也不能漏掉连续保存事件。
-    const changed=(event:Event)=>{if((event as CustomEvent<string>).detail===watchedCardId)loader.reload()}
-    window.addEventListener(CHARACTER_CHANGED_EVENT,changed)
-    return()=>window.removeEventListener(CHARACTER_CHANGED_EVENT,changed)
+    return subscribeKeyedWindowEvent(CHARACTER_CHANGED_EVENT,watchedCardId,false,loader.reload)
   },[watchedCardId,loader.reload])
   const libraries:HelperScriptAsset[]=bundle?(bundle.libraries??[{target:{type:'character',cardId:bundle.cardId},revision:bundle.revision,trees:bundle.trees}]):[]
   let scripts:HelperScript[]=[],scriptError:string|null=null

@@ -105,6 +105,8 @@ interface DocEntry<D> {
   length: number
   /** term → 本文档在该词倒排表里的下标，删除时 O(1) 定位。 */
   positions: Map<string, number>
+  /** 与 positions 同序的正文/标签词倒排表引用，similarity 计算文档总权重时避免每次逐词查 Map。 */
+  termPostings: Posting[]
   /** 单字 → 本文档在该字倒排表里的下标。 */
   charPositions: Map<string, number>
   /** 边界特征 → 本文档在该特征倒排表里的下标。 */
@@ -227,6 +229,22 @@ export class Bm25Index<D = unknown> {
   private scores = new Float64Array(0)
   private norms = new Float64Array(0)
   private seen = new Uint8Array(0)
+  /** 索引修订代号：增删清时推进，用于惰性失效 similarity 的 IDF 表与按槽位文档权重缓存。 */
+  private mutationEpoch = 1
+  private idfEpoch = 0
+  private idfWeights = new Float64Array(0)
+  private docWeights = new Float64Array(0)
+  private docWeightEpochs = new Uint32Array(0)
+
+  private bumpEpoch(): void {
+    if (this.mutationEpoch === 0xffffffff) {
+      this.mutationEpoch = 1
+      this.idfEpoch = 0
+      this.docWeightEpochs.fill(0)
+    } else {
+      this.mutationEpoch += 1
+    }
+  }
 
   private ensureScratch(): void {
     if (this.seen.length < this.slots.length) {
@@ -234,6 +252,12 @@ export class Bm25Index<D = unknown> {
       this.scores = new Float64Array(capacity)
       this.norms = new Float64Array(capacity)
       this.seen = new Uint8Array(capacity)
+      const nextWeights = new Float64Array(capacity)
+      nextWeights.set(this.docWeights)
+      this.docWeights = nextWeights
+      const nextEpochs = new Uint32Array(capacity)
+      nextEpochs.set(this.docWeightEpochs)
+      this.docWeightEpochs = nextEpochs
     }
   }
 
@@ -278,9 +302,11 @@ export class Bm25Index<D = unknown> {
     for (const alias of doc.aliases ?? []) label(alias, 1)
     const length = body.terms.length
     const slot = this.freeSlots.pop() ?? this.slots.length
+    const termPostings: Posting[] = []
     const entry: DocEntry<D> = {
       id: doc.id, slot, length,
-      positions: this.attach(this.postings, tf, slot),
+      positions: this.attach(this.postings, tf, slot, termPostings),
+      termPostings,
       charPositions: this.attach(this.charPostings, charTf, slot),
       edgePositions: this.attach(this.edgePostings, edges, slot),
       ts: doc.ts, data: doc.data,
@@ -289,10 +315,11 @@ export class Bm25Index<D = unknown> {
     this.slots[slot] = entry
     this.lengths[slot] = length
     this.totalLength += length
+    this.bumpEpoch()
   }
 
   /** 把一篇文档的词频挂进倒排表，返回各词在倒排表里的下标。 */
-  private attach(postings: Map<string, Posting>, frequencies: Map<string, number>, slot: number): Map<string, number> {
+  private attach(postings: Map<string, Posting>, frequencies: Map<string, number>, slot: number, refs?: Posting[]): Map<string, number> {
     const positions = new Map<string, number>()
     for (const [term, frequency] of frequencies) {
       let posting = postings.get(term)
@@ -302,6 +329,7 @@ export class Bm25Index<D = unknown> {
         if (postings === this.postings) this.noteBigram(term, 1)
       }
       positions.set(term, posting.slots.length)
+      refs?.push(posting)
       posting.slots.push(slot)
       posting.tfs.push(frequency)
     }
@@ -352,6 +380,7 @@ export class Bm25Index<D = unknown> {
     this.slots[entry.slot] = undefined
     this.lengths[entry.slot] = 0
     this.freeSlots.push(entry.slot)
+    this.bumpEpoch()
   }
 
   clear(): void {
@@ -365,6 +394,7 @@ export class Bm25Index<D = unknown> {
     this.lengths.length = 0
     this.freeSlots.length = 0
     this.totalLength = 0
+    this.bumpEpoch()
   }
 
   /** Robertson 变体 IDF：ln(1 + (N - df + 0.5)/(df + 0.5))，保证为正。 */
@@ -581,7 +611,17 @@ export class Bm25Index<D = unknown> {
 
     this.ensureScratch()
     const others = docCount - 1
-    const weight = (df: number): number => Math.log(1 + (others - df + 0.5) / (df + 0.5))
+    const epoch = this.mutationEpoch
+    if (this.idfEpoch !== epoch) {
+      if (this.idfWeights.length <= others) {
+        this.idfWeights = new Float64Array(Math.max(others + 1, this.idfWeights.length * 2, 16))
+      }
+      for (let df = 0; df <= others; df++) {
+        this.idfWeights[df] = Math.log(1 + (others - df + 0.5) / (df + 0.5))
+      }
+      this.idfEpoch = epoch
+    }
+    const idfWeights = this.idfWeights
     /** 共有词的权重和（复用 scores）：候选文档含有这些词，文档频率各减 1。 */
     const shared = this.scores
     /** 同一批共有词按「候选文档不含它」计的权重和（复用 norms），用来从 absent 里扣掉。 */
@@ -595,10 +635,10 @@ export class Bm25Index<D = unknown> {
         const posting = this.postings.get(term)
         const df = posting?.slots.length ?? 0
         // 每篇文档都有的词不存在「候选不含它」的情况，两边同记 0。
-        const asAbsent = df > others ? 0 : weight(df)
+        const asAbsent = df > others ? 0 : idfWeights[df]!
         absent += asAbsent
         if (!posting) continue
-        const asShared = weight(df - 1)
+        const asShared = idfWeights[df - 1]!
         for (const slot of posting.slots) {
           if (seen[slot] === 0) {
             seen[slot] = 1
@@ -612,13 +652,24 @@ export class Bm25Index<D = unknown> {
         }
       }
 
+      const { docWeights, docWeightEpochs } = this
       const hits = new TopHits<D>(topK, touched.length)
       for (const slot of touched) {
         const entry = this.slots[slot]!
         const overlap = shared[slot]!
         const queryWeight = overlap + Math.max(0, absent - sharedAsAbsent[slot]!)
-        let docWeight = 0
-        for (const term of entry.positions.keys()) docWeight += weight(this.postings.get(term)!.slots.length - 1)
+        let docWeight: number
+        if (docWeightEpochs[slot] === epoch) {
+          docWeight = docWeights[slot]!
+        } else {
+          docWeight = 0
+          const { termPostings } = entry
+          for (let i = 0; i < termPostings.length; i++) {
+            docWeight += idfWeights[termPostings[i]!.slots.length - 1]!
+          }
+          docWeights[slot] = docWeight
+          docWeightEpochs[slot] = epoch
+        }
         // 求和顺序不同会差几个末位；舍入到 1e-12，使相同正文恰好得 1。
         const score = Math.min(1, Math.round(Math.min(overlap / queryWeight, overlap / docWeight) * 1e12) / 1e12)
         if (score <= 0) continue

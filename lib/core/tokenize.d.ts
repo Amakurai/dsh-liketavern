@@ -62,6 +62,19 @@ export declare function isKana(char: string): boolean;
  * 不屏蔽别处出现的同字，也不改变 terms、lone 或原来的分段边界。建索引不传此参数。
  */
 export declare function analyzeText(text: string, ignoredCharBigrams?: ReadonlySet<string>): TextTokens;
+export interface TokenCharCounts {
+    cjk: number;
+    other: number;
+}
+/** 统计文本的 (cjk, other) 字符计数；二者在拼接上严格可加，便于增量计算 JSON 输出预算。 */
+export declare function countTokenChars(text: string): TokenCharCounts;
+/**
+ * 统计 JSON.stringify(text) 的 (cjk, other) 字符计数（含外层双引号、控制字符转义与孤立代理项转义）。
+ * 与 ES2019+ 标准 JSON 序列化逐字符一致，无需分配转义后的字符串副本。
+ */
+export declare function countJsonStringTokenChars(text: string): TokenCharCounts;
+/** CJK 码点判定（与 estimateTokens 同口径，供增量 JSON 字符串扫描复用）。 */
+export declare function isTokenCjkCode(code: number): boolean;
 /**
  * 确定性粗估 token 数：CJK 字符每个计 1，其余字符累计后 ÷4 向上取整，两部分相加。
  * 只用于预算分配，不追求与具体模型 tokenizer 对齐；口径固定，不跟随分词的 bigram 文字范围。

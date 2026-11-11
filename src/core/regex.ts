@@ -917,15 +917,17 @@ export function parseImportedRegexRules(raw: unknown): RegexRule[] {
  * 正则替换后的展示文本常是「整页 HTML 封面」或「小部件 HTML + 后面的正文」。
  * HTML 文档和小部件片段抽进 iframe；围栏外 / </html> 之前的协议标签与之后的文字留给 Markdown。
  */
-export function locateRenderedHtml(text: string): { html: string; rest: string; start: number; fence?:{start:number;end:number} } | null {
+export function locateRenderedHtml(text: string, existingCode?: ReturnType<typeof markdownCodeScanner> | null): { html: string; rest: string; start: number; fence?:{start:number;end:number} } | null {
   if (!text) return null
   const hasFenceTokens = text.includes('```') || text.includes('~~~')
   const hasAngle = text.includes('<')
   if (!hasFenceTokens && !hasAngle) return null
-  const code = markdownCodeScanner(text)
+  const code = existingCode ?? markdownCodeScanner(text)
   const fence = hasFenceTokens ? findHtmlFence(text, code) : null
-  const fragment = hasAngle ? findHtmlFragment(text, code) : null
-  const document = hasAngle ? findHtmlDocument(text, code) : null
+  const beforeFence = fence ? fence.start - 1 : Number.POSITIVE_INFINITY
+  const fragment = hasAngle ? findHtmlFragment(text, code, beforeFence) : null
+  const beforeRange = fragment ? Math.min(beforeFence, fragment.start) : beforeFence
+  const document = hasAngle ? findHtmlDocument(text, code, beforeRange) : null
   // 从组件容器开始保留相邻 CSS/JS，不能从中间的 style 起切，更不能吞入下一张完整文档。
   const range = fragment && (!document || fragment.start < document.start) ? fragment : document
   if(fence&&(!range||fence.start<range.start))return {html:text.slice(fence.contentStart,fence.contentEnd),rest:[text.slice(0,fence.start).trim(),text.slice(fence.end).trim()].filter(Boolean).join('\n'),start:fence.contentStart,fence:{start:fence.start,end:fence.end}}

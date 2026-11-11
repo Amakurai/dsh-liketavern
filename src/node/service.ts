@@ -20,6 +20,7 @@ import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import { estimateTokens } from '../core/tokenize.js'
 import { inspectCharacterCompatibility } from '../core/characterCompatibility.js'
 import { isolated } from './isolated.js'
+import type { ComputeJobs } from './computeWorker.js'
 import { collectDisplayRegexDiagnostics, presentTemplateDisplayResult } from './templateDisplay.js'
 import { hasApplicableOrMalformedRegex } from '../core/regex.js'
 import { hideIncompleteHtml, presentRenderedOutput, stripOpaqueDisplayMeta } from '../core/displaySanitize.js'
@@ -92,6 +93,16 @@ interface DisplayScope {
   templateOutputs: (ids: readonly number[]) => Promise<Awaited<ReturnType<typeof loadTemplateOutputs>>>
   helperSet: (withSnapshot: boolean) => Promise<HelperDisplaySet>
   helperExtras: () => Promise<{ helperScripts: HelperScriptContext; helperWorldbooks: HelperWorldbookContext }>
+  renderDisplay: (
+    parts: TemplateDisplayPart[],
+    rules: ComputeJobs['display']['input']['rules'],
+    macroCtx: ComputeJobs['display']['input']['macroCtx'],
+  ) => Promise<ComputeJobs['display']['output']>
+  renderText: (
+    text: string,
+    rules: ComputeJobs['render']['input']['rules'],
+    macroCtx: ComputeJobs['render']['input']['macroCtx'],
+  ) => Promise<ComputeJobs['render']['output']>
 }
 
 /** 单个气泡的展示结果；卡面快照与脚本库、世界书只标记需要，由调用方按单条或批次组装。 */
@@ -701,6 +712,90 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
       }
     })
     const helperSets = [once(() => loadHelperDisplaySet(this.ctx, this.state, sessionId, false)), once(() => loadHelperDisplaySet(this.ctx, this.state, sessionId, true))] as const
+    type PendingRenderItem =
+      | {
+          kind: 'render'
+          text: string
+          rules: ComputeJobs['render']['input']['rules']
+          macroCtx: ComputeJobs['render']['input']['macroCtx']
+          resolve: (value: ComputeJobs['render']['output']) => void
+          reject: (reason: unknown) => void
+        }
+      | {
+          kind: 'display'
+          parts: TemplateDisplayPart[]
+          rules: ComputeJobs['display']['input']['rules']
+          macroCtx: ComputeJobs['display']['input']['macroCtx']
+          resolve: (value: ComputeJobs['display']['output']) => void
+          reject: (reason: unknown) => void
+        }
+    let renderQueue: PendingRenderItem[] = []
+    let renderScheduled = false
+    const runSingleRender = async (entry: PendingRenderItem): Promise<void> => {
+      try {
+        if (entry.kind === 'render') {
+          entry.resolve(await isolated('render', { text: entry.text, rules: entry.rules, macroCtx: entry.macroCtx }))
+        } else {
+          entry.resolve(await isolated('display', { parts: entry.parts, rules: entry.rules, macroCtx: entry.macroCtx }))
+        }
+      } catch (error) {
+        entry.reject(error)
+      }
+    }
+    const flushRenderQueue = () => {
+      renderScheduled = false
+      const batch = renderQueue
+      renderQueue = []
+      if (batch.length === 0) return
+      if (batch.length === 1) {
+        void runSingleRender(batch[0]!)
+        return
+      }
+      const first = batch[0]!
+      const sameContext = batch.every(
+        (entry) =>
+          entry.rules === first.rules
+          && entry.macroCtx.char === first.macroCtx.char
+          && entry.macroCtx.user === first.macroCtx.user
+          && entry.macroCtx.pickSeed === first.macroCtx.pickSeed,
+      )
+      if (!sameContext) {
+        for (const entry of batch) void runSingleRender(entry)
+        return
+      }
+      void isolated('renderBatch', {
+        rules: first.rules,
+        macroCtx: first.macroCtx,
+        items: batch.map((entry) =>
+          entry.kind === 'render'
+            ? { kind: 'render' as const, text: entry.text }
+            : { kind: 'display' as const, parts: entry.parts },
+        ),
+      }).then(
+        (results) => {
+          for (let i = 0; i < batch.length; i++) {
+            const entry = batch[i]!
+            const res = results[i]
+            if (!res) entry.reject(new Error('展示批次返回缺失'))
+            else if (!res.ok) entry.reject(new Error(res.error))
+            else if (entry.kind === 'render' && res.kind === 'render') entry.resolve(res.value)
+            else if (entry.kind === 'display' && res.kind === 'display') entry.resolve(res.value)
+            else entry.reject(new Error('展示批次返回类型不匹配'))
+          }
+        },
+        // 整批超限或单个气泡超时导致 worker 终止时退回逐条隔离执行，保持「单项失败只影响该项」。
+        () => {
+          for (const entry of batch) void runSingleRender(entry)
+        },
+      )
+    }
+    const scheduleRender = (entry: PendingRenderItem) => {
+      renderQueue.push(entry)
+      if (!renderScheduled) {
+        renderScheduled = true
+        queueMicrotask(flushRenderQueue)
+      }
+    }
     return {
       sessionId, settings, liveEvents,
       canSwipeGreeting: Boolean(liveEvents && !displaySessionHasUserMessage(liveEvents)),
@@ -725,6 +820,10 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
         ])
         return { helperScripts, helperWorldbooks }
       }),
+      renderDisplay: (parts, rules, macroCtx) =>
+        new Promise((resolve, reject) => scheduleRender({ kind: 'display', parts, rules, macroCtx, resolve, reject })),
+      renderText: (text, rules, macroCtx) =>
+        new Promise((resolve, reject) => scheduleRender({ kind: 'render', text, rules, macroCtx, resolve, reject })),
     }
   }
 
@@ -808,7 +907,7 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
     const macroCtx = { ...names, outlets: {}, pickSeed: chatPickSeed(binding) }
     const expandedParts = templateParts?.map(part => ({ ...part, text: expandIdentityMacros(part.text, names) }))
     const display = expandedParts === undefined ? undefined
-      : hasRenderRegex ? await isolated('display', { parts: expandedParts, rules, macroCtx })
+      : hasRenderRegex ? await scope.renderDisplay(expandedParts, rules, macroCtx)
         : presentTemplateDisplayResult(expandedParts, [], macroCtx)
     let parts = display?.parts
     let regexDiagnostics = display?.regexDiagnostics
@@ -816,7 +915,7 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
     let presented: {htmls:string[];text:string;pendingHtml?:true}
     if(parts === undefined) {
       const rendered = hasRenderRegex
-        ? await isolated('render', { text: named, rules, macroCtx })
+        ? await scope.renderText(named, rules, macroCtx)
         : { text: named, applied: [], errors: [] as Array<{ ruleId: string; message: string }> }
       regexDiagnostics = hasRenderRegex ? collectDisplayRegexDiagnostics(rendered.errors, rules) : undefined
       presented = presentRenderedOutput(rendered.text, allowHtml)

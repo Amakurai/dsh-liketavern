@@ -147,43 +147,46 @@ export async function loadBoundLoreEntries(
 ): Promise<BoundLoreEntries> {
   const onCorruptChatBook = options?.onCorruptChatBook ?? 'throw'
   const ws = await state.storyWorkspace(binding.cardId, binding.storyId)
-  const groups: WorldInfoEntry[][] = []
-
-  // 全局世界书
-  if (binding.lorebookIds.length > 0) {
-    groups.push(...(await Promise.all(binding.lorebookIds.map((id) => state.loadLorebookEntries(id, 'global')))))
-  }
-  // 主世界书（Character Lore）：绑定指定库文件 > 卡内嵌书（card.json / assets/character-book.json）
-  if (binding.characterLorebookId) {
-    groups.push(await state.loadLorebookEntries(binding.characterLorebookId, 'character'))
-  } else if (binding.useEmbeddedLorebook !== false) {
-    const embeddedEntries = await state.loadCharacterLorebookEntries(binding.cardId)
-    if (embeddedEntries.length > 0) groups.push(embeddedEntries)
-  }
   const additionalIds = [...new Set(binding.characterLorebookIds ?? [])].filter((id) => id !== binding.characterLorebookId)
-  if (additionalIds.length > 0) {
-    groups.push(...(await Promise.all(additionalIds.map((id) => state.loadLorebookEntries(id, 'character')))))
-  }
-  // 聊天世界书（会话级，存工作区）
   let chatBookCorrupt = false
-  try {
-    const chatEntries = await state.loadChatLorebookEntries(binding.cardId, binding.storyId, ws)
-    if (chatEntries.length > 0) groups.push(chatEntries)
-  } catch (cause) {
-    // 损坏的聊天世界书不能静默当空书：否则整本书的 WI 与模板 world_info 会无声消失，
-    // 与 getChatLorebook / helperWorldbook 的严格口径也不一致。
-    if (onCorruptChatBook === 'throw') throw new Error(CHAT_BOOK_CORRUPT_MESSAGE, { cause })
-    chatBookCorrupt = true
-  }
-  // 人设世界书
-  const persona = options && 'persona' in options ? options.persona : await state.resolvePersona(binding.personaId)
-  if (persona?.lorebookId) {
-    groups.push(await state.loadLorebookEntries(persona.lorebookId, 'persona'))
-  }
 
+  const [globalGroups, charEntries, additionalGroups, chatEntries, personaEntries, deltas] = await Promise.all([
+    // 全局世界书
+    binding.lorebookIds.length > 0
+      ? Promise.all(binding.lorebookIds.map((id) => state.loadLorebookEntries(id, 'global')))
+      : Promise.resolve([] as WorldInfoEntry[][]),
+    // 主世界书（Character Lore）：绑定指定库文件 > 卡内嵌书（card.json / assets/character-book.json）
+    binding.characterLorebookId
+      ? state.loadLorebookEntries(binding.characterLorebookId, 'character')
+      : binding.useEmbeddedLorebook !== false
+        ? state.loadCharacterLorebookEntries(binding.cardId)
+        : Promise.resolve([] as WorldInfoEntry[]),
+    additionalIds.length > 0
+      ? Promise.all(additionalIds.map((id) => state.loadLorebookEntries(id, 'character')))
+      : Promise.resolve([] as WorldInfoEntry[][]),
+    // 聊天世界书（会话级，存工作区）
+    state.loadChatLorebookEntries(binding.cardId, binding.storyId, ws).catch((cause: unknown) => {
+      // 损坏的聊天世界书不能静默当空书：否则整本书的 WI 与模板 world_info 会无声消失，
+      // 与 getChatLorebook / helperWorldbook 的严格口径也不一致。
+      if (onCorruptChatBook === 'throw') throw new Error(CHAT_BOOK_CORRUPT_MESSAGE, { cause })
+      chatBookCorrupt = true
+      return [] as WorldInfoEntry[]
+    }),
+    // 人设世界书
+    (async () => {
+      const persona = options && 'persona' in options ? options.persona : await state.resolvePersona(binding.personaId)
+      return persona?.lorebookId ? state.loadLorebookEntries(persona.lorebookId, 'persona') : []
+    })(),
+    ws.deltas.list(),
+  ])
+
+  const groups: WorldInfoEntry[][] = [...globalGroups]
+  if (binding.characterLorebookId || charEntries.length > 0) groups.push(charEntries)
+  groups.push(...additionalGroups)
+  if (chatEntries.length > 0) groups.push(chatEntries)
+  if (personaEntries.length > 0) groups.push(personaEntries)
   const base = groups.flat()
   // 变化层：ref 的 order 解析先查 character 条目，再查其余（预建索引避免 O(|deltas| * |base|) 线性扫描）
-  const deltas = await ws.deltas.list()
   let charOrderByUid: Map<string, number> | null = null
   let anyOrderByUid: Map<string, number> | null = null
   const resolveRefOrder = (ref: string): number | null => {
@@ -261,13 +264,16 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
       return restored
     }
   }
-  const charWs = await state.loadCharacter(binding.cardId)
+  const [charWs, rawPreset, persona] = await Promise.all([
+    state.loadCharacter(binding.cardId),
+    binding.presetId ? state.loadPreset(binding.presetId, true) : Promise.resolve(null),
+    state.resolvePersona(binding.personaId),
+  ])
   if (!charWs) return null
   const card = charWs.card
   const charName = characterPromptName(card)
 
-  const preset = (binding.presetId ? await state.loadPreset(binding.presetId, true) : null) ?? defaultPreset()
-  const persona = await state.resolvePersona(binding.personaId)
+  const preset = rawPreset ?? defaultPreset()
   const userName = persona?.name.trim() || DEFAULT_USER_NAME
   // 修订号可能在上述异步读取期间更新；实际已读取资产的内容才是这份快照的身份。
   // 加入正文指纹后，旧正文与新修订号即使同时出现，也不会挡住下一轮的新正文；图片不参与组装。
@@ -360,8 +366,43 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
   // 且 idle 时 turn 恒为 -1，各次预览之间也不该互相复用（绑定/世界书/记忆随时可能被编辑）。
   // 代价是每次预览/代答多评估一次世界书——正确且便宜。
   const cacheable = input.mode === 'live' && turn >= 0
+  // 记忆检索：本轮输入 + 最近 N 条历史做查询，本轮输入里的词额外加权；
+  // 角色名和用户人设名是确知的名字，即使正好由功能字组成（七、月、日向）也照常参与
+  const { query: queryMessages, boost } = memoryQuery(chatMessages, config.memory.queryMessages)
+  const candidateCount = memoryCandidateCount(config.memory.retrievalTopK)
+  const shouldSearchMemories = Boolean(
+    queryMessages.trim()
+      && candidateCount > 0
+      && Number.isFinite(config.memory.retrievalTokenBudget)
+      && config.memory.retrievalTokenBudget >= 1,
+  )
+
+  // 同轮冻结的宏输入：第 1 步取当前 history 的最近 assistant 正文（{{lastcharmessage}} 用），
+  // 后续步 history 增长也不变；journal 同理只在本轮首次评估读一次盘。
+  const lastCharMessage = [...chatMessages].reverse().find((m) => m.role === 'assistant')?.content ?? ''
+
   // 组装/模型输入路径：聊天世界书损坏必须显式失败，不能静默少注入整本书。
-  const lore = await loadBoundLoreEntries(state, binding, { onCorruptChatBook: 'throw', persona })
+  const [lore, avatars, memoryHits, rawJournal, timerState, regexRules] = await Promise.all([
+    loadBoundLoreEntries(state, binding, { onCorruptChatBook: 'throw', persona }),
+    loadTemplateAvatars(state, binding.cardId, persona),
+    shouldSearchMemories
+      ? ws.memory.search(
+          queryMessages,
+          {
+            ...memorySearchOptions(candidateCount, config.memory.halfLifeDays),
+            includeSummarySources: true,
+            ...(boost ? { boost } : {}),
+            names: persona?.name.trim() ? [charName, persona.name.trim()] : [charName],
+          },
+        )
+      : Promise.resolve(null),
+    binding.injectJournal ? ws.fs.readText('journal.md') : Promise.resolve(null),
+    input.mode === 'live'
+      ? state.loadTimers(binding.cardId, sessionId, binding.storyId)
+      : Promise.resolve(structuredClone(EMPTY_TIMER_STATE)),
+    state.rulesFor(binding),
+  ])
+
   lore.entries = lore.entries.map(normalizeTemplateLore)
   const templateContext: TemplateContext = {
     variables: templateState.variables, char: charName, user: userName,
@@ -369,41 +410,22 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
     entries: lore.entries, presets: preset.entries.filter(e => e.enabled), history: templateHistory,
     historyIdentities,messageVariables:visibleTemplateMessageVariables(templateState.messageVariables,historyIdentities),
     ...(helperMvu ? {helperMvu} : {}),
-    ...await loadTemplateAvatars(state,binding.cardId,persona),
+    ...avatars,
     now: macroCtx.now.getTime(), seed: turnSeed, phase: 'generate',
     sessionId, cardId: binding.cardId, generationType: input.generationType ?? 'normal', model:route.model ?? '',
   }
   const deltas: WorldDelta[] = lore.deltas
-
-  // 记忆检索：本轮输入 + 最近 N 条历史做查询，本轮输入里的词额外加权；
-  // 角色名和用户人设名是确知的名字，即使正好由功能字组成（七、月、日向）也照常参与
-  const { query: queryMessages, boost } = memoryQuery(chatMessages, config.memory.queryMessages)
-  let memories: string[] = []
-  const candidateCount = memoryCandidateCount(config.memory.retrievalTopK)
-  if (queryMessages.trim() && candidateCount > 0 && Number.isFinite(config.memory.retrievalTokenBudget) && config.memory.retrievalTokenBudget >= 1) {
-    const hits = await ws.memory.search(
-      queryMessages,
-      { ...memorySearchOptions(candidateCount, config.memory.halfLifeDays), includeSummarySources: true, ...(boost ? { boost } : {}),
-        names: persona?.name.trim() ? [charName, persona.name.trim()] : [charName] },
-    )
-    memories = selectMemoryBodies(hits, config.memory.retrievalTokenBudget, config.memory.retrievalTopK)
-  }
-
-  // 同轮冻结的宏输入：第 1 步取当前 history 的最近 assistant 正文（{{lastcharmessage}} 用），
-  // 后续步 history 增长也不变；journal 同理只在本轮首次评估读一次盘。
-  const lastCharMessage = [...chatMessages].reverse().find((m) => m.role === 'assistant')?.content ?? ''
-  let journalText = ''
-  if (binding.injectJournal) {
-    const rawJournal = await ws.fs.readText('journal.md')
-    if (rawJournal?.trim()) journalText = clipToTokenBudget(rawJournal, JOURNAL_TURN_TOKEN_BUDGET).text
-  }
+  const memories = memoryHits
+    ? selectMemoryBodies(memoryHits, config.memory.retrievalTokenBudget, config.memory.retrievalTopK)
+    : []
+  const journalText = rawJournal?.trim() ? clipToTokenBudget(rawJournal, JOURNAL_TURN_TOKEN_BUDGET).text : ''
 
   const assembled = await isolated('assemble', {
     templates: templateContext,
     templateContinuation:resolveTemplateContinuation(templateState),
     wiEvaluation: {
       entries:lore.entries, messages:chatMessages, settings:state.worldInfoFor(binding),
-      timerState:input.mode==='live' ? await state.loadTimers(binding.cardId,sessionId,binding.storyId) : structuredClone(EMPTY_TIMER_STATE),
+      timerState,
       contextWindowTokens:contextWindow, reservedTokens:estimateTokens(scanMessages.map(m=>m.content).join('\n')),
       seed:turnSeed, macroCtx:{char:charName,user:userName},
     },
@@ -424,7 +446,7 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
     journalText,
     // 显式冻结 lastCharMessage（同轮复用缓存值），不让 assemble 回退到随 history 增长的现算值。
     macroCtx: { ...macroCtx, lastCharMessage },
-    regexRules: await state.rulesFor(binding),
+    regexRules,
     // ST injection_trigger 评估用：当前正常发信是 normal；continue/impersonate 经 PipelineInput 传入。
     generationType: input.generationType ?? 'normal',
     seed: turnSeed ^ 0x9e3779b9,

@@ -2,7 +2,7 @@
  * 工作区资产阅读：路径消毒、可读白名单、预设条目目录。
  * 只允许角色工作区内的文本文件；WAL 与二进制一律拒绝。
  */
-import { clipToTokenBudget } from './tokenize.js';
+import { clipToTokenBudget, type TokenCharCounts } from './tokenize.js';
 import type { PresetEntry, PromptPreset } from './types.js';
 /** 资产工具的完整 JSON 输出预算；包括目录、正文、元数据、转义与展示缩进。 */
 export declare const ASSET_OUTPUT_TOKEN_BUDGET = 3000;
@@ -47,6 +47,10 @@ export interface AssetCatalogStats {
 export declare function stampAssetTokens<T extends {
     tokensUsed: number;
 }>(value: T, wrap?: (value: T) => unknown): T;
+/** 与 stampAssetTokens 同口径的零分配不动点计算：tokensUsed 从 0 变为多位整数只增加 ASCII 数字位数。 */
+export declare function stabilizeJsonTokenCount(cjk: number, otherAtZero: number): number;
+/** 统计单个数组元素在 pretty JSON（缩进 arrayIndent + 2 空格）中的增量字符数。 */
+export declare function countPrettyArrayItemChars(item: unknown, arrayIndent: number): TokenCharCounts;
 export interface PresetCatalog extends AssetCatalogStats {
     id?: string;
     idOmitted?: boolean;

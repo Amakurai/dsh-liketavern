@@ -10,7 +10,7 @@ import { CardDataSettings } from './cardData.js'
 import type { SessionsPort } from '../openChild.js'
 import { DraftScope, useDraftGuard } from '../drafts.js'
 import { useDraftRestored, useDraftState } from '../draftPersistence.js'
-import { useEffect, useId, useRef, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { MAX_PRESET_STOP_CHARS, MAX_PRESET_STOP_SEQUENCES } from '../../core/presetSampling.js'
 import { notifyAllSessionBindingsChanged } from '../cache.js'
 import { setSpeakerHeader } from '../displayPrefs.js'
@@ -46,11 +46,15 @@ export function SettingsSection(props: { remote: TavernRemote; sessions?: Sessio
   const t = useT()
   const tabsId = useId()
   const { state, reload } = useLoader(() => remote.getSettings({}), [])
-  const dataInfo = useLoader(() => remote.getDataInfo({}), [])
-  const presets = useLoader(() => remote.listPresets({}), [])
-  const lore = useLoader(() => remote.listLorebooks({}), [])
-  const personas = useLoader(() => remote.listPersonas({}), [])
   const [sub, setSub] = useDraftState<SubId>('settings:sub', lastSub ?? 'interface')
+  const [visitedDefaults, setVisitedDefaults] = useState(sub === 'defaults')
+  const [visitedCards, setVisitedCards] = useState(sub === 'cards')
+  if (sub === 'defaults' && !visitedDefaults) setVisitedDefaults(true)
+  if (sub === 'cards' && !visitedCards) setVisitedCards(true)
+  const dataInfo = useLoader(() => remote.getDataInfo({}), [], visitedCards)
+  const presets = useLoader(() => remote.listPresets({}), [], visitedDefaults)
+  const lore = useLoader(() => remote.listLorebooks({}), [], visitedDefaults)
+  const personas = useLoader(() => remote.listPersonas({}), [], visitedDefaults)
   const [baseline, setBaseline] = useDraftState<TavernSettings | null>('settings:baseline', null)
   const [draft, setDraft] = useDraftState<TavernSettings | null>('settings:draft', null)
   const restoredDraft = useDraftRestored('settings:draft')
@@ -66,7 +70,12 @@ export function SettingsSection(props: { remote: TavernRemote; sessions?: Sessio
     return runAsync(setBusy, setError, fn).finally(() => { pending.current = false })
   }
   const toast = useToast()
-  useDraftGuard(draft !== null && baseline !== null && JSON.stringify(draft) !== JSON.stringify(baseline), busy)
+  const baselineJson = useMemo(() => (baseline === null ? null : JSON.stringify(baseline)), [baseline])
+  const dirty = useMemo(
+    () => draft !== null && baselineJson !== null && JSON.stringify(draft) !== baselineJson,
+    [draft, baselineJson],
+  )
+  useDraftGuard(dirty, busy)
 
   /** 老配置可能缺 defaults/prompts 键，落成草稿时补齐，避免新设置被误显示为关闭。 */
   const toDraft = (settings: TavernSettings): TavernSettings => ({

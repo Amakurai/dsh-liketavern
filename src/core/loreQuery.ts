@@ -2,8 +2,8 @@
  * 世界书按条阅读：目录摘要、uid/关键词筛选、正文预算截断。
  * 给模型工具用，避免整本 JSON 灌进上下文。
  */
-import { estimateTokens } from './tokenize.js'
-import { assetOutputTokens, clipAssetJsonText, stampAssetTokens } from './assetRead.js'
+import { countJsonStringTokenChars, countTokenChars, estimateTokens, isTokenCjkCode, type TokenCharCounts } from './tokenize.js'
+import { clipAssetJsonText, countPrettyArrayItemChars, stabilizeJsonTokenCount, stampAssetTokens } from './assetRead.js'
 import type { WISource, WorldInfoEntry } from './types.js'
 
 export const LORE_READ_DEFAULT_TOPK = 6
@@ -138,8 +138,16 @@ export interface LoreBudgetResult<T> {
 /** 只裁剪展示元数据；触发键逐项完整保留或省略，uid/key/sourceRef 等定位字段绝不改写。 */
 function boundedLoreMetadata(entry: WorldInfoEntry) {
   const comment = clipAssetJsonText(entry.comment, 80), keys: string[] = []
+  let keysCjk = 0, keysOther = 0
   for (const key of entry.keys) {
-    if (assetOutputTokens([...keys, key]) <= 120) keys.push(key)
+    const kc = countJsonStringTokenChars(key)
+    const nextCjk = keysCjk + kc.cjk
+    const nextOther = keys.length === 0 ? 6 + kc.other : keysOther + 4 + kc.other
+    if (nextCjk + Math.ceil(nextOther / 4) <= 120) {
+      keys.push(key)
+      keysCjk = nextCjk
+      keysOther = nextOther
+    }
   }
   return { uid: entry.uid, key: entry.key, source: entry.source, sourceRef: entry.sourceRef,
     comment: comment.text, keys, enabled: entry.enabled, constant: entry.constant,
@@ -150,7 +158,13 @@ function boundedLoreMetadata(entry: WorldInfoEntry) {
 function budgetLoreItems<T extends { metadataTruncated?: boolean; truncated?: boolean }>(
   entries: readonly WorldInfoEntry[], mode: 'catalog' | 'content', budget: number,
   build: (entry: WorldInfoEntry) => T,
-  fill?: (item: T, entry: WorldInfoEntry, make: () => LoreBudgetResult<T>, limit: number) => void, extraHint?: string,
+  fill?: (
+    item: T,
+    entry: WorldInfoEntry,
+    tokensWithDelta: (deltaCjk: number, deltaOther: number, itemTruncated: boolean) => number,
+    limit: number,
+  ) => TokenCharCounts,
+  extraHint?: string,
 ): LoreBudgetResult<T> {
   const limit = Math.max(0, Math.floor(budget)), out: T[] = []
   const baseHint = mode === 'catalog' ? '用 uid 或完整 key 取正文；disabled 条目仍可读。' : entries.length === 0 ? '无匹配。先不带参数看目录。' : ''
@@ -161,13 +175,46 @@ function budgetLoreItems<T extends { metadataTruncated?: boolean; truncated?: bo
     ...(mergedHint ? { hint: mergedHint } : {}),
 
   } as LoreBudgetResult<T>)
-  if (make().tokensUsed > limit) throw new Error('世界书输出预算不足以容纳响应元数据')
+  const shellCache = new Map<number, TokenCharCounts>()
+  const shellCounts = (len: number, truncated: boolean): TokenCharCounts => {
+    const key = len * 2 + (truncated ? 1 : 0)
+    let cached = shellCache.get(key)
+    if (!cached) {
+      const shell: LoreBudgetResult<T> = { ok: true, mode, count: entries.length, entries: [], tokensUsed: 0,
+        omitted: entries.length - len, truncated, ...(mergedHint ? { hint: mergedHint } : {}) }
+      cached = countTokenChars(JSON.stringify(shell, null, 2))
+      shellCache.set(key, cached)
+    }
+    return cached
+  }
+  const estimateWith = (len: number, anyTruncated: boolean, cjk: number, other: number): number => {
+    const shell = shellCounts(len, entries.length > len || anyTruncated)
+    if (len === 0) return stabilizeJsonTokenCount(shell.cjk, shell.other)
+    return stabilizeJsonTokenCount(shell.cjk + cjk, shell.other + 2 + 2 * len + other)
+  }
+  if (estimateWith(0, false, 0, 0) > limit) throw new Error('世界书输出预算不足以容纳响应元数据')
+  let itemsCjk = 0, itemsOther = 0, anyItemTruncated = false
   for (const entry of entries) {
     if (mode === 'catalog' && out.length >= LORE_CATALOG_MAX) break
     const item = build(entry)
+    const itemTrunc = Boolean(item.metadataTruncated || item.truncated)
+    const delta = countPrettyArrayItemChars(item, 2)
+    const nextLen = out.length + 1
+    if (estimateWith(nextLen, anyItemTruncated || itemTrunc, itemsCjk + delta.cjk, itemsOther + delta.other) > limit) continue
     out.push(item)
-    if (make().tokensUsed > limit) { out.pop(); continue }
-    fill?.(item, entry, make, limit)
+    itemsCjk += delta.cjk
+    itemsOther += delta.other
+    if (fill) {
+      const extra = fill(
+        item,
+        entry,
+        (dCjk, dOther, trunc) => estimateWith(nextLen, anyItemTruncated || itemTrunc || trunc, itemsCjk + dCjk, itemsOther + dOther),
+        limit,
+      )
+      itemsCjk += extra.cjk
+      itemsOther += extra.other
+    }
+    if (item.metadataTruncated || item.truncated) anyItemTruncated = true
   }
   const result = make()
   if (entries.length && !out.length) {
@@ -196,21 +243,57 @@ export function budgetLoreCatalog(entries: readonly WorldInfoEntry[], budget = L
 /** 正文按实际序列化响应拟合；控制字符转义、Unicode 代理对和字段计数都不能突破整份预算。 */
 export function clipLoreContents(entries: readonly WorldInfoEntry[], budget = LORE_READ_TOKEN_BUDGET, extraHint?: string): LoreBudgetResult<LoreContentItem> {
   return budgetLoreItems<LoreContentItem>(entries, 'content', budget, entry => ({ ...boundedLoreMetadata(entry), content: '', truncated: false }),
-    (item, entry, make, limit) => {
-      item.content = entry.content
-      if (make().tokensUsed <= limit) return
-      item.truncated = true
+    (item, entry, tokensWithDelta, limit) => {
       const suffix = '…（已截断）'
-      item.content = suffix
-      if (make().tokensUsed > limit) { item.content = ''; return }
-      let lo = 0, hi = entry.content.length
-      while (lo < hi) {
-        const mid = Math.ceil((lo + hi) / 2)
-        item.content = `${entry.content.slice(0, mid)}${suffix}`
-        if (make().tokensUsed <= limit) lo = mid
-        else hi = mid - 1
+      // item 初始为 content: "", truncated: false；设为 truncated: true 时 JSON 字面量从 false(5) 变为 true(4)，即 -1 other。
+      let jsonCjk = 0, jsonOther = 0
+      let lo = 0, loJsonCjk = 0, loJsonOther = 0
+      let exceeded = false
+      const content = entry.content
+      for (let i = 0; i < content.length;) {
+        const code = content.charCodeAt(i)
+        let step = 1
+        if (code >= 0xd800 && code <= 0xdbff) {
+          const next = i + 1 < content.length ? content.charCodeAt(i + 1) : 0
+          if (next >= 0xdc00 && next <= 0xdfff) {
+            step = 2
+            jsonOther += 2
+          } else {
+            jsonOther += 6
+          }
+        } else if (code >= 0xdc00 && code <= 0xdfff) {
+          jsonOther += 6
+        } else if (code === 0x22 || code === 0x5c || code === 0x08 || code === 0x09 || code === 0x0a || code === 0x0c || code === 0x0d) {
+          jsonOther += 2
+        } else if (code < 0x20) {
+          jsonOther += 6
+        } else if (isTokenCjkCode(code)) {
+          jsonCjk += 1
+        } else {
+          jsonOther += 1
+        }
+        const nextIndex = i + step
+        if (tokensWithDelta(jsonCjk + 3, jsonOther + 3 - 1, true) <= limit) {
+          lo = nextIndex
+          loJsonCjk = jsonCjk
+          loJsonOther = jsonOther
+        }
+        if (tokensWithDelta(jsonCjk, jsonOther, false) > limit) {
+          exceeded = true
+          break
+        }
+        i = nextIndex
       }
-      if (lo > 0 && /[\uD800-\uDBFF]/.test(entry.content[lo - 1]!) && /[\uDC00-\uDFFF]/.test(entry.content[lo] ?? '')) lo--
-      item.content = `${entry.content.slice(0, lo)}${suffix}`
+      if (!exceeded) {
+        item.content = content
+        return { cjk: jsonCjk, other: jsonOther }
+      }
+      item.truncated = true
+      if (tokensWithDelta(3, 3 - 1, true) > limit) {
+        item.content = ''
+        return { cjk: 0, other: -1 }
+      }
+      item.content = `${content.slice(0, lo)}${suffix}`
+      return { cjk: loJsonCjk + 3, other: loJsonOther + 3 - 1 }
     }, extraHint)
 }

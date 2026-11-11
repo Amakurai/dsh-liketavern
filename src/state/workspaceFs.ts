@@ -262,15 +262,11 @@ export class WorkspaceFs {
    * 记忆检索每次都要核对上千个归档来源的指纹，逐个 stat 是每个文件 5 次调用。
    */
   async statMany(relPaths: readonly string[]): Promise<Array<{ mtimeMs: number; size: number } | null>> {
+    if (!relPaths.length) return []
     const targets = relPaths.map((relPath) => this.abs(relPath))
-    const parents = new Set(targets.map((abs) => (abs === this.root ? abs : dirname(abs))))
-    for (const parent of parents) await this.assertNoLinks(parent)
+    await this.assertNoLinksAmong(new Set(targets.map((abs) => (abs === this.root ? abs : dirname(abs)))))
     // 多个文件同时出错时报告顺序最靠前的那个，不取决于哪个调用先返回。
-    const settled = await Promise.allSettled(targets.map((abs) => this.lstatFile(abs)))
-    return settled.map((result) => {
-      if (result.status === 'rejected') throw result.reason
-      return result.value
-    })
+    return mapBounded(targets, (abs) => this.lstatFile(abs))
   }
 
   /** 多个目录到根的链接检查：公共祖先只查一次。 */
@@ -393,9 +389,14 @@ export class WorkspaceFs {
 
   /** 读取二进制内容；不存在返回 null。 */
   async readBytes(relPath: string): Promise<Uint8Array | null> {
+    const abs = this.abs(relPath)
+    await this.assertNoLinks(abs)
+    return this.readBytesVerified(abs)
+  }
+
+  /** 调用方已对 abs 完成 assertNoLinks 时的原始字节读取；不存在返回 null。 */
+  private async readBytesVerified(abs: string): Promise<Uint8Array | null> {
     try {
-      const abs = this.abs(relPath)
-      await this.assertNoLinks(abs)
       return await readFile(abs)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
@@ -411,7 +412,7 @@ export class WorkspaceFs {
       await this.assertNoLinks(abs)
       if (this.wal && this.floor) {
         const path = this.walPath(relPath)
-        const bytes = await this.readBytes(relPath)
+        const bytes = await this.readBytesVerified(abs)
         const before = bytes === null ? null : snapshotOf(bytes)
         await this.wal.recordChange(this.floor, path, before?.value ?? null, content, before?.encoding ?? 'utf8', 'utf8')
       }
@@ -431,7 +432,7 @@ export class WorkspaceFs {
       await this.assertNoLinks(abs)
       if (this.wal && this.floor) {
         const path = this.walPath(relPath)
-        const before = await this.readBytes(relPath)
+        const before = await this.readBytesVerified(abs)
         await this.wal.recordChange(this.floor, path,
           before === null ? null : Buffer.from(before).toString('base64'),
           Buffer.from(bytes).toString('base64'), 'base64', 'base64')
@@ -452,7 +453,7 @@ export class WorkspaceFs {
       await this.assertNoLinks(abs)
       if (this.wal && this.floor) {
         const path = this.walPath(relPath)
-        const bytes = await this.readBytes(relPath)
+        const bytes = await this.readBytesVerified(abs)
         if (bytes === null) return
         const before = snapshotOf(bytes)
         await this.wal.recordChange(this.floor, path, before.value, null, before.encoding ?? 'utf8', 'utf8')
@@ -509,14 +510,12 @@ export class WorkspaceFs {
     // list 已确认 prefix 到根不经过链接，并跳过了本层的链接条目；这里每个文件只需一次 lstat。
     const names = await this.list(prefix, { recursive: false })
     const base = prefix ? `${prefix}/` : ''
-    const stats = await Promise.all(
-      names.map(async (name) => {
-        // list 与 lstat 之间文件被并发删掉：按不存在处理（与 readText 返回 null 的容错口径一致）；
-        // 期间被换成链接则照旧拒绝。
-        const info = await this.lstatFile(this.abs(`${base}${name}`))
-        return info && { name, ...info }
-      }),
-    )
+    const stats = await mapBounded(names, async (name) => {
+      // list 与 lstat 之间文件被并发删掉：按不存在处理（与 readText 返回 null 的容错口径一致）；
+      // 期间被换成链接则照旧拒绝。
+      const info = await this.lstatFile(this.abs(`${base}${name}`))
+      return info && { name, ...info }
+    })
     return stats.filter((s) => s !== null)
   }
 }

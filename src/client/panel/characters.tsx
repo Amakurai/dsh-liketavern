@@ -46,9 +46,11 @@ const COMPATIBILITY_STATUS_KEYS: Record<CharacterCompatibilityStatus, string> = 
   review: 'characters.compatibility.status.review',
 }
 
-/** 按 cardId 拉头像 dataURL 的 Avatar 包装（失败时回落首字符/图标）；头像走进程内缓存。 */
-function CardAvatar(props: { remote: TavernRemote; cardId: string; name: string; size: number }) {
-  const { state } = useLoader(() => cachedAvatar(props.remote, props.cardId), [props.cardId])
+const CHARACTERS_PAGE_SIZE = 24
+
+/** 按 cardId 拉头像 dataURL 的 Avatar 包装（失败时回落首字符/图标）；头像走进程内缓存，无头像卡不发 RPC。 */
+function CardAvatar(props: { remote: TavernRemote; cardId: string; name: string; size: number; enabled?: boolean }) {
+  const { state } = useLoader(() => cachedAvatar(props.remote, props.cardId), [props.cardId], props.enabled !== false)
   const url = state.status === 'ready' ? state.value.dataUrl : null
   return <Avatar url={url} name={props.name} size={props.size} />
 }
@@ -65,7 +67,7 @@ function CharacterCard(props: {
   onDelete: (item: CharacterSummary) => void
 }) {
   const t = useT()
-  const { state } = useLoader(() => cachedAvatar(props.remote, props.item.cardId), [props.item.cardId])
+  const { state } = useLoader(() => cachedAvatar(props.remote, props.item.cardId), [props.item.cardId], props.item.hasAvatar !== false)
   const url = state.status === 'ready' ? state.value.dataUrl : null
   const initial = props.item.name.trim().charAt(0) || '?'
   const book = props.item.characterBookName
@@ -155,7 +157,11 @@ function CharacterDetailDialog(props: { remote: TavernRemote; cardId: string; on
   const appliedRef = useRef<CharacterDetail | null>(null)
   // 重读挂起或失败时仍用已知保存版本比较，不能把刚输入的正文误判为已保存。
   const baseline = loaded ?? appliedRef.current
-  const dirty = draft !== null && (baseline === null ? restored : JSON.stringify(draft) !== JSON.stringify(baseline))
+  const baselineJson = useMemo(() => (baseline === null ? null : JSON.stringify(baseline)), [baseline])
+  const dirty = useMemo(
+    () => draft !== null && (baselineJson === null ? restored : JSON.stringify(draft) !== baselineJson),
+    [draft, baselineJson, restored],
+  )
   const guard = useDraftGuard(dirty, busy)
   const draftRef = useRef(draft)
   draftRef.current = draft
@@ -258,7 +264,7 @@ function CharacterDetailDialog(props: { remote: TavernRemote; cardId: string; on
       {detail && (
         <fieldset disabled={busy} className="dsh-tavern-editorFields dsh-tavern-dialogStack" style={{ fontSize: 13 }}>
           <div className="dsh-tavern-panelCard" style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
-            <CardAvatar remote={remote} cardId={cardId} name={detail.name} size={52} />
+            <CardAvatar remote={remote} cardId={cardId} name={detail.name} size={52} enabled={detail.hasAvatar !== false} />
             <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
               <Field label={t('characters.detail.displayName')}>
                 <input className="dsh-tavern-input" style={{ width: '100%' }} value={detail.name} onChange={(e) => set({ name: e.target.value })} />
@@ -434,6 +440,7 @@ function CharactersSectionContent(props: { remote: TavernRemote }) {
   const operationPending = useRef(false)
   const [createError, setCreateError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
+  const [limit, setLimit] = useState(CHARACTERS_PAGE_SIZE)
   const toast = useToast()
   const createGuard = useDraftGuard(creating && !!newName.trim(), busy)
   /** 预检与写操作共用同步屏障，防止确认连点、重选文件或其它操作提前解除 busy。 */
@@ -565,6 +572,7 @@ function CharactersSectionContent(props: { remote: TavernRemote }) {
         onChange={(value) => {
           if (operationPending.current) return
           setCollection(value as 'active' | 'archived')
+          setLimit(CHARACTERS_PAGE_SIZE)
           setError(null)
           setToDelete(null)
         }}
@@ -585,7 +593,7 @@ function CharactersSectionContent(props: { remote: TavernRemote }) {
           <SearchInput
             label={t('characters.searchLabel')}
             value={query}
-            onChange={setQuery}
+            onChange={(value) => { setQuery(value); setLimit(CHARACTERS_PAGE_SIZE) }}
             placeholder={t('characters.searchPlaceholder')}
             width={220}
           />
@@ -610,15 +618,20 @@ function CharactersSectionContent(props: { remote: TavernRemote }) {
         </div>
       )}
       {q !== '' && filtered.length === 0 && state.status === 'ready' && (
-        <SearchEmpty what={t('characters.what')} query={query.trim()} onClear={() => setQuery('')} />
+        <SearchEmpty what={t('characters.what')} query={query.trim()} onClear={() => { setQuery(''); setLimit(CHARACTERS_PAGE_SIZE) }} />
       )}
       <div className="dsh-tavern-charGrid">
-        {filtered.map((item) => (
+        {filtered.slice(0, limit).map((item) => (
           <CharacterCard key={item.cardId} remote={remote} item={item} busy={busy} archived={collection === 'archived'}
             onOpen={collection === 'active' ? id => { if (!operationPending.current) setDetailId(id) } : undefined} onArchive={(card) => void onArchive(card)}
             onRestore={(card) => void onRestore(card)} onDelete={item => { if (!operationPending.current) setToDelete(item) }} />
         ))}
       </div>
+      {filtered.length > limit && (
+        <div style={{ marginTop: 12 }}>
+          <Btn disabled={busy} onClick={() => setLimit((current) => current + CHARACTERS_PAGE_SIZE)}>{t('hero.picker.more')}</Btn>
+        </div>
+      )}
       {detailId && (
         <CharacterDetailDialog
           key={detailId}

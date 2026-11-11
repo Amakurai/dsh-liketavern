@@ -95,7 +95,7 @@ function releaseWorker(slot:WorkerSlot):void {
   slot.worker.unref()
 }
 
-function compute<K extends keyof ComputeJobs>(slot:WorkerSlot,kind:K,input:ComputeJobs[K]['input'],budget:TemplateExecutionBudget):Promise<ComputeJobs[K]['output']> {
+function compute<K extends keyof ComputeJobs>(slot:WorkerSlot,kind:K,input:ComputeJobs[K]['input'],budget:TemplateExecutionBudget,incomingKey?:string):Promise<ComputeJobs[K]['output']> {
   const id=++requestSerial
   return new Promise((resolve,reject)=> {
     const worker=slot.worker
@@ -139,7 +139,7 @@ function compute<K extends keyof ComputeJobs>(slot:WorkerSlot,kind:K,input:Compu
     worker.on('message',onMessage)
     worker.on('error',onError)
     worker.on('exit',onExit)
-    try {worker.postMessage({id,kind,input,budget})} catch(error) {finish(error instanceof Error?error:new Error(String(error)))}
+    try {worker.postMessage({id,kind,input,budget,incomingKey})} catch(error) {finish(error instanceof Error?error:new Error(String(error)))}
   })
 }
 
@@ -148,7 +148,8 @@ export async function isolated<K extends keyof ComputeJobs>(kind: K, input: Comp
   const replayWork = 'replay' in input && input.replay ? measureTemplateReplayWork(input.replay) : 0
   const continuationWork = 'templateContinuation' in input && input.templateContinuation?.replay
     ? measureTemplateReplayWork(input.templateContinuation.replay) : 0
-  const budget = templateExecutionBudget(Math.max(inputChars, replayWork, continuationWork), timeoutMs, kind === 'render' || kind === 'display' ? 'display' : 'template')
+  const budget = templateExecutionBudget(Math.max(inputChars, replayWork, continuationWork), timeoutMs,
+    kind === 'render' || kind === 'display' || kind === 'renderBatch' ? 'display' : 'template')
   const replay='replay' in input ? input.replay : 'templateContinuation' in input ? input.templateContinuation?.replay : undefined
   const context='context' in input ? input.context : 'templates' in input ? input.templates : undefined
   const key=templateWorkerCacheKey(replay,context)
@@ -159,7 +160,7 @@ export async function isolated<K extends keyof ComputeJobs>(kind: K, input: Comp
   let slot:WorkerSlot|undefined
   try {
     slot=await acquireWorker(budget.workerMemoryMb,key)
-    return await compute(slot,kind,input,budget)
+    return await compute(slot,kind,input,budget,key)
   } finally {
     if(slot)releaseWorker(slot)
     const next=waiting.shift()

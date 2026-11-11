@@ -97,6 +97,8 @@ export declare class WorkspaceFs {
     ensureDir(relPath?: string): Promise<void>;
     /** 读取二进制内容；不存在返回 null。 */
     readBytes(relPath: string): Promise<Uint8Array | null>;
+    /** 调用方已对 abs 完成 assertNoLinks 时的原始字节读取；不存在返回 null。 */
+    private readBytesVerified;
     /** 事务写入：每次修改先持久化 before/after，再原子替换正文；与回退共享工作区锁。 */
     writeText(relPath: string, content: string): Promise<void>;
     /**

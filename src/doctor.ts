@@ -212,7 +212,8 @@ async function readBoundedText(path: string, maxBytes: number, sharedBudget?: Re
         budget.exhausted = true
         return { status: 'budget' }
       }
-      const length = Math.min(READ_CHUNK_BYTES, maxBytes + 1 - position, budget.remaining)
+      const expected = current.size >= position ? current.size + 1 - position : READ_CHUNK_BYTES
+      const length = Math.min(READ_CHUNK_BYTES, Math.max(256, expected), maxBytes + 1 - position, budget.remaining)
       const chunk = Buffer.allocUnsafe(length)
       const { bytesRead } = await handle.read(chunk, 0, length, position)
       if (bytesRead === 0) return { status: 'ok', text: Buffer.concat(chunks, position).toString('utf8') }

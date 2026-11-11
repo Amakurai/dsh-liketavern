@@ -182,6 +182,7 @@ function messageScanTexts(
 
 interface Candidate {
   entry: WorldInfoEntry
+  groups: readonly string[]
   matchedKeys: string[]
   via: WIActivation['via']
   recursionLevel: number
@@ -206,6 +207,8 @@ interface CompiledEntry {
   secondaryCount: number
   /** isStandingBudgetSafe 的结果：扫描、扩深与预算各轮反复用到，且需检查正文宏与变量读取。 */
   standingSafe: boolean
+  /** 预解析的 inclusion group 列表，避免递归与扩深轮反复拆分去重。 */
+  groups: readonly string[]
 }
 
 function compileEntry(
@@ -232,27 +235,33 @@ function compileEntry(
   return {
     entry, primary, secondary, keyCount: rawKeys.length, secondaryCount: nonEmptySecondary.length,
     standingSafe: isStandingBudgetSafe(entry),
+    groups: inclusionGroupsOf(entry),
   }
 }
 
-function matchCompiled(c: CompiledEntry, texts: readonly ScanText[]): string[] | null {
+function matchCompiled(c: CompiledEntry, texts: readonly ScanText[]): { keys: string[]; tests: KeyTest[] } | null {
+  if (texts.length === 0) return null
   const matched: string[] = []
+  const matchedTests: KeyTest[] = []
   for (const k of c.primary) {
-    if (texts.some((t) => k.test(t))) matched.push(k.raw)
+    if (texts.some((t) => k.test(t))) {
+      matched.push(k.raw)
+      matchedTests.push(k.test)
+    }
   }
   if (matched.length === 0) return null
   const entry = c.entry
-  if (!entry.selective || c.secondaryCount === 0) return matched
-  const hits = c.secondary.filter((test) => texts.some((t) => test(t))).length
+  if (!entry.selective || c.secondaryCount === 0) return { keys: matched, tests: matchedTests }
+  const matchesAnyText = (test: KeyTest) => texts.some((t) => test(t))
   const ok =
     entry.selectiveLogic === WISelectiveLogic.AndAny
-      ? hits > 0
+      ? c.secondary.some(matchesAnyText)
       : entry.selectiveLogic === WISelectiveLogic.AndAll
-        ? hits === c.secondary.length
+        ? c.secondary.every(matchesAnyText)
         : entry.selectiveLogic === WISelectiveLogic.NotAny
-          ? hits === 0
-          : hits < c.secondary.length // NotAll
-  return ok ? matched : null
+          ? !c.secondary.some(matchesAnyText)
+          : c.secondary.some((test) => !matchesAnyText(test)) // NotAll
+  return ok ? { keys: matched, tests: matchedTests } : null
 }
 
 /**
@@ -381,7 +390,7 @@ export function evaluateWorldInfo(input: WIEngineInput): WIEngineResult {
     const newcomers = new Map<string, Candidate[]>()
     for (const c of fresh) {
       if (groupLosers.has(c.entry.key)) continue
-      for (const name of inclusionGroupsOf(c.entry)) {
+      for (const name of c.groups) {
         const list = newcomers.get(name) ?? []
         list.push(c)
         newcomers.set(name, list)
@@ -420,7 +429,8 @@ export function evaluateWorldInfo(input: WIEngineInput): WIEngineResult {
     }
   }
 
-  const tryActivate = (entry: WorldInfoEntry, matchedKeys: string[], via: WIActivation['via'], level: number): boolean => {
+  const tryActivate = (c: CompiledEntry, matchedKeys: string[], via: WIActivation['via'], level: number): boolean => {
+    const { entry } = c
     if (activatedKeys.has(entry.key)||probabilityFailures.has(entry.key)) return false
     // 只有 sticky 延续豁免概率。确定常驻条目本来就没有概率过滤，概率型 constant 必须按轮评估。
     if (via !== 'sticky' && entry.useProbability && entry.probability < 100) {
@@ -430,7 +440,7 @@ export function evaluateWorldInfo(input: WIEngineInput): WIEngineResult {
         return false
       }
     }
-    activated.push({ entry, matchedKeys, via, recursionLevel: level })
+    activated.push({ entry, groups: c.groups, matchedKeys, via, recursionLevel: level })
     activatedKeys.add(entry.key)
     log.push({
       kind: 'activated',
@@ -447,6 +457,7 @@ export function evaluateWorldInfo(input: WIEngineInput): WIEngineResult {
   }
 
   const loggedSkip = new Set<string>()
+  const fixedDepthMiss = new Set<CompiledEntry>()
   const evaluate = (texts: readonly ScanText[], level: number): Candidate[] => {
     const fresh: Candidate[] = []
     for (const c of compiled) {
@@ -459,13 +470,13 @@ export function evaluateWorldInfo(input: WIEngineInput): WIEngineResult {
       if (c.standingSafe) {
         delete timer.stickyLeft[entry.key]
         delete timer.cooldownLeft[entry.key]
-        if (tryActivate(entry, [], 'constant', level)) fresh.push(activated[activated.length - 1]!)
+        if (tryActivate(c, [], 'constant', level)) fresh.push(activated[activated.length - 1]!)
         continue
       }
       // sticky 延续：无需命中、跳过概率（须先于 cooldown 判定：cooldown 与 sticky
       // 串联写入时 sticky 期间 cooldown 一并倒数，先判 cooldown 会拦死 sticky 延续）
       if ((timer.stickyLeft[entry.key] ?? 0) > 0) {
-        if (tryActivate(entry, [], 'sticky', level)) fresh.push(activated[activated.length - 1]!)
+        if (tryActivate(c, [], 'sticky', level)) fresh.push(activated[activated.length - 1]!)
         continue
       }
       // 冷却
@@ -486,21 +497,26 @@ export function evaluateWorldInfo(input: WIEngineInput): WIEngineResult {
         continue
       }
       if (entry.constant) {
-        if (tryActivate(entry, [], 'constant', level)) fresh.push(activated[activated.length - 1]!)
+        if (tryActivate(c, [], 'constant', level)) fresh.push(activated[activated.length - 1]!)
         continue
       }
-      if (c.keyCount === 0) continue
+      if (c.keyCount === 0 || probabilityFailures.has(entry.key)) continue
+      // 显式指定 scanDepth 的条目在 level=0 的扫描切片不随 minActivations 扩深改变；首轮未命中即可缓存跳过。
+      if (level === 0 && entry.scanDepth !== null && entry.scanDepth !== undefined && fixedDepthMiss.has(c)) continue
       const scanTextsForEntry =
         level === 0
           ? textsAtDepth(entry.scanDepth ?? expandedDepth)
           : texts
       const matched = matchCompiled(c, scanTextsForEntry)
-      if (matched === null) continue
-      if (tryActivate(entry, matched, level === 0 ? 'keyword' : 'recursion', level)) {
+      if (matched === null) {
+        if (level === 0 && entry.scanDepth !== null && entry.scanDepth !== undefined) fixedDepthMiss.add(c)
+        continue
+      }
+      if (tryActivate(c, matched.keys, level === 0 ? 'keyword' : 'recursion', level)) {
         const candidate = activated[activated.length - 1]!
         if (level === 0) {
           const newest = textsAtDepth(1)
-          candidate.mentionedNow = c.primary.some((k) => newest.some((t) => k.test(t)))
+          candidate.mentionedNow = scanTextsForEntry === newest || matched.tests.some((test) => newest.some((t) => test(t)))
         }
         fresh.push(candidate)
       }
@@ -544,8 +560,10 @@ export function evaluateWorldInfo(input: WIEngineInput): WIEngineResult {
   const expansionLimit=Math.min(input.messages.length,1000,settings.maxScanDepth>0?settings.maxScanDepth:1000)
   const scanBudget=settings.tokenBudget>0?settings.tokenBudget:Math.max(0,Math.floor(Math.min(input.contextWindowTokens,WI_PERCENT_WINDOW_BASE)*settings.contextPercent/100)-Math.max(0,input.reservedTokens))
   const surviving=()=>activated.filter(c=>!groupLosers.has(c.entry.key))
-  while(settings.minActivations>0&&surviving().length<settings.minActivations&&expandedDepth<expansionLimit&&(maxSteps===0||scanSteps<maxSteps)){
-    const counted=surviving().filter(c=>!standingSafe.get(c.entry))
+  while(settings.minActivations>0&&expandedDepth<expansionLimit&&(maxSteps===0||scanSteps<maxSteps)){
+    const activeSurvivors=surviving()
+    if(activeSurvivors.length>=settings.minActivations)break
+    const counted=activeSurvivors.filter(c=>!standingSafe.get(c.entry))
     if(counted.reduce((sum,c)=>sum+costOf(c.entry),0)>scanBudget)break
     expandedDepth++
     scanSteps++

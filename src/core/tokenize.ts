@@ -177,6 +177,59 @@ export function analyzeText(text: string, ignoredCharBigrams?: ReadonlySet<strin
 // token 估算
 // ---------------------------------------------------------------------------
 
+export interface TokenCharCounts {
+  cjk: number
+  other: number
+}
+
+/** 统计文本的 (cjk, other) 字符计数；二者在拼接上严格可加，便于增量计算 JSON 输出预算。 */
+export function countTokenChars(text: string): TokenCharCounts {
+  let cjk = 0
+  let other = 0
+  for (let i = 0; i < text.length; i++) {
+    if (isCjkCode(text.charCodeAt(i))) cjk++
+    else other++
+  }
+  return { cjk, other }
+}
+
+/**
+ * 统计 JSON.stringify(text) 的 (cjk, other) 字符计数（含外层双引号、控制字符转义与孤立代理项转义）。
+ * 与 ES2019+ 标准 JSON 序列化逐字符一致，无需分配转义后的字符串副本。
+ */
+export function countJsonStringTokenChars(text: string): TokenCharCounts {
+  let cjk = 0
+  let other = 2
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i)
+    if (code === 0x22 || code === 0x5c || code === 0x08 || code === 0x09 || code === 0x0a || code === 0x0c || code === 0x0d) {
+      other += 2
+    } else if (code < 0x20) {
+      other += 6
+    } else if (code >= 0xd800 && code <= 0xdbff) {
+      const next = i + 1 < text.length ? text.charCodeAt(i + 1) : 0
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        other += 2
+        i++
+      } else {
+        other += 6
+      }
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      other += 6
+    } else if (isCjkCode(code)) {
+      cjk++
+    } else {
+      other++
+    }
+  }
+  return { cjk, other }
+}
+
+/** CJK 码点判定（与 estimateTokens 同口径，供增量 JSON 字符串扫描复用）。 */
+export function isTokenCjkCode(code: number): boolean {
+  return isCjkCode(code)
+}
+
 /**
  * 确定性粗估 token 数：CJK 字符每个计 1，其余字符累计后 ÷4 向上取整，两部分相加。
  * 只用于预算分配，不追求与具体模型 tokenizer 对齐；口径固定，不跟随分词的 bigram 文字范围。

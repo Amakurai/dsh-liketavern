@@ -11,6 +11,17 @@ const INERT_CONTENT = new Set(['noscript'])
 export const LENIENT_OPAQUE = new Set(['code', 'pre'])
 const VOID_ELEMENTS = new Set(['area','base','br','col','embed','hr','img','input','link','meta','param','source','track','wbr'])
 const HTML_TAGS=/<!--[\s\S]*?(?:-->|$)|<\/?([A-Za-z][A-Za-z0-9:-]*)(?=[\s/>])(?:[^"'<>]|"[^"]*"|'[^']*')*>/gi
+const HTML_DOCUMENT_CANDIDATE=/<(?:!doctype\s+html|html|body)(?=[\s/>]|$)/i
+const CLOSE_TAG_CACHE=new Map<string,RegExp>()
+
+function closeTagPattern(normalized:string):RegExp {
+  let cached=CLOSE_TAG_CACHE.get(normalized)
+  if(!cached) {
+    cached=new RegExp('</'+normalized+'\\s*>','gi')
+    if(CLOSE_TAG_CACHE.size<64)CLOSE_TAG_CACHE.set(normalized,cached)
+  }
+  return cached
+}
 
 /**
  * 跳过不会在当前脚本环境中成为活动 DOM 的内容区。template 允许合理嵌套；其中的
@@ -20,7 +31,7 @@ const HTML_TAGS=/<!--[\s\S]*?(?:-->|$)|<\/?([A-Za-z][A-Za-z0-9:-]*)(?=[\s/>])(?:
 export function findHtmlOpaqueEnd(text:string,contentStart:number,tag:string):number|null {
   const normalized=tag.toLowerCase()
   if(normalized!=='template') {
-    const close=new RegExp('</'+normalized+'\\s*>','gi');close.lastIndex=contentStart
+    const close=closeTagPattern(normalized);close.lastIndex=contentStart
     const found=close.exec(text)
     return found?close.lastIndex:null
   }
@@ -46,13 +57,14 @@ export function findHtmlOpaqueEnd(text:string,contentStart:number,tag:string):nu
 }
 
 /** 完整文档也按标签扫描；注释、代码示例与 script/style 字符串不参与文档边界判断。 */
-export function findHtmlDocument(text:string,code?:ReturnType<typeof markdownCodeScanner>):{start:number;end:number}|null {
-  if(!text.includes('<'))return null
+export function findHtmlDocument(text:string,code?:ReturnType<typeof markdownCodeScanner>,maxStart=Number.POSITIVE_INFINITY):{start:number;end:number}|null {
+  if(maxStart<0||!text.includes('<')||!HTML_DOCUMENT_CANDIDATE.test(text))return null
   const scanner=code??markdownCodeScanner(text)
   const tokens=/<!--[\s\S]*?(?:-->|$)|<!doctype\s+html\b[^>]*>|<\/?([A-Za-z][A-Za-z0-9:-]*)(?=[\s/>])(?:[^"'<>]|"[^"]*"|'[^']*')*>|`+|~{3,}/gi
   let start=-1,root=''
   for(let token=tokens.exec(text);token;token=tokens.exec(text)) {
     const raw=token[0],at=token.index
+    if(start<0&&at>maxStart)return null
     if(raw.startsWith('<!--'))continue
     if(raw.startsWith('`')||raw.startsWith('~')) {
       if(start<0) {
@@ -89,14 +101,15 @@ export function isFullHtmlDocument(text:string):boolean {
   return findHtmlDocument(text)!==null
 }
 
-export function findHtmlFragment(text: string, code?: ReturnType<typeof markdownCodeScanner>): { start: number; end: number } | null {
-  if (!text.includes('<')) return null
+export function findHtmlFragment(text: string, code?: ReturnType<typeof markdownCodeScanner>, maxStart = Number.POSITIVE_INFINITY): { start: number; end: number } | null {
+  if (maxStart < 0 || !text.includes('<')) return null
   const scanner=code??markdownCodeScanner(text)
   // 属性引号内的 > 或 </div> 不参与闭合计数；各分支首字符互斥，避免嵌套回溯。
   const tokens = /<!--[\s\S]*?(?:-->|$)|<!doctype\s+html\b[^>]*>|<\/?([A-Za-z][A-Za-z0-9:-]*)(?=[\s/>])(?:[^"'<>]|"[^"]*"|'[^']*')*>|`+|~{3,}/gi
   let root = '', depth = 0, start = -1, end = -1, inertStart = -1, inertEnd = -1
   for (let token = tokens.exec(text); token; token = tokens.exec(text)) {
     const raw = token[0], at = token.index
+    if (!depth && start < 0 && inertStart < 0 && at > maxStart) return null
     if (!depth && end >= 0 && text.slice(end, at).trim()) break
     if (!depth && end < 0 && inertEnd >= 0 && text.slice(inertEnd, at).trim()) {
       inertStart = -1

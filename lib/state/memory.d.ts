@@ -78,6 +78,8 @@ export declare class MemoryStore {
     private aliasCache;
     /** 条目正文的指纹；条目对象在正文不变时一直是同一个，不必每次重算。 */
     private readonly hashes;
+    /** 条目正文的 token 粗估缓存，跟随同一个不可变条目对象复用。 */
+    private readonly tokens;
     private readonly ledger;
     private epoch;
     constructor(fs: WorkspaceFs, options?: MemoryStoreOptions);
@@ -97,6 +99,7 @@ export declare class MemoryStore {
     private sync;
     /** 正文指纹：别名按它对应到记忆，正文一改即作废。 */
     private hashOf;
+    private tokensOf;
     /**
      * 读别名文件；调用方必须持有工作区锁。文件缺失或损坏都当作没有别名——它是派生数据，之后会重新生成。
      * known 是调用方刚取到的磁盘指纹（与别的文件一起批量取的），传了就不再单独 stat。
@@ -131,6 +134,7 @@ export declare class MemoryStore {
         keys?: string[];
         sourceRange?: string;
     }): Promise<MemoryWriteResult>;
+    private writeNow;
     /** 更新正文与 tags/keys、刷新 updated；默认合并列表，replace 模式允许 UI 删除或清空列表项。 */
     update(id: string, patch: {
         body?: string;

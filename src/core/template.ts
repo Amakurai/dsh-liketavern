@@ -60,13 +60,16 @@ export function validateTemplateJson(value: unknown, depth = 0): asserts value i
   if (value === null || typeof value === 'string' || typeof value === 'boolean') return
   if (typeof value === 'number' && Number.isFinite(value)) return
   if (typeof value !== 'object' || !value) throw new Error('模板变量必须是 JSON 值')
-  if (!Array.isArray(value)) {
-    const proto = Object.getPrototypeOf(value)
-    if (proto !== Object.prototype && proto !== null) throw new Error('模板变量必须是 JSON 值')
+  if (Array.isArray(value)) {
+    if (Object.getPrototypeOf(value) !== Array.prototype) throw new Error('模板变量必须是 JSON 值')
+    for (let i = 0; i < value.length; i++) validateTemplateJson(value[i], depth + 1)
+    return
   }
-  for (const [key, item] of Object.entries(value)) {
-    if (['__proto__', 'prototype', 'constructor'].includes(key)) throw new Error('模板变量含禁止的原型路径')
-    validateTemplateJson(item, depth + 1)
+  const proto = Object.getPrototypeOf(value)
+  if (proto !== Object.prototype && proto !== null) throw new Error('模板变量必须是 JSON 值')
+  for (const key of Object.keys(value)) {
+    if (key === '__proto__' || key === 'prototype' || key === 'constructor') throw new Error('模板变量含禁止的原型路径')
+    validateTemplateJson((value as Record<string, unknown>)[key], depth + 1)
   }
 }
 

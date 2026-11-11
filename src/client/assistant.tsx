@@ -14,6 +14,7 @@ import { useMarkdownLabels, useT } from './i18n.js'
 import { isTavernSession, type UseSessions } from './mode.js'
 import { openChildSession } from './openChild.js'
 import { BINDING_CHANGED_EVENT, BRANCH_CHANGED_EVENT, TavernInterruptedFloorActions } from './actions.js'
+import { subscribeKeyedWindowEvent } from './windowEvents.js'
 import { SpeechBubble } from './speech.js'
 import type { TavernSessions } from './navigation.js'
 import type { CharacterDetail, SessionBinding, TavernRemote } from './types.js'
@@ -164,13 +165,8 @@ export function TavernAssistantNode(props: {
   const bindingLoader = useLoader(() => cachedSessionBinding(remote, sessionId), [sessionId], tavern)
   // 绑定/解绑或修改互动卡开关后，已渲染的楼层要随之切换排版；否则要等重新挂载才更新（操作条与 chip 同样监听）。
   useEffect(() => {
-    if (!tavern || typeof window === 'undefined') return
-    const changed = (event: Event) => {
-      const target = (event as CustomEvent<string | undefined>).detail
-      if (!target || target === sessionId) bindingLoader.reload()
-    }
-    window.addEventListener(BINDING_CHANGED_EVENT, changed)
-    return () => window.removeEventListener(BINDING_CHANGED_EVENT, changed)
+    if (!tavern) return
+    return subscribeKeyedWindowEvent(BINDING_CHANGED_EVENT, sessionId, true, bindingLoader.reload)
   }, [tavern, sessionId, bindingLoader.reload])
   // 重拉与读取失败时沿用同一会话上次确认的绑定，避免短暂故障卸载互动卡；成功解绑仍立即生效。
   const lastBinding = useRef<{ sessionId: string; binding: SessionBinding | null; userName?: string } | null>(null)
@@ -190,11 +186,7 @@ export function TavernAssistantNode(props: {
   )
   useEffect(() => {
     if (!tavern || !binding) return
-    const changed = (event: Event) => {
-      if ((event as CustomEvent<string>).detail === binding.cardId) detail.reload()
-    }
-    window.addEventListener(CHARACTER_CHANGED_EVENT, changed)
-    return () => window.removeEventListener(CHARACTER_CHANGED_EVENT, changed)
+    return subscribeKeyedWindowEvent(CHARACTER_CHANGED_EVENT, binding.cardId, false, detail.reload)
   }, [tavern, binding?.cardId, detail.reload])
   const streaming = node.data.status === 'running'
   const eventBinding=sessions?.binding?.(sessionId)

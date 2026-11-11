@@ -78,6 +78,13 @@ export declare class Bm25Index<D = unknown> {
     private scores;
     private norms;
     private seen;
+    /** 索引修订代号：增删清时推进，用于惰性失效 similarity 的 IDF 表与按槽位文档权重缓存。 */
+    private mutationEpoch;
+    private idfEpoch;
+    private idfWeights;
+    private docWeights;
+    private docWeightEpochs;
+    private bumpEpoch;
     private ensureScratch;
     constructor(options?: {
         k1?: number;

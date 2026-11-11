@@ -8,6 +8,7 @@ import { MemorySection } from './panel/memory.js'
 import { useEffect, useId, useRef, useState } from 'react'
 import { BINDING_CHANGED_EVENT } from './actions.js'
 import { CHARACTER_CHANGED_EVENT, cachedAvatar, cachedCharacterDetail, cachedSessionBinding, invalidateSessionBinding } from './cache.js'
+import { subscribeKeyedWindowEvent } from './windowEvents.js'
 import { useT } from './i18n.js'
 import { isTavernSession, type UseSessions } from './mode.js'
 import { useSessionView } from './sessionViews.js'
@@ -244,7 +245,7 @@ function HeaderChipSession(props: HeaderChipProps) {
   // 会话头部只随被显示的会话挂载：宿主 0.1.7 不再公开 current，由这里登记当前视图。
   useSessionView(sessionId, tavern)
   const bindingLoader = useLoader(() => cachedSessionBinding(remote, sessionId), [sessionId], tavern)
-  useEffect(()=>{const changed=(event:Event)=>{const target=(event as CustomEvent<string|undefined>).detail;if(!target||target===sessionId)bindingLoader.reload()};window.addEventListener(BINDING_CHANGED_EVENT,changed);return()=>window.removeEventListener(BINDING_CHANGED_EVENT,changed)},[sessionId,bindingLoader.reload])
+  useEffect(() => subscribeKeyedWindowEvent(BINDING_CHANGED_EVENT, sessionId, true, bindingLoader.reload), [sessionId, bindingLoader.reload])
   const lastBinding = useRef<{ sessionId: string; binding: SessionBinding | null; canSwipeGreeting: boolean } | null>(null)
   if (bindingLoader.state.status === 'ready') {
     lastBinding.current = {
@@ -273,12 +274,10 @@ function HeaderChipSession(props: HeaderChipProps) {
     [binding?.cardId],
     tavern && binding !== null,
   )
-  useEffect(()=>{
-    if(!tavern||!binding)return
-    const changed=(event:Event)=>{if((event as CustomEvent<string>).detail===binding.cardId)detail.reload()}
-    window.addEventListener(CHARACTER_CHANGED_EVENT,changed)
-    return()=>window.removeEventListener(CHARACTER_CHANGED_EVENT,changed)
-  },[tavern,binding?.cardId,detail.reload])
+  useEffect(() => {
+    if (!tavern || !binding) return
+    return subscribeKeyedWindowEvent(CHARACTER_CHANGED_EVENT, binding.cardId, false, detail.reload)
+  }, [tavern, binding?.cardId, detail.reload])
 
   const [open, setOpen] = useState(false)
   const usageLoader = useLoader(() => remote.getContextUsage({ sessionId }), [sessionId, open], tavern && open)
@@ -382,7 +381,7 @@ function HeaderChipSession(props: HeaderChipProps) {
     else {
       closeGuard.clearDraft()
       toast.show(t('chip.saved'))
-      // 先失效进程内缓存再读取权威绑定/reload/广播，否则重拉吃到旧绑定（见 cache.ts TTL 口径）。
+      // 先失效进程内缓存再 reload/广播，否则重拉吃到旧绑定（见 cache.ts TTL 口径）。
       invalidateSessionBinding(sessionId)
       // 服务端在首次绑定/换卡时可能自动开启原生 MVU、创建 story 或规范化卡名；
       // 这些不属于用户刚编辑的草稿字段。若不回填，第二次保存会把服务端值写回旧草稿的 undefined。

@@ -1101,9 +1101,9 @@ const STREAMING_HTML_TAG_SET: ReadonlySet<string> = new Set(STREAMING_HTML_TAG_N
  * 从首个卡面起暂缓展示尾部；完整回复仍由服务端按原文执行常规只读展示投影。
  * 与正式抽取共用容器集合和 Markdown 代码边界，普通代码示例不当成半张卡片。
  */
-function streamingHtmlStart(text: string, scanMarkdown = true): number | null {
+function streamingHtmlStart(text: string, scanMarkdown: boolean | ReturnType<typeof markdownCodeScanner> = true): number | null {
   if (!text.includes('<') && (!scanMarkdown || (!text.includes('```') && !text.includes('~~~')))) return null
-  const code = scanMarkdown ? markdownCodeScanner(text) : null
+  const code = scanMarkdown === true ? markdownCodeScanner(text) : scanMarkdown || null
   const tokens = /<|`+|~{3,}/g
   let lineStart = 0, nextLine = text.indexOf('\n')
   for (let token = tokens.exec(text); token; token = tokens.exec(text)) {
@@ -1164,9 +1164,12 @@ export function presentStreamingOutput(text: string, allowHtml: boolean): { text
 export function findIncompleteHtmlStart(text:string):number|null {
   let offset=0,previous:{start:number;end:number}|undefined
   for(let count=0;count<128;count++){
-    const remaining=text.slice(offset),start=streamingHtmlStart(remaining)
+    const remaining=text.slice(offset)
+    if(!remaining.includes('<')&&!remaining.includes('```')&&!remaining.includes('~~~'))return null
+    const code=markdownCodeScanner(remaining)
+    const start=streamingHtmlStart(remaining,code)
     if(start===null)return null
-    const complete=locateRenderedHtml(remaining),completeStart=complete?.fence?.start??complete?.start
+    const complete=locateRenderedHtml(remaining,code),completeStart=complete?.fence?.start??complete?.start
     if(complete&&completeStart!==undefined&&completeStart<=start){
       const end=offset+(complete.fence?.end??complete.start+complete.html.length)
       previous=complete.fence?undefined:{start:offset+completeStart,end};offset=end;continue

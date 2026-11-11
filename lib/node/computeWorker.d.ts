@@ -68,5 +68,30 @@ export interface ComputeJobs {
         };
         output: ReturnType<typeof presentTemplateDisplayResult>;
     };
+    renderBatch: {
+        input: {
+            rules: Parameters<typeof applyRegexRules>[1];
+            macroCtx: SerializableMacros;
+            items: Array<{
+                kind: 'render';
+                text: string;
+            } | {
+                kind: 'display';
+                parts: TemplateDisplayPart[];
+            }>;
+        };
+        output: Array<{
+            ok: true;
+            kind: 'render';
+            value: ReturnType<typeof applyRegexRules>;
+        } | {
+            ok: true;
+            kind: 'display';
+            value: ReturnType<typeof presentTemplateDisplayResult>;
+        } | {
+            ok: false;
+            error: string;
+        }>;
+    };
 }
 export {};

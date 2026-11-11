@@ -27,6 +27,7 @@ import { useT } from './i18n.js'
 import { isTavernSession, type UseSessions } from './mode.js'
 import { openChildSession, type SessionsPort } from './openChild.js'
 import { remoteIdentity } from './remoteIdentity.js'
+import { subscribeKeyedWindowEvent } from './windowEvents.js'
 import type { Envelope, TavernRemote } from './types.js'
 import { Badge, Btn, Dialog, Err, SaveBar, useLoader, useToast } from './util.js'
 import './styles.js'
@@ -91,70 +92,7 @@ function getRecordedContinuableFloor(remote: TavernRemote, sessionId: string): s
   return latestContinuableByRemote.get(remote)?.get(sessionId)
 }
 
-type SessionEventCallback = () => void
-interface WindowEventChannel {
-  readonly bySession: Map<string, Set<SessionEventCallback>>
-  readonly wildcard: Set<SessionEventCallback>
-  readonly handler: (event: Event) => void
-}
-const windowEventChannels = new WeakMap<EventTarget, Map<string, WindowEventChannel>>()
-
-/**
- * 长历史同时挂载 N 条操作条时，不在 window 上重复挂 3N 个监听器：每个事件名只挂 1 个分发器，
- * 按 sessionId（以及无 detail 的全局失效广播）O(1) 路由；按 window 实例 WeakMap 隔离以兼容测试替换。
- */
-function subscribeSessionWindowEvent(
-  eventName: string,
-  sessionId: string,
-  acceptEmptyDetail: boolean,
-  callback: SessionEventCallback,
-): () => void {
-  if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return () => {}
-  const target: EventTarget = window
-  let channels = windowEventChannels.get(target)
-  if (!channels) {
-    channels = new Map()
-    windowEventChannels.set(target, channels)
-  }
-  let channel = channels.get(eventName)
-  if (!channel) {
-    const bySession = new Map<string, Set<SessionEventCallback>>()
-    const wildcard = new Set<SessionEventCallback>()
-    const handler = (event: Event) => {
-      const detail = (event as CustomEvent<string | undefined>).detail
-      if (!detail) {
-        for (const fn of [...wildcard]) fn()
-        return
-      }
-      const listeners = bySession.get(detail)
-      if (listeners) for (const fn of [...listeners]) fn()
-    }
-    channel = { bySession, wildcard, handler }
-    channels.set(eventName, channel)
-    target.addEventListener(eventName, handler)
-  }
-  let sessionSet = channel.bySession.get(sessionId)
-  if (!sessionSet) {
-    sessionSet = new Set()
-    channel.bySession.set(sessionId, sessionSet)
-  }
-  sessionSet.add(callback)
-  if (acceptEmptyDetail) channel.wildcard.add(callback)
-  return () => {
-    const activeChannel = channels?.get(eventName)
-    if (!activeChannel) return
-    const set = activeChannel.bySession.get(sessionId)
-    if (set) {
-      set.delete(callback)
-      if (set.size === 0) activeChannel.bySession.delete(sessionId)
-    }
-    if (acceptEmptyDetail) activeChannel.wildcard.delete(callback)
-    if (activeChannel.bySession.size === 0 && activeChannel.wildcard.size === 0) {
-      channels?.delete(eventName)
-      target.removeEventListener(eventName, activeChannel.handler)
-    }
-  }
-}
+const subscribeSessionWindowEvent = subscribeKeyedWindowEvent
 
 /** 查询会话是否已绑定角色卡；null = 尚未加载完成（先不渲染，避免闪烁）。非 Tavern 不打 remote。绑定读进程内缓存：每条 assistant 消息的操作条共享一次 RPC。 */
 function useTavernBound(remote: TavernRemote, sessionId: string, enabled: boolean): boolean | null {

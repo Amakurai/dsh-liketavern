@@ -26,6 +26,7 @@
  * 的规则同样跳过并记录，绝不让 .includes() 处炸在主循环里。
  */
 import { type MacroContext } from './macros.js';
+import { markdownCodeScanner } from './markdownCode.js';
 import type { CardRegexScript, ChatMessage, RegexRule, RegexScope, RegexTiming } from './types.js';
 export type { MacroContext };
 export interface RegexFilter {
@@ -102,7 +103,7 @@ export declare function parseImportedRegexRules(raw: unknown): RegexRule[];
  * 正则替换后的展示文本常是「整页 HTML 封面」或「小部件 HTML + 后面的正文」。
  * HTML 文档和小部件片段抽进 iframe；围栏外 / </html> 之前的协议标签与之后的文字留给 Markdown。
  */
-export declare function locateRenderedHtml(text: string): {
+export declare function locateRenderedHtml(text: string, existingCode?: ReturnType<typeof markdownCodeScanner> | null): {
     html: string;
     rest: string;
     start: number;

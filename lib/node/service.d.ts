@@ -182,6 +182,11 @@ export declare class TavernService extends TypertRemoteService implements Tavern
         messageId?: string;
         turn?: number;
     }): Promise<TavernMethodResults['getFloorSiblings']>;
+    /** 长历史首屏批量读取消息操作栏状态：共享一次提交等待、事件快照与兄弟索引检查。 */
+    getFloorActionStates(request: {
+        sessionId: string;
+        messageIds: string[];
+    }): Promise<TavernMethodResults['getFloorActionStates']>;
     renderOutputText(request: {
         sessionId: string;
         text: string;
@@ -261,6 +266,7 @@ export declare class TavernService extends TypertRemoteService implements Tavern
     /** impersonate 是带外一次性调用，不进会话串行队列（不改会话状态）。 */
     impersonate(request: {
         sessionId: string;
+        hint?: string;
     }): Promise<TavernMethodResults['impersonate']>;
     listStories(request: {
         cardId: string;

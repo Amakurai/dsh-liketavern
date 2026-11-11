@@ -32,6 +32,8 @@ export declare const zh: {
     readonly 'lorebookEditor.pager.next': "下一页";
     readonly 'lorebookEditor.pager.status': "{page} / {pageCount} 页（本页 {count} 条）";
     readonly 'lorebookEditor.deleteEntry': "删除条目";
+    readonly 'lorebookEditor.duplicateEntry': "复制条目";
+    readonly 'lorebookEditor.copySuffix': "（副本）";
     readonly 'lorebookEditor.delete.title': "删除这条世界书？";
     readonly 'lorebookEditor.delete.desc': "删除后需点「保存」才会写回文件。可先返回列表放弃更改。";
     readonly 'lorebookEditor.discard.title': "放弃未保存的更改？";

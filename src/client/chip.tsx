@@ -3,7 +3,7 @@
  * 显示当前会话绑定的角色；点击展开绑定编辑 / 开场白 / 调试小面板。
  */
 import { describeError } from '../core/guards.js'
-import { DraftScope } from './drafts.js'
+import { DraftScope, useDraftGuard } from './drafts.js'
 import { MemorySection } from './panel/memory.js'
 import { useEffect, useId, useRef, useState } from 'react'
 import { BINDING_CHANGED_EVENT } from './actions.js'
@@ -21,7 +21,7 @@ import { LorebookEditor } from './panel/lorebookEditor.js'
 import type { CharacterSummary, Persona, PresetSummary, SessionBinding, TavernRemote, TavernSettings } from './types.js'
 import { EMPTY_SESSION_DEFAULTS } from './types.js'
 import { IconCopyOutlineMedium } from '@deepseek-ai/dsh-client-ui-primitives'
-import { Btn, CheckChips, ConfirmDialog, Dialog, Err, Field, IconBtn, Muted, Select, Skeleton, Tabs, Toggle, errOf, runAsync, useLoader, useToast } from './util.js'
+import { Badge, Btn, CheckChips, ConfirmDialog, Dialog, Err, Field, IconBtn, Muted, Select, Skeleton, Tabs, Toggle, errOf, runAsync, useLoader, useToast } from './util.js'
 
 export function defaultBinding(sessionId: string, cardId: string, defaults?: TavernSettings['defaults']): SessionBinding {
   const d = defaults ?? EMPTY_SESSION_DEFAULTS
@@ -214,6 +214,24 @@ function helperRuntimeKey(sessionId: string, binding: SessionBinding): string {
   ])
 }
 
+/** 判断会话绑定草稿是否有尚未保存的用户修改；忽略空对象/布尔缺省的等价表示。 */
+export function isBindingDirty(draft: SessionBinding | null, saved: SessionBinding | null): boolean {
+  if (!draft) return false
+  if (!saved) return true
+  if (draft.cardId !== saved.cardId) return true
+  if ((draft.presetId ?? null) !== (saved.presetId ?? null)) return true
+  if ((draft.personaId ?? null) !== (saved.personaId ?? null)) return true
+  if ((draft.characterLorebookId ?? null) !== (saved.characterLorebookId ?? null)) return true
+  if ((draft.useEmbeddedLorebook !== false) !== (saved.useEmbeddedLorebook !== false)) return true
+  if (JSON.stringify(draft.characterLorebookIds ?? []) !== JSON.stringify(saved.characterLorebookIds ?? [])) return true
+  if (JSON.stringify(draft.lorebookIds) !== JSON.stringify(saved.lorebookIds)) return true
+  if (JSON.stringify(draft.worldInfo ?? {}) !== JSON.stringify(saved.worldInfo ?? {})) return true
+  if ((draft.authorNote ?? '') !== (saved.authorNote ?? '')) return true
+  if ((draft.injectJournal === true) !== (saved.injectJournal === true)) return true
+  if ((draft.helperMvu === true) !== (saved.helperMvu === true)) return true
+  return false
+}
+
 /** 宿主切换会话可能复用 slot；表单、子弹窗与在途请求的状态都必须随会话重新挂载。 */
 export function TavernHeaderChip(props: HeaderChipProps) {
   return <HeaderChipSession key={props.sessionId} {...props}/>
@@ -262,14 +280,6 @@ function HeaderChipSession(props: HeaderChipProps) {
     return()=>window.removeEventListener(CHARACTER_CHANGED_EVENT,changed)
   },[tavern,binding?.cardId,detail.reload])
 
-  const listsLoader = useLoader(
-    () => remote.listCharacters({}),
-    [sessionId],
-    tavern,
-  )
-  const listed = listsLoader.state.status === 'ready' ? listsLoader.state.value.items : []
-  const listedName = binding ? listed.find((c) => c.cardId === binding.cardId)?.name : undefined
-
   const [open, setOpen] = useState(false)
   const usageLoader = useLoader(() => remote.getContextUsage({ sessionId }), [sessionId, open], tavern && open)
   const usage = usageLoader.state.status === 'ready' ? usageLoader.state.value.usage : null
@@ -279,17 +289,21 @@ function HeaderChipSession(props: HeaderChipProps) {
       { count: staleTurn.snapshots, tokens: fmtTokens(staleTurn.tokens) })}</Muted>
     : null
   const [lists, setLists] = useState<Lists | null>(null)
+  const listedName = binding && lists ? lists.characters.find((c) => c.cardId === binding.cardId)?.name : undefined
   const [draft, setDraft] = useState<SessionBinding | null>(null)
   const [error, setError] = useState<string | null>(null)
   const toast = useToast()
   const [view, setView] = useState<{ title: string; text: string } | null>(null)
   const [previewData, setPreviewData] = useState<PromptPreview | null>(null)
   const [chatLore, setChatLore] = useState<{ cardId: string; storyId?: string; entries: WorldInfoEntry[]; revision: string } | null>(null)
-  const [memoryOpen, setMemoryOpen] = useState(false)
+  const [memoryOpenTab, setMemoryOpenTab] = useState<'memory' | 'journal' | null>(null)
   const [confirmUnbind, setConfirmUnbind] = useState(false)
   /** 保存、解除与开场白等操作共用同步锁；React 提交 busy 前的重复点击同样不能发送第二个请求。 */
   const pending = useRef(false)
   const [busy, setBusy] = useState(false)
+  const bindingDirty = isBindingDirty(draft, binding)
+  const closeGuard = useDraftGuard(open && bindingDirty, busy)
+  const requestCloseDialog = () => { if (!pending.current) closeGuard.request(() => setOpen(false)) }
   const run = (fn: () => Promise<void>) => {
     if (pending.current) return
     pending.current = true
@@ -366,6 +380,7 @@ function HeaderChipSession(props: HeaderChipProps) {
     const err = errOf(r)
     if (err) setError(err)
     else {
+      closeGuard.clearDraft()
       toast.show(t('chip.saved'))
       // 先失效进程内缓存再读取权威绑定/reload/广播，否则重拉吃到旧绑定（见 cache.ts TTL 口径）。
       invalidateSessionBinding(sessionId)
@@ -427,6 +442,7 @@ function HeaderChipSession(props: HeaderChipProps) {
         setConfirmUnbind(false)
         setError(err)
       } else {
+        closeGuard.clearDraft()
         setConfirmUnbind(false)
         setOpen(false)
         invalidateSessionBinding(sessionId)
@@ -480,18 +496,18 @@ function HeaderChipSession(props: HeaderChipProps) {
     <span className="dsh-tavern-ui" style={{ display: 'inline-flex' }}>
       {binding?.storyId&&<HelperScripts key={helperRuntimeKey(sessionId,binding)} remote={remote} sessionId={sessionId} cardId={binding.cardId} sessions={sessions} onCancel={props.onCancel}/>}
       <TavernSeatChip
-        label={binding ? (name ?? listedName ?? binding.cardName ?? t('chip.characterFallback')) : t('hero.pickCharacter')}
+        label={binding ? (name ?? binding.cardName ?? listedName ?? t('chip.characterFallback')) : t('hero.pickCharacter')}
         title={t('hero.pickCharacter')}
         avatarUrl={avatar}
         open={open}
         loading={bindingLoader.state.status === 'loading'}
         hasPopup="dialog"
-        onClick={() => setOpen(!open)}
+        onClick={() => { if (open) requestCloseDialog(); else setOpen(true) }}
       />
       <Dialog
         open={open}
         title={t('chip.dialog.title')}
-        onClose={() => setOpen(false)}
+        onClose={requestCloseDialog}
         width="xl"
         footer={
           draft ? (
@@ -510,8 +526,9 @@ function HeaderChipSession(props: HeaderChipProps) {
               ) : null}
               <span className="dsh-tavern-footSpacer" />
               <span className="dsh-tavern-footGroup">
+                {bindingDirty ? <Badge accent>{t('draft.unsaved')}</Badge> : null}
                 <Btn size="md" disabled={busy || !binding?.storyId || draft?.cardId !== binding.cardId} onClick={() => run(openChatLore)}>{t('chip.chatLore.edit')}</Btn>
-                <Btn size="md" disabled={!binding?.storyId} onClick={() => setMemoryOpen(true)}>{t('section.memory')}</Btn>
+                <Btn size="md" disabled={!binding?.storyId} onClick={() => setMemoryOpenTab('memory')}>{t('section.memory')}</Btn>
                 <Btn primary size="md" disabled={busy} onClick={() => run(saveBinding)}>{t('binding.save')}</Btn>
               </span>
             </div>
@@ -671,6 +688,11 @@ function HeaderChipSession(props: HeaderChipProps) {
                       />
                       {t('chip.field.injectJournal')}
                     </label>
+                    {binding?.storyId && draft.cardId === binding.cardId ? (
+                      <Btn size="sm" disabled={busy} onClick={() => setMemoryOpenTab('journal')}>
+                        {t('chip.journal.edit')}
+                      </Btn>
+                    ) : null}
                     <label><Toggle checked={draft.helperMvu===true} onChange={helperMvu=>setDraft({...draft,helperMvu})}/>{t('chip.field.helperMvu')}</label>
                   </div>
                   <Muted>{t('chip.field.helperMvuNote')}</Muted>
@@ -755,11 +777,17 @@ function HeaderChipSession(props: HeaderChipProps) {
           />
         </Dialog>
       }</DraftScope>}
-      {memoryOpen && binding?.storyId && <DraftScope>{(request) =>
-        <Dialog open width="xl" title={t('section.memory')} onClose={() => request(() => setMemoryOpen(false))}>
-          <MemorySection key={binding.storyId} remote={remote} initialContext={{ cardId: binding.cardId, storyId: binding.storyId! }} />
+      {memoryOpenTab !== null && binding?.storyId && <DraftScope>{(request) =>
+        <Dialog open width="xl" title={t('section.memory')} onClose={() => request(() => setMemoryOpenTab(null))}>
+          <MemorySection
+            key={`${binding.storyId}:${memoryOpenTab}`}
+            remote={remote}
+            initialContext={{ cardId: binding.cardId, storyId: binding.storyId! }}
+            initialTab={memoryOpenTab}
+          />
         </Dialog>
       }</DraftScope>}
+      {closeGuard.confirmation}
       <ConfirmDialog
         open={confirmUnbind}
         title={t('chip.unbind.title')}

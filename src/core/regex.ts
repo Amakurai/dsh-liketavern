@@ -30,6 +30,7 @@ import { findHtmlDocument, findHtmlFragment } from './htmlFragment.js'
 import { findHtmlFence } from './htmlFence.js'
 import { markdownCodeScanner } from './markdownCode.js'
 import { isSyntheticUserText } from './dshPrompt.js'
+import { randomUuid } from './secureRandom.js'
 import type { CardRegexScript, ChatMessage, ChatRole, RegexRule, RegexScope, RegexTiming } from './types.js'
 
 export type { MacroContext }
@@ -792,6 +793,124 @@ export function compileCardRegexScripts(scripts: readonly CardRegexScript[], car
 /** 预设内嵌正则：跟脚本 disabled 走。 */
 export function compilePresetRegexScripts(scripts: readonly CardRegexScript[], presetId: string): RegexRule[] {
   return compileRegexScripts(scripts, { source: 'preset', sourceRef: presetId })
+}
+
+const VALID_SCOPES = new Set<RegexScope>(['input', 'output', 'prompt'])
+const VALID_TIMINGS = new Set<RegexTiming>(['assemble', 'send', 'render'])
+const VALID_ROLES = new Set<ChatRole>(['system', 'user', 'assistant'])
+
+function normalizeImportedNativeRule(item: Record<string, unknown>, index: number): RegexRule | null {
+  const find = typeof item.find === 'string' ? item.find : ''
+  if (!find) return null
+  const scopes = Array.isArray(item.scopes)
+    ? item.scopes.filter((s): s is RegexScope => typeof s === 'string' && VALID_SCOPES.has(s as RegexScope))
+    : []
+  const timing = Array.isArray(item.timing)
+    ? item.timing.filter((t): t is RegexTiming => typeof t === 'string' && VALID_TIMINGS.has(t as RegexTiming))
+    : []
+  if (scopes.length === 0 || timing.length === 0) return null
+  const roles = Array.isArray(item.roles)
+    ? item.roles.filter((r): r is ChatRole => typeof r === 'string' && VALID_ROLES.has(r as ChatRole))
+    : []
+  const minDepth = typeof item.minDepth === 'number' && Number.isFinite(item.minDepth) ? item.minDepth : null
+  const maxDepth = typeof item.maxDepth === 'number' && Number.isFinite(item.maxDepth) ? item.maxDepth : null
+  const sub = Number(item.substituteRegex)
+  const trimStrings = Array.isArray(item.trimStrings)
+    ? item.trimStrings.filter((s): s is string => typeof s === 'string' && s.length > 0)
+    : []
+  const trimStringsRegex = Array.isArray(item.trimStringsRegex)
+    ? item.trimStringsRegex.filter((s): s is string => typeof s === 'string' && s.length > 0)
+    : []
+  return {
+    id: `rule-${randomUuid()}`,
+    name: typeof item.name === 'string' && item.name.trim() ? item.name : `导入正则 ${index + 1}`,
+    find,
+    replace: typeof item.replace === 'string' ? item.replace : '',
+    enabled: typeof item.enabled === 'boolean' ? item.enabled : true,
+    scopes: [...new Set(scopes)],
+    timing: [...new Set(timing)],
+    minDepth,
+    maxDepth,
+    substituteRegex: sub === 1 || sub === 2 ? sub : 0,
+    source: 'user',
+    ...(roles.length > 0 ? { roles: [...new Set(roles)] } : {}),
+    ...(trimStrings.length > 0 ? { trimStrings } : {}),
+    ...(trimStringsRegex.length > 0 ? { trimStringsRegex } : {}),
+  }
+}
+
+function normalizeStScriptCandidate(item: Record<string, unknown>): CardRegexScript | null {
+  if (typeof item.findRegex !== 'string' || !item.findRegex) return null
+  const placement = Array.isArray(item.placement)
+    ? item.placement.map(Number).filter((n) => Number.isInteger(n))
+    : undefined
+  const trimStrings = Array.isArray(item.trimStrings)
+    ? item.trimStrings.filter((s): s is string => typeof s === 'string')
+    : undefined
+  const trimStringsRegex = Array.isArray(item.trimStringsRegex)
+    ? item.trimStringsRegex.filter((s): s is string => typeof s === 'string')
+    : undefined
+  return {
+    ...(typeof item.scriptName === 'string' ? { scriptName: item.scriptName } : {}),
+    findRegex: item.findRegex,
+    ...(typeof item.replaceString === 'string' ? { replaceString: item.replaceString } : {}),
+    ...(placement ? { placement } : {}),
+    ...(typeof item.disabled === 'boolean' ? { disabled: item.disabled } : {}),
+    ...(typeof item.markdownOnly === 'boolean' ? { markdownOnly: item.markdownOnly } : {}),
+    ...(typeof item.promptOnly === 'boolean' ? { promptOnly: item.promptOnly } : {}),
+    ...(item.substituteRegex !== undefined ? { substituteRegex: Number(item.substituteRegex) } : {}),
+    ...(item.minDepth === null || typeof item.minDepth === 'number' || typeof item.minDepth === 'string'
+      ? { minDepth: item.minDepth as number | null }
+      : {}),
+    ...(item.maxDepth === null || typeof item.maxDepth === 'number' || typeof item.maxDepth === 'string'
+      ? { maxDepth: item.maxDepth as number | null }
+      : {}),
+    ...(trimStrings ? { trimStrings } : {}),
+    ...(trimStringsRegex ? { trimStringsRegex } : {}),
+  }
+}
+
+/**
+ * 解析外部导入的全局正则 JSON：兼容 SillyTavern 单条/数组正则脚本、预设内 regex_scripts 片段，
+ * 以及本插件导出的 RegexRule 数组或 { rules } 包装。所有导入规则统一分配新 ID 并归入 user 作用域。
+ */
+export function parseImportedRegexRules(raw: unknown): RegexRule[] {
+  let list: unknown[]
+  if (Array.isArray(raw)) {
+    list = raw
+  } else if (raw !== null && typeof raw === 'object') {
+    const obj = raw as Record<string, unknown>
+    if (Array.isArray(obj.rules)) list = obj.rules
+    else if (Array.isArray(obj.regex_scripts)) list = obj.regex_scripts
+    else if (Array.isArray(obj.regexScripts)) list = obj.regexScripts
+    else if (Array.isArray(obj.scripts)) list = obj.scripts
+    else list = [obj]
+  } else {
+    return []
+  }
+
+  const out: RegexRule[] = []
+  list.forEach((entry, index) => {
+    if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) return
+    const record = entry as Record<string, unknown>
+    if (typeof record.find === 'string') {
+      const rule = normalizeImportedNativeRule(record, index)
+      if (rule) out.push(rule)
+      return
+    }
+    const st = normalizeStScriptCandidate(record)
+    if (!st) return
+    const compiled = compileRegexScripts([st], { source: 'preset', sourceRef: 'import' })[0]
+    if (compiled) {
+      out.push({
+        ...compiled,
+        id: `rule-${randomUuid()}`,
+        name: st.scriptName?.trim() ? st.scriptName : `导入正则 ${index + 1}`,
+        source: 'user',
+      })
+    }
+  })
+  return out
 }
 
 /**

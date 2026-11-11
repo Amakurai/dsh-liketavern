@@ -9,13 +9,12 @@ import { memo, useCallback, useId, useMemo, useRef, useState } from 'react'
 import {
   IconChevronDownOutlineMedium,
   IconPlusOutlineMedium,
-  IconSearchOutlineMedium,
   IconTrashOutlineMedium,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { WIPosition, WIRole, WISelectiveLogic, WISource, WorldInfoEntry } from '../../core/types.js'
 import { exportLorebook } from '../../state/lorebook.js'
 import { useT } from '../i18n.js'
-import { Badge, Btn, ConfirmDialog, Err, IconBtn, ListInput, Muted, NumInput, NullableNumInput, Select, Toggle, errOf, runAsync } from '../util.js'
+import { Badge, Btn, ConfirmDialog, Err, IconBtn, ListInput, Muted, NumInput, NullableNumInput, SearchInput, Select, Toggle, errOf, runAsync } from '../util.js'
 import type { Envelope, TavernRemote } from '../types.js'
 
 const PAGE_SIZE = 40
@@ -181,7 +180,11 @@ function LorebookEditorContent(props: LorebookEditorProps & { draftKey: string }
   const [query, setQuery] = useDraftState(`${draftKey}.query`, '')
   const [filter, setFilter] = useDraftState<FilterId>(`${draftKey}.filter`, 'all')
   const [page, setPage] = useDraftState(`${draftKey}.page`, 0)
-  const [openUid, setOpenUid] = useDraftState<string | null>(`${draftKey}.openUid`, null)
+  // 单条目世界书默认直接展开，多条目默认收起并按需挂载表单（消除 40 条同时挂载的卡顿与隐藏焦点陷阱）。
+  const [openUid, setOpenUid] = useDraftState<string | null>(
+    `${draftKey}.openUid`,
+    () => (props.entries.length === 1 ? props.entries[0]!.uid : null),
+  )
   const [advanced, setAdvanced] = useDraftState(`${draftKey}.advanced`, false)
   const savedEntries = useRef(props.entries)
   const [busy, setBusy] = useState(false)
@@ -274,6 +277,27 @@ function LorebookEditorContent(props: LorebookEditorProps & { draftKey: string }
     setAdvanced(false)
   }
 
+  const duplicateEntry = useCallback((uid: string) => {
+    const current = entriesRef.current
+    const idx = current.findIndex((e) => e.uid === uid)
+    if (idx < 0) return
+    const targetEntry = current[idx]!
+    const copyUid = newUid()
+    const cloned: WorldInfoEntry = {
+      ...targetEntry,
+      uid: copyUid,
+      key: `${source}:${sourceRef}:${copyUid}`,
+      keys: [...targetEntry.keys],
+      secondaryKeys: [...targetEntry.secondaryKeys],
+      comment: targetEntry.comment.trim() ? `${targetEntry.comment}${t('lorebookEditor.copySuffix')}` : targetEntry.comment,
+    }
+    const next = current.slice()
+    next.splice(idx + 1, 0, cloned)
+    setEntries(next)
+    setDirty(true)
+    setOpenUid(copyUid)
+  }, [source, sourceRef, setEntries, setDirty, setOpenUid, t])
+
   const applyFilterEnabled = (enabled: boolean) => {
     const ids = new Set(filtered.map((e) => e.uid))
     mark(entries.map((e) => (ids.has(e.uid) ? { ...e, enabled } : e)))
@@ -319,15 +343,14 @@ function LorebookEditorContent(props: LorebookEditorProps & { draftKey: string }
       </div>
       <Err message={error} />
 
-      <div className="dsh-tavern-search" style={{ margin: '10px 0 12px' }}>
-        <span className="dsh-tavern-searchIcon">
-          <IconSearchOutlineMedium />
-        </span>
-        <input
-          value={query}
+      <div style={{ margin: '10px 0 12px' }}>
+        <SearchInput
+          label={t('lorebookEditor.searchPlaceholder')}
           placeholder={t('lorebookEditor.searchPlaceholder')}
-          onChange={(e) => {
-            setQuery(e.target.value)
+          value={query}
+          width="100%"
+          onChange={(value) => {
+            setQuery(value)
             setPage(0)
           }}
         />
@@ -391,13 +414,16 @@ function LorebookEditorContent(props: LorebookEditorProps & { draftKey: string }
                 </div>
                 <div className={`dsh-tavern-collapse${open ? ' is-open' : ''}`}>
                   <div className="dsh-tavern-collapseInner">
-                    <EntryForm
-                      entry={entry}
-                      advanced={advanced}
-                      onAdvanced={setAdvanced}
-                      onPatch={patch}
-                      onRequestDelete={setToDelete}
-                    />
+                    {open ? (
+                      <EntryForm
+                        entry={entry}
+                        advanced={advanced}
+                        onAdvanced={setAdvanced}
+                        onPatch={patch}
+                        onDuplicate={duplicateEntry}
+                        onRequestDelete={setToDelete}
+                      />
+                    ) : null}
                   </div>
                 </div>
               </div>
@@ -420,7 +446,7 @@ function LorebookEditorContent(props: LorebookEditorProps & { draftKey: string }
         </div>
       )}
 
-      <div className="dsh-tavern-stickyBar">
+      <div className={`dsh-tavern-stickyBar${dirty ? ' is-sticky' : ''}`}>
         <Btn size="md" onClick={addEntry}>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
             <IconPlusOutlineMedium /> {t('lorebookEditor.newEntry')}
@@ -468,10 +494,11 @@ const EntryForm = memo(function EntryForm(props: {
   advanced: boolean
   onAdvanced: (v: boolean) => void
   onPatch: (uid: string, partial: Partial<WorldInfoEntry>) => void
+  onDuplicate: (uid: string) => void
   onRequestDelete: (uid: string) => void
 }) {
   const t = useT()
-  const { entry, onPatch, onRequestDelete } = props
+  const { entry, onPatch, onDuplicate, onRequestDelete } = props
   const set = (partial: Partial<WorldInfoEntry>) => onPatch(entry.uid, partial)
   return (
     <div className="dsh-tavern-entryBody" onClick={(e) => e.stopPropagation()}>
@@ -669,7 +696,10 @@ const EntryForm = memo(function EntryForm(props: {
         </>
       ) : null}
 
-      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 8 }}>
+        <Btn size="sm" onClick={() => onDuplicate(entry.uid)}>
+          {t('lorebookEditor.duplicateEntry')}
+        </Btn>
         <IconBtn label={t('lorebookEditor.deleteEntry')} danger onClick={() => onRequestDelete(entry.uid)}>
           <IconTrashOutlineMedium />
         </IconBtn>

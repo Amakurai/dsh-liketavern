@@ -26,7 +26,7 @@ import { Wal } from '../state/wal.js'
 import { copyTemplateTimers, loadTemplateGenerationIdentity } from '../state/template.js'
 import { estimateTokens } from '../core/tokenize.js'
 import { rebuildIndex } from '../state/workspace.js'
-import { cardGreetingVariants, greetingFloorState, isGreetingOnlyBlank, isTavernGreetingEvent, pickGreetingText, sessionHasUserMessage, TAVERN_GREETING_SOURCE } from '../core/greetingLog.js'
+import { activeGreetingIndex, cardGreetingVariants, greetingFloorState, isGreetingOnlyBlank, isTavernGreetingEvent, pickGreetingText, sessionHasUserMessage, TAVERN_GREETING_SOURCE, type GreetingFloorState } from '../core/greetingLog.js'
 import { expandMacros } from '../core/macros.js'
 import { CONTINUE_INSTRUCTION_PREFIX, isContinueInstruction, isHostInjectedUserMessage, isSyntheticUserText } from '../core/dshPrompt.js'
 import { DEFAULT_USER_NAME } from '../core/persona.js'
@@ -1143,6 +1143,131 @@ export async function getFloorSiblings(
     if (!swipe) return none
     return { swipe: { turn, ...swipe } }
   })
+}
+
+export interface BatchFloorActionState {
+  greeting: GreetingFloorState
+  siblings: { swipe: (SiblingSwipe & { turn: number }) | null }
+  canContinue: boolean
+}
+
+/**
+ * 批量读取同一会话多条 assistant 消息的操作栏状态（开场白 swipe、同层分支兄弟导航与是否可续写）：
+ * 整批共享一次绑定读取、一次事件快照线性扫描与至多一次 siblings.json 锁，消除长对话首屏 2N 次 RPC 风暴。
+ */
+export async function getFloorActionStates(
+  { ctx, state }: FloorDeps,
+  sessionId: string,
+  messageIds: readonly string[],
+): Promise<{ items: BatchFloorActionState[] }> {
+  const emptyItem = (): BatchFloorActionState => ({
+    greeting: { swipe: null, isGreeting: false, started: false },
+    siblings: { swipe: null },
+    canContinue: false,
+  })
+  if (messageIds.length === 0) return { items: [] }
+  const binding = await state.loadBinding(sessionId)
+  if (!binding) return { items: messageIds.map(emptyItem) }
+  const session = liveSession(ctx, sessionId)
+  if (!session || !isTavernRuntimeSession(ctx, session)) return { items: messageIds.map(emptyItem) }
+
+  const events = session.snapshotEvents()
+  const started = sessionHasUserMessage(events)
+  const { turns, openTurn } = closedTurns(events)
+  const lastClosedTurn = openTurn === null ? turns.at(-1) : undefined
+
+  let firstAssistantMessageId: string | undefined
+  let firstIsGreeting = false
+  const turnByMessageId = new Map<string, number>()
+  for (const e of events) {
+    if (e.type !== 'assistant/message') continue
+    const data = e.data as { turn: number; message?: { id?: string } }
+    const id = data.message?.id
+    if (firstAssistantMessageId === undefined) {
+      firstAssistantMessageId = id ?? ''
+      firstIsGreeting = Boolean(id) && isTavernGreetingEvent(e)
+    }
+    if (id && !turnByMessageId.has(id)) {
+      turnByMessageId.set(id, data.turn)
+    }
+  }
+
+  const needsGreetingVariants =
+    !started && firstIsGreeting && Boolean(firstAssistantMessageId) && messageIds.includes(firstAssistantMessageId!)
+  const variantCount = needsGreetingVariants ? (await greetingVariants(state, binding.cardId)).length : 0
+
+  const resolvedTurns = messageIds.map((id) => (id ? (turnByMessageId.get(id) ?? null) : null))
+  const siblingsByTurn = new Map<number, (SiblingSwipe & { turn: number }) | null>()
+  const uniqueTurns = [...new Set(resolvedTurns.filter((t): t is number => t !== null))]
+
+  if (uniqueTurns.length > 0) {
+    const quickForks = await loadSiblingForks(state.paths.root)
+    if (quickForks.some((f) => f.parentSessionId === sessionId || f.childSessionId === sessionId)) {
+      await withWorkspaceLock(siblingsFile(state.paths.root), async () => {
+        const forks = await loadSiblingForks(state.paths.root)
+        if (forks.length === 0) return
+        const ids = new Set<string>()
+        for (const f of forks) {
+          ids.add(f.parentSessionId)
+          ids.add(f.childSessionId)
+        }
+        const existing = new Set<string>([sessionId])
+        const confirmed = confirmedBindingIds(state)
+        await Promise.all(
+          [...ids].map(async (id) => {
+            if (ctx.sessions.get(id as Session['id']) !== undefined || confirmed.has(id)) {
+              existing.add(id)
+            } else {
+              try {
+                if ((await loadBinding(state.paths, id, true)) !== null) {
+                  existing.add(id)
+                  confirmed.add(id)
+                }
+              } catch {
+                existing.add(id)
+              }
+            }
+          }),
+        )
+        const exists = (id: string) => existing.has(id)
+        const pruned = pruneSiblingForks(forks, exists)
+        if (pruned.changed) {
+          try {
+            await mutateSiblingForks(state.paths.root, (current) => {
+              const next = pruneSiblingForks(current, exists)
+              return next.changed ? next.forks : current
+            })
+          } catch {
+            // 落盘失败不影响本次查询；下次读取再剪。
+          }
+        }
+        for (const turn of uniqueTurns) {
+          const swipe = siblingSwipe(pruned.forks, sessionId, turn, exists)
+          siblingsByTurn.set(turn, swipe ? { turn, ...swipe } : null)
+        }
+      })
+    }
+  }
+
+  const items: BatchFloorActionState[] = messageIds.map((messageId, index) => {
+    const isGreeting = Boolean(messageId) && firstIsGreeting && firstAssistantMessageId === messageId
+    const greeting: GreetingFloorState = isGreeting
+      ? {
+          isGreeting: true,
+          started,
+          swipe: !started && variantCount >= 2 ? { index: activeGreetingIndex(binding.greetingIndex, variantCount), total: variantCount } : null,
+        }
+      : { isGreeting: false, started, swipe: null }
+    const turn = resolvedTurns[index] ?? null
+    const canContinue = !isGreeting && openTurn === null && turn !== null && lastClosedTurn !== undefined && turn === lastClosedTurn
+    return {
+      greeting,
+      siblings: { swipe: turn !== null ? (siblingsByTurn.get(turn) ?? null) : null },
+      canContinue,
+    }
+  })
+
+  return { items }
 }
 
 /**

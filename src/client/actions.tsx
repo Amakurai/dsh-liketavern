@@ -21,6 +21,8 @@ import { IconBranchOutlineMedium, IconChevronLeftOutlineMedium, IconChevronRight
 import type { ReactNode } from 'react'
 import { cachedSessionBinding } from './cache.js'
 import { useDraftGuard } from './drafts.js'
+import { floorActionStateBatched } from './floorActionBatch.js'
+import { resolveSessionInput } from './helperChoices.js'
 import { useT } from './i18n.js'
 import { isTavernSession, type UseSessions } from './mode.js'
 import { openChildSession, type SessionsPort } from './openChild.js'
@@ -67,6 +69,27 @@ export const BINDING_CHANGED_EVENT = 'dsh-tavern:binding-changed'
 
 /** 分支变更广播（fork 操作成功后以源会话 id dispatch，兄弟导航据此重拉）。 */
 export const BRANCH_CHANGED_EVENT = 'dsh-tavern:branch-changed'
+
+/** 最新可续写楼层变更广播（同一会话挂载新楼层并拿到服务端 canContinue=true 时通知旧楼层收起续写钮）。 */
+const CONTINUABLE_CHANGED_EVENT = 'dsh-tavern:continuable-changed'
+const latestContinuableByRemote = new WeakMap<TavernRemote, Map<string, string>>()
+
+function recordContinuableFloor(remote: TavernRemote, sessionId: string, messageId: string): void {
+  let bySession = latestContinuableByRemote.get(remote)
+  if (!bySession) {
+    bySession = new Map()
+    latestContinuableByRemote.set(remote, bySession)
+  }
+  if (bySession.get(sessionId) === messageId) return
+  bySession.set(sessionId, messageId)
+  if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+    window.dispatchEvent(new CustomEvent(CONTINUABLE_CHANGED_EVENT, { detail: sessionId }))
+  }
+}
+
+function getRecordedContinuableFloor(remote: TavernRemote, sessionId: string): string | undefined {
+  return latestContinuableByRemote.get(remote)?.get(sessionId)
+}
 
 type SessionEventCallback = () => void
 interface WindowEventChannel {
@@ -216,33 +239,44 @@ function FloorActions(props: FloorActionsProps) {
   const closeEditAi = () => { if (!submitting.current) editAiGuard.request(() => setEditAi(null)) }
   /** 剪贴板不可用时展示的代答结果（用户手动复制）。 */
   const [impersonated, setImpersonated] = useState<string | null>(null)
+  /** 记录本操作栏上一次写入宿主输入框的代答版本，连续点击代答时将上次结果当作换一版重抽而非扩写提示。 */
+  const lastImpersonated = useRef<{ draft: string; revision: number } | null>(null)
+  const [, setContinuableTick] = useState(0)
   const toast = useToast()
-  const swipeLoader = useLoader(
-    () => remote.getGreetingSwipe({ sessionId, messageId: messageId! }),
-    [sessionId, messageId],
-    bound === true && Boolean(messageId),
-  )
-  const siblingLoader = useLoader(
-    () => remote.getFloorSiblings({ sessionId, messageId: messageId! }),
+  const hasBatchStates = typeof remote.getFloorActionStates === 'function'
+  const floorStateLoader = useLoader(
+    () => floorActionStateBatched(remote, { sessionId, messageId: messageId! }),
     [sessionId, messageId],
     bound === true && Boolean(messageId),
   )
   useEffect(() => {
     if (bound !== true || !messageId) return
-    const offBinding = subscribeSessionWindowEvent(BINDING_CHANGED_EVENT, sessionId, false, () => swipeLoader.reload())
-    const offBranch = subscribeSessionWindowEvent(BRANCH_CHANGED_EVENT, sessionId, false, () => siblingLoader.reload())
+    const offBinding = subscribeSessionWindowEvent(BINDING_CHANGED_EVENT, sessionId, false, () => floorStateLoader.reload())
+    const offBranch = subscribeSessionWindowEvent(BRANCH_CHANGED_EVENT, sessionId, false, () => floorStateLoader.reload())
+    const offContinuable = subscribeSessionWindowEvent(CONTINUABLE_CHANGED_EVENT, sessionId, false, () => setContinuableTick((n) => n + 1))
     return () => {
       offBinding()
       offBranch()
+      offContinuable()
     }
     // reload 随 loader render 更新；事件回调只需跟会话、消息和启用状态重挂。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bound, messageId, sessionId])
-  const greetState = swipeLoader.state.status === 'ready' ? swipeLoader.state.value : null
+  const floorState = floorStateLoader.state.status === 'ready' ? floorStateLoader.state.value : null
+  useEffect(() => {
+    if (hasBatchStates && messageId && floorState?.canContinue) {
+      recordContinuableFloor(remote, sessionId, messageId)
+    }
+  }, [hasBatchStates, remote, sessionId, messageId, floorState?.canContinue])
+  const greetState = floorState?.greeting ?? null
   const swipe = greetState?.swipe ?? null
   const isGreeting = greetState?.isGreeting === true
   const started = greetState?.started === true
-  const siblingSwipe = siblingLoader.state.status === 'ready' ? siblingLoader.state.value.swipe : null
+  const siblingSwipe = floorState?.siblings.swipe ?? null
+  const recordedContinuable = hasBatchStates ? getRecordedContinuableFloor(remote, sessionId) : undefined
+  const canContinue = floorState === null
+    ? true
+    : floorState.canContinue && (!recordedContinuable || recordedContinuable === messageId)
 
   /** 跑一个产生分支会话的操作；成功后直接跳转到分支（续跑过程在分支里原生流式可见），并写入分支标题。 */
   const run = async (
@@ -294,7 +328,7 @@ function FloorActions(props: FloorActionsProps) {
     void openChildSession(navigation, target, undefined, sessionId)
       .catch(() => {
         toast.show(t('actions.branchGone'))
-        siblingLoader.reload()
+        floorStateLoader.reload()
       })
       .finally(() => { submitting.current = false; setOperation(null) })
   }
@@ -403,24 +437,63 @@ function FloorActions(props: FloorActionsProps) {
     }
   }
 
-  /** AI 代答用户：结果复制进剪贴板；剪贴板不可用时弹窗展示。 */
+  /** AI 代答用户：优先填入宿主输入框（已有用户手写草稿时作为扩写提示）；等待期间若用户编辑了草稿或输入框不可用则回退剪贴板/弹窗。 */
   const onImpersonate = async () => {
     if (!active.current || submitting.current) return
     submitting.current = true
     setOperation('impersonate')
     setFailure(null)
     try {
-      const r = await remote.impersonate({ sessionId })
+      const initialInput = resolveSessionInput(sessionId)
+      let before: { phase: string; occurrences: readonly unknown[]; draft: string; draftRev: number } | undefined
+      try {
+        before = initialInput?.state.getSnapshot()
+      } catch {
+        before = undefined
+      }
+      const canUseInitialDraft = before !== undefined && before.phase === 'plain' && before.occurrences.length === 0
+      const isPreviousImpersonation = Boolean(
+        before
+          && lastImpersonated.current
+          && lastImpersonated.current.draft === before.draft
+          && lastImpersonated.current.revision === before.draftRev,
+      )
+      const hint = before && canUseInitialDraft && !isPreviousImpersonation && before.draft.trim()
+        ? before.draft.trim().slice(0, 2000)
+        : undefined
+      const r = await remote.impersonate(hint ? { sessionId, hint } : { sessionId })
       if (!active.current) return
       if (!r.ok) {
         setFailure(r.error.message)
         return
       }
-      try {
-        await navigator.clipboard.writeText(r.value.text)
-        if (active.current) toast.show(t('actions.impersonateCopied'))
-      } catch {
-        if (active.current) setImpersonated(r.value.text)
+      let filled = false
+      const currentInput = resolveSessionInput(sessionId)
+      if (currentInput) {
+        try {
+          const after = currentInput.state.getSnapshot()
+          const untouchedDuringWait = !before
+            ? after.draft.trim() === ''
+            : (after.draft === before.draft && after.draftRev === before.draftRev) || after.draft.trim() === ''
+          if (after.phase === 'plain' && after.occurrences.length === 0 && untouchedDuringWait) {
+            currentInput.setDraft(r.value.text)
+            currentInput.focus?.()
+            const written = currentInput.state.getSnapshot()
+            lastImpersonated.current = { draft: written.draft, revision: written.draftRev }
+            filled = true
+            if (active.current) toast.show(t('actions.impersonateFilled'))
+          }
+        } catch {
+          filled = false
+        }
+      }
+      if (!filled) {
+        try {
+          await navigator.clipboard.writeText(r.value.text)
+          if (active.current) toast.show(t('actions.impersonateCopied'))
+        } catch {
+          if (active.current) setImpersonated(r.value.text)
+        }
       }
     } catch (e) {
       setFailure(describeError(e))
@@ -465,7 +538,7 @@ function FloorActions(props: FloorActionsProps) {
           <IconRefreshOutlineMedium />
         </IconAction>
       )}
-      {!isGreeting && (
+      {!isGreeting && canContinue && (
         <IconAction label={t('actions.continue')} disabled={busy} busy={operation === 'continue'} onClick={() => void onContinue()}>
           <IconPlayOutlineMedium />
         </IconAction>
@@ -501,6 +574,12 @@ function FloorActions(props: FloorActionsProps) {
             disabled={busy}
             value={edit.text}
             onChange={(e) => { if (!submitting.current) setEdit({ ...edit, text: e.target.value }) }}
+            onKeyDown={(e) => {
+              if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && !e.nativeEvent?.isComposing) {
+                e.preventDefault()
+                void submitEdit()
+              }
+            }}
           />
           <Err message={editFailure} />
           <SaveBar>
@@ -520,6 +599,12 @@ function FloorActions(props: FloorActionsProps) {
             disabled={busy}
             value={editAi.text}
             onChange={(e) => { if (!submitting.current) setEditAi({ ...editAi, text: e.target.value }) }}
+            onKeyDown={(e) => {
+              if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && !e.nativeEvent?.isComposing) {
+                e.preventDefault()
+                void submitEditAi()
+              }
+            }}
           />
           <Err message={editAiFailure} />
           <SaveBar>

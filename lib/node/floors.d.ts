@@ -1,6 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis';
 import type { Agent, AgentOptions } from '@deepseek-ai/dsh-agent';
 import { type Session, type SessionEvent } from '@deepseek-ai/dsh-session';
+import { type GreetingFloorState } from '../core/greetingLog.js';
 import { type SiblingSwipe } from '../core/siblings.js';
 import { type SessionBinding, type WalLineageEntry } from './bindings.js';
 import type { TavernState } from './state.js';
@@ -140,6 +141,22 @@ export declare function getFloorSiblings({ ctx, state }: FloorDeps, sessionId: s
     swipe: (SiblingSwipe & {
         turn: number;
     }) | null;
+}>;
+export interface BatchFloorActionState {
+    greeting: GreetingFloorState;
+    siblings: {
+        swipe: (SiblingSwipe & {
+            turn: number;
+        }) | null;
+    };
+    canContinue: boolean;
+}
+/**
+ * 批量读取同一会话多条 assistant 消息的操作栏状态（开场白 swipe、同层分支兄弟导航与是否可续写）：
+ * 整批共享一次绑定读取、一次事件快照线性扫描与至多一次 siblings.json 锁，消除长对话首屏 2N 次 RPC 风暴。
+ */
+export declare function getFloorActionStates({ ctx, state }: FloorDeps, sessionId: string, messageIds: readonly string[]): Promise<{
+    items: BatchFloorActionState[];
 }>;
 /**
  * 选卡进入对话：把开场白写进一轮完整 turn（start/step/message/end），

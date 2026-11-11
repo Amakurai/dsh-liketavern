@@ -34,6 +34,8 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
 }
 /** renderOutputTexts 单批上限；客户端超出时拆成多批。 */
 export declare const RENDER_OUTPUT_BATCH_MAX = 64;
+/** getFloorActionStates 单批上限；客户端超出时拆成多批。 */
+export declare const FLOOR_ACTION_BATCH_MAX = 64;
 /** method → [request shape, value schema, 简介] */
 export declare const METHODS: {
     listSessionImportWorkspaces: {
@@ -841,8 +843,17 @@ export declare const METHODS: {
         }, import("zod/v4/core").$strip>;
         summary: string;
     };
+    getFloorActionStates: {
+        req: import("zod/mini").ZodMiniObject<{
+            messageIds: import("zod/mini").ZodMiniArray<import("zod/mini").ZodMiniString<string>>;
+            sessionId: import("zod/mini").ZodMiniString<string>;
+        }, import("zod/v4/core").$strip>;
+        value: import("zod/mini").ZodMiniUnknown;
+        summary: string;
+    };
     impersonate: {
         req: import("zod/mini").ZodMiniObject<{
+            hint: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
             sessionId: import("zod/mini").ZodMiniString<string>;
         }, import("zod/v4/core").$strip>;
         value: import("zod/mini").ZodMiniUnknown;
@@ -1135,6 +1146,16 @@ export interface StaleTurnContextUsage {
     tokens: number;
     projected: boolean;
 }
+/** 单条消息操作栏的聚合只读状态（开场白 swipe、同层分支兄弟导航与是否可续写）。 */
+export interface FloorActionStateItem {
+    greeting: GreetingFloorState;
+    siblings: {
+        swipe: (SiblingSwipe & {
+            turn: number;
+        }) | null;
+    };
+    canContinue: boolean;
+}
 /** 方法名 → 裸业务结果类型。加/改 remote 方法时必须与 METHODS、service 实现、client 镜像同步。 */
 export interface TavernMethodResults {
     listSessionImportWorkspaces: {
@@ -1374,6 +1395,9 @@ export interface TavernMethodResults {
         swipe: (SiblingSwipe & {
             turn: number;
         }) | null;
+    };
+    getFloorActionStates: {
+        items: FloorActionStateItem[];
     };
     impersonate: {
         text: string;
@@ -1860,6 +1884,10 @@ export declare const TYPERT_HOST: {
                     turn: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniInt>;
                     sessionId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                    messageIds: import("zod/mini").ZodMiniArray<import("zod/mini").ZodMiniString<string>>;
+                    sessionId: import("zod/mini").ZodMiniString<string>;
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                    hint: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
                     sessionId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     storyId: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
@@ -2382,6 +2410,10 @@ export declare const TYPERT_REMOTE: {
                     turn: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniInt>;
                     sessionId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                    messageIds: import("zod/mini").ZodMiniArray<import("zod/mini").ZodMiniString<string>>;
+                    sessionId: import("zod/mini").ZodMiniString<string>;
+                }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
+                    hint: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;
                     sessionId: import("zod/mini").ZodMiniString<string>;
                 }, import("zod/v4/core").$strip> | import("zod/mini").ZodMiniObject<{
                     storyId: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniString<string>>;

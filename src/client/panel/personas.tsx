@@ -20,6 +20,8 @@ export function PersonasSection(props: { remote: TavernRemote }) {
   const t = useT()
   const { state, reload } = useLoader(() => remote.listPersonas({}), [])
   const lore = useLoader(() => remote.listLorebooks({}), [])
+  const settings = useLoader(() => remote.getSettings({}), [], typeof remote.getSettings === 'function')
+  const defaultPersonaId = settings.state.status === 'ready' ? (settings.state.value.settings.defaults?.personaId || null) : null
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const pending = useRef(false)
@@ -68,6 +70,7 @@ export function PersonasSection(props: { remote: TavernRemote }) {
         notifyAllSessionBindingsChanged()
         toast.show(t('personas.saved', { name: editing.name }))
         reload()
+        settings.reload()
       }
     })
   }
@@ -99,6 +102,7 @@ export function PersonasSection(props: { remote: TavernRemote }) {
       const err = errOf(r)
       if (err) setError(err)
       else {
+        settings.reload()
         notifyAllSessionBindingsChanged()
         toast.show(t('personas.defaultSet'))
       }
@@ -111,7 +115,7 @@ export function PersonasSection(props: { remote: TavernRemote }) {
       {guard.confirmation}
       <div className="dsh-tavern-toolbar">
         <Btn size="md" disabled={busy} onClick={() => requestEditor(createNew)}>{t('personas.new')}</Btn>
-        <Btn size="md" onClick={() => { reload(); lore.reload() }} disabled={busy}>{t('action.refresh')}</Btn>
+        <Btn size="md" onClick={() => { reload(); lore.reload(); settings.reload() }} disabled={busy}>{t('action.refresh')}</Btn>
         {(items.length >= 5 || query !== '') && (
           <SearchInput label={t('personas.searchLabel')} value={query} onChange={setQuery} placeholder={t('personas.searchPlaceholder')} width={220} />
         )}
@@ -139,26 +143,32 @@ export function PersonasSection(props: { remote: TavernRemote }) {
         <SearchEmpty what={t('personas.entity')} query={query.trim()} onClear={() => setQuery('')} />
       )}
       <div className="dsh-tavern-list" style={{ marginBottom: 12 }}>
-        {filtered.map((p) => (
-          <div key={p.id} className="dsh-tavern-tile" {...clickableProps(() => openPersona(p))}>
-            <div className="dsh-tavern-tileMain">
-              <div className="dsh-tavern-tileTitleRow">
-                <span className="dsh-tavern-tileName">{p.name}</span>
-                {p.lorebookId ? <Badge>{p.lorebookId}</Badge> : null}
+        {filtered.map((p) => {
+          const isDefault = defaultPersonaId === p.id
+          return (
+            <div key={p.id} className="dsh-tavern-tile" {...clickableProps(() => openPersona(p))}>
+              <div className="dsh-tavern-tileMain">
+                <div className="dsh-tavern-tileTitleRow">
+                  <span className="dsh-tavern-tileName">{p.name}</span>
+                  {isDefault ? <Badge accent>{t('personas.defaultBadge')}</Badge> : null}
+                  {p.lorebookId ? <Badge>{p.lorebookId}</Badge> : null}
+                </div>
+                <span className="dsh-tavern-tileSub">{p.description.trim() || t('personas.noDescription')}</span>
               </div>
-              <span className="dsh-tavern-tileSub">{p.description.trim() || t('personas.noDescription')}</span>
+              <div className="dsh-tavern-tileActions">
+                <IconBtn label={t('action.edit')} disabled={busy} onClick={() => openPersona(p)}>
+                  <IconEditOutlineMedium />
+                </IconBtn>
+                <Btn size="sm" disabled={busy || isDefault} onClick={() => void setAsDefault(p.id)}>
+                  {t(isDefault ? 'personas.isDefault' : 'personas.setDefault')}
+                </Btn>
+                <IconBtn label={t('personas.delete')} danger disabled={busy} onClick={() => { if (!pending.current) setToDelete(p) }}>
+                  <IconTrashOutlineMedium />
+                </IconBtn>
+              </div>
             </div>
-            <div className="dsh-tavern-tileActions">
-              <IconBtn label={t('action.edit')} disabled={busy} onClick={() => openPersona(p)}>
-                <IconEditOutlineMedium />
-              </IconBtn>
-              <Btn size="sm" disabled={busy} onClick={() => void setAsDefault(p.id)}>{t('personas.setDefault')}</Btn>
-              <IconBtn label={t('personas.delete')} danger disabled={busy} onClick={() => { if (!pending.current) setToDelete(p) }}>
-                <IconTrashOutlineMedium />
-              </IconBtn>
-            </div>
-          </div>
-        ))}
+          )
+        })}
       </div>
       <ConfirmDialog
         open={toDelete !== null}

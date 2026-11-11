@@ -132,6 +132,8 @@ function EntryEditor(props: { entry: PresetEntry; disabled: boolean; onChange: (
 export function PresetsSection(props: { remote: TavernRemote }) {
   const { remote } = props
   const { state, reload } = useLoader(() => remote.listPresets({}), [])
+  const settings = useLoader(() => remote.getSettings({}), [], typeof remote.getSettings === 'function')
+  const defaultPresetId = settings.state.status === 'ready' ? (settings.state.value.settings.defaults?.presetId || null) : null
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [baseline, setBaseline] = useDraftState<string | null>('presets:baseline', null)
@@ -252,6 +254,7 @@ export function PresetsSection(props: { remote: TavernRemote }) {
       const err = errOf(r)
       if (err) setError(err)
       else {
+        settings.reload()
         notifyAllSessionBindingsChanged()
         toast.show(t('presets.setDefaultDone'))
       }
@@ -297,7 +300,7 @@ export function PresetsSection(props: { remote: TavernRemote }) {
           {t('presets.importFile')}
         </FileBtn>
         <Btn size="md" disabled={busy} onClick={() => requestEditor(createNew)}>{t('presets.new')}</Btn>
-        <Btn size="md" onClick={reload} disabled={busy}>{t('action.refresh')}</Btn>
+        <Btn size="md" onClick={() => { reload(); settings.reload() }} disabled={busy}>{t('action.refresh')}</Btn>
         {(items.length >= 5 || query !== '') && (
           <SearchInput label={t('presets.searchLabel')} value={query} onChange={setQuery} placeholder={t('presets.searchPlaceholder')} width={220} />
         )}
@@ -324,32 +327,38 @@ export function PresetsSection(props: { remote: TavernRemote }) {
         <SearchEmpty what={t('presets.noun')} query={query.trim()} onClear={() => setQuery('')} />
       )}
       <div className="dsh-tavern-list" style={{ marginBottom: 12 }}>
-        {filtered.map((item) => (
-          <div key={item.id} className="dsh-tavern-tile" {...clickableProps(() => requestEditor(() => void open(item.id)))}>
-            <span className="dsh-tavern-tileIcon">
-              <IconListPenOutlineMedium size={18} />
-            </span>
-            <div className="dsh-tavern-tileMain">
-              <div className="dsh-tavern-tileTitleRow">
-                <span className="dsh-tavern-tileName">{item.name}</span>
-                {item.regexCount > 0 ? <Badge>{t('presets.regexCount', { count: item.regexCount })}</Badge> : null}
+        {filtered.map((item) => {
+          const isDefault = defaultPresetId === item.id
+          return (
+            <div key={item.id} className="dsh-tavern-tile" {...clickableProps(() => requestEditor(() => void open(item.id)))}>
+              <span className="dsh-tavern-tileIcon">
+                <IconListPenOutlineMedium size={18} />
+              </span>
+              <div className="dsh-tavern-tileMain">
+                <div className="dsh-tavern-tileTitleRow">
+                  <span className="dsh-tavern-tileName">{item.name}</span>
+                  {isDefault ? <Badge accent>{t('presets.defaultBadge')}</Badge> : null}
+                  {item.regexCount > 0 ? <Badge>{t('presets.regexCount', { count: item.regexCount })}</Badge> : null}
+                </div>
+                <span className="dsh-tavern-tileSub">{item.id}</span>
               </div>
-              <span className="dsh-tavern-tileSub">{item.id}</span>
+              <div className="dsh-tavern-tileActions">
+                <IconBtn label={t('action.edit')} disabled={busy} onClick={() => requestEditor(() => void open(item.id))}>
+                  <IconEditOutlineMedium />
+                </IconBtn>
+                <IconBtn label={t('presets.export')} disabled={busy} onClick={() => void exportPreset(item.id, item.name)}>
+                  <IconDownloadOutlineMedium />
+                </IconBtn>
+                <Btn size="sm" disabled={busy || isDefault} onClick={() => void setAsDefault(item.id)}>
+                  {t(isDefault ? 'presets.isDefault' : 'presets.setAsDefault')}
+                </Btn>
+                <IconBtn label={t('presets.delete')} danger disabled={busy} onClick={() => { if (!pending.current && !opening.current) setToDelete(item.id) }}>
+                  <IconTrashOutlineMedium />
+                </IconBtn>
+              </div>
             </div>
-            <div className="dsh-tavern-tileActions">
-              <IconBtn label={t('action.edit')} disabled={busy} onClick={() => requestEditor(() => void open(item.id))}>
-                <IconEditOutlineMedium />
-              </IconBtn>
-              <IconBtn label={t('presets.export')} disabled={busy} onClick={() => void exportPreset(item.id, item.name)}>
-                <IconDownloadOutlineMedium />
-              </IconBtn>
-              <Btn size="sm" disabled={busy} onClick={() => void setAsDefault(item.id)}>{t('presets.setAsDefault')}</Btn>
-              <IconBtn label={t('presets.delete')} danger disabled={busy} onClick={() => { if (!pending.current && !opening.current) setToDelete(item.id) }}>
-                <IconTrashOutlineMedium />
-              </IconBtn>
-            </div>
-          </div>
-        ))}
+          )
+        })}
       </div>
       <ConfirmDialog
         open={toDelete !== null}

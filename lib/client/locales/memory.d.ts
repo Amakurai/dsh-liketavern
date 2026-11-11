@@ -2,6 +2,7 @@
 export declare const zh: {
     readonly 'memory.deleteConfirm': "删除后，这条记忆将不再用于当前状态的检索。确定删除？";
     readonly 'memory.storyLabel': "剧情 {index} · {date}";
+    readonly 'memory.storyLabelCurrent': "剧情 {index} · {date}（当前会话）";
     readonly 'memory.scopeStory': "剧情状态";
     readonly 'memory.scopeInitial': "新会话初始状态";
     readonly 'memory.scopeStoryDesc': "修改仅影响所选剧情，不会改变其他会话或分支。";
@@ -56,5 +57,19 @@ export declare const zh: {
     readonly 'memory.resetRecovery': "重置回滚游标";
     readonly 'memory.resetRecoveryConfirm': "重置后写屏障解除，但未撤销完的楼层仍需重新回退才能撤销。确定重置？";
     readonly 'memory.recoveryReset': "已重置 {count} 个楼层的回滚游标";
+    readonly 'memory.searchPlaceholder': "搜索记忆正文、检索键或标签…";
+    readonly 'memory.noun': "记忆";
+    readonly 'memory.filter.all': "全部 {count}";
+    readonly 'memory.filter.active': "活跃 {count}";
+    readonly 'memory.filter.archived': "已归档 {count}";
+    readonly 'memory.newTagsPlaceholder': "标签（逗号分隔，可空）";
+    readonly 'memory.newKeysPlaceholder': "检索键（逗号分隔，可空）";
+    readonly 'memory.deltaSearchPlaceholder': "搜索世界状态正文、原 uid 或触发键…";
+    readonly 'memory.deltaNoun': "世界状态";
+    readonly 'memory.deltaFilter.all': "全部 {count}";
+    readonly 'memory.deltaFilter.active': "生效中 {count}";
+    readonly 'memory.deltaFilter.revoked': "已撤销 {count}";
+    readonly 'memory.journalBudget': "当前约 {tokens} / {limit} token";
+    readonly 'memory.journalBudgetExceeded': "超出本轮注入预算（仅前 {limit} token 入模），建议将长设定移至本会话世界书或长期记忆。";
 };
 export declare const en: Record<keyof typeof zh, string>;

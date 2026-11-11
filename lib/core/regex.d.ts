@@ -94,6 +94,11 @@ export declare function compileCardRegexScripts(scripts: readonly CardRegexScrip
 /** 预设内嵌正则：跟脚本 disabled 走。 */
 export declare function compilePresetRegexScripts(scripts: readonly CardRegexScript[], presetId: string): RegexRule[];
 /**
+ * 解析外部导入的全局正则 JSON：兼容 SillyTavern 单条/数组正则脚本、预设内 regex_scripts 片段，
+ * 以及本插件导出的 RegexRule 数组或 { rules } 包装。所有导入规则统一分配新 ID 并归入 user 作用域。
+ */
+export declare function parseImportedRegexRules(raw: unknown): RegexRule[];
+/**
  * 正则替换后的展示文本常是「整页 HTML 封面」或「小部件 HTML + 后面的正文」。
  * HTML 文档和小部件片段抽进 iframe；围栏外 / </html> 之前的协议标签与之后的文字留给 Markdown。
  */

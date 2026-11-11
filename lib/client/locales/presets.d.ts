@@ -12,6 +12,8 @@ export declare const zh: {
     readonly 'presets.regexCount': "{count} 条正则";
     readonly 'presets.export': "导出 JSON";
     readonly 'presets.setAsDefault': "设为默认";
+    readonly 'presets.defaultBadge': "默认";
+    readonly 'presets.isDefault': "默认预设";
     readonly 'presets.delete': "删除预设";
     readonly 'presets.deleteTitle': "删除预设？";
     readonly 'presets.deleteDesc': "确定删除预设 {id}？";

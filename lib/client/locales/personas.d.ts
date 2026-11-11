@@ -9,6 +9,8 @@ export declare const zh: {
     readonly 'personas.emptyDesc': "新建一条人设，对话里的 {{user}} 就会换成它。";
     readonly 'personas.noDescription': "还没有填写人设描述。";
     readonly 'personas.setDefault': "设为默认";
+    readonly 'personas.defaultBadge': "默认";
+    readonly 'personas.isDefault': "默认人设";
     readonly 'personas.delete': "删除人设";
     readonly 'personas.deleteTitle': "删除人设？";
     readonly 'personas.deleteDesc': "确定删除人设「{name}」？";

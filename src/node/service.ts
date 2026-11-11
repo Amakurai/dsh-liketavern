@@ -37,7 +37,7 @@ import { writeHostForkSkipped } from './hostForkAdoption.js'
 import { MAX_CARD_PNG_BASE64_CHARS, MAX_CARD_PNG_BYTES } from '../core/cardLimits.js'
 import { parseJsonCard, parsePngCard } from '../state/card.js'
 import { characterEditRevision, jsonEditRevision, personaEditRevision, presetEditRevision, regexEditRevision } from '../state/characterRevision.js'
-import { FloorError, continueFloor, discardHostForkAdoptionPlan, editAssistantMessage, editUserMessage, enterGreetingConversation, getFloorAssistantMessage, getFloorSiblings, getFloorUserMessage, getGreetingSwipe, regenerate, rollbackToFloor, swipeGreeting } from './floors.js'
+import { FloorError, continueFloor, discardHostForkAdoptionPlan, editAssistantMessage, editUserMessage, enterGreetingConversation, getFloorActionStates, getFloorAssistantMessage, getFloorSiblings, getFloorUserMessage, getGreetingSwipe, regenerate, rollbackToFloor, swipeGreeting } from './floors.js'
 import { impersonate } from './impersonate.js'
 import { CHAT_BOOK_CORRUPT_MESSAGE, loadBoundLoreEntries, runTavernPipeline } from './pipeline.js'
 import { hasEjs } from '../core/template.js'
@@ -614,6 +614,12 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
     return getFloorSiblings(this.floorDeps(), request.sessionId, request.messageId, request.turn)
   }
 
+  /** 长历史首屏批量读取消息操作栏状态：共享一次提交等待、事件快照与兄弟索引检查。 */
+  async getFloorActionStates(request: { sessionId: string; messageIds: string[] }): Promise<TavernMethodResults['getFloorActionStates']> {
+    await this.state.waitForSessionCommits(request.sessionId)
+    return getFloorActionStates(this.floorDeps(), request.sessionId, request.messageIds)
+  }
+
   async renderOutputText(request: { sessionId: string; text: string; messageId?: number }): Promise<TavernMethodResults['renderOutputText']> {
     await this.state.waitForSessionCommits(request.sessionId)
     const scope = this.displayScope(request.sessionId, [request])
@@ -972,8 +978,8 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
   }
 
   /** impersonate 是带外一次性调用，不进会话串行队列（不改会话状态）。 */
-  impersonate(request: { sessionId: string }): Promise<TavernMethodResults['impersonate']> {
-    return impersonate({ ctx: this.ctx, state: this.state }, request.sessionId)
+  impersonate(request: { sessionId: string; hint?: string }): Promise<TavernMethodResults['impersonate']> {
+    return impersonate({ ctx: this.ctx, state: this.state }, request.sessionId, request.hint)
   }
 
   // ── 记忆 ─────────────────────────────────────────────────────────────────

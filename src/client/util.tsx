@@ -358,27 +358,53 @@ export function Field(props: { label: string; children?: ReactNode }) {
   )
 }
 
-/** 列表搜索框（36px 胶囊 + 前导图标），配合面板里的关键字过滤。 */
+/** 列表搜索框（36px 胶囊 + 前导图标 + 非空清空钮 + Esc 清空），配合面板里的关键字过滤。 */
 export function SearchInput(props: {
   label: string
   value: string
   onChange: (value: string) => void
   placeholder?: string
   width?: number | string
+  autoFocus?: boolean
 }) {
   const t = useT()
+  const inputRef = useRef<HTMLInputElement>(null)
   return (
     <div className="dsh-tavern-search" role="search" style={{ width: props.width ?? 220 }}>
       <span className="dsh-tavern-searchIcon">
         <IconSearchOutlineMedium />
       </span>
       <input
+        ref={inputRef}
         type="text"
         aria-label={props.label}
         placeholder={props.placeholder ?? t('common.searchPlaceholder')}
+        autoFocus={props.autoFocus}
         value={props.value}
         onChange={(e) => props.onChange(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape' && props.value !== '') {
+            e.preventDefault()
+            e.stopPropagation()
+            props.onChange('')
+          }
+        }}
       />
+      {props.value !== '' ? (
+        <button
+          type="button"
+          className="dsh-tavern-searchClear"
+          aria-label={t('action.clearSearch')}
+          onClick={() => {
+            props.onChange('')
+            inputRef.current?.focus?.()
+          }}
+        >
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true">
+            <path d="M2.5 2.5l7 7M9.5 2.5l-7 7" />
+          </svg>
+        </button>
+      ) : null}
     </div>
   )
 }

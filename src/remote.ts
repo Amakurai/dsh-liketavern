@@ -51,6 +51,8 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
 
 /** renderOutputTexts 单批上限；客户端超出时拆成多批。 */
 export const RENDER_OUTPUT_BATCH_MAX = 64
+/** getFloorActionStates 单批上限；客户端超出时拆成多批。 */
+export const FLOOR_ACTION_BATCH_MAX = 64
 /** 非空字符串（原 `z.string().min(1)`）。 */
 const nonEmpty = () => string().check(minLength(1))
 /** 楼层 turn 号：正整数（原 `z.number().int().min(1)`）。 */
@@ -348,8 +350,16 @@ export const METHODS = {
     }),
     summary: '同一楼层分支会话的兄弟导航（‹ n/m ›；无兄弟时 swipe=null）',
   },
+  getFloorActionStates: {
+    req: object({
+      ...sessionIdField,
+      messageIds: array(nonEmpty()).check(minLength(1), maxLength(FLOOR_ACTION_BATCH_MAX)),
+    }),
+    value: anyValue,
+    summary: '批量读取同一会话多条消息的开场白、分支兄弟与可续写状态',
+  },
   impersonate: {
-    req: object({ ...sessionIdField }),
+    req: object({ ...sessionIdField, hint: optional(string().check(maxLength(2000))) }),
     value: anyValue,
     summary: '以用户身份代写一句台词（不入会话日志，由前端填入输入）',
   },
@@ -542,6 +552,13 @@ export interface StaleTurnContextUsage {
   projected: boolean
 }
 
+/** 单条消息操作栏的聚合只读状态（开场白 swipe、同层分支兄弟导航与是否可续写）。 */
+export interface FloorActionStateItem {
+  greeting: GreetingFloorState
+  siblings: { swipe: (SiblingSwipe & { turn: number }) | null }
+  canContinue: boolean
+}
+
 /** 方法名 → 裸业务结果类型。加/改 remote 方法时必须与 METHODS、service 实现、client 镜像同步。 */
 export interface TavernMethodResults {
   listSessionImportWorkspaces: { items: Array<{ id: string; title: string }> }
@@ -632,6 +649,7 @@ export interface TavernMethodResults {
   editAssistantMessage: ForkResult
   continueFloor: { continued: boolean }
   getFloorSiblings: { swipe: (SiblingSwipe & { turn: number }) | null }
+  getFloorActionStates: { items: FloorActionStateItem[] }
   impersonate: { text: string }
   // 记忆
   getMemories: { items: MemoryEntry[] }

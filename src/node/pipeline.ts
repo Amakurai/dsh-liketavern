@@ -15,6 +15,7 @@ import { BOUND_DISCIPLINE, TURN_PLAYBOOK, isHostInjectedUserMessage, isHostSyste
 import { hashToSeed } from '../core/macros.js'
 import { memoryCandidateCount, memoryQuery, memorySearchOptions, selectMemoryBodies } from '../core/memoryRetrieval.js'
 import { clipToTokenBudget, estimateTokens } from '../core/tokenize.js'
+import { JOURNAL_TURN_TOKEN_BUDGET } from '../core/turnBudget.js'
 import type { ChatMessage, WIEngineResult, WorldDelta, WorldInfoEntry } from '../core/types.js'
 import { EMPTY_TIMER_STATE } from '../core/types.js'
 import { isolated } from './isolated.js'
@@ -394,7 +395,7 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
   let journalText = ''
   if (binding.injectJournal) {
     const rawJournal = await ws.fs.readText('journal.md')
-    if (rawJournal?.trim()) journalText = clipToTokenBudget(rawJournal, 800).text
+    if (rawJournal?.trim()) journalText = clipToTokenBudget(rawJournal, JOURNAL_TURN_TOKEN_BUDGET).text
   }
 
   const assembled = await isolated('assemble', {

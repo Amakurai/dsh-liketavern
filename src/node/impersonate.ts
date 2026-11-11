@@ -1,8 +1,8 @@
 /**
  * AI 代答用户（impersonate）：以 {{user}} 口吻写一句台词。
  *
- * 不走会话 turn：不开楼层、不记 WAL、不入会话日志——结果由客户端填进输入框
- * （dsh 输入区没有插件可写 API 时退化为剪贴板），用户确认后才真正发出。
+ * 不走会话 turn：不开楼层、不记 WAL、不入会话日志——结果由客户端优先直接填入宿主输入框
+ * （输入区不可达或正忙时退化为剪贴板与弹窗），用户确认后才真正发出；若输入框已有草稿可作为方向参考。
  * 这里用当前会话的 provider/model 直调一次模型（hand-built one-shot），
  * 提示词复用 runTavernPipeline 的组装（mode preview：WI 定时器不落盘、不碰 WAL）。
  */
@@ -31,9 +31,10 @@ export interface ImpersonateDeps {
 
 /**
  * 生成一句用户台词。要求会话在线且活 agent 在位（历史经 agent.session 派生）。
+ * 可选传入 hint（如输入框内已写的半句起笔或本轮行动方向），模型会顺着该意图完成台词。
  * 返回纯文本，调用方（client）负责填入输入框或剪贴板。
  */
-export async function impersonate({ ctx, state }: ImpersonateDeps, sessionId: string): Promise<{ text: string }> {
+export async function impersonate({ ctx, state }: ImpersonateDeps, sessionId: string, hint?: string): Promise<{ text: string }> {
   const session = ctx.sessions.get(sessionId as Session['id'])
   if (!session) throw new FloorError('session-not-live', `会话 ${sessionId} 不在线（仅支持当前打开的会话）`)
   if (!isTavernRuntimeSession(ctx, session)) throw new FloorError('not-tavern', '当前会话不是 Tavern 模式')
@@ -78,6 +79,7 @@ export async function impersonate({ ctx, state }: ImpersonateDeps, sessionId: st
       ? createAssistantMessage({ content: [{ type: 'text', text: m.content }], source: { provider, model } })
       : m.role === 'system' ? createSystemMessage(m.content) : createUserMessage({ content: [{ type: 'text', text: m.content }], source: { kind: 'user' } }),
   )
+  const trimmedHint = typeof hint === 'string' ? hint.trim().slice(0, 2000) : ''
   messages.push(
     createUserMessage({
       content: [
@@ -85,6 +87,9 @@ export async function impersonate({ ctx, state }: ImpersonateDeps, sessionId: st
           type: 'text',
           text: [
             `[系统指令：现在以用户「${pipeline.userName}」的身份，写 ta 在这个角色扮演中的下一句台词。`,
+            ...(trimmedHint
+              ? [`用户给出的本轮起笔或方向参考：\n${trimmedHint}\n请顺着这一意图或起笔自然写出完整的台词。`]
+              : []),
             '只输出台词正文：不要以角色身份说话，不要旁白解释，不要加引号或名字前缀。]',
           ].join(''),
         },

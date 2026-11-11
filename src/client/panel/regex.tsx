@@ -2,6 +2,8 @@
  * 设置面板分区：全局正则脚本（列表 + enabled 开关 + 编辑，整表保存）。
  * find/replace 等代码向输入用 code 字体类；保存反馈走 useToast，上下文错误用 Err。
  */
+import { describeError } from '../../core/guards.js'
+import { parseImportedRegexRules } from '../../core/regex.js'
 import { useDraftGuard } from '../drafts.js'
 import { useDraftState } from '../draftPersistence.js'
 import { randomUuid } from '../../core/secureRandom.js'
@@ -10,7 +12,7 @@ import { IconTrashOutlineMedium } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PromptPreset, RegexRule, RegexScope, RegexTiming } from '../../core/types.js'
 import type { TavernRemote } from '../types.js'
 import { t as tOnce, useT } from '../i18n.js'
-import { Badge, Btn, CheckChips, Err, Field, IconBtn, Muted, NullableNumInput, RegexScriptRow, SaveBar, Section, Select, Skeleton, Toggle, errOf, runAsync, useLoader, useToast } from '../util.js'
+import { Badge, Btn, CheckChips, Err, Field, FileBtn, IconBtn, Muted, NullableNumInput, RegexScriptRow, SaveBar, Section, Select, Skeleton, Toggle, downloadJson, errOf, readJsonFile, runAsync, useLoader, useToast } from '../util.js'
 
 const SCOPES: { value: RegexScope; labelKey: string }[] = [
   { value: 'input', labelKey: 'regex.scope.input' },
@@ -41,16 +43,34 @@ function newRule(): RegexRule {
   }
 }
 
-function RuleEditor(props: { rule: RegexRule; onChange: (r: RegexRule) => void; onDelete: () => void }) {
+function RuleEditor(props: {
+  rule: RegexRule
+  canMoveUp: boolean
+  canMoveDown: boolean
+  onMoveUp: () => void
+  onMoveDown: () => void
+  onChange: (r: RegexRule) => void
+  onDelete: () => void
+}) {
   const t = useT()
   const { rule } = props
   const set = (patch: Partial<RegexRule>) => props.onChange({ ...rule, ...patch })
   return (
     <div className="dsh-tavern-entry" style={{ marginBottom: 8 }}>
-      <div style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '12px 16px 8px' }}>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '12px 16px 8px' }}>
         <Toggle checked={rule.enabled} onChange={(enabled) => set({ enabled })} title={rule.enabled ? t('regex.toggleDisable') : t('regex.toggleEnable')} />
         <input aria-label={t('regex.ruleName')} className="dsh-tavern-input" style={{ flex: 1 }} value={rule.name} onChange={(e) => set({ name: e.target.value })} />
         <Badge>{t(SOURCE_LABEL_KEY[rule.source])}</Badge>
+        <IconBtn label={t('regex.moveUp')} disabled={!props.canMoveUp} onClick={props.onMoveUp}>
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M4 10l4-4 4 4" />
+          </svg>
+        </IconBtn>
+        <IconBtn label={t('regex.moveDown')} disabled={!props.canMoveDown} onClick={props.onMoveDown}>
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M4 6l4 4 4-4" />
+          </svg>
+        </IconBtn>
         <IconBtn label={t('regex.deleteRule')} danger onClick={props.onDelete}>
           <IconTrashOutlineMedium />
         </IconBtn>
@@ -198,6 +218,30 @@ export function RegexSection(props: { remote: TavernRemote }) {
   }
 
   const current = rules ?? []
+  const moveRule = (index: number, delta: -1 | 1) => {
+    const target = index + delta
+    if (target < 0 || target >= current.length) return
+    const next = current.slice()
+    const [moved] = next.splice(index, 1)
+    next.splice(target, 0, moved!)
+    setRules(next)
+  }
+  const importRules = async (file: File) => {
+    if (saving.current) return
+    try {
+      const raw = await readJsonFile(file)
+      const imported = parseImportedRegexRules(raw)
+      if (imported.length === 0) {
+        setError(t('regex.importEmpty'))
+        return
+      }
+      setError(null)
+      setRules((prev) => [...(prev ?? []), ...imported])
+      toast.show(t('regex.imported', { count: imported.length }))
+    } catch (cause) {
+      setError(describeError(cause))
+    }
+  }
   return (
     <Section description={t('regex.liveNotice')} title={t('section.regex')}>
       {toast.node}
@@ -223,6 +267,10 @@ export function RegexSection(props: { remote: TavernRemote }) {
             <RuleEditor
               key={rule.id}
               rule={rule}
+              canMoveUp={i > 0}
+              canMoveDown={i < current.length - 1}
+              onMoveUp={() => moveRule(i, -1)}
+              onMoveDown={() => moveRule(i, 1)}
               onChange={(r) => {
                 const next = current.slice()
                 next[i] = r
@@ -238,7 +286,11 @@ export function RegexSection(props: { remote: TavernRemote }) {
             </div>
           )}
           <SaveBar inline>
-            <Btn onClick={() => setRules([...current, newRule()])}>{t('regex.new')}</Btn>
+            <Btn disabled={busy} onClick={() => setRules([...current, newRule()])}>{t('regex.new')}</Btn>
+            <FileBtn accept=".json" disabled={busy} onFile={(file) => void importRules(file)}>{t('regex.importFile')}</FileBtn>
+            {current.length > 0 ? (
+              <Btn disabled={busy} onClick={() => downloadJson('tavern-regex-rules.json', current)}>{t('regex.exportAll')}</Btn>
+            ) : null}
             <Btn disabled={busy} onClick={() => void save(current)} primary>{t('regex.saveAll')}</Btn>
             <Btn
               disabled={busy}

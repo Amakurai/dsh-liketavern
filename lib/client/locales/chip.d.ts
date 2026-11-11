@@ -31,6 +31,7 @@ export declare const zh: {
     readonly 'chip.field.noLorebooks': "库中暂无世界书";
     readonly 'chip.field.authorNote': "作者注释（本会话，进本轮 turn）";
     readonly 'chip.field.injectJournal': "注入角色笔记 journal.md";
+    readonly 'chip.journal.edit': "编辑角色笔记";
     readonly 'chip.embeddedBook.withCount': "{name}（卡内嵌 {count} 条）";
     readonly 'chip.embeddedBook.noCount': "{name}（卡内嵌）";
     readonly 'chip.embeddedBook.none': "（卡内嵌书 / 无）";

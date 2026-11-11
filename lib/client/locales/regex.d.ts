@@ -34,6 +34,12 @@ export declare const zh: {
     readonly 'regex.emptyTitle': "暂无自定义规则";
     readonly 'regex.emptyDesc': "点「新建规则」添加展示或 ST 模拟的改写规则。";
     readonly 'regex.new': "新建规则";
+    readonly 'regex.importFile': "导入正则 JSON";
+    readonly 'regex.exportAll': "导出 JSON";
+    readonly 'regex.imported': "已导入 {count} 条规则（请检查后点击「保存全部」）";
+    readonly 'regex.importEmpty': "文件中没有可识别的正则规则";
+    readonly 'regex.moveUp': "上移规则";
+    readonly 'regex.moveDown': "下移规则";
     readonly 'regex.saveAll': "保存全部";
     readonly 'regex.discard': "放弃更改并刷新";
     readonly 'regex.presetHead': "预设附带";

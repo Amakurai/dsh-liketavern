@@ -50,7 +50,7 @@ export function CharacterPicker(props: { remote: TavernRemote; selectedId?: stri
       <CharactersSection remote={props.remote} />
     </> : <div className="dsh-tavern-section">
       <div className="dsh-tavern-toolbar">
-        <SearchInput label={t('characters.searchLabel')} placeholder={t('characters.searchPlaceholder')} value={query} width="100%" onChange={(value) => { setQuery(value); setLimit(24) }} />
+        <SearchInput autoFocus label={t('characters.searchLabel')} placeholder={t('characters.searchPlaceholder')} value={query} width="100%" onChange={(value) => { setQuery(value); setLimit(24) }} />
         <Btn disabled={props.busy} onClick={() => setManaging(true)}>{t('hero.picker.manage')}</Btn>
       </div>
       <Err message={props.error ?? (chars.state.status === 'error' ? chars.state.message : null)} />

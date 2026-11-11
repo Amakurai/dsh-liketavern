@@ -4,12 +4,14 @@ import {useCallback,useEffect,useRef,useState} from 'react'
 import {parseHelperVariableBackup,helperVariableRestoreChanges} from '../../core/helperVariableBackup.js'
 import type {HelperSnapshot} from '../../core/helperRuntime.js'
 import type {HelperScriptAsset} from '../../core/helperScripts.js'
+import {cachedSessionBinding} from '../cache.js'
 import {DraftScope,useDraftGuard} from '../drafts.js'
-import {useDraftState} from '../draftPersistence.js'
+import {useDraftRestored,useDraftState} from '../draftPersistence.js'
 import {HelperScriptEditor} from '../helperScriptEditor.js'
 import {notifyHelperStory} from '../helperNotifications.js'
 import {notifyHelperScripts} from '../helperScriptNotifications.js'
 import {useT} from '../i18n.js'
+import {currentTavernSession} from '../sessionViews.js'
 import type {TavernRemote} from '../types.js'
 import {openChildSession,type SessionsPort} from '../openChild.js'
 import {Btn,ConfirmDialog,Err,FileBtn,Muted,SaveBar,Section,Select,SettingsRow,Skeleton,downloadJson,useLoader,useToast} from '../util.js'
@@ -18,6 +20,21 @@ export function CardDataSettings({remote,sessions}:{remote:TavernRemote;sessions
   const t=useT()
   const [cardId,setCardId]=useDraftState('card-data:card','')
   const [storyId,setStoryId]=useDraftState('card-data:story','')
+  const cardRestored=useDraftRestored('card-data:card')
+  const storyRestored=useDraftRestored('card-data:story')
+  const activeSessionId=currentTavernSession()
+  const prefilled=useRef(false)
+  useEffect(()=>{
+    if(cardRestored||storyRestored||prefilled.current||cardId||!activeSessionId||typeof remote.getSessionBinding!=='function')return
+    prefilled.current=true
+    let alive=true
+    void cachedSessionBinding(remote,activeSessionId).then(r=>{
+      if(!alive||!r.ok||!r.value.binding?.cardId)return
+      setCardId(prev=>prev||r.value.binding!.cardId)
+      if(r.value.binding.storyId)setStoryId(prev=>prev||r.value.binding!.storyId!)
+    }).catch(()=>{})
+    return()=>{alive=false}
+  },[remote,cardRestored,storyRestored,cardId,activeSessionId,setCardId,setStoryId])
   const chars=useLoader(()=>remote.listCharacters({}),[])
   const stories=useLoader(()=>remote.listStories({cardId}),[cardId],Boolean(cardId))
   const items=stories.state.status==='ready'?stories.state.value.items:[]
@@ -29,7 +46,7 @@ export function CardDataSettings({remote,sessions}:{remote:TavernRemote;sessions
         options={[{value:'',label:t('settings.cards.variableChoose')},...(chars.state.status==='ready'?chars.state.value.items.map(item=>({value:item.cardId,label:item.name})):[])]}
         onChange={value=>request(()=>{setCardId(value);setStoryId('')})}/></SettingsRow>
       <SettingsRow title={t('memory.story')}><Select value={storyId} title={t('memory.story')} disabled={!cardId||stories.state.status!=='ready'}
-        options={[{value:'',label:t('settings.cards.variableChoose')},...items.map((item,index)=>({value:item.id,label:t('memory.storyLabel',{index:index+1,date:new Date(item.createdAt).toLocaleString()})}))]}
+        options={[{value:'',label:t('settings.cards.variableChoose')},...items.map((item,index)=>({value:item.id,label:t(activeSessionId&&item.sessionId===activeSessionId?'memory.storyLabelCurrent':'memory.storyLabel',{index:index+1,date:new Date(item.createdAt).toLocaleString()})}))]}
         onChange={value=>request(()=>setStoryId(value))}/></SettingsRow>
       {(chars.state.status==='loading'||stories.state.status==='loading')&&<Skeleton height={40}/>}
       <Err message={chars.state.status==='error'?chars.state.message:stories.state.status==='error'?stories.state.message:null}/>

@@ -5,6 +5,7 @@ export interface ScriptChoice {
     text: string;
 }
 export declare function installChoiceInput(resolve: (sessionId: string) => SessionInput | undefined): () => void;
+export declare function resolveSessionInput(sessionId: string): SessionInput | undefined;
 export declare function parseScriptChoices(value: unknown): ScriptChoice[];
 export declare function publishScriptChoices(owner: symbol, sessionId: string, context: HelperSnapshot, messageId: number, choices: unknown): void;
 export declare function clearScriptChoices(owner: symbol): void;

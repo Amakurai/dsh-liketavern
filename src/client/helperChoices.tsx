@@ -14,6 +14,7 @@ const snapshot=()=>entries
 const notify=()=>{for(const listener of listeners)listener()}
 let inputFor:((sessionId:string)=>SessionInput|undefined)|undefined
 export function installChoiceInput(resolve:(sessionId:string)=>SessionInput|undefined):()=>void {inputFor=resolve;return()=>{if(inputFor===resolve)inputFor=undefined}}
+export function resolveSessionInput(sessionId:string):SessionInput|undefined {return inputFor?.(sessionId)}
 export function parseScriptChoices(value:unknown):ScriptChoice[] {
   if(!Array.isArray(value)||value.length>32)throw new Error('选项需为至多 32 项的数组')
   return value.map(item=>{if(!item||typeof item!=='object'||typeof item.label!=='string'||!item.label.trim()||item.label.length>128||typeof item.text!=='string'||!item.text.trim()||item.text.length>1024||Object.keys(item).some(key=>!['label','text'].includes(key)))throw new Error('选项文本无效或超出预算');return {label:item.label,text:item.text}})

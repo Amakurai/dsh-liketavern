@@ -18,6 +18,8 @@ import type { WorldDelta } from './types.js';
 export declare const WI_PERCENT_WINDOW_BASE = 131072;
 /** 变化层每轮进快照的 token 上限:从最新往旧装载,更旧的丢给工具补读。 */
 export declare const WORLD_DELTA_TURN_BUDGET = 1500;
+/** 角色笔记（journal.md）启用本轮注入时的 token 预算上限；超出部分截断。 */
+export declare const JOURNAL_TURN_TOKEN_BUDGET = 800;
 /** 从最新往旧装载变化层,超出预算的裁掉。输入须已是活跃列表(未 revoked、未过期)。 */
 export declare function clipWorldDeltasForTurn(deltas: readonly WorldDelta[], estimateTokens: (text: string) => number, budget?: number): {
     kept: WorldDelta[];

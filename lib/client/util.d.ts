@@ -96,13 +96,14 @@ export declare function Field(props: {
     label: string;
     children?: ReactNode;
 }): import("react").JSX.Element;
-/** 列表搜索框（36px 胶囊 + 前导图标），配合面板里的关键字过滤。 */
+/** 列表搜索框（36px 胶囊 + 前导图标 + 非空清空钮 + Esc 清空），配合面板里的关键字过滤。 */
 export declare function SearchInput(props: {
     label: string;
     value: string;
     onChange: (value: string) => void;
     placeholder?: string;
     width?: number | string;
+    autoFocus?: boolean;
 }): import("react").JSX.Element;
 /** 列表搜索的空结果态：与各面板空态同一套样式，附「清空搜索」动作。 */
 export declare function SearchEmpty(props: {

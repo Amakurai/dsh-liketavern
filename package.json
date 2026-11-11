@@ -238,7 +238,7 @@
     "source-map-js": "1.2.2",
     "typescript": "^5.8.0",
     "vitest": "4.1.12",
-    "zustand": "4.4.7",
+    "zustand": "5.1.0",
     "@deepseek-ai/dsh-session-format-v3-to-v4": "0.2.2-rc.1",
     "@deepseek-ai/dsh-compaction-tool-result-pruner": "0.2.2-rc.1",
     "@deepseek-ai/dsh-compaction-basic": "0.2.2-rc.1",

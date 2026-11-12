@@ -69,6 +69,7 @@ export declare const zh: {
     readonly 'memory.deltaFilter.all': "全部 {count}";
     readonly 'memory.deltaFilter.active': "生效中 {count}";
     readonly 'memory.deltaFilter.revoked': "已撤销 {count}";
+    readonly 'memory.loadMore': "加载更多（剩余 {count} 条）";
     readonly 'memory.journalBudget': "当前约 {tokens} / {limit} token";
     readonly 'memory.journalBudgetExceeded': "超出本轮注入预算（仅前 {limit} token 入模），建议将长设定移至本会话世界书或长期记忆。";
 };

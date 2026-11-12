@@ -6,18 +6,37 @@
 import { hasTurnLocalMacros } from './macros.js'
 import type { MacroContext } from './types.js'
 
-interface Dependencies {
-  dynamic: boolean
-  reads: Set<string>
-  writes: Set<string>
-  unknownWrite: boolean
-}
-
 /** 可能在任意一轮命中的来源；正文保持引用，不复制世界书资产。 */
 export interface MacroDependencySource {
   text: string
   turnLocal: boolean
 }
+
+const READ_VAR_RE = /\{\{\s*(?:(?:get|has)(?:local|global)?var|(?:global)?varexists)\s*::([^{}]*)(?=\{\{|\}\})/gi
+const WRITE_VAR_RE = /\{\{\s*(set|add|inc|dec|delete|flush)(?:local|global)?var\s*::([^{}]*?)(?=::|\{\{|\}\})/gi
+const FIELD_REF_RE = /\{\{\s*([^{}:]+?)\s*\}\}|<(USER|BOT|CHAR|CHARIFNOTGROUP|GROUP)>/gi
+const contextFieldsCache = new WeakMap<MacroContext, Record<string, string | undefined>>()
+
+function fieldsForContext(context: MacroContext): Record<string, string | undefined> {
+  let fields = contextFieldsCache.get(context)
+  if (!fields) {
+    fields = {
+      ...context.vars,
+      char: context.char, charname: context.char, user: context.user, username: context.user,
+      description: context.description, personality: context.personality, scenario: context.scenario,
+      chardescription: context.description, charpersonality: context.personality, charscenario: context.scenario,
+      charversion: context.charVersion, charcreatornotes: context.creatorNotes, creatornotes: context.creatorNotes,
+      chardepthprompt: context.charDepthPrompt, mesexamples: context.mesExamples, mesexamplesraw: context.mesExamples,
+      persona: context.persona, firstmessage: context.firstMessage, charfirstmessage: context.firstMessage, greeting: context.firstMessage,
+      charprompt: context.charPrompt, charinstruction: context.charInstruction, charjailbreak: context.charInstruction,
+      group: context.char, groupnotmuted: context.char, notchar: context.user,
+    }
+    contextFieldsCache.set(context, fields)
+  }
+  return fields
+}
+
+const EMPTY_SET: ReadonlySet<string> = new Set()
 
 export function createMacroDependencyTracker(initial: MacroContext, potentialSources: readonly MacroDependencySource[] = []): {
   isDynamic(text: string, context: MacroContext): boolean
@@ -29,53 +48,53 @@ export function createMacroDependencyTracker(initial: MacroContext, potentialSou
   const potentialVariables = new Set<string>()
   let unknownDynamicWrite = false
 
-  const inspect = (text: string, context: MacroContext): Dependencies => {
-    const result: Dependencies = { dynamic: false, reads: new Set(), writes: new Set(), unknownWrite: false }
-    const fields: Record<string, string | undefined> = {
-      ...context.vars,
-      char: context.char, charname: context.char, user: context.user, username: context.user,
-      description: context.description, personality: context.personality, scenario: context.scenario,
-      chardescription: context.description, charpersonality: context.personality, charscenario: context.scenario,
-      charversion: context.charVersion, charcreatornotes: context.creatorNotes, creatornotes: context.creatorNotes,
-      chardepthprompt: context.charDepthPrompt, mesexamples: context.mesExamples, mesexamplesraw: context.mesExamples,
-      persona: context.persona, firstmessage: context.firstMessage, charfirstmessage: context.firstMessage, greeting: context.firstMessage,
-      charprompt: context.charPrompt, charinstruction: context.charInstruction, charjailbreak: context.charInstruction,
-      group: context.char, groupnotmuted: context.char, notchar: context.user,
+  const inspect = (text: string, context: MacroContext): { dynamic: boolean; reads: ReadonlySet<string>; writes: ReadonlySet<string>; unknownWrite: boolean } => {
+    if (!text.includes('{{') && !text.includes('<')) {
+      return { dynamic: false, reads: EMPTY_SET, writes: EMPTY_SET, unknownWrite: false }
     }
+    const reads = new Set<string>()
+    const writes = new Set<string>()
+    let dynamic = false
+    let unknownWrite = false
+    let fields: Record<string, string | undefined> | undefined
     const pending = [text]
-    const visited = new Set<string>()
+    let visited: Set<string> | undefined
     while (pending.length > 0) {
       const current = pending.pop()!
-      if (hasTurnLocalMacros(current)) result.dynamic = true
+      if (!current.includes('{{') && !current.includes('<')) continue
+      if (hasTurnLocalMacros(current)) dynamic = true
       // 扫描宏开头而不吞掉整个正文，嵌套 set/get 同样能逐个看到；不执行随机数与写入。
-      for (const match of current.matchAll(/\{\{\s*(?:(?:get|has)(?:local|global)?var|(?:global)?varexists)\s*::([^{}]*)(?=\{\{|\}\})/gi)) {
+      for (const match of current.matchAll(READ_VAR_RE)) {
         const key = match[1]!.trim()
         const computed = current.slice(match.index + match[0].length, match.index + match[0].length + 2) === '{{'
-        result.reads.add(key)
-        if (computed || unknownDynamicWrite || dynamicVariables.has(key) || potentialVariables.has(key)) result.dynamic = true
+        reads.add(key)
+        if (computed || unknownDynamicWrite || dynamicVariables.has(key) || potentialVariables.has(key)) dynamic = true
       }
-      for (const match of current.matchAll(/\{\{\s*(set|add|inc|dec|delete|flush)(?:local|global)?var\s*::([^{}]*?)(?=::|\{\{|\}\})/gi)) {
+      for (const match of current.matchAll(WRITE_VAR_RE)) {
         const key = match[2]!.trim()
         const computed = current.slice(match.index + match[0].length, match.index + match[0].length + 2) === '{{'
-        if (computed) result.unknownWrite = true
+        if (computed) unknownWrite = true
         else if (key) {
-          result.writes.add(key)
+          writes.add(key)
           // 增减类写入以旧值为输入：读写都要记，动态旧值会把结果一起带入本轮通道。
-          if (!['set', 'delete', 'flush'].includes(match[1]!.toLowerCase())) {
-            result.reads.add(key)
-            if (unknownDynamicWrite || dynamicVariables.has(key) || potentialVariables.has(key)) result.dynamic = true
+          const op = match[1]!.toLowerCase()
+          if (op !== 'set' && op !== 'delete' && op !== 'flush') {
+            reads.add(key)
+            if (unknownDynamicWrite || dynamicVariables.has(key) || potentialVariables.has(key)) dynamic = true
           }
         }
       }
       // 字段与 original 可以继续引用字段或变量。每个名称只访问一次，循环不递归展开。
-      for (const match of current.matchAll(/\{\{\s*([^{}:]+?)\s*\}\}|<(USER|BOT|CHAR|CHARIFNOTGROUP|GROUP)>/gi)) {
+      for (const match of current.matchAll(FIELD_REF_RE)) {
         const name = (match[1] ?? (match[2]!.toLowerCase() === 'user' ? 'user' : 'char')).trim().toLowerCase()
+        fields ??= fieldsForContext(context)
+        visited ??= new Set()
         if (visited.has(name) || !Object.hasOwn(fields, name)) continue
         visited.add(name)
         if (fields[name]) pending.push(fields[name])
       }
     }
-    return result
+    return { dynamic, reads, writes, unknownWrite }
   }
 
   // 所有候选来源只解析一次。通过变量→读取来源的反向边传播，条目是否在当前轮命中

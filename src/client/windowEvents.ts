@@ -67,3 +67,67 @@ export function subscribeKeyedWindowEvent(
     }
   }
 }
+
+export type WindowMessageCallback = (event: MessageEvent) => void
+
+interface WindowMessageChannel {
+  readonly bySource: Map<unknown, Set<WindowMessageCallback>>
+  readonly dynamic: Set<WindowMessageCallback>
+  readonly handler: (event: Event) => void
+}
+
+const windowMessageChannels = new WeakMap<EventTarget, WindowMessageChannel>()
+
+/**
+ * 共享 window message 分发器：同一会话挂载数十张交互卡 iframe 时，不在 window 上重复挂 N 个监听器。
+ * 已知 contentWindow 按 event.source 做 O(1) 路由；调用方内部仍保留自身的 contentWindow 与运行时令牌复核。
+ */
+export function subscribeWindowMessage(source: unknown, callback: WindowMessageCallback): () => void {
+  if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return () => {}
+  const target: EventTarget = window
+  let channel = windowMessageChannels.get(target)
+  if (!channel) {
+    const bySource = new Map<unknown, Set<WindowMessageCallback>>()
+    const dynamic = new Set<WindowMessageCallback>()
+    const handler = (rawEvent: Event) => {
+      const event = rawEvent as MessageEvent
+      if (event.source != null) {
+        const scoped = bySource.get(event.source)
+        if (scoped) for (const fn of [...scoped]) fn(event)
+      }
+      if (dynamic.size > 0) {
+        for (const fn of [...dynamic]) fn(event)
+      }
+    }
+    channel = { bySource, dynamic, handler }
+    windowMessageChannels.set(target, channel)
+    target.addEventListener('message', handler)
+  }
+  if (source != null) {
+    let set = channel.bySource.get(source)
+    if (!set) {
+      set = new Set()
+      channel.bySource.set(source, set)
+    }
+    set.add(callback)
+  } else {
+    channel.dynamic.add(callback)
+  }
+  return () => {
+    const active = windowMessageChannels.get(target)
+    if (!active) return
+    if (source != null) {
+      const set = active.bySource.get(source)
+      if (set) {
+        set.delete(callback)
+        if (set.size === 0) active.bySource.delete(source)
+      }
+    } else {
+      active.dynamic.delete(callback)
+    }
+    if (active.bySource.size === 0 && active.dynamic.size === 0) {
+      windowMessageChannels.delete(target)
+      target.removeEventListener('message', active.handler)
+    }
+  }
+}

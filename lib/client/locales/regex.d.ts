@@ -42,6 +42,9 @@ export declare const zh: {
     readonly 'regex.moveDown': "下移规则";
     readonly 'regex.saveAll': "保存全部";
     readonly 'regex.discard': "放弃更改并刷新";
+    readonly 'regex.discardTitle': "放弃未保存的正则修改";
+    readonly 'regex.discardConfirm': "这会放弃当前未保存的自定义规则修改并重新读取已保存列表。确定继续？";
+    readonly 'regex.discardConfirmAction': "放弃并刷新";
     readonly 'regex.presetHead': "预设附带";
     readonly 'regex.noPresetRegex': "没有预设携带正则。预设 JSON 里 extensions.regex_scripts 会随导入带进来，可在「预设」页查看。";
     readonly 'regex.presetCount': "{name}（{count} 条）";

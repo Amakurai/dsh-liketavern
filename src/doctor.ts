@@ -243,21 +243,40 @@ async function isUnstartedFloor(directory: string): Promise<boolean> {
   return true
 }
 
-async function readBoundedJson(path: string, maxBytes = MAX_JSON_BYTES, budget?: ReadBudget): Promise<ReadJsonResult> {
+async function readBoundedJson(
+  path: string,
+  maxBytes = MAX_JSON_BYTES,
+  budget?: ReadBudget,
+  inspectedJson?: Map<string, ReadJsonResult['status']>,
+): Promise<ReadJsonResult> {
   const read = await readBoundedText(path, maxBytes, budget)
-  if (read.status !== 'ok') return read
+  const done = (result: ReadJsonResult): ReadJsonResult => {
+    if (inspectedJson && (
+      result.status === 'ok'
+      || result.status === 'invalid'
+      || result.status === 'unsafe'
+      || result.status === 'unreadable'
+      || (result.status === 'oversized' && maxBytes >= MAX_JSON_BYTES)
+    )) {
+      inspectedJson.set(resolve(path), result.status)
+    }
+    return result
+  }
+  if (read.status !== 'ok') return done(read)
   try {
-    return { status: 'ok', value: JSON.parse(read.text) as unknown }
+    return done({ status: 'ok', value: JSON.parse(read.text) as unknown })
   } catch {
-    return { status: 'invalid' }
+    return done({ status: 'invalid' })
   }
 }
 
-async function probeDirectory(path: string, boundary?: string): Promise<DoctorDirectoryStatus> {
+async function probeDirectory(path: string, boundary?: string, verifiedDirs?: Set<string>): Promise<DoctorDirectoryStatus> {
+  const resolvedPath = resolve(path)
   if (boundary !== undefined) {
-    const local = relative(resolve(boundary), resolve(path))
+    const resolvedBoundary = resolve(boundary)
+    const local = relative(resolvedBoundary, resolvedPath)
     if (isAbsolute(local) || local === '..' || local.startsWith(`..${sep}`)) return 'unreadable'
-    let current = resolve(boundary)
+    let current = resolvedBoundary
     // 必须逐段检查 state/wal、library/* 等多级目录；只 lstat 末级仍会跟随中间的 junction。
     const parents = [current]
     for (const part of local.split(sep).filter(Boolean).slice(0, -1)) {
@@ -265,10 +284,12 @@ async function probeDirectory(path: string, boundary?: string): Promise<DoctorDi
       parents.push(current)
     }
     for (const parent of parents) {
-      const status = await probeDirectory(parent)
+      if (verifiedDirs?.has(parent)) continue
+      const status = await probeDirectory(parent, undefined, verifiedDirs)
       if (status !== 'directory') return status
     }
   }
+  if (verifiedDirs?.has(resolvedPath)) return 'directory'
   let info
   try {
     info = await lstat(path)
@@ -280,6 +301,7 @@ async function probeDirectory(path: string, boundary?: string): Promise<DoctorDi
   let directory
   try {
     directory = await opendir(path)
+    verifiedDirs?.add(resolvedPath)
     return 'directory'
   } catch {
     return 'unreadable'
@@ -328,7 +350,12 @@ function validArchiveMetadata(value: unknown): boolean {
  * WAL 楼层只消费首次有界快照；活跃与已回滚目录使用同一套事务格式约束。
  * 记录行与恢复游标的判定与运行时共用（state/walFormat.ts），诊断不能比运行时更宽或更严。
  */
-async function validateWalArtifacts(directory: string, budget: ReadBudget, rolledBack = false): Promise<ValidationResult | 'recovering'> {
+async function validateWalArtifacts(
+  directory: string,
+  budget: ReadBudget,
+  rolledBack = false,
+  inspectedJson?: Map<string, ReadJsonResult['status']>,
+): Promise<ValidationResult | 'recovering'> {
   const recordsRead = await readBoundedText(`${directory}/records.jsonl`, MAX_WAL_BYTES, budget)
   if (recordsRead.status === 'oversized' || recordsRead.status === 'budget') return 'uninspected'
   if (recordsRead.status === 'unsafe' || recordsRead.status === 'invalid' || recordsRead.status === 'unreadable') return 'unhealthy'
@@ -343,7 +370,7 @@ async function validateWalArtifacts(directory: string, budget: ReadBudget, rolle
     }
   }
 
-  const progressRead = await readBoundedJson(`${directory}/rollback-progress.json`, MAX_JSON_BYTES, budget)
+  const progressRead = await readBoundedJson(`${directory}/rollback-progress.json`, MAX_JSON_BYTES, budget, inspectedJson)
   if (progressRead.status === 'missing') return rolledBack && records.length > 0 ? 'unhealthy' : 'healthy'
   if (progressRead.status === 'oversized' || progressRead.status === 'budget') return 'uninspected'
   if (progressRead.status !== 'ok') return 'unhealthy'
@@ -368,10 +395,11 @@ async function inspectWalCoverage(
   stats: DoctorReport['statistics']['wal'],
   issues: IssueCounter,
   budget: ReadBudget,
+  inspectedJson: Map<string, ReadJsonResult['status']>,
 ): Promise<void> {
   // 清单根是工作区（root 的祖父目录），路径为 <workspace>/state/wal-coverage.json。
   const path = join(dirname(dirname(root)), ...WAL_COVERAGE_PATH.split('/'))
-  const read = await readBoundedJson(path, MAX_WAL_COVERAGE_BYTES, budget)
+  const read = await readBoundedJson(path, MAX_WAL_COVERAGE_BYTES, budget, inspectedJson)
   if (read.status === 'missing') return
   if (read.status === 'budget') {
     stats.uninspected += 1
@@ -397,9 +425,10 @@ async function inspectWalRecovery(
   stats: DoctorReport['statistics']['wal'],
   issues: IssueCounter,
   budget: ReadBudget,
+  inspectedJson: Map<string, ReadJsonResult['status']>,
 ): Promise<void> {
   const path = join(dirname(dirname(root)), ...WAL_RECOVERY_PATH.split('/'))
-  const read = await readBoundedJson(path, MAX_WAL_COVERAGE_BYTES, budget)
+  const read = await readBoundedJson(path, MAX_WAL_COVERAGE_BYTES, budget, inspectedJson)
   if (read.status === 'missing') return
   if (read.status === 'budget') {
     stats.uninspected += 1
@@ -417,13 +446,15 @@ async function inspectWalRoot(
   issues: IssueCounter,
   budget: ReadBudget,
   scanBudget: ScanBudget,
+  inspectedJson: Map<string, ReadJsonResult['status']>,
+  verifiedDirs: Set<string>,
 ): Promise<void> {
   const pendingBefore = stats.pending
-  const status = await probeDirectory(root, dirname(dirname(root)))
+  const status = await probeDirectory(root, dirname(dirname(root)), verifiedDirs)
   if (status === 'missing') {
     // 日志目录被整体删除时清单仍可能登记着楼层；没有可枚举的身份，全部按缺失报告。
-    await inspectWalCoverage(root, new Set(), new Set(), stats, issues, budget)
-    await inspectWalRecovery(root, stats, issues, budget)
+    await inspectWalCoverage(root, new Set(), new Set(), stats, issues, budget, inspectedJson)
+    await inspectWalRecovery(root, stats, issues, budget, inspectedJson)
     return
   }
   if (status === 'link') {
@@ -464,7 +495,7 @@ async function inspectWalRoot(
     else stats.active += 1
 
     const directory = `${root}/${entry.name}`
-    const metaRead = await readBoundedJson(`${directory}/meta.json`, 64 * 1024, budget)
+    const metaRead = await readBoundedJson(`${directory}/meta.json`, 64 * 1024, budget, inspectedJson)
     if (metaRead.status === 'oversized' || metaRead.status === 'budget') {
       unresolvedFloors.add(baseName)
       stats.uninspected += 1
@@ -484,7 +515,7 @@ async function inspectWalRoot(
     // 清单身份与 Wal.doListFloors 一致：元数据有效的楼层（含回滚副本）才算「日志仍在」。
     presentIdentities.add(JSON.stringify([meta.floor, meta.startedAt]))
 
-    const validation = await validateWalArtifacts(directory, budget, rolledBack)
+    const validation = await validateWalArtifacts(directory, budget, rolledBack, inspectedJson)
     if (!rolledBack && (validation === 'recovering' || !meta.committed)) stats.pending += 1
     else if (meta.committed) stats.committed += 1
     if (validation === 'healthy' || validation === 'recovering') stats.healthy += 1
@@ -499,8 +530,8 @@ async function inspectWalRoot(
   }
   // 只在完整枚举后对账：预算耗尽或目录项被截断时不能断言某层日志已丢失。
   if (enumerationComplete && !budget.exhausted && !scanBudget.exhausted) {
-    await inspectWalCoverage(root, presentIdentities, unresolvedFloors, stats, issues, budget)
-    await inspectWalRecovery(root, stats, issues, budget)
+    await inspectWalCoverage(root, presentIdentities, unresolvedFloors, stats, issues, budget, inspectedJson)
+    await inspectWalRecovery(root, stats, issues, budget, inspectedJson)
   }
   if (stats.pending > pendingBefore) issues.add('WAL_UNCOMMITTED', 'warning', stats.pending - pendingBefore)
 }
@@ -511,10 +542,12 @@ async function inspectStories(
   issues: IssueCounter,
   budget: ReadBudget,
   scanBudget: ScanBudget,
+  inspectedJson: Map<string, ReadJsonResult['status']>,
+  verifiedDirs: Set<string>,
 ): Promise<void> {
   const draftsBefore = stats.stories.drafts
   const storiesRoot = `${cardRoot}/stories`
-  const status = await probeDirectory(storiesRoot)
+  const status = await probeDirectory(storiesRoot, undefined, verifiedDirs)
   if (status === 'missing') return
   if (status === 'link') {
     stats.stories.unsafeEntries += 1
@@ -553,7 +586,8 @@ async function inspectStories(
       issues.add('STORY_METADATA_INVALID', 'error')
       continue
     }
-    const metadata = await readBoundedJson(`${root}/story.json`, 256 * 1024, budget)
+    verifiedDirs.add(resolve(root))
+    const metadata = await readBoundedJson(`${root}/story.json`, 256 * 1024, budget, inspectedJson)
     if (metadata.status === 'budget') {
       stats.stories.uninspected += 1
       continue
@@ -570,7 +604,7 @@ async function inspectStories(
       issues.add('STORY_METADATA_INVALID', 'error')
       continue
     }
-    await inspectWalRoot(`${root}/state/wal`, stats.wal, issues, budget, scanBudget)
+    await inspectWalRoot(`${root}/state/wal`, stats.wal, issues, budget, scanBudget, inspectedJson, verifiedDirs)
   }
   if (stats.stories.drafts > draftsBefore) issues.add('STORY_DRAFT_PRESENT', 'info', stats.stories.drafts - draftsBefore)
 }
@@ -581,7 +615,8 @@ async function inspectCharacters(
   issues: IssueCounter,
   budget: ReadBudget,
   scanBudget: ScanBudget,
-  inspectedCards: Map<string, ReadJsonResult['status']>,
+  inspectedJson: Map<string, ReadJsonResult['status']>,
+  verifiedDirs: Set<string>,
 ): Promise<void> {
   let entries
   try { entries = await readDirectoryEntries(charactersRoot, scanBudget) } catch {
@@ -607,17 +642,17 @@ async function inspectCharacters(
       continue
     }
     const cardRoot = `${charactersRoot}/${entry.name}`
+    verifiedDirs.add(resolve(cardRoot))
     // card.json 与运行时写入共用存储上限；通用扫描复用本次结果计数，不再重复读取。
-    const card = await readBoundedJson(`${cardRoot}/card.json`, MAX_STORED_CARD_JSON_BYTES, budget)
+    const card = await readBoundedJson(`${cardRoot}/card.json`, MAX_STORED_CARD_JSON_BYTES, budget, inspectedJson)
     if (card.status === 'budget') {
       stats.characters.uninspected += 1
       continue
     }
-    inspectedCards.set(resolve(cardRoot, 'card.json'), card.status)
     let healthy = card.status === 'ok' && isRecord(card.value)
     if (!healthy) issues.add(card.status === 'oversized' ? 'CHARACTER_METADATA_TOO_LARGE' : 'CHARACTER_METADATA_INVALID', 'error')
 
-    const archive = await readBoundedJson(`${cardRoot}/${CHARACTER_ARCHIVE_FILE}`, 64 * 1024, budget)
+    const archive = await readBoundedJson(`${cardRoot}/${CHARACTER_ARCHIVE_FILE}`, 64 * 1024, budget, inspectedJson)
     if (archive.status === 'budget') {
       if (!healthy) stats.characters.unhealthy += 1
       else stats.characters.uninspected += 1
@@ -636,8 +671,8 @@ async function inspectCharacters(
 
     if (healthy) stats.characters.healthy += 1
     else stats.characters.unhealthy += 1
-    await inspectWalRoot(`${cardRoot}/state/wal`, stats.wal, issues, budget, scanBudget)
-    await inspectStories(cardRoot, stats, issues, budget, scanBudget)
+    await inspectWalRoot(`${cardRoot}/state/wal`, stats.wal, issues, budget, scanBudget, inspectedJson, verifiedDirs)
+    await inspectStories(cardRoot, stats, issues, budget, scanBudget, inspectedJson, verifiedDirs)
   }
 }
 
@@ -818,14 +853,15 @@ export async function runDoctor(options: RunDoctorOptions = {}): Promise<DoctorR
   } else if (dataRootStatus !== 'directory') {
     issues.add(dataRootStatus === 'link' ? 'DATA_ROOT_LINK_SKIPPED' : 'DATA_ROOT_UNREADABLE', 'error')
   } else {
+    const verifiedDirs = new Set<string>([resolve(paths.root)])
     for (const [name, path] of Object.entries(names) as Array<[keyof typeof names, string]>) {
-      directories[name] = await probeDirectory(path, paths.root)
+      directories[name] = await probeDirectory(path, paths.root, verifiedDirs)
       if (directories[name] === 'missing') issues.add('STANDARD_DIRECTORY_MISSING', 'warning')
       else if (directories[name] !== 'directory') issues.add('STANDARD_DIRECTORY_INVALID', 'error')
     }
-    const inspectedCards = new Map<string, ReadJsonResult['status']>()
-    if (directories.characters === 'directory') await inspectCharacters(paths.characters, statistics, issues, budget, scanBudget, inspectedCards)
-    await inspectFiles(paths.root, statistics.files, issues, budget, scanBudget, inspectedCards)
+    const inspectedJson = new Map<string, ReadJsonResult['status']>()
+    if (directories.characters === 'directory') await inspectCharacters(paths.characters, statistics, issues, budget, scanBudget, inspectedJson, verifiedDirs)
+    await inspectFiles(paths.root, statistics.files, issues, budget, scanBudget, inspectedJson)
   }
   if (scanBudget.exhausted) {
     statistics.files.scanTruncated = true

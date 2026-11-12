@@ -7,12 +7,12 @@ import { parseImportedRegexRules } from '../../core/regex.js'
 import { useDraftGuard } from '../drafts.js'
 import { useDraftState } from '../draftPersistence.js'
 import { randomUuid } from '../../core/secureRandom.js'
-import { useEffect, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { IconTrashOutlineMedium } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PromptPreset, RegexRule, RegexScope, RegexTiming } from '../../core/types.js'
 import type { TavernRemote } from '../types.js'
 import { t as tOnce, useT } from '../i18n.js'
-import { Badge, Btn, CheckChips, Err, Field, FileBtn, IconBtn, Muted, NullableNumInput, RegexScriptRow, SaveBar, Section, Select, Skeleton, Toggle, downloadJson, errOf, readJsonFile, runAsync, useLoader, useToast } from '../util.js'
+import { Badge, Btn, CheckChips, ConfirmDialog, Err, Field, FileBtn, IconBtn, Muted, NullableNumInput, RegexScriptRow, SaveBar, Section, Select, Skeleton, Toggle, downloadJson, errOf, readJsonFile, runAsync, useLoader, useToast } from '../util.js'
 
 const SCOPES: { value: RegexScope; labelKey: string }[] = [
   { value: 'input', labelKey: 'regex.scope.input' },
@@ -43,35 +43,35 @@ function newRule(): RegexRule {
   }
 }
 
-function RuleEditor(props: {
+const RuleEditor = memo(function RuleEditor(props: {
   rule: RegexRule
+  index: number
   canMoveUp: boolean
   canMoveDown: boolean
-  onMoveUp: () => void
-  onMoveDown: () => void
-  onChange: (r: RegexRule) => void
-  onDelete: () => void
+  onMove: (index: number, delta: -1 | 1) => void
+  onChange: (index: number, r: RegexRule) => void
+  onDelete: (index: number) => void
 }) {
   const t = useT()
-  const { rule } = props
-  const set = (patch: Partial<RegexRule>) => props.onChange({ ...rule, ...patch })
+  const { rule, index } = props
+  const set = (patch: Partial<RegexRule>) => props.onChange(index, { ...rule, ...patch })
   return (
     <div className="dsh-tavern-entry" style={{ marginBottom: 8 }}>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '12px 16px 8px' }}>
         <Toggle checked={rule.enabled} onChange={(enabled) => set({ enabled })} title={rule.enabled ? t('regex.toggleDisable') : t('regex.toggleEnable')} />
         <input aria-label={t('regex.ruleName')} className="dsh-tavern-input" style={{ flex: 1 }} value={rule.name} onChange={(e) => set({ name: e.target.value })} />
         <Badge>{t(SOURCE_LABEL_KEY[rule.source])}</Badge>
-        <IconBtn label={t('regex.moveUp')} disabled={!props.canMoveUp} onClick={props.onMoveUp}>
+        <IconBtn label={t('regex.moveUp')} disabled={!props.canMoveUp} onClick={() => props.onMove(index, -1)}>
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <path d="M4 10l4-4 4 4" />
           </svg>
         </IconBtn>
-        <IconBtn label={t('regex.moveDown')} disabled={!props.canMoveDown} onClick={props.onMoveDown}>
+        <IconBtn label={t('regex.moveDown')} disabled={!props.canMoveDown} onClick={() => props.onMove(index, 1)}>
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <path d="M4 6l4 4 4-4" />
           </svg>
         </IconBtn>
-        <IconBtn label={t('regex.deleteRule')} danger onClick={props.onDelete}>
+        <IconBtn label={t('regex.deleteRule')} danger onClick={() => props.onDelete(index)}>
           <IconTrashOutlineMedium />
         </IconBtn>
       </div>
@@ -125,7 +125,7 @@ function RuleEditor(props: {
       </div>
     </div>
   )
-}
+})
 
 export function RegexSection(props: { remote: TavernRemote }) {
   const t = useT()
@@ -134,11 +134,17 @@ export function RegexSection(props: { remote: TavernRemote }) {
   const [rules, setRules] = useDraftState<RegexRule[] | null>('regex:rules', null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [confirmDiscard, setConfirmDiscard] = useState(false)
   const toast = useToast()
   const [savedRules, setSavedRules] = useDraftState<string | null>('regex:savedRules', null)
   const [revision, setRevision] = useDraftState<string | null>('regex:revision', null)
   const saving = useRef(false)
-  useDraftGuard(rules !== null && JSON.stringify(rules) !== (savedRules ?? (state.status === 'ready' ? JSON.stringify(state.value.rules) : null)), busy)
+  const baselineRules = savedRules ?? (state.status === 'ready' ? JSON.stringify(state.value.rules) : null)
+  const dirty = useMemo(
+    () => rules !== null && JSON.stringify(rules) !== baselineRules,
+    [rules, baselineRules],
+  )
+  useDraftGuard(dirty, busy)
 
   useEffect(() => {
     if (state.status === 'ready' && rules === null) {
@@ -218,13 +224,34 @@ export function RegexSection(props: { remote: TavernRemote }) {
   }
 
   const current = rules ?? []
-  const moveRule = (index: number, delta: -1 | 1) => {
-    const target = index + delta
-    if (target < 0 || target >= current.length) return
-    const next = current.slice()
-    const [moved] = next.splice(index, 1)
-    next.splice(target, 0, moved!)
-    setRules(next)
+  const moveRule = useCallback((index: number, delta: -1 | 1) => {
+    setRules((prev) => {
+      if (!prev) return prev
+      const target = index + delta
+      if (target < 0 || target >= prev.length) return prev
+      const next = prev.slice()
+      const [moved] = next.splice(index, 1)
+      next.splice(target, 0, moved!)
+      return next
+    })
+  }, [setRules])
+  const updateRule = useCallback((index: number, r: RegexRule) => {
+    setRules((prev) => {
+      if (!prev) return prev
+      const next = prev.slice()
+      next[index] = r
+      return next
+    })
+  }, [setRules])
+  const removeRule = useCallback((index: number) => {
+    setRules((prev) => (prev ? prev.filter((_, j) => j !== index) : prev))
+  }, [setRules])
+  const discardNow = () => {
+    setConfirmDiscard(false)
+    setRules(null)
+    setSavedRules(null)
+    setRevision(null)
+    reload()
   }
   const importRules = async (file: File) => {
     if (saving.current) return
@@ -245,6 +272,16 @@ export function RegexSection(props: { remote: TavernRemote }) {
   return (
     <Section description={t('regex.liveNotice')} title={t('section.regex')}>
       {toast.node}
+      <ConfirmDialog
+        open={confirmDiscard}
+        title={t('regex.discardTitle')}
+        description={t('regex.discardConfirm')}
+        confirmLabel={t('regex.discardConfirmAction')}
+        danger
+        busy={busy}
+        onCancel={() => { if (!busy) setConfirmDiscard(false) }}
+        onConfirm={discardNow}
+      />
       <Muted>
         {t('regex.desc')}
       </Muted>
@@ -267,16 +304,12 @@ export function RegexSection(props: { remote: TavernRemote }) {
             <RuleEditor
               key={rule.id}
               rule={rule}
+              index={i}
               canMoveUp={i > 0}
               canMoveDown={i < current.length - 1}
-              onMoveUp={() => moveRule(i, -1)}
-              onMoveDown={() => moveRule(i, 1)}
-              onChange={(r) => {
-                const next = current.slice()
-                next[i] = r
-                setRules(next)
-              }}
-              onDelete={() => setRules(current.filter((_, j) => j !== i))}
+              onMove={moveRule}
+              onChange={updateRule}
+              onDelete={removeRule}
             />
           ))}
           {current.length === 0 && (
@@ -296,10 +329,8 @@ export function RegexSection(props: { remote: TavernRemote }) {
               disabled={busy}
               onClick={() => {
                 if (busy) return
-                setRules(null)
-                setSavedRules(null)
-                setRevision(null)
-                reload()
+                if (dirty) setConfirmDiscard(true)
+                else discardNow()
               }}
             >
               {t('regex.discard')}

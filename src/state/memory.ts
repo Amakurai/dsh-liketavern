@@ -12,7 +12,7 @@ import { Bm25Index, type Bm25SearchOptions } from '../core/bm25.js'
 import { normalizeAliases, parseAliasFile, serializeAliasFile, type AliasRecord } from '../core/memoryAliases.js'
 import { estimateTokens } from '../core/tokenize.js'
 import type { MemoryEntry } from '../core/types.js'
-import { caseIdentity } from './pathIdentity.js'
+import { caseIdentity, sameFileStat } from './pathIdentity.js'
 import type { WorkspaceFs } from './workspaceFs.js'
 import { withWorkspaceLock } from './workspaceLock.js'
 import { dirWrittenSince, openLedger, writtenSince, type WriteLedger } from './writeLedger.js'
@@ -27,9 +27,7 @@ const ARCHIVE_DIR = `${MEMORY_DIR}/archive`
 const ALIAS_PATH = `${MEMORY_DIR}/aliases.json`
 const NO_ALIASES: ReadonlyMap<string, AliasRecord> = new Map()
 
-function sameStat(a: FileStat | null, b: FileStat | null): boolean {
-  return a === null || b === null ? a === b : a.mtimeMs === b.mtimeMs && a.size === b.size
-}
+const sameStat = sameFileStat
 
 function sameList(a: readonly string[] | undefined, b: readonly string[] | undefined): boolean {
   return a === b || (a !== undefined && b !== undefined && a.length === b.length && a.every((item, index) => item === b[index]))

@@ -5,19 +5,42 @@ import type { SessionEventSource } from '@deepseek-ai/dsh-api-session-controller
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { continuationStreamText } from '../core/continuationDisplay.js'
 
+const EMPTY_EVENTS:readonly SessionEvent[]=[]
+
 export function useContinuationStream(source:SessionEventSource|undefined,turn:number|undefined,seq:number|undefined,text:string){
   const subscribe=useCallback((listener:()=>void)=>source?.subscribe(listener)??(()=>{}),[source])
   const read=useCallback(()=>source?.getSnapshot(),[source])
   const snapshot=useSyncExternalStore(subscribe,read,read)
-  const eventsRef=useRef<readonly SessionEvent[]>([])
+  const cacheRef=useRef<{source:SessionEventSource|undefined;revision:number;events:readonly SessionEvent[]}>({source:undefined,revision:-1,events:EMPTY_EVENTS})
   const events=useMemo(()=>{
+    if(!snapshot)return EMPTY_EVENTS
+    const prev=cacheRef.current
+    if(typeof snapshot.revision==='number'&&snapshot.change){
+      if(prev.source===source&&prev.revision===snapshot.revision)return prev.events
+      if(prev.source===source&&snapshot.change.kind==='append'&&prev.revision+1===snapshot.revision){
+        let added:SessionEvent[]|undefined
+        for(const entry of snapshot.change.entries){
+          if(entry.type==='event'){
+            added??=[]
+            added.push(entry.event)
+          }
+        }
+        const next=added?[...prev.events,...added]:prev.events
+        cacheRef.current={source,revision:snapshot.revision,events:next}
+        return next
+      }
+      const next:SessionEvent[]=[]
+      for(const entry of snapshot.entries)if(entry.type==='event')next.push(entry.event)
+      const resolved=prev.events.length===next.length&&prev.events.every((event,index)=>event===next[index])?prev.events:next
+      cacheRef.current={source,revision:snapshot.revision,events:resolved}
+      return resolved
+    }
     const next:SessionEvent[]=[]
-    if(snapshot)for(const entry of snapshot.entries)if(entry.type==='event')next.push(entry.event)
-    const prev=eventsRef.current
-    if(prev.length===next.length&&prev.every((event,index)=>event===next[index]))return prev
-    eventsRef.current=next
+    for(const entry of snapshot.entries)if(entry.type==='event')next.push(entry.event)
+    if(prev.events.length===next.length&&prev.events.every((event,index)=>event===next[index]))return prev.events
+    cacheRef.current={source,revision:-1,events:next}
     return next
-  },[snapshot])
+  },[source,snapshot])
   return useMemo(()=>{
     if(turn===undefined||!source)return {text}
     try{return {text:continuationStreamText(events,turn,seq,text)}}

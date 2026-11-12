@@ -34,35 +34,53 @@ import { escapeScriptJson } from './scriptJson.js'
 
 export const CARD_BRIDGE_SOURCE = 'dsh-tavern-card'
 
-// 兼容库超过 600 KiB；转义结果在模块内只构造一次。纯静态卡没有任何可执行入口，
-// 不需要为每个历史 iframe 复制并初始化 jQuery/Lodash/Zod/YAML/jsonrepair。
-const CARD_LIBRARY_TAG = `<script data-dsh-tavern-libraries>${CARD_LIBRARIES.replace(/<\/script/gi, '<\\/script')}</script>`
+// 兼容库超过 600 KiB：惰性构造并缓存转义结果，未打开含可执行脚本的交互卡前不在浏览器启动期复制双份大字符串。
+let cardLibraryTagCache: string | undefined
+function getCardLibraryTag(): string {
+  return (cardLibraryTagCache ??= `<script data-dsh-tavern-libraries>${CARD_LIBRARIES.replace(/<\/script/gi, '<\\/script')}</script>`)
+}
 
-// 桥接安装函数在进程内恒定：模块装载期只序列化一次，避免每个历史卡面重复 21 次 Function.toString()。
-const HELPER_RECORD_SRC = helperRecord.toString()
-const HELPER_JSON_SRC = helperJson.toString()
-const INSTALL_EVENTS_SRC = installCardEvents.toString()
-const INSTALL_PERSISTENCE_SRC = installCardPersistence.toString()
-const INSTALL_VARIABLES_SRC = installCardVariables.toString()
-const INSTALL_HELPER_SRC = installCardHelper.toString()
-const INSTALL_MVU_SRC = installCardMvu.toString()
-const CREATE_MVU_CODEC_SRC = createHelperMvuCommandCodec.toString()
-const MARKDOWN_SCANNER_SRC = markdownCodeScanner.toString()
-const INSTALL_MVU_RUNNER_SRC = installCardMvuRunner.toString()
-const CREATE_MVU_INITIAL_SRC = createHelperMvuInitialData.toString()
-const PARSE_SCRIPT_TREES_SRC = parseHelperScriptTrees.toString()
-const INSTALL_SCRIPT_LIBS_SRC = installCardScriptLibraries.toString()
-const INSTALL_WORLDBOOK_SRC = installCardWorldbook.toString()
-const CREATE_WB_SETTINGS_CODEC_SRC = createHelperWorldbookSettingsCodec.toString()
-const INSTALL_LOREBOOK_SRC = installCardLorebook.toString()
-const CREATE_LOREBOOK_CODEC_SRC = createHelperLorebookCodec.toString()
-const PARSE_SWIPES_SRC = parseHelperSwipes.toString()
-const PARSE_MSG_EDITS_SRC = parseHelperMessageEdits.toString()
-const NORMALIZE_MSG_INPUTS_SRC = normalizeHelperMessageInputs.toString()
-const INSTALL_CHAT_EDITS_SRC = installCardChatEdits.toString()
-const INSTALL_DISPLAY_SRC = installCardDisplay.toString()
-const INSTALL_LEGACY_CHAT_SRC = installCardLegacyChat.toString()
-const INSTALL_CARD_SCRIPT_SRC = installCardScript.toString()
+// 桥接安装函数在进程内恒定：首次构建交互卡时才执行一次 Function.toString() 并缓存，避免冷启动及每个历史卡面重复序列化。
+let bridgeSrcCache: {
+  helperRecord: string; helperJson: string; installEvents: string; installPersistence: string
+  installVariables: string; installHelper: string; installMvu: string; createMvuCodec: string
+  markdownScanner: string; installMvuRunner: string; createMvuInitial: string; parseScriptTrees: string
+  installScriptLibs: string; installWorldbook: string; createWbSettingsCodec: string; installLorebook: string
+  createLorebookCodec: string; parseSwipes: string; parseMsgEdits: string; normalizeMsgInputs: string
+  installChatEdits: string; installDisplay: string; installLegacyChat: string; installCardScript: string
+  wrapDoc: string; hasShell: string
+} | undefined
+
+function getBridgeSources() {
+  return (bridgeSrcCache ??= {
+    helperRecord: helperRecord.toString(),
+    helperJson: helperJson.toString(),
+    installEvents: installCardEvents.toString(),
+    installPersistence: installCardPersistence.toString(),
+    installVariables: installCardVariables.toString(),
+    installHelper: installCardHelper.toString(),
+    installMvu: installCardMvu.toString(),
+    createMvuCodec: createHelperMvuCommandCodec.toString(),
+    markdownScanner: markdownCodeScanner.toString(),
+    installMvuRunner: installCardMvuRunner.toString(),
+    createMvuInitial: createHelperMvuInitialData.toString(),
+    parseScriptTrees: parseHelperScriptTrees.toString(),
+    installScriptLibs: installCardScriptLibraries.toString(),
+    installWorldbook: installCardWorldbook.toString(),
+    createWbSettingsCodec: createHelperWorldbookSettingsCodec.toString(),
+    installLorebook: installCardLorebook.toString(),
+    createLorebookCodec: createHelperLorebookCodec.toString(),
+    parseSwipes: parseHelperSwipes.toString(),
+    parseMsgEdits: parseHelperMessageEdits.toString(),
+    normalizeMsgInputs: normalizeHelperMessageInputs.toString(),
+    installChatEdits: installCardChatEdits.toString(),
+    installDisplay: installCardDisplay.toString(),
+    installLegacyChat: installCardLegacyChat.toString(),
+    installCardScript: installCardScript.toString(),
+    wrapDoc: wrapCardDocument.toString(),
+    hasShell: hasCardDocumentShell.toString(),
+  })
+}
 
 export interface CardFrameOptions {
   /** 开场白变体（0 = first_mes）。供 getChatMessages / swipe_id 使用。 */
@@ -165,6 +183,7 @@ function cspContent(connectHosts: string[]): string {
 /** SillyTavern / tavernhelper 常用入口的 stub；卡内按钮经 postMessage 请求 swipeGreeting。 */
 export function tavernCardBridgeScript(options: Omit<CardFrameOptions, 'connectHosts'>): string {
   // 小字段照常序列化（缺省字段同样省略），只把可缓存的大快照拼接进去；source 恒在，对象不为空。
+  const src = getBridgeSources()
   const head = escapeScriptJson({ greetings: options.greetings, greetingIndex: options.greetingIndex, source: CARD_BRIDGE_SOURCE })
   const payload = options.helperSnapshot ? head.slice(0, -1) + ',"helperSnapshot":' + snapshotScriptJson(options.helperSnapshot) + '}' : head
   return `<script data-dsh-tavern-bridge>
@@ -222,11 +241,11 @@ export function tavernCardBridgeScript(options: Omit<CardFrameOptions, 'connectH
     }
   })(cfg.helperSnapshot);
   // 先固定本次运行时，所有业务桥随后捕获它；document.write 重建后旧异步任务不能认领新身份。
-  var HELPER_MAX_BYTES = 1024 * 1024, helperRecord = (${HELPER_RECORD_SRC}), helperJson = (${HELPER_JSON_SRC});
-  var cleanupEvents = (${INSTALL_EVENTS_SRC})(Boolean(cfg.helperSnapshot));
+  var HELPER_MAX_BYTES = 1024 * 1024, helperRecord = (${src.helperRecord}), helperJson = (${src.helperJson});
+  var cleanupEvents = (${src.installEvents})(Boolean(cfg.helperSnapshot));
   var runtimeId = window.__dshTavernEventRuntimeId;
-  var cleanupPersistence = ${options.helperSnapshot ? `(${INSTALL_PERSISTENCE_SRC})(cfg.helperSnapshot,cfg.source,${escapeScriptJson(options.persistenceLabels ?? {saving:'Saving story variables…',saved:'Story variables saved',failed:'Story variable save failed; keep a backup and refresh'})})` : 'function () {}'};
-  (${INSTALL_VARIABLES_SRC})(${escapeScriptJson(options.variableLabels ?? {
+  var cleanupPersistence = ${options.helperSnapshot ? `(${src.installPersistence})(cfg.helperSnapshot,cfg.source,${escapeScriptJson(options.persistenceLabels ?? {saving:'Saving story variables…',saved:'Story variables saved',failed:'Story variable save failed; keep a backup and refresh'})})` : 'function () {}'};
+  (${src.installVariables})(${escapeScriptJson(options.variableLabels ?? {
     title: 'Card variables / backup', note: options.helperSnapshot ? 'Variables save to this story. Wait for the saved status before leaving; keep a backup if saving fails. Restoring also updates story variables.' : 'Card variables stay in this preview only. Copy a backup before leaving or refreshing.',
     backup: 'Select backup text', text: 'Card variable backup',
   })}, ${escapeScriptJson(options.variableStyles ?? '')}, cfg.helperSnapshot ? cfg.helperSnapshot.currentMessageId : ${escapeScriptJson(options.helperContext?.messageId ?? 0)}, cfg.helperSnapshot ? cfg.helperSnapshot.messages.length : undefined);
@@ -235,35 +254,35 @@ export function tavernCardBridgeScript(options: Omit<CardFrameOptions, 'connectH
     if (extra) for (var k in extra) if (Object.prototype.hasOwnProperty.call(extra, k)) msg[k] = extra[k];
     try { parent.postMessage(msg, '*'); } catch (e) {}
   }
-  var cleanupHelper = (${INSTALL_HELPER_SRC})(Object.assign(${escapeScriptJson(options.helperContext ?? {})},{snapshot:cfg.helperSnapshot}), cfg.greetings, cfg.greetingIndex, cfg.source,
+  var cleanupHelper = (${src.installHelper})(Object.assign(${escapeScriptJson(options.helperContext ?? {})},{snapshot:cfg.helperSnapshot}), cfg.greetings, cfg.greetingIndex, cfg.source,
     ${escapeScriptJson(options.helperLabels ?? { diagnostics: "Card script messages", unsupported: "Not available in this card sandbox" })});
-  var cleanupMvu = (${INSTALL_MVU_SRC})((${CREATE_MVU_CODEC_SRC})(helperJson,(${MARKDOWN_SCANNER_SRC})),helperJson);
-  var cleanupMvuRunner = ${options.mvuRunner ? `(${INSTALL_MVU_RUNNER_SRC})((${CREATE_MVU_INITIAL_SRC}),helperJson)` : 'function(){}'};
+  var cleanupMvu = (${src.installMvu})((${src.createMvuCodec})(helperJson,(${src.markdownScanner})),helperJson);
+  var cleanupMvuRunner = ${options.mvuRunner ? `(${src.installMvuRunner})((${src.createMvuInitial}),helperJson)` : 'function(){}'};
   var ro = null, mo = null, timers = [], lastHeight = 0;
   var heightFrame = null, heightFrameKind = '', heightActive = true;
   var scriptContext=${escapeScriptJson(options.scriptContext??null)};
   var scriptLibraries=${options.scriptLibraries?cachedScriptJson(options.scriptLibraries,()=>escapeScriptJson(options.scriptLibraries)):'null'};
   var cleanupScriptLibraries=${options.scriptLibraries ? `(function(){
-    var parseScriptTrees=(${PARSE_SCRIPT_TREES_SRC});
+    var parseScriptTrees=(${src.parseScriptTrees});
     var normalize=function(input){return parseScriptTrees(input,helperJson,helperRecord);};
-    return (${INSTALL_SCRIPT_LIBS_SRC})(scriptLibraries,normalize,helperJson,${escapeScriptJson(options.scriptLibraryLabels??{saving:'Saving script library…',saved:'Script library saved',failed:'Script library save failed; keep your edits and refresh'})});
+    return (${src.installScriptLibs})(scriptLibraries,normalize,helperJson,${escapeScriptJson(options.scriptLibraryLabels??{saving:'Saving script library…',saved:'Script library saved',failed:'Script library save failed; keep your edits and refresh'})});
   })()` : 'function(){}'};
   var worldbooks=${options.worldbooks?cachedScriptJson(options.worldbooks,()=>escapeScriptJson(options.worldbooks)):'null'};
   var cleanupWorldbooks=${options.worldbooks ? `(function(){
-    var cleanup=(${INSTALL_WORLDBOOK_SRC})(worldbooks,helperJson,(${CREATE_WB_SETTINGS_CODEC_SRC})(helperJson));
-    (${INSTALL_LOREBOOK_SRC})(window.TavernHelper,(${CREATE_LOREBOOK_CODEC_SRC})(helperJson));
+    var cleanup=(${src.installWorldbook})(worldbooks,helperJson,(${src.createWbSettingsCodec})(helperJson));
+    (${src.installLorebook})(window.TavernHelper,(${src.createLorebookCodec})(helperJson));
     return cleanup;
   })()` : 'function(){}'};
   var cleanupChatEdits=${options.helperSnapshot ? `(function(){
-    var parseHelperSwipes=(${PARSE_SWIPES_SRC});
-    var parseHelperMessageEdits=(${PARSE_MSG_EDITS_SRC});
-    var normalizeHelperMessageInputs=(${NORMALIZE_MSG_INPUTS_SRC});
-    var cleanup=(${INSTALL_CHAT_EDITS_SRC})(function(input,lookup){return parseHelperMessageEdits(normalizeHelperMessageInputs(input,lookup,helperJson,parseHelperSwipes),helperJson,parseHelperSwipes);},helperJson);
-    var cleanupDisplay=(${INSTALL_DISPLAY_SRC})();
-    var cleanupLegacy=(${INSTALL_LEGACY_CHAT_SRC})(helperJson);
+    var parseHelperSwipes=(${src.parseSwipes});
+    var parseHelperMessageEdits=(${src.parseMsgEdits});
+    var normalizeHelperMessageInputs=(${src.normalizeMsgInputs});
+    var cleanup=(${src.installChatEdits})(function(input,lookup){return parseHelperMessageEdits(normalizeHelperMessageInputs(input,lookup,helperJson,parseHelperSwipes),helperJson,parseHelperSwipes);},helperJson);
+    var cleanupDisplay=(${src.installDisplay})();
+    var cleanupLegacy=(${src.installLegacyChat})(helperJson);
     return function(){cleanupDisplay();cleanupLegacy();cleanup();};
   })()` : 'function(){}'};
-  var cleanupScript=${options.scriptContext ? `(${INSTALL_CARD_SCRIPT_SRC})(scriptContext)` : 'function(){}'};
+  var cleanupScript=${options.scriptContext ? `(${src.installCardScript})(scriptContext)` : 'function(){}'};
   function reportHeight() {
     try {
       var h = 0;
@@ -385,7 +404,7 @@ export function tavernCardBridgeScript(options: Omit<CardFrameOptions, 'connectH
   var libraryHtml = libraryNode && libraryNode.outerHTML ? libraryNode.outerHTML : '';
   function injectBridge(html) {
     // 不信任第三方 head、注释或伪造的 bridge 标记；重新解析前先建立有效策略。
-    return (${wrapCardDocument.toString()})(html, cspHtml + libraryHtml + stubHtml, (${hasCardDocumentShell.toString()})(html));
+    return (${src.wrapDoc})(html, cspHtml + libraryHtml + stubHtml, (${src.hasShell})(html));
   }
   // 浏览器里 document.write 后不调用 close 仍会渲染（文档保持打开）。缓冲整页时若同一任务内
   // 没等到 close，就在下一任务补写并保持打开；否则只写不关的封面会整页空白。
@@ -477,7 +496,7 @@ function needsCardLibraries(html:string,options:CardFrameOptions):boolean {
 export function buildCardSrcDoc(html: string, options: CardFrameOptions): string {
   const meta = `<meta http-equiv="Content-Security-Policy" content="${cspContent(options.connectHosts ?? [])}">`
   const stub = tavernCardBridgeScript(options)
-  const libraries = needsCardLibraries(html,options) ? CARD_LIBRARY_TAG : ''
+  const libraries = needsCardLibraries(html,options) ? getCardLibraryTag() : ''
   return wrapCardDocument(html, meta + libraries + stub, isFullHtmlDocument(html))
 }
 

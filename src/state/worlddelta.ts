@@ -12,15 +12,31 @@
 import { randomBytes } from 'node:crypto'
 import { array, boolean, enum as enum_, looseObject, minLength, nullable, number, optional, safeParse, string } from 'zod/mini'
 import type { WorldDelta, WorldInfoEntry } from '../core/types.js'
+import { rootIdentity, sameFileStat, type FileStatStamp } from './pathIdentity.js'
 import type { WorkspaceFs } from './workspaceFs.js'
 import { withWorkspaceLock } from './workspaceLock.js'
 import { openLedger, writtenSince, type WriteLedger } from './writeLedger.js'
 
 const DELTA_FILE = 'state/world-delta.jsonl'
+const MAX_DELTA_CACHE_ROOTS = 64
 
-function sameStat(a: { mtimeMs: number; size: number } | null, b: { mtimeMs: number; size: number } | null): boolean {
-  return a === null || b === null ? a === b : a.mtimeMs === b.mtimeMs && a.size === b.size
+interface CachedWorldDeltas {
+  stat: FileStatStamp | null
+  revision: number
+  epoch: number
+  parsed: readonly WorldDelta[]
 }
+
+const worldDeltaCache = new Map<string, CachedWorldDeltas>()
+
+function rememberWorldDeltas(key: string, entry: CachedWorldDeltas): void {
+  worldDeltaCache.delete(key)
+  worldDeltaCache.set(key, entry)
+  if (worldDeltaCache.size > MAX_DELTA_CACHE_ROOTS) {
+    worldDeltaCache.delete(worldDeltaCache.keys().next().value!)
+  }
+}
+
 /** 磁盘 JSON 必须满足实际业务形状，不能仅凭 id 就把错型字段送入引擎或编辑器。 */
 const deltaSchema = looseObject({
   id: string().check(minLength(1)), ts: string(), type: enum_(['add', 'update', 'invalidate']),
@@ -35,10 +51,11 @@ const deltaSchema = looseObject({
 
 export class WorldDeltaStore {
   private readonly ledger: WriteLedger
-  private cache: { stat: { mtimeMs: number; size: number } | null; revision: number; epoch: number; parsed: readonly WorldDelta[] } | null = null
+  private readonly cacheKey: string
 
   constructor(private readonly fs: WorkspaceFs) {
     this.ledger = openLedger(fs.root)
+    this.cacheKey = rootIdentity(fs.root)
   }
 
   private enqueue<T>(task: () => Promise<T>): Promise<T> {
@@ -65,17 +82,19 @@ export class WorldDeltaStore {
     const revision = this.ledger.counter
     const epoch = this.ledger.epoch
     const stat = await this.fs.stat(DELTA_FILE)
+    const cached = worldDeltaCache.get(this.cacheKey)
     if (
-      this.cache &&
-      this.cache.epoch === epoch &&
-      !writtenSince(this.ledger, DELTA_FILE, this.cache.revision) &&
-      sameStat(this.cache.stat, stat)
+      cached &&
+      cached.epoch === epoch &&
+      !writtenSince(this.ledger, DELTA_FILE, cached.revision) &&
+      sameFileStat(cached.stat, stat)
     ) {
-      return this.cache.parsed
+      rememberWorldDeltas(this.cacheKey, cached)
+      return cached.parsed
     }
     if (stat === null) {
       if (!writtenSince(this.ledger, DELTA_FILE, revision) && this.ledger.epoch === epoch) {
-        this.cache = { stat: null, revision, epoch, parsed: [] }
+        rememberWorldDeltas(this.cacheKey, { stat: null, revision, epoch, parsed: [] })
       }
       return []
     }
@@ -85,8 +104,8 @@ export class WorldDeltaStore {
       if (delta) parsed.push(delta)
     }
     const afterStat = await this.fs.stat(DELTA_FILE)
-    if (sameStat(stat, afterStat) && !writtenSince(this.ledger, DELTA_FILE, revision) && this.ledger.epoch === epoch) {
-      this.cache = { stat, revision, epoch, parsed }
+    if (sameFileStat(stat, afterStat) && !writtenSince(this.ledger, DELTA_FILE, revision) && this.ledger.epoch === epoch) {
+      rememberWorldDeltas(this.cacheKey, { stat, revision, epoch, parsed })
     }
     return parsed
   }
@@ -121,7 +140,7 @@ export class WorldDeltaStore {
         const expires = Date.parse(delta.expires)
         if (!Number.isNaN(expires) && expires <= now.getTime()) continue
       }
-      out.push(delta)
+      out.push({ ...delta, keys: [...delta.keys] })
     }
     return out
   }

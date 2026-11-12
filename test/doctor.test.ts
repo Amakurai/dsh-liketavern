@@ -383,12 +383,35 @@ describe('doctor 聚合报告', () => {
     const root = await makeStandardDirectories()
     const cardRoot = join(root, 'characters', 'bad-card-budget-a1b2c3d4')
     await mkdir(cardRoot)
-    await writeFile(join(cardRoot, 'card.json'), '{}')
-    await writeFile(join(cardRoot, '.archive.json'), JSON.stringify({ archivedAt: new Date(0).toISOString(), pad: 'x'.repeat(200) }))
-    const report = await runDoctor({ home, nodeVersion: '24.0.0', readBudgetBytes: 300 })
+    await writeFile(join(cardRoot, 'card.json'), '[]')
+    await writeFile(join(cardRoot, '.archive.json'), JSON.stringify({ version: 1, archivedAt: new Date(0).toISOString(), pad: 'x'.repeat(200) }))
+    const report = await runDoctor({ home, nodeVersion: '24.0.0', readBudgetBytes: 200 })
     expect(report.ok).toBe(false)
     expect(report.statistics.characters).toMatchObject({ directories: 1, healthy: 0, unhealthy: 1, uninspected: 0 })
+    expect(report.issues).toContainEqual({ code: 'CHARACTER_METADATA_INVALID', severity: 'error', count: 1 })
     expect(report.issues).toContainEqual({ code: 'READ_BUDGET_EXCEEDED', severity: 'warning', count: 1 })
+  })
+
+  it('结构检查已读取的 .archive.json 与 story.json 在文件遍历中复用结果，不重复计费读取预算', async () => {
+    const root = await makeStandardDirectories()
+    const cardRoot = join(root, 'characters', 'single-charge-a1b2c3d4')
+    const storyId = 'story-00000000-0000-4000-8000-000000000001'
+    const storyDir = join(cardRoot, 'stories', storyId)
+    await mkdir(storyDir, { recursive: true })
+    const cardText = JSON.stringify({ name: '单次计费角色' })
+    const archiveText = JSON.stringify({ version: 1, archivedAt: new Date(0).toISOString(), pad: 'a'.repeat(120) })
+    const storyText = JSON.stringify({ version: 1, id: storyId, sessionId: 'sess-1', createdAt: new Date(0).toISOString(), migrated: false })
+    await writeFile(join(cardRoot, 'card.json'), cardText)
+    await writeFile(join(cardRoot, '.archive.json'), archiveText)
+    await writeFile(join(storyDir, 'story.json'), storyText)
+    const totalBytes = Buffer.byteLength(cardText) + Buffer.byteLength(archiveText) + Buffer.byteLength(storyText)
+    // 预算只够单次完整读取加上一字节增长探针，若文件遍历重复读取任一 JSON 就会触发 READ_BUDGET_EXCEEDED。
+    const report = await runDoctor({ home, nodeVersion: '24.0.0', readBudgetBytes: totalBytes + 16 })
+    expect(report.ok).toBe(true)
+    expect(report.statistics.characters).toMatchObject({ directories: 1, healthy: 1, archived: 1, uninspected: 0 })
+    expect(report.statistics.stories).toMatchObject({ directories: 1, healthy: 1, uninspected: 0 })
+    expect(report.statistics.files).toMatchObject({ json: 3, invalidJson: 0, scanTruncated: false })
+    expect(report.issues.map(issue => issue.code)).not.toContain('READ_BUDGET_EXCEEDED')
   })
 
   it('读取预算耗尽后继续统计剩余角色与剧情目录，计入 uninspected 保持目录总数守恒', async () => {

@@ -59,26 +59,103 @@ export function createHelperMvuCommandCodec(json: (value: unknown, maxBytes?: nu
     }
     return bytes
   }
+  const budgetCache = new WeakMap<object, { bytes: number; relDepth: number }>()
+  const invalidatePath = (root: unknown, parts: readonly string[]): void => {
+    let cur = root
+    for (let i = 0; i < parts.length; i++) {
+      if (!cur || typeof cur !== 'object') return
+      budgetCache.delete(cur)
+      const key = parts[i]!
+      cur = Array.isArray(cur) ? cur[Number(key)] : (cur as Table)[key]
+    }
+    if (cur && typeof cur === 'object') budgetCache.delete(cur)
+  }
+  const assertStatDepth = (root: Table): void => {
+    const walk = (item: unknown, depth: number): number => {
+      if (depth > DEPTH) throw new Error('MVU 数据嵌套超过 64 层')
+      if (!item || typeof item !== 'object') return 0
+      const hit = budgetCache.get(item)
+      if (hit) {
+        if (depth + hit.relDepth > DEPTH) throw new Error('MVU 数据嵌套超过 64 层')
+        return hit.relDepth
+      }
+      let maxRel = 0
+      if (Array.isArray(item)) {
+        for (let i = 0; i < item.length; i++) {
+          const childRel = 1 + walk(item[i], depth + 1)
+          if (childRel > maxRel) maxRel = childRel
+        }
+      } else if (record(item)) {
+        const keys = Object.keys(item)
+        for (let i = 0; i < keys.length; i++) {
+          const childRel = 1 + walk(item[keys[i]!], depth + 1)
+          if (childRel > maxRel) maxRel = childRel
+        }
+      }
+      return maxRel
+    }
+    walk(root, 0)
+  }
   const assertOutputBudget = (value: unknown, maxBytes: number): void => {
     let bytes = 0
-    const walk = (item: unknown, depth: number): void => {
+    const walk = (item: unknown, depth: number): number => {
       if (depth > DEPTH) throw new Error('酒馆助手数据嵌套超过 64 层')
-      if (item === null || typeof item === 'boolean') bytes += 5
-      else if (typeof item === 'string') bytes += strJsonBytes(item)
-      else if (typeof item === 'number' && Number.isFinite(item)) bytes += String(item).length
-      else if (Array.isArray(item)) {
+      if (item === null || typeof item === 'boolean') {
+        bytes += 5
+        if (bytes > maxBytes) throw new Error('酒馆助手数据超过预算')
+        return 0
+      }
+      if (typeof item === 'string') {
+        bytes += strJsonBytes(item)
+        if (bytes > maxBytes) throw new Error('酒馆助手数据超过预算')
+        return 0
+      }
+      if (typeof item === 'number' && Number.isFinite(item)) {
+        bytes += String(item).length
+        if (bytes > maxBytes) throw new Error('酒馆助手数据超过预算')
+        return 0
+      }
+      if (Array.isArray(item)) {
+        const hit = budgetCache.get(item)
+        if (hit && depth + hit.relDepth <= DEPTH && bytes + hit.bytes <= maxBytes) {
+          bytes += hit.bytes
+          return hit.relDepth
+        }
+        const before = bytes
         bytes += 2
-        for (let i = 0; i < item.length; i++) { bytes++; walk(item[i], depth + 1) }
-      } else if (record(item)) {
+        if (bytes > maxBytes) throw new Error('酒馆助手数据超过预算')
+        let maxRel = 0
+        for (let i = 0; i < item.length; i++) {
+          bytes++
+          const childRel = 1 + walk(item[i], depth + 1)
+          if (childRel > maxRel) maxRel = childRel
+        }
+        if (bytes > maxBytes) throw new Error('酒馆助手数据超过预算')
+        budgetCache.set(item, { bytes: bytes - before, relDepth: maxRel })
+        return maxRel
+      }
+      if (record(item)) {
+        const hit = budgetCache.get(item)
+        if (hit && depth + hit.relDepth <= DEPTH && bytes + hit.bytes <= maxBytes) {
+          bytes += hit.bytes
+          return hit.relDepth
+        }
+        const before = bytes
         bytes += 2
+        if (bytes > maxBytes) throw new Error('酒馆助手数据超过预算')
         const keys = Object.keys(item)
+        let maxRel = 0
         for (let i = 0; i < keys.length; i++) {
           const key = keys[i]!
           bytes += strJsonBytes(key) + 2
-          walk(item[key], depth + 1)
+          const childRel = 1 + walk(item[key], depth + 1)
+          if (childRel > maxRel) maxRel = childRel
         }
-      } else throw new Error('酒馆助手只接受普通 JSON 数据')
-      if (bytes > maxBytes) throw new Error('酒馆助手数据超过预算')
+        if (bytes > maxBytes) throw new Error('酒馆助手数据超过预算')
+        budgetCache.set(item, { bytes: bytes - before, relDepth: maxRel })
+        return maxRel
+      }
+      throw new Error('酒馆助手只接受普通 JSON 数据')
     }
     walk(value, 0)
   }
@@ -110,6 +187,7 @@ export function createHelperMvuCommandCodec(json: (value: unknown, maxBytes?: nu
     }
     throw new Error('MVU 字符串未闭合')
   }
+  const numRe = /[+-]?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?/y
   const literal = (source: unknown): unknown => {
     // 官方命令事件可以把 args 从原文字面量改成实际 JSON 值；复制验证后直接使用，不隐式 stringify 执行。
     if (typeof source !== 'string') return copy(source)
@@ -151,8 +229,9 @@ export function createHelperMvuCommandCodec(json: (value: unknown, maxBytes?: nu
       for (const [word, value] of [['true', true], ['false', false], ['null', null]] as const) {
         if (source.startsWith(word, at)) { at += word.length; return value }
       }
-      const number = source.slice(at).match(/^[+-]?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?/)
-      if (number) { at += number[0].length; const value = Number(number[0]); if (Number.isFinite(value)) return value }
+      numRe.lastIndex = at
+      const number = numRe.exec(source)
+      if (number) { at = numRe.lastIndex; const value = Number(number[0]); if (Number.isFinite(value)) return value }
       throw new Error('MVU 只支持有界 JSON 字面量；暂不支持数学、函数或模板表达式，字符串请加引号')
     }
     const value = read(0)
@@ -330,7 +409,7 @@ export function createHelperMvuCommandCodec(json: (value: unknown, maxBytes?: nu
       if (tag) {
         let end = at + tag.length + 2
         const close = '</' + tag + '>'
-        while (end < message.length && message.slice(end, end + close.length).toLowerCase() !== close) {
+        while (end < message.length && (message.charCodeAt(end) !== 60 || message.slice(end, end + close.length).toLowerCase() !== close)) {
           if (message[end] === '"' || message[end] === "'") end = quoted(message, end).end
           else end++
         }
@@ -398,16 +477,16 @@ export function createHelperMvuCommandCodec(json: (value: unknown, maxBytes?: nu
   const write = (root: Table, parts: string[], value: unknown, insert: boolean): Table => {
     if (!parts.length) return table(value)
     const parent = get(root, parts.slice(0, -1)), key = parts.at(-1)!
-    if (Array.isArray(parent)) { const index = arrayIndex(key, parent.length, insert); if (insert) parent.splice(index, 0, value); else parent[index] = value }
-    else if (record(parent)) { if (!insert && !Object.hasOwn(parent, key)) throw new Error('MVU 目标字段不存在'); parent[key] = value }
+    if (Array.isArray(parent)) { const index = arrayIndex(key, parent.length, insert); invalidatePath(root, parts); if (insert) parent.splice(index, 0, value); else parent[index] = value }
+    else if (record(parent)) { if (!insert && !Object.hasOwn(parent, key)) throw new Error('MVU 目标字段不存在'); invalidatePath(root, parts); parent[key] = value }
     else throw new Error('MVU 目标父路径不是集合')
     return root
   }
   const remove = (root: Table, parts: string[]): void => {
     if (!parts.length) throw new Error('暂不支持删除 MVU stat_data 根对象')
     const parent = get(root, parts.slice(0, -1)), key = parts.at(-1)!
-    if (Array.isArray(parent)) parent.splice(arrayIndex(key, parent.length), 1)
-    else if (record(parent) && Object.hasOwn(parent, key)) delete parent[key]
+    if (Array.isArray(parent)) { const index = arrayIndex(key, parent.length); invalidatePath(root, parts); parent.splice(index, 1) }
+    else if (record(parent) && Object.hasOwn(parent, key)) { invalidatePath(root, parts); delete parent[key] }
     else throw new Error('MVU 删除目标不存在')
   }
   const equal = (a: unknown, b: unknown) => JSON.stringify(json(a, OUTPUT)) === JSON.stringify(json(b, OUTPUT))
@@ -415,11 +494,13 @@ export function createHelperMvuCommandCodec(json: (value: unknown, maxBytes?: nu
     if (depth > DEPTH) throw new Error('MVU 合并超过 64 层')
     if (Array.isArray(value)) {
       const result = Array.isArray(target) ? target : []
+      budgetCache.delete(result)
       for (let i = 0; i < value.length; i++) result[i] = merge(result[i], value[i], depth + 1)
       return result
     }
     if (record(value)) {
       const result = record(target) ? target : {}
+      budgetCache.delete(result)
       for (const key of Object.keys(value)) result[key] = merge(result[key], value[key], depth + 1)
       return result
     }
@@ -428,6 +509,7 @@ export function createHelperMvuCommandCodec(json: (value: unknown, maxBytes?: nu
   const logAt = (root: Table, parts: string[], text: string) => {
     const keys = parts.length ? parts : ['']; let container: Table | unknown[] = root
     for (let i = 0; i < keys.length; i++) {
+      budgetCache.delete(container)
       const key = keys[i]!, nextIsIndex = i < keys.length - 1 && /^(0|[1-9][0-9]*)$/.test(keys[i + 1]!)
       if (Array.isArray(container)) {
         if (!/^(0|[1-9][0-9]*)$/.test(key)) throw new Error('MVU 显示路径数组下标越界')
@@ -476,7 +558,7 @@ export function createHelperMvuCommandCodec(json: (value: unknown, maxBytes?: nu
           value = Number((oldValue + value).toPrecision(12))
         } else if (!isPatch && typeof oldValue === 'number' && typeof value === 'string' && value.trim() !== '') { const num = Number(value); if (Number.isFinite(num)) value = num }
         value = copy(value)
-        if (wrapped) previous[0] = value
+        if (wrapped) { invalidatePath(stat, parts); budgetCache.delete(previous); previous[0] = value }
         else stat = write(stat, parts, value, false)
         log = printable(oldValue) + '->' + printable(value) + ' ' + suffix
       } else if (type === 'insert') {
@@ -487,8 +569,8 @@ export function createHelperMvuCommandCodec(json: (value: unknown, maxBytes?: nu
           stat = write(stat, parts, collection, false)
         }
         if (args.length === 2) {
-          if (Array.isArray(collection)) { collection.push(value); log = 'ASSIGNED ' + JSON.stringify(value) + " into array '" + label + "' " + suffix }
-          else if (record(collection) && record(value)) { merge(collection, value); log = 'MERGED object ' + JSON.stringify(value) + " into object '" + label + "' " + suffix }
+          if (Array.isArray(collection)) { invalidatePath(stat, parts); budgetCache.delete(collection); collection.push(value); log = 'ASSIGNED ' + JSON.stringify(value) + " into array '" + label + "' " + suffix }
+          else if (record(collection) && record(value)) { invalidatePath(stat, parts); merge(collection, value); log = 'MERGED object ' + JSON.stringify(value) + " into object '" + label + "' " + suffix }
           else throw new Error('MVU insert 的两参数形式需要数组或对象合并')
         } else {
           const key = literal(args[1])
@@ -498,9 +580,10 @@ export function createHelperMvuCommandCodec(json: (value: unknown, maxBytes?: nu
             else if (key === '-') index = collection.length
             else if (typeof key === 'number' && Number.isSafeInteger(key)) index = key < 0 ? Math.max(0, collection.length + key) : Math.min(collection.length, key)
             else throw new Error('MVU insert 数组位置必须是整数或 -')
+            invalidatePath(stat, parts); budgetCache.delete(collection)
             collection.splice(index, 0, value); log = 'ASSIGNED ' + JSON.stringify(value) + " into '" + label + "' at index " + index + ' ' + suffix
           } else if (record(collection) && (typeof key === 'string' || typeof key === 'number')) {
-            checkKey(String(key)); collection[String(key)] = value; log = "ASSIGNED key '" + key + "' with value " + JSON.stringify(value) + " into object '" + label + "' " + suffix
+            checkKey(String(key)); invalidatePath(stat, parts); budgetCache.delete(collection); collection[String(key)] = value; log = "ASSIGNED key '" + key + "' with value " + JSON.stringify(value) + " into object '" + label + "' " + suffix
           } else throw new Error('MVU insert 目标不是集合或键无效')
         }
       } else if (type === 'delete') {
@@ -534,9 +617,9 @@ export function createHelperMvuCommandCodec(json: (value: unknown, maxBytes?: nu
         if (!equal(get(stat, parts), literal(args[1]))) throw new Error('MVU JSON Patch test 校验失败')
         continue
       }
-      checkMetadata(stat)
+      assertStatDepth(stat)
       logAt(display, logPath, log); logAt(delta, logPath, log)
-      // 每一步都执行总输出预算，防止中间 insert/copy 膨胀后再删除掩盖超量（零分配计量，末尾统一深拷贝归一化）。
+      // 每一步都执行总输出预算，防止中间 insert/copy 膨胀后再删除掩盖超量（增量缓存计量，末尾统一深拷贝归一化）。
       assertOutputBudget({ stat_data: stat, display_data: display, delta_data: delta }, OUTPUT)
     }
     return json({ stat_data: stat, display_data: display, delta_data: delta }, OUTPUT) as ReturnType<HelperMvuCommandCodec['apply']>

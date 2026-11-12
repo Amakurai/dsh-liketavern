@@ -76,6 +76,10 @@ export function Select(props: {
   const [open, setOpen] = useState(false)
   const label = useContext(ControlLabel)
   const selected = props.options.find((o) => o.value === props.value)
+  const items = useMemo(
+    () => props.options.map((o) => ({ id: selectOptionId(o.value), label: o.label })),
+    [props.options],
+  )
   const width = props.width ?? '100%'
   // 保存等操作会临时禁用整张表单；若此时菜单正展开，只把传给 Menu 的 open
   // 变成 false 会留下内部 open=true，操作结束后菜单会无故再次弹出。
@@ -113,10 +117,7 @@ export function Select(props: {
             <IconChevronDownOutlineMedium className="dsh-tavern-pillSelectChevron" />
           </button>
         }
-        items={props.options.map((o) => ({
-          id: selectOptionId(o.value),
-          label: o.label,
-        }))}
+        items={items}
       />
     </div>
   )

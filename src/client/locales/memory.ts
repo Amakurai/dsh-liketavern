@@ -70,6 +70,7 @@ export const zh = {
   'memory.deltaFilter.all': '全部 {count}',
   'memory.deltaFilter.active': '生效中 {count}',
   'memory.deltaFilter.revoked': '已撤销 {count}',
+  'memory.loadMore': '加载更多（剩余 {count} 条）',
   'memory.journalBudget': '当前约 {tokens} / {limit} token',
   'memory.journalBudgetExceeded': '超出本轮注入预算（仅前 {limit} token 入模），建议将长设定移至本会话世界书或长期记忆。',
 } as const
@@ -144,6 +145,7 @@ export const en: Record<keyof typeof zh, string> = {
   'memory.deltaFilter.all': 'All ({count})',
   'memory.deltaFilter.active': 'Active ({count})',
   'memory.deltaFilter.revoked': 'Revoked ({count})',
+  'memory.loadMore': 'Load more ({count} remaining)',
   'memory.journalBudget': 'Approx. {tokens} / {limit} tokens',
   'memory.journalBudgetExceeded': 'Exceeds the per-turn injection budget (only the first {limit} tokens are sent). Move long lore into the session lorebook or memory.',
 }

@@ -4,7 +4,7 @@
  * 用法：node scripts/build-client.mjs（须在 npx tsc 之后运行，npm run build 已串好）。
  */
 import { build } from 'esbuild-vendor'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -27,6 +27,12 @@ const result = await build({
   format: 'cjs',
   target: 'es2022',
   platform: 'browser',
+  charset: 'utf8',
+  minifyWhitespace: true,
+  minifySyntax: true,
+  // 保留标识符名：卡面 iframe 桥接通过 Function.prototype.toString() 注入沙箱源码。
+  minifyIdentifiers: false,
+  legalComments: 'none',
   external,
   write: false,
   logLevel: 'info',
@@ -46,13 +52,21 @@ const footer = `
 });
 `
 
+const bundleText = banner + code + footer
+// 自检先于落盘：产物必须包含 ModuleLoader 包裹与三个导出（ESM 输入经 __export 导出）。
+const requiredChecks = [
+  ['window.__ModuleLoader__.load', /window\.__ModuleLoader__\.load/],
+  ['"dsh-liketavern"', /"dsh-liketavern"/],
+  ['apply export', /\bapply:\s*\(\)\s*=>/],
+  ['inject export', /\binject:\s*\(\)\s*=>/],
+  ['name export', /\bname:\s*\(\)\s*=>/],
+  ['return module.exports', /return module\.exports/],
+]
+for (const [label, pattern] of requiredChecks) {
+  if (!pattern.test(bundleText)) throw new Error(`build-client: 产物缺少 ${label}`)
+}
+
 const out = join(root, 'lib/client.js')
 await mkdir(dirname(out), { recursive: true })
-await writeFile(out, banner + code + footer, 'utf8')
-
-// 简单自检：产物必须包含 ModuleLoader 包裹与三个导出（ESM 输入经 __export 导出）。
-const written = await readFile(out, 'utf8')
-for (const needle of ['window.__ModuleLoader__.load', '"dsh-liketavern"', 'apply: () =>', 'inject: () =>', 'name: () =>', 'return module.exports']) {
-  if (!written.includes(needle)) throw new Error(`build-client: 产物缺少 ${needle}`)
-}
-console.log(`build-client: wrote ${out} (${(written.length / 1024).toFixed(1)} KiB)`)
+await writeFile(out, bundleText, 'utf8')
+console.log(`build-client: wrote ${out} (${(Buffer.byteLength(bundleText, 'utf8') / 1024).toFixed(1)} KiB)`)

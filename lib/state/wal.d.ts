@@ -38,6 +38,8 @@ export declare class Wal {
     private readonly hasCoverage;
     /** 最近一次确认已登记的楼层身份。 */
     private covered;
+    /** 已归档回滚副本（.rolled-back-*）的不可变元数据缓存，按文件 mtimeMs/size 复核。 */
+    private readonly rolledBackMetaCache;
     /** rootDir 为工作区的 state/wal/ 目录；不存在则在首次操作时创建。 */
     constructor(rootDir: string);
     private readCoverage;
@@ -51,6 +53,7 @@ export declare class Wal {
      */
     private assertCoveredFloorDirs;
     private assertLogPath;
+    private assertLogPaths;
     /** 开始新的楼层事务；已有楼层必须显式 reopen 或先回滚，不能覆盖原始镜像。 */
     beginFloor(floor: string): Promise<void>;
     /** 每次修改独立记录 before/after，必须在正文原子替换之前持久化。 */

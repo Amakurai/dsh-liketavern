@@ -70,6 +70,7 @@ export declare class TavernState {
     /** 宿主作用域持有的布局适配器；agent 销毁不影响其它剧情的注册。 */
     presetAdapter?: PresetAdapterController;
     private readonly workspaces;
+    private readonly sweptRoots;
     readonly triggerLogs: Map<string, {
         at: string;
         lines: string[];
@@ -219,8 +220,10 @@ export declare class TavernState {
      * 不等待其后排入的后台维护。维护的模型请求可能持续数十秒，展示正文不应被它挡住。
      */
     waitForSessionCommits(sessionId: string): Promise<void>;
+    private markSweptRoot;
     workspace(cardId: string): Promise<WorkspaceHandle>;
-    private evictInactiveWorkspaces;
+    private evictInactiveCardWorkspaces;
+    private evictInactiveStoryWorkspaces;
     /** 资产初始状态与独立剧情状态共用文件面；storyId 缺省仅供初始状态面板及旧数据迁移。 */
     storyWorkspace(cardId: string, storyId?: string): Promise<WorkspaceHandle>;
     discardUnboundStory(cardId: string, storyId: string, sessionId: string): Promise<void>;
@@ -255,6 +258,7 @@ export declare class TavernState {
     private salvageLorebook;
     /** 资产锁内按目录占位选择数字后缀，跳过已有文件后复核候选；不依赖时钟，也不重复读取占位正文。 */
     private probeAvailableAssetId;
+    private readAssetCandidates;
     /**
      * assetFileId 多对一净化的冲突检测（问题5修复）：不同显示名可能净化成同一文件 id
      * （「主线 设定」/「主线?设定」→「主线_设定」），后保存者会静默覆盖前者。

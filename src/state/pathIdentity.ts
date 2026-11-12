@@ -16,3 +16,13 @@ export function caseIdentity(value: string): string {
 export function rootIdentity(root: string): string {
   return caseIdentity(resolve(root))
 }
+
+export interface FileStatStamp {
+  mtimeMs: number
+  size: number
+}
+
+/** 文件 mtimeMs 与字节长度一致判定（同时为 null 也视为相同）。 */
+export function sameFileStat(a: FileStatStamp | null, b: FileStatStamp | null): boolean {
+  return a === null || b === null ? a === b : a.mtimeMs === b.mtimeMs && a.size === b.size
+}

@@ -5,7 +5,7 @@
 import { describeError } from '../core/guards.js'
 import { DraftScope, useDraftGuard } from './drafts.js'
 import { MemorySection } from './panel/memory.js'
-import { useEffect, useId, useRef, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { BINDING_CHANGED_EVENT } from './actions.js'
 import { CHARACTER_CHANGED_EVENT, cachedAvatar, cachedCharacterDetail, cachedSessionBinding, invalidateSessionBinding } from './cache.js'
 import { subscribeKeyedWindowEvent } from './windowEvents.js'
@@ -17,7 +17,7 @@ import { TavernSeatChip } from './seatChip.js'
 import { HelperScripts } from './helperScripts.js'
 import type { WorldInfoEntry } from '../core/types.js'
 import { activeGreetingIndex, cardGreetingVariants } from '../core/greetingLog.js'
-import { parseLorebook } from '../state/lorebook.js'
+import { parseLorebook } from '../core/lorebookFormat.js'
 import { LorebookEditor } from './panel/lorebookEditor.js'
 import type { CharacterSummary, Persona, PresetSummary, SessionBinding, TavernRemote, TavernSettings } from './types.js'
 import { EMPTY_SESSION_DEFAULTS } from './types.js'
@@ -118,18 +118,21 @@ function PromptPreviewDialog(props: { data: PromptPreview; onClose: () => void }
   const wi = data.worldInfoBudget
   const assemble = data.assembleBudget
   const lastTurn = data.cacheUsage.turns.at(-1)
-  const body =
-    tab === 'cache'
-      ? cacheUsageText(data.cacheUsage, t)
-      : tab === 'actual'
-      ? data.actualRequest ? data.actualRequest.text + (data.actualRequest.truncated ? '\n' + t('chip.preview.actualTruncated') : '') : t('chip.preview.noActual')
-      : tab === 'standing'
-      ? data.standing || t('chip.preview.empty')
-      : tab === 'turn'
-        ? data.turnContext || t('chip.preview.empty')
-        : tab === 'log'
-          ? data.logLines.join('\n') || t('chip.preview.noLog')
-          : `=== system ===\n${data.system}\n\n=== messages ===\n${data.messages.map((m) => JSON.stringify(m)).join('\n\n')}`
+  const body = useMemo(
+    () =>
+      tab === 'cache'
+        ? cacheUsageText(data.cacheUsage, t)
+        : tab === 'actual'
+        ? data.actualRequest ? data.actualRequest.text + (data.actualRequest.truncated ? '\n' + t('chip.preview.actualTruncated') : '') : t('chip.preview.noActual')
+        : tab === 'standing'
+        ? data.standing || t('chip.preview.empty')
+        : tab === 'turn'
+          ? data.turnContext || t('chip.preview.empty')
+          : tab === 'log'
+            ? data.logLines.join('\n') || t('chip.preview.noLog')
+            : `=== system ===\n${data.system}\n\n=== messages ===\n${data.messages.map((m) => JSON.stringify(m)).join('\n\n')}`,
+    [tab, data, t],
+  )
   const copyBody = async () => {
     try {
       await navigator.clipboard.writeText(body)
@@ -288,6 +291,8 @@ function HeaderChipSession(props: HeaderChipProps) {
       { count: staleTurn.snapshots, tokens: fmtTokens(staleTurn.tokens) })}</Muted>
     : null
   const [lists, setLists] = useState<Lists | null>(null)
+  const [listsLoading, setListsLoading] = useState(false)
+  const [listsReloadSeq, setListsReloadSeq] = useState(0)
   const listedName = binding && lists ? lists.characters.find((c) => c.cardId === binding.cardId)?.name : undefined
   const [draft, setDraft] = useState<SessionBinding | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -315,6 +320,7 @@ function HeaderChipSession(props: HeaderChipProps) {
   useEffect(() => {
     if (!open) return
     let alive = true
+    setListsLoading(true)
     setError(null)
     void (async () => {
       try {
@@ -338,13 +344,15 @@ function HeaderChipSession(props: HeaderChipProps) {
       } catch (cause) {
         // RPC 传输/校验失败是 reject 而非错误信封；不兜会停在骨架屏
         if (alive) setError(describeError(cause))
+      } finally {
+        if (alive) setListsLoading(false)
       }
     })()
     return () => {
       alive = false
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open])
+  }, [open, listsReloadSeq])
 
   useEffect(() => {
     if (!open) {
@@ -536,12 +544,17 @@ function HeaderChipSession(props: HeaderChipProps) {
       >
           <div className="dsh-tavern-binding dsh-tavern-bindingWide">
           <Err message={error} />
-          {!lists && (
+          {!lists && listsLoading && (
             <div className="dsh-tavern-panelCard">
               <Skeleton height={14} width="24%" />
               <Skeleton height={38} radius={18} />
               <Skeleton height={38} radius={18} />
               <Skeleton height={38} radius={18} />
+            </div>
+          )}
+          {!lists && !listsLoading && error && (
+            <div>
+              <Btn disabled={busy} onClick={() => setListsReloadSeq((n) => n + 1)}>{t('action.retry')}</Btn>
             </div>
           )}
           {lists && (

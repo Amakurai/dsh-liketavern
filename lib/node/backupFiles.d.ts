@@ -15,7 +15,8 @@ export declare function fail(code: string): never;
 export declare function safeRelative(path: unknown): path is string;
 export declare function checkedPath(root: string, path: string): string;
 /** 包括传入根的祖先，避免中间的 junction 把显式目录解析到其它数据树。 */
-export declare function assertDirectory(path: string): Promise<void>;
+export declare function assertDirectory(path: string, verified?: ReadonlySet<string>): Promise<void>;
+export declare function ancestorChainAbove(root: string): Set<string>;
 export declare function assertAbsent(path: string): Promise<void>;
 export declare function assertSeparate(left: string, right: string): void;
 export interface BackupEntry {
@@ -32,7 +33,7 @@ export interface ScannedEntry extends BackupEntry {
 export declare function isDependencyPath(path: string): boolean;
 export declare function inventory(root: string, excludedDependencies?: string[]): Promise<ScannedEntry[]>;
 /** 固定位置分块读取，完整检查前后文件身份；输出文件独占创建且同步后关闭。 */
-export declare function transferFile(root: string, entry: BackupEntry, destination?: string): Promise<string>;
+export declare function transferFile(root: string, entry: BackupEntry, destination?: string, verifiedAboveRoot?: ReadonlySet<string>): Promise<string>;
 export declare function boundedJson(path: string, maxBytes?: number): Promise<unknown>;
 /** 会话迁移读原始字节：限额在读取前后都生效，并复核句柄与目录项仍为同一普通文件。 */
 export declare function boundedBytes(path: string, maxBytes: number): Promise<Buffer>;

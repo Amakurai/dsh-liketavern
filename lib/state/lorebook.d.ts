@@ -1,38 +1,4 @@
-import { type WISource, type WorldDelta, type WorldInfoEntry } from '../core/types.js';
-/** 单文件条目数上限：社区大书在千级，2000 已留足余量。预设（presetStore）同口径复用。 */
-export declare const MAX_LOREBOOK_ENTRIES = 2000;
 /**
- * 单条正文字符数上限：≈2.5 万 token，超出任何合理条目。
- * 预设（presetStore）单条 prompt 正文同口径复用。
+ * 世界书 JSON ⇄ 归一化 WorldInfoEntry 兼容转出（纯函数实现收敛于 core/lorebookFormat.ts，消除 client -> state 跨层引用）。
  */
-export declare const MAX_LOREBOOK_CONTENT_CHARS = 100000;
-export interface ParseLorebookOptions {
-    source: WISource;
-    sourceRef: string;
-}
-/**
- * 解析世界书 JSON 为归一化条目数组。
- * 非对象/缺 entries 时抛中文错误；条目数/正文/键超限或键容器、content 错型同样抛错拒绝导入。
- */
-export declare function parseLorebook(json: unknown, opts: ParseLorebookOptions): WorldInfoEntry[];
-/**
- * 导出为角色卡 V2/V3 规范的 character_book（对齐 ST convertWorldInfoToCharacterBook）：
- * entries 是数组，字段为 keys/insertion_order/enabled，引擎细节放在 extensions 的 snake_case 键。
- * ST 读取卡内书时按数组遍历，原生世界书的 uid map 形态会让整本书无法导入。
- */
-export declare function exportCharacterBook(entries: WorldInfoEntry[], name: string): Record<string, unknown>;
-/** 卡内书是否已是规范数组形态（且每条都是角色书条目）；是则导出时原样保留作者的额外字段。 */
-export declare function isSpecCharacterBook(value: unknown): boolean;
-/**
- * 导出为 SillyTavern 原生形态 {entries: {<uid>: {...}}}（camelCase 字段对齐原生 WI JSON）。
- * name 不写入文件（ST 原生世界书 JSON 无此字段），保留在签名中供调用方传递命名上下文。
- */
-export declare function exportLorebook(entries: WorldInfoEntry[], name: string): unknown;
-/**
- * 固化导出用：把生效中的 delta 合并进原书条目，返回新数组（不改入参）。
- * - update → 替换 ref 条目 content
- * - invalidate → 标记 ref 条目 enabled=false
- * - add → 追加新条目（source 'global'，uid `delta-<id>`，position 默认 AfterCharDefs）
- * revoked 与已过期（expires <= 当前时间）的 delta 忽略；ref 未命中的 update/invalidate 同样忽略。
- */
-export declare function mergeDeltasForExport(originals: WorldInfoEntry[], deltas: WorldDelta[]): WorldInfoEntry[];
+export { MAX_LOREBOOK_CONTENT_CHARS, MAX_LOREBOOK_ENTRIES, entryUid, exportCharacterBook, exportLorebook, isSpecCharacterBook, mergeDeltasForExport, parseLorebook, type ParseLorebookOptions, } from '../core/lorebookFormat.js';

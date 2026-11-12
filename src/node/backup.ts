@@ -6,7 +6,7 @@ import { renameWithRetry } from '../state/rename.js'
 import { runDoctor, type DoctorIssue } from '../doctor.js'
 import { parseSessionBinding } from './bindings.js'
 import { safeHostRange } from '../core/hostVersion.js'
-import { BACKUP_LIMITS, BackupError, assertAbsent, assertDirectory, assertSeparate, boundedJson, checkedPath,
+import { BACKUP_LIMITS, BackupError, ancestorChainAbove, assertAbsent, assertDirectory, assertSeparate, boundedJson, checkedPath,
   createDirectories, discardTemporary, fail, inventory, isDependencyPath, safeRelative, transferFile, type BackupEntry } from './backupFiles.js'
 import { isRecord } from '../core/guards.js'
 
@@ -182,19 +182,24 @@ async function compare(home: string, expected: BackupEntry[], exclusions?: strin
   const actual = await inventory(home, exclusions ? observedExclusions : undefined)
   if (exclusions && JSON.stringify([...exclusions].sort()) !== JSON.stringify(observedExclusions.sort())) fail('SOURCE_CHANGED')
   if (actual.length !== expected.length) fail('INVENTORY_MISMATCH')
+  const aboveHome = ancestorChainAbove(home)
   for (let i = 0; i < actual.length; i++) {
     const a = actual[i]!, b = expected[i]!
     if (a.path !== b.path || a.kind !== b.kind || a.size !== b.size || (process.platform !== 'win32' && a.mode !== b.mode)) fail('INVENTORY_MISMATCH')
-    if (a.kind === 'file' && await transferFile(home, b) !== b.sha256) fail('HASH_MISMATCH')
+    if (a.kind === 'file' && await transferFile(home, b, undefined, aboveHome) !== b.sha256) fail('HASH_MISMATCH')
   }
+  await assertDirectory(home)
 }
 async function copy(home: string, target: string, entries: BackupEntry[]): Promise<BackupEntry[]> {
+  await assertDirectory(home)
+  const aboveHome = ancestorChainAbove(home)
   await createDirectories(target, entries)
   const result: BackupEntry[] = []
   for (const entry of entries) {
     const { path, kind, size, mode } = entry
-    result.push({ path, kind, size, mode, ...(kind === 'file' ? { sha256: await transferFile(home, entry, checkedPath(target, path)) } : {}) })
+    result.push({ path, kind, size, mode, ...(kind === 'file' ? { sha256: await transferFile(home, entry, checkedPath(target, path), aboveHome) } : {}) })
   }
+  await assertDirectory(home)
   for (const entry of [...entries].reverse()) if (entry.kind === 'directory') await chmod(checkedPath(target, entry.path), entry.mode)
   return result
 }
@@ -251,6 +256,13 @@ export async function verifyBackup(options: { backup: string }): Promise<BackupR
   const { manifest, issues } = await readBackup(resolve(options.backup))
   return report('verify', manifest, false, issues)
 }
+async function verifyBackupUnchanged(backup: string, expected: BackupManifest): Promise<void> {
+  await assertDirectory(backup)
+  if (JSON.stringify((await readdir(backup)).sort()) !== JSON.stringify(['data', 'manifest.json'])) fail('BACKUP_CONTENTS_INVALID')
+  const manifest = parseBackupManifest(await boundedJson(join(backup, 'manifest.json')))
+  if (JSON.stringify(manifest) !== JSON.stringify(expected)) fail('SOURCE_CHANGED')
+  await compare(join(backup, 'data'), manifest.entries)
+}
 export async function restoreBackup(options: { backup: string; target: string; offline: boolean; hooks?: BackupHooks }): Promise<BackupReport> {
   if (!options.offline) fail('OFFLINE_DECLARATION_REQUIRED')
   if (!options.backup || !options.target) fail('EXPLICIT_PATH_REQUIRED')
@@ -264,7 +276,7 @@ export async function restoreBackup(options: { backup: string; target: string; o
     await options.hooks?.afterCopy?.()
     await compare(temporary, manifest.entries)
     await inspect(temporary, manifest.entries)
-    await readBackup(backup)
+    await verifyBackupUnchanged(backup, manifest)
   }, options.hooks)
   return report('restore', manifest, true, issues)
 }

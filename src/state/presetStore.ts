@@ -24,7 +24,7 @@ import { characterHelperSettings,helperScriptSettings } from '../core/helperScri
 import { importStPresetSampling, parsePresetSampling } from '../core/presetSampling.js'
 import { isStSystemPrompt } from '../core/presetExport.js'
 import { isRecord } from '../core/guards.js'
-import { toBool, toNum, toStr } from './coerce.js'
+import { toBool, toNum, toNumOrNull, toStr } from './coerce.js'
 export { exportStPreset } from '../core/presetExport.js'
 
 /** 格式模板只接收有界文本字段；字符串按原样保存，空串表示明确禁用包装。 */
@@ -187,14 +187,7 @@ function collectPromptEmbeddedRegex(rawPrompts: unknown[]): CardRegexScript[] {
  * 归一为 0/1/2 再存。否则存储校验只收数字，整份预设会因一条旧脚本导入失败。
  */
 function normalizeDepthBound(value: unknown): number | null | undefined {
-  if (value === undefined) return undefined
-  if (value === null || value === '') return null
-  if (typeof value === 'number') return Number.isFinite(value) ? value : null
-  if (typeof value === 'string' && value.trim() !== '') {
-    const n = Number(value)
-    return Number.isFinite(n) ? n : null
-  }
-  return null
+  return value === undefined ? undefined : toNumOrNull(value)
 }
 
 function normalizeImportedRegexScript(script: CardRegexScript): CardRegexScript {

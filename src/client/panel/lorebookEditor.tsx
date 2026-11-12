@@ -12,7 +12,7 @@ import {
   IconTrashOutlineMedium,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { WIPosition, WIRole, WISelectiveLogic, WISource, WorldInfoEntry } from '../../core/types.js'
-import { exportLorebook } from '../../state/lorebook.js'
+import { exportLorebook } from '../../core/lorebookFormat.js'
 import { useT } from '../i18n.js'
 import { Badge, Btn, ConfirmDialog, Err, IconBtn, ListInput, Muted, NumInput, NullableNumInput, SearchInput, Select, Toggle, errOf, runAsync } from '../util.js'
 import type { Envelope, TavernRemote } from '../types.js'
@@ -400,17 +400,27 @@ function LorebookEditorContent(props: LorebookEditorProps & { draftKey: string }
                     title={entry.enabled ? t('lorebookEditor.entry.disable') : t('lorebookEditor.entry.enable')}
                     onChange={(enabled) => patch(entry.uid, { enabled })}
                   />
-                  <div className="dsh-tavern-entryMain">
-                    <div className="dsh-tavern-entryTitle">{entryTitle(t, entry)}</div>
-                    <div className="dsh-tavern-entrySub">{entrySub(t, entry)}</div>
-                  </div>
-                  <div className="dsh-tavern-entryBadges">
-                    {entry.constant ? <Badge>{t('lorebookEditor.constant')}</Badge> : null}
-                    {entry.keys.length > 0 ? <Badge>{t('lorebookEditor.entry.keys', { count: entry.keys.length })}</Badge> : <Badge>{t('lorebookEditor.entry.noKeys')}</Badge>}
-                  </div>
-                  <span className={`dsh-tavern-chevron${open ? ' is-open' : ''}`}>
-                    <IconChevronDownOutlineMedium />
-                  </span>
+                  <button
+                    type="button"
+                    className="dsh-tavern-entryTrigger"
+                    aria-expanded={open}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setOpenUid(open ? null : entry.uid)
+                    }}
+                  >
+                    <div className="dsh-tavern-entryMain">
+                      <div className="dsh-tavern-entryTitle">{entryTitle(t, entry)}</div>
+                      <div className="dsh-tavern-entrySub">{entrySub(t, entry)}</div>
+                    </div>
+                    <div className="dsh-tavern-entryBadges">
+                      {entry.constant ? <Badge>{t('lorebookEditor.constant')}</Badge> : null}
+                      {entry.keys.length > 0 ? <Badge>{t('lorebookEditor.entry.keys', { count: entry.keys.length })}</Badge> : <Badge>{t('lorebookEditor.entry.noKeys')}</Badge>}
+                    </div>
+                    <span className={`dsh-tavern-chevron${open ? ' is-open' : ''}`}>
+                      <IconChevronDownOutlineMedium />
+                    </span>
+                  </button>
                 </div>
                 <div className={`dsh-tavern-collapse${open ? ' is-open' : ''}`}>
                   <div className="dsh-tavern-collapseInner">

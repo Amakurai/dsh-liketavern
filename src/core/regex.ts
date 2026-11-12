@@ -947,15 +947,36 @@ export function splitRenderedHtml(text: string): { html: string | null; rest: st
  */
 export function collectRenderedHtml(text: string): { htmls: string[]; rest: string } {
   const htmls: string[] = []
-  let current = text
+  const restParts: string[] = []
+  let remaining = text
   for (let i = 0; i < 128; i++) {
-    const split = splitRenderedHtml(current)
-    if (!split.html) return { htmls, rest: split.rest }
-    htmls.push(split.html)
-    if (!split.rest || split.rest === current) return { htmls, rest: split.rest }
-    current = split.rest
+    const located = locateRenderedHtml(remaining)
+    if (!located) {
+      const tail = remaining.trim()
+      if (tail) restParts.push(tail)
+      break
+    }
+    htmls.push(located.html)
+    const cutStart = located.fence?.start ?? located.start
+    const cutEnd = located.fence?.end ?? located.start + located.html.length
+    const before = remaining.slice(0, cutStart).trim()
+    if (before) restParts.push(before)
+    remaining = remaining.slice(cutEnd)
+    if (i === 127 && locateRenderedHtml(remaining)) {
+      throw new Error('交互卡展示片段过多')
+    }
   }
-  // 达到预算时明确失败，不能把余下的交互 HTML 当普通台词返回。
-  if (splitRenderedHtml(current).html) throw new Error('交互卡展示片段过多')
-  return { htmls, rest: current }
+  let rest = restParts.join('\n')
+  // 罕见跨切片拼接二次合成卡面兜底（保持与历史逐轮 splitRenderedHtml 100% 等价）
+  if (restParts.length > 1 && locateRenderedHtml(rest)) {
+    while (htmls.length < 128) {
+      const split = splitRenderedHtml(rest)
+      if (!split.html) { rest = split.rest; break }
+      htmls.push(split.html)
+      if (!split.rest || split.rest === rest) { rest = split.rest; break }
+      rest = split.rest
+    }
+    if (splitRenderedHtml(rest).html) throw new Error('交互卡展示片段过多')
+  }
+  return { htmls, rest }
 }

@@ -12,6 +12,7 @@ import type { TavernState } from './state.js'
 import { mergeTemplateMessageVariables, visibleTemplateMessageVariables } from '../core/templateMessageVariables.js'
 import { TEMPLATE_DISPLAY_PARTS_VERSION } from '../core/templateDisplay.js'
 import { assertActiveTemplateRuntime, TemplateRuntimeCompatibilityError } from './templateRuntimeGuard.js'
+import { findLastEvent } from './sessionEvents.js'
 
 /** 计算已成功但提交未确认：保留原 prepared 与 WAL，不能按模板脚本异常放弃回复。 */
 export class TemplateOutputCommitError extends Error {
@@ -31,7 +32,7 @@ function isTemplateComputeFailure(error: unknown): boolean {
 
 export async function completeTemplateOutput(state:TavernState,session:Pick<Session,'id'|'snapshotEvents'>):Promise<void> {
   const events = session.snapshotEvents()
-  const ending = [...events].reverse().find(event=>event.type==='turn/start'||event.type==='turn/end')
+  const ending = findLastEvent(events, event=>event.type==='turn/start'||event.type==='turn/end')
   if (ending?.type!=='turn/end' || ending.data.reason.kind!=='completed') return
   const turn = ending.data.turn
   const binding = await state.loadStoryBinding(session.id)
@@ -58,7 +59,7 @@ export async function completeTemplateOutput(state:TavernState,session:Pick<Sess
     await ws.wal.validateFloor(floor)
     const history = context.history.map(message=>({...message}))
     const historyIdentities=context.historyIdentities?.map(identity=>({...identity}))
-    const candidates:Array<{id:string;text:string;metadata:TemplateMessageMetadata;step:number;seq:number}> = []
+    const candidates:Array<{id:string;text:string;metadata:TemplateMessageMetadata;step:number;seq:number;normalStop:boolean}> = []
     for (const event of events) {
       if (event.type!=='assistant/message' || event.data.turn!==turn || event.data.interrupted || event.seq>=ending.seq) continue
       const text = event.data.message.content.filter(block=>block.type==='text').map(block=>block.text).join('\n')
@@ -66,15 +67,14 @@ export async function completeTemplateOutput(state:TavernState,session:Pick<Sess
       const metadata:TemplateMessageMetadata = {index:history.length,role:'assistant',name:context.char,swipeId:0,hostMessageId:event.seq}
       history.push({role:'assistant',content:text,name:context.char})
       historyIdentities?.push({messageId:event.data.message.id,hostMessageId:event.seq,swipeId:0})
-      candidates.push({id:String(event.seq),text,metadata,step:event.data.step,seq:event.seq})
+      candidates.push({id:String(event.seq),text,metadata,step:event.data.step,seq:event.seq,normalStop:hasNormalAssistantStop(event)})
     }
     const normalizedEntries = context.entries.map(normalizeTemplateLore)
     const before = normalizedEntries.filter(entry=>entry.enabled && !entry.templateOnlyPreload && /^\[RENDER:BEFORE\]/i.test(entry.comment))
     const after = normalizedEntries.filter(entry=>entry.enabled && !entry.templateOnlyPreload && /^\[RENDER:AFTER\]/i.test(entry.comment))
     const pending:typeof candidates = []
     for (const candidate of candidates) {
-      const message = events.find(event=>event.seq===candidate.seq)
-      if (message?.type!=='assistant/message' || !hasNormalAssistantStop(message)) continue
+      if (!candidate.normalStop) continue
       if (!historyIdentities && !hasEjs(candidate.text) && !before.length && !after.length && !context.regexRules?.length && !context.hasMessageRegex) continue
       if (stored.outputs[candidate.id]?.hash===templateTextHash(candidate.text)) continue
       if (stored.outputs[candidate.id]) throw new Error('已处理的模板回复发生改写，请回滚该楼层后继续')

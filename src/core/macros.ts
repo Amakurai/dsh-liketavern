@@ -60,6 +60,7 @@ function expandLegacyMacros(text: string, ctx: Pick<MacroContext, 'char' | 'user
 }
 const MARKER_PREFIX = '\uE000tavern'
 const readonlyStatHazardCache = new WeakMap<object, string | null>()
+const contextStaticHazardCache = new WeakMap<MacroContext, readonly string[]>()
 const MACRO_CONTEXT_STRING_KEYS = [
   'char', 'user', 'pickSeed', 'lastMessage', 'lastUserMessage', 'lastCharMessage',
   'description', 'personality', 'scenario', 'charVersion', 'creatorNotes',
@@ -75,34 +76,51 @@ function readonlyStatHazard(statData: Readonly<Record<string, unknown>> | undefi
   return hazard
 }
 
+function staticContextHazards(ctx: MacroContext): readonly string[] {
+  const cached = contextStaticHazardCache.get(ctx)
+  if (cached) return cached
+  const list: string[] = []
+  const pushIf = (value: string | undefined | null) => {
+    if (value && value.includes(MARKER_PREFIX)) list.push(value)
+  }
+  for (const key of MACRO_CONTEXT_STRING_KEYS) pushIf(ctx[key])
+  if (ctx.vars) for (const key in ctx.vars) pushIf(ctx.vars[key])
+  if (ctx.outlets) for (const key in ctx.outlets) pushIf(ctx.outlets[key])
+  pushIf(readonlyStatHazard(ctx.readonlyStatData))
+  contextStaticHazardCache.set(ctx, list)
+  return list
+}
+
 /**
  * 内部占位标记必须避开本次所有文本来源，私用区字符本身也可能是角色使用的图标。
  * 所有占位标记均以 `\uE000tavern` 开头且不含换行，因此只需收集含该前缀的来源片段；
- * 常规调用零数组拼接、每个只读 MVU 快照对象最多序列化一次。
+ * 常规调用零数组拼接、静态上下文字段与只读 MVU 快照按引用缓存，仅在真正需要分配标记时求值。
  */
 export function createMacroMarkerAllocator(text: string, ctx: MacroContext): (name: string, extraText?: string) => string {
-  let hazards: string[] | null = null
-  const getHazards = (): string[] => {
-    if (hazards !== null) return hazards
-    hazards = []
-    const pushIf = (value: string | undefined | null) => {
-      if (value && value.includes(MARKER_PREFIX)) hazards!.push(value)
-    }
-    pushIf(text)
-    for (const key of MACRO_CONTEXT_STRING_KEYS) pushIf(ctx[key])
-    if (ctx.vars) for (const key in ctx.vars) pushIf(ctx.vars[key])
-    if (ctx.outlets) for (const key in ctx.outlets) pushIf(ctx.outlets[key])
-    if (ctx.store) for (const value of ctx.store.values()) pushIf(value)
-    pushIf(readonlyStatHazard(ctx.readonlyStatData))
-    return hazards
+  let baseHazards: string[] | null = null
+  const getBaseHazards = (): string[] => {
+    if (baseHazards !== null) return baseHazards
+    baseHazards = [...staticContextHazards(ctx)]
+    if (text && text.includes(MARKER_PREFIX)) baseHazards.push(text)
+    return baseHazards
   }
   return (name: string, extraText?: string): string => {
-    const list = getHazards()
+    const list = getBaseHazards()
+    let storeHazards: string[] | null = null
+    if (ctx.store && ctx.store.size > 0) {
+      for (const value of ctx.store.values()) {
+        if (value && value.includes(MARKER_PREFIX)) (storeHazards ??= []).push(value)
+      }
+    }
     const checkExtra = Boolean(extraText && extraText !== text && extraText.includes(MARKER_PREFIX))
-    if (list.length === 0 && !checkExtra) return `${MARKER_PREFIX}${name}0\uE001`
+    if (list.length === 0 && !storeHazards && !checkExtra) return `${MARKER_PREFIX}${name}0\uE001`
     let index = 0
     let marker = `${MARKER_PREFIX}${name}${index}\uE001`
-    while (list.some((s) => s.includes(marker)) || (checkExtra && extraText!.includes(marker))) {
+    while (
+      list.some((s) => s.includes(marker)) ||
+      (storeHazards ? storeHazards.some((s) => s.includes(marker)) : false) ||
+      (checkExtra && extraText!.includes(marker))
+    ) {
       marker = `${MARKER_PREFIX}${name}${++index}\uE001`
     }
     return marker
@@ -414,13 +432,32 @@ export function expandMacros(
   const postClose = postProcess ? markerFor('PostClose') : undefined
   const legacy = expandLegacyMacros(text, ctx, postOpen && postClose ? (v) => v ? `${postOpen}${v}${postClose}` : v : undefined)
   if (!legacy.includes('{{')) return legacy
-  const clock = { ...defaultVars(now), ...ctx.vars }
-  const frozenOpen = markerFor('FrozenOpen', legacy)
-  const frozenClose = `${frozenOpen}close`
-  // ST 的 {{trim}} 连同两侧换行一起删除，且在变量与 {{newline}} 之后求值：先留占位，全部展开后再收掉。
-  const trimMarker = markerFor('Trim', legacy)
-  const trimRe = new RegExp(`(?:\\r?\\n)*${trimMarker}(?:\\r?\\n)*`, 'g')
-  const thawRaw = (value: string): string => value.replace(trimRe, '').replaceAll(frozenClose, '}').replaceAll(frozenOpen, '{')
+  let clock: Record<string, string> | undefined
+  const getClock = (): Record<string, string> => (clock ??= { ...defaultVars(now), ...ctx.vars })
+  // 绝大多数宏展开不含 outlet:: 或 {{trim}}：按需惰性分配占位标记，避免每条普通文本扫描全部上下文字段与编译正则。
+  let frozenOpen: string | undefined
+  let frozenClose: string | undefined
+  const ensureFrozen = (): { open: string; close: string } => {
+    if (!frozenOpen) {
+      frozenOpen = markerFor('FrozenOpen', legacy)
+      frozenClose = `${frozenOpen}close`
+    }
+    return { open: frozenOpen, close: frozenClose! }
+  }
+  let trimMarker: string | undefined
+  let trimRe: RegExp | undefined
+  const getTrimMarker = (): string => {
+    if (!trimMarker) {
+      trimMarker = markerFor('Trim', legacy)
+      trimRe = new RegExp(`(?:\\r?\\n)*${trimMarker}(?:\\r?\\n)*`, 'g')
+    }
+    return trimMarker
+  }
+  const thawRaw = (value: string): string => {
+    let next = trimRe ? value.replace(trimRe, '') : value
+    if (frozenOpen && frozenClose) next = next.replaceAll(frozenClose, '}').replaceAll(frozenOpen, '{')
+    return next
+  }
   const thaw = (value: string): string => {
     const unfreezed = thawRaw(value)
     return postProcess && postOpen && postClose ? applyPostMarkers(unfreezed, postOpen, postClose, postProcess) : unfreezed
@@ -429,9 +466,10 @@ export function expandMacros(
   // 原文哈希让不同条目里的同一组选项互相独立；同一段原文里同组选项按出现次序各取一次。
   // 不用字符偏移：其它宏（如本轮台词）展开后长度会变，偏移会让结果跨轮漂移。
   const pickSeed = ctx.pickSeed
-  const pickCounts = new Map<string, number>()
+  let pickCounts: Map<string, number> | undefined
   let textSeed: number | undefined
   const pickRandom = pickSeed === undefined ? undefined : (inner: string): (() => number) => {
+    pickCounts ??= new Map()
     const occurrence = pickCounts.get(inner) ?? 0
     pickCounts.set(inner, occurrence + 1)
     textSeed ??= hashToSeed(text)
@@ -444,16 +482,22 @@ export function expandMacros(
       if (mode === 'non-get' && isGetVar(inner)) return raw
       if (mode === 'nested-get') {
         if (!isGetVar(inner)) return raw
-        const prefix = current.slice(0, offset)
-        if (prefix.lastIndexOf('{{') <= prefix.lastIndexOf('}}') || current.indexOf('}}', offset + raw.length) < 0) return raw
+        const prevOpen = offset >= 2 ? current.lastIndexOf('{{', offset - 2) : -1
+        const prevClose = offset >= 2 ? current.lastIndexOf('}}', offset - 2) : -1
+        if (prevOpen <= prevClose || current.indexOf('}}', offset + raw.length) < 0) return raw
       }
-      if (inner.trim().toLowerCase() === 'trim') return trimMarker
-      const applied = applyCommand(inner, ctx, clock, pickRandom)
+      const trimmedLower = inner.trim().toLowerCase()
+      if (trimmedLower === 'trim') return getTrimMarker()
+      const applied = applyCommand(inner, ctx, getClock(), pickRandom)
       if (applied !== undefined) {
-        const isOutlet = inner.trim().toLowerCase().startsWith('outlet::')
-        const isFieldMacro = FIELD_MACRO_COMMANDS.has(inner.trim().toLowerCase())
+        const isOutlet = trimmedLower.startsWith('outlet::')
+        const isFieldMacro = FIELD_MACRO_COMMANDS.has(trimmedLower)
         const resolved = isFieldMacro ? expandLegacyMacros(applied, ctx) : applied
-        const value = isOutlet ? resolved.replaceAll('{', frozenOpen).replaceAll('}', frozenClose) : resolved
+        let value = resolved
+        if (isOutlet && (resolved.includes('{') || resolved.includes('}'))) {
+          const frozen = ensureFrozen()
+          value = resolved.replaceAll('{', frozen.open).replaceAll('}', frozen.close)
+        }
         // 转义等后处理先作用于原文，再冻结双向花括号，避免截断外层 setvar。
 
         return postOpen && postClose && value
@@ -483,10 +527,16 @@ export function expandMacros(
     return thaw(current)
   } finally {
     // setvar 可以捕获 outlet 内容；调用结束不能把本次内部占位符留在共享变量表里。
-    for (const [key, value] of ctx.store ?? []) {
-      if (value.includes(frozenOpen) || value.includes(trimMarker) || (postOpen && value.includes(postOpen))) {
-        const cleaned = postOpen && postClose ? value.replaceAll(postOpen, '').replaceAll(postClose, '') : value
-        ctx.store!.set(key, thawRaw(cleaned))
+    if (ctx.store && ctx.store.size > 0 && (frozenOpen || trimMarker || postOpen)) {
+      for (const [key, value] of ctx.store) {
+        if (
+          (frozenOpen !== undefined && value.includes(frozenOpen)) ||
+          (trimMarker !== undefined && value.includes(trimMarker)) ||
+          (postOpen !== undefined && value.includes(postOpen))
+        ) {
+          const cleaned = postOpen && postClose ? value.replaceAll(postOpen, '').replaceAll(postClose, '') : value
+          ctx.store.set(key, thawRaw(cleaned))
+        }
       }
     }
   }

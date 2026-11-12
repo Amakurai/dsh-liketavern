@@ -15,6 +15,8 @@ export declare class WorkspaceLinkError extends Error {
 /** 批量读取遇到超过调用方上限的文件：不把内容读进内存，由调用方给出业务含义。 */
 export declare class WorkspaceSizeError extends Error {
 }
+/** 按入参顺序并发执行；全部结束后报告顺序最靠前的错误，结果不取决于哪个调用先返回。 */
+export declare function mapBounded<T, R>(items: readonly T[], task: (item: T, index: number) => Promise<R>): Promise<R[]>;
 export declare class WorkspaceFs {
     readonly root: string;
     private readonly wal;
@@ -42,6 +44,8 @@ export declare class WorkspaceFs {
      * 但一旦进入指定工作区，链接不得改写剧情边界；WAL 整批预检也复用此只读检查。
      */
     assertSafePath(relPath: string): Promise<void>;
+    /** 批量路径链接检查：共享祖先目录只做一次 lstat，与逐个 assertSafePath 拒绝口径一致。 */
+    assertSafePaths(relPaths: Iterable<string>): Promise<void>;
     /**
      * 回滚恢复写屏障：本工作区存在恢复标记（或有旧版遗留游标）时，任何写/删都必须明确失败。
      * Wal 回滚自身的正文替换、摘要展开与索引重建经 withRecoveryWriteAccess 放行。

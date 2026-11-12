@@ -497,10 +497,15 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
   // ── 会话绑定 ──────────────────────────────────────────────────────────────
 
   /** 以已提交日志判定是否进入对话，避免客户端 blank 镜像滞后时误清绑定。 */
+  private eventsStartedConversation(events: readonly SessionEvent[]): boolean {
+    for (const e of events) {
+      if (e.type === 'turn/start' || e.type === 'assistant/message') return true
+    }
+    return displaySessionHasUserMessage(events)
+  }
+
   private async conversationStarted(sessionId: string): Promise<boolean> {
-    return (await readDisplaySessionEvents(this.ctx,sessionId)).some(
-      (e, _i, all) => e.type === 'turn/start' || e.type === 'assistant/message' || (e.type === 'user/message' && displaySessionHasUserMessage(all)),
-    ) ?? false
+    return this.eventsStartedConversation(await readDisplaySessionEvents(this.ctx, sessionId))
   }
 
   async getSessionBinding(request: { sessionId: string }): Promise<TavernMethodResults['getSessionBinding']> {
@@ -508,8 +513,10 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
     const persona = binding ? await this.state.resolvePersona(binding.personaId) : null
     // 异步读资产期间可能刚写入开场白，返回前再取日志状态，避免向 hero 回传旧 blank 判定。
     const session = this.ctx.sessions.get(request.sessionId as Session['id'])
-    const canSwipeGreeting = Boolean(binding && session && !displaySessionHasUserMessage(session.snapshotEvents()))
-    const conversationStarted = await this.conversationStarted(request.sessionId)
+    const liveEvents = session?.snapshotEvents()
+    const canSwipeGreeting = Boolean(binding && liveEvents && !displaySessionHasUserMessage(liveEvents))
+    const displayEvents = liveEvents ?? (await readDisplaySessionEvents(this.ctx, request.sessionId))
+    const conversationStarted = this.eventsStartedConversation(displayEvents)
     return { binding, userName: persona?.name.trim() || DEFAULT_USER_NAME, canSwipeGreeting, conversationStarted }
   }
 
@@ -867,17 +874,20 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
       const greeting = request.messageId !== undefined && isTavernGreetingEvent(displaySessionEventAt(displayEvents,request.messageId)??{type:''})
       if (request.messageId !== undefined && !greeting) throw new Error('该回复的模板未成功提交或已被编辑；请查看触发日志，不会在刷新时重新执行写入')
       // 开场白/独立展示没有楼层，仅执行临时副本；浏览器传入文本永远不能落盘变量。
-      const preset = binding.presetId ? await this.state.loadPreset(binding.presetId) : null
-      const templates = await loadTemplateMetadata(story.fs)
       // 只读展示：坏聊天书降级为「本次未注入」并回传标记，不因一本坏书让整条气泡渲染失败。
-      const lore = await loadBoundLoreEntries(this.state, binding, { onCorruptChatBook: 'report', persona })
+      const [preset, templates, lore, avatars] = await Promise.all([
+        binding.presetId ? this.state.loadPreset(binding.presetId) : null,
+        loadTemplateMetadata(story.fs),
+        loadBoundLoreEntries(this.state, binding, { onCorruptChatBook: 'report', persona }),
+        loadTemplateAvatars(this.state, binding.cardId, persona),
+      ])
       chatBookCorrupt = lore.chatBookCorrupt
       if (chatBookCorrupt) {
         try { this.ctx.logger.warn(`dsh-tavern: 展示渲染降级：${CHAT_BOOK_CORRUPT_MESSAGE}`) } catch { /* 日志失败不阻断展示 */ }
       }
       const result = await isolated('template', { texts: [named], context: {
         variables: templates.variables, ...names, card: ws ? templateCardData(ws.card) : {name:names.char},
-        ...await loadTemplateAvatars(this.state,binding.cardId,persona),
+        ...avatars,
         entries: lore.entries,
         presets: preset?.entries.filter(e => e.enabled) ?? [], history: [], now: Date.now(), seed: 1, phase: 'render',
         sessionId: request.sessionId, cardId: binding.cardId,

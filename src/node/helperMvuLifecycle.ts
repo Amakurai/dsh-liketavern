@@ -8,6 +8,7 @@ import { helperMvuPending, queueHelperMvuStop } from './helperMvu.js'
 import { isTurnDeferred } from './sessionLifecycle.js'
 import { isTavernGreetingEvent } from '../core/greetingLog.js'
 import { hasNormalAssistantStop } from '../core/assistantStream.js'
+import { findLastEvent } from './sessionEvents.js'
 import type { TavernState } from './state.js'
 
 type Snapshot = Pick<Session, 'id' | 'snapshotEvents'>
@@ -46,7 +47,7 @@ export async function runHelperMvuEnable<T>(ctx: Context, state: TavernState, se
   catch { throw new Error(message) }
 }
 function currentTurn(session: Snapshot): number | undefined {
-  const event = [...session.snapshotEvents()].reverse().find(item => item.type === 'turn/start' || item.type === 'turn/end')
+  const event = findLastEvent(session.snapshotEvents(), item => item.type === 'turn/start' || item.type === 'turn/end')
   return event?.type === 'turn/start' ? event.data.turn : undefined
 }
 /** 空历史没有可初始化的回复，允许首轮生成；开场白由维护等待的 session task 先写入。 */
@@ -106,7 +107,7 @@ export async function stopForHelperMvu(state: TavernState, agent: Agent, signal:
   signal.throwIfAborted()
   const events = agent.session.snapshotEvents()
   const turn = currentTurn(agent.session)
-  const assistant = [...events].reverse().find(event => event.type === 'assistant/message' && event.data.turn === turn)
+  const assistant = findLastEvent(events, event => event.type === 'assistant/message' && event.data.turn === turn)
   if (assistant?.type !== 'assistant/message' || assistant.data.interrupted) return
   if (!hasNormalAssistantStop(assistant)) return
   await abortable(queueHelperMvuStop(state, agent.id, { id: agent.id, snapshotEvents: () => events }), signal)

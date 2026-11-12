@@ -172,15 +172,24 @@ function DraftSession(props: { remote: TavernRemote; scope: string; owner: strin
     let activeWrite: PendingWrite | undefined
     let queuedWrite: PendingWrite | undefined
     const queueKey = `${props.owner}:${props.scope}`
-    const capture = () => {
+    const capture = (): string | undefined => {
       const dirty = [...statuses.values()].some((s) => s.dirty)
       const busy = [...statuses.values()].some((s) => s.busy)
       // 异步子编辑器尚未挂载时，不能丢掉未消费的恢复字段，也不能据父表单已保存而清空整份快照。
       if (dirty || (seenDirty && Object.keys(restored).length > 0)) {
         seenDirty = true
         // JSON 归一化去掉可选 undefined；后端再次做大小、结构和污染键校验。
-        last = JSON.parse(JSON.stringify({ version: 1, fields: { ...restored, ...Object.fromEntries([...fields].map(([key, f]) => [key, f.value])) } })) as Snapshot
-      } else if (seenDirty && !busy) last = null
+        const merged: Fields = { ...restored }
+        for (const [key, f] of fields) merged[key] = f.value
+        const encoded = JSON.stringify({ version: 1, fields: merged })
+        last = JSON.parse(encoded) as Snapshot
+        return encoded
+      }
+      if (seenDirty && !busy) {
+        last = null
+        return 'null'
+      }
+      return last === undefined ? undefined : JSON.stringify(last)
     }
     const flush = () => {
       if (timer) clearTimeout(timer)
@@ -188,9 +197,9 @@ function DraftSession(props: { remote: TavernRemote; scope: string; owner: strin
       // 字段注册只更新引用；完整 JSON 快照在防抖、重试、pagehide 或卸载时才编码，避免每次输入复制整份大草稿。
       let serialized: string, recovery: DraftRecoveryRecord
       try {
-        capture()
-        if (last === undefined) return
-        serialized = JSON.stringify(last)
+        const captured = capture()
+        if (captured === undefined || last === undefined) return
+        serialized = captured
         // 超限后缩回在途的同一正文也须重新登记，不能让旧失败标记吞掉本次合法修改。
         if (!props.channel.pending?.unavailable
           && (queuedWrite?.serialized === serialized || (!queuedWrite && activeWrite?.serialized === serialized))) return

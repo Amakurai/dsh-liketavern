@@ -16,7 +16,7 @@
  *   TavernInterruptedFloorActions（重新生成/回退/兄弟导航，按 turn 号定位）。
  */
 import { describeError } from '../core/guards.js'
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { IconBranchOutlineMedium, IconChevronLeftOutlineMedium, IconChevronRightOutlineMedium, IconEditOutlineMedium, IconListPenOutlineMedium, IconLoadingOutlineMedium, IconPlayOutlineMedium, IconRefreshOutlineMedium, IconUserOutlineMedium, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ReactNode } from 'react'
 import { cachedSessionBinding } from './cache.js'
@@ -179,9 +179,20 @@ function FloorActions(props: FloorActionsProps) {
   const [impersonated, setImpersonated] = useState<string | null>(null)
   /** 记录本操作栏上一次写入宿主输入框的代答版本，连续点击代答时将上次结果当作换一版重抽而非扩写提示。 */
   const lastImpersonated = useRef<{ draft: string; revision: number } | null>(null)
-  const [, setContinuableTick] = useState(0)
   const toast = useToast()
   const hasBatchStates = typeof remote.getFloorActionStates === 'function'
+  const subscribeContinuable = useCallback(
+    (listener: () => void) => (hasBatchStates && bound === true && messageId
+      ? subscribeSessionWindowEvent(CONTINUABLE_CHANGED_EVENT, sessionId, false, listener)
+      : () => {}),
+    [hasBatchStates, bound, messageId, sessionId],
+  )
+  const readSupersededContinuable = useCallback(() => {
+    if (!hasBatchStates || !messageId) return false
+    const recorded = getRecordedContinuableFloor(remote, sessionId)
+    return Boolean(recorded && recorded !== messageId)
+  }, [hasBatchStates, remote, sessionId, messageId])
+  const isSupersededContinuable = useSyncExternalStore(subscribeContinuable, readSupersededContinuable, readSupersededContinuable)
   const floorStateLoader = useLoader(
     () => floorActionStateBatched(remote, { sessionId, messageId: messageId! }),
     [sessionId, messageId],
@@ -191,11 +202,9 @@ function FloorActions(props: FloorActionsProps) {
     if (bound !== true || !messageId) return
     const offBinding = subscribeSessionWindowEvent(BINDING_CHANGED_EVENT, sessionId, false, () => floorStateLoader.reload())
     const offBranch = subscribeSessionWindowEvent(BRANCH_CHANGED_EVENT, sessionId, false, () => floorStateLoader.reload())
-    const offContinuable = subscribeSessionWindowEvent(CONTINUABLE_CHANGED_EVENT, sessionId, false, () => setContinuableTick((n) => n + 1))
     return () => {
       offBinding()
       offBranch()
-      offContinuable()
     }
     // reload 随 loader render 更新；事件回调只需跟会话、消息和启用状态重挂。
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -211,10 +220,9 @@ function FloorActions(props: FloorActionsProps) {
   const isGreeting = greetState?.isGreeting === true
   const started = greetState?.started === true
   const siblingSwipe = floorState?.siblings.swipe ?? null
-  const recordedContinuable = hasBatchStates ? getRecordedContinuableFloor(remote, sessionId) : undefined
   const canContinue = floorState === null
     ? true
-    : floorState.canContinue && (!recordedContinuable || recordedContinuable === messageId)
+    : floorState.canContinue && !isSupersededContinuable
 
   /** 跑一个产生分支会话的操作；成功后直接跳转到分支（续跑过程在分支里原生流式可见），并写入分支标题。 */
   const run = async (

@@ -6,3 +6,9 @@
  */
 export type KeyedWindowEventCallback = () => void;
 export declare function subscribeKeyedWindowEvent(eventName: string, key: string, acceptEmptyDetail: boolean, callback: KeyedWindowEventCallback): () => void;
+export type WindowMessageCallback = (event: MessageEvent) => void;
+/**
+ * 共享 window message 分发器：同一会话挂载数十张交互卡 iframe 时，不在 window 上重复挂 N 个监听器。
+ * 已知 contentWindow 按 event.source 做 O(1) 路由；调用方内部仍保留自身的 contentWindow 与运行时令牌复核。
+ */
+export declare function subscribeWindowMessage(source: unknown, callback: WindowMessageCallback): () => void;

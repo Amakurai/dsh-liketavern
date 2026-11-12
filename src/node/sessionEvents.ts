@@ -18,6 +18,26 @@ function currentSnapshot<T>(events:readonly SessionEvent[],cached:EventSnapshotC
   return cached?.length===events.length&&cached.last===last&&cached.lastSeq===last?.seq
 }
 
+/** 逆序查找最近一条满足条件的会话事件，避免 `[...events].reverse()` 在长历史上反复复制数组。 */
+export function findLastEvent<E extends SessionEvent>(
+  events: readonly SessionEvent[],
+  predicate: (event: SessionEvent) => event is E,
+): E | undefined
+export function findLastEvent(
+  events: readonly SessionEvent[],
+  predicate: (event: SessionEvent) => boolean,
+): SessionEvent | undefined
+export function findLastEvent(
+  events: readonly SessionEvent[],
+  predicate: (event: SessionEvent) => boolean,
+): SessionEvent | undefined {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const event = events[i]!
+    if (predicate(event)) return event
+  }
+  return undefined
+}
+
 export function displaySessionHasUserMessage(events:readonly SessionEvent[]):boolean {
   const cached=userMessagePresence.get(events)
   if(currentSnapshot(events,cached))return cached.value

@@ -1094,55 +1094,11 @@ export async function getFloorSiblings(
   if (!session || !isTavernRuntimeSession(ctx, session)) return none
   const turn = resolveFloorTurn(session.snapshotEvents(), messageId, floorTurn)
   if (turn === null) return none
-  // 绝大部分未分支会话不在 siblings.json 中：先用 stat 缓存无锁快筛，命中 0 分支直接返回，避免长历史首屏排队抢锁。
-  const quickForks = await loadSiblingForks(state.paths.root)
-  if (!quickForks.some((f) => f.parentSessionId === sessionId || f.childSessionId === sessionId)) return none
-
-  // 存在性探测也是读改写的一部分：只锁最终写入会把期间新增、尚未探测的分支误删。
-  return withWorkspaceLock(siblingsFile(state.paths.root), async () => {
-    const forks = await loadSiblingForks(state.paths.root)
-    if (forks.length === 0) return none
-    const ids = new Set<string>()
-    for (const f of forks) {
-      ids.add(f.parentSessionId)
-      ids.add(f.childSessionId)
-    }
-    const existing = new Set<string>([sessionId])
-    const confirmed = confirmedBindingIds(state)
-    // 并行探测存在性：兄弟索引会随分支数增长，串行 await loadBinding 让每次导航查询线性变慢。
-    await Promise.all(
-      [...ids].map(async (id) => {
-        if (ctx.sessions.get(id as Session['id']) !== undefined || confirmed.has(id)) {
-          existing.add(id)
-        } else {
-          try {
-            if ((await loadBinding(state.paths, id, true)) !== null) {
-              existing.add(id)
-              confirmed.add(id)
-            }
-          } catch {
-            // 临时 I/O 故障不能当成已解绑而把有效离线分支从 siblings.json 永久剪掉。
-            existing.add(id)
-          }
-        }
-      }),
-    )
-    const exists = (id: string) => existing.has(id)
-    const pruned = pruneSiblingForks(forks, exists)
-    if (pruned.changed) {
-      try {
-        await mutateSiblingForks(state.paths.root, (current) => {
-          const next = pruneSiblingForks(current, exists)
-          return next.changed ? next.forks : current
-        })
-      } catch {
-        // 落盘失败不影响本次查询；下次读取再剪。
-      }
-    }
-    const swipe = siblingSwipe(pruned.forks, sessionId, turn, exists)
-    if (!swipe) return none
-    return { swipe: { turn, ...swipe } }
-  })
+  const resolved = await resolvePrunedSiblings(ctx, state, sessionId)
+  if (!resolved) return none
+  const swipe = siblingSwipe(resolved.forks, sessionId, turn, resolved.exists)
+  if (!swipe) return none
+  return { swipe: { turn, ...swipe } }
 }
 
 export interface BatchFloorActionState {
@@ -1201,51 +1157,12 @@ export async function getFloorActionStates(
   const uniqueTurns = [...new Set(resolvedTurns.filter((t): t is number => t !== null))]
 
   if (uniqueTurns.length > 0) {
-    const quickForks = await loadSiblingForks(state.paths.root)
-    if (quickForks.some((f) => f.parentSessionId === sessionId || f.childSessionId === sessionId)) {
-      await withWorkspaceLock(siblingsFile(state.paths.root), async () => {
-        const forks = await loadSiblingForks(state.paths.root)
-        if (forks.length === 0) return
-        const ids = new Set<string>()
-        for (const f of forks) {
-          ids.add(f.parentSessionId)
-          ids.add(f.childSessionId)
-        }
-        const existing = new Set<string>([sessionId])
-        const confirmed = confirmedBindingIds(state)
-        await Promise.all(
-          [...ids].map(async (id) => {
-            if (ctx.sessions.get(id as Session['id']) !== undefined || confirmed.has(id)) {
-              existing.add(id)
-            } else {
-              try {
-                if ((await loadBinding(state.paths, id, true)) !== null) {
-                  existing.add(id)
-                  confirmed.add(id)
-                }
-              } catch {
-                existing.add(id)
-              }
-            }
-          }),
-        )
-        const exists = (id: string) => existing.has(id)
-        const pruned = pruneSiblingForks(forks, exists)
-        if (pruned.changed) {
-          try {
-            await mutateSiblingForks(state.paths.root, (current) => {
-              const next = pruneSiblingForks(current, exists)
-              return next.changed ? next.forks : current
-            })
-          } catch {
-            // 落盘失败不影响本次查询；下次读取再剪。
-          }
-        }
-        for (const turn of uniqueTurns) {
-          const swipe = siblingSwipe(pruned.forks, sessionId, turn, exists)
-          siblingsByTurn.set(turn, swipe ? { turn, ...swipe } : null)
-        }
-      })
+    const resolved = await resolvePrunedSiblings(ctx, state, sessionId)
+    if (resolved) {
+      for (const turn of uniqueTurns) {
+        const swipe = siblingSwipe(resolved.forks, sessionId, turn, resolved.exists)
+        siblingsByTurn.set(turn, swipe ? { turn, ...swipe } : null)
+      }
     }
   }
 
@@ -1270,11 +1187,62 @@ export async function getFloorActionStates(
   return { items }
 }
 
+async function resolvePrunedSiblings(ctx: Context, state: TavernState, sessionId: string) {
+  // 绝大部分未分支会话不在 siblings.json 中：先用 stat 缓存无锁快筛，命中 0 分支直接返回，避免长历史首屏排队抢锁。
+  const quickForks = await loadSiblingForks(state.paths.root)
+  if (!quickForks.some((f) => f.parentSessionId === sessionId || f.childSessionId === sessionId)) return null
+
+  // 存在性探测也是读改写的一部分：只锁最终写入会把期间新增、尚未探测的分支误删。
+  return withWorkspaceLock(siblingsFile(state.paths.root), async () => {
+    const forks = await loadSiblingForks(state.paths.root)
+    if (forks.length === 0) return null
+    const ids = new Set<string>()
+    for (const f of forks) {
+      ids.add(f.parentSessionId)
+      ids.add(f.childSessionId)
+    }
+    const existing = new Set<string>([sessionId])
+    const confirmed = confirmedBindingIds(state)
+    // 并行探测存在性：兄弟索引会随分支数增长，串行 await loadBinding 让每次导航查询线性变慢。
+    await Promise.all(
+      [...ids].map(async (id) => {
+        if (ctx.sessions.get(id as Session['id']) !== undefined || confirmed.has(id)) {
+          existing.add(id)
+        } else {
+          try {
+            if ((await loadBinding(state.paths, id, true)) !== null) {
+              existing.add(id)
+              rememberConfirmedBinding(confirmed, id)
+            }
+          } catch {
+            // 临时 I/O 故障不能当成已解绑而把有效离线分支从 siblings.json 永久剪掉。
+            existing.add(id)
+          }
+        }
+      }),
+    )
+    const exists = (id: string) => existing.has(id)
+    const pruned = pruneSiblingForks(forks, exists)
+    if (pruned.changed) {
+      try {
+        await mutateSiblingForks(state.paths.root, (current) => {
+          const next = pruneSiblingForks(current, exists)
+          return next.changed ? next.forks : current
+        })
+      } catch {
+        // 落盘失败不影响本次查询；下次读取再剪。
+      }
+    }
+    return { forks: pruned.forks, exists }
+  })
+}
+
 /**
  * 已确认仍有绑定的离线分支。长历史首屏每个楼层操作栏都查询一次，每次重读全部分支绑定会
  * 占满 I/O 线程池，后来的查询连自身绑定都读不到。只缓存“存在”，任何绑定删除后整体失效；
  * “不存在”每次当场复核后才剪枝，缓存永远不会导致误删分支记录。
  */
+const CONFIRMED_BINDINGS_MAX = 2048
 const confirmedBindings = new WeakMap<TavernState, { generation: number; ids: Set<string> }>()
 function confirmedBindingIds(state: TavernState): Set<string> {
   const generation = bindingDeletionGeneration()
@@ -1284,6 +1252,14 @@ function confirmedBindingIds(state: TavernState): Set<string> {
     confirmedBindings.set(state, entry)
   }
   return entry.ids
+}
+function rememberConfirmedBinding(confirmed: Set<string>, id: string): void {
+  if (confirmed.has(id)) return
+  if (confirmed.size >= CONFIRMED_BINDINGS_MAX) {
+    const oldest = confirmed.values().next().value
+    if (oldest !== undefined) confirmed.delete(oldest)
+  }
+  confirmed.add(id)
 }
 
 /**

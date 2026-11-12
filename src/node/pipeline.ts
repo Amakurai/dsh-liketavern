@@ -16,13 +16,13 @@ import { hashToSeed } from '../core/macros.js'
 import { memoryCandidateCount, memoryQuery, memorySearchOptions, selectMemoryBodies } from '../core/memoryRetrieval.js'
 import { clipToTokenBudget, estimateTokens } from '../core/tokenize.js'
 import { JOURNAL_TURN_TOKEN_BUDGET } from '../core/turnBudget.js'
-import type { ChatMessage, WIEngineResult, WorldDelta, WorldInfoEntry } from '../core/types.js'
+import type { ChatMessage, CharacterCard, PromptPreset, WIEngineResult, WorldDelta, WorldInfoEntry } from '../core/types.js'
 import { EMPTY_TIMER_STATE } from '../core/types.js'
 import { isolated } from './isolated.js'
 import { stableFingerprintHash, standingFingerprint } from '../core/standingPin.js'
 import { resolvePresetSampling } from '../core/presetSampling.js'
 import type { PromptLayout } from '../core/promptLayout.js'
-import { DEFAULT_USER_NAME } from '../core/persona.js'
+import { DEFAULT_USER_NAME, type Persona } from '../core/persona.js'
 import { withWorkspaceLock } from '../state/workspaceLock.js'
 import { loadTemplateMetadata, saveTemplateMetadata } from '../state/template.js'
 import { loadHelperState } from '../state/helper.js'
@@ -41,10 +41,50 @@ import { loadTemplateAvatars } from './templateAvatar.js'
 import { resolveTemplateContinuation } from '../state/templateContinuation.js'
 import { sessionModelRoute, type SessionModelRoute } from './modelRoute.js'
 import { chatPickSeed } from '../core/binding.js'
+import { findLastEvent } from './sessionEvents.js'
 import type { TavernState } from './state.js'
 
 const FALLBACK_CONTEXT_WINDOW = 131072
 const FALLBACK_RESERVE_OUTPUT = 8192
+const DEFAULT_PRESET: PromptPreset = defaultPreset()
+
+interface CachedCardSnapshot {
+  cardWithoutPng: CharacterCard
+  byPreset: WeakMap<PromptPreset, { nullPersona?: string; byPersona: WeakMap<Persona, string> }>
+}
+
+const standingSnapshotCache = new WeakMap<CharacterCard, CachedCardSnapshot>()
+
+function resolveStandingSnapshot(card: CharacterCard, preset: PromptPreset, persona: Persona | null): {
+  hash: string
+  cardWithoutPng: CharacterCard
+} {
+  let cardEntry = standingSnapshotCache.get(card)
+  if (!cardEntry) {
+    cardEntry = { cardWithoutPng: { ...card, pngBytes: null }, byPreset: new WeakMap() }
+    standingSnapshotCache.set(card, cardEntry)
+  }
+  let presetEntry = cardEntry.byPreset.get(preset)
+  if (!presetEntry) {
+    presetEntry = { byPersona: new WeakMap() }
+    cardEntry.byPreset.set(preset, presetEntry)
+  }
+  const existing = persona ? presetEntry.byPersona.get(persona) : presetEntry.nullPersona
+  if (existing !== undefined) return { hash: existing, cardWithoutPng: cardEntry.cardWithoutPng }
+  const { pngBytes: _png, ...promptCard } = card
+  const hash = stableFingerprintHash({ card: promptCard, preset, persona })
+  if (persona) presetEntry.byPersona.set(persona, hash)
+  else presetEntry.nullPersona = hash
+  return { hash, cardWithoutPng: cardEntry.cardWithoutPng }
+}
+
+function findLastChat(messages: readonly ChatMessage[], predicate: (message: ChatMessage) => boolean): ChatMessage | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i]!
+    if (predicate(message)) return message
+  }
+  return undefined
+}
 
 export interface PipelineInput {
   state: TavernState
@@ -247,7 +287,7 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
     let recoveryTurn = activeTurn
     if (recoveryTurn===undefined && generation.status==='prepared') {
       const events = input.agent?.session.snapshotEvents()
-      const last = events && [...events].reverse().find(event=>event.type==='turn/start'||event.type==='turn/end')
+      const last = events && findLastEvent(events, event => event.type === 'turn/start' || event.type === 'turn/end')
       if (last?.type!=='turn/start' || last.data.turn!==generation.turn) throw new Error('模板计划等待恢复：请先完成当前宿主轮次，不能重新执行已提交模板')
       recoveryTurn = last.data.turn
     }
@@ -273,14 +313,14 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
   const card = charWs.card
   const charName = characterPromptName(card)
 
-  const preset = rawPreset ?? defaultPreset()
+  const preset = rawPreset ?? DEFAULT_PRESET
   const userName = persona?.name.trim() || DEFAULT_USER_NAME
   // 修订号可能在上述异步读取期间更新；实际已读取资产的内容才是这份快照的身份。
   // 加入正文指纹后，旧正文与新修订号即使同时出现，也不会挡住下一轮的新正文；图片不参与组装。
-  const { pngBytes: _png, ...promptCard } = card
+  const { hash: snapshotHash, cardWithoutPng } = resolveStandingSnapshot(card, preset, persona)
   const standingKey = standingFingerprint(binding, { name: userName, description: persona?.description ?? '' },
     [...state.standingRevTags(binding, { personaLorebookId: persona?.lorebookId ?? null }),
-      `snapshot=${stableFingerprintHash({ card: promptCard, preset, persona })}`], input.generationType ?? 'normal')
+      `snapshot=${snapshotHash}`], input.generationType ?? 'normal')
   const hostMessages = input.agent?.session.deriveMessages() ?? []
   const hostHistory = hostMessages.flatMap(message => {
     if (message.role === 'tool' || message.role === 'developer' || isHostSystemPromptMessage(message)
@@ -334,7 +374,7 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
     const current = currentHelperMvuTemplateData(input.agent!.session.snapshotEvents(),helper.scopes)
     if(current !== undefined) helperMvu = projectTemplateHelperMvu(helper.scopes,historyIdentities,current)
   }
-  const lastUserMessage = [...chatMessages].reverse().find((m) => m.role === 'user')?.content ?? ''
+  const lastUserMessage = findLastChat(chatMessages, (m) => m.role === 'user')?.content ?? ''
   const config = state.config
   const cacheFirstLayout = config.prompts.cacheFirstLayout
   const requestCleanup = { hideHarnessIdentity: config.prompts.hideHarnessIdentity,
@@ -350,7 +390,7 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
     user: userName,
     pickSeed: chatPickSeed(binding),
     lastUserMessage,
-    lastMessage: [...chatMessages].reverse().find(message => message.role === 'assistant'
+    lastMessage: findLastChat(chatMessages, message => message.role === 'assistant'
       || (message.role === 'user' && !isSyntheticUserText(message.content)))?.content ?? '',
     charPrompt: config.prompts.preferCharacterPrompt ? card.systemPrompt : '',
     charInstruction: config.prompts.preferCharacterInstructions ? card.postHistoryInstructions : '',
@@ -379,7 +419,7 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
 
   // 同轮冻结的宏输入：第 1 步取当前 history 的最近 assistant 正文（{{lastcharmessage}} 用），
   // 后续步 history 增长也不变；journal 同理只在本轮首次评估读一次盘。
-  const lastCharMessage = [...chatMessages].reverse().find((m) => m.role === 'assistant')?.content ?? ''
+  const lastCharMessage = findLastChat(chatMessages, (m) => m.role === 'assistant')?.content ?? ''
 
   // 组装/模型输入路径：聊天世界书损坏必须显式失败，不能静默少注入整本书。
   const [lore, avatars, memoryHits, rawJournal, timerState, regexRules] = await Promise.all([
@@ -431,7 +471,7 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
     },
     preset,
     promptPreferences: config.prompts,
-    card:{...promptCard,pngBytes:null},
+    card:cardWithoutPng,
     personaDescription: persona?.description ?? '',
     history: scanMessages,
     historyMessageIds: [

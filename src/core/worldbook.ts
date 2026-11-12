@@ -266,26 +266,45 @@ function matchCompiled(c: CompiledEntry, texts: readonly ScanText[]): { keys: st
 
 /**
  * 最近 depth 条消息的扫描单元。每条消息只展开宏、建单元一次：minActivations 逐条扩深时
- * 各深度共享同一批单元（及其小写缓存），不再随深度重复处理整段历史。
+ * 各深度共享同一批单元（及其小写缓存），并提供增量深度切片以跳过已知无主关键词命中的旧区间。
  */
 function createDepthTexts(
   messages: readonly ChatMessage[],
   includeNames: boolean,
   macroCtx?: Pick<MacroContext, 'char' | 'user'>,
-): (depth: number) => readonly ScanText[] {
+): {
+  atDepth: (depth: number) => readonly ScanText[]
+  deltaBetween: (prevDepth: number, nextDepth: number) => readonly ScanText[]
+} {
   const perMessage: Array<ScanText[] | undefined> = []
   const byDepth = new Map<number, ScanText[]>()
-  return (depth) => {
-    if (depth <= 0) return []
-    const cached = byDepth.get(depth)
-    if (cached) return cached
-    const texts: ScanText[] = []
-    // 起点沿用 slice(-depth) 的取整口径：绕过归一化的小数/NaN 深度与原实现一致，不产生小数下标。
-    for (let i = messages.length - messages.slice(-depth).length; i < messages.length; i++) {
-      texts.push(...(perMessage[i] ??= messageScanTexts(messages[i]!, includeNames, macroCtx)))
-    }
-    byDepth.set(depth, texts)
-    return texts
+  const startIndexOf = (depth: number): number => {
+    if (depth <= 0) return messages.length
+    const neg = Math.trunc(-depth)
+    return Number.isNaN(neg) || neg >= 0 ? 0 : Math.max(0, messages.length + neg)
+  }
+  const unitsAt = (index: number): ScanText[] => (perMessage[index] ??= messageScanTexts(messages[index]!, includeNames, macroCtx))
+  return {
+    atDepth: (depth) => {
+      if (depth <= 0) return []
+      const cached = byDepth.get(depth)
+      if (cached) return cached
+      const texts: ScanText[] = []
+      for (let i = startIndexOf(depth); i < messages.length; i++) {
+        texts.push(...unitsAt(i))
+      }
+      byDepth.set(depth, texts)
+      return texts
+    },
+    deltaBetween: (prevDepth, nextDepth) => {
+      const from = startIndexOf(nextDepth)
+      const to = startIndexOf(prevDepth)
+      if (from >= to) return []
+      if (to - from === 1) return unitsAt(from)
+      const texts: ScanText[] = []
+      for (let i = from; i < to; i++) texts.push(...unitsAt(i))
+      return texts
+    },
   }
 }
 
@@ -366,7 +385,8 @@ export function evaluateWorldInfo(input: WIEngineInput): WIEngineResult {
   }
 
   // 扫描文本：全局/条目 scanDepth 0 = 该条关键词不扫消息（常驻与递归仍可活）
-  const textsAtDepth = createDepthTexts(input.messages, settings.includeNames, input.macroCtx)
+  const depthScan = createDepthTexts(input.messages, settings.includeNames, input.macroCtx)
+  const textsAtDepth = depthScan.atDepth
 
   const activated: Candidate[] = []
   const activatedKeys = new Set<string>()
@@ -458,6 +478,8 @@ export function evaluateWorldInfo(input: WIEngineInput): WIEngineResult {
 
   const loggedSkip = new Set<string>()
   const fixedDepthMiss = new Set<CompiledEntry>()
+  // 跟随全局 scanDepth 的条目：记录已确认无任何主关键词命中的最大深度，扩深时仅测试新增历史区间。
+  const noPrimaryDepth = new Map<CompiledEntry, number>()
   const evaluate = (texts: readonly ScanText[], level: number): Candidate[] => {
     const fresh: Candidate[] = []
     for (const c of compiled) {
@@ -501,15 +523,30 @@ export function evaluateWorldInfo(input: WIEngineInput): WIEngineResult {
         continue
       }
       if (c.keyCount === 0 || probabilityFailures.has(entry.key)) continue
+      const followsExpandedDepth = level === 0 && (entry.scanDepth === null || entry.scanDepth === undefined)
       // 显式指定 scanDepth 的条目在 level=0 的扫描切片不随 minActivations 扩深改变；首轮未命中即可缓存跳过。
-      if (level === 0 && entry.scanDepth !== null && entry.scanDepth !== undefined && fixedDepthMiss.has(c)) continue
+      if (level === 0 && !followsExpandedDepth && fixedDepthMiss.has(c)) continue
+      if (followsExpandedDepth) {
+        const prevNoPrimary = noPrimaryDepth.get(c) ?? 0
+        if (prevNoPrimary > 0) {
+          if (expandedDepth <= prevNoPrimary) continue
+          const deltaTexts = depthScan.deltaBetween(prevNoPrimary, expandedDepth)
+          if (!c.primary.some((k) => deltaTexts.some((t) => k.test(t)))) {
+            noPrimaryDepth.set(c, expandedDepth)
+            continue
+          }
+        }
+      }
       const scanTextsForEntry =
         level === 0
           ? textsAtDepth(entry.scanDepth ?? expandedDepth)
           : texts
       const matched = matchCompiled(c, scanTextsForEntry)
       if (matched === null) {
-        if (level === 0 && entry.scanDepth !== null && entry.scanDepth !== undefined) fixedDepthMiss.add(c)
+        if (level === 0 && !followsExpandedDepth) fixedDepthMiss.add(c)
+        else if (followsExpandedDepth && expandedDepth > 0 && !c.primary.some((k) => scanTextsForEntry.some((t) => k.test(t)))) {
+          noPrimaryDepth.set(c, expandedDepth)
+        }
         continue
       }
       if (tryActivate(c, matched.keys, level === 0 ? 'keyword' : 'recursion', level)) {

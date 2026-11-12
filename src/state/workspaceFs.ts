@@ -98,7 +98,7 @@ export class WorkspaceSizeError extends Error {}
 const BATCH_CONCURRENCY = 8
 
 /** 按入参顺序并发执行；全部结束后报告顺序最靠前的错误，结果不取决于哪个调用先返回。 */
-async function mapBounded<T, R>(items: readonly T[], task: (item: T, index: number) => Promise<R>): Promise<R[]> {
+export async function mapBounded<T, R>(items: readonly T[], task: (item: T, index: number) => Promise<R>): Promise<R[]> {
   const results: R[] = new Array(items.length)
   const errors: Array<{ index: number; error: unknown }> = []
   let next = 0
@@ -202,6 +202,14 @@ export class WorkspaceFs {
    */
   async assertSafePath(relPath: string): Promise<void> {
     await this.assertNoLinks(this.abs(relPath))
+  }
+
+  /** 批量路径链接检查：共享祖先目录只做一次 lstat，与逐个 assertSafePath 拒绝口径一致。 */
+  async assertSafePaths(relPaths: Iterable<string>): Promise<void> {
+    const targets: string[] = []
+    for (const relPath of relPaths) targets.push(this.abs(relPath))
+    if (!targets.length) return
+    await this.assertNoLinksAmong(targets)
   }
 
   /**

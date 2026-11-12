@@ -22,6 +22,7 @@ import {BINDING_CHANGED_EVENT} from './actions.js'
 import { getTavernLocale, useT, useMarkdownLabels } from './i18n.js'
 import { useSpeakerHeader } from './displayPrefs.js'
 import { renderOutputBatched } from './renderBatch.js'
+import { subscribeWindowMessage } from './windowEvents.js'
 import { Avatar, Btn, Err, IconBtn, Skeleton, useLoader, useToast } from './util.js'
 import type { TavernRemote } from './types.js'
 import { CARD_VARIABLE_STYLES } from './styles.js'
@@ -353,8 +354,8 @@ export function SpeechHtmlFrame(props: {
         setFrameH(Math.min(8000, Math.max(24, Math.ceil(parsed.height))))
       }
     }
-    window.addEventListener('message', onMsg)
-    return () => {active=false;if(rotateReadOnly.current===rotate)rotateReadOnly.current=()=>{};closeRegistration();stopStory?.();clearScriptChoices(choiceOwner);unregisterGuard?.();for(const [id,guard] of guards){clearTimeout(guard.timer);unlock(id,guard.runtimeId);guard.reject(new Error('卡面已关闭'))}for(const receipt of displayReceipts.values()){clearTimeout(receipt.timer);receipt.lease.cancel()}eventEndpoint?.dispose();window.removeEventListener('message', onMsg)}
+    const unsubscribeMsg = subscribeWindowMessage(iframeRef.current?.contentWindow, onMsg)
+    return () => {active=false;if(rotateReadOnly.current===rotate)rotateReadOnly.current=()=>{};closeRegistration();stopStory?.();clearScriptChoices(choiceOwner);unregisterGuard?.();for(const [id,guard] of guards){clearTimeout(guard.timer);unlock(id,guard.runtimeId);guard.reject(new Error('卡面已关闭'))}for(const receipt of displayReceipts.values()){clearTimeout(receipt.timer);receipt.lease.cancel()}eventEndpoint?.dispose();unsubscribeMsg()}
   }, [srcDoc,props.helperBinding?.sessionId,props.helperBinding?.storyId,props.helperMessageId])
 
   useLayoutEffect(()=>{rotateReadOnly.current(Boolean(props.readOnly))},[props.readOnly])

@@ -1,9 +1,9 @@
 /** 剧情模板状态共用原子根事务；大型快照无损分块复用，预览只读，楼层写入先 WAL。 */
 import { createHash } from 'node:crypto'
 import { Buffer } from 'node:buffer'
-import { resolve } from 'node:path'
 import { emptyTemplateScopes, parseTemplateScopes, type TemplateScopes } from '../core/template.js'
 import { EMPTY_TIMER_STATE, type WITimerState } from '../core/types.js'
+import { rootIdentity, sameFileStat, type FileStatStamp } from './pathIdentity.js'
 import type { WorkspaceFs } from './workspaceFs.js'
 import { withWorkspaceLock } from './workspaceLock.js'
 import { attachTemplateGeneration, detachTemplateGeneration, isDetachedTemplateGeneration, parseDetachedTemplateGeneration, parseTemplateGeneration,
@@ -47,19 +47,21 @@ interface StoredTemplateState { state:TemplateState; detached?:DetachedTemplateG
 /** 每个剧情最近一次读写确认的生成正文：同一轮里状态会被读取十余次，正文不必每次重读与校验。 */
 interface GenerationBody {
   /** 根里的归属与摘要原文；同一份正文换了归属也要重新合并校验。 */
-  owner:string; path:string; revision:number; epoch:number
-  /** 读取时校验过的完整记录；刚写入、尚未读回校验时缺省。 */
-  json?:string
+  owner:string; path:string; revision:number; epoch:number; bytes:number
+  /** 读取时校验过的完整记录与文件指纹；刚写入、尚未读回校验时缺省。 */
+  stat?:FileStatStamp
+  parsed?:PreparedTemplateGeneration
 }
+const GENERATION_BODY_BUDGET = 64 * 1024 * 1024
 const generationBodies = new Map<string,GenerationBody>()
-const bodyKey = (root:string):string => {const absolute=resolve(root);return process.platform==='win32' ? absolute.toLowerCase() : absolute}
+let generationBodiesBytes = 0
 /** 清理只需知道旧根引用哪份正文，不缓存历史 outputs 或恢复计划的全文。 */
 interface GenerationReferences {roots:Map<string,string|null>;current:string;revision:number;epoch:number}
 const generationReferences=new Map<string,GenerationReferences>()
-const rootIdentity=(raw:string|null):string=>raw===null ? 'empty' : templateTextHash(raw)
+const rootContentHash=(raw:string|null):string=>raw===null ? 'empty' : templateTextHash(raw)
 const generationDataKey=ledgerKey(TEMPLATE_DATA_PATH)
 function generationReferenceCache(fs:WorkspaceFs,current:string|null):GenerationReferences {
-  const key=bodyKey(fs.root),ledger=openLedger(fs.root),identity=rootIdentity(current)
+  const key=rootIdentity(fs.root),ledger=openLedger(fs.root),identity=rootContentHash(current)
   let cache=generationReferences.get(key)
   if(cache) generationReferences.delete(key)
   else cache={roots:new Map(),current:identity,revision:ledger.counter,epoch:ledger.epoch}
@@ -72,45 +74,58 @@ function generationReferenceCache(fs:WorkspaceFs,current:string|null):Generation
   return cache
 }
 function rememberGenerationReference(cache:GenerationReferences,raw:string|null,path:string|null):void {
-  const key=rootIdentity(raw)
+  const key=rootContentHash(raw)
   cache.roots.delete(key);cache.roots.set(key,path)
   if(cache.roots.size>16) cache.roots.delete(cache.roots.keys().next().value!)
 }
-function rememberGenerationBody(fs:WorkspaceFs,body:GenerationBody|undefined):void {
-  const key=bodyKey(fs.root)
+function evictGenerationBodyKey(key:string):void {
+  const prev=generationBodies.get(key)
+  if(!prev) return
   generationBodies.delete(key)
+  generationBodiesBytes=Math.max(0,generationBodiesBytes-(prev.parsed ? prev.bytes : 0))
+}
+function rememberGenerationBody(fs:WorkspaceFs,body:GenerationBody|undefined):void {
+  const key=rootIdentity(fs.root)
+  evictGenerationBodyKey(key)
   if(!body) return
+  const charged=body.parsed ? body.bytes : 0
+  while(generationBodies.size>=8 || (charged>0 && generationBodies.size>0 && generationBodiesBytes+charged>GENERATION_BODY_BUDGET)) {
+    evictGenerationBodyKey(generationBodies.keys().next().value!)
+  }
   generationBodies.set(key,body)
-  if(generationBodies.size>8) generationBodies.delete(generationBodies.keys().next().value!)
+  generationBodiesBytes+=charged
 }
 function knownGenerationBody(fs:WorkspaceFs,path:string):GenerationBody|undefined {
-  const body=generationBodies.get(bodyKey(fs.root)),ledger=openLedger(fs.root)
+  const body=generationBodies.get(rootIdentity(fs.root)),ledger=openLedger(fs.root)
   // 工作区内改写或删除过这份正文就重新读盘核对。
   return body && body.path===path && body.epoch===ledger.epoch && !writtenSince(ledger,path,body.revision) ? body : undefined
 }
 
 /** 清理临时草稿或已删除剧情的模板内存缓存，避免挤占活跃剧情槽位。 */
 export function evictTemplateCaches(root:string):void {
-  const key=bodyKey(root)
-  generationBodies.delete(key)
+  const key=rootIdentity(root)
+  evictGenerationBodyKey(key)
   generationReferences.delete(key)
   evictTemplateStoryCache(root)
 }
 
 async function readGenerationBody(fs:WorkspaceFs,detached:DetachedTemplateGeneration):Promise<PreparedTemplateGeneration> {
   const owner=JSON.stringify(detached),hash=detached.payload.hash,path=generationPath(detached.floor,hash)
-  const known=knownGenerationBody(fs,path)
-  if(known?.owner===owner && known.json!==undefined) return JSON.parse(known.json) as PreparedTemplateGeneration
   const plain=fs.withFloor(null)
+  const known=knownGenerationBody(fs,path)
   const info=await plain.stat(path)
   if(!info) throw new Error('模板生成恢复数据缺失，无法恢复未结束的轮次；请回退该楼层后继续')
   if(info.size!==detached.payload.bytes || info.size>TEMPLATE_DOCUMENT_LIMIT) throw new Error('模板生成恢复数据校验失败')
+  if(known?.owner===owner && known.parsed!==undefined && known.stat!==undefined && sameFileStat(known.stat,info)) {
+    rememberGenerationBody(fs,known)
+    return structuredClone(known.parsed)
+  }
   const raw=await plain.readText(path)
   if(raw===null || templateTextHash(raw)!==hash) throw new Error('模板生成恢复数据校验失败')
   const generation=attachTemplateGeneration(detached,JSON.parse(raw))
   const ledger=openLedger(fs.root)
-  rememberGenerationBody(fs,{owner,path,json:JSON.stringify(generation),revision:ledger.counter,epoch:ledger.epoch})
-  return generation
+  rememberGenerationBody(fs,{owner,path,bytes:detached.payload.bytes,stat:info,parsed:generation,revision:ledger.counter,epoch:ledger.epoch})
+  return structuredClone(generation)
 }
 
 export async function loadTemplateState(fs: WorkspaceFs): Promise<TemplateState> {
@@ -275,7 +290,7 @@ async function writeTemplateState(fs: WorkspaceFs, state: TemplateState): Promis
   const current=await fs.readText(TEMPLATE_STATE_PATH)
   if (raw === current) return
   const references=generationReferenceCache(fs,current)
-  if(!references.roots.has(rootIdentity(current))) {
+  if(!references.roots.has(rootContentHash(current))) {
     try {
       const retained=await loadTemplateDocument(fs,TEMPLATE_STATE_PATH,parseStoredTemplateState,value=>value.detached
         ? generationPath(value.detached.floor,value.detached.payload.hash) : null)
@@ -301,8 +316,8 @@ async function writeTemplateState(fs: WorkspaceFs, state: TemplateState): Promis
   const ledger=openLedger(fs.root)
   // 锁内本次写入只发布已验证的不可变块与新根，既有根的正文引用结论仍然成立。
   rememberGenerationReference(references,raw,body || null)
-  references.current=rootIdentity(raw);references.revision=ledger.counter;references.epoch=ledger.epoch
-  rememberGenerationBody(fs,detached && body ? {owner:JSON.stringify(detached.generation),path:body,revision:ledger.counter,epoch:ledger.epoch} : undefined)
+  references.current=rootContentHash(raw);references.revision=ledger.counter;references.epoch=ledger.epoch
+  rememberGenerationBody(fs,detached && body ? {owner:JSON.stringify(detached.generation),path:body,bytes:detached.generation.payload.bytes,revision:ledger.counter,epoch:ledger.epoch} : undefined)
   // 楼层外维护会打断根的连续写入：回滚会保留手动根，它可能仍引用本层的 prepared 正文。
   // 先按同一套 WAL 撤销语义推算回滚后的根，只清理当前根与可恢复根均不引用的正文；判断失败则保守保留。
   // 其它楼层留下的正文（例如继承自来源剧情的未结束记录）仍可能随回滚重新成为当前状态，不在这里处理。
@@ -312,7 +327,7 @@ async function writeTemplateState(fs: WorkspaceFs, state: TemplateState): Promis
       const candidates=(await plain.list(TEMPLATE_GENERATION_PATH,{recursive:false})).filter(name=>name.startsWith(prefix) && `${TEMPLATE_GENERATION_PATH}/${name}`!==body)
       if(candidates.length) {
         const restored=await fs.rollbackSnapshot(TEMPLATE_STATE_PATH,raw)
-        const restoredKey=rootIdentity(restored)
+        const restoredKey=rootContentHash(restored)
         if(!references.roots.has(restoredKey)) {
           const previous=parseStoredTemplateState(await readTemplateDocumentText(plain,restored))
           rememberGenerationReference(references,restored,previous.detached ? generationPath(previous.detached.floor,previous.detached.payload.hash) : null)

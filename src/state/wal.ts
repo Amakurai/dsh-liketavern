@@ -19,7 +19,7 @@ import { atomicWrite } from './atomicWrite.js'
 import { renameWithRetry } from './rename.js'
 import { withWorkspaceLock } from './workspaceLock.js'
 import { expandAffectedMemories } from './memoryRollback.js'
-import { hasRecoveryMarker, WAL_RECOVERY_PATH, withRecoveryWriteAccess, WorkspaceFs, WORKSPACE_RECOVERING_MESSAGE } from './workspaceFs.js'
+import { hasRecoveryMarker, mapBounded, WAL_RECOVERY_PATH, withRecoveryWriteAccess, WorkspaceFs, WORKSPACE_RECOVERING_MESSAGE } from './workspaceFs.js'
 import { rebuildIndex } from './workspace.js'
 import { estimateTokens } from '../core/tokenize.js'
 import { readTemplateDocument, TEMPLATE_DATA_PATH } from './templateStorage.js'
@@ -163,6 +163,8 @@ export class Wal {
   private readonly hasCoverage: boolean
   /** 最近一次确认已登记的楼层身份。 */
   private covered: string | undefined
+  /** 已归档回滚副本（.rolled-back-*）的不可变元数据缓存，按文件 mtimeMs/size 复核。 */
+  private readonly rolledBackMetaCache = new Map<string, { mtimeMs: number; size: number; meta: FloorMeta }>()
 
   /** rootDir 为工作区的 state/wal/ 目录；不存在则在首次操作时创建。 */
   constructor(rootDir: string) {
@@ -202,12 +204,12 @@ export class Wal {
     if(raw!==await this.logFs.readText(WAL_COVERAGE_PATH)) await atomicWrite(path,raw)
   }
 
-  private async recordCoverage(meta:FloorMeta):Promise<void> {
+  private async recordCoverage(meta:FloorMeta,knownCoverage?:Array<Pick<WalFloorInfo,'floor'|'startedAt'>>|null):Promise<void> {
     if(!this.hasCoverage) return
     // 同一楼层连续写入只核对一次；楼层身份含开始时间，重生成的同名楼层会重新登记。
     const identity=JSON.stringify([meta.floor,meta.startedAt])
     if(this.covered===identity) return
-    const coverage=await this.readCoverage()
+    const coverage=knownCoverage!==undefined ? knownCoverage : await this.readCoverage()
     if(!coverage?.some(floor=>floor.floor===meta.floor && floor.startedAt===meta.startedAt)) {
       // 旧剧情首次登记才完整列举。已有清单只追加或替换本层，其它楼层的登记原样保留：
       // 每次开层都重新列举既随楼层数变慢，也不该由磁盘现状重建已有的登记。
@@ -222,13 +224,17 @@ export class Wal {
    * 普通新层只比目录名；重用已登记 id 时只核对该身份的回滚完成证明，不能用新开始时间洗掉丢日志的证据。
    * 其它楼层的元数据与开始时间完整检查仍留给列举、回退与分支。
    */
-  private async assertCoveredFloorDirs(targetFloor:string):Promise<void> {
-    const coverage=await this.readCoverage()
+  private async assertCoveredFloorDirs(
+    targetFloor:string,
+    preloaded?:{coverage?:Array<Pick<WalFloorInfo,'floor'|'startedAt'>>|null;entries?:Dirent[]},
+  ):Promise<void> {
+    const coverage=preloaded?.coverage!==undefined ? preloaded.coverage : await this.readCoverage()
     if(!coverage?.length) return
-    const directories=(await readdir(this.rootDir,{withFileTypes:true}).catch((error:NodeJS.ErrnoException)=> {
+    const allEntries=preloaded?.entries ?? await readdir(this.rootDir,{withFileTypes:true}).catch((error:NodeJS.ErrnoException)=> {
       if(error.code==='ENOENT') return []
       throw error
-    })).filter(entry=>entry.isDirectory())
+    })
+    const directories=allEntries.filter(entry=>entry.isDirectory())
     // 活跃目录按目录名直接核对；回滚副本只能作为清单里旧楼层的身份证明。
     // 不能只按 baseFloorDir 名称集合判断：旧副本会掩盖同名活跃楼层被删除的事实。
     const activeNames=new Set(directories.filter(entry=>!isRolledBackDir(entry.name)).map(entry=>entry.name))
@@ -239,7 +245,7 @@ export class Wal {
       let proven=false
       for(const entry of rolledBack) {
         if(baseFloorDir(entry.name)!==dirName) continue
-        const meta=await this.readMeta(join(this.rootDir,entry.name))
+        const meta=await this.readMeta(join(this.rootDir,entry.name),{cacheRolledBack:true})
         if(meta?.floor===floor.floor && meta.startedAt===floor.startedAt) { proven=true; break }
       }
       if(!proven) throw new Error(`WAL 楼层缺失：${floor.floor}；请恢复完整日志，不能继续回退或分支`)
@@ -252,7 +258,7 @@ export class Wal {
     for(const entry of rolledBack) {
       if(baseFloorDir(entry.name)!==targetDirName) continue
       const dir=join(this.rootDir,entry.name)
-      const meta=await this.readMeta(dir)
+      const meta=await this.readMeta(dir,{cacheRolledBack:true})
       if(meta?.floor!==previous.floor || meta.startedAt!==previous.startedAt) continue
       const records=await this.readRecords(dir)
       const progress=await this.readRollbackProgress(dir,records)
@@ -264,6 +270,12 @@ export class Wal {
 
   private async assertLogPath(target = this.rootDir): Promise<void> {
     await this.logFs.assertSafePath(relative(this.logFs.root, target))
+  }
+
+  private async assertLogPaths(targets: Iterable<string>): Promise<void> {
+    const rels: string[] = []
+    for (const target of targets) rels.push(relative(this.logFs.root, target))
+    await this.logFs.assertSafePaths(rels)
   }
 
   /** 开始新的楼层事务；已有楼层必须显式 reopen 或先回滚，不能覆盖原始镜像。 */
@@ -371,17 +383,16 @@ export class Wal {
   validateFloor(floor: string): Promise<WalFloorInfo> {
     return this.enqueue(async () => {
       const dir = join(this.rootDir, sanitizeFloor(floor))
-      await this.assertLogPath(dir)
-      for (const marker of WAL_FLOOR_MARKERS) await this.assertLogPath(join(dir, marker))
+      await this.assertLogPaths([dir, ...WAL_FLOOR_MARKERS.map((marker) => join(dir, marker))])
       if (!(await isDir(dir)) || (await isUnstartedDir(dir))) {
         await this.assertWorkspaceReady()
         await this.assertCoveredFloorDirs(floor)
         throw new Error(`WAL 楼层缺失或已回滚：${floor}`)
       }
-      const meta = await this.readFloorMeta(dir, floor)
-      await this.assertNotRecovering(dir)
+      const meta = await this.readFloorMeta(dir, floor, { verified: true })
+      await this.assertNotRecovering(dir, { verified: true })
       await this.assertWorkspaceReady()
-      await this.readRecords(dir)
+      await this.readRecords(dir, { verified: true })
       return { floor, committed: meta.committed, startedAt: meta.startedAt, rolledBack: false }
     })
   }
@@ -403,9 +414,25 @@ export class Wal {
     })
   }
 
-  private async readMeta(dir: string): Promise<FloorMeta | null> {
-    await this.assertLogPath(join(dir, 'meta.json'))
-    const raw = await readFile(join(dir, 'meta.json'), 'utf8').catch((error: NodeJS.ErrnoException) => {
+  private async readMeta(dir: string, options?: { verified?: boolean; cacheRolledBack?: boolean }): Promise<FloorMeta | null> {
+    const metaFile = join(dir, 'meta.json')
+    if (!options?.verified) await this.assertLogPath(metaFile)
+    let statInfo: { mtimeMs: number; size: number } | null = null
+    if (options?.cacheRolledBack) {
+      const s = await stat(metaFile).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === 'ENOENT') return null
+        throw error
+      })
+      if (s === null) return null
+      statInfo = { mtimeMs: s.mtimeMs, size: s.size }
+      const cached = this.rolledBackMetaCache.get(dir)
+      if (cached && cached.mtimeMs === statInfo.mtimeMs && cached.size === statInfo.size) {
+        this.rolledBackMetaCache.delete(dir)
+        this.rolledBackMetaCache.set(dir, cached)
+        return { ...cached.meta, ...(cached.meta.preservedPaths ? { preservedPaths: [...cached.meta.preservedPaths] } : {}) }
+      }
+    }
+    const raw = await readFile(metaFile, 'utf8').catch((error: NodeJS.ErrnoException) => {
       if (error.code === 'ENOENT') return null
       throw error
     })
@@ -413,7 +440,19 @@ export class Wal {
     let meta: unknown
     try { meta = JSON.parse(raw) } catch { throw new Error(`WAL 元数据损坏：${dir}`) }
     if (!isFloorMetaShape(meta)) throw new Error(`WAL 元数据形状损坏：${dir}`)
-    return meta as unknown as FloorMeta
+    const parsed = meta as unknown as FloorMeta
+    if (options?.cacheRolledBack && statInfo !== null) {
+      this.rolledBackMetaCache.delete(dir)
+      this.rolledBackMetaCache.set(dir, {
+        mtimeMs: statInfo.mtimeMs,
+        size: statInfo.size,
+        meta: { ...parsed, ...(parsed.preservedPaths ? { preservedPaths: [...parsed.preservedPaths] } : {}) },
+      })
+      if (this.rolledBackMetaCache.size > 512) {
+        this.rolledBackMetaCache.delete(this.rolledBackMetaCache.keys().next().value!)
+      }
+    }
+    return parsed
   }
 
   private async writeMeta(dir: string, meta: FloorMeta): Promise<void> {
@@ -422,15 +461,15 @@ export class Wal {
   }
 
   /** 目录存在不代表楼层可写；元数据必须完整且属于请求的原始楼层，不能只比净化后的目录名。 */
-  private async readFloorMeta(dir: string, floor: string): Promise<FloorMeta> {
-    const meta = await this.readMeta(dir)
+  private async readFloorMeta(dir: string, floor: string, options?: { verified?: boolean }): Promise<FloorMeta> {
+    const meta = await this.readMeta(dir, options)
     if (!meta || meta.floor !== floor) throw new Error(`WAL 楼层元数据不存在或不匹配：${floor}`)
     return meta
   }
 
   /** 恢复游标绑定原始记录集合；中断后只能继续回滚，追加或提交会使游标失效或误报已完成。 */
-  private async assertNotRecovering(dir: string): Promise<void> {
-    await this.assertLogPath(join(dir, 'rollback-progress.json'))
+  private async assertNotRecovering(dir: string, options?: { verified?: boolean }): Promise<void> {
+    if (!options?.verified) await this.assertLogPath(join(dir, 'rollback-progress.json'))
     const progress = await stat(join(dir, 'rollback-progress.json')).catch((error: NodeJS.ErrnoException) => {
       if (error.code === 'ENOENT') return null
       throw error
@@ -551,24 +590,25 @@ export class Wal {
    * `scanCursors` 供开层/分支快照等低频入口使用，兜底识别旧版本崩溃遗留、还没有标记文件的恢复游标；
    * 已改名归档的回滚副本不算恢复中（它的游标只是完成回滚后的历史记录，`ROLLED_BACK_MARK` 目录一律跳过）。
    */
-  private async assertWorkspaceReady(options?: { scanCursors?: boolean }): Promise<void> {
+  private async assertWorkspaceReady(options?: { scanCursors?: boolean; entries?: Dirent[] }): Promise<void> {
     const markerRoot = this.hasCoverage ? this.logFs.root : this.rootDir
     if (await hasRecoveryMarker(markerRoot)) {
       if ((await this.reconcileRecoveryMarker()).length) throw new Error(WORKSPACE_RECOVERING_MESSAGE)
     }
     if (!options?.scanCursors) return
-    const entries = await readdir(this.rootDir, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
+    const entries = options.entries ?? await readdir(this.rootDir, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
       if (error.code === 'ENOENT') return []
       throw error
     })
-    for (const entry of entries) {
-      if (!entry.isDirectory() || isRolledBackDir(entry.name)) continue
-      const progress = await stat(join(this.rootDir, entry.name, 'rollback-progress.json')).catch((error: NodeJS.ErrnoException) => {
-        if (error.code === 'ENOENT') return null
+    const activeDirs = entries.filter((entry) => entry.isDirectory() && !isRolledBackDir(entry.name))
+    if (!activeDirs.length) return
+    const found = await mapBounded(activeDirs, (entry) =>
+      stat(join(this.rootDir, entry.name, 'rollback-progress.json')).then(() => true, (error: NodeJS.ErrnoException) => {
+        if (error.code === 'ENOENT') return false
         throw error
-      })
-      if (progress) throw new Error(WORKSPACE_RECOVERING_MESSAGE)
-    }
+      }),
+    )
+    if (found.some(Boolean)) throw new Error(WORKSPACE_RECOVERING_MESSAGE)
   }
 
   /** 供分支快照等外部入口复用：有未完成恢复（或旧版遗留游标）时明确拒绝，并清理失效标记。 */
@@ -618,8 +658,8 @@ export class Wal {
     })
   }
 
-  private async readRecordsWithText(dir: string): Promise<{ text: string; records: RecordLine[] }> {
-    await this.assertLogPath(join(dir, 'records.jsonl'))
+  private async readRecordsWithText(dir: string, options?: { verified?: boolean }): Promise<{ text: string; records: RecordLine[] }> {
+    if (!options?.verified) await this.assertLogPath(join(dir, 'records.jsonl'))
     let text: string
     try {
       text = await readFile(join(dir, 'records.jsonl'), 'utf8')
@@ -640,13 +680,13 @@ export class Wal {
     return { text, records }
   }
 
-  private async readRecords(dir: string): Promise<RecordLine[]> {
-    return (await this.readRecordsWithText(dir)).records
+  private async readRecords(dir: string, options?: { verified?: boolean }): Promise<RecordLine[]> {
+    return (await this.readRecordsWithText(dir, options)).records
   }
 
   /** 预检与执行共用同一套只读校验，任何坏游标都必须在修改批次中首个文件前被发现。 */
-  private async readRollbackProgress(dir: string, records: RecordLine[]): Promise<RollbackProgress> {
-    await this.assertLogPath(join(dir, 'rollback-progress.json'))
+  private async readRollbackProgress(dir: string, records: RecordLine[], options?: { verified?: boolean }): Promise<RollbackProgress> {
+    if (!options?.verified) await this.assertLogPath(join(dir, 'rollback-progress.json'))
     const hash = createHash('sha256').update(JSON.stringify(records)).digest('hex')
     const saved = await readFile(join(dir, 'rollback-progress.json'), 'utf8').catch((error: NodeJS.ErrnoException) => {
       if (error.code === 'ENOENT') return null
@@ -677,26 +717,32 @@ export class Wal {
     await mkdir(this.rootDir, { recursive: true })
     const dirName = sanitizeFloor(floor)
     const dir = join(this.rootDir, dirName)
-    await this.assertLogPath(dir)
-    for (const marker of WAL_FLOOR_MARKERS) await this.assertLogPath(join(dir, marker))
+    await this.assertLogPaths([dir, ...WAL_FLOOR_MARKERS.map((marker) => join(dir, marker))])
     if (await isDir(dir) && !(await isUnstartedDir(dir))) {
-      const meta = await this.readMeta(dir)
+      const meta = await this.readMeta(dir, { verified: true })
       if (meta && !meta.committed) {
         throw new Error(`楼层 "${floor}" 已存在且未提交，拒绝重复开始（防止跨会话串层）`)
       }
       // records 与 meta 两次原子替换仍有崩溃窗口；重复楼层不得清空旧镜像。
-      // 已完成层的受控追加使用 reopenFloor；重生成先回滚再开新层。
+      // 已完成层的受控追加使用 reopenFloor；重生成先回滚再开层。
       throw new Error(`楼层 "${floor}" 已存在，拒绝重复开始；追加写入请显式重新打开，重新生成请先回滚`)
     }
+    const [coverage, entries] = await Promise.all([
+      this.readCoverage(),
+      readdir(this.rootDir, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === 'ENOENT') return [] as Dirent[]
+        throw error
+      }),
+    ])
     // 先核对旧清单，不能在日志被清理后继续开新层。
-    await this.assertCoveredFloorDirs(floor)
+    await this.assertCoveredFloorDirs(floor, { coverage, entries })
     // 恢复游标存在期间禁止开新层：部分撤销的正文不能被新楼层当作基线写入。
     // 这里同时兜底扫描旧版本崩溃遗留、还没有标记文件的游标（只在开层这种低频入口做）。
-    await this.assertWorkspaceReady({ scanCursors: true })
+    await this.assertWorkspaceReady({ scanCursors: true, entries })
     await mkdir(dir, { recursive: true })
     const meta={floor,startedAt:nextWalIsoTime(),committed:false}
     await this.writeMeta(dir,meta)
-    await this.recordCoverage(meta)
+    await this.recordCoverage(meta, coverage)
   }
 
   private async doCommitFloor(floor: string): Promise<void> {
@@ -831,17 +877,21 @@ export class Wal {
       throw error
     })
     // 后继依赖预检也会读未选中日志，所有可见楼层标记都必须在第一次日志读取前拒绝链接。
+    const logTargets: string[] = []
     for (const directory of directories) {
       if (!directory.isDirectory() && !directory.isSymbolicLink()) continue
-      await this.assertLogPath(join(this.rootDir, directory.name))
-      for (const marker of WAL_FLOOR_MARKERS) await this.assertLogPath(join(this.rootDir, directory.name, marker))
+      const floorDir = join(this.rootDir, directory.name)
+      logTargets.push(floorDir)
+      for (const marker of WAL_FLOOR_MARKERS) logTargets.push(join(floorDir, marker))
     }
+    if (logTargets.length) await this.assertLogPaths(logTargets)
+    const verifiedFloorDirs = new Set(directories.filter((d) => d.isDirectory()).map((d) => join(this.rootDir, d.name)))
     const lastStep = new Map(floors.map((floor, index) => [floor, index]))
     type IndexedChange = { rec: RecordLine; startedAt: number | null; step: number; afterBytes: string | null }
     const changesByPath = new Map<string, IndexedChange[]>()
     const targetLoaded = new Map<string, { dirExists: boolean; meta: FloorMeta | null; records: RecordLine[]; progress: RollbackProgress }>()
     const knownMetasByDir = new Map<string, FloorMeta>()
-    const checkedBodyPaths = new Set<string>()
+    const uncheckedBodyPaths = new Set<string>()
     let hasNullStartedAt = false
     let minStartedAt = Infinity
     let maxStep = -1
@@ -849,21 +899,19 @@ export class Wal {
     let rebuildsIndex = false
     for (const floor of floors) {
       const dir = join(this.rootDir, sanitizeFloor(floor))
+      const verified = verifiedFloorDirs.has(dir)
       // 净化目录名不是楼层身份：不同原始 id 可能共用同一目录名。
       // 必须在整批开始前核对元数据，不能撤销到另一个楼层或等较新楼层已恢复才发现冲突。
-      const dirExists = await isDir(dir)
-      const meta = dirExists && !(await isUnstartedDir(dir)) ? await this.readFloorMeta(dir, floor) : null
+      const dirExists = verified || await isDir(dir)
+      const meta = dirExists && !(await isUnstartedDir(dir)) ? await this.readFloorMeta(dir, floor, { verified }) : null
       if (meta) knownMetasByDir.set(dir, meta)
-      const records = await this.readRecords(dir)
-      const progress = await this.readRollbackProgress(dir, records)
+      const records = await this.readRecords(dir, { verified })
+      const progress = await this.readRollbackProgress(dir, records, { verified })
       targetLoaded.set(floor, { dirExists, meta, records, progress })
       const startedAt = meta ? Date.parse(meta.startedAt) : null
       const step = lastStep.get(floor)!
       for (const rec of records) {
-        if (!checkedBodyPaths.has(rec.path)) {
-          await bodyFs.assertSafePath(rec.path)
-          checkedBodyPaths.add(rec.path)
-        }
+        uncheckedBodyPaths.add(rec.path)
         const path = recordPathIdentity(rec.path)
         expandsMemory ||= path.startsWith('memory/')
         rebuildsIndex ||= path.startsWith('memory/') || path === 'state/world-delta.jsonl'
@@ -877,10 +925,11 @@ export class Wal {
         }
       }
     }
+    if (uncheckedBodyPaths.size) await bodyFs.assertSafePaths(uncheckedBodyPaths)
     // 摘要展开与索引重建读写记录外的路径；整批准备时检查，不能等较新楼层已恢复才失败。
     if (rebuildsIndex) {
       await bodyFs.list('memory', { recursive: expandsMemory, rejectLinks: true })
-      for (const path of ['state/world-delta.jsonl', 'journal.md', 'index.json']) await bodyFs.assertSafePath(path)
+      await bodyFs.assertSafePaths(['state/world-delta.jsonl', 'journal.md', 'index.json'])
     }
     const listedFloors = await this.doListFloors({ markersVerified: true, knownMetasByDir })
     if (changesByPath.size === 0) return targetLoaded
@@ -897,11 +946,12 @@ export class Wal {
       if (otherStep !== undefined && otherStep >= maxStep) continue
       const cachedTarget = targetLoaded.get(floor.floor)
       const dir = join(this.rootDir, sanitizeFloor(floor.floor))
-      const meta = cachedTarget ? cachedTarget.meta : (knownMetasByDir.get(dir) ?? await this.readMeta(dir))
+      const verified = verifiedFloorDirs.has(dir)
+      const meta = cachedTarget ? cachedTarget.meta : (knownMetasByDir.get(dir) ?? await this.readMeta(dir, { verified }))
       const completedAt = meta?.committed && meta.committedAt ? Date.parse(meta.committedAt) : NaN
       if (otherStep === undefined && !hasNullStartedAt && Number.isFinite(completedAt) && completedAt < minStartedAt) continue
       const otherStartedAt = meta ? Date.parse(meta.startedAt) : NaN
-      const records = cachedTarget ? cachedTarget.records : await this.readRecords(dir)
+      const records = cachedTarget ? cachedTarget.records : await this.readRecords(dir, { verified })
       for (const rec of records) {
         if (isNoopRecord(rec)) continue
         const recPath = recordPathIdentity(rec.path)
@@ -950,25 +1000,32 @@ export class Wal {
     // 否则残留的标记会一直挡住后续写入与分支。
     if (await hasRecoveryMarker(this.hasCoverage ? this.logFs.root : this.rootDir)) await this.reconcileRecoveryMarker()
     const entries = await readdir(this.rootDir, { withFileTypes: true })
+    if (!options?.markersVerified) {
+      const logTargets: string[] = []
+      for (const entry of entries) {
+        if (!entry.isDirectory() && !entry.isSymbolicLink()) continue
+        const dir = join(this.rootDir, entry.name)
+        logTargets.push(dir)
+        if (entry.isDirectory()) for (const marker of WAL_FLOOR_MARKERS) logTargets.push(join(dir, marker))
+      }
+      if (logTargets.length) await this.assertLogPaths(logTargets)
+    }
     const floors: WalFloorInfo[] = []
     for (const entry of entries) {
-      if (entry.isSymbolicLink() && !options?.markersVerified) await this.assertLogPath(join(this.rootDir, entry.name))
       if (!entry.isDirectory()) continue
       const dir = join(this.rootDir, entry.name)
-      if (!options?.markersVerified) {
-        await this.assertLogPath(dir)
-        for (const marker of WAL_FLOOR_MARKERS) await this.assertLogPath(join(dir, marker))
-      }
+      const rolledBack = isRolledBackDir(entry.name)
       const knownMeta = options?.knownMetasByDir?.get(dir)
-      if (!knownMeta && (await isUnstartedDir(dir))) continue
-      const meta = knownMeta ?? await this.readMeta(dir)
+      if (!knownMeta && !rolledBack && (await isUnstartedDir(dir))) continue
+      if (!knownMeta && rolledBack && (await isUnstartedDir(dir))) continue
+      const meta = knownMeta ?? await this.readMeta(dir, { verified: true, cacheRolledBack: rolledBack })
       if (meta) options?.knownMetasByDir?.set(dir, meta)
       if (!meta || sanitizeFloor(meta.floor) !== baseFloorDir(entry.name)) throw new Error(`WAL 元数据缺失或目录不匹配：${entry.name}`)
       floors.push({
         floor: meta.floor,
         committed: meta.committed,
         startedAt: meta.startedAt,
-        rolledBack: isRolledBackDir(entry.name),
+        rolledBack,
       })
     }
     floors.sort((a, b) => a.startedAt.localeCompare(b.startedAt))
@@ -994,7 +1051,7 @@ export class Wal {
       if (!entry.isDirectory() || !isRolledBackDir(entry.name)) continue
       const dir = join(this.rootDir, entry.name)
       await this.assertLogPath(dir)
-      const meta = await this.readMeta(dir)
+      const meta = await this.readMeta(dir, { cacheRolledBack: true })
       let rolledBackAt = meta?.rolledBackAt ? Date.parse(meta.rolledBackAt) : Number.NaN
       if (Number.isNaN(rolledBackAt)) rolledBackAt = (await stat(dir)).mtimeMs // 元数据缺失时退回目录 mtime
       if (rolledBackAt < cutoff) expired.push(dir)
@@ -1005,6 +1062,7 @@ export class Wal {
       await this.writeCoverage(await this.doListFloors())
     }
     for (const dir of expired) {
+      this.rolledBackMetaCache.delete(dir)
       await rm(dir, { recursive: true, force: true })
     }
     return expired.length

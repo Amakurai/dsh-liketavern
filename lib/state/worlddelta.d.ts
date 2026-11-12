@@ -17,7 +17,7 @@ import type { WorkspaceFs } from './workspaceFs.js';
 export declare class WorldDeltaStore {
     private readonly fs;
     private readonly ledger;
-    private cache;
+    private readonly cacheKey;
     constructor(fs: WorkspaceFs);
     private enqueue;
     /** 读出全部非空原始行（保留原文，重写时不丢无法解析的行）。 */

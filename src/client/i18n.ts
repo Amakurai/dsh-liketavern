@@ -79,14 +79,22 @@ export function useT(): typeof t {
   return t
 }
 
+const markdownLabelsCache = new Map<TavernLocaleId, { code: { copyLabel: string; copiedLabel: string }; footnotes: string }>()
+
 /**
  * 宿主 MarkdownText 的 chrome 文案（0.1.2 起 labels 为必填 prop，缺了渲染代码围栏即崩）。
- * 键位与宿主 markdownLabels(t) 一致，文案走本插件字典。
+ * 键位与宿主 markdownLabels(t) 一致，文案走本插件字典；按生效语言缓存引用，避免流式重绘反复新建对象。
  */
 export function useMarkdownLabels(): { code: { copyLabel: string; copiedLabel: string }; footnotes: string } {
-  const t = useT()
-  return {
-    code: { copyLabel: t('common.copy'), copiedLabel: t('common.copied') },
-    footnotes: t('common.markdownFootnotes'),
+  const translate = useT()
+  const locale = getTavernLocale()
+  let cached = markdownLabelsCache.get(locale)
+  if (!cached) {
+    cached = {
+      code: { copyLabel: translate('common.copy'), copiedLabel: translate('common.copied') },
+      footnotes: translate('common.markdownFootnotes'),
+    }
+    markdownLabelsCache.set(locale, cached)
   }
+  return cached
 }

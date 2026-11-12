@@ -5,7 +5,7 @@
 import { createHash } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import { createUserMessage, freezeMessage, MessageId, type GenerateOptions, type LlmResolvedModelInfo, type Message, type RequestMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
-import { deriveEventMessage, foldSurface, type Session, type SessionSeq } from '@deepseek-ai/dsh-session'
+import { deriveEventMessage, foldSurface, type Session, type SessionEvent, type SessionSeq } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-agent-loop'
 import type {} from '@deepseek-ai/dsh-compaction-basic'
 import { joinContextSections } from '@deepseek-ai/dsh-system-prompt'
@@ -150,7 +150,9 @@ function stripPlanMetadata(message: Message): Message {
 }
 
 function activeTurn(session: Session): number {
-  for (const event of [...session.snapshotEvents()].reverse()) {
+  const events = session.snapshotEvents()
+  for (let i = events.length - 1; i >= 0; i--) {
+    const event = events[i]!
     if (event.type === 'turn/end') throw new Error('Tavern 提示词投影没有正在进行的轮次')
     if (event.type === 'turn/start') return event.data.turn
   }
@@ -159,14 +161,19 @@ function activeTurn(session: Session): number {
 
 function currentPlan(messages: readonly Message[], session: Session): { plan: PresetRequestPlan; carrier: UserMessage } {
   const turn = activeTurn(session)
-  const candidates: Message[] = [...messages].reverse()
-  for (const event of [...session.snapshotEvents()].reverse()) {
-    if (event.type === 'user/message') candidates.push(event.data)
-  }
-  for (const message of candidates) {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i]!
     const plan = planFromMessage(message)
     if (!plan || plan.sessionId !== session.id || plan.turn !== turn) continue
     return { plan, carrier: message as UserMessage }
+  }
+  const events = session.snapshotEvents()
+  for (let i = events.length - 1; i >= 0; i--) {
+    const event = events[i]!
+    if (event.type !== 'user/message') continue
+    const plan = planFromMessage(event.data)
+    if (!plan || plan.sessionId !== session.id || plan.turn !== turn) continue
+    return { plan, carrier: event.data }
   }
   throw new Error(`Tavern 第 ${turn} 轮缺少当前会话的冻结提示词布局；旧轮次计划不能复用，请开启下一轮`)
 }
@@ -317,13 +324,74 @@ function applySystemPolicy(messages: readonly Message[], projection: PresetProje
     ...messages.filter(message => message.role !== 'system')]
 }
 
+const frozenMessageTokensCache = new WeakMap<RequestMessage, number>()
+
 /** 只估可见 text 块与旧式 system；图片、工具参数/结果编码及 provider framing 不在此估算内。 */
 function requestTextTokens(options: Readonly<GenerateOptions>, messages: readonly RequestMessage[]): number {
   let tokens = options.system ? estimateTokens(options.system) : 0
-  for (const message of messages) for (const block of message.content) {
-    if (block.type === 'text') tokens += estimateTokens(block.text)
+  for (const message of messages) {
+    const frozen = Object.isFrozen(message) && Object.isFrozen(message.content)
+    const cached = frozen ? frozenMessageTokensCache.get(message) : undefined
+    if (cached !== undefined) {
+      tokens += cached
+      continue
+    }
+    let messageTokens = 0
+    for (const block of message.content) {
+      if (block.type === 'text') messageTokens += estimateTokens(block.text)
+    }
+    if (frozen) frozenMessageTokensCache.set(message, messageTokens)
+    tokens += messageTokens
   }
   return tokens
+}
+
+interface CachedEventProjectionIndex {
+  length: number
+  last: SessionEvent | undefined
+  lastSeq: SessionSeq | undefined
+  eventBySeq: ReadonlyMap<SessionSeq, SessionEvent>
+  seqByMessageId: ReadonlyMap<string, SessionSeq>
+  turnByMessageId: ReadonlyMap<string, number>
+  replacements: ReadonlyMap<SessionSeq, SessionSeq>
+}
+
+const eventProjectionIndexCache = new WeakMap<readonly SessionEvent[], CachedEventProjectionIndex>()
+
+function resolveEventProjectionIndex(events: readonly SessionEvent[]): CachedEventProjectionIndex {
+  const last = events.at(-1)
+  const cached = eventProjectionIndexCache.get(events)
+  if (cached && cached.length === events.length && cached.last === last && cached.lastSeq === last?.seq) {
+    return cached
+  }
+  const eventBySeq = new Map<SessionSeq, SessionEvent>()
+  const seqByMessageId = new Map<string, SessionSeq>()
+  const turnByMessageId = new Map<string, number>()
+  let currentEventTurn: number | undefined
+  for (const event of events) {
+    eventBySeq.set(event.seq, event)
+    if (event.type === 'turn/start') currentEventTurn = event.data.turn
+    const message = deriveEventMessage(event)
+    if (message) {
+      seqByMessageId.set(message.id, event.seq)
+      if (currentEventTurn !== undefined) turnByMessageId.set(message.id, currentEventTurn)
+    }
+  }
+  const replacements = new Map<SessionSeq, SessionSeq>()
+  for (const replacement of foldSurface(events).replacements) {
+    for (const seq of replacement.shadowedSeqs) replacements.set(seq, replacement.seq)
+  }
+  const next: CachedEventProjectionIndex = {
+    length: events.length,
+    last,
+    lastSeq: last?.seq,
+    eventBySeq,
+    seqByMessageId,
+    turnByMessageId,
+    replacements,
+  }
+  eventProjectionIndexCache.set(events, next)
+  return next
 }
 
 interface ToolSpan { start: number; end: number; complete: boolean }
@@ -432,22 +500,7 @@ export function projectPresetRequest(options: Readonly<GenerateOptions>, session
   }
   // 只沿宿主真实 surface replacement 的被覆盖集合追踪身份；额外 source 引用不能伪装为替换关系。
   const events = session.snapshotEvents()
-  const eventBySeq = new Map(events.map(event => [event.seq, event]))
-  const seqByMessageId = new Map<string, SessionSeq>()
-  const turnByMessageId = new Map<string, number>()
-  let currentEventTurn: number | undefined
-  for (const event of events) {
-    if (event.type === 'turn/start') currentEventTurn = event.data.turn
-    const message = deriveEventMessage(event)
-    if (message) {
-      seqByMessageId.set(message.id, event.seq)
-      if (currentEventTurn !== undefined) turnByMessageId.set(message.id, currentEventTurn)
-    }
-  }
-  const replacements = new Map<SessionSeq, SessionSeq>()
-  for (const replacement of foldSurface(events).replacements) {
-    for (const seq of replacement.shadowedSeqs) replacements.set(seq, replacement.seq)
-  }
+  const { eventBySeq, seqByMessageId, turnByMessageId, replacements } = resolveEventProjectionIndex(events)
   const surfaceNodes = new Set(session.surface.nodes)
   const reported = new Set<string>()
   const located = new Map<number, { index: number; compacted: boolean }>()

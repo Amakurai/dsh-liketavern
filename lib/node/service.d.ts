@@ -155,6 +155,7 @@ export declare class TavernService extends TypertRemoteService implements Tavern
     listRegexRules(_request: Record<string, never>): Promise<TavernMethodResults['listRegexRules']>;
     saveRegexRules(request: TavernMethodRequests['saveRegexRules']): Promise<TavernMethodResults['saveRegexRules']>;
     /** 以已提交日志判定是否进入对话，避免客户端 blank 镜像滞后时误清绑定。 */
+    private eventsStartedConversation;
     private conversationStarted;
     getSessionBinding(request: {
         sessionId: string;

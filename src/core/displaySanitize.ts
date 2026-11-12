@@ -301,7 +301,7 @@ function attributeValueRanges(text: string, start: number, limit: number): Attri
   return ranges
 }
 
-type DecodedReferences = { text: string; spans: TextRange[] }
+type DecodedReferences = { text: string; starts: Int32Array; ends: Int32Array }
 const META_REFERENCE_CANDIDATE_RE = /&(?:amp;|lt;?|#0*(?:38|60);?|#x0*(?:26|3c);?|num;|semi;|tab;|newline;|sol;)/i
 
 function needsReferenceDecode(value: string): boolean {
@@ -393,35 +393,67 @@ function decodeReferenceText(value: string): string {
   return current
 }
 
-/** 单轮字符引用解码；输入 span 已指向原源码，因此多轮后仍能精确删除原始字节区间。 */
-function decodeReferencePass(value: string, inputSpans: readonly TextRange[]): DecodedReferences {
+/** 单轮字符引用解码；输入区间数组已指向原源码，非 `&` 连续片段通过 TypedArray 批量复制，多轮后仍精确删除原始字节区间。 */
+function decodeReferencePass(current: DecodedReferences): DecodedReferences {
+  const value = current.text
+  if (!value.includes('&')) return current
+  const inStarts = current.starts
+  const inEnds = current.ends
+  const fallbackEnd = inStarts.length > 0 ? inEnds[inStarts.length - 1]! : 0
   const out: string[] = []
-  const spans: TextRange[] = []
-  const append = (decoded: string, start: number, end: number): void => {
-    out.push(decoded)
-    const mapped = {
-      start: inputSpans[start]?.start ?? inputSpans.at(-1)?.end ?? 0,
-      end: inputSpans[end - 1]?.end ?? inputSpans[start]?.end ?? inputSpans.at(-1)?.end ?? 0,
+  let nextStarts: Int32Array | null = null
+  let nextEnds: Int32Array | null = null
+  let outLen = 0
+  let copied = 0
+  let cursor = 0
+  while (cursor < value.length) {
+    const amp = value.indexOf('&', cursor)
+    if (amp < 0) break
+    const token = decodedReferenceAt(value, amp)
+    if (token.end === amp + 1) { cursor = token.end; continue }
+    if (nextStarts === null || nextEnds === null) {
+      nextStarts = new Int32Array(value.length)
+      nextEnds = new Int32Array(value.length)
     }
-    for (let i = 0; i < decoded.length; i++) spans.push(mapped)
+    if (amp > copied) {
+      out.push(value.slice(copied, amp))
+      nextStarts.set(inStarts.subarray(copied, amp), outLen)
+      nextEnds.set(inEnds.subarray(copied, amp), outLen)
+      outLen += amp - copied
+    }
+    const mappedStart = amp < inStarts.length ? inStarts[amp]! : fallbackEnd
+    const endIdx = token.end - 1
+    const mappedEnd = endIdx >= 0 && endIdx < inEnds.length ? inEnds[endIdx]! : (amp < inEnds.length ? inEnds[amp]! : fallbackEnd)
+    out.push(token.decoded)
+    for (let i = 0; i < token.decoded.length; i++) {
+      nextStarts[outLen] = mappedStart
+      nextEnds[outLen] = mappedEnd
+      outLen++
+    }
+    copied = token.end
+    cursor = token.end
   }
-  for (let index = 0; index < value.length;) {
-    if (value[index] !== '&') { append(value[index]!, index, index + 1); index++; continue }
-    const token = decodedReferenceAt(value, index)
-    append(token.decoded, index, token.end)
-    index = token.end
+  if (nextStarts === null || nextEnds === null) return current
+  if (copied < value.length) {
+    out.push(value.slice(copied))
+    nextStarts.set(inStarts.subarray(copied), outLen)
+    nextEnds.set(inEnds.subarray(copied), outLen)
+    outLen += value.length - copied
   }
-  return { text: out.join(''), spans }
+  return { text: out.join(''), starts: nextStarts.subarray(0, outLen), ends: nextEnds.subarray(0, outLen) }
 }
 
 /** 有界固定点解码覆盖属性解析 + srcdoc/data/RCDATA 二次解析，同时保持 O(n)。 */
 function decodeReferences(value: string, offset = 0): DecodedReferences {
-  let current: DecodedReferences = {
-    text: value,
-    spans: Array.from({ length: value.length }, (_item, index) => ({ start: offset + index, end: offset + index + 1 })),
+  const starts = new Int32Array(value.length)
+  const ends = new Int32Array(value.length)
+  for (let i = 0; i < value.length; i++) {
+    starts[i] = offset + i
+    ends[i] = offset + i + 1
   }
+  let current: DecodedReferences = { text: value, starts, ends }
   for (let pass = 0; pass < 4; pass++) {
-    const next = decodeReferencePass(current.text, current.spans)
+    const next = decodeReferencePass(current)
     if (next.text === current.text) return next
     current = next
   }
@@ -547,10 +579,15 @@ function literalMetaState(value: string): { ranges: TextRange[]; pending: MetaSt
   return { ranges, pending }
 }
 
-function mappedDecodedRange(range: TextRange, spans: readonly TextRange[], fallback: number): TextRange {
-  const first = spans[range.start]
-  const last = spans[range.end - 1]
-  return { start: first?.start ?? fallback, end: last?.end ?? first?.end ?? fallback }
+function mappedDecodedRange(range: TextRange, decoded: DecodedReferences, fallback: number): TextRange {
+  const len = decoded.starts.length
+  const hasFirst = range.start >= 0 && range.start < len
+  const lastIdx = range.end - 1
+  const hasLast = lastIdx >= 0 && lastIdx < len
+  return {
+    start: hasFirst ? decoded.starts[range.start]! : fallback,
+    end: hasLast ? decoded.ends[lastIdx]! : (hasFirst ? decoded.ends[range.start]! : fallback),
+  }
 }
 
 function collectLiteralMeta(
@@ -574,7 +611,7 @@ function collectLiteralMeta(
   const decoded = decode ? decodeReferences(source, start) : null
   const visible = decoded?.text ?? source
   const map = (range: TextRange): TextRange => decoded
-    ? mappedDecodedRange(range, decoded.spans, end)
+    ? mappedDecodedRange(range, decoded, end)
     : { start: start + range.start, end: start + range.end }
   let cursor = 0
   while (cursor < visible.length) {
@@ -615,7 +652,7 @@ function collectIsolatedLiteralMeta(
   const decoded = decode ? decodeReferences(source, start) : null
   const visible = decoded?.text ?? source
   const map = (range: TextRange): TextRange => decoded
-    ? mappedDecodedRange(range, decoded.spans, end)
+    ? mappedDecodedRange(range, decoded, end)
     : { start: start + range.start, end: start + range.end }
   const local = literalMetaState(visible)
   ranges.push(...local.ranges.map(map))
@@ -919,21 +956,19 @@ function isCoverHtml(text: string): boolean {
   return /<!DOCTYPE\s+html/i.test(text) || /<html[\s>]/i.test(text) || /<body[\s>]/i.test(text)
 }
 
+const DISPLAY_META_ALT = DISPLAY_META_TAGS.join('|')
+const META_TAG_SCREEN_RE = new RegExp(`<(?:${DISPLAY_META_ALT}|style|details)(?=[\\t\\n\\f\\r />])`, 'i')
 const CLOSED_EMPTY_META_RES = DISPLAY_META_TAGS.map((tag) => ({
   selfClosing: new RegExp(`<${tag}(?=[\\t\\n\\f\\r />])[^>]*/[\\t\\n\\f\\r ]*>`, 'gi'),
   paired: new RegExp(`<${tag}(?=[\\t\\n\\f\\r />])[^>]*>[\\s\\S]*?</${tag}[\\t\\n\\f\\r ]*>`, 'gi'),
 }))
-const UNCLOSED_META_RES = DISPLAY_META_TAGS.map((tag) => new RegExp(`<${tag}(?=[\\t\\n\\f\\r />])`, 'i'))
-const WIDGET_TAIL_MARKERS = [
-  /<div\b[^>]*\bstream-log\b/i,
-  /<details\b[^>]*\b[\w-]*-box\b/i,
-  /<div\b[^>]*\b[\w-]*-box\b/i,
-  /<style\b/i,
-] as const
+const UNCLOSED_ANY_META_RE = new RegExp(`<(?:${DISPLAY_META_ALT})(?=[\\t\\n\\f\\r />])`, 'i')
+const WIDGET_TAIL_ANY_RE = /<(?:div\b[^>]*\b(?:stream-log|[\w-]*-box)\b|details\b[^>]*\b[\w-]*-box\b|style\b)/i
 
 function stripClosedAndEmpty(text: string): string {
   let out = text
   for (let pass = 0; pass < 8; pass++) {
+    if (!META_TAG_SCREEN_RE.test(out)) break
     let next = out
     for (const { selfClosing, paired } of CLOSED_EMPTY_META_RES) {
       next = next.replace(selfClosing, '')
@@ -949,12 +984,8 @@ function stripClosedAndEmpty(text: string): string {
 
 /** 未闭合的协议标签（流式输出到一半）从开标签切到文末。 */
 function stripUnclosedMeta(text: string): string {
-  let cut = -1
-  for (const re of UNCLOSED_META_RES) {
-    const match = re.exec(text)
-    if (match && (cut < 0 || match.index < cut)) cut = match.index
-  }
-  return cut >= 0 ? text.slice(0, cut) : text
+  const match = UNCLOSED_ANY_META_RE.exec(text)
+  return match ? text.slice(0, match.index) : text
 }
 
 /**
@@ -962,12 +993,8 @@ function stripUnclosedMeta(text: string): string {
  * 从第一个特征开标签切到文末，避免半截 HTML 露出来。
  */
 function stripWidgetTail(text: string): string {
-  let cut = -1
-  for (const re of WIDGET_TAIL_MARKERS) {
-    const match = re.exec(text)
-    if (match && (cut < 0 || match.index < cut)) cut = match.index
-  }
-  return cut >= 0 ? text.slice(0, cut) : text
+  const match = WIDGET_TAIL_ANY_RE.exec(text)
+  return match ? text.slice(0, match.index) : text
 }
 
 function tidy(text: string): string {

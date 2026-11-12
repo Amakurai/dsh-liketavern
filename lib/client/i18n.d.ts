@@ -16,7 +16,7 @@ export declare function hasTavernKey(key: string): boolean;
 export declare function useT(): typeof t;
 /**
  * 宿主 MarkdownText 的 chrome 文案（0.1.2 起 labels 为必填 prop，缺了渲染代码围栏即崩）。
- * 键位与宿主 markdownLabels(t) 一致，文案走本插件字典。
+ * 键位与宿主 markdownLabels(t) 一致，文案走本插件字典；按生效语言缓存引用，避免流式重绘反复新建对象。
  */
 export declare function useMarkdownLabels(): {
     code: {

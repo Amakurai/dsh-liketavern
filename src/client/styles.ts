@@ -99,8 +99,7 @@ const STYLE = `
 .dsh-tavern-greetingEntry>button{align-self:flex-end}
 
 /* ========== 基础 ========== */
-.dsh-tavern-ui{
-  color:var(--dsw-alias-label-primary, inherit);color-scheme:inherit;
+.dsh-tavern-ui,.dsh-tavern-speech,.dsh-tavern-actionGroup{
   /* Tavern 识别色：蓝（solid/strong 跟随宿主 business-primary 令牌，深浅色自适应）。
      solid 用于开关/刻度等小面积；soft 系用于选中底色与图标座。 */
   --tavern-accent:var(--dsw-alias-state-business-primary, #4176e6);
@@ -109,6 +108,7 @@ const STYLE = `
   --tavern-accent-softer:rgba(65,118,230,.07);
   --tavern-accent-border:rgba(65,118,230,.32);
 }
+.dsh-tavern-ui{color:var(--dsw-alias-label-primary, inherit);color-scheme:inherit}
 .dsh-tavern-panel{max-width:880px;container-type:inline-size;container-name:tavern-panel}
 /* 宿主设置弹窗右侧滚动区预留稳定滚动条槽位，避免「界面」等短页签与长页签切换时容器宽度跳变 */
 [role="dialog"][aria-modal="true"]:has(.dsh-tavern-panel)>nav+div>div:last-child{scrollbar-gutter:stable}
@@ -130,12 +130,17 @@ const STYLE = `
 .dsh-tavern-rise{animation:dsh-tavern-fade-up var(--ds-transition-duration, .2s) var(--ds-ease-in-out, ease)}
 .dsh-tavern-spin{display:inline-flex;animation:dsh-tavern-spin .9s linear infinite}
 @media (prefers-reduced-motion: reduce){
-  .dsh-tavern-ui *,.dsh-tavern-ui *::before,.dsh-tavern-ui *::after{
+  .dsh-tavern-rise,.dsh-tavern-spin,
+  .dsh-tavern-ui,.dsh-tavern-ui *,.dsh-tavern-ui *::before,.dsh-tavern-ui *::after,
+  .dsh-tavern-speech,.dsh-tavern-speech *,.dsh-tavern-speech *::before,.dsh-tavern-speech *::after,
+  .dsh-tavern-actionGroup,.dsh-tavern-actionGroup *,.dsh-tavern-actionGroup *::before,.dsh-tavern-actionGroup *::after{
     animation-duration:.01ms !important;animation-iteration-count:1 !important;transition-duration:.01ms !important}
 }
 
 /* ========== 可访问性 ========== */
-.dsh-tavern-ui button:focus-visible,.dsh-tavern-ui [role="button"]:focus-visible{
+.dsh-tavern-ui button:focus-visible,.dsh-tavern-ui [role="button"]:focus-visible,
+.dsh-tavern-speech button:focus-visible,.dsh-tavern-speech summary:focus-visible,
+.dsh-tavern-actionGroup button:focus-visible{
   outline:2px solid var(--dsw-alias-state-business-primary, #4176e6);outline-offset:2px}
 .dsh-tavern-ui input:focus-visible,.dsh-tavern-ui textarea:focus-visible{
   outline:2px solid var(--dsw-alias-state-business-primary, #4176e6);outline-offset:-1px;border-color:transparent}
@@ -431,10 +436,12 @@ const STYLE = `
 .dsh-tavern-entry.is-open{background:var(--dsw-alias-bg-layer-2, transparent);
   border-color:var(--dsw-alias-label-dimmed, #888)}
 .dsh-tavern-entry.is-off .dsh-tavern-entryTitle{opacity:.55}
-.dsh-tavern-entryHead{display:flex;align-items:center;gap:12px;width:100%;padding:13px 16px;border:0;
+.dsh-tavern-entryHead{box-sizing:border-box;display:flex;align-items:center;gap:12px;width:100%;padding:13px 16px;border:0;
   background:0 0;color:inherit;font:inherit;text-align:left;cursor:pointer;
   transition:background var(--ds-transition-duration-fast, .1s) var(--ds-ease-in-out, ease)}
 .dsh-tavern-entryHead:hover{background:var(--dsw-alias-interactive-bg-hover, transparent)}
+.dsh-tavern-entryTrigger{appearance:none;display:flex;align-items:center;gap:12px;flex:1;min-width:0;padding:0;border:0;
+  background:0 0;color:inherit;font:inherit;text-align:left;cursor:pointer;border-radius:8px}
 .dsh-tavern-entryMain{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
 .dsh-tavern-entryTitle{font-size:14px;font-weight:500;line-height:22px;color:var(--dsw-alias-label-primary, inherit);
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

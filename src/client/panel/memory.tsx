@@ -11,6 +11,7 @@ import { IconEditOutlineMedium, IconTrashOutlineMedium } from '@deepseek-ai/dsh-
 import { estimateTokens } from '../../core/tokenize.js'
 import { JOURNAL_TURN_TOKEN_BUDGET } from '../../core/turnBudget.js'
 import type { MemoryEntry, WorldDelta } from '../../core/types.js'
+import type { TavernMethodResults } from '../../remote.js'
 import { useT } from '../i18n.js'
 import { currentTavernSession } from '../sessionViews.js'
 import type { TavernRemote } from '../types.js'
@@ -18,6 +19,7 @@ import { Badge, Btn, ConfirmDialog, Err, IconBtn, Muted, SearchEmpty, SearchInpu
 
 /** 变化层类型徽标/选项对应的 i18n 键；渲染处经 t() 取文案。 */
 const DELTA_TYPE_KEY: Record<WorldDelta['type'], string> = { add: 'memory.deltaType.add', update: 'memory.deltaType.update', invalidate: 'memory.deltaType.invalidate' }
+const MEMORY_PAGE_SIZE = 50
 
 function MemoryEditor(props: { remote: TavernRemote; cardId: string; storyId?: string; entry: MemoryEntry; onDone: () => void }) {
   const { entry } = props
@@ -101,6 +103,8 @@ function MemorySelection(props: MemorySectionProps) {
   const storyRestored = useDraftRestored('memory:storyId')
   const activeSessionId = currentTavernSession()
   const prefilled = useRef(false)
+  const chars = useLoader(() => props.remote.listCharacters({}), [])
+  const stories = useLoader(() => props.remote.listStories({ cardId }), [cardId], cardId !== '')
   useEffect(() => {
     if (props.initialContext || cardRestored || storyRestored || prefilled.current || cardId) return
     if (!activeSessionId || typeof props.remote.getSessionBinding !== 'function') return
@@ -114,20 +118,22 @@ function MemorySelection(props: MemorySectionProps) {
     return () => { alive = false }
   }, [props.initialContext, props.remote, cardRestored, storyRestored, cardId, activeSessionId, setCardId, setStoredStoryId])
   const storyId = storedStoryId || undefined
-  // 剧情切换必须重建所有编辑状态：禁止旧 journal 查询或旧字段值进入新剧情。
+  // 剧情切换必须重建所有编辑状态：禁止旧 journal 查询或旧字段值进入新剧情；角色与剧情列表留在本层复用。
   return <MemoryContextSection key={JSON.stringify([cardId, storyId ?? null])} remote={props.remote}
+    chars={chars} stories={stories}
     cardId={cardId} storyId={storyId} initialTab={props.initialTab} activeSessionId={activeSessionId}
     setCardId={setCardId} setStoryId={(value) => setStoredStoryId(value ?? '')} />
 }
 
-function MemoryContextSection(props: { remote: TavernRemote; cardId: string; storyId?: string;
+function MemoryContextSection(props: { remote: TavernRemote;
+  chars: ReturnType<typeof useLoader<TavernMethodResults['listCharacters']>>;
+  stories: ReturnType<typeof useLoader<TavernMethodResults['listStories']>>;
+  cardId: string; storyId?: string;
   initialTab?: 'memory' | 'delta' | 'journal'; activeSessionId?: string;
   setCardId: (cardId: string) => void; setStoryId: (storyId: string | undefined) => void }) {
-  const { remote } = props
+  const { remote, chars, stories } = props
   const { cardId, storyId, activeSessionId, setCardId, setStoryId } = props
   const t = useT()
-  const chars = useLoader(() => remote.listCharacters({}), [])
-  const stories = useLoader(() => remote.listStories({ cardId }), [cardId], cardId !== '')
   const draftKey = `memory:context:${JSON.stringify([cardId, storyId ?? null])}`
   const [tab, setTab] = useDraftState<'memory' | 'delta' | 'journal'>(`${draftKey}:tab`, props.initialTab ?? 'memory')
   const [error, setError] = useState<string | null>(null)
@@ -144,8 +150,10 @@ function MemoryContextSection(props: { remote: TavernRemote; cardId: string; sto
   const [newKeys, setNewKeys] = useDraftState(`${draftKey}:newKeys`, '')
   const [memoryQuery, setMemoryQuery] = useState('')
   const [memoryFilter, setMemoryFilter] = useState<'all' | 'active' | 'archived'>('all')
+  const [memoryLimit, setMemoryLimit] = useState(MEMORY_PAGE_SIZE)
   const [deltaQuery, setDeltaQuery] = useState('')
   const [deltaFilter, setDeltaFilter] = useState<'all' | 'active' | 'revoked'>('all')
+  const [deltaLimit, setDeltaLimit] = useState(MEMORY_PAGE_SIZE)
   const [journalText, setJournalText] = useDraftState(`${draftKey}:journalText`, '')
   const [journalRevision, setJournalRevision] = useDraftState<string | null>(`${draftKey}:journalRevision`, null)
   const journalRestored = useDraftRestored(`${draftKey}:journalText`)
@@ -218,6 +226,15 @@ function MemoryContextSection(props: { remote: TavernRemote; cardId: string; sto
     })
     return { activeDeltaCount: active, revokedDeltaCount: revoked, filteredDeltas: list }
   }, [deltaItems, deltaFilter, deltaQuery])
+  const effectiveMemoryLimit = useMemo(() => {
+    if (!editingId) return memoryLimit
+    const idx = filteredMemories.findIndex((m) => m.id === editingId)
+    return idx >= memoryLimit ? idx + 1 : memoryLimit
+  }, [editingId, filteredMemories, memoryLimit])
+  const visibleMemories = useMemo(() => filteredMemories.slice(0, effectiveMemoryLimit), [filteredMemories, effectiveMemoryLimit])
+  const remainingMemories = filteredMemories.length - visibleMemories.length
+  const visibleDeltas = useMemo(() => filteredDeltas.slice(0, deltaLimit), [filteredDeltas, deltaLimit])
+  const remainingDeltas = filteredDeltas.length - visibleDeltas.length
   const journalTokens = useMemo(() => estimateTokens(journalText), [journalText])
   const journalOverBudget = journalTokens > JOURNAL_TURN_TOKEN_BUDGET
   // keyed 上下文首挂时字段已从对应剧情恢复；首次查询不能覆盖它，后续保存重拉正常同步。
@@ -427,7 +444,7 @@ function MemoryContextSection(props: { remote: TavernRemote; cardId: string; sto
                     placeholder={t('memory.searchPlaceholder')}
                     value={memoryQuery}
                     width={240}
-                    onChange={setMemoryQuery}
+                    onChange={(q) => { setMemoryQuery(q); setMemoryLimit(MEMORY_PAGE_SIZE) }}
                   />
                   {(archivedMemoryCount > 0 || memoryFilter !== 'all') && (
                     <div className="dsh-tavern-filters">
@@ -444,7 +461,7 @@ function MemoryContextSection(props: { remote: TavernRemote; cardId: string; sto
                           className="dsh-tavern-chip"
                           data-active={memoryFilter === id ? 'true' : 'false'}
                           disabled={busy || editingId !== null}
-                          onClick={() => setMemoryFilter(id)}
+                          onClick={() => { setMemoryFilter(id); setMemoryLimit(MEMORY_PAGE_SIZE) }}
                         >
                           {label}
                         </button>
@@ -460,9 +477,9 @@ function MemoryContextSection(props: { remote: TavernRemote; cardId: string; sto
                 </div>
               )}
               {memoryItems.length > 0 && filteredMemories.length === 0 && memories.state.status === 'ready' && (
-                <SearchEmpty what={t('memory.noun')} query={memoryQuery.trim() || memoryFilter} onClear={() => { setMemoryQuery(''); setMemoryFilter('all') }} />
+                <SearchEmpty what={t('memory.noun')} query={memoryQuery.trim() || memoryFilter} onClear={() => { setMemoryQuery(''); setMemoryFilter('all'); setMemoryLimit(MEMORY_PAGE_SIZE) }} />
               )}
-              {filteredMemories.map((m) => (
+              {visibleMemories.map((m) => (
                 <div key={m.id} className="dsh-tavern-memo">
                   <div className="dsh-tavern-memoHead">
                     <Badge>{m.id}</Badge>
@@ -495,6 +512,13 @@ function MemoryContextSection(props: { remote: TavernRemote; cardId: string; sto
                   )}
                 </div>
               ))}
+              {remainingMemories > 0 && (
+                <div style={{ display: 'flex', justifyContent: 'center' }}>
+                  <Btn disabled={busy} onClick={() => setMemoryLimit((n) => n + MEMORY_PAGE_SIZE)}>
+                    {t('memory.loadMore', { count: remainingMemories })}
+                  </Btn>
+                </div>
+              )}
               <div className="dsh-tavern-memo is-compose">
                 <textarea
                   className="dsh-tavern-input dsh-tavern-textarea"
@@ -552,7 +576,7 @@ function MemoryContextSection(props: { remote: TavernRemote; cardId: string; sto
                     placeholder={t('memory.deltaSearchPlaceholder')}
                     value={deltaQuery}
                     width={240}
-                    onChange={setDeltaQuery}
+                    onChange={(q) => { setDeltaQuery(q); setDeltaLimit(MEMORY_PAGE_SIZE) }}
                   />
                   <div className="dsh-tavern-filters">
                     {(
@@ -568,7 +592,7 @@ function MemoryContextSection(props: { remote: TavernRemote; cardId: string; sto
                         className="dsh-tavern-chip"
                         data-active={deltaFilter === id ? 'true' : 'false'}
                         disabled={busy || editingId !== null}
-                        onClick={() => setDeltaFilter(id)}
+                        onClick={() => { setDeltaFilter(id); setDeltaLimit(MEMORY_PAGE_SIZE) }}
                       >
                         {label}
                       </button>
@@ -577,9 +601,9 @@ function MemoryContextSection(props: { remote: TavernRemote; cardId: string; sto
                 </div>
               )}
               {deltaItems.length > 0 && filteredDeltas.length === 0 && deltas.state.status === 'ready' && (
-                <SearchEmpty what={t('memory.deltaNoun')} query={deltaQuery.trim() || deltaFilter} onClear={() => { setDeltaQuery(''); setDeltaFilter('all') }} />
+                <SearchEmpty what={t('memory.deltaNoun')} query={deltaQuery.trim() || deltaFilter} onClear={() => { setDeltaQuery(''); setDeltaFilter('all'); setDeltaLimit(MEMORY_PAGE_SIZE) }} />
               )}
-              {filteredDeltas.map((d: WorldDelta) => (
+              {visibleDeltas.map((d: WorldDelta) => (
                 <div key={d.id} className={`dsh-tavern-memo${d.revoked ? ' is-revoked' : ''}`}>
                   <div className="dsh-tavern-memoHead">
                     <Badge>#{d.id}</Badge>
@@ -596,6 +620,13 @@ function MemoryContextSection(props: { remote: TavernRemote; cardId: string; sto
                   <pre className="dsh-tavern-memoBody dsh-tavern-scroll">{d.content}</pre>
                 </div>
               ))}
+              {remainingDeltas > 0 && (
+                <div style={{ display: 'flex', justifyContent: 'center' }}>
+                  <Btn disabled={busy} onClick={() => setDeltaLimit((n) => n + MEMORY_PAGE_SIZE)}>
+                    {t('memory.loadMore', { count: remainingDeltas })}
+                  </Btn>
+                </div>
+              )}
               {deltaItems.length === 0 && deltas.state.status === 'ready' && (
                 <div className="dsh-tavern-empty is-compact">
                   <div className="dsh-tavern-emptyTitle">{t('memory.emptyDeltas')}</div>

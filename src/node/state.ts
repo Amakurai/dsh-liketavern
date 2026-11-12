@@ -61,8 +61,24 @@ const TRIGGER_LOG_SESSIONS_MAX = 64
 const STANDING_PINS_MAX = 256
 /** 非活跃剧情句柄与角色解析缓存上限：超限时按 LRU 逐出未开启楼层的旧句柄。 */
 const WORKSPACES_MAX = 64
+const CARD_WORKSPACES_MAX = 64
 const CARD_CACHE_MAX = 64
+const PRESET_CACHE_MAX = 64
+const LORE_CACHE_MAX = 128
+const PERSONA_CACHE_MAX = 64
+const MODEL_INFO_CACHE_MAX = 128
+const SWEPT_ROOTS_MAX = 512
 const CLEARED_ADOPTIONS_MAX = 512
+
+function setLru<K, V>(map: Map<K, V>, key: K, value: V, max: number): void {
+  map.delete(key)
+  map.set(key, value)
+  while (map.size > max) {
+    const oldest = map.keys().next().value
+    if (oldest === undefined) break
+    map.delete(oldest)
+  }
+}
 
 /** 永久删除前的持久化引用快照；两类引用都为空才允许移除卡目录。 */
 export interface CharacterDeletePlan {
@@ -222,6 +238,7 @@ export class TavernState {
   /** 宿主作用域持有的布局适配器；agent 销毁不影响其它剧情的注册。 */
   presetAdapter?: PresetAdapterController
   private readonly workspaces = new Map<string, WorkspaceHandle>()
+  private readonly sweptRoots = new Set<string>()
   readonly triggerLogs = new Map<string, { at: string; lines: string[] }>()
   /** 会话当前 turn 号（session/event 的 turn/start 维护；WI/记忆检索按 turn 缓存）。 */
   readonly requestDiagnostics = new Map<string, { text: string; truncated: boolean }>()
@@ -376,12 +393,28 @@ export class TavernState {
 
   // ── 角色工作区 ────────────────────────────────────────────────────────────
 
+  private markSweptRoot(key: string): boolean {
+    const normalized = this.assetFileKey(key)
+    if (this.sweptRoots.has(normalized)) return false
+    this.sweptRoots.add(normalized)
+    while (this.sweptRoots.size > SWEPT_ROOTS_MAX) {
+      const oldest = this.sweptRoots.values().next().value
+      if (oldest === undefined) break
+      this.sweptRoots.delete(oldest)
+    }
+    return true
+  }
+
   async workspace(cardId: string): Promise<WorkspaceHandle> {
     // 工作区根必须始终是 characters/ 下的单层目录；否则 WorkspaceFs 自身的
     // 相对路径保护只会约束在错误根目录内，挡不住 `cardId=..` 先把根挪出去。
     assertValidCardId(cardId)
     const cached = this.workspaces.get(cardId)
-    if (cached) return cached
+    if (cached) {
+      this.workspaces.delete(cardId)
+      this.workspaces.set(cardId, cached)
+      return cached
+    }
     const root = join(this.paths.characters, cardId)
     const wal = new Wal(join(root, 'state', 'wal'))
     const fs = new WorkspaceFs(root, wal)
@@ -390,23 +423,45 @@ export class TavernState {
     const deltas = new WorldDeltaStore(plainFs)
     const handle: WorkspaceHandle = { fs, plainFs, wal, memory, deltas, plain: { fs: plainFs, memory, deltas } }
     this.workspaces.set(cardId, handle)
-    await this.sweepTemps(root, { skipDir: (rel) => rel === 'stories' })
-    // stories 本层的崩溃草稿（.preparing-<uuid>）被上面的 skipDir 排除，只能在父层显式回收；
-    // 只删点号前缀且 mtime 超龄的目录，已发布的 story-<uuid>/legacy-<hex> 不在删除范围内。
-    await this.sweepTemps(join(root, 'stories'), { draftPrefixes: DRAFT_PREFIXES, recursive: false })
+    this.evictInactiveCardWorkspaces(cardId)
+    if (this.markSweptRoot(cardId)) {
+      await this.sweepTemps(root, { skipDir: (rel) => rel === 'stories' })
+      // stories 本层的崩溃草稿（.preparing-<uuid>）被上面的 skipDir 排除，只能在父层显式回收；
+      // 只删点号前缀且 mtime 超龄的目录，已发布的 story-<uuid>/legacy-<hex> 不在删除范围内。
+      await this.sweepTemps(join(root, 'stories'), { draftPrefixes: DRAFT_PREFIXES, recursive: false })
+    }
     return handle
   }
 
-  private evictInactiveWorkspaces(): void {
-    if (this.workspaces.size <= WORKSPACES_MAX) return
+  private evictInactiveCardWorkspaces(keepKey: string): void {
+    let cardCount = 0
+    for (const key of this.workspaces.keys()) {
+      if (!key.includes('/')) cardCount += 1
+    }
+    if (cardCount <= CARD_WORKSPACES_MAX) return
+    for (const key of this.workspaces.keys()) {
+      if (cardCount <= CARD_WORKSPACES_MAX) break
+      if (key.includes('/') || key === keepKey) continue
+      this.workspaces.delete(key)
+      cardCount -= 1
+    }
+  }
+
+  private evictInactiveStoryWorkspaces(keepKey: string): void {
+    let storyCount = 0
+    for (const key of this.workspaces.keys()) {
+      if (key.includes('/')) storyCount += 1
+    }
+    if (storyCount <= WORKSPACES_MAX) return
     const activeStories = new Set<string>()
     for (const open of this.openFloors.values()) {
       if (open.storyId) activeStories.add(`${open.cardId}/${open.storyId}`)
     }
     for (const key of this.workspaces.keys()) {
-      if (this.workspaces.size <= WORKSPACES_MAX) break
-      if (!key.includes('/') || activeStories.has(key)) continue
+      if (storyCount <= WORKSPACES_MAX) break
+      if (!key.includes('/') || key === keepKey || activeStories.has(key)) continue
       this.workspaces.delete(key)
+      storyCount -= 1
     }
   }
 
@@ -451,8 +506,10 @@ export class TavernState {
       storyStat: stat ? { ...stat, revision: ledger.counter, epoch: ledger.epoch } : undefined,
     }
     this.workspaces.set(key, handle)
-    this.evictInactiveWorkspaces()
-    await this.sweepTemps(root)
+    this.evictInactiveStoryWorkspaces(key)
+    if (this.markSweptRoot(key)) {
+      await this.sweepTemps(root)
+    }
     return handle
   }
 
@@ -464,7 +521,9 @@ export class TavernState {
       // rename 已完成而随后的读回暂失败，不能导致刚绑定成功的正文被失败清理删除。
       if (!binding && await new WorkspaceFs(this.paths.sessions, null).exists(basename(sessionFile(this.paths, sessionId)))) return
       await discardStory(join(this.paths.characters, cardId), storyId, sessionId)
-      this.workspaces.delete(`${cardId}/${storyId}`)
+      const key = `${cardId}/${storyId}`
+      this.workspaces.delete(key)
+      this.sweptRoots.delete(this.assetFileKey(key))
     })
   }
 
@@ -506,18 +565,11 @@ export class TavernState {
     const tag = `${this.assetRevision(`card:${cardId}`)}:${this.assetRevision(`charlore:${cardId}`)}`
     const cached = this.cardCache.get(cardId)
     if (cached && cached.tag === tag) {
-      this.cardCache.delete(cardId)
-      this.cardCache.set(cardId, cached)
+      setLru(this.cardCache, cardId, cached, CARD_CACHE_MAX)
       return cached.value
     }
     const value = await loadCharacter(this.paths.characters, cardId)
-    this.cardCache.delete(cardId)
-    this.cardCache.set(cardId, { tag, value })
-    while (this.cardCache.size > CARD_CACHE_MAX) {
-      const oldest = this.cardCache.keys().next().value
-      if (oldest === undefined) break
-      this.cardCache.delete(oldest)
-    }
+    setLru(this.cardCache, cardId, { tag, value }, CARD_CACHE_MAX)
     return value
   }
 
@@ -590,6 +642,9 @@ export class TavernState {
         const normalized = storageKey(key)
         if (normalized === deletedKey || normalized.startsWith(`${deletedKey}/`)) this.workspaces.delete(key)
       }
+      for (const key of [...this.sweptRoots]) {
+        if (key === deletedKey || key.startsWith(`${deletedKey}/`)) this.sweptRoots.delete(key)
+      }
       for (const key of this.cardCache.keys()) {
         if (storageKey(key) === deletedKey) this.cardCache.delete(key)
       }
@@ -629,6 +684,36 @@ export class TavernState {
     }
   }
 
+  private async readAssetCandidates(fs: WorkspaceFs, dir: string, base: string): Promise<{
+    ids: string[]
+    entries: Array<{ candidate: string; key: string; existing: string | null; existingSourceId: string | null }>
+  }> {
+    const baseKey = this.assetFileKey(base)
+    const ids = await this.assetFileIds(fs, dir)
+    const candidates = ids.filter((candidate) => {
+      const key = this.assetFileKey(candidate)
+      return key === baseKey || (key.startsWith(`${baseKey}-`) && /^\d+$/.test(key.slice(baseKey.length + 1)))
+    })
+    const raws = candidates.length > 0 ? await fs.readTextMany(candidates.map((candidate) => `${dir}/${candidate}.json`)) : []
+    const entries: Array<{ candidate: string; key: string; existing: string | null; existingSourceId: string | null }> = []
+    for (const [index, candidate] of candidates.entries()) {
+      const raw = raws[index] ?? null
+      if (raw === null) continue
+      let existing: string | null = null
+      let existingSourceId: string | null = null
+      try {
+        const json: unknown = JSON.parse(raw)
+        existing = stringField(json, 'identifier') ?? stringField(json, 'id') ?? stringField(json, 'name')
+        existingSourceId = stringField(json, 'sourceId')
+      } catch {
+        existing = null
+        existingSourceId = null
+      }
+      entries.push({ candidate, key: this.assetFileKey(candidate), existing, existingSourceId })
+    }
+    return { ids, entries }
+  }
+
   /**
    * assetFileId 多对一净化的冲突检测（问题5修复）：不同显示名可能净化成同一文件 id
    * （「主线 设定」/「主线?设定」→「主线_设定」），后保存者会静默覆盖前者。
@@ -646,25 +731,10 @@ export class TavernState {
     const base = this.assetFileId(name)
     const baseKey = this.assetFileKey(base)
     const matches: string[] = []
-    const ids = await this.assetFileIds(fs, dir)
-    const candidates = ids.filter((candidate) => {
-      const key = this.assetFileKey(candidate)
-      return key === baseKey || (key.startsWith(`${baseKey}-`) && /^\d+$/.test(key.slice(baseKey.length + 1)))
-    })
-    const raws = candidates.length > 0 ? await fs.readTextMany(candidates.map((candidate) => `${dir}/${candidate}.json`)) : []
-    for (const [index, candidate] of candidates.entries()) {
-      const key = this.assetFileKey(candidate)
-      const raw = raws[index] ?? null
-      if (raw === null) continue
-      let existing: string | null = null
-      try {
-        const json: unknown = JSON.parse(raw)
-        existing = stringField(json, 'identifier') ?? stringField(json, 'id') ?? stringField(json, 'name')
-        const existingSourceId = stringField(json, 'sourceId')
-        if (existingSourceId !== null && (sameAsset(existingSourceId) || expectedRevision === null)) existing = existingSourceId
-      } catch {
-        existing = null
-      }
+    const { ids, entries } = await this.readAssetCandidates(fs, dir, base)
+    for (const { candidate, key, existing: baseExisting, existingSourceId } of entries) {
+      let existing = baseExisting
+      if (existingSourceId !== null && (sameAsset(existingSourceId) || expectedRevision === null)) existing = existingSourceId
       // base 是调用方传回的直接目标，保留旧文件缺身份时的修复入口；未知后缀
       // 只接受实际内部身份，不能把坏文件猜成某个资产。Windows fallback 用请求名。
       if (existing !== null ? sameAsset(existing) : key === baseKey && sameAsset(base)) matches.push(candidate)
@@ -680,24 +750,8 @@ export class TavernState {
     const baseKey = this.assetFileKey(base)
     const matches: string[] = []
     let fallbackLegacy: string | null = null
-    const candidates = (await this.assetFileIds(fs, dir)).filter((candidate) => {
-      const key = this.assetFileKey(candidate)
-      return key === baseKey || (key.startsWith(`${baseKey}-`) && /^\d+$/.test(key.slice(baseKey.length + 1)))
-    })
-    const raws = candidates.length > 0 ? await fs.readTextMany(candidates.map((candidate) => `${dir}/${candidate}.json`)) : []
-    for (const [index, candidate] of candidates.entries()) {
-      const key = this.assetFileKey(candidate)
-      const raw = raws[index] ?? null
-      if (raw === null) continue
-      let existing: string | null = null
-      let existingSourceId: string | null = null
-      try {
-        const json: unknown = JSON.parse(raw)
-        existing = stringField(json, 'identifier') ?? stringField(json, 'id') ?? stringField(json, 'name')
-        existingSourceId = stringField(json, 'sourceId')
-      } catch {
-        existing = null
-      }
+    const { entries } = await this.readAssetCandidates(fs, dir, base)
+    for (const { candidate, key, existing, existingSourceId } of entries) {
       if (existingSourceId === name || existing === name) matches.push(candidate)
       if (key === baseKey && existing === null && existingSourceId === null) fallbackLegacy = candidate
     }
@@ -815,10 +869,13 @@ export class TavernState {
   async loadCharacterLorebookEntries(cardId: string): Promise<WorldInfoEntry[]> {
     const tag = `${this.assetRevision(`card:${cardId}`)}:${this.assetRevision(`charlore:${cardId}`)}`
     const cached = this.charLoreCache.get(cardId)
-    if (cached && cached.tag === tag) return cached.value
+    if (cached && cached.tag === tag) {
+      setLru(this.charLoreCache, cardId, cached, CARD_CACHE_MAX)
+      return cached.value
+    }
     const embedded = await this.loadCharacterLorebookRaw(cardId)
     const value = embedded ? parseLorebook(embedded.json, { source: 'character', sourceRef: cardId }) : []
-    this.charLoreCache.set(cardId, { tag, value })
+    setLru(this.charLoreCache, cardId, { tag, value }, CARD_CACHE_MAX)
     return value
   }
 
@@ -1138,12 +1195,15 @@ export class TavernState {
     const cacheKey = `${id}\0${source}`
     const rev = this.assetRevision(`lore:${id}`)
     const cached = this.loreCache.get(cacheKey)
-    if (cached && cached.rev === rev) return cached.value
+    if (cached && cached.rev === rev) {
+      setLru(this.loreCache, cacheKey, cached, LORE_CACHE_MAX)
+      return cached.value
+    }
     const fs = await this.rootFs()
     const raw = await fs.readText(`library/lorebooks/${id}.json`)
     if (raw === null) return []
     const value = parseLorebook(JSON.parse(raw), { source, sourceRef: id })
-    this.loreCache.set(cacheKey, { rev, value })
+    setLru(this.loreCache, cacheKey, { rev, value }, LORE_CACHE_MAX)
     return value
   }
 
@@ -1241,7 +1301,10 @@ export class TavernState {
     let key = this.assetFileId(id)
     const rev = this.assetRevision(`preset:${key}`)
     const cached = this.presetCache.get(key)
-    if (cached && cached.rev === rev && (!strictRead || cached.value !== null)) return cached.value
+    if (cached && cached.rev === rev && (!strictRead || cached.value !== null)) {
+      setLru(this.presetCache, key, cached, PRESET_CACHE_MAX)
+      return cached.value
+    }
     const fs = await this.rootFs()
     const raw = await fs.readText(`library/presets/${key}.json`)
     let value: PromptPreset | null = null
@@ -1253,7 +1316,7 @@ export class TavernState {
         value = null
       }
     }
-    this.presetCache.set(key, { rev, value })
+    setLru(this.presetCache, key, { rev, value }, PRESET_CACHE_MAX)
     return value
   }
 
@@ -1332,7 +1395,7 @@ export class TavernState {
         } catch {
           value = null // 坏文件跳过
         }
-        if (value !== null) this.personaCache.set(id, { rev, value })
+        if (value !== null) setLru(this.personaCache, id, { rev, value }, PERSONA_CACHE_MAX)
         return value
       }),
     )
@@ -1349,7 +1412,10 @@ export class TavernState {
     const rev = this.assetRevision(`persona:${key}`)
     const cached = this.personaCache.get(key)
     // 容错路径缓存的 null 可能来自坏 JSON；严格读取须重查，修复文件后也能直接恢复。
-    if (cached && cached.rev === rev && (!strictRead || cached.value !== null)) return cached.value
+    if (cached && cached.rev === rev && (!strictRead || cached.value !== null)) {
+      setLru(this.personaCache, key, cached, PERSONA_CACHE_MAX)
+      return cached.value
+    }
     const fs = await this.rootFs()
     // Windows 请求可以带大小写别名；冷读取实际拼写，热缓存仍不增加目录 I/O。
     const fileId = process.platform === 'win32'
@@ -1365,7 +1431,7 @@ export class TavernState {
         value = null
       }
     }
-    this.personaCache.set(key, { rev, value })
+    setLru(this.personaCache, key, { rev, value }, PERSONA_CACHE_MAX)
     return value
   }
 
@@ -1520,7 +1586,10 @@ export class TavernState {
     const info = await ws.fs.stat(path)
     let fingerprint = info ? `${info.mtimeMs}:${info.size}` : 'missing'
     const cached = this.cardRegexCache.get(cardId)
-    if (cached && cached.fingerprint === fingerprint) return cached.value
+    if (cached && cached.fingerprint === fingerprint) {
+      setLru(this.cardRegexCache, cardId, cached, CARD_CACHE_MAX)
+      return cached.value
+    }
     let cardRules: RegexRule[] = []
     // 解析成功（含空数组）即为确定结论：导入时无条件落盘该文件，`[]` 表示该卡确认无正则，
     // 直接短路。只有文件缺失/损坏（旧导入）才走卡内重编译兜底——否则无正则的卡
@@ -1555,7 +1624,7 @@ export class TavernState {
         }
       }
     }
-    this.cardRegexCache.set(cardId, { fingerprint, value: cardRules })
+    setLru(this.cardRegexCache, cardId, { fingerprint, value: cardRules }, CARD_CACHE_MAX)
     return cardRules
   }
 
@@ -1834,9 +1903,18 @@ export class TavernState {
     const now = Date.now()
     const key = `${provider}\0${model}`
     const cached = this.modelInfoCache.get(key)
-    if (cached && now >= cached.at && now - cached.at < MODEL_INFO_TTL_MS) return cached.promise
+    if (cached && now >= cached.at && now - cached.at < MODEL_INFO_TTL_MS) {
+      this.modelInfoCache.delete(key)
+      this.modelInfoCache.set(key, cached)
+      return cached.promise
+    }
+    if (this.modelInfoCache.size >= MODEL_INFO_CACHE_MAX) {
+      for (const [k, v] of this.modelInfoCache) {
+        if (now < v.at || now - v.at >= MODEL_INFO_TTL_MS) this.modelInfoCache.delete(k)
+      }
+    }
     const promise = llm.resolveModelInfo(provider, model, signal)
-    this.modelInfoCache.set(key, { at: now, promise })
+    setLru(this.modelInfoCache, key, { at: now, promise }, MODEL_INFO_CACHE_MAX)
     promise.catch(() => {
       if (this.modelInfoCache.get(key)?.promise === promise) this.modelInfoCache.delete(key)
     })

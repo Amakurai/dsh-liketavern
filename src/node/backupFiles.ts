@@ -26,16 +26,29 @@ export function checkedPath(root: string, path: string): string {
   return child
 }
 /** 包括传入根的祖先，避免中间的 junction 把显式目录解析到其它数据树。 */
-export async function assertDirectory(path: string): Promise<void> {
+export async function assertDirectory(path: string, verified?: ReadonlySet<string>): Promise<void> {
   const absolute = resolve(path)
   const root = parse(absolute).root
   let current = root
   for (const part of relative(root, absolute).split(sep).filter(Boolean)) {
     current = join(current, part)
+    if (verified?.has(current)) continue
     const info = await lstat(current)
     if (info.isSymbolicLink()) fail('LINK_NOT_ALLOWED')
     if (!info.isDirectory()) fail('DIRECTORY_REQUIRED')
   }
+}
+export function ancestorChainAbove(root: string): Set<string> {
+  const absolute = resolve(root)
+  const fsRoot = parse(absolute).root
+  const chain = new Set<string>()
+  let current = fsRoot
+  const parts = relative(fsRoot, absolute).split(sep).filter(Boolean)
+  for (let i = 0; i < parts.length - 1; i++) {
+    current = join(current, parts[i]!)
+    chain.add(current)
+  }
+  return chain
 }
 export async function assertAbsent(path: string): Promise<void> {
   try { await lstat(path) } catch (error) { if (errorCode(error) === 'ENOENT') return; throw error }
@@ -59,13 +72,14 @@ export function isDependencyPath(path: string): boolean {
 }
 export async function inventory(root: string, excludedDependencies?: string[]): Promise<ScannedEntry[]> {
   await assertDirectory(root)
+  const aboveRoot = ancestorChainAbove(root)
   const entries: ScannedEntry[] = []
   const folded = new Set<string>()
   let totalBytes = 0
   let pathBytes = 0
   async function visit(prefix: string): Promise<void> {
     const directory = prefix ? checkedPath(root, prefix) : root
-    await assertDirectory(directory)
+    await assertDirectory(directory, aboveRoot)
     for await (const entry of await opendir(directory)) {
       const path = prefix ? `${prefix}/${entry.name}` : entry.name
       if (!safeRelative(path)) fail('UNSAFE_PATH')
@@ -89,12 +103,13 @@ export async function inventory(root: string, excludedDependencies?: string[]): 
     }
   }
   await visit('')
+  await assertDirectory(root)
   return entries.sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0)
 }
 /** 固定位置分块读取，完整检查前后文件身份；输出文件独占创建且同步后关闭。 */
-export async function transferFile(root: string, entry: BackupEntry, destination?: string): Promise<string> {
+export async function transferFile(root: string, entry: BackupEntry, destination?: string, verifiedAboveRoot?: ReadonlySet<string>): Promise<string> {
   const path = checkedPath(root, entry.path)
-  await assertDirectory(dirname(path))
+  await assertDirectory(dirname(path), verifiedAboveRoot)
   const before = await lstat(path)
   if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1) fail('LINK_NOT_ALLOWED')
   if (before.size !== entry.size) fail('SOURCE_CHANGED')
@@ -121,7 +136,7 @@ export async function transferFile(root: string, entry: BackupEntry, destination
       }
       position += bytesRead
     }
-    await assertDirectory(dirname(path))
+    await assertDirectory(dirname(path), verifiedAboveRoot)
     if (position !== entry.size || !sameFile(before, await source.stat()) || !sameFile(before, await lstat(path))) fail('SOURCE_CHANGED')
     if (target) { await target.chmod(entry.mode); await target.sync() }
     return hash.digest('hex')

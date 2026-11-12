@@ -20,6 +20,10 @@ concurrency:
   group: release-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
   validate:
     uses: ./.github/workflows/ci.yml
@@ -61,6 +65,15 @@ jobs:
           # 保留 README 对外约定的附件名，内容沿用打包时的原始校验和。
           cp "dsh-liketavern-$VERSION.tgz.sha256" SHA256SUMS.txt
 
+      # 手工推送标签也必须位于 main 历史内（identical 或 behind），拒绝发布未合入主分支的游离提交。
+      - name: 校验发布标签归属主分支
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          AHEAD_BY=$(gh api "repos/$GITHUB_REPOSITORY/compare/main...$GITHUB_SHA" --jq .ahead_by)
+          test "$AHEAD_BY" = 0
+
       # 无本机 Git 凭据时可从 Actions 手动发布；验证和包校验成功后才创建标签。
       # GITHUB_TOKEN 创建的标签不再触发另一次 push workflow，避免重复发布。
       - name: 创建已验证标签（手动发布）
@@ -88,6 +101,7 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           TARBALL="dsh-liketavern-${RELEASE_TAG#v}.tgz"
+          STATUS="published"
           if DRAFT=$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft 2>/dev/null); then
             if [ "$DRAFT" = false ]; then
               mkdir -p "$RUNNER_TEMP/published"
@@ -95,11 +109,23 @@ jobs:
               cmp "release-assets/$TARBALL" "$RUNNER_TEMP/published/$TARBALL"
               cmp release-assets/SHA256SUMS.txt "$RUNNER_TEMP/published/SHA256SUMS.txt"
               echo "已发布附件与本次验证完全一致，跳过。"
-              exit 0
+              STATUS="verified-existing"
             fi
           else
             gh release create "$RELEASE_TAG" --draft --verify-tag \
               --title "$(cat release-title.txt)" --notes-file release-notes.md
           fi
-          gh release upload "$RELEASE_TAG" "release-assets/$TARBALL" release-assets/SHA256SUMS.txt --clobber
-          gh release edit "$RELEASE_TAG" --draft=false --title "$(cat release-title.txt)" --notes-file release-notes.md
+          if [ "$STATUS" = published ]; then
+            gh release upload "$RELEASE_TAG" "release-assets/$TARBALL" release-assets/SHA256SUMS.txt --clobber
+            gh release edit "$RELEASE_TAG" --draft=false --title "$(cat release-title.txt)" --notes-file release-notes.md
+          fi
+          if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+            DIGEST=$(awk '{print $1}' release-assets/SHA256SUMS.txt)
+            {
+              echo "### Release Summary: \`$RELEASE_TAG\` ($STATUS)"
+              echo ""
+              echo "- Commit: \`${GITHUB_SHA:-local}\`"
+              echo "- Package: \`$TARBALL\`"
+              echo "- SHA-256: \`$DIGEST\`"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi

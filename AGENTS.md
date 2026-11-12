@@ -83,7 +83,7 @@ npm pack --dry-run
 - 改 core/state 必须有对应行为测试。涉及宿主事件、分支、请求或故障时，补真实文件系统 + 模拟宿主/适配器的集成测试；不得以“host/UI 不测”为由跳过关键路径。
 - 重点回归：storyIsolation、transactionRecovery、robustBoundaries、pipelineCache、floorConcurrency、i18n。测试用手写工厂数据，不调用真实模型。
 - tests 直接 import src；Node 24 下 worker 源码测试使用类型剥离，交付运行只用 lib JS。正则超时测试必须在隔离 worker 中进行。
-- CI 每个平台分两片独立 runner，片内仍 maxWorkers=1；不得用同机增加 worker 或全局重试掩盖产品墙钟限额。JSON/JUnit 与慢用例摘要在失败时也保留；发布复用同一套双平台检查，只上传本次验证过的原始 tarball。流程与本地复现见 [CI 与测试](docs/CI.md)。
+- CI 由 Ubuntu 快速门禁先行拦错，通过后并行启动 Windows 构建守卫与双平台各四片 LPT 耗时均衡独立 runner，片内仍 maxWorkers=1；不得用同机增加 worker 或全局重试掩盖产品墙钟限额。JSON/JUnit 与慢用例摘要在失败时也保留；发布复用同一套双平台检查并校验标签归属 main，只上传本次验证过的原始 tarball。流程与本地复现见 [CI 与测试](docs/CI.md)。
 - 每个源文件和测试用中文块注释说明职责；标识符英文。测试验证业务结果与失败边界，避免只镜像实现。
 - 运行依赖为 zod、quickjs-emscripten、yaml、lodash、jsonrepair、@faker-js/faker、ejs、markdown-it、markdown-it-emoji、jquery、semver；jquery 仅随卡面库脚本文本打包，在 opaque-origin iframe 内执行，不能在宿主或主页面执行。模板库用于实际兼容编译参数、消息格式化、schema、Lodash、模型 JSON 修复与 Faker 全语言数据，构建为带原始及传递依赖许可证的 QuickJS 内部脚本，不桥接 Node 函数。Markdown 格式化仅在可终止 worker 的 QuickJS 中执行，不生成 metadata 完整文档或标题 ID；HTML 产物只能交给原有沙箱 iframe，不能放入主页面。已移除无公开补丁的 Showdown；格式化器升级使用 replay.formatterVersion 边界，旧活动日志不能静默改 hash、丢闭包或在拒绝前推进 WAL。隔离 JavaScript、有界初值解析与新增兼容库固定公开 npm 版本，不用 node:vm 冒充安全边界。宿主公开门槛（`engines.dsh` 与 `@deepseek-ai/*` peer）必须是 `*`：宿主自动升级到任何过去或未来版本都不得因版本号被拒；dev、overrides 与锁文件仍固定同一个经验证的精确基线，构建、测试与 `host:check` 只针对该基线。宿主接口漂移由 `src/node/hostCompat.ts` 逐步守卫：可选服务（`agentPresets`、`workspaceRegistry`、`typert`）经 `ctx.get` 探测，缺失即跳过；单个子系统失败只写一条降级日志，不得把异常抛回 Cordis；client 侧每个 slot 独立注册。诊断按宿主 includePrerelease 语义判断。禁止 file:、绝对路径或链接依赖；开发挂载仓库的 junction/symlink 是另一件事。
 - lib/ 刻意入库。所有 src 改动必须重建；CI 会拦过期、缺失和未跟踪产物。不要忽略 lib/。

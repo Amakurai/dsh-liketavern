@@ -23,28 +23,27 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ inputs.release_tag || github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ inputs.release_tag == '' && !startsWith(github.ref, 'refs/tags/') }}
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
+  # Ubuntu 快速门禁先拦住 workflow 语法、发布说明、锁文件审计与过期构建产物，
+  # 通过后立即并行启动 Windows 构建守卫与双平台测试分片，缩短主路径等待时间。
   verify:
-    name: verify (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    name: verify (ubuntu-latest)
+    runs-on: ubuntu-latest
     timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    defaults:
-      run:
-        shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       # 下载固定版本并核对独立 SHA-256，不通过浮动第三方 action 执行检查。
-      - name: 校验 CI 与发布 workflow
-        if: runner.os == 'Linux'
+      - name: 校验 GitHub Actions workflows
         run: |
           curl --fail --silent --show-error --location \
+            --retry 3 --retry-connrefused --connect-timeout 10 --max-time 60 \
             https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz \
             --output "$RUNNER_TEMP/actionlint.tar.gz"
           echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  $RUNNER_TEMP/actionlint.tar.gz" | sha256sum --check
@@ -70,14 +69,13 @@ jobs:
           node scripts/release-notes.mjs "$VERSION" CHANGELOG.md "$RUNNER_TEMP/release-notes.md" "$RUNNER_TEMP/release-title.txt"
 
       - name: 安装依赖
-        run: npm ci --no-audit --no-fund
+        run: npm ci --prefer-offline --no-audit --no-fund
 
       - name: 宿主版本对齐
         run: npm run host:check
 
       # 锁文件相同，审计无需在每个系统与分片重复请求 registry。
       - name: 依赖安全审计
-        if: runner.os == 'Linux'
         run: npm audit --package-lock-only
 
       - name: 构建（tsc + client bundle）
@@ -103,17 +101,10 @@ jobs:
 
       # 只打包一次，校验和与发布都使用这份字节流，不再触发 prepack 重建。
       - name: 生成并校验待审核 npm 包
-        if: runner.os == 'Linux'
         id: package
         run: node scripts/verify-package.mjs
 
-      # 直接运行覆盖 Windows 的 npm.cmd 安全拉起分支。
-      - name: 校验 npm 包边界（Windows）
-        if: runner.os == 'Windows'
-        run: node scripts/verify-package.mjs --dry-run
-
       - name: 上传待审核 npm 包
-        if: runner.os == 'Linux'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: npm-package-${{ github.sha }}
@@ -125,17 +116,12 @@ jobs:
           retention-days: 14
           compression-level: 0
 
-  tests:
-    name: test (${{ matrix.os }}, ${{ matrix.shard }}/2)
+  # 与测试分片并行执行 Windows 检出重建、CLI 链接与 npm.cmd 打包边界验证，仍为总闸必过项。
+  verify-windows:
+    name: verify (windows-latest)
     needs: verify
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
-    strategy:
-      # 一个分片失败仍收集其它分片，避免一次只看到一个平台的问题。
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-        shard: [1, 2]
+    runs-on: windows-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -147,16 +133,66 @@ jobs:
           cache: npm
 
       - name: 安装依赖
-        run: npm ci --no-audit --no-fund
+        run: npm ci --prefer-offline --no-audit --no-fund
 
-      # 分片放到独立 runner；每台仍 maxWorkers=1，保留 QuickJS 的墙钟隔离纪律。
+      - name: 宿主版本对齐
+        run: npm run host:check
+
+      - name: 构建（tsc + client bundle）
+        run: npm run build
+
+      - name: 校验 lib/ 与 presets/ 完整且未变化
+        run: |
+          git diff --exit-code --stat -- lib/ presets/
+          status=$(git status --porcelain --untracked-files=all -- lib/ presets/)
+          if [ -n "$status" ]; then
+            echo "lib/ 或 presets/ 存在未跟踪或未提交的产物："
+            echo "$status"
+            exit 1
+          fi
+
+      - name: 诊断命令安装入口冒烟
+        run: npm run doctor:check
+
+      - name: 备份恢复安装入口冒烟
+        run: npm run backup:check
+
+      # 直接运行覆盖 Windows 的 npm.cmd 安全拉起分支。
+      - name: 校验 npm 包边界（Windows）
+        run: node scripts/verify-package.mjs --dry-run
+
+  tests:
+    name: test (${{ matrix.os }}, ${{ matrix.shard }}/4)
+    needs: verify
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      # 一个分片失败仍收集其它分片，避免一次只看到一个平台的问题。
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci --prefer-offline --no-audit --no-fund
+
+      # 按双平台实测耗时 LPT 均衡切为四片独立 runner；每台仍 maxWorkers=1，保留 QuickJS 墙钟隔离纪律。
       - name: 测试
-        run: npm test -- --shard=${{ matrix.shard }}/2
+        run: npm test -- --shard=${{ matrix.shard }}/4
 
       - name: 测试结果与耗时摘要
         if: ${{ !cancelled() }}
         env:
-          TEST_LABEL: ${{ runner.os }} shard ${{ matrix.shard }}/2
+          TEST_LABEL: ${{ runner.os }} shard ${{ matrix.shard }}/4
         run: node scripts/summarize-tests.mjs .vitest/results.json
 
       - name: 上传测试报告
@@ -176,12 +212,25 @@ jobs:
   ci:
     name: CI checks
     if: always()
-    needs: [verify, tests]
+    needs: [verify, verify-windows, tests]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: 所有构建与测试必须成功
         env:
           VERIFY_RESULT: ${{ needs.verify.result }}
+          VERIFY_WINDOWS_RESULT: ${{ needs.verify-windows.result }}
           TEST_RESULT: ${{ needs.tests.result }}
-        run: test "$VERIFY_RESULT" = success && test "$TEST_RESULT" = success
+        run: |
+          if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+            {
+              echo "### CI Gate Summary"
+              echo ""
+              echo "| Stage | Result |"
+              echo "| --- | --- |"
+              echo "| \`verify (ubuntu-latest)\` | \`$VERIFY_RESULT\` |"
+              echo "| \`verify (windows-latest)\` | \`$VERIFY_WINDOWS_RESULT\` |"
+              echo "| \`tests (ubuntu + windows, 4 shards each)\` | \`$TEST_RESULT\` |"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          test "$VERIFY_RESULT" = success && test "$VERIFY_WINDOWS_RESULT" = success && test "$TEST_RESULT" = success

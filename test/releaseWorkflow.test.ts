@@ -11,6 +11,7 @@ const workflow = parse(await readFile(new URL('../.github/workflows/release.yml'
 const steps = workflow.jobs.release.steps as Array<{ name?: string; run?: string }>
 const publish = steps.find(step => step.name === '发布已验证安装包')!.run!
 const metadata = steps.find(step => step.name === '校验待发布包并生成说明')!.run!
+const ensureMainAncestry = steps.find(step => step.name === '校验发布标签归属主分支')!.run!
 const ensureTag = steps.find(step => step.name === '创建已验证标签（手动发布）')!.run!
 // Windows PATH 上的 bash 可能是 WSL 启动器；定位实际 git 安装携带的 Git Bash。
 const bash = process.platform === 'win32'
@@ -58,7 +59,7 @@ async function fixture(task: (root: string) => Promise<void>) {
 function run(root: string, script: string, scenario = '', options: { factory?: string; env?: Record<string, string> } = {}) {
   // 统一转成 Git Bash 的 POSIX 路径；仅替换反斜杠会让 mkdir -p 探测 Windows 用户父目录，在受限环境中失败。
   const preparePaths = process.platform === 'win32'
-    ? 'RUNNER_TEMP="$(cygpath -u "$RUNNER_TEMP")"\nCALL_LOG="$(cygpath -u "$CALL_LOG")"\n' : ''
+    ? 'RUNNER_TEMP="$(cygpath -u "$RUNNER_TEMP")"\nCALL_LOG="$(cygpath -u "$CALL_LOG")"\nif [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then GITHUB_STEP_SUMMARY="$(cygpath -u "$GITHUB_STEP_SUMMARY")"; fi\n' : ''
   return spawnSync(bash, ['--noprofile', '--norc', '-e', '-o', 'pipefail', '-c', `${preparePaths}${options.factory ?? factoryGh}\n${script}`], {
     cwd: root, encoding: 'utf8', windowsHide: true, timeout: 10_000,
     env: { ...process.env, SCENARIO: scenario, RELEASE_TAG: 'v1.2.3', RUNNER_TEMP: root.replace(/\\/g, '/'), CALL_LOG: join(root, 'calls.txt').replace(/\\/g, '/'), ...options.env },
@@ -66,14 +67,42 @@ function run(root: string, script: string, scenario = '', options: { factory?: s
 }
 
 it.each([
-  ['new', ['view', 'create', 'upload', 'edit']],
-  ['draft', ['view', 'upload', 'edit']],
-  ['published', ['view', 'download']],
-] as const)('%s：只有附件就绪后才发布，公开的相同附件可幂等重跑', async (scenario, commands) => {
+  ['new', ['view', 'create', 'upload', 'edit'], 'published'],
+  ['draft', ['view', 'upload', 'edit'], 'published'],
+  ['published', ['view', 'download'], 'verified-existing'],
+] as const)('%s：只有附件就绪后才发布，公开的相同附件可幂等重跑并输出摘要', async (scenario, commands, expectedStatus) => {
   await fixture(async root => {
-    const result = run(root, publish, scenario)
+    const summary = join(root, 'summary.md')
+    const result = run(root, publish, scenario, { env: { GITHUB_STEP_SUMMARY: summary.replace(/\\/g, '/'), GITHUB_SHA: 'a'.repeat(40) } })
     expect(result.status, result.stderr || result.error?.message).toBe(0)
     expect((await readFile(join(root, 'calls.txt'), 'utf8')).trim().split('\n')).toEqual(commands.map(command => `release ${command}`))
+    const summaryText = await readFile(summary, 'utf8')
+    expect(summaryText).toContain(`Release Summary: \`v1.2.3\` (${expectedStatus})`)
+    expect(summaryText).toContain('`dsh-liketavern-1.2.3.tgz`')
+  })
+})
+
+const ancestryFactory = `
+gh() {
+  printf '%s\\n' "$*" >> "$CALL_LOG"
+  case "$*" in
+    'api repos/factory/repo/compare/main...aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --jq .ahead_by')
+      case "$SCENARIO" in
+        on-main) echo 0 ;;
+        off-main) echo 2 ;;
+        *) return 1 ;;
+      esac ;;
+    *) return 99 ;;
+  esac
+}
+`
+
+it('标签推送校验：仅接受位于 main 历史上的提交，分叉提交与接口异常均拒绝', async () => {
+  await fixture(async root => {
+    const env = { GITHUB_REPOSITORY: 'factory/repo', GITHUB_SHA: 'a'.repeat(40) }
+    expect(run(root, ensureMainAncestry, 'on-main', { factory: ancestryFactory, env }).status).toBe(0)
+    expect(run(root, ensureMainAncestry, 'off-main', { factory: ancestryFactory, env }).status).not.toBe(0)
+    expect(run(root, ensureMainAncestry, 'api-error', { factory: ancestryFactory, env }).status).not.toBe(0)
   })
 })
 

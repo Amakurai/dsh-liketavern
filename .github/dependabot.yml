@@ -4,16 +4,56 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 3
+    groups:
+      github-actions:
+        patterns:
+          - "*"
 
   - package-ecosystem: "npm"
     directory: "/"
     schedule:
       interval: "weekly"
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 3
+    groups:
+      npm-minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
     ignore:
       # 宿主开发基线需整组对齐并通过 npm run host:check 验证，避免单包漂移破坏构建。
       - dependency-name: "@deepseek-ai/*"
-      # 模板检查点引擎固定精确 WASM ABI，升级须同步核对引擎清单与旧检查点兼容。
+      # 模板检查点引擎与构建器固定精确 WASM/产物 ABI，升级须同步核对引擎清单与旧检查点兼容。
       - dependency-name: "quickjs-emscripten*"
       - dependency-name: "@jitl/quickjs-*"
+      - dependency-name: "esbuild-vendor"
+      # 模板与卡面沙箱库内嵌进已入库的 lib/vendor/* 并绑定运行时源码指纹，须在本地重建产物并登记旧指纹后提交；安全漏洞仍由 CI npm audit 与 Advisory 告警拦截。
+      - dependency-name: "@faker-js/faker"
+      - dependency-name: "ejs"
+      - dependency-name: "jquery"
+      - dependency-name: "jsonrepair"
+      - dependency-name: "lodash"
+      - dependency-name: "markdown-it*"
+      - dependency-name: "yaml"
+      - dependency-name: "zod"
+      # 客户端外部化依赖与测试运行器跟随宿主 React 18 / store 基线或锁定主版本 API，跨大版本需人工评估。
+      - dependency-name: "react"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "react-dom"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "react-test-renderer"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@types/react*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "zustand"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "immer"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "vitest"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "jsdom"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "esbuild"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]

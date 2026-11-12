@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { expect, it } from 'vitest'
+import { estimateTestFileSeconds, partitionTestShard, sortShardFiles } from '../scripts/shard-tests.mjs'
 import { summarizeTests } from '../scripts/summarize-tests.mjs'
 
 function report() {
@@ -70,4 +71,44 @@ it('实际 Vitest CLI 在本地和 Actions 两种 reporter 配置下均能启动
       expect(files.some(row => row.file.endsWith('/test/toolWriteReceipt.test.ts'))).toBe(true)
     }
   } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+it('LPT 分片在任意片数下保持完整不重不漏，并将重型套件均匀分散到不同分片', () => {
+  const sample = [
+    'test/templateCheckpointUpgrade.test.ts',
+    'test/template.test.ts',
+    'test/walCrashMatrix.test.ts',
+    'test/templateStorageScale.test.ts',
+    'test/templateCheckpoint.test.ts',
+    'test/transactionRecovery.test.ts',
+    'test/brandNewFutureSuite.test.ts',
+    'test/brandNewUiSuite.test.tsx',
+    'test/brandNewTemplateSuite.test.ts',
+    'test/tokenize.test.ts',
+    'test/i18n.test.ts',
+    'test/bm25.test.ts',
+  ].map(relativePath => ({ item: relativePath, relativePath }))
+
+  for (const platform of ['win32', 'linux'] as const) {
+    for (const count of [1, 2, 3, 4, 6]) {
+      const shards = Array.from({ length: count }, (_, idx) =>
+        partitionTestShard(sample, { index: idx + 1, count, platform }))
+      const flattened = shards.flat()
+      expect(new Set(flattened).size).toBe(sample.length)
+      expect([...flattened].sort()).toEqual(sample.map(entry => entry.item).sort())
+      // 输入乱序时同一平台各 runner 仍计算出完全一致的分片结果。
+      const reversed = [...sample].reverse()
+      expect(partitionTestShard(reversed, { index: count, count, platform })).toEqual(shards[count - 1])
+    }
+    const fourShards = Array.from({ length: 4 }, (_, idx) =>
+      partitionTestShard(sample, { index: idx + 1, count: 4, platform }))
+    const shardTotals = fourShards.map(files =>
+      files.reduce((sum, file) => sum + estimateTestFileSeconds(file, platform), 0))
+    expect(Math.max(...shardTotals) - Math.min(...shardTotals)).toBeLessThan(15)
+    const sorted = sortShardFiles(sample, { platform })
+    expect(estimateTestFileSeconds(sorted[0]!, platform)).toBeGreaterThan(estimateTestFileSeconds(sorted.at(-1)!, platform))
+  }
+  expect(() => partitionTestShard(sample, { index: 0, count: 4 })).toThrow('无效的分片序号')
+  expect(() => partitionTestShard(sample, { index: 5, count: 4 })).toThrow('无效的分片序号')
+  expect(() => partitionTestShard(sample, { index: 1, count: 0 })).toThrow('无效的分片总数')
 })

@@ -1,7 +1,32 @@
-/** 隔离运行时按墙钟限时；限制测试文件并发，避免大量测试沙箱争抢 CPU 产生假超时，不放宽产品限额。 */
+/** 隔离运行时按墙钟限时；限制测试文件并发并按实测耗时做确定性 LPT 分片，避免沙箱争抢 CPU 或哈希偏斜拖慢长尾，不放宽产品限额。 */
 import { availableParallelism } from 'node:os'
+import { relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { configDefaults, defineConfig } from 'vitest/config'
+import { BaseSequencer, type TestSpecification } from 'vitest/node'
+import { partitionTestShard, sortShardFiles } from './scripts/shard-tests.mjs'
+
+const HOST_RUNTIME_IMPORT_RE = /(?:^|\n|;)\s*(?:import(?!\s+type\b)|export(?!\s+type\b))\s+(?:[^;\n]*?\s+from\s+)?['"]@deepseek-ai\/(?!dsh-client-)|import\s*\(\s*['"]@deepseek-ai\/(?!dsh-client-)/
+
+class BalancedSequencer extends BaseSequencer {
+  private wrapSpecifications(files: TestSpecification[]) {
+    const root = this.ctx.config.root
+    return files.map(item => ({
+      item,
+      relativePath: relative(root, item.moduleId).replaceAll('\\', '/'),
+    }))
+  }
+
+  override async shard(files: TestSpecification[]): Promise<TestSpecification[]> {
+    const shard = this.ctx.config.shard
+    if (!shard) return files
+    return partitionTestShard(this.wrapSpecifications(files), { index: shard.index, count: shard.count })
+  }
+
+  override async sort(files: TestSpecification[]): Promise<TestSpecification[]> {
+    return sortShardFiles(this.wrapSpecifications(files))
+  }
+}
 
 export default defineConfig({
   plugins: [
@@ -73,11 +98,17 @@ import { ToolRuntime } from '@deepseek-ai/dsh-tools'
 import { NativeToolExecutor } from '@deepseek-ai/dsh-tool-executor-native'
 import { WorkingDirectoryService } from '@deepseek-ai/dsh-working-directory'
 import { SandboxPolicyService } from '@deepseek-ai/dsh-sandbox-policy'
-// setup 只安装宿主测试桩；业务模块等测试文件注册 vi.mock 后再加载，避免提前缓存真实适配器。
+// 兼容桩按需在首个宿主后端导入前挂载，并固定原始方法引用防止同进程多文件重复包裹原型链；
+// 业务模型路由仍等实际创建 Agent 或处理 agent/pre-step 时动态加载，避免抢先缓存真实适配器。
 const loadModelRoute = () => import('${fileURLToPath(new URL('./src/node/modelRoute.ts', import.meta.url)).replace(/\\/g, '/')}')
+const originalMethod = (proto, key, fn) => {
+  const slot = Symbol.for('dsh-liketavern.testHarnessOrig.' + key)
+  if (!proto[slot]) proto[slot] = fn
+  return proto[slot]
+}
 
 if (typeof AgentModel?.prototype?.current === 'function') {
-  const origCurrent = AgentModel.prototype.current
+  const origCurrent = originalMethod(AgentModel.prototype, 'AgentModel.current', AgentModel.prototype.current)
   AgentModel.prototype.current = function () {
     const state = this.readState?.()
     if (state?.pending) return { ...state.pending }
@@ -96,7 +127,7 @@ if (typeof AgentModel?.prototype?.current === 'function') {
 }
 
 if (typeof SandboxPolicyService?.prototype?.overrideOf === 'function') {
-  const origOverrideOf = SandboxPolicyService.prototype.overrideOf
+  const origOverrideOf = originalMethod(SandboxPolicyService.prototype, 'SandboxPolicyService.overrideOf', SandboxPolicyService.prototype.overrideOf)
   SandboxPolicyService.prototype.overrideOf = function (session) {
     if (!this.sandboxModeProjectionHandle) return undefined
     return origOverrideOf.call(this, session)
@@ -104,7 +135,7 @@ if (typeof SandboxPolicyService?.prototype?.overrideOf === 'function') {
 }
 
 if (typeof WorkingDirectoryService?.prototype?.get === 'function') {
-  const origGet = WorkingDirectoryService.prototype.get
+  const origGet = originalMethod(WorkingDirectoryService.prototype, 'WorkingDirectoryService.get', WorkingDirectoryService.prototype.get)
   WorkingDirectoryService.prototype.get = function (session) {
     if (!this.workingDirectoryProjectionHandle) {
       return session?.header?.cwd ?? this.defaultDirectory
@@ -114,7 +145,7 @@ if (typeof WorkingDirectoryService?.prototype?.get === 'function') {
 }
 
 if (typeof WorkingDirectoryService?.prototype?.ensure === 'function') {
-  const origEnsure = WorkingDirectoryService.prototype.ensure
+  const origEnsure = originalMethod(WorkingDirectoryService.prototype, 'WorkingDirectoryService.ensure', WorkingDirectoryService.prototype.ensure)
   WorkingDirectoryService.prototype.ensure = async function (agent, signal) {
     if (!this.workingDirectoryProjectionHandle && this.ctx?.sessionProjections) {
       try { await this[Service.init]?.() } catch {}
@@ -127,7 +158,7 @@ if (typeof WorkingDirectoryService?.prototype?.ensure === 'function') {
 }
 
 if (typeof ToolRuntime?.prototype?.selectExecutor === 'function') {
-  const origSelectExecutor = ToolRuntime.prototype.selectExecutor
+  const origSelectExecutor = originalMethod(ToolRuntime.prototype, 'ToolRuntime.selectExecutor', ToolRuntime.prototype.selectExecutor)
   ToolRuntime.prototype.selectExecutor = function (scope) {
     try {
       return origSelectExecutor.call(this, scope)
@@ -154,7 +185,7 @@ if (typeof ToolRuntime?.prototype?.modeFor !== 'function') {
 }
 
 if (typeof ToolRuntime?.prototype?.execute === 'function') {
-  const origExecute = ToolRuntime.prototype.execute
+  const origExecute = originalMethod(ToolRuntime.prototype, 'ToolRuntime.execute', ToolRuntime.prototype.execute)
   ToolRuntime.prototype.execute = async function (input) {
     const isSingle = input && !input.calls && (input.name !== undefined || input.callId !== undefined)
     if (isSingle) {
@@ -172,9 +203,10 @@ if (typeof ToolRuntime?.prototype?.execute === 'function') {
 }
 
 try {
-  const EventsService = new Context().events?.constructor
+  const eventsCtorSlot = Symbol.for('dsh-liketavern.testHarnessOrig.EventsService')
+  const EventsService = (globalThis[eventsCtorSlot] ??= new Context().events?.constructor)
   if (typeof EventsService?.prototype?.waterfall === 'function') {
-    const origWaterfall = EventsService.prototype.waterfall
+    const origWaterfall = originalMethod(EventsService.prototype, 'EventsService.waterfall', EventsService.prototype.waterfall)
     EventsService.prototype.waterfall = function (...args) {
       const name = typeof args[0] === 'string' ? args[0] : typeof args[1] === 'string' ? args[1] : undefined
       if (name === 'agent/pre-step') {
@@ -198,7 +230,7 @@ try {
 } catch {}
 
 if (typeof AgentRegistry?.prototype?.setFactory === 'function') {
-  const origSetFactory = AgentRegistry.prototype.setFactory
+  const origSetFactory = originalMethod(AgentRegistry.prototype, 'AgentRegistry.setFactory', AgentRegistry.prototype.setFactory)
   AgentRegistry.prototype.setFactory = function (factory) {
     if (this.factory !== undefined) {
       const target = factory?.[symbols.original] ?? factory
@@ -209,7 +241,7 @@ if (typeof AgentRegistry?.prototype?.setFactory === 'function') {
 }
 
 if (typeof AgentRegistry?.prototype?.requireFactory === 'function') {
-  const origRequireFactory = AgentRegistry.prototype.requireFactory
+  const origRequireFactory = originalMethod(AgentRegistry.prototype, 'AgentRegistry.requireFactory', AgentRegistry.prototype.requireFactory)
   AgentRegistry.prototype.requireFactory = function () {
     if (!this.factory && this.ctx?.agentLoop) {
       try { this.setFactory(this.ctx.agentLoop) } catch {}
@@ -219,7 +251,7 @@ if (typeof AgentRegistry?.prototype?.requireFactory === 'function') {
 }
 
 if (typeof AgentLoop?.prototype?.initializeAgent === 'function') {
-  const origInitializeAgent = AgentLoop.prototype.initializeAgent
+  const origInitializeAgent = originalMethod(AgentLoop.prototype, 'AgentLoop.initializeAgent', AgentLoop.prototype.initializeAgent)
   AgentLoop.prototype.initializeAgent = async function (ownerCtx, options) {
     if (!this.modelProjectionHandle) {
       await this[Service.init]?.()
@@ -249,7 +281,7 @@ if (typeof AgentLoop?.prototype?.initializeAgent === 'function') {
 }
 
 if (typeof AgentRegistry?.prototype?.turnBoundaryOf === 'function') {
-  const origTurnBoundaryOf = AgentRegistry.prototype.turnBoundaryOf
+  const origTurnBoundaryOf = originalMethod(AgentRegistry.prototype, 'AgentRegistry.turnBoundaryOf', AgentRegistry.prototype.turnBoundaryOf)
   AgentRegistry.prototype.turnBoundaryOf = function (session) {
     if (this.turnBoundaryProjectionHandle) {
       return origTurnBoundaryOf.call(this, session)
@@ -282,10 +314,17 @@ if (typeof AgentRegistry?.prototype?.turnBoundaryOf === 'function') {
 `
       },
       transform(code, id) {
-        if (id.replace(/\\/g, '/').endsWith('/test/setupComputeWorkers.ts')) {
-          return { code: `import '\\0dsh-test-harness-compat';\n${code}`, map: null }
+        if (id.startsWith('\0')) return null
+        const normalized = id.replace(/\\/g, '/')
+        if (normalized.includes('/node_modules/') || !/\.(?:[cm]?[jt]sx?)$/.test(normalized)) return null
+        let next = code
+        if (!code.startsWith('#!') && HOST_RUNTIME_IMPORT_RE.test(code)) {
+          next = `import '\\0dsh-test-harness-compat';${next}`
         }
-        return null
+        if (normalized.endsWith('/src/node/isolated.ts')) {
+          next = `${next}\n;(globalThis[Symbol.for('dsh-liketavern.computeWorkerDisposers')] ??= new Set()).add(disposeIdleComputeWorkers);\n`
+        }
+        return next === code ? null : { code: next, map: null }
       },
     },
   ],
@@ -293,6 +332,9 @@ if (typeof AgentRegistry?.prototype?.turnBoundaryOf === 'function') {
     // 只收集仓库 test/；.tmp 等被忽略目录里的旧版冒烟副本不能混进本地全量运行。
     include: ['test/**/*.test.{ts,tsx}'],
     setupFiles: ['test/setupComputeWorkers.ts'],
+    sequence: {
+      sequencer: BalancedSequencer,
+    },
     // 显式配置 reporter 时默认的 GitHub 注解不会自动追加，必须一并保留。
     reporters: process.env.GITHUB_ACTIONS === 'true' ? [
       'default', 'github-actions',

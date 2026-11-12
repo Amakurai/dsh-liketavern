@@ -10,7 +10,9 @@ import ts from 'typescript'
 const attributes = await readFile(new URL('../.gitattributes', import.meta.url), 'utf8')
 const workflow = parse(await readFile(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8'))
 const steps = workflow.jobs.verify.steps as Array<{ name?: string; run?: string }>
+const windowsSteps = workflow.jobs['verify-windows'].steps as Array<{ name?: string; run?: string }>
 const guard = steps.find(step => step.name === '校验 lib/ 与 presets/ 完整且未变化')!.run!
+const windowsGuard = windowsSteps.find(step => step.name === '校验 lib/ 与 presets/ 完整且未变化')!.run!
 const bash = process.platform === 'win32'
   ? resolve(spawnSync('git', ['--exec-path'], { encoding: 'utf8' }).stdout.trim(), '../../..', 'bin/bash.exe') : 'bash'
 const source = '/** 工厂多行模板，编译器必须看到与入库相同的原始换行。 */\nexport const ready = String.raw`first\nsecond`;\n'
@@ -42,6 +44,10 @@ function check(root: string) {
 }
 
 // 多次真实 commit/clone/Bash 检查的总时限独立于产品执行期限。
+it('Ubuntu 与 Windows 的构建产物守卫保持同一份脚本定义', () => {
+  expect(windowsGuard).toBe(guard)
+})
+
 it.each(['true', 'false'])('首次检出 core.autocrlf=%s 后重建保持干净，守卫仍拒绝改动、未跟踪与缺失产物', { timeout: 30_000 }, async autocrlf => {
   const root = await mkdtemp(join(tmpdir(), 'tavern-build-checkout-'))
   try {

@@ -222,7 +222,7 @@
     "@jitl/quickjs-wasmfile-release-sync": "0.32.0",
     "@modelcontextprotocol/client": "2.3.1",
     "@types/markdown-it-emoji": "3.0.1",
-    "@types/node": "^24.0.0",
+    "@types/node": "^26.6.6",
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.7",
     "@types/react-test-renderer": "18.3.1",

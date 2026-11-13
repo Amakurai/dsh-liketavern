@@ -3,7 +3,7 @@
  * 给模型工具用，避免整本 JSON 灌进上下文。
  */
 import { countJsonStringTokenChars, countTokenChars, estimateTokens, isTokenCjkCode, type TokenCharCounts } from './tokenize.js'
-import { clipAssetJsonText, countPrettyArrayItemChars, stabilizeJsonTokenCount, stampAssetTokens } from './assetRead.js'
+import { clipAssetJsonText, collapseWhitespacePreview, countPrettyArrayItemChars, stabilizeJsonTokenCount, stampAssetTokens } from './assetRead.js'
 import type { WISource, WorldInfoEntry } from './types.js'
 
 export const LORE_READ_DEFAULT_TOPK = 6
@@ -40,10 +40,7 @@ export function clampLoreTopK(value: number | undefined): number {
 }
 
 export function toLoreCatalogItem(entry: WorldInfoEntry): LoreCatalogItem {
-  const normalized = entry.content.replace(/\s+/g, ' ').trim()
-  let end = LORE_CATALOG_PREVIEW
-  if (end < normalized.length && end > 0 && /[\uD800-\uDBFF]/.test(normalized[end - 1]!) && /[\uDC00-\uDFFF]/.test(normalized[end] ?? '')) end--
-  const preview = normalized.slice(0, end)
+  const preview = collapseWhitespacePreview(entry.content, LORE_CATALOG_PREVIEW)
   return {
     uid: entry.uid,
     key: entry.key,
@@ -58,10 +55,10 @@ export function toLoreCatalogItem(entry: WorldInfoEntry): LoreCatalogItem {
   }
 }
 
-function scoreLore(entry: WorldInfoEntry, needle: string): number {
+function scoreLore(entry: WorldInfoEntry, needle: string, lowerNeedle = needle.toLowerCase()): number {
   if (!needle) return 1
   if (entry.uid === needle || entry.key === needle) return 100
-  const q = needle.toLowerCase()
+  const q = lowerNeedle
   if (entry.uid.toLowerCase() === q || entry.key.toLowerCase() === q) return 95
   if (entry.keys.some((k) => k.toLowerCase() === q)) return 80
   if (entry.keys.some((k) => k.toLowerCase().includes(q))) return 60
@@ -101,8 +98,9 @@ export function selectLoreEntries(entries: readonly WorldInfoEntry[], q: LoreRea
   }
   const query = q.query?.trim()
   if (!query) return scoped
+  const lowerQuery = query.toLowerCase()
   const ranked = scoped
-    .map((entry) => ({ entry, score: scoreLore(entry, query) }))
+    .map((entry) => ({ entry, score: scoreLore(entry, query, lowerQuery) }))
     .filter((x) => x.score > 0)
     .sort((a, b) => b.score - a.score || b.entry.order - a.entry.order)
   return ranked.slice(0, clampLoreTopK(q.topK)).map((x) => x.entry)
@@ -234,8 +232,9 @@ function budgetLoreItems<T extends { metadataTruncated?: boolean; truncated?: bo
 
 export function budgetLoreCatalog(entries: readonly WorldInfoEntry[], budget = LORE_READ_TOKEN_BUDGET, extraHint?: string): LoreBudgetResult<LoreCatalogItem> {
   return budgetLoreItems(entries, 'catalog', budget, entry => {
-    const preview = clipAssetJsonText(toLoreCatalogItem(entry).preview, 80), metadata = boundedLoreMetadata(entry)
-    return { ...metadata, tokens: estimateTokens(entry.content), preview: preview.text,
+    const catalogItem = toLoreCatalogItem(entry)
+    const preview = clipAssetJsonText(catalogItem.preview, 80), metadata = boundedLoreMetadata(entry)
+    return { ...metadata, tokens: catalogItem.tokens, preview: preview.text,
       metadataTruncated: preview.truncated || metadata.metadataTruncated }
   }, undefined, extraHint)
 }

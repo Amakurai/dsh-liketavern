@@ -10,24 +10,27 @@ const CHAT_WORLDBOOK_PREFIX=`${HELPER_CHAT_WORLDBOOK}/`
 function id(value:unknown):string {if(typeof value!=='string'||!/^[a-z0-9][a-z0-9-]{0,63}$/.test(value))throw new Error('聊天世界书标识无效');return value}
 export function chatWorldbookId(ref:string):string|null {if(ref===HELPER_CHAT_WORLDBOOK)return 'main';if(ref.startsWith(CHAT_WORLDBOOK_PREFIX))return id(ref.slice(CHAT_WORLDBOOK_PREFIX.length));return null}
 export function chatWorldbookRef(value:string):string {return id(value)==='main'?HELPER_CHAT_WORLDBOOK:CHAT_WORLDBOOK_PREFIX+value}
-export function plainChatWorldbook(value:unknown):unknown {
+function stripAndValidatePlainChatWorldbook(value:unknown):{book:Record<string,unknown>;entryCount:number} {
   if(!helperRecord(value))throw new Error('聊天世界书必须为对象')
   const {[CHAT_WORLDBOOK_META]:_meta,...book}=value
-  readHelperWorldbook(book)
-  return book
+  const parsed=readHelperWorldbook(book)
+  return {book,entryCount:parsed.entries.length}
+}
+export function plainChatWorldbook(value:unknown):unknown {
+  return stripAndValidatePlainChatWorldbook(value).book
 }
 export function decodeChatWorldbooks(input:unknown|null):ChatWorldbooks {
   if(input===null)return {active:null,books:new Map()}
   const raw=helperJson(input,CHAT_WORLDBOOK_TOTAL_BYTES)
   if(!helperRecord(raw))throw new Error('聊天世界书文件损坏')
   const meta=raw[CHAT_WORLDBOOK_META],books=new Map<string,unknown>()
-  if(meta===undefined)return {active:'main',books:new Map([['main',plainChatWorldbook(raw)]])}
-  if(!helperRecord(meta)||meta.version!==1||!helperRecord(meta.books)||Object.keys(meta.books).length>64||Object.keys(meta).some(key=>!['version','active','books'].includes(key)))throw new Error('聊天世界书集合损坏')
+  if(meta===undefined)return {active:'main',books:new Map([['main',stripAndValidatePlainChatWorldbook(raw).book]])}
+  if(!helperRecord(meta)||meta.version!==1||!helperRecord(meta.books)||Object.keys(meta.books).length>64||Object.keys(meta).some(key=>key!=='version'&&key!=='active'&&key!=='books'))throw new Error('聊天世界书集合损坏')
   const active=meta.active===null?null:id(meta.active)
-  for(const [key,value] of Object.entries(meta.books)){id(key);if(key===active)throw new Error('聊天世界书活动副本冲突');books.set(key,plainChatWorldbook(value))}
-  const current=plainChatWorldbook(raw)
-  if(active!==null)books.set(active,current)
-  else if(readHelperWorldbook(current).entries.length)throw new Error('已解绑聊天世界书仍含活动条目')
+  for(const [key,value] of Object.entries(meta.books)){id(key);if(key===active)throw new Error('聊天世界书活动副本冲突');books.set(key,stripAndValidatePlainChatWorldbook(value).book)}
+  const current=stripAndValidatePlainChatWorldbook(raw)
+  if(active!==null)books.set(active,current.book)
+  else if(current.entryCount)throw new Error('已解绑聊天世界书仍含活动条目')
   if(books.size>64)throw new Error('聊天世界书超过 64 本预算')
   return {active,books}
 }

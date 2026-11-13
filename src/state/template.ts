@@ -1,6 +1,7 @@
 /** 剧情模板状态共用原子根事务；大型快照无损分块复用，预览只读，楼层写入先 WAL。 */
 import { createHash } from 'node:crypto'
 import { Buffer } from 'node:buffer'
+import { sep } from 'node:path'
 import { emptyTemplateScopes, parseTemplateScopes, type TemplateScopes } from '../core/template.js'
 import { EMPTY_TIMER_STATE, type WITimerState } from '../core/types.js'
 import { rootIdentity, sameFileStat, type FileStatStamp } from './pathIdentity.js'
@@ -102,11 +103,20 @@ function knownGenerationBody(fs:WorkspaceFs,path:string):GenerationBody|undefine
 }
 
 /** 清理临时草稿或已删除剧情的模板内存缓存，避免挤占活跃剧情槽位。 */
-export function evictTemplateCaches(root:string):void {
+export function evictTemplateCaches(root:string,options?:{prefix?:boolean}):void {
   const key=rootIdentity(root)
   evictGenerationBodyKey(key)
   generationReferences.delete(key)
-  evictTemplateStoryCache(root)
+  if(options?.prefix) {
+    const boundary=key.endsWith(sep) ? key : `${key}${sep}`
+    for(const existing of [...generationBodies.keys()]) {
+      if(existing.startsWith(boundary)) evictGenerationBodyKey(existing)
+    }
+    for(const existing of [...generationReferences.keys()]) {
+      if(existing.startsWith(boundary)) generationReferences.delete(existing)
+    }
+  }
+  evictTemplateStoryCache(root,options)
 }
 
 async function readGenerationBody(fs:WorkspaceFs,detached:DetachedTemplateGeneration):Promise<PreparedTemplateGeneration> {
@@ -254,29 +264,51 @@ export async function saveTemplateMetadata(fs:WorkspaceFs,metadata:TemplateMetad
 }
 
 /** 调用方已持有工作区锁；定时器面板允许使用无楼层句柄发布独立维护。 */
+/** 所有非生成回复通道统一先校验变量/定时后再覆盖，但跳过未改变历史 outputs 的重复校验。 */
 async function writeTemplateMetadata(fs:WorkspaceFs,metadata:TemplateMetadata):Promise<void> {
   let outputs:TemplateState['outputs']={}
   await loadTemplateDocument(fs,TEMPLATE_STATE_PATH,parseStoredTemplateState,stored=> {
     outputs=stored.state.outputs
     return null
   })
-  await writeTemplateState(fs,{...metadata,outputs})
+  await writeTemplateStateInternal(fs,{...metadata,outputs},{trustedOutputs:true})
 }
 
 async function writeTemplateState(fs: WorkspaceFs, state: TemplateState): Promise<void> {
+  return writeTemplateStateInternal(fs,state)
+}
+
+async function writeTemplateStateInternal(fs: WorkspaceFs, state: TemplateState, options?: { trustedOutputs?: boolean }): Promise<void> {
   if (state.version!==1 || !state.outputs || typeof state.outputs!=='object' || Array.isArray(state.outputs)) throw new Error('模板状态文件损坏')
-  parseTemplateScopes(state.variables)
-  if(state.messageVariables) state.messageVariables=parseTemplateMessageVariables(state.messageVariables,'stored')
-  if(state.continuation) {parseTemplateContinuation(state.continuation);resolveTemplateContinuation(state)}
+  const variables = parseTemplateScopes(state.variables)
+  const messageVariables = state.messageVariables ? parseTemplateMessageVariables(state.messageVariables,'stored') : undefined
+  if(messageVariables) state.messageVariables=messageVariables
+  const continuation = state.continuation ? parseTemplateContinuation(state.continuation) : undefined
+  if(continuation) resolveTemplateContinuation(state)
   if (state.wiTimers!==undefined && (!state.wiTimers || typeof state.wiTimers!=='object' || Array.isArray(state.wiTimers))) throw new Error('模板定时状态损坏')
-  for (const timers of Object.values(state.wiTimers ?? {})) parseTimerState(timers)
-  for (const [key,output] of Object.entries(state.outputs)) {
-    if (!/^\d+$/.test(key) || !output || typeof output!=='object' || typeof output.hash!=='string'
-      || !/^[a-f0-9]{64}$/.test(output.hash) || typeof output.text!=='string') throw new Error('模板回复快照损坏')
-    if (output.parts!==undefined) parseTemplateDisplayParts(output.parts)
-    if (output.partsVersion!==undefined && output.partsVersion!==TEMPLATE_DISPLAY_PARTS_VERSION) throw new Error('模板回复展示版本无效')
+  let wiTimers: TemplateState['wiTimers']
+  if (state.wiTimers!==undefined) {
+    wiTimers = {}
+    for (const [key, timers] of Object.entries(state.wiTimers)) wiTimers[key] = parseTimerState(timers)
   }
-  if (state.generation) parseTemplateGeneration(state.generation)
+  const outputs: TemplateState['outputs'] = {}
+  if (options?.trustedOutputs) {
+    Object.assign(outputs, state.outputs)
+  } else {
+    for (const [key,output] of Object.entries(state.outputs)) {
+      if (!/^\d+$/.test(key) || !output || typeof output!=='object' || typeof output.hash!=='string'
+        || !/^[a-f0-9]{64}$/.test(output.hash) || typeof output.text!=='string') throw new Error('模板回复快照损坏')
+      const parts = output.parts!==undefined ? parseTemplateDisplayParts(output.parts) : undefined
+      if (output.partsVersion!==undefined && output.partsVersion!==TEMPLATE_DISPLAY_PARTS_VERSION) throw new Error('模板回复展示版本无效')
+      outputs[key] = {
+        hash: output.hash,
+        text: output.text,
+        ...(parts!==undefined ? { parts } : {}),
+        ...(output.partsVersion!==undefined ? { partsVersion: TEMPLATE_DISPLAY_PARTS_VERSION } : {}),
+      }
+    }
+  }
+  const generation = state.generation ? parseTemplateGeneration(state.generation) : undefined
   // 小状态整份内联，与旧格式一致；大型状态的 prepared 正文不进入分块历史。
   let stored:Omit<TemplateState,'generation'>&{generation?:TemplateGeneration|DetachedTemplateGeneration}=state
   let detached:{generation:DetachedTemplateGeneration;text:string}|undefined
@@ -308,10 +340,17 @@ async function writeTemplateState(fs: WorkspaceFs, state: TemplateState): Promis
     // 某些文件系统在 rename 已完成后仍报告失败；读回确认提交结果，防重试重复增量。
     if (await fs.readText(TEMPLATE_STATE_PATH) !== raw) throw error
   }
-  // 根只在全部新块落盘后发布；读回即为 raw 说明这些块都已在磁盘。解析结果与之后从磁盘读取所得相同；
-  // 状态此时已经提交，解析不出来就留给下次读取从磁盘报告，不能把已提交的保存改报失败。
-  let parsed:StoredTemplateState|undefined
-  if(document.blocks.size) try {parsed=parseStoredTemplateState(document.value)} catch {parsed=undefined}
+  // 根只在全部新块落盘后发布；读回即为 raw 说明这些块都已在磁盘，直接用刚验证后的状态填充缓存。
+  const parsedState:TemplateState={
+    version:1,
+    variables,
+    outputs,
+    ...(messageVariables ? {messageVariables} : {}),
+    ...(wiTimers ? {wiTimers} : {}),
+    ...(generation && !detached ? {generation} : {}),
+    ...(continuation ? {continuation} : {}),
+  }
+  const parsed:StoredTemplateState={state:parsedState,...(detached ? {detached:detached.generation} : {})}
   adoptTemplateDocument(fs,TEMPLATE_STATE_PATH,document,parsed)
   const ledger=openLedger(fs.root)
   // 锁内本次写入只发布已验证的不可变块与新根，既有根的正文引用结论仍然成立。

@@ -6,7 +6,7 @@
  * 口径取值：尚未被请求使用的最新选择优先，其次最近请求头，日志都没有时才回退 options。
  * 请求头可能记录本插件的 DeepSeek 布局通道；辅助调用没有提示词布局，映射回同凭证的官方 provider。
  */
-import type { Context } from '@deepseek-ai/cordis';
+import { type Context } from '@deepseek-ai/cordis';
 import type { Agent } from '@deepseek-ai/dsh-agent';
 /**
  * 同步 DSH 0.2.2-rc.1 ReactLoopAgent 在单步 preStep -> prepareRequest 期间锁定的 selection：

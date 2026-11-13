@@ -53,5 +53,6 @@ export declare const zh: {
     readonly 'common.copy': "复制";
     readonly 'common.copied': "已复制";
     readonly 'common.markdownFootnotes': "脚注";
+    readonly 'common.loadMore': "加载更多";
 };
 export declare const en: Record<keyof typeof zh, string>;

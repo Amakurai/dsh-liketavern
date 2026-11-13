@@ -15,9 +15,29 @@ export function installCardPersistence(snapshot:HelperSnapshot,source:string,_la
   root.__dshTavernSnapshot=snapshot
   const clone=<T>(value:T):T=>JSON.parse(JSON.stringify(value)) as T
   const equal=(a:unknown,b:unknown):boolean=>{
-    const ordered=(value:unknown):unknown=>Array.isArray(value)?value.map(ordered):value&&typeof value==='object'
-      ?Object.fromEntries(Object.entries(value).sort(([a],[b])=>a.localeCompare(b)).map(([key,item])=>[key,ordered(item)])):value
-    return JSON.stringify(ordered(a))===JSON.stringify(ordered(b))
+    if(Object.is(a,b)) return true
+    if(a===null||b===null||typeof a!=='object'||typeof b!=='object') return false
+    const aArr=Array.isArray(a), bArr=Array.isArray(b)
+    if(aArr!==bArr) return false
+    if(aArr) {
+      const aa=a as unknown[], bb=b as unknown[]
+      if(aa.length!==bb.length) return false
+      for(let i=0;i<aa.length;i++) if(!equal(aa[i],bb[i])) return false
+      return true
+    }
+    const ao=a as Record<string,unknown>, bo=b as Record<string,unknown>
+    const aKeys=Object.keys(ao), bKeys=Object.keys(bo)
+    let aDefined=0
+    for(const key of aKeys) if(ao[key]!==undefined) aDefined++
+    let bDefined=0
+    for(const key of bKeys) if(bo[key]!==undefined) bDefined++
+    if(aDefined!==bDefined) return false
+    for(const key of aKeys) {
+      const av=ao[key]
+      if(av===undefined) continue
+      if(!Object.prototype.hasOwnProperty.call(bo,key)||!equal(av,bo[key])) return false
+    }
+    return true
   }
   let state=root.__dshTavernPersistent as State|undefined
   if(!state||state.storyId!==snapshot.storyId||state.historyRevision!==snapshot.historyRevision) {

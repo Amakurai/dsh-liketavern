@@ -94,9 +94,15 @@ export function promptHistoryAnchors(history: readonly ChatMessage[], messageIds
   })
 }
 
+const chatAnchorsCache = new WeakMap<readonly PromptHistoryAnchor[], readonly PromptHistoryAnchor[]>()
+
 /** depth 只数本轮首次组装时的真实聊天；后续工具步骤不移动已冻结的边界。 */
 export function promptDepthPlacement(history: readonly PromptHistoryAnchor[], depth: number, order: number): PromptLayoutPlacement {
-  const chat = history.filter(anchor => anchor.chat)
+  let chat = chatAnchorsCache.get(history)
+  if (!chat) {
+    chat = history.filter(anchor => anchor.chat)
+    chatAnchorsCache.set(history, chat)
+  }
   const at = Math.max(0, chat.length - depth)
   const previous = chat[at - 1]
   const next = chat[at]

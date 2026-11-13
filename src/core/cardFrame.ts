@@ -288,12 +288,67 @@ export function tavernCardBridgeScript(options: Omit<CardFrameOptions, 'connectH
       var h = 0;
       var el = document.documentElement;
       var body = document.body;
+      var scrollY = window.scrollY || 0;
+      var hasComputedStyle = typeof getComputedStyle === 'function';
+      var styleCache = new Map();
+      var rectCache = new Map();
+      var stateCache = new Map();
+      function styleOf(node) {
+        if (!hasComputedStyle) return null;
+        var cached = styleCache.get(node);
+        if (cached !== undefined) return cached;
+        var st = getComputedStyle(node);
+        styleCache.set(node, st);
+        return st;
+      }
+      function rectOf(node) {
+        if (rectCache.has(node)) return rectCache.get(node);
+        var rect = node.getBoundingClientRect ? node.getBoundingClientRect() : null;
+        rectCache.set(node, rect);
+        return rect;
+      }
       // 根元素至少等于 iframe 视口，不能作为折叠后的内容高度下限。
       // 用实际边界及外边距测量，避免根 scrollHeight 在有/无滚动条之间反复撑高和缩小。
       function bottomWithMargin(node) {
-        var rect = node.getBoundingClientRect ? node.getBoundingClientRect() : null;
-        var margin = typeof getComputedStyle === 'function' ? parseFloat(getComputedStyle(node).marginBottom) || 0 : 0;
-        return rect ? rect.bottom + (window.scrollY || 0) + Math.max(0, margin) : 0;
+        var rect = rectOf(node);
+        var st = styleOf(node);
+        var margin = st ? parseFloat(st.marginBottom) || 0 : 0;
+        return rect ? rect.bottom + scrollY + Math.max(0, margin) : 0;
+      }
+      function closedSummaryOf(detailsNode) {
+        var summary = null;
+        var children = detailsNode.children || [];
+        for (var j = 0; j < children.length; j++) {
+          if (children[j].tagName === 'SUMMARY') { summary = children[j]; break; }
+        }
+        return summary;
+      }
+      function ancestorState(ancestor, child) {
+        if (!ancestor || ancestor === body) return { hidden: false, clippedBottom: Infinity };
+        var base = stateCache.get(ancestor);
+        if (!base) {
+          var parentState = ancestorState(ancestor.parentElement, ancestor);
+          if (parentState.hidden) {
+            base = { hidden: true, clippedBottom: Infinity };
+          } else {
+            var clip = parentState.clippedBottom;
+            var st = styleOf(ancestor);
+            if (st && /^(auto|scroll|hidden|clip)$/.test(st.overflowY)) {
+              var rect = rectOf(ancestor);
+              if (rect) clip = Math.min(clip, rect.bottom + scrollY);
+            }
+            base = { hidden: false, clippedBottom: clip };
+          }
+          stateCache.set(ancestor, base);
+        }
+        if (base.hidden) return base;
+        if (ancestor.tagName === 'DETAILS' && !ancestor.open) {
+          var summary = closedSummaryOf(ancestor);
+          if (!summary || (child !== summary && !summary.contains(child))) {
+            return { hidden: true, clippedBottom: base.clippedBottom };
+          }
+        }
+        return base;
       }
       if (body) {
         h = Math.max(h, body.offsetHeight || 0, bottomWithMargin(body));
@@ -302,20 +357,9 @@ export function tavernCardBridgeScript(options: Omit<CardFrameOptions, 'connectH
         var n = Math.min(nodes.length, 400);
         for (var i = 0; i < n; i++) {
           // Chromium 仍可返回收起 details 内部的旧矩形，不能把不可见内容撑回 iframe。
-          var hidden = false;
-          var clippedBottom = Infinity;
-          for (var ancestor = nodes[i].parentElement; ancestor && ancestor !== body; ancestor = ancestor.parentElement) {
-            if (ancestor.tagName === 'DETAILS' && !ancestor.open) {
-              var summary = Array.prototype.find.call(ancestor.children, function(child) { return child.tagName === 'SUMMARY'; });
-              if (!summary || !summary.contains(nodes[i])) { hidden = true; break; }
-            }
-            // 卡内滚动/裁切区域不应被其隐藏后代反向撑高；body/root 仍由外层自适应。
-            if (typeof getComputedStyle === 'function' && /^(auto|scroll|hidden|clip)$/.test(getComputedStyle(ancestor).overflowY)) {
-              clippedBottom = Math.min(clippedBottom, ancestor.getBoundingClientRect().bottom + (window.scrollY || 0));
-            }
-          }
-          if (hidden) continue;
-          h = Math.max(h, Math.min(clippedBottom, bottomWithMargin(nodes[i])));
+          var state = ancestorState(nodes[i].parentElement, nodes[i]);
+          if (state.hidden) continue;
+          h = Math.max(h, Math.min(state.clippedBottom, bottomWithMargin(nodes[i])));
         }
       }
       if (h > 0 && Math.ceil(h) !== lastHeight) {

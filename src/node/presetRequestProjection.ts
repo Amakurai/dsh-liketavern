@@ -128,12 +128,24 @@ export function attachPresetPlanMessage(message: UserMessage, plan: PresetReques
   return freezeMessage({ ...message, source: { ...message.source, tavernPromptPlan: validated } })
 }
 
+const messagePlanCache = new WeakMap<Message, PresetRequestPlan | null>()
+const turnTailCache = new WeakMap<PresetRequestPlan, readonly Message[]>()
+
 function planFromMessage(message: Message): PresetRequestPlan | undefined {
+  if (Object.isFrozen(message) && Object.isFrozen(message.source)) {
+    const cached = messagePlanCache.get(message)
+    if (cached !== undefined) return cached ?? undefined
+  }
   const value = 'tavernPromptPlan' in message.source ? message.source.tavernPromptPlan
     : message.source.kind === 'tavern-prompt-plan' ? message.source.plan : undefined
-  if (value === undefined) return undefined
+  if (value === undefined) {
+    if (Object.isFrozen(message) && Object.isFrozen(message.source)) messagePlanCache.set(message, null)
+    return undefined
+  }
   if (message.role !== 'user') throw new Error('Tavern 提示词布局载体必须是 user/message')
-  return parsePlan(value)
+  const plan = parsePlan(value)
+  if (Object.isFrozen(message) && Object.isFrozen(message.source)) messagePlanCache.set(message, plan)
+  return plan
 }
 
 /** 接收批次及已持久化日志共用的轮次判定；存在但损坏的元数据仍明确失败。 */
@@ -428,6 +440,11 @@ function toolSpans(messages: readonly Message[]): ToolSpan[] {
  */
 function turnTailMessages(plan: PresetRequestPlan): Message[] {
   if (!plan.cacheFirst) return []
+  const frozenPlan = Object.isFrozen(plan)
+  if (frozenPlan) {
+    const cached = turnTailCache.get(plan)
+    if (cached) return [...cached]
+  }
   const entries = plan.layout.entries
   for (const entry of entries) {
     if (mayContainControlTokens(entry.content)) assertNoControlTokens(entry.content, `Tavern 布局条目 ${entry.key}（${entry.role}）`)
@@ -463,7 +480,9 @@ function turnTailMessages(plan: PresetRequestPlan): Message[] {
     visiting.delete(entry.key)
   }
   for (const entry of entries) if (entry.placement.kind !== 'entry-relative') emit(entry)
-  return out.length ? [pluginMessage(plan, 'host:turn-tail-header', 'user', turnTailHeader(plan.turn)), ...out] : []
+  const result = out.length ? [pluginMessage(plan, 'host:turn-tail-header', 'user', turnTailHeader(plan.turn)), ...out] : []
+  if (frozenPlan) turnTailCache.set(plan, result)
+  return [...result]
 }
 
 /** 适配器边界的唯一变换：返回新请求，原请求和 Session 永远不被修改。 */

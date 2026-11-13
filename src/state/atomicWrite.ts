@@ -8,7 +8,7 @@
  * 不把已经提交的写入改报为失败。
  */
 import { randomUUID } from 'node:crypto'
-import { lstat, mkdir, open, readdir, rm, stat } from 'node:fs/promises'
+import { lstat, mkdir, open, readdir, rm } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { renameWithRetry } from './rename.js'
 
@@ -34,14 +34,20 @@ async function syncDirectory(dir: string): Promise<void> {
 
 export async function atomicWrite(path: string, data: string | Uint8Array): Promise<void> {
   const dir = dirname(path)
-  // 新建目录链的目录项也要刷盘；已存在的目录不重复 sync，避免每次写入都多走一趟父目录。
-  const existed = await stat(dir).then(() => true, () => false)
-  await mkdir(dir, { recursive: true })
-  if (!existed) await syncDirectory(dirname(dir))
   const temp = join(dir, `.dsh-tavern-write.${randomUUID()}.tmp`)
   let owned = false
   try {
-    const file = await open(temp, 'wx')
+    let file
+    try {
+      file = await open(temp, 'wx')
+    } catch (error) {
+      const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') throw error
+      // 父目录尚未创建时建目录并尽力同步其父目录项，已存在目录跳过多余 stat + mkdir。
+      await mkdir(dir, { recursive: true })
+      await syncDirectory(dirname(dir))
+      file = await open(temp, 'wx')
+    }
     owned = true
     try {
       await file.writeFile(data)

@@ -65,17 +65,16 @@ export function hasTavernKey(key: string): boolean {
   return Object.hasOwn(zh, key)
 }
 
+function subscribeLocale(fn: () => void): () => void {
+  listeners.add(fn)
+  return () => {
+    listeners.delete(fn)
+  }
+}
+
 /** 组件内取文案的唯一入口：订阅语言切换，切语言时触发重渲染。 */
 export function useT(): typeof t {
-  useSyncExternalStore(
-    (fn) => {
-      listeners.add(fn)
-      return () => {
-        listeners.delete(fn)
-      }
-    },
-    getTavernLocale,
-  )
+  useSyncExternalStore(subscribeLocale, getTavernLocale)
   return t
 }
 

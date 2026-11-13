@@ -31,6 +31,19 @@ let nextLedgerEpoch = 0
 
 /** 相对路径的身份：正斜杠、去掉空段与 `.`；Windows 上文件名不分大小写。 */
 export function ledgerKey(relPath: string): string {
+  if (
+    relPath.length > 0 &&
+    !relPath.includes('\\') &&
+    !relPath.includes('//') &&
+    relPath.charCodeAt(0) !== 47 &&
+    relPath.charCodeAt(relPath.length - 1) !== 47 &&
+    relPath !== '.' &&
+    !relPath.startsWith('./') &&
+    !relPath.includes('/./') &&
+    !relPath.endsWith('/.')
+  ) {
+    return caseIdentity(relPath)
+  }
   const key = relPath.replace(/\\/g, '/').split('/').filter((segment) => segment !== '' && segment !== '.').join('/')
   return caseIdentity(key)
 }

@@ -1,5 +1,6 @@
 /** 记忆工具的完整 JSON 预算：正文优先，展示标签可裁剪，定位字段完整保留或明确省略；不修改存储条目。 */
-import { clipAssetJsonText, resolveReadableAssetPath, stampAssetTokens } from './assetRead.js'
+import { clipAssetJsonText, countPrettyArrayItemChars, resolveReadableAssetPath, stabilizeJsonTokenCount, stampAssetTokens } from './assetRead.js'
+import { countTokenChars, type TokenCharCounts } from './tokenize.js'
 import type { MemoryEntry } from './types.js'
 
 export interface MemoryToolHit {
@@ -50,9 +51,24 @@ export function budgetMemorySearch(
   const out: { ok: boolean; count: number; omitted: number; truncated: boolean; tokensUsed: number;
     results: MemoryToolHit[]; hint?: string } = { ok: true, count: hits.length, omitted: hits.length,
       truncated: hits.length > 0, tokensUsed: 0, results }
+  const shellCache = new Map<string, TokenCharCounts>()
+  const shellCounts = (len: number, truncated: boolean, hasHint: boolean): TokenCharCounts => {
+    const key = `${len}:${truncated ? 1 : 0}:${hasHint ? 1 : 0}`
+    let cached = shellCache.get(key)
+    if (!cached) {
+      const shell = { ok: true, count: hits.length, omitted: hits.length - len, truncated, tokensUsed: 0,
+        results: [] as MemoryToolHit[], ...(hasHint && out.hint ? { hint: out.hint } : {}) }
+      cached = countTokenChars(JSON.stringify(shell, null, 2))
+      shellCache.set(key, cached)
+    }
+    return cached
+  }
+  let anyPrevTruncated = false
+  let itemsCjk = 0
+  let itemsOther = 0
   const refresh = () => {
     out.omitted = hits.length - results.length
-    out.truncated = out.omitted > 0 || results.some(item => item.truncated || item.metadataTruncated)
+    out.truncated = out.omitted > 0 || results.some((r) => r.truncated || r.metadataTruncated)
     return stampAssetTokens(out).tokensUsed
   }
   if (refresh() > limit) return stampAssetTokens({ ok: false, error: 'memory-budget-too-small：预算不足以容纳完整 JSON 响应', tokensUsed: 0 })
@@ -67,6 +83,7 @@ export function budgetMemorySearch(
     out.hint = '部分内容已裁剪或省略；可用返回的完整 path 按条读取。'
     if (refresh() > limit) delete out.hint
   }
+  const hasHint = Boolean(out.hint)
   for (const hit of hits) {
     const path = `memory/${hit.entry.file}`
     const readable = resolveReadableAssetPath(path)
@@ -76,20 +93,34 @@ export function budgetMemorySearch(
       metadataTruncated: hit.entry.tags.length > 0 || hit.entry.keys.length > 0,
       tagsTruncated: hit.entry.tags.length > 0, keysTruncated: hit.entry.keys.length > 0 }
     results.push(item)
-    if (refresh() > limit) {
-      delete item.sourceRange; item.sourceRangeOmitted = true; item.metadataTruncated = true
+    const nextLen = results.length
+    const itemDeltaWithSource = countPrettyArrayItemChars(item, 2)
+    const estimateWithItem = (delta: TokenCharCounts, itemTrunc: boolean) => {
+      const shell = shellCounts(nextLen, hits.length > nextLen || anyPrevTruncated || itemTrunc, hasHint)
+      return stabilizeJsonTokenCount(shell.cjk + itemsCjk + delta.cjk, shell.other + 2 + 2 * nextLen + itemsOther + delta.other)
     }
-    if (refresh() > limit) { results.pop(); continue }
+    if (estimateWithItem(itemDeltaWithSource, true) > limit) {
+      delete item.sourceRange; item.sourceRangeOmitted = true; item.metadataTruncated = true
+      const itemDeltaNoSource = countPrettyArrayItemChars(item, 2)
+      if (estimateWithItem(itemDeltaNoSource, true) > limit) { results.pop(); continue }
+    }
+    const baseDelta = item.sourceRangeOmitted ? countPrettyArrayItemChars(item, 2) : itemDeltaWithSource
     // 留给布尔标记和 tokensUsed 数位变化的余量来自本响应预算，不增加输出上限。
-    const body = clipAssetJsonText(hit.entry.body, limit - refresh() - 16)
+    const usedBeforeBody = estimateWithItem(baseDelta, true)
+    const body = clipAssetJsonText(hit.entry.body, limit - usedBeforeBody - 16)
     item.body = body.text; item.truncated = body.truncated
+    let itemDelta = countPrettyArrayItemChars(item, 2)
+    let itemTruncated = item.truncated || item.metadataTruncated
     const fill = (field: 'keys' | 'tags', source: readonly string[]): boolean => {
       let clipped = false
       for (const value of source) {
-        const text = clipAssetJsonText(value, limit - refresh() - 8)
+        const usedSoFar = estimateWithItem(itemDelta, true)
+        const text = clipAssetJsonText(value, limit - usedSoFar - 8)
         if (!text.text && value) { clipped = true; break }
         item[field].push(text.text)
-        if (refresh() > limit) { item[field].pop(); clipped = true; break }
+        const nextDelta = countPrettyArrayItemChars(item, 2)
+        if (estimateWithItem(nextDelta, true) > limit) { item[field].pop(); clipped = true; break }
+        itemDelta = nextDelta
         if (text.truncated) { clipped = true; break }
       }
       return clipped || item[field].length < source.length
@@ -97,10 +128,15 @@ export function budgetMemorySearch(
     item.keysTruncated = fill('keys', hit.entry.keys)
     item.tagsTruncated = fill('tags', hit.entry.tags)
     item.metadataTruncated = item.keysTruncated || item.tagsTruncated || Boolean(item.sourceRangeOmitted)
+    itemTruncated = item.truncated || item.metadataTruncated
+    itemDelta = countPrettyArrayItemChars(item, 2)
     // 不允许预算耗尽后继续输出下一条的标签；随后条目仍可因定位较短而装入。
-    if (refresh() > limit) results.pop()
+    if (estimateWithItem(itemDelta, itemTruncated) > limit) { results.pop(); continue }
+    anyPrevTruncated ||= itemTruncated
+    itemsCjk += itemDelta.cjk
+    itemsOther += itemDelta.other
   }
-  refresh()
+  while (refresh() > limit && results.length > 0) results.pop()
   if (!out.truncated) { delete out.hint; refresh() }
   return out
 }

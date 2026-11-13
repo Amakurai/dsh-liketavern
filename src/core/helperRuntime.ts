@@ -46,15 +46,43 @@ export function helperRecord(value: unknown): value is HelperTable {
 /** 不求值 getter/toJSON；拒绝污染键、循环、非有限数和超深数据，再复制普通 JSON。 */
 export function helperJson(value: unknown, maxBytes=HELPER_MAX_BYTES): unknown {
   let bytes = 0
-  const active = new Set<object>(), encoder = new TextEncoder()
+  const active = new Set<object>()
+  // 函数体通过 .toString() 注入 iframe；JSON UTF-8 字符串字节统计必须保持自包含、不引用外部符号。
+  function utf8JsonStringBytes(text: string): number {
+    let len = 2
+    for (let i = 0; i < text.length; i++) {
+      const code = text.charCodeAt(i)
+      if (code < 0x80) {
+        if (code === 0x22 || code === 0x5c || code === 0x08 || code === 0x09 || code === 0x0a || code === 0x0c || code === 0x0d) len += 2
+        else if (code < 0x20) len += 6
+        else len += 1
+      } else if (code < 0x800) {
+        len += 2
+      } else if (code >= 0xd800 && code <= 0xdbff) {
+        const next = i + 1 < text.length ? text.charCodeAt(i + 1) : 0
+        if (next >= 0xdc00 && next <= 0xdfff) { len += 4; i++ }
+        else len += 6
+      } else if (code >= 0xdc00 && code <= 0xdfff) {
+        len += 6
+      } else {
+        len += 3
+      }
+    }
+    return len
+  }
+  function isPlainHelperObj(item: unknown): item is HelperTable {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return false
+    const prototype = Object.getPrototypeOf(item)
+    return prototype === Object.prototype || prototype === null
+  }
   function walk(item: unknown, depth: number): unknown {
     if (depth > 64) throw new Error('酒馆助手数据嵌套超过 64 层')
     let result: unknown
     if (item === null || typeof item === 'boolean') { bytes += 5; result = item }
-    else if (typeof item === 'string') { bytes += encoder.encode(JSON.stringify(item)).length; result = item }
+    else if (typeof item === 'string') { bytes += utf8JsonStringBytes(item); result = item }
     else if (typeof item === 'number' && Number.isFinite(item)) { bytes += String(item).length; result = item }
     else {
-      if (!item || typeof item !== 'object' || (!Array.isArray(item) && !helperRecord(item))) throw new Error('酒馆助手只接受普通 JSON 数据')
+      if (!item || typeof item !== 'object' || (!Array.isArray(item) && !isPlainHelperObj(item))) throw new Error('酒馆助手只接受普通 JSON 数据')
       if (active.has(item) || Object.getOwnPropertySymbols(item).length) throw new Error('酒馆助手数据不能包含循环或 Symbol')
       active.add(item); bytes += 2
       const descriptors = Object.getOwnPropertyDescriptors(item)
@@ -70,7 +98,7 @@ export function helperJson(value: unknown, maxBytes=HELPER_MAX_BYTES): unknown {
         for (const key of Object.keys(descriptors).sort()) {
           const descriptor = descriptors[key]!
           if (['__proto__', 'constructor', 'prototype'].includes(key) || !('value' in descriptor) || !descriptor.enumerable) throw new Error('酒馆助手数据包含非法字段')
-          bytes += encoder.encode(JSON.stringify(key)).length + 2
+          bytes += utf8JsonStringBytes(key) + 2
           output[key] = walk(descriptor.value, depth + 1)
         }
         result = output

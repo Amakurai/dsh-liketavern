@@ -20,14 +20,13 @@ export function setSpeakerHeader(value: boolean): void {
   for (const fn of listeners) fn()
 }
 
+function subscribeSpeakerHeader(fn: () => void): () => void {
+  listeners.add(fn)
+  return () => {
+    listeners.delete(fn)
+  }
+}
+
 export function useSpeakerHeader(): boolean {
-  return useSyncExternalStore(
-    (fn) => {
-      listeners.add(fn)
-      return () => {
-        listeners.delete(fn)
-      }
-    },
-    getSpeakerHeader,
-  )
+  return useSyncExternalStore(subscribeSpeakerHeader, getSpeakerHeader)
 }

@@ -224,6 +224,8 @@ export function RegexSection(props: { remote: TavernRemote }) {
   }
 
   const current = rules ?? []
+  const [ruleLimit, setRuleLimit] = useState(40)
+  const shownRules = current.slice(0, ruleLimit)
   const moveRule = useCallback((index: number, delta: -1 | 1) => {
     setRules((prev) => {
       if (!prev) return prev
@@ -263,7 +265,11 @@ export function RegexSection(props: { remote: TavernRemote }) {
         return
       }
       setError(null)
-      setRules((prev) => [...(prev ?? []), ...imported])
+      setRules((prev) => {
+        const next = [...(prev ?? []), ...imported]
+        setRuleLimit((n) => Math.max(n, next.length))
+        return next
+      })
       toast.show(t('regex.imported', { count: imported.length }))
     } catch (cause) {
       setError(describeError(cause))
@@ -300,7 +306,8 @@ export function RegexSection(props: { remote: TavernRemote }) {
       {rules !== null && (
         <div className="dsh-tavern-regexCustom">
           <div className="dsh-tavern-groupHead">{t('regex.customHead')}</div>
-          {current.map((rule, i) => (
+      <div className="dsh-tavern-list" style={{ marginBottom: 12 }}>
+        {shownRules.map((rule, i) => (
             <RuleEditor
               key={rule.id}
               rule={rule}
@@ -312,6 +319,12 @@ export function RegexSection(props: { remote: TavernRemote }) {
               onDelete={removeRule}
             />
           ))}
+      </div>
+      {shownRules.length < current.length && (
+        <div className="dsh-tavern-row" style={{ marginBottom: 8 }}>
+          <Btn disabled={busy} onClick={() => setRuleLimit((n) => n + 40)}>{t('common.loadMore')}</Btn>
+        </div>
+      )}
           {current.length === 0 && (
             <div className="dsh-tavern-regexEmpty">
               <div className="dsh-tavern-emptyTitle">{t('regex.emptyTitle')}</div>
@@ -319,7 +332,7 @@ export function RegexSection(props: { remote: TavernRemote }) {
             </div>
           )}
           <SaveBar inline>
-            <Btn disabled={busy} onClick={() => setRules([...current, newRule()])}>{t('regex.new')}</Btn>
+            <Btn disabled={busy} onClick={() => { setRuleLimit((n) => Math.max(n, current.length + 1)); setRules([...current, newRule()]) }}>{t('regex.new')}</Btn>
             <FileBtn accept=".json" disabled={busy} onFile={(file) => void importRules(file)}>{t('regex.importFile')}</FileBtn>
             {current.length > 0 ? (
               <Btn disabled={busy} onClick={() => downloadJson('tavern-regex-rules.json', current)}>{t('regex.exportAll')}</Btn>

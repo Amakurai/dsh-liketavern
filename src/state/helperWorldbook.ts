@@ -6,6 +6,7 @@ const positions=['before_character_definition','after_character_definition','bef
 const logics=['and_any','not_all','not_any','and_all'] as const
 const roles=['system','user','assistant'] as const
 const extraFields=['outletName','useProbability','caseSensitive','matchWholeWords','useGroupScoring','ignoreBudget','group','groupWeight','groupOverride','automationId'] as const
+const IGNORED_RAW_KEYS=new Set(['dsh_helper_uid','dsh_helper_extra','keys','secondary_keys','enabled','insertion_order','extensions','id'])
 /** 数组形态条目的原始 UID，与 parseLorebook 的 entryUid 同口径：非字符串/数字/布尔回落到下标。 */
 function rawUid(item:HelperTable,index:number):string{
   return entryUid(item,String(index))
@@ -42,7 +43,7 @@ export function readHelperWorldbook(input:unknown):{entries:HelperWorldbookEntry
     while(ids.has(next))next++
     const uid=mapped.get(entry.uid)??next++;ids.add(uid);originalIds.set(uid,entry.uid)
     const raw=rows.get(entry.uid)??{},base=canonical[entry.uid]!,extra:HelperTable={}
-    for(const [key,value] of Object.entries(raw))if(!Object.hasOwn(base,key)&&!['dsh_helper_uid','dsh_helper_extra','keys','secondary_keys','enabled','insertion_order','extensions','id'].includes(key))extra[key]=value
+    for(const [key,value] of Object.entries(raw))if(!Object.hasOwn(base,key)&&!IGNORED_RAW_KEYS.has(key))extra[key]=value
     if(helperRecord(raw.extensions)){extra.extensions=raw.extensions;if(raw.extensions.display_index!==undefined)extra.displayIndex=raw.extensions.display_index}
     Object.assign(extra,helperRecord(raw.dsh_helper_extra)?raw.dsh_helper_extra:{})
     for(const key of extraFields)extra[key]=base[key]
@@ -56,9 +57,10 @@ export function readHelperWorldbook(input:unknown):{entries:HelperWorldbookEntry
 }
 export function writeHelperWorldbook(input:unknown,previous:unknown={entries:{}}):unknown {
   const entries=parseHelperWorldbook(input),before=readHelperWorldbook(previous),oldRows=sourceRows(previous),rows:HelperTable=Object.create(null)
+  let reserved:Set<string>|undefined
   for(const entry of entries){
     let originalId=before.originalIds.get(entry.uid)
-    if(originalId===undefined){originalId=String(entry.uid);const reserved=new Set(before.originalIds.values());while(reserved.has(originalId)||Object.hasOwn(rows,originalId))originalId='helper-'+originalId}
+    if(originalId===undefined){originalId=String(entry.uid);reserved??=new Set(before.originalIds.values());while(reserved.has(originalId)||Object.hasOwn(rows,originalId))originalId='helper-'+originalId}
     if(Object.hasOwn(rows,originalId))throw new Error('世界书原始 UID 冲突')
     if(entry.strategy.type==='vectorized'&&!oldRows.get(originalId)?.vectorized)throw new Error('当前世界书引擎尚未提供向量触发；不能新增向量条目')
     const extra:HelperTable={};for(const key of extraFields)if(entry.extra[key]!==undefined)extra[key]=entry.extra[key]

@@ -461,7 +461,11 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
   const journalText = rawJournal?.trim() ? clipToTokenBudget(rawJournal, JOURNAL_TURN_TOKEN_BUDGET).text : ''
 
   const assembled = await isolated('assemble', {
-    templates: templateContext,
+    templates: {
+      ...templateContext,
+      entries: undefined as unknown as WorldInfoEntry[],
+      presets: undefined as unknown as TemplateContext['presets'],
+    },
     templateContinuation:resolveTemplateContinuation(templateState),
     wiEvaluation: {
       entries:lore.entries, messages:chatMessages, settings:state.worldInfoFor(binding),

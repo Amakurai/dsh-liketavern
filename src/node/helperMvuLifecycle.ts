@@ -53,12 +53,15 @@ function currentTurn(session: Snapshot): number | undefined {
 /** 空历史没有可初始化的回复，允许首轮生成；开场白由维护等待的 session task 先写入。 */
 export function helperMvuHasAssistant(session: Snapshot): boolean {
   const events = session.snapshotEvents()
+  const completedTurns = new Set<number>()
+  for (const event of events) {
+    if (event.type === 'turn/end' && event.data.reason.kind === 'completed') completedTurns.add(event.data.turn)
+  }
   return events.some(event => {
     if (event.type !== 'assistant/message' || event.data.interrupted || event.surfaceOp !== undefined && event.surfaceOp !== 'append'
       || !event.data.message.content.some(block => block.type === 'text' && block.text.trim())) return false
     if (isTavernGreetingEvent(event) || event.data.turn === 0) return true
-    const end = events.find(item => item.type === 'turn/end' && item.data.turn === event.data.turn)
-    if (end?.type !== 'turn/end' || end.data.reason.kind !== 'completed') return false
+    if (!completedTurns.has(event.data.turn)) return false
     return hasNormalAssistantStop(event)
   })
 }

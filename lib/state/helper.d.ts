@@ -1,4 +1,3 @@
-/** 剧情级酒馆助手状态：完整验证后 CAS 更新，每次写入经过当前楼层 WAL，支持分支和重启。 */
 import { type HelperScopes, type HelperVariableChange } from '../core/helperRuntime.js';
 import { type HelperSwipeSet } from '../core/helperSwipes.js';
 import { type HelperMvuState } from '../core/helperMvu.js';
@@ -10,6 +9,9 @@ export interface HelperState {
     swipes?: Record<string, HelperSwipeSet>;
     mvu?: HelperMvuState;
 }
+export declare function evictHelperStateCache(root: string, options?: {
+    prefix?: boolean;
+}): void;
 export declare function loadHelperState(fs: WorkspaceFs): Promise<HelperState>;
 export declare function loadHelperScopes(fs: WorkspaceFs): Promise<HelperScopes>;
 /** 同文件保存变量与 extra，整批在一次原子正文替换中生效。 */

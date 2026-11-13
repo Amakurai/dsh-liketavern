@@ -195,7 +195,7 @@ export const en: Record<keyof typeof zh, string> = {
   'speech.scriptExport':'Export script library',
   'speech.scriptExportData':'Include initial variables in exports',
   'speech.scriptExportButtons':'Include button settings in exports',
-  'speech.scriptList':'Character script list',
+  'speech.scriptList':'Script list',
   'speech.scriptName':'Name',
   'speech.scriptFolder':'Folder',
   'speech.scriptRoot':'Top level',

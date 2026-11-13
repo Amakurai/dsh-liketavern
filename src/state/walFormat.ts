@@ -107,14 +107,25 @@ export function recordLineIssue(value: unknown, expectedSeq: number): RecordLine
   return null
 }
 
-/** 快照统一为实际字节的 base64；旧版省略 utf8 标签或使用 before 前缀也必须得到相同身份。 */
+const snapshotCache = new WeakMap<RecordLine, { before?: string | null; after?: string | null }>()
+
+/** 快照统一为实际字节的 base64；旧版省略 utf8 标签或使用 before 前缀也必须得到相同身份（带 WeakMap 缓存）。 */
 export function snapshotBytes(rec: RecordLine, side: 'before' | 'after'): string | null {
+  let cached = snapshotCache.get(rec)
+  if (cached && side in cached) return cached[side]!
   const value = rec[side] ?? null
-  if (value === null) return null
   const encoding = side === 'before' ? rec.beforeEncoding : rec.afterEncoding
-  if (encoding === 'base64') return value
-  if (side === 'before' && encoding === undefined && value.startsWith(WAL_BINARY_MARK)) return value.slice(WAL_BINARY_MARK.length)
-  return Buffer.from(value).toString('base64')
+  let result: string | null
+  if (value === null) result = null
+  else if (encoding === 'base64') result = value
+  else if (side === 'before' && encoding === undefined && value.startsWith(WAL_BINARY_MARK)) result = value.slice(WAL_BINARY_MARK.length)
+  else result = Buffer.from(value).toString('base64')
+  if (!cached) {
+    cached = {}
+    snapshotCache.set(rec, cached)
+  }
+  cached[side] = result
+  return result
 }
 
 /** 从同一记录与撤销前正文推导恢复目标；执行与恢复游标预检共用，禁止游标自行提供新正文。 */

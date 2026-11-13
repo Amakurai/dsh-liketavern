@@ -71,7 +71,19 @@ function isClitic(text: string, index: number, word: string): boolean {
  *   撇号后面的词尾不算词：`it's` → ['it']，`don't` → ['don']。
  */
 export function tokenize(text: string): string[] {
-  return analyzeText(text).terms
+  const terms: string[] = []
+  const normalized = text.normalize('NFKC')
+  for (const match of normalized.matchAll(SEGMENT_RE)) {
+    const seg = match[0]
+    if (isBigramScript(seg.charCodeAt(0))) {
+      for (let i = 0; i < seg.length - 1; i++) terms.push(seg.slice(i, i + 2))
+    } else {
+      const word = seg.toLowerCase()
+      if (isClitic(normalized, match.index, word)) continue
+      terms.push(word)
+    }
+  }
+  return terms
 }
 
 /** 一段文本的检索切分；各数组都保留重复，顺序同原文。 */

@@ -29,6 +29,7 @@ export function PersonasSection(props: { remote: TavernRemote }) {
   const [editing, setEditing] = useDraftState<PersonaDraft | null>('personas:editing', null)
   const [toDelete, setToDelete] = useState<Persona | null>(null)
   const [query, setQuery] = useState('')
+  const [limit, setLimit] = useState(40)
   const toast = useToast()
   const guard = useDraftGuard(editing !== null && JSON.stringify(editing) !== baseline, busy)
   const requestEditor = (action: () => void) => { if (!pending.current) guard.request(action) }
@@ -47,6 +48,7 @@ export function PersonasSection(props: { remote: TavernRemote }) {
   const items = state.status === 'ready' ? state.value.items : []
   const q = query.trim().toLowerCase()
   const filtered = q === '' ? items : items.filter((p) => p.name.toLowerCase().includes(q) || p.description.toLowerCase().includes(q))
+  const visible = filtered.slice(0, limit)
 
   const save = async () => {
     if (!editing || pending.current) return
@@ -117,7 +119,7 @@ export function PersonasSection(props: { remote: TavernRemote }) {
         <Btn size="md" disabled={busy} onClick={() => requestEditor(createNew)}>{t('personas.new')}</Btn>
         <Btn size="md" onClick={() => { reload(); lore.reload(); settings.reload() }} disabled={busy}>{t('action.refresh')}</Btn>
         {(items.length >= 5 || query !== '') && (
-          <SearchInput label={t('personas.searchLabel')} value={query} onChange={setQuery} placeholder={t('personas.searchPlaceholder')} width={220} />
+          <SearchInput label={t('personas.searchLabel')} value={query} onChange={(value) => { setQuery(value); setLimit(40) }} placeholder={t('personas.searchPlaceholder')} width={220} />
         )}
       </div>
       {state.status === 'loading' && (
@@ -140,10 +142,10 @@ export function PersonasSection(props: { remote: TavernRemote }) {
         </div>
       )}
       {q !== '' && filtered.length === 0 && state.status === 'ready' && (
-        <SearchEmpty what={t('personas.entity')} query={query.trim()} onClear={() => setQuery('')} />
+        <SearchEmpty what={t('personas.entity')} query={query.trim()} onClear={() => { setQuery(''); setLimit(40) }} />
       )}
       <div className="dsh-tavern-list" style={{ marginBottom: 12 }}>
-        {filtered.map((p) => {
+        {visible.map((p) => {
           const isDefault = defaultPersonaId === p.id
           return (
             <div key={p.id} className="dsh-tavern-tile" {...clickableProps(() => openPersona(p))}>
@@ -170,6 +172,11 @@ export function PersonasSection(props: { remote: TavernRemote }) {
           )
         })}
       </div>
+      {visible.length < filtered.length && (
+        <div className="dsh-tavern-row" style={{ marginBottom: 12 }}>
+          <Btn disabled={busy} onClick={() => setLimit((n) => n + 40)}>{t('common.loadMore')}</Btn>
+        </div>
+      )}
       <ConfirmDialog
         open={toDelete !== null}
         title={t('personas.deleteTitle')}

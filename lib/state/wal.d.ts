@@ -38,8 +38,10 @@ export declare class Wal {
     private readonly hasCoverage;
     /** 最近一次确认已登记的楼层身份。 */
     private covered;
-    /** 已归档回滚副本（.rolled-back-*）的不可变元数据缓存，按文件 mtimeMs/size 复核。 */
-    private readonly rolledBackMetaCache;
+    /** 楼层元数据缓存（含归档回滚副本与已提交活跃楼层），按 meta.json 的 mtimeMs/size 复核。 */
+    private readonly metaCache;
+    /** 同层 records.jsonl 原文绑定缓存：命中前提必须是磁盘读出的全文完全相等。 */
+    private readonly recordsCache;
     /** rootDir 为工作区的 state/wal/ 目录；不存在则在首次操作时创建。 */
     constructor(rootDir: string);
     private readCoverage;
@@ -92,6 +94,8 @@ export declare class Wal {
         keepRolledBackDays?: number;
     }): Promise<number>;
     private enqueue;
+    private cloneMeta;
+    private rememberRecordsCache;
     private readMeta;
     private writeMeta;
     /** 目录存在不代表楼层可写；元数据必须完整且属于请求的原始楼层，不能只比净化后的目录名。 */

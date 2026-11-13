@@ -1,4 +1,5 @@
 /** 剧情级酒馆助手状态：完整验证后 CAS 更新，每次写入经过当前楼层 WAL，支持分支和重启。 */
+import { sep } from 'node:path'
 import { helperChanges, helperRecord, helperScopeKey, helperTable, type HelperScopes, type HelperVariableChange } from '../core/helperRuntime.js'
 import {parseHelperSwipes,type HelperSwipeSet} from '../core/helperSwipes.js'
 import {parseHelperMvuState,type HelperMvuState} from '../core/helperMvu.js'
@@ -24,6 +25,16 @@ function rememberHelperState(key: string, entry: CachedHelperState): void {
   helperStateCache.set(key, entry)
   if (helperStateCache.size > MAX_HELPER_CACHE_ROOTS) {
     helperStateCache.delete(helperStateCache.keys().next().value!)
+  }
+}
+
+export function evictHelperStateCache(root: string, options?: { prefix?: boolean }): void {
+  const target = helperCacheKey(root)
+  helperStateCache.delete(target)
+  if (!options?.prefix) return
+  const boundary = target.endsWith(sep) ? target : `${target}${sep}`
+  for (const key of helperStateCache.keys()) {
+    if (key.startsWith(boundary)) helperStateCache.delete(key)
   }
 }
 
@@ -73,15 +84,30 @@ export async function saveHelperState(fs:WorkspaceFs,state:HelperState):Promise<
   const scopes=helperTable(state.scopes),extras=helperTable(state.extras)
   for(const [key,table] of Object.entries(scopes)){helperScopeKey(key);helperTable(table)}
   for(const [id,table] of Object.entries(extras)){if(!id||id.length>256)throw new Error('消息身份无效');helperTable(table)}
-  const swipes=helperTable(state.swipes??{})
-  for(const [id,value] of Object.entries(swipes)){if(!id||id.length>256)throw new Error('消息身份无效');parseHelperSwipes(value)}
-  const raw=JSON.stringify({version:1,scopes,...(Object.keys(extras).length?{extras}:{}),...(Object.keys(swipes).length?{swipes}:{}),...(state.mvu===undefined?{}:{mvu:parseHelperMvuState(state.mvu)})})
+  const swipes=helperTable(state.swipes??{}),normalizedSwipes:Record<string,HelperSwipeSet>={}
+  for(const [id,value] of Object.entries(swipes)){if(!id||id.length>256)throw new Error('消息身份无效');normalizedSwipes[id]=parseHelperSwipes(value)}
+  const serializedSwipes=Object.keys(swipes).length?{swipes}:{}
+  const normalizedMvu=state.mvu===undefined?undefined:parseHelperMvuState(state.mvu)
+  const raw=JSON.stringify({version:1,scopes,...(Object.keys(extras).length?{extras}:{}),...serializedSwipes,...(normalizedMvu===undefined?{}:{mvu:normalizedMvu})})
   const byteLength=Buffer.byteLength(raw)
   if(byteLength>4*1024*1024)throw new Error('酒馆助手状态文件超限')
   const existingStat=await fs.stat(HELPER_STATE_PATH)
   if(existingStat===null || existingStat.size!==byteLength || await fs.readText(HELPER_STATE_PATH)!==raw){
     try{await fs.writeText(HELPER_STATE_PATH,raw)}
     catch(error){if(await fs.readText(HELPER_STATE_PATH)!==raw)throw error}
+  }
+  const ledger = openLedger(fs.root)
+  const revision = ledger.counter
+  const epoch = ledger.epoch
+  const afterStat = await fs.stat(HELPER_STATE_PATH)
+  if (afterStat !== null && ledger.epoch === epoch && !writtenSince(ledger, HELPER_STATE_PATH, revision)) {
+    const cachedState: HelperState = {
+      scopes: scopes as HelperScopes,
+      extras: extras as HelperState['extras'],
+      swipes: normalizedSwipes,
+      ...(normalizedMvu === undefined ? {} : { mvu: normalizedMvu }),
+    }
+    rememberHelperState(helperCacheKey(fs.root), { stat: afterStat, revision, epoch, state: structuredClone(cachedState) })
   }
 }
 export function applyHelperChanges(scopes: HelperScopes, changes: HelperVariableChange[]): HelperScopes {

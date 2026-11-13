@@ -6,7 +6,7 @@
  * 口径取值：尚未被请求使用的最新选择优先，其次最近请求头，日志都没有时才回退 options。
  * 请求头可能记录本插件的 DeepSeek 布局通道；辅助调用没有提示词布局，映射回同凭证的官方 provider。
  */
-import type { Context } from '@deepseek-ai/cordis'
+import { symbols, type Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { PRESET_ADAPTER_PROVIDER, PRESET_ADAPTER_SOURCE_PROVIDER } from './presetAdapter.js'
 
@@ -189,8 +189,14 @@ function patchModelSelectionDef(def: {
   }
 }
 
-function ensureProjectionPatched(projections: unknown): void {
-  if (!projections || typeof projections !== 'object') return
+function unwrapService<T extends object>(service: T): T {
+  const original = (service as unknown as Record<PropertyKey, unknown>)[symbols.original]
+  return (original && typeof original === 'object' ? original : service) as T
+}
+
+function ensureProjectionPatched(rawProjections: unknown): void {
+  if (!rawProjections || typeof rawProjections !== 'object') return
+  const projections = unwrapService(rawProjections as object)
   const regMap = (projections as { registrations?: Map<string, { def?: any }> }).registrations
   const existing = regMap?.get('modelSelection')
   if (existing?.def) patchModelSelectionDef(existing.def)
@@ -219,8 +225,8 @@ export function installTavernModelSelectionCompat(ctx: Context): void {
   if (installedRoots.has(root)) return
   installedRoots.add(root)
   root.on('session/event' as any, (session: { id: string }, event: { type?: string; data?: any }) => {
-    ensureProjectionPatched(root.get('sessionProjections'))
     if (event?.type !== 'request/header') return
+    ensureProjectionPatched(root.get('sessionProjections'))
     const cfg = event.data?.header?.config
     if (!cfg || cfg.provider !== PRESET_ADAPTER_PROVIDER) return
     const controller = root.get('sessionController') as {

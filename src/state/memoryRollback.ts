@@ -2,6 +2,7 @@
 import { isMemoryId, memorySourceIds, parseMemory } from './memory.js'
 import { caseIdentity } from './pathIdentity.js'
 import { WorkspaceFs } from './workspaceFs.js'
+import { withWorkspaceLock } from './workspaceLock.js'
 
 /** Windows 的同名文件不区分大小写；只规范图节点身份，旧来源正文与 WAL 镜像保持原样。 */
 const memoryIdentity = caseIdentity
@@ -12,10 +13,13 @@ export async function expandAffectedMemories(root: string, paths: readonly strin
     return match && isMemoryId(match[1]) ? [memoryIdentity(match[1])] : []
   }))
   if (!changed.size) return
+  return withWorkspaceLock(root, async () => {
   const fs = new WorkspaceFs(root, null)
   const names = new Map<string, string>()
   const rawEntries = new Map<string, { id: string; sources: string[] }>()
   const corrupted = new Set<string>()
+  const activePresent = new Set<string>()
+  const archivedTexts = new Map<string, string>()
   // 摘要图必须完整：跳过链接来源会把相关摘要误判为独立事实，回滚应在写入前明确失败。
   const validFiles: Array<{ file: string; id: string; identity: string; archived: boolean }> = []
   for (const file of await fs.list('memory', { rejectLinks: true })) {
@@ -34,6 +38,8 @@ export async function expandAffectedMemories(root: string, paths: readonly strin
     const { file, id, identity, archived } = validFiles[i]!
     const text = texts[i] ?? null
     if (text === null) continue
+    if (archived) archivedTexts.set(identity, text)
+    else activePresent.add(identity)
     let entry
     try { entry = parseMemory(file, text) }
     catch {
@@ -55,19 +61,37 @@ export async function expandAffectedMemories(root: string, paths: readonly strin
   const canonicalId = (id: string) => names.get(memoryIdentity(id)) ?? id
   const summaries = new Map([...rawEntries.values()].filter(entry => entry.sources.length)
     .map(({ id, sources }) => [canonicalId(id), sources.map(canonicalId)]))
+  const dependents = new Map<string, string[]>()
   for (const [id, sources] of summaries) {
     if (sources.some(source => memoryIdentity(source) === memoryIdentity(id))) throw new Error('记忆归并来源存在循环，已停止回滚')
     const broken = sources.find(source => corrupted.has(memoryIdentity(source)))
     if (broken) throw new Error(`记忆归并来源 ${broken} 损坏，已停止回滚`)
+    for (const source of sources) {
+      const sourceId = memoryIdentity(source)
+      let list = dependents.get(sourceId)
+      if (!list) {
+        list = []
+        dependents.set(sourceId, list)
+      }
+      list.push(id)
+    }
   }
   const invalid = new Set<string>()
-  let grew = true
-  while (grew) {
-    grew = false
-    for (const [id, sources] of summaries) {
-      if (!invalid.has(id) && sources.some((source) => changed.has(memoryIdentity(source)) || invalid.has(source))) {
-        invalid.add(id)
-        grew = true
+  const queue: string[] = []
+  for (const sourceId of changed) {
+    for (const dependent of dependents.get(sourceId) ?? []) {
+      if (!invalid.has(dependent)) {
+        invalid.add(dependent)
+        queue.push(dependent)
+      }
+    }
+  }
+  for (let head = 0; head < queue.length; head++) {
+    const id = queue[head]!
+    for (const dependent of dependents.get(memoryIdentity(id)) ?? []) {
+      if (!invalid.has(dependent)) {
+        invalid.add(dependent)
+        queue.push(dependent)
       }
     }
   }
@@ -79,7 +103,7 @@ export async function expandAffectedMemories(root: string, paths: readonly strin
   // 先只读规划整张受影响来源图。共享中间摘要只能展开一次，不能处理完一个父摘要就删掉
   // 另一个父摘要仍需读取的来源；缺失与循环也必须在第一次正文修改之前拒绝。
   for (const rootId of invalid) {
-    if (!(await fs.exists(`memory/${rootId}.md`))) continue
+    if (!activePresent.has(memoryIdentity(rootId))) continue
     const pending = [{ id: rootId, exit: false }]
     while (pending.length) {
       const next = pending.pop()!
@@ -95,8 +119,9 @@ export async function expandAffectedMemories(root: string, paths: readonly strin
       pending.push({ id: next.id, exit: true })
       for (const source of summaries.get(next.id) ?? []) {
         if (!sourcesToUnarchive.has(source)) {
-          if (!(await fs.exists(`memory/${source}.md`))) {
-            const original = await fs.readText(`memory/archive/${source}.md`)
+          const sourceIdentity = memoryIdentity(source)
+          if (!activePresent.has(sourceIdentity)) {
+            const original = archivedTexts.get(sourceIdentity) ?? null
             if (original === null) throw new Error(`记忆归并来源 ${source} 缺失，已停止回滚`)
             restore.set(source, original)
           }
@@ -107,11 +132,18 @@ export async function expandAffectedMemories(root: string, paths: readonly strin
     }
   }
   // 全部来源恢复后才删除归档；I/O 失败时保留摘要和原文，重试可从活跃副本继续。
-  for (const [id, original] of restore) await fs.writeText(`memory/${id}.md`, original)
-  for (const id of sourcesToUnarchive) await fs.delete(`memory/archive/${id}.md`)
+  for (const [id, original] of restore) {
+    await fs.writeText(`memory/${id}.md`, original)
+    activePresent.add(memoryIdentity(id))
+  }
+  for (const id of sourcesToUnarchive) {
+    if (archivedTexts.has(memoryIdentity(id))) await fs.delete(`memory/archive/${id}.md`)
+  }
   // 逆后序确保所有父摘要先于共享子摘要删除，避免中途失败留下指向已删除子摘要的父级。
   for (const id of postorder.reverse()) {
-    await fs.delete(`memory/${id}.md`)
-    await fs.delete(`memory/archive/${id}.md`)
+    const idIdentity = memoryIdentity(id)
+    if (activePresent.has(idIdentity)) await fs.delete(`memory/${id}.md`)
+    if (archivedTexts.has(idIdentity)) await fs.delete(`memory/archive/${id}.md`)
   }
+  })
 }

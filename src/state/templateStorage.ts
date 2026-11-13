@@ -1,6 +1,7 @@
 /** 模板 JSON 的无损分块存储：内容寻址复用历史，所有新块先记 WAL，最后原子发布根引用。 */
 import { createHash } from 'node:crypto'
 import { Buffer } from 'node:buffer'
+import { sep } from 'node:path'
 import { rootIdentity } from './pathIdentity.js'
 import { WorkspaceSizeError, type WorkspaceFs } from './workspaceFs.js'
 import { ledgerKey, openLedger } from './writeLedger.js'
@@ -152,7 +153,9 @@ interface StoryBlocks {
   epoch:number
   /** 上述结论对应的根文件原文；磁盘上的根不是这一份时，不能凭内存断定块仍在。 */
   root:string|null
-  /** 当前根的解析结果；内部递归冻结，读取时只复制调用方选择的内容。size 为 JSON 字符数。 */
+  /** 当前根是否使用分块目录（内联状态不依赖 state/template-data，可省去目录探测）。 */
+  chunked?:boolean
+  /** 完整视图的解析结果；内部递归冻结，读取时只复制调用方选择的内容。size 为 JSON 字符数。 */
   parsed?:{path:string;raw:string;value:unknown;size:number}
   /** 路径结果只证明选中的子图有效，不得用于写入时跳过其它块的完整校验。 */
   selected?:{path:string;raw:string;values:Map<string,{value:unknown;size:number}>;
@@ -164,8 +167,14 @@ const storyKey = rootIdentity
 const DATA_KEY = ledgerKey(TEMPLATE_DATA_PATH)
 
 /** 清理临时草稿或已废弃剧情目录的分块缓存，避免分支准备挤掉活跃剧情的解析结果。 */
-export function evictTemplateStoryCache(root:string):void {
-  stories.delete(storyKey(root))
+export function evictTemplateStoryCache(root:string,options?:{prefix?:boolean}):void {
+  const target=storyKey(root)
+  stories.delete(target)
+  if(!options?.prefix) return
+  const boundary=target.endsWith(sep) ? target : `${target}${sep}`
+  for(const key of stories.keys()) {
+    if(key.startsWith(boundary)) stories.delete(key)
+  }
 }
 
 function storyBlocks(fs:WorkspaceFs):StoryBlocks {
@@ -444,11 +453,12 @@ function trimParsed(cache:StoryBlocks):void {
 export function adoptTemplateDocument(fs:WorkspaceFs,path:string,document:TemplateDocumentWrite,parsed:unknown):void {
   const cache=storyBlocks(fs)
   cache.known=new Set(document.blocks.keys())
+  cache.chunked=document.blocks.size>0
   cache.root=document.raw
   cache.parsed=undefined
   cache.selected=undefined
-  // 内联文档每次读取本来就只读一个小文件，不占用解析结果的预算。
-  if(document.blocks.size && parsed!==undefined) rememberParsed(cache,path,document.raw,parsed)
+  // 内联文档也保留已校验的视图，避免同一轮内连续读取重复 JSON.parse 与业务校验。
+  if(parsed!==undefined) rememberParsed(cache,path,document.raw,parsed)
   cache.revision=openLedger(fs.root).counter
 }
 
@@ -570,19 +580,25 @@ function parseDocumentRoot(document:Record<string,unknown>):Document {
 async function decodeRoot(fs:WorkspaceFs,raw:string|null,references?:Set<string>,remember=true):Promise<Loaded> {
   if(raw===null) return {value:null}
   const document:unknown=JSON.parse(raw)
+  const cache=remember ? storyBlocks(fs) : undefined
   if(!isRecord(document) || document.version!==2) {
     // 旧版及本地抬高限制后留下的完整 JSON 可无损迁移；异常大单值仍明确拒绝。
     if(Buffer.byteLength(raw)>BLOCK_LIMIT) prepareTemplateDocument(document)
-    return {value:document}
+    if(cache) {
+      cache.known.clear()
+      cache.chunked=false
+      if(cache.root!==raw) {cache.root=raw;cache.parsed=undefined;cache.selected=undefined}
+    }
+    return {value:document,cache}
   }
   const manifest=parseDocumentRoot(document)
-  const cache=remember ? storyBlocks(fs) : undefined
   const blocks=await fetchBlocks(fs,manifest.root)
   const value=decodeDocument(manifest,blocks)
   // 当前根可达的块刚从磁盘逐一核对过。
   if(cache) {
     cache.known=new Set(blocks.keys())
-    if(cache.root!==raw) {cache.root=raw;cache.parsed=undefined}
+    cache.chunked=true
+    if(cache.root!==raw) {cache.root=raw;cache.parsed=undefined;cache.selected=undefined}
   }
   if(references) for(const hash of blocks.keys()) references.add(blockPath(hash))
   return {value,cache}
@@ -645,10 +661,19 @@ async function readTemplateDocumentPathsFromRaw(
   const parsed:unknown=JSON.parse(raw)
   if(!isRecord(parsed) || parsed.version!==2) {
     if(Buffer.byteLength(raw)>BLOCK_LIMIT) prepareTemplateDocument(parsed)
-    return paths.map(item=>structuredClone(selectJsonPath(parsed,item)))
+    const values=paths.map(item=>structuredClone(selectJsonPath(parsed,item)))
+    const cache=storyBlocks(fs)
+    cache.known.clear()
+    cache.chunked=false
+    if(cache.root!==raw) {cache.root=raw;cache.parsed=undefined}
+    if(!cache.selected || cache.selected.path!==path || cache.selected.raw!==raw) {
+      cache.selected={path,raw,values:new Map(),parsers:new Map(),blocks:new Map(),size:0}
+    }
+    return values
   }
   const document=parseDocumentRoot(parsed),blocks=new Map<string,unknown>()
   const cache=storyBlocks(fs)
+  cache.chunked=true
   if(cache.selected && (cache.selected.path!==path || cache.selected.raw!==raw
     || !(dataDirPresent ?? Boolean(await fs.stat(TEMPLATE_DATA_PATH))))) cache.selected=undefined
   cache.selected ??={path,raw,values:new Map(),parsers:new Map(),blocks:new Map(),size:0}
@@ -857,7 +882,7 @@ export async function loadTemplateDocumentPaths<T>(fs:WorkspaceFs,path:string,pa
   const selected=cache.selected
   let dataDirPresent:boolean|undefined
   if(raw!==null && selected?.path===path && selected.raw===raw) {
-    dataDirPresent=Boolean(await fs.stat(TEMPLATE_DATA_PATH))
+    dataDirPresent=cache.chunked ? Boolean(await fs.stat(TEMPLATE_DATA_PATH)) : true
     if(dataDirPresent) {
       const previous=selected.parsers.get(parse)
       if(previous?.paths===key) return structuredClone(previous.value) as T
@@ -887,8 +912,8 @@ export async function loadTemplateDocument<T,R>(fs:WorkspaceFs,path:string,parse
   const raw=await readRoot(fs,path)
   if(raw!==null) {
     const cache=storyBlocks(fs),parsed=cache.parsed
-    // 整个块目录被移走时不沿用内存结论，让缺失在读取时就暴露。
-    if(parsed && parsed.path===path && parsed.raw===raw && cache.root===raw && await fs.stat(TEMPLATE_DATA_PATH)) return copy(parsed.value)
+    // 分块文档在整个块目录被移走时不沿用内存结论；内联文档无外部块依赖。
+    if(parsed && parsed.path===path && parsed.raw===raw && cache.root===raw && (!cache.chunked || await fs.stat(TEMPLATE_DATA_PATH))) return copy(parsed.value)
   }
   const loaded=await decodeRoot(fs,raw)
   const result=parse(loaded.value)

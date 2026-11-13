@@ -154,6 +154,8 @@ export function PresetsSection(props: { remote: TavernRemote }) {
   useEffect(() => () => { openRequest.current += 1 }, [])
   const [toDelete, setToDelete] = useState<string | null>(null)
   const [query, setQuery] = useState('')
+  const [listLimit, setListLimit] = useState(40)
+  const [entryLimit, setEntryLimit] = useState(40)
   const toast = useToast()
   const t = useT()
   const dirty = useMemo(() => editing !== null && JSON.stringify(editing) !== baseline, [editing, baseline])
@@ -173,6 +175,7 @@ export function PresetsSection(props: { remote: TavernRemote }) {
   const items: PresetSummary[] = state.status === 'ready' ? state.value.items : []
   const q = query.trim().toLowerCase()
   const filtered = q === '' ? items : items.filter((p) => p.name.toLowerCase().includes(q) || p.id.toLowerCase().includes(q))
+  const visibleItems = filtered.slice(0, listLimit)
 
   const cancelOpening = () => {
     openRequest.current += 1
@@ -181,6 +184,7 @@ export function PresetsSection(props: { remote: TavernRemote }) {
 
   const resetEditor = () => {
     cancelOpening()
+    setEntryLimit(40)
     setEditing(null)
     setEditingId(null)
     setRevision(null)
@@ -197,7 +201,7 @@ export function PresetsSection(props: { remote: TavernRemote }) {
     try {
       const r = await remote.getPreset({ id })
       if (openRequest.current !== request) return
-      if (r.ok) { setEditing(structuredClone(r.value.preset)); setEditingId(id); setRevision(r.value.revision ?? null); setBaseline(JSON.stringify(r.value.preset)) }
+      if (r.ok) { setEntryLimit(40); setEditing(structuredClone(r.value.preset)); setEditingId(id); setRevision(r.value.revision ?? null); setBaseline(JSON.stringify(r.value.preset)) }
       else setError(r.error.message)
     } catch (cause) {
       if (openRequest.current === request) setError(describeError(cause))
@@ -284,6 +288,7 @@ export function PresetsSection(props: { remote: TavernRemote }) {
     if (pending.current) return
     cancelOpening()
     const id = `preset-${randomUuid()}`
+    setEntryLimit(40)
     setEditing({ name: t('presets.newPresetName'), identifier: id, entries: [newEntry(100)] })
     setEditingId(null)
     setRevision(null)
@@ -313,7 +318,7 @@ export function PresetsSection(props: { remote: TavernRemote }) {
         <Btn size="md" disabled={busy} onClick={() => requestEditor(createNew)}>{t('presets.new')}</Btn>
         <Btn size="md" onClick={() => { reload(); settings.reload() }} disabled={busy}>{t('action.refresh')}</Btn>
         {(items.length >= 5 || query !== '') && (
-          <SearchInput label={t('presets.searchLabel')} value={query} onChange={setQuery} placeholder={t('presets.searchPlaceholder')} width={220} />
+          <SearchInput label={t('presets.searchLabel')} value={query} onChange={(value) => { setQuery(value); setListLimit(40) }} placeholder={t('presets.searchPlaceholder')} width={220} />
         )}
       </div>
       {state.status === 'loading' && (
@@ -335,10 +340,10 @@ export function PresetsSection(props: { remote: TavernRemote }) {
         </div>
       )}
       {q !== '' && filtered.length === 0 && state.status === 'ready' && (
-        <SearchEmpty what={t('presets.noun')} query={query.trim()} onClear={() => setQuery('')} />
+        <SearchEmpty what={t('presets.noun')} query={query.trim()} onClear={() => { setQuery(''); setListLimit(40) }} />
       )}
       <div className="dsh-tavern-list" style={{ marginBottom: 12 }}>
-        {filtered.map((item) => {
+        {visibleItems.map((item) => {
           const isDefault = defaultPresetId === item.id
           return (
             <div key={item.id} className="dsh-tavern-tile" {...clickableProps(() => requestEditor(() => void open(item.id)))}>
@@ -371,6 +376,11 @@ export function PresetsSection(props: { remote: TavernRemote }) {
           )
         })}
       </div>
+      {visibleItems.length < filtered.length && (
+        <div className="dsh-tavern-row" style={{ marginBottom: 12 }}>
+          <Btn disabled={busy} onClick={() => setListLimit((n) => n + 40)}>{t('common.loadMore')}</Btn>
+        </div>
+      )}
       <ConfirmDialog
         open={toDelete !== null}
         title={t('presets.deleteTitle')}
@@ -401,7 +411,7 @@ export function PresetsSection(props: { remote: TavernRemote }) {
             />
           )}
           <div className="dsh-tavern-list" style={{ margin: '8px 0' }}>
-            {editing.entries.map((entry, i) => (
+            {editing.entries.slice(0, entryLimit).map((entry, i) => (
               <EntryEditor
                 key={entry.identifier}
                 index={i}
@@ -412,9 +422,17 @@ export function PresetsSection(props: { remote: TavernRemote }) {
               />
             ))}
           </div>
+          {entryLimit < editing.entries.length && (
+            <div className="dsh-tavern-row" style={{ marginBottom: 8 }}>
+              <Btn disabled={busy} onClick={() => setEntryLimit((n) => n + 40)}>{t('common.loadMore')}</Btn>
+            </div>
+          )}
           <SaveBar>
             <span className="dsh-tavern-muted">{dirty ? t('draft.unsaved') : ''}</span>
-            <Btn onClick={() => edit(current => ({ ...current, entries: [...current.entries, newEntry(current.entries.length * 100 + 100)] }))}>{t('presets.addEntry')}</Btn>
+            <Btn onClick={() => {
+              setEntryLimit((n) => Math.max(n, editing.entries.length + 1))
+              edit(current => ({ ...current, entries: [...current.entries, newEntry(current.entries.length * 100 + 100)] }))
+            }}>{t('presets.addEntry')}</Btn>
             <Btn disabled={busy} onClick={() => void save()} primary>{t('presets.save')}</Btn>
             <Btn onClick={() => requestEditor(closeEditor)}>{t('action.close')}</Btn>
           </SaveBar>

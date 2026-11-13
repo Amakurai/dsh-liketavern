@@ -54,10 +54,14 @@ function LorebooksSectionContent(props: { remote: TavernRemote }) {
   const charBooks = charItems.filter((c) => c.hasCharacterBook)
   // 关键词同时过滤「角色卡内嵌」与「世界书库」两组；书多到要滚动找时才出搜索框。
   const [query, setQuery] = useState('')
+  const [charLimit, setCharLimit] = useState(40)
+  const [libraryLimit, setLibraryLimit] = useState(40)
   const q = query.trim().toLowerCase()
   const matchBook = (label: string) => q === '' || label.toLowerCase().includes(q)
   const shownCharBooks = q === '' ? charBooks : charBooks.filter((c) => matchBook(c.characterBookName || c.name) || c.name.toLowerCase().includes(q))
   const shownNames = q === '' ? names : names.filter(matchBook)
+  const visibleCharBooks = shownCharBooks.slice(0, charLimit)
+  const visibleNames = shownNames.slice(0, libraryLimit)
   const totalBooks = charBooks.length + names.length
 
   /** 库文件与内嵌书共用请求身份；只有最后一次点选可以打开编辑器、报告错误或收起加载反馈。 */
@@ -237,7 +241,7 @@ function LorebooksSectionContent(props: { remote: TavernRemote }) {
           {t('action.refresh')}
         </Btn>
         {(totalBooks >= 5 || query !== '') && (
-          <SearchInput label={t('lorebooks.searchLabel')} value={query} onChange={setQuery} placeholder={t('lorebooks.searchPlaceholder')} width={220} />
+          <SearchInput label={t('lorebooks.searchLabel')} value={query} onChange={(value) => { setQuery(value); setCharLimit(40); setLibraryLimit(40) }} placeholder={t('lorebooks.searchPlaceholder')} width={220} />
         )}
       </div>
       {opening !== null && <div className="dsh-tavern-toolbar" role="status">
@@ -255,14 +259,14 @@ function LorebooksSectionContent(props: { remote: TavernRemote }) {
       {chars.state.status === 'error' && <Err message={chars.state.message} />}
       <Err message={error} />
       {q !== '' && shownCharBooks.length === 0 && shownNames.length === 0 && state.status === 'ready' && chars.state.status === 'ready' && (
-        <SearchEmpty what={t('section.lorebooks')} query={query.trim()} onClear={() => setQuery('')} />
+        <SearchEmpty what={t('section.lorebooks')} query={query.trim()} onClear={() => { setQuery(''); setCharLimit(40); setLibraryLimit(40) }} />
       )}
 
       {shownCharBooks.length > 0 && (
         <>
           <div className="dsh-tavern-groupHead">{t('lorebooks.groupEmbedded')}</div>
           <div className="dsh-tavern-list">
-            {shownCharBooks.map((item) => (
+            {visibleCharBooks.map((item) => (
               <div key={item.cardId} className="dsh-tavern-tile" {...clickableProps(() => void openCharacter(item))}>
                 <span className="dsh-tavern-tileIcon">
                   <IconFolderOpenOutlineMedium size={18} />
@@ -289,6 +293,11 @@ function LorebooksSectionContent(props: { remote: TavernRemote }) {
               </div>
             ))}
           </div>
+          {visibleCharBooks.length < shownCharBooks.length && (
+            <div className="dsh-tavern-row" style={{ marginBottom: 8 }}>
+              <Btn disabled={busy} onClick={() => setCharLimit((n) => n + 40)}>{t('common.loadMore')}</Btn>
+            </div>
+          )}
         </>
       )}
 
@@ -306,33 +315,40 @@ function LorebooksSectionContent(props: { remote: TavernRemote }) {
           </div>
         ) : null
       ) : (
-        <div className="dsh-tavern-list">
-          {shownNames.map((name) => (
-            <div key={name} className="dsh-tavern-tile" {...clickableProps(() => void openLibrary(name))}>
-              <span className="dsh-tavern-tileIcon">
-                <IconFolderOpenOutlineMedium size={18} />
-              </span>
-              <div className="dsh-tavern-tileMain">
-                <div className="dsh-tavern-tileTitleRow">
-                  <span className="dsh-tavern-tileName">{name}</span>
-                  <Badge>{t('lorebooks.badgeLibrary')}</Badge>
+        <>
+          <div className="dsh-tavern-list">
+            {visibleNames.map((name) => (
+              <div key={name} className="dsh-tavern-tile" {...clickableProps(() => void openLibrary(name))}>
+                <span className="dsh-tavern-tileIcon">
+                  <IconFolderOpenOutlineMedium size={18} />
+                </span>
+                <div className="dsh-tavern-tileMain">
+                  <div className="dsh-tavern-tileTitleRow">
+                    <span className="dsh-tavern-tileName">{name}</span>
+                    <Badge>{t('lorebooks.badgeLibrary')}</Badge>
+                  </div>
+                  <span className="dsh-tavern-tileSub">{t('lorebooks.libraryFileSub')}</span>
                 </div>
-                <span className="dsh-tavern-tileSub">{t('lorebooks.libraryFileSub')}</span>
+                <div className="dsh-tavern-tileActions">
+                  <IconBtn label={t('lorebooks.editEntries')} onClick={() => void openLibrary(name)}>
+                    <IconEditOutlineMedium />
+                  </IconBtn>
+                  <IconBtn label={t('lorebooks.exportJson')} disabled={busy || opening !== null} onClick={() => void exportBook(name)}>
+                    <IconDownloadOutlineMedium />
+                  </IconBtn>
+                  <IconBtn label={t('lorebooks.deleteBook')} danger disabled={busy || opening !== null} onClick={() => setToDelete(name)}>
+                    <IconTrashOutlineMedium />
+                  </IconBtn>
+                </div>
               </div>
-              <div className="dsh-tavern-tileActions">
-                <IconBtn label={t('lorebooks.editEntries')} onClick={() => void openLibrary(name)}>
-                  <IconEditOutlineMedium />
-                </IconBtn>
-                <IconBtn label={t('lorebooks.exportJson')} disabled={busy || opening !== null} onClick={() => void exportBook(name)}>
-                  <IconDownloadOutlineMedium />
-                </IconBtn>
-                <IconBtn label={t('lorebooks.deleteBook')} danger disabled={busy || opening !== null} onClick={() => setToDelete(name)}>
-                  <IconTrashOutlineMedium />
-                </IconBtn>
-              </div>
+            ))}
+          </div>
+          {visibleNames.length < shownNames.length && (
+            <div className="dsh-tavern-row" style={{ marginBottom: 8 }}>
+              <Btn disabled={busy} onClick={() => setLibraryLimit((n) => n + 40)}>{t('common.loadMore')}</Btn>
             </div>
-          ))}
-        </div>
+          )}
+        </>
       )}
 
       <ConfirmDialog

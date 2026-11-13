@@ -7,7 +7,7 @@
  */
 
 import { Buffer } from 'node:buffer'
-import { inflateSync } from 'node:zlib'
+import { crc32, inflateSync } from 'node:zlib'
 import { characterDataExtras, isKnownCharacterDataKey } from '../core/characterData.js'
 import { exportCharacterBook, isSpecCharacterBook, parseLorebook } from './lorebook.js'
 import type { CardRegexScript, CharacterCard, ChatRole, DepthPrompt, LorebookFile } from '../core/types.js'
@@ -477,15 +477,6 @@ const BLANK_PNG = Buffer.from(
   'hex',
 )
 
-function crc32(bytes: Uint8Array): number {
-  let crc = 0xffffffff
-  for (const b of bytes) {
-    crc ^= b
-    for (let i = 0; i < 8; i++) crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0)
-  }
-  return (crc ^ 0xffffffff) >>> 0
-}
-
 function pngChunk(type: string, data: Uint8Array): Uint8Array {
   const header = new Uint8Array(8)
   new DataView(header.buffer).setUint32(0, data.length)
@@ -494,7 +485,7 @@ function pngChunk(type: string, data: Uint8Array): Uint8Array {
   crcInput.set(header.subarray(4, 8), 0)
   crcInput.set(data, 4)
   const crc = new Uint8Array(4)
-  new DataView(crc.buffer).setUint32(0, crc32(crcInput))
+  new DataView(crc.buffer).setUint32(0, crc32(crcInput) >>> 0)
   const out = new Uint8Array(12 + data.length)
   out.set(header, 0)
   out.set(data, 8)
@@ -681,18 +672,78 @@ export function createBlankCard(name: string): CharacterCard {
   )
 }
 
-/** 解析 JSON 角色卡（.json 导入），无 PNG 字节。 */
-export function parseJsonCard(json: unknown): CharacterCard {
-  // 调用方已完成 JSON.parse（内存账已付），这里补一道体量闸：挡住绕过文件字节检查、
-  // 经 remote 直传的超大对象。序列化长度与源文件字节数同量级，作为字节上限的近似。
-  let size = 0
+function measureJsonCharsBounded(value: unknown, limit: number): number {
+  const ancestors = new Set<object>()
+  let total = 0
+  const bump = (delta: number): void => {
+    total += delta
+    if (total > limit) {
+      throw new CardParseError(`JSON 角色卡超过大小上限（${MAX_CARD_JSON_CHARS / 1024 / 1024}MB）`)
+    }
+  }
+  const stringChars = (text: string): number => {
+    let chars = 2 + text.length
+    if (total + chars > limit) return chars
+    for (let i = 0; i < text.length; i++) {
+      const code = text.charCodeAt(i)
+      if (code === 0x22 || code === 0x5c || code === 0x08 || code === 0x0c || code === 0x0a || code === 0x0d || code === 0x09) chars++
+      else if (code < 0x20) chars += 5
+    }
+    return chars
+  }
+  const walk = (node: unknown, inArray: boolean): boolean => {
+    if (typeof node === 'object' && node !== null && typeof (node as { toJSON?: unknown }).toJSON === 'function') {
+      node = (node as { toJSON: () => unknown }).toJSON()
+    }
+    if (node === null) { bump(4); return true }
+    switch (typeof node) {
+      case 'boolean': bump(node ? 4 : 5); return true
+      case 'number': bump(Number.isFinite(node) ? String(node).length : 4); return true
+      case 'string': bump(stringChars(node)); return true
+      case 'bigint': throw new CardParseError('角色卡 JSON 无法序列化（含循环引用？）')
+      case 'undefined':
+      case 'function':
+      case 'symbol':
+        if (!inArray) return false
+        bump(4)
+        return true
+    }
+    if (ancestors.has(node)) throw new CardParseError('角色卡 JSON 无法序列化（含循环引用？）')
+    ancestors.add(node)
+    try {
+      if (Array.isArray(node)) {
+        bump(node.length > 1 ? 2 + node.length - 1 : 2)
+        for (let i = 0; i < node.length; i++) walk(node[i], true)
+        return true
+      }
+      bump(2)
+      let first = true
+      for (const key of Object.keys(node)) {
+        const prop = (node as Record<string, unknown>)[key]
+        const before = total
+        bump((first ? 0 : 1) + stringChars(key) + 1)
+        if (!walk(prop, false)) { total = before; continue }
+        first = false
+      }
+      return true
+    } finally {
+      ancestors.delete(node)
+    }
+  }
+  if (value === undefined || typeof value === 'function' || typeof value === 'symbol') return 0
   try {
-    size = JSON.stringify(json)?.length ?? 0
-  } catch {
+    walk(value, true)
+    return total
+  } catch (error) {
+    if (error instanceof CardParseError) throw error
     throw new CardParseError('角色卡 JSON 无法序列化（含循环引用？）')
   }
-  if (size > MAX_CARD_JSON_CHARS) {
-    throw new CardParseError(`JSON 角色卡超过大小上限（${MAX_CARD_JSON_CHARS / 1024 / 1024}MB）`)
-  }
+}
+
+/** 解析 JSON 角色卡（.json 导入），无 PNG 字节。 */
+export function parseJsonCard(json: unknown): CharacterCard {
+  // 调用方已完成 JSON.parse（内存账已付），这里补一道无大字符串分配的体量闸：挡住绕过文件字节检查、
+  // 经 remote 直传的超大对象或循环引用对象。
+  measureJsonCharsBounded(json, MAX_CARD_JSON_CHARS)
   return normalizeCardInternal(json, null, null)
 }

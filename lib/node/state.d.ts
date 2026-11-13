@@ -149,6 +149,9 @@ export declare class TavernState {
     private readonly cardCache;
     private readonly charLoreCache;
     private readonly personaCache;
+    private readonly charScriptCache;
+    private readonly presetScriptCache;
+    private globalScriptCache;
     /** 全局正则规则解析缓存（rulesFor 每 step 调一次；saveRegexRules bump `regex:global`）。 */
     private globalRegexCache;
     /** 预设内嵌正则编译缓存：以 loadPreset 返回的预设对象为弱引用键，预设修订更新或删除后随旧对象自动释放。 */

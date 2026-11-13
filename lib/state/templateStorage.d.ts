@@ -19,7 +19,9 @@ export declare function jsonStringByteLength(text: string): number;
 /** 快速判断任意值经 JSON.stringify 后的 UTF-8 字节数是否超过上限，超限即提前退出，不分配大字符串。 */
 export declare function exceedsJsonBytes(root: unknown, limit: number): boolean;
 /** 清理临时草稿或已废弃剧情目录的分块缓存，避免分支准备挤掉活跃剧情的解析结果。 */
-export declare function evictTemplateStoryCache(root: string): void;
+export declare function evictTemplateStoryCache(root: string, options?: {
+    prefix?: boolean;
+}): void;
 /** 全部预算和结构先在内存检查，拒绝时尚未开始任何正文或 WAL 写入。 */
 export declare function prepareTemplateDocument(value: unknown): TemplateDocumentWrite;
 /**

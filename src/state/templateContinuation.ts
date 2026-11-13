@@ -10,13 +10,24 @@ import { parseTemplateStickyState,type TemplateStickyState } from '../core/templ
 import { parseTemplateReplay,closeTemplateGeneration } from './templateGeneration.js'
 import type { TemplateState } from './template.js'
 
-export function templatePreloadRevision(context:TemplateContext):string {
-  const canonical=(value:unknown):unknown=> {
-    if(Array.isArray(value)) return value.map(canonical)
-    if(value && typeof value==='object') return Object.fromEntries(Object.keys(value).sort().map(key=>[key,canonical((value as Record<string,unknown>)[key])]))
-    return value
+const canonicalCache=new WeakMap<object,unknown>()
+
+function canonicalValue(value:unknown):unknown {
+  if(value===null || typeof value!=='object') return value
+  const frozen=Object.isFrozen(value)
+  if(frozen) {
+    const cached=canonicalCache.get(value)
+    if(cached!==undefined) return cached
   }
-  return createHash('sha256').update(JSON.stringify(canonical(templatePreloadAssets(context)))).digest('hex')
+  let result:unknown
+  if(Array.isArray(value)) result=value.map(canonicalValue)
+  else result=Object.fromEntries(Object.keys(value).sort().map(key=>[key,canonicalValue((value as Record<string,unknown>)[key])]))
+  if(frozen) canonicalCache.set(value,result)
+  return result
+}
+
+export function templatePreloadRevision(context:TemplateContext):string {
+  return createHash('sha256').update(JSON.stringify(canonicalValue(templatePreloadAssets(context)))).digest('hex')
 }
 
 export function templateStickyHasClosures(state:TemplateStickyState):boolean {

@@ -55,6 +55,30 @@ export interface PresetCatalogItem {
   truncated?: boolean
 }
 
+export function collapseWhitespacePreview(text: string, maxChars: number): string {
+  // 收集至多 maxChars+1 个折叠后字符即可确定截断边界，避免整篇万字文本的全量正则替换。
+  const limit = maxChars + 1
+  let out = ''
+  let pendingSpace = false
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]!
+    if (ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r' || ch === '\f' || ch === '\v' || /\s/.test(ch)) {
+      if (out.length > 0) pendingSpace = true
+      continue
+    }
+    if (pendingSpace) {
+      out += ' '
+      pendingSpace = false
+      if (out.length >= limit) break
+    }
+    out += ch
+    if (out.length >= limit) break
+  }
+  let end = Math.min(maxChars, out.length)
+  if (end < out.length && end > 0 && /[\uD800-\uDBFF]/.test(out[end - 1]!) && /[\uDC00-\uDFFF]/.test(out[end] ?? '')) end--
+  return out.slice(0, end)
+}
+
 export function toPresetCatalogItem(entry: PresetEntry): PresetCatalogItem {
   return {
     identifier: entry.identifier,
@@ -65,12 +89,7 @@ export function toPresetCatalogItem(entry: PresetEntry): PresetCatalogItem {
     marker: entry.marker,
     markerId: entry.markerId ?? null,
     tokens: estimateTokens(entry.content),
-    preview: (() => {
-      const normalized = entry.content.replace(/\s+/g, ' ').trim()
-      let end = PRESET_CATALOG_PREVIEW
-      if (end < normalized.length && end > 0 && /[\uD800-\uDBFF]/.test(normalized[end - 1]!) && /[\uDC00-\uDFFF]/.test(normalized[end] ?? '')) end--
-      return normalized.slice(0, end)
-    })(),
+    preview: collapseWhitespacePreview(entry.content, PRESET_CATALOG_PREVIEW),
   }
 }
 

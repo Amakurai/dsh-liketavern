@@ -38,7 +38,7 @@ export declare class WorkspaceFs {
      * 日志被判定损坏，进而阻断该剧情之后所有回退与分支。盘符与 WAL 自身目录同样拒绝。
      */
     private walPath;
-    private assertNoLinks;
+    private lstatSafe;
     /**
      * 所有直接操作默认拒绝根与内部父路径上的链接。根的祖先可以是宿主安装挂载，
      * 但一旦进入指定工作区，链接不得改写剧情边界；WAL 整批预检也复用此只读检查。
@@ -58,7 +58,7 @@ export declare class WorkspaceFs {
     exists(relPath: string): Promise<boolean>;
     /**
      * 单文件元信息（mtimeMs/size）；不存在返回 null。
-     * 用途是廉价的「内容是否变过」指纹：一次 stat 不读数据，远便宜于全文读 + 解析，
+     * 用途是廉价的「内容是否变过」指纹：一次 lstat 不读数据，远便宜于全文读 + 解析，
      * 且能捕获绕开本类的落盘（WAL 回滚会直接写回文件），比进程内修订号更可靠。
      */
     stat(relPath: string): Promise<{
@@ -75,7 +75,7 @@ export declare class WorkspaceFs {
         mtimeMs: number;
         size: number;
     } | null>>;
-    /** 多个目录到根的链接检查：公共祖先只查一次。 */
+    /** 多个目录到根的链接检查：按深度分层有界并发，公共祖先只查一次并保留最早错误顺序。 */
     private assertNoLinksAmong;
     /**
      * 批量读取文本，顺序与入参一致，不存在的为 null。与逐个 readText 结果相同，系统调用少得多：
@@ -101,7 +101,7 @@ export declare class WorkspaceFs {
     ensureDir(relPath?: string): Promise<void>;
     /** 读取二进制内容；不存在返回 null。 */
     readBytes(relPath: string): Promise<Uint8Array | null>;
-    /** 调用方已对 abs 完成 assertNoLinks 时的原始字节读取；不存在返回 null。 */
+    /** 调用方已对 abs 完成 lstatSafe 时的原始字节读取；不存在返回 null。 */
     private readBytesVerified;
     /** 事务写入：每次修改先持久化 before/after，再原子替换正文；与回退共享工作区锁。 */
     writeText(relPath: string, content: string): Promise<void>;
@@ -116,6 +116,8 @@ export declare class WorkspaceFs {
      * 否则回滚写回的是有损转码后的字节。无楼层时只需判存在性，不读全文。
      */
     delete(relPath: string): Promise<void>;
+    /** 批量事务删除：单个锁与单次批量 WAL 记录，再有界并发删除正文。 */
+    deleteMany(relPaths: readonly string[]): Promise<void>;
     /**
      * 列出 prefix 子目录下的文件（相对路径，正斜杠）。
      * 默认递归；`recursive: false` 只列本层文件（跳过子目录，不进去走）——

@@ -28,6 +28,7 @@ export interface PresetCatalogItem {
     preview: string;
     truncated?: boolean;
 }
+export declare function collapseWhitespacePreview(text: string, maxChars: number): string;
 export declare function toPresetCatalogItem(entry: PresetEntry): PresetCatalogItem;
 export declare function listPresetCatalog(preset: PromptPreset): PresetCatalogItem[];
 export declare function findPresetEntry(preset: PromptPreset, identifier: string, options?: {

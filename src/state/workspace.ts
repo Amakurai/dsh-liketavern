@@ -18,7 +18,10 @@ import { compileCardRegexScripts } from '../core/regex.js'
 import { estimateTokens } from '../core/tokenize.js'
 import type { CharacterCard } from '../core/types.js'
 import { cardToStJson, embedCardInPng, hydrateStoredCard, normalizeBook, serializeStoredCard, withoutEmbeddedCharacterBook } from './card.js'
+import { evictHelperStateCache } from './helper.js'
 import { rootIdentity } from './pathIdentity.js'
+import { evictTemplateCaches } from './template.js'
+import { evictWorldDeltaCache } from './worlddelta.js'
 import { WorkspaceFs } from './workspaceFs.js'
 import { withWorkspaceLock } from './workspaceLock.js'
 import { renameWithRetry } from './rename.js'
@@ -273,13 +276,13 @@ async function inspectCharacterSummary(
   const ledger = openLedger(root)
   const epoch = ledger.epoch
   const revision = ledger.counter
-  const [archiveStat, cardStat, avatarStat, bookStat] = await Promise.all([
-    fs.stat(CHARACTER_ARCHIVE_FILE),
-    fs.stat('card.json'),
-    fs.stat('card.png'),
-    fs.stat('assets/character-book.json'),
-  ])
-  const watchedPaths = [CHARACTER_ARCHIVE_FILE, 'card.json', 'card.png', 'assets/character-book.json']
+  const watchedPaths = [CHARACTER_ARCHIVE_FILE, 'card.json', 'card.png', 'assets/character-book.json'] as const
+  const [archiveStat, cardStat, avatarStat, bookStat] = await fs.statMany(watchedPaths) as [
+    FileStat | null,
+    FileStat | null,
+    FileStat | null,
+    FileStat | null,
+  ]
   let entry = characterSummaryCache.get(key)
   const valid = Boolean(
     entry &&
@@ -451,6 +454,9 @@ export async function deleteCharacter(dataRoot: string, cardId: string): Promise
   assertValidCardId(cardId)
   const root = join(dataRoot, cardId)
   closeLedger(root, { prefix: true })
+  evictTemplateCaches(root, { prefix: true })
+  evictHelperStateCache(root, { prefix: true })
+  evictWorldDeltaCache(root, { prefix: true })
   characterSummaryCache.delete(cacheRootKey(root))
   await rm(root, { recursive: true, force: true })
 }

@@ -684,7 +684,7 @@ export function Dialog(props: {
       description={props.description}
       closeLabel={t('action.close')}
       footer={props.footer}
-      className={widthClass || undefined}
+      className={widthClass ? `dsh-tavern-ui ${widthClass}` : 'dsh-tavern-ui'}
       contentClassName={`dsh-tavern-modalContent${props.footer ? ' dsh-tavern-modalHasFooter' : ''}`}
     >
       <div className="dsh-tavern-ui dsh-tavern-modalBody">{props.children}</div>
@@ -721,6 +721,7 @@ export function ConfirmDialog(props: {
       title={props.title}
       description={props.description}
       closeLabel={t('action.cancel')}
+      className="dsh-tavern-ui"
       {...(props.children ? { contentClassName: 'dsh-tavern-modalContent dsh-tavern-modalHasFooter' } : {})}
       footer={
         <div className="dsh-tavern-modalActions">

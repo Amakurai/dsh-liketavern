@@ -13,7 +13,8 @@
  */
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { Buffer } from 'node:buffer'
-import { lstat, mkdir, readFile, readdir, rm, stat } from 'node:fs/promises'
+import type { Stats } from 'node:fs'
+import { lstat, mkdir, readFile, readdir, rm } from 'node:fs/promises'
 import { dirname, join, normalize, relative, resolve, sep } from 'node:path'
 import type { Wal } from './wal.js'
 import { atomicWrite } from './atomicWrite.js'
@@ -183,17 +184,23 @@ export class WorkspaceFs {
     return path
   }
 
-  private async assertNoLinks(abs: string): Promise<void> {
+  private async lstatSafe(abs: string): Promise<Stats | null> {
     let current = this.root
-    for (const segment of ['', ...relative(this.root, abs).split(sep).filter(Boolean)]) {
+    let lastInfo: Stats | null = null
+    const segments = ['', ...relative(this.root, abs).split(sep).filter(Boolean)]
+    for (let i = 0; i < segments.length; i++) {
+      const segment = segments[i]!
       if (segment) current = join(current, segment)
       try {
-        if ((await lstat(current)).isSymbolicLink()) throw new WorkspaceLinkError(`工作区资产路径不能经过链接: ${abs}`)
+        const info = await lstat(current)
+        if (info.isSymbolicLink()) throw new WorkspaceLinkError(`工作区资产路径不能经过链接: ${abs}`)
+        lastInfo = info
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
         throw error
       }
     }
+    return lastInfo
   }
 
   /**
@@ -201,7 +208,7 @@ export class WorkspaceFs {
    * 但一旦进入指定工作区，链接不得改写剧情边界；WAL 整批预检也复用此只读检查。
    */
   async assertSafePath(relPath: string): Promise<void> {
-    await this.assertNoLinks(this.abs(relPath))
+    await this.lstatSafe(this.abs(relPath))
   }
 
   /** 批量路径链接检查：共享祖先目录只做一次 lstat，与逐个 assertSafePath 拒绝口径一致。 */
@@ -225,7 +232,8 @@ export class WorkspaceFs {
     try {
       const abs = this.abs(relPath)
       // rejectLinks 参数保留兼容；直接读取始终检查，普通记忆检索也不能绕过目录链接。
-      await this.assertNoLinks(abs)
+      const info = await this.lstatSafe(abs)
+      if (!info) return null
       return await readFile(abs, 'utf8')
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
@@ -235,32 +243,17 @@ export class WorkspaceFs {
 
   /** 判断路径是否存在（文件或目录）。 */
   async exists(relPath: string): Promise<boolean> {
-    try {
-      const abs = this.abs(relPath)
-      await this.assertNoLinks(abs)
-      await stat(abs)
-      return true
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
-      throw error
-    }
+    return (await this.lstatSafe(this.abs(relPath))) !== null
   }
 
   /**
    * 单文件元信息（mtimeMs/size）；不存在返回 null。
-   * 用途是廉价的「内容是否变过」指纹：一次 stat 不读数据，远便宜于全文读 + 解析，
+   * 用途是廉价的「内容是否变过」指纹：一次 lstat 不读数据，远便宜于全文读 + 解析，
    * 且能捕获绕开本类的落盘（WAL 回滚会直接写回文件），比进程内修订号更可靠。
    */
   async stat(relPath: string): Promise<{ mtimeMs: number; size: number } | null> {
-    try {
-      const abs = this.abs(relPath)
-      await this.assertNoLinks(abs)
-      const info = await stat(abs)
-      return { mtimeMs: info.mtimeMs, size: info.size }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
-      throw error
-    }
+    const info = await this.lstatSafe(this.abs(relPath))
+    return info ? { mtimeMs: info.mtimeMs, size: info.size } : null
   }
 
   /**
@@ -277,21 +270,63 @@ export class WorkspaceFs {
     return mapBounded(targets, (abs) => this.lstatFile(abs))
   }
 
-  /** 多个目录到根的链接检查：公共祖先只查一次。 */
+  /** 多个目录到根的链接检查：按深度分层有界并发，公共祖先只查一次并保留最早错误顺序。 */
   private async assertNoLinksAmong(dirs: Iterable<string>): Promise<void> {
-    const cleared = new Set<string>()
-    for (const dir of dirs) {
-      let current = this.root
-      for (const segment of ['', ...relative(this.root, dir).split(sep).filter(Boolean)]) {
-        if (segment) current = join(current, segment)
-        if (cleared.has(current)) continue
+    const dirList = [...dirs]
+    if (!dirList.length) return
+    const rootChecked = await (async () => {
+      try {
+        if ((await lstat(this.root)).isSymbolicLink()) {
+          throw new WorkspaceLinkError(`工作区资产路径不能经过链接: ${dirList[0]}`)
+        }
+        return true
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+        throw error
+      }
+    })()
+    if (!rootChecked) return
+
+    const relSegmentsPerDir: string[][] = dirList.map((dir) => relative(this.root, dir).split(sep).filter(Boolean))
+    let maxDepth = 0
+    for (const segs of relSegmentsPerDir) if (segs.length > maxDepth) maxDepth = segs.length
+    const active = new Array<boolean>(dirList.length).fill(true)
+    const currentPaths = new Array<string>(dirList.length).fill(this.root)
+    for (let depth = 0; depth < maxDepth; depth++) {
+      const uniqueTargets: string[] = []
+      const pathToFirstDir = new Map<string, string>()
+      const nextPaths = new Array<string | null>(dirList.length).fill(null)
+      for (let i = 0; i < dirList.length; i++) {
+        if (!active[i]) continue
+        const seg = relSegmentsPerDir[i]![depth]
+        if (!seg) continue
+        const nextPath = join(currentPaths[i]!, seg)
+        nextPaths[i] = nextPath
+        if (!pathToFirstDir.has(nextPath)) {
+          pathToFirstDir.set(nextPath, dirList[i]!)
+          uniqueTargets.push(nextPath)
+        }
+      }
+      if (!uniqueTargets.length) break
+      const missingPaths = new Set<string>()
+      await mapBounded(uniqueTargets, async (targetPath) => {
         try {
-          if ((await lstat(current)).isSymbolicLink()) throw new WorkspaceLinkError(`工作区资产路径不能经过链接: ${dir}`)
+          if ((await lstat(targetPath)).isSymbolicLink()) {
+            throw new WorkspaceLinkError(`工作区资产路径不能经过链接: ${pathToFirstDir.get(targetPath)}`)
+          }
         } catch (error) {
-          if ((error as NodeJS.ErrnoException).code === 'ENOENT') break
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+            missingPaths.add(targetPath)
+            return
+          }
           throw error
         }
-        cleared.add(current)
+      })
+      for (let i = 0; i < dirList.length; i++) {
+        const nextPath = nextPaths[i]
+        if (!nextPath) continue
+        if (missingPaths.has(nextPath)) active[i] = false
+        else currentPaths[i] = nextPath
       }
     }
   }
@@ -391,18 +426,19 @@ export class WorkspaceFs {
   /** 确保目录存在（递归创建）。目录创建幂等且无内容副作用，不纳入 WAL。 */
   async ensureDir(relPath = ''): Promise<void> {
     const abs = this.abs(relPath)
-    await this.assertNoLinks(abs)
+    await this.lstatSafe(abs)
     await mkdir(abs, { recursive: true })
   }
 
   /** 读取二进制内容；不存在返回 null。 */
   async readBytes(relPath: string): Promise<Uint8Array | null> {
     const abs = this.abs(relPath)
-    await this.assertNoLinks(abs)
+    const info = await this.lstatSafe(abs)
+    if (!info) return null
     return this.readBytesVerified(abs)
   }
 
-  /** 调用方已对 abs 完成 assertNoLinks 时的原始字节读取；不存在返回 null。 */
+  /** 调用方已对 abs 完成 lstatSafe 时的原始字节读取；不存在返回 null。 */
   private async readBytesVerified(abs: string): Promise<Uint8Array | null> {
     try {
       return await readFile(abs)
@@ -417,10 +453,10 @@ export class WorkspaceFs {
     await withWorkspaceLock(this.root, async () => {
       await this.assertWritable()
       const abs = this.abs(relPath)
-      await this.assertNoLinks(abs)
+      const info = await this.lstatSafe(abs)
       if (this.wal && this.floor) {
         const path = this.walPath(relPath)
-        const bytes = await this.readBytesVerified(abs)
+        const bytes = info ? await this.readBytesVerified(abs) : null
         const before = bytes === null ? null : snapshotOf(bytes)
         await this.wal.recordChange(this.floor, path, before?.value ?? null, content, before?.encoding ?? 'utf8', 'utf8')
       }
@@ -437,10 +473,10 @@ export class WorkspaceFs {
     await withWorkspaceLock(this.root, async () => {
       await this.assertWritable()
       const abs = this.abs(relPath)
-      await this.assertNoLinks(abs)
+      const info = await this.lstatSafe(abs)
       if (this.wal && this.floor) {
         const path = this.walPath(relPath)
-        const before = await this.readBytesVerified(abs)
+        const before = info ? await this.readBytesVerified(abs) : null
         await this.wal.recordChange(this.floor, path,
           before === null ? null : Buffer.from(before).toString('base64'),
           Buffer.from(bytes).toString('base64'), 'base64', 'base64')
@@ -458,7 +494,8 @@ export class WorkspaceFs {
     await withWorkspaceLock(this.root, async () => {
       await this.assertWritable()
       const abs = this.abs(relPath)
-      await this.assertNoLinks(abs)
+      const info = await this.lstatSafe(abs)
+      if (!info) return
       if (this.wal && this.floor) {
         const path = this.walPath(relPath)
         const bytes = await this.readBytesVerified(abs)
@@ -467,6 +504,55 @@ export class WorkspaceFs {
         await this.wal.recordChange(this.floor, path, before.value, null, before.encoding ?? 'utf8', 'utf8')
       }
       try { await rm(abs, { force: true }) } finally { noteWrite(this.root, relPath) }
+    })
+  }
+
+  /** 批量事务删除：单个锁与单次批量 WAL 记录，再有界并发删除正文。 */
+  async deleteMany(relPaths: readonly string[]): Promise<void> {
+    if (!relPaths.length) return
+    await withWorkspaceLock(this.root, async () => {
+      await this.assertWritable()
+      const targets = relPaths.map((relPath) => ({ relPath, abs: this.abs(relPath) }))
+      if (new Set(targets.map((target) => ledgerKey(target.relPath))).size !== targets.length) throw new Error('批量删除包含重复路径')
+      await this.assertNoLinksAmong(new Set(targets.map((target) => dirname(target.abs))))
+      const logged = Boolean(this.wal && this.floor)
+      const existing = await mapBounded(targets, async (target) => {
+        const info = await this.lstatFile(target.abs)
+        if (!info) return { present: false as const, snap: null }
+        if (!logged) return { present: true as const, snap: null }
+        try {
+          return { present: true as const, snap: snapshotOf(await readFile(target.abs)) }
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { present: false as const, snap: null }
+          throw error
+        }
+      })
+      const changes: Array<{
+        path: string; before: string | null; after: null; beforeEncoding: 'utf8' | 'base64'; afterEncoding: 'utf8'
+      }> = []
+      const toDelete: typeof targets = []
+      for (let i = 0; i < targets.length; i++) {
+        const state = existing[i]!
+        if (!state.present) continue
+        const target = targets[i]!
+        toDelete.push(target)
+        if (logged && state.snap) {
+          changes.push({
+            path: this.walPath(target.relPath),
+            before: state.snap.value,
+            after: null,
+            beforeEncoding: state.snap.encoding ?? 'utf8',
+            afterEncoding: 'utf8',
+          })
+        }
+      }
+      if (!toDelete.length) return
+      if (this.wal && this.floor && changes.length) {
+        await this.wal.recordChanges(this.floor, changes)
+      }
+      await mapBounded(toDelete, async (target) => {
+        try { await rm(target.abs, { force: true }) } finally { noteWrite(this.root, target.relPath) }
+      })
     })
   }
 
@@ -484,7 +570,7 @@ export class WorkspaceFs {
     const skipDir = options?.skipDir
     const base = this.abs(prefix)
     // 遍历途中默认跳过链接资产；prefix 本身却不得是链接，否则会跨界列举整棵剧情。
-    await this.assertNoLinks(base)
+    await this.lstatSafe(base)
     const out: string[] = []
     const walk = async (dir: string, rel: string): Promise<void> => {
       let entries

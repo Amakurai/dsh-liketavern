@@ -114,6 +114,11 @@ async function helperHistoryContext(ctx:Context,state:TavernState,sessionId:stri
   return {binding,history:cached.history,historyRevision:cached.historyRevision,indexByIdentity:cached.indexByIdentity,
     assistantIndexBySeq:cached.assistantIndexBySeq,ws,writable,turn,greetings}
 }
+async function resolveHelperStoryRoot(state:TavernState,sessionId:string):Promise<string> {
+  const binding=await state.loadBinding(sessionId)
+  if (!binding?.storyId) throw new Error('会话未绑定可用剧情')
+  return (await state.storyWorkspace(binding.cardId,binding.storyId)).fs.root
+}
 async function helperContext(ctx:Context,state:TavernState,sessionId:string,messageId:number) {
   const context=await helperHistoryContext(ctx,state,sessionId)
   const currentMessageId=context.assistantIndexBySeq.get(messageId)??-1
@@ -156,10 +161,10 @@ export interface HelperDisplaySet {
   base?: HelperSnapshotBase
 }
 export async function loadHelperDisplaySet(ctx:Context,state:TavernState,sessionId:string,withSnapshot:boolean):Promise<HelperDisplaySet> {
-  const first=await helperHistoryContext(ctx,state,sessionId)
-  return withWorkspaceLock(first.ws.fs.root,async()=>{
+  const root=await resolveHelperStoryRoot(state,sessionId)
+  return withWorkspaceLock(root,async()=>{
     const current=await helperHistoryContext(ctx,state,sessionId)
-    if(current.ws.fs.root!==first.ws.fs.root)throw new Error('卡面剧情绑定已经改变')
+    if(current.ws.fs.root!==root)throw new Error('卡面剧情绑定已经改变')
     let base:HelperSnapshotBase|undefined
     if(withSnapshot){
       const saved=await loadHelperState(current.ws.fs),exposed=publicScopes(saved.scopes,current.indexByIdentity)
@@ -178,20 +183,20 @@ export async function loadHelperDisplaySet(ctx:Context,state:TavernState,session
  * 与完整 HelperSnapshot 保持同一套绑定和历史修订校验，但不读取、复制变量表。
  */
 export async function getHelperDisplayContext(ctx:Context,state:TavernState,sessionId:string,messageId:number):Promise<HelperDisplayContext> {
-  const context=await helperContext(ctx,state,sessionId,messageId)
-  return withWorkspaceLock(context.ws.fs.root,async()=>{
+  const root=await resolveHelperStoryRoot(state,sessionId)
+  return withWorkspaceLock(root,async()=>{
     const current=await helperContext(ctx,state,sessionId,messageId)
-    if(current.ws.fs.root!==context.ws.fs.root)throw new Error('卡面剧情绑定已经改变')
+    if(current.ws.fs.root!==root)throw new Error('卡面剧情绑定已经改变')
     const message=current.history[current.currentMessageId]
     if(!message)throw new Error('卡面消息不在当前剧情中')
     return {storyId:current.binding.storyId!,historyRevision:current.historyRevision,currentMessageId:current.currentMessageId,currentMessageRole:message.role}
   })
 }
 export async function getHelperSnapshot(ctx:Context,state:TavernState,sessionId:string,messageId:number):Promise<HelperSnapshot> {
-  const context=await helperContext(ctx,state,sessionId,messageId)
-  return withWorkspaceLock(context.ws.fs.root,async()=>{
+  const root=await resolveHelperStoryRoot(state,sessionId)
+  return withWorkspaceLock(root,async()=>{
     const current=await helperContext(ctx,state,sessionId,messageId)
-    if(current.ws.fs.root!==context.ws.fs.root) throw new Error('卡面剧情绑定已经改变')
+    if(current.ws.fs.root!==root) throw new Error('卡面剧情绑定已经改变')
     const saved=await loadHelperState(current.ws.fs)
     return snapshot(current,saved.scopes,saved.extras,saved.swipes)
   })
@@ -245,11 +250,11 @@ export async function getHelperScriptBundle(ctx:Context,state:TavernState,sessio
 }
 export async function commitHelperVariables(ctx:Context,state:TavernState,request:{sessionId:string;messageId:number;storyId:string;historyRevision:string;changes:unknown},beforeWrite?:HelperFrameWriteGuard):Promise<HelperSnapshot> {
   const changes=helperChanges(request.changes)
-  const context=await helperContext(ctx,state,request.sessionId,request.messageId)
+  const root=await resolveHelperStoryRoot(state,request.sessionId)
   // 与消息修订共用剧情 → 绑定锁序；复核到提交期间不能让换绑使旧卡面继续写入。
-  return withWorkspaceLock(context.ws.fs.root,()=>withWorkspaceLock(state.paths.sessions,async()=>{
+  return withWorkspaceLock(root,()=>withWorkspaceLock(state.paths.sessions,async()=>{
     const current=await helperContext(ctx,state,request.sessionId,request.messageId)
-    if(current.binding.storyId!==request.storyId || current.ws.fs.root!==context.ws.fs.root) throw new Error('卡面剧情绑定已经改变')
+    if(current.binding.storyId!==request.storyId || current.ws.fs.root!==root) throw new Error('卡面剧情绑定已经改变')
     if(current.historyRevision!==request.historyRevision) throw new Error('聊天历史已改变，请刷新卡面后重试')
     if(!state.config.interactiveCards||current.binding.interactiveCards===false)throw new Error('交互卡已关闭')
     await assertHelperMvuWritable(state,request.sessionId)
@@ -276,10 +281,10 @@ export async function commitHelperVariables(ctx:Context,state:TavernState,reques
 
 /** 聊天世界书等沙箱剧情写入复用楼层纪律；先验证业务内容，再调用 begin，最后 WAL 提交。 */
 export async function withHelperStoryWrite<T>(ctx:Context,state:TavernState,sessionId:string,messageId:number,storyId:string,write:(fs:WorkspaceFs,begin:()=>Promise<void>)=>Promise<T>,beforeWrite?:HelperFrameWriteGuard):Promise<T> {
-  const first=await helperContext(ctx,state,sessionId,messageId)
-  return withWorkspaceLock(first.ws.fs.root,()=>withWorkspaceLock(state.paths.sessions,async()=>{
+  const root=await resolveHelperStoryRoot(state,sessionId)
+  return withWorkspaceLock(root,()=>withWorkspaceLock(state.paths.sessions,async()=>{
     const current=await helperContext(ctx,state,sessionId,messageId)
-    if(current.binding.storyId!==storyId||current.ws.fs.root!==first.ws.fs.root)throw new Error('世界书剧情绑定已改变')
+    if(current.binding.storyId!==storyId||current.ws.fs.root!==root)throw new Error('世界书剧情绑定已改变')
     if(!state.config.interactiveCards||current.binding.interactiveCards===false)throw new Error('交互卡已关闭')
     await assertHelperMvuWritable(state,sessionId)
     if(!current.writable)throw new Error('生成期间不能修改聊天世界书')

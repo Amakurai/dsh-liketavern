@@ -732,17 +732,34 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
     ;(byDepth.get(inj.depth) ?? byDepth.set(inj.depth, []).get(inj.depth)!).push(inj)
   }
   const depths = [...byDepth.keys()].sort((a, b) => b - a)
-  const depthChatHistory = history.filter(message=>historyAnchors.get(message)?.chat)
-  for (const depth of depths) {
-    // 模板缓冲与最终布局使用同一真实聊天边界；插件通知、system 与已插入片段不消耗 depth。
-    const next = depthChatHistory[Math.max(0, depthChatHistory.length - depth)]
-    const at = next ? history.indexOf(next) : 0
-    const group = byDepth.get(depth)!.sort(compareDepthInjections)
-    history.splice(at, 0, ...group.map((g) => {
-      const message:ChatMessage={role:g.role,content:g.content}
-      depthBindings.set(message,g)
-      return message
-    }))
+  if (depths.length > 0) {
+    const depthChatHistory = history.filter(message=>historyAnchors.get(message)?.chat)
+    const historyIndex = new Map<ChatMessage, number>()
+    for (let i = 0; i < history.length; i++) historyIndex.set(history[i]!, i)
+    const insertions = new Map<number, ChatMessage[]>()
+    for (const depth of depths) {
+      // 模板缓冲与最终布局使用同一真实聊天边界；插件通知、system 与已插入片段不消耗 depth。
+      const next = depthChatHistory[Math.max(0, depthChatHistory.length - depth)]
+      const at = next ? (historyIndex.get(next) ?? 0) : 0
+      const group = byDepth.get(depth)!.sort(compareDepthInjections)
+      let bucket = insertions.get(at)
+      if (!bucket) {
+        bucket = []
+        insertions.set(at, bucket)
+      }
+      for (const g of group) {
+        const message: ChatMessage = { role: g.role, content: g.content }
+        depthBindings.set(message, g)
+        bucket.push(message)
+      }
+    }
+    const merged: ChatMessage[] = []
+    for (let i = 0; i < history.length; i++) {
+      const injected = insertions.get(i)
+      if (injected) merged.push(...injected)
+      merged.push(history[i]!)
+    }
+    history.splice(0, history.length, ...merged)
   }
   const depth0 = depthInjections.filter((d) => d.depth === 0).sort(compareDepthInjections)
 
@@ -804,7 +821,10 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
   const layoutFragments: PromptLayoutFragment[] = []
   const layoutMessageIndices = new Map<ChatMessage, number>()
   const firstHistory = layoutHistory[0]
-  const lastHistory = [...layoutHistory].reverse().find(anchor=>anchor.chat) ?? layoutHistory.at(-1)
+  let lastHistory = layoutHistory.at(-1)
+  for (let i = layoutHistory.length - 1; i >= 0; i--) {
+    if (layoutHistory[i]!.chat) { lastHistory = layoutHistory[i]; break }
+  }
   const tailSet = new Set(tail)
   for (const message of [...beforeHistory, ...history, ...tail]) {
     const anchor = historyAnchors.get(message)
@@ -872,11 +892,13 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
   trimNonHistory((m) => examplePromptMessages.has(m), 'dialogueExamples')
   trimNonHistory((m) => characterDefinitionMessages.has(m), 'characterDefinitions')
   // 历史裁剪：丢最旧的消息（保留最新用户输入）
-  while (currentTokens > totalBudget && history.length > 1) {
-    const dropped = history.shift()!
+  let historyDropCount = 0
+  while (currentTokens > totalBudget && history.length - historyDropCount > 1) {
+    const dropped = history[historyDropCount++]!
     currentTokens -= estimate(dropped)
     trimmedSections.push('history')
   }
+  if (historyDropCount > 0) history.splice(0, historyDropCount)
 
   const messages = [...beforeHistory, ...history, ...tail]
   const tokensAfter = currentTokens

@@ -50,7 +50,7 @@ export type RecordLineIssue = 'shape' | 'seq' | 'path' | 'encoding';
  * 返回 null 表示该行可用。
  */
 export declare function recordLineIssue(value: unknown, expectedSeq: number): RecordLineIssue | null;
-/** 快照统一为实际字节的 base64；旧版省略 utf8 标签或使用 before 前缀也必须得到相同身份。 */
+/** 快照统一为实际字节的 base64；旧版省略 utf8 标签或使用 before 前缀也必须得到相同身份（带 WeakMap 缓存）。 */
 export declare function snapshotBytes(rec: RecordLine, side: 'before' | 'after'): string | null;
 /** 从同一记录与撤销前正文推导恢复目标；执行与恢复游标预检共用，禁止游标自行提供新正文。 */
 export declare function rollbackTarget(rec: RecordLine, current: string | null): {

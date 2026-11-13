@@ -10,6 +10,7 @@
  */
 
 import { randomBytes } from 'node:crypto'
+import { sep } from 'node:path'
 import { array, boolean, enum as enum_, looseObject, minLength, nullable, number, optional, safeParse, string } from 'zod/mini'
 import type { WorldDelta, WorldInfoEntry } from '../core/types.js'
 import { rootIdentity, sameFileStat, type FileStatStamp } from './pathIdentity.js'
@@ -34,6 +35,16 @@ function rememberWorldDeltas(key: string, entry: CachedWorldDeltas): void {
   worldDeltaCache.set(key, entry)
   if (worldDeltaCache.size > MAX_DELTA_CACHE_ROOTS) {
     worldDeltaCache.delete(worldDeltaCache.keys().next().value!)
+  }
+}
+
+export function evictWorldDeltaCache(root: string, options?: { prefix?: boolean }): void {
+  const target = rootIdentity(root)
+  worldDeltaCache.delete(target)
+  if (!options?.prefix) return
+  const boundary = target.endsWith(sep) ? target : `${target}${sep}`
+  for (const key of worldDeltaCache.keys()) {
+    if (key.startsWith(boundary)) worldDeltaCache.delete(key)
   }
 }
 
@@ -120,7 +131,19 @@ export class WorldDeltaStore {
         ts: input.ts ?? new Date().toISOString(),
       }
       deltaSchema.parse(delta)
-      await this.fs.writeText(DELTA_FILE, `${[...lines, JSON.stringify(delta)].join('\n')}\n`)
+      const nextLines = [...lines, JSON.stringify(delta)]
+      await this.fs.writeText(DELTA_FILE, `${nextLines.join('\n')}\n`)
+      const revision = this.ledger.counter
+      const epoch = this.ledger.epoch
+      const afterStat = await this.fs.stat(DELTA_FILE)
+      if (afterStat !== null && this.ledger.epoch === epoch && !writtenSince(this.ledger, DELTA_FILE, revision)) {
+        const parsed: WorldDelta[] = []
+        for (const line of nextLines) {
+          const item = WorldDeltaStore.parseLine(line)
+          if (item) parsed.push(item)
+        }
+        rememberWorldDeltas(this.cacheKey, { stat: afterStat, revision, epoch, parsed })
+      }
       return delta
     })
   }
@@ -158,6 +181,17 @@ export class WorldDeltaStore {
       })
       if (!found) return false
       await this.fs.writeText(DELTA_FILE, `${next.join('\n')}\n`)
+      const revision = this.ledger.counter
+      const epoch = this.ledger.epoch
+      const afterStat = await this.fs.stat(DELTA_FILE)
+      if (afterStat !== null && this.ledger.epoch === epoch && !writtenSince(this.ledger, DELTA_FILE, revision)) {
+        const parsed: WorldDelta[] = []
+        for (const line of next) {
+          const item = WorldDeltaStore.parseLine(line)
+          if (item) parsed.push(item)
+        }
+        rememberWorldDeltas(this.cacheKey, { stat: afterStat, revision, epoch, parsed })
+      }
       return true
     })
   }

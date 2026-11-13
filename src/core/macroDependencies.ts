@@ -38,6 +38,53 @@ function fieldsForContext(context: MacroContext): Record<string, string | undefi
 
 const EMPTY_SET: ReadonlySet<string> = new Set()
 
+interface StaticMacroScan {
+  turnLocal: boolean
+  reads: string[]
+  computedRead: boolean
+  writes: string[]
+  computedWrite: boolean
+  mutatedReads: string[]
+  fieldRefs: string[]
+}
+
+const STATIC_SCAN_EMPTY: StaticMacroScan = {
+  turnLocal: false, reads: [], computedRead: false, writes: [], computedWrite: false, mutatedReads: [], fieldRefs: [],
+}
+
+function scanStaticMacroChunk(text: string): StaticMacroScan {
+  if (!text.includes('{{') && !text.includes('<')) return STATIC_SCAN_EMPTY
+  const reads: string[] = []
+  const writes: string[] = []
+  const mutatedReads: string[] = []
+  const fieldRefs: string[] = []
+  let computedRead = false
+  let computedWrite = false
+  const turnLocal = hasTurnLocalMacros(text)
+  if (text.includes('{{')) {
+    for (const match of text.matchAll(READ_VAR_RE)) {
+      const key = match[1]!.trim()
+      const computed = text.slice(match.index + match[0].length, match.index + match[0].length + 2) === '{{'
+      reads.push(key)
+      if (computed) computedRead = true
+    }
+    for (const match of text.matchAll(WRITE_VAR_RE)) {
+      const key = match[2]!.trim()
+      const computed = text.slice(match.index + match[0].length, match.index + match[0].length + 2) === '{{'
+      if (computed) computedWrite = true
+      else if (key) {
+        writes.push(key)
+        const op = match[1]!.toLowerCase()
+        if (op !== 'set' && op !== 'delete' && op !== 'flush') mutatedReads.push(key)
+      }
+    }
+  }
+  for (const match of text.matchAll(FIELD_REF_RE)) {
+    fieldRefs.push((match[1] ?? (match[2]!.toLowerCase() === 'user' ? 'user' : 'char')).trim().toLowerCase())
+  }
+  return { turnLocal, reads, computedRead, writes, computedWrite, mutatedReads, fieldRefs }
+}
+
 export function createMacroDependencyTracker(initial: MacroContext, potentialSources: readonly MacroDependencySource[] = []): {
   isDynamic(text: string, context: MacroContext): boolean
   record(text: string, context: MacroContext, turnLocal: boolean): void
@@ -47,6 +94,15 @@ export function createMacroDependencyTracker(initial: MacroContext, potentialSou
   // 潜在的条件写入不能因当前未命中或默认值赋值而清除，否则首轮会钉死空/default。
   const potentialVariables = new Set<string>()
   let unknownDynamicWrite = false
+  const scanCache = new Map<string, StaticMacroScan>()
+  const getScan = (text: string): StaticMacroScan => {
+    let cached = scanCache.get(text)
+    if (!cached) {
+      cached = scanStaticMacroChunk(text)
+      scanCache.set(text, cached)
+    }
+    return cached
+  }
 
   const inspect = (text: string, context: MacroContext): { dynamic: boolean; reads: ReadonlySet<string>; writes: ReadonlySet<string>; unknownWrite: boolean } => {
     if (!text.includes('{{') && !text.includes('<')) {
@@ -62,36 +118,28 @@ export function createMacroDependencyTracker(initial: MacroContext, potentialSou
     while (pending.length > 0) {
       const current = pending.pop()!
       if (!current.includes('{{') && !current.includes('<')) continue
-      if (hasTurnLocalMacros(current)) dynamic = true
-      // 扫描宏开头而不吞掉整个正文，嵌套 set/get 同样能逐个看到；不执行随机数与写入。
-      for (const match of current.matchAll(READ_VAR_RE)) {
-        const key = match[1]!.trim()
-        const computed = current.slice(match.index + match[0].length, match.index + match[0].length + 2) === '{{'
+      const scanned = getScan(current)
+      if (scanned.turnLocal) dynamic = true
+      if (scanned.computedRead) dynamic = true
+      if (scanned.computedWrite) unknownWrite = true
+      for (const key of scanned.reads) {
         reads.add(key)
-        if (computed || unknownDynamicWrite || dynamicVariables.has(key) || potentialVariables.has(key)) dynamic = true
+        if (!dynamic && (unknownDynamicWrite || dynamicVariables.has(key) || potentialVariables.has(key))) dynamic = true
       }
-      for (const match of current.matchAll(WRITE_VAR_RE)) {
-        const key = match[2]!.trim()
-        const computed = current.slice(match.index + match[0].length, match.index + match[0].length + 2) === '{{'
-        if (computed) unknownWrite = true
-        else if (key) {
-          writes.add(key)
-          // 增减类写入以旧值为输入：读写都要记，动态旧值会把结果一起带入本轮通道。
-          const op = match[1]!.toLowerCase()
-          if (op !== 'set' && op !== 'delete' && op !== 'flush') {
-            reads.add(key)
-            if (unknownDynamicWrite || dynamicVariables.has(key) || potentialVariables.has(key)) dynamic = true
-          }
-        }
+      for (const key of scanned.writes) writes.add(key)
+      for (const key of scanned.mutatedReads) {
+        reads.add(key)
+        if (!dynamic && (unknownDynamicWrite || dynamicVariables.has(key) || potentialVariables.has(key))) dynamic = true
       }
       // 字段与 original 可以继续引用字段或变量。每个名称只访问一次，循环不递归展开。
-      for (const match of current.matchAll(FIELD_REF_RE)) {
-        const name = (match[1] ?? (match[2]!.toLowerCase() === 'user' ? 'user' : 'char')).trim().toLowerCase()
+      if (scanned.fieldRefs.length > 0) {
         fields ??= fieldsForContext(context)
         visited ??= new Set()
-        if (visited.has(name) || !Object.hasOwn(fields, name)) continue
-        visited.add(name)
-        if (fields[name]) pending.push(fields[name])
+        for (const name of scanned.fieldRefs) {
+          if (visited.has(name) || !Object.hasOwn(fields, name)) continue
+          visited.add(name)
+          if (fields[name]) pending.push(fields[name])
+        }
       }
     }
     return { dynamic, reads, writes, unknownWrite }

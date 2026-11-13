@@ -1,6 +1,6 @@
 /** 共享脚本库编辑器：草稿、导入导出、文件夹及持久开关；保存走资产修订校验，运行变量不写回共享资产。 */
 import { describeError } from '../core/guards.js'
-import { useEffect, useId, useRef, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { notifyHelperScriptAssets } from './helperScriptNotifications.js'
 import { parseHelperScriptTrees,importHelperScriptFile,exportHelperScriptTrees,type HelperScript,type HelperScriptLibrary,type HelperScriptTree,type HelperScriptAsset,type HelperScriptTarget } from '../core/helperScripts.js'
 import { useDraftGuard } from './drafts.js'
@@ -13,6 +13,12 @@ import { randomUuid } from '../core/secureRandom.js'
 type ScriptEditorProps={label?:string;remote:TavernRemote;library:HelperScriptLibrary|HelperScriptAsset;onClose:()=>void;onSaved:()=>void}
 const libraryTarget=(library:ScriptEditorProps['library']):HelperScriptTarget=>'target' in library?library.target:{type:'character',cardId:library.cardId}
 const draftScope=(target:HelperScriptTarget)=>`helper-scripts:${target.type==='character'?target.cardId:JSON.stringify(target)}`
+const scriptDataJsonCache=new WeakMap<object,string>()
+function cachedPrettyDataJson(data:object):string {
+  let cached=scriptDataJsonCache.get(data)
+  if(cached===undefined){cached=JSON.stringify(data,null,2);scriptDataJsonCache.set(data,cached)}
+  return cached
+}
 export function HelperScriptEditor(props:ScriptEditorProps) {
   return <PersistentEditor remote={props.remote} scope={draftScope(libraryTarget(props.library))}>
     <HelperScriptEditorBody {...props}/>
@@ -31,16 +37,29 @@ export function HelperScriptEditorBody(props:ScriptEditorProps) {
   const [baseline,setBaseline]=useDraftState(`${scope}:baseline`,JSON.stringify(props.library.trees))
   const [dataTexts,setDataTexts]=useDraftState<Record<string,string>>(`${scope}:data`,{})
   const [selected,setSelected]=useState<string|null>(props.library.trees[0]?.id??null),[error,setError]=useState<string|null>(null),[busy,setBusy]=useState(false),[removing,setRemoving]=useState(false)
-  const flat=trees.flatMap(tree=>tree.type==='folder'?[tree,...tree.scripts]:[tree])
-  useEffect(()=>{if(!flat.some(item=>item.id===selected))setSelected(flat[0]?.id??null)},[trees,selected])
+  const {flat,scriptById}=useMemo(()=>{
+    const items:HelperScriptTree[]=[]
+    const scripts=new Map<string,HelperScript>()
+    for(const tree of trees){
+      items.push(tree)
+      if(tree.type==='folder'){
+        for(const script of tree.scripts){items.push(script);scripts.set(script.id,script)}
+      }else{
+        scripts.set(tree.id,tree)
+      }
+    }
+    return {flat:items,scriptById:scripts}
+  },[trees])
+  useEffect(()=>{if(!flat.some(item=>item.id===selected))setSelected(flat[0]?.id??null)},[flat,selected])
   const current=flat.find(tree=>tree.id===selected)
   const siblings=current?trees.find(tree=>tree.type==='folder'&&tree.scripts.some(script=>script.id===current.id)):undefined
   const peers=siblings?.type==='folder'?siblings.scripts:trees
   const position=peers.findIndex(item=>item.id===selected)
-  const matches=(item:HelperScriptTree)=>item.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())
-  const visible=trees.filter(tree=>matches(tree)||tree.type==='folder'&&tree.scripts.some(matches))
-  const scriptCount=flat.filter(tree=>tree.type==='script').length
-  const dirty=JSON.stringify(trees)!==baseline||Object.entries(dataTexts).some(([id,text])=>{const item=flat.find(tree=>tree.type==='script'&&tree.id===id);return !item||item.type!=='script'||text!==JSON.stringify(item.data,null,2)})
+  const trimmedQuery=query.trim().toLocaleLowerCase()
+  const matches=(tree:HelperScriptTree)=>!trimmedQuery||tree.name.toLocaleLowerCase().includes(trimmedQuery)
+  const visible=useMemo(()=>!trimmedQuery?trees:trees.filter(tree=>matches(tree)||tree.type==='folder'&&tree.scripts.some(matches)),[trees,trimmedQuery])
+  const scriptCount=scriptById.size
+  const dirty=useMemo(()=>JSON.stringify(trees)!==baseline||Object.entries(dataTexts).some(([id,text])=>{const item=scriptById.get(id);return !item||text!==cachedPrettyDataJson(item.data)}),[trees,baseline,dataTexts,scriptById])
   const guard=useDraftGuard(dirty,busy)
   const update=(id:string,change:(tree:HelperScriptTree)=>HelperScriptTree)=>setTrees(items=>items.map(tree=>tree.id===id?change(tree):tree.type==='folder'?{...tree,scripts:tree.scripts.map(script=>script.id===id?change(script) as HelperScript:script)}:tree))
   const materialize=()=>parseHelperScriptTrees(trees.map(tree=>tree.type==='script'?scriptData(tree):{...tree,scripts:tree.scripts.map(scriptData)}))

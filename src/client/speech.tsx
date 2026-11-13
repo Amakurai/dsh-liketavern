@@ -816,7 +816,8 @@ function SpeechBubbleSession(props: SpeechBubbleProps) {
       <span className="dsh-tavern-muted">{t('speech.cardPending')}</span><Skeleton height={48}/>
     </div>)
   }else if(rendered.state.status!=='ready'){
-    projectionNodes.push(!streaming&&rendered.state.status==='loading'&&failedProjection.current!==projectionIdentity
+    const plainReadyFallback = !streaming && rendered.state.status==='loading' && Boolean(text.trim()) && !rawText.includes('<') && !rawText.includes('<%') && !rawText.includes('{{')
+    projectionNodes.push(!streaming&&rendered.state.status==='loading'&&!plainReadyFallback&&failedProjection.current!==projectionIdentity
       ? <Skeleton key="loading" height={48}/>
       : <MarkdownText key={`fallback:${baseProjectionId}`} text={text||' '} streaming={Boolean(streaming)} labels={markdownLabels} fileMentions={props.fileMentions}/>)
   }

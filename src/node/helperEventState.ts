@@ -30,8 +30,14 @@ export async function getHelperEventState(ctx:Context,state:TavernState,request:
       const generation=await loadTemplateGenerationIdentity(ws.fs)
       if(generation?.sessionId===request.sessionId&&generation.turn===ending.data.turn&&generation.status==='prepared')throw new Error('事件轮次模板尚未收口')
     }
-    const lastBoundary=[...events].reverse().find(event=>event.type==='turn/start'||event.type==='turn/end')
-    const lastEnd=[...events].reverse().find(event=>event.type==='turn/end')
+    let lastBoundary: typeof events[number] | undefined
+    let lastEnd: typeof events[number] | undefined
+    for (let i = events.length - 1; i >= 0; i--) {
+      const event = events[i]!
+      if (!lastBoundary && (event.type === 'turn/start' || event.type === 'turn/end')) lastBoundary = event
+      if (!lastEnd && event.type === 'turn/end') lastEnd = event
+      if (lastBoundary && lastEnd) break
+    }
     return {storyId:binding.storyId!,historyRevision:helperHistoryRevision(history),
       messages:history.map(({seq,role},message_id)=>({seq,role,message_id})),
       writable:!state.openFloors.has(request.sessionId)&&lastBoundary?.type!=='turn/start',closedThrough:lastEnd?.seq??-1}

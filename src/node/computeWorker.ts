@@ -78,17 +78,26 @@ async function compute(request: typeof workerData):Promise<void> {
       input.replay ? measureTemplateReplayWork(input.replay) : 0,
       input.templateContinuation?.replay ? measureTemplateReplayWork(input.templateContinuation.replay) : 0), undefined,
       kind === 'render' || kind === 'display' || kind === 'renderBatch' ? 'display' : 'template')
+    const assembleTemplates: TemplateContext | undefined = kind === 'assemble' && input.templates
+      ? {
+          ...input.templates,
+          entries: input.templates.entries ?? input.wiEvaluation?.entries ?? [],
+          presets: input.templates.presets ?? input.preset.entries.filter((e: { enabled: boolean }) => e.enabled),
+        }
+      : undefined
     const needsTemplates = kind === 'template' || kind === 'wi' && input.templates && input.entries.some((raw: WorldInfoEntry) => {
         const entry = normalizeTemplateLore(raw)
         return entry.enabled && Boolean(entry.templateCondition)
       })
-      || kind === 'assemble' && input.templates
-      && (input.templateContinuation || input.templates.historyIdentities?.length || input.templates.regexRules?.length
+      || kind === 'assemble' && assembleTemplates
+      && (input.templateContinuation || assembleTemplates.historyIdentities?.length || assembleTemplates.regexRules?.length
         || [input.card, input.preset, input.personaDescription, input.history, input.wi, input.wiEvaluation?.entries,
           input.memories, input.worldDeltas, input.authorNote, input.journalText,
-          input.regexRules, input.macroCtx, input.templates.variables,
-          input.templates.messageVariables, input.templates.entries, input.templates.presets].some(hasTemplateText)
-        || [...input.templates.entries, ...(input.wiEvaluation?.entries ?? [])].some((raw:WorldInfoEntry) => {
+          input.regexRules, input.macroCtx, assembleTemplates.variables,
+          assembleTemplates.messageVariables, assembleTemplates.entries, assembleTemplates.presets].some(hasTemplateText)
+        || (input.wiEvaluation?.entries && input.wiEvaluation.entries !== assembleTemplates.entries
+          ? [...assembleTemplates.entries, ...input.wiEvaluation.entries]
+          : assembleTemplates.entries).some((raw:WorldInfoEntry) => {
         const entry=normalizeTemplateLore(raw)
         // 预处理必须计入：仅靠 @@preprocessing（正文装饰器）或 [Preprocessing]（注释标记）触发的条目
         // 可能完全没有 EJS，漏判会让预处理静默不执行（键与正文不展开），而不是明确失败。
@@ -103,7 +112,7 @@ async function compute(request: typeof workerData):Promise<void> {
     const beginComputing = () => send({ computing: true })
     beginComputing()
     const incomingReplay=kind==='assemble' ? input.templateContinuation?.replay : kind==='template' ? input.replay : undefined
-    const incomingContext=kind==='assemble' ? input.templates : input.context
+    const incomingContext=kind==='assemble' ? assembleTemplates : input.context
     const incomingKey='incomingKey' in request ? (request.incomingKey as string | undefined) : templateWorkerCacheKey(incomingReplay,incomingContext)
     if(!needsTemplates||kind==='render'||kind==='display'||kind==='renderBatch')cacheKey=sandboxCache.key
     else if(!incomingKey)sandboxCache.clear()
@@ -114,17 +123,18 @@ async function compute(request: typeof workerData):Promise<void> {
     }
     let value: unknown
     if (kind === 'assemble') {
-      const sandbox = templateClass ? await prepareContinuedTemplate(templateClass,input.templates,input.templateContinuation,restoreCached) : null
+      const assembleInput = assembleTemplates ? { ...input, templates: assembleTemplates } : input
+      const sandbox = templateClass && assembleTemplates ? await prepareContinuedTemplate(templateClass,assembleTemplates,input.templateContinuation,restoreCached) : null
       beginComputing()
       let retained=false
       try {
-        const assembled=assembleTemplatePlan(input,sandbox)
+        const assembled=assembleTemplatePlan(assembleInput,sandbox)
         sandbox?.sticky('finish')
         // replay() 必须是最后一次查询；它也记录变量导出，缓存 VM 必须与回传日志精确对齐。
-        const result={...assembled,...(sandbox ? {templateMessageVariables:sandbox.messageVariables(),
-          templateContinuation:exportTemplateContinuation(sandbox,input.templates),templateRegexRules:sandbox.regexDescriptors(),templateHasMessageRegex:sandbox.hasMessageRegex(),templateReplay:sandbox.replay()} : {})}
+        const result={...assembled,...(sandbox && assembleTemplates ? {templateMessageVariables:sandbox.messageVariables(),
+          templateContinuation:exportTemplateContinuation(sandbox,assembleTemplates),templateRegexRules:sandbox.regexDescriptors(),templateHasMessageRegex:sandbox.hasMessageRegex(),templateReplay:sandbox.replay()} : {})}
         value=result
-        if(sandbox && result.templateReplay) {cacheKey=sandboxCache.keep(sandbox,result.templateReplay,input.templates);retained=true}
+        if(sandbox && assembleTemplates && result.templateReplay) {cacheKey=sandboxCache.keep(sandbox,result.templateReplay,assembleTemplates);retained=true}
       } finally { if(!retained)sandbox?.dispose() }
     }
     else if (kind === 'template') {

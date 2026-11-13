@@ -37,6 +37,7 @@ export async function editHelperMessages(ctx:Context,state:TavernState,sessionId
       beforeWrite?.(current)
     }
     const expected=parseHelperMessageEdits(request.before??[]),saved=await loadHelperState(ws.fs)
+    const expectedById=new Map(expected.map(row=>[row.message_id,row]))
     beforeWrite?.(binding)
     const equal=(a:unknown,b:unknown)=>JSON.stringify(helperJson(a))===JSON.stringify(helperJson(b))
     const metadata:{seq:number;data?:Record<string,unknown>;extra?:Record<string,unknown>;pages?:HelperSwipeSet}[]=[]
@@ -53,7 +54,7 @@ export async function editHelperMessages(ctx:Context,state:TavernState,sessionId
       const pageSwitched=edit.pages!==undefined&&edit.pages.active!==currentBook.active&&(edit.pages.pages.length===currentBook.pages.length||!equal(selected,currentBook.pages[currentBook.active]))
       seen.add(index);if(text!==undefined&&(target.message!==text||pageSwitched)){changed.set(target.seq,text);deletedIdentities.add(target.identity)}
       if(edit.data!==undefined||edit.extra!==undefined||edit.pages!==undefined){
-        const old=expected.find(row=>row.message_id===edit.message_id)
+        const old=expectedById.get(edit.message_id)
         if(!old||old.message!==undefined||Object.hasOwn(old,'data')!==Object.hasOwn(edit,'data')||Object.hasOwn(old,'extra')!==Object.hasOwn(edit,'extra')||Object.hasOwn(old,'pages')!==Object.hasOwn(edit,'pages'))throw new Error('消息数据编辑缺少原值，请刷新后重试')
         consumed.add(old.message_id)
         if(edit.pages&&!equal(currentBook,old.pages)&&!equal(currentBook,edit.pages))throw new Error('消息页已被另一卡面修改，请刷新后重试')
@@ -69,9 +70,10 @@ export async function editHelperMessages(ctx:Context,state:TavernState,sessionId
     const apply=(base:HelperState,targets:typeof history):HelperState=>{
       // 分支传入的是草稿 WAL 回滚后的状态；保留其 MVU 回执，不能重新复制来源剧情的已撤销楼层。
       const next={...base,scopes:{...base.scopes},extras:{...base.extras},swipes:{...base.swipes}}
+      const identityBySeq=new Map(targets.map(target=>[target.seq,target.identity]))
       for(const identity of deletedIdentities){delete next.scopes[JSON.stringify(['message',identity])];delete next.extras[identity];delete next.swipes[identity]}
       for(const row of metadata){
-        const identity=targets.find(target=>target.seq===row.seq)?.identity;if(!identity)throw new Error('编辑后消息身份不存在')
+        const identity=identityBySeq.get(row.seq);if(!identity)throw new Error('编辑后消息身份不存在')
         if(row.data!==undefined)next.scopes[JSON.stringify(['message',identity])]=row.data
         if(row.extra!==undefined)next.extras[identity]=row.extra
         if(row.pages!==undefined)next.swipes[identity]=row.pages
@@ -95,7 +97,8 @@ export async function editHelperMessages(ctx:Context,state:TavernState,sessionId
       if(!metadata.length&&!deletedIdentities.size)return
       const base=await loadHelperState(fs),next=apply(base,nextHistory)
       if(equal(base.scopes,next.scopes)&&equal(base.extras,next.extras)&&equal(base.swipes??{},next.swipes??{}))return
-      const boundary=[...events].reverse().find(event=>event.type==='turn/end'),turn=boundary?.type==='turn/end'?boundary.data.turn:0
+      let turn=0
+      for(let i=events.length-1;i>=0;i--){const event=events[i]!;if(event.type==='turn/end'){turn=event.data.turn;break}}
       const floor=childId+'#t'+turn,wal=new Wal(join(fs.root,'state','wal'))
       await wal.beginFloor(floor);await saveHelperState(new WorkspaceFs(fs.root,wal).withFloor(floor),next);await wal.commitFloor(floor)
     }

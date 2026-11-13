@@ -4,12 +4,14 @@ import { lstat, readdir, rm } from 'node:fs/promises'
 import { join, resolve, sep } from 'node:path'
 import { rebuildIndex } from './workspace.js'
 import { estimateTokens } from '../core/tokenize.js'
-import { WorkspaceFs } from './workspaceFs.js'
+import { mapBounded, WorkspaceFs } from './workspaceFs.js'
 import { Wal } from './wal.js'
 import { withWorkspaceLock } from './workspaceLock.js'
 import { renameWithRetry } from './rename.js'
 import { closeLedger } from './writeLedger.js'
+import { evictHelperStateCache } from './helper.js'
 import { evictTemplateCaches } from './template.js'
+import { evictWorldDeltaCache } from './worlddelta.js'
 
 export interface StorySummary {
   id: string
@@ -56,10 +58,9 @@ export async function listStories(cardRoot: string): Promise<StorySummary[]> {
     throw error
   })
   // 已发布状态损坏必须报告；.preparing-* 是未发布草稿，不会列为可选剧情。
-  const items = await Promise.all(
-    entries
-      .filter((entry) => entry.isDirectory() && /^(story-|legacy-)/.test(entry.name))
-      .map((entry) => readStory(cardRoot, entry.name)),
+  const items = await mapBounded(
+    entries.filter((entry) => entry.isDirectory() && /^(story-|legacy-)/.test(entry.name)),
+    (entry) => readStory(cardRoot, entry.name),
   )
   return items.sort((a, b) => a.createdAt.localeCompare(b.createdAt))
 }
@@ -117,6 +118,8 @@ export async function snapshotStory(options: {
       const base = resolve(options.cardRoot, 'stories') + sep
       if (!resolve(staging).startsWith(base)) throw new Error('剧情草稿清理路径越界')
       evictTemplateCaches(staging)
+      evictHelperStateCache(staging)
+      evictWorldDeltaCache(staging)
       closeLedger(staging)
       await rm(staging, { recursive: true, force: true })
     }
@@ -130,6 +133,8 @@ export async function discardStory(cardRoot: string, id: string, sessionId: stri
   const target = resolve(storyRoot(cardRoot, id))
   if (!target.startsWith(resolve(cardRoot, 'stories') + sep)) throw new Error('剧情清理路径越界')
   evictTemplateCaches(target)
+  evictHelperStateCache(target)
+  evictWorldDeltaCache(target)
   closeLedger(target)
   await rm(target, { recursive: true, force: true })
 }

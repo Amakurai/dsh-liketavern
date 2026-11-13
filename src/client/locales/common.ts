@@ -54,6 +54,7 @@ export const zh = {
   'common.copy': '复制',
   'common.copied': '已复制',
   'common.markdownFootnotes': '脚注',
+  'common.loadMore': '加载更多',
 } as const
 
 export const en: Record<keyof typeof zh, string> = {
@@ -106,4 +107,5 @@ export const en: Record<keyof typeof zh, string> = {
   'common.copy': 'Copy',
   'common.copied': 'Copied',
   'common.markdownFootnotes': 'Footnotes',
+  'common.loadMore': 'Load more',
 }

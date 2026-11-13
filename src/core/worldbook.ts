@@ -97,7 +97,8 @@ export function isStandingBudgetSafe(entry: WorldInfoEntry, isDynamic?: (text: s
 }
 
 function ident(text: string, ctx?: Pick<MacroContext, 'char' | 'user'>): string {
-  return ctx ? expandIdentityMacros(text, ctx) : text
+  if (!ctx || (!text.includes('{{') && !text.includes('<'))) return text
+  return expandIdentityMacros(text, ctx)
 }
 
 /**

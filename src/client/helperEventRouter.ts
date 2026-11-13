@@ -6,7 +6,7 @@ import { randomUuid } from '../core/secureRandom.js'
 type NativeMvu={current:()=>boolean;snapshot:()=>HelperSnapshot|undefined}
 type Message=Record<string,unknown>
 type Entry={endpoint:Endpoint;id:string;event:string;once:boolean}
-type Group={endpoints:Set<Endpoint>;listeners:Entry[];inflight:number}
+type Group={sessionId:string;endpoints:Set<Endpoint>;listeners:Entry[];inflight:number}
 type Delivery={resolve:(value:Message)=>void;reject:(error:Error)=>void;timer:ReturnType<typeof setTimeout>;
   host?:{entry:Entry;current:()=>boolean;phase:'preparing'|'executing'}}
 const groups=new Map<string,Group>()
@@ -137,7 +137,7 @@ const PREVIEW_REJECTED_EVENT_ACTIONS=new Set(['helperEventEmit','helperEventSubs
 
 /** 预览只建立本帧身份租约；没有剧情分组，不接收跨卡监听、发送或业务授权。 */
 export function attachCardBridgeRuntime(send:(message:Message)=>void,retiredRuntimes?:Set<string>) {
-  const endpoint=new Endpoint({endpoints:new Set(),listeners:[],inflight:0},send,undefined,retiredRuntimes)
+  const endpoint=new Endpoint({sessionId:'',endpoints:new Set(),listeners:[],inflight:0},send,undefined,retiredRuntimes)
   return {
     matchesRuntime:(id:unknown)=>endpoint.active&&typeof id==='string'&&id!==''&&endpoint.runtimeId===id,
     runtimeId:()=>endpoint.runtimeId,
@@ -158,7 +158,7 @@ export function attachCardBridgeRuntime(send:(message:Message)=>void,retiredRunt
 export function attachHelperEvents(sessionId:string,storyId:string,send:(message:Message)=>void,nativeMvu?:NativeMvu,retiredRuntimes?:Set<string>) {
   const key=JSON.stringify([sessionId,storyId])
   let group=groups.get(key)
-  if(!group){group={endpoints:new Set(),listeners:[],inflight:0};groups.set(key,group)}
+  if(!group){group={sessionId,endpoints:new Set(),listeners:[],inflight:0};groups.set(key,group)}
   const endpoint=new Endpoint(group,send,nativeMvu,retiredRuntimes);group.endpoints.add(endpoint)
   return {
     matchesRuntime:(id:unknown)=>endpoint.active&&typeof id==='string'&&id!==''&&endpoint.runtimeId===id,
@@ -196,5 +196,6 @@ export function reportHelperHostEventError(sessionId:string,storyId:string,error
   for(const endpoint of groups.get(JSON.stringify([sessionId,storyId]))?.endpoints??[])endpoint.post({action:'helperEventResult',ok:false,args:[],error:String(error instanceof Error?error.message:error).slice(0,2000)})
 }
 export function hasHelperEventAudience(sessionId:string):boolean{
-  return [...groups].some(([key,group])=>JSON.parse(key)[0]===sessionId&&group.endpoints.size>0)
+  for(const group of groups.values())if(group.sessionId===sessionId&&group.endpoints.size>0)return true
+  return false
 }

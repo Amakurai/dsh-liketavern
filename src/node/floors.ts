@@ -1319,12 +1319,12 @@ export async function swipeGreeting({ ctx, state }: FloorDeps, sessionId: string
   }
   const verifySource = async (): Promise<void> => { assertSource() }
   assertSource()
-  const initial = await state.loadStoryBinding(sessionId)
+  const initial = await state.loadBinding(sessionId, false, 'preserve')
   if (!initial) throw new FloorError('no-binding', '当前会话未绑定 Tavern 角色卡')
   const ws=await state.storyWorkspace(initial.cardId,initial.storyId)
   return withWorkspaceLock(ws.fs.root,()=>withWorkspaceLock(state.paths.sessions,async()=>{
   assertSource()
-  const binding=await state.loadStoryBinding(sessionId,{strictRead:true,waitForAdoption:false})
+  const binding=await state.loadBindingUnwaited(sessionId,true,'preserve')
   if(!binding||binding.cardId!==initial.cardId||binding.storyId!==initial.storyId)throw new FloorError('binding-changed','开场白剧情绑定已改变')
   assertSource()
   const variants = await greetingVariants(state, binding.cardId)

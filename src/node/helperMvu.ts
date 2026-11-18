@@ -205,17 +205,21 @@ export async function assertHelperMvuWritable(state:TavernState,sessionId:string
 async function sources(state:TavernState,binding:SessionBinding):Promise<HelperMvuInitialSource[]>{
   const seen=new Set<string>()
   const tasks:Array<()=>Promise<HelperMvuInitialSource|null>>=[]
-  const requested:Array<{id:string;role:'global'|'character'}>=[]
-  for(const id of binding.lorebookIds)requested.push({id,role:'global'})
-  if(binding.characterLorebookId)requested.push({id:binding.characterLorebookId,role:'character'})
-  else if(binding.useEmbeddedLorebook!==false){
-    tasks.push(async()=>{
-      const [embedded,entries]=await Promise.all([state.loadCharacterLorebookRaw(binding.cardId),state.loadCharacterLorebookEntries(binding.cardId)])
-      return embedded?{name:embedded.name,role:'character',entries:entries.map(({uid,comment,content})=>({uid,comment,content}))}:null
-    })
-  }
-  for(const id of binding.characterLorebookIds??[])requested.push({id,role:'character'})
-  for(const {id,role} of requested){
+  type RequestedSource={kind:'shared';id:string;role:'global'|'character'}|{kind:'embedded'}
+  const requested:RequestedSource[]=[]
+  for(const id of binding.lorebookIds)requested.push({kind:'shared',id,role:'global'})
+  if(binding.characterLorebookId)requested.push({kind:'shared',id:binding.characterLorebookId,role:'character'})
+  else if(binding.useEmbeddedLorebook!==false)requested.push({kind:'embedded'})
+  for(const id of binding.characterLorebookIds??[])requested.push({kind:'shared',id,role:'character'})
+  for(const item of requested){
+    if(item.kind==='embedded'){
+      tasks.push(async()=>{
+        const [embedded,entries]=await Promise.all([state.loadCharacterLorebookRaw(binding.cardId),state.loadCharacterLorebookEntries(binding.cardId)])
+        return embedded?{name:embedded.name,role:'character',entries:entries.map(({uid,comment,content})=>({uid,comment,content}))}:null
+      })
+      continue
+    }
+    const {id,role}=item
     const resolved=await state.resolveLorebookFileId(id)
     if(!resolved)throw new Error('自动 MVU 初始化世界书不存在：'+id)
     const dedupeKey=process.platform==='win32'?resolved.toLowerCase():resolved

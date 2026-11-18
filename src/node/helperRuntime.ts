@@ -224,10 +224,10 @@ export async function sessionHelperLibraries(state:TavernState,binding:Pick<Sess
   ])
 }
 export async function getHelperScriptBundle(ctx:Context,state:TavernState,sessionId:string):Promise<HelperScriptBundle> {
-  const binding=await state.loadStoryBinding(sessionId)
+  const binding=await state.loadBinding(sessionId,false,'resolve-tolerant')
   if(!binding?.storyId)throw new Error('会话未绑定可用剧情')
   const ensureBinding=async()=>{
-    const current=await state.loadStoryBinding(sessionId)
+    const current=await state.loadBinding(sessionId,false,'resolve-tolerant')
     if(!current||current.storyId!==binding.storyId||current.cardId!==binding.cardId||current.presetId!==binding.presetId||current.personaId!==binding.personaId||current.interactiveCards!==binding.interactiveCards||current.helperMvu!==binding.helperMvu)throw new Error('脚本会话绑定已改变，请重新加载')
   }
 

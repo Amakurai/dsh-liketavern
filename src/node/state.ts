@@ -1804,15 +1804,19 @@ export class TavernState {
    * 人设未绑定时，接到默认页或库里唯一一条，避免 {{user}} 落成 User。
    * 回收失败则删除绑定文件并返回 null，避免 UI 把文件夹 ID 当成角色名。
    */
-  async loadBinding(sessionId: string, strictRead = false): Promise<SessionBinding | null> {
+  async loadBinding(
+    sessionId: string,
+    strictRead = false,
+    personaSelection: 'resolve' | 'preserve' | 'resolve-tolerant' = 'resolve',
+  ): Promise<SessionBinding | null> {
     await this.waitForBindingAdoption(sessionId)
-    return this.loadBindingUnwaited(sessionId, strictRead)
+    return this.loadBindingUnwaited(sessionId, strictRead, personaSelection)
   }
 
   /** 运行时只复核剧情归属并保留人设选择；首次组装自行解析，冻结后的请求、工具和收口不重读人设。 */
   async loadStoryBinding(sessionId: string, options: { strictRead?: boolean; waitForAdoption?: boolean } = {}): Promise<SessionBinding | null> {
     if (options.waitForAdoption !== false) await this.waitForBindingAdoption(sessionId)
-    return withWorkspaceLock(this.paths.sessions, () => this.loadBindingNow(sessionId, options.strictRead ?? false, 'preserve'))
+    return this.loadBindingUnwaited(sessionId, options.strictRead ?? false, 'preserve')
   }
 
   /** 绑定接管须在工作区锁外等待；调用方随后可在 sessions 锁内复核，避免子分支等待父分支时互锁。 */
@@ -1828,8 +1832,12 @@ export class TavernState {
   }
 
   /** 不等待绑定接管的锁内复核，避免接管流程等待自己；写入比较用 strictRead 拒绝不确定的 I/O 结果。 */
-  async loadBindingUnwaited(sessionId: string, strictRead = false): Promise<SessionBinding | null> {
-    return withWorkspaceLock(this.paths.sessions, () => this.loadBindingNow(sessionId, strictRead))
+  async loadBindingUnwaited(
+    sessionId: string,
+    strictRead = false,
+    personaSelection: 'resolve' | 'preserve' | 'resolve-tolerant' = 'resolve',
+  ): Promise<SessionBinding | null> {
+    return withWorkspaceLock(this.paths.sessions, () => this.loadBindingNow(sessionId, strictRead, personaSelection))
   }
 
   private readonly bindingAdoptions = new Map<string, Promise<unknown>>()
@@ -1862,7 +1870,11 @@ export class TavernState {
     return tracked
   }
 
-  private async loadBindingNow(sessionId: string, strictRead = false, personaSelection: 'resolve' | 'preserve' = 'resolve'): Promise<SessionBinding | null> {
+  private async loadBindingNow(
+    sessionId: string,
+    strictRead = false,
+    personaSelection: 'resolve' | 'preserve' | 'resolve-tolerant' = 'resolve',
+  ): Promise<SessionBinding | null> {
     await assertSessionImportComplete(this.paths, sessionId)
     const parsed = await loadBinding(this.paths, sessionId, strictRead)
     if (!parsed) return null
@@ -1884,9 +1896,18 @@ export class TavernState {
       await deleteBinding(this.paths, sessionId)
       return null
     }
-    const personaId = personaSelection === 'preserve'
-      ? resolved.personaId
-      : (await this.resolvePersona(resolved.personaId))?.id ?? null
+    let personaId: string | null
+    if (personaSelection === 'preserve') {
+      personaId = resolved.personaId
+    } else if (personaSelection === 'resolve-tolerant') {
+      try {
+        personaId = (await this.resolvePersona(resolved.personaId))?.id ?? null
+      } catch {
+        personaId = resolved.personaId
+      }
+    } else {
+      personaId = (await this.resolvePersona(resolved.personaId))?.id ?? null
+    }
     let next = personaId !== resolved.personaId ? { ...resolved, personaId } : resolved
     if (next.cardId !== parsed.cardId) next = { ...next, storyId: undefined, walLineage: undefined }
     if (!next.storyId) {

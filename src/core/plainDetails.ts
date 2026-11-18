@@ -4,7 +4,7 @@
  * 由客户端原生 `<details>` + `MarkdownText` 渲染，避免拆进白色/突兀的沙箱 `<iframe>`。
  * 只要结构或标签存在任何越界或疑似 HTML/脚本片段，立即返回 `null` 回退原有 `<iframe>` 隔离沙箱。
  */
-import { isKnownHtmlElementName, stripDisplayMeta } from './displaySanitize.js'
+import { isDisplayMetaTagName, isKnownHtmlElementName, stripDisplayMeta } from './displaySanitize.js'
 import { markdownCodeScanner } from './markdownCode.js'
 
 export type PlainDetailsChild =
@@ -30,8 +30,11 @@ const SUMMARY_CLOSE_RE = /<\/summary\s*>/i
 const SUMMARY_HTML_TAG_RE = /<[!?/A-Za-z]/
 const BR_CANDIDATE_RE = /^<br(?=[\t\n\f\r />])/i
 const BR_PLAIN_RE = /<br\s*\/?>/iy
-const TAG_HEAD_RE = /<\/?([A-Za-z][\w.:-]*)(?=[\t\n\f\r />])/y
-const RESIDUAL_TAG_RE = /<\/?[A-Za-z][^<>\r\n]*>/y
+const AUTOLINK_CANDIDATE_RE = /<[^\s<>]+>/y
+const BODY_TAG_RE = /<(\/?)([A-Za-z][\w.:-]*)(?:(?=[\t\n\f\r />])(?:[^"'<>]|"[^"]*"|'[^']*')*)?>/y
+const CUSTOM_ELEMENT_NAME_RE = /^[a-z][\w.]*-[\w.-]*$/
+const RESIDUAL_TAG_RE = /<\/?[A-Za-z][\w.:-]*(?:(?=[\t\n\f\r />])(?:[^"'<>]|"[^"]*"|'[^']*')*)?>/y
+const DETAILS_BOUNDARY_RE = /<!--[\s\S]*?(?:-->|$)|<\/?details(?=[\t\n\f\r />])(?:[^"'<>]|"[^"]*"|'[^']*')*>/gi
 const EMAIL_AUTOLINK_RE = /^<[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*>$/
 const URI_AUTOLINK_RE = /^<([A-Za-z][A-Za-z0-9+.-]{1,31}):[^\s<>]+>$/
 const AUTOLINK_SCHEMES = new Set([
@@ -160,6 +163,46 @@ function hasResidualTag(text: string): boolean {
   return false
 }
 
+/**
+ * 代码区间仅在不跨越未配对 `<details>`/`</details>` HTML 边界且围栏已闭合时才允许跳过，
+ * 防止反引号或未闭合围栏跨过 `</details>` 将相邻 `<script>` 或第二个折叠块吞入同一代码块。
+ */
+function detailsSafeCodeEnd(
+  text: string,
+  at: number,
+  code: ReturnType<typeof markdownCodeScanner>,
+): number | null {
+  const fence = code.fence(at)
+  let end: number
+  if (fence) {
+    if (!fence.closed) return null
+    end = fence.end
+  } else {
+    const inlineEnd = code.inlineEnd(at)
+    if (inlineEnd === null) return null
+    end = inlineEnd
+  }
+  const slice = text.slice(at, end)
+  if (!slice.includes('<')) return end
+  const boundary = new RegExp(DETAILS_BOUNDARY_RE.source, DETAILS_BOUNDARY_RE.flags)
+  let localDepth = 0
+  for (let match = boundary.exec(slice); match; match = boundary.exec(slice)) {
+    const raw = match[0]
+    if (raw.startsWith('<!--')) {
+      if (!raw.endsWith('-->')) return null
+      continue
+    }
+    if (raw.startsWith('</')) {
+      if (!DETAILS_CLOSE_RE.test(raw)) return null
+      if (--localDepth < 0) return null
+      continue
+    }
+    if (raw.endsWith('/>')) return null
+    localDepth++
+  }
+  return localDepth === 0 ? end : null
+}
+
 function findMatchingDetailsClose(
   text: string,
   start: number,
@@ -176,7 +219,7 @@ function findMatchingDetailsClose(
       continue
     }
     if (raw[0] === '`' || raw[0] === '~') {
-      const end = code.fence(at)?.end ?? code.inlineEnd(at)
+      const end = detailsSafeCodeEnd(text, at, code)
       if (end !== null) tokens.lastIndex = end
       continue
     }
@@ -217,7 +260,7 @@ function parseDetailsBody(
   for (let token = tokens.exec(body); token; token = tokens.exec(body)) {
     const at = token.index
     if (token[0] !== '<') {
-      const end = code.fence(at)?.end ?? code.inlineEnd(at)
+      const end = detailsSafeCodeEnd(body, at, code)
       if (end !== null) tokens.lastIndex = end
       continue
     }
@@ -252,9 +295,25 @@ function parseDetailsBody(
       continue
     }
 
-    TAG_HEAD_RE.lastIndex = at
-    const head = TAG_HEAD_RE.exec(body)
-    if (head && isKnownHtmlElementName(head[1]!)) return null
+    AUTOLINK_CANDIDATE_RE.lastIndex = at
+    const autolink = AUTOLINK_CANDIDATE_RE.exec(body)
+    if (autolink && isAutolinkToken(autolink[0])) {
+      tokens.lastIndex = AUTOLINK_CANDIDATE_RE.lastIndex
+      continue
+    }
+
+    BODY_TAG_RE.lastIndex = at
+    const tag = BODY_TAG_RE.exec(body)
+    if (tag) {
+      const closing = tag[1] === '/'
+      const name = tag[2]!
+      if (isKnownHtmlElementName(name)) return null
+      if (!isDisplayMetaTagName(name)) {
+        if (CUSTOM_ELEMENT_NAME_RE.test(name)) return null
+        const attrs = tag[0].slice(1 + tag[1]!.length + name.length, tag[0].length - 1)
+        if (!closing && attrs.includes('=')) return null
+      }
+    }
   }
 
   if (!flushMarkdown(body.length)) return null
@@ -277,28 +336,40 @@ function parseDetailsBlock(
   const open = Boolean(openMatch[1])
   const openEnd = DETAILS_OPEN_RE.lastIndex
 
-  const matched = findMatchingDetailsClose(text, openEnd, code)
-  if (!matched) return null
-
-  const rawInner = text.slice(openEnd, matched.closeStart)
-  let innerPos = skipIgnorableHtml(rawInner, 0)
-  if (innerPos === null) return null
+  let bodyStart = skipIgnorableHtml(text, openEnd)
+  if (bodyStart === null) return null
 
   let summary: string | null = null
-  if (SUMMARY_CANDIDATE_RE.test(rawInner.slice(innerPos, Math.min(rawInner.length, innerPos + 16)))) {
-    SUMMARY_OPEN_RE.lastIndex = innerPos
-    const summaryOpen = SUMMARY_OPEN_RE.exec(rawInner)
+  let summaryHasCodeSyntax = false
+  if (SUMMARY_CANDIDATE_RE.test(text.slice(bodyStart, Math.min(text.length, bodyStart + 16)))) {
+    SUMMARY_OPEN_RE.lastIndex = bodyStart
+    const summaryOpen = SUMMARY_OPEN_RE.exec(text)
     if (!summaryOpen) return null
     const summaryStart = SUMMARY_OPEN_RE.lastIndex
-    const closeMatch = SUMMARY_CLOSE_RE.exec(rawInner.slice(summaryStart))
+    const closeRe = new RegExp(SUMMARY_CLOSE_RE.source, 'gi')
+    closeRe.lastIndex = summaryStart
+    const closeMatch = closeRe.exec(text)
     if (!closeMatch) return null
-    const rawSummary = rawInner.slice(summaryStart, summaryStart + closeMatch.index)
+    const rawSummary = text.slice(summaryStart, closeMatch.index)
     if (SUMMARY_HTML_TAG_RE.test(rawSummary)) return null
     summary = decodeSummaryEntities(rawSummary).trim()
-    innerPos = summaryStart + closeMatch.index + closeMatch[0].length
+    summaryHasCodeSyntax = rawSummary.includes('`') || rawSummary.includes('~~~')
+    bodyStart = closeRe.lastIndex
   }
 
-  const body = dedentCommonIndent(rawInner.slice(innerPos))
+  let matched: { closeStart: number; closeEnd: number } | null
+  if (summaryHasCodeSyntax) {
+    const rest = text.slice(bodyStart)
+    const restMatched = findMatchingDetailsClose(rest, 0, markdownCodeScanner(rest))
+    matched = restMatched
+      ? { closeStart: bodyStart + restMatched.closeStart, closeEnd: bodyStart + restMatched.closeEnd }
+      : null
+  } else {
+    matched = findMatchingDetailsClose(text, bodyStart, code)
+  }
+  if (!matched) return null
+
+  const body = dedentCommonIndent(text.slice(bodyStart, matched.closeStart))
   const children = parseDetailsBody(body, state, depth)
   if (!children) return null
 

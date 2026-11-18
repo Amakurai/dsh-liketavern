@@ -12,6 +12,7 @@ import { IconDownloadOutlineMedium, IconEditOutlineMedium, IconFolderOpenOutline
 import type { CardRegexScript, ChatRole, PresetEntry, PromptPreset } from '../../core/types.js'
 import type { PresetSummary, TavernRemote } from '../types.js'
 import { notifyAllSessionBindingsChanged } from '../cache.js'
+import { bumpDisplaySettingsRevision } from '../displayPrefs.js'
 import { t as tBare, useT } from '../i18n.js'
 import { Badge, Btn, ConfirmDialog, Err, Field, FileBtn, IconBtn, Muted, NumInput, RegexScriptRow, SaveBar, SearchEmpty, SearchInput, Section, Select, Skeleton, Toggle, clickableProps, downloadJson, errOf, readJsonFile, runAsync, useLoader, useToast } from '../util.js'
 
@@ -86,7 +87,7 @@ const EntryEditor = memo(function EntryEditor(props: {
   return (
     <div className="dsh-tavern-entry">
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', padding: '12px 16px 8px' }}>
-        <Toggle checked={entry.enabled} onChange={(enabled) => set({ enabled })} title={entry.enabled ? t('presets.entry.disable') : t('presets.entry.enable')} />
+        <Toggle disabled={props.disabled} checked={entry.enabled} onChange={(enabled) => set({ enabled })} title={entry.enabled ? t('presets.entry.disable') : t('presets.entry.enable')} />
         <input aria-label={t('presets.name')} className="dsh-tavern-input" style={{ width: 160 }} value={entry.name} placeholder={t('presets.name')} onChange={(e) => set({ name: e.target.value })} />
         <Select
           value={entry.role}
@@ -122,7 +123,7 @@ const EntryEditor = memo(function EntryEditor(props: {
           <input aria-label={t('presets.entry.markerId')} className="dsh-tavern-input" style={{ width: 140 }} value={entry.markerId ?? ''} placeholder="markerId" onChange={(e) => set({ markerId: e.target.value })} />
         )}
         <span style={{ flex: 1 }} />
-        <IconBtn label={t('presets.entry.delete')} danger onClick={() => onDelete(index)}>
+        <IconBtn label={t('presets.entry.delete')} danger disabled={props.disabled} onClick={() => onDelete(index)}>
           <IconTrashOutlineMedium />
         </IconBtn>
       </div>
@@ -220,6 +221,7 @@ export function PresetsSection(props: { remote: TavernRemote }) {
         setEditingId(r.value.id)
         setRevision(r.value.revision ?? null)
         setBaseline(JSON.stringify(editing))
+        bumpDisplaySettingsRevision()
         toast.show(t('presets.saved', { name: editing.name }))
         reload()
       }

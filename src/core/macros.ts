@@ -60,7 +60,11 @@ function expandLegacyMacros(text: string, ctx: Pick<MacroContext, 'char' | 'user
 }
 const MARKER_PREFIX = '\uE000tavern'
 const readonlyStatHazardCache = new WeakMap<object, string | null>()
-const contextStaticHazardCache = new WeakMap<MacroContext, readonly string[]>()
+interface CachedStringHazards {
+  values: readonly (string | undefined)[]
+  hazards: readonly string[]
+}
+const contextStaticHazardCache = new WeakMap<MacroContext, CachedStringHazards>()
 const MACRO_CONTEXT_STRING_KEYS = [
   'char', 'user', 'pickSeed', 'lastMessage', 'lastUserMessage', 'lastCharMessage',
   'description', 'personality', 'scenario', 'charVersion', 'creatorNotes',
@@ -78,17 +82,28 @@ function readonlyStatHazard(statData: Readonly<Record<string, unknown>> | undefi
 
 function staticContextHazards(ctx: MacroContext): readonly string[] {
   const cached = contextStaticHazardCache.get(ctx)
-  if (cached) return cached
-  const list: string[] = []
-  const pushIf = (value: string | undefined | null) => {
-    if (value && value.includes(MARKER_PREFIX)) list.push(value)
+  let stringHazards: readonly string[]
+  if (cached && MACRO_CONTEXT_STRING_KEYS.every((key, index) => cached.values[index] === ctx[key])) {
+    stringHazards = cached.hazards
+  } else {
+    const values: Array<string | undefined> = []
+    const found: string[] = []
+    for (const key of MACRO_CONTEXT_STRING_KEYS) {
+      const value = ctx[key]
+      values.push(value)
+      if (value && value.includes(MARKER_PREFIX)) found.push(value)
+    }
+    contextStaticHazardCache.set(ctx, { values, hazards: found })
+    stringHazards = found
   }
-  for (const key of MACRO_CONTEXT_STRING_KEYS) pushIf(ctx[key])
-  if (ctx.vars) for (const key in ctx.vars) pushIf(ctx.vars[key])
-  if (ctx.outlets) for (const key in ctx.outlets) pushIf(ctx.outlets[key])
-  pushIf(readonlyStatHazard(ctx.readonlyStatData))
-  contextStaticHazardCache.set(ctx, list)
-  return list
+  let dynamicHazards: string[] | null = null
+  const pushDynamic = (value: string | undefined | null) => {
+    if (value && value.includes(MARKER_PREFIX)) (dynamicHazards ??= [...stringHazards]).push(value)
+  }
+  if (ctx.vars) for (const key in ctx.vars) pushDynamic(ctx.vars[key])
+  if (ctx.outlets) for (const key in ctx.outlets) pushDynamic(ctx.outlets[key])
+  pushDynamic(readonlyStatHazard(ctx.readonlyStatData))
+  return dynamicHazards ?? stringHazards
 }
 
 /**
@@ -566,7 +581,7 @@ export function hasTurnLocalMacros(text: string): boolean {
   if (!text.includes('{{')) return text.includes('<%')
   if (text.includes('<%')) return true
   // 原生 MVU 的 stat_data 是轮初剧情快照；读取它的宏和 EJS 一样不能跨轮钉死。
-  if (/\{\{\s*(?:getvar|getlocalvar|getglobalvar|hasvar|haslocalvar|hasglobalvar|varexists|globalvarexists)\s*::\s*stat_data(?:[.\[]|\s*\}\})/i.test(text)) return true
+  if (/\{\{\s*(?:getvar|getlocalvar|getglobalvar|hasvar|haslocalvar|hasglobalvar|varexists|globalvarexists)\s*::\s*stat_data(?:[.\[]|\s*(?:::|\}\}))/i.test(text)) return true
   return /\{\{\s*(outlet::|outletPromptsInjected:|lastusermessage|lastmessage|last_user_message|lastcharmessage|last_char_message|time|date|datetime|weekday|isodate|isotime|roll(?:\s*:|\s+\S)|random\s*:)/i.test(text)
 }
 

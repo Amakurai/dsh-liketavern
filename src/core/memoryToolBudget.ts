@@ -88,7 +88,8 @@ export function budgetMemorySearch(
     const path = `memory/${hit.entry.file}`
     const readable = resolveReadableAssetPath(path)
     if (!readable.ok || readable.path !== path) continue
-    const item: MemoryToolHit = { id: hit.entry.id, path, archived: hit.entry.archived, sourceRange: hit.entry.sourceRange,
+    const item: MemoryToolHit = { id: hit.entry.id, path, archived: hit.entry.archived,
+      ...(hit.entry.sourceRange !== undefined ? { sourceRange: hit.entry.sourceRange } : {}),
       score: hit.score, tags: [], keys: [], body: '', truncated: hit.entry.body.length > 0,
       metadataTruncated: hit.entry.tags.length > 0 || hit.entry.keys.length > 0,
       tagsTruncated: hit.entry.tags.length > 0, keysTruncated: hit.entry.keys.length > 0 }
@@ -100,6 +101,7 @@ export function budgetMemorySearch(
       return stabilizeJsonTokenCount(shell.cjk + itemsCjk + delta.cjk, shell.other + 2 + 2 * nextLen + itemsOther + delta.other)
     }
     if (estimateWithItem(itemDeltaWithSource, true) > limit) {
+      if (!item.sourceRange) { results.pop(); continue }
       delete item.sourceRange; item.sourceRangeOmitted = true; item.metadataTruncated = true
       const itemDeltaNoSource = countPrettyArrayItemChars(item, 2)
       if (estimateWithItem(itemDeltaNoSource, true) > limit) { results.pop(); continue }

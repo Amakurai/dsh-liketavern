@@ -13,6 +13,7 @@ import {BINDING_CHANGED_EVENT,BRANCH_CHANGED_EVENT} from './actions.js'
 import { subscribeKeyedWindowEvent } from './windowEvents.js'
 import { watchHelperScripts,watchHelperScriptAssets } from './helperScriptNotifications.js'
 import { notifyHelperStory,watchHelperStory } from './helperNotifications.js'
+import { useDisplaySettingsRevision } from './displayPrefs.js'
 import { useT } from './i18n.js'
 import {cardVariableLabels} from './cardVariableLabels.js'
 import { useLoader } from './util.js'
@@ -31,7 +32,8 @@ const MVU_FOLLOW_MAX_ATTEMPTS=12
 
 export function HelperScripts(props:{remote:TavernRemote;sessionId:string;cardId?:string;sessions?:{open(id:string):void;refresh?:()=>Promise<void>};onCancel?:()=>Promise<void>}) {
   const {remote,sessionId}=props,t=useT()
-  const loader=useLoader(()=>remote.getHelperScriptBundle({sessionId}),[sessionId],true)
+  const displaySettingsRevision=useDisplaySettingsRevision()
+  const loader=useLoader(()=>remote.getHelperScriptBundle({sessionId}),[sessionId,displaySettingsRevision],true)
   const bundle=loader.state.status==='ready'?loader.state.value:undefined
   // RPC 每次成功载入的是一组新沙箱；内容修订相同也不代表旧运行时仍在。
   const runtimeVersion=useMemo(()=>randomUuid(),[bundle])

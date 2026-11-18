@@ -129,16 +129,25 @@ export async function rebindHelperWorldbooks(ctx:Context,state:TavernState,sessi
       if(request.kind==='settings'){
         const patch=helperWorldbookSettingsCodec.patch(value),worldInfo={...binding.worldInfo,...helperWorldbookSettingsCodec.toNative(patch)}
         const lorebookIds=patch.selected_global_lorebooks===undefined?binding.lorebookIds:await sharedList(patch.selected_global_lorebooks)
-        const next={...binding,worldInfo,lorebookIds};await state.saveBinding(next,()=>beforeWrite?.(binding,next));return contextFrom(state,next,chat)
+        let saved:SessionBinding={...binding,worldInfo,lorebookIds}
+        await state.saveBinding(saved,(_previous,published)=>{saved=published;beforeWrite?.(binding,published)})
+        return contextFrom(state,saved,chat)
       }
-      if(request.kind==='global'){const lorebookIds=await sharedList(value),next={...binding,lorebookIds};await state.saveBinding(next,()=>beforeWrite?.(binding,next));return contextFrom(state,next,chat)}
+      if(request.kind==='global'){
+        const lorebookIds=await sharedList(value)
+        let saved:SessionBinding={...binding,lorebookIds}
+        await state.saveBinding(saved,(_previous,published)=>{saved=published;beforeWrite?.(binding,published)})
+        return contextFrom(state,saved,chat)
+      }
       if(request.kind==='character'){
         if(!helperRecord(value)||!Array.isArray(value.additional)||value.primary!==null&&typeof value.primary!=='string'||Object.keys(value).some(key=>!['primary','additional'].includes(key)))throw new Error('角色世界书绑定无效')
         let primary:string|null=null,embedded=false
         if(value.primary===CHARACTER){const book=await rawBook(state,binding,CHARACTER,chat);if(book.raw===null)throw new Error('角色内嵌书不存在');readHelperWorldbook(book.raw);embedded=true}
         else if(value.primary!==null)primary=await shared(value.primary)
-        const additional=(await sharedList(value.additional)).filter(id=>id!==primary),next={...binding,characterLorebookId:primary,useEmbeddedLorebook:embedded,characterLorebookIds:additional}
-        await state.saveBinding(next,()=>beforeWrite?.(binding,next));return contextFrom(state,next,chat)
+        const additional=(await sharedList(value.additional)).filter(id=>id!==primary)
+        let saved:SessionBinding={...binding,characterLorebookId:primary,useEmbeddedLorebook:embedded,characterLorebookIds:additional}
+        await state.saveBinding(saved,(_previous,published)=>{saved=published;beforeWrite?.(binding,published)})
+        return contextFrom(state,saved,chat)
       }
       if(!writeChat)throw new Error('聊天绑定缺少楼层写入上下文')
       if(request.kind==='ensure-chat'){

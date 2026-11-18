@@ -20,8 +20,8 @@ export function findHtmlFence(text:string,code?:ReturnType<typeof markdownCodeSc
       if(end!==null)tokens.lastIndex=end
       continue
     }
-    if(!fence.closed)return null
     tokens.lastIndex=fence.end
+    if(!fence.closed)continue
     // CommonMark 以 info 的首个单词作为语言，`html title="x"` 仍是 HTML 围栏。
     const info=fence.info.trim().split(/\s+/)[0]!.toLowerCase()
     if(!fence.standalone||!['','html','text','xml'].includes(info))continue

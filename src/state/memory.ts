@@ -15,7 +15,7 @@ import type { MemoryEntry } from '../core/types.js'
 import { caseIdentity, sameFileStat } from './pathIdentity.js'
 import type { WorkspaceFs } from './workspaceFs.js'
 import { withWorkspaceLock } from './workspaceLock.js'
-import { dirWrittenSince, openLedger, writtenSince, type WriteLedger } from './writeLedger.js'
+import { dirWrittenSince, invalidateLedger, ledgerKey, openLedger, writtenSince, type WriteLedger } from './writeLedger.js'
 
 /** 正文软上限（字）：超过不拒绝，write 返回值带 overLength: true，治理提示由工具层做。 */
 const MEMORY_BODY_SOFT_LIMIT = 200
@@ -31,6 +31,10 @@ const sameStat = sameFileStat
 
 function sameList(a: readonly string[] | undefined, b: readonly string[] | undefined): boolean {
   return a === b || (a !== undefined && b !== undefined && a.length === b.length && a.every((item, index) => item === b[index]))
+}
+
+function cloneMemoryEntry(entry: MemoryEntry): MemoryEntry {
+  return { ...entry, tags: [...entry.tags], keys: [...entry.keys] }
 }
 
 /** 落盘的 frontmatter 元数据；id 由文件名推导、archived 由路径推导，均不写入文件。 */
@@ -326,7 +330,6 @@ export class MemoryStore {
   private readonly hashes = new WeakMap<MemoryEntry, string>()
   /** 条目正文的 token 粗估缓存，跟随同一个不可变条目对象复用。 */
   private readonly tokens = new WeakMap<MemoryEntry, number>()
-  private readonly ledger: WriteLedger
   private epoch: number
 
   constructor(
@@ -335,8 +338,7 @@ export class MemoryStore {
   ) {
     this.similarTopK = options?.similarTopK ?? 3
     // 同一剧情的多个实例（管线与工具的只读操作用长期存活的那个，工具写入每次新建）共用文件层的写入登记
-    this.ledger = openLedger(fs.root)
-    this.epoch = this.ledger.epoch
+    this.epoch = openLedger(fs.root).epoch
   }
 
   /**
@@ -355,14 +357,15 @@ export class MemoryStore {
    * 才可能既不改文件大小、又落在同一个 mtime 刻度内，那时需要调用方手动调一次。
    */
   invalidate(): void {
-    this.ledger.epoch++
+    invalidateLedger(this.fs.root)
     this.sync()
   }
 
-  /** 取共享的写入登记；有实例显式作废过就先丢掉本实例的全部缓存。 */
+  /** 取共享的写入登记；有实例显式作废或账本关闭重建过，就先丢掉本实例的全部缓存。 */
   private sync(): WriteLedger {
-    if (this.epoch !== this.ledger.epoch) {
-      this.epoch = this.ledger.epoch
+    const ledger = openLedger(this.fs.root)
+    if (this.epoch !== ledger.epoch) {
+      this.epoch = ledger.epoch
       this.cache = null
       this.activeIndex = null
       this.sourceIndex = null
@@ -370,7 +373,7 @@ export class MemoryStore {
       this.sourceCache.clear()
       this.aliasCache = null
     }
-    return this.ledger
+    return ledger
   }
 
   /** 正文指纹：别名按它对应到记忆，正文一改即作废。 */
@@ -425,7 +428,9 @@ export class MemoryStore {
       const pending: MemoryEntry[] = []
       for (let i = entries.length - 1; i >= 0 && pending.length < limit; i--) {
         const entry = entries[i]!
-        if (entry.body.trim() && records.get(memoryIdentity(entry.id))?.hash !== this.hashOf(entry)) pending.push(entry)
+        if (entry.body.trim() && records.get(memoryIdentity(entry.id))?.hash !== this.hashOf(entry)) {
+          pending.push(cloneMemoryEntry(entry))
+        }
       }
       return pending
     })
@@ -457,9 +462,9 @@ export class MemoryStore {
     })
   }
 
-  /** 解析 memory/*.md（不含 archive/），坏文件容错跳过；按 created 升序（并列按 id 字典序）。 */
+  /** 解析 memory/*.md（不含 archive/），坏文件容错跳过；按 created 升序（并列按 id 字典序）。返回独立副本。 */
   async list(): Promise<MemoryEntry[]> {
-    return withWorkspaceLock(this.fs.root, () => this.listNow())
+    return (await withWorkspaceLock(this.fs.root, () => this.listNow())).map(cloneMemoryEntry)
   }
 
   private async listNow(): Promise<MemoryEntry[]> {
@@ -632,10 +637,18 @@ export class MemoryStore {
   async mergeBatch(batch: readonly MemoryEntry[], body: string, kind: 'compress' | 'merge'): Promise<number> {
     return withWorkspaceLock(this.fs.root, async () => {
       if (!batch.length) return 0
-      for (const source of batch) if (!isMemoryId(source.id)) return 0
-      const texts = await this.fs.readTextMany(batch.map((source) => this.pathOf(source.id)))
-      for (let i = 0; i < batch.length; i++) {
-        const source = batch[i]!
+      const uniqueBatch: MemoryEntry[] = []
+      const seenIds = new Set<string>()
+      for (const source of batch) {
+        if (!isMemoryId(source.id)) return 0
+        const identity = memoryIdentity(source.id)
+        if (seenIds.has(identity)) continue
+        seenIds.add(identity)
+        uniqueBatch.push(source)
+      }
+      const texts = await this.fs.readTextMany(uniqueBatch.map((source) => this.pathOf(source.id)))
+      for (let i = 0; i < uniqueBatch.length; i++) {
+        const source = uniqueBatch[i]!
         const text = texts[i] ?? null
         if (text === null) return 0
         let current: MemoryEntry
@@ -648,11 +661,11 @@ export class MemoryStore {
       }
       await this.write({
         body,
-        tags: [...new Set([kind === 'compress' ? 'compressed' : 'merged', ...batch.flatMap((entry) => entry.tags)])],
-        keys: [...new Set(batch.flatMap((entry) => entry.keys))],
-        sourceRange: memorySourceRange(kind, batch.map((entry) => entry.id)),
+        tags: [...new Set([kind === 'compress' ? 'compressed' : 'merged', ...uniqueBatch.flatMap((entry) => entry.tags)])],
+        keys: [...new Set(uniqueBatch.flatMap((entry) => entry.keys))],
+        sourceRange: memorySourceRange(kind, uniqueBatch.map((entry) => entry.id)),
       })
-      return this.archive(batch.map((entry) => entry.id))
+      return this.archive(uniqueBatch.map((entry) => entry.id))
     })
   }
 
@@ -662,14 +675,15 @@ export class MemoryStore {
    */
   private async buildIndex(includeSources = false): Promise<MemoryIndex> {
     const entries = await this.listNow()
+    const ledger = this.sync()
     const existing = includeSources ? this.sourceIndex : this.activeIndex
-    const revision = this.ledger.counter
+    const revision = ledger.counter
     // 别名只进检索索引：去重比较的是新正文与已有条目，别名会让同一段正文显得不那么相似。
     let records = NO_ALIASES
     const reusable = existing !== null && existing.synced === entries
     if (!includeSources) {
       if (reusable) return existing
-    } else if (reusable && !dirWrittenSince(this.ledger, ARCHIVE_DIR, existing.revision)) {
+    } else if (reusable && !dirWrittenSince(ledger, ARCHIVE_DIR, existing.revision)) {
       // 缓存命中的常见路径：归档来源与别名文件的指纹一次批量取回，不为别名多发一轮 stat。
       const stats = await this.fs.statMany([...existing.sourceFiles, ALIAS_PATH])
       records = await this.loadAliases(stats[existing.sourceFiles.length] ?? null)
@@ -705,7 +719,7 @@ export class MemoryStore {
             break
           }
         }
-        const loaded = await this.loadSources(ids, revision)
+        const loaded = await this.loadSources(ids, ledger, revision)
         if (stopped) throw deferred
         const next: MemoryEntry[] = []
         for (const source of loaded) {
@@ -716,8 +730,8 @@ export class MemoryStore {
         frontier = next
       }
       // 不再可达的来源不留在缓存里；失败的重建在上面抛出，不会走到这里误删。
-      const reachable = new Set(sources.map((source) => source.path))
-      for (const path of this.sourceCache.keys()) if (!reachable.has(path)) this.sourceCache.delete(path)
+      const reachable = new Set(sources.map((source) => ledgerKey(source.path)))
+      for (const cacheKey of this.sourceCache.keys()) if (!reachable.has(cacheKey)) this.sourceCache.delete(cacheKey)
     }
     // 来源全部加载成功后才动索引：中途失败时上一份索引保持原样。以下到返回之间没有 await。
     const index = existing?.index ?? new Bm25Index<MemoryEntry>()
@@ -761,22 +775,23 @@ export class MemoryStore {
    * 先整批取指纹再读；来源是否存在仍以读取结果为准。缺失、解析失败和读取故障都不进缓存。
    * 取指纹阶段的故障先于读取阶段报告；同一阶段多个来源出错时报告顺序最靠前的那个。
    */
-  private async loadSources(ids: readonly string[], revision: number): Promise<LoadedSource[]> {
+  private async loadSources(ids: readonly string[], ledger: WriteLedger, revision: number): Promise<LoadedSource[]> {
     if (ids.length === 0) return []
     const paths = ids.map((id) => this.pathOf(id, true))
     const stats = await this.fs.statMany(paths)
     const settled = await settleLimited(ids, SOURCE_READ_CONCURRENCY, async (id, index): Promise<LoadedSource> => {
       const path = paths[index]!
+      const cacheKey = ledgerKey(path)
       const stat = stats[index] ?? null
-      const cached = this.sourceCache.get(path)
+      const cached = this.sourceCache.get(cacheKey)
       if (stat && cached?.stat && cached.stat.mtimeMs === stat.mtimeMs && cached.stat.size === stat.size
-        && !writtenSince(this.ledger, path, cached.revision)) return cached
-      this.sourceCache.delete(path)
+        && !writtenSince(ledger, path, cached.revision)) return cached
+      this.sourceCache.delete(cacheKey)
       const raw = await this.fs.readText(path)
       if (raw === null) throw new Error(`摘要来源 ${id} 缺失，无法保证检索完整性`)
       const loaded: LoadedSource = { path, stat, revision, entry: parseMemory(`${ARCHIVE_PREFIX}${id}.md`, raw) }
       // 没有指纹就无从校验，下次照常重读。
-      if (stat) this.sourceCache.set(path, loaded)
+      if (stat) this.sourceCache.set(cacheKey, loaded)
       return loaded
     })
     const loaded: LoadedSource[] = []
@@ -804,7 +819,7 @@ export class MemoryStore {
       const { index } = await this.buildIndex()
       return index
         .similarity([text, ...keys].join(' '), { topK: topK ?? this.similarTopK })
-        .map((hit) => ({ entry: hit.data!, score: hit.score }))
+        .map((hit) => ({ entry: cloneMemoryEntry(hit.data!), score: hit.score }))
     })
   }
 
@@ -818,7 +833,7 @@ export class MemoryStore {
   ): Promise<Array<{ entry: MemoryEntry; score: number; summarySourceIds?: readonly string[] }>> {
     return withWorkspaceLock(this.fs.root, async () => {
       const { index, entries } = await this.buildIndex(true)
-      return index.search(query, options).map((hit) => ({ entry: hit.data!, score: hit.score,
+      return index.search(query, options).map((hit) => ({ entry: cloneMemoryEntry(hit.data!), score: hit.score,
         ...(options?.includeSummarySources && isMemorySummary(hit.data!.sourceRange)
           ? { summarySourceIds: summarySourceIds(hit.id, entries) } : {}),
       }))
@@ -827,15 +842,17 @@ export class MemoryStore {
 
   /** 容量统计：条数与正文 token 粗估累加。 */
   async stats(): Promise<{ count: number; tokens: number }> {
-    const entries = await this.list()
-    return {
-      count: entries.length,
-      tokens: entries.reduce((sum, entry) => sum + this.tokensOf(entry), 0),
-    }
+    return withWorkspaceLock(this.fs.root, async () => {
+      const entries = await this.listNow()
+      return {
+        count: entries.length,
+        tokens: entries.reduce((sum, entry) => sum + this.tokensOf(entry), 0),
+      }
+    })
   }
 
   /** 最旧的 n 条（created 升序），压缩取批次用。 */
   async oldest(n: number): Promise<MemoryEntry[]> {
-    return (await this.list()).slice(0, Math.max(0, n))
+    return (await withWorkspaceLock(this.fs.root, () => this.listNow())).slice(0, Math.max(0, n)).map(cloneMemoryEntry)
   }
 }

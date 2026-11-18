@@ -94,14 +94,19 @@ export function helperHistoryOf(events: readonly SessionEvent[], names: {char:st
 export function helperHistoryRevision(history:ReturnType<typeof helperHistoryOf>):string{
   return createHash('sha256').update(JSON.stringify(history.map(({seq,identity,message})=>[seq,identity,message]))).digest('hex')
 }
+/** 仅用于助手显示姓名的容错人设读取：不为剧情归属复核强绑人设健康度，损坏时回退默认名称以免阻塞 MVU 收口与卡面桥。 */
+async function resolveHelperPersona(state:TavernState,personaId:string|null) {
+  try { return await state.resolvePersona(personaId) }
+  catch { return null }
+}
 /** 不依赖具体消息的剧情历史上下文；绑定、工作区与 writable 每次重新读取，不进入缓存。 */
 async function helperHistoryContext(ctx:Context,state:TavernState,sessionId:string) {
-  const binding=await state.loadBinding(sessionId)
+  const binding=await state.loadStoryBinding(sessionId)
   if (!binding?.storyId) throw new Error('会话未绑定可用剧情')
   const [events,card,persona]=await Promise.all([
     readDisplaySessionEvents(ctx,sessionId),
     state.loadCharacter(binding.cardId),
-    state.resolvePersona(binding.personaId),
+    resolveHelperPersona(state,binding.personaId),
   ])
   const charName=card?characterPromptName(card.card):'Assistant'
   const names={char:card?.card.name??'Assistant',user:persona?.name??DEFAULT_USER_NAME}
@@ -115,7 +120,7 @@ async function helperHistoryContext(ctx:Context,state:TavernState,sessionId:stri
     assistantIndexBySeq:cached.assistantIndexBySeq,ws,writable,turn,greetings}
 }
 async function resolveHelperStoryRoot(state:TavernState,sessionId:string):Promise<string> {
-  const binding=await state.loadBinding(sessionId)
+  const binding=await state.loadStoryBinding(sessionId)
   if (!binding?.storyId) throw new Error('会话未绑定可用剧情')
   return (await state.storyWorkspace(binding.cardId,binding.storyId)).fs.root
 }
@@ -156,22 +161,30 @@ function snapshot(context:Awaited<ReturnType<typeof helperContext>>,scopes:Helpe
  * 长历史首屏会退化为 O(消息数²)。
  */
 export interface HelperDisplaySet {
+  storyId: string
   context(seq: number): HelperDisplayContext
-  /** 仅 withSnapshot=true 时存在；各气泡只差 currentMessageId，messages/scopes 共用引用。 */
+  /** 仅 withSnapshot=true 且变量读取成功时存在；各气泡只差 currentMessageId，messages/scopes 共用引用。 */
   base?: HelperSnapshotBase
+  /** 变量文件损坏时仅令真实 iframe 卡面失败，纯文本与原生折叠仍可使用同一份历史上下文。 */
+  snapshotError?: unknown
 }
-export async function loadHelperDisplaySet(ctx:Context,state:TavernState,sessionId:string,withSnapshot:boolean):Promise<HelperDisplaySet> {
+export async function loadHelperDisplaySet(ctx:Context,state:TavernState,sessionId:string,withSnapshot:boolean,expectedStoryId?:string):Promise<HelperDisplaySet> {
   const root=await resolveHelperStoryRoot(state,sessionId)
   return withWorkspaceLock(root,async()=>{
     const current=await helperHistoryContext(ctx,state,sessionId)
-    if(current.ws.fs.root!==root)throw new Error('卡面剧情绑定已经改变')
+    if(current.ws.fs.root!==root||expectedStoryId!==undefined&&current.binding.storyId!==expectedStoryId)throw new Error('卡面剧情绑定已经改变')
     let base:HelperSnapshotBase|undefined
+    let snapshotError:unknown
     if(withSnapshot){
-      const saved=await loadHelperState(current.ws.fs),exposed=publicScopes(saved.scopes,current.indexByIdentity)
-      base={storyId:current.binding.storyId!,historyRevision:current.historyRevision,writable:current.writable,scopes:exposed,
-        messages:snapshotMessages(current,exposed,saved.extras,saved.swipes??{})}
+      try{
+        const saved=await loadHelperState(current.ws.fs),exposed=publicScopes(saved.scopes,current.indexByIdentity)
+        base={storyId:current.binding.storyId!,historyRevision:current.historyRevision,writable:current.writable,scopes:exposed,
+          messages:snapshotMessages(current,exposed,saved.extras,saved.swipes??{})}
+      }catch(error){
+        snapshotError=error
+      }
     }
-    return {...(base?{base}:{}),context:seq=>{
+    return {storyId:current.binding.storyId!,...(base?{base}:{}),...(snapshotError!==undefined?{snapshotError}:{}),context:seq=>{
       const index=current.assistantIndexBySeq.get(seq)??-1,message=current.history[index]
       if(index<0||!message)throw new Error('卡面消息不在当前剧情中')
       return {storyId:current.binding.storyId!,historyRevision:current.historyRevision,currentMessageId:index,currentMessageRole:message.role}
@@ -211,10 +224,10 @@ export async function sessionHelperLibraries(state:TavernState,binding:Pick<Sess
   ])
 }
 export async function getHelperScriptBundle(ctx:Context,state:TavernState,sessionId:string):Promise<HelperScriptBundle> {
-  const binding=await state.loadBinding(sessionId)
+  const binding=await state.loadStoryBinding(sessionId)
   if(!binding?.storyId)throw new Error('会话未绑定可用剧情')
   const ensureBinding=async()=>{
-    const current=await state.loadBinding(sessionId)
+    const current=await state.loadStoryBinding(sessionId)
     if(!current||current.storyId!==binding.storyId||current.cardId!==binding.cardId||current.presetId!==binding.presetId||current.personaId!==binding.personaId||current.interactiveCards!==binding.interactiveCards||current.helperMvu!==binding.helperMvu)throw new Error('脚本会话绑定已改变，请重新加载')
   }
 
@@ -222,7 +235,7 @@ export async function getHelperScriptBundle(ctx:Context,state:TavernState,sessio
   await ensureBinding()
   const enabled=state.config.interactiveCards&&binding.interactiveCards!==false
   const character=libraries.find(library=>library.target.type==='character')!
-  const [card,persona]=await Promise.all([state.loadCharacter(binding.cardId),state.resolvePersona(binding.personaId)])
+  const [card,persona]=await Promise.all([state.loadCharacter(binding.cardId),resolveHelperPersona(state,binding.personaId)])
   // 角色/人设元数据读取同样跨越异步边界；若此时会话换绑，不能把旧名称连同新一轮
   // 脚本运行时一起返回。尤其 disabled / 无脚本分支会在下面提前返回，必须先复核。
   await ensureBinding()

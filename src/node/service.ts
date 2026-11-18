@@ -92,7 +92,7 @@ interface DisplayScope {
   }>
   displayEvents: () => Promise<readonly SessionEvent[]>
   templateOutputs: (ids: readonly number[]) => Promise<Awaited<ReturnType<typeof loadTemplateOutputs>>>
-  helperSet: (withSnapshot: boolean) => Promise<HelperDisplaySet>
+  helperSet: (withSnapshot: boolean, expectedStoryId?: string) => Promise<HelperDisplaySet>
   helperExtras: () => Promise<{ helperScripts: HelperScriptContext; helperWorldbooks: HelperWorldbookContext }>
   renderDisplay: (
     parts: TemplateDisplayPart[],
@@ -106,11 +106,10 @@ interface DisplayScope {
   ) => Promise<ComputeJobs['render']['output']>
 }
 
-/** 单个气泡的展示结果；卡面快照与脚本库、世界书只标记需要，由调用方按单条或批次组装。 */
+/** 单个气泡的展示结果；卡面快照与脚本库、世界书只标记需要，由调用方按单条或批次统一读取并组装。 */
 interface DisplayDraft {
   output: Omit<RenderedOutput, 'helper' | 'helperScripts' | 'helperWorldbooks'>
-  helperMessageId?: number
-  helperExtras?: boolean
+  helperLookup?: { messageId: number; hasIframeHtml: boolean; storyId: string }
 }
 
 export class TavernService extends TypertRemoteService implements TavernServiceContract {
@@ -236,6 +235,12 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
 
   async deleteCharacter(request: { cardId: string; discardStoryIds?: string[] }): Promise<TavernMethodResults['deleteCharacter']> {
     const { salvagedLorebook } = await this.state.deleteCharacter(request.cardId, { discardStoryIds: request.discardStoryIds })
+    const deletedKey = process.platform === 'win32' ? request.cardId.toLowerCase() : request.cardId
+    for (const key of [...this.avatarCache.keys()]) {
+      if ((process.platform === 'win32' ? key.toLowerCase() : key) === deletedKey) {
+        this.avatarCache.delete(key)
+      }
+    }
     return { deleted: true, salvagedLorebook }
   }
 
@@ -642,11 +647,22 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
   async renderOutputText(request: { sessionId: string; text: string; messageId?: number }): Promise<TavernMethodResults['renderOutputText']> {
     await this.state.waitForSessionCommits(request.sessionId)
     const scope = this.displayScope(request.sessionId, [request])
-    const { output, helperMessageId, helperExtras } = await this.renderDisplayDraft(request, scope)
+    const { output, helperLookup } = await this.renderDisplayDraft(request, scope)
+    if (!helperLookup) return output
+    const displaySet = await scope.helperSet(helperLookup.hasIframeHtml, helperLookup.storyId)
+    if (helperLookup.hasIframeHtml) {
+      if (displaySet.snapshotError !== undefined) throw displaySet.snapshotError
+      const currentMessageId = displaySet.context(helperLookup.messageId).currentMessageId
+      const extras = await scope.helperExtras()
+      return {
+        ...output,
+        helper: helperSnapshotAt(displaySet.base!, currentMessageId),
+        ...extras,
+      }
+    }
     return {
       ...output,
-      ...(helperMessageId === undefined ? {} : { helper: helperSnapshotAt((await scope.helperSet(true)).base!, helperMessageId) }),
-      ...(helperExtras ? await scope.helperExtras() : {}),
+      helperContext: displaySet.context(helperLookup.messageId),
     }
   }
 
@@ -658,17 +674,57 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
     await this.state.waitForSessionCommits(request.sessionId)
     const scope = this.displayScope(request.sessionId, request.items)
     const drafts = await Promise.allSettled(request.items.map((item) => this.renderDisplayDraft({ sessionId: request.sessionId, ...item }, scope)))
+    const lookups = drafts.flatMap((res) => (res.status === 'fulfilled' && res.value.helperLookup ? [res.value.helperLookup] : []))
+    const needSnapshot = lookups.some((lookup) => lookup.hasIframeHtml)
+    let displaySet: HelperDisplaySet | undefined
+    let displaySetError: unknown
+    if (lookups.length > 0) {
+      try {
+        displaySet = await scope.helperSet(needSnapshot, lookups[0]!.storyId)
+      } catch (error) {
+        displaySetError = error
+      }
+    }
+    let extras: Awaited<ReturnType<DisplayScope['helperExtras']>> | undefined
+    let extrasError: unknown
+    if (needSnapshot && displaySet && displaySet.snapshotError === undefined) {
+      try {
+        extras = await scope.helperExtras()
+      } catch (error) {
+        extrasError = error
+      }
+    }
     const batch: TavernMethodResults['renderOutputTexts'] = { items: [] }
+    const failItem = (reason: unknown) => ({ ok: false as const, error: reason instanceof Error ? reason.message : String(reason) })
     for (const result of drafts) {
       if (result.status === 'rejected') {
-        batch.items.push({ ok: false, error: result.reason instanceof Error ? result.reason.message : String(result.reason) })
+        batch.items.push(failItem(result.reason))
         continue
       }
-      const { output, helperMessageId, helperExtras } = result.value
-      // 两类共享部分已在草稿内成功加载过；这里只取同一份备忘结果。
-      if (helperMessageId !== undefined) batch.helperBase ??= (await scope.helperSet(true)).base!
-      if (helperExtras && !batch.helperScripts) Object.assign(batch, await scope.helperExtras())
-      batch.items.push({ ok: true, value: { ...output, ...(helperMessageId === undefined ? {} : { helperMessageId }), ...(helperExtras ? { helperExtras: true as const } : {}) } })
+      const { output, helperLookup } = result.value
+      if (!helperLookup) {
+        batch.items.push({ ok: true, value: output })
+        continue
+      }
+      if (displaySetError !== undefined) {
+        batch.items.push(failItem(displaySetError))
+        continue
+      }
+      try {
+        if (helperLookup.hasIframeHtml) {
+          if (displaySet!.snapshotError !== undefined) throw displaySet!.snapshotError
+          const currentMessageId = displaySet!.context(helperLookup.messageId).currentMessageId
+          if (extrasError !== undefined) throw extrasError
+          batch.helperBase ??= displaySet!.base!
+          if (!batch.helperScripts && extras) Object.assign(batch, extras)
+          batch.items.push({ ok: true, value: { ...output, helperMessageId: currentMessageId, helperExtras: true as const } })
+        } else {
+          const helperContext = displaySet!.context(helperLookup.messageId)
+          batch.items.push({ ok: true, value: { ...output, helperContext } })
+        }
+      } catch (error) {
+        batch.items.push(failItem(error))
+      }
     }
     return batch
   }
@@ -719,7 +775,15 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
         return null
       }
     })
-    const helperSets = [once(() => loadHelperDisplaySet(this.ctx, this.state, sessionId, false)), once(() => loadHelperDisplaySet(this.ctx, this.state, sessionId, true))] as const
+    let helperSetPromise: { withSnapshot: boolean; expectedStoryId?: string; promise: Promise<HelperDisplaySet> } | undefined
+    const helperSet = (withSnapshot: boolean, expectedStoryId?: string): Promise<HelperDisplaySet> => {
+      if (helperSetPromise && (helperSetPromise.withSnapshot || !withSnapshot) && helperSetPromise.expectedStoryId === expectedStoryId) {
+        return helperSetPromise.promise
+      }
+      const promise = loadHelperDisplaySet(this.ctx, this.state, sessionId, withSnapshot, expectedStoryId)
+      helperSetPromise = { withSnapshot, expectedStoryId, promise }
+      return promise
+    }
     type PendingRenderItem =
       | {
           kind: 'render'
@@ -819,7 +883,7 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
         const { story } = await assets()
         return loadTemplateOutputs(story.fs, ids)
       },
-      helperSet: (withSnapshot) => helperSets[withSnapshot ? 1 : 0](),
+      helperSet,
       helperExtras: once(async () => {
         const storyId = (await binding())!.storyId!
         const [helperScripts, helperWorldbooks] = await Promise.all([
@@ -960,17 +1024,13 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
       ? parts.some(part => part.kind === 'html' && (part.title !== undefined || !isPlainDetailsHtml(part.text)))
       : htmls.some(html => !isPlainDetailsHtml(html)))
     // 纯文本及原生折叠 `<details>` 消息也承载后台脚本发布的选项，但不应为历史中的每个气泡
-    // 重复传输完整消息与变量快照。卡面快照与脚本库、世界书只在这里校验能否读取；组装时引用批次共享的同一份结果。
-    const helperMessageId = allowHtml && messageId !== undefined && hasIframeHtml
-      ? (await scope.helperSet(true)).context(messageId).currentMessageId : undefined
-    const helperContext = allowHtml && messageId !== undefined && !hasIframeHtml
-      ? (await scope.helperSet(false)).context(messageId) : undefined
-    const helperExtras = hasIframeHtml && messageId !== undefined
-    if (helperExtras) await scope.helperExtras()
-    return { helperMessageId, helperExtras, output: {
+    // 重复传输完整消息与变量快照。整批渲染收敛后只按需读取一次同一份剧情快照与脚本/世界书。
+    const helperLookup = allowHtml && messageId !== undefined && binding.storyId
+      ? { messageId, hasIframeHtml, storyId: binding.storyId }
+      : undefined
+    return { ...(helperLookup ? { helperLookup } : {}), output: {
       ...(parts === undefined ? {} : { parts }),
       ...(regexDiagnostics ? { regexDiagnostics } : {}),
-      ...(helperContext ? { helperContext } : {}),
       html: htmls[0] ?? null,
       htmls,
       // 坏聊天书时在展示正文尾部追加可见降级标记（不写日志、不改历史，修好后自动消失）。
@@ -1026,15 +1086,30 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
   getCharacterHelperScripts(request:{cardId:string}):Promise<TavernMethodResults['getCharacterHelperScripts']> {
     return this.state.getCharacterHelperScripts(request.cardId)
   }
-  async editHelperMessages(request:TavernMethodRequests['editHelperMessages']):Promise<TavernMethodResults['editHelperMessages']>{await this.state.waitForSessionTasks(request.sessionId);return editHelperMessages(this.ctx,this.state,request.sessionId,request.messageId,request,helperFrameWriteGuard(this.state,request,request.frameLease))}
-  rebindHelperWorldbooks(request:TavernMethodRequests['rebindHelperWorldbooks']):Promise<TavernMethodResults['rebindHelperWorldbooks']> {return rebindHelperWorldbooks(this.ctx,this.state,request.sessionId,request.messageId,request,helperFrameWriteGuard(this.state,request,request.frameLease))}
-  getHelperWorldbookContext(request:TavernMethodRequests['getHelperWorldbookContext']):Promise<TavernMethodResults['getHelperWorldbookContext']> {return getHelperWorldbookContext(this.state,request.sessionId,request.storyId)}
-  helperWorldbookOperation(request:TavernMethodRequests['helperWorldbookOperation']):Promise<TavernMethodResults['helperWorldbookOperation']> {return helperWorldbookOperation(this.ctx,this.state,request.sessionId,request.messageId,request,helperFrameWriteGuard(this.state,request,request.frameLease))}
-  getSessionHelperScripts(request:TavernMethodRequests['getSessionHelperScripts']):Promise<TavernMethodResults['getSessionHelperScripts']> {
+  editHelperMessages(request:TavernMethodRequests['editHelperMessages']):Promise<TavernMethodResults['editHelperMessages']>{
+    return this.state.enqueueSessionTask(request.sessionId, () => editHelperMessages(this.ctx,this.state,request.sessionId,request.messageId,request,helperFrameWriteGuard(this.state,request,request.frameLease)))
+  }
+  rebindHelperWorldbooks(request:TavernMethodRequests['rebindHelperWorldbooks']):Promise<TavernMethodResults['rebindHelperWorldbooks']> {
+    return this.state.enqueueSessionTask(request.sessionId, () => rebindHelperWorldbooks(this.ctx,this.state,request.sessionId,request.messageId,request,helperFrameWriteGuard(this.state,request,request.frameLease)))
+  }
+  async getHelperWorldbookContext(request:TavernMethodRequests['getHelperWorldbookContext']):Promise<TavernMethodResults['getHelperWorldbookContext']> {
+    await this.state.waitForSessionCommits(request.sessionId)
+    return getHelperWorldbookContext(this.state,request.sessionId,request.storyId)
+  }
+  async helperWorldbookOperation(request:TavernMethodRequests['helperWorldbookOperation']):Promise<TavernMethodResults['helperWorldbookOperation']> {
+    const guard = helperFrameWriteGuard(this.state,request,request.frameLease)
+    if (request.operation === 'get') {
+      await this.state.waitForSessionCommits(request.sessionId)
+      return helperWorldbookOperation(this.ctx,this.state,request.sessionId,request.messageId,request,guard)
+    }
+    return this.state.enqueueSessionTask(request.sessionId, () => helperWorldbookOperation(this.ctx,this.state,request.sessionId,request.messageId,request,guard))
+  }
+  async getSessionHelperScripts(request:TavernMethodRequests['getSessionHelperScripts']):Promise<TavernMethodResults['getSessionHelperScripts']> {
+    await this.state.waitForSessionCommits(request.sessionId)
     return this.state.getSessionHelperScripts(request.sessionId,request.storyId)
   }
   commitSessionHelperScripts(request:TavernMethodRequests['commitSessionHelperScripts']):Promise<TavernMethodResults['commitSessionHelperScripts']> {
-    return this.state.commitSessionHelperScripts(request.sessionId,request,helperFrameWriteGuard(this.state,request,request.frameLease))
+    return this.state.enqueueSessionTask(request.sessionId, () => this.state.commitSessionHelperScripts(request.sessionId,request,helperFrameWriteGuard(this.state,request,request.frameLease)))
   }
   getHelperScriptLibrary(request:TavernMethodRequests['getHelperScriptLibrary']):Promise<TavernMethodResults['getHelperScriptLibrary']> {
     return this.state.getHelperScriptLibrary(request.target)
@@ -1110,27 +1185,40 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
     // 面板/服务层非会话写路径一律走 plainWorkspace（floor 恒 null，绝不记 WAL）：
     // 生成进行中的面板编辑若走携带楼层的实例，会被记进当前楼层 WAL、回退时静默改回旧值。
     const ws = await this.state.plainWorkspace(request.cardId, request.storyId)
-    let entry: MemoryEntry | null
-    if (request.id) {
-      entry = await ws.memory.update(
-        request.id,
-        { body: request.body, tags: request.tags, keys: request.keys },
-        { listMode: 'replace' },
-      )
-      if (!entry) throw new FloorError('memory-not-found', `记忆 ${request.id} 不存在`)
-    } else {
-      entry = await ws.memory.write({ body: request.body, tags: request.tags, keys: request.keys })
-    }
-    await rebuildIndex(ws.fs, estimateTokens)
-    return { id: entry.id }
+    return withWorkspaceLock(ws.fs.root, async () => {
+      let entry: MemoryEntry | null
+      if (request.id) {
+        entry = await ws.memory.update(
+          request.id,
+          { body: request.body, tags: request.tags, keys: request.keys },
+          { listMode: 'replace' },
+        )
+        if (!entry) throw new FloorError('memory-not-found', `记忆 ${request.id} 不存在`)
+      } else {
+        entry = await ws.memory.write({ body: request.body, tags: request.tags, keys: request.keys })
+      }
+      await rebuildIndex(ws.fs, estimateTokens)
+      return { id: entry.id }
+    })
   }
 
   async deleteMemory(request: { cardId: string; storyId?: string; id: string }): Promise<TavernMethodResults['deleteMemory']> {
     // 面板写路径走 plainWorkspace（理由同 saveMemory）。
     const ws = await this.state.plainWorkspace(request.cardId, request.storyId)
-    const deleted = await ws.memory.delete(request.id)
-    if (deleted) await rebuildIndex(ws.fs, estimateTokens)
-    return { deleted }
+    return withWorkspaceLock(ws.fs.root, async () => {
+      const deleted = await ws.memory.delete(request.id)
+      if (deleted) {
+        await rebuildIndex(ws.fs, estimateTokens)
+        const key = request.storyId ?? request.cardId
+        if (this.state.pendingMemoryCompress.has(key)) {
+          const stats = await ws.memory.stats()
+          if (stats.count <= this.state.config.memory.maxEntries && stats.tokens <= this.state.config.memory.maxTokens) {
+            this.state.pendingMemoryCompress.delete(key)
+          }
+        }
+      }
+      return { deleted }
+    })
   }
 
   /** 无 LLM 的确定性归并：原文逐条保留，只减少条目数，不宣称减少 token。 */
@@ -1152,15 +1240,24 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
   async compressMemories(request: { cardId: string; storyId?: string }): Promise<TavernMethodResults['compressMemories']> {
     // 面板写路径走 plainWorkspace（理由同 saveMemory）。
     const ws = await this.state.plainWorkspace(request.cardId, request.storyId)
-    const batch = await ws.memory.oldest(this.state.config.memory.compressBatch)
-    if (batch.length < 2) return { merged: 0 }
-    const merged = batch.map((b, i) => `${i + 1}. ${b.body}`).join('\n')
-    // 顺序与 memoryMaintenance.compressOldestMemories 一致：先落合并条目成功后再归档原条目——
-    // 先归档的话，合并写失败会让整批从活跃库消失（丢事实）；反过来写失败批次原样保留可重试，
-    // 归档中途失败的最坏结果只是新旧并存，下次压缩把残余再合并一次，有冗余但不丢事实。
-    const count = await ws.memory.mergeBatch(batch, merged, 'merge')
-    await rebuildIndex(ws.fs, estimateTokens)
-    return { merged: count }
+    return withWorkspaceLock(ws.fs.root, async () => {
+      const batch = await ws.memory.oldest(this.state.config.memory.compressBatch)
+      if (batch.length < 2) return { merged: 0 }
+      const merged = batch.map((b, i) => `${i + 1}. ${b.body}`).join('\n')
+      // 顺序与 memoryMaintenance.compressOldestMemories 一致：先落合并条目成功后再归档原条目——
+      // 先归档的话，合并写失败会让整批从活跃库消失（丢事实）；反过来写失败批次原样保留可重试，
+      // 归档中途失败的最坏结果只是新旧并存，下次压缩把残余再合并一次，有冗余但不丢事实。
+      const count = await ws.memory.mergeBatch(batch, merged, 'merge')
+      await rebuildIndex(ws.fs, estimateTokens)
+      const key = request.storyId ?? request.cardId
+      if (count > 0 && this.state.pendingMemoryCompress.has(key)) {
+        const stats = await ws.memory.stats()
+        if (stats.count <= this.state.config.memory.maxEntries && stats.tokens <= this.state.config.memory.maxTokens) {
+          this.state.pendingMemoryCompress.delete(key)
+        }
+      }
+      return { merged: count }
+    })
   }
 
   // ── 世界状态 ──────────────────────────────────────────────────────────────
@@ -1173,9 +1270,11 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
   async revokeWorldDelta(request: { cardId: string; storyId?: string; id: string }): Promise<TavernMethodResults['revokeWorldDelta']> {
     // 面板写路径走 plainWorkspace（理由同 saveMemory）。
     const ws = await this.state.plainWorkspace(request.cardId, request.storyId)
-    const revoked = await ws.deltas.revoke(request.id)
-    if (revoked) await rebuildIndex(ws.fs, estimateTokens)
-    return { revoked }
+    return withWorkspaceLock(ws.fs.root, async () => {
+      const revoked = await ws.deltas.revoke(request.id)
+      if (revoked) await rebuildIndex(ws.fs, estimateTokens)
+      return { revoked }
+    })
   }
 
   async addWorldDelta(request: {
@@ -1192,17 +1291,19 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
     }
     // 面板写路径走 plainWorkspace（理由同 saveMemory）。
     const ws = await this.state.plainWorkspace(request.cardId, request.storyId)
-    const delta = await ws.deltas.append({
-      type: request.type,
-      ref: request.ref ?? null,
-      content: request.content.trim(),
-      keys: request.keys ?? [],
-      order: request.order ?? 100,
-      sourceRange: 'manual',
-      expires: null,
+    return withWorkspaceLock(ws.fs.root, async () => {
+      const delta = await ws.deltas.append({
+        type: request.type,
+        ref: request.ref ?? null,
+        content: request.content.trim(),
+        keys: request.keys ?? [],
+        order: request.order ?? 100,
+        sourceRange: 'manual',
+        expires: null,
+      })
+      await rebuildIndex(ws.fs, estimateTokens)
+      return { id: delta.id }
     })
-    await rebuildIndex(ws.fs, estimateTokens)
-    return { id: delta.id }
   }
 
   async exportMergedLorebook(request: { cardId: string; storyId?: string }): Promise<TavernMethodResults['exportMergedLorebook']> {
@@ -1311,15 +1412,21 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
     // 指纹一致直接回缓存：一次 stat 代替全文读 + Base64 编码（指纹口径见 avatarCache 注释）。
     const info = await ws.fs.stat('card.png')
     const fingerprint = info ? `${info.mtimeMs}:${info.size}` : 'missing'
-    const cached = this.avatarCache.get(request.cardId)
-    if (cached && cached.fingerprint === fingerprint) return { dataUrl: cached.dataUrl }
+    const cacheKey = process.platform === 'win32' ? request.cardId.toLowerCase() : request.cardId
+    const cached = this.avatarCache.get(cacheKey)
+    if (cached && cached.fingerprint === fingerprint) {
+      this.avatarCache.delete(cacheKey)
+      this.avatarCache.set(cacheKey, cached)
+      return { dataUrl: cached.dataUrl }
+    }
     const bytes = info ? await ws.fs.readBytes('card.png') : null
     const dataUrl = bytes ? `data:image/png;base64,${Buffer.from(bytes).toString('base64')}` : null
-    if (this.avatarCache.size >= AVATAR_CACHE_MAX && !this.avatarCache.has(request.cardId)) {
+    if (this.avatarCache.size >= AVATAR_CACHE_MAX && !this.avatarCache.has(cacheKey)) {
       const oldest = this.avatarCache.keys().next().value
       if (oldest !== undefined) this.avatarCache.delete(oldest)
     }
-    this.avatarCache.set(request.cardId, { fingerprint, dataUrl })
+    this.avatarCache.delete(cacheKey)
+    this.avatarCache.set(cacheKey, { fingerprint, dataUrl })
     return { dataUrl }
   }
 

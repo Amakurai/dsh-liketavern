@@ -88,6 +88,15 @@ function recordContinuableFloor(remote: TavernRemote, sessionId: string, message
   }
 }
 
+function clearContinuableFloor(remote: TavernRemote, sessionId: string, messageId: string): void {
+  const bySession = latestContinuableByRemote.get(remote)
+  if (bySession?.get(sessionId) !== messageId) return
+  bySession.delete(sessionId)
+  if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+    window.dispatchEvent(new CustomEvent(CONTINUABLE_CHANGED_EVENT, { detail: sessionId }))
+  }
+}
+
 function getRecordedContinuableFloor(remote: TavernRemote, sessionId: string): string | undefined {
   return latestContinuableByRemote.get(remote)?.get(sessionId)
 }
@@ -211,17 +220,17 @@ function FloorActions(props: FloorActionsProps) {
   }, [bound, messageId, sessionId])
   const floorState = floorStateLoader.state.status === 'ready' ? floorStateLoader.state.value : null
   useEffect(() => {
-    if (hasBatchStates && messageId && floorState?.canContinue) {
-      recordContinuableFloor(remote, sessionId, messageId)
-    }
-  }, [hasBatchStates, remote, sessionId, messageId, floorState?.canContinue])
+    if (!hasBatchStates || !messageId || !floorState) return
+    if (floorState.canContinue) recordContinuableFloor(remote, sessionId, messageId)
+    else clearContinuableFloor(remote, sessionId, messageId)
+  }, [hasBatchStates, remote, sessionId, messageId, floorState])
   const greetState = floorState?.greeting ?? null
   const swipe = greetState?.swipe ?? null
   const isGreeting = greetState?.isGreeting === true
   const started = greetState?.started === true
   const siblingSwipe = floorState?.siblings.swipe ?? null
   const canContinue = floorState === null
-    ? true
+    ? !isSupersededContinuable
     : floorState.canContinue && !isSupersededContinuable
 
   /** 跑一个产生分支会话的操作；成功后直接跳转到分支（续跑过程在分支里原生流式可见），并写入分支标题。 */
@@ -273,10 +282,11 @@ function FloorActions(props: FloorActionsProps) {
     setOperation(delta < 0 ? 'branch-prev' : 'branch-next')
     void openChildSession(navigation, target, undefined, sessionId)
       .catch(() => {
+        if (!active.current) return
         toast.show(t('actions.branchGone'))
         floorStateLoader.reload()
       })
-      .finally(() => { submitting.current = false; setOperation(null) })
+      .finally(() => { submitting.current = false; if (active.current) setOperation(null) })
   }
 
   const onEdit = async () => {
@@ -643,10 +653,11 @@ function InterruptedFloorActions(props: InterruptedFloorActionsProps) {
     setOperation(delta < 0 ? 'branch-prev' : 'branch-next')
     void openChildSession(navigation, target, undefined, sessionId)
       .catch(() => {
+        if (!active.current) return
         toast.show(t('actions.branchGone'))
         siblingLoader.reload()
       })
-      .finally(() => { submitting.current = false; setOperation(null) })
+      .finally(() => { submitting.current = false; if (active.current) setOperation(null) })
   }
 
   return (

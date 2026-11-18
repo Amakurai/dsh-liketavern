@@ -23,6 +23,18 @@ function closeTagPattern(normalized:string):RegExp {
   return cached
 }
 
+function hasCodeIndent(line: string): boolean {
+  let cols = 0
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i]!
+    if (ch === ' ') cols += 1
+    else if (ch === '\t') cols += 4 - (cols % 4)
+    else break
+    if (cols >= 4) return true
+  }
+  return false
+}
+
 /**
  * 跳过不会在当前脚本环境中成为活动 DOM 的内容区。template 允许合理嵌套；其中的
  * script/style/noscript 字节也不能伪造 template 闭标签。其它既有 RAW_TEXT 仍沿用
@@ -74,7 +86,7 @@ export function findHtmlDocument(text:string,code?:ReturnType<typeof markdownCod
       continue
     }
     const line=text.slice(text.lastIndexOf('\n',at-1)+1,at)
-    if(start<0&&/^(?: {4}|\t)/.test(line))continue
+    if(start<0&&hasCodeIndent(line))continue
     const tag=token[1]?.toLowerCase(),closing=raw.startsWith('</')
     if(start<0&&(/^<!doctype/i.test(raw)||!closing&&(tag==='html'||tag==='body'))) {
       start=at;root=tag==='body'?'body':'html'
@@ -130,7 +142,7 @@ export function findHtmlFragment(text: string, code?: ReturnType<typeof markdown
     if (/^<!doctype/i.test(raw)) break
     const tag = token[1]!.toLowerCase(), closing = raw.startsWith('</')
     const line = text.slice(text.lastIndexOf('\n', at - 1) + 1, at)
-    const indented = /^(?: {4}|\t)/.test(line)
+    const indented = hasCodeIndent(line)
     if (!depth && !closing && (tag === 'html' || tag === 'body')) {
       if (indented) continue
       break

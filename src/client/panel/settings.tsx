@@ -13,7 +13,7 @@ import { useDraftRestored, useDraftState } from '../draftPersistence.js'
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { MAX_PRESET_STOP_CHARS, MAX_PRESET_STOP_SEQUENCES } from '../../core/presetSampling.js'
 import { notifyAllSessionBindingsChanged } from '../cache.js'
-import { setSpeakerHeader } from '../displayPrefs.js'
+import { bumpDisplaySettingsRevision, setSpeakerHeader } from '../displayPrefs.js'
 import { setTavernLocale, useT } from '../i18n.js'
 import { applySettingsPatch, changedSettingsPatch } from '../settingsPatch.js'
 import { DEFAULT_PROMPT_PREFERENCES, EMPTY_SESSION_DEFAULTS, type PresetSummary, type TavernRemote, type TavernSettings } from '../types.js'
@@ -118,6 +118,7 @@ export function SettingsSection(props: { remote: TavernRemote; sessions?: Sessio
         return applySettingsPatch(saved, unsaved)
       })
       if ('defaults' in patch || 'interactiveCards' in patch) notifyAllSessionBindingsChanged()
+      if ('interactiveCards' in patch || 'cardNetworkWhitelist' in patch) bumpDisplaySettingsRevision()
       toast.show(toastText)
     })
 

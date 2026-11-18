@@ -172,8 +172,10 @@ export function installHelperLiveEvents(sessions: Pick<ClientContext['sessions']
         // turn/end 已先被捕获：把补发的接收事件插到待发送结束信号之前，保持 message_received 先于 generation_ended。
         const signal: Signal = { kind: 'assistant', seq: event.seq, turn: turnNumber }
         const index = view.queue.findIndex(item => item.kind === 'end' && item.turn === turnNumber)
-        if (index >= 0) view.queue.splice(index, 0, signal)
-        else enqueue(view, signal)
+        if (index >= 0) {
+          if (view.queue.length >= MAX_QUEUE) throw new Error('宿主消息事件超过待处理预算')
+          view.queue.splice(index, 0, signal)
+        } else enqueue(view, signal)
       } else {
         let created = view.turns.get(turnNumber)
         if (!created) {
@@ -227,7 +229,8 @@ export function installHelperLiveEvents(sessions: Pick<ClientContext['sessions']
   }
   const changed = (event: Event) => {
     const view = selected
-    if (!view || (event as CustomEvent<unknown>).detail !== view.sessionId) return
+    const target = (event as CustomEvent<unknown>).detail
+    if (!view || (target && target !== view.sessionId)) return
     const epoch = view.epoch, probe = ++view.probe
     void read(view, { sessionId: view.sessionId }, epoch).then(state => {
       if (!current(view, epoch) || probe !== view.probe) return

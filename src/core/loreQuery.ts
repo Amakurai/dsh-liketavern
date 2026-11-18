@@ -164,7 +164,7 @@ function budgetLoreItems<T extends { metadataTruncated?: boolean; truncated?: bo
   ) => TokenCharCounts,
   extraHint?: string,
 ): LoreBudgetResult<T> {
-  const limit = Math.max(0, Math.floor(budget)), out: T[] = []
+  const limit = Number.isNaN(budget) ? 0 : Math.max(0, Math.floor(budget)), out: T[] = []
   const baseHint = mode === 'catalog' ? '用 uid 或完整 key 取正文；disabled 条目仍可读。' : entries.length === 0 ? '无匹配。先不带参数看目录。' : ''
   const mergedHint = extraHint ? (baseHint ? `${baseHint} ${extraHint}` : extraHint) : baseHint
   const make = () => stampAssetTokens({ ok: true, mode, count: entries.length, entries: out, tokensUsed: 0,

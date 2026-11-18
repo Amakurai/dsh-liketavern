@@ -39,43 +39,45 @@ export function evictHelperStateCache(root: string, options?: { prefix?: boolean
 }
 
 export async function loadHelperState(fs: WorkspaceFs): Promise<HelperState> {
-  const key = helperCacheKey(fs.root)
-  const ledger = openLedger(fs.root)
-  const revision = ledger.counter
-  const epoch = ledger.epoch
-  const info = await fs.stat(HELPER_STATE_PATH)
-  if (info && info.size > 4 * 1024 * 1024) throw new Error('酒馆助手状态文件超限')
-  const cached = helperStateCache.get(key)
-  if (
-    cached &&
-    cached.epoch === epoch &&
-    !writtenSince(ledger, HELPER_STATE_PATH, cached.revision) &&
-    sameFileStat(cached.stat, info)
-  ) {
-    rememberHelperState(key, cached)
-    return cached.stat === null ? { scopes: {}, extras: {} } : structuredClone(cached.state)
-  }
-  const raw = await fs.readText(HELPER_STATE_PATH)
-  if (raw === null) {
-    if (info === null && !writtenSince(ledger, HELPER_STATE_PATH, revision) && ledger.epoch === epoch) {
-      rememberHelperState(key, { stat: null, revision, epoch, state: { scopes: {}, extras: {} } })
+  return withWorkspaceLock(fs.root, async () => {
+    const key = helperCacheKey(fs.root)
+    const ledger = openLedger(fs.root)
+    const revision = ledger.counter
+    const epoch = ledger.epoch
+    const info = await fs.stat(HELPER_STATE_PATH)
+    if (info && info.size > 4 * 1024 * 1024) throw new Error('酒馆助手状态文件超限')
+    const cached = helperStateCache.get(key)
+    if (
+      cached &&
+      cached.epoch === epoch &&
+      !writtenSince(ledger, HELPER_STATE_PATH, cached.revision) &&
+      sameFileStat(cached.stat, info)
+    ) {
+      rememberHelperState(key, cached)
+      return cached.stat === null ? { scopes: {}, extras: {} } : structuredClone(cached.state)
     }
-    return {scopes:{},extras:{}}
-  }
-  const parsed: unknown = JSON.parse(raw)
-  if (!helperRecord(parsed) || parsed.version !== 1 || !helperRecord(parsed.scopes)) throw new Error('酒馆助手状态文件损坏')
-  const scopes = helperTable(parsed.scopes) as HelperScopes
-  for (const [key, table] of Object.entries(scopes)) { helperScopeKey(key); helperTable(table) }
-  const extras=helperTable(parsed.extras===undefined?{}:parsed.extras) as HelperState['extras']
-  for(const [id,table] of Object.entries(extras)){if(!id||id.length>256)throw new Error('消息身份无效');helperTable(table)}
-  const rawSwipes=helperTable(parsed.swipes===undefined?{}:parsed.swipes),swipes:Record<string,HelperSwipeSet>={}
-  for(const [id,value] of Object.entries(rawSwipes)){if(!id||id.length>256)throw new Error('消息身份无效');swipes[id]=parseHelperSwipes(value)}
-  const state: HelperState = {scopes,extras,swipes,...(parsed.mvu===undefined?{}:{mvu:parseHelperMvuState(parsed.mvu)})}
-  const afterStat = await fs.stat(HELPER_STATE_PATH)
-  if (info !== null && sameFileStat(info, afterStat) && !writtenSince(ledger, HELPER_STATE_PATH, revision) && ledger.epoch === epoch) {
-    rememberHelperState(key, { stat: info, revision, epoch, state })
-  }
-  return structuredClone(state)
+    const raw = await fs.readText(HELPER_STATE_PATH)
+    if (raw === null) {
+      if (info === null && !writtenSince(ledger, HELPER_STATE_PATH, revision) && ledger.epoch === epoch) {
+        rememberHelperState(key, { stat: null, revision, epoch, state: { scopes: {}, extras: {} } })
+      }
+      return { scopes: {}, extras: {} }
+    }
+    const parsed: unknown = JSON.parse(raw)
+    if (!helperRecord(parsed) || parsed.version !== 1 || !helperRecord(parsed.scopes)) throw new Error('酒馆助手状态文件损坏')
+    const scopes = helperTable(parsed.scopes) as HelperScopes
+    for (const [key, table] of Object.entries(scopes)) { helperScopeKey(key); helperTable(table) }
+    const extras = helperTable(parsed.extras === undefined ? {} : parsed.extras) as HelperState['extras']
+    for (const [id, table] of Object.entries(extras)) { if (!id || id.length > 256) throw new Error('消息身份无效'); helperTable(table) }
+    const rawSwipes = helperTable(parsed.swipes === undefined ? {} : parsed.swipes), swipes: Record<string, HelperSwipeSet> = {}
+    for (const [id, value] of Object.entries(rawSwipes)) { if (!id || id.length > 256) throw new Error('消息身份无效'); swipes[id] = parseHelperSwipes(value) }
+    const state: HelperState = { scopes, extras, swipes, ...(parsed.mvu === undefined ? {} : { mvu: parseHelperMvuState(parsed.mvu) }) }
+    const afterStat = await fs.stat(HELPER_STATE_PATH)
+    if (info !== null && sameFileStat(info, afterStat) && !writtenSince(ledger, HELPER_STATE_PATH, revision) && ledger.epoch === epoch) {
+      rememberHelperState(key, { stat: info, revision, epoch, state })
+    }
+    return structuredClone(state)
+  })
 }
 export async function loadHelperScopes(fs:WorkspaceFs):Promise<HelperScopes>{return (await loadHelperState(fs)).scopes}
 /** 同文件保存变量与 extra，整批在一次原子正文替换中生效。 */
@@ -86,29 +88,31 @@ export async function saveHelperState(fs:WorkspaceFs,state:HelperState):Promise<
   for(const [id,table] of Object.entries(extras)){if(!id||id.length>256)throw new Error('消息身份无效');helperTable(table)}
   const swipes=helperTable(state.swipes??{}),normalizedSwipes:Record<string,HelperSwipeSet>={}
   for(const [id,value] of Object.entries(swipes)){if(!id||id.length>256)throw new Error('消息身份无效');normalizedSwipes[id]=parseHelperSwipes(value)}
-  const serializedSwipes=Object.keys(swipes).length?{swipes}:{}
+  const serializedSwipes=Object.keys(normalizedSwipes).length?{swipes:normalizedSwipes}:{}
   const normalizedMvu=state.mvu===undefined?undefined:parseHelperMvuState(state.mvu)
   const raw=JSON.stringify({version:1,scopes,...(Object.keys(extras).length?{extras}:{}),...serializedSwipes,...(normalizedMvu===undefined?{}:{mvu:normalizedMvu})})
   const byteLength=Buffer.byteLength(raw)
   if(byteLength>4*1024*1024)throw new Error('酒馆助手状态文件超限')
-  const existingStat=await fs.stat(HELPER_STATE_PATH)
-  if(existingStat===null || existingStat.size!==byteLength || await fs.readText(HELPER_STATE_PATH)!==raw){
-    try{await fs.writeText(HELPER_STATE_PATH,raw)}
-    catch(error){if(await fs.readText(HELPER_STATE_PATH)!==raw)throw error}
-  }
-  const ledger = openLedger(fs.root)
-  const revision = ledger.counter
-  const epoch = ledger.epoch
-  const afterStat = await fs.stat(HELPER_STATE_PATH)
-  if (afterStat !== null && ledger.epoch === epoch && !writtenSince(ledger, HELPER_STATE_PATH, revision)) {
-    const cachedState: HelperState = {
-      scopes: scopes as HelperScopes,
-      extras: extras as HelperState['extras'],
-      swipes: normalizedSwipes,
-      ...(normalizedMvu === undefined ? {} : { mvu: normalizedMvu }),
+  await withWorkspaceLock(fs.root, async () => {
+    const existingStat=await fs.stat(HELPER_STATE_PATH)
+    if(existingStat===null || existingStat.size!==byteLength || await fs.readText(HELPER_STATE_PATH)!==raw){
+      try{await fs.writeText(HELPER_STATE_PATH,raw)}
+      catch(error){if(await fs.readText(HELPER_STATE_PATH)!==raw)throw error}
     }
-    rememberHelperState(helperCacheKey(fs.root), { stat: afterStat, revision, epoch, state: structuredClone(cachedState) })
-  }
+    const ledger = openLedger(fs.root)
+    const revision = ledger.counter
+    const epoch = ledger.epoch
+    const afterStat = await fs.stat(HELPER_STATE_PATH)
+    if (afterStat !== null && ledger.epoch === epoch && !writtenSince(ledger, HELPER_STATE_PATH, revision)) {
+      const cachedState: HelperState = {
+        scopes: scopes as HelperScopes,
+        extras: extras as HelperState['extras'],
+        swipes: normalizedSwipes,
+        ...(normalizedMvu === undefined ? {} : { mvu: normalizedMvu }),
+      }
+      rememberHelperState(helperCacheKey(fs.root), { stat: afterStat, revision, epoch, state: structuredClone(cachedState) })
+    }
+  })
 }
 export function applyHelperChanges(scopes: HelperScopes, changes: HelperVariableChange[]): HelperScopes {
   const next = {...scopes}

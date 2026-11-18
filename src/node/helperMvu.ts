@@ -9,6 +9,7 @@ import {enabledHelperLibraries} from '../core/helperScripts.js'
 import {isTavernGreetingEvent} from '../core/greetingLog.js'
 import {isContinueInstruction} from '../core/dshPrompt.js'
 import type {SessionBinding} from '../core/binding.js'
+import {parseSessionBinding} from './bindings.js'
 import {loadHelperState,saveHelperState,type HelperState} from '../state/helper.js'
 import {withWorkspaceLock} from '../state/workspaceLock.js'
 import {getHelperSnapshot,helperHistoryOf,helperHistoryRevision} from './helperRuntime.js'
@@ -202,23 +203,26 @@ export async function assertHelperMvuWritable(state:TavernState,sessionId:string
   await withWorkspaceLock(ws.fs.root,async()=>{const mvu=parseHelperMvuState((await loadHelperState(ws.fs)).mvu);if(mvu.pending.length||await unfinalizedReceipt(state,binding!,sessionId,mvu)||await unregisteredFloor(state,binding!,sessionId,mvu))throw new Error('自动 MVU 正在更新当前剧情，请等待事务完成')})
 }
 async function sources(state:TavernState,binding:SessionBinding):Promise<HelperMvuInitialSource[]>{
-  const known=new Set(await state.listLorebooks()),seen=new Set<string>()
+  const seen=new Set<string>()
   const tasks:Array<()=>Promise<HelperMvuInitialSource|null>>=[]
-  const plan=(id:string,role:'global'|'character')=>{
-    if(seen.has(id))return
-    if(!known.has(id))throw new Error('自动 MVU 初始化世界书不存在：'+id)
-    seen.add(id)
-    tasks.push(async()=>({name:id,role,entries:(await state.loadLorebookEntries(id,role)).map(({uid,comment,content})=>({uid,comment,content}))}))
-  }
-  for(const id of binding.lorebookIds)plan(id,'global')
-  if(binding.characterLorebookId)plan(binding.characterLorebookId,'character')
+  const requested:Array<{id:string;role:'global'|'character'}>=[]
+  for(const id of binding.lorebookIds)requested.push({id,role:'global'})
+  if(binding.characterLorebookId)requested.push({id:binding.characterLorebookId,role:'character'})
   else if(binding.useEmbeddedLorebook!==false){
     tasks.push(async()=>{
       const [embedded,entries]=await Promise.all([state.loadCharacterLorebookRaw(binding.cardId),state.loadCharacterLorebookEntries(binding.cardId)])
       return embedded?{name:embedded.name,role:'character',entries:entries.map(({uid,comment,content})=>({uid,comment,content}))}:null
     })
   }
-  for(const id of binding.characterLorebookIds??[])plan(id,'character')
+  for(const id of binding.characterLorebookIds??[])requested.push({id,role:'character'})
+  for(const {id,role} of requested){
+    const resolved=await state.resolveLorebookFileId(id)
+    if(!resolved)throw new Error('自动 MVU 初始化世界书不存在：'+id)
+    const dedupeKey=process.platform==='win32'?resolved.toLowerCase():resolved
+    if(seen.has(dedupeKey))continue
+    seen.add(dedupeKey)
+    tasks.push(async()=>({name:resolved,role,entries:(await state.loadLorebookEntries(resolved,role)).map(({uid,comment,content})=>({uid,comment,content}))}))
+  }
   const loaded=await Promise.all(tasks.map(task=>task()))
   const result=loaded.filter((item):item is HelperMvuInitialSource=>item!==null)
   helperJson(result,2*1024*1024);return result
@@ -326,7 +330,8 @@ export async function prepareHelperMvuJob(ctx:Context,state:TavernState,request:
     if(continuationMessageIds.some(index=>index<0))throw new Error('自动 MVU 续写来源不在当前剧情快照中')
     await floorReady(state,binding,request.sessionId,job)
     const key=leaseKey(request),map=leaseMap(state),old=map.get(key)
-    const bindingDigest=hash(binding),historyDigest=helperHistoryRevision(history),beforeDigest=stateHash(saved)
+    const {cardName:_cardName,...semanticBinding}=parseSessionBinding(binding)
+    const bindingDigest=hash(semanticBinding),historyDigest=helperHistoryRevision(history),beforeDigest=stateHash(saved)
     let cachedScriptsRev:string|undefined
     const getScriptsRev=async()=>(cachedScriptsRev??=await scriptRevision(state,request))
     if(old&&old.job.id===job.id&&!old.committed){
@@ -365,7 +370,8 @@ export async function commitHelperMvuJob(ctx:Context,state:TavernState,request:R
     if(!enabled(state,binding))throw new Error('自动 MVU 已关闭')
     const key=leaseKey(request),lease=leaseMap(state).get(key)
     if(!lease||lease.runtimeId!==request.runtimeId||lease.token!==request.token||lease.job.id!==request.jobId)throw new Error('自动 MVU 执行租约已失效，请重新准备')
-    if(hash(binding)!==lease.binding||await scriptRevision(state,request)!==lease.scripts)throw new Error('自动 MVU 绑定或脚本库已改变')
+    const {cardName:_cardName,...semanticBinding}=parseSessionBinding(binding)
+    if(hash(semanticBinding)!==lease.binding||await scriptRevision(state,request)!==lease.scripts)throw new Error('自动 MVU 绑定或脚本库已改变')
     const events=await readDisplaySessionEvents(ctx,request.sessionId)
     verifyTarget(events,lease.job)
     if(helperHistoryRevision(helperHistoryOf(events,{char:'',user:''}))!==lease.history)throw new Error('自动 MVU 执行期间聊天历史已改变')

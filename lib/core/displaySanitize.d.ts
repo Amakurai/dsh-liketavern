@@ -1,3 +1,5 @@
+/** 是否为展示层应隐藏的机读块标签名（忽略大小写）。 */
+export declare function isDisplayMetaTagName(name: string): boolean;
 /** 只删除机读块及其内容；不 trim，也不处理 details/style/widget/透明协议壳。 */
 export declare function stripOpaqueDisplayMeta(text: string, removeComments?: boolean): string;
 /** 跨有序片段延续机读标签状态，再把保留内容映射回原 kind/title。 */

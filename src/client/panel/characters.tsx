@@ -151,6 +151,7 @@ function CharacterDetailDialog(props: { remote: TavernRemote; cardId: string; on
   const preserveRestored = useRef(restored && draft !== null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const pending = useRef(false)
   const toast = useToast()
   const loaded: CharacterDetail | null = state.status === 'ready' ? state.value : null
   const detail = draft ?? loaded
@@ -177,68 +178,84 @@ function CharacterDetailDialog(props: { remote: TavernRemote; cardId: string; on
     setDraft(loaded)
   }, [loaded, setDraft])
 
-  const close = () => guard.request(() => {
-    setDraft(null)
-    props.onClose()
-  })
+  const close = () => {
+    if (pending.current) return
+    guard.request(() => {
+      setDraft(null)
+      props.onClose()
+    })
+  }
 
-  const set = (patch: Partial<CharacterDetail>) => setDraft(detail ? { ...detail, ...patch } : detail)
+  const set = (patch: Partial<CharacterDetail>) => {
+    if (!pending.current) setDraft(detail ? { ...detail, ...patch } : detail)
+  }
   const interactiveHtml = typeof detail?.extensions?.interactiveHtml === 'string' ? (detail.extensions.interactiveHtml as string) : null
 
   const save = async () => {
-    if (!detail) return
+    if (!detail || pending.current) return
     // 旧版恢复草稿没有基线版本，不能拿刚读取的版本替它授权覆盖。
     if (!detail.revision) { setError(t('characters.detail.missingRevision')); return }
     if (!detail.name.trim()) {
       setError(t('characters.detail.nameRequired'))
       return
     }
-    await runAsync(setBusy, setError, async () => {
-      const r = await remote.saveCharacter({
-        cardId,
-        expectedRevision: detail.revision,
-        name: detail.name,
-        description: detail.description,
-        personality: detail.personality,
-        scenario: detail.scenario,
-        firstMes: detail.firstMes,
-        alternateGreetings: detail.alternateGreetings.map((s) => s.trim()).filter(Boolean),
-        mesExample: detail.mesExample,
-        systemPrompt: detail.systemPrompt,
-        postHistoryInstructions: detail.postHistoryInstructions,
-        creatorNotes: detail.creatorNotes,
-        creator: detail.creator,
-        characterVersion: detail.characterVersion,
-        tags: detail.tags,
-        depthPrompt: detail.depthPrompt ?? null,
+    pending.current = true
+    try {
+      await runAsync(setBusy, setError, async () => {
+        const r = await remote.saveCharacter({
+          cardId,
+          expectedRevision: detail.revision,
+          name: detail.name,
+          description: detail.description,
+          personality: detail.personality,
+          scenario: detail.scenario,
+          firstMes: detail.firstMes,
+          alternateGreetings: detail.alternateGreetings.map((s) => s.trim()).filter(Boolean),
+          mesExample: detail.mesExample,
+          systemPrompt: detail.systemPrompt,
+          postHistoryInstructions: detail.postHistoryInstructions,
+          creatorNotes: detail.creatorNotes,
+          creator: detail.creator,
+          characterVersion: detail.characterVersion,
+          tags: detail.tags,
+          depthPrompt: detail.depthPrompt ?? null,
+        })
+        const err = errOf(r)
+        if (err) { setError(err); invalidateCharacter(cardId) }
+        else if (r.ok) {
+          // 保存回执推进版本，但只更新版本字段，不能覆盖往返期间的新键入。
+          const revision = r.value.revision
+          appliedRef.current = { ...detail, revision }
+          setDraft(current => current ? { ...current, revision } : current)
+          toast.show(t('characters.detail.saved', { name: detail.name }))
+          // 先失效详情/头像缓存再 reload，否则详情弹窗与聊天气泡继续吃旧值。
+          notifyCharacterChanged(cardId)
+          reload()
+          props.onSaved()
+        }
       })
-      const err = errOf(r)
-      if (err) { setError(err); invalidateCharacter(cardId) }
-      else if (r.ok) {
-        // 保存回执推进版本，但只更新版本字段，不能覆盖往返期间的新键入。
-        const revision = r.value.revision
-        appliedRef.current = { ...detail, revision }
-        setDraft(current => current ? { ...current, revision } : current)
-        toast.show(t('characters.detail.saved', { name: detail.name }))
-        // 先失效详情/头像缓存再 reload，否则详情弹窗与聊天气泡继续吃旧值。
-        notifyCharacterChanged(cardId)
-        reload()
-        props.onSaved()
-      }
-    })
+    } finally {
+      pending.current = false
+    }
   }
 
   const exportCard = async (kind: 'json' | 'png') => {
-    await runAsync(setBusy, setError, async () => {
-      const r = await remote.exportCharacter({ cardId })
-      if (!r.ok) {
-        setError(r.error.message)
-        return
-      }
-      if (kind === 'json') downloadJson(`${r.value.name}.json`, r.value.json)
-      else downloadBase64(`${r.value.name}.png`, r.value.pngBase64, 'image/png')
-      toast.show(t('characters.detail.exported', { kind: kind.toUpperCase() }))
-    })
+    if (pending.current) return
+    pending.current = true
+    try {
+      await runAsync(setBusy, setError, async () => {
+        const r = await remote.exportCharacter({ cardId })
+        if (!r.ok) {
+          setError(r.error.message)
+          return
+        }
+        if (kind === 'json') downloadJson(`${r.value.name}.json`, r.value.json)
+        else downloadBase64(`${r.value.name}.png`, r.value.pngBase64, 'image/png')
+        toast.show(t('characters.detail.exported', { kind: kind.toUpperCase() }))
+      })
+    } finally {
+      pending.current = false
+    }
   }
 
   return (

@@ -16,7 +16,7 @@ import type { WorldDelta, WorldInfoEntry } from '../core/types.js'
 import { rootIdentity, sameFileStat, type FileStatStamp } from './pathIdentity.js'
 import type { WorkspaceFs } from './workspaceFs.js'
 import { withWorkspaceLock } from './workspaceLock.js'
-import { openLedger, writtenSince, type WriteLedger } from './writeLedger.js'
+import { openLedger, writtenSince } from './writeLedger.js'
 
 const DELTA_FILE = 'state/world-delta.jsonl'
 const MAX_DELTA_CACHE_ROOTS = 64
@@ -60,12 +60,20 @@ const deltaSchema = looseObject({
  * 队列必须按工作区根共享；放在实例字段里会让两个「读全部行 → 全量重写」互相覆盖。
  */
 
+const BASE_DELTA_KEYS = new Set(['id', 'ts', 'type', 'ref', 'content', 'keys', 'order', 'sourceRange', 'expires', 'revoked'])
+
+function cloneWorldDelta(delta: WorldDelta): WorldDelta {
+  for (const key of Object.keys(delta)) {
+    if (!BASE_DELTA_KEYS.has(key)) return structuredClone(delta)
+  }
+  return { ...delta, keys: [...delta.keys] }
+}
+
 export class WorldDeltaStore {
-  private readonly ledger: WriteLedger
   private readonly cacheKey: string
 
   constructor(private readonly fs: WorkspaceFs) {
-    this.ledger = openLedger(fs.root)
+    openLedger(fs.root)
     this.cacheKey = rootIdentity(fs.root)
   }
 
@@ -90,21 +98,22 @@ export class WorldDeltaStore {
   }
 
   private async readParsedDeltas(): Promise<readonly WorldDelta[]> {
-    const revision = this.ledger.counter
-    const epoch = this.ledger.epoch
+    const ledger = openLedger(this.fs.root)
+    const revision = ledger.counter
+    const epoch = ledger.epoch
     const stat = await this.fs.stat(DELTA_FILE)
     const cached = worldDeltaCache.get(this.cacheKey)
     if (
       cached &&
       cached.epoch === epoch &&
-      !writtenSince(this.ledger, DELTA_FILE, cached.revision) &&
+      !writtenSince(ledger, DELTA_FILE, cached.revision) &&
       sameFileStat(cached.stat, stat)
     ) {
       rememberWorldDeltas(this.cacheKey, cached)
       return cached.parsed
     }
     if (stat === null) {
-      if (!writtenSince(this.ledger, DELTA_FILE, revision) && this.ledger.epoch === epoch) {
+      if (!writtenSince(ledger, DELTA_FILE, revision) && ledger.epoch === epoch) {
         rememberWorldDeltas(this.cacheKey, { stat: null, revision, epoch, parsed: [] })
       }
       return []
@@ -115,7 +124,7 @@ export class WorldDeltaStore {
       if (delta) parsed.push(delta)
     }
     const afterStat = await this.fs.stat(DELTA_FILE)
-    if (sameFileStat(stat, afterStat) && !writtenSince(this.ledger, DELTA_FILE, revision) && this.ledger.epoch === epoch) {
+    if (sameFileStat(stat, afterStat) && !writtenSince(ledger, DELTA_FILE, revision) && ledger.epoch === epoch) {
       rememberWorldDeltas(this.cacheKey, { stat, revision, epoch, parsed })
     }
     return parsed
@@ -127,16 +136,18 @@ export class WorldDeltaStore {
       const lines = await this.readRawLines()
       const delta: WorldDelta = {
         ...input,
+        keys: [...input.keys],
         id: `d-${Date.now().toString(36)}-${randomBytes(3).toString('hex')}`,
         ts: input.ts ?? new Date().toISOString(),
       }
       deltaSchema.parse(delta)
       const nextLines = [...lines, JSON.stringify(delta)]
       await this.fs.writeText(DELTA_FILE, `${nextLines.join('\n')}\n`)
-      const revision = this.ledger.counter
-      const epoch = this.ledger.epoch
+      const ledger = openLedger(this.fs.root)
+      const revision = ledger.counter
+      const epoch = ledger.epoch
       const afterStat = await this.fs.stat(DELTA_FILE)
-      if (afterStat !== null && this.ledger.epoch === epoch && !writtenSince(this.ledger, DELTA_FILE, revision)) {
+      if (afterStat !== null && ledger.epoch === epoch && !writtenSince(ledger, DELTA_FILE, revision)) {
         const parsed: WorldDelta[] = []
         for (const line of nextLines) {
           const item = WorldDeltaStore.parseLine(line)
@@ -144,7 +155,7 @@ export class WorldDeltaStore {
         }
         rememberWorldDeltas(this.cacheKey, { stat: afterStat, revision, epoch, parsed })
       }
-      return delta
+      return cloneWorldDelta(delta)
     })
   }
 
@@ -163,7 +174,7 @@ export class WorldDeltaStore {
         const expires = Date.parse(delta.expires)
         if (!Number.isNaN(expires) && expires <= now.getTime()) continue
       }
-      out.push({ ...delta, keys: [...delta.keys] })
+      out.push(cloneWorldDelta(delta))
     }
     return out
   }
@@ -181,10 +192,11 @@ export class WorldDeltaStore {
       })
       if (!found) return false
       await this.fs.writeText(DELTA_FILE, `${next.join('\n')}\n`)
-      const revision = this.ledger.counter
-      const epoch = this.ledger.epoch
+      const ledger = openLedger(this.fs.root)
+      const revision = ledger.counter
+      const epoch = ledger.epoch
       const afterStat = await this.fs.stat(DELTA_FILE)
-      if (afterStat !== null && this.ledger.epoch === epoch && !writtenSince(this.ledger, DELTA_FILE, revision)) {
+      if (afterStat !== null && ledger.epoch === epoch && !writtenSince(ledger, DELTA_FILE, revision)) {
         const parsed: WorldDelta[] = []
         for (const line of next) {
           const item = WorldDeltaStore.parseLine(line)
@@ -215,7 +227,7 @@ export class WorldDeltaStore {
         uid: delta.id,
         source: 'delta',
         sourceRef: 'world-delta',
-        keys: delta.keys,
+        keys: [...delta.keys],
         secondaryKeys: [],
         selective: false,
         selectiveLogic: 0,

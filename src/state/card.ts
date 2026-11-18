@@ -253,14 +253,43 @@ export function serializeStoredCard(cardJson: Record<string, unknown>): string {
   return text
 }
 
-/** 工作区 card.json 是归一化卡；旧文件可能只有 extensions.depth_prompt。 */
+/** 工作区 card.json 是归一化卡；旧文件可能只有 extensions.depth_prompt 或最小字段集合。 */
 export function hydrateStoredCard(record: Record<string, unknown>): CharacterCard {
-  const card = { ...record, pngBytes: null } as unknown as CharacterCard
-  if (!card.depthPrompt) {
-    const ext = isRecord(card.extensions) ? card.extensions : {}
-    card.depthPrompt = parseDepthPrompt(ext)
+  const ext = isRecord(record.extensions) ? { ...record.extensions } : {}
+  const spec = record.spec === 'chara_card_v1' || record.spec === 'chara_card_v2' || record.spec === 'chara_card_v3' || record.spec === 'unknown'
+    ? record.spec
+    : 'chara_card_v2'
+  const str = (v: unknown): string => (typeof v === 'string' ? v : '')
+  const strList = (v: unknown): string[] => (Array.isArray(v) ? v.filter((item): item is string => typeof item === 'string') : [])
+  const characterBook = isRecord(record.characterBook) && Array.isArray(record.characterBook.entries)
+    ? (record.characterBook as unknown as LorebookFile)
+    : null
+  const depthPrompt = isRecord(record.depthPrompt) && typeof record.depthPrompt.prompt === 'string' && record.depthPrompt.prompt.trim()
+    ? (record.depthPrompt as unknown as DepthPrompt)
+    : parseDepthPrompt(ext)
+  return {
+    ...(record as unknown as CharacterCard),
+    spec,
+    name: str(record.name),
+    description: str(record.description),
+    personality: str(record.personality),
+    scenario: str(record.scenario),
+    firstMes: str(record.firstMes),
+    alternateGreetings: strList(record.alternateGreetings),
+    mesExample: str(record.mesExample),
+    systemPrompt: str(record.systemPrompt),
+    postHistoryInstructions: str(record.postHistoryInstructions),
+    creatorNotes: str(record.creatorNotes),
+    creator: str(record.creator),
+    characterVersion: str(record.characterVersion),
+    tags: strList(record.tags),
+    characterBook,
+    regexScripts: Array.isArray(record.regexScripts) ? [...(record.regexScripts as CardRegexScript[])] : [],
+    extensions: ext,
+    depthPrompt,
+    pngBytes: null,
+    raw: 'raw' in record ? record.raw : record,
   }
-  return card
 }
 
 /** Pygmalion/Gradio 旧卡字段 → V1 字段（对齐 ST 导入）；这些卡没有 spec/name，只有 char_* 字段。 */

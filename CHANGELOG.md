@@ -2,6 +2,29 @@
 
 当前开发基线为 dsh `0.2.2-rc.3`；公开门槛（`engines.dsh` 与宿主 peer）为 `*`，宿主不会仅因版本号拒绝加载。接口兼容仍须逐版本验证，各构建的验证情况见 [宿主兼容记录](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/HOST_COMPATIBILITY.md)。升级宿主前请备份并核对对应版本。
 
+## 未发布
+
+- **核心提示词组装、展示净化与原生折叠边界加固**：
+  - 修复空聊天历史（`history: []`）下遗漏 `depth > 0` 的预设 `in-chat`、世界书 `@D` 与角色 `depthPrompt` 注入的问题；修正可变 `MacroContext`（原地挂载 `outlets` / 更新 `vars`）与聊天锚点 `WeakMap` 缓存校验，补齐 `stat_data` 尾随 `::` 参数的轮内宏检测。
+  - 修复引用块（`>`）内未闭合代码围栏越界至文末导致后续机读块泄漏或真实 HTML 卡面被跳过的问题，为 `markdownCodeScanner` 补充同起点记忆化与带 `fromLine` 下界的未闭合围栏线性缓存。
+  - 优化展示净化与实体/缩进边界：外层无未闭合块时保留含孤立闭标签的代码示例并消除千行未闭合围栏的二次退化；兼容 CRLF 排版折叠、HTML5 数值字符引用替换（NUL、代理码位与越界码点）及 CommonMark 四列制表位缩进，补全标准 HTML/SVG/MathML 元素表。
+  - 加固原生 `<details>` 折叠沙箱边界：拦截跨 `</details>` 的反引号/未闭合围栏吞并相邻脚本、`<summary>` 内代码标点污染正文扫描、多行标签及带属性自定义元素；修复卡面变量持久化在 `-0` 下的重复提交循环，拦截世界书与资产目录的 `NaN` 预算绕过。
+- **状态存储、WAL 事务与只读诊断加固**：
+  - 修复 `closeLedger` 与 `invalidate` 后存活 `MemoryStore`/`WorldDeltaStore` 实例的账本同步与全局单调 `epoch` 推进；为公开读取接口补齐返回副本隔离，并在 `mergeBatch` 归并前去重重复来源 ID。
+  - 为 `Wal.recordChanges` 补齐落盘前记录格式校验，新增跨实例 WAL 目录修订与 `metaCache`/`coverageEpoch` 同步，并在楼层外手工改坏 `state/template.json` 时保守保留分块数据而不锁死回滚恢复。
+  - 拦截 `WorkspaceFs` 以工作区根目录自身或尾随分隔符作为文件写删目标（防止临时文件落入父目录），前置校验楼层内删除 WAL 保留路径；补齐分离存放的 `state/template-generation` 外部丢失重写自愈、跨路径 `chunked` 标记隔离、`HelperState` 工作区锁串行与 `swipes` 归一化落盘。
+  - 拒绝无名 `card.json` 与损坏 `story.json`，为极简存储卡水合补齐安全默认字段；对齐 `doctor` 与离线备份对合法超过 16 MiB 的模板状态/生成恢复正文及聊天世界书 JSON 上限校验。
+- **宿主编排、卡面桥租约与工作区缓存修复**：
+  - 统一卡面桥 `openHelperFrame`、脚本库、开场白切页与历史编辑分支为保留原始 `personaId: null` 的剧情绑定读取，采用剥离 `cardName` 的规范化语义键校验租约，并在世界书重绑发布回调中记录实际落盘绑定；人设文件损坏时不再阻塞已生成楼层的自动 MVU 收口、脚本包加载与卡面桥写入，MVU 初始化支持解析未净化原名与大小写别名世界书。
+  - 合并 `renderOutputTexts` 混合纯文本、原生 `<details>` 与真实 `<iframe>` 批次为单次剧情快照读取，将 `state/helper.json` 损坏影响隔离到真实 `<iframe>` 项；将各酒馆助手写操作统一纳入会话提交队列（`enqueueSessionTask` / `waitForSessionCommits`），并为面板记忆与变化层写路径补齐工作区锁及 `pendingMemoryCompress` 自动清理。
+  - 为 `TavernState` 增加工作区并发冷打开去重与临时文件前置清扫，保护活跃开层与待压缩剧情不被 LRU 淘汰，并在删卡或并发写期间通过规范化键与修订复核防止在途旧读回填幽灵缓存、同步回收 `avatarCache`。
+  - 对齐宿主 `0.2.2-rc.3` 单步请求路由：跳过 `probe` 探测请求且不在 `agent/request` 中向持久日志写入伪造 `model/selection` 事件；`onTurnEnd`（含暂缓轮）同步清理 `appliedStanding` / `appliedTurnContext`；`computeWorker` 在执行带 `templateCondition` 的 `wi` 求值时保留跨步骤 `TemplateSandbox` 缓存。
+- **客户端气泡生命周期、批处理去重与面板交互修复**：
+  - 修复 `DisplayProjection` 在 `StrictMode` 双挂载、多卡面混排 `PlainDetailsFoldView`、`srcDoc` 重建及动态开启交互卡时的就绪计数与渲染完成事件收口；混排 Markdown 与原生 `<details>` 气泡复制时保留完整文档顺序，并在保存全局交互卡开关、网络白名单、展示正则或预设后联动已挂载气泡与后台脚本即时刷新。
+  - `renderOutputBatched` 与 `floorActionStateBatched` 在分片前按请求键全局去重、隔离损坏批次项并捕获回退单条异常；楼层操作条在绑定刷新重拉期间压制非末层续写按钮闪烁并在全层不可续写时清理旧记录，补齐卸载后的分支导航异常隔离。
+  - `installHelperLiveEvents` 响应无 `detail` 的全局绑定变更事件重探测当前会话，并为乱序 `settle-assistant` 插入补齐 `MAX_QUEUE` 上限守卫；`HelperMvuRunner` 在提交失败且持有未提交结果时按租约续期窗口退避而非每秒空转轮询。
+  - 共享 `PersistentEditor` 中单子编辑器清理草稿时保留未挂载兄弟子页签的待恢复字段；修复世界书编辑器跨页删除/复制页码归位、世界书删除在途防重开、正则放弃草稿清理与文件导入锁、脚本编辑器跨库切换状态复位、头部绑定弹窗保存期间表单禁用及角色选择器清空搜索复位分页。
+
 ## 0.5.12（2026-11-18）适配 dsh 0.2.2-rc.3、展示渲染与全栈性能优化
 
 当前开发与验证基线升级至 dsh `0.2.2-rc.3`（Node.js ≥ 24）。公开安装门槛（`engines.dsh` 与全部 `@deepseek-ai/*` peer）继续保持 `*`，实际接口兼容范围以宿主兼容记录为准。

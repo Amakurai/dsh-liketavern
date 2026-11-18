@@ -36,9 +36,9 @@ export declare class Wal {
     private readonly rootDir;
     private readonly logFs;
     private readonly hasCoverage;
-    /** 最近一次确认已登记的楼层身份。 */
+    /** 最近一次确认已登记的楼层身份（绑定共享 coverageEpoch，跨实例修改清单后自动重验）。 */
     private covered;
-    /** 楼层元数据缓存（含归档回滚副本与已提交活跃楼层），按 meta.json 的 mtimeMs/size 复核。 */
+    /** 楼层元数据缓存（含归档回滚副本与已提交活跃楼层），按 meta.json 的磁盘指纹与跨实例写入序号复核。 */
     private readonly metaCache;
     /** 同层 records.jsonl 原文绑定缓存：命中前提必须是磁盘读出的全文完全相等。 */
     private readonly recordsCache;

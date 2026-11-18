@@ -46,7 +46,7 @@ export function CharacterPicker(props: { remote: TavernRemote; selectedId?: stri
   return <DraftScope>{(request) => <Dialog open width="lg" title={t(managing ? 'section.characters' : 'hero.pickCharacter')}
     onClose={() => { if (!props.busy) request(props.onClose) }}>
     {managing ? <>
-      <Btn onClick={() => request(() => setManaging(false))}>{t('hero.picker.back')}</Btn>
+      <Btn onClick={() => request(() => { setManaging(false); setLimit(24) })}>{t('hero.picker.back')}</Btn>
       <CharactersSection remote={props.remote} />
     </> : <div className="dsh-tavern-section">
       <div className="dsh-tavern-toolbar">
@@ -62,7 +62,7 @@ export function CharacterPicker(props: { remote: TavernRemote; selectedId?: stri
         <Btn primary onClick={() => setManaging(true)}>{t('hero.picker.manage')}</Btn>
       </div>}
       {chars.state.status === 'ready' && items.length > 0 && filtered.length === 0 &&
-        <SearchEmpty what={t('characters.what')} query={query} onClear={() => setQuery('')} />}
+        <SearchEmpty what={t('characters.what')} query={query} onClear={() => { setQuery(''); setLimit(24) }} />}
       <div className="dsh-tavern-pickerList" aria-busy={props.busy}>
         {filtered.slice(0, limit).map((item) => <PickerItem key={item.cardId} item={item} remote={props.remote}
           selected={props.selectedId === item.cardId} recent={recentIds.has(item.cardId)} busy={props.busy} onPick={() => props.onPick(item.cardId)} />)}

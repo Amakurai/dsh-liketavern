@@ -80,7 +80,6 @@ export declare class MemoryStore {
     private readonly hashes;
     /** 条目正文的 token 粗估缓存，跟随同一个不可变条目对象复用。 */
     private readonly tokens;
-    private readonly ledger;
     private epoch;
     constructor(fs: WorkspaceFs, options?: MemoryStoreOptions);
     /**
@@ -95,7 +94,7 @@ export declare class MemoryStore {
      * 才可能既不改文件大小、又落在同一个 mtime 刻度内，那时需要调用方手动调一次。
      */
     invalidate(): void;
-    /** 取共享的写入登记；有实例显式作废过就先丢掉本实例的全部缓存。 */
+    /** 取共享的写入登记；有实例显式作废或账本关闭重建过，就先丢掉本实例的全部缓存。 */
     private sync;
     /** 正文指纹：别名按它对应到记忆，正文一改即作废。 */
     private hashOf;
@@ -121,7 +120,7 @@ export declare class MemoryStore {
         entry: MemoryEntry;
         aliases: readonly string[];
     }>): Promise<number>;
-    /** 解析 memory/*.md（不含 archive/），坏文件容错跳过；按 created 升序（并列按 id 字典序）。 */
+    /** 解析 memory/*.md（不含 archive/），坏文件容错跳过；按 created 升序（并列按 id 字典序）。返回独立副本。 */
     list(): Promise<MemoryEntry[]>;
     private listNow;
     /** 按 id 取单条（不含 archive/）；不存在或坏文件返回 null。 */

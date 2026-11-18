@@ -70,6 +70,7 @@ export declare class TavernState {
     /** 宿主作用域持有的布局适配器；agent 销毁不影响其它剧情的注册。 */
     presetAdapter?: PresetAdapterController;
     private readonly workspaces;
+    private readonly openingWorkspaces;
     private readonly sweptRoots;
     readonly triggerLogs: Map<string, {
         at: string;
@@ -337,6 +338,8 @@ export declare class TavernState {
     listLorebooks(): Promise<string[]>;
     /** 读取世界书原始 JSON（供设置面板编辑）；不存在或损坏返回 null。 */
     loadLorebookJson(name: string): Promise<unknown | null>;
+    /** 解析世界书在磁盘上的实际文件 ID（兼容未净化原名与 Windows 大小写别名）；不存在返回 null。 */
+    resolveLorebookFileId(name: string): Promise<string | null>;
     loadLorebookEntries(name: string, source: WorldInfoEntry['source']): Promise<WorldInfoEntry[]>;
     /** 落盘并 bump 修订号，返回磁盘上的 id：调用方（服务层/客户端）之后要按这个 id 打开，不能用原始名。 */
     saveLorebook(name: string, json: unknown, beforeWrite?: () => void): Promise<string>;

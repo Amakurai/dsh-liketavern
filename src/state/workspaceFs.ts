@@ -163,9 +163,22 @@ export class WorkspaceFs {
     if (relPath.split(/[/\\]/).some((seg) => seg === '..')) {
       throw new Error(`工作区路径越界: ${relPath}`)
     }
-    const abs = normalize(join(this.root, relPath))
+    const joined = normalize(join(this.root, relPath))
+    const abs = joined.length > this.root.length ? joined.replace(/[/\\]+$/, '') : joined
     if (abs !== this.root && !abs.startsWith(this.root + sep)) {
       throw new Error(`工作区路径越界: ${relPath}`)
+    }
+    return abs
+  }
+
+  /** 文件写删复制的目标必须是工作区内的具体文件路径，禁止以工作区根目录自身或末尾分隔符为目标（否则临时文件会落入父目录）。 */
+  private fileAbs(relPath: string): string {
+    if (/[/\\]$/.test(relPath)) {
+      throw new Error(`工作区文件路径无效: ${relPath}`)
+    }
+    const abs = this.abs(relPath)
+    if (abs === this.root) {
+      throw new Error(`工作区文件路径无效: ${relPath}`)
     }
     return abs
   }
@@ -361,10 +374,15 @@ export class WorkspaceFs {
     if (!entries.length) return
     await withWorkspaceLock(this.root, async () => {
       await this.assertWritable()
-      const targets = entries.map(([relPath, content]) => ({ relPath, abs: this.abs(relPath), content }))
+      const logged = Boolean(this.wal && this.floor)
+      const targets = entries.map(([relPath, content]) => ({
+        relPath,
+        abs: this.fileAbs(relPath),
+        walPath: logged ? this.walPath(relPath) : '',
+        content,
+      }))
       if (new Set(targets.map((target) => ledgerKey(target.relPath))).size !== targets.length) throw new Error('批量写入包含重复路径')
       await this.assertNoLinksAmong(new Set(targets.map((target) => dirname(target.abs))))
-      const logged = Boolean(this.wal && this.floor)
       // 目标自身也不能是链接；写前镜像与单条写入同一口径（文本原样，二进制 base64）。
       const before = await mapBounded(targets, async (target) => {
         if ((await this.lstatFile(target.abs)) === null || !logged) return null
@@ -375,7 +393,7 @@ export class WorkspaceFs {
         }
       })
       if (this.wal && this.floor) {
-        await this.wal.recordChanges(this.floor, targets.map((target, index) => ({ path: this.walPath(target.relPath),
+        await this.wal.recordChanges(this.floor, targets.map((target, index) => ({ path: target.walPath,
           before: before[index]?.value ?? null, after: target.content, beforeEncoding: before[index]?.encoding ?? 'utf8', afterEncoding: 'utf8' as const })))
       }
       await mapBounded(targets, async (target) => {
@@ -394,7 +412,7 @@ export class WorkspaceFs {
     if (this.wal && this.floor) throw new Error('批量复制不记录楼层快照，不能用于楼层写入')
     await withWorkspaceLock(this.root, async () => {
       await this.assertWritable()
-      const targets = relPaths.map((relPath) => ({ relPath, from: source.abs(relPath), to: this.abs(relPath) }))
+      const targets = relPaths.map((relPath) => ({ relPath, from: source.fileAbs(relPath), to: this.fileAbs(relPath) }))
       await source.assertNoLinksAmong(new Set(targets.map((target) => dirname(target.from))))
       await this.assertNoLinksAmong(new Set(targets.map((target) => dirname(target.to))))
       await mapBounded(targets, async (target) => {
@@ -452,13 +470,13 @@ export class WorkspaceFs {
   async writeText(relPath: string, content: string): Promise<void> {
     await withWorkspaceLock(this.root, async () => {
       await this.assertWritable()
-      const abs = this.abs(relPath)
+      const abs = this.fileAbs(relPath)
+      const walPath = this.wal && this.floor ? this.walPath(relPath) : null
       const info = await this.lstatSafe(abs)
-      if (this.wal && this.floor) {
-        const path = this.walPath(relPath)
+      if (this.wal && this.floor && walPath !== null) {
         const bytes = info ? await this.readBytesVerified(abs) : null
         const before = bytes === null ? null : snapshotOf(bytes)
-        await this.wal.recordChange(this.floor, path, before?.value ?? null, content, before?.encoding ?? 'utf8', 'utf8')
+        await this.wal.recordChange(this.floor, walPath, before?.value ?? null, content, before?.encoding ?? 'utf8', 'utf8')
       }
       // 无论替换是否成功都登记：多登记只会让读的一方多读一次，漏登记才会留下旧缓存。
       try { await atomicWrite(abs, content) } finally { noteWrite(this.root, relPath) }
@@ -472,12 +490,12 @@ export class WorkspaceFs {
   async writeBytes(relPath: string, bytes: Uint8Array): Promise<void> {
     await withWorkspaceLock(this.root, async () => {
       await this.assertWritable()
-      const abs = this.abs(relPath)
+      const abs = this.fileAbs(relPath)
+      const walPath = this.wal && this.floor ? this.walPath(relPath) : null
       const info = await this.lstatSafe(abs)
-      if (this.wal && this.floor) {
-        const path = this.walPath(relPath)
+      if (this.wal && this.floor && walPath !== null) {
         const before = info ? await this.readBytesVerified(abs) : null
-        await this.wal.recordChange(this.floor, path,
+        await this.wal.recordChange(this.floor, walPath,
           before === null ? null : Buffer.from(before).toString('base64'),
           Buffer.from(bytes).toString('base64'), 'base64', 'base64')
       }
@@ -493,15 +511,15 @@ export class WorkspaceFs {
   async delete(relPath: string): Promise<void> {
     await withWorkspaceLock(this.root, async () => {
       await this.assertWritable()
-      const abs = this.abs(relPath)
+      const abs = this.fileAbs(relPath)
+      const walPath = this.wal && this.floor ? this.walPath(relPath) : null
       const info = await this.lstatSafe(abs)
       if (!info) return
-      if (this.wal && this.floor) {
-        const path = this.walPath(relPath)
+      if (this.wal && this.floor && walPath !== null) {
         const bytes = await this.readBytesVerified(abs)
         if (bytes === null) return
         const before = snapshotOf(bytes)
-        await this.wal.recordChange(this.floor, path, before.value, null, before.encoding ?? 'utf8', 'utf8')
+        await this.wal.recordChange(this.floor, walPath, before.value, null, before.encoding ?? 'utf8', 'utf8')
       }
       try { await rm(abs, { force: true }) } finally { noteWrite(this.root, relPath) }
     })
@@ -512,10 +530,14 @@ export class WorkspaceFs {
     if (!relPaths.length) return
     await withWorkspaceLock(this.root, async () => {
       await this.assertWritable()
-      const targets = relPaths.map((relPath) => ({ relPath, abs: this.abs(relPath) }))
+      const logged = Boolean(this.wal && this.floor)
+      const targets = relPaths.map((relPath) => ({
+        relPath,
+        abs: this.fileAbs(relPath),
+        walPath: logged ? this.walPath(relPath) : '',
+      }))
       if (new Set(targets.map((target) => ledgerKey(target.relPath))).size !== targets.length) throw new Error('批量删除包含重复路径')
       await this.assertNoLinksAmong(new Set(targets.map((target) => dirname(target.abs))))
-      const logged = Boolean(this.wal && this.floor)
       const existing = await mapBounded(targets, async (target) => {
         const info = await this.lstatFile(target.abs)
         if (!info) return { present: false as const, snap: null }
@@ -538,7 +560,7 @@ export class WorkspaceFs {
         toDelete.push(target)
         if (logged && state.snap) {
           changes.push({
-            path: this.walPath(target.relPath),
+            path: target.walPath,
             before: state.snap.value,
             after: null,
             beforeEncoding: state.snap.encoding ?? 'utf8',

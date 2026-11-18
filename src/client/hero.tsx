@@ -342,25 +342,27 @@ function HeroCharacterSession(props: HeroProps) {
       }
       const entered = await withWriteTimeout(remote.ensureGreeting({ sessionId }), HERO_WRITE_TIMEOUT_MS, () => new Error(t('util.loadTimeout')))
       const enterErr = errOf(entered)
-      if (enterErr) setError(enterErr)
-      else if (entered.ok) {
+      if (enterErr) {
+        if (alive.current) setError(enterErr)
+      } else if (entered.ok) {
         if (entered.value.created || entered.value.conversationStarted) {
           invalidateSessionBinding(sessionId)
           window.dispatchEvent(new CustomEvent(BINDING_CHANGED_EVENT, { detail: sessionId }))
+          if (!alive.current) return
           setEntered(true)
           // 插件直接追加日志不会经过宿主 send；主动同步 blank，解除空白会话复用。
           try {
             await props.sessions.refresh?.()
           } catch (cause) {
-            setEntered(false)
+            if (alive.current) setEntered(false)
             throw cause
           }
-        } else setError(t('hero.error.enterFailed'))
+        } else if (alive.current) setError(t('hero.error.enterFailed'))
       }
     } catch (cause) {
-      setError(describeError(cause))
+      if (alive.current) setError(describeError(cause))
     } finally {
-      setBusy(false)
+      if (alive.current) setBusy(false)
     }
   }
 
@@ -372,16 +374,17 @@ function HeroCharacterSession(props: HeroProps) {
     try {
       const saved = await withWriteTimeout(remote.setSessionBinding({ binding: { ...binding, greetingIndex: index } }), HERO_WRITE_TIMEOUT_MS, () => new Error(t('util.loadTimeout')))
       const saveErr = errOf(saved)
-      if (saveErr) setError(saveErr)
-      else {
+      if (saveErr) {
+        if (alive.current) setError(saveErr)
+      } else {
         invalidateSessionBinding(sessionId)
         window.dispatchEvent(new CustomEvent(BINDING_CHANGED_EVENT, { detail: sessionId }))
-        bindingLoader.reload()
+        if (alive.current) bindingLoader.reload()
       }
     } catch (cause) {
-      setError(describeError(cause))
+      if (alive.current) setError(describeError(cause))
     } finally {
-      setBusy(false)
+      if (alive.current) setBusy(false)
     }
   }
 

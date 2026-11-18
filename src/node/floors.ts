@@ -1319,12 +1319,12 @@ export async function swipeGreeting({ ctx, state }: FloorDeps, sessionId: string
   }
   const verifySource = async (): Promise<void> => { assertSource() }
   assertSource()
-  const initial = await state.loadBinding(sessionId)
+  const initial = await state.loadStoryBinding(sessionId)
   if (!initial) throw new FloorError('no-binding', '当前会话未绑定 Tavern 角色卡')
   const ws=await state.storyWorkspace(initial.cardId,initial.storyId)
   return withWorkspaceLock(ws.fs.root,()=>withWorkspaceLock(state.paths.sessions,async()=>{
   assertSource()
-  const binding=await state.loadBindingUnwaited(sessionId,true)
+  const binding=await state.loadStoryBinding(sessionId,{strictRead:true,waitForAdoption:false})
   if(!binding||binding.cardId!==initial.cardId||binding.storyId!==initial.storyId)throw new FloorError('binding-changed','开场白剧情绑定已改变')
   assertSource()
   const variants = await greetingVariants(state, binding.cardId)
@@ -1351,7 +1351,7 @@ export async function forkEditedHistory(deps:FloorDeps,sessionId:string,storyId:
   if(!source)throw new FloorError('session-not-live','消息编辑需要当前会话在线')
   requireTavernSession(ctx,source)
   if(closedTurns(source.snapshotEvents()).openTurn!==null||state.openFloors?.has(sessionId))throw new FloorError('turn-open','生成期间不能编辑聊天消息')
-  const loaded=await state.loadBinding(sessionId)
+  const loaded=await state.loadStoryBinding(sessionId,{strictRead:true,waitForAdoption:false})
   if(!loaded||loaded.storyId!==storyId)throw new FloorError('binding-changed','剧情绑定已改变')
   const binding=await inferLiveWalLineage(ctx,state,source,loaded)
   const childSessionId=await forkAt(ctx,state,source,binding,source.snapshotEvents().length-1,{seedOverride:seed,forkTurn:fromTurn,rollbackFromTurn:fromTurn,verifySource:verify,prepareEdits,beforePublish})

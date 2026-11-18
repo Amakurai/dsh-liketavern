@@ -13,13 +13,8 @@ import type { WorkspaceFs } from './workspaceFs.js';
 export declare function evictWorldDeltaCache(root: string, options?: {
     prefix?: boolean;
 }): void;
-/**
- * 同一角色工作区可能同时存在共享句柄、楼层派生句柄和多个 plainWorkspace 实例。
- * 队列必须按工作区根共享；放在实例字段里会让两个「读全部行 → 全量重写」互相覆盖。
- */
 export declare class WorldDeltaStore {
     private readonly fs;
-    private readonly ledger;
     private readonly cacheKey;
     constructor(fs: WorkspaceFs);
     private enqueue;

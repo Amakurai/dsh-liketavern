@@ -32,6 +32,8 @@ export declare class WorkspaceFs {
     /** 已持有工作区锁时推算本层回滚后的文本；只读且不推进恢复游标，供依赖正文的安全清理使用。 */
     rollbackSnapshot(relPath: string, current: string | null): Promise<string | null>;
     private abs;
+    /** 文件写删复制的目标必须是工作区内的具体文件路径，禁止以工作区根目录自身或末尾分隔符为目标（否则临时文件会落入父目录）。 */
+    private fileAbs;
     /**
      * WAL 记录用的规范相对路径：正斜杠、去掉 `.` 与空段。读路径可以宽松（normalize 会折叠它们），
      * 但记进日志的路径必须是 Wal.readRecords 日后接受的形状——一条 `memory/./x.md` 会让整层

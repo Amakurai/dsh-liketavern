@@ -266,7 +266,7 @@ function DraftSession(props: { remote: TavernRemote; scope: string; owner: strin
         } else {
           for (const [key, current] of statuses) if (current.dirty) statuses.set(key, { ...current, dirty: false })
         }
-        if ([...statuses.values()].some((s) => s.dirty)) {
+        if ([...statuses.values()].some((s) => s.dirty) || (id !== undefined && Object.keys(restored).length > 0)) {
           schedule()
           return
         }

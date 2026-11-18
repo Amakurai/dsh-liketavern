@@ -28,7 +28,31 @@ function subscribeSpeakerHeader(fn: () => void): () => void {
 }
 
 export function useSpeakerHeader(): boolean {
-  return useSyncExternalStore(subscribeSpeakerHeader, getSpeakerHeader)
+  return useSyncExternalStore(subscribeSpeakerHeader, getSpeakerHeader, getSpeakerHeader)
+}
+
+let displaySettingsRevision = 0
+const displayRevisionListeners = new Set<() => void>()
+
+export function getDisplaySettingsRevision(): number {
+  return displaySettingsRevision
+}
+
+/** 全局交互卡开关、网络白名单、展示正则或预设保存后递增，驱动已挂载气泡与后台脚本重读展示配置。 */
+export function bumpDisplaySettingsRevision(): void {
+  displaySettingsRevision += 1
+  for (const fn of [...displayRevisionListeners]) fn()
+}
+
+function subscribeDisplaySettingsRevision(fn: () => void): () => void {
+  displayRevisionListeners.add(fn)
+  return () => {
+    displayRevisionListeners.delete(fn)
+  }
+}
+
+export function useDisplaySettingsRevision(): number {
+  return useSyncExternalStore(subscribeDisplaySettingsRevision, getDisplaySettingsRevision, getDisplaySettingsRevision)
 }
 
 /** 读取宿主当前主题明暗配色（优先 body[data-ds-dark-theme]，回退根节点 colorScheme）。 */

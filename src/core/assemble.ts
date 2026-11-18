@@ -759,6 +759,8 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
       if (injected) merged.push(...injected)
       merged.push(history[i]!)
     }
+    const atEnd = insertions.get(history.length)
+    if (atEnd) merged.push(...atEnd)
     history.splice(0, history.length, ...merged)
   }
   const depth0 = depthInjections.filter((d) => d.depth === 0).sort(compareDepthInjections)

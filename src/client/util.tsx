@@ -432,6 +432,7 @@ export function CheckChips(props: {
   selected: readonly string[]
   onChange: (next: string[]) => void
   ariaLabel?: string
+  disabled?: boolean
 }) {
   return (
     <div className="dsh-tavern-filters" role="group" aria-label={props.ariaLabel}>
@@ -444,7 +445,10 @@ export function CheckChips(props: {
             className="dsh-tavern-chip is-check"
             data-active={on ? 'true' : 'false'}
             aria-pressed={on}
-            onClick={() => props.onChange(on ? props.selected.filter((v) => v !== o.value) : [...props.selected, o.value])}
+            disabled={props.disabled}
+            onClick={() => {
+              if (!props.disabled) props.onChange(on ? props.selected.filter((v) => v !== o.value) : [...props.selected, o.value])
+            }}
           >
             {o.label}
           </button>

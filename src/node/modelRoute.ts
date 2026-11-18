@@ -34,7 +34,9 @@ export function ensureAgentRequestSelectionSync(agent: unknown, stepSelection?: 
         machine._activeSelection = payload.modelSelection
       }
       const res = await origWaterfall.call(this, name, payload, ...rest)
-      if (name === 'agent/request' && res && typeof res === 'object') {
+      // 只读 probe 不能改动当前步骤的已锁定选择，任何请求也不向会话日志伪造 model/selection 事件；
+      // 真实请求头仍由宿主 buildRequest 在 prepareCall 成功后统一落盘。
+      if (name === 'agent/request' && !payload?.probe && res && typeof res === 'object') {
         const sel = (machine._activeSelection ?? activeStepSelections.get(machine)) as SelectionEntry | undefined
         if (sel && typeof sel === 'object' && !Object.isFrozen(sel)) {
           if (res.provider) sel.provider = res.provider
@@ -44,13 +46,6 @@ export function ensureAgentRequestSelectionSync(agent: unknown, stepSelection?: 
           } else {
             delete sel.reasoningEffort
           }
-        }
-        if (typeof machine.model?.select === 'function' && res.provider && res.model) {
-          machine.model.select({
-            provider: res.provider,
-            model: res.model,
-            ...(res.reasoningEffort !== undefined ? { reasoningEffort: res.reasoningEffort } : {}),
-          })
         }
       }
       return res

@@ -405,6 +405,7 @@ export async function loadCharacter(dataRoot: string, cardId: string): Promise<C
   }
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null
   const record = parsed as Record<string, unknown>
+  if (typeof record.name !== 'string' || record.name.length === 0) return null
   // pngBytes 不持久化于 card.json（头像字节在 card.png），读回恒为 null
   const card = hydrateStoredCard(record)
   // 旧导入或 card.json 缺 characterBook 时，从落盘的内嵌书补回
@@ -453,12 +454,19 @@ export async function restoreCharacter(dataRoot: string, cardId: string): Promis
 export async function deleteCharacter(dataRoot: string, cardId: string): Promise<void> {
   assertValidCardId(cardId)
   const root = join(dataRoot, cardId)
-  closeLedger(root, { prefix: true })
-  evictTemplateCaches(root, { prefix: true })
-  evictHelperStateCache(root, { prefix: true })
-  evictWorldDeltaCache(root, { prefix: true })
-  characterSummaryCache.delete(cacheRootKey(root))
-  await rm(root, { recursive: true, force: true })
+  const evict = (): void => {
+    closeLedger(root, { prefix: true })
+    evictTemplateCaches(root, { prefix: true })
+    evictHelperStateCache(root, { prefix: true })
+    evictWorldDeltaCache(root, { prefix: true })
+    characterSummaryCache.delete(cacheRootKey(root))
+  }
+  evict()
+  try {
+    await rm(root, { recursive: true, force: true })
+  } finally {
+    evict()
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -587,18 +595,21 @@ export async function rebuildIndex(
       if (!activePaths.has(key)) wsCache.files.delete(key)
     }
 
-    const files: WorkspaceIndexFile[] = memSlots.map((slot) => {
+    const files: WorkspaceIndexFile[] = []
+    for (const slot of memSlots) {
       if (slot.cached) {
-        return { path: slot.path, summary: slot.cached.summary, tokens: slot.cached.tokens }
+        files.push({ path: slot.path, summary: slot.cached.summary, tokens: slot.cached.tokens })
+        continue
       }
-      const content = missingContents[slot.missingIndex] ?? ''
+      const content = missingContents[slot.missingIndex] ?? null
+      if (content === null) continue
       const summary = summarizeMarkdown(content)
       const tokens = estimateTokens(content)
       if (ledger.epoch === epoch && !writtenSince(ledger, slot.path, revision)) {
         wsCache.files.set(slot.path, { mtimeMs: slot.stat.mtimeMs, size: slot.stat.size, revision, summary, tokens })
       }
-      return { path: slot.path, summary, tokens }
-    })
+      files.push({ path: slot.path, summary, tokens })
+    }
 
     if (deltaHit && cachedDelta) {
       files.push({ path: deltaPath, summary: cachedDelta.summary, tokens: cachedDelta.tokens })

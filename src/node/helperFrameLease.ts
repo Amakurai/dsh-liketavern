@@ -3,6 +3,7 @@ import {randomUUID} from 'node:crypto'
 import type {Context} from '@deepseek-ai/cordis'
 import type {SessionBinding} from '../core/binding.js'
 import type {HelperFrameClose,HelperFrameLease,HelperFrameOpen,HelperFrameWriteGuard} from '../core/helperFrame.js'
+import {parseSessionBinding} from './bindings.js'
 import {displaySessionEventAt,readDisplaySessionEvents} from './sessionEvents.js'
 import type {TavernState} from './state.js'
 
@@ -10,7 +11,10 @@ const MAX_FRAMES=1024
 const CLOSED_RETENTION_MS=15*60*1000
 interface FrameRecord extends HelperFrameOpen {token?:string;binding?:string;closedAt?:number;closed:boolean}
 const records=new WeakMap<TavernState,Map<string,FrameRecord>>()
-const bindingKey=(binding:SessionBinding)=>JSON.stringify(binding)
+const bindingKey=(binding:SessionBinding)=>{
+  const {cardName:_cardName,...semantic}=parseSessionBinding(binding)
+  return JSON.stringify(semantic)
+}
 function mapFor(state:TavernState):Map<string,FrameRecord>{
   let map=records.get(state);if(!map){map=new Map();records.set(state,map)}
   for(const [key,value] of map)if(value.closedAt!==undefined&&Date.now()-value.closedAt>CLOSED_RETENTION_MS)map.delete(key)
@@ -48,14 +52,14 @@ export async function openHelperFrame(ctx:Context,state:TavernState,request:Help
   // 先替换记录，不能把失效操作排到旧写入占用的剧情/会话队列之后。
   const record:FrameRecord={...request,closed:false,closedAt:Date.now()};map.set(request.frameId,record)
   try{
-    const binding=await state.loadBindingUnwaited(request.sessionId,true)
+    const binding=await state.loadStoryBinding(request.sessionId,{strictRead:true,waitForAdoption:false})
     if(!binding?.storyId||binding.storyId!==request.storyId)throw new Error('卡面剧情绑定已经改变')
     if(!state.config.interactiveCards||binding.interactiveCards===false)throw new Error('交互卡已关闭')
     // 气泡并发连接只按固定 seq 验证目标，避免每个 iframe 再扫描并复制整份历史。
     const event=displaySessionEventAt(await readDisplaySessionEvents(ctx,request.sessionId),request.messageId)
     if(event?.type!=='assistant/message'||event.surfaceOp!==undefined&&event.surfaceOp!=='append'
       ||!event.data.message.content.some(block=>block.type==='text'&&block.text.trim()))throw new Error('卡面消息不在当前剧情中')
-    const current=await state.loadBindingUnwaited(request.sessionId,true)
+    const current=await state.loadStoryBinding(request.sessionId,{strictRead:true,waitForAdoption:false})
     if(!current||bindingKey(current)!==bindingKey(binding)||!state.config.interactiveCards)throw new Error('卡面连接期间绑定已经改变')
     if(map.get(request.frameId)!==record||record.closed)throw new Error('卡面运行时连接已失效')
     record.token=randomUUID();record.binding=bindingKey(binding);delete record.closedAt

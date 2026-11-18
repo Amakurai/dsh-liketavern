@@ -388,7 +388,7 @@ export function createHelperMvuCommandCodec(json: (value: unknown, maxBytes?: nu
           const content=message.slice(fence.contentStart,fence.contentEnd).trim()
           const envelope=/^<(updatevariable|json_?patch)(?=[\s>])/i.exec(content)
           const payload=fence.standalone&&envelope&&new RegExp('</'+envelope[1]+'\\s*>\\s*$','i').test(content)
-          if(updates||payload){syntaxEnds.set(fence.contentEnd,fence.end);at=fence.contentStart}
+          if(updates||payload){if(fence.contentEnd<fence.end)syntaxEnds.set(fence.contentEnd,fence.end);at=fence.contentStart}
           else at=fence.end
           continue
         }

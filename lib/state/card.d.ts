@@ -35,7 +35,7 @@ export declare function withoutEmbeddedCharacterBook(card: CharacterCard): Chara
 export declare const MAX_STORED_CARD_JSON_BYTES: number;
 /** 序列化待落盘的 card.json（剔除 pngBytes 后的卡）；超出 MAX_STORED_CARD_JSON_BYTES 抛错。 */
 export declare function serializeStoredCard(cardJson: Record<string, unknown>): string;
-/** 工作区 card.json 是归一化卡；旧文件可能只有 extensions.depth_prompt。 */
+/** 工作区 card.json 是归一化卡；旧文件可能只有 extensions.depth_prompt 或最小字段集合。 */
 export declare function hydrateStoredCard(record: Record<string, unknown>): CharacterCard;
 /**
  * 解析 PNG 角色卡：遍历 chunk 找 tEXt / zTXt / iTXt（关键字 chara 或 ccv3，同时存在时优先 ccv3），

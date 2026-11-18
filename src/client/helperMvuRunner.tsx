@@ -38,6 +38,7 @@ export function HelperMvuRunner(props:{remote:TavernRemote;sessionId:string;stor
         const wakeAt=deadline>0?Math.min(renewAt||deadline,deadline):renewAt||now+1000
         return Math.max(250,Math.min(20000,wakeAt-now))
       }
+      if(work&&renewAt>now)return Math.max(250,Math.min(20000,renewAt-now))
       if(idlePollAt>now)return Math.max(250,idlePollAt-now)
       return 1000
     }
@@ -141,7 +142,7 @@ export function HelperMvuRunner(props:{remote:TavernRemote;sessionId:string;stor
       if(value.action!=='helperMvuResult'||!endpoint.matchesRuntime(value.runtimeId)||value.requestId!==requestId||!running||result!==undefined)return
       if(!valid()){fail(t('speech.mvuTaskChanged'));return}
       if(value.ok!==true){fail(value.error);return}
-      try{result=helperJson(value.data);void commit().catch(fail)}catch(error){fail(error)}
+      try{result=helperJson(value.data);void commit().catch(error=>{fail(error);scheduleTimer()})}catch(error){fail(error)}
     }
     retry.current=()=>{
       failed=false;setError(null);idleAttempts=0;idlePollAt=0

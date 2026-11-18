@@ -6,6 +6,7 @@
 import {cardVariableLabels} from '../cardVariableLabels.js'
 import { useDraftGuard } from '../drafts.js'
 import { buildCardSrcDoc } from '../../core/cardFrame.js'
+import { readHostColorScheme } from '../displayPrefs.js'
 import { cardGreetingVariants } from '../../core/greetingLog.js'
 import { MAX_CARD_PNG_BYTES } from '../../core/cardLimits.js'
 import type { CharacterCompatibilityCode, CharacterCompatibilityStatus } from '../../core/characterCompatibility.js'
@@ -371,13 +372,14 @@ function CharacterDetailDialog(props: { remote: TavernRemote; cardId: string; on
           <iframe
             sandbox="allow-scripts"
             srcDoc={buildCardSrcDoc(interactiveHtml, { greetings: detail ? cardGreetingVariants(detail.firstMes, detail.alternateGreetings) : [], greetingIndex: 0,
+              colorScheme: readHostColorScheme(),
               helperContext: { name: detail?.name, macroName: detail?.characterName ?? detail?.name, canSwipe: false },
               helperLabels: { diagnostics: t('speech.helperMessages'), unsupported: t('speech.helperUnsupported') },
               variableStyles: CARD_VARIABLE_STYLES,
               variableLabels:cardVariableLabels(t,t('speech.cardDataNote')),
             })}
             title={t('characters.detail.interactiveFrame')}
-            style={{ width: '100%', height: '60vh', border: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.25))', borderRadius: 16, background: 'var(--dsw-alias-bg-base, #111)' }}
+            style={{ colorScheme: 'inherit', width: '100%', height: '60vh', border: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.25))', borderRadius: 16, background: 'var(--dsw-alias-bg-base, #111)' }}
           />
         </Dialog>
       )}

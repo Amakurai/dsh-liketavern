@@ -6,7 +6,7 @@
 
 Release 也支持在 Actions 的 `release` 页面手动运行：选择 `main`，填写与包版本一致的新标签（例如 `v0.5.11`）。复用的 CI 会先校验分支、版本和发布说明，再运行完整双平台检查。只有这些检查、主分支世系校验及 artifact 校验全部成功，发布 job 才把新标签固定到本次已验证的 SHA，并发布该 run 的原始安装包；已有标签只能指向相同提交，手工推送的 `v*` 标签也必须位于 `main` 历史内（`compare/main...SHA` 的 `ahead_by == 0`），绝不移动旧标签或发布分叉提交。手动入口与 tag push 按同一标签串行，均不会取消已开始的发布验证。
 
-1. `verify (ubuntu-latest)` 先用固定版本、固定 SHA-256 的 actionlint 检查全部 GitHub Actions workflows（`ci.yml`、`release.yml`、`hol-plugin-scanner.yml`），校验发布元数据，安装锁定依赖，执行 `host:check` 与 `npm audit --package-lock-only`（审计完整锁文件而非单平台安装子集），完成构建并校验 `lib/` 与 `presets/` 无变动或遗漏文件，执行 doctor/backup 安装入口冒烟，最后只打包一次生成真实 tarball 与 SHA-256。任一环节失败会立即终止后续任务，避免浪费多台测试与 Windows 机器。
+1. `verify (ubuntu-latest)` 先用固定版本、固定 SHA-256 的 actionlint 检查全部 GitHub Actions workflows（`ci.yml`、`release.yml`、`hol-plugin-scanner.yml`），校验发布元数据，安装锁定依赖，执行 `host:check` 与 `npm run audit:check`（校验完整锁文件的生产依赖零漏洞及开发链受控公告状态，而非仅检查单平台安装子集），完成构建并校验 `lib/` 与 `presets/` 无变动或遗漏文件，执行 doctor/backup 安装入口冒烟，最后只打包一次生成真实 tarball 与 SHA-256。任一环节失败会立即终止后续任务，避免浪费多台测试与 Windows 机器。
 2. Ubuntu `verify` 通过后，并行启动 `verify (windows-latest)` 与八台独立测试 runner：
    - `verify (windows-latest)` 在 Windows 环境独立验证锁定依赖安装、`host:check`、首次检出重建一致性、doctor/backup 链接入口以及直接调用 Node 脚本时的 `npm.cmd` 打包白名单分支。
    - `tests` 在 Ubuntu、Windows 各启动 `--shard=1/4` 至 `--shard=4/4` 四片独立 runner。`vitest.config.ts` 接入 `scripts/shard-tests.mjs` 的确定性 LPT（最长处理时间优先）分片器，按双平台实测耗时基线将重型沙箱、WAL 故障矩阵与宿主集成套件均匀分散到各片，片内优先执行重型套件；每台 runner 内仍保持 `maxWorkers=1`。测试直接使用已验证与源码一致的入库 `lib/`，不重复构建。

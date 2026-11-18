@@ -49,3 +49,16 @@ it('角色卡原文里的 {{…}} 原样进入 standing，不抛错、不被宿�
   expect(assembly.contexts.find(context => context.name === 'tavern:turn')?.interpolate ?? false).toBe(false)
   expect(() => renderContextSections(assembly)).not.toThrow()
 })
+
+it('关闭宿主可选运行时上下文后，仍保留 Tavern 本轮上下文和入模刷新结果', async () => {
+  ctx.systemPrompt.context({ name: 'factory:optional', order: 100, text: '宿主可选上下文' })
+  const context = assembleContextFor(agent)
+  const before = await ctx.systemPrompt.assemble(context)
+  const turn = before.contexts.find(entry => entry.name === 'tavern:turn')
+  expect(turn?.text.length).toBeGreaterThan(0)
+
+  ctx.systemPrompt.suppressRuntimeContext()
+  const after = await ctx.systemPrompt.assemble(context)
+  expect(after.contexts).toEqual([turn])
+  expect(ctx.systemPrompt.refreshContext(after, context).contexts).toEqual([turn])
+})

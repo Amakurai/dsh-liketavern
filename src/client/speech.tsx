@@ -6,13 +6,14 @@
  * 卡内按钮经 postMessage 请求宿主 swipeGreeting。无 allow-same-origin。
  * 正则若只把标记换成 HTML，iframe 下面仍渲染剩余正文。
  */
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ComponentProps, ReactNode } from 'react'
 import { IconCopyOutlineMedium, MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives'
 import { buildCardSrcDoc, parseCardBridgeMessage } from '../core/cardFrame.js'
 import {ScriptChoices,publishScriptChoices,clearScriptChoices,parseScriptChoices} from './helperChoices.js'
 import {cardVariableLabels} from './cardVariableLabels.js'
 import { presentStreamingOutput, stripDisplayMeta } from '../core/displaySanitize.js'
+import { formatPlainDetailsText, parsePlainDetailsBlocks, type PlainDetailsBlock } from '../core/plainDetails.js'
 import type { SessionEventSource } from '@deepseek-ai/dsh-api-session-controller/client'
 import { useContinuationStream } from './continuationStream.js'
 import { disableInteractiveParts, type TemplateDisplayPart } from '../core/templateDisplay.js'
@@ -20,7 +21,7 @@ import { isFullHtmlDocument } from '../core/htmlFragment.js'
 import { cachedAvatar,invalidateSessionBinding } from './cache.js'
 import {BINDING_CHANGED_EVENT} from './actions.js'
 import { getTavernLocale, useT, useMarkdownLabels } from './i18n.js'
-import { useSpeakerHeader } from './displayPrefs.js'
+import { readHostColorScheme, useSpeakerHeader } from './displayPrefs.js'
 import { renderOutputBatched } from './renderBatch.js'
 import { subscribeWindowMessage } from './windowEvents.js'
 import { Avatar, Btn, Err, IconBtn, Skeleton, useLoader, useToast } from './util.js'
@@ -39,6 +40,8 @@ import type { HelperFrameLease } from '../core/helperFrame.js'
 import { randomUuid } from '../core/secureRandom.js'
 import { describeError } from '../core/guards.js'
 type FrameWrite<T> = T & { frameLease?: HelperFrameLease }
+
+export { readHostColorScheme }
 
 function displayFailure(error:unknown,t:ReturnType<typeof useT>):string{
   if(error instanceof HelperDisplayError)return t(error.code==='busy'?'speech.helperDisplayBusy':error.code==='timeout'?'speech.helperDisplayTimeout':'speech.helperDisplayStale')
@@ -140,6 +143,17 @@ export function SpeechHtmlFrame(props: {
     rotateReadOnly.current=rotate
     const stopStory=props.helperBinding?watchHelperStory(props.helperBinding.sessionId,props.helperBinding.storyId,
       ()=>eventEndpoint?.post({action:'helperSnapshotInvalidated',storyId:props.helperBinding!.storyId})):undefined
+    const syncColorScheme=()=>{
+      const runtimeId=eventEndpoint.runtimeId()
+      const colorScheme=readHostColorScheme()
+      if(runtimeId&&colorScheme)eventEndpoint.post({action:'setColorScheme',colorScheme})
+    }
+    let themeObserver:MutationObserver|undefined
+    if(typeof MutationObserver!=='undefined'&&typeof document!=='undefined'){
+      themeObserver=new MutationObserver(()=>syncColorScheme())
+      if(document.documentElement)themeObserver.observe(document.documentElement,{attributes:true,attributeFilter:['style','data-ds-theme-source']})
+      if(document.body)themeObserver.observe(document.body,{attributes:true,attributeFilter:['data-ds-dark-theme']})
+    }
     let editPending=false,editFinished=false,frameReady=false,legacyHeight=false
     const pending=new Set<string>(),scriptReceipts=new Set<string>(),editReceipts=new Map<string,NonNullable<HelperMessageEditResult['branch']>>()
     let displayBusy=false,guardSerial=0
@@ -174,7 +188,7 @@ export function SpeechHtmlFrame(props: {
       if(helperRecord(value)&&value.source==='dsh-tavern-card'&&(value.action==='helperEventConnect'||value.action==='helperEventDisconnect')){
         const before=eventEndpoint?.runtimeId()
         eventEndpoint?.receive(value)
-        if(before!==eventEndpoint?.runtimeId()){closeRegistration();resetBusiness();handlers.current.onScriptReady?.(false);openRegistration(eventEndpoint.runtimeId())}
+        if(before!==eventEndpoint?.runtimeId()){closeRegistration();resetBusiness();handlers.current.onScriptReady?.(false);openRegistration(eventEndpoint.runtimeId());syncColorScheme()}
         return
       }
       // 高度、剧情业务、读取和应用回执共同固定到当前已连接运行时。
@@ -355,7 +369,7 @@ export function SpeechHtmlFrame(props: {
       }
     }
     const unsubscribeMsg = subscribeWindowMessage(iframeRef.current?.contentWindow, onMsg)
-    return () => {active=false;if(rotateReadOnly.current===rotate)rotateReadOnly.current=()=>{};closeRegistration();stopStory?.();clearScriptChoices(choiceOwner);unregisterGuard?.();for(const [id,guard] of guards){clearTimeout(guard.timer);unlock(id,guard.runtimeId);guard.reject(new Error('卡面已关闭'))}for(const receipt of displayReceipts.values()){clearTimeout(receipt.timer);receipt.lease.cancel()}eventEndpoint?.dispose();unsubscribeMsg()}
+    return () => {active=false;themeObserver?.disconnect();if(rotateReadOnly.current===rotate)rotateReadOnly.current=()=>{};closeRegistration();stopStory?.();clearScriptChoices(choiceOwner);unregisterGuard?.();for(const [id,guard] of guards){clearTimeout(guard.timer);unlock(id,guard.runtimeId);guard.reject(new Error('卡面已关闭'))}for(const receipt of displayReceipts.values()){clearTimeout(receipt.timer);receipt.lease.cancel()}eventEndpoint?.dispose();unsubscribeMsg()}
   }, [srcDoc,props.helperBinding?.sessionId,props.helperBinding?.storyId,props.helperMessageId])
 
   useLayoutEffect(()=>{rotateReadOnly.current(Boolean(props.readOnly))},[props.readOnly])
@@ -427,6 +441,43 @@ interface DisplayProjectionProps extends SpeechBubbleProps {
   onSwipe: (index: number, frameLease?: HelperFrameLease) => void | Promise<void>
 }
 
+function PlainDetailsFoldView(props: {
+  block: PlainDetailsBlock
+  defaultSummary: string
+  labels: ComponentProps<typeof MarkdownText>['labels']
+  fileMentions?: ComponentProps<typeof MarkdownText>['fileMentions']
+}) {
+  const { block, defaultSummary, labels, fileMentions } = props
+  return (
+    <details className="dsh-tavern-fold" open={block.open || undefined}>
+      <summary>{block.summary || defaultSummary}</summary>
+      {block.children.length > 0 && (
+        <div className="dsh-tavern-foldBody">
+          {block.children.map((child, childIndex) =>
+            child.kind === 'markdown' ? (
+              <MarkdownText
+                key={`md:${childIndex}`}
+                text={child.text}
+                streaming={false}
+                labels={labels}
+                fileMentions={fileMentions}
+              />
+            ) : (
+              <PlainDetailsFoldView
+                key={`nested:${childIndex}`}
+                block={child.block}
+                defaultSummary={defaultSummary}
+                labels={labels}
+                fileMentions={fileMentions}
+              />
+            ),
+          )}
+        </div>
+      )}
+    </details>
+  )
+}
+
 /**
  * 一份可独立存活的卡面投影。重绘时新投影先以 hidden 真挂载，完成 iframe ready
  * 与宿主显示事件后只切换容器可见性；key 不变，已启动的沙箱不会为发布再执行一次。
@@ -450,14 +501,23 @@ function DisplayProjection(props: DisplayProjectionProps) {
     if (!parts.length) parts.push({ kind: 'markdown', text: text || ' ' })
     return parts
   },[streaming,interactive,value,rawText])
+  const plainFolds = useMemo(
+    () => visibleParts.map(part =>
+      interactive && !streaming && part.kind === 'html' && part.title === undefined
+        ? parsePlainDetailsBlocks(part.text)
+        : null),
+    [visibleParts, interactive, streaming],
+  )
 
   // 每个卡面会内嵌完整消息快照。普通气泡重绘只更新事件回调，不重复序列化历史。
   const frameDocs=useMemo(()=>{
+    const colorScheme = readHostColorScheme()
     let frameIndex=0
-    return visibleParts.map(part=>{
-      if(part.kind!=='html')return null
+    return visibleParts.map((part, index)=>{
+      if(part.kind!=='html' || plainFolds[index] !== null)return null
       return buildCardSrcDoc(part.text, {
         greetings: value.greetings ?? [], greetingIndex: value.greetingIndex ?? 0, connectHosts: value.whitelist,
+        colorScheme,
         helperSnapshot: value.helper, scriptLibraries: value.helperScripts, worldbooks: value.helperWorldbooks,
         scriptLibraryLabels: { saving: t('speech.scriptSaving'), saved: t('speech.scriptSaved'), failed: t('speech.scriptSaveFailed') },
         persistenceLabels: { saving: t('speech.helperSaving'), saved: t('speech.helperSaved'), failed: t('speech.helperSaveFailed'), refresh: t('speech.helperRefresh') },
@@ -469,9 +529,12 @@ function DisplayProjection(props: DisplayProjectionProps) {
         variableLabels: cardVariableLabels(t, value.helper ? t('speech.helperDataNote') : t('speech.cardDataNote')),
       })
     })
-  },[visibleParts,value,rawText,props.messageId,props.name,Boolean(props.onSwipeGreeting),locale])
+  },[visibleParts,plainFolds,value,rawText,props.messageId,props.name,Boolean(props.onSwipeGreeting),locale])
 
-  const htmlCount = visibleParts.filter(part => part.kind === 'html').length
+  const htmlCount = useMemo(
+    () => frameDocs.reduce((count, doc) => count + (doc !== null ? 1 : 0), 0),
+    [frameDocs],
+  )
   const cycleRef = useRef({ seen: new Set<number>(), done: false, active: true })
   const latest = useRef({ isCurrent: props.isCurrent, onComplete: props.onComplete, onFailure: props.onFailure })
   latest.current = { isCurrent: props.isCurrent, onComplete: props.onComplete, onFailure: props.onFailure }
@@ -523,6 +586,18 @@ function DisplayProjection(props: DisplayProjectionProps) {
 
   const content = visibleParts.map((part, index) => {
     if (part.kind === 'markdown') return <MarkdownText key={`text:${index}`} text={part.text} streaming={Boolean(streaming)} labels={markdownLabels} fileMentions={props.fileMentions} />
+    const folds = plainFolds[index]
+    if (folds !== null && folds !== undefined) {
+      return <Fragment key={`fold-group:${index}`}>{folds.map((block, foldIndex) => (
+        <PlainDetailsFoldView
+          key={`plain-fold:${index}:${foldIndex}`}
+          block={block}
+          defaultSummary={t('speech.detailsSummary')}
+          labels={markdownLabels}
+          fileMentions={props.fileMentions}
+        />
+      ))}</Fragment>
+    }
     const srcDoc = frameDocs[index]!
     const fullDocumentCover = isFullHtmlDocument(part.text)
     const widget = !fullDocumentCover && visibleParts.length > 1
@@ -767,7 +842,23 @@ function SpeechBubbleSession(props: SpeechBubbleProps) {
 
   /** 复制纯文本：优先 navigator.clipboard，沙盒/权限被拒时回退 execCommand。 */
   const onCopy = async () => {
-    const plain = streaming || rendered.state.status==='ready'&&rendered.state.value.pendingHtml ? text : text || stripDisplayMeta(rawText)
+    let plain = streaming || rendered.state.status==='ready'&&rendered.state.value.pendingHtml ? text : text || stripDisplayMeta(rawText)
+    if (!plain.trim() && !streaming && interactive && rendered.state.status === 'ready') {
+      const value = rendered.state.value
+      const htmlFragments = value.parts
+        ? value.parts.filter(part => part.kind === 'html' && part.title === undefined).map(part => part.text)
+        : value.htmls?.length
+          ? value.htmls
+          : value.html ? [value.html] : []
+      const foldText = htmlFragments
+        .flatMap(html => {
+          const parsed = parsePlainDetailsBlocks(html)
+          return parsed ? [formatPlainDetailsText(parsed)] : []
+        })
+        .filter(Boolean)
+        .join('\n\n')
+      if (foldText) plain = foldText
+    }
     const fallback = () => {
       try {
         const ta = document.createElement('textarea')

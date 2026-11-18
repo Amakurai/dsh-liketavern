@@ -1,6 +1,7 @@
 import type { ComponentProps, ReactNode } from 'react';
 import { MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives';
 import type { SessionEventSource } from '@deepseek-ai/dsh-api-session-controller/client';
+import { readHostColorScheme } from './displayPrefs.js';
 import type { TavernRemote } from './types.js';
 import { type HelperSnapshot } from '../core/helperRuntime.js';
 import type { HelperWorldbookContext, HelperWorldbookRequest, HelperWorldbookResult, HelperWorldbookRebindRequest } from '../core/helperWorldbook.js';
@@ -11,6 +12,7 @@ import type { HelperFrameLease } from '../core/helperFrame.js';
 type FrameWrite<T> = T & {
     frameLease?: HelperFrameLease;
 };
+export { readHostColorScheme };
 export declare function SpeechHtmlFrame(props: {
     onFrameReady?: () => void;
     onScriptError?: (message: string) => void;
@@ -71,4 +73,3 @@ interface SpeechBubbleProps {
 }
 /** 按会话和角色卸载旧气泡状态，慢请求的报错不能留到新会话。 */
 export declare function SpeechBubble(props: SpeechBubbleProps): import("react").JSX.Element;
-export {};

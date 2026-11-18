@@ -2,6 +2,7 @@
  * 展示层机读标签收起：UpdateVariable / JSONPatch / 流式未闭合尾巴 / 协议标签
  *（customize_HCI、now_plot 等），不误伤普通正文与 HTML。
  */
+import MarkdownIt from 'markdown-it'
 import { describe, expect, it } from 'vitest'
 import { presentRenderedOutput, presentStreamingOutput, stripDisplayMeta, stripOpaqueDisplayMeta } from '../src/core/displaySanitize.js'
 
@@ -356,5 +357,79 @@ describe('审查修复回归：交互卡回退', () => {
       pendingHtml: false,
     })
     expect(stripDisplayMeta('前文<initvar/>中<Analysis>一</Analysis>后<JSONPatch>未闭合')).toBe('前文中后')
+  })
+
+  it('行首自定义伪标签不吞掉后续代码围栏，CommonMark 渲染出 json 代码块', () => {
+    const md = new MarkdownIt('commonmark')
+    const repro = [
+      '<Adventurer Profile>',
+      '```json',
+      '•姓名: 格伦·铁砧',
+      '•性别: 男',
+      '•种族: 矮人',
+      '```',
+      '<details><summary>____------妖精契约------____</summary>',
+      '>契约者: 希尔薇',
+      '</details>',
+      '</Adventurer Profile>',
+    ].join('\n')
+
+    expect(md.render(repro)).not.toContain('<pre><code class="language-json">')
+
+    const shown = presentRenderedOutput(repro, true)
+    expect(shown.htmls).toEqual([
+      '<details><summary>____------妖精契约------____</summary>\n>契约者: 希尔薇\n</details>',
+    ])
+    expect(shown.text).toBe('```json\n•姓名: 格伦·铁砧\n•性别: 男\n•种族: 矮人\n```')
+
+    const markup = md.render(shown.text)
+    expect(markup).toContain('<pre><code class="language-json">')
+    expect(markup).toContain('格伦·铁砧')
+    expect(markup).not.toContain('Adventurer Profile')
+
+    const statusSample = '<status1>\n```json\n{"hp": 10}\n```\n</status1>'
+    expect(md.render(statusSample)).not.toContain('<pre><code class="language-json">')
+    const strippedStatus = stripDisplayMeta(statusSample)
+    expect(strippedStatus).toBe('```json\n{"hp": 10}\n```')
+    const statusMarkup = md.render(strippedStatus)
+    expect(statusMarkup).toContain('<pre><code class="language-json">')
+    expect(statusMarkup).toContain('&quot;hp&quot;')
+    expect(statusMarkup).not.toContain('status1')
+
+    const disabled = presentRenderedOutput(repro, false)
+    expect(disabled.htmls).toEqual([])
+    expect(disabled.text).toContain('```json\n•姓名: 格伦·铁砧')
+    expect(disabled.text).toContain('```html\n<details>')
+    expect(disabled.text).not.toContain('Adventurer Profile')
+  })
+
+  it('清理引用块内、多伪标签同行、配对同行残余及未闭合流式伪标签行', () => {
+    expect(stripDisplayMeta('<Adventurer Profile> <status1>\n正文\n</status1> </Adventurer Profile>')).toBe('正文')
+    expect(stripDisplayMeta('> <Adventurer Profile>\n> ```json\n> {"a": 1}\n> ```\n> </Adventurer Profile>'))
+      .toBe('>\n> ```json\n> {"a": 1}\n> ```\n>')
+    expect(stripDisplayMeta('<status1>\n种族: 矮人</status1>')).toBe('种族: 矮人')
+    expect(stripDisplayMeta('前文<status1>\n</status1>')).toBe('前文')
+    expect(stripDisplayMeta('<Adventurer Profile>\n已输出台词')).toBe('已输出台词')
+    expect(stripDisplayMeta('<rpg:status>\n```json\n{"lv":1}\n```\n</rpg:status>')).toBe('```json\n{"lv":1}\n```')
+  })
+
+  it('伪标签清理不误伤代码示例、缩进代码、自动链接、盘符路径、泛型与标准 HTML', () => {
+    const preserved = [
+      '```text\n<Adventurer Profile>\n<status1>\n```',
+      '行内 `<Adventurer Profile>` 与 `<status1>` 保留',
+      '代码示例：\n\n    <status1>',
+      '代码示例：\n\n\t<Adventurer Profile>',
+      '<https://example.com/>',
+      '<mailto:a@b.com>',
+      '<urn:isbn:0451450523>',
+      '<C:/Users/foo>',
+      '类型 Array<string> 保留',
+      '<think-box>legit</think-box> after',
+      '<DIV>\n正文\n</DIV>',
+      '<menuitem>项</menuitem>',
+    ]
+    for (const sample of preserved) {
+      expect(stripDisplayMeta(sample)).toBe(sample)
+    }
   })
 })

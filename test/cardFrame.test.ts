@@ -128,6 +128,15 @@ describe('buildCardSrcDoc', () => {
     expect(payloadStart).toBeGreaterThan(doc.indexOf('<script data-dsh-tavern-bridge>'))
     expect(doc.slice(payloadStart)).toBe(`${payload}</html>`)
   })
+
+  it('按宿主 colorScheme 写入 meta 声明，缺省保持自适应 light dark', () => {
+    const darkDoc = buildCardSrcDoc('<div>卡面</div>', { greetings: [], greetingIndex: 0, colorScheme: 'dark' })
+    const lightDoc = buildCardSrcDoc('<div>卡面</div>', { greetings: [], greetingIndex: 0, colorScheme: 'light' })
+    const defaultDoc = buildCardSrcDoc('<div>卡面</div>', { greetings: [], greetingIndex: 0 })
+    expect(darkDoc).toContain('<meta name="color-scheme" content="dark"></head><body>')
+    expect(lightDoc).toContain('<meta name="color-scheme" content="light"></head><body>')
+    expect(defaultDoc).toContain('<meta name="color-scheme" content="light dark"></head><body>')
+  })
 })
 
 describe('tavernCardBridgeScript', () => {
@@ -205,6 +214,52 @@ describe('tavernCardBridgeScript', () => {
       expect(written).toContain(`${trustedCsp}${trustedBridge}<meta name="color-scheme" content="light dark"></head>${payload}`)
     }
     expect(nativeWrite).toHaveBeenCalledTimes(4)
+  })
+
+  it('只响应合法父窗口与当前运行时的 setColorScheme，重写文档后保留新配色并在卸载时清理监听', () => {
+    const nativeOpen = vi.fn(), nativeWrite = vi.fn(), nativeClose = vi.fn()
+    const messageHandlers: Array<(event: unknown) => void> = []
+    const window = {
+      name: '',
+      addEventListener: vi.fn((type: string, fn: (event: unknown) => void) => {
+        if (type === 'message') messageHandlers.push(fn)
+      }),
+      removeEventListener: vi.fn(),
+      location: { reload: vi.fn() },
+    }
+    const metaNode = { name: 'color-scheme', content: 'light' }
+    const document = {
+      open: nativeOpen, write: nativeWrite, close: nativeClose, currentScript: null,
+      querySelector: (selector: string) => selector === 'meta[name="color-scheme"]' ? metaNode : null,
+      readyState: 'loading', addEventListener: vi.fn(), removeEventListener: vi.fn(),
+    }
+    const parent = { postMessage: vi.fn() }
+    const context = createContext({ crypto: webcrypto, window, document, parent, TextEncoder, clearTimeout, setTimeout })
+    const script = tavernCardBridgeScript({ greetings: [], greetingIndex: 0, colorScheme: 'light' })
+      .replace(/^<script[^>]*>/, '').replace(/<\/script>$/, '')
+    runInContext(script, context)
+
+    const runtimeId = (window as { __dshTavernEventRuntimeId?: string }).__dshTavernEventRuntimeId
+    expect(typeof runtimeId).toBe('string')
+    const dispatch = (event: unknown) => { for (const handler of messageHandlers) handler(event) }
+
+    // 伪造来源、旧运行时或非法值必须忽略
+    dispatch({ source: {}, data: { source: CARD_BRIDGE_SOURCE, runtimeId, action: 'setColorScheme', colorScheme: 'dark' } })
+    dispatch({ source: parent, data: { source: CARD_BRIDGE_SOURCE, runtimeId: 'stale-runtime', action: 'setColorScheme', colorScheme: 'dark' } })
+    dispatch({ source: parent, data: { source: CARD_BRIDGE_SOURCE, runtimeId, action: 'setColorScheme', colorScheme: 'sepia' } })
+    expect(metaNode.content).toBe('light')
+
+    // 合法父窗口 + 当前运行时更新 meta 并在 document.write 时保留
+    dispatch({ source: parent, data: { source: CARD_BRIDGE_SOURCE, runtimeId, action: 'setColorScheme', colorScheme: 'dark' } })
+    expect(metaNode.content).toBe('dark')
+
+    document.open()
+    document.write('<html><body>重写内容</body></html>')
+    document.close()
+    expect(nativeWrite.mock.lastCall?.[0]).toContain('<meta name="color-scheme" content="dark"></head>')
+
+    runInContext('window.__dshTavernBridgeCleanup()', context)
+    expect(window.removeEventListener).toHaveBeenCalledWith('message', expect.any(Function))
   })
 })
 

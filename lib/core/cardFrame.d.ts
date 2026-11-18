@@ -15,6 +15,7 @@ export interface CardFrameOptions {
     /** 开场白变体（0 = first_mes）。供 getChatMessages / swipe_id 使用。 */
     greetings: string[];
     greetingIndex: number;
+    colorScheme?: 'light' | 'dark';
     variableLabels?: CardVariableLabels;
     variableStyles?: string;
     helperContext?: CardHelperContext;

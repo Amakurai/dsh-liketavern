@@ -86,6 +86,7 @@ export interface CardFrameOptions {
   /** 开场白变体（0 = first_mes）。供 getChatMessages / swipe_id 使用。 */
   greetings: string[]
   greetingIndex: number
+  colorScheme?: 'light' | 'dark'
   variableLabels?: CardVariableLabels
   variableStyles?: string
   helperContext?: CardHelperContext
@@ -184,6 +185,7 @@ function cspContent(connectHosts: string[]): string {
 export function tavernCardBridgeScript(options: Omit<CardFrameOptions, 'connectHosts'>): string {
   // 小字段照常序列化（缺省字段同样省略），只把可缓存的大快照拼接进去；source 恒在，对象不为空。
   const src = getBridgeSources()
+  const initialColorScheme = options.colorScheme === 'light' || options.colorScheme === 'dark' ? options.colorScheme : 'light dark'
   const head = escapeScriptJson({ greetings: options.greetings, greetingIndex: options.greetingIndex, source: CARD_BRIDGE_SOURCE })
   const payload = options.helperSnapshot ? head.slice(0, -1) + ',"helperSnapshot":' + snapshotScriptJson(options.helperSnapshot) + '}' : head
   return `<script data-dsh-tavern-bridge>
@@ -249,6 +251,28 @@ export function tavernCardBridgeScript(options: Omit<CardFrameOptions, 'connectH
     title: 'Card variables / backup', note: options.helperSnapshot ? 'Variables save to this story. Wait for the saved status before leaving; keep a backup if saving fails. Restoring also updates story variables.' : 'Card variables stay in this preview only. Copy a backup before leaving or refreshing.',
     backup: 'Select backup text', text: 'Card variable backup',
   })}, ${escapeScriptJson(options.variableStyles ?? '')}, cfg.helperSnapshot ? cfg.helperSnapshot.currentMessageId : ${escapeScriptJson(options.helperContext?.messageId ?? 0)}, cfg.helperSnapshot ? cfg.helperSnapshot.messages.length : undefined);
+  var currentColorScheme = ${escapeScriptJson(initialColorScheme)};
+  var colorSchemeFromHost = false;
+  function readColorSchemeMeta() {
+    var node = document.querySelector ? document.querySelector('meta[name="color-scheme"]') : null;
+    if (!colorSchemeFromHost && node && (node.content === 'light' || node.content === 'dark')) {
+      currentColorScheme = node.content;
+    }
+  }
+  function applyColorScheme(scheme) {
+    if (scheme !== 'light' && scheme !== 'dark' && scheme !== 'light dark') return;
+    colorSchemeFromHost = true;
+    currentColorScheme = scheme;
+    var node = document.querySelector ? document.querySelector('meta[name="color-scheme"]') : null;
+    if (node) node.content = scheme;
+  }
+  function onHostColorScheme(event) {
+    var data = event && event.data;
+    if (!data || event.source !== parent || data.source !== cfg.source || data.runtimeId !== runtimeId || data.action !== 'setColorScheme') return;
+    applyColorScheme(data.colorScheme);
+  }
+  readColorSchemeMeta();
+  if (typeof window.addEventListener === 'function') window.addEventListener('message', onHostColorScheme);
   function post(action, extra) {
     var msg = { source: cfg.source, action: action, runtimeId: runtimeId };
     if (extra) for (var k in extra) if (Object.prototype.hasOwnProperty.call(extra, k)) msg[k] = extra[k];
@@ -407,6 +431,10 @@ export function tavernCardBridgeScript(options: Omit<CardFrameOptions, 'connectH
     document.addEventListener('toggle', scheduleHeight, true);
     timers.push(setTimeout(scheduleHeight, 300), setTimeout(scheduleHeight, 1200));
   }
+  function onDomReady() {
+    readColorSchemeMeta();
+    watchHeight();
+  }
   window.__dshTavernBridgeCleanup = function () {
     heightActive = false;
     if (heightFrame !== null) {
@@ -428,9 +456,10 @@ export function tavernCardBridgeScript(options: Omit<CardFrameOptions, 'connectH
     if (mo) mo.disconnect();
     timers.forEach(clearTimeout);
     window.removeEventListener('load', scheduleHeight);
+    if (typeof window.removeEventListener === 'function') window.removeEventListener('message', onHostColorScheme);
     document.removeEventListener('load', scheduleHeight, true);
     document.removeEventListener('toggle', scheduleHeight, true);
-    document.removeEventListener('DOMContentLoaded', watchHeight);
+    document.removeEventListener('DOMContentLoaded', onDomReady);
   };
   // 封面常 document.write 整页 HTML，会冲掉 head 里的桥。把 stub/CSP 写回后再落盘。
   var nativeDocument = window.__dshTavernNativeDocument || (window.__dshTavernNativeDocument = {
@@ -448,7 +477,7 @@ export function tavernCardBridgeScript(options: Omit<CardFrameOptions, 'connectH
   var libraryHtml = libraryNode && libraryNode.outerHTML ? libraryNode.outerHTML : '';
   function injectBridge(html) {
     // 不信任第三方 head、注释或伪造的 bridge 标记；重新解析前先建立有效策略。
-    return (${src.wrapDoc})(html, cspHtml + libraryHtml + stubHtml, (${src.hasShell})(html));
+    return (${src.wrapDoc})(html, cspHtml + libraryHtml + stubHtml, (${src.hasShell})(html), currentColorScheme);
   }
   // 浏览器里 document.write 后不调用 close 仍会渲染（文档保持打开）。缓冲整页时若同一任务内
   // 没等到 close，就在下一任务补写并保持打开；否则只写不关的封面会整页空白。
@@ -489,8 +518,8 @@ export function tavernCardBridgeScript(options: Omit<CardFrameOptions, 'connectH
   document.close = function () {
     if (!flushBuffered(true)) return origClose();
   };
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', watchHeight);
-  else watchHeight();
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', onDomReady);
+  else onDomReady();
 })();
 </script>`
 }
@@ -501,8 +530,9 @@ export function tavernCardBridgeScript(options: Omit<CardFrameOptions, 'connectH
  * lang/dir/class/style/onload 等属性投影到真实根节点。普通片段仍预建 body，保证
  * 放在首位的旧卡脚本立即访问 document.body。初次加载和 document.write 共用此包装。
  */
-function wrapCardDocument(html: string, trustedHead: string, fullDocument: boolean): string {
-  const head=`<!DOCTYPE html><html><head><meta charset="utf-8">${trustedHead}<meta name="color-scheme" content="light dark"></head>`
+function wrapCardDocument(html: string, trustedHead: string, fullDocument: boolean, colorScheme = 'light dark'): string {
+  const scheme = colorScheme === 'light' || colorScheme === 'dark' ? colorScheme : 'light dark'
+  const head=`<!DOCTYPE html><html><head><meta charset="utf-8">${trustedHead}<meta name="color-scheme" content="${scheme}"></head>`
   return fullDocument ? `${head}${html}</html>` : `${head}<body>${html}</body></html>`
 }
 
@@ -541,7 +571,7 @@ export function buildCardSrcDoc(html: string, options: CardFrameOptions): string
   const meta = `<meta http-equiv="Content-Security-Policy" content="${cspContent(options.connectHosts ?? [])}">`
   const stub = tavernCardBridgeScript(options)
   const libraries = needsCardLibraries(html,options) ? getCardLibraryTag() : ''
-  return wrapCardDocument(html, meta + libraries + stub, isFullHtmlDocument(html))
+  return wrapCardDocument(html, meta + libraries + stub, isFullHtmlDocument(html), options.colorScheme)
 }
 
 export interface CardBridgeMessage {

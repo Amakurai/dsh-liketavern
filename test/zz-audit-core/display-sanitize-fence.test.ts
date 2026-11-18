@@ -57,3 +57,20 @@ it('未闭合围栏内的半截机读标签不触发截断', () => {
   const input = '示例：\n```html\n<UpdateVariable>还没写完'
   expect(stripDisplayMeta(input)).toBe(input)
 })
+
+it('围栏与行内代码内的自定义伪标签原样保留，围栏外行首伪标签照常清理', () => {
+  const input = [
+    '<Adventurer Profile>',
+    '```json',
+    '{"tag": "<status1>"}',
+    '```',
+    '示例 `<Adventurer Profile>` 与 `<status1>` 原样保留。',
+    '</Adventurer Profile>',
+  ].join('\n')
+  expect(stripDisplayMeta(input)).toBe([
+    '```json',
+    '{"tag": "<status1>"}',
+    '```',
+    '示例 `<Adventurer Profile>` 与 `<status1>` 原样保留。',
+  ].join('\n'))
+})

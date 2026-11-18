@@ -8,6 +8,8 @@ export declare function stripOpaqueDisplayMetaParts<T extends {
 export declare function stripContinuedDisplayMetaParts<T extends {
     text: string;
 }>(parts: readonly T[]): T[];
+/** 是否为标准 HTML / SVG / MathML 元素名（忽略大小写）。 */
+export declare function isKnownHtmlElementName(name: string): boolean;
 /** 独立样式片段不应占一个空 iframe；跨过普通台词，将 CSS 交给下一张真正的卡面。 */
 export declare function mergeDetachedCardStyles<T extends {
     kind: 'markdown' | 'html';

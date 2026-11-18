@@ -483,3 +483,37 @@ it('真实剧情落盘后按顺序重绘，资产修改和重复读取不重跑�
   storedEvents=events
   await expect(service.renderOutputText({sessionId:'s1',text:greeting,messageId:5})).rejects.toThrow(/未成功提交/)
 })
+
+it('仅含普通 details 折叠块的消息只返回紧凑 helperContext，不加载完整 helper 快照与脚本库',async()=>{
+  const root=await mkdtemp(join(tmpdir(),'tavern-plain-details-')); roots.push(root)
+  const paths={root,characters:join(root,'characters'),lorebooks:join(root,'lorebooks'),presets:join(root,'presets'),personas:join(root,'personas'),regexDir:join(root,'regex'),sessions:join(root,'sessions')}
+  const state=new TavernState(paths,()=>resolveConfig({}));await state.init()
+  const {cardId}=await importCard(paths.characters,parseJsonCard({name:'A',description:'角色'}))
+  await saveBinding(paths,{sessionId:'s-details',cardId,cardName:'A',presetId:null,personaId:null,lorebookIds:[],characterLorebookId:null,interactiveCards:null,greetingIndex:0,createdAt:new Date(0).toISOString()})
+
+  const plainText='<Adventurer Profile>\n```json\n{"hp":10}\n```\n<details><summary>契约</summary>\n>希尔薇\n</details>\n</Adventurer Profile>'
+  const cardText='<div>状态卡</div>'
+  const storedEvents=[
+    {type:'assistant/message',seq:1,time:0,data:{turn:1,step:1,message:createAssistantMessage({content:[{type:'text',text:plainText}],source:TAVERN_GREETING_SOURCE})}},
+    {type:'assistant/message',seq:2,time:0,data:{turn:2,step:1,message:createAssistantMessage({content:[{type:'text',text:cardText}]})}},
+  ] as unknown as SessionEvent[]
+  const session={id:'s-details' as Session['id'],snapshotEvents:()=>storedEvents}
+  const config=(TavernConfigSchema as (input:unknown)=>TavernConfigRaw)({})
+  const ctx={reflect:{provide:()=>{}},get:()=>undefined,sessions:{get:()=>session}} as unknown as Context
+  const service=new TavernService(ctx,state,{get:()=>config} as unknown as TavernSettingsScope)
+
+  const plainOutput=await service.renderOutputText({sessionId:'s-details',text:plainText,messageId:1})
+  expect(plainOutput.htmls).toEqual(['<details><summary>契约</summary>\n>希尔薇\n</details>'])
+  expect(plainOutput.text).toBe('```json\n{"hp":10}\n```')
+  expect(plainOutput.helperContext).toEqual({storyId:(await state.loadBinding('s-details'))!.storyId,historyRevision:expect.any(String),currentMessageId:0,currentMessageRole:'assistant'})
+  expect(plainOutput.helper).toBeUndefined()
+  expect(plainOutput.helperScripts).toBeUndefined()
+  expect(plainOutput.helperWorldbooks).toBeUndefined()
+
+  const cardOutput=await service.renderOutputText({sessionId:'s-details',text:cardText,messageId:2})
+  expect(cardOutput.htmls).toEqual(['<div>状态卡</div>'])
+  expect(cardOutput.helper).toBeDefined()
+  expect(cardOutput.helperContext).toBeUndefined()
+  expect(cardOutput.helperScripts).toBeDefined()
+  expect(cardOutput.helperWorldbooks).toBeDefined()
+})

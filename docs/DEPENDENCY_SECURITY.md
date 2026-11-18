@@ -1,6 +1,13 @@
 # 依赖安全记录
 
-本记录说明依赖告警的处理结果与剩余边界，最近复核日期为 2026-10-10。v0.5.2 的干净 `npm ci` 后，全量 `npm audit` 与生产依赖审计均为 **0 项已知漏洞**。审计或测试通过都不能解释为不存在未知漏洞。
+本记录说明依赖告警的处理结果与剩余边界，最近复核日期为 2026-11-18。生产运行依赖审计（`npm audit --omit=dev --package-lock-only`）保持 **0 项已知漏洞**；开发锁文件的上游未修复公告由 `npm run audit:check`（`scripts/verify-audit.mjs`）执行范围绑定的自过期受控校验。审计或测试通过都不能解释为不存在未知漏洞。
+
+## 2026-11-18 开发链未修复公告受控校验（picomatch）
+
+GitHub Advisory Database 于 2026-11-17 更新 [GHSA-fc5q-39xc-vjpf](https://github.com/advisories/GHSA-fc5q-39xc-vjpf)（CVE-2026-112366）：`picomatch` `<= 4.0.7` 在解析单分支重复 extglob 模式时存在指数级回溯（ReDoS）风险，核对时公开 npm 最新版本仍为 `4.0.7`（`first_patched_version` 为空，尚无任何已发布修复版本）。
+
+- **影响范围核对**：`npm audit --omit=dev --package-lock-only` 为 **0 项漏洞**。`picomatch` 不属于插件运行依赖，不进入 `lib/`、`lib/vendor/*` 或发布的 `.tgz` 安装包；仅通过开发测试链（`vitest` / `vite` / `tinyglobby`）与开发宿主包（`@deepseek-ai/dsh-hmr`、`@deepseek-ai/dsh-experimental-client-ui-forge`）存在于仓库开发锁文件中，不处理不可信外部角色卡或用户输入。
+- **门禁策略**：新增 `scripts/verify-audit.mjs`（`npm run audit:check`）替代裸 `npm audit` 退出码判断：生产运行依赖保持零容忍（任一告警立即失败）；全量锁文件仅在 `GHSA-fc5q-39xc-vjpf` 的受影响范围仍为 `<=4.0.7` 且未报告直接修复版本时放行并输出明确提示。一旦上游发布补丁使范围变化，或出现任何其它 GHSA / 未归因告警，门禁立即失败报错，绝不通过 `--audit-level` 或伪造包全局掩盖其它漏洞。
 
 ## 2026-10-24 新公告处理
 
@@ -48,7 +55,7 @@ v0.2.6 发布前本地验收：`npm run build`、全量 **140 文件 / 1986 项�
 
 ## 安装脚本与上游弃用提示
 
-npm 11.16 的项目 `allowScripts` 逐版本记录：`@deepseek-ai/dsh-subprocess-local@0.2.2-rc.1`、`@google/genai@2.21.0`、`esbuild@0.25.12`、`esbuild@0.28.2`、`koffi@3.1.1`、`node-pty@1.2.0-beta.15`、`protobufjs@7.6.6`。不使用全局放行或通配符；以后版本变化需要重新审阅。此字段是脚本审批记录，不是脚本权限沙箱，旧 npm 可能不读取它。见 [npm 官方说明](https://docs.npmjs.com/cli/v11/commands/npm-approve-scripts/)。
+npm 11.16 的项目 `allowScripts` 逐版本记录：`@deepseek-ai/dsh-subprocess-local@0.2.2-rc.3`、`@google/genai@2.21.0`、`esbuild@0.25.12`、`esbuild@0.28.2`、`koffi@3.1.1`、`node-pty@1.2.0-beta.15`、`protobufjs@7.6.6`。不使用全局放行或通配符；以后版本变化需要重新审阅。此字段是脚本审批记录，不是脚本权限沙箱，旧 npm 可能不读取它。见 [npm 官方说明](https://docs.npmjs.com/cli/v11/commands/npm-approve-scripts/)。
 
 2026-11-06 对照了 esbuild `0.25.12` 与 `0.28.2` 的安装脚本：新版仍准备当前平台二进制，并在需要从 npm 或官方 registry 补取时按包内摘要核对 SHA-256；它只用于 Vite 的开发依赖，产物构建器仍固定为 `0.25.12`。
 

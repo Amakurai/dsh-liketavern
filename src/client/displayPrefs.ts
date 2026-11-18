@@ -30,3 +30,11 @@ function subscribeSpeakerHeader(fn: () => void): () => void {
 export function useSpeakerHeader(): boolean {
   return useSyncExternalStore(subscribeSpeakerHeader, getSpeakerHeader)
 }
+
+/** 读取宿主当前主题明暗配色（优先 body[data-ds-dark-theme]，回退根节点 colorScheme）。 */
+export function readHostColorScheme(): 'light' | 'dark' | undefined {
+  if (typeof document === 'undefined') return undefined
+  if (document.body?.hasAttribute?.('data-ds-dark-theme')) return 'dark'
+  const scheme = document.documentElement?.style?.colorScheme
+  return scheme === 'dark' || scheme === 'light' ? scheme : undefined
+}

@@ -8,7 +8,7 @@ import {ScriptChoices} from '../src/client/helperChoices.js'
 import { SpeechHtmlFrame,SpeechBubble } from '../src/client/speech.js'
 import type { TavernRemote } from '../src/client/types.js'
 import { setTavernLocale } from '../src/client/i18n.js'
-import { Btn,FileBtn,SearchInput,Select,Tabs,Toggle } from '../src/client/util.js'
+import { Btn,FileBtn,IconBtn,SearchInput,Select,Tabs,Toggle } from '../src/client/util.js'
 import { HelperScriptEditorBody } from '../src/client/helperScriptEditor.js'
 import type { HelperSnapshot } from '../src/core/helperRuntime.js'
 import { HelperScripts } from '../src/client/helperScripts.js'
@@ -1110,4 +1110,128 @@ it.each([true,false])('33 个启用脚本在会话 enabled=%s 时正确发布预
   expect(status.state).toBe(enabled?'error':'disabled')
   if(enabled)expect(status.error).toContain('32')
   else expect(status.error).toBeUndefined()
+})
+
+it('伪标签加普通 details 渲染为原生折叠与 json 围栏且不挂载 iframe，并正常触发显示完成事件',async()=>{
+  const {attachHelperEvents}=await import('../src/client/helperEventRouter.js')
+  const deliveries:unknown[][]=[]
+  let prepared:unknown[]|undefined
+  const observer=attachHelperEvents('plain-details-session','story',message=>{
+    if(message.action==='helperEventDeliver'){prepared=message.args;queueMicrotask(()=>observer.receive({source:'dsh-tavern-card',action:'helperEventPrepared',runtimeId:'observer',deliveryId:message.deliveryId,args:message.args}))}
+    if(message.action==='helperEventExecute'){
+      deliveries.push(prepared??[])
+      queueMicrotask(()=>observer.receive({source:'dsh-tavern-card',action:'helperEventReply',runtimeId:'observer',deliveryId:message.deliveryId,args:prepared??[],ok:true}))
+    }
+  })
+  observer.receive({source:'dsh-tavern-card',action:'helperEventConnect',runtimeId:'observer'})
+  observer.receive({source:'dsh-tavern-card',action:'helperEventSubscribe',runtimeId:'observer',listenerId:'rendered',event:'character_message_rendered',once:false,position:'normal'})
+  const raw=[
+    '<Adventurer Profile>',
+    '```json',
+    '•姓名: 格伦·铁砧',
+    '```',
+    '<details><summary>____------妖精契约------____</summary>',
+    '>契约者: 希尔薇',
+    '</details>',
+    '<details><summary>状态</summary>',
+    '正常',
+    '</details>',
+    '</Adventurer Profile>',
+  ].join('\n')
+  const output=presentRenderedOutput(raw,true)
+  const parts=splitTemplateDisplay(raw)
+  const rpc={...frameLeaseRpc,renderOutputText:async()=>({ok:true as const,value:{...output,parts,interactiveCards:true,
+    whitelist:[],greetings:[],greetingIndex:0,canSwipeGreeting:false,
+    helperContext:{storyId:'story',historyRevision:'rev-1',currentMessageId:4,currentMessageRole:'assistant' as const}}})} as unknown as TavernRemote
+  try{
+    await mount(<SpeechBubble remote={rpc} sessionId="plain-details-session" cardId="card" name="角色" rawText={raw} messageId={4}/>)
+    expect(view!.root.findAllByType('iframe')).toHaveLength(0)
+    const markdowns=view!.root.findAllByType(MarkdownText).map(node=>node.props.text)
+    expect(markdowns[0]).toBe('```json\n•姓名: 格伦·铁砧\n```')
+    expect(markdowns.join('\n')).not.toContain('Adventurer Profile')
+    const folds=view!.root.findAllByProps({className:'dsh-tavern-fold'})
+    expect(folds).toHaveLength(2)
+    expect(folds[0]!.findByType('summary').children).toEqual(['____------妖精契约------____'])
+    expect(folds[0]!.findByType(MarkdownText).props.text).toBe('>契约者: 希尔薇')
+    expect(folds[1]!.findByType('summary').children).toEqual(['状态'])
+    expect(deliveries).toEqual([[4,'normal']])
+
+    // 关闭交互卡后仍回退为 html 源码围栏，不误删细节内容
+    await act(async()=>view!.update(<SpeechBubble remote={rpc} sessionId="plain-details-session" cardId="card" name="角色" rawText={raw} messageId={4} interactiveCards={false}/>))
+    expect(view!.root.findAllByProps({className:'dsh-tavern-fold'})).toHaveLength(0)
+    expect(view!.root.findAllByType(MarkdownText).map(node=>node.props.text).join('\n')).toContain('```html\n<details>')
+  }finally{observer.dispose()}
+})
+
+it('普通 details 与真实 iframe 卡面混排时真实卡面的 frameIndex 仍从 0 连续编号，带属性或标题的折叠保持 iframe',async()=>{
+  const parts=[
+    {kind:'html' as const,text:'<details><summary>纯文本折叠</summary>摘要说明</details>'},
+    {kind:'html' as const,text:'<div class="status">真实状态卡</div>'},
+    {kind:'html' as const,text:'<details><summary>带外层标题</summary>隔离内容</details>',title:'隔离卡片'},
+    {kind:'html' as const,text:'<details class="styled"><summary>带样式类</summary>样式内容</details>'},
+  ]
+  const rpc={...frameLeaseRpc,renderOutputText:async()=>({ok:true as const,value:{text:'',html:null,htmls:[],parts,interactiveCards:true,
+    whitelist:[],greetings:[],greetingIndex:0,canSwipeGreeting:false}})} as unknown as TavernRemote
+  await mount(<SpeechBubble remote={rpc} sessionId="mixed-fold" cardId="card" name="角色" rawText="mixed"/>)
+  expect(view!.root.findAllByProps({className:'dsh-tavern-fold'})).toHaveLength(1)
+  const iframes=view!.root.findAllByType('iframe')
+  expect(iframes).toHaveLength(3)
+  expect(iframes[0]!.props.srcDoc).toContain('"frameIndex":0')
+  expect(iframes[1]!.props.srcDoc).toContain('"frameIndex":1')
+  expect(iframes[2]!.props.srcDoc).toContain('"frameIndex":2')
+})
+
+it('Web GUI 深浅色与 MutationObserver 变更实时向沙箱发送 setColorScheme，不重建 srcDoc',async()=>{
+  const observers:Array<()=>void>=[]
+  const disconnect=vi.fn()
+  class MockMutationObserver {
+    constructor(cb:()=>void){observers.push(cb)}
+    observe=vi.fn()
+    disconnect=disconnect
+  }
+  let dark=true
+  const doc={
+    documentElement:{style:{colorScheme:'dark'}},
+    body:{hasAttribute:(attr:string)=>attr==='data-ds-dark-theme'&&dark},
+  }
+  vi.stubGlobal('MutationObserver',MockMutationObserver)
+  vi.stubGlobal('document',doc)
+  const cardRpc={...frameLeaseRpc,renderOutputText:async()=>({ok:true as const,value:{text:'',html:'<div class="card">卡面</div>',
+    htmls:['<div class="card">卡面</div>'],parts:[{kind:'html' as const,text:'<div class="card">卡面</div>'}],interactiveCards:true,
+    whitelist:[],greetings:[],greetingIndex:0,canSwipeGreeting:false}})} as unknown as TavernRemote
+  await mount(<SpeechBubble remote={cardRpc} sessionId="theme-sync" cardId="card" name="灯塔" rawText="卡面"/>)
+  const iframe=view!.root.findByType('iframe')
+  const initialSrcDoc=iframe.props.srcDoc as string
+  expect(initialSrcDoc).toContain('<meta name="color-scheme" content="dark"></head>')
+  expect(source.postMessage).toHaveBeenCalledWith(expect.objectContaining({
+    source:'dsh-tavern-card',action:'setColorScheme',colorScheme:'dark',
+  }),'*')
+
+  dark=false
+  doc.documentElement.style.colorScheme='light'
+  await act(async()=>{for(const cb of observers)cb()})
+  expect(source.postMessage).toHaveBeenCalledWith(expect.objectContaining({
+    source:'dsh-tavern-card',action:'setColorScheme',colorScheme:'light',
+  }),'*')
+  expect(view!.root.findByType('iframe').props.srcDoc).toBe(initialSrcDoc)
+  await act(async()=>view!.unmount());view=undefined
+  expect(disconnect).toHaveBeenCalled()
+})
+
+it('只含原生 details 折叠块的气泡点击复制按钮仍写入展开文本而非空串',async()=>{
+  const {setSpeakerHeader}=await import('../src/client/displayPrefs.js')
+  const writeText=vi.fn(async()=>undefined)
+  vi.stubGlobal('navigator',{clipboard:{writeText}})
+  const raw='<details><summary>妖精契约</summary>\n>契约者: 希尔薇<br/>契约状态: 稳定\n</details>'
+  const output=presentRenderedOutput(raw,true)
+  const parts=splitTemplateDisplay(raw)
+  const foldRpc={...frameLeaseRpc,renderOutputText:async()=>({ok:true as const,value:{...output,parts,interactiveCards:true,
+    whitelist:[],greetings:[],greetingIndex:0,canSwipeGreeting:false}})} as unknown as TavernRemote
+  try{
+    setSpeakerHeader(true)
+    await mount(<SpeechBubble remote={foldRpc} sessionId="fold-copy" cardId="card" name="角色" rawText={raw}/>)
+    const copyBtn=view!.root.findByProps({className:'dsh-tavern-speechCopy'}).findByType(IconBtn)
+    await act(async()=>{copyBtn.props.onClick()})
+    expect(writeText).toHaveBeenCalledWith('妖精契约\n>契约者: 希尔薇\n契约状态: 稳定')
+  }finally{setSpeakerHeader(false)}
 })

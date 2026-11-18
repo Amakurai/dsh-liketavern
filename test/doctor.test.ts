@@ -501,9 +501,9 @@ describe('doctor 宿主版本', () => {
 
   it('按宿主优先使用的 engines.dsh 范围报告兼容性', async () => {
     const report = await runDoctor({ home, nodeVersion: '24.0.0', pluginVersion: '9.8.7' })
-    const { engines } = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))
+    const { engines, devDependencies } = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))
     const range = engines.dsh as string
-    expect(report.runtime.dsh).toEqual({ installedVersion: '0.2.2-rc.1', expectedVersion: range, compatible: true })
+    expect(report.runtime.dsh).toEqual({ installedVersion: devDependencies['@deepseek-ai/dsh'], expectedVersion: range, compatible: true })
     expect(areDshVersionsCompatible('0.2.1-rc.2+host', '0.2.1-rc.2+plugin')).toBe(true)
     expect(areDshVersionsCompatible('0.2.1-rc.5', range)).toBe(true)
     expect(areDshVersionsCompatible('0.2.2-alpha.2', range)).toBe(true)

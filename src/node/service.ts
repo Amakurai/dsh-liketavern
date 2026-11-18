@@ -24,6 +24,7 @@ import type { ComputeJobs } from './computeWorker.js'
 import { collectDisplayRegexDiagnostics, presentTemplateDisplayResult } from './templateDisplay.js'
 import { hasApplicableOrMalformedRegex } from '../core/regex.js'
 import { hideIncompleteHtml, presentRenderedOutput, stripOpaqueDisplayMeta } from '../core/displaySanitize.js'
+import { isPlainDetailsHtml } from '../core/plainDetails.js'
 import { disableInteractiveParts, splitTemplateDisplay, TEMPLATE_DISPLAY_PARTS_VERSION, type TemplateDisplayPart } from '../core/templateDisplay.js'
 import { expandIdentityMacros } from '../core/macros.js'
 import { chatPickSeed } from '../core/binding.js'
@@ -955,13 +956,16 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
         ...(pendingHtml?{pendingHtml:true as const}:{}) }
     }
     const htmls = presented.htmls
-    // 纯文本消息也承载后台脚本发布的选项，但不应为历史中的每个气泡重复传输完整消息与变量快照。
-    // 卡面快照与脚本库、世界书只在这里校验能否读取；组装时引用批次共享的同一份结果。
-    const helperMessageId = allowHtml && messageId !== undefined && htmls.length
+    const hasIframeHtml = allowHtml && (parts !== undefined
+      ? parts.some(part => part.kind === 'html' && (part.title !== undefined || !isPlainDetailsHtml(part.text)))
+      : htmls.some(html => !isPlainDetailsHtml(html)))
+    // 纯文本及原生折叠 `<details>` 消息也承载后台脚本发布的选项，但不应为历史中的每个气泡
+    // 重复传输完整消息与变量快照。卡面快照与脚本库、世界书只在这里校验能否读取；组装时引用批次共享的同一份结果。
+    const helperMessageId = allowHtml && messageId !== undefined && hasIframeHtml
       ? (await scope.helperSet(true)).context(messageId).currentMessageId : undefined
-    const helperContext = allowHtml && messageId !== undefined && !htmls.length
+    const helperContext = allowHtml && messageId !== undefined && !hasIframeHtml
       ? (await scope.helperSet(false)).context(messageId) : undefined
-    const helperExtras = htmls.length > 0 && messageId !== undefined
+    const helperExtras = hasIframeHtml && messageId !== undefined
     if (helperExtras) await scope.helperExtras()
     return { helperMessageId, helperExtras, output: {
       ...(parts === undefined ? {} : { parts }),

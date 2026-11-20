@@ -179,6 +179,7 @@ export async function importCard(dataRoot: string, card: CharacterCard, opts?: I
     }
   } finally {
     // 只移除本次临时目录；发布成功后它已不存在，永不清理正式角色目录。
+    closeLedger(staging)
     await rm(staging, { recursive: true, force: true })
   }
 }

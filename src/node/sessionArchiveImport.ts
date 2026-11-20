@@ -12,11 +12,12 @@ import { loadCharacter } from '../state/workspace.js'
 import { withWorkspaceLock } from '../state/workspaceLock.js'
 import { atomicWrite, sweepOrphanTemps } from '../state/atomicWrite.js'
 import { renameWithRetry } from '../state/rename.js'
+import { closeLedger } from '../state/writeLedger.js'
 import { assertBindingFileIdentity, loadBinding, saveBinding } from './bindings.js'
 import { sessionFile } from './paths.js'
 import { assertDirectory, boundedBytes, boundedJson } from './backupFiles.js'
 import { sessionArchiveMarkerPath } from './sessionArchiveMarker.js'
-import { assertArchiveWalComplete } from './sessionArchiveWal.js'
+import { assertArchiveWalComplete, assertWalLineageComplete } from './sessionArchiveWal.js'
 import { parseSessionArchive, SESSION_ARCHIVE_MAX_BYTES, type SessionArchiveFile } from './sessionArchiveFormat.js'
 import { TavernState } from './state.js'
 
@@ -81,7 +82,11 @@ async function validateSharedAssets(parent: string, state: TavernState, archive:
     if (archive.binding.personaId && !(await probe.loadPersona(archive.binding.personaId))) throw new Error('迁移文件中的人设无效')
     if (expected.includes('regex/rules.json')) await probe.getRegexRulesSnapshot()
     if (expected.includes('library/helper-scripts.json')) await probe.getHelperScriptLibrary({ type: 'global' })
-  } finally { await cleanupStage(stage, parent) }
+  } finally {
+    closeLedger(join(stage, 'characters', archive.binding.cardId))
+    closeLedger(stage)
+    await cleanupStage(stage, parent)
+  }
 }
 
 /** 导入失败后保留绑定到归档摘要的回执；相同文件可重试，不能借回执覆盖其它会话。 */
@@ -131,7 +136,11 @@ export async function importSessionArchive(ctx: Context, state: TavernState, inp
         } else missingGlobals.push(file)
       }
       if (missingGlobals.some(file => file.path === 'regex/rules.json' || file.path === 'library/helper-scripts.json')) {
-        const others = (await readdir(state.paths.sessions)).filter(name => name.endsWith('.json'))
+        const entries = await readdir(state.paths.sessions).catch((error: NodeJS.ErrnoException) => {
+          if (error.code === 'ENOENT') return []
+          throw error
+        })
+        const others = entries.filter(name => /\.json$/i.test(name))
         if (others.length && !(retry && others.length === 1 && existingBinding)) throw new Error('导入全局正则或脚本会影响已有会话，请先处理共享设置冲突')
       }
       const store = ctx.get('attachments')
@@ -150,6 +159,8 @@ export async function importSessionArchive(ctx: Context, state: TavernState, inp
         await writeFiles(stagedStory, storyFiles)
         const wal = new Wal(join(stagedStory, 'state', 'wal'))
         await assertArchiveWalComplete(wal)
+        const activeFloors = (await wal.listFloors()).filter(floor => !floor.rolledBack).map(floor => floor.floor)
+        assertWalLineageComplete(activeFloors, binding, binding.sessionId)
         // 附件服务保存的是不可变内容寻址对象；先核对实际保存身份，再发布剧情或恢复标记。
         // 目标策略可能把校验通过的图片缩小或重编码，若现在才发现即可拒绝，避免留下无法完成的导入。
         for (const attachment of archive.attachments) {
@@ -187,6 +198,10 @@ export async function importSessionArchive(ctx: Context, state: TavernState, inp
       } catch (error) {
         if (await present(markerPath)) throw new Error('会话导入尚未完成，请使用同一文件和工作区重试', { cause: error })
         throw error
-      } finally { await cleanupStage(stage, stageParent) }
+      } finally {
+        if (!cardExists) closeLedger(storyRoot(stage, storyId))
+        closeLedger(stage)
+        await cleanupStage(stage, stageParent)
+      }
     }))))
 }

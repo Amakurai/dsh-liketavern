@@ -18,6 +18,7 @@ import { lstat, mkdir, readFile, readdir, rm } from 'node:fs/promises'
 import { dirname, join, normalize, relative, resolve, sep } from 'node:path'
 import type { Wal } from './wal.js'
 import { atomicWrite } from './atomicWrite.js'
+import { parseRecoveryMarker } from './walFormat.js'
 import { ledgerKey, noteWrite } from './writeLedger.js'
 import { withWorkspaceLock } from './workspaceLock.js'
 
@@ -74,11 +75,12 @@ async function recoveryMarkerActive(root: string): Promise<boolean> {
   }
   let value: unknown
   try { value = JSON.parse(raw) } catch { return true }
-  if (typeof value !== 'object' || value === null || !Array.isArray((value as { dirs?: unknown }).dirs)) return true
-  const { dirs, walDir } = value as { dirs: unknown[]; walDir?: unknown }
-  const walDirs = [join(root, 'state', 'wal'), ...(typeof walDir === 'string' ? [walDir] : [])]
+  const parsed = parseRecoveryMarker(value)
+  if (!parsed.valid) return true
+  const { dirs, walDir } = value as { dirs: string[]; walDir?: string }
+  const walDirs = [join(root, 'state', 'wal'), ...(typeof walDir === 'string' && walDir ? [walDir] : [])]
   for (const dir of dirs) {
-    if (typeof dir !== 'string' || !dir || dir.includes('/') || dir.includes('\\') || dir === '.' || dir === '..') return true
+    if (!dir || dir.includes('/') || dir.includes('\\') || dir === '.' || dir === '..') return true
     for (const base of walDirs) {
       if (await existsFile(join(base, dir, 'rollback-progress.json'))) return true
     }

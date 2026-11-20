@@ -16,6 +16,7 @@ export interface WalFloorInfo {
     committed: boolean;
     startedAt: string;
     rolledBack: boolean;
+    reopened?: boolean;
 }
 /** rollbackAfter() 返回形状。 */
 export interface RollbackAfterResult {
@@ -104,6 +105,8 @@ export declare class Wal {
     private assertNotRecovering;
     /** 工作区级恢复标记的绝对路径；非标准日志根（无 state/wal 布局）退回日志目录内。 */
     private recoveryMarkerPath;
+    /** 探测当前 WAL 实际使用的恢复标记路径（兼容非标准日志根）。 */
+    private hasRecoveryMarkerFile;
     /** 读恢复标记中的楼层清单及形状有效性；缺失返回 null，损坏返回 valid: false 以便对账重写或删除。 */
     private readRecoveryMarker;
     /**

@@ -80,7 +80,9 @@ export function installCardScriptLibraries(initial:HelperScriptContext,normalize
     const library=entry(option?.type),trees=normalize(normalize(input))
     json(state.libraries.map(item=>({type:item.type,trees:item===library?trees:item.trees})),4*1024*1024)
     if(equal(trees,library.trees))return
-    library.trees=trees;library.version++;setStatus('pending')
+    library.trees=trees;library.version++
+    if(failure){setStatus('error');return}
+    setStatus('pending')
     queueMicrotask(()=>{if(active)void flushHelperScripts().catch(()=>{})})
   }
   function updateScriptTreesWith(updater:(trees:HelperScriptTree[])=>unknown,option:{type:HelperScriptType}):unknown {

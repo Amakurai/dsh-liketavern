@@ -1357,8 +1357,8 @@ export class TavernState {
   }
 
   /** 落盘并 bump 修订号，返回磁盘上的 id：调用方（服务层/客户端）之后要按这个 id 打开，不能用原始名。 */
-  async saveLorebook(name: string, json: unknown, beforeWrite?:()=>void): Promise<string> {
-    return (await this.saveLorebookSnapshot(name, json, undefined, beforeWrite)).name
+  async saveLorebook(name: string, json: unknown, beforeWrite?:()=>void, expectedRevision?: string | null): Promise<string> {
+    return (await this.saveLorebookSnapshot(name, json, expectedRevision, beforeWrite)).name
   }
 
   /** 编辑按实际文件 ID 核对版本并写回同一文件；导入与新建仍按内部名称分配身份。 */
@@ -1815,8 +1815,8 @@ export class TavernState {
 
   /** 运行时只复核剧情归属并保留人设选择；首次组装自行解析，冻结后的请求、工具和收口不重读人设。 */
   async loadStoryBinding(sessionId: string, options: { strictRead?: boolean; waitForAdoption?: boolean } = {}): Promise<SessionBinding | null> {
-    if (options.waitForAdoption !== false) await this.waitForBindingAdoption(sessionId)
-    return this.loadBindingUnwaited(sessionId, options.strictRead ?? false, 'preserve')
+    if (options.waitForAdoption === false) return this.loadBindingUnwaited(sessionId, options.strictRead ?? false, 'preserve')
+    return this.loadBinding(sessionId, options.strictRead ?? false, 'preserve')
   }
 
   /** 绑定接管须在工作区锁外等待；调用方随后可在 sessions 锁内复核，避免子分支等待父分支时互锁。 */
@@ -1829,6 +1829,14 @@ export class TavernState {
       const retry = this.bindingAdoptionRetries.get(sessionId)
       if (retry) await this.trackBindingAdoption(sessionId, retry)
     }
+  }
+
+  /** 仅等待已在途的绑定接管并取消待重试任务，供解除绑定与会话销毁使用，避免清理前反向触发新接管。 */
+  async drainBindingAdoption(sessionId: string): Promise<void> {
+    this.clearedAdoptions.add(sessionId)
+    this.bindingAdoptionRetries.delete(sessionId)
+    const adoption = this.bindingAdoptions.get(sessionId)
+    if (adoption) await adoption
   }
 
   /** 不等待绑定接管的锁内复核，避免接管流程等待自己；写入比较用 strictRead 拒绝不确定的 I/O 结果。 */

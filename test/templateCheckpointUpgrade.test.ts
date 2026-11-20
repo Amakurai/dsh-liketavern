@@ -11,19 +11,45 @@ import type { TemplateState } from '../src/state/template.js'
 const LEGACY_HASH='77f29556bf365b33ddb9d006fc8ea78f6088c36fd3c464a0ef2c4c036dc0a3f1'
 const PREVIOUS_HASH='14eb40ac012bfbbc29d615b5996315c2e2fc81f8a80f16b98a04b6651e2b384e'
 const V0511_HASH='0422fcf07bff3ed7bb881bca9af3b0530bdbdda9abb9e6b1f0b341cfaf71eeae'
+const V0512_HASH='b41cc77a4069e10626af39291d2924fbaa5c864aca16b06a65882fb2198f4810'
 const roots:string[]=[]
 const QUERIES=96
 
 /**
  * 复原旧正则源码、两行 bootstrap 差异与当时的 vendor；旧 hash 必须由真实旧源码计算，不能改检查点头冒充兼容。
- * markdown-it 15.0.3 安全升级及后续 UTF-8/Faker 惰性装载调整后当前 vendor 已变，旧版原文以压缩夹具保存
+ * markdown-it 15.0.3 安全升级及后续 UTF-8/Faker 惰性装载与模板脚本修复后当前源码与 vendor 已变，旧版原文以压缩夹具保存
  * （取自升级前提交，LF），只在旧版 worker 里替换对应文件的读取。
  */
 const LEGACY_LIBRARIES=fileURLToPath(new URL('./templateLibrariesV055.fixture.js.gz',import.meta.url))
 const PREVIOUS_REGEX=fileURLToPath(new URL('./templateRegexSourcesV059.fixture.txt',import.meta.url))
 const V0511_RUNTIME=fileURLToPath(new URL('./templateRuntimeV0511.fixture.json.gz',import.meta.url))
+const V0512_RUNTIME=fileURLToPath(new URL('./templateRuntimeV0512.fixture.json.gz',import.meta.url))
+/** 从 v0.5.12 真实源码生成旧堆，不能用当前实现冒充旧指纹。 */
+const v0512Loader=String.raw`
+{
+  const fsp=require('node:fs/promises'),{readFileSync}=require('node:fs'),{gunzipSync}=require('node:zlib'),{registerHooks,syncBuiltinESMExports}=require('node:module');
+  const v0512=JSON.parse(gunzipSync(readFileSync(${JSON.stringify(V0512_RUNTIME)})).toString('utf8'));
+  const currentReadFile=fsp.readFile;
+  fsp.readFile=function(path,...rest){
+    const name=(path instanceof URL?path.pathname:String(path)).replaceAll('\\','/');
+    if(name.endsWith('/lib/vendor/template-libraries.js'))return Promise.resolve(v0512.libraries);
+    return currentReadFile.call(this,path,...rest);
+  };
+  syncBuiltinESMExports();
+  registerHooks({load(url,context,next){
+    const loaded=next(url,context);
+    if(url.endsWith('/node/templateBootstrap.ts'))return {...loaded,source:v0512.templateBootstrap};
+    if(url.endsWith('/node/templateHelperMvu.ts'))return {...loaded,source:v0512.templateHelperMvu};
+    if(url.endsWith('/node/templateHelpers.ts'))return {...loaded,source:v0512.templateHelpers};
+    if(url.endsWith('/node/templateMessageVariables.ts'))return {...loaded,source:v0512.templateMessageVariables};
+    if(url.endsWith('/node/templateSandbox.ts'))return {...loaded,source:v0512.templateSandbox};
+    if(url.endsWith('/node/templateWorldInfo.ts'))return {...loaded,source:v0512.templateWorldInfo};
+    return loaded;
+  }});
+}
+`
 /** 从优化前真实源码生成旧堆，不能用当前实现冒充旧指纹。 */
-const v0511Loader=String.raw`
+const v0511Loader=v0512Loader+String.raw`
 {
   const fsp=require('node:fs/promises'),{readFileSync}=require('node:fs'),{gunzipSync}=require('node:zlib'),{registerHooks,syncBuiltinESMExports}=require('node:module');
   const v0511=JSON.parse(gunzipSync(readFileSync(${JSON.stringify(V0511_RUNTIME)})).toString('utf8'));
@@ -222,10 +248,10 @@ if(workerData.mode==='legacy') {
 })().catch(error=>parentPort.postMessage({error:error.stack||String(error)}));
 `
 
-async function run(mode:'legacy'|'resume'|'fresh',root:string,exportPath:string,fixture:'legacy'|'previous'|'v0511'):Promise<Result> {
+async function run(mode:'legacy'|'resume'|'fresh',root:string,exportPath:string,fixture:'legacy'|'previous'|'v0511'|'v0512'):Promise<Result> {
   const old=mode==='legacy',fresh=mode==='fresh'
-  const sourceLoader=fixture==='legacy'?legacyLoader:fixture==='previous'?previousRegexLoader:v0511Loader
-  const legacyHash=fixture==='legacy'?LEGACY_HASH:fixture==='previous'?PREVIOUS_HASH:V0511_HASH
+  const sourceLoader=fixture==='legacy'?legacyLoader:fixture==='previous'?previousRegexLoader:fixture==='v0511'?v0511Loader:v0512Loader
+  const legacyHash=fixture==='legacy'?LEGACY_HASH:fixture==='previous'?PREVIOUS_HASH:fixture==='v0511'?V0511_HASH:V0512_HASH
   return new Promise((resolve,reject)=> {
     const worker=new Worker((old?sourceLoader:'')+'\n'+workerSource,{eval:true,workerData:{mode,root,exportPath,legacyHash,
       legacyLoader:sourceLoader,legacyHasAbi:fixture!=='legacy',sourceRoot:new URL('../src/',import.meta.url).href,queries:QUERIES,script:template(fresh?1000:0,fresh?'current':'legacy'),
@@ -244,6 +270,7 @@ it.each([
   {fixture:'legacy' as const,hash:LEGACY_HASH,abi:null},
   {fixture:'previous' as const,hash:PREVIOUS_HASH,abi:TEMPLATE_RUNTIME_ABI},
   {fixture:'v0511' as const,hash:V0511_HASH,abi:TEMPLATE_RUNTIME_ABI},
+  {fixture:'v0512' as const,hash:V0512_HASH,abi:TEMPLATE_RUNTIME_ABI},
 ])('真实旧代码堆 $fixture 经新安装包冷恢复并保留旧身份，闭包到期后才切换当前运行时',async({fixture,hash,abi})=> {
   const root=await mkdtemp(join(tmpdir(),'tavern-checkpoint-upgrade-'));roots.push(root)
   const workspace=join(root,'story'),exportPath=join(root,'legacy.json')

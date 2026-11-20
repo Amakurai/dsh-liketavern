@@ -38,14 +38,14 @@ export function continuedMarkdown(previous:string,current:string):{start:number;
       const language=/^[a-z0-9_#+-]+$/i.test(info)&&!['html','xml','text'].includes(info)?info:'plaintext'
       return {start,text:marker+language+'\n'+content+(content.endsWith('\n')?'':'\n')+marker+'\n'+rest}
     }
-    const end=code.inlineEnd(start)
-    if(end===null)continue
-    tokens.lastIndex=end
-    if(end<=boundary)continue
-    const content=joined.slice(Math.max(boundary,start+token[0].length),Math.max(boundary,end-token[0].length))
-    if(!content)return {start,text:joined.slice(end)}
+    const span=code.inlineSpan(start)
+    if(!span)continue
+    tokens.lastIndex=span.end
+    if(span.end<=boundary)continue
+    const content=joined.slice(Math.max(boundary,span.start+span.width),Math.max(boundary,span.end-span.width))
+    if(!content)return {start:span.start,text:joined.slice(span.end)}
     const marker=codeMarker(content,1)
-    return {start,text:marker+' '+content+' '+marker+joined.slice(end)}
+    return {start:span.start,text:marker+' '+content+' '+marker+joined.slice(span.end)}
   }
   return undefined
 }

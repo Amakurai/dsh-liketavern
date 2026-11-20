@@ -327,21 +327,26 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
     for (const [name, acts] of Object.entries(wi.outlets)) {
       // outlet 内容同样做宏展开（与定位条目一致）；此处 macroCtx.outlets 尚未赋值，
       // 故内容中嵌套的 {{outlet::X}} 不会递归解析（对齐「禁止嵌套 outlet」）。
-      outlets[name] = joinPromptParts(
-        acts.map((a) => {
-          const label = `世界书 Outlet「${a.entry.key}」`
-          if (!(hasEjs(a.entry.content) && input.renderTemplate) && hasUnevaluatedScript(a.entry.content)) {
-            if (!skippedScripts.has(label)) {
-              skippedScripts.add(label)
-              log.push({ kind: 'dropped-script', detail: `${label} 含未执行 EJS/STscript，已跳过注入` })
+      Object.defineProperty(outlets, name, {
+        value: joinPromptParts(
+          acts.map((a) => {
+            const label = `世界书 Outlet「${a.entry.key}」`
+            if (!(hasEjs(a.entry.content) && input.renderTemplate) && hasUnevaluatedScript(a.entry.content)) {
+              if (!skippedScripts.has(label)) {
+                skippedScripts.add(label)
+                log.push({ kind: 'dropped-script', detail: `${label} 含未执行 EJS/STscript，已跳过注入` })
+              }
+              return ''
             }
-            return ''
-          }
-          const first = expandTracked(a.entry.content, macroCtx, true)
-          const rendered = renderTemplate(first, a.entry.key, macroCtx)
-          return rendered === first || input.processTemplateSequence ? rendered : expandTracked(rendered, macroCtx, true)
-        }),
-      )
+            const first = expandTracked(a.entry.content, macroCtx, true)
+            const rendered = renderTemplate(first, a.entry.key, macroCtx)
+            return rendered === first || input.processTemplateSequence ? rendered : expandTracked(rendered, macroCtx, true)
+          }),
+        ),
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      })
     }
   }
   macroCtx.outlets = outlets
@@ -446,7 +451,12 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
       // 已处理的正文不重新经过宏展开，模板阶段仍能逐条冻结世界书来源。
       const turnLocal = dynamic(format)
       const context = turnLocal ? macroCtx : standingCtx
-      const wrapper = format.trim() ? expandTracked(format, context, turnLocal) : '{0}'
+      let wrapper = '{0}'
+      if (format.trim()) {
+        const first = expandTracked(format, context, turnLocal)
+        const rendered = input.processTemplateSequence ? first : renderTemplate(first, 'preset:format:world-info', context)
+        wrapper = rendered === first || input.processTemplateSequence ? rendered : expandTracked(rendered, context, turnLocal)
+      }
       for (const [text, local, sources] of [[standing, turnLocal, standingSources], [turn, true, turnSources]] as const) {
         if (!text) continue
         const content = wrapper.replaceAll('{0}', () => text)

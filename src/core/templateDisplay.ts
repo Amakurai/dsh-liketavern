@@ -5,8 +5,8 @@ import {
   htmlSourceFallback,
   mergeDetachedCardStyles,
   stripDisplayMeta,
-  stripOpaqueDisplayMeta,
-  stripOpaqueDisplayMetaParts,
+  stripDisplayOpaqueMeta,
+  stripDisplayOpaqueMetaParts,
 } from './displaySanitize.js'
 
 export type TemplateDisplayPart = {kind:'markdown';text:string} | {kind:'html';text:string;title?:string}
@@ -48,7 +48,7 @@ export function splitTemplateDisplay(text:string,preserveMeta=false):TemplateDis
     visit(after,depth+1)
   }
   // 机读块必须在首次 HTML 定位前按完整字符串收起，不能让拆分切断其开闭标签。
-  visit(stripOpaqueDisplayMeta(text))
+  visit(stripDisplayOpaqueMeta(text))
   const grouped=mergeDetachedCardStyles(parts)
   return preserveMeta ? parseTemplateDisplayParts(grouped) : sanitizeTemplateDisplayParts(grouped)
 }
@@ -58,7 +58,7 @@ export function splitTemplateDisplay(text:string,preserveMeta=false):TemplateDis
  * 模板首次生成和展示正则之后都调用，避免标签跨 markdown/html 边界时丢失状态。
  */
 export function sanitizeTemplateDisplayParts(parts: readonly TemplateDisplayPart[]): TemplateDisplayPart[] {
-  const visible = stripOpaqueDisplayMetaParts(parseTemplateDisplayParts(parts))
+  const visible = stripDisplayOpaqueMetaParts(parseTemplateDisplayParts(parts))
   const output: TemplateDisplayPart[] = []
   for (const part of visible) {
     if (part.kind === 'html') {
@@ -73,7 +73,7 @@ export function sanitizeTemplateDisplayParts(parts: readonly TemplateDisplayPart
 
 /** 会话/全局关闭交互卡时跨片段清理，再逐 HTML 段安全降级并保持顺序。 */
 export function disableInteractiveParts(parts: readonly TemplateDisplayPart[]): TemplateDisplayPart[] {
-  const visible = stripOpaqueDisplayMetaParts(parseTemplateDisplayParts(parts), true)
+  const visible = stripDisplayOpaqueMetaParts(parseTemplateDisplayParts(parts), true)
   const output: TemplateDisplayPart[] = []
   for (const part of visible) {
     if (part.kind === 'html') {

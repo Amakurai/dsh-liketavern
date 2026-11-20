@@ -7,6 +7,7 @@ import {helperWorldbookSettingsCodec} from '../core/helperWorldbookSettings.js'
 import {helperJson,helperRecord} from '../core/helperRuntime.js'
 import {HELPER_CHARACTER_WORLDBOOK as CHARACTER,HELPER_WORLDBOOK_MAX_BYTES,type HelperWorldbookContext,type HelperWorldbookRequest,type HelperWorldbookResult,type HelperWorldbookRebindRequest} from '../core/helperWorldbook.js'
 import {readHelperWorldbook,writeHelperWorldbook} from '../state/helperWorldbook.js'
+import {jsonEditRevision} from '../state/characterRevision.js'
 import {CHAT_WORLDBOOK_PATH,chatWorldbookId,chatWorldbookRef,parseChatWorldbookFile,encodeChatWorldbooks,type ChatWorldbooks} from '../state/chatWorldbooks.js'
 import {WorkspaceFs} from '../state/workspaceFs.js'
 import {withWorkspaceLock} from '../state/workspaceLock.js'
@@ -17,7 +18,8 @@ function revision(value:unknown):string{return createHash('sha256').update(JSON.
 function bindingRevision(state:TavernState,binding:SessionBinding,chat:ChatWorldbooks):string{return revision([binding.storyId,binding.cardId,binding.lorebookIds,binding.characterLorebookId,binding.useEmbeddedLorebook!==false,binding.characterLorebookIds??[],chat.active,state.worldInfoFor(binding)])}
 async function chatBooks(state:TavernState,binding:SessionBinding):Promise<ChatWorldbooks>{const fs=(await state.storyWorkspace(binding.cardId,binding.storyId)).fs,text=await fs.readText(CHAT_WORLDBOOK_PATH);return parseChatWorldbookFile(text)}
 async function selected(state:TavernState,sessionId:string,storyId:string,expected?:string){
-  const binding=await state.loadStoryBinding(sessionId)
+  // 调用方已在进入 sessions 锁前等待过绑定接管；锁内不得反向等待接管以免与 adoptHostFork 互锁。
+  const binding=await state.loadStoryBinding(sessionId,{waitForAdoption:false})
   if(!binding?.storyId||binding.storyId!==storyId)throw new Error('世界书会话绑定已改变，请刷新')
   if(!state.config.interactiveCards||binding.interactiveCards===false)throw new Error('交互卡已关闭')
   const chat=await chatBooks(state,binding)
@@ -58,12 +60,14 @@ async function contextFrom(state:TavernState,binding:SessionBinding,chat:ChatWor
     character:{primary:binding.characterLorebookId?(items.includes(binding.characterLorebookId)?binding.characterLorebookId:null):(binding.useEmbeddedLorebook!==false&&embedded.raw!==null?CHARACTER:null),additional:(binding.characterLorebookIds??[]).filter(id=>items.includes(id)&&id!==binding.characterLorebookId)},chat:chat.active===null?null:chatWorldbookRef(chat.active)}
 }
 export async function getHelperWorldbookContext(state:TavernState,sessionId:string,storyId:string):Promise<HelperWorldbookContext>{
+  await state.waitForBindingAdoption(sessionId)
   return withWorkspaceLock(state.paths.sessions,async()=>{const {binding,chat}=await selected(state,sessionId,storyId);return contextFrom(state,binding,chat)})
 }
 export async function helperWorldbookOperation(ctx:Context,state:TavernState,sessionId:string,messageId:number,request:HelperWorldbookRequest,beforeWrite?:HelperFrameWriteGuard):Promise<HelperWorldbookResult>{
   name(request.name);if(request.label!==undefined)name(request.label)
   if(!['get','replace','create','upsert','delete'].includes(request.operation))throw new Error('世界书操作无效')
   const privateId=chatWorldbookId(request.name)
+  await state.waitForBindingAdoption(sessionId)
   const run=async(writeChat?:(raw:unknown|null,binding:SessionBinding)=>Promise<void>):Promise<HelperWorldbookResult>=>withWorkspaceLock(state.paths.sessions,async()=>{
     const {binding,chat}=await selected(state,sessionId,request.storyId,request.bindingRevision)
     const lock=request.name===CHARACTER?join(state.paths.characters,binding.cardId):state.paths.root
@@ -99,7 +103,10 @@ export async function helperWorldbookOperation(ctx:Context,state:TavernState,ses
         return saved.raw===null?{deleted:true,context}:{created:current.raw===null,snapshot:snapshot(saved.raw),context}
       }
       if(next===null){await state.deleteLorebook(current.id,()=>beforeWrite?.(binding));return {deleted:true}}
-      const id=await state.saveLorebook(current.raw===null?request.name:current.id,next,()=>beforeWrite?.(binding)),saved=await rawBook(state,binding,id,chat)
+      const id=current.raw===null
+        ?await state.saveLorebook(request.name,next,()=>beforeWrite?.(binding))
+        :await state.saveLorebook(current.id,next,()=>beforeWrite?.(binding),jsonEditRevision(current.raw))
+      const saved=await rawBook(state,binding,id,chat)
       if(saved.raw===null)throw new Error('世界书保存回执无法确认')
       return {created:current.raw===null,snapshot:snapshot(saved.raw,id)}
     })
@@ -115,6 +122,7 @@ export async function helperWorldbookOperation(ctx:Context,state:TavernState,ses
 export async function rebindHelperWorldbooks(ctx:Context,state:TavernState,sessionId:string,messageId:number,request:HelperWorldbookRebindRequest,beforeWrite?:HelperFrameWriteGuard):Promise<HelperWorldbookContext>{
   const value=helperJson(request.selection,16384)
   if(!['global','character','chat','ensure-chat','settings'].includes(request.kind))throw new Error('世界书绑定类型无效')
+  await state.waitForBindingAdoption(sessionId)
   if(request.kind==='ensure-chat'){
     if(value!==null)name(value)
     const existing=await withWorkspaceLock(state.paths.sessions,async()=>{const {binding,chat}=await selected(state,sessionId,request.storyId,request.bindingRevision);return chat.active===null?null:contextFrom(state,binding,chat)})
@@ -164,7 +172,7 @@ export async function rebindHelperWorldbooks(ctx:Context,state:TavernState,sessi
         else{
           const source=await rawBook(state,binding,ref,chat);if(source.raw===null)throw new Error('绑定的世界书不存在');readHelperWorldbook(source.raw)
           const target='source-'+createHash('sha256').update(source.id).digest('hex').slice(0,24)
-          if(!chat.books.has(target))chat.books.set(target,source.raw)
+          if(!chat.books.has(target))chat.books.set(target,Array.isArray(source.raw)?{name:source.id,entries:source.raw}:source.raw)
           chat.active=target
         }
       }

@@ -18,6 +18,13 @@ export declare function mergeDetachedCardStyles<T extends {
     text: string;
     title?: string;
 }>(parts: readonly T[]): T[];
+/** 展示层机读清理：保护 Markdown 代码示例里的伪/机读标签，同时仍清理 HTML 卡片和 HTML 围栏内的机读块。 */
+export declare function stripDisplayOpaqueMeta(text: string, removeComments?: boolean): string;
+/** 跨有序片段展示层机读清理：仅保护 Markdown 片段的代码示例，HTML 片段内反引号按原样 HTML 处理。 */
+export declare function stripDisplayOpaqueMetaParts<T extends {
+    kind?: 'markdown' | 'html';
+    text: string;
+}>(parts: readonly T[], removeComments?: boolean, separator?: string): T[];
 /** 去掉展示不该看见的机读块与小部件；角色正文与 Markdown 代码示例保留。 */
 export declare function stripDisplayMeta(text: string): string;
 /** 流式正文只显示卡面前的台词；关闭交互卡时维持显式源码展示。 */

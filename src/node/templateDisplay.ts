@@ -8,7 +8,7 @@ import {
 import type { WorldInfoEntry, MacroContext, RegexRule } from '../core/types.js'
 import { applyRegexRulesBatch, type RegexApplyResult } from '../core/regex.js'
 import { markdownCodeScanner } from '../core/markdownCode.js'
-import { findIncompleteHtmlStart, stripOpaqueDisplayMetaParts } from '../core/displaySanitize.js'
+import { findIncompleteHtmlStart, stripDisplayOpaqueMetaParts } from '../core/displaySanitize.js'
 import type { DisplayRegexDiagnostics } from '../remote.js'
 import type { TemplateSandbox } from './templateSandbox.js'
 import { TEMPLATE_INPUT_MAX_CHARS, TEMPLATE_OUTPUT_MAX_CHARS } from '../core/templateBudget.js'
@@ -76,7 +76,7 @@ export function renderTemplateDisplay(text:string,entries:WorldInfoEntry[],sandb
   }
   const project=()=>{
     // BEFORE/正文/AFTER 是同一逻辑展示流；先跨来源收起机读块，再做任何 HTML 定位。
-    for(const source of stripOpaqueDisplayMetaParts(parseTemplateDisplayParts(rawParts),false,'\n')) {
+    for(const source of stripDisplayOpaqueMetaParts(parseTemplateDisplayParts(rawParts),false,'\n')) {
       if(source.kind==='html') {
         if(source.text) parts.push(source)
         continue
@@ -151,7 +151,7 @@ export function presentTemplateDisplayResult(parts:TemplateDisplayPart[],rules:R
   diagnostics.add(batch.errors)
   const rendered=sanitized.map((part,index)=>({...part,text:batch.texts[index]!}))
   // 展示正则可能在不同既有片段中生成开闭标签；整体清理后才能安全拆分新生成的 HTML。
-  for(const part of stripOpaqueDisplayMetaParts(parseTemplateDisplayParts(rendered))) {
+  for(const part of stripDisplayOpaqueMetaParts(parseTemplateDisplayParts(rendered))) {
     if(part.kind==='html') {
       if(part.text) output.push(part)
     }

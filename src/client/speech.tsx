@@ -393,7 +393,7 @@ export function SpeechHtmlFrame(props: {
       title={props.title}
       style={frameStyle}
     />
-    {editedBranch&&<div className="dsh-tavern-cardBackupBar"><Btn onClick={()=>{void props.onMessageBranch?.(editedBranch).catch(error=>setBranchError(String(error)))}}>{t('speech.openEditedBranch')}</Btn><Err message={branchError}/></div>}
+    {(editedBranch||branchError)&&<div className="dsh-tavern-cardBackupBar">{editedBranch&&<Btn onClick={()=>{void props.onMessageBranch?.(editedBranch).catch(error=>setBranchError(String(error)))}}>{t('speech.openEditedBranch')}</Btn>}<Err message={branchError}/></div>}
     </>
   )
 }

@@ -76,11 +76,13 @@ function jsonPatch(dest, changes) {
 }
 function patchVariables(key, changes, opts={}) {
   opts = options(opts);
-  return setvar(key,jsonPatch(getvar(key,{scope:opts.scope || 'cache',...(opts.withMsg===undefined?{}:{withMsg:opts.withMsg})}),changes),opts);
+  const readScope = opts.scope || (opts.withMsg !== undefined ? 'message' : 'cache');
+  return setvar(key,jsonPatch(getvar(key,{scope:readScope,...(opts.withMsg===undefined?{}:{withMsg:opts.withMsg})}),changes),opts);
 }
 function insvar(key, value, index, opts={}) {
   opts = options(opts);
-  let old = clone(getvar(key,{scope:opts.scope || 'cache',...(opts.withMsg===undefined?{}:{withMsg:opts.withMsg})}));
+  const readScope = opts.scope || (opts.withMsg !== undefined ? 'message' : 'cache');
+  let old = clone(getvar(key,{scope:readScope,...(opts.withMsg===undefined?{}:{withMsg:opts.withMsg})}));
   if (Array.isArray(old) || typeof old === 'string') {
     const at = index == null ? old.length : Number(index);
     if (!Number.isInteger(at) || at < 0 || at > old.length) return undefined;
@@ -155,7 +157,7 @@ function defineTemplate(name,value,combine=false) {
   let next=copyDefinition(value,null);
   if(combine && Array.isArray(next) && (old===undefined || Array.isArray(old))) next=[...(old || []),...next];
   else if(combine && lodash.isPlainObject(next) && (old===undefined || lodash.isPlainObject(old))) {
-    next=lodash.mergeWith({},old || {},next,(_left,right)=>Array.isArray(right) ? right : undefined);
+    next=lodash.mergeWith({},old || {},next,(left,right)=>Array.isArray(right) ? right : Array.isArray(left) && lodash.isPlainObject(right) ? right : undefined);
   }
   lodash.set(api.defines,parts,next);
   const root=parts[0];

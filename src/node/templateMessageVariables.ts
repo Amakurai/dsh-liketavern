@@ -100,7 +100,7 @@ function writeHistoricalVariable(key,value,opts,remove=false) {
     if(remove) unsetHistorical(indexed,opts.index); else set(indexed,opts.index,value);
     value=indexed;remove=false;
   }
-  if(opts.merge) value=merge(old && typeof old==='object' ? old : {},value);
+  if(opts.merge) value=merge(old && typeof old==='object' && !Array.isArray(old) ? old : {},value);
   let next=target;
   if(key==null) {
     if(remove) next={};

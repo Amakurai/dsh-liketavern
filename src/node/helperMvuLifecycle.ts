@@ -50,20 +50,26 @@ function currentTurn(session: Snapshot): number | undefined {
   const event = findLastEvent(session.snapshotEvents(), item => item.type === 'turn/start' || item.type === 'turn/end')
   return event?.type === 'turn/start' ? event.data.turn : undefined
 }
-/** 空历史没有可初始化的回复，允许首轮生成；开场白由维护等待的 session task 先写入。 */
-export function helperMvuHasAssistant(session: Snapshot): boolean {
+/** 找出可作为初次 MVU 初始化锚点的最新完成角色回复轮号；无可用锚点返回 null。 */
+export function helperMvuInitAnchorTurn(session: Snapshot): number | null {
   const events = session.snapshotEvents()
   const completedTurns = new Set<number>()
   for (const event of events) {
     if (event.type === 'turn/end' && event.data.reason.kind === 'completed') completedTurns.add(event.data.turn)
   }
-  return events.some(event => {
+  const latest = findLastEvent(events, event => {
     if (event.type !== 'assistant/message' || event.data.interrupted || event.surfaceOp !== undefined && event.surfaceOp !== 'append'
       || !event.data.message.content.some(block => block.type === 'text' && block.text.trim())) return false
     if (isTavernGreetingEvent(event) || event.data.turn === 0) return true
     if (!completedTurns.has(event.data.turn)) return false
     return hasNormalAssistantStop(event)
   })
+  return latest?.type === 'assistant/message' ? latest.data.turn : null
+}
+
+/** 空历史没有可初始化的回复，允许首轮生成；开场白由维护等待的 session task 先写入。 */
+export function helperMvuHasAssistant(session: Snapshot): boolean {
+  return helperMvuInitAnchorTurn(session) !== null
 }
 
 /** 取消可以结束单次读盘或短间隔等待，不占用剧情锁，也不把浏览器工作放入 session task 队列。 */
@@ -75,9 +81,9 @@ async function abortable<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
     if (signal.aborted) abort()
   })
 }
-async function waitForHelperMvu(state: TavernState, agent: Agent, signal: AbortSignal, includeInitialization = true): Promise<void> {
+async function waitForHelperMvu(state: TavernState, agent: Agent, signal: AbortSignal, includeInitialization = true, initAnchorTurn?: number | null): Promise<void> {
   let announced = false
-  while (await abortable(helperMvuPending(state, agent.id, includeInitialization), signal)) {
+  while (await abortable(helperMvuPending(state, agent.id, includeInitialization, initAnchorTurn), signal)) {
     if (!announced) {
       state.recordTriggerLog(agent.id, ['[mvu:waiting] 等待角色变量处理；请保持交互卡页面打开。取消会保留待处理任务和原生队列。'])
       announced = true
@@ -95,7 +101,8 @@ export function reserveHelperMvuMaintenance(state: TavernState, agent: Agent, re
     gate.maintenance = true
     const task = agent.runMaintenance(async signal => {
       await abortable(state.waitForSessionTasks(agent.id), signal)
-      await waitForHelperMvu(state, agent, signal, helperMvuHasAssistant(agent.session))
+      const anchorTurn = helperMvuInitAnchorTurn(agent.session)
+      await waitForHelperMvu(state, agent, signal, anchorTurn !== null, anchorTurn)
     })
     void task.catch(report).finally(() => { gate.maintenance = false })
   } catch {
@@ -177,7 +184,8 @@ export async function blockHelperMvuAssembly(state: TavernState, agent: Agent, s
     await state.waitForSessionTasks(agent.id)
     // 全局交互设置可能在已开层的一轮中启用；空初始化延后到该轮 stop，真实 pending 仍强制等待。
     const opened = state.openFloors.get(agent.id)?.floor === agent.id + '#t' + turn
-    blocked = isTurnDeferred(state, agent.id, turn) || await helperMvuPending(state, agent.id, !opened && helperMvuHasAssistant(agent.session))
+    const anchorTurn = opened ? null : helperMvuInitAnchorTurn(agent.session)
+    blocked = isTurnDeferred(state, agent.id, turn) || await helperMvuPending(state, agent.id, !opened && anchorTurn !== null, anchorTurn)
   } catch (error) {
     state.recordTriggerLog(agent.id, [`[mvu:blocked] 变量状态读取失败，输入已保留：${String(error)}`])
     blocked = true

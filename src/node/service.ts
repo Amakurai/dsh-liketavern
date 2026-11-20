@@ -23,7 +23,7 @@ import { isolated } from './isolated.js'
 import type { ComputeJobs } from './computeWorker.js'
 import { collectDisplayRegexDiagnostics, presentTemplateDisplayResult } from './templateDisplay.js'
 import { hasApplicableOrMalformedRegex } from '../core/regex.js'
-import { hideIncompleteHtml, presentRenderedOutput, stripOpaqueDisplayMeta } from '../core/displaySanitize.js'
+import { hideIncompleteHtml, presentRenderedOutput, stripDisplayOpaqueMeta } from '../core/displaySanitize.js'
 import { isPlainDetailsHtml } from '../core/plainDetails.js'
 import { disableInteractiveParts, splitTemplateDisplay, TEMPLATE_DISPLAY_PARTS_VERSION, type TemplateDisplayPart } from '../core/templateDisplay.js'
 import { expandIdentityMacros } from '../core/macros.js'
@@ -548,7 +548,7 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
     if ((await this.state.loadCharacter(binding.cardId)) === null) {
       throw new FloorError('card-not-found', `角色 ${binding.cardId} 不存在`)
     }
-    const existing = await this.state.loadBinding(binding.sessionId, true)
+    const existing = await this.state.loadBinding(binding.sessionId, true, 'preserve')
     // Windows 同卡别名必须先还原持久身份，后面的剧情、祖先与 MVU 判断共用它。
     if (existing && process.platform === 'win32' && existing.cardId.toLowerCase() === binding.cardId.toLowerCase()) {
       binding = { ...binding, cardId: existing.cardId }
@@ -562,7 +562,7 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
     // createdAt 由 parseSessionBinding 保证必填非空，无需再兜底。
     const save=(claimedEnable:boolean)=>withWorkspaceLock(this.state.paths.sessions,async()=>{
       // 远程请求的前置读取可能已过时；实际提交在同一绑定锁内继承当前剧情和祖先，不能换回并发请求的旧身份。
-      const current=await this.state.loadBindingUnwaited(binding.sessionId,true)
+      const current=await this.state.loadBindingUnwaited(binding.sessionId,true,'preserve')
       const sameCard=current!==null&&(process.platform==='win32'
         ?current.cardId.toLowerCase()===binding.cardId.toLowerCase():current.cardId===binding.cardId)
       if(!claimedEnable&&binding.helperMvu===true&&(current?.helperMvu!==true||!sameCard||current.interactiveCards===false&&binding.interactiveCards!==false))return false
@@ -584,12 +584,12 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
     const clear=async()=>{
       // 原生分支 adoption 在准备剧情后才发布绑定；必须先在 sessions 锁外等它落定，
       // 否则准备期间的解除会清掉不存在的绑定，随后 adoption 又把绑定发布回来。
-      // 接管失败不阻断合法解除；锁内仍用 loadBindingUnwaited 复核磁盘现状。
-      await this.state.waitForBindingAdoption(request.sessionId).catch(() => {})
+      // 接管失败不阻断合法解除，也不应反向触发一次新的接管重试；锁内仍用 loadBindingUnwaited 复核磁盘现状。
+      await this.state.drainBindingAdoption(request.sessionId).catch(() => {})
       return withWorkspaceLock(this.state.paths.sessions,async()=>{
         // 文件名别名不能借解除绑定取消另一会话；身份校验通过后、实际删除前取消准备中的旧剧情请求。
         await assertBindingFileIdentity(this.state.paths,request.sessionId)
-        const current=await this.state.loadBindingUnwaited(request.sessionId)
+        const current=await this.state.loadBindingUnwaited(request.sessionId,false,'preserve')
         const live=this.ctx.sessions.get(request.sessionId as Session['id'])
         // 明确解除的合法绑定须留原种子凭据；写失败在取消/删除之前拒绝，未知接管失败不生成 skip。
         if(current&&live){
@@ -908,7 +908,7 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
       const presented = presentRenderedOutput(text, settings.interactiveCards)
       return { output: {
         ...presented,
-        ...(presented.htmls.length ? {parts:splitTemplateDisplay(hideIncompleteHtml(stripOpaqueDisplayMeta(text)).text)} : {}),
+        ...(presented.htmls.length ? {parts:splitTemplateDisplay(hideIncompleteHtml(stripDisplayOpaqueMeta(text)).text)} : {}),
         interactiveCards: settings.interactiveCards,
         whitelist,
         greetings: [] as string[],
@@ -929,7 +929,7 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
       templateParts = cached.parts
       // 旧投影会在逐片清理时永久丢掉 opener；完整已求值文本仍在，可只读重建安全展示而不重跑模板。
       if (templateParts && cached.partsVersion !== TEMPLATE_DISPLAY_PARTS_VERSION) {
-        const legacyProjection = stripOpaqueDisplayMeta(cached.text)
+        const legacyProjection = stripDisplayOpaqueMeta(cached.text)
         if (legacyProjection !== cached.text) templateParts = splitTemplateDisplay(legacyProjection)
       }
     }
@@ -995,7 +995,7 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
       regexDiagnostics = hasRenderRegex ? collectDisplayRegexDiagnostics(rendered.errors, rules) : undefined
       presented = presentRenderedOutput(rendered.text, allowHtml)
       // 普通回复与展示正则生成的片段也保留原位置，避免尾部状态栏移到台词前面。
-      if(presented.htmls.length) parts = splitTemplateDisplay(hideIncompleteHtml(stripOpaqueDisplayMeta(rendered.text)).text)
+      if(presented.htmls.length) parts = splitTemplateDisplay(hideIncompleteHtml(stripDisplayOpaqueMeta(rendered.text)).text)
     } else {
       let pendingHtml=false
       if(allowHtml){

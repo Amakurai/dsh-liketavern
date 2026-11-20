@@ -845,10 +845,14 @@ async function readTemplateDocumentPathsFromRaw(
     return child ? select(child.value,keys,offset+1,referenceDepth+child.depth) : undefined
   }
   const pathKeys=paths.map(keys=>JSON.stringify(keys))
+  // 命中缓存的条目必须在任何异步读盘和 trimParsed 之前先抓取本地快照，防止中途 LRU 淘汰导致静默丢值或写回 undefined。
+  const cachedValues=new Map<string,unknown>()
   const inFlight=new Map<string,Promise<unknown>>()
   for(let i=0;i<paths.length;i++) {
     const key=pathKeys[i]!
-    if(selections.values.has(key) || inFlight.has(key)) continue
+    if(cachedValues.has(key) || inFlight.has(key)) continue
+    const remembered=selections.values.get(key)
+    if(remembered) { cachedValues.set(key,remembered.value); continue }
     inFlight.set(key,select({ref:document.root},paths[i]!))
   }
   const fetched=new Map<string,unknown>()
@@ -860,13 +864,14 @@ async function readTemplateDocumentPathsFromRaw(
   const byteMemo=new WeakMap<object,number>()
   const results:unknown[]=new Array(paths.length)
   for(let i=0;i<paths.length;i++) {
-    const key=pathKeys[i]!,remembered=selections.values.get(key)
-    const source=remembered ? remembered.value : fetched.get(key)
+    const key=pathKeys[i]!
+    const fromCache=cachedValues.has(key)
+    const source=fromCache ? cachedValues.get(key) : fetched.get(key)
     const size=source===undefined ? 0 : jsonValueBytes(source,byteMemo)
     if(size>document.bytes) throw new Error('模板状态展开字节数不一致')
     selectedBytes+=size
     if(selectedBytes>TEMPLATE_DOCUMENT_LIMIT) throw new Error(DOCUMENT_LIMIT_MESSAGE)
-    if(!remembered) {
+    if(!fromCache) {
       const retained=size+Buffer.byteLength(key)+64,existingValue=selections.values.get(key)
       selections.size-=existingValue?.size ?? 0
       selections.values.set(key,{value:cloneFrozenJson(source),size:retained});selections.size+=retained

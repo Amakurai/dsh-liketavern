@@ -3,8 +3,11 @@ interface MarkdownLine { start:number; end:number; next:number }
 interface FenceOpening { marker:string; info:string; line:number; listIndent:number; quoteDepth:number; standalone:boolean }
 export interface MarkdownFence { info:string; contentStart:number; contentEnd:number; end:number; closed:boolean; standalone:boolean }
 
+export interface MarkdownInlineSpan { start:number; end:number; width:number }
+
 export function markdownCodeScanner(text:string):{
   inlineEnd:(start:number)=>number|null
+  inlineSpan:(start:number)=>MarkdownInlineSpan|null
   fence:(start:number)=>MarkdownFence|null
 } {
   /** 四列缩进计算留在工厂内部，整个扫描器可原样注入 MVU 沙箱，不引用外部闭包。 */
@@ -18,7 +21,7 @@ export function markdownCodeScanner(text:string):{
     }
     return expanded
   }
-  if(!/[`~]/.test(text))return {inlineEnd:()=>null,fence:()=>null}
+  if(!/[`~]/.test(text))return {inlineEnd:()=>null,inlineSpan:()=>null,fence:()=>null}
   const lines:MarkdownLine[]=[]
   const openings=new Map<number,FenceOpening>()
   const lineBreak=/\r?\n/g
@@ -41,7 +44,8 @@ export function markdownCodeScanner(text:string):{
       quoteDepth:prefix.match(/>/g)?.length??0,standalone:/^ {0,3}$/.test(prefix)})
   }
   const inlineEnds=new Map<number,number>()
-  const waiting=new Map<number,number[]>()
+  const inlineSpans=new Map<number,MarkdownInlineSpan>()
+  const waiting=new Map<number,{at:number;start:number}[]>()
   const markers=/`+|~{3,}|\r?\n[ \t]*\r?\n/g
   for(let token=markers.exec(text);token;token=markers.exec(text)) {
     const raw=token[0],at=token.index
@@ -49,17 +53,25 @@ export function markdownCodeScanner(text:string):{
     if(raw[0]==='\r'||raw[0]==='\n'||openings.has(at)){waiting.clear();continue}
     if(raw[0]!=='`')continue
     const pending=waiting.get(raw.length)
-    if(pending)for(const opening of pending)inlineEnds.set(opening,markers.lastIndex)
+    if(pending)for(const opening of pending){
+      inlineEnds.set(opening.at,markers.lastIndex)
+      inlineEnds.set(opening.start,markers.lastIndex)
+      const span:MarkdownInlineSpan={start:opening.start,end:markers.lastIndex,width:raw.length}
+      inlineSpans.set(opening.at,span)
+      inlineSpans.set(opening.start,span)
+    }
     waiting.delete(raw.length)
     let slashes=0
     for(let index=at-1;index>=0&&text[index]==='\\';index--)slashes++
-    const width=raw.length-(slashes%2)
-    if(width){const starts=waiting.get(width)??[];starts.push(at);waiting.set(width,starts)}
+    const escaped=slashes%2
+    const width=raw.length-escaped
+    if(width){const starts=waiting.get(width)??[];starts.push({at,start:at+escaped});waiting.set(width,starts)}
   }
   const fenceResults=new Map<number,MarkdownFence>()
   const unclosedCache=new Map<string,{fromLine:number;minLen:number;untilLine:number;endPos:number}>()
   return {
     inlineEnd:at=>inlineEnds.get(at)??null,
+    inlineSpan:at=>inlineSpans.get(at)??null,
     fence:at=>{
       const known=fenceResults.get(at)
       if(known)return known

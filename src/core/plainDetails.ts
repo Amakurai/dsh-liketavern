@@ -56,7 +56,8 @@ function decodeSummaryEntities(text: string): string {
   if (!text.includes('&')) return text
   return text.replace(/&(?:#(\d+)|#x([0-9a-f]+)|([a-z]+));/gi, (raw, dec?: string, hex?: string, named?: string) => {
     if (named !== undefined) {
-      return SUMMARY_NAMED_ENTITIES[named.toLowerCase()] ?? raw
+      const key = named.toLowerCase()
+      return Object.hasOwn(SUMMARY_NAMED_ENTITIES, key) ? SUMMARY_NAMED_ENTITIES[key]! : raw
     }
     const codePoint = dec !== undefined ? Number.parseInt(dec, 10) : Number.parseInt(hex!, 16)
     if (!Number.isSafeInteger(codePoint) || codePoint < 0 || codePoint > 0x10ffff) return raw

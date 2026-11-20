@@ -100,8 +100,8 @@ function staticContextHazards(ctx: MacroContext): readonly string[] {
   const pushDynamic = (value: string | undefined | null) => {
     if (value && value.includes(MARKER_PREFIX)) (dynamicHazards ??= [...stringHazards]).push(value)
   }
-  if (ctx.vars) for (const key in ctx.vars) pushDynamic(ctx.vars[key])
-  if (ctx.outlets) for (const key in ctx.outlets) pushDynamic(ctx.outlets[key])
+  if (ctx.vars) for (const key of Object.keys(ctx.vars)) pushDynamic(ctx.vars[key])
+  if (ctx.outlets) for (const key of Object.keys(ctx.outlets)) pushDynamic(ctx.outlets[key])
   pushDynamic(readonlyStatHazard(ctx.readonlyStatData))
   return dynamicHazards ?? stringHazards
 }
@@ -309,22 +309,23 @@ function applyCommand(inner: string, ctx: MacroContext, clock: Record<string, st
   const cmd = trimmed.slice(0, eq).trim().toLowerCase()
   const rest = trimmed.slice(eq + 2)
   if (ctx.readonlyStatData !== undefined) {
-    const variableKey = splitOnce(rest)[0].trim()
+    const variableKey = (GET_VAR_SET.has(cmd) || HAS_VAR_SET.has(cmd) || DELETE_VAR_SET.has(cmd) || INC_VAR_SET.has(cmd) || DEC_VAR_SET.has(cmd)
+      ? rest
+      : splitOnce(rest)[0]).trim()
     if (variableKey === 'stat_data' || variableKey.startsWith('stat_data.') || variableKey.startsWith('stat_data[')) {
-      const mvuPath = variableKey.replace(/\[(["']?)([^\]"']+)\1\]/g, '.$2').split('.')
-      if (mvuPath[0] === 'stat_data') {
-        if (MUTATE_VAR_SET.has(cmd)) {
-          throw new Error('MVU stat_data 是只读快照，不能通过宏修改')
+      if (MUTATE_VAR_SET.has(cmd)) {
+        throw new Error('MVU stat_data 是只读快照，不能通过宏修改')
+      }
+      if (GET_VAR_SET.has(cmd) || HAS_VAR_SET.has(cmd)) {
+        const mvuPath = parseReadonlyStatPath(variableKey)
+        if (!mvuPath) throw new Error('MVU 宏变量路径无效')
+        let value: unknown = ctx.readonlyStatData
+        for (const part of mvuPath) {
+          if (!part || part === '__proto__' || part === 'constructor' || part === 'prototype') throw new Error('MVU 宏变量路径无效')
+          value = value && typeof value === 'object' && Object.hasOwn(value, part) ? (value as Record<string, unknown>)[part] : undefined
         }
-        if (GET_VAR_SET.has(cmd) || HAS_VAR_SET.has(cmd)) {
-          let value: unknown = ctx.readonlyStatData
-          for (const part of mvuPath.slice(1)) {
-            if (!part || part === '__proto__' || part === 'constructor' || part === 'prototype') throw new Error('MVU 宏变量路径无效')
-            value = value && typeof value === 'object' && Object.hasOwn(value, part) ? (value as Record<string, unknown>)[part] : undefined
-          }
-          if (HAS_VAR_SET.has(cmd)) return value === undefined ? 'false' : 'true'
-          return value === undefined ? '' : typeof value === 'string' ? value : JSON.stringify(value)
-        }
+        if (HAS_VAR_SET.has(cmd)) return value === undefined ? 'false' : 'true'
+        return value === undefined ? '' : typeof value === 'string' ? value : JSON.stringify(value)
       }
     }
   }
@@ -354,6 +355,64 @@ function applyCommand(inner: string, ctx: MacroContext, clock: Record<string, st
     return ''
   }
   return undefined
+}
+
+/** 解析只读 MVU 宏变量路径，正确保留方括号引号内的点号、异类引号与转义字符。 */
+function parseReadonlyStatPath(variableKey: string): string[] | null {
+  if (variableKey === 'stat_data') return []
+  if (!variableKey.startsWith('stat_data.') && !variableKey.startsWith('stat_data[')) return null
+  const parts: string[] = []
+  let pos = 'stat_data'.length
+  while (pos < variableKey.length) {
+    const ch = variableKey[pos]!
+    if (ch === '.') {
+      pos++
+      const start = pos
+      while (pos < variableKey.length && variableKey[pos] !== '.' && variableKey[pos] !== '[') pos++
+      if (pos === start) return null
+      parts.push(variableKey.slice(start, pos))
+      continue
+    }
+    if (ch === '[') {
+      pos++
+      if (pos >= variableKey.length) return null
+      const quote = variableKey[pos]
+      if (quote === '"' || quote === "'") {
+        pos++
+        let segment = ''
+        let closed = false
+        while (pos < variableKey.length) {
+          const cur = variableKey[pos]!
+          if (cur === '\\') {
+            if (pos + 1 >= variableKey.length) return null
+            segment += variableKey[pos + 1]!
+            pos += 2
+            continue
+          }
+          if (cur === quote) {
+            pos++
+            closed = true
+            break
+          }
+          segment += cur
+          pos++
+        }
+        if (!closed || variableKey[pos] !== ']') return null
+        pos++
+        parts.push(segment)
+        continue
+      }
+      const close = variableKey.indexOf(']', pos)
+      if (close < 0) return null
+      const segment = variableKey.slice(pos, close)
+      if (!segment || segment.includes('[') || segment.includes('"') || segment.includes("'")) return null
+      pos = close + 1
+      parts.push(segment)
+      continue
+    }
+    return null
+  }
+  return parts
 }
 
 /**

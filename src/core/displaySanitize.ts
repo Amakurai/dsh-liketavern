@@ -1272,18 +1272,38 @@ function stripHtmlComments(text: string): string {
 const VOID_TAGS = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr'])
 const COMMONMARK_TAG_RE = /<(?:\/([A-Za-z][\w:-]*)\s*>|([A-Za-z][\w:-]*)(?:\s+[A-Za-z_:][\w.:-]*(?:\s*=\s*(?:[^\s"'=<>`]+|'[^']*'|"[^"]*"))?)*\s*(\/?)>)/y
 
+interface MarkdownCodeProtectionOptions {
+  skipHtmlFences?: boolean
+  skipInsideHtml?: boolean
+  initialOuterOpen?: ReadonlyMap<string, number>
+  collectOpenMeta?: Map<string, number>
+  skipAllCode?: boolean
+}
+
+function isExecutableHtmlFence(
+  text: string,
+  fence: NonNullable<ReturnType<ReturnType<typeof markdownCodeScanner>['fence']>>,
+): boolean {
+  if (!fence.standalone) return false
+  const info = fence.info.trim().split(/\s+/)[0]!.toLowerCase()
+  if (info === 'html' || info === 'xml') return true
+  if (info === '' || info === 'text') {
+    return streamingHtmlStart(text.slice(fence.contentStart, fence.contentEnd).trimStart(), false) !== null
+  }
+  return false
+}
+
 /**
  * 展示净化不得改写的 Markdown 代码区间：围栏（含开闭行）与行内代码。
  * 代码示例里的 `<style>`/`<details>`/`think`/协议标签是作者给模型看的正文，不是机读块；
  * 仅当外层存在尚未闭合的标签/注释/脚本边界，且候选代码区间吞入该外层边界的闭合标签时才拒绝保护。
  */
-function markdownCodeRanges(text: string): TextRange[] {
-  if (!text.includes('`') && !text.includes('~~~')) return []
-  const code = markdownCodeScanner(text)
+function markdownCodeRanges(text: string, options?: MarkdownCodeProtectionOptions): TextRange[] {
+  const hasCodeTokens = !options?.skipAllCode && (text.includes('`') || text.includes('~~~'))
+  if (!hasCodeTokens && !options?.collectOpenMeta) return []
   const ranges: TextRange[] = []
-  const tokens = /`+|~{3,}/g
   const hasAngles = text.includes('<')
-  const outerOpen = new Map<string, number>()
+  const outerOpen = new Map<string, number>(options?.initialOuterOpen)
   let outerCursor = 0
   let blockedUntil = 0
   let rejectedSpan: { from: number; end: number; failAt: number } | null = null
@@ -1298,6 +1318,12 @@ function markdownCodeRanges(text: string): TextRange[] {
     if (count === 1) outerOpen.delete(name)
     else outerOpen.set(name, count - 1)
     rejectedSpan = null
+  }
+  const hasOpenHtmlElement = (): boolean => {
+    for (const name of outerOpen.keys()) {
+      if (isKnownHtmlElementName(name)) return true
+    }
+    return false
   }
 
   const advanceOuter = (target: number): boolean => {
@@ -1417,27 +1443,43 @@ function markdownCodeRanges(text: string): TextRange[] {
     return false
   }
 
-  for (let token = tokens.exec(text); token; token = tokens.exec(text)) {
-    const at = token.index
-    const fence = code.fence(at)
-    if (fence) {
-      // 围栏区间不含闭合行后的换行：换行属于正文排版，仍交给 tidy 收尾。
-      let end = fence.end
-      while (end > at && (text[end - 1] === '\n' || text[end - 1] === '\r')) end--
-      if (advanceOuter(at) && !closesOuterBoundary(at, end)) {
-        ranges.push({ start: at, end })
-        outerCursor = Math.max(outerCursor, fence.end)
-        rejectedSpan = null
-        tokens.lastIndex = Math.max(fence.end, at + 1)
+  if (hasCodeTokens) {
+    const code = markdownCodeScanner(text)
+    const tokens = /`+|~{3,}/g
+    for (let token = tokens.exec(text); token; token = tokens.exec(text)) {
+      const at = token.index
+      const fence = code.fence(at)
+      if (fence) {
+        if (options?.skipHtmlFences && isExecutableHtmlFence(text, fence)) {
+          advanceOuter(at)
+          if (fence.closed && outerOpen.size === 0) outerCursor = Math.max(outerCursor, fence.end)
+          tokens.lastIndex = Math.max(fence.end, at + 1)
+          continue
+        }
+        // 围栏区间不含闭合行后的换行：换行属于正文排版，仍交给 tidy 收尾。
+        let end = fence.end
+        while (end > at && (text[end - 1] === '\n' || text[end - 1] === '\r')) end--
+        if (advanceOuter(at) && !(options?.skipInsideHtml && hasOpenHtmlElement()) && !closesOuterBoundary(at, end)) {
+          ranges.push({ start: at, end })
+          outerCursor = Math.max(outerCursor, fence.end)
+          rejectedSpan = null
+          tokens.lastIndex = Math.max(fence.end, at + 1)
+        }
+        continue
       }
-      continue
+      const end = code.inlineEnd(at)
+      if (end !== null && advanceOuter(at) && !(options?.skipInsideHtml && hasOpenHtmlElement()) && !closesOuterBoundary(at, end)) {
+        ranges.push({ start: at, end })
+        outerCursor = Math.max(outerCursor, end)
+        rejectedSpan = null
+        tokens.lastIndex = end
+      }
     }
-    const end = code.inlineEnd(at)
-    if (end !== null && advanceOuter(at) && !closesOuterBoundary(at, end)) {
-      ranges.push({ start: at, end })
-      outerCursor = Math.max(outerCursor, end)
-      rejectedSpan = null
-      tokens.lastIndex = end
+  }
+  if (options?.collectOpenMeta) {
+    advanceOuter(text.length)
+    for (const [name, count] of outerOpen) {
+      if (DISPLAY_META_NAMES.has(name) && count > 0) options.collectOpenMeta.set(name, count)
     }
   }
   return ranges
@@ -1448,8 +1490,11 @@ function markdownCodeRanges(text: string): TextRange[] {
  * 跨段状态（「从开标签切到文末」的截断、整篇 tidy）仍按整篇判定，
  * 但代码示例的字节不会被任何删除/截断规则改写。占位符前缀会先确认不在原文中出现。
  */
-function protectMarkdownCode(text: string): { masked: string; restore: (value: string) => string } {
-  const ranges = markdownCodeRanges(text)
+function protectMarkdownCode(
+  text: string,
+  options?: MarkdownCodeProtectionOptions,
+): { masked: string; restore: (value: string) => string } {
+  const ranges = markdownCodeRanges(text, options)
   if (ranges.length === 0) return { masked: text, restore: value => value }
   let prefix = '\uE000tavernCode'
   while (text.includes(prefix)) prefix += 'X'
@@ -1465,6 +1510,56 @@ function protectMarkdownCode(text: string): { masked: string; restore: (value: s
   masked += text.slice(cursor)
   const pattern = new RegExp(`${prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\d+)${suffix}`, 'g')
   return { masked, restore: value => value.replace(pattern, (_raw, index: string) => parts[Number(index)] ?? '') }
+}
+
+/** 展示层机读清理：保护 Markdown 代码示例里的伪/机读标签，同时仍清理 HTML 卡片和 HTML 围栏内的机读块。 */
+export function stripDisplayOpaqueMeta(text: string, removeComments = false): string {
+  if (!text) return text
+  const protectedCode = protectMarkdownCode(text, { skipHtmlFences: true, skipInsideHtml: true })
+  return protectedCode.restore(stripOpaqueDisplayMeta(protectedCode.masked, removeComments))
+}
+
+/** 跨有序片段展示层机读清理：仅保护 Markdown 片段的代码示例，HTML 片段内反引号按原样 HTML 处理。 */
+export function stripDisplayOpaqueMetaParts<T extends { kind?: 'markdown' | 'html'; text: string }>(
+  parts: readonly T[],
+  removeComments = false,
+  separator = '',
+): T[] {
+  if (parts.length === 0) return []
+  let prefix = '\uE000tavernCode'
+  while (parts.some(part => part.text.includes(prefix))) prefix += 'X'
+  const suffix = '\uE001'
+  const saved: string[] = []
+  let openMeta = new Map<string, number>()
+  const maskedParts = parts.map(part => {
+    const nextMeta = new Map<string, number>()
+    const ranges = markdownCodeRanges(part.text, {
+      skipHtmlFences: true,
+      skipInsideHtml: true,
+      initialOuterOpen: openMeta,
+      collectOpenMeta: nextMeta,
+      skipAllCode: part.kind === 'html',
+    })
+    openMeta = nextMeta
+    if (ranges.length === 0) return part
+    let masked = ''
+    let cursor = 0
+    for (const range of ranges) {
+      const index = saved.length
+      saved.push(part.text.slice(range.start, range.end))
+      masked += part.text.slice(cursor, range.start) + `${prefix}${index}${suffix}`
+      cursor = range.end
+    }
+    masked += part.text.slice(cursor)
+    return { ...part, text: masked }
+  })
+  const visible = stripOpaqueDisplayMetaParts(maskedParts, removeComments, separator)
+  if (saved.length === 0) return visible
+  const pattern = new RegExp(`${prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\d+)${suffix}`, 'g')
+  return visible.map(part => ({
+    ...part,
+    text: part.text.replace(pattern, (_raw, index: string) => saved[Number(index)] ?? ''),
+  }))
 }
 
 /** 去掉展示不该看见的机读块与小部件；角色正文与 Markdown 代码示例保留。 */
@@ -1541,7 +1636,7 @@ function streamingHtmlStart(text: string, scanMarkdown: boolean | ReturnType<typ
 /** 流式正文只显示卡面前的台词；关闭交互卡时维持显式源码展示。 */
 export function presentStreamingOutput(text: string, allowHtml: boolean): { text: string; pendingHtml: boolean } {
   if (!allowHtml) return { text: stripDisplayMeta(text), pendingHtml: false }
-  const visible = stripOpaqueDisplayMeta(text)
+  const visible = stripDisplayOpaqueMeta(text)
   const start = streamingHtmlStart(visible)
   return { text: stripDisplayMeta(start === null ? visible : visible.slice(0, start)), pendingHtml: start !== null }
 }
@@ -1587,7 +1682,7 @@ export function htmlSourceFallback(html: string): string {
 function disabledHtmlText(rendered: string): string {
   const parts: string[] = []
   // 先在完整逻辑流上收起机读块；否则 HTML 拆分会切断 think/Analysis 等边界并泄漏内容。
-  let remaining = stripOpaqueDisplayMeta(rendered, true)
+  let remaining = stripDisplayOpaqueMeta(rendered, true)
   for (let i = 0; i < 128; i++) {
     const located = locateRenderedHtml(remaining)
     if (!located) { parts.push(stripDisplayMeta(remaining)); return parts.filter(Boolean).join('\n\n') }
@@ -1595,7 +1690,9 @@ function disabledHtmlText(rendered: string): string {
     parts.push(htmlSourceFallback(located.html))
     remaining = remaining.slice(located.fence?.end ?? located.start + located.html.length)
   }
-  throw new Error('交互卡展示片段过多')
+  if (locateRenderedHtml(remaining)) throw new Error('交互卡展示片段过多')
+  parts.push(stripDisplayMeta(remaining))
+  return parts.filter(Boolean).join('\n\n')
 }
 
 /**
@@ -1607,7 +1704,7 @@ export function presentRenderedOutput(
   allowHtml: boolean,
 ): { html: string | null; htmls: string[]; text: string; pendingHtml?:true } {
   if (!allowHtml) return { html: null, htmls: [], text: disabledHtmlText(rendered) }
-  const visible=hideIncompleteHtml(stripOpaqueDisplayMeta(rendered))
+  const visible=hideIncompleteHtml(stripDisplayOpaqueMeta(rendered))
   const { htmls, rest } = collectRenderedHtml(visible.text)
   const grouped=mergeDetachedCardStyles(htmls.map(text=>({kind:'html' as const,text}))).map(part=>part.text)
   return {

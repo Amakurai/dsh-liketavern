@@ -270,3 +270,68 @@ it.each([diary,'<!DOCTYPE html><html><body>实际文档</body></html>'])('成对
     ])
   }
 })
+
+it('纯文本 <details> 与相邻非 <details> 卡片拆分，带共享样式时仍留在同一沙箱', () => {
+  const plainFold = '<details><summary>行动选项</summary>\n1. 探索酒馆\n2. 离开村庄\n</details>'
+  const mvuCard = '<div class="mvu-status">HP: 100</div>'
+  expect(splitTemplateDisplay(`${plainFold}\n${mvuCard}`)).toEqual([
+    { kind: 'html', text: plainFold },
+    { kind: 'html', text: mvuCard },
+  ])
+  expect(splitTemplateDisplay(`${mvuCard}\n${plainFold}`)).toEqual([
+    { kind: 'html', text: mvuCard },
+    { kind: 'html', text: plainFold },
+  ])
+
+  // 前导或后置 <style> 显式共享样式时仍保留在同一个卡面。
+  const styledPair = `<style>details{color:red}.mvu-status{color:blue}</style>\n${mvuCard}\n${plainFold}`
+  expect(splitTemplateDisplay(styledPair)).toEqual([{ kind: 'html', text: styledPair }])
+  const trailingStyle = `${plainFold}\n<style>details{color:red}</style>`
+  expect(splitTemplateDisplay(trailingStyle)).toEqual([{ kind: 'html', text: trailingStyle }])
+})
+
+it('前导 <link>/<meta>、媒体/图形容器、<center> 卡面与未引号尾斜杠属性正确识别', () => {
+  const fontLink = '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC">'
+  const styledCard = `${fontLink}\n<style>.card{font-family:serif}</style>\n<div class="card">星港</div>`
+  expect(splitTemplateDisplay(`前文\n${styledCard}\n后文`)).toEqual([
+    { kind: 'markdown', text: '前文' },
+    { kind: 'html', text: styledCard },
+    { kind: 'markdown', text: '后文' },
+  ])
+  // 无后续卡面时孤立 <link> 不升级为 iframe，且不跨过代码围栏吞并后面的卡片。
+  expect(splitRenderedHtml(`${fontLink}\n普通正文`)).toEqual({ html: null, rest: `${fontLink}\n普通正文` })
+  expect(splitTemplateDisplay(`${fontLink}\n\`\`\`html\n<div class="fence">围栏卡</div>\n\`\`\`\n<div class="tail">尾卡</div>`)).toEqual([
+    { kind: 'markdown', text: fontLink },
+    { kind: 'html', text: '<div class="fence">围栏卡</div>' },
+    { kind: 'html', text: '<div class="tail">尾卡</div>' },
+  ])
+
+  // 音频、视频、SVG、画布与对话框容器进入沙箱。
+  for (const mediaHtml of [
+    '<audio controls src="https://example.com/bgm.mp3"></audio>',
+    '<video controls width="320"><source src="https://example.com/pv.mp4"></video>',
+    '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/></svg>',
+    '<canvas id="map" width="200" height="100"></canvas>',
+    '<dialog open><p>提示</p></dialog>',
+  ]) {
+    expect(splitTemplateDisplay(`前文\n${mediaHtml}\n后文`)).toEqual([
+      { kind: 'markdown', text: '前文' },
+      { kind: 'html', text: mediaHtml },
+      { kind: 'markdown', text: '后文' },
+    ])
+  }
+
+  // <center> 仅在带属性或内含 HTML/样式卡面时进入 iframe；纯 Markdown <center> 留给宿主归一化。
+  for (const cardCenter of [
+    '<center><div class="card">居中卡片</div></center>',
+    '<center style="color:gold">★ 欢迎 ★</center>',
+    '<center><img src="https://example.com/cg.png" width="240"><h2>标题</h2></center>',
+  ]) {
+    expect(splitTemplateDisplay(cardCenter)).toEqual([{ kind: 'html', text: cardCenter }])
+  }
+  expect(splitRenderedHtml('<center>### 序章</center>')).toEqual({ html: null, rest: '<center>### 序章</center>' })
+
+  // 未引号属性值末尾的 `/` 不得把开放标签误判为自闭合。
+  const unquotedSlash = '<div data-href=https://example.com/>状态内容</div>'
+  expect(splitTemplateDisplay(unquotedSlash)).toEqual([{ kind: 'html', text: unquotedSlash }])
+})

@@ -536,6 +536,18 @@ describe('compileCardRegexScripts', () => {
     expect(compileCardRegexScripts([{ ...base, placement: [0, 3, 4, 6] }], 'c')).toEqual([])
   })
 
+  it('兼容字符串化数字 placement（如 ["2"]）', () => {
+    const rules = compileCardRegexScripts(
+      [{ ...base, scriptName: 'str-p2', placement: ['2' as unknown as number] }],
+      'card1',
+    )
+    expect(rules).toHaveLength(1)
+    expect(rules[0]!.scopes).toEqual(['output'])
+    expect(rules[0]!.timing).toEqual(['render'])
+    expect(rules[0]!.roles).toEqual(['assistant'])
+    expect(rules[0]!.enabled).toBe(true)
+  })
+
   it('markdownOnly 覆盖为仅 output/render，作用楼层仍随 placement', () => {
     const rules = compileCardRegexScripts([{ ...base, placement: [1, 5], markdownOnly: true }], 'c')
     expect(rules).toHaveLength(1)

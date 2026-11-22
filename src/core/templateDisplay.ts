@@ -2,6 +2,7 @@
 import { locateRenderedHtml } from './regex.js'
 import { TEMPLATE_REPLAY_MAX_CHARS } from './templateBudget.js'
 import {
+  collectStandaloneCustomTagNames,
   htmlSourceFallback,
   mergeDetachedCardStyles,
   stripDisplayMeta,
@@ -37,11 +38,12 @@ export function splitTemplateDisplay(text:string,preserveMeta=false):TemplateDis
     if(depth>64 || parts.length>=MAX_PARTS) throw new Error('模板展示片段过多')
     const split=locateRenderedHtml(source)
     if(!split) {
-      const value=preserveMeta ? source : stripDisplayMeta(source)
-      if(value) parts.push({kind:'markdown',text:value})
+      parts.push({kind:'markdown',text:source})
       return
     }
-    const before=source.slice(0,split.fence?.start??split.start)
+    const rawBefore=source.slice(0,split.fence?.start??split.start)
+    // 引用块整块包裹 `<details>`/`<div>` 时，开标签同行的孤立 `> ` 前缀只属于被抽出的 HTML。
+    const before=split.fence ? rawBefore : rawBefore.replace(/(?:^|\r?\n)[ \t]*>(?:[ \t]*>)*[ \t]*$/,'')
     const after=source.slice(split.fence?.end??split.start+split.html.length)
     visit(before,depth+1)
     parts.push({kind:'html',text:split.html})
@@ -53,19 +55,29 @@ export function splitTemplateDisplay(text:string,preserveMeta=false):TemplateDis
   return preserveMeta ? parseTemplateDisplayParts(grouped) : sanitizeTemplateDisplayParts(grouped)
 }
 
+function collectSharedCustomTags(parts: readonly TemplateDisplayPart[]): ReadonlySet<string> | undefined {
+  const shared = new Set<string>()
+  for (const part of parts) {
+    if (part.kind !== 'markdown' || !part.text.includes('<')) continue
+    for (const name of collectStandaloneCustomTagNames(part.text)) shared.add(name)
+  }
+  return shared.size > 0 ? shared : undefined
+}
+
 /**
  * 对有序展示片段做一次跨片段机读清理；HTML 类型与折叠标题保持不变。
  * 模板首次生成和展示正则之后都调用，避免标签跨 markdown/html 边界时丢失状态。
  */
 export function sanitizeTemplateDisplayParts(parts: readonly TemplateDisplayPart[]): TemplateDisplayPart[] {
   const visible = stripDisplayOpaqueMetaParts(parseTemplateDisplayParts(parts))
+  const sharedCustomTags = collectSharedCustomTags(visible)
   const output: TemplateDisplayPart[] = []
   for (const part of visible) {
     if (part.kind === 'html') {
       if (part.text) output.push(part)
       continue
     }
-    const text = stripDisplayMeta(part.text)
+    const text = stripDisplayMeta(part.text, sharedCustomTags)
     if (text) output.push({ kind: 'markdown', text })
   }
   return parseTemplateDisplayParts(mergeDetachedCardStyles(output))
@@ -74,13 +86,14 @@ export function sanitizeTemplateDisplayParts(parts: readonly TemplateDisplayPart
 /** 会话/全局关闭交互卡时跨片段清理，再逐 HTML 段安全降级并保持顺序。 */
 export function disableInteractiveParts(parts: readonly TemplateDisplayPart[]): TemplateDisplayPart[] {
   const visible = stripDisplayOpaqueMetaParts(parseTemplateDisplayParts(parts), true)
+  const sharedCustomTags = collectSharedCustomTags(visible)
   const output: TemplateDisplayPart[] = []
   for (const part of visible) {
     if (part.kind === 'html') {
       if (part.text) output.push({ kind: 'markdown', text: htmlSourceFallback(part.text) })
       continue
     }
-    const text = stripDisplayMeta(part.text)
+    const text = stripDisplayMeta(part.text, sharedCustomTags)
     if (text) output.push({ kind: 'markdown', text })
   }
   return output

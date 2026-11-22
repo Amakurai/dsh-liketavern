@@ -413,6 +413,20 @@ describe('审查修复回归：交互卡回退', () => {
     expect(stripDisplayMeta('<rpg:status>\n```json\n{"lv":1}\n```\n</rpg:status>')).toBe('```json\n{"lv":1}\n```')
   })
 
+  it('清理含引号内 > 的自定义伪标签并保留 CommonMark 两空格硬换行', () => {
+    const md = new MarkdownIt('commonmark')
+    const quotedAttr = '<status title="HP > 50%">\n```json\n{"hp": 80}\n```\n</status>'
+    const cleaned = stripDisplayMeta(quotedAttr)
+    expect(cleaned).toBe('```json\n{"hp": 80}\n```')
+    expect(md.render(cleaned)).toContain('<pre><code class="language-json">')
+
+    // 非空续行前的两个空格属于 CommonMark 硬换行，tidy 必须保留；空白行前的行尾空格仍照常裁剪。
+    expect(stripDisplayMeta('第一行  \n第二行')).toBe('第一行  \n第二行')
+    expect(md.render(stripDisplayMeta('第一行  \n第二行'))).toContain('第一行<br />\n第二行')
+    expect(stripDisplayMeta('第一行   \n第二行 \n第三行\t\n第四行')).toBe('第一行  \n第二行\n第三行\n第四行')
+    expect(stripDisplayMeta('前段  \n   \n后段')).toBe('前段\n\n后段')
+  })
+
   it('伪标签清理不误伤代码示例、缩进代码、自动链接、盘符路径、泛型与标准 HTML', () => {
     const preserved = [
       '```text\n<Adventurer Profile>\n<status1>\n```',

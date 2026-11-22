@@ -110,3 +110,110 @@ export function markdownCodeScanner(text:string):{
     },
   }
 }
+
+function hasTableCodeIndent(line: string): boolean {
+  let cols = 0
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i]!
+    if (ch === ' ') cols += 1
+    else if (ch === '\t') cols += 4 - (cols % 4)
+    else break
+    if (cols >= 4) return true
+  }
+  return false
+}
+
+function splitGfmTableCells(content: string): string[] | null {
+  const trimmed = content.trim()
+  if (!trimmed || !trimmed.includes('|')) return null
+  const pipeIndices: number[] = []
+  let slashes = 0
+  for (let i = 0; i < trimmed.length; i++) {
+    const ch = trimmed[i]!
+    if (ch === '\\') {
+      slashes++
+      continue
+    }
+    if (ch === '|' && slashes % 2 === 0) pipeIndices.push(i)
+    slashes = 0
+  }
+  if (pipeIndices.length === 0) return null
+  const start = pipeIndices[0] === 0 ? 1 : 0
+  const lastPipe = pipeIndices[pipeIndices.length - 1]!
+  const end = lastPipe === trimmed.length - 1 && lastPipe >= start ? trimmed.length - 1 : trimmed.length
+  const cells: string[] = []
+  let cellStart = start
+  for (const pipe of pipeIndices) {
+    if (pipe < start || pipe >= end) continue
+    cells.push(trimmed.slice(cellStart, pipe).trim())
+    cellStart = pipe + 1
+  }
+  cells.push(trimmed.slice(cellStart, end).trim())
+  return cells
+}
+
+/**
+ * 识别文本中属于 GFM 表格的行号（0 基），跳过围栏代码块。
+ * 放在 `markdownCodeScanner` 之外以保持扫描器本体无外部闭包依赖。
+ */
+export function findGfmTableLines(text: string, code?: ReturnType<typeof markdownCodeScanner>): Set<number> {
+  const tableLines = new Set<number>()
+  if (!text.includes('|') || !text.includes('-')) return tableLines
+  const lines: MarkdownLine[] = []
+  const lineBreak = /\r?\n/g
+  let start = 0
+  for (let match = lineBreak.exec(text); match; match = lineBreak.exec(text)) {
+    lines.push({ start, end: match.index, next: lineBreak.lastIndex })
+    start = lineBreak.lastIndex
+  }
+  lines.push({ start, end: text.length, next: text.length })
+  if (lines.length < 2) return tableLines
+
+  const scanner = code ?? markdownCodeScanner(text)
+  const inFence = new Set<number>()
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!
+    const value = text.slice(line.start, line.end)
+    const opening = /^((?: {0,3}>[ \t]?)* {0,3}(?:(?:[-+*]|\d{1,9}[.)])[ \t]+)?)(`{3,}|~{3,})/.exec(value)
+    if (!opening) continue
+    const fence = scanner.fence(line.start + opening[1]!.length)
+    if (!fence) continue
+    let j = i
+    while (j < lines.length && lines[j]!.start < fence.end) {
+      inFence.add(j)
+      j++
+    }
+    i = Math.max(i, j - 1)
+  }
+
+  const stripQuote = (value: string): { depth: number; content: string } => {
+    const m = /^((?: {0,3}>[ \t]?)*)(.*)$/.exec(value)!
+    return { depth: m[1]!.match(/>/g)?.length ?? 0, content: m[2]! }
+  }
+
+  for (let i = 0; i < lines.length - 1; i++) {
+    if (inFence.has(i) || inFence.has(i + 1)) continue
+    const head = stripQuote(text.slice(lines[i]!.start, lines[i]!.end))
+    const delim = stripQuote(text.slice(lines[i + 1]!.start, lines[i + 1]!.end))
+    if (head.depth !== delim.depth) continue
+    if (hasTableCodeIndent(head.content) || hasTableCodeIndent(delim.content)) continue
+    const delimCells = splitGfmTableCells(delim.content)
+    if (!delimCells || delimCells.length === 0 || !delimCells.every(cell => /^:?-{1,}:?$/.test(cell))) continue
+    const headCells = splitGfmTableCells(head.content)
+    if (!headCells || headCells.length !== delimCells.length) continue
+    tableLines.add(i)
+    tableLines.add(i + 1)
+    let j = i + 2
+    while (j < lines.length && !inFence.has(j)) {
+      const row = stripQuote(text.slice(lines[j]!.start, lines[j]!.end))
+      if (row.depth !== head.depth || hasTableCodeIndent(row.content)) break
+      const trimmed = row.content.trim()
+      if (!trimmed || /^#{1,6}(?:[ \t]|$)/.test(trimmed)) break
+      if (splitGfmTableCells(row.content) === null) break
+      tableLines.add(j)
+      j++
+    }
+    i = j - 1
+  }
+  return tableLines
+}

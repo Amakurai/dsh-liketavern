@@ -975,7 +975,29 @@ const AUTOLINK_SCHEMES = new Set([
   'ws', 'wss', 'ssh', 'git', 'file', 'magnet', 'news', 'xmpp', 'sip',
   'sips', 'sms', 'geo', 'data', 'blob', 'javascript', 'vbscript',
 ])
-const CUSTOM_TAG_TOKEN_RE = /^<(\/?)([A-Za-z][\w.-]*(?::[A-Za-z_][\w.-]*)?)(?:[ \t][^<>]*?)?(\/?)>$/
+const CUSTOM_TAG_HEAD_RE = /^<(\/?)([A-Za-z][\w.-]*(?::[A-Za-z_][\w.-]*)?)(?=[ \t/>])/
+
+/** 在单行内扫描自定义伪标签的结束 `>`，跳过 `="..."`/`='...'` 属性引号内的 `>` 与 `<`。 */
+function scanCustomTagTokenEnd(line: string, start: number): number {
+  if (line[start] !== '<') return -1
+  let quote: '"' | "'" | null = null
+  for (let j = start + 1; j < line.length; j++) {
+    const ch = line[j]!
+    if (quote !== null) {
+      if (ch === quote) quote = null
+      continue
+    }
+    if (ch === '"' || ch === "'") {
+      let back = j - 1
+      while (back > start && (line[back] === ' ' || line[back] === '\t')) back--
+      if (back > start && line[back] === '=') quote = ch
+      continue
+    }
+    if (ch === '<') return -1
+    if (ch === '>') return j
+  }
+  return -1
+}
 
 function hasCodeIndent(line: string): boolean {
   let cols = 0
@@ -1073,14 +1095,16 @@ function scanBlockquoteAndIndent(line: string): { quotePrefixEnd: number; conten
 }
 
 function customTagName(token: string): string | null {
+  if (!token.startsWith('<') || !token.endsWith('>') || token.includes('\n') || token.includes('\r')) return null
   if (token.startsWith('<!--') || token.startsWith('<!') || token.startsWith('<?')) return null
   if (EMAIL_AUTOLINK_RE.test(token)) return null
   if (!/\s/.test(token)) {
     const uri = URI_AUTOLINK_RE.exec(token)
     if (uri && (token.includes('://') || AUTOLINK_SCHEMES.has(uri[1]!.toLowerCase()))) return null
   }
-  const match = CUSTOM_TAG_TOKEN_RE.exec(token)
+  const match = CUSTOM_TAG_HEAD_RE.exec(token)
   if (!match) return null
+  if (scanCustomTagTokenEnd(token, 0) !== token.length - 1) return null
   const name = match[2]!
   return isKnownHtmlElementName(name) ? null : name.toLowerCase()
 }
@@ -1096,67 +1120,66 @@ function stripCustomTagTokensInLine(line: string, strippedNames: ReadonlySet<str
       i++
       continue
     }
-    let j = i + 1
-    while (j < line.length && line[j] !== '>' && line[j] !== '<') j++
-    if (j < line.length && line[j] === '>') {
-      const name = customTagName(line.slice(i, j + 1))
+    const end = scanCustomTagTokenEnd(line, i)
+    if (end > i) {
+      const name = customTagName(line.slice(i, end + 1))
       if (name !== null && strippedNames.has(name)) {
         if (i > cursor) out.push(line.slice(cursor, i))
-        cursor = j + 1
+        cursor = end + 1
       }
-      i = j + 1
+      i = end + 1
       continue
     }
-    i = j
+    i++
   }
   if (cursor === 0) return line
   if (cursor < line.length) out.push(line.slice(cursor))
   return out.join('')
 }
 
+/** 扫描单行是否仅由行首自定义伪标签组成，返回提取出的标签名列表；不匹配返回 `null`。 */
+function extractStandaloneCustomTagLine(line: string): { quotePrefixEnd: number; names: string[] } | null {
+  if (!line.includes('<')) return null
+  const layout = scanBlockquoteAndIndent(line)
+  if (layout.indentedCode) return null
+  const trimmed = line.slice(layout.contentStart).replace(/[ \t]+$/, '')
+  if (!trimmed.startsWith('<')) return null
+  const names: string[] = []
+  let pos = 0
+  while (pos < trimmed.length) {
+    if (trimmed[pos] !== '<') return null
+    const end = scanCustomTagTokenEnd(trimmed, pos)
+    if (end <= pos) return null
+    const name = customTagName(trimmed.slice(pos, end + 1))
+    if (name === null) return null
+    names.push(name)
+    pos = end + 1
+    while (pos < trimmed.length && (trimmed[pos] === ' ' || trimmed[pos] === '\t')) pos++
+  }
+  return names.length > 0 ? { quotePrefixEnd: layout.quotePrefixEnd, names } : null
+}
+
 /**
  * 清理会触发 CommonMark Type 7 HTML 块并吞掉后续围栏的行首自定义伪标签，
  * 以及与这些已确认伪标签同行混写的配对残余；跳过缩进代码、自动链接与标准 HTML 元素。
  */
-function stripCustomTags(text: string): string {
+function stripCustomTags(text: string, extraNames?: ReadonlySet<string>): string {
   if (!text.includes('<')) return text
-  const strippedNames = new Set<string>()
+  const strippedNames = new Set<string>(extraNames)
   const firstPass: string[] = []
   const lineBreak = /\r?\n/g
   let lineStart = 0
   let changed = false
 
   const processLine = (line: string, breakText: string): void => {
-    let handled = false
-    if (line.includes('<')) {
-      const layout = scanBlockquoteAndIndent(line)
-      if (!layout.indentedCode) {
-        const trimmed = line.slice(layout.contentStart).replace(/[ \t]+$/, '')
-        if (trimmed.startsWith('<')) {
-          const lineNames: string[] = []
-          let pos = 0
-          let allCustom = true
-          while (pos < trimmed.length) {
-            if (trimmed[pos] !== '<') { allCustom = false; break }
-            let j = pos + 1
-            while (j < trimmed.length && trimmed[j] !== '>' && trimmed[j] !== '<') j++
-            if (j >= trimmed.length || trimmed[j] !== '>') { allCustom = false; break }
-            const name = customTagName(trimmed.slice(pos, j + 1))
-            if (name === null) { allCustom = false; break }
-            lineNames.push(name)
-            pos = j + 1
-            while (pos < trimmed.length && (trimmed[pos] === ' ' || trimmed[pos] === '\t')) pos++
-          }
-          if (allCustom && lineNames.length > 0) {
-            for (const name of lineNames) strippedNames.add(name)
-            firstPass.push(line.slice(0, layout.quotePrefixEnd).replace(/[ \t]+$/, ''), breakText)
-            changed = true
-            handled = true
-          }
-        }
-      }
+    const standalone = extractStandaloneCustomTagLine(line)
+    if (standalone) {
+      for (const name of standalone.names) strippedNames.add(name)
+      firstPass.push(line.slice(0, standalone.quotePrefixEnd).replace(/[ \t]+$/, ''), breakText)
+      changed = true
+      return
     }
-    if (!handled) firstPass.push(line, breakText)
+    firstPass.push(line, breakText)
   }
 
   for (let match = lineBreak.exec(text); match; match = lineBreak.exec(text)) {
@@ -1165,8 +1188,8 @@ function stripCustomTags(text: string): string {
   }
   processLine(text.slice(lineStart), '')
 
-  if (!changed) return text
-  const pass1 = firstPass.join('')
+  if (!changed && strippedNames.size === 0) return text
+  const pass1 = changed ? firstPass.join('') : text
   if (strippedNames.size === 0 || !pass1.includes('<')) return pass1
 
   const secondPass: string[] = []
@@ -1185,6 +1208,27 @@ function stripCustomTags(text: string): string {
   if (nextTail !== tail) sChanged = true
   secondPass.push(nextTail)
   return sChanged ? secondPass.join('') : pass1
+}
+
+/** 收集单段 Markdown 文本中所有独占行的自定义伪标签名，供跨 HTML 卡片拆分的兄弟片段共享清理。 */
+export function collectStandaloneCustomTagNames(text: string): Set<string> {
+  const names = new Set<string>()
+  if (!text || !text.includes('<')) return names
+  const protectedCode = protectMarkdownCode(text)
+  const visible = stripOpaqueDisplayMeta(protectedCode.masked)
+  if (!visible.includes('<') || isCoverHtml(visible)) return names
+  const cleaned = stripWidgetTail(stripUnclosedMeta(stripClosedAndEmpty(stripHtmlComments(visible))))
+  if (!cleaned.includes('<')) return names
+  const lineBreak = /\r?\n/g
+  let lineStart = 0
+  for (let match = lineBreak.exec(cleaned); match; match = lineBreak.exec(cleaned)) {
+    const standalone = extractStandaloneCustomTagLine(cleaned.slice(lineStart, match.index))
+    if (standalone) for (const name of standalone.names) names.add(name)
+    lineStart = lineBreak.lastIndex
+  }
+  const tail = extractStandaloneCustomTagLine(cleaned.slice(lineStart))
+  if (tail) for (const name of tail.names) names.add(name)
+  return names
 }
 
 function isCoverHtml(text: string): boolean {
@@ -1234,7 +1278,10 @@ function stripWidgetTail(text: string): string {
 
 function tidy(text: string): string {
   return text
-    .replace(/[ \t]+(?=\r?\n)/g, '')
+    // 保留非空行末且下一行非空时的 CommonMark 硬换行（两空格），其余行尾与空白行空白照常裁剪。
+    .replace(/([^\r\n \t])([ \t]+)(?=\r?\n([^\r\n]*))/g, (_m, lead: string, spaces: string, nextLine: string) =>
+      lead + (/^ {2,}$/.test(spaces) && nextLine.trim().length > 0 ? '  ' : ''))
+    .replace(/^[ \t]+(?=\r?\n)/gm, '')
     .replace(/(\r?\n)(?:\r?\n){2,}/g, '$1$1')
     .trim()
 }
@@ -1563,14 +1610,14 @@ export function stripDisplayOpaqueMetaParts<T extends { kind?: 'markdown' | 'htm
 }
 
 /** 去掉展示不该看见的机读块与小部件；角色正文与 Markdown 代码示例保留。 */
-export function stripDisplayMeta(text: string): string {
+export function stripDisplayMeta(text: string, extraCustomTagNames?: ReadonlySet<string>): string {
   if (!text) return text
   const protectedCode = protectMarkdownCode(text)
   const visible = stripOpaqueDisplayMeta(protectedCode.masked)
   if (!visible.includes('<')) return protectedCode.restore(tidy(visible))
   if (isCoverHtml(visible)) return protectedCode.restore(visible)
   return protectedCode.restore(tidy(
-    stripProtocolTags(stripCustomTags(stripWidgetTail(stripUnclosedMeta(stripClosedAndEmpty(stripHtmlComments(visible)))))),
+    stripProtocolTags(stripCustomTags(stripWidgetTail(stripUnclosedMeta(stripClosedAndEmpty(stripHtmlComments(visible)))), extraCustomTagNames)),
   ))
 }
 

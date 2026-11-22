@@ -1181,6 +1181,36 @@ it('普通 details 与真实 iframe 卡面混排时真实卡面的 frameIndex �
   expect(iframes[2]!.props.srcDoc).toContain('"frameIndex":2')
 })
 
+it('<summary> 未闭合但以空行分隔正文的纯文本 details 走原生折叠与 MarkdownText，无空行仍回退 iframe',async()=>{
+  const raw=[
+    '开场引导',
+    '',
+    '<details>',
+    '<summary>你可以在下面选一个出生地',
+    '',
+    '### 中央大陆',
+    '1. 鲁迪乌斯',
+    '</details>',
+  ].join('\n')
+  const output=presentRenderedOutput(raw,true)
+  const parts=splitTemplateDisplay(raw)
+  const rpc={...frameLeaseRpc,renderOutputText:async()=>({ok:true as const,value:{...output,parts,interactiveCards:true,
+    whitelist:[],greetings:[],greetingIndex:0,canSwipeGreeting:false}})} as unknown as TavernRemote
+  await mount(<SpeechBubble remote={rpc} sessionId="unclosed-summary" cardId="card" name="角色" rawText={raw}/>)
+  expect(view!.root.findAllByType('iframe')).toHaveLength(0)
+  const folds=view!.root.findAllByProps({className:'dsh-tavern-fold'})
+  expect(folds).toHaveLength(1)
+  expect(folds[0]!.findByType('summary').children).toEqual(['你可以在下面选一个出生地'])
+  expect(folds[0]!.findByType(MarkdownText).props.text).toBe('### 中央大陆\n1. 鲁迪乌斯')
+
+  const noBlank='<details>\n<summary>无空行未闭合\n正文\n</details>'
+  const fallbackRpc={...frameLeaseRpc,renderOutputText:async()=>({ok:true as const,value:{...presentRenderedOutput(noBlank,true),
+    parts:splitTemplateDisplay(noBlank),interactiveCards:true,whitelist:[],greetings:[],greetingIndex:0,canSwipeGreeting:false}})} as unknown as TavernRemote
+  await act(async()=>view!.update(<SpeechBubble remote={fallbackRpc} sessionId="unclosed-summary-fallback" cardId="card" name="角色" rawText={noBlank}/>))
+  expect(view!.root.findAllByProps({className:'dsh-tavern-fold'})).toHaveLength(0)
+  expect(view!.root.findAllByType('iframe')).toHaveLength(1)
+})
+
 it('Web GUI 深浅色与 MutationObserver 变更实时向沙箱发送 setColorScheme，不重建 srcDoc',async()=>{
   const observers:Array<()=>void>=[]
   const disconnect=vi.fn()
@@ -1234,4 +1264,95 @@ it('只含原生 details 折叠块的气泡点击复制按钮仍写入展开文�
     await act(async()=>{copyBtn.props.onClick()})
     expect(writeText).toHaveBeenCalledWith('妖精契约\n>契约者: 希尔薇\n契约状态: 稳定')
   }finally{setSpeakerHeader(false)}
+})
+
+it('交互模式对 MarkdownText 归一化安全 HTML，关闭交互卡与渲染报错回退保持原样',async()=>{
+  const raw='<font color="#ff6699">「早上好！」</font><br><b>欢迎来到星港</b>\n<img src="https://example.com/cg.png" alt="封面">'
+  const okRpc={...frameLeaseRpc,renderOutputText:async()=>({ok:true as const,value:{
+    text:raw,html:null,htmls:[],parts:[{kind:'markdown' as const,text:raw}],interactiveCards:true,
+    whitelist:[],greetings:[],greetingIndex:0,canSwipeGreeting:false,
+  }})} as unknown as TavernRemote
+  await mount(<SpeechBubble remote={okRpc} sessionId="norm-on" cardId="card" name="角色" rawText={raw}/>)
+  expect(view!.root.findByType(MarkdownText).props.text).toBe('「早上好！」  \n**欢迎来到星港**\n![封面](https://example.com/cg.png)')
+
+  // 关闭交互卡时不改写 Markdown 原文。
+  await mount(<SpeechBubble remote={okRpc} sessionId="norm-off" cardId="card" name="角色" rawText={raw} interactiveCards={false}/>)
+  expect(view!.root.findByType(MarkdownText).props.text).toBe(raw)
+
+  // 渲染失败回退路径不执行归一化，维持原始回退文本。
+  const failRpc={...frameLeaseRpc,renderOutputText:async()=>({ok:false as const,error:{message:'渲染失败'}})} as unknown as TavernRemote
+  await mount(<SpeechBubble remote={failRpc} sessionId="norm-err" cardId="card" name="角色" rawText={raw}/>)
+  expect(view!.root.findByType(MarkdownText).props.text).toBe(raw)
+})
+
+it('相邻纯文本 <details> 与状态卡片 <div> 在气泡中分别走原生折叠和独立 iframe',async()=>{
+  const raw='<details><summary>行动选项</summary>\n1. 探索酒馆\n2. 离开村庄\n</details>\n<div class="mvu-status">HP: 100</div>'
+  const output=presentRenderedOutput(raw,true)
+  const parts=splitTemplateDisplay(raw)
+  const mixedRpc={...frameLeaseRpc,renderOutputText:async()=>({ok:true as const,value:{
+    ...output,parts,interactiveCards:true,whitelist:[],greetings:[],greetingIndex:0,canSwipeGreeting:false,
+  }})} as unknown as TavernRemote
+  await mount(<SpeechBubble remote={mixedRpc} sessionId="mixed-fold-card" cardId="card" name="角色" rawText={raw}/>)
+  const folds=view!.root.findAllByProps({className:'dsh-tavern-fold'})
+  expect(folds).toHaveLength(1)
+  expect(folds[0]!.findByType('summary').children).toEqual(['行动选项'])
+  expect(folds[0]!.findByType(MarkdownText).props.text).toBe('1. 探索酒馆\n2. 离开村庄')
+  const frames=view!.root.findAllByType('iframe')
+  expect(frames).toHaveLength(1)
+  expect(frames[0]!.props.srcDoc).toContain('<div class="mvu-status">HP: 100</div>')
+})
+
+it('readHostColorScheme 在宿主启动期未设置 style.colorScheme 时回退读取 data-ds-theme-source',async()=>{
+  const {readHostColorScheme}=await import('../src/client/displayPrefs.js')
+  let darkAttr=false
+  let sourceAttr:string|null='dark'
+  vi.stubGlobal('document',{
+    documentElement:{style:{colorScheme:''},getAttribute:(name:string)=>name==='data-ds-theme-source'?sourceAttr:null},
+    body:{hasAttribute:(attr:string)=>attr==='data-ds-dark-theme'&&darkAttr},
+  })
+  expect(readHostColorScheme()).toBe('dark')
+  sourceAttr='light'
+  expect(readHostColorScheme()).toBe('light')
+  sourceAttr='system'
+  expect(readHostColorScheme()).toBe('light')
+  darkAttr=true
+  expect(readHostColorScheme()).toBe('dark')
+  darkAttr=false
+  sourceAttr=null
+  expect(readHostColorScheme()).toBeUndefined()
+})
+
+it('角色详情页交互卡预览同步宿主主题 setColorScheme 且不重建 srcDoc',async()=>{
+  const {CharacterInteractivePreview}=await import('../src/client/panel/characters.js')
+  const observers:Array<()=>void>=[]
+  const disconnect=vi.fn()
+  class MockMutationObserver {
+    constructor(cb:()=>void){observers.push(cb)}
+    observe=vi.fn()
+    disconnect=disconnect
+  }
+  let dark=true
+  const doc={
+    documentElement:{style:{colorScheme:'dark'},getAttribute:()=>null},
+    body:{hasAttribute:(attr:string)=>attr==='data-ds-dark-theme'&&dark},
+  }
+  vi.stubGlobal('MutationObserver',MockMutationObserver)
+  vi.stubGlobal('document',doc)
+  await mount(<CharacterInteractivePreview html="<div class='cover'>封面</div>" firstMes="开场" alternateGreetings={[]} name="角色" title="预览"/>)
+  const iframe=view!.root.findByType('iframe')
+  const initialSrcDoc=iframe.props.srcDoc as string
+  expect(initialSrcDoc).toContain('<meta name="color-scheme" content="dark"></head>')
+  expect(source.postMessage).toHaveBeenCalledWith(expect.objectContaining({
+    source:'dsh-tavern-card',action:'setColorScheme',colorScheme:'dark',
+  }),'*')
+
+  dark=false
+  doc.documentElement.style.colorScheme='light'
+  await act(async()=>{for(const cb of observers)cb()})
+  expect(source.postMessage).toHaveBeenCalledWith(expect.objectContaining({
+    source:'dsh-tavern-card',action:'setColorScheme',colorScheme:'light',
+  }),'*')
+  expect(view!.root.findByType('iframe').props.srcDoc).toBe(initialSrcDoc)
+  await act(async()=>view!.unmount());view=undefined
+  expect(disconnect).toHaveBeenCalled()
 })

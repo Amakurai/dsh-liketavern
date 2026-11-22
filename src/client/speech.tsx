@@ -13,6 +13,7 @@ import { buildCardSrcDoc, parseCardBridgeMessage } from '../core/cardFrame.js'
 import {ScriptChoices,publishScriptChoices,clearScriptChoices,parseScriptChoices} from './helperChoices.js'
 import {cardVariableLabels} from './cardVariableLabels.js'
 import { presentStreamingOutput, stripDisplayMeta } from '../core/displaySanitize.js'
+import { normalizeHostMarkdown } from '../core/hostMarkdown.js'
 import { formatPlainDetailsText, parsePlainDetailsBlocks, type PlainDetailsBlock } from '../core/plainDetails.js'
 import type { SessionEventSource } from '@deepseek-ai/dsh-api-session-controller/client'
 import { useContinuationStream } from './continuationStream.js'
@@ -457,7 +458,7 @@ function PlainDetailsFoldView(props: {
             child.kind === 'markdown' ? (
               <MarkdownText
                 key={`md:${childIndex}`}
-                text={child.text}
+                text={normalizeHostMarkdown(child.text)}
                 streaming={false}
                 labels={labels}
                 fileMentions={fileMentions}
@@ -606,7 +607,7 @@ function DisplayProjection(props: DisplayProjectionProps) {
   useLayoutEffect(() => { if (props.publishing) props.onPublished?.() }, [props.publishing, props.onPublished])
 
   const content = visibleParts.map((part, index) => {
-    if (part.kind === 'markdown') return <MarkdownText key={`text:${index}`} text={part.text} streaming={Boolean(streaming)} labels={markdownLabels} fileMentions={props.fileMentions} />
+    if (part.kind === 'markdown') return <MarkdownText key={`text:${index}`} text={interactive ? normalizeHostMarkdown(part.text) : part.text} streaming={Boolean(streaming)} labels={markdownLabels} fileMentions={props.fileMentions} />
     const folds = plainFolds[index]
     if (folds !== null && folds !== undefined) {
       return <Fragment key={`fold-group:${index}`}>{folds.map((block, foldIndex) => (
@@ -925,7 +926,8 @@ function SpeechBubbleSession(props: SpeechBubbleProps) {
   const activeProjectionId=activeOverride?.id??baseProjectionId
   const projectionNodes:ReactNode[]=[]
   if(streaming){
-    if(text||!streamDisplay?.pendingHtml)projectionNodes.push(<MarkdownText key="streaming-text" text={text||' '} streaming labels={markdownLabels} fileMentions={props.fileMentions}/>)
+    const streamText = interactive ? normalizeHostMarkdown(text) : text
+    if(streamText||!streamDisplay?.pendingHtml)projectionNodes.push(<MarkdownText key="streaming-text" text={streamText||' '} streaming labels={markdownLabels} fileMentions={props.fileMentions}/>)
     if(streamDisplay?.pendingHtml)projectionNodes.push(<div key="streaming-card" role="status">
       <span className="dsh-tavern-muted">{t('speech.cardPending')}</span><Skeleton height={48}/>
     </div>)
@@ -940,7 +942,8 @@ function SpeechBubbleSession(props: SpeechBubbleProps) {
       onSwipe={swipeGreeting}/>)
   }else if(rendered.state.status==='loading'&&streamHandoff.current){
     const handoff=streamDisplay??presentStreamingOutput(rawText,interactive)
-    if(handoff.text||!handoff.pendingHtml)projectionNodes.push(<MarkdownText key="handoff-text" text={handoff.text||' '} streaming={false} labels={markdownLabels} fileMentions={props.fileMentions}/>)
+    const handoffText = interactive ? normalizeHostMarkdown(handoff.text) : handoff.text
+    if(handoffText||!handoff.pendingHtml)projectionNodes.push(<MarkdownText key="handoff-text" text={handoffText||' '} streaming={false} labels={markdownLabels} fileMentions={props.fileMentions}/>)
     if(handoff.pendingHtml)projectionNodes.push(<div key="handoff-card" role="status">
       <span className="dsh-tavern-muted">{t('speech.cardPending')}</span><Skeleton height={48}/>
     </div>)

@@ -434,6 +434,76 @@ it('受限滚动区的后代矩形按容器裁切，允许外溢时仍可扩展'
   runInContext('window.__dshTavernBridgeCleanup()',context)
 })
 
+/** min-height: 100vh 叠加 body 外边距会导致视口反弹；必须识别并终止正反馈，同时不阻断真实内容展开与折叠。 */
+it('阻断 100vh 视口正反馈循环，且不影响真实内容展开与收起',()=>{
+  const callbacks=new Map<string,()=>void>(),postMessage=vi.fn(),frames=animationFrames()
+  const timerCallbacks:Array<()=>void>=[]
+  let resize:()=>void=()=>{},mutation:()=>void=()=>{}
+  class ResizeObserver {constructor(cb:()=>void){resize=cb}observe=vi.fn();disconnect=vi.fn()}
+  class MutationObserver {constructor(cb:()=>void){mutation=cb}observe=vi.fn();disconnect=vi.fn()}
+  let clientHeight=280,realContent=180
+  const root={get clientHeight(){return clientHeight},clientWidth:640}
+  const body={
+    get offsetHeight(){return Math.max(realContent,clientHeight)},
+    get scrollHeight(){return Math.max(realContent,clientHeight)+16},
+    getBoundingClientRect:()=>({bottom:Math.max(realContent,clientHeight)+8,width:624,height:Math.max(realContent,clientHeight)}),
+    querySelectorAll:()=>[],
+  }
+  const document={open:vi.fn(),write:vi.fn(),close:vi.fn(),currentScript:null,querySelector:()=>null,
+    readyState:'loading',addEventListener:(name:string,fn:()=>void)=>callbacks.set(name,fn),removeEventListener:vi.fn(),
+    documentElement:root,body}
+  const window={addEventListener:(name:string,fn:()=>void)=>callbacks.set(name,fn),removeEventListener:vi.fn(),
+    requestAnimationFrame:frames.requestAnimationFrame,cancelAnimationFrame:frames.cancelAnimationFrame}
+  const context=createContext({crypto:webcrypto,window,document,parent:{postMessage},ResizeObserver,MutationObserver,TextEncoder,
+    getComputedStyle:(node:unknown)=>node===body?{marginBottom:'8px',minHeight:`${clientHeight}px`}:{},
+    clearTimeout:vi.fn(),setTimeout:(fn:()=>void)=>{timerCallbacks.push(fn);return timerCallbacks.length}})
+  runInContext(tavernCardBridgeScript({greetings:[],greetingIndex:0}).replace(/^<script[^>]*>/,'').replace(/<\/script>$/,''),context)
+
+  const resizes=()=>postMessage.mock.calls.map(([m])=>m).filter(m=>m.action==='resize').map(m=>m.height)
+  callbacks.get('DOMContentLoaded')?.();frames.flush()
+  expect(resizes()).toEqual([296])
+
+  // 宿主把 iframe 拉高到 296，触发 ResizeObserver；100vh 反弹到 312 应立即截断，兜底定时器和无变化 DOM 变更也不继续拉高。
+  clientHeight=296;resize();frames.flush()
+  for(const fn of timerCallbacks) fn()
+  frames.flush()
+  mutation();frames.flush()
+  expect(resizes()).toEqual([296])
+
+  // 真实内容展开到 520，仍可正常上报新高度。
+  realContent=520;mutation();frames.flush()
+  expect(resizes()).toEqual([296,536])
+
+  // 随后真实内容折叠到 120 且视口回落，可正常缩小。
+  clientHeight=120;realContent=120;mutation();frames.flush()
+  expect(resizes()).toEqual([296,536,136])
+  runInContext('window.__dshTavernBridgeCleanup()',context)
+})
+
+/** fixed 蒙层、display:none 与空矩形不得锁死缩小高度；非视觉标签与 SVG 子图元不占用扫描配额。 */
+it('忽略 fixed/display:none/空矩形节点，并在超过 400 个非视觉或 SVG 节点后仍测到末尾可见元素',()=>{
+  const callbacks=new Map<string,()=>void>(),postMessage=vi.fn(),frames=animationFrames()
+  const fixedOverlay={tagName:'DIV',parentElement:null,style:{position:'fixed',display:'block'},getBoundingClientRect:()=>({bottom:900,width:640,height:900})}
+  const hiddenParent={tagName:'DIV',parentElement:null,style:{display:'none'},getBoundingClientRect:()=>({bottom:800,width:0,height:0})}
+  const hiddenChild={tagName:'SPAN',parentElement:hiddenParent,style:{display:'inline'},getBoundingClientRect:()=>({bottom:800,width:100,height:20})}
+  const zeroRect={tagName:'DIV',parentElement:null,style:{display:'block'},getBoundingClientRect:()=>({bottom:0,width:0,height:0})}
+  const svgPaths=Array.from({length:500},()=>({tagName:'path',namespaceURI:'http://www.w3.org/2000/svg',parentElement:null,style:{},getBoundingClientRect:()=>({bottom:999,width:10,height:10})}))
+  const fillerDivs=Array.from({length:450},()=>({tagName:'DIV',parentElement:null,style:{display:'block'},getBoundingClientRect:()=>({bottom:100,width:100,height:20})}))
+  const deepTail={tagName:'DIV',parentElement:null,style:{display:'block'},getBoundingClientRect:()=>({bottom:420,width:100,height:20})}
+  const document={open:vi.fn(),write:vi.fn(),close:vi.fn(),currentScript:null,querySelector:()=>null,
+    readyState:'loading',addEventListener:(name:string,fn:()=>void)=>callbacks.set(name,fn),removeEventListener:vi.fn(),
+    documentElement:{clientHeight:900,clientWidth:640},
+    body:{offsetHeight:120,scrollHeight:120,querySelectorAll:()=>[fixedOverlay,hiddenParent,hiddenChild,zeroRect,...svgPaths,...fillerDivs,deepTail]}}
+  const window={addEventListener:(name:string,fn:()=>void)=>callbacks.set(name,fn),removeEventListener:vi.fn(),
+    requestAnimationFrame:frames.requestAnimationFrame,cancelAnimationFrame:frames.cancelAnimationFrame}
+  const context=createContext({crypto:webcrypto,window,document,parent:{postMessage},TextEncoder,
+    getComputedStyle:(node:{style?:unknown})=>node.style??{},clearTimeout:vi.fn(),setTimeout:vi.fn()})
+  runInContext(tavernCardBridgeScript({greetings:[],greetingIndex:0}).replace(/^<script[^>]*>/,'').replace(/<\/script>$/,''),context)
+  callbacks.get('DOMContentLoaded')?.();frames.flush()
+  expect(postMessage.mock.calls.map(([m])=>m).filter(m=>m.action==='resize').map(m=>m.height)).toEqual([420])
+  runInContext('window.__dshTavernBridgeCleanup()',context)
+})
+
 /** 长历史卡面内嵌快照：共享对象只序列化一次，默认页集合省略后在卡面代码运行前逐字段还原。 */
 describe('卡面内嵌快照', () => {
   const page = (message: string, data: Record<string, unknown>) => ({ message, data, extra: {} })

@@ -596,7 +596,7 @@ const STYLE = `
 .dsh-tavern-fold[open]>summary::before{transform:rotate(90deg)}
 .dsh-tavern-foldBody{display:flex;flex-direction:column;gap:8px;padding:10px 14px 12px;min-width:0;
   border-top:1px solid var(--dsw-alias-border-l1, rgba(128,128,128,.14))}
-.dsh-tavern-foldBody p{white-space:pre-line}
+.dsh-tavern-foldBody p,.dsh-tavern-foldBody li:not(:has(> p,> ul,> ol,> blockquote,> pre,> div)){white-space:pre-line}
 
 /* ========== 楼层操作条 ========== */
 .dsh-tavern-action{width:28px;height:28px;padding:6px;border:none;border-radius:28px;display:inline-flex;

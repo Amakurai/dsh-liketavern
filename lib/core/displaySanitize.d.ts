@@ -12,6 +12,8 @@ export declare function stripContinuedDisplayMetaParts<T extends {
 }>(parts: readonly T[]): T[];
 /** 是否为标准 HTML / SVG / MathML 元素名（忽略大小写）。 */
 export declare function isKnownHtmlElementName(name: string): boolean;
+/** 收集单段 Markdown 文本中所有独占行的自定义伪标签名，供跨 HTML 卡片拆分的兄弟片段共享清理。 */
+export declare function collectStandaloneCustomTagNames(text: string): Set<string>;
 /** 独立样式片段不应占一个空 iframe；跨过普通台词，将 CSS 交给下一张真正的卡面。 */
 export declare function mergeDetachedCardStyles<T extends {
     kind: 'markdown' | 'html';
@@ -26,7 +28,7 @@ export declare function stripDisplayOpaqueMetaParts<T extends {
     text: string;
 }>(parts: readonly T[], removeComments?: boolean, separator?: string): T[];
 /** 去掉展示不该看见的机读块与小部件；角色正文与 Markdown 代码示例保留。 */
-export declare function stripDisplayMeta(text: string): string;
+export declare function stripDisplayMeta(text: string, extraCustomTagNames?: ReadonlySet<string>): string;
 /** 流式正文只显示卡面前的台词；关闭交互卡时维持显式源码展示。 */
 export declare function presentStreamingOutput(text: string, allowHtml: boolean): {
     text: string;

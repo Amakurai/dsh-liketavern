@@ -423,6 +423,22 @@ describe('有序展示与真实消息格式化',()=>{
     const result=await render('前文\n<div class="card">未闭合卡面')
     expect(result.parts[0]).toEqual([{kind:'markdown',text:'前文\n<div class="card">未闭合卡面'}])
   })
+  it('跨 HTML 卡片拆分的自定义伪标签配对残余与引用块包裹 details 前缀均彻底清理',()=>{
+    expect(splitTemplateDisplay('<status1>角色档案\n<details><summary>技能</summary>火球术</details>\n</status1>')).toEqual([
+      {kind:'markdown',text:'角色档案'},
+      {kind:'html',text:'<details><summary>技能</summary>火球术</details>'},
+    ])
+    expect(splitTemplateDisplay('<Adventurer Profile>\n<details><summary>契约</summary>希尔薇</details>\n结语</Adventurer Profile>')).toEqual([
+      {kind:'html',text:'<details><summary>契约</summary>希尔薇</details>'},
+      {kind:'markdown',text:'结语'},
+    ])
+    const quotedDetails='前文\n\n> <details>\n> <summary>背景设定</summary>\n> 内容\n> </details>\n\n后文'
+    expect(splitTemplateDisplay(quotedDetails)).toEqual([
+      {kind:'markdown',text:'前文'},
+      {kind:'html',text:'<details>\n> <summary>背景设定</summary>\n> 内容\n> </details>'},
+      {kind:'markdown',text:'后文'},
+    ])
+  })
 })
 
 const roots:string[]=[]
@@ -492,10 +508,12 @@ it('仅含普通 details 折叠块的消息只返回紧凑 helperContext，不�
   await saveBinding(paths,{sessionId:'s-details',cardId,cardName:'A',presetId:null,personaId:null,lorebookIds:[],characterLorebookId:null,interactiveCards:null,greetingIndex:0,createdAt:new Date(0).toISOString()})
 
   const plainText='<Adventurer Profile>\n```json\n{"hp":10}\n```\n<details><summary>契约</summary>\n>希尔薇\n</details>\n</Adventurer Profile>'
+  const unclosedSummaryText='<details>\n<summary>你可以在下面选一个出生地\n\n### 中央大陆\n1. 鲁迪乌斯\n</details>'
   const cardText='<div>状态卡</div>'
   const storedEvents=[
     {type:'assistant/message',seq:1,time:0,data:{turn:1,step:1,message:createAssistantMessage({content:[{type:'text',text:plainText}],source:TAVERN_GREETING_SOURCE})}},
-    {type:'assistant/message',seq:2,time:0,data:{turn:2,step:1,message:createAssistantMessage({content:[{type:'text',text:cardText}]})}},
+    {type:'assistant/message',seq:2,time:0,data:{turn:2,step:1,message:createAssistantMessage({content:[{type:'text',text:unclosedSummaryText}]})}},
+    {type:'assistant/message',seq:3,time:0,data:{turn:3,step:1,message:createAssistantMessage({content:[{type:'text',text:cardText}]})}},
   ] as unknown as SessionEvent[]
   const session={id:'s-details' as Session['id'],snapshotEvents:()=>storedEvents}
   const config=(TavernConfigSchema as (input:unknown)=>TavernConfigRaw)({})
@@ -510,7 +528,12 @@ it('仅含普通 details 折叠块的消息只返回紧凑 helperContext，不�
   expect(plainOutput.helperScripts).toBeUndefined()
   expect(plainOutput.helperWorldbooks).toBeUndefined()
 
-  const cardOutput=await service.renderOutputText({sessionId:'s-details',text:cardText,messageId:2})
+  const unclosedOutput=await service.renderOutputText({sessionId:'s-details',text:unclosedSummaryText,messageId:2})
+  expect(unclosedOutput.htmls).toEqual([unclosedSummaryText])
+  expect(unclosedOutput.helperContext).toEqual({storyId:(await state.loadBinding('s-details'))!.storyId,historyRevision:expect.any(String),currentMessageId:1,currentMessageRole:'assistant'})
+  expect(unclosedOutput.helper).toBeUndefined()
+
+  const cardOutput=await service.renderOutputText({sessionId:'s-details',text:cardText,messageId:3})
   expect(cardOutput.htmls).toEqual(['<div>状态卡</div>'])
   expect(cardOutput.helper).toBeDefined()
   expect(cardOutput.helperContext).toBeUndefined()

@@ -5,28 +5,16 @@
  * 预设若没带展示正则，Markdown 会把这些当正文渲染。封面整页 HTML 原样留给 iframe；
  * 小部件 HTML 后面若还有正文，拆开后只对正文做收起。
  */
-import { collectRenderedHtml, locateRenderedHtml } from './regex.js'
+import { locateRenderedHtml } from './regex.js'
 import { findHtmlOpaqueEnd, HTML_CARD_CONTAINERS, LENIENT_OPAQUE } from './htmlFragment.js'
 import { markdownCodeScanner } from './markdownCode.js'
+import { DISPLAY_META_TAGS, isDisplayMetaTagName, isKnownHtmlElementName, isPlainDetailsStructure } from './plainDetailsSyntax.js'
 
-const DISPLAY_META_TAGS = [
-  'initvar',
-  'UpdateVariable',
-  'JSONPatch',
-  'Analysis',
-  'think',
-  'thinking',
-  'StatusPlaceHolderImpl',
-] as const
+export { isDisplayMetaTagName, isKnownHtmlElementName }
 
 type TextRange = { start: number; end: number }
 type MetaStackEntry = { name: string; start: number; tokenEnd: number; slash: boolean }
 const DISPLAY_META_NAMES = new Set<string>(DISPLAY_META_TAGS.map(tag => tag.toLowerCase()))
-
-/** 是否为展示层应隐藏的机读块标签名（忽略大小写）。 */
-export function isDisplayMetaTagName(name: string): boolean {
-  return DISPLAY_META_NAMES.has(name.toLowerCase())
-}
 /** 真正 raw-text 的脚本可含标签字面量；style 能通过 CSS content 直接展示属性或字符串，不能豁免。 */
 const OPAQUE_HTML_TAGS = new Set(['script'])
 /** 这些容器把内层标签当可见文本；其中的 script/style 不能反过来开启不可见 raw-text 状态。 */
@@ -946,27 +934,8 @@ function mapVisibleMetaParts<T extends {text:string}>(parts:readonly T[],ranges:
  * 下划线名或 PascalCase；不碰 div/p/span 等 HTML。
  */
 const PROTOCOL_TAG_RE =
-  /<\/?([A-Za-z][\w]*_[A-Za-z0-9_]+|[A-Z][A-Za-z0-9]*[A-Z][A-Za-z0-9]*)\b[^>]*\/?>/g
-
-// 机读协议常用全大写标签；HTML 本身不区分大小写，不能把 <DIV>/<BR> 当协议删掉。
-const HTML_ELEMENT_NAMES = new Set(('a abbr acronym address applet area article aside audio b base basefont bdi bdo bgsound big blockquote body br button canvas '
-  + 'caption center cite code col colgroup data datalist dd del details dfn dialog dir div dl dt em embed '
-  + 'fencedframe fieldset figcaption figure font footer form frame frameset h1 h2 h3 h4 h5 h6 head header hgroup hr '
-  + 'html i iframe img input ins kbd keygen label legend li link main map mark marquee menu menuitem meta meter nav nobr noframes '
-  + 'noscript object ol optgroup option output p param picture plaintext portal pre progress q rb rp rt rtc ruby s samp '
-  + 'script search section select slot small source span strike strong style sub summary sup svg table tbody td '
-  + 'template textarea tfoot th thead time title tr track tt u ul var video wbr xmp '
-  + 'animatemotion animatetransform circle clippath defs ellipse feblend fecolormatrix fecomponenttransfer fecomposite feconvolvematrix '
-  + 'fediffuselighting fedisplacementmap fedistantlight fedropshadow feflood fefunca fefuncb fefuncg fefuncr fegaussianblur feimage '
-  + 'femerge femergenode femorphology feoffset fepointlight fespecularlighting fespotlight fetile feturbulence filter foreignobject g image '
-  + 'line lineargradient mask mpath path pattern polygon polyline radialgradient rect stop symbol text textpath tref tspan use view '
-  + 'annotation-xml maction math menclose merror mfenced mfrac mi mmultiscripts mn mo mover mpadded mphantom mprescripts mroot mrow mspace '
-  + 'msqrt mstyle msub msubsup msup mtable mtd mtext mtr munder munderover semantics').split(' '))
-
-/** 是否为标准 HTML / SVG / MathML 元素名（忽略大小写）。 */
-export function isKnownHtmlElementName(name: string): boolean {
-  return HTML_ELEMENT_NAMES.has(name.toLowerCase())
-}
+  /<\/?([A-Za-z][\w]*_[A-Za-z0-9_]+|[A-Z][A-Za-z0-9]*[A-Z][A-Za-z0-9]*)\b(?:[^"'<>]|"[^"]*"|'[^']*')*\/?>/g
+const ST_COMMENT_MACRO_RE = /\{\{\s*\/\/[^{}]*\}\}/g
 
 const EMAIL_AUTOLINK_RE = /^<[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*>$/
 const URI_AUTOLINK_RE = /^<([A-Za-z][A-Za-z0-9+.-]{1,31}):[^\s<>]+>$/
@@ -1286,30 +1255,107 @@ function tidy(text: string): string {
     .trim()
 }
 
-/** 收起未转换成 HTML 的协议开闭标签，留下内部正文。 */
+/** 收起未转换成 HTML 的协议开闭标签，留下内部正文；跳过标准 HTML 与大写 URI/邮箱自动链接。 */
 function stripProtocolTags(text: string): string {
-  return text.replace(PROTOCOL_TAG_RE, (match, name:string) => HTML_ELEMENT_NAMES.has(name.toLowerCase()) ? match : '')
+  return text.replace(PROTOCOL_TAG_RE, (match, name: string) => {
+    if (isKnownHtmlElementName(name)) return match
+    if (EMAIL_AUTOLINK_RE.test(match)) return match
+    if (!/\s/.test(match)) {
+      const uri = URI_AUTOLINK_RE.exec(match)
+      if (uri && (match.includes('://') || AUTOLINK_SCHEMES.has(uri[1]!.toLowerCase()))) return match
+    }
+    return ''
+  })
 }
 
-/** 独立样式片段不应占一个空 iframe；跨过普通台词，将 CSS 交给下一张真正的卡面。 */
+function stripStCommentMacros(text: string): string {
+  return text.includes('{{') ? text.replace(ST_COMMENT_MACRO_RE, '') : text
+}
+
+/** 独立样式片段（含配套前导 <link>/<meta> 样式表）不应占一个空 iframe；优先向前/向后并入真实卡面，无目标卡面且无独立视觉效果的全局宿主 CSS 则移除。 */
 export function mergeDetachedCardStyles<T extends {kind:'markdown'|'html';text:string;title?:string}>(parts:readonly T[]):T[] {
-  const styleOnly=/^\s*(?:<style\b(?:[^"'<>]|"[^"]*"|'[^']*')*>[\s\S]*?<\/style\s*>\s*)+$/i
-  const prefixes=new Map<number,string[]>()
-  const moved=new Set<number>()
-  for(let i=0;i<parts.length;i++) {
-    const part=parts[i]!
-    if(part.kind!=='html'||part.title||!styleOnly.test(part.text))continue
-    let target=i+1
-    while(target<parts.length && (parts[target]!.kind!=='html'||styleOnly.test(parts[target]!.text)))target++
-    if(target===parts.length)continue
-    const group=prefixes.get(target)??[]
-    group.push(part.text)
-    prefixes.set(target,group)
-    moved.add(i)
+  const headItem = '(?:<!--(?:[\\s\\S]*?)-->|<(?:link|meta)\\b(?:[^"\'<>]|"[^"]*"|\'[^\']*\')*>)'
+  const styleOnly = new RegExp(
+    `^\\s*(?:${headItem}\\s*)*(?:<style\\b(?:[^"'<>]|"[^"]*"|'[^']*')*>[\\s\\S]*?<\\/style\\s*>\\s*(?:${headItem}\\s*)*)+$`,
+    'i',
+  )
+  const standaloneVisualCss = /\bcontent\s*:|(?:^|[},;\s])(?:html|body|:root)\b[^{]*\{[^}]*(?:background|border|min-height|height|box-shadow)\s*:/i
+  const stylesPlainDetailsRe = /<link\b|@import\b|\b(?:details|summary|body|html)\b|:root|(?:^|[},;\s])\*\s*[{,]/i
+  const isStyle = parts.map(part => part.kind === 'html' && !part.title && styleOnly.test(part.text))
+  const isPlainFold = parts.map((part, idx) =>
+    part.kind === 'html' && !part.title && !isStyle[idx] && isPlainDetailsStructure(part.text))
+  const hasProse = parts.some(part => part.kind === 'markdown' && part.text.trim().length > 0)
+  const prefixes = new Map<number, string[]>()
+  const suffixes = new Map<number, string[]>()
+  const moved = new Set<number>()
+
+  const pickTargets = (candidates: number[], cssText: string): number[] => {
+    const stylesDetails = stylesPlainDetailsRe.test(cssText) || standaloneVisualCss.test(cssText)
+    const filtered = stylesDetails ? candidates : candidates.filter(idx => !isPlainFold[idx])
+    if (filtered.length === 0) return []
+    return cssText.length * filtered.length <= 256 * 1024 ? filtered : [filtered[0]!]
   }
-  return parts.flatMap((part,index)=>moved.has(index)?[]:[prefixes.has(index)
-    ? {...part,text:prefixes.get(index)!.join('\n')+'\n'+part.text}
-    : part])
+
+  for (let i = 0; i < parts.length; i++) {
+    if (!isStyle[i]) continue
+    const cssText = parts[i]!.text
+    const forward: number[] = []
+    for (let j = i + 1; j < parts.length; j++) {
+      const candidate = parts[j]!
+      if (candidate.kind === 'html' && !candidate.title && !isStyle[j]) forward.push(j)
+    }
+    if (forward.length > 0) {
+      const targets = pickTargets(forward, cssText)
+      if (targets.length > 0) {
+        for (const target of targets) {
+          const group = prefixes.get(target) ?? []
+          group.push(cssText)
+          prefixes.set(target, group)
+        }
+        moved.add(i)
+        continue
+      }
+    }
+    // 仅跨过正文时向前回并尾部 <style>；紧贴前一个显式围栏或独立文档时保留原边界。
+    const backward: number[] = []
+    let sawMarkdownBefore = false
+    for (let j = i - 1; j >= 0; j--) {
+      const candidate = parts[j]!
+      if (candidate.kind === 'markdown') {
+        if (candidate.text.trim()) sawMarkdownBefore = true
+        continue
+      }
+      if (sawMarkdownBefore && !candidate.title && !isStyle[j]) backward.push(j)
+    }
+    if (backward.length > 0) {
+      const targets = pickTargets(backward, cssText)
+      if (targets.length > 0) {
+        for (const target of targets) {
+          const group = suffixes.get(target) ?? []
+          group.push(cssText)
+          suffixes.set(target, group)
+        }
+        moved.add(i)
+        continue
+      }
+    }
+    // 没有任何目标 HTML 卡面时，仅面向宿主聊天 DOM 的纯 <style>（无伪元素 content / body 视觉盒）在独立沙箱里必为空白 iframe，直接收起。
+    if (hasProse && !standaloneVisualCss.test(cssText)) {
+      moved.add(i)
+    }
+  }
+  return parts.flatMap((part, index) => {
+    if (moved.has(index)) return []
+    const pre = prefixes.get(index)
+    const suf = suffixes.get(index)
+    if (!pre && !suf) return [part]
+    const nextText = [
+      ...(pre ?? []),
+      part.text,
+      ...(suf ?? []),
+    ].join('\n')
+    return [{ ...part, text: nextText }]
+  })
 }
 
 function stripHtmlComments(text: string): string {
@@ -1327,15 +1373,23 @@ interface MarkdownCodeProtectionOptions {
   skipAllCode?: boolean
 }
 
+function isPlainTextHtmlFenceContent(content: string): boolean {
+  const trimmed = content.trimStart()
+  if (!trimmed.includes('<')) return false
+  const leadingComments = /^(?:\s|<!--[\s\S]*?-->)*/.exec(trimmed)![0]!.length
+  const htmlAt = streamingHtmlStart(trimmed, false)
+  return htmlAt !== null && htmlAt <= leadingComments
+}
+
 function isExecutableHtmlFence(
   text: string,
   fence: NonNullable<ReturnType<ReturnType<typeof markdownCodeScanner>['fence']>>,
 ): boolean {
   if (!fence.standalone) return false
   const info = fence.info.trim().split(/\s+/)[0]!.toLowerCase()
-  if (info === 'html' || info === 'xml') return true
+  if (info === 'html' || info === 'htm' || info === 'xhtml' || info === 'xml') return true
   if (info === '' || info === 'text') {
-    return streamingHtmlStart(text.slice(fence.contentStart, fence.contentEnd).trimStart(), false) !== null
+    return isPlainTextHtmlFenceContent(text.slice(fence.contentStart, fence.contentEnd))
   }
   return false
 }
@@ -1614,15 +1668,52 @@ export function stripDisplayMeta(text: string, extraCustomTagNames?: ReadonlySet
   if (!text) return text
   const protectedCode = protectMarkdownCode(text)
   const visible = stripOpaqueDisplayMeta(protectedCode.masked)
-  if (!visible.includes('<')) return protectedCode.restore(tidy(visible))
+  if (!visible.includes('<')) return protectedCode.restore(tidy(stripStCommentMacros(visible)))
   if (isCoverHtml(visible)) return protectedCode.restore(visible)
   return protectedCode.restore(tidy(
-    stripProtocolTags(stripCustomTags(stripWidgetTail(stripUnclosedMeta(stripClosedAndEmpty(stripHtmlComments(visible)))), extraCustomTagNames)),
+    stripStCommentMacros(
+      stripProtocolTags(stripCustomTags(stripWidgetTail(stripUnclosedMeta(stripClosedAndEmpty(stripHtmlComments(visible)))), extraCustomTagNames)),
+    ),
   ))
 }
 
 const STREAMING_HTML_TAG_NAMES = [...HTML_CARD_CONTAINERS, 'html', 'body', 'style', 'script', 'template'] as const
 const STREAMING_HTML_TAG_SET: ReadonlySet<string> = new Set(STREAMING_HTML_TAG_NAMES)
+
+/** 判断 `<link>` / `<meta>` 前导标签后是否紧跟真实卡面起点，避免流式或半截卡面把前导样式链接漏成原文。 */
+function preludeLeadsToStreamingHtml(text: string, start: number): boolean {
+  let cursor = start
+  for (let steps = 0; steps < 32 && cursor < text.length; steps++) {
+    while (cursor < text.length && isHtmlSpace(text[cursor])) cursor++
+    if (cursor >= text.length) return false
+    if (text.startsWith('<!--', cursor)) {
+      const end = text.indexOf('-->', cursor + 4)
+      if (end < 0) return false
+      cursor = end + 3
+      continue
+    }
+    if (text[cursor] !== '<') return false
+    if (text.length - cursor <= 32 && text.indexOf('>', cursor + 1) < 0) {
+      const tail = text.slice(cursor).toLowerCase()
+      if (/^<[a-z]+$/.test(tail) && STREAMING_HTML_TAG_NAMES.some(tag => tag.startsWith(tail.slice(1)))) return true
+      if (/^<![a-z]+(?:\s+[a-z]*)?$/.test(tail) && '<!doctype html'.startsWith(tail.replace(/\s+/g, ' '))) return true
+      return false
+    }
+    if (/^<!doctype(?:\s+html\b|$)/i.test(text.slice(cursor, cursor + 20))) return true
+    const head = tagHead(text, cursor)
+    if (!head || head.closing) return false
+    const end = htmlTagEnd(text, cursor)
+    if (head.name === 'link' || head.name === 'meta') {
+      if (end < 0) return false
+      cursor = end
+      continue
+    }
+    if (!STREAMING_HTML_TAG_SET.has(head.name)) return false
+    if (end > 0 && isHtmlSelfClosingTag(text, head.end, end)) return false
+    return true
+  }
+  return false
+}
 
 /**
  * 只识别正在生成的卡面起点，不执行模板或第三方正则。未闭合 HTML 不能送入 iframe，
@@ -1640,8 +1731,8 @@ function streamingHtmlStart(text: string, scanMarkdown: boolean | ReturnType<typ
       const fence = code?.fence(at)
       if (fence) {
         const info = fence.info.trim().split(/\s+/)[0]!.toLowerCase()
-        if (fence.standalone && (['html', 'xml'].includes(info)
-          || ['', 'text'].includes(info) && streamingHtmlStart(text.slice(fence.contentStart, fence.contentEnd).trimStart(), false) !== null)) return at
+        if (fence.standalone && (['html', 'htm', 'xhtml', 'xml'].includes(info)
+          || ['', 'text'].includes(info) && isPlainTextHtmlFenceContent(text.slice(fence.contentStart, fence.contentEnd)))) return at
         tokens.lastIndex = fence.end
       } else {
         const end = code?.inlineEnd(at)
@@ -1667,8 +1758,18 @@ function streamingHtmlStart(text: string, scanMarkdown: boolean | ReturnType<typ
     if (!indented && /^<!doctype(?:\s+html\b|$)/i.test(text.slice(at, at + 20))) return at
     const head = tagHead(text, at)
     if (!head) continue
-    if (!indented && !head.closing && STREAMING_HTML_TAG_SET.has(head.name)) return at
     const end = htmlTagEnd(text, at)
+    if (!indented && !head.closing && (head.name === 'link' || head.name === 'meta') && end > 0 && preludeLeadsToStreamingHtml(text, end)) {
+      return at
+    }
+    if (!indented && !head.closing && STREAMING_HTML_TAG_SET.has(head.name)) {
+      // 自闭合容器标签（如 <div/>、<svg .../>）不是待闭合卡面，跳过以免误隐藏后文。
+      if (end > 0 && isHtmlSelfClosingTag(text, head.end, end)) {
+        tokens.lastIndex = end
+        continue
+      }
+      return at
+    }
     if (end < 0) break
     tokens.lastIndex = end
     if (!head.closing && ['textarea', 'title', 'pre', 'code', 'noscript'].includes(head.name)) {
@@ -1685,7 +1786,10 @@ export function presentStreamingOutput(text: string, allowHtml: boolean): { text
   if (!allowHtml) return { text: stripDisplayMeta(text), pendingHtml: false }
   const visible = stripDisplayOpaqueMeta(text)
   const start = streamingHtmlStart(visible)
-  return { text: stripDisplayMeta(start === null ? visible : visible.slice(0, start)), pendingHtml: start !== null }
+  const prefix = start === null
+    ? visible
+    : visible.slice(0, start).replace(/(?:(?:^|\r?\n)[ \t]*>(?:[ \t]*>)*[ \t]*)+$/, '')
+  return { text: stripDisplayMeta(prefix), pendingHtml: start !== null }
 }
 
 /** 找到未闭合卡面的起点；已完成的卡面、普通台词与代码示例不因后面的半张卡而被收起。 */
@@ -1751,13 +1855,56 @@ export function presentRenderedOutput(
   allowHtml: boolean,
 ): { html: string | null; htmls: string[]; text: string; pendingHtml?:true } {
   if (!allowHtml) return { html: null, htmls: [], text: disabledHtmlText(rendered) }
-  const visible=hideIncompleteHtml(stripDisplayOpaqueMeta(rendered))
-  const { htmls, rest } = collectRenderedHtml(visible.text)
-  const grouped=mergeDetachedCardStyles(htmls.map(text=>({kind:'html' as const,text}))).map(part=>part.text)
+  const visible = hideIncompleteHtml(stripDisplayOpaqueMeta(rendered))
+  const ordered: Array<{ kind: 'markdown' | 'html'; text: string }> = []
+  const restParts: string[] = []
+  let remaining = visible.text
+  let htmlCount = 0
+  for (let i = 0; i < 128; i++) {
+    const located = locateRenderedHtml(remaining)
+    if (!located) {
+      const tail = remaining.trim()
+      if (tail) {
+        ordered.push({ kind: 'markdown', text: tail })
+        restParts.push(tail)
+      }
+      break
+    }
+    const cutStart = located.fence?.start ?? located.start
+    const cutEnd = located.fence?.end ?? located.start + located.html.length
+    const rawBefore = remaining.slice(0, cutStart)
+    const before = (located.fence ? rawBefore : rawBefore.replace(/(?:(?:^|\r?\n)[ \t]*>(?:[ \t]*>)*[ \t]*)+$/, '')).trim()
+    if (before) {
+      ordered.push({ kind: 'markdown', text: before })
+      restParts.push(before)
+    }
+    ordered.push({ kind: 'html', text: located.html })
+    htmlCount++
+    remaining = remaining.slice(cutEnd)
+    if (i === 127 && locateRenderedHtml(remaining)) {
+      throw new Error('交互卡展示片段过多')
+    }
+  }
+  let rest = restParts.join('\n')
+  if (restParts.length > 1 && locateRenderedHtml(rest)) {
+    while (htmlCount < 128) {
+      const split = locateRenderedHtml(rest)
+      if (!split) break
+      ordered.push({ kind: 'html', text: split.html })
+      htmlCount++
+      if (!split.rest || split.rest === rest) { rest = split.rest; break }
+      rest = split.rest
+    }
+    if (locateRenderedHtml(rest)) throw new Error('交互卡展示片段过多')
+  }
+  const cleanedRest = stripDisplayMeta(rest)
+  const grouped = mergeDetachedCardStyles(ordered)
+    .filter(part => part.kind === 'html')
+    .map(part => part.text)
   return {
     html: grouped[0] ?? null,
     htmls: grouped,
-    text: stripDisplayMeta(rest),
-    ...(visible.pendingHtml?{pendingHtml:true as const}:{}),
+    text: cleanedRest,
+    ...(visible.pendingHtml ? { pendingHtml: true as const } : {}),
   }
 }

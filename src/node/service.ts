@@ -22,7 +22,7 @@ import { inspectCharacterCompatibility } from '../core/characterCompatibility.js
 import { isolated } from './isolated.js'
 import type { ComputeJobs } from './computeWorker.js'
 import { collectDisplayRegexDiagnostics, presentTemplateDisplayResult } from './templateDisplay.js'
-import { hasApplicableOrMalformedRegex } from '../core/regex.js'
+import { hasApplicableOrMalformedRegex, hasDepthScopedRegex } from '../core/regex.js'
 import { hideIncompleteHtml, presentRenderedOutput, stripDisplayOpaqueMeta } from '../core/displaySanitize.js'
 import { isPlainDetailsHtml } from '../core/plainDetails.js'
 import { disableInteractiveParts, splitTemplateDisplay, TEMPLATE_DISPLAY_PARTS_VERSION, type TemplateDisplayPart } from '../core/templateDisplay.js'
@@ -49,7 +49,7 @@ import { loadTemplateMetadata, loadTemplateOutputs, templateTextHash } from '../
 import { loadTemplateAvatars } from './templateAvatar.js'
 import { sessionCacheUsage } from './requestDiagnostics.js'
 import { hasNativeMvuEntry } from '../core/cardScript.js'
-import { displaySessionEventAt, displaySessionHasUserMessage, readDisplaySessionEvents } from './sessionEvents.js'
+import { displayAssistantDepthAt, displaySessionEventAt, displaySessionHasUserMessage, readDisplaySessionEvents } from './sessionEvents.js'
 import { continuationDisplaySources, continuationDisplayText } from '../core/continuationDisplay.js'
 import {getHelperWorldbookContext,helperWorldbookOperation,rebindHelperWorldbooks} from './helperWorldbook.js'
 import {editHelperMessages} from './helperChatEdits.js'
@@ -84,6 +84,7 @@ interface DisplayScope {
   assets: () => Promise<{
     rules: Awaited<ReturnType<TavernState['rulesFor']>>
     hasRenderRegex: boolean
+    hasDepthRenderRegex: boolean
     ws: Awaited<ReturnType<TavernState['loadCharacter']>>
     persona: Awaited<ReturnType<TavernState['resolvePersona']>>
     names: { char: string; user: string }
@@ -98,11 +99,13 @@ interface DisplayScope {
     parts: TemplateDisplayPart[],
     rules: ComputeJobs['display']['input']['rules'],
     macroCtx: ComputeJobs['display']['input']['macroCtx'],
+    depth?: number,
   ) => Promise<ComputeJobs['display']['output']>
   renderText: (
     text: string,
     rules: ComputeJobs['render']['input']['rules'],
     macroCtx: ComputeJobs['render']['input']['macroCtx'],
+    depth?: number,
   ) => Promise<ComputeJobs['render']['output']>
 }
 
@@ -749,7 +752,8 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
         expandIdentityMacros(g, names),
       )
       const hasRenderRegex = hasApplicableOrMalformedRegex(rules, { scope: 'output', timing: 'render' })
-      return { rules, hasRenderRegex, ws, persona, names, greetings, story }
+      const hasDepthRenderRegex = hasRenderRegex && hasDepthScopedRegex(rules, { scope: 'output', timing: 'render' })
+      return { rules, hasRenderRegex, hasDepthRenderRegex, ws, persona, names, greetings, story }
     })
     const validId = (id: number | undefined): id is number => id !== undefined && Number.isSafeInteger(id) && id >= 0
     const prefetchedOutputs = once(async (): Promise<{ covered: ReadonlySet<number>; outputs: Awaited<ReturnType<typeof loadTemplateOutputs>> } | null> => {
@@ -790,6 +794,7 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
           text: string
           rules: ComputeJobs['render']['input']['rules']
           macroCtx: ComputeJobs['render']['input']['macroCtx']
+          depth?: number
           resolve: (value: ComputeJobs['render']['output']) => void
           reject: (reason: unknown) => void
         }
@@ -798,6 +803,7 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
           parts: TemplateDisplayPart[]
           rules: ComputeJobs['display']['input']['rules']
           macroCtx: ComputeJobs['display']['input']['macroCtx']
+          depth?: number
           resolve: (value: ComputeJobs['display']['output']) => void
           reject: (reason: unknown) => void
         }
@@ -806,9 +812,9 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
     const runSingleRender = async (entry: PendingRenderItem): Promise<void> => {
       try {
         if (entry.kind === 'render') {
-          entry.resolve(await isolated('render', { text: entry.text, rules: entry.rules, macroCtx: entry.macroCtx }))
+          entry.resolve(await isolated('render', { text: entry.text, rules: entry.rules, macroCtx: entry.macroCtx, ...(entry.depth !== undefined ? { depth: entry.depth } : {}) }))
         } else {
-          entry.resolve(await isolated('display', { parts: entry.parts, rules: entry.rules, macroCtx: entry.macroCtx }))
+          entry.resolve(await isolated('display', { parts: entry.parts, rules: entry.rules, macroCtx: entry.macroCtx, ...(entry.depth !== undefined ? { depth: entry.depth } : {}) }))
         }
       } catch (error) {
         entry.reject(error)
@@ -840,8 +846,8 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
         macroCtx: first.macroCtx,
         items: batch.map((entry) =>
           entry.kind === 'render'
-            ? { kind: 'render' as const, text: entry.text }
-            : { kind: 'display' as const, parts: entry.parts },
+            ? { kind: 'render' as const, text: entry.text, ...(entry.depth !== undefined ? { depth: entry.depth } : {}) }
+            : { kind: 'display' as const, parts: entry.parts, ...(entry.depth !== undefined ? { depth: entry.depth } : {}) },
         ),
       }).then(
         (results) => {
@@ -892,10 +898,10 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
         ])
         return { helperScripts, helperWorldbooks }
       }),
-      renderDisplay: (parts, rules, macroCtx) =>
-        new Promise((resolve, reject) => scheduleRender({ kind: 'display', parts, rules, macroCtx, resolve, reject })),
-      renderText: (text, rules, macroCtx) =>
-        new Promise((resolve, reject) => scheduleRender({ kind: 'render', text, rules, macroCtx, resolve, reject })),
+      renderDisplay: (parts, rules, macroCtx, depth) =>
+        new Promise((resolve, reject) => scheduleRender({ kind: 'display', parts, rules, macroCtx, ...(depth !== undefined ? { depth } : {}), resolve, reject })),
+      renderText: (text, rules, macroCtx, depth) =>
+        new Promise((resolve, reject) => scheduleRender({ kind: 'render', text, rules, macroCtx, ...(depth !== undefined ? { depth } : {}), resolve, reject })),
     }
   }
 
@@ -917,7 +923,7 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
       } }
     }
     const allowHtml = settings.interactiveCards && binding.interactiveCards !== false
-    const { rules, hasRenderRegex, ws, persona, names, greetings, story } = await scope.assets()
+    const { rules, hasRenderRegex, hasDepthRenderRegex, ws, persona, names, greetings, story } = await scope.assets()
     // SillyTavern：先 substituteParams 再跑展示正则，开场白里的 {{user}} 才能被按名字匹配。
     let named = expandIdentityMacros(text, names)
     let templateParts: TemplateDisplayPart[] | undefined
@@ -962,8 +968,10 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
     }
     // 机读 opener 与未完成卡面可能在前文；只读已提交模板快照，不能借续写重跑旧模板。
     const messageId=request.messageId
+    let renderDepth: number | undefined
     if(messageId!==undefined){
       const events=liveEvents??await scope.displayEvents()
+      if (hasDepthRenderRegex) renderDepth = displayAssistantDepthAt(events, messageId) ?? 0
       // 续写只沿实际来源读取快照；冷启动也不展开其他楼层的正文数据块。
       const outputs=await scope.templateOutputs(continuationDisplaySources(events,messageId,text).map(event=>event.seq))
       const continued=continuationDisplayText(events,messageId,text,named,event=>{
@@ -973,6 +981,8 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
         return hasEjs(raw)?undefined:expandIdentityMacros(raw,names)
       })
       if(continued!==named){named=continued;if(templateParts!==undefined)templateParts=splitTemplateDisplay(named)}
+    } else if (hasDepthRenderRegex) {
+      renderDepth = 0
     }
     // 原生 MVU 已启用且卡片明确提供状态栏时，展示层补位；历史和模板缓存仍保持原始文本。
     if(allowHtml&&binding.helperMvu===true&&request.messageId!==undefined&&needsMvuStatusPlaceholder(named,rules)){
@@ -980,19 +990,20 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
       if(templateParts!==undefined)templateParts=[...templateParts,{kind:'markdown',text:MVU_STATUS_PLACEHOLDER}]
     }
     const macroCtx = { ...names, outlets: {}, pickSeed: chatPickSeed(binding) }
+    const effectiveRenderRegex = hasRenderRegex && hasApplicableOrMalformedRegex(rules, { scope: 'output', timing: 'render', ...(renderDepth !== undefined ? { depth: renderDepth } : {}) })
     const expandedParts = templateParts?.map(part => ({ ...part, text: expandIdentityMacros(part.text, names) }))
     const display = expandedParts === undefined ? undefined
-      : hasRenderRegex ? await scope.renderDisplay(expandedParts, rules, macroCtx)
-        : presentTemplateDisplayResult(expandedParts, [], macroCtx)
+      : effectiveRenderRegex ? await scope.renderDisplay(expandedParts, rules, macroCtx, renderDepth)
+        : presentTemplateDisplayResult(expandedParts, [], macroCtx, renderDepth)
     let parts = display?.parts
     let regexDiagnostics = display?.regexDiagnostics
     if (parts !== undefined && !allowHtml) parts = disableInteractiveParts(parts)
     let presented: {htmls:string[];text:string;pendingHtml?:true}
     if(parts === undefined) {
-      const rendered = hasRenderRegex
-        ? await scope.renderText(named, rules, macroCtx)
+      const rendered = effectiveRenderRegex
+        ? await scope.renderText(named, rules, macroCtx, renderDepth)
         : { text: named, applied: [], errors: [] as Array<{ ruleId: string; message: string }> }
-      regexDiagnostics = hasRenderRegex ? collectDisplayRegexDiagnostics(rendered.errors, rules) : undefined
+      regexDiagnostics = effectiveRenderRegex ? collectDisplayRegexDiagnostics(rendered.errors, rules) : undefined
       presented = presentRenderedOutput(rendered.text, allowHtml)
       // 普通回复与展示正则生成的片段也保留原位置，避免尾部状态栏移到台词前面。
       if(presented.htmls.length) parts = splitTemplateDisplay(hideIncompleteHtml(stripDisplayOpaqueMeta(rendered.text)).text)

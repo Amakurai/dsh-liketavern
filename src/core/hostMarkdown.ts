@@ -5,8 +5,9 @@
  *
  * 本模块仅在客户端渲染 `kind: 'markdown'` 文本前调用，不修改会话存储与入模上下文：
  * - 严格保护围栏代码块（含流式未闭合围栏）、行内代码与四空格缩进代码块；
- * - 将酒馆角色卡/展示正则常见的安全格式化标签（`<br>`、`<hr>`、`http(s)` `<img>`、
- *   无属性 `<center>`/`<p>`/`<h1>`-`<h6>`/`<blockquote>`、纯样式 `<font>`/`<span>`、
+ * - 将酒馆角色卡/展示正则常见的安全格式化标签（`<br>`、`<hr>`、`http(s)` `<img>`/`<a>`、
+ *   `<pre>`/`<code>`/`<kbd>`、`<ruby>` 注音、无属性 `<center>`/`<p>`/`<h1>`-`<h6>`/`<blockquote>`、
+ *   纯样式 `<font>`/`<span>`/`<small>`/`<mark>`/`<u>`、
  *   满足 CommonMark 边界的 `<b>`/`<strong>`/`<i>`/`<em>`/`<s>`/`<del>`/`<strike>`）
  *   转为宿主 `MarkdownText` 可直接渲染的纯净 Markdown。
  */
@@ -14,10 +15,12 @@ import { findGfmTableLines, markdownCodeScanner } from './markdownCode.js'
 
 const FONT_SAFE_ATTRS = new Set(['color', 'size', 'face', 'style', 'class', 'title', 'dir', 'lang'])
 const SPAN_SAFE_ATTRS = new Set(['style', 'class', 'title', 'dir', 'lang'])
+const ANCHOR_SAFE_ATTRS = new Set(['href', 'title', 'target', 'rel', 'class', 'style', 'dir', 'lang'])
 const BLOCK_SAFE_ATTRS = new Set(['style', 'class', 'align', 'dir', 'lang'])
 const QUOTE_SAFE_ATTRS = new Set(['style', 'class', 'dir', 'lang', 'cite'])
 const HR_SAFE_ATTRS = new Set(['style', 'class', 'width', 'size', 'color', 'align', 'noshade'])
 const BR_SAFE_ATTRS = new Set(['style', 'class', 'clear'])
+const PRESENTATIONAL_WRAPPER_NAMES = new Set(['font', 'span', 'small', 'mark', 'u'])
 
 const BASIC_ENTITIES: Record<string, string> = {
   amp: '&',
@@ -238,57 +241,66 @@ interface MaskedCode {
   prefix: string
   suffix: string
   saved: string[]
+  protect: (original: string) => string
   restore: (value: string) => string
 }
 
-/** 用唯一占位符保护 Markdown 围栏代码（含流式未闭合围栏）与行内代码。 */
+/** 用唯一占位符保护 Markdown 围栏代码（含流式未闭合围栏）与行内代码，并支持后续 pass 动态登记新生成的代码块。 */
 function maskMarkdownCode(text: string): MaskedCode {
-  const hasCode = text.includes('`') || text.includes('~~~')
-  if (!hasCode) {
-    return { masked: text, prefix: '', suffix: '', saved: [], restore: value => value }
-  }
-  const scanner = markdownCodeScanner(text)
   const ranges: Array<{ start: number; end: number }> = []
-  const tokens = /`+|~{3,}/g
-  for (let token = tokens.exec(text); token; token = tokens.exec(text)) {
-    const at = token.index
-    const fence = scanner.fence(at)
-    if (fence) {
-      let end = fence.end
-      while (end > at && (text[end - 1] === '\n' || text[end - 1] === '\r')) end--
-      ranges.push({ start: at, end })
-      tokens.lastIndex = Math.max(fence.end, at + 1)
-      continue
-    }
-    const inlineEnd = scanner.inlineEnd(at)
-    if (inlineEnd !== null) {
-      ranges.push({ start: at, end: inlineEnd })
-      tokens.lastIndex = inlineEnd
+  if (text.includes('`') || text.includes('~~~')) {
+    const scanner = markdownCodeScanner(text)
+    const tokens = /`+|~{3,}/g
+    for (let token = tokens.exec(text); token; token = tokens.exec(text)) {
+      const at = token.index
+      const fence = scanner.fence(at)
+      if (fence) {
+        let end = fence.end
+        while (end > at && (text[end - 1] === '\n' || text[end - 1] === '\r')) end--
+        ranges.push({ start: at, end })
+        tokens.lastIndex = Math.max(fence.end, at + 1)
+        continue
+      }
+      const inlineEnd = scanner.inlineEnd(at)
+      if (inlineEnd !== null) {
+        ranges.push({ start: at, end: inlineEnd })
+        tokens.lastIndex = inlineEnd
+      }
     }
   }
-  if (ranges.length === 0) {
-    return { masked: text, prefix: '', suffix: '', saved: [], restore: value => value }
-  }
-  let prefix = '\uE000tavernHm'
-  while (text.includes(prefix)) prefix += 'X'
-  const suffix = '\uE001'
   const saved: string[] = []
+  const mask: MaskedCode = {
+    masked: text,
+    prefix: '',
+    suffix: '',
+    saved,
+    protect(original: string): string {
+      if (!mask.prefix) {
+        let candidate = '\uE000tavernHm'
+        while (text.includes(candidate)) candidate += 'X'
+        mask.prefix = candidate
+        mask.suffix = '\uE001'
+      }
+      const index = saved.length
+      saved.push(original)
+      return `${mask.prefix}${index}${mask.suffix}`
+    },
+    restore(value: string): string {
+      if (!mask.prefix || saved.length === 0 || !value.includes(mask.prefix)) return value
+      const pattern = new RegExp(`${mask.prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\d+)${mask.suffix}`, 'g')
+      return value.replace(pattern, (_raw, index: string) => saved[Number(index)] ?? '')
+    },
+  }
+  if (ranges.length === 0) return mask
   let masked = ''
   let cursor = 0
-  for (const [index, range] of ranges.entries()) {
-    masked += text.slice(cursor, range.start) + `${prefix}${index}${suffix}`
-    saved.push(text.slice(range.start, range.end))
+  for (const range of ranges) {
+    masked += text.slice(cursor, range.start) + mask.protect(text.slice(range.start, range.end))
     cursor = range.end
   }
   masked += text.slice(cursor)
-  const pattern = new RegExp(`${prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\d+)${suffix}`, 'g')
-  return {
-    masked,
-    prefix,
-    suffix,
-    saved,
-    restore: value => value.replace(pattern, (_raw, index: string) => saved[Number(index)] ?? ''),
-  }
+  mask.masked = masked
+  return mask
 }
 
 /** 将行内占位符边界字符还原为真实源码字符，确保 CommonMark 左右贴合判断准确。 */
@@ -344,6 +356,161 @@ function isPlaceholderLine(content: string, mask: MaskedCode): boolean {
   return content.startsWith(mask.prefix) && content.endsWith(mask.suffix)
 }
 
+function isSafeHttpUrl(url: string): boolean {
+  return /^https?:\/\/[^\s/<>]+/i.test(url) && !/[\r\n\t\u0000-\u001f\u007f<>]/.test(url)
+}
+
+function encodeMarkdownUrl(url: string, inTable: boolean): string {
+  return url
+    .replace(/[ ()<>]/g, ch => '%' + ch.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0'))
+    .replace(/\|/g, inTable ? '%7C' : '|')
+}
+
+/** Pass 0：将安全 `<pre>` / `<pre><code>` 转为围栏代码块并立即受 mask 保护，避免后续 pass 改写内部文本。 */
+function convertSafePreBlocks(text: string, mask: MaskedCode): string {
+  if (!/<pre(?=[\s/>])/i.test(text)) return text
+  const { lines, breaks } = splitLinesWithBreaks(text)
+  const indented = findIndentedCodeLines(lines)
+  const lineStarts: number[] = []
+  let off = 0
+  for (let i = 0; i < lines.length; i++) {
+    lineStarts.push(off)
+    off += lines[i]!.length + (i < breaks.length ? breaks[i]!.length : 0)
+  }
+  const lineOf = (pos: number): number => {
+    let lo = 0, hi = lineStarts.length - 1
+    while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (lineStarts[mid]! <= pos) lo = mid; else hi = mid - 1 }
+    return lo
+  }
+
+  let out = ''
+  let cursor = 0
+  let pos = 0
+  let changed = false
+  while (pos < text.length) {
+    const open = text.indexOf('<', pos)
+    if (open < 0) break
+    const tag = parseHtmlTagAt(text, open)
+    if (!tag || tag.closing || tag.selfClosing || tag.name !== 'pre') {
+      pos = tag ? tag.end : open + 1
+      continue
+    }
+    const openLineIdx = lineOf(tag.start)
+    if (indented.has(openLineIdx)) { pos = tag.end; continue }
+    const preAttrs = parseSafeTagAttrs(tag.rawAttrs)
+    if (!preAttrs || !hasOnlyAttrs(preAttrs, BLOCK_SAFE_ATTRS)) { pos = tag.end; continue }
+    const closeRe = /<\/pre\s*>/gi
+    closeRe.lastIndex = tag.end
+    const closeMatch = closeRe.exec(text)
+    if (!closeMatch) { pos = tag.end; continue }
+
+    let rawBody = text.slice(tag.end, closeMatch.index)
+    let lang = ''
+    const trimmedBody = rawBody.trim()
+    const maybeCode = parseHtmlTagAt(trimmedBody, 0)
+    if (maybeCode && !maybeCode.closing && !maybeCode.selfClosing && maybeCode.name === 'code') {
+      const codeAttrs = parseSafeTagAttrs(maybeCode.rawAttrs)
+      const closeCode = /<\/code\s*>$/i.exec(trimmedBody.slice(maybeCode.end))
+      if (codeAttrs && hasOnlyAttrs(codeAttrs, SPAN_SAFE_ATTRS) && closeCode) {
+        const cls = codeAttrs.get('class') ?? ''
+        const langMatch = /\b(?:language|lang)-([a-z0-9_+-]+)\b/i.exec(cls)
+        if (langMatch) lang = langMatch[1]!
+        rawBody = trimmedBody.slice(maybeCode.end, maybeCode.end + closeCode.index)
+      }
+    }
+    if (rawBody.includes('<') || rawBody.includes('>') || (mask.prefix && rawBody.includes(mask.prefix))) {
+      pos = closeRe.lastIndex
+      continue
+    }
+    const decoded = decodeBasicEntities(rawBody.replace(/^\r?\n/, '').replace(/\r?\n$/, ''))
+    let maxRun = 2
+    for (const m of decoded.matchAll(/`+/g)) if (m[0].length > maxRun) maxRun = m[0].length
+    const fence = '`'.repeat(maxRun + 1)
+    const outerPrefix = lineLayout(lines[openLineIdx]!).quotePrefix
+    const bodyLines = decoded.split(/\r?\n/).map(l => {
+      const clean = outerPrefix && l.startsWith(outerPrefix) ? l.slice(outerPrefix.length) : l
+      return `${outerPrefix}${clean}`
+    }).join('\n')
+    const fenced = `${outerPrefix}${fence}${lang}\n${bodyLines}\n${outerPrefix}${fence}`
+    const placeholder = mask.protect(fenced)
+
+    const beforeOnLine = text.slice(lineStarts[openLineIdx]!, tag.start).slice(outerPrefix.length)
+    const afterSlice = text.slice(closeRe.lastIndex)
+    const needLead = beforeOnLine.trim() !== '' ? `\n${outerPrefix.trimEnd()}\n` : ''
+    const needTrail = afterSlice && !/^[ \t]*(?:\r?\n|$)/.test(afterSlice) ? `\n${outerPrefix.trimEnd()}\n${outerPrefix}` : ''
+    if (needLead) {
+      out += text.slice(cursor, tag.start).replace(/[ \t]+$/, '') + needLead + placeholder + needTrail
+    } else {
+      const cutTo = Math.max(cursor, lineStarts[openLineIdx]!)
+      out += text.slice(cursor, cutTo) + placeholder + needTrail
+    }
+    cursor = closeRe.lastIndex
+    pos = closeRe.lastIndex
+    changed = true
+  }
+  if (!changed) return text
+  out += text.slice(cursor)
+  return out
+}
+
+/** Pass 0b：将单行安全 `<code>` / `<kbd>` 转为 Markdown 行内代码并立即受 mask 保护。 */
+function convertSafeInlineCode(text: string, mask: MaskedCode): string {
+  if (!/<(?:code|kbd)(?=[\s/>])/i.test(text)) return text
+  const { lines, breaks } = splitLinesWithBreaks(text)
+  const indented = findIndentedCodeLines(lines)
+  const tableLines = findGfmTableLines(text)
+  let changed = false
+
+  for (let i = 0; i < lines.length; i++) {
+    if (indented.has(i)) continue
+    const line = lines[i]!
+    if (!/<(?:code|kbd)(?=[\s/>])/i.test(line)) continue
+    const inTable = tableLines.has(i)
+    let out = ''
+    let cursor = 0
+    let pos = 0
+    let lineChanged = false
+    while (pos < line.length) {
+      const open = line.indexOf('<', pos)
+      if (open < 0) break
+      const tag = parseHtmlTagAt(line, open)
+      if (!tag || tag.closing || tag.selfClosing || (tag.name !== 'code' && tag.name !== 'kbd')) {
+        pos = tag ? tag.end : open + 1
+        continue
+      }
+      const attrs = parseSafeTagAttrs(tag.rawAttrs)
+      if (!attrs || !hasOnlyAttrs(attrs, SPAN_SAFE_ATTRS)) { pos = tag.end; continue }
+      const closeRe = new RegExp(`</${tag.name}\\s*>`, 'gi')
+      closeRe.lastIndex = tag.end
+      const closeMatch = closeRe.exec(line)
+      if (!closeMatch) { pos = tag.end; continue }
+      const inner = line.slice(tag.end, closeMatch.index)
+      if (!inner || inner.includes('<') || inner.includes('>') || (mask.prefix && inner.includes(mask.prefix))) {
+        pos = closeRe.lastIndex
+        continue
+      }
+      let decoded = decodeBasicEntities(inner)
+      if (inTable) decoded = decoded.replace(/\|/g, '\\|')
+      let maxRun = 0
+      for (const m of decoded.matchAll(/`+/g)) if (m[0].length > maxRun) maxRun = m[0].length
+      const fence = '`'.repeat(maxRun + 1)
+      const needsPad = decoded.startsWith('`') || decoded.endsWith('`')
+        || (decoded.startsWith(' ') && decoded.endsWith(' ') && /[^ ]/.test(decoded))
+      const span = needsPad ? `${fence} ${decoded} ${fence}` : `${fence}${decoded}${fence}`
+      out += line.slice(cursor, tag.start) + mask.protect(span)
+      cursor = closeRe.lastIndex
+      pos = closeRe.lastIndex
+      lineChanged = true
+    }
+    if (lineChanged) {
+      out += line.slice(cursor)
+      lines[i] = out
+      changed = true
+    }
+  }
+  return changed ? joinLinesWithBreaks(lines, breaks) : text
+}
+
 /** Pass 1：将安全 `http(s)` `<img>` 转为标准 Markdown 图片语法 `![alt](src)`。 */
 function convertSafeImages(text: string, mask: MaskedCode): string {
   if (!/<img(?=[\s/>])/i.test(text)) return text
@@ -376,12 +543,11 @@ function convertSafeImages(text: string, mask: MaskedCode): string {
         continue
       }
       const src = decodeBasicEntities(rawSrc).trim()
-      if (!/^https?:\/\/\S+$/i.test(src) || /[\u0000-\u001f\u007f]/.test(src)) {
+      if (!isSafeHttpUrl(src)) {
         pos = tag.end
         continue
       }
-      const safeUrl = src.replace(/[()<>]/g, ch => '%' + ch.charCodeAt(0).toString(16).toUpperCase())
-        .replace(/\|/g, inTable ? '%7C' : '|')
+      const safeUrl = encodeMarkdownUrl(src, inTable)
       const rawAlt = decodeBasicEntities(attrs.get('alt') ?? '').replace(/\r?\n/g, ' ').trim()
       const safeAlt = rawAlt.replace(/([\\[\]])/g, '\\$1').replace(/\|/g, inTable ? '\\|' : '|')
       out += line.slice(cursor, tag.start) + `![${safeAlt}](${safeUrl})`
@@ -399,9 +565,90 @@ function convertSafeImages(text: string, mask: MaskedCode): string {
   return changed ? joinLinesWithBreaks(lines, breaks) : text
 }
 
-/** Pass 2：剥离纯样式 `<font ...>`/`</font>` 与 `<span ...>`/`</span>` 外壳。 */
-function unwrapSafeFontAndSpan(text: string): string {
-  if (!/<\/?(?:font|span)(?=[\s/>])/i.test(text)) return text
+/** Pass 1b：将日系/轻小说角色卡常用的 `<ruby>基字<rt>注音</rt></ruby>` 转为 `基字(注音)`。 */
+function convertSafeRuby(text: string): string {
+  if (!/<ruby(?=[\s/>])/i.test(text)) return text
+  const { lines, breaks } = splitLinesWithBreaks(text)
+  const indented = findIndentedCodeLines(lines)
+  let changed = false
+
+  for (let i = 0; i < lines.length; i++) {
+    if (indented.has(i)) continue
+    const line = lines[i]!
+    if (!/<ruby(?=[\s/>])/i.test(line)) continue
+    let out = ''
+    let cursor = 0
+    let pos = 0
+    let lineChanged = false
+    while (pos < line.length) {
+      const open = line.indexOf('<', pos)
+      if (open < 0) break
+      const tag = parseHtmlTagAt(line, open)
+      if (!tag || tag.closing || tag.selfClosing || tag.name !== 'ruby') {
+        pos = tag ? tag.end : open + 1
+        continue
+      }
+      const attrs = parseSafeTagAttrs(tag.rawAttrs)
+      if (!attrs || !hasOnlyAttrs(attrs, SPAN_SAFE_ATTRS)) { pos = tag.end; continue }
+      const closeRe = /<\/ruby\s*>/gi
+      closeRe.lastIndex = tag.end
+      const closeMatch = closeRe.exec(line)
+      if (!closeMatch) { pos = tag.end; continue }
+      const inner = line.slice(tag.end, closeMatch.index)
+      let rubyOut = ''
+      let rubyPos = 0
+      let valid = true
+      let sawRt = false
+      while (rubyPos < inner.length) {
+        const lt = inner.indexOf('<', rubyPos)
+        if (lt < 0) {
+          rubyOut += inner.slice(rubyPos)
+          break
+        }
+        rubyOut += inner.slice(rubyPos, lt)
+        const innerTag = parseHtmlTagAt(inner, lt)
+        if (!innerTag || innerTag.closing || innerTag.selfClosing
+          || (innerTag.name !== 'rt' && innerTag.name !== 'rb' && innerTag.name !== 'rp')) {
+          valid = false
+          break
+        }
+        const innerAttrs = parseSafeTagAttrs(innerTag.rawAttrs)
+        if (!innerAttrs || !hasOnlyAttrs(innerAttrs, SPAN_SAFE_ATTRS)) { valid = false; break }
+        const endInnerRe = new RegExp(`</${innerTag.name}\\s*>`, 'gi')
+        endInnerRe.lastIndex = innerTag.end
+        const endInner = endInnerRe.exec(inner)
+        if (!endInner) { valid = false; break }
+        const piece = inner.slice(innerTag.end, endInner.index)
+        if (piece.includes('<') || piece.includes('>')) { valid = false; break }
+        if (innerTag.name === 'rt') {
+          const reading = piece.trim()
+          if (reading) {
+            rubyOut += `(${reading})`
+            sawRt = true
+          }
+        } else if (innerTag.name === 'rb') {
+          rubyOut += piece
+        }
+        rubyPos = endInnerRe.lastIndex
+      }
+      if (!valid || !sawRt || !rubyOut.trim()) { pos = closeRe.lastIndex; continue }
+      out += line.slice(cursor, tag.start) + rubyOut
+      cursor = closeRe.lastIndex
+      pos = closeRe.lastIndex
+      lineChanged = true
+    }
+    if (lineChanged) {
+      out += line.slice(cursor)
+      lines[i] = out
+      changed = true
+    }
+  }
+  return changed ? joinLinesWithBreaks(lines, breaks) : text
+}
+
+/** Pass 2：剥离纯样式 `<font>`/`<span>`/`<small>`/`<mark>`/`<u>` 外壳。 */
+function unwrapSafePresentational(text: string): string {
+  if (!/<\/?(?:font|span|small|mark|u)(?=[\s/>])/i.test(text)) return text
   const { lines, breaks } = splitLinesWithBreaks(text)
   const indented = findIndentedCodeLines(lines)
   // 记录每个字符偏移所在行号，确保缩进代码块不被触碰。
@@ -423,9 +670,11 @@ function unwrapSafeFontAndSpan(text: string): string {
   }
 
   const removeRanges: Array<{ start: number; end: number }> = []
-  const stacks: Record<'font' | 'span', Array<{ start: number; end: number; safe: boolean }>> = {
-    font: [],
-    span: [],
+  const stacks = new Map<string, Array<{ start: number; end: number; safe: boolean }>>()
+  const stackOf = (name: string) => {
+    let list = stacks.get(name)
+    if (!list) { list = []; stacks.set(name, list) }
+    return list
   }
   let pos = 0
   while (pos < text.length) {
@@ -433,10 +682,10 @@ function unwrapSafeFontAndSpan(text: string): string {
     if (open < 0) break
     const tag = parseHtmlTagAt(text, open)
     if (!tag) { pos = open + 1; continue }
-    if (tag.name !== 'font' && tag.name !== 'span') { pos = tag.end; continue }
+    if (!PRESENTATIONAL_WRAPPER_NAMES.has(tag.name)) { pos = tag.end; continue }
     const lineIdx = lineOfOffset(tag.start)
     if (indented.has(lineIdx)) { pos = tag.end; continue }
-    const stack = stacks[tag.name]
+    const stack = stackOf(tag.name)
     if (!tag.closing) {
       const attrs = parseSafeTagAttrs(tag.rawAttrs)
       const allowed = tag.name === 'font' ? FONT_SAFE_ATTRS : SPAN_SAFE_ATTRS
@@ -465,8 +714,8 @@ function unwrapSafeFontAndSpan(text: string): string {
     pos = tag.end
   }
   // 跨 HTML 卡片拆分后留下的独占行安全开标签同样剥离，避免吞掉后续围栏。
-  for (const name of ['font', 'span'] as const) {
-    for (const opened of stacks[name]) {
+  for (const list of stacks.values()) {
+    for (const opened of list) {
       if (!opened.safe) continue
       const lineIdx = lineOfOffset(opened.start)
       const line = lines[lineIdx]!
@@ -533,8 +782,129 @@ function unwrapSafeFontAndSpan(text: string): string {
   return joinLinesWithBreaks(nextLines, nextBreaks)
 }
 
-/** Pass 3：处理块级包装标签（`<center>`、`<p>`、`<h1>`-`<h6>`、`<blockquote>`、`<hr>`）。 */
-function normalizeBlockHtml(text: string): string {
+/** Pass 2b：将安全的 `http(s)` `<a href="...">文本</a>` 转为标准 Markdown 链接。 */
+function convertSafeLinks(text: string): string {
+  if (!/<a(?=[\s/>])/i.test(text)) return text
+  const { lines, breaks } = splitLinesWithBreaks(text)
+  const indented = findIndentedCodeLines(lines)
+  const tableLines = findGfmTableLines(text)
+  let changed = false
+
+  for (let i = 0; i < lines.length; i++) {
+    if (indented.has(i)) continue
+    const line = lines[i]!
+    if (!/<a(?=[\s/>])/i.test(line)) continue
+    const inTable = tableLines.has(i)
+    let out = ''
+    let cursor = 0
+    let pos = 0
+    let lineChanged = false
+    while (pos < line.length) {
+      const open = line.indexOf('<', pos)
+      if (open < 0) break
+      const tag = parseHtmlTagAt(line, open)
+      if (!tag || tag.closing || tag.selfClosing || tag.name !== 'a') {
+        pos = tag ? tag.end : open + 1
+        continue
+      }
+      const attrs = parseSafeTagAttrs(tag.rawAttrs)
+      const rawHref = attrs?.get('href')
+      if (!attrs || rawHref === undefined || !hasOnlyAttrs(attrs, ANCHOR_SAFE_ATTRS)) {
+        pos = tag.end
+        continue
+      }
+      const href = decodeBasicEntities(rawHref).trim()
+      if (!isSafeHttpUrl(href)) {
+        pos = tag.end
+        continue
+      }
+      const closeRe = /<\/a\s*>/gi
+      closeRe.lastIndex = tag.end
+      const closeMatch = closeRe.exec(line)
+      if (!closeMatch) { pos = tag.end; continue }
+      const inner = line.slice(tag.end, closeMatch.index).trim()
+      const isSingleMdImage = /^!\[(?:\\.|[^\[\]\\])*\]\([^()\s]+\)$/.test(inner)
+      if (!inner || inner.includes('<') || inner.includes('>') || (!isSingleMdImage && (inner.includes('[') || inner.includes(']')))) {
+        pos = closeRe.lastIndex
+        continue
+      }
+      const safeUrl = encodeMarkdownUrl(href, inTable)
+      const safeLabel = inTable && !isSingleMdImage ? inner.replace(/\|/g, '\\|') : inner
+      out += line.slice(cursor, tag.start) + `[${safeLabel}](${safeUrl})`
+      cursor = closeRe.lastIndex
+      pos = closeRe.lastIndex
+      lineChanged = true
+    }
+    if (lineChanged) {
+      out += line.slice(cursor)
+      lines[i] = out
+      changed = true
+    }
+  }
+  return changed ? joinLinesWithBreaks(lines, breaks) : text
+}
+
+function hasFencePlaceholder(text: string, mask: MaskedCode): boolean {
+  if (!mask.prefix || !text.includes(mask.prefix)) return false
+  let pos = 0
+  while (pos < text.length) {
+    const at = text.indexOf(mask.prefix, pos)
+    if (at < 0) break
+    const close = text.indexOf(mask.suffix, at + mask.prefix.length)
+    if (close < 0) break
+    const idxStr = text.slice(at + mask.prefix.length, close)
+    if (/^\d+$/.test(idxStr)) {
+      const original = mask.saved[Number(idxStr)]
+      if (original && (original.includes('\n') || /^(`{3,}|~{3,})/.test(original))) return true
+    }
+    pos = close + mask.suffix.length
+  }
+  return false
+}
+
+/** 若整行由单个无属性 `<center>...</center>` 包裹（配对深度恰好在行尾归零），剥离最外层。 */
+function unwrapWholeLineCenter(content: string): { value: string; changed: boolean } {
+  let working = content
+  let changed = false
+  for (let pass = 0; pass < 4; pass++) {
+    const openTag = parseHtmlTagAt(working, 0)
+    if (!openTag || openTag.closing || openTag.selfClosing || openTag.name !== 'center' || openTag.rawAttrs.trim() !== '') {
+      break
+    }
+    let depth = 1
+    let pos = openTag.end
+    let closeStart = -1
+    let closeEnd = -1
+    while (pos < working.length) {
+      const lt = working.indexOf('<', pos)
+      if (lt < 0) break
+      const tag = parseHtmlTagAt(working, lt)
+      if (!tag) { pos = lt + 1; continue }
+      if (tag.name === 'center' && !tag.selfClosing) {
+        if (tag.closing) {
+          depth--
+          if (depth === 0) {
+            closeStart = tag.start
+            closeEnd = tag.end
+            break
+          }
+        } else {
+          depth++
+        }
+      }
+      pos = tag.end
+    }
+    if (closeStart < 0 || working.slice(closeEnd).trim() !== '') break
+    working = working.slice(openTag.end, closeStart).trim()
+    changed = true
+  }
+  return { value: working, changed }
+}
+
+const HEADING_FORBIDDEN_INNER_RE = /<\/?(?:div|table|section|article|details|script|style|iframe|h[1-6]|blockquote|p|hr)\b/i
+
+/** Pass 3：处理块级包装标签（`<blockquote>`、`<center>`、`<h1>`-`<h6>`、`<p>`、`<hr>`）。 */
+function normalizeBlockHtml(text: string, mask: MaskedCode): string {
   if (!/<\/?(?:center|p|h[1-6]|blockquote|hr)(?=[\s/>])/i.test(text)) return text
   let current = text
 
@@ -606,35 +976,140 @@ function normalizeBlockHtml(text: string): string {
     if (!replaced) break
   }
 
-  // 3b: 配对 <h1>..<h6> 标题
+  // 3b: 无属性 <center> 外壳（先于 h1-h6 剥离，使 <center><h2>标题</h2></center> 能继续转为 ## 标题）
+  if (/<\/?center(?=[\s/>])/i.test(current)) {
+    const { lines, breaks } = splitLinesWithBreaks(current)
+    const indented = findIndentedCodeLines(lines)
+    const nextLines: string[] = []
+    const nextBreaks: string[] = []
+    let changed = false
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i]!
+      const br = i < breaks.length ? breaks[i] : undefined
+      if (indented.has(i) || !/<\/?center(?=[\s/>])/i.test(line)) {
+        nextLines.push(line)
+        if (br !== undefined) nextBreaks.push(br)
+        continue
+      }
+      const layout = lineLayout(line)
+      const content = line.slice(layout.contentStart).trimEnd()
+      const singleTag = parseHtmlTagAt(content, 0)
+      if (singleTag && singleTag.end === content.length && singleTag.name === 'center') {
+        const attrs = singleTag.closing ? new Map<string, string>() : parseSafeTagAttrs(singleTag.rawAttrs)
+        if (attrs && attrs.size === 0) {
+          changed = true
+          continue
+        }
+      }
+      const unwrapped = unwrapWholeLineCenter(content)
+      if (unwrapped.changed) {
+        changed = true
+        if (unwrapped.value === '') continue
+        nextLines.push(line.slice(0, layout.contentStart) + unwrapped.value)
+        if (br !== undefined) nextBreaks.push(br)
+        continue
+      }
+      nextLines.push(line)
+      if (br !== undefined) nextBreaks.push(br)
+    }
+    if (changed) {
+      while (nextBreaks.length >= nextLines.length && nextBreaks.length > 0) nextBreaks.pop()
+      current = joinLinesWithBreaks(nextLines, nextBreaks)
+    }
+  }
+
+  // 3c: 配对 <h1>..<h6> 标题（支持单行与常见多行格式，避免 Type 6 HTML 块吞掉紧随的代码围栏）
   if (/<h[1-6](?=[\s/>])/i.test(current)) {
     const { lines, breaks } = splitLinesWithBreaks(current)
     const indented = findIndentedCodeLines(lines)
+    const nextLines: string[] = []
+    const nextBreaks: string[] = []
     let changed = false
     for (let i = 0; i < lines.length; i++) {
-      if (indented.has(i)) continue
       const line = lines[i]!
-      if (!/<h[1-6](?=[\s/>])/i.test(line)) continue
+      const br = i < breaks.length ? breaks[i] : undefined
+      if (indented.has(i) || !/<h[1-6](?=[\s/>])/i.test(line)) {
+        nextLines.push(line)
+        if (br !== undefined) nextBreaks.push(br)
+        continue
+      }
       const layout = lineLayout(line)
       const trimmed = line.slice(layout.contentStart).trimEnd()
       const openTag = parseHtmlTagAt(trimmed, 0)
-      if (!openTag || openTag.closing || openTag.selfClosing || !/^h[1-6]$/.test(openTag.name)) continue
+      if (!openTag || openTag.closing || openTag.selfClosing || !/^h[1-6]$/.test(openTag.name)) {
+        nextLines.push(line)
+        if (br !== undefined) nextBreaks.push(br)
+        continue
+      }
       const attrs = parseSafeTagAttrs(openTag.rawAttrs)
-      if (!attrs || !hasOnlyAttrs(attrs, BLOCK_SAFE_ATTRS)) continue
-      const closeRe = new RegExp(`</${openTag.name}\\s*>$`, 'i')
-      const closeMatch = closeRe.exec(trimmed.slice(openTag.end))
-      if (!closeMatch) continue
-      const inner = trimmed.slice(openTag.end, openTag.end + closeMatch.index).trim()
-      if (!inner || /<\/?(?:div|table|section|article|details|script|style|iframe|h[1-6])\b/i.test(inner)) continue
+      if (!attrs || !hasOnlyAttrs(attrs, BLOCK_SAFE_ATTRS)) {
+        nextLines.push(line)
+        if (br !== undefined) nextBreaks.push(br)
+        continue
+      }
       const level = Number(openTag.name[1])
-      lines[i] = `${layout.quotePrefix}${'#'.repeat(level)} ${inner}`
-      changed = true
+      const closeRe = new RegExp(`</${openTag.name}\\s*>$`, 'i')
+      const afterOpen = trimmed.slice(openTag.end)
+      const closeMatch = closeRe.exec(afterOpen)
+      if (closeMatch) {
+        const inner = afterOpen.slice(0, closeMatch.index).trim()
+        if (inner && !HEADING_FORBIDDEN_INNER_RE.test(inner) && !hasFencePlaceholder(inner, mask)) {
+          nextLines.push(`${layout.quotePrefix}${'#'.repeat(level)} ${inner}`)
+          if (br !== undefined) nextBreaks.push(br)
+          changed = true
+          continue
+        }
+        nextLines.push(line)
+        if (br !== undefined) nextBreaks.push(br)
+        continue
+      }
+
+      // 多行标题：如 <h2 align="center">\n  序章：星港\n</h2>
+      const firstPart = afterOpen.trim()
+      if (!HEADING_FORBIDDEN_INNER_RE.test(firstPart) && !hasFencePlaceholder(firstPart, mask)) {
+        const parts: string[] = firstPart ? [firstPart] : []
+        let matchedEnd = -1
+        const maxScan = Math.min(lines.length - 1, i + 6)
+        for (let j = i + 1; j <= maxScan; j++) {
+          if (indented.has(j)) break
+          const jLine = lines[j]!
+          const jLayout = lineLayout(jLine)
+          if (jLayout.quotePrefix !== layout.quotePrefix) break
+          const jTrimmed = jLine.slice(jLayout.contentStart).trimEnd()
+          if (!jTrimmed || hasFencePlaceholder(jTrimmed, mask)) break
+          const jClose = closeRe.exec(jTrimmed)
+          if (jClose) {
+            const beforeClose = jTrimmed.slice(0, jClose.index).trim()
+            if (beforeClose) parts.push(beforeClose)
+            const combined = parts.join(' ').trim()
+            if (combined && !HEADING_FORBIDDEN_INNER_RE.test(combined)) {
+              matchedEnd = j
+            }
+            break
+          }
+          if (HEADING_FORBIDDEN_INNER_RE.test(jTrimmed)) break
+          parts.push(jTrimmed)
+        }
+        if (matchedEnd >= 0) {
+          nextLines.push(`${layout.quotePrefix}${'#'.repeat(level)} ${parts.join(' ').trim()}`)
+          const endBr = matchedEnd < breaks.length ? breaks[matchedEnd] : undefined
+          if (endBr !== undefined) nextBreaks.push(endBr)
+          i = matchedEnd
+          changed = true
+          continue
+        }
+      }
+      nextLines.push(line)
+      if (br !== undefined) nextBreaks.push(br)
     }
-    if (changed) current = joinLinesWithBreaks(lines, breaks)
+    if (changed) {
+      while (nextBreaks.length >= nextLines.length && nextBreaks.length > 0) nextBreaks.pop()
+      current = joinLinesWithBreaks(nextLines, nextBreaks)
+    }
   }
 
-  // 3c: <center> 与 <p>（成对同行与独占行）及 <hr>
-  if (/<\/?(?:center|p|hr)(?=[\s/>])/i.test(current)) {
+  // 3d: <p>（成对同行与独占行）及 <hr>
+  if (/<\/?(?:p|hr)(?=[\s/>])/i.test(current)) {
     const { lines, breaks } = splitLinesWithBreaks(current)
     const indented = findIndentedCodeLines(lines)
     const nextLines: string[] = []
@@ -649,7 +1124,7 @@ function normalizeBlockHtml(text: string): string {
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i]!
       const br = i < breaks.length ? breaks[i] : undefined
-      if (indented.has(i) || !/<\/?(?:center|p|hr)(?=[\s/>])/i.test(line)) {
+      if (indented.has(i) || !/<\/?(?:p|hr)(?=[\s/>])/i.test(line)) {
         pushLine(line, br)
         continue
       }
@@ -675,14 +1150,6 @@ function normalizeBlockHtml(text: string): string {
             continue
           }
         }
-        if (singleTag.name === 'center') {
-          const attrs = singleTag.closing ? new Map<string, string>() : parseSafeTagAttrs(singleTag.rawAttrs)
-          if (attrs && attrs.size === 0) {
-            changed = true
-            // 丢弃独占行的无属性 <center> / </center>
-            continue
-          }
-        }
         if (singleTag.name === 'p') {
           const attrs = singleTag.closing ? new Map<string, string>() : parseSafeTagAttrs(singleTag.rawAttrs)
           if (attrs && hasOnlyAttrs(attrs, BLOCK_SAFE_ATTRS)) {
@@ -703,18 +1170,9 @@ function normalizeBlockHtml(text: string): string {
         }
       }
 
-      // 行内出现 <center>...</center>、<p>...</p> 或行内 <hr>
+      // 行内出现 <p>...</p> 或行内 <hr>
       let working = content
       let lineChanged = false
-      // 拆解无属性单行 <center>内容</center>
-      const centerOpen = parseHtmlTagAt(working, 0)
-      if (centerOpen && !centerOpen.closing && !centerOpen.selfClosing && centerOpen.name === 'center' && centerOpen.rawAttrs.trim() === '') {
-        const closeCenter = /<\/center\s*>$/i.exec(working.slice(centerOpen.end))
-        if (closeCenter) {
-          working = working.slice(centerOpen.end, centerOpen.end + closeCenter.index).trim()
-          lineChanged = true
-        }
-      }
       // 行内 <p>...</p> 与 <hr>
       if (/<\/?(?:p|hr)(?=[\s/>])/i.test(working)) {
         let out = ''
@@ -867,31 +1325,94 @@ function convertSafeInlineFormatting(text: string, mask: MaskedCode): string {
         const closeMatch = closeRe.exec(line)
         if (!closeMatch) { pos = tag.end; continue }
         const inner = line.slice(tag.end, closeMatch.index)
-        // 含嵌套标签或未消费尖括号时留给更内层或跳过，避免破坏结构。
-        if (inner.includes('<') || inner.includes('>')) { pos = tag.end; continue }
-        const leadSpaces = /^[ \t]*/.exec(inner)![0]!
-        const trailSpaces = /[ \t]*$/.exec(inner)![0]!
-        const core = inner.slice(leadSpaces.length, inner.length - trailSpaces.length)
-        if (!core) { pos = closeRe.lastIndex; continue }
-        // 避免和内容已有定界符冲突；仅允许 ** 包裹外层单 * 斜体形成 ***...***。
-        const hasConflict = spec.marker === '**'
-          ? (core.includes('**') || (core.includes('*') && !/^\*[^*]+\*$/.test(core)))
-          : spec.marker === '*'
-            ? core.includes('*')
-            : core.includes('~')
-        if (hasConflict) { pos = closeRe.lastIndex; continue }
+        const formatSegment = (
+          seg: string,
+          prevChar: string,
+          nextChar: string,
+        ): string | null => {
+          const leadSpaces = /^[ \t]*/.exec(seg)![0]!
+          const trailSpaces = /[ \t]*$/.exec(seg)![0]!
+          const core = seg.slice(leadSpaces.length, seg.length - trailSpaces.length)
+          if (!core) return null
+          // 避免和内容已有定界符冲突；仅允许 ** 包裹外层单 * 斜体形成 ***...***。
+          const hasConflict = spec.marker === '**'
+            ? (core.includes('**') || (core.includes('*') && !/^\*[^*]+\*$/.test(core)))
+            : spec.marker === '*'
+              ? core.includes('*')
+              : core.includes('~')
+          if (hasConflict) return null
+          const beforeChar = leadSpaces.length > 0 ? ' ' : prevChar
+          const afterChar = trailSpaces.length > 0 ? ' ' : nextChar
+          const firstChar = boundaryChar(core, 0, 'start', mask)
+          const lastChar = boundaryChar(core, core.length - 1, 'end', mask)
+          if (!canFlank(beforeChar, firstChar, lastChar, afterChar, spec.marker, spec.cjkFriendly)) {
+            return null
+          }
+          return leadSpaces + spec.marker + core + spec.marker + trailSpaces
+        }
 
-        const beforeIdx = leadSpaces.length > 0 ? -1 : tag.start - 1
-        const afterIdx = trailSpaces.length > 0 ? -1 : closeRe.lastIndex
-        const beforeChar = leadSpaces.length > 0 ? ' ' : boundaryChar(line, beforeIdx, 'end', mask)
-        const afterChar = trailSpaces.length > 0 ? ' ' : boundaryChar(line, afterIdx, 'start', mask)
-        const firstChar = boundaryChar(core, 0, 'start', mask)
-        const lastChar = boundaryChar(core, core.length - 1, 'end', mask)
-        if (!canFlank(beforeChar, firstChar, lastChar, afterChar, spec.marker, spec.cjkFriendly)) {
+        const outerBefore = boundaryChar(line, tag.start - 1, 'end', mask)
+        const outerAfter = boundaryChar(line, closeRe.lastIndex, 'start', mask)
+
+        // 含嵌套标签时仅允许内部存在安全 <br>（按 <br> 拆段分别包裹），其它嵌套留给更内层或跳过。
+        if (inner.includes('<') || inner.includes('>')) {
+          const segments: Array<{ kind: 'text'; text: string } | { kind: 'br'; raw: string }> = []
+          let segPos = 0
+          let brCount = 0
+          let valid = true
+          while (segPos < inner.length) {
+            const lt = inner.indexOf('<', segPos)
+            if (lt < 0) {
+              const tail = inner.slice(segPos)
+              if (tail.includes('>')) { valid = false; break }
+              if (tail) segments.push({ kind: 'text', text: tail })
+              break
+            }
+            const chunk = inner.slice(segPos, lt)
+            if (chunk.includes('>')) { valid = false; break }
+            if (chunk) segments.push({ kind: 'text', text: chunk })
+            const innerTag = parseHtmlTagAt(inner, lt)
+            if (!innerTag || innerTag.closing || innerTag.name !== 'br') { valid = false; break }
+            const brAttrs = parseSafeTagAttrs(innerTag.rawAttrs)
+            if (!brAttrs || !hasOnlyAttrs(brAttrs, BR_SAFE_ATTRS)) { valid = false; break }
+            segments.push({ kind: 'br', raw: inner.slice(innerTag.start, innerTag.end) })
+            brCount++
+            segPos = innerTag.end
+          }
+          if (!valid || brCount === 0) { pos = tag.end; continue }
+          let rebuilt = ''
+          let nonEmptyCount = 0
+          for (let s = 0; s < segments.length; s++) {
+            const seg = segments[s]!
+            if (seg.kind === 'br') {
+              rebuilt += seg.raw
+              continue
+            }
+            if (!seg.text.trim()) {
+              rebuilt += seg.text
+              continue
+            }
+            const segBefore = s === 0 ? outerBefore : ' '
+            const segAfter = s === segments.length - 1 ? outerAfter : ' '
+            const formatted = formatSegment(seg.text, segBefore, segAfter)
+            if (formatted === null) { valid = false; break }
+            rebuilt += formatted
+            nonEmptyCount++
+          }
+          if (!valid || nonEmptyCount === 0) { pos = closeRe.lastIndex; continue }
+          out += line.slice(cursor, tag.start) + rebuilt
+          cursor = closeRe.lastIndex
+          pos = closeRe.lastIndex
+          passChanged = true
+          continue
+        }
+
+        const formatted = formatSegment(inner, outerBefore, outerAfter)
+        if (formatted === null) {
           pos = closeRe.lastIndex
           continue
         }
-        out += line.slice(cursor, tag.start) + leadSpaces + spec.marker + core + spec.marker + trailSpaces
+        out += line.slice(cursor, tag.start) + formatted
         cursor = closeRe.lastIndex
         pos = closeRe.lastIndex
         passChanged = true
@@ -908,7 +1429,135 @@ function convertSafeInlineFormatting(text: string, mask: MaskedCode): string {
     }
   }
 
-  return changed ? joinLinesWithBreaks(lines, breaks) : text
+  // 4b: 多行无属性 <b>/<i>/<s>（如跨行旁白/对白），逐行按 CommonMark 贴合条件包裹。
+  const afterSingle = changed ? joinLinesWithBreaks(lines, breaks) : text
+  if (!/<(?:b|strong|i|em|s|del|strike)\s*>/i.test(afterSingle)) return afterSingle
+  const tableLines = findGfmTableLines(afterSingle)
+  const blockMarkerRe = /^(?:#{1,6}(?:[ \t]|$)|(?:[-*_][ \t]*){3,}$|[-+*][ \t]+|\d{1,9}[.)][ \t]+|>)/
+  const formatLinePiece = (
+    seg: string,
+    prevChar: string,
+    nextChar: string,
+    spec: { marker: '**' | '*' | '~~'; cjkFriendly: boolean },
+  ): string | null => {
+    const leadSpaces = /^[ \t]*/.exec(seg)![0]!
+    const trailSpaces = /[ \t]*$/.exec(seg)![0]!
+    const core = seg.slice(leadSpaces.length, seg.length - trailSpaces.length)
+    if (!core) return null
+    const hasConflict = spec.marker === '**'
+      ? (core.includes('**') || (core.includes('*') && !/^\*[^*]+\*$/.test(core)))
+      : spec.marker === '*'
+        ? core.includes('*')
+        : core.includes('~')
+    if (hasConflict) return null
+    const beforeChar = leadSpaces.length > 0 ? ' ' : prevChar
+    const afterChar = trailSpaces.length > 0 ? ' ' : nextChar
+    const firstChar = boundaryChar(core, 0, 'start', mask)
+    const lastChar = boundaryChar(core, core.length - 1, 'end', mask)
+    if (!canFlank(beforeChar, firstChar, lastChar, afterChar, spec.marker, spec.cjkFriendly)) return null
+    return leadSpaces + spec.marker + core + spec.marker + trailSpaces
+  }
+
+  let multiChanged = false
+  for (let i = 0; i < lines.length; i++) {
+    if (indented.has(i) || tableLines.has(i)) continue
+    const line = lines[i]!
+    if (!/<(?:b|strong|i|em|s|del|strike)\s*>/i.test(line)) continue
+    const startLayout = lineLayout(line)
+    let pos = startLayout.contentStart
+    while (pos < line.length) {
+      const open = line.indexOf('<', pos)
+      if (open < 0) break
+      const tag = parseHtmlTagAt(line, open)
+      if (!tag || tag.closing || tag.selfClosing || tag.rawAttrs.trim() !== '') {
+        pos = tag ? tag.end : open + 1
+        continue
+      }
+      const spec = INLINE_FORMAT_MAP[tag.name]
+      if (!spec) { pos = tag.end; continue }
+      const firstTail = line.slice(tag.end)
+      if (firstTail.includes('<') || firstTail.includes('>') || hasFencePlaceholder(firstTail, mask)) {
+        pos = tag.end
+        continue
+      }
+      const closeRe = new RegExp(`</${tag.name}\\s*>`, 'i')
+      let closeLine = -1
+      let closeMatch: RegExpExecArray | null = null
+      let valid = true
+      const maxScan = Math.min(lines.length - 1, i + 8)
+      for (let j = i + 1; j <= maxScan; j++) {
+        if (indented.has(j) || tableLines.has(j)) { valid = false; break }
+        const jLine = lines[j]!
+        const jLayout = lineLayout(jLine)
+        if (jLayout.quotePrefix !== startLayout.quotePrefix) { valid = false; break }
+        const jContent = jLine.slice(jLayout.quotePrefix.length)
+        if (hasFencePlaceholder(jContent, mask)) { valid = false; break }
+        const found = closeRe.exec(jLine)
+        if (found) {
+          const beforeClose = jLine.slice(jLayout.quotePrefix.length, found.index)
+          if (beforeClose.includes('<') || beforeClose.includes('>') || blockMarkerRe.test(beforeClose.trimStart())) {
+            valid = false
+          } else {
+            closeLine = j
+            closeMatch = found
+          }
+          break
+        }
+        if (jContent.includes('<') || jContent.includes('>') || blockMarkerRe.test(jContent.trimStart())) {
+          valid = false
+          break
+        }
+      }
+      if (!valid || closeLine < 0 || !closeMatch) { pos = tag.end; continue }
+
+      // 逐行尝试包裹；全部非空行都满足贴合规则才整体替换。
+      const replacements = new Map<number, string>()
+      let nonEmptyCount = 0
+      const outerBefore = boundaryChar(line, tag.start - 1, 'end', mask)
+      const closeEnd = closeMatch.index + closeMatch[0].length
+      const outerAfter = boundaryChar(lines[closeLine]!, closeEnd, 'start', mask)
+
+      if (firstTail.trim()) {
+        const formatted = formatLinePiece(firstTail, outerBefore, ' ', spec)
+        if (formatted === null) { pos = tag.end; continue }
+        replacements.set(i, line.slice(0, tag.start) + formatted)
+        nonEmptyCount++
+      } else {
+        replacements.set(i, line.slice(0, tag.start) + firstTail)
+      }
+      for (let j = i + 1; j < closeLine; j++) {
+        const jLine = lines[j]!
+        const jBody = jLine.slice(startLayout.quotePrefix.length)
+        if (!jBody.trim()) continue
+        const formatted = formatLinePiece(jBody, ' ', ' ', spec)
+        if (formatted === null) { valid = false; break }
+        replacements.set(j, startLayout.quotePrefix + formatted)
+        nonEmptyCount++
+      }
+      if (valid) {
+        const endLine = lines[closeLine]!
+        const endBody = endLine.slice(startLayout.quotePrefix.length, closeMatch.index)
+        const endTail = endLine.slice(closeEnd)
+        if (endBody.trim()) {
+          const formatted = formatLinePiece(endBody, ' ', outerAfter, spec)
+          if (formatted === null) valid = false
+          else {
+            replacements.set(closeLine, startLayout.quotePrefix + formatted + endTail)
+            nonEmptyCount++
+          }
+        } else {
+          replacements.set(closeLine, startLayout.quotePrefix + endBody + endTail)
+        }
+      }
+      if (!valid || nonEmptyCount === 0) { pos = tag.end; continue }
+      for (const [idx, nextLine] of replacements) lines[idx] = nextLine
+      multiChanged = true
+      i = lines[closeLine]!.slice(closeEnd).includes('<') ? closeLine - 1 : closeLine
+      break
+    }
+  }
+
+  return changed || multiChanged ? joinLinesWithBreaks(lines, breaks) : text
 }
 
 /** Pass 5：按上下文把 `<br>` 转为 GFM 表格空格、独立空行或 CommonMark 硬换行。 */
@@ -1009,6 +1658,7 @@ function convertSafeLineBreaks(text: string, mask: MaskedCode): string {
       const afterTrimmed = afterSlice.replace(/^[ \t]+/, '')
       const atLineEnd = afterTrimmed === ''
       out += before
+      const hasContentBefore = out.slice(Math.min(out.length, layout.quotePrefix.length)).trim() !== ''
       if (atLineEnd) {
         if (runCount >= 2 && nextLine !== undefined && nextContent.trim() !== '') {
           out += `\n${layout.quotePrefix.trimEnd()}`
@@ -1016,6 +1666,10 @@ function convertSafeLineBreaks(text: string, mask: MaskedCode): string {
           out += '  '
         }
         c = line.length
+      } else if (!hasContentBefore) {
+        // 行首（或引用前缀后直接）出现 <br>：输出干净的空行而非带两个前导空格的硬换行。
+        out += `\n${layout.quotePrefix}`
+        c = end + (afterSlice.length - afterTrimmed.length)
       } else if (runCount >= 2) {
         out += `\n${layout.quotePrefix.trimEnd()}\n${layout.quotePrefix}`
         c = end + (afterSlice.length - afterTrimmed.length)
@@ -1041,10 +1695,15 @@ export function normalizeHostMarkdown(text: string): string {
   if (!text || !text.includes('<')) return text
   const mask = maskMarkdownCode(text)
   let out = mask.masked
+  out = convertSafePreBlocks(out, mask)
+  out = convertSafeInlineCode(out, mask)
   out = convertSafeImages(out, mask)
-  out = unwrapSafeFontAndSpan(out)
-  out = normalizeBlockHtml(out)
+  out = unwrapSafePresentational(out)
+  out = convertSafeRuby(out)
+  out = convertSafeLinks(out)
+  out = normalizeBlockHtml(out, mask)
   out = convertSafeInlineFormatting(out, mask)
+  out = convertSafeLinks(out)
   out = convertSafeLineBreaks(out, mask)
   if (out === mask.masked) return text
   return mask.restore(out.replace(/(\r?\n)(?:[ \t]*\r?\n){2,}/g, '$1$1'))

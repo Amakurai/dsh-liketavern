@@ -84,6 +84,28 @@ it('开场白预览采用只读展示正文，互动 HTML 显示提示且不在�
   expect(f.ensureGreeting).not.toHaveBeenCalled()
 })
 
+it('开场白预览展开纯 <details> 并归一化安全 HTML，不误报互动卡面提示', async () => {
+  const f = fixture()
+  f.renderOutputText.mockResolvedValue(ok({
+    text: '<font color="gold">欢迎来到星港</font><br><ruby>星辰<rt>ほし</rt></ruby>',
+    htmls: ['<details><summary>状态栏</summary>生命值：100</details>'],
+    parts: [
+      { kind: 'markdown', text: '<font color="gold">欢迎来到星港</font><br><ruby>星辰<rt>ほし</rt></ruby>' },
+      { kind: 'html', text: '<details><summary>状态栏</summary>生命值：100</details>' },
+    ],
+  }))
+  await mount(f.node('plain-preview')); await pick()
+  const rendered = JSON.stringify(view!.toJSON())
+  expect(rendered).toContain('欢迎来到星港')
+  expect(rendered).toContain('星辰(ほし)')
+  expect(rendered).toContain('状态栏')
+  expect(rendered).toContain('生命值：100')
+  expect(rendered).not.toContain('<font')
+  expect(rendered).not.toContain('<br>')
+  expect(rendered).not.toMatch(/互动卡面|interactive card/)
+  expect(view!.root.findAllByType('iframe')).toHaveLength(0)
+})
+
 it('宿主 blank 滞后但日志已开始时不显示预览、不清绑定，并刷新列表', async () => {
   const f = fixture(true)
   await mount(f.node('existing'))

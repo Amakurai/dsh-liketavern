@@ -9,6 +9,7 @@ import { Fragment, useEffect, useMemo, useRef } from 'react'
 import type { ReactNode, ComponentProps } from 'react'
 import { JsonBlock, MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives'
 import { stripDisplayMeta } from '../core/displaySanitize.js'
+import { normalizeHostMarkdown } from '../core/hostMarkdown.js'
 import { CHARACTER_CHANGED_EVENT, cachedCharacterDetail, cachedSessionBinding, invalidateCharacter, invalidateSessionBinding } from './cache.js'
 import { useMarkdownLabels, useT } from './i18n.js'
 import { isTavernSession, type UseSessions } from './mode.js'
@@ -322,7 +323,14 @@ export function TavernAssistantNode(props: {
   return (
     <div>
       {bindingError}
-      <NativeAssistantFallback {...props} mentions={mentions} streaming={streaming} interrupted={interrupted} stripMeta />
+      <NativeAssistantFallback
+        {...props}
+        mentions={mentions}
+        streaming={streaming}
+        interrupted={interrupted}
+        stripMeta
+        normalizeMarkdown={binding?.interactiveCards !== false}
+      />
       {interruptedActions}
     </div>
   )
@@ -340,9 +348,10 @@ function NativeAssistantFallback(props: {
   streaming: boolean
   interrupted: boolean
   stripMeta?: boolean
+  normalizeMarkdown?: boolean
   groupPart?: string
 }) {
-  const { node, loadImage, renderFactorySlot, renderMessageImages, mentions, streaming, interrupted, stripMeta, groupPart } = props
+  const { node, loadImage, renderFactorySlot, renderMessageImages, mentions, streaming, interrupted, stripMeta, normalizeMarkdown, groupPart } = props
   const t = useT()
   const markdownLabels = useMarkdownLabels()
   const rendered: ReactNode[] = []
@@ -354,7 +363,8 @@ function NativeAssistantFallback(props: {
     if (groupPart === 'reasoning' && block.kind !== 'reasoning') continue
     if (groupPart === 'response' && block.kind === 'reasoning') continue
     if (block.kind === 'text') {
-      const shown = stripMeta ? stripDisplayMeta(block.text ?? '') : (block.text ?? '')
+      const cleaned = stripMeta ? stripDisplayMeta(block.text ?? '') : (block.text ?? '')
+      const shown = stripMeta && normalizeMarkdown ? normalizeHostMarkdown(cleaned) : cleaned
       rendered.push(
         <MarkdownText key={i} text={shown} streaming={streaming} fileMentions={mentions} labels={markdownLabels} />,
       )

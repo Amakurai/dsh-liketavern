@@ -335,3 +335,97 @@ it('前导 <link>/<meta>、媒体/图形容器、<center> 卡面与未引号尾�
   const unquotedSlash = '<div data-href=https://example.com/>状态内容</div>'
   expect(splitTemplateDisplay(unquotedSlash)).toEqual([{ kind: 'html', text: unquotedSlash }])
 })
+
+it('支持 DOCTYPE 片段卡、跨注释共享尾样式及 htm/xhtml 围栏，且不把带内嵌示例标签的 text 围栏误判为卡面', () => {
+  // 无 <html>/<body> 壳的 DOCTYPE 片段卡应完整进入沙箱，不能被判成未闭合整页并丢弃。
+  const doctypeFragment = '<!DOCTYPE html>\n<style>.c{color:red}</style>\n<div class="c">状态栏</div>'
+  expect(splitTemplateDisplay(doctypeFragment)).toEqual([{ kind: 'html', text: doctypeFragment }])
+  expect(presentRenderedOutput(doctypeFragment, true)).toEqual({
+    html: doctypeFragment,
+    htmls: [doctypeFragment],
+    text: '',
+  })
+
+  // <details> 与尾部 <style> 之间夹 HTML 注释时仍留在同一沙箱共享样式。
+  const commentedStyle = '<div class="bar">状态</div>\n<details><summary>详情</summary>内容</details>\n<!-- style -->\n<style>.bar{color:red}</style>'
+  expect(splitTemplateDisplay(commentedStyle)).toEqual([{ kind: 'html', text: commentedStyle }])
+
+  // htm / xhtml 显式围栏按 HTML 卡面提取；text 围栏正文里仅含行中示例标签时保持代码块。
+  expect(splitTemplateDisplay('```htm\n<div class="card">卡面</div>\n```')).toEqual([
+    { kind: 'html', text: '<div class="card">卡面</div>' },
+  ])
+  expect(splitTemplateDisplay('```xhtml\n<section>章节卡</section>\n```')).toEqual([
+    { kind: 'html', text: '<section>章节卡</section>' },
+  ])
+  const proseFence = '```text\n说明：\n<audio>示例</audio>\n```'
+  expect(splitTemplateDisplay(proseFence)).toEqual([{ kind: 'markdown', text: proseFence }])
+  expect(presentRenderedOutput(proseFence, true)).toEqual({ html: null, htmls: [], text: proseFence })
+
+  // 省略 <html> 的 DOCTYPE + <body>（含可选 <head>）文档，在 </body> 后紧跟台词时正常拆分且不触发 pendingHtml。
+  const doctypeBody = '<!DOCTYPE html>\n<body><div>卡片</div></body>'
+  expect(splitTemplateDisplay(`${doctypeBody}\n后文`)).toEqual([
+    { kind: 'html', text: doctypeBody },
+    { kind: 'markdown', text: '后文' },
+  ])
+  expect(presentRenderedOutput(`${doctypeBody}\n后文`, true)).toEqual({
+    html: doctypeBody,
+    htmls: [doctypeBody],
+    text: '后文',
+  })
+  const doctypeHeadBody = '<!DOCTYPE html>\n<head><style>.a{color:red}</style></head>\n<body><div class="a">卡片</div></body>'
+  expect(splitTemplateDisplay(`${doctypeHeadBody}\n后文`)).toEqual([
+    { kind: 'html', text: doctypeHeadBody },
+    { kind: 'markdown', text: '后文' },
+  ])
+  // 显式写了 <html> 但缺 </html> 且后面跟台词的未闭合文档仍保持拒绝语义。
+  expect(isFullHtmlDocument('<html><body>卡面</body>后续台词')).toBe(false)
+})
+
+it('有效纯折叠块（含 #31 未闭合 summary）与相邻非纯折叠块自动拆分，不被同层无效块拖入 iframe', () => {
+  const issue31Fold = '<details>\n<summary>出生地列表\n\n### 中央大陆\n1. 鲁迪乌斯\n</details>'
+  const noBlankBlockFold = '<details>\n<summary>角色列表\n### 魔大陆\n1. 洛琪希\n</details>'
+  const unclosedPlain = '<details>\n<summary>无空行未闭合\n正文\n</details>'
+  const customWidgetFold = '<details><summary>状态卡</summary>\n<my-status>HP: 100</my-status>\n</details>'
+  const kbdFold = '<details><summary>操作提示</summary>\n按 <kbd>Enter</kbd> 继续\n</details>'
+  const strayBacktickFold = '<details><summary>命令 `help 说明</summary>\n请参考 `<div class="demo">` 的写法\n</details>'
+  const mvuCard = '<div class="mvu-status">HP: 100</div>'
+
+  // 两个都可走原生折叠的相邻块维持合并，减少碎片。
+  expect(splitTemplateDisplay(`${issue31Fold}\n${noBlankBlockFold}`)).toEqual([
+    { kind: 'html', text: `${issue31Fold}\n${noBlankBlockFold}` },
+  ])
+
+  // 相邻块中只要有一方不能走原生折叠，必须拆分各自片段（正反顺序皆如此）。
+  for (const nonPlain of [unclosedPlain, customWidgetFold, kbdFold]) {
+    expect(splitTemplateDisplay(`${issue31Fold}\n${nonPlain}`)).toEqual([
+      { kind: 'html', text: issue31Fold },
+      { kind: 'html', text: nonPlain },
+    ])
+    expect(splitTemplateDisplay(`${nonPlain}\n${issue31Fold}`)).toEqual([
+      { kind: 'html', text: nonPlain },
+      { kind: 'html', text: issue31Fold },
+    ])
+  }
+
+  // 摘要内孤立反引号与无空行未闭合块紧邻 <div> 卡片时也正确拆分。
+  expect(splitTemplateDisplay(`${strayBacktickFold}\n${mvuCard}`)).toEqual([
+    { kind: 'html', text: strayBacktickFold },
+    { kind: 'html', text: mvuCard },
+  ])
+  expect(splitTemplateDisplay(`${noBlankBlockFold}\n${mvuCard}`)).toEqual([
+    { kind: 'html', text: noBlankBlockFold },
+    { kind: 'html', text: mvuCard },
+  ])
+
+  // 含多伪标签同行的纯折叠块可与相邻 <div> 拆分；含未声明行内闭标签的非纯折叠块与纯折叠块隔离。
+  const multiPseudoFold = '<details><summary>档案</summary>\n<Adventurer Profile> <status1>\n内容\n</status1> </Adventurer Profile>\n</details>'
+  const residualCloseFold = '<details><summary>残余标签</summary>\n正文 </unknown> 结束\n</details>'
+  expect(splitTemplateDisplay(`${multiPseudoFold}\n${mvuCard}`)).toEqual([
+    { kind: 'html', text: multiPseudoFold },
+    { kind: 'html', text: mvuCard },
+  ])
+  expect(splitTemplateDisplay(`${issue31Fold}\n${residualCloseFold}`)).toEqual([
+    { kind: 'html', text: issue31Fold },
+    { kind: 'html', text: residualCloseFold },
+  ])
+})

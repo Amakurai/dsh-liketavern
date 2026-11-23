@@ -540,3 +540,87 @@ it('仅含普通 details 折叠块的消息只返回紧凑 helperContext，不�
   expect(cardOutput.helperScripts).toBeDefined()
   expect(cardOutput.helperWorldbooks).toBeDefined()
 })
+
+it('连续引用块内的 <details> 被空引用行隔开时，不残留孤立的 > 正文片段', () => {
+  const quoted = '> <details><summary>A</summary>1</details>\n>\n> <details><summary>B</summary>2</details>'
+  expect(splitTemplateDisplay(quoted)).toEqual([
+    { kind: 'html', text: '<details><summary>A</summary>1</details>' },
+    { kind: 'html', text: '<details><summary>B</summary>2</details>' },
+  ])
+})
+
+it('服务层 renderOutputTexts 与开场白预览按真实楼层深度过滤 output/render 正则的 minDepth/maxDepth', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'tavern-display-depth-'))
+  roots.push(root)
+  const paths = {
+    root,
+    characters: join(root, 'characters'),
+    lorebooks: join(root, 'lorebooks'),
+    presets: join(root, 'presets'),
+    personas: join(root, 'personas'),
+    regexDir: join(root, 'regex'),
+    sessions: join(root, 'sessions'),
+  }
+  const state = new TavernState(paths, () => resolveConfig({}))
+  await state.init()
+  const { cardId } = await importCard(paths.characters, parseJsonCard({
+    name: '星港',
+    description: '角色',
+    extensions: {
+      regex_scripts: [
+        { id: 'hide-old', scriptName: '隐藏旧状态', findRegex: '/<status>[\\s\\S]*?<\\/status>/g', replaceString: '', placement: [2], markdownOnly: true, minDepth: 1, maxDepth: null },
+        { id: 'show-latest', scriptName: '渲染最新状态', findRegex: '/<status>([\\s\\S]*?)<\\/status>/g', replaceString: '<div class="st">$1</div>', placement: [2], markdownOnly: true, minDepth: 0, maxDepth: 0 },
+      ],
+    },
+  }))
+  await saveBinding(paths, {
+    sessionId: 's-depth',
+    cardId,
+    cardName: '星港',
+    presetId: null,
+    personaId: null,
+    lorebookIds: [],
+    characterLorebookId: null,
+    interactiveCards: null,
+    greetingIndex: 0,
+    createdAt: new Date(0).toISOString(),
+  })
+
+  const oldReply = '第一轮台词\n<status>HP 80</status>'
+  const latestReply = '第二轮台词\n<status>HP 100</status>'
+  const storedEvents = [
+    { type: 'assistant/message', seq: 1, time: 0, data: { turn: 1, step: 1, message: createAssistantMessage({ content: [{ type: 'text', text: oldReply }] }) } },
+    { type: 'user/message', seq: 2, time: 0, data: { id: 'u1', content: [{ type: 'text', text: '继续' }] } },
+    { type: 'assistant/message', seq: 3, time: 0, data: { turn: 2, step: 1, message: createAssistantMessage({ content: [{ type: 'text', text: latestReply }] }) } },
+  ] as unknown as SessionEvent[]
+  const session = { id: 's-depth' as Session['id'], snapshotEvents: () => storedEvents }
+  const config = (TavernConfigSchema as (input: unknown) => TavernConfigRaw)({})
+  const ctx = { reflect: { provide: () => {} }, get: () => undefined, sessions: { get: () => session } } as unknown as Context
+  const service = new TavernService(ctx, state, { get: () => config } as unknown as TavernSettingsScope)
+
+  const batch = await service.renderOutputTexts({
+    sessionId: 's-depth',
+    items: [
+      { text: oldReply, messageId: 1 },
+      { text: latestReply, messageId: 3 },
+    ],
+  })
+  expect(batch.items).toHaveLength(2)
+  // 旧楼层（depth=2）：命中 hide-old，移除状态标签且不生成卡面 iframe。
+  expect(batch.items[0]?.ok).toBe(true)
+  if (batch.items[0]?.ok) {
+    expect(batch.items[0].value.text).toBe('第一轮台词')
+    expect(batch.items[0].value.htmls).toEqual([])
+  }
+  // 最新楼层（depth=0）：跳过 hide-old，命中 show-latest 生成状态栏卡面。
+  expect(batch.items[1]?.ok).toBe(true)
+  if (batch.items[1]?.ok) {
+    expect(batch.items[1].value.text).toBe('第二轮台词')
+    expect(batch.items[1].value.htmls).toEqual(['<div class="st">HP 100</div>'])
+  }
+
+  // 无 messageId 的开场白独立预览按 depth=0 处理，照常显示最新状态栏。
+  const preview = await service.renderOutputText({ sessionId: 's-depth', text: '开场\n<status>HP 100</status>' })
+  expect(preview.text).toBe('开场')
+  expect(preview.htmls).toEqual(['<div class="st">HP 100</div>'])
+})

@@ -474,3 +474,33 @@ describe('中断回复的宿主操作栏归属', () => {
     expect(view.root.findAllByProps({ 'aria-label': '回退到这一层（丢弃其后楼层）' })).toHaveLength(expected)
   })
 })
+
+describe('原生回退路径的 Markdown 归一化边界', () => {
+  it('Tavern 会话走原生回退时归一化安全 HTML，关闭互动卡或非 Tavern 会话保持原样', async () => {
+    const richNode = {
+      ...node,
+      data: {
+        ...node.data,
+        blocks: [
+          { kind: 'text', text: '<font color="gold"><b>第一行<br>第二行</b></font>' },
+          { kind: 'reasoning', text: '补充思考' },
+        ],
+      },
+    }
+    const sessionId = 'assistant-fallback-normalize'
+    const env = environment(sessionId)
+    await env.change({ ...defaultBinding(sessionId, 'card-a'), interactiveCards: true })
+    const useSessions = (select: (state: unknown) => unknown) => select({ byId: { [sessionId]: { projectionValues: { agentPreset: 'tavern' } } } })
+    let view!: ReactTestRenderer
+    await act(async () => { view = create(<TavernAssistantNode remote={env.remote} sessionId={sessionId} node={richNode} useSessions={useSessions as never} />) })
+    mounted.push(view)
+    expect(view.root.findByProps({ 'data-native': true }).props.children).toBe('**第一行**  \n**第二行**')
+
+    await env.change({ ...defaultBinding(sessionId, 'card-a'), interactiveCards: false })
+    expect(view.root.findByProps({ 'data-native': true }).props.children).toBe('<font color="gold"><b>第一行<br>第二行</b></font>')
+
+    const nonTavernSessions = (select: (state: unknown) => unknown) => select({ byId: { [sessionId]: { projectionValues: { agentPreset: 'coding' } } } })
+    await act(async () => { view.update(<TavernAssistantNode remote={env.remote} sessionId={sessionId} node={richNode} useSessions={nonTavernSessions as never} />) })
+    expect(view.root.findByProps({ 'data-native': true }).props.children).toBe('<font color="gold"><b>第一行<br>第二行</b></font>')
+  })
+})

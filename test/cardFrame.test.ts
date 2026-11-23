@@ -504,6 +504,83 @@ it('忽略 fixed/display:none/空矩形节点，并在超过 400 个非视觉或
   runInContext('window.__dshTavernBridgeCleanup()',context)
 })
 
+/** Web 字体延迟加载可能改变文本换行与卡片总高；fonts.ready 与 loadingdone 均应触发重测，清理时退订且不再上报。 */
+it('Web 字体加载完成触发高度重测，并在清理时退订 loadingdone 监听', async () => {
+  const callbacks=new Map<string,()=>void>(),fontListeners=new Map<string,()=>void>()
+  const postMessage=vi.fn(),frames=animationFrames()
+  let height=180
+  const fontsReady=Promise.withResolvers<void>()
+  const removeFontListener=vi.fn((name:string)=>{ fontListeners.delete(name) })
+  const document={open:vi.fn(),write:vi.fn(),close:vi.fn(),currentScript:null,querySelector:()=>null,
+    readyState:'loading',addEventListener:(name:string,fn:()=>void)=>callbacks.set(name,fn),removeEventListener:vi.fn(),
+    documentElement:{clientHeight:height,clientWidth:640},
+    body:{get offsetHeight(){return height},get scrollHeight(){return height},querySelectorAll:()=>[]},
+    fonts:{ready:fontsReady.promise,addEventListener:(name:string,fn:()=>void)=>fontListeners.set(name,fn),removeEventListener:removeFontListener}}
+  const window={addEventListener:(name:string,fn:()=>void)=>callbacks.set(name,fn),removeEventListener:vi.fn(),
+    requestAnimationFrame:frames.requestAnimationFrame,cancelAnimationFrame:frames.cancelAnimationFrame}
+  const context=createContext({crypto:webcrypto,window,document,parent:{postMessage},TextEncoder,
+    getComputedStyle:()=>({}),clearTimeout:vi.fn(),setTimeout:vi.fn()})
+  runInContext(tavernCardBridgeScript({greetings:[],greetingIndex:0}).replace(/^<script[^>]*>/,'').replace(/<\/script>$/,''),context)
+  const resizes=()=>postMessage.mock.calls.map(([m])=>m).filter(m=>m.action==='resize').map(m=>m.height)
+  callbacks.get('DOMContentLoaded')?.();frames.flush()
+  expect(resizes()).toEqual([180])
+
+  // 字体异步加载导致卡片增高，loadingdone 立即重测。
+  height=240
+  fontListeners.get('loadingdone')?.();frames.flush()
+  expect(resizes()).toEqual([180,240])
+
+  // fonts.ready 兑现再次触发重测。
+  height=272
+  fontsReady.resolve()
+  await Promise.resolve();await Promise.resolve()
+  frames.flush()
+  expect(resizes()).toEqual([180,240,272])
+
+  runInContext('window.__dshTavernBridgeCleanup()',context)
+  expect(removeFontListener).toHaveBeenCalledWith('loadingdone', expect.any(Function))
+})
+
+/** 含可见子节点的 100vh 卡片在收起时，即使视口仍停留在旧展开高度，也应立即按实际子节点回缩。 */
+it('body 设为 min-height: 100vh 时按真实子节点测量高度，收起无需等待视口先缩小', () => {
+  const callbacks=new Map<string,()=>void>(),postMessage=vi.fn(),frames=animationFrames()
+  let mutation:()=>void=()=>{}
+  class MutationObserver {constructor(cb:()=>void){mutation=cb}observe=vi.fn();disconnect=vi.fn()}
+  let clientHeight=280,panelBottom=180
+  const panel={tagName:'DIV',parentElement:null,style:{display:'block',marginBottom:'0px'},getBoundingClientRect:()=>({bottom:panelBottom,width:600,height:panelBottom})}
+  const root={get clientHeight(){return clientHeight},clientWidth:640}
+  const body={
+    get offsetHeight(){return Math.max(panelBottom+20,clientHeight)},
+    get scrollHeight(){return Math.max(panelBottom+20,clientHeight)},
+    getBoundingClientRect:()=>({bottom:Math.max(panelBottom+20,clientHeight),width:624,height:Math.max(panelBottom+20,clientHeight)}),
+    querySelectorAll:()=>[panel],
+  }
+  const document={open:vi.fn(),write:vi.fn(),close:vi.fn(),currentScript:null,querySelector:()=>null,
+    readyState:'loading',addEventListener:(name:string,fn:()=>void)=>callbacks.set(name,fn),removeEventListener:vi.fn(),
+    documentElement:root,body}
+  const window={addEventListener:(name:string,fn:()=>void)=>callbacks.set(name,fn),removeEventListener:vi.fn(),
+    requestAnimationFrame:frames.requestAnimationFrame,cancelAnimationFrame:frames.cancelAnimationFrame}
+  const context=createContext({crypto:webcrypto,window,document,parent:{postMessage},MutationObserver,TextEncoder,
+    getComputedStyle:(node:unknown)=>node===body?{minHeight:`${clientHeight}px`,paddingBottom:'12px',marginBottom:'8px'}:(node as {style?:unknown})?.style??{},
+    clearTimeout:vi.fn(),setTimeout:vi.fn()})
+  runInContext(tavernCardBridgeScript({greetings:[],greetingIndex:0}).replace(/^<script[^>]*>/,'').replace(/<\/script>$/,''),context)
+  const resizes=()=>postMessage.mock.calls.map(([m])=>m).filter(m=>m.action==='resize').map(m=>m.height)
+
+  // 首次渲染：clientHeight=280 但子节点只有 180 + pad(12) + margin(8) = 200。
+  callbacks.get('DOMContentLoaded')?.();frames.flush()
+  expect(resizes()).toEqual([200])
+
+  // 展开面板到 520，宿主随后拉高视口到 540。
+  panelBottom=520;mutation();frames.flush()
+  clientHeight=540
+  expect(resizes()).toEqual([200,540])
+
+  // 面板收起到 120，而宿主 iframe 视口仍停留在 540：应立即回缩到 140 而非卡死在 540。
+  panelBottom=120;mutation();frames.flush()
+  expect(resizes()).toEqual([200,540,140])
+  runInContext('window.__dshTavernBridgeCleanup()',context)
+})
+
 /** 长历史卡面内嵌快照：共享对象只序列化一次，默认页集合省略后在卡面代码运行前逐字段还原。 */
 describe('卡面内嵌快照', () => {
   const page = (message: string, data: Record<string, unknown>) => ({ message, data, extra: {} })

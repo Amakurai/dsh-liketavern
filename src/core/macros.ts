@@ -617,7 +617,7 @@ export function expandMacros(
   }
 }
 
-const IDENTITY_MACRO_RE = /\{\{\s*(char|charname|user|username)\s*\}\}/gi
+const IDENTITY_MACRO_RE = /\{\{\s*(char|charname|user|username|group|groupnotmuted|notchar)\s*\}\}/gi
 
 /**
  * 只展开身份宏。用于开场白展示、世界书扫描、入模历史——这些地方不该跑 setvar/时钟。
@@ -628,7 +628,7 @@ export function expandIdentityMacros(text: string, ctx: Pick<MacroContext, 'char
   if (!legacy.includes('{{')) return legacy
   return legacy.replace(IDENTITY_MACRO_RE, (_raw, name: string) => {
     const k = name.toLowerCase()
-    return k === 'user' || k === 'username' ? ctx.user : ctx.char
+    return k === 'user' || k === 'username' || k === 'notchar' ? ctx.user : ctx.char
   })
 }
 

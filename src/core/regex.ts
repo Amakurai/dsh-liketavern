@@ -38,6 +38,15 @@ export type { MacroContext }
 export interface RegexFilter {
   scope: RegexScope
   timing: RegexTiming
+  /** 可选消息深度（0 = 最新真实消息）；仅在提供时按规则 minDepth/maxDepth 过滤。 */
+  depth?: number
+}
+
+function matchesRegexDepth(rule: RegexRule, depth: number | undefined): boolean {
+  if (depth === undefined) return true
+  if (rule.minDepth !== null && rule.minDepth >= 0 && depth < rule.minDepth) return false
+  if (rule.maxDepth !== null && rule.maxDepth >= 0 && depth > rule.maxDepth) return false
+  return true
 }
 
 export interface RegexApplyResult {
@@ -463,6 +472,7 @@ export function applyRegexRules(
     if (!rule.scopes.includes(filter.scope) || !rule.timing.includes(filter.timing)) continue
     // output 展示面只有 AI 楼层；限定用户楼层的显示规则（ST USER_INPUT + markdownOnly）在此不生效。
     if (filter.scope === 'output' && rule.roles?.length && !rule.roles.includes('assistant')) continue
+    if (!matchesRegexDepth(rule, filter.depth)) continue
     try {
       const re = compile(rule, macroCtx)
       let next: string
@@ -550,7 +560,19 @@ export function hasApplicableOrMalformedRegex(rules: readonly RegexRule[], filte
     if (!rule.enabled) continue
     if (!rule.scopes.includes(filter.scope) || !rule.timing.includes(filter.timing)) continue
     if (filter.scope === 'output' && rule.roles?.length && !rule.roles.includes('assistant')) continue
+    if (!matchesRegexDepth(rule, filter.depth)) continue
     return true
+  }
+  return false
+}
+
+/** 规则集合中是否存在依赖消息深度（minDepth > 0 或 maxDepth >= 0）的启用的展示规则。 */
+export function hasDepthScopedRegex(rules: readonly RegexRule[], filter: Omit<RegexFilter, 'depth'>): boolean {
+  for (const rule of rules) {
+    if (!isWellFormedRule(rule) || !rule.enabled) continue
+    if (!rule.scopes.includes(filter.scope) || !rule.timing.includes(filter.timing)) continue
+    if (filter.scope === 'output' && rule.roles?.length && !rule.roles.includes('assistant')) continue
+    if ((rule.minDepth !== null && rule.minDepth > 0) || (rule.maxDepth !== null && rule.maxDepth >= 0)) return true
   }
   return false
 }
@@ -574,6 +596,7 @@ export function applyRegexRulesBatch(
     if (!rule.enabled) continue
     if (!rule.scopes.includes(filter.scope) || !rule.timing.includes(filter.timing)) continue
     if (filter.scope === 'output' && rule.roles?.length && !rule.roles.includes('assistant')) continue
+    if (!matchesRegexDepth(rule, filter.depth)) continue
     const item = prepareRegexRule(rule, macroCtx)
     if (item.error !== undefined) errors.push({ ruleId: rule.id, message: item.error })
     else prepared.push(item)
@@ -915,7 +938,7 @@ export function parseImportedRegexRules(raw: unknown): RegexRule[] {
 }
 
 function stripLeadingHtmlQuote(before: string): string {
-  return before.replace(/(?:^|\r?\n)[ \t]*>(?:[ \t]*>)*[ \t]*$/, '')
+  return before.replace(/(?:(?:^|\r?\n)[ \t]*>(?:[ \t]*>)*[ \t]*)+$/, '')
 }
 
 /**

@@ -1209,6 +1209,51 @@ it('<summary> 未闭合但以空行分隔正文的纯文本 details 走原生折
   await act(async()=>view!.update(<SpeechBubble remote={fallbackRpc} sessionId="unclosed-summary-fallback" cardId="card" name="角色" rawText={noBlank}/>))
   expect(view!.root.findAllByProps({className:'dsh-tavern-fold'})).toHaveLength(0)
   expect(view!.root.findAllByType('iframe')).toHaveLength(1)
+
+  // 无空行但紧跟 Markdown 标题/代码围栏的未闭合 <summary> 走原生折叠；相邻无效折叠块各自隔离，不拖累有效折叠。
+  const mixed=[
+    '<details>',
+    '<summary>无空行但紧跟标题',
+    '### 中央大陆',
+    '1. 鲁迪乌斯',
+    '</details>',
+    '<details>',
+    '<summary>无空行纯文本',
+    '普通正文',
+    '</details>',
+  ].join('\n')
+  const mixedRpc={...frameLeaseRpc,renderOutputText:async()=>({ok:true as const,value:{...presentRenderedOutput(mixed,true),
+    parts:splitTemplateDisplay(mixed),interactiveCards:true,whitelist:[],greetings:[],greetingIndex:0,canSwipeGreeting:false}})} as unknown as TavernRemote
+  await act(async()=>view!.update(<SpeechBubble remote={mixedRpc} sessionId="unclosed-summary-mixed" cardId="card" name="角色" rawText={mixed}/>))
+  const mixedFolds=view!.root.findAllByProps({className:'dsh-tavern-fold'})
+  expect(mixedFolds).toHaveLength(1)
+  expect(mixedFolds[0]!.findByType('summary').children).toEqual(['无空行但紧跟标题'])
+  expect(mixedFolds[0]!.findByType(MarkdownText).props.text).toBe('### 中央大陆\n1. 鲁迪乌斯')
+  const mixedFrames=view!.root.findAllByType('iframe')
+  expect(mixedFrames).toHaveLength(1)
+  const frameSrcDoc=mixedFrames[0]!.props.srcDoc as string
+  const frameBody=frameSrcDoc.slice(frameSrcDoc.indexOf('<body>'))
+  expect(frameBody).toContain('无空行纯文本')
+  expect(frameBody).not.toContain('无空行但紧跟标题')
+
+  // 宿主 DOM <style> 跨正文与 #31 纯折叠块共存时，无关样式不把折叠块拽进 iframe。
+  const withHostCss=[
+    '<style>.mes_text { font-family: serif; }</style>',
+    '欢迎来到六面世界',
+    '<details>',
+    '<summary>点击查看出生地<summary>',
+    '### 中央大陆',
+    '1. 鲁迪乌斯',
+    '</details>',
+  ].join('\n')
+  const hostCssRpc={...frameLeaseRpc,renderOutputText:async()=>({ok:true as const,value:{...presentRenderedOutput(withHostCss,true),
+    parts:splitTemplateDisplay(withHostCss),interactiveCards:true,whitelist:[],greetings:[],greetingIndex:0,canSwipeGreeting:false}})} as unknown as TavernRemote
+  await act(async()=>view!.update(<SpeechBubble remote={hostCssRpc} sessionId="unclosed-summary-host-css" cardId="card" name="角色" rawText={withHostCss}/>))
+  expect(view!.root.findAllByType('iframe')).toHaveLength(0)
+  const hostCssFolds=view!.root.findAllByProps({className:'dsh-tavern-fold'})
+  expect(hostCssFolds).toHaveLength(1)
+  expect(hostCssFolds[0]!.findByType('summary').children).toEqual(['点击查看出生地'])
+  expect(hostCssFolds[0]!.findByType(MarkdownText).props.text).toBe('### 中央大陆\n1. 鲁迪乌斯')
 })
 
 it('Web GUI 深浅色与 MutationObserver 变更实时向沙箱发送 setColorScheme，不重建 srcDoc',async()=>{

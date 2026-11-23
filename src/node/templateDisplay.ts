@@ -142,12 +142,12 @@ export function collectDisplayRegexDiagnostics(errors: RegexApplyResult['errors'
 }
 
 /** 已提交片段的展示正则仍在 worker 内运行；逐片段保留位置并返回可读的失败原因。 */
-export function presentTemplateDisplayResult(parts:TemplateDisplayPart[],rules:RegexRule[],macroCtx:MacroContext):{parts:TemplateDisplayPart[];regexDiagnostics?:DisplayRegexDiagnostics} {
+export function presentTemplateDisplayResult(parts:TemplateDisplayPart[],rules:RegexRule[],macroCtx:MacroContext,depth?:number):{parts:TemplateDisplayPart[];regexDiagnostics?:DisplayRegexDiagnostics} {
   const output:TemplateDisplayPart[]=[]
   const diagnostics = displayRegexDiagnosticCollector(rules)
   // 旧缓存或外部输入可能把开闭标签分在不同 part；必须先整体清理，再逐片跑展示正则。
   const sanitized=sanitizeTemplateDisplayParts(parts)
-  const batch=applyRegexRulesBatch(sanitized.map(part=>part.text),rules,{scope:'output',timing:'render'},macroCtx)
+  const batch=applyRegexRulesBatch(sanitized.map(part=>part.text),rules,{scope:'output',timing:'render',...(depth!==undefined?{depth}:{})},macroCtx)
   diagnostics.add(batch.errors)
   const rendered=sanitized.map((part,index)=>({...part,text:batch.texts[index]!}))
   // 展示正则可能在不同既有片段中生成开闭标签；整体清理后才能安全拆分新生成的 HTML。

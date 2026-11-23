@@ -873,4 +873,42 @@ describe('审查修复回归：正则宏值', () => {
     expect(res.errors).toHaveLength(1)
     expect(res.errors[0]?.ruleId).toBe('bad-re')
   })
+
+  it('output/render 单文本与批量展示正则在提供 depth 时遵守 minDepth/maxDepth，未提供时保持兼容', () => {
+    const hideOld = makeRule({
+      id: 'hide-old',
+      find: '/<status>[\\s\\S]*?<\\/status>/g',
+      replace: '',
+      scopes: ['output'],
+      timing: ['render'],
+      minDepth: 1,
+      maxDepth: null,
+    })
+    const showLatest = makeRule({
+      id: 'show-latest',
+      find: '/<status>([\\s\\S]*?)<\\/status>/g',
+      replace: '<div class="st">$1</div>',
+      scopes: ['output'],
+      timing: ['render'],
+      minDepth: 0,
+      maxDepth: 0,
+    })
+    const input = '正文\n<status>HP 100</status>'
+    // depth=0（最新楼层）：跳过 hide-old，命中 show-latest。
+    expect(applyRegexRules(input, [hideOld, showLatest], { scope: 'output', timing: 'render', depth: 0 }, CTX)).toEqual({
+      text: '正文\n<div class="st">HP 100</div>',
+      applied: ['show-latest'],
+      errors: [],
+    })
+    // depth=2（历史楼层）：命中 hide-old，跳过 show-latest。
+    expect(applyRegexRules(input, [hideOld, showLatest], { scope: 'output', timing: 'render', depth: 2 }, CTX)).toEqual({
+      text: '正文\n',
+      applied: ['hide-old'],
+      errors: [],
+    })
+    // 负数 minDepth/maxDepth 按不限处理；不传 depth 时维持原有无过滤语义。
+    const unlimited = makeRule({ id: 'neg', find: 'cat', replace: 'dog', scopes: ['output'], timing: ['render'], minDepth: -1, maxDepth: -1 })
+    expect(applyRegexRules('cat', [unlimited], { scope: 'output', timing: 'render', depth: 5 }, CTX).text).toBe('dog')
+    expect(applyRegexRules(input, [showLatest], { scope: 'output', timing: 'render' }, CTX).text).toBe('正文\n<div class="st">HP 100</div>')
+  })
 })

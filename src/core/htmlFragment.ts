@@ -1,5 +1,6 @@
 /** 识别没有文档外壳的卡面片段：闭合容器与相邻样式/脚本共用沙箱，保留原字节并跳过代码示例。 */
 import { markdownCodeScanner } from './markdownCode.js'
+import { isPlainDetailsStructure } from './plainDetailsSyntax.js'
 
 export const HTML_CARD_CONTAINERS: ReadonlySet<string> = new Set([
   'div', 'section', 'article', 'main', 'aside', 'header', 'footer', 'nav',
@@ -16,7 +17,6 @@ export const LENIENT_OPAQUE = new Set(['code', 'pre'])
 const VOID_ELEMENTS = new Set(['area','base','br','col','embed','hr','img','input','link','meta','param','source','track','wbr'])
 const HEAD_PRELUDE_ELEMENTS = new Set(['link', 'meta'])
 const PLAIN_DETAILS_OPEN_RE = /^<details(?:\s+open(?:\s*=\s*(?:""|''|"open"|'open'|open))?)?\s*>$/i
-const PLAIN_DETAILS_INNER_SIMPLE_RE = /^<(?:\/?summary|br\s*\/?|hr\s*\/?)\s*>$/i
 const STYLED_HTML_TAG_NAMES = new Set([
   ...HTML_CARD_CONTAINERS,
   'style', 'script', 'template', 'noscript', 'iframe', 'object', 'embed',
@@ -128,45 +128,43 @@ function isHtmlCardCenter(text: string, openEnd: number, rawOpen: string): boole
   return false
 }
 
-/** 轻量前瞻：判断从 `openEnd` 起的 `<details>` 是否为不依赖样式/脚本的纯文本折叠块候选。 */
-function isPlainDetailsCandidate(text: string, openEnd: number, rawOpen: string, scanner: ReturnType<typeof markdownCodeScanner>): boolean {
+/** 前瞻单块 `<details>` 边界，并与 `plainDetails` 同口径校验是否可安全走原生折叠。 */
+function isPlainDetailsCandidate(text: string, openStart: number, openEnd: number, rawOpen: string): boolean {
   if (!PLAIN_DETAILS_OPEN_RE.test(rawOpen)) return false
-  const tokens = /<!--[\s\S]*?(?:-->|$)|<\/?([A-Za-z][A-Za-z0-9:-]*)(?=[\s/>])(?:[^"'<>]|"[^"]*"|'[^']*')*>|`+|~{3,}/gi
+  const tokens = new RegExp(HTML_TAGS.source, HTML_TAGS.flags)
   tokens.lastIndex = openEnd
   let depth = 1
   for (let token = tokens.exec(text); token; token = tokens.exec(text)) {
-    const raw = token[0], at = token.index
+    const raw = token[0]
     if (raw.startsWith('<!--')) {
       if (!raw.endsWith('-->')) return false
       continue
     }
-    if (raw[0] === '`' || raw[0] === '~') {
-      const fence = scanner.fence(at)
-      const end = fence ? (fence.closed ? fence.end : null) : scanner.inlineEnd(at)
-      if (end !== null && !text.slice(at, end).toLowerCase().includes('</details')) {
-        tokens.lastIndex = end
+    const nested = token[1]?.toLowerCase()
+    const closing = raw.startsWith('</')
+    if (!nested) continue
+    if (!closing && (RAW_TEXT.has(nested) || INERT_CONTENT.has(nested) || nested === 'template')) {
+      const opaqueEnd = findHtmlOpaqueEnd(text, tokens.lastIndex, nested)
+      if (opaqueEnd === null) {
+        if (LENIENT_OPAQUE.has(nested)) continue
+        return false
       }
+      tokens.lastIndex = opaqueEnd
       continue
     }
-    const nested = token[1]!.toLowerCase(), closing = raw.startsWith('</')
     if (nested === 'details') {
       if (closing) {
         if (--depth === 0) {
-          // 若紧跟 <style>/<script>，仍留在同一 HTML 片段里共享样式与脚本。
-          const tail = text.slice(tokens.lastIndex).trimStart()
-          return !/^<(?:style|script)(?=[\s/>])/i.test(tail)
+          const closeEnd = tokens.lastIndex
+          // 若紧跟（可跨 HTML 注释）<style>/<script>，仍留在同一 HTML 片段里共享样式与脚本。
+          const tail = text.slice(closeEnd).replace(/^(?:\s|<!--[\s\S]*?-->)*/, '')
+          if (/^<(?:style|script)(?=[\s/>])/i.test(tail)) return false
+          return isPlainDetailsStructure(text.slice(openStart, closeEnd))
         }
-      } else {
-        if (!PLAIN_DETAILS_OPEN_RE.test(raw)) return false
+      } else if (!isTagSelfClosing(raw)) {
         depth++
       }
-      continue
     }
-    if (nested === 'summary' || nested === 'br' || nested === 'hr') {
-      if (!PLAIN_DETAILS_INNER_SIMPLE_RE.test(raw)) return false
-      continue
-    }
-    if (STYLED_HTML_TAG_NAMES.has(nested)) return false
   }
   return false
 }
@@ -230,7 +228,7 @@ export function findHtmlDocument(text:string,code?:ReturnType<typeof markdownCod
   if(maxStart<0||!text.includes('<')||!HTML_DOCUMENT_CANDIDATE.test(text))return null
   const scanner=code??markdownCodeScanner(text)
   const tokens=/<!--[\s\S]*?(?:-->|$)|<!doctype\s+html\b[^>]*>|<\/?([A-Za-z][A-Za-z0-9:-]*)(?=[\s/>])(?:[^"'<>]|"[^"]*"|'[^']*')*>|`+|~{3,}/gi
-  let start=-1,root=''
+  let start=-1,root='',sawHtml=false
   for(let token=tokens.exec(text);token;token=tokens.exec(text)) {
     const raw=token[0],at=token.index
     if(start<0&&at>maxStart)return null
@@ -247,6 +245,9 @@ export function findHtmlDocument(text:string,code?:ReturnType<typeof markdownCod
     const tag=token[1]?.toLowerCase(),closing=raw.startsWith('</')
     if(start<0&&(/^<!doctype/i.test(raw)||!closing&&(tag==='html'||tag==='body'))) {
       start=at;root=tag==='body'?'body':'html'
+      if(tag==='html')sawHtml=true
+    } else if(start>=0&&!closing&&tag==='html') {
+      sawHtml=true
     }
     if(tag&&!closing&&(RAW_TEXT.has(tag)||INERT_CONTENT.has(tag)||tag==='template')) {
       const end=findHtmlOpaqueEnd(text,tokens.lastIndex,tag)
@@ -256,10 +257,17 @@ export function findHtmlDocument(text:string,code?:ReturnType<typeof markdownCod
       // 旧卡偶尔只写 body 起点却仍以 html 收尾；把紧跟的外壳闭标签一并保留。
       const tail=root==='body'?/^\s*<\/html\s*>/i.exec(text.slice(tokens.lastIndex)):null
       return {start,end:tokens.lastIndex+(tail?.[0].length??0)}
-    } else if(start>=0&&root==='html'&&closing&&tag==='body'&&/^\s*$/.test(text.slice(tokens.lastIndex))) {
-      // HTML 的 </html> 可合法省略；只在 </body> 已完整闭合且后面全为空白时接受，
-      // 仍拒绝双闭标签都缺失的流式半卡，也不吞掉文档后的普通台词。
-      return {start,end:tokens.lastIndex}
+    } else if(start>=0&&root==='html'&&closing&&tag==='body') {
+      if(!sawHtml) {
+        // <!DOCTYPE html> 后直接写 <head>/<body> 而省略 <html> 时，</body> 即构成完整文档边界。
+        const tail=/^\s*<\/html\s*>/i.exec(text.slice(tokens.lastIndex))
+        return {start,end:tokens.lastIndex+(tail?.[0].length??0)}
+      }
+      if(/^\s*$/.test(text.slice(tokens.lastIndex))) {
+        // HTML 的 </html> 可合法省略；只在 </body> 已完整闭合且后面全为空白时接受，
+        // 仍拒绝双闭标签都缺失的流式半卡，也不吞掉文档后的普通台词。
+        return {start,end:tokens.lastIndex}
+      }
     }
   }
   return null
@@ -297,7 +305,18 @@ export function findHtmlFragment(text: string, code?: ReturnType<typeof markdown
       else if (!depth && inertEnd >= 0) inertEnd = tokens.lastIndex
       continue
     }
-    if (/^<!doctype/i.test(raw)) break
+    if (/^<!doctype/i.test(raw)) {
+      if (depth || end >= 0) break
+      const doctypeLine = text.slice(text.lastIndexOf('\n', at - 1) + 1, at)
+      if (hasCodeIndent(doctypeLine)) continue
+      // 紧跟 html/body/head 属于完整文档外壳，留给 findHtmlDocument 处理；
+      // 仅写 <!DOCTYPE html> 后直接跟 <style>/<div> 的片段卡则作为前导并入当前卡面。
+      const afterDoctype = text.slice(tokens.lastIndex).replace(/^(?:\s|<!--[\s\S]*?-->)*/, '')
+      if (/^<(?:html|body|head)(?=[\s/>])/i.test(afterDoctype)) break
+      if (inertStart < 0) inertStart = at
+      inertEnd = tokens.lastIndex
+      continue
+    }
     const tag = token[1]!.toLowerCase(), closing = raw.startsWith('</')
     const line = text.slice(text.lastIndexOf('\n', at - 1) + 1, at)
     const indented = hasCodeIndent(line)
@@ -362,13 +381,13 @@ export function findHtmlFragment(text: string, code?: ReturnType<typeof markdown
       // 独立的纯文本/Markdown <details> 与相邻非 <details> 卡片拆分，避免把原生折叠块拽进 iframe。
       if (end >= 0) {
         if (onlyPlainDetails) {
-          if (tag !== 'details' || !isPlainDetailsCandidate(text, tokens.lastIndex, raw, scanner)) break
-        } else if (!hasPrelude && tag === 'details' && isPlainDetailsCandidate(text, tokens.lastIndex, raw, scanner)) {
+          if (tag !== 'details' || !isPlainDetailsCandidate(text, at, tokens.lastIndex, raw)) break
+        } else if (!hasPrelude && tag === 'details' && isPlainDetailsCandidate(text, at, tokens.lastIndex, raw)) {
           break
         }
       } else {
         onlyPlainDetails = inertStart < 0 && !hasPrelude && tag === 'details'
-          && isPlainDetailsCandidate(text, tokens.lastIndex, raw, scanner)
+          && isPlainDetailsCandidate(text, at, tokens.lastIndex, raw)
       }
       root = tag; depth = 1
       if (start < 0) {

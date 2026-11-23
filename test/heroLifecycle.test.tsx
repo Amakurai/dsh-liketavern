@@ -106,6 +106,40 @@ it('开场白预览展开纯 <details> 并归一化安全 HTML，不误报互动
   expect(view!.root.findAllByType('iframe')).toHaveLength(0)
 })
 
+it('开场白预览在会话未显式覆写时尊重全局关闭交互卡', async () => {
+  const f = fixture()
+  f.renderOutputText.mockResolvedValueOnce(ok({
+    text: '<font color="gold">原样保留</font>',
+    htmls: [],
+    interactiveCards: false,
+    parts: [
+      { kind: 'markdown', text: '<font color="gold">原样保留</font>' },
+    ],
+  }))
+  await mount(f.node('global-off')); await pick()
+  const globalOff = JSON.stringify(view!.toJSON())
+  expect(globalOff).toContain('<font color=\\"gold\\">原样保留</font>')
+  expect(globalOff).not.toMatch(/互动卡面|interactive card/)
+})
+
+it('开场白预览中带折叠标题的 HTML 片段仍提示互动卡面，不按纯 details 展开', async () => {
+  const f = fixture()
+  f.renderOutputText.mockResolvedValueOnce(ok({
+    text: '正文',
+    htmls: ['<details><summary>折叠块</summary>内容</details>'],
+    interactiveCards: true,
+    parts: [
+      { kind: 'markdown', text: '正文' },
+      { kind: 'html', text: '<details><summary>折叠块</summary>内容</details>', title: '卡片标题' },
+    ],
+  }))
+  await mount(f.node('titled-html')); await pick()
+  const titled = JSON.stringify(view!.toJSON())
+  expect(titled).toContain('正文')
+  expect(titled).not.toContain('折叠块')
+  expect(titled).toMatch(/互动卡面|interactive card/)
+})
+
 it('宿主 blank 滞后但日志已开始时不显示预览、不清绑定，并刷新列表', async () => {
   const f = fixture(true)
   await mount(f.node('existing'))

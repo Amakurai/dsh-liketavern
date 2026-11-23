@@ -601,9 +601,45 @@ describe('parsePlainDetailsBlocks', () => {
     '<details><summary>闭合摘要\n\n记得用 `</summary>` 闭合</summary>\n正文</details>',
     '<details><summary>攻击标题\n\n```\n</details>\n<script>window.pwned=1</script>\n<details><summary>二</summary>\n```\n</details>',
     '<details><summary>攻击标题\n```\n</details>\n<script>window.pwned=1</script>\n<details><summary>二</summary>\n```\n</details>',
+    '<details><summary>第一行\n<br/>第二行</summary>\n正文</details>',
+    '<details><summary>标题\n<br class="x"/>1. 条目\n</details>',
+    '<details><summary>标题\n<hr style="border:none"/>正文\n</details>',
   ])('含样式/脚本/属性/HTML 或混杂顶层内容时严格返回 null：%s', html => {
     expect(parsePlainDetailsBlocks(html)).toBeNull()
     expect(isPlainDetailsHtml(html)).toBe(false)
+  })
+
+  it('未闭合 <summary> 后紧跟行首 <br>/<hr> 正文可切分，且 <br> 遇换行不叠成双换行', () => {
+    expect(parsePlainDetailsBlocks('<details>\n<summary>可选出生地\n<br/>1. 鲁迪乌斯\n2. 希露菲\n</details>')).toEqual([{
+      open: false,
+      summary: '可选出生地',
+      children: [{ kind: 'markdown', text: '1. 鲁迪乌斯\n2. 希露菲' }],
+    }])
+    expect(parsePlainDetailsBlocks('<details>\n<summary>章节说明\n<hr/>这里是正文\n</details>')).toEqual([{
+      open: false,
+      summary: '章节说明',
+      children: [{ kind: 'markdown', text: '---\n\n这里是正文' }],
+    }])
+    expect(parsePlainDetailsBlocks('<details><summary>价格 100&yen; &middot; 25&deg;C &harr; &infin;</summary>\nHP: 100<br/>\nMP: 50\n</details>')).toEqual([{
+      open: false,
+      summary: '价格 100¥ · 25°C ↔ ∞',
+      children: [{ kind: 'markdown', text: 'HP: 100\nMP: 50' }],
+    }])
+    expect(parsePlainDetailsBlocks('<details><summary>契约</summary>\n> 第一行<br/>\n> 第二行\n</details>')).toEqual([{
+      open: false,
+      summary: '契约',
+      children: [{ kind: 'markdown', text: '> 第一行\n> 第二行' }],
+    }])
+    expect(parsePlainDetailsBlocks('<details><summary>日记</summary>\n> 第一行<br><br>\n> 第二行\n</details>')).toEqual([{
+      open: false,
+      summary: '日记',
+      children: [{ kind: 'markdown', text: '> 第一行\n>\n> 第二行' }],
+    }])
+    expect(parsePlainDetailsBlocks('<details><summary>段落</summary>\n第一段\n<br/>\n第二段\n</details>')).toEqual([{
+      open: false,
+      summary: '段落',
+      children: [{ kind: 'markdown', text: '第一段\n\n第二段' }],
+    }])
   })
 })
 

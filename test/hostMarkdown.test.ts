@@ -206,4 +206,116 @@ describe('normalizeHostMarkdown', () => {
       .toBe('> ~~旧记录第一行~~\n> ~~旧记录第二行~~')
     expect(normalizeHostMarkdown('<b>- 列表一\n- 列表二</b>')).toBe('<b>- 列表一\n- 列表二</b>')
   })
+
+  it('剥离行内未闭合/孤立纯样式标签，同时保留不安全标签及其匹配闭标签', () => {
+    expect(normalizeHostMarkdown('<font color="#ff6699">「早上好！」')).toBe('「早上好！」')
+    expect(normalizeHostMarkdown('「早上好！」</font>')).toBe('「早上好！」')
+    expect(normalizeHostMarkdown('<span style="color:#88ccff">（未闭合内心独白）')).toBe('（未闭合内心独白）')
+    expect(normalizeHostMarkdown('前缀</span>后缀')).toBe('前缀后缀')
+    expect(normalizeHostMarkdown('<small>附注')).toBe('附注')
+    expect(normalizeHostMarkdown('<span onclick="alert(1)"><span>内层</span>外层</span>'))
+      .toBe('<span onclick="alert(1)">内层外层</span>')
+    expect(normalizeHostMarkdown('<span onclick="alert(1)">未闭合危险')).toBe('<span onclick="alert(1)">未闭合危险')
+    expect(normalizeHostMarkdown('<span id="mvu-anchor">锚点</span>')).toBe('<span id="mvu-anchor">锚点</span>')
+  })
+
+  it('支持同行尾随/未闭合标题、行内/未闭合 <center> 与 <p>/<hr> 组合，不触发 Setext 误判也不吞围栏', () => {
+    // 同行标题后跟 <p>/<hr>/<br>/相邻标题/普通正文
+    expect(normalizeHostMarkdown('<h3>标题</h3><p>正文</p>')).toBe('### 标题\n\n正文')
+    expect(normalizeHostMarkdown('<h3>标题</h3><hr>')).toBe('### 标题\n\n---')
+    expect(normalizeHostMarkdown('<h3>标题</h3><br>正文')).toBe('### 标题\n\n正文')
+    expect(normalizeHostMarkdown('<h2>第一章</h2><h3>第一节</h3>')).toBe('## 第一章\n### 第一节')
+    expect(normalizeHostMarkdown('<h3>标题</h3>正文')).toBe('### 标题\n正文')
+    expect(normalizeHostMarkdown('<p><h3>包装标题</h3></p>')).toBe('### 包装标题')
+    expect(normalizeHostMarkdown('<h2>\n  多行标题\n</h2><p>后文</p>')).toBe('## 多行标题\n\n后文')
+
+    // 未闭合安全标题与空开标题不吞掉后续代码围栏
+    const unclosedHeading = '<h3>角色档案\n```json\n{"hp":100}\n```'
+    expect(md.render(unclosedHeading)).not.toContain('<pre><code class="language-json">')
+    const normHeading = normalizeHostMarkdown(unclosedHeading)
+    expect(normHeading).toBe('### 角色档案\n```json\n{"hp":100}\n```')
+    expect(md.render(normHeading)).toContain('<h3>角色档案</h3>')
+    expect(md.render(normHeading)).toContain('<pre><code class="language-json">')
+
+    const emptyUnclosedHeading = '<h3>\n```json\n{"hp":100}\n```'
+    expect(md.render(normalizeHostMarkdown(emptyUnclosedHeading))).toContain('<pre><code class="language-json">')
+    expect(normalizeHostMarkdown('<h2 onclick="x()">危险</h2>')).toBe('<h2 onclick="x()">危险</h2>')
+    expect(normalizeHostMarkdown('<h2 onclick="x()">未闭合危险')).toBe('<h2 onclick="x()">未闭合危险')
+
+    // 行内/未闭合/孤立无属性 <center>，保留带属性 <center>
+    expect(normalizeHostMarkdown('<center>标题</center><br>副标题')).toBe('标题  \n副标题')
+    expect(normalizeHostMarkdown('<center><h3>序章</h3></center><hr>')).toBe('### 序章\n\n---')
+    expect(normalizeHostMarkdown('<center>### 序章')).toBe('### 序章')
+    expect(normalizeHostMarkdown('### 序章</center>')).toBe('### 序章')
+    expect(normalizeHostMarkdown('<center style="color:red">保留样式</center>')).toBe('<center style="color:red">保留样式</center>')
+    expect(normalizeHostMarkdown('<center onclick="x()">保留事件</center>')).toBe('<center onclick="x()">保留事件</center>')
+
+    // 行首行内 <hr> 不把前一行变成 Setext 二级标题；不安全 <p onclick> 保留配对闭标签
+    const inlineHrAfterText = '第一章正文\n<hr>第二章正文'
+    const normHr = normalizeHostMarkdown(inlineHrAfterText)
+    expect(normHr).toBe('第一章正文\n\n---\n\n第二章正文')
+    expect(md.render(normHr)).not.toContain('<h2>')
+    expect(md.render(normHr)).toContain('<hr />')
+    expect(normalizeHostMarkdown('第一段\n<p>第二段</p>')).toBe('第一段\n\n第二段')
+    expect(normalizeHostMarkdown('<p onclick="x()">危险</p>')).toBe('<p onclick="x()">危险</p>')
+  })
+
+  it('处理未闭合/孤立 <blockquote>、脱离列表容器的安全 <li> 以及孤立闭合块标签，防止吞掉代码围栏', () => {
+    const unclosedQuote = '<blockquote>夜风很凉。\n```json\n{"hp":100}\n```'
+    expect(md.render(unclosedQuote)).not.toContain('<pre><code class="language-json">')
+    const normQuote = normalizeHostMarkdown(unclosedQuote)
+    expect(normQuote).toBe('> 夜风很凉。\n\n```json\n{"hp":100}\n```')
+    expect(md.render(normQuote)).toContain('<blockquote>\n<p>夜风很凉。</p>\n</blockquote>')
+    expect(md.render(normQuote)).toContain('<pre><code class="language-json">')
+
+    expect(normalizeHostMarkdown('前文\n<blockquote>\n台词一\n台词二\n\n后文')).toBe('前文\n> 台词一\n> 台词二\n\n后文')
+    expect(normalizeHostMarkdown('<blockquote>\n```json\n{"a":1}\n```')).toBe('```json\n{"a":1}\n```')
+    expect(normalizeHostMarkdown('</blockquote>\n```json\n{"a":1}\n```')).toBe('```json\n{"a":1}\n```')
+    expect(normalizeHostMarkdown('<blockquote onclick="x()">保留</blockquote>')).toBe('<blockquote onclick="x()">保留</blockquote>')
+
+    // 孤立 <li> 转为列表项，<ul>/<ol> 容器内的 <li> 保持不动
+    const bareLi = '<li>第一项</li><li>第二项</li>\n<li>未闭合条目\n```json\n{"ok":true}\n```'
+    const normLi = normalizeHostMarkdown(bareLi)
+    expect(normLi).toBe('- 第一项\n- 第二项\n- 未闭合条目\n```json\n{"ok":true}\n```')
+    expect(md.render(normLi)).toContain('<li>第一项</li>')
+    expect(md.render(normLi)).toContain('<pre><code class="language-json">')
+    expect(normalizeHostMarkdown('<ul>\n<li>保留在容器内</li>\n</ul>')).toBe('<ul>\n<li>保留在容器内</li>\n</ul>')
+    expect(normalizeHostMarkdown('<li onclick="x()">保留事件</li>')).toBe('<li onclick="x()">保留事件</li>')
+
+    // 孤立闭合块/格式标签不触发 CommonMark Type 6/7 吞掉围栏；成对标签与缩进代码保持不动
+    for (const orphan of ['</div>', '</details>', '</summary>', '</section>', '</b>']) {
+      const sample = `${orphan}\n\`\`\`json\n{"hp":100}\n\`\`\``
+      expect(md.render(sample)).not.toContain('<pre><code class="language-json">')
+      const out = normalizeHostMarkdown(sample)
+      expect(out).toBe('```json\n{"hp":100}\n```')
+      expect(md.render(out)).toContain('<pre><code class="language-json">')
+    }
+    expect(normalizeHostMarkdown('<div onclick="x()">\n内容\n</div>')).toBe('<div onclick="x()">\n内容\n</div>')
+    expect(normalizeHostMarkdown('代码：\n\n    </div>\n    正文')).toBe('代码：\n\n    </div>\n    正文')
+    expect(normalizeHostMarkdown('</script>\n正文')).toBe('</script>\n正文')
+  })
+
+  it('支持纯样式属性的 <b>/<i>/<s> 与对称嵌套 <i><b>...</b></i>，并在 CommonMark 下正确贴合渲染', () => {
+    expect(normalizeHostMarkdown('<b style="color:#ff6699">重点</b>与<em class="note">旁白</em>与<del style="opacity:.6">旧值</del>'))
+      .toBe('**重点**与*旁白*与~~旧值~~')
+    expect(normalizeHostMarkdown('<strong style="color:gold">第一行\n第二行</strong>'))
+      .toBe('**第一行**\n**第二行**')
+    expect(normalizeHostMarkdown('<b onclick="x()">危险</b>')).toBe('<b onclick="x()">危险</b>')
+    expect(normalizeHostMarkdown('<b id="anchor">锚点</b>')).toBe('<b id="anchor">锚点</b>')
+
+    // <i><b> 与 <b><i> 对称，且紧邻汉字/英文单词均按三连星内层字符贴合
+    expect(normalizeHostMarkdown('<i><b>加粗斜体</b></i>')).toBe('***加粗斜体***')
+    expect(normalizeHostMarkdown('中文<i><b>加粗斜体</b></i>中文')).toBe('中文***加粗斜体***中文')
+    expect(md.render(normalizeHostMarkdown('中文<i><b>加粗斜体</b></i>中文')))
+      .toContain('中文<em><strong>加粗斜体</strong></em>中文')
+    expect(normalizeHostMarkdown('foo<b><i>bar</i></b>baz')).toBe('foo***bar***baz')
+    expect(md.render(normalizeHostMarkdown('foo<b><i>bar</i></b>baz')))
+      .toContain('foo<em><strong>bar</strong></em>baz')
+    expect(normalizeHostMarkdown('「<i><b>不要走。</b></i>」')).toBe('「***不要走。***」')
+    expect(md.render(normalizeHostMarkdown('「<i><b>不要走。</b></i>」')))
+      .toContain('「<em><strong>不要走。</strong></em>」')
+    // 中文紧贴标点的三连星在纯 CommonMark 中无法闭合，保持保守不输出裸露 ***
+    expect(normalizeHostMarkdown('中文<i><b>「不要走。」</b></i>中文')).not.toContain('***')
+    expect(normalizeHostMarkdown('中文<b><i>「不要走。」</i></b>中文')).not.toContain('***')
+  })
 })

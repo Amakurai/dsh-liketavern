@@ -48,7 +48,7 @@ function GreetingPreview(props: { remote: TavernRemote; sessionId: string; text:
   if (preview.state.status === 'error') return <Err message={preview.state.message} />
   if (preview.state.status !== 'ready') return <Skeleton />
   const value = preview.state.value
-  const interactive = props.interactiveCards !== false
+  const interactive = props.interactiveCards ?? (value.interactiveCards !== false)
   const chunks: string[] = []
   let hasInteractiveHtml = false
   if (value.parts && value.parts.length > 0) {
@@ -57,7 +57,7 @@ function GreetingPreview(props: { remote: TavernRemote; sessionId: string; text:
         const shown = interactive ? normalizeHostMarkdown(part.text) : part.text
         if (shown.trim()) chunks.push(shown)
       } else {
-        const details = interactive ? parsePlainDetailsBlocks(part.text) : null
+        const details = interactive && part.title === undefined ? parsePlainDetailsBlocks(part.text) : null
         if (details) {
           const expanded = formatPlainDetailsText(details)
           if (expanded.trim()) chunks.push(expanded)

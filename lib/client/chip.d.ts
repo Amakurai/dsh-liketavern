@@ -9,6 +9,8 @@ export declare function HelperMvuAbandonAction(props: {
     remote: TavernRemote;
     sessionId: string;
     storyId: string;
+    disabled?: boolean;
+    onBusyChange?: (busy: boolean) => void;
     onChanged: () => void;
 }): import("react").JSX.Element;
 interface HeaderChipProps {

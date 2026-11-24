@@ -140,7 +140,9 @@ export function createTemplateGeneration(
       buffer=before
       // ST basic 在宿主组装时先处理；本地模拟显式执行整包 basic 后关闭该阶段。
       // 快照由沙箱保留，activewi 新增来源仍使用首次 basic 规则，不续期或重复注册。
-      sandbox.render('<% __prepareTemplateBasicRegex() %>')
+      // 直接调用冻结的宿主协议入口，避免经 EJS with (locals) 被模板 define 同名属性遮蔽；旧沙箱桩回退原调用。
+      if (typeof sandbox.prepareBasicRegex === 'function') sandbox.prepareBasicRegex()
+      else sandbox.render('<% __prepareTemplateBasicRegex() %>')
       const basicParts:TemplateRegexSource[][]=[]
       // 批次容量只控制一次跨沙箱调用的大小，不能成为完整可见历史的消息条数上限。
       for(let start=0;start<rawParts.length;start+=512) {
@@ -149,7 +151,8 @@ export function createTemplateGeneration(
           return {parts,meta:{role:item.message.role,worldinfo:item.worldinfo,depth:item.depth}}
         }),'basic-message'))
       }
-      sandbox.render('<% __clearTemplateBasicRegex() %>')
+      if (typeof sandbox.clearBasicRegex === 'function') sandbox.clearBasicRegex()
+      else sandbox.render('<% __clearTemplateBasicRegex() %>')
       generateData=generateData.map((message,index)=>({...message,content:basicParts[index]!.map(part=>part.text).join('')}))
       if(generateData.reduce((chars,message)=>chars+message.content.length,0)>maxChars) throw new Error('GENERATE 正则新增输出超过 1 MiB 额度，请缩减正则的扩张')
       for(let index=0;index<sequence.length;index++) {

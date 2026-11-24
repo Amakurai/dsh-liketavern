@@ -325,7 +325,9 @@ export declare class TavernState {
     saveHelperScriptLibrary(target: HelperScriptTarget, revision: string, input: unknown, beforeWrite?: () => void): Promise<HelperScriptAsset>;
     /** 沙箱只选择库类型，资产身份始终从绑定中派生；绑定锁覆盖校验到资产落盘。 */
     private helperScriptBinding;
-    getSessionHelperScripts(sessionId: string, storyId: string): Promise<HelperScriptContext>;
+    getSessionHelperScripts(sessionId: string, storyId: string, options?: {
+        waitForAdoption?: boolean;
+    }): Promise<HelperScriptContext>;
     commitSessionHelperScripts(sessionId: string, request: HelperScriptCommit, beforeWrite?: (binding: SessionBinding) => void): Promise<HelperScriptView>;
     getJournal(cardId: string, storyId?: string): Promise<string>;
     /** 面板保存核对实际读取的正文版本；检查、正文与索引共用剧情锁，内部明确覆盖仍可省略版本。 */

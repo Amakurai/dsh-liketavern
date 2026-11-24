@@ -15,6 +15,7 @@ import type { infer as Infer } from 'zod/mini'
 import { array, boolean, enum as enum_, int, literal, maxLength, maximum, minimum, minLength, nullable, number, object, optional, regex, string, union, unknown } from 'zod/mini'
 import type { ZodMiniType } from 'zod/mini'
 import type { AssembledPrompt } from './core/assemble.js'
+import { MAX_CARD_PNG_BASE64_CHARS } from './core/cardLimits.js'
 import type { CharacterCompatibilityReport } from './core/characterCompatibility.js'
 import type { SessionBinding } from './core/binding.js'
 import type { GreetingFloorState } from './core/greetingLog.js'
@@ -155,16 +156,16 @@ export const METHODS = {
   archiveCharacter: { req: object({ ...cardIdField }), value: anyValue, summary: '将角色卡移入收纳箱' },
   restoreCharacter: { req: object({ ...cardIdField }), value: anyValue, summary: '从收纳箱恢复角色卡' },
   inspectCharacter: {
-    // dataBase64：卡文件字节（PNG/JSON），传输层只判非空；V1/V2/V3 结构由 state/card 的 PNG/JSON 解析入口归一化校验。
-    req: object({ name: nonEmpty(), dataBase64: nonEmpty() }),
+    // dataBase64：卡文件字节（PNG/JSON），传输层限制最大编码体积；V1/V2/V3 结构由 state/card 的 PNG/JSON 解析入口归一化校验。
+    req: object({ name: nonEmpty(), dataBase64: string().check(minLength(1), maxLength(MAX_CARD_PNG_BASE64_CHARS)) }),
     value: anyValue,
     summary: '解析角色卡但不落盘（导入前预览内嵌世界书）',
   },
   importCharacter: {
-    // dataBase64：同 inspectCharacter，卡结构由 state/card 归一化校验。
+    // dataBase64：同 inspectCharacter，传输层限制最大编码体积，卡结构由 state/card 归一化校验。
     req: object({
       name: nonEmpty(),
-      dataBase64: nonEmpty(),
+      dataBase64: string().check(minLength(1), maxLength(MAX_CARD_PNG_BASE64_CHARS)),
       importWorldBook: optional(boolean()),
     }),
     value: anyValue,
@@ -195,7 +196,7 @@ export const METHODS = {
         nullable(
           object({
             prompt: string(),
-            depth: number(),
+            depth: int().check(minimum(0)),
             role: enum_(['system', 'user', 'assistant']),
           }),
         ),

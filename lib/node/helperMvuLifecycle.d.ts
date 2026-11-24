@@ -6,7 +6,7 @@ import type { TavernState } from './state.js';
 type Snapshot = Pick<Session, 'id' | 'snapshotEvents'>;
 /** 开启配置必须先同步认领宿主真正 idle；不能在新的空 WAL 出现后再尝试初始化旧回复。 */
 export declare function runHelperMvuEnable<T>(ctx: Context, state: TavernState, sessionId: string, save: () => Promise<T>): Promise<T>;
-/** 找出可作为初次 MVU 初始化锚点的最新完成角色回复轮号；无可用锚点返回 null。 */
+/** 找出可作为初次 MVU 初始化锚点的最新完成角色回复轮号；与 helperMvu.latestCompleted 共用同一谓词。 */
 export declare function helperMvuInitAnchorTurn(session: Snapshot): number | null;
 /** 空历史没有可初始化的回复，允许首轮生成；开场白由维护等待的 session task 先写入。 */
 export declare function helperMvuHasAssistant(session: Snapshot): boolean;

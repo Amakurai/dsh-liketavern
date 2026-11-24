@@ -259,6 +259,11 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
   }
 
   const chatFlags = layoutHistory.map((anchor) => anchor.chat)
+  // 显式非聊天历史（historyChatFlags=false，如插件通知/压缩检查点）与宿主合成 user 文本不进入模板序列；
+  // 未显式排除的普通 system 历史仍保留给 generate 阶段（对齐 templateApiParity 的 generate 默认含 system 契约）。
+  const templateHistoryFlags = input.history.map((message, index) =>
+    (input.historyChatFlags?.[index] ?? true) && !(message.role === 'user' && isSyntheticUserText(message.content)),
+  )
   // 旧式 <USER>/<BOT> 不含花括号，不能用 '{{' 预判；未命中时保留原对象身份。非聊天摘要/系统消息不改写。
   const namedHistory = input.history.map((m, index) => {
     if (!chatFlags[index]) return m
@@ -304,10 +309,12 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
     cache.set(cacheKey, rendered)
     return rendered
   }
-  // 历史 EJS 仅处理模拟副本，真实宿主消息不在这个函数的写入范围。
-  if (input.processTemplateSequence) history = history.map((message,index)=>({...message,
-    content:renderTemplate(message.content,`history:${index}`,macroCtx)}))
+  // 历史 EJS 仅处理允许进入模板序列的模拟副本，显式非聊天条目与宿主合成文本不执行模板改写。
+  if (input.processTemplateSequence) history = history.map((message,index)=> templateHistoryFlags[index]
+    ? ({...message, content:renderTemplate(message.content,`history:${index}`,macroCtx)})
+    : message)
   const originalHistory = new Set(history)
+  const templateHistory = new Set(history.filter((_, index) => templateHistoryFlags[index]))
   const historyDepth = new Map(history.map((message,index)=>[message,historyDepths[index]!]))
   const historyAnchors = new Map(history.map((message,index)=>[message,layoutHistory[index]!]))
   const processedHistory = new Map<ChatMessage,string>()
@@ -719,13 +726,23 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
   }
 
   if (input.transformPrompt) {
-    history = history.map(m=>({...m,content:input.transformPrompt!(m.content,{role:m.role,worldinfo:false,depth:historyDepth.get(m) ?? 0})}))
-    // 重映射产生新对象；originalHistory/historyDepth 按对象身份追踪，必须随之重建，
+    history = history.map((m, index) => {
+      // 保持回调可观测各历史位点的冻结 depth（兼容既有契约），但显式非聊天与合成条目正文不被改写。
+      const transformed = input.transformPrompt!(m.content,{role:m.role,worldinfo:false,depth:historyDepth.get(m) ?? 0})
+      return templateHistoryFlags[index] ? {...m,content:transformed} : m
+    })
+    // 重映射产生新对象；originalHistory/templateHistory/historyDepth 按对象身份追踪，必须随之重建，
     // 否则模板序列的 depth 归 0、history 标记落空、historyContent 与 asTurn 判定全部失效。
     originalHistory.clear()
+    templateHistory.clear()
     historyDepth.clear()
     historyAnchors.clear()
-    history.forEach((message,index)=>{originalHistory.add(message);historyDepth.set(message,historyDepths[index]!);historyAnchors.set(message,layoutHistory[index]!)})
+    history.forEach((message,index)=>{
+      originalHistory.add(message)
+      if (templateHistoryFlags[index]) templateHistory.add(message)
+      historyDepth.set(message,historyDepths[index]!)
+      historyAnchors.set(message,layoutHistory[index]!)
+    })
     for (const m of [...beforeHistory,...afterHistory,...(anBottomMessage ? [anBottomMessage] : [])]) {
       const content = input.transformPrompt(m.content,{role:m.role,worldinfo:worldInfoPromptMessages.has(m),depth:0})
       if (content!==m.content) {m.content=content;asTurn(m)}
@@ -794,7 +811,8 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
   let preciseTemplateHistory = true
   let templateTailInsertions: string[] | undefined
   if(input.processTemplateSequence) {
-    const sequence=[...beforeHistory,...history,...tail]
+    // 显式非聊天条目（historyChatFlags=false）与宿主合成文本不进入模板序列；普通 system 历史仍保留给 generate 阶段。
+    const sequence=[...beforeHistory,...history,...tail].filter(message=>!originalHistory.has(message) || templateHistory.has(message))
     const items:TemplateSequenceMessage[]=sequence.map(message=>({message,originalContent:message.content,
       worldinfo:worldInfoPromptMessages.has(message) || depthBindings.get(message)?.worldinfo===true,
       depth:depthBindings.get(message)?.depth ?? historyDepth.get(message) ?? 0,
@@ -866,7 +884,8 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
   }
   for (const content of templateTailInsertions ?? []) layoutFragments.push({role:'system',content,
     sourceKeys:['template:generate:empty-sequence'],turnLocal:true,placement:{kind:'after-history'}})
-  if (!preciseTemplateHistory || (!layoutHistory.length && templateTailInsertions===undefined)) {
+  const hasTemplateHistory = templateHistoryFlags.some(Boolean)
+  if (!preciseTemplateHistory || (!hasTemplateHistory && templateTailInsertions===undefined)) {
     for (const content of templateTurnContext) layoutFragments.push({ role: 'system', content,
       sourceKeys: ['template:legacy-turn-context'], turnLocal: true, compatibilityFallback: true,
       placement: { kind: 'after-history', ...(lastHistory ? { anchor: lastHistory } : {}) } })

@@ -4,7 +4,7 @@
  * 引用块去壳与代码安全闭合定位，避免 `htmlFragment`、`displaySanitize` 与 `plainDetails`
  * 各自维护口径导致相邻折叠块拆分漂移或循环依赖。
  */
-import { markdownCodeScanner } from './markdownCode.js'
+import { findGfmTableLines, markdownCodeScanner } from './markdownCode.js'
 
 export const DISPLAY_META_TAGS = [
   'initvar',
@@ -66,7 +66,7 @@ const DETAILS_BOUNDARY_RE = /<!--[\s\S]*?(?:-->|$)|<\/?details(?=[\t\n\f\r />])(
 
 const STANDALONE_BR_LINE_RE = /^(?:<br\s*\/?>[ \t]*)+$/i
 const LEADING_BR_LINE_RE = /^<br\s*\/?>/i
-const FENCE_OPEN_LINE_RE = /^(?:(?:>[ \t]*)*(?:(?:[-+*]|\d{1,9}[.)])[ \t]+)?)?(?:`{3,}[^`\r\n]*|~{3,}[ \t]*(?:[A-Za-z0-9_+#.-][^\r\n~]*)?)$/
+const FENCE_OPEN_LINE_RE = /^(?:(?:>[ \t]*)*(?:(?:[-+*]|\d{1,9}[.)])[ \t]+)?)?(?:`{3,}[^`\r\n]*|~{3,}[^\r\n]*)$/
 const HEADING_LINE_RE = /^#{1,6}[ \t]+\S/
 const UNORDERED_LIST_LINE_RE = /^[-*+][ \t]+\S/
 const ORDERED_LIST_LINE_RE = /^\d{1,9}[.)][ \t]+\S/
@@ -75,7 +75,7 @@ const DETAILS_OPEN_LINE_RE = /^<details(?:\s+(?:open(?:\s*=\s*(?:""|''|"open"|'o
 const HR_OPEN_LINE_RE = /^<hr\s*\/?>/i
 const TAG_OPEN_HEAD_RE = /^<([A-Za-z][\w:-]*)(?=[\t\n\f\r />])/
 const STANDALONE_CUSTOM_TAG_LINE_RE = /^<([A-Za-z][\w.:-]*)(?:[ \t]+[^"'<>=\r\n]+)?\s*>$/
-const PROTOCOL_TAG_NAME_RE = /^(?:[A-Za-z]\w*_[A-Za-z0-9_]+|[A-Z][A-Za-z0-9]*[A-Z][A-Za-z0-9]*)$/
+const ST_COMMENT_MACRO_RE = /\{\{\s*\/\/[^{}]*\}\}/g
 
 const EMAIL_AUTOLINK_RE = /^<[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*>$/
 const URI_AUTOLINK_RE = /^<([A-Za-z][A-Za-z0-9+.-]{1,31}):[^\s<>]+>$/
@@ -707,33 +707,513 @@ export function findMatchingDetailsClose(
   return null
 }
 
-function isStandaloneCustomTagSequence(lineContent: string): boolean {
-  if (!lineContent.startsWith('<') || !lineContent.endsWith('>')) return false
-  const tokenRe = /<\/?([A-Za-z][\w.:-]*)(?:[ \t]+[^"'<>=\r\n]+)?\s*>/y
-  let pos = 0
-  let count = 0
-  while (pos < lineContent.length) {
-    tokenRe.lastIndex = pos
-    const m = tokenRe.exec(lineContent)
-    if (!m) return false
-    const name = m[1]!
-    if (isKnownHtmlElementName(name) || CUSTOM_ELEMENT_NAME_RE.test(name)) return false
-    count++
-    pos = tokenRe.lastIndex
-    while (pos < lineContent.length && (lineContent[pos] === ' ' || lineContent[pos] === '\t')) pos++
+const CUSTOM_TAG_HEAD_RE = /^<(\/?)([A-Za-z][\w.-]*(?::[A-Za-z_][\w.-]*)?)(?=[ \t/>])/
+const PROTOCOL_TAG_RE =
+  /<\/?([A-Za-z][\w]*_[A-Za-z0-9_]+|[A-Z][A-Za-z0-9]*[A-Z][A-Za-z0-9]*)\b(?:[^"'<>]|"[^"]*"|'[^']*')*\/?>/g
+
+/** 在单行内扫描自定义伪标签的结束 `>`，跳过 `="..."`/`='...'` 属性引号内的 `>` 与 `<`。 */
+export function scanCustomTagTokenEnd(line: string, start: number): number {
+  if (line[start] !== '<') return -1
+  let quote: '"' | "'" | null = null
+  for (let j = start + 1; j < line.length; j++) {
+    const ch = line[j]!
+    if (quote !== null) {
+      if (ch === quote) quote = null
+      continue
+    }
+    if (ch === '"' || ch === "'") {
+      let back = j - 1
+      while (back > start && (line[back] === ' ' || line[back] === '\t')) back--
+      if (back > start && line[back] === '=') quote = ch
+      continue
+    }
+    if (ch === '<') return -1
+    if (ch === '>') return j
   }
-  return count > 0
+  return -1
 }
 
-function validatePlainDetailsBody(
+/** 按 CommonMark 四列制表位剥离多层引用块前缀并判定剩余缩进是否达到 4 列缩进代码。 */
+export function scanBlockquoteAndIndent(line: string): { quotePrefixEnd: number; contentStart: number; indentedCode: boolean } {
+  let index = 0
+  let col = 0
+  let quotePrefixEnd = 0
+  while (index < line.length) {
+    let probe = index
+    let probeCol = col
+    let spaces = 0
+    while (probe < line.length && spaces < 4) {
+      const ch = line[probe]!
+      if (ch === ' ') {
+        spaces++
+        probeCol++
+        probe++
+      } else if (ch === '\t') {
+        const width = 4 - (probeCol % 4)
+        if (spaces + width >= 4) break
+        spaces += width
+        probeCol += width
+        probe++
+      } else {
+        break
+      }
+    }
+    if (line[probe] !== '>') break
+    probe++
+    probeCol++
+    if (probe < line.length) {
+      if (line[probe] === ' ') {
+        probe++
+        probeCol++
+      } else if (line[probe] === '\t') {
+        const width = 4 - (probeCol % 4)
+        probe++
+        index = probe
+        quotePrefixEnd = probe
+        let indentCols = width - 1
+        col = probeCol + width
+        if (indentCols >= 4) return { quotePrefixEnd, contentStart: index, indentedCode: true }
+        while (index < line.length) {
+          const ch = line[index]!
+          if (ch === ' ') {
+            indentCols++
+            col++
+            index++
+          } else if (ch === '\t') {
+            const tabWidth = 4 - (col % 4)
+            indentCols += tabWidth
+            col += tabWidth
+            index++
+          } else {
+            break
+          }
+          if (indentCols >= 4) return { quotePrefixEnd, contentStart: index, indentedCode: true }
+        }
+        continue
+      }
+    }
+    index = probe
+    col = probeCol
+    quotePrefixEnd = probe
+  }
+  let indentCols = 0
+  while (index < line.length) {
+    const ch = line[index]!
+    if (ch === ' ') {
+      indentCols++
+      col++
+      index++
+    } else if (ch === '\t') {
+      const width = 4 - (col % 4)
+      indentCols += width
+      col += width
+      index++
+    } else {
+      break
+    }
+    if (indentCols >= 4) return { quotePrefixEnd, contentStart: index, indentedCode: true }
+  }
+  return { quotePrefixEnd, contentStart: index, indentedCode: false }
+}
+
+/** 判定单个尖括号记号是否为非标准 HTML、非自动链接的自定义伪标签，返回小写标签名。 */
+export function customTagName(token: string): string | null {
+  if (!token.startsWith('<') || !token.endsWith('>') || token.includes('\n') || token.includes('\r')) return null
+  if (token.startsWith('<!--') || token.startsWith('<!') || token.startsWith('<?')) return null
+  if (isAutolinkToken(token)) return null
+  const match = CUSTOM_TAG_HEAD_RE.exec(token)
+  if (!match) return null
+  if (scanCustomTagTokenEnd(token, 0) !== token.length - 1) return null
+  const name = match[2]!
+  return isKnownHtmlElementName(name) ? null : name.toLowerCase()
+}
+
+function stripCustomTagTokensInLine(line: string, strippedNames: ReadonlySet<string>): string {
+  if (!line.includes('<')) return line
+  if (scanBlockquoteAndIndent(line).indentedCode) return line
+  const out: string[] = []
+  let cursor = 0
+  let i = 0
+  while (i < line.length) {
+    if (line[i] !== '<') {
+      i++
+      continue
+    }
+    const end = scanCustomTagTokenEnd(line, i)
+    if (end > i) {
+      const name = customTagName(line.slice(i, end + 1))
+      if (name !== null && strippedNames.has(name)) {
+        if (i > cursor) out.push(line.slice(cursor, i))
+        cursor = end + 1
+      }
+      i = end + 1
+      continue
+    }
+    i++
+  }
+  if (cursor === 0) return line
+  if (cursor < line.length) out.push(line.slice(cursor))
+  return out.join('')
+}
+
+/** 扫描单行是否仅由行首自定义伪标签组成，返回提取出的标签名列表；不匹配返回 `null`。 */
+export function extractStandaloneCustomTagLine(line: string): { quotePrefixEnd: number; names: string[] } | null {
+  if (!line.includes('<')) return null
+  const layout = scanBlockquoteAndIndent(line)
+  if (layout.indentedCode) return null
+  const trimmed = line.slice(layout.contentStart).replace(/[ \t]+$/, '')
+  if (!trimmed.startsWith('<')) return null
+  const names: string[] = []
+  let pos = 0
+  while (pos < trimmed.length) {
+    if (trimmed[pos] !== '<') return null
+    const end = scanCustomTagTokenEnd(trimmed, pos)
+    if (end <= pos) return null
+    const name = customTagName(trimmed.slice(pos, end + 1))
+    if (name === null) return null
+    names.push(name)
+    pos = end + 1
+    while (pos < trimmed.length && (trimmed[pos] === ' ' || trimmed[pos] === '\t')) pos++
+  }
+  return names.length > 0 ? { quotePrefixEnd: layout.quotePrefixEnd, names } : null
+}
+
+/**
+ * 清理会触发 CommonMark Type 7 HTML 块并吞掉后续围栏的行首自定义伪标签，
+ * 以及与这些已确认伪标签同行混写的配对残余；跳过缩进代码、自动链接与标准 HTML 元素。
+ */
+export function stripCustomTags(text: string, extraNames?: ReadonlySet<string>): string {
+  if (!text.includes('<')) return text
+  const strippedNames = new Set<string>(extraNames)
+  const firstPass: string[] = []
+  const lineBreak = /\r?\n/g
+  let lineStart = 0
+  let changed = false
+
+  const processLine = (line: string, breakText: string): void => {
+    const standalone = extractStandaloneCustomTagLine(line)
+    if (standalone) {
+      for (const name of standalone.names) strippedNames.add(name)
+      firstPass.push(line.slice(0, standalone.quotePrefixEnd).replace(/[ \t]+$/, ''), breakText)
+      changed = true
+      return
+    }
+    firstPass.push(line, breakText)
+  }
+
+  for (let match = lineBreak.exec(text); match; match = lineBreak.exec(text)) {
+    processLine(text.slice(lineStart, match.index), match[0])
+    lineStart = lineBreak.lastIndex
+  }
+  processLine(text.slice(lineStart), '')
+
+  if (!changed && strippedNames.size === 0) return text
+  const pass1 = changed ? firstPass.join('') : text
+  if (strippedNames.size === 0 || !pass1.includes('<')) return pass1
+
+  const secondPass: string[] = []
+  let sStart = 0
+  let sChanged = false
+  lineBreak.lastIndex = 0
+  for (let match = lineBreak.exec(pass1); match; match = lineBreak.exec(pass1)) {
+    const line = pass1.slice(sStart, match.index)
+    const next = stripCustomTagTokensInLine(line, strippedNames)
+    if (next !== line) sChanged = true
+    secondPass.push(next, match[0])
+    sStart = lineBreak.lastIndex
+  }
+  const tail = pass1.slice(sStart)
+  const nextTail = stripCustomTagTokensInLine(tail, strippedNames)
+  if (nextTail !== tail) sChanged = true
+  secondPass.push(nextTail)
+  return sChanged ? secondPass.join('') : pass1
+}
+
+/** 收起未转换成 HTML 的协议开闭标签，留下内部正文；跳过标准 HTML 与大写 URI/邮箱自动链接。 */
+export function stripProtocolTags(text: string): string {
+  return text.replace(PROTOCOL_TAG_RE, (match, name: string) => {
+    if (isKnownHtmlElementName(name)) return match
+    if (isAutolinkToken(match)) return match
+    return ''
+  })
+}
+
+/** 检测净化后的纯折叠块 Markdown 片段中是否仍残留未允许标签。 */
+export function hasResidualTag(text: string): boolean {
+  if (!text.includes('<')) return false
+  const code = markdownCodeScanner(text)
+  const tokens = /<|`+|~{3,}/g
+  for (let token = tokens.exec(text); token; token = tokens.exec(text)) {
+    const at = token.index
+    if (token[0] !== '<') {
+      const end = code.fence(at)?.end ?? code.inlineEnd(at)
+      if (end !== null) tokens.lastIndex = end
+      continue
+    }
+    RESIDUAL_TAG_RE.lastIndex = at
+    const tag = RESIDUAL_TAG_RE.exec(text)
+    if (!tag || isAutolinkToken(tag[0])) continue
+    const closing = tag[1] === '/'
+    const name = tag[2]!
+    const attrs = tag[3] ?? ''
+    // 放行行内泛型/占位记号（如 `Array<string>`），仍严格拦截标准 HTML/SVG/MathML、
+    // 机读标签、自定义元素（含连字符）、带属性/空白标签与闭合标签。
+    if (closing || isKnownHtmlElementName(name) || isDisplayMetaTagName(name)
+      || CUSTOM_ELEMENT_NAME_RE.test(name) || attrs.trim().length > 0) {
+      return true
+    }
+  }
+  return false
+}
+
+/** 按 HTML5 属性状态判定单标签是否自闭合，避免未引号属性值末尾的 `/` 被误判。 */
+function isPlainSelfClosingTag(raw: string): boolean {
+  if (!raw.endsWith('/>') || raw.startsWith('</')) return false
+  const slash = raw.length - 2
+  let i = 1
+  const isSpace = (ch: string | undefined): boolean => ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r' || ch === '\f'
+  while (i < slash && !isSpace(raw[i]) && raw[i] !== '/') i++
+  type State = 'before-name' | 'name' | 'after-name' | 'before-value' | 'unquoted' | 'quoted' | 'after-value'
+  let state: State = 'before-name'
+  let quote: '"' | "'" | null = null
+  for (; i < slash; i++) {
+    const ch = raw[i]!
+    if (state === 'quoted') {
+      if (ch === quote) { quote = null; state = 'after-value' }
+      continue
+    }
+    if (state === 'before-name') {
+      if (isSpace(ch) || ch === '/') continue
+      state = 'name'
+    } else if (state === 'name') {
+      if (isSpace(ch)) state = 'after-name'
+      else if (ch === '=') state = 'before-value'
+      else if (ch === '/') state = 'before-name'
+    } else if (state === 'after-name') {
+      if (isSpace(ch)) continue
+      if (ch === '=') state = 'before-value'
+      else if (ch === '/') state = 'before-name'
+      else state = 'name'
+    } else if (state === 'before-value') {
+      if (isSpace(ch)) continue
+      if (ch === '"' || ch === "'") { quote = ch; state = 'quoted' }
+      else state = 'unquoted'
+    } else if (state === 'unquoted') {
+      if (isSpace(ch)) state = 'before-name'
+    } else if (state === 'after-value') {
+      if (isSpace(ch) || ch === '/') state = 'before-name'
+      else state = 'name'
+    }
+  }
+  return state === 'before-name' || state === 'name' || state === 'after-name' || state === 'after-value'
+}
+
+/** 仅按机读标签边界清理纯折叠块 Markdown 分片中的机读块（供无环依赖校验与 `stripDisplayMeta` 对齐）。 */
+function stripPlainChunkMeta(text: string): string {
+  if (!text.includes('<')) return text
+  const stack: Array<{ name: string; start: number; tokenEnd: number; slash: boolean }> = []
+  const ranges: Array<{ start: number; end: number }> = []
+  const tagRe = /<(\/?)([A-Za-z][\w:-]*)(?=[\t\n\f\r />])(?:[^"'<>]|"[^"]*"|'[^']*')*>/g
+  let cursor = 0
+  while (cursor < text.length) {
+    const open = text.indexOf('<', cursor)
+    if (open < 0) break
+    tagRe.lastIndex = open
+    const m = tagRe.exec(text)
+    if (!m || m.index !== open) {
+      const head = /^<([A-Za-z][\w:-]*)(?=[\t\n\f\r />]|$)/.exec(text.slice(open, Math.min(text.length, open + 32)))
+      if (head && isDisplayMetaTagName(head[1]!)) {
+        ranges.push({ start: open, end: text.length })
+        break
+      }
+      cursor = open + 1
+      continue
+    }
+    const closing = m[1] === '/'
+    const name = m[2]!.toLowerCase()
+    const end = tagRe.lastIndex
+    if (!DISPLAY_META_NAMES.has(name)) {
+      cursor = end
+      continue
+    }
+    const slash = !closing && isPlainSelfClosingTag(m[0])
+    if (!closing) {
+      stack.push({ name, start: open, tokenEnd: end, slash })
+    } else {
+      let matchIdx = stack.length - 1
+      while (matchIdx >= 0 && stack[matchIdx]!.name !== name && stack[matchIdx]!.slash) matchIdx--
+      if (matchIdx >= 0 && stack[matchIdx]!.name === name) {
+        ranges.push({ start: stack[matchIdx]!.start, end })
+        stack.length = matchIdx
+      } else {
+        ranges.push({ start: open, end })
+      }
+    }
+    cursor = end
+  }
+  for (const opened of stack) {
+    ranges.push({ start: opened.start, end: opened.slash ? opened.tokenEnd : text.length })
+  }
+  if (ranges.length === 0) return text
+  ranges.sort((a, b) => a.start - b.start || a.end - b.end)
+  const out: string[] = []
+  let pos = 0
+  for (const range of ranges) {
+    if (range.start > pos) out.push(text.slice(pos, range.start))
+    pos = Math.max(pos, range.end)
+  }
+  if (pos < text.length) out.push(text.slice(pos))
+  return out.join('')
+}
+
+/** 在纯折叠块分片内按与 `stripDisplayMeta` 同口径保护代码、清理机读/自定义/协议标签并检查残留标签。 */
+function validatePlainDetailsChunk(raw: string): boolean {
+  if (!raw.includes('<')) return true
+  const code = markdownCodeScanner(raw)
+  const ranges: Array<{ start: number; end: number }> = []
+  const metaOpen = new Map<string, number>()
+  let outerCursor = 0
+  const advanceMeta = (target: number): void => {
+    const tagRe = /<(\/?)([A-Za-z][\w:-]*)(?=[\t\n\f\r />])(?:[^"'<>]|"[^"]*"|'[^']*')*>/g
+    while (outerCursor < target) {
+      const open = raw.indexOf('<', outerCursor)
+      if (open < 0 || open >= target) { outerCursor = target; break }
+      tagRe.lastIndex = open
+      const m = tagRe.exec(raw)
+      if (m && m.index === open) {
+        const name = m[2]!.toLowerCase()
+        if (DISPLAY_META_NAMES.has(name)) {
+          const closing = m[1] === '/'
+          const slash = !closing && isPlainSelfClosingTag(m[0])
+          if (!closing && !slash) metaOpen.set(name, (metaOpen.get(name) ?? 0) + 1)
+          else if (closing) {
+            const cur = metaOpen.get(name) ?? 0
+            if (cur <= 1) metaOpen.delete(name)
+            else metaOpen.set(name, cur - 1)
+          }
+        }
+        outerCursor = tagRe.lastIndex
+        continue
+      }
+      const head = /^<([A-Za-z][\w:-]*)(?=[\t\n\f\r />]|$)/.exec(raw.slice(open, Math.min(raw.length, open + 32)))
+      if (head && isDisplayMetaTagName(head[1]!)) {
+        const name = head[1]!.toLowerCase()
+        metaOpen.set(name, (metaOpen.get(name) ?? 0) + 1)
+        outerCursor = open + head[0].length
+        continue
+      }
+      outerCursor = open + 1
+    }
+  }
+  const closesMeta = (start: number, end: number): boolean => {
+    if (metaOpen.size === 0) return false
+    const slice = raw.slice(start, end)
+    if (!slice.includes('</')) return false
+    const innerOpen = new Map<string, number>()
+    const tagRe = /<(\/?)([A-Za-z][\w:-]*)(?=[\t\n\f\r />])(?:[^"'<>]|"[^"]*"|'[^']*')*>/g
+    for (let m = tagRe.exec(slice); m; m = tagRe.exec(slice)) {
+      const name = m[2]!.toLowerCase()
+      if (!metaOpen.has(name)) continue
+      const closing = m[1] === '/'
+      if (!closing && isPlainSelfClosingTag(m[0])) continue
+      if (!closing) {
+        innerOpen.set(name, (innerOpen.get(name) ?? 0) + 1)
+      } else {
+        const local = innerOpen.get(name) ?? 0
+        if (local > 0) innerOpen.set(name, local - 1)
+        else return true
+      }
+    }
+    return false
+  }
+  if (raw.includes('`') || raw.includes('~~~')) {
+    const tokens = /`+|~{3,}/g
+    for (let token = tokens.exec(raw); token; token = tokens.exec(raw)) {
+      const at = token.index
+      const fence = code.fence(at)
+      if (fence) {
+        let end = fence.end
+        while (end > at && (raw[end - 1] === '\n' || raw[end - 1] === '\r')) end--
+        advanceMeta(at)
+        if (!closesMeta(at, end)) {
+          ranges.push({ start: at, end })
+          outerCursor = Math.max(outerCursor, fence.end)
+          tokens.lastIndex = Math.max(fence.end, at + 1)
+        }
+        continue
+      }
+      const end = code.inlineEnd(at)
+      if (end !== null) {
+        advanceMeta(at)
+        if (!closesMeta(at, end)) {
+          ranges.push({ start: at, end })
+          outerCursor = Math.max(outerCursor, end)
+          tokens.lastIndex = end
+        }
+      }
+    }
+  }
+  let masked = raw
+  let prefix = ''
+  const saved: string[] = []
+  if (ranges.length > 0) {
+    prefix = '\uE000tavernPd'
+    while (raw.includes(prefix)) prefix += 'X'
+    let buf = ''
+    let c = 0
+    for (const [idx, range] of ranges.entries()) {
+      buf += raw.slice(c, range.start) + `${prefix}${idx}\uE001`
+      saved.push(raw.slice(range.start, range.end))
+      c = range.end
+    }
+    buf += raw.slice(c)
+    masked = buf
+  }
+  const strippedMeta = stripPlainChunkMeta(masked)
+  const stripped = (strippedMeta.includes('{{') ? strippedMeta.replace(ST_COMMENT_MACRO_RE, '') : strippedMeta)
+  const cleaned = stripProtocolTags(stripCustomTags(stripped))
+  const restored = prefix
+    ? cleaned.replace(new RegExp(`${prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\d+)\uE001`, 'g'), (_m, idx: string) => saved[Number(idx)] ?? '')
+    : cleaned
+  return !hasResidualTag(restored)
+}
+
+/**
+ * 共享纯 `<details>` 正文扫描器：`plainDetails` 解析与 `isPlainDetailsStructure` 校验复用同一套
+ * 注释剥离、`<br>`/`<hr>` 归一化、嵌套折叠与标签边界检查，杜绝两端口径漂移。
+ */
+export function scanPlainDetailsBody(
   body: string,
-  state: { count: number },
-  depth: number,
+  onMarkdown: (raw: string) => boolean,
+  onNestedDetails: (nestedStart: number, code: ReturnType<typeof markdownCodeScanner>) => number | null,
 ): boolean {
+  const chunks: string[] = []
+  let chunkStart = 0
+  const flushMarkdown = (endPos: number): boolean => {
+    if (endPos > chunkStart) chunks.push(body.slice(chunkStart, endPos))
+    chunkStart = endPos
+    if (chunks.length === 0) return true
+    const raw = chunks.join('')
+    chunks.length = 0
+    return onMarkdown(raw)
+  }
+
   const code = markdownCodeScanner(body)
-  let chunkIdx = 0
-  const chunkStandaloneNames: Array<Set<string>> = [new Set()]
-  const deferredCustomChecks: Array<{ chunkIdx: number; name: string; closing: boolean; hasAttrs: boolean }> = []
+  const tableLines = findGfmTableLines(body, code)
+  const lineStarts: number[] = []
+  if (tableLines.size > 0) {
+    lineStarts.push(0)
+    for (let idx = body.indexOf('\n'); idx >= 0; idx = body.indexOf('\n', idx + 1)) {
+      lineStarts.push(idx + 1)
+    }
+  }
+  let lineCursor = 0
+  const isInTableLine = (pos: number): boolean => {
+    if (tableLines.size === 0) return false
+    while (lineCursor + 1 < lineStarts.length && lineStarts[lineCursor + 1]! <= pos) lineCursor++
+    return tableLines.has(lineCursor)
+  }
+
   const tokens = /<|`+|~{3,}/g
   for (let token = tokens.exec(body); token; token = tokens.exec(body)) {
     const at = token.index
@@ -745,30 +1225,70 @@ function validatePlainDetailsBody(
     if (body.startsWith('<!--', at)) {
       const close = body.indexOf('-->', at + 4)
       if (close < 0) return false
+      if (at > chunkStart) chunks.push(body.slice(chunkStart, at))
+      chunkStart = close + 3
       tokens.lastIndex = close + 3
       continue
     }
     if (body.startsWith('<!', at) || body.startsWith('<?', at)) return false
 
     if (/^<details(?=[\t\n\f\r />])/i.test(body.slice(at, Math.min(body.length, at + 16)))) {
-      const nestedNext = validatePlainDetailsBlock(body, at, code, state, depth + 1)
+      if (!flushMarkdown(at)) return false
+      const nestedNext = onNestedDetails(at, code)
       if (nestedNext === null) return false
-      chunkIdx++
-      chunkStandaloneNames.push(new Set())
+      chunkStart = nestedNext
       tokens.lastIndex = nestedNext
       continue
     }
 
     if (BR_CANDIDATE_RE.test(body.slice(at, Math.min(body.length, at + 8)))) {
       BR_PLAIN_RE.lastIndex = at
-      if (!BR_PLAIN_RE.exec(body)) return false
-      tokens.lastIndex = BR_PLAIN_RE.lastIndex
+      const br = BR_PLAIN_RE.exec(body)
+      if (!br) return false
+      if (at > chunkStart) chunks.push(body.slice(chunkStart, at))
+      let endPos = BR_PLAIN_RE.lastIndex
+      let brCount = 1
+      while (endPos < body.length) {
+        let ws = endPos
+        while (ws < body.length && (body[ws] === ' ' || body[ws] === '\t')) ws++
+        if (!BR_CANDIDATE_RE.test(body.slice(ws, Math.min(body.length, ws + 8)))) break
+        BR_PLAIN_RE.lastIndex = ws
+        const nextBr = BR_PLAIN_RE.exec(body)
+        if (!nextBr) break
+        endPos = BR_PLAIN_RE.lastIndex
+        brCount++
+      }
+      const trailingBreak = /^[ \t]*(\r?\n)/.exec(body.slice(endPos))
+      if (isInTableLine(at)) {
+        chunks.push(' ')
+      } else if (brCount >= 2) {
+        const lineStart = body.lastIndexOf('\n', at - 1) + 1
+        const quotePrefix = /^((?: {0,3}>[ \t]?)+)/.exec(body.slice(lineStart, at))?.[1] ?? ''
+        if (trailingBreak) {
+          endPos += trailingBreak[0].length
+          const nextStartsQuote = Boolean(quotePrefix) && body.slice(endPos).startsWith(quotePrefix.trimEnd())
+          chunks.push(quotePrefix ? `\n${quotePrefix.trimEnd()}\n${nextStartsQuote ? '' : quotePrefix}` : '\n\n')
+        } else {
+          chunks.push(quotePrefix ? `\n${quotePrefix.trimEnd()}\n${quotePrefix}` : '\n\n')
+        }
+      } else if (trailingBreak) {
+        // 紧跟原始换行时复用已有换行符，避免 `<br/>\n` 与 `> A<br/>\n> B` 叠成双换行拆断段落或引用块。
+        endPos += trailingBreak[0].length - trailingBreak[1]!.length
+      } else {
+        chunks.push('\n')
+      }
+      chunkStart = endPos
+      tokens.lastIndex = endPos
       continue
     }
 
     if (HR_CANDIDATE_RE.test(body.slice(at, Math.min(body.length, at + 8)))) {
       HR_PLAIN_RE.lastIndex = at
-      if (!HR_PLAIN_RE.exec(body)) return false
+      const hr = HR_PLAIN_RE.exec(body)
+      if (!hr) return false
+      if (at > chunkStart) chunks.push(body.slice(chunkStart, at))
+      chunks.push('\n\n---\n\n')
+      chunkStart = HR_PLAIN_RE.lastIndex
       tokens.lastIndex = HR_PLAIN_RE.lastIndex
       continue
     }
@@ -790,31 +1310,57 @@ function validatePlainDetailsBody(
         if (CUSTOM_ELEMENT_NAME_RE.test(name)) return false
         const attrs = tag[0].slice(1 + tag[1]!.length + name.length, tag[0].length - 1)
         if (!closing && attrs.includes('=')) return false
-        const lineStart = body.lastIndexOf('\n', at - 1) + 1
-        const lineEnd = lineBoundsAt(body, lineStart).end
-        const afterQuote = body.slice(lineStart, lineEnd).replace(/^(?: {0,3}>[ \t]?)+/, '')
-        const lineContent = afterQuote.trim()
-        const isIndented = indentColumns(afterQuote) >= 4
-        const isStandaloneLine = !isIndented && (lineContent === tag[0] || isStandaloneCustomTagSequence(lineContent))
-        if (isStandaloneLine) {
-          chunkStandaloneNames[chunkIdx]!.add(name.toLowerCase())
-        } else if (!PROTOCOL_TAG_NAME_RE.test(name)) {
-          // 延后到整段扫描结束后对照同分片两遍式独占行集合，与 stripCustomTags + hasResidualTag 保持 100% 同口径。
-          deferredCustomChecks.push({
-            chunkIdx,
-            name: name.toLowerCase(),
-            closing,
-            hasAttrs: attrs.trim().length > 0,
-          })
-        }
       }
     }
   }
-  for (const check of deferredCustomChecks) {
-    if (chunkStandaloneNames[check.chunkIdx]!.has(check.name)) continue
-    if (check.closing || check.hasAttrs) return false
+
+  return flushMarkdown(body.length)
+}
+
+/** 定位从 `start` 开始的单个纯 `<details>` 候选块的匹配 `</details>` 结束下标（支持摘要与正文代码安全跳过）。 */
+export function findPlainDetailsCloseEnd(
+  text: string,
+  start: number,
+  code: ReturnType<typeof markdownCodeScanner>,
+): number | null {
+  DETAILS_OPEN_RE.lastIndex = start
+  if (!DETAILS_OPEN_RE.exec(text)) return null
+  let bodyStart = skipIgnorableHtml(text, DETAILS_OPEN_RE.lastIndex)
+  if (bodyStart === null) return null
+
+  let summaryHasCodeSyntax = false
+  if (SUMMARY_CANDIDATE_RE.test(text.slice(bodyStart, Math.min(text.length, bodyStart + 16)))) {
+    SUMMARY_OPEN_RE.lastIndex = bodyStart
+    if (!SUMMARY_OPEN_RE.exec(text)) return null
+    const parsedSummary = scanPlainSummary(text, SUMMARY_OPEN_RE.lastIndex)
+    if (!parsedSummary) return null
+    bodyStart = parsedSummary.bodyStart
+    summaryHasCodeSyntax = parsedSummary.hasCodeSyntax
   }
-  return true
+
+  let matched: { closeStart: number; closeEnd: number } | null
+  if (summaryHasCodeSyntax) {
+    const rest = text.slice(bodyStart)
+    const restMatched = findMatchingDetailsClose(rest, 0, markdownCodeScanner(rest))
+    matched = restMatched
+      ? { closeStart: bodyStart + restMatched.closeStart, closeEnd: bodyStart + restMatched.closeEnd }
+      : null
+  } else {
+    matched = findMatchingDetailsClose(text, bodyStart, code)
+  }
+  return matched ? matched.closeEnd : null
+}
+
+function validatePlainDetailsBody(
+  body: string,
+  state: { count: number },
+  depth: number,
+): boolean {
+  return scanPlainDetailsBody(
+    body,
+    validatePlainDetailsChunk,
+    (nestedStart, code) => validatePlainDetailsBlock(body, nestedStart, code, state, depth + 1),
+  )
 }
 
 function validatePlainDetailsBlock(

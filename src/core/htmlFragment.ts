@@ -1,6 +1,6 @@
 /** 识别没有文档外壳的卡面片段：闭合容器与相邻样式/脚本共用沙箱，保留原字节并跳过代码示例。 */
 import { markdownCodeScanner } from './markdownCode.js'
-import { isPlainDetailsStructure } from './plainDetailsSyntax.js'
+import { findPlainDetailsCloseEnd, isPlainDetailsStructure } from './plainDetailsSyntax.js'
 
 export const HTML_CARD_CONTAINERS: ReadonlySet<string> = new Set([
   'div', 'section', 'article', 'main', 'aside', 'header', 'footer', 'nav',
@@ -114,25 +114,26 @@ function isPlainSafeLinkAttrs(attrSlice: string): boolean {
 }
 
 /**
- * 判定紧跟纯 `<details>` 之后的 `<style>` 是否仅面向后续非 `<details>` HTML 卡片：
- * 不含面向 `details`/`summary`/`body`/`html`/`:root`/通配符 `*`/`@import` 的选择器，且其后紧邻另一张真实卡面。
+ * 判定紧跟纯 `<details>` 之后的 `<style>` 是否与该折叠块无关：
+ * 全部连续 `<style>` 均闭合且不含面向 `details`/`summary`/`body`/`html`/`:root`/通配符 `*`/`@import` 的选择器，
+ * 其后既可以是独立非 `<details>` 卡面，也可以是文末、普通正文或另一段折叠块（由下游合并/收起）。
  */
-function isCardOwnedFollowingStyle(text: string, styleStart: number): boolean {
+function isNonDetailsFollowingStyle(text: string, styleStart: number): boolean {
   let cursor = styleStart
   let sawStyle = false
   for (let steps = 0; steps < 8 && cursor < text.length; steps++) {
     const skip = /^(?:\s|<!--[\s\S]*?-->)*/.exec(text.slice(cursor))![0]!.length
     cursor += skip
-    if (cursor >= text.length) return false
+    if (cursor >= text.length) return sawStyle
     const tokens = new RegExp(HTML_TAGS.source, HTML_TAGS.flags)
     tokens.lastIndex = cursor
     const m = tokens.exec(text)
-    if (!m || m.index !== cursor) return false
+    if (!m || m.index !== cursor) return sawStyle
     const raw = m[0]
     if (raw.startsWith('<!--')) { cursor = tokens.lastIndex; continue }
     const tag = m[1]?.toLowerCase()
     const closing = raw.startsWith('</')
-    if (!tag || closing) return false
+    if (!tag || closing) return sawStyle
     if (tag === 'style') {
       const contentStart = tokens.lastIndex
       const styleEnd = findHtmlOpaqueEnd(text, contentStart, 'style')
@@ -144,14 +145,9 @@ function isCardOwnedFollowingStyle(text: string, styleStart: number): boolean {
       cursor = styleEnd
       continue
     }
-    if (!sawStyle) return false
-    return (HTML_CARD_CONTAINERS.has(tag) && tag !== 'details')
-      || tag === 'script'
-      || tag === 'html'
-      || tag === 'body'
-      || (tag === 'center' && isHtmlCardCenter(text, tokens.lastIndex, raw))
+    return sawStyle
   }
-  return false
+  return cursor >= text.length && sawStyle
 }
 
 /**
@@ -212,57 +208,27 @@ function isHtmlCardCenter(text: string, openEnd: number, rawOpen: string): boole
   return false
 }
 
-/** 前瞻单块 `<details>` 边界，并与 `plainDetails` 同口径校验是否可安全走原生折叠。 */
-function isPlainDetailsCandidate(
+/** 前瞻单块 `<details>` 边界，并与 `plainDetails` 同口径校验是否可安全走原生折叠；命中返回匹配 `</details>` 结束下标。 */
+function plainDetailsCandidateEnd(
   text: string,
   openStart: number,
-  openEnd: number,
   rawOpen: string,
-  hasPrecedingHtml = false,
-): boolean {
-  if (!PLAIN_DETAILS_OPEN_RE.test(rawOpen)) return false
-  const tokens = new RegExp(HTML_TAGS.source, HTML_TAGS.flags)
-  tokens.lastIndex = openEnd
-  let depth = 1
-  for (let token = tokens.exec(text); token; token = tokens.exec(text)) {
-    const raw = token[0]
-    if (raw.startsWith('<!--')) {
-      if (!raw.endsWith('-->')) return false
-      continue
-    }
-    const nested = token[1]?.toLowerCase()
-    const closing = raw.startsWith('</')
-    if (!nested) continue
-    if (!closing && (RAW_TEXT.has(nested) || INERT_CONTENT.has(nested) || nested === 'template')) {
-      const opaqueEnd = findHtmlOpaqueEnd(text, tokens.lastIndex, nested)
-      if (opaqueEnd === null) {
-        if (LENIENT_OPAQUE.has(nested)) continue
-        return false
-      }
-      tokens.lastIndex = opaqueEnd
-      continue
-    }
-    if (nested === 'details') {
-      if (closing) {
-        if (--depth === 0) {
-          const closeEnd = tokens.lastIndex
-          // 若紧跟（可跨 HTML 注释）<style>/<script>，默认留在同一 HTML 片段里共享样式与脚本；
-          // 但前无其它卡面且后置 <style> 只面向紧随其后的独立卡片（如 `<details>...</details><style>.card{...}</style><div class="card">`）时允许拆分。
-          const skip = /^(?:\s|<!--[\s\S]*?-->)*/.exec(text.slice(closeEnd))![0]!.length
-          const tailStart = closeEnd + skip
-          const tail = text.slice(tailStart)
-          if (/^<script(?=[\s/>])/i.test(tail)) return false
-          if (/^<style(?=[\s/>])/i.test(tail) && (hasPrecedingHtml || !isCardOwnedFollowingStyle(text, tailStart))) {
-            return false
-          }
-          return isPlainDetailsStructure(text.slice(openStart, closeEnd))
-        }
-      } else if (!isTagSelfClosing(raw)) {
-        depth++
-      }
-    }
+  hasPrecedingHtml: boolean,
+  code: ReturnType<typeof markdownCodeScanner>,
+): number | null {
+  if (!PLAIN_DETAILS_OPEN_RE.test(rawOpen)) return null
+  const closeEnd = findPlainDetailsCloseEnd(text, openStart, code)
+  if (closeEnd === null) return null
+  // 若紧跟（可跨 HTML 注释）<script> 或面向折叠块/前置卡片的 <style>，默认留在同一 HTML 片段里共享样式与脚本；
+  // 但前无其它卡面且后置 <style> 与纯折叠块无关（面向后续独立卡片或仅作用于宿主 DOM）时允许拆分。
+  const skip = /^(?:\s|<!--[\s\S]*?-->)*/.exec(text.slice(closeEnd))![0]!.length
+  const tailStart = closeEnd + skip
+  const tail = text.slice(tailStart)
+  if (/^<script(?=[\s/>])/i.test(tail)) return null
+  if (/^<style(?=[\s/>])/i.test(tail) && (hasPrecedingHtml || !isNonDetailsFollowingStyle(text, tailStart))) {
+    return null
   }
-  return false
+  return isPlainDetailsStructure(text.slice(openStart, closeEnd)) ? closeEnd : null
 }
 
 function closeTagPattern(normalized:string):RegExp {
@@ -380,7 +346,7 @@ export function findHtmlFragment(text: string, code?: ReturnType<typeof markdown
   // 属性引号内的 > 或 </div> 不参与闭合计数；各分支首字符互斥，避免嵌套回溯。
   const tokens = /<!--[\s\S]*?(?:-->|$)|<!doctype\s+html\b[^>]*>|<\/?([A-Za-z][A-Za-z0-9:-]*)(?=[\s/>])(?:[^"'<>]|"[^"]*"|'[^']*')*>|`+|~{3,}/gi
   let root = '', depth = 0, start = -1, end = -1, inertStart = -1, inertEnd = -1
-  let hasPrelude = false, onlyPlainDetails = false, hasBody = false
+  let hasPrelude = false, preludeTargetsDetails = false, onlyPlainDetails = false, hasBody = false
   for (let token = tokens.exec(text); token; token = tokens.exec(text)) {
     const raw = token[0], at = token.index
     if (!depth && end >= 0 && text.slice(end, at).trim()) break
@@ -421,7 +387,8 @@ export function findHtmlFragment(text: string, code?: ReturnType<typeof markdown
       break
     }
     if (!closing && (RAW_TEXT.has(tag) || INERT_CONTENT.has(tag) || tag === 'template')) {
-      const opaqueEnd=findHtmlOpaqueEnd(text,tokens.lastIndex,tag)
+      const contentStart = tokens.lastIndex
+      const opaqueEnd=findHtmlOpaqueEnd(text,contentStart,tag)
       if(opaqueEnd===null) { if(LENIENT_OPAQUE.has(tag)) continue; break }
       tokens.lastIndex=opaqueEnd
       if (!depth) {
@@ -433,10 +400,17 @@ export function findHtmlFragment(text: string, code?: ReturnType<typeof markdown
         if ((tag !== 'style' && tag !== 'script') || indented) {
           if (end >= 0) break
         } else {
-          if (end >= 0 && onlyPlainDetails && tag === 'style' && isCardOwnedFollowingStyle(text, at)) break
+          if (end >= 0 && onlyPlainDetails && tag === 'style' && isNonDetailsFollowingStyle(text, at)) break
           if (start < 0) start = inertStart >= 0 ? inertStart : at
           end = tokens.lastIndex
           hasPrelude = true
+          if (tag === 'script' || inertStart >= 0) {
+            preludeTargetsDetails = true
+          } else {
+            const cssEnd = text.lastIndexOf('</', opaqueEnd)
+            const css = text.slice(contentStart, cssEnd >= contentStart ? cssEnd : opaqueEnd)
+            if (DETAILS_TARGETING_STYLE_RE.test(css)) preludeTargetsDetails = true
+          }
           onlyPlainDetails = false
           inertStart = inertEnd = -1
         }
@@ -454,21 +428,21 @@ export function findHtmlFragment(text: string, code?: ReturnType<typeof markdown
           continue
         }
       }
-      // style/script 已明确开启一个卡面时，把紧邻的普通 HTML 根也留在同一沙箱；否则
-      // `<style>p{...}</style><p>...</p>` 会把样式和目标拆到两个渲染器。没有前导卡面时
-      // 仍只接受保守容器集合，普通回复里的单个 p/span 不会被自动提升为可执行卡片。
-      const followsPrelude = start >= 0 && end >= 0 || inertStart >= 0
-      const adjacentVoid = followsPrelude && VOID_ELEMENTS.has(tag)
+      // style/script 已明确开启一个卡面时，把紧邻的普通 HTML 根与空元素也留在同一沙箱；否则
+      // `<style>p{...}</style><p>...</p>` 会把样式和目标拆到两个渲染器。仅有前导 inert 壳
+      //（`<link>`/`<meta>`/`<template>`/`<noscript>`）时不得将普通 `<p>`/`<br>`/`<hr>` 升级为独立 iframe。
+      const hasActiveCard = start >= 0 && end >= 0
+      const adjacentVoid = hasActiveCard && VOID_ELEMENTS.has(tag)
       const selfClosing = isTagSelfClosing(raw)
       const isCardContainer = HTML_CARD_CONTAINERS.has(tag)
         || (tag === 'center' && !closing && !indented && isHtmlCardCenter(text, tokens.lastIndex, raw))
-      if (closing || (!isCardContainer && !followsPrelude) || selfClosing && !adjacentVoid) {
+      if (closing || (!isCardContainer && !hasActiveCard) || selfClosing && !adjacentVoid) {
         if (end >= 0) break
+        inertStart = inertEnd = -1
         continue
       }
       if (adjacentVoid) {
         if (end >= 0 && onlyPlainDetails) break
-        if(start<0){start=inertStart>=0?inertStart:at;if(inertStart>=0)hasPrelude=true}
         end = tokens.lastIndex
         hasBody = true
         inertStart = inertEnd = -1
@@ -476,20 +450,36 @@ export function findHtmlFragment(text: string, code?: ReturnType<typeof markdown
       }
       // 四空格/制表符缩进的顶层标签属于 Markdown 代码；容器内部缩进不受影响。
       if (indented) { if (end >= 0) break; continue }
-      // 独立的纯文本/Markdown <details> 与相邻非 <details> 卡片拆分，避免把原生折叠块拽进 iframe。
+      // 独立的纯文本/Markdown <details> 与相邻非 <details> 卡片或无关 <style> 拆分，
+      // 并在确认安全纯折叠块后整体跳过其 Markdown 正文（防止代码示例里的 `<script>`/`<style>` 截断闭合）。
       if (end >= 0) {
         if (onlyPlainDetails) {
-          if (tag !== 'details' || !isPlainDetailsCandidate(text, at, tokens.lastIndex, raw, false)) break
-        } else if (!hasPrelude && tag === 'details' && isPlainDetailsCandidate(text, at, tokens.lastIndex, raw, true)) {
+          if (tag !== 'details') break
+          const plainEnd = plainDetailsCandidateEnd(text, at, raw, false, scanner)
+          if (plainEnd === null) break
+          end = plainEnd
+          hasBody = true
+          tokens.lastIndex = plainEnd
+          continue
+        } else if ((!hasPrelude || !preludeTargetsDetails) && tag === 'details'
+          && plainDetailsCandidateEnd(text, at, raw, hasBody, scanner) !== null) {
           break
         }
-      } else {
-        onlyPlainDetails = inertStart < 0 && !hasPrelude && tag === 'details'
-          && isPlainDetailsCandidate(text, at, tokens.lastIndex, raw, false)
+      } else if (inertStart < 0 && !hasPrelude && tag === 'details') {
+        const plainEnd = plainDetailsCandidateEnd(text, at, raw, false, scanner)
+        if (plainEnd !== null) {
+          start = at
+          end = plainEnd
+          hasBody = true
+          onlyPlainDetails = true
+          inertStart = inertEnd = -1
+          tokens.lastIndex = plainEnd
+          continue
+        }
       }
       root = tag; depth = 1
       if (start < 0) {
-        if (inertStart >= 0) { start = inertStart; hasPrelude = true }
+        if (inertStart >= 0) { start = inertStart; hasPrelude = true; preludeTargetsDetails = true }
         else start = at
       }
       inertStart = inertEnd = -1

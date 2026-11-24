@@ -19,14 +19,32 @@ export const BOOTSTRAP = String.raw`
 // 协议标记属于这个已保存环境；后续升级恢复旧堆不重跑此段，也不替换其闭包实现。
 Object.defineProperty(globalThis,'__tavernRuntimeAbi',{value:${JSON.stringify(TEMPLATE_RUNTIME_ABI)},writable:false,configurable:false});
 const parseTemplateInput=JSON.parse;
+const rawStringifyTemplateJson=JSON.stringify;
+const nativeDateGetTime=Date.prototype.getTime;
+const isRealDate=value=>{try{nativeDateGetTime.call(value);return true;}catch{return false;}};
+function stringifyTemplateJson(value) {
+  if (typeof Object.prototype.toJSON==='function' || typeof Array.prototype.toJSON==='function'
+    || typeof String.prototype.toJSON==='function' || typeof Number.prototype.toJSON==='function'
+    || typeof Boolean.prototype.toJSON==='function') {
+    throw Error('禁止在内置原型上定义 toJSON');
+  }
+  return rawStringifyTemplateJson(value);
+}
 const input = parseTemplateInput(__input);
-globalThis.__input=undefined;
+delete globalThis.__input;
 let templateOutputLimit=__tavernOutputLimit;
+delete globalThis.__tavernOutputLimit;
+const AsyncFunction=(async function(){}).constructor;
+let conditionReadonlyDepth=0;
+function assertNotConditionReadonly(action) {
+  if (conditionReadonlyDepth>0) throw Error('@@if 条件必须只读，不能'+action);
+}
 function validate(value, depth=0, seen=new Set()) {
   if (depth>48) throw Error('模板变量嵌套超过 48 层');
   if (value===null || typeof value==='string' || typeof value==='boolean') return;
   if (typeof value==='number' && Number.isFinite(value)) return;
   if (!value || typeof value!=='object' || seen.has(value)) throw Error('模板变量必须是无循环 JSON 值');
+  if (typeof value.toJSON==='function' && !isRealDate(value)) throw Error('模板变量不能包含自定义 toJSON');
   seen.add(value);
   for (const [key,item] of Object.entries(value)) {
     if (['__proto__','prototype','constructor'].includes(key)) throw Error('禁止的变量路径');
@@ -34,7 +52,7 @@ function validate(value, depth=0, seen=new Set()) {
   }
   seen.delete(value);
 }
-const clone = value => { if (value===undefined) return undefined; validate(value); return JSON.parse(JSON.stringify(value)); };
+const clone = value => { if (value===undefined) return undefined; validate(value); return parseTemplateInput(stringifyTemplateJson(value)); };
 const scopes = clone(input.variables);
 const initial = {};
 const forbidden = new Set(['__proto__', 'constructor', 'prototype']);
@@ -77,7 +95,7 @@ function equal(a,b) {
   return keys.length===Object.keys(b).length && keys.every(key=>Object.hasOwn(b,key)&&equal(a[key],b[key]));
 }
 for (const entry of input.entries.filter(e => e.enabled && /^\[InitialVariables\]/i.test(e.comment))) {
-  const value = JSON.parse(entry.content);
+  const value = parseTemplateInput(entry.content);
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw Error('InitialVariables 必须是 JSON 对象');
   merge(initial, value);
 }
@@ -111,6 +129,7 @@ function getvar(key, opts = {}) {
   return opts.clone ? clone(value) : value;
 }
 function setvar(key, value, opts = {}) {
+  assertNotConditionReadonly('修改变量');
   mvuGuardWrite(key);
   if (validatingSchema) throw Error('变量校验期间不能修改变量');
   opts = options(opts);
@@ -161,6 +180,7 @@ function incvar(key, amount = 1, opts = {}) {
   return setvar(key, value, {...opts, scope:outScope});
 }
 function delvar(key, index, opts = {}) {
+  assertNotConditionReadonly('修改变量');
   mvuGuardWrite(key);
   if (validatingSchema) throw Error('变量校验期间不能修改变量');
   if(index && typeof index==='object' && !Array.isArray(index)) {opts={...options(index),...options(opts)};index=opts.index;}
@@ -258,7 +278,7 @@ Object.defineProperty(api,'variables',{enumerable:true,configurable:false,get:()
 api.getchr = api.getchar;
 api.getPresetPrompt = api.getpreset;
 api.getprp = api.getpreset;
-api.define = (name,value,combine=false)=> { path(name); api.defines[name]=combine ? merge(api.defines[name]||{},value) : value; api[name]=api.defines[name]; };
+api.define = (name,value,combine=false)=> { assertNotConditionReadonly('修改共享定义'); path(name); api.defines[name]=combine ? merge(api.defines[name]||{},value) : value; api[name]=api.defines[name]; };
 for (const scope of ['global','local','message']) {
   const title = scope[0].toUpperCase()+scope.slice(1);
   api['get'+title+'Var']=(key,opts={})=>getvar(key,{...options(opts),scope});
@@ -268,8 +288,25 @@ for (const scope of ['global','local','message']) {
   api['del'+title+'Var']=(key,index,opts={})=>delvar(key,index,{...options(opts),scope});
 }
 globalThis.__render = evalTemplate;
-globalThis.__scopes = scopes;
-globalThis.__export = () => { validate(scopes); validate(variables); if(variableSchema && JSON.stringify(variables)!==schemaCacheState) checkVariableSchema(variables); if (variableSchema && JSON.stringify(scopes)!==schemaState) checkVariableSchema(merge(merge(merge(clone(initial),scopes.global),scopes.local),scopes.message)); return JSON.stringify(scopes); };
+globalThis.__export = () => { validate(scopes); validate(variables); if(variableSchema && stringifyTemplateJson(variables)!==schemaCacheState) checkVariableSchema(variables); if (variableSchema && stringifyTemplateJson(scopes)!==schemaState) checkVariableSchema(merge(merge(merge(clone(initial),scopes.global),scopes.local),scopes.message)); return stringifyTemplateJson(scopes); };
+async function evalConditionExpression(expression) {
+  if (typeof expression !== 'string') throw Error('@@if 条件必须是字符串');
+  if (expression.length > templateOutputLimit) throw Error('@@if 条件超过长度上限');
+  if (!expression.trim()) return 'false';
+  if (++depth > 16) { depth--; throw Error('模板嵌套超过 16 层'); }
+  conditionReadonlyDepth++;
+  try {
+    const locals = Object.create(api);
+    __bindTemplateDefinitions(locals);
+    // 用独立 AsyncFunction 求值纯 JS 表达式并换行闭合，避免字符串中的 %> 或尾部 // 注释触发 EJS 语法错误。
+    const fn = new AsyncFunction('locals', 'with (locals) {\nreturn !!(\n' + expression + '\n);\n}');
+    return (await fn.call(locals, locals)) ? 'true' : 'false';
+  } finally {
+    conditionReadonlyDepth--;
+    depth--;
+  }
+}
+globalThis.__evalTemplateCondition = evalConditionExpression;
 function snapshotConditionState() {
   let nodes = 200000;
   const seen = [];

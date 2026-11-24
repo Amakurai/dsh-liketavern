@@ -122,6 +122,9 @@ export declare const zh: {
     readonly 'settings.worldinfo.maxRecursionSteps': "最大扫描轮数";
     readonly 'settings.worldinfo.maxRecursionStepsDesc': "含首轮：1 = 关闭递归，2 = 首轮加一轮递归，0 = 不限（仅受预算约束）。";
     readonly 'settings.worldinfo.strategy': "合并策略";
+    readonly 'settings.worldinfo.strategy.evenly': "均匀排序";
+    readonly 'settings.worldinfo.strategy.characterFirst': "角色世界书优先";
+    readonly 'settings.worldinfo.strategy.globalFirst': "全局世界书优先";
     readonly 'settings.worldinfo.recursiveScan': "递归扫描";
     readonly 'settings.worldinfo.recursiveScanDesc': "命中条目的内容继续作为关键词扫描。";
     readonly 'settings.worldinfo.caseSensitive': "区分大小写";

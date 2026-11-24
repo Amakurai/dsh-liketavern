@@ -212,7 +212,7 @@ export declare const METHODS: {
             tags: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniArray<import("zod/mini").ZodMiniString<string>>>;
             depthPrompt: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNullable<import("zod/mini").ZodMiniObject<{
                 prompt: import("zod/mini").ZodMiniString<string>;
-                depth: import("zod/mini").ZodMiniNumber<number>;
+                depth: import("zod/mini").ZodMiniInt;
                 role: import("zod/mini").ZodMiniEnum<{
                     user: "user";
                     system: "system";
@@ -1543,7 +1543,7 @@ export declare const TYPERT_HOST: {
                     tags: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniArray<import("zod/mini").ZodMiniString<string>>>;
                     depthPrompt: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNullable<import("zod/mini").ZodMiniObject<{
                         prompt: import("zod/mini").ZodMiniString<string>;
-                        depth: import("zod/mini").ZodMiniNumber<number>;
+                        depth: import("zod/mini").ZodMiniInt;
                         role: import("zod/mini").ZodMiniEnum<{
                             user: "user";
                             system: "system";
@@ -2069,7 +2069,7 @@ export declare const TYPERT_REMOTE: {
                     tags: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniArray<import("zod/mini").ZodMiniString<string>>>;
                     depthPrompt: import("zod/mini").ZodMiniOptional<import("zod/mini").ZodMiniNullable<import("zod/mini").ZodMiniObject<{
                         prompt: import("zod/mini").ZodMiniString<string>;
-                        depth: import("zod/mini").ZodMiniNumber<number>;
+                        depth: import("zod/mini").ZodMiniInt;
                         role: import("zod/mini").ZodMiniEnum<{
                             user: "user";
                             system: "system";

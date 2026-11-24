@@ -69,10 +69,13 @@ export function installCardMvu(codec:HelperMvuCommandCodec,json:(value:unknown,m
       else (target as Table)[key]=value&&typeof value==='object'?json(value):value
     }
   }
+  // MVU 单次事件会同时携带 next（含 stat_data + display_data + delta_data）、before 与回复正文；
+  // 预算按 1 MiB 状态上限对齐为 4 MiB，避免中等规模状态在普通 256 KiB 事件上限下必崩。
+  const MVU_EVENT_MAX_BYTES=4*1024*1024
   async function emit(name:string,...args:unknown[]):Promise<void>{
-    check();json(args,256*1024)
+    check();json(args,MVU_EVENT_MAX_BYTES)
     await (root.eventEmit as (name:string,...args:unknown[])=>Promise<void>)(name,...args)
-    check();json(args,256*1024)
+    check();json(args,MVU_EVENT_MAX_BYTES)
   }
   async function parseMessage(message:string,oldData:unknown):Promise<Table>{
     check()

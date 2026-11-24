@@ -4,9 +4,8 @@ import type { Agent, InboxTarget } from '@deepseek-ai/dsh-agent'
 import type { Session, SessionEvent, UserMessage } from '@deepseek-ai/dsh-session'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { setTimeout as delay } from 'node:timers/promises'
-import { helperMvuPending, queueHelperMvuStop } from './helperMvu.js'
+import { helperMvuPending, latestCompletedMvuAssistant, queueHelperMvuStop } from './helperMvu.js'
 import { isTurnDeferred } from './sessionLifecycle.js'
-import { isTavernGreetingEvent } from '../core/greetingLog.js'
 import { hasNormalAssistantStop } from '../core/assistantStream.js'
 import { findLastEvent } from './sessionEvents.js'
 import type { TavernState } from './state.js'
@@ -50,21 +49,10 @@ function currentTurn(session: Snapshot): number | undefined {
   const event = findLastEvent(session.snapshotEvents(), item => item.type === 'turn/start' || item.type === 'turn/end')
   return event?.type === 'turn/start' ? event.data.turn : undefined
 }
-/** 找出可作为初次 MVU 初始化锚点的最新完成角色回复轮号；无可用锚点返回 null。 */
+/** 找出可作为初次 MVU 初始化锚点的最新完成角色回复轮号；与 helperMvu.latestCompleted 共用同一谓词。 */
 export function helperMvuInitAnchorTurn(session: Snapshot): number | null {
-  const events = session.snapshotEvents()
-  const completedTurns = new Set<number>()
-  for (const event of events) {
-    if (event.type === 'turn/end' && event.data.reason.kind === 'completed') completedTurns.add(event.data.turn)
-  }
-  const latest = findLastEvent(events, event => {
-    if (event.type !== 'assistant/message' || event.data.interrupted || event.surfaceOp !== undefined && event.surfaceOp !== 'append'
-      || !event.data.message.content.some(block => block.type === 'text' && block.text.trim())) return false
-    if (isTavernGreetingEvent(event) || event.data.turn === 0) return true
-    if (!completedTurns.has(event.data.turn)) return false
-    return hasNormalAssistantStop(event)
-  })
-  return latest?.type === 'assistant/message' ? latest.data.turn : null
+  const latest = latestCompletedMvuAssistant(session.snapshotEvents())
+  return latest ? latest.data.turn : null
 }
 
 /** 空历史没有可初始化的回复，允许首轮生成；开场白由维护等待的 session task 先写入。 */

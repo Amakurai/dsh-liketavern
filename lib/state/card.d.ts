@@ -15,6 +15,12 @@ export declare class CardParseError extends Error {
  * 兼容：对象（entries 为数组或 map）、顶层即为条目数组、JSON 字符串。
  */
 export declare function normalizeBook(value: unknown): LorebookFile | null;
+/**
+ * 归一化第三方角色卡 / 预设的 regex_scripts 单项：
+ * 过滤非对象，按 core/regex 同口径容错规整字段，避免畸形项在编译或存储校验时崩溃；
+ * 字段全部合规时按写时复制保留原对象引用，不破坏上游按引用去重（如兼容报告）。
+ */
+export declare function normalizeCardRegexScript(raw: unknown): CardRegexScript | null;
 /** 从 data / 顶层 / extensions 挑出 regex_scripts（V3 卡常放在 extensions 里）。 */
 export declare function pickRegexScripts(json: Record<string, unknown>, data: Record<string, unknown>): CardRegexScript[];
 /** 已落盘的归一化卡也可能 regexScripts 为空，从 raw / extensions 补回。 */

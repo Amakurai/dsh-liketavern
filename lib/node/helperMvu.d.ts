@@ -19,6 +19,8 @@ export declare function assertHelperMvuContinuable(state: TavernState, sessionId
 export declare function assertHelperMvuWritable(state: TavernState, sessionId: string, options?: {
     waitForAdoption?: boolean;
 }): Promise<void>;
+/** 统一判定可作为 MVU 初始化/锚点的最新完成角色回复，供门控与任务准备共用，避免判定漂移。 */
+export declare function latestCompletedMvuAssistant(events: readonly SessionEvent[]): SessionEvent<'assistant/message'> | undefined;
 /** 后台脚本在任何沙箱挂载前取得安全锚点并播种静态 data；不会领取执行租约或执行第三方代码。 */
 export declare function ensureHelperMvuScriptAnchor(ctx: Context, state: TavernState, sessionId: string, storyId: string): Promise<number | null>;
 export declare function prepareHelperMvuJob(ctx: Context, state: TavernState, request: Request): Promise<HelperMvuWork>;

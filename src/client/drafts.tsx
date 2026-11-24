@@ -9,10 +9,10 @@ type DraftStatus = { dirty: boolean; busy: boolean; clearDraft: () => void }
 const DraftContext = createContext<((id: string, status: DraftStatus | null) => void) | null>(null)
 
 /** 每个编辑器独立注册，避免一个干净的子编辑器覆盖另一个编辑器的未保存状态。 */
-export function useDraftGuard(dirty: boolean, busy = false, clearChildren?: () => void) {
+export function useDraftGuard(dirty: boolean, busy = false, clearChildren?: () => void, persistStatus = true) {
   const report = useContext(DraftContext)
   const id = useId()
-  const discard = usePersistentDraftStatus(id, dirty, busy)
+  const discard = usePersistentDraftStatus(id, dirty, busy, persistStatus)
   // 确认放弃和保存后立即关闭都可同步清理；不能依赖卸载前再提交一次 dirty=false。
   const clearDraft = useCallback(() => { clearChildren?.(); discard?.() }, [discard, clearChildren])
   const t = useT()
@@ -66,7 +66,9 @@ export function DraftScope(props: { children: (request: (action: () => void) => 
   const clearChildren = useCallback(() => {
     for (const status of Object.values(currentStatuses.current)) if (status.dirty) status.clearDraft()
   }, [])
-  const guard = useDraftGuard(dirty, busy, clearChildren)
+  // DraftScope 仅汇总子编辑器状态，不向 PersistentEditor 重复登记影子脏态；
+  // 否则子编辑器调用 guard.clearDraft() 时，外层影子 dirty=true 会阻止同步删除草稿。
+  const guard = useDraftGuard(dirty, busy, clearChildren, false)
   return <DraftContext.Provider value={report}>
     {props.children(guard.request, dirty, busy)}
     {guard.confirmation}

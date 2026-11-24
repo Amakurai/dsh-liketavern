@@ -29,7 +29,8 @@ export function parseHelperWorldbook(input:unknown):HelperWorldbookEntry[] {
   const text=(value:unknown,fallback='',max=100000)=>{if(value===undefined)return fallback;if(typeof value!=='string'||value.length>max)throw new Error('世界书文本字段类型无效或超出预算');return value}
   const bool=(value:unknown,fallback:boolean)=>{if(value===undefined)return fallback;if(typeof value!=='boolean')throw new Error('世界书开关必须为布尔值');return value}
   const number=(value:unknown,fallback:number,min=0,max=Number.MAX_SAFE_INTEGER)=>{if(value===undefined)return fallback;if(typeof value!=='number'||!Number.isFinite(value)||value<min||value>max)throw new Error('世界书数值字段无效');return value}
-  const nullable=(value:unknown)=>value==null?null:number(value,0)
+  const integer=(value:unknown,fallback:number,min=0,max=Number.MAX_SAFE_INTEGER)=>{const n=number(value,fallback,min,max);if(!Number.isSafeInteger(n))throw new Error('世界书整数字段无效');return n}
+  const nullableInt=(value:unknown)=>value==null?null:integer(value,0)
   const choice=<T extends string>(value:unknown,values:readonly T[],fallback:T):T=>{if(value===undefined)return fallback;if(!values.includes(value as T))throw new Error('世界书枚举字段无效');return value as T}
   const keys=(value:unknown):string[]=>{if(value===undefined)return [];if(!Array.isArray(value)||value.length>2000)throw new Error('世界书关键字列表无效');return value.map(item=>text(item,'',500))}
   return data.map(value=>{
@@ -37,11 +38,11 @@ export function parseHelperWorldbook(input:unknown):HelperWorldbookEntry[] {
     while(reserved.has(next))next++
     const uid=item.uid===undefined?next++:Number(item.uid);reserved.add(uid)
     if(ids.has(uid))throw new Error('世界书 UID 重复');ids.add(uid)
-    const scan=strategy.scan_depth===undefined||strategy.scan_depth==='same_as_global'?'same_as_global':number(strategy.scan_depth,0)
+    const scan=strategy.scan_depth===undefined||strategy.scan_depth==='same_as_global'?'same_as_global':integer(strategy.scan_depth,0)
     return {uid,name:text(item.name,'',4096),enabled:bool(item.enabled,true),content:text(item.content),probability:number(item.probability,100,0,100),
       strategy:{type:choice(strategy.type,['constant','selective','vectorized'],'selective'),keys:keys(strategy.keys),keys_secondary:{logic:choice(secondary.logic,['and_any','and_all','not_all','not_any'],'and_any'),keys:keys(secondary.keys)},scan_depth:scan},
-      position:{type:choice(position.type,['before_character_definition','after_character_definition','before_author_note','after_author_note','at_depth','before_example_messages','after_example_messages','outlet'],'before_character_definition'),role:choice(position.role,['system','assistant','user'],'system'),depth:number(position.depth,4),order:number(position.order,100,-Number.MAX_SAFE_INTEGER)},
-      recursion:{prevent_incoming:bool(recursion.prevent_incoming,false),prevent_outgoing:bool(recursion.prevent_outgoing,false),delay_until:nullable(recursion.delay_until)},
-      effect:{sticky:nullable(effect.sticky),cooldown:nullable(effect.cooldown),delay:nullable(effect.delay)},extra:record(item.extra)}
+      position:{type:choice(position.type,['before_character_definition','after_character_definition','before_author_note','after_author_note','at_depth','before_example_messages','after_example_messages','outlet'],'before_character_definition'),role:choice(position.role,['system','assistant','user'],'system'),depth:integer(position.depth,4),order:number(position.order,100,-Number.MAX_SAFE_INTEGER)},
+      recursion:{prevent_incoming:bool(recursion.prevent_incoming,false),prevent_outgoing:bool(recursion.prevent_outgoing,false),delay_until:nullableInt(recursion.delay_until)},
+      effect:{sticky:nullableInt(effect.sticky),cooldown:nullableInt(effect.cooldown),delay:nullableInt(effect.delay)},extra:record(item.extra)}
   })
 }

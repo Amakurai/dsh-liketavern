@@ -46,6 +46,7 @@ function newRule(): RegexRule {
 const RuleEditor = memo(function RuleEditor(props: {
   rule: RegexRule
   index: number
+  disabled?: boolean
   canMoveUp: boolean
   canMoveDown: boolean
   onMove: (index: number, delta: -1 | 1) => void
@@ -53,7 +54,9 @@ const RuleEditor = memo(function RuleEditor(props: {
   onDelete: (index: number) => void
 }) {
   const t = useT()
-  const { rule, index } = props
+  const { rule, index, disabled } = props
+  // 保存飞行期间允许继续编辑文本字段（保留为未保存草稿，见 editorInteractionAudit），
+  // 但禁用排序/删除等结构性变更，避免下标错位或误删正在提交的规则。
   const set = (patch: Partial<RegexRule>) => props.onChange(index, { ...rule, ...patch })
   return (
     <div className="dsh-tavern-entry" style={{ marginBottom: 8 }}>
@@ -61,17 +64,17 @@ const RuleEditor = memo(function RuleEditor(props: {
         <Toggle checked={rule.enabled} onChange={(enabled) => set({ enabled })} title={rule.enabled ? t('regex.toggleDisable') : t('regex.toggleEnable')} />
         <input aria-label={t('regex.ruleName')} className="dsh-tavern-input" style={{ flex: 1 }} value={rule.name} onChange={(e) => set({ name: e.target.value })} />
         <Badge>{t(SOURCE_LABEL_KEY[rule.source])}</Badge>
-        <IconBtn label={t('regex.moveUp')} disabled={!props.canMoveUp} onClick={() => props.onMove(index, -1)}>
+        <IconBtn label={t('regex.moveUp')} disabled={disabled || !props.canMoveUp} onClick={() => props.onMove(index, -1)}>
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <path d="M4 10l4-4 4 4" />
           </svg>
         </IconBtn>
-        <IconBtn label={t('regex.moveDown')} disabled={!props.canMoveDown} onClick={() => props.onMove(index, 1)}>
+        <IconBtn label={t('regex.moveDown')} disabled={disabled || !props.canMoveDown} onClick={() => props.onMove(index, 1)}>
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <path d="M4 6l4 4 4-4" />
           </svg>
         </IconBtn>
-        <IconBtn label={t('regex.deleteRule')} danger onClick={() => props.onDelete(index)}>
+        <IconBtn label={t('regex.deleteRule')} danger disabled={disabled} onClick={() => props.onDelete(index)}>
           <IconTrashOutlineMedium />
         </IconBtn>
       </div>
@@ -235,6 +238,7 @@ export function RegexSection(props: { remote: TavernRemote }) {
   const [ruleLimit, setRuleLimit] = useState(40)
   const shownRules = current.slice(0, ruleLimit)
   const moveRule = useCallback((index: number, delta: -1 | 1) => {
+    if (saving.current) return
     setRules((prev) => {
       if (!prev) return prev
       const target = index + delta
@@ -254,8 +258,15 @@ export function RegexSection(props: { remote: TavernRemote }) {
     })
   }, [setRules])
   const removeRule = useCallback((index: number) => {
+    if (saving.current) return
     setRules((prev) => (prev ? prev.filter((_, j) => j !== index) : prev))
   }, [setRules])
+  const reloadPresetRegex = () => {
+    if (saving.current) return
+    setError(null)
+    setPresetDrafts(null)
+    presetRegex.reload()
+  }
   const discardNow = () => {
     if (saving.current) return
     setConfirmDiscard(false)
@@ -323,6 +334,7 @@ export function RegexSection(props: { remote: TavernRemote }) {
               key={rule.id}
               rule={rule}
               index={i}
+              disabled={busy}
               canMoveUp={i > 0}
               canMoveDown={i < current.length - 1}
               onMove={moveRule}
@@ -364,7 +376,10 @@ export function RegexSection(props: { remote: TavernRemote }) {
       )}
 
       <div className="dsh-tavern-regexPresets">
-        <div className="dsh-tavern-groupHead">{t('regex.presetHead')}</div>
+        <div className="dsh-tavern-groupHead" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+          <span>{t('regex.presetHead')}</span>
+          <Btn disabled={busy || presetRegex.state.status === 'loading'} onClick={reloadPresetRegex}>{t('action.refresh')}</Btn>
+        </div>
         {presetRegex.state.status === 'loading' && (
           <>
             <Skeleton height={56} />

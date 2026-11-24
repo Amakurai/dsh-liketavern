@@ -1,5 +1,6 @@
 /** 会话原生 MVU 调度器：后台轮询持久任务，绑定脚本就绪与租约，沙箱计算完成后才提交结果。 */
 import {useEffect,useLayoutEffect,useMemo,useRef,useState} from 'react'
+import {describeError} from '../core/guards.js'
 import {buildCardSrcDoc} from '../core/cardFrame.js'
 import {helperJson,helperRecord} from '../core/helperRuntime.js'
 import type {HelperMvuWork} from '../core/helperMvu.js'
@@ -14,22 +15,38 @@ import { randomUuid, sha256Hex } from '../core/secureRandom.js'
 const IDLE_POLL_BASE_DELAY_MS=2_000
 const IDLE_POLL_MAX_DELAY_MS=30_000
 
-export function HelperMvuRunner(props:{remote:TavernRemote;sessionId:string;storyId:string;snapshot:HelperSnapshot;ready:boolean;onStatus?:(status:{error:string|null;busy:boolean;retry:()=>void})=>void;onCancel?:()=>Promise<void>}){
+export interface HelperMvuRunnerStatus {
+  error:string|null
+  busy:boolean
+  restartRequired:boolean
+  canCancel:boolean
+  canceling:boolean
+  cancelError:string|null
+  retry:()=>void
+  cancel?:()=>Promise<void>
+}
+
+export function HelperMvuRunner(props:{remote:TavernRemote;sessionId:string;storyId:string;snapshot:HelperSnapshot;ready:boolean;onStatus?:(status:HelperMvuRunnerStatus)=>void;onCancel?:()=>Promise<void>}){
   const t=useT(),frame=useRef<HTMLIFrameElement|null>(null),live=useRef(props)
   live.current=props
   const [error,setError]=useState<string|null>(null),[busy,setBusy]=useState(false),[restartRequired,setRestartRequired]=useState(false)
   const [canceling,setCanceling]=useState(false),[cancelError,setCancelError]=useState<string|null>(null),cancelPending=useRef(false)
+  const [sandboxGen,setSandboxGen]=useState(0)
   const cancelWaiting=async()=>{
-    if(!props.onCancel||cancelPending.current)return
+    if(!live.current.onCancel||cancelPending.current)return
     cancelPending.current=true;setCanceling(true);setCancelError(null)
-    try{await props.onCancel()}catch(value){setCancelError(String(value instanceof Error?value.message:value))}
+    try{await live.current.onCancel()}catch(value){setCancelError(describeError(value))}
     finally{cancelPending.current=false;setCanceling(false)}
   }
+  const cancelRef=useRef(cancelWaiting)
+  cancelRef.current=cancelWaiting
   const retry=useRef<()=>void>(()=>{}),pollRef=useRef<()=>void>(()=>{})
-  useEffect(()=>{props.onStatus?.({error,busy,retry:()=>retry.current()})},[error,busy,props.onStatus])
+  const canCancel=Boolean(props.onCancel&&(!props.ready||busy||error))
+  const hasCancel=Boolean(props.onCancel)
+  useEffect(()=>{props.onStatus?.({error,busy,restartRequired,canCancel,canceling,cancelError,retry:()=>retry.current(),cancel:hasCancel?()=>cancelRef.current():undefined})},[error,busy,restartRequired,canCancel,canceling,cancelError,hasCancel,props.onStatus])
   const srcDoc=useMemo(()=>buildCardSrcDoc('',{greetings:[],greetingIndex:0,helperSnapshot:props.snapshot,mvuRunner:true}),[props.sessionId,props.storyId])
   useLayoutEffect(()=>{
-    let active=true,frameRuntime='',running=false,polling=false,failed=false,committing=false,wakeQueued=false,selfNotifying=false
+    let active=true,frameRuntime='',running=false,sandboxBusy=false,polling=false,failed=false,committing=false,wakeQueued=false,selfNotifying=false
     let work:HelperMvuWork|undefined,result:unknown,deadline=0,renewAt=0,renewFailures=0,idlePollAt=0,idleAttempts=0,requestId='',restart=false
     let timerId:ReturnType<typeof setTimeout>|undefined
     const nextPollDelay=():number=>{
@@ -110,6 +127,7 @@ export function HelperMvuRunner(props:{remote:TavernRemote;sessionId:string;stor
             restart=true;setRestartRequired(true)
             throw new Error(t('speech.mvuLeaseChanged'))
           }
+          if(running&&result===undefined)setError(null)
           return
         }
         setBusy(next.status==='waiting')
@@ -123,9 +141,16 @@ export function HelperMvuRunner(props:{remote:TavernRemote;sessionId:string;stor
           return
         }
         idleAttempts=0;idlePollAt=0
-        work=next;running=true;deadline=Date.now()+300000;requestId=randomUuid();setBusy(true);setError(null)
+        work=next;running=true;sandboxBusy=true;deadline=Date.now()+300000;requestId=randomUuid();setBusy(true);setError(null)
         send({action:'helperMvuRun',runtimeId:frameRuntime,requestId,work:next})
-      }catch(value){if(work===expectedWork){if(work)renewAt=Date.now()+Math.min(60000,5000*2**Math.min(renewFailures++,4));fail(value)}}finally{polling=false;if(wakeQueued&&active){wakeQueued=false;void poll()}else scheduleTimer()}
+      }catch(value){
+        if(work===expectedWork){
+          if(work)renewAt=Date.now()+Math.min(60000,5000*2**Math.min(renewFailures++,4))
+          // 沙箱计算中遇到瞬时续租错误不中止 running，也不停轮询；保留计算结果接收能力并按 renewAt 退避重试续租。
+          if(running&&result===undefined&&!restart){if(active)setError(describeError(value).slice(0,2000))}
+          else fail(value)
+        }
+      }finally{polling=false;if(wakeQueued&&active){wakeQueued=false;void poll()}else scheduleTimer()}
     }
     const wake=()=>{if(selfNotifying)return;idleAttempts=0;idlePollAt=0;if(polling||committing){wakeQueued=true;return}void poll()}
     const receive=(event:MessageEvent)=>{
@@ -140,12 +165,24 @@ export function HelperMvuRunner(props:{remote:TavernRemote;sessionId:string;stor
       if(value.action==='helperSnapshotGet'&&typeof value.requestId==='string'&&value.storyId===storyId&&endpoint.matchesRuntime(value.runtimeId)){
         send({action:'helperSnapshotResult',runtimeId:value.runtimeId,requestId:value.requestId,ok:true,snapshot:work?.snapshot??live.current.snapshot});return
       }
-      if(value.action!=='helperMvuResult'||!endpoint.matchesRuntime(value.runtimeId)||value.requestId!==requestId||!running||result!==undefined)return
+      if(value.action!=='helperMvuResult'||!endpoint.matchesRuntime(value.runtimeId)||value.requestId!==requestId)return
+      sandboxBusy=false
+      if(!running||result!==undefined)return
       if(!valid()){fail(t('speech.mvuTaskChanged'));return}
       if(value.ok!==true){fail(value.error);return}
       try{result=helperJson(value.data);void commit().catch(error=>{fail(error);scheduleTimer()})}catch(error){fail(error)}
     }
     retry.current=()=>{
+      // 计算中遇到瞬时续租失败时，沙箱仍在执行：直接立即重试续租，避免把进行中的计算提前打断。
+      if(running&&result===undefined&&!restart&&!failed){
+        renewAt=0;void poll();return
+      }
+      // 旧任务超限/租约变更后沙箱仍占着 busy 锁：重建隔离 iframe，避免重发 helperMvuRun 立刻被拒绝。
+      if(sandboxBusy){
+        setRestartRequired(false);setError(null);setBusy(false)
+        setSandboxGen(n=>n+1)
+        return
+      }
       failed=false;setError(null);idleAttempts=0;idlePollAt=0
       if(restart){restart=false;setRestartRequired(false);result=undefined;work=undefined;running=false;renewFailures=0;renewAt=0;void poll()}
       else if(result!==undefined){setBusy(true);void commit().catch(error=>{fail(error);scheduleTimer()})}
@@ -156,14 +193,14 @@ export function HelperMvuRunner(props:{remote:TavernRemote;sessionId:string;stor
     window.addEventListener('message',receive)
     scheduleTimer()
     return()=>{active=false;if(timerId!==undefined)clearTimeout(timerId);stopWatch();for(const cancel of requests)cancel();endpoint.dispose();window.removeEventListener('message',receive);retry.current=()=>{};pollRef.current=()=>{}}
-  },[props.sessionId,props.storyId,srcDoc])
+  },[props.sessionId,props.storyId,srcDoc,sandboxGen])
   useEffect(()=>{if(props.ready)pollRef.current()},[props.ready])
   return <span>
     <Muted>{t(!props.ready?'speech.mvuWaiting':busy?'speech.mvuRunning':'speech.mvuReady')}</Muted>
     <Err message={error}/>
     <Err message={cancelError}/>
-    {props.onCancel&&(!props.ready||busy||error)&&<Btn disabled={canceling} onClick={()=>{void cancelWaiting()}}>{t('speech.mvuCancel')}</Btn>}
+    {canCancel&&<Btn disabled={canceling} onClick={()=>{void cancelWaiting()}}>{t('speech.mvuCancel')}</Btn>}
     {error&&<Btn onClick={()=>retry.current()}>{t(restartRequired?'speech.mvuRestart':'speech.mvuRetry')}</Btn>}
-    <iframe ref={frame} srcDoc={srcDoc} sandbox="allow-scripts" title={t('speech.mvuTitle')} hidden/>
+    <iframe key={sandboxGen} ref={frame} srcDoc={srcDoc} sandbox="allow-scripts" title={t('speech.mvuTitle')} hidden/>
   </span>
 }

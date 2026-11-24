@@ -371,6 +371,7 @@ function convertSafePreBlocks(text: string, mask: MaskedCode): string {
   if (!/<pre(?=[\s/>])/i.test(text)) return text
   const { lines, breaks } = splitLinesWithBreaks(text)
   const indented = findIndentedCodeLines(lines)
+  const tableLines = findGfmTableLines(text)
   const lineStarts: number[] = []
   let off = 0
   for (let i = 0; i < lines.length; i++) {
@@ -396,13 +397,14 @@ function convertSafePreBlocks(text: string, mask: MaskedCode): string {
       continue
     }
     const openLineIdx = lineOf(tag.start)
-    if (indented.has(openLineIdx)) { pos = tag.end; continue }
+    if (indented.has(openLineIdx) || tableLines.has(openLineIdx)) { pos = tag.end; continue }
     const preAttrs = parseSafeTagAttrs(tag.rawAttrs)
     if (!preAttrs || !hasOnlyAttrs(preAttrs, BLOCK_SAFE_ATTRS)) { pos = tag.end; continue }
     const closeRe = /<\/pre\s*>/gi
     closeRe.lastIndex = tag.end
     const closeMatch = closeRe.exec(text)
     if (!closeMatch) { pos = tag.end; continue }
+    if (tableLines.has(lineOf(closeMatch.index))) { pos = closeRe.lastIndex; continue }
 
     let rawBody = text.slice(tag.end, closeMatch.index)
     let lang = ''
@@ -881,7 +883,7 @@ function normalizeUnmatchedBlockquotes(text: string, mask: MaskedCode): string {
     if (!tag) { pos = open + 1; continue }
     if (tag.name !== 'blockquote') { pos = tag.end; continue }
     const lineIdx = lineOf(tag.start)
-    if (indented.has(lineIdx)) { pos = tag.end; continue }
+    if (indented.has(lineIdx) || tableLines.has(lineIdx)) { pos = tag.end; continue }
     if (!tag.closing && !tag.selfClosing) {
       const attrs = parseSafeTagAttrs(tag.rawAttrs)
       stack.push({ tag, lineIdx, safe: attrs !== null && hasOnlyAttrs(attrs, QUOTE_SAFE_ATTRS) })
@@ -1396,6 +1398,28 @@ function convertSafeBareListItems(text: string, mask: MaskedCode): string {
   return joinLinesWithBreaks(nextLines, nextBreaks)
 }
 
+/** 为被 `<blockquote>` 包裹的多行代码占位符（围栏代码块、`<pre>` 转换结果或跨行行内代码）逐行补齐引用前缀。 */
+function quoteMaskedBlock(inner: string, outerPrefix: string, mask: MaskedCode): string {
+  if (!mask.prefix || !inner.includes(mask.prefix)) return inner
+  const pattern = new RegExp(`${mask.prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\d+)${mask.suffix}`, 'g')
+  const outerTrim = outerPrefix.trimEnd()
+  return inner.replace(pattern, (raw, idxStr: string) => {
+    const original = mask.saved[Number(idxStr)]
+    if (original === undefined || !/[\r\n]/.test(original)) return raw
+    const blockLines = original.split(/\r?\n/)
+    const rebuilt = blockLines.map((line, index) => {
+      let clean = line
+      if (outerPrefix) {
+        if (clean.startsWith(outerPrefix)) clean = clean.slice(outerPrefix.length)
+        else if (outerTrim && clean === outerTrim) clean = ''
+      }
+      if (index === 0) return clean
+      return clean === '' ? `${outerPrefix}>` : `${outerPrefix}> ${clean}`
+    })
+    return mask.protect(rebuilt.join('\n'))
+  })
+}
+
 /** Pass 3：处理块级包装标签（`<blockquote>`、`<center>`、`<h1>`-`<h6>`、`<p>`、`<hr>`）。 */
 function normalizeBlockHtml(text: string, mask: MaskedCode): string {
   if (!/<\/?(?:center|p|h[1-6]|blockquote|hr|li)(?=[\s/>])/i.test(text)) return text
@@ -1406,6 +1430,7 @@ function normalizeBlockHtml(text: string, mask: MaskedCode): string {
     if (!/<blockquote(?=[\s/>])/i.test(current)) break
     const { lines, breaks } = splitLinesWithBreaks(current)
     const indented = findIndentedCodeLines(lines)
+    const tableLines = findGfmTableLines(current)
     const lineStarts: number[] = []
     let off = 0
     for (let i = 0; i < lines.length; i++) {
@@ -1426,7 +1451,7 @@ function normalizeBlockHtml(text: string, mask: MaskedCode): string {
       const tag = parseHtmlTagAt(current, open)
       if (!tag) { pos = open + 1; continue }
       if (tag.name !== 'blockquote') { pos = tag.end; continue }
-      if (indented.has(lineOf(tag.start))) { pos = tag.end; continue }
+      if (indented.has(lineOf(tag.start)) || tableLines.has(lineOf(tag.start))) { pos = tag.end; continue }
       if (!tag.closing && !tag.selfClosing) {
         const attrs = parseSafeTagAttrs(tag.rawAttrs)
         stack.push({ tag, safe: attrs !== null && hasOnlyAttrs(attrs, QUOTE_SAFE_ATTRS), hasSafeChild: false })
@@ -1447,10 +1472,21 @@ function normalizeBlockHtml(text: string, mask: MaskedCode): string {
       const target = targets[t]!
       const openLineIdx = lineOf(target.open.start)
       const outerPrefix = lineLayout(lines[openLineIdx]!).quotePrefix
-      const inner = current.slice(target.open.end, target.close.start).replace(/^\s*\r?\n/, '').replace(/\r?\n[ \t]*$/, '').trim()
+      const outerTrim = outerPrefix.trimEnd()
+      const rawLines = current.slice(target.open.end, target.close.start).split(/\r?\n/)
+      const isBlankQuoteLine = (line: string): boolean => {
+        const trimmed = line.trim()
+        return trimmed === '' || (outerTrim !== '' && trimmed === outerTrim)
+      }
+      while (rawLines.length > 0 && isBlankQuoteLine(rawLines[0]!)) rawLines.shift()
+      while (rawLines.length > 0 && isBlankQuoteLine(rawLines[rawLines.length - 1]!)) rawLines.pop()
+      const rawInner = rawLines.join('\n').trim()
+      const inner = rawInner ? quoteMaskedBlock(rawInner, outerPrefix, mask) : ''
       const quotedInner = inner
         ? inner.split(/\r?\n/).map(l => {
-            const clean = outerPrefix && l.startsWith(outerPrefix) ? l.slice(outerPrefix.length) : l
+            const clean = outerPrefix && l.startsWith(outerPrefix)
+              ? l.slice(outerPrefix.length)
+              : (outerTrim && l.trim() === outerTrim ? '' : l)
             return clean.trim() ? `${outerPrefix}> ${clean.trimStart()}` : `${outerPrefix}>`
           }).join('\n')
         : ''
@@ -1484,6 +1520,7 @@ function normalizeBlockHtml(text: string, mask: MaskedCode): string {
   if (/<\/?(?:p|hr)(?=[\s/>])/i.test(current)) {
     const { lines, breaks } = splitLinesWithBreaks(current)
     const indented = findIndentedCodeLines(lines)
+    const tableLines = findGfmTableLines(current)
     const nextLines: string[] = []
     const nextBreaks: string[] = []
     const pStack: boolean[] = []
@@ -1496,7 +1533,7 @@ function normalizeBlockHtml(text: string, mask: MaskedCode): string {
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i]!
       const br = i < breaks.length ? breaks[i] : undefined
-      if (indented.has(i) || !/<\/?(?:p|hr)(?=[\s/>])/i.test(line)) {
+      if (indented.has(i) || tableLines.has(i) || !/<\/?(?:p|hr)(?=[\s/>])/i.test(line)) {
         pushLine(line, br)
         continue
       }
@@ -1843,7 +1880,10 @@ function convertSafeInlineFormatting(text: string, mask: MaskedCode): string {
         const closeMatch = closeRe.exec(line)
         if (!closeMatch) { pos = tag.end; continue }
         const inner = line.slice(tag.end, closeMatch.index)
-        const outerBefore = boundaryChar(line, tag.start - 1, 'end', mask)
+        // 相邻转换（如 <i>a</i><i>b</i>）时用已生成的 out 末尾字符检查贴合，避免合并成 *a**b* / **a****b** / ~~a~~~~b~~。
+        const outerBefore = cursor === tag.start && out.length > 0
+          ? boundaryChar(out, out.length - 1, 'end', mask)
+          : boundaryChar(line, tag.start - 1, 'end', mask)
         const outerAfter = boundaryChar(line, closeRe.lastIndex, 'start', mask)
 
         // 含嵌套标签时仅允许内部存在安全 <br>（按 <br> 拆段分别包裹），其它嵌套留给更内层或跳过。
@@ -1928,105 +1968,110 @@ function convertSafeInlineFormatting(text: string, mask: MaskedCode): string {
   const blockMarkerRe = /^(?:#{1,6}(?:[ \t]|$)|(?:[-*_][ \t]*){3,}$|[-+*][ \t]+|\d{1,9}[.)][ \t]+|>)/
 
   let multiChanged = false
-  for (let i = 0; i < lines.length; i++) {
-    if (indented.has(i) || tableLines.has(i)) continue
-    const line = lines[i]!
-    if (!/<(?:b|strong|i|em|s|del|strike)(?=[\s/>])/i.test(line)) continue
-    const startLayout = lineLayout(line)
-    let pos = startLayout.contentStart
-    while (pos < line.length) {
-      const open = line.indexOf('<', pos)
-      if (open < 0) break
-      const tag = parseHtmlTagAt(line, open)
-      if (!tag || tag.closing || tag.selfClosing) {
-        pos = tag ? tag.end : open + 1
-        continue
-      }
-      const spec = Object.hasOwn(INLINE_FORMAT_MAP, tag.name) ? INLINE_FORMAT_MAP[tag.name] : undefined
-      if (!spec) { pos = tag.end; continue }
-      const attrs = parseSafeTagAttrs(tag.rawAttrs)
-      if (!attrs || !hasOnlyAttrs(attrs, SPAN_SAFE_ATTRS)) { pos = tag.end; continue }
-      const firstTail = line.slice(tag.end)
-      if (firstTail.includes('<') || firstTail.includes('>') || hasFencePlaceholder(firstTail, mask)) {
-        pos = tag.end
-        continue
-      }
-      const closeRe = new RegExp(`</${tag.name}\\s*>`, 'i')
-      let closeLine = -1
-      let closeMatch: RegExpExecArray | null = null
-      let valid = true
-      const maxScan = Math.min(lines.length - 1, i + 8)
-      for (let j = i + 1; j <= maxScan; j++) {
-        if (indented.has(j) || tableLines.has(j)) { valid = false; break }
-        const jLine = lines[j]!
-        const jLayout = lineLayout(jLine)
-        if (jLayout.quotePrefix !== startLayout.quotePrefix) { valid = false; break }
-        const jContent = jLine.slice(jLayout.quotePrefix.length)
-        if (hasFencePlaceholder(jContent, mask)) { valid = false; break }
-        const found = closeRe.exec(jLine)
-        if (found) {
-          const beforeClose = jLine.slice(jLayout.quotePrefix.length, found.index)
-          if (beforeClose.includes('<') || beforeClose.includes('>') || blockMarkerRe.test(beforeClose.trimStart())) {
+  for (let multiPass = 0; multiPass < 3; multiPass++) {
+    let passMultiChanged = false
+    for (let i = 0; i < lines.length; i++) {
+      if (indented.has(i) || tableLines.has(i)) continue
+      const line = lines[i]!
+      if (!/<(?:b|strong|i|em|s|del|strike)(?=[\s/>])/i.test(line)) continue
+      const startLayout = lineLayout(line)
+      let pos = startLayout.contentStart
+      while (pos < line.length) {
+        const open = line.indexOf('<', pos)
+        if (open < 0) break
+        const tag = parseHtmlTagAt(line, open)
+        if (!tag || tag.closing || tag.selfClosing) {
+          pos = tag ? tag.end : open + 1
+          continue
+        }
+        const spec = Object.hasOwn(INLINE_FORMAT_MAP, tag.name) ? INLINE_FORMAT_MAP[tag.name] : undefined
+        if (!spec) { pos = tag.end; continue }
+        const attrs = parseSafeTagAttrs(tag.rawAttrs)
+        if (!attrs || !hasOnlyAttrs(attrs, SPAN_SAFE_ATTRS)) { pos = tag.end; continue }
+        const firstTail = line.slice(tag.end)
+        if (firstTail.includes('<') || firstTail.includes('>') || hasFencePlaceholder(firstTail, mask)) {
+          pos = tag.end
+          continue
+        }
+        const closeRe = new RegExp(`</${tag.name}\\s*>`, 'i')
+        let closeLine = -1
+        let closeMatch: RegExpExecArray | null = null
+        let valid = true
+        const maxScan = Math.min(lines.length - 1, i + 8)
+        for (let j = i + 1; j <= maxScan; j++) {
+          if (indented.has(j) || tableLines.has(j)) { valid = false; break }
+          const jLine = lines[j]!
+          const jLayout = lineLayout(jLine)
+          if (jLayout.quotePrefix !== startLayout.quotePrefix) { valid = false; break }
+          const jContent = jLine.slice(jLayout.quotePrefix.length)
+          if (hasFencePlaceholder(jContent, mask)) { valid = false; break }
+          const found = closeRe.exec(jLine)
+          if (found) {
+            const beforeClose = jLine.slice(jLayout.quotePrefix.length, found.index)
+            if (beforeClose.includes('<') || beforeClose.includes('>') || blockMarkerRe.test(beforeClose.trimStart())) {
+              valid = false
+            } else {
+              closeLine = j
+              closeMatch = found
+            }
+            break
+          }
+          if (jContent.includes('<') || jContent.includes('>') || blockMarkerRe.test(jContent.trimStart())) {
             valid = false
-          } else {
-            closeLine = j
-            closeMatch = found
+            break
           }
-          break
         }
-        if (jContent.includes('<') || jContent.includes('>') || blockMarkerRe.test(jContent.trimStart())) {
-          valid = false
-          break
-        }
-      }
-      if (!valid || closeLine < 0 || !closeMatch) { pos = tag.end; continue }
+        if (!valid || closeLine < 0 || !closeMatch) { pos = tag.end; continue }
 
-      // 逐行尝试包裹；全部非空行都满足贴合规则才整体替换。
-      const replacements = new Map<number, string>()
-      let nonEmptyCount = 0
-      const outerBefore = boundaryChar(line, tag.start - 1, 'end', mask)
-      const closeEnd = closeMatch.index + closeMatch[0].length
-      const outerAfter = boundaryChar(lines[closeLine]!, closeEnd, 'start', mask)
+        // 逐行尝试包裹；全部非空行都满足贴合规则才整体替换。
+        const replacements = new Map<number, string>()
+        let nonEmptyCount = 0
+        const outerBefore = boundaryChar(line, tag.start - 1, 'end', mask)
+        const closeEnd = closeMatch.index + closeMatch[0].length
+        const outerAfter = boundaryChar(lines[closeLine]!, closeEnd, 'start', mask)
 
-      if (firstTail.trim()) {
-        const formatted = formatInlineSegment(firstTail, outerBefore, ' ', spec)
-        if (formatted === null) { pos = tag.end; continue }
-        replacements.set(i, line.slice(0, tag.start) + formatted)
-        nonEmptyCount++
-      } else {
-        replacements.set(i, line.slice(0, tag.start) + firstTail)
-      }
-      for (let j = i + 1; j < closeLine; j++) {
-        const jLine = lines[j]!
-        const jBody = jLine.slice(startLayout.quotePrefix.length)
-        if (!jBody.trim()) continue
-        const formatted = formatInlineSegment(jBody, ' ', ' ', spec)
-        if (formatted === null) { valid = false; break }
-        replacements.set(j, startLayout.quotePrefix + formatted)
-        nonEmptyCount++
-      }
-      let endTail = ''
-      if (valid) {
-        const endLine = lines[closeLine]!
-        const endBody = endLine.slice(startLayout.quotePrefix.length, closeMatch.index)
-        endTail = endLine.slice(closeEnd)
-        if (endBody.trim()) {
-          const formatted = formatInlineSegment(endBody, ' ', outerAfter, spec)
-          if (formatted === null) valid = false
-          else {
-            replacements.set(closeLine, startLayout.quotePrefix + formatted + endTail)
-            nonEmptyCount++
-          }
+        if (firstTail.trim()) {
+          const formatted = formatInlineSegment(firstTail, outerBefore, ' ', spec)
+          if (formatted === null) { pos = tag.end; continue }
+          replacements.set(i, line.slice(0, tag.start) + formatted)
+          nonEmptyCount++
         } else {
-          replacements.set(closeLine, startLayout.quotePrefix + endBody + endTail)
+          replacements.set(i, line.slice(0, tag.start) + firstTail)
         }
+        for (let j = i + 1; j < closeLine; j++) {
+          const jLine = lines[j]!
+          const jBody = jLine.slice(startLayout.quotePrefix.length)
+          if (!jBody.trim()) continue
+          const formatted = formatInlineSegment(jBody, ' ', ' ', spec)
+          if (formatted === null) { valid = false; break }
+          replacements.set(j, startLayout.quotePrefix + formatted)
+          nonEmptyCount++
+        }
+        let endTail = ''
+        if (valid) {
+          const endLine = lines[closeLine]!
+          const endBody = endLine.slice(startLayout.quotePrefix.length, closeMatch.index)
+          endTail = endLine.slice(closeEnd)
+          if (endBody.trim()) {
+            const formatted = formatInlineSegment(endBody, ' ', outerAfter, spec)
+            if (formatted === null) valid = false
+            else {
+              replacements.set(closeLine, startLayout.quotePrefix + formatted + endTail)
+              nonEmptyCount++
+            }
+          } else {
+            replacements.set(closeLine, startLayout.quotePrefix + endBody + endTail)
+          }
+        }
+        if (!valid || nonEmptyCount === 0) { pos = tag.end; continue }
+        for (const [idx, nextLine] of replacements) lines[idx] = nextLine
+        multiChanged = true
+        passMultiChanged = true
+        i = endTail.includes('<') ? closeLine - 1 : closeLine
+        break
       }
-      if (!valid || nonEmptyCount === 0) { pos = tag.end; continue }
-      for (const [idx, nextLine] of replacements) lines[idx] = nextLine
-      multiChanged = true
-      i = endTail.includes('<') ? closeLine - 1 : closeLine
-      break
     }
+    if (!passMultiChanged) break
   }
 
   return changed || multiChanged ? joinLinesWithBreaks(lines, breaks) : text

@@ -10,4 +10,4 @@ export declare function PersistentEditor(props: {
 export declare function useDraftState<T>(key: string, initial: T | (() => T)): [T, Dispatch<SetStateAction<T>>];
 /** 恢复标志固定在当前实例；异步资产加载只在第一次跳过草稿，保存后的刷新正常回填。 */
 export declare function useDraftRestored(key: string): boolean;
-export declare function usePersistentDraftStatus(id: string, dirty: boolean, busy: boolean): (() => void) | undefined;
+export declare function usePersistentDraftStatus(id: string, dirty: boolean, busy: boolean, enabled?: boolean): (() => void) | undefined;

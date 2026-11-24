@@ -56,6 +56,37 @@ export declare function findMatchingDetailsClose(text: string, start: number, co
     closeStart: number;
     closeEnd: number;
 } | null;
+/** 在单行内扫描自定义伪标签的结束 `>`，跳过 `="..."`/`='...'` 属性引号内的 `>` 与 `<`。 */
+export declare function scanCustomTagTokenEnd(line: string, start: number): number;
+/** 按 CommonMark 四列制表位剥离多层引用块前缀并判定剩余缩进是否达到 4 列缩进代码。 */
+export declare function scanBlockquoteAndIndent(line: string): {
+    quotePrefixEnd: number;
+    contentStart: number;
+    indentedCode: boolean;
+};
+/** 判定单个尖括号记号是否为非标准 HTML、非自动链接的自定义伪标签，返回小写标签名。 */
+export declare function customTagName(token: string): string | null;
+/** 扫描单行是否仅由行首自定义伪标签组成，返回提取出的标签名列表；不匹配返回 `null`。 */
+export declare function extractStandaloneCustomTagLine(line: string): {
+    quotePrefixEnd: number;
+    names: string[];
+} | null;
+/**
+ * 清理会触发 CommonMark Type 7 HTML 块并吞掉后续围栏的行首自定义伪标签，
+ * 以及与这些已确认伪标签同行混写的配对残余；跳过缩进代码、自动链接与标准 HTML 元素。
+ */
+export declare function stripCustomTags(text: string, extraNames?: ReadonlySet<string>): string;
+/** 收起未转换成 HTML 的协议开闭标签，留下内部正文；跳过标准 HTML 与大写 URI/邮箱自动链接。 */
+export declare function stripProtocolTags(text: string): string;
+/** 检测净化后的纯折叠块 Markdown 片段中是否仍残留未允许标签。 */
+export declare function hasResidualTag(text: string): boolean;
+/**
+ * 共享纯 `<details>` 正文扫描器：`plainDetails` 解析与 `isPlainDetailsStructure` 校验复用同一套
+ * 注释剥离、`<br>`/`<hr>` 归一化、嵌套折叠与标签边界检查，杜绝两端口径漂移。
+ */
+export declare function scanPlainDetailsBody(body: string, onMarkdown: (raw: string) => boolean, onNestedDetails: (nestedStart: number, code: ReturnType<typeof markdownCodeScanner>) => number | null): boolean;
+/** 定位从 `start` 开始的单个纯 `<details>` 候选块的匹配 `</details>` 结束下标（支持摘要与正文代码安全跳过）。 */
+export declare function findPlainDetailsCloseEnd(text: string, start: number, code: ReturnType<typeof markdownCodeScanner>): number | null;
 /**
  * 供 `htmlFragment` 拆分阶段复用：与 `parsePlainDetailsBlocks` 同口径判定单段 `<details>`
  * 是否可走原生折叠，避免无空行未闭合 `<summary>`、自定义元素或非常见 HTML 标签的邻块

@@ -5,6 +5,9 @@ import { type TemplateMessageVariables } from '../core/templateMessageVariables.
 import { type TemplateReplay, type TemplateReplayRegexSources } from '../core/templateReplay.js';
 import { type TemplateContext, type TemplateScopes, type TemplateRegexDescriptor, type TemplateMessageMetadata } from '../core/template.js';
 export declare class TemplateSandbox {
+    private static readonly PREPARE_BASIC_REGEX_OP;
+    private static readonly CLEAR_BASIC_REGEX_OP;
+    private static readonly CONDITION_SOURCE;
     private readonly renderedSources;
     private readonly vm;
     private readonly owner;
@@ -60,15 +63,19 @@ export declare class TemplateSandbox {
     private adoptShared;
     replay(): TemplateReplay;
     private captureCheckpoint;
-    /** QuickJS 的 dump(promise) 会内部释放句柄；统一在此安全导出并释放，避免二次 dispose 触发 UseAfterFree。 */
-    private dumpAndDispose;
+    /** 直接经纯 C FFI 读取原始值并释放句柄，绝不走 QTS_Dump（避免调用 JS_JSONStringify / Object.prototype.toJSON）。 */
+    private readPrimitiveAndDispose;
+    /** 安全格式化任意 QuickJS 异常句柄（含 Error、BigInt、Symbol、恶意 getter/toJSON 对象），绝不经 QTS_Dump 触发原型 toJSON 或泄漏 C 句柄。 */
+    private formatErrorHandle;
+    /** 统一格式化同步 evalCode / callFunction 异常并识别超时中断，防止超时被误判为确定性脚本失败。 */
+    private evalFailure;
     /** readonly 仅用于不改变沙箱状态的固定查询；其余求值都可能运行第三方代码并改动规则表。 */
     private evaluate;
-    /** 纯 JSON 作为 QuickJS 字符串值传输，固定源码不再重复解析转义后的大历史。 */
+    /** 纯 JSON 经函数实参句柄直接传入，不经可写 globalThis 中转，也不把大文本编成 JS 源码。 */
     private evaluateInput;
     /** 同 evaluateInput，但把完成值句柄留给调用方（渲染状态必须由宿主持有，不能经全局中转）。 */
     private evaluateHandle;
-    /** 只读取闭包状态；不经过模板可命名的全局，也不调用任何模板可补丁的函数。 */
+    /** 只读取闭包状态；不经过模板可命名的全局，也不调用任何模板可补丁的函数或 QTS_Dump。 */
     private readRenderState;
     /** 只记录实际发出的中断，不把单纯超过墙钟期限等同于中断。 */
     private interruptIfExpired;
@@ -94,6 +101,10 @@ export declare class TemplateSandbox {
     advanceGeneration(context: TemplateContext, refreshPreload: boolean): TemplateStickyState;
     stickyState(): TemplateStickyState;
     sticky(action: 'begin' | 'finish' | 'restore', state?: TemplateStickyState): TemplateStickyState;
+    /** 直接调用冻结的 globalThis 协议入口，避免经 EJS with (locals) 被 define 同名属性遮蔽。 */
+    prepareBasicRegex(): void;
+    clearBasicRegex(): void;
+    private drainRenderHandle;
     render(text: string, data?: Record<string, unknown>, source?: string): string;
     /** 重组同轮计划时只重放已求值的来源，避免 activewi 引起脚本重复写变量。 */
     renderSource(text: string, source: string, data?: Record<string, unknown>): string;
@@ -131,7 +142,8 @@ export declare class TemplateSandbox {
     resolveOutlets(text: string): string;
     variables(): TemplateScopes;
     messageVariables(): TemplateMessageVariables;
-    /** 条件在 WI 预算和分组前求值；拒绝写变量，避免预选阶段产生未提交或重复副作用。 */
+    private evalCondition;
+    /** 条件在 WI 预算和分组前求值；拒绝写变量与注册表副作用，避免预选阶段产生未提交或重复副作用。 */
     condition(expression: string): boolean;
     dispose(): void;
 }

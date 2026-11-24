@@ -2,6 +2,7 @@
 import { randomUUID } from 'node:crypto'
 import { chmod, lstat, mkdir, open, readdir } from 'node:fs/promises'
 import { basename, dirname, join, resolve } from 'node:path'
+import { MAX_STORED_CARD_JSON_BYTES } from '../state/card.js'
 import { renameWithRetry } from '../state/rename.js'
 import { runDoctor, type DoctorIssue } from '../doctor.js'
 import { parseSessionBinding } from './bindings.js'
@@ -104,7 +105,7 @@ async function references(home: string, entries: BackupEntry[]): Promise<DoctorI
     const value = raw[key]
     return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null
   }
-  let budget = 64 * 1024 ** 2
+  let budget = 256 * 1024 ** 2
   for (const entry of entries) {
     if (entry.kind !== 'file' || !/^dsh-tavern\/sessions\/[^/]+\.json$/i.test(entry.path)) continue
     budget -= entry.size
@@ -150,8 +151,9 @@ async function references(home: string, entries: BackupEntry[]): Promise<DoctorI
         if (parsed === undefined && !candidateCache.has(candidate)) {
           budget -= file.size
           if (budget < 0) fail('REFERENCE_CHECK_LIMIT')
+          const maxCandidateBytes = directory === 'personas' ? 16 * 1024 * 1024 : MAX_STORED_CARD_JSON_BYTES
           let raw: unknown = null
-          try { raw = await boundedJson(checkedPath(home, candidate), 16 * 1024 * 1024) }
+          try { raw = await boundedJson(checkedPath(home, candidate), maxCandidateBytes) }
           catch (error) { if (error instanceof BackupError && error.code !== 'INVALID_JSON') throw error }
           parsed = isRecord(raw)
             ? { primary: field(raw, 'identifier') ?? field(raw, 'id') ?? field(raw, 'name'), sourceId: field(raw, 'sourceId') }

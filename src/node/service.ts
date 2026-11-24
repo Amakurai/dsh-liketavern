@@ -197,12 +197,26 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
     return { restored: true }
   }
 
-  /** 读取前端之外的调用也先守住 PNG 编码体积；不能等 Buffer 分配完成后才在解析器拒绝。 */
+  /** JSON 卡上传上限（与 state/card 的 8M UTF-16 码元紧凑 JSON 对应最多 24 MiB UTF-8），阻止解码/parse 前分配超大载荷。 */
+  private static readonly MAX_CARD_JSON_UPLOAD_BYTES = 24 * 1024 * 1024
+  private static readonly MAX_CARD_JSON_UPLOAD_BASE64_CHARS = Math.ceil((24 * 1024 * 1024) / 3) * 4
+
+  /** 读取前端之外的调用也先守住 PNG/JSON 编码体积；不能等 Buffer 分配或 JSON.parse 完成后才拒绝。 */
   private decodeCharacterUpload(request: { name: string; dataBase64: string }): Buffer {
-    if (/\.png$/i.test(request.name) && request.dataBase64.length > MAX_CARD_PNG_BASE64_CHARS) {
-      throw new FloorError('invalid-card', `PNG 角色卡超过大小上限（${MAX_CARD_PNG_BYTES / 1024 / 1024}MiB）`)
+    if (/\.png$/i.test(request.name)) {
+      if (request.dataBase64.length > MAX_CARD_PNG_BASE64_CHARS) {
+        throw new FloorError('invalid-card', `PNG 角色卡超过大小上限（${MAX_CARD_PNG_BYTES / 1024 / 1024}MiB）`)
+      }
+      return Buffer.from(request.dataBase64, 'base64')
     }
-    return Buffer.from(request.dataBase64, 'base64')
+    if (request.dataBase64.length > TavernService.MAX_CARD_JSON_UPLOAD_BASE64_CHARS) {
+      throw new FloorError('invalid-card', `JSON 角色卡超过大小上限（${TavernService.MAX_CARD_JSON_UPLOAD_BYTES / 1024 / 1024}MiB）`)
+    }
+    const bytes = Buffer.from(request.dataBase64, 'base64')
+    if (bytes.byteLength > TavernService.MAX_CARD_JSON_UPLOAD_BYTES) {
+      throw new FloorError('invalid-card', `JSON 角色卡超过大小上限（${TavernService.MAX_CARD_JSON_UPLOAD_BYTES / 1024 / 1024}MiB）`)
+    }
+    return bytes
   }
 
   async inspectCharacter(request: { name: string; dataBase64: string }): Promise<TavernMethodResults['inspectCharacter']> {

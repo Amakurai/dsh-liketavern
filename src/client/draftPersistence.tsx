@@ -323,12 +323,13 @@ export function useDraftRestored(key: string): boolean {
   return restored
 }
 
-export function usePersistentDraftStatus(id: string, dirty: boolean, busy: boolean): (() => void) | undefined {
+export function usePersistentDraftStatus(id: string, dirty: boolean, busy: boolean, enabled = true): (() => void) | undefined {
   const registry = useContext(PersistenceContext)
   useEffect(() => {
+    if (!enabled) return
     registry?.report(id, { dirty, busy })
     return () => registry?.report(id, null)
-  }, [registry, id, dirty, busy])
-  const discard = useCallback(() => registry?.discard(id), [registry, id])
-  return registry ? discard : undefined
+  }, [registry, id, dirty, busy, enabled])
+  const discard = useCallback(() => { if (enabled) registry?.discard(id) }, [registry, id, enabled])
+  return registry && enabled ? discard : undefined
 }

@@ -40,12 +40,18 @@ const v0512Loader=String.raw`
     const loaded=next(url,context);
     if(url.endsWith('/node/templateAssets.ts'))return {...loaded,source:v0512.templateAssets};
     if(url.endsWith('/node/templateBootstrap.ts'))return {...loaded,source:v0512.templateBootstrap};
+    if(url.endsWith('/node/templateContinuation.ts'))return {...loaded,source:v0512.templateContinuation};
     if(url.endsWith('/node/templateEjs.ts'))return {...loaded,source:v0512.templateEjs};
+    if(url.endsWith('/node/templateFaker.ts'))return {...loaded,source:v0512.templateFaker};
     if(url.endsWith('/node/templateHelperMvu.ts'))return {...loaded,source:v0512.templateHelperMvu};
     if(url.endsWith('/node/templateHelpers.ts'))return {...loaded,source:v0512.templateHelpers};
     if(url.endsWith('/node/templateMessageVariables.ts'))return {...loaded,source:v0512.templateMessageVariables};
+    if(url.endsWith('/node/templateRegex.ts'))return {...loaded,source:v0512.templateRegex};
     if(url.endsWith('/node/templateRegexSources.ts'))return {...loaded,source:v0512.templateRegexSources};
+    if(url.endsWith('/node/templateReplay.ts'))return {...loaded,source:v0512.templateReplay};
     if(url.endsWith('/node/templateSandbox.ts'))return {...loaded,source:v0512.templateSandbox};
+    if(url.endsWith('/node/templateSchema.ts'))return {...loaded,source:v0512.templateSchema};
+    if(url.endsWith('/node/templateSticky.ts'))return {...loaded,source:v0512.templateSticky};
     if(url.endsWith('/node/templateWorldInfo.ts'))return {...loaded,source:v0512.templateWorldInfo};
     return loaded;
   }});

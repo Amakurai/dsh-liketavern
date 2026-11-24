@@ -1,5 +1,5 @@
 import type { Context } from '@deepseek-ai/cordis';
-import { SessionId, type Session } from '@deepseek-ai/dsh-session';
+import { SessionId, type Session, type SessionEvent } from '@deepseek-ai/dsh-session';
 import type { SessionPersistence } from '@deepseek-ai/dsh-session-persistence';
 import { type SessionArchive } from './sessionArchiveFormat.js';
 import type { TavernState } from './state.js';
@@ -15,6 +15,8 @@ export declare const forkedSessionParents: BoundedSessionParentMap;
 export declare function installSessionForkTracking(): void;
 /** 合并会话头、同进程追踪和已校验的插件来源；明确解绑后的记录不能再次推断继承。 */
 export declare function resolveLegacyForkParent(paths: TavernPaths | undefined, child: HostForkIdentitySource): Promise<Session['id'] | undefined>;
+/** seed 中最大的 turn/start（或开场白 turn 0）；空前缀表示没有继承源会话楼层。 */
+export declare function inheritedThroughTurn(seed: readonly SessionEvent[]): number | null;
 /** 旧分支未保存 WAL 世系时，从真实祖先的持久化继承边界重建；缺失祖先不能猜测。 */
 export declare function deriveLegacyLineage(persistence: SessionPersistence, root: SessionArchive['session'], paths?: TavernPaths): Promise<WalLineageEntry[]>;
 /** 导出期间拒绝正在生成或未完成的轮次；返回的是校验过的、无兄弟剧情的完整快照。 */

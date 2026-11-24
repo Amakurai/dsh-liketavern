@@ -5,7 +5,8 @@ import { buildCardSrcDoc } from '../core/cardFrame.js'
 import { helperScriptHtml,isNativeMvuFramework } from '../core/cardScript.js'
 import {publishScriptStatus,clearScriptStatus,type ScriptRuntimeStatus} from './helperScriptStatus.js'
 import { enabledHelperScripts,enabledHelperLibraries,type HelperScriptAsset,type HelperScript } from '../core/helperScripts.js'
-import {HelperMvuRunner} from './helperMvuRunner.js'
+import type { HelperMessageEditResult } from '../core/helperChatEdits.js'
+import {HelperMvuRunner,type HelperMvuRunnerStatus} from './helperMvuRunner.js'
 import {openChildSession} from './openChild.js'
 import { SpeechHtmlFrame } from './speech.js'
 import {CHARACTER_CHANGED_EVENT,invalidateSessionBinding} from './cache.js'
@@ -41,20 +42,42 @@ export function HelperScripts(props:{remote:TavernRemote;sessionId:string;cardId
   currentRuntime.current=runtimeVersion
   const [ready,setReady]=useState<Record<string,string>>({})
   const [failures,setFailures]=useState<Record<string,{version:string;error:string}>>({})
+  const [editedBranch,setEditedBranch]=useState<{version:string;scriptId:string;branch:NonNullable<HelperMessageEditResult['branch']>;error:string}|null>(null)
   const owner=useRef(Symbol('script-runtime'))
-  const [mvuState,setMvu]=useState<{version:string;error:string|null;busy:boolean}>({version:runtimeVersion,error:null,busy:false})
-  const mvu=mvuState.version===runtimeVersion?mvuState:{error:null,busy:false}
+  const [mvuState,setMvu]=useState<{version:string;error:string|null;busy:boolean;restartRequired:boolean;canCancel:boolean;canceling:boolean;cancelError:string|null}>({version:runtimeVersion,error:null,busy:false,restartRequired:false,canCancel:false,canceling:false,cancelError:null})
+  const mvu=mvuState.version===runtimeVersion?mvuState:{error:null,busy:false,restartRequired:false,canCancel:false,canceling:false,cancelError:null}
+  const activeEditedBranch=editedBranch?.version===runtimeVersion?editedBranch:null
   const retryMvu=useRef<{version:string;run:()=>void}>({version:'',run:()=>{}})
+  const cancelMvu=useRef<{version:string;run?:()=>Promise<void>}>({version:''})
   /** 退避重试计数按会话+剧情保留：bundle 重拉会重建 effect，计数不能随之归零（否则退化成固定 1s/5s 轮询）。 */
   const waitAttempts=useRef<{key:string;count:number}>({key:'',count:0})
   const followAttempts=useRef<{key:string;count:number}>({key:'',count:0})
-  const mvuStatus=useCallback((value:{error:string|null;busy:boolean;retry:()=>void})=>{if(currentRuntime.current!==runtimeVersion)return;retryMvu.current={version:runtimeVersion,run:value.retry};setMvu(current=>current.version===runtimeVersion&&current.error===value.error&&current.busy===value.busy?current:{version:runtimeVersion,error:value.error,busy:value.busy})},[runtimeVersion])
+  const mvuStatus=useCallback((value:HelperMvuRunnerStatus)=>{
+    if(currentRuntime.current!==runtimeVersion)return
+    retryMvu.current={version:runtimeVersion,run:value.retry}
+    cancelMvu.current={version:runtimeVersion,run:value.cancel}
+    setMvu(current=>current.version===runtimeVersion
+      &&current.error===value.error
+      &&current.busy===value.busy
+      &&current.restartRequired===value.restartRequired
+      &&current.canCancel===value.canCancel
+      &&current.canceling===value.canceling
+      &&current.cancelError===value.cancelError
+      ?current
+      :{version:runtimeVersion,error:value.error,busy:value.busy,restartRequired:value.restartRequired,canCancel:value.canCancel,canceling:value.canceling,cancelError:value.cancelError})
+  },[runtimeVersion])
   useEffect(()=>{
     if(bundle)return
     // 重读期间 iframe 与 MVU 执行器已卸载；即使资产修订不变，也不能沿用旧运行时的就绪或故障。
-    setReady({});setFailures({});retryMvu.current={version:'',run:()=>{}}
+    setReady({});setFailures({});setEditedBranch(null);retryMvu.current={version:'',run:()=>{}};cancelMvu.current={version:''}
   },[bundle])
-  useEffect(()=>bundle?watchHelperScripts(sessionId,bundle.storyId,()=>loader.reload()):undefined,[sessionId,bundle?.storyId,loader.reload])
+  // 重拉或报错期间 bundle 暂时为空：记住本会话已知 storyId 与脚本库目标，避免连续保存或修复保存的通知静默丢失。
+  const [knownStory,setKnownStory]=useState<{sessionId:string;storyId:string}|null>(null)
+  if(bundle&&(knownStory?.sessionId!==sessionId||knownStory.storyId!==bundle.storyId)){
+    setKnownStory({sessionId,storyId:bundle.storyId})
+  }
+  const watchedStoryId=bundle?.storyId??(knownStory?.sessionId===sessionId?knownStory.storyId:undefined)
+  useEffect(()=>watchedStoryId?watchHelperScripts(sessionId,watchedStoryId,()=>loader.reload()):undefined,[sessionId,watchedStoryId,loader.reload])
   const watchedCardId=props.cardId??bundle?.cardId
   useEffect(()=>{
     if(!watchedCardId)return
@@ -62,6 +85,11 @@ export function HelperScripts(props:{remote:TavernRemote;sessionId:string;cardId
     return subscribeKeyedWindowEvent(CHARACTER_CHANGED_EVENT,watchedCardId,false,loader.reload)
   },[watchedCardId,loader.reload])
   const libraries:HelperScriptAsset[]=bundle?(bundle.libraries??[{target:{type:'character',cardId:bundle.cardId},revision:bundle.revision,trees:bundle.trees}]):[]
+  const libraryTargetKeys=libraries.map(library=>JSON.stringify(library.target))
+  const [knownTargets,setKnownTargets]=useState<{sessionId:string;keys:string[]}|null>(null)
+  if(bundle&&(knownTargets?.sessionId!==sessionId||JSON.stringify(knownTargets.keys)!==JSON.stringify(libraryTargetKeys))){
+    setKnownTargets({sessionId,keys:libraryTargetKeys})
+  }
   let scripts:HelperScript[]=[],scriptError:string|null=null
   try{scripts=enabledHelperLibraries(libraries)}catch(error){scriptError=describeError(error)}
   const waitingForMessage=Boolean(bundle?.enabled&&bundle.messageId===null&&!bundle.snapshot&&!bundle.runtimeError&&!scriptError&&(scripts.length>0||bundle.helperMvu)&&scripts.length<=32)
@@ -112,17 +140,53 @@ export function HelperScripts(props:{remote:TavernRemote;sessionId:string;cardId
     schedule()
     return()=>{active=false;stop();if(timer!==undefined)clearTimeout(timer)}
   },[follow,sessionId,bundle?.storyId,enableMvu])
-  const scriptVersion=JSON.stringify(libraries.map(library=>[library.target,library.revision]))
-  useEffect(()=>watchHelperScriptAssets(target=>{if(libraries.some(library=>JSON.stringify(library.target)===JSON.stringify(target)))loader.reload()}),[loader.reload,scriptVersion,bundle?.cardId])
+  const watchedTargetKeys=bundle?libraryTargetKeys:knownTargets?.sessionId===sessionId?knownTargets.keys:null
+  const watchedTargetsKey=JSON.stringify(watchedTargetKeys)
+  useEffect(()=>watchHelperScriptAssets(target=>{
+    const serialized=JSON.stringify(target)
+    const matchesKnown=watchedTargetKeys!==null&&watchedTargetKeys.includes(serialized)
+    const matchesFallback=watchedTargetKeys===null&&(target.type==='global'||target.type==='preset'||(target.type==='character'&&(!watchedCardId||target.cardId===watchedCardId)))
+    if(matchesKnown||matchesFallback)loader.reload()
+  }),[loader.reload,watchedTargetsKey,watchedCardId])
   const allReady=!scriptError&&!bundle?.runtimeError&&scripts.length<=32&&scripts.every(script=>ready[script.id]===runtimeVersion&&failures[script.id]?.version!==runtimeVersion)
   // 超预算时一个脚本都不会挂载：状态必须显式报错，否则谎报 running 且 MVU 永远「等待脚本就绪」。
   const scriptsBudget=bundle?.enabled===true&&scripts.length>32
-  const status:ScriptRuntimeStatus={sessionId,cardId:bundle?.cardId??'',nativeMvu:bundle?.helperMvu===true,mvuFollow:follow,mvuBusy:mvu.busy,mvuError:mvu.error??undefined,
-    state:loader.state.status==='error'||scriptError||bundle?.runtimeError||mvu.error||scriptsBudget||scripts.some(script=>failures[script.id]?.version===runtimeVersion)?'error':!bundle?'loading':!bundle.enabled?'disabled':waitingForMessage?'waiting':'running',
+  const status:ScriptRuntimeStatus={sessionId,cardId:bundle?.cardId??watchedCardId??'',nativeMvu:bundle?.helperMvu===true,mvuFollow:follow,mvuBusy:mvu.busy,mvuError:mvu.error??undefined,
+    mvuRestartRequired:mvu.restartRequired||undefined,mvuCanCancel:mvu.canCancel||undefined,mvuCanceling:mvu.canceling||undefined,mvuCancelError:mvu.cancelError??undefined,
+    editedBranchError:activeEditedBranch?.error,editedBranchTitle:activeEditedBranch?.branch.title,
+    state:loader.state.status==='error'||scriptError||bundle?.runtimeError||mvu.error||activeEditedBranch||scriptsBudget||scripts.some(script=>failures[script.id]?.version===runtimeVersion)?'error':!bundle?'loading':!bundle.enabled?'disabled':waitingForMessage?'waiting':'running',
     error:loader.state.status==='error'?loader.state.message:scriptError??bundle?.runtimeError??(scriptsBudget?t('speech.scriptsBudget'):undefined),
     scripts:scripts.map(script=>({id:script.id,name:script.name||script.id,native:isNativeMvuFramework(script.content),state:failures[script.id]?.version===runtimeVersion?'error':ready[script.id]===runtimeVersion?'ready':'loading',error:failures[script.id]?.version===runtimeVersion?failures[script.id]?.error:undefined}))}
   const statusKey=JSON.stringify(status)
-  useEffect(()=>{publishScriptStatus(owner.current,status,()=>{if(retryMvu.current.version===currentRuntime.current)retryMvu.current.run()},()=>enableMvu('explicit'))},[statusKey,enableMvu])
+  const openEditedBranch=useCallback(async()=>{
+    if(!activeEditedBranch||!props.sessions)return
+    const pending=activeEditedBranch
+    try{
+      await openChildSession(props.sessions,pending.branch.childSessionId,pending.branch.title)
+      if(currentRuntime.current!==pending.version)return
+      setEditedBranch(current=>current?.version===pending.version?null:current)
+      setFailures(current=>{
+        if(current[pending.scriptId]?.version!==pending.version||current[pending.scriptId]?.error!==pending.error)return current
+        const next={...current};delete next[pending.scriptId];return next
+      })
+    }catch(cause){
+      if(currentRuntime.current!==pending.version)return
+      const message=describeError(cause)
+      setEditedBranch(current=>current?.version===pending.version?{...current,error:message}:current)
+    }
+  },[activeEditedBranch,props.sessions,sessionId])
+  useEffect(()=>{
+    publishScriptStatus(
+      owner.current,
+      status,
+      ()=>{if(retryMvu.current.version===currentRuntime.current)retryMvu.current.run()},
+      ()=>enableMvu('explicit'),
+      {
+        cancel:mvu.canCancel?async()=>{if(cancelMvu.current.version===currentRuntime.current&&cancelMvu.current.run)await cancelMvu.current.run()}:undefined,
+        openBranch:activeEditedBranch&&props.sessions?openEditedBranch:undefined,
+      },
+    )
+  },[statusKey,enableMvu,mvu.canCancel,activeEditedBranch,props.sessions,openEditedBranch])
   useEffect(()=>()=>clearScriptStatus(owner.current,sessionId),[sessionId])
   return <span className="dsh-tavern-scriptHost" hidden>
     {bundle?.enabled&&bundle.helperMvu&&bundle.snapshot&&<HelperMvuRunner key={runtimeVersion} remote={remote} sessionId={sessionId} storyId={bundle.storyId} snapshot={bundle.snapshot} ready={allReady} onStatus={mvuStatus} onCancel={props.onCancel}/>}
@@ -140,7 +204,19 @@ export function HelperScripts(props:{remote:TavernRemote;sessionId:string;cardId
         return <section key={runtimeVersion+script.id}>
           {<SpeechHtmlFrame srcDoc={srcDoc} title={script.name||script.id} widget compact
             onScriptError={error=>{if(currentRuntime.current===runtimeVersion)setFailures(current=>({...current,[script.id]:{version:runtimeVersion,error}}))}}
-            onScriptReady={value=>{if(currentRuntime.current===runtimeVersion)setReady(current=>current[script.id]===(value?runtimeVersion:'')?current:{...current,[script.id]:value?runtimeVersion:''})}}
+            onScriptReset={()=>{
+              if(currentRuntime.current!==runtimeVersion)return
+              setFailures(current=>{if(!current[script.id])return current;const next={...current};delete next[script.id];return next})
+            }}
+            onScriptReady={value=>{
+              if(currentRuntime.current!==runtimeVersion)return
+              setReady(current=>current[script.id]===(value?runtimeVersion:'')?current:{...current,[script.id]:value?runtimeVersion:''})
+            }}
+            onBranchError={(branch,error)=>{
+              if(currentRuntime.current!==runtimeVersion)return
+              if(branch&&error)setEditedBranch({version:runtimeVersion,scriptId:script.id,branch,error})
+              else setEditedBranch(current=>current?.version===runtimeVersion&&current.scriptId===script.id?null:current)
+            }}
             remote={remote} helperMessageId={messageId}
             helperBinding={{sessionId,storyId:snapshot.storyId}}
             onMessageBranch={props.sessions?async branch=>{window.dispatchEvent(new CustomEvent(BRANCH_CHANGED_EVENT,{detail:props.sessionId}));await openChildSession(props.sessions!,branch.childSessionId,branch.title,props.sessionId)}:undefined}

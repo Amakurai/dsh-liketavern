@@ -32,11 +32,15 @@ export function revokeHelperMvuLease(state:TavernState,sessionId:string,storyId:
 function requestIdentity(request:Request):void{
   if(!request.sessionId||!request.storyId||!request.runtimeId||request.runtimeId.length>96)throw new Error('自动 MVU 运行时身份无效')
 }
+/** 开场白或遗留 Turn 0 回复均可作为无 finish 帧的 MVU 初始锚点，门控与任务准备/校验共用同一口径。 */
+function isMvuGreetingAnchor(event:SessionEvent):boolean{
+  return event.type==='assistant/message'&&(isTavernGreetingEvent(event)||event.data.turn===0)
+}
 function candidates(events:readonly SessionEvent[],turn:number,through=Infinity){
   return events.filter((event):event is SessionEvent<'assistant/message'>=>{
     if(event.type!=='assistant/message'||event.data.turn!==turn||event.data.interrupted||event.seq>=through||event.surfaceOp!==undefined&&event.surfaceOp!=='append')return false
     if(!event.data.message.content.some(block=>block.type==='text'&&block.text.trim()))return false
-    if(isTavernGreetingEvent(event))return true
+    if(isMvuGreetingAnchor(event))return true
     return hasNormalAssistantStop(event)
   })
 }
@@ -68,7 +72,7 @@ function verifyContinuation(events:readonly SessionEvent[],job:Pick<HelperMvuJob
       &&(event.surfaceOp===undefined||event.surfaceOp==='append')&&event.data.message.content.some(block=>block.type==='text'&&block.text.trim()))
     if(!previous)throw new Error('自动 MVU 无法核对续写来源，请重新生成完整回复')
     const identity=String(previous.data.message.id)
-    if(isTavernGreetingEvent(previous)||mvu.completed.some(receipt=>receipt.identity===identity)
+    if(isMvuGreetingAnchor(previous)||mvu.completed.some(receipt=>receipt.identity===identity)
       ||mvu.pending.some(pending=>pending.identity===identity)||helperRecord(scopes[scope(identity)]?.stat_data))return done()
     const end=events.find(event=>event.type==='turn/end'&&event.data.turn===previous.data.turn&&event.seq>previous.seq&&event.seq<start.seq)
     // 停用期间或用户明确放弃的完整回复不能借后续续写被重新执行。
@@ -90,7 +94,8 @@ function verifyContinuation(events:readonly SessionEvent[],job:Pick<HelperMvuJob
 }
 /** 新卡面只读取默认值；首次脚本作用域与任务同一原子 WAL 写入，避免 active turn 的 bootstrap flush 穿过写入禁令。 */
 async function seedScripts(state:TavernState,sessionId:string,storyId:string,saved:HelperState):Promise<void>{
-  const context=await state.getSessionHelperScripts(sessionId,storyId)
+  // 调用方已持剧情与 sessions 锁：禁止反向等待绑定接管，避免与 adoptHostFork 形成 AB/BA 死锁。
+  const context=await state.getSessionHelperScripts(sessionId,storyId,{waitForAdoption:false})
   for(const script of enabledHelperLibraries(context.libraries)){
     const key=JSON.stringify(['script',script.id])
     if(!Object.hasOwn(saved.scopes,key))saved.scopes[key]=helperJson(script.data) as Record<string,unknown>
@@ -191,7 +196,7 @@ async function queue(state:TavernState,sessionId:string,session:Snapshot,live:bo
   if(!enabled(state,binding))return
   const events=session.snapshotEvents(),boundary=findLastEvent(events,(event):event is SessionEvent<'turn/start'|'turn/end'>=>recovery?event.type==='turn/end'&&event.data.turn===recovery.turn:event.type==='turn/start'||event.type==='turn/end')
   if(!boundary||!live&&(boundary.type!=='turn/end'||boundary.data.reason.kind!=='completed'))return
-  if(live&&boundary.type==='turn/end')return queue(state,sessionId,session,false)
+  if(live&&boundary.type==='turn/end')return queue(state,sessionId,session,false,recovery,options)
   const turn=boundary.data.turn,open=state.openFloors.get(sessionId)
   if(live&&(!open||open.cardId!==binding!.cardId||open.storyId!==binding!.storyId))throw new Error('自动 MVU stop 缺少当前楼层')
   const items=candidates(events,turn,boundary.type==='turn/end'?boundary.seq:Infinity)
@@ -295,11 +300,13 @@ async function sources(state:TavernState,binding:SessionBinding):Promise<HelperM
   const result=loaded.filter((item):item is HelperMvuInitialSource=>item!==null)
   helperJson(result,2*1024*1024);return result
 }
-function latestCompleted(events:readonly SessionEvent[]){
+/** 统一判定可作为 MVU 初始化/锚点的最新完成角色回复，供门控与任务准备共用，避免判定漂移。 */
+export function latestCompletedMvuAssistant(events:readonly SessionEvent[]):SessionEvent<'assistant/message'>|undefined{
   const completed=new Set(events.filter(event=>event.type==='turn/end'&&event.data.reason.kind==='completed').map(event=>event.type==='turn/end'?event.data.turn:-1))
   return findLastEvent(events,(event):event is SessionEvent<'assistant/message'>=>event.type==='assistant/message'&&!event.data.interrupted&&(event.surfaceOp===undefined||event.surfaceOp==='append')
-    &&event.data.message.content.some(block=>block.type==='text'&&block.text.trim())&&(isTavernGreetingEvent(event)||completed.has(event.data.turn)&&candidates(events,event.data.turn).some(item=>item.seq===event.seq)))
+    &&event.data.message.content.some(block=>block.type==='text'&&block.text.trim())&&(isMvuGreetingAnchor(event)||completed.has(event.data.turn)&&candidates(events,event.data.turn).some(item=>item.seq===event.seq)))
 }
+const latestCompleted=latestCompletedMvuAssistant
 async function locked<T>(state:TavernState,request:Request,run:(binding:SessionBinding)=>Promise<T>):Promise<T>{
   requestIdentity(request)
   const first=await state.loadStoryBinding(request.sessionId)
@@ -311,12 +318,12 @@ async function locked<T>(state:TavernState,request:Request,run:(binding:SessionB
     return run(binding)
   }))
 }
-async function scriptRevision(state:TavernState,request:Request){const scripts=await state.getSessionHelperScripts(request.sessionId,request.storyId);return hash([scripts.bindingRevision,scripts.libraries.map(({type,revision})=>[type,revision])])}
+async function scriptRevision(state:TavernState,request:Request){const scripts=await state.getSessionHelperScripts(request.sessionId,request.storyId,{waitForAdoption:false});return hash([scripts.bindingRevision,scripts.libraries.map(({type,revision})=>[type,revision])])}
 function verifyTarget(events:readonly SessionEvent[],job:HelperMvuJob):void{
   const target=events.find(event=>event.seq===job.seq)
   if(target?.type!=='assistant/message'||String(target.data.message.id)!==job.identity||target.data.turn!==job.turn||target.data.interrupted||target.surfaceOp!==undefined&&target.surfaceOp!=='append'
     ||target.data.message.content.filter(block=>block.type==='text').map(block=>block.text).join('\n')!==job.text)throw new Error('自动 MVU 目标消息身份或原文已改变')
-  if(!isTavernGreetingEvent(target)&&!candidates(events,job.turn).some(item=>item.seq===job.seq))throw new Error('自动 MVU 目标没有真实正常 stop')
+  if(!isMvuGreetingAnchor(target)&&!candidates(events,job.turn).some(item=>item.seq===job.seq))throw new Error('自动 MVU 目标没有真实正常 stop')
 }
 /** 后台脚本在任何沙箱挂载前取得安全锚点并播种静态 data；不会领取执行租约或执行第三方代码。 */
 export async function ensureHelperMvuScriptAnchor(ctx:Context,state:TavernState,sessionId:string,storyId:string):Promise<number|null>{
@@ -439,9 +446,9 @@ export async function prepareHelperMvuJob(ctx:Context,state:TavernState,request:
       if(!helperRecord(base.stat_data))throw new Error('自动 MVU 更新缺少前一条有效消息状态')
     }
     const initialSources=job.kind==='initialize'?await sources(state,binding):undefined
-    const greeting=events.find((event):event is SessionEvent<'assistant/message'>=>event.type==='assistant/message'&&isTavernGreetingEvent(event)&&(event.surfaceOp===undefined||event.surfaceOp==='append'))
-    const isGreeting=isTavernGreetingEvent(events.find(event=>event.seq===job.seq)!)
-    const token=randomUUID(),snapshot={...await getHelperSnapshot(ctx,state,request.sessionId,job.seq),writable:false},work:HelperMvuWork={...baseWork,status:'pending',job,token,base:helperJson(base) as Record<string,unknown>,snapshot,applyText:job.kind==='update'||!isGreeting&&!helperRecord(target.stat_data),
+    const greeting=events.find((event):event is SessionEvent<'assistant/message'>=>event.type==='assistant/message'&&isMvuGreetingAnchor(event)&&(event.surfaceOp===undefined||event.surfaceOp==='append'))
+    const isGreeting=isMvuGreetingAnchor(events.find(event=>event.seq===job.seq)!)
+    const token=randomUUID(),snapshot={...await getHelperSnapshot(ctx,state,request.sessionId,job.seq,{waitForAdoption:false}),writable:false},work:HelperMvuWork={...baseWork,status:'pending',job,token,base:helperJson(base) as Record<string,unknown>,snapshot,applyText:job.kind==='update'||!isGreeting&&!helperRecord(target.stat_data),
       ...(continuationMessageIds.length?{continuationMessageIds}:{}),
       ...(initialSources?{initialSources,greeting:greeting?.data.message.content.filter(block=>block.type==='text').map(block=>block.text).join('\n')??'',swipeId:isGreeting?snapshot.messages[index]?.swipe?.active??0:saved.swipes?.[job.identity]?.active??0}:{})}
     if(map.size>=128)throw new Error('自动 MVU 活动运行时超过预算')

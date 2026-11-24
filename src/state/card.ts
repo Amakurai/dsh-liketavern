@@ -14,7 +14,7 @@ import type { CardRegexScript, CharacterCard, ChatRole, DepthPrompt, LorebookFil
 import { MAX_CARD_PNG_BYTES } from '../core/cardLimits.js'
 import { isRecord } from '../core/guards.js'
 import { setOwnField } from '../core/objectSafety.js'
-import { toNum } from './coerce.js'
+import { toNum, toNumOrNull } from './coerce.js'
 
 /** 角色卡解析失败时抛出，消息使用中文。 */
 export class CardParseError extends Error {
@@ -98,6 +98,76 @@ export function normalizeBook(value: unknown): LorebookFile | null {
   return book
 }
 
+/**
+ * 归一化第三方角色卡 / 预设的 regex_scripts 单项：
+ * 过滤非对象，按 core/regex 同口径容错规整字段，避免畸形项在编译或存储校验时崩溃；
+ * 字段全部合规时按写时复制保留原对象引用，不破坏上游按引用去重（如兼容报告）。
+ */
+export function normalizeCardRegexScript(raw: unknown): CardRegexScript | null {
+  if (!isRecord(raw)) return null
+  let out: Record<string, unknown> | null = null
+  const draft = (): Record<string, unknown> => (out ??= { ...raw })
+  for (const field of ['id', 'scriptName', 'findRegex', 'replaceString'] as const) {
+    if (!Object.hasOwn(raw, field)) continue
+    const value = raw[field]
+    if (typeof value === 'string') continue
+    if (typeof value === 'number' || typeof value === 'boolean') draft()[field] = String(value)
+    else delete draft()[field]
+  }
+  for (const field of ['trimStrings', 'trimStringsRegex'] as const) {
+    if (!Object.hasOwn(raw, field)) continue
+    const value = raw[field]
+    if (Array.isArray(value)) {
+      if (value.some((item) => typeof item !== 'string')) {
+        draft()[field] = value.filter((item): item is string => typeof item === 'string')
+      }
+    } else {
+      delete draft()[field]
+    }
+  }
+  if (Object.hasOwn(raw, 'placement')) {
+    const value = raw.placement
+    if (Array.isArray(value)) {
+      if (value.some((item) => typeof item !== 'number' || !Number.isInteger(item))) {
+        draft().placement = value
+          .map((item) => (typeof item === 'number' ? item : typeof item === 'string' && item.trim() !== '' ? Number(item) : Number.NaN))
+          .filter((n) => Number.isInteger(n))
+      }
+    } else {
+      delete draft().placement
+    }
+  }
+  for (const field of ['disabled', 'markdownOnly', 'promptOnly', 'runOnEdit'] as const) {
+    if (!Object.hasOwn(raw, field)) continue
+    const value = raw[field]
+    if (typeof value === 'boolean') continue
+    if (value === 0 || value === 1) draft()[field] = value === 1
+    else if (value === 'true' || value === 'false') draft()[field] = value === 'true'
+    else delete draft()[field]
+  }
+  if (Object.hasOwn(raw, 'substituteRegex')) {
+    const value = raw.substituteRegex
+    if (value === undefined) {
+      delete draft().substituteRegex
+    } else {
+      const n = typeof value === 'number' && Number.isFinite(value) ? value : Number(value)
+      const normalized = n === 1 || n === 2 ? n : 0
+      if (value !== normalized) draft().substituteRegex = normalized
+    }
+  }
+  for (const field of ['minDepth', 'maxDepth'] as const) {
+    if (!Object.hasOwn(raw, field)) continue
+    const value = raw[field]
+    if (value === undefined) {
+      delete draft()[field]
+    } else {
+      const normalized = toNumOrNull(value)
+      if (!Object.is(value, normalized)) draft()[field] = normalized
+    }
+  }
+  return (out ?? raw) as CardRegexScript
+}
+
 /** 从 data / 顶层 / extensions 挑出 regex_scripts（V3 卡常放在 extensions 里）。 */
 export function pickRegexScripts(json: Record<string, unknown>, data: Record<string, unknown>): CardRegexScript[] {
   const dataExt = isRecord(data.extensions) ? data.extensions : null
@@ -111,7 +181,10 @@ export function pickRegexScripts(json: Record<string, unknown>, data: Record<str
     jsonExt?.regexScripts,
   ]
   for (const c of candidates) {
-    if (Array.isArray(c) && c.length > 0) return c as CardRegexScript[]
+    if (Array.isArray(c) && c.length > 0) {
+      const normalized = c.map(normalizeCardRegexScript).filter((item): item is CardRegexScript => item !== null)
+      if (normalized.length > 0) return normalized
+    }
   }
   return []
 }
@@ -221,17 +294,25 @@ export function withoutEmbeddedCharacterBook(card: CharacterCard): CharacterCard
   return { ...card, characterBook: null, extensions, raw: stripRawCharacterBooks(card.raw) }
 }
 
-function parseDepthPrompt(ext: Record<string, unknown>): DepthPrompt | null {
-  const raw = ext.depth_prompt
+/** 归一化 depth_prompt：depth 强制为非负安全整数，role 限定为 system/user/assistant。 */
+function normalizeDepthPrompt(raw: unknown): DepthPrompt | null {
   if (!isRecord(raw)) return null
   const prompt = toStr(raw.prompt)
   if (!prompt.trim()) return null
-  const depth = toNum(raw.depth, 4)
+  const numeric = toNum(raw.depth, 4)
+  const rounded = Math.round(numeric)
+  const depth = Number.isSafeInteger(rounded) && rounded >= 0
+    ? rounded
+    : rounded > Number.MAX_SAFE_INTEGER ? Number.MAX_SAFE_INTEGER : 0
   const roleRaw = raw.role
   let role: ChatRole = 'system'
   if (roleRaw === 'user' || roleRaw === 1 || roleRaw === '1') role = 'user'
   else if (roleRaw === 'assistant' || roleRaw === 2 || roleRaw === '2') role = 'assistant'
-  return { prompt, depth: Math.max(0, Math.round(depth)), role }
+  return { prompt, depth, role }
+}
+
+function parseDepthPrompt(ext: Record<string, unknown>): DepthPrompt | null {
+  return normalizeDepthPrompt(ext.depth_prompt)
 }
 
 /**
@@ -265,7 +346,7 @@ export function hydrateStoredCard(record: Record<string, unknown>): CharacterCar
     ? (record.characterBook as unknown as LorebookFile)
     : null
   const depthPrompt = isRecord(record.depthPrompt) && typeof record.depthPrompt.prompt === 'string' && record.depthPrompt.prompt.trim()
-    ? (record.depthPrompt as unknown as DepthPrompt)
+    ? normalizeDepthPrompt(record.depthPrompt)
     : parseDepthPrompt(ext)
   return {
     ...(record as unknown as CharacterCard),
@@ -284,7 +365,9 @@ export function hydrateStoredCard(record: Record<string, unknown>): CharacterCar
     characterVersion: str(record.characterVersion),
     tags: strList(record.tags),
     characterBook,
-    regexScripts: Array.isArray(record.regexScripts) ? [...(record.regexScripts as CardRegexScript[])] : [],
+    regexScripts: Array.isArray(record.regexScripts)
+      ? record.regexScripts.map(normalizeCardRegexScript).filter((item): item is CardRegexScript => item !== null)
+      : [],
     extensions: ext,
     depthPrompt,
     pngBytes: null,
@@ -657,6 +740,19 @@ export function applyCharacterPatch(
   // RPC 组装补丁时会显式带上未传字段的 undefined；它表示「未修改」，
   // 不能覆盖旧值并在 JSON 序列化时删除整片角色字段。空串、空数组与 null 仍允许清空。
   const definedPatch = Object.fromEntries(Object.entries(patch).filter(([, value]) => value !== undefined))
+  if ('depthPrompt' in definedPatch && definedPatch.depthPrompt !== null) {
+    const dp = definedPatch.depthPrompt
+    if (
+      !isRecord(dp)
+      || typeof dp.prompt !== 'string'
+      || typeof dp.depth !== 'number'
+      || !Number.isSafeInteger(dp.depth)
+      || dp.depth < 0
+      || (dp.role !== 'system' && dp.role !== 'user' && dp.role !== 'assistant')
+    ) {
+      throw new CardParseError('角色 depthPrompt 无效：depth 必须是非负安全整数，role 必须是 system/user/assistant')
+    }
+  }
   const next: CharacterCard = { ...card, ...definedPatch }
   const extensions: Record<string, unknown> = { ...next.extensions }
   if (next.depthPrompt) {

@@ -4,6 +4,7 @@ import { type Session, type SessionEvent } from '@deepseek-ai/dsh-session';
 import { type GreetingFloorState } from '../core/greetingLog.js';
 import { type SiblingSwipe } from '../core/siblings.js';
 import { type SessionBinding, type WalLineageEntry } from './bindings.js';
+import { inheritedThroughTurn } from './sessionArchiveSnapshot.js';
 import type { TavernState } from './state.js';
 export interface FloorDeps {
     ctx: Context;
@@ -54,8 +55,8 @@ export declare function timerOwnerAtTurn(binding: Pick<SessionBinding, 'walLinea
  * throughTurn === null（空 seed，未继承任何楼层）时祖先内容同样未继承，整条世系丢弃。
  */
 export declare function childWalLineage(binding: Pick<SessionBinding, 'walLineage'>, sourceId: string, throughTurn: number | null): WalLineageEntry[];
-/** seed 中最大的 turn/start（或开场白 turn 0）；空前缀表示没有继承源会话楼层。 */
-export declare function inheritedThroughTurn(seed: readonly SessionEvent[]): number | null;
+/** 复用归档与分支共享的继承边界计算（含 Turn 0 开场白）。 */
+export { inheritedThroughTurn };
 /** 分支操作结果：子会话 id + 建议标题（客户端经 sessions.rename 落到会话列表）。 */
 export interface ForkResult {
     childSessionId: string;

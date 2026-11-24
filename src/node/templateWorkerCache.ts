@@ -18,9 +18,9 @@ export class TemplateWorkerCache {
     const current=this.current
     this.current=undefined
     if (!current) return undefined
-    if (!key || current.key!==key) {current.sandbox.dispose();return undefined}
+    if (!key || current.key!==key) {try { current.sandbox.dispose() } catch {} return undefined}
     try {current.sandbox.restartBudget(resourceChars);current.sandbox.verifyReplayState(replay);return current.sandbox}
-    catch(error) {current.sandbox.dispose();throw error}
+    catch(error) {try { current.sandbox.dispose() } catch {} throw error}
   }
 
   keep(sandbox:TemplateSandbox,replay:TemplateReplay,context:TemplateContext):string {

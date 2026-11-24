@@ -3,10 +3,11 @@ export const TEMPLATE_SCHEMA = String.raw`
 const z = __TavernTemplateLibraries.z;
 let variableSchema = null;
 let validatingSchema = false;
-let schemaState = JSON.stringify(scopes);
-let schemaCacheState = JSON.stringify(variables);
-function rememberSchemaState() { schemaState=JSON.stringify(scopes);schemaCacheState=JSON.stringify(variables); }
+let schemaState = stringifyTemplateJson(scopes);
+let schemaCacheState = stringifyTemplateJson(variables);
+function rememberSchemaState() { schemaState=stringifyTemplateJson(scopes);schemaCacheState=stringifyTemplateJson(variables); }
 function setVariableSchema(schema) {
+  assertNotConditionReadonly('修改变量 schema');
   if (validatingSchema) throw Error('变量校验期间不能替换 schema');
   if (schema instanceof z.ZodType) variableSchema = typeof schema.loose==='function' ? schema.loose() : schema;
   else if (schema && typeof schema==='object' && !Array.isArray(schema)) variableSchema = z.looseObject(schema);
@@ -18,18 +19,18 @@ function checkVariableSchema(value) {
   if (!variableSchema) return value;
   if (validatingSchema) throw Error('变量校验期间不能修改变量');
   const originalVariables=clone(variables), originalScopes=clone(scopes), originalInitial=clone(initial),originalMessages=clone(messageSnapshots);
-  const previous=JSON.stringify({variables,scopes,initial,messageSnapshots});
+  const previous=stringifyTemplateJson({variables,scopes,initial,messageSnapshots});
   validatingSchema=true;
   try {
     const result=variableSchema.parse(clone(value));
-    if (JSON.stringify({variables,scopes,initial,messageSnapshots})!==previous) throw Error('schema 校验函数不能修改变量');
+    if (stringifyTemplateJson({variables,scopes,initial,messageSnapshots})!==previous) throw Error('schema 校验函数不能修改变量');
     if (!result || typeof result!=='object' || Array.isArray(result)) throw Error('变量 schema 根输出必须是对象');
     validate(result);
     return result;
   } finally {
     // 用户 validator 即使抛错或经引用写入，也不得污染前一份状态。
     // 纯校验保留引用身份；否则 findVariables 返回的当前树会和 scopes.message 失联。
-    if(JSON.stringify({variables,scopes,initial,messageSnapshots})!==previous) {
+    if(stringifyTemplateJson({variables,scopes,initial,messageSnapshots})!==previous) {
       for (const key of Object.keys(scopes)) delete scopes[key];
       Object.assign(scopes,originalScopes);
       for (const key of Object.keys(initial)) delete initial[key];
@@ -55,5 +56,5 @@ function copySchemaChanges(target,before,after,parts=[]) {
   }
 }
 Object.assign(api,{z,setVariableSchema,_:__TavernTemplateLibraries.lodash,
-  parseJSON:text=>JSON.parse(__TavernTemplateLibraries.jsonrepair(String(text)))});
+  parseJSON:text=>parseTemplateInput(__TavernTemplateLibraries.jsonrepair(String(text)))});
 `;

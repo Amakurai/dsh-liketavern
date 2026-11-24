@@ -7,11 +7,20 @@ type NativeMvu={current:()=>boolean;snapshot:()=>HelperSnapshot|undefined}
 type Message=Record<string,unknown>
 type Entry={endpoint:Endpoint;id:string;event:string;once:boolean}
 type Group={sessionId:string;endpoints:Set<Endpoint>;listeners:Entry[];inflight:number}
-type Delivery={resolve:(value:Message)=>void;reject:(error:Error)=>void;timer:ReturnType<typeof setTimeout>;
+type Delivery={resolve:(value:Message)=>void;reject:(error:Error)=>void;timer:ReturnType<typeof setTimeout>;maxBytes:number;
   host?:{entry:Entry;current:()=>boolean;phase:'preparing'|'executing'}}
 const groups=new Map<string,Group>()
-function args(value:unknown):unknown[] {
-  const parsed=helperJson(value,256*1024)
+const EVENT_MAX_BYTES=256*1024
+const MVU_EVENT_MAX_BYTES=4*1024*1024
+/** 内置 MVU 生命周期事件允许承载完整 1 MiB 状态的前后副本与正文，普通跨卡面事件保持 256 KiB 上限。 */
+const MVU_EVENTS=new Set([
+  'mag_variable_updated','mag_variable_initialized','mag_variable_update_started',
+  'mag_command_parsed','mag_command_parsed_for_zod','mag_command_parsed_ended_for_zod',
+  'mag_variable_update_ended','mag_variable_update_ended_for_zod','mag_before_message_update',
+])
+const eventMaxBytes=(event:string):number=>MVU_EVENTS.has(event)?MVU_EVENT_MAX_BYTES:EVENT_MAX_BYTES
+function args(value:unknown,maxBytes=EVENT_MAX_BYTES):unknown[] {
+  const parsed=helperJson(value,maxBytes)
   if(!Array.isArray(parsed)||parsed.length>64)throw new Error('事件参数必须是至多 64 项的 JSON 数组')
   return parsed
 }
@@ -25,14 +34,14 @@ class Endpoint {
     for(const [deliveryId,delivery] of this.pending){clearTimeout(delivery.timer);if(delivery.host)this.post({action:'helperEventCancel',deliveryId});delivery.reject(new Error(reason))}
     this.pending.clear()
   }
-  async invoke(entry:Entry,data:unknown[],emissionId:string,remaining:number,host?:()=>boolean,mvuSnapshot?:HelperSnapshot):Promise<Message> {
+  async invoke(entry:Entry,data:unknown[],emissionId:string,remaining:number,maxBytes:number,host?:()=>boolean,mvuSnapshot?:HelperSnapshot):Promise<Message> {
     if(!this.active)throw new Error('事件监听卡面已关闭')
     if(this.pending.size>=64)throw new Error('事件监听处理超过并发预算')
     const deliveryId=`${this.runtimeId}:${++this.serial}`
     return new Promise((resolve,reject)=>{
       const timeoutMs=Math.min(15000,remaining)
       const timer=setTimeout(()=>{this.pending.delete(deliveryId);if(host)this.post({action:'helperEventCancel',deliveryId});reject(new Error('事件监听处理超时'))},timeoutMs)
-      this.pending.set(deliveryId,{resolve,reject,timer,...(host?{host:{entry,current:host,phase:'preparing' as const}}:{})})
+      this.pending.set(deliveryId,{resolve,reject,timer,maxBytes,...(host?{host:{entry,current:host,phase:'preparing' as const}}:{})})
       try{this.post({action:'helperEventDeliver',deliveryId,listenerId:entry.id,emissionId,args:data,...(host?{host:true,timeoutMs}:{}),...(mvuSnapshot?{mvuSnapshot}:{})})}
       catch(error){clearTimeout(timer);this.pending.delete(deliveryId);reject(error instanceof Error?error:new Error(String(error)))}
     })
@@ -56,7 +65,7 @@ class Endpoint {
       // 准备可以等待变量保存与远端读取；执行许可必须在等待之后由宿主再次核验。
       try{
         if(!host.current())throw new Error('宿主事件来源已改变')
-        const data=args(value.args)
+        const data=args(value.args,delivery.maxBytes)
         if(!this.group.listeners.includes(host.entry)){
           this.pending.delete(deliveryId);clearTimeout(delivery.timer);this.post({action:'helperEventCancel',deliveryId})
           delivery.resolve({ok:true,args:data,invoked:false,canceled:true});return
@@ -77,7 +86,7 @@ class Endpoint {
       this.pending.delete(value.deliveryId);clearTimeout(delivery.timer)
       try{
         if(delivery.host?.phase==='preparing'&&value.ok===true&&value.canceled!==true)throw new Error('宿主事件尚未确认执行')
-        delivery.resolve({...value,args:args(value.args)})
+        delivery.resolve({...value,args:args(value.args,delivery.maxBytes)})
       }catch(error){delivery.reject(error instanceof Error?error:new Error(String(error)))}
       return
     }
@@ -99,9 +108,10 @@ class Endpoint {
       } else if(action==='helperEventEmit') {
         if(typeof value.requestId!=='string'||!value.requestId||value.requestId.length>128||typeof value.event!=='string'||!value.event||value.event.length>256)throw new Error('事件发送信息无效')
         if(this.inflight>=16||this.group.inflight>=64)throw new Error('事件发送超过并发预算')
-        const data=args(value.args),runtimeId=this.runtimeId
+        const maxBytes=eventMaxBytes(value.event)
+        const data=args(value.args,maxBytes),runtimeId=this.runtimeId
         this.inflight++;this.group.inflight++
-        void this.emit(value.requestId,value.event,data,value.excludeSelf===true).then(result=>{
+        void this.emit(value.requestId,value.event,data,value.excludeSelf===true,maxBytes).then(result=>{
           if(this.runtimeId===runtimeId)this.post(result)
         }).catch(()=>{}).finally(()=>{this.inflight--;this.group.inflight--})
       }
@@ -109,9 +119,10 @@ class Endpoint {
       this.post({action:'helperEventResult',requestId:value.requestId,ok:false,error:describeError(error),args:[]})
     }
   }
-  async emit(requestId:string,event:string,data:unknown[],excludeSelf:boolean):Promise<Message> {
+  async emit(requestId:string,event:string,data:unknown[],excludeSelf:boolean,maxBytes:number):Promise<Message> {
     const runtimeId=this.runtimeId
     const deadline=Date.now()+45000
+    let delivered=false
     try {
       const current=()=>this.active&&this.runtimeId===runtimeId&&(!this.nativeMvu||this.nativeMvu.current())
       if(!current())throw new Error('事件发送卡面或 MVU 任务已改变')
@@ -123,12 +134,14 @@ class Endpoint {
         if(entry.event!==event||excludeSelf&&entry.endpoint===this||!this.group.listeners.includes(entry))continue
         if(this.nativeMvu&&!this.nativeMvu.current())throw new Error('MVU 任务或脚本就绪状态已改变')
         if(entry.once&&!this.nativeMvu)this.group.listeners=this.group.listeners.filter(item=>item!==entry)
-        const result=await entry.endpoint.invoke(entry,data,requestId,deadline-Date.now(),this.nativeMvu?current:undefined,mvuSnapshot)
-        data=args(result.args)
+        delivered=true
+        const result=await entry.endpoint.invoke(entry,data,requestId,deadline-Date.now(),maxBytes,this.nativeMvu?current:undefined,mvuSnapshot)
+        data=args(result.args,maxBytes)
         if(result.ok!==true)throw new Error(typeof result.error==='string'?result.error:'事件监听失败')
       }
       if(!current())throw new Error('事件发送卡面或 MVU 任务已改变')
-      return {action:'helperEventResult',requestId,ok:true,args:data}
+      // 无监听命中时省略回传 args，避免大 MVU 状态在零监听场景做无意义的跨帧复制与 reconcile。
+      return delivered?{action:'helperEventResult',requestId,ok:true,args:data}:{action:'helperEventResult',requestId,ok:true}
     } catch(error) {return {action:'helperEventResult',requestId,ok:false,error:describeError(error),args:data}}
   }
 }
@@ -185,8 +198,8 @@ export async function emitHelperHostEvent(sessionId:string,storyId:string,event:
       if(!current()||groups.get(key)!==group)throw new Error('宿主事件来源已改变')
       if(entry.event!==event||!entry.endpoint.hostEventsEnabled||!group.listeners.includes(entry))continue
       if(Date.now()>=deadline)throw new Error('事件处理超过总时间预算')
-      const result=await entry.endpoint.invoke(entry,payload,id,deadline-Date.now(),()=>current()&&groups.get(key)===group)
-      payload=args(result.args)
+      const result=await entry.endpoint.invoke(entry,payload,id,deadline-Date.now(),EVENT_MAX_BYTES,()=>current()&&groups.get(key)===group)
+      payload=args(result.args,EVENT_MAX_BYTES)
       if(result.ok!==true)throw new Error(typeof result.error==='string'?result.error:'宿主事件监听失败')
     }
     if(!current())throw new Error('宿主事件来源已改变')

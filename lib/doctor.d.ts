@@ -50,6 +50,7 @@ export interface DoctorReport {
             unhealthy: number;
             uninspected: number;
             archived: number;
+            drafts: number;
             invalidIds: number;
             unsafeEntries: number;
         };

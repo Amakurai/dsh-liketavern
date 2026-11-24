@@ -46,7 +46,7 @@ globalThis.__continueTemplateGeneration=context=> {
   for(const key of Object.keys(input)) delete input[key];
   Object.assign(input,clone(context));
   for(const key of Object.keys(initial)) delete initial[key];
-  for(const entry of input.entries.filter(e=>e.enabled && /^\[InitialVariables\]/i.test(e.comment))) merge(initial,JSON.parse(entry.content));
+  for(const entry of input.entries.filter(e=>e.enabled && /^\[InitialVariables\]/i.test(e.comment))) merge(initial,parseTemplateInput(entry.content));
   Object.assign(scopes,clone(context.variables));
   messageSnapshots=clone(context.messageVariables || {version:1,snapshots:{}});
   messageIdentities=context.historyIdentities || context.history.map((_,index)=>({messageId:'preview:'+index,swipeId:0}));

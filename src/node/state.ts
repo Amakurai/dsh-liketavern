@@ -949,7 +949,11 @@ export class TavernState {
 
   /** 导入角色卡（PNG/JSON 字节），落盘工作区并初始化索引。 */
   async importCharacter(fileName: string, bytes: Uint8Array, opts?: { importWorldBook?: boolean }): Promise<CharacterWorkspace> {
-    const card: CharacterCard = /\.png$/i.test(fileName) ? parsePngCard(bytes) : parseJsonCard(JSON.parse(new TextDecoder().decode(bytes)))
+    const isPng = /\.png$/i.test(fileName)
+    if (!isPng && bytes.byteLength > 24 * 1024 * 1024) {
+      throw new Error('JSON 角色卡超过大小上限（24MiB）')
+    }
+    const card: CharacterCard = isPng ? parsePngCard(bytes) : parseJsonCard(JSON.parse(new TextDecoder().decode(bytes)))
     const ws = await importCardToWorkspace(this.paths.characters, card, opts)
     this.bumpAssetRev(`card:${ws.cardId}`)
     this.invalidateCardRegex(ws.cardId)
@@ -1221,8 +1225,8 @@ export class TavernState {
     }
     return {binding,revision,target}
   }
-  async getSessionHelperScripts(sessionId:string,storyId:string):Promise<HelperScriptContext> {
-    await this.waitForBindingAdoption(sessionId)
+  async getSessionHelperScripts(sessionId:string,storyId:string,options?:{waitForAdoption?:boolean}):Promise<HelperScriptContext> {
+    if(options?.waitForAdoption!==false)await this.waitForBindingAdoption(sessionId)
     return withWorkspaceLock(this.paths.sessions,async()=>{
       const selected=this.helperScriptBinding(await this.loadBindingNow(sessionId,false,'preserve'))
       if(selected.binding.storyId!==storyId)throw new Error('脚本剧情绑定已改变')

@@ -16,6 +16,7 @@ import { CharacterPicker, rememberCharacter } from './characterPicker.js'
 import { BINDING_CHANGED_EVENT } from './actions.js'
 import { CHARACTER_CHANGED_EVENT, cachedAvatar, cachedCharacterDetail, invalidateSessionBinding } from './cache.js'
 import { bindingFromDefaults } from './chip.js'
+import { useDisplaySettingsRevision } from './displayPrefs.js'
 import { useT } from './i18n.js'
 import { isTavernSession, type UseSessions } from './mode.js'
 import { useSessionView } from './sessionViews.js'
@@ -42,13 +43,25 @@ function withWriteTimeout<T>(pending: Promise<T>, ms: number, onTimeout: () => E
 }
 
 /** 开场白只读展示与聊天共用服务端处理；纯 `<details>` 展开为可读正文，真实互动 HTML 只提示，避免源码泄露或提前执行脚本。 */
-function GreetingPreview(props: { remote: TavernRemote; sessionId: string; text: string; interactiveCards?: boolean | null }) {
+function GreetingPreview(props: {
+  remote: TavernRemote
+  sessionId: string
+  text: string
+  interactiveCards?: boolean | null
+  cardId?: string
+  characterRevision?: string
+  presetId?: string | null
+}) {
   const t = useT()
-  const preview = useLoader(() => props.remote.renderOutputText({ sessionId: props.sessionId, text: props.text }), [props.sessionId, props.text])
+  const displaySettingsRevision = useDisplaySettingsRevision()
+  const preview = useLoader(
+    () => props.remote.renderOutputText({ sessionId: props.sessionId, text: props.text }),
+    [props.sessionId, props.text, props.interactiveCards, props.cardId, props.characterRevision, props.presetId, displaySettingsRevision],
+  )
   if (preview.state.status === 'error') return <Err message={preview.state.message} />
   if (preview.state.status !== 'ready') return <Skeleton />
   const value = preview.state.value
-  const interactive = props.interactiveCards ?? (value.interactiveCards !== false)
+  const interactive = props.interactiveCards !== false && value.interactiveCards !== false
   const chunks: string[] = []
   let hasInteractiveHtml = false
   if (value.parts && value.parts.length > 0) {
@@ -56,8 +69,8 @@ function GreetingPreview(props: { remote: TavernRemote; sessionId: string; text:
       if (part.kind === 'markdown') {
         const shown = interactive ? normalizeHostMarkdown(part.text) : part.text
         if (shown.trim()) chunks.push(shown)
-      } else {
-        const details = interactive && part.title === undefined ? parsePlainDetailsBlocks(part.text) : null
+      } else if (interactive) {
+        const details = part.title === undefined ? parsePlainDetailsBlocks(part.text) : null
         if (details) {
           const expanded = formatPlainDetailsText(details)
           if (expanded.trim()) chunks.push(expanded)
@@ -69,13 +82,15 @@ function GreetingPreview(props: { remote: TavernRemote; sessionId: string; text:
   } else {
     const shown = interactive ? normalizeHostMarkdown(value.text) : value.text
     if (shown) chunks.push(shown)
-    for (const html of value.htmls) {
-      const details = interactive ? parsePlainDetailsBlocks(html) : null
-      if (details) {
-        const expanded = formatPlainDetailsText(details)
-        if (expanded.trim()) chunks.push(expanded)
-      } else {
-        hasInteractiveHtml = true
+    if (interactive) {
+      for (const html of value.htmls) {
+        const details = parsePlainDetailsBlocks(html)
+        if (details) {
+          const expanded = formatPlainDetailsText(details)
+          if (expanded.trim()) chunks.push(expanded)
+        } else {
+          hasInteractiveHtml = true
+        }
       }
     }
   }
@@ -213,6 +228,8 @@ function HeroCharacterSession(props: HeroProps) {
 
   /** 用户正在点选角色：不要把刚写入的绑定当成「上次留下的」清掉。 */
   const picking = useRef(false)
+  /** 选卡/开聊/切开场白共用同步互斥锁，防止 React 提交 busy 前连点触发并发写入。 */
+  const writing = useRef(false)
   /** 进行中的陈旧绑定清扫；点选角色要等它结束（有界），不再用定时器轮询。 */
   const clearing = useRef<Promise<void> | null>(null)
   const clearingSerial = useRef(0)
@@ -244,7 +261,7 @@ function HeroCharacterSession(props: HeroProps) {
         if (picking.current) return
         // 宿主写入可能永不返回；有界等待，超时明确失败而不是无上限轮询。
         const r = await withWriteTimeout(remote.clearSessionBinding({ sessionId, onlyIfBlank: true }), HERO_WRITE_TIMEOUT_MS, () => new Error(t('util.loadTimeout')))
-        if (picking.current) return
+        if (picking.current || !alive.current) return
         const err = errOf(r)
         if (err) {
           sweptSession.current = null
@@ -258,6 +275,13 @@ function HeroCharacterSession(props: HeroProps) {
         window.dispatchEvent(new CustomEvent(BINDING_CHANGED_EVENT, { detail: sessionId }))
         bindingLoader.reload()
       } catch (cause) {
+        if (!alive.current) return
+        if (picking.current) {
+          // 用户已开始选卡：仍提示清扫失败/超时，但不能重置 sweptSession 或置 sweepFailed，
+          // 否则选卡完成后会把刚选好的新角色当成陈旧绑定再次清扫。
+          setError(describeError(cause))
+          return
+        }
         // 失败不能消费一次性标记：留出重试入口，避免陈旧绑定继续被用来开始对话。
         sweptSession.current = null
         setSweepFailed(true)
@@ -321,7 +345,8 @@ function HeroCharacterSession(props: HeroProps) {
   if (detail && detail.tags.length > 0) metaParts.push(detail.tags.slice(0, 3).join(' · '))
 
   const pickCharacter = async (cardId: string) => {
-    if (!cardId || busy) return
+    if (!cardId || busy || writing.current) return
+    writing.current = true
     picking.current = true
     sweptSession.current = sessionId
     setBusy(true)
@@ -343,6 +368,7 @@ function HeroCharacterSession(props: HeroProps) {
       const next = await withWriteTimeout(bindingFromDefaults(remote, sessionId, cardId), HERO_WRITE_TIMEOUT_MS, () => new Error(t('util.loadTimeout'))).catch((e) => { syncFailedPick(); throw e })
       if (!alive.current) return
       const saved = await withWriteTimeout(remote.setSessionBinding({ binding: next }), HERO_WRITE_TIMEOUT_MS, () => new Error(t('util.loadTimeout'))).catch((e) => { syncFailedPick(); throw e })
+      if (!alive.current) return
       const saveErr = errOf(saved)
       if (saveErr) {
         syncFailedPick()
@@ -355,14 +381,16 @@ function HeroCharacterSession(props: HeroProps) {
       rememberCharacter(remote, cardId)
       setOpen(false)
     } catch (cause) {
-      setError(describeError(cause))
+      if (alive.current) setError(describeError(cause))
     } finally {
-      setBusy(false)
+      writing.current = false
+      if (alive.current) setBusy(false)
     }
   }
 
   const startConversation = async () => {
-    if (!binding || busy) return
+    if (!binding || busy || writing.current) return
+    writing.current = true
     picking.current = true
     setBusy(true)
     setError(null)
@@ -397,13 +425,15 @@ function HeroCharacterSession(props: HeroProps) {
     } catch (cause) {
       if (alive.current) setError(describeError(cause))
     } finally {
+      writing.current = false
       if (alive.current) setBusy(false)
     }
   }
 
   /** 空白页只改绑定下标，不 fork、不写日志，以免毁掉可复用的空白会话。 */
   const swipeTo = async (index: number) => {
-    if (!binding || busy) return
+    if (!binding || busy || writing.current) return
+    writing.current = true
     setBusy(true)
     setError(null)
     try {
@@ -419,6 +449,7 @@ function HeroCharacterSession(props: HeroProps) {
     } catch (cause) {
       if (alive.current) setError(describeError(cause))
     } finally {
+      writing.current = false
       if (alive.current) setBusy(false)
     }
   }
@@ -490,7 +521,7 @@ function HeroCharacterSession(props: HeroProps) {
           {detailLoader.state.status === 'error' ? (
             <div className="dsh-tavern-hero-previewText" role="alert">{t('hero.detailLoadFailed')}</div>
           ) : greetingText ? (
-            <div className="dsh-tavern-hero-quote"><GreetingPreview remote={remote} sessionId={sessionId} text={greetingText} interactiveCards={binding.interactiveCards} /></div>
+            <div className="dsh-tavern-hero-quote"><GreetingPreview remote={remote} sessionId={sessionId} text={greetingText} interactiveCards={binding.interactiveCards} cardId={binding.cardId} characterRevision={detail?.revision} presetId={binding.presetId} /></div>
           ) : hasAnyGreeting ? (
             <div className="dsh-tavern-hero-previewText">{t('hero.emptyVariantHint')}</div>
           ) : (

@@ -16,6 +16,8 @@ export { readHostColorScheme };
 export declare function SpeechHtmlFrame(props: {
     onFrameReady?: () => void;
     onScriptError?: (message: string) => void;
+    /** 仅在 iframe 文档重建或新 runtimeId 重连时触发，供宿主清除上一运行时的故障记录；同运行时故障不可由 onScriptReady(true) 绕过。 */
+    onScriptReset?: () => void;
     onScriptReady?: (ready: boolean) => void;
     registerDisplayGuard?: (guard: (request: HelperDisplayRequest) => Promise<HelperDisplayLease>) => () => void;
     srcDoc: string;
@@ -24,8 +26,12 @@ export declare function SpeechHtmlFrame(props: {
     compact?: boolean;
     /** 重绘候选已真实挂载但尚未发布；允许只读查询和事件订阅，禁止产生剧情副作用。 */
     readOnly?: boolean;
+    /** 活跃可见卡面正处于重载或重载失败态；禁止新剧情写入，但不得冒充 helperEventEmit 成功或吞掉在途 *Applied 回执。 */
+    refreshing?: boolean;
     /** 候选发布前尝试剧情写入时，立即废弃候选并保留旧卡。 */
     onReadOnlyViolation?: () => void;
+    /** 分支导航失败或重试成功时同步通知宿主容器（后台隐藏脚本借此在可见 UI 展示错误与手动打开入口）。 */
+    onBranchError?: (branch: NonNullable<HelperMessageEditResult['branch']> | null, error: string | null) => void;
     remote?: TavernRemote;
     helperMessageId?: number;
     onMessageEdit?: (request: FrameWrite<HelperMessageEditRequest>) => Promise<HelperMessageEditResult>;

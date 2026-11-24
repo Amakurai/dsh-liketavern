@@ -64,7 +64,8 @@ export function createHelperMvuInitialData(
     return target
   }
   const blocks = (text: string): string[] => {
-    const values: string[] = [], tags = /<\s*\/?\s*initvar\b[^>]*>/gi
+    // 仅匹配真正的 <initvar> / </initvar> 标签边界，不把 <initvar-box> 等自定义短横线标签误判为带属性标签。
+    const values: string[] = [], tags = /<\s*\/?\s*initvar(?=[\s/>]|$)[^>]*>/gi
     let begin: number | undefined
     for (let match = tags.exec(text); match; match = tags.exec(text)) {
       if (!/^<\s*\/?\s*initvar\s*>$/i.test(match[0])) throw new Error('MVU initvar 标签不支持属性')
@@ -76,7 +77,7 @@ export function createHelperMvuInitialData(
         begin = match.index + match[0].length
       }
     }
-    if (begin !== undefined || /<\s*\/?\s*initvar\b[^>]*$/i.test(text)) throw new Error('MVU initvar 标签未闭合')
+    if (begin !== undefined || /<\s*\/?\s*initvar(?=[\s/>]|$)[^>]*$/i.test(text)) throw new Error('MVU initvar 标签未闭合')
     return values
   }
   const parse = (text: string): Table => {

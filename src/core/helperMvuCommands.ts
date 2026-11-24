@@ -428,7 +428,8 @@ export function createHelperMvuCommandCodec(json: (value: unknown, maxBytes?: nu
           continue
         }
       }
-      if (!message.startsWith('_.', at)) { at++; continue }
+      // 排除标识符后缀（如 foo_.set(...)），避免围栏外正文里的普通代码片段被误判为 MVU 命令。
+      if (!message.startsWith('_.', at) || (at > 0 && /[\w$]/.test(message[at - 1]!))) { at++; continue }
       const start = at; at += 2; const nameStart = at
       while (at < message.length && /[a-z]/i.test(message[at]!)) at++
       const name = message.slice(nameStart, at)

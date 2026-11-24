@@ -23,7 +23,7 @@ import { CHARACTER_ARCHIVE_FILE, isValidCardId } from './state/workspace.js'
 import { storyRoot } from './state/story.js'
 import { WAL_COVERAGE_PATH, WAL_FLOOR_MARKERS } from './state/wal.js'
 import {
-  baseFloorDir, checkRollbackProgress, isFloorMetaShape, isRolledBackDir, MAX_WAL_COVERAGE_BYTES, parseRecoveryMarker,
+  baseFloorDir, checkRollbackProgress, isFloorMetaShape, isRolledBackDir, isValidWalFloorDir, MAX_WAL_COVERAGE_BYTES, parseRecoveryMarker,
   parseWalCoverage, recordLineIssue, sanitizeFloor, type RecordLine,
 } from './state/walFormat.js'
 import { WAL_RECOVERY_PATH } from './state/workspaceFs.js'
@@ -95,6 +95,7 @@ export interface DoctorReport {
       unhealthy: number
       uninspected: number
       archived: number
+      drafts: number
       invalidIds: number
       unsafeEntries: number
     }
@@ -506,7 +507,7 @@ async function inspectWalRoot(
       continue
     }
     const meta = metaRead.status === 'ok' ? metaRead.value : undefined
-    if (!isFloorMetaShape(meta) || sanitizeFloor(meta.floor) !== baseName
+    if (!isFloorMetaShape(meta) || !isValidWalFloorDir(baseName) || sanitizeFloor(meta.floor) !== baseName
       || (rolledBack && !validDate(meta.rolledBackAt))) {
       stats.unhealthy += 1
       issues.add('WAL_INVALID', 'error')
@@ -621,12 +622,18 @@ async function inspectCharacters(
   inspectedJson: Map<string, ReadJsonResult['status']>,
   verifiedDirs: Set<string>,
 ): Promise<void> {
+  const draftsBefore = stats.characters.drafts
   let entries
   try { entries = await readDirectoryEntries(charactersRoot, scanBudget) } catch {
     issues.add('CHARACTERS_DIRECTORY_UNREADABLE', 'error')
     return
   }
   for (const entry of entries) {
+    if (entry.name.startsWith('.importing-')) {
+      if (entry.isDirectory()) stats.characters.drafts += 1
+      else if (entry.isSymbolicLink()) { stats.characters.unsafeEntries += 1; issues.add('CHARACTER_LINK_SKIPPED', 'error') }
+      continue
+    }
     if (entry.isSymbolicLink()) {
       stats.characters.unsafeEntries += 1
       issues.add('CHARACTER_LINK_SKIPPED', 'error')
@@ -677,11 +684,15 @@ async function inspectCharacters(
     await inspectWalRoot(`${cardRoot}/state/wal`, stats.wal, issues, budget, scanBudget, inspectedJson, verifiedDirs)
     await inspectStories(cardRoot, stats, issues, budget, scanBudget, inspectedJson, verifiedDirs)
   }
+  if (stats.characters.drafts > draftsBefore) issues.add('CHARACTER_DRAFT_PRESENT', 'info', stats.characters.drafts - draftsBefore)
 }
 
-/** 特定剧情/角色大文件与运行时各自的持久化上限对齐，避免合法大快照在诊断与离线备份时误报超限。 */
+/** 特定剧情/角色/共享库大文件与运行时各自的持久化上限对齐，避免合法大快照在诊断与离线备份时误报超限。 */
 function jsonLimitForDataFile(dataRoot: string, filePath: string): number {
   const rel = relative(resolve(dataRoot), resolve(filePath)).replace(/\\/g, '/')
+  if (/^library\/(?:lorebooks|presets)\/[^/]+\.json$/.test(rel)) {
+    return MAX_STORED_CARD_JSON_BYTES
+  }
   const match = /^characters\/([^/]+)\/(?:stories\/([^/]+)\/)?(.+)$/.exec(rel)
   if (!match || !isValidCardId(match[1]!)) return MAX_JSON_BYTES
   const storyId = match[2]
@@ -809,7 +820,7 @@ async function ownPackageVersion(): Promise<string> {
 function emptyStatistics(): DoctorReport['statistics'] {
   return {
     files: { total: 0, json: 0, invalidJson: 0, oversizedJson: 0, unreadable: 0, skippedLinks: 0, scanTruncated: false },
-    characters: { directories: 0, healthy: 0, unhealthy: 0, uninspected: 0, archived: 0, invalidIds: 0, unsafeEntries: 0 },
+    characters: { directories: 0, healthy: 0, unhealthy: 0, uninspected: 0, archived: 0, drafts: 0, invalidIds: 0, unsafeEntries: 0 },
     stories: { directories: 0, healthy: 0, unhealthy: 0, uninspected: 0, drafts: 0, unsafeEntries: 0 },
     wal: { roots: 0, floors: 0, active: 0, rolledBack: 0, healthy: 0, unhealthy: 0, uninspected: 0,
       committed: 0, pending: 0, unsafeEntries: 0 },
@@ -920,7 +931,7 @@ export function formatDoctorText(report: DoctorReport): string {
     `storage: home=${report.storage.home} home-status=${report.storage.homeStatus} data-root=${report.storage.dataRoot} data-status=${report.storage.dataRootStatus}`,
     `directories: ${Object.entries(report.storage.directories).map(([name, status]) => `${name}=${status}`).join(' ')}`,
     `files: total=${files.total} json=${files.json} invalid-json=${files.invalidJson} oversized-json=${files.oversizedJson} unreadable=${files.unreadable} skipped-links=${files.skippedLinks} truncated=${files.scanTruncated}`,
-    `characters: directories=${characters.directories} healthy=${characters.healthy} unhealthy=${characters.unhealthy} uninspected=${characters.uninspected} archived=${characters.archived} invalid-ids=${characters.invalidIds} unsafe=${characters.unsafeEntries}`,
+    `characters: directories=${characters.directories} healthy=${characters.healthy} unhealthy=${characters.unhealthy} uninspected=${characters.uninspected} archived=${characters.archived} drafts=${characters.drafts} invalid-ids=${characters.invalidIds} unsafe=${characters.unsafeEntries}`,
     `stories: directories=${stories.directories} healthy=${stories.healthy} unhealthy=${stories.unhealthy} uninspected=${stories.uninspected} drafts=${stories.drafts} unsafe=${stories.unsafeEntries}`,
     `wal: roots=${wal.roots} floors=${wal.floors} active=${wal.active} rolled-back=${wal.rolledBack} healthy=${wal.healthy} unhealthy=${wal.unhealthy} uninspected=${wal.uninspected} committed=${wal.committed} pending=${wal.pending} unsafe=${wal.unsafeEntries}`,
   ]

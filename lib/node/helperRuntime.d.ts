@@ -36,7 +36,9 @@ export declare function loadHelperDisplaySet(ctx: Context, state: TavernState, s
  * 与完整 HelperSnapshot 保持同一套绑定和历史修订校验，但不读取、复制变量表。
  */
 export declare function getHelperDisplayContext(ctx: Context, state: TavernState, sessionId: string, messageId: number): Promise<HelperDisplayContext>;
-export declare function getHelperSnapshot(ctx: Context, state: TavernState, sessionId: string, messageId: number): Promise<HelperSnapshot>;
+export declare function getHelperSnapshot(ctx: Context, state: TavernState, sessionId: string, messageId: number, options?: {
+    waitForAdoption?: boolean;
+}): Promise<HelperSnapshot>;
 /** 会话实际加载的三类脚本库。预设被删除或损坏时与 getSessionHelperScripts 同口径：按没有预设脚本处理，不让整个脚本包失败。 */
 export declare function sessionHelperLibraries(state: TavernState, binding: Pick<SessionBinding, 'presetId' | 'cardId'>): Promise<HelperScriptAsset[]>;
 export declare function getHelperScriptBundle(ctx: Context, state: TavernState, sessionId: string): Promise<HelperScriptBundle>;
@@ -48,4 +50,6 @@ export declare function commitHelperVariables(ctx: Context, state: TavernState, 
     changes: unknown;
 }, beforeWrite?: HelperFrameWriteGuard): Promise<HelperSnapshot>;
 /** 聊天世界书等沙箱剧情写入复用楼层纪律；先验证业务内容，再调用 begin，最后 WAL 提交。 */
-export declare function withHelperStoryWrite<T>(ctx: Context, state: TavernState, sessionId: string, messageId: number, storyId: string, write: (fs: WorkspaceFs, begin: () => Promise<void>) => Promise<T>, beforeWrite?: HelperFrameWriteGuard): Promise<T>;
+export declare function withHelperStoryWrite<T>(ctx: Context, state: TavernState, sessionId: string, messageId: number, storyId: string, write: (fs: WorkspaceFs, begin: () => Promise<void>) => Promise<T>, beforeWrite?: HelperFrameWriteGuard, options?: {
+    waitForAdoption?: boolean;
+}): Promise<T>;

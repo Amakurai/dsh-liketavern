@@ -8,7 +8,15 @@
 import { locateRenderedHtml } from './regex.js'
 import { findHtmlOpaqueEnd, HTML_CARD_CONTAINERS, LENIENT_OPAQUE } from './htmlFragment.js'
 import { markdownCodeScanner } from './markdownCode.js'
-import { DISPLAY_META_TAGS, isDisplayMetaTagName, isKnownHtmlElementName, isPlainDetailsStructure } from './plainDetailsSyntax.js'
+import {
+  DISPLAY_META_TAGS,
+  extractStandaloneCustomTagLine,
+  isDisplayMetaTagName,
+  isKnownHtmlElementName,
+  isPlainDetailsStructure,
+  stripCustomTags,
+  stripProtocolTags,
+} from './plainDetailsSyntax.js'
 
 export { isDisplayMetaTagName, isKnownHtmlElementName }
 
@@ -456,6 +464,28 @@ function decodeReferences(value: string, offset = 0): DecodedReferences {
   return current
 }
 
+/**
+ * 匹配机读块闭标签：栈顶存在已自闭合（如 `<StatusPlaceHolderImpl/>`）的无关机读条目时先向内回退再配对外层标签，
+ * 避免自闭合机读占位符卡死外层 `</think>` / `</UpdateVariable>` 导致后续全部正文被吞；
+ * 非自闭合交叉嵌套（如 `<think><Analysis>...</think>`）仍按隐私优先保持未出栈。
+ */
+function closeMetaStack(
+  stack: MetaStackEntry[],
+  name: string,
+  open: number,
+  end: number,
+  ranges: TextRange[],
+): void {
+  let matchIdx = stack.length - 1
+  while (matchIdx >= 0 && stack[matchIdx]!.name !== name && stack[matchIdx]!.slash) matchIdx--
+  if (matchIdx >= 0 && stack[matchIdx]!.name === name) {
+    ranges.push({ start: stack[matchIdx]!.start, end })
+    stack.length = matchIdx
+  } else {
+    ranges.push({ start: open, end })
+  }
+}
+
 /** 属性内部独立配对，供整值清理判断；属性中的孤立 closer 不关闭外层边界。 */
 function attributeMetaState(value: string): { sawOpen: boolean; pending: Array<{ name: string; slash: boolean }> } {
   if (!value.includes('<') && !META_REFERENCE_CANDIDATE_RE.test(value)) return { sawOpen: false, pending: [] }
@@ -471,7 +501,11 @@ function attributeMetaState(value: string): { sawOpen: boolean; pending: Array<{
     const end = htmlTagEnd(decoded, open)
     const slash = end > 0 && isHtmlSelfClosingTag(decoded, head.end, end)
     if (!head.closing) { sawOpen = true; pending.push({ name: head.name, slash }) }
-    else if (pending.at(-1)?.name === head.name) pending.pop()
+    else {
+      let matchIdx = pending.length - 1
+      while (matchIdx >= 0 && pending[matchIdx]!.name !== head.name && pending[matchIdx]!.slash) matchIdx--
+      if (matchIdx >= 0 && pending[matchIdx]!.name === head.name) pending.length = matchIdx
+    }
     if (end < 0) break
     cursor = end
   }
@@ -561,14 +595,7 @@ function literalMetaState(value: string): { ranges: TextRange[]; pending: MetaSt
     const tokenEnd = end > 0 ? end : value.length
     const slash = end > 0 && isHtmlSelfClosingTag(value, head.end, end)
     if (!head.closing) pending.push({ name: head.name, start: open, tokenEnd, slash })
-    else {
-      const opened = pending.at(-1)
-      if (!opened || opened.name !== head.name) ranges.push({ start: open, end: tokenEnd })
-      else {
-        ranges.push({ start: opened.start, end: tokenEnd })
-        pending.pop()
-      }
-    }
+    else closeMetaStack(pending, head.name, open, tokenEnd, ranges)
     if (end < 0) break
     cursor = end
   }
@@ -620,14 +647,7 @@ function collectLiteralMeta(
     const mapped = map({ start: open, end: localEnd })
     const slash = tokenEnd > 0 && isHtmlSelfClosingTag(visible, head.end, tokenEnd)
     if (!head.closing) stack.push({ name: head.name, start: mapped.start, tokenEnd: mapped.end, slash })
-    else {
-      const opened = stack.at(-1)
-      if (!opened || opened.name !== head.name) ranges.push(mapped)
-      else {
-        ranges.push({ start: opened.start, end: mapped.end })
-        stack.pop()
-      }
-    }
+    else closeMetaStack(stack, head.name, mapped.start, mapped.end, ranges)
     if (tokenEnd < 0) break
     cursor = tokenEnd
   }
@@ -820,14 +840,7 @@ function opaqueDisplayMetaRanges(
 
       if (DISPLAY_META_NAMES.has(name)) {
         if (!closing) stack.push({ name, start: open, tokenEnd: end, slash: selfClosing })
-        else {
-          const opened = stack.at(-1)
-          if (!opened || opened.name !== name) ranges.push({ start: open, end })
-          else {
-            ranges.push({ start: opened.start, end })
-            stack.pop()
-          }
-        }
+        else closeMetaStack(stack, name, open, end, ranges)
         index = end
         continue
       }
@@ -929,44 +942,7 @@ function mapVisibleMetaParts<T extends {text:string}>(parts:readonly T[],ranges:
   })
 }
 
-/**
- * 社区卡常用的机读协议标签（customize_HCI / now_plot / world_status）。
- * 下划线名或 PascalCase；不碰 div/p/span 等 HTML。
- */
-const PROTOCOL_TAG_RE =
-  /<\/?([A-Za-z][\w]*_[A-Za-z0-9_]+|[A-Z][A-Za-z0-9]*[A-Z][A-Za-z0-9]*)\b(?:[^"'<>]|"[^"]*"|'[^']*')*\/?>/g
 const ST_COMMENT_MACRO_RE = /\{\{\s*\/\/[^{}]*\}\}/g
-
-const EMAIL_AUTOLINK_RE = /^<[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*>$/
-const URI_AUTOLINK_RE = /^<([A-Za-z][A-Za-z0-9+.-]{1,31}):[^\s<>]+>$/
-const AUTOLINK_SCHEMES = new Set([
-  'http', 'https', 'ftp', 'ftps', 'mailto', 'tel', 'urn', 'irc', 'ircs',
-  'ws', 'wss', 'ssh', 'git', 'file', 'magnet', 'news', 'xmpp', 'sip',
-  'sips', 'sms', 'geo', 'data', 'blob', 'javascript', 'vbscript',
-])
-const CUSTOM_TAG_HEAD_RE = /^<(\/?)([A-Za-z][\w.-]*(?::[A-Za-z_][\w.-]*)?)(?=[ \t/>])/
-
-/** 在单行内扫描自定义伪标签的结束 `>`，跳过 `="..."`/`='...'` 属性引号内的 `>` 与 `<`。 */
-function scanCustomTagTokenEnd(line: string, start: number): number {
-  if (line[start] !== '<') return -1
-  let quote: '"' | "'" | null = null
-  for (let j = start + 1; j < line.length; j++) {
-    const ch = line[j]!
-    if (quote !== null) {
-      if (ch === quote) quote = null
-      continue
-    }
-    if (ch === '"' || ch === "'") {
-      let back = j - 1
-      while (back > start && (line[back] === ' ' || line[back] === '\t')) back--
-      if (back > start && line[back] === '=') quote = ch
-      continue
-    }
-    if (ch === '<') return -1
-    if (ch === '>') return j
-  }
-  return -1
-}
 
 function hasCodeIndent(line: string): boolean {
   let cols = 0
@@ -978,205 +954,6 @@ function hasCodeIndent(line: string): boolean {
     if (cols >= 4) return true
   }
   return false
-}
-
-/** 按 CommonMark 四列制表位剥离多层引用块前缀并判定剩余缩进是否达到 4 列缩进代码。 */
-function scanBlockquoteAndIndent(line: string): { quotePrefixEnd: number; contentStart: number; indentedCode: boolean } {
-  let index = 0
-  let col = 0
-  let quotePrefixEnd = 0
-  while (index < line.length) {
-    let probe = index
-    let probeCol = col
-    let spaces = 0
-    while (probe < line.length && spaces < 4) {
-      const ch = line[probe]!
-      if (ch === ' ') {
-        spaces++
-        probeCol++
-        probe++
-      } else if (ch === '\t') {
-        const width = 4 - (probeCol % 4)
-        if (spaces + width >= 4) break
-        spaces += width
-        probeCol += width
-        probe++
-      } else {
-        break
-      }
-    }
-    if (line[probe] !== '>') break
-    probe++
-    probeCol++
-    if (probe < line.length) {
-      if (line[probe] === ' ') {
-        probe++
-        probeCol++
-      } else if (line[probe] === '\t') {
-        const width = 4 - (probeCol % 4)
-        probe++
-        index = probe
-        quotePrefixEnd = probe
-        let indentCols = width - 1
-        col = probeCol + width
-        if (indentCols >= 4) return { quotePrefixEnd, contentStart: index, indentedCode: true }
-        while (index < line.length) {
-          const ch = line[index]!
-          if (ch === ' ') {
-            indentCols++
-            col++
-            index++
-          } else if (ch === '\t') {
-            const tabWidth = 4 - (col % 4)
-            indentCols += tabWidth
-            col += tabWidth
-            index++
-          } else {
-            break
-          }
-          if (indentCols >= 4) return { quotePrefixEnd, contentStart: index, indentedCode: true }
-        }
-        continue
-      }
-    }
-    index = probe
-    col = probeCol
-    quotePrefixEnd = probe
-  }
-  let indentCols = 0
-  while (index < line.length) {
-    const ch = line[index]!
-    if (ch === ' ') {
-      indentCols++
-      col++
-      index++
-    } else if (ch === '\t') {
-      const width = 4 - (col % 4)
-      indentCols += width
-      col += width
-      index++
-    } else {
-      break
-    }
-    if (indentCols >= 4) return { quotePrefixEnd, contentStart: index, indentedCode: true }
-  }
-  return { quotePrefixEnd, contentStart: index, indentedCode: false }
-}
-
-function customTagName(token: string): string | null {
-  if (!token.startsWith('<') || !token.endsWith('>') || token.includes('\n') || token.includes('\r')) return null
-  if (token.startsWith('<!--') || token.startsWith('<!') || token.startsWith('<?')) return null
-  if (EMAIL_AUTOLINK_RE.test(token)) return null
-  if (!/\s/.test(token)) {
-    const uri = URI_AUTOLINK_RE.exec(token)
-    if (uri && (token.includes('://') || AUTOLINK_SCHEMES.has(uri[1]!.toLowerCase()))) return null
-  }
-  const match = CUSTOM_TAG_HEAD_RE.exec(token)
-  if (!match) return null
-  if (scanCustomTagTokenEnd(token, 0) !== token.length - 1) return null
-  const name = match[2]!
-  return isKnownHtmlElementName(name) ? null : name.toLowerCase()
-}
-
-function stripCustomTagTokensInLine(line: string, strippedNames: ReadonlySet<string>): string {
-  if (!line.includes('<')) return line
-  if (scanBlockquoteAndIndent(line).indentedCode) return line
-  const out: string[] = []
-  let cursor = 0
-  let i = 0
-  while (i < line.length) {
-    if (line[i] !== '<') {
-      i++
-      continue
-    }
-    const end = scanCustomTagTokenEnd(line, i)
-    if (end > i) {
-      const name = customTagName(line.slice(i, end + 1))
-      if (name !== null && strippedNames.has(name)) {
-        if (i > cursor) out.push(line.slice(cursor, i))
-        cursor = end + 1
-      }
-      i = end + 1
-      continue
-    }
-    i++
-  }
-  if (cursor === 0) return line
-  if (cursor < line.length) out.push(line.slice(cursor))
-  return out.join('')
-}
-
-/** 扫描单行是否仅由行首自定义伪标签组成，返回提取出的标签名列表；不匹配返回 `null`。 */
-function extractStandaloneCustomTagLine(line: string): { quotePrefixEnd: number; names: string[] } | null {
-  if (!line.includes('<')) return null
-  const layout = scanBlockquoteAndIndent(line)
-  if (layout.indentedCode) return null
-  const trimmed = line.slice(layout.contentStart).replace(/[ \t]+$/, '')
-  if (!trimmed.startsWith('<')) return null
-  const names: string[] = []
-  let pos = 0
-  while (pos < trimmed.length) {
-    if (trimmed[pos] !== '<') return null
-    const end = scanCustomTagTokenEnd(trimmed, pos)
-    if (end <= pos) return null
-    const name = customTagName(trimmed.slice(pos, end + 1))
-    if (name === null) return null
-    names.push(name)
-    pos = end + 1
-    while (pos < trimmed.length && (trimmed[pos] === ' ' || trimmed[pos] === '\t')) pos++
-  }
-  return names.length > 0 ? { quotePrefixEnd: layout.quotePrefixEnd, names } : null
-}
-
-/**
- * 清理会触发 CommonMark Type 7 HTML 块并吞掉后续围栏的行首自定义伪标签，
- * 以及与这些已确认伪标签同行混写的配对残余；跳过缩进代码、自动链接与标准 HTML 元素。
- */
-function stripCustomTags(text: string, extraNames?: ReadonlySet<string>): string {
-  if (!text.includes('<')) return text
-  const strippedNames = new Set<string>(extraNames)
-  const firstPass: string[] = []
-  const lineBreak = /\r?\n/g
-  let lineStart = 0
-  let changed = false
-
-  const processLine = (line: string, breakText: string): void => {
-    const standalone = extractStandaloneCustomTagLine(line)
-    if (standalone) {
-      for (const name of standalone.names) strippedNames.add(name)
-      firstPass.push(line.slice(0, standalone.quotePrefixEnd).replace(/[ \t]+$/, ''), breakText)
-      changed = true
-      return
-    }
-    firstPass.push(line, breakText)
-  }
-
-  for (let match = lineBreak.exec(text); match; match = lineBreak.exec(text)) {
-    processLine(text.slice(lineStart, match.index), match[0])
-    lineStart = lineBreak.lastIndex
-  }
-  processLine(text.slice(lineStart), '')
-
-  if (!changed && strippedNames.size === 0) return text
-  const pass1 = changed ? firstPass.join('') : text
-  if (strippedNames.size === 0 || !pass1.includes('<')) return pass1
-
-  const secondPass: string[] = []
-  let sStart = 0
-  let sChanged = false
-  lineBreak.lastIndex = 0
-  for (let match = lineBreak.exec(pass1); match; match = lineBreak.exec(pass1)) {
-    const line = pass1.slice(sStart, match.index)
-    const next = stripCustomTagTokensInLine(line, strippedNames)
-    if (next !== line) sChanged = true
-    secondPass.push(next, match[0])
-    sStart = lineBreak.lastIndex
-  }
-  const tail = pass1.slice(sStart)
-  const nextTail = stripCustomTagTokensInLine(tail, strippedNames)
-  if (nextTail !== tail) sChanged = true
-  secondPass.push(nextTail)
-  return sChanged ? secondPass.join('') : pass1
 }
 
 /** 收集单段 Markdown 文本中所有独占行的自定义伪标签名，供跨 HTML 卡片拆分的兄弟片段共享清理。 */
@@ -1255,19 +1032,6 @@ function tidy(text: string): string {
     .trim()
 }
 
-/** 收起未转换成 HTML 的协议开闭标签，留下内部正文；跳过标准 HTML 与大写 URI/邮箱自动链接。 */
-function stripProtocolTags(text: string): string {
-  return text.replace(PROTOCOL_TAG_RE, (match, name: string) => {
-    if (isKnownHtmlElementName(name)) return match
-    if (EMAIL_AUTOLINK_RE.test(match)) return match
-    if (!/\s/.test(match)) {
-      const uri = URI_AUTOLINK_RE.exec(match)
-      if (uri && (match.includes('://') || AUTOLINK_SCHEMES.has(uri[1]!.toLowerCase()))) return match
-    }
-    return ''
-  })
-}
-
 function stripStCommentMacros(text: string): string {
   return text.includes('{{') ? text.replace(ST_COMMENT_MACRO_RE, '') : text
 }
@@ -1285,6 +1049,7 @@ export function mergeDetachedCardStyles<T extends {kind:'markdown'|'html';text:s
   const isPlainFold = parts.map((part, idx) =>
     part.kind === 'html' && !part.title && !isStyle[idx] && isPlainDetailsStructure(part.text))
   const hasProse = parts.some(part => part.kind === 'markdown' && part.text.trim().length > 0)
+  const hasVisibleContent = hasProse || isPlainFold.some(Boolean)
   const prefixes = new Map<number, string[]>()
   const suffixes = new Map<number, string[]>()
   const moved = new Set<number>()
@@ -1340,7 +1105,7 @@ export function mergeDetachedCardStyles<T extends {kind:'markdown'|'html';text:s
       }
     }
     // 没有任何目标 HTML 卡面时，仅面向宿主聊天 DOM 的纯 <style>（无伪元素 content / body 视觉盒）在独立沙箱里必为空白 iframe，直接收起。
-    if (hasProse && !standaloneVisualCss.test(cssText)) {
+    if (hasVisibleContent && !standaloneVisualCss.test(cssText)) {
       moved.add(i)
     }
   }
@@ -1363,6 +1128,11 @@ function stripHtmlComments(text: string): string {
 }
 
 const VOID_TAGS = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr'])
+const CODE_BOUNDARY_HTML_TAGS = new Set<string>([
+  ...HTML_CARD_CONTAINERS,
+  'html', 'body', 'head', 'script', 'style', 'template', 'noscript',
+  'iframe', 'textarea', 'title', 'xmp', 'plaintext', 'select', 'option', 'datalist', 'math', 'pre', 'code',
+])
 const COMMONMARK_TAG_RE = /<(?:\/([A-Za-z][\w:-]*)\s*>|([A-Za-z][\w:-]*)(?:\s+[A-Za-z_:][\w.:-]*(?:\s*=\s*(?:[^\s"'=<>`]+|'[^']*'|"[^"]*"))?)*\s*(\/?)>)/y
 
 interface MarkdownCodeProtectionOptions {
@@ -1463,7 +1233,7 @@ function markdownCodeRanges(text: string, options?: MarkdownCodeProtectionOption
               continue
             }
             pushOpen(openName)
-          } else if (!selfClosing && !VOID_TAGS.has(openName)) {
+          } else if (!selfClosing && !VOID_TAGS.has(openName) && (DISPLAY_META_NAMES.has(openName) || CODE_BOUNDARY_HTML_TAGS.has(openName))) {
             pushOpen(openName)
           }
         }
@@ -1786,6 +1556,17 @@ function preludeLeadsToStreamingHtml(text: string, start: number): boolean {
       cursor = end
       continue
     }
+    if (head.name === 'template' || head.name === 'noscript') {
+      if (end < 0) return true
+      if (isHtmlSelfClosingTag(text, head.end, end)) {
+        cursor = end
+        continue
+      }
+      const opaqueEnd = findHtmlOpaqueEnd(text, end, head.name)
+      if (opaqueEnd === null) return true
+      cursor = opaqueEnd
+      continue
+    }
     if (!STREAMING_HTML_TAG_SET.has(head.name)) return false
     if (end > 0 && isHtmlSelfClosingTag(text, head.end, end)) return false
     return true
@@ -1839,6 +1620,18 @@ function streamingHtmlStart(text: string, scanMarkdown: boolean | ReturnType<typ
     const end = htmlTagEnd(text, at)
     if (!indented && !head.closing && (head.name === 'link' || head.name === 'meta') && end > 0 && preludeLeadsToStreamingHtml(text, end)) {
       return at
+    }
+    if (!indented && !head.closing && head.name === 'template') {
+      if (end < 0) return at
+      if (isHtmlSelfClosingTag(text, head.end, end)) {
+        tokens.lastIndex = end
+        continue
+      }
+      const opaqueEnd = findHtmlOpaqueEnd(text, end, 'template')
+      if (opaqueEnd === null) return at
+      if (preludeLeadsToStreamingHtml(text, opaqueEnd)) return at
+      tokens.lastIndex = opaqueEnd
+      continue
     }
     if (!indented && !head.closing && STREAMING_HTML_TAG_SET.has(head.name)) {
       // 自闭合容器标签（如 <div/>、<svg .../>）不是待闭合卡面，跳过以免误隐藏后文。
@@ -1911,19 +1704,34 @@ export function htmlSourceFallback(html: string): string {
 
 /** 只在卡面之外收起机读标签；不能把已识别的 details/style 小部件连同正文裁掉。 */
 function disabledHtmlText(rendered: string): string {
-  const parts: string[] = []
+  const segments: Array<{ kind: 'text' | 'html'; text: string }> = []
   // 先在完整逻辑流上收起机读块；否则 HTML 拆分会切断 think/Analysis 等边界并泄漏内容。
   let remaining = stripDisplayOpaqueMeta(rendered, true)
   for (let i = 0; i < 128; i++) {
     const located = locateRenderedHtml(remaining)
-    if (!located) { parts.push(stripDisplayMeta(remaining)); return parts.filter(Boolean).join('\n\n') }
-    parts.push(stripDisplayMeta(remaining.slice(0, located.fence?.start ?? located.start)))
-    parts.push(htmlSourceFallback(located.html))
+    if (!located) {
+      segments.push({ kind: 'text', text: remaining })
+      remaining = ''
+      break
+    }
+    segments.push({ kind: 'text', text: remaining.slice(0, located.fence?.start ?? located.start) })
+    segments.push({ kind: 'html', text: located.html })
     remaining = remaining.slice(located.fence?.end ?? located.start + located.html.length)
   }
-  if (locateRenderedHtml(remaining)) throw new Error('交互卡展示片段过多')
-  parts.push(stripDisplayMeta(remaining))
-  return parts.filter(Boolean).join('\n\n')
+  if (remaining) {
+    if (locateRenderedHtml(remaining)) throw new Error('交互卡展示片段过多')
+    segments.push({ kind: 'text', text: remaining })
+  }
+  const sharedCustomTags = new Set<string>()
+  for (const seg of segments) {
+    if (seg.kind !== 'text') continue
+    for (const name of collectStandaloneCustomTagNames(seg.text)) sharedCustomTags.add(name)
+  }
+  const extra = sharedCustomTags.size > 0 ? sharedCustomTags : undefined
+  return segments
+    .map(seg => seg.kind === 'text' ? stripDisplayMeta(seg.text, extra) : htmlSourceFallback(seg.text))
+    .filter(Boolean)
+    .join('\n\n')
 }
 
 /**

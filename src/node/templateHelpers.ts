@@ -113,6 +113,7 @@ const injections = new Map();
 let injectionSize = 0;
 let injectionCount = 0;
 function injectPrompt(key, prompt, order=100, sticky=0, uid='') {
+  assertNotConditionReadonly('修改注入提示词');
   stickyFinite(sticky);
   if (typeof key !== 'string' || typeof prompt !== 'string' || !Number.isFinite(order) || typeof uid !== 'string') throw Error('injectPrompt 参数无效');
   if (key.length>4096 || uid.length>4096) throw Error('注入提示词名称或 uid 超过 4096 字符上限');
@@ -130,7 +131,7 @@ function injectPrompt(key, prompt, order=100, sticky=0, uid='') {
   if(size>1024*1024) throw Error('注入提示词总量超过 1 MiB 上限');
   if(!group.has(id))injectionCount++;
   group.set(id,{prompt,order,sticky}); injections.set(key,group); injectionSize=size;
-  stickyTombstones.prompts.delete(JSON.stringify([key,id]));
+  stickyTombstones.prompts.delete(stringifyTemplateJson([key,id]));
 }
 function getPromptsInjected(key, postprocess=[], outlet=templateOutletsDeferred && !preparing) {
   if (typeof key!=='string' || key.length>4096 || !Array.isArray(postprocess) || typeof outlet!=='boolean') throw Error('getPromptsInjected 参数无效');
@@ -163,6 +164,7 @@ function copyDefinition(value,context,depth=0,seen=new Set()) {
   return result;
 }
 function defineTemplate(name,value,combine=false) {
+  assertNotConditionReadonly('修改共享定义');
   const lodash=__TavernTemplateLibraries.lodash;
   if(typeof name!=='string' || !name) throw Error('定义名称必须是非空字符串');
   const parts=lodash.toPath(name);

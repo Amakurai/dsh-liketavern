@@ -120,8 +120,8 @@ async function helperHistoryContext(ctx:Context,state:TavernState,sessionId:stri
   return {binding,history:cached.history,historyRevision:cached.historyRevision,indexByIdentity:cached.indexByIdentity,
     assistantIndexBySeq:cached.assistantIndexBySeq,ws,writable,turn,greetings}
 }
-async function resolveHelperStoryRoot(state:TavernState,sessionId:string):Promise<string> {
-  const binding=await state.loadStoryBinding(sessionId)
+async function resolveHelperStoryRoot(state:TavernState,sessionId:string,waitForAdoption=true):Promise<string> {
+  const binding=await state.loadStoryBinding(sessionId,{waitForAdoption})
   if (!binding?.storyId) throw new Error('会话未绑定可用剧情')
   return (await state.storyWorkspace(binding.cardId,binding.storyId)).fs.root
 }
@@ -206,8 +206,8 @@ export async function getHelperDisplayContext(ctx:Context,state:TavernState,sess
     return {storyId:current.binding.storyId!,historyRevision:current.historyRevision,currentMessageId:current.currentMessageId,currentMessageRole:message.role}
   })
 }
-export async function getHelperSnapshot(ctx:Context,state:TavernState,sessionId:string,messageId:number):Promise<HelperSnapshot> {
-  const root=await resolveHelperStoryRoot(state,sessionId)
+export async function getHelperSnapshot(ctx:Context,state:TavernState,sessionId:string,messageId:number,options?:{waitForAdoption?:boolean}):Promise<HelperSnapshot> {
+  const root=await resolveHelperStoryRoot(state,sessionId,options?.waitForAdoption??true)
   return withWorkspaceLock(root,async()=>{
     const current=await helperContext(ctx,state,sessionId,messageId,false)
     if(current.ws.fs.root!==root) throw new Error('卡面剧情绑定已经改变')
@@ -303,8 +303,8 @@ export async function commitHelperVariables(ctx:Context,state:TavernState,reques
 }
 
 /** 聊天世界书等沙箱剧情写入复用楼层纪律；先验证业务内容，再调用 begin，最后 WAL 提交。 */
-export async function withHelperStoryWrite<T>(ctx:Context,state:TavernState,sessionId:string,messageId:number,storyId:string,write:(fs:WorkspaceFs,begin:()=>Promise<void>)=>Promise<T>,beforeWrite?:HelperFrameWriteGuard):Promise<T> {
-  const root=await resolveHelperStoryRoot(state,sessionId)
+export async function withHelperStoryWrite<T>(ctx:Context,state:TavernState,sessionId:string,messageId:number,storyId:string,write:(fs:WorkspaceFs,begin:()=>Promise<void>)=>Promise<T>,beforeWrite?:HelperFrameWriteGuard,options?:{waitForAdoption?:boolean}):Promise<T> {
+  const root=await resolveHelperStoryRoot(state,sessionId,options?.waitForAdoption??true)
   return withWorkspaceLock(root,()=>withWorkspaceLock(state.paths.sessions,async()=>{
     const current=await helperContext(ctx,state,sessionId,messageId,false)
     if(current.binding.storyId!==storyId||current.ws.fs.root!==root)throw new Error('世界书剧情绑定已改变')

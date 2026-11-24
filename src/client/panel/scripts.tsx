@@ -1,7 +1,7 @@
 /** 设置中的脚本资产管理：无需绑定会话，按全局、角色与预设选择独立脚本库，复用带草稿保护的编辑器。 */
 import { describeError } from '../../core/guards.js'
 import { useEffect, useRef, useState,useSyncExternalStore } from 'react'
-import {scriptStatusStore,retryScriptMvu,enableScriptMvu,isScriptWindowAccessError,type ScriptRuntimeStatus} from '../helperScriptStatus.js'
+import {scriptStatusStore,retryScriptMvu,cancelScriptMvu,openScriptEditedBranch,enableScriptMvu,isScriptWindowAccessError,type ScriptRuntimeStatus} from '../helperScriptStatus.js'
 import type { HelperScriptAsset, HelperScriptTarget } from '../../core/helperScripts.js'
 import type { TavernRemote } from '../types.js'
 import { HelperScriptEditor } from '../helperScriptEditor.js'
@@ -53,9 +53,15 @@ export function ScriptSettings({remote}:{remote:TavernRemote}) {
         <Muted>{t(RUNTIME_STATE_KEYS[runtime.state])}</Muted><Err message={runtime.error??null}/>
         {runtime.scripts.some(script=>script.native)&&<Muted>{t(runtime.nativeMvu?'settings.scripts.nativeOn':runtime.mvuFollow?'settings.scripts.nativeFollow':'settings.scripts.nativeOff')}</Muted>}
         {runtime.scripts.some(script=>script.native)&&!runtime.nativeMvu&&runtime.state!=='disabled'&&<NativeMvuEnable sessionId={runtime.sessionId}/>}
-        {runtime.nativeMvu&&<Muted>{t(runtime.mvuError?'speech.mvuRetry':runtime.mvuBusy?'speech.mvuRunning':runtime.scripts.every(script=>script.state==='ready')?'speech.mvuReady':'speech.mvuWaiting')}</Muted>}
+        {runtime.nativeMvu&&<Muted>{t(runtime.mvuError?'settings.scripts.runtime.error':runtime.mvuBusy?'speech.mvuRunning':runtime.scripts.every(script=>script.state==='ready')?'speech.mvuReady':'speech.mvuWaiting')}</Muted>}
         <Err message={runtime.mvuError??null}/>
-        {runtime.mvuError&&<Btn onClick={()=>retryScriptMvu(runtime.sessionId)}>{t('speech.mvuRetry')}</Btn>}
+        <Err message={runtime.mvuCancelError??null}/>
+        {runtime.mvuError&&<Btn onClick={()=>retryScriptMvu(runtime.sessionId)}>{t(runtime.mvuRestartRequired?'speech.mvuRestart':'speech.mvuRetry')}</Btn>}
+        {runtime.mvuCanCancel&&<Btn disabled={runtime.mvuCanceling} onClick={()=>{void cancelScriptMvu(runtime.sessionId)}}>{t('speech.mvuCancel')}</Btn>}
+        {runtime.editedBranchError&&<>
+          <Err message={runtime.editedBranchError}/>
+          <Btn onClick={()=>{void openScriptEditedBranch(runtime.sessionId)}}>{t('speech.openEditedBranch')}</Btn>
+        </>}
         <ul>{runtime.scripts.map(script=>{
           const incompatible=script.state==='error'&&isScriptWindowAccessError(script.error)
           return <li key={script.id}><span>{script.name}</span><span className="dsh-tavern-scriptRuntimeStatus">{t(RUNTIME_STATE_KEYS[incompatible?'incompatible':script.state])}</span>

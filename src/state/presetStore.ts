@@ -15,17 +15,24 @@
  * 导入硬上限与世界书（lorebook.ts）同口径：条目数 / 单条正文 / identifier 长度超限，
  * 或 content 字段类型非法，一律在归一化时抛中文错误拒绝导入——统一拒绝口径，不做静默截断。
  */
+import { Buffer } from 'node:buffer'
 import { MAX_WI_KEY_CHARS } from '../core/worldbook.js'
 import { array, boolean, enum as enum_, looseObject, maxLength, minLength, nullable, number, optional, safeParse, strictObject, string, unknown } from 'zod/mini'
 import type { CardRegexScript, ChatRole, PresetEntry, PromptPreset } from '../core/types.js'
 import { MAX_LOREBOOK_CONTENT_CHARS, MAX_LOREBOOK_ENTRIES } from './lorebook.js'
-import { pickRegexScripts } from './card.js'
+import { MAX_STORED_CARD_JSON_BYTES, normalizeCardRegexScript, pickRegexScripts } from './card.js'
 import { characterHelperSettings,helperScriptSettings } from '../core/helperScripts.js'
 import { importStPresetSampling, parsePresetSampling } from '../core/presetSampling.js'
 import { isStSystemPrompt } from '../core/presetExport.js'
 import { isRecord } from '../core/guards.js'
-import { toBool, toNum, toNumOrNull, toStr } from './coerce.js'
+import { toBool, toNum, toStr } from './coerce.js'
 export { exportStPreset } from '../core/presetExport.js'
+
+/** 预设内嵌正则的硬上限：防第三方预设构造数组/文本炸弹绕过 entries/formatting 体量防线。 */
+const MAX_PRESET_REGEX_SCRIPTS = 500
+const MAX_PRESET_REGEX_LABEL_CHARS = 4096
+const MAX_PRESET_REGEX_TRIM_ITEMS = 200
+const MAX_PRESET_REGEX_PLACEMENT_ITEMS = 64
 
 /** 格式模板只接收有界文本字段；字符串按原样保存，空串表示明确禁用包装。 */
 const presetFormattingSchema = strictObject({
@@ -62,11 +69,16 @@ const storedPresetSchema = looseObject({
     injectionTrigger: optional(array(string())),
   })).check(maxLength(MAX_LOREBOOK_ENTRIES)),
   regexScripts: optional(array(looseObject({
-    id: optional(string()), scriptName: optional(string()), findRegex: optional(string()), replaceString: optional(string()),
-    trimStrings: optional(array(string())), trimStringsRegex: optional(array(string())), placement: optional(array(number())),
+    id: optional(string().check(maxLength(MAX_PRESET_REGEX_LABEL_CHARS))),
+    scriptName: optional(string().check(maxLength(MAX_PRESET_REGEX_LABEL_CHARS))),
+    findRegex: optional(string().check(maxLength(MAX_LOREBOOK_CONTENT_CHARS))),
+    replaceString: optional(string().check(maxLength(MAX_LOREBOOK_CONTENT_CHARS))),
+    trimStrings: optional(array(string().check(maxLength(MAX_PRESET_REGEX_LABEL_CHARS))).check(maxLength(MAX_PRESET_REGEX_TRIM_ITEMS))),
+    trimStringsRegex: optional(array(string().check(maxLength(MAX_PRESET_REGEX_LABEL_CHARS))).check(maxLength(MAX_PRESET_REGEX_TRIM_ITEMS))),
+    placement: optional(array(number()).check(maxLength(MAX_PRESET_REGEX_PLACEMENT_ITEMS))),
     disabled: optional(boolean()), markdownOnly: optional(boolean()), promptOnly: optional(boolean()), runOnEdit: optional(boolean()),
     substituteRegex: optional(number()), minDepth: optional(nullable(number())), maxDepth: optional(nullable(number())),
-  }))),
+  })).check(maxLength(MAX_PRESET_REGEX_SCRIPTS))),
   helperSettings: optional(unknown()),
   sampling: optional(unknown()),
   formatting: optional(unknown()),
@@ -87,9 +99,17 @@ export function parseStoredPreset(value: unknown): PromptPreset {
       else delete entry.injectionTrigger
     }
   }
-  return { ...preset, ...(helperSettings !== undefined ? { helperSettings: helperScriptSettings(helperSettings) } : {}),
+  const normalized: PromptPreset = {
+    ...preset,
+    ...(helperSettings !== undefined ? { helperSettings: helperScriptSettings(helperSettings) } : {}),
     ...(sampling !== undefined ? { sampling: parsePresetSampling(sampling) } : {}),
-    ...(formatting !== undefined ? { formatting: parsePresetFormatting(formatting) } : {}) }
+    ...(formatting !== undefined ? { formatting: parsePresetFormatting(formatting) } : {}),
+  }
+  // 与 doctor/backup 共享同一存储字节上限，避免合法写出的预设在只读诊断与离线备份中被判超限。
+  if (Buffer.byteLength(JSON.stringify(normalized, null, 2) + '\n', 'utf8') > MAX_STORED_CARD_JSON_BYTES) {
+    throw new Error(`预设数据超过存储上限（${MAX_STORED_CARD_JSON_BYTES / 1024 / 1024}MB），拒绝保存`)
+  }
+  return normalized
 }
 
 
@@ -182,28 +202,33 @@ function collectPromptEmbeddedRegex(rawPrompts: unknown[]): CardRegexScript[] {
   return out
 }
 
-/**
- * 旧版 ST 的 substituteRegex 是布尔（true = 原样代入），也可能是数字字符串；按 ST 的 Number() 口径
- * 归一为 0/1/2 再存。否则存储校验只收数字，整份预设会因一条旧脚本导入失败。
- */
-function normalizeDepthBound(value: unknown): number | null | undefined {
-  return value === undefined ? undefined : toNumOrNull(value)
-}
-
-function normalizeImportedRegexScript(script: CardRegexScript): CardRegexScript {
-  const rawSubstitute: unknown = isRecord(script) ? script.substituteRegex : undefined
-  const substitute = typeof rawSubstitute === 'number' && Number.isFinite(rawSubstitute) ? rawSubstitute : rawSubstitute === undefined ? undefined : Number(rawSubstitute)
-  const minDepth = isRecord(script) ? normalizeDepthBound(script.minDepth) : undefined
-  const maxDepth = isRecord(script) ? normalizeDepthBound(script.maxDepth) : undefined
-  return {
-    ...script,
-    ...(substitute !== undefined ? { substituteRegex: substitute === 1 || substitute === 2 ? substitute : 0 } : {}),
-    ...(minDepth !== undefined ? { minDepth } : {}),
-    ...(maxDepth !== undefined ? { maxDepth } : {}),
-
-
-
+/** 归一化导入的预设正则脚本并校验条数与单字段上限，保证与 storedPresetSchema 同口径。 */
+function validateImportedRegexScripts(rawScripts: readonly unknown[]): CardRegexScript[] {
+  const scripts = rawScripts
+    .map((script) => normalizeCardRegexScript(script))
+    .filter((script): script is CardRegexScript => script !== null)
+  if (scripts.length > MAX_PRESET_REGEX_SCRIPTS) {
+    throw new Error(`预设正则条数 ${scripts.length} 超过上限 ${MAX_PRESET_REGEX_SCRIPTS}，拒绝导入`)
   }
+  for (let i = 0; i < scripts.length; i++) {
+    const script = scripts[i]!
+    if ((script.id?.length ?? 0) > MAX_PRESET_REGEX_LABEL_CHARS || (script.scriptName?.length ?? 0) > MAX_PRESET_REGEX_LABEL_CHARS) {
+      throw new Error(`预设正则 regex_scripts[${i}] 名称或标识超过 ${MAX_PRESET_REGEX_LABEL_CHARS} 字符上限，拒绝导入`)
+    }
+    if ((script.findRegex?.length ?? 0) > MAX_LOREBOOK_CONTENT_CHARS || (script.replaceString?.length ?? 0) > MAX_LOREBOOK_CONTENT_CHARS) {
+      throw new Error(`预设正则 regex_scripts[${i}] 表达式或替换串超过 ${MAX_LOREBOOK_CONTENT_CHARS} 字符上限，拒绝导入`)
+    }
+    if ((script.placement?.length ?? 0) > MAX_PRESET_REGEX_PLACEMENT_ITEMS) {
+      throw new Error(`预设正则 regex_scripts[${i}] 的 placement 超过 ${MAX_PRESET_REGEX_PLACEMENT_ITEMS} 项上限，拒绝导入`)
+    }
+    for (const list of [script.trimStrings, script.trimStringsRegex]) {
+      if (!list) continue
+      if (list.length > MAX_PRESET_REGEX_TRIM_ITEMS || list.some((s) => s.length > MAX_PRESET_REGEX_LABEL_CHARS)) {
+        throw new Error(`预设正则 regex_scripts[${i}] 的裁剪列表超过上限，拒绝导入`)
+      }
+    }
+  }
+  return scripts
 }
 
 function parsePromptEntry(raw: Record<string, unknown>, index: number, warnings: string[]): PresetEntry | null {
@@ -343,7 +368,7 @@ export function parseStPreset(json: unknown, fallbackName?: string): ParseStPres
     preset.helperSettings=helperScriptSettings(characterHelperSettings(json.extensions))
   }
   const embedded = regexScripts.length > 0 ? [] : collectPromptEmbeddedRegex(rawPrompts)
-  const scripts = (regexScripts.length > 0 ? regexScripts : embedded).map(normalizeImportedRegexScript)
+  const scripts = validateImportedRegexScripts(regexScripts.length > 0 ? regexScripts : embedded)
   if (scripts.length > 0) {
     preset.regexScripts = scripts
     warnings.push(`已导入 ${scripts.length} 条预设正则（随脚本开关生效）`)

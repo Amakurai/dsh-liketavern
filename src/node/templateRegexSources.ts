@@ -89,7 +89,7 @@ function applyTemporaryRegexSources(inputParts,stage,meta,namespace,rules) {
       let replacement;
       if(typeof rule.replacement==='function') {
         const ranges=matched.length?matched.map(part=>[part.key,part.start,part.text.length]):[[origin.key,origin.start,0]];
-        const baseKey=JSON.stringify([stage,rule.id,namespace,meta,ranges,captures,groups]);
+        const baseKey=stringifyTemplateJson([stage,rule.id,namespace,meta,ranges,captures,groups]);
         const occurrence=seenInRun.get(baseKey) || 0;
         seenInRun.set(baseKey,occurrence+1);
         const key=baseKey+':'+occurrence;
@@ -117,7 +117,7 @@ function applyTemporaryRegexSources(inputParts,stage,meta,namespace,rules) {
 globalThis.__applyTemporaryRegexSources=(parts,stage,meta,namespace)=>applyTemporaryRegexSources(parts,stage,meta,namespace,templateRegexRulesForStage(stage,meta));
 globalThis.__runTemporaryRegexSources=(parts,stage,meta,namespace)=> {
   const rules=templateRegexRulesForStage(stage,meta);
-  return JSON.stringify({applied:rules.length>0,parts:applyTemporaryRegexSources(parts,stage,meta,namespace,rules)});
+  return stringifyTemplateJson({applied:rules.length>0,parts:applyTemporaryRegexSources(parts,stage,meta,namespace,rules)});
 };
 globalThis.__runBasicRegexSourcesBatch=(items,namespace)=> {
   if(!Array.isArray(items)||items.length>4096)throw Error('basic 正则消息批次超过 4096 条上限');
@@ -132,6 +132,6 @@ globalThis.__runBasicRegexSourcesBatch=(items,namespace)=> {
     if(outputChars>inputChars+1024*1024)throw Error('basic 正则批次输出净增超过 1 MiB 额度');
     return result;
   });
-  return JSON.stringify({applied,parts});
+  return stringifyTemplateJson({applied,parts});
 };
 `;

@@ -1132,44 +1132,46 @@ export class Wal {
       await bodyFs.assertSafePaths(['state/world-delta.jsonl', 'journal.md', 'index.json'])
     }
     const listedFloors = await this.doListFloors({ markersVerified: true, knownMetasByDir })
-    if (changesByPath.size === 0) return targetLoaded
-    // 后继写入以被撤销记录的写后内容为写前快照；null 也代表删除后的状态，重建文件同样依赖它。
-    // 只有已在目标楼层开始前完成的旧楼层才能排除。
-    // 旧共享工作区的会话可能交错：较早开始的楼层仍会较晚写入，重新打开的完成楼层也会追加写入。
-    // 不能单凭 startedAt 排除它们，否则之后撤销该楼层时会复活已经撤销的事实。
-    // 已更早完成楼层的同值 before 不是依赖：轮到它时恢复的正是它自己的 before。
-    // 每轮重写相同定时器、标志位来回切换的普通剧情都会让旧楼层出现同值 before，若不分先后，
-    // 第三层起就再也无法只重生成最新楼层。
-    for (const floor of listedFloors) {
-      if (floor.rolledBack) continue
-      const otherStep = lastStep.get(floor.floor)
-      if (otherStep !== undefined && otherStep >= maxStep) continue
-      const cachedTarget = targetLoaded.get(floor.floor)
-      const dir = join(this.rootDir, sanitizeFloor(floor.floor))
-      const verified = verifiedFloorDirs.has(dir)
-      const meta = cachedTarget ? cachedTarget.meta : (knownMetasByDir.get(dir) ?? await this.readMeta(dir, { verified }))
-      const completedAt = meta?.committed && meta.committedAt ? Date.parse(meta.committedAt) : NaN
-      if (otherStep === undefined && !hasNullStartedAt && Number.isFinite(completedAt) && completedAt < minStartedAt) continue
-      const otherStartedAt = meta ? Date.parse(meta.startedAt) : NaN
-      const records = cachedTarget ? cachedTarget.records : await this.readRecords(dir, { verified })
-      for (const rec of records) {
-        if (isNoopRecord(rec)) continue
-        const recPath = recordPathIdentity(rec.path)
-        const candidates = changesByPath.get(recPath)
-        if (!candidates) continue
-        const isWorldDelta = recPath === 'state/world-delta.jsonl'
-        const recBeforeBytes = isWorldDelta ? null : snapshotBytes(rec, 'before')
-        if (candidates.some(({ rec: change, startedAt, step, afterBytes }) => (otherStep === undefined || otherStep < step)
-          && (startedAt === null
-            || (Number.isFinite(completedAt)
-              ? completedAt >= startedAt
-              : otherStep === undefined || !Number.isFinite(otherStartedAt) || otherStartedAt >= startedAt))
-          && (isWorldDelta ? deltaChangesDependOn(change, rec) : recBeforeBytes === afterBytes))) {
-          throw new Error(`WAL 存在未撤销的后继依赖：${floor.floor}（${rec.path}）；请从最新楼层依次回退`)
+    if (changesByPath.size > 0) {
+      // 后继写入以被撤销记录的写后内容为写前快照；null 也代表删除后的状态，重建文件同样依赖它。
+      // 只有已在目标楼层开始前完成的旧楼层才能排除。
+      // 旧共享工作区的会话可能交错：较早开始的楼层仍会较晚写入，重新打开的完成楼层也会追加写入。
+      // 不能单凭 startedAt 排除它们，否则之后撤销该楼层时会复活已经撤销的事实。
+      // 已更早完成楼层的同值 before 不是依赖：轮到它时恢复的正是它自己的 before。
+      // 每轮重写相同定时器、标志位来回切换的普通剧情都会让旧楼层出现同值 before，若不分先后，
+      // 第三层起就再也无法只重生成最新楼层。
+      for (const floor of listedFloors) {
+        if (floor.rolledBack) continue
+        const otherStep = lastStep.get(floor.floor)
+        if (otherStep !== undefined && otherStep >= maxStep) continue
+        const cachedTarget = targetLoaded.get(floor.floor)
+        const dir = join(this.rootDir, sanitizeFloor(floor.floor))
+        const verified = verifiedFloorDirs.has(dir)
+        const meta = cachedTarget ? cachedTarget.meta : (knownMetasByDir.get(dir) ?? await this.readMeta(dir, { verified }))
+        const completedAt = meta?.committed && meta.committedAt ? Date.parse(meta.committedAt) : NaN
+        if (otherStep === undefined && !hasNullStartedAt && Number.isFinite(completedAt) && completedAt < minStartedAt) continue
+        const otherStartedAt = meta ? Date.parse(meta.startedAt) : NaN
+        const records = cachedTarget ? cachedTarget.records : await this.readRecords(dir, { verified })
+        for (const rec of records) {
+          if (isNoopRecord(rec)) continue
+          const recPath = recordPathIdentity(rec.path)
+          const candidates = changesByPath.get(recPath)
+          if (!candidates) continue
+          const isWorldDelta = recPath === 'state/world-delta.jsonl'
+          const recBeforeBytes = isWorldDelta ? null : snapshotBytes(rec, 'before')
+          if (candidates.some(({ rec: change, startedAt, step, afterBytes }) => (otherStep === undefined || otherStep < step)
+            && (startedAt === null
+              || (Number.isFinite(completedAt)
+                ? completedAt >= startedAt
+                : otherStep === undefined || !Number.isFinite(otherStartedAt) || otherStartedAt >= startedAt))
+            && (isWorldDelta ? deltaChangesDependOn(change, rec) : recBeforeBytes === afterBytes))) {
+            throw new Error(`WAL 存在未撤销的后继依赖：${floor.floor}（${rec.path}）；请从最新楼层依次回退`)
+          }
         }
       }
     }
     // 对尚未被较新待回滚楼层改动过的记忆目录，提前在整批开始前完成只读归并规划。
+    // 即便待回滚批次全部是无 after 字段的旧版 before-only 记录，也必须执行该预检，不能因 changesByPath 为空早退。
     let newerTouchedMemory = false
     for (let i = floors.length - 1; i >= 0; i--) {
       const entry = targetLoaded.get(floors[i]!)

@@ -7,17 +7,24 @@ export function installCardEvents(shared=false): () => void {
   let active = true
   const runtimeId=crypto.randomUUID()
   root.__dshTavernEventRuntimeId=runtimeId
+  const EVENT_MAX_BYTES=256*1024,MVU_EVENT_MAX_BYTES=4*1024*1024
+  const MVU_EVENTS=new Set([
+    'mag_variable_updated','mag_variable_initialized','mag_variable_update_started',
+    'mag_command_parsed','mag_command_parsed_for_zod','mag_command_parsed_ended_for_zod',
+    'mag_variable_update_ended','mag_variable_update_ended_for_zod','mag_before_message_update',
+  ])
+  const eventMaxBytes=(event:unknown)=>typeof event==='string'&&MVU_EVENTS.has(event)?MVU_EVENT_MAX_BYTES:EVENT_MAX_BYTES
   let serial=0
-  const outgoing=new Map<string,{data:unknown[];resolve:()=>void;reject:(error:Error)=>void;timer:ReturnType<typeof setTimeout>}>()
+  const outgoing=new Map<string,{data:unknown[];maxBytes:number;resolve:()=>void;reject:(error:Error)=>void;timer:ReturnType<typeof setTimeout>}>()
   const incoming=new Map<string,{timer:ReturnType<typeof setTimeout>;execute?:()=>void}>()
   const post=(action:string,value:Record<string,unknown>={})=>parent.postMessage({source:'dsh-tavern-card',runtimeId,action,...value},'*')
   const report=(error:unknown)=>{if(!active||root.__dshTavernEventRuntimeId!==runtimeId)return;const handler=root.__dshTavernReportError;if(typeof handler==='function')handler(error)}
-  function json(value:unknown):unknown[] {
+  function json(value:unknown,maxBytes=EVENT_MAX_BYTES):unknown[] {
     const text=JSON.stringify(value,(key,item:unknown)=>{
       if(['__proto__','prototype','constructor'].includes(key)||typeof item==='function'||typeof item==='symbol'||typeof item==='undefined'||typeof item==='bigint'||typeof item==='number'&&!Number.isFinite(item))throw new Error('跨卡面事件只接受普通 JSON 数据')
       return item
     })
-    if(new TextEncoder().encode(text).length>256*1024)throw new Error('跨卡面事件参数超过 256 KiB')
+    if(new TextEncoder().encode(text).length>maxBytes)throw new Error(maxBytes===EVENT_MAX_BYTES?'跨卡面事件参数超过 256 KiB':'MVU 跨卡面事件参数超过 4 MiB')
     const parsed:unknown=JSON.parse(text)
     if(!Array.isArray(parsed)||parsed.length>64)throw new Error('事件参数无效')
     return parsed
@@ -35,10 +42,11 @@ export function installCardEvents(shared=false): () => void {
     if(!active)return Promise.reject(new Error('Card event runtime has been disposed'))
     if(outgoing.size>=16)return Promise.reject(new Error('事件发送超过并发预算'))
     const requestId=`${runtimeId}:${++serial}`
+    const maxBytes=eventMaxBytes(event)
     return new Promise((resolve,reject)=>{
-      const args=json(data)
+      const args=json(data,maxBytes)
       const timer=setTimeout(()=>{outgoing.delete(requestId);reject(new Error('跨卡面事件等待超时'))},60000)
-      outgoing.set(requestId,{data,resolve,reject,timer})
+      outgoing.set(requestId,{data,maxBytes,resolve,reject,timer})
       post('helperEventEmit',{requestId,event,args,excludeSelf})
     })
   }
@@ -51,7 +59,7 @@ export function installCardEvents(shared=false): () => void {
       if(!pending){if(value.ok===false)report(value.error);return}
       outgoing.delete(value.requestId);clearTimeout(pending.timer)
       try {
-        if(Array.isArray(value.args)&&value.args.length===pending.data.length)reconcile(pending.data,json(value.args))
+        if(Array.isArray(value.args)&&value.args.length===pending.data.length)reconcile(pending.data,json(value.args,pending.maxBytes))
         if(value.ok!==true)throw new Error(String(value.error??'跨卡面事件失败'))
         pending.resolve()
       } catch(error){pending.reject(error instanceof Error?error:new Error(String(error)))}
@@ -67,18 +75,19 @@ export function installCardEvents(shared=false): () => void {
     if(value.action!=='helperEventDeliver')return
     const match=[...listeners.entries()].flatMap(([event,entries])=>entries.map(entry=>({event,entry}))).find(item=>item.entry.id===value.listenerId)
     if(!match){post('helperEventReply',{deliveryId:value.deliveryId,ok:true,args:value.args,...(value.host===true?{invoked:false,canceled:true}:{})});return}
-    const data=json(value.args),original=json(data),own=outgoing.get(value.emissionId)
+    const maxBytes=eventMaxBytes(match.event)
+    const data=json(value.args,maxBytes),original=json(data,maxBytes),own=outgoing.get(value.emissionId)
     const args=own?reconcile(own.data,data) as unknown[]:data
     if(match.entry.once&&value.host!==true)eventRemoveListener(match.event,match.entry.listener)
     const invoke=async()=>{
       let invoked=false
       try{
-        if(value.host===true&&!listeners.get(match.event)?.includes(match.entry)){post('helperEventReply',{deliveryId:value.deliveryId,ok:true,args:json(args),invoked:false,canceled:true});return}
+        if(value.host===true&&!listeners.get(match.event)?.includes(match.entry)){post('helperEventReply',{deliveryId:value.deliveryId,ok:true,args:json(args,maxBytes),invoked:false,canceled:true});return}
         if(value.host===true&&match.entry.once)eventRemoveListener(match.event,match.entry.listener)
-        invoked=true;await match.entry.listener(...args);if(active)post('helperEventReply',{deliveryId:value.deliveryId,ok:true,args:json(args)})}
+        invoked=true;await match.entry.listener(...args);if(active)post('helperEventReply',{deliveryId:value.deliveryId,ok:true,args:json(args,maxBytes)})}
       catch(error){
         let safe=original
-        try{safe=json(args)}catch{}
+        try{safe=json(args,maxBytes)}catch{}
         if(active)post('helperEventReply',{deliveryId:value.deliveryId,ok:false,invoked,...(value.host===true&&!invoked?{canceled:!listeners.get(match.event)?.includes(match.entry)}:{}),error:String(error instanceof Error?error.message:error).slice(0,2000),args:safe})
       }
     }
@@ -100,9 +109,9 @@ export function installCardEvents(shared=false): () => void {
         const prepare=value.mvuSnapshot?root.__dshTavernPrepareMvuEvent:root.__dshTavernPrepareHostEvent
         if(typeof prepare==='function')await prepare(value.mvuSnapshot)
         if(!active||incoming.get(deliveryId)!==delivery)return
-        if(!listeners.get(match.event)?.includes(match.entry)){release();post('helperEventReply',{deliveryId,ok:true,args:json(args),invoked:false,canceled:true});return}
+        if(!listeners.get(match.event)?.includes(match.entry)){release();post('helperEventReply',{deliveryId,ok:true,args:json(args,maxBytes),invoked:false,canceled:true});return}
         delivery.execute=()=>{if(!active||incoming.get(deliveryId)!==delivery)return;release();void invoke().catch(report)}
-        post('helperEventPrepared',{deliveryId,args:json(args)})
+        post('helperEventPrepared',{deliveryId,args:json(args,maxBytes)})
       }catch(error){
         if(!active||incoming.get(deliveryId)!==delivery)return
         release()

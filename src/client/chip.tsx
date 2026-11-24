@@ -57,26 +57,27 @@ export function draftWithCard(draft: SessionBinding, saved: SessionBinding | nul
 }
 
 /** 独立于脚本运行器和全局交互开关的恢复入口；只在确认后放弃任务，不触碰宿主输入队列。 */
-export function HelperMvuAbandonAction(props: { remote: TavernRemote; sessionId: string; storyId: string; onChanged: () => void }) {
+export function HelperMvuAbandonAction(props: { remote: TavernRemote; sessionId: string; storyId: string; disabled?: boolean; onBusyChange?: (busy: boolean) => void; onChanged: () => void }) {
   const t = useT(), pending = useRef(false)
   const [confirm, setConfirm] = useState(false), [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null), [done, setDone] = useState(false)
+  const locked = busy || Boolean(props.disabled)
   const abandon = async () => {
-    if (pending.current) return
-    pending.current = true; setBusy(true); setError(null); setDone(false)
+    if (pending.current || props.disabled) return
+    pending.current = true; setBusy(true); props.onBusyChange?.(true); setError(null); setDone(false)
     try {
       const result = await props.remote.abandonHelperMvu({ sessionId: props.sessionId, storyId: props.storyId })
       if (!result.ok) throw new Error(result.error.message)
       setConfirm(false); setDone(true)
     } catch (cause) { setError(describeError(cause)) }
-    finally { pending.current = false; setBusy(false); props.onChanged() }
+    finally { pending.current = false; setBusy(false); props.onBusyChange?.(false); props.onChanged() }
   }
   return <div className="dsh-tavern-mvuRecovery">
-    <Btn danger disabled={busy} onClick={() => { setError(null); setDone(false); setConfirm(true) }}>{t('chip.mvuAbandon.action')}</Btn>
+    <Btn danger disabled={locked} onClick={() => { if (locked) return; setError(null); setDone(false); setConfirm(true) }}>{t('chip.mvuAbandon.action')}</Btn>
     {done && <Muted>{t('chip.mvuAbandon.done')}</Muted>}
     <Err message={error}/>
     <ConfirmDialog open={confirm} title={t('chip.mvuAbandon.title')} description={t('chip.mvuAbandon.desc') + (error ? '\n' + error : '')}
-      confirmLabel={t('chip.mvuAbandon.action')} danger busy={busy} onCancel={() => { if (!pending.current) setConfirm(false) }} onConfirm={() => { void abandon() }}/>
+      confirmLabel={t('chip.mvuAbandon.action')} danger busy={locked} onCancel={() => { if (!pending.current) setConfirm(false) }} onConfirm={() => { void abandon() }}/>
   </div>
 }
 
@@ -302,14 +303,17 @@ function HeaderChipSession(props: HeaderChipProps) {
   const [chatLore, setChatLore] = useState<{ cardId: string; storyId?: string; entries: WorldInfoEntry[]; revision: string } | null>(null)
   const [memoryOpenTab, setMemoryOpenTab] = useState<'memory' | 'journal' | null>(null)
   const [confirmUnbind, setConfirmUnbind] = useState(false)
-  /** 保存、解除与开场白等操作共用同步锁；React 提交 busy 前的重复点击同样不能发送第二个请求。 */
+  /** 保存、解除、开场白与放弃 MVU 共用写入锁；React 提交 busy 前的重复点击同样不能发送并发请求。 */
   const pending = useRef(false)
+  const abandoningMvuRef = useRef(false)
   const [busy, setBusy] = useState(false)
+  const [abandoningMvu, setAbandoningMvu] = useState(false)
+  const locked = busy || abandoningMvu
   const bindingDirty = isBindingDirty(draft, binding)
-  const closeGuard = useDraftGuard(open && bindingDirty, busy)
-  const requestCloseDialog = () => { if (!pending.current) closeGuard.request(() => setOpen(false)) }
+  const closeGuard = useDraftGuard(open && bindingDirty, locked)
+  const requestCloseDialog = () => { if (!pending.current && !abandoningMvuRef.current) closeGuard.request(() => setOpen(false)) }
   const run = (fn: () => Promise<void>) => {
-    if (pending.current) return
+    if (pending.current || abandoningMvuRef.current) return
     pending.current = true
     void runAsync(setBusy, setError, fn).finally(() => { pending.current = false })
   }
@@ -524,9 +528,9 @@ function HeaderChipSession(props: HeaderChipProps) {
                 <Btn
                   danger
                   size="md"
-                  disabled={busy}
+                  disabled={locked}
                   onClick={() => {
-                    if (!pending.current) setConfirmUnbind(true)
+                    if (!pending.current && !abandoningMvuRef.current) setConfirmUnbind(true)
                   }}
                 >
                   {t('chip.unbind.action')}
@@ -535,9 +539,9 @@ function HeaderChipSession(props: HeaderChipProps) {
               <span className="dsh-tavern-footSpacer" />
               <span className="dsh-tavern-footGroup">
                 {bindingDirty ? <Badge accent>{t('draft.unsaved')}</Badge> : null}
-                <Btn size="md" disabled={busy || !binding?.storyId || draft?.cardId !== binding.cardId} onClick={() => run(openChatLore)}>{t('chip.chatLore.edit')}</Btn>
-                <Btn size="md" disabled={!binding?.storyId} onClick={() => setMemoryOpenTab('memory')}>{t('section.memory')}</Btn>
-                <Btn primary size="md" disabled={busy} onClick={() => run(saveBinding)}>{t('binding.save')}</Btn>
+                <Btn size="md" disabled={locked || !binding?.storyId || draft?.cardId !== binding.cardId} onClick={() => run(openChatLore)}>{t('chip.chatLore.edit')}</Btn>
+                <Btn size="md" disabled={locked || !binding?.storyId} onClick={() => { if (!pending.current && !abandoningMvuRef.current) setMemoryOpenTab('memory') }}>{t('section.memory')}</Btn>
+                <Btn primary size="md" disabled={locked} onClick={() => run(saveBinding)}>{t('binding.save')}</Btn>
               </span>
             </div>
           ) : undefined
@@ -555,11 +559,11 @@ function HeaderChipSession(props: HeaderChipProps) {
           )}
           {!lists && !listsLoading && error && (
             <div>
-              <Btn disabled={busy} onClick={() => setListsReloadSeq((n) => n + 1)}>{t('action.retry')}</Btn>
+              <Btn disabled={locked} onClick={() => setListsReloadSeq((n) => n + 1)}>{t('action.retry')}</Btn>
             </div>
           )}
           {lists && (
-            <fieldset disabled={busy} className="dsh-tavern-editorFields" style={{ display: 'contents' }}>
+            <fieldset disabled={locked} className="dsh-tavern-editorFields" style={{ display: 'contents' }}>
               <div className="dsh-tavern-bindingColumn">
               {draft ? (
                 <>
@@ -767,7 +771,7 @@ function HeaderChipSession(props: HeaderChipProps) {
             </fieldset>
           )}
           </div>
-          {binding?.storyId && <HelperMvuAbandonAction key={sessionId + ':' + binding.storyId} remote={remote} sessionId={sessionId} storyId={binding.storyId} onChanged={() => {
+          {binding?.storyId && <HelperMvuAbandonAction key={sessionId + ':' + binding.storyId} remote={remote} sessionId={sessionId} storyId={binding.storyId} disabled={busy} onBusyChange={(on) => { abandoningMvuRef.current = on; setAbandoningMvu(on) }} onChanged={() => {
             invalidateSessionBinding(sessionId)
             bindingLoader.reload()
             window.dispatchEvent(new CustomEvent(BINDING_CHANGED_EVENT, { detail: sessionId }))

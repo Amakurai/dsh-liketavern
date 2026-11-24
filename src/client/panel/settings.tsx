@@ -90,13 +90,14 @@ export function SettingsSection(props: { remote: TavernRemote; sessions?: Sessio
     const firstReady = !receivedSettings.current
     receivedSettings.current = true
     // 首次远端读取只补没有恢复的字段；null 表示尚未初始化，不应让加载中的快照锁死页面。
-    // 头像偏好是即时保存项，不属于未保存草稿；重入设置页或启动读取失败后恢复时以远端为准。
+    // 头像偏好与界面语言是即时保存项，不属于未保存草稿；重入设置页或启动读取失败后恢复时以远端为准。
     const speakerHeader = state.value.settings.speakerHeader === true
+    const locale = state.value.settings.locale
     setSpeakerHeader(speakerHeader)
     if (!firstReady || !restoredDraft || draft === null) setDraft(toDraft(state.value.settings))
-    else setDraft((current) => current ? { ...current, speakerHeader } : current)
+    else setDraft((current) => current ? { ...current, speakerHeader, locale } : current)
     if (!firstReady || !restoredBaseline || baseline === null) setBaseline(toDraft(state.value.settings))
-    else setBaseline((current) => current ? { ...current, speakerHeader } : current)
+    else setBaseline((current) => current ? { ...current, speakerHeader, locale } : current)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state])
 
@@ -408,9 +409,9 @@ export function SettingsSection(props: { remote: TavernRemote; sessions?: Sessio
                 disabled={busy}
                 onChange={(v) => setWorldInfo({ characterStrategy: Number(v) as 0 | 1 | 2 })}
                 options={[
-                  { value: '0', label: 'Sorted Evenly' },
-                  { value: '1', label: 'Character Lore First' },
-                  { value: '2', label: 'Global Lore First' },
+                  { value: '0', label: t('settings.worldinfo.strategy.evenly') },
+                  { value: '1', label: t('settings.worldinfo.strategy.characterFirst') },
+                  { value: '2', label: t('settings.worldinfo.strategy.globalFirst') },
                 ]}
               />
             </SettingsRow>

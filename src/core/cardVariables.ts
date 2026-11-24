@@ -115,8 +115,12 @@ export function installCardVariables(labels: CardVariableLabels, styles = '', me
     } else if (type === 'message' && (id === 'latest' || id === 'current' || id === -1)) id = messageId ?? 'current'
     if (type === 'message' && id !== 'current' && (typeof id !== 'number' || !Number.isSafeInteger(id) || id < 0)) throw new Error('Message variable index out of range')
     if (typeof id !== 'string' && typeof id !== 'number') throw new Error('Invalid variable scope id')
-    if (typeof id === 'number' && !Number.isFinite(id)) throw new Error('Invalid variable scope id')
-    return JSON.stringify([type, id])
+    // 与服务端 helperScopeKey 保持完全一致的边界校验，避免本地写入成功却在异步持久化时永久锁死错误态。
+    if (typeof id === 'string' && id.length > 256) throw new Error('Invalid variable scope id')
+    if (typeof id === 'number' && (!Number.isSafeInteger(id) || id < 0)) throw new Error('Invalid variable scope id')
+    const serialized = JSON.stringify([type, id])
+    if (serialized.length > 512) throw new Error('Invalid variable scope id')
+    return serialized
   }
   function getVariables(option?: unknown): Table {
     const value = clone(holder.scopes[scope(option)] ?? {})

@@ -3,7 +3,8 @@ export const TEMPLATE_FAKER = String.raw`
 (()=>{
   const createFakerCore=globalThis.__createTavernFakerCore;
   let dataJson=globalThis.__tavernFakerData;
-  globalThis.__resetTemplateFaker=()=>{};
+  let resetTemplateFaker=()=>{};
+  Object.defineProperty(globalThis,'__resetTemplateFaker',{value:()=>resetTemplateFaker(),writable:false,configurable:false});
   delete globalThis.__createTavernFakerCore;
   delete globalThis.__tavernFakerData;
   function lazyFakerProperty(target,name,load) {
@@ -13,12 +14,12 @@ export const TEMPLATE_FAKER = String.raw`
   }
   lazyFakerProperty(api,'faker',()=>{
     if(typeof createFakerCore!=='function'||typeof dataJson!=='string') throw Error('Faker 依赖产物缺失，请先运行 npm run build');
-    const fakerCore=createFakerCore(),fakerLibrary=JSON.parse(dataJson);
+    const fakerCore=createFakerCore(),fakerLibrary=parseTemplateInput(dataJson);
     dataJson=undefined;
     const fakerNamespace=Object.assign(Object.create(null),fakerCore);
     const fakerLocales=Object.create(null),fakerInstances=Object.create(null),loadedInstances=[];
     for(const code of Object.keys(fakerLibrary.fakerLocaleJson)) {
-      lazyFakerProperty(fakerLocales,code,()=>JSON.parse(fakerLibrary.fakerLocaleJson[code]));
+      lazyFakerProperty(fakerLocales,code,()=>parseTemplateInput(fakerLibrary.fakerLocaleJson[code]));
       lazyFakerProperty(fakerNamespace,code,()=>fakerLocales[code]);
       lazyFakerProperty(fakerInstances,code,()=>{
         // 直接传入已设种子的官方随机源，避免默认源先随机初始化后再次 seed。
@@ -31,7 +32,7 @@ export const TEMPLATE_FAKER = String.raw`
     fakerNamespace.allFakers=fakerInstances;
     fakerNamespace.simpleFaker.seed(input.seed>>>0);
     fakerNamespace.simpleFaker.setDefaultRefDate(input.now);
-    globalThis.__resetTemplateFaker=()=> {
+    resetTemplateFaker=()=> {
       for(const instance of [fakerNamespace.simpleFaker,...loadedInstances]) {instance.seed(input.seed>>>0);instance.setDefaultRefDate(input.now);}
     };
     return fakerNamespace;

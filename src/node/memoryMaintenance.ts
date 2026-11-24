@@ -13,8 +13,8 @@ import type {} from './messageSources.js'
  * 同步压缩曾阻塞该 step 的 LLM 流式调用数秒，挪到 idle 期后写工具立即返回。
  */
 import type { Context } from '@deepseek-ai/cordis'
-import type { LlmRuntime } from '@deepseek-ai/dsh-llm'
-import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import { ReasoningEffortId, createUserMessage, type LlmRuntime } from '@deepseek-ai/dsh-llm'
+import { resolveTavernReasoningEffort, type AdvertisedReasoningInfo } from '../core/callConfig.js'
 import { ALIAS_BATCH, buildAliasPrompt, parseAliasReply } from '../core/memoryAliases.js'
 import { estimateTokens } from '../core/tokenize.js'
 import { rebuildIndex } from '../state/workspace.js'
@@ -22,6 +22,38 @@ import { withWorkspaceLock } from '../state/workspaceLock.js'
 import { collectCompleteText } from './collectText.js'
 import { sessionModelRoute } from './modelRoute.js'
 import type { TavernState } from './state.js'
+
+/** 无法关闭思考的推理模型至少保留 8192 输出预算，避免思维链耗尽 1024/2048 触发 max-tokens 截断。 */
+const FORCED_THINKING_MIN_MAX_TOKENS = 8192
+
+/**
+ * 为空闲维护（记忆压缩 / 检索别名）解析思考档位与输出上限：
+ * 优先按模型公布能力关闭思考（deepseek-official 元数据不可用时也回退 off），
+ * 避免默认 high 思考在小 maxTokens 下频繁以 max-tokens 失败；仅公布非 off 思考档的模型放宽预算。
+ */
+async function resolveMaintenanceCallOptions(
+  llm: LlmRuntime,
+  provider: string,
+  model: string,
+  baseMaxTokens: number,
+  signal: AbortSignal,
+): Promise<{ maxTokens: number; reasoningEffort?: ReasoningEffortId }> {
+  let reasoning: AdvertisedReasoningInfo | undefined
+  try {
+    if (typeof llm.resolveModelInfo === 'function') {
+      reasoning = (await llm.resolveModelInfo(provider, model, signal)).reasoning
+    }
+  } catch {
+    // 元数据解析失败不阻断维护；按无公布档回退（deepseek-official 仍会选 off）。
+  }
+  signal.throwIfAborted()
+  const effort = resolveTavernReasoningEffort('disabled', reasoning, undefined, provider)
+  if (effort !== undefined) {
+    return { maxTokens: baseMaxTokens, reasoningEffort: ReasoningEffortId(effort) }
+  }
+  const forcedThinking = (reasoning?.efforts?.length ?? 0) > 0
+  return { maxTokens: forcedThinking ? Math.max(baseMaxTokens, FORCED_THINKING_MIN_MAX_TOKENS) : baseMaxTokens }
+}
 
 /** 用指定模型把一批旧记忆压缩合并为一条；失败返回 null。 */
 export async function compressMemoryBatch(
@@ -40,7 +72,8 @@ export async function compressMemoryBatch(
     })
     const timeout = AbortSignal.timeout(60_000)
     const signal = maintenanceSignal ? AbortSignal.any([maintenanceSignal, timeout]) : timeout
-    return await collectCompleteText(llm.stream({ provider, model, messages: [message], maxTokens: 1024, temperature: 0.3, signal }), signal)
+    const callOptions = await resolveMaintenanceCallOptions(llm, provider, model, 1024, signal)
+    return await collectCompleteText(llm.stream({ provider, model, messages: [message], temperature: 0.3, signal, ...callOptions }), signal)
   } catch {
     return null
   }
@@ -100,7 +133,8 @@ async function requestMemoryAliases(
     })
     const timeout = AbortSignal.timeout(60_000)
     const signal = maintenanceSignal ? AbortSignal.any([maintenanceSignal, timeout]) : timeout
-    const text = await collectCompleteText(llm.stream({ provider, model, messages: [message], maxTokens: 2048, temperature: 0.3, signal }), signal)
+    const callOptions = await resolveMaintenanceCallOptions(llm, provider, model, 2048, signal)
+    const text = await collectCompleteText(llm.stream({ provider, model, messages: [message], temperature: 0.3, signal, ...callOptions }), signal)
     return parseAliasReply(text, bodies)
   } catch {
     return null

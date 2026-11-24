@@ -12,7 +12,7 @@
  * 同步压缩曾阻塞该 step 的 LLM 流式调用数秒，挪到 idle 期后写工具立即返回。
  */
 import type { Context } from '@deepseek-ai/cordis';
-import type { LlmRuntime } from '@deepseek-ai/dsh-llm';
+import { type LlmRuntime } from '@deepseek-ai/dsh-llm';
 import type { TavernState } from './state.js';
 /** 用指定模型把一批旧记忆压缩合并为一条；失败返回 null。 */
 export declare function compressMemoryBatch(llm: LlmRuntime, provider: string, model: string, bodies: string[], maintenanceSignal?: AbortSignal): Promise<string | null>;

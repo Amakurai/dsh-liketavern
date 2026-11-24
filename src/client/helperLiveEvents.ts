@@ -13,15 +13,17 @@ type Signal = { kind: 'start'; seq: number } | { kind: 'user'; seq: number } |
   { kind: 'assistant'; seq: number; turn: number; endSeq: number } |
   { kind: 'end'; seq: number; turn: number; completed: boolean; assistants: number[] }
 type Turn = { started: boolean; assistants: number[] }
-type EndedTurn = { endSeq: number; completed: boolean }
+type EndedTurn = { endSeq: number; completed: boolean; emitEndOnSettle?: boolean }
 type View = {
   sessionId: string; source: SessionEventSource; active: boolean; epoch: number; storyId?: string
   revision: number; highwater: number; turns: Map<number, Turn>; assistantCount: number
+  /** 基线快照中已开始但尚未结束的轮次：若随后仅收到 turn/end 不触发空结束，若 turn/end 后又迟到 settle-assistant 则按序补发接收与结束。 */
+  openBaselineTurns: Set<number>
   /** 每轮已捕获的持久 assistant seq；settle-assistant 可能晚于 turn/end 到达，不能按全局 highwater 丢弃。 */
   assistantsByTurn: Map<number, Set<number>>
   /** 已捕获 turn/end 的轮次及收口信息；晚到的 settle 仅在实时正常完成轮次经闭合屏障补发，不向失败/基线前轮次补发。 */
   endedTurns: Map<number, EndedTurn>
-  queue: Signal[]; running: boolean; ready: boolean; requests: Set<() => void>; dispose: () => void; probe: number
+  queue: Signal[]; running: boolean; ready: boolean; rebindPending: boolean; requests: Set<() => void>; dispose: () => void; probe: number
 }
 const MAX_QUEUE = 256, MAX_TURNS = 64, MAX_ASSISTANTS = 4096
 class SourceChanged extends Error {}
@@ -38,7 +40,7 @@ export function installHelperLiveEvents(sessions: Pick<ClientContext['sessions']
   const cancel = (view: View) => {
     view.epoch++
     for (const stop of [...view.requests]) stop()
-    view.queue = []; view.turns.clear(); view.assistantsByTurn.clear(); view.endedTurns.clear(); view.assistantCount = 0; view.running = false
+    view.queue = []; view.turns.clear(); view.openBaselineTurns.clear(); view.assistantsByTurn.clear(); view.endedTurns.clear(); view.assistantCount = 0; view.running = false
   }
   const read = (view: View, request: Parameters<EventRemote['getHelperEventState']>[0], epoch = view.epoch): Promise<EventState> => {
     if (!current(view, epoch)) return Promise.reject(new SourceChanged('宿主事件来源已改变'))
@@ -77,11 +79,15 @@ export function installHelperLiveEvents(sessions: Pick<ClientContext['sessions']
   }
   const baseline = (view: View, snapshot: SessionEventWindow) => {
     view.revision = snapshot.revision
-    view.assistantsByTurn.clear(); view.endedTurns.clear()
+    view.openBaselineTurns.clear(); view.assistantsByTurn.clear(); view.endedTurns.clear()
     for (const entry of snapshot.entries) if (entry.type === 'event') {
       view.highwater = Math.max(view.highwater, entry.event.seq)
       rememberAssistant(view, entry.event)
-      if (entry.event.type === 'turn/end') {
+      if (entry.event.type === 'turn/start') {
+        if (view.openBaselineTurns.size >= MAX_TURNS) view.openBaselineTurns.delete(view.openBaselineTurns.keys().next().value!)
+        view.openBaselineTurns.add(entry.event.data.turn)
+      } else if (entry.event.type === 'turn/end') {
+        view.openBaselineTurns.delete(entry.event.data.turn)
         if (view.endedTurns.size >= MAX_TURNS) view.endedTurns.delete(view.endedTurns.keys().next().value!)
         // 基线之前已结束的轮次不应因迟到的 settle-assistant 回放 message_received。
         view.endedTurns.set(entry.event.data.turn, { endSeq: entry.event.seq, completed: false })
@@ -90,8 +96,12 @@ export function installHelperLiveEvents(sessions: Pick<ClientContext['sessions']
   }
   const reset = (view: View, snapshot: SessionEventWindow) => {
     cancel(view); baseline(view, snapshot)
-    if (!view.ready) initialize(view)
-    if (view.storyId) notifyHelperStory(view.sessionId, view.storyId)
+    if (!view.ready || view.rebindPending) {
+      view.rebindPending = false
+      view.ready = false
+      initialize(view)
+    }
+    if (view.ready && view.storyId) notifyHelperStory(view.sessionId, view.storyId)
   }
   const dispatch = async (view: View, signal: Signal, epoch: number) => {
     const closedSeq = signal.kind === 'end' ? signal.seq : signal.kind === 'assistant' ? signal.endSeq : undefined
@@ -149,7 +159,10 @@ export function installHelperLiveEvents(sessions: Pick<ClientContext['sessions']
     const epoch = view.epoch
     void read(view, { sessionId: view.sessionId }, epoch).then(state => {
       if (!current(view, epoch)) return
-      view.storyId = state.storyId; view.ready = true; drain(view)
+      const previous = view.storyId
+      view.storyId = state.storyId; view.ready = true
+      if (previous !== undefined && previous !== state.storyId) notifyHelperStory(view.sessionId, state.storyId)
+      drain(view)
     }).catch(error => {
       if (!current(view, epoch)) return
       report(view, error); cancel(view); view.ready = false
@@ -184,7 +197,13 @@ export function installHelperLiveEvents(sessions: Pick<ClientContext['sessions']
         if (index >= 0) {
           if (view.queue.length >= MAX_QUEUE) throw new Error('宿主消息事件超过待处理预算')
           view.queue.splice(index, 0, signal)
-        } else enqueue(view, signal)
+        } else {
+          enqueue(view, signal)
+          if (ended.emitEndOnSettle) {
+            ended.emitEndOnSettle = false
+            enqueue(view, { kind: 'end', seq: ended.endSeq, turn: turnNumber, completed: true, assistants: [] })
+          }
+        }
       } else {
         let created = view.turns.get(turnNumber)
         if (!created) {
@@ -196,7 +215,23 @@ export function installHelperLiveEvents(sessions: Pick<ClientContext['sessions']
       }
     } else if (event.type === 'turn/end') {
       const turn = view.turns.get(event.data.turn)
-      if (!turn) return
+      const wasOpenBaseline = view.openBaselineTurns.delete(event.data.turn)
+      if (!turn) {
+        if (wasOpenBaseline) {
+          // 轮中建基线后若仅收到 turn/end（无新回复），不空发 generation_ended；
+          // 但保留结束信息，若随后迟到 settle-assistant 再补发 message_received 与 generation_ended。
+          if (view.endedTurns.size >= MAX_TURNS) view.endedTurns.delete(view.endedTurns.keys().next().value!)
+          const completed = event.data.reason.kind === 'completed'
+          view.endedTurns.set(event.data.turn, { endSeq: event.seq, completed, emitEndOnSettle: completed })
+          return
+        }
+        // 未见过 turn/start 的孤立/截断窗口 turn/end：记录为非完成结束，防止迟到 settle-assistant 泄漏 view.turns。
+        if (!view.endedTurns.has(event.data.turn)) {
+          if (view.endedTurns.size >= MAX_TURNS) view.endedTurns.delete(view.endedTurns.keys().next().value!)
+          view.endedTurns.set(event.data.turn, { endSeq: event.seq, completed: false })
+        }
+        return
+      }
       view.turns.delete(event.data.turn); view.assistantCount -= turn.assistants.length
       if (view.endedTurns.size >= MAX_TURNS) view.endedTurns.delete(view.endedTurns.keys().next().value!)
       const completed = event.data.reason.kind === 'completed'
@@ -212,7 +247,7 @@ export function installHelperLiveEvents(sessions: Pick<ClientContext['sessions']
     if (selected) { selected.active = false; cancel(selected); selected.dispose(); selected = undefined }
     if (!active || !sessionId || !binding || binding.sessionId !== sessionId) return
     const view: View = { sessionId, source: binding.eventSource, active: true, epoch: 0, revision: -1, highwater: -1,
-      turns: new Map(), assistantsByTurn: new Map(), endedTurns: new Map(), assistantCount: 0, queue: [], running: false, ready: false, requests: new Set(), dispose: () => {}, probe: 0 }
+      turns: new Map(), openBaselineTurns: new Set(), assistantsByTurn: new Map(), endedTurns: new Map(), assistantCount: 0, queue: [], running: false, ready: false, rebindPending: false, requests: new Set(), dispose: () => {}, probe: 0 }
     selected = view
     baseline(view, view.source.getSnapshot())
     view.dispose = view.source.subscribe(() => {
@@ -242,14 +277,18 @@ export function installHelperLiveEvents(sessions: Pick<ClientContext['sessions']
     const target = (event as CustomEvent<unknown>).detail
     if (!view || (target && target !== view.sessionId)) return
     const epoch = view.epoch, probe = ++view.probe
+    // 探测在途若被 eventSource replace 中断，reset 必须重新 initialize，不能沿用旧 storyId。
+    view.rebindPending = true
     void read(view, { sessionId: view.sessionId }, epoch).then(state => {
       if (!current(view, epoch) || probe !== view.probe) return
+      view.rebindPending = false
       const different = view.storyId !== undefined && view.storyId !== state.storyId, suspended = !view.ready
       view.storyId = state.storyId; view.ready = true
       if (different || suspended) reset(view, view.source.getSnapshot())
       drain(view)
     }).catch(error => {
       if (!current(view, epoch) || probe !== view.probe) return
+      view.rebindPending = false
       report(view, error); cancel(view); baseline(view, view.source.getSnapshot()); view.ready = false
     })
   }

@@ -6,20 +6,23 @@ const entryData = entry => ({...clone(entry), key:clone(entry.keys), keysecondar
 function findEntry(book,title) {
   return findTemplateEntry(book,title);
 }
-async function activewi(book,title,force=false) {
-  if (typeof title==='boolean' || title===undefined) {force=title ?? false; title=book; book='';}
-  if (input.phase!=='generate') throw Error('activewi 只能在生成阶段调用');
-  const entry = findEntry(book,title);
-  if (!entry || entry.templateDontActivate || entry.templateOnlyPreload) return null;
-  if (!force && !entry.enabled) return null;
-  if (/^\[(?:InitialVariables|RENDER)\b/i.test(entry.comment)) return null;
-  if (entry.templateCondition && !(await templateCondition(entry.templateCondition))) return null;
-  activations.set(entry.key,Boolean(force) || activations.get(entry.key) || false);
-  return entryData(entry);
+function activewi(book,title,force=false) {
+  assertNotConditionReadonly('激活世界书');
+  return (async()=>{
+    if (typeof title==='boolean' || title===undefined) {force=title ?? false; title=book; book='';}
+    if (input.phase!=='generate') throw Error('activewi 只能在生成阶段调用');
+    const entry = findEntry(book,title);
+    if (!entry || entry.templateDontActivate || entry.templateOnlyPreload) return null;
+    if (!force && !entry.enabled) return null;
+    if (/^\[(?:InitialVariables|RENDER)\b/i.test(entry.comment)) return null;
+    if (entry.templateCondition && !(await templateCondition(entry.templateCondition))) return null;
+    activations.set(entry.key,Boolean(force) || activations.get(entry.key) || false);
+    return entryData(entry);
+  })();
 }
 async function templateCondition(expression) {
   const before = snapshotConditionState();
-  const result = await evalTemplate('<%- Boolean('+expression+') %>');
+  const result = await evalConditionExpression(expression);
   if (snapshotConditionState()!==before) throw Error('@@if 条件必须只读，不能修改变量');
   return result==='true';
 }
@@ -27,7 +30,10 @@ function keywordMatch(pattern,text,sensitive=false,whole=false) {
   pattern=String(pattern).trim();
   if (!pattern) return false;
   const literal = /^\/([\s\S]*)\/([dgimsuvy]*)$/.exec(pattern);
-  if (literal) return new RegExp(literal[1],literal[2]).test(text);
+  if (literal) {
+    try { return new RegExp(literal[1],literal[2]).test(text); }
+    catch { return false; }
+  }
   if (!sensitive) {pattern=pattern.toLowerCase();text=text.toLowerCase();}
   if (!whole) return text.includes(pattern);
   // 与 core/worldbook.ts 同口径：不用空格分词的文字（汉字、假名、谚文、泰文等）本身就是边界。
@@ -59,13 +65,16 @@ function selectActivatedEntries(entries,keywords,condition={}) {
     return [count>0,count<secondary.length,count===0,count===secondary.length][e.selectiveLogic || 0];
   });
 }
-async function activateWorldInfoByKeywords(keywords,condition={}) {
-  const results=[];
-  for (const entry of selectActivatedEntries(input.entries.map(entryData),keywords,condition)) {
-    const result=await activewi(entry.world,entry.uid,condition.disabled===true);
-    if (result) results.push(result);
-  }
-  return results;
+function activateWorldInfoByKeywords(keywords,condition={}) {
+  assertNotConditionReadonly('激活世界书');
+  return (async()=>{
+    const results=[];
+    for (const entry of selectActivatedEntries(input.entries.map(entryData),keywords,condition)) {
+      const result=await activewi(entry.world,entry.uid,condition.disabled===true);
+      if (result) results.push(result);
+    }
+    return results;
+  })();
 }
 Object.assign(api,{activewi,activateWorldInfo:activewi,selectActivatedEntries,activateWorldInfoByKeywords,
   getWorldInfoData:async name=>input.entries.filter(e=>!name||matches(e.sourceRef,name)).map(entryData),
@@ -73,5 +82,5 @@ Object.assign(api,{activewi,activateWorldInfo:activewi,selectActivatedEntries,ac
     .filter(e=>e.source==='character'?(chara||charaExtra):e.source==='global'?global:e.source==='persona'?persona:e.source!=='delta').map(entryData),
   getWorldInfoActivatedData:async (name,keywords,condition={})=>selectActivatedEntries(input.entries.filter(e=>!name||matches(e.sourceRef,name)).map(entryData),keywords,condition),
 });
-globalThis.__activationRequests=()=>JSON.stringify([...activations].map(([key,force])=>({key,force})));
+globalThis.__activationRequests=()=>stringifyTemplateJson([...activations].map(([key,force])=>({key,force})));
 `;

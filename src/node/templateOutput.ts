@@ -26,15 +26,31 @@ const DETERMINISTIC_TEMPLATE_SCRIPT_ERROR_PREFIXES = [
   'EJS 模板失败',
   'EJS 异步任务未完成',
   'EJS 异步任务失败',
+  'EJS 输出无效或净增超过',
   '@@if 条件必须只读',
   '@@if 条件状态',
+  '模板变量超过',
+  '模板变量嵌套超过',
+  '模板变量必须是',
+  '模板变量含禁止',
+  '模板变量状态损坏',
+  '模板变量作用域损坏',
+  '模板消息格式化输出超过',
+  '消息变量导出无效',
+  '单条消息变量快照超过',
+  '消息变量快照超过',
+  '临时正则返回值无效',
+  '正则来源结果无效',
+  '模板注入出口返回无效',
+  'sticky 导出无效',
+  'sticky 状态',
 ] as const
 
-/** 隔离器的启动/计算/容量故障属于可重试的提交失败；确定性的第三方脚本或只读守卫异常仍按模板降级。 */
+/** 隔离器的启动/计算/容量故障属于可重试的提交失败；确定性的第三方脚本、变量/输出超限或只读守卫异常仍按模板降级。 */
 function isTemplateComputeFailure(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error)
-  // TemplateSandbox 对第三方脚本/表达式错误、未完成异步任务、非超时中断的异步拒绝与 @@if 只读违规
-  // 均属于确定性模板异常（展示回退原文）；其余 isolated 异常与超时中断视为计算资源/桥接故障，可重试。
+  // TemplateSandbox 对第三方脚本/表达式错误、未完成异步任务、非超时中断的异步拒绝、确定性导出/变量超限
+  // 及 @@if 只读违规均属于确定性模板异常（展示回退原文）；其余 isolated 异常与超时中断视为计算资源/桥接故障，可重试。
   if (message === '模板回复结果与宿主消息数量不一致') return true
   if (message.includes('（执行期间触发计算超时中断）')) return true
   return !DETERMINISTIC_TEMPLATE_SCRIPT_ERROR_PREFIXES.some(prefix => message.startsWith(prefix))

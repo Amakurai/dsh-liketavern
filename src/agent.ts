@@ -63,9 +63,9 @@ function applyTurnContext(
  */
 function dropStaleTurnNotices<D extends { kind: 'enter'; messages: UserMessage[] }>(claimed: readonly UserMessage[], decision: D): D {
   const stale = new Set(claimed.filter(isTurnScopedNotice).map((message) => message.id))
+  if (stale.size === 0) return decision
   const kept = claimed.some((message) => !stale.has(message.id))
   if (!kept) return { ...decision, messages: [] }
-  if (stale.size === 0) return decision
   return { ...decision, messages: decision.messages.filter((message) => !stale.has(message.id)) }
 }
 

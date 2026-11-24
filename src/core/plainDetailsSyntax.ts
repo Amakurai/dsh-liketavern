@@ -731,7 +731,9 @@ function validatePlainDetailsBody(
   depth: number,
 ): boolean {
   const code = markdownCodeScanner(body)
-  const standaloneCustomNames = new Set<string>()
+  let chunkIdx = 0
+  const chunkStandaloneNames: Array<Set<string>> = [new Set()]
+  const deferredCustomChecks: Array<{ chunkIdx: number; name: string; closing: boolean; hasAttrs: boolean }> = []
   const tokens = /<|`+|~{3,}/g
   for (let token = tokens.exec(body); token; token = tokens.exec(body)) {
     const at = token.index
@@ -751,6 +753,8 @@ function validatePlainDetailsBody(
     if (/^<details(?=[\t\n\f\r />])/i.test(body.slice(at, Math.min(body.length, at + 16)))) {
       const nestedNext = validatePlainDetailsBlock(body, at, code, state, depth + 1)
       if (nestedNext === null) return false
+      chunkIdx++
+      chunkStandaloneNames.push(new Set())
       tokens.lastIndex = nestedNext
       continue
     }
@@ -788,15 +792,27 @@ function validatePlainDetailsBody(
         if (!closing && attrs.includes('=')) return false
         const lineStart = body.lastIndexOf('\n', at - 1) + 1
         const lineEnd = lineBoundsAt(body, lineStart).end
-        const lineContent = body.slice(lineStart, lineEnd).replace(/^(?: {0,3}>[ \t]?)+/, '').trim()
-        const isStandaloneLine = lineContent === tag[0] || isStandaloneCustomTagSequence(lineContent)
+        const afterQuote = body.slice(lineStart, lineEnd).replace(/^(?: {0,3}>[ \t]?)+/, '')
+        const lineContent = afterQuote.trim()
+        const isIndented = indentColumns(afterQuote) >= 4
+        const isStandaloneLine = !isIndented && (lineContent === tag[0] || isStandaloneCustomTagSequence(lineContent))
         if (isStandaloneLine) {
-          standaloneCustomNames.add(name.toLowerCase())
-        } else if (closing && !PROTOCOL_TAG_NAME_RE.test(name) && !standaloneCustomNames.has(name.toLowerCase())) {
-          return false
+          chunkStandaloneNames[chunkIdx]!.add(name.toLowerCase())
+        } else if (!PROTOCOL_TAG_NAME_RE.test(name)) {
+          // 延后到整段扫描结束后对照同分片两遍式独占行集合，与 stripCustomTags + hasResidualTag 保持 100% 同口径。
+          deferredCustomChecks.push({
+            chunkIdx,
+            name: name.toLowerCase(),
+            closing,
+            hasAttrs: attrs.trim().length > 0,
+          })
         }
       }
     }
+  }
+  for (const check of deferredCustomChecks) {
+    if (chunkStandaloneNames[check.chunkIdx]!.has(check.name)) continue
+    if (check.closing || check.hasAttrs) return false
   }
   return true
 }

@@ -318,4 +318,50 @@ describe('normalizeHostMarkdown', () => {
     expect(normalizeHostMarkdown('中文<i><b>「不要走。」</b></i>中文')).not.toContain('***')
     expect(normalizeHostMarkdown('中文<b><i>「不要走。」</i></b>中文')).not.toContain('***')
   })
+
+  it('支持含成对反引号的 <pre>/<code>/<kbd>、混合嵌套粗斜体、空自闭合结构标签与未闭合独占行格式开标签', () => {
+    // 含成对反引号的 <pre>/<code>/<kbd> 正常转为围栏或行内代码，不因预掩码被跳过。
+    expect(normalizeHostMarkdown('<pre>const s = `hello`;</pre>')).toBe('```\nconst s = `hello`;\n```')
+    expect(normalizeHostMarkdown('<pre><code class="language-js">const s = `hello`;</code></pre>'))
+      .toBe('```js\nconst s = `hello`;\n```')
+    expect(normalizeHostMarkdown('<pre>\n```js\nconsole.log(1)\n```\n</pre>'))
+      .toBe('````\n```js\nconsole.log(1)\n```\n````')
+    expect(normalizeHostMarkdown('<code>a `b` c</code>')).toBe('``a `b` c``')
+    expect(normalizeHostMarkdown('<kbd>`Ctrl`+`C`</kbd>')).toBe('`` `Ctrl`+`C` ``')
+    // 含原始尖括号的反引号片段仍保守拒绝。
+    expect(normalizeHostMarkdown('<code>`<script>`</code>')).toBe('<code>`<script>`</code>')
+
+    // 混合嵌套粗斜体在 CommonMark 中按内层跨度贴合校验转换；中文无空格标点嵌套保守拒绝。
+    expect(normalizeHostMarkdown('<b>加粗 <i>斜体</i> 文本</b>')).toBe('**加粗 *斜体* 文本**')
+    expect(md.render(normalizeHostMarkdown('<b>加粗 <i>斜体</i> 文本</b>')))
+      .toContain('<strong>加粗 <em>斜体</em> 文本</strong>')
+    expect(normalizeHostMarkdown('<i>斜体 <b>加粗</b> 文本</i>')).toBe('*斜体 **加粗** 文本*')
+    expect(md.render(normalizeHostMarkdown('<i>斜体 <b>加粗</b> 文本</i>')))
+      .toContain('<em>斜体 <strong>加粗</strong> 文本</em>')
+    expect(normalizeHostMarkdown('<b><i>斜体</i> 加粗</b>')).toBe('***斜体* 加粗**')
+    expect(normalizeHostMarkdown('<b>加粗 <i>斜体</i></b>')).toBe('**加粗 *斜体***')
+    expect(normalizeHostMarkdown('<i><b>加粗</b> 斜体</i>')).toBe('***加粗** 斜体*')
+    expect(normalizeHostMarkdown('<i>斜体 <b>加粗</b></i>')).toBe('*斜体 **加粗***')
+    expect(normalizeHostMarkdown('中文<b>加粗 <i>「斜体」</i> 文本</b>中文'))
+      .toBe('中文**加粗 *「斜体」* 文本**中文')
+    expect(normalizeHostMarkdown('中文<b>中文<i>「斜体」</i>中文</b>中文'))
+      .toBe('中文<b>中文<i>「斜体」</i>中文</b>中文')
+    expect(normalizeHostMarkdown('中文<i>中文<b>「加粗」</b>中文</i>中文')).not.toContain('*中文**')
+
+    // 行内 <p/>、同行尾随未闭合标题、空自闭合结构容器、孤立独占行 <b> 与退出引用块的双 <br>。
+    expect(normalizeHostMarkdown('前文<p/>后文')).toBe('前文\n\n后文')
+    expect(normalizeHostMarkdown('<h3>标题</h3><h3>未闭合标题')).toBe('### 标题\n### 未闭合标题')
+    expect(normalizeHostMarkdown('> 第一行<br><br>\n普通正文')).toBe('> 第一行\n\n普通正文')
+    for (const sample of [
+      '前文\n<div/>\n```json\n{"a":1}\n```',
+      '前文\n<section class="gap"/>\n```json\n{"a":1}\n```',
+      '<b>\n```json\n{"a":1}\n```',
+    ]) {
+      const out = normalizeHostMarkdown(sample)
+      expect(md.render(out)).toContain('<pre><code class="language-json">')
+    }
+    // 成对跨行未转换 <b> 与带事件自闭合 <div onclick=.../> 原样保留。
+    expect(normalizeHostMarkdown('<b>\n- 列表一\n</b>')).toBe('<b>\n- 列表一\n</b>')
+    expect(normalizeHostMarkdown('前文\n<div onclick="x()"/>\n后文')).toBe('前文\n<div onclick="x()"/>\n后文')
+  })
 })

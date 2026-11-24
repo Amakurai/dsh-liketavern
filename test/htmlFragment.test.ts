@@ -428,4 +428,18 @@ it('有效纯折叠块（含 #31 未闭合 summary）与相邻非纯折叠块自
     { kind: 'html', text: issue31Fold },
     { kind: 'html', text: residualCloseFold },
   ])
+
+  // 纯 <details> 后紧跟只面向下一张真实卡片的 <style> + <div> 时，拆分原生折叠块与样式卡片。
+  const cardWithStyle = '<style>.card{color:red}</style>\n<div class="card">状态卡</div>'
+  expect(splitTemplateDisplay(`${issue31Fold}\n${cardWithStyle}`)).toEqual([
+    { kind: 'html', text: issue31Fold },
+    { kind: 'html', text: cardWithStyle },
+  ])
+  // <center> 内纯 http(s) 链接留给宿主 Markdown 归一化后可正常点击；带样式或危险协议仍进 iframe。
+  expect(splitRenderedHtml('<center><a href="https://example.com" target="_blank">图鉴</a></center>'))
+    .toEqual({ html: null, rest: '<center><a href="https://example.com" target="_blank">图鉴</a></center>' })
+  expect(splitRenderedHtml('<center><a href="https://example.com" style="color:gold">金色链接</a></center>').html)
+    .toContain('style="color:gold"')
+  expect(splitRenderedHtml('<center><a href="javascript:alert(1)">危险</a></center>').html)
+    .toContain('javascript:alert(1)')
 })

@@ -73,6 +73,87 @@ function isTagSelfClosing(raw: string): boolean {
   return state === 'before-name' || state === 'name' || state === 'after-name' || state === 'after-value'
 }
 
+const PLAIN_CENTER_LINK_ATTRS = new Set(['href', 'title', 'target', 'rel', 'dir', 'lang'])
+const DETAILS_TARGETING_STYLE_RE = /@import\b|\b(?:details|summary|body|html)\b|:root|(?:^|[},;\s])\*\s*[{,]/i
+
+/** 判定 `<center>` 内的 `<a>` 是否为无样式/事件的纯 http(s) 链接（留给宿主 Markdown 归一化后可正常点击）。 */
+function isPlainSafeLinkAttrs(attrSlice: string): boolean {
+  let i = 0
+  const len = attrSlice.length
+  let href: string | null = null
+  while (i < len) {
+    while (i < len && (isHtmlSpace(attrSlice[i]) || attrSlice[i] === '/')) i++
+    if (i >= len) break
+    const nameStart = i
+    while (i < len && !isHtmlSpace(attrSlice[i]) && attrSlice[i] !== '=' && attrSlice[i] !== '/') i++
+    const name = attrSlice.slice(nameStart, i).toLowerCase()
+    if (!name || !PLAIN_CENTER_LINK_ATTRS.has(name)) return false
+    while (i < len && isHtmlSpace(attrSlice[i])) i++
+    let value = ''
+    if (i < len && attrSlice[i] === '=') {
+      i++
+      while (i < len && isHtmlSpace(attrSlice[i])) i++
+      if (i >= len) return false
+      const q = attrSlice[i]!
+      if (q === '"' || q === "'") {
+        i++
+        const valStart = i
+        const close = attrSlice.indexOf(q, i)
+        if (close < 0) return false
+        value = attrSlice.slice(valStart, close)
+        i = close + 1
+      } else {
+        const valStart = i
+        while (i < len && !isHtmlSpace(attrSlice[i])) i++
+        value = attrSlice.slice(valStart, i)
+      }
+    }
+    if (name === 'href') href = value.trim()
+  }
+  return href !== null && /^https?:\/\/[^\s/<>]+/i.test(href) && !/[\r\n\t\u0000-\u001f\u007f<>]/.test(href)
+}
+
+/**
+ * 判定紧跟纯 `<details>` 之后的 `<style>` 是否仅面向后续非 `<details>` HTML 卡片：
+ * 不含面向 `details`/`summary`/`body`/`html`/`:root`/通配符 `*`/`@import` 的选择器，且其后紧邻另一张真实卡面。
+ */
+function isCardOwnedFollowingStyle(text: string, styleStart: number): boolean {
+  let cursor = styleStart
+  let sawStyle = false
+  for (let steps = 0; steps < 8 && cursor < text.length; steps++) {
+    const skip = /^(?:\s|<!--[\s\S]*?-->)*/.exec(text.slice(cursor))![0]!.length
+    cursor += skip
+    if (cursor >= text.length) return false
+    const tokens = new RegExp(HTML_TAGS.source, HTML_TAGS.flags)
+    tokens.lastIndex = cursor
+    const m = tokens.exec(text)
+    if (!m || m.index !== cursor) return false
+    const raw = m[0]
+    if (raw.startsWith('<!--')) { cursor = tokens.lastIndex; continue }
+    const tag = m[1]?.toLowerCase()
+    const closing = raw.startsWith('</')
+    if (!tag || closing) return false
+    if (tag === 'style') {
+      const contentStart = tokens.lastIndex
+      const styleEnd = findHtmlOpaqueEnd(text, contentStart, 'style')
+      if (styleEnd === null) return false
+      const cssEnd = text.lastIndexOf('</', styleEnd)
+      const css = text.slice(contentStart, cssEnd >= contentStart ? cssEnd : styleEnd)
+      if (DETAILS_TARGETING_STYLE_RE.test(css)) return false
+      sawStyle = true
+      cursor = styleEnd
+      continue
+    }
+    if (!sawStyle) return false
+    return (HTML_CARD_CONTAINERS.has(tag) && tag !== 'details')
+      || tag === 'script'
+      || tag === 'html'
+      || tag === 'body'
+      || (tag === 'center' && isHtmlCardCenter(text, tokens.lastIndex, raw))
+  }
+  return false
+}
+
 /**
  * 判定 `<center>` 是否包裹 HTML 卡面：
  * 带属性的 `<center style=...>` 或内含 HTML 容器/样式元素时交给沙箱 iframe；
@@ -116,9 +197,12 @@ function isHtmlCardCenter(text: string, openEnd: number, rawOpen: string): boole
         hasHtmlCardContent = true
       } else if (STYLED_HTML_TAG_NAMES.has(nested)) {
         const attrSlice = raw.slice(1 + nested.length, raw.length - (isTagSelfClosing(raw) ? 2 : 1)).trim()
-        // 带布局/样式属性的子元素（如 `<img width="200">`/`<h2 style=...>`）保留给 iframe 还原排版。
+        // 带布局/样式属性的子元素（如 `<img width="200">`/`<h2 style=...>`）保留给 iframe 还原排版；
+        // 纯 `http(s)` 图片与纯 `http(s)` 链接留给宿主 Markdown 归一化，避免链接困在无 allow-popups 沙箱内无法点击。
         if (nested === 'img') {
           if (/\b(?:width|height|style|class|align|border|hspace|vspace)\s*=/i.test(attrSlice)) hasHtmlCardContent = true
+        } else if (nested === 'a') {
+          if (attrSlice.length > 0 && !isPlainSafeLinkAttrs(attrSlice)) hasHtmlCardContent = true
         } else if (attrSlice.length > 0) {
           hasHtmlCardContent = true
         }
@@ -129,7 +213,13 @@ function isHtmlCardCenter(text: string, openEnd: number, rawOpen: string): boole
 }
 
 /** 前瞻单块 `<details>` 边界，并与 `plainDetails` 同口径校验是否可安全走原生折叠。 */
-function isPlainDetailsCandidate(text: string, openStart: number, openEnd: number, rawOpen: string): boolean {
+function isPlainDetailsCandidate(
+  text: string,
+  openStart: number,
+  openEnd: number,
+  rawOpen: string,
+  hasPrecedingHtml = false,
+): boolean {
   if (!PLAIN_DETAILS_OPEN_RE.test(rawOpen)) return false
   const tokens = new RegExp(HTML_TAGS.source, HTML_TAGS.flags)
   tokens.lastIndex = openEnd
@@ -156,9 +246,15 @@ function isPlainDetailsCandidate(text: string, openStart: number, openEnd: numbe
       if (closing) {
         if (--depth === 0) {
           const closeEnd = tokens.lastIndex
-          // 若紧跟（可跨 HTML 注释）<style>/<script>，仍留在同一 HTML 片段里共享样式与脚本。
-          const tail = text.slice(closeEnd).replace(/^(?:\s|<!--[\s\S]*?-->)*/, '')
-          if (/^<(?:style|script)(?=[\s/>])/i.test(tail)) return false
+          // 若紧跟（可跨 HTML 注释）<style>/<script>，默认留在同一 HTML 片段里共享样式与脚本；
+          // 但前无其它卡面且后置 <style> 只面向紧随其后的独立卡片（如 `<details>...</details><style>.card{...}</style><div class="card">`）时允许拆分。
+          const skip = /^(?:\s|<!--[\s\S]*?-->)*/.exec(text.slice(closeEnd))![0]!.length
+          const tailStart = closeEnd + skip
+          const tail = text.slice(tailStart)
+          if (/^<script(?=[\s/>])/i.test(tail)) return false
+          if (/^<style(?=[\s/>])/i.test(tail) && (hasPrecedingHtml || !isCardOwnedFollowingStyle(text, tailStart))) {
+            return false
+          }
           return isPlainDetailsStructure(text.slice(openStart, closeEnd))
         }
       } else if (!isTagSelfClosing(raw)) {
@@ -337,6 +433,7 @@ export function findHtmlFragment(text: string, code?: ReturnType<typeof markdown
         if ((tag !== 'style' && tag !== 'script') || indented) {
           if (end >= 0) break
         } else {
+          if (end >= 0 && onlyPlainDetails && tag === 'style' && isCardOwnedFollowingStyle(text, at)) break
           if (start < 0) start = inertStart >= 0 ? inertStart : at
           end = tokens.lastIndex
           hasPrelude = true
@@ -381,13 +478,13 @@ export function findHtmlFragment(text: string, code?: ReturnType<typeof markdown
       // 独立的纯文本/Markdown <details> 与相邻非 <details> 卡片拆分，避免把原生折叠块拽进 iframe。
       if (end >= 0) {
         if (onlyPlainDetails) {
-          if (tag !== 'details' || !isPlainDetailsCandidate(text, at, tokens.lastIndex, raw)) break
-        } else if (!hasPrelude && tag === 'details' && isPlainDetailsCandidate(text, at, tokens.lastIndex, raw)) {
+          if (tag !== 'details' || !isPlainDetailsCandidate(text, at, tokens.lastIndex, raw, false)) break
+        } else if (!hasPrelude && tag === 'details' && isPlainDetailsCandidate(text, at, tokens.lastIndex, raw, true)) {
           break
         }
       } else {
         onlyPlainDetails = inertStart < 0 && !hasPrelude && tag === 'details'
-          && isPlainDetailsCandidate(text, at, tokens.lastIndex, raw)
+          && isPlainDetailsCandidate(text, at, tokens.lastIndex, raw, false)
       }
       root = tag; depth = 1
       if (start < 0) {

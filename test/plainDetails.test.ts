@@ -5,6 +5,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { formatPlainDetailsText, isPlainDetailsHtml, parsePlainDetailsBlocks } from '../src/core/plainDetails.js'
+import { isPlainDetailsStructure } from '../src/core/plainDetailsSyntax.js'
 
 describe('parsePlainDetailsBlocks', () => {
   it('解析单个与连续多个纯文本/Markdown 折叠块', () => {
@@ -640,6 +641,20 @@ describe('parsePlainDetailsBlocks', () => {
       summary: '段落',
       children: [{ kind: 'markdown', text: '第一段\n\n第二段' }],
     }])
+  })
+
+  it('isPlainDetailsStructure 与 parsePlainDetailsBlocks 对非独立伪标签及逆序独占伪标签保持严格同口径', () => {
+    const samples: Array<[string, boolean]> = [
+      ['<details><summary>标题</summary>\n效果：<custom tag> 说明\n</details>', false],
+      ['<details><summary>标题\n\n正文 <custom tag> 测试\n</details>', false],
+      ['<details><summary>标题</summary>\n第一行</status1>\n<status1>\n</details>', true],
+      ['<details><summary>标题</summary>\n<foo>正文</foo>\n<foo>\n</details>', true],
+      ['<details><summary>外层</summary>\n第一行</status1>\n<details><summary>内层</summary><status1>\n</details>\n</details>', false],
+    ]
+    for (const [sample, expected] of samples) {
+      expect(isPlainDetailsStructure(sample)).toBe(expected)
+      expect(parsePlainDetailsBlocks(sample) !== null).toBe(expected)
+    }
   })
 })
 

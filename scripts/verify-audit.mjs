@@ -11,16 +11,10 @@ import { fileURLToPath } from 'node:url'
 
 /**
  * 临时受控的开发依赖链未修复公告表：
- * - GHSA-fc5q-39xc-vjpf（CVE-2026-112366）：picomatch <=4.0.7 单分支重复 extglob ReDoS。
- *   核对时 npm 最新版本仍为 4.0.7（first_patched_version = null），仅存在于 vitest/vite 与宿主开发包链，
- *   不进入插件运行依赖、lib/ 或发布 tarball。一旦上游发布新版本使公告范围不再为 `<=4.0.7`，守卫立即报错提醒升级。
+ * 当前为空（生产运行依赖与开发锁文件均保持 0 项已知漏洞、0 项豁免）。
+ * 历史临时条目 GHSA-fc5q-39xc-vjpf（picomatch <=4.0.7）已于 2026-11-18 被 GitHub 官方撤回并清理。
  */
-export const TEMPORARY_UNPATCHED_DEV_ADVISORIES = Object.freeze({
-  'GHSA-fc5q-39xc-vjpf': Object.freeze({
-    packageName: 'picomatch',
-    unpatchedRange: '<=4.0.7',
-  }),
-})
+export const TEMPORARY_UNPATCHED_DEV_ADVISORIES = Object.freeze({})
 
 const GHSA_URL_RE = /\/advisories\/(GHSA-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4})(?:$|[/?#])/i
 

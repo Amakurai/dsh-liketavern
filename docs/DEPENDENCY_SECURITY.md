@@ -1,8 +1,13 @@
 # 依赖安全记录
 
-本记录说明依赖告警的处理结果与剩余边界，最近复核日期为 2026-11-18。生产运行依赖审计（`npm audit --omit=dev --package-lock-only`）保持 **0 项已知漏洞**；开发锁文件的上游未修复公告由 `npm run audit:check`（`scripts/verify-audit.mjs`）执行范围绑定的自过期受控校验。审计或测试通过都不能解释为不存在未知漏洞。
+本记录说明依赖告警的处理结果与剩余边界，最近复核日期为 2026-11-24。生产运行依赖审计（`npm audit --omit=dev --package-lock-only`）与全量开发锁文件审计（`npm run audit:check`，即 `scripts/verify-audit.mjs`）当前均保持 **0 项已知漏洞、0 项临时豁免**。审计或测试通过都不能解释为不存在未知漏洞。
 
-## 2026-11-18 开发链未修复公告受控校验（picomatch）
+## 2026-11-24 清理已撤回的 picomatch 临时豁免与常规依赖复核
+
+- **移除过期临时豁免**：GitHub Advisory Database 已于 2026-11-18 撤回 [GHSA-fc5q-39xc-vjpf](https://github.com/advisories/GHSA-fc5q-39xc-vjpf)（`picomatch <= 4.0.7`）。现已清空 `scripts/verify-audit.mjs` 中的 `TEMPORARY_UNPATCHED_DEV_ADVISORIES`，同时保留结构化双审计守卫与自过期校验框架，默认恢复生产与全量开发锁文件零豁免门禁。
+- **常规依赖同步复核**：同步合并 `semver` `7.8.5 → 7.8.6`、开发链 `@modelcontextprotocol/client`（含 `core`）`2.3.1 → 2.4.0`、`immer` `10.1.1 → 10.2.0`、`zustand` `4.4.7 → 4.5.7`（对齐宿主 `~4.5.7`）。上述更新均不含安装脚本，未变更 `lib/vendor/*`，`npm run audit:check` 与 `test/dependencySecurity.test.ts` 通过。
+
+## 2026-11-18 开发链未修复公告受控校验（picomatch，已于 2026-11-24 清理）
 
 GitHub Advisory Database 于 2026-11-17 更新 [GHSA-fc5q-39xc-vjpf](https://github.com/advisories/GHSA-fc5q-39xc-vjpf)（CVE-2026-112366）：`picomatch` `<= 4.0.7` 在解析单分支重复 extglob 模式时存在指数级回溯（ReDoS）风险，核对时公开 npm 最新版本仍为 `4.0.7`（`first_patched_version` 为空，尚无任何已发布修复版本）。
 

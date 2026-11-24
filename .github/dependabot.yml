@@ -36,7 +36,9 @@ updates:
       - dependency-name: "markdown-it*"
       - dependency-name: "yaml"
       - dependency-name: "zod"
-      # 客户端外部化依赖与测试运行器跟随宿主 React 18 / store 基线或锁定主版本 API，跨大版本需人工评估。
+      # 客户端外部化依赖、Node 24 类型基线与测试运行器跟随宿主 React 18 / store 基线或锁定主版本 API，跨大版本需人工评估。
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
       - dependency-name: "react"
         update-types: ["version-update:semver-major"]
       - dependency-name: "react-dom"

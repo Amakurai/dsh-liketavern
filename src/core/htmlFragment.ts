@@ -380,7 +380,7 @@ export function findHtmlFragment(text: string, code?: ReturnType<typeof markdown
   // 属性引号内的 > 或 </div> 不参与闭合计数；各分支首字符互斥，避免嵌套回溯。
   const tokens = /<!--[\s\S]*?(?:-->|$)|<!doctype\s+html\b[^>]*>|<\/?([A-Za-z][A-Za-z0-9:-]*)(?=[\s/>])(?:[^"'<>]|"[^"]*"|'[^']*')*>|`+|~{3,}/gi
   let root = '', depth = 0, start = -1, end = -1, inertStart = -1, inertEnd = -1
-  let hasPrelude = false, onlyPlainDetails = false
+  let hasPrelude = false, onlyPlainDetails = false, hasBody = false
   for (let token = tokens.exec(text); token; token = tokens.exec(text)) {
     const raw = token[0], at = token.index
     if (!depth && end >= 0 && text.slice(end, at).trim()) break
@@ -470,6 +470,7 @@ export function findHtmlFragment(text: string, code?: ReturnType<typeof markdown
         if (end >= 0 && onlyPlainDetails) break
         if(start<0){start=inertStart>=0?inertStart:at;if(inertStart>=0)hasPrelude=true}
         end = tokens.lastIndex
+        hasBody = true
         inertStart = inertEnd = -1
         continue
       }
@@ -494,9 +495,9 @@ export function findHtmlFragment(text: string, code?: ReturnType<typeof markdown
       inertStart = inertEnd = -1
     } else if (tag === root) {
       if (closing) {
-        if (--depth === 0) end = tokens.lastIndex
+        if (--depth === 0) { end = tokens.lastIndex; hasBody = true }
       } else if (!isTagSelfClosing(raw)) depth++
     }
   }
-  return end < 0 ? null : { start, end }
+  return end < 0 || (depth > 0 && !hasBody) ? null : { start, end }
 }

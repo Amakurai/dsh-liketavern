@@ -9,6 +9,7 @@ import { safeHostRange } from '../core/hostVersion.js'
 import { BACKUP_LIMITS, BackupError, ancestorChainAbove, assertAbsent, assertDirectory, assertSeparate, boundedJson, checkedPath,
   createDirectories, discardTemporary, fail, inventory, isDependencyPath, safeRelative, transferFile, type BackupEntry } from './backupFiles.js'
 import { isRecord } from '../core/guards.js'
+import { safeAssetFileId } from './state.js'
 
 export interface BackupManifest {
   schemaVersion: 1
@@ -97,10 +98,15 @@ async function references(home: string, entries: BackupEntry[]): Promise<DoctorI
   const files = new Map(entries.filter(entry => entry.kind === 'file').map(entry => [entry.path, entry]))
   const paths = new Set(files.keys())
   const issues = new Map<string, DoctorIssue>()
+  const candidateCache = new Map<string, { primary: string | null; sourceId: string | null } | null>()
   const add = (code: string) => { const found = issues.get(code); if (found) found.count++; else issues.set(code, { code, severity: 'error', count: 1 }) }
+  const field = (raw: Record<string, unknown>, key: string): string | null => {
+    const value = raw[key]
+    return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null
+  }
   let budget = 64 * 1024 ** 2
   for (const entry of entries) {
-    if (entry.kind !== 'file' || !/^dsh-tavern\/sessions\/[^/]+\.json$/.test(entry.path)) continue
+    if (entry.kind !== 'file' || !/^dsh-tavern\/sessions\/[^/]+\.json$/i.test(entry.path)) continue
     budget -= entry.size
     if (budget < 0) fail('REFERENCE_CHECK_LIMIT')
     let binding: ReturnType<typeof parseSessionBinding>
@@ -119,14 +125,18 @@ async function references(home: string, entries: BackupEntry[]): Promise<DoctorI
       else {
         budget -= files.get(story)!.size
         if (budget < 0) fail('REFERENCE_CHECK_LIMIT')
-        const metadata = await boundedJson(checkedPath(home, story), 1024 * 1024)
+        let metadata: unknown = null
+        try { metadata = await boundedJson(checkedPath(home, story), 1024 * 1024) }
+        catch (error) {
+          if (error instanceof BackupError && error.code !== 'INVALID_JSON') throw error
+        }
         if (!isRecord(metadata) || metadata.sessionId !== binding.sessionId) add('BINDING_STORY_IDENTITY_INVALID')
       }
     }
     for (const [id, directory] of [[binding.presetId, 'library/presets'], [binding.personaId, 'personas'],
       ...[...binding.lorebookIds, ...(binding.characterLorebookIds ?? []), binding.characterLorebookId].map(id => [id, 'library/lorebooks'])] as Array<[string | null, string]>) {
       if (!id || (directory === 'library/lorebooks' && id === '@dsh/character')) continue
-      const safe = id.replace(/[^A-Za-z0-9_一-鿿.-]/g, '_')
+      const safe = safeAssetFileId(id)
       const baseFile = `dsh-tavern/${directory}/${safe}.json`
       if (safe === id) {
         if (!paths.has(baseFile)) add('BINDING_ASSET_MISSING')
@@ -136,14 +146,22 @@ async function references(home: string, entries: BackupEntry[]): Promise<DoctorI
       let matches = 0, fallback = false
       for (const [candidate, file] of files) {
         if (candidate !== baseFile && (!candidate.startsWith(prefix) || !/^\d+\.json$/.test(candidate.slice(prefix.length)))) continue
-        budget -= file.size
-        if (budget < 0) fail('REFERENCE_CHECK_LIMIT')
-        let raw: unknown = null
-        try { raw = await boundedJson(checkedPath(home, candidate), 16 * 1024 * 1024) }
-        catch (error) { if (error instanceof BackupError && error.code !== 'INVALID_JSON') throw error }
-        if (!isRecord(raw)) continue
-        const identities = [raw.sourceId, raw.identifier, raw.id, raw.name].filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
-        if (identities.some(v => v.trim() === id)) matches++
+        let parsed = candidateCache.get(candidate)
+        if (parsed === undefined && !candidateCache.has(candidate)) {
+          budget -= file.size
+          if (budget < 0) fail('REFERENCE_CHECK_LIMIT')
+          let raw: unknown = null
+          try { raw = await boundedJson(checkedPath(home, candidate), 16 * 1024 * 1024) }
+          catch (error) { if (error instanceof BackupError && error.code !== 'INVALID_JSON') throw error }
+          parsed = isRecord(raw)
+            ? { primary: field(raw, 'identifier') ?? field(raw, 'id') ?? field(raw, 'name'), sourceId: field(raw, 'sourceId') }
+            : null
+          candidateCache.set(candidate, parsed)
+        }
+        if (!parsed) continue
+        const trimmedId = id.trim()
+        const identities = [parsed.sourceId, parsed.primary].filter((v): v is string => v !== null)
+        if (identities.some(v => v === trimmedId)) matches++
         else if (candidate === baseFile && identities.length === 0) fallback = true
       }
       if (!(matches === 1 || (matches === 0 && fallback))) add('BINDING_ASSET_MISSING')

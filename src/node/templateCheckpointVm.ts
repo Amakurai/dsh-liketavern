@@ -12,14 +12,14 @@ import { TEMPLATE_CHECKPOINT_ENGINE, TEMPLATE_CHECKPOINT_WASM_HASH, TEMPLATE_CHE
 export interface TemplateCheckpointVm {engine:QuickJSWASMModule;vm:QuickJSContext}
 interface VmBridge {
   ctx:{value:number}
-  uint32Out:{value:{ptr:number}}
+  uint32Out:{value:{ptr:number;typedArray?:unknown}}
   _BigInt?:unknown
   _Symbol?:unknown
   _SymbolIterator?:unknown
   _SymbolAsyncIterator?:unknown
-  memory:{scope:{_disposables:{value:Set<unknown>}}}
+  memory:{scope:{_disposables:{value:Set<unknown>}};newTypedArray?:(...args:unknown[])=>unknown}
   runtime:{rt:{value:number};contextMap:Map<number,unknown>;context:unknown;moduleLoader?:unknown;moduleNormalizer?:unknown;
-    hostRefs:{groups:Map<unknown,unknown>;nextId:number;freelist:unknown[]}}
+    hostRefs:{groups:Map<unknown,unknown>;nextId:number;freelist:unknown[]};memory?:{newTypedArray?:(...args:unknown[])=>unknown}}
 }
 interface EngineBridge {callbacks:{contextCallbacks:Map<number,unknown>;runtimeCallbacks:Map<number,unknown>}}
 interface Owner {engine:QuickJSWASMModule;stackPointer:()=>unknown;handles:TemplateCheckpointVmHandles}
@@ -61,6 +61,38 @@ function handles(vm:QuickJSContext):TemplateCheckpointVmHandles {
 function sameHandles(left:TemplateCheckpointVmHandles,right:TemplateCheckpointVmHandles):boolean {
   return (Object.keys(left) as Array<keyof TemplateCheckpointVmHandles>).every(key=>left[key]===right[key])
 }
+/** WASM memory.grow() 会使旧 ArrayBuffer 分离；将 typedArray 改为按当前 memory.buffer 按需重绑定视图的读取器。 */
+function bindLiveTypedArray(target:{ptr?:unknown;typedArray?:unknown}|undefined,memory:WebAssembly.Memory):void {
+  if(!target||typeof target!=='object') return
+  const initial=target.typedArray
+  if(!ArrayBuffer.isView(initial)) return
+  const ptr=typeof target.ptr==='number'?target.ptr:initial.byteOffset
+  const length=(initial as ArrayBufferView&{length:number}).length
+  const Ctor=initial.constructor as new(buffer:ArrayBuffer,byteOffset:number,length:number)=>ArrayBufferView
+  let current=initial
+  Object.defineProperty(target,'typedArray',{
+    configurable:true,
+    enumerable:true,
+    get() {
+      const buffer=memory.buffer
+      if(current.buffer!==buffer) current=new Ctor(buffer,ptr,length)
+      return current
+    },
+  })
+}
+function patchLiveTypedArrays(vm:QuickJSContext,memory:WebAssembly.Memory):void {
+  const bridge=vm as unknown as VmBridge
+  bindLiveTypedArray(bridge.uint32Out?.value,memory)
+  for(const holder of [bridge.memory,bridge.runtime?.memory]) {
+    if(!holder||typeof holder.newTypedArray!=='function') continue
+    const original=holder.newTypedArray
+    holder.newTypedArray=function(this:unknown,...args:unknown[]) {
+      const lifetime=original.apply(this,args) as {value?:{ptr?:unknown;typedArray?:unknown}}|undefined
+      if(lifetime?.value) bindLiveTypedArray(lifetime.value,memory)
+      return lifetime
+    }
+  }
+}
 function assertOwned(owner:TemplateCheckpointVm):Owner {
   const internal=owners.get(owner.vm)
   if(!internal||internal.engine!==owner.engine||!owner.vm.alive)throw new Error('模板检查点 VM 归属无效')
@@ -96,7 +128,9 @@ export async function createTemplateCheckpointVm(value?:TemplateCheckpointVmImag
   const stackPointer=exports?.Oa
   // Oa 是此精确 WASM SHA 的 stackSave 导出；唯一可变 global 为 i32 栈指针，静止值必须匹配。
   if(typeof stackPointer!=='function'||stackPointer()!==STACK_POINTER)throw new Error('模板检查点 WASM 栈布局不兼容')
-  const vm=engine.newContext(),layout=handles(vm),owner={engine,vm}
+  const vm=engine.newContext()
+  patchLiveTypedArrays(vm,memory)
+  const layout=handles(vm),owner={engine,vm}
   owners.set(vm,{engine,stackPointer:()=>stackPointer(),handles:layout})
   let memoryReplaced=false
   try {

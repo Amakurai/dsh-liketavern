@@ -1193,6 +1193,9 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
   }
 
   async saveMemory(request: { cardId: string; storyId?: string; id?: string; body: string; tags?: string[]; keys?: string[] }): Promise<TavernMethodResults['saveMemory']> {
+    if (!request.storyId && (await this.state.loadCharacter(request.cardId)) === null) {
+      throw new FloorError('card-not-found', `角色 ${request.cardId} 不存在`)
+    }
     // 面板/服务层非会话写路径一律走 plainWorkspace（floor 恒 null，绝不记 WAL）：
     // 生成进行中的面板编辑若走携带楼层的实例，会被记进当前楼层 WAL、回退时静默改回旧值。
     const ws = await this.state.plainWorkspace(request.cardId, request.storyId)
@@ -1214,6 +1217,9 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
   }
 
   async deleteMemory(request: { cardId: string; storyId?: string; id: string }): Promise<TavernMethodResults['deleteMemory']> {
+    if (!request.storyId && (await this.state.loadCharacter(request.cardId)) === null) {
+      throw new FloorError('card-not-found', `角色 ${request.cardId} 不存在`)
+    }
     // 面板写路径走 plainWorkspace（理由同 saveMemory）。
     const ws = await this.state.plainWorkspace(request.cardId, request.storyId)
     return withWorkspaceLock(ws.fs.root, async () => {
@@ -1249,6 +1255,9 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
   }
 
   async compressMemories(request: { cardId: string; storyId?: string }): Promise<TavernMethodResults['compressMemories']> {
+    if (!request.storyId && (await this.state.loadCharacter(request.cardId)) === null) {
+      throw new FloorError('card-not-found', `角色 ${request.cardId} 不存在`)
+    }
     // 面板写路径走 plainWorkspace（理由同 saveMemory）。
     const ws = await this.state.plainWorkspace(request.cardId, request.storyId)
     return withWorkspaceLock(ws.fs.root, async () => {
@@ -1279,6 +1288,9 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
   }
 
   async revokeWorldDelta(request: { cardId: string; storyId?: string; id: string }): Promise<TavernMethodResults['revokeWorldDelta']> {
+    if (!request.storyId && (await this.state.loadCharacter(request.cardId)) === null) {
+      throw new FloorError('card-not-found', `角色 ${request.cardId} 不存在`)
+    }
     // 面板写路径走 plainWorkspace（理由同 saveMemory）。
     const ws = await this.state.plainWorkspace(request.cardId, request.storyId)
     return withWorkspaceLock(ws.fs.root, async () => {

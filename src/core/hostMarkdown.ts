@@ -1417,10 +1417,9 @@ function normalizeBlockHtml(text: string, mask: MaskedCode): string {
       while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (lineStarts[mid]! <= pos) lo = mid; else hi = mid - 1 }
       return lo
     }
-    let replaced = false
     let pos = 0
-    const stack: Array<{ tag: ParsedTag; safe: boolean }> = []
-    let target: { open: ParsedTag; close: ParsedTag } | null = null
+    const stack: Array<{ tag: ParsedTag; safe: boolean; hasSafeChild: boolean }> = []
+    const targets: Array<{ open: ParsedTag; close: ParsedTag }> = []
     while (pos < current.length) {
       const open = current.indexOf('<', pos)
       if (open < 0) break
@@ -1430,43 +1429,47 @@ function normalizeBlockHtml(text: string, mask: MaskedCode): string {
       if (indented.has(lineOf(tag.start))) { pos = tag.end; continue }
       if (!tag.closing && !tag.selfClosing) {
         const attrs = parseSafeTagAttrs(tag.rawAttrs)
-        stack.push({ tag, safe: attrs !== null && hasOnlyAttrs(attrs, QUOTE_SAFE_ATTRS) })
+        stack.push({ tag, safe: attrs !== null && hasOnlyAttrs(attrs, QUOTE_SAFE_ATTRS), hasSafeChild: false })
       } else if (tag.closing && stack.length > 0) {
         const opened = stack.pop()!
-        if (opened.safe) {
-          target = { open: opened.tag, close: tag }
-          break
+        if (opened.safe && !opened.hasSafeChild) {
+          targets.push({ open: opened.tag, close: tag })
+          if (stack.length > 0) stack[stack.length - 1]!.hasSafeChild = true
+        } else if (opened.hasSafeChild && stack.length > 0) {
+          stack[stack.length - 1]!.hasSafeChild = true
         }
       }
       pos = tag.end
     }
-    if (!target) break
-    const openLineIdx = lineOf(target.open.start)
-    const outerPrefix = lineLayout(lines[openLineIdx]!).quotePrefix
-    const inner = current.slice(target.open.end, target.close.start).replace(/^\s*\r?\n/, '').replace(/\r?\n[ \t]*$/, '').trim()
-    const quotedInner = inner
-      ? inner.split(/\r?\n/).map(l => {
-          const clean = outerPrefix && l.startsWith(outerPrefix) ? l.slice(outerPrefix.length) : l
-          return clean.trim() ? `${outerPrefix}> ${clean.trimStart()}` : `${outerPrefix}>`
-        }).join('\n')
-      : ''
-    const before = current.slice(0, target.open.start)
-    const after = current.slice(target.close.end)
-    const beforeOnLine = before.slice(lineStarts[openLineIdx]!).slice(outerPrefix.length)
-    const needLead = beforeOnLine.trim() !== '' ? '\n\n' : ''
-    let trail = ''
-    if (after) {
-      if (!/^[ \t]*\r?\n/.test(after)) {
-        trail = `\n\n${outerPrefix}`
-      } else if (!/^[ \t]*\r?\n[ \t]*(?:\r?\n|$)/.test(after)) {
-        // CommonMark 的引用块懒延续会把紧跟的非空行吸入 blockquote，需补一个空行分隔。
-        trail = `\n${outerPrefix.trimEnd()}`
+    if (targets.length === 0) break
+    // 同一趟替换全部互不重叠的最内层引用块，避免超过 4 个平级引用时后半截退化为原文 HTML。
+    for (let t = targets.length - 1; t >= 0; t--) {
+      const target = targets[t]!
+      const openLineIdx = lineOf(target.open.start)
+      const outerPrefix = lineLayout(lines[openLineIdx]!).quotePrefix
+      const inner = current.slice(target.open.end, target.close.start).replace(/^\s*\r?\n/, '').replace(/\r?\n[ \t]*$/, '').trim()
+      const quotedInner = inner
+        ? inner.split(/\r?\n/).map(l => {
+            const clean = outerPrefix && l.startsWith(outerPrefix) ? l.slice(outerPrefix.length) : l
+            return clean.trim() ? `${outerPrefix}> ${clean.trimStart()}` : `${outerPrefix}>`
+          }).join('\n')
+        : ''
+      const before = current.slice(0, target.open.start)
+      const after = current.slice(target.close.end)
+      const beforeOnLine = before.slice(lineStarts[openLineIdx]!).slice(outerPrefix.length)
+      const needLead = beforeOnLine.trim() !== '' ? '\n\n' : ''
+      let trail = ''
+      if (after) {
+        if (!/^[ \t]*\r?\n/.test(after)) {
+          trail = `\n\n${outerPrefix}`
+        } else if (!/^[ \t]*\r?\n[ \t]*(?:\r?\n|$)/.test(after)) {
+          // CommonMark 的引用块懒延续会把紧跟的非空行吸入 blockquote，需补一个空行分隔。
+          trail = `\n${outerPrefix.trimEnd()}`
+        }
       }
+      current = (needLead ? before.trimEnd() + needLead : before.slice(0, lineStarts[openLineIdx]!))
+        + quotedInner + trail + after
     }
-    current = (needLead ? before.trimEnd() + needLead : before.slice(0, lineStarts[openLineIdx]!))
-      + quotedInner + trail + after
-    replaced = true
-    if (!replaced) break
   }
   current = normalizeUnmatchedBlockquotes(current, mask)
 
@@ -1656,7 +1659,7 @@ function normalizeBlockHtml(text: string, mask: MaskedCode): string {
           }
         }
         const prefix = line.slice(0, layout.contentStart)
-        const emitted = working.startsWith(layout.quotePrefix) ? working : prefix + working
+        const emitted = layout.quotePrefix !== '' && working.startsWith(layout.quotePrefix) ? working : prefix + working
         pushLine(emitted, br)
         // 行尾闭合 </p> 或行尾 <hr> 后紧跟另一段落时确保空行分隔。
         if (endsWithBlockBreak) {
@@ -1831,7 +1834,7 @@ function convertSafeInlineFormatting(text: string, mask: MaskedCode): string {
           pos = tag ? tag.end : open + 1
           continue
         }
-        const spec = INLINE_FORMAT_MAP[tag.name]
+        const spec = Object.hasOwn(INLINE_FORMAT_MAP, tag.name) ? INLINE_FORMAT_MAP[tag.name] : undefined
         if (!spec) { pos = tag.end; continue }
         const attrs = parseSafeTagAttrs(tag.rawAttrs)
         if (!attrs || !hasOnlyAttrs(attrs, SPAN_SAFE_ATTRS)) { pos = tag.end; continue }
@@ -1939,7 +1942,7 @@ function convertSafeInlineFormatting(text: string, mask: MaskedCode): string {
         pos = tag ? tag.end : open + 1
         continue
       }
-      const spec = INLINE_FORMAT_MAP[tag.name]
+      const spec = Object.hasOwn(INLINE_FORMAT_MAP, tag.name) ? INLINE_FORMAT_MAP[tag.name] : undefined
       if (!spec) { pos = tag.end; continue }
       const attrs = parseSafeTagAttrs(tag.rawAttrs)
       if (!attrs || !hasOnlyAttrs(attrs, SPAN_SAFE_ATTRS)) { pos = tag.end; continue }
@@ -2002,10 +2005,11 @@ function convertSafeInlineFormatting(text: string, mask: MaskedCode): string {
         replacements.set(j, startLayout.quotePrefix + formatted)
         nonEmptyCount++
       }
+      let endTail = ''
       if (valid) {
         const endLine = lines[closeLine]!
         const endBody = endLine.slice(startLayout.quotePrefix.length, closeMatch.index)
-        const endTail = endLine.slice(closeEnd)
+        endTail = endLine.slice(closeEnd)
         if (endBody.trim()) {
           const formatted = formatInlineSegment(endBody, ' ', outerAfter, spec)
           if (formatted === null) valid = false
@@ -2020,7 +2024,7 @@ function convertSafeInlineFormatting(text: string, mask: MaskedCode): string {
       if (!valid || nonEmptyCount === 0) { pos = tag.end; continue }
       for (const [idx, nextLine] of replacements) lines[idx] = nextLine
       multiChanged = true
-      i = lines[closeLine]!.slice(closeEnd).includes('<') ? closeLine - 1 : closeLine
+      i = endTail.includes('<') ? closeLine - 1 : closeLine
       break
     }
   }

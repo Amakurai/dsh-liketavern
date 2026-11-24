@@ -3,7 +3,7 @@ export const TEMPLATE_ASSETS=String.raw`
 const assetIdentity=(text,charName=input.char)=>String(text).replace(/\{\{(char|user)\}\}/gi,(_,name)=>name.toLowerCase()==='char'?charName:input.user);
 function assetLocals(parent,data) {
   const inherited={};
-  if(parent && typeof parent==='object') for(const key of Object.keys(parent)) {
+  if(parent && typeof parent==='object' && parent!==globalThis && parent!==api) for(const key of Object.keys(parent)) {
     if(!Object.hasOwn(api.defines,key)) inherited[key]=parent[key];
   }
   return {...inherited,...data};

@@ -129,7 +129,8 @@ async function startTavern(ctx: Context, config: ReturnType<typeof Config>): Pro
     const currentLive = ctx.sessions.get(sessionId as Session['id'])
     if (currentLive && currentLive !== initialLive) return
     if (persisted) {
-      if (state.openFloors.get(sessionId)?.storyId) {
+      const open = state.openFloors.get(sessionId)
+      if (open?.storyId && !open.endedWithError) {
         state.pendingRuntimeClear.add(sessionId)
         state.clearStandingPins(sessionId)
       } else {

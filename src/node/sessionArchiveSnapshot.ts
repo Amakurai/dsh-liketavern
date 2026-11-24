@@ -141,6 +141,14 @@ export async function snapshotSessionArchive(ctx: Context, state: TavernState, s
       if (cardPaths.length + storyPaths.length + globalPaths.length > SESSION_ARCHIVE_MAX_FILES) {
         throw new Error(`会话迁移文件数量超过 ${SESSION_ARCHIVE_MAX_FILES} 个上限，请使用全量备份`)
       }
+      if (binding.presetId && !(await state.loadPreset(binding.presetId, true))) throw new Error('会话引用的预设无效，无法导出')
+      for (const path of globalPaths) {
+        if (path.startsWith('library/lorebooks/') && path.endsWith('.json')) {
+          await state.loadLorebookEntries(path.slice('library/lorebooks/'.length, -'.json'.length), 'global')
+        }
+      }
+      if (globalPaths.includes('regex/rules.json')) await state.getRegexRulesSnapshot()
+      if (globalPaths.includes('library/helper-scripts.json')) await state.getHelperScriptLibrary({ type: 'global' })
       const refs = sessionAttachmentReferences(session.events)
       if (refs.images.size + refs.files.size > SESSION_ARCHIVE_MAX_FILES) {
         throw new Error(`会话迁移附件数量超过 ${SESSION_ARCHIVE_MAX_FILES} 个上限，请使用全量备份`)

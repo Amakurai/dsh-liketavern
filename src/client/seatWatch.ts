@@ -70,6 +70,9 @@ export function installTavernSeatWatch(ctx: ClientContext, views: Pick<SessionVi
 
   const check = () => {
     timer = undefined
+    if (views.hasShownSession()) {
+      armed = false
+    }
     const tavern = seatShowsTavern()
     if (tavern === null) return // chip 不在树上：保持上次状态，不算变化
     if (!baselineDone) {

@@ -399,11 +399,11 @@ export function childWalLineage(
   ]
 }
 
-/** seed 中最大的 turn/start；空前缀表示没有继承源会话楼层。 */
+/** seed 中最大的 turn/start（或开场白 turn 0）；空前缀表示没有继承源会话楼层。 */
 export function inheritedThroughTurn(seed: readonly SessionEvent[]): number | null {
   let max: number | null = null
   for (const event of seed) {
-    if (event.type !== 'turn/start') continue
+    if (event.type !== 'turn/start' && !(event.type === 'assistant/message' && (event.data as { turn?: unknown }).turn === 0)) continue
     const turn = (event.data as { turn?: unknown }).turn
     if (typeof turn === 'number' && Number.isSafeInteger(turn) && turn >= 0) max = Math.max(max ?? turn, turn)
   }
@@ -464,7 +464,7 @@ async function prepareBranchStory(
   childId: string,
   seed: readonly SessionEvent[],
   rollbackFromTurn: number | undefined,
-): Promise<void> {
+): Promise<number | null> {
   const wal = new Wal(join(fs.root, 'state', 'wal'))
   const floors = (await wal.listFloors()).filter((item) => !item.rolledBack).map((item) => item.floor)
   assertWalLineageComplete(floors, binding, sourceId)
@@ -492,6 +492,14 @@ async function prepareBranchStory(
     }
   }
   await rebuildIndex(fs, estimateTokens)
+  const remainingFloors = (await wal.listFloors()).filter((item) => !item.rolledBack).map((item) => item.floor)
+  let retainedMaxTurn: number | null = null
+  for (const floor of remainingFloors) {
+    const match = /^(.+)#t([0-9]+)$/.exec(floor)
+    const turn = match ? Number(match[2]) : NaN
+    if (Number.isSafeInteger(turn) && turn >= 0) retainedMaxTurn = Math.max(retainedMaxTurn ?? turn, turn)
+  }
+  return retainedMaxTurn
 }
 
 /** 插件分支在 create 之后才落绑定；宿主 session/created 期间据此把它们与原生分支区分开。 */
@@ -508,15 +516,16 @@ async function forkAt(
   const seed = options?.seedOverride ?? sessionPrefixEvents(source.snapshotEvents(), boundary)
   const childId = newChildId()
   // 先在独立草稿恢复剧情；失败不会创建会话，也不会改动来源分支。
+  let retainedMaxTurn: number | null = null
   const storyId = await state.forkStory(binding, childId, async (fs) => {
-    await prepareBranchStory(fs, binding, source.id, childId, seed, options?.rollbackFromTurn)
+    retainedMaxTurn = await prepareBranchStory(fs, binding, source.id, childId, seed, options?.rollbackFromTurn)
     await options?.prepareEdits?.(fs,childId)
     await options?.verifySource?.()
   },options?.beforePublish)
-  const throughTurn = options?.rollbackFromTurn === 0 ? null : inheritedThroughTurn(seed)
-
-
-
+  const seedTurn = options?.rollbackFromTurn === 0 ? null : inheritedThroughTurn(seed)
+  const throughTurn = retainedMaxTurn !== null
+    ? Math.max(seedTurn ?? retainedMaxTurn, retainedMaxTurn)
+    : seedTurn
   const walLineage = childWalLineage(binding, source.id, throughTurn)
   let created: { dispose(): Promise<void> } | undefined
   pluginForkIds.add(childId)
@@ -700,7 +709,7 @@ export async function adoptHostFork({ ctx, state }: FloorDeps, child: Session): 
     const inherited = Number.isSafeInteger(child.inheritedEventCount) ? child.inheritedEventCount : 0
     const throughTurn = inheritedThroughTurn(pending.prefix)
     let rollbackFromTurn = (throughTurn ?? 0) + 1
-    if (throughTurn !== null
+    if (throughTurn !== null && throughTurn >= 1
       && !pending.prefix.some(event => event.type === 'turn/end' && event.data.turn === throughTurn)
       && turnContinuesAfter(parent?.snapshotEvents().slice(inherited), throughTurn)) rollbackFromTurn = throughTurn
     pending.binding = structuredClone(binding)
@@ -715,8 +724,10 @@ export async function adoptHostFork({ ctx, state }: FloorDeps, child: Session): 
   await writeHostForkAdoption(state.paths, pending)
   const binding = pending.binding, rollbackFromTurn = pending.rollbackFromTurn!
   await assertHostForkSource(state.paths, binding)
-  const storyId = await state.forkStory(binding, child.id, fs =>
-    prepareBranchStory(fs, binding, pending.parentId, child.id, pending.prefix, rollbackFromTurn))
+  let retainedMaxTurn: number | null = null
+  const storyId = await state.forkStory(binding, child.id, async (fs) => {
+    retainedMaxTurn = await prepareBranchStory(fs, binding, pending.parentId, child.id, pending.prefix, rollbackFromTurn)
+  })
   // 快照已释放来源剧情锁；只把子绑定发布和记录清理收在 sessions 锁内，避免迟到清理删除解除凭据。
   return withWorkspaceLock(state.paths.sessions, async () => {
   try {
@@ -727,11 +738,18 @@ export async function adoptHostFork({ ctx, state }: FloorDeps, child: Session): 
       plans.delete(child.id)
       return false
     }
+    const prefixTurn = inheritedThroughTurn(pending.prefix)
+    const baseThroughTurn = rollbackFromTurn > 1
+      ? rollbackFromTurn - 1
+      : (rollbackFromTurn === 1 && prefixTurn === 0 ? 0 : null)
+    const childThroughTurn = retainedMaxTurn !== null
+      ? Math.max(baseThroughTurn ?? retainedMaxTurn, retainedMaxTurn)
+      : baseThroughTurn
     await state.saveBinding({
       ...binding,
       sessionId: child.id,
       storyId,
-      walLineage: childWalLineage(binding, pending.parentId, rollbackFromTurn > 1 ? rollbackFromTurn - 1 : null),
+      walLineage: childWalLineage(binding, pending.parentId, childThroughTurn),
     })
   } catch (error) {
     await state.discardUnboundStory(binding.cardId, storyId, child.id)

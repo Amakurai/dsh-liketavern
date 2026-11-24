@@ -26,10 +26,11 @@ export function CardDataSettings({remote,sessions}:{remote:TavernRemote;sessions
   const prefilled=useRef(false)
   useEffect(()=>{
     if(cardRestored||storyRestored||prefilled.current||cardId||!activeSessionId||typeof remote.getSessionBinding!=='function')return
-    prefilled.current=true
     let alive=true
     void cachedSessionBinding(remote,activeSessionId).then(r=>{
-      if(!alive||!r.ok||!r.value.binding?.cardId)return
+      if(!alive)return
+      prefilled.current=true
+      if(!r.ok||!r.value.binding?.cardId)return
       setCardId(prev=>prev||r.value.binding!.cardId)
       if(r.value.binding.storyId)setStoryId(prev=>prev||r.value.binding!.storyId!)
     }).catch(()=>{})

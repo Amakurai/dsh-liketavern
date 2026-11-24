@@ -33,6 +33,6 @@ export class TemplateWorkerCache {
   clear():void {
     const current=this.current
     this.current=undefined
-    current?.sandbox.dispose()
+    try { current?.sandbox.dispose() } catch {}
   }
 }

@@ -67,6 +67,7 @@ export function installCardChatEdits(parse:(input:unknown,lookup:(id:number)=>Re
     })
     await submit(edits,option,true)
   }
-  Object.assign(root,{setChatMessages,deleteChatMessages});root.TavernHelper=Object.assign(root.TavernHelper??{},{setChatMessages,deleteChatMessages});window.addEventListener('message',receive)
-  return()=>{active=false;window.removeEventListener('message',receive);if(pending){clearTimeout(pending.timer);pending.reject(new Error('卡面已关闭，请在会话列表检查编辑结果'));pending=null}}
+  const chatEditBusy=()=>busy||branched
+  Object.assign(root,{setChatMessages,deleteChatMessages,__dshTavernChatEditBusy:chatEditBusy});root.TavernHelper=Object.assign(root.TavernHelper??{},{setChatMessages,deleteChatMessages});window.addEventListener('message',receive)
+  return()=>{active=false;if(root.__dshTavernChatEditBusy===chatEditBusy)delete root.__dshTavernChatEditBusy;window.removeEventListener('message',receive);if(pending){clearTimeout(pending.timer);pending.reject(new Error('卡面已关闭，请在会话列表检查编辑结果'));pending=null}}
 }

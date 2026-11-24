@@ -40,6 +40,8 @@ export interface RegexFilter {
   timing: RegexTiming
   /** 可选消息深度（0 = 最新真实消息）；仅在提供时按规则 minDepth/maxDepth 过滤。 */
   depth?: number
+  /** 与消息数组等长的是否计入真实聊天的标记（跳过压缩摘要/系统/合成条目）。 */
+  chatFlags?: readonly boolean[]
 }
 
 function matchesRegexDepth(rule: RegexRule, depth: number | undefined): boolean {
@@ -434,20 +436,34 @@ function replaceWithGroupTrim(text: string, re: RegExp, template: string, rule: 
     // 回调实参是 [match, ...捕获组, offset, subject]（有命名组时末尾再多一个 groups 对象）。
     // 越界的 $N 会读到 offset（数字）或整段原文，必须挡掉：原生 replace 对越界 $N 原样输出字面量。
     const groupCount = args.length - (groups ? 4 : 3)
-    return tpl.replace(/\$\$|\$&|\$(\d+)|\$<([^>]+)>/g, (_m: string, num: string | undefined, name: string | undefined) => {
+    return tpl.replace(/\$\$|\$&|\$(\d{1,2})|\$<([^>]+)>/g, (_m: string, num: string | undefined, name: string | undefined) => {
       if (_m === '$$') return '$' // 宏值中的字面美元符号，不再扫描回调返回值。
       let value: unknown
+      let trailing = ''
       if (_m === '$&') value = args[0]
       else if (num !== undefined) {
-        if (Number(num) > groupCount) return _m
-        value = args[Number(num)]
+        if (num === '0') {
+          value = args[0]
+        } else {
+          const parsed = Number(num)
+          if (parsed >= 1 && parsed <= groupCount) {
+            value = args[parsed]
+          } else if (num.length === 2) {
+            const first = Number(num[0]!)
+            if (first < 1 || first > groupCount) return _m
+            value = args[first]
+            trailing = num[1]!
+          } else {
+            return _m
+          }
+        }
       } else if (name !== undefined) {
         if (!groups) return _m
         value = groups[name]
       }
-      if (value === undefined) return '' // 未命中的组（含可选组）代入空串，对齐 ST；'' 与 '0' 是真值，必须留下
+      if (value === undefined) return trailing // 未命中的组（含可选组）代入空串，对齐 ST；'' 与 '0' 是真值，必须留下
       if (typeof value !== 'string') return _m
-      return filterCapturedGroup(value, rule, trimRes, macroCtx)
+      return filterCapturedGroup(value, rule, trimRes, macroCtx) + trailing
     })
   })
 }
@@ -656,7 +672,8 @@ export function applyRegexToMessages(
   let depthFromEnd = 0
   for (let i = n - 1; i >= 0; i--) {
     const msg = messages[i]!
-    if (msg.role === 'user' && isSyntheticUserText(msg.content)) continue
+    const isChat = filter.chatFlags ? Boolean(filter.chatFlags[i]) : (msg.role !== 'system' && !(msg.role === 'user' && isSyntheticUserText(msg.content)))
+    if (!isChat) continue
     depths[i] = depthFromEnd
     depthFromEnd++
   }

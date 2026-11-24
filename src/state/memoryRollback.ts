@@ -7,12 +7,22 @@ import { withWorkspaceLock } from './workspaceLock.js'
 /** Windows 的同名文件不区分大小写；只规范图节点身份，旧来源正文与 WAL 镜像保持原样。 */
 const memoryIdentity = caseIdentity
 
-export async function expandAffectedMemories(root: string, paths: readonly string[]): Promise<void> {
+export interface MemoryExpansionPlan {
+  readonly fs: WorkspaceFs
+  readonly restore: Map<string, string>
+  readonly sourcesToUnarchive: Set<string>
+  readonly archivedTexts: Map<string, string>
+  readonly activePresent: Set<string>
+  readonly postorder: string[]
+}
+
+/** 只读扫描并验证受影响的记忆归并谱系；缺失或循环会在写入与持久化游标前拒绝。 */
+export async function planExpandAffectedMemories(root: string, paths: readonly string[]): Promise<MemoryExpansionPlan | null> {
   const changed = new Set(paths.flatMap((path) => {
     const match = /^memory\/([^/]+)\.md$/.exec(memoryIdentity(path))
     return match && isMemoryId(match[1]) ? [memoryIdentity(match[1])] : []
   }))
-  if (!changed.size) return
+  if (!changed.size) return null
   return withWorkspaceLock(root, async () => {
   const fs = new WorkspaceFs(root, null)
   const names = new Map<string, string>()
@@ -131,19 +141,33 @@ export async function expandAffectedMemories(root: string, paths: readonly strin
       }
     }
   }
-  // 全部来源恢复后才删除归档；I/O 失败时保留摘要和原文，重试可从活跃副本继续。
-  for (const [id, original] of restore) {
-    await fs.writeText(`memory/${id}.md`, original)
-    activePresent.add(memoryIdentity(id))
-  }
-  for (const id of sourcesToUnarchive) {
-    if (archivedTexts.has(memoryIdentity(id))) await fs.delete(`memory/archive/${id}.md`)
-  }
-  // 逆后序确保所有父摘要先于共享子摘要删除，避免中途失败留下指向已删除子摘要的父级。
-  for (const id of postorder.reverse()) {
-    const idIdentity = memoryIdentity(id)
-    if (activePresent.has(idIdentity)) await fs.delete(`memory/${id}.md`)
-    if (archivedTexts.has(idIdentity)) await fs.delete(`memory/archive/${id}.md`)
-  }
+  return { fs, restore, sourcesToUnarchive, archivedTexts, activePresent, postorder }
   })
+}
+
+/** 执行已规划好的记忆归并展开：全部来源恢复后才删除归档与父摘要。 */
+export async function applyExpandAffectedMemories(root: string, plan: MemoryExpansionPlan | null): Promise<void> {
+  if (!plan) return
+  const { fs, restore, sourcesToUnarchive, archivedTexts, activePresent, postorder } = plan
+  return withWorkspaceLock(root, async () => {
+    // 全部来源恢复后才删除归档；I/O 失败时保留摘要和原文，重试可从活跃副本继续。
+    for (const [id, original] of restore) {
+      await fs.writeText(`memory/${id}.md`, original)
+      activePresent.add(memoryIdentity(id))
+    }
+    for (const id of sourcesToUnarchive) {
+      if (archivedTexts.has(memoryIdentity(id))) await fs.delete(`memory/archive/${id}.md`)
+    }
+    // 逆后序确保所有父摘要先于共享子摘要删除，避免中途失败留下指向已删除子摘要的父级。
+    for (const id of [...postorder].reverse()) {
+      const idIdentity = memoryIdentity(id)
+      if (activePresent.has(idIdentity)) await fs.delete(`memory/${id}.md`)
+      if (archivedTexts.has(idIdentity)) await fs.delete(`memory/archive/${id}.md`)
+    }
+  })
+}
+
+export async function expandAffectedMemories(root: string, paths: readonly string[]): Promise<void> {
+  const plan = await planExpandAffectedMemories(root, paths)
+  if (plan) await applyExpandAffectedMemories(root, plan)
 }

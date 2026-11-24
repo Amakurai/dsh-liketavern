@@ -10,6 +10,7 @@
  * 收纳箱只在角色根写 `.archive.json` 原子标记，不搬动工作区：已绑定会话
  * 仍可以按原 cardId/storyId 读取剧情，而新会话的普通列表不再暴露已收纳角色。
  */
+import { Buffer } from 'node:buffer'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import type { Dirent } from 'node:fs'
 import { readdir, rm } from 'node:fs/promises'
@@ -17,7 +18,7 @@ import { join } from 'node:path'
 import { compileCardRegexScripts } from '../core/regex.js'
 import { estimateTokens } from '../core/tokenize.js'
 import type { CharacterCard } from '../core/types.js'
-import { cardToStJson, embedCardInPng, hydrateStoredCard, normalizeBook, serializeStoredCard, withoutEmbeddedCharacterBook } from './card.js'
+import { cardToStJson, embedCardInPng, hydrateStoredCard, MAX_STORED_CARD_JSON_BYTES, normalizeBook, serializeStoredCard, withoutEmbeddedCharacterBook } from './card.js'
 import { evictHelperStateCache } from './helper.js'
 import { rootIdentity } from './pathIdentity.js'
 import { evictTemplateCaches } from './template.js'
@@ -161,7 +162,11 @@ export async function importCard(dataRoot: string, card: CharacterCard, opts?: I
 
     if (importWorldBook && importedCard.characterBook && importedCard.characterBook.entries.length > 0) {
       const book = { name: importedCard.characterBook.name ?? importedCard.name, entries: importedCard.characterBook.entries }
-      await fs.writeText('assets/character-book.json', JSON.stringify(book, null, 2) + '\n')
+      const bookText = JSON.stringify(book, null, 2) + '\n'
+      if (Buffer.byteLength(bookText, 'utf8') > MAX_STORED_CARD_JSON_BYTES) {
+        throw new Error(`角色内嵌世界书超过存储上限（${MAX_STORED_CARD_JSON_BYTES / 1024 / 1024}MB），未写入`)
+      }
+      await fs.writeText('assets/character-book.json', bookText)
     }
 
     const rules = compileCardRegexScripts(importedCard.regexScripts, cardId)

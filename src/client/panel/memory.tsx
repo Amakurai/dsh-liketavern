@@ -108,10 +108,11 @@ function MemorySelection(props: MemorySectionProps) {
   useEffect(() => {
     if (props.initialContext || cardRestored || storyRestored || prefilled.current || cardId) return
     if (!activeSessionId || typeof props.remote.getSessionBinding !== 'function') return
-    prefilled.current = true
     let alive = true
     void cachedSessionBinding(props.remote, activeSessionId).then((r) => {
-      if (!alive || !r.ok || !r.value.binding?.cardId) return
+      if (!alive) return
+      prefilled.current = true
+      if (!r.ok || !r.value.binding?.cardId) return
       setCardId((prev) => prev || r.value.binding!.cardId)
       if (r.value.binding.storyId) setStoredStoryId((prev) => prev || r.value.binding!.storyId!)
     }).catch(() => {})

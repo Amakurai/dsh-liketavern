@@ -3,6 +3,7 @@
  * 聚合数据目录、设置、各资产存储与工作区句柄，供 remote 服务、工具与组装管线共用。
  */
 import { basename, join } from 'node:path'
+import { Buffer } from 'node:buffer'
 import { characterEditRevision, jsonEditRevision, personaEditRevision, presetEditRevision, regexEditRevision } from '../state/characterRevision.js'
 import { createHash,randomUUID } from 'node:crypto'
 import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
@@ -13,7 +14,7 @@ import type { LlmResolvedModelInfo, LlmRuntime } from '@deepseek-ai/dsh-llm'
 import { estimateTokens } from '../core/tokenize.js'
 import { type CharacterCard, type MemoryEntry, type PromptPreset, type RegexRule, type WITimerState, type WorldDelta, type WorldInfoEntry } from '../core/types.js'
 import { compileCardRegexScripts, compilePresetRegexScripts } from '../core/regex.js'
-import { normalizeBook, parseJsonCard, parsePngCard, regexScriptsOf, applyCharacterPatch, cardToStJson, createBlankCard, embedCardInPng, serializeStoredCard, withoutEmbeddedCharacterBook } from '../state/card.js'
+import { normalizeBook, parseJsonCard, parsePngCard, regexScriptsOf, applyCharacterPatch, cardToStJson, createBlankCard, embedCardInPng, MAX_STORED_CARD_JSON_BYTES, serializeStoredCard, withoutEmbeddedCharacterBook } from '../state/card.js'
 import { parseLorebook } from '../state/lorebook.js'
 import { parseStoredPreset } from '../state/presetStore.js'
 import { MemoryStore } from '../state/memory.js'
@@ -124,6 +125,40 @@ class CharacterArchivedError extends RemoteError<'tavern/character-archived'> {
   constructor() {
     super('tavern/character-archived', '角色已在收纳箱，不能创建新会话或切换剧情', {})
   }
+}
+
+const WINDOWS_RESERVED_ASSET_NAME = /^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9]|CLOCK\$)(?:\.|$)/i
+const MAX_ASSET_FILE_ID_BYTES = 120
+
+/** 规范化共享资产文件名：避免空串、相对目录、尾点/空白、Windows 保留设备名与超长 UTF-8 文件名。 */
+export function safeAssetFileId(name: string): string {
+  let out = name.replace(/[^A-Za-z0-9_一-鿿.-]/g, '_')
+  const stripped = out.replace(/[. ]+$/, '')
+  const hash = () => createHash('sha256').update(name).digest('hex').slice(0, 8)
+  if (!stripped || stripped === '.' || stripped === '..') {
+    return `asset-${hash()}`
+  }
+  if (WINDOWS_RESERVED_ASSET_NAME.test(stripped)) {
+    out = `_${stripped}-${hash()}`
+  } else if (stripped !== out) {
+    out = `${stripped}-${hash()}`
+  }
+  if (Buffer.byteLength(out, 'utf8') > MAX_ASSET_FILE_ID_BYTES) {
+    const digest = hash()
+    const budget = MAX_ASSET_FILE_ID_BYTES - digest.length - 1
+    let prefix = ''
+    let bytes = 0
+    for (const ch of out) {
+      const chBytes = Buffer.byteLength(ch, 'utf8')
+      if (bytes + chBytes > budget) break
+      prefix += ch
+      bytes += chBytes
+    }
+    prefix = prefix.replace(/[. ]+$/, '')
+    if (!prefix || prefix === '.' || prefix === '..') return `asset-${digest}`
+    out = `${prefix}-${digest}`
+  }
+  return out
 }
 
 /** 从资产 JSON 取非空白字符串字段（非对象/非字符串/空白按缺失返回 null）。 */
@@ -262,7 +297,7 @@ export class TavernState {
    * 若按当前绑定提交，开层那张卡的楼层会永远悬在未提交状态；工具写路径也凭
    * entry.cardId 与当前绑定比对，不一致即拒绝写入（见 tools.ts resolveCtx）。
    */
-  readonly openFloors = new Map<string, { cardId: string; storyId?: string; floor: string }>()
+  readonly openFloors = new Map<string, { cardId: string; storyId?: string; floor: string; endedWithError?: boolean }>()
   /** 本轮已认领尚未入日志的输入（agent/inbox/claimed 按 turn 经会话队列发布；turn/end 清除）。 */
   readonly pendingInputs = new Map<string, string[]>()
   readonly pendingTemplateInputs = new Map<string, Array<{id:string;text:string;hasImage?:boolean;chat?:boolean}>>()
@@ -514,8 +549,10 @@ export class TavernState {
       if (cached.storyStat.epoch === ledger.epoch && !writtenSince(ledger, 'story.json', cached.storyStat.revision)) {
         const stat = await cached.plainFs.stat('story.json')
         if (stat && stat.mtimeMs === cached.storyStat.mtimeMs && stat.size === cached.storyStat.size) {
-          this.workspaces.delete(key)
-          this.workspaces.set(key, cached)
+          if (this.workspaces.get(key) === cached) {
+            this.workspaces.delete(key)
+            this.workspaces.set(key, cached)
+          }
           return cached
         }
       }
@@ -844,7 +881,7 @@ export class TavernState {
     }
     await add('library/presets', binding.presetId)
     await add('personas', binding.personaId)
-    const persona = await this.loadPersona(binding.personaId)
+    const persona = await this.loadPersona(binding.personaId, true)
     for (const id of new Set([...binding.lorebookIds, ...(binding.characterLorebookIds ?? []), binding.characterLorebookId, persona?.lorebookId])) {
       await add('library/lorebooks', id)
     }
@@ -856,7 +893,12 @@ export class TavernState {
   invalidateSessionArchiveAssets(paths: readonly string[]): void {
     for (const path of paths) {
       const match = /^(library\/presets|library\/lorebooks|personas)\/([^/]+)\.json$/.exec(path)
-      if (match) this.bumpAssetRev(`${match[1] === 'library/presets' ? 'preset' : match[1] === 'library/lorebooks' ? 'lore' : 'persona'}:${match[2]}`)
+      if (match) {
+        const kind = match[1] === 'library/presets' ? 'preset' : match[1] === 'library/lorebooks' ? 'lore' : 'persona'
+        const fileId = match[2]!
+        const baseMatch = /^(.+)-\d+$/.exec(fileId)
+        this.bumpNamedAssetRev(kind, fileId, baseMatch?.[1])
+      }
       if (path === 'library/helper-scripts.json') { this.bumpAssetRev('helper:global'); this.globalScriptCache = null }
       if (path === 'regex/rules.json') this.bumpAssetRev('regex:global')
     }
@@ -982,9 +1024,13 @@ export class TavernState {
       const { pngBytes: _png, ...cardJson } = next
       // 先过存储上限，避免只写出独立世界书而 card.json 被拒绝。
       const cardText = serializeStoredCard(cardJson)
+      const bookText = JSON.stringify(json, null, 2) + '\n'
+      if (Buffer.byteLength(bookText, 'utf8') > MAX_STORED_CARD_JSON_BYTES) {
+        throw new Error(`角色内嵌世界书超过存储上限（${MAX_STORED_CARD_JSON_BYTES / 1024 / 1024}MB），未写入`)
+      }
       beforeWrite?.()
       try {
-        await fs.writeText('assets/character-book.json', JSON.stringify(json, null, 2) + '\n')
+        await fs.writeText('assets/character-book.json', bookText)
         await fs.writeText('card.json', cardText)
       } finally { this.bumpAssetRev(`charlore:${cardId}`) }
       return { name: book.name ?? charWs.card.name, entryCount: book.entries.length, revision: jsonEditRevision(json) }
@@ -1367,6 +1413,8 @@ export class TavernState {
     return withWorkspaceLock(fs.root,async()=>{
     let id: string
     let identity = name
+    let previousName: string | null = null
+    let previousSourceId: string | null = null
     if (expectedRevision !== undefined && expectedRevision !== null) {
       // 编辑器返回的 name 是文件定位信息，不能净化后转向另一文件，也不在删除后查找同名副本。
       if (typeof name !== 'string' || !name || name === '.' || name === '..' || this.assetFileId(name) !== name) {
@@ -1384,7 +1432,9 @@ export class TavernState {
       if (jsonEditRevision(previous) !== expectedRevision) {
         throw new Error('世界书已被另一窗口修改或删除，请保留草稿并重新打开后再保存')
       }
-      identity = stringField(previous, 'name') ?? id
+      previousName = stringField(previous, 'name')
+      previousSourceId = stringField(previous, 'sourceId')
+      identity = previousName ?? id
       const incomingName = stringField(json, 'name')
       if (incomingName !== null && incomingName !== identity) throw new Error('世界书的内部名称不可修改，请保留原身份或另行导入新世界书')
     } else {
@@ -1399,7 +1449,7 @@ export class TavernState {
       ? { ...(json as Record<string, unknown>), name: identity } : json
     beforeWrite?.()
     try{await fs.writeText(`library/lorebooks/${id}.json`, JSON.stringify(content, null, 2) + '\n')}
-    finally{this.bumpAssetRev(`lore:${id}`)}
+    finally{this.bumpNamedAssetRev('lore', id, name, identity, previousName, previousSourceId, stringField(content, 'sourceId'))}
     return { name: id, revision: jsonEditRevision(content) }
     })
   }
@@ -1411,11 +1461,28 @@ export class TavernState {
       beforeWrite?.()
       const target = await this.resolveExistingAssetId(fs, 'library/lorebooks', name)
       const resolved = target ?? id
+      let deletedName: string | null = null
+      let deletedSourceId: string | null = null
+      if (target) {
+        const raw = await fs.readText(`library/lorebooks/${target}.json`)
+        if (raw !== null) {
+          try {
+            const parsed: unknown = JSON.parse(raw)
+            deletedName = stringField(parsed, 'name')
+            deletedSourceId = stringField(parsed, 'sourceId')
+          } catch { /* 损坏文件仅删除并作废 */ }
+        }
+      }
       try{if (target) await fs.delete(`library/lorebooks/${target}.json`)}finally{
-        this.bumpAssetRev(`lore:${resolved}`)
+        this.bumpNamedAssetRev('lore', resolved, name, deletedName, deletedSourceId)
+        const targetKeys = new Set(
+          [resolved, name, deletedName, deletedSourceId]
+            .filter((value): value is string => Boolean(value))
+            .flatMap((value) => [this.assetFileKey(value), this.assetFileKey(this.assetFileId(value))]),
+        )
         for (const key of [...this.loreCache.keys()]) {
           const cachedId = key.split('\0')[0]!
-          if (this.assetFileKey(cachedId) === this.assetFileKey(resolved)) this.loreCache.delete(key)
+          if (targetKeys.has(this.assetFileKey(cachedId))) this.loreCache.delete(key)
         }
       }
     })
@@ -1486,7 +1553,7 @@ export class TavernState {
     let id: string
     if (options.id !== undefined) {
       // 编辑器选中的文件是定位信息，不能净化后改指另一个文件，或在删除后另找同身份副本。
-      if (typeof options.id !== 'string' || !options.id || this.assetFileId(options.id) !== options.id) throw new Error('非法的预设文件 ID')
+      if (typeof options.id !== 'string' || !options.id || options.id === '.' || options.id === '..' || this.assetFileId(options.id) !== options.id) throw new Error('非法的预设文件 ID')
       if (typeof options.expectedRevision !== 'string' || !options.expectedRevision) {
         throw new Error('明确保存预设文件时必须携带修订版本；预设已被另一窗口修改或删除，请保留草稿并重新打开后再保存')
       }
@@ -1500,7 +1567,8 @@ export class TavernState {
     // 编辑严格读取实际文件；显式导入仍按文件替换，允许修复同身份的损坏预设。
     const raw = options.id !== undefined || options.preserveHelperSettings || options.expectedRevision !== undefined
       ? await fs.readText(`library/presets/${id}.json`) : null
-    const previous = raw === null ? null : parseStoredPreset(JSON.parse(raw))
+    const parsedPrev: unknown = raw === null ? null : JSON.parse(raw)
+    const previous = parsedPrev === null ? null : parseStoredPreset(parsedPrev)
     if (options.id !== undefined && previous?.identifier !== preset.identifier) {
       throw new Error('预设的 identifier 不可修改，请保留原身份或另行导入新预设')
     }
@@ -1510,7 +1578,7 @@ export class TavernState {
     const value=previous && options.preserveHelperSettings?{...preset,helperSettings:previous.helperSettings}:preset
     if(value.helperSettings!==undefined)value.helperSettings=helperScriptSettings(value.helperSettings)
     try{await fs.writeText(`library/presets/${id}.json`, JSON.stringify(value, null, 2) + '\n')}
-    finally{this.bumpAssetRev(`preset:${id}`)}
+    finally{this.bumpNamedAssetRev('preset', id, options.id, preset.identifier, previous?.identifier, stringField(parsedPrev, 'sourceId'))}
     return { id, revision: presetEditRevision(value) }
     })
   }
@@ -1521,13 +1589,30 @@ export class TavernState {
     await withWorkspaceLock(fs.root,async()=>{
       const target = await this.resolveExistingAssetId(fs, 'library/presets', id)
       const resolved = target ?? safe
+      let deletedIdentifier: string | null = null
+      let deletedSourceId: string | null = null
+      if (target) {
+        const raw = await fs.readText(`library/presets/${target}.json`)
+        if (raw !== null) {
+          try {
+            const parsed: unknown = JSON.parse(raw)
+            deletedIdentifier = stringField(parsed, 'identifier')
+            deletedSourceId = stringField(parsed, 'sourceId')
+          } catch { /* 损坏文件仅删除并作废 */ }
+        }
+      }
       try{if (target) await fs.delete(`library/presets/${target}.json`)}finally{
-        this.bumpAssetRev(`preset:${resolved}`)
+        this.bumpNamedAssetRev('preset', resolved, id, deletedIdentifier, deletedSourceId)
+        const targetKeys = new Set(
+          [resolved, id, deletedIdentifier, deletedSourceId]
+            .filter((value): value is string => Boolean(value))
+            .flatMap((value) => [this.assetFileKey(value), this.assetFileKey(this.assetFileId(value))]),
+        )
         for (const key of [...this.presetCache.keys()]) {
-          if (this.assetFileKey(key) === this.assetFileKey(resolved)) this.presetCache.delete(key)
+          if (targetKeys.has(this.assetFileKey(key))) this.presetCache.delete(key)
         }
         for (const key of [...this.presetScriptCache.keys()]) {
-          if (this.assetFileKey(key) === this.assetFileKey(resolved)) this.presetScriptCache.delete(key)
+          if (targetKeys.has(this.assetFileKey(key))) this.presetScriptCache.delete(key)
         }
       }
     })
@@ -2044,6 +2129,22 @@ export class TavernState {
     this.assetRevs.set(this.assetRevisionKey(key), this.assetRevision(key) + 1)
   }
 
+  /** 按文件 ID 及其原始名称（净化前键）联动失效修订，确保 standing 指纹与冲突后缀副本保持一致。 */
+  private bumpNamedAssetRev(kind: 'lore' | 'preset' | 'persona', ...names: Array<string | null | undefined>): void {
+    const seen = new Set<string>()
+    for (const name of names) {
+      if (!name) continue
+      const safe = this.assetFileId(name)
+      for (const candidate of [name, safe]) {
+        const key = `${kind}:${candidate}`
+        const revKey = this.assetRevisionKey(key)
+        if (seen.has(revKey)) continue
+        seen.add(revKey)
+        this.bumpAssetRev(key)
+      }
+    }
+  }
+
   /**
    * standing 指纹的资产修订标记（稳定顺序）：绑定预设 + 全局世界书 + 主世界书（库书或卡内嵌书）
    * + 卡 + 会话书 + 人设书，末尾再加一个 config 标记。
@@ -2051,7 +2152,7 @@ export class TavernState {
    * 资产键一律走 assetFileId：绑定里可能存着原始名，与写方法 bump 的键必须是同一个。
    */
   standingRevTags(binding: SessionBinding, extra?: { personaLorebookId?: string | null }): string[] {
-    const presetKey = `preset:${this.assetFileId(binding.presetId ?? '')}`
+    const presetKey = `preset:${binding.presetId ? this.assetFileId(binding.presetId) : ''}`
     const tags = [`${presetKey}=${this.assetRevision(presetKey)}`]
     for (const id of binding.lorebookIds) {
       const key = `lore:${this.assetFileId(id)}`
@@ -2156,7 +2257,8 @@ export class TavernState {
 
   /** 清掉会话绑定文件与运行期内存状态；空白新对话复用旧会话时用来去掉上次留下的角色卡与状态。 */
   async clearBinding(sessionId: string): Promise<void> {
-    if (this.openFloors.get(sessionId)?.storyId) {
+    const open = this.openFloors.get(sessionId)
+    if (open?.storyId && !open.endedWithError) {
       this.pendingRuntimeClear.add(sessionId)
       this.clearStandingPins(sessionId)
     } else {
@@ -2202,7 +2304,7 @@ export class TavernState {
    * standing 指纹于是一直读一个没人 bump 的键，编辑世界书后钉死永不失效。
    */
   private assetFileId(name: string): string {
-    return name.replace(/[^A-Za-z0-9_一-鿿.-]/g, '_')
+    return safeAssetFileId(name)
   }
 
   private rootFsPromise: Promise<WorkspaceFs> | null = null

@@ -51,10 +51,21 @@ export function installCardMvu(codec:HelperMvuCommandCodec,json:(value:unknown,m
   }
   /** 合并单条命令的变更日志；数组下标的 null 只是占位，不能覆盖前面命令写下的日志。 */
   function mergeLog(target:Table|unknown[],source:Table|unknown[]):void{
+    if(Array.isArray(target)&&Array.isArray(source)){
+      for(let i=0;i<source.length;i++){
+        const value=source[i]
+        if(value===null)continue
+        while(target.length<=i)target.push(null)
+        const current=target[i]
+        if(value&&typeof value==='object'&&current&&typeof current==='object'&&Array.isArray(value)===Array.isArray(current))mergeLog(current as Table|unknown[],value as Table|unknown[])
+        else target[i]=value&&typeof value==='object'?json(value):value
+      }
+      return
+    }
     for(const [key,value] of Object.entries(source)){
       if(value===null&&Array.isArray(source))continue
       const current=(target as Table)[key]
-      if(value&&typeof value==='object'&&current&&typeof current==='object'&&Array.isArray(value)===Array.isArray(current))mergeLog(current as Table,value as Table)
+      if(value&&typeof value==='object'&&current&&typeof current==='object'&&Array.isArray(value)===Array.isArray(current))mergeLog(current as Table|unknown[],value as Table|unknown[])
       else (target as Table)[key]=value&&typeof value==='object'?json(value):value
     }
   }

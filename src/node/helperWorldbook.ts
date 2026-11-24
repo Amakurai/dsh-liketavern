@@ -97,7 +97,15 @@ export async function helperWorldbookOperation(ctx:Context,state:TavernState,ses
       }
       if(request.name===CHARACTER){
         if(next===null)await state.deleteCharacterLorebook(binding.cardId,()=>beforeWrite?.(binding))
-        else await state.saveCharacterLorebook(binding.cardId,{...(next as Record<string,unknown>),name:CHARACTER},undefined,()=>beforeWrite?.(binding))
+        else {
+          const prevName=helperRecord(current.raw)&&typeof current.raw.name==='string'&&current.raw.name.trim()&&current.raw.name!==CHARACTER?current.raw.name.trim():null
+          const labelName=request.label&&request.label!==CHARACTER?request.label:null
+          const cardName=prevName??labelName??(await state.loadCharacter(binding.cardId))?.card.name
+          const payload={...(next as Record<string,unknown>)}
+          if(payload.name===CHARACTER)delete payload.name
+          if(typeof payload.name!=='string'||!payload.name.trim()){if(cardName)payload.name=cardName}
+          await state.saveCharacterLorebook(binding.cardId,payload,undefined,()=>beforeWrite?.(binding))
+        }
         const saved=await rawBook(state,binding,CHARACTER,chat)
         const context=await contextFrom(state,binding,chat)
         return saved.raw===null?{deleted:true,context}:{created:current.raw===null,snapshot:snapshot(saved.raw),context}
@@ -138,13 +146,15 @@ export async function rebindHelperWorldbooks(ctx:Context,state:TavernState,sessi
         const patch=helperWorldbookSettingsCodec.patch(value),worldInfo={...binding.worldInfo,...helperWorldbookSettingsCodec.toNative(patch)}
         const lorebookIds=patch.selected_global_lorebooks===undefined?binding.lorebookIds:await sharedList(patch.selected_global_lorebooks)
         let saved:SessionBinding={...binding,worldInfo,lorebookIds}
-        await state.saveBinding(saved,(_previous,published)=>{saved=published;beforeWrite?.(binding,published)})
+        await state.saveBinding(saved,(_previous,published)=>{saved=published;beforeWrite?.(binding)})
+        try{beforeWrite?.(binding,saved)}catch{/* 绑定已落盘，忽略旧租约同步错误 */}
         return contextFrom(state,saved,chat)
       }
       if(request.kind==='global'){
         const lorebookIds=await sharedList(value)
         let saved:SessionBinding={...binding,lorebookIds}
-        await state.saveBinding(saved,(_previous,published)=>{saved=published;beforeWrite?.(binding,published)})
+        await state.saveBinding(saved,(_previous,published)=>{saved=published;beforeWrite?.(binding)})
+        try{beforeWrite?.(binding,saved)}catch{/* 绑定已落盘，忽略旧租约同步错误 */}
         return contextFrom(state,saved,chat)
       }
       if(request.kind==='character'){
@@ -154,7 +164,8 @@ export async function rebindHelperWorldbooks(ctx:Context,state:TavernState,sessi
         else if(value.primary!==null)primary=await shared(value.primary)
         const additional=(await sharedList(value.additional)).filter(id=>id!==primary)
         let saved:SessionBinding={...binding,characterLorebookId:primary,useEmbeddedLorebook:embedded,characterLorebookIds:additional}
-        await state.saveBinding(saved,(_previous,published)=>{saved=published;beforeWrite?.(binding,published)})
+        await state.saveBinding(saved,(_previous,published)=>{saved=published;beforeWrite?.(binding)})
+        try{beforeWrite?.(binding,saved)}catch{/* 绑定已落盘，忽略旧租约同步错误 */}
         return contextFrom(state,saved,chat)
       }
       if(!writeChat)throw new Error('聊天绑定缺少楼层写入上下文')

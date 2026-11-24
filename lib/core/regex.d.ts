@@ -34,6 +34,8 @@ export interface RegexFilter {
     timing: RegexTiming;
     /** 可选消息深度（0 = 最新真实消息）；仅在提供时按规则 minDepth/maxDepth 过滤。 */
     depth?: number;
+    /** 与消息数组等长的是否计入真实聊天的标记（跳过压缩摘要/系统/合成条目）。 */
+    chatFlags?: readonly boolean[];
 }
 export interface RegexApplyResult {
     text: string;

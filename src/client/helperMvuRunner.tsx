@@ -30,7 +30,7 @@ export function HelperMvuRunner(props:{remote:TavernRemote;sessionId:string;stor
   const srcDoc=useMemo(()=>buildCardSrcDoc('',{greetings:[],greetingIndex:0,helperSnapshot:props.snapshot,mvuRunner:true}),[props.sessionId,props.storyId])
   useLayoutEffect(()=>{
     let active=true,frameRuntime='',running=false,polling=false,failed=false,committing=false,wakeQueued=false,selfNotifying=false
-    let work:HelperMvuWork|undefined,result:unknown,deadline=0,renewAt=0,idlePollAt=0,idleAttempts=0,requestId='',restart=false
+    let work:HelperMvuWork|undefined,result:unknown,deadline=0,renewAt=0,renewFailures=0,idlePollAt=0,idleAttempts=0,requestId='',restart=false
     let timerId:ReturnType<typeof setTimeout>|undefined
     const nextPollDelay=():number=>{
       const now=Date.now()
@@ -44,7 +44,7 @@ export function HelperMvuRunner(props:{remote:TavernRemote;sessionId:string;stor
     }
     const scheduleTimer=()=>{
       if(timerId!==undefined)clearTimeout(timerId)
-      if(!active||(failed&&result===undefined))return
+      if(!active||(failed&&result===undefined)||restart)return
       timerId=setTimeout(()=>{timerId=undefined;void poll()},nextPollDelay())
     }
     const runtimeId=randomUuid(),{sessionId,storyId}=props
@@ -64,7 +64,7 @@ export function HelperMvuRunner(props:{remote:TavernRemote;sessionId:string;stor
     const endpoint=attachHelperEvents(sessionId,storyId,send,{current:valid,snapshot:()=>work?.snapshot})
     const fail=(value:unknown)=>{if(active){failed=true;running=false;setBusy(false);setError(String(value instanceof Error?value.message:value).slice(0,2000))}}
     const complete=(next?:Partial<HelperMvuWork>)=>{
-      work=undefined;result=undefined;running=false;failed=false;restart=false
+      work=undefined;result=undefined;running=false;failed=false;restart=false;renewFailures=0
       if(next&&next.status==='idle'&&!next.awaitingTurnEnd){idleAttempts=1;idlePollAt=Date.now()+IDLE_POLL_BASE_DELAY_MS}
       else{idleAttempts=0;idlePollAt=0}
       setRestartRequired(false);setBusy(false);setError(null)
@@ -86,7 +86,7 @@ export function HelperMvuRunner(props:{remote:TavernRemote;sessionId:string;stor
     }
     const poll=async()=>{
       if(!active||polling||committing||!frameRuntime||!live.current.ready){scheduleTimer();return}
-      if(failed&&result===undefined)return
+      if((failed&&result===undefined)||restart)return
       if(running&&Date.now()>deadline){fail(t('speech.mvuExecutionTimeout'));return}
       if(work&&Date.now()<renewAt){scheduleTimer();return}
       if(!work&&Date.now()<idlePollAt){scheduleTimer();return}
@@ -97,6 +97,7 @@ export function HelperMvuRunner(props:{remote:TavernRemote;sessionId:string;stor
         if(!active||work!==expectedWork)return
         if(!response.ok)throw new Error(response.error.message)
         const next=response.value
+        renewFailures=0
         renewAt=Date.now()+20000
         if(work){
           if(next.job?.id!==work.job?.id||next.token!==work.token){
@@ -124,7 +125,7 @@ export function HelperMvuRunner(props:{remote:TavernRemote;sessionId:string;stor
         idleAttempts=0;idlePollAt=0
         work=next;running=true;deadline=Date.now()+300000;requestId=randomUuid();setBusy(true);setError(null)
         send({action:'helperMvuRun',runtimeId:frameRuntime,requestId,work:next})
-      }catch(value){if(work===expectedWork)fail(value)}finally{polling=false;if(wakeQueued&&active){wakeQueued=false;void poll()}else scheduleTimer()}
+      }catch(value){if(work===expectedWork){if(work)renewAt=Date.now()+Math.min(60000,5000*2**Math.min(renewFailures++,4));fail(value)}}finally{polling=false;if(wakeQueued&&active){wakeQueued=false;void poll()}else scheduleTimer()}
     }
     const wake=()=>{if(selfNotifying)return;idleAttempts=0;idlePollAt=0;if(polling||committing){wakeQueued=true;return}void poll()}
     const receive=(event:MessageEvent)=>{
@@ -146,9 +147,9 @@ export function HelperMvuRunner(props:{remote:TavernRemote;sessionId:string;stor
     }
     retry.current=()=>{
       failed=false;setError(null);idleAttempts=0;idlePollAt=0
-      if(restart){restart=false;setRestartRequired(false);result=undefined;work=undefined;running=false;renewAt=0;void poll()}
-      else if(result!==undefined){renewAt=0;setBusy(true);void commit().catch(error=>{renewAt=0;fail(error);scheduleTimer()})}
-      else{work=undefined;running=false;renewAt=0;void poll()}
+      if(restart){restart=false;setRestartRequired(false);result=undefined;work=undefined;running=false;renewFailures=0;renewAt=0;void poll()}
+      else if(result!==undefined){setBusy(true);void commit().catch(error=>{fail(error);scheduleTimer()})}
+      else{work=undefined;running=false;renewFailures=0;renewAt=0;void poll()}
     }
     pollRef.current=wake
     const stopWatch=watchHelperStory(sessionId,storyId,wake)

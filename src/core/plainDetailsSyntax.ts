@@ -60,7 +60,7 @@ export const HR_CANDIDATE_RE = /^<hr(?=[\t\n\f\r />])/i
 export const HR_PLAIN_RE = /<hr\s*\/?>/iy
 export const AUTOLINK_CANDIDATE_RE = /<[^\s<>]+>/y
 export const BODY_TAG_RE = /<(\/?)([A-Za-z][\w.:-]*)(?:(?=[\t\n\f\r />])(?:[^"'<>]|"[^"]*"|'[^']*')*)?>/y
-export const CUSTOM_ELEMENT_NAME_RE = /^[a-z][\w.]*-[\w.-]*$/
+export const CUSTOM_ELEMENT_NAME_RE = /^[a-z][\w.]*-[\w.-]*$/i
 export const RESIDUAL_TAG_RE = /<(\/?)([A-Za-z][\w.:-]*)((?:(?=[\t\n\f\r />])(?:[^"'<>]|"[^"]*"|'[^']*')*)?)>/y
 const DETAILS_BOUNDARY_RE = /<!--[\s\S]*?(?:-->|$)|<\/?details(?=[\t\n\f\r />])(?:[^"'<>]|"[^"]*"|'[^']*')*>/gi
 

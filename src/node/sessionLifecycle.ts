@@ -6,7 +6,7 @@ import { loadTemplateGenerationIdentity, loadTemplateMetadata, loadTemplateState
 import { closeTemplateGenerationState } from '../state/templateContinuation.js'
 import { withWorkspaceLock } from '../state/workspaceLock.js'
 import { helperMvuPending, queueHelperMvuTurn } from './helperMvu.js'
-import { helperMvuHasAssistant } from './helperMvuLifecycle.js'
+import { helperMvuInitAnchorTurn } from './helperMvuLifecycle.js'
 import { hasNormalAssistantStop } from '../core/assistantStream.js'
 import { assertActiveTemplateRuntime, TemplateRuntimeCompatibilityError } from './templateRuntimeGuard.js'
 import { findLastEvent } from './sessionEvents.js'
@@ -38,7 +38,8 @@ export async function onTurnStart(state:TavernState,sessionId:string,turn:number
   state.currentTurns.set(sessionId,turn)
   state.currentSteps.set(sessionId,1)
   state.deferredTurns.set(sessionId,turn)
-  if (await helperMvuPending(state,sessionId,!session || helperMvuHasAssistant(session))) return
+  const anchorTurn = session ? helperMvuInitAnchorTurn(session) : undefined
+  if (await helperMvuPending(state,sessionId,!session || anchorTurn !== null,anchorTurn)) return
   state.deferredTurns.delete(sessionId)
   const binding = await state.loadStoryBinding(sessionId)
   if (!binding) return
@@ -147,7 +148,12 @@ export async function onTurnEnd(state:TavernState,sessionId:string,session?:Pick
       while(state.helperTurnClosures.size>256)state.helperTurnClosures.delete(state.helperTurnClosures.keys().next().value!)
     }
     try{await finishTurn(state,sessionId,session);record()}
-    catch(error){record(error);throw error}
+    catch(error){
+      record(error)
+      const open=state.openFloors.get(sessionId)
+      if(open)open.endedWithError=true
+      throw error
+    }
   } finally {
     if (!state.openFloors.has(sessionId) && state.pendingRuntimeClear.delete(sessionId)) {
       state.clearSessionRuntime(sessionId)
@@ -221,8 +227,6 @@ async function finishTurn(state:TavernState,sessionId:string,session?:Pick<Sessi
       // 开始预检与最终提交分属两次持锁；复核最新状态，不能将间隙恢复的旧日志按通用错误路径收口。
       const metadata=await loadTemplateMetadata(ws.fs)
       await assertActiveTemplateRuntime(metadata,sessionId)
-      // 回复结束后的维护恢复也可能改变兼容性；最后一次预检成功前仍保留本轮缓存和待发布计划。
-      clearTurn()
       await ws.wal.validateFloor(entry.floor)
       if (!templateError) {
         try {
@@ -245,6 +249,8 @@ async function finishTurn(state:TavernState,sessionId:string,session?:Pick<Sessi
       // MVU 登记失败时必须保留未提交楼层，后台可从正常 stop 原文重建任务；提交会把故障伪装成成功并放行下一轮。
       // 开层句柄照常释放：helperMvu.unregisteredFloor 正是按「未提交、未登记、不在 openFloors」识别待恢复楼层。
       if(!helperQueueError)await ws.wal.commitFloor(entry.floor)
+      // 回复结束后的维护恢复也可能改变兼容性；最后一次预检与提交均完成后才清除本轮缓存和待发布计划。
+      clearTurn()
     })
   } else clearTurn()
   // 最终校验或提交失败时保留原楼层归属，供同一结束事件重试。没有模板 generation

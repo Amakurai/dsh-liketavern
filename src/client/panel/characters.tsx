@@ -447,10 +447,14 @@ export function CharacterInteractivePreview(props: {
     const onMsg = (e: MessageEvent) => {
       if (!iframeRef.current || e.source !== iframeRef.current.contentWindow) return
       const value: unknown = e.data
-      if (helperRecord(value) && value.source === 'dsh-tavern-card' && (value.action === 'helperEventConnect' || value.action === 'helperEventDisconnect')) {
-        const before = eventEndpoint.runtimeId()
-        eventEndpoint.receive(value)
-        if (before !== eventEndpoint.runtimeId()) syncColorScheme()
+      if (helperRecord(value) && value.source === 'dsh-tavern-card' && typeof value.action === 'string' && value.action.startsWith('helperEvent')) {
+        if (value.action === 'helperEventConnect' || value.action === 'helperEventDisconnect') {
+          const before = eventEndpoint.runtimeId()
+          eventEndpoint.receive(value)
+          if (before !== eventEndpoint.runtimeId()) syncColorScheme()
+          return
+        }
+        if (eventEndpoint.matchesRuntime(value.runtimeId)) eventEndpoint.receive(value)
       }
     }
     const unsubscribe = subscribeWindowMessage(iframeRef.current?.contentWindow, onMsg)

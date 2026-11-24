@@ -57,7 +57,9 @@ export async function assertAbsent(path: string): Promise<void> {
 export function assertSeparate(left: string, right: string): void {
   const a = resolve(left).toLocaleLowerCase('en-US')
   const b = resolve(right).toLocaleLowerCase('en-US')
-  if (a === b || a.startsWith(b + sep) || b.startsWith(a + sep)) fail('NESTED_PATHS')
+  const aPrefix = a.endsWith(sep) ? a : a + sep
+  const bPrefix = b.endsWith(sep) ? b : b + sep
+  if (a === b || a.startsWith(bPrefix) || b.startsWith(aPrefix)) fail('NESTED_PATHS')
 }
 export interface BackupEntry { path: string; kind: 'file' | 'directory'; size: number; mode: number; sha256?: string }
 export interface ScannedEntry extends BackupEntry { stamp: Stats }

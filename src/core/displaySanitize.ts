@@ -542,9 +542,9 @@ function collectTagInteriorMeta(
   const attributes = analyzeAttributeValues(text, start, limit)
   ranges.push(...attributes.dangerous)
   const resume = text[limit] === '>' ? limit + 1 : limit
-  stack.push(...[...attributes.pending, ...embeddedAttributeNameOpeners(text, start, limit, attributes.values)]
-    .sort((a, b) => a.start - b.start)
-    .map(opened => ({ ...opened, start: resume, tokenEnd: resume })))
+  const attrPending = attributes.pending.map(opened => ({ ...opened, start: resume, tokenEnd: resume }))
+  const namePending = embeddedAttributeNameOpeners(text, start, limit, attributes.values)
+  stack.push(...[...attrPending, ...namePending].sort((a, b) => a.start - b.start))
 }
 
 /** 可见 raw/RCDATA 正文中的机读标签独立配对；孤立 closer 不得关闭外层边界。 */
@@ -1680,6 +1680,84 @@ export function stripDisplayMeta(text: string, extraCustomTagNames?: ReadonlySet
 const STREAMING_HTML_TAG_NAMES = [...HTML_CARD_CONTAINERS, 'html', 'body', 'style', 'script', 'template'] as const
 const STREAMING_HTML_TAG_SET: ReadonlySet<string> = new Set(STREAMING_HTML_TAG_NAMES)
 
+function hasUnquotedTagOpen(text: string, start: number, limit: number): boolean {
+  type State = 'before-name' | 'name' | 'after-name' | 'before-value' | 'unquoted' | 'quoted' | 'after-value'
+  let state: State = 'before-name'
+  let quote: '"' | "'" | null = null
+  for (let i = start; i < limit; i++) {
+    const char = text[i]!
+    if (state === 'quoted') {
+      if (char === quote) { quote = null; state = 'after-value' }
+      continue
+    }
+    if (char === '<') return true
+    if (state === 'before-name') {
+      if (isHtmlSpace(char) || char === '/') continue
+      state = 'name'
+    } else if (state === 'name') {
+      if (isHtmlSpace(char)) state = 'after-name'
+      else if (char === '=') state = 'before-value'
+      else if (char === '/') state = 'before-name'
+    } else if (state === 'after-name') {
+      if (isHtmlSpace(char)) continue
+      if (char === '=') state = 'before-value'
+      else if (char === '/') state = 'before-name'
+      else state = 'name'
+    } else if (state === 'before-value') {
+      if (isHtmlSpace(char)) continue
+      if (char === '"' || char === "'") { quote = char; state = 'quoted' }
+      else state = 'unquoted'
+    } else if (state === 'unquoted') {
+      if (isHtmlSpace(char)) state = 'before-name'
+    } else if (state === 'after-value') {
+      if (isHtmlSpace(char) || char === '/') state = 'before-name'
+      else state = 'name'
+    }
+  }
+  return false
+}
+
+/** 仅含前导资源/样式/脚本/惰性壳且无实际可见组件时，后续紧跟的未闭合容器仍属同一卡面。 */
+function isPreludeOnlyHtml(fragment: string): boolean {
+  let cursor = 0
+  while (cursor < fragment.length) {
+    while (cursor < fragment.length && isHtmlSpace(fragment[cursor])) cursor++
+    if (cursor >= fragment.length) break
+    if (fragment.startsWith('<!--', cursor)) {
+      const closed = htmlCommentEnd(fragment, cursor, fragment.length)
+      if (closed < 0) return false
+      cursor = closed
+      continue
+    }
+    if (/^<!doctype(?:\s+html\b|\s*>)/i.test(fragment.slice(cursor, cursor + 20))) {
+      const closed = doctypeEnd(fragment, cursor + 2, fragment.length)
+      if (closed < 0) return false
+      cursor = closed
+      continue
+    }
+    const head = tagHead(fragment, cursor)
+    if (!head || head.closing) return false
+    const end = htmlTagEnd(fragment, cursor)
+    if (end < 0) return false
+    if (head.name === 'link' || head.name === 'meta') {
+      cursor = end
+      continue
+    }
+    if (head.name === 'style' || head.name === 'script' || head.name === 'template' || head.name === 'noscript') {
+      if (isHtmlSelfClosingTag(fragment, head.end, end)) {
+        cursor = end
+        continue
+      }
+      const opaqueEnd = findHtmlOpaqueEnd(fragment, end, head.name)
+      if (opaqueEnd === null) return false
+      cursor = opaqueEnd
+      continue
+    }
+    return false
+  }
+  return true
+}
+
 /** 判断 `<link>` / `<meta>` 前导标签后是否紧跟真实卡面起点，避免流式或半截卡面把前导样式链接漏成原文。 */
 function preludeLeadsToStreamingHtml(text: string, start: number): boolean {
   let cursor = start
@@ -1770,7 +1848,8 @@ function streamingHtmlStart(text: string, scanMarkdown: boolean | ReturnType<typ
       }
       return at
     }
-    if (end < 0) break
+    if (end < 0) continue
+    if (hasUnquotedTagOpen(text, head.end, end - 1)) continue
     tokens.lastIndex = end
     if (!head.closing && ['textarea', 'title', 'pre', 'code', 'noscript'].includes(head.name)) {
       const opaqueEnd = findHtmlOpaqueEnd(text, end, head.name)
@@ -1807,8 +1886,9 @@ export function findIncompleteHtmlStart(text:string):number|null {
       previous=complete.fence?undefined:{start:offset+completeStart,end};offset=end;continue
     }
     const at=offset+start
-    // 紧贴完整组件的半段脚本/样式仍属于该组件，续写需要一起放入同一个沙箱。
-    if(previous&&!text.slice(previous.end,at).trim()&&/^<(?:script|style|template)(?=[\s/>]|$)/i.test(text.slice(at)))return previous.start
+    // 紧贴完整组件的半段脚本/样式，或紧贴前导样式/脚本的未闭合容器，仍属于同一沙箱。
+    if(previous&&!text.slice(previous.end,at).replace(/<!--[\s\S]*?-->/g,'').trim()
+      &&(/^<(?:script|style|template)(?=[\s/>]|$)/i.test(text.slice(at))||isPreludeOnlyHtml(text.slice(previous.start,previous.end))))return previous.start
     return at
   }
   if(streamingHtmlStart(text.slice(offset))!==null)throw new Error('交互卡展示片段过多')

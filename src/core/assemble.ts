@@ -258,8 +258,10 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
     },
   }
 
-  // 旧式 <USER>/<BOT> 不含花括号，不能用 '{{' 预判；未命中时保留原对象身份。
-  const namedHistory = input.history.map((m) => {
+  const chatFlags = layoutHistory.map((anchor) => anchor.chat)
+  // 旧式 <USER>/<BOT> 不含花括号，不能用 '{{' 预判；未命中时保留原对象身份。非聊天摘要/系统消息不改写。
+  const namedHistory = input.history.map((m, index) => {
+    if (!chatFlags[index]) return m
     const content = expandIdentityMacros(m.content, macroCtx)
     return content === m.content ? m : { ...m, content }
   })
@@ -268,16 +270,16 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
   const inputRegex = applyRegexToMessages(
     namedHistory,
     input.regexRules,
-    { scope: 'input', timing: 'send' },
+    { scope: 'input', timing: 'send', chatFlags },
     macroCtx,
   )
   const regexRes = applyRegexToMessages(
     inputRegex.messages,
     input.regexRules,
-    { scope: 'prompt', timing: 'assemble' },
+    { scope: 'prompt', timing: 'assemble', chatFlags },
     macroCtx,
   )
-  const sendRegex = applyRegexToMessages(regexRes.messages, input.regexRules, { scope: 'prompt', timing: 'send' }, macroCtx)
+  const sendRegex = applyRegexToMessages(regexRes.messages, input.regexRules, { scope: 'prompt', timing: 'send', chatFlags }, macroCtx)
   let history: ChatMessage[] = sendRegex.messages
   for (const e of [...inputRegex.errors, ...regexRes.errors, ...sendRegex.errors]) {
     log.push({ kind: 'regex-error', detail: `${e.ruleId}: ${e.message}` })

@@ -320,15 +320,19 @@ function FloorActions(props: FloorActionsProps) {
       if (r.ok) {
         setEdit(null)
         window.dispatchEvent(new CustomEvent(BRANCH_CHANGED_EVENT, { detail: sessionId }))
-        await openChildSession(navigation, r.value.childSessionId, r.value.title, sessionId)
+        try {
+          await openChildSession(navigation, r.value.childSessionId, r.value.title, sessionId)
+        } catch (e) {
+          if (active.current) setFailure(describeError(e))
+        }
       } else {
         setEditFailure(r.error.message)
       }
     } catch (e) {
-      setEditFailure(describeError(e))
+      if (active.current) setEditFailure(describeError(e))
     } finally {
       submitting.current = false
-      setOperation(null)
+      if (active.current) setOperation(null)
     }
   }
 
@@ -381,15 +385,19 @@ function FloorActions(props: FloorActionsProps) {
       if (r.ok) {
         setEditAi(null)
         window.dispatchEvent(new CustomEvent(BRANCH_CHANGED_EVENT, { detail: sessionId }))
-        await openChildSession(navigation, r.value.childSessionId, r.value.title, sessionId)
+        try {
+          await openChildSession(navigation, r.value.childSessionId, r.value.title, sessionId)
+        } catch (e) {
+          if (active.current) setFailure(describeError(e))
+        }
       } else {
         setEditAiFailure(r.error.message)
       }
     } catch (e) {
-      setEditAiFailure(describeError(e))
+      if (active.current) setEditAiFailure(describeError(e))
     } finally {
       submitting.current = false
-      setOperation(null)
+      if (active.current) setOperation(null)
     }
   }
 

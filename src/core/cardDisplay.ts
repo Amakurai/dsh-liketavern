@@ -17,6 +17,9 @@ export function installCardDisplay():()=>void{
     if(legacy?.())throw new Error('上下文聊天有未保存草稿')
     const variables=root.__dshTavernVariableEditorDirty as (()=>boolean)|undefined
     if(variables?.())throw new Error('变量编辑器有未保存草稿')
+    const chatEditBusy=root.__dshTavernChatEditBusy as (()=>boolean)|undefined
+    if(chatEditBusy?.())throw new Error('消息编辑尚未完成')
+    if(root.__dshTavernMessageBranch)throw new Error('消息已分支，请等待切换')
   }
   function receive(event:MessageEvent){
     const value=event.data

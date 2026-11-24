@@ -35,6 +35,8 @@ export declare class CharacterInUseError extends RemoteError<'tavern/character-i
     readonly references: CharacterReferences;
     constructor(references: CharacterReferences);
 }
+/** 规范化共享资产文件名：避免空串、相对目录、尾点/空白、Windows 保留设备名与超长 UTF-8 文件名。 */
+export declare function safeAssetFileId(name: string): string;
 interface WorkspaceHandle {
     fs: WorkspaceFs;
     plainFs: WorkspaceFs;
@@ -115,6 +117,7 @@ export declare class TavernState {
         cardId: string;
         storyId?: string;
         floor: string;
+        endedWithError?: boolean;
     }>;
     /** 本轮已认领尚未入日志的输入（agent/inbox/claimed 按 turn 经会话队列发布；turn/end 清除）。 */
     readonly pendingInputs: Map<string, string[]>;
@@ -441,6 +444,8 @@ export declare class TavernState {
     private assetRevisionKey;
     private assetRevision;
     private bumpAssetRev;
+    /** 按文件 ID 及其原始名称（净化前键）联动失效修订，确保 standing 指纹与冲突后缀副本保持一致。 */
+    private bumpNamedAssetRev;
     /**
      * standing 指纹的资产修订标记（稳定顺序）：绑定预设 + 全局世界书 + 主世界书（库书或卡内嵌书）
      * + 卡 + 会话书 + 人设书，末尾再加一个 config 标记。

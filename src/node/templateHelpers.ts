@@ -76,12 +76,26 @@ function jsonPatch(dest, changes) {
 }
 function patchVariables(key, changes, opts={}) {
   opts = options(opts);
-  const readScope = opts.scope || (opts.withMsg !== undefined ? 'message' : 'cache');
-  return setvar(key,jsonPatch(getvar(key,{scope:readScope,...(opts.withMsg===undefined?{}:{withMsg:opts.withMsg})}),changes),opts);
+  const outScope = opts.outscope || opts.scope;
+  const readScope = opts.inscope || opts.scope || (opts.withMsg !== undefined ? 'message' : 'cache');
+  const readOpts = {scope:readScope,
+    ...(opts.index===undefined?{}:{index:opts.index}),
+    ...(opts.defaults===undefined?{}:{defaults:opts.defaults}),
+    ...(opts.withMsg===undefined?{}:{withMsg:opts.withMsg})};
+  const writeOpts = outScope ? {...opts, scope:outScope} : opts;
+  return setvar(key,jsonPatch(getvar(key,readOpts),changes),writeOpts);
 }
 function insvar(key, value, index, opts={}) {
-  opts = options(opts);
-  const readScope = opts.scope || (opts.withMsg !== undefined ? 'message' : 'cache');
+  if (index && typeof index === 'object' && !Array.isArray(index)) {
+    opts = {...options(index), ...options(opts)};
+    index = opts.index;
+  } else {
+    opts = options(opts);
+    index = index ?? opts.index;
+  }
+  opts = {...opts}; delete opts.index;
+  const outScope = opts.outscope || opts.scope;
+  const readScope = opts.inscope || opts.scope || (opts.withMsg !== undefined ? 'message' : 'cache');
   let old = clone(getvar(key,{scope:readScope,...(opts.withMsg===undefined?{}:{withMsg:opts.withMsg})}));
   if (Array.isArray(old) || typeof old === 'string') {
     const at = index == null ? old.length : Number(index);
@@ -93,7 +107,7 @@ function insvar(key, value, index, opts={}) {
     if (forbidden.has(part)) throw Error('禁止的变量路径');
     old[part] = clone(value);
   } else return undefined;
-  return setvar(key,old,opts);
+  return setvar(key,old,outScope ? {...opts, scope:outScope} : opts);
 }
 const injections = new Map();
 let injectionSize = 0;

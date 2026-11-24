@@ -55,6 +55,8 @@ export declare class Wal {
      * 其它楼层的元数据与开始时间完整检查仍留给列举、回退与分支。
      */
     private assertCoveredFloorDirs;
+    private assertWithinRoot;
+    private floorDir;
     private assertLogPath;
     private assertLogPaths;
     /** 开始新的楼层事务；已有楼层必须显式 reopen 或先回滚，不能覆盖原始镜像。 */

@@ -232,7 +232,7 @@ export function isBindingDirty(draft: SessionBinding | null, saved: SessionBindi
   if (JSON.stringify(draft.worldInfo ?? {}) !== JSON.stringify(saved.worldInfo ?? {})) return true
   if ((draft.authorNote ?? '') !== (saved.authorNote ?? '')) return true
   if ((draft.injectJournal === true) !== (saved.injectJournal === true)) return true
-  if ((draft.helperMvu === true) !== (saved.helperMvu === true)) return true
+  if ((draft.helperMvu ?? undefined) !== (saved.helperMvu ?? undefined)) return true
   return false
 }
 
@@ -715,7 +715,7 @@ function HeaderChipSession(props: HeaderChipProps) {
                         {t('chip.journal.edit')}
                       </Btn>
                     ) : null}
-                    <label><Toggle disabled={busy} checked={draft.helperMvu===true} onChange={helperMvu=>setDraft({...draft,helperMvu})}/>{t('chip.field.helperMvu')}</label>
+                    <label><Toggle disabled={busy} checked={draft.helperMvu===true} onChange={next=>{const helperMvu=!next&&(!binding||draft.cardId!==binding.cardId||binding.helperMvu===undefined)?undefined:next;setDraft({...draft,helperMvu})}}/>{t('chip.field.helperMvu')}</label>
                   </div>
                   <Muted>{t('chip.field.helperMvuNote')}</Muted>
                 </div>

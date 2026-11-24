@@ -1,6 +1,6 @@
 /** 设置中的脚本资产管理：无需绑定会话，按全局、角色与预设选择独立脚本库，复用带草稿保护的编辑器。 */
 import { describeError } from '../../core/guards.js'
-import { useRef, useState,useSyncExternalStore } from 'react'
+import { useEffect, useRef, useState,useSyncExternalStore } from 'react'
 import {scriptStatusStore,retryScriptMvu,enableScriptMvu,isScriptWindowAccessError,type ScriptRuntimeStatus} from '../helperScriptStatus.js'
 import type { HelperScriptAsset, HelperScriptTarget } from '../../core/helperScripts.js'
 import type { TavernRemote } from '../types.js'
@@ -98,10 +98,15 @@ export function ScriptSettings({remote}:{remote:TavernRemote}) {
 function NativeMvuEnable({sessionId}:{sessionId:string}) {
   const t=useT()
   const [busy,setBusy]=useState(false),[error,setError]=useState<string|null>(null)
+  const busyRef=useRef(false),aliveRef=useRef(true)
+  useEffect(()=>{aliveRef.current=true;return()=>{aliveRef.current=false}},[])
   const enable=()=>{
-    if(busy)return
+    if(busyRef.current)return
+    busyRef.current=true
     setBusy(true);setError(null)
-    enableScriptMvu(sessionId).then(found=>{if(!found)setError(t('settings.scripts.nativeUnavailable'))},cause=>setError(describeError(cause))).finally(()=>setBusy(false))
+    enableScriptMvu(sessionId)
+      .then(found=>{if(aliveRef.current&&!found)setError(t('settings.scripts.nativeUnavailable'))},cause=>{if(aliveRef.current)setError(describeError(cause))})
+      .finally(()=>{busyRef.current=false;if(aliveRef.current)setBusy(false)})
   }
   return <><Btn disabled={busy} onClick={enable}>{t('settings.scripts.nativeEnable')}</Btn><Err message={error}/></>
 }

@@ -223,7 +223,7 @@ export function SpeechHtmlFrame(props: {
       if(helperRecord(value)&&value.source==='dsh-tavern-card'&&value.action==='helperDisplayGuardResult'&&typeof value.requestId==='string'){
         const id=value.requestId,guard=guards.get(id);if(!guard)return
         guards.delete(id);clearTimeout(guard.timer)
-        if(value.ok!==true||pending.size||editPending){unlock(id,guard.runtimeId);guard.reject(new Error(typeof value.error==='string'?value.error:handlers.current.t('speech.helperSaveBusy')));return}
+        if(value.ok!==true||pending.size||editPending||editFinished||editReceipts.size){unlock(id,guard.runtimeId);guard.reject(new Error(typeof value.error==='string'?value.error:handlers.current.t('speech.helperSaveBusy')));return}
         heldGuards.add(id)
         eventEndpoint?.setHostEventsEnabled(false)
         // 锁从准备重绘时取得，随后还要覆盖最多 25s 服务端重渲染和 60s 隐藏投影发布。
@@ -253,9 +253,10 @@ export function SpeechHtmlFrame(props: {
         })().catch(error=>{if(currentRuntime())displayBusy=false;respond({ok:false,error:displayFailure(error,handlers.current.t)})})
         return
       }
-      if(heldGuards.size&&helperRecord(value)&&value.source==='dsh-tavern-card'&&typeof value.action==='string'){
+      if((heldGuards.size||guards.size)&&helperRecord(value)&&value.source==='dsh-tavern-card'&&typeof value.action==='string'){
         const responses:Record<string,string>={helperMessageEdit:'helperMessageEditResult',helperVariablesCommit:'helperVariablesResult',helperSnapshotGet:'helperSnapshotResult',helperScriptLibraryCommit:'helperScriptLibraryResult',helperScriptLibrariesGet:'helperScriptLibrariesResult',helperWorldbookOperation:'helperWorldbookResult',helperWorldbookContextGet:'helperWorldbookContextResult',helperWorldbookBind:'helperWorldbookBindResult'}
-        const action=responses[value.action]
+        const isGuardMutation=value.action==='helperMessageEdit'||value.action==='helperVariablesCommit'||value.action==='helperScriptLibraryCommit'||value.action==='helperWorldbookOperation'&&value.operation!=='get'||value.action==='helperWorldbookBind'
+        const action=heldGuards.size?responses[value.action]:(isGuardMutation?responses[value.action]:undefined)
         if(action){iframeRef.current.contentWindow?.postMessage({source:'dsh-tavern-card',action,requestId:value.requestId,runtimeId,ok:false,error:handlers.current.t('speech.helperSaveBusy')},'*');return}
         if(value.action==='swipeGreeting')return
       }

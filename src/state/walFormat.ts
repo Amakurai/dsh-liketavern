@@ -54,6 +54,17 @@ export function baseFloorDir(name: string): string {
   return isRolledBackDir(name) ? name.replace(ROLLED_BACK_SUFFIX, '') : name
 }
 
+const WINDOWS_RESERVED_FLOOR_DIR = /^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9]|CLOCK\$)(?:\.|$)/i
+
+/** 校验净化后的楼层目录名：禁止空串、当前/上级目录、尾点、Windows 保留设备名及已归滚后缀。 */
+export function isValidWalFloorDir(dirName: string): boolean {
+  if (!dirName || dirName === '.' || dirName === '..') return false
+  if (isRolledBackDir(dirName)) return false
+  if (WINDOWS_RESERVED_FLOOR_DIR.test(dirName)) return false
+  if (dirName.endsWith('.')) return false
+  return /^[A-Za-z0-9_.-]+$/.test(dirName)
+}
+
 /** 楼层 id → 目录名：非法字符替换为 '_'（同字符冲突由调用方保证不出现）。 */
 export function sanitizeFloor(floor: string): string {
   return floor.replace(/[^A-Za-z0-9_.-]/g, '_')
@@ -191,6 +202,7 @@ export function parseWalCoverage(value: unknown): WalCoverageFloor[] | null {
     || !Array.isArray(value.floors) || value.floors.some(floor => !isRecord(floor)
       || Object.keys(floor).some(key => !['floor', 'startedAt'].includes(key))
       || typeof floor.floor !== 'string' || !floor.floor || floor.floor.length > 512
+      || !isValidWalFloorDir(sanitizeFloor(floor.floor))
       || typeof floor.startedAt !== 'string' || !Number.isFinite(Date.parse(floor.startedAt)))
     || new Set(value.floors.map(floor => floor.floor)).size !== value.floors.length) return null
   return value.floors as WalCoverageFloor[]
@@ -203,7 +215,7 @@ export function parseWalCoverage(value: unknown): WalCoverageFloor[] | null {
 export function parseRecoveryMarker(value: unknown): { floors: string[]; bodyRoot?: string; valid: boolean } {
   if (!isRecord(value)) return { floors: [], valid: false }
   const rawFloors = Array.isArray(value.floors) ? value.floors : []
-  const floors = rawFloors.filter((floor): floor is string => typeof floor === 'string' && floor.length > 0 && floor.length <= 512)
+  const floors = rawFloors.filter((floor): floor is string => typeof floor === 'string' && floor.length > 0 && floor.length <= 512 && isValidWalFloorDir(sanitizeFloor(floor)))
   const expectedDirs = floors.map(sanitizeFloor)
   const valid = value.version === 1 && Array.isArray(value.floors) && Array.isArray(value.dirs)
     && floors.length > 0 && floors.length === value.floors.length

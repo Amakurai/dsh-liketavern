@@ -28,6 +28,8 @@ export declare const ROLLED_BACK_MARK = ".rolled-back-";
 export declare function isRolledBackDir(name: string): boolean;
 /** 副本目录去掉后缀得到原楼层目录名；活跃目录原样返回。 */
 export declare function baseFloorDir(name: string): string;
+/** 校验净化后的楼层目录名：禁止空串、当前/上级目录、尾点、Windows 保留设备名及已归滚后缀。 */
+export declare function isValidWalFloorDir(dirName: string): boolean;
 /** 楼层 id → 目录名：非法字符替换为 '_'（同字符冲突由调用方保证不出现）。 */
 export declare function sanitizeFloor(floor: string): string;
 /** Buffer 的 base64 解码会忽略坏字符和截断；必须往返一致才允许用作恢复镜像。 */

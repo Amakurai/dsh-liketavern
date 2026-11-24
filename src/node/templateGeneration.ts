@@ -72,10 +72,12 @@ export function createTemplateGeneration(
       offset=finish+end.length
     }
   }
+  const stripSyntheticPrefix = (text: string) =>
+    text.replace(/^(?:<% \/\* (?:activewi|conditional lore|positioned template|preprocessed) \*\/ %>)+/, '')
   return {
     renderTemplate:(text,key,context)=> {
       // 内部动态标记不属于角色原文，也不能让同一匹配的来源偏移在重组后改变。
-      text=text.replace(/^(?:<% \/\* (?:activewi|conditional lore|positioned template|preprocessed) \*\/ %>)+/,'')
+      text=stripSyntheticPrefix(text)
       sources.push({text,key,context})
       return `${prefix}${sources.length-1}${end}`
     },
@@ -124,7 +126,7 @@ export function createTemplateGeneration(
           world_info:{...entry,key:entry.keys,keysecondary:entry.secondaryKeys,world:entry.sourceRef,disable:!entry.enabled},
           matched_message:message?.content ?? '',matched_message_index:index,matched_message_role:message?.role ?? ''}
         const key=`${entry.key}:generation:${matchKey}`
-        const prepared=transform(expandMacros(entry.content,macroCtx),key,{role:message?.role ?? 'system',worldinfo:true,depth:0})
+        const prepared=transform(expandMacros(stripSyntheticPrefix(entry.content),macroCtx),key,{role:message?.role ?? 'system',worldinfo:true,depth:0})
         return checked(expandMacros(sandbox.renderSource(prepared,key,data),macroCtx))
       }
       const runHooks=(selected:Hook[],index:number,prior:string,message:ChatMessage|undefined,matchKey:string):string=> {

@@ -38,10 +38,13 @@ const v0512Loader=String.raw`
   syncBuiltinESMExports();
   registerHooks({load(url,context,next){
     const loaded=next(url,context);
+    if(url.endsWith('/node/templateAssets.ts'))return {...loaded,source:v0512.templateAssets};
     if(url.endsWith('/node/templateBootstrap.ts'))return {...loaded,source:v0512.templateBootstrap};
+    if(url.endsWith('/node/templateEjs.ts'))return {...loaded,source:v0512.templateEjs};
     if(url.endsWith('/node/templateHelperMvu.ts'))return {...loaded,source:v0512.templateHelperMvu};
     if(url.endsWith('/node/templateHelpers.ts'))return {...loaded,source:v0512.templateHelpers};
     if(url.endsWith('/node/templateMessageVariables.ts'))return {...loaded,source:v0512.templateMessageVariables};
+    if(url.endsWith('/node/templateRegexSources.ts'))return {...loaded,source:v0512.templateRegexSources};
     if(url.endsWith('/node/templateSandbox.ts'))return {...loaded,source:v0512.templateSandbox};
     if(url.endsWith('/node/templateWorldInfo.ts'))return {...loaded,source:v0512.templateWorldInfo};
     return loaded;

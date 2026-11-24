@@ -549,14 +549,43 @@ export function expandMacros(
   }
 
   const replaceInnermost = (mode: 'non-get' | 'nested-get' | 'all', unknowns: string[] | null): void => {
+    let nestedStarts: Set<number> | undefined
+    if (mode === 'nested-get') {
+      // 栈项记录外层闭合子项：位于至少一层已闭合外层宏内部的所有最内层 getvar 在同一趟一并展开，
+      // 避免多枚并列 {{getvar}} 逐趟依次展开耗尽 MAX_PASSES。
+      const stack: Array<{ start: number; closedChildren: number[] }> = []
+      nestedStarts = new Set<number>()
+      for (let i = 0; i < current.length - 1; ) {
+        if (current[i] === '{') {
+          let runEnd = i + 1
+          while (runEnd < current.length && current[runEnd] === '{') runEnd++
+          const runLen = runEnd - i
+          if (runLen >= 2) {
+            if (runLen % 2 === 1) i++
+            while (i + 1 < runEnd) {
+              stack.push({ start: i, closedChildren: [] })
+              i += 2
+            }
+            continue
+          }
+          i = runEnd
+          continue
+        }
+        if (current[i] === '}' && current[i + 1] === '}' && stack.length > 0) {
+          const frame = stack.pop()!
+          for (const childStart of frame.closedChildren) nestedStarts.add(childStart)
+          if (stack.length > 0) stack[stack.length - 1]!.closedChildren.push(frame.start)
+          i += 2
+          continue
+        }
+        i++
+      }
+    }
     current = current.replace(MACRO_RE, (raw, inner: string, offset: number) => {
       if (postOpen && postClose) inner = inner.replaceAll(postOpen, '').replaceAll(postClose, '')
       if (mode === 'non-get' && isGetVar(inner)) return raw
       if (mode === 'nested-get') {
-        if (!isGetVar(inner)) return raw
-        const prevOpen = offset >= 2 ? current.lastIndexOf('{{', offset - 2) : -1
-        const prevClose = offset >= 2 ? current.lastIndexOf('}}', offset - 2) : -1
-        if (prevOpen <= prevClose || current.indexOf('}}', offset + raw.length) < 0) return raw
+        if (!isGetVar(inner) || !nestedStarts?.has(offset)) return raw
       }
       const trimmedLower = inner.trim().toLowerCase()
       if (trimmedLower === 'trim') return getTrimMarker()

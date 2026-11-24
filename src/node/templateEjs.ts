@@ -20,6 +20,8 @@ __TavernTemplateLibraries.ejsUtils.shallowCopy=function(target,source){
   }
   return copyEjsData(target,source);
 };
+const IDENTIFIER_RE=/^[A-Za-z_$][A-Za-z0-9_$]*$/;
+const RESERVED_WORDS=new Set(['await','break','case','catch','class','const','continue','debugger','default','delete','do','else','enum','export','extends','false','finally','for','function','if','import','in','instanceof','let','new','null','return','static','super','switch','this','throw','true','try','typeof','var','void','while','with','yield','implements','interface','package','private','protected','public','arguments','eval']);
 async function evalTemplate(text,data={},compileOptions={}) {
   if(++depth>16) { depth--; throw Error('模板嵌套超过 16 层'); }
   try {
@@ -33,8 +35,13 @@ async function evalTemplate(text,data={},compileOptions={}) {
     __bindTemplateDefinitions(locals);
     const opts={async:true,outputFunctionName:'print',_with:true,localsName:'locals',...compileOptions};
     if(opts._with===false && opts.destructuredLocals===undefined) {
+      const sourceText=String(text),needsFaker=/\bfaker\b/.test(sourceText);
       opts.destructuredLocals=[];
-      for(const key in locals) opts.destructuredLocals.push(key);
+      for(const key in locals) {
+        if(!IDENTIFIER_RE.test(key) || RESERVED_WORDS.has(key)) continue;
+        if(key==='faker' && !Object.hasOwn(locals,'faker') && !needsFaker) continue;
+        opts.destructuredLocals.push(key);
+      }
     }
     opts.context=compileOptions.context===undefined?locals:compileOptions.context;
     opts.escape=compileOptions.escape || compileOptions.escapeFunction || (value=>__templateEscaper(value,locals));

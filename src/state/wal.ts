@@ -14,18 +14,18 @@ import { createHash } from 'node:crypto'
 import { Buffer } from 'node:buffer'
 import type { Dirent } from 'node:fs'
 import { lstat, mkdir, readFile, readdir, rm, stat } from 'node:fs/promises'
-import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { atomicWrite } from './atomicWrite.js'
 import { rootIdentity } from './pathIdentity.js'
 import { renameWithRetry } from './rename.js'
 import { withWorkspaceLock } from './workspaceLock.js'
-import { expandAffectedMemories } from './memoryRollback.js'
+import { applyExpandAffectedMemories, planExpandAffectedMemories, type MemoryExpansionPlan } from './memoryRollback.js'
 import { mapBounded, WAL_RECOVERY_PATH, withRecoveryWriteAccess, WorkspaceFs, WORKSPACE_RECOVERING_MESSAGE } from './workspaceFs.js'
 import { rebuildIndex } from './workspace.js'
 import { estimateTokens } from '../core/tokenize.js'
 import { readTemplateDocument, TEMPLATE_DATA_PATH } from './templateStorage.js'
 import {
-  baseFloorDir, checkRollbackProgress, isFloorMetaShape, isRolledBackDir, MAX_WAL_COVERAGE_BYTES, parseRecoveryMarker,
+  baseFloorDir, checkRollbackProgress, isFloorMetaShape, isRolledBackDir, isValidWalFloorDir, MAX_WAL_COVERAGE_BYTES, parseRecoveryMarker,
   parseWalCoverage, recordLineIssue, recordPathIdentity, rollbackTarget, ROLLED_BACK_MARK, sanitizeFloor, snapshotBytes,
   WAL_BINARY_MARK, type RecordLine, type RecordLineIssue, type RollbackProgress, type RollbackProgressIssue,
 } from './walFormat.js'
@@ -335,13 +335,38 @@ export class Wal {
     throw new Error(`WAL 已登记楼层缺失或未完成回滚：${targetFloor}；请恢复完整日志，不能重新开始`)
   }
 
+  private assertWithinRoot(target: string): void {
+    const resolvedTarget = resolve(target)
+    const resolvedRoot = resolve(this.rootDir)
+    if (resolvedTarget === resolvedRoot) return
+    const check = (value: string) => (process.platform === 'win32' ? value.toLowerCase() : value)
+    const targetKey = check(resolvedTarget)
+    if (this.hasCoverage && targetKey === check(resolve(join(this.logFs.root, WAL_COVERAGE_PATH)))) return
+    if (targetKey === check(resolve(this.recoveryMarkerPath()))) return
+    const rootPrefix = resolvedRoot.endsWith(sep) ? resolvedRoot : resolvedRoot + sep
+    if (!targetKey.startsWith(check(rootPrefix))) {
+      throw new Error(`WAL 路径越界：${target}`)
+    }
+  }
+
+  private floorDir(floor: string): { dirName: string; dir: string } {
+    if (!floor) throw new Error(`WAL 楼层 ID 无效：${floor}`)
+    const dirName = sanitizeFloor(floor)
+    if (!isValidWalFloorDir(dirName)) throw new Error(`WAL 楼层目录名非法：${floor}`)
+    return { dirName, dir: join(this.rootDir, dirName) }
+  }
+
   private async assertLogPath(target = this.rootDir): Promise<void> {
+    this.assertWithinRoot(target)
     await this.logFs.assertSafePath(relative(this.logFs.root, target))
   }
 
   private async assertLogPaths(targets: Iterable<string>): Promise<void> {
     const rels: string[] = []
-    for (const target of targets) rels.push(relative(this.logFs.root, target))
+    for (const target of targets) {
+      this.assertWithinRoot(target)
+      rels.push(relative(this.logFs.root, target))
+    }
     await this.logFs.assertSafePaths(rels)
   }
 
@@ -364,8 +389,7 @@ export class Wal {
     beforeEncoding: 'utf8' | 'base64'; afterEncoding: 'utf8' | 'base64' }>): Promise<void> {
     return this.enqueue(async () => {
       if (!changes.length) return
-      const dirName = sanitizeFloor(floor)
-      const dir = join(this.rootDir, dirName)
+      const { dir } = this.floorDir(floor)
       await this.assertLogPaths([dir, ...WAL_FLOOR_MARKERS.map((marker) => join(dir, marker))])
       if (!(await isDir(dir))) throw new Error(`楼层 "${floor}" 未开始（或已回滚），无法记录写入快照`)
       await this.assertNotRecovering(dir, { verified: true })
@@ -404,7 +428,7 @@ export class Wal {
   /** 已完成楼层追加受控事务前重新标记未收口；保留全部快照和时间，先验证整层，不能用旧 committed 掩盖新写入失败。 */
   reopenFloor(floor: string): Promise<void> {
     return this.enqueue(async () => {
-      const dir = join(this.rootDir, sanitizeFloor(floor))
+      const { dir } = this.floorDir(floor)
       await this.assertLogPath(dir)
       if (!(await isDir(dir))) throw new Error(`WAL 楼层缺失或已回滚：${floor}`)
       await this.assertNotRecovering(dir)
@@ -436,7 +460,7 @@ export class Wal {
     const identity=recordPathIdentity(path.replace(/\\/g,'/'))
     let snapshot=current===null?null:Buffer.from(current).toString('base64')
     return this.enqueue(async()=> {
-      const dir=join(this.rootDir,sanitizeFloor(floor))
+      const { dir } = this.floorDir(floor)
       await this.assertLogPath(dir)
       await this.readFloorMeta(dir,floor)
       await this.assertNotRecovering(dir)
@@ -464,7 +488,7 @@ export class Wal {
   /** 只读检查可用楼层：元数据、序号、路径与快照必须有效；回滚中的旧 committed 不能作为完成证明。 */
   validateFloor(floor: string): Promise<WalFloorInfo> {
     return this.enqueue(async () => {
-      const dir = join(this.rootDir, sanitizeFloor(floor))
+      const { dir } = this.floorDir(floor)
       await this.assertLogPaths([dir, ...WAL_FLOOR_MARKERS.map((marker) => join(dir, marker))])
       if (!(await isDir(dir)) || (await isUnstartedDir(dir))) {
         await this.assertWorkspaceReady()
@@ -678,7 +702,9 @@ export class Wal {
   private async activeRecoveryFloors(floors: readonly string[]): Promise<string[]> {
     const active: string[] = []
     for (const floor of floors) {
-      const dir = join(this.rootDir, sanitizeFloor(floor))
+      const dirName = sanitizeFloor(floor)
+      if (!isValidWalFloorDir(dirName)) continue
+      const dir = join(this.rootDir, dirName)
       if (!(await isDir(dir))) continue
       const progress = await stat(join(dir, 'rollback-progress.json')).catch((error: NodeJS.ErrnoException) => {
         if (error.code === 'ENOENT') return null
@@ -786,7 +812,7 @@ export class Wal {
    */
   resetRollbackCursor(floor: string): Promise<void> {
     return this.enqueue(async () => {
-      const dir = join(this.rootDir, sanitizeFloor(floor))
+      const { dir } = this.floorDir(floor)
       await this.assertLogPath(dir)
       if (!(await isDir(dir))) throw new Error(`楼层 "${floor}" 不存在或已回滚，无法重置回滚游标`)
       await this.readFloorMeta(dir, floor)
@@ -864,8 +890,7 @@ export class Wal {
 
   private async doBeginFloor(floor: string): Promise<void> {
     await mkdir(this.rootDir, { recursive: true })
-    const dirName = sanitizeFloor(floor)
-    const dir = join(this.rootDir, dirName)
+    const { dir } = this.floorDir(floor)
     await this.assertLogPaths([dir, ...WAL_FLOOR_MARKERS.map((marker) => join(dir, marker))])
     if (await isDir(dir) && !(await isUnstartedDir(dir))) {
       const meta = await this.readMeta(dir, { verified: true })
@@ -896,7 +921,7 @@ export class Wal {
 
   private async doCommitFloor(floor: string): Promise<void> {
     await mkdir(this.rootDir, { recursive: true })
-    const dir = join(this.rootDir, sanitizeFloor(floor))
+    const { dir } = this.floorDir(floor)
     await this.assertLogPaths([dir, ...WAL_FLOOR_MARKERS.map((marker) => join(dir, marker))])
     const meta = await this.readFloorMeta(dir, floor, { verified: true })
     await this.assertNotRecovering(dir, { verified: true })
@@ -912,11 +937,10 @@ export class Wal {
   private async doRollbackFloor(
     floor: string,
     workspaceRoot: string,
-    preloaded?: { dirExists: boolean; meta: FloorMeta | null; records: RecordLine[]; progress: RollbackProgress },
+    preloaded?: { dirExists: boolean; meta: FloorMeta | null; records: RecordLine[]; progress: RollbackProgress; memoryPlan?: MemoryExpansionPlan | null },
   ): Promise<string[]> {
     await mkdir(this.rootDir, { recursive: true })
-    const dirName = sanitizeFloor(floor)
-    const dir = join(this.rootDir, dirName)
+    const { dirName, dir } = this.floorDir(floor)
     if (!preloaded) await this.assertLogPath(dir)
     if (!(preloaded ? preloaded.dirExists : await isDir(dir))) {
       throw new Error(
@@ -937,6 +961,11 @@ export class Wal {
           ...(preloaded.progress.pending ? { pending: { ...preloaded.progress.pending } } : {}),
         }
       : await this.readRollbackProgress(dir, records)
+    // 先在只读规划阶段校验受影响的记忆归并谱系；缺失或循环必须在写入恢复标记与游标之前拒绝，
+    // 否则工作区会被无效恢复状态锁死。
+    const memoryPlan = preloaded && preloaded.memoryPlan !== undefined
+      ? preloaded.memoryPlan
+      : await planExpandAffectedMemories(workspaceRoot, records.filter((record) => !isNoopRecord(record)).map((record) => record.path))
     // 先登记工作区级恢复标记，再写恢复游标：标记存在期间所有外部/面板/其它楼层写入都被拒绝，
     // 恢复自身的正文替换与摘要展开经 withRecoveryWriteAccess 放行。崩溃遗留的标记会在下一次
     // 回滚重试时继续生效，完成后才注销；受控重置用 resetRollbackCursor。
@@ -951,7 +980,7 @@ export class Wal {
     await checkpoint()
     // 同值快照没有撤销事实；不能仅因路径出现过就拆掉后来生成的摘要与归档来源。
     // 沿用字节级判定，兼容文本、base64 以及旧版补写 after 的日志。
-    await expandAffectedMemories(workspaceRoot, records.filter((record) => !isNoopRecord(record)).map((record) => record.path))
+    await applyExpandAffectedMemories(workspaceRoot, memoryPlan)
     const currentBytes = async (path: string) => {
       const bytes = await bodyFs.readBytes(path)
       return bytes === null ? null : Buffer.from(bytes).toString('base64')
@@ -1028,7 +1057,7 @@ export class Wal {
   private async preflightRollback(
     floors: string[],
     workspaceRoot: string,
-  ): Promise<Map<string, { dirExists: boolean; meta: FloorMeta | null; records: RecordLine[]; progress: RollbackProgress }>> {
+  ): Promise<Map<string, { dirExists: boolean; meta: FloorMeta | null; records: RecordLine[]; progress: RollbackProgress; memoryPlan?: MemoryExpansionPlan | null }>> {
     const bodyFs = new WorkspaceFs(workspaceRoot, null)
     const logRelative = relative(workspaceRoot, this.rootDir)
     // 正常剧情日志在工作区内，要连同内部父路径一起检查；独立日志根仍遵守自己的显式边界。
@@ -1051,7 +1080,7 @@ export class Wal {
     const lastStep = new Map(floors.map((floor, index) => [floor, index]))
     type IndexedChange = { rec: RecordLine; startedAt: number | null; step: number; afterBytes: string | null }
     const changesByPath = new Map<string, IndexedChange[]>()
-    const targetLoaded = new Map<string, { dirExists: boolean; meta: FloorMeta | null; records: RecordLine[]; progress: RollbackProgress }>()
+    const targetLoaded = new Map<string, { dirExists: boolean; meta: FloorMeta | null; records: RecordLine[]; progress: RollbackProgress; memoryPlan?: MemoryExpansionPlan | null }>()
     const knownMetasByDir = new Map<string, FloorMeta>()
     const uncheckedBodyPaths = new Set<string>()
     let hasNullStartedAt = false
@@ -1060,7 +1089,7 @@ export class Wal {
     let expandsMemory = false
     let rebuildsIndex = false
     for (const floor of floors) {
-      const dir = join(this.rootDir, sanitizeFloor(floor))
+      const { dir } = this.floorDir(floor)
       const verified = verifiedFloorDirs.has(dir)
       // 净化目录名不是楼层身份：不同原始 id 可能共用同一目录名。
       // 必须在整批开始前核对元数据，不能撤销到另一个楼层或等较新楼层已恢复才发现冲突。
@@ -1139,6 +1168,20 @@ export class Wal {
           throw new Error(`WAL 存在未撤销的后继依赖：${floor.floor}（${rec.path}）；请从最新楼层依次回退`)
         }
       }
+    }
+    // 对尚未被较新待回滚楼层改动过的记忆目录，提前在整批开始前完成只读归并规划。
+    let newerTouchedMemory = false
+    for (let i = floors.length - 1; i >= 0; i--) {
+      const entry = targetLoaded.get(floors[i]!)
+      if (!entry || !entry.dirExists) continue
+      const touchesMemory = entry.records.some((record) => !isNoopRecord(record) && recordPathIdentity(record.path).startsWith('memory/'))
+      if (!newerTouchedMemory) {
+        entry.memoryPlan = await planExpandAffectedMemories(
+          workspaceRoot,
+          entry.records.filter((record) => !isNoopRecord(record)).map((record) => record.path),
+        )
+      }
+      if (touchesMemory) newerTouchedMemory = true
     }
     return targetLoaded
   }

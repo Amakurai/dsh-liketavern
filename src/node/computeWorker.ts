@@ -69,6 +69,9 @@ function hasTemplateText(value: unknown): boolean {
 }
 
 const sandboxCache = new TemplateWorkerCache()
+function safeDispose(sandbox?: { dispose(): void } | null): void {
+  try { sandbox?.dispose() } catch {}
+}
 async function compute(request: typeof workerData):Promise<void> {
   let cacheKey:string|undefined,cacheHit=false
   const send=(message:Record<string,unknown>)=>parentPort!.postMessage({id:request.id,...message})
@@ -135,7 +138,7 @@ async function compute(request: typeof workerData):Promise<void> {
           templateContinuation:exportTemplateContinuation(sandbox,assembleTemplates),templateRegexRules:sandbox.regexDescriptors(),templateHasMessageRegex:sandbox.hasMessageRegex(),templateReplay:sandbox.replay()} : {})}
         value=result
         if(sandbox && assembleTemplates && result.templateReplay) {cacheKey=sandboxCache.keep(sandbox,result.templateReplay,assembleTemplates);retained=true}
-      } finally { if(!retained)sandbox?.dispose() }
+      } finally { if(!retained)safeDispose(sandbox) }
     }
     else if (kind === 'template') {
       const continuation=input.templateContinuation && parseTemplateContinuation(input.templateContinuation)
@@ -159,7 +162,7 @@ async function compute(request: typeof workerData):Promise<void> {
         value=result
         if(result.templateContinuation?.replay) {cacheKey=sandboxCache.keep(sandbox,result.templateContinuation.replay,input.context);retained=true}
       }
-      finally { if(!retained)sandbox.dispose() }
+      finally { if(!retained)safeDispose(sandbox) }
     }
     else if (kind === 'wi') {
       const sandbox = templateClass ? await templateClass.create(input.templates) : null
@@ -171,7 +174,7 @@ async function compute(request: typeof workerData):Promise<void> {
           return { ...entry, content:`<% /* conditional lore */ %>${entry.content}` }
         })
         value = evaluateWorldInfo({ ...input, entries, estimateTokens, random: createTurnRandom(input.seed) })
-      } finally { sandbox?.dispose() }
+      } finally { safeDispose(sandbox) }
     }
     else if (kind === 'render') { beginComputing(); value = applyRegexRules(input.text, input.rules, { scope: 'output', timing: 'render', ...(input.depth !== undefined ? { depth: input.depth } : {}) }, input.macroCtx) }
     else if (kind === 'display') { beginComputing(); value = presentTemplateDisplayResult(input.parts,input.rules,input.macroCtx,input.depth) }

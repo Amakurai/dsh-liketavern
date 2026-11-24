@@ -687,6 +687,9 @@ function jsonLimitForDataFile(dataRoot: string, filePath: string): number {
   const storyId = match[2]
   if (storyId !== undefined && !/^(?:story-[a-f0-9-]{36}|legacy-[a-f0-9]{32})$/.test(storyId)) return MAX_JSON_BYTES
   const sub = match[3]!
+  if (storyId === undefined && sub === 'assets/character-book.json') {
+    return MAX_STORED_CARD_JSON_BYTES
+  }
   if (sub === 'state/template.json' || /^state\/template-generation\/[^/]+\.json$/.test(sub)) {
     return TEMPLATE_DOCUMENT_LIMIT
   }

@@ -60,8 +60,9 @@ export function HelperMvuRunner(props:{remote:TavernRemote;sessionId:string;stor
       return 1000
     }
     const scheduleTimer=()=>{
-      if(timerId!==undefined)clearTimeout(timerId)
+      if(timerId!==undefined){clearTimeout(timerId);timerId=undefined}
       if(!active||(failed&&result===undefined)||restart)return
+      if(!running&&(!frameRuntime||!live.current.ready))return
       timerId=setTimeout(()=>{timerId=undefined;void poll()},nextPollDelay())
     }
     const runtimeId=randomUuid(),{sessionId,storyId}=props
@@ -79,7 +80,7 @@ export function HelperMvuRunner(props:{remote:TavernRemote;sessionId:string;stor
     const send=(message:Record<string,unknown>)=>{if(active)frame.current?.contentWindow?.postMessage({source:'dsh-tavern-card',...message},'*')}
     const valid=()=>active&&running&&!failed&&live.current.ready&&Boolean(work?.job)&&Date.now()<deadline
     const endpoint=attachHelperEvents(sessionId,storyId,send,{current:valid,snapshot:()=>work?.snapshot})
-    const fail=(value:unknown)=>{if(active){failed=true;running=false;setBusy(false);setError(String(value instanceof Error?value.message:value).slice(0,2000))}}
+    const fail=(value:unknown)=>{if(active){failed=true;running=false;if(result===undefined&&timerId!==undefined){clearTimeout(timerId);timerId=undefined}setBusy(false);setError(String(value instanceof Error?value.message:value).slice(0,2000))}}
     const complete=(next?:Partial<HelperMvuWork>)=>{
       work=undefined;result=undefined;running=false;failed=false;restart=false;renewFailures=0
       if(next&&next.status==='idle'&&!next.awaitingTurnEnd){idleAttempts=1;idlePollAt=Date.now()+IDLE_POLL_BASE_DELAY_MS}
@@ -99,12 +100,14 @@ export function HelperMvuRunner(props:{remote:TavernRemote;sessionId:string;stor
         if(!response.ok)throw new Error(response.error.message)
         if(!active)return
         complete(response.value)
-      }finally{committing=false;if(wakeQueued&&active){wakeQueued=false;void poll()}}
+      }finally{committing=false;if(wakeQueued&&active){wakeQueued=false;void poll()}else scheduleTimer()}
     }
     const poll=async()=>{
-      if(!active||polling||committing||!frameRuntime||!live.current.ready){scheduleTimer();return}
+      if(!active||polling||committing)return
       if((failed&&result===undefined)||restart)return
+      if(running&&!live.current.ready){fail(t('speech.mvuScriptsNotReady'));return}
       if(running&&Date.now()>deadline){fail(t('speech.mvuExecutionTimeout'));return}
+      if(!frameRuntime||!live.current.ready)return
       if(work&&Date.now()<renewAt){scheduleTimer();return}
       if(!work&&Date.now()<idlePollAt){scheduleTimer();return}
       polling=true
@@ -194,7 +197,7 @@ export function HelperMvuRunner(props:{remote:TavernRemote;sessionId:string;stor
     scheduleTimer()
     return()=>{active=false;if(timerId!==undefined)clearTimeout(timerId);stopWatch();for(const cancel of requests)cancel();endpoint.dispose();window.removeEventListener('message',receive);retry.current=()=>{};pollRef.current=()=>{}}
   },[props.sessionId,props.storyId,srcDoc,sandboxGen])
-  useEffect(()=>{if(props.ready)pollRef.current()},[props.ready])
+  useEffect(()=>{pollRef.current()},[props.ready])
   return <span>
     <Muted>{t(!props.ready?'speech.mvuWaiting':busy?'speech.mvuRunning':'speech.mvuReady')}</Muted>
     <Err message={error}/>

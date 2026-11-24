@@ -36,9 +36,11 @@ const DETERMINISTIC_TEMPLATE_SCRIPT_ERROR_PREFIXES = [
   '模板变量状态损坏',
   '模板变量作用域损坏',
   '模板消息格式化输出超过',
+  '模板展示片段',
+  '模板展示标题无效',
   '消息变量导出无效',
   '单条消息变量快照超过',
-  '消息变量快照超过',
+  '消息变量快照',
   '临时正则返回值无效',
   '正则来源结果无效',
   '模板注入出口返回无效',
@@ -98,10 +100,20 @@ export async function completeTemplateOutput(state:TavernState,session:Pick<Sess
     const normalizedEntries = context.entries.map(normalizeTemplateLore)
     const before = normalizedEntries.filter(entry=>entry.enabled && !entry.templateOnlyPreload && /^\[RENDER:BEFORE\]/i.test(entry.comment))
     const after = normalizedEntries.filter(entry=>entry.enabled && !entry.templateOnlyPreload && /^\[RENDER:AFTER\]/i.test(entry.comment))
+    const hasPersistedTemplateState = Boolean(
+      context.historyIdentities?.length
+      || context.helperMvu !== undefined
+      || Object.keys(stored.variables.global).length
+      || Object.keys(stored.variables.local).length
+      || Object.keys(stored.variables.message).length
+      || Object.keys(stored.messageVariables?.snapshots ?? {}).length
+      || stored.continuation !== undefined
+      || replay !== undefined
+    )
     const pending:typeof candidates = []
     for (const candidate of candidates) {
       if (!candidate.normalStop) continue
-      if (!historyIdentities && !hasEjs(candidate.text) && !before.length && !after.length && !context.regexRules?.length && !context.hasMessageRegex) continue
+      if (!hasPersistedTemplateState && !hasEjs(candidate.text) && !before.length && !after.length && !context.regexRules?.length && !context.hasMessageRegex) continue
       if (stored.outputs[candidate.id]?.hash===templateTextHash(candidate.text)) continue
       if (stored.outputs[candidate.id]) throw new Error('已处理的模板回复发生改写，请回滚该楼层后继续')
       pending.push(candidate)

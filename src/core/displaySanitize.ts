@@ -1655,7 +1655,7 @@ function streamingHtmlStart(text: string, scanMarkdown: boolean | ReturnType<typ
 
 /** 流式正文只显示卡面前的台词；关闭交互卡时维持显式源码展示。 */
 export function presentStreamingOutput(text: string, allowHtml: boolean): { text: string; pendingHtml: boolean } {
-  if (!allowHtml) return { text: stripDisplayMeta(text), pendingHtml: false }
+  if (!allowHtml) return { text: stripDisplayMeta(stripDisplayOpaqueMeta(text)), pendingHtml: false }
   const visible = stripDisplayOpaqueMeta(text)
   const start = streamingHtmlStart(visible)
   const prefix = start === null
@@ -1715,7 +1715,8 @@ function disabledHtmlText(rendered: string): string {
       break
     }
     segments.push({ kind: 'text', text: remaining.slice(0, located.fence?.start ?? located.start) })
-    segments.push({ kind: 'html', text: located.html })
+    const cleanHtml = stripOpaqueDisplayMeta(located.html, true)
+    if (cleanHtml.trim()) segments.push({ kind: 'html', text: cleanHtml })
     remaining = remaining.slice(located.fence?.end ?? located.start + located.html.length)
   }
   if (remaining) {
@@ -1766,8 +1767,11 @@ export function presentRenderedOutput(
       ordered.push({ kind: 'markdown', text: before })
       restParts.push(before)
     }
-    ordered.push({ kind: 'html', text: located.html })
-    htmlCount++
+    const cleanHtml = stripOpaqueDisplayMeta(located.html, false)
+    if (cleanHtml.trim()) {
+      ordered.push({ kind: 'html', text: cleanHtml })
+      htmlCount++
+    }
     remaining = remaining.slice(cutEnd)
     if (i === 127 && locateRenderedHtml(remaining)) {
       throw new Error('交互卡展示片段过多')
@@ -1778,8 +1782,11 @@ export function presentRenderedOutput(
     while (htmlCount < 128) {
       const split = locateRenderedHtml(rest)
       if (!split) break
-      ordered.push({ kind: 'html', text: split.html })
-      htmlCount++
+      const cleanHtml = stripOpaqueDisplayMeta(split.html, false)
+      if (cleanHtml.trim()) {
+        ordered.push({ kind: 'html', text: cleanHtml })
+        htmlCount++
+      }
       if (!split.rest || split.rest === rest) { rest = split.rest; break }
       rest = split.rest
     }

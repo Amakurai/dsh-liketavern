@@ -14,6 +14,7 @@ import type { TemplateReplay } from '../core/templateReplay.js'
 import type { TemplateMessageVariables } from '../core/templateMessageVariables.js'
 import type { TemplateDisplayPart } from '../core/templateDisplay.js'
 import { renderTemplateDisplay, presentTemplateDisplayResult } from './templateDisplay.js'
+import { containsTemplateOutlet } from './templateOutlets.js'
 import type { TemplateContinuation } from '../core/templateContinuation.js'
 import { prepareContinuedTemplate,exportTemplateContinuation } from './templateContinuation.js'
 import { parseTemplateContinuation,templatePreloadRevision } from '../state/templateContinuation.js'
@@ -88,12 +89,21 @@ async function compute(request: typeof workerData):Promise<void> {
           presets: input.templates.presets ?? input.preset.entries.filter((e: { enabled: boolean }) => e.enabled),
         }
       : undefined
+    const hasActiveTemplateState = Boolean(
+      assembleTemplates && (
+        assembleTemplates.helperMvu !== undefined
+        || Object.keys(assembleTemplates.variables.global).length
+        || Object.keys(assembleTemplates.variables.local).length
+        || Object.keys(assembleTemplates.variables.message).length
+        || Object.keys(assembleTemplates.messageVariables?.snapshots ?? {}).length
+      )
+    )
     const needsTemplates = kind === 'template' || kind === 'wi' && input.templates && input.entries.some((raw: WorldInfoEntry) => {
         const entry = normalizeTemplateLore(raw)
         return entry.enabled && Boolean(entry.templateCondition)
       })
       || kind === 'assemble' && assembleTemplates
-      && (input.templateContinuation || assembleTemplates.historyIdentities?.length || assembleTemplates.regexRules?.length
+      && (input.templateContinuation || Boolean(assembleTemplates.historyIdentities?.length) || hasActiveTemplateState || assembleTemplates.regexRules?.length
         || [input.card, input.preset, input.personaDescription, input.history, input.wi, input.wiEvaluation?.entries,
           input.memories, input.worldDeltas, input.authorNote, input.journalText,
           input.regexRules, input.macroCtx, assembleTemplates.variables,
@@ -154,7 +164,8 @@ async function compute(request: typeof workerData):Promise<void> {
         const rendered=input.texts.map((text: string,index:number) => {
           const meta=sandbox.setMessageContext(input.context.renderMessages?.[index] ?? null)
           if(input.context.phase==='render') return renderTemplateDisplay(text,entries,sandbox,meta,Boolean(input.decorateOutput))
-          const rendered=sandbox.resolveOutlets(sandbox.render(text))
+          const raw=sandbox.render(text)
+          const rendered=containsTemplateOutlet(raw) ? sandbox.resolveOutlets(raw) : raw
           return {text:rendered,parts:[{kind:'markdown' as const,text:rendered}]}
         })
         const result = { texts:rendered.map((result:{text:string})=>result.text),parts:rendered.map((result:{parts:TemplateDisplayPart[]})=>result.parts),variables:sandbox.variables(),messageVariables:sandbox.messageVariables(),

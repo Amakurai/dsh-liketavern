@@ -10,7 +10,7 @@ import {isTavernGreetingEvent} from '../core/greetingLog.js'
 import {CONTINUE_INSTRUCTION_PREFIX,isContinueInstruction} from '../core/dshPrompt.js'
 import type {SessionBinding} from '../core/binding.js'
 import {parseSessionBinding} from './bindings.js'
-import {loadHelperState,saveHelperState,type HelperState} from '../state/helper.js'
+import {loadHelperState,saveHelperState,serializeHelperState,type HelperState} from '../state/helper.js'
 import type {WalFloorInfo} from '../state/wal.js'
 import {withWorkspaceLock} from '../state/workspaceLock.js'
 import {getHelperSnapshot,helperHistoryOf,helperHistoryRevision} from './helperRuntime.js'
@@ -218,8 +218,10 @@ async function queue(state:TavernState,sessionId:string,session:Snapshot,live:bo
       mvu.pending.push(job)
     }
     if(!added)return
+    const nextState={...saved,mvu:parseHelperMvuState(mvu)}
+    serializeHelperState(nextState)
     await ws.wal.reopenFloor(floor)
-    await saveHelperState(ws.fs.withFloor(floor),{...saved,mvu:parseHelperMvuState(mvu)})
+    await saveHelperState(ws.fs.withFloor(floor),nextState)
   }))
 }
 export const queueHelperMvuTurn=(state:TavernState,sessionId:string,session:Snapshot):Promise<void>=>queue(state,sessionId,session,false)
@@ -357,6 +359,7 @@ export async function ensureHelperMvuScriptAnchor(ctx:Context,state:TavernState,
     await seedScripts(state,sessionId,storyId,saved)
     if(register){mvu.pending.push(job);saved.mvu=mvu}
     if(stateHash(saved)!==before){
+      serializeHelperState(saved)
       if(!register&&!mvu.pending.length){
         const latestFloor=latestOwnedActiveFloor(await ws.wal.listFloors(),binding,sessionId)
         const open=state.openFloors.get(sessionId)
@@ -410,6 +413,7 @@ export async function prepareHelperMvuJob(ctx:Context,state:TavernState,request:
       const ready=await floorReady(state,binding,request.sessionId,job,true)
       await seedScripts(state,request.sessionId,request.storyId,saved)
       mvu.pending.push(job);saved.mvu=mvu
+      serializeHelperState(saved)
       await ws.wal.reopenFloor(job.floor)
       await saveHelperState(ws.fs.withFloor(job.floor),saved)
       if(!ready.open)await ws.wal.commitFloor(job.floor)
@@ -484,6 +488,7 @@ export async function commitHelperMvuJob(ctx:Context,state:TavernState,request:R
     saved.scopes[scope(lease.job.identity)]=helperMvuData({...(saved.scopes[scope(lease.job.identity)]??{}),...data})
     mvu.pending.shift();mvu.completed.push({id:lease.job.id,identity:lease.job.identity,kind:lease.job.kind,digest,valueDigest:hash(saved.scopes[scope(lease.job.identity)]),floor:lease.job.floor})
     mvu.completed=mvu.completed.slice(-256);mvu.initialized=true;mvu.lastIdentity=lease.job.identity;saved.mvu=mvu
+    serializeHelperState(saved)
     await ws.wal.reopenFloor(lease.job.floor)
     await saveHelperState(ws.fs.withFloor(lease.job.floor),saved)
     if(!open)await ws.wal.commitFloor(lease.job.floor)

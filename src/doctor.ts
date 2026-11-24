@@ -21,6 +21,7 @@ import { CHAT_WORLDBOOK_TOTAL_BYTES } from './state/chatWorldbooks.js'
 import { TEMPLATE_DOCUMENT_LIMIT } from './state/templateStorage.js'
 import { CHARACTER_ARCHIVE_FILE, isValidCardId } from './state/workspace.js'
 import { storyRoot } from './state/story.js'
+import { rootIdentity } from './state/pathIdentity.js'
 import { WAL_COVERAGE_PATH, WAL_FLOOR_MARKERS } from './state/wal.js'
 import {
   baseFloorDir, checkRollbackProgress, isFloorMetaShape, isRolledBackDir, isValidWalFloorDir, MAX_WAL_COVERAGE_BYTES, parseRecoveryMarker,
@@ -262,7 +263,7 @@ async function readBoundedJson(
       || result.status === 'unreadable'
       || (result.status === 'oversized' && maxBytes >= MAX_JSON_BYTES)
     )) {
-      inspectedJson.set(resolve(path), result.status)
+      inspectedJson.set(rootIdentity(path), result.status)
     }
     return result
   }
@@ -288,12 +289,13 @@ async function probeDirectory(path: string, boundary?: string, verifiedDirs?: Se
       parents.push(current)
     }
     for (const parent of parents) {
-      if (verifiedDirs?.has(parent)) continue
+      if (verifiedDirs?.has(rootIdentity(parent))) continue
       const status = await probeDirectory(parent, undefined, verifiedDirs)
       if (status !== 'directory') return status
     }
   }
-  if (verifiedDirs?.has(resolvedPath)) return 'directory'
+  const pathKey = rootIdentity(resolvedPath)
+  if (verifiedDirs?.has(pathKey)) return 'directory'
   let info
   try {
     info = await lstat(path)
@@ -305,7 +307,7 @@ async function probeDirectory(path: string, boundary?: string, verifiedDirs?: Se
   let directory
   try {
     directory = await opendir(path)
-    verifiedDirs?.add(resolvedPath)
+    verifiedDirs?.add(pathKey)
     return 'directory'
   } catch {
     return 'unreadable'
@@ -374,7 +376,7 @@ async function validateWalArtifacts(
     }
   }
 
-  const progressRead = await readBoundedJson(`${directory}/rollback-progress.json`, MAX_JSON_BYTES, budget, inspectedJson)
+  const progressRead = await readBoundedJson(`${directory}/rollback-progress.json`, MAX_WAL_BYTES, budget, inspectedJson)
   if (progressRead.status === 'missing') return rolledBack && records.length > 0 ? 'unhealthy' : 'healthy'
   if (progressRead.status === 'oversized' || progressRead.status === 'budget') return 'uninspected'
   if (progressRead.status !== 'ok') return 'unhealthy'
@@ -499,7 +501,7 @@ async function inspectWalRoot(
     else stats.active += 1
 
     const directory = `${root}/${entry.name}`
-    const metaRead = await readBoundedJson(`${directory}/meta.json`, 64 * 1024, budget, inspectedJson)
+    const metaRead = await readBoundedJson(`${directory}/meta.json`, MAX_JSON_BYTES, budget, inspectedJson)
     if (metaRead.status === 'oversized' || metaRead.status === 'budget') {
       unresolvedFloors.add(baseName)
       stats.uninspected += 1
@@ -689,16 +691,20 @@ async function inspectCharacters(
 
 /** 特定剧情/角色/共享库大文件与运行时各自的持久化上限对齐，避免合法大快照在诊断与离线备份时误报超限。 */
 function jsonLimitForDataFile(dataRoot: string, filePath: string): number {
-  const rel = relative(resolve(dataRoot), resolve(filePath)).replace(/\\/g, '/')
+  const rawRel = relative(resolve(dataRoot), resolve(filePath)).replace(/\\/g, '/')
+  const rel = process.platform === 'win32' ? rawRel.toLowerCase() : rawRel
   if (/^library\/(?:lorebooks|presets)\/[^/]+\.json$/.test(rel)) {
     return MAX_STORED_CARD_JSON_BYTES
   }
   const match = /^characters\/([^/]+)\/(?:stories\/([^/]+)\/)?(.+)$/.exec(rel)
-  if (!match || !isValidCardId(match[1]!)) return MAX_JSON_BYTES
+  if (!match) return MAX_JSON_BYTES
+  const rawMatch = /^characters\/([^/]+)\/(?:stories\/([^/]+)\/)?(.+)$/i.exec(rawRel)
+  const cardId = rawMatch?.[1] ?? match[1]!
+  if (!isValidCardId(cardId)) return MAX_JSON_BYTES
   const storyId = match[2]
   if (storyId !== undefined && !/^(?:story-[a-f0-9-]{36}|legacy-[a-f0-9]{32})$/.test(storyId)) return MAX_JSON_BYTES
   const sub = match[3]!
-  if (storyId === undefined && sub === 'assets/character-book.json') {
+  if (storyId === undefined && (sub === 'card.json' || sub === 'assets/character-book.json')) {
     return MAX_STORED_CARD_JSON_BYTES
   }
   if (sub === 'state/template.json' || /^state\/template-generation\/[^/]+\.json$/.test(sub)) {
@@ -706,6 +712,9 @@ function jsonLimitForDataFile(dataRoot: string, filePath: string): number {
   }
   if (sub === 'assets/chat-lorebook.json') {
     return MAX_CHAT_WORLDBOOK_JSON_BYTES
+  }
+  if (/^state\/wal\/[^/]+\/rollback-progress\.json$/.test(sub)) {
+    return MAX_WAL_BYTES
   }
   return MAX_JSON_BYTES
 }
@@ -748,7 +757,7 @@ async function inspectFiles(
         stats.total += 1
         if (entry.name.toLowerCase().endsWith('.json')) {
           stats.json += 1
-          const cached = inspectedCards.get(resolve(child))
+          const cached = inspectedCards.get(rootIdentity(child))
           const json = cached !== undefined ? { status: cached } : await readBoundedJson(child, jsonLimitForDataFile(root, child), budget)
           if (json.status === 'oversized') stats.oversizedJson += 1
           else if (json.status === 'invalid') stats.invalidJson += 1

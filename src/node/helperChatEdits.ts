@@ -5,7 +5,7 @@ import {WorkspaceFs} from '../state/workspaceFs.js'
 import {Wal} from '../state/wal.js'
 import type {HelperSwipeSet} from '../core/helperSwipes.js'
 import {helperJson,helperTable} from '../core/helperRuntime.js'
-import {loadHelperState,saveHelperState,type HelperState} from '../state/helper.js'
+import {loadHelperState,saveHelperState,serializeHelperState,type HelperState} from '../state/helper.js'
 import type {Context} from '@deepseek-ai/cordis'
 import type {Session} from '@deepseek-ai/dsh-session'
 import {isSyntheticUserText} from '../core/dshPrompt.js'
@@ -92,6 +92,7 @@ export async function editHelperMessages(ctx:Context,state:TavernState,sessionId
       const next=apply(saved,history)
       await withHelperStoryWrite(ctx,state,sessionId,messageId,request.storyId,async(fs,begin)=>{
         if(equal(saved.scopes,next.scopes)&&equal(saved.extras,next.extras)&&equal(saved.swipes??{},next.swipes??{}))return
+        serializeHelperState(next)
         await verify();await begin();await saveHelperState(fs,next)
       },beforeWrite,{waitForAdoption:false})
       return {branch:null,snapshot:await getHelperSnapshot(ctx,state,sessionId,messageId,{waitForAdoption:false})}
@@ -121,6 +122,7 @@ export async function editHelperMessages(ctx:Context,state:TavernState,sessionId
         const next=apply(current,nextHistory,entry.deletions,entry.rows)
         if(equal(current.scopes,next.scopes)&&equal(current.extras,next.extras)&&equal(current.swipes??{},next.swipes??{}))continue
         const floor=childId+'#t'+turn
+        serializeHelperState(next)
         await wal.beginFloor(floor);await saveHelperState(new WorkspaceFs(fs.root,wal).withFloor(floor),next);await wal.commitFloor(floor)
         current=next
       }

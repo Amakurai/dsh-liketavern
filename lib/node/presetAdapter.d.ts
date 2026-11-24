@@ -1,5 +1,5 @@
 /** Tavern 提示词投影适配器：复用宿主 DeepSeek 配置、凭证与传输，在同一 AgentLoop 请求内投影消息。 */
-import type { Context } from '@deepseek-ai/cordis';
+import { type Context } from '@deepseek-ai/cordis';
 import { type GenerateOptions, type LlmResolvedModelInfo } from '@deepseek-ai/dsh-llm';
 export declare const PRESET_ADAPTER_PROVIDER = "tavern-deepseek";
 export declare const PRESET_ADAPTER_SOURCE_PROVIDER = "deepseek-official";

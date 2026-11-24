@@ -154,6 +154,8 @@ export declare class Wal {
     private doRollbackFloor;
     /** 整批先校验；不能在撤销较新楼层后才发现较旧日志损坏。 */
     private preflightRollback;
+    /** 校验全部已回滚 WAL 目录的元数据、记录行与完成态游标，防止导入或导出受损历史污染 doctor/backup。 */
+    validateRolledBackFloors(): Promise<void>;
     private doRollbackAfter;
     private doListFloors;
     private doPrune;

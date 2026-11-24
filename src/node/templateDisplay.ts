@@ -11,6 +11,7 @@ import { markdownCodeScanner } from '../core/markdownCode.js'
 import { findIncompleteHtmlStart, stripDisplayOpaqueMetaParts } from '../core/displaySanitize.js'
 import type { DisplayRegexDiagnostics } from '../remote.js'
 import type { TemplateSandbox } from './templateSandbox.js'
+import { containsTemplateOutlet } from './templateOutlets.js'
 import { TEMPLATE_INPUT_MAX_CHARS, TEMPLATE_OUTPUT_MAX_CHARS } from '../core/templateBudget.js'
 
 export const TEMPLATE_DISPLAY=String.raw`
@@ -62,7 +63,7 @@ export function renderTemplateDisplay(text:string,entries:WorldInfoEntry[],sandb
     sources.push({value,entry})
   }
   const present=(raw:string,entry?:WorldInfoEntry)=>{
-    const value=sandbox.resolveOutlets(raw)
+    const value=containsTemplateOutlet(raw) ? sandbox.resolveOutlets(raw) : raw
     if(!value.trim()) return
     if(entry?.templateIframe!==undefined) {
       rawParts.push({kind:'html',text:entry.templateMessageFormatting?sandbox.formatMessage(value):value,...(entry.templateIframe?{title:entry.templateIframe}:{})})
@@ -106,7 +107,8 @@ export function renderTemplateDisplay(text:string,entries:WorldInfoEntry[],sandb
   if(decorate) renderEntries('AFTER')
   for(const source of sources) present(source.value,source.entry)
   project()
-  return {text:sandbox.resolveOutlets(textPieces.join('\n')),parts:sanitizeTemplateDisplayParts(parts)}
+  const joined=textPieces.join('\n')
+  return {text:containsTemplateOutlet(joined) ? sandbox.resolveOutlets(joined) : joined,parts:sanitizeTemplateDisplayParts(parts)}
 }
 
 /** 同一规则在多个展示片段失败只报告一次；截断展示字段前去重，避免不同错误被截成同一条。 */

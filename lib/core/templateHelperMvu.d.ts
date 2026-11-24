@@ -1,6 +1,6 @@
 /** 模板的 MVU 只读投影：只选当前剧情可见的稳定消息身份，不制造另一份可写变量存储。 */
 import { type HelperScopes } from './helperRuntime.js';
-import { type TemplateVariables } from './template.js';
+import type { TemplateVariables } from './template.js';
 import type { TemplateMessageIdentity } from './templateMessageVariables.js';
 export interface TemplateHelperMvu {
     version: 1;

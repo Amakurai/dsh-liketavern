@@ -66,14 +66,11 @@ function deactivateRegex(selector={},count=1) {
   const changes=[];
   for(const channel of ['basic','generate','message']) {
     if(!selector.uuid&&!selector[channel])continue;
-    let removedCount=stickyTombstones[channel].size;
     for(const [uuid,rule] of temporaryRegex[channel]) {
       if(selector.uuid&&selector.uuid!==uuid)continue;
       const next=stickyFinite(rule.sticky-count);
-      if((channel==='basic'||next<=0)&&!stickyTombstones[channel].has(uuid))removedCount++;
       changes.push({channel,uuid,rule,next});
     }
-    if(removedCount>4096)throw Error('sticky 过期记录超过上限');
   }
   for(const {channel,uuid,rule,next} of changes) {
       if(channel==='basic'||next<=0) {rememberStickyRemoval(channel,uuid);temporaryRegex[channel].delete(uuid);}

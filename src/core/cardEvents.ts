@@ -7,6 +7,8 @@ export function installCardEvents(shared=false): () => void {
   let active = true
   const runtimeId=crypto.randomUUID()
   root.__dshTavernEventRuntimeId=runtimeId
+  root.__dshTavernSharedEvents=shared
+  root.__dshTavernHasLocalListeners=(event:string)=>active&&Boolean(listeners.get(event)?.length)
   const EVENT_MAX_BYTES=256*1024,MVU_EVENT_MAX_BYTES=4*1024*1024
   const MVU_EVENTS=new Set([
     'mag_variable_updated','mag_variable_initialized','mag_variable_update_started',

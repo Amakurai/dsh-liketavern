@@ -563,10 +563,10 @@ export function useLoader<T>(load: () => Promise<Envelope<T>>, deps: readonly un
     // Promise 前同步抛错。先进入已解决 Promise，把两类失败统一收进错误态；否则
     // 异常会逃出 effect，页面既白屏又无法点 reload 恢复。
     Promise.resolve()
-      .then(load)
+      .then(() => (alive ? load() : null))
       .then((r) => {
         settle()
-        if (alive) setState(r.ok ? { status: 'ready', value: r.value } : { status: 'error', message: r.error.message })
+        if (alive && r) setState(r.ok ? { status: 'ready', value: r.value } : { status: 'error', message: r.error.message })
       })
       .catch((e) => {
         settle()

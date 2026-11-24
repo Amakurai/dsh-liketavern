@@ -69,15 +69,23 @@ export async function apply(ctx: ClientContext) {
     }
   }
 
-  // 界面语言与消息显示偏好在挂载 slot 前播种（持久化于 dsh-tavern 设置），避免先英文或头像闪一下再切走。
+  // 界面语言与消息显示偏好在挂载 slot 前有界播种（持久化于 dsh-tavern 设置），避免先英文或头像闪一下再切走；
+  // 远端启动慢或挂起时 5s 超时放行 slot 挂载，避免阻塞整个插件界面。
+  let seedTimer: ReturnType<typeof setTimeout> | undefined
   try {
-    const result = await remote.getSettings({})
-    if (result.ok) {
+    const seedRpc = Promise.resolve().then(() => remote.getSettings({})).catch(() => null)
+    const result = await Promise.race([
+      seedRpc,
+      new Promise<null>((resolve) => { seedTimer = setTimeout(() => resolve(null), 5000) }),
+    ])
+    if (result?.ok) {
       setTavernLocale(result.value.settings.locale)
       setSpeakerHeader(result.value.settings.speakerHeader === true)
     }
   } catch {
     // 读取失败保持默认（auto 跟随宿主）。
+  } finally {
+    if (seedTimer !== undefined) clearTimeout(seedTimer)
   }
 
   // auto 档跟随宿主界面语言（0.1.2 的 LocaleRuntime 快照 + 订阅）。

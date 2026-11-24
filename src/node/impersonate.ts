@@ -19,6 +19,8 @@ import {
 import type { Session } from '@deepseek-ai/dsh-session'
 import { mergeTavernCallConfig, resolveTavernReasoningEffort, type AdvertisedReasoningInfo } from '../core/callConfig.js'
 import { FloorError, forkAgentOptions } from './floors.js'
+import { sessionModelRoute } from './modelRoute.js'
+import { PRESET_ADAPTER_PROVIDER, PRESET_ADAPTER_SOURCE_PROVIDER } from './presetAdapter.js'
 import { runTavernPipeline } from './pipeline.js'
 import { isTavernRuntimeSession } from './tavernSession.js'
 import { collectCompleteText } from './collectText.js'
@@ -45,6 +47,7 @@ export async function impersonate({ ctx, state }: ImpersonateDeps, sessionId: st
   const llm = ctx.get('llm') as LlmRuntime | undefined
   if (!llm) throw new FloorError('no-llm', '当前运行时没有 LLM 服务，无法代答')
 
+  const sessionRoute = sessionModelRoute(agent)
   const route = forkAgentOptions(agent, session)
   if (!route.provider || !route.model) {
     throw new FloorError('no-route', '会话还没有可用的模型路由（先发一条消息或检查模型配置）')
@@ -69,9 +72,17 @@ export async function impersonate({ ctx, state }: ImpersonateDeps, sessionId: st
     // 模型元数据解析失败不阻断代答；按「无公布档」回退
   }
   signal.throwIfAborted()
-  // 「当前档」取会话最近一次 request header 里的档位：与 agent/request 看到的 config.reasoningEffort
-  // 同源（forkAgentOptions 的路由也读这里），enabled 档才不会和 live 行为分叉。
-  const currentEffort = session.requestHeader()?.config.reasoningEffort
+  // 「当前档」优先取当前生效路由（含未消费的 model/selection），仅当 header 与当前路由同模型时回退其档位，
+  // 避免换模后第一轮把旧模型的 reasoningEffort 错带给新模型。
+  const headerConfig = session.requestHeader()?.config
+  const headerProvider = headerConfig?.provider === PRESET_ADAPTER_PROVIDER
+    ? PRESET_ADAPTER_SOURCE_PROVIDER
+    : headerConfig?.provider
+  const currentEffort = sessionRoute.provider === provider && sessionRoute.model === model
+    ? sessionRoute.reasoningEffort
+    : headerProvider === provider && headerConfig?.model === model
+      ? headerConfig.reasoningEffort
+      : undefined
   const reasoningEffort = resolveTavernReasoningEffort(sampling.thinking, reasoning, currentEffort, provider)
 
   const messages: Message[] = pipeline.history.filter(message=>message.content.trim()).map((m) =>

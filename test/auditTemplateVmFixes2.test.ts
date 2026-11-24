@@ -378,7 +378,7 @@ describe('Template & VM 层第二轮缺陷修复回归 (T1–T11)', () => {
     const out = await isolated('template', {
       context: ctx(),
       texts: [
-        `<%- await evalTemplate('<' + '%= x + "-" + locals["bad-key"] %' + '>', { x: 42, 'bad-key': 'ok', 'class': 'ignored' }, { _with: false }) %>|<%- Object.getOwnPropertyDescriptor(api, 'faker')?.get !== undefined %>`,
+        `<%- await evalTemplate('<' + '%= x + "-" + locals["bad-key"] %' + '>', { x: 42, 'bad-key': 'ok', 'class': 'ignored' }, { _with: false }) %>|<%- Object.getOwnPropertyDescriptor(Object.getPrototypeOf(locals), 'faker')?.get !== undefined %>`,
       ],
     })
     expect(out.texts[0]).toBe('42-ok|true')

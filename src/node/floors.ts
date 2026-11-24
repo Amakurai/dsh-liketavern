@@ -585,7 +585,22 @@ interface LiveHostForkAdoptionPlan extends HostForkAdoptionPlan {
   prefix: readonly SessionEvent[]
   unverifiedResume?: boolean
 }
+const MAX_HOST_FORK_ADOPTION_PLANS = 128
 const hostForkAdoptionPlans = new WeakMap<TavernState, Map<string, LiveHostForkAdoptionPlan>>()
+
+function rememberHostForkAdoptionPlan(
+  plans: Map<string, LiveHostForkAdoptionPlan>,
+  sessionId: string,
+  plan: LiveHostForkAdoptionPlan,
+): void {
+  plans.delete(sessionId)
+  plans.set(sessionId, plan)
+  while (plans.size > MAX_HOST_FORK_ADOPTION_PLANS) {
+    const oldest = plans.keys().next().value
+    if (oldest === undefined) break
+    plans.delete(oldest)
+  }
+}
 
 /** 合法解除已先持久化 skipped；只失效内存来源计划，保留旧失败屏障下一次读取确认磁盘意图。 */
 export function discardHostForkAdoptionPlan(state: TavernState, sessionId: string): void {
@@ -641,10 +656,12 @@ export async function adoptHostFork({ ctx, state }: FloorDeps, child: Session): 
     const stored = await readHostForkAdoption(state.paths, child, prefix, parentId)
     plan = { ...(stored ?? { version: 1, status: 'unverified', sessionId: child.id, parentId, inheritedCount: inherited, seedHash: hostForkSeedHash(prefix) }),
       prefix, ...(!stored && child.firstLifecycleSeq > inherited ? { unverifiedResume: true } : {}) }
-    plans.set(child.id, plan)
+    rememberHostForkAdoptionPlan(plans, child.id, plan)
   } else if (plan.parentId !== parentId || plan.inheritedCount !== child.inheritedEventCount
     || plan.seedHash !== hostForkSeedHash(child.snapshotEvents().slice(0, plan.inheritedCount))) {
     throw new FloorError('fork-source-changed', '原生分支身份或继承历史已变化，请重新创建分支')
+  } else {
+    rememberHostForkAdoptionPlan(plans, child.id, plan)
   }
   if (!plan) return false
   if ('error' in childRead) {

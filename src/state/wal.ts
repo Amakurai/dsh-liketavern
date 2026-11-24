@@ -19,7 +19,16 @@ import { atomicWrite } from './atomicWrite.js'
 import { rootIdentity } from './pathIdentity.js'
 import { renameWithRetry } from './rename.js'
 import { withWorkspaceLock } from './workspaceLock.js'
-import { applyExpandAffectedMemories, planExpandAffectedMemories, type MemoryExpansionPlan } from './memoryRollback.js'
+import {
+  applyExpandAffectedMemories,
+  applyMemoryFileToOverlay,
+  loadMemoryRollbackOverlay,
+  planExpandAffectedMemories,
+  planMemoryExpansionFromOverlay,
+  readMemoryFileFromOverlay,
+  simulateMemoryExpansionOnOverlay,
+  type MemoryExpansionPlan,
+} from './memoryRollback.js'
 import { mapBounded, WAL_RECOVERY_PATH, withRecoveryWriteAccess, WorkspaceFs, WORKSPACE_RECOVERING_MESSAGE } from './workspaceFs.js'
 import { rebuildIndex } from './workspace.js'
 import { estimateTokens } from '../core/tokenize.js'
@@ -736,7 +745,8 @@ export class Wal {
         })
         if (progress) {
           const meta = await this.readMeta(join(this.rootDir, entry.name))
-          if (meta) candidates.add(meta.floor)
+          if (!meta) throw new Error(`WAL 楼层元数据缺失但存在回滚恢复游标：${entry.name}`)
+          candidates.add(meta.floor)
         }
       }
     }
@@ -797,7 +807,8 @@ export class Wal {
         })
         if (progress) {
           const meta = await this.readMeta(join(this.rootDir, entry.name))
-          if (meta) floors.add(meta.floor)
+          if (!meta) throw new Error(`WAL 楼层元数据缺失但存在回滚恢复游标：${entry.name}`)
+          floors.add(meta.floor)
         }
       }
       if (floors.size !== reconciled.length) await this.writeRecoveryFloors([...floors], marker?.bodyRoot)
@@ -1170,22 +1181,77 @@ export class Wal {
         }
       }
     }
-    // 对尚未被较新待回滚楼层改动过的记忆目录，提前在整批开始前完成只读归并规划。
-    // 即便待回滚批次全部是无 after 字段的旧版 before-only 记录，也必须执行该预检，不能因 changesByPath 为空早退。
-    let newerTouchedMemory = false
-    for (let i = floors.length - 1; i >= 0; i--) {
-      const entry = targetLoaded.get(floors[i]!)
-      if (!entry || !entry.dirExists) continue
-      const touchesMemory = entry.records.some((record) => !isNoopRecord(record) && recordPathIdentity(record.path).startsWith('memory/'))
-      if (!newerTouchedMemory) {
-        entry.memoryPlan = await planExpandAffectedMemories(
-          workspaceRoot,
-          entry.records.filter((record) => !isNoopRecord(record)).map((record) => record.path),
-        )
+    // 整批所有触及记忆目录的楼层都必须在第一次磁盘修改前完成归并谱系预检（含跨楼层推演），
+    // 防止较新楼层触及 memory/* 后跳过旧楼层检验，导致半批不可逆回滚。
+    const anyTouchesMemory = floors.some((floor) => {
+      const entry = targetLoaded.get(floor)
+      return Boolean(entry?.dirExists && entry.records.some((record) => !isNoopRecord(record) && recordPathIdentity(record.path).startsWith('memory/')))
+    })
+    if (anyTouchesMemory) {
+      const overlay = await loadMemoryRollbackOverlay(workspaceRoot)
+      let newerTouchedMemory = false
+      for (let i = floors.length - 1; i >= 0; i--) {
+        const entry = targetLoaded.get(floors[i]!)
+        if (!entry || !entry.dirExists) continue
+        const nonNoop = entry.records.filter((record) => !isNoopRecord(record))
+        const touchesMemory = nonNoop.some((record) => recordPathIdentity(record.path).startsWith('memory/'))
+        const plan = planMemoryExpansionFromOverlay(overlay, nonNoop.map((record) => record.path))
+        if (!newerTouchedMemory) entry.memoryPlan = plan
+        simulateMemoryExpansionOnOverlay(overlay, plan)
+        for (let j = nonNoop.length - 1; j >= 0; j--) {
+          const rec = nonNoop[j]!
+          if (!recordPathIdentity(rec.path).startsWith('memory/')) continue
+          const currentText = readMemoryFileFromOverlay(overlay, rec.path)
+          const outcome = rollbackTarget(rec, currentText)
+          if (outcome.restore) {
+            applyMemoryFileToOverlay(overlay, rec.path, outcome.value)
+          }
+        }
+        if (touchesMemory) newerTouchedMemory = true
       }
-      if (touchesMemory) newerTouchedMemory = true
     }
     return targetLoaded
+  }
+
+  /** 校验全部已回滚 WAL 目录的元数据、记录行与完成态游标，防止导入或导出受损历史污染 doctor/backup。 */
+  validateRolledBackFloors(): Promise<void> {
+    return this.enqueue(async () => {
+      const entries = await readdir(this.rootDir, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === 'ENOENT') return []
+        throw error
+      })
+      for (const entry of entries) {
+        if (!entry.isDirectory() || !isRolledBackDir(entry.name)) continue
+        const dir = join(this.rootDir, entry.name)
+        await this.assertLogPath(dir)
+        const baseName = baseFloorDir(entry.name)
+        const meta = await this.readMeta(dir, { verified: true })
+        if (!meta || !isValidWalFloorDir(baseName) || sanitizeFloor(meta.floor) !== baseName
+          || typeof meta.rolledBackAt !== 'string' || !Number.isFinite(Date.parse(meta.rolledBackAt))) {
+          throw new Error(`已回滚 WAL 楼层元数据损坏：${entry.name}`)
+        }
+        const records = await this.readRecords(dir, { verified: true })
+        const progressPath = join(dir, 'rollback-progress.json')
+        let rawProgress: string | null = null
+        try {
+          await this.assertLogPath(progressPath)
+          rawProgress = await readFile(progressPath, 'utf8')
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+        }
+        if (rawProgress === null) {
+          if (records.length > 0) throw new Error(`已回滚 WAL 缺少完成游标：${entry.name}`)
+          continue
+        }
+        let parsed: unknown
+        try { parsed = JSON.parse(rawProgress) } catch { throw new Error(`已回滚 WAL 恢复游标损坏：${entry.name}`) }
+        const hash = createHash('sha256').update(JSON.stringify(records)).digest('hex')
+        const checked = checkRollbackProgress(parsed, records, hash)
+        if (!checked.ok || checked.progress.next !== -1 || checked.progress.pending) {
+          throw new Error(`已回滚 WAL 恢复游标未完成或损坏：${entry.name}`)
+        }
+      }
+    })
   }
 
   private async doRollbackAfter(floors: string[], workspaceRoot: string): Promise<RollbackAfterResult> {

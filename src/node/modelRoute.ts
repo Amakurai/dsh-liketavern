@@ -59,18 +59,19 @@ export interface SessionModelRoute {
   reasoningEffort?: string
 }
 
-interface RoutePair { provider: string; model: string }
+interface RoutePair { provider: string; model: string; reasoningEffort?: string }
 
 const present = (value: unknown): value is string => typeof value === 'string' && value.trim() !== ''
 
 /** 只接受成对的路由，不能拼出「新 provider + 旧 model」这类不存在的组合。 */
 function pairOf(value: unknown): RoutePair | undefined {
   if (value === null || typeof value !== 'object') return undefined
-  const { provider, model } = value as { provider?: unknown; model?: unknown }
+  const { provider, model, reasoningEffort } = value as { provider?: unknown; model?: unknown; reasoningEffort?: unknown }
   if (!present(provider) || !present(model)) return undefined
   return {
     provider: provider === PRESET_ADAPTER_PROVIDER ? PRESET_ADAPTER_SOURCE_PROVIDER : provider,
     model,
+    ...(present(reasoningEffort) ? { reasoningEffort } : {}),
   }
 }
 
@@ -136,12 +137,12 @@ function patchModelSelectionDef(def: {
   key?: string
   apply?: (state: ModelSelectionState, event: { type?: string; data?: any }) => ModelSelectionState
   stateSchema?: { parse?: (input: unknown) => unknown; safeParse?: (input: unknown) => { success: boolean; data?: unknown } }
-}): void {
+}, cleanups?: Array<() => void>): void {
   if (!def || typeof def !== 'object' || def.key !== 'modelSelection' || patchedDefs.has(def)) return
   patchedDefs.add(def)
   const origApply = def.apply
   if (typeof origApply === 'function') {
-    def.apply = (rawState: ModelSelectionState, event: { type?: string; data?: any }) => {
+    const wrappedApply = (rawState: ModelSelectionState, event: { type?: string; data?: any }) => {
       const state = normalizeModelSelectionState(rawState)
       if (event?.type === 'model/selection' && event.data?.provider === PRESET_ADAPTER_PROVIDER) {
         return origApply(state, { ...event, data: { ...event.data, provider: PRESET_ADAPTER_SOURCE_PROVIDER } })
@@ -166,21 +167,37 @@ function patchModelSelectionDef(def: {
       }
       return origApply(state, event)
     }
+    def.apply = wrappedApply
+    cleanups?.push(() => {
+      if (def.apply === wrappedApply) def.apply = origApply
+      patchedDefs.delete(def)
+    })
   }
   const schema = def.stateSchema
   if (schema && typeof schema === 'object' && !patchedDefs.has(schema)) {
     patchedDefs.add(schema)
-    if (typeof schema.parse === 'function') {
-      const origParse = schema.parse.bind(schema)
-      schema.parse = (input: unknown) => normalizeModelSelectionState(origParse(input) as ModelSelectionState)
+    const rawParse = schema.parse
+    let wrappedParse: ((input: unknown) => unknown) | undefined
+    if (typeof rawParse === 'function') {
+      const origParse = rawParse.bind(schema)
+      wrappedParse = (input: unknown) => normalizeModelSelectionState(origParse(input) as ModelSelectionState)
+      schema.parse = wrappedParse
     }
-    if (typeof schema.safeParse === 'function') {
-      const origSafeParse = schema.safeParse.bind(schema)
-      schema.safeParse = (input: unknown) => {
+    const rawSafeParse = schema.safeParse
+    let wrappedSafeParse: ((input: unknown) => { success: boolean; data?: unknown }) | undefined
+    if (typeof rawSafeParse === 'function') {
+      const origSafeParse = rawSafeParse.bind(schema)
+      wrappedSafeParse = (input: unknown) => {
         const res = origSafeParse(input)
         return res.success ? { ...res, data: normalizeModelSelectionState(res.data as ModelSelectionState) } : res
       }
+      schema.safeParse = wrappedSafeParse
     }
+    cleanups?.push(() => {
+      if (wrappedParse && schema.parse === wrappedParse) schema.parse = rawParse
+      if (wrappedSafeParse && schema.safeParse === wrappedSafeParse) schema.safeParse = rawSafeParse
+      patchedDefs.delete(schema)
+    })
   }
 }
 
@@ -189,23 +206,30 @@ function unwrapService<T extends object>(service: T): T {
   return (original && typeof original === 'object' ? original : service) as T
 }
 
-function ensureProjectionPatched(rawProjections: unknown): void {
+function ensureProjectionPatched(rawProjections: unknown, cleanups?: Array<() => void>): void {
   if (!rawProjections || typeof rawProjections !== 'object') return
   const projections = unwrapService(rawProjections as object)
   const regMap = (projections as { registrations?: Map<string, { def?: any }> }).registrations
   const existing = regMap?.get('modelSelection')
-  if (existing?.def) patchModelSelectionDef(existing.def)
+  if (existing?.def) patchModelSelectionDef(existing.def, cleanups)
   if (patchedProjections.has(projections)) return
   patchedProjections.add(projections)
   const origRegister = (projections as { register?: (def: any) => unknown }).register
   if (typeof origRegister === 'function') {
-    ;(projections as { register: (def: any) => unknown }).register = function (def: any) {
-      patchModelSelectionDef(def)
+    const wrappedRegister = function (this: unknown, def: any) {
+      patchModelSelectionDef(def, cleanups)
       const dispose = origRegister.call(this, def)
       const registered = regMap?.get('modelSelection')
-      if (registered?.def) patchModelSelectionDef(registered.def)
+      if (registered?.def) patchModelSelectionDef(registered.def, cleanups)
       return dispose
     }
+    ;(projections as { register: (def: any) => unknown }).register = wrappedRegister
+    cleanups?.push(() => {
+      if ((projections as { register?: unknown }).register === wrappedRegister) {
+        ;(projections as { register: (def: any) => unknown }).register = origRegister
+      }
+      patchedProjections.delete(projections)
+    })
   }
 }
 
@@ -216,12 +240,13 @@ function ensureProjectionPatched(rawProjections: unknown): void {
  */
 export function installTavernModelSelectionCompat(ctx: Context): void {
   const root = (ctx.root ?? ctx) as Context
-  ensureProjectionPatched(root.get('sessionProjections'))
+  const cleanups: Array<() => void> = []
+  ensureProjectionPatched(root.get('sessionProjections'), cleanups)
   if (installedRoots.has(root)) return
   installedRoots.add(root)
-  root.on('session/event' as any, (session: { id: string }, event: { type?: string; data?: any }) => {
+  ctx.on('session/event' as any, (session: { id: string }, event: { type?: string; data?: any }) => {
     if (event?.type !== 'request/header') return
-    ensureProjectionPatched(root.get('sessionProjections'))
+    ensureProjectionPatched(root.get('sessionProjections'), cleanups)
     const cfg = event.data?.header?.config
     if (!cfg || cfg.provider !== PRESET_ADAPTER_PROVIDER) return
     const controller = root.get('sessionController') as {
@@ -253,4 +278,10 @@ export function installTavernModelSelectionCompat(ctx: Context): void {
       }
     }
   })
+  if (typeof ctx.effect === 'function') {
+    ctx.effect(() => () => {
+      installedRoots.delete(root)
+      for (const cleanup of cleanups.splice(0).reverse()) cleanup()
+    }, 'dsh-tavern: model selection compat')
+  }
 }

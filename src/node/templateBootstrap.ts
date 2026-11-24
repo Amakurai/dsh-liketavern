@@ -18,41 +18,94 @@ import { TEMPLATE_RUNTIME_ABI } from '../core/templateRuntimeAbi.js'
 export const BOOTSTRAP = String.raw`
 // 协议标记属于这个已保存环境；后续升级恢复旧堆不重跑此段，也不替换其闭包实现。
 Object.defineProperty(globalThis,'__tavernRuntimeAbi',{value:${JSON.stringify(TEMPLATE_RUNTIME_ABI)},writable:false,configurable:false});
+(()=>{
 const parseTemplateInput=JSON.parse;
 const rawStringifyTemplateJson=JSON.stringify;
 const nativeDateGetTime=Date.prototype.getTime;
+const nativeDateToJSON=Date.prototype.toJSON;
+const NativePromise=Promise;
+const NativeObjectDefineProperty=Object.defineProperty;
+const NativeObjectHasOwn=Object.hasOwn;
+const NativeObjectGetOwnPropertyDescriptor=Object.getOwnPropertyDescriptor;
 const isRealDate=value=>{try{nativeDateGetTime.call(value);return true;}catch{return false;}};
-function stringifyTemplateJson(value) {
+function safeAwaitPromise(value) {
+  if (value && typeof value==='object') {
+    try { NativeObjectDefineProperty(value,'constructor',{value:NativePromise,writable:false,configurable:true}); } catch {}
+  }
+  return value;
+}
+function assertBuiltinToJsonClean() {
   if (typeof Object.prototype.toJSON==='function' || typeof Array.prototype.toJSON==='function'
     || typeof String.prototype.toJSON==='function' || typeof Number.prototype.toJSON==='function'
-    || typeof Boolean.prototype.toJSON==='function') {
+    || typeof Boolean.prototype.toJSON==='function' || Date.prototype.toJSON!==nativeDateToJSON) {
     throw Error('禁止在内置原型上定义 toJSON');
   }
+}
+function stringifyTemplateJson(value) {
+  assertBuiltinToJsonClean();
   return rawStringifyTemplateJson(value);
 }
-const input = parseTemplateInput(__input);
+function serializeTemplateJson(value, depth=0, seen=new Set()) {
+  if (depth===0) assertBuiltinToJsonClean();
+  if (depth>48) throw Error('模板变量嵌套超过 48 层');
+  if (value===null) return 'null';
+  const type=typeof value;
+  if (type==='boolean') return value ? 'true' : 'false';
+  if (type==='string') return rawStringifyTemplateJson(value);
+  if (type==='number') {
+    if (!Number.isFinite(value)) throw Error('模板变量必须是无循环 JSON 值');
+    return Object.is(value,-0) ? '0' : String(value);
+  }
+  if (!value || type!=='object' || seen.has(value)) throw Error('模板变量必须是无循环 JSON 值');
+  if (isRealDate(value)) {
+    const desc=NativeObjectGetOwnPropertyDescriptor(value,'toJSON');
+    if (desc && (desc.get || typeof desc.value==='function')) throw Error('模板变量不能包含自定义 toJSON');
+    const iso=nativeDateToJSON.call(value);
+    if (iso===null) return 'null';
+    if (typeof iso!=='string') throw Error('模板变量必须是无循环 JSON 值');
+    return rawStringifyTemplateJson(iso);
+  }
+  const ownToJson=NativeObjectGetOwnPropertyDescriptor(value,'toJSON');
+  if (ownToJson && (ownToJson.get || typeof ownToJson.value==='function')) throw Error('模板变量不能包含自定义 toJSON');
+  if (typeof value.toJSON==='function') throw Error('模板变量不能包含自定义 toJSON');
+  seen.add(value);
+  try {
+    if (Array.isArray(value)) {
+      const parts=[];
+      for (let i=0;i<value.length;i++) {
+        parts.push(NativeObjectHasOwn(value,i) ? serializeTemplateJson(value[i],depth+1,seen) : 'null');
+      }
+      return '['+parts.join(',')+']';
+    }
+    const parts=[];
+    for (const key of Object.keys(value)) {
+      if (key==='__proto__' || key==='prototype' || key==='constructor') throw Error('禁止的变量路径');
+      parts.push(rawStringifyTemplateJson(key)+':'+serializeTemplateJson(value[key],depth+1,seen));
+    }
+    return '{'+parts.join(',')+'}';
+  } finally {
+    seen.delete(value);
+  }
+}
+const input = parseTemplateInput(globalThis.__input);
 delete globalThis.__input;
-let templateOutputLimit=__tavernOutputLimit;
+let templateOutputLimit=globalThis.__tavernOutputLimit;
 delete globalThis.__tavernOutputLimit;
+globalThis.__parseTemplateInput=parseTemplateInput;
+globalThis.__setTemplateOutputLimit=limit=>{
+  if (typeof limit==='number' && Number.isFinite(limit) && limit>=0) templateOutputLimit=limit;
+};
 const AsyncFunction=(async function(){}).constructor;
 let conditionReadonlyDepth=0;
+globalThis.__setConditionReadonly=delta=>{
+  if (delta===1) conditionReadonlyDepth++;
+  else if (delta===-1 && conditionReadonlyDepth>0) conditionReadonlyDepth--;
+};
 function assertNotConditionReadonly(action) {
   if (conditionReadonlyDepth>0) throw Error('@@if 条件必须只读，不能'+action);
 }
-function validate(value, depth=0, seen=new Set()) {
-  if (depth>48) throw Error('模板变量嵌套超过 48 层');
-  if (value===null || typeof value==='string' || typeof value==='boolean') return;
-  if (typeof value==='number' && Number.isFinite(value)) return;
-  if (!value || typeof value!=='object' || seen.has(value)) throw Error('模板变量必须是无循环 JSON 值');
-  if (typeof value.toJSON==='function' && !isRealDate(value)) throw Error('模板变量不能包含自定义 toJSON');
-  seen.add(value);
-  for (const [key,item] of Object.entries(value)) {
-    if (['__proto__','prototype','constructor'].includes(key)) throw Error('禁止的变量路径');
-    validate(item,depth+1,seen);
-  }
-  seen.delete(value);
-}
-const clone = value => { if (value===undefined) return undefined; validate(value); return parseTemplateInput(stringifyTemplateJson(value)); };
+function validate(value) { serializeTemplateJson(value); }
+const clone = value => { if (value===undefined) return undefined; return parseTemplateInput(serializeTemplateJson(value)); };
 const scopes = clone(input.variables);
 const initial = {};
 const forbidden = new Set(['__proto__', 'constructor', 'prototype']);
@@ -248,8 +301,16 @@ Math.random = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; retu
 const matches = (value, query) => query instanceof RegExp ? (query.lastIndex = 0, query.test(value)) : String(value) === String(query);
 ${TEMPLATE_EJS}
 ${TEMPLATE_ASSETS}
+const rawDefines = {};
+const guardedDefines = new Proxy(rawDefines, {
+  set(target, key, value, receiver) { assertNotConditionReadonly('修改共享定义'); return Reflect.set(target, key, value, receiver); },
+  deleteProperty(target, key) { assertNotConditionReadonly('修改共享定义'); return Reflect.deleteProperty(target, key); },
+  defineProperty(target, key, desc) { assertNotConditionReadonly('修改共享定义'); return Reflect.defineProperty(target, key, desc); },
+  setPrototypeOf(target, proto) { assertNotConditionReadonly('修改共享定义'); return Reflect.setPrototypeOf(target, proto); },
+  preventExtensions(target) { assertNotConditionReadonly('修改共享定义'); return Reflect.preventExtensions(target); },
+});
 const api = {
-  char:input.char, user:input.user, variables, initialVariables:initial, defines:{},
+  char:input.char, user:input.user, variables, initialVariables:initial, defines:guardedDefines,
   charName:input.char, userName:input.user, runType:input.phase,
   is_user:false, is_system:false,
   chatId:input.sessionId, characterId:input.cardId, generateType:input.phase==='generate' ? input.generationType || 'normal' : '',
@@ -288,7 +349,16 @@ for (const scope of ['global','local','message']) {
   api['del'+title+'Var']=(key,index,opts={})=>delvar(key,index,{...options(opts),scope});
 }
 globalThis.__render = evalTemplate;
-globalThis.__export = () => { validate(scopes); validate(variables); if(variableSchema && stringifyTemplateJson(variables)!==schemaCacheState) checkVariableSchema(variables); if (variableSchema && stringifyTemplateJson(scopes)!==schemaState) checkVariableSchema(merge(merge(merge(clone(initial),scopes.global),scopes.local),scopes.message)); return stringifyTemplateJson(scopes); };
+globalThis.__export = () => {
+  const varsJson = serializeTemplateJson(variables);
+  const scopesJson = serializeTemplateJson(scopes);
+  if (variableSchema && varsJson !== schemaCacheState) checkVariableSchema(parseTemplateInput(varsJson));
+  if (variableSchema && scopesJson !== schemaState) {
+    const parsedScopes = parseTemplateInput(scopesJson);
+    checkVariableSchema(merge(merge(merge(clone(initial), parsedScopes.global), parsedScopes.local), parsedScopes.message));
+  }
+  return scopesJson;
+};
 async function evalConditionExpression(expression) {
   if (typeof expression !== 'string') throw Error('@@if 条件必须是字符串');
   if (expression.length > templateOutputLimit) throw Error('@@if 条件超过长度上限');
@@ -300,7 +370,7 @@ async function evalConditionExpression(expression) {
     __bindTemplateDefinitions(locals);
     // 用独立 AsyncFunction 求值纯 JS 表达式并换行闭合，避免字符串中的 %> 或尾部 // 注释触发 EJS 语法错误。
     const fn = new AsyncFunction('locals', 'with (locals) {\nreturn !!(\n' + expression + '\n);\n}');
-    return (await fn.call(locals, locals)) ? 'true' : 'false';
+    return (await safeAwaitPromise(fn.call(locals, locals))) ? 'true' : 'false';
   } finally {
     conditionReadonlyDepth--;
     depth--;
@@ -371,4 +441,5 @@ ${TEMPLATE_CONTEXT}
 ${TEMPLATE_REPLAY}
 ${TEMPLATE_CONTINUATION}
 ${TEMPLATE_DISPLAY}
+})();
 `;

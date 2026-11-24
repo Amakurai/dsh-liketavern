@@ -22,16 +22,18 @@ interface VmBridge {
     hostRefs:{groups:Map<unknown,unknown>;nextId:number;freelist:unknown[]};memory?:{newTypedArray?:(...args:unknown[])=>unknown}}
 }
 interface EngineBridge {callbacks:{contextCallbacks:Map<number,unknown>;runtimeCallbacks:Map<number,unknown>}}
-interface Owner {engine:QuickJSWASMModule;stackPointer:()=>unknown;handles:TemplateCheckpointVmHandles}
+interface Owner {engine:QuickJSWASMModule;memory:WebAssembly.Memory;limit:{wasmByteLimit:number};stackPointer:()=>unknown;handles:TemplateCheckpointVmHandles}
 const owners=new WeakMap<QuickJSContext,Owner>()
 const STACK_POINTER=5333088
+/** WASM 线性内存的静态区、栈与内置 vendor 基线余量；叠加 quickJsMemoryBytes 倍率后仍受检查点硬上限约束。 */
+const WASM_BASELINE_BYTES=32*1024*1024
 /** 精确 ABI 的全部 imports。堆摘要只校完整性；任意伪造 C 指针也不能借表内包装器取得宿主副作用。 */
 const IMPORT_NAMES='abcdefghijklmnopqrst'.split('')
 const FORBIDDEN_IMPORTS=new Set('bcghjlqrst'.split(''))
 const ZERO_PAGE=new Uint8Array(TEMPLATE_CHECKPOINT_PAGE_BYTES)
 let compiled:Promise<WebAssembly.Module>|undefined
 
-function checkpointImports(module:WebAssembly.Module,imports:WebAssembly.Imports):WebAssembly.Imports {
+function checkpointImports(module:WebAssembly.Module,imports:WebAssembly.Imports,limit:{wasmByteLimit:number}):WebAssembly.Imports {
   const definitions=WebAssembly.Module.imports(module),namespace=imports.a
   if(definitions.length!==IMPORT_NAMES.length||Object.keys(imports).length!==1||!namespace
     ||Object.keys(namespace).length!==IMPORT_NAMES.length||IMPORT_NAMES.some(name=>!Object.hasOwn(namespace,name))
@@ -42,6 +44,13 @@ function checkpointImports(module:WebAssembly.Module,imports:WebAssembly.Imports
   // b/q 原实现会解码断言指针并打印；c/j/l/r 是输出/定时器/退出，g/h/s/t 是模板禁用的宿主桥。
   for(const name of FORBIDDEN_IMPORTS)restricted[name]=()=>{throw new Error(name==='b'||name==='q'
     ?'模板检查点引擎内部错误（断言或内存异常）':'模板检查点禁止宿主副作用')}
+  // 冻结引擎的 malloc_usable_size 不可用，QuickJS setMemoryLimit 无法计入分块分配；
+  // 在 Emscripten 堆扩容入口 k (_emscripten_resize_heap) 施加线性内存硬上限，拒绝后返回 false 让 QuickJS 正常抛 OOM。
+  const originalResize=namespace.k as (requested:number)=>boolean
+  restricted.k=(requested:number)=>{
+    if((requested>>>0)>limit.wasmByteLimit)return false
+    return originalResize(requested)
+  }
   return {a:restricted}
 }
 
@@ -50,7 +59,35 @@ async function prepare():Promise<WebAssembly.Module> {
   const {wasmBytes}=await loadTemplateCheckpointEngine()
   return WebAssembly.compile(wasmBytes)
 }
-export async function prepareTemplateCheckpointVm():Promise<void> {await (compiled ??= prepare())}
+function compiledModule():Promise<WebAssembly.Module> {
+  if(!compiled) {
+    const pending=prepare().catch(error=>{
+      if(compiled===pending) compiled=undefined
+      throw error
+    })
+    compiled=pending
+  }
+  return compiled
+}
+export async function prepareTemplateCheckpointVm():Promise<void> {await compiledModule()}
+
+/** 同步收紧或放宽专属 WASM 线性内存上限；不会低于当前已分配页数，也不超过检查点硬上限。 */
+export function setTemplateCheckpointVmMemoryLimit(vm:QuickJSContext,quickJsMemoryBytes:number):void {
+  const internal=owners.get(vm)
+  if(!internal) return
+  // dlmalloc 碎片与 markdown-it / 长串编译瞬时峰值为逻辑预算的 2–3 倍；3x 乘数兼顾 4 MiB 合法渲染与硬上限防 OOB。
+  const target=Math.max(internal.memory.buffer.byteLength,WASM_BASELINE_BYTES+quickJsMemoryBytes*3)
+  internal.limit.wasmByteLimit=Math.min(TEMPLATE_CHECKPOINT_MEMORY_MAX_BYTES,target)
+}
+
+/** 宿主 FFI（入参编码、错误格式化、dispose）期间临时提供少量 WASM 扩容余量，防止 _malloc 返回 NULL 触发 OOB。 */
+export function withTemplateCheckpointVmHeadroom<T>(vm:QuickJSContext,extraBytes:number,fn:()=>T):T {
+  const internal=owners.get(vm)
+  if(!internal) return fn()
+  const prev=internal.limit.wasmByteLimit
+  internal.limit.wasmByteLimit=Math.min(TEMPLATE_CHECKPOINT_MEMORY_MAX_BYTES,Math.max(prev,internal.memory.buffer.byteLength+extraBytes))
+  try {return fn()} finally {internal.limit.wasmByteLimit=prev}
+}
 
 function handles(vm:QuickJSContext):TemplateCheckpointVmHandles {
   const bridge=vm as unknown as VmBridge
@@ -111,16 +148,17 @@ function assertOwned(owner:TemplateCheckpointVm):Owner {
 
 export async function createTemplateCheckpointVm(value?:TemplateCheckpointVmImage):Promise<TemplateCheckpointVm> {
   const image=value===undefined ? undefined : parseTemplateCheckpointVmImage(value)
-  const module=await (compiled ??= prepare())
+  const module=await compiledModule()
   const {newQuickJSWASMModule,newVariant,RELEASE_SYNC}=await loadTemplateCheckpointEngine()
   const memory=new WebAssembly.Memory({initial:(image?.memoryBytes ?? TEMPLATE_CHECKPOINT_MEMORY_MIN_BYTES)/65536,maximum:TEMPLATE_CHECKPOINT_MEMORY_MAX_BYTES/65536})
+  const limit={wasmByteLimit:TEMPLATE_CHECKPOINT_MEMORY_MAX_BYTES}
   let exports:WebAssembly.Exports|undefined
   let rejectInstantiation!:(error:unknown)=>void
   const failed=new Promise<never>((_resolve,reject)=>{rejectInstantiation=reject})
   const engine=await Promise.race([newQuickJSWASMModule(newVariant(RELEASE_SYNC,{wasmMemory:memory,
     emscriptenModule:{instantiateWasm:(imports,onSuccess)=> {
       try {
-        void WebAssembly.instantiate(module,checkpointImports(module,imports)).then(instance=>{exports=instance.exports;onSuccess(instance)},rejectInstantiation)
+        void WebAssembly.instantiate(module,checkpointImports(module,imports,limit)).then(instance=>{exports=instance.exports;onSuccess(instance)},rejectInstantiation)
       } catch(error) {rejectInstantiation(error)}
       return {}
     }},
@@ -131,7 +169,7 @@ export async function createTemplateCheckpointVm(value?:TemplateCheckpointVmImag
   const vm=engine.newContext()
   patchLiveTypedArrays(vm,memory)
   const layout=handles(vm),owner={engine,vm}
-  owners.set(vm,{engine,stackPointer:()=>stackPointer(),handles:layout})
+  owners.set(vm,{engine,memory,limit,stackPointer:()=>stackPointer(),handles:layout})
   let memoryReplaced=false
   try {
     assertOwned(owner)

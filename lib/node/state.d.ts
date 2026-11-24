@@ -425,7 +425,7 @@ export declare class TavernState {
     /** 登记宿主原生分支的绑定接管；同步登记，使随后任何 loadBinding 都先等它结束。 */
     trackBindingAdoption<T>(sessionId: string, work: () => Promise<T>): Promise<T>;
     private loadBindingNow;
-    saveBinding(binding: SessionBinding, beforePublish?: (previous: SessionBinding | null, next: SessionBinding) => void): Promise<void>;
+    saveBinding(binding: SessionBinding, beforePublish?: (previous: SessionBinding | null, next: SessionBinding) => void, afterPublish?: (previous: SessionBinding | null, next: SessionBinding) => void): Promise<void>;
     /**
      * 绑定不变时复用第一次 standing，避免组装抖动打穿 KV。钉位按会话 × 生成场景（standingPinKey）。
      * 返回 `reused` 供调用方记观测日志（[standing:pin] hit/recompute）。

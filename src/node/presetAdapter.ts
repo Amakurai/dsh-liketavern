@@ -1,5 +1,5 @@
 /** Tavern 提示词投影适配器：复用宿主 DeepSeek 配置、凭证与传输，在同一 AgentLoop 请求内投影消息。 */
-import type { Context } from '@deepseek-ai/cordis'
+import { symbols, type Context } from '@deepseek-ai/cordis'
 import { getOrCreateAnonymousUserId } from '@deepseek-ai/dsh-anonymous-user-id'
 import { launchEnvironmentOf } from '@deepseek-ai/dsh-launch-environment'
 import { assertUsableApiKey, callConfigEquals, LlmAdapter, LlmError, resolveImageAttachmentAccess,
@@ -195,13 +195,25 @@ export function registerPresetAdapter(ctx: Context, project: PresetRequestProjec
       ?? Promise.resolve({ fields: {}, accept: async () => {} }),
   })
   const adapter = new PresetAdapter(delegate, project)
-  let registration: AdapterRegistrationHandle | undefined, registeredPolicy: string | undefined
+  let registration: AdapterRegistrationHandle | undefined, registeredPolicy: string | undefined, registeredLlm: object | undefined
+  const unwrapLlm = (service: object): object => {
+    const original = (service as Record<PropertyKey, unknown>)[symbols.original]
+    return original && typeof original === 'object' ? original : service
+  }
   const ensureRegistered = () => {
     const policy = JSON.stringify(options().retryPolicy)
     const llm = ctx.get('llm')
     if (!llm) throw presetAdapterError('Tavern DeepSeek adapter is waiting for the host LLM service.', 'PRESET_ADAPTER_UNAVAILABLE')
-    if (!registration) registration = llm.registerAdapter([PRESET_ADAPTER_PROVIDER], adapter)
-    else if (registeredPolicy !== policy) registration.replace([PRESET_ADAPTER_PROVIDER])
+    const rawLlm = unwrapLlm(llm as unknown as object)
+    const providerPresent = typeof llm.listProviders === 'function'
+      ? llm.listProviders().some(provider => provider.id === PRESET_ADAPTER_PROVIDER)
+      : true
+    if (!registration || registeredLlm !== rawLlm || !providerPresent) {
+      registration = llm.registerAdapter([PRESET_ADAPTER_PROVIDER], adapter)
+      registeredLlm = rawLlm
+    } else if (registeredPolicy !== policy) {
+      registration.replace([PRESET_ADAPTER_PROVIDER])
+    }
     registeredPolicy = policy
   }
   /** 设置里「是否跟随列表」变化时丢弃旧列表；endpoint 与凭证变化由缓存作用域自行处理。 */

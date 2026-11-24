@@ -19,7 +19,7 @@ import { describeError } from '../core/guards.js'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { IconBranchOutlineMedium, IconChevronLeftOutlineMedium, IconChevronRightOutlineMedium, IconEditOutlineMedium, IconListPenOutlineMedium, IconLoadingOutlineMedium, IconPlayOutlineMedium, IconRefreshOutlineMedium, IconUserOutlineMedium, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ReactNode } from 'react'
-import { cachedSessionBinding } from './cache.js'
+import { CHARACTER_CHANGED_EVENT, cachedSessionBinding } from './cache.js'
 import { useDraftGuard } from './drafts.js'
 import { floorActionStateBatched } from './floorActionBatch.js'
 import { resolveSessionInput } from './helperChoices.js'
@@ -104,11 +104,11 @@ function getRecordedContinuableFloor(remote: TavernRemote, sessionId: string): s
 const subscribeSessionWindowEvent = subscribeKeyedWindowEvent
 
 /** 查询会话是否已绑定角色卡；null = 尚未加载完成（先不渲染，避免闪烁）。非 Tavern 不打 remote。绑定读进程内缓存：每条 assistant 消息的操作条共享一次 RPC。 */
-function useTavernBound(remote: TavernRemote, sessionId: string, enabled: boolean): boolean | null {
-  const [bound, setBound] = useState<{ remote: TavernRemote; sessionId: string; enabled: boolean; value: boolean | null } | null>(null)
+function useTavernBound(remote: TavernRemote, sessionId: string, enabled: boolean): { bound: boolean | null; cardId: string | null } {
+  const [bound, setBound] = useState<{ remote: TavernRemote; sessionId: string; enabled: boolean; value: boolean | null; cardId: string | null } | null>(null)
   useEffect(() => {
     if (!enabled) {
-      setBound({ remote, sessionId, enabled, value: false })
+      setBound({ remote, sessionId, enabled, value: false, cardId: null })
       return
     }
     let alive = true
@@ -118,10 +118,18 @@ function useTavernBound(remote: TavernRemote, sessionId: string, enabled: boolea
       const current = ++request
       return cachedSessionBinding(remote, sessionId)
         .then((r) => {
-          if (alive && current === request) setBound({ remote, sessionId, enabled, value: r.ok ? r.value.binding !== null : null })
+          if (alive && current === request) {
+            setBound({
+              remote,
+              sessionId,
+              enabled,
+              value: r.ok ? r.value.binding !== null : null,
+              cardId: r.ok ? r.value.binding?.cardId ?? null : null,
+            })
+          }
         })
         .catch(() => {
-          if (alive && current === request) setBound({ remote, sessionId, enabled, value: null })
+          if (alive && current === request) setBound({ remote, sessionId, enabled, value: null, cardId: null })
         })
     }
     void load()
@@ -132,7 +140,10 @@ function useTavernBound(remote: TavernRemote, sessionId: string, enabled: boolea
     }
   }, [remote, sessionId, enabled])
   // 会话/remote 切换的本次渲染就关掉旧权限，不能等 effect 或新读取完成才收起操作条。
-  return !enabled ? false : bound?.remote === remote && bound.sessionId === sessionId && bound.enabled === enabled ? bound.value : null
+  if (!enabled) return { bound: false, cardId: null }
+  return bound?.remote === remote && bound.sessionId === sessionId && bound.enabled === enabled
+    ? { bound: bound.value, cardId: bound.cardId }
+    : { bound: null, cardId: null }
 }
 
 export interface FloorActionsProps {
@@ -169,7 +180,7 @@ function FloorActions(props: FloorActionsProps) {
   const navigation = guardedSessions(sessions, active)
   const t = useT()
   const tavern = isTavernSession(props.useSessions, sessionId)
-  const bound = useTavernBound(remote, sessionId, tavern)
+  const { bound, cardId } = useTavernBound(remote, sessionId, tavern)
   const [operation, setOperation] = useState<FloorOperation>(null)
   const [failure, setFailure] = useState<string | null>(null)
   const [editFailure, setEditFailure] = useState<string | null>(null)
@@ -211,13 +222,17 @@ function FloorActions(props: FloorActionsProps) {
     if (bound !== true || !messageId) return
     const offBinding = subscribeSessionWindowEvent(BINDING_CHANGED_EVENT, sessionId, false, () => floorStateLoader.reload())
     const offBranch = subscribeSessionWindowEvent(BRANCH_CHANGED_EVENT, sessionId, false, () => floorStateLoader.reload())
+    const offCharacter = cardId
+      ? subscribeSessionWindowEvent(CHARACTER_CHANGED_EVENT, cardId, false, () => floorStateLoader.reload())
+      : () => {}
     return () => {
       offBinding()
       offBranch()
+      offCharacter()
     }
-    // reload 随 loader render 更新；事件回调只需跟会话、消息和启用状态重挂。
+    // reload 随 loader render 更新；事件回调只需跟会话、消息、角色和启用状态重挂。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bound, messageId, sessionId])
+  }, [bound, cardId, messageId, sessionId])
   const floorState = floorStateLoader.state.status === 'ready' ? floorStateLoader.state.value : null
   useEffect(() => {
     if (!hasBatchStates || !messageId || !floorState) return

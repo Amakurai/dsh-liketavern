@@ -112,11 +112,12 @@ export function SpeechHtmlFrame(props: {
     let active=true
     const send=(message:Record<string,unknown>)=>{if(active)iframeRef.current?.contentWindow?.postMessage(message,'*')}
     const eventEndpoint=props.helperBinding?attachHelperEvents(props.helperBinding.sessionId,props.helperBinding.storyId,send,undefined,retiredRuntimes.current):attachCardBridgeRuntime(send,retiredRuntimes.current)
-    type Registration={frameId:string;runtimeId:string;epoch:number;readOnly:boolean;remote:TavernRemote;token?:string;failed:boolean;promise:Promise<HelperFrameLease>}
+    type Registration={frameId:string;runtimeId:string;epoch:number;readOnly:boolean;remote:TavernRemote;token?:string;failed:boolean;closed:boolean;promise:Promise<HelperFrameLease>}
     let registration:Registration|undefined
     const closeRegistration=()=>{
       const previous=registration;registration=undefined
       if(previous&&props.helperBinding&&props.helperMessageId!==undefined){
+        previous.closed=true
         void previous.remote.closeHelperFrame({sessionId:props.helperBinding.sessionId,messageId:props.helperMessageId,
           frameId:previous.frameId,runtimeId:previous.runtimeId,epoch:previous.epoch,
           ...(previous.token?{token:previous.token}:{})}).catch(()=>{})
@@ -125,16 +126,34 @@ export function SpeechHtmlFrame(props: {
     const openRegistration=(runtimeId:string,readOnly=handlers.current.readOnly||handlers.current.refreshing)=>{
       const remote=remoteRef.current
       if(!runtimeId||!remote||!props.helperBinding)return
+      const sessionId=props.helperBinding.sessionId,storyId=props.helperBinding.storyId,messageId=props.helperMessageId
       const epoch=++frameEpoch.current
-      const current:Registration={frameId:frameId.current,runtimeId,epoch,readOnly,remote,failed:false,promise:undefined!}
+      const current:Registration={frameId:frameId.current,runtimeId,epoch,readOnly,remote,failed:false,closed:false,promise:undefined!}
       registration=current
+      let closedLate=false
+      const closeLate=(token:string)=>{
+        if(closedLate||messageId===undefined)return
+        closedLate=true
+        current.closed=true
+        void remote.closeHelperFrame({sessionId,messageId,frameId:current.frameId,runtimeId,epoch,token}).catch(()=>{})
+      }
       current.promise=(async()=>{
-        if(props.helperMessageId===undefined||epoch>2147483647)throw new Error(handlers.current.t('speech.helperUnsupported'))
-        const result=await waitHelperDisplay(remote.openHelperFrame({sessionId:props.helperBinding!.sessionId,
-          storyId:props.helperBinding!.storyId,messageId:props.helperMessageId,frameId:current.frameId,runtimeId,epoch,readOnly}),AbortSignal.timeout(5000))
+        if(messageId===undefined||epoch>2147483647)throw new Error(handlers.current.t('speech.helperUnsupported'))
+        const openRpc=remote.openHelperFrame({sessionId,storyId,messageId,frameId:current.frameId,runtimeId,epoch,readOnly})
+        // 超时、卸载或切换运行时后迟到的 open 成功回包立即回收服务端租约，防止占满 1024 连接预算；
+        // 若 closeRegistration 已发过正常关闭（current.closed && !current.failed），不重复发第二次 close。
+        void openRpc.then(resolved=>{
+          if(!resolved.ok)return
+          if(current.failed||(!current.closed&&(!active||registration!==current||!eventEndpoint.matchesRuntime(runtimeId))))closeLate(resolved.value.token)
+        },()=>{})
+        const result=await waitHelperDisplay(openRpc,AbortSignal.timeout(5000))
         if(!result.ok)throw new Error(result.error.message)
         current.token=result.value.token
-        if(!active||registration!==current||!eventEndpoint.matchesRuntime(runtimeId))throw new Error(handlers.current.t('speech.helperStoryChanged'))
+        if(!active||registration!==current||current.failed||!eventEndpoint.matchesRuntime(runtimeId)){
+          current.failed=true
+          if(!current.closed)closeLate(result.value.token)
+          throw new Error(handlers.current.t('speech.helperStoryChanged'))
+        }
         return {frameId:current.frameId,runtimeId,epoch,token:result.value.token}
       })()
       void current.promise.catch(error=>{

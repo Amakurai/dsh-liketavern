@@ -94,6 +94,7 @@ export function SettingsSection(props: { remote: TavernRemote; sessions?: Sessio
     const speakerHeader = state.value.settings.speakerHeader === true
     const locale = state.value.settings.locale
     setSpeakerHeader(speakerHeader)
+    setTavernLocale(locale)
     if (!firstReady || !restoredDraft || draft === null) setDraft(toDraft(state.value.settings))
     else setDraft((current) => current ? { ...current, speakerHeader, locale } : current)
     if (!firstReady || !restoredBaseline || baseline === null) setBaseline(toDraft(state.value.settings))

@@ -77,6 +77,32 @@ export function installCardMvu(codec:HelperMvuCommandCodec,json:(value:unknown,m
     await (root.eventEmit as (name:string,...args:unknown[])=>Promise<void>)(name,...args)
     check();json(args,MVU_EVENT_MAX_BYTES)
   }
+  const MAX_COMMANDS=256,INPUT_MAX_BYTES=256*1024
+  const utf8Bytes=(text:string):number=>{
+    let bytes=0
+    for(let i=0;i<text.length;i++){
+      const code=text.charCodeAt(i)
+      if(code<0x80)bytes++
+      else if(code<0x800)bytes+=2
+      else if(code>=0xd800&&code<=0xdbff&&i+1<text.length&&text.charCodeAt(i+1)>=0xdc00&&text.charCodeAt(i+1)<=0xdfff){bytes+=4;i++}
+      else bytes+=3
+    }
+    return bytes
+  }
+  /** 逐条套用与 Zod 校验前统一核对整批命令数与累计参数字节上限，防止监听器追加命令绕过预算。 */
+  function assertCommandBudget(list:unknown[]):void{
+    if(list.length>MAX_COMMANDS)throw new Error('MVU 单次最多 256 个命令')
+    let argumentBytes=0
+    for(const item of list){
+      if(!item||typeof item!=='object'||Array.isArray(item))continue
+      const row=item as {reason?:unknown;args?:unknown}
+      if(typeof row.reason==='string')argumentBytes+=utf8Bytes(row.reason)
+      if(Array.isArray(row.args)){
+        for(const arg of row.args)argumentBytes+=utf8Bytes(typeof arg==='string'?arg:(JSON.stringify(arg)??''))
+      }
+      if(argumentBytes>INPUT_MAX_BYTES)throw new Error('MVU 命令参数超过 256 KiB')
+    }
+  }
   async function parseMessage(message:string,oldData:unknown):Promise<Table>{
     check()
     if(parsing>=8)throw new Error('MVU 解析超过并发预算')
@@ -90,19 +116,33 @@ export function installCardMvu(codec:HelperMvuCommandCodec,json:(value:unknown,m
       await emit('mag_command_parsed_for_zod',next,commands,message)
       await emit('mag_command_parsed_ended_for_zod',next,commands,message)
       if(commands.length){
-        supported(next)
-        // 逐条应用：每条 set/add 后按官方 MVU 发出 SINGLE_VARIABLE_UPDATED(stat_data, 路径, 旧值, 新值)，
-        // 监听器对 stat_data 的修改在下一条命令前生效。无监听时结果与整批应用相同；任一条失败整体拒绝。
-        let display=table(next.display_data)
-        const delta:Table={}
-        for(const command of commands){
-          const stat=table(data(next).stat_data),before=codec.read(stat,command.args[0])
-          const applied=codec.apply(stat,[command],display)
+        assertCommandBudget(commands)
+        const validated=data(next)
+        supported(validated)
+        let stat=validated.stat_data as Table
+        let display=validated.display_data&&typeof validated.display_data==='object'&&!Array.isArray(validated.display_data)?table(validated.display_data):table(stat)
+        const delta:Table=validated.delta_data&&typeof validated.delta_data==='object'&&!Array.isArray(validated.delta_data)?table(validated.delta_data):{}
+        const hasSetOrAdd=commands.some(command=>command&&typeof command==='object'&&(command.type==='set'||command.type==='add'))
+        const canBatch=!hasSetOrAdd||(root.__dshTavernSharedEvents!==true&&typeof root.__dshTavernHasLocalListeners==='function'&&!(root.__dshTavernHasLocalListeners as (name:string)=>boolean)(events.SINGLE_VARIABLE_UPDATED))
+        if(canBatch){
+          // 无 SINGLE_VARIABLE_UPDATED 监听或无 set/add 时整批执行，命中 codec 内部增量预算缓存并保留前序 delta_data。
+          const applied=codec.apply(stat,commands,display)
           display=applied.display_data;mergeLog(delta,applied.delta_data)
           next.stat_data=applied.stat_data;next.display_data=display;next.delta_data=delta
-          if(command.type==='set'||command.type==='add'){
-            const raw=String(command.args[0]).trim(),quoted=/^(['"])([\s\S]*)\1$/.exec(raw)
-            await emit(events.SINGLE_VARIABLE_UPDATED,next.stat_data,quoted?quoted[2]:raw,before,codec.read(table(next.stat_data),command.args[0]))
+        }else{
+          // 逐条应用：每条 set/add 后按官方 MVU 发出 SINGLE_VARIABLE_UPDATED(stat_data, 路径, 旧值, 新值)，
+          // 监听器对 stat_data 的修改在下一条命令前生效；任一条失败整体拒绝。
+          for(const command of commands){
+            const notify=command.type==='set'||command.type==='add'
+            const prevValue=notify?codec.read(stat,command.args[0]):null
+            const applied=codec.apply(stat,[command],display)
+            stat=applied.stat_data;display=applied.display_data;mergeLog(delta,applied.delta_data)
+            next.stat_data=stat;next.display_data=display;next.delta_data=delta
+            if(notify){
+              const raw=String(command.args[0]).trim(),quoted=/^(['"])([\s\S]*)\1$/.exec(raw)
+              await emit(events.SINGLE_VARIABLE_UPDATED,next.stat_data,quoted?quoted[2]:raw,prevValue,codec.read(stat,command.args[0]))
+              stat=data(next).stat_data as Table
+            }
           }
         }
         next.delta_data=table(delta)
@@ -134,9 +174,12 @@ export function installCardMvu(codec:HelperMvuCommandCodec,json:(value:unknown,m
     const on=root.eventOn as ((name:string,listener:(...args:unknown[])=>unknown)=>unknown)|undefined
     if(!zod||typeof on!=='function')throw new Error('registerMvuSchema 需要沙箱内的 zod 与 eventOn')
     const resolve=():Zod=>{
-      const raw=(typeof input==='function'?(input as ()=>unknown)():input) as {shape?:unknown}&Zod
+      const raw=(typeof input==='function'?(input as ()=>unknown)():input) as {shape?:unknown;loose?:()=>Zod}&Zod
       if(!raw||typeof raw.safeParse!=='function')throw new Error('registerMvuSchema 需要 zod schema')
-      const schema=zod.ZodObject&&raw instanceof zod.ZodObject&&typeof zod.looseObject==='function'?zod.looseObject(raw.shape):raw
+      // Zod v4 的 .refine/.superRefine 附着在 ZodObject 自身；优先调用 raw.loose() 保留顶层约束。
+      const schema=zod.ZodObject&&raw instanceof zod.ZodObject
+        ?(typeof raw.loose==='function'?raw.loose():typeof zod.looseObject==='function'?zod.looseObject(raw.shape):raw)
+        :raw
       const registerSchema=root.registerVariableSchema
       if(typeof registerSchema==='function'&&typeof zod.object==='function')registerSchema(zod.object({stat_data:schema}),{type:'message'})
       return schema
@@ -166,6 +209,7 @@ export function installCardMvu(codec:HelperMvuCommandCodec,json:(value:unknown,m
     })
     on('mag_command_parsed_for_zod',(variables:unknown,commands:unknown)=>{
       if(!active||!Array.isArray(commands))return
+      assertCommandBudget(commands)
       const target=variables as Table,schema=resolve()
       for(const command of commands as Array<{type:string;args:unknown[];full_match?:string}>){
         let candidate:Table

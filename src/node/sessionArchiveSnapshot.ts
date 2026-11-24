@@ -164,9 +164,10 @@ export async function snapshotSessionArchive(ctx: Context, state: TavernState, s
       }
       let remaining = SESSION_ARCHIVE_MAX_BYTES - Buffer.byteLength(history)
       const files: SessionArchiveFile[] = []
+      const dirCheck = { boundary: state.paths.root, verified: new Set<string>() }
       const add = async (area: SessionArchiveFile['area'], root: string, path: string) => {
         if (remaining < 0) throw new Error('会话迁移文件超过大小上限')
-        const bytes = await boundedBytes(join(root, ...path.split('/')), remaining)
+        const bytes = await boundedBytes(join(root, ...path.split('/')), remaining, dirCheck)
         remaining -= bytes.length
         files.push(archiveFile(area, path, bytes))
       }

@@ -3,9 +3,9 @@ export const TEMPLATE_SCHEMA = String.raw`
 const z = __TavernTemplateLibraries.z;
 let variableSchema = null;
 let validatingSchema = false;
-let schemaState = stringifyTemplateJson(scopes);
-let schemaCacheState = stringifyTemplateJson(variables);
-function rememberSchemaState() { schemaState=stringifyTemplateJson(scopes);schemaCacheState=stringifyTemplateJson(variables); }
+let schemaState = serializeTemplateJson(scopes);
+let schemaCacheState = serializeTemplateJson(variables);
+function rememberSchemaState() { schemaState=serializeTemplateJson(scopes);schemaCacheState=serializeTemplateJson(variables); }
 function setVariableSchema(schema) {
   assertNotConditionReadonly('修改变量 schema');
   if (validatingSchema) throw Error('变量校验期间不能替换 schema');
@@ -15,31 +15,36 @@ function setVariableSchema(schema) {
   rememberSchemaState();
 }
 function checkVariableSchema(value) {
-  validate(value);
-  if (!variableSchema) return value;
+  const inputJson = serializeTemplateJson(value);
+  if (!variableSchema) return parseTemplateInput(inputJson);
   if (validatingSchema) throw Error('变量校验期间不能修改变量');
   const originalVariables=clone(variables), originalScopes=clone(scopes), originalInitial=clone(initial),originalMessages=clone(messageSnapshots);
-  const previous=stringifyTemplateJson({variables,scopes,initial,messageSnapshots});
+  const previous=serializeTemplateJson({variables,scopes,initial,messageSnapshots});
   validatingSchema=true;
   try {
-    const result=variableSchema.parse(clone(value));
-    if (stringifyTemplateJson({variables,scopes,initial,messageSnapshots})!==previous) throw Error('schema 校验函数不能修改变量');
+    const result=variableSchema.parse(parseTemplateInput(inputJson));
+    if (serializeTemplateJson({variables,scopes,initial,messageSnapshots})!==previous) throw Error('schema 校验函数不能修改变量');
     if (!result || typeof result!=='object' || Array.isArray(result)) throw Error('变量 schema 根输出必须是对象');
-    validate(result);
-    return result;
+    return parseTemplateInput(serializeTemplateJson(result));
   } finally {
-    // 用户 validator 即使抛错或经引用写入，也不得污染前一份状态。
+    // 用户 validator 即使抛错、产生循环引用或经引用写入，也不得跳过回滚或锁死 validatingSchema。
     // 纯校验保留引用身份；否则 findVariables 返回的当前树会和 scopes.message 失联。
-    if(stringifyTemplateJson({variables,scopes,initial,messageSnapshots})!==previous) {
-      for (const key of Object.keys(scopes)) delete scopes[key];
-      Object.assign(scopes,originalScopes);
-      for (const key of Object.keys(initial)) delete initial[key];
-      Object.assign(initial,originalInitial);
-      messageSnapshots=originalMessages;
-      if(currentMessageIndex>=0) scopes.message=snapshotAt(currentMessageIndex).values;
-      variables=originalVariables; api.variables=variables;
+    try {
+      let mutated=false;
+      try { mutated=serializeTemplateJson({variables,scopes,initial,messageSnapshots})!==previous; }
+      catch { mutated=true; }
+      if(mutated) {
+        for (const key of Object.keys(scopes)) delete scopes[key];
+        Object.assign(scopes,originalScopes);
+        for (const key of Object.keys(initial)) delete initial[key];
+        Object.assign(initial,originalInitial);
+        messageSnapshots=originalMessages;
+        if(currentMessageIndex>=0) scopes.message=snapshotAt(currentMessageIndex).values;
+        variables=originalVariables; api.variables=variables;
+      }
+    } finally {
+      validatingSchema=false;
     }
-    validatingSchema=false;
   }
 }
 function copySchemaChanges(target,before,after,parts=[]) {

@@ -98,8 +98,18 @@ function report(operation: BackupReport['operation'], manifest: BackupManifest, 
 async function references(home: string, entries: BackupEntry[]): Promise<DoctorIssue[]> {
   const files = new Map(entries.filter(entry => entry.kind === 'file').map(entry => [entry.path, entry]))
   const paths = new Set(files.keys())
+  const assetsByDir = new Map<string, Array<{ path: string; file: BackupEntry }>>([
+    ['library/presets', []],
+    ['personas', []],
+    ['library/lorebooks', []],
+  ])
+  for (const [path, file] of files) {
+    const match = /^dsh-tavern\/(library\/presets|personas|library\/lorebooks)\/[^/]+\.json$/.exec(path)
+    if (match) assetsByDir.get(match[1]!)!.push({ path, file })
+  }
   const issues = new Map<string, DoctorIssue>()
   const candidateCache = new Map<string, { primary: string | null; sourceId: string | null } | null>()
+  const resolvedAssetCache = new Map<string, boolean>()
   const add = (code: string) => { const found = issues.get(code); if (found) found.count++; else issues.set(code, { code, severity: 'error', count: 1 }) }
   const field = (raw: Record<string, unknown>, key: string): string | null => {
     const value = raw[key]
@@ -143,9 +153,15 @@ async function references(home: string, entries: BackupEntry[]): Promise<DoctorI
         if (!paths.has(baseFile)) add('BINDING_ASSET_MISSING')
         continue
       }
+      const cacheKey = `${directory}\0${id}`
+      const cachedOk = resolvedAssetCache.get(cacheKey)
+      if (cachedOk !== undefined) {
+        if (!cachedOk) add('BINDING_ASSET_MISSING')
+        continue
+      }
       const prefix = `dsh-tavern/${directory}/${safe}-`
       let matches = 0, fallback = false
-      for (const [candidate, file] of files) {
+      for (const { path: candidate, file } of assetsByDir.get(directory) ?? []) {
         if (candidate !== baseFile && (!candidate.startsWith(prefix) || !/^\d+\.json$/.test(candidate.slice(prefix.length)))) continue
         let parsed = candidateCache.get(candidate)
         if (parsed === undefined && !candidateCache.has(candidate)) {
@@ -166,7 +182,9 @@ async function references(home: string, entries: BackupEntry[]): Promise<DoctorI
         if (identities.some(v => v === trimmedId)) matches++
         else if (candidate === baseFile && identities.length === 0) fallback = true
       }
-      if (!(matches === 1 || (matches === 0 && fallback))) add('BINDING_ASSET_MISSING')
+      const ok = matches === 1 || (matches === 0 && fallback)
+      resolvedAssetCache.set(cacheKey, ok)
+      if (!ok) add('BINDING_ASSET_MISSING')
     }
   }
   return [...issues.values()]
@@ -220,7 +238,12 @@ async function copy(home: string, target: string, entries: BackupEntry[]): Promi
     result.push({ path, kind, size, mode, ...(kind === 'file' ? { sha256: await transferFile(home, entry, checkedPath(target, path), aboveHome) } : {}) })
   }
   await assertDirectory(home)
-  for (const entry of [...entries].reverse()) if (entry.kind === 'directory') await chmod(checkedPath(target, entry.path), entry.mode)
+  for (const entry of [...entries].reverse()) {
+    if (entry.kind !== 'directory') continue
+    // POSIX 上缺少属主 r-x 的目录（如旧版 Windows 清单里的 0o666）会导致后续校验 EACCES 且无法遍历，先明确拒绝。
+    if (process.platform !== 'win32' && (entry.mode & 0o500) !== 0o500) fail('INVALID_MANIFEST')
+    await chmod(checkedPath(target, entry.path), entry.mode)
+  }
   return result
 }
 async function stage(target: string, action: (temporary: string) => Promise<void>, hooks?: BackupHooks): Promise<void> {

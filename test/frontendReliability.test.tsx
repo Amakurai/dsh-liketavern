@@ -91,7 +91,7 @@ it('读取函数同步抛错时显示错误且仍可重试', async () => {
 
 it('默认资产列表失败时禁用对应选择器，并提供可恢复的重试入口', async () => {
   setTavernLocale('zh')
-  const settings = TavernConfigSchema({})
+  const settings = TavernConfigSchema({ locale: 'zh' })
   const listPresets = vi.fn()
     .mockResolvedValueOnce({ ok: false, error: { code: 'test', message: '预设目录暂时不可用' } })
     .mockResolvedValue({ ok: true, value: { items: [] } })

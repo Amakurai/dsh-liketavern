@@ -21,9 +21,9 @@ function format(markdown: string) {
 describe('Markdown 格式化安全边界', () => {
   it('隔离模板不再装载 Showdown 或暴露 Markdown 引擎的全局配置', async () => {
     const result=await isolated('template',{context:{...context(),phase:'generate'},texts:[
-      '<%= typeof __TavernTemplateLibraries.showdown %>|<%= typeof __TavernTemplateLibraries.markdownit %>',
+      '<%= typeof __TavernTemplateLibraries %>|<%= typeof globalThis.showdown %>|<%= typeof globalThis.markdownit %>',
     ]})
-    expect(result.texts).toEqual(['undefined|undefined'])
+    expect(result.texts).toEqual(['undefined|undefined|undefined'])
   })
 
   it('metadata 标题载荷不会生成完整文档，原始 HTML 仍只进入沙箱片段', async () => {

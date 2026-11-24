@@ -152,14 +152,17 @@ export function installCardPersistence(snapshot:HelperSnapshot,source:string,_la
     if(!active) return Promise.reject(new Error('卡面已关闭'))
     if(editing) return editing.then(()=>flushHelperVariables())
     if(refreshing) return refreshing.then(()=>flushHelperVariables())
+    flushScheduled=false
     if(failure) return Promise.reject(failure)
     if(!running) running=drain().finally(()=>{running=null;refreshIfClean()})
     return running
   }
+  let flushScheduled=false
   function changed() {
     if(!active) throw new Error('卡面已关闭')
     if(failure) {setStatus('error');return}
     setStatus('pending')
+    flushScheduled=true
     queueMicrotask(()=>{if(active) void flushHelperVariables().catch(()=>{})})
   }
   // 消息数据事务复用变量保存队列；等待期间的本地新修改保留，随后以新确认值提交。
@@ -184,22 +187,36 @@ export function installCardPersistence(snapshot:HelperSnapshot,source:string,_la
         root.__dshTavernSnapshotGeneration=Number(root.__dshTavernSnapshotGeneration??0)+1
       }
       return result
-    }finally{editing=null;release();if(active){if(differences().length)changed();else refreshIfClean()}}
+    }finally{
+      editing=null
+      // 在唤醒等待 editing 的事件准备前先同步启动/登记排空，避免微任务顺序竞态误报未保存变量。
+      if(active){
+        if(differences().length){
+          if(!failure&&!running){setStatus('pending');running=drain().finally(()=>{running=null;refreshIfClean()})}
+          else changed()
+        }else refreshIfClean()
+      }
+      release()
+    }
+  }
+  const settleBeforeEvent=async(message:string)=>{
+    for(let i=0;i<8;i++){
+      if(editing){await editing;continue}
+      if(running){await running;continue}
+      if(refreshing){await refreshing;continue}
+      if(active&&!failure&&flushScheduled&&differences().length){await flushHelperVariables();continue}
+      break
+    }
+    if(!active)throw new Error('卡面已关闭')
+    if(failure||differences().length)throw failure??new Error(message)
   }
   root.__dshTavernPrepareMvuEvent=async(next:HelperSnapshot)=>{
-    if(editing)await editing
-    if(running)await running
-    if(refreshing)await refreshing
-    if(failure||differences().length)throw failure??new Error('卡面有未保存变量，MVU 监听未执行')
+    await settleBeforeEvent('卡面有未保存变量，MVU 监听未执行')
     await refreshHelperSnapshot({},next)
   }
   root.__dshTavernPrepareHostEvent=async()=>{
     // 先等待本地事务收口，再刷新实际剧情；冲突草稿不得被生命周期通知冲掉。
-    if(editing)await editing
-    if(running)await running
-    if(refreshing)await refreshing
-    if(!active)throw new Error('卡面已关闭')
-    if(failure||differences().length)throw failure??new Error('卡面有未保存变量，宿主事件未执行；请保留草稿后刷新')
+    await settleBeforeEvent('卡面有未保存变量，宿主事件未执行；请保留草稿后刷新')
     await refreshHelperSnapshot()
   }
   root.__dshTavernMessageTransaction=messageTransaction

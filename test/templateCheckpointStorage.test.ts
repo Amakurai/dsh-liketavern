@@ -17,7 +17,7 @@ import { Wal } from '../src/state/wal.js'
 import { WorkspaceFs } from '../src/state/workspaceFs.js'
 
 const roots:string[]=[]
-const QUERIES=96
+const QUERIES=128
 let factory:TemplateState
 
 /** define 与长期正则共享同一个 let；检查点必须保存真实词法环境，变量 JSON 没有这份计数。 */
@@ -45,7 +45,7 @@ function checkpoint(state:TemplateState):TemplateReplayCheckpoint {
   return result
 }
 
-/** 每次真实求值留下 message/render/outlets 等操作，96 次足以跨越 256 操作的检查点间隔。 */
+/** 每次真实求值留下 message/render 等操作，128 次足以跨越 256 操作的检查点间隔。 */
 async function advance(state:TemplateState,count=QUERIES,sessionId?:string) {
   const replay=state.continuation?.replay
   if(!replay)throw new Error('工厂缺少跨轮执行日志')
@@ -125,10 +125,10 @@ it('检查点保存后可冷恢复，更新楼层回滚后恢复旧堆，copyFro
   const firstRoot=await source.fs.readText(TEMPLATE_STATE_PATH),first=await cold(source.fs)
   const initialBlocks=new Set(await source.fs.list(TEMPLATE_DATA_PATH))
   expect(checkpoint(first).image.memoryHash).toBe(checkpoint(factory).image.memoryHash)
-  expect(await probe(first)).toEqual(['97 98'])
+  expect(await probe(first)).toEqual([`${QUERIES+1} ${QUERIES+2}`])
 
   const updated=await advance(await cold(source.fs))
-  expect(updated.texts[0]).toBe('97');expect(updated.texts.at(-1)).toBe('192')
+  expect(updated.texts[0]).toBe(String(QUERIES+1));expect(updated.texts.at(-1)).toBe(String(QUERIES*2))
   expect(checkpoint(updated.state).image.memoryHash).not.toBe(checkpoint(first).image.memoryHash)
   await commit(source.fs,source.wal,'story#t2',updated.state)
   const nextBlocks=new Set(await source.fs.list(TEMPLATE_DATA_PATH))
@@ -144,25 +144,25 @@ it('检查点保存后可冷恢复，更新楼层回滚后恢复旧堆，copyFro
     expect(initialBlocks.has(page)).toBe(true);expect(nextBlocks.has(page)).toBe(true)
     expect(secondWal).not.toContain(`${TEMPLATE_DATA_PATH}/${page}`)
   }
-  expect(await probe(await cold(source.fs))).toEqual(['193 194'])
+  expect(await probe(await cold(source.fs))).toEqual([`${QUERIES*2+1} ${QUERIES*2+2}`])
 
   await source.wal.rollbackFloor('story#t2',source.root)
   expect(await source.fs.readText(TEMPLATE_STATE_PATH)).toBe(firstRoot)
-  expect(await probe(await cold(source.fs))).toEqual(['97 98'])
+  expect(await probe(await cold(source.fs))).toEqual([`${QUERIES+1} ${QUERIES+2}`])
 
   const branch=await fixture()
   await branch.fs.copyFrom(source.fs,await source.fs.list(),path=>new Error(`工厂分支不能复制 ${path}`))
   const original=await disk(source.fs),branchSession='checkpoint-storage-branch'
   const continued=await advance(await cold(branch.fs),QUERIES,branchSession)
-  expect(continued.texts[0]).toBe('97');expect(continued.texts.at(-1)).toBe('192')
+  expect(continued.texts[0]).toBe(String(QUERIES+1));expect(continued.texts.at(-1)).toBe(String(QUERIES*2))
   expect(continued.state.continuation!.replay!.context.sessionId).toBe(branchSession)
   expect(checkpoint(continued.state).context.sessionId).toBe(branchSession)
   await commit(branch.fs,branch.wal,'branch#t2',continued.state)
   expect(await disk(source.fs)).toEqual(original)
   expect(await session(await cold(branch.fs))).toEqual([branchSession])
-  expect(await probe(await cold(branch.fs))).toEqual(['193 194'])
+  expect(await probe(await cold(branch.fs))).toEqual([`${QUERIES*2+1} ${QUERIES*2+2}`])
   expect(await session(await cold(source.fs))).toEqual(['checkpoint-storage'])
-  expect(await probe(await cold(source.fs))).toEqual(['97 98'])
+  expect(await probe(await cold(source.fs))).toEqual([`${QUERIES+1} ${QUERIES+2}`])
 },60000)
 
 it('损坏的检查点头、运行时指纹、内存摘要、压缩正文或句柄明确拒绝，根与 WAL 不推进',async()=> {
@@ -194,5 +194,5 @@ it('损坏的检查点头、运行时指纹、内存摘要、压缩正文或句�
   }
   // 修复被模拟损坏的根后原检查点仍可恢复，没有哪一次失败偷偷消耗共享计数。
   await fs.withFloor(null).writeText(TEMPLATE_STATE_PATH,JSON.stringify(factory))
-  expect(await probe(await cold(fs))).toEqual(['97 98'])
+  expect(await probe(await cold(fs))).toEqual([`${QUERIES+1} ${QUERIES+2}`])
 },60000)

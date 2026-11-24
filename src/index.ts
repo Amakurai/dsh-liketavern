@@ -8,7 +8,9 @@ import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
 import type { Session } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-typert-registry'
 import { Config, TAVERN_NS, TavernConfigSchema, resolveConfig } from './node/config.js'
-import { adoptHostFork, ensureGreeting } from './node/floors.js'
+import { adoptHostFork, discardHostForkAdoptionPlan, ensureGreeting } from './node/floors.js'
+import { revokeSessionHelperFrames } from './node/helperFrameLease.js'
+import { deleteHostForkAdoption } from './node/hostForkAdoption.js'
 import { createGreetingRetirement } from './node/greetingRetirement.js'
 import { tavernPaths } from './node/paths.js'
 import { installTavernPreset } from './node/presetInstall.js'
@@ -98,8 +100,15 @@ async function startTavern(ctx: Context, config: ReturnType<typeof Config>): Pro
     guardPhase(ctx, 'typert remote', () => ctx.effect(() => typert.register(TYPERT_HOST), 'dsh-tavern.typert'))
   }
 
+  let lastPersistence = ctx.get('sessionPersistence') as { stat?(id: string): Promise<unknown> } | undefined
+  const refreshPersistence = () => {
+    const current = ctx.get('sessionPersistence') as { stat?(id: string): Promise<unknown> } | undefined
+    if (current) lastPersistence = current
+    return current ?? lastPersistence
+  }
   const greetingRetirement = createGreetingRetirement(ctx)
   const adoptOrRetireSession = (session: Session) => {
+    refreshPersistence()
     let isFork = false
     try {
       const parentId = session.header.parentSession ?? forkedSessionParents.get(session.id)
@@ -114,20 +123,24 @@ async function startTavern(ctx: Context, config: ReturnType<typeof Config>): Pro
   ctx.on('session/created', adoptOrRetireSession)
   ctx.on('agent/created', ({ agent }) => { greetingRetirement.agentCreated(agent); return undefined })
 
-  let lastPersistence = ctx.get('sessionPersistence') as { stat?(id: string): Promise<unknown> } | undefined
   const disposeSession = async (sessionId: string, disposedSession?: Session) => {
     const initialLive = disposedSession ?? ctx.sessions.get(sessionId as Session['id'])
     await state.drainBindingAdoption(sessionId).catch(() => {})
     await state.waitForSessionTasks(sessionId).catch(() => {})
-    const persistence = (ctx.get('sessionPersistence') as { stat?(id: string): Promise<unknown> } | undefined) ?? lastPersistence
-    if (persistence) lastPersistence = persistence
+    const persistence = refreshPersistence()
     let persisted = false
-    if (persistence?.stat) {
-      try { persisted = (await persistence.stat(sessionId)) !== undefined }
-      catch (err) { persisted = (err as NodeJS.ErrnoException | undefined)?.code !== 'ENOENT' }
+    if (persistence) {
+      if (typeof persistence.stat === 'function') {
+        try { persisted = (await persistence.stat(sessionId)) !== undefined }
+        catch (err) { persisted = (err as NodeJS.ErrnoException | undefined)?.code !== 'ENOENT' }
+      } else {
+        persisted = true
+      }
     }
     const currentLive = ctx.sessions.get(sessionId as Session['id'])
     if (currentLive && currentLive !== initialLive) return
+    discardHostForkAdoptionPlan(state, sessionId)
+    revokeSessionHelperFrames(state, sessionId)
     if (persisted) {
       const open = state.openFloors.get(sessionId)
       if (open?.storyId && !open.endedWithError) {
@@ -142,19 +155,19 @@ async function startTavern(ctx: Context, config: ReturnType<typeof Config>): Pro
     try {
       await state.clearBinding(sessionId)
       await deleteHostForkIdentity(state.paths, sessionId)
+      await deleteHostForkAdoption(state.paths, sessionId)
     } catch (err) { ctx.logger.warn(`dsh-tavern: 会话解绑或分支来源清理失败：${String(err)}`) }
   }
   ctx.on('session/disposed', (session: Session) => {
-    forkedSessionParents.delete(session.id)
     void disposeSession(session.id, session)
   })
   ctx.on('api-session/removed' as any, (sessionId: string) => {
-    forkedSessionParents.delete(sessionId)
     void disposeSession(sessionId)
   })
 
   // 楼层 WAL 与每 turn 检索缓存：只碰 Tavern 模式会话，普通 dsh 助手不受影响。
   ctx.on('session/event', (session: Session, event) => {
+    refreshPersistence()
     if (!isTavernRuntimeSession(ctx, session)) return
     if (event.type === 'turn/start') {
       const { turn } = event.data as { turn: number }

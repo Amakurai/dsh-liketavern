@@ -228,12 +228,12 @@ async function finishTurn(state:TavernState,sessionId:string,session?:Pick<Sessi
       const metadata=await loadTemplateMetadata(ws.fs)
       await assertActiveTemplateRuntime(metadata,sessionId)
       await ws.wal.validateFloor(entry.floor)
-      if (!templateError) {
+      if (!(templateError instanceof TemplateOutputCommitError) && !helperQueueError) {
         try {
           const generation = metadata.generation
           if (generation?.status==='prepared' && generation.sessionId===sessionId && generation.cardId===entry.cardId
             && generation.storyId===entry.storyId && generation.floor===entry.floor) {
-            const completed = ending?.type==='turn/end' && ending.data.turn===generation.turn && ending.data.reason.kind==='completed'
+            const completed = !templateError && ending?.type==='turn/end' && ending.data.turn===generation.turn && ending.data.reason.kind==='completed'
               && events.some(event=>{
                 if (event.type!=='assistant/message' || event.data.turn!==generation.turn || event.data.interrupted || event.seq>=ending.seq) return false
                 return hasNormalAssistantStop(event)

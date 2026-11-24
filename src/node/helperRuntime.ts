@@ -9,7 +9,7 @@ import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { helperJson, helperChanges, helperScopeKey, type HelperDisplayContext, type HelperScopes, type HelperSnapshot, type HelperSnapshotBase } from '../core/helperRuntime.js'
 import { isHostInjectedUserMessage, isSyntheticUserText } from '../core/dshPrompt.js'
 import { DEFAULT_USER_NAME } from '../core/persona.js'
-import { applyHelperChanges, commitHelperChanges, loadHelperScopes, loadHelperState, type HelperState } from '../state/helper.js'
+import { applyHelperChanges, loadHelperState, saveHelperState, serializeHelperState, type HelperState } from '../state/helper.js'
 import { loadTemplateGenerationIdentity } from '../state/template.js'
 import type { WorkspaceFs } from '../state/workspaceFs.js'
 import { withWorkspaceLock } from '../state/workspaceLock.js'
@@ -280,7 +280,10 @@ export async function commitHelperVariables(ctx:Context,state:TavernState,reques
       return {...change,key:JSON.stringify(['message',current.history[id]!.identity])}
     })
     const floor=`${request.sessionId}#t${current.turn}`
-    applyHelperChanges(await loadHelperScopes(current.ws.fs),mapped)
+    const existing=await loadHelperState(current.ws.fs)
+    const scopes=applyHelperChanges(existing.scopes,mapped)
+    const nextState:HelperState={...existing,scopes}
+    serializeHelperState(nextState)
     const generation=await loadTemplateGenerationIdentity(current.ws.fs)
     if(generation?.status==='prepared') throw new Error('模板楼层尚未收口，请先恢复宿主生成后再写入')
     const floors=await current.ws.wal.listFloors()
@@ -295,7 +298,7 @@ export async function commitHelperVariables(ctx:Context,state:TavernState,reques
     beforeWrite?.(current.binding)
     if(targetFloor) await current.ws.wal.reopenFloor(floor)
     else await current.ws.wal.beginFloor(floor)
-    const scopes=await commitHelperChanges(current.ws.fs.withFloor(floor),mapped)
+    await saveHelperState(current.ws.fs.withFloor(floor),nextState)
     await current.ws.wal.commitFloor(floor)
     const saved=await loadHelperState(current.ws.fs)
     return snapshot(current,scopes,saved.extras,saved.swipes)

@@ -240,8 +240,13 @@ function compileEntry(
   }
 }
 
-function matchCompiled(c: CompiledEntry, texts: readonly ScanText[]): { keys: string[]; tests: KeyTest[] } | null {
-  if (texts.length === 0) return null
+type CompiledMatchResult =
+  | { kind: 'match'; keys: string[]; tests: KeyTest[] }
+  | { kind: 'no-primary' }
+  | { kind: 'secondary-miss' }
+
+function matchCompiled(c: CompiledEntry, texts: readonly ScanText[]): CompiledMatchResult {
+  if (texts.length === 0) return { kind: 'no-primary' }
   const matched: string[] = []
   const matchedTests: KeyTest[] = []
   for (const k of c.primary) {
@@ -250,9 +255,9 @@ function matchCompiled(c: CompiledEntry, texts: readonly ScanText[]): { keys: st
       matchedTests.push(k.test)
     }
   }
-  if (matched.length === 0) return null
+  if (matched.length === 0) return { kind: 'no-primary' }
   const entry = c.entry
-  if (!entry.selective || c.secondaryCount === 0) return { keys: matched, tests: matchedTests }
+  if (!entry.selective || c.secondaryCount === 0) return { kind: 'match', keys: matched, tests: matchedTests }
   const matchesAnyText = (test: KeyTest) => texts.some((t) => test(t))
   const ok =
     entry.selectiveLogic === WISelectiveLogic.AndAny
@@ -262,7 +267,7 @@ function matchCompiled(c: CompiledEntry, texts: readonly ScanText[]): { keys: st
         : entry.selectiveLogic === WISelectiveLogic.NotAny
           ? !c.secondary.some(matchesAnyText)
           : c.secondary.some((test) => !matchesAnyText(test)) // NotAll
-  return ok ? { keys: matched, tests: matchedTests } : null
+  return ok ? { kind: 'match', keys: matched, tests: matchedTests } : { kind: 'secondary-miss' }
 }
 
 /**
@@ -543,9 +548,9 @@ export function evaluateWorldInfo(input: WIEngineInput): WIEngineResult {
           ? textsAtDepth(entry.scanDepth ?? expandedDepth)
           : texts
       const matched = matchCompiled(c, scanTextsForEntry)
-      if (matched === null) {
+      if (matched.kind !== 'match') {
         if (level === 0 && !followsExpandedDepth) fixedDepthMiss.add(c)
-        else if (followsExpandedDepth && expandedDepth > 0 && !c.primary.some((k) => scanTextsForEntry.some((t) => k.test(t)))) {
+        else if (followsExpandedDepth && settings.minActivations > 0 && expandedDepth > 0 && matched.kind === 'no-primary') {
           noPrimaryDepth.set(c, expandedDepth)
         }
         continue

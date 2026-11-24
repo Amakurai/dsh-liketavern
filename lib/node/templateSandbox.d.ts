@@ -39,6 +39,8 @@ export declare class TemplateSandbox {
     /** 每次可能运行 VM 代码的求值都会递增；@@if 末态快照仅在其后没有任何求值时作为下一条条件的起点。 */
     private vmEpoch;
     private conditionSnapshot?;
+    /** 新版 IIFE 封装堆通过冻结协议入口通信，旧版 v1 历史检查点堆沿用原有词法全局回退。 */
+    private hasPrivateProtocol;
     private constructor();
     /** 仅预热受信任的 WASM 模块；不解析或执行第三方输入。 */
     static prepare(onPhase?: (phase: 'loading' | 'computing') => void): Promise<void>;
@@ -75,8 +77,6 @@ export declare class TemplateSandbox {
     private evaluateInput;
     /** 同 evaluateInput，但把完成值句柄留给调用方（渲染状态必须由宿主持有，不能经全局中转）。 */
     private evaluateHandle;
-    /** 只读取闭包状态；不经过模板可命名的全局，也不调用任何模板可补丁的函数或 QTS_Dump。 */
-    private readRenderState;
     /** 只记录实际发出的中断，不把单纯超过墙钟期限等同于中断。 */
     private interruptIfExpired;
     /** 保留真实错误；若执行时确实触发过中断，同时报告该事实，不猜测两者的因果关系。 */
@@ -84,8 +84,8 @@ export declare class TemplateSandbox {
     /** 冻结宿主命令入口；对已冻结属性幂等，旧堆里的可写实现会被一并收紧。 */
     private hardenProtocol;
     /**
-     * 宿主侧直接单趟序列化内部状态并在主线程比较：不再经过模板可命名的 __conditionState，
-     * 也不调用 vm.dump / JSON.stringify / toJSON，彻底消除“先检后 dump”的二次读取窗口。
+     * 宿主侧单趟读取内部状态并在主线程比较：新堆直接经冻结的闭包入口 __conditionState() 访问私有词法状态，
+     * 旧版 v1 检查点堆保留直接经 CONDITION_STATE_SNAPSHOT 扫描词法全局的兼容路径。
      */
     private conditionState;
     private growResources;

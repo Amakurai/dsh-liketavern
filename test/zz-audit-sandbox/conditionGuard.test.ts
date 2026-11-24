@@ -49,14 +49,14 @@ it('A1：变量对象挂 toJSON 冻结快照也不能掩盖 @@if 写入', async 
   } finally { sandbox.dispose() }
 }, 30_000)
 
-// 伪造的 toJSON 精确返回写入前的序列化：绕开 setvar 直接改写内部对象，快照比较本身看不出差异，只能靠 toJSON 检查拦下。
-const replayBefore = `const snap=JSON.parse(JSON.stringify({scopes,variables})); variables.pwn=1;`
+// IIFE 封装已彻底隔离内部 scopes；对仍通过 locals 暴露的 variables 挂伪造 toJSON 返回写入前快照时，只能靠 toJSON 检查拦下。
+const replayBefore = `if(typeof scopes!=='undefined')throw Error('scopes leaked'); const snap=JSON.parse(JSON.stringify({variables})); variables.pwn=1;`
 
 it('A1：toJSON 返回写入前快照时由 toJSON 检查拒绝，而非静默通过', async () => {
   await TemplateSandbox.prepare()
   const sandbox = await TemplateSandbox.create(context(), false)
   try {
-    const own = `(() => { ${replayBefore} scopes.toJSON=()=>snap.scopes; variables.toJSON=()=>snap.variables; return true; })()`
+    const own = `(() => { ${replayBefore} variables.toJSON=()=>snap.variables; return true; })()`
     expect(() => sandbox.condition(own)).toThrow(/toJSON/)
   } finally { sandbox.dispose() }
 }, 30_000)
@@ -66,7 +66,7 @@ it('A1：原型链上不可枚举的 toJSON 同样被发现', async () => {
   const sandbox = await TemplateSandbox.create(context(), false)
   try {
     const proto = `(() => { ${replayBefore} Object.defineProperty(Object.prototype,'toJSON',{configurable:true,
-      value(){return this===scopes?snap.scopes:this===variables?snap.variables:Object.assign({},this)}}); return true; })()`
+      value(){return this===variables?snap.variables:Object.assign({},this)}}); return true; })()`
     expect(() => sandbox.condition(proto)).toThrow(/toJSON/)
   } finally { sandbox.dispose() }
 }, 30_000)
@@ -75,7 +75,7 @@ it('A1：替换 Object/JSON/Array 全局不能让 toJSON 检查漏判', async ()
   await TemplateSandbox.prepare()
   const sandbox = await TemplateSandbox.create(context(), false)
   try {
-    const blind = `(() => { ${replayBefore} scopes.toJSON=()=>snap.scopes; variables.toJSON=()=>snap.variables;
+    const blind = `(() => { ${replayBefore} variables.toJSON=()=>snap.variables;
       Object.keys=()=>[]; Object.entries=()=>[]; Object.getPrototypeOf=()=>null; Array.isArray=()=>false;
       Reflect.get=()=>undefined; return true; })()`
     expect(() => sandbox.condition(blind)).toThrow(/toJSON/)

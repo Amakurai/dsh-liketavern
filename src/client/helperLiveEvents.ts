@@ -156,15 +156,15 @@ export function installHelperLiveEvents(sessions: Pick<ClientContext['sessions']
     view.queue.push(signal)
   }
   const initialize = (view: View) => {
-    const epoch = view.epoch
+    const epoch = view.epoch, probe = ++view.probe
     void read(view, { sessionId: view.sessionId }, epoch).then(state => {
-      if (!current(view, epoch)) return
+      if (!current(view, epoch) || probe !== view.probe) return
       const previous = view.storyId
       view.storyId = state.storyId; view.ready = true
       if (previous !== undefined && previous !== state.storyId) notifyHelperStory(view.sessionId, state.storyId)
       drain(view)
     }).catch(error => {
-      if (!current(view, epoch)) return
+      if (!current(view, epoch) || probe !== view.probe) return
       report(view, error); cancel(view); view.ready = false
     })
   }

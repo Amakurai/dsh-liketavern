@@ -13,7 +13,7 @@ const PREVIOUS_HASH='14eb40ac012bfbbc29d615b5996315c2e2fc81f8a80f16b98a04b6651e2
 const V0511_HASH='0422fcf07bff3ed7bb881bca9af3b0530bdbdda9abb9e6b1f0b341cfaf71eeae'
 const V0512_HASH='b41cc77a4069e10626af39291d2924fbaa5c864aca16b06a65882fb2198f4810'
 const roots:string[]=[]
-const QUERIES=96
+const QUERIES=128
 
 /**
  * 复原旧正则源码、两行 bootstrap 差异与当时的 vendor；旧 hash 必须由真实旧源码计算，不能改检查点头冒充兼容。
@@ -40,7 +40,9 @@ const v0512Loader=String.raw`
     const loaded=next(url,context);
     if(url.endsWith('/node/templateAssets.ts'))return {...loaded,source:v0512.templateAssets};
     if(url.endsWith('/node/templateBootstrap.ts'))return {...loaded,source:v0512.templateBootstrap};
+    if(url.endsWith('/node/templateContext.ts'))return {...loaded,source:v0512.templateContext};
     if(url.endsWith('/node/templateContinuation.ts'))return {...loaded,source:v0512.templateContinuation};
+    if(url.endsWith('/node/templateDisplay.ts'))return {...loaded,source:v0512.templateDisplay};
     if(url.endsWith('/node/templateEjs.ts'))return {...loaded,source:v0512.templateEjs};
     if(url.endsWith('/node/templateFaker.ts'))return {...loaded,source:v0512.templateFaker};
     if(url.endsWith('/node/templateHelperMvu.ts'))return {...loaded,source:v0512.templateHelperMvu};
@@ -289,10 +291,10 @@ it.each([
   expect(legacy.checkpointHash).toBe(hash)
   expect(legacy.initialCheckpoint).toBe(false)
   expect(legacy.operations).toBeLessThan(256)
-  expect([legacy.first,legacy.last]).toEqual(['1','96'])
-  expect(legacy.observation).toEqual({count:96,helper:'captured-old-helper',shared:true,abi,
-    events:['sync:95','micro:95','sync:96','micro:96']})
-  expect(legacy.reply).toEqual(['97 98'])
+  expect([legacy.first,legacy.last]).toEqual(['1',String(QUERIES)])
+  expect(legacy.observation).toEqual({count:QUERIES,helper:'captured-old-helper',shared:true,abi,
+    events:[`sync:${QUERIES-1}`,`micro:${QUERIES-1}`,`sync:${QUERIES}`,`micro:${QUERIES}`]})
+  expect(legacy.reply).toEqual([`${QUERIES+1} ${QUERIES+2}`])
   expect(legacy.sticky).toEqual(['legacy'])
   expect(legacy.inheritedHeap).toBe(false)
   const exported=JSON.parse(await readFile(exportPath,'utf8')) as TemplateState
@@ -308,10 +310,11 @@ it.each([
   expect(resumed.operations).toBeLessThan(256)
   expect(resumed.checkpointHash).toBe(hash)
   expect(resumed.checkpointAbi).toBe(TEMPLATE_RUNTIME_ABI)
-  expect([resumed.first,resumed.last]).toEqual(['99','194'])
-  expect(resumed.observation).toEqual({count:194,helper:'captured-old-helper',shared:true,abi,
-    events:['sync:193','micro:193','sync:194','micro:194']})
-  expect(resumed.reply).toEqual(['195 196'])
+  const resumedStart=QUERIES+3,resumedEnd=QUERIES*2+2
+  expect([resumed.first,resumed.last]).toEqual([String(resumedStart),String(resumedEnd)])
+  expect(resumed.observation).toEqual({count:resumedEnd,helper:'captured-old-helper',shared:true,abi,
+    events:[`sync:${resumedEnd-1}`,`micro:${resumedEnd-1}`,`sync:${resumedEnd}`,`micro:${resumedEnd}`]})
+  expect(resumed.reply).toEqual([`${resumedEnd+1} ${resumedEnd+2}`])
   expect(resumed.sticky).toEqual(['legacy'])
 
   const fresh=await run('fresh',workspace,exportPath,fixture)
@@ -323,10 +326,11 @@ it.each([
   expect(fresh.operations).toBeLessThan(256)
   expect(fresh.checkpointHash).toBe(fresh.runtimeHash)
   expect(fresh.checkpointAbi).toBe(TEMPLATE_RUNTIME_ABI)
-  expect([fresh.first,fresh.last]).toEqual(['1001','1096'])
-  expect(fresh.observation).toEqual({count:1096,helper:'captured-old-helper',shared:true,abi:TEMPLATE_RUNTIME_ABI,
-    events:['sync:1095','micro:1095','sync:1096','micro:1096']})
-  expect(fresh.reply).toEqual(['1097 1098'])
+  const freshEnd=1000+QUERIES
+  expect([fresh.first,fresh.last]).toEqual(['1001',String(freshEnd)])
+  expect(fresh.observation).toEqual({count:freshEnd,helper:'captured-old-helper',shared:true,abi:TEMPLATE_RUNTIME_ABI,
+    events:[`sync:${freshEnd-1}`,`micro:${freshEnd-1}`,`sync:${freshEnd}`,`micro:${freshEnd}`]})
+  expect(fresh.reply).toEqual([`${freshEnd+1} ${freshEnd+2}`])
   expect(fresh.sticky).toEqual(['current'])
   expect(fresh.inheritedHeap).toBe(false)
 },120000)

@@ -25,9 +25,39 @@ export function checkedPath(root: string, path: string): string {
   if (!rel || rel.startsWith(`..${sep}`) || rel === '..' || isAbsolute(rel)) fail('UNSAFE_PATH')
   return child
 }
-/** 包括传入根的祖先，避免中间的 junction 把显式目录解析到其它数据树。 */
-export async function assertDirectory(path: string, verified?: ReadonlySet<string>): Promise<void> {
+export interface DirectoryCheckOptions {
+  /** 限制链接检查仅从该边界目录向下进行（允许宿主数据根之上的合法系统挂载/符号链接，如 macOS /var -> /private/var）。 */
+  boundary?: string
+  /** 可选已验目录集合；传入可变 Set 时同时回填已验证目录以消除重复 lstat。 */
+  verified?: Set<string> | ReadonlySet<string>
+}
+
+/** 包括传入根的祖先（或指定 boundary 向下），避免中间的 junction 把显式目录解析到其它数据树。 */
+export async function assertDirectory(path: string, options?: ReadonlySet<string> | DirectoryCheckOptions): Promise<void> {
   const absolute = resolve(path)
+  const isSet = options !== undefined && typeof (options as ReadonlySet<string>).has === 'function'
+  const opts: DirectoryCheckOptions = isSet ? { verified: options as ReadonlySet<string> } : ((options as DirectoryCheckOptions | undefined) ?? {})
+  const verified = opts.verified
+  const mutableVerified = verified instanceof Set ? verified : undefined
+  if (opts.boundary !== undefined) {
+    const boundary = resolve(opts.boundary)
+    const rel = relative(boundary, absolute)
+    if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) fail('UNSAFE_PATH')
+    const targets = [boundary]
+    let current = boundary
+    for (const part of rel.split(sep).filter(Boolean)) {
+      current = join(current, part)
+      targets.push(current)
+    }
+    for (const dir of targets) {
+      if (verified?.has(dir)) continue
+      const info = await lstat(dir)
+      if (info.isSymbolicLink()) fail('LINK_NOT_ALLOWED')
+      if (!info.isDirectory()) fail('DIRECTORY_REQUIRED')
+      mutableVerified?.add(dir)
+    }
+    return
+  }
   const root = parse(absolute).root
   let current = root
   for (const part of relative(root, absolute).split(sep).filter(Boolean)) {
@@ -36,7 +66,17 @@ export async function assertDirectory(path: string, verified?: ReadonlySet<strin
     const info = await lstat(current)
     if (info.isSymbolicLink()) fail('LINK_NOT_ALLOWED')
     if (!info.isDirectory()) fail('DIRECTORY_REQUIRED')
+    mutableVerified?.add(current)
   }
+}
+
+/** Windows 的 libuv lstat 对目录和文件统一合成 0o666（缺目录 +x 且全员可写）；归一化为可移植私有 POSIX 权限位。 */
+export function portableMode(kind: 'file' | 'directory', rawMode: number, platform: NodeJS.Platform = process.platform): number {
+  if (platform === 'win32') {
+    const writable = (rawMode & 0o200) !== 0
+    return kind === 'directory' ? (writable ? 0o700 : 0o500) : (writable ? 0o600 : 0o400)
+  }
+  return rawMode & 0o777
 }
 export function ancestorChainAbove(root: string): Set<string> {
   const absolute = resolve(root)
@@ -100,7 +140,7 @@ export async function inventory(root: string, excludedDependencies?: string[]): 
       if (!Number.isSafeInteger(size) || size < 0 || size > BACKUP_LIMITS.fileBytes) fail('SIZE_LIMIT')
       totalBytes += size
       if (totalBytes > BACKUP_LIMITS.totalBytes) fail('SIZE_LIMIT')
-      entries.push({ path, kind, size, mode: stamp.mode & 0o777, stamp })
+      entries.push({ path, kind, size, mode: portableMode(kind, stamp.mode), stamp })
       if (kind === 'directory') await visit(path)
     }
   }
@@ -144,8 +184,8 @@ export async function transferFile(root: string, entry: BackupEntry, destination
     return hash.digest('hex')
   } finally { await source.close(); await target?.close() }
 }
-export async function boundedJson(path: string, maxBytes = BACKUP_LIMITS.manifestBytes): Promise<unknown> {
-  await assertDirectory(dirname(path))
+export async function boundedJson(path: string, maxBytes = BACKUP_LIMITS.manifestBytes, options?: ReadonlySet<string> | DirectoryCheckOptions): Promise<unknown> {
+  await assertDirectory(dirname(path), options)
   const before = await lstat(path)
   if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1) fail('LINK_NOT_ALLOWED')
   if (before.size > maxBytes) fail('METADATA_LIMIT')
@@ -165,8 +205,8 @@ export async function boundedJson(path: string, maxBytes = BACKUP_LIMITS.manifes
   } finally { await handle.close() }
 }
 /** 会话迁移读原始字节：限额在读取前后都生效，并复核句柄与目录项仍为同一普通文件。 */
-export async function boundedBytes(path: string, maxBytes: number): Promise<Buffer> {
-  await assertDirectory(dirname(path))
+export async function boundedBytes(path: string, maxBytes: number, options?: ReadonlySet<string> | DirectoryCheckOptions): Promise<Buffer> {
+  await assertDirectory(dirname(path), options)
   const before = await lstat(path)
   if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1) fail('LINK_NOT_ALLOWED')
   if (before.size > maxBytes) fail('SIZE_LIMIT')

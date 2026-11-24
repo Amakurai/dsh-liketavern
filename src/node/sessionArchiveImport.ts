@@ -15,7 +15,7 @@ import { renameWithRetry } from '../state/rename.js'
 import { closeLedger } from '../state/writeLedger.js'
 import { assertBindingFileIdentity, loadBinding, saveBinding } from './bindings.js'
 import { sessionFile } from './paths.js'
-import { assertDirectory, boundedBytes, boundedJson } from './backupFiles.js'
+import { assertDirectory, boundedBytes, boundedJson, type DirectoryCheckOptions } from './backupFiles.js'
 import { sessionArchiveMarkerPath } from './sessionArchiveMarker.js'
 import { assertArchiveWalComplete, assertWalLineageComplete } from './sessionArchiveWal.js'
 import { parseSessionArchive, SESSION_ARCHIVE_MAX_BYTES, type SessionArchiveFile } from './sessionArchiveFormat.js'
@@ -29,8 +29,8 @@ async function present(path: string): Promise<boolean> {
   try { await lstat(path); return true } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw error }
 }
 function bytes(file: SessionArchiveFile): Buffer { return Buffer.from(file.data, 'base64') }
-async function sameFile(root: string, file: SessionArchiveFile): Promise<boolean> {
-  try { return (await boundedBytes(join(root, ...file.path.split('/')), SESSION_ARCHIVE_MAX_BYTES)).equals(bytes(file)) }
+async function sameFile(root: string, file: SessionArchiveFile, dirCheck?: DirectoryCheckOptions): Promise<boolean> {
+  try { return (await boundedBytes(join(root, ...file.path.split('/')), SESSION_ARCHIVE_MAX_BYTES, dirCheck)).equals(bytes(file)) }
   catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw error }
 }
 async function writeFiles(root: string, files: readonly SessionArchiveFile[]): Promise<void> {
@@ -46,10 +46,10 @@ async function cardFiles(root: string): Promise<string[]> {
   return ['card.json', ...(await fs.exists('card.png') ? ['card.png'] : []),
     ...(await fs.list('assets', { rejectLinks: true })).map(path => `assets/${path}`).filter(path => path.toLowerCase() !== 'assets/chat-lorebook.json')].sort()
 }
-async function sameFiles(root: string, files: readonly SessionArchiveFile[], actualPaths: readonly string[]): Promise<boolean> {
+async function sameFiles(root: string, files: readonly SessionArchiveFile[], actualPaths: readonly string[], dirCheck?: DirectoryCheckOptions): Promise<boolean> {
   const expected = files.map(file => file.path).sort()
   if (JSON.stringify(expected) !== JSON.stringify([...actualPaths].sort())) return false
-  for (const file of files) if (!(await sameFile(root, file))) return false
+  for (const file of files) if (!(await sameFile(root, file, dirCheck))) return false
   return true
 }
 
@@ -116,11 +116,12 @@ export async function importSessionArchive(ctx: Context, state: TavernState, inp
   // 与已有剧情写路径保持相同锁序，即使导入最终因剧情冲突而拒绝也不能造成互锁。
   return withWorkspaceLock(story, () => withWorkspaceLock(state.paths.sessions, () => withWorkspaceLock(cardRoot,
     () => withWorkspaceLock(state.paths.root, async () => {
+      const dirCheck: DirectoryCheckOptions = { boundary: state.paths.root, verified: new Set<string>() }
       await mkdir(markers, { recursive: true })
-      await assertDirectory(markers)
+      await assertDirectory(markers, dirCheck)
       await sweepOrphanTemps(markers, { draftPrefixes: ['.validating-'], recursive: false })
       await validateSharedAssets(markers, state, archive)
-      const previous = await present(markerPath) ? await boundedJson(markerPath, 64 * 1024) : null
+      const previous = await present(markerPath) ? await boundedJson(markerPath, 64 * 1024, dirCheck) : null
       if (previous !== null && JSON.stringify(previous) !== JSON.stringify(marker)) throw new Error('已有不同的会话迁移任务，不能覆盖')
       const retry = previous !== null
       await assertBindingFileIdentity(state.paths, binding.sessionId)
@@ -130,14 +131,14 @@ export async function importSessionArchive(ctx: Context, state: TavernState, inp
       if ((ctx.sessions.get(binding.sessionId as Session['id']) || existingSession) && !retry) throw new Error('目标会话已存在，不能覆盖')
       if (ctx.sessions.get(binding.sessionId as Session['id'])) throw new Error('目标会话正在运行，不能导入')
       const cardExists = await present(cardRoot)
-      if (cardExists && !(await sameFiles(cardRoot, card, await cardFiles(cardRoot)))) throw new Error('同 ID 的角色资产不同，不能覆盖')
+      if (cardExists && !(await sameFiles(cardRoot, card, await cardFiles(cardRoot), dirCheck))) throw new Error('同 ID 的角色资产不同，不能覆盖')
       if (await present(story)) {
-        if (!retry || !(await sameFiles(story, storyFiles, await new WorkspaceFs(story, null).list('', { rejectLinks: true })))) throw new Error('目标剧情已存在，不能覆盖')
+        if (!retry || !(await sameFiles(story, storyFiles, await new WorkspaceFs(story, null).list('', { rejectLinks: true }), dirCheck))) throw new Error('目标剧情已存在，不能覆盖')
       }
       const rootFs = new WorkspaceFs(state.paths.root, null), missingGlobals: SessionArchiveFile[] = []
       for (const file of globals) {
         if (await rootFs.exists(file.path)) {
-          if (!(await sameFile(state.paths.root, file))) throw new Error('同名共享资产内容不同，不能覆盖')
+          if (!(await sameFile(state.paths.root, file, dirCheck))) throw new Error('同名共享资产内容不同，不能覆盖')
         } else missingGlobals.push(file)
       }
       if (missingGlobals.some(file => file.path === 'regex/rules.json' || file.path === 'library/helper-scripts.json')) {
@@ -155,7 +156,13 @@ export async function importSessionArchive(ctx: Context, state: TavernState, inp
       }
       const stageParent = cardExists ? join(cardRoot, 'stories') : state.paths.characters
       await mkdir(stageParent, { recursive: true })
-      await assertDirectory(stageParent)
+      await assertDirectory(stageParent, dirCheck)
+      // 发布前核对所有剧情 JSON 文件语法合法，防止受损 JSON 迁入后毒化 doctor 与整库备份。
+      for (const file of storyFiles) {
+        if (!file.path.toLowerCase().endsWith('.json')) continue
+        try { JSON.parse(bytes(file).toString('utf8')) }
+        catch { throw new Error(`迁移文件中的剧情 JSON 无效：${file.path}`) }
+      }
       const stage = join(stageParent, `.preparing-${randomUUID()}`)
       try {
         await mkdir(stage, { mode: 0o700 })

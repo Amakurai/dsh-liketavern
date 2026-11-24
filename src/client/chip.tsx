@@ -201,13 +201,14 @@ interface HeaderChipProps {
 }
 
 /** 后台脚本持有绑定派生的名称、脚本库与世界书令牌；任一来源变化都必须重建沙箱。 */
-function helperRuntimeKey(sessionId: string, binding: SessionBinding): string {
+function helperRuntimeKey(sessionId: string, binding: SessionBinding, userName?: string): string {
   return JSON.stringify([
     sessionId,
     binding.storyId,
     binding.cardId,
     binding.presetId,
     binding.personaId,
+    userName ?? '',
     binding.interactiveCards,
     binding.helperMvu === true,
     binding.lorebookIds,
@@ -250,12 +251,13 @@ function HeaderChipSession(props: HeaderChipProps) {
   useSessionView(sessionId, tavern)
   const bindingLoader = useLoader(() => cachedSessionBinding(remote, sessionId), [sessionId], tavern)
   useEffect(() => subscribeKeyedWindowEvent(BINDING_CHANGED_EVENT, sessionId, true, bindingLoader.reload), [sessionId, bindingLoader.reload])
-  const lastBinding = useRef<{ sessionId: string; binding: SessionBinding | null; canSwipeGreeting: boolean } | null>(null)
+  const lastBinding = useRef<{ sessionId: string; binding: SessionBinding | null; canSwipeGreeting: boolean; userName?: string } | null>(null)
   if (bindingLoader.state.status === 'ready') {
     lastBinding.current = {
       sessionId,
       binding: bindingLoader.state.value.binding,
       canSwipeGreeting: bindingLoader.state.value.canSwipeGreeting !== false,
+      userName: bindingLoader.state.value.userName,
     }
   }
   const binding = bindingLoader.state.status === 'ready'
@@ -263,6 +265,11 @@ function HeaderChipSession(props: HeaderChipProps) {
     : (bindingLoader.state.status === 'loading' || bindingLoader.state.status === 'error') && lastBinding.current?.sessionId === sessionId
       ? lastBinding.current.binding
       : null
+  const userName = bindingLoader.state.status === 'ready'
+    ? bindingLoader.state.value.userName
+    : (bindingLoader.state.status === 'loading' || bindingLoader.state.status === 'error') && lastBinding.current?.sessionId === sessionId
+      ? lastBinding.current.userName
+      : undefined
   const canSwipeGreeting =
     bindingLoader.state.status === 'ready'
       ? bindingLoader.state.value.canSwipeGreeting !== false
@@ -506,7 +513,7 @@ function HeaderChipSession(props: HeaderChipProps) {
 
   return (
     <span className="dsh-tavern-ui" style={{ display: 'inline-flex' }}>
-      {binding?.storyId&&<HelperScripts key={helperRuntimeKey(sessionId,binding)} remote={remote} sessionId={sessionId} cardId={binding.cardId} sessions={sessions} onCancel={props.onCancel}/>}
+      {binding?.storyId&&<HelperScripts key={helperRuntimeKey(sessionId,binding,userName)} remote={remote} sessionId={sessionId} cardId={binding.cardId} sessions={sessions} onCancel={props.onCancel}/>}
       <TavernSeatChip
         label={binding ? (name ?? binding.cardName ?? listedName ?? t('chip.characterFallback')) : t('hero.pickCharacter')}
         title={t('hero.pickCharacter')}

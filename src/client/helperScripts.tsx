@@ -15,7 +15,7 @@ import { subscribeKeyedWindowEvent } from './windowEvents.js'
 import { watchHelperScripts,watchHelperScriptAssets } from './helperScriptNotifications.js'
 import { notifyHelperStory,watchHelperStory } from './helperNotifications.js'
 import { useDisplaySettingsRevision } from './displayPrefs.js'
-import { useT } from './i18n.js'
+import { getTavernLocale, useT } from './i18n.js'
 import {cardVariableLabels} from './cardVariableLabels.js'
 import { useLoader } from './util.js'
 import { CARD_VARIABLE_STYLES } from './styles.js'
@@ -32,7 +32,7 @@ const MVU_FOLLOW_MAX_DELAY_MS=30_000
 const MVU_FOLLOW_MAX_ATTEMPTS=12
 
 export function HelperScripts(props:{remote:TavernRemote;sessionId:string;cardId?:string;sessions?:{open(id:string):void;refresh?:()=>Promise<void>};onCancel?:()=>Promise<void>}) {
-  const {remote,sessionId}=props,t=useT()
+  const {remote,sessionId}=props,t=useT(),locale=getTavernLocale()
   const displaySettingsRevision=useDisplaySettingsRevision()
   const loader=useLoader(()=>remote.getHelperScriptBundle({sessionId}),[sessionId,displaySettingsRevision],true)
   const bundle=loader.state.status==='ready'?loader.state.value:undefined
@@ -84,14 +84,23 @@ export function HelperScripts(props:{remote:TavernRemote;sessionId:string;cardId
     // HeaderChip 传入绑定中的稳定 cardId；重拉期间 bundle 暂时为空也不能漏掉连续保存事件。
     return subscribeKeyedWindowEvent(CHARACTER_CHANGED_EVENT,watchedCardId,false,loader.reload)
   },[watchedCardId,loader.reload])
-  const libraries:HelperScriptAsset[]=bundle?(bundle.libraries??[{target:{type:'character',cardId:bundle.cardId},revision:bundle.revision,trees:bundle.trees}]):[]
-  const libraryTargetKeys=libraries.map(library=>JSON.stringify(library.target))
+  const {libraries,libraryTargetKeys,scripts,scriptError,libraryTypeByScriptId}=useMemo(()=>{
+    const libs:HelperScriptAsset[]=bundle?(bundle.libraries??[{target:{type:'character',cardId:bundle.cardId},revision:bundle.revision,trees:bundle.trees}]):[]
+    const targetKeys=libs.map(library=>JSON.stringify(library.target))
+    let enabled:HelperScript[]=[],error:string|null=null
+    try{enabled=enabledHelperLibraries(libs)}catch(err){error=describeError(err)}
+    const typeById=new Map<string,HelperScriptAsset['target']['type']>()
+    for(const library of libs){
+      for(const item of enabledHelperScripts(library.trees)){
+        if(!typeById.has(item.id))typeById.set(item.id,library.target.type)
+      }
+    }
+    return {libraries:libs,libraryTargetKeys:targetKeys,scripts:enabled,scriptError:error,libraryTypeByScriptId:typeById}
+  },[bundle])
   const [knownTargets,setKnownTargets]=useState<{sessionId:string;keys:string[]}|null>(null)
   if(bundle&&(knownTargets?.sessionId!==sessionId||JSON.stringify(knownTargets.keys)!==JSON.stringify(libraryTargetKeys))){
     setKnownTargets({sessionId,keys:libraryTargetKeys})
   }
-  let scripts:HelperScript[]=[],scriptError:string|null=null
-  try{scripts=enabledHelperLibraries(libraries)}catch(error){scriptError=describeError(error)}
   const waitingForMessage=Boolean(bundle?.enabled&&bundle.messageId===null&&!bundle.snapshot&&!bundle.runtimeError&&!scriptError&&(scripts.length>0||bundle.helperMvu)&&scripts.length<=32)
   useEffect(()=>{
     if(!waitingForMessage||!bundle)return
@@ -173,6 +182,10 @@ export function HelperScripts(props:{remote:TavernRemote;sessionId:string;cardId
       if(currentRuntime.current!==pending.version)return
       const message=describeError(cause)
       setEditedBranch(current=>current?.version===pending.version?{...current,error:message}:current)
+      setFailures(current=>{
+        if(current[pending.scriptId]?.version!==pending.version||current[pending.scriptId]?.error!==pending.error)return current
+        return {...current,[pending.scriptId]:{version:pending.version,error:message}}
+      })
     }
   },[activeEditedBranch,props.sessions,sessionId])
   useEffect(()=>{
@@ -188,19 +201,30 @@ export function HelperScripts(props:{remote:TavernRemote;sessionId:string;cardId
     )
   },[statusKey,enableMvu,mvu.canCancel,activeEditedBranch,props.sessions,openEditedBranch])
   useEffect(()=>()=>clearScriptStatus(owner.current,sessionId),[sessionId])
+  const scriptFrames=useMemo(()=>{
+    if(!bundle?.enabled||bundle.runtimeError||scriptError||!bundle.snapshot||bundle.messageId===null||scripts.length>32)return []
+    const snapshot=bundle.snapshot,messageId=bundle.messageId
+    const assistantName=bundle.name??snapshot.messages.find(message=>message.role==='assistant')?.name??''
+    const userName=bundle.userName??snapshot.messages.find(message=>message.role==='user')?.name??''
+    const libraryList=libraries.map(library=>({type:library.target.type,trees:library.trees}))
+    const scriptLibraryLabels={saving:t('speech.scriptSaving'),saved:t('speech.scriptSaved'),failed:t('speech.scriptSaveFailed')}
+    const persistenceLabels={saving:t('speech.helperSaving'),saved:t('speech.helperSaved'),failed:t('speech.helperSaveFailed'),refresh:t('speech.helperRefresh')}
+    const helperLabels={diagnostics:t('speech.helperMessages'),unsupported:t('speech.helperUnsupported')}
+    const variableLabels=cardVariableLabels(t,t('speech.helperDataNote'))
+    return scripts.map(script=>({
+      script,snapshot,messageId,
+      srcDoc:buildCardSrcDoc(helperScriptHtml(script.content),{greetings:[],greetingIndex:0,helperSnapshot:snapshot,
+        worldbooks:bundle.worldbooks,scriptLibraries:bundle.scriptContext,scriptLibraryLabels,
+        scriptContext:{script,trees:bundle.trees,libraryType:libraryTypeByScriptId.get(script.id),libraries:libraryList},
+        helperContext:{canSwipe:false,scriptFrame:true,name:assistantName,macroName:bundle.characterName??assistantName,userName},
+        connectHosts:bundle.whitelist,variableStyles:CARD_VARIABLE_STYLES,persistenceLabels,helperLabels,variableLabels}),
+    }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[bundle,scripts,scriptError,libraries,libraryTypeByScriptId,locale])
   return <span className="dsh-tavern-scriptHost" hidden>
     {bundle?.enabled&&bundle.helperMvu&&bundle.snapshot&&<HelperMvuRunner key={runtimeVersion} remote={remote} sessionId={sessionId} storyId={bundle.storyId} snapshot={bundle.snapshot} ready={allReady} onStatus={mvuStatus} onCancel={props.onCancel}/>}
     <div>
-      {bundle?.enabled&&!bundle.runtimeError&&!scriptError&&bundle.snapshot&&bundle.messageId!==null&&scripts.length<=32&&scripts.map(script=>{
-        const snapshot=bundle.snapshot!,messageId=bundle.messageId!
-        const assistantName=bundle.name??snapshot.messages.find(message=>message.role==='assistant')?.name??''
-        const userName=bundle.userName??snapshot.messages.find(message=>message.role==='user')?.name??''
-        const srcDoc=buildCardSrcDoc(helperScriptHtml(script.content),{greetings:[],greetingIndex:0,helperSnapshot:snapshot,
-          worldbooks:bundle.worldbooks,scriptLibraries:bundle.scriptContext,scriptLibraryLabels:{saving:t('speech.scriptSaving'),saved:t('speech.scriptSaved'),failed:t('speech.scriptSaveFailed')},
-          scriptContext:{script,trees:bundle.trees,libraryType:libraries.find(library=>enabledHelperScripts(library.trees).some(item=>item.id===script.id))?.target.type,libraries:libraries.map(library=>({type:library.target.type,trees:library.trees}))},helperContext:{canSwipe:false,scriptFrame:true,name:assistantName,macroName:bundle.characterName??assistantName,userName},connectHosts:bundle.whitelist,variableStyles:CARD_VARIABLE_STYLES,
-          persistenceLabels:{saving:t('speech.helperSaving'),saved:t('speech.helperSaved'),failed:t('speech.helperSaveFailed'),refresh:t('speech.helperRefresh')},
-          helperLabels:{diagnostics:t('speech.helperMessages'),unsupported:t('speech.helperUnsupported')},
-          variableLabels:cardVariableLabels(t,t('speech.helperDataNote'))})
+      {scriptFrames.map(({script,snapshot,messageId,srcDoc})=>{
         return <section key={runtimeVersion+script.id}>
           {<SpeechHtmlFrame srcDoc={srcDoc} title={script.name||script.id} widget compact
             onScriptError={error=>{if(currentRuntime.current===runtimeVersion)setFailures(current=>({...current,[script.id]:{version:runtimeVersion,error}}))}}

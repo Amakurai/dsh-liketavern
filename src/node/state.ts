@@ -20,6 +20,7 @@ import { parseStoredPreset } from '../state/presetStore.js'
 import { MemoryStore } from '../state/memory.js'
 import type { PipelineResult } from './pipeline.js'
 import type { PresetAdapterController } from './presetAdapter.js'
+import { revokeSessionHelperFrames, revokeStaleBindingHelperFrames } from './helperFrameLease.js'
 import { loadTemplateTimers, saveTemplateTimers } from '../state/template.js'
 import { Wal } from '../state/wal.js'
 import { WorldDeltaStore } from '../state/worlddelta.js'
@@ -2031,7 +2032,11 @@ export class TavernState {
     return next
   }
 
-  async saveBinding(binding: SessionBinding, beforePublish?: (previous: SessionBinding | null, next: SessionBinding) => void): Promise<void> {
+  async saveBinding(
+    binding: SessionBinding,
+    beforePublish?: (previous: SessionBinding | null, next: SessionBinding) => void,
+    afterPublish?: (previous: SessionBinding | null, next: SessionBinding) => void,
+  ): Promise<void> {
     // schema 失败不能发生在剧情已经发布之后，否则一次非法表单也会遗留永久引用。
     binding = parseSessionBinding(binding)
     assertValidCardId(binding.cardId)
@@ -2074,6 +2079,8 @@ export class TavernState {
           beforePublish?.(existing, next)
           this.pendingRuntimeClear.delete(binding.sessionId)
           await saveBinding(this.paths, next)
+          try { afterPublish?.(existing, next) } catch { /* 绑定已落盘，忽略旧租约同步错误 */ }
+          revokeStaleBindingHelperFrames(this, next.sessionId, next)
         } catch (error) {
           // 只清理本次创建、落盘后仍未绑定的剧情；原剧情与调用方预先准备的分支都保留。
           if (createdStory) await this.discardUnboundStory(binding.cardId, id, binding.sessionId)
@@ -2226,6 +2233,7 @@ export class TavernState {
 
   /** 清理会话在内存中的全部运行期状态与缓存。 */
   clearSessionRuntime(sessionId: string): void {
+    revokeSessionHelperFrames(this, sessionId)
     this.clearStandingPins(sessionId)
     this.pendingRuntimeClear.delete(sessionId)
     this.deferredTurns.delete(sessionId)
@@ -2261,6 +2269,7 @@ export class TavernState {
 
   /** 清掉会话绑定文件与运行期内存状态；空白新对话复用旧会话时用来去掉上次留下的角色卡与状态。 */
   async clearBinding(sessionId: string): Promise<void> {
+    revokeSessionHelperFrames(this, sessionId)
     const open = this.openFloors.get(sessionId)
     if (open?.storyId && !open.endedWithError) {
       this.pendingRuntimeClear.add(sessionId)

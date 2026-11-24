@@ -188,8 +188,9 @@ function MemoryContextSection(props: { remote: TavernRemote;
   }
 
   const journalDirty = journal.state.status === 'ready' && journalText !== journal.state.value.text
+  const effectiveDeltaRef = deltaType === 'add' ? '' : deltaRef.trim()
   const guard = useDraftGuard(
-    journalDirty || !!newBody.trim() || !!newTags.trim() || !!newKeys.trim() || !!deltaContent.trim() || !!deltaRef.trim() || !!deltaKeys.trim(),
+    journalDirty || !!newBody.trim() || !!newTags.trim() || !!newKeys.trim() || !!deltaContent.trim() || !!effectiveDeltaRef || !!deltaKeys.trim(),
     busy,
   )
   const charItems = chars.state.status === 'ready' ? chars.state.value.items : []
@@ -342,7 +343,7 @@ function MemoryContextSection(props: { remote: TavernRemote;
         cardId, storyId,
         type: deltaType,
         content: deltaContent.trim(),
-        ref: deltaRef.trim() || null,
+        ref: effectiveDeltaRef || null,
         keys: splitListText(deltaKeys),
       })
       const err = errOf(r)

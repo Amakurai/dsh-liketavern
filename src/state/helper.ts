@@ -80,9 +80,14 @@ export async function loadHelperState(fs: WorkspaceFs): Promise<HelperState> {
   })
 }
 export async function loadHelperScopes(fs:WorkspaceFs):Promise<HelperScopes>{return (await loadHelperState(fs)).scopes}
-/** 同文件保存变量与 extra，整批在一次原子正文替换中生效。 */
-export async function saveHelperState(fs:WorkspaceFs,state:HelperState):Promise<void>{
-  if(!fs.currentFloor)throw new Error('酒馆助手剧情写入必须绑定楼层')
+export interface SerializedHelperState {
+  raw: string
+  byteLength: number
+  normalized: HelperState
+}
+
+/** 验证并序列化酒馆助手状态（含 4 MiB 上限）；调用方可在开启或重开 WAL 楼层前预检，避免超限留下未提交楼层。 */
+export function serializeHelperState(state: HelperState): SerializedHelperState {
   const scopes=helperTable(state.scopes),extras=helperTable(state.extras)
   for(const [key,table] of Object.entries(scopes)){helperScopeKey(key);helperTable(table)}
   for(const [id,table] of Object.entries(extras)){if(!id||id.length>256)throw new Error('消息身份无效');helperTable(table)}
@@ -93,6 +98,19 @@ export async function saveHelperState(fs:WorkspaceFs,state:HelperState):Promise<
   const raw=JSON.stringify({version:1,scopes,...(Object.keys(extras).length?{extras}:{}),...serializedSwipes,...(normalizedMvu===undefined?{}:{mvu:normalizedMvu})})
   const byteLength=Buffer.byteLength(raw)
   if(byteLength>4*1024*1024)throw new Error('酒馆助手状态文件超限')
+  const normalized: HelperState = {
+    scopes: scopes as HelperScopes,
+    extras: extras as HelperState['extras'],
+    swipes: normalizedSwipes,
+    ...(normalizedMvu === undefined ? {} : { mvu: normalizedMvu }),
+  }
+  return { raw, byteLength, normalized }
+}
+
+/** 同文件保存变量与 extra，整批在一次原子正文替换中生效。 */
+export async function saveHelperState(fs:WorkspaceFs,state:HelperState):Promise<void>{
+  if(!fs.currentFloor)throw new Error('酒馆助手剧情写入必须绑定楼层')
+  const { raw, byteLength, normalized } = serializeHelperState(state)
   await withWorkspaceLock(fs.root, async () => {
     const existingStat=await fs.stat(HELPER_STATE_PATH)
     if(existingStat===null || existingStat.size!==byteLength || await fs.readText(HELPER_STATE_PATH)!==raw){
@@ -104,13 +122,7 @@ export async function saveHelperState(fs:WorkspaceFs,state:HelperState):Promise<
     const epoch = ledger.epoch
     const afterStat = await fs.stat(HELPER_STATE_PATH)
     if (afterStat !== null && ledger.epoch === epoch && !writtenSince(ledger, HELPER_STATE_PATH, revision)) {
-      const cachedState: HelperState = {
-        scopes: scopes as HelperScopes,
-        extras: extras as HelperState['extras'],
-        swipes: normalizedSwipes,
-        ...(normalizedMvu === undefined ? {} : { mvu: normalizedMvu }),
-      }
-      rememberHelperState(helperCacheKey(fs.root), { stat: afterStat, revision, epoch, state: structuredClone(cachedState) })
+      rememberHelperState(helperCacheKey(fs.root), { stat: afterStat, revision, epoch, state: structuredClone(normalized) })
     }
   })
 }

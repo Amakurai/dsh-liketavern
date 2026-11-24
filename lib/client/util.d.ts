@@ -120,6 +120,7 @@ export declare function CheckChips(props: {
     selected: readonly string[];
     onChange: (next: string[]) => void;
     ariaLabel?: string;
+    disabled?: boolean;
 }): import("react").JSX.Element;
 export declare function Err(props: {
     message: string | null;

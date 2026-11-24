@@ -146,14 +146,16 @@ export function StoryVariableSettings(props:{remote:TavernRemote;cardId:string;s
   },[sessionId,storyId])
   const [library,setLibrary]=useState<HelperScriptAsset|null>(null)
   const [scriptError,setScriptError]=useState<string|null>(null),[scriptBusy,setScriptBusy]=useState(false)
+  const scriptOpening=useRef(false)
   const scriptGuard=useDraftGuard(false,scriptBusy)
   const editScripts=async()=>{
-    setScriptBusy(true);setScriptError(null)
+    if(scriptOpening.current)return
+    scriptOpening.current=true;setScriptBusy(true);setScriptError(null)
     try{
       const result=await remote.getHelperScriptLibrary({target:{type:'character',cardId:props.cardId}})
       if(!result.ok)throw new Error(result.error.message)
       setLibrary(result.value)
-    }catch(error){setScriptError(describeError(error))}finally{setScriptBusy(false)}
+    }catch(error){setScriptError(describeError(error))}finally{scriptOpening.current=false;setScriptBusy(false)}
   }
   return <>
     {scriptGuard.confirmation}
@@ -173,9 +175,11 @@ export function VariableBackupEditor(props:{remote:TavernRemote;sessionId:string
   useEffect(()=>{setSnapshot(props.snapshot)},[props.snapshot])
   const [text,setText]=useDraftState(`card-data:backup:${JSON.stringify([props.sessionId,snapshot.storyId])}`,'')
   const [error,setError]=useState<string|null>(null),[busy,setBusy]=useState(false),[confirm,setConfirm]=useState(false)
+  const restoring=useRef(false)
   const guard=useDraftGuard(Boolean(text.trim()),busy)
   const restore=async()=>{
-    setConfirm(false);setBusy(true);setError(null)
+    if(restoring.current)return
+    restoring.current=true;setConfirm(false);setBusy(true);setError(null)
     try{
       const target=parseHelperVariableBackup(text,snapshot.currentMessageId)
       const changes=helperVariableRestoreChanges(snapshot.scopes,target)
@@ -195,7 +199,7 @@ export function VariableBackupEditor(props:{remote:TavernRemote;sessionId:string
         setSnapshot(fresh.value)
       }
       setText('');guard.clearDraft();toast.show(t(changes.length?'speech.variableSaved':'settings.cards.variableUnchanged'))
-    }catch(error){setError(describeError(error))}finally{setBusy(false)}
+    }catch(error){setError(describeError(error))}finally{restoring.current=false;setBusy(false)}
   }
   return <>
     {toast.node}{guard.confirmation}

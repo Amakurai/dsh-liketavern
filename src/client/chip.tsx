@@ -315,6 +315,7 @@ function HeaderChipSession(props: HeaderChipProps) {
   }
   /** 无绑定时选择角色会异步读取 defaults；序号保证只有最后一次选择能落到草稿。 */
   const characterRequest = useRef(0)
+  useEffect(() => () => { characterRequest.current += 1 }, [])
 
   // 打开面板时拉取四个候选列表。绑定晚到时再填草稿，但不要在用户编辑中途用 reload 覆盖。
   useEffect(() => {
@@ -558,7 +559,7 @@ function HeaderChipSession(props: HeaderChipProps) {
             </div>
           )}
           {lists && (
-            <>
+            <fieldset disabled={busy} className="dsh-tavern-editorFields" style={{ display: 'contents' }}>
               <div className="dsh-tavern-bindingColumn">
               {draft ? (
                 <>
@@ -567,6 +568,7 @@ function HeaderChipSession(props: HeaderChipProps) {
                     <Field label={t('chip.field.character')}>
                       <Select
                         width="100%"
+                        disabled={busy}
                         value={draft.cardId}
                         onChange={(cardId) => {
                           if (!cardId) return
@@ -582,6 +584,7 @@ function HeaderChipSession(props: HeaderChipProps) {
                     <Field label={t('chip.field.preset')}>
                       <Select
                         width="100%"
+                        disabled={busy}
                         value={draft.presetId ?? ''}
                         onChange={(v) => setDraft({ ...draft, presetId: v || null })}
                         options={[{ value: '', label: t('chip.field.builtinPreset') }, ...lists.presets.map((p) => ({ value: p.id, label: p.regexCount > 0 ? t('settings.defaults.presetRegexCount', { name: p.name, count: p.regexCount }) : p.name }))]}
@@ -590,6 +593,7 @@ function HeaderChipSession(props: HeaderChipProps) {
                     <Field label={t('chip.field.persona')}>
                       <Select
                         width="100%"
+                        disabled={busy}
                         value={draft.personaId ?? ''}
                         onChange={(v) => setDraft({ ...draft, personaId: v || null })}
                         options={[{ value: '', label: t('chip.field.none') }, ...lists.personas.map((p) => ({ value: p.id, label: p.name }))]}
@@ -601,11 +605,12 @@ function HeaderChipSession(props: HeaderChipProps) {
                     <div className="dsh-tavern-groupHead">{t('section.lorebooks')}</div>
                     {draft.worldInfo&&Object.keys(draft.worldInfo).length>0&&<Field label={t('chip.worldInfoOverride')}>
                       <Muted>{t('chip.worldInfoOverrideDesc',{count:Object.keys(draft.worldInfo).length})}</Muted>
-                      <Btn onClick={()=>setDraft({...draft,worldInfo:{}})}>{t('chip.worldInfoReset')}</Btn>
+                      <Btn disabled={busy} onClick={()=>setDraft({...draft,worldInfo:{}})}>{t('chip.worldInfoReset')}</Btn>
                     </Field>}
                     <Field label={t('chip.field.mainLore')}>
                       <Select
                         width="100%"
+                        disabled={busy}
                         value={draft.characterLorebookId ?? (draft.useEmbeddedLorebook===false?'@dsh/no-main-worldbook':'')}
                         onChange={(v) => {
                           const nextMain = v === '' || v === '@dsh/no-main-worldbook' ? null : v
@@ -629,6 +634,7 @@ function HeaderChipSession(props: HeaderChipProps) {
                       {lists.lorebooks.length === 0 ? <Muted>{t('chip.field.noLorebooks')}</Muted> : (
                         <CheckChips
                           ariaLabel={t('chip.field.additionalLore')}
+                          disabled={busy}
                           options={lists.lorebooks.filter(n => n !== draft.characterLorebookId).map(n => ({value:n,label:n}))}
                           selected={draft.characterLorebookIds ?? []}
                           onChange={characterLorebookIds => setDraft({...draft,characterLorebookIds})}
@@ -641,6 +647,7 @@ function HeaderChipSession(props: HeaderChipProps) {
                       ) : (
                         <CheckChips
                           ariaLabel={t('chip.field.globalLoreAria')}
+                          disabled={busy}
                           options={lists.lorebooks.map((n) => ({ value: n, label: n }))}
                           selected={draft.lorebookIds}
                           onChange={(lorebookIds) => setDraft({ ...draft, lorebookIds })}
@@ -656,6 +663,7 @@ function HeaderChipSession(props: HeaderChipProps) {
                   <Field label={t('chip.field.character')}>
                     <Select
                       width="100%"
+                      disabled={busy}
                       value=""
                       onChange={(cardId) => {
                         if (!cardId) return
@@ -688,6 +696,7 @@ function HeaderChipSession(props: HeaderChipProps) {
                     <textarea
                       className="dsh-tavern-input dsh-tavern-textarea"
                       style={{ minHeight: 96 }}
+                      disabled={busy}
                       value={draft.authorNote ?? ''}
                       onChange={(e) => setDraft({ ...draft, authorNote: e.target.value })}
                     />
@@ -695,6 +704,7 @@ function HeaderChipSession(props: HeaderChipProps) {
                   <div className="dsh-tavern-inlineChecks">
                     <label>
                       <Toggle
+                        disabled={busy}
                         checked={draft.injectJournal === true}
                         onChange={(injectJournal) => setDraft({ ...draft, injectJournal })}
                       />
@@ -705,7 +715,7 @@ function HeaderChipSession(props: HeaderChipProps) {
                         {t('chip.journal.edit')}
                       </Btn>
                     ) : null}
-                    <label><Toggle checked={draft.helperMvu===true} onChange={helperMvu=>setDraft({...draft,helperMvu})}/>{t('chip.field.helperMvu')}</label>
+                    <label><Toggle disabled={busy} checked={draft.helperMvu===true} onChange={helperMvu=>setDraft({...draft,helperMvu})}/>{t('chip.field.helperMvu')}</label>
                   </div>
                   <Muted>{t('chip.field.helperMvuNote')}</Muted>
                 </div>
@@ -754,7 +764,7 @@ function HeaderChipSession(props: HeaderChipProps) {
                 </div>
               )}
               {!usage && staleTurnLine && <div className="dsh-tavern-usageBar">{staleTurnLine}</div>}
-            </>
+            </fieldset>
           )}
           </div>
           {binding?.storyId && <HelperMvuAbandonAction key={sessionId + ':' + binding.storyId} remote={remote} sessionId={sessionId} storyId={binding.storyId} onChanged={() => {

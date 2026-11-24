@@ -32,7 +32,7 @@ export interface ComputeJobs {
     output: ReturnType<typeof evaluateWorldInfo>
   }
   render: {
-    input: { text: string; rules: Parameters<typeof applyRegexRules>[1]; macroCtx: SerializableMacros }
+    input: { text: string; rules: Parameters<typeof applyRegexRules>[1]; macroCtx: SerializableMacros; depth?: number }
     output: ReturnType<typeof applyRegexRules>
   }
   template: {
@@ -40,7 +40,7 @@ export interface ComputeJobs {
     output: { texts: string[]; parts:TemplateDisplayPart[][]; variables: TemplateScopes; messageVariables:TemplateMessageVariables; templateContinuation?:TemplateContinuation }
   }
   display: {
-    input: {parts:TemplateDisplayPart[];rules:Parameters<typeof applyRegexRules>[1];macroCtx:SerializableMacros}
+    input: {parts:TemplateDisplayPart[];rules:Parameters<typeof applyRegexRules>[1];macroCtx:SerializableMacros;depth?:number}
     output: ReturnType<typeof presentTemplateDisplayResult>
   }
   renderBatch: {
@@ -48,8 +48,8 @@ export interface ComputeJobs {
       rules: Parameters<typeof applyRegexRules>[1]
       macroCtx: SerializableMacros
       items: Array<
-        | { kind: 'render'; text: string }
-        | { kind: 'display'; parts: TemplateDisplayPart[] }
+        | { kind: 'render'; text: string; depth?: number }
+        | { kind: 'display'; parts: TemplateDisplayPart[]; depth?: number }
       >
     }
     output: Array<
@@ -114,7 +114,7 @@ async function compute(request: typeof workerData):Promise<void> {
     const incomingReplay=kind==='assemble' ? input.templateContinuation?.replay : kind==='template' ? input.replay : undefined
     const incomingContext=kind==='assemble' ? assembleTemplates : input.context
     const incomingKey='incomingKey' in request ? (request.incomingKey as string | undefined) : templateWorkerCacheKey(incomingReplay,incomingContext)
-    if(!needsTemplates||kind==='render'||kind==='display'||kind==='renderBatch')cacheKey=sandboxCache.key
+    if(!needsTemplates||kind==='wi'||kind==='render'||kind==='display'||kind==='renderBatch')cacheKey=sandboxCache.key
     else if(!incomingKey)sandboxCache.clear()
     const restoreCached=()=> {
       const cached=sandboxCache.take(incomingKey,incomingReplay,budget.inputChars)
@@ -173,16 +173,16 @@ async function compute(request: typeof workerData):Promise<void> {
         value = evaluateWorldInfo({ ...input, entries, estimateTokens, random: createTurnRandom(input.seed) })
       } finally { sandbox?.dispose() }
     }
-    else if (kind === 'render') { beginComputing(); value = applyRegexRules(input.text, input.rules, { scope: 'output', timing: 'render' }, input.macroCtx) }
-    else if (kind === 'display') { beginComputing(); value = presentTemplateDisplayResult(input.parts,input.rules,input.macroCtx) }
+    else if (kind === 'render') { beginComputing(); value = applyRegexRules(input.text, input.rules, { scope: 'output', timing: 'render', ...(input.depth !== undefined ? { depth: input.depth } : {}) }, input.macroCtx) }
+    else if (kind === 'display') { beginComputing(); value = presentTemplateDisplayResult(input.parts,input.rules,input.macroCtx,input.depth) }
     else if (kind === 'renderBatch') {
       beginComputing()
       value = input.items.map((item: ComputeJobs['renderBatch']['input']['items'][number]) => {
         try {
           if (item.kind === 'render') {
-            return { ok: true as const, kind: 'render' as const, value: applyRegexRules(item.text, input.rules, { scope: 'output', timing: 'render' }, input.macroCtx) }
+            return { ok: true as const, kind: 'render' as const, value: applyRegexRules(item.text, input.rules, { scope: 'output', timing: 'render', ...(item.depth !== undefined ? { depth: item.depth } : {}) }, input.macroCtx) }
           }
-          return { ok: true as const, kind: 'display' as const, value: presentTemplateDisplayResult(item.parts, input.rules, input.macroCtx) }
+          return { ok: true as const, kind: 'display' as const, value: presentTemplateDisplayResult(item.parts, input.rules, input.macroCtx, item.depth) }
         } catch (error) {
           const message = error instanceof Error ? (error.message || error.name || '展示正则计算失败') : (String(error) || '展示正则计算失败')
           return { ok: false as const, error: message }

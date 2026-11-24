@@ -15,24 +15,45 @@ export interface MacroDependencySource {
 const READ_VAR_RE = /\{\{\s*(?:(?:get|has)(?:local|global)?var|(?:global)?varexists)\s*::([^{}]*)(?=\{\{|\}\})/gi
 const WRITE_VAR_RE = /\{\{\s*(set|add|inc|dec|delete|flush)(?:local|global)?var\s*::([^{}]*?)(?=::|\{\{|\}\})/gi
 const FIELD_REF_RE = /\{\{\s*([^{}:]+?)\s*\}\}|<(USER|BOT|CHAR|CHARIFNOTGROUP|GROUP)>/gi
-const contextFieldsCache = new WeakMap<MacroContext, Record<string, string | undefined>>()
+interface CachedContextFields {
+  values: readonly (string | undefined)[]
+  varsEntries: readonly (readonly [string, string])[]
+  fields: Record<string, string | undefined>
+}
+const CONTEXT_FIELD_SOURCE_KEYS = [
+  'char', 'user', 'description', 'personality', 'scenario', 'charVersion',
+  'creatorNotes', 'charDepthPrompt', 'mesExamples', 'persona', 'firstMessage',
+  'charPrompt', 'charInstruction',
+] as const
+const contextFieldsCache = new WeakMap<MacroContext, CachedContextFields>()
 
 function fieldsForContext(context: MacroContext): Record<string, string | undefined> {
-  let fields = contextFieldsCache.get(context)
-  if (!fields) {
-    fields = {
-      ...context.vars,
-      char: context.char, charname: context.char, user: context.user, username: context.user,
-      description: context.description, personality: context.personality, scenario: context.scenario,
-      chardescription: context.description, charpersonality: context.personality, charscenario: context.scenario,
-      charversion: context.charVersion, charcreatornotes: context.creatorNotes, creatornotes: context.creatorNotes,
-      chardepthprompt: context.charDepthPrompt, mesexamples: context.mesExamples, mesexamplesraw: context.mesExamples,
-      persona: context.persona, firstmessage: context.firstMessage, charfirstmessage: context.firstMessage, greeting: context.firstMessage,
-      charprompt: context.charPrompt, charinstruction: context.charInstruction, charjailbreak: context.charInstruction,
-      group: context.char, groupnotmuted: context.char, notchar: context.user,
-    }
-    contextFieldsCache.set(context, fields)
+  const varsEntries = context.vars ? Object.entries(context.vars) : []
+  const cached = contextFieldsCache.get(context)
+  if (
+    cached &&
+    CONTEXT_FIELD_SOURCE_KEYS.every((key, index) => cached.values[index] === context[key]) &&
+    cached.varsEntries.length === varsEntries.length &&
+    cached.varsEntries.every(([key, value], index) => varsEntries[index]?.[0] === key && varsEntries[index]?.[1] === value)
+  ) {
+    return cached.fields
   }
+  const fields: Record<string, string | undefined> = {
+    ...context.vars,
+    char: context.char, charname: context.char, user: context.user, username: context.user,
+    description: context.description, personality: context.personality, scenario: context.scenario,
+    chardescription: context.description, charpersonality: context.personality, charscenario: context.scenario,
+    charversion: context.charVersion, charcreatornotes: context.creatorNotes, creatornotes: context.creatorNotes,
+    chardepthprompt: context.charDepthPrompt, mesexamples: context.mesExamples, mesexamplesraw: context.mesExamples,
+    persona: context.persona, firstmessage: context.firstMessage, charfirstmessage: context.firstMessage, greeting: context.firstMessage,
+    charprompt: context.charPrompt, charinstruction: context.charInstruction, charjailbreak: context.charInstruction,
+    group: context.char, groupnotmuted: context.char, notchar: context.user,
+  }
+  contextFieldsCache.set(context, {
+    values: CONTEXT_FIELD_SOURCE_KEYS.map((key) => context[key]),
+    varsEntries,
+    fields,
+  })
   return fields
 }
 

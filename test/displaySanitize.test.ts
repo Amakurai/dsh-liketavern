@@ -2,6 +2,7 @@
  * 展示层机读标签收起：UpdateVariable / JSONPatch / 流式未闭合尾巴 / 协议标签
  *（customize_HCI、now_plot 等），不误伤普通正文与 HTML。
  */
+import MarkdownIt from 'markdown-it'
 import { describe, expect, it } from 'vitest'
 import { presentRenderedOutput, presentStreamingOutput, stripDisplayMeta, stripOpaqueDisplayMeta } from '../src/core/displaySanitize.js'
 
@@ -356,5 +357,186 @@ describe('审查修复回归：交互卡回退', () => {
       pendingHtml: false,
     })
     expect(stripDisplayMeta('前文<initvar/>中<Analysis>一</Analysis>后<JSONPatch>未闭合')).toBe('前文中后')
+  })
+
+  it('行首自定义伪标签不吞掉后续代码围栏，CommonMark 渲染出 json 代码块', () => {
+    const md = new MarkdownIt('commonmark')
+    const repro = [
+      '<Adventurer Profile>',
+      '```json',
+      '•姓名: 格伦·铁砧',
+      '•性别: 男',
+      '•种族: 矮人',
+      '```',
+      '<details><summary>____------妖精契约------____</summary>',
+      '>契约者: 希尔薇',
+      '</details>',
+      '</Adventurer Profile>',
+    ].join('\n')
+
+    expect(md.render(repro)).not.toContain('<pre><code class="language-json">')
+
+    const shown = presentRenderedOutput(repro, true)
+    expect(shown.htmls).toEqual([
+      '<details><summary>____------妖精契约------____</summary>\n>契约者: 希尔薇\n</details>',
+    ])
+    expect(shown.text).toBe('```json\n•姓名: 格伦·铁砧\n•性别: 男\n•种族: 矮人\n```')
+
+    const markup = md.render(shown.text)
+    expect(markup).toContain('<pre><code class="language-json">')
+    expect(markup).toContain('格伦·铁砧')
+    expect(markup).not.toContain('Adventurer Profile')
+
+    const statusSample = '<status1>\n```json\n{"hp": 10}\n```\n</status1>'
+    expect(md.render(statusSample)).not.toContain('<pre><code class="language-json">')
+    const strippedStatus = stripDisplayMeta(statusSample)
+    expect(strippedStatus).toBe('```json\n{"hp": 10}\n```')
+    const statusMarkup = md.render(strippedStatus)
+    expect(statusMarkup).toContain('<pre><code class="language-json">')
+    expect(statusMarkup).toContain('&quot;hp&quot;')
+    expect(statusMarkup).not.toContain('status1')
+
+    const disabled = presentRenderedOutput(repro, false)
+    expect(disabled.htmls).toEqual([])
+    expect(disabled.text).toContain('```json\n•姓名: 格伦·铁砧')
+    expect(disabled.text).toContain('```html\n<details>')
+    expect(disabled.text).not.toContain('Adventurer Profile')
+  })
+
+  it('清理引用块内、多伪标签同行、配对同行残余及未闭合流式伪标签行', () => {
+    expect(stripDisplayMeta('<Adventurer Profile> <status1>\n正文\n</status1> </Adventurer Profile>')).toBe('正文')
+    expect(stripDisplayMeta('> <Adventurer Profile>\n> ```json\n> {"a": 1}\n> ```\n> </Adventurer Profile>'))
+      .toBe('>\n> ```json\n> {"a": 1}\n> ```\n>')
+    expect(stripDisplayMeta('<status1>\n种族: 矮人</status1>')).toBe('种族: 矮人')
+    expect(stripDisplayMeta('前文<status1>\n</status1>')).toBe('前文')
+    expect(stripDisplayMeta('<Adventurer Profile>\n已输出台词')).toBe('已输出台词')
+    expect(stripDisplayMeta('<rpg:status>\n```json\n{"lv":1}\n```\n</rpg:status>')).toBe('```json\n{"lv":1}\n```')
+  })
+
+  it('清理含引号内 > 的自定义伪标签并保留 CommonMark 两空格硬换行', () => {
+    const md = new MarkdownIt('commonmark')
+    const quotedAttr = '<status title="HP > 50%">\n```json\n{"hp": 80}\n```\n</status>'
+    const cleaned = stripDisplayMeta(quotedAttr)
+    expect(cleaned).toBe('```json\n{"hp": 80}\n```')
+    expect(md.render(cleaned)).toContain('<pre><code class="language-json">')
+
+    // 非空续行前的两个空格属于 CommonMark 硬换行，tidy 必须保留；空白行前的行尾空格仍照常裁剪。
+    expect(stripDisplayMeta('第一行  \n第二行')).toBe('第一行  \n第二行')
+    expect(md.render(stripDisplayMeta('第一行  \n第二行'))).toContain('第一行<br />\n第二行')
+    expect(stripDisplayMeta('第一行   \n第二行 \n第三行\t\n第四行')).toBe('第一行  \n第二行\n第三行\n第四行')
+    expect(stripDisplayMeta('前段  \n   \n后段')).toBe('前段\n\n后段')
+  })
+
+  it('伪标签清理不误伤代码示例、缩进代码、自动链接、盘符路径、泛型与标准 HTML', () => {
+    const preserved = [
+      '```text\n<Adventurer Profile>\n<status1>\n```',
+      '行内 `<Adventurer Profile>` 与 `<status1>` 保留',
+      '代码示例：\n\n    <status1>',
+      '代码示例：\n\n\t<Adventurer Profile>',
+      '<https://example.com/>',
+      '<mailto:a@b.com>',
+      '<urn:isbn:0451450523>',
+      '<C:/Users/foo>',
+      '类型 Array<string> 保留',
+      '<think-box>legit</think-box> after',
+      '<DIV>\n正文\n</DIV>',
+      '<menuitem>项</menuitem>',
+    ]
+    for (const sample of preserved) {
+      expect(stripDisplayMeta(sample)).toBe(sample)
+    }
+  })
+
+  it('自闭合容器标签不触发 pendingHtml，大写 URI/邮箱自动链接与代码内注释宏不被误删', () => {
+    // <div/> / <svg .../> 等自闭合容器不应触发未闭合卡面并隐藏整段后文。
+    for (const sample of ['前文\n<div/>\n后文不能消失', '前文\n<svg width="16" height="16"/>\n后文不能消失', '前文<audio/>后文']) {
+      expect(presentStreamingOutput(sample, true)).toEqual({ text: sample, pendingHtml: false })
+      const shown = presentRenderedOutput(sample, true)
+      expect(shown.pendingHtml).toBeUndefined()
+      expect(shown.text).toContain('后文')
+    }
+
+    // 协议标签含引号内 > 仍可剥离，但合法大写 URI / 邮箱自动链接必须完整保留。
+    expect(stripDisplayMeta('台词 <CharStatus title="HP > 50%">状态</CharStatus> 结束')).toBe('台词 状态 结束')
+    expect(stripDisplayMeta('参考 <HTTPS://example.com/docs> 和 <User_Name@example.com>'))
+      .toBe('参考 <HTTPS://example.com/docs> 和 <User_Name@example.com>')
+
+    // ST 作者注释宏 {{// ... }} 在正文清理，但行内与围栏代码示例里原样保留。
+    expect(stripDisplayMeta('{{// 开场白注释 }}\n欢迎来到星港')).toBe('欢迎来到星港')
+    expect(stripDisplayMeta('`{{// keep }}` {{// drop }} 正文')).toBe('`{{// keep }}`  正文')
+    expect(stripDisplayMeta('```text\n{{// keep }}\n```')).toBe('```text\n{{// keep }}\n```')
+  })
+
+  it('带前导 <link> 的分离样式合并到真实卡面，且流式阶段不泄漏前导 <link> 或孤立引用前缀', () => {
+    const separated = '<link rel="stylesheet" href="https://fonts.example.com/a.css">\n<style>.bar{color:red}</style>\n她走了过来。\n<div class="bar">HP 10</div>'
+    const shown = presentRenderedOutput(separated, true)
+    expect(shown.pendingHtml).toBeUndefined()
+    expect(shown.text).toBe('她走了过来。')
+    expect(shown.htmls).toHaveLength(1)
+    expect(shown.htmls[0]).toContain('<link rel="stylesheet"')
+    expect(shown.htmls[0]).toContain('<style>.bar{color:red}</style>')
+    expect(shown.htmls[0]).toContain('<div class="bar">HP 10</div>')
+
+    // 流式输出遇到前导 <link> + <style> 时立即进入卡面占位，不把原始 <link> 暴露给用户。
+    expect(presentStreamingOutput(separated, true)).toEqual({ text: '', pendingHtml: true })
+    // 未闭合的 <link> + <style> 在完成态同样一并隐藏为 pendingHtml。
+    const broken = '前文\n<link rel="stylesheet" href="https://fonts.example.com/a.css">\n<style>.bar{color:red'
+    expect(presentRenderedOutput(broken, true)).toEqual({ html: null, htmls: [], text: '前文', pendingHtml: true })
+    // 引用中的折叠块流式阶段不闪现孤立的 >。
+    expect(presentStreamingOutput('> <details><summary>A</summary>1', true)).toEqual({ text: '', pendingHtml: true })
+    expect(presentStreamingOutput('> 旁白\n> <details><summary>A</summary>1', true)).toEqual({ text: '> 旁白', pendingHtml: true })
+  })
+
+  it('后置分离样式向前回并、共享样式分发给多张卡片，且纯宿主 DOM 样式不生成空白 iframe', () => {
+    // 尾部 <style> 被正文隔开时并回前面的卡片，不留空白 iframe。
+    const trailing = '<div class="card">状态栏</div>\n她缓缓走来。\n<style>.card{color:red}</style>'
+    const shownTrailing = presentRenderedOutput(trailing, true)
+    expect(shownTrailing.text).toBe('她缓缓走来。')
+    expect(shownTrailing.htmls).toEqual(['<div class="card">状态栏</div>\n<style>.card{color:red}</style>'])
+
+    // 顶部共享 <style> 跨正文分发给全部非纯折叠 HTML 卡，同时不把无关的纯 <details> 拖进 iframe。
+    const multi = '<style>.a{color:red}.b{color:blue}</style>\n开场\n<div class="a">一</div>\n中段\n<div class="b">二</div>\n<details><summary>纯折叠</summary>文字</details>'
+    const shownMulti = presentRenderedOutput(multi, true)
+    expect(shownMulti.htmls).toEqual([
+      '<style>.a{color:red}.b{color:blue}</style>\n<div class="a">一</div>',
+      '<style>.a{color:red}.b{color:blue}</style>\n<div class="b">二</div>',
+      '<details><summary>纯折叠</summary>文字</details>',
+    ])
+
+    // 仅有面向 SillyTavern 宿主聊天的 <style> + 普通台词时，在沙箱里不生成空白 iframe。
+    const hostCssOnly = '<style>.mes_text { font-family: serif; }</style>\n她轻轻推开门。'
+    expect(presentRenderedOutput(hostCssOnly, true)).toEqual({ html: null, htmls: [], text: '她轻轻推开门。' })
+
+    // 宿主 DOM 样式后只有 #31 纯折叠块（无其它 HTML 卡片）时，不把无关样式强挂到纯折叠块将其拖入 iframe。
+    const issue31Fold = '<details>\n<summary>你可以从列表中选择一个家庭和地区\n\n### 中央大陆\n1. 鲁迪乌斯\n</details>'
+    const hostCssWithFold = `<style>.mes_text { font-family: serif; }</style>\n欢迎来到六面世界。\n${issue31Fold}`
+    expect(presentRenderedOutput(hostCssWithFold, true)).toEqual({
+      html: issue31Fold,
+      htmls: [issue31Fold],
+      text: '欢迎来到六面世界。',
+    })
+
+    // 显式作用到 details/summary 或带外部 <link> 的样式仍按原语义并入折叠块。
+    const detailsCss = `<style>details { border: 1px solid gold; }</style>\n开场\n${issue31Fold}`
+    expect(presentRenderedOutput(detailsCss, true).htmls).toEqual([
+      `<style>details { border: 1px solid gold; }</style>\n${issue31Fold}`,
+    ])
+    const linkCss = `<link rel="stylesheet" href="https://fonts.example.com/a.css">\n<style>.x{}</style>\n开场\n${issue31Fold}`
+    expect(presentRenderedOutput(linkCss, true).htmls).toEqual([
+      `<link rel="stylesheet" href="https://fonts.example.com/a.css">\n<style>.x{}</style>\n${issue31Fold}`,
+    ])
+
+    // 含内部 HTML 的样式化 <details> 不应被误判成纯折叠块而漏掉共享 CSS；夹在真实卡片与纯折叠间的样式向前回并到真实卡片。
+    const styledDetails = '<details><summary>记录</summary><div class="bar">状态</div></details>'
+    const sharedStyled = `<style>.bar{color:red}</style>\n开场\n${styledDetails}\n中段\n<div class="bar">主卡</div>`
+    expect(presentRenderedOutput(sharedStyled, true).htmls).toEqual([
+      `<style>.bar{color:red}</style>\n${styledDetails}`,
+      '<style>.bar{color:red}</style>\n<div class="bar">主卡</div>',
+    ])
+    const middleStyle = `<div class="bar">状态</div>\n中段\n<style>.bar{color:red}</style>\n后段\n${issue31Fold}`
+    expect(presentRenderedOutput(middleStyle, true).htmls).toEqual([
+      '<div class="bar">状态</div>\n<style>.bar{color:red}</style>',
+      issue31Fold,
+    ])
   })
 })

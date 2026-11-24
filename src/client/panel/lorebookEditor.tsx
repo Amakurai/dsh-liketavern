@@ -200,21 +200,25 @@ function LorebookEditorContent(props: LorebookEditorProps & { draftKey: string }
 
   const entriesRef = useRef(entries)
   entriesRef.current = entries
+  const filterStateRef = useRef({ filter, query })
+  filterStateRef.current = { filter, query }
 
   const patch = useCallback((uid: string, partial: Partial<WorldInfoEntry>) => {
     setEntries(entriesRef.current.map((e) => (e.uid === uid ? { ...e, ...partial } : e)))
     setDirty(true)
   }, [setEntries, setDirty])
 
+  const matchesFilter = (e: WorldInfoEntry, activeFilter: FilterId, needle: string): boolean => {
+    if (activeFilter === 'on' && !e.enabled) return false
+    if (activeFilter === 'off' && e.enabled) return false
+    if (activeFilter === 'constant' && !e.constant) return false
+    if (!needle) return true
+    return getEntryHaystack(e).includes(needle)
+  }
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
-    return entries.filter((e) => {
-      if (filter === 'on' && !e.enabled) return false
-      if (filter === 'off' && e.enabled) return false
-      if (filter === 'constant' && !e.constant) return false
-      if (!q) return true
-      return getEntryHaystack(e).includes(q)
-    })
+    return entries.filter((e) => matchesFilter(e, filter, q))
   }, [entries, filter, query])
 
   const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
@@ -293,10 +297,16 @@ function LorebookEditorContent(props: LorebookEditorProps & { draftKey: string }
     }
     const next = current.slice()
     next.splice(idx + 1, 0, cloned)
+    const { filter: activeFilter, query: activeQuery } = filterStateRef.current
+    const q = activeQuery.trim().toLowerCase()
+    const nextFiltered = next.filter((e) => matchesFilter(e, activeFilter, q))
+    const clonedIdx = nextFiltered.findIndex((e) => e.uid === copyUid)
     setEntries(next)
     setDirty(true)
     setOpenUid(copyUid)
-  }, [source, sourceRef, setEntries, setDirty, setOpenUid, t])
+    if (clonedIdx >= 0) setPage(Math.floor(clonedIdx / PAGE_SIZE))
+    else setPage((prev) => Math.min(prev, Math.max(0, Math.ceil(nextFiltered.length / PAGE_SIZE) - 1)))
+  }, [source, sourceRef, setEntries, setDirty, setOpenUid, setPage, t])
 
   const applyFilterEnabled = (enabled: boolean) => {
     const ids = new Set(filtered.map((e) => e.uid))
@@ -305,7 +315,11 @@ function LorebookEditorContent(props: LorebookEditorProps & { draftKey: string }
 
   const removeEntry = () => {
     if (!toDelete) return
-    mark(entries.filter((e) => e.uid !== toDelete))
+    const next = entries.filter((e) => e.uid !== toDelete)
+    const q = query.trim().toLowerCase()
+    const nextFilteredCount = next.filter((e) => matchesFilter(e, filter, q)).length
+    mark(next)
+    setPage(Math.min(safePage, Math.max(0, Math.ceil(nextFilteredCount / PAGE_SIZE) - 1)))
     if (openUid === toDelete) setOpenUid(null)
     setToDelete(null)
   }

@@ -6,16 +6,20 @@
 import {cardVariableLabels} from '../cardVariableLabels.js'
 import { useDraftGuard } from '../drafts.js'
 import { buildCardSrcDoc } from '../../core/cardFrame.js'
+import { helperRecord } from '../../core/helperRuntime.js'
+import { readHostColorScheme } from '../displayPrefs.js'
+import { attachCardBridgeRuntime } from '../helperEventRouter.js'
+import { subscribeWindowMessage } from '../windowEvents.js'
 import { cardGreetingVariants } from '../../core/greetingLog.js'
 import { MAX_CARD_PNG_BYTES } from '../../core/cardLimits.js'
 import type { CharacterCompatibilityCode, CharacterCompatibilityStatus } from '../../core/characterCompatibility.js'
 import { CARD_VARIABLE_STYLES } from '../styles.js'
 import { PersistentEditor, useDraftRestored, useDraftState } from '../draftPersistence.js'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Button, IconArchiveOutlineMedium, IconDownloadOutlineMedium, IconRefreshOutlineMedium, IconTrashOutlineMedium, IconUserOutlineMedium, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
 import { cachedAvatar, cachedCharacterDetail, invalidateCharacter, notifyAllSessionBindingsChanged, notifyCharacterChanged } from '../cache.js'
 import { filterCharacters } from '../characterSearch.js'
-import { useT } from '../i18n.js'
+import { getTavernLocale, useT } from '../i18n.js'
 import type { CharacterDeletePlan, CharacterDetail, CharacterInspect, CharacterSummary, TavernRemote } from '../types.js'
 import { Avatar, Btn, ConfirmDialog, Dialog, Err, Field, FileBtn, IconBtn, ListInput, Muted, NumInput, SearchEmpty, SearchInput, Section, Select, Skeleton, Tabs, clickableProps, downloadBase64, downloadJson, errOf, fileToBase64, runAsync, useLoader, useToast, type LoadState } from '../util.js'
 
@@ -150,6 +154,7 @@ function CharacterDetailDialog(props: { remote: TavernRemote; cardId: string; on
   const preserveRestored = useRef(restored && draft !== null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const pending = useRef(false)
   const toast = useToast()
   const loaded: CharacterDetail | null = state.status === 'ready' ? state.value : null
   const detail = draft ?? loaded
@@ -176,68 +181,84 @@ function CharacterDetailDialog(props: { remote: TavernRemote; cardId: string; on
     setDraft(loaded)
   }, [loaded, setDraft])
 
-  const close = () => guard.request(() => {
-    setDraft(null)
-    props.onClose()
-  })
+  const close = () => {
+    if (pending.current) return
+    guard.request(() => {
+      setDraft(null)
+      props.onClose()
+    })
+  }
 
-  const set = (patch: Partial<CharacterDetail>) => setDraft(detail ? { ...detail, ...patch } : detail)
+  const set = (patch: Partial<CharacterDetail>) => {
+    if (!pending.current) setDraft(detail ? { ...detail, ...patch } : detail)
+  }
   const interactiveHtml = typeof detail?.extensions?.interactiveHtml === 'string' ? (detail.extensions.interactiveHtml as string) : null
 
   const save = async () => {
-    if (!detail) return
+    if (!detail || pending.current) return
     // 旧版恢复草稿没有基线版本，不能拿刚读取的版本替它授权覆盖。
     if (!detail.revision) { setError(t('characters.detail.missingRevision')); return }
     if (!detail.name.trim()) {
       setError(t('characters.detail.nameRequired'))
       return
     }
-    await runAsync(setBusy, setError, async () => {
-      const r = await remote.saveCharacter({
-        cardId,
-        expectedRevision: detail.revision,
-        name: detail.name,
-        description: detail.description,
-        personality: detail.personality,
-        scenario: detail.scenario,
-        firstMes: detail.firstMes,
-        alternateGreetings: detail.alternateGreetings.map((s) => s.trim()).filter(Boolean),
-        mesExample: detail.mesExample,
-        systemPrompt: detail.systemPrompt,
-        postHistoryInstructions: detail.postHistoryInstructions,
-        creatorNotes: detail.creatorNotes,
-        creator: detail.creator,
-        characterVersion: detail.characterVersion,
-        tags: detail.tags,
-        depthPrompt: detail.depthPrompt ?? null,
+    pending.current = true
+    try {
+      await runAsync(setBusy, setError, async () => {
+        const r = await remote.saveCharacter({
+          cardId,
+          expectedRevision: detail.revision,
+          name: detail.name,
+          description: detail.description,
+          personality: detail.personality,
+          scenario: detail.scenario,
+          firstMes: detail.firstMes,
+          alternateGreetings: detail.alternateGreetings.map((s) => s.trim()).filter(Boolean),
+          mesExample: detail.mesExample,
+          systemPrompt: detail.systemPrompt,
+          postHistoryInstructions: detail.postHistoryInstructions,
+          creatorNotes: detail.creatorNotes,
+          creator: detail.creator,
+          characterVersion: detail.characterVersion,
+          tags: detail.tags,
+          depthPrompt: detail.depthPrompt ?? null,
+        })
+        const err = errOf(r)
+        if (err) { setError(err); invalidateCharacter(cardId) }
+        else if (r.ok) {
+          // 保存回执推进版本，但只更新版本字段，不能覆盖往返期间的新键入。
+          const revision = r.value.revision
+          appliedRef.current = { ...detail, revision }
+          setDraft(current => current ? { ...current, revision } : current)
+          toast.show(t('characters.detail.saved', { name: detail.name }))
+          // 先失效详情/头像缓存再 reload，否则详情弹窗与聊天气泡继续吃旧值。
+          notifyCharacterChanged(cardId)
+          reload()
+          props.onSaved()
+        }
       })
-      const err = errOf(r)
-      if (err) { setError(err); invalidateCharacter(cardId) }
-      else if (r.ok) {
-        // 保存回执推进版本，但只更新版本字段，不能覆盖往返期间的新键入。
-        const revision = r.value.revision
-        appliedRef.current = { ...detail, revision }
-        setDraft(current => current ? { ...current, revision } : current)
-        toast.show(t('characters.detail.saved', { name: detail.name }))
-        // 先失效详情/头像缓存再 reload，否则详情弹窗与聊天气泡继续吃旧值。
-        notifyCharacterChanged(cardId)
-        reload()
-        props.onSaved()
-      }
-    })
+    } finally {
+      pending.current = false
+    }
   }
 
   const exportCard = async (kind: 'json' | 'png') => {
-    await runAsync(setBusy, setError, async () => {
-      const r = await remote.exportCharacter({ cardId })
-      if (!r.ok) {
-        setError(r.error.message)
-        return
-      }
-      if (kind === 'json') downloadJson(`${r.value.name}.json`, r.value.json)
-      else downloadBase64(`${r.value.name}.png`, r.value.pngBase64, 'image/png')
-      toast.show(t('characters.detail.exported', { kind: kind.toUpperCase() }))
-    })
+    if (pending.current) return
+    pending.current = true
+    try {
+      await runAsync(setBusy, setError, async () => {
+        const r = await remote.exportCharacter({ cardId })
+        if (!r.ok) {
+          setError(r.error.message)
+          return
+        }
+        if (kind === 'json') downloadJson(`${r.value.name}.json`, r.value.json)
+        else downloadBase64(`${r.value.name}.png`, r.value.pngBase64, 'image/png')
+        toast.show(t('characters.detail.exported', { kind: kind.toUpperCase() }))
+      })
+    } finally {
+      pending.current = false
+    }
   }
 
   return (
@@ -368,20 +389,87 @@ function CharacterDetailDialog(props: { remote: TavernRemote; cardId: string; on
       )}
       {cardOpen && interactiveHtml !== null && (
         <Dialog open width="lg" title={t('characters.detail.interactiveTitle', { name: detail?.name ?? '' })} onClose={() => setCardOpen(false)}>
-          <iframe
-            sandbox="allow-scripts"
-            srcDoc={buildCardSrcDoc(interactiveHtml, { greetings: detail ? cardGreetingVariants(detail.firstMes, detail.alternateGreetings) : [], greetingIndex: 0,
-              helperContext: { name: detail?.name, macroName: detail?.characterName ?? detail?.name, canSwipe: false },
-              helperLabels: { diagnostics: t('speech.helperMessages'), unsupported: t('speech.helperUnsupported') },
-              variableStyles: CARD_VARIABLE_STYLES,
-              variableLabels:cardVariableLabels(t,t('speech.cardDataNote')),
-            })}
+          <CharacterInteractivePreview
+            html={interactiveHtml}
+            firstMes={detail?.firstMes ?? ''}
+            alternateGreetings={detail?.alternateGreetings ?? []}
+            name={detail?.name}
+            macroName={detail?.characterName ?? detail?.name}
             title={t('characters.detail.interactiveFrame')}
-            style={{ width: '100%', height: '60vh', border: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.25))', borderRadius: 16, background: 'var(--dsw-alias-bg-base, #111)' }}
           />
         </Dialog>
       )}
     </Dialog>
+  )
+}
+
+/** 详情页只读交互卡预览：缓存 srcDoc 并在宿主切换明暗主题时实时同步 `setColorScheme`。 */
+export function CharacterInteractivePreview(props: {
+  html: string
+  firstMes: string
+  alternateGreetings: string[]
+  name?: string
+  macroName?: string
+  title: string
+}) {
+  const t = useT()
+  const locale = getTavernLocale()
+  const iframeRef = useRef<HTMLIFrameElement | null>(null)
+  const retiredRuntimes = useRef(new Set<string>())
+  const greetingsKey = useMemo(() => JSON.stringify([props.firstMes, props.alternateGreetings]), [props.firstMes, props.alternateGreetings])
+  const srcDoc = useMemo(() => buildCardSrcDoc(props.html, {
+    greetings: cardGreetingVariants(props.firstMes, props.alternateGreetings),
+    greetingIndex: 0,
+    colorScheme: readHostColorScheme(),
+    helperContext: { name: props.name, macroName: props.macroName, canSwipe: false },
+    helperLabels: { diagnostics: t('speech.helperMessages'), unsupported: t('speech.helperUnsupported') },
+    variableStyles: CARD_VARIABLE_STYLES,
+    variableLabels: cardVariableLabels(t, t('speech.cardDataNote')),
+  }), [props.html, greetingsKey, props.name, props.macroName, locale])
+
+  useLayoutEffect(() => {
+    let active = true
+    const send = (message: Record<string, unknown>) => {
+      if (active) iframeRef.current?.contentWindow?.postMessage(message, '*')
+    }
+    const eventEndpoint = attachCardBridgeRuntime(send, retiredRuntimes.current)
+    const syncColorScheme = () => {
+      const runtimeId = eventEndpoint.runtimeId()
+      const colorScheme = readHostColorScheme()
+      if (runtimeId && colorScheme) eventEndpoint.post({ action: 'setColorScheme', colorScheme })
+    }
+    let themeObserver: MutationObserver | undefined
+    if (typeof MutationObserver !== 'undefined' && typeof document !== 'undefined') {
+      themeObserver = new MutationObserver(() => syncColorScheme())
+      if (document.documentElement) themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['style', 'data-ds-theme-source'] })
+      if (document.body) themeObserver.observe(document.body, { attributes: true, attributeFilter: ['data-ds-dark-theme'] })
+    }
+    const onMsg = (e: MessageEvent) => {
+      if (!iframeRef.current || e.source !== iframeRef.current.contentWindow) return
+      const value: unknown = e.data
+      if (helperRecord(value) && value.source === 'dsh-tavern-card' && (value.action === 'helperEventConnect' || value.action === 'helperEventDisconnect')) {
+        const before = eventEndpoint.runtimeId()
+        eventEndpoint.receive(value)
+        if (before !== eventEndpoint.runtimeId()) syncColorScheme()
+      }
+    }
+    const unsubscribe = subscribeWindowMessage(iframeRef.current?.contentWindow, onMsg)
+    return () => {
+      active = false
+      themeObserver?.disconnect()
+      eventEndpoint.dispose()
+      unsubscribe()
+    }
+  }, [srcDoc])
+
+  return (
+    <iframe
+      ref={iframeRef}
+      sandbox="allow-scripts"
+      srcDoc={srcDoc}
+      title={props.title}
+      style={{ colorScheme: 'inherit', width: '100%', height: '60vh', border: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.25))', borderRadius: 16, background: 'var(--dsw-alias-bg-base, #111)' }}
+    />
   )
 }
 

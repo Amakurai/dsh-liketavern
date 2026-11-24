@@ -6,6 +6,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { AuthorizationServerMismatchError, Client, ClientCredentialsProvider, fetchToken, StreamableHTTPClientTransport } from '@modelcontextprotocol/client'
 import * as hostMcp from '@deepseek-ai/dsh-mcp-client'
 import { expect, it, vi } from 'vitest'
+import { inspectAuditReports } from '../scripts/verify-audit.mjs'
 
 const require = createRequire(import.meta.url)
 const CachePolicy = require('http-cache-semantics') as new (
@@ -89,4 +90,111 @@ it('宿主使用的 MCP 导出与 HTTP 传输仍可握手、发现工具并转�
     server.closeAllConnections()
     await new Promise<void>(resolve => server.close(() => resolve()))
   }
+})
+
+it('锁文件安全审计守卫：生产依赖零容忍，仅放行已登记的无补丁开发链公告并在范围变化时自动失效', () => {
+  const cleanReport = {
+    auditReportVersion: 2,
+    vulnerabilities: {},
+    metadata: { vulnerabilities: { total: 0 } },
+  }
+  expect(inspectAuditReports(cleanReport, cleanReport)).toEqual({
+    ok: true,
+    errors: [],
+    notices: [],
+  })
+
+  const makePicomatchFullReport = (range = '<=4.0.7', fixAvailable: unknown = { name: 'vitest', version: '3.1.4', isSemVerMajor: true }) => ({
+    auditReportVersion: 2,
+    vulnerabilities: {
+      picomatch: {
+        name: 'picomatch',
+        severity: 'high',
+        isDirect: false,
+        via: [
+          {
+            source: 1247710,
+            name: 'picomatch',
+            title: 'picomatch vulnerable to ReDoS through single-branch repeated extglobs',
+            url: 'https://github.com/advisories/GHSA-fc5q-39xc-vjpf',
+            severity: 'high',
+            range,
+          },
+        ],
+        effects: ['tinyglobby', 'vitest', '@deepseek-ai/dsh-hmr'],
+        fixAvailable,
+      },
+      tinyglobby: {
+        name: 'tinyglobby',
+        severity: 'high',
+        via: ['picomatch'],
+        effects: ['vitest'],
+        fixAvailable,
+      },
+      vitest: {
+        name: 'vitest',
+        severity: 'high',
+        via: ['picomatch', 'tinyglobby'],
+        effects: [],
+        fixAvailable,
+      },
+      '@deepseek-ai/dsh-hmr': {
+        name: '@deepseek-ai/dsh-hmr',
+        severity: 'high',
+        via: ['picomatch'],
+        effects: ['@deepseek-ai/dsh'],
+        fixAvailable: true,
+      },
+      '@deepseek-ai/dsh': {
+        name: '@deepseek-ai/dsh',
+        severity: 'high',
+        via: ['@deepseek-ai/dsh-hmr'],
+        effects: [],
+        fixAvailable: { isSemVerMajor: true },
+      },
+    },
+    metadata: { vulnerabilities: { total: 5 } },
+  })
+
+  // 开发链无补丁的已知公告在生产审计为 0 时受控通过，并给出明确提示
+  const allowed = inspectAuditReports(cleanReport, makePicomatchFullReport())
+  expect(allowed.ok).toBe(true)
+  expect(allowed.errors).toEqual([])
+  expect(allowed.notices).toHaveLength(1)
+  expect(allowed.notices[0]).toContain('GHSA-fc5q-39xc-vjpf')
+
+  // 即使同一 GHSA 若进入生产依赖（--omit=dev）也必须立即拒绝
+  const inProd = inspectAuditReports(makePicomatchFullReport(), makePicomatchFullReport())
+  expect(inProd.ok).toBe(false)
+  expect(inProd.errors.join('\n')).toContain('生产运行依赖存在已知漏洞')
+
+  // 上游发布修复版本使受影响范围收缩或报告直接修复时，临时豁免自动失效
+  const rangeUpdated = inspectAuditReports(cleanReport, makePicomatchFullReport('<4.0.8'))
+  expect(rangeUpdated.ok).toBe(false)
+  expect(rangeUpdated.errors.join('\n')).toContain('受影响范围已变更')
+
+  const fixReady = inspectAuditReports(cleanReport, makePicomatchFullReport('<=4.0.7', true))
+  expect(fixReady.ok).toBe(false)
+  expect(fixReady.errors.join('\n')).toContain('已报告直接修复版本')
+
+  // 其它未知 GHSA 或未归因的传递告警一律拒绝
+  const otherReport = makePicomatchFullReport()
+  ;(otherReport.vulnerabilities as Record<string, unknown>).unlisted = {
+    name: 'unlisted',
+    severity: 'moderate',
+    via: [{ source: 999, name: 'unlisted', url: 'https://github.com/advisories/GHSA-0000-1111-2222', range: '<1.0.1' }],
+  }
+  const rejectedOther = inspectAuditReports(cleanReport, otherReport)
+  expect(rejectedOther.ok).toBe(false)
+  expect(rejectedOther.errors.join('\n')).toContain('GHSA-0000-1111-2222')
+
+  const orphanReport = makePicomatchFullReport()
+  ;(orphanReport.vulnerabilities as Record<string, unknown>).orphan = {
+    name: 'orphan',
+    severity: 'high',
+    via: ['missing-root'],
+  }
+  const rejectedOrphan = inspectAuditReports(cleanReport, orphanReport)
+  expect(rejectedOrphan.ok).toBe(false)
+  expect(rejectedOrphan.errors.join('\n')).toContain('存在未归因于受控公告的依赖告警：orphan')
 })

@@ -24,12 +24,18 @@ export function applyTemplatePlacements(
   let messages=assembled.messages.map(message=>({...message}))
   let provenance=assembled.messageProvenance.map(origin=>({...origin}))
   const layout={...assembled.layout,entries:assembled.layout.entries.map(entry=>({...entry,sourceKeys:[...entry.sourceKeys]}))}
+  // 仅把调用前已存在的 history-relative 条目视为 GENERATE 钩子；
+  // 同位置多条 @INJECT 不能把前一条刚插入的 template-insert 误认成既有钩子而逆序插到前面。
+  const existingHistoryHooks = new Set(
+    layout.entries.filter(entry => entry.placement.kind === 'history-relative').map(entry => entry.key),
+  )
   let insertionId=0
   const boundary=(origin:PromptMessageProvenance|undefined,side:'before'|'after'):PromptLayoutPlacement=> {
     if(origin?.kind==='layout') return {kind:'entry-relative',entryKey:origin.entryKey,side}
     if(origin?.kind==='history') {
       // GENERATE 的前后片段属于同一条模拟消息，INSERT 必须落在整条消息的外侧。
-      const hooks=layout.entries.filter(entry=>entry.placement.kind==='history-relative'
+      const hooks=layout.entries.filter(entry=>existingHistoryHooks.has(entry.key)
+        && entry.placement.kind==='history-relative'
         && entry.placement.anchor.inputIndex===origin.anchor.inputIndex && entry.placement.side===side)
       const outer=side==='before'?hooks[0]:hooks.at(-1)
       return outer ? {kind:'entry-relative',entryKey:outer.key,side} : {kind:'history-relative',anchor:{...origin.anchor},side}
@@ -121,7 +127,7 @@ export function applyTemplatePlacements(
           entry.content=placement.at==='before'?[text,entry.content].filter(Boolean).join('\n'):[entry.content,text].filter(Boolean).join('\n')
           entry.turnLocal=true
           entry.sourceKeys.push(item.entry.key)
-        } else addLayout(item,text,index,placement.at)
+        } else existingHistoryHooks.add(addLayout(item,text,index,placement.at))
       }
       message.content=placement.at==='before' ? [text,message.content].filter(Boolean).join('\n') : [message.content,text].filter(Boolean).join('\n')
     }

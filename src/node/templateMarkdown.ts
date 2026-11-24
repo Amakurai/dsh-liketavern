@@ -192,20 +192,32 @@ export function createMessageFormatter(): (text: string) => string {
     const previousMark = state.bMarks[startLine]!
     const previousShift = state.tShift[startLine]!
     const previousCount = state.sCount[startLine]!
+    const previousBsCount = state.bsCount[startLine]!
     if (state.parentType === 'list' && last?.type === 'list_item_open'
       && (last.markup === '.' || last.markup === ')') && state.blkIndent > state.listIndent + 2) {
       state.blkIndent = state.listIndent + 2
-      // 标记跨多位数字时，首行的虚拟起点同步前移；否则 getLines 会把标记尾部混入正文。
+      // 标记跨多位数字或后接制表符时，按列宽前移首行虚拟起点且不得越过正文起点，同时同步 bsCount 保持后续制表位对齐。
       const delta = previousIndent - state.blkIndent
-      state.bMarks[startLine] = previousMark + delta
-      state.tShift[startLine] = previousShift - delta
+      let pos = previousMark
+      let col = 0
+      const limit = previousMark + previousShift
+      while (pos < limit && col < delta) {
+        const ch = state.src.charCodeAt(pos)
+        if (ch === 0x09) col += 4 - ((col + previousBsCount) % 4)
+        else col += 1
+        pos++
+      }
+      state.bMarks[startLine] = pos
+      state.tShift[startLine] = limit - pos
       state.sCount[startLine] = previousCount - delta
+      state.bsCount[startLine] = previousBsCount + col
     }
     try { tokenizeBlocks(state, startLine, endLine) } finally {
       state.blkIndent = previousIndent
       state.bMarks[startLine] = previousMark
       state.tShift[startLine] = previousShift
       state.sCount[startLine] = previousCount
+      state.bsCount[startLine] = previousBsCount
     }
   }
   markdown.block.ruler.before('reference', 'tavern_image_reference_dimensions',

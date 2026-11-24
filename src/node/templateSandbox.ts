@@ -106,24 +106,41 @@ const PROTOCOL_ENTRIES = ['__conditionState','__export','__exportMessageVariable
   '__applyTemporaryRegex','__applyTemporaryRegexSources','__runTemporaryRegexSources','__runBasicRegexSourcesBatch','__regexDescriptors','__hasMessageRegex',
   '__templateRegexRuleCount','__templateRegexStageSize','__prepareTemplateBasicRegex','__clearTemplateBasicRegex','__activationRequests','__formatTemplateMessage',
   '__continueTemplateGeneration','__resumeTemplateReply','__beginTemplateGeneration','__finishTemplateGeneration','__hasLiveTemplateClosures',
-  '__deactivateTemplateRegex','__deactivateTemplatePromptInjection','__sourceData','__bindTemplateDefinitions','__setPreparing'] as const
+  '__deactivateTemplateRegex','__deactivateTemplatePromptInjection','__sourceData','__bindTemplateDefinitions','__setPreparing','__conditionState'] as const
 const HARDEN_PROTOCOL = `(()=>{for(const name of ${JSON.stringify(PROTOCOL_ENTRIES)}){try{
 const value=globalThis[name];if(typeof value!=='function')continue;
 Object.defineProperty(globalThis,name,{value,writable:false,configurable:false})}catch{}}return undefined})()`
 /**
- * @@if 状态的 toJSON 检查：每次新求值，只用 typeof、属性读取、for-in 与局部函数，不调用任何全局或原型方法，
- * 模板替换 Object/JSON/Array 也不能让它漏检。一次调用走完整棵状态，代替逐节点句柄往返；
- * 循环已由先行的 dump 拒绝，节点与深度上限沿用原口径。返回 0 通过、1 过大、2 含 toJSON。
+ * @@if 状态的单趟纯语法快照：每次新求值，只用 typeof、属性读取、for-in 与局部函数，
+ * 不调用任何全局或原型方法（含 Object/JSON/Array/toJSON），并直接输出规范化字符串，
+ * 避免“先检 toJSON 再 vm.dump 二次读取”的 TOCTOU 绕过。返回字符串表示快照，
+ * 返回数字 1 过大、2 含自定义 toJSON、3 不可序列化或存在循环引用。
  */
-const CONDITION_STATE_CHECK = `(state)=>{let nodes=200000;
+const CONDITION_STATE_SNAPSHOT = `(state)=>{let nodes=200000;const seen=[];
+const esc=(s)=>{let out='"';for(let i=0;i<s.length;i++){const c=s[i];if(c==='"'||c==='\\\\')out+='\\\\'+c;else if(c==='\\n')out+='\\\\n';else if(c==='\\r')out+='\\\\r';else if(c==='\\t')out+='\\\\t';else out+=c}return out+'"'};
 const visit=(value,depth)=>{
-if(value===null||typeof value==='string'||typeof value==='boolean')return 0;
-if(typeof value==='number')return value===value&&value!==1/0&&value!==-1/0?0:3;
-if(typeof value!=='object')return 3;
+if(value===null)return 'null';
+const t=typeof value;
+if(t==='boolean')return value?'true':'false';
+if(t==='number')return value===value&&value!==1/0&&value!==-1/0?(value===0?'0':''+value):3;
+if(t==='string')return esc(value);
+if(t!=='object')return 3;
 if(--nodes<0||depth>256)return 1;
+for(let i=0;i<seen.length;i++)if(seen[i]===value)return 3;
 if(typeof value.toJSON==='function')return 2;
-for(const key in value){const found=visit(value[key],depth+1);if(found)return found}
-return 0};
+seen[seen.length]=value;
+let out=typeof value.length==='number'?'L'+value.length+'{':'{';
+let first=true;
+for(const key in value){
+const entry=visit(value[key],depth+1);
+if(typeof entry!=='string'){seen.length--;return entry}
+if(!first)out+=',';
+first=false;
+out+=esc(key)+':'+entry;
+if(out.length>16*1024*1024){seen.length--;return 1}
+}
+seen.length--;
+return out+'}'};
 return visit(state,0)}`
 
 export class TemplateSandbox {
@@ -501,9 +518,8 @@ export class TemplateSandbox {
   private hardenProtocol():void { this.evaluate(HARDEN_PROTOCOL) }
 
   /**
-   * 宿主侧直接读取内部状态并在主线程比较：不再经过模板可命名的 __conditionState，
-   * 也不使用 VM 内可被补丁的 JSON.stringify。vm.dump 走 JSON 语义会调用对象的 toJSON，
-   * 模板可借此让快照恒定；因此 dump 后用新求值的纯语法检查遍历同一状态，带 toJSON 的状态直接拒绝。
+   * 宿主侧直接单趟序列化内部状态并在主线程比较：不再经过模板可命名的 __conditionState，
+   * 也不调用 vm.dump / JSON.stringify / toJSON，彻底消除“先检后 dump”的二次读取窗口。
    */
   private conditionState():string {
     // 读取属性会触发 getter/Proxy 等模板代码；与 evaluate 一致失效阶段缓存。
@@ -514,34 +530,26 @@ export class TemplateSandbox {
       throw new Error(`@@if 条件状态读取失败：${JSON.stringify(error)}`)
     }
     try {
-      this.assertPlainState(object.value)
-      let dumped:unknown
-      try { dumped=this.vm.dump(object.value) }
-      catch(error) { throw new Error(`@@if 条件状态读取失败：${error instanceof Error?error.message:String(error)}`) }
-      try { return JSON.stringify(dumped) }
-      catch { throw new Error('@@if 条件状态不可序列化，拒绝求值') }
-    } finally { if (object.value.alive) object.value.dispose() }
-  }
-
-  /** 状态里的对象节点必须没有 toJSON（含原型链）或非 JSON 值，dump 的键集合才是真实的可枚举属性。 */
-  private assertPlainState(state:QuickJSHandle):void {
-    const check=this.vm.evalCode(CONDITION_STATE_CHECK)
-    if(check.error) {
-      const error:unknown=this.dumpAndDispose(check.error)
-      throw new Error(`@@if 条件状态读取失败：${JSON.stringify(error)}`)
-    }
-    try {
-      const result=this.vm.callFunction(check.value,this.vm.undefined,state)
-      if(result.error) {
-        const error:unknown=this.dumpAndDispose(result.error)
+      const snapshotFn=this.vm.evalCode(CONDITION_STATE_SNAPSHOT)
+      if(snapshotFn.error) {
+        const error:unknown=this.dumpAndDispose(snapshotFn.error)
         throw new Error(`@@if 条件状态读取失败：${JSON.stringify(error)}`)
       }
-      const code=this.vm.getNumber(result.value)
-      result.value.dispose()
-      if(code===1) throw new Error('@@if 条件状态过大，拒绝求值')
-      if(code===3) throw new Error('@@if 条件状态不可序列化，拒绝求值')
-      if(code!==0) throw new Error('@@if 条件状态含自定义 toJSON，拒绝求值')
-    } finally { if (check.value.alive) check.value.dispose() }
+      try {
+        const result=this.vm.callFunction(snapshotFn.value,this.vm.undefined,object.value)
+        if(result.error) {
+          const error:unknown=this.dumpAndDispose(result.error)
+          throw new Error(`@@if 条件状态读取失败：${JSON.stringify(error)}`)
+        }
+        try {
+          if(this.vm.typeof(result.value)==='string') return this.vm.getString(result.value)
+          const code=this.vm.getNumber(result.value)
+          if(code===1) throw new Error('@@if 条件状态过大，拒绝求值')
+          if(code===3) throw new Error('@@if 条件状态不可序列化，拒绝求值')
+          throw new Error('@@if 条件状态含自定义 toJSON，拒绝求值')
+        } finally { if (result.value.alive) result.value.dispose() }
+      } finally { if (snapshotFn.value.alive) snapshotFn.value.dispose() }
+    } finally { if (object.value.alive) object.value.dispose() }
   }
 
   private growResources(inputChars:number):void {

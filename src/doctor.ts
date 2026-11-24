@@ -17,6 +17,8 @@ import { dshHomeDisplay, resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 import { isRecord } from './core/guards.js'
 import { hostVersionSatisfies, manifestHostRange, safeHostRange } from './core/hostVersion.js'
 import { MAX_STORED_CARD_JSON_BYTES } from './state/card.js'
+import { CHAT_WORLDBOOK_TOTAL_BYTES } from './state/chatWorldbooks.js'
+import { TEMPLATE_DOCUMENT_LIMIT } from './state/templateStorage.js'
 import { CHARACTER_ARCHIVE_FILE, isValidCardId } from './state/workspace.js'
 import { storyRoot } from './state/story.js'
 import { WAL_COVERAGE_PATH, WAL_FLOOR_MARKERS } from './state/wal.js'
@@ -29,6 +31,7 @@ import { tavernPaths } from './node/paths.js'
 
 const REQUIRED_NODE_MAJOR = 24
 const MAX_JSON_BYTES = 16 * 1024 * 1024
+const MAX_CHAT_WORLDBOOK_JSON_BYTES = Math.floor(CHAT_WORLDBOOK_TOTAL_BYTES * 2.5)
 const MAX_WAL_BYTES = 128 * 1024 * 1024
 /**
  * 累计读取预算只限制扫描耗时，单文件内存仍由各自上限约束。card.json 上限为 128 MiB，
@@ -649,7 +652,7 @@ async function inspectCharacters(
       stats.characters.uninspected += 1
       continue
     }
-    let healthy = card.status === 'ok' && isRecord(card.value)
+    let healthy = card.status === 'ok' && isRecord(card.value) && typeof card.value.name === 'string' && card.value.name.length > 0
     if (!healthy) issues.add(card.status === 'oversized' ? 'CHARACTER_METADATA_TOO_LARGE' : 'CHARACTER_METADATA_INVALID', 'error')
 
     const archive = await readBoundedJson(`${cardRoot}/${CHARACTER_ARCHIVE_FILE}`, 64 * 1024, budget, inspectedJson)
@@ -674,6 +677,23 @@ async function inspectCharacters(
     await inspectWalRoot(`${cardRoot}/state/wal`, stats.wal, issues, budget, scanBudget, inspectedJson, verifiedDirs)
     await inspectStories(cardRoot, stats, issues, budget, scanBudget, inspectedJson, verifiedDirs)
   }
+}
+
+/** 特定剧情/角色大文件与运行时各自的持久化上限对齐，避免合法大快照在诊断与离线备份时误报超限。 */
+function jsonLimitForDataFile(dataRoot: string, filePath: string): number {
+  const rel = relative(resolve(dataRoot), resolve(filePath)).replace(/\\/g, '/')
+  const match = /^characters\/([^/]+)\/(?:stories\/([^/]+)\/)?(.+)$/.exec(rel)
+  if (!match || !isValidCardId(match[1]!)) return MAX_JSON_BYTES
+  const storyId = match[2]
+  if (storyId !== undefined && !/^(?:story-[a-f0-9-]{36}|legacy-[a-f0-9]{32})$/.test(storyId)) return MAX_JSON_BYTES
+  const sub = match[3]!
+  if (sub === 'state/template.json' || /^state\/template-generation\/[^/]+\.json$/.test(sub)) {
+    return TEMPLATE_DOCUMENT_LIMIT
+  }
+  if (sub === 'assets/chat-lorebook.json') {
+    return MAX_CHAT_WORLDBOOK_JSON_BYTES
+  }
+  return MAX_JSON_BYTES
 }
 
 /** 统计普通文件并只对 .json 做语法检查；不跟随任何链接，也不输出文件名。 */
@@ -715,7 +735,7 @@ async function inspectFiles(
         if (entry.name.toLowerCase().endsWith('.json')) {
           stats.json += 1
           const cached = inspectedCards.get(resolve(child))
-          const json = cached !== undefined ? { status: cached } : await readBoundedJson(child, MAX_JSON_BYTES, budget)
+          const json = cached !== undefined ? { status: cached } : await readBoundedJson(child, jsonLimitForDataFile(root, child), budget)
           if (json.status === 'oversized') stats.oversizedJson += 1
           else if (json.status === 'invalid') stats.invalidJson += 1
           else if (json.status === 'budget') {

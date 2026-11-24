@@ -45,6 +45,7 @@ import { PRESET_ADAPTER_PROVIDER, PRESET_ADAPTER_SOURCE_PROVIDER } from './prese
 import { sessionModelRoute } from './modelRoute.js'
 import { forkedSessionParents, installSessionForkTracking, resolveLegacyForkParent } from './sessionArchiveSnapshot.js'
 import { readHostForkIdentity, writeHostForkIdentity } from './hostForkIdentity.js'
+import { assertHelperMvuContinuable } from './helperMvu.js'
 import { assertWalLineageComplete } from './sessionArchiveWal.js'
 import type { TavernState } from './state.js'
 
@@ -591,7 +592,7 @@ export async function adoptHostFork({ ctx, state }: FloorDeps, child: Session): 
   if (child.header.isSeeded !== true || depth > 0 || pluginForkIds.has(child.id)) return false
   // 已发布的独立子剧情不依赖旧来源；残留接管记录的清理不能要求原剧情仍可读。
   const childRead = await withWorkspaceLock(state.paths.sessions, async () => {
-    const read = await state.loadBindingUnwaited(child.id, true).then(binding => ({ binding }), (error: unknown) => ({ error }))
+    const read = await state.loadBindingUnwaited(child.id, true, 'preserve').then(binding => ({ binding }), (error: unknown) => ({ error }))
     if ('binding' in read && read.binding) {
       await deleteHostForkAdoption(state.paths, child.id).catch(error => ctx.logger.warn(`dsh-tavern: 已绑定分支接管记录待清理：${String(error)}`))
       discardHostForkAdoptionPlan(state, child.id)
@@ -720,7 +721,7 @@ export async function adoptHostFork({ ctx, state }: FloorDeps, child: Session): 
   return withWorkspaceLock(state.paths.sessions, async () => {
   try {
     // 准备期间若已有其它路径为子会话落了绑定，以它为准，丢弃本次草稿。
-    if (await state.loadBindingUnwaited(child.id, true)) {
+    if (await state.loadBindingUnwaited(child.id, true, 'preserve')) {
       await state.discardUnboundStory(binding.cardId, storyId, child.id)
       await deleteHostForkAdoption(state.paths, child.id)
       plans.delete(child.id)
@@ -789,7 +790,7 @@ export async function regenerate({ ctx, state }: FloorDeps, sessionId: string, m
     if (liveSession(ctx, sessionId) !== source || source.seq !== revision) throw new FloorError('history-changed', '对话已改变，请刷新后再重新生成')
     if (closedTurns(source.snapshotEvents()).openTurn !== null || state.openFloors?.has(sessionId)) throw new FloorError('turn-open', '生成仍在进行中，请等待完成后再重新生成')
   }
-  const loadedBinding = await state.loadBinding(sessionId)
+  const loadedBinding = await state.loadStoryBinding(sessionId)
   const binding = loadedBinding ? await inferLiveWalLineage(ctx, state, source, loadedBinding) : null
   if (!binding) throw new FloorError('no-binding', '当前会话未绑定 Tavern 角色卡')
   assertSource()
@@ -822,7 +823,7 @@ export async function rollbackToFloor({ ctx, state }: FloorDeps, sessionId: stri
     if (liveSession(ctx, sessionId) !== source || source.seq !== revision) throw new FloorError('history-changed', '对话已改变，请刷新后再回退')
     if (closedTurns(source.snapshotEvents()).openTurn !== null || state.openFloors?.has(sessionId)) throw new FloorError('turn-open', '生成仍在进行中')
   }
-  const loadedBinding = await state.loadBinding(sessionId)
+  const loadedBinding = await state.loadStoryBinding(sessionId)
   const binding = loadedBinding ? await inferLiveWalLineage(ctx, state, source, loadedBinding) : null
   if (!binding) throw new FloorError('no-binding', '当前会话未绑定 Tavern 角色卡')
   assertSource()
@@ -875,7 +876,7 @@ export async function editUserMessage(
     if (liveSession(ctx, sessionId) !== source || source.seq !== revision) throw new FloorError('history-changed', '对话已改变，请刷新后再编辑')
     if (closedTurns(source.snapshotEvents()).openTurn !== null || state.openFloors?.has(sessionId)) throw new FloorError('turn-open', '生成仍在进行中')
   }
-  const loadedBinding = await state.loadBinding(sessionId)
+  const loadedBinding = await state.loadStoryBinding(sessionId)
   const binding = loadedBinding ? await inferLiveWalLineage(ctx, state, source, loadedBinding) : null
   if (!binding) throw new FloorError('no-binding', '当前会话未绑定 Tavern 角色卡')
   assertSource()
@@ -962,7 +963,7 @@ export async function editAssistantMessage(
     if (liveSession(ctx, sessionId) !== source || source.seq !== revision) throw new FloorError('history-changed', '对话已改变，请刷新后再编辑')
     if (closedTurns(source.snapshotEvents()).openTurn !== null || state.openFloors?.has(sessionId)) throw new FloorError('turn-open', '生成仍在进行中')
   }
-  const loadedBinding = await state.loadBinding(sessionId)
+  const loadedBinding = await state.loadStoryBinding(sessionId)
   const binding = loadedBinding ? await inferLiveWalLineage(ctx, state, source, loadedBinding) : null
   if (!binding) throw new FloorError('no-binding', '当前会话未绑定 Tavern 角色卡')
   assertSource()
@@ -994,9 +995,17 @@ export async function continueFloor(
   if (hit && isTavernGreetingEvent(hit)) throw new FloorError('greeting-floor', '开场白楼层不支持续写')
   const last = turns.at(-1)
   if (last === undefined || turn !== last) throw new FloorError('not-last-floor', '只能续写最后一层回复')
-  const binding = await state.loadBinding(sessionId)
+  const binding = await state.loadStoryBinding(sessionId)
   if (!binding) throw new FloorError('no-binding', '当前会话未绑定 Tavern 角色卡')
   // 读取绑定期间可能已接入新用户轮或重建会话；旧回复的续写不能排队去续另一条回复。
+  if (liveSession(ctx, sessionId) !== source || source.seq !== revision) {
+    throw new FloorError('history-changed', '对话已改变，请刷新后再续写')
+  }
+  try {
+    await assertHelperMvuContinuable(state, sessionId, events, binding)
+  } catch (error) {
+    throw new FloorError('invalid-continuation', error instanceof Error ? error.message : String(error))
+  }
   if (liveSession(ctx, sessionId) !== source || source.seq !== revision) {
     throw new FloorError('history-changed', '对话已改变，请刷新后再续写')
   }
@@ -1319,12 +1328,12 @@ export async function swipeGreeting({ ctx, state }: FloorDeps, sessionId: string
   }
   const verifySource = async (): Promise<void> => { assertSource() }
   assertSource()
-  const initial = await state.loadBinding(sessionId)
+  const initial = await state.loadBinding(sessionId, false, 'preserve')
   if (!initial) throw new FloorError('no-binding', '当前会话未绑定 Tavern 角色卡')
   const ws=await state.storyWorkspace(initial.cardId,initial.storyId)
   return withWorkspaceLock(ws.fs.root,()=>withWorkspaceLock(state.paths.sessions,async()=>{
   assertSource()
-  const binding=await state.loadBindingUnwaited(sessionId,true)
+  const binding=await state.loadBindingUnwaited(sessionId,true,'preserve')
   if(!binding||binding.cardId!==initial.cardId||binding.storyId!==initial.storyId)throw new FloorError('binding-changed','开场白剧情绑定已改变')
   assertSource()
   const variants = await greetingVariants(state, binding.cardId)
@@ -1351,7 +1360,7 @@ export async function forkEditedHistory(deps:FloorDeps,sessionId:string,storyId:
   if(!source)throw new FloorError('session-not-live','消息编辑需要当前会话在线')
   requireTavernSession(ctx,source)
   if(closedTurns(source.snapshotEvents()).openTurn!==null||state.openFloors?.has(sessionId))throw new FloorError('turn-open','生成期间不能编辑聊天消息')
-  const loaded=await state.loadBinding(sessionId)
+  const loaded=await state.loadStoryBinding(sessionId,{strictRead:true,waitForAdoption:false})
   if(!loaded||loaded.storyId!==storyId)throw new FloorError('binding-changed','剧情绑定已改变')
   const binding=await inferLiveWalLineage(ctx,state,source,loaded)
   const childSessionId=await forkAt(ctx,state,source,binding,source.snapshotEvents().length-1,{seedOverride:seed,forkTurn:fromTurn,rollbackFromTurn:fromTurn,verifySource:verify,prepareEdits,beforePublish})

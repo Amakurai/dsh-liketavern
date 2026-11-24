@@ -4,8 +4,8 @@
 
 **SillyTavern roleplay on the native DeepSeek Harness Agent runtime**
 
-[![Release](https://img.shields.io/badge/version-v0.5.11-blue.svg)](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.5.11)
-[![dsh](https://img.shields.io/badge/dsh-0.2.1--rc.5%20%7C%200.2.2--rc.1-informational.svg)](https://deepseek-harness.github.io/deepseek-harness/)
+[![Release](https://img.shields.io/badge/version-v0.5.12-blue.svg)](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.5.12)
+[![dsh](https://img.shields.io/badge/dsh-0.2.1--rc.5%20%7C%200.2.2--rc.3-informational.svg)](https://deepseek-harness.github.io/deepseek-harness/)
 [![Node.js](https://img.shields.io/badge/node-%E2%89%A524-brightgreen.svg)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
@@ -42,21 +42,21 @@ Regex rules, prompt templates, and HTML card scripts bundled inside third-party 
 
 ## Installation & Upgrade
 
-> **Prerequisites**: Node.js `>= 24.0.0`, DeepSeek Harness, `pnpm`, and at least one configured model in `dsh`. The current development baseline is `0.2.2-rc.1`. The `*` declarations for `engines.dsh` and host peers only prevent version-number rejection; they do not guarantee interface compatibility with every host. See the [host compatibility record](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/HOST_COMPATIBILITY.md) for tested versions and limitations. If you are new to `dsh`, see the [DeepSeek Harness Documentation](https://deepseek-harness.github.io/deepseek-harness/) first. Precompiled `lib/` bundles are committed to the repository, so no local build is required during installation.
+> **Prerequisites**: Node.js `>= 24.0.0`, DeepSeek Harness, `pnpm`, and at least one configured model in `dsh`. The current development baseline is `0.2.2-rc.3`. The `*` declarations for `engines.dsh` and host peers only prevent version-number rejection; they do not guarantee interface compatibility with every host. See the [host compatibility record](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/HOST_COMPATIBILITY.md) for tested versions and limitations. If you are new to `dsh`, see the [DeepSeek Harness Documentation](https://deepseek-harness.github.io/deepseek-harness/) first. Precompiled `lib/` bundles are committed to the repository, so no local build is required during installation.
 
 ### Desktop Installation
 
 Open **Plugins → Add plugin** in the `dsh` desktop app, enter the following repository tag URL, and restart the app once installed:
 
 ```text
-https://github.com/Amakurai/dsh-liketavern.git#v0.5.11
+https://github.com/Amakurai/dsh-liketavern.git#v0.5.12
 ```
 
 ### Web / CLI Online Installation
 
 ```bash
 # Install the plugin into the web profile
-dsh plugin --profile web add github:Amakurai/dsh-liketavern#v0.5.11
+dsh plugin --profile web add github:Amakurai/dsh-liketavern#v0.5.12
 
 # Verify installation
 dsh plugin --profile web list --depth 0
@@ -69,10 +69,10 @@ On the tested `0.2.0-rc.1` and `0.2.2-alpha.2` hosts, pnpm may warn that the iso
 
 ### Offline Release Tarball Installation
 
-Download `dsh-liketavern-0.5.11.tgz` from the [v0.5.11 Release](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.5.11) (verify against `SHA256SUMS.txt` if desired) and run:
+Download `dsh-liketavern-0.5.12.tgz` from the [v0.5.12 Release](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.5.12) (verify against `SHA256SUMS.txt` if desired) and run:
 
 ```bash
-dsh plugin --profile web add ./dsh-liketavern-0.5.11.tgz
+dsh plugin --profile web add ./dsh-liketavern-0.5.12.tgz
 dsh web
 ```
 
@@ -82,7 +82,7 @@ dsh web
 - **Desktop Upgrade**: Check [CHANGELOG.md](./CHANGELOG.md) and back up your data. Choose **Update to… → Copy install address** in About, use that version tag address in **Plugins → Add plugin**, then **fully quit and restart the desktop app**. The host plugin manager performs the installation.
 - **Web / CLI Upgrade**: Run `dsh plugin --profile web add` with the new version tag and restart `dsh web`. Existing data directories are preserved automatically.
 
-The native version list and update action in dsh `0.2.2-rc.1` support registry sources. This project uses Git tags and Releases; an old pinned tag does not move to a new tag automatically, so About provides a separate GitHub release check and an explicit new install address. **The checker in v0.5.9 and earlier only recognizes exact host peers and cannot parse the new open range. For the first upgrade, install once using the v0.5.11 address above.** New releases show installation requirements separately from actual verification coverage; meeting a version requirement does not establish that every feature was tested on that host.
+The native version list in dsh `0.2.2-rc.3` reads registry sources. Its update action also supports Git installations pinned to a full commit: the target must pin another full commit in the same repository directory and declare a newer package version. This project uses Git tags and Releases; upgrading a pinned tag still requires explicitly selecting the new tag, so About provides a separate GitHub release check and an explicit new install address. **The checker in v0.5.9 and earlier only recognizes exact host peers and cannot parse the new open range. For the first upgrade, install once using the v0.5.12 address above.** New releases show installation requirements separately from actual verification coverage; meeting a version requirement does not establish that every feature was tested on that host.
 
 ---
 

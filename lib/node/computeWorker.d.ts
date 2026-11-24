@@ -41,6 +41,7 @@ export interface ComputeJobs {
             text: string;
             rules: Parameters<typeof applyRegexRules>[1];
             macroCtx: SerializableMacros;
+            depth?: number;
         };
         output: ReturnType<typeof applyRegexRules>;
     };
@@ -65,6 +66,7 @@ export interface ComputeJobs {
             parts: TemplateDisplayPart[];
             rules: Parameters<typeof applyRegexRules>[1];
             macroCtx: SerializableMacros;
+            depth?: number;
         };
         output: ReturnType<typeof presentTemplateDisplayResult>;
     };
@@ -75,9 +77,11 @@ export interface ComputeJobs {
             items: Array<{
                 kind: 'render';
                 text: string;
+                depth?: number;
             } | {
                 kind: 'display';
                 parts: TemplateDisplayPart[];
+                depth?: number;
             }>;
         };
         output: Array<{

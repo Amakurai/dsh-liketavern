@@ -20,8 +20,9 @@ function cachedPrettyDataJson(data:object):string {
   return cached
 }
 export function HelperScriptEditor(props:ScriptEditorProps) {
-  return <PersistentEditor remote={props.remote} scope={draftScope(libraryTarget(props.library))}>
-    <HelperScriptEditorBody {...props}/>
+  const scope=draftScope(libraryTarget(props.library))
+  return <PersistentEditor remote={props.remote} scope={scope}>
+    <HelperScriptEditorBody key={scope} {...props}/>
   </PersistentEditor>
 }
 export function HelperScriptEditorBody(props:ScriptEditorProps) {
@@ -37,6 +38,15 @@ export function HelperScriptEditorBody(props:ScriptEditorProps) {
   const [baseline,setBaseline]=useDraftState(`${scope}:baseline`,JSON.stringify(props.library.trees))
   const [dataTexts,setDataTexts]=useDraftState<Record<string,string>>(`${scope}:data`,{})
   const [selected,setSelected]=useState<string|null>(props.library.trees[0]?.id??null),[error,setError]=useState<string|null>(null),[busy,setBusy]=useState(false),[removing,setRemoving]=useState(false)
+  const [activeScope,setActiveScope]=useState(scope)
+  if(activeScope!==scope){
+    setActiveScope(scope)
+    setQuery('')
+    setSection('code')
+    setError(null)
+    setRemoving(false)
+    setSelected(trees[0]?.id??null)
+  }
   const {flat,scriptById}=useMemo(()=>{
     const items:HelperScriptTree[]=[]
     const scripts=new Map<string,HelperScript>()

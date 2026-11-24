@@ -13,13 +13,14 @@
 import { createHash } from 'node:crypto'
 import { Buffer } from 'node:buffer'
 import type { Dirent } from 'node:fs'
-import { mkdir, readFile, readdir, rm, stat } from 'node:fs/promises'
+import { lstat, mkdir, readFile, readdir, rm, stat } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { atomicWrite } from './atomicWrite.js'
+import { rootIdentity } from './pathIdentity.js'
 import { renameWithRetry } from './rename.js'
 import { withWorkspaceLock } from './workspaceLock.js'
 import { expandAffectedMemories } from './memoryRollback.js'
-import { hasRecoveryMarker, mapBounded, WAL_RECOVERY_PATH, withRecoveryWriteAccess, WorkspaceFs, WORKSPACE_RECOVERING_MESSAGE } from './workspaceFs.js'
+import { mapBounded, WAL_RECOVERY_PATH, withRecoveryWriteAccess, WorkspaceFs, WORKSPACE_RECOVERING_MESSAGE } from './workspaceFs.js'
 import { rebuildIndex } from './workspace.js'
 import { estimateTokens } from '../core/tokenize.js'
 import { readTemplateDocument, TEMPLATE_DATA_PATH } from './templateStorage.js'
@@ -58,6 +59,8 @@ interface FloorMeta {
   startedAt: string
   committed: boolean
   committedAt?: string
+  /** 已提交楼层经 reopenFloor 重新打开（如酒馆助手二次写入中断重试），区分于从未收口的宿主事务。 */
+  reopened?: boolean
   /** 回滚时刻（prune 以此为据判断过期）。 */
   rolledBackAt?: string
   /** 与楼层写入不同的后续修订被保留，供检查回滚结果。 */
@@ -70,6 +73,7 @@ export interface WalFloorInfo {
   committed: boolean
   startedAt: string
   rolledBack: boolean
+  reopened?: boolean
 }
 
 /** rollbackAfter() 返回形状。 */
@@ -169,14 +173,61 @@ function isNoopRecord(rec: RecordLine): boolean {
   return snapshotBytes(rec, 'before') === snapshotBytes(rec, 'after')
 }
 
+/** 同一 WAL 根目录下跨实例共享的楼层元数据与清单变更序号，避免等长 ISO 时间戳在同一 mtime 刻度内命中陈旧缓存。 */
+interface SharedWalState {
+  epoch: number
+  counter: number
+  coverageEpoch: number
+  readonly dirs: Map<string, number>
+}
+
+const MAX_SHARED_WAL_ROOTS = 256
+const MAX_SHARED_WAL_DIRS = 2048
+const sharedWalStates = new Map<string, SharedWalState>()
+let nextSharedWalEpoch = 1
+let nextSharedWalCoverageEpoch = 1
+
+function getSharedWalState(rootDir: string): SharedWalState {
+  const key = rootIdentity(rootDir)
+  let state = sharedWalStates.get(key)
+  if (state) {
+    sharedWalStates.delete(key)
+  } else {
+    state = { epoch: nextSharedWalEpoch++, counter: 0, coverageEpoch: nextSharedWalCoverageEpoch++, dirs: new Map() }
+  }
+  sharedWalStates.set(key, state)
+  if (sharedWalStates.size > MAX_SHARED_WAL_ROOTS) {
+    sharedWalStates.delete(sharedWalStates.keys().next().value!)
+  }
+  return state
+}
+
+function noteWalDirMutation(rootDir: string, dir: string): SharedWalState {
+  const state = getSharedWalState(rootDir)
+  if (state.dirs.size >= MAX_SHARED_WAL_DIRS) {
+    state.epoch = nextSharedWalEpoch++
+    state.dirs.clear()
+  }
+  state.dirs.set(rootIdentity(dir), ++state.counter)
+  return state
+}
+
 export class Wal {
   private readonly rootDir: string
   private readonly logFs: WorkspaceFs
   private readonly hasCoverage: boolean
-  /** 最近一次确认已登记的楼层身份。 */
-  private covered: string | undefined
-  /** 楼层元数据缓存（含归档回滚副本与已提交活跃楼层），按 meta.json 的 mtimeMs/size 复核。 */
-  private readonly metaCache = new Map<string, { mtimeMs: number; size: number; meta: FloorMeta }>()
+  /** 最近一次确认已登记的楼层身份（绑定共享 coverageEpoch，跨实例修改清单后自动重验）。 */
+  private covered: { epoch: number; identity: string } | undefined
+  /** 楼层元数据缓存（含归档回滚副本与已提交活跃楼层），按 meta.json 的磁盘指纹与跨实例写入序号复核。 */
+  private readonly metaCache = new Map<string, {
+    epoch: number
+    revision: number
+    mtimeMs: number
+    ctimeMs: number | undefined
+    size: number
+    ino: number | undefined
+    meta: FloorMeta
+  }>()
   /** 同层 records.jsonl 原文绑定缓存：命中前提必须是磁盘读出的全文完全相等。 */
   private readonly recordsCache = new Map<string, { rawText: string; records: readonly RecordLine[] }>()
 
@@ -210,6 +261,7 @@ export class Wal {
   private async writeCoverageFloors(floors:Array<Pick<WalFloorInfo,'floor'|'startedAt'>>):Promise<void> {
     if(!this.hasCoverage) return
     this.covered=undefined
+    getSharedWalState(this.rootDir).coverageEpoch = nextSharedWalCoverageEpoch++
     const raw=JSON.stringify({version:1,floors:[...floors].sort((a,b)=>a.floor.localeCompare(b.floor))})
     if(Buffer.byteLength(raw)>MAX_WAL_COVERAGE_BYTES) throw new Error('WAL 楼层清单超过上限')
     const path=join(this.logFs.root,WAL_COVERAGE_PATH)
@@ -222,7 +274,8 @@ export class Wal {
     if(!this.hasCoverage) return
     // 同一楼层连续写入只核对一次；楼层身份含开始时间，重生成的同名楼层会重新登记。
     const identity=JSON.stringify([meta.floor,meta.startedAt])
-    if(this.covered===identity) return
+    const shared=getSharedWalState(this.rootDir)
+    if(this.covered?.epoch===shared.coverageEpoch && this.covered.identity===identity) return
     const coverage=knownCoverage!==undefined ? knownCoverage : await this.readCoverage()
     if(!coverage?.some(floor=>floor.floor===meta.floor && floor.startedAt===meta.startedAt)) {
       // 旧剧情首次登记才完整列举。已有清单只追加或替换本层，其它楼层的登记原样保留：
@@ -230,7 +283,7 @@ export class Wal {
       if(coverage===null) await this.writeCoverage(await this.doListFloors())
       else await this.writeCoverageFloors([...coverage.filter(floor=>floor.floor!==meta.floor),{floor:meta.floor,startedAt:meta.startedAt}])
     }
-    this.covered=identity
+    this.covered={epoch:getSharedWalState(this.rootDir).coverageEpoch,identity}
   }
 
   /**
@@ -331,9 +384,13 @@ export class Wal {
         beforeEncoding: change.beforeEncoding,
         afterEncoding: change.afterEncoding,
       }))
+      for (const rec of appended) {
+        const issue = recordLineIssue(rec, rec.seq)
+        if (issue) throw new Error(`${RECORD_ISSUE_MESSAGE[issue]}：${dir}`)
+      }
       const lines = appended.map((rec) => JSON.stringify(rec))
       const nextText = text + (text && !text.endsWith('\n') ? '\n' : '') + lines.join('\n') + '\n'
-      this.recordsCache.delete(dir)
+      this.recordsCache.delete(rootIdentity(dir))
       await atomicWrite(file, nextText)
       this.rememberRecordsCache(dir, nextText, [...records, ...appended])
     })
@@ -356,6 +413,7 @@ export class Wal {
       await this.readRecords(dir)
       if (!meta.committed) return
       meta.committed = false
+      meta.reopened = true
       delete meta.committedAt
       await this.writeMeta(dir, meta)
     })
@@ -417,7 +475,7 @@ export class Wal {
       await this.assertNotRecovering(dir, { verified: true })
       await this.assertWorkspaceReady()
       await this.readRecords(dir, { verified: true })
-      return { floor, committed: meta.committed, startedAt: meta.startedAt, rolledBack: false }
+      return { floor, committed: meta.committed, startedAt: meta.startedAt, rolledBack: false, ...(meta.reopened ? { reopened: true } : {}) }
     })
   }
 
@@ -443,8 +501,9 @@ export class Wal {
   }
 
   private rememberRecordsCache(dir: string, rawText: string, records: readonly RecordLine[]): void {
-    this.recordsCache.delete(dir)
-    this.recordsCache.set(dir, { rawText, records })
+    const key = rootIdentity(dir)
+    this.recordsCache.delete(key)
+    this.recordsCache.set(key, { rawText, records })
     if (this.recordsCache.size > 64) {
       this.recordsCache.delete(this.recordsCache.keys().next().value!)
     }
@@ -453,16 +512,30 @@ export class Wal {
   private async readMeta(dir: string, options?: { verified?: boolean; cacheRolledBack?: boolean }): Promise<FloorMeta | null> {
     const metaFile = join(dir, 'meta.json')
     if (!options?.verified) await this.assertLogPath(metaFile)
+    const dirKey = rootIdentity(dir)
+    const shared = getSharedWalState(this.rootDir)
+    const epoch = shared.epoch
+    const revision = shared.counter
     const s = await stat(metaFile).catch((error: NodeJS.ErrnoException) => {
       if (error.code === 'ENOENT') return null
       throw error
     })
-    if (s === null) return null
-    const statInfo = { mtimeMs: s.mtimeMs, size: s.size }
-    const cached = this.metaCache.get(dir)
-    if (cached && cached.mtimeMs === statInfo.mtimeMs && cached.size === statInfo.size) {
-      this.metaCache.delete(dir)
-      this.metaCache.set(dir, cached)
+    if (s === null) {
+      this.metaCache.delete(dirKey)
+      return null
+    }
+    const cached = this.metaCache.get(dirKey)
+    if (
+      cached &&
+      cached.epoch === epoch &&
+      (shared.dirs.get(dirKey) ?? 0) <= cached.revision &&
+      cached.mtimeMs === s.mtimeMs &&
+      cached.ctimeMs === s.ctimeMs &&
+      cached.size === s.size &&
+      cached.ino === s.ino
+    ) {
+      this.metaCache.delete(dirKey)
+      this.metaCache.set(dirKey, cached)
       return this.cloneMeta(cached.meta)
     }
     const raw = await readFile(metaFile, 'utf8').catch((error: NodeJS.ErrnoException) => {
@@ -474,9 +547,17 @@ export class Wal {
     try { meta = JSON.parse(raw) } catch { throw new Error(`WAL 元数据损坏：${dir}`) }
     if (!isFloorMetaShape(meta)) throw new Error(`WAL 元数据形状损坏：${dir}`)
     const parsed = meta as unknown as FloorMeta
-    if (options?.cacheRolledBack || parsed.committed) {
-      this.metaCache.delete(dir)
-      this.metaCache.set(dir, { mtimeMs: statInfo.mtimeMs, size: statInfo.size, meta: this.cloneMeta(parsed) })
+    if ((options?.cacheRolledBack || parsed.committed) && shared.epoch === epoch && (shared.dirs.get(dirKey) ?? 0) <= revision) {
+      this.metaCache.delete(dirKey)
+      this.metaCache.set(dirKey, {
+        epoch,
+        revision,
+        mtimeMs: s.mtimeMs,
+        ctimeMs: s.ctimeMs,
+        size: s.size,
+        ino: s.ino,
+        meta: this.cloneMeta(parsed),
+      })
       if (this.metaCache.size > 512) {
         this.metaCache.delete(this.metaCache.keys().next().value!)
       }
@@ -487,11 +568,23 @@ export class Wal {
   private async writeMeta(dir: string, meta: FloorMeta): Promise<void> {
     const metaFile = join(dir, 'meta.json')
     await this.assertLogPath(metaFile)
-    this.metaCache.delete(dir)
+    const dirKey = rootIdentity(dir)
+    this.metaCache.delete(dirKey)
     await atomicWrite(metaFile, JSON.stringify(meta, null, 2) + '\n')
+    const shared = noteWalDirMutation(this.rootDir, dir)
+    const epoch = shared.epoch
+    const revision = shared.counter
     const s = await stat(metaFile).catch(() => null)
-    if (s) {
-      this.metaCache.set(dir, { mtimeMs: s.mtimeMs, size: s.size, meta: this.cloneMeta(meta) })
+    if (s && meta.committed && shared.epoch === epoch && (shared.dirs.get(dirKey) ?? 0) <= revision) {
+      this.metaCache.set(dirKey, {
+        epoch,
+        revision,
+        mtimeMs: s.mtimeMs,
+        ctimeMs: s.ctimeMs,
+        size: s.size,
+        ino: s.ino,
+        meta: this.cloneMeta(meta),
+      })
       if (this.metaCache.size > 512) this.metaCache.delete(this.metaCache.keys().next().value!)
     }
   }
@@ -516,6 +609,15 @@ export class Wal {
   /** 工作区级恢复标记的绝对路径；非标准日志根（无 state/wal 布局）退回日志目录内。 */
   private recoveryMarkerPath(): string {
     return this.hasCoverage ? join(this.logFs.root, WAL_RECOVERY_PATH) : join(this.rootDir, 'wal-recovery.json')
+  }
+
+  /** 探测当前 WAL 实际使用的恢复标记路径（兼容非标准日志根）。 */
+  private async hasRecoveryMarkerFile(): Promise<boolean> {
+    try { await lstat(this.recoveryMarkerPath()); return true }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+      throw error
+    }
   }
 
   /** 读恢复标记中的楼层清单及形状有效性；缺失返回 null，损坏返回 valid: false 以便对账重写或删除。 */
@@ -627,8 +729,7 @@ export class Wal {
    * 已改名归档的回滚副本不算恢复中（它的游标只是完成回滚后的历史记录，`ROLLED_BACK_MARK` 目录一律跳过）。
    */
   private async assertWorkspaceReady(options?: { scanCursors?: boolean; entries?: Dirent[] }): Promise<void> {
-    const markerRoot = this.hasCoverage ? this.logFs.root : this.rootDir
-    if (await hasRecoveryMarker(markerRoot)) {
+    if (await this.hasRecoveryMarkerFile()) {
       if ((await this.reconcileRecoveryMarker()).length) throw new Error(WORKSPACE_RECOVERING_MESSAGE)
     }
     if (!options?.scanCursors) return
@@ -655,6 +756,7 @@ export class Wal {
   /** 列出当前处于回滚恢复中的楼层（标记清单 + 磁盘游标），供面板/诊断决定是否提示重置。 */
   async recoveringFloors(): Promise<string[]> {
     return this.enqueue(async () => {
+      const marker = await this.readRecoveryMarker()
       const reconciled = await this.reconcileRecoveryMarker()
       const floors = new Set(reconciled)
       const entries = await readdir(this.rootDir, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
@@ -672,7 +774,7 @@ export class Wal {
           if (meta) floors.add(meta.floor)
         }
       }
-      if (floors.size !== reconciled.length) await this.writeRecoveryFloors([...floors])
+      if (floors.size !== reconciled.length) await this.writeRecoveryFloors([...floors], marker?.bodyRoot)
       return [...floors]
     })
   }
@@ -696,20 +798,21 @@ export class Wal {
 
   private async readRecordsWithText(dir: string, options?: { verified?: boolean }): Promise<{ text: string; records: RecordLine[] }> {
     if (!options?.verified) await this.assertLogPath(join(dir, 'records.jsonl'))
+    const dirKey = rootIdentity(dir)
     let text: string
     try {
       text = await readFile(join(dir, 'records.jsonl'), 'utf8')
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-        this.recordsCache.delete(dir)
+        this.recordsCache.delete(dirKey)
         return { text: '', records: [] }
       }
       throw err
     }
-    const cached = this.recordsCache.get(dir)
+    const cached = this.recordsCache.get(dirKey)
     if (cached && cached.rawText === text) {
-      this.recordsCache.delete(dir)
-      this.recordsCache.set(dir, cached)
+      this.recordsCache.delete(dirKey)
+      this.recordsCache.set(dirKey, cached)
       return { text, records: [...cached.records] }
     }
     const records: RecordLine[] = []
@@ -802,6 +905,7 @@ export class Wal {
     await this.readRecords(dir, { verified: true })
     meta.committed = true
     meta.committedAt = nextWalIsoTime()
+    delete meta.reopened
     await this.writeMeta(dir, meta)
   }
 
@@ -867,7 +971,7 @@ export class Wal {
       await checkpoint()
     }
     if (progress.pending) await applyPending()
-    let templateBlocks:Set<string>|undefined
+    let templateBlocks: Set<string> | 'all' | undefined
     for (let i = progress.next; i >= 0; i--) {
       const rec = records[i]!
       const current = await currentBytes(rec.path)
@@ -875,11 +979,17 @@ export class Wal {
       if(path==='state/template.json') templateBlocks=undefined
       if(path.startsWith(TEMPLATE_DATA_PATH+'/') && !templateBlocks) {
         // 手动维护可能发布新根并复用旧块；保留根时不能随后删掉它仍引用的内容。
+        // 若楼层外把根改坏导致无法解析，保守保留数据块，不在回滚中途抛错锁死工作区。
         const references=new Set<string>()
-        await readTemplateDocument(bodyFs,'state/template.json',references)
-        templateBlocks=new Set([...references].map(recordPathIdentity))
+        try {
+          await readTemplateDocument(bodyFs,'state/template.json',references)
+          templateBlocks=new Set([...references].map(recordPathIdentity))
+        } catch {
+          templateBlocks='all'
+        }
       }
-      const target = templateBlocks?.has(path) ? {restore:false as const} : rollbackTarget(rec, current)
+      const preserveBlock = templateBlocks==='all' ? path.startsWith(TEMPLATE_DATA_PATH+'/') : Boolean(templateBlocks?.has(path))
+      const target = preserveBlock ? {restore:false as const} : rollbackTarget(rec, current)
       if (!target.restore) {
         progress.preserved.push(rec.path)
         progress.next = i - 1
@@ -902,9 +1012,12 @@ export class Wal {
     const archived = join(this.rootDir, `${dirName}${ROLLED_BACK_MARK}${timestamp()}`)
     await this.assertLogPath(dir)
     await this.assertLogPath(archived)
-    this.metaCache.delete(dir)
-    this.recordsCache.delete(dir)
+    const dirKey = rootIdentity(dir)
+    this.metaCache.delete(dirKey)
+    this.recordsCache.delete(dirKey)
     await renameWithRetry(dir, archived)
+    noteWalDirMutation(this.rootDir, dir)
+    noteWalDirMutation(this.rootDir, archived)
     // 只有整层改名归档后才注销恢复标记；中途失败保留标记，重试仍受同一屏障保护。
     await this.clearRecovering(floor, workspaceRoot)
     return restored
@@ -1056,7 +1169,7 @@ export class Wal {
     await mkdir(this.rootDir, { recursive: true })
     // 崩溃可能落在「回滚已改名归档、标记还没注销」之间；列举是恢复流程的固定入口，顺手清掉失效标记，
     // 否则残留的标记会一直挡住后续写入与分支。
-    if (await hasRecoveryMarker(this.hasCoverage ? this.logFs.root : this.rootDir)) await this.reconcileRecoveryMarker()
+    if (await this.hasRecoveryMarkerFile()) await this.reconcileRecoveryMarker()
     const entries = await readdir(this.rootDir, { withFileTypes: true })
     if (!options?.markersVerified) {
       const logTargets: string[] = []
@@ -1084,6 +1197,7 @@ export class Wal {
         committed: meta.committed,
         startedAt: meta.startedAt,
         rolledBack,
+        ...(meta.reopened ? { reopened: true } : {}),
       }
     })
     const floors = floorRows.filter((row): row is WalFloorInfo => row !== null)
@@ -1121,9 +1235,11 @@ export class Wal {
       await this.writeCoverage(await this.doListFloors())
     }
     for (const dir of expired) {
-      this.metaCache.delete(dir)
-      this.recordsCache.delete(dir)
+      const dirKey = rootIdentity(dir)
+      this.metaCache.delete(dirKey)
+      this.recordsCache.delete(dirKey)
       await rm(dir, { recursive: true, force: true })
+      noteWalDirMutation(this.rootDir, dir)
     }
     return expired.length
   }

@@ -3,6 +3,7 @@ import { randomUUID, createHash } from 'node:crypto'
 import { lstat, readdir, rm } from 'node:fs/promises'
 import { join, resolve, sep } from 'node:path'
 import { rebuildIndex } from './workspace.js'
+import { isRecord } from '../core/guards.js'
 import { estimateTokens } from '../core/tokenize.js'
 import { mapBounded, WorkspaceFs } from './workspaceFs.js'
 import { Wal } from './wal.js'
@@ -46,8 +47,9 @@ export async function readStory(cardRoot: string, id: string): Promise<StorySumm
   }
   const raw = await new WorkspaceFs(storyRoot(cardRoot, id), null).readText('story.json')
   if (raw === null) throw new Error('剧情状态不存在，已停止操作以免写入错误工作区')
-  const value = JSON.parse(raw) as Partial<StorySummary> & { version?: number }
-  if (value.version !== 1 || value.id !== id || typeof value.sessionId !== 'string'
+  let value: unknown
+  try { value = JSON.parse(raw) } catch { throw new Error('剧情状态元数据损坏') }
+  if (!isRecord(value) || value.version !== 1 || value.id !== id || typeof value.sessionId !== 'string'
     || typeof value.createdAt !== 'string' || typeof value.migrated !== 'boolean') throw new Error('剧情状态元数据损坏')
   return { id, sessionId: value.sessionId, createdAt: value.createdAt, migrated: value.migrated }
 }
@@ -117,11 +119,18 @@ export async function snapshotStory(options: {
       // 只清理本次生成且确认位于 stories 内的草稿，已发布状态从不在失败清理中删除。
       const base = resolve(options.cardRoot, 'stories') + sep
       if (!resolve(staging).startsWith(base)) throw new Error('剧情草稿清理路径越界')
-      evictTemplateCaches(staging)
-      evictHelperStateCache(staging)
-      evictWorldDeltaCache(staging)
-      closeLedger(staging)
-      await rm(staging, { recursive: true, force: true })
+      const evictStaging = (): void => {
+        evictTemplateCaches(staging)
+        evictHelperStateCache(staging)
+        evictWorldDeltaCache(staging)
+        closeLedger(staging)
+      }
+      evictStaging()
+      try {
+        await rm(staging, { recursive: true, force: true })
+      } finally {
+        evictStaging()
+      }
     }
   })
 }
@@ -132,9 +141,16 @@ export async function discardStory(cardRoot: string, id: string, sessionId: stri
   if (metadata.sessionId !== sessionId || metadata.migrated) throw new Error('拒绝清理不属于本次分支的剧情')
   const target = resolve(storyRoot(cardRoot, id))
   if (!target.startsWith(resolve(cardRoot, 'stories') + sep)) throw new Error('剧情清理路径越界')
-  evictTemplateCaches(target)
-  evictHelperStateCache(target)
-  evictWorldDeltaCache(target)
-  closeLedger(target)
-  await rm(target, { recursive: true, force: true })
+  const evictTarget = (): void => {
+    evictTemplateCaches(target)
+    evictHelperStateCache(target)
+    evictWorldDeltaCache(target)
+    closeLedger(target)
+  }
+  evictTarget()
+  try {
+    await rm(target, { recursive: true, force: true })
+  } finally {
+    evictTarget()
+  }
 }

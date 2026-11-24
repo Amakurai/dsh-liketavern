@@ -2,6 +2,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import { SessionPersistenceNotFoundError } from '@deepseek-ai/dsh-session-persistence'
+import { isHostInjectedUserMessage, isSyntheticUserText } from '../core/dshPrompt.js'
 import { sessionHasUserMessage } from '../core/greetingLog.js'
 
 /**
@@ -12,6 +13,7 @@ import { sessionHasUserMessage } from '../core/greetingLog.js'
 interface EventSnapshotCache<T> {length:number;last:SessionEvent|undefined;lastSeq:number|undefined;value:T}
 const userMessagePresence=new WeakMap<readonly SessionEvent[],EventSnapshotCache<boolean>>()
 const eventIndexes=new WeakMap<readonly SessionEvent[],EventSnapshotCache<ReadonlyMap<number,SessionEvent>>>()
+const assistantDepthIndexes=new WeakMap<readonly SessionEvent[],EventSnapshotCache<ReadonlyMap<number,number>>>()
 
 function currentSnapshot<T>(events:readonly SessionEvent[],cached:EventSnapshotCache<T>|undefined):cached is EventSnapshotCache<T> {
   const last=events.at(-1)
@@ -54,6 +56,34 @@ export function displaySessionEventAt(events:readonly SessionEvent[],seq:number)
   if(!currentSnapshot(events,cached)){
     const last=events.at(-1),value=new Map(events.map(event=>[event.seq,event]))
     cached={length:events.length,last,lastSeq:last?.seq,value};eventIndexes.set(events,cached)
+  }
+  return cached.value.get(seq)
+}
+
+/**
+ * 按不可变快照计算每条真实 assistant 消息的展示深度（0 = 最新真实消息，跳过宿主合成 user 消息），
+ * 与 `applyRegexToMessages` 和 SillyTavern `getRegexedString` 深度口径完全一致。
+ */
+export function displayAssistantDepthAt(events: readonly SessionEvent[], seq: number): number | undefined {
+  if (!Number.isSafeInteger(seq) || seq < 0) return undefined
+  let cached = assistantDepthIndexes.get(events)
+  if (!currentSnapshot(events, cached)) {
+    const depths = new Map<number, number>()
+    let depthFromEnd = 0
+    for (let i = events.length - 1; i >= 0; i--) {
+      const event = events[i]!
+      if (event.type !== 'user/message' && event.type !== 'assistant/message') continue
+      if ('surfaceOp' in event && event.surfaceOp !== undefined && event.surfaceOp !== 'append') continue
+      if (event.type === 'user/message' && isHostInjectedUserMessage(event.data)) continue
+      const message = event.type === 'user/message' ? event.data : event.data.message
+      const text = message.content.filter(block => block.type === 'text').map(block => block.text).join('\n')
+      if (!text.trim() || (event.type === 'user/message' && isSyntheticUserText(text))) continue
+      if (event.type === 'assistant/message') depths.set(event.seq, depthFromEnd)
+      depthFromEnd++
+    }
+    const last = events.at(-1)
+    cached = { length: events.length, last, lastSeq: last?.seq, value: depths }
+    assistantDepthIndexes.set(events, cached)
   }
   return cached.value.get(seq)
 }

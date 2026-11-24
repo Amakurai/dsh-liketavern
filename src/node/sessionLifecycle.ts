@@ -120,6 +120,8 @@ export async function onTurnEnd(state:TavernState,sessionId:string,session?:Pick
       state.stepNoticeMarks.delete(sessionId)
       state.turnPlans.delete(sessionId)
       state.pendingTurnPlans.delete(sessionId)
+      state.appliedStanding.delete(sessionId)
+      state.appliedTurnContext.delete(sessionId)
       if(key) {
         const deferredStoryId=state.openFloors.get(sessionId)?.storyId??(await state.loadStoryBinding(sessionId))?.storyId
         state.helperTurnClosures.delete(key)
@@ -210,6 +212,8 @@ async function finishTurn(state:TavernState,sessionId:string,session?:Pick<Sessi
     state.pendingTurnPlans.delete(sessionId)
     state.pendingInputs.delete(sessionId)
     state.pendingTemplateInputs.delete(sessionId)
+    state.appliedStanding.delete(sessionId)
+    state.appliedTurnContext.delete(sessionId)
   }
   if (entry) {
     const ws = await state.storyWorkspace(entry.cardId,entry.storyId)

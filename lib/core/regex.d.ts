@@ -32,6 +32,8 @@ export type { MacroContext };
 export interface RegexFilter {
     scope: RegexScope;
     timing: RegexTiming;
+    /** 可选消息深度（0 = 最新真实消息）；仅在提供时按规则 minDepth/maxDepth 过滤。 */
+    depth?: number;
 }
 export interface RegexApplyResult {
     text: string;
@@ -57,6 +59,8 @@ export declare function findUnsafeRegexConstruct(source: string): string | null;
 export declare function applyRegexRules(text: string, rules: readonly RegexRule[], filter: RegexFilter, macroCtx: MacroContext): RegexApplyResult;
 /** 是否存在需要在隔离环境中执行或报告错误的规则；全不命中且无畸形项时可零开销跳过。 */
 export declare function hasApplicableOrMalformedRegex(rules: readonly RegexRule[], filter: RegexFilter): boolean;
+/** 规则集合中是否存在依赖消息深度（minDepth > 0 或 maxDepth >= 0）的启用的展示规则。 */
+export declare function hasDepthScopedRegex(rules: readonly RegexRule[], filter: Omit<RegexFilter, 'depth'>): boolean;
 /** 同一条消息的多段展示文本共享一次规则预编译；替换串宏展开仍逐段进行。 */
 export declare function applyRegexRulesBatch(texts: readonly string[], rules: readonly RegexRule[], filter: RegexFilter, macroCtx: MacroContext): {
     texts: string[];

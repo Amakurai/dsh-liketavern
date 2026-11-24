@@ -388,15 +388,15 @@ export function createHelperMvuCommandCodec(json: (value: unknown, maxBytes?: nu
           const content=message.slice(fence.contentStart,fence.contentEnd).trim()
           const envelope=/^<(updatevariable|json_?patch)(?=[\s>])/i.exec(content)
           const payload=fence.standalone&&envelope&&new RegExp('</'+envelope[1]+'\\s*>\\s*$','i').test(content)
-          if(updates||payload){syntaxEnds.set(fence.contentEnd,fence.end);at=fence.contentStart}
+          if(updates||payload){if(fence.contentEnd<fence.end)syntaxEnds.set(fence.contentEnd,fence.end);at=fence.contentStart}
           else at=fence.end
           continue
         }
-        const end=code.inlineEnd(at)
-        if(end!==null){
-          if(updates){let width=1;while(message[at+width]==='`')width++;syntaxEnds.set(end-width,end);at+=width}
-          else if(!/<(?:updatevariable|json_?patch)(?=[\s>])/i.test(message.slice(at,end))||/<\/(?:updatevariable|json_?patch)\s*>/i.test(message.slice(at,end))||/^`+\s*<(?:updatevariable|json_?patch)(?:\s[^<>]*)?>\s*`+$/i.test(message.slice(at,end))||!/<\/(?:updatevariable|json_?patch)\s*>/i.test(message.slice(end)))at=end
-          else{while(message[at]==='`')at++}
+        const span=code.inlineSpan(at)
+        if(span){
+          if(updates){syntaxEnds.set(span.end-span.width,span.end);at=span.start+span.width}
+          else if(!/<(?:updatevariable|json_?patch)(?=[\s>])/i.test(message.slice(span.start,span.end))||/<\/(?:updatevariable|json_?patch)\s*>/i.test(message.slice(span.start,span.end))||/^`+\s*<(?:updatevariable|json_?patch)(?:\s[^<>]*)?>\s*`+$/i.test(message.slice(span.start,span.end))||!/<\/(?:updatevariable|json_?patch)\s*>/i.test(message.slice(span.end)))at=span.end
+          else{at=span.start+span.width}
           continue
         }
       }
@@ -506,11 +506,17 @@ export function createHelperMvuCommandCodec(json: (value: unknown, maxBytes?: nu
     }
     return value
   }
-  const logAt = (root: Table, parts: string[], text: string) => {
+  const logAt = (root: Table, parts: string[], text: string, statRoot?: unknown) => {
     const keys = parts.length ? parts : ['']; let container: Table | unknown[] = root
+    let statNode: unknown = statRoot
     for (let i = 0; i < keys.length; i++) {
       budgetCache.delete(container)
-      const key = keys[i]!, nextIsIndex = i < keys.length - 1 && /^(0|[1-9][0-9]*)$/.test(keys[i + 1]!)
+      const key = keys[i]!
+      let nextStat: unknown = undefined
+      if (Array.isArray(statNode) && /^(0|[1-9][0-9]*)$/.test(key)) nextStat = statNode[Number(key)]
+      else if (record(statNode) && Object.hasOwn(statNode, key)) nextStat = statNode[key]
+      const nextIsIndex = i < keys.length - 1 && /^(0|[1-9][0-9]*)$/.test(keys[i + 1]!)
+      const nextIsArray = nextIsIndex && (statRoot === undefined ? true : Array.isArray(nextStat))
       if (Array.isArray(container)) {
         if (!/^(0|[1-9][0-9]*)$/.test(key)) throw new Error('MVU 显示路径数组下标越界')
         const index = Number(key)
@@ -518,14 +524,17 @@ export function createHelperMvuCommandCodec(json: (value: unknown, maxBytes?: nu
         while (container.length <= index) container.push(null)
         if (i === keys.length - 1) { container[index] = text; return }
         const child = container[index]
-        if (!record(child) && (!Array.isArray(child) || !nextIsIndex)) container[index] = nextIsIndex ? [] : {}
+        if (nextIsArray) { if (!Array.isArray(child)) container[index] = [] }
+        else if (!record(child)) container[index] = {}
         container = container[index] as Table | unknown[]
       } else {
         if (i === keys.length - 1) { container[key] = text; return }
         const child = container[key]
-        if (!record(child) && (!Array.isArray(child) || !nextIsIndex)) container[key] = nextIsIndex ? [] : {}
+        if (nextIsArray) { if (!Array.isArray(child)) container[key] = [] }
+        else if (!record(child)) container[key] = {}
         container = container[key] as Table | unknown[]
       }
+      statNode = nextStat
     }
   }
   const printable = (value: unknown) => typeof value === 'string' ? value : JSON.stringify(value)
@@ -612,13 +621,17 @@ export function createHelperMvuCommandCodec(json: (value: unknown, maxBytes?: nu
         if (type === 'move' && equal(parts, to)) continue
         if (type === 'move') remove(stat, parts)
         stat = write(stat, to, value, true); logPath = to
+        if (to.length > 0 && to.at(-1) === '-') {
+          const parent = get(stat, to.slice(0, -1))
+          if (Array.isArray(parent) && parent.length > 0) logPath = [...to.slice(0, -1), String(parent.length - 1)]
+        }
         log = (type === 'move' ? 'MOVED' : 'COPIED') + " path '" + label + "' to '" + encodePath(to) + "' " + suffix
       } else {
         if (!equal(get(stat, parts), literal(args[1]))) throw new Error('MVU JSON Patch test 校验失败')
         continue
       }
       assertStatDepth(stat)
-      logAt(display, logPath, log); logAt(delta, logPath, log)
+      logAt(display, logPath, log, stat); logAt(delta, logPath, log, stat)
       // 每一步都执行总输出预算，防止中间 insert/copy 膨胀后再删除掩盖超量（增量缓存计量，末尾统一深拷贝归一化）。
       assertOutputBudget({ stat_data: stat, display_data: display, delta_data: delta }, OUTPUT)
     }

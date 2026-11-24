@@ -117,7 +117,7 @@ async function startTavern(ctx: Context, config: ReturnType<typeof Config>): Pro
   let lastPersistence = ctx.get('sessionPersistence') as { stat?(id: string): Promise<unknown> } | undefined
   const disposeSession = async (sessionId: string, disposedSession?: Session) => {
     const initialLive = disposedSession ?? ctx.sessions.get(sessionId as Session['id'])
-    await state.waitForBindingAdoption(sessionId).catch(() => {})
+    await state.drainBindingAdoption(sessionId).catch(() => {})
     await state.waitForSessionTasks(sessionId).catch(() => {})
     const persistence = (ctx.get('sessionPersistence') as { stat?(id: string): Promise<unknown> } | undefined) ?? lastPersistence
     if (persistence) lastPersistence = persistence

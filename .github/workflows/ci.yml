@@ -76,7 +76,7 @@ jobs:
 
       # 锁文件相同，审计无需在每个系统与分片重复请求 registry。
       - name: 依赖安全审计
-        run: npm audit --package-lock-only
+        run: npm run audit:check
 
       - name: 构建（tsc + client bundle）
         run: npm run build

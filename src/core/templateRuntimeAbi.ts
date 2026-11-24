@@ -33,6 +33,8 @@ export const TEMPLATE_LEGACY_RUNTIME_ABIS:Readonly<Record<string,TemplateRuntime
   '14eb40ac012bfbbc29d615b5996315c2e2fc81f8a80f16b98a04b6651e2b384e':TEMPLATE_RUNTIME_ABI,
   // v0.5.10–v0.5.11 发布的规范化指纹；Faker 惰性工厂与 UTF-8 vendor 重建未改变宿主通信契约。
   '0422fcf07bff3ed7bb881bca9af3b0530bdbdda9abb9e6b1f0b341cfaf71eeae':TEMPLATE_RUNTIME_ABI,
+  // v0.5.12 发布的规范化指纹；后续修复 @@if 只读快照、merge 数组与 withMsg 读作用域，未改变宿主通信契约。
+  'b41cc77a4069e10626af39291d2924fbaa5c864aca16b06a65882fb2198f4810':TEMPLATE_RUNTIME_ABI,
 })
 
 /** 仅登记确实需要禁止恢复的运行时；撤销优先于 current 和 legacy，不用虚构版本占位。 */

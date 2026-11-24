@@ -182,6 +182,8 @@ function mountTavernAgent(ctx: Context): void {
     name: TURN_CONTEXT,
     order: 20,
     interpolate: false,
+    // 本轮剧情材料是 Tavern 的必要输入，不随宿主可选环境上下文一同关闭。
+    required: true,
     text: (context) => (context.agent ? state.appliedTurnContext.get(context.agent.id) ?? '' : ''),
   })
 
@@ -349,7 +351,7 @@ function mountTavernAgent(ctx: Context): void {
       return { ...resolved, provider: PRESET_ADAPTER_PROVIDER }
     }
     return resolved
-  }, { prepend: true })
+  })
 
   // 工具与空闲维护是可选能力：宿主工具 API 变更时只跳过这一段，提示词与运行时不跟着失效。
   const guard = <T>(label: string, run: () => T): T | undefined => guardPhase(ctx, label, run)

@@ -17,6 +17,8 @@ export declare function openLedger(root: string): WriteLedger;
  * 没有读者打开过的根目录直接忽略。
  */
 export declare function noteWrite(root: string, relPath: string): void;
+/** 显式作废该工作区下全部缓存：推进全局单调 epoch 并清空文件/目录序号，保留已打开账本以继续接收后续写入通知。 */
+export declare function invalidateLedger(root: string): void;
 /** 释放临时草稿或已删除工作区的写入登记；推进 epoch 使仍持有引用的读取方一并失效。 */
 export declare function closeLedger(root: string, options?: {
     prefix?: boolean;

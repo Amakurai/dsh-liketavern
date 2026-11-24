@@ -7,4 +7,9 @@ export declare function findLastEvent(events: readonly SessionEvent[], predicate
 export declare function displaySessionHasUserMessage(events: readonly SessionEvent[]): boolean;
 /** 按不可变快照建立一次 seq 索引；兼容测试桩及未来可能返回的非零起点只读切片。 */
 export declare function displaySessionEventAt(events: readonly SessionEvent[], seq: number): SessionEvent | undefined;
+/**
+ * 按不可变快照计算每条真实 assistant 消息的展示深度（0 = 最新真实消息，跳过宿主合成 user 消息），
+ * 与 `applyRegexToMessages` 和 SillyTavern `getRegexedString` 深度口径完全一致。
+ */
+export declare function displayAssistantDepthAt(events: readonly SessionEvent[], seq: number): number | undefined;
 export declare function readDisplaySessionEvents(ctx: Context, sessionId: string): Promise<readonly SessionEvent[]>;

@@ -70,6 +70,7 @@ export declare class TavernState {
     /** 宿主作用域持有的布局适配器；agent 销毁不影响其它剧情的注册。 */
     presetAdapter?: PresetAdapterController;
     private readonly workspaces;
+    private readonly openingWorkspaces;
     private readonly sweptRoots;
     readonly triggerLogs: Map<string, {
         at: string;
@@ -337,9 +338,11 @@ export declare class TavernState {
     listLorebooks(): Promise<string[]>;
     /** 读取世界书原始 JSON（供设置面板编辑）；不存在或损坏返回 null。 */
     loadLorebookJson(name: string): Promise<unknown | null>;
+    /** 解析世界书在磁盘上的实际文件 ID（兼容未净化原名与 Windows 大小写别名）；不存在返回 null。 */
+    resolveLorebookFileId(name: string): Promise<string | null>;
     loadLorebookEntries(name: string, source: WorldInfoEntry['source']): Promise<WorldInfoEntry[]>;
     /** 落盘并 bump 修订号，返回磁盘上的 id：调用方（服务层/客户端）之后要按这个 id 打开，不能用原始名。 */
-    saveLorebook(name: string, json: unknown, beforeWrite?: () => void): Promise<string>;
+    saveLorebook(name: string, json: unknown, beforeWrite?: () => void, expectedRevision?: string | null): Promise<string>;
     /** 编辑按实际文件 ID 核对版本并写回同一文件；导入与新建仍按内部名称分配身份。 */
     saveLorebookSnapshot(name: string, json: unknown, expectedRevision?: string | null, beforeWrite?: () => void): Promise<{
         name: string;
@@ -399,7 +402,7 @@ export declare class TavernState {
      * 人设未绑定时，接到默认页或库里唯一一条，避免 {{user}} 落成 User。
      * 回收失败则删除绑定文件并返回 null，避免 UI 把文件夹 ID 当成角色名。
      */
-    loadBinding(sessionId: string, strictRead?: boolean): Promise<SessionBinding | null>;
+    loadBinding(sessionId: string, strictRead?: boolean, personaSelection?: 'resolve' | 'preserve' | 'resolve-tolerant'): Promise<SessionBinding | null>;
     /** 运行时只复核剧情归属并保留人设选择；首次组装自行解析，冻结后的请求、工具和收口不重读人设。 */
     loadStoryBinding(sessionId: string, options?: {
         strictRead?: boolean;
@@ -407,8 +410,10 @@ export declare class TavernState {
     }): Promise<SessionBinding | null>;
     /** 绑定接管须在工作区锁外等待；调用方随后可在 sessions 锁内复核，避免子分支等待父分支时互锁。 */
     waitForBindingAdoption(sessionId: string): Promise<void>;
+    /** 仅等待已在途的绑定接管并取消待重试任务，供解除绑定与会话销毁使用，避免清理前反向触发新接管。 */
+    drainBindingAdoption(sessionId: string): Promise<void>;
     /** 不等待绑定接管的锁内复核，避免接管流程等待自己；写入比较用 strictRead 拒绝不确定的 I/O 结果。 */
-    loadBindingUnwaited(sessionId: string, strictRead?: boolean): Promise<SessionBinding | null>;
+    loadBindingUnwaited(sessionId: string, strictRead?: boolean, personaSelection?: 'resolve' | 'preserve' | 'resolve-tolerant'): Promise<SessionBinding | null>;
     private readonly bindingAdoptions;
     private readonly bindingAdoptionRetries;
     private readonly clearedAdoptions;

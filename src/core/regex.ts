@@ -38,6 +38,15 @@ export type { MacroContext }
 export interface RegexFilter {
   scope: RegexScope
   timing: RegexTiming
+  /** 可选消息深度（0 = 最新真实消息）；仅在提供时按规则 minDepth/maxDepth 过滤。 */
+  depth?: number
+}
+
+function matchesRegexDepth(rule: RegexRule, depth: number | undefined): boolean {
+  if (depth === undefined) return true
+  if (rule.minDepth !== null && rule.minDepth >= 0 && depth < rule.minDepth) return false
+  if (rule.maxDepth !== null && rule.maxDepth >= 0 && depth > rule.maxDepth) return false
+  return true
 }
 
 export interface RegexApplyResult {
@@ -463,6 +472,7 @@ export function applyRegexRules(
     if (!rule.scopes.includes(filter.scope) || !rule.timing.includes(filter.timing)) continue
     // output 展示面只有 AI 楼层；限定用户楼层的显示规则（ST USER_INPUT + markdownOnly）在此不生效。
     if (filter.scope === 'output' && rule.roles?.length && !rule.roles.includes('assistant')) continue
+    if (!matchesRegexDepth(rule, filter.depth)) continue
     try {
       const re = compile(rule, macroCtx)
       let next: string
@@ -550,7 +560,19 @@ export function hasApplicableOrMalformedRegex(rules: readonly RegexRule[], filte
     if (!rule.enabled) continue
     if (!rule.scopes.includes(filter.scope) || !rule.timing.includes(filter.timing)) continue
     if (filter.scope === 'output' && rule.roles?.length && !rule.roles.includes('assistant')) continue
+    if (!matchesRegexDepth(rule, filter.depth)) continue
     return true
+  }
+  return false
+}
+
+/** 规则集合中是否存在依赖消息深度（minDepth > 0 或 maxDepth >= 0）的启用的展示规则。 */
+export function hasDepthScopedRegex(rules: readonly RegexRule[], filter: Omit<RegexFilter, 'depth'>): boolean {
+  for (const rule of rules) {
+    if (!isWellFormedRule(rule) || !rule.enabled) continue
+    if (!rule.scopes.includes(filter.scope) || !rule.timing.includes(filter.timing)) continue
+    if (filter.scope === 'output' && rule.roles?.length && !rule.roles.includes('assistant')) continue
+    if ((rule.minDepth !== null && rule.minDepth > 0) || (rule.maxDepth !== null && rule.maxDepth >= 0)) return true
   }
   return false
 }
@@ -574,6 +596,7 @@ export function applyRegexRulesBatch(
     if (!rule.enabled) continue
     if (!rule.scopes.includes(filter.scope) || !rule.timing.includes(filter.timing)) continue
     if (filter.scope === 'output' && rule.roles?.length && !rule.roles.includes('assistant')) continue
+    if (!matchesRegexDepth(rule, filter.depth)) continue
     const item = prepareRegexRule(rule, macroCtx)
     if (item.error !== undefined) errors.push({ ruleId: rule.id, message: item.error })
     else prepared.push(item)
@@ -696,15 +719,16 @@ export function compileRegexScripts(
     const roles = new Set<ChatRole>()
     const placement = script.placement ?? [2]
     for (const p of placement) {
-      if (p === 1) {
+      const n = Number(p)
+      if (n === 1) {
         scopes.add('input')
         timing.add('send')
         roles.add('user')
-      } else if (p === 2) {
+      } else if (n === 2) {
         scopes.add('output')
         timing.add('render')
         roles.add('assistant')
-      } else if (p === 5) {
+      } else if (n === 5) {
         scopes.add('prompt')
         timing.add('assemble')
       }
@@ -913,6 +937,10 @@ export function parseImportedRegexRules(raw: unknown): RegexRule[] {
   return out
 }
 
+function stripLeadingHtmlQuote(before: string): string {
+  return before.replace(/(?:(?:^|\r?\n)[ \t]*>(?:[ \t]*>)*[ \t]*)+$/, '')
+}
+
 /**
  * 正则替换后的展示文本常是「整页 HTML 封面」或「小部件 HTML + 后面的正文」。
  * HTML 文档和小部件片段抽进 iframe；围栏外 / </html> 之前的协议标签与之后的文字留给 Markdown。
@@ -932,7 +960,7 @@ export function locateRenderedHtml(text: string, existingCode?: ReturnType<typeo
   const range = fragment && (!document || fragment.start < document.start) ? fragment : document
   if(fence&&(!range||fence.start<range.start))return {html:text.slice(fence.contentStart,fence.contentEnd),rest:[text.slice(0,fence.start).trim(),text.slice(fence.end).trim()].filter(Boolean).join('\n'),start:fence.contentStart,fence:{start:fence.start,end:fence.end}}
   if (!range) return null
-  return {html:text.slice(range.start,range.end),rest:[text.slice(0,range.start).trim(),text.slice(range.end).trim()].filter(Boolean).join('\n'),start:range.start}
+  return {html:text.slice(range.start,range.end),rest:[stripLeadingHtmlQuote(text.slice(0,range.start)).trim(),text.slice(range.end).trim()].filter(Boolean).join('\n'),start:range.start}
 }
 
 /** 兼容聚合接口；有序展示使用定位结果，避免同文代码示例抢占真实卡面的起点。 */
@@ -959,7 +987,8 @@ export function collectRenderedHtml(text: string): { htmls: string[]; rest: stri
     htmls.push(located.html)
     const cutStart = located.fence?.start ?? located.start
     const cutEnd = located.fence?.end ?? located.start + located.html.length
-    const before = remaining.slice(0, cutStart).trim()
+    const rawBefore = remaining.slice(0, cutStart)
+    const before = (located.fence ? rawBefore : stripLeadingHtmlQuote(rawBefore)).trim()
     if (before) restParts.push(before)
     remaining = remaining.slice(cutEnd)
     if (i === 127 && locateRenderedHtml(remaining)) {

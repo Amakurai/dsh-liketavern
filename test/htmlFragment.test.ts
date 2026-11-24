@@ -270,3 +270,176 @@ it.each([diary,'<!DOCTYPE html><html><body>实际文档</body></html>'])('成对
     ])
   }
 })
+
+it('纯文本 <details> 与相邻非 <details> 卡片拆分，带共享样式时仍留在同一沙箱', () => {
+  const plainFold = '<details><summary>行动选项</summary>\n1. 探索酒馆\n2. 离开村庄\n</details>'
+  const mvuCard = '<div class="mvu-status">HP: 100</div>'
+  expect(splitTemplateDisplay(`${plainFold}\n${mvuCard}`)).toEqual([
+    { kind: 'html', text: plainFold },
+    { kind: 'html', text: mvuCard },
+  ])
+  expect(splitTemplateDisplay(`${mvuCard}\n${plainFold}`)).toEqual([
+    { kind: 'html', text: mvuCard },
+    { kind: 'html', text: plainFold },
+  ])
+
+  // 前导或后置 <style> 显式共享样式时仍保留在同一个卡面。
+  const styledPair = `<style>details{color:red}.mvu-status{color:blue}</style>\n${mvuCard}\n${plainFold}`
+  expect(splitTemplateDisplay(styledPair)).toEqual([{ kind: 'html', text: styledPair }])
+  const trailingStyle = `${plainFold}\n<style>details{color:red}</style>`
+  expect(splitTemplateDisplay(trailingStyle)).toEqual([{ kind: 'html', text: trailingStyle }])
+})
+
+it('前导 <link>/<meta>、媒体/图形容器、<center> 卡面与未引号尾斜杠属性正确识别', () => {
+  const fontLink = '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC">'
+  const styledCard = `${fontLink}\n<style>.card{font-family:serif}</style>\n<div class="card">星港</div>`
+  expect(splitTemplateDisplay(`前文\n${styledCard}\n后文`)).toEqual([
+    { kind: 'markdown', text: '前文' },
+    { kind: 'html', text: styledCard },
+    { kind: 'markdown', text: '后文' },
+  ])
+  // 无后续卡面时孤立 <link> 不升级为 iframe，且不跨过代码围栏吞并后面的卡片。
+  expect(splitRenderedHtml(`${fontLink}\n普通正文`)).toEqual({ html: null, rest: `${fontLink}\n普通正文` })
+  expect(splitTemplateDisplay(`${fontLink}\n\`\`\`html\n<div class="fence">围栏卡</div>\n\`\`\`\n<div class="tail">尾卡</div>`)).toEqual([
+    { kind: 'markdown', text: fontLink },
+    { kind: 'html', text: '<div class="fence">围栏卡</div>' },
+    { kind: 'html', text: '<div class="tail">尾卡</div>' },
+  ])
+
+  // 音频、视频、SVG、画布与对话框容器进入沙箱。
+  for (const mediaHtml of [
+    '<audio controls src="https://example.com/bgm.mp3"></audio>',
+    '<video controls width="320"><source src="https://example.com/pv.mp4"></video>',
+    '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/></svg>',
+    '<canvas id="map" width="200" height="100"></canvas>',
+    '<dialog open><p>提示</p></dialog>',
+  ]) {
+    expect(splitTemplateDisplay(`前文\n${mediaHtml}\n后文`)).toEqual([
+      { kind: 'markdown', text: '前文' },
+      { kind: 'html', text: mediaHtml },
+      { kind: 'markdown', text: '后文' },
+    ])
+  }
+
+  // <center> 仅在带属性或内含 HTML/样式卡面时进入 iframe；纯 Markdown <center> 留给宿主归一化。
+  for (const cardCenter of [
+    '<center><div class="card">居中卡片</div></center>',
+    '<center style="color:gold">★ 欢迎 ★</center>',
+    '<center><img src="https://example.com/cg.png" width="240"><h2>标题</h2></center>',
+  ]) {
+    expect(splitTemplateDisplay(cardCenter)).toEqual([{ kind: 'html', text: cardCenter }])
+  }
+  expect(splitRenderedHtml('<center>### 序章</center>')).toEqual({ html: null, rest: '<center>### 序章</center>' })
+
+  // 未引号属性值末尾的 `/` 不得把开放标签误判为自闭合。
+  const unquotedSlash = '<div data-href=https://example.com/>状态内容</div>'
+  expect(splitTemplateDisplay(unquotedSlash)).toEqual([{ kind: 'html', text: unquotedSlash }])
+})
+
+it('支持 DOCTYPE 片段卡、跨注释共享尾样式及 htm/xhtml 围栏，且不把带内嵌示例标签的 text 围栏误判为卡面', () => {
+  // 无 <html>/<body> 壳的 DOCTYPE 片段卡应完整进入沙箱，不能被判成未闭合整页并丢弃。
+  const doctypeFragment = '<!DOCTYPE html>\n<style>.c{color:red}</style>\n<div class="c">状态栏</div>'
+  expect(splitTemplateDisplay(doctypeFragment)).toEqual([{ kind: 'html', text: doctypeFragment }])
+  expect(presentRenderedOutput(doctypeFragment, true)).toEqual({
+    html: doctypeFragment,
+    htmls: [doctypeFragment],
+    text: '',
+  })
+
+  // <details> 与尾部 <style> 之间夹 HTML 注释时仍留在同一沙箱共享样式。
+  const commentedStyle = '<div class="bar">状态</div>\n<details><summary>详情</summary>内容</details>\n<!-- style -->\n<style>.bar{color:red}</style>'
+  expect(splitTemplateDisplay(commentedStyle)).toEqual([{ kind: 'html', text: commentedStyle }])
+
+  // htm / xhtml 显式围栏按 HTML 卡面提取；text 围栏正文里仅含行中示例标签时保持代码块。
+  expect(splitTemplateDisplay('```htm\n<div class="card">卡面</div>\n```')).toEqual([
+    { kind: 'html', text: '<div class="card">卡面</div>' },
+  ])
+  expect(splitTemplateDisplay('```xhtml\n<section>章节卡</section>\n```')).toEqual([
+    { kind: 'html', text: '<section>章节卡</section>' },
+  ])
+  const proseFence = '```text\n说明：\n<audio>示例</audio>\n```'
+  expect(splitTemplateDisplay(proseFence)).toEqual([{ kind: 'markdown', text: proseFence }])
+  expect(presentRenderedOutput(proseFence, true)).toEqual({ html: null, htmls: [], text: proseFence })
+
+  // 省略 <html> 的 DOCTYPE + <body>（含可选 <head>）文档，在 </body> 后紧跟台词时正常拆分且不触发 pendingHtml。
+  const doctypeBody = '<!DOCTYPE html>\n<body><div>卡片</div></body>'
+  expect(splitTemplateDisplay(`${doctypeBody}\n后文`)).toEqual([
+    { kind: 'html', text: doctypeBody },
+    { kind: 'markdown', text: '后文' },
+  ])
+  expect(presentRenderedOutput(`${doctypeBody}\n后文`, true)).toEqual({
+    html: doctypeBody,
+    htmls: [doctypeBody],
+    text: '后文',
+  })
+  const doctypeHeadBody = '<!DOCTYPE html>\n<head><style>.a{color:red}</style></head>\n<body><div class="a">卡片</div></body>'
+  expect(splitTemplateDisplay(`${doctypeHeadBody}\n后文`)).toEqual([
+    { kind: 'html', text: doctypeHeadBody },
+    { kind: 'markdown', text: '后文' },
+  ])
+  // 显式写了 <html> 但缺 </html> 且后面跟台词的未闭合文档仍保持拒绝语义。
+  expect(isFullHtmlDocument('<html><body>卡面</body>后续台词')).toBe(false)
+})
+
+it('有效纯折叠块（含 #31 未闭合 summary）与相邻非纯折叠块自动拆分，不被同层无效块拖入 iframe', () => {
+  const issue31Fold = '<details>\n<summary>出生地列表\n\n### 中央大陆\n1. 鲁迪乌斯\n</details>'
+  const noBlankBlockFold = '<details>\n<summary>角色列表\n### 魔大陆\n1. 洛琪希\n</details>'
+  const unclosedPlain = '<details>\n<summary>无空行未闭合\n正文\n</details>'
+  const customWidgetFold = '<details><summary>状态卡</summary>\n<my-status>HP: 100</my-status>\n</details>'
+  const kbdFold = '<details><summary>操作提示</summary>\n按 <kbd>Enter</kbd> 继续\n</details>'
+  const strayBacktickFold = '<details><summary>命令 `help 说明</summary>\n请参考 `<div class="demo">` 的写法\n</details>'
+  const mvuCard = '<div class="mvu-status">HP: 100</div>'
+
+  // 两个都可走原生折叠的相邻块维持合并，减少碎片。
+  expect(splitTemplateDisplay(`${issue31Fold}\n${noBlankBlockFold}`)).toEqual([
+    { kind: 'html', text: `${issue31Fold}\n${noBlankBlockFold}` },
+  ])
+
+  // 相邻块中只要有一方不能走原生折叠，必须拆分各自片段（正反顺序皆如此）。
+  for (const nonPlain of [unclosedPlain, customWidgetFold, kbdFold]) {
+    expect(splitTemplateDisplay(`${issue31Fold}\n${nonPlain}`)).toEqual([
+      { kind: 'html', text: issue31Fold },
+      { kind: 'html', text: nonPlain },
+    ])
+    expect(splitTemplateDisplay(`${nonPlain}\n${issue31Fold}`)).toEqual([
+      { kind: 'html', text: nonPlain },
+      { kind: 'html', text: issue31Fold },
+    ])
+  }
+
+  // 摘要内孤立反引号与无空行未闭合块紧邻 <div> 卡片时也正确拆分。
+  expect(splitTemplateDisplay(`${strayBacktickFold}\n${mvuCard}`)).toEqual([
+    { kind: 'html', text: strayBacktickFold },
+    { kind: 'html', text: mvuCard },
+  ])
+  expect(splitTemplateDisplay(`${noBlankBlockFold}\n${mvuCard}`)).toEqual([
+    { kind: 'html', text: noBlankBlockFold },
+    { kind: 'html', text: mvuCard },
+  ])
+
+  // 含多伪标签同行的纯折叠块可与相邻 <div> 拆分；含未声明行内闭标签的非纯折叠块与纯折叠块隔离。
+  const multiPseudoFold = '<details><summary>档案</summary>\n<Adventurer Profile> <status1>\n内容\n</status1> </Adventurer Profile>\n</details>'
+  const residualCloseFold = '<details><summary>残余标签</summary>\n正文 </unknown> 结束\n</details>'
+  expect(splitTemplateDisplay(`${multiPseudoFold}\n${mvuCard}`)).toEqual([
+    { kind: 'html', text: multiPseudoFold },
+    { kind: 'html', text: mvuCard },
+  ])
+  expect(splitTemplateDisplay(`${issue31Fold}\n${residualCloseFold}`)).toEqual([
+    { kind: 'html', text: issue31Fold },
+    { kind: 'html', text: residualCloseFold },
+  ])
+
+  // 纯 <details> 后紧跟只面向下一张真实卡片的 <style> + <div> 时，拆分原生折叠块与样式卡片。
+  const cardWithStyle = '<style>.card{color:red}</style>\n<div class="card">状态卡</div>'
+  expect(splitTemplateDisplay(`${issue31Fold}\n${cardWithStyle}`)).toEqual([
+    { kind: 'html', text: issue31Fold },
+    { kind: 'html', text: cardWithStyle },
+  ])
+  // <center> 内纯 http(s) 链接留给宿主 Markdown 归一化后可正常点击；带样式或危险协议仍进 iframe。
+  expect(splitRenderedHtml('<center><a href="https://example.com" target="_blank">图鉴</a></center>'))
+    .toEqual({ html: null, rest: '<center><a href="https://example.com" target="_blank">图鉴</a></center>' })
+  expect(splitRenderedHtml('<center><a href="https://example.com" style="color:gold">金色链接</a></center>').html)
+    .toContain('style="color:gold"')
+  expect(splitRenderedHtml('<center><a href="javascript:alert(1)">危险</a></center>').html)
+    .toContain('javascript:alert(1)')
+})

@@ -2,7 +2,6 @@
  * 设置面板分区：全局正则脚本（列表 + enabled 开关 + 编辑，整表保存）。
  * find/replace 等代码向输入用 code 字体类；保存反馈走 useToast，上下文错误用 Err。
  */
-import { describeError } from '../../core/guards.js'
 import { parseImportedRegexRules } from '../../core/regex.js'
 import { useDraftGuard } from '../drafts.js'
 import { useDraftState } from '../draftPersistence.js'
@@ -11,6 +10,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { IconTrashOutlineMedium } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PromptPreset, RegexRule, RegexScope, RegexTiming } from '../../core/types.js'
 import type { TavernRemote } from '../types.js'
+import { bumpDisplaySettingsRevision } from '../displayPrefs.js'
 import { t as tOnce, useT } from '../i18n.js'
 import { Badge, Btn, CheckChips, ConfirmDialog, Err, Field, FileBtn, IconBtn, Muted, NullableNumInput, RegexScriptRow, SaveBar, Section, Select, Skeleton, Toggle, downloadJson, errOf, readJsonFile, runAsync, useLoader, useToast } from '../util.js'
 
@@ -144,7 +144,9 @@ export function RegexSection(props: { remote: TavernRemote }) {
     () => rules !== null && JSON.stringify(rules) !== baselineRules,
     [rules, baselineRules],
   )
-  useDraftGuard(dirty, busy)
+  const guard = useDraftGuard(dirty, busy)
+  const rulesRef = useRef(rules)
+  rulesRef.current = rules
 
   useEffect(() => {
     if (state.status === 'ready' && rules === null) {
@@ -205,6 +207,7 @@ export function RegexSection(props: { remote: TavernRemote }) {
         setPresetDrafts(drafts)
       } else if (r.ok) {
         setPresetDrafts(drafts.map((p, i) => i === pi ? { ...nextPreset, editRevision: r.value.revision } : p))
+        bumpDisplaySettingsRevision()
         const name = script.scriptName?.trim() || t('util.regex.unnamed', { index: si + 1 })
         toast.show(disabled ? t('regex.toggledOff', { name }) : t('regex.toggledOn', { name }))
       }
@@ -219,7 +222,12 @@ export function RegexSection(props: { remote: TavernRemote }) {
       const r = await remote.saveRegexRules({ rules: next, expectedRevision: revision })
       const err = errOf(r)
       if (err) setError(err)
-      else if (r.ok) { setSavedRules(JSON.stringify(next)); setRevision(r.value.revision ?? null); toast.show(t('regex.saved', { count: next.length })) }
+      else if (r.ok) {
+        setSavedRules(JSON.stringify(next))
+        setRevision(r.value.revision ?? null)
+        bumpDisplaySettingsRevision()
+        toast.show(t('regex.saved', { count: next.length }))
+      }
     }) } finally { saving.current = false }
   }
 
@@ -249,30 +257,33 @@ export function RegexSection(props: { remote: TavernRemote }) {
     setRules((prev) => (prev ? prev.filter((_, j) => j !== index) : prev))
   }, [setRules])
   const discardNow = () => {
+    if (saving.current) return
     setConfirmDiscard(false)
+    setRuleLimit(40)
     setRules(null)
     setSavedRules(null)
     setRevision(null)
+    guard.clearDraft()
     reload()
   }
   const importRules = async (file: File) => {
     if (saving.current) return
+    saving.current = true
     try {
-      const raw = await readJsonFile(file)
-      const imported = parseImportedRegexRules(raw)
-      if (imported.length === 0) {
-        setError(t('regex.importEmpty'))
-        return
-      }
-      setError(null)
-      setRules((prev) => {
-        const next = [...(prev ?? []), ...imported]
+      await runAsync(setBusy, setError, async () => {
+        const raw = await readJsonFile(file)
+        const imported = parseImportedRegexRules(raw)
+        if (imported.length === 0) {
+          setError(t('regex.importEmpty'))
+          return
+        }
+        const next = [...(rulesRef.current ?? []), ...imported]
         setRuleLimit((n) => Math.max(n, next.length))
-        return next
+        setRules(next)
+        toast.show(t('regex.imported', { count: imported.length }))
       })
-      toast.show(t('regex.imported', { count: imported.length }))
-    } catch (cause) {
-      setError(describeError(cause))
+    } finally {
+      saving.current = false
     }
   }
   return (

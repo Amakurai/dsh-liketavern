@@ -22,12 +22,21 @@ export class TemplateOutputCommitError extends Error {
   }
 }
 
-/** 隔离器的启动/计算/容量故障属于可重试的提交失败；普通 EJS 脚本异常仍按模板降级。 */
+const DETERMINISTIC_TEMPLATE_SCRIPT_ERROR_PREFIXES = [
+  'EJS 模板失败',
+  'EJS 异步任务未完成',
+  'EJS 异步任务失败',
+  '@@if 条件必须只读',
+] as const
+
+/** 隔离器的启动/计算/容量故障属于可重试的提交失败；确定性的第三方脚本或只读守卫异常仍按模板降级。 */
 function isTemplateComputeFailure(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error)
-  // TemplateSandbox 对第三方脚本/表达式错误统一加 "EJS 模板失败：" 前缀，这类错误按原有
-  // 模板异常路径提交（展示回退原文）；其余 isolated 异常都视为计算资源/桥接故障，可重试。
-  return message === '模板回复结果与宿主消息数量不一致' || !message.startsWith('EJS 模板失败')
+  // TemplateSandbox 对第三方脚本/表达式错误、未完成异步任务、非超时中断的异步拒绝与 @@if 只读违规
+  // 均属于确定性模板异常（展示回退原文）；其余 isolated 异常与超时中断视为计算资源/桥接故障，可重试。
+  if (message === '模板回复结果与宿主消息数量不一致') return true
+  if (message.includes('（执行期间触发计算超时中断）')) return true
+  return !DETERMINISTIC_TEMPLATE_SCRIPT_ERROR_PREFIXES.some(prefix => message.startsWith(prefix))
 }
 
 export async function completeTemplateOutput(state:TavernState,session:Pick<Session,'id'|'snapshotEvents'>):Promise<void> {

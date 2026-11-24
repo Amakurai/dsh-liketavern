@@ -16,6 +16,7 @@ export interface WalFloorInfo {
     committed: boolean;
     startedAt: string;
     rolledBack: boolean;
+    reopened?: boolean;
 }
 /** rollbackAfter() 返回形状。 */
 export interface RollbackAfterResult {
@@ -36,9 +37,9 @@ export declare class Wal {
     private readonly rootDir;
     private readonly logFs;
     private readonly hasCoverage;
-    /** 最近一次确认已登记的楼层身份。 */
+    /** 最近一次确认已登记的楼层身份（绑定共享 coverageEpoch，跨实例修改清单后自动重验）。 */
     private covered;
-    /** 楼层元数据缓存（含归档回滚副本与已提交活跃楼层），按 meta.json 的 mtimeMs/size 复核。 */
+    /** 楼层元数据缓存（含归档回滚副本与已提交活跃楼层），按 meta.json 的磁盘指纹与跨实例写入序号复核。 */
     private readonly metaCache;
     /** 同层 records.jsonl 原文绑定缓存：命中前提必须是磁盘读出的全文完全相等。 */
     private readonly recordsCache;
@@ -104,6 +105,8 @@ export declare class Wal {
     private assertNotRecovering;
     /** 工作区级恢复标记的绝对路径；非标准日志根（无 state/wal 布局）退回日志目录内。 */
     private recoveryMarkerPath;
+    /** 探测当前 WAL 实际使用的恢复标记路径（兼容非标准日志根）。 */
+    private hasRecoveryMarkerFile;
     /** 读恢复标记中的楼层清单及形状有效性；缺失返回 null，损坏返回 valid: false 以便对账重写或删除。 */
     private readRecoveryMarker;
     /**

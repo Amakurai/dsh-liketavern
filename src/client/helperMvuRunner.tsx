@@ -38,6 +38,7 @@ export function HelperMvuRunner(props:{remote:TavernRemote;sessionId:string;stor
         const wakeAt=deadline>0?Math.min(renewAt||deadline,deadline):renewAt||now+1000
         return Math.max(250,Math.min(20000,wakeAt-now))
       }
+      if(work&&renewAt>now)return Math.max(250,Math.min(20000,renewAt-now))
       if(idlePollAt>now)return Math.max(250,idlePollAt-now)
       return 1000
     }
@@ -134,14 +135,14 @@ export function HelperMvuRunner(props:{remote:TavernRemote;sessionId:string;stor
         if(frameRuntime&&frameRuntime!==value.runtimeId){fail(t('speech.mvuSandboxChanged'));return}
         frameRuntime=String(value.runtimeId);wake();return
       }
-      // 快照读取与其它业务回执同口径：卡面重建后的旧运行时迟到请求不能拿到当前剧情快照。
+      // 快照读取与其它业务回执同口径：卡面重建后的旧运行时迟到请求不能拿到当前剧情快照，回执亦须携带 runtimeId。
       if(value.action==='helperSnapshotGet'&&typeof value.requestId==='string'&&value.storyId===storyId&&endpoint.matchesRuntime(value.runtimeId)){
-        send({action:'helperSnapshotResult',requestId:value.requestId,ok:true,snapshot:work?.snapshot??live.current.snapshot});return
+        send({action:'helperSnapshotResult',runtimeId:value.runtimeId,requestId:value.requestId,ok:true,snapshot:work?.snapshot??live.current.snapshot});return
       }
       if(value.action!=='helperMvuResult'||!endpoint.matchesRuntime(value.runtimeId)||value.requestId!==requestId||!running||result!==undefined)return
       if(!valid()){fail(t('speech.mvuTaskChanged'));return}
       if(value.ok!==true){fail(value.error);return}
-      try{result=helperJson(value.data);void commit().catch(fail)}catch(error){fail(error)}
+      try{result=helperJson(value.data);void commit().catch(error=>{fail(error);scheduleTimer()})}catch(error){fail(error)}
     }
     retry.current=()=>{
       failed=false;setError(null);idleAttempts=0;idlePollAt=0

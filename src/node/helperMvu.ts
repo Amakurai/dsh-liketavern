@@ -7,9 +7,11 @@ import {helperMvuData,parseHelperMvuState,type HelperMvuJob,type HelperMvuWork,t
 import {helperJson,helperRecord} from '../core/helperRuntime.js'
 import {enabledHelperLibraries} from '../core/helperScripts.js'
 import {isTavernGreetingEvent} from '../core/greetingLog.js'
-import {isContinueInstruction} from '../core/dshPrompt.js'
+import {CONTINUE_INSTRUCTION_PREFIX,isContinueInstruction} from '../core/dshPrompt.js'
 import type {SessionBinding} from '../core/binding.js'
+import {parseSessionBinding} from './bindings.js'
 import {loadHelperState,saveHelperState,type HelperState} from '../state/helper.js'
+import type {WalFloorInfo} from '../state/wal.js'
 import {withWorkspaceLock} from '../state/workspaceLock.js'
 import {getHelperSnapshot,helperHistoryOf,helperHistoryRevision} from './helperRuntime.js'
 import {findLastEvent,readDisplaySessionEvents} from './sessionEvents.js'
@@ -94,6 +96,35 @@ async function seedScripts(state:TavernState,sessionId:string,storyId:string,sav
     if(!Object.hasOwn(saved.scopes,key))saved.scopes[key]=helperJson(script.data) as Record<string,unknown>
   }
 }
+function ownedFloorOrder(floor:string,binding:SessionBinding,sessionId:string):{turn:number;owner:number}|null{
+  const match=/^(.*)#t([0-9]+)$/.exec(floor)
+  if(!match)return null
+  const turn=Number(match[2])
+  if(!Number.isSafeInteger(turn))return null
+  const lineage=binding.walLineage??[]
+  if(match[1]===sessionId)return {turn,owner:lineage.length}
+  const owner=lineage.findIndex(entry=>entry.sessionId===match[1]&&entry.throughTurn>=turn)
+  return owner<0?null:{turn,owner}
+}
+function hasNewerOwnedFloor(floors:readonly WalFloorInfo[],binding:SessionBinding,sessionId:string,turn:number):boolean{
+  return floors.some(item=>{
+    if(item.rolledBack)return false
+    const order=ownedFloorOrder(item.floor,binding,sessionId)
+    return order!==null&&order.turn>turn
+  })
+}
+function latestOwnedActiveFloor(floors:readonly WalFloorInfo[],binding:SessionBinding,sessionId:string):{floor:string;turn:number;committed:boolean}|null{
+  let best:{floor:string;turn:number;owner:number;committed:boolean}|null=null
+  for(const item of floors){
+    if(item.rolledBack)continue
+    const order=ownedFloorOrder(item.floor,binding,sessionId)
+    if(!order)continue
+    if(!best||order.turn>best.turn||(order.turn===best.turn&&order.owner>best.owner)){
+      best={floor:item.floor,turn:order.turn,owner:order.owner,committed:item.committed}
+    }
+  }
+  return best?{floor:best.floor,turn:best.turn,committed:best.committed}:null
+}
 function floorOwner(binding:SessionBinding,sessionId:string,job:Pick<HelperMvuJob,'floor'|'turn'>):void{
   const suffix='#t'+job.turn
   if(!job.floor.endsWith(suffix))throw new Error('自动 MVU 楼层与消息轮次不一致')
@@ -154,9 +185,9 @@ async function resolveTurnFloor(ws:{wal:import('../state/wal.js').Wal},binding:S
   const inherited=active.find(item=>{const owner=item.floor.slice(0,-suffix.length);return (binding.walLineage??[]).some(entry=>entry.sessionId===owner&&entry.throughTurn>=turn)})
   return inherited?.floor??sessionId+suffix
 }
-async function queue(state:TavernState,sessionId:string,session:Snapshot,live:boolean,recovery?:{floor:string;turn:number}):Promise<void>{
+async function queue(state:TavernState,sessionId:string,session:Snapshot,live:boolean,recovery?:{floor:string;turn:number},options?:{waitForAdoption?:boolean}):Promise<void>{
   if(session.id!==sessionId)throw new Error('自动 MVU 结束来源与会话不一致')
-  const binding=await state.loadStoryBinding(sessionId)
+  const binding=await state.loadStoryBinding(sessionId,options)
   if(!enabled(state,binding))return
   const events=session.snapshotEvents(),boundary=findLastEvent(events,(event):event is SessionEvent<'turn/start'|'turn/end'>=>recovery?event.type==='turn/end'&&event.data.turn===recovery.turn:event.type==='turn/start'||event.type==='turn/end')
   if(!boundary||!live&&(boundary.type!=='turn/end'||boundary.data.reason.kind!=='completed'))return
@@ -188,37 +219,78 @@ async function queue(state:TavernState,sessionId:string,session:Snapshot,live:bo
 }
 export const queueHelperMvuTurn=(state:TavernState,sessionId:string,session:Snapshot):Promise<void>=>queue(state,sessionId,session,false)
 export const queueHelperMvuStop=(state:TavernState,sessionId:string,session:Snapshot):Promise<void>=>queue(state,sessionId,session,true)
-export async function helperMvuPending(state:TavernState,sessionId:string,includeInitialization=true):Promise<boolean>{
+export async function helperMvuPending(state:TavernState,sessionId:string,includeInitialization=true,initAnchorTurn?:number|null):Promise<boolean>{
   const binding=await state.loadStoryBinding(sessionId)
   if(!enabled(state,binding))return false
   const ws=await state.storyWorkspace(binding!.cardId,binding!.storyId)
-  return withWorkspaceLock(ws.fs.root,async()=>{const mvu=parseHelperMvuState((await loadHelperState(ws.fs)).mvu);return includeInitialization&&!mvu.initialized||mvu.pending.length>0||await unfinalizedReceipt(state,binding!,sessionId,mvu)||await unregisteredFloor(state,binding!,sessionId,mvu)})
+  return withWorkspaceLock(ws.fs.root,async()=>{
+    const mvu=parseHelperMvuState((await loadHelperState(ws.fs)).mvu)
+    let needsInit=includeInitialization&&!mvu.initialized
+    if(needsInit&&initAnchorTurn!==undefined){
+      needsInit=initAnchorTurn!==null&&!hasNewerOwnedFloor(await ws.wal.listFloors(),binding!,sessionId,initAnchorTurn)
+    }
+    return needsInit||mvu.pending.length>0||await unfinalizedReceipt(state,binding!,sessionId,mvu)||await unregisteredFloor(state,binding!,sessionId,mvu)
+  })
+}
+/** 续写前预检：原生 MVU 开启时核对来源回复能否被续写链路恢复，避免开启注定无法收口的续写轮。 */
+export async function assertHelperMvuContinuable(state:TavernState,sessionId:string,events:readonly SessionEvent[],bindingOverride?:SessionBinding|null):Promise<void>{
+  const binding=bindingOverride===undefined?await state.loadStoryBinding(sessionId):bindingOverride
+  if(!enabled(state,binding))return
+  const ws=await state.storyWorkspace(binding!.cardId,binding!.storyId)
+  await withWorkspaceLock(ws.fs.root,async()=>{
+    const saved=await loadHelperState(ws.fs),mvu=parseHelperMvuState(saved.mvu)
+    const lastBoundary=findLastEvent(events,event=>event.type==='turn/start'||event.type==='turn/end')
+    const nextTurn=(lastBoundary?.data.turn??0)+1
+    const lastSeq=events.at(-1)?.seq??0
+    const syntheticEvents:SessionEvent[]=[
+      ...events,
+      {seq:lastSeq+1,type:'turn/start',data:{turn:nextTurn}} as SessionEvent,
+      {
+        seq:lastSeq+2,
+        type:'user/message',
+        data:{
+          id:'mvu-continue-preflight',
+          role:'user',
+          content:[{type:'text',text:CONTINUE_INSTRUCTION_PREFIX}],
+          source:{kind:'dsh-tavern',form:'notice',summary:'续写指令'},
+        },
+      } as unknown as SessionEvent,
+    ]
+    verifyContinuation(syntheticEvents,{seq:lastSeq+3,turn:nextTurn,text:''},mvu,saved.scopes)
+  })
 }
 /** 脚本加载阶段允许先播种数据；任务一经登记，普通变量/消息/世界书写必须等待本批事务完成。 */
-export async function assertHelperMvuWritable(state:TavernState,sessionId:string):Promise<void>{
-  const binding=await state.loadStoryBinding(sessionId)
+export async function assertHelperMvuWritable(state:TavernState,sessionId:string,options?:{waitForAdoption?:boolean}):Promise<void>{
+  const binding=await state.loadStoryBinding(sessionId,options)
   if(!enabled(state,binding))return
   const ws=await state.storyWorkspace(binding!.cardId,binding!.storyId)
   await withWorkspaceLock(ws.fs.root,async()=>{const mvu=parseHelperMvuState((await loadHelperState(ws.fs)).mvu);if(mvu.pending.length||await unfinalizedReceipt(state,binding!,sessionId,mvu)||await unregisteredFloor(state,binding!,sessionId,mvu))throw new Error('自动 MVU 正在更新当前剧情，请等待事务完成')})
 }
 async function sources(state:TavernState,binding:SessionBinding):Promise<HelperMvuInitialSource[]>{
-  const known=new Set(await state.listLorebooks()),seen=new Set<string>()
+  const seen=new Set<string>()
   const tasks:Array<()=>Promise<HelperMvuInitialSource|null>>=[]
-  const plan=(id:string,role:'global'|'character')=>{
-    if(seen.has(id))return
-    if(!known.has(id))throw new Error('自动 MVU 初始化世界书不存在：'+id)
-    seen.add(id)
-    tasks.push(async()=>({name:id,role,entries:(await state.loadLorebookEntries(id,role)).map(({uid,comment,content})=>({uid,comment,content}))}))
+  type RequestedSource={kind:'shared';id:string;role:'global'|'character'}|{kind:'embedded'}
+  const requested:RequestedSource[]=[]
+  for(const id of binding.lorebookIds)requested.push({kind:'shared',id,role:'global'})
+  if(binding.characterLorebookId)requested.push({kind:'shared',id:binding.characterLorebookId,role:'character'})
+  else if(binding.useEmbeddedLorebook!==false)requested.push({kind:'embedded'})
+  for(const id of binding.characterLorebookIds??[])requested.push({kind:'shared',id,role:'character'})
+  for(const item of requested){
+    if(item.kind==='embedded'){
+      tasks.push(async()=>{
+        const [embedded,entries]=await Promise.all([state.loadCharacterLorebookRaw(binding.cardId),state.loadCharacterLorebookEntries(binding.cardId)])
+        return embedded?{name:embedded.name,role:'character',entries:entries.map(({uid,comment,content})=>({uid,comment,content}))}:null
+      })
+      continue
+    }
+    const {id,role}=item
+    const resolved=await state.resolveLorebookFileId(id)
+    if(!resolved)throw new Error('自动 MVU 初始化世界书不存在：'+id)
+    const dedupeKey=process.platform==='win32'?resolved.toLowerCase():resolved
+    if(seen.has(dedupeKey))continue
+    seen.add(dedupeKey)
+    tasks.push(async()=>({name:resolved,role,entries:(await state.loadLorebookEntries(resolved,role)).map(({uid,comment,content})=>({uid,comment,content}))}))
   }
-  for(const id of binding.lorebookIds)plan(id,'global')
-  if(binding.characterLorebookId)plan(binding.characterLorebookId,'character')
-  else if(binding.useEmbeddedLorebook!==false){
-    tasks.push(async()=>{
-      const [embedded,entries]=await Promise.all([state.loadCharacterLorebookRaw(binding.cardId),state.loadCharacterLorebookEntries(binding.cardId)])
-      return embedded?{name:embedded.name,role:'character',entries:entries.map(({uid,comment,content})=>({uid,comment,content}))}:null
-    })
-  }
-  for(const id of binding.characterLorebookIds??[])plan(id,'character')
   const loaded=await Promise.all(tasks.map(task=>task()))
   const result=loaded.filter((item):item is HelperMvuInitialSource=>item!==null)
   helperJson(result,2*1024*1024);return result
@@ -264,6 +336,9 @@ export async function ensureHelperMvuScriptAnchor(ctx:Context,state:TavernState,
       }
       if(!latest)return null
       const open=state.openFloors.get(sessionId)
+      const floors=await ws.wal.listFloors()
+      // 尚未初始化且最新完成回复之后已有更新的 WAL 楼层（例如中断/超长/错误轮）时，不能向旧楼层补写，延后到下一次正常 stop。
+      if(!mvu.initialized&&hasNewerOwnedFloor(floors,binding,sessionId,latest.data.turn))return null
       const targetFloor=await resolveTurnFloor(ws,binding,sessionId,latest.data.turn)
       if(open&&open.floor!==targetFloor)return null
       job=makeJob(latest,mvu.initialized?'update':'initialize',targetFloor)
@@ -275,10 +350,23 @@ export async function ensureHelperMvuScriptAnchor(ctx:Context,state:TavernState,
     await seedScripts(state,sessionId,storyId,saved)
     if(register){mvu.pending.push(job);saved.mvu=mvu}
     if(stateHash(saved)!==before){
-      const ready=await floorReady(state,binding,sessionId,job,register)
-      await ws.wal.reopenFloor(job.floor)
-      await saveHelperState(ws.fs.withFloor(job.floor),saved)
-      if(!ready.open)await ws.wal.commitFloor(job.floor)
+      if(!register&&!mvu.pending.length){
+        const latestFloor=latestOwnedActiveFloor(await ws.wal.listFloors(),binding,sessionId)
+        const open=state.openFloors.get(sessionId)
+        const seedTarget=latestFloor&&latestFloor.turn>job.turn?{floor:latestFloor.floor,turn:latestFloor.turn}:job
+        if(latestFloor&&latestFloor.floor===seedTarget.floor&&!latestFloor.committed&&open?.floor!==seedTarget.floor){
+          throw new Error('最新楼层存在未收口的宿主事务，请先恢复后再写入')
+        }
+        const ready=await floorReady(state,binding,sessionId,seedTarget,false)
+        await ws.wal.reopenFloor(seedTarget.floor)
+        await saveHelperState(ws.fs.withFloor(seedTarget.floor),saved)
+        if(!ready.open)await ws.wal.commitFloor(seedTarget.floor)
+      }else{
+        const ready=await floorReady(state,binding,sessionId,job,register)
+        await ws.wal.reopenFloor(job.floor)
+        await saveHelperState(ws.fs.withFloor(job.floor),saved)
+        if(!ready.open)await ws.wal.commitFloor(job.floor)
+      }
     }else if(mvu.pending.length)await floorReady(state,binding,sessionId,job)
     return job.seq
   })
@@ -297,7 +385,7 @@ export async function prepareHelperMvuJob(ctx:Context,state:TavernState,request:
     if(unregistered){
       const session=ctx.sessions.get(request.sessionId as Session['id'])
       if(!session)throw new Error('自动 MVU 登记恢复缺少当前宿主会话')
-      await queue(state,request.sessionId,session,false,unregistered)
+      await queue(state,request.sessionId,session,false,unregistered,{waitForAdoption:false})
       saved=await loadHelperState(ws.fs);mvu=parseHelperMvuState(saved.mvu)
       if(!mvu.pending.length)throw new Error('自动 MVU 登记恢复未找到正常完成回复')
     }
@@ -306,6 +394,7 @@ export async function prepareHelperMvuJob(ctx:Context,state:TavernState,request:
     if(!mvu.pending.length&&!mvu.initialized){
       const latest=latestCompleted(events)
       if(!latest)return {...baseWork,status:'waiting'}
+      if(hasNewerOwnedFloor(await ws.wal.listFloors(),binding,request.sessionId,latest.data.turn))return {...baseWork,status:'waiting'}
       const open=state.openFloors.get(request.sessionId)
       const targetFloor=await resolveTurnFloor(ws,binding,request.sessionId,latest.data.turn)
       if(open&&open.floor!==targetFloor)return {...baseWork,status:'waiting'}
@@ -326,7 +415,8 @@ export async function prepareHelperMvuJob(ctx:Context,state:TavernState,request:
     if(continuationMessageIds.some(index=>index<0))throw new Error('自动 MVU 续写来源不在当前剧情快照中')
     await floorReady(state,binding,request.sessionId,job)
     const key=leaseKey(request),map=leaseMap(state),old=map.get(key)
-    const bindingDigest=hash(binding),historyDigest=helperHistoryRevision(history),beforeDigest=stateHash(saved)
+    const {cardName:_cardName,...semanticBinding}=parseSessionBinding(binding)
+    const bindingDigest=hash(semanticBinding),historyDigest=helperHistoryRevision(history),beforeDigest=stateHash(saved)
     let cachedScriptsRev:string|undefined
     const getScriptsRev=async()=>(cachedScriptsRev??=await scriptRevision(state,request))
     if(old&&old.job.id===job.id&&!old.committed){
@@ -365,7 +455,8 @@ export async function commitHelperMvuJob(ctx:Context,state:TavernState,request:R
     if(!enabled(state,binding))throw new Error('自动 MVU 已关闭')
     const key=leaseKey(request),lease=leaseMap(state).get(key)
     if(!lease||lease.runtimeId!==request.runtimeId||lease.token!==request.token||lease.job.id!==request.jobId)throw new Error('自动 MVU 执行租约已失效，请重新准备')
-    if(hash(binding)!==lease.binding||await scriptRevision(state,request)!==lease.scripts)throw new Error('自动 MVU 绑定或脚本库已改变')
+    const {cardName:_cardName,...semanticBinding}=parseSessionBinding(binding)
+    if(hash(semanticBinding)!==lease.binding||await scriptRevision(state,request)!==lease.scripts)throw new Error('自动 MVU 绑定或脚本库已改变')
     const events=await readDisplaySessionEvents(ctx,request.sessionId)
     verifyTarget(events,lease.job)
     if(helperHistoryRevision(helperHistoryOf(events,{char:'',user:''}))!==lease.history)throw new Error('自动 MVU 执行期间聊天历史已改变')

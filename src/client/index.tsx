@@ -58,11 +58,12 @@ export async function apply(ctx: ClientContext) {
     const conversation=ctx.get('conversation') as IConversation|undefined
     return scope&&conversation?.input?conversation.input.for(scope as Context):undefined
   }),'dsh-tavern: choice input')
-  /** 使用宿主公开取消动作；其 keepInbox 语义保留待处理输入，也可以终止空闲维护等待。 */
+  /** 使用宿主公开取消动作；调用时按需解析当前绑定，避免插槽 inject 缓存过期或错失晚到的会话句柄。 */
   const cancelWaiting = (sessionId: string): (() => Promise<void>) | undefined => {
-    const face = sessions.binding?.(sessionId)?.session
-    if (!face) return undefined
+    if (typeof sessions.binding !== 'function') return undefined
     return async () => {
+      const face = sessions.binding?.(sessionId)?.session
+      if (!face) throw new Error('当前会话未就绪，无法取消等待')
       const result = await face.cancel()
       if (!result.ok) throw new Error(result.error.message)
     }
@@ -137,8 +138,9 @@ export async function apply(ctx: ClientContext) {
     const applyNode = (want: boolean) => {
       if (want) {
         if (nodeDispose) return
+        let assistant: (() => void) | undefined
         try {
-          const assistant = ctx.slots.register(
+          assistant = ctx.slots.register(
             {
               name: 'conversation.chat.node',
               key: 'assistant-step',
@@ -149,8 +151,10 @@ export async function apply(ctx: ClientContext) {
           )
           // 续写等合成指令唤醒的回合：宿主会把指令原文画成可展开行，这里换成简短说明（见 trigger.tsx）。
           const trigger = ctx.slots.register({ name: 'conversation.chat.node', key: 'turn-trigger', priority: -1 }, TavernTurnTrigger)
-          nodeDispose = () => { assistant(); trigger() }
+          const disposeAssistant = assistant
+          nodeDispose = () => { disposeAssistant(); trigger() }
         } catch (error) {
+          assistant?.()
           nodeDispose = undefined
           warn('对话节点覆盖', error)
         }

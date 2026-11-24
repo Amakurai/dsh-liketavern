@@ -90,16 +90,16 @@ it('连续条件复用上一条的末态快照，中间有求值时重新读取'
   await TemplateSandbox.prepare()
   const sandbox = await TemplateSandbox.create(context(), false)
   try {
-    // 计数 getter 不改状态值，只记录快照读取次数：每次快照经 dump 与 toJSON 检查各读一次。
+    // 计数 getter 不改状态值，只记录快照读取次数：单趟原子快照每次只读取一次（消除 2-pass TOCTOU）。
     sandbox.render(`<% globalThis.probeReads=0; Object.defineProperty(variables,'probe',{enumerable:true,get(){globalThis.probeReads++;return 1}}) %>`)
     const reads = () => Number(sandbox.render('<%- globalThis.probeReads %>'))
     const start = reads()
     for (let index = 0; index < 5; index++) expect(sandbox.condition('true')).toBe(true)
-    // 首条取起点与末态，其后四条只取末态：共 6 次快照。
-    expect(reads() - start).toBe(12)
+    // 首条取起点与末态，其后四条只取末态：共 6 次单趟快照。
+    expect(reads() - start).toBe(6)
     // reads() 本身是一次求值，下一条条件必须重新取起点。
     const afterRender = reads()
     expect(sandbox.condition('true')).toBe(true)
-    expect(reads() - afterRender).toBe(4)
+    expect(reads() - afterRender).toBe(2)
   } finally { sandbox.dispose() }
 }, 30_000)

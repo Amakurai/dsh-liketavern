@@ -511,3 +511,8 @@ it('先读后清：flushvar 不早于同段 getvar 执行', () => {
   expect(second).toBe('{keep} Bob')
   expect(toJsonCalls).toBe(1)
 })
+
+it('expandIdentityMacros 同步展开 {{group}}/{{groupNotMuted}}/{{notChar}} 别名，避免开场白漏出原样宏', () => {
+  expect(expandIdentityMacros('{{group}} / {{groupNotMuted}} / {{notChar}} / <GROUP>', { char: '爱丽丝', user: '旅人' }))
+    .toBe('爱丽丝 / 爱丽丝 / 旅人 / 爱丽丝')
+})

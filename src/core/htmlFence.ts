@@ -20,19 +20,22 @@ export function findHtmlFence(text:string,code?:ReturnType<typeof markdownCodeSc
       if(end!==null)tokens.lastIndex=end
       continue
     }
-    if(!fence.closed)return null
     tokens.lastIndex=fence.end
+    if(!fence.closed)continue
     // CommonMark 以 info 的首个单词作为语言，`html title="x"` 仍是 HTML 围栏。
     const info=fence.info.trim().split(/\s+/)[0]!.toLowerCase()
-    if(!fence.standalone||!['','html','text','xml'].includes(info))continue
+    if(!fence.standalone||!['','html','htm','xhtml','text','xml'].includes(info))continue
     const content=text.slice(fence.contentStart,fence.contentEnd),trimmed=content.trim()
-    // 明确标成 html/xml 的围栏本身就是作者给出的执行边界。button、p、自定义元素等
-    // 不需要再伪装成 div 才能进入沙箱；无语言/text 围栏仍走结构识别，避免把普通代码提升为卡面。
+    // 明确标成 html/htm/xhtml/xml 的围栏本身就是作者给出的执行边界。button、p、自定义元素等
+    // 不需要再伪装成 div 才能进入沙箱；无语言/text 围栏须从首标签起就是 HTML，避免把含示例标签的普通说明提升为卡面。
     if(!trimmed)continue
-    if(!['html','xml'].includes(info)) {
+    if(!['html','htm','xhtml','xml'].includes(info)) {
       if(!trimmed.includes('<'))continue
       const innerCode=markdownCodeScanner(trimmed)
-      if(!findHtmlDocument(trimmed,innerCode)&&!findHtmlFragment(trimmed,innerCode))continue
+      const leadingComments=/^(?:\s|<!--[\s\S]*?-->)*/.exec(trimmed)![0]!.length
+      const doc=findHtmlDocument(trimmed,innerCode)
+      const frag=findHtmlFragment(trimmed,innerCode)
+      if((!doc||doc.start>leadingComments)&&(!frag||frag.start>leadingComments))continue
     }
     const start=fence.contentStart+content.indexOf(trimmed)
     return {start:token.index,end:fence.end,contentStart:start,contentEnd:start+trimmed.length}

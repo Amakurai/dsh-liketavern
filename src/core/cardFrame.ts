@@ -86,6 +86,7 @@ export interface CardFrameOptions {
   /** 开场白变体（0 = first_mes）。供 getChatMessages / swipe_id 使用。 */
   greetings: string[]
   greetingIndex: number
+  colorScheme?: 'light' | 'dark'
   variableLabels?: CardVariableLabels
   variableStyles?: string
   helperContext?: CardHelperContext
@@ -184,6 +185,7 @@ function cspContent(connectHosts: string[]): string {
 export function tavernCardBridgeScript(options: Omit<CardFrameOptions, 'connectHosts'>): string {
   // 小字段照常序列化（缺省字段同样省略），只把可缓存的大快照拼接进去；source 恒在，对象不为空。
   const src = getBridgeSources()
+  const initialColorScheme = options.colorScheme === 'light' || options.colorScheme === 'dark' ? options.colorScheme : 'light dark'
   const head = escapeScriptJson({ greetings: options.greetings, greetingIndex: options.greetingIndex, source: CARD_BRIDGE_SOURCE })
   const payload = options.helperSnapshot ? head.slice(0, -1) + ',"helperSnapshot":' + snapshotScriptJson(options.helperSnapshot) + '}' : head
   return `<script data-dsh-tavern-bridge>
@@ -249,6 +251,28 @@ export function tavernCardBridgeScript(options: Omit<CardFrameOptions, 'connectH
     title: 'Card variables / backup', note: options.helperSnapshot ? 'Variables save to this story. Wait for the saved status before leaving; keep a backup if saving fails. Restoring also updates story variables.' : 'Card variables stay in this preview only. Copy a backup before leaving or refreshing.',
     backup: 'Select backup text', text: 'Card variable backup',
   })}, ${escapeScriptJson(options.variableStyles ?? '')}, cfg.helperSnapshot ? cfg.helperSnapshot.currentMessageId : ${escapeScriptJson(options.helperContext?.messageId ?? 0)}, cfg.helperSnapshot ? cfg.helperSnapshot.messages.length : undefined);
+  var currentColorScheme = ${escapeScriptJson(initialColorScheme)};
+  var colorSchemeFromHost = false;
+  function readColorSchemeMeta() {
+    var node = document.querySelector ? document.querySelector('meta[name="color-scheme"]') : null;
+    if (!colorSchemeFromHost && node && (node.content === 'light' || node.content === 'dark')) {
+      currentColorScheme = node.content;
+    }
+  }
+  function applyColorScheme(scheme) {
+    if (scheme !== 'light' && scheme !== 'dark' && scheme !== 'light dark') return;
+    colorSchemeFromHost = true;
+    currentColorScheme = scheme;
+    var node = document.querySelector ? document.querySelector('meta[name="color-scheme"]') : null;
+    if (node) node.content = scheme;
+  }
+  function onHostColorScheme(event) {
+    var data = event && event.data;
+    if (!data || event.source !== parent || data.source !== cfg.source || data.runtimeId !== runtimeId || data.action !== 'setColorScheme') return;
+    applyColorScheme(data.colorScheme);
+  }
+  readColorSchemeMeta();
+  if (typeof window.addEventListener === 'function') window.addEventListener('message', onHostColorScheme);
   function post(action, extra) {
     var msg = { source: cfg.source, action: action, runtimeId: runtimeId };
     if (extra) for (var k in extra) if (Object.prototype.hasOwnProperty.call(extra, k)) msg[k] = extra[k];
@@ -259,6 +283,7 @@ export function tavernCardBridgeScript(options: Omit<CardFrameOptions, 'connectH
   var cleanupMvu = (${src.installMvu})((${src.createMvuCodec})(helperJson,(${src.markdownScanner})),helperJson);
   var cleanupMvuRunner = ${options.mvuRunner ? `(${src.installMvuRunner})((${src.createMvuInitial}),helperJson)` : 'function(){}'};
   var ro = null, mo = null, timers = [], lastHeight = 0;
+  var lastClientHeight = 0, lastClientWidth = 0, viewportGrowStreak = 0, contentTrigger = true, viewportLocked = null;
   var heightFrame = null, heightFrameKind = '', heightActive = true;
   var scriptContext=${escapeScriptJson(options.scriptContext??null)};
   var scriptLibraries=${options.scriptLibraries?cachedScriptJson(options.scriptLibraries,()=>escapeScriptJson(options.scriptLibraries)):'null'};
@@ -283,12 +308,17 @@ export function tavernCardBridgeScript(options: Omit<CardFrameOptions, 'connectH
     return function(){cleanupDisplay();cleanupLegacy();cleanup();};
   })()` : 'function(){}'};
   var cleanupScript=${options.scriptContext ? `(${src.installCardScript})(scriptContext)` : 'function(){}'};
+  var SKIP_MEASURE_TAGS = { script: 1, style: 1, template: 1, link: 1, meta: 1, title: 1, noscript: 1 };
   function reportHeight() {
+    var triggeredByContent = contentTrigger;
+    contentTrigger = false;
     try {
       var h = 0;
       var el = document.documentElement;
       var body = document.body;
       var scrollY = window.scrollY || 0;
+      var clientH = el && typeof el.clientHeight === 'number' ? el.clientHeight : 0;
+      var clientW = el && typeof el.clientWidth === 'number' ? el.clientWidth : 0;
       var hasComputedStyle = typeof getComputedStyle === 'function';
       var styleCache = new Map();
       var rectCache = new Map();
@@ -311,9 +341,10 @@ export function tavernCardBridgeScript(options: Omit<CardFrameOptions, 'connectH
       // 用实际边界及外边距测量，避免根 scrollHeight 在有/无滚动条之间反复撑高和缩小。
       function bottomWithMargin(node) {
         var rect = rectOf(node);
+        if (!rect || (rect.width === 0 && rect.height === 0 && rect.bottom === 0)) return 0;
         var st = styleOf(node);
         var margin = st ? parseFloat(st.marginBottom) || 0 : 0;
-        return rect ? rect.bottom + scrollY + Math.max(0, margin) : 0;
+        return rect.bottom + scrollY + Math.max(0, margin);
       }
       function closedSummaryOf(detailsNode) {
         var summary = null;
@@ -333,11 +364,15 @@ export function tavernCardBridgeScript(options: Omit<CardFrameOptions, 'connectH
           } else {
             var clip = parentState.clippedBottom;
             var st = styleOf(ancestor);
-            if (st && /^(auto|scroll|hidden|clip)$/.test(st.overflowY)) {
-              var rect = rectOf(ancestor);
-              if (rect) clip = Math.min(clip, rect.bottom + scrollY);
+            if (st && (st.display === 'none' || st.position === 'fixed')) {
+              base = { hidden: true, clippedBottom: Infinity };
+            } else {
+              if (st && /^(auto|scroll|hidden|clip)$/.test(st.overflowY)) {
+                var rect = rectOf(ancestor);
+                if (rect) clip = Math.min(clip, rect.bottom + scrollY);
+              }
+              base = { hidden: false, clippedBottom: clip };
             }
-            base = { hidden: false, clippedBottom: clip };
           }
           stateCache.set(ancestor, base);
         }
@@ -350,27 +385,84 @@ export function tavernCardBridgeScript(options: Omit<CardFrameOptions, 'connectH
         }
         return base;
       }
+      var bodyViewportLocked = false;
       if (body) {
-        h = Math.max(h, body.offsetHeight || 0, bottomWithMargin(body));
-        if (body.scrollHeight > (el ? el.clientHeight : 0)) h = Math.max(h, body.scrollHeight);
+        var bodyStyle = styleOf(body);
+        var bodyMinH = bodyStyle && bodyStyle.minHeight ? parseFloat(bodyStyle.minHeight) || 0 : 0;
+        var bodyH = bodyStyle && bodyStyle.height ? parseFloat(bodyStyle.height) || 0 : 0;
+        bodyViewportLocked = clientH > 0 && (Math.abs(bodyMinH - clientH) <= 2 || Math.abs(bodyH - clientH) <= 2);
+        var childMax = 0;
         var nodes = body.querySelectorAll('*');
-        var n = Math.min(nodes.length, 400);
-        for (var i = 0; i < n; i++) {
+        var scanned = 0;
+        for (var i = 0; i < nodes.length && scanned < 2000; i++) {
+          var node = nodes[i];
+          var tag = node.tagName ? String(node.tagName).toLowerCase() : '';
+          if (SKIP_MEASURE_TAGS[tag] || (node.namespaceURI === 'http://www.w3.org/2000/svg' && tag !== 'svg')) continue;
+          scanned++;
+          var nodeStyle = styleOf(node);
+          if (nodeStyle && (nodeStyle.display === 'none' || nodeStyle.position === 'fixed')) continue;
           // Chromium 仍可返回收起 details 内部的旧矩形，不能把不可见内容撑回 iframe。
-          var state = ancestorState(nodes[i].parentElement, nodes[i]);
+          var state = ancestorState(node.parentElement, node);
           if (state.hidden) continue;
-          h = Math.max(h, Math.min(state.clippedBottom, bottomWithMargin(nodes[i])));
+          childMax = Math.max(childMax, Math.min(state.clippedBottom, bottomWithMargin(node)));
+        }
+        h = Math.max(h, childMax);
+        if (bodyViewportLocked && childMax > 0) {
+          // body 写 min-height: 100vh / height: 100% 时 offsetHeight 永远卡在旧视口高度，
+          // 优先按实际可见子节点底部 + body 底部留白计算，展开与收起都能准确贴合内容。
+          var padBottom = bodyStyle ? parseFloat(bodyStyle.paddingBottom) || 0 : 0;
+          var marginBottom = bodyStyle ? parseFloat(bodyStyle.marginBottom) || 0 : 0;
+          h = Math.max(h, childMax + Math.max(0, padBottom) + Math.max(0, marginBottom));
+        } else {
+          h = Math.max(h, body.offsetHeight || 0, bottomWithMargin(body));
+        }
+        if (body.scrollHeight > clientH && !(bodyViewportLocked && childMax > 0 && body.scrollHeight <= clientH + 32)) {
+          h = Math.max(h, body.scrollHeight);
         }
       }
-      if (h > 0 && Math.ceil(h) !== lastHeight) {
-        lastHeight = Math.ceil(h);
+      var nextHeight = Math.ceil(h);
+      var deltaClient = clientH - lastClientHeight;
+      var deltaHeight = nextHeight - lastHeight;
+      var sameWidth = clientW === lastClientWidth;
+      if (viewportLocked && sameWidth && Math.abs(nextHeight - viewportLocked.height) <= 2 && nextHeight > lastHeight) {
+        lastClientHeight = clientH;
+        lastClientWidth = clientW;
+        return;
+      }
+      if (triggeredByContent || !sameWidth || deltaHeight <= 0) {
+        viewportGrowStreak = 0;
+        viewportLocked = null;
+      } else if (lastHeight > 0 && deltaClient > 0 && deltaHeight <= deltaClient + 4) {
+        // 卡片使用 min-height: 100vh / height: 100vh 叠加外边距或内边距时，
+        // 宿主按回执拉高 iframe 会反过来拉高视口形成 8000px 正反馈循环；识别反弹并锁定高度。
+        var lockstep = Math.abs(deltaHeight - deltaClient) <= 4;
+        if (bodyViewportLocked || lockstep) {
+          viewportGrowStreak++;
+          if (bodyViewportLocked || viewportGrowStreak >= 2) {
+            viewportLocked = { width: clientW, height: nextHeight };
+            lastClientHeight = clientH;
+            lastClientWidth = clientW;
+            return;
+          }
+        } else {
+          viewportGrowStreak = 0;
+        }
+      } else {
+        viewportGrowStreak = 0;
+      }
+      lastClientHeight = clientH;
+      lastClientWidth = clientW;
+      if (h > 0 && nextHeight !== lastHeight) {
+        viewportLocked = null;
+        lastHeight = nextHeight;
         post('resize', { height: lastHeight });
       }
     } catch (e) {}
   }
   // DOM 库常在一个任务内连续改多处节点；观察器、资源事件与兜底定时器都只预约
   // 下一帧的一次布局读取，避免同一帧反复 query/getComputedStyle 强制回流。
-  function scheduleHeight() {
+  function scheduleHeightFrom(isContent) {
+    if (isContent) contentTrigger = true;
     if (!heightActive || heightFrame !== null) return;
     var flush = function () {
       heightFrame = null;
@@ -385,11 +477,13 @@ export function tavernCardBridgeScript(options: Omit<CardFrameOptions, 'connectH
       heightFrame = setTimeout(flush, 0);
     }
   }
+  function scheduleHeight() { scheduleHeightFrom(true); }
+  function scheduleResizeHeight() { scheduleHeightFrom(false); }
   function watchHeight() {
     scheduleHeight();
     if (typeof ResizeObserver !== 'undefined') {
       try {
-        ro = new ResizeObserver(function () { scheduleHeight(); });
+        ro = new ResizeObserver(function () { scheduleResizeHeight(); });
         if (document.documentElement) ro.observe(document.documentElement);
         if (document.body) ro.observe(document.body);
       } catch (e2) {}
@@ -405,7 +499,22 @@ export function tavernCardBridgeScript(options: Omit<CardFrameOptions, 'connectH
     window.addEventListener('load', scheduleHeight);
     document.addEventListener('load', scheduleHeight, true);
     document.addEventListener('toggle', scheduleHeight, true);
-    timers.push(setTimeout(scheduleHeight, 300), setTimeout(scheduleHeight, 1200));
+    var fonts = document.fonts;
+    if (fonts) {
+      try {
+        if (fonts.ready && typeof fonts.ready.then === 'function') {
+          fonts.ready.then(function () { if (heightActive) scheduleHeight(); }, function () {});
+        }
+        if (typeof fonts.addEventListener === 'function') {
+          fonts.addEventListener('loadingdone', scheduleHeight);
+        }
+      } catch (e4) {}
+    }
+    timers.push(setTimeout(scheduleResizeHeight, 300), setTimeout(scheduleResizeHeight, 1200));
+  }
+  function onDomReady() {
+    readColorSchemeMeta();
+    watchHeight();
   }
   window.__dshTavernBridgeCleanup = function () {
     heightActive = false;
@@ -428,9 +537,13 @@ export function tavernCardBridgeScript(options: Omit<CardFrameOptions, 'connectH
     if (mo) mo.disconnect();
     timers.forEach(clearTimeout);
     window.removeEventListener('load', scheduleHeight);
+    if (typeof window.removeEventListener === 'function') window.removeEventListener('message', onHostColorScheme);
     document.removeEventListener('load', scheduleHeight, true);
     document.removeEventListener('toggle', scheduleHeight, true);
-    document.removeEventListener('DOMContentLoaded', watchHeight);
+    if (document.fonts && typeof document.fonts.removeEventListener === 'function') {
+      try { document.fonts.removeEventListener('loadingdone', scheduleHeight); } catch (e5) {}
+    }
+    document.removeEventListener('DOMContentLoaded', onDomReady);
   };
   // 封面常 document.write 整页 HTML，会冲掉 head 里的桥。把 stub/CSP 写回后再落盘。
   var nativeDocument = window.__dshTavernNativeDocument || (window.__dshTavernNativeDocument = {
@@ -448,7 +561,7 @@ export function tavernCardBridgeScript(options: Omit<CardFrameOptions, 'connectH
   var libraryHtml = libraryNode && libraryNode.outerHTML ? libraryNode.outerHTML : '';
   function injectBridge(html) {
     // 不信任第三方 head、注释或伪造的 bridge 标记；重新解析前先建立有效策略。
-    return (${src.wrapDoc})(html, cspHtml + libraryHtml + stubHtml, (${src.hasShell})(html));
+    return (${src.wrapDoc})(html, cspHtml + libraryHtml + stubHtml, (${src.hasShell})(html), currentColorScheme);
   }
   // 浏览器里 document.write 后不调用 close 仍会渲染（文档保持打开）。缓冲整页时若同一任务内
   // 没等到 close，就在下一任务补写并保持打开；否则只写不关的封面会整页空白。
@@ -489,8 +602,8 @@ export function tavernCardBridgeScript(options: Omit<CardFrameOptions, 'connectH
   document.close = function () {
     if (!flushBuffered(true)) return origClose();
   };
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', watchHeight);
-  else watchHeight();
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', onDomReady);
+  else onDomReady();
 })();
 </script>`
 }
@@ -501,8 +614,9 @@ export function tavernCardBridgeScript(options: Omit<CardFrameOptions, 'connectH
  * lang/dir/class/style/onload 等属性投影到真实根节点。普通片段仍预建 body，保证
  * 放在首位的旧卡脚本立即访问 document.body。初次加载和 document.write 共用此包装。
  */
-function wrapCardDocument(html: string, trustedHead: string, fullDocument: boolean): string {
-  const head=`<!DOCTYPE html><html><head><meta charset="utf-8">${trustedHead}<meta name="color-scheme" content="light dark"></head>`
+function wrapCardDocument(html: string, trustedHead: string, fullDocument: boolean, colorScheme = 'light dark'): string {
+  const scheme = colorScheme === 'light' || colorScheme === 'dark' ? colorScheme : 'light dark'
+  const head=`<!DOCTYPE html><html><head><meta charset="utf-8">${trustedHead}<meta name="color-scheme" content="${scheme}"></head>`
   return fullDocument ? `${head}${html}</html>` : `${head}<body>${html}</body></html>`
 }
 
@@ -541,7 +655,7 @@ export function buildCardSrcDoc(html: string, options: CardFrameOptions): string
   const meta = `<meta http-equiv="Content-Security-Policy" content="${cspContent(options.connectHosts ?? [])}">`
   const stub = tavernCardBridgeScript(options)
   const libraries = needsCardLibraries(html,options) ? getCardLibraryTag() : ''
-  return wrapCardDocument(html, meta + libraries + stub, isFullHtmlDocument(html))
+  return wrapCardDocument(html, meta + libraries + stub, isFullHtmlDocument(html), options.colorScheme)
 }
 
 export interface CardBridgeMessage {

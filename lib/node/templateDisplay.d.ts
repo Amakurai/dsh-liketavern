@@ -16,7 +16,7 @@ export declare function renderTemplateDisplay(text: string, entries: WorldInfoEn
 /** 普通正文的 worker 结果在服务边界使用同一套有界诊断，不重新执行任何展示规则。 */
 export declare function collectDisplayRegexDiagnostics(errors: RegexApplyResult['errors'], rules: readonly RegexRule[]): DisplayRegexDiagnostics | undefined;
 /** 已提交片段的展示正则仍在 worker 内运行；逐片段保留位置并返回可读的失败原因。 */
-export declare function presentTemplateDisplayResult(parts: TemplateDisplayPart[], rules: RegexRule[], macroCtx: MacroContext): {
+export declare function presentTemplateDisplayResult(parts: TemplateDisplayPart[], rules: RegexRule[], macroCtx: MacroContext, depth?: number): {
     parts: TemplateDisplayPart[];
     regexDiagnostics?: DisplayRegexDiagnostics;
 };

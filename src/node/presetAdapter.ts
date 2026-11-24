@@ -25,6 +25,11 @@ export interface PresetAdapterController {
   ensureRegistered(): void
 }
 
+/** 插件私有失败码不能传给只接受内置码的 LlmError 构造器，统一经 fromFailure 保留原码。 */
+function presetAdapterError(message: string, code: string): LlmError {
+  return LlmError.fromFailure({ message, code })
+}
+
 /** 投影依据本次已准备的模型能力；单参数投影回调仍可直接使用。 */
 export type PresetRequestProjection = (options: GenerateOptions, model: Readonly<LlmResolvedModelInfo>) => GenerateOptions
 
@@ -54,7 +59,7 @@ class PresetAdapter extends LlmAdapter {
       const projected = this.project(options, modelInfo)
       if (!callConfigEquals(options, projected) || projected.signal !== options.signal || projected.sessionId !== options.sessionId
         || projected.purpose !== options.purpose || projected.tools !== options.tools || projected.system !== options.system) {
-        throw new LlmError('Tavern request projection may only replace the message list.', 'INVALID_PRESET_PROJECTION')
+        throw presetAdapterError('Tavern request projection may only replace the message list.', 'INVALID_PRESET_PROJECTION')
       }
       return call.stream({ ...projected, provider: PRESET_ADAPTER_SOURCE_PROVIDER })
     } }
@@ -72,7 +77,7 @@ export function registerPresetAdapter(ctx: Context, project: PresetRequestProjec
     const directory = ctx.get('llm')?.listConfigurableProviders().find(item => item.provider === PRESET_ADAPTER_SOURCE_PROVIDER)
     const descriptor = ctx.get('settings')?.describe().find(item => item.ns === (directory?.settingsNs ?? SETTINGS_NS))
     const raw = (directory?.settingsPath ?? []).reduce<unknown>((value, key) => value && typeof value === 'object' ? Reflect.get(value, key) : undefined, descriptor?.value)
-    if (raw === undefined) throw new LlmError('Tavern DeepSeek adapter is waiting for the host llm-deepseek-api-key settings namespace.', 'PRESET_ADAPTER_UNAVAILABLE')
+    if (raw === undefined) throw presetAdapterError('Tavern DeepSeek adapter is waiting for the host llm-deepseek-api-key settings namespace.', 'PRESET_ADAPTER_UNAVAILABLE')
     if (raw !== lastRaw || connection === undefined) {
       const next = resolveAdapterOptions(plainOptions(DeepSeekConfig(raw)), launchEnvironmentOf(ctx))
       lastRaw = raw; connection = next
@@ -101,7 +106,7 @@ export function registerPresetAdapter(ctx: Context, project: PresetRequestProjec
   let listingChangeTimer: ReturnType<typeof setTimeout> | undefined
   const notifyListingChanged = () => {
     lastListingChange = Date.now()
-    Reflect.apply(ctx.emit, ctx, ['llm/models-updated', PRESET_ADAPTER_PROVIDER])
+    ctx.emit('llm/models-updated', PRESET_ADAPTER_PROVIDER)
   }
   const onListingChanged = () => {
     const now = Date.now()
@@ -130,11 +135,8 @@ export function registerPresetAdapter(ctx: Context, project: PresetRequestProjec
   const listings = typeof deepSeekCatalog.ModelListingCache === 'function' && typeof deepSeekCatalog.requestModelListing === 'function'
     ? new deepSeekCatalog.ModelListingCache({
     // 新宿主的缓存通过这两个回调读取最新设置并通知目录变化；旧版构造器会忽略额外字段。
-    ...{
-      settings: () => settingsConnection().listing,
-      // 基线宿主的类型尚未声明这个后来新增的事件；运行时按新宿主的公开事件契约发送。
-      changed: () => onListingChanged(),
-    },
+    settings: () => settingsConnection().listing,
+    changed: onListingChanged,
     credential: async () => presentKey(settingsConnection()),
     load: (url, apiKey, signal) => deepSeekCatalog.requestModelListing(url, { 'x-api-key': apiKey }, signal),
     now: () => Date.now(),
@@ -142,7 +144,7 @@ export function registerPresetAdapter(ctx: Context, project: PresetRequestProjec
     warn: message => ctx.logger.warn(`dsh-tavern: DeepSeek 模型列表：${message}`),
   }) : undefined
   const listingCache = () => {
-    if (!listings) throw new LlmError('The host cannot provide its configured DeepSeek model listing.', 'PRESET_ADAPTER_UNAVAILABLE')
+    if (!listings) throw presetAdapterError('The host cannot provide its configured DeepSeek model listing.', 'PRESET_ADAPTER_UNAVAILABLE')
     return listings
   }
   /** 无 I/O 的同步视图：请求解析与图片投影读它，保证已冻结的 prepareCall 不再取设置。 */
@@ -197,7 +199,7 @@ export function registerPresetAdapter(ctx: Context, project: PresetRequestProjec
   const ensureRegistered = () => {
     const policy = JSON.stringify(options().retryPolicy)
     const llm = ctx.get('llm')
-    if (!llm) throw new LlmError('Tavern DeepSeek adapter is waiting for the host LLM service.', 'PRESET_ADAPTER_UNAVAILABLE')
+    if (!llm) throw presetAdapterError('Tavern DeepSeek adapter is waiting for the host LLM service.', 'PRESET_ADAPTER_UNAVAILABLE')
     if (!registration) registration = llm.registerAdapter([PRESET_ADAPTER_PROVIDER], adapter)
     else if (registeredPolicy !== policy) registration.replace([PRESET_ADAPTER_PROVIDER])
     registeredPolicy = policy

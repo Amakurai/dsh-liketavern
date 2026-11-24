@@ -10,16 +10,17 @@ import type { ClientContext, TavernRemote } from './types.js'
 type EventRemote = Pick<TavernRemote, 'getHelperEventState'>
 type EventState = Extract<Awaited<ReturnType<EventRemote['getHelperEventState']>>, { ok: true }>['value']
 type Signal = { kind: 'start'; seq: number } | { kind: 'user'; seq: number } |
-  { kind: 'assistant'; seq: number; turn: number } |
+  { kind: 'assistant'; seq: number; turn: number; endSeq: number } |
   { kind: 'end'; seq: number; turn: number; completed: boolean; assistants: number[] }
 type Turn = { started: boolean; assistants: number[] }
+type EndedTurn = { endSeq: number; completed: boolean }
 type View = {
   sessionId: string; source: SessionEventSource; active: boolean; epoch: number; storyId?: string
   revision: number; highwater: number; turns: Map<number, Turn>; assistantCount: number
   /** 每轮已捕获的持久 assistant seq；settle-assistant 可能晚于 turn/end 到达，不能按全局 highwater 丢弃。 */
   assistantsByTurn: Map<number, Set<number>>
-  /** 已捕获 turn/end 的轮次；晚到的 settle 不能再新建一个永远等不到结束的轮次。 */
-  endedTurns: Set<number>
+  /** 已捕获 turn/end 的轮次及收口信息；晚到的 settle 仅在实时正常完成轮次经闭合屏障补发，不向失败/基线前轮次补发。 */
+  endedTurns: Map<number, EndedTurn>
   queue: Signal[]; running: boolean; ready: boolean; requests: Set<() => void>; dispose: () => void; probe: number
 }
 const MAX_QUEUE = 256, MAX_TURNS = 64, MAX_ASSISTANTS = 4096
@@ -80,7 +81,11 @@ export function installHelperLiveEvents(sessions: Pick<ClientContext['sessions']
     for (const entry of snapshot.entries) if (entry.type === 'event') {
       view.highwater = Math.max(view.highwater, entry.event.seq)
       rememberAssistant(view, entry.event)
-      if (entry.event.type === 'turn/end') view.endedTurns.add(entry.event.data.turn)
+      if (entry.event.type === 'turn/end') {
+        if (view.endedTurns.size >= MAX_TURNS) view.endedTurns.delete(view.endedTurns.keys().next().value!)
+        // 基线之前已结束的轮次不应因迟到的 settle-assistant 回放 message_received。
+        view.endedTurns.set(entry.event.data.turn, { endSeq: entry.event.seq, completed: false })
+      }
     }
   }
   const reset = (view: View, snapshot: SessionEventWindow) => {
@@ -89,8 +94,9 @@ export function installHelperLiveEvents(sessions: Pick<ClientContext['sessions']
     if (view.storyId) notifyHelperStory(view.sessionId, view.storyId)
   }
   const dispatch = async (view: View, signal: Signal, epoch: number) => {
+    const closedSeq = signal.kind === 'end' ? signal.seq : signal.kind === 'assistant' ? signal.endSeq : undefined
     const state = await read(view, { sessionId: view.sessionId, storyId: view.storyId,
-      ...(signal.kind === 'end' ? { closedSeq: signal.seq } : {}) }, epoch)
+      ...(closedSeq !== undefined ? { closedSeq } : {}) }, epoch)
     if (view.storyId !== undefined && state.storyId !== view.storyId) throw new Error('宿主消息事件的剧情绑定已改变')
     view.storyId = state.storyId
     const valid = () => current(view, epoch) && view.storyId === state.storyId
@@ -102,6 +108,7 @@ export function installHelperLiveEvents(sessions: Pick<ClientContext['sessions']
       const message = state.messages.find(item => item.seq === signal.seq && item.role === 'user')
       if (message) { notifyHelperStory(view.sessionId, state.storyId); await emit('message_sent', [message.message_id]) }
     } else if (signal.kind === 'assistant') {
+      if (state.closedThrough < signal.endSeq) throw new Error('宿主消息事件尚未完成剧情收口')
       const message = state.messages.find(item => item.seq === signal.seq && item.role === 'assistant')
       if (message) { notifyHelperStory(view.sessionId, state.storyId); await emit('message_received', [message.message_id, 'normal']) }
     } else {
@@ -164,16 +171,20 @@ export function installHelperLiveEvents(sessions: Pick<ClientContext['sessions']
       enqueue(view, { kind: 'user', seq: event.seq })
     } else if (event.type === 'assistant/message' && (event.surfaceOp === undefined || event.surfaceOp === 'append') && !event.data.interrupted) {
       if (!rememberAssistant(view, event)) return
-      const turnNumber = event.data.turn, turn = view.turns.get(turnNumber)
+      const turnNumber = event.data.turn, turn = view.turns.get(turnNumber), ended = view.endedTurns.get(turnNumber)
       if (turn) {
         if (view.assistantCount >= MAX_ASSISTANTS) throw new Error('宿主消息事件超过待完成回复预算')
         turn.assistants.push(event.seq); view.assistantCount++
-      } else if (view.endedTurns.has(turnNumber)) {
+      } else if (ended) {
+        // 仅对正常完成的实时轮次补发 message_received；失败/中断或基线前已结束轮次忽略迟到结算。
+        if (!ended.completed) return
         // turn/end 已先被捕获：把补发的接收事件插到待发送结束信号之前，保持 message_received 先于 generation_ended。
-        const signal: Signal = { kind: 'assistant', seq: event.seq, turn: turnNumber }
+        const signal: Signal = { kind: 'assistant', seq: event.seq, turn: turnNumber, endSeq: ended.endSeq }
         const index = view.queue.findIndex(item => item.kind === 'end' && item.turn === turnNumber)
-        if (index >= 0) view.queue.splice(index, 0, signal)
-        else enqueue(view, signal)
+        if (index >= 0) {
+          if (view.queue.length >= MAX_QUEUE) throw new Error('宿主消息事件超过待处理预算')
+          view.queue.splice(index, 0, signal)
+        } else enqueue(view, signal)
       } else {
         let created = view.turns.get(turnNumber)
         if (!created) {
@@ -187,9 +198,10 @@ export function installHelperLiveEvents(sessions: Pick<ClientContext['sessions']
       const turn = view.turns.get(event.data.turn)
       if (!turn) return
       view.turns.delete(event.data.turn); view.assistantCount -= turn.assistants.length
-      if (view.endedTurns.size >= MAX_TURNS) view.endedTurns.delete(view.endedTurns.values().next().value!)
-      view.endedTurns.add(event.data.turn)
-      enqueue(view, { kind: 'end', seq: event.seq, turn: event.data.turn, completed: event.data.reason.kind === 'completed', assistants: turn.assistants })
+      if (view.endedTurns.size >= MAX_TURNS) view.endedTurns.delete(view.endedTurns.keys().next().value!)
+      const completed = event.data.reason.kind === 'completed'
+      view.endedTurns.set(event.data.turn, { endSeq: event.seq, completed })
+      enqueue(view, { kind: 'end', seq: event.seq, turn: event.data.turn, completed, assistants: turn.assistants })
     }
   }
   const sync = () => {
@@ -200,7 +212,7 @@ export function installHelperLiveEvents(sessions: Pick<ClientContext['sessions']
     if (selected) { selected.active = false; cancel(selected); selected.dispose(); selected = undefined }
     if (!active || !sessionId || !binding || binding.sessionId !== sessionId) return
     const view: View = { sessionId, source: binding.eventSource, active: true, epoch: 0, revision: -1, highwater: -1,
-      turns: new Map(), assistantsByTurn: new Map(), endedTurns: new Set(), assistantCount: 0, queue: [], running: false, ready: false, requests: new Set(), dispose: () => {}, probe: 0 }
+      turns: new Map(), assistantsByTurn: new Map(), endedTurns: new Map(), assistantCount: 0, queue: [], running: false, ready: false, requests: new Set(), dispose: () => {}, probe: 0 }
     selected = view
     baseline(view, view.source.getSnapshot())
     view.dispose = view.source.subscribe(() => {
@@ -227,7 +239,8 @@ export function installHelperLiveEvents(sessions: Pick<ClientContext['sessions']
   }
   const changed = (event: Event) => {
     const view = selected
-    if (!view || (event as CustomEvent<unknown>).detail !== view.sessionId) return
+    const target = (event as CustomEvent<unknown>).detail
+    if (!view || (target && target !== view.sessionId)) return
     const epoch = view.epoch, probe = ++view.probe
     void read(view, { sessionId: view.sessionId }, epoch).then(state => {
       if (!current(view, epoch) || probe !== view.probe) return

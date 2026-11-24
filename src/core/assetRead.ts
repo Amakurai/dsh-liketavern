@@ -56,8 +56,10 @@ export interface PresetCatalogItem {
 }
 
 export function collapseWhitespacePreview(text: string, maxChars: number): string {
-  // 收集至多 maxChars+1 个折叠后字符即可确定截断边界，避免整篇万字文本的全量正则替换。
-  const limit = maxChars + 1
+  const cap = Number.isNaN(maxChars) ? 0 : Math.max(0, Math.floor(maxChars))
+  if (cap === 0 || !text) return ''
+  // 收集至多 cap+1 个折叠后字符即可确定截断边界，避免整篇万字文本的全量正则替换。
+  const limit = cap + 1
   let out = ''
   let pendingSpace = false
   for (let i = 0; i < text.length; i++) {
@@ -74,7 +76,7 @@ export function collapseWhitespacePreview(text: string, maxChars: number): strin
     out += ch
     if (out.length >= limit) break
   }
-  let end = Math.min(maxChars, out.length)
+  let end = Math.min(cap, out.length)
   if (end < out.length && end > 0 && /[\uD800-\uDBFF]/.test(out[end - 1]!) && /[\uDC00-\uDFFF]/.test(out[end] ?? '')) end--
   return out.slice(0, end)
 }
@@ -210,6 +212,7 @@ function boundCatalog<T, R extends AssetCatalogStats>(
   candidates: Iterable<T>, count: number, budget: number, metadataTruncated: boolean,
   build: (items: T[], stats: AssetCatalogStats) => R, wrap: (value: R) => unknown, arrayIndent: number,
 ): R {
+  const limit = Number.isNaN(budget) ? 0 : Math.max(0, Math.floor(budget))
   const items: T[] = []
   let itemsCjk = 0, itemsOther = 0
   const shellCache = new Map<number, TokenCharCounts>()
@@ -232,7 +235,7 @@ function boundCatalog<T, R extends AssetCatalogStats>(
   for (const item of candidates) {
     if (items.length >= ASSET_CATALOG_MAX) break
     const delta = countPrettyArrayItemChars(item, arrayIndent)
-    if (estimateWith(items.length + 1, itemsCjk + delta.cjk, itemsOther + delta.other) <= budget) {
+    if (estimateWith(items.length + 1, itemsCjk + delta.cjk, itemsOther + delta.other) <= limit) {
       items.push(item)
       itemsCjk += delta.cjk
       itemsOther += delta.other
@@ -240,7 +243,7 @@ function boundCatalog<T, R extends AssetCatalogStats>(
   }
   const result = stampAssetTokens(build(items, { count, omitted: count - items.length,
     truncated: metadataTruncated || count > items.length, tokensUsed: 0 }), wrap)
-  if (result.tokensUsed > budget) throw new Error('资产目录元数据超过输出预算')
+  if (result.tokensUsed > limit) throw new Error('资产目录元数据超过输出预算')
   return result
 }
 
@@ -254,11 +257,12 @@ export interface PresetCatalog extends AssetCatalogStats {
 
 /** 预设目录仅对展示字段裁剪；identifier 与 markerId 太长时整条省略并保留真实总数。 */
 export function budgetPresetCatalog(preset: PromptPreset, budget = ASSET_OUTPUT_TOKEN_BUDGET): PresetCatalog {
+  const limit = Number.isNaN(budget) ? 0 : Math.max(0, Math.floor(budget))
   const name = clipAssetJsonText(preset.name, 80)
   const header = stampAssetTokens({ id: preset.identifier, name: name.text, metadataTruncated: name.truncated,
     entries: [], count: preset.entries.length, omitted: preset.entries.length,
     truncated: name.truncated || preset.entries.length > 0, tokensUsed: 0 }, value => ({ preset: value }))
-  const idOmitted = header.tokensUsed > budget
+  const idOmitted = header.tokensUsed > limit
   let metadataTruncated = name.truncated || idOmitted
   const entries: PresetCatalogItem[] = []
   for (const entry of preset.entries) {

@@ -123,6 +123,7 @@ export const zh = {
   'speech.cardDataBackup': '生成并选中备份',
   'speech.cardDataRestore': '恢复卡内备份',
   'speech.cardDataText': '卡内变量备份文本',
+  'speech.detailsSummary': '详情',
 } as const
 
 export const en: Record<keyof typeof zh, string> = {
@@ -248,4 +249,5 @@ export const en: Record<keyof typeof zh, string> = {
   'speech.cardDataBackup': 'Generate and select backup',
   'speech.cardDataRestore': 'Restore card backup',
   'speech.cardDataText': 'Card variable backup text',
+  'speech.detailsSummary': 'Details',
 }

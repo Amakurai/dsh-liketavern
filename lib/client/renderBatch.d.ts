@@ -6,6 +6,6 @@ type RenderRequest = {
     messageId?: number;
 };
 export declare function renderOutputBatched(remote: TavernRemote, request: RenderRequest): Promise<Envelope<RenderedOutput>>;
-/** 按引用重组批次结果；声明了共享部分却缺失时该项明确失败，不静默丢掉卡面数据。 */
+/** 按引用重组批次结果；单项异常只影响该项，声明了共享部分却缺失时明确失败，不静默丢掉卡面数据。 */
 export declare function expandRenderedOutputBatch(batch: RenderedOutputBatch): Envelope<RenderedOutput>[];
 export {};

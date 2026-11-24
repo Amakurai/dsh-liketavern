@@ -266,6 +266,19 @@ function assertHostSystemLeading(original: readonly Message[], projected: readon
   throw new Error('Tavern 提示词布局把宿主系统提示挤出了请求首条；已拒绝投影，避免适配器把系统提示降级成历史消息')
 }
 
+/** 与 DeepSeekAdapter.serialize 对齐：无有效内容块的 user/assistant 会被线层跳过，不能充当 system 更新的锚点。 */
+function hasMessagesWireContent(message: Message): boolean {
+  if (message.role === 'user') {
+    return message.content.some(block =>
+      block.type === 'text' ? block.text.length > 0 : block.type !== 'reasoning' && block.type !== 'tool-call',
+    )
+  }
+  if (message.role === 'assistant') {
+    return message.content.some(block => block.type === 'text' ? block.text.length > 0 : true)
+  }
+  return true
+}
+
 /** in-history 的每条 system 是完整快照；旧模型只读首条，因此不能直接发送增量 system 片段。 */
 function applySystemPolicy(messages: readonly Message[], projection: PresetProjectionOptions): Message[] {
   if (!projection.model) return [...messages]
@@ -294,6 +307,7 @@ function applySystemPolicy(messages: readonly Message[], projection: PresetProje
           if (previous !== 'user' && previous !== 'tool') incompatiblePosition = true
         }
       } else {
+        if (!hasMessagesWireContent(message)) continue
         if (pending && message.role !== 'assistant') incompatiblePosition = true
         previous = message.role
         pending = false

@@ -18,9 +18,9 @@ async function activewi(book,title,force=false) {
   return entryData(entry);
 }
 async function templateCondition(expression) {
-  const before = __conditionState();
+  const before = snapshotConditionState();
   const result = await evalTemplate('<%- Boolean('+expression+') %>');
-  if (__conditionState()!==before) throw Error('@@if 条件必须只读，不能修改变量');
+  if (snapshotConditionState()!==before) throw Error('@@if 条件必须只读，不能修改变量');
   return result==='true';
 }
 function keywordMatch(pattern,text,sensitive=false,whole=false) {

@@ -23,11 +23,14 @@ export declare function helperHistoryRevision(history: ReturnType<typeof helperH
  * 长历史首屏会退化为 O(消息数²)。
  */
 export interface HelperDisplaySet {
+    storyId: string;
     context(seq: number): HelperDisplayContext;
-    /** 仅 withSnapshot=true 时存在；各气泡只差 currentMessageId，messages/scopes 共用引用。 */
+    /** 仅 withSnapshot=true 且变量读取成功时存在；各气泡只差 currentMessageId，messages/scopes 共用引用。 */
     base?: HelperSnapshotBase;
+    /** 变量文件损坏时仅令真实 iframe 卡面失败，纯文本与原生折叠仍可使用同一份历史上下文。 */
+    snapshotError?: unknown;
 }
-export declare function loadHelperDisplaySet(ctx: Context, state: TavernState, sessionId: string, withSnapshot: boolean): Promise<HelperDisplaySet>;
+export declare function loadHelperDisplaySet(ctx: Context, state: TavernState, sessionId: string, withSnapshot: boolean, expectedStoryId?: string): Promise<HelperDisplaySet>;
 /**
  * 纯文本展示只返回剧情/历史身份与当前消息角色；仍在剧情锁内二次读取，
  * 与完整 HelperSnapshot 保持同一套绑定和历史修订校验，但不读取、复制变量表。

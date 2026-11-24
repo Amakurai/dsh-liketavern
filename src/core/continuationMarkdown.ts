@@ -30,22 +30,22 @@ export function continuedMarkdown(previous:string,current:string):{start:number;
       // 有明确 HTML 语言但还没有闭围栏时也属于卡面；其余普通代码使用安全语言名，
       // 避免将原本在引用/列表中的 HTML 示例改造成顶层可执行 HTML 围栏。
       const info=fence.info.trim().split(/\s+/)[0]!.toLowerCase()
-      if(fence.standalone&&['html','xml'].includes(info))continue
+      if(fence.standalone&&['html','htm','xhtml','xml'].includes(info))continue
       const content=joined.slice(Math.max(boundary,fence.contentStart),Math.max(boundary,fence.contentEnd))
       const rest=joined.slice(Math.max(boundary,fence.end))
       if(!content)return {start,text:rest}
       const marker=codeMarker(content,3)
-      const language=/^[a-z0-9_#+-]+$/i.test(info)&&!['html','xml','text'].includes(info)?info:'plaintext'
+      const language=/^[a-z0-9_#+-]+$/i.test(info)&&!['html','htm','xhtml','xml','text'].includes(info)?info:'plaintext'
       return {start,text:marker+language+'\n'+content+(content.endsWith('\n')?'':'\n')+marker+'\n'+rest}
     }
-    const end=code.inlineEnd(start)
-    if(end===null)continue
-    tokens.lastIndex=end
-    if(end<=boundary)continue
-    const content=joined.slice(Math.max(boundary,start+token[0].length),Math.max(boundary,end-token[0].length))
-    if(!content)return {start,text:joined.slice(end)}
+    const span=code.inlineSpan(start)
+    if(!span)continue
+    tokens.lastIndex=span.end
+    if(span.end<=boundary)continue
+    const content=joined.slice(Math.max(boundary,span.start+span.width),Math.max(boundary,span.end-span.width))
+    if(!content)return {start:span.start,text:joined.slice(span.end)}
     const marker=codeMarker(content,1)
-    return {start,text:marker+' '+content+' '+marker+joined.slice(end)}
+    return {start:span.start,text:marker+' '+content+' '+marker+joined.slice(span.end)}
   }
   return undefined
 }

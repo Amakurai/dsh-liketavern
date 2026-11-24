@@ -15,7 +15,7 @@ export function installCardPersistence(snapshot:HelperSnapshot,source:string,_la
   root.__dshTavernSnapshot=snapshot
   const clone=<T>(value:T):T=>JSON.parse(JSON.stringify(value)) as T
   const equal=(a:unknown,b:unknown):boolean=>{
-    if(Object.is(a,b)) return true
+    if(a===b||Object.is(a,b)) return true
     if(a===null||b===null||typeof a!=='object'||typeof b!=='object') return false
     const aArr=Array.isArray(a), bArr=Array.isArray(b)
     if(aArr!==bArr) return false

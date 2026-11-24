@@ -94,14 +94,30 @@ export function promptHistoryAnchors(history: readonly ChatMessage[], messageIds
   })
 }
 
-const chatAnchorsCache = new WeakMap<readonly PromptHistoryAnchor[], readonly PromptHistoryAnchor[]>()
+interface CachedChatAnchors {
+  anchors: readonly PromptHistoryAnchor[]
+  chatFlags: readonly boolean[]
+  chat: readonly PromptHistoryAnchor[]
+}
+const chatAnchorsCache = new WeakMap<readonly PromptHistoryAnchor[], CachedChatAnchors>()
 
 /** depth 只数本轮首次组装时的真实聊天；后续工具步骤不移动已冻结的边界。 */
 export function promptDepthPlacement(history: readonly PromptHistoryAnchor[], depth: number, order: number): PromptLayoutPlacement {
-  let chat = chatAnchorsCache.get(history)
-  if (!chat) {
+  const cached = chatAnchorsCache.get(history)
+  let chat: readonly PromptHistoryAnchor[]
+  if (
+    cached &&
+    cached.anchors.length === history.length &&
+    history.every((anchor, index) => anchor === cached.anchors[index] && anchor.chat === cached.chatFlags[index])
+  ) {
+    chat = cached.chat
+  } else {
     chat = history.filter(anchor => anchor.chat)
-    chatAnchorsCache.set(history, chat)
+    chatAnchorsCache.set(history, {
+      anchors: [...history],
+      chatFlags: history.map(anchor => anchor.chat),
+      chat,
+    })
   }
   const at = Math.max(0, chat.length - depth)
   const previous = chat[at - 1]

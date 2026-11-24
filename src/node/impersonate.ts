@@ -98,13 +98,16 @@ export async function impersonate({ ctx, state }: ImpersonateDeps, sessionId: st
     }),
   )
 
-  const options: GenerateOptions = mergeTavernCallConfig({
+  const merged = mergeTavernCallConfig({
     provider,
     model,
     messages,
     system: pipeline.system,
     ...(reasoningEffort !== undefined ? { reasoningEffort: ReasoningEffortId(reasoningEffort) } : {}),
-  }, sampling, undefined, agent.options.maxTokens)
+  }, sampling, reasoningEffort, agent.options.maxTokens)
+  const options: GenerateOptions = reasoningEffort === undefined
+    ? merged
+    : { ...merged, reasoningEffort: ReasoningEffortId(reasoningEffort) }
   const latestBinding = await state.loadStoryBinding(sessionId)
   if (!latestBinding || latestBinding.cardId !== binding.cardId || latestBinding.storyId !== binding.storyId) {
     throw new FloorError('binding-changed', '代答准备期间剧情绑定已改变')

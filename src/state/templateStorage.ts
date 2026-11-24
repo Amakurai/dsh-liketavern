@@ -156,9 +156,9 @@ interface StoryBlocks {
   /** 当前根是否使用分块目录（内联状态不依赖 state/template-data，可省去目录探测）。 */
   chunked?:boolean
   /** 完整视图的解析结果；内部递归冻结，读取时只复制调用方选择的内容。size 为 JSON 字符数。 */
-  parsed?:{path:string;raw:string;value:unknown;size:number}
+  parsed?:{path:string;raw:string;chunked:boolean;value:unknown;size:number}
   /** 路径结果只证明选中的子图有效，不得用于写入时跳过其它块的完整校验。 */
-  selected?:{path:string;raw:string;values:Map<string,{value:unknown;size:number}>;
+  selected?:{path:string;raw:string;chunked:boolean;values:Map<string,{value:unknown;size:number}>;
     parsers:Map<(values:Array<unknown|undefined>|null)=>unknown,{paths:string;value:unknown;size:number}>;
     blocks:Map<string,{value:unknown;size:number}>;size:number}
 }
@@ -415,9 +415,9 @@ function cloneFrozenJson(value:unknown):unknown {
   return Object.freeze(out)
 }
 
-function rememberParsed(cache:StoryBlocks,path:string,raw:string,parsed:unknown):void {
+function rememberParsed(cache:StoryBlocks,path:string,raw:string,chunked:boolean,parsed:unknown):void {
   const frozen=cloneFrozenJson(parsed)
-  cache.parsed={path,raw,value:frozen,size:jsonValueBytes(frozen)}
+  cache.parsed={path,raw,chunked,value:frozen,size:jsonValueBytes(frozen)}
   trimParsed(cache)
 }
 
@@ -452,13 +452,14 @@ function trimParsed(cache:StoryBlocks):void {
  */
 export function adoptTemplateDocument(fs:WorkspaceFs,path:string,document:TemplateDocumentWrite,parsed:unknown):void {
   const cache=storyBlocks(fs)
+  const chunked=document.blocks.size>0
   cache.known=new Set(document.blocks.keys())
-  cache.chunked=document.blocks.size>0
+  cache.chunked=chunked
   cache.root=document.raw
   cache.parsed=undefined
   cache.selected=undefined
   // 内联文档也保留已校验的视图，避免同一轮内连续读取重复 JSON.parse 与业务校验。
-  if(parsed!==undefined) rememberParsed(cache,path,document.raw,parsed)
+  if(parsed!==undefined) rememberParsed(cache,path,document.raw,chunked,parsed)
   cache.revision=openLedger(fs.root).counter
 }
 
@@ -663,20 +664,22 @@ async function readTemplateDocumentPathsFromRaw(
     if(Buffer.byteLength(raw)>BLOCK_LIMIT) prepareTemplateDocument(parsed)
     const values=paths.map(item=>structuredClone(selectJsonPath(parsed,item)))
     const cache=storyBlocks(fs)
-    cache.known.clear()
-    cache.chunked=false
-    if(cache.root!==raw) {cache.root=raw;cache.parsed=undefined}
+    if(!cache.parsed || cache.parsed.path===path) {
+      cache.known.clear()
+      cache.chunked=false
+      if(cache.root!==raw) {cache.root=raw;cache.parsed=undefined}
+    }
     if(!cache.selected || cache.selected.path!==path || cache.selected.raw!==raw) {
-      cache.selected={path,raw,values:new Map(),parsers:new Map(),blocks:new Map(),size:0}
+      cache.selected={path,raw,chunked:false,values:new Map(),parsers:new Map(),blocks:new Map(),size:0}
     }
     return values
   }
   const document=parseDocumentRoot(parsed),blocks=new Map<string,unknown>()
   const cache=storyBlocks(fs)
-  cache.chunked=true
+  if(!cache.parsed || cache.parsed.path===path) cache.chunked=true
   if(cache.selected && (cache.selected.path!==path || cache.selected.raw!==raw
     || !(dataDirPresent ?? Boolean(await fs.stat(TEMPLATE_DATA_PATH))))) cache.selected=undefined
-  cache.selected ??={path,raw,values:new Map(),parsers:new Map(),blocks:new Map(),size:0}
+  cache.selected ??={path,raw,chunked:true,values:new Map(),parsers:new Map(),blocks:new Map(),size:0}
   const selections=cache.selected
   const pending=new Map<string,{resolve:(value:unknown)=>void;reject:(reason:unknown)=>void}>()
   const promised=new Map<string,Promise<unknown>>()
@@ -723,7 +726,8 @@ async function readTemplateDocumentPathsFromRaw(
               const block:unknown=JSON.parse(text)
               accountLoadedBlock(block)
               if(Array.isArray(block) && block[0]!=='json') {
-                const size=Buffer.byteLength(text)+128
+                const size=Buffer.byteLength(text)+128,previousBlock=selections.blocks.get(key)
+                selections.size-=previousBlock?.size ?? 0
                 selections.blocks.set(key,{value:freezeJson(block),size});selections.size+=size
                 trimParsed(cache)
               }
@@ -841,10 +845,14 @@ async function readTemplateDocumentPathsFromRaw(
     return child ? select(child.value,keys,offset+1,referenceDepth+child.depth) : undefined
   }
   const pathKeys=paths.map(keys=>JSON.stringify(keys))
+  // 命中缓存的条目必须在任何异步读盘和 trimParsed 之前先抓取本地快照，防止中途 LRU 淘汰导致静默丢值或写回 undefined。
+  const cachedValues=new Map<string,unknown>()
   const inFlight=new Map<string,Promise<unknown>>()
   for(let i=0;i<paths.length;i++) {
     const key=pathKeys[i]!
-    if(selections.values.has(key) || inFlight.has(key)) continue
+    if(cachedValues.has(key) || inFlight.has(key)) continue
+    const remembered=selections.values.get(key)
+    if(remembered) { cachedValues.set(key,remembered.value); continue }
     inFlight.set(key,select({ref:document.root},paths[i]!))
   }
   const fetched=new Map<string,unknown>()
@@ -856,14 +864,16 @@ async function readTemplateDocumentPathsFromRaw(
   const byteMemo=new WeakMap<object,number>()
   const results:unknown[]=new Array(paths.length)
   for(let i=0;i<paths.length;i++) {
-    const key=pathKeys[i]!,remembered=selections.values.get(key)
-    const source=remembered ? remembered.value : fetched.get(key)
+    const key=pathKeys[i]!
+    const fromCache=cachedValues.has(key)
+    const source=fromCache ? cachedValues.get(key) : fetched.get(key)
     const size=source===undefined ? 0 : jsonValueBytes(source,byteMemo)
     if(size>document.bytes) throw new Error('模板状态展开字节数不一致')
     selectedBytes+=size
     if(selectedBytes>TEMPLATE_DOCUMENT_LIMIT) throw new Error(DOCUMENT_LIMIT_MESSAGE)
-    if(!remembered) {
-      const retained=size+Buffer.byteLength(key)+64
+    if(!fromCache) {
+      const retained=size+Buffer.byteLength(key)+64,existingValue=selections.values.get(key)
+      selections.size-=existingValue?.size ?? 0
       selections.values.set(key,{value:cloneFrozenJson(source),size:retained});selections.size+=retained
       trimParsed(cache)
     }
@@ -882,7 +892,7 @@ export async function loadTemplateDocumentPaths<T>(fs:WorkspaceFs,path:string,pa
   const selected=cache.selected
   let dataDirPresent:boolean|undefined
   if(raw!==null && selected?.path===path && selected.raw===raw) {
-    dataDirPresent=cache.chunked ? Boolean(await fs.stat(TEMPLATE_DATA_PATH)) : true
+    dataDirPresent=selected.chunked ? Boolean(await fs.stat(TEMPLATE_DATA_PATH)) : true
     if(dataDirPresent) {
       const previous=selected.parsers.get(parse)
       if(previous?.paths===key) return structuredClone(previous.value) as T
@@ -913,11 +923,11 @@ export async function loadTemplateDocument<T,R>(fs:WorkspaceFs,path:string,parse
   if(raw!==null) {
     const cache=storyBlocks(fs),parsed=cache.parsed
     // 分块文档在整个块目录被移走时不沿用内存结论；内联文档无外部块依赖。
-    if(parsed && parsed.path===path && parsed.raw===raw && cache.root===raw && (!cache.chunked || await fs.stat(TEMPLATE_DATA_PATH))) return copy(parsed.value)
+    if(parsed && parsed.path===path && parsed.raw===raw && cache.root===raw && (!parsed.chunked || await fs.stat(TEMPLATE_DATA_PATH))) return copy(parsed.value)
   }
   const loaded=await decodeRoot(fs,raw)
   const result=parse(loaded.value)
-  if(loaded.cache && raw!==null) rememberParsed(loaded.cache,path,raw,result)
+  if(loaded.cache && raw!==null) rememberParsed(loaded.cache,path,raw,Boolean(loaded.cache.chunked),result)
   if(project) return copy(loaded.cache?.parsed?.value ?? freezeJson(structuredClone(result)))
   return result
 }

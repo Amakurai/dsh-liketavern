@@ -63,33 +63,39 @@ function flush(remote: TavernRemote): void {
   queues.delete(remote)
   if (!sessions) return
   for (const [sessionId, pending] of sessions) {
-    for (let start = 0; start < pending.length; start += FLOOR_ACTION_BATCH_MAX) {
-      const chunk = pending.slice(start, start + FLOOR_ACTION_BATCH_MAX)
-      // 同一窗口内若同一 messageId 重复请求，去重发信后再按原顺序扇出。
-      const uniqueIds: string[] = []
-      const indexById = new Map<string, number>()
-      for (const { request } of chunk) {
-        if (!indexById.has(request.messageId)) {
-          indexById.set(request.messageId, uniqueIds.length)
-          uniqueIds.push(request.messageId)
-        }
+    // 同一窗口内先按 messageId 全量去重，再按 FLOOR_ACTION_BATCH_MAX 分片，
+    // 避免 StrictMode 双挂载把同一批消息拆进两次 RPC。
+    const unique: Array<{ messageId: string; resolvers: Array<Pending['resolve']> }> = []
+    const byId = new Map<string, Array<Pending['resolve']>>()
+    for (const item of pending) {
+      let resolvers = byId.get(item.request.messageId)
+      if (!resolvers) {
+        resolvers = []
+        byId.set(item.request.messageId, resolvers)
+        unique.push({ messageId: item.request.messageId, resolvers })
       }
+      resolvers.push(item.resolve)
+    }
+    for (let start = 0; start < unique.length; start += FLOOR_ACTION_BATCH_MAX) {
+      const chunk = unique.slice(start, start + FLOOR_ACTION_BATCH_MAX)
+      const uniqueIds = chunk.map((entry) => entry.messageId)
       void Promise.resolve()
         .then(() => remote.getFloorActionStates({ sessionId, messageIds: uniqueIds }))
         .then((response) => {
           if (!response.ok) {
-            for (const item of chunk) item.resolve(response)
+            for (const entry of chunk) for (const resolve of entry.resolvers) resolve(response)
             return
           }
-          for (const item of chunk) {
-            const idx = indexById.get(item.request.messageId)
-            const state = idx !== undefined ? response.value.items[idx] : undefined
-            item.resolve(state ? { ok: true, value: state } : failure('批量楼层状态缺少该消息'))
-          }
+          const items = Array.isArray(response.value?.items) ? response.value.items : []
+          chunk.forEach((entry, idx) => {
+            const state = items[idx]
+            const result = state ? { ok: true as const, value: state } : failure('批量楼层状态缺少该消息')
+            for (const resolve of entry.resolvers) resolve(result)
+          })
         })
         .catch((error: unknown) => {
           const err = failure(describeError(error))
-          for (const item of chunk) item.resolve(err)
+          for (const entry of chunk) for (const resolve of entry.resolvers) resolve(err)
         })
     }
   }

@@ -24,7 +24,9 @@ import type { CharacterDetail, CharacterSummary, SessionBinding, TavernRemote } 
 import { Avatar, Btn, Err, errOf, Skeleton, useLoader } from './util.js'
 import { expandIdentityMacros } from '../core/macros.js'
 import { cardGreetingVariants } from '../core/greetingLog.js'
+import { normalizeHostMarkdown } from '../core/hostMarkdown.js'
 import { DEFAULT_USER_NAME } from '../core/persona.js'
+import { formatPlainDetailsText, parsePlainDetailsBlocks } from '../core/plainDetails.js'
 import './styles.js'
 
 /** 英雄区写操作的有界等待：宿主 RPC 可能永不返回，超时必须明确失败而不是无限等待。 */
@@ -39,13 +41,46 @@ function withWriteTimeout<T>(pending: Promise<T>, ms: number, onTimeout: () => E
   ]).finally(() => { if (timer !== undefined) clearTimeout(timer) })
 }
 
-/** 开场白只读展示与聊天共用服务端处理；互动 HTML 只提示，避免源码泄露或提前执行脚本。 */
-function GreetingPreview(props: { remote: TavernRemote; sessionId: string; text: string }) {
+/** 开场白只读展示与聊天共用服务端处理；纯 `<details>` 展开为可读正文，真实互动 HTML 只提示，避免源码泄露或提前执行脚本。 */
+function GreetingPreview(props: { remote: TavernRemote; sessionId: string; text: string; interactiveCards?: boolean | null }) {
   const t = useT()
   const preview = useLoader(() => props.remote.renderOutputText({ sessionId: props.sessionId, text: props.text }), [props.sessionId, props.text])
   if (preview.state.status === 'error') return <Err message={preview.state.message} />
   if (preview.state.status !== 'ready') return <Skeleton />
-  return <>{preview.state.value.text}{preview.state.value.htmls.length > 0 && <span>{t('hero.interactiveGreeting')}</span>}</>
+  const value = preview.state.value
+  const interactive = props.interactiveCards ?? (value.interactiveCards !== false)
+  const chunks: string[] = []
+  let hasInteractiveHtml = false
+  if (value.parts && value.parts.length > 0) {
+    for (const part of value.parts) {
+      if (part.kind === 'markdown') {
+        const shown = interactive ? normalizeHostMarkdown(part.text) : part.text
+        if (shown.trim()) chunks.push(shown)
+      } else {
+        const details = interactive && part.title === undefined ? parsePlainDetailsBlocks(part.text) : null
+        if (details) {
+          const expanded = formatPlainDetailsText(details)
+          if (expanded.trim()) chunks.push(expanded)
+        } else {
+          hasInteractiveHtml = true
+        }
+      }
+    }
+  } else {
+    const shown = interactive ? normalizeHostMarkdown(value.text) : value.text
+    if (shown) chunks.push(shown)
+    for (const html of value.htmls) {
+      const details = interactive ? parsePlainDetailsBlocks(html) : null
+      if (details) {
+        const expanded = formatPlainDetailsText(details)
+        if (expanded.trim()) chunks.push(expanded)
+      } else {
+        hasInteractiveHtml = true
+      }
+    }
+  }
+  const visibleText = chunks.join('\n\n')
+  return <>{visibleText}{hasInteractiveHtml && <span>{t('hero.interactiveGreeting')}</span>}</>
 }
 
 /** 芯片只能并入英雄行，绝不能塞进模式选择按钮内部（会把菜单点坏）。 */
@@ -342,25 +377,27 @@ function HeroCharacterSession(props: HeroProps) {
       }
       const entered = await withWriteTimeout(remote.ensureGreeting({ sessionId }), HERO_WRITE_TIMEOUT_MS, () => new Error(t('util.loadTimeout')))
       const enterErr = errOf(entered)
-      if (enterErr) setError(enterErr)
-      else if (entered.ok) {
+      if (enterErr) {
+        if (alive.current) setError(enterErr)
+      } else if (entered.ok) {
         if (entered.value.created || entered.value.conversationStarted) {
           invalidateSessionBinding(sessionId)
           window.dispatchEvent(new CustomEvent(BINDING_CHANGED_EVENT, { detail: sessionId }))
+          if (!alive.current) return
           setEntered(true)
           // 插件直接追加日志不会经过宿主 send；主动同步 blank，解除空白会话复用。
           try {
             await props.sessions.refresh?.()
           } catch (cause) {
-            setEntered(false)
+            if (alive.current) setEntered(false)
             throw cause
           }
-        } else setError(t('hero.error.enterFailed'))
+        } else if (alive.current) setError(t('hero.error.enterFailed'))
       }
     } catch (cause) {
-      setError(describeError(cause))
+      if (alive.current) setError(describeError(cause))
     } finally {
-      setBusy(false)
+      if (alive.current) setBusy(false)
     }
   }
 
@@ -372,16 +409,17 @@ function HeroCharacterSession(props: HeroProps) {
     try {
       const saved = await withWriteTimeout(remote.setSessionBinding({ binding: { ...binding, greetingIndex: index } }), HERO_WRITE_TIMEOUT_MS, () => new Error(t('util.loadTimeout')))
       const saveErr = errOf(saved)
-      if (saveErr) setError(saveErr)
-      else {
+      if (saveErr) {
+        if (alive.current) setError(saveErr)
+      } else {
         invalidateSessionBinding(sessionId)
         window.dispatchEvent(new CustomEvent(BINDING_CHANGED_EVENT, { detail: sessionId }))
-        bindingLoader.reload()
+        if (alive.current) bindingLoader.reload()
       }
     } catch (cause) {
-      setError(describeError(cause))
+      if (alive.current) setError(describeError(cause))
     } finally {
-      setBusy(false)
+      if (alive.current) setBusy(false)
     }
   }
 
@@ -452,7 +490,7 @@ function HeroCharacterSession(props: HeroProps) {
           {detailLoader.state.status === 'error' ? (
             <div className="dsh-tavern-hero-previewText" role="alert">{t('hero.detailLoadFailed')}</div>
           ) : greetingText ? (
-            <div className="dsh-tavern-hero-quote"><GreetingPreview remote={remote} sessionId={sessionId} text={greetingText} /></div>
+            <div className="dsh-tavern-hero-quote"><GreetingPreview remote={remote} sessionId={sessionId} text={greetingText} interactiveCards={binding.interactiveCards} /></div>
           ) : hasAnyGreeting ? (
             <div className="dsh-tavern-hero-previewText">{t('hero.emptyVariantHint')}</div>
           ) : (

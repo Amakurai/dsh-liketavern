@@ -707,7 +707,10 @@ export function evaluateWorldInfo(input: WIEngineInput): WIEngineResult {
     if (c.entry.position === WIPosition.Outlet) {
       const name = c.entry.outletName.trim()
       if (!name) continue // 无名 outlet 条目不注入（也不进 activated，与「丢弃」语义一致）
-      ;(outlets[name] ??= []).push(activation)
+      if (!Object.hasOwn(outlets, name)) {
+        Object.defineProperty(outlets, name, { value: [], enumerable: true, writable: true, configurable: true })
+      }
+      outlets[name]!.push(activation)
     } else {
       ;(byPosition[c.entry.position] ??= []).push(activation)
     }

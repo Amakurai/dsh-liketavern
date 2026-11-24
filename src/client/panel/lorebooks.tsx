@@ -27,9 +27,15 @@ function LorebooksSectionContent(props: { remote: TavernRemote }) {
   const chars = useLoader(() => remote.listCharacters({}), [])
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const pending = useRef(false)
   const [opening, setOpening] = useState<string | null>(null)
   const openRequest = useRef(0)
   useEffect(() => () => { openRequest.current += 1 }, [])
+  const perform = async (operation: () => Promise<void>) => {
+    if (pending.current) return
+    pending.current = true
+    try { await runAsync(setBusy, setError, operation) } finally { pending.current = false }
+  }
   const [opened, setOpened] = useDraftState<Opened | null>('lorebooks:opened', null)
   const [toDelete, setToDelete] = useState<string | null>(null)
   const [toDeleteEmbedded, setToDeleteEmbedded] = useState<CharacterSummary | null>(null)
@@ -66,12 +72,13 @@ function LorebooksSectionContent(props: { remote: TavernRemote }) {
 
   /** 库文件与内嵌书共用请求身份；只有最后一次点选可以打开编辑器、报告错误或收起加载反馈。 */
   const openBook = async (name: string, load: () => Promise<Opened>) => {
+    if (pending.current) return
     const request = ++openRequest.current
     setError(null)
     setOpening(name)
     try {
       const book = await load()
-      if (openRequest.current === request) setOpened(book)
+      if (openRequest.current === request && !pending.current) setOpened(book)
     } catch (err) {
       if (openRequest.current === request) setError(describeError(err))
     } finally {
@@ -105,9 +112,9 @@ function LorebooksSectionContent(props: { remote: TavernRemote }) {
   }
 
   const remove = async () => {
-    if (!toDelete) return
+    if (!toDelete || pending.current) return
     cancelOpening()
-    await runAsync(setBusy, setError, async () => {
+    await perform(async () => {
       const r = await remote.deleteLorebook({ name: toDelete })
       const err = errOf(r)
       if (err) setError(err)
@@ -122,9 +129,9 @@ function LorebooksSectionContent(props: { remote: TavernRemote }) {
   /** 删除角色卡内嵌世界书（保留角色卡本身）。 */
   const removeEmbedded = async () => {
     const target = toDeleteEmbedded
-    if (!target) return
+    if (!target || pending.current) return
     cancelOpening()
-    await runAsync(setBusy, setError, async () => {
+    await perform(async () => {
       const r = await remote.deleteEmbeddedLorebook({ cardId: target.cardId })
       const err = errOf(r)
       if (err) setError(err)
@@ -139,7 +146,7 @@ function LorebooksSectionContent(props: { remote: TavernRemote }) {
   }
 
   const exportBook = async (name: string) => {
-    await runAsync(setBusy, setError, async () => {
+    await perform(async () => {
       const r = await remote.getLorebook({ name })
       if (!r.ok) setError(r.error.message)
       else downloadJson(`${name}.json`, r.value.json)
@@ -147,9 +154,7 @@ function LorebooksSectionContent(props: { remote: TavernRemote }) {
   }
 
   const onImportFile = async (file: File) => {
-    setBusy(true)
-    setError(null)
-    try {
+    await perform(async () => {
       const json = await readJsonFile(file)
       const name = file.name.replace(/\.json$/i, '')
       const r = await remote.importLorebook({ name, json })
@@ -158,11 +163,7 @@ function LorebooksSectionContent(props: { remote: TavernRemote }) {
         toast.show(t('lorebooks.imported', { name: r.value.name, count: r.value.entryCount }))
         reload()
       }
-    } catch (err2) {
-      setError(describeError(err2))
-    } finally {
-      setBusy(false)
-    }
+    })
   }
 
   const createEmpty = async () => {
@@ -283,7 +284,7 @@ function LorebooksSectionContent(props: { remote: TavernRemote }) {
                   </span>
                 </div>
                 <div className="dsh-tavern-tileActions">
-                  <IconBtn label={t('lorebooks.editEntries')} onClick={() => void openCharacter(item)}>
+                  <IconBtn label={t('lorebooks.editEntries')} disabled={busy || opening !== null} onClick={() => void openCharacter(item)}>
                     <IconEditOutlineMedium />
                   </IconBtn>
                   <IconBtn label={t('lorebooks.deleteEmbedded')} danger disabled={busy || opening !== null} onClick={() => setToDeleteEmbedded(item)}>
@@ -330,7 +331,7 @@ function LorebooksSectionContent(props: { remote: TavernRemote }) {
                   <span className="dsh-tavern-tileSub">{t('lorebooks.libraryFileSub')}</span>
                 </div>
                 <div className="dsh-tavern-tileActions">
-                  <IconBtn label={t('lorebooks.editEntries')} onClick={() => void openLibrary(name)}>
+                  <IconBtn label={t('lorebooks.editEntries')} disabled={busy || opening !== null} onClick={() => void openLibrary(name)}>
                     <IconEditOutlineMedium />
                   </IconBtn>
                   <IconBtn label={t('lorebooks.exportJson')} disabled={busy || opening !== null} onClick={() => void exportBook(name)}>

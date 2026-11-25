@@ -63,7 +63,7 @@ describe('世界书打开请求', () => {
   async function open(view: ReactTestRenderer, name: string) {
     const tile = view.root.findAllByProps({ className: 'dsh-tavern-tile' }).find((item) =>
       item.findByProps({ className: 'dsh-tavern-tileName' }).children.join('') === name)!
-    await act(async () => tile.props.onClick())
+    await act(async () => tile.findByProps({ className: 'dsh-tavern-tileTrigger' }).props.onClick())
   }
 
   it('先点库文件再点内嵌书，旧请求迟到不切回旧书或丢弃已编辑的条目', async () => {

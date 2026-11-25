@@ -25,7 +25,37 @@ const TIMINGS: { value: RegexTiming; labelKey: string }[] = [
   { value: 'render', labelKey: 'regex.timing.render' },
 ]
 const SOURCE_LABEL_KEY: Record<RegexRule['source'], string> = { user: 'regex.source.user', card: 'regex.source.card', preset: 'regex.source.preset' }
+const REGEX_LITERAL_RE = /^\/(.*)\/([a-z]*)$/s
 type PresetDraft = PromptPreset & { editId: string; editRevision?: string }
+type FindIssue = { kind: 'empty' } | { kind: 'syntax'; detail: string }
+
+/**
+ * 校验单条正则规则的查找表达式：与 core/regex.ts 一致解析 `/pattern/flags`，
+ * 启用宏展开时用占位符替换 `{{...}}`，拦截空表达式与确定语法/标志错误。
+ */
+function validateRegexFind(rule: RegexRule): FindIssue | null {
+  let source = rule.find
+  let flags = ''
+  const literal = REGEX_LITERAL_RE.exec(source)
+  if (literal) {
+    source = literal[1]!
+    flags = literal[2] ?? ''
+  }
+  if (rule.find.trim().length === 0 || source.length === 0) return { kind: 'empty' }
+  const testSource = rule.substituteRegex !== 0 && source.includes('{{')
+    ? source.replace(/\{\{[^{}]*\}\}/g, 'macro')
+    : source
+  try {
+    new RegExp(testSource, flags)
+    return null
+  } catch (err) {
+    return { kind: 'syntax', detail: err instanceof Error ? err.message : String(err) }
+  }
+}
+
+function formatFindIssue(t: ReturnType<typeof useT>, issue: FindIssue): string {
+  return issue.kind === 'empty' ? t('regex.error.emptyFind') : t('regex.error.invalidFind', { detail: issue.detail })
+}
 
 function newRule(): RegexRule {
   return {
@@ -47,6 +77,7 @@ const RuleEditor = memo(function RuleEditor(props: {
   rule: RegexRule
   index: number
   disabled?: boolean
+  showEmptyError?: boolean
   canMoveUp: boolean
   canMoveDown: boolean
   onMove: (index: number, delta: -1 | 1) => void
@@ -54,7 +85,15 @@ const RuleEditor = memo(function RuleEditor(props: {
   onDelete: (index: number) => void
 }) {
   const t = useT()
-  const { rule, index, disabled } = props
+  const { rule, index, disabled, showEmptyError } = props
+  const [findTouched, setFindTouched] = useState(false)
+  const findIssue = validateRegexFind(rule)
+  const inlineFindError =
+    findIssue === null
+      ? null
+      : findIssue.kind === 'syntax' || showEmptyError || findTouched || rule.find.length > 0
+        ? formatFindIssue(t, findIssue)
+        : null
   // 保存飞行期间允许继续编辑文本字段（保留为未保存草稿，见 editorInteractionAudit），
   // 但禁用排序/删除等结构性变更，避免下标错位或误删正在提交的规则。
   const set = (patch: Partial<RegexRule>) => props.onChange(index, { ...rule, ...patch })
@@ -80,7 +119,17 @@ const RuleEditor = memo(function RuleEditor(props: {
       </div>
       <div style={{ padding: '2px 16px 14px' }}>
       <Field label={t('regex.find')}>
-        <input className="dsh-tavern-input dsh-tavern-codeFont" style={{ flex: 1 }} value={rule.find} onChange={(e) => set({ find: e.target.value })} />
+        <input
+          className="dsh-tavern-input dsh-tavern-codeFont"
+          style={{ flex: 1 }}
+          aria-invalid={inlineFindError !== null || undefined}
+          value={rule.find}
+          onChange={(e) => {
+            setFindTouched(true)
+            set({ find: e.target.value })
+          }}
+        />
+        <Err message={inlineFindError} />
       </Field>
       <Field label={t('regex.replace')}>
         <textarea className="dsh-tavern-input dsh-tavern-textarea dsh-tavern-codeFont" style={{ minHeight: 40 }} value={rule.replace} onChange={(e) => set({ replace: e.target.value })} />
@@ -105,15 +154,14 @@ const RuleEditor = memo(function RuleEditor(props: {
           />
         </div>
       </div>
-      <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: 12, alignItems: 'center' }}>
-        <label>
-          {t('regex.minDepth')} <NullableNumInput value={rule.minDepth} width={64} onChange={(v) => set({ minDepth: v })} />
-        </label>
-        <label>
-          {t('regex.maxDepth')} <NullableNumInput value={rule.maxDepth} width={64} onChange={(v) => set({ maxDepth: v })} />
-        </label>
-        <label>
-          {t('regex.macroExpand')}{' '}
+      <div className="dsh-tavern-fieldRow" style={{ marginTop: 10 }}>
+        <Field label={t('regex.minDepth')}>
+          <NullableNumInput value={rule.minDepth} width={112} onChange={(v) => set({ minDepth: v })} />
+        </Field>
+        <Field label={t('regex.maxDepth')}>
+          <NullableNumInput value={rule.maxDepth} width={112} onChange={(v) => set({ maxDepth: v })} />
+        </Field>
+        <Field label={t('regex.macroExpand')}>
           <Select
             value={String(rule.substituteRegex)}
             onChange={(v) => set({ substituteRegex: Number(v) as RegexRule['substituteRegex'] })}
@@ -123,7 +171,7 @@ const RuleEditor = memo(function RuleEditor(props: {
               { value: '2', label: t('regex.substitute.escaped') },
             ]}
           />
-        </label>
+        </Field>
       </div>
       </div>
     </div>
@@ -138,8 +186,10 @@ export function RegexSection(props: { remote: TavernRemote }) {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [confirmDiscard, setConfirmDiscard] = useState(false)
+  const [showValidation, setShowValidation] = useState(false)
   const toast = useToast()
-  const [savedRules, setSavedRules] = useDraftState<string | null>('regex:savedRules', null)
+  // 服务器基线留在组件本地 state，不进持久草稿：避免保存/删除清空规则后把基线回写进草稿触发复活。
+  const [savedRules, setSavedRules] = useState<string | null>(null)
   const [revision, setRevision] = useDraftState<string | null>('regex:revision', null)
   const saving = useRef(false)
   const baselineRules = savedRules ?? (state.status === 'ready' ? JSON.stringify(state.value.rules) : null)
@@ -220,14 +270,30 @@ export function RegexSection(props: { remote: TavernRemote }) {
   const save = async (next: RegexRule[]) => {
     if (saving.current) return
     if (!revision) { setError(t('regex.missingRevision')); return }
+    for (let i = 0; i < next.length; i++) {
+      const rule = next[i]!
+      const issue = validateRegexFind(rule)
+      if (issue) {
+        setShowValidation(true)
+        const ruleLabel = rule.name.trim() || `#${i + 1}`
+        setError(t('regex.error.saveBlocked', { name: ruleLabel, reason: formatFindIssue(t, issue) }))
+        return
+      }
+    }
     saving.current = true
     try { await runAsync(setBusy, setError, async () => {
       const r = await remote.saveRegexRules({ rules: next, expectedRevision: revision })
       const err = errOf(r)
       if (err) setError(err)
       else if (r.ok) {
-        setSavedRules(JSON.stringify(next))
+        const savedSerialized = JSON.stringify(next)
+        setSavedRules(savedSerialized)
         setRevision(r.value.revision ?? null)
+        setShowValidation(false)
+        // 仅当飞行期间没有新的编辑时立即清理草稿；若有继续键入则保留脏态与草稿。
+        if (JSON.stringify(rulesRef.current) === savedSerialized) {
+          guard.clearDraft()
+        }
         bumpDisplaySettingsRevision()
         toast.show(t('regex.saved', { count: next.length }))
       }
@@ -270,6 +336,8 @@ export function RegexSection(props: { remote: TavernRemote }) {
   const discardNow = () => {
     if (saving.current) return
     setConfirmDiscard(false)
+    setShowValidation(false)
+    setError(null)
     setRuleLimit(40)
     setRules(null)
     setSavedRules(null)
@@ -335,6 +403,7 @@ export function RegexSection(props: { remote: TavernRemote }) {
               rule={rule}
               index={i}
               disabled={busy}
+              showEmptyError={showValidation}
               canMoveUp={i > 0}
               canMoveDown={i < current.length - 1}
               onMove={moveRule}
@@ -360,7 +429,7 @@ export function RegexSection(props: { remote: TavernRemote }) {
             {current.length > 0 ? (
               <Btn disabled={busy} onClick={() => downloadJson('tavern-regex-rules.json', current)}>{t('regex.exportAll')}</Btn>
             ) : null}
-            <Btn disabled={busy} onClick={() => void save(current)} primary>{t('regex.saveAll')}</Btn>
+            <Btn disabled={busy || !dirty} onClick={() => void save(current)} primary>{t('regex.saveAll')}</Btn>
             <Btn
               disabled={busy}
               onClick={() => {
@@ -376,9 +445,11 @@ export function RegexSection(props: { remote: TavernRemote }) {
       )}
 
       <div className="dsh-tavern-regexPresets">
-        <div className="dsh-tavern-groupHead" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+        <div className="dsh-tavern-groupHead">
           <span>{t('regex.presetHead')}</span>
-          <Btn disabled={busy || presetRegex.state.status === 'loading'} onClick={reloadPresetRegex}>{t('action.refresh')}</Btn>
+          <span style={{ marginLeft: 'auto' }}>
+            <Btn disabled={busy || presetRegex.state.status === 'loading'} onClick={reloadPresetRegex}>{t('action.refresh')}</Btn>
+          </span>
         </div>
         {presetRegex.state.status === 'loading' && (
           <>

@@ -76,8 +76,8 @@ export function CardDataSettings({remote,sessions}:{remote:TavernRemote;sessions
       {(chars.state.status==='loading'||stories.state.status==='loading')&&<Skeleton height={40}/>}
       <Err message={chars.state.status==='error'?chars.state.message:stories.state.status==='error'?stories.state.message:null}/>
       {(chars.state.status==='error'||stories.state.status==='error')&&<Btn onClick={()=>{chars.reload();stories.reload()}}>{t('action.retry')}</Btn>}
-      <SessionTransfer remote={remote} sessions={sessions} sessionId={story?.sessionId}/>
       {story?<StoryVariableSettings key={JSON.stringify([cardId,storyId,story.sessionId])} remote={remote} cardId={cardId} storyId={storyId} sessionId={story.sessionId}/>:<Muted>{t('settings.cards.variableChooseStory')}</Muted>}
+      <SessionTransfer remote={remote} sessions={sessions} sessionId={story?.sessionId}/>
     </>}</DraftScope>
   </Section>
 }
@@ -235,7 +235,7 @@ export function VariableBackupEditor(props:{remote:TavernRemote;sessionId:string
       <textarea className="dsh-tavern-input dsh-tavern-textarea dsh-tavern-codeFont" aria-label={t('speech.cardDataText')} value={text} disabled={busy} onChange={event=>setText(event.target.value)}/>
     </SettingsRow>
     <Err message={error}/>
-    <SaveBar><Btn disabled={busy||!text.trim()} onClick={()=>guard.request(()=>{setText('');setError(null)})}>{t('action.cancel')}</Btn>
+    <SaveBar>{text.trim()?<Btn disabled={busy} onClick={()=>guard.request(()=>{setText('');setError(null)})}>{t('action.cancel')}</Btn>:null}
       <Btn primary disabled={busy||!snapshot.writable||!text.trim()} onClick={()=>{try{helperVariableRestoreChanges(snapshot.scopes,parseHelperVariableBackup(text,snapshot.currentMessageId));setError(null);setConfirm(true)}catch(error){setError(describeError(error))}}}>{t('speech.cardDataRestore')}</Btn></SaveBar>
     <ConfirmDialog open={confirm} title={t('speech.cardDataRestore')} description={t('settings.cards.variableRestoreConfirm')} busy={busy}
       onCancel={()=>setConfirm(false)} onConfirm={()=>void restore()}/>

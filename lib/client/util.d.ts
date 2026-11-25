@@ -190,7 +190,7 @@ export declare function fileToBase64(file: File): Promise<string>;
 export declare function readJsonFile(file: File): Promise<unknown>;
 export declare function downloadJson(filename: string, json: unknown, space?: number): void;
 export declare function downloadBase64(filename: string, base64: string, mime: string): void;
-/** primitives Modal 的薄封装（统一关闭文案）；width 档：sm 380（默认）/ md 480 / lg 680 / xl 880 / full 1280（近全屏）。 */
+/** primitives Modal 的薄封装（统一关闭文案）；width 档：sm 380（默认）/ md 480 / lg 680 / xl 880 / full 1280（近全屏）；layer='sub' 用于弹窗之上叠开子弹窗。 */
 export declare function Dialog(props: {
     open: boolean;
     title: string;
@@ -198,6 +198,7 @@ export declare function Dialog(props: {
     onClose: () => void;
     footer?: ReactNode;
     width?: 'sm' | 'md' | 'lg' | 'xl' | 'full';
+    layer?: 'base' | 'sub';
     children?: ReactNode;
 }): import("react").JSX.Element;
 export declare function ConfirmDialog(props: {

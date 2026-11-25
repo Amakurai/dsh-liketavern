@@ -1,6 +1,6 @@
 /**
  * 设置面板分区：世界书库与角色卡内嵌书。卡片网格展示，点开后按条目开关/编辑。
- * 卡片可键盘触发（clickableProps）；导入/保存等瞬时反馈走 useToast，上下文错误用 Err。
+ * 卡片主区域使用原生按钮触发器（与操作按钮平级，避免嵌套可交互元素）；导入/保存等瞬时反馈走 useToast，上下文错误用 Err。
  */
 import { describeError } from '../../core/guards.js'
 import { useEffect, useRef, useState } from 'react'
@@ -12,7 +12,7 @@ import type { WorldInfoEntry } from '../../core/types.js'
 import { parseLorebook } from '../../core/lorebookFormat.js'
 import { useT } from '../i18n.js'
 import type { CharacterSummary, TavernRemote } from '../types.js'
-import { Badge, Btn, ConfirmDialog, Dialog, Err, FileBtn, IconBtn, SearchEmpty, SearchInput, Section, Skeleton, clickableProps, downloadJson, errOf, readJsonFile, runAsync, useLoader, useToast } from '../util.js'
+import { Badge, Btn, ConfirmDialog, Dialog, Err, FileBtn, IconBtn, SearchEmpty, SearchInput, Section, Skeleton, downloadJson, errOf, readJsonFile, runAsync, useLoader, useToast } from '../util.js'
 import { LorebookEditor, type LorebookTarget } from './lorebookEditor.js'
 
 type Opened = { target: LorebookTarget; entries: WorldInfoEntry[]; revision?: string }
@@ -268,21 +268,23 @@ function LorebooksSectionContent(props: { remote: TavernRemote }) {
           <div className="dsh-tavern-groupHead">{t('lorebooks.groupEmbedded')}</div>
           <div className="dsh-tavern-list">
             {visibleCharBooks.map((item) => (
-              <div key={item.cardId} className="dsh-tavern-tile" {...clickableProps(() => void openCharacter(item))}>
-                <span className="dsh-tavern-tileIcon">
-                  <IconFolderOpenOutlineMedium size={18} />
-                </span>
-                <div className="dsh-tavern-tileMain">
-                  <div className="dsh-tavern-tileTitleRow">
-                    <span className="dsh-tavern-tileName">{item.characterBookName || item.name}</span>
-                    <Badge>{t('lorebooks.badgeEmbedded')}</Badge>
-                  </div>
-                  <span className="dsh-tavern-tileSub">
-                    {typeof item.characterBookEntryCount === 'number' && item.characterBookEntryCount > 0
-                      ? t('lorebooks.fromCharacterWithCount', { name: item.name, count: item.characterBookEntryCount })
-                      : t('lorebooks.fromCharacter', { name: item.name })}
+              <div key={item.cardId} className="dsh-tavern-tile">
+                <button type="button" className="dsh-tavern-tileTrigger" disabled={busy} onClick={() => void openCharacter(item)}>
+                  <span className="dsh-tavern-tileIcon">
+                    <IconFolderOpenOutlineMedium size={18} />
                   </span>
-                </div>
+                  <span className="dsh-tavern-tileMain">
+                    <span className="dsh-tavern-tileTitleRow">
+                      <span className="dsh-tavern-tileName">{item.characterBookName || item.name}</span>
+                      <Badge>{t('lorebooks.badgeEmbedded')}</Badge>
+                    </span>
+                    <span className="dsh-tavern-tileSub">
+                      {typeof item.characterBookEntryCount === 'number' && item.characterBookEntryCount > 0
+                        ? t('lorebooks.fromCharacterWithCount', { name: item.name, count: item.characterBookEntryCount })
+                        : t('lorebooks.fromCharacter', { name: item.name })}
+                    </span>
+                  </span>
+                </button>
                 <div className="dsh-tavern-tileActions">
                   <IconBtn label={t('lorebooks.editEntries')} disabled={busy || opening !== null} onClick={() => void openCharacter(item)}>
                     <IconEditOutlineMedium />
@@ -319,17 +321,19 @@ function LorebooksSectionContent(props: { remote: TavernRemote }) {
         <>
           <div className="dsh-tavern-list">
             {visibleNames.map((name) => (
-              <div key={name} className="dsh-tavern-tile" {...clickableProps(() => void openLibrary(name))}>
-                <span className="dsh-tavern-tileIcon">
-                  <IconFolderOpenOutlineMedium size={18} />
-                </span>
-                <div className="dsh-tavern-tileMain">
-                  <div className="dsh-tavern-tileTitleRow">
-                    <span className="dsh-tavern-tileName">{name}</span>
-                    <Badge>{t('lorebooks.badgeLibrary')}</Badge>
-                  </div>
-                  <span className="dsh-tavern-tileSub">{t('lorebooks.libraryFileSub')}</span>
-                </div>
+              <div key={name} className="dsh-tavern-tile">
+                <button type="button" className="dsh-tavern-tileTrigger" disabled={busy} onClick={() => void openLibrary(name)}>
+                  <span className="dsh-tavern-tileIcon">
+                    <IconFolderOpenOutlineMedium size={18} />
+                  </span>
+                  <span className="dsh-tavern-tileMain">
+                    <span className="dsh-tavern-tileTitleRow">
+                      <span className="dsh-tavern-tileName">{name}</span>
+                      <Badge>{t('lorebooks.badgeLibrary')}</Badge>
+                    </span>
+                    <span className="dsh-tavern-tileSub">{t('lorebooks.libraryFileSub')}</span>
+                  </span>
+                </button>
                 <div className="dsh-tavern-tileActions">
                   <IconBtn label={t('lorebooks.editEntries')} disabled={busy || opening !== null} onClick={() => void openLibrary(name)}>
                     <IconEditOutlineMedium />

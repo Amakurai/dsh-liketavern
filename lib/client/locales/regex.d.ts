@@ -48,5 +48,8 @@ export declare const zh: {
     readonly 'regex.presetHead': "预设附带";
     readonly 'regex.noPresetRegex': "没有预设携带正则。预设 JSON 里 extensions.regex_scripts 会随导入带进来，可在「预设」页查看。";
     readonly 'regex.presetCount': "{name}（{count} 条）";
+    readonly 'regex.error.emptyFind': "查找表达式不能为空";
+    readonly 'regex.error.invalidFind': "正则表达式语法无效：{detail}";
+    readonly 'regex.error.saveBlocked': "无法保存：规则「{name}」{reason}";
 };
 export declare const en: Record<keyof typeof zh, string>;

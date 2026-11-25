@@ -654,7 +654,7 @@ export function downloadBase64(filename: string, base64: string, mime: string): 
   setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
-/** primitives Modal 的薄封装（统一关闭文案）；width 档：sm 380（默认）/ md 480 / lg 680 / xl 880 / full 1280（近全屏）。 */
+/** primitives Modal 的薄封装（统一关闭文案）；width 档：sm 380（默认）/ md 480 / lg 680 / xl 880 / full 1280（近全屏）；layer='sub' 用于弹窗之上叠开子弹窗。 */
 export function Dialog(props: {
   open: boolean
   title: string
@@ -662,6 +662,7 @@ export function Dialog(props: {
   onClose: () => void
   footer?: ReactNode
   width?: 'sm' | 'md' | 'lg' | 'xl' | 'full'
+  layer?: 'base' | 'sub'
   children?: ReactNode
 }) {
   const t = useT()
@@ -680,6 +681,7 @@ export function Dialog(props: {
           : props.width === 'full'
             ? 'dsh-tavern-modal-full'
             : ''
+  const classes = ['dsh-tavern-ui', widthClass, props.layer === 'sub' ? 'dsh-tavern-modal-sub' : ''].filter(Boolean).join(' ')
   return (
     <Modal
       open={props.open}
@@ -688,7 +690,7 @@ export function Dialog(props: {
       description={props.description}
       closeLabel={t('action.close')}
       footer={props.footer}
-      className={widthClass ? `dsh-tavern-ui ${widthClass}` : 'dsh-tavern-ui'}
+      className={classes}
       contentClassName={`dsh-tavern-modalContent${props.footer ? ' dsh-tavern-modalHasFooter' : ''}`}
     >
       <div className="dsh-tavern-ui dsh-tavern-modalBody">{props.children}</div>
@@ -724,8 +726,8 @@ export function ConfirmDialog(props: {
       onClose={cancel}
       title={props.title}
       description={props.description}
-      closeLabel={t('action.cancel')}
-      className="dsh-tavern-ui"
+      closeLabel={t('action.close')}
+      className="dsh-tavern-ui dsh-tavern-modal-confirm"
       {...(props.children ? { contentClassName: 'dsh-tavern-modalContent dsh-tavern-modalHasFooter' } : {})}
       footer={
         <div className="dsh-tavern-modalActions">

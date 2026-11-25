@@ -148,6 +148,8 @@ type LorebookEditorProps = {
   target: LorebookTarget
   entries: WorldInfoEntry[]
   revision?: string
+  /** 嵌在自带关闭钮的 Dialog 中时隐藏顶部关闭/返回钮，避免重复关闭入口。 */
+  hideCloseButton?: boolean
   onClose: () => void
   onSaved: (entries: WorldInfoEntry[], revision?: string) => void
   save: (json: unknown, expectedRevision?: string) => Promise<Envelope<unknown>>
@@ -330,19 +332,28 @@ function LorebookEditorContent(props: LorebookEditorProps & { draftKey: string }
     else props.onClose()
   }
 
+  const kindLabel = targetKindLabel(t, target.kind)
+  const fullMeta = t('lorebookEditor.meta', { kind: kindLabel, total: entries.length, enabled: enabledCount })
+  const duplicatePrefix = `${kindLabel} · `
+  const metaText = target.kind === 'chat' && kindLabel === target.name && fullMeta.startsWith(duplicatePrefix)
+    ? fullMeta.slice(duplicatePrefix.length)
+    : fullMeta
+
   return (
     <div>
       <div className="dsh-tavern-toolbar">
-        <Btn size="md" onClick={askClose}>
-          {target.kind === 'chat' ? t('action.close') : t('lorebookEditor.backToList')}
-        </Btn>
+        {!props.hideCloseButton && (
+          <Btn size="md" onClick={askClose}>
+            {target.kind === 'chat' ? t('action.close') : t('lorebookEditor.backToList')}
+          </Btn>
+        )}
         <div style={{ flex: 1, minWidth: 0 }}>
           <div className="dsh-tavern-cardName" style={{ fontSize: 15 }}>
             {target.name}
           </div>
           <div className="dsh-tavern-editorMeta">
             <Muted>
-              {t('lorebookEditor.meta', { kind: targetKindLabel(t, target.kind), total: entries.length, enabled: enabledCount })}
+              {metaText}
               {constantCount > 0 ? t('lorebookEditor.metaConstant', { count: constantCount }) : ''}
             </Muted>
             {dirty ? <Badge accent>{t('lorebookEditor.unsaved')}</Badge> : null}
@@ -479,9 +490,11 @@ function LorebookEditorContent(props: LorebookEditorProps & { draftKey: string }
         <Btn primary size="md" disabled={busy || !dirty} onClick={() => void save()}>
           {t('action.save')}
         </Btn>
-        <Btn size="md" onClick={askClose}>
-          {dirty ? t('lorebookEditor.discardAndBack') : t('lorebookEditor.back')}
-        </Btn>
+        {(!props.hideCloseButton || dirty) && (
+          <Btn size="md" onClick={askClose}>
+            {dirty ? t('lorebookEditor.discardAndBack') : t('lorebookEditor.back')}
+          </Btn>
+        )}
       </div>
 
       <ConfirmDialog
@@ -559,15 +572,15 @@ const EntryForm = memo(function EntryForm(props: {
       </label>
       <div className="dsh-tavern-inlineChecks">
         <label>
-          <Toggle checked={entry.constant} onChange={(constant) => set({ constant })} />
+          <Toggle checked={entry.constant} title={t('lorebookEditor.form.constant')} onChange={(constant) => set({ constant })} />
           {t('lorebookEditor.form.constant')}
         </label>
         <label>
-          <Toggle checked={entry.selective} onChange={(selective) => set({ selective })} />
+          <Toggle checked={entry.selective} title={t('lorebookEditor.form.selective')} onChange={(selective) => set({ selective })} />
           {t('lorebookEditor.form.selective')}
         </label>
         <label>
-          <Toggle checked={entry.ignoreBudget} onChange={(ignoreBudget) => set({ ignoreBudget })} />
+          <Toggle checked={entry.ignoreBudget} title={t('lorebookEditor.form.ignoreBudget')} onChange={(ignoreBudget) => set({ ignoreBudget })} />
           {t('lorebookEditor.form.ignoreBudget')}
         </label>
       </div>
@@ -638,7 +651,7 @@ const EntryForm = memo(function EntryForm(props: {
             </label>
             <label className="dsh-tavern-inlineChecks" style={{ paddingTop: 22 }}>
               <span>
-                <Toggle checked={entry.useProbability} onChange={(useProbability) => set({ useProbability })} /> {t('lorebookEditor.form.useProbability')}
+                <Toggle checked={entry.useProbability} title={t('lorebookEditor.form.useProbability')} onChange={(useProbability) => set({ useProbability })} /> {t('lorebookEditor.form.useProbability')}
               </span>
             </label>
             {entry.position === 4 ? (
@@ -655,11 +668,11 @@ const EntryForm = memo(function EntryForm(props: {
           </div>
           <div className="dsh-tavern-inlineChecks">
             <label>
-              <Toggle checked={entry.excludeRecursion} onChange={(excludeRecursion) => set({ excludeRecursion })} />
+              <Toggle checked={entry.excludeRecursion} title={t('lorebookEditor.form.excludeRecursion')} onChange={(excludeRecursion) => set({ excludeRecursion })} />
               {t('lorebookEditor.form.excludeRecursion')}
             </label>
             <label>
-              <Toggle checked={entry.preventRecursion} onChange={(preventRecursion) => set({ preventRecursion })} />
+              <Toggle checked={entry.preventRecursion} title={t('lorebookEditor.form.preventRecursion')} onChange={(preventRecursion) => set({ preventRecursion })} />
               {t('lorebookEditor.form.preventRecursion')}
             </label>
           </div>
@@ -713,7 +726,7 @@ const EntryForm = memo(function EntryForm(props: {
           </div>
           <div className="dsh-tavern-inlineChecks">
             <label>
-              <Toggle checked={entry.groupOverride} onChange={(groupOverride) => set({ groupOverride })} />
+              <Toggle checked={entry.groupOverride} title={t('lorebookEditor.form.groupOverride')} onChange={(groupOverride) => set({ groupOverride })} />
               {t('lorebookEditor.form.groupOverride')}
             </label>
           </div>

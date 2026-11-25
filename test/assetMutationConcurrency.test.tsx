@@ -79,7 +79,7 @@ it('人设保存前同步拦截重复保存、交叉默认项及迟到世界书�
   await f.state.savePersona(persona)
   vi.mocked(f.remote.savePersona).mockImplementationOnce(async request => { await gate.promise; return ok(await f.service.savePersona(request)) })
   const view = await render(<PersonasSection remote={f.remote}/>)
-  await act(async () => tile(view, '港口').props.onClick())
+  await act(async () => tile(view, '港口').findByProps({ className: 'dsh-tavern-tileTrigger' }).props.onClick())
   await act(async () => view.root.findByType('textarea').props.onChange({ target: { value: '提交的描述' } }))
   const save = button(view, t('action.save')).props.onClick
   const select = view.root.findByType(Select).props.onChange
@@ -105,7 +105,7 @@ it('预设设置默认项期间拒绝重复写入、保存、导出读取与迟�
     enabled: true, role: 'system', position: 'relative', depth: 4, order: 100, marker: false }] })
   vi.mocked(f.remote.updateSettings).mockImplementationOnce(async request => { await gate.promise; return ok(await f.service.updateSettings(request)) })
   const view = await render(<PresetsSection remote={f.remote}/>)
-  await act(async () => tile(view, '港口预设').props.onClick())
+  await act(async () => tile(view, '港口预设').findByProps({ className: 'dsh-tavern-tileTrigger' }).props.onClick())
   await act(async () => { await vi.waitFor(() => expect(view.root.findAllByType('fieldset')).toHaveLength(1)) })
   await act(async () => view.root.findAllByType('input').find(input => input.props.value === '港口预设')!.props.onChange({ target: { value: '修改的预设名' } }))
   const setDefault = button(view, t('presets.setAsDefault')).props.onClick

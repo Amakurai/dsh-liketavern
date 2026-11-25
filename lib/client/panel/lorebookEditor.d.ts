@@ -18,6 +18,8 @@ type LorebookEditorProps = {
     target: LorebookTarget;
     entries: WorldInfoEntry[];
     revision?: string;
+    /** 嵌在自带关闭钮的 Dialog 中时隐藏顶部关闭/返回钮，避免重复关闭入口。 */
+    hideCloseButton?: boolean;
     onClose: () => void;
     onSaved: (entries: WorldInfoEntry[], revision?: string) => void;
     save: (json: unknown, expectedRevision?: string) => Promise<Envelope<unknown>>;

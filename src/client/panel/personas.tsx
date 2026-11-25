@@ -1,6 +1,6 @@
 /**
  * 设置面板分区：人设（卡片网格 / 新建编辑 / 删除 / 设为默认）。
- * 卡片可键盘触发（clickableProps）；保存/设默认等瞬时反馈走 useToast，上下文错误用 Err。
+ * 卡片主区域使用原生按钮触发器（与操作按钮平级，避免嵌套可交互元素）；保存/设默认等瞬时反馈走 useToast，上下文错误用 Err。
  */
 import { useDraftGuard } from '../drafts.js'
 import { useDraftState } from '../draftPersistence.js'
@@ -10,7 +10,7 @@ import { IconEditOutlineMedium, IconTrashOutlineMedium, IconUserOutlineMedium } 
 import { notifyAllSessionBindingsChanged } from '../cache.js'
 import { useT } from '../i18n.js'
 import type { Persona, TavernRemote } from '../types.js'
-import { Badge, Btn, ConfirmDialog, Err, Field, IconBtn, SaveBar, SearchEmpty, SearchInput, Section, Select, Skeleton, clickableProps, errOf, runAsync, useLoader, useToast } from '../util.js'
+import { Badge, Btn, ConfirmDialog, Err, Field, IconBtn, SaveBar, SearchEmpty, SearchInput, Section, Select, Skeleton, errOf, runAsync, useLoader, useToast } from '../util.js'
 
 /** 编辑器保留读取时的版本；旧版恢复草稿缺少版本时必须重新打开，不能借刷新结果授权覆盖。 */
 type PersonaDraft = Persona & { revision?: string }
@@ -148,15 +148,17 @@ export function PersonasSection(props: { remote: TavernRemote }) {
         {visible.map((p) => {
           const isDefault = defaultPersonaId === p.id
           return (
-            <div key={p.id} className="dsh-tavern-tile" {...clickableProps(() => openPersona(p))}>
-              <div className="dsh-tavern-tileMain">
-                <div className="dsh-tavern-tileTitleRow">
-                  <span className="dsh-tavern-tileName">{p.name}</span>
-                  {isDefault ? <Badge accent>{t('personas.defaultBadge')}</Badge> : null}
-                  {p.lorebookId ? <Badge>{p.lorebookId}</Badge> : null}
-                </div>
-                <span className="dsh-tavern-tileSub">{p.description.trim() || t('personas.noDescription')}</span>
-              </div>
+            <div key={p.id} className="dsh-tavern-tile">
+              <button type="button" className="dsh-tavern-tileTrigger" disabled={busy} onClick={() => openPersona(p)}>
+                <span className="dsh-tavern-tileMain">
+                  <span className="dsh-tavern-tileTitleRow">
+                    <span className="dsh-tavern-tileName">{p.name}</span>
+                    {isDefault ? <Badge accent>{t('personas.defaultBadge')}</Badge> : null}
+                    {p.lorebookId ? <Badge>{p.lorebookId}</Badge> : null}
+                  </span>
+                  <span className="dsh-tavern-tileSub">{p.description.trim() || t('personas.noDescription')}</span>
+                </span>
+              </button>
               <div className="dsh-tavern-tileActions">
                 <IconBtn label={t('action.edit')} disabled={busy} onClick={() => openPersona(p)}>
                   <IconEditOutlineMedium />

@@ -83,8 +83,8 @@ export function HelperMvuAbandonAction(props: { remote: TavernRemote; sessionId:
 
 function PreDialog(props: { title: string; text: string; onClose: () => void }) {
   return (
-    <Dialog open title={props.title} onClose={props.onClose} width="lg">
-      <pre className="dsh-tavern-modalPre">{props.text}</pre>
+    <Dialog open title={props.title} onClose={props.onClose} width="lg" layer="sub">
+      <pre tabIndex={0} className="dsh-tavern-modalPre">{props.text}</pre>
     </Dialog>
   )
 }
@@ -143,7 +143,7 @@ function PromptPreviewDialog(props: { data: PromptPreview; onClose: () => void }
     }
   }
   return (
-    <Dialog open title={t('chip.preview.title')} onClose={props.onClose} width="lg">
+    <Dialog open title={t('chip.preview.title')} onClose={props.onClose} width="lg" layer="sub">
       <Muted>{t('chip.preview.notice')}</Muted>
       <Muted>
         {t('chip.preview.budget', { used: wi.used, limit: wi.limit })}
@@ -794,6 +794,7 @@ function HeaderChipSession(props: HeaderChipProps) {
                         disabled={busy}
                         checked={draft.injectJournal === true}
                         onChange={(injectJournal) => setDraft({ ...draft, injectJournal })}
+                        title={t('chip.field.injectJournal')}
                       />
                       {t('chip.field.injectJournal')}
                     </label>
@@ -802,7 +803,18 @@ function HeaderChipSession(props: HeaderChipProps) {
                         {t('chip.journal.edit')}
                       </Btn>
                     ) : null}
-                    <label><Toggle disabled={busy} checked={draft.helperMvu===true} onChange={next=>{const helperMvu=!next&&(!binding||draft.cardId!==binding.cardId||binding.helperMvu===undefined)?undefined:next;setDraft({...draft,helperMvu})}}/>{t('chip.field.helperMvu')}</label>
+                    <label>
+                      <Toggle
+                        disabled={busy}
+                        checked={draft.helperMvu === true}
+                        onChange={(next) => {
+                          const helperMvu = !next && (!binding || draft.cardId !== binding.cardId || binding.helperMvu === undefined) ? undefined : next
+                          setDraft({ ...draft, helperMvu })
+                        }}
+                        title={t('chip.field.helperMvu')}
+                      />
+                      {t('chip.field.helperMvu')}
+                    </label>
                   </div>
                   <Muted>{t('chip.field.helperMvuNote')}</Muted>
                 </div>
@@ -873,12 +885,13 @@ function HeaderChipSession(props: HeaderChipProps) {
       {view && <PreDialog title={view.title} text={view.text} onClose={() => setView(null)} />}
       {previewData && <PromptPreviewDialog data={previewData} onClose={() => setPreviewData(null)} />}
       {chatLore && <DraftScope>{(request) =>
-        <Dialog open width="xl" title={t('chip.chatLore.title')} onClose={() => request(() => setChatLore(null))}>
+        <Dialog open width="xl" layer="sub" title={t('chip.chatLore.title')} onClose={() => request(() => setChatLore(null))}>
           <LorebookEditor
             remote={remote}
             target={{ kind: 'chat', cardId: chatLore.cardId, storyId: chatLore.storyId, name: t('chip.chatLore.title') }}
             entries={chatLore.entries}
             revision={chatLore.revision}
+            hideCloseButton
             onClose={() => setChatLore(null)}
             onSaved={() => {
               toast.show(t('chip.chatLore.saved'))
@@ -889,12 +902,13 @@ function HeaderChipSession(props: HeaderChipProps) {
         </Dialog>
       }</DraftScope>}
       {memoryOpenTab !== null && binding?.storyId && <DraftScope>{(request) =>
-        <Dialog open width="xl" title={t('section.memory')} onClose={() => request(() => setMemoryOpenTab(null))}>
+        <Dialog open width="xl" layer="sub" title={t('section.memory')} onClose={() => request(() => setMemoryOpenTab(null))}>
           <MemorySection
             key={`${binding.storyId}:${memoryOpenTab}`}
             remote={remote}
             initialContext={{ cardId: binding.cardId, storyId: binding.storyId!, cardName: name ?? binding.cardName ?? listedName }}
             initialTab={memoryOpenTab}
+            hideTitle
           />
         </Dialog>
       }</DraftScope>}

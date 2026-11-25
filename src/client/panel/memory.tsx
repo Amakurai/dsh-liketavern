@@ -21,6 +21,13 @@ import { Badge, Btn, ConfirmDialog, Err, IconBtn, Muted, SearchEmpty, SearchInpu
 const DELTA_TYPE_KEY: Record<WorldDelta['type'], string> = { add: 'memory.deltaType.add', update: 'memory.deltaType.update', invalidate: 'memory.deltaType.invalidate' }
 const MEMORY_PAGE_SIZE = 50
 
+/** 将 ISO 时间戳格式化为本地可读时间；无法解析时原样回退，避免出现 Invalid Date。 */
+function formatTimestamp(iso: string): string {
+  if (!iso) return ''
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString()
+}
+
 function MemoryEditor(props: { remote: TavernRemote; cardId: string; storyId?: string; entry: MemoryEntry; onDone: () => void }) {
   const { entry } = props
   const t = useT()
@@ -87,6 +94,7 @@ interface MemorySectionProps {
   remote: TavernRemote
   initialContext?: { cardId: string; storyId: string; cardName?: string }
   initialTab?: 'memory' | 'delta' | 'journal'
+  hideTitle?: boolean
 }
 
 type MemoryCharacters = {
@@ -141,7 +149,8 @@ function MemorySelection(props: MemorySectionProps) {
   // 剧情切换必须重建所有编辑状态：禁止旧 journal 查询或旧字段值进入新剧情；角色与剧情列表留在本层复用。
   return <MemoryContextSection key={JSON.stringify([cardId, storyId ?? null])} remote={props.remote}
     chars={chars} stories={stories}
-    cardId={cardId} prefilledCardName={prefilledCardName} storyId={storyId} initialTab={props.initialTab} activeSessionId={activeSessionId}
+    cardId={cardId} prefilledCardName={prefilledCardName} storyId={storyId} initialTab={props.initialTab}
+    hideTitle={props.hideTitle ?? Boolean(props.initialContext)} activeSessionId={activeSessionId}
     setCardId={(value) => { setPrefilledCardName(''); setCardId(value) }} setStoryId={(value) => setStoredStoryId(value ?? '')} />
 }
 
@@ -149,7 +158,7 @@ function MemoryContextSection(props: { remote: TavernRemote;
   chars: ReturnType<typeof useLoader<MemoryCharacters>>;
   stories: ReturnType<typeof useLoader<TavernMethodResults['listStories']>>;
   cardId: string; prefilledCardName: string; storyId?: string;
-  initialTab?: 'memory' | 'delta' | 'journal'; activeSessionId?: string;
+  initialTab?: 'memory' | 'delta' | 'journal'; hideTitle?: boolean; activeSessionId?: string;
   setCardId: (cardId: string) => void; setStoryId: (storyId: string | undefined) => void }) {
   const { remote, chars, stories } = props
   const { cardId, prefilledCardName, storyId, activeSessionId, setCardId, setStoryId } = props
@@ -396,7 +405,7 @@ function MemoryContextSection(props: { remote: TavernRemote;
     })
 
   return (
-    <Section title={t('section.memory')} description={t('memory.desc')}>
+    <Section title={props.hideTitle ? undefined : t('section.memory')} description={t('memory.desc')}>
       {toast.node}
       {guard.confirmation}
       <ConfirmDialog open={deleteId !== null} title={t('memory.deleteEntry')} description={t('memory.deleteConfirm')}
@@ -455,7 +464,7 @@ function MemoryContextSection(props: { remote: TavernRemote;
               </button>
             </div>
             <span style={{ flex: 1 }} />
-            {tab === 'memory' && <Btn disabled={busy || editingId !== null} onClick={() => void compress()}>{t('memory.compressOldest')}</Btn>}
+            {tab === 'memory' && <Btn disabled={busy || editingId !== null || activeMemoryCount < 2} onClick={() => void compress()}>{t('memory.compressOldest')}</Btn>}
             {tab === 'delta' && <Btn disabled={busy} onClick={() => void exportBook()}>{t('memory.exportBook')}</Btn>}
           </div>
           {tab === 'memory' && (
@@ -468,7 +477,7 @@ function MemoryContextSection(props: { remote: TavernRemote;
                 </>
               )}
               {memories.state.status === 'error' && <><Err message={memories.state.message} /><Btn disabled={busy} onClick={memories.reload}>{t('action.retry')}</Btn></>}
-              {(memoryItems.length >= 2 || memoryQuery !== '' || memoryFilter !== 'all') && (
+              {(memoryItems.length >= 2 || archivedMemoryCount > 0 || memoryQuery !== '' || memoryFilter !== 'all') && (
                 <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10 }}>
                   <SearchInput
                     label={t('memory.searchPlaceholder')}
@@ -518,7 +527,7 @@ function MemoryContextSection(props: { remote: TavernRemote;
                     {m.tags.map((tag) => (
                       <Badge key={tag}>{tag}</Badge>
                     ))}
-                    <span className="dsh-tavern-memoMeta">{m.updated}</span>
+                    <span className="dsh-tavern-memoMeta" title={m.updated}>{formatTimestamp(m.updated)}</span>
                     <span className="dsh-tavern-memoActions">
                       <IconBtn disabled={editingId !== null || busy} label={t('action.edit')} onClick={() => { if (!pending.current && editing.current === null) setEditingId(m.id) }}>
                         <IconEditOutlineMedium />
@@ -600,7 +609,7 @@ function MemoryContextSection(props: { remote: TavernRemote;
                 </>
               )}
               {deltas.state.status === 'error' && <><Err message={deltas.state.message} /><Btn disabled={busy} onClick={deltas.reload}>{t('action.retry')}</Btn></>}
-              {(deltaItems.length >= 2 || deltaQuery !== '' || deltaFilter !== 'all') && (
+              {(deltaItems.length >= 2 || revokedDeltaCount > 0 || deltaQuery !== '' || deltaFilter !== 'all') && (
                 <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10 }}>
                   <SearchInput
                     label={t('memory.deltaSearchPlaceholder')}
@@ -641,7 +650,7 @@ function MemoryContextSection(props: { remote: TavernRemote;
                     <Badge danger={d.type === 'invalidate'}>{t(DELTA_TYPE_KEY[d.type])}</Badge>
                     {d.ref ? <Badge>→ {d.ref}</Badge> : null}
                     {d.revoked ? <Badge danger>{t('memory.revoked')}</Badge> : null}
-                    <span className="dsh-tavern-memoMeta">{d.ts}</span>
+                    <span className="dsh-tavern-memoMeta" title={d.ts}>{formatTimestamp(d.ts)}</span>
                     {!d.revoked && (
                       <span className="dsh-tavern-memoActions">
                         <Btn size="sm" disabled={busy} onClick={() => void revoke(d.id)}>{t('memory.revoke')}</Btn>

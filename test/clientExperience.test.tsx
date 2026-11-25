@@ -66,7 +66,7 @@ describe('人设并发编辑与部分写入反馈', () => {
     const savePersona = vi.fn()
     const remote = { listPersonas: async () => ok({ items: [legacy] }), listLorebooks: async () => ok({ items: [] }), savePersona } as unknown as TavernRemote
     const view = await render(<PersonasSection remote={remote} />)
-    await act(async () => view.root.findByProps({ className: 'dsh-tavern-tile' }).props.onClick())
+    await act(async () => view.root.findByProps({ className: 'dsh-tavern-tileTrigger' }).props.onClick())
     await act(async () => view.root.findByType('textarea').props.onChange({ target: { value: '保留我的草稿' } }))
     await act(async () => button(view, '保存').props.onClick())
     expect(savePersona).not.toHaveBeenCalled()
@@ -78,7 +78,7 @@ describe('人设并发编辑与部分写入反馈', () => {
     const listPersonas = vi.fn(async () => ok({ items: [persona] }))
     const remote = { listPersonas, listLorebooks: async () => ok({ items: [] }), savePersona } as unknown as TavernRemote
     const view = await render(<PersonasSection remote={remote} />)
-    await act(async () => view.root.findByProps({ className: 'dsh-tavern-tile' }).props.onClick())
+    await act(async () => view.root.findByProps({ className: 'dsh-tavern-tileTrigger' }).props.onClick())
     await act(async () => view.root.findByType('textarea').props.onChange({ target: { value: 'A 的未保存草稿' } }))
     await act(async () => button(view, '保存').props.onClick())
     expect(view.root.findByType('textarea').props.value).toBe('A 的未保存草稿')

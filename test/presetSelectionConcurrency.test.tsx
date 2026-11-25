@@ -45,7 +45,7 @@ async function render(f: ReturnType<typeof fixture>) {
   return view
 }
 async function selectBoth(view: ReactTestRenderer) {
-  const tiles = view.root.findAllByProps({ className: 'dsh-tavern-tile' })
+  const tiles = view.root.findAllByProps({ className: 'dsh-tavern-tileTrigger' })
   await act(async () => { tiles[0]!.props.onClick(); tiles[1]!.props.onClick() })
 }
 
@@ -79,7 +79,7 @@ it.each(['envelope', 'transport'] as const)('最后读取失败后保留该错�
   expect(view.root.findByProps({ role: 'alert' }).children.join('')).toContain('灯塔读取失败')
   expect(JSON.stringify(view.toJSON())).not.toContain('过时的港口错误')
   f.getPreset.mockResolvedValueOnce(ok({ preset: content('lighthouse'), revision: 'retry-revision' }))
-  await act(async () => view.root.findAllByProps({ className: 'dsh-tavern-tile' })[1]!.props.onClick())
+  await act(async () => view.root.findAllByProps({ className: 'dsh-tavern-tileTrigger' })[1]!.props.onClick())
   expect(view.root.findByType('textarea').props.value).toBe('lighthouse原始正文')
   expect(view.root.findAllByProps({ role: 'alert' })).toHaveLength(0)
 })
@@ -93,7 +93,7 @@ it('快速关闭并重开编辑器后，先前点选的迟到错误不能污染�
   await act(async () => view.root.findAllByType(ConfirmDialog).find(dialog => dialog.props.open)!.props.onConfirm())
   expect(view.root.findAllByType('textarea')).toHaveLength(0)
   f.getPreset.mockResolvedValueOnce(ok({ preset: { ...content('lighthouse'), entries: [{ ...content('lighthouse').entries[0]!, content: '重新打开的新灯塔正文' }] }, revision: 'reopened-revision' }))
-  await act(async () => view.root.findAllByProps({ className: 'dsh-tavern-tile' })[1]!.props.onClick())
+  await act(async () => view.root.findAllByProps({ className: 'dsh-tavern-tileTrigger' })[1]!.props.onClick())
   await act(async () => f.port.reject(new Error('关闭前的过时港口错误')))
   expect(view.root.findByType('textarea').props.value).toBe('重新打开的新灯塔正文')
   expect(view.root.findAllByProps({ role: 'alert' })).toHaveLength(0)
@@ -102,9 +102,9 @@ it('快速关闭并重开编辑器后，先前点选的迟到错误不能污染�
 it('同批关闭取消已开始的读取，迟到成功不能重新打开用户已关闭的编辑器', async () => {
   const f = fixture(), view = await render(f)
   await act(async () => f.lighthouse.resolve(ok({ preset: content('lighthouse'), revision: 'lighthouse-revision' })))
-  await act(async () => view.root.findAllByProps({ className: 'dsh-tavern-tile' })[1]!.props.onClick())
+  await act(async () => view.root.findAllByProps({ className: 'dsh-tavern-tileTrigger' })[1]!.props.onClick())
   const close = view.root.findAllByType(Btn).find(button => button.props.children === t('action.close'))!.props.onClick
-  await act(async () => { view.root.findAllByProps({ className: 'dsh-tavern-tile' })[0]!.props.onClick(); close() })
+  await act(async () => { view.root.findAllByProps({ className: 'dsh-tavern-tileTrigger' })[0]!.props.onClick(); close() })
   expect(view.root.findAllByType('textarea')).toHaveLength(0)
   await act(async () => f.port.resolve(ok({ preset: content('port'), revision: 'port-revision' })))
   expect(view.root.findAllByType('textarea')).toHaveLength(0)

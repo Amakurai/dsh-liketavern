@@ -1,6 +1,6 @@
 /**
  * 设置面板分区：提示词预设（卡片网格 / 导入 / 导出 / 删除 / 条目表格编辑）。
- * 卡片可键盘触发（clickableProps）；保存/导入/设默认等瞬时反馈走 useToast，上下文错误用 Err。
+ * 卡片主区域使用原生按钮触发器（与操作按钮平级，避免嵌套可交互元素）；保存/导入/设默认等瞬时反馈走 useToast，上下文错误用 Err。
  */
 import { describeError } from '../../core/guards.js'
 import { exportStPreset } from '../../core/presetExport.js'
@@ -14,7 +14,7 @@ import type { PresetSummary, TavernRemote } from '../types.js'
 import { notifyAllSessionBindingsChanged } from '../cache.js'
 import { bumpDisplaySettingsRevision } from '../displayPrefs.js'
 import { t as tBare, useT } from '../i18n.js'
-import { Badge, Btn, ConfirmDialog, Err, Field, FileBtn, IconBtn, Muted, NumInput, RegexScriptRow, SaveBar, SearchEmpty, SearchInput, Section, Select, Skeleton, Toggle, clickableProps, downloadJson, errOf, readJsonFile, runAsync, useLoader, useToast } from '../util.js'
+import { Badge, Btn, ConfirmDialog, Err, Field, FileBtn, IconBtn, Muted, NumInput, RegexScriptRow, SaveBar, SearchEmpty, SearchInput, Section, Select, Skeleton, Toggle, downloadJson, errOf, readJsonFile, runAsync, useLoader, useToast } from '../util.js'
 
 function newEntry(order: number): PresetEntry {
   return {
@@ -348,18 +348,20 @@ export function PresetsSection(props: { remote: TavernRemote }) {
         {visibleItems.map((item) => {
           const isDefault = defaultPresetId === item.id
           return (
-            <div key={item.id} className="dsh-tavern-tile" {...clickableProps(() => requestEditor(() => void open(item.id)))}>
-              <span className="dsh-tavern-tileIcon">
-                <IconListPenOutlineMedium size={18} />
-              </span>
-              <div className="dsh-tavern-tileMain">
-                <div className="dsh-tavern-tileTitleRow">
-                  <span className="dsh-tavern-tileName">{item.name}</span>
-                  {isDefault ? <Badge accent>{t('presets.defaultBadge')}</Badge> : null}
-                  {item.regexCount > 0 ? <Badge>{t('presets.regexCount', { count: item.regexCount })}</Badge> : null}
-                </div>
-                <span className="dsh-tavern-tileSub">{item.id}</span>
-              </div>
+            <div key={item.id} className="dsh-tavern-tile">
+              <button type="button" className="dsh-tavern-tileTrigger" disabled={busy} onClick={() => requestEditor(() => void open(item.id))}>
+                <span className="dsh-tavern-tileIcon">
+                  <IconListPenOutlineMedium size={18} />
+                </span>
+                <span className="dsh-tavern-tileMain">
+                  <span className="dsh-tavern-tileTitleRow">
+                    <span className="dsh-tavern-tileName">{item.name}</span>
+                    {isDefault ? <Badge accent>{t('presets.defaultBadge')}</Badge> : null}
+                    {item.regexCount > 0 ? <Badge>{t('presets.regexCount', { count: item.regexCount })}</Badge> : null}
+                  </span>
+                  <span className="dsh-tavern-tileSub">{item.id}</span>
+                </span>
+              </button>
               <div className="dsh-tavern-tileActions">
                 <IconBtn label={t('action.edit')} disabled={busy} onClick={() => requestEditor(() => void open(item.id))}>
                   <IconEditOutlineMedium />
@@ -435,7 +437,7 @@ export function PresetsSection(props: { remote: TavernRemote }) {
               setEntryLimit((n) => Math.max(n, editing.entries.length + 1))
               edit(current => ({ ...current, entries: [...current.entries, newEntry(current.entries.length * 100 + 100)] }))
             }}>{t('presets.addEntry')}</Btn>
-            <Btn disabled={busy} onClick={() => void save()} primary>{t('presets.save')}</Btn>
+            <Btn disabled={busy || (!dirty && baseline !== 'null')} onClick={() => void save()} primary>{t('presets.save')}</Btn>
             <Btn onClick={() => requestEditor(closeEditor)}>{t('action.close')}</Btn>
           </SaveBar>
         </fieldset>

@@ -49,6 +49,9 @@ export const zh = {
   'regex.presetHead': '预设附带',
   'regex.noPresetRegex': '没有预设携带正则。预设 JSON 里 extensions.regex_scripts 会随导入带进来，可在「预设」页查看。',
   'regex.presetCount': '{name}（{count} 条）',
+  'regex.error.emptyFind': '查找表达式不能为空',
+  'regex.error.invalidFind': '正则表达式语法无效：{detail}',
+  'regex.error.saveBlocked': '无法保存：规则「{name}」{reason}',
 } as const
 
 export const en: Record<keyof typeof zh, string> = {
@@ -100,4 +103,7 @@ export const en: Record<keyof typeof zh, string> = {
   'regex.presetHead': 'Bundled with presets',
   'regex.noPresetRegex': 'No preset carries regex scripts. extensions.regex_scripts in a preset JSON is imported along with it; see the "Presets" page.',
   'regex.presetCount': '{name} ({count})',
+  'regex.error.emptyFind': 'Find pattern cannot be empty',
+  'regex.error.invalidFind': 'Invalid regular expression syntax: {detail}',
+  'regex.error.saveBlocked': 'Cannot save: rule "{name}" — {reason}',
 }

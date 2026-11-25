@@ -106,7 +106,7 @@ describe('预设删除使用磁盘身份', () => {
     await settle(() => {}, () => completed(f.remote.listPresets))
     const tile = (name: string) => view.root.findAllByProps({ className: 'dsh-tavern-tile' }).find(item =>
       item.findByProps({ className: 'dsh-tavern-tileName' }).children.join('') === name)!
-    await settle(() => tile('正在编辑').props.onClick(), () => completed(f.remote.getPreset))
+    await settle(() => tile('正在编辑').findByProps({ className: 'dsh-tavern-tileTrigger' }).props.onClick(), () => completed(f.remote.getPreset))
     await act(async () => view.root.findByType('input').props.onChange({ target: { value: '保留我的修改' } }))
     const remove = async (name: string) => {
       await act(async () => tile(name).findAllByType(IconBtn).find(item => item.props.label === t('presets.delete'))!.props.onClick())
@@ -147,7 +147,7 @@ it('预设旧窗口保存失败保留草稿和版本，不能覆盖另一窗口�
   const id = await f.state.savePreset({ identifier: 'two-windows', name: '初始名称', entries: [] })
   const view = await render(<PresetsSection remote={f.remote} />)
   await settle(() => {}, () => completed(f.remote.listPresets))
-  await settle(() => view.root.findByProps({ className: 'dsh-tavern-tile' }).props.onClick(), () => completed(f.remote.getPreset))
+  await settle(() => view.root.findByProps({ className: 'dsh-tavern-tileTrigger' }).props.onClick(), () => completed(f.remote.getPreset))
   const old = await f.service.getPreset({ id })
   await f.service.savePreset({ preset: { ...old.preset, name: 'B 已保存' }, expectedRevision: old.revision })
   await act(async () => view.root.findByType('input').props.onChange({ target: { value: 'A 未保存' } }))
@@ -168,7 +168,7 @@ it('世界书冲突保留本地条目，重复保存仍拒绝覆盖已落盘的�
   f.remote.saveLorebook = vi.fn(async request => ok(await f.service.saveLorebook(request)))
   const view = await render(<LorebooksSection remote={f.remote} />)
   await settle(() => {}, () => completed(f.remote.listLorebooks))
-  await settle(() => view.root.findByProps({ className: 'dsh-tavern-tile' }).props.onClick(), () => completed(f.remote.getLorebook))
+  await settle(() => view.root.findByProps({ className: 'dsh-tavern-tileTrigger' }).props.onClick(), () => completed(f.remote.getLorebook))
   const old = await f.service.getLorebook({ name })
   await f.service.saveLorebook({ name, json: { entries: { one: { uid: 'one', content: 'B 新正文' } } }, expectedRevision: old.revision })
   const input = view.root.findAllByType('input').find(item => item.props.placeholder === t('lorebookEditor.form.commentPlaceholder'))!
@@ -216,7 +216,7 @@ it('删除角色内嵌世界书时取消在途打开请求，迟到响应不重�
   const view = await render(<LorebooksSection remote={f.remote} />)
   await settle(() => {}, () => completed(f.remote.listLorebooks) && completed(f.remote.listCharacters))
   await act(async () => view.root.findAllByType(IconBtn).find(item => item.props.label === t('lorebooks.deleteEmbedded'))!.props.onClick())
-  await act(async () => view.root.findByProps({ className: 'dsh-tavern-tile' }).props.onClick())
+  await act(async () => view.root.findByProps({ className: 'dsh-tavern-tileTrigger' }).props.onClick())
   expect(f.remote.getCharacterLorebook).toHaveBeenCalledTimes(1)
   await settle(() => view.root.findAllByType(ConfirmDialog).find(item => item.props.open && item.props.danger)!.props.onConfirm(),
     () => completed(f.remote.deleteEmbeddedLorebook))
@@ -234,7 +234,7 @@ it('已有正则关键词追加普通词后保存，不拆坏量词与字符类�
   f.remote.saveLorebook = vi.fn(async request => ok(await f.service.saveLorebook(request)))
   const view = await render(<LorebooksSection remote={f.remote}/>)
   await settle(() => {}, () => completed(f.remote.listLorebooks))
-  await settle(() => view.root.findByProps({ className: 'dsh-tavern-tile' }).props.onClick(), () => completed(f.remote.getLorebook))
+  await settle(() => view.root.findByProps({ className: 'dsh-tavern-tileTrigger' }).props.onClick(), () => completed(f.remote.getLorebook))
   const input = (placeholder: string) => view.root.findAllByType('input').find(item => item.props.placeholder === placeholder)!
   await act(async () => input(t('lorebookEditor.form.keysPlaceholder')).props.onChange({ target: { value: `${primary}, 港口` } }))
   await act(async () => input(t('lorebookEditor.form.secondaryKeysPlaceholder')).props.onChange({ target: { value: `${secondary}, 船` } }))
@@ -282,7 +282,7 @@ it('预设改用插件采样设置可取消，保存后实际移除采样覆盖'
   await settle(() => {}, () => completed(f.remote.listPresets))
   const open = async () => {
     const count = vi.mocked(f.remote.getPreset).mock.calls.length
-    await settle(() => view.root.findByProps({ className: 'dsh-tavern-tile' }).props.onClick(),
+    await settle(() => view.root.findByProps({ className: 'dsh-tavern-tileTrigger' }).props.onClick(),
       () => vi.mocked(f.remote.getPreset).mock.calls.length > count && completed(f.remote.getPreset))
   }
   const resetButtons = () => view.root.findAllByType(Btn).filter(item => item.props.children === t('presets.sampling.useGlobal'))

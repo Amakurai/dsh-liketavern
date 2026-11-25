@@ -92,9 +92,12 @@ export function AboutSection({ remote }: { remote: TavernRemote }) {
           {info.developmentHostVersion && info.developmentHostVersion !== 'unknown' && <SettingsRow title={t('about.developmentHost')}>
             <span>{info.developmentHostVersion}</span>
           </SettingsRow>}
-          <Muted>{t('about.compatibilityPolicy')}</Muted>
-          <a className="dsh-tavern-aboutLink" href={COMPATIBILITY_URL} target="_blank" rel="noopener noreferrer">{t('about.compatibilityDetails')}</a>
-          {info.hostVersion === 'unknown' && <Muted>{t('about.hostUnknown')}</Muted>}
+          <p className="dsh-tavern-aboutNote">
+            <Muted>{t('about.compatibilityPolicy')}</Muted>
+            {' '}
+            <a className="dsh-tavern-aboutLink" href={COMPATIBILITY_URL} target="_blank" rel="noopener noreferrer">{t('about.compatibilityDetails')}</a>
+          </p>
+          {info.hostVersion === 'unknown' && <p className="dsh-tavern-aboutNote"><Muted>{t('about.hostUnknown')}</Muted></p>}
           {info.sourceCheckout && <div className="dsh-tavern-aboutSource"><Badge>{t('about.source')}</Badge><Muted>{t('about.sourceHint')}</Muted></div>}
         </>}
       </div>

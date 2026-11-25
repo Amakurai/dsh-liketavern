@@ -37,7 +37,7 @@ it('预设正文保存持续携带选中的后缀文件 ID 与读取版本', asy
   const remote = { listPresets: async () => ok({ items: [{ id, name: content.name, regexCount: 1 }] }),
     getPreset: async () => ok({ preset: content, revision: 'original-revision' }), savePreset } as unknown as TavernRemote
   const view = await render(<PresetsSection remote={remote} />)
-  await act(async () => view.root.findByProps({ className: 'dsh-tavern-tile' }).props.onClick())
+  await act(async () => view.root.findByProps({ className: 'dsh-tavern-tileTrigger' }).props.onClick())
   await act(async () => view.root.findAllByType('input').find(input => input.props.value === content.name)!.props.onChange({ target: { value: '修改名称' } }))
   await act(async () => view.root.findAllByType(Btn).find(button => button.props.children === t('presets.save'))!.props.onClick())
   expect(savePreset).toHaveBeenLastCalledWith({ id, preset: { ...content, name: '修改名称' }, expectedRevision: 'original-revision' })

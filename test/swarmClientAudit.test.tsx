@@ -1088,7 +1088,8 @@ describe('持久草稿、面板分页与表单在途互斥保护', () => {
     })
 
     // 删除尚未返回时点击卡片试图打开世界书，必须被同步锁拦截
-    const cardNode = view.root.findAllByProps({ role: 'button' }).find((node) => instanceText(node).includes('设定集'))!
+    const cardNode = view.root.findAllByProps({ className: 'dsh-tavern-tileTrigger' }).find((node) => instanceText(node).includes('设定集'))!
+    expect(cardNode.props.disabled).toBe(true)
     await act(async () => {
       cardNode.props.onClick()
     })

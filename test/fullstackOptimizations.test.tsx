@@ -479,7 +479,7 @@ describe('Client & UX optimizations', () => {
     })
     expect(view.root.findAll((n) => n.props.className === 'dsh-tavern-tile')).toHaveLength(45)
 
-    const firstTile = view.root.findAll((n) => n.props.className === 'dsh-tavern-tile')[0]!
+    const firstTile = view.root.findAll((n) => n.props.className === 'dsh-tavern-tileTrigger')[0]!
     await act(async () => {
       firstTile.props.onClick()
       await vi.waitFor(() => expect(view.root.findAllByType('fieldset')).toHaveLength(1))

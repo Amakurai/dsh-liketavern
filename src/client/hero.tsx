@@ -179,14 +179,33 @@ function HeroCharacterSession(props: HeroProps) {
 
   // 空白判定涉及写操作，不使用可能仍缓存着「未开始」的绑定快照。
   const bindingLoader = useLoader(() => remote.getSessionBinding({ sessionId }), [sessionId], eligible)
+  const lastBinding = useRef<{ sessionId: string; binding: SessionBinding | null; userName: string } | null>(null)
+  if (lastBinding.current && lastBinding.current.sessionId !== sessionId) {
+    lastBinding.current = null
+  }
+  if (bindingLoader.state.status === 'ready') {
+    lastBinding.current = {
+      sessionId,
+      binding: bindingLoader.state.value.binding,
+      userName: bindingLoader.state.value.userName || DEFAULT_USER_NAME,
+    }
+  }
   const started = bindingLoader.state.status === 'ready' && bindingLoader.state.value.conversationStarted
   const showHero = eligible && !entered && !started
   useEffect(() => {
     if (eligible && started) void props.sessions.refresh?.().catch(() => {})
   }, [eligible, started, props.sessions])
-  const binding: SessionBinding | null = bindingLoader.state.status === 'ready' ? bindingLoader.state.value.binding : null
-  const userName =
-    bindingLoader.state.status === 'ready' ? (bindingLoader.state.value.userName || DEFAULT_USER_NAME) : DEFAULT_USER_NAME
+  // 重载期间保留同一会话的已知绑定，切开场白时不卸载预览卡片、不丢失键盘焦点。
+  const binding: SessionBinding | null = bindingLoader.state.status === 'ready'
+    ? bindingLoader.state.value.binding
+    : bindingLoader.state.status === 'loading' && lastBinding.current?.sessionId === sessionId
+      ? lastBinding.current.binding
+      : null
+  const userName = bindingLoader.state.status === 'ready'
+    ? (bindingLoader.state.value.userName || DEFAULT_USER_NAME)
+    : bindingLoader.state.status === 'loading' && lastBinding.current?.sessionId === sessionId
+      ? lastBinding.current.userName
+      : DEFAULT_USER_NAME
 
   const charsLoader = useLoader(() => remote.listCharacters({}), [sessionId], showHero)
   const characters: CharacterSummary[] = charsLoader.state.status === 'ready' ? charsLoader.state.value.items : []
@@ -214,20 +233,12 @@ function HeroCharacterSession(props: HeroProps) {
     return () => window.removeEventListener(CHARACTER_CHANGED_EVENT, onCharacterChanged)
   }, [showHero, binding?.cardId, detailLoader.reload, avatarLoader.reload, charsLoader.reload])
 
-  useEffect(() => {
-    if (!showHero) return
-    const onChanged = (e: Event) => {
-      const target = (e as CustomEvent<string | undefined>).detail
-      if (!target || target === sessionId) bindingLoader.reload()
-    }
-    window.addEventListener(BINDING_CHANGED_EVENT, onChanged)
-    return () => window.removeEventListener(BINDING_CHANGED_EVENT, onChanged)
-    // reload 随 loader 每次 render 换新引用，只跟会话走。
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showHero, sessionId])
-
   /** 用户正在点选角色：不要把刚写入的绑定当成「上次留下的」清掉。 */
   const picking = useRef(false)
+  /** 外部（如头部 chip）已修改当前会话绑定：取消本会话的自动清扫，避免误删刚保存的绑定。 */
+  const externalBindingChanged = useRef(false)
+  /** 区分自身清扫派发的绑定变更事件与外部保存事件。 */
+  const dispatchingSweep = useRef(false)
   /** 选卡/开聊/切开场白共用同步互斥锁，防止 React 提交 busy 前连点触发并发写入。 */
   const writing = useRef(false)
   /** 进行中的陈旧绑定清扫；点选角色要等它结束（有界），不再用定时器轮询。 */
@@ -241,8 +252,28 @@ function HeroCharacterSession(props: HeroProps) {
   useEffect(() => {
     sweptSession.current = null
     picking.current = false
+    externalBindingChanged.current = false
     setSweepFailed(false)
   }, [sessionId])
+
+  useEffect(() => {
+    if (!showHero) return
+    const onChanged = (e: Event) => {
+      const target = (e as CustomEvent<string | undefined>).detail
+      if (!target || target === sessionId) {
+        if (!dispatchingSweep.current && target === sessionId) {
+          externalBindingChanged.current = true
+          sweptSession.current = sessionId
+          setSweepFailed(false)
+        }
+        bindingLoader.reload()
+      }
+    }
+    window.addEventListener(BINDING_CHANGED_EVENT, onChanged)
+    return () => window.removeEventListener(BINDING_CHANGED_EVENT, onChanged)
+    // reload 随 loader 每次 render 换新引用，只跟会话走。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showHero, sessionId])
 
   // 新对话常会复用仍空白的 Tavern 会话；清掉上次留下的角色绑定，才能切回其他模式。
   useEffect(() => {
@@ -250,7 +281,7 @@ function HeroCharacterSession(props: HeroProps) {
       picking.current = false
       return
     }
-    if (picking.current || busy || clearing.current) return
+    if (picking.current || externalBindingChanged.current || busy || clearing.current) return
     if (bindingLoader.state.status !== 'ready') return
     if (sweptSession.current === sessionId) return
     sweptSession.current = sessionId
@@ -258,10 +289,10 @@ function HeroCharacterSession(props: HeroProps) {
     const serial = ++clearingSerial.current
     clearing.current = (async () => {
       try {
-        if (picking.current) return
+        if (picking.current || externalBindingChanged.current) return
         // 宿主写入可能永不返回；有界等待，超时明确失败而不是无上限轮询。
         const r = await withWriteTimeout(remote.clearSessionBinding({ sessionId, onlyIfBlank: true }), HERO_WRITE_TIMEOUT_MS, () => new Error(t('util.loadTimeout')))
-        if (picking.current || !alive.current) return
+        if (picking.current || externalBindingChanged.current || !alive.current) return
         const err = errOf(r)
         if (err) {
           sweptSession.current = null
@@ -272,10 +303,15 @@ function HeroCharacterSession(props: HeroProps) {
         if (r.ok && !r.value.cleared) setEntered(true)
         setSweepFailed(false)
         invalidateSessionBinding(sessionId)
-        window.dispatchEvent(new CustomEvent(BINDING_CHANGED_EVENT, { detail: sessionId }))
+        dispatchingSweep.current = true
+        try {
+          window.dispatchEvent(new CustomEvent(BINDING_CHANGED_EVENT, { detail: sessionId }))
+        } finally {
+          dispatchingSweep.current = false
+        }
         bindingLoader.reload()
       } catch (cause) {
-        if (!alive.current) return
+        if (!alive.current || externalBindingChanged.current) return
         if (picking.current) {
           // 用户已开始选卡：仍提示清扫失败/超时，但不能重置 sweptSession 或置 sweepFailed，
           // 否则选卡完成后会把刚选好的新角色当成陈旧绑定再次清扫。
@@ -463,7 +499,7 @@ function HeroCharacterSession(props: HeroProps) {
   const chip = (
     <span data-tavern-hero-seat="" className="dsh-tavern-ui">
       <TavernSeatChip label={chipLabel} title={t('hero.pickCharacter')} avatarUrl={avatar}
-        open={open} hasPopup="dialog" loading={bindingLoader.state.status === 'loading'} disabled={busy}
+        open={open} hasPopup="dialog" loading={bindingLoader.state.status === 'loading' && lastBinding.current?.sessionId !== sessionId} disabled={busy}
         onClick={() => { setError(null); setOpen(true) }} />
     </span>
   )
@@ -520,7 +556,7 @@ function HeroCharacterSession(props: HeroProps) {
           </div>
           {detailLoader.state.status === 'error' ? (
             <div className="dsh-tavern-hero-previewText" role="alert">{t('hero.detailLoadFailed')}</div>
-          ) : greetingText ? (
+          ) : greetingText.trim() ? (
             <div className="dsh-tavern-hero-quote"><GreetingPreview remote={remote} sessionId={sessionId} text={greetingText} interactiveCards={binding.interactiveCards} cardId={binding.cardId} characterRevision={detail?.revision} presetId={binding.presetId} /></div>
           ) : hasAnyGreeting ? (
             <div className="dsh-tavern-hero-previewText">{t('hero.emptyVariantHint')}</div>

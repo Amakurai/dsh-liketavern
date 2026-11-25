@@ -257,7 +257,7 @@ it('角色详情多行输入框具有真实关联的可访问名称，重复挂�
   const expected = ['description', 'personality', 'scenario', 'greeting', 'mesExample', 'systemPrompt', 'postHistory', 'depthPrompt', 'creatorNotes']
   for (const view of views) {
     await settle(() => {}, () => view.root.findAllByProps({ className: 'dsh-tavern-charCard' }).length === 1)
-    await act(async () => view.root.findByProps({ className: 'dsh-tavern-charCard' }).props.onClick())
+    await act(async () => view.root.findByProps({ className: 'dsh-tavern-charCardBody' }).props.onClick())
     await settle(() => {}, () => view.root.findAllByType('textarea').length >= expected.length)
     const controls = view.root.findAllByType('textarea').filter(node => node.props['aria-labelledby'])
     const names = controls.map(node => {
@@ -634,12 +634,11 @@ describe('角色卡收纳箱交互', () => {
     const view = await render(<CharactersSection remote={f.remote} />)
     await settle(() => {}, () => completed(f.remote.listCharacters))
     await act(async () => view.root.findByProps({ 'aria-label': t('characters.card.archive') }).props.onClick({ stopPropagation: () => {} }))
-    const card = view.root.findByType('article')
-    expect(card.props['aria-disabled']).toBe(true)
+    const cardButton = view.root.findByProps({ className: 'dsh-tavern-charCardBody' })
+    expect(cardButton.type).toBe('button')
+    expect(cardButton.props.disabled).toBe(true)
     await act(async () => {
-      card.props.onClick()
-      const target = {}
-      card.props.onKeyDown({ key: 'Enter', target, currentTarget: target, preventDefault: () => {} })
+      cardButton.props.onClick()
     })
     expect(f.remote.getCharacterDetail).not.toHaveBeenCalled()
     expect(view.root.findAllByType(Dialog).filter(item => item.props.open)).toHaveLength(0)
@@ -683,7 +682,7 @@ it('审查修复回归：双编辑器保存不静默覆盖，保存回执版本�
   const a = await render(<CharactersSection remote={f.remote} />), b = await render(<CharactersSection remote={f.remote} />)
   for (const view of [a, b]) {
     await settle(() => {}, () => view.root.findAllByProps({ className: 'dsh-tavern-charCard' }).length === 1)
-    await settle(() => view.root.findByProps({ className: 'dsh-tavern-charCard' }).props.onClick(),
+    await settle(() => view.root.findByProps({ className: 'dsh-tavern-charCardBody' }).props.onClick(),
       () => view.root.findAllByType('textarea').length > 0)
   }
   const save = (view: ReactTestRenderer) => settle(() => view.root.findAllByType(Btn).find(item => item.props.children === '保存')!.props.onClick(), () => completed(f.remote.saveCharacter))

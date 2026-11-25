@@ -21,7 +21,7 @@ import { cachedAvatar, cachedCharacterDetail, invalidateCharacter, notifyAllSess
 import { filterCharacters } from '../characterSearch.js'
 import { getTavernLocale, useT } from '../i18n.js'
 import type { CharacterDeletePlan, CharacterDetail, CharacterInspect, CharacterSummary, TavernRemote } from '../types.js'
-import { Avatar, Btn, ConfirmDialog, Dialog, Err, Field, FileBtn, IconBtn, ListInput, Muted, NumInput, SearchEmpty, SearchInput, Section, Select, Skeleton, Tabs, clickableProps, downloadBase64, downloadJson, errOf, fileToBase64, runAsync, useLoader, useToast, type LoadState } from '../util.js'
+import { Avatar, Btn, ConfirmDialog, Dialog, Err, Field, FileBtn, IconBtn, ListInput, Muted, NumInput, SearchEmpty, SearchInput, Section, Select, Skeleton, Tabs, downloadBase64, downloadJson, errOf, fileToBase64, runAsync, useLoader, useToast, type LoadState } from '../util.js'
 
 /**
  * 兼容性报告的动态键映射：core 新增 code/status 而这里漏配时编译期报错，
@@ -51,6 +51,30 @@ const COMPATIBILITY_STATUS_KEYS: Record<CharacterCompatibilityStatus, string> = 
 }
 
 const CHARACTERS_PAGE_SIZE = 24
+/** JSON 角色卡客户端前置体积上限，与服务端 src/node/state.ts 保持一致。 */
+const MAX_CARD_JSON_BYTES = 24 * 1024 * 1024
+
+/** 仅提取角色详情弹窗提交给 saveCharacter 的可编辑字段，排除 revision/extensions/spec/characterName 等服务端派生字段。 */
+export function editableCharacterSnapshot(detail: CharacterDetail): string {
+  return JSON.stringify({
+    name: detail.name,
+    description: detail.description,
+    personality: detail.personality,
+    scenario: detail.scenario,
+    firstMes: detail.firstMes,
+    alternateGreetings: detail.alternateGreetings,
+    mesExample: detail.mesExample,
+    systemPrompt: detail.systemPrompt,
+    postHistoryInstructions: detail.postHistoryInstructions,
+    creatorNotes: detail.creatorNotes,
+    creator: detail.creator,
+    characterVersion: detail.characterVersion,
+    tags: detail.tags,
+    depthPrompt: detail.depthPrompt
+      ? { prompt: detail.depthPrompt.prompt, depth: detail.depthPrompt.depth, role: detail.depthPrompt.role }
+      : null,
+  })
+}
 
 /** 按 cardId 拉头像 dataURL 的 Avatar 包装（失败时回落首字符/图标）；头像走进程内缓存，无头像卡不发 RPC。 */
 function CardAvatar(props: { remote: TavernRemote; cardId: string; name: string; size: number; enabled?: boolean }) {
@@ -84,19 +108,31 @@ function CharacterCard(props: {
           : ''
       }`
     : ''
-  const openProps = props.onOpen ? {
-    ...clickableProps(() => { if (!props.busy) props.onOpen?.(props.item.cardId) }),
-    'aria-disabled': props.busy || undefined,
-  } : {}
+  const body = (
+    <>
+      <span className="dsh-tavern-charCardCover">
+        {url ? <img src={url} alt="" /> : <span className="dsh-tavern-charCardInitial" aria-hidden="true">{initial}</span>}
+      </span>
+      <span className="dsh-tavern-charCardBar">
+        <span className="dsh-tavern-charCardName">{props.item.name}</span>
+        {meta ? <span className="dsh-tavern-charCardMeta">{meta}</span> : null}
+      </span>
+    </>
+  )
   return (
-    <article className={`dsh-tavern-charCard${props.archived ? ' is-archived' : ''}`} {...openProps}>
-      <div className="dsh-tavern-charCardCover">
-        {url ? <img src={url} alt="" /> : <span className="dsh-tavern-charCardInitial">{initial}</span>}
-      </div>
-      <div className="dsh-tavern-charCardBar">
-        <div className="dsh-tavern-charCardName">{props.item.name}</div>
-        {meta ? <div className="dsh-tavern-charCardMeta">{meta}</div> : null}
-      </div>
+    <article className={`dsh-tavern-charCard${props.archived ? ' is-archived' : ''}`}>
+      {props.onOpen ? (
+        <button
+          type="button"
+          className="dsh-tavern-charCardBody"
+          disabled={props.busy}
+          onClick={() => { if (!props.busy) props.onOpen?.(props.item.cardId) }}
+        >
+          {body}
+        </button>
+      ) : (
+        <div className="dsh-tavern-charCardBody">{body}</div>
+      )}
       <div className="dsh-tavern-charCardActions">
         {props.archived ? (
           <>
@@ -160,12 +196,23 @@ function CharacterDetailDialog(props: { remote: TavernRemote; cardId: string; on
   const detail = draft ?? loaded
   // 最近一次应用到草稿的服务端值（或保存成功那一刻的草稿）：用于识别 reload 往返窗口期内的新编辑。
   const appliedRef = useRef<CharacterDetail | null>(null)
+  // 清空 depth_prompt 正文时记住用户上次设置的深度与角色，重新输入时恢复而非重置为 4 / system。
+  const lastDepthPromptMeta = useRef<{ depth: number; role: 'system' | 'user' | 'assistant' }>({
+    depth: 4,
+    role: 'system',
+  })
+  if (detail?.depthPrompt) {
+    lastDepthPromptMeta.current = {
+      depth: detail.depthPrompt.depth,
+      role: detail.depthPrompt.role,
+    }
+  }
   // 重读挂起或失败时仍用已知保存版本比较，不能把刚输入的正文误判为已保存。
   const baseline = loaded ?? appliedRef.current
-  const baselineJson = useMemo(() => (baseline === null ? null : JSON.stringify(baseline)), [baseline])
+  const baselineSnapshot = useMemo(() => (baseline === null ? null : editableCharacterSnapshot(baseline)), [baseline])
   const dirty = useMemo(
-    () => draft !== null && (baselineJson === null ? restored : JSON.stringify(draft) !== baselineJson),
-    [draft, baselineJson, restored],
+    () => draft !== null && (baselineSnapshot === null ? restored : editableCharacterSnapshot(draft) !== baselineSnapshot),
+    [draft, baselineSnapshot, restored],
   )
   const guard = useDraftGuard(dirty, busy)
   const draftRef = useRef(draft)
@@ -176,7 +223,11 @@ function CharacterDetailDialog(props: { remote: TavernRemote; cardId: string; on
     if (preserveRestored.current) { preserveRestored.current = false; appliedRef.current = loaded; return }
     // 保存后 reload 落地时，草稿若已偏离基线（往返窗口期内有新键入），不整体覆盖：
     // 覆盖会静默丢掉窗口期编辑并把 dirty 复位为 false；保留草稿让「未保存」提示继续可见。
-    if (draftRef.current !== null && appliedRef.current !== null && JSON.stringify(draftRef.current) !== JSON.stringify(appliedRef.current)) return
+    if (
+      draftRef.current !== null
+      && appliedRef.current !== null
+      && editableCharacterSnapshot(draftRef.current) !== editableCharacterSnapshot(appliedRef.current)
+    ) return
     appliedRef.current = loaded
     setDraft(loaded)
   }, [loaded, setDraft])
@@ -202,6 +253,8 @@ function CharacterDetailDialog(props: { remote: TavernRemote; cardId: string; on
       setError(t('characters.detail.nameRequired'))
       return
     }
+    const normalizedGreetings = detail.alternateGreetings.map((s) => s.trim()).filter(Boolean)
+    const sentSnapshot = editableCharacterSnapshot(detail)
     pending.current = true
     try {
       await runAsync(setBusy, setError, async () => {
@@ -213,7 +266,7 @@ function CharacterDetailDialog(props: { remote: TavernRemote; cardId: string; on
           personality: detail.personality,
           scenario: detail.scenario,
           firstMes: detail.firstMes,
-          alternateGreetings: detail.alternateGreetings.map((s) => s.trim()).filter(Boolean),
+          alternateGreetings: normalizedGreetings,
           mesExample: detail.mesExample,
           systemPrompt: detail.systemPrompt,
           postHistoryInstructions: detail.postHistoryInstructions,
@@ -226,10 +279,17 @@ function CharacterDetailDialog(props: { remote: TavernRemote; cardId: string; on
         const err = errOf(r)
         if (err) { setError(err); invalidateCharacter(cardId) }
         else if (r.ok) {
-          // 保存回执推进版本，但只更新版本字段，不能覆盖往返期间的新键入。
+          // 保存回执推进版本并结束恢复态；若未出现往返期新键入，同步已裁剪的备选开场白，避免误报未保存。
           const revision = r.value.revision
-          appliedRef.current = { ...detail, revision }
-          setDraft(current => current ? { ...current, revision } : current)
+          preserveRestored.current = false
+          appliedRef.current = { ...detail, revision, alternateGreetings: normalizedGreetings }
+          setDraft((current) => {
+            if (!current) return current
+            if (editableCharacterSnapshot(current) === sentSnapshot) {
+              return { ...current, revision, alternateGreetings: normalizedGreetings }
+            }
+            return { ...current, revision }
+          })
           toast.show(t('characters.detail.saved', { name: detail.name }))
           // 先失效详情/头像缓存再 reload，否则详情弹窗与聊天气泡继续吃旧值。
           notifyCharacterChanged(cardId)
@@ -335,7 +395,11 @@ function CharacterDetailDialog(props: { remote: TavernRemote; cardId: string; on
                 onChange={(e) =>
                   set({
                     depthPrompt: e.target.value.trim()
-                      ? { prompt: e.target.value, depth: detail.depthPrompt?.depth ?? 4, role: detail.depthPrompt?.role ?? 'system' }
+                      ? {
+                          prompt: e.target.value,
+                          depth: detail.depthPrompt?.depth ?? lastDepthPromptMeta.current.depth,
+                          role: detail.depthPrompt?.role ?? lastDepthPromptMeta.current.role,
+                        }
                       : null,
                   })
                 }
@@ -343,12 +407,25 @@ function CharacterDetailDialog(props: { remote: TavernRemote; cardId: string; on
               {detail.depthPrompt ? (
                 <div className="dsh-tavern-fieldRow" style={{ marginTop: 6 }}>
                   <Field label={t('characters.detail.depth')}>
-                    <NumInput value={detail.depthPrompt.depth} onChange={(depth) => set({ depthPrompt: { ...detail.depthPrompt!, depth: Math.max(0, Math.round(depth)) } })} />
+                    <NumInput
+                      width="100%"
+                      style={{ height: 36 }}
+                      value={detail.depthPrompt.depth}
+                      onChange={(depth) => {
+                        const nextDepth = Math.max(0, Math.round(depth))
+                        lastDepthPromptMeta.current = { ...lastDepthPromptMeta.current, depth: nextDepth }
+                        set({ depthPrompt: { ...detail.depthPrompt!, depth: nextDepth } })
+                      }}
+                    />
                   </Field>
                   <Field label={t('characters.detail.role')}>
                     <Select
                       value={detail.depthPrompt.role}
-                      onChange={(role) => set({ depthPrompt: { ...detail.depthPrompt!, role: role as 'system' | 'user' | 'assistant' } })}
+                      onChange={(role) => {
+                        const nextRole = role as 'system' | 'user' | 'assistant'
+                        lastDepthPromptMeta.current = { ...lastDepthPromptMeta.current, role: nextRole }
+                        set({ depthPrompt: { ...detail.depthPrompt!, role: nextRole } })
+                      }}
                       options={[
                         { value: 'system', label: 'system' },
                         { value: 'user', label: 'user' },
@@ -580,8 +657,15 @@ function CharactersSectionContent(props: { remote: TavernRemote }) {
 
   const onImportFile = async (file: File) => {
     await perform(async () => {
-      if (/\.png$/i.test(file.name) && file.size > MAX_CARD_PNG_BYTES) {
+      if (file.size === 0) {
+        throw new Error(t('characters.fileEmpty'))
+      }
+      const isPng = /\.png$/i.test(file.name)
+      if (isPng && file.size > MAX_CARD_PNG_BYTES) {
         throw new Error(t('characters.pngFileTooLarge', { limit: MAX_CARD_PNG_BYTES / 1024 / 1024 }))
+      }
+      if (!isPng && file.size > MAX_CARD_JSON_BYTES) {
+        throw new Error(t('characters.jsonFileTooLarge', { limit: MAX_CARD_JSON_BYTES / 1024 / 1024 }))
       }
       const dataBase64 = await fileToBase64(file)
       const inspected = await remote.inspectCharacter({ name: file.name, dataBase64 })
@@ -709,7 +793,7 @@ function CharactersSectionContent(props: { remote: TavernRemote }) {
           <div className="dsh-tavern-emptyDesc">{t(collection === 'active' ? 'characters.emptyDesc' : 'characters.archive.emptyDesc')}</div>
         </div>
       )}
-      {q !== '' && filtered.length === 0 && state.status === 'ready' && (
+      {items.length > 0 && q !== '' && filtered.length === 0 && state.status === 'ready' && (
         <SearchEmpty what={t('characters.what')} query={query.trim()} onClear={() => { setQuery(''); setLimit(CHARACTERS_PAGE_SIZE) }} />
       )}
       <div className="dsh-tavern-charGrid">
@@ -744,7 +828,7 @@ function CharactersSectionContent(props: { remote: TavernRemote }) {
               ? t('characters.importBook.descNamed', { name: pending.preview.name, book: pending.preview.characterBookName, count: pending.preview.entryCount })
               : t('characters.importBook.desc', { name: pending.preview.name, count: pending.preview.entryCount })
           }
-          onClose={() => { if (!operationPending.current) setPending(null) }}
+          onClose={() => { if (!operationPending.current) { setPending(null); setError(null) } }}
           footer={
             <div className="dsh-tavern-modalActions">
               <Button type="button" variant="outline" size="md" disabled={busy} onClick={() => { if (!operationPending.current) { setPending(null); setError(null) } }}>

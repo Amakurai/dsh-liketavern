@@ -110,13 +110,14 @@ async function helperHistoryContext(ctx:Context,state:TavernState,sessionId:stri
     resolveHelperPersona(state,binding.personaId),
   ])
   const charName=card?characterPromptName(card.card):'Assistant'
-  const names={char:card?.card.name??'Assistant',user:persona?.name??DEFAULT_USER_NAME}
+  const userName=persona?.name.trim()||DEFAULT_USER_NAME
+  const names={char:card?.card.name??'Assistant',user:userName}
   const bindingKey=`${binding.cardId}\0${binding.storyId}\0${binding.personaId??''}`
   const cached=cachedHelperHistory(state,sessionId,events,bindingKey,names)
   const turn=cached.lastBoundary?.type==='turn/end'?cached.lastBoundary.turn:0
   const writable=!state.openFloors.has(sessionId) && cached.lastBoundary?.type!=='turn/start'
   const ws=await state.storyWorkspace(binding.cardId,binding.storyId)
-  const greetings=card?cardGreetingVariants(card.card.firstMes,card.card.alternateGreetings).map(text=>expandIdentityMacros(text,{char:charName,user:persona?.name??DEFAULT_USER_NAME})):[]
+  const greetings=card?cardGreetingVariants(card.card.firstMes,card.card.alternateGreetings).map(text=>expandIdentityMacros(text,{char:charName,user:userName})):[]
   return {binding,history:cached.history,historyRevision:cached.historyRevision,indexByIdentity:cached.indexByIdentity,
     assistantIndexBySeq:cached.assistantIndexBySeq,ws,writable,turn,greetings}
 }
@@ -243,7 +244,7 @@ export async function getHelperScriptBundle(ctx:Context,state:TavernState,sessio
   const name=card?.card.name??binding.cardName
   // 未表态的绑定跟随卡片：由页面调用 enableHelperMvu 经空闲认领开启，读取路径本身不写绑定。
   const base={helperMvu:binding.helperMvu===true,helperMvuFollow:binding.helperMvu===undefined&&enabled&&hasNativeMvuEntry(libraries),cardId:binding.cardId,trees:character.trees,revision:character.revision,libraries,storyId:binding.storyId,enabled,whitelist:[...state.config.cardNetworkWhitelist],
-    name,characterName:card?characterPromptName(card.card):name,userName:persona?.name??DEFAULT_USER_NAME}
+    name,characterName:card?characterPromptName(card.card):name,userName:persona?.name.trim()||DEFAULT_USER_NAME}
   if(!enabled)return {...base,messageId:null}
   try{helperJson(libraries,4*1024*1024);if(!enabledHelperLibraries(libraries).length&&!base.helperMvu)return {...base,messageId:null}}
   catch(error){return {...base,messageId:null,runtimeError:error instanceof Error?error.message:String(error)}}

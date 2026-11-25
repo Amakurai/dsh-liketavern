@@ -631,7 +631,7 @@ async function inspectCharacters(
     return
   }
   for (const entry of entries) {
-    if (entry.name.startsWith('.importing-')) {
+    if (entry.name.startsWith('.importing-') || entry.name.startsWith('.preparing-')) {
       if (entry.isDirectory()) stats.characters.drafts += 1
       else if (entry.isSymbolicLink()) { stats.characters.unsafeEntries += 1; issues.add('CHARACTER_LINK_SKIPPED', 'error') }
       continue
@@ -704,7 +704,7 @@ function jsonLimitForDataFile(dataRoot: string, filePath: string): number {
   const storyId = match[2]
   if (storyId !== undefined && !/^(?:story-[a-f0-9-]{36}|legacy-[a-f0-9]{32})$/.test(storyId)) return MAX_JSON_BYTES
   const sub = match[3]!
-  if (storyId === undefined && (sub === 'card.json' || sub === 'assets/character-book.json')) {
+  if (storyId === undefined && (sub === 'card.json' || sub === 'assets/character-book.json' || sub === 'assets/regex-scripts.json')) {
     return MAX_STORED_CARD_JSON_BYTES
   }
   if (sub === 'state/template.json' || /^state\/template-generation\/[^/]+\.json$/.test(sub)) {

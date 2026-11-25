@@ -13,6 +13,9 @@ export declare const zh: {
     readonly 'characters.searchPlaceholder': "搜索角色名 / 标签 / 作者 / 内嵌书名";
     readonly 'characters.emptyDesc': "导入一张 SillyTavern 角色卡，或新建空白卡。";
     readonly 'characters.pngFileTooLarge': "PNG 角色卡超过 {limit} MiB 大小上限，请选择较小的文件。";
+    readonly 'characters.jsonFileTooLarge': "JSON 角色卡超过 {limit} MiB 大小上限，请选择较小的文件。";
+    readonly 'characters.fileEmpty': "所选角色卡文件为空，请选择有效的 PNG 或 JSON 角色卡。";
+    readonly 'characters.archivedName': "{name}（已收纳）";
     readonly 'characters.imported': "已导入角色卡";
     readonly 'characters.importedWithBook': "已导入角色卡（含内嵌世界书）";
     readonly 'characters.archived': "已将「{name}」移入收纳箱";
@@ -39,7 +42,7 @@ export declare const zh: {
     readonly 'characters.detail.scenario': "场景";
     readonly 'characters.detail.groupGreetings': "开场白与示例";
     readonly 'characters.detail.greeting': "开场白";
-    readonly 'characters.detail.altGreetings': "开场白变体（每行一条）";
+    readonly 'characters.detail.altGreetings': "开场白变体";
     readonly 'characters.detail.mesExample': "对话示例";
     readonly 'characters.detail.groupAdvanced': "高级注入";
     readonly 'characters.detail.systemPrompt': "系统提示";

@@ -5,7 +5,7 @@ import { type GreetingFloorState } from '../core/greetingLog.js';
 import { type SiblingSwipe } from '../core/siblings.js';
 import { type SessionBinding, type WalLineageEntry } from './bindings.js';
 import { inheritedThroughTurn } from './sessionArchiveSnapshot.js';
-import type { TavernState } from './state.js';
+import { type TavernState } from './state.js';
 export interface FloorDeps {
     ctx: Context;
     state: TavernState;

@@ -48,11 +48,11 @@ export declare function hydrateStoredCard(record: Record<string, unknown>): Char
  * 其 text 为 Base64 编码的 UTF-8 JSON。读取不校验 CRC，遇 IEND 停止。
  */
 export declare function parsePngCard(bytes: Uint8Array): CharacterCard;
-/** 把角色卡 JSON 嵌进 PNG（去掉旧 chara/ccv3 块，在 IEND 前写入 tEXt）。无原图则用 1×1 占位图。 */
+/** 把角色卡 JSON 嵌进 PNG（去掉旧 chara/ccv3 块，在 IEND 前写入 tEXt）。无原图（null）则用 1×1 占位图。 */
 export declare function embedCardInPng(pngBytes: Uint8Array | null, json: unknown, spec: CharacterCard['spec']): Uint8Array;
 /** 导出 SillyTavern 角色卡 JSON（V2 data 包装；V3 保持 spec）。 */
 export declare function cardToStJson(card: CharacterCard): unknown;
-/** 从编辑字段合成一张卡（保留内嵌书、正则、头像字节与 spec）。 */
+/** 从编辑字段合成一张卡（保留内嵌书、正则与头像字节；V1/unknown 随 raw 统一升级为 V2）。 */
 export declare function applyCharacterPatch(card: CharacterCard, patch: Partial<Pick<CharacterCard, 'name' | 'description' | 'personality' | 'scenario' | 'firstMes' | 'alternateGreetings' | 'mesExample' | 'systemPrompt' | 'postHistoryInstructions' | 'creatorNotes' | 'creator' | 'characterVersion' | 'tags' | 'depthPrompt'>>): CharacterCard;
 export declare function createBlankCard(name: string): CharacterCard;
 /** 解析 JSON 角色卡（.json 导入），无 PNG 字节。 */

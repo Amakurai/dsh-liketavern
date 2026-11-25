@@ -11,7 +11,7 @@ import type { TavernServiceContract } from '../remote.js';
 import type { Context } from '@deepseek-ai/cordis';
 import type { TavernSettingsScope } from './config.js';
 import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol';
-import type { TavernState } from './state.js';
+import { type TavernState } from './state.js';
 import type { TavernMethodResults, TavernMethodRequests } from '../remote.js';
 export declare class TavernService extends TypertRemoteService implements TavernServiceContract {
     /** 运行时中枢（agent 面插件经 ctx.tavern 访问）。 */

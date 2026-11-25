@@ -85,8 +85,13 @@ function MemoryEditor(props: { remote: TavernRemote; cardId: string; storyId?: s
 
 interface MemorySectionProps {
   remote: TavernRemote
-  initialContext?: { cardId: string; storyId: string }
+  initialContext?: { cardId: string; storyId: string; cardName?: string }
   initialTab?: 'memory' | 'delta' | 'journal'
+}
+
+type MemoryCharacters = {
+  active: TavernMethodResults['listCharacters']['items']
+  archived: TavernMethodResults['listArchivedCharacters']['items']
 }
 
 /** 聊天入口独立使用剧情草稿范围；设置面板已有范围时复用父级存储与恢复提示。 */
@@ -99,11 +104,24 @@ function MemorySelection(props: MemorySectionProps) {
   const [cardId, setCardId] = useDraftState('memory:cardId', props.initialContext?.cardId ?? '')
   // 空字符串可在 JSON 中保留“初始状态”选择；undefined 会丢键，恢复时误回落聊天入口原剧情。
   const [storedStoryId, setStoredStoryId] = useDraftState('memory:storyId', props.initialContext?.storyId ?? '')
+  const [prefilledCardName, setPrefilledCardName] = useState(props.initialContext?.cardName ?? '')
   const cardRestored = useDraftRestored('memory:cardId')
   const storyRestored = useDraftRestored('memory:storyId')
   const activeSessionId = currentTavernSession()
   const prefilled = useRef(false)
-  const chars = useLoader(() => props.remote.listCharacters({}), [])
+  // 同时加载活跃与已收纳角色，确保已收纳角色仍显示卡名并可查看/编辑其记忆与剧情。
+  const chars = useLoader<MemoryCharacters>(async () => {
+    const [active, archived] = await Promise.all([
+      props.remote.listCharacters({}),
+      typeof props.remote.listArchivedCharacters === 'function'
+        ? props.remote.listArchivedCharacters({}).catch(() => null)
+        : Promise.resolve(null),
+    ])
+    if (!active.ok) return active
+    const activeIds = new Set(active.value.items.map((item) => item.cardId))
+    const archivedItems = archived && archived.ok ? archived.value.items.filter((item) => !activeIds.has(item.cardId)) : []
+    return { ok: true as const, value: { active: active.value.items, archived: archivedItems } }
+  }, [])
   const stories = useLoader(() => props.remote.listStories({ cardId }), [cardId], cardId !== '')
   useEffect(() => {
     if (props.initialContext || cardRestored || storyRestored || prefilled.current || cardId) return
@@ -113,6 +131,7 @@ function MemorySelection(props: MemorySectionProps) {
       if (!alive) return
       prefilled.current = true
       if (!r.ok || !r.value.binding?.cardId) return
+      if (r.value.binding.cardName) setPrefilledCardName((prev) => prev || r.value.binding!.cardName!)
       setCardId((prev) => prev || r.value.binding!.cardId)
       if (r.value.binding.storyId) setStoredStoryId((prev) => prev || r.value.binding!.storyId!)
     }).catch(() => {})
@@ -122,18 +141,18 @@ function MemorySelection(props: MemorySectionProps) {
   // 剧情切换必须重建所有编辑状态：禁止旧 journal 查询或旧字段值进入新剧情；角色与剧情列表留在本层复用。
   return <MemoryContextSection key={JSON.stringify([cardId, storyId ?? null])} remote={props.remote}
     chars={chars} stories={stories}
-    cardId={cardId} storyId={storyId} initialTab={props.initialTab} activeSessionId={activeSessionId}
-    setCardId={setCardId} setStoryId={(value) => setStoredStoryId(value ?? '')} />
+    cardId={cardId} prefilledCardName={prefilledCardName} storyId={storyId} initialTab={props.initialTab} activeSessionId={activeSessionId}
+    setCardId={(value) => { setPrefilledCardName(''); setCardId(value) }} setStoryId={(value) => setStoredStoryId(value ?? '')} />
 }
 
 function MemoryContextSection(props: { remote: TavernRemote;
-  chars: ReturnType<typeof useLoader<TavernMethodResults['listCharacters']>>;
+  chars: ReturnType<typeof useLoader<MemoryCharacters>>;
   stories: ReturnType<typeof useLoader<TavernMethodResults['listStories']>>;
-  cardId: string; storyId?: string;
+  cardId: string; prefilledCardName: string; storyId?: string;
   initialTab?: 'memory' | 'delta' | 'journal'; activeSessionId?: string;
   setCardId: (cardId: string) => void; setStoryId: (storyId: string | undefined) => void }) {
   const { remote, chars, stories } = props
-  const { cardId, storyId, activeSessionId, setCardId, setStoryId } = props
+  const { cardId, prefilledCardName, storyId, activeSessionId, setCardId, setStoryId } = props
   const t = useT()
   const draftKey = `memory:context:${JSON.stringify([cardId, storyId ?? null])}`
   const [tab, setTab] = useDraftState<'memory' | 'delta' | 'journal'>(`${draftKey}:tab`, props.initialTab ?? 'memory')
@@ -193,7 +212,17 @@ function MemoryContextSection(props: { remote: TavernRemote;
     journalDirty || !!newBody.trim() || !!newTags.trim() || !!newKeys.trim() || !!deltaContent.trim() || !!effectiveDeltaRef || !!deltaKeys.trim(),
     busy,
   )
-  const charItems = chars.state.status === 'ready' ? chars.state.value.items : []
+  const activeChars = chars.state.status === 'ready' ? chars.state.value.active : []
+  const archivedChars = chars.state.status === 'ready' ? chars.state.value.archived : []
+  const characterOptions = [
+    { value: '', label: t('memory.pickCharacter') },
+    ...activeChars.map((c) => ({ value: c.cardId, label: c.name })),
+    ...archivedChars.map((c) => ({ value: c.cardId, label: t('characters.archivedName', { name: c.name }) })),
+  ]
+  if (cardId && !characterOptions.some((option) => option.value === cardId)) {
+    characterOptions.push({ value: cardId, label: prefilledCardName || t('memory.character') })
+  }
+  const selectedCharacterLabel = characterOptions.find((option) => option.value === cardId)?.label ?? (prefilledCardName || t('memory.character'))
   const memoryItems = memories.state.status === 'ready' ? memories.state.value.items : []
   const deltaItems = deltas.state.status === 'ready' ? deltas.state.value.items : []
   const { activeMemoryCount, archivedMemoryCount, filteredMemories } = useMemo(() => {
@@ -384,7 +413,7 @@ function MemoryContextSection(props: { remote: TavernRemote;
           size="md"
           value={cardId}
           disabled={busy || editingId !== null || chars.state.status !== 'ready'} onChange={(value) => guard.request(() => { setStoryId(undefined); setCardId(value) })}
-          options={[{ value: '', label: t('memory.pickCharacter') }, ...charItems.map((c) => ({ value: c.cardId, label: c.name }))]}
+          options={characterOptions}
         />
       </SettingsRow>
       {cardId && <SettingsRow title={t('memory.story')} description={t('memory.storyDesc')}>
@@ -396,7 +425,7 @@ function MemoryContextSection(props: { remote: TavernRemote;
       </SettingsRow>}
       {cardId && <div className="dsh-tavern-storyContext" role="status">
         <div className="dsh-tavern-storyContextTitle">
-          <strong>{charItems.find((c) => c.cardId === cardId)?.name ?? t('memory.character')}</strong>
+          <strong>{selectedCharacterLabel}</strong>
           <Badge accent={!!storyId}>{t(storyId ? 'memory.scopeStory' : 'memory.scopeInitial')}</Badge>
         </div>
         <span>{t(storyId ? 'memory.scopeStoryDesc' : 'memory.scopeInitialDesc')}</span>

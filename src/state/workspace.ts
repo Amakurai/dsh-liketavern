@@ -460,19 +460,21 @@ export async function restoreCharacter(dataRoot: string, cardId: string): Promis
 export async function deleteCharacter(dataRoot: string, cardId: string): Promise<void> {
   assertValidCardId(cardId)
   const root = join(dataRoot, cardId)
-  const evict = (): void => {
-    closeLedger(root, { prefix: true })
-    evictTemplateCaches(root, { prefix: true })
-    evictHelperStateCache(root, { prefix: true })
-    evictWorldDeltaCache(root, { prefix: true })
-    characterSummaryCache.delete(cacheRootKey(root))
-  }
-  evict()
-  try {
-    await rm(root, { recursive: true, force: true })
-  } finally {
+  await withWorkspaceLock(root, async () => {
+    const evict = (): void => {
+      closeLedger(root, { prefix: true })
+      evictTemplateCaches(root, { prefix: true })
+      evictHelperStateCache(root, { prefix: true })
+      evictWorldDeltaCache(root, { prefix: true })
+      characterSummaryCache.delete(cacheRootKey(root))
+    }
     evict()
-  }
+    try {
+      await rm(root, { recursive: true, force: true })
+    } finally {
+      evict()
+    }
+  })
 }
 
 // ---------------------------------------------------------------------------

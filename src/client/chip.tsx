@@ -19,7 +19,7 @@ import type { WorldInfoEntry } from '../core/types.js'
 import { activeGreetingIndex, cardGreetingVariants } from '../core/greetingLog.js'
 import { parseLorebook } from '../core/lorebookFormat.js'
 import { LorebookEditor } from './panel/lorebookEditor.js'
-import type { CharacterSummary, Persona, PresetSummary, SessionBinding, TavernRemote, TavernSettings } from './types.js'
+import type { ArchivedCharacterSummary, CharacterSummary, Persona, PresetSummary, SessionBinding, TavernRemote, TavernSettings } from './types.js'
 import { EMPTY_SESSION_DEFAULTS } from './types.js'
 import { IconCopyOutlineMedium } from '@deepseek-ai/dsh-client-ui-primitives'
 import { Badge, Btn, CheckChips, ConfirmDialog, Dialog, Err, Field, IconBtn, Muted, Select, Skeleton, Tabs, Toggle, errOf, runAsync, useLoader, useToast } from './util.js'
@@ -187,6 +187,7 @@ function PromptPreviewDialog(props: { data: PromptPreview; onClose: () => void }
 
 interface Lists {
   characters: CharacterSummary[]
+  archivedCharacters: ArchivedCharacterSummary[]
   presets: PresetSummary[]
   personas: Persona[]
   lorebooks: string[]
@@ -276,11 +277,23 @@ function HeaderChipSession(props: HeaderChipProps) {
       : (bindingLoader.state.status === 'loading' || bindingLoader.state.status === 'error') && lastBinding.current?.sessionId === sessionId
         ? lastBinding.current.canSwipeGreeting
         : false
+  const hasLoadedBinding = bindingLoader.state.status === 'ready' || lastBinding.current?.sessionId === sessionId
+  const bindingLoadError = bindingLoader.state.status === 'error' && !binding ? bindingLoader.state.message : null
+  const bindingPending = !bindingLoadError && !hasLoadedBinding
   const detail = useLoader(
     async () => {
       const [d, a] = await Promise.all([cachedCharacterDetail(remote, binding!.cardId), cachedAvatar(remote, binding!.cardId)])
       if (!d.ok) return d
-      return { ok: true as const, value: { name: d.value.name, avatar: a.ok ? a.value.dataUrl : null } }
+      return {
+        ok: true as const,
+        value: {
+          name: d.value.name,
+          avatar: a.ok ? a.value.dataUrl : null,
+          hasCharacterBook: d.value.hasCharacterBook,
+          characterBookName: d.value.characterBookName,
+          characterBookEntryCount: d.value.characterBookEntryCount,
+        },
+      }
     },
     [binding?.cardId],
     tavern && binding !== null,
@@ -301,7 +314,10 @@ function HeaderChipSession(props: HeaderChipProps) {
   const [lists, setLists] = useState<Lists | null>(null)
   const [listsLoading, setListsLoading] = useState(false)
   const [listsReloadSeq, setListsReloadSeq] = useState(0)
-  const listedName = binding && lists ? lists.characters.find((c) => c.cardId === binding.cardId)?.name : undefined
+  const listedName = binding && lists
+    ? (lists.characters.find((c) => c.cardId === binding.cardId)
+      ?? lists.archivedCharacters.find((c) => c.cardId === binding.cardId))?.name
+    : undefined
   const [draft, setDraft] = useState<SessionBinding | null>(null)
   const [error, setError] = useState<string | null>(null)
   const toast = useToast()
@@ -336,8 +352,11 @@ function HeaderChipSession(props: HeaderChipProps) {
     setError(null)
     void (async () => {
       try {
-        const [chars, presets, personas, lorebooks] = await Promise.all([
+        const [chars, archivedChars, presets, personas, lorebooks] = await Promise.all([
           remote.listCharacters({}),
+          typeof remote.listArchivedCharacters === 'function'
+            ? remote.listArchivedCharacters({}).catch(() => null)
+            : Promise.resolve(null),
           remote.listPresets({}),
           remote.listPersonas({}),
           remote.listLorebooks({}),
@@ -349,6 +368,7 @@ function HeaderChipSession(props: HeaderChipProps) {
         if (!lorebooks.ok) return setError(lorebooks.error.message)
         setLists({
           characters: chars.value.items,
+          archivedCharacters: archivedChars && archivedChars.ok ? archivedChars.value.items : [],
           presets: presets.value.items,
           personas: personas.value.items,
           lorebooks: lorebooks.value.items,
@@ -383,15 +403,44 @@ function HeaderChipSession(props: HeaderChipProps) {
 
   const name = detail.state.status === 'ready' ? detail.state.value.name : null
   const avatar = detail.state.status === 'ready' ? detail.state.value.avatar : null
-  const selectedChar = lists && draft ? lists.characters.find((c) => c.cardId === draft.cardId) : undefined
-  const embeddedBookLabel = selectedChar?.hasCharacterBook
-    ? typeof selectedChar.characterBookEntryCount === 'number'
+  const selectedChar = lists && draft
+    ? (lists.characters.find((c) => c.cardId === draft.cardId)
+      ?? lists.archivedCharacters.find((c) => c.cardId === draft.cardId))
+    : undefined
+  const selectedBookSource = selectedChar ?? (
+    draft && binding && draft.cardId === binding.cardId && detail.state.status === 'ready'
+      ? detail.state.value
+      : undefined
+  )
+  const embeddedBookLabel = selectedBookSource?.hasCharacterBook
+    ? typeof selectedBookSource.characterBookEntryCount === 'number'
       ? t('chip.embeddedBook.withCount', {
-          name: selectedChar.characterBookName || selectedChar.name,
-          count: selectedChar.characterBookEntryCount,
+          name: selectedBookSource.characterBookName || selectedBookSource.name,
+          count: selectedBookSource.characterBookEntryCount,
         })
-      : t('chip.embeddedBook.noCount', { name: selectedChar.characterBookName || selectedChar.name })
+      : t('chip.embeddedBook.noCount', { name: selectedBookSource.characterBookName || selectedBookSource.name })
     : t('chip.embeddedBook.none')
+  // 已绑定会话可能指向已收纳角色：在下拉中保留其显示名并允许草稿切回，绝不回落展示内部 cardId。
+  const extraCharacterOptions: Array<{ value: string; label: string; name: string }> = []
+  if (lists) {
+    const activeIds = new Set(lists.characters.map((c) => c.cardId))
+    const addExtra = (cardId: string, fallbackCardName?: string) => {
+      if (!cardId || activeIds.has(cardId) || extraCharacterOptions.some((item) => item.value === cardId)) return
+      const archived = lists.archivedCharacters.find((c) => c.cardId === cardId)
+      if (archived) {
+        extraCharacterOptions.push({
+          value: archived.cardId,
+          label: t('characters.archivedName', { name: archived.name }),
+          name: archived.name,
+        })
+        return
+      }
+      const resolvedName = (binding?.cardId === cardId ? name : null) || fallbackCardName || t('chip.characterFallback')
+      extraCharacterOptions.push({ value: cardId, label: resolvedName, name: resolvedName })
+    }
+    if (binding) addExtra(binding.cardId, binding.cardName)
+    if (draft) addExtra(draft.cardId, draft.cardName)
+  }
 
   const saveBinding = async () => {
     if (!draft) return
@@ -425,7 +474,15 @@ function HeaderChipSession(props: HeaderChipProps) {
   const insertGreeting = async () => {
     const r = await remote.ensureGreeting({ sessionId })
     if (!r.ok) setError(r.error.message)
-    else toast.show(r.value.created ? t('chip.greeting.inserted') : t('chip.greeting.skipped'))
+    else {
+      toast.show(r.value.created ? t('chip.greeting.inserted') : t('chip.greeting.skipped'))
+      if (r.value.created || r.value.conversationStarted) {
+        invalidateSessionBinding(sessionId)
+        bindingLoader.reload()
+        window.dispatchEvent(new CustomEvent(BINDING_CHANGED_EVENT, { detail: sessionId }))
+        void Promise.resolve(sessions.refresh?.()).catch(() => {})
+      }
+    }
   }
 
   const swipeBy = async (delta: number) => {
@@ -515,8 +572,8 @@ function HeaderChipSession(props: HeaderChipProps) {
     <span className="dsh-tavern-ui" style={{ display: 'inline-flex' }}>
       {binding?.storyId&&<HelperScripts key={helperRuntimeKey(sessionId,binding,userName)} remote={remote} sessionId={sessionId} cardId={binding.cardId} sessions={sessions} onCancel={props.onCancel}/>}
       <TavernSeatChip
-        label={binding ? (name ?? binding.cardName ?? listedName ?? t('chip.characterFallback')) : t('hero.pickCharacter')}
-        title={t('hero.pickCharacter')}
+        label={binding ? (name ?? binding.cardName ?? listedName ?? t('chip.characterFallback')) : bindingLoadError ? t('chip.bindingLoadFailed') : t('hero.pickCharacter')}
+        title={bindingLoadError ? `${t('chip.bindingLoadFailed')}: ${bindingLoadError}` : t('hero.pickCharacter')}
         avatarUrl={avatar}
         open={open}
         loading={bindingLoader.state.status === 'loading'}
@@ -529,7 +586,7 @@ function HeaderChipSession(props: HeaderChipProps) {
         onClose={requestCloseDialog}
         width="xl"
         footer={
-          draft ? (
+          draft && !bindingLoadError && !bindingPending ? (
             <div className="dsh-tavern-footActions">
               {binding ? (
                 <Btn
@@ -555,6 +612,22 @@ function HeaderChipSession(props: HeaderChipProps) {
         }
       >
           <div className="dsh-tavern-binding dsh-tavern-bindingWide">
+          {bindingLoadError ? (
+            <div className="dsh-tavern-panelCard">
+              <Err message={bindingLoadError} />
+              <div>
+                <Btn disabled={locked} onClick={bindingLoader.reload}>{t('action.retry')}</Btn>
+              </div>
+            </div>
+          ) : bindingPending ? (
+            <div className="dsh-tavern-panelCard">
+              <Skeleton height={14} width="24%" />
+              <Skeleton height={38} radius={18} />
+              <Skeleton height={38} radius={18} />
+              <Skeleton height={38} radius={18} />
+            </div>
+          ) : (
+            <>
           <Err message={error} />
           {!lists && listsLoading && (
             <div className="dsh-tavern-panelCard">
@@ -584,10 +657,13 @@ function HeaderChipSession(props: HeaderChipProps) {
                         onChange={(cardId) => {
                           if (!cardId) return
                           const picked = lists.characters.find((c) => c.cardId === cardId)
-                          setDraft(draftWithCard(draft, binding, cardId, picked?.name))
+                            ?? lists.archivedCharacters.find((c) => c.cardId === cardId)
+                          const pickedName = picked?.name ?? extraCharacterOptions.find((item) => item.value === cardId)?.name
+                          setDraft(draftWithCard(draft, binding, cardId, pickedName))
                         }}
                         options={[
                           { value: '', label: t('chip.field.selectCharacter') },
+                          ...extraCharacterOptions.map((item) => ({ value: item.value, label: item.label })),
                           ...lists.characters.map((c) => ({ value: c.cardId, label: c.name })),
                         ]}
                       />
@@ -777,6 +853,8 @@ function HeaderChipSession(props: HeaderChipProps) {
               {!usage && staleTurnLine && <div className="dsh-tavern-usageBar">{staleTurnLine}</div>}
             </fieldset>
           )}
+            </>
+          )}
           </div>
           {binding?.storyId && <HelperMvuAbandonAction key={sessionId + ':' + binding.storyId} remote={remote} sessionId={sessionId} storyId={binding.storyId} disabled={busy} onBusyChange={(on) => { abandoningMvuRef.current = on; setAbandoningMvu(on) }} onChanged={() => {
             invalidateSessionBinding(sessionId)
@@ -815,7 +893,7 @@ function HeaderChipSession(props: HeaderChipProps) {
           <MemorySection
             key={`${binding.storyId}:${memoryOpenTab}`}
             remote={remote}
-            initialContext={{ cardId: binding.cardId, storyId: binding.storyId! }}
+            initialContext={{ cardId: binding.cardId, storyId: binding.storyId!, cardName: name ?? binding.cardName ?? listedName }}
             initialTab={memoryOpenTab}
           />
         </Dialog>

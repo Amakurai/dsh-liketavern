@@ -8,7 +8,7 @@
 
 import { Buffer } from 'node:buffer'
 import { crc32, inflateSync } from 'node:zlib'
-import { characterDataExtras, isKnownCharacterDataKey } from '../core/characterData.js'
+import { characterDataExtras, hasWrappedCardRawData, isKnownCharacterDataKey, MODELED_CHARACTER_DATA_KEYS } from '../core/characterData.js'
 import { exportCharacterBook, isSpecCharacterBook, parseLorebook } from './lorebook.js'
 import type { CardRegexScript, CharacterCard, ChatRole, DepthPrompt, LorebookFile } from '../core/types.js'
 import { MAX_CARD_PNG_BYTES } from '../core/cardLimits.js'
@@ -37,8 +37,15 @@ const MAX_CARD_JSON_CHARS = 8 * 1024 * 1024
 /**
  * zTXt/iTXt 解压输出上限：deflate 极端膨胀比约 1000:1，无输出上限时几十 KB 的
  * 压缩炸弹即可在主进程膨胀出几百 MB、直接耗尽内存。正常卡 JSON（base64 文本）远低于 4MB。
+ * 整张 PNG 另设累计解压上限（2 × 单块上限 = 8MB），允许合法双块（chara + ccv3）同时存在，
+ * 同时阻止攻击者拆分多块绕过单块上限。
  */
 const MAX_INFLATE_OUTPUT_BYTES = 4 * 1024 * 1024
+const MAX_TOTAL_INFLATE_OUTPUT_BYTES = 2 * MAX_INFLATE_OUTPUT_BYTES
+/** DEFLATE 理论最大膨胀比（1032:1），用于损坏块在尾部校验失败时保守扣减累计解压预算。 */
+const MAX_DEFLATE_EXPANSION_RATIO = 1032
+/** 空输出或极短损坏块的最低预算扣减，防止海量空压缩块在主线程堆积同步解压。 */
+const MIN_EMPTY_OR_FAILED_INFLATE_CHARGE = 4096
 
 type CardSpec = CharacterCard['spec']
 
@@ -269,7 +276,7 @@ export function withoutEmbeddedCharacterBook(card: CharacterCard): CharacterCard
   const extensions = { ...card.extensions }
   const raw = isRecord(card.raw) ? card.raw : null
   if (raw) {
-    const rawData = card.spec !== 'chara_card_v1' && isRecord(raw.data) ? raw.data : raw
+    const rawData = hasWrappedCardRawData(card.spec, raw) ? raw.data : raw
     const directKeys = new Set(Object.keys(rawData))
     const extensionSource = isRecord(rawData.extensions) ? rawData.extensions
       : rawData !== raw && isRecord(raw.extensions) ? raw.extensions : null
@@ -302,7 +309,7 @@ function normalizeDepthPrompt(raw: unknown): DepthPrompt | null {
   const numeric = toNum(raw.depth, 4)
   const rounded = Math.round(numeric)
   const depth = Number.isSafeInteger(rounded) && rounded >= 0
-    ? rounded
+    ? (rounded || 0)
     : rounded > Number.MAX_SAFE_INTEGER ? Number.MAX_SAFE_INTEGER : 0
   const roleRaw = raw.role
   let role: ChatRole = 'system'
@@ -461,6 +468,13 @@ export function parsePngCard(bytes: Uint8Array): CharacterCard {
   let offset = PNG_SIGNATURE.length
   let charaText: string | null = null
   let ccv3Text: string | null = null
+  const inflateBudget = { remaining: MAX_TOTAL_INFLATE_OUTPUT_BYTES }
+
+  const shouldParseKeyword = (keyword: string): boolean => {
+    if (ccv3Text !== null) return false
+    if (keyword === 'chara') return charaText === null
+    return keyword === 'ccv3'
+  }
 
   const take = (keyword: string, text: string | null): void => {
     if (text === null || text === '') return
@@ -478,13 +492,13 @@ export function parsePngCard(bytes: Uint8Array): CharacterCard {
     const data = bytes.subarray(dataStart, dataStart + length)
 
     if (type === 'tEXt') {
-      const parsed = parsePngTextChunk(data, 'tEXt')
+      const parsed = parsePngTextChunk(data, 'tEXt', shouldParseKeyword, inflateBudget)
       if (parsed) take(parsed.keyword, parsed.text)
     } else if (type === 'zTXt') {
-      const parsed = parsePngTextChunk(data, 'zTXt')
+      const parsed = parsePngTextChunk(data, 'zTXt', shouldParseKeyword, inflateBudget)
       if (parsed) take(parsed.keyword, parsed.text)
     } else if (type === 'iTXt') {
-      const parsed = parsePngTextChunk(data, 'iTXt')
+      const parsed = parsePngTextChunk(data, 'iTXt', shouldParseKeyword, inflateBudget)
       if (parsed) take(parsed.keyword, parsed.text)
     }
 
@@ -525,25 +539,43 @@ function isInflateOverflow(error: unknown): boolean {
 }
 
 /**
- * 带输出上限的解压：超限（疑似压缩炸弹）抛 CardParseError 让导入方看到明确原因；
- * 其余解压失败（数据损坏）返回 null，与既有「坏块静默跳过」口径一致。
+ * 带单块与整图累计输出上限的解压：超限（疑似压缩炸弹）抛 CardParseError 让导入方看到明确原因；
+ * 其余解压失败（数据损坏）按理论上界扣减预算并返回 null，与既有「坏块静默跳过」口径一致。
  */
-function inflateCardText(compressed: Uint8Array): Buffer | null {
+function inflateCardText(compressed: Uint8Array, budget: { remaining: number }): Buffer | null {
+  if (budget.remaining <= 0) {
+    throw new CardParseError(`PNG 文本块累计解压超过 ${MAX_TOTAL_INFLATE_OUTPUT_BYTES / 1024 / 1024}MB 上限，疑似压缩炸弹，已拒绝`)
+  }
+  const limit = Math.min(MAX_INFLATE_OUTPUT_BYTES, budget.remaining)
   try {
-    return inflateSync(Buffer.from(compressed), { maxOutputLength: MAX_INFLATE_OUTPUT_BYTES })
+    const inflated = inflateSync(Buffer.from(compressed), { maxOutputLength: limit })
+    const consumed = inflated.length > 0 ? inflated.length : Math.max(MIN_EMPTY_OR_FAILED_INFLATE_CHARGE, compressed.length)
+    budget.remaining = Math.max(0, budget.remaining - consumed)
+    return inflated
   } catch (error) {
     if (isInflateOverflow(error)) {
-      throw new CardParseError(`PNG 文本块解压超过 ${MAX_INFLATE_OUTPUT_BYTES / 1024 / 1024}MB 上限，疑似压缩炸弹，已拒绝`)
+      const detail = limit < MAX_INFLATE_OUTPUT_BYTES
+        ? `PNG 文本块累计解压超过 ${MAX_TOTAL_INFLATE_OUTPUT_BYTES / 1024 / 1024}MB 上限，疑似压缩炸弹，已拒绝`
+        : `PNG 文本块解压超过 ${MAX_INFLATE_OUTPUT_BYTES / 1024 / 1024}MB 上限，疑似压缩炸弹，已拒绝`
+      throw new CardParseError(detail)
     }
+    const worstCase = Math.min(limit, Math.max(MIN_EMPTY_OR_FAILED_INFLATE_CHARGE, compressed.length * MAX_DEFLATE_EXPANSION_RATIO))
+    budget.remaining = Math.max(0, budget.remaining - worstCase)
     return null
   }
 }
 
-function parsePngTextChunk(data: Uint8Array, type: 'tEXt' | 'zTXt' | 'iTXt'): { keyword: string; text: string } | null {
+function parsePngTextChunk(
+  data: Uint8Array,
+  type: 'tEXt' | 'zTXt' | 'iTXt',
+  shouldParseKeyword: (keyword: string) => boolean,
+  inflateBudget: { remaining: number },
+): { keyword: string; text: string } | null {
   const sep = data.indexOf(0x00)
   if (sep < 0) return null
   const keyword = Buffer.from(data.subarray(0, sep)).toString('latin1')
   if (keyword !== 'chara' && keyword !== 'ccv3') return null
+  if (!shouldParseKeyword(keyword)) return null
   try {
     if (type === 'tEXt') {
       return { keyword, text: Buffer.from(data.subarray(sep + 1)).toString('latin1') }
@@ -553,7 +585,7 @@ function parsePngTextChunk(data: Uint8Array, type: 'tEXt' | 'zTXt' | 'iTXt'): { 
       if (sep + 2 > data.length) return null
       const method = data[sep + 1]
       if (method !== 0) return null
-      const inflated = inflateCardText(data.subarray(sep + 2))
+      const inflated = inflateCardText(data.subarray(sep + 2), inflateBudget)
       if (inflated === null) return null
       return { keyword, text: inflated.toString('latin1') }
     }
@@ -571,7 +603,7 @@ function parsePngTextChunk(data: Uint8Array, type: 'tEXt' | 'zTXt' | 'iTXt'): { 
     const payload = data.subarray(transEnd + 1)
     if (compressed) {
       if (method !== 0) return null
-      const inflated = inflateCardText(payload)
+      const inflated = inflateCardText(payload, inflateBudget)
       if (inflated === null) return null
       return { keyword, text: inflated.toString('utf8') }
     }
@@ -617,10 +649,13 @@ function textChunkBytes(keyword: string, b64: string): Uint8Array {
   return pngChunk('tEXt', Buffer.from(`${keyword}\0${b64}`, 'latin1'))
 }
 
-/** 把角色卡 JSON 嵌进 PNG（去掉旧 chara/ccv3 块，在 IEND 前写入 tEXt）。无原图则用 1×1 占位图。 */
+/** 把角色卡 JSON 嵌进 PNG（去掉旧 chara/ccv3 块，在 IEND 前写入 tEXt）。无原图（null）则用 1×1 占位图。 */
 export function embedCardInPng(pngBytes: Uint8Array | null, json: unknown, spec: CharacterCard['spec']): Uint8Array {
-  const source = pngBytes && pngBytes.length >= PNG_SIGNATURE.length ? pngBytes : BLANK_PNG
-  if (!PNG_SIGNATURE.every((b, i) => source[i] === b)) {
+  const source = pngBytes === null ? BLANK_PNG : pngBytes
+  if (
+    source.length < PNG_SIGNATURE.length ||
+    !PNG_SIGNATURE.every((b, i) => source[i] === b)
+  ) {
     throw new CardParseError('不是有效的 PNG 文件：文件签名不匹配')
   }
   const b64 = Buffer.from(JSON.stringify(json), 'utf-8').toString('base64')
@@ -657,6 +692,20 @@ export function embedCardInPng(pngBytes: Uint8Array | null, json: unknown, spec:
   }
   return out
 }
+
+/** V2/V3 导出时必须从外层 envelope 剔除的键：外层结构键、已建模 V1 镜像字段、兼容别名与内嵌书落点。 */
+const STRIPPED_ENVELOPE_KEYS = new Set<string>([
+  'spec',
+  'spec_version',
+  'data',
+  ...MODELED_CHARACTER_DATA_KEYS,
+  'lorebook',
+  'characterBook',
+  'world',
+  'creatorcomment',
+  'depth_prompt',
+  'regexScripts',
+])
 
 /** 导出 SillyTavern 角色卡 JSON（V2 data 包装；V3 保持 spec）。 */
 export function cardToStJson(card: CharacterCard): unknown {
@@ -702,9 +751,9 @@ export function cardToStJson(card: CharacterCard): unknown {
   }
   if (card.regexScripts.length > 0) data.regex_scripts = card.regexScripts
   const spec = card.spec === 'chara_card_v1' || card.spec === 'unknown' ? 'chara_card_v2' : card.spec
-  const raw = card.raw && typeof card.raw === 'object' && !Array.isArray(card.raw) ? card.raw as Record<string, unknown> : {}
-  const envelopeExtras = card.spec !== 'chara_card_v1' && raw.data && typeof raw.data === 'object' && !Array.isArray(raw.data)
-    ? Object.fromEntries(Object.entries(raw).filter(([k]) => !['spec', 'spec_version', 'data', 'character_book', 'lorebook', 'characterBook', 'world'].includes(k)))
+  const raw = isRecord(card.raw) ? card.raw : {}
+  const envelopeExtras = hasWrappedCardRawData(card.spec, raw)
+    ? Object.fromEntries(Object.entries(raw).filter(([k]) => !STRIPPED_ENVELOPE_KEYS.has(k)))
     : {}
   return {
     spec,
@@ -714,7 +763,7 @@ export function cardToStJson(card: CharacterCard): unknown {
   }
 }
 
-/** 从编辑字段合成一张卡（保留内嵌书、正则、头像字节与 spec）。 */
+/** 从编辑字段合成一张卡（保留内嵌书、正则与头像字节；V1/unknown 随 raw 统一升级为 V2）。 */
 export function applyCharacterPatch(
   card: CharacterCard,
   patch: Partial<
@@ -752,6 +801,11 @@ export function applyCharacterPatch(
     ) {
       throw new CardParseError('角色 depthPrompt 无效：depth 必须是非负安全整数，role 必须是 system/user/assistant')
     }
+    // 与 hydrateStoredCard / normalizeDepthPrompt 对齐：空白 prompt 归零为 null，非空按规范键序落盘，
+    // 防止保存返回的 characterEditRevision 与重载后的修订号不一致。
+    definedPatch.depthPrompt = dp.prompt.trim()
+      ? { prompt: dp.prompt, depth: dp.depth || 0, role: dp.role }
+      : null
   }
   const next: CharacterCard = { ...card, ...definedPatch }
   const extensions: Record<string, unknown> = { ...next.extensions }
@@ -765,7 +819,11 @@ export function applyCharacterPatch(
     delete extensions.depth_prompt
   }
   next.extensions = extensions
+  // 先按原 card.spec 投影 raw（保留 V1 自定义 data 字段），再将 V1/unknown 升级为与新 raw 一致的 V2。
   next.raw = cardToStJson(next)
+  if (next.spec === 'chara_card_v1' || next.spec === 'unknown') {
+    next.spec = 'chara_card_v2'
+  }
   return next
 }
 

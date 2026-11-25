@@ -4,6 +4,16 @@
  * 导出与模板快照必须借助 raw 还原来源，不能因此把 data.assets 搬成 data.extensions.assets。
  */
 import type { CharacterCard } from './types.js';
+/** 已被 CharacterCard 显式建模、由调用方以当前值覆盖的 ST data 字段。 */
+export declare const MODELED_CHARACTER_DATA_KEYS: ReadonlySet<string>;
+/**
+ * 判定 raw 是否采用 V2/V3 的 data 包装。
+ * 除卡片本身为 V2/V3 外，也兼容历史落盘中 card.spec 仍为 chara_card_v1 但 raw 已升级为 V2/V3 包装的卡片；
+ * 若 raw.spec 显式为 chara_card_v1，则 raw.data 属于 V1 自定义字段而非包装壳。
+ */
+export declare function hasWrappedCardRawData(spec: CharacterCard['spec'], raw: Record<string, unknown>): raw is Record<string, unknown> & {
+    data: Record<string, unknown>;
+};
 /**
  * 归一化时判定字段是否已消费；无效 lorebook/characterBook 只是厂商自定义字段，
  * 必须像其它未知 V3 字段一样镜像并保留原位置。

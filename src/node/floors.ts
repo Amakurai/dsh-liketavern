@@ -47,7 +47,7 @@ import { forkedSessionParents, inheritedThroughTurn, installSessionForkTracking,
 import { readHostForkIdentity, writeHostForkIdentity } from './hostForkIdentity.js'
 import { assertHelperMvuContinuable } from './helperMvu.js'
 import { assertWalLineageComplete } from './sessionArchiveWal.js'
-import type { TavernState } from './state.js'
+import { CharacterArchivedError, type TavernState } from './state.js'
 
 installSessionForkTracking()
 
@@ -516,6 +516,9 @@ async function forkAt(
   boundary: number,
   options?: { prepareEdits?:(fs:import('../state/workspaceFs.js').WorkspaceFs,childId:string)=>Promise<void>; greetingIndex?: number; seedOverride?: readonly SessionEvent[]; forkTurn?: number; rollbackFromTurn?: number; verifySource?:()=>Promise<void>; beforePublish?:()=>void },
 ): Promise<string> {
+  if (await state.isCharacterArchived(binding.cardId)) {
+    throw new CharacterArchivedError()
+  }
   const seed = options?.seedOverride ?? sessionPrefixEvents(source.snapshotEvents(), boundary)
   const childId = newChildId()
   // 先在独立草稿恢复剧情；失败不会创建会话，也不会改动来源分支。
@@ -550,6 +553,7 @@ async function forkAt(
     // 插件无法操作的孤儿会话。
     await created?.dispose().catch(() => {})
     await state.discardUnboundStory(binding.cardId, storyId, childId)
+    if (error instanceof CharacterArchivedError) throw error
     throw new FloorError('fork-failed', `准备分支失败：${error instanceof Error ? error.message : String(error)}`)
   } finally {
     pluginForkIds.delete(childId)
@@ -747,6 +751,9 @@ export async function adoptHostFork({ ctx, state }: FloorDeps, child: Session): 
   // 快照父剧情前先等待非后台楼层提交落定，避免把未收口楼层复制给子会话。
   await state.waitForSessionCommits(pending.parentId)
   await assertHostForkSource(state.paths, binding)
+  if (await state.isCharacterArchived(binding.cardId)) {
+    throw new CharacterArchivedError()
+  }
   let retainedMaxTurn: number | null = null
   const storyId = await state.forkStory(binding, child.id, async (fs) => {
     retainedMaxTurn = await prepareBranchStory(fs, binding, pending.parentId, child.id, pending.prefix, rollbackFromTurn)
@@ -1076,7 +1083,7 @@ async function expandGreeting(state: TavernState, binding: SessionBinding, text:
   const persona = await state.resolvePersona(binding.personaId)
   return expandMacros(text, {
     char: ws ? characterPromptName(ws.card) : 'Assistant',
-    user: persona?.name ?? DEFAULT_USER_NAME,
+    user: persona?.name.trim() || DEFAULT_USER_NAME,
   })
 }
 
@@ -1333,11 +1340,29 @@ export async function enterGreetingConversation({ ctx, state }: FloorDeps, sessi
   const raw = pickGreetingText(variants, binding.greetingIndex)
   if (!raw) return false
   const text = await expandGreeting(state, binding, raw)
-  // 资产读取期间宿主可能已经开轮；迟到的初始化不能插入 turn 0 或抢占真实轮次。
-  if (session.snapshotEvents().some(e => e.type === 'turn/start') || session.surface.nodes.length > 0) return false
-  appendGreetingTurn(session, text)
-  syncIdleAgentLastTurn(ctx, session.id)
-  return true
+  await state.waitForBindingAdoption(sessionId)
+  return withWorkspaceLock(state.paths.sessions, async () => {
+    // 异步读取角色与人设期间会话可能被换绑、解绑或修改开场白下标；写入前在 sessions 锁内复核同一绑定。
+    const latest = await state.loadBindingUnwaited(sessionId)
+    if (
+      !latest
+      || latest.cardId !== binding.cardId
+      || latest.storyId !== binding.storyId
+      || latest.greetingIndex !== binding.greetingIndex
+      || latest.personaId !== binding.personaId
+    ) return false
+    // 资产读取期间宿主可能已经开轮、写入消息或替换会话；迟到的初始化不能插入 turn 0 或抢占真实轮次。
+    if (liveSession(ctx, sessionId) !== session) return false
+    const currentEvents = session.snapshotEvents()
+    if (
+      currentEvents.some((e) => e.type === 'turn/start' || e.type === 'assistant/message')
+      || sessionHasUserMessage(currentEvents)
+      || session.surface.nodes.length > 0
+    ) return false
+    appendGreetingTurn(session, text)
+    syncIdleAgentLastTurn(ctx, session.id)
+    return true
+  })
 }
 
 /**

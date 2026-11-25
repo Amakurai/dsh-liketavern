@@ -271,7 +271,7 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
     return content === m.content ? m : { ...m, content }
   })
 
-  // ── 1. 输入侧正则（历史副本：先 input/send，再 prompt/assemble） ──────────
+  // ── 1. 输入侧正则（历史副本：先 input/send，再 prompt/assemble，最后仅含 prompt/send 的规则） ──
   const inputRegex = applyRegexToMessages(
     namedHistory,
     input.regexRules,
@@ -284,7 +284,16 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
     { scope: 'prompt', timing: 'assemble', chatFlags },
     macroCtx,
   )
-  const sendRegex = applyRegexToMessages(regexRes.messages, input.regexRules, { scope: 'prompt', timing: 'send', chatFlags }, macroCtx)
+  // promptOnly 规则编译时同时携带 assemble 与 send；已在 prompt/assemble 执行过的规则不得在 prompt/send 重复执行。
+  const sendOnlyPromptRules = input.regexRules.filter(
+    (rule) => typeof rule === 'object' && rule !== null && Array.isArray(rule.timing) && !rule.timing.includes('assemble'),
+  )
+  const sendRegex = applyRegexToMessages(
+    regexRes.messages,
+    sendOnlyPromptRules,
+    { scope: 'prompt', timing: 'send', chatFlags },
+    macroCtx,
+  )
   let history: ChatMessage[] = sendRegex.messages
   for (const e of [...inputRegex.errors, ...regexRes.errors, ...sendRegex.errors]) {
     log.push({ kind: 'regex-error', detail: `${e.ruleId}: ${e.message}` })

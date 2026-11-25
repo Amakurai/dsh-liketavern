@@ -83,3 +83,31 @@ it.each(['zh','en'] as const)('跨窗口故障显示适配说明并保留原始�
     await act(async()=>{view!.unmount();view=undefined;clearScriptStatus(owner,'diagnostics');setTavernLocale('auto')})
   }
 })
+
+it('运行状态列表解析已收纳角色显示名，同时角色脚本编辑下拉保持仅列活跃角色',async()=>{
+  const owner=Symbol()
+  setTavernLocale('zh')
+  publishScriptStatus(owner,{
+    sessionId:'archived-session',
+    cardId:'星野凛-5849b162',
+    state:'running',
+    nativeMvu:false,
+    scripts:[{id:'s1',name:'背景同步',state:'ready',native:false}],
+  })
+  const remote={
+    listCharacters:async()=>({ok:true,value:{items:[{cardId:'active-1',name:'活跃角色'}]}}),
+    listArchivedCharacters:async()=>({ok:true,value:{items:[{cardId:'星野凛-5849b162',name:'星野凛',archivedAt:'2026-01-01T00:00:00.000Z'}]}}),
+    listPresets:async()=>({ok:true,value:{items:[]}}),
+  } as unknown as TavernRemote
+  try{
+    await act(async()=>{view=create(<ScriptSettings remote={remote}/>)})
+    const runtimeHeading=view!.root.findByProps({className:'dsh-tavern-scriptRuntime'}).findByType('strong')
+    expect(runtimeHeading.children.join('')).toBe(t('characters.archivedName',{name:'星野凛'}))
+    expect(runtimeHeading.children.join('')).not.toBe(t('settings.scripts.current'))
+    const charSelect=view!.root.findAllByType(Select)[0]!
+    const optionValues=(charSelect.props.options as Array<{value:string}>).map(item=>item.value)
+    expect(optionValues).toEqual(['','active-1'])
+  }finally{
+    await act(async()=>{view!.unmount();view=undefined;clearScriptStatus(owner,'archived-session');setTavernLocale('auto')})
+  }
+})

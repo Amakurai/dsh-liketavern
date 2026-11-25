@@ -516,7 +516,7 @@ export function useToast() {
   return { show, node }
 }
 
-/** 让卡片等元素可键盘触发（Enter/Space）；用于 .dsh-tavern-charCard / .dsh-tavern-tile，其悬停样式由各自规则提供。 */
+/** 让卡片等元素可键盘触发（Enter/Space）；用于 .dsh-tavern-tile，其悬停样式由各自规则提供。 */
 export function clickableProps(onClick: () => void) {
   return {
     role: 'button',
@@ -751,7 +751,7 @@ export function ConfirmDialog(props: {
 }
 
 /** 数字输入保留未完成文本；空值不误提交为 0，失焦时显示有效值，外部重置及时同步。 */
-export function NumInput(props: { value: number; onChange: (v: number) => void; step?: string; width?: number }) {
+export function NumInput(props: { value: number; onChange: (v: number) => void; step?: string; width?: number | string; style?: CSSProperties }) {
   const label = useContext(ControlLabel)
   const value = Number.isFinite(props.value) ? props.value : 0
   const [draft, setDraft] = useState(() => ({ value, text: String(value), pending: false }))
@@ -770,7 +770,7 @@ export function NumInput(props: { value: number; onChange: (v: number) => void; 
       aria-labelledby={label?.labelId}
       aria-describedby={label?.descriptionId}
       className="dsh-tavern-input"
-      style={{ width: props.width ?? 90 }}
+      style={{ width: props.width ?? 90, ...props.style }}
       value={text}
       step={props.step ?? 'any'}
       onChange={(e) => {
@@ -789,7 +789,7 @@ export function NumInput(props: { value: number; onChange: (v: number) => void; 
 }
 
 /** 可空数字输入（null ↔ 空串）：保留未完成输入与中间态文本，失焦时收敛到有效值，外部重置即时同步。 */
-export function NullableNumInput(props: { value: number | null; onChange: (v: number | null) => void; step?: string; width?: number }) {
+export function NullableNumInput(props: { value: number | null; onChange: (v: number | null) => void; step?: string; width?: number | string; style?: CSSProperties }) {
   const t = useT()
   const label = useContext(ControlLabel)
   const value = props.value !== null && Number.isFinite(props.value) ? props.value : null
@@ -808,7 +808,7 @@ export function NullableNumInput(props: { value: number | null; onChange: (v: nu
       aria-labelledby={label?.labelId}
       aria-describedby={label?.descriptionId}
       className="dsh-tavern-input"
-      style={{ width: props.width ?? 90 }}
+      style={{ width: props.width ?? 90, ...props.style }}
       value={text}
       step={props.step ?? 'any'}
       placeholder={t('common.unlimited')}

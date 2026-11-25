@@ -184,7 +184,7 @@ const STYLE = `
 .dsh-tavern-groupHead:first-child{margin-top:0}
 
 /* 页签导航：圆角分段控件（pill track），区别于宿主通用设置的下划线页签 */
-.dsh-tavern-navPills{box-sizing:border-box;display:inline-flex;flex-wrap:wrap;gap:2px;max-width:100%;padding:4px;margin:2px 0 20px;
+.dsh-tavern-navPills{box-sizing:border-box;display:inline-flex;align-self:flex-start;flex-wrap:wrap;gap:2px;max-width:100%;padding:4px;margin:2px 0 20px;
   border-radius:19px;border:1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.18));
   background:var(--dsw-alias-bg-layer-2, rgba(128,128,128,.08))}
 .dsh-tavern-navPill{appearance:none;height:30px;padding:0 15px;border:0;border-radius:999px;background:transparent;
@@ -278,8 +278,8 @@ const STYLE = `
 .dsh-tavern-select{display:block;width:100%;min-width:0;max-width:100%}
 .dsh-tavern-select > span{display:block;width:100%}
 /* 36px 胶囊选择器（对齐通用设置的 .selector） */
-.dsh-tavern-pillSelect{display:inline-flex;align-items:center;justify-content:space-between;gap:12px;
-  width:100%;min-width:0;height:36px;padding:0 15px;border:0;border-radius:18px;cursor:pointer;text-align:left;
+.dsh-tavern-pillSelect{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:space-between;gap:12px;
+  width:100%;min-width:0;height:36px;padding:0 15px;border:1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.2));border-radius:18px;cursor:pointer;text-align:left;
   background:var(--dsw-alias-bg-module-platform, rgba(128,128,128,.14));
   color:var(--dsw-alias-label-primary, inherit);font:inherit;font-size:14px;line-height:22px;
   transition:background var(--ds-transition-duration-fast, .1s) var(--ds-ease-in-out, ease)}
@@ -356,38 +356,42 @@ const STYLE = `
 
 /* ========== 角色海报卡（封面 + 底部渐变名条） ========== */
 .dsh-tavern-charGrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(208px,100%),1fr));gap:16px;margin:0;padding:0;list-style:none}
-.dsh-tavern-charCard{position:relative;display:flex;flex-direction:column;border-radius:18px;overflow:hidden;min-width:0;cursor:pointer;
+.dsh-tavern-charCard{position:relative;display:flex;flex-direction:column;border-radius:18px;overflow:hidden;min-width:0;
   border:1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.18));
   background:var(--dsw-alias-bg-layer-3, transparent);
   transition:border-color var(--ds-transition-duration, .2s) var(--ds-ease-in-out, ease),
     transform var(--ds-transition-duration-fast, .1s) var(--ds-ease-in-out, ease),
     box-shadow var(--ds-transition-duration-fast, .1s) var(--ds-ease-in-out, ease)}
-.dsh-tavern-charCard.is-archived,.dsh-tavern-charCard[aria-disabled="true"]{cursor:default}
-.dsh-tavern-charCard:hover,.dsh-tavern-charCard:focus-visible{
+.dsh-tavern-charCard:hover,.dsh-tavern-charCard:has(>.dsh-tavern-charCardBody:focus-visible){
   border-color:var(--tavern-accent-border, rgba(65,118,230,.32));
   transform:translateY(-2px);box-shadow:var(--dsw-shadow-lv2, 0 4px 12px rgba(0,0,0,.04))}
 .dsh-tavern-charCard:active{transform:none;box-shadow:none}
+.dsh-tavern-charCardBody{appearance:none;border:0;padding:0;margin:0;background:transparent;font:inherit;color:inherit;text-align:left;
+  width:100%;height:100%;display:block;position:relative;box-sizing:border-box;border-radius:inherit}
+button.dsh-tavern-charCardBody{cursor:pointer}
+button.dsh-tavern-charCardBody:disabled{cursor:default}
 /* overflow:hidden 会裁掉全局 focus 轮廓，内缩到卡内 */
-.dsh-tavern-charCard:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary, #4176e6);outline-offset:-2px}
-.dsh-tavern-charCardCover{position:relative;height:168px;flex:none;overflow:hidden;
+.dsh-tavern-ui button.dsh-tavern-charCardBody:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary, #4176e6);outline-offset:-2px}
+.dsh-tavern-charCardCover{display:block;position:relative;height:168px;flex:none;overflow:hidden;
   background:linear-gradient(135deg,
     var(--tavern-accent-softer, rgba(65,118,230,.07)),
     var(--dsw-alias-bg-layer-3, rgba(128,128,128,.2)))}
 .dsh-tavern-charCardCover>img{width:100%;height:100%;object-fit:cover;display:block;
   transition:transform .3s var(--ds-ease-in-out, ease)}
-.dsh-tavern-charCard:hover .dsh-tavern-charCardCover>img,.dsh-tavern-charCard:focus-visible .dsh-tavern-charCardCover>img{transform:scale(1.04)}
+.dsh-tavern-charCard:hover .dsh-tavern-charCardCover>img,.dsh-tavern-charCardBody:focus-visible .dsh-tavern-charCardCover>img{transform:scale(1.04)}
 .dsh-tavern-charCardInitial{width:100%;height:100%;display:flex;align-items:center;justify-content:center;padding-bottom:30px;
   font-size:46px;font-weight:600;color:var(--tavern-accent-strong, #4176e6);user-select:none}
 /* 名条压在封面底部渐变上；渐变同时压暗图片和浅色兜底封面，明暗主题下白字都可读 */
 .dsh-tavern-charCardBar{position:absolute;left:0;right:0;bottom:0;padding:32px 14px 12px;min-width:0;
   display:flex;flex-direction:column;gap:2px;
   background:linear-gradient(to top, rgba(15,15,15,.82), rgba(15,15,15,0))}
-.dsh-tavern-charCardName{font-size:15px;font-weight:600;line-height:22px;color:#fff;
+.dsh-tavern-charCardName{display:block;font-size:15px;font-weight:600;line-height:22px;color:#fff;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.dsh-tavern-charCardMeta{font-size:12px;line-height:17px;color:rgba(255,255,255,.78);
+.dsh-tavern-charCardMeta{display:block;font-size:12px;line-height:17px;color:rgba(255,255,255,.78);
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.dsh-tavern-charCardActions{position:absolute;top:10px;right:10px;display:flex;gap:4px;opacity:0;
+.dsh-tavern-charCardActions{position:absolute;top:10px;right:10px;z-index:2;display:flex;gap:4px;opacity:.78;
   transition:opacity var(--ds-transition-duration-fast, .1s) var(--ds-ease-in-out, ease)}
+.dsh-tavern-charCard.is-archived .dsh-tavern-charCardActions{opacity:.92}
 .dsh-tavern-charCard:hover .dsh-tavern-charCardActions,.dsh-tavern-charCard:focus-within .dsh-tavern-charCardActions{opacity:1}
 /* 封面上的操作钮：暗底玻璃感，图片与浅色封面上都可读 */
 .dsh-tavern-coverBtn{width:28px;height:28px;padding:6px;border:none;border-radius:999px;cursor:pointer;
@@ -740,7 +744,7 @@ const STYLE = `
 .dsh-tavern-compatibility li>small{overflow-wrap:anywhere;color:var(--dsw-alias-label-secondary);font-size:11px}
 .dsh-tavern-compatibilityNote{margin:0;font-size:13px;line-height:20px;color:var(--dsw-alias-label-secondary)}
 @media (hover:none), (pointer:coarse){
-  .dsh-tavern-charCardActions,.dsh-tavern-speechCopy{opacity:1}
+  .dsh-tavern-charCardActions,.dsh-tavern-charCard.is-archived .dsh-tavern-charCardActions,.dsh-tavern-speechCopy{opacity:1}
   .dsh-tavern-iconBtn,.dsh-tavern-action,.dsh-tavern-hero-swipeBtn{width:40px;height:40px}
 }
 `

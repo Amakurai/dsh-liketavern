@@ -134,7 +134,7 @@ it('角色详情读取失败时保留弹窗和重试入口，恢复后显示真�
   let view!: ReactTestRenderer
   await act(async () => { view = create(<CharactersSection remote={remote} />) })
   mounted.push(view)
-  const card = view.root.findByProps({ className: 'dsh-tavern-charCard' })
+  const card = view.root.findByProps({ className: 'dsh-tavern-charCardBody' })
   await act(async () => card.props.onClick())
   expect(JSON.stringify(view.toJSON())).toContain('角色详情暂时不可用')
   const retry = view.root.findAllByType(Btn).find(button => button.props.children === '重试')

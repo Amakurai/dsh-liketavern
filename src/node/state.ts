@@ -2,6 +2,8 @@
  * TavernState：host 侧运行时中枢。
  * 聚合数据目录、设置、各资产存储与工作区句柄，供 remote 服务、工具与组装管线共用。
  */
+import type { Dirent } from 'node:fs'
+import { readdir } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import { Buffer } from 'node:buffer'
 import { characterEditRevision, jsonEditRevision, personaEditRevision, presetEditRevision, regexEditRevision } from '../state/characterRevision.js'
@@ -10,6 +12,7 @@ import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
 import {CHAT_WORLDBOOK_PATH,parseChatWorldbookFile,encodeChatWorldbooks,plainChatWorldbook} from '../state/chatWorldbooks.js'
 import { characterHelperScripts,characterHelperSettings,helperScriptSettings,parseHelperScriptTrees,type HelperScriptLibrary,type HelperScriptAsset,type HelperScriptTarget,type HelperScriptContext,type HelperScriptCommit,type HelperScriptView,type HelperScriptType } from '../core/helperScripts.js'
 import { helperJson } from '../core/helperRuntime.js'
+import { isRecord } from '../core/guards.js'
 import type { LlmResolvedModelInfo, LlmRuntime } from '@deepseek-ai/dsh-llm'
 import { estimateTokens } from '../core/tokenize.js'
 import { type CharacterCard, type MemoryEntry, type PromptPreset, type RegexRule, type WITimerState, type WorldDelta, type WorldInfoEntry } from '../core/types.js'
@@ -121,10 +124,10 @@ class CharacterNotArchivedError extends RemoteError<'tavern/character-not-archiv
   }
 }
 
-/** 收纳后只允许原会话原 story 更新选项，不允许新绑定绕过活动列表。 */
-class CharacterArchivedError extends RemoteError<'tavern/character-archived'> {
-  constructor() {
-    super('tavern/character-archived', '角色已在收纳箱，不能创建新会话或切换剧情', {})
+/** 收纳后只允许原会话原 story 更新选项，不允许新绑定绕过活动列表、导入会话或修改角色资产。 */
+export class CharacterArchivedError extends RemoteError<'tavern/character-archived'> {
+  constructor(message = '角色已在收纳箱，不能创建新会话或切换剧情') {
+    super('tavern/character-archived', message, {})
   }
 }
 
@@ -195,10 +198,20 @@ function preferredCardMetadata(card: CharacterCard): Record<string, unknown> {
 function attachCharacterBookMetadata(card: CharacterCard, book: NonNullable<CharacterCard['characterBook']>): Record<string, unknown> {
   const metadata = preferredCardMetadata(card)
   const payload = book.raw ?? { name: book.name ?? card.name, entries: book.entries }
-  if (card.spec !== 'chara_card_v1' && metadata.data && typeof metadata.data === 'object' && !Array.isArray(metadata.data)) {
-    return { ...metadata, data: { ...(metadata.data as Record<string, unknown>), character_book: payload } }
+  if (metadata.spec !== 'chara_card_v1' && isRecord(metadata.data)) {
+    return { ...metadata, data: { ...metadata.data, character_book: payload } }
   }
   return { ...metadata, character_book: payload }
+}
+
+/** 元数据已是 V2/V3 包装结构时同步升级顶层 spec，避免 V1 spec 与 V2/V3 raw 失步。 */
+function syncedCardSpec(current: CharacterCard['spec'], metadata: Record<string, unknown>): CharacterCard['spec'] {
+  if ((current === 'chara_card_v1' || current === 'unknown')
+    && (metadata.spec === 'chara_card_v2' || metadata.spec === 'chara_card_v3')
+    && isRecord(metadata.data)) {
+    return metadata.spec
+  }
+  return current
 }
 
 /** RegexScope / RegexTiming 的合法取值（types.ts 只导出类型，取值集合在此守住落盘边界）。 */
@@ -325,7 +338,7 @@ export class TavernState {
    */
   private readonly presetCache = new Map<string, { rev: number; value: PromptPreset | null }>()
   private readonly loreCache = new Map<string, { rev: number; value: WorldInfoEntry[] }>()
-  private readonly cardCache = new Map<string, { tag: string; value: CharacterWorkspace | null }>()
+  private readonly cardCache = new Map<string, { tag: string; value: CharacterWorkspace }>()
   private readonly charLoreCache = new Map<string, { tag: string; value: WorldInfoEntry[] }>()
   private readonly personaCache = new Map<string, { rev: number; value: Persona | null }>()
   private readonly charScriptCache = new Map<string, { rev: number; value: HelperScriptLibrary }>()
@@ -603,19 +616,21 @@ export class TavernState {
   }
 
   async discardUnboundStory(cardId: string, storyId: string, sessionId: string): Promise<void> {
-    await withWorkspaceLock(this.paths.sessions, async () => {
+    assertValidCardId(cardId)
+    const cardRoot = join(this.paths.characters, cardId)
+    await withWorkspaceLock(this.paths.sessions, () => withWorkspaceLock(cardRoot, async () => {
       const binding = await loadBinding(this.paths, sessionId)
       if (binding?.storyId === storyId) return
       // loadBinding 的容错 null 也包含读取失败或损坏；有文件却无法确认归属时保留剧情。
       // rename 已完成而随后的读回暂失败，不能导致刚绑定成功的正文被失败清理删除。
       if (!binding && await new WorkspaceFs(this.paths.sessions, null).exists(basename(sessionFile(this.paths, sessionId)))) return
-      await discardStory(join(this.paths.characters, cardId), storyId, sessionId)
+      await discardStory(cardRoot, storyId, sessionId)
       const key = this.assetFileKey(`${cardId}/${storyId}`)
       this.openingWorkspaces.delete(key)
       this.workspaces.delete(key)
       this.sweptRoots.delete(key)
       this.pendingMemoryCompress.delete(storyId)
-    })
+    }))
   }
 
   async listStories(cardId: string) {
@@ -648,22 +663,66 @@ export class TavernState {
 
   async restoreCharacter(cardId: string): Promise<void> {
     await withWorkspaceLock(this.paths.sessions, () => restoreCharacterOnDisk(this.paths.characters, cardId))
+    // 角色恢复出收纳箱后，因收纳阻塞的原生分支接管允许在下一次读取时重新尝试一次。
+    for (const [sessionId, entry] of [...this.terminalBindingAdoptions.entries()]) {
+      if (!(entry.error instanceof CharacterArchivedError)) continue
+      this.terminalBindingAdoptions.delete(sessionId)
+      if (entry.retryWork && !this.clearedAdoptions.has(sessionId)) {
+        this.bindingAdoptionRetries.set(sessionId, entry.retryWork)
+      }
+    }
+  }
+
+  /** 收纳箱存在性判定（fail-closed：标记文件存在即视为已收纳，即使内容损坏也不放行写操作）。 */
+  async isCharacterArchived(cardId: string): Promise<boolean> {
+    assertValidCardId(cardId)
+    return new WorkspaceFs(join(this.paths.characters, cardId), null).exists(CHARACTER_ARCHIVE_FILE)
+  }
+
+  /**
+   * 面板写入临界区：按 storyRoot → cardRoot 锁序串行化，与 deleteCharacter（sessions → cardRoot）
+   * 互斥且严格遵守全仓 storyRoot → sessions → cardRoot 锁序（无死锁）。
+   * 持有两级锁后再复核磁盘上的 card.json 与 story.json 存在性，阻止与 deleteCharacter 竞态时
+   * 通过 mkdir({ recursive: true }) 复活已删角色/剧情的僵尸目录。
+   */
+  async withPanelWorkspaceLock<T>(
+    cardId: string,
+    storyId: string | undefined,
+    task: (ws: { fs: WorkspaceFs; memory: MemoryStore; deltas: WorldDeltaStore }) => Promise<T>,
+    onMissingCard?: () => Error,
+  ): Promise<T> {
+    assertValidCardId(cardId)
+    const cardRoot = join(this.paths.characters, cardId)
+    const targetRoot = storyId ? storyRoot(cardRoot, storyId) : cardRoot
+    return withWorkspaceLock(targetRoot, () => withWorkspaceLock(cardRoot, async () => {
+      const cardFs = new WorkspaceFs(cardRoot, null)
+      if (!(await cardFs.exists('card.json')) || (await this.loadCharacter(cardId)) === null) {
+        throw onMissingCard ? onMissingCard() : new Error(`角色 ${cardId} 不存在`)
+      }
+      if (storyId) {
+        await readStory(cardRoot, storyId)
+      }
+      const ws = await this.plainWorkspace(cardId, storyId)
+      return task(ws)
+    }))
   }
 
   async loadCharacter(cardId: string): Promise<CharacterWorkspace | null> {
     // 解析缓存：card.json 的全部写路径（saveCharacter / saveCharacterLorebook /
     // deleteCharacterLorebook / deleteCharacter）都 bump card:/charlore: 修订号，tag 变化即失效重读。
+    // 不缓存 null：磁盘上缺失或损坏的 card.json 修复后无需重启进程即可立即恢复读取。
     const cacheKey = this.assetFileKey(cardId)
     const tagOf = () => `${this.assetRevision(`card:${cardId}`)}:${this.assetRevision(`charlore:${cardId}`)}`
     const tag = tagOf()
     const cached = this.cardCache.get(cacheKey)
     if (cached && cached.tag === tag) {
       setLru(this.cardCache, cacheKey, cached, CARD_CACHE_MAX)
-      return cached.value ? (cached.value.cardId === cardId ? cached.value : { ...cached.value, cardId }) : null
+      return cached.value.cardId === cardId ? cached.value : { ...cached.value, cardId }
     }
     const value = await loadCharacter(this.paths.characters, cardId)
     if (tagOf() === tag) {
-      setLru(this.cardCache, cacheKey, { tag, value }, CARD_CACHE_MAX)
+      if (value !== null) setLru(this.cardCache, cacheKey, { tag, value }, CARD_CACHE_MAX)
+      else this.cardCache.delete(cacheKey)
     }
     return value
   }
@@ -725,44 +784,47 @@ export class TavernState {
           salvagedLorebook = await this.salvageLorebook(book.name, book.json)
         }
       }
-      await deleteCharacterFromDisk(this.paths.characters, cardId)
-      closeLedger(cardRoot, { prefix: true })
-      this.bumpAssetRev(`card:${cardId}`)
-      this.bumpAssetRev(`charlore:${cardId}`)
-      // 整卡目录已 rm：以 `${cardId}/` 为前缀的剧情句柄（含 Wal/MemoryStore）与正则缓存
-      // 一并逐出，避免后续缓存命中与进程内存滞留；这不撤销在途调用已持有的句柄。
-      // Windows 的大小写别名指向同一目录，删除请求与已缓存的 cardId 未必同形；
-      // 遗漏别名会让 saveBinding 的锁内存在性检查命中旧卡并重建孤儿剧情。
-      const storageKey = (key: string) => process.platform === 'win32' ? key.toLowerCase() : key
-      const deletedKey = storageKey(cardId)
-      for (const key of [...this.openingWorkspaces.keys()]) {
-        const normalized = storageKey(key)
-        if (normalized === deletedKey || normalized.startsWith(`${deletedKey}/`)) this.openingWorkspaces.delete(key)
-      }
-      for (const key of [...this.workspaces.keys()]) {
-        const normalized = storageKey(key)
-        if (normalized === deletedKey || normalized.startsWith(`${deletedKey}/`)) this.workspaces.delete(key)
-      }
-      for (const key of [...this.sweptRoots]) {
-        if (key === deletedKey || key.startsWith(`${deletedKey}/`)) this.sweptRoots.delete(key)
-      }
-      for (const key of [...this.pendingMemoryCompress]) {
-        if (storageKey(key) === deletedKey) this.pendingMemoryCompress.delete(key)
-      }
-      for (const story of stories) {
-        this.pendingMemoryCompress.delete(story.id)
-      }
-      for (const key of this.cardCache.keys()) {
-        if (storageKey(key) === deletedKey) this.cardCache.delete(key)
-      }
-      for (const key of this.charLoreCache.keys()) {
-        if (storageKey(key) === deletedKey) this.charLoreCache.delete(key)
-      }
-      for (const key of this.cardRegexCache.keys()) {
-        if (storageKey(key) === deletedKey) this.cardRegexCache.delete(key)
-      }
-      for (const key of this.charScriptCache.keys()) {
-        if (storageKey(key) === deletedKey) this.charScriptCache.delete(key)
+      try {
+        await deleteCharacterFromDisk(this.paths.characters, cardId)
+      } finally {
+        closeLedger(cardRoot, { prefix: true })
+        this.bumpAssetRev(`card:${cardId}`)
+        this.bumpAssetRev(`charlore:${cardId}`)
+        // 整卡目录已 rm（或 Windows 部分删除失败）：以 `${cardId}/` 为前缀的剧情句柄（含 Wal/MemoryStore）
+        // 与正则/世界书/脚本缓存一并逐出，避免部分删除失败时在进程内残留陈旧缓存。
+        // Windows 的大小写别名指向同一目录，删除请求与已缓存的 cardId 未必同形；
+        // 遗漏别名会让 saveBinding 的锁内存在性检查命中旧卡并重建孤儿剧情。
+        const storageKey = (key: string) => process.platform === 'win32' ? key.toLowerCase() : key
+        const deletedKey = storageKey(cardId)
+        for (const key of [...this.openingWorkspaces.keys()]) {
+          const normalized = storageKey(key)
+          if (normalized === deletedKey || normalized.startsWith(`${deletedKey}/`)) this.openingWorkspaces.delete(key)
+        }
+        for (const key of [...this.workspaces.keys()]) {
+          const normalized = storageKey(key)
+          if (normalized === deletedKey || normalized.startsWith(`${deletedKey}/`)) this.workspaces.delete(key)
+        }
+        for (const key of [...this.sweptRoots]) {
+          if (key === deletedKey || key.startsWith(`${deletedKey}/`)) this.sweptRoots.delete(key)
+        }
+        for (const key of [...this.pendingMemoryCompress]) {
+          if (storageKey(key) === deletedKey) this.pendingMemoryCompress.delete(key)
+        }
+        for (const story of stories) {
+          this.pendingMemoryCompress.delete(story.id)
+        }
+        for (const key of [...this.cardCache.keys()]) {
+          if (storageKey(key) === deletedKey) this.cardCache.delete(key)
+        }
+        for (const key of [...this.charLoreCache.keys()]) {
+          if (storageKey(key) === deletedKey) this.charLoreCache.delete(key)
+        }
+        for (const key of [...this.cardRegexCache.keys()]) {
+          if (storageKey(key) === deletedKey) this.cardRegexCache.delete(key)
+        }
+        for (const key of [...this.charScriptCache.keys()]) {
+          if (storageKey(key) === deletedKey) this.charScriptCache.delete(key)
+        }
       }
       return { salvagedLorebook }
     }))
@@ -929,10 +991,13 @@ export class TavernState {
       const charWs = await this.loadCharacter(cardId)
       if (!charWs) throw new Error(`角色 ${cardId} 不存在`)
       const fs = this.plainFs(cardId)
+      if (await fs.exists(CHARACTER_ARCHIVE_FILE)) {
+        throw new CharacterArchivedError('角色已在收纳箱，请先恢复后再修改角色资产')
+      }
       const cleaned = withoutEmbeddedCharacterBook(charWs.card)
       // 先完成元数据清洗与 PNG 重嵌计算；坏图会在任何删除/写入前失败，不留下半清理状态。
       const metadata = preferredCardMetadata(cleaned)
-      const next: CharacterCard = { ...cleaned, raw: metadata }
+      const next: CharacterCard = { ...cleaned, spec: syncedCardSpec(cleaned.spec, metadata), raw: metadata }
       const currentPng = await fs.readBytes('card.png')
       const rewrittenPng = currentPng
         ? embedCardInPng(currentPng, metadata, next.spec)
@@ -980,7 +1045,7 @@ export class TavernState {
       const json: unknown = JSON.parse(file)
       const normalized = normalizeBook(json)
       if (!normalized) return null
-      return { name: normalized.name ?? charWs.card.name, json, entryCount: normalized.entries.length }
+      return { name: normalized.name ?? charWs.card.name, json: normalized.raw ?? json, entryCount: normalized.entries.length }
     } catch {
       return null
     }
@@ -1007,29 +1072,43 @@ export class TavernState {
   async saveCharacterLorebook(cardId: string, json: unknown, expectedRevision?: string | null, beforeWrite?:()=>void): Promise<{ name: string; entryCount: number; revision: string }> {
     assertValidCardId(cardId)
     return withWorkspaceLock(join(this.paths.characters, cardId), async () => {
-      const book = normalizeBook(json)
-      if (!book) throw new Error('内嵌世界书缺少合法结构')
       const charWs = await this.loadCharacter(cardId)
       if (!charWs) throw new Error(`角色 ${cardId} 不存在`)
+      const fs = this.plainFs(cardId)
+      if (await fs.exists(CHARACTER_ARCHIVE_FILE)) {
+        throw new CharacterArchivedError('角色已在收纳箱，请先恢复后再修改角色资产')
+      }
+      let book = normalizeBook(json)
+      if (!book) {
+        if (Array.isArray(json) && json.length === 0) {
+          book = { name: charWs.card.name, entries: [], raw: { name: charWs.card.name, entries: [] } }
+        } else if (isRecord(json) && (Array.isArray(json.entries) || isRecord(json.entries))) {
+          const raw = { ...json, name: charWs.card.name }
+          book = { name: charWs.card.name, entries: [], raw }
+        }
+      }
+      if (!book) throw new Error('内嵌世界书缺少合法结构')
+      const storedJson = book.raw ?? json
       if (expectedRevision !== undefined) {
         const current = await this.loadCharacterLorebookRaw(cardId)
         if ((current ? jsonEditRevision(current.json) : null) !== expectedRevision) {
           throw new Error('内嵌世界书已被修改或删除，请保留草稿并重新打开后再保存')
         }
       }
-      const fs = this.plainFs(cardId)
       // 旧卡可能同时含 character_book/lorebook/characterBook/world 等兼容落点；
       // 先统一清除，再只写一个 canonical character_book，避免导出时新旧两本书并存。
       const cleaned = withoutEmbeddedCharacterBook(charWs.card)
       const nextWithoutRaw: CharacterCard = { ...cleaned, characterBook: book }
+      const metadata = attachCharacterBookMetadata(cleaned, book)
       const next: CharacterCard = {
         ...nextWithoutRaw,
-        raw: attachCharacterBookMetadata(cleaned, book),
+        spec: syncedCardSpec(cleaned.spec, metadata),
+        raw: metadata,
       }
       const { pngBytes: _png, ...cardJson } = next
       // 先过存储上限，避免只写出独立世界书而 card.json 被拒绝。
       const cardText = serializeStoredCard(cardJson)
-      const bookText = JSON.stringify(json, null, 2) + '\n'
+      const bookText = JSON.stringify(storedJson, null, 2) + '\n'
       if (Buffer.byteLength(bookText, 'utf8') > MAX_STORED_CARD_JSON_BYTES) {
         throw new Error(`角色内嵌世界书超过存储上限（${MAX_STORED_CARD_JSON_BYTES / 1024 / 1024}MB），未写入`)
       }
@@ -1038,7 +1117,7 @@ export class TavernState {
         await fs.writeText('assets/character-book.json', bookText)
         await fs.writeText('card.json', cardText)
       } finally { this.bumpAssetRev(`charlore:${cardId}`) }
-      return { name: book.name ?? charWs.card.name, entryCount: book.entries.length, revision: jsonEditRevision(json) }
+      return { name: book.name ?? charWs.card.name, entryCount: book.entries.length, revision: jsonEditRevision(storedJson) }
     })
   }
 
@@ -1051,6 +1130,9 @@ export class TavernState {
     return withWorkspaceLock(join(this.paths.characters, cardId), async () => {
       const charWs = await this.loadCharacter(cardId)
       if (!charWs) throw new Error(`角色 ${cardId} 不存在`)
+      if (await this.plainFs(cardId).exists(CHARACTER_ARCHIVE_FILE)) {
+        throw new CharacterArchivedError('角色已在收纳箱，请先恢复后再修改角色资产')
+      }
       // 工作区锁同时覆盖版本比较和写入；旧编辑器不能把新正文覆盖回去。
       if (expectedRevision !== undefined && expectedRevision !== characterEditRevision(charWs.card)) {
         throw new Error('角色已被其他编辑器修改；草稿已保留，请复制草稿后重新打开角色并合并修改')
@@ -1058,8 +1140,12 @@ export class TavernState {
       if (patch.name !== undefined && !patch.name.trim()) throw new Error('角色名不能为空')
       const next = applyCharacterPatch(charWs.card, patch)
       const { pngBytes: _png, ...cardJson } = next
-      await this.plainFs(cardId).writeText('card.json', serializeStoredCard(cardJson))
-      this.bumpAssetRev(`card:${cardId}`)
+      const cardText = serializeStoredCard(cardJson)
+      try {
+        await this.plainFs(cardId).writeText('card.json', cardText)
+      } finally {
+        this.bumpAssetRev(`card:${cardId}`)
+      }
       return { cardId, name: next.name, revision: characterEditRevision(next) }
     })
   }
@@ -1096,17 +1182,21 @@ export class TavernState {
     // 归一化后再次校验预算，确保写出的资产下一次能够直接读取。
     parseHelperScriptTrees(trees)
     return withWorkspaceLock(join(this.paths.characters,cardId),async()=>{
+      const workspace=await this.loadCharacter(cardId)
+      if(!workspace)throw new Error('角色不存在')
+      if(await this.plainFs(cardId).exists(CHARACTER_ARCHIVE_FILE)){
+        throw new CharacterArchivedError('角色已在收纳箱，请先恢复后再修改角色资产')
+      }
       const current=await this.getCharacterHelperScripts(cardId)
       beforeWrite?.()
       if(JSON.stringify(current.trees)===JSON.stringify(trees))return current
       if(current.revision!==revision)throw new Error('脚本库已被其他编辑器修改，请重新读取后合并')
-      const workspace=await this.loadCharacter(cardId)
-      if(!workspace)throw new Error('角色不存在')
       const extensions:Record<string,unknown>={...workspace.card.extensions,tavern_helper:{...characterHelperSettings(workspace.card.extensions),scripts:trees}}
       delete extensions.TavernHelper_scripts
       const {pngBytes:_png,...card}=workspace.card
-      const nextCard={...card,extensions}
-      const cardText=serializeStoredCard({...nextCard,raw:cardToStJson({...nextCard,pngBytes:null})})
+      const nextSpec: CharacterCard['spec'] = card.spec === 'chara_card_v1' || card.spec === 'unknown' ? 'chara_card_v2' : card.spec
+      const raw = cardToStJson({...card,extensions,pngBytes:null})
+      const cardText=serializeStoredCard({...card,spec:nextSpec,extensions,raw})
       beforeWrite?.()
       try{await this.plainFs(cardId).writeText('card.json',cardText)}
       finally{this.bumpAssetRev(`card:${cardId}`)}
@@ -1259,12 +1349,11 @@ export class TavernState {
     return (await handle.fs.readText('journal.md')) ?? ''
   }
 
-  /** 面板保存核对实际读取的正文版本；检查、正文与索引共用剧情锁，内部明确覆盖仍可省略版本。 */
-  async saveJournal(cardId: string, text: string, storyId?: string, expectedRevision?: string | null): Promise<string> {
+  /** 面板保存核对实际读取的正文版本；检查、正文与索引共用剧情/卡锁，内部明确覆盖仍可省略版本。 */
+  async saveJournal(cardId: string, text: string, storyId?: string, expectedRevision?: string | null, onMissingCard?: () => Error): Promise<string> {
     // Markdown 按 UTF-8 落盘；版本与幂等比较须使用同一编码后的正文，而不是无法编码的孤立代理项。
     text = Buffer.from(text, 'utf8').toString('utf8')
-    const { fs } = await this.plainWorkspace(cardId, storyId)
-    return withWorkspaceLock(fs.root, async () => {
+    return this.withPanelWorkspaceLock(cardId, storyId, async ({ fs }) => {
       if (expectedRevision === null) throw new Error('笔记缺少保存版本，请复制草稿并重新读取后合并修改')
       const current = (await fs.readText('journal.md')) ?? ''
       // 正文已落盘而索引重建失败时，同一保存可重试收口；不能让失败回执把自己的新正文变成冲突。
@@ -1274,7 +1363,7 @@ export class TavernState {
       await fs.writeText('journal.md', text)
       await rebuildIndex(fs, estimateTokens)
       return jsonEditRevision(text)
-    })
+    }, onMissingCard)
   }
 
   async getChatLorebook(cardId: string, storyId?: string): Promise<unknown> {
@@ -1337,10 +1426,9 @@ export class TavernState {
     return entries
   }
 
-  async saveChatLorebook(cardId: string, json: unknown, storyId?: string, expectedRevision?: string): Promise<string> {
+  async saveChatLorebook(cardId: string, json: unknown, storyId?: string, expectedRevision?: string, onMissingCard?: () => Error): Promise<string> {
     parseLorebook(json, { source: 'chat', sourceRef: 'chat-lorebook' })
-    const { fs } = await this.plainWorkspace(cardId, storyId)
-    return withWorkspaceLock(fs.root,async()=>{
+    return this.withPanelWorkspaceLock(cardId, storyId, async ({ fs }) => {
       const text=await fs.readText(CHAT_WORLDBOOK_PATH),store=parseChatWorldbookFile(text)
       if (expectedRevision !== undefined && jsonEditRevision(text === null ? { entries: {} } : JSON.parse(text)) !== expectedRevision) {
         throw new Error('聊天世界书已被另一窗口或卡面修改，请保留草稿并重新打开后再保存')
@@ -1350,7 +1438,7 @@ export class TavernState {
       try{await fs.writeText(CHAT_WORLDBOOK_PATH,JSON.stringify(content,null,2)+'\n')}
       finally{this.bumpAssetRev(`chatlore:${cardId}${storyId ? ':' + storyId : ''}`)}
       return jsonEditRevision(content)
-    })
+    }, onMissingCard)
   }
 
   // ── 世界书库 ─────────────────────────────────────────────────────────────
@@ -1915,6 +2003,9 @@ export class TavernState {
     const adoption = this.bindingAdoptions.get(sessionId)
     if (adoption) await adoption
     else {
+      // 终态不可重试错误（如角色已收纳）直接拒绝，不再重复拷贝/删除剧情造成磁盘抖动。
+      const terminal = this.terminalBindingAdoptions.get(sessionId)
+      if (terminal) throw terminal.error
       // 上次失败不是合法未绑定。下一次独立读取只重试一回，并发读共享同一任务；本次失败直接抛出。
       const retry = this.bindingAdoptionRetries.get(sessionId)
       if (retry) await this.trackBindingAdoption(sessionId, retry)
@@ -1925,6 +2016,7 @@ export class TavernState {
   async drainBindingAdoption(sessionId: string): Promise<void> {
     this.clearedAdoptions.add(sessionId)
     this.bindingAdoptionRetries.delete(sessionId)
+    this.terminalBindingAdoptions.delete(sessionId)
     const adoption = this.bindingAdoptions.get(sessionId)
     if (adoption) await adoption
   }
@@ -1940,6 +2032,7 @@ export class TavernState {
 
   private readonly bindingAdoptions = new Map<string, Promise<unknown>>()
   private readonly bindingAdoptionRetries = new Map<string, () => Promise<unknown>>()
+  private readonly terminalBindingAdoptions = new Map<string, { error: Error; retryWork?: () => Promise<unknown> }>()
   private readonly clearedAdoptions = new Set<string>()
 
   /** 登记宿主原生分支的绑定接管；同步登记，使随后任何 loadBinding 都先等它结束。 */
@@ -1948,6 +2041,7 @@ export class TavernState {
     if (pending) return pending as Promise<T>
     this.clearedAdoptions.delete(sessionId)
     this.bindingAdoptionRetries.delete(sessionId)
+    this.terminalBindingAdoptions.delete(sessionId)
     const run = Promise.resolve().then(work)
     const tracked = run.then(value => {
       this.activeTaskPromises.delete(tracked)
@@ -1958,7 +2052,11 @@ export class TavernState {
       if (this.bindingAdoptions.get(sessionId) === tracked) {
         this.bindingAdoptions.delete(sessionId)
         if (!this.clearedAdoptions.has(sessionId)) {
-          this.bindingAdoptionRetries.set(sessionId, work)
+          if (error instanceof CharacterArchivedError) {
+            setLru(this.terminalBindingAdoptions, sessionId, { error, retryWork: work }, CLEARED_ADOPTIONS_MAX)
+          } else {
+            this.bindingAdoptionRetries.set(sessionId, work)
+          }
         }
       }
       throw error
@@ -2032,6 +2130,19 @@ export class TavernState {
     return next
   }
 
+  /** Windows 下将请求中的 cardId 规范化为 characters/ 磁盘上的实际目录拼写，与 listCharacters 保持一致。 */
+  private async resolveCanonicalCardId(cardId: string): Promise<string | null> {
+    let entries: Dirent[]
+    try {
+      entries = await readdir(this.paths.characters, { withFileTypes: true })
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+      throw error
+    }
+    const target = cardId.toLowerCase()
+    return entries.find((entry) => entry.isDirectory() && entry.name.toLowerCase() === target)?.name ?? null
+  }
+
   async saveBinding(
     binding: SessionBinding,
     beforePublish?: (previous: SessionBinding | null, next: SessionBinding) => void,
@@ -2049,6 +2160,11 @@ export class TavernState {
       if (sameCard && existing) binding = { ...binding, cardId: existing.cardId }
       const cardRoot = join(this.paths.characters, binding.cardId)
       return withWorkspaceLock(cardRoot, async () => {
+        if (process.platform === 'win32' && !sameCard) {
+          const canonical = await this.resolveCanonicalCardId(binding.cardId)
+          if (canonical) binding = { ...binding, cardId: canonical }
+        }
+        const resolvedCardRoot = join(this.paths.characters, binding.cardId)
         const ws = await this.loadCharacter(binding.cardId)
         // service 在入队前的存在性检查不能代替这个锁内复核：永久删除可能在
         // 「service 检查通过 → saveBinding 拿到 sessions 锁」之间完成。若继续做快照，
@@ -2056,7 +2172,7 @@ export class TavernState {
         if (!ws) throw new Error(`角色 ${binding.cardId} 不存在`)
         const existingStory = sameCard ? existing?.storyId : undefined
         const requestedStory = binding.storyId ?? existingStory
-        if (await new WorkspaceFs(cardRoot, null).exists(CHARACTER_ARCHIVE_FILE)) {
+        if (await new WorkspaceFs(resolvedCardRoot, null).exists(CHARACTER_ARCHIVE_FILE)) {
           // 已归档卡只允许原 session 在原 story 上改预设/人设/开场白下标等绑定字段。
           // 新 session、换卡命中收纳卡、显式切到另一 story 均拒绝；不传 storyId 但能
           // 从同一既有绑定确定唯一原 story 时，等价于更新原 story，不会新建。
@@ -2068,17 +2184,19 @@ export class TavernState {
         let createdStory = false
         if (!id) {
           id = newStoryId()
-          await snapshotStory({ cardRoot, sourceRoot: cardRoot, id, sessionId: binding.sessionId })
+          await snapshotStory({ cardRoot: resolvedCardRoot, sourceRoot: resolvedCardRoot, id, sessionId: binding.sessionId })
           createdStory = true
         }
         try {
-          const story = await readStory(cardRoot, id)
+          const story = await readStory(resolvedCardRoot, id)
           if (story.sessionId !== binding.sessionId) throw new Error('剧情状态属于另一会话，必须通过分支快照继承')
           const next = { ...binding, storyId: id, cardName: ws.card.name }
           // 全部归属校验通过后才通知运行时；同步回调在实际发布之前取消旧请求，不能留下落盘后的异步发信窗口。
           beforePublish?.(existing, next)
           this.pendingRuntimeClear.delete(binding.sessionId)
           await saveBinding(this.paths, next)
+          this.terminalBindingAdoptions.delete(next.sessionId)
+          this.bindingAdoptionRetries.delete(next.sessionId)
           try { afterPublish?.(existing, next) } catch { /* 绑定已落盘，忽略旧租约同步错误 */ }
           revokeStaleBindingHelperFrames(this, next.sessionId, next)
         } catch (error) {
@@ -2265,6 +2383,7 @@ export class TavernState {
     const adoption = this.bindingAdoptions.get(sessionId)
     if (adoption && !this.activeTaskPromises.has(adoption)) this.bindingAdoptions.delete(sessionId)
     this.bindingAdoptionRetries.delete(sessionId)
+    this.terminalBindingAdoptions.delete(sessionId)
   }
 
   /** 清掉会话绑定文件与运行期内存状态；空白新对话复用旧会话时用来去掉上次留下的角色卡与状态。 */

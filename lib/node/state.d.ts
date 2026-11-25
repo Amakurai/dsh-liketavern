@@ -35,6 +35,10 @@ export declare class CharacterInUseError extends RemoteError<'tavern/character-i
     readonly references: CharacterReferences;
     constructor(references: CharacterReferences);
 }
+/** 收纳后只允许原会话原 story 更新选项，不允许新绑定绕过活动列表、导入会话或修改角色资产。 */
+export declare class CharacterArchivedError extends RemoteError<'tavern/character-archived'> {
+    constructor(message?: string);
+}
 /** 规范化共享资产文件名：避免空串、相对目录、尾点/空白、Windows 保留设备名与超长 UTF-8 文件名。 */
 export declare function safeAssetFileId(name: string): string;
 interface WorkspaceHandle {
@@ -242,6 +246,19 @@ export declare class TavernState {
     listArchivedCharacters(): Promise<ArchivedCharacterSummary[]>;
     archiveCharacter(cardId: string): Promise<void>;
     restoreCharacter(cardId: string): Promise<void>;
+    /** 收纳箱存在性判定（fail-closed：标记文件存在即视为已收纳，即使内容损坏也不放行写操作）。 */
+    isCharacterArchived(cardId: string): Promise<boolean>;
+    /**
+     * 面板写入临界区：按 storyRoot → cardRoot 锁序串行化，与 deleteCharacter（sessions → cardRoot）
+     * 互斥且严格遵守全仓 storyRoot → sessions → cardRoot 锁序（无死锁）。
+     * 持有两级锁后再复核磁盘上的 card.json 与 story.json 存在性，阻止与 deleteCharacter 竞态时
+     * 通过 mkdir({ recursive: true }) 复活已删角色/剧情的僵尸目录。
+     */
+    withPanelWorkspaceLock<T>(cardId: string, storyId: string | undefined, task: (ws: {
+        fs: WorkspaceFs;
+        memory: MemoryStore;
+        deltas: WorldDeltaStore;
+    }) => Promise<T>, onMissingCard?: () => Error): Promise<T>;
     loadCharacter(cardId: string): Promise<CharacterWorkspace | null>;
     /**
      * 永久删除前的只读预检：列出角色的全部剧情并标注是否仍被会话绑定。
@@ -330,8 +347,8 @@ export declare class TavernState {
     }): Promise<HelperScriptContext>;
     commitSessionHelperScripts(sessionId: string, request: HelperScriptCommit, beforeWrite?: (binding: SessionBinding) => void): Promise<HelperScriptView>;
     getJournal(cardId: string, storyId?: string): Promise<string>;
-    /** 面板保存核对实际读取的正文版本；检查、正文与索引共用剧情锁，内部明确覆盖仍可省略版本。 */
-    saveJournal(cardId: string, text: string, storyId?: string, expectedRevision?: string | null): Promise<string>;
+    /** 面板保存核对实际读取的正文版本；检查、正文与索引共用剧情/卡锁，内部明确覆盖仍可省略版本。 */
+    saveJournal(cardId: string, text: string, storyId?: string, expectedRevision?: string | null, onMissingCard?: () => Error): Promise<string>;
     getChatLorebook(cardId: string, storyId?: string): Promise<unknown>;
     invalidateChatLorebook(cardId: string, storyId: string): void;
     /**
@@ -339,7 +356,7 @@ export declare class TavernState {
      * 损坏文件不进缓存，直接抛出供上层决定报错或降级。
      */
     loadChatLorebookEntries(cardId: string, storyId?: string, existingHandle?: WorkspaceHandle): Promise<WorldInfoEntry[]>;
-    saveChatLorebook(cardId: string, json: unknown, storyId?: string, expectedRevision?: string): Promise<string>;
+    saveChatLorebook(cardId: string, json: unknown, storyId?: string, expectedRevision?: string, onMissingCard?: () => Error): Promise<string>;
     listLorebooks(): Promise<string[]>;
     /** 读取世界书原始 JSON（供设置面板编辑）；不存在或损坏返回 null。 */
     loadLorebookJson(name: string): Promise<unknown | null>;
@@ -421,10 +438,13 @@ export declare class TavernState {
     loadBindingUnwaited(sessionId: string, strictRead?: boolean, personaSelection?: 'resolve' | 'preserve' | 'resolve-tolerant'): Promise<SessionBinding | null>;
     private readonly bindingAdoptions;
     private readonly bindingAdoptionRetries;
+    private readonly terminalBindingAdoptions;
     private readonly clearedAdoptions;
     /** 登记宿主原生分支的绑定接管；同步登记，使随后任何 loadBinding 都先等它结束。 */
     trackBindingAdoption<T>(sessionId: string, work: () => Promise<T>): Promise<T>;
     private loadBindingNow;
+    /** Windows 下将请求中的 cardId 规范化为 characters/ 磁盘上的实际目录拼写，与 listCharacters 保持一致。 */
+    private resolveCanonicalCardId;
     saveBinding(binding: SessionBinding, beforePublish?: (previous: SessionBinding | null, next: SessionBinding) => void, afterPublish?: (previous: SessionBinding | null, next: SessionBinding) => void): Promise<void>;
     /**
      * 绑定不变时复用第一次 standing，避免组装抖动打穿 KV。钉位按会话 × 生成场景（standingPinKey）。

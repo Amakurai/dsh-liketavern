@@ -26,6 +26,13 @@ export function ScriptSettings({remote}:{remote:TavernRemote}) {
   const t=useT()
   const runtimes=useSyncExternalStore(scriptStatusStore.subscribe,scriptStatusStore.getSnapshot,scriptStatusStore.getSnapshot)
   const characters=useLoader(()=>remote.listCharacters({}),[])
+  // 已收纳角色脚本库只读，不放进下方编辑选择器；仅用于解析运行中会话的角色显示名。
+  const archivedCharacters=useLoader(
+    ()=>typeof remote.listArchivedCharacters==='function'
+      ?remote.listArchivedCharacters({}).then(r=>r.ok?r:{ok:true as const,value:{items:[]}},()=>({ok:true as const,value:{items:[]}}))
+      :Promise.resolve({ok:true as const,value:{items:[]}}),
+    [],
+  )
   const presets=useLoader(()=>remote.listPresets({}),[])
   const [cardId,setCardId]=useState(''),[presetId,setPresetId]=useState('')
   const [editing,setEditing]=useState<HelperScriptAsset|null>(null)
@@ -43,13 +50,20 @@ export function ScriptSettings({remote}:{remote:TavernRemote}) {
   }
   const target=editing?.target
   const editorLabel=target?.type==='character'&&characters.state.status==='ready'?characters.state.value.items.find(card=>card.cardId===target.cardId)?.name:target?.type==='preset'&&presets.state.status==='ready'?presets.state.value.items.find(preset=>preset.id===target.presetId)?.name:undefined
+  const runtimeCharacterName=(runtimeCardId:string)=>{
+    const active=characters.state.status==='ready'?characters.state.value.items.find(card=>card.cardId===runtimeCardId):undefined
+    if(active)return active.name
+    const archived=archivedCharacters.state.status==='ready'?archivedCharacters.state.value.items.find(card=>card.cardId===runtimeCardId):undefined
+    if(archived)return t('characters.archivedName',{name:archived.name})
+    return t('settings.scripts.current')
+  }
   const action=(type:HelperScriptTarget['type'])=>t(openingType===type?'settings.scripts.loading':'settings.scripts.open')
   return <Section title={t('settings.sub.scripts')} description={t('settings.scripts.desc')}>
     <section className="dsh-tavern-scriptRuntime" aria-label={t('settings.scripts.runtime')}>
       <h4>{t('settings.scripts.runtime')}</h4>
       {!runtimes.length&&<Muted>{t('settings.scripts.noRuntime')}</Muted>}
       {runtimes.map(runtime=><div key={runtime.sessionId}>
-        <strong>{characters.state.status==='ready'?characters.state.value.items.find(card=>card.cardId===runtime.cardId)?.name??t('settings.scripts.current'):t('settings.scripts.current')}</strong>
+        <strong>{runtimeCharacterName(runtime.cardId)}</strong>
         <Muted>{t(RUNTIME_STATE_KEYS[runtime.state])}</Muted><Err message={runtime.error??null}/>
         {runtime.scripts.some(script=>script.native)&&<Muted>{t(runtime.nativeMvu?'settings.scripts.nativeOn':runtime.mvuFollow?'settings.scripts.nativeFollow':'settings.scripts.nativeOff')}</Muted>}
         {runtime.scripts.some(script=>script.native)&&!runtime.nativeMvu&&runtime.state!=='disabled'&&<NativeMvuEnable sessionId={runtime.sessionId}/>}

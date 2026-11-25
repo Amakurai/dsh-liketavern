@@ -29,7 +29,7 @@ import { disableInteractiveParts, splitTemplateDisplay, TEMPLATE_DISPLAY_PARTS_V
 import { expandIdentityMacros } from '../core/macros.js'
 import { chatPickSeed } from '../core/binding.js'
 import { DEFAULT_USER_NAME } from '../core/persona.js'
-import { cardGreetingVariants, isTavernGreetingEvent } from '../core/greetingLog.js'
+import { activeGreetingIndex, cardGreetingVariants, isTavernGreetingEvent } from '../core/greetingLog.js'
 import type { MemoryEntry, PromptPreset } from '../core/types.js'
 import { exportLorebook, mergeDeltasForExport, parseLorebook } from '../state/lorebook.js'
 import { parseStoredPreset, parseStPreset } from '../state/presetStore.js'
@@ -63,7 +63,7 @@ import {abandonHelperMvu} from './helperMvuAbandon.js'
 import {enableHelperMvu} from './helperMvuEnable.js'
 import {getHelperEventState} from './helperEventState.js'
 import {openHelperFrame,closeHelperFrame,helperFrameWriteGuard} from './helperFrameLease.js'
-import type { TavernState } from './state.js'
+import { CharacterArchivedError, type TavernState } from './state.js'
 import type { RenderedOutput, TavernMethodResults,TavernMethodRequests } from '../remote.js'
 import { deleteEditorDraft, getEditorDraft, saveEditorDraft } from './editorDrafts.js'
 import { createPluginAboutReader, type PluginAboutReader } from './pluginAbout.js'
@@ -251,14 +251,17 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
   }
 
   async deleteCharacter(request: { cardId: string; discardStoryIds?: string[] }): Promise<TavernMethodResults['deleteCharacter']> {
-    const { salvagedLorebook } = await this.state.deleteCharacter(request.cardId, { discardStoryIds: request.discardStoryIds })
-    const deletedKey = process.platform === 'win32' ? request.cardId.toLowerCase() : request.cardId
-    for (const key of [...this.avatarCache.keys()]) {
-      if ((process.platform === 'win32' ? key.toLowerCase() : key) === deletedKey) {
-        this.avatarCache.delete(key)
+    try {
+      const { salvagedLorebook } = await this.state.deleteCharacter(request.cardId, { discardStoryIds: request.discardStoryIds })
+      return { deleted: true, salvagedLorebook }
+    } finally {
+      const deletedKey = process.platform === 'win32' ? request.cardId.toLowerCase() : request.cardId
+      for (const key of [...this.avatarCache.keys()]) {
+        if ((process.platform === 'win32' ? key.toLowerCase() : key) === deletedKey) {
+          this.avatarCache.delete(key)
+        }
       }
     }
-    return { deleted: true, salvagedLorebook }
   }
 
   async getCharacterDetail(request: { cardId: string }): Promise<TavernMethodResults['getCharacterDetail']> {
@@ -329,6 +332,7 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
         depthPrompt: request.depthPrompt,
       }, request.expectedRevision)
     } catch (error) {
+      if (error instanceof CharacterArchivedError) throw error
       throw new FloorError('invalid-card', error instanceof Error ? error.message : String(error))
     }
   }
@@ -442,7 +446,13 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
     if ((await this.state.loadCharacter(request.cardId)) === null) {
       throw new FloorError('card-not-found', `角色 ${request.cardId} 不存在`)
     }
-    const revision = await this.state.saveChatLorebook(request.cardId, request.json, request.storyId, request.expectedRevision ?? jsonEditRevision({ entries: {} }))
+    const revision = await this.state.saveChatLorebook(
+      request.cardId,
+      request.json,
+      request.storyId,
+      request.expectedRevision ?? jsonEditRevision({ entries: {} }),
+      () => new FloorError('card-not-found', `角色 ${request.cardId} 不存在`),
+    )
     return { saved: true, revision }
   }
 
@@ -455,10 +465,13 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
   }
 
   async saveJournal(request: TavernMethodRequests['saveJournal']): Promise<TavernMethodResults['saveJournal']> {
-    if ((await this.state.loadCharacter(request.cardId)) === null) {
-      throw new FloorError('card-not-found', `角色 ${request.cardId} 不存在`)
-    }
-    const revision = await this.state.saveJournal(request.cardId, request.text, request.storyId, request.expectedRevision ?? null)
+    const revision = await this.state.saveJournal(
+      request.cardId,
+      request.text,
+      request.storyId,
+      request.expectedRevision ?? null,
+      () => new FloorError('card-not-found', `角色 ${request.cardId} 不存在`),
+    )
     return { saved: true, revision }
   }
 
@@ -761,7 +774,7 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
         this.state.resolvePersona(current.personaId),
         this.state.storyWorkspace(current.cardId, current.storyId),
       ])
-      const names = { char: ws ? characterPromptName(ws.card) : 'Assistant', user: persona?.name ?? DEFAULT_USER_NAME }
+      const names = { char: ws ? characterPromptName(ws.card) : 'Assistant', user: persona?.name.trim() || DEFAULT_USER_NAME }
       const greetings = (ws ? cardGreetingVariants(ws.card.firstMes, ws.card.alternateGreetings) : []).map((g) =>
         expandIdentityMacros(g, names),
       )
@@ -1064,7 +1077,7 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
       interactiveCards: settings.interactiveCards,
       whitelist,
       greetings,
-      greetingIndex: binding.greetingIndex,
+      greetingIndex: activeGreetingIndex(binding.greetingIndex, greetings.length),
       canSwipeGreeting,
       userName: names.user,
       characterName: names.char,
@@ -1207,13 +1220,9 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
   }
 
   async saveMemory(request: { cardId: string; storyId?: string; id?: string; body: string; tags?: string[]; keys?: string[] }): Promise<TavernMethodResults['saveMemory']> {
-    if (!request.storyId && (await this.state.loadCharacter(request.cardId)) === null) {
-      throw new FloorError('card-not-found', `角色 ${request.cardId} 不存在`)
-    }
-    // 面板/服务层非会话写路径一律走 plainWorkspace（floor 恒 null，绝不记 WAL）：
-    // 生成进行中的面板编辑若走携带楼层的实例，会被记进当前楼层 WAL、回退时静默改回旧值。
-    const ws = await this.state.plainWorkspace(request.cardId, request.storyId)
-    return withWorkspaceLock(ws.fs.root, async () => {
+    // 面板/服务层非会话写路径一律经 withPanelWorkspaceLock（storyRoot → cardRoot 锁序，plainWorkspace 绝不记 WAL）：
+    // 锁内复核 card.json/story.json 存在性，防止与 deleteCharacter 竞态时重建已删目录。
+    return this.state.withPanelWorkspaceLock(request.cardId, request.storyId, async (ws) => {
       let entry: MemoryEntry | null
       if (request.id) {
         entry = await ws.memory.update(
@@ -1227,16 +1236,12 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
       }
       await rebuildIndex(ws.fs, estimateTokens)
       return { id: entry.id }
-    })
+    }, () => new FloorError('card-not-found', `角色 ${request.cardId} 不存在`))
   }
 
   async deleteMemory(request: { cardId: string; storyId?: string; id: string }): Promise<TavernMethodResults['deleteMemory']> {
-    if (!request.storyId && (await this.state.loadCharacter(request.cardId)) === null) {
-      throw new FloorError('card-not-found', `角色 ${request.cardId} 不存在`)
-    }
-    // 面板写路径走 plainWorkspace（理由同 saveMemory）。
-    const ws = await this.state.plainWorkspace(request.cardId, request.storyId)
-    return withWorkspaceLock(ws.fs.root, async () => {
+    // 面板写路径走 withPanelWorkspaceLock（理由同 saveMemory）。
+    return this.state.withPanelWorkspaceLock(request.cardId, request.storyId, async (ws) => {
       const deleted = await ws.memory.delete(request.id)
       if (deleted) {
         await rebuildIndex(ws.fs, estimateTokens)
@@ -1249,7 +1254,7 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
         }
       }
       return { deleted }
-    })
+    }, () => new FloorError('card-not-found', `角色 ${request.cardId} 不存在`))
   }
 
   /** 无 LLM 的确定性归并：原文逐条保留，只减少条目数，不宣称减少 token。 */
@@ -1269,12 +1274,8 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
   }
 
   async compressMemories(request: { cardId: string; storyId?: string }): Promise<TavernMethodResults['compressMemories']> {
-    if (!request.storyId && (await this.state.loadCharacter(request.cardId)) === null) {
-      throw new FloorError('card-not-found', `角色 ${request.cardId} 不存在`)
-    }
-    // 面板写路径走 plainWorkspace（理由同 saveMemory）。
-    const ws = await this.state.plainWorkspace(request.cardId, request.storyId)
-    return withWorkspaceLock(ws.fs.root, async () => {
+    // 面板写路径走 withPanelWorkspaceLock（理由同 saveMemory）。
+    return this.state.withPanelWorkspaceLock(request.cardId, request.storyId, async (ws) => {
       const batch = await ws.memory.oldest(this.state.config.memory.compressBatch)
       if (batch.length < 2) return { merged: 0 }
       const merged = batch.map((b, i) => `${i + 1}. ${b.body}`).join('\n')
@@ -1291,7 +1292,7 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
         }
       }
       return { merged: count }
-    })
+    }, () => new FloorError('card-not-found', `角色 ${request.cardId} 不存在`))
   }
 
   // ── 世界状态 ──────────────────────────────────────────────────────────────
@@ -1302,16 +1303,12 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
   }
 
   async revokeWorldDelta(request: { cardId: string; storyId?: string; id: string }): Promise<TavernMethodResults['revokeWorldDelta']> {
-    if (!request.storyId && (await this.state.loadCharacter(request.cardId)) === null) {
-      throw new FloorError('card-not-found', `角色 ${request.cardId} 不存在`)
-    }
-    // 面板写路径走 plainWorkspace（理由同 saveMemory）。
-    const ws = await this.state.plainWorkspace(request.cardId, request.storyId)
-    return withWorkspaceLock(ws.fs.root, async () => {
+    // 面板写路径走 withPanelWorkspaceLock（理由同 saveMemory）。
+    return this.state.withPanelWorkspaceLock(request.cardId, request.storyId, async (ws) => {
       const revoked = await ws.deltas.revoke(request.id)
       if (revoked) await rebuildIndex(ws.fs, estimateTokens)
       return { revoked }
-    })
+    }, () => new FloorError('card-not-found', `角色 ${request.cardId} 不存在`))
   }
 
   async addWorldDelta(request: {
@@ -1323,12 +1320,8 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
     order?: number
   }): Promise<TavernMethodResults['addWorldDelta']> {
     if (!request.content?.trim()) throw new FloorError('invalid-delta', '世界状态内容不能为空')
-    if ((await this.state.loadCharacter(request.cardId)) === null) {
-      throw new FloorError('card-not-found', `角色 ${request.cardId} 不存在`)
-    }
-    // 面板写路径走 plainWorkspace（理由同 saveMemory）。
-    const ws = await this.state.plainWorkspace(request.cardId, request.storyId)
-    return withWorkspaceLock(ws.fs.root, async () => {
+    // 面板写路径走 withPanelWorkspaceLock（理由同 saveMemory）。
+    return this.state.withPanelWorkspaceLock(request.cardId, request.storyId, async (ws) => {
       const delta = await ws.deltas.append({
         type: request.type,
         ref: request.ref ?? null,
@@ -1340,7 +1333,7 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
       })
       await rebuildIndex(ws.fs, estimateTokens)
       return { id: delta.id }
-    })
+    }, () => new FloorError('card-not-found', `角色 ${request.cardId} 不存在`))
   }
 
   async exportMergedLorebook(request: { cardId: string; storyId?: string }): Promise<TavernMethodResults['exportMergedLorebook']> {

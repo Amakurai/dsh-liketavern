@@ -4,6 +4,7 @@ interface MemorySectionProps {
     initialContext?: {
         cardId: string;
         storyId: string;
+        cardName?: string;
     };
     initialTab?: 'memory' | 'delta' | 'journal';
 }

@@ -8,7 +8,7 @@ import { Session, SessionLogOffset } from '@deepseek-ai/dsh-session'
 import { WorkspaceFs } from '../state/workspaceFs.js'
 import { Wal } from '../state/wal.js'
 import { storyRoot } from '../state/story.js'
-import { loadCharacter } from '../state/workspace.js'
+import { CHARACTER_ARCHIVE_FILE, loadCharacter } from '../state/workspace.js'
 import { withWorkspaceLock } from '../state/workspaceLock.js'
 import { atomicWrite, sweepOrphanTemps } from '../state/atomicWrite.js'
 import { renameWithRetry } from '../state/rename.js'
@@ -19,7 +19,7 @@ import { assertDirectory, boundedBytes, boundedJson, type DirectoryCheckOptions 
 import { sessionArchiveMarkerPath } from './sessionArchiveMarker.js'
 import { assertArchiveWalComplete, assertWalLineageComplete } from './sessionArchiveWal.js'
 import { parseSessionArchive, SESSION_ARCHIVE_MAX_BYTES, type SessionArchiveFile } from './sessionArchiveFormat.js'
-import { TavernState } from './state.js'
+import { CharacterArchivedError, TavernState } from './state.js'
 
 interface ImportWorkspace { id: string; path: string; attachSession(id: Session['id']): Promise<void> }
 interface ImportWorkspaceRegistry { list(): ImportWorkspace[] }
@@ -131,6 +131,9 @@ export async function importSessionArchive(ctx: Context, state: TavernState, inp
       if ((ctx.sessions.get(binding.sessionId as Session['id']) || existingSession) && !retry) throw new Error('目标会话已存在，不能覆盖')
       if (ctx.sessions.get(binding.sessionId as Session['id'])) throw new Error('目标会话正在运行，不能导入')
       const cardExists = await present(cardRoot)
+      if (cardExists && await new WorkspaceFs(cardRoot, null).exists(CHARACTER_ARCHIVE_FILE)) {
+        throw new CharacterArchivedError('角色已在收纳箱，请先恢复后再导入会话')
+      }
       if (cardExists && !(await sameFiles(cardRoot, card, await cardFiles(cardRoot), dirCheck))) throw new Error('同 ID 的角色资产不同，不能覆盖')
       if (await present(story)) {
         if (!retry || !(await sameFiles(story, storyFiles, await new WorkspaceFs(story, null).list('', { rejectLinks: true }), dirCheck))) throw new Error('目标剧情已存在，不能覆盖')

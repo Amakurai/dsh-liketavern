@@ -20,6 +20,7 @@ export function CardDataSettings({remote,sessions}:{remote:TavernRemote;sessions
   const t=useT()
   const [cardId,setCardId]=useDraftState('card-data:card','')
   const [storyId,setStoryId]=useDraftState('card-data:story','')
+  const [prefilledCardName,setPrefilledCardName]=useState('')
   const cardRestored=useDraftRestored('card-data:card')
   const storyRestored=useDraftRestored('card-data:story')
   const activeSessionId=currentTavernSession()
@@ -31,21 +32,44 @@ export function CardDataSettings({remote,sessions}:{remote:TavernRemote;sessions
       if(!alive)return
       prefilled.current=true
       if(!r.ok||!r.value.binding?.cardId)return
+      if(r.value.binding.cardName)setPrefilledCardName(r.value.binding.cardName)
       setCardId(prev=>prev||r.value.binding!.cardId)
       if(r.value.binding.storyId)setStoryId(prev=>prev||r.value.binding!.storyId!)
     }).catch(()=>{})
     return()=>{alive=false}
   },[remote,cardRestored,storyRestored,cardId,activeSessionId,setCardId,setStoryId])
-  const chars=useLoader(()=>remote.listCharacters({}),[])
+  // 同时加载活跃与已收纳角色，确保已收纳角色仍显示卡名并可检查/导出剧情数据。
+  const chars=useLoader(async()=>{
+    const [active,archived]=await Promise.all([
+      remote.listCharacters({}),
+      typeof remote.listArchivedCharacters==='function'
+        ?remote.listArchivedCharacters({}).catch(()=>null)
+        :Promise.resolve(null),
+    ])
+    if(!active.ok)return active
+    const activeIds=new Set(active.value.items.map(item=>item.cardId))
+    const archivedItems=archived&&archived.ok?archived.value.items.filter(item=>!activeIds.has(item.cardId)):[]
+    return {ok:true as const,value:{active:active.value.items,archived:archivedItems}}
+  },[remote])
   const stories=useLoader(()=>remote.listStories({cardId}),[cardId],Boolean(cardId))
   const items=stories.state.status==='ready'?stories.state.value.items:[]
   const story=items.find(item=>item.id===storyId)
+  const characterOptions=[
+    {value:'',label:t('settings.cards.variableChoose')},
+    ...(chars.state.status==='ready'?[
+      ...chars.state.value.active.map(item=>({value:item.cardId,label:item.name})),
+      ...chars.state.value.archived.map(item=>({value:item.cardId,label:t('characters.archivedName',{name:item.name})})),
+    ]:[]),
+  ]
+  if(cardId&&!characterOptions.some(option=>option.value===cardId)){
+    characterOptions.push({value:cardId,label:prefilledCardName||t('chip.characterFallback')})
+  }
   return <Section title={t('speech.cardDataTitle')} description={t('settings.cards.variablesDesc')}>
     <DraftScope>{request=><>
       <SettingsRow title={t('settings.cards.variableCharacter')}><Select value={cardId} title={t('settings.cards.variableCharacter')}
         disabled={chars.state.status!=='ready'}
-        options={[{value:'',label:t('settings.cards.variableChoose')},...(chars.state.status==='ready'?chars.state.value.items.map(item=>({value:item.cardId,label:item.name})):[])]}
-        onChange={value=>request(()=>{setCardId(value);setStoryId('')})}/></SettingsRow>
+        options={characterOptions}
+        onChange={value=>request(()=>{setPrefilledCardName('');setCardId(value);setStoryId('')})}/></SettingsRow>
       <SettingsRow title={t('memory.story')}><Select value={storyId} title={t('memory.story')} disabled={!cardId||stories.state.status!=='ready'}
         options={[{value:'',label:t('settings.cards.variableChoose')},...items.map((item,index)=>({value:item.id,label:t(activeSessionId&&item.sessionId===activeSessionId?'memory.storyLabelCurrent':'memory.storyLabel',{index:index+1,date:new Date(item.createdAt).toLocaleString()})}))]}
         onChange={value=>request(()=>setStoryId(value))}/></SettingsRow>

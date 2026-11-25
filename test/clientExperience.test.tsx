@@ -166,7 +166,7 @@ describe('编辑草稿保护', () => {
     const remote = { listCharacters: async () => ok({ items: [summary(card.cardId, card.name)] }), getCharacterDetail: async () => ok(card),
       getAvatar: async () => ok({ dataUrl: null }), saveCharacter } as unknown as TavernRemote
     const view = await render(<CharactersSection remote={remote} />)
-    await act(async () => view.root.findByProps({ className: 'dsh-tavern-charCard' }).props.onClick())
+    await act(async () => view.root.findByProps({ className: 'dsh-tavern-charCardBody' }).props.onClick())
     const greeting = view.root.findAllByType('textarea').find((n) => n.props.value === '第一段\n第二段')!
     await act(async () => greeting.props.onChange({ target: { value: '新的第一段\n新的第二段' } }))
     await act(async () => button(view, '保存').props.onClick())
@@ -190,7 +190,7 @@ describe('编辑草稿保护', () => {
     const remote = { listCharacters: async () => ok({ items: [summary(card.cardId, card.name)] }), getCharacterDetail,
       getAvatar: async () => ok({ dataUrl: null }), saveCharacter } as unknown as TavernRemote
     const view = await render(<CharactersSection remote={remote} />)
-    await act(async () => view.root.findByProps({ className: 'dsh-tavern-charCard' }).props.onClick())
+    await act(async () => view.root.findByProps({ className: 'dsh-tavern-charCardBody' }).props.onClick())
     // 首次加载落地（冲刷全部挂起的详情请求，等待 loading → ready 状态更新）。
     const flushReloads = () => { for (const resolve of pendingReloads.splice(0)) resolve(ok(serverCard)) }
     const settle = async () => { await act(async () => { flushReloads(); await Promise.resolve(); await Promise.resolve(); await Promise.resolve() }) }
@@ -223,7 +223,7 @@ describe('编辑草稿保护', () => {
     } as unknown as TavernRemote
     const view = await render(<CharactersSection remote={remote}/>)
     try {
-      await act(async () => view.root.findByProps({ className: 'dsh-tavern-charCard' }).props.onClick())
+      await act(async () => view.root.findByProps({ className: 'dsh-tavern-charCardBody' }).props.onClick())
       const greeting = (value: string) => view.root.findAllByType('textarea').find(item => item.props.value === value)!
       await act(async () => greeting('第一段\n第二段').props.onChange({ target: { value: '已保存版本' } }))
       await act(async () => button(view, '保存').props.onClick())
@@ -479,7 +479,7 @@ it('审查修复回归：缺少角色版本时保留编辑，不发送无条件�
   const remote = { listCharacters: async () => ok({ items: [summary(legacy.cardId, legacy.name)] }),
     getCharacterDetail: async () => ok(legacy), getAvatar: async () => ok({ dataUrl: null }), saveCharacter } as unknown as TavernRemote
   const view = await render(<CharactersSection remote={remote} />)
-  await act(async () => view.root.findByProps({ className: 'dsh-tavern-charCard' }).props.onClick())
+  await act(async () => view.root.findByProps({ className: 'dsh-tavern-charCardBody' }).props.onClick())
   await act(async () => view.root.findAllByType('textarea')[0]!.props.onChange({ target: { value: '旧版草稿的正文' } }))
   await act(async () => button(view, '保存').props.onClick())
   expect(saveCharacter).not.toHaveBeenCalled()

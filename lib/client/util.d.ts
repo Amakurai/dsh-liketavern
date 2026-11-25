@@ -147,7 +147,7 @@ export declare function useToast(): {
     show: (text: string) => void;
     node: import("react").JSX.Element | null;
 };
-/** 让卡片等元素可键盘触发（Enter/Space）；用于 .dsh-tavern-charCard / .dsh-tavern-tile，其悬停样式由各自规则提供。 */
+/** 让卡片等元素可键盘触发（Enter/Space）；用于 .dsh-tavern-tile，其悬停样式由各自规则提供。 */
 export declare function clickableProps(onClick: () => void): {
     role: string;
     tabIndex: number;
@@ -218,14 +218,16 @@ export declare function NumInput(props: {
     value: number;
     onChange: (v: number) => void;
     step?: string;
-    width?: number;
+    width?: number | string;
+    style?: CSSProperties;
 }): import("react").JSX.Element;
 /** 可空数字输入（null ↔ 空串）：保留未完成输入与中间态文本，失焦时收敛到有效值，外部重置即时同步。 */
 export declare function NullableNumInput(props: {
     value: number | null;
     onChange: (v: number | null) => void;
     step?: string;
-    width?: number;
+    width?: number | string;
+    style?: CSSProperties;
 }): import("react").JSX.Element;
 /** 以逗号或换行分隔的字符串列表。全角逗号与半角逗号等价，空项忽略。 */
 export declare function splitListText(text: string): string[];

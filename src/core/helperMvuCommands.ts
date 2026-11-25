@@ -326,6 +326,7 @@ export function createHelperMvuCommandCodec(json: (value: unknown, maxBytes?: nu
   }
   type HtmlToken={name:string;closing:boolean;selfClosing:boolean;end:number}
   const htmlHead=/<(\/?)([a-z][\w:-]*)(?=[\s/>]|$)/iy
+  const jsonPatchOpen=/<(json_?patch)\s*>/iy
   const rawTags=new Set(['script','style','textarea','title','xmp','plaintext'])
   const rawClosePatterns=new Map([...rawTags].map(name=>[name,new RegExp('</'+name+'(?=[\\s/>])','gi')]))
   const hiddenTags=new Set([...rawTags,'pre','code','noscript','template','svg','math','analysis','think','thinking'])
@@ -405,17 +406,25 @@ export function createHelperMvuCommandCodec(json: (value: unknown, maxBytes?: nu
         const end=message.indexOf('\n',at);at=end<0?message.length:end+1;continue
       }
       if(message.startsWith('<!--',at)){at=commentEnd(message,at);continue}
-      const tag = message[at] === '<' ? ['jsonpatch', 'json_patch'].find(name => message.slice(at, at + name.length + 2).toLowerCase() === '<' + name + '>') : undefined
-      if (tag) {
-        let end = at + tag.length + 2
-        const close = '</' + tag + '>'
-        while (end < message.length && (message.charCodeAt(end) !== 60 || message.slice(end, end + close.length).toLowerCase() !== close)) {
-          if (message[end] === '"' || message[end] === "'") end = quoted(message, end).end
-          else end++
+      if (message[at] === '<') {
+        jsonPatchOpen.lastIndex = at
+        const patchOpen = jsonPatchOpen.exec(message)
+        if (patchOpen) {
+          const tag = patchOpen[1]!.toLowerCase(), bodyStart = jsonPatchOpen.lastIndex
+          const closeRe = new RegExp('</' + tag + '\\s*>', 'iy')
+          let end = bodyStart, closeEnd = -1
+          while (end < message.length) {
+            if (message.charCodeAt(end) === 60) {
+              closeRe.lastIndex = end
+              if (closeRe.exec(message)) { closeEnd = closeRe.lastIndex; break }
+            }
+            if (message[end] === '"') end = quoted(message, end).end
+            else end++
+          }
+          if (closeEnd < 0) throw new Error('MVU JSON Patch 标签未闭合')
+          for (const command of patchCommands(message.slice(bodyStart, end))) append(command)
+          at = closeEnd; continue
         }
-        if (end >= message.length) throw new Error('MVU JSON Patch 标签未闭合')
-        for (const command of patchCommands(message.slice(at + tag.length + 2, end))) append(command)
-        at = end + tag.length + 3; continue
       }
       if(message[at]==='<'){
         const token=htmlToken(message,at)

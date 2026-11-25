@@ -288,7 +288,7 @@ export async function commitHelperVariables(ctx:Context,state:TavernState,reques
     const generation=await loadTemplateGenerationIdentity(current.ws.fs)
     if(generation?.status==='prepared') throw new Error('模板楼层尚未收口，请先恢复宿主生成后再写入')
     const floors=await current.ws.wal.listFloors()
-    const targetFloor=floors.find(item=>item.floor===floor)
+    const targetFloor=floors.find(item=>!item.rolledBack&&item.floor===floor)??floors.find(item=>item.floor===floor)
     if(targetFloor?.rolledBack) throw new Error('酒馆助手目标楼层已回滚')
     if(targetFloor) {
       const verified=await current.ws.wal.validateFloor(floor)
@@ -322,7 +322,7 @@ export async function withHelperStoryWrite<T>(ctx:Context,state:TavernState,sess
       const generation=await loadTemplateGenerationIdentity(current.ws.fs)
       if(generation?.status==='prepared')throw new Error('模板楼层尚未收口，请先恢复宿主生成后再写入')
       const floors=await current.ws.wal.listFloors()
-      const targetFloor=floors.find(item=>item.floor===floor)
+      const targetFloor=floors.find(item=>!item.rolledBack&&item.floor===floor)??floors.find(item=>item.floor===floor)
       if(targetFloor?.rolledBack)throw new Error('世界书目标楼层已回滚')
       if(targetFloor){
         const verified=await current.ws.wal.validateFloor(floor)

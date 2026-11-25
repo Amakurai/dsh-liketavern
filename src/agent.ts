@@ -24,7 +24,8 @@ import type { TavernState } from './node/state.js'
 import { registerTavernTools } from './node/tools.js'
 import { mergeTavernCallConfig, resolveTavernReasoningEffort, type AdvertisedReasoningInfo } from './core/callConfig.js'
 import { BOUND_DISCIPLINE, TURN_PLAYBOOK, UNBOUND_STANDING, isContinueInstruction, isHostInjectedUserMessage, isTurnScopedNotice } from './core/dshPrompt.js'
-import { DEFAULT_SAMPLING, type SamplingSettings } from './core/types.js'
+import { resolvePresetSampling } from './core/presetSampling.js'
+import type { SamplingSettings } from './core/types.js'
 import { PRESET_ADAPTER_PROVIDER, PRESET_ADAPTER_SOURCE_PROVIDER } from './node/presetAdapter.js'
 import { ensureAgentRequestSelectionSync, installTavernModelSelectionCompat } from './node/modelRoute.js'
 import { attachPresetPlanMessage, createPresetPlanMessage, hasPresetPlanMessage } from './node/presetRequestProjection.js'
@@ -321,17 +322,36 @@ function mountTavernAgent(ctx: Context): void {
     const config = await next()
     const binding = await state.loadStoryBinding(payload.agent.id)
     if ((payload as any)?.probe) {
-      if (binding && state.presetAdapter && (config.provider === PRESET_ADAPTER_SOURCE_PROVIDER || config.provider === PRESET_ADAPTER_PROVIDER || !config.provider)) {
-        const preset = binding.presetId ? await state.loadPreset(binding.presetId) : null
-        const sampling: SamplingSettings = { ...DEFAULT_SAMPLING, ...preset?.sampling }
-        const effort = await resolveRequestReasoningEffort(llm, { ...config, provider: PRESET_ADAPTER_PROVIDER }, sampling, payload.signal)
-        return {
-          ...config,
-          provider: PRESET_ADAPTER_PROVIDER,
-          ...(effort !== undefined ? { reasoningEffort: ReasoningEffortId(effort) } : {}),
-        }
+      if (!binding) {
+        return config.provider === PRESET_ADAPTER_PROVIDER
+          ? { ...config, provider: PRESET_ADAPTER_SOURCE_PROVIDER }
+          : config
       }
-      return config
+      const plan = state.turnPlans.get(payload.agent.id)
+      const matchingPlan = plan
+        && (payload.turn === undefined || plan.turn === payload.turn)
+        && plan.cardId === binding.cardId
+        && plan.storyId === binding.storyId
+        ? plan
+        : undefined
+      const sampling: SamplingSettings = matchingPlan
+        ? matchingPlan.result.sampling
+        : resolvePresetSampling(state.config.sampling, (binding.presetId ? await state.loadPreset(binding.presetId) : null)?.sampling)
+      const hasLayoutForPresetAdapter = !matchingPlan || Boolean(matchingPlan.result.layout)
+      const usePresetAdapter = Boolean(state.presetAdapter)
+        && hasLayoutForPresetAdapter
+        && (config.provider === PRESET_ADAPTER_SOURCE_PROVIDER || config.provider === PRESET_ADAPTER_PROVIDER || !config.provider)
+      if (usePresetAdapter) {
+        try { state.presetAdapter!.ensureRegistered() } catch { /* probe 阶段宿主未就绪时交由调用方按原错误感知 */ }
+      }
+      const probeConfig = usePresetAdapter
+        ? { ...config, provider: PRESET_ADAPTER_PROVIDER }
+        : config.provider === PRESET_ADAPTER_PROVIDER
+          ? { ...config, provider: PRESET_ADAPTER_SOURCE_PROVIDER }
+          : config
+      const effort = await resolveRequestReasoningEffort(llm, probeConfig, sampling, payload.signal)
+      const merged = mergeTavernCallConfig(probeConfig, sampling, effort, payload.agent.options?.maxTokens)
+      return effort === undefined ? merged : { ...merged, reasoningEffort: ReasoningEffortId(effort) }
     }
     const plan = state.turnPlans.get(payload.agent.id)
     // assemble 与请求 waterfall 之间仍可换绑；旧角色的 standing/布局不能在新剧情归属下发信。

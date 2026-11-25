@@ -234,6 +234,11 @@ export class TemplateSandbox {
     templateLibrarySource=runtime.librarySource;templateFakerSource=runtime.fakerSource;templateRuntimeHash=runtime.hash
   }
 
+  /** 任务结束后清理 worker 阶段回调，避免模块静态闭包长期钉住上一次的大输入引用。 */
+  static clearPhaseReporter(): void {
+    computationPhase = undefined
+  }
+
   private static normalizeContext(input:TemplateContext):TemplateContext {
     if(input.historyIdentities) parseTemplateMessageIdentities(input.historyIdentities,input.history.length)
     if(input.helperMvu!==undefined) parseTemplateHelperMvu(input.helperMvu,input.historyIdentities ?? [])

@@ -25,28 +25,30 @@ const RUNTIME_STATE_KEYS: Record<ScriptRuntimeStatus['state'] | 'ready' | 'incom
 export function ScriptSettings({remote}:{remote:TavernRemote}) {
   const t=useT()
   const runtimes=useSyncExternalStore(scriptStatusStore.subscribe,scriptStatusStore.getSnapshot,scriptStatusStore.getSnapshot)
-  const characters=useLoader(()=>remote.listCharacters({}),[])
+  const characters=useLoader(()=>remote.listCharacters({}),[remote])
   // 已收纳角色脚本库只读，不放进下方编辑选择器；仅用于解析运行中会话的角色显示名。
   const archivedCharacters=useLoader(
     ()=>typeof remote.listArchivedCharacters==='function'
       ?remote.listArchivedCharacters({}).then(r=>r.ok?r:{ok:true as const,value:{items:[]}},()=>({ok:true as const,value:{items:[]}}))
       :Promise.resolve({ok:true as const,value:{items:[]}}),
-    [],
+    [remote],
   )
-  const presets=useLoader(()=>remote.listPresets({}),[])
+  const presets=useLoader(()=>remote.listPresets({}),[remote])
   const [cardId,setCardId]=useState(''),[presetId,setPresetId]=useState('')
   const [editing,setEditing]=useState<HelperScriptAsset|null>(null)
   const [busy,setBusy]=useState(false),[error,setError]=useState<string|null>(null)
-  const opening=useRef(false)
+  const opening=useRef(false),alive=useRef(true)
+  useEffect(()=>{alive.current=true;return()=>{alive.current=false}},[])
   const [openingType,setOpeningType]=useState<HelperScriptTarget['type']|null>(null)
   const open=async(target:HelperScriptTarget)=>{
     if(opening.current)return
     opening.current=true;setOpeningType(target.type);setBusy(true);setError(null)
     try {
       const result=await remote.getHelperScriptLibrary({target})
+      if(!alive.current)return
       if(!result.ok)throw new Error(result.error.message)
       setEditing(result.value)
-    }catch(error){setError(describeError(error))}finally{opening.current=false;setOpeningType(null);setBusy(false)}
+    }catch(error){if(alive.current)setError(describeError(error))}finally{opening.current=false;if(alive.current){setOpeningType(null);setBusy(false)}}
   }
   const target=editing?.target
   const editorLabel=target?.type==='character'&&characters.state.status==='ready'?characters.state.value.items.find(card=>card.cardId===target.cardId)?.name:target?.type==='preset'&&presets.state.status==='ready'?presets.state.value.items.find(preset=>preset.id===target.presetId)?.name:undefined

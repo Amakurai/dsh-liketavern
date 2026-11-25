@@ -17,7 +17,7 @@ export interface ControlTokenFinding {
 
 /**
  * 受检标记。刻意不收录 `<s>` / `</s>`：它们是合法 HTML 删除线，误伤代价高于收益。
- * 各格式合并后用 `u` 模式扫描，每次调用独立构造正则，避免共享 lastIndex。
+ * 各格式合并后用 `u` 模式扫描，同步扫描入口每次显式归零 lastIndex，避免重复编译正则。
  */
 const CONTROL_TOKEN_SOURCES: readonly string[] = [
   '<｜[^<>｜\\n]{0,40}｜>', // DeepSeek / ChatML 全角变体：<｜Assistant｜>、<｜end▁of_sentence｜>
@@ -28,6 +28,8 @@ const CONTROL_TOKEN_SOURCES: readonly string[] = [
   '<\\/?start_of_turn>', // Gemma
   '<end_of_turn>', // Gemma（与上一条重叠时只报一次，靠 token 去重）
 ]
+
+const CONTROL_TOKEN_PATTERN = new RegExp(CONTROL_TOKEN_SOURCES.map(source => `(?:${source})`).join('|'), 'gu')
 
 /** 便宜的预筛：没有候选开头就不跑正则，热路径上绝大多数条目在第一轮就被排除。 */
 export function mayContainControlTokens(text: string): boolean {
@@ -43,8 +45,8 @@ export function findControlTokens(text: string, limit = 4): ControlTokenFinding[
   const findings: ControlTokenFinding[] = []
   const seen = new Set<string>()
   // 合并扫描才能在限额内保留正文中最早的命中；按格式分批扫描后再排序，会先丢掉其它格式的早期标记。
-  const pattern = new RegExp(CONTROL_TOKEN_SOURCES.map(source => `(?:${source})`).join('|'), 'gu')
-  for (const match of text.matchAll(pattern)) {
+  CONTROL_TOKEN_PATTERN.lastIndex = 0
+  for (let match = CONTROL_TOKEN_PATTERN.exec(text); match !== null; match = CONTROL_TOKEN_PATTERN.exec(text)) {
     if (seen.has(match[0])) continue
     seen.add(match[0])
     findings.push({ token: match[0], index: match.index ?? 0 })

@@ -123,24 +123,25 @@ export async function onTurnEnd(state:TavernState,sessionId:string,session?:Pick
       state.pendingTurnPlans.delete(sessionId)
       state.appliedStanding.delete(sessionId)
       state.appliedTurnContext.delete(sessionId)
-      if(key) {
-        const deferredStoryId=state.openFloors.get(sessionId)?.storyId??(await state.loadStoryBinding(sessionId))?.storyId
-        state.helperTurnClosures.delete(key)
-        state.helperTurnClosures.set(key,{seq:ending.seq,storyId:deferredStoryId,deferred:true})
-        while(state.helperTurnClosures.size>256)state.helperTurnClosures.delete(state.helperTurnClosures.keys().next().value!)
-      }
       state.currentTurns.delete(sessionId)
       state.currentSteps.delete(sessionId)
       // 门控已把未进入模型的原输入放回宿主队列；下次 claim 会按新轮重新发布。
       state.pendingInputs.delete(sessionId)
       state.pendingTemplateInputs.delete(sessionId)
+      if(key) {
+        const openEntry=state.openFloors.get(sessionId)
+        const deferredStoryId=openEntry ? openEntry.storyId : (await state.loadStoryBinding(sessionId).catch(()=>null))?.storyId
+        state.helperTurnClosures.delete(key)
+        state.helperTurnClosures.set(key,{seq:ending.seq,storyId:deferredStoryId,deferred:true})
+        while(state.helperTurnClosures.size>256)state.helperTurnClosures.delete(state.helperTurnClosures.keys().next().value!)
+      }
       return
     }
     if(!key)return await finishTurn(state,sessionId,session)
     // 重复投递的旧结束帧不能借当前 openFloors 收口后来的轮次，也不能覆写旧成功回执。
     const active=state.openFloors.get(sessionId)
     if(active && active.floor!==key)throw new Error('宿主结束帧与当前楼层不一致')
-    const storyId=state.openFloors.get(sessionId)?.storyId??(await state.loadStoryBinding(sessionId))?.storyId
+    const storyId=active ? active.storyId : (await state.loadStoryBinding(sessionId).catch(()=>null))?.storyId
     const record=(error?:unknown)=>{
       if(!key||ending?.type!=='turn/end')return
       state.helperTurnClosures.delete(key)

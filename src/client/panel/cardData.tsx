@@ -51,7 +51,7 @@ export function CardDataSettings({remote,sessions}:{remote:TavernRemote;sessions
     const archivedItems=archived&&archived.ok?archived.value.items.filter(item=>!activeIds.has(item.cardId)):[]
     return {ok:true as const,value:{active:active.value.items,archived:archivedItems}}
   },[remote])
-  const stories=useLoader(()=>remote.listStories({cardId}),[cardId],Boolean(cardId))
+  const stories=useLoader(()=>remote.listStories({cardId}),[remote,cardId],Boolean(cardId))
   const items=stories.state.status==='ready'?stories.state.value.items:[]
   const story=items.find(item=>item.id===storyId)
   const characterOptions=[
@@ -159,6 +159,8 @@ export function SessionTransfer({remote,sessions,sessionId}:{remote:TavernRemote
 
 export function StoryVariableSettings(props:{remote:TavernRemote;cardId:string;storyId:string;sessionId:string}){
   const {remote,sessionId,storyId}=props,t=useT()
+  const alive=useRef(true)
+  useEffect(()=>{alive.current=true;return()=>{alive.current=false}},[])
   const loaded=useLoader(async()=>{
     const events=await remote.getHelperEventState({sessionId,storyId})
     if(!events.ok)return events
@@ -168,7 +170,7 @@ export function StoryVariableSettings(props:{remote:TavernRemote;cardId:string;s
     if(!result.ok)return result
     if(result.value.storyId!==storyId)throw new Error(t('speech.helperStoryChanged'))
     return {ok:true as const,value:{snapshot:result.value,messageId:message.seq}}
-  },[sessionId,storyId])
+  },[remote,sessionId,storyId])
   const [library,setLibrary]=useState<HelperScriptAsset|null>(null)
   const [scriptError,setScriptError]=useState<string|null>(null),[scriptBusy,setScriptBusy]=useState(false)
   const scriptOpening=useRef(false)
@@ -178,9 +180,10 @@ export function StoryVariableSettings(props:{remote:TavernRemote;cardId:string;s
     scriptOpening.current=true;setScriptBusy(true);setScriptError(null)
     try{
       const result=await remote.getHelperScriptLibrary({target:{type:'character',cardId:props.cardId}})
+      if(!alive.current)return
       if(!result.ok)throw new Error(result.error.message)
       setLibrary(result.value)
-    }catch(error){setScriptError(describeError(error))}finally{scriptOpening.current=false;setScriptBusy(false)}
+    }catch(error){if(alive.current)setScriptError(describeError(error))}finally{scriptOpening.current=false;if(alive.current)setScriptBusy(false)}
   }
   return <>
     {scriptGuard.confirmation}
@@ -196,6 +199,8 @@ export function StoryVariableSettings(props:{remote:TavernRemote;cardId:string;s
 
 export function VariableBackupEditor(props:{remote:TavernRemote;sessionId:string;messageId:number;snapshot:HelperSnapshot;onRefresh:()=>void}){
   const t=useT(),toast=useToast()
+  const alive=useRef(true)
+  useEffect(()=>{alive.current=true;return()=>{alive.current=false}},[])
   const [snapshot,setSnapshot]=useState(props.snapshot)
   useEffect(()=>{setSnapshot(props.snapshot)},[props.snapshot])
   const [text,setText]=useDraftState(`card-data:backup:${JSON.stringify([props.sessionId,snapshot.storyId])}`,'')
@@ -213,7 +218,9 @@ export function VariableBackupEditor(props:{remote:TavernRemote;sessionId:string
         const result=await props.remote.commitHelperVariables({sessionId:props.sessionId,messageId:props.messageId,storyId:snapshot.storyId,historyRevision:snapshot.historyRevision,changes})
         if(!result.ok)throw new Error(result.error.message)
         if(result.value.storyId!==snapshot.storyId)throw new Error(t('speech.helperStoryChanged'))
-        setSnapshot(result.value);notifyHelperStory(props.sessionId,snapshot.storyId)
+        notifyHelperStory(props.sessionId,snapshot.storyId)
+        if(!alive.current)return
+        setSnapshot(result.value)
       }else{
         // 旧快照相等不能证明服务器仍相等；只读复核后才提示无需恢复，不清掉冲突草稿。
         const fresh=await props.remote.getHelperSnapshot({sessionId:props.sessionId,messageId:props.messageId})
@@ -221,10 +228,11 @@ export function VariableBackupEditor(props:{remote:TavernRemote;sessionId:string
         if(fresh.value.storyId!==snapshot.storyId||fresh.value.historyRevision!==snapshot.historyRevision)throw new Error(t('speech.helperStoryChanged'))
         if(!fresh.value.writable)throw new Error(t('settings.cards.variableReadOnly'))
         if(helperVariableRestoreChanges(fresh.value.scopes,target).length)throw new Error(t('settings.cards.variableConflict'))
+        if(!alive.current)return
         setSnapshot(fresh.value)
       }
       setText('');guard.clearDraft();toast.show(t(changes.length?'speech.variableSaved':'settings.cards.variableUnchanged'))
-    }catch(error){setError(describeError(error))}finally{restoring.current=false;setBusy(false)}
+    }catch(error){if(alive.current)setError(describeError(error))}finally{restoring.current=false;if(alive.current)setBusy(false)}
   }
   return <>
     {toast.node}{guard.confirmation}

@@ -343,7 +343,7 @@ function LorebookEditorContent(props: LorebookEditorProps & { draftKey: string }
     <div>
       <div className="dsh-tavern-toolbar">
         {!props.hideCloseButton && (
-          <Btn size="md" onClick={askClose}>
+          <Btn size="md" disabled={busy} onClick={askClose}>
             {target.kind === 'chat' ? t('action.close') : t('lorebookEditor.backToList')}
           </Btn>
         )}
@@ -359,7 +359,7 @@ function LorebookEditorContent(props: LorebookEditorProps & { draftKey: string }
             {dirty ? <Badge accent>{t('lorebookEditor.unsaved')}</Badge> : null}
           </div>
         </div>
-        <Btn size="md" onClick={addEntry}>
+        <Btn size="md" disabled={busy} onClick={addEntry}>
           {t('lorebookEditor.newEntry')}
         </Btn>
         <Btn primary size="md" disabled={busy || !dirty} onClick={() => void save()}>
@@ -392,6 +392,7 @@ function LorebookEditorContent(props: LorebookEditorProps & { draftKey: string }
           <button
             key={id}
             type="button"
+            aria-pressed={filter === id}
             className="dsh-tavern-chip"
             data-active={filter === id ? 'true' : 'false'}
             onClick={() => {
@@ -403,10 +404,10 @@ function LorebookEditorContent(props: LorebookEditorProps & { draftKey: string }
           </button>
         ))}
         <span style={{ flex: 1 }} />
-        <Btn size="sm" onClick={() => applyFilterEnabled(true)} disabled={filtered.length === 0}>
+        <Btn size="sm" onClick={() => applyFilterEnabled(true)} disabled={busy || filtered.length === 0}>
           {t('lorebookEditor.enableFiltered')}
         </Btn>
-        <Btn size="sm" onClick={() => applyFilterEnabled(false)} disabled={filtered.length === 0}>
+        <Btn size="sm" onClick={() => applyFilterEnabled(false)} disabled={busy || filtered.length === 0}>
           {t('lorebookEditor.disableFiltered')}
         </Btn>
       </div>
@@ -482,7 +483,7 @@ function LorebookEditorContent(props: LorebookEditorProps & { draftKey: string }
       )}
 
       <div className={`dsh-tavern-stickyBar${dirty ? ' is-sticky' : ''}`}>
-        <Btn size="md" onClick={addEntry}>
+        <Btn size="md" disabled={busy} onClick={addEntry}>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
             <IconPlusOutlineMedium /> {t('lorebookEditor.newEntry')}
           </span>
@@ -491,7 +492,7 @@ function LorebookEditorContent(props: LorebookEditorProps & { draftKey: string }
           {t('action.save')}
         </Btn>
         {(!props.hideCloseButton || dirty) && (
-          <Btn size="md" onClick={askClose}>
+          <Btn size="md" disabled={busy} onClick={askClose}>
             {dirty ? t('lorebookEditor.discardAndBack') : t('lorebookEditor.back')}
           </Btn>
         )}
@@ -503,8 +504,9 @@ function LorebookEditorContent(props: LorebookEditorProps & { draftKey: string }
         description={t('lorebookEditor.delete.desc')}
         confirmLabel={t('lorebookEditor.deleteEntry')}
         danger
-        onCancel={() => setToDelete(null)}
-        onConfirm={removeEntry}
+        busy={busy}
+        onCancel={() => { if (!busy) setToDelete(null) }}
+        onConfirm={() => { if (!busy) removeEntry() }}
       />
       <ConfirmDialog
         open={leaveConfirm}
@@ -512,7 +514,8 @@ function LorebookEditorContent(props: LorebookEditorProps & { draftKey: string }
         description={t('lorebookEditor.discard.desc')}
         confirmLabel={t('lorebookEditor.discard.confirm')}
         danger
-        onCancel={() => setLeaveConfirm(false)}
+        busy={busy}
+        onCancel={() => { if (!busy) setLeaveConfirm(false) }}
         onConfirm={() => {
           if (busy) return
           setLeaveConfirm(false)

@@ -163,26 +163,27 @@ export function TavernAssistantNode(props: {
   const markdownLabels = useMarkdownLabels()
   const tavern = isTavernSession(props.useSessions, sessionId)
   // 绑定/角色详情走进程内缓存（key=sessionId / cardId）：N 个 assistant 节点共享一次 RPC。
-  const bindingLoader = useLoader(() => cachedSessionBinding(remote, sessionId), [sessionId], tavern)
+  const bindingLoader = useLoader(() => cachedSessionBinding(remote, sessionId), [remote, sessionId], tavern)
   // 绑定/解绑或修改互动卡开关后，已渲染的楼层要随之切换排版；否则要等重新挂载才更新（操作条与 chip 同样监听）。
   useEffect(() => {
     if (!tavern) return
     return subscribeKeyedWindowEvent(BINDING_CHANGED_EVENT, sessionId, true, bindingLoader.reload)
   }, [tavern, sessionId, bindingLoader.reload])
-  // 重拉与读取失败时沿用同一会话上次确认的绑定，避免短暂故障卸载互动卡；成功解绑仍立即生效。
-  const lastBinding = useRef<{ sessionId: string; binding: SessionBinding | null; userName?: string } | null>(null)
+  // 重拉与读取失败时沿用同一宿主与会话上次确认的绑定，避免短暂故障卸载互动卡；成功解绑仍立即生效。
+  const lastBinding = useRef<{ remote: TavernRemote; sessionId: string; binding: SessionBinding | null; userName?: string } | null>(null)
   if (bindingLoader.state.status === 'ready') {
-    lastBinding.current = { sessionId, binding: bindingLoader.state.value.binding, userName: bindingLoader.state.value.userName }
+    lastBinding.current = { remote, sessionId, binding: bindingLoader.state.value.binding, userName: bindingLoader.state.value.userName }
   }
+  const rememberedBinding = lastBinding.current?.remote === remote && lastBinding.current.sessionId === sessionId ? lastBinding.current : null
   const binding = bindingLoader.state.status === 'ready'
     ? bindingLoader.state.value.binding
-    : (bindingLoader.state.status === 'loading' || bindingLoader.state.status === 'error') && lastBinding.current?.sessionId === sessionId ? lastBinding.current.binding : null
+    : (bindingLoader.state.status === 'loading' || bindingLoader.state.status === 'error') && rememberedBinding ? rememberedBinding.binding : null
   const userName = bindingLoader.state.status === 'ready'
     ? bindingLoader.state.value.userName
-    : (bindingLoader.state.status === 'loading' || bindingLoader.state.status === 'error') && lastBinding.current?.sessionId === sessionId ? lastBinding.current.userName : undefined
+    : (bindingLoader.state.status === 'loading' || bindingLoader.state.status === 'error') && rememberedBinding ? rememberedBinding.userName : undefined
   const detail = useLoader(
     () => cachedCharacterDetail(remote, binding!.cardId),
-    [binding?.cardId],
+    [remote, binding?.cardId],
     tavern && binding !== null,
   )
   useEffect(() => {
@@ -193,10 +194,10 @@ export function TavernAssistantNode(props: {
   const eventBinding=sessions?.binding?.(sessionId)
   const interrupted = node.data.status === 'interrupted'
   // 详情刷新不应短暂改成通用角色名，否则 name 会改变 srcDoc，销毁卡面草稿和脚本运行时。
-  const lastDetail = useRef<{ cardId: string; value: CharacterDetail } | null>(null)
-  if (detail.state.status === 'ready' && binding) lastDetail.current = { cardId: binding.cardId, value: detail.state.value }
+  const lastDetail = useRef<{ remote: TavernRemote; cardId: string; value: CharacterDetail } | null>(null)
+  if (detail.state.status === 'ready' && binding) lastDetail.current = { remote, cardId: binding.cardId, value: detail.state.value }
   const currentDetail = detail.state.status === 'ready' ? detail.state.value
-    : binding && lastDetail.current?.cardId === binding.cardId ? lastDetail.current.value : undefined
+    : binding && lastDetail.current?.remote === remote && lastDetail.current.cardId === binding.cardId ? lastDetail.current.value : undefined
   const name = currentDetail?.name ?? binding?.cardName ?? ''
   const {
     text,
@@ -251,7 +252,7 @@ export function TavernAssistantNode(props: {
 
   // 首次绑定尚未确认时不把 HTML/EJS 原文交给原生 Markdown，避免异步回包前短暂显示源码。
   // 已知绑定的刷新沿用原气泡；失败仍提供可读回退与恢复入口。
-  if (bindingLoader.state.status === 'loading' && lastBinding.current?.sessionId !== sessionId) {
+  if (bindingLoader.state.status === 'loading' && !rememberedBinding) {
     return <Skeleton height={56} />
   }
 

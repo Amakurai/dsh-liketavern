@@ -163,7 +163,7 @@ export declare class TavernService extends TypertRemoteService implements Tavern
     getSessionBinding(request: {
         sessionId: string;
     }): Promise<TavernMethodResults['getSessionBinding']>;
-    /** 剧情归属变更先同步取消当前宿主请求，覆盖 agent/request 之后 prepareCall 的异步准备；未来输入仍留在原生队列。 */
+    /** 剧情归属变更先同步取消当前宿主请求与在途维护，覆盖 prepareCall 与空闲压缩/别名流；未来输入仍留在原生队列。 */
     private cancelChangedBinding;
     setSessionBinding(request: {
         binding: unknown;

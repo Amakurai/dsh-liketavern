@@ -23,14 +23,15 @@ export function LorebooksSection(props: { remote: TavernRemote }) {
 
 function LorebooksSectionContent(props: { remote: TavernRemote }) {
   const { remote } = props
-  const { state, reload } = useLoader(() => remote.listLorebooks({}), [])
-  const chars = useLoader(() => remote.listCharacters({}), [])
+  const { state, reload } = useLoader(() => remote.listLorebooks({}), [remote])
+  const chars = useLoader(() => remote.listCharacters({}), [remote])
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const pending = useRef(false)
+  const alive = useRef(true)
   const [opening, setOpening] = useState<string | null>(null)
   const openRequest = useRef(0)
-  useEffect(() => () => { openRequest.current += 1 }, [])
+  useEffect(() => { alive.current = true; return () => { alive.current = false; openRequest.current += 1 } }, [])
   const perform = async (operation: () => Promise<void>) => {
     if (pending.current) return
     pending.current = true
@@ -148,6 +149,7 @@ function LorebooksSectionContent(props: { remote: TavernRemote }) {
   const exportBook = async (name: string) => {
     await perform(async () => {
       const r = await remote.getLorebook({ name })
+      if (!alive.current) return
       if (!r.ok) setError(r.error.message)
       else downloadJson(`${name}.json`, r.value.json)
     })
@@ -269,7 +271,7 @@ function LorebooksSectionContent(props: { remote: TavernRemote }) {
           <div className="dsh-tavern-list">
             {visibleCharBooks.map((item) => (
               <div key={item.cardId} className="dsh-tavern-tile">
-                <button type="button" className="dsh-tavern-tileTrigger" disabled={busy} onClick={() => void openCharacter(item)}>
+                <button type="button" className="dsh-tavern-tileTrigger" disabled={busy || opening !== null} onClick={() => void openCharacter(item)}>
                   <span className="dsh-tavern-tileIcon">
                     <IconFolderOpenOutlineMedium size={18} />
                   </span>
@@ -322,7 +324,7 @@ function LorebooksSectionContent(props: { remote: TavernRemote }) {
           <div className="dsh-tavern-list">
             {visibleNames.map((name) => (
               <div key={name} className="dsh-tavern-tile">
-                <button type="button" className="dsh-tavern-tileTrigger" disabled={busy} onClick={() => void openLibrary(name)}>
+                <button type="button" className="dsh-tavern-tileTrigger" disabled={busy || opening !== null} onClick={() => void openLibrary(name)}>
                   <span className="dsh-tavern-tileIcon">
                     <IconFolderOpenOutlineMedium size={18} />
                   </span>

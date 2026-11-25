@@ -5,7 +5,7 @@ import type {HelperSnapshot} from '../core/helperRuntime.js'
 import { randomUuid } from '../core/secureRandom.js'
 type NativeMvu={current:()=>boolean;snapshot:()=>HelperSnapshot|undefined}
 type Message=Record<string,unknown>
-type Entry={endpoint:Endpoint;id:string;event:string;once:boolean}
+type Entry={endpoint:Endpoint;id:string;event:string;once:boolean;active:boolean}
 type Group={sessionId:string;endpoints:Set<Endpoint>;listeners:Entry[];inflight:number}
 type Delivery={resolve:(value:Message)=>void;reject:(error:Error)=>void;timer:ReturnType<typeof setTimeout>;maxBytes:number;
   host?:{entry:Entry;current:()=>boolean;phase:'preparing'|'executing'}}
@@ -27,10 +27,15 @@ function args(value:unknown,maxBytes=EVENT_MAX_BYTES):unknown[] {
 class Endpoint {
   runtimeId='';active=true;hostEventsEnabled=true;serial=0;inflight=0
   pending=new Map<string,Delivery>()
+  entries=new Map<string,Entry>()
   constructor(readonly group:Group,readonly send:(message:Message)=>void,readonly nativeMvu?:NativeMvu,readonly retiredRuntimes=new Set<string>()){}
   post(message:Message){if(this.active)this.send({source:'dsh-tavern-card',runtimeId:this.runtimeId,...message})}
   reset(reason:string) {
-    this.group.listeners=this.group.listeners.filter(entry=>entry.endpoint!==this)
+    if(this.entries.size){
+      for(const entry of this.entries.values())entry.active=false
+      this.entries.clear()
+      this.group.listeners=this.group.listeners.filter(entry=>entry.endpoint!==this)
+    }
     for(const [deliveryId,delivery] of this.pending){clearTimeout(delivery.timer);if(delivery.host)this.post({action:'helperEventCancel',deliveryId});delivery.reject(new Error(reason))}
     this.pending.clear()
   }
@@ -66,11 +71,15 @@ class Endpoint {
       try{
         if(!host.current())throw new Error('宿主事件来源已改变')
         const data=args(value.args,delivery.maxBytes)
-        if(!this.group.listeners.includes(host.entry)){
+        if(!host.entry.active){
           this.pending.delete(deliveryId);clearTimeout(delivery.timer);this.post({action:'helperEventCancel',deliveryId})
           delivery.resolve({ok:true,args:data,invoked:false,canceled:true});return
         }
-        if(host.entry.once)this.group.listeners=this.group.listeners.filter(entry=>entry!==host.entry)
+        if(host.entry.once){
+          host.entry.active=false
+          host.entry.endpoint.entries.delete(host.entry.id)
+          this.group.listeners=this.group.listeners.filter(entry=>entry!==host.entry)
+        }
         host.phase='executing'
         this.post({action:'helperEventExecute',deliveryId})
       }catch(error){
@@ -94,17 +103,26 @@ class Endpoint {
       if(action==='helperEventSubscribe') {
         if(typeof value.listenerId!=='string'||value.listenerId.length>128||typeof value.event!=='string'||!value.event||value.event.length>256)throw new Error('事件监听信息无效')
         if(typeof value.once!=='boolean'||!['normal','first','last'].includes(String(value.position)))throw new Error('事件监听选项无效')
-        const existing=this.group.listeners.find(entry=>entry.endpoint===this&&entry.id===value.listenerId)
+        const existing=this.entries.get(value.listenerId)
         if(existing&&existing.event!==value.event)throw new Error('事件监听身份冲突')
-        if(!existing&&(this.group.listeners.length>=4096||this.group.listeners.filter(entry=>entry.endpoint===this).length>=1024))throw new Error('剧情事件监听超过预算')
+        if(!existing&&(this.group.listeners.length>=4096||this.entries.size>=1024))throw new Error('剧情事件监听超过预算')
         // 重绑同步 once，但 normal 保持原有顺序和在途交付的条目身份。
         if(existing)existing.once=value.once
         if(existing&&value.position==='normal')return
-        this.group.listeners=this.group.listeners.filter(entry=>entry!==existing)
-        const entry=existing??{endpoint:this,id:value.listenerId,event:value.event,once:value.once}
+        if(existing)this.group.listeners=this.group.listeners.filter(entry=>entry!==existing)
+        const entry:Entry=existing??{endpoint:this,id:value.listenerId,event:value.event,once:value.once,active:true}
+        entry.active=true
+        this.entries.set(entry.id,entry)
         if(value.position==='first')this.group.listeners.unshift(entry);else this.group.listeners.push(entry)
       } else if(action==='helperEventUnsubscribe') {
-        this.group.listeners=this.group.listeners.filter(entry=>entry.endpoint!==this||entry.id!==value.listenerId)
+        if(typeof value.listenerId==='string'){
+          const removed=this.entries.get(value.listenerId)
+          if(removed){
+            removed.active=false
+            this.entries.delete(value.listenerId)
+            this.group.listeners=this.group.listeners.filter(entry=>entry!==removed)
+          }
+        }
       } else if(action==='helperEventEmit') {
         if(typeof value.requestId!=='string'||!value.requestId||value.requestId.length>128||typeof value.event!=='string'||!value.event||value.event.length>256)throw new Error('事件发送信息无效')
         if(this.inflight>=16||this.group.inflight>=64)throw new Error('事件发送超过并发预算')
@@ -131,9 +149,13 @@ class Endpoint {
       for(const entry of [...this.group.listeners]) {
         if(!this.active||this.runtimeId!==runtimeId)throw new Error('事件发送卡面已关闭')
         if(Date.now()>=deadline)throw new Error('事件处理超过总时间预算')
-        if(entry.event!==event||excludeSelf&&entry.endpoint===this||!this.group.listeners.includes(entry))continue
+        if(entry.event!==event||excludeSelf&&entry.endpoint===this||!entry.active)continue
         if(this.nativeMvu&&!this.nativeMvu.current())throw new Error('MVU 任务或脚本就绪状态已改变')
-        if(entry.once&&!this.nativeMvu)this.group.listeners=this.group.listeners.filter(item=>item!==entry)
+        if(entry.once&&!this.nativeMvu){
+          entry.active=false
+          entry.endpoint.entries.delete(entry.id)
+          this.group.listeners=this.group.listeners.filter(item=>item!==entry)
+        }
         delivered=true
         const result=await entry.endpoint.invoke(entry,data,requestId,deadline-Date.now(),maxBytes,this.nativeMvu?current:undefined,mvuSnapshot)
         data=args(result.args,maxBytes)
@@ -196,7 +218,7 @@ export async function emitHelperHostEvent(sessionId:string,storyId:string,event:
   try{
     for(const entry of [...group.listeners]){
       if(!current()||groups.get(key)!==group)throw new Error('宿主事件来源已改变')
-      if(entry.event!==event||!entry.endpoint.hostEventsEnabled||!group.listeners.includes(entry))continue
+      if(entry.event!==event||!entry.endpoint.hostEventsEnabled||!entry.active)continue
       if(Date.now()>=deadline)throw new Error('事件处理超过总时间预算')
       const result=await entry.endpoint.invoke(entry,payload,id,deadline-Date.now(),EVENT_MAX_BYTES,()=>current()&&groups.get(key)===group)
       payload=args(result.args,EVENT_MAX_BYTES)
@@ -206,7 +228,7 @@ export async function emitHelperHostEvent(sessionId:string,storyId:string,event:
   }finally{group.inflight--}
 }
 export function reportHelperHostEventError(sessionId:string,storyId:string,error:unknown):void{
-  for(const endpoint of groups.get(JSON.stringify([sessionId,storyId]))?.endpoints??[])endpoint.post({action:'helperEventResult',ok:false,args:[],error:String(error instanceof Error?error.message:error).slice(0,2000)})
+  for(const endpoint of [...(groups.get(JSON.stringify([sessionId,storyId]))?.endpoints??[])])endpoint.post({action:'helperEventResult',ok:false,args:[],error:describeError(error).slice(0,2000)})
 }
 export function hasHelperEventAudience(sessionId:string):boolean{
   for(const group of groups.values())if(group.sessionId===sessionId&&group.endpoints.size>0)return true

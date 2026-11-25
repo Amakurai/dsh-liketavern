@@ -17,7 +17,7 @@ export function getSpeakerHeader(): boolean {
 export function setSpeakerHeader(value: boolean): void {
   if (value === speakerHeader) return
   speakerHeader = value
-  for (const fn of listeners) fn()
+  for (const fn of [...listeners]) fn()
 }
 
 function subscribeSpeakerHeader(fn: () => void): () => void {

@@ -508,6 +508,10 @@ async function prepareBranchStory(
 /** 插件分支在 create 之后才落绑定；宿主 session/created 期间据此把它们与原生分支区分开。 */
 const pluginForkIds = new Set<string>()
 
+export function isPluginForkSession(sessionId: string): boolean {
+  return pluginForkIds.has(sessionId)
+}
+
 async function forkAt(
   ctx: Context,
   state: TavernState,
@@ -537,6 +541,14 @@ async function forkAt(
   pluginForkIds.add(childId)
   try {
     created = (await forkChildSession(ctx, source, seed, childId)).handle
+    await options?.verifySource?.()
+    if (typeof state.loadBindingUnwaited === 'function') {
+      const currentSourceBinding = await state.loadBindingUnwaited(source.id, true, 'preserve')
+      if (!currentSourceBinding || currentSourceBinding.cardId !== binding.cardId
+        || (binding.storyId !== undefined && currentSourceBinding.storyId !== binding.storyId)) {
+        throw new FloorError('binding-changed', '准备分支期间原会话剧情绑定已改变，请刷新后重试')
+      }
+    }
     await state.saveBinding({
       ...binding,
       sessionId: childId,
@@ -553,7 +565,7 @@ async function forkAt(
     // 插件无法操作的孤儿会话。
     await created?.dispose().catch(() => {})
     await state.discardUnboundStory(binding.cardId, storyId, childId)
-    if (error instanceof CharacterArchivedError) throw error
+    if (error instanceof CharacterArchivedError || error instanceof FloorError) throw error
     throw new FloorError('fork-failed', `准备分支失败：${error instanceof Error ? error.message : String(error)}`)
   } finally {
     pluginForkIds.delete(childId)
@@ -1036,7 +1048,13 @@ export async function continueFloor(
   const revision = source.seq
   const events = source.snapshotEvents()
   const { turns, openTurn } = closedTurns(events)
-  if (openTurn !== null) throw new FloorError('turn-open', `turn ${openTurn} 仍在进行中，请等待完成后再续写`)
+  if (openTurn !== null || state.openFloors?.has(sessionId)) {
+    throw new FloorError('turn-open', `turn ${openTurn ?? '上一层'} 仍在进行中，请等待完成后再续写`)
+  }
+  const liveAgent = ctx.agents?.get(source.id) as { inbox?: { nextTurn?: readonly unknown[] } } | undefined
+  if ((liveAgent?.inbox?.nextTurn?.length ?? 0) > 0) {
+    throw new FloorError('turn-open', '已有排队中的用户输入，请等待当前轮次完成后再续写')
+  }
   const turn = turnOfAssistantMessage(events, messageId)
   if (turn === null) throw new FloorError('no-message', '这条消息不在当前会话中（可能已过期）')
   const hit = events.find((e) => e.type === 'assistant/message' && (e.data as { message?: { id?: string } }).message?.id === messageId)
@@ -1049,13 +1067,23 @@ export async function continueFloor(
   if (liveSession(ctx, sessionId) !== source || source.seq !== revision) {
     throw new FloorError('history-changed', '对话已改变，请刷新后再续写')
   }
+  if (state.openFloors?.has(sessionId) || ((ctx.agents?.get(source.id) as { inbox?: { nextTurn?: readonly unknown[] } } | undefined)?.inbox?.nextTurn?.length ?? 0) > 0) {
+    throw new FloorError('turn-open', '已有新轮次进入队列，请等待完成后再续写')
+  }
   try {
     await assertHelperMvuContinuable(state, sessionId, events, binding)
   } catch (error) {
     throw new FloorError('invalid-continuation', error instanceof Error ? error.message : String(error))
   }
+  const latestBinding = await state.loadStoryBinding(sessionId)
+  if (!latestBinding || latestBinding.cardId !== binding.cardId || latestBinding.storyId !== binding.storyId) {
+    throw new FloorError('binding-changed', '续写准备期间剧情绑定已改变，请刷新后再续写')
+  }
   if (liveSession(ctx, sessionId) !== source || source.seq !== revision) {
     throw new FloorError('history-changed', '对话已改变，请刷新后再续写')
+  }
+  if (state.openFloors?.has(sessionId) || ((ctx.agents?.get(source.id) as { inbox?: { nextTurn?: readonly unknown[] } } | undefined)?.inbox?.nextTurn?.length ?? 0) > 0) {
+    throw new FloorError('turn-open', '已有新轮次进入队列，请等待完成后再续写')
   }
 
   const instruction = createUserMessage({

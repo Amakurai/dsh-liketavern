@@ -227,10 +227,11 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
   let remainingChat = layoutHistory.filter(anchor=>anchor.chat).length
   const historyDepths = layoutHistory.map(anchor=>{if(anchor.chat) remainingChat--; return remainingChat})
   const unknownMacros = new Set<string>()
-  const generationType = (input.generationType ?? 'normal').toLowerCase()
-  // injection_trigger（对齐 ST shouldTrigger）：空/缺省 = 全场景；否则须含当前场景。
+  const generationType = (input.generationType ?? 'normal').trim().toLowerCase() || 'normal'
+  // injection_trigger（对齐 ST shouldTrigger，与 standingPin 场景归一化一致）：空/缺省 = 全场景；否则须含当前场景。
   const triggered = (e: PresetEntry): boolean =>
-    (e.injectionTrigger?.length ?? 0) === 0 || e.injectionTrigger!.includes(generationType)
+    (e.injectionTrigger?.length ?? 0) === 0
+    || e.injectionTrigger!.some((t) => typeof t === 'string' && t.trim().toLowerCase() === generationType)
   const macroCtx: MacroContext = {
     ...input.macroCtx,
     // 卡字段/人设/开场白宏：调用方可显式覆盖，缺省从组装输入取

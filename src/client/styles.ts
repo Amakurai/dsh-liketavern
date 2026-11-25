@@ -140,9 +140,9 @@ const STYLE = `
 }
 
 /* ========== 可访问性 ========== */
-.dsh-tavern-ui button:focus-visible,.dsh-tavern-ui [role="button"]:focus-visible,
+.dsh-tavern-ui button:focus-visible,.dsh-tavern-ui [role="button"]:focus-visible,.dsh-tavern-ui summary:focus-visible,
 .dsh-tavern-speech button:focus-visible,.dsh-tavern-speech summary:focus-visible,
-.dsh-tavern-actionGroup button:focus-visible{
+.dsh-tavern-reason>summary:focus-visible,.dsh-tavern-actionGroup button:focus-visible{
   outline:2px solid var(--dsw-alias-state-business-primary, #4176e6);outline-offset:2px}
 .dsh-tavern-ui input:focus-visible,.dsh-tavern-ui textarea:focus-visible{
   outline:2px solid var(--dsw-alias-state-business-primary, #4176e6);outline-offset:-1px;border-color:transparent}

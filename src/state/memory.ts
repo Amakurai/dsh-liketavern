@@ -518,8 +518,14 @@ export class MemoryStore {
     entries.sort((a, b) =>
       a.created < b.created ? -1 : a.created > b.created ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
     )
-    this.cache = { revision, fingerprint, entries }
-    return entries
+    const stableEntries =
+      cached &&
+      cached.entries.length === entries.length &&
+      entries.every((entry, idx) => entry === cached.entries[idx])
+        ? cached.entries
+        : entries
+    this.cache = { revision, fingerprint, entries: stableEntries }
+    return stableEntries
   }
 
   /** 按 id 取单条（不含 archive/）；不存在或坏文件返回 null。 */

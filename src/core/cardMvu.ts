@@ -211,13 +211,17 @@ export function installCardMvu(codec:HelperMvuCommandCodec,json:(value:unknown,m
       if(!active||!Array.isArray(commands))return
       assertCommandBudget(commands)
       const target=variables as Table,schema=resolve()
+      let currentStat:Table|undefined
       for(const command of commands as Array<{type:string;args:unknown[];full_match?:string}>){
-        let candidate:Table
-        try{candidate=codec.apply(table(target.stat_data),[command as never]).stat_data}
+        let baseline:Table,candidate:Table
+        try{
+          baseline=(currentStat??=table(target.stat_data))
+          candidate=codec.apply(baseline,[command as never]).stat_data
+        }
         catch(error){report('warn','变量更新命令无法套用，可能需要重 Roll：'+String(command.full_match??command.type),error);continue}
-        if(changesReadOnly(target.stat_data,candidate))continue
+        if(changesReadOnly(baseline,candidate))continue
         const result=schema.safeParse(candidate)
-        if(result.success)target.stat_data=table(result.data)
+        if(result.success){currentStat=table(result.data);target.stat_data=currentStat}
         else report('warn','变量更新不符合 schema，已忽略：'+String(command.full_match??command.type),result.error)
       }
     })

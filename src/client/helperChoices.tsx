@@ -11,7 +11,7 @@ let entries:readonly Entry[]=[]
 const listeners=new Set<()=>void>()
 const subscribe=(listener:()=>void)=>{listeners.add(listener);return()=>{listeners.delete(listener)}}
 const snapshot=()=>entries
-const notify=()=>{for(const listener of listeners)listener()}
+const notify=()=>{for(const listener of [...listeners])listener()}
 let inputFor:((sessionId:string)=>SessionInput|undefined)|undefined
 export function installChoiceInput(resolve:(sessionId:string)=>SessionInput|undefined):()=>void {inputFor=resolve;return()=>{if(inputFor===resolve)inputFor=undefined}}
 export function resolveSessionInput(sessionId:string):SessionInput|undefined {return inputFor?.(sessionId)}

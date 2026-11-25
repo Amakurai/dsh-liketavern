@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { chmod, lstat, mkdir, open, readdir } from 'node:fs/promises'
 import { basename, dirname, join, resolve } from 'node:path'
 import { MAX_STORED_CARD_JSON_BYTES } from '../state/card.js'
+import { caseIdentity } from '../state/pathIdentity.js'
 import { renameWithRetry } from '../state/rename.js'
 import { runDoctor, type DoctorIssue } from '../doctor.js'
 import { parseSessionBinding } from './bindings.js'
@@ -96,16 +97,20 @@ function report(operation: BackupReport['operation'], manifest: BackupManifest, 
 }
 /** 所有引用只通过已经扫描且有界的清单定位；不让 JSON 中的 ID 参与任意文件读取。 */
 async function references(home: string, entries: BackupEntry[]): Promise<DoctorIssue[]> {
-  const files = new Map(entries.filter(entry => entry.kind === 'file').map(entry => [entry.path, entry]))
-  const paths = new Set(files.keys())
-  const assetsByDir = new Map<string, Array<{ path: string; file: BackupEntry }>>([
+  const filesByKey = new Map<string, BackupEntry>()
+  const assetsByDir = new Map<string, Array<{ path: string; fileIdKey: string; file: BackupEntry }>>([
     ['library/presets', []],
     ['personas', []],
     ['library/lorebooks', []],
   ])
-  for (const [path, file] of files) {
-    const match = /^dsh-tavern\/(library\/presets|personas|library\/lorebooks)\/[^/]+\.json$/.exec(path)
-    if (match) assetsByDir.get(match[1]!)!.push({ path, file })
+  for (const entry of entries) {
+    if (entry.kind !== 'file') continue
+    filesByKey.set(caseIdentity(entry.path), entry)
+    const match = /^dsh-tavern\/(library\/presets|personas|library\/lorebooks)\/([^/]+)\.json$/i.exec(entry.path)
+    if (match) {
+      const dir = match[1]!.toLowerCase()
+      assetsByDir.get(dir)?.push({ path: entry.path, fileIdKey: caseIdentity(match[2]!), file: entry })
+    }
   }
   const issues = new Map<string, DoctorIssue>()
   const candidateCache = new Map<string, { primary: string | null; sourceId: string | null } | null>()
@@ -113,7 +118,7 @@ async function references(home: string, entries: BackupEntry[]): Promise<DoctorI
   const add = (code: string) => { const found = issues.get(code); if (found) found.count++; else issues.set(code, { code, severity: 'error', count: 1 }) }
   const field = (raw: Record<string, unknown>, key: string): string | null => {
     const value = raw[key]
-    return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null
+    return typeof value === 'string' && value.trim().length > 0 ? value : null
   }
   let budget = 256 * 1024 ** 2
   for (const entry of entries) {
@@ -127,17 +132,17 @@ async function references(home: string, entries: BackupEntry[]): Promise<DoctorI
       add('BINDING_INVALID'); continue
     }
     const expected = `dsh-tavern/sessions/${binding.sessionId.replace(/[^A-Za-z0-9_.-]/g, '_')}.json`
-    if (expected !== entry.path) add('BINDING_IDENTITY_INVALID')
+    if (caseIdentity(expected) !== caseIdentity(entry.path)) add('BINDING_IDENTITY_INVALID')
     const card = `dsh-tavern/characters/${binding.cardId}`
-    if (!paths.has(`${card}/card.json`)) add('BINDING_CARD_MISSING')
+    if (!filesByKey.has(caseIdentity(`${card}/card.json`))) add('BINDING_CARD_MISSING')
     if (binding.storyId) {
-      const story = `${card}/stories/${binding.storyId}/story.json`
-      if (!paths.has(story)) add('BINDING_STORY_MISSING')
+      const storyFile = filesByKey.get(caseIdentity(`${card}/stories/${binding.storyId}/story.json`))
+      if (!storyFile) add('BINDING_STORY_MISSING')
       else {
-        budget -= files.get(story)!.size
+        budget -= storyFile.size
         if (budget < 0) fail('REFERENCE_CHECK_LIMIT')
         let metadata: unknown = null
-        try { metadata = await boundedJson(checkedPath(home, story), 1024 * 1024) }
+        try { metadata = await boundedJson(checkedPath(home, storyFile.path), 1024 * 1024) }
         catch (error) {
           if (error instanceof BackupError && error.code !== 'INVALID_JSON') throw error
         }
@@ -148,9 +153,9 @@ async function references(home: string, entries: BackupEntry[]): Promise<DoctorI
       ...[...binding.lorebookIds, ...(binding.characterLorebookIds ?? []), binding.characterLorebookId].map(id => [id, 'library/lorebooks'])] as Array<[string | null, string]>) {
       if (!id || (directory === 'library/lorebooks' && id === '@dsh/character')) continue
       const safe = safeAssetFileId(id)
-      const baseFile = `dsh-tavern/${directory}/${safe}.json`
+      const safeKey = caseIdentity(safe)
       if (safe === id) {
-        if (!paths.has(baseFile)) add('BINDING_ASSET_MISSING')
+        if (!filesByKey.has(caseIdentity(`dsh-tavern/${directory}/${safe}.json`))) add('BINDING_ASSET_MISSING')
         continue
       }
       const cacheKey = `${directory}\0${id}`
@@ -159,10 +164,10 @@ async function references(home: string, entries: BackupEntry[]): Promise<DoctorI
         if (!cachedOk) add('BINDING_ASSET_MISSING')
         continue
       }
-      const prefix = `dsh-tavern/${directory}/${safe}-`
+      const prefixKey = `${safeKey}-`
       let matches = 0, fallback = false
-      for (const { path: candidate, file } of assetsByDir.get(directory) ?? []) {
-        if (candidate !== baseFile && (!candidate.startsWith(prefix) || !/^\d+\.json$/.test(candidate.slice(prefix.length)))) continue
+      for (const { path: candidate, fileIdKey, file } of assetsByDir.get(directory) ?? []) {
+        if (fileIdKey !== safeKey && (!fileIdKey.startsWith(prefixKey) || !/^\d+$/.test(fileIdKey.slice(prefixKey.length)))) continue
         let parsed = candidateCache.get(candidate)
         if (parsed === undefined && !candidateCache.has(candidate)) {
           budget -= file.size
@@ -177,10 +182,9 @@ async function references(home: string, entries: BackupEntry[]): Promise<DoctorI
           candidateCache.set(candidate, parsed)
         }
         if (!parsed) continue
-        const trimmedId = id.trim()
         const identities = [parsed.sourceId, parsed.primary].filter((v): v is string => v !== null)
-        if (identities.some(v => v === trimmedId)) matches++
-        else if (candidate === baseFile && identities.length === 0) fallback = true
+        if (identities.some(v => v === id)) matches++
+        else if (fileIdKey === safeKey && identities.length === 0) fallback = true
       }
       const ok = matches === 1 || (matches === 0 && fallback)
       resolvedAssetCache.set(cacheKey, ok)

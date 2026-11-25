@@ -87,7 +87,7 @@ export function AboutSection({ remote }: { remote: TavernRemote }) {
             <span>{version(info.hostVersion)}</span>
           </SettingsRow>
           {info.hostCompatibility && <SettingsRow title={t('about.currentCompatibility')}>
-            <Badge accent={info.hostCompatibility === 'compatible'}>{t(COMPATIBILITY_KEYS[info.hostCompatibility])}</Badge>
+            <Badge accent={info.hostCompatibility === 'compatible'}>{Object.hasOwn(COMPATIBILITY_KEYS, info.hostCompatibility) ? t(COMPATIBILITY_KEYS[info.hostCompatibility]) : String(info.hostCompatibility)}</Badge>
           </SettingsRow>}
           {info.developmentHostVersion && info.developmentHostVersion !== 'unknown' && <SettingsRow title={t('about.developmentHost')}>
             <span>{info.developmentHostVersion}</span>
@@ -109,12 +109,12 @@ export function AboutSection({ remote }: { remote: TavernRemote }) {
       </div>
       <Muted>{t(info?.desktopHost ? 'about.desktopNote' : 'about.cliNote')}</Muted>
       <div role="status" aria-live="polite">
-        {result && <p className="dsh-tavern-aboutStatus">{t(STATUS_KEYS[versionStatus!], { version: result.latestVersion, host: version(result.requiredHostVersion) })}</p>}
+        {result && <p className="dsh-tavern-aboutStatus">{versionStatus && Object.hasOwn(STATUS_KEYS, versionStatus) ? t(STATUS_KEYS[versionStatus], { version: result.latestVersion, host: version(result.requiredHostVersion) }) : result.latestVersion}</p>}
       </div>
       <Err message={visible?.failed ? t('about.checkFailed') : null} />
       {result && <>
         <SettingsRow title={t('about.latestCompatibility')} description={t('about.hostRequired', { version: version(result.requiredHostVersion) })}>
-          <Badge accent={hostCompatibility === 'compatible'}>{t(COMPATIBILITY_KEYS[hostCompatibility])}</Badge>
+          <Badge accent={hostCompatibility === 'compatible'}>{Object.hasOwn(COMPATIBILITY_KEYS, hostCompatibility) ? t(COMPATIBILITY_KEYS[hostCompatibility]) : String(hostCompatibility)}</Badge>
         </SettingsRow>
         {result.developmentHostVersion && result.developmentHostVersion !== 'unknown' && <SettingsRow title={t('about.latestDevelopmentHost')}>
           <span>{result.developmentHostVersion}</span>

@@ -303,16 +303,36 @@ function maskMarkdownCode(text: string): MaskedCode {
   return mask
 }
 
-/** 将行内占位符边界字符还原为真实源码字符，确保 CommonMark 左右贴合判断准确。 */
+function codePointAtStart(value: string, index: number): string {
+  if (index < 0 || index >= value.length) return ''
+  const first = value.charCodeAt(index)
+  if (first >= 0xd800 && first <= 0xdbff && index + 1 < value.length) {
+    const second = value.charCodeAt(index + 1)
+    if (second >= 0xdc00 && second <= 0xdfff) return value.slice(index, index + 2)
+  }
+  return value[index]!
+}
+
+function codePointAtEnd(value: string, index: number): string {
+  if (index < 0 || index >= value.length) return ''
+  const last = value.charCodeAt(index)
+  if (last >= 0xdc00 && last <= 0xdfff && index > 0) {
+    const prev = value.charCodeAt(index - 1)
+    if (prev >= 0xd800 && prev <= 0xdbff) return value.slice(index - 1, index + 1)
+  }
+  return value[index]!
+}
+
+/** 将行内占位符边界字符还原为真实源码完整码点（含 emoji/扩展汉字代理对），确保 CommonMark 左右贴合判断准确。 */
 function boundaryChar(text: string, index: number, side: 'start' | 'end', mask: MaskedCode): string {
   if (index < 0 || index >= text.length) return ''
   const ch = text[index]!
-  if (!mask.prefix) return ch
+  if (!mask.prefix) return side === 'start' ? codePointAtStart(text, index) : codePointAtEnd(text, index)
   if (side === 'start' && ch === mask.prefix[0] && text.startsWith(mask.prefix, index)) {
     const close = text.indexOf(mask.suffix, index + mask.prefix.length)
     if (close > 0) {
       const original = mask.saved[Number(text.slice(index + mask.prefix.length, close))]
-      if (original) return original[0] ?? ''
+      if (original) return codePointAtStart(original, 0)
     }
   }
   if (side === 'end' && ch === mask.suffix) {
@@ -321,11 +341,11 @@ function boundaryChar(text: string, index: number, side: 'start' | 'end', mask: 
       const idxStr = text.slice(open + mask.prefix.length, index)
       if (/^\d+$/.test(idxStr)) {
         const original = mask.saved[Number(idxStr)]
-        if (original) return original[original.length - 1] ?? ''
+        if (original) return codePointAtEnd(original, original.length - 1)
       }
     }
   }
-  return ch
+  return side === 'start' ? codePointAtStart(text, index) : codePointAtEnd(text, index)
 }
 
 function splitLinesWithBreaks(text: string): { lines: string[]; breaks: string[] } {
@@ -362,7 +382,7 @@ function isSafeHttpUrl(url: string): boolean {
 
 function encodeMarkdownUrl(url: string, inTable: boolean): string {
   return url
-    .replace(/[ ()<>]/g, ch => '%' + ch.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0'))
+    .replace(/[ ()<>\\]/g, ch => '%' + ch.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0'))
     .replace(/\|/g, inTable ? '%7C' : '|')
 }
 
@@ -551,7 +571,7 @@ function convertSafeImages(text: string, mask: MaskedCode): string {
         continue
       }
       const safeUrl = encodeMarkdownUrl(src, inTable)
-      const rawAlt = decodeBasicEntities(attrs.get('alt') ?? '').replace(/\r?\n/g, ' ').trim()
+      const rawAlt = decodeBasicEntities(attrs.get('alt') ?? '').replace(/[\r\n]+/g, ' ').trim()
       const safeAlt = rawAlt.replace(/([\\[\]])/g, '\\$1').replace(/\|/g, inTable ? '\\|' : '|')
       out += line.slice(cursor, tag.start) + `![${safeAlt}](${safeUrl})`
       cursor = tag.end

@@ -53,12 +53,62 @@ const CLITICS: ReadonlySet<string> = new Set(['s', 't', 'd', 'm', 'll', 're', 'v
 const APOSTROPHES = "'\u2019\u02bc"
 const WORD_BEFORE_APOSTROPHE = /[\p{L}\p{N}]/u
 
+function isAsciiAlnum(code: number): boolean {
+  return (code >= 0x30 && code <= 0x39) || (code >= 0x41 && code <= 0x5a) || (code >= 0x61 && code <= 0x7a)
+}
+
+function isAsciiText(text: string): boolean {
+  for (let i = 0; i < text.length; i++) {
+    if (text.charCodeAt(i) >= 0x80) return false
+  }
+  return true
+}
+
 /**
  * 这个词是否只是撇号拆出来的词尾。它们不是词：留着的话「it's」会让每条带所有格的记忆都算命中，
  * 把它们当功能词剔除又会连带剔掉以单个字母为名的角色（M、T 先生、小 S）。只在紧跟「字母 + 撇号」时才算。
+ * 撇号前若为扩展汉字等 UTF-16 代理对，须拼合完整码点再测 `\p{L}|\p{N}`，避免裸低代理误判为非词字符。
  */
 function isClitic(text: string, index: number, word: string): boolean {
-  return CLITICS.has(word) && index >= 2 && APOSTROPHES.includes(text[index - 1]!) && WORD_BEFORE_APOSTROPHE.test(text[index - 2]!)
+  if (!CLITICS.has(word) || index < 2 || !APOSTROPHES.includes(text[index - 1]!)) return false
+  const prevUnit = text.charCodeAt(index - 2)
+  const prevChar = prevUnit >= 0xdc00 && prevUnit <= 0xdfff && index >= 3
+    && text.charCodeAt(index - 3) >= 0xd800 && text.charCodeAt(index - 3) <= 0xdbff
+    ? text.slice(index - 3, index - 1)
+    : text[index - 2]!
+  return WORD_BEFORE_APOSTROPHE.test(prevChar)
+}
+
+function tokenizeAscii(text: string): string[] {
+  const terms: string[] = []
+  const len = text.length
+  let i = 0
+  while (i < len) {
+    if (!isAsciiAlnum(text.charCodeAt(i))) {
+      i++
+      continue
+    }
+    const start = i
+    i++
+    while (i < len) {
+      const code = text.charCodeAt(i)
+      if (isAsciiAlnum(code)) {
+        i++
+        continue
+      }
+      if ((code === 0x5f || code === 0x2d) && i + 1 < len && isAsciiAlnum(text.charCodeAt(i + 1))) {
+        i += 2
+        continue
+      }
+      break
+    }
+    const word = text.slice(start, i).toLowerCase()
+    if (start >= 2 && text.charCodeAt(start - 1) === 0x27 && isAsciiAlnum(text.charCodeAt(start - 2)) && CLITICS.has(word)) {
+      continue
+    }
+    terms.push(word)
+  }
+  return terms
 }
 
 /**
@@ -71,9 +121,11 @@ function isClitic(text: string, index: number, word: string): boolean {
  *   撇号后面的词尾不算词：`it's` → ['it']，`don't` → ['don']。
  */
 export function tokenize(text: string): string[] {
+  if (isAsciiText(text)) return tokenizeAscii(text)
   const terms: string[] = []
   const normalized = text.normalize('NFKC')
-  for (const match of normalized.matchAll(SEGMENT_RE)) {
+  SEGMENT_RE.lastIndex = 0
+  for (let match = SEGMENT_RE.exec(normalized); match !== null; match = SEGMENT_RE.exec(normalized)) {
     const seg = match[0]
     if (isBigramScript(seg.charCodeAt(0))) {
       for (let i = 0; i < seg.length - 1; i++) terms.push(seg.slice(i, i + 2))
@@ -145,6 +197,10 @@ export function isKana(char: string): boolean {
  * 不屏蔽别处出现的同字，也不改变 terms、lone 或原来的分段边界。建索引不传此参数。
  */
 export function analyzeText(text: string, ignoredCharBigrams?: ReadonlySet<string>): TextTokens {
+  if (isAsciiText(text)) {
+    const terms = tokenizeAscii(text)
+    return { terms, chars: [], initials: [], finals: [], words: [], sides: [], lefts: [], rights: [], lone: terms.length === 0 }
+  }
   const terms: string[] = []
   const chars: string[] = []
   const initials: string[] = []
@@ -155,7 +211,8 @@ export function analyzeText(text: string, ignoredCharBigrams?: ReadonlySet<strin
   const rights: string[] = []
   let lone = true
   const normalized = text.normalize('NFKC')
-  for (const match of normalized.matchAll(SEGMENT_RE)) {
+  SEGMENT_RE.lastIndex = 0
+  for (let match = SEGMENT_RE.exec(normalized); match !== null; match = SEGMENT_RE.exec(normalized)) {
     const seg = match[0]
     if (isBigramScript(seg.charCodeAt(0))) {
       // bigram 文字都在基本多文种平面，按 UTF-16 下标取字不会拆开代理对

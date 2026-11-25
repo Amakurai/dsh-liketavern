@@ -215,7 +215,7 @@ function FloorActions(props: FloorActionsProps) {
   const isSupersededContinuable = useSyncExternalStore(subscribeContinuable, readSupersededContinuable, readSupersededContinuable)
   const floorStateLoader = useLoader(
     () => floorActionStateBatched(remote, { sessionId, messageId: messageId! }),
-    [sessionId, messageId],
+    [remote, sessionId, messageId],
     bound === true && Boolean(messageId),
   )
   useEffect(() => {
@@ -269,10 +269,10 @@ function FloorActions(props: FloorActionsProps) {
         await openChildSession(navigation, r.value.childSessionId, r.value.title, sessionId)
       } else setFailure(r.error.message)
     } catch (e) {
-      setFailure(describeError(e))
+      if (active.current) setFailure(describeError(e))
     } finally {
       submitting.current = false
-      setOperation(null)
+      if (active.current) setOperation(null)
     }
   }
 
@@ -316,10 +316,10 @@ function FloorActions(props: FloorActionsProps) {
       if (r.ok) setEdit({ turn: r.value.turn, text: r.value.text, original: r.value.text })
       else setFailure(r.error.message)
     } catch (e) {
-      setFailure(describeError(e))
+      if (active.current) setFailure(describeError(e))
     } finally {
       submitting.current = false
-      setOperation(null)
+      if (active.current) setOperation(null)
     }
   }
 
@@ -362,10 +362,10 @@ function FloorActions(props: FloorActionsProps) {
       if (!active.current) return
       if (!r.ok) setFailure(r.error.message)
     } catch (e) {
-      setFailure(describeError(e))
+      if (active.current) setFailure(describeError(e))
     } finally {
       submitting.current = false
-      setOperation(null)
+      if (active.current) setOperation(null)
     }
   }
 
@@ -381,10 +381,10 @@ function FloorActions(props: FloorActionsProps) {
       if (r.ok) setEditAi({ turn: r.value.turn, text: r.value.text, original: r.value.text })
       else setFailure(r.error.message)
     } catch (e) {
-      setFailure(describeError(e))
+      if (active.current) setFailure(describeError(e))
     } finally {
       submitting.current = false
-      setOperation(null)
+      if (active.current) setOperation(null)
     }
   }
 
@@ -475,10 +475,10 @@ function FloorActions(props: FloorActionsProps) {
         }
       }
     } catch (e) {
-      setFailure(describeError(e))
+      if (active.current) setFailure(describeError(e))
     } finally {
       submitting.current = false
-      setOperation(null)
+      if (active.current) setOperation(null)
     }
   }
 
@@ -599,7 +599,7 @@ function FloorActions(props: FloorActionsProps) {
       {editAiGuard.confirmation}
       {impersonated !== null && (
         <Dialog open title={t('actions.impersonateTitle')} onClose={() => setImpersonated(null)}>
-          <textarea readOnly className="dsh-tavern-input dsh-tavern-textarea" style={{ minHeight: 120 }} value={impersonated} />
+          <textarea readOnly aria-label={t('actions.impersonateTitle')} className="dsh-tavern-input dsh-tavern-textarea" style={{ minHeight: 120 }} value={impersonated} />
           <div style={{ marginTop: 8, fontSize: 12, opacity: 0.8 }}>{t('actions.clipboardUnavailable')}</div>
         </Dialog>
       )}
@@ -634,7 +634,7 @@ function InterruptedFloorActions(props: InterruptedFloorActionsProps) {
   const [operation, setOperation] = useState<'regenerate' | 'rollback' | 'branch-prev' | 'branch-next' | null>(null)
   const [failure, setFailure] = useState<string | null>(null)
   const submitting = useRef(false)
-  const siblingLoader = useLoader(() => remote.getFloorSiblings({ sessionId, turn }), [sessionId, turn])
+  const siblingLoader = useLoader(() => remote.getFloorSiblings({ sessionId, turn }), [remote, sessionId, turn])
   useEffect(() => {
     return subscribeSessionWindowEvent(BRANCH_CHANGED_EVENT, sessionId, false, () => siblingLoader.reload())
     // reload 随 loader render 更新；事件回调只需跟会话重挂。
@@ -660,10 +660,10 @@ function InterruptedFloorActions(props: InterruptedFloorActionsProps) {
         await openChildSession(navigation, r.value.childSessionId, r.value.title, sessionId)
       } else setFailure(r.error.message)
     } catch (e) {
-      setFailure(describeError(e))
+      if (active.current) setFailure(describeError(e))
     } finally {
       submitting.current = false
-      setOperation(null)
+      if (active.current) setOperation(null)
     }
   }
 

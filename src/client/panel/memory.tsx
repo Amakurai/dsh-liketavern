@@ -129,8 +129,8 @@ function MemorySelection(props: MemorySectionProps) {
     const activeIds = new Set(active.value.items.map((item) => item.cardId))
     const archivedItems = archived && archived.ok ? archived.value.items.filter((item) => !activeIds.has(item.cardId)) : []
     return { ok: true as const, value: { active: active.value.items, archived: archivedItems } }
-  }, [])
-  const stories = useLoader(() => props.remote.listStories({ cardId }), [cardId], cardId !== '')
+  }, [props.remote])
+  const stories = useLoader(() => props.remote.listStories({ cardId }), [props.remote, cardId], cardId !== '')
   useEffect(() => {
     if (props.initialContext || cardRestored || storyRestored || prefilled.current || cardId) return
     if (!activeSessionId || typeof props.remote.getSessionBinding !== 'function') return
@@ -173,6 +173,8 @@ function MemoryContextSection(props: { remote: TavernRemote;
   const editing = useRef(editingId)
   editing.current = editingId
   const pending = useRef(false)
+  const alive = useRef(true)
+  useEffect(() => { alive.current = true; return () => { alive.current = false } }, [])
   const setEditingId = (id: string | null) => { editing.current = id; setStoredEditingId(id) }
   const [newBody, setNewBody] = useDraftState(`${draftKey}:newBody`, '')
   const [newTags, setNewTags] = useDraftState(`${draftKey}:newTags`, '')
@@ -196,11 +198,11 @@ function MemoryContextSection(props: { remote: TavernRemote;
   const [deltaKeys, setDeltaKeys] = useDraftState(`${draftKey}:deltaKeys`, '')
   const toast = useToast()
 
-  const memories = useLoader(() => remote.getMemories({ cardId, storyId }), [cardId, storyId], cardId !== '')
-  const deltas = useLoader(() => remote.getWorldDeltas({ cardId, storyId }), [cardId, storyId], cardId !== '')
-  const journal = useLoader(() => remote.getJournal({ cardId, storyId }), [cardId, storyId], cardId !== '')
+  const memories = useLoader(() => remote.getMemories({ cardId, storyId }), [remote, cardId, storyId], cardId !== '')
+  const deltas = useLoader(() => remote.getWorldDeltas({ cardId, storyId }), [remote, cardId, storyId], cardId !== '')
+  const journal = useLoader(() => remote.getJournal({ cardId, storyId }), [remote, cardId, storyId], cardId !== '')
   // 回滚恢复未完成时整个剧情拒绝写入；这里给出可见状态与受控重置出口，避免永久卡死。
-  const recovery = useLoader(() => remote.getStoryRecovery({ cardId, storyId }), [cardId, storyId], cardId !== '')
+  const recovery = useLoader(() => remote.getStoryRecovery({ cardId, storyId }), [remote, cardId, storyId], cardId !== '')
   const [confirmReset, setConfirmReset] = useState(false)
   const recoveringFloors = recovery.state.status === 'ready' ? recovery.state.value.floors : []
 
@@ -215,7 +217,10 @@ function MemoryContextSection(props: { remote: TavernRemote;
     finally { pending.current = false }
   }
 
-  const journalDirty = journal.state.status === 'ready' && journalText !== journal.state.value.text
+  // 读取尚未就绪或报错时，恢复的未保存笔记草稿同样必须计入 dirty，防止切换角色/剧情或关闭时静默丢弃。
+  const journalDirty = journal.state.status === 'ready'
+    ? journalText !== journal.state.value.text
+    : journalRestored && journalUnsaved !== false
   const effectiveDeltaRef = deltaType === 'add' ? '' : deltaRef.trim()
   const guard = useDraftGuard(
     journalDirty || !!newBody.trim() || !!newTags.trim() || !!newKeys.trim() || !!deltaContent.trim() || !!effectiveDeltaRef || !!deltaKeys.trim(),
@@ -347,6 +352,7 @@ function MemoryContextSection(props: { remote: TavernRemote;
   const exportBook = () =>
     op(async () => {
       const r = await remote.exportMergedLorebook({ cardId, storyId })
+      if (!alive.current) return
       if (!r.ok) setError(r.error.message)
       else {
         downloadJson(`lorebook-merged-${cardId}.json`, r.value.json)
@@ -498,6 +504,7 @@ function MemoryContextSection(props: { remote: TavernRemote;
                         <button
                           key={id}
                           type="button"
+                          aria-pressed={memoryFilter === id}
                           className="dsh-tavern-chip"
                           data-active={memoryFilter === id ? 'true' : 'false'}
                           disabled={busy || editingId !== null}
@@ -629,6 +636,7 @@ function MemoryContextSection(props: { remote: TavernRemote;
                       <button
                         key={id}
                         type="button"
+                        aria-pressed={deltaFilter === id}
                         className="dsh-tavern-chip"
                         data-active={deltaFilter === id ? 'true' : 'false'}
                         disabled={busy || editingId !== null}

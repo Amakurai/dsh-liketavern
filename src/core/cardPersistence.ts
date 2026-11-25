@@ -154,6 +154,7 @@ export function installCardPersistence(snapshot:HelperSnapshot,source:string,_la
     if(refreshing) return refreshing.then(()=>flushHelperVariables())
     flushScheduled=false
     if(failure) return Promise.reject(failure)
+    if(!running&&!differences().length){setStatus('saved');return Promise.resolve()}
     if(!running) running=drain().finally(()=>{running=null;refreshIfClean()})
     return running
   }
@@ -161,6 +162,7 @@ export function installCardPersistence(snapshot:HelperSnapshot,source:string,_la
   function changed() {
     if(!active) throw new Error('卡面已关闭')
     if(failure) {setStatus('error');return}
+    if(!running&&!editing&&!refreshing&&!differences().length){flushScheduled=false;setStatus('saved');return}
     setStatus('pending')
     flushScheduled=true
     queueMicrotask(()=>{if(active) void flushHelperVariables().catch(()=>{})})

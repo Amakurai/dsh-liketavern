@@ -9,6 +9,7 @@ import {attachHelperEvents} from './helperEventRouter.js'
 import {notifyHelperStory,watchHelperStory} from './helperNotifications.js'
 import {useT} from './i18n.js'
 import {Btn,Err,Muted} from './util.js'
+import {subscribeWindowMessage} from './windowEvents.js'
 import type {TavernRemote} from './types.js'
 import { randomUuid, sha256Hex } from '../core/secureRandom.js'
 
@@ -30,13 +31,16 @@ export function HelperMvuRunner(props:{remote:TavernRemote;sessionId:string;stor
   const t=useT(),frame=useRef<HTMLIFrameElement|null>(null),live=useRef(props)
   live.current=props
   const [error,setError]=useState<string|null>(null),[busy,setBusy]=useState(false),[restartRequired,setRestartRequired]=useState(false)
-  const [canceling,setCanceling]=useState(false),[cancelError,setCancelError]=useState<string|null>(null),cancelPending=useRef(false)
+  const [canceling,setCanceling]=useState(false),[cancelError,setCancelError]=useState<string|null>(null),cancelPending=useRef(false),mounted=useRef(true)
   const [sandboxGen,setSandboxGen]=useState(0)
+  // 同一 (sessionId, storyId) 下沙箱因卡死/脚本失联重建时沿用宿主侧租约身份，避免服务端 90s 租约自锁。
+  const runnerIdentity=useRef<{key:string;runtimeId:string}>({key:'',runtimeId:''})
+  useLayoutEffect(()=>{mounted.current=true;return()=>{mounted.current=false}},[])
   const cancelWaiting=async()=>{
     if(!live.current.onCancel||cancelPending.current)return
     cancelPending.current=true;setCanceling(true);setCancelError(null)
-    try{await live.current.onCancel()}catch(value){setCancelError(describeError(value))}
-    finally{cancelPending.current=false;setCanceling(false)}
+    try{await live.current.onCancel()}catch(value){if(mounted.current)setCancelError(describeError(value))}
+    finally{cancelPending.current=false;if(mounted.current)setCanceling(false)}
   }
   const cancelRef=useRef(cancelWaiting)
   cancelRef.current=cancelWaiting
@@ -65,7 +69,12 @@ export function HelperMvuRunner(props:{remote:TavernRemote;sessionId:string;stor
       if(!running&&(!frameRuntime||!live.current.ready))return
       timerId=setTimeout(()=>{timerId=undefined;void poll()},nextPollDelay())
     }
-    const runtimeId=randomUuid(),{sessionId,storyId}=props
+    const {sessionId,storyId}=props
+    const identityKey=`${sessionId}\0${storyId}`
+    if(runnerIdentity.current.key!==identityKey){
+      runnerIdentity.current={key:identityKey,runtimeId:randomUuid()}
+    }
+    const runtimeId=runnerIdentity.current.runtimeId
     const requests=new Set<()=>void>()
     // RPC 无响应也必须释放本地在途锁；迟到响应只结束原 Promise，不能覆盖重试后的任务。
     const request=async<T,>(call:()=>Promise<T>):Promise<T>=>{
@@ -80,7 +89,7 @@ export function HelperMvuRunner(props:{remote:TavernRemote;sessionId:string;stor
     const send=(message:Record<string,unknown>)=>{if(active)frame.current?.contentWindow?.postMessage({source:'dsh-tavern-card',...message},'*')}
     const valid=()=>active&&running&&!failed&&live.current.ready&&Boolean(work?.job)&&Date.now()<deadline
     const endpoint=attachHelperEvents(sessionId,storyId,send,{current:valid,snapshot:()=>work?.snapshot})
-    const fail=(value:unknown)=>{if(active){failed=true;running=false;if(result===undefined&&timerId!==undefined){clearTimeout(timerId);timerId=undefined}setBusy(false);setError(String(value instanceof Error?value.message:value).slice(0,2000))}}
+    const fail=(value:unknown)=>{if(active){failed=true;running=false;if(result===undefined&&timerId!==undefined){clearTimeout(timerId);timerId=undefined}setBusy(false);setError(describeError(value).slice(0,2000))}}
     const complete=(next?:Partial<HelperMvuWork>)=>{
       work=undefined;result=undefined;running=false;failed=false;restart=false;renewFailures=0
       if(next&&next.status==='idle'&&!next.awaitingTurnEnd){idleAttempts=1;idlePollAt=Date.now()+IDLE_POLL_BASE_DELAY_MS}
@@ -193,9 +202,9 @@ export function HelperMvuRunner(props:{remote:TavernRemote;sessionId:string;stor
     }
     pollRef.current=wake
     const stopWatch=watchHelperStory(sessionId,storyId,wake)
-    window.addEventListener('message',receive)
+    const unsubscribeMsg=subscribeWindowMessage(frame.current?.contentWindow,receive)
     scheduleTimer()
-    return()=>{active=false;if(timerId!==undefined)clearTimeout(timerId);stopWatch();for(const cancel of requests)cancel();endpoint.dispose();window.removeEventListener('message',receive);retry.current=()=>{};pollRef.current=()=>{}}
+    return()=>{active=false;if(timerId!==undefined)clearTimeout(timerId);stopWatch();for(const cancel of requests)cancel();endpoint.dispose();unsubscribeMsg();retry.current=()=>{};pollRef.current=()=>{}}
   },[props.sessionId,props.storyId,srcDoc,sandboxGen])
   useEffect(()=>{pollRef.current()},[props.ready])
   return <span>

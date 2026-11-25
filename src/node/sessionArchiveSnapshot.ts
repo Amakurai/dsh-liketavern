@@ -2,7 +2,7 @@
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { SessionId, SessionStore, type Session, type SessionEvent } from '@deepseek-ai/dsh-session'
-import type { SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
+import { materializeCreateHeader, type SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
 import { WorkspaceFs } from '../state/workspaceFs.js'
 import { readStory, storyRoot } from '../state/story.js'
 import { withWorkspaceLock } from '../state/workspaceLock.js'
@@ -162,7 +162,9 @@ export async function snapshotSessionArchive(ctx: Context, state: TavernState, s
       if (refs.images.size + refs.files.size > SESSION_ARCHIVE_MAX_FILES) {
         throw new Error(`会话迁移附件数量超过 ${SESSION_ARCHIVE_MAX_FILES} 个上限，请使用全量备份`)
       }
-      let remaining = SESSION_ARCHIVE_MAX_BYTES - Buffer.byteLength(history)
+      const initialEnvelopeBytes = Buffer.byteLength(JSON.stringify({ binding, session }))
+      let remaining = SESSION_ARCHIVE_MAX_BYTES - initialEnvelopeBytes
+      if (remaining < 0) throw new Error('会话迁移文件超过大小上限')
       const files: SessionArchiveFile[] = []
       const dirCheck = { boundary: state.paths.root, verified: new Set<string>() }
       const add = async (area: SessionArchiveFile['area'], root: string, path: string) => {
@@ -180,6 +182,7 @@ export async function snapshotSessionArchive(ctx: Context, state: TavernState, s
       for (const ref of refs.images.values()) {
         if (ref.bytes > remaining) throw new Error('会话迁移文件超过大小上限')
         const image = await store!.readImage(ref)
+        if (image.data.byteLength > remaining) throw new Error('会话迁移文件超过大小上限')
         remaining -= image.data.byteLength
         attachments.push({ kind: 'image', ref, data: Buffer.from(image.data).toString('base64') })
       }
@@ -201,6 +204,13 @@ export async function snapshotSessionArchive(ctx: Context, state: TavernState, s
       const preservedBinding = derived && derived.length > 0 ? { ...binding, walLineage: derived } : binding
       const activeFloors = (await workspace.wal.listFloors()).filter(floor => !floor.rolledBack).map(floor => floor.floor)
       assertWalLineageComplete(activeFloors, preservedBinding, sessionId)
+      const finalEnvelopeBytes = Buffer.byteLength(JSON.stringify({
+        binding: preservedBinding,
+        session: { header: materializeCreateHeader(session.header), inheritedEventCount: session.inheritedEventCount, events: session.events },
+      }))
+      if (remaining - (finalEnvelopeBytes - initialEnvelopeBytes) < 0) {
+        throw new Error('会话迁移文件超过大小上限')
+      }
       const archive = sealSessionArchive({ format: 'dsh-tavern-session', version: 1, binding: preservedBinding, session, files, attachments })
       if (Buffer.byteLength(JSON.stringify(archive)) > SESSION_ARCHIVE_MAX_JSON_BYTES) throw new Error('会话迁移文件超过 JSON 大小上限')
       if (!live) {

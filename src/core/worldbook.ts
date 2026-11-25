@@ -25,6 +25,7 @@
  *   /regex/ 键（复用 regex.ts 的保守启发式）一律按「永不命中」处理，与非法正则键同口径。
  */
 import { expandIdentityMacros, hasTurnLocalMacros } from './macros.js'
+import { setOwnField } from './objectSafety.js'
 import { findUnsafeRegexConstruct } from './regex.js'
 import { WI_PERCENT_WINDOW_BASE } from './turnBudget.js'
 import {
@@ -353,6 +354,23 @@ function sourceTier(entry: WorldInfoEntry, strategy: 0 | 1 | 2): number {
   }
 }
 
+function normalizeTimerMap(raw: Readonly<Record<string, number>> | undefined): Record<string, number> {
+  const out: Record<string, number> = {}
+  if (!raw || typeof raw !== 'object') return out
+  for (const [key, value] of Object.entries(raw)) {
+    if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+      setOwnField(out, key, value)
+    }
+  }
+  return out
+}
+
+function readTimerCount(map: Readonly<Record<string, number>>, key: string): number {
+  if (!Object.hasOwn(map, key)) return 0
+  const value = map[key]
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0
+}
+
 /**
  * 求值一轮世界书触发。返回激活条目（按位置分桶）、触发日志与新的定时状态。
  * 纯函数：不修改入参；timerState 的持久化由调用方经事务层完成。
@@ -362,13 +380,14 @@ export function evaluateWorldInfo(input: WIEngineInput): WIEngineResult {
   const random = input.random ?? Math.random
   const log: WILogEntry[] = []
   const timer: WITimerState = {
-    stickyLeft: { ...input.timerState.stickyLeft },
-    cooldownLeft: { ...input.timerState.cooldownLeft },
+    stickyLeft: normalizeTimerMap(input.timerState?.stickyLeft),
+    cooldownLeft: normalizeTimerMap(input.timerState?.cooldownLeft),
   }
 
   // ── 定时效果按轮推进：本轮判定使用上轮剩余值，轮末才扣减（见递归扫描之后）。
   // sticky=N 语义 = 激活后再保持 N 轮（types.ts：「激活后保持 N 条消息」）；
-  // 若轮初先扣，sticky=2 只会多维持 1 轮，与文档语义不符。
+  // 若轮初先扣，sticky=2 只会多维持 1 轮，与文档语义不符。仅活跃正计数才进入轮初集合，
+  // 避免外部残留 <=0 脏键在同轮新激活时被立即误扣或在预算裁掉时漏回滚。
   const stickyKeysAtStart = new Set(Object.keys(timer.stickyLeft))
   const cooldownKeysAtStart = new Set(Object.keys(timer.cooldownLeft))
 
@@ -475,9 +494,12 @@ export function evaluateWorldInfo(input: WIEngineInput): WIEngineResult {
     })
     // 定时效果：仅新激活（非 sticky 延续）写入状态；效果期间重复命中不刷新
     if (via !== 'sticky') {
-      if (entry.sticky && entry.sticky > 0) timer.stickyLeft[entry.key] = entry.sticky
-      // cooldown 与 sticky 串联：sticky 期间 cooldown 一并倒数
-      if (entry.cooldown && entry.cooldown > 0) timer.cooldownLeft[entry.key] = entry.cooldown + (entry.sticky ?? 0)
+      const stickyTurns = typeof entry.sticky === 'number' && Number.isFinite(entry.sticky) && entry.sticky > 0 ? entry.sticky : 0
+      if (stickyTurns > 0) setOwnField(timer.stickyLeft, entry.key, stickyTurns)
+      // cooldown 与 sticky 串联：sticky 期间 cooldown 一并倒数（负值/NaN sticky 视为未启用，不得抵消 cooldown）
+      if (typeof entry.cooldown === 'number' && Number.isFinite(entry.cooldown) && entry.cooldown > 0) {
+        setOwnField(timer.cooldownLeft, entry.key, entry.cooldown + stickyTurns)
+      }
     }
     return true
   }
@@ -496,19 +518,19 @@ export function evaluateWorldInfo(input: WIEngineInput): WIEngineResult {
       if (entry.delayUntilRecursion > level) continue
       // 条目编辑为确定常驻后，旧配置留下的计时器不能改变稳定段是否存在。
       if (c.standingSafe) {
-        delete timer.stickyLeft[entry.key]
-        delete timer.cooldownLeft[entry.key]
+        if (Object.hasOwn(timer.stickyLeft, entry.key)) delete timer.stickyLeft[entry.key]
+        if (Object.hasOwn(timer.cooldownLeft, entry.key)) delete timer.cooldownLeft[entry.key]
         if (tryActivate(c, [], 'constant', level)) fresh.push(activated[activated.length - 1]!)
         continue
       }
       // sticky 延续：无需命中、跳过概率（须先于 cooldown 判定：cooldown 与 sticky
       // 串联写入时 sticky 期间 cooldown 一并倒数，先判 cooldown 会拦死 sticky 延续）
-      if ((timer.stickyLeft[entry.key] ?? 0) > 0) {
+      if (readTimerCount(timer.stickyLeft, entry.key) > 0) {
         if (tryActivate(c, [], 'sticky', level)) fresh.push(activated[activated.length - 1]!)
         continue
       }
       // 冷却
-      const cooldownLeft = timer.cooldownLeft[entry.key] ?? 0
+      const cooldownLeft = readTimerCount(timer.cooldownLeft, entry.key)
       if (cooldownLeft > 0) {
         if (!loggedSkip.has(entry.key)) {
           loggedSkip.add(entry.key)
@@ -618,14 +640,20 @@ export function evaluateWorldInfo(input: WIEngineInput): WIEngineResult {
 
   // ── 轮末扣减定时计数：仅扣轮初已存在的键；本轮新激活写入的值从下一轮开始倒数 ──
   for (const key of stickyKeysAtStart) {
-    const left = (timer.stickyLeft[key] ?? 0) - 1
-    if (left <= 0) delete timer.stickyLeft[key]
-    else timer.stickyLeft[key] = left
+    const left = readTimerCount(timer.stickyLeft, key) - 1
+    if (left <= 0) {
+      if (Object.hasOwn(timer.stickyLeft, key)) delete timer.stickyLeft[key]
+    } else {
+      setOwnField(timer.stickyLeft, key, left)
+    }
   }
   for (const key of cooldownKeysAtStart) {
-    const left = (timer.cooldownLeft[key] ?? 0) - 1
-    if (left <= 0) delete timer.cooldownLeft[key]
-    else timer.cooldownLeft[key] = left
+    const left = readTimerCount(timer.cooldownLeft, key) - 1
+    if (left <= 0) {
+      if (Object.hasOwn(timer.cooldownLeft, key)) delete timer.cooldownLeft[key]
+    } else {
+      setOwnField(timer.cooldownLeft, key, left)
+    }
   }
 
   // inclusion group 已在每轮扫描后即时裁决（见 adjudicateGroups）：最终候选 = 全部激活去掉落选者
@@ -730,8 +758,12 @@ export function evaluateWorldInfo(input: WIEngineInput): WIEngineResult {
     // sticky 延续条目（计时是更早轮写入的）本轮落选也要清 stickyLeft：保留会让它下轮
     // 经 via='sticky' 免概率回归并无条件占住 inclusion group，饿死同组兄弟后又可能被裁，
     // 导致 sticky 剩余轮数内整组零输出。cooldown 保留——落选不豁免冷却。
-    if (candidate.via === 'sticky' || !stickyKeysAtStart.has(candidate.entry.key)) delete timer.stickyLeft[candidate.entry.key]
-    if (!cooldownKeysAtStart.has(candidate.entry.key)) delete timer.cooldownLeft[candidate.entry.key]
+    if (candidate.via === 'sticky' || !stickyKeysAtStart.has(candidate.entry.key)) {
+      if (Object.hasOwn(timer.stickyLeft, candidate.entry.key)) delete timer.stickyLeft[candidate.entry.key]
+    }
+    if (!cooldownKeysAtStart.has(candidate.entry.key)) {
+      if (Object.hasOwn(timer.cooldownLeft, candidate.entry.key)) delete timer.cooldownLeft[candidate.entry.key]
+    }
   }
 
   return {

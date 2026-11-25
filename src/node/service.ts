@@ -513,9 +513,12 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
   }
 
   async deletePersona(request: { id: string }): Promise<TavernMethodResults['deletePersona']> {
-    const id = await this.state.deletePersona(request.id)
-    await this.updateDefaultPersona(current => Boolean(current) && (current === request.id || current === id
-      || (process.platform === 'win32' && current.toLowerCase() === id.toLowerCase())), '')
+    const { id, aliases } = typeof this.state.deletePersonaWithAliases === 'function'
+      ? await this.state.deletePersonaWithAliases(request.id)
+      : { id: await this.state.deletePersona(request.id), aliases: [request.id] }
+    const matchKey = (value: string) => process.platform === 'win32' ? value.toLowerCase() : value
+    const aliasSet = new Set([request.id, id, ...aliases].map(matchKey))
+    await this.updateDefaultPersona(current => Boolean(current) && aliasSet.has(matchKey(current)), '')
     return { deleted: true }
   }
 
@@ -556,14 +559,17 @@ export class TavernService extends TypertRemoteService implements TavernServiceC
     return { binding, userName: persona?.name.trim() || DEFAULT_USER_NAME, canSwipeGreeting, conversationStarted }
   }
 
-  /** 剧情归属变更先同步取消当前宿主请求，覆盖 agent/request 之后 prepareCall 的异步准备；未来输入仍留在原生队列。 */
+  /** 剧情归属变更先同步取消当前宿主请求与在途维护，覆盖 prepareCall 与空闲压缩/别名流；未来输入仍留在原生队列。 */
   private cancelChangedBinding(sessionId: string, previous: SessionBinding | null, next: SessionBinding | null): void {
     const plan = this.state.turnPlans.get(sessionId)
     // 当前读失败可按未绑定容错，活动计划仍是准备中请求的确定归属；不能在实际解除后放行旧角色请求。
     if (previous?.cardId === next?.cardId && previous?.storyId === next?.storyId
       && (!plan || plan.cardId === next?.cardId && plan.storyId === next?.storyId)) return
     const agent = this.ctx.agents?.get(sessionId as Session['id'])
-    if (agent?.status === 'running') agent.cancel({ kind: 'hook', reason: 'Tavern 剧情绑定已变化' }, { keepInbox: true })
+    const phaseKind = (agent as { phase?: { kind?: string } } | undefined)?.phase?.kind
+    if (agent && (agent.status === 'running' || phaseKind === 'maintenance')) {
+      agent.cancel({ kind: 'hook', reason: 'Tavern 剧情绑定已变化' }, { keepInbox: true })
+    }
   }
 
   async setSessionBinding(request: { binding: unknown }): Promise<TavernMethodResults['setSessionBinding']> {

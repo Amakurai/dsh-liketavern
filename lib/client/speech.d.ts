@@ -77,5 +77,5 @@ interface SpeechBubbleProps {
     onMessageBranch?: (branch: NonNullable<HelperMessageEditResult['branch']>) => Promise<void>;
     onSwipeGreeting?: (index: number, frameLease?: HelperFrameLease) => void | Promise<void>;
 }
-/** 按会话和角色卸载旧气泡状态，慢请求的报错不能留到新会话。 */
+/** 按宿主、会话和角色卸载旧气泡状态，慢请求的报错不能留到新会话。 */
 export declare function SpeechBubble(props: SpeechBubbleProps): import("react").JSX.Element;

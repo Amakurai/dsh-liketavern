@@ -67,11 +67,10 @@ const REGEX_LITERAL_RE = /^\/(.*)\/([a-z]*)$/s
 /** 单条 pattern 字符数上限：超长 pattern 编译/回溯成本都不可控，直接拒绝。 */
 const MAX_REGEX_PATTERN_CHARS = 2000
 
-/** 从 i（'[' 的下标）跳过整个字符类（含转义与首位置字面 ]），返回类后一个字符的下标。 */
+/** 从 i（'[' 的下标）跳过整个字符类（JS 中未转义的 `]` 立即闭合 `[]` / `[^]`），返回类后一个字符的下标。 */
 function skipCharClass(source: string, i: number): number {
   i++
   if (source[i] === '^') i++
-  if (source[i] === ']') i++ // 首位置的 ] 是字面量
   while (i < source.length) {
     if (source[i] === '\\') {
       i += 2
@@ -416,14 +415,17 @@ function filterCapturedGroup(value: string, rule: RegexRule, trimRes: readonly R
   return out
 }
 
+const MATCH_MACRO_TEST_RE = /\{\{\s*match\s*\}\}/i
+const MATCH_MACRO_REPLACE_RE = /\{\{\s*match\s*\}\}/gi
+
 /** 带 trim 的规则走 ST 同款手工代入：$0/$1..$N/$<name>，代入前先过滤组值。 */
 function expandRegexReplacement(replace: string, macroCtx: MacroContext, _matchToken: '$&' | '$0' = '$&'): string {
   if (!replace.includes('{{') && !replace.includes('<')) return replace
-  if (!replace.includes('{{match}}')) {
+  if (!MATCH_MACRO_TEST_RE.test(replace)) {
     return expandMacros(replace, macroCtx, undefined, escapeReplacementDollars)
   }
   const marker = createMacroMarkerAllocator(replace, macroCtx)('Match')
-  const expanded = expandMacros(replace.replaceAll('{{match}}', marker), macroCtx, undefined, escapeReplacementDollars)
+  const expanded = expandMacros(replace.replace(MATCH_MACRO_REPLACE_RE, () => marker), macroCtx, undefined, escapeReplacementDollars)
   const re = new RegExp(`(\\$*)${escapeRegExp(marker)}`, 'g')
   return expanded.replace(re, (_raw, dollars: string) => `${dollars.length % 2 === 1 ? `${dollars}$` : dollars}$&`)
 }
@@ -460,7 +462,7 @@ function replaceWithGroupTrim(text: string, re: RegExp, template: string, rule: 
         }
       } else if (name !== undefined) {
         if (!groups) return _m
-        value = groups[name]
+        value = Object.hasOwn(groups, name) ? groups[name] : undefined
       }
       if (value === undefined) return trailing // 未命中的组（含可选组）代入空串，对齐 ST；'' 与 '0' 是真值，必须留下
       if (typeof value !== 'string') return _m

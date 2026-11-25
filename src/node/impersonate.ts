@@ -119,6 +119,9 @@ export async function impersonate({ ctx, state }: ImpersonateDeps, sessionId: st
   const options: GenerateOptions = reasoningEffort === undefined
     ? merged
     : { ...merged, reasoningEffort: ReasoningEffortId(reasoningEffort) }
+  if (ctx.sessions.get(sessionId as Session['id']) !== session || !isTavernRuntimeSession(ctx, session)) {
+    throw new FloorError('session-not-live', `会话 ${sessionId} 已关闭或退出 Tavern 模式`)
+  }
   const latestBinding = await state.loadStoryBinding(sessionId)
   if (!latestBinding || latestBinding.cardId !== binding.cardId || latestBinding.storyId !== binding.storyId) {
     throw new FloorError('binding-changed', '代答准备期间剧情绑定已改变')

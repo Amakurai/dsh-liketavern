@@ -14,11 +14,12 @@ import {
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { CharacterPicker, rememberCharacter } from './characterPicker.js'
 import { BINDING_CHANGED_EVENT } from './actions.js'
-import { CHARACTER_CHANGED_EVENT, cachedAvatar, cachedCharacterDetail, invalidateSessionBinding } from './cache.js'
+import { CHARACTER_CHANGED_EVENT, cachedAvatar, cachedCharacterDetail, invalidateCharacter, invalidateSessionBinding } from './cache.js'
 import { bindingFromDefaults } from './chip.js'
 import { useDisplaySettingsRevision } from './displayPrefs.js'
 import { useT } from './i18n.js'
 import { isTavernSession, type UseSessions } from './mode.js'
+import { remoteIdentity } from './remoteIdentity.js'
 import { useSessionView } from './sessionViews.js'
 import { TavernSeatChip } from './seatChip.js'
 import type { CharacterDetail, CharacterSummary, SessionBinding, TavernRemote } from './types.js'
@@ -56,7 +57,7 @@ function GreetingPreview(props: {
   const displaySettingsRevision = useDisplaySettingsRevision()
   const preview = useLoader(
     () => props.remote.renderOutputText({ sessionId: props.sessionId, text: props.text }),
-    [props.sessionId, props.text, props.interactiveCards, props.cardId, props.characterRevision, props.presetId, displaySettingsRevision],
+    [props.remote, props.sessionId, props.text, props.interactiveCards, props.cardId, props.characterRevision, props.presetId, displaySettingsRevision],
   )
   if (preview.state.status === 'error') return <Err message={preview.state.message} />
   if (preview.state.status !== 'ready') return <Skeleton />
@@ -153,9 +154,9 @@ interface HeroProps {
   useSessions?: UseSessions
 }
 
-/** 会话切换时卸载旧选择器，异步结果不能把忙碌态、错误或弹窗带到新会话。 */
+/** 会话切换或重连 remote 时卸载旧选择器，异步结果不能把忙碌态、错误或弹窗带到新会话。 */
 export function TavernHeroCharacter(props: HeroProps) {
-  return <HeroCharacterSession key={props.sessionId} {...props} />
+  return <HeroCharacterSession key={`${remoteIdentity(props.remote)}:${props.sessionId}`} {...props} />
 }
 
 function HeroCharacterSession(props: HeroProps) {
@@ -338,13 +339,20 @@ function HeroCharacterSession(props: HeroProps) {
       setChipHost((prev) => (prev === host ? prev : host))
       return host
     }
-    if (apply()) return
+    const initial = apply()
     const seat = dockRef.current?.closest('[data-composer-seat]')
-    const root = seat instanceof HTMLElement ? seat : document.body
+    if (seat instanceof HTMLElement) {
+      const obs = new MutationObserver(() => {
+        apply()
+      })
+      obs.observe(seat, { childList: true, subtree: true })
+      return () => obs.disconnect()
+    }
+    if (initial) return
     const obs = new MutationObserver(() => {
       if (apply()) obs.disconnect()
     })
-    obs.observe(root, { childList: true, subtree: true })
+    obs.observe(document.body, { childList: true, subtree: true })
     const timer = window.setTimeout(() => {
       apply()
       obs.disconnect()
@@ -506,7 +514,7 @@ function HeroCharacterSession(props: HeroProps) {
 
   return (
     <div ref={dockRef} data-tavern-hero-root="" className="dsh-tavern-ui">
-      {chipHost ? createPortal(chip, chipHost) : chip}
+      {chipHost && chipHost.isConnected !== false ? createPortal(chip, chipHost) : chip}
       {open && <CharacterPicker remote={remote} selectedId={binding?.cardId} busy={busy} error={error}
         onPick={(id) => void pickCharacter(id)} onClose={() => setOpen(false)} />}
       {error && (sweepFailed
@@ -517,7 +525,7 @@ function HeroCharacterSession(props: HeroProps) {
         : <div className="dsh-tavern-hero-error">{error}</div>)}
       {bindingLoader.state.status === 'error' && <div role="alert" className="dsh-tavern-hero-error">
         {bindingLoader.state.message}
-        <Btn onClick={bindingLoader.reload} disabled={busy}>{t('action.retry')}</Btn>
+        <Btn onClick={() => { invalidateSessionBinding(sessionId); bindingLoader.reload() }} disabled={busy}>{t('action.retry')}</Btn>
       </div>}
       {binding && detailLoader.state.status === 'loading' && (
         <div className="dsh-tavern-hero-preview" aria-busy="true">
@@ -567,7 +575,7 @@ function HeroCharacterSession(props: HeroProps) {
             <Btn primary size="md" disabled={busy || !greetingText.trim() || !detail} onClick={() => void startConversation()}>
               {t('hero.start')}
             </Btn>
-            {detailLoader.state.status === 'error' && <Btn disabled={busy} onClick={detailLoader.reload}>{t('action.retry')}</Btn>}
+            {detailLoader.state.status === 'error' && <Btn disabled={busy} onClick={() => { invalidateCharacter(binding.cardId); detailLoader.reload(); avatarLoader.reload() }}>{t('action.retry')}</Btn>}
             {variants.length > 1 && (
               <div className="dsh-tavern-hero-swipe">
                 <button

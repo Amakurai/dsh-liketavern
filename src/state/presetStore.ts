@@ -145,16 +145,15 @@ function toRole(raw: Record<string, unknown>): ChatRole {
 /** prompt_order 的 folder 摊平：嵌套层级设硬上限（恶意深嵌套会撑爆调用栈），超限拒绝导入。 */
 const MAX_PROMPT_ORDER_DEPTH = 16
 
-function flattenOrderItems(items: unknown[], depth = 0): OrderItem[] {
+function flattenOrderItems(items: unknown[], depth = 0, out: OrderItem[] = []): OrderItem[] {
   if (depth > MAX_PROMPT_ORDER_DEPTH) {
     throw new Error(`prompt_order 嵌套层级超过上限（${MAX_PROMPT_ORDER_DEPTH}），拒绝导入`)
   }
-  const out: OrderItem[] = []
   for (const item of items) {
     if (!isRecord(item)) continue
     const identifier = toStr(item.identifier)
     if (identifier !== '') out.push({ identifier, enabled: toBool(item.enabled, true) })
-    if (Array.isArray(item.items)) out.push(...flattenOrderItems(item.items, depth + 1))
+    if (Array.isArray(item.items)) flattenOrderItems(item.items, depth + 1, out)
   }
   return out
 }
@@ -165,19 +164,23 @@ function flattenOrderItems(items: unknown[], depth = 0): OrderItem[] {
  */
 function pickPromptOrder(promptOrder: unknown): OrderItem[] | null {
   if (!Array.isArray(promptOrder) || promptOrder.length === 0) return null
-  const blocks: { id: number; items: OrderItem[] }[] = []
+  const rawBlocks: { id: number; order: unknown[] }[] = []
   for (const block of promptOrder) {
     if (!isRecord(block) || !Array.isArray(block.order)) continue
-    const items = flattenOrderItems(block.order)
     // 空顺序也是明确选择：不能跳过首选角色而启用旧角色的提示词。
-    blocks.push({ id: toNum(block.character_id, Number.NaN), items })
+    rawBlocks.push({ id: toNum(block.character_id, Number.NaN), order: block.order })
   }
-  if (blocks.length === 0) return []
+  if (rawBlocks.length === 0) return []
   for (const id of PREFERRED_CHARACTER_IDS) {
-    const hit = blocks.find((b) => b.id === id)
-    if (hit) return hit.items
+    const hit = rawBlocks.find((b) => b.id === id)
+    if (hit) return flattenOrderItems(hit.order)
   }
-  return blocks.reduce((best, cur) => (cur.items.length > best.items.length ? cur : best)).items
+  let best: OrderItem[] = []
+  for (let i = 0; i < rawBlocks.length; i++) {
+    const items = flattenOrderItems(rawBlocks[i]!.order)
+    if (i === 0 || items.length > best.length) best = items
+  }
+  return best
 }
 
 function collectPromptEmbeddedRegex(rawPrompts: unknown[]): CardRegexScript[] {

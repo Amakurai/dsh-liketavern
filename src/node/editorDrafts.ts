@@ -5,9 +5,11 @@
  */
 import { Buffer } from 'node:buffer'
 import { createHash } from 'node:crypto'
+import { constants as fsConstants } from 'node:fs'
 import { open, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { atomicWrite } from '../state/atomicWrite.js'
+import { WorkspaceFs } from '../state/workspaceFs.js'
 import { withWorkspaceLock } from '../state/workspaceLock.js'
 import { EDITOR_DRAFT_MAX_BYTES } from '../core/editorDraftLimits.js'
 import { POLLUTION_KEYS } from '../core/objectSafety.js'
@@ -72,23 +74,27 @@ function validateValue(value: unknown): asserts value is Record<string, unknown>
   visit(value, 0)
 }
 
-function draftPath(root: string, owner: string, key: string): string {
+function draftLocation(root: string, owner: string, key: string): { relPath: string; path: string } {
   if (typeof owner !== 'string' || !/^[A-Za-z0-9_-]{8,80}$/.test(owner)) invalid('浏览器标识格式错误')
   if (typeof key !== 'string' || key.length < 1 || key.length > 300 || key.includes('\0')) invalid('编辑器标识格式错误')
   const hash = (input: string) => createHash('sha256').update(input, 'utf8').digest('hex')
-  return join(root, 'editor-drafts', hash(owner), `${hash(key)}.json`)
+  const relPath = join('editor-drafts', hash(owner), `${hash(key)}.json`)
+  return { relPath, path: join(root, relPath) }
 }
 
 export async function getEditorDraft(root: string, owner: string, key: string): Promise<EditorDraft | null> {
-  const path = draftPath(root, owner, key)
+  const { relPath, path } = draftLocation(root, owner, key)
   return withWorkspaceLock(path, async () => {
+    await new WorkspaceFs(root, null).assertSafePath(relPath)
     let file
-    try { file = await open(path, 'r') } catch (error) {
+    try { file = await open(path, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0)) } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
       throw error
     }
     try {
-      const size = (await file.stat()).size
+      const stat = await file.stat()
+      if (!stat.isFile()) invalid('已保存草稿不是普通文件')
+      const size = stat.size
       if (size > EDITOR_DRAFT_MAX_BYTES) invalid('已保存草稿大小超过 2 MiB')
       // 有界读取同时覆盖外部进程在 stat 之后扩写文件的情形。
       const bytes = Buffer.alloc(Math.min(size + 1, EDITOR_DRAFT_MAX_BYTES + 1))
@@ -109,14 +115,20 @@ export async function getEditorDraft(root: string, owner: string, key: string): 
 }
 
 export async function saveEditorDraft(root: string, owner: string, key: string, value: unknown): Promise<void> {
-  const path = draftPath(root, owner, key)
+  const { relPath, path } = draftLocation(root, owner, key)
   validateValue(value)
   const serialized = JSON.stringify({ version: 1, updatedAt: new Date().toISOString(), value })
   if (Buffer.byteLength(serialized, 'utf8') > EDITOR_DRAFT_MAX_BYTES) invalid('大小不能超过 2 MiB')
-  await withWorkspaceLock(path, () => atomicWrite(path, serialized))
+  await withWorkspaceLock(path, async () => {
+    await new WorkspaceFs(root, null).assertSafePath(relPath)
+    await atomicWrite(path, serialized)
+  })
 }
 
 export async function deleteEditorDraft(root: string, owner: string, key: string): Promise<void> {
-  const path = draftPath(root, owner, key)
-  await withWorkspaceLock(path, () => rm(path, { force: true }))
+  const { relPath, path } = draftLocation(root, owner, key)
+  await withWorkspaceLock(path, async () => {
+    await new WorkspaceFs(root, null).assertSafePath(relPath)
+    await rm(path, { force: true })
+  })
 }

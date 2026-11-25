@@ -1,16 +1,3 @@
-/**
- * 记忆的空闲维护，两件事共用一次 agent.runMaintenance，每次空闲只做其中一件：
- * - 异步压缩：memory_write 超容量时只标记（state.pendingMemoryCompress），
- *   turn 结束后用当前会话模型把最旧一批记忆合并为一条。
- * - 检索别名：没有待压缩的批次时，为还没有别名的记忆请模型补上（见 core/memoryAliases.ts）。
- *   别名是派生数据，写进 memory/aliases.json，不改记忆文件；失败不留痕迹，下一个结束的轮次再试。
- *
- * 语义约定：maintenance 在楼层之外运行，写入走 state.plainWorkspace 的
- * floor=null 文件面，压缩本身不记 WAL；原文归档并保留来源链。
- * 源记忆回滚时先展开相关摘要再撤销原文，避免摘要残留已撤销事实。即使同卡的
- * 另一会话正在生成中（其楼层由 withFloor 派生实例持有），这里也绝不会被记进 WAL。
- * 同步压缩曾阻塞该 step 的 LLM 流式调用数秒，挪到 idle 期后写工具立即返回。
- */
 import type { Context } from '@deepseek-ai/cordis';
 import { type LlmRuntime } from '@deepseek-ai/dsh-llm';
 import type { TavernState } from './state.js';

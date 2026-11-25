@@ -13,7 +13,7 @@
  * 骨架可能不同，场景并入指纹且各自占一个钉位——同一会话内场景交替时各自复用本场景首次
  * 钉死的字节，既不互相覆盖重算，也不会让 continue 轮拿到 normal 轮钉死的文本。
  */
-export declare const STANDING_PIN_VERSION = 28;
+export declare const STANDING_PIN_VERSION = 29;
 /** 钉死键：会话 × 生成场景。 */
 export declare function standingPinKey(sessionId: string, generationType?: string): string;
 export declare function standingFingerprint(binding: {

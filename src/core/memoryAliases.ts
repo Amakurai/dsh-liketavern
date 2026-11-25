@@ -49,7 +49,7 @@ const WRAPPERS = new RegExp(`^[${WRAP}\\-—]+|[${WRAP}。.．,，;；:：!！?�
 export function normalizeAliases(raw: readonly unknown[], body: string): string[] {
   const seen = new Set<string>()
   const aliases: string[] = []
-  const whole = body.trim().toLowerCase()
+  const whole = body ? body.normalize('NFKC').replace(/\s+/g, ' ').replace(WRAPPERS, '').toLowerCase() : ''
   for (const item of raw) {
     if (typeof item !== 'string') continue
     const alias = item.normalize('NFKC').replace(/\s+/g, ' ').replace(WRAPPERS, '')

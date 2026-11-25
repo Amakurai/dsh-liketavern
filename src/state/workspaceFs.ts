@@ -18,6 +18,7 @@ import { lstat, mkdir, readFile, readdir, rm } from 'node:fs/promises'
 import { dirname, join, normalize, relative, resolve, sep } from 'node:path'
 import type { Wal } from './wal.js'
 import { atomicWrite } from './atomicWrite.js'
+import { rootIdentity } from './pathIdentity.js'
 import { parseRecoveryMarker } from './walFormat.js'
 import { ledgerKey, noteWrite } from './writeLedger.js'
 import { withWorkspaceLock } from './workspaceLock.js'
@@ -25,25 +26,50 @@ import { withWorkspaceLock } from './workspaceLock.js'
 /** 工作区级回滚恢复标记（相对工作区根）：存在期间任何正文写入都必须被拒绝。 */
 export const WAL_RECOVERY_PATH = 'state/wal-recovery.json'
 
-/** WAL 目录及控制元数据（清单与恢复标记）不可作为普通楼层快照目标写入或回放。 */
+/** WAL 目录及控制元数据（清单与恢复标记）不可作为普通楼层快照目标写入或回放；折叠段尾点与空格防 Windows 别名绕过。 */
 export function isReservedWalPath(path: string): boolean {
-  const lower = path.toLowerCase()
-  return lower === 'state/wal' || lower.startsWith('state/wal/')
-    || lower === 'state/wal-coverage.json' || lower === 'state/wal-recovery.json'
+  if (!/wal/i.test(path)) return false
+  const normalized = path
+    .replace(/\\/g, '/')
+    .split('/')
+    .filter((seg) => seg !== '' && seg !== '.')
+    .map((seg) => seg.replace(/[. ]+$/, '').toLowerCase())
+    .join('/')
+  return normalized === 'state/wal' || normalized.startsWith('state/wal/')
+    || normalized === 'state/wal-coverage.json' || normalized === 'state/wal-recovery.json'
 }
 /** 恢复期间所有写入入口统一使用的中文拒绝原因（含「回滚恢复」，供上层提示与测试匹配）。 */
 export const WORKSPACE_RECOVERING_MESSAGE =
   '剧情正在回滚恢复：请先重新执行回退完成恢复；反复失败时可在「记忆」面板选择该剧情并重置回滚游标。本次写入未执行'
 
-/**
- * 回滚自身需要写正文（替换、摘要展开、索引重建）。内部恢复流程通过这个上下文放行，
- * 外部/面板/其它楼层的写入拿不到它，从而在恢复游标存在期间被写屏障挡住。
- */
-const recoveryWriteAccess = new AsyncLocalStorage<true>()
+interface RecoveryWriteScope {
+  readonly all?: { active: boolean }
+  readonly roots: ReadonlyMap<string, { active: boolean }>
+}
 
-/** 仅限 Wal 回滚内部使用：本上下文内的 WorkspaceFs 写入跳过恢复写屏障。 */
-export function withRecoveryWriteAccess<T>(task: () => Promise<T>): Promise<T> {
-  return recoveryWriteAccess.run(true, task)
+/**
+ * 回滚自身需要写正文（替换、摘要展开、索引重建）。内部恢复流程通过带租约和工作区边界的上下文放行：
+ * 仅对指定工作区根生效，且任务结束即吊销租约，避免延迟回调或跨工作区调用绕过恢复写屏障。
+ */
+const recoveryWriteAccess = new AsyncLocalStorage<RecoveryWriteScope>()
+
+/** 仅限 Wal 回滚内部使用：本上下文内的指定工作区 WorkspaceFs 写入跳过恢复写屏障。 */
+export function withRecoveryWriteAccess<T>(root: string, task: () => Promise<T>): Promise<T>
+export function withRecoveryWriteAccess<T>(task: () => Promise<T>): Promise<T>
+export function withRecoveryWriteAccess<T>(
+  rootOrTask: string | (() => Promise<T>),
+  maybeTask?: () => Promise<T>,
+): Promise<T> {
+  const prev = recoveryWriteAccess.getStore()
+  const lease = { active: true }
+  const task = typeof rootOrTask === 'function' ? rootOrTask : maybeTask!
+  const next: RecoveryWriteScope = typeof rootOrTask === 'string'
+    ? { ...(prev?.all ? { all: prev.all } : {}), roots: new Map([...(prev?.roots ?? []), [rootIdentity(rootOrTask), lease]]) }
+    : { all: lease, roots: prev?.roots ?? new Map() }
+  return recoveryWriteAccess.run(next, async () => {
+    try { return await task() }
+    finally { lease.active = false }
+  })
 }
 
 async function existsFile(path: string): Promise<boolean> {
@@ -78,7 +104,10 @@ async function recoveryMarkerActive(root: string): Promise<boolean> {
   const parsed = parseRecoveryMarker(value)
   if (!parsed.valid) return true
   const { dirs, walDir } = value as { dirs: string[]; walDir?: string }
-  const walDirs = [join(root, 'state', 'wal'), ...(typeof walDir === 'string' && walDir ? [walDir] : [])]
+  const defaultWalDir = join(root, 'state', 'wal')
+  const walDirs = typeof walDir === 'string' && walDir && rootIdentity(walDir) !== rootIdentity(defaultWalDir)
+    ? [defaultWalDir, walDir]
+    : [defaultWalDir]
   for (const dir of dirs) {
     if (!dir || dir.includes('/') || dir.includes('\\') || dir === '.' || dir === '..') return true
     for (const base of walDirs) {
@@ -159,6 +188,10 @@ export class WorkspaceFs {
   }
 
   private abs(relPath: string): string {
+    // 禁止空字节与冒号（拦截 Windows 盘符相对路径如 C:foo 与 NTFS 备用数据流如 card.json::$DATA）。
+    if (relPath.includes('\0') || relPath.includes(':')) {
+      throw new Error(`工作区路径越界: ${relPath}`)
+    }
     // 段级消毒：任何 '..' 段一律拒绝。只看根目录前缀挡不住
     // 'personas/../regex/rules.json' 这类「不出根但跨子树」的越权——人设/世界书/预设 id
     // 经 RPC 直达存储层时可能带 '..'，把包容性做成 fs 的性质，而不是指望每个调用方各自消毒。
@@ -239,7 +272,8 @@ export class WorkspaceFs {
    * Wal 回滚自身的正文替换、摘要展开与索引重建经 withRecoveryWriteAccess 放行。
    */
   private async assertWritable(): Promise<void> {
-    if (recoveryWriteAccess.getStore()) return
+    const scope = recoveryWriteAccess.getStore()
+    if (scope?.all?.active || scope?.roots.get(rootIdentity(this.root))?.active) return
     if (await recoveryMarkerActive(this.root)) throw new Error(WORKSPACE_RECOVERING_MESSAGE)
   }
 
@@ -316,22 +350,24 @@ export class WorkspaceFs {
         const seg = relSegmentsPerDir[i]![depth]
         if (!seg) continue
         const nextPath = join(currentPaths[i]!, seg)
+        const nextKey = rootIdentity(nextPath)
         nextPaths[i] = nextPath
-        if (!pathToFirstDir.has(nextPath)) {
-          pathToFirstDir.set(nextPath, dirList[i]!)
+        if (!pathToFirstDir.has(nextKey)) {
+          pathToFirstDir.set(nextKey, dirList[i]!)
           uniqueTargets.push(nextPath)
         }
       }
       if (!uniqueTargets.length) break
-      const missingPaths = new Set<string>()
+      const missingKeys = new Set<string>()
       await mapBounded(uniqueTargets, async (targetPath) => {
+        const targetKey = rootIdentity(targetPath)
         try {
           if ((await lstat(targetPath)).isSymbolicLink()) {
-            throw new WorkspaceLinkError(`工作区资产路径不能经过链接: ${pathToFirstDir.get(targetPath)}`)
+            throw new WorkspaceLinkError(`工作区资产路径不能经过链接: ${pathToFirstDir.get(targetKey)}`)
           }
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-            missingPaths.add(targetPath)
+            missingKeys.add(targetKey)
             return
           }
           throw error
@@ -340,7 +376,7 @@ export class WorkspaceFs {
       for (let i = 0; i < dirList.length; i++) {
         const nextPath = nextPaths[i]
         if (!nextPath) continue
-        if (missingPaths.has(nextPath)) active[i] = false
+        if (missingKeys.has(rootIdentity(nextPath))) active[i] = false
         else currentPaths[i] = nextPath
       }
     }
@@ -352,6 +388,7 @@ export class WorkspaceFs {
    * 分块保存的状态一次要读上千个小文件，逐个读取是每个文件十余次调用。
    */
   async readTextMany(relPaths: readonly string[], maxBytes = Number.POSITIVE_INFINITY): Promise<Array<string | null>> {
+    if (!relPaths.length) return []
     const targets = relPaths.map((relPath) => this.abs(relPath))
     await this.assertNoLinksAmong(new Set(targets.map((abs) => (abs === this.root ? abs : dirname(abs)))))
     return mapBounded(targets, async (abs, index) => {
@@ -412,9 +449,11 @@ export class WorkspaceFs {
    */
   async copyFrom(source: WorkspaceFs, relPaths: readonly string[], reject: (relPath: string) => Error): Promise<void> {
     if (this.wal && this.floor) throw new Error('批量复制不记录楼层快照，不能用于楼层写入')
+    if (!relPaths.length) return
     await withWorkspaceLock(this.root, async () => {
       await this.assertWritable()
       const targets = relPaths.map((relPath) => ({ relPath, from: source.fileAbs(relPath), to: this.fileAbs(relPath) }))
+      if (new Set(targets.map((target) => ledgerKey(target.relPath))).size !== targets.length) throw new Error('批量复制包含重复路径')
       await source.assertNoLinksAmong(new Set(targets.map((target) => dirname(target.from))))
       await this.assertNoLinksAmong(new Set(targets.map((target) => dirname(target.to))))
       await mapBounded(targets, async (target) => {

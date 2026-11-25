@@ -63,6 +63,7 @@ export interface ForkResult {
     /** 分支会话的可读标题，如「角色名 · 从第 3 层重生成」。 */
     title: string;
 }
+export declare function isPluginForkSession(sessionId: string): boolean;
 /** 合法解除已先持久化 skipped；只失效内存来源计划，保留旧失败屏障下一次读取确认磁盘意图。 */
 export declare function discardHostForkAdoptionPlan(state: TavernState, sessionId: string): void;
 /**

@@ -8,7 +8,7 @@ import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
 import type { Session } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-typert-registry'
 import { Config, TAVERN_NS, TavernConfigSchema, resolveConfig } from './node/config.js'
-import { adoptHostFork, discardHostForkAdoptionPlan, ensureGreeting } from './node/floors.js'
+import { adoptHostFork, discardHostForkAdoptionPlan, ensureGreeting, isPluginForkSession } from './node/floors.js'
 import { revokeSessionHelperFrames } from './node/helperFrameLease.js'
 import { deleteHostForkAdoption } from './node/hostForkAdoption.js'
 import { createGreetingRetirement } from './node/greetingRetirement.js'
@@ -83,7 +83,7 @@ async function startTavern(ctx: Context, config: ReturnType<typeof Config>): Pro
     projectTavernAdapterRequest(ctx, state, options, model),
   ))
   const preparePresetAdapter = () => {
-    if (!state.presetAdapter) return
+    if (!state.presetAdapter || ctx.fiber.uid === null || ctx.fiber.state === 4 /* DISPOSED */ || ctx.fiber.state === 5 /* UNLOADING */) return
     const providers = ctx.get('llm')?.listProviders() ?? []
     if (providers.some(provider => provider.id === PRESET_ADAPTER_PROVIDER)
       || !providers.some(provider => provider.id === PRESET_ADAPTER_SOURCE_PROVIDER)) return
@@ -109,6 +109,7 @@ async function startTavern(ctx: Context, config: ReturnType<typeof Config>): Pro
   const greetingRetirement = createGreetingRetirement(ctx)
   const adoptOrRetireSession = (session: Session) => {
     refreshPersistence()
+    if (isPluginForkSession(session.id)) { greetingRetirement.schedule(session); return }
     let isFork = false
     try {
       const parentId = session.header.parentSession ?? forkedSessionParents.get(session.id)
@@ -124,9 +125,10 @@ async function startTavern(ctx: Context, config: ReturnType<typeof Config>): Pro
   ctx.on('agent/created', ({ agent }) => { greetingRetirement.agentCreated(agent); return undefined })
 
   const disposeSession = async (sessionId: string, disposedSession?: Session) => {
-    const initialLive = disposedSession ?? ctx.sessions.get(sessionId as Session['id'])
+    const initialLive = disposedSession ?? ctx.get('sessions')?.get(sessionId as Session['id'])
     await state.drainBindingAdoption(sessionId).catch(() => {})
     await state.waitForSessionTasks(sessionId).catch(() => {})
+    if ((ctx.fiber.uid === null || ctx.fiber.state === 4 /* DISPOSED */ || ctx.fiber.state === 5 /* UNLOADING */) && !ctx.get('sessions')) return
     const persistence = refreshPersistence()
     let persisted = false
     if (persistence) {
@@ -137,7 +139,7 @@ async function startTavern(ctx: Context, config: ReturnType<typeof Config>): Pro
         persisted = true
       }
     }
-    const currentLive = ctx.sessions.get(sessionId as Session['id'])
+    const currentLive = ctx.get('sessions')?.get(sessionId as Session['id'])
     if (currentLive && currentLive !== initialLive) return
     discardHostForkAdoptionPlan(state, sessionId)
     revokeSessionHelperFrames(state, sessionId)
@@ -191,7 +193,7 @@ async function startTavern(ctx: Context, config: ReturnType<typeof Config>): Pro
   guardPhase(ctx, '输入追踪', () => registerPromptInputTracking(ctx, state))
   // 第一条真正发出时写入开场白，避免空白会话被写脏后无法换模式 / 无法新对话。
   ctx.on('agent/inbox/inserted', ({ agent }) => {
-    const session = ctx.sessions.get(agent.id)
+    const session = ctx.get('sessions')?.get(agent.id)
     if (!session || !isTavernRuntimeSession(ctx, session)) return
     void state
       .enqueueSessionTask(agent.id, () => ensureGreeting({ ctx, state }, agent.id))
@@ -213,7 +215,7 @@ export function projectTavernAdapterRequest(
 ): GenerateOptions {
   // 摘要、标题和明确的独立代答没有普通聊天布局；仍复用相同官方传输。
   if (options.purpose || !options.sessionId) return options
-  const session = ctx.sessions.get(options.sessionId)
+  const session = ctx.get('sessions')?.get(options.sessionId)
   if (!session || !isTavernRuntimeSession(ctx, session)) return options
   const notes = new Set<string>()
   // 请求副本清理开关随本轮计划冻结（plan.cleanup），这里不读当前设置。

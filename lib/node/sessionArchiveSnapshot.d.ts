@@ -1,6 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis';
 import { SessionId, type Session, type SessionEvent } from '@deepseek-ai/dsh-session';
-import type { SessionPersistence } from '@deepseek-ai/dsh-session-persistence';
+import { type SessionPersistence } from '@deepseek-ai/dsh-session-persistence';
 import { type SessionArchive } from './sessionArchiveFormat.js';
 import type { TavernState } from './state.js';
 import type { WalLineageEntry } from './bindings.js';

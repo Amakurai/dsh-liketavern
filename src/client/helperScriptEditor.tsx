@@ -28,7 +28,8 @@ export function HelperScriptEditor(props:ScriptEditorProps) {
 export function HelperScriptEditorBody(props:ScriptEditorProps) {
   const target=libraryTarget(props.library)
   const t=useT(),toast=useToast(),tabsId=useId()
-  const saving=useRef(false)
+  const saving=useRef(false),alive=useRef(true)
+  useEffect(()=>{alive.current=true;return()=>{alive.current=false}},[])
   const [query,setQuery]=useState(''),[section,setSection]=useState('code')
   // 设置面板内嵌时 PersistentEditor 复用父级快照，外层 scope 不生效；草稿键必须自带目标身份，
   // 否则全局库的未保存草稿会在打开另一张卡的脚本库时被当作它的草稿恢复并保存进错误的卡。
@@ -116,23 +117,26 @@ export function HelperScriptEditorBody(props:ScriptEditorProps) {
       const trees=materialize()
       const result=target.type==='character'?await props.remote.saveCharacterHelperScripts({cardId:target.cardId,revision,trees}):await props.remote.saveHelperScriptLibrary({target,revision,trees})
       if(!result.ok)throw new Error(result.error.message)
-      setTrees(result.value.trees);setRevision(result.value.revision);setBaseline(JSON.stringify(result.value.trees));setDataTexts({})
       notifyHelperScriptAssets(target)
+      if(!alive.current)return
+      setTrees(result.value.trees);setRevision(result.value.revision);setBaseline(JSON.stringify(result.value.trees));setDataTexts({})
       guard.clearDraft();toast.show(t('speech.scriptSaved'));props.onSaved()
-    } catch(error){setError(describeError(error))}finally{saving.current=false;setBusy(false)}
+    } catch(error){if(alive.current)setError(describeError(error))}finally{saving.current=false;if(alive.current)setBusy(false)}
   }
   const reload=()=>{if(saving.current)return;guard.request(()=>{if(saving.current)return;saving.current=true;setBusy(true);setError(null);void (target.type==='character'?props.remote.getCharacterHelperScripts({cardId:target.cardId}):props.remote.getHelperScriptLibrary({target})).then(result=>{
     if(!result.ok)throw new Error(result.error.message)
+    if(!alive.current)return
     setTrees(result.value.trees);setRevision(result.value.revision);setBaseline(JSON.stringify(result.value.trees));setDataTexts({});setQuery('');setSelected(result.value.trees[0]?.id??null)
-  }).catch(error=>setError(String(error instanceof Error?error.message:error))).finally(()=>{saving.current=false;setBusy(false)})})}
+  }).catch(error=>{if(alive.current)setError(describeError(error))}).finally(()=>{saving.current=false;if(alive.current)setBusy(false)})})}
   const importFile=async(file:File)=>{
     if(saving.current)return;saving.current=true;setBusy(true);setError(null)
     try{
       if(file.size>4*1024*1024)throw new Error(t('speech.scriptFileLarge'))
       const input:unknown=JSON.parse(await file.text())
       const parsed=importHelperScriptFile(input)
+      if(!alive.current)return
       guard.request(()=>{setTrees(parsed);setDataTexts({});setQuery('');setSelected(parsed[0]?.id??null)})
-    }catch(error){setError(describeError(error))}finally{saving.current=false;setBusy(false)}
+    }catch(error){if(alive.current)setError(describeError(error))}finally{saving.current=false;if(alive.current)setBusy(false)}
   }
   return <>
     {guard.confirmation}{toast.node}
@@ -143,7 +147,7 @@ export function HelperScriptEditorBody(props:ScriptEditorProps) {
         <div className="dsh-tavern-scriptTools"><Btn size="md" primary disabled={busy} onClick={()=>add(false)}>{t('speech.scriptAdd')}</Btn><Btn size="md" disabled={busy} onClick={()=>add(true)}>{t('speech.scriptAddFolder')}</Btn></div>
         <div className="dsh-tavern-scriptTools">
           <FileBtn accept=".json,application/json" disabled={busy} onFile={file=>void importFile(file)}>{t('speech.scriptImport')}</FileBtn>
-          <Btn size="md" disabled={busy||!trees.length} onClick={()=>{try{downloadJson('tavern-helper-scripts.json',exportHelperScriptTrees(materialize()))}catch(error){setError(String(error))}}}>{t('speech.scriptExport')}</Btn>
+          <Btn size="md" disabled={busy||!trees.length} onClick={()=>{try{downloadJson('tavern-helper-scripts.json',exportHelperScriptTrees(materialize()))}catch(error){setError(describeError(error))}}}>{t('speech.scriptExport')}</Btn>
           <Btn size="md" disabled={busy} onClick={reload}>{t('speech.scriptReadSaved')}</Btn>
         </div>
       </div>
@@ -178,7 +182,7 @@ export function HelperScriptEditorBody(props:ScriptEditorProps) {
             <SettingsRow stacked title={t('speech.scriptCode')}><textarea className="dsh-tavern-input dsh-tavern-scriptCode" aria-label={t('speech.scriptCode')} value={current.content} disabled={busy} spellCheck={false} onChange={event=>update(current.id,item=>({...item,content:event.target.value}))}/></SettingsRow>
             <details><summary>{t('speech.scriptInfo')}</summary><SettingsRow stacked title={t('speech.scriptInfo')}><textarea className="dsh-tavern-input" aria-label={t('speech.scriptInfo')} value={current.info} disabled={busy} onChange={event=>update(current.id,item=>({...item,info:event.target.value}))}/></SettingsRow></details>
             </div><div hidden={section!=='data'}>
-            <SettingsRow stacked title={t('speech.scriptData')}><textarea className="dsh-tavern-input" aria-label={t('speech.scriptData')} value={dataTexts[current.id]??JSON.stringify(current.data,null,2)} disabled={busy} spellCheck={false} onChange={event=>setDataTexts(values=>({...values,[current.id]:event.target.value}))}/></SettingsRow>
+            <SettingsRow stacked title={t('speech.scriptData')}><textarea className="dsh-tavern-input" aria-label={t('speech.scriptData')} value={Object.hasOwn(dataTexts,current.id)?dataTexts[current.id]!:cachedPrettyDataJson(current.data)} disabled={busy} spellCheck={false} onChange={event=>setDataTexts(values=>({...values,[current.id]:event.target.value}))}/></SettingsRow>
             <Btn disabled={busy} onClick={()=>{try{const data=scriptData(current).data;setDataTexts(values=>({...values,[current.id]:JSON.stringify(data,null,2)}));setError(null)}catch(error){setError(describeError(error))}}}>{t('speech.scriptFormatData')}</Btn>
             <SettingsRow title={t('speech.scriptExportData')}><Toggle title={t('speech.scriptExportData')} checked={current.export_with.data} disabled={busy} onChange={data=>update(current.id,item=>item.type==='script'?{...item,export_with:{...item.export_with,data}}:item)}/></SettingsRow>
 

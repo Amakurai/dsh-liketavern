@@ -7,7 +7,8 @@ export function watchHelperScripts(sessionId:string,storyId:string,listener:()=>
   return ()=>{group.delete(listener);if(!group.size)listeners.delete(key)}
 }
 export function notifyHelperScripts(sessionId:string,storyId:string):void {
-  for(const listener of listeners.get(JSON.stringify([sessionId,storyId]))??[])listener()
+  const group=listeners.get(JSON.stringify([sessionId,storyId]))
+  if(group)for(const listener of [...group])listener()
 }
 
 /** 设置页资产保存完成后通知页面内运行器重新读取绑定库；无需暴露剧情数据。 */
@@ -15,4 +16,4 @@ const assetListeners=new Set<(target:HelperScriptTarget)=>void>()
 export function watchHelperScriptAssets(listener:(target:HelperScriptTarget)=>void):()=>void {
   assetListeners.add(listener);return ()=>{assetListeners.delete(listener)}
 }
-export function notifyHelperScriptAssets(target:HelperScriptTarget):void {for(const listener of assetListeners)listener(target)}
+export function notifyHelperScriptAssets(target:HelperScriptTarget):void {for(const listener of [...assetListeners])listener(target)}

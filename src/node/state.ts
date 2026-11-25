@@ -1824,27 +1824,50 @@ export class TavernState {
       const { revision: _revision, ...value } = persona as Persona & { revision?: unknown }
       const sourceId = persona.id !== id ? persona.id : previousSourceId
       try { await fs.writeText(`personas/${id}.json`, JSON.stringify({ ...value, id, ...(sourceId ? { sourceId } : {}) }, null, 2) + '\n') }
-      finally { this.bumpAssetRev(`persona:${id}`) }
+      finally { this.bumpNamedAssetRev('persona', id, persona.id, previousSourceId) }
       return id
     })
   }
 
-  async deletePersona(id: string): Promise<string> {
+  async deletePersonaWithAliases(id: string): Promise<{ id: string; aliases: string[] }> {
     let key = this.assetFileId(id)
     const fs = await this.rootFs()
     return withWorkspaceLock(fs.root, async () => {
+      let deletedId: string | null = null
+      let deletedSourceId: string | null = null
       try {
         const target = await this.resolveExistingAssetId(fs, 'personas', id)
-        if (target) { key = target; await fs.delete(`personas/${target}.json`) }
-      }
-      finally {
-        this.bumpAssetRev(`persona:${key}`)
-        for (const cachedKey of [...this.personaCache.keys()]) {
-          if (this.assetFileKey(cachedKey) === this.assetFileKey(key)) this.personaCache.delete(cachedKey)
+        if (target) {
+          key = target
+          const raw = await fs.readText(`personas/${target}.json`)
+          if (raw !== null) {
+            try {
+              const parsed: unknown = JSON.parse(raw)
+              deletedId = stringField(parsed, 'id')
+              deletedSourceId = stringField(parsed, 'sourceId')
+            } catch { /* 损坏文件仅删除并作废 */ }
+          }
+          await fs.delete(`personas/${target}.json`)
         }
       }
-      return key
+      finally {
+        this.bumpNamedAssetRev('persona', key, id, deletedId, deletedSourceId)
+        const targetKeys = new Set(
+          [key, id, deletedId, deletedSourceId]
+            .filter((value): value is string => Boolean(value))
+            .flatMap((value) => [this.assetFileKey(value), this.assetFileKey(this.assetFileId(value))]),
+        )
+        for (const cachedKey of [...this.personaCache.keys()]) {
+          if (targetKeys.has(this.assetFileKey(cachedKey))) this.personaCache.delete(cachedKey)
+        }
+      }
+      const aliases = [...new Set([key, id, deletedId, deletedSourceId].filter((value): value is string => Boolean(value)))]
+      return { id: key, aliases }
     })
+  }
+
+  async deletePersona(id: string): Promise<string> {
+    return (await this.deletePersonaWithAliases(id)).id
   }
 
   // ── 全局正则 ──────────────────────────────────────────────────────────────

@@ -17,7 +17,7 @@ export function rememberCharacter(remote: TavernRemote, cardId: string) {
 function PickerItem(props: { remote: TavernRemote; item: CharacterSummary; selected: boolean; recent: boolean; busy: boolean; onPick: () => void }) {
   const { item } = props
   const t = useT()
-  const avatar = useLoader(() => cachedAvatar(props.remote, item.cardId), [item.cardId], item.hasAvatar)
+  const avatar = useLoader(() => cachedAvatar(props.remote, item.cardId), [props.remote, item.cardId], item.hasAvatar)
   return <button type="button" className="dsh-tavern-pickerItem" aria-pressed={props.selected} disabled={props.busy} onClick={props.onPick}>
     <Avatar name={item.name} url={avatar.state.status === 'ready' ? avatar.state.value.dataUrl : null} size={52} />
     <span className="dsh-tavern-pickerText">
@@ -34,7 +34,7 @@ export function CharacterPicker(props: { remote: TavernRemote; selectedId?: stri
   const [query, setQuery] = useState('')
   const [limit, setLimit] = useState(24)
   const [managing, setManaging] = useState(false)
-  const chars = useLoader(() => props.remote.listCharacters({}), [managing])
+  const chars = useLoader(() => props.remote.listCharacters({}), [props.remote, managing])
   const items = chars.state.status === 'ready' ? chars.state.value.items : []
   const recent = recentByRemote.get(props.remote) ?? NO_RECENT
   const recentIds = useMemo(() => new Set(recent), [recent])

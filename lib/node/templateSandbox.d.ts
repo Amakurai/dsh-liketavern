@@ -44,6 +44,8 @@ export declare class TemplateSandbox {
     private constructor();
     /** 仅预热受信任的 WASM 模块；不解析或执行第三方输入。 */
     static prepare(onPhase?: (phase: 'loading' | 'computing') => void): Promise<void>;
+    /** 任务结束后清理 worker 阶段回调，避免模块静态闭包长期钉住上一次的大输入引用。 */
+    static clearPhaseReporter(): void;
     private static normalizeContext;
     static create(input: TemplateContext, record?: boolean, bootstrap?: TemplateReplayBootstrap, resourceChars?: number): Promise<TemplateSandbox>;
     /** 重建同轮已执行的代码和词法环境；所有输入仍由 QuickJS 求值，每步校验确定性结果。 */

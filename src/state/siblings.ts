@@ -8,11 +8,12 @@
  * 所有读改写（追加登记 / 读路径剪枝）必须经 mutateSiblingForks：模块级互斥串行化，
  * 否则不同会话的并发 fork 登记 / 剪枝落盘会互相覆盖丢记录。
  */
-import { readFile, stat } from 'node:fs/promises'
+import { lstat, readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { normalizeSiblingForks, recordSiblingFork, type SiblingFork } from '../core/siblings.js'
 import { atomicWrite } from './atomicWrite.js'
 import { rootIdentity } from './pathIdentity.js'
+import { WorkspaceLinkError } from './workspaceFs.js'
 import { withWorkspaceLock } from './workspaceLock.js'
 
 interface SiblingStat {
@@ -60,7 +61,9 @@ async function readSiblingForks(rootDir: string): Promise<{ forks: SiblingFork[]
   const generation = writeGeneration
   let info: SiblingStat | null = null
   try {
-    info = toSiblingStat(await stat(file))
+    const st = await lstat(file)
+    if (st.isSymbolicLink()) throw new WorkspaceLinkError(`分支兄弟索引不能是链接: ${file}`)
+    info = toSiblingStat(st)
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
       if (writeGeneration === generation) setSiblingsCache(key, { stat: null, forks: [] })
@@ -113,7 +116,11 @@ async function saveSiblingForks(rootDir: string, forks: readonly SiblingFork[]):
   await atomicWrite(file, JSON.stringify(forks, null, 2) + '\n')
   writeGeneration++
   try {
-    const st = await stat(file)
+    const st = await lstat(file)
+    if (st.isSymbolicLink()) {
+      siblingsCache.delete(key)
+      return
+    }
     setSiblingsCache(key, {
       stat: toSiblingStat(st),
       forks: forks.map((f) => ({ ...f })),
@@ -134,8 +141,9 @@ export async function mutateSiblingForks(
   await withWorkspaceLock(siblingsFile(rootDir), async () => {
     const { forks, corrupt } = await readSiblingForks(rootDir)
     if (corrupt) throw new Error('分支兄弟索引 siblings.json 损坏，拒绝以空索引覆盖；请修复或删除该文件')
+    const beforeJson = JSON.stringify(forks)
     const next = await fn(forks)
-    if (next !== forks && JSON.stringify(next) !== JSON.stringify(forks)) {
+    if (JSON.stringify(next) !== beforeJson) {
       await saveSiblingForks(rootDir, next)
     }
   })

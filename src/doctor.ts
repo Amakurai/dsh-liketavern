@@ -592,7 +592,7 @@ async function inspectStories(
       issues.add('STORY_METADATA_INVALID', 'error')
       continue
     }
-    verifiedDirs.add(resolve(root))
+    verifiedDirs.add(rootIdentity(root))
     const metadata = await readBoundedJson(`${root}/story.json`, 256 * 1024, budget, inspectedJson)
     if (metadata.status === 'budget') {
       stats.stories.uninspected += 1
@@ -654,7 +654,7 @@ async function inspectCharacters(
       continue
     }
     const cardRoot = `${charactersRoot}/${entry.name}`
-    verifiedDirs.add(resolve(cardRoot))
+    verifiedDirs.add(rootIdentity(cardRoot))
     // card.json 与运行时写入共用存储上限；通用扫描复用本次结果计数，不再重复读取。
     const card = await readBoundedJson(`${cardRoot}/card.json`, MAX_STORED_CARD_JSON_BYTES, budget, inspectedJson)
     if (card.status === 'budget') {
@@ -700,9 +700,12 @@ function jsonLimitForDataFile(dataRoot: string, filePath: string): number {
   if (!match) return MAX_JSON_BYTES
   const rawMatch = /^characters\/([^/]+)\/(?:stories\/([^/]+)\/)?(.+)$/i.exec(rawRel)
   const cardId = rawMatch?.[1] ?? match[1]!
-  if (!isValidCardId(cardId)) return MAX_JSON_BYTES
+  const isCardDraft = cardId.startsWith('.importing-') || cardId.startsWith('.preparing-')
+  if (!isCardDraft && !isValidCardId(cardId)) return MAX_JSON_BYTES
   const storyId = match[2]
-  if (storyId !== undefined && !/^(?:story-[a-f0-9-]{36}|legacy-[a-f0-9]{32})$/.test(storyId)) return MAX_JSON_BYTES
+  if (storyId !== undefined && !storyId.startsWith('.preparing-') && !/^(?:story-[a-f0-9-]{36}|legacy-[a-f0-9]{32})$/.test(storyId)) {
+    return MAX_JSON_BYTES
+  }
   const sub = match[3]!
   if (storyId === undefined && (sub === 'card.json' || sub === 'assets/character-book.json' || sub === 'assets/regex-scripts.json')) {
     return MAX_STORED_CARD_JSON_BYTES
@@ -896,7 +899,7 @@ export async function runDoctor(options: RunDoctorOptions = {}): Promise<DoctorR
   } else if (dataRootStatus !== 'directory') {
     issues.add(dataRootStatus === 'link' ? 'DATA_ROOT_LINK_SKIPPED' : 'DATA_ROOT_UNREADABLE', 'error')
   } else {
-    const verifiedDirs = new Set<string>([resolve(paths.root)])
+    const verifiedDirs = new Set<string>([rootIdentity(paths.root)])
     for (const [name, path] of Object.entries(names) as Array<[keyof typeof names, string]>) {
       directories[name] = await probeDirectory(path, paths.root, verifiedDirs)
       if (directories[name] === 'missing') issues.add('STANDARD_DIRECTORY_MISSING', 'warning')

@@ -65,9 +65,11 @@ export function installCardScriptLibraries(initial:HelperScriptContext,normalize
   }
   function flushHelperScripts(option:{retry?:boolean}={}):Promise<void>{
     if(!active)return Promise.reject(new Error('脚本库运行时已关闭'))
+    if(root.__dshTavernDisplayLocked&&(option.retry||dirty()))return Promise.reject(new Error('卡面正在重绘，请等待完成'))
     if(refreshing)return refreshing.then(()=>flushHelperScripts(option))
     if(option.retry)failure=null
     if(failure)return Promise.reject(failure)
+    if(!running&&!dirty()){setStatus('saved');return Promise.resolve()}
     if(!running)running=drain().finally(()=>{running=null})
     return running
   }
@@ -77,11 +79,12 @@ export function installCardScriptLibraries(initial:HelperScriptContext,normalize
   }
   function replaceScriptTrees(input:unknown,option:{type:HelperScriptType}):void{
     if(root.__dshTavernDisplayLocked)throw new Error('卡面正在重绘，请等待完成')
-    const library=entry(option?.type),trees=normalize(normalize(input))
+    const library=entry(option?.type),trees=normalize(input)
     json(state.libraries.map(item=>({type:item.type,trees:item===library?trees:item.trees})),4*1024*1024)
     if(equal(trees,library.trees))return
     library.trees=trees;library.version++
     if(failure){setStatus('error');return}
+    if(!running&&!refreshing&&!dirty()){setStatus('saved');return}
     setStatus('pending')
     queueMicrotask(()=>{if(active)void flushHelperScripts().catch(()=>{})})
   }
@@ -93,6 +96,7 @@ export function installCardScriptLibraries(initial:HelperScriptContext,normalize
     return result&&typeof (result as Promise<unknown>).then==='function'?Promise.resolve(result).then(commit):commit(result)
   }
   function refreshHelperScripts(option:{discardUnsaved?:boolean}={}):Promise<HelperScriptContext>{
+    if(root.__dshTavernDisplayLocked)return Promise.reject(new Error('卡面正在重绘，请等待完成'))
     if(refreshing)return refreshing
     if(running)return Promise.reject(new Error('请等待当前脚本库保存结束'))
     if(dirty()&&!option.discardUnsaved)return Promise.reject(new Error('脚本库有未保存修改，请先导出或保存'))

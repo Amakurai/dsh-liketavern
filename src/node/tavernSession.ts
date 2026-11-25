@@ -30,10 +30,22 @@ export function sessionPresetId(ctx: Context, session: Session): string | null {
   return preset
 }
 
+interface AgentsLookup {
+  get(id: string): { ctx: Context } | undefined
+}
+
+function resolveAgentsLookup(ctx: Context): AgentsLookup | undefined {
+  const fromService = typeof ctx.get === 'function' ? (ctx.get('agents') as Partial<AgentsLookup> | undefined) : undefined
+  if (typeof fromService?.get === 'function') return fromService as AgentsLookup
+  const fromProp = (ctx as { agents?: Partial<AgentsLookup> }).agents
+  if (typeof fromProp?.get === 'function') return fromProp as AgentsLookup
+  return undefined
+}
+
 /** 活 agent 的组成预设优先；否则读会话预设投影（header + 之后的 agent-preset/selected）。 */
 export function isTavernRuntimeSession(ctx: Context, session: Session): boolean {
   const presets = ctx.get('agentPresets') as AgentPresetRegistry | undefined
-  const agent = ctx.agents.get(session.id)
+  const agent = resolveAgentsLookup(ctx)?.get(session.id)
   const live = agent && presets ? presets.composedPreset(agent.ctx) : undefined
   return isTavernPresetId(live ?? sessionPresetId(ctx, session))
 }

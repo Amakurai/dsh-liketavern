@@ -27,7 +27,7 @@ function syncEffective(): void {
   const next = effectiveLocale()
   if (next === current) return
   current = next
-  for (const fn of listeners) fn()
+  for (const fn of [...listeners]) fn()
 }
 
 export function getTavernLocale(): TavernLocaleId {

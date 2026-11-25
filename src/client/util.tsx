@@ -200,7 +200,8 @@ export function Tabs(props: { items: TabItem[]; value: string; onChange: (id: st
     <div ref={nav} className={`dsh-tavern-navPills${props.size === 'sm' ? ' is-sub' : ''}`} role="tablist" aria-label={props.label} onKeyDown={(e) => {
       const direction = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0
       if (!direction && e.key !== 'Home' && e.key !== 'End') return
-      const buttons = Array.from(e.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]'))
+      const buttons = Array.from(e.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]:not(:disabled)'))
+      if (buttons.length === 0) return
       const current = buttons.indexOf(e.target as HTMLButtonElement)
       if (current < 0) return
       e.preventDefault()
@@ -642,9 +643,18 @@ export function downloadJson(filename: string, json: unknown, space = 2): void {
 }
 
 export function downloadBase64(filename: string, base64: string, mime: string): void {
-  const binary = atob(base64)
-  const bytes = new Uint8Array(binary.length)
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+  const fromBase64 = (Uint8Array as unknown as { fromBase64?: (value: string) => Uint8Array }).fromBase64
+  let bytes: Uint8Array<ArrayBuffer>
+  if (typeof fromBase64 === 'function') {
+    const decoded = fromBase64(base64)
+    bytes = decoded.buffer instanceof ArrayBuffer
+      ? (decoded as Uint8Array<ArrayBuffer>)
+      : new Uint8Array(decoded)
+  } else {
+    const binary = atob(base64)
+    bytes = new Uint8Array(binary.length)
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+  }
   const blob = new Blob([bytes], { type: mime })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
@@ -853,8 +863,9 @@ export function splitRegexListText(text: string): string[] {
       if (char === '[') inClass = true
       else if (char === ']') inClass = false
       else if (char === '/' && !inClass) {
+        const flagLimit = Math.min(text.length, index + 1 + 16)
         let end = index + 1
-        while (end < limit && text[end]! >= 'a' && text[end]! <= 'z') end++
+        while (end < flagLimit && text[end]! >= 'a' && text[end]! <= 'z') end++
         let next = end
         while (next < text.length && !separator(text[next]) && text[next]!.trim() === '') next++
         if (next === text.length || separator(text[next])) return end
@@ -898,6 +909,7 @@ export function ListInput(props: { value: readonly string[]; onChange: (items: s
   const split = props.preserveRegex ? splitRegexListText : splitListText
   const external = joinListText(props.value)
   const shown = joinListText(split(text)) === external ? text : external
+  if (shown !== text) setText(shown)
   return (
     <input
       aria-labelledby={label?.labelId}
@@ -925,6 +937,7 @@ export function LineListInput(props: { value: readonly string[]; onChange: (item
   const [text, setText] = useState(() => props.value.join('\n'))
   const external = props.value.join('\n')
   const shown = splitLineListText(text).join('\n') === external ? text : external
+  if (shown !== text) setText(shown)
   return (
     <textarea
       aria-labelledby={label?.labelId}

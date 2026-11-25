@@ -75,7 +75,13 @@ function read<T>(map: Map<string, CacheEntry<T>>, key: string, ttlMs: number, lo
     if (hit.pending) return hit.pending
     if (hit.value) return Promise.resolve(hit.value)
   }
-  const pending = load().then(
+  let raw: Promise<Envelope<T>>
+  try {
+    raw = Promise.resolve(load())
+  } catch (err) {
+    raw = Promise.reject(err)
+  }
+  const pending = raw.then(
     (r) => {
       if (r.ok) {
         // invalidate 可能在请求飞行期间发生；只有当前槽位仍属于本次请求时才允许回填。

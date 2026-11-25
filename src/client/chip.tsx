@@ -8,6 +8,7 @@ import { MemorySection } from './panel/memory.js'
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { BINDING_CHANGED_EVENT } from './actions.js'
 import { CHARACTER_CHANGED_EVENT, cachedAvatar, cachedCharacterDetail, cachedSessionBinding, invalidateSessionBinding } from './cache.js'
+import { remoteIdentity } from './remoteIdentity.js'
 import { subscribeKeyedWindowEvent } from './windowEvents.js'
 import { useT } from './i18n.js'
 import { isTavernSession, type UseSessions } from './mode.js'
@@ -58,7 +59,16 @@ export function draftWithCard(draft: SessionBinding, saved: SessionBinding | nul
 
 /** 独立于脚本运行器和全局交互开关的恢复入口；只在确认后放弃任务，不触碰宿主输入队列。 */
 export function HelperMvuAbandonAction(props: { remote: TavernRemote; sessionId: string; storyId: string; disabled?: boolean; onBusyChange?: (busy: boolean) => void; onChanged: () => void }) {
-  const t = useT(), pending = useRef(false)
+  const t = useT(), pending = useRef(false), alive = useRef(true)
+  const onBusyChangeRef = useRef(props.onBusyChange)
+  onBusyChangeRef.current = props.onBusyChange
+  useEffect(() => {
+    alive.current = true
+    return () => {
+      alive.current = false
+      if (pending.current) onBusyChangeRef.current?.(false)
+    }
+  }, [])
   const [confirm, setConfirm] = useState(false), [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null), [done, setDone] = useState(false)
   const locked = busy || Boolean(props.disabled)
@@ -68,9 +78,13 @@ export function HelperMvuAbandonAction(props: { remote: TavernRemote; sessionId:
     try {
       const result = await props.remote.abandonHelperMvu({ sessionId: props.sessionId, storyId: props.storyId })
       if (!result.ok) throw new Error(result.error.message)
-      setConfirm(false); setDone(true)
-    } catch (cause) { setError(describeError(cause)) }
-    finally { pending.current = false; setBusy(false); props.onBusyChange?.(false); props.onChanged() }
+      if (alive.current) { setConfirm(false); setDone(true) }
+    } catch (cause) { if (alive.current) setError(describeError(cause)) }
+    finally {
+      const wasAlive = alive.current
+      pending.current = false
+      if (wasAlive) { setBusy(false); props.onBusyChange?.(false); props.onChanged() }
+    }
   }
   return <div className="dsh-tavern-mvuRecovery">
     <Btn danger disabled={locked} onClick={() => { if (locked) return; setError(null); setDone(false); setConfirm(true) }}>{t('chip.mvuAbandon.action')}</Btn>
@@ -239,18 +253,20 @@ export function isBindingDirty(draft: SessionBinding | null, saved: SessionBindi
   return false
 }
 
-/** 宿主切换会话可能复用 slot；表单、子弹窗与在途请求的状态都必须随会话重新挂载。 */
+/** 宿主切换会话或重连 remote 可能复用 slot；表单、子弹窗与在途请求的状态都必须随宿主和会话重新挂载。 */
 export function TavernHeaderChip(props: HeaderChipProps) {
-  return <HeaderChipSession key={props.sessionId} {...props}/>
+  return <HeaderChipSession key={`${remoteIdentity(props.remote)}:${props.sessionId}`} {...props}/>
 }
 
 function HeaderChipSession(props: HeaderChipProps) {
   const { remote, sessionId, sessions } = props
   const t = useT()
+  const alive = useRef(true)
+  useEffect(() => { alive.current = true; return () => { alive.current = false } }, [])
   const tavern = isTavernSession(props.useSessions, sessionId)
   // 会话头部只随被显示的会话挂载：宿主 0.1.7 不再公开 current，由这里登记当前视图。
   useSessionView(sessionId, tavern)
-  const bindingLoader = useLoader(() => cachedSessionBinding(remote, sessionId), [sessionId], tavern)
+  const bindingLoader = useLoader(() => cachedSessionBinding(remote, sessionId), [remote, sessionId], tavern)
   useEffect(() => subscribeKeyedWindowEvent(BINDING_CHANGED_EVENT, sessionId, true, bindingLoader.reload), [sessionId, bindingLoader.reload])
   const lastBinding = useRef<{ sessionId: string; binding: SessionBinding | null; canSwipeGreeting: boolean; userName?: string } | null>(null)
   if (bindingLoader.state.status === 'ready') {
@@ -295,7 +311,7 @@ function HeaderChipSession(props: HeaderChipProps) {
         },
       }
     },
-    [binding?.cardId],
+    [remote, binding?.cardId],
     tavern && binding !== null,
   )
   useEffect(() => {
@@ -304,7 +320,7 @@ function HeaderChipSession(props: HeaderChipProps) {
   }, [tavern, binding?.cardId, detail.reload])
 
   const [open, setOpen] = useState(false)
-  const usageLoader = useLoader(() => remote.getContextUsage({ sessionId }), [sessionId, open], tavern && open)
+  const usageLoader = useLoader(() => remote.getContextUsage({ sessionId }), [remote, sessionId, open], tavern && open)
   const usage = usageLoader.state.status === 'ready' ? usageLoader.state.value.usage : null
   const staleTurn = usageLoader.state.status === 'ready' ? usageLoader.state.value.staleTurnContext : null
   const staleTurnLine = staleTurn && staleTurn.snapshots > 0
@@ -446,16 +462,19 @@ function HeaderChipSession(props: HeaderChipProps) {
     if (!draft) return
     const r = await remote.setSessionBinding({ binding: draft })
     const err = errOf(r)
-    if (err) setError(err)
+    if (err) { if (alive.current) setError(err) }
     else {
-      closeGuard.clearDraft()
-      toast.show(t('chip.saved'))
       // 先失效进程内缓存再 reload/广播，否则重拉吃到旧绑定（见 cache.ts TTL 口径）。
       invalidateSessionBinding(sessionId)
+      window.dispatchEvent(new CustomEvent(BINDING_CHANGED_EVENT, { detail: sessionId }))
+      if (!alive.current) return
+      closeGuard.clearDraft()
+      toast.show(t('chip.saved'))
       // 服务端在首次绑定/换卡时可能自动开启原生 MVU、创建 story 或规范化卡名；
       // 这些不属于用户刚编辑的草稿字段。若不回填，第二次保存会把服务端值写回旧草稿的 undefined。
       const fresh = typeof remote.getSessionBinding === 'function'
         ? await remote.getSessionBinding({ sessionId }).catch(() => null) : null
+      if (!alive.current) return
       if (fresh && fresh.ok && fresh.value.binding && fresh.value.binding.cardId === draft.cardId) {
         const authoritative = fresh.value.binding
         setDraft(previous => previous && previous.cardId === authoritative.cardId ? {
@@ -466,28 +485,28 @@ function HeaderChipSession(props: HeaderChipProps) {
         } : previous)
       }
       bindingLoader.reload()
-      // 通知操作条等按绑定显隐的组件刷新
-      window.dispatchEvent(new CustomEvent(BINDING_CHANGED_EVENT, { detail: sessionId }))
     }
   }
 
   const insertGreeting = async () => {
     const r = await remote.ensureGreeting({ sessionId })
-    if (!r.ok) setError(r.error.message)
+    if (!r.ok) { if (alive.current) setError(r.error.message) }
     else {
-      toast.show(r.value.created ? t('chip.greeting.inserted') : t('chip.greeting.skipped'))
       if (r.value.created || r.value.conversationStarted) {
         invalidateSessionBinding(sessionId)
-        bindingLoader.reload()
         window.dispatchEvent(new CustomEvent(BINDING_CHANGED_EVENT, { detail: sessionId }))
         void Promise.resolve(sessions.refresh?.()).catch(() => {})
       }
+      if (!alive.current) return
+      toast.show(r.value.created ? t('chip.greeting.inserted') : t('chip.greeting.skipped'))
+      if (r.value.created || r.value.conversationStarted) bindingLoader.reload()
     }
   }
 
   const swipeBy = async (delta: number) => {
     if (!binding) return
     const variants = await cachedCharacterDetail(remote, binding.cardId)
+    if (!alive.current) return
     if (!variants.ok) {
       setError(variants.error.message)
       return
@@ -500,11 +519,12 @@ function HeaderChipSession(props: HeaderChipProps) {
     // 越界的旧下标实际展示的是第 1 条；从它翻页，不能「下一条」又落回当前这条。
     const next = ((activeGreetingIndex(binding.greetingIndex, total) + delta) % total + total) % total
     const r = await remote.swipeGreeting({ sessionId, index: next })
+    if (!alive.current) return
     if (!r.ok) setError(r.error.message)
     else {
       // 二次打开可能因会话尚未登记而抛错；分支已建好，toast 提示即可
-      await openChildSession(sessions, r.value.childSessionId, r.value.title, sessionId).catch(() => {
-        toast.show(t('chip.swipe.childCreated'))
+      await openChildSession({ ...sessions, open: (id) => { if (alive.current) sessions.open(id) } }, r.value.childSessionId, r.value.title, sessionId).catch(() => {
+        if (alive.current) toast.show(t('chip.swipe.childCreated'))
       })
     }
   }
@@ -514,18 +534,21 @@ function HeaderChipSession(props: HeaderChipProps) {
       const r = await remote.clearSessionBinding({ sessionId })
       const err = errOf(r)
       if (err) {
+        if (!alive.current) return
         // 收起确认层后，错误会显示在仍打开的主 Dialog 中。
         setConfirmUnbind(false)
         setError(err)
       } else {
+        invalidateSessionBinding(sessionId)
+        window.dispatchEvent(new CustomEvent(BINDING_CHANGED_EVENT, { detail: sessionId }))
+        if (!alive.current) return
         closeGuard.clearDraft()
         setConfirmUnbind(false)
         setOpen(false)
-        invalidateSessionBinding(sessionId)
         bindingLoader.reload()
-        window.dispatchEvent(new CustomEvent(BINDING_CHANGED_EVENT, { detail: sessionId }))
       }
     } catch (error) {
+      if (!alive.current) return
       // typert 传输失败/入参校验不过时是 reject 而非错误信封：不收起确认框会永久卡死。
       setConfirmUnbind(false)
       setError(describeError(error))
@@ -534,6 +557,7 @@ function HeaderChipSession(props: HeaderChipProps) {
 
   const showTriggerLog = async () => {
     const r = await remote.getTriggerLog({ sessionId })
+    if (!alive.current) return
     if (!r.ok) return setError(r.error.message)
     const log = r.value.log
     setView({
@@ -544,6 +568,7 @@ function HeaderChipSession(props: HeaderChipProps) {
 
   const preview = async () => {
     const r = await remote.previewPrompt({ sessionId })
+    if (!alive.current) return
     if (!r.ok) return setError(r.error.message)
     setPreviewData(r.value)
   }
@@ -552,6 +577,7 @@ function HeaderChipSession(props: HeaderChipProps) {
     const cardId = draft?.cardId
     if (!cardId || cardId !== binding?.cardId || !binding.storyId) return
     const r = await remote.getChatLorebook({ cardId, storyId: binding?.cardId === cardId ? binding.storyId : undefined })
+    if (!alive.current) return
     if (!r.ok) {
       setError(r.error.message)
       return
@@ -616,7 +642,7 @@ function HeaderChipSession(props: HeaderChipProps) {
             <div className="dsh-tavern-panelCard">
               <Err message={bindingLoadError} />
               <div>
-                <Btn disabled={locked} onClick={bindingLoader.reload}>{t('action.retry')}</Btn>
+                <Btn disabled={locked} onClick={() => { invalidateSessionBinding(sessionId); bindingLoader.reload() }}>{t('action.retry')}</Btn>
               </div>
             </div>
           ) : bindingPending ? (
@@ -652,7 +678,7 @@ function HeaderChipSession(props: HeaderChipProps) {
                     <Field label={t('chip.field.character')}>
                       <Select
                         width="100%"
-                        disabled={busy}
+                        disabled={locked}
                         value={draft.cardId}
                         onChange={(cardId) => {
                           if (!cardId) return
@@ -671,7 +697,7 @@ function HeaderChipSession(props: HeaderChipProps) {
                     <Field label={t('chip.field.preset')}>
                       <Select
                         width="100%"
-                        disabled={busy}
+                        disabled={locked}
                         value={draft.presetId ?? ''}
                         onChange={(v) => setDraft({ ...draft, presetId: v || null })}
                         options={[{ value: '', label: t('chip.field.builtinPreset') }, ...lists.presets.map((p) => ({ value: p.id, label: p.regexCount > 0 ? t('settings.defaults.presetRegexCount', { name: p.name, count: p.regexCount }) : p.name }))]}
@@ -680,7 +706,7 @@ function HeaderChipSession(props: HeaderChipProps) {
                     <Field label={t('chip.field.persona')}>
                       <Select
                         width="100%"
-                        disabled={busy}
+                        disabled={locked}
                         value={draft.personaId ?? ''}
                         onChange={(v) => setDraft({ ...draft, personaId: v || null })}
                         options={[{ value: '', label: t('chip.field.none') }, ...lists.personas.map((p) => ({ value: p.id, label: p.name }))]}
@@ -692,12 +718,12 @@ function HeaderChipSession(props: HeaderChipProps) {
                     <div className="dsh-tavern-groupHead">{t('section.lorebooks')}</div>
                     {draft.worldInfo&&Object.keys(draft.worldInfo).length>0&&<Field label={t('chip.worldInfoOverride')}>
                       <Muted>{t('chip.worldInfoOverrideDesc',{count:Object.keys(draft.worldInfo).length})}</Muted>
-                      <Btn disabled={busy} onClick={()=>setDraft({...draft,worldInfo:{}})}>{t('chip.worldInfoReset')}</Btn>
+                      <Btn disabled={locked} onClick={()=>setDraft({...draft,worldInfo:{}})}>{t('chip.worldInfoReset')}</Btn>
                     </Field>}
                     <Field label={t('chip.field.mainLore')}>
                       <Select
                         width="100%"
-                        disabled={busy}
+                        disabled={locked}
                         value={draft.characterLorebookId ?? (draft.useEmbeddedLorebook===false?'@dsh/no-main-worldbook':'')}
                         onChange={(v) => {
                           const nextMain = v === '' || v === '@dsh/no-main-worldbook' ? null : v
@@ -721,7 +747,7 @@ function HeaderChipSession(props: HeaderChipProps) {
                       {lists.lorebooks.length === 0 ? <Muted>{t('chip.field.noLorebooks')}</Muted> : (
                         <CheckChips
                           ariaLabel={t('chip.field.additionalLore')}
-                          disabled={busy}
+                          disabled={locked}
                           options={lists.lorebooks.filter(n => n !== draft.characterLorebookId).map(n => ({value:n,label:n}))}
                           selected={draft.characterLorebookIds ?? []}
                           onChange={characterLorebookIds => setDraft({...draft,characterLorebookIds})}
@@ -734,7 +760,7 @@ function HeaderChipSession(props: HeaderChipProps) {
                       ) : (
                         <CheckChips
                           ariaLabel={t('chip.field.globalLoreAria')}
-                          disabled={busy}
+                          disabled={locked}
                           options={lists.lorebooks.map((n) => ({ value: n, label: n }))}
                           selected={draft.lorebookIds}
                           onChange={(lorebookIds) => setDraft({ ...draft, lorebookIds })}
@@ -750,17 +776,17 @@ function HeaderChipSession(props: HeaderChipProps) {
                   <Field label={t('chip.field.character')}>
                     <Select
                       width="100%"
-                      disabled={busy}
+                      disabled={locked}
                       value=""
                       onChange={(cardId) => {
                         if (!cardId) return
                         const request = ++characterRequest.current
                         void bindingFromDefaults(remote, sessionId, cardId).then((next) => {
-                          if (characterRequest.current !== request) return
+                          if (!alive.current || characterRequest.current !== request) return
                           const picked = lists.characters.find((c) => c.cardId === cardId)
                           setDraft({ ...next, cardName: picked?.name })
                         }).catch((cause) => {
-                          if (characterRequest.current === request) {
+                          if (alive.current && characterRequest.current === request) {
                             setError(describeError(cause))
                           }
                         })
@@ -783,7 +809,7 @@ function HeaderChipSession(props: HeaderChipProps) {
                     <textarea
                       className="dsh-tavern-input dsh-tavern-textarea"
                       style={{ minHeight: 96 }}
-                      disabled={busy}
+                      disabled={locked}
                       value={draft.authorNote ?? ''}
                       onChange={(e) => setDraft({ ...draft, authorNote: e.target.value })}
                     />
@@ -791,7 +817,7 @@ function HeaderChipSession(props: HeaderChipProps) {
                   <div className="dsh-tavern-inlineChecks">
                     <label>
                       <Toggle
-                        disabled={busy}
+                        disabled={locked}
                         checked={draft.injectJournal === true}
                         onChange={(injectJournal) => setDraft({ ...draft, injectJournal })}
                         title={t('chip.field.injectJournal')}
@@ -799,13 +825,13 @@ function HeaderChipSession(props: HeaderChipProps) {
                       {t('chip.field.injectJournal')}
                     </label>
                     {binding?.storyId && draft.cardId === binding.cardId ? (
-                      <Btn size="sm" disabled={busy} onClick={() => setMemoryOpenTab('journal')}>
+                      <Btn size="sm" disabled={locked} onClick={() => setMemoryOpenTab('journal')}>
                         {t('chip.journal.edit')}
                       </Btn>
                     ) : null}
                     <label>
                       <Toggle
-                        disabled={busy}
+                        disabled={locked}
                         checked={draft.helperMvu === true}
                         onChange={(next) => {
                           const helperMvu = !next && (!binding || draft.cardId !== binding.cardId || binding.helperMvu === undefined) ? undefined : next
@@ -823,11 +849,11 @@ function HeaderChipSession(props: HeaderChipProps) {
               <div className="dsh-tavern-panelCard">
                 <div className="dsh-tavern-groupHead">{t('chip.group.greetingDebug')}</div>
                 <div className="dsh-tavern-bindingActions">
-                  <Btn disabled={busy || !binding} onClick={() => run(insertGreeting)}>{t('binding.greeting')}</Btn>
-                  <Btn disabled={busy || !binding || !canSwipeGreeting} onClick={() => run(() => swipeBy(-1))}>{t('chip.greeting.prev')}</Btn>
-                  <Btn disabled={busy || !binding || !canSwipeGreeting} onClick={() => run(() => swipeBy(1))}>{t('chip.greeting.next')}</Btn>
-                  <Btn disabled={busy} onClick={() => run(showTriggerLog)}>{t('binding.triggerLog')}</Btn>
-                  <Btn disabled={busy} onClick={() => run(preview)}>{t('binding.preview')}</Btn>
+                  <Btn disabled={locked || !binding} onClick={() => run(insertGreeting)}>{t('binding.greeting')}</Btn>
+                  <Btn disabled={locked || !binding || !canSwipeGreeting} onClick={() => run(() => swipeBy(-1))}>{t('chip.greeting.prev')}</Btn>
+                  <Btn disabled={locked || !binding || !canSwipeGreeting} onClick={() => run(() => swipeBy(1))}>{t('chip.greeting.next')}</Btn>
+                  <Btn disabled={locked} onClick={() => run(showTriggerLog)}>{t('binding.triggerLog')}</Btn>
+                  <Btn disabled={locked} onClick={() => run(preview)}>{t('binding.preview')}</Btn>
                 </div>
               </div>
               </div>
@@ -870,11 +896,12 @@ function HeaderChipSession(props: HeaderChipProps) {
           </div>
           {binding?.storyId && <HelperMvuAbandonAction key={sessionId + ':' + binding.storyId} remote={remote} sessionId={sessionId} storyId={binding.storyId} disabled={busy} onBusyChange={(on) => { abandoningMvuRef.current = on; setAbandoningMvu(on) }} onChanged={() => {
             invalidateSessionBinding(sessionId)
-            bindingLoader.reload()
             window.dispatchEvent(new CustomEvent(BINDING_CHANGED_EVENT, { detail: sessionId }))
+            if (!alive.current) return
+            bindingLoader.reload()
             // 关闭绑定后正文写入可能失败；重新读取真实开关，保留用户其它尚未保存的绑定编辑。
             void cachedSessionBinding(remote, sessionId).then(result => {
-              if (result.ok && result.value.binding) {
+              if (alive.current && result.ok && result.value.binding) {
                 const current = result.value.binding
                 setDraft(previous => previous?.cardId === current.cardId && previous.storyId === current.storyId ? { ...previous, helperMvu: current.helperMvu } : previous)
               }
@@ -919,9 +946,9 @@ function HeaderChipSession(props: HeaderChipProps) {
         description={t('chip.unbind.desc')}
         confirmLabel={t('chip.unbind.action')}
         danger
-        busy={busy}
+        busy={locked}
         onCancel={() => {
-          if (!pending.current) setConfirmUnbind(false)
+          if (!pending.current && !abandoningMvuRef.current) setConfirmUnbind(false)
         }}
         onConfirm={() => run(unbind)}
       />

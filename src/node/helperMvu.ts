@@ -140,7 +140,7 @@ async function floorReady(state:TavernState,binding:SessionBinding,sessionId:str
   floorOwner(binding,sessionId,job)
   const ws=await state.storyWorkspace(binding.cardId,binding.storyId)
   const floors=await ws.wal.listFloors(),active=floors.filter(item=>!item.rolledBack)
-  const known=floors.find(item=>item.floor===job.floor)
+  const known=active.find(item=>item.floor===job.floor)??floors.find(item=>item.floor===job.floor)
   if(known?.rolledBack)throw new Error('自动 MVU 目标楼层已回滚')
   const open=state.openFloors.get(sessionId)
   if(open&&(open.floor!==job.floor||open.cardId!==binding.cardId||open.storyId!==binding.storyId))throw new Error('自动 MVU 不能写入已经开启的新楼层')

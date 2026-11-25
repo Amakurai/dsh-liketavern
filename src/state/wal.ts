@@ -16,7 +16,7 @@ import type { Dirent } from 'node:fs'
 import { lstat, mkdir, readFile, readdir, rm, stat } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { atomicWrite } from './atomicWrite.js'
-import { rootIdentity } from './pathIdentity.js'
+import { caseIdentity, rootIdentity } from './pathIdentity.js'
 import { renameWithRetry } from './rename.js'
 import { withWorkspaceLock } from './workspaceLock.js'
 import {
@@ -313,35 +313,38 @@ export class Wal {
     const directories=allEntries.filter(entry=>entry.isDirectory())
     // 活跃目录按目录名直接核对；回滚副本只能作为清单里旧楼层的身份证明。
     // 不能只按 baseFloorDir 名称集合判断：旧副本会掩盖同名活跃楼层被删除的事实。
-    const activeNames=new Set(directories.filter(entry=>!isRolledBackDir(entry.name)).map(entry=>entry.name))
+    const activeNames=new Set(directories.filter(entry=>!isRolledBackDir(entry.name)).map(entry=>caseIdentity(entry.name)))
     const rolledBack=directories.filter(entry=>isRolledBackDir(entry.name))
     for(const floor of coverage) {
-      const dirName=sanitizeFloor(floor.floor)
-      if(activeNames.has(dirName)) continue
+      const dirKey=caseIdentity(sanitizeFloor(floor.floor))
+      if(activeNames.has(dirKey)) continue
       let proven=false
       for(const entry of rolledBack) {
-        if(baseFloorDir(entry.name)!==dirName) continue
+        if(caseIdentity(baseFloorDir(entry.name))!==dirKey) continue
         const meta=await this.readMeta(join(this.rootDir,entry.name),{cacheRolledBack:true})
         if(meta?.floor===floor.floor && meta.startedAt===floor.startedAt) { proven=true; break }
       }
       if(!proven) throw new Error(`WAL 楼层缺失：${floor.floor}；请恢复完整日志，不能继续回退或分支`)
     }
-    const previous=coverage.find(floor=>floor.floor===targetFloor)
-    if(!previous) return
-    // 空目录可能是首次开层前的崩溃遗留，也可能是已有层的日志被清空。
+    const targetDirKey=caseIdentity(sanitizeFloor(targetFloor))
+    const matchingCovered=coverage.filter(floor=>caseIdentity(sanitizeFloor(floor.floor))===targetDirKey)
+    if(!matchingCovered.length) return
+    // 空目录可能是首次开层前的崩溃遗留，也可能是已有层的日志被清空；不同楼层 ID 净化或大小写折叠到同一目录时同样适用。
     // 清单已登记的身份只有完成回滚后才能替换；更早一次同名层的副本不能充当当前层的证明。
-    const targetDirName=sanitizeFloor(targetFloor)
-    for(const entry of rolledBack) {
-      if(baseFloorDir(entry.name)!==targetDirName) continue
-      const dir=join(this.rootDir,entry.name)
-      const meta=await this.readMeta(dir,{cacheRolledBack:true})
-      if(meta?.floor!==previous.floor || meta.startedAt!==previous.startedAt) continue
-      const records=await this.readRecords(dir)
-      const progress=await this.readRollbackProgress(dir,records)
-      if(typeof meta.rolledBackAt==='string' && Number.isFinite(Date.parse(meta.rolledBackAt))
-        && progress.next===-1 && !progress.pending) return
+    for(const previous of matchingCovered) {
+      let completed=false
+      for(const entry of rolledBack) {
+        if(caseIdentity(baseFloorDir(entry.name))!==targetDirKey) continue
+        const dir=join(this.rootDir,entry.name)
+        const meta=await this.readMeta(dir,{cacheRolledBack:true})
+        if(meta?.floor!==previous.floor || meta.startedAt!==previous.startedAt) continue
+        const records=await this.readRecords(dir)
+        const progress=await this.readRollbackProgress(dir,records)
+        if(typeof meta.rolledBackAt==='string' && Number.isFinite(Date.parse(meta.rolledBackAt))
+          && progress.next===-1 && !progress.pending) { completed=true; break }
+      }
+      if(!completed) throw new Error(`WAL 已登记楼层缺失或未完成回滚：${previous.floor}；请恢复完整日志，不能重新开始`)
     }
-    throw new Error(`WAL 已登记楼层缺失或未完成回滚：${targetFloor}；请恢复完整日志，不能重新开始`)
   }
 
   private assertWithinRoot(target: string): void {
@@ -981,7 +984,7 @@ export class Wal {
     // 恢复自身的正文替换与摘要展开经 withRecoveryWriteAccess 放行。崩溃遗留的标记会在下一次
     // 回滚重试时继续生效，完成后才注销；受控重置用 resetRollbackCursor。
     await this.markRecovering(floor, workspaceRoot)
-    return await withRecoveryWriteAccess(async () => {
+    return await withRecoveryWriteAccess(workspaceRoot, async () => {
     // progressFile 链接已在 readRollbackProgress（及 preflightRollback）核对，此处持同一工作区锁无需逐条重验。
     const checkpoint = async () => {
       await atomicWrite(progressFile, JSON.stringify(progress) + '\n')
@@ -1087,7 +1090,7 @@ export class Wal {
       for (const marker of WAL_FLOOR_MARKERS) logTargets.push(join(floorDir, marker))
     }
     if (logTargets.length) await this.assertLogPaths(logTargets)
-    const verifiedFloorDirs = new Set(directories.filter((d) => d.isDirectory()).map((d) => join(this.rootDir, d.name)))
+    const verifiedFloorDirs = new Set(directories.filter((d) => d.isDirectory()).map((d) => rootIdentity(join(this.rootDir, d.name))))
     const lastStep = new Map(floors.map((floor, index) => [floor, index]))
     type IndexedChange = { rec: RecordLine; startedAt: number | null; step: number; afterBytes: string | null }
     const changesByPath = new Map<string, IndexedChange[]>()
@@ -1099,9 +1102,12 @@ export class Wal {
     let maxStep = -1
     let expandsMemory = false
     let rebuildsIndex = false
-    for (const floor of floors) {
+    for (let index = 0; index < floors.length; index++) {
+      const floor = floors[index]!
+      if (lastStep.get(floor) !== index) continue
       const { dir } = this.floorDir(floor)
-      const verified = verifiedFloorDirs.has(dir)
+      const dirKey = rootIdentity(dir)
+      const verified = verifiedFloorDirs.has(dirKey)
       // 净化目录名不是楼层身份：不同原始 id 可能共用同一目录名。
       // 必须在整批开始前核对元数据，不能撤销到另一个楼层或等较新楼层已恢复才发现冲突。
       const dirExists = verified || await isDir(dir)
@@ -1111,7 +1117,7 @@ export class Wal {
         if (probeMeta !== null) {
           if (probeMeta.floor !== floor) throw new Error(`WAL 楼层元数据不存在或不匹配：${floor}`)
           meta = probeMeta
-          knownMetasByDir.set(dir, meta)
+          knownMetasByDir.set(dirKey, meta)
         } else if (!(await isUnstartedDir(dir))) {
           throw new Error(`WAL 楼层元数据不存在或不匹配：${floor}`)
         }
@@ -1120,7 +1126,7 @@ export class Wal {
       const progress = await this.readRollbackProgress(dir, records, { verified })
       targetLoaded.set(floor, { dirExists, meta, records, progress })
       const startedAt = meta ? Date.parse(meta.startedAt) : null
-      const step = lastStep.get(floor)!
+      const step = index
       for (const rec of records) {
         uncheckedBodyPaths.add(rec.path)
         const path = recordPathIdentity(rec.path)
@@ -1157,8 +1163,9 @@ export class Wal {
         if (otherStep !== undefined && otherStep >= maxStep) continue
         const cachedTarget = targetLoaded.get(floor.floor)
         const dir = join(this.rootDir, sanitizeFloor(floor.floor))
-        const verified = verifiedFloorDirs.has(dir)
-        const meta = cachedTarget ? cachedTarget.meta : (knownMetasByDir.get(dir) ?? await this.readMeta(dir, { verified }))
+        const dirKey = rootIdentity(dir)
+        const verified = verifiedFloorDirs.has(dirKey)
+        const meta = cachedTarget ? cachedTarget.meta : (knownMetasByDir.get(dirKey) ?? await this.readMeta(dir, { verified }))
         const completedAt = meta?.committed && meta.committedAt ? Date.parse(meta.committedAt) : NaN
         if (otherStep === undefined && !hasNullStartedAt && Number.isFinite(completedAt) && completedAt < minStartedAt) continue
         const otherStartedAt = meta ? Date.parse(meta.startedAt) : NaN
@@ -1191,7 +1198,9 @@ export class Wal {
       const overlay = await loadMemoryRollbackOverlay(workspaceRoot)
       let newerTouchedMemory = false
       for (let i = floors.length - 1; i >= 0; i--) {
-        const entry = targetLoaded.get(floors[i]!)
+        const floor = floors[i]!
+        if (lastStep.get(floor) !== i) continue
+        const entry = targetLoaded.get(floor)
         if (!entry || !entry.dirExists) continue
         const nonNoop = entry.records.filter((record) => !isNoopRecord(record))
         const touchesMemory = nonNoop.some((record) => recordPathIdentity(record.path).startsWith('memory/'))
@@ -1295,13 +1304,14 @@ export class Wal {
     const floorEntries = entries.filter((entry) => entry.isDirectory())
     const floorRows = await mapBounded(floorEntries, async (entry): Promise<WalFloorInfo | null> => {
       const dir = join(this.rootDir, entry.name)
+      const dirKey = rootIdentity(dir)
       const rolledBack = isRolledBackDir(entry.name)
-      let meta = options?.knownMetasByDir?.get(dir) ?? null
+      let meta = options?.knownMetasByDir?.get(dirKey) ?? null
       if (!meta) {
         meta = await this.readMeta(dir, { verified: true, cacheRolledBack: rolledBack })
         if (!meta && (await isUnstartedDir(dir))) return null
       }
-      if (meta) options?.knownMetasByDir?.set(dir, meta)
+      if (meta) options?.knownMetasByDir?.set(dirKey, meta)
       if (!meta || sanitizeFloor(meta.floor) !== baseFloorDir(entry.name)) throw new Error(`WAL 元数据缺失或目录不匹配：${entry.name}`)
       return {
         floor: meta.floor,

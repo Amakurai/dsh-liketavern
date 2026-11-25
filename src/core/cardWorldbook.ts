@@ -61,31 +61,42 @@ export function installCardWorldbook(initial:HelperWorldbookContext,json:(value:
     })
     bindingQueue=pending.catch(()=>undefined);return pending
   }
-  async function operation(book:string,kind:string,entries?:unknown,revision?:string,label?:string):Promise<HelperWorldbookResult>{
+  async function operation(book:string,kind:string,entries?:unknown,revision?:string,label?:string,alias?:string):Promise<HelperWorldbookResult>{
     name(book)
+    if(alias!==undefined)name(alias)
     const response=await request('helperWorldbookOperation','helperWorldbookResult',{name:book,operation:kind,...(entries===undefined?{}:{entries:wire(entries)}),...(revision===undefined?{}:{revision}),...(label===undefined?{}:{label})})
     if(!active)throw new Error('世界书运行时已关闭')
     const result=clone(response.result as HelperWorldbookResult)
     if(!result||typeof result!=='object')throw new Error('世界书回执无效')
     if(result.context)applyContext(result.context)
-    if(result.snapshot){cache.set(book,clone(result.snapshot));cache.set(result.snapshot.name,clone(result.snapshot));if(!result.snapshot.name.startsWith('@dsh/')&&!metadata.names.includes(result.snapshot.name))metadata={...metadata,names:[...metadata.names,result.snapshot.name]}}
-    if(result.deleted){const id=cache.get(book)?.name??book;cache.delete(book);cache.delete(id);metadata={...metadata,names:metadata.names.filter(name=>name!==id),global:metadata.global.filter(name=>name!==id),chat:metadata.chat===id?null:metadata.chat,character:{primary:metadata.character.primary===id?null:metadata.character.primary,additional:metadata.character.additional.filter(name=>name!==id)}}}
+    if(result.snapshot){
+      if(alias!==undefined)cache.set(alias,clone(result.snapshot))
+      cache.set(book,clone(result.snapshot));cache.set(result.snapshot.name,clone(result.snapshot))
+      if(!result.snapshot.name.startsWith('@dsh/')&&!metadata.names.includes(result.snapshot.name))metadata={...metadata,names:[...metadata.names,result.snapshot.name]}
+    }
+    if(result.deleted){
+      const id=cache.get(book)?.name??(alias!==undefined?cache.get(alias)?.name:undefined)??book
+      if(alias!==undefined)cache.delete(alias)
+      cache.delete(book);cache.delete(id)
+      metadata={...metadata,names:metadata.names.filter(name=>name!==id),global:metadata.global.filter(name=>name!==id),chat:metadata.chat===id?null:metadata.chat,character:{primary:metadata.character.primary===id?null:metadata.character.primary,additional:metadata.character.additional.filter(name=>name!==id)}}
+    }
     if(kind!=='get'){
-      const id=result.snapshot?.name??cache.get(book)?.name
+      const id=result.snapshot?.name??cache.get(book)?.name??(alias!==undefined?cache.get(alias)?.name:undefined)
+      if(alias!==undefined&&alias!==book)versions.set(alias,(versions.get(alias)??0)+1)
       versions.set(book,(versions.get(book)??0)+1)
-      if(id&&id!==book)versions.set(id,(versions.get(id)??0)+1)
+      if(id&&id!==book&&id!==alias)versions.set(id,(versions.get(id)??0)+1)
     }
     return result
   }
   async function readSnapshot(book:string):Promise<HelperWorldbookSnapshot>{const result=await operation(book,'get');if(!result.snapshot)throw new Error(result.missing?'世界书不存在':'世界书回执缺少条目');return result.snapshot}
   async function getWorldbook(book:string):Promise<HelperWorldbookEntry[]>{return clone((await readSnapshot(book)).entries)}
   const ensure=async(book:string)=>cache.get(book)??await readSnapshot(book)
-  async function replaceWorldbook(book:string,entries:unknown):Promise<void>{const current=await ensure(book);await operation(book,'replace',entries,current.revision)}
+  async function replaceWorldbook(book:string,entries:unknown):Promise<void>{const current=await ensure(book);await operation(current.name,'replace',entries,current.revision,undefined,book)}
   async function updateWorldbookWith(book:string,updater:(entries:HelperWorldbookEntry[])=>unknown):Promise<HelperWorldbookEntry[]>{
     if(typeof updater!=='function')throw new Error('世界书更新器必须为函数')
     const current=await readSnapshot(book),before=generation,version=versions.get(book)??0,canonicalVersion=versions.get(current.name)??0,result=await updater(clone(current.entries))
     if(!active||generation!==before||(versions.get(book)??0)!==version||(versions.get(current.name)??0)!==canonicalVersion)throw new Error('等待期间世界书已改变')
-    return clone((await operation(book,'replace',result,current.revision)).snapshot!.entries)
+    return clone((await operation(current.name,'replace',result,current.revision,undefined,book)).snapshot!.entries)
   }
   async function createWorldbookEntries(book:string,input:unknown){
     if(!Array.isArray(input))throw new Error('新条目必须是数组')
@@ -93,14 +104,14 @@ export function installCardWorldbook(initial:HelperWorldbookContext,json:(value:
     const data=wire(input) as Record<string,unknown>[]
     if(data.some(item=>!item||typeof item!=='object'||Array.isArray(item)))throw new Error('世界书条目必须为对象')
     const added=data.map(item=>{while(ids.has(next))next++;const uid=next++;ids.add(uid);return {...(item as Record<string,unknown>),uid}})
-    const saved=(await operation(book,'replace',[...entries,...added],current.revision)).snapshot!.entries,newIds=new Set(added.map(entry=>entry.uid))
+    const saved=(await operation(current.name,'replace',[...entries,...added],current.revision,undefined,book)).snapshot!.entries,newIds=new Set(added.map(entry=>entry.uid))
     return {worldbook:clone(saved),new_entries:clone(saved.filter(entry=>newIds.has(entry.uid)))}
   }
   async function deleteWorldbookEntries(book:string,predicate:(entry:HelperWorldbookEntry)=>boolean){
     if(typeof predicate!=='function')throw new Error('世界书删除条件必须为函数')
     const current=await readSnapshot(book),entries=current.entries,deleted:HelperWorldbookEntry[]=[],kept:HelperWorldbookEntry[]=[]
     for(const entry of entries){const result=predicate(clone(entry));if(typeof result!=='boolean')throw new Error('删除条件必须同步返回布尔值');(result?deleted:kept).push(entry)}
-    const saved=(await operation(book,'replace',kept,current.revision)).snapshot!.entries
+    const saved=(await operation(current.name,'replace',kept,current.revision,undefined,book)).snapshot!.entries
     return {worldbook:clone(saved),deleted_entries:clone(deleted)}
   }
   const settingsDrafts=new Map<number,Partial<HelperLorebookSettings>>()
@@ -145,8 +156,8 @@ export function installCardWorldbook(initial:HelperWorldbookContext,json:(value:
     rebindChatWorldbook:async(chat:string,input:unknown)=>{if(chat!=='current')throw new Error('只能修改当前聊天世界书');const value=json(input,16384);await bind('chat',()=>value)},
     getWorldbook,replaceWorldbook,updateWorldbookWith,createWorldbookEntries,deleteWorldbookEntries,refreshHelperWorldbooks,
     createWorldbook:async(book:string,entries:unknown=[])=>Boolean((await operation(book,'create',entries)).created),
-    createOrReplaceWorldbook:async(book:string,entries:unknown=[])=>{const current=await operation(book,'get');return Boolean((await operation(book,'upsert',entries,current.snapshot?.revision)).created)},
-    deleteWorldbook:async(book:string)=>{const current=await operation(book,'get');if(current.missing)return false;return Boolean((await operation(book,'delete',undefined,current.snapshot!.revision)).deleted)},
+    createOrReplaceWorldbook:async(book:string,entries:unknown=[])=>{const current=await operation(book,'get');return Boolean((await operation(current.snapshot?.name??book,'upsert',entries,current.snapshot?.revision,undefined,book)).created)},
+    deleteWorldbook:async(book:string)=>{const current=await operation(book,'get');if(current.missing)return false;return Boolean((await operation(current.snapshot!.name,'delete',undefined,current.snapshot!.revision,undefined,book)).deleted)},
     getOrCreateChatWorldbook:async(chat:string,label?:string)=>{if(chat!=='current')throw new Error('只能创建当前剧情世界书');if(label!==undefined)name(label);const result=await bind('ensure-chat',()=>label??null);if(!result.chat)throw new Error('聊天世界书回执缺少绑定');return result.chat},
   }
   Object.assign(root,api);root.TavernHelper=Object.assign(root.TavernHelper??{},api);window.addEventListener('message',receive)

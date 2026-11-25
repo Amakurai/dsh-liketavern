@@ -15,6 +15,6 @@ interface HeroProps {
     session?: HeroSession;
     useSessions?: UseSessions;
 }
-/** 会话切换时卸载旧选择器，异步结果不能把忙碌态、错误或弹窗带到新会话。 */
+/** 会话切换或重连 remote 时卸载旧选择器，异步结果不能把忙碌态、错误或弹窗带到新会话。 */
 export declare function TavernHeroCharacter(props: HeroProps): import("react").JSX.Element;
 export {};

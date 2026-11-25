@@ -8,5 +8,6 @@ export function watchHelperStory(sessionId:string,storyId:string,listener:()=>vo
   return ()=>{group!.delete(listener);if(!group!.size) listeners.delete(key)}
 }
 export function notifyHelperStory(sessionId:string,storyId:string):void {
-  for(const listener of listeners.get(JSON.stringify([sessionId,storyId]))??[]) listener()
+  const group=listeners.get(JSON.stringify([sessionId,storyId]))
+  if(group)for(const listener of [...group])listener()
 }

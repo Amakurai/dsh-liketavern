@@ -24,6 +24,7 @@ import {BINDING_CHANGED_EVENT} from './actions.js'
 import { getTavernLocale, useT, useMarkdownLabels } from './i18n.js'
 import { readHostColorScheme, useDisplaySettingsRevision, useSpeakerHeader } from './displayPrefs.js'
 import { renderOutputBatched } from './renderBatch.js'
+import { remoteIdentity } from './remoteIdentity.js'
 import { subscribeWindowMessage } from './windowEvents.js'
 import { Avatar, Btn, Err, IconBtn, Skeleton, useLoader, useToast } from './util.js'
 import type { TavernRemote } from './types.js'
@@ -84,7 +85,9 @@ export function SpeechHtmlFrame(props: {
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
   // 私有 frameId、epoch 和服务端令牌仅留在可信宿主，不发送给卡面。
   const frameId = useRef(randomUuid()), frameEpoch = useRef(0), retiredRuntimes = useRef(new Set<string>())
-  const fixedFrameIdentity=useRef(JSON.stringify([props.helperBinding?.sessionId,props.helperMessageId]))
+  const fixedFrameIdentity=useRef(JSON.stringify([props.helperBinding?.sessionId,props.helperBinding?.storyId,props.helperMessageId]))
+  const mountedRef = useRef(true)
+  useLayoutEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false } }, [])
   const [frameH, setFrameH] = useState<number | null>(null)
   const t = useT()
   const remoteRef=useRef(props.remote),rotateReadOnly=useRef<(readOnly:boolean)=>void>(()=>{})
@@ -102,13 +105,25 @@ export function SpeechHtmlFrame(props: {
   }, [srcDoc])
 
   useLayoutEffect(() => {
+    let shouldClearBranchState = false
     if (previousSrcDoc.current !== srcDoc) {
       previousSrcDoc.current = srcDoc
+      shouldClearBranchState = true
       handlers.current.onScriptReady?.(false)
       handlers.current.onScriptReset?.()
     }
-    const fixedIdentity=JSON.stringify([props.helperBinding?.sessionId,props.helperMessageId])
-    if(fixedFrameIdentity.current!==fixedIdentity){frameId.current=randomUuid();frameEpoch.current=0;fixedFrameIdentity.current=fixedIdentity}
+    const fixedIdentity=JSON.stringify([props.helperBinding?.sessionId,props.helperBinding?.storyId,props.helperMessageId])
+    if(fixedFrameIdentity.current!==fixedIdentity){
+      frameId.current=randomUuid()
+      frameEpoch.current=0
+      fixedFrameIdentity.current=fixedIdentity
+      shouldClearBranchState=true
+    }
+    if(shouldClearBranchState){
+      setEditedBranch(null)
+      setBranchError(null)
+      handlers.current.onBranchError?.(null,null)
+    }
     let active=true
     const send=(message:Record<string,unknown>)=>{if(active)iframeRef.current?.contentWindow?.postMessage(message,'*')}
     const eventEndpoint=props.helperBinding?attachHelperEvents(props.helperBinding.sessionId,props.helperBinding.storyId,send,undefined,retiredRuntimes.current):attachCardBridgeRuntime(send,retiredRuntimes.current)
@@ -444,7 +459,8 @@ export function SpeechHtmlFrame(props: {
     />
     {(editedBranch||branchError)&&<div className="dsh-tavern-cardBackupBar">{editedBranch&&<Btn onClick={()=>{
       setBranchError(null)
-      void Promise.resolve().then(()=>props.onMessageBranch?.(editedBranch)).then(()=>{props.onBranchError?.(null,null)},error=>{
+      void Promise.resolve().then(()=>props.onMessageBranch?.(editedBranch)).then(()=>{if(mountedRef.current)props.onBranchError?.(null,null)},error=>{
+        if(!mountedRef.current)return
         const message=describeError(error)
         setBranchError(message)
         props.onBranchError?.(editedBranch,message)
@@ -479,9 +495,9 @@ interface SpeechBubbleProps {
   onSwipeGreeting?: (index: number, frameLease?: HelperFrameLease) => void | Promise<void>
 }
 
-/** 按会话和角色卸载旧气泡状态，慢请求的报错不能留到新会话。 */
+/** 按宿主、会话和角色卸载旧气泡状态，慢请求的报错不能留到新会话。 */
 export function SpeechBubble(props: SpeechBubbleProps) {
-  return <SpeechBubbleSession key={`${props.sessionId}:${props.cardId}`} {...props} />
+  return <SpeechBubbleSession key={`${remoteIdentity(props.remote)}:${props.sessionId}:${props.cardId}`} {...props} />
 }
 
 interface DisplayProjectionProps extends SpeechBubbleProps {

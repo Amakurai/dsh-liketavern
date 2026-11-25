@@ -190,16 +190,28 @@ export function hashToSeed(text: string): number {
   return h >>> 0
 }
 
+function sampleIndex(random: () => number, count: number): number {
+  const raw = random()
+  if (!Number.isFinite(raw) || raw <= 0) return 0
+  if (raw >= 1) return count - 1
+  return Math.min(count - 1, Math.max(0, Math.floor(raw * count)))
+}
+
 function rollChoice(options: string[], random: () => number, numericRange: boolean): string {
   if (options.length === 0) return ''
   if (numericRange && options.length === 2 && options.every((o) => /^-?\d+$/.test(o))) {
     const a = Number(options[0])
     const b = Number(options[1])
-    const lo = Math.min(a, b)
-    const hi = Math.max(a, b)
-    return String(lo + Math.floor(random() * (hi - lo + 1)))
+    if (Number.isSafeInteger(a) && Number.isSafeInteger(b)) {
+      const lo = Math.min(a, b)
+      const hi = Math.max(a, b)
+      const span = hi - lo + 1
+      if (Number.isSafeInteger(span)) {
+        return String(lo + sampleIndex(random, span))
+      }
+    }
   }
-  return options[Math.min(options.length - 1, Math.floor(random() * options.length))]!
+  return options[sampleIndex(random, options.length)]!
 }
 
 function parseChoiceMacro(inner: string): { kind: 'random' | 'pick'; options: string[] } | null {
@@ -435,13 +447,17 @@ function addVariable(store: Map<string, string>, key: string, value: string): st
   }
   const increment = value.trim() === '' ? Number.NaN : Number(value)
   const base = current.trim() === '' ? Number.NaN : Number(current)
-  if (Number.isNaN(increment) || Number.isNaN(base)) {
+  if (!Number.isFinite(increment) || !Number.isFinite(base)) {
     const next = previous + value
     store.set(key, next)
     return next
   }
   const sum = base + increment
-  if (Number.isNaN(sum)) return ''
+  if (!Number.isFinite(sum)) {
+    const next = previous + value
+    store.set(key, next)
+    return next
+  }
   store.set(key, String(sum))
   return String(sum)
 }
@@ -553,29 +569,34 @@ export function expandMacros(
     if (mode === 'nested-get') {
       // 栈项记录外层闭合子项：位于至少一层已闭合外层宏内部的所有最内层 getvar 在同一趟一并展开，
       // 避免多枚并列 {{getvar}} 逐趟依次展开耗尽 MAX_PASSES。
+      // MACRO_RE 体为 [^{}]+，任何落入开栈帧的单花括号 `{` 或 `}` 都意味着外层帧永不可能匹配为合法宏，须立即清空外层栈。
       const stack: Array<{ start: number; closedChildren: number[] }> = []
       nestedStarts = new Set<number>()
-      for (let i = 0; i < current.length - 1; ) {
+      for (let i = 0; i < current.length; ) {
         if (current[i] === '{') {
           let runEnd = i + 1
           while (runEnd < current.length && current[runEnd] === '{') runEnd++
           const runLen = runEnd - i
-          if (runLen >= 2) {
-            if (runLen % 2 === 1) i++
-            while (i + 1 < runEnd) {
-              stack.push({ start: i, closedChildren: [] })
-              i += 2
-            }
-            continue
+          if (runLen % 2 === 1) {
+            stack.length = 0
+            i++
           }
-          i = runEnd
+          while (i + 1 < runEnd) {
+            stack.push({ start: i, closedChildren: [] })
+            i += 2
+          }
           continue
         }
-        if (current[i] === '}' && current[i + 1] === '}' && stack.length > 0) {
-          const frame = stack.pop()!
-          for (const childStart of frame.closedChildren) nestedStarts.add(childStart)
-          if (stack.length > 0) stack[stack.length - 1]!.closedChildren.push(frame.start)
-          i += 2
+        if (current[i] === '}') {
+          if (i + 1 < current.length && current[i + 1] === '}' && stack.length > 0) {
+            const frame = stack.pop()!
+            for (const childStart of frame.closedChildren) nestedStarts.add(childStart)
+            if (stack.length > 0) stack[stack.length - 1]!.closedChildren.push(frame.start)
+            i += 2
+            continue
+          }
+          stack.length = 0
+          i++
           continue
         }
         i++

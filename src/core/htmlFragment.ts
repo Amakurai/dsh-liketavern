@@ -113,6 +113,8 @@ function isPlainSafeLinkAttrs(attrSlice: string): boolean {
   return href !== null && /^https?:\/\/[^\s/<>]+/i.test(href) && !/[\r\n\t\u0000-\u001f\u007f<>]/.test(href)
 }
 
+const STYLE_FOLLOW_TAGS_RE = new RegExp(HTML_TAGS.source, HTML_TAGS.flags)
+
 /**
  * 判定紧跟纯 `<details>` 之后的 `<style>` 是否与该折叠块无关：
  * 全部连续 `<style>` 均闭合且不含面向 `details`/`summary`/`body`/`html`/`:root`/通配符 `*`/`@import` 的选择器，
@@ -125,17 +127,16 @@ function isNonDetailsFollowingStyle(text: string, styleStart: number): boolean {
     const skip = /^(?:\s|<!--[\s\S]*?-->)*/.exec(text.slice(cursor))![0]!.length
     cursor += skip
     if (cursor >= text.length) return sawStyle
-    const tokens = new RegExp(HTML_TAGS.source, HTML_TAGS.flags)
-    tokens.lastIndex = cursor
-    const m = tokens.exec(text)
+    STYLE_FOLLOW_TAGS_RE.lastIndex = cursor
+    const m = STYLE_FOLLOW_TAGS_RE.exec(text)
     if (!m || m.index !== cursor) return sawStyle
     const raw = m[0]
-    if (raw.startsWith('<!--')) { cursor = tokens.lastIndex; continue }
+    if (raw.startsWith('<!--')) { cursor = STYLE_FOLLOW_TAGS_RE.lastIndex; continue }
     const tag = m[1]?.toLowerCase()
     const closing = raw.startsWith('</')
     if (!tag || closing) return sawStyle
     if (tag === 'style') {
-      const contentStart = tokens.lastIndex
+      const contentStart = STYLE_FOLLOW_TAGS_RE.lastIndex
       const styleEnd = findHtmlOpaqueEnd(text, contentStart, 'style')
       if (styleEnd === null) return false
       const cssEnd = text.lastIndexOf('</', styleEnd)

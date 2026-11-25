@@ -516,8 +516,17 @@ export function tavernCardBridgeScript(options: Omit<CardFrameOptions, 'connectH
     readColorSchemeMeta();
     watchHeight();
   }
+  var writeBuf = null;
+  var flushTimer = null;
+  var streamOpen = false;
   window.__dshTavernBridgeCleanup = function () {
     heightActive = false;
+    if (flushTimer !== null) {
+      clearTimeout(flushTimer);
+      flushTimer = null;
+    }
+    writeBuf = null;
+    streamOpen = false;
     if (heightFrame !== null) {
       if (heightFrameKind === 'raf') window.cancelAnimationFrame(heightFrame);
       else clearTimeout(heightFrame);
@@ -545,14 +554,13 @@ export function tavernCardBridgeScript(options: Omit<CardFrameOptions, 'connectH
     }
     document.removeEventListener('DOMContentLoaded', onDomReady);
   };
-  // 封面常 document.write 整页 HTML，会冲掉 head 里的桥。把 stub/CSP 写回后再落盘。
+  // 封面常 document.write 整页 HTML，解析完成后的片段 document.write 也会触发隐式 document.open 冲掉 head 里的 CSP 与桥。
   var nativeDocument = window.__dshTavernNativeDocument || (window.__dshTavernNativeDocument = {
     open: document.open.bind(document), write: document.write.bind(document), close: document.close.bind(document)
   });
   var origOpen = nativeDocument.open;
   var origWrite = nativeDocument.write;
   var origClose = nativeDocument.close;
-  var writeBuf = null;
   var stubNode = document.currentScript;
   var stubHtml = stubNode && stubNode.outerHTML ? stubNode.outerHTML : '';
   var cspNode = document.querySelector('meta[http-equiv="Content-Security-Policy"]');
@@ -565,12 +573,12 @@ export function tavernCardBridgeScript(options: Omit<CardFrameOptions, 'connectH
   }
   // 浏览器里 document.write 后不调用 close 仍会渲染（文档保持打开）。缓冲整页时若同一任务内
   // 没等到 close，就在下一任务补写并保持打开；否则只写不关的封面会整页空白。
-  var flushTimer = null;
   function flushBuffered(close) {
     if (flushTimer !== null) { clearTimeout(flushTimer); flushTimer = null; }
     if (writeBuf === null) return false;
     var html = injectBridge(writeBuf);
     writeBuf = null;
+    streamOpen = !close;
     origOpen();
     origWrite(html);
     if (close) origClose();
@@ -580,6 +588,7 @@ export function tavernCardBridgeScript(options: Omit<CardFrameOptions, 'connectH
     if (flushTimer === null) flushTimer = setTimeout(function () { flushTimer = null; flushBuffered(false); }, 0);
   }
   document.open = function () {
+    streamOpen = false;
     writeBuf = '';
     deferFlush();
     return document;
@@ -587,7 +596,8 @@ export function tavernCardBridgeScript(options: Omit<CardFrameOptions, 'connectH
   document.write = function () {
     var chunk = Array.prototype.join.call(arguments, '');
     if (writeBuf === null) {
-      if (/<!DOCTYPE/i.test(chunk) || /<html[\\s>]/i.test(chunk) || /<body[\\s>]/i.test(chunk)) {
+      var postLoad = !streamOpen && (document.readyState === 'interactive' || document.readyState === 'complete');
+      if (postLoad || /<!DOCTYPE/i.test(chunk) || /<body[\\s>]/i.test(chunk) || /<(?:html|head|body)(?=[\\s>\\/]|$)/i.test(chunk)) {
         writeBuf = chunk;
         deferFlush();
         return;
@@ -600,6 +610,7 @@ export function tavernCardBridgeScript(options: Omit<CardFrameOptions, 'connectH
     document.write(Array.prototype.join.call(arguments, '') + '\\n');
   };
   document.close = function () {
+    streamOpen = false;
     if (!flushBuffered(true)) return origClose();
   };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', onDomReady);

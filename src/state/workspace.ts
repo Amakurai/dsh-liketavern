@@ -328,7 +328,7 @@ async function inspectCharacterSummary(
   }
   const needSummary = mode === 'active' ? entry!.archiveState === 'none' : entry!.archiveState !== 'none'
   if (needSummary && !entry!.summaryLoaded) {
-    const ws = cardStat === null ? null : await loadCharacter(dataRoot, cardId)
+    const ws = cardStat === null ? null : await loadCharacterInternal(dataRoot, cardId, { skipMissingBookFallback: bookStat === null })
     let summary: CharacterSummary | null = null
     if (ws) {
       const bookName = ws.card.characterBook?.name ?? null
@@ -398,6 +398,14 @@ export async function listArchivedCharacters(dataRoot: string): Promise<Archived
 
 /** 读取角色工作区；card.json 缺失或损坏返回 null。 */
 export async function loadCharacter(dataRoot: string, cardId: string): Promise<CharacterWorkspace | null> {
+  return loadCharacterInternal(dataRoot, cardId)
+}
+
+async function loadCharacterInternal(
+  dataRoot: string,
+  cardId: string,
+  options?: { skipMissingBookFallback?: boolean },
+): Promise<CharacterWorkspace | null> {
   if (!isValidCardId(cardId)) return null
   const root = join(dataRoot, cardId)
   const fs = new WorkspaceFs(root, null)
@@ -415,7 +423,7 @@ export async function loadCharacter(dataRoot: string, cardId: string): Promise<C
   // pngBytes 不持久化于 card.json（头像字节在 card.png），读回恒为 null
   const card = hydrateStoredCard(record)
   // 旧导入或 card.json 缺 characterBook 时，从落盘的内嵌书补回
-  if (!Array.isArray(card.characterBook?.entries) || card.characterBook.entries.length === 0) {
+  if (!options?.skipMissingBookFallback && (!Array.isArray(card.characterBook?.entries) || card.characterBook.entries.length === 0)) {
     const bookText = await fs.readText('assets/character-book.json')
     if (bookText !== null) {
       try {

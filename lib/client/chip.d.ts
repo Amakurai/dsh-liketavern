@@ -25,6 +25,6 @@ interface HeaderChipProps {
 }
 /** 判断会话绑定草稿是否有尚未保存的用户修改；忽略空对象/布尔缺省的等价表示。 */
 export declare function isBindingDirty(draft: SessionBinding | null, saved: SessionBinding | null): boolean;
-/** 宿主切换会话可能复用 slot；表单、子弹窗与在途请求的状态都必须随会话重新挂载。 */
+/** 宿主切换会话或重连 remote 可能复用 slot；表单、子弹窗与在途请求的状态都必须随宿主和会话重新挂载。 */
 export declare function TavernHeaderChip(props: HeaderChipProps): import("react").JSX.Element;
 export {};

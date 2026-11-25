@@ -51,7 +51,7 @@ export async function enableScriptMvu(sessionId:string):Promise<boolean> {
   return true
 }
 const owners=new Map<string,symbol>(),listeners=new Set<()=>void>()
-const notify=()=>{for(const listener of listeners)listener()}
+const notify=()=>{for(const listener of [...listeners])listener()}
 export const scriptStatusStore={getSnapshot:()=>snapshot,subscribe:(listener:()=>void)=>{listeners.add(listener);return()=>{listeners.delete(listener)}}}
 export function publishScriptStatus(
   owner:symbol,

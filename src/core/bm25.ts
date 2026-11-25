@@ -229,8 +229,11 @@ export class Bm25Index<D = unknown> {
   private scores = new Float64Array(0)
   private norms = new Float64Array(0)
   private seen = new Uint8Array(0)
-  /** 索引修订代号：增删清时推进，用于惰性失效 similarity 的 IDF 表与按槽位文档权重缓存。 */
+  private touchedSlots = new Int32Array(0)
+  /** 索引修订代号：增删清时推进，用于惰性失效长度归一化、similarity 的 IDF 表与按槽位文档权重缓存。 */
   private mutationEpoch = 1
+  private cachedNorms = new Float64Array(0)
+  private normEpochs = new Uint32Array(0)
   private idfEpoch = 0
   private idfWeights = new Float64Array(0)
   private docWeights = new Float64Array(0)
@@ -240,6 +243,7 @@ export class Bm25Index<D = unknown> {
     if (this.mutationEpoch === 0xffffffff) {
       this.mutationEpoch = 1
       this.idfEpoch = 0
+      this.normEpochs.fill(0)
       this.docWeightEpochs.fill(0)
     } else {
       this.mutationEpoch += 1
@@ -252,6 +256,13 @@ export class Bm25Index<D = unknown> {
       this.scores = new Float64Array(capacity)
       this.norms = new Float64Array(capacity)
       this.seen = new Uint8Array(capacity)
+      this.touchedSlots = new Int32Array(capacity)
+      const nextNorms = new Float64Array(capacity)
+      nextNorms.set(this.cachedNorms)
+      this.cachedNorms = nextNorms
+      const nextNormEpochs = new Uint32Array(capacity)
+      nextNormEpochs.set(this.normEpochs)
+      this.normEpochs = nextNormEpochs
       const nextWeights = new Float64Array(capacity)
       nextWeights.set(this.docWeights)
       this.docWeights = nextWeights
@@ -493,24 +504,26 @@ export class Bm25Index<D = unknown> {
         if (scale > 0) termWeights.set(term, (termWeights.get(term) ?? 0) + weight * scale)
         else if (isBigramTerm(term)) functional.add(term)
       }
-      const evidenceTokens = functional.size > 0 ? analyzeText(text, functional) : tokens
-      const eligibleChars = new Set(evidenceTokens.chars)
-      const isolated = tokens.terms.length === 0
-      const words = new Set(evidenceTokens.words)
-      const sides = new Set(evidenceTokens.sides)
-      for (const char of new Set(tokens.chars)) {
-        // 被单字 key 声明过的字例外：「七点」是数词接量词，但「七」是名字
-        const known = declared(char)
-        if (!known && !eligibleChars.has(char)) continue
-        const evidence = this.charEvidence(char, { declared: known, explicit, isolated, lone: tokens.lone, word: words.has(char), edge: sides.has(char) })
-        if (!evidence) continue
-        const added = weight * CHAR_WEIGHT
-        if (evidence === 'primary' || charWeights.has(char)) {
-          // 在另一段文本里只算次级的那部分权重，一并转为主证据
-          charWeights.set(char, (charWeights.get(char) ?? 0) + (extraWeights.get(char) ?? 0) + added)
-          extraWeights.delete(char)
-        } else {
-          extraWeights.set(char, (extraWeights.get(char) ?? 0) + added)
+      if (tokens.chars.length > 0) {
+        const evidenceTokens = functional.size > 0 ? analyzeText(text, functional) : tokens
+        const eligibleChars = new Set(evidenceTokens.chars)
+        const isolated = tokens.terms.length === 0
+        const words = new Set(evidenceTokens.words)
+        const sides = new Set(evidenceTokens.sides)
+        for (const char of new Set(tokens.chars)) {
+          // 被单字 key 声明过的字例外：「七点」是数词接量词，但「七」是名字
+          const known = declared(char)
+          if (!known && !eligibleChars.has(char)) continue
+          const evidence = this.charEvidence(char, { declared: known, explicit, isolated, lone: tokens.lone, word: words.has(char), edge: sides.has(char) })
+          if (!evidence) continue
+          const added = weight * CHAR_WEIGHT
+          if (evidence === 'primary' || charWeights.has(char)) {
+            // 在另一段文本里只算次级的那部分权重，一并转为主证据
+            charWeights.set(char, (charWeights.get(char) ?? 0) + (extraWeights.get(char) ?? 0) + added)
+            extraWeights.delete(char)
+          } else {
+            extraWeights.set(char, (extraWeights.get(char) ?? 0) + added)
+          }
         }
       }
     }
@@ -519,24 +532,34 @@ export class Bm25Index<D = unknown> {
     if (termWeights.size === 0 && charWeights.size === 0) return []
 
     this.ensureScratch()
-    const { k1, b, lengths, scores, norms, seen } = this
+    const { k1, b, lengths, scores, cachedNorms, normEpochs, seen, touchedSlots } = this
+    const epoch = this.mutationEpoch
     const avgdl = this.totalLength / docCount
     /** 首次命中顺序；只为这些槽位产出结果，不扫全库。 */
-    const touched: number[] = []
+    let touchedCount = 0
     const accumulate = (posting: Posting, weight: number): void => {
       const { slots, tfs } = posting
       const df = slots.length
       const idf = this.idf(df)
       for (let i = 0; i < df; i++) {
         const slot = slots[i]!
+        let norm: number
         if (seen[slot] === 0) {
           seen[slot] = 1
-          touched.push(slot)
-          // 全部正文为空（只有 keys）时没有长度信息，归一化因子取 1。
-          norms[slot] = avgdl > 0 ? 1 - b + (b * lengths[slot]!) / avgdl : 1
+          touchedSlots[touchedCount++] = slot
+          if (normEpochs[slot] === epoch) {
+            norm = cachedNorms[slot]!
+          } else {
+            // 全部正文为空（只有 keys）时没有长度信息，归一化因子取 1。
+            norm = avgdl > 0 ? 1 - b + (b * lengths[slot]!) / avgdl : 1
+            cachedNorms[slot] = norm
+            normEpochs[slot] = epoch
+          }
+        } else {
+          norm = cachedNorms[slot]!
         }
         const tf = tfs[i]!
-        scores[slot] = scores[slot]! + weight * ((idf * tf * (k1 + 1)) / (tf + k1 * norms[slot]!))
+        scores[slot] = scores[slot]! + weight * ((idf * tf * (k1 + 1)) / (tf + k1 * norm))
       }
     }
     try {
@@ -551,25 +574,27 @@ export class Bm25Index<D = unknown> {
         const idf = this.idf(slots.length)
         // 主证据很稀疏时，只核对已有候选的单字位置；否则顺序遍历短倒排表。
         // Map 查询比数组访问贵，只有候选显著更少时才切换，且两路都不新增命中。
-        if (touched.length * 4 < slots.length) {
-          for (const slot of touched) {
+        if (touchedCount * 4 < slots.length) {
+          for (let t = 0; t < touchedCount; t++) {
+            const slot = touchedSlots[t]!
             const position = this.slots[slot]!.charPositions.get(char)
             if (position === undefined) continue
             const tf = tfs[position]!
-            scores[slot] = scores[slot]! + weight * ((idf * tf * (k1 + 1)) / (tf + k1 * norms[slot]!))
+            scores[slot] = scores[slot]! + weight * ((idf * tf * (k1 + 1)) / (tf + k1 * cachedNorms[slot]!))
           }
         } else {
           for (let i = 0; i < slots.length; i++) {
             const slot = slots[i]!
             if (seen[slot] === 0) continue
             const tf = tfs[i]!
-            scores[slot] = scores[slot]! + weight * ((idf * tf * (k1 + 1)) / (tf + k1 * norms[slot]!))
+            scores[slot] = scores[slot]! + weight * ((idf * tf * (k1 + 1)) / (tf + k1 * cachedNorms[slot]!))
           }
         }
       }
 
-      const hits = new TopHits<D>(topK, touched.length)
-      for (const slot of touched) {
+      const hits = new TopHits<D>(topK, touchedCount)
+      for (let t = 0; t < touchedCount; t++) {
+        const slot = touchedSlots[t]!
         const score = scores[slot]!
         if (score <= 0) continue
         const entry = this.slots[slot]!
@@ -585,7 +610,8 @@ export class Bm25Index<D = unknown> {
       }
       return hits.sorted()
     } finally {
-      for (const slot of touched) {
+      for (let t = 0; t < touchedCount; t++) {
+        const slot = touchedSlots[t]!
         scores[slot] = 0
         seen[slot] = 0
       }
@@ -627,7 +653,8 @@ export class Bm25Index<D = unknown> {
     /** 同一批共有词按「候选文档不含它」计的权重和（复用 norms），用来从 absent 里扣掉。 */
     const sharedAsAbsent = this.norms
     const seen = this.seen
-    const touched: number[] = []
+    const touchedSlots = this.touchedSlots
+    let touchedCount = 0
     try {
       /** 查询全部词按「候选文档不含它」计的权重和。 */
       let absent = 0
@@ -642,7 +669,7 @@ export class Bm25Index<D = unknown> {
         for (const slot of posting.slots) {
           if (seen[slot] === 0) {
             seen[slot] = 1
-            touched.push(slot)
+            touchedSlots[touchedCount++] = slot
             shared[slot] = asShared
             sharedAsAbsent[slot] = asAbsent
           } else {
@@ -653,8 +680,9 @@ export class Bm25Index<D = unknown> {
       }
 
       const { docWeights, docWeightEpochs } = this
-      const hits = new TopHits<D>(topK, touched.length)
-      for (const slot of touched) {
+      const hits = new TopHits<D>(topK, touchedCount)
+      for (let t = 0; t < touchedCount; t++) {
+        const slot = touchedSlots[t]!
         const entry = this.slots[slot]!
         const overlap = shared[slot]!
         const queryWeight = overlap + Math.max(0, absent - sharedAsAbsent[slot]!)
@@ -678,7 +706,8 @@ export class Bm25Index<D = unknown> {
 
       return hits.sorted()
     } finally {
-      for (const slot of touched) {
+      for (let t = 0; t < touchedCount; t++) {
+        const slot = touchedSlots[t]!
         shared[slot] = 0
         sharedAsAbsent[slot] = 0
         seen[slot] = 0

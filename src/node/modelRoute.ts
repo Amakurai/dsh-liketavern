@@ -8,7 +8,9 @@
  */
 import { symbols, type Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { Session } from '@deepseek-ai/dsh-session'
 import { PRESET_ADAPTER_PROVIDER, PRESET_ADAPTER_SOURCE_PROVIDER } from './presetAdapter.js'
+import { isTavernRuntimeSession } from './tavernSession.js'
 
 const wrappedAgents = new WeakSet<object>()
 const activeStepSelections = new WeakMap<object, SelectionEntry>()
@@ -248,7 +250,10 @@ export function installTavernModelSelectionCompat(ctx: Context): void {
     if (event?.type !== 'request/header') return
     ensureProjectionPatched(root.get('sessionProjections'), cleanups)
     const cfg = event.data?.header?.config
-    if (!cfg || cfg.provider !== PRESET_ADAPTER_PROVIDER) return
+    if (!cfg || typeof cfg.provider !== 'string' || typeof cfg.model !== 'string') return
+    const isPresetRoute = cfg.provider === PRESET_ADAPTER_PROVIDER
+    if (!isPresetRoute && !isTavernRuntimeSession(root, session as Session)) return
+    const targetProvider = isPresetRoute ? PRESET_ADAPTER_SOURCE_PROVIDER : cfg.provider
     const controller = root.get('sessionController') as {
       agents?: {
         consumeSelection?: (agent: unknown, provider: string, model: string, reasoningEffort?: string) => boolean
@@ -263,18 +268,20 @@ export function installTavernModelSelectionCompat(ctx: Context): void {
     if (!agent || agent.session !== session || !controller?.agents) return
     const consumed = controller.agents.consumeSelection?.(
       agent,
-      PRESET_ADAPTER_SOURCE_PROVIDER,
+      targetProvider,
       cfg.model,
       cfg.reasoningEffort,
     )
     if (!consumed) {
       const sel = controller.agents.selections?.get(agent)
       const current = sel?.current
+      const currentProvider = current?.provider
       if (current
-        && (current.provider === PRESET_ADAPTER_SOURCE_PROVIDER || current.provider === PRESET_ADAPTER_PROVIDER)
+        && typeof currentProvider === 'string'
+        && (currentProvider === targetProvider || (isPresetRoute && currentProvider === PRESET_ADAPTER_PROVIDER))
         && typeof current.model === 'string'
         && current.model === cfg.model) {
-        sel?.consume?.(current.provider, current.model, current.reasoningEffort)
+        sel?.consume?.(currentProvider, current.model, current.reasoningEffort)
       }
     }
   })

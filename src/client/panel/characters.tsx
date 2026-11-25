@@ -191,6 +191,8 @@ function CharacterDetailDialog(props: { remote: TavernRemote; cardId: string; on
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const pending = useRef(false)
+  const alive = useRef(true)
+  useEffect(() => { alive.current = true; return () => { alive.current = false } }, [])
   const toast = useToast()
   const loaded: CharacterDetail | null = state.status === 'ready' ? state.value : null
   const detail = draft ?? loaded
@@ -308,6 +310,7 @@ function CharacterDetailDialog(props: { remote: TavernRemote; cardId: string; on
     try {
       await runAsync(setBusy, setError, async () => {
         const r = await remote.exportCharacter({ cardId })
+        if (!alive.current) return
         if (!r.ok) {
           setError(r.error.message)
           return
@@ -340,7 +343,7 @@ function CharacterDetailDialog(props: { remote: TavernRemote; cardId: string; on
       )}
       {state.status === 'error' && <div>
         <Err message={state.message} />
-        <Btn disabled={busy} onClick={reload}>{t('action.retry')}</Btn>
+        <Btn disabled={busy} onClick={() => { invalidateCharacter(cardId); reload() }}>{t('action.retry')}</Btn>
       </div>}
       {detail && (
         <fieldset disabled={busy} className="dsh-tavern-editorFields dsh-tavern-dialogStack" style={{ fontSize: 13 }}>
@@ -850,11 +853,14 @@ function CharactersSectionContent(props: { remote: TavernRemote }) {
               const findings = pending.preview.compatibility.findings.filter(item => item.status === status)
               return findings.length > 0 && <div key={status}>
                 <h3>{t(COMPATIBILITY_STATUS_KEYS[status])}</h3>
-                <ul>{findings.map(item => <li key={item.code}>
-                  <strong>{t(COMPATIBILITY_KEYS[item.code].title)}</strong>
-                  <span>{t(COMPATIBILITY_KEYS[item.code].desc)}</span>
-                  <small>{t('characters.compatibility.locations', { count: item.count, locations: item.locations.join(', ') })}</small>
-                </li>)}</ul>
+                <ul>{findings.map(item => {
+                  const meta = Object.hasOwn(COMPATIBILITY_KEYS, item.code) ? COMPATIBILITY_KEYS[item.code] : undefined
+                  return <li key={item.code}>
+                    <strong>{meta ? t(meta.title) : item.code}</strong>
+                    <span>{meta ? t(meta.desc) : ''}</span>
+                    <small>{t('characters.compatibility.locations', { count: item.count, locations: item.locations.join(', ') })}</small>
+                  </li>
+                })}</ul>
               </div>
             })}
           </section>

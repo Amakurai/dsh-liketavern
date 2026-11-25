@@ -138,8 +138,8 @@ const EntryEditor = memo(function EntryEditor(props: {
 
 export function PresetsSection(props: { remote: TavernRemote }) {
   const { remote } = props
-  const { state, reload } = useLoader(() => remote.listPresets({}), [])
-  const settings = useLoader(() => remote.getSettings({}), [], typeof remote.getSettings === 'function')
+  const { state, reload } = useLoader(() => remote.listPresets({}), [remote])
+  const settings = useLoader(() => remote.getSettings({}), [remote], typeof remote.getSettings === 'function')
   const defaultPresetId = settings.state.status === 'ready' ? (settings.state.value.settings.defaults?.presetId || null) : null
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -149,10 +149,11 @@ export function PresetsSection(props: { remote: TavernRemote }) {
   const [editingId, setEditingId] = useDraftState<string | null>('presets:editingId', null)
   const [revision, setRevision] = useDraftState<string | null>('presets:revision', null)
   const pending = useRef(false)
+  const alive = useRef(true)
   /** 同批点选可能先于 busy 提交；只让最后的读取更新目标、正文、版本与等待状态。 */
   const openRequest = useRef(0)
   const opening = useRef(false)
-  useEffect(() => () => { openRequest.current += 1 }, [])
+  useEffect(() => { alive.current = true; return () => { alive.current = false; openRequest.current += 1 } }, [])
   const [toDelete, setToDelete] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const [listLimit, setListLimit] = useState(40)
@@ -233,10 +234,12 @@ export function PresetsSection(props: { remote: TavernRemote }) {
     await perform(async () => {
       const r = await remote.deletePreset({ id: toDelete })
       const err = errOf(r)
-      if (err) setError(err)
+      if (err) { if (alive.current) setError(err) }
       else {
-        if ((editingId ?? editing?.identifier) === toDelete) resetEditor()
+        bumpDisplaySettingsRevision()
         notifyAllSessionBindingsChanged()
+        if (!alive.current) return
+        if ((editingId ?? editing?.identifier) === toDelete) resetEditor()
         setToDelete(null)
         reload()
       }
@@ -248,8 +251,10 @@ export function PresetsSection(props: { remote: TavernRemote }) {
       const json = await readJsonFile(file)
       const name = file.name.replace(/\.json$/i, '')
       const r = await remote.importPreset({ name, json })
-      if (!r.ok) setError(r.error.message)
+      if (!r.ok) { if (alive.current) setError(r.error.message) }
       else {
+        bumpDisplaySettingsRevision()
+        if (!alive.current) return
         toast.show(
           r.value.warnings.length > 0
             ? t('presets.importedWarnings', { warnings: r.value.warnings.map(String).join(t('presets.warningSep')) })
@@ -265,10 +270,11 @@ export function PresetsSection(props: { remote: TavernRemote }) {
       // 只更新用户点选的默认预设，保留其它窗口刚保存的默认角色、人设和世界书。
       const r = await remote.updateSettings({ patch: { defaults: { presetId: id } } })
       const err = errOf(r)
-      if (err) setError(err)
+      if (err) { if (alive.current) setError(err) }
       else {
-        settings.reload()
         notifyAllSessionBindingsChanged()
+        if (!alive.current) return
+        settings.reload()
         toast.show(t('presets.setDefaultDone'))
       }
     })
@@ -277,6 +283,7 @@ export function PresetsSection(props: { remote: TavernRemote }) {
   const exportPreset = async (id: string, name: string) => {
     await perform(async () => {
       const r = await remote.getPreset({ id })
+      if (!alive.current) return
       if (!r.ok) {
         setError(r.error.message)
         return

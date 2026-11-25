@@ -74,8 +74,10 @@ function safeDispose(sandbox?: { dispose(): void } | null): void {
   try { sandbox?.dispose() } catch {}
 }
 async function compute(request: typeof workerData):Promise<void> {
+  const requestId = request.id
   let cacheKey:string|undefined,cacheHit=false
-  const send=(message:Record<string,unknown>)=>parentPort!.postMessage({id:request.id,...message})
+  let templateClass: typeof import('./templateSandbox.js').TemplateSandbox | null = null
+  const send=(message:Record<string,unknown>)=>parentPort!.postMessage({id:requestId,...message})
   try {
     const { kind, input } = request
     const budget: TemplateExecutionBudget = request.budget ?? templateExecutionBudget(Math.max(measureTemplateJson(input),
@@ -119,7 +121,7 @@ async function compute(request: typeof workerData):Promise<void> {
           || /^\[(InitialVariables|RENDER:BEFORE|RENDER:AFTER)\]/i.test(entry.comment)
           || /^\[(?:GENERATE|RENDER|PRELOAD)\b/i.test(entry.comment) || /^\s*@INJECT\b/.test(entry.content) || /^@INJECT\b/i.test(entry.comment))
       }))
-    const templateClass = needsTemplates ? (await import('./templateSandbox.js')).TemplateSandbox : null
+    templateClass = needsTemplates ? (await import('./templateSandbox.js')).TemplateSandbox : null
     // 输入解析、预加载与重放都计入计算预算；只有受信依赖和沙箱初始化走装载预算。
     await templateClass?.prepare(phase => send({ [phase]: true }))
     const beginComputing = () => send({ computing: true })
@@ -211,6 +213,8 @@ async function compute(request: typeof workerData):Promise<void> {
     // 空消息错误不能被 host 当成成功：这里保证 error 字段始终是非空失败原因。
     const message=error instanceof Error ? (error.message || error.name || '模板计算失败') : (String(error) || '模板计算失败')
     send({ error: message })
+  } finally {
+    templateClass?.clearPhaseReporter?.()
   }
 }
 

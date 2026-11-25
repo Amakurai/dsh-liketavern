@@ -74,7 +74,10 @@ export function registerPresetAdapter(ctx: Context, project: PresetRequestProjec
   let lastRaw: unknown, connection: ResolvedDeepSeekOptions | undefined
   /** 宿主 `llm-deepseek-api-key` 的当前设置快照；同一对象复用上一次解析结果。 */
   const settingsConnection = (): ResolvedDeepSeekOptions => {
-    const directory = ctx.get('llm')?.listConfigurableProviders().find(item => item.provider === PRESET_ADAPTER_SOURCE_PROVIDER)
+    const llmService = ctx.get('llm')
+    const directory = typeof llmService?.listConfigurableProviders === 'function'
+      ? llmService.listConfigurableProviders().find(item => item.provider === PRESET_ADAPTER_SOURCE_PROVIDER)
+      : undefined
     const descriptor = ctx.get('settings')?.describe().find(item => item.ns === (directory?.settingsNs ?? SETTINGS_NS))
     const raw = (directory?.settingsPath ?? []).reduce<unknown>((value, key) => value && typeof value === 'object' ? Reflect.get(value, key) : undefined, descriptor?.value)
     if (raw === undefined) throw presetAdapterError('Tavern DeepSeek adapter is waiting for the host llm-deepseek-api-key settings namespace.', 'PRESET_ADAPTER_UNAVAILABLE')
@@ -196,21 +199,44 @@ export function registerPresetAdapter(ctx: Context, project: PresetRequestProjec
   })
   const adapter = new PresetAdapter(delegate, project)
   let registration: AdapterRegistrationHandle | undefined, registeredPolicy: string | undefined, registeredLlm: object | undefined
+  let disposed = false, releasing = false
+  const releaseRegistration = () => {
+    const prev = registration
+    registration = undefined
+    registeredPolicy = undefined
+    registeredLlm = undefined
+    if (!prev) return
+    releasing = true
+    try {
+      if (typeof prev === 'function') prev()
+      else (prev as { dispose?: () => void }).dispose?.()
+    } catch { /* 宿主已提前卸载该句柄时忽略重复释放 */ }
+    finally { releasing = false }
+  }
   const unwrapLlm = (service: object): object => {
     const original = (service as Record<PropertyKey, unknown>)[symbols.original]
     return original && typeof original === 'object' ? original : service
   }
   const ensureRegistered = () => {
+    if (disposed) throw presetAdapterError('Tavern DeepSeek adapter has been disposed.', 'PRESET_ADAPTER_UNAVAILABLE')
+    if (releasing) return
     const policy = JSON.stringify(options().retryPolicy)
     const llm = ctx.get('llm')
     if (!llm) throw presetAdapterError('Tavern DeepSeek adapter is waiting for the host LLM service.', 'PRESET_ADAPTER_UNAVAILABLE')
     const rawLlm = unwrapLlm(llm as unknown as object)
-    const providerPresent = typeof llm.listProviders === 'function'
+    const isProviderPresent = () => typeof llm.listProviders === 'function'
       ? llm.listProviders().some(provider => provider.id === PRESET_ADAPTER_PROVIDER)
       : true
-    if (!registration || registeredLlm !== rawLlm || !providerPresent) {
-      registration = llm.registerAdapter([PRESET_ADAPTER_PROVIDER], adapter)
-      registeredLlm = rawLlm
+    if (!registration || registeredLlm !== rawLlm || !isProviderPresent()) {
+      if (registration) releaseRegistration()
+      if (disposed) throw presetAdapterError('Tavern DeepSeek adapter has been disposed.', 'PRESET_ADAPTER_UNAVAILABLE')
+      // releaseRegistration 会同步触发宿主的 llm/adapters-updated 通知；复核最新状态避免重入双注册。
+      if (!registration || registeredLlm !== rawLlm || !isProviderPresent()) {
+        registration = llm.registerAdapter([PRESET_ADAPTER_PROVIDER], adapter)
+        registeredLlm = rawLlm
+      } else if (registeredPolicy !== policy) {
+        registration.replace([PRESET_ADAPTER_PROVIDER])
+      }
     } else if (registeredPolicy !== policy) {
       registration.replace([PRESET_ADAPTER_PROVIDER])
     }
@@ -226,6 +252,7 @@ export function registerPresetAdapter(ctx: Context, project: PresetRequestProjec
   }
   followListing()
   ctx.on('settings/document-updated', () => {
+    if (disposed) return
     // 设置对象可能原地更新：先丢弃解析缓存，再按新快照判断跟随状态与重试策略。
     lastRaw = undefined; connection = undefined
     followListing()
@@ -234,6 +261,10 @@ export function registerPresetAdapter(ctx: Context, project: PresetRequestProjec
     try { ensureRegistered() }
     catch (error) { ctx.logger.warn(`dsh-tavern: DeepSeek 布局通道设置暂不可用：${String(error)}`) }
   })
-  ctx.effect(() => () => listings?.dispose(), 'dsh-tavern: DeepSeek model listing')
+  ctx.effect(() => () => {
+    disposed = true
+    releaseRegistration()
+    listings?.dispose()
+  }, 'dsh-tavern: DeepSeek model listing')
   return { ensureRegistered }
 }

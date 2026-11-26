@@ -54,7 +54,7 @@ export declare const zh: {
     readonly 'lorebookEditor.tri.follow': "跟随全局";
     readonly 'lorebookEditor.tri.on': "开";
     readonly 'lorebookEditor.tri.off': "关";
-    readonly 'lorebookEditor.form.comment': "条目标题（comment）";
+    readonly 'lorebookEditor.form.comment': "条目标题";
     readonly 'lorebookEditor.form.commentPlaceholder': "给自己看的名字，例如「主角身世」";
     readonly 'lorebookEditor.form.keys': "关键词（逗号分隔）";
     readonly 'lorebookEditor.form.keysPlaceholder': "命中这些词时注入";
@@ -64,8 +64,8 @@ export declare const zh: {
     readonly 'lorebookEditor.form.selective': "启用次级键";
     readonly 'lorebookEditor.form.ignoreBudget': "忽略预算";
     readonly 'lorebookEditor.form.position': "插入位置";
-    readonly 'lorebookEditor.form.order': "顺序 order";
-    readonly 'lorebookEditor.form.depth': "深度 depth";
+    readonly 'lorebookEditor.form.order': "插入顺序";
+    readonly 'lorebookEditor.form.depth': "插入深度";
     readonly 'lorebookEditor.form.outletName': "Outlet 名";
     readonly 'lorebookEditor.form.secondaryKeys': "次级关键词";
     readonly 'lorebookEditor.form.secondaryKeysPlaceholder': "与主关键词组合判定";
@@ -78,6 +78,9 @@ export declare const zh: {
     readonly 'lorebookEditor.form.excludeRecursion': "不可被递归激活";
     readonly 'lorebookEditor.form.preventRecursion': "激活后停止递归";
     readonly 'lorebookEditor.form.delayUntilRecursion': "延迟到递归层";
+    readonly 'lorebookEditor.form.sticky': "持续生效轮数（sticky）";
+    readonly 'lorebookEditor.form.cooldown': "冷却轮数（cooldown）";
+    readonly 'lorebookEditor.form.delay': "首轮延迟激活（delay）";
     readonly 'lorebookEditor.form.scanDepth': "扫描深度（空=跟随全局）";
     readonly 'lorebookEditor.form.caseSensitive': "区分大小写";
     readonly 'lorebookEditor.form.matchWholeWords': "整词匹配";

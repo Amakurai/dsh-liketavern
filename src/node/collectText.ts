@@ -25,7 +25,15 @@ export async function collectCompleteText(stream: AsyncIterable<StreamChunk>, si
         text += chunk.text
         if (text.length > 100_000) throw new Error('辅助生成正文超过上限')
       } else if (chunk.type === 'finish') {
-        if (chunk.reason.kind !== 'stop') throw new Error(`模型未正常完成：${chunk.reason.kind}`)
+        if (chunk.reason.kind !== 'stop') {
+          const failure = 'failure' in chunk.reason ? chunk.reason.failure : undefined
+          const detail = typeof failure?.message === 'string' ? failure.message.trim() : ''
+          const code = typeof failure?.code === 'string' ? failure.code.trim() : ''
+          if (detail) {
+            throw new Error(`模型未正常完成：${detail}${code && !detail.includes(code) ? `（${code}）` : ''}`)
+          }
+          throw new Error(`模型未正常完成：${code ? `${chunk.reason.kind}（${code}）` : chunk.reason.kind}`)
+        }
         complete = true
       }
     }

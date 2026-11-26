@@ -107,7 +107,7 @@ describe('Node 与 Helper 层缺陷修复回归', () => {
       resolveModelInfo: async () => ({
         reasoning: {
           supported: true,
-          efforts: ['off', 'low', 'high'],
+          efforts: [{ id: 'off' }, { id: 'low' }, { id: 'high' }],
           defaultEffort: 'high',
         },
       }),

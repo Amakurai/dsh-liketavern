@@ -833,16 +833,23 @@ function CharactersSectionContent(props: { remote: TavernRemote }) {
           }
           onClose={() => { if (!operationPending.current) { setPending(null); setError(null) } }}
           footer={
-            <div className="dsh-tavern-modalActions">
-              <Button type="button" variant="outline" size="md" disabled={busy} onClick={() => { if (!operationPending.current) { setPending(null); setError(null) } }}>
-                {t('action.cancel')}
-              </Button>
-              {pending.preview.hasCharacterBook && <Button type="button" variant="outline" size="md" disabled={busy} onClick={() => void doImport(pending.name, pending.dataBase64, false)}>
-                {t('characters.importBook.skip')}
-              </Button>}
-              <Button type="button" variant="primary" size="md" disabled={busy} onClick={() => void doImport(pending.name, pending.dataBase64, pending.preview.hasCharacterBook)}>
-                {t(pending.preview.hasCharacterBook ? 'characters.importBook.import' : 'characters.importPreview.import')}
-              </Button>
+            <div className="dsh-tavern-importFooter">
+              {pending.preview.hasCharacterBook && (
+                <p className="dsh-tavern-compatibilityNote">
+                  {t('characters.importBook.skipNote')}
+                </p>
+              )}
+              <div className="dsh-tavern-modalActions">
+                <Button type="button" variant="outline" size="md" disabled={busy} onClick={() => { if (!operationPending.current) { setPending(null); setError(null) } }}>
+                  {t('action.cancel')}
+                </Button>
+                {pending.preview.hasCharacterBook && <Button type="button" variant="outline" size="md" disabled={busy} onClick={() => void doImport(pending.name, pending.dataBase64, false)}>
+                  {t('characters.importBook.skip')}
+                </Button>}
+                <Button type="button" variant="primary" size="md" disabled={busy} onClick={() => void doImport(pending.name, pending.dataBase64, pending.preview.hasCharacterBook)}>
+                  {t(pending.preview.hasCharacterBook ? 'characters.importBook.import' : 'characters.importPreview.import')}
+                </Button>
+              </div>
             </div>
           }
         >
@@ -851,8 +858,11 @@ function CharactersSectionContent(props: { remote: TavernRemote }) {
             <p className="dsh-tavern-compatibilityNote">{t('characters.compatibility.note')}</p>
             {(['unsupported', 'review', 'supported'] as const).map(status => {
               const findings = pending.preview.compatibility.findings.filter(item => item.status === status)
-              return findings.length > 0 && <div key={status}>
-                <h3>{t(COMPATIBILITY_STATUS_KEYS[status])}</h3>
+              return findings.length > 0 && <div key={status} className={`dsh-tavern-compatGroup is-${status}`}>
+                <h3 className="dsh-tavern-compatHeading">
+                  <span className={`dsh-tavern-compatBadge is-${status}`}>{t(COMPATIBILITY_STATUS_KEYS[status])}</span>
+                  <span className="dsh-tavern-compatCount">{findings.length}</span>
+                </h3>
                 <ul>{findings.map(item => {
                   const meta = Object.hasOwn(COMPATIBILITY_KEYS, item.code) ? COMPATIBILITY_KEYS[item.code] : undefined
                   return <li key={item.code}>
@@ -864,9 +874,6 @@ function CharactersSectionContent(props: { remote: TavernRemote }) {
               </div>
             })}
           </section>
-          {pending.preview.hasCharacterBook && <p className="dsh-tavern-compatibilityNote">
-            {t('characters.importBook.skipNote')}
-          </p>}
         </Dialog>
       )}
       <ConfirmDialog

@@ -63,10 +63,13 @@ describe('resolveTavernReasoningEffort', () => {
     expect(resolveTavernReasoningEffort('high', { efforts: DEEPSEEK_V4 }, 'max', 'other')).toBe('high')
   })
 
-  it('元数据解析失败（无公布信息）时 deepseek-official 关思考仍落成 off', () => {
+  it('元数据解析失败（无公布信息）时 deepseek-official 关思考仍落成 off；明确强制思考模型不得强发 off', () => {
     expect(resolveTavernReasoningEffort('disabled', undefined, 'max', 'deepseek-official')).toBe('off')
-    // 模型公布了档位但没有 off 档，同样兜底
-    expect(resolveTavernReasoningEffort('disabled', { efforts: [{ id: 'high' }] }, 'max', 'deepseek-official')).toBe('off')
+    // 模型已明确公布仅含非 off 档位（强制思考），不得强发未公布的 off（避免 UNSUPPORTED_REASONING_EFFORT）
+    expect(resolveTavernReasoningEffort('disabled', { efforts: [{ id: 'high' }] }, 'max', 'deepseek-official')).toBeUndefined()
+    // 明确公布空档位列表（不支持任何 reasoningEffort）时不得泄漏陈旧 current 档位
+    expect(resolveTavernReasoningEffort('enabled', { efforts: [] }, 'high', 'deepseek-official')).toBeUndefined()
+    expect(resolveTavernReasoningEffort('disabled', { efforts: [] }, 'high', 'deepseek-official')).toBeUndefined()
   })
 
   it('非 deepseek-official 关思考时不瞎填', () => {
@@ -74,9 +77,9 @@ describe('resolveTavernReasoningEffort', () => {
     expect(resolveTavernReasoningEffort('disabled', undefined, 'max', undefined)).toBeUndefined()
   })
 
-  it('同一官方传输的 Tavern 路由在元数据失败时仍保留关闭思考的明确选择', () => {
+  it('同一官方传输的 Tavern 路由在元数据失败时仍保留关闭思考的明确选择，强制思考模型不强发 off', () => {
     expect(resolveTavernReasoningEffort('disabled', undefined, 'high', 'tavern-deepseek')).toBe('off')
-    expect(resolveTavernReasoningEffort('disabled', { efforts: [{ id: 'high' }] }, 'high', 'tavern-deepseek')).toBe('off')
+    expect(resolveTavernReasoningEffort('disabled', { efforts: [{ id: 'high' }] }, 'high', 'tavern-deepseek')).toBeUndefined()
     expect(resolveTavernReasoningEffort('enabled', undefined, 'high', 'tavern-deepseek')).toBe('high')
   })
 

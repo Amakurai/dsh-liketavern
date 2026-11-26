@@ -6,9 +6,9 @@ import { materializeCreateHeader, type SessionPersistence } from '@deepseek-ai/d
 import { WorkspaceFs } from '../state/workspaceFs.js'
 import { readStory, storyRoot } from '../state/story.js'
 import { withWorkspaceLock } from '../state/workspaceLock.js'
-import { boundedBytes } from './backupFiles.js'
+import { BackupError, boundedBytes } from './backupFiles.js'
 import { sessionAttachmentReferences } from './sessionArchiveAttachments.js'
-import { archiveFile, sealSessionArchive, SESSION_ARCHIVE_MAX_BYTES, SESSION_ARCHIVE_MAX_FILES, SESSION_ARCHIVE_MAX_JSON_BYTES, type SessionArchive, type SessionArchiveAttachment, type SessionArchiveFile } from './sessionArchiveFormat.js'
+import { archiveFile, isOsJunkPath, sealSessionArchive, SESSION_ARCHIVE_MAX_BYTES, SESSION_ARCHIVE_MAX_FILES, SESSION_ARCHIVE_MAX_JSON_BYTES, validArchiveFilePath, type SessionArchive, type SessionArchiveAttachment, type SessionArchiveFile } from './sessionArchiveFormat.js'
 import type { TavernState } from './state.js'
 import type { WalLineageEntry } from './bindings.js'
 import { assertArchiveWalComplete, assertWalLineageComplete } from './sessionArchiveWal.js'
@@ -140,12 +140,17 @@ export async function snapshotSessionArchive(ctx: Context, state: TavernState, s
       const history = JSON.stringify(session.events)
       if (session.header.id !== sessionId || hasOpenTurn(session.events) || state.openFloors.has(sessionId)
         || (live && JSON.stringify(live.snapshotEvents()) !== history)) throw new Error('会话正在生成或历史尚未稳定，请稍后重试')
-      // 先核对可迁移数量，再读取正文和附件；不能在全部编码完之后把超限误报为文件损坏。
+      // 先核对可迁移数量与路径合法性，再读取正文和附件；跳过常见 OS 杂项文件，不能在全部编码完之后把超限误报为文件损坏。
       const cardFs = new WorkspaceFs(cardRoot, null)
       const cardPaths = ['card.json', ...(await cardFs.exists('card.png') ? ['card.png'] : []),
-        ...(await cardFs.list('assets', { rejectLinks: true })).map(path => `assets/${path}`).filter(path => path.toLowerCase() !== 'assets/chat-lorebook.json')]
+        ...(await cardFs.list('assets', { rejectLinks: true })).map(path => `assets/${path}`)
+          .filter(path => path.toLowerCase() !== 'assets/chat-lorebook.json' && !isOsJunkPath(path))]
       const storyFs = new WorkspaceFs(story, null)
-      const storyPaths = await storyFs.list('', { rejectLinks: true })
+      const storyPaths = (await storyFs.list('', { rejectLinks: true })).filter(path => !isOsJunkPath(path))
+      const invalidCardPath = cardPaths.find(path => !validArchiveFilePath('card', path))
+      if (invalidCardPath) throw new Error(`角色目录包含无法迁移的非标准文件：${invalidCardPath}`)
+      const invalidStoryPath = storyPaths.find(path => !validArchiveFilePath('story', path))
+      if (invalidStoryPath) throw new Error(`剧情目录包含无法迁移的非标准文件：${invalidStoryPath}`)
       const globalPaths = await state.sessionArchiveAssetPaths(binding)
       if (cardPaths.length + storyPaths.length + globalPaths.length > SESSION_ARCHIVE_MAX_FILES) {
         throw new Error(`会话迁移文件数量超过 ${SESSION_ARCHIVE_MAX_FILES} 个上限，请使用全量备份`)
@@ -164,12 +169,22 @@ export async function snapshotSessionArchive(ctx: Context, state: TavernState, s
       }
       const initialEnvelopeBytes = Buffer.byteLength(JSON.stringify({ binding, session }))
       let remaining = SESSION_ARCHIVE_MAX_BYTES - initialEnvelopeBytes
-      if (remaining < 0) throw new Error('会话迁移文件超过大小上限')
+      if (remaining < 0) throw new Error('会话迁移文件超过大小上限（128 MiB），请使用全量备份')
       const files: SessionArchiveFile[] = []
       const dirCheck = { boundary: state.paths.root, verified: new Set<string>() }
       const add = async (area: SessionArchiveFile['area'], root: string, path: string) => {
-        if (remaining < 0) throw new Error('会话迁移文件超过大小上限')
-        const bytes = await boundedBytes(join(root, ...path.split('/')), remaining, dirCheck)
+        if (remaining < 0) throw new Error('会话迁移文件超过大小上限（128 MiB），请使用全量备份')
+        let bytes: Buffer
+        try {
+          bytes = await boundedBytes(join(root, ...path.split('/')), remaining, dirCheck)
+        } catch (error) {
+          if (error instanceof BackupError) {
+            if (error.code === 'SIZE_LIMIT') throw new Error('会话迁移文件超过大小上限（128 MiB），请使用全量备份', { cause: error })
+            if (error.code === 'LINK_NOT_ALLOWED') throw new Error('会话迁移不支持链接文件，请先清理链接后重试', { cause: error })
+            if (error.code === 'SOURCE_CHANGED') throw new Error('导出期间会话文件发生变化，请稍后重试', { cause: error })
+          }
+          throw error
+        }
         remaining -= bytes.length
         files.push(archiveFile(area, path, bytes))
       }
@@ -180,18 +195,18 @@ export async function snapshotSessionArchive(ctx: Context, state: TavernState, s
       const store = ctx.get('attachments')
       if ((refs.images.size || refs.files.size) && !store) throw new Error('宿主附件服务不可用')
       for (const ref of refs.images.values()) {
-        if (ref.bytes > remaining) throw new Error('会话迁移文件超过大小上限')
+        if (ref.bytes > remaining) throw new Error('会话迁移文件超过大小上限（128 MiB），请使用全量备份')
         const image = await store!.readImage(ref)
-        if (image.data.byteLength > remaining) throw new Error('会话迁移文件超过大小上限')
+        if (image.data.byteLength > remaining) throw new Error('会话迁移文件超过大小上限（128 MiB），请使用全量备份')
         remaining -= image.data.byteLength
         attachments.push({ kind: 'image', ref, data: Buffer.from(image.data).toString('base64') })
       }
       for (const ref of refs.files.values()) {
-        if (ref.bytes > remaining) throw new Error('会话迁移文件超过大小上限')
+        if (ref.bytes > remaining) throw new Error('会话迁移文件超过大小上限（128 MiB），请使用全量备份')
         const chunks: Uint8Array[] = []; let bytes = 0
         for await (const chunk of store!.readFileStream(ref)) {
           bytes += chunk.byteLength
-          if (bytes > remaining || bytes > ref.bytes) throw new Error('附件超过迁移大小上限')
+          if (bytes > remaining || bytes > ref.bytes) throw new Error('附件超过迁移大小上限（128 MiB），请使用全量备份')
           chunks.push(chunk)
         }
         remaining -= bytes
@@ -209,10 +224,10 @@ export async function snapshotSessionArchive(ctx: Context, state: TavernState, s
         session: { header: materializeCreateHeader(session.header), inheritedEventCount: session.inheritedEventCount, events: session.events },
       }))
       if (remaining - (finalEnvelopeBytes - initialEnvelopeBytes) < 0) {
-        throw new Error('会话迁移文件超过大小上限')
+        throw new Error('会话迁移文件超过大小上限（128 MiB），请使用全量备份')
       }
       const archive = sealSessionArchive({ format: 'dsh-tavern-session', version: 1, binding: preservedBinding, session, files, attachments })
-      if (Buffer.byteLength(JSON.stringify(archive)) > SESSION_ARCHIVE_MAX_JSON_BYTES) throw new Error('会话迁移文件超过 JSON 大小上限')
+      if (Buffer.byteLength(JSON.stringify(archive)) > SESSION_ARCHIVE_MAX_JSON_BYTES) throw new Error('会话迁移文件超过 JSON 大小上限（192 MiB），请使用全量备份')
       if (!live) {
         const fresh = await persistence.open(sessionId as Session['id'], 'read')
         try { if (JSON.stringify((await fresh.read()).events) !== history) throw new Error('导出期间会话历史已变化') }

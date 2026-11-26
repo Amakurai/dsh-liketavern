@@ -1,6 +1,6 @@
 /** 编辑器自动草稿：宿主持久化与本页有界未确认恢复；浏览器持久存储只保存本标签页标识。 */
 import { describeError } from '../core/guards.js'
-import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { Dispatch, ReactNode, SetStateAction } from 'react'
 import type { TavernRemote } from './types.js'
 import { useT } from './i18n.js'
@@ -17,6 +17,11 @@ type LoadedDraft = { channel: DraftRecoveryChannel; snapshot: Snapshot | null; r
 type PendingWrite = { snapshot: Snapshot | null; serialized: string; revision: number; recovery: DraftRecoveryRecord }
 type Status = { dirty: boolean; busy: boolean }
 type WriteState = 'idle' | 'restored' | 'local' | 'saving' | 'saved' | 'error'
+export interface DraftPersistenceStatus {
+  writeState: WriteState
+  error: string | null
+  retry: () => void
+}
 interface DraftRegistry {
   remote: TavernRemote
   restored: Fields
@@ -26,6 +31,7 @@ interface DraftRegistry {
   discard(id?: string): void
 }
 const PersistenceContext = createContext<DraftRegistry | null>(null)
+const PersistenceStatusContext = createContext<DraftPersistenceStatus | null>(null)
 const remotes = new WeakMap<TavernRemote, { id: number; queues: Map<string, Promise<unknown>> }>()
 let fallbackOwner: string | undefined
 
@@ -72,16 +78,24 @@ function readSnapshot(value: unknown): Snapshot {
   return { version: 1, fields: draft.fields }
 }
 
+/** 按字段键排序编码快照，消除子组件自底向上挂载顺序差异导致的虚假脏写（避免 restored 500ms 后被覆写为 saved）。 */
+function serializeSnapshot(snapshot: Snapshot | null): string {
+  if (snapshot === null) return 'null'
+  const sorted: Fields = {}
+  for (const key of Object.keys(snapshot.fields).sort()) sorted[key] = snapshot.fields[key]
+  return JSON.stringify({ version: 1, fields: sorted })
+}
+
 /** 分区独立入口可复用；设置面板内的分区共用父级快照，保留页签与所选角色/剧情。 */
-export function PersistentEditor(props: { remote?: TavernRemote; scope: string; children: ReactNode }) {
+export function PersistentEditor(props: { remote?: TavernRemote; scope: string; hideStatus?: boolean; children: ReactNode }) {
   const parent = useContext(PersistenceContext)
   if (parent && (!props.remote || parent.remote === props.remote)) return <>{props.children}</>
   // 未安装 remote 的隔离渲染环境仍保留普通编辑能力。
   if (!props.remote?.getEditorDraft) return <PersistenceContext.Provider value={null}>{props.children}</PersistenceContext.Provider>
-  return <DraftLoader key={JSON.stringify([draftRemote(props.remote).id, props.scope])} remote={props.remote} scope={props.scope}>{props.children}</DraftLoader>
+  return <DraftLoader key={JSON.stringify([draftRemote(props.remote).id, props.scope])} remote={props.remote} scope={props.scope} hideStatus={props.hideStatus}>{props.children}</DraftLoader>
 }
 
-function DraftLoader(props: { remote: TavernRemote; scope: string; children: ReactNode }) {
+function DraftLoader(props: { remote: TavernRemote; scope: string; hideStatus?: boolean; children: ReactNode }) {
   const t = useT()
   const [owner] = useState(ownerId)
   const queueKey = `${owner}:${props.scope}`
@@ -146,7 +160,7 @@ function DraftLoader(props: { remote: TavernRemote; scope: string; children: Rea
         loaded.reload()
       }} />
   </div>
-  return <DraftSession remote={props.remote} scope={props.scope} owner={owner} snapshot={value.snapshot} channel={value.channel} recovery={value.recovery}>{props.children}</DraftSession>
+  return <DraftSession remote={props.remote} scope={props.scope} owner={owner} snapshot={value.snapshot} channel={value.channel} recovery={value.recovery} hideStatus={props.hideStatus}>{props.children}</DraftSession>
 }
 
 function readSnapshotOrNull(serialized: string | undefined): Snapshot | null {
@@ -155,7 +169,7 @@ function readSnapshotOrNull(serialized: string | undefined): Snapshot | null {
   return value === null ? null : readSnapshot(value)
 }
 
-function DraftSession(props: { remote: TavernRemote; scope: string; owner: string; snapshot: Snapshot | null; channel: DraftRecoveryChannel; recovery?: DraftRecoveryRecord; children: ReactNode }) {
+function DraftSession(props: { remote: TavernRemote; scope: string; owner: string; snapshot: Snapshot | null; channel: DraftRecoveryChannel; recovery?: DraftRecoveryRecord; hideStatus?: boolean; children: ReactNode }) {
   const t = useT()
   const [writeState, setWriteState] = useState<WriteState>(props.recovery ? props.recovery.error ? 'error' : 'local' : props.snapshot ? 'restored' : 'idle')
   const [error, setError] = useState<string | null>(props.recovery?.error ?? null)
@@ -168,7 +182,7 @@ function DraftSession(props: { remote: TavernRemote; scope: string; owner: strin
     let seenDirty = false
     let last: Snapshot | null | undefined = props.recovery ? props.snapshot : props.snapshot ?? undefined
     let revision = 0
-    let persisted = props.recovery ? undefined : JSON.stringify(last)
+    let persisted = props.recovery ? undefined : (last === undefined ? undefined : serializeSnapshot(last))
     let activeWrite: PendingWrite | undefined
     let queuedWrite: PendingWrite | undefined
     const queueKey = `${props.owner}:${props.scope}`
@@ -181,7 +195,7 @@ function DraftSession(props: { remote: TavernRemote; scope: string; owner: strin
         // JSON 归一化去掉可选 undefined；后端再次做大小、结构和污染键校验。
         const merged: Fields = { ...restored }
         for (const [key, f] of fields) merged[key] = f.value
-        const encoded = JSON.stringify({ version: 1, fields: merged })
+        const encoded = serializeSnapshot({ version: 1, fields: merged })
         last = JSON.parse(encoded) as Snapshot
         return encoded
       }
@@ -189,7 +203,7 @@ function DraftSession(props: { remote: TavernRemote; scope: string; owner: strin
         last = null
         return 'null'
       }
-      return last === undefined ? undefined : JSON.stringify(last)
+      return last === undefined ? undefined : serializeSnapshot(last)
     }
     const flush = () => {
       if (timer) clearTimeout(timer)
@@ -284,14 +298,25 @@ function DraftSession(props: { remote: TavernRemote; scope: string; owner: strin
     if (typeof window !== 'undefined') window.addEventListener('pagehide', flush)
     return () => { if (typeof window !== 'undefined') window.removeEventListener('pagehide', flush); session.stop() }
   }, [session])
+  const statusValue = useMemo<DraftPersistenceStatus>(
+    () => ({ writeState, error, retry: session.flush }),
+    [writeState, error, session],
+  )
   return <PersistenceContext.Provider value={session.registry}>
-    {writeState !== 'idle' && <div className="dsh-tavern-ui dsh-tavern-draftStatus" role="status">
-      <span>{t(writeState === 'restored' ? 'draft.restored' : writeState === 'local' ? 'draft.localOnly' : writeState === 'saving' ? 'draft.autosaving' : writeState === 'error' ? 'draft.autosaveFailed' : 'draft.autosaved')}</span>
-      {error && <Err message={error} />}
-      {(error || writeState === 'local') && <Btn onClick={session.flush}>{t('action.retry')}</Btn>}
-    </div>}
-    {props.children}
+    <PersistenceStatusContext.Provider value={statusValue}>
+      {!props.hideStatus && writeState !== 'idle' && <div className="dsh-tavern-ui dsh-tavern-draftStatus" role="status">
+        <span className="dsh-tavern-draftStatusText">{t(writeState === 'restored' ? 'draft.restored' : writeState === 'local' ? 'draft.localOnly' : writeState === 'saving' ? 'draft.autosaving' : writeState === 'error' ? 'draft.autosaveFailed' : 'draft.autosaved')}</span>
+        {error && <Err message={error} />}
+        {(error || writeState === 'local') && <Btn size="sm" onClick={session.flush}>{t('action.retry')}</Btn>}
+      </div>}
+      {props.children}
+    </PersistenceStatusContext.Provider>
   </PersistenceContext.Provider>
+}
+
+/** 读取外层 PersistentEditor 的自动暂存状态，供面板合并展示避免多条状态栏堆叠。 */
+export function useDraftPersistenceStatus(): DraftPersistenceStatus | null {
+  return useContext(PersistenceStatusContext)
 }
 
 /** 可动态切换字段键；切换角色/剧情时不会带入上一对象的 React state。 */

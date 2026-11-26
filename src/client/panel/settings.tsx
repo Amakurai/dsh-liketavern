@@ -15,7 +15,7 @@ import { MAX_PRESET_STOP_CHARS, MAX_PRESET_STOP_SEQUENCES } from '../../core/pre
 import { notifyAllSessionBindingsChanged } from '../cache.js'
 import { bumpDisplaySettingsRevision, setSpeakerHeader } from '../displayPrefs.js'
 import { setTavernLocale, useT } from '../i18n.js'
-import { applySettingsPatch, changedSettingsPatch } from '../settingsPatch.js'
+import { applySettingsPatch, changedSettingsPatch, formatSettingsWriteError } from '../settingsPatch.js'
 import { DEFAULT_PROMPT_PREFERENCES, EMPTY_SESSION_DEFAULTS, type PresetSummary, type TavernRemote, type TavernSettings } from '../types.js'
 import { Btn, CheckChips, Err, LineListInput, Muted, NumInput, SaveBar, Section, Select, SettingsRow, Skeleton, Tabs, Toggle, runAsync, useLoader, useToast } from '../util.js'
 
@@ -41,6 +41,13 @@ function stopSequencesError(stop: readonly string[]): 'count' | 'length' | null 
   return stop.some((item) => item.length > MAX_PRESET_STOP_CHARS) ? 'length' : null
 }
 
+/** 剥离语言与角色头像两项即时偏好后再比较草稿差异，避免切换即时偏好误标脏态或触发草稿暂存。 */
+function comparableSettingsDraft(settings: TavernSettings | null): string | null {
+  if (settings === null) return null
+  const { locale: _locale, speakerHeader: _speakerHeader, ...rest } = settings
+  return JSON.stringify(rest)
+}
+
 export function SettingsSection(props: { remote: TavernRemote; sessions?: SessionsPort }) {
   const { remote } = props
   const t = useT()
@@ -62,17 +69,24 @@ export function SettingsSection(props: { remote: TavernRemote; sessions?: Sessio
   const receivedSettings = useRef(false)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  /** 各设置组与语言即改共用同步锁，避免 busy 提交前的重复写入及旧语言回包回滚新选择。 */
+  const [immediateBusy, setImmediateBusy] = useState(false)
+  /** 各设置组与语言/头像即时偏好共用同步锁；即时偏好不进入 DraftScope 脏态/繁忙态，避免切换触发草稿条跳动。 */
   const pending = useRef(false)
+  const locked = busy || immediateBusy
   const run = (fn: () => Promise<void>) => {
     if (pending.current) return Promise.resolve()
     pending.current = true
     return runAsync(setBusy, setError, fn).finally(() => { pending.current = false })
   }
+  const runImmediate = (fn: () => Promise<void>) => {
+    if (pending.current) return Promise.resolve()
+    pending.current = true
+    return runAsync(setImmediateBusy, setError, fn).finally(() => { pending.current = false })
+  }
   const toast = useToast()
-  const baselineJson = useMemo(() => (baseline === null ? null : JSON.stringify(baseline)), [baseline])
+  const baselineJson = useMemo(() => comparableSettingsDraft(baseline), [baseline])
   const dirty = useMemo(
-    () => draft !== null && baselineJson !== null && JSON.stringify(draft) !== baselineJson,
+    () => draft !== null && baselineJson !== null && comparableSettingsDraft(draft) !== baselineJson,
     [draft, baselineJson],
   )
   useDraftGuard(dirty, busy)
@@ -96,18 +110,29 @@ export function SettingsSection(props: { remote: TavernRemote; sessions?: Sessio
     setSpeakerHeader(speakerHeader)
     setTavernLocale(locale)
     if (!firstReady || !restoredDraft || draft === null) setDraft(toDraft(state.value.settings))
-    else setDraft((current) => current ? { ...current, speakerHeader, locale } : current)
+    else setDraft((current) => {
+      if (!current || (current.speakerHeader === speakerHeader && current.locale === locale)) return current
+      return { ...current, speakerHeader, locale }
+    })
     if (!firstReady || !restoredBaseline || baseline === null) setBaseline(toDraft(state.value.settings))
-    else setBaseline((current) => current ? { ...current, speakerHeader, locale } : current)
+    else setBaseline((current) => {
+      if (!current || (current.speakerHeader === speakerHeader && current.locale === locale)) return current
+      return { ...current, speakerHeader, locale }
+    })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state])
 
   const save = (patch: Record<string, unknown>, toastText: string) =>
     run(async () => {
       const previous = baseline ? toDraft(baseline) : null
-      const r = await remote.updateSettings({ patch: changedSettingsPatch(patch, previous) })
+      let r: Awaited<ReturnType<TavernRemote['updateSettings']>>
+      try {
+        r = await remote.updateSettings({ patch: changedSettingsPatch(patch, previous) })
+      } catch (cause) {
+        throw new Error(formatSettingsWriteError(describeError(cause), t))
+      }
       if (!r.ok) {
-        setError(r.error.message)
+        setError(formatSettingsWriteError(r.error.message, t))
         return
       }
       const saved = toDraft(r.value.settings)
@@ -130,7 +155,7 @@ export function SettingsSection(props: { remote: TavernRemote; sessions?: Sessio
     const prev = draft.locale
     setDraft((current) => current ? { ...current, locale } : current)
     setTavernLocale(locale)
-    void run(async () => {
+    void runImmediate(async () => {
       try {
         const r = await remote.updateSettings({ patch: { locale } })
         if (!r.ok) throw new Error(r.error.message)
@@ -141,7 +166,7 @@ export function SettingsSection(props: { remote: TavernRemote; sessions?: Sessio
       } catch (error) {
         setDraft((current) => (current ? { ...current, locale: prev } : current))
         setTavernLocale(prev)
-        throw new Error(`${t('settings.interface.languageFailed')}: ${describeError(error)}`)
+        throw new Error(`${t('settings.interface.languageFailed')}: ${formatSettingsWriteError(describeError(error), t)}`)
       }
     })
   }
@@ -152,7 +177,7 @@ export function SettingsSection(props: { remote: TavernRemote; sessions?: Sessio
     const prev = draft.speakerHeader === true
     setDraft((current) => current ? { ...current, speakerHeader } : current)
     setSpeakerHeader(speakerHeader)
-    void run(async () => {
+    void runImmediate(async () => {
       try {
         const r = await remote.updateSettings({ patch: { speakerHeader } })
         if (!r.ok) throw new Error(r.error.message)
@@ -163,7 +188,7 @@ export function SettingsSection(props: { remote: TavernRemote; sessions?: Sessio
       } catch (error) {
         setDraft((current) => (current ? { ...current, speakerHeader: prev } : current))
         setSpeakerHeader(prev)
-        throw new Error(`${t('settings.interface.speakerHeaderFailed')}: ${describeError(error)}`)
+        throw new Error(`${t('settings.interface.speakerHeaderFailed')}: ${formatSettingsWriteError(describeError(error), t)}`)
       }
     })
   }
@@ -211,7 +236,7 @@ export function SettingsSection(props: { remote: TavernRemote; sessions?: Sessio
   return (
     <>
       {toast.node}
-      <fieldset disabled={busy} className="dsh-tavern-editorFields">
+      <fieldset disabled={locked} className="dsh-tavern-editorFields">
       {/* 设置草稿挂在本组件上，切子组不会丢，因此本组件的守卫只向面板级作用域汇报；
           这里的内层作用域只保护子组内随切换卸载的嵌套编辑器（脚本库、卡片数据），不会为设置自身的草稿弹放弃确认。 */}
       <DraftScope>{(request) => <>
@@ -237,7 +262,7 @@ export function SettingsSection(props: { remote: TavernRemote; sessions?: Sessio
               <Select
                 size="md"
                 value={draft.locale}
-                disabled={busy}
+                disabled={locked}
                 onChange={(v) => changeLocale(v === 'zh' ? 'zh' : v === 'en' ? 'en' : 'auto')}
                 options={[
                   { value: 'auto', label: t('settings.interface.localeAuto') },
@@ -255,12 +280,12 @@ export function SettingsSection(props: { remote: TavernRemote; sessions?: Sessio
         {sub === 'defaults' && (
           <Section title={t('settings.defaults.title')} description={t('settings.defaults.desc')}>
             <Err message={defaultAssetsError} />
-            {defaultAssetsError && <Btn size="sm" disabled={busy} onClick={() => { presets.reload(); personas.reload(); lore.reload() }}>{t('action.retry')}</Btn>}
+            {defaultAssetsError && <Btn size="sm" disabled={locked} onClick={() => { presets.reload(); personas.reload(); lore.reload() }}>{t('action.retry')}</Btn>}
             <SettingsRow title={t('settings.defaults.preset')} description={t('settings.defaults.presetDesc')}>
               <Select
                 size="md"
                 value={draft.defaults.presetId}
-                disabled={busy || presets.state.status !== 'ready'}
+                disabled={locked || presets.state.status !== 'ready'}
                 onChange={(presetId) => setDefaults({ presetId })}
                 options={[
                   { value: '', label: t('settings.defaults.builtinPreset') },
@@ -275,7 +300,7 @@ export function SettingsSection(props: { remote: TavernRemote; sessions?: Sessio
               <Select
                 size="md"
                 value={draft.defaults.personaId}
-                disabled={busy || personas.state.status !== 'ready'}
+                disabled={locked || personas.state.status !== 'ready'}
                 onChange={(personaId) => setDefaults({ personaId })}
                 options={[{ value: '', label: t('settings.defaults.noPersona') }, ...personaItems.map((p) => ({ value: p.id, label: p.name }))]}
               />
@@ -284,7 +309,7 @@ export function SettingsSection(props: { remote: TavernRemote; sessions?: Sessio
               <Select
                 size="md"
                 value={draft.defaults.characterLorebookId}
-                disabled={busy || lore.state.status !== 'ready'}
+                disabled={locked || lore.state.status !== 'ready'}
                 onChange={(characterLorebookId) => setDefaults({ characterLorebookId })}
                 options={[{ value: '', label: t('settings.defaults.embeddedLore') }, ...lorebooks.map((n) => ({ value: n, label: n }))]}
               />
@@ -304,7 +329,7 @@ export function SettingsSection(props: { remote: TavernRemote; sessions?: Sessio
               ) : null}
             </SettingsRow>
             <SaveBar>
-              <Btn primary size="md" disabled={busy} onClick={() => void save({ defaults: draft.defaults }, t('settings.defaults.saved'))}>
+              <Btn primary size="md" disabled={locked} onClick={() => void save({ defaults: draft.defaults }, t('settings.defaults.saved'))}>
                 {t('settings.defaults.save')}
               </Btn>
             </SaveBar>
@@ -329,7 +354,7 @@ export function SettingsSection(props: { remote: TavernRemote; sessions?: Sessio
               <Toggle checked={promptPreferences.dropWorkspaceInstructions} onChange={(dropWorkspaceInstructions) => setPrompts({ dropWorkspaceInstructions })} />
             </SettingsRow>
             <SaveBar>
-              <Btn disabled={busy} onClick={() => void save({ prompts: promptPreferences }, t('settings.prompts.saved'))} primary size="md">
+              <Btn disabled={locked} onClick={() => void save({ prompts: promptPreferences }, t('settings.prompts.saved'))} primary size="md">
                 {t('settings.prompts.save')}
               </Btn>
             </SaveBar>
@@ -359,7 +384,7 @@ export function SettingsSection(props: { remote: TavernRemote; sessions?: Sessio
               <Select
                 size="md"
                 value={draft.sampling.thinking}
-                disabled={busy}
+                disabled={locked}
                 onChange={(v) => setSampling({ thinking: v as TavernSettings['sampling']['thinking'] })}
                 options={[
                   { value: 'disabled', label: t('settings.sampling.thinking.disabled') },
@@ -376,7 +401,7 @@ export function SettingsSection(props: { remote: TavernRemote; sessions?: Sessio
             <Err message={stopSequencesError(draft.sampling.stop) === null ? null
               : t('settings.sampling.stopInvalid', { count: MAX_PRESET_STOP_SEQUENCES, chars: MAX_PRESET_STOP_CHARS })} />
             <SaveBar>
-              <Btn disabled={busy || stopSequencesError(draft.sampling.stop) !== null} onClick={() => void save({ sampling: draft.sampling }, t('settings.sampling.saved'))} primary size="md">
+              <Btn disabled={locked || stopSequencesError(draft.sampling.stop) !== null} onClick={() => void save({ sampling: draft.sampling }, t('settings.sampling.saved'))} primary size="md">
                 {t('settings.sampling.save')}
               </Btn>
             </SaveBar>
@@ -407,7 +432,7 @@ export function SettingsSection(props: { remote: TavernRemote; sessions?: Sessio
               <Select
                 size="md"
                 value={String(draft.worldInfo.characterStrategy)}
-                disabled={busy}
+                disabled={locked}
                 onChange={(v) => setWorldInfo({ characterStrategy: Number(v) as 0 | 1 | 2 })}
                 options={[
                   { value: '0', label: t('settings.worldinfo.strategy.evenly') },
@@ -431,7 +456,7 @@ export function SettingsSection(props: { remote: TavernRemote; sessions?: Sessio
               </SettingsRow>
             ))}
             <SaveBar>
-              <Btn disabled={busy} onClick={() => void save({ worldInfo: draft.worldInfo }, t('settings.worldinfo.saved'))} primary size="md">
+              <Btn disabled={locked} onClick={() => void save({ worldInfo: draft.worldInfo }, t('settings.worldinfo.saved'))} primary size="md">
                 {t('settings.worldinfo.save')}
               </Btn>
             </SaveBar>
@@ -468,7 +493,7 @@ export function SettingsSection(props: { remote: TavernRemote; sessions?: Sessio
               <Toggle checked={draft.memory.aliasExpansion} onChange={(aliasExpansion) => setMemory({ aliasExpansion })} />
             </SettingsRow>
             <SaveBar>
-              <Btn disabled={busy} onClick={() => void save({ memory: draft.memory }, t('settings.memory.saved'))} primary size="md">
+              <Btn disabled={locked} onClick={() => void save({ memory: draft.memory }, t('settings.memory.saved'))} primary size="md">
                 {t('settings.memory.save')}
               </Btn>
             </SaveBar>
@@ -498,7 +523,7 @@ export function SettingsSection(props: { remote: TavernRemote; sessions?: Sessio
                 <Btn
                   primary
                   size="md"
-                  disabled={busy}
+                  disabled={locked}
                   onClick={() =>
                     void save(
                       {
@@ -519,7 +544,7 @@ export function SettingsSection(props: { remote: TavernRemote; sessions?: Sessio
             <div className="dsh-tavern-groupHead">{t('settings.cards.dataHome')}</div>
             {dataInfo.state.status === 'error' ? <>
               <Err message={dataInfo.state.message} />
-              <Btn size="sm" disabled={busy} onClick={dataInfo.reload}>{t('action.retry')}</Btn>
+              <Btn size="sm" disabled={locked} onClick={dataInfo.reload}>{t('action.retry')}</Btn>
             </> : <Muted>
               <span style={{ wordBreak: 'break-all' }}>
                 {t('settings.cards.dataHomeDesc')}

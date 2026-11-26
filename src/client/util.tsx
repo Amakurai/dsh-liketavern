@@ -126,6 +126,7 @@ export function Select(props: {
 export function FileBtn(props: {
   accept: string
   disabled?: boolean
+  size?: 'sm' | 'md'
   onFile: (file: File) => void
   children?: ReactNode
 }) {
@@ -133,7 +134,7 @@ export function FileBtn(props: {
     <Button
       type="button"
       variant="outline"
-      size="md"
+      size={props.size ?? 'md'}
       disabled={props.disabled}
       className="dsh-tavern-file dsh-tavern-btn"
       onClick={() => {

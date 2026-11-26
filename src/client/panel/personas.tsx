@@ -9,6 +9,7 @@ import { useRef, useState } from 'react'
 import { IconEditOutlineMedium, IconTrashOutlineMedium, IconUserOutlineMedium } from '@deepseek-ai/dsh-client-ui-primitives'
 import { notifyAllSessionBindingsChanged } from '../cache.js'
 import { useT } from '../i18n.js'
+import { formatSettingsWriteError } from '../settingsPatch.js'
 import type { Persona, TavernRemote } from '../types.js'
 import { Badge, Btn, ConfirmDialog, Err, Field, IconBtn, SaveBar, SearchEmpty, SearchInput, Section, Select, Skeleton, errOf, runAsync, useLoader, useToast } from '../util.js'
 
@@ -66,9 +67,18 @@ export function PersonasSection(props: { remote: TavernRemote }) {
       if (err) setError(err)
       else if (r.ok) {
         const saved = { ...editing, id: r.value.id, revision: r.value.revision }
-        setEditing(saved)
-        setBaseline(JSON.stringify(saved))
-        if (r.value.defaultWarning) setError(t('personas.defaultFailed', { message: r.value.defaultWarning }))
+        const wasNew = baseline === 'null'
+        if (r.value.defaultWarning) {
+          setEditing(saved)
+          setBaseline(JSON.stringify(saved))
+          setError(t('personas.defaultFailed', { message: formatSettingsWriteError(r.value.defaultWarning, t) }))
+        } else if (wasNew) {
+          setEditing(null)
+          setBaseline(null)
+        } else {
+          setEditing(saved)
+          setBaseline(JSON.stringify(saved))
+        }
         notifyAllSessionBindingsChanged()
         toast.show(t('personas.saved', { name: editing.name }))
         reload()
@@ -102,7 +112,7 @@ export function PersonasSection(props: { remote: TavernRemote }) {
       // 宿主按字段合并；不能把旧默认快照中的角色、预设和世界书写回去。
       const r = await remote.updateSettings({ patch: { defaults: { personaId: id } } })
       const err = errOf(r)
-      if (err) setError(err)
+      if (err) setError(formatSettingsWriteError(err, t))
       else {
         settings.reload()
         notifyAllSessionBindingsChanged()
@@ -132,7 +142,7 @@ export function PersonasSection(props: { remote: TavernRemote }) {
       {state.status === 'error' && <Err message={state.message} />}
       {lore.state.status === 'error' && <Err message={lore.state.message} />}
       <Err message={error} />
-      {items.length === 0 && state.status === 'ready' && (
+      {items.length === 0 && !editing && state.status === 'ready' && (
         <div className="dsh-tavern-empty">
           <div className="dsh-tavern-emptyIcon">
             <IconUserOutlineMedium size={32} />

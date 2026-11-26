@@ -29,6 +29,7 @@ export declare function Select(props: {
 export declare function FileBtn(props: {
     accept: string;
     disabled?: boolean;
+    size?: 'sm' | 'md';
     onFile: (file: File) => void;
     children?: ReactNode;
 }): import("react").JSX.Element;

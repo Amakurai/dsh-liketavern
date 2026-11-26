@@ -34,6 +34,8 @@ export interface SessionArchive {
     attachments: SessionArchiveAttachment[];
     manifestSha256: string;
 }
+/** 过滤常见桌面系统自动生成的目录杂项文件，避免误触发迁移损坏或卡面资产差异。 */
+export declare function isOsJunkPath(path: string): boolean;
 /** 所有路径均相对格式内的固定作用域；大小写折叠避免跨平台别名。 */
 export declare function validArchiveFilePath(area: SessionArchiveArea, path: string): boolean;
 export declare function archiveFile(area: SessionArchiveArea, path: string, bytes: Uint8Array): SessionArchiveFile;

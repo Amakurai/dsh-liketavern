@@ -99,13 +99,14 @@ describe('buildCardSrcDoc', () => {
     expect(doc.slice(payloadStart-6)).toBe(`<body>${html}</body></html>`)
   })
 
-  it('完整文档沿用原 html/body 属性与 load 初始化，同时可信头仍先执行', () => {
+  it('完整文档沿用原 html/body 属性与 load 初始化，同时可信头仍先执行且不重复闭合 html 标签', () => {
     const html = '<html lang="zh-CN" dir="rtl" class="card-root"><head><title>角色卡</title></head><body class="status-page" style="margin:0" onload="window.cardLoaded=1"><main>正文</main></body></html>'
     const doc = buildCardSrcDoc(html, { greetings: [], greetingIndex: 0 })
     const payloadStart = doc.indexOf(html)
     expect(payloadStart).toBeGreaterThan(doc.indexOf('Content-Security-Policy'))
     expect(payloadStart).toBeGreaterThan(doc.indexOf('data-dsh-tavern-bridge'))
-    expect(doc.slice(payloadStart)).toBe(`${html}</html>`)
+    expect(doc.slice(payloadStart)).toBe(html)
+    expect(doc).not.toMatch(/<\/html\s*>\s*<\/html\s*>/i)
     expect(doc.slice(payloadStart).match(/<body\b/gi)).toHaveLength(1)
     expect(doc).toContain('<body class="status-page" style="margin:0" onload="window.cardLoaded=1">')
     expect(doc).toContain('<html lang="zh-CN" dir="rtl" class="card-root">')
@@ -120,13 +121,14 @@ describe('buildCardSrcDoc', () => {
     '<script>fetch("https://example.invalid/early")</script><html><head></head><body>正文</body></html>',
     '<!DoCtYpE hTmL><HTML lang="zh"><HEAD><style>.card{color:red}</style></HEAD><BODY class="card">正文</BODY></HTML>',
     '<html><head data-dsh-tavern-bridge></head><body>伪造已安装标记</body></html>',
-  ])('有效 CSP 和可信桥位于整个第三方文档之前：%s', (payload) => {
+  ])('有效 CSP 和可信桥位于整个第三方文档之前且不重复闭合 </html>：%s', (payload) => {
     const doc = buildCardSrcDoc(payload, { greetings: [], greetingIndex: 0 })
     expect(doc).toMatch(/^<!DOCTYPE html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy"/)
     const payloadStart = doc.indexOf(payload)
     expect(payloadStart).toBeGreaterThan(doc.indexOf("connect-src 'none'"))
     expect(payloadStart).toBeGreaterThan(doc.indexOf('<script data-dsh-tavern-bridge>'))
-    expect(doc.slice(payloadStart)).toBe(`${payload}</html>`)
+    expect(doc.slice(payloadStart)).toBe(payload)
+    expect(doc).not.toMatch(/<\/html\s*>\s*<\/html\s*>/i)
   })
 
   it('按宿主 colorScheme 写入 meta 声明，缺省保持自适应 light dark', () => {
@@ -212,6 +214,7 @@ describe('tavernCardBridgeScript', () => {
       expect(written.indexOf(trustedCsp)).toBeLessThan(written.indexOf(trustedBridge))
       expect(written.indexOf(trustedBridge)).toBeLessThan(written.indexOf(payload))
       expect(written).toContain(`${trustedCsp}${trustedBridge}<meta name="color-scheme" content="light dark"></head>${payload}`)
+      expect(written).not.toMatch(/<\/html\s*>\s*<\/html\s*>/i)
     }
     expect(nativeWrite).toHaveBeenCalledTimes(4)
   })
@@ -579,6 +582,61 @@ it('body 设为 min-height: 100vh 时按真实子节点测量高度，收起无�
   panelBottom=120;mutation();frames.flush()
   expect(resizes()).toEqual([200,540,140])
   runInContext('window.__dshTavernBridgeCleanup()',context)
+})
+
+/** 视口缩窄（如桌面 1440px -> 手机 390px）导致正文折行增高时，window resize 应触发重测并上报新高度。 */
+it('视口宽度缩窄折行时 window resize 立即上报增长后的内容高度，卸载时退订 resize', () => {
+  const callbacks = new Map<string, () => void>(), postMessage = vi.fn(), frames = animationFrames()
+  let clientWidth = 680, clientHeight = 340, wrappedHeight = 340
+  const panel = {
+    tagName: 'DIV', parentElement: null,
+    style: { display: 'block', marginBottom: '0px' },
+    getBoundingClientRect: () => ({ bottom: 340, width: clientWidth - 24, height: 340 }),
+  }
+  const root = {
+    get clientWidth() { return clientWidth },
+    get clientHeight() { return clientHeight },
+    get scrollHeight() { return wrappedHeight },
+  }
+  const body = {
+    get offsetHeight() { return clientHeight },
+    get scrollHeight() { return wrappedHeight },
+    getBoundingClientRect: () => ({ bottom: clientHeight, width: clientWidth, height: clientHeight }),
+    querySelectorAll: () => [panel],
+  }
+  const document = {
+    open: vi.fn(), write: vi.fn(), close: vi.fn(), currentScript: null, querySelector: () => null,
+    readyState: 'loading', addEventListener: (name: string, fn: () => void) => callbacks.set('document:' + name, fn), removeEventListener: vi.fn(),
+    documentElement: root, body,
+  }
+  const window = {
+    addEventListener: (name: string, fn: () => void) => callbacks.set('window:' + name, fn), removeEventListener: vi.fn(),
+    requestAnimationFrame: frames.requestAnimationFrame, cancelAnimationFrame: frames.cancelAnimationFrame,
+  }
+  const context = createContext({
+    crypto: webcrypto, window, document, parent: { postMessage }, TextEncoder,
+    getComputedStyle: (node: unknown) => node === body ? { height: `${clientHeight}px`, paddingBottom: '0px', marginBottom: '0px' } : (node as { style?: unknown })?.style ?? {},
+    clearTimeout: vi.fn(), setTimeout: vi.fn(),
+  })
+  runInContext(tavernCardBridgeScript({ greetings: [], greetingIndex: 0 }).replace(/^<script[^>]*>/, '').replace(/<\/script>$/, ''), context)
+  const resizes = () => postMessage.mock.calls.map(([m]) => m).filter(m => m.action === 'resize').map(m => m.height)
+
+  // 初始桌面宽度：卡片高度 340，宿主随后将 iframe 固定到 340。
+  callbacks.get('document:DOMContentLoaded')?.(); frames.flush()
+  expect(resizes()).toEqual([340])
+
+  // 缩窄到手机宽度 350px：即使增长幅度 <= 32px 且 body 计算高度曾等于旧 clientHeight，也不应被误判为 100vh 正反馈。
+  clientWidth = 350; wrappedHeight = 368
+  callbacks.get('window:resize')?.(); frames.flush()
+  expect(resizes()).toEqual([340, 368])
+
+  // 继续折行到 460px 时同样即时同步。
+  clientHeight = 368; clientWidth = 320; wrappedHeight = 460
+  callbacks.get('window:resize')?.(); frames.flush()
+  expect(resizes()).toEqual([340, 368, 460])
+
+  runInContext('window.__dshTavernBridgeCleanup()', context)
+  expect(window.removeEventListener).toHaveBeenCalledWith('resize', expect.any(Function))
 })
 
 /** 长历史卡面内嵌快照：共享对象只序列化一次，默认页集合省略后在卡面代码运行前逐字段还原。 */

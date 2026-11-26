@@ -235,4 +235,21 @@ describe('设置草稿恢复', () => {
     expect(grid.findAllByType(NumInput)).toHaveLength(5)
     expect(grid.findAllByType(Select)).toHaveLength(0)
   })
+
+  it.each(['zh', 'en'] as const)('配置受命令行 --patch / home overlay 写保护时给出本地化操作指引并保持回滚语义：%s', async (locale) => {
+    setTavernLocale(locale)
+    const initial = { ...settings(0.4), locale }
+    snapshot.initial = { 'settings:sub': 'interface' }
+    const api = remote(async () => ok({ settings: initial }))
+    const rawOverlayError = 'Configuration for "dsh-tavern" is overridden by a home patch or command-line overlay'
+    vi.mocked(api.updateSettings).mockResolvedValueOnce({ ok: false, error: { code: 'READ_ONLY', message: rawOverlayError } })
+    const view = await render(api)
+    await act(async () => view.root.findByType(Select).props.onChange(locale === 'zh' ? 'en' : 'zh'))
+    expect(getTavernLocale()).toBe(locale)
+    const alertText = view.root.findByProps({ role: 'alert' }).children.join('')
+    expect(alertText).toContain('--patch')
+    expect(alertText).toContain(rawOverlayError)
+    if (locale === 'zh') expect(alertText).toContain('只读保护')
+    else expect(alertText).toContain('write-protected')
+  })
 })

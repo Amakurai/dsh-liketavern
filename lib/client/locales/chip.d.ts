@@ -30,8 +30,8 @@ export declare const zh: {
     readonly 'chip.field.globalLore': "全局世界书（多选）";
     readonly 'chip.field.globalLoreAria': "全局世界书";
     readonly 'chip.field.noLorebooks': "库中暂无世界书";
-    readonly 'chip.field.authorNote': "作者注释（本会话，进本轮 turn）";
-    readonly 'chip.field.injectJournal': "注入角色笔记 journal.md";
+    readonly 'chip.field.authorNote': "作者注释（仅当前会话生效，每轮自动注入）";
+    readonly 'chip.field.injectJournal': "注入角色笔记";
     readonly 'chip.journal.edit': "编辑角色笔记";
     readonly 'chip.embeddedBook.withCount': "{name}（卡内嵌 {count} 条）";
     readonly 'chip.embeddedBook.noCount': "{name}（卡内嵌）";
@@ -59,6 +59,7 @@ export declare const zh: {
     readonly 'chip.usage.staleTurn': "历史中的旧本轮快照：{count} 份，约 {tokens} token，仍随每次请求发送给模型";
     readonly 'chip.usage.staleTurnProjected': "历史中的旧本轮快照：{count} 份，约 {tokens} token；DeepSeek 通道发信前已剔除";
     readonly 'chip.preview.title': "提示词预览";
+    readonly 'chip.preview.loading': "正在生成预览…";
     readonly 'chip.preview.empty': "（空）";
     readonly 'chip.preview.noLog': "（无触发日志）";
     readonly 'chip.preview.copied': "已复制当前视图内容";

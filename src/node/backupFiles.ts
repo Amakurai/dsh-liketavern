@@ -1,15 +1,25 @@
 /** 完整离线备份的文件边界：拒绝链接与跨平台路径别名，分块校验和复制，不输出私人路径。 */
 import { createHash } from 'node:crypto'
-import { constants, type Stats } from 'node:fs'
+import { constants, type BigIntStats } from 'node:fs'
 import { chmod, lstat, mkdir, open, opendir, rm } from 'node:fs/promises'
 import { dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path'
 
 export const BACKUP_LIMITS = { entries: 200_000, depth: 64, fileBytes: 64 * 1024 ** 3, totalBytes: 1024 ** 4,
   manifestBytes: 64 * 1024 ** 2, pathBytes: 32 * 1024 ** 2 }
-export class BackupError extends Error {
-  constructor(readonly code: string) { super(code); this.name = 'BackupError' }
+export interface BackupIssueSummary {
+  code: string
+  severity: 'info' | 'warning' | 'error'
+  count: number
 }
-export function fail(code: string): never { throw new BackupError(code) }
+export class BackupError extends Error {
+  readonly issues?: BackupIssueSummary[]
+  constructor(readonly code: string, issues?: readonly BackupIssueSummary[]) {
+    super(code)
+    this.name = 'BackupError'
+    if (issues && issues.length > 0) this.issues = issues.map(issue => ({ ...issue }))
+  }
+}
+export function fail(code: string, issues?: readonly BackupIssueSummary[]): never { throw new BackupError(code, issues) }
 function errorCode(error: unknown): string | undefined { return (error as NodeJS.ErrnoException | undefined)?.code }
 export function safeRelative(path: unknown): path is string {
   if (typeof path !== 'string' || !path || path.length > 4096 || path.includes('\\') || isAbsolute(path)) return false
@@ -101,12 +111,13 @@ export function assertSeparate(left: string, right: string): void {
   const bPrefix = b.endsWith(sep) ? b : b + sep
   if (a === b || a.startsWith(bPrefix) || b.startsWith(aPrefix)) fail('NESTED_PATHS')
 }
-export interface BackupEntry { path: string; kind: 'file' | 'directory'; size: number; mode: number; sha256?: string }
-export interface ScannedEntry extends BackupEntry { stamp: Stats }
-function sameFile(a: Stats, b: Stats): boolean {
-  return a.isFile() && b.isFile() && !a.isSymbolicLink() && !b.isSymbolicLink() && a.nlink === 1 && b.nlink === 1
-    && a.dev === b.dev && a.ino === b.ino && a.size === b.size && a.mtimeMs === b.mtimeMs
-    && a.ctimeMs === b.ctimeMs && a.mode === b.mode
+export interface BackupEntry { path: string; kind: 'file' | 'directory'; size: number; mode: number; sha256?: string; hardlinkGroup?: number }
+export interface ScannedEntry extends BackupEntry { stamp: BigIntStats; expectedNlink: number }
+function sameFile(a: BigIntStats, b: BigIntStats, expectedNlink = 1): boolean {
+  const expected = BigInt(expectedNlink)
+  return a.isFile() && b.isFile() && !a.isSymbolicLink() && !b.isSymbolicLink() && a.nlink === expected && b.nlink === expected
+    && a.dev === b.dev && a.ino === b.ino && a.size === b.size && a.mtimeNs === b.mtimeNs
+    && a.ctimeNs === b.ctimeNs && a.mode === b.mode
 }
 /** 与宿主 app-boot 的共享 fallback、profile 私有 pnpm/投影目录保持同一精确布局。 */
 export function isDependencyPath(path: string): boolean {
@@ -132,33 +143,66 @@ export async function inventory(root: string, excludedDependencies?: string[]): 
       folded.add(key)
       if (excludedDependencies && isDependencyPath(path)) { excludedDependencies.push(path); continue }
       if (entries.length >= BACKUP_LIMITS.entries) fail('ENTRY_LIMIT')
-      const stamp = await lstat(checkedPath(root, path))
-      if (stamp.isSymbolicLink() || (stamp.isFile() && stamp.nlink !== 1)) fail('LINK_NOT_ALLOWED')
+      const stamp = await lstat(checkedPath(root, path), { bigint: true })
+      if (stamp.isSymbolicLink()) fail('LINK_NOT_ALLOWED')
       if (!stamp.isDirectory() && !stamp.isFile()) fail('SPECIAL_FILE_NOT_ALLOWED')
       const kind = stamp.isDirectory() ? 'directory' : 'file'
-      const size = kind === 'file' ? stamp.size : 0
+      if (kind === 'file' && stamp.nlink < 1n) fail('LINK_NOT_ALLOWED')
+      if (kind === 'file' && (stamp.size < 0n || stamp.size > BigInt(BACKUP_LIMITS.fileBytes))) fail('SIZE_LIMIT')
+      const size = kind === 'file' ? Number(stamp.size) : 0
       if (!Number.isSafeInteger(size) || size < 0 || size > BACKUP_LIMITS.fileBytes) fail('SIZE_LIMIT')
       totalBytes += size
       if (totalBytes > BACKUP_LIMITS.totalBytes) fail('SIZE_LIMIT')
-      entries.push({ path, kind, size, mode: portableMode(kind, stamp.mode), stamp })
+      entries.push({ path, kind, size, mode: portableMode(kind, Number(stamp.mode)), stamp, expectedNlink: 1 })
       if (kind === 'directory') await visit(path)
     }
   }
   await visit('')
   await assertDirectory(root)
-  return entries.sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0)
+  entries.sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0)
+  // 宿主文件附件在 attachments/v1/{file-objects,files}/ 间使用同根硬链接：只允许全部链接都落在
+  // 当前根内的封闭硬链接组（nlink 严格等于组内数量），任何指向根外或排除目录的硬链接一律拒绝。
+  const hardlinkGroups = new Map<string, ScannedEntry[]>()
+  for (const entry of entries) {
+    if (entry.kind !== 'file' || entry.stamp.nlink === 1n) continue
+    const inodeKey = `${entry.stamp.dev}:${entry.stamp.ino}`
+    const group = hardlinkGroups.get(inodeKey)
+    if (group) group.push(entry)
+    else hardlinkGroups.set(inodeKey, [entry])
+  }
+  let nextGroupId = 1
+  for (const members of hardlinkGroups.values()) {
+    const count = BigInt(members.length)
+    const first = members[0]!
+    if (members.length < 2 || members.some(m => m.stamp.nlink !== count || m.size !== first.size || m.mode !== first.mode)) {
+      fail('LINK_NOT_ALLOWED')
+    }
+    const groupId = nextGroupId++
+    for (const member of members) {
+      member.hardlinkGroup = groupId
+      member.expectedNlink = members.length
+    }
+  }
+  return entries
 }
 /** 固定位置分块读取，完整检查前后文件身份；输出文件独占创建且同步后关闭。 */
-export async function transferFile(root: string, entry: BackupEntry, destination?: string, verifiedAboveRoot?: ReadonlySet<string>): Promise<string> {
+export async function transferFile(
+  root: string,
+  entry: BackupEntry,
+  destination?: string,
+  verifiedAboveRoot?: ReadonlySet<string>,
+  options?: { expectedNlink?: number; deferChmod?: boolean },
+): Promise<string> {
+  const expectedNlink = options?.expectedNlink ?? 1
   const path = checkedPath(root, entry.path)
   await assertDirectory(dirname(path), verifiedAboveRoot)
-  const before = await lstat(path)
-  if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1) fail('LINK_NOT_ALLOWED')
-  if (before.size !== entry.size) fail('SOURCE_CHANGED')
+  const before = await lstat(path, { bigint: true })
+  if (!before.isFile() || before.isSymbolicLink() || before.nlink !== BigInt(expectedNlink)) fail('LINK_NOT_ALLOWED')
+  if (before.size !== BigInt(entry.size)) fail('SOURCE_CHANGED')
   const source = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
   let target: Awaited<ReturnType<typeof open>> | undefined
   try {
-    if (!sameFile(before, await source.stat())) fail('SOURCE_CHANGED')
+    if (!sameFile(before, await source.stat({ bigint: true }), expectedNlink)) fail('SOURCE_CHANGED')
     if (destination) target = await open(destination, 'wx', 0o600)
     const hash = createHash('sha256')
     const buffer = Buffer.allocUnsafe(128 * 1024)
@@ -179,69 +223,92 @@ export async function transferFile(root: string, entry: BackupEntry, destination
       position += bytesRead
     }
     await assertDirectory(dirname(path), verifiedAboveRoot)
-    if (position !== entry.size || !sameFile(before, await source.stat()) || !sameFile(before, await lstat(path))) fail('SOURCE_CHANGED')
-    if (target) { await target.chmod(entry.mode); await target.sync() }
+    if (position !== entry.size || !sameFile(before, await source.stat({ bigint: true }), expectedNlink)
+      || !sameFile(before, await lstat(path, { bigint: true }), expectedNlink)) fail('SOURCE_CHANGED')
+    if (target) {
+      if (!options?.deferChmod) await target.chmod(entry.mode)
+      await target.sync()
+    }
     return hash.digest('hex')
   } finally { await source.close(); await target?.close() }
 }
 export async function boundedJson(path: string, maxBytes = BACKUP_LIMITS.manifestBytes, options?: ReadonlySet<string> | DirectoryCheckOptions): Promise<unknown> {
   await assertDirectory(dirname(path), options)
-  const before = await lstat(path)
-  if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1) fail('LINK_NOT_ALLOWED')
-  if (before.size > maxBytes) fail('METADATA_LIMIT')
+  const before = await lstat(path, { bigint: true })
+  if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1n) fail('LINK_NOT_ALLOWED')
+  if (before.size > BigInt(maxBytes)) fail('METADATA_LIMIT')
+  const size = Number(before.size)
   const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
   try {
-    if (!sameFile(before, await handle.stat())) fail('SOURCE_CHANGED')
+    if (!sameFile(before, await handle.stat({ bigint: true }))) fail('SOURCE_CHANGED')
     const chunks: Buffer[] = []
     let position = 0
-    while (position <= before.size) {
-      const buffer = Buffer.allocUnsafe(Math.min(64 * 1024, before.size + 1 - position))
+    while (position <= size) {
+      const buffer = Buffer.allocUnsafe(Math.min(64 * 1024, size + 1 - position))
       const { bytesRead } = await handle.read(buffer, 0, buffer.length, position)
       if (!bytesRead) break
       chunks.push(buffer.subarray(0, bytesRead)); position += bytesRead
     }
-    if (position !== before.size || !sameFile(before, await handle.stat()) || !sameFile(before, await lstat(path))) fail('SOURCE_CHANGED')
+    if (position !== size || !sameFile(before, await handle.stat({ bigint: true })) || !sameFile(before, await lstat(path, { bigint: true }))) fail('SOURCE_CHANGED')
     try { return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown } catch { return fail('INVALID_JSON') }
   } finally { await handle.close() }
 }
 /** 会话迁移读原始字节：限额在读取前后都生效，并复核句柄与目录项仍为同一普通文件。 */
 export async function boundedBytes(path: string, maxBytes: number, options?: ReadonlySet<string> | DirectoryCheckOptions): Promise<Buffer> {
   await assertDirectory(dirname(path), options)
-  const before = await lstat(path)
-  if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1) fail('LINK_NOT_ALLOWED')
-  if (before.size > maxBytes) fail('SIZE_LIMIT')
+  const before = await lstat(path, { bigint: true })
+  if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1n) fail('LINK_NOT_ALLOWED')
+  if (before.size > BigInt(maxBytes)) fail('SIZE_LIMIT')
+  const size = Number(before.size)
   const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
   try {
-    if (!sameFile(before, await handle.stat())) fail('SOURCE_CHANGED')
+    if (!sameFile(before, await handle.stat({ bigint: true }))) fail('SOURCE_CHANGED')
     const chunks: Buffer[] = []
     let position = 0
-    while (position <= before.size) {
-      const buffer = Buffer.allocUnsafe(Math.min(64 * 1024, before.size + 1 - position))
+    while (position <= size) {
+      const buffer = Buffer.allocUnsafe(Math.min(64 * 1024, size + 1 - position))
       const { bytesRead } = await handle.read(buffer, 0, buffer.length, position)
       if (!bytesRead) break
       chunks.push(buffer.subarray(0, bytesRead)); position += bytesRead
     }
-    if (position !== before.size || !sameFile(before, await handle.stat()) || !sameFile(before, await lstat(path))) fail('SOURCE_CHANGED')
+    if (position !== size || !sameFile(before, await handle.stat({ bigint: true })) || !sameFile(before, await lstat(path, { bigint: true }))) fail('SOURCE_CHANGED')
     return Buffer.concat(chunks, position)
   } finally { await handle.close() }
 }
 export async function createDirectories(root: string, entries: BackupEntry[]): Promise<void> {
   for (const entry of entries) if (entry.kind === 'directory') await mkdir(checkedPath(root, entry.path), { mode: 0o700 })
 }
-/** 失败草稿可能已经套用源目录的只读权限；仅在自有、无链接草稿内恢复清理所需权限。 */
+/** 失败草稿可能已经套用源目录的只读权限或内部硬链接；仅在自有、无外链草稿内恢复清理所需权限。 */
 export async function discardTemporary(root: string): Promise<void> {
-  async function writable(path: string): Promise<void> {
+  const files: Array<{ path: string; info: BigIntStats }> = []
+  async function scan(path: string): Promise<void> {
     await assertDirectory(dirname(path))
-    const info = await lstat(path)
-    if (info.isSymbolicLink() || (!info.isDirectory() && (!info.isFile() || info.nlink !== 1))) fail('UNSAFE_CLEANUP')
-    await chmod(path, info.isDirectory() ? 0o700 : 0o600)
+    const info = await lstat(path, { bigint: true })
+    if (info.isSymbolicLink() || (!info.isDirectory() && !info.isFile())) fail('UNSAFE_CLEANUP')
     if (info.isDirectory()) {
+      await chmod(path, 0o700)
       for await (const entry of await opendir(path)) {
         if (!safeRelative(entry.name)) fail('UNSAFE_CLEANUP')
-        await writable(join(path, entry.name))
+        await scan(join(path, entry.name))
       }
+    } else {
+      if (info.nlink < 1n) fail('UNSAFE_CLEANUP')
+      files.push({ path, info })
     }
   }
-  await writable(root)
+  await scan(root)
+  const hardlinks = new Map<string, Array<{ path: string; info: BigIntStats }>>()
+  for (const item of files) {
+    if (item.info.nlink === 1n) continue
+    const key = `${item.info.dev}:${item.info.ino}`
+    const group = hardlinks.get(key)
+    if (group) group.push(item)
+    else hardlinks.set(key, [item])
+  }
+  for (const group of hardlinks.values()) {
+    const count = BigInt(group.length)
+    if (group.some(item => item.info.nlink !== count)) fail('UNSAFE_CLEANUP')
+  }
+  for (const item of files) await chmod(item.path, 0o600)
   await rm(root, { recursive: true, force: true })
 }

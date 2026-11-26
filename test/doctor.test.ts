@@ -457,6 +457,103 @@ describe('doctor 聚合报告', () => {
     expect(report.statistics.files.scanTruncated).toBe(true)
     expect(report.issues).toContainEqual({ code: 'FILE_SCAN_LIMIT_REACHED', severity: 'warning', count: 1 })
   })
+
+  it('检测会话绑定、persona.lorebookId、孤立剧情、未完成导入、WAL 恢复中、坏头像与草稿异常，并输出脱敏指引', async () => {
+    const root = await makeStandardDirectories()
+    const cardId = 'secret-hero-a1b2c3d4'
+    const cardRoot = join(root, 'characters', cardId)
+    const storyBound = 'story-00000000-0000-4000-8000-000000000101'
+    const storyOrphan = 'story-00000000-0000-4000-8000-000000000102'
+    await mkdir(join(cardRoot, 'stories', storyBound, 'state'), { recursive: true })
+    await mkdir(join(cardRoot, 'stories', storyOrphan), { recursive: true })
+    await writeFile(join(cardRoot, 'card.json'), JSON.stringify({ name: '私密角色甲' }))
+    // 非法 PNG 魔数头像
+    await writeFile(join(cardRoot, 'card.png'), 'not-a-valid-png')
+    await writeFile(join(cardRoot, 'stories', storyBound, 'story.json'), JSON.stringify({
+      version: 1, id: storyBound, sessionId: 'secret-session-1', createdAt: new Date(0).toISOString(), migrated: false,
+    }))
+    await writeFile(join(cardRoot, 'stories', storyOrphan, 'story.json'), JSON.stringify({
+      version: 1, id: storyOrphan, sessionId: 'secret-orphan-session', createdAt: new Date(0).toISOString(), migrated: false,
+    }))
+    // 合法但未完成的 wal-recovery.json
+    await writeFile(join(cardRoot, 'stories', storyBound, 'state', 'wal-recovery.json'), JSON.stringify({
+      version: 1, floors: ['secret-session-1#t1'], dirs: ['secret-session-1_t1'],
+    }))
+    // 人设引用已删除的专属世界书
+    await writeFile(join(root, 'personas', 'secret-persona.json'), JSON.stringify({
+      id: 'secret-persona', name: '私密人设', description: '', lorebookId: 'deleted-persona-book',
+    }))
+    // 绑定引用不存在的 preset、lorebook 与人设里的 deleted-persona-book
+    await writeFile(join(root, 'sessions', 'secret-session-1.json'), JSON.stringify({
+      sessionId: 'secret-session-1', cardId, storyId: storyBound,
+      presetId: 'deleted-preset', personaId: 'secret-persona',
+      lorebookIds: ['deleted-lore'], characterLorebookId: null,
+      interactiveCards: null, greetingIndex: 0, createdAt: new Date(0).toISOString(),
+    }))
+    // 编辑器草稿：一条格式非法 + 一条超 2 MiB
+    const draftOwnerDir = join(root, 'editor-drafts', 'a'.repeat(64))
+    await mkdir(draftOwnerDir, { recursive: true })
+    await writeFile(join(draftOwnerDir, `${'b'.repeat(64)}.json`), JSON.stringify({ version: 2, updatedAt: 'bad', value: [] }))
+    await writeFile(join(draftOwnerDir, `${'c'.repeat(64)}.json`), JSON.stringify({
+      version: 1, updatedAt: new Date(0).toISOString(), value: { text: 'x'.repeat(2 * 1024 * 1024 + 64) },
+    }))
+
+    const warnReport = await runDoctor({ home, nodeVersion: '24.0.0', pluginVersion: '9.8.7' })
+    // 仅含 warning/info 时 ok 为 true
+    expect(warnReport.ok).toBe(true)
+    expect(warnReport.issues).toEqual(expect.arrayContaining([
+      { code: 'CHARACTER_AVATAR_INVALID', severity: 'warning', count: 1 },
+      { code: 'WAL_RECOVERY_IN_PROGRESS', severity: 'warning', count: 1 },
+      { code: 'BINDING_ASSET_MISSING', severity: 'warning', count: 3 },
+      { code: 'STORY_ORPHANED', severity: 'info', count: 1 },
+      { code: 'EDITOR_DRAFT_INVALID', severity: 'warning', count: 1 },
+      { code: 'EDITOR_DRAFT_TOO_LARGE', severity: 'warning', count: 1 },
+    ]))
+    const text = formatDoctorText(warnReport)
+    expect(text).toContain('hint:')
+    for (const secret of [home, cardId, storyBound, storyOrphan, 'secret-session-1', 'secret-persona', 'deleted-preset', 'deleted-lore', 'deleted-persona-book', '私密角色甲']) {
+      expect(JSON.stringify(warnReport)).not.toContain(secret)
+      expect(text).not.toContain(secret)
+    }
+
+    // 补充未完成迁移标记与致命绑定故障，验证 ok 变为 false 且精确上报问题码。
+    await mkdir(join(root, 'session-imports'), { recursive: true })
+    await writeFile(join(root, 'session-imports', `${'f'.repeat(64)}.json`), '{}')
+    await writeFile(join(root, 'sessions', 'bad-identity.json'), JSON.stringify({
+      sessionId: 'secret-session-1', cardId, storyId: storyBound,
+      presetId: null, personaId: null, lorebookIds: [], characterLorebookId: null,
+      interactiveCards: null, greetingIndex: 0, createdAt: new Date(0).toISOString(),
+    }))
+    await writeFile(join(root, 'sessions', 'missing-card.json'), JSON.stringify({
+      sessionId: 'missing-card', cardId: 'ghost-card-12345678', storyId: storyBound,
+      presetId: null, personaId: null, lorebookIds: [], characterLorebookId: null,
+      interactiveCards: null, greetingIndex: 0, createdAt: new Date(0).toISOString(),
+    }))
+    await writeFile(join(root, 'sessions', 'missing-story.json'), JSON.stringify({
+      sessionId: 'missing-story', cardId, storyId: 'story-99999999-9999-4999-8999-999999999999',
+      presetId: null, personaId: null, lorebookIds: [], characterLorebookId: null,
+      interactiveCards: null, greetingIndex: 0, createdAt: new Date(0).toISOString(),
+    }))
+    await writeFile(join(root, 'sessions', 'wrong-story-owner.json'), JSON.stringify({
+      sessionId: 'wrong-story-owner', cardId, storyId: storyBound,
+      presetId: null, personaId: null, lorebookIds: [], characterLorebookId: null,
+      interactiveCards: null, greetingIndex: 0, createdAt: new Date(0).toISOString(),
+    }))
+    await writeFile(join(root, 'sessions', 'corrupt-binding.json'), '{"not":"a-binding"}')
+
+    const errReport = await runDoctor({ home, nodeVersion: '24.0.0', pluginVersion: '9.8.7' })
+    expect(errReport.ok).toBe(false)
+    expect(errReport.issues).toEqual(expect.arrayContaining([
+      { code: 'SESSION_IMPORT_INCOMPLETE', severity: 'error', count: 1 },
+      { code: 'BINDING_IDENTITY_INVALID', severity: 'error', count: 1 },
+      { code: 'BINDING_CARD_MISSING', severity: 'error', count: 1 },
+      { code: 'BINDING_STORY_MISSING', severity: 'error', count: 1 },
+      { code: 'BINDING_STORY_IDENTITY_INVALID', severity: 'error', count: 1 },
+      { code: 'BINDING_INVALID', severity: 'error', count: 1 },
+    ]))
+    // 存在损坏绑定时不误报 STORY_ORPHANED
+    expect(errReport.issues.map(issue => issue.code)).not.toContain('STORY_ORPHANED')
+  })
 })
 
 describe('doctor CLI', () => {
@@ -468,23 +565,39 @@ describe('doctor CLI', () => {
     expect(areDshVersionsCompatible('0.2.1-rc.3', packageJson.peerDependencies['@deepseek-ai/dsh'])).toBe(true)
   })
 
-  it('只接受只读参数，未知修复参数直接拒绝', () => {
+  it('只接受只读参数，支持 --home=<path>，未知修复参数直接拒绝', () => {
     expect(parseDoctorArguments(['--json', '--home', home])).toEqual({ json: true, help: false, version: false, home })
-    expect(parseDoctorArguments(['--json', '--home', home])).toEqual({ json: true, help: false, version: false, home })
+    expect(parseDoctorArguments(['--json', `--home=${home}`])).toEqual({ json: true, help: false, version: false, home })
     expect(() => parseDoctorArguments(['--fix'])).toThrow('invalid arguments')
     expect(() => parseDoctorArguments(['--home'])).toThrow('invalid arguments')
     expect(() => parseDoctorArguments(['--home', '--json'])).toThrow('invalid arguments')
+    expect(() => parseDoctorArguments(['--home', '-x'])).toThrow('invalid arguments')
+    expect(() => parseDoctorArguments(['--home='])).toThrow('invalid arguments')
     expect(() => parseDoctorArguments(['--home', home, '--home', home])).toThrow('invalid arguments')
   })
 
-  it('JSON CLI 使用健康状态决定退出码且不回显输入路径', async () => {
+  it('JSON CLI 使用健康状态决定退出码且不回显输入路径；参数错误在 --json 下输出结构化 JSON，--help 说明退出码', async () => {
     const output: string[] = []
     const errors: string[] = []
-    const code = await doctorMain(['--json', '--home', home], { out: text => output.push(text), err: text => errors.push(text) })
+    const io = { out: (text: string) => output.push(text), err: (text: string) => errors.push(text) }
+    const code = await doctorMain(['--json', `--home=${home}`], io)
     expect(code).toBe(0)
     expect(errors).toEqual([])
     expect(JSON.parse(output.join(''))).toMatchObject({ schemaVersion: 1, ok: true })
     expect(output.join('')).not.toContain(home)
+
+    output.length = 0; errors.length = 0
+    expect(await doctorMain(['--json', '--fix'], io)).toBe(2)
+    expect(output).toEqual([])
+    expect(JSON.parse(errors.join(''))).toMatchObject({ schemaVersion: 1, ok: false, code: 'INVALID_ARGUMENTS' })
+    expect(errors.join('')).not.toContain('--fix')
+
+    output.length = 0; errors.length = 0
+    expect(await doctorMain(['--help'], io)).toBe(0)
+    expect(output.join('')).toContain('Exit codes:')
+    expect(output.join('')).toMatch(/^\s+0\s+Healthy/m)
+    expect(output.join('')).toMatch(/^\s+1\s+One or more/m)
+    expect(output.join('')).toMatch(/^\s+2\s+Invalid/m)
   })
 })
 

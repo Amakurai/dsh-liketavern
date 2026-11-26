@@ -47,7 +47,7 @@ export declare const zh: {
     readonly 'characters.detail.groupAdvanced': "高级注入";
     readonly 'characters.detail.systemPrompt': "系统提示";
     readonly 'characters.detail.postHistory': "历史后指令";
-    readonly 'characters.detail.depthPrompt': "depth_prompt（模拟按深度插位；live 静态进 standing，动态进 turn）";
+    readonly 'characters.detail.depthPrompt': "角色深度注入（模拟预览按深度插位；实际聊天中静态内容进入常驻区，含动态宏的内容进入本轮上下文）";
     readonly 'characters.detail.depth': "深度";
     readonly 'characters.detail.role': "角色";
     readonly 'characters.detail.groupMetadata': "元数据";
@@ -61,9 +61,9 @@ export declare const zh: {
     readonly 'characters.detail.interactiveFrame': "交互卡";
     readonly 'characters.importBook.desc': "角色卡「{name}」内嵌世界书，共 {count} 条。导入后会作为该卡的主世界书。";
     readonly 'characters.importBook.descNamed': "角色卡「{name}」内嵌世界书「{book}」，共 {count} 条。导入后会作为该卡的主世界书。";
-    readonly 'characters.importBook.skip': "跳过";
-    readonly 'characters.importBook.import': "导入世界书";
-    readonly 'characters.importBook.skipNote': "跳过后仍导入角色卡（描述、开场白、正则），内嵌世界书不会保存到角色工作区。";
+    readonly 'characters.importBook.skip': "仅导入角色卡";
+    readonly 'characters.importBook.import': "导入角色与世界书";
+    readonly 'characters.importBook.skipNote': "选择「仅导入角色卡」仍会导入描述、开场白与正则，但内嵌世界书不会保存到角色工作区。";
     readonly 'characters.importPreview.title': "导入角色卡：兼容性预检";
     readonly 'characters.importPreview.desc': "已读取「{name}」，尚未保存。确认报告后可导入角色卡。";
     readonly 'characters.importPreview.import': "导入角色卡";

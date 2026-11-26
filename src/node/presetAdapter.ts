@@ -93,7 +93,7 @@ export function registerPresetAdapter(ctx: Context, project: PresetRequestProjec
     const value = credentials === undefined ? launchEnvironmentOf(ctx).get(snapshot.apiKeyEnv)?.value
       : (await credentials.resolve(snapshot.apiKeyEnv))?.value
     if (value === undefined || value.length === 0) throw new LlmError(
-      `Tavern cannot resolve the host DeepSeek credential reference ${snapshot.apiKeyEnv}.`, 'MISSING_CREDENTIAL')
+      `未配置 DeepSeek API 密钥（环境变量 ${snapshot.apiKeyEnv}）：请前往「设置 → 模型」填写并保存密钥后重试。`, 'MISSING_CREDENTIAL')
     return assertUsableApiKey(value, 'dsh-tavern', snapshot.apiKeyEnv)
   }
   /** 目录广告与列表加载共用的凭证探测：没有密钥只是等待状态，其它凭证故障照常上抛。 */

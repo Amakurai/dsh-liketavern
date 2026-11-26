@@ -18,6 +18,8 @@ export interface AssembleInput {
     historyMessageIds?: readonly (string | undefined)[];
     /** 宿主根据消息来源指明真实 user/model 正文；工具/插件输入不得挤占聊天深度。 */
     historyChatFlags?: readonly boolean[];
+    /** 历史消息是否允许在组装期执行 EJS；未传时沿用历史模板范围（默认仅用于兼容直调测试）。 */
+    historyTemplateFlags?: readonly boolean[];
     /** 世界书引擎结果（null = 无世界书）。 */
     wi: WIEngineResult | null;
     /** 隔离器提供全部候选来源，未命中的条件写入也不能使读取者被跨轮钉死。 */
@@ -93,6 +95,8 @@ export interface TemplateSequenceMessage {
     worldinfo: boolean;
     depth: number;
     history: boolean;
+    /** 跳过历史消息上的 EJS 求值（仍保留 basic/generate 正则与定位钩子），防止旧回复重复执行副作用。 */
+    skipEjs?: boolean;
     /** 历史模拟副本保留正文处理结果；GENERATE 位置注入只加入完整 messages 序列。 */
     historyContent?: string;
     /** GENERATE 钩子围绕历史正文生成的插件内容；精确布局不复制历史正文。 */

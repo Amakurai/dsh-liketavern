@@ -59,8 +59,8 @@ function GreetingPreview(props: {
     () => props.remote.renderOutputText({ sessionId: props.sessionId, text: props.text }),
     [props.remote, props.sessionId, props.text, props.interactiveCards, props.cardId, props.characterRevision, props.presetId, displaySettingsRevision],
   )
-  if (preview.state.status === 'error') return <Err message={preview.state.message} />
-  if (preview.state.status !== 'ready') return <Skeleton />
+  if (preview.state.status === 'error') return <div className="dsh-tavern-hero-quote"><Err message={preview.state.message} /></div>
+  if (preview.state.status !== 'ready') return <div className="dsh-tavern-hero-quote"><Skeleton /></div>
   const value = preview.state.value
   const interactive = props.interactiveCards !== false && value.interactiveCards !== false
   const chunks: string[] = []
@@ -96,7 +96,12 @@ function GreetingPreview(props: {
     }
   }
   const visibleText = chunks.join('\n\n')
-  return <>{visibleText}{hasInteractiveHtml && <span>{t('hero.interactiveGreeting')}</span>}</>
+  return (
+    <>
+      {visibleText.trim() ? <div className="dsh-tavern-hero-quote">{visibleText}</div> : null}
+      {hasInteractiveHtml ? <div className="dsh-tavern-hero-interactiveHint">{t('hero.interactiveGreeting')}</div> : null}
+    </>
+  )
 }
 
 /** 芯片只能并入英雄行，绝不能塞进模式选择按钮内部（会把菜单点坏）。 */
@@ -565,7 +570,7 @@ function HeroCharacterSession(props: HeroProps) {
           {detailLoader.state.status === 'error' ? (
             <div className="dsh-tavern-hero-previewText" role="alert">{t('hero.detailLoadFailed')}</div>
           ) : greetingText.trim() ? (
-            <div className="dsh-tavern-hero-quote"><GreetingPreview remote={remote} sessionId={sessionId} text={greetingText} interactiveCards={binding.interactiveCards} cardId={binding.cardId} characterRevision={detail?.revision} presetId={binding.presetId} /></div>
+            <GreetingPreview remote={remote} sessionId={sessionId} text={greetingText} interactiveCards={binding.interactiveCards} cardId={binding.cardId} characterRevision={detail?.revision} presetId={binding.presetId} />
           ) : hasAnyGreeting ? (
             <div className="dsh-tavern-hero-previewText">{t('hero.emptyVariantHint')}</div>
           ) : (

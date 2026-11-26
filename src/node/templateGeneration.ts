@@ -183,6 +183,7 @@ export function createTemplateGeneration(
           while(sourceParents.has(key)&&sourceParents.get(key)!==parent) key=sourceParents.get(key)!
           return key
         }
+        const allowEjs=!item.skipEjs
         const renderParts=(parts:TemplateRegexSource[]):string=> {
           let output=''
           for(let at=0;at<parts.length;) {
@@ -195,7 +196,7 @@ export function createTemplateGeneration(
             // outlet 宏带入的是原文；子代码与父代码共同编译，服从父 if/loop 并共享词法变量。
             // 整棵来源冻结首次结果，activewi 重组不能重新执行父模板或其中的子代码。
             const text=checked(group.map(value=>value.text).join(''))
-            const result=hasEjs(text)||Boolean(source&&hasEjs(source.text))||group.some(child=>hasEjs(sourceByOrigin.get(child.key)?.text ?? ''))
+            const result=allowEjs&&(hasEjs(text)||Boolean(source&&hasEjs(source.text))||group.some(child=>hasEjs(sourceByOrigin.get(child.key)?.text ?? '')))
               ? expandMacros(sandbox.renderSource(text,source?.key ?? key,
                 {generateData,generateBuffer:checked(buffer+localBefore+output)}),source?.context ?? macroCtx)
               : text
@@ -205,11 +206,13 @@ export function createTemplateGeneration(
         }
         const rendered=renderParts(transformed)
         // 删除整个来源也要冻结空结果，否则后续 activewi 改变匹配范围时会补执行旧代码。
-        for(const part of rawParts[index]!) {
-          const rootKey=directChild(part.key,undefined),source=sourceByOrigin.get(part.key),rootSource=sourceByOrigin.get(rootKey)
-          if(rootSource&&(hasEjs(source?.text ?? '')||hasEjs(rootSource.text))&&!visited.has(rootKey)) {
-            visited.add(rootKey)
-            sandbox.renderSource('',rootSource.key,{generateData,generateBuffer:checked(buffer+localBefore+rendered)})
+        if(allowEjs) {
+          for(const part of rawParts[index]!) {
+            const rootKey=directChild(part.key,undefined),source=sourceByOrigin.get(part.key),rootSource=sourceByOrigin.get(rootKey)
+            if(rootSource&&(hasEjs(source?.text ?? '')||hasEjs(rootSource.text))&&!visited.has(rootKey)) {
+              visited.add(rootKey)
+              sandbox.renderSource('',rootSource.key,{generateData,generateBuffer:checked(buffer+localBefore+rendered)})
+            }
           }
         }
         if(item.history) item.historyContent=rendered

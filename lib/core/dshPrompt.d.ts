@@ -63,8 +63,8 @@ export declare function neutralizeDshMustache(text: string): string;
 /** 宿主身份段原文（`harness:identity`）。投影副本可选择移除，避免与角色身份正面竞争。 */
 export declare const HARNESS_IDENTITY_TEXT = "You are an AI agent powered by DeepSeek Harness.";
 /**
- * 从请求副本的 system 文本里删掉宿主身份句。
- * 只做精确句匹配，连同宿主段间分隔符 `\n\n` 一起删；其它字节一律不动，宿主改文案时自动变成 no-op。
+ * 从请求副本的 system 文本里删掉宿主身份句（含 `harness:identity` 与部署 `coding agent` 前缀）。
+ * 只做精确独立段匹配，连同宿主段间分隔符 `\n\n` 一起删；其它字节一律不动，宿主改文案时自动变成 no-op。
  */
 export declare function stripHarnessIdentity(text: string): string;
 /**

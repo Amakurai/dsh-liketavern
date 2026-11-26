@@ -14,6 +14,7 @@ import type { PresetSummary, TavernRemote } from '../types.js'
 import { notifyAllSessionBindingsChanged } from '../cache.js'
 import { bumpDisplaySettingsRevision } from '../displayPrefs.js'
 import { t as tBare, useT } from '../i18n.js'
+import { formatSettingsWriteError } from '../settingsPatch.js'
 import { Badge, Btn, ConfirmDialog, Err, Field, FileBtn, IconBtn, Muted, NumInput, RegexScriptRow, SaveBar, SearchEmpty, SearchInput, Section, Select, Skeleton, Toggle, downloadJson, errOf, readJsonFile, runAsync, useLoader, useToast } from '../util.js'
 
 function newEntry(order: number): PresetEntry {
@@ -68,7 +69,9 @@ function PresetSamplingSummary({ sampling, onChange }: { sampling: PromptPreset[
     <Muted>{t('presets.sampling.desc')}</Muted>
     {retained.length > 0 && <Muted>{t('presets.sampling.retained', { values: retained.join(t('presets.warningSep')) })}</Muted>}
     {sampling !== undefined && <>
-      <Btn onClick={onChange}>{t('presets.sampling.useGlobal')}</Btn>
+      <div style={{ alignSelf: 'flex-start' }}>
+        <Btn onClick={onChange}>{t('presets.sampling.useGlobal')}</Btn>
+      </div>
       <Muted>{t('presets.sampling.useGlobalDesc')}</Muted>
     </>}
   </Field>
@@ -270,7 +273,7 @@ export function PresetsSection(props: { remote: TavernRemote }) {
       // 只更新用户点选的默认预设，保留其它窗口刚保存的默认角色、人设和世界书。
       const r = await remote.updateSettings({ patch: { defaults: { presetId: id } } })
       const err = errOf(r)
-      if (err) { if (alive.current) setError(err) }
+      if (err) { if (alive.current) setError(formatSettingsWriteError(err, t)) }
       else {
         notifyAllSessionBindingsChanged()
         if (!alive.current) return

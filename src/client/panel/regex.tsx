@@ -425,7 +425,7 @@ export function RegexSection(props: { remote: TavernRemote }) {
           )}
           <SaveBar inline>
             <Btn disabled={busy} onClick={() => { setRuleLimit((n) => Math.max(n, current.length + 1)); setRules([...current, newRule()]) }}>{t('regex.new')}</Btn>
-            <FileBtn accept=".json" disabled={busy} onFile={(file) => void importRules(file)}>{t('regex.importFile')}</FileBtn>
+            <FileBtn size="sm" accept=".json" disabled={busy} onFile={(file) => void importRules(file)}>{t('regex.importFile')}</FileBtn>
             {current.length > 0 ? (
               <Btn disabled={busy} onClick={() => downloadJson('tavern-regex-rules.json', current)}>{t('regex.exportAll')}</Btn>
             ) : null}

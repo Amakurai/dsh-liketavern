@@ -14,10 +14,11 @@ import { TavernState } from '../src/node/state.js'
 import { deriveLegacyLineage, forkedSessionParents, snapshotSessionArchive } from '../src/node/sessionArchiveSnapshot.js'
 import { deleteHostForkIdentity, writeHostForkIdentity } from '../src/node/hostForkIdentity.js'
 import { importSessionArchive } from '../src/node/sessionArchiveImport.js'
-import { parseSessionArchive, SESSION_ARCHIVE_MAX_FILES } from '../src/node/sessionArchiveFormat.js'
+import { archiveFile, parseSessionArchive, sealSessionArchive, SESSION_ARCHIVE_MAX_FILES } from '../src/node/sessionArchiveFormat.js'
 import { withWorkspaceLock } from '../src/state/workspaceLock.js'
 import { WorkspaceFs } from '../src/state/workspaceFs.js'
 import * as backupFiles from '../src/node/backupFiles.js'
+import { BackupError } from '../src/node/backupFiles.js'
 import type { SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
 
 let root: string, state: TavernState, ctx: Context, fake: Context, cardId: string
@@ -438,4 +439,124 @@ it('seeded 且继承历史但无来源、无活动祖先 WAL 时导出保留 und
   await writeHostForkIdentity(state.paths, child.id, parent.id, child.snapshotEvents().slice(0, child.inheritedEventCount))
   const derived = await snapshotSessionArchive(sourceCtx, state, child.id)
   expect(derived.binding.walLineage).toEqual([{ sessionId: parent.id, throughTurn: 1 }])
+})
+
+it('导入中断报错拼接脱敏原因摘要，不吞错且不泄露带引号或无引号含空格的本机绝对路径', async () => {
+  const archive = await snapshotSessionArchive(fake, state, 'session-one')
+  const cases = [
+    {
+      label: 'quoted',
+      error: Object.assign(new Error("EACCES: permission denied, open 'C:\\Users\\secret-alice\\.dsh\\sessions\\s.jsonl'"), { code: 'EACCES' }),
+      forbidden: ['secret-alice', 'C:\\Users', 'sessions\\s.jsonl'],
+      required: ['EACCES', '<path>'],
+    },
+    {
+      label: 'unquoted-windows-spaces',
+      error: Object.assign(new Error('EBUSY: 写入 C:\\Users\\Alice Smith\\My Docs\\.dsh\\sessions\\s.jsonl 失败'), { code: 'EBUSY' }),
+      forbidden: ['Alice', 'Smith', 'My Docs', 'C:\\Users', 's.jsonl'],
+      required: ['EBUSY', '<path>', '写入', '失败'],
+    },
+  ] as const
+  for (const item of cases) {
+    const targetRoot = join(root, `cause-target-${item.label}`)
+    const target = new TavernState({ root: targetRoot, characters: join(targetRoot, 'characters'), lorebooks: join(targetRoot, 'library/lorebooks'),
+      presets: join(targetRoot, 'library/presets'), personas: join(targetRoot, 'personas'), regexDir: join(targetRoot, 'regex'), sessions: join(targetRoot, 'sessions') }, () => resolveConfig({}))
+    await target.init()
+    const persistenceContext = new Context()
+    try {
+      await persistenceJsonl.apply(persistenceContext, { root: join(targetRoot, 'host-sessions'), compression: 'none' })
+      const persistence = persistenceContext.get('sessionPersistence')!
+      const destCtx = { sessions: { get: () => undefined }, get: (name: string) => name === 'sessionPersistence' ? persistence
+        : name === 'workspaceRegistry' ? { list: () => [{ id: 'target', path: root, attachSession: async () => { throw item.error } }] } : undefined } as unknown as Context
+      const caught = await importSessionArchive(destCtx, target, archive, 'target').then(() => null, error => error as Error)
+      expect(caught).toBeInstanceOf(Error)
+      expect(caught!.message).toContain('会话导入尚未完成，请使用同一文件和工作区重试')
+      expect(caught!.message).toContain('原因：')
+      for (const token of item.required) expect(caught!.message).toContain(token)
+      for (const secret of item.forbidden) expect(caught!.message).not.toContain(secret)
+    } finally { await persistenceContext.fiber.dispose() }
+  }
+})
+
+it('空的全局正则/脚本文件（[]）既不随新导出带出，也不在导入旧归档时误拦多会话目标', async () => {
+  await writeFile(join(root, 'regex/rules.json'), '[]\n')
+  await writeFile(join(root, 'library/helper-scripts.json'), '[]\n')
+  const archive = await snapshotSessionArchive(fake, state, 'session-one')
+  expect(archive.files.some(file => file.path === 'regex/rules.json' || file.path === 'library/helper-scripts.json')).toBe(false)
+
+  // 构造一个已包含另一会话和自定义全局正则的目标工作区。
+  const makeTarget = async (dir: string) => {
+    const targetRoot = join(root, dir)
+    const target = new TavernState({ root: targetRoot, characters: join(targetRoot, 'characters'), lorebooks: join(targetRoot, 'library/lorebooks'),
+      presets: join(targetRoot, 'library/presets'), personas: join(targetRoot, 'personas'), regexDir: join(targetRoot, 'regex'), sessions: join(targetRoot, 'sessions') }, () => resolveConfig({}))
+    await target.init()
+    const existingCard = (await target.createCharacter('既有角色')).cardId
+    await target.saveBinding({ sessionId: 'existing-session', cardId: existingCard, presetId: null, personaId: null,
+      lorebookIds: [], characterLorebookId: null, interactiveCards: false, greetingIndex: 0, createdAt: new Date(0).toISOString() })
+    await writeFile(join(targetRoot, 'regex/rules.json'), JSON.stringify([{
+      id: 'rule-keep', name: 'keep', find: 'foo', replace: 'bar', enabled: true,
+      scopes: ['output'], timing: ['render'], minDepth: null, maxDepth: null, substituteRegex: 0, source: 'user',
+    }]) + '\n')
+    return { targetRoot, target }
+  }
+
+  for (const variant of ['fresh', 'legacy-empty-globals'] as const) {
+    const { targetRoot, target } = await makeTarget(`multi-target-${variant}`)
+    const persistenceContext = new Context()
+    try {
+      await persistenceJsonl.apply(persistenceContext, { root: join(targetRoot, 'host-sessions'), compression: 'none' })
+      const persistence = persistenceContext.get('sessionPersistence')!
+      const destCtx = { sessions: { get: () => undefined }, get: (name: string) => name === 'sessionPersistence' ? persistence
+        : name === 'workspaceRegistry' ? { list: () => [{ id: 'target', path: root, attachSession: async () => {} }] } : undefined } as unknown as Context
+      const payload = variant === 'fresh' ? archive : sealSessionArchive({
+        format: 'dsh-tavern-session', version: 1, binding: archive.binding, session: archive.session, attachments: archive.attachments,
+        files: [...archive.files, archiveFile('global', 'regex/rules.json', Buffer.from('[]\n')), archiveFile('global', 'library/helper-scripts.json', Buffer.from('[]\n'))],
+      })
+      await expect(importSessionArchive(destCtx, target, payload, 'target')).resolves.toEqual({ sessionId: 'session-one' })
+      // 目标原有的全局正则保持原样未被空数组覆盖。
+      expect((await target.getRegexRulesSnapshot()).rules.map(rule => rule.id)).toEqual(['rule-keep'])
+    } finally { await persistenceContext.fiber.dispose() }
+  }
+})
+
+it('跳过常见 OS 杂项文件、对非标准剧情文件给出明确路径提示，并将 SIZE_LIMIT 转译为中文全量备份提示', async () => {
+  const binding = (await state.loadBinding('session-one'))!, ws = await state.storyWorkspace(cardId, binding.storyId)
+  await mkdir(join(state.paths.characters, cardId, 'assets'), { recursive: true })
+  await writeFile(join(state.paths.characters, cardId, 'assets', 'Thumbs.db'), 'os-thumb')
+  await writeFile(join(ws.fs.root, 'Thumbs.db'), 'os-thumb')
+  await writeFile(join(ws.fs.root, '.DS_Store'), 'os-finder')
+
+  const archive = await snapshotSessionArchive(fake, state, 'session-one')
+  expect(archive.files.some(file => /thumbs\.db|\.ds_store/i.test(file.path))).toBe(false)
+
+  // 非 OS 杂项的非标准文件给出清晰路径提示，而非笼统损坏。
+  await writeFile(join(ws.fs.root, 'unexpected-note.txt'), 'stray')
+  await expect(snapshotSessionArchive(fake, state, 'session-one')).rejects.toThrow('剧情目录包含无法迁移的非标准文件：unexpected-note.txt')
+  await rm(join(ws.fs.root, 'unexpected-note.txt'))
+
+  // SIZE_LIMIT 转为中文全量备份提示。
+  vi.spyOn(backupFiles, 'boundedBytes').mockRejectedValueOnce(new BackupError('SIZE_LIMIT'))
+  await expect(snapshotSessionArchive(fake, state, 'session-one')).rejects.toThrow('会话迁移文件超过大小上限（128 MiB），请使用全量备份')
+})
+
+it('缺失或冲突的共享资产报错明确区分资产类型，不泄露具体名称或 ID', async () => {
+  const binding = (await state.loadBinding('session-one'))!
+  await state.saveBinding({ ...binding, presetId: 'secret-missing-preset' })
+  await expect(snapshotSessionArchive(fake, state, 'session-one')).rejects.toThrow('会话引用的共享资产不存在，无法完整导出（预设）')
+
+  // 恢复合法世界书引用并验证导入时内容分歧明确提示（世界书）。
+  await state.saveBinding({ ...binding, presetId: null, lorebookIds: ['shared-book'] })
+  await writeFile(join(root, 'library/lorebooks/shared-book.json'), JSON.stringify({ name: '书甲', entries: {} }))
+  const archive = await snapshotSessionArchive(fake, state, 'session-one')
+
+  const targetRoot = join(root, 'diverge-lore-target')
+  const target = new TavernState({ root: targetRoot, characters: join(targetRoot, 'characters'), lorebooks: join(targetRoot, 'library/lorebooks'),
+    presets: join(targetRoot, 'library/presets'), personas: join(targetRoot, 'personas'), regexDir: join(targetRoot, 'regex'), sessions: join(targetRoot, 'sessions') }, () => resolveConfig({}))
+  await target.init()
+  await writeFile(join(targetRoot, 'library/lorebooks/shared-book.json'), JSON.stringify({ name: '书乙', entries: {} }))
+  const persistence = { stat: vi.fn(async () => undefined) }
+  const destCtx = { sessions: { get: () => undefined }, get: (name: string) => name === 'sessionPersistence' ? persistence
+    : name === 'workspaceRegistry' ? { list: () => [{ id: 'target', path: root, attachSession: async () => {} }] } : undefined } as unknown as Context
+  const err = await importSessionArchive(destCtx, target, archive, 'target').then(() => null, error => error as Error)
+  expect(err?.message).toBe('同名共享资产内容不同，不能覆盖（世界书）')
 })

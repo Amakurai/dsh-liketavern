@@ -15,11 +15,13 @@ import { renameWithRetry } from '../state/rename.js'
 import { closeLedger } from '../state/writeLedger.js'
 import { assertBindingFileIdentity, loadBinding, saveBinding } from './bindings.js'
 import { sessionFile } from './paths.js'
-import { assertDirectory, boundedBytes, boundedJson, type DirectoryCheckOptions } from './backupFiles.js'
+import { assertDirectory, BackupError, boundedBytes, boundedJson, type DirectoryCheckOptions } from './backupFiles.js'
 import { sessionArchiveMarkerPath } from './sessionArchiveMarker.js'
 import { assertArchiveWalComplete, assertWalLineageComplete } from './sessionArchiveWal.js'
-import { parseSessionArchive, SESSION_ARCHIVE_MAX_BYTES, type SessionArchiveFile } from './sessionArchiveFormat.js'
+import { isOsJunkPath, parseSessionArchive, SESSION_ARCHIVE_MAX_BYTES, type SessionArchiveFile } from './sessionArchiveFormat.js'
 import { CharacterArchivedError, TavernState } from './state.js'
+
+const GLOBAL_COLLECTION_PATHS = new Set(['regex/rules.json', 'library/helper-scripts.json'])
 
 interface ImportWorkspace { id: string; path: string; attachSession(id: Session['id']): Promise<void> }
 interface ImportWorkspaceRegistry { list(): ImportWorkspace[] }
@@ -29,9 +31,59 @@ async function present(path: string): Promise<boolean> {
   try { await lstat(path); return true } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw error }
 }
 function bytes(file: SessionArchiveFile): Buffer { return Buffer.from(file.data, 'base64') }
+function assetCategoryLabel(path: string): string {
+  const lower = path.toLowerCase()
+  if (lower.startsWith('library/presets/')) return '预设'
+  if (lower.startsWith('library/lorebooks/')) return '世界书'
+  if (lower.startsWith('personas/')) return '用户人设'
+  if (lower === 'regex/rules.json') return '全局正则规则'
+  if (lower === 'library/helper-scripts.json') return '全局脚本库'
+  return '共享资产'
+}
+function assetCategorySummary(paths: readonly string[]): string {
+  return [...new Set(paths.map(assetCategoryLabel))].join('、')
+}
+function isEmptyGlobalCollectionFile(file: SessionArchiveFile): boolean {
+  if (!GLOBAL_COLLECTION_PATHS.has(file.path)) return false
+  try {
+    const parsed: unknown = JSON.parse(bytes(file).toString('utf8'))
+    return Array.isArray(parsed) && parsed.length === 0
+  } catch {
+    return false
+  }
+}
+/** 脱敏提取底层中断原因：折叠换行、剥离带引号及无引号（含空格）的绝对路径与句柄细节，并限制长度。 */
+function summarizeImportError(error: unknown): string {
+  const err = error instanceof Error ? error : null
+  const code = err && typeof (err as NodeJS.ErrnoException).code === 'string'
+    ? (err as NodeJS.ErrnoException).code!
+    : null
+  const raw = err ? err.message : typeof error === 'string' ? error : ''
+  const replaceUnquotedPath = (match: string): string => {
+    const trimmed = match.replace(/\s+$/, '')
+    return `<path>${match.slice(trimmed.length)}`
+  }
+  const cleaned = raw
+    .replace(/(['"`])(?:[A-Za-z]:[\\/]|\\\\|\/(?:[^'"`\r\n/]+\/))[^'"`\r\n]*\1/g, '$1<path>$1')
+    .replace(/[A-Za-z]:[\\/](?:(?! -> )[^\r\n'"`,;()[\]{}:\u3000-\u9fff\uff00-\uffef])*/g, replaceUnquotedPath)
+    .replace(/\\\\(?:(?! -> )[^\r\n'"`,;()[\]{}:\u3000-\u9fff\uff00-\uffef])+/g, replaceUnquotedPath)
+    .replace(/(^|[\s'"`(,:])(\/(?:[^\r\n'"`,;()[\]{}:/\u3000-\u9fff\uff00-\uffef]+\/)+(?:(?! -> )[^\r\n'"`,;()[\]{}:\u3000-\u9fff\uff00-\uffef])*)/g,
+      (_, lead: string, path: string) => `${lead}${replaceUnquotedPath(path)}`)
+    .replace(/[\u0000-\u001f\u007f]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  const prefix = code && !cleaned.includes(code) ? `${code}: ` : ''
+  const combined = `${prefix}${cleaned}`.trim()
+  if (!combined) return code ?? ''
+  return combined.length > 160 ? `${combined.slice(0, 159)}…` : combined
+}
 async function sameFile(root: string, file: SessionArchiveFile, dirCheck?: DirectoryCheckOptions): Promise<boolean> {
   try { return (await boundedBytes(join(root, ...file.path.split('/')), SESSION_ARCHIVE_MAX_BYTES, dirCheck)).equals(bytes(file)) }
-  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw error }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+    if (error instanceof BackupError && error.code === 'SIZE_LIMIT') return false
+    throw error
+  }
 }
 async function writeFiles(root: string, files: readonly SessionArchiveFile[]): Promise<void> {
   const fs = new WorkspaceFs(root, null)
@@ -44,7 +96,8 @@ async function writeFiles(root: string, files: readonly SessionArchiveFile[]): P
 async function cardFiles(root: string): Promise<string[]> {
   const fs = new WorkspaceFs(root, null)
   return ['card.json', ...(await fs.exists('card.png') ? ['card.png'] : []),
-    ...(await fs.list('assets', { rejectLinks: true })).map(path => `assets/${path}`).filter(path => path.toLowerCase() !== 'assets/chat-lorebook.json')].sort()
+    ...(await fs.list('assets', { rejectLinks: true })).map(path => `assets/${path}`)
+      .filter(path => path.toLowerCase() !== 'assets/chat-lorebook.json' && !isOsJunkPath(path))].sort()
 }
 async function sameFiles(root: string, files: readonly SessionArchiveFile[], actualPaths: readonly string[], dirCheck?: DirectoryCheckOptions): Promise<boolean> {
   const expected = files.map(file => file.path).sort()
@@ -77,7 +130,17 @@ async function validateSharedAssets(parent: string, state: TavernState, archive:
       presets: join(stage, 'library/presets'), personas: join(stage, 'personas'), regexDir: join(stage, 'regex'), sessions: join(stage, 'sessions') }
     const probe = new TavernState(paths, () => state.config)
     const expected = await probe.sessionArchiveAssetPaths(archive.binding)
-    if (JSON.stringify(expected) !== JSON.stringify(globals.map(file => file.path).sort())) throw new Error('迁移文件包含无关或缺失的共享资产')
+    const actual = globals.filter(file => !isEmptyGlobalCollectionFile(file)).map(file => file.path).sort()
+    if (JSON.stringify(expected) !== JSON.stringify(actual)) {
+      const missing = expected.filter(path => !actual.includes(path))
+      const extra = actual.filter(path => !expected.includes(path))
+      const detail = missing.length > 0 && extra.length > 0
+        ? `缺少引用的${assetCategorySummary(missing)}，且包含无关的${assetCategorySummary(extra)}`
+        : missing.length > 0
+          ? `缺少引用的${assetCategorySummary(missing)}`
+          : `包含无关的${assetCategorySummary(extra)}`
+      throw new Error(`迁移文件包含无关或缺失的共享资产（${detail}）`)
+    }
     if (archive.binding.presetId && !(await probe.loadPreset(archive.binding.presetId, true))) throw new Error('迁移文件中的预设无效')
     if (archive.binding.personaId && !(await probe.loadPersona(archive.binding.personaId, true))) throw new Error('迁移文件中的人设无效')
     for (const path of expected) {
@@ -136,15 +199,20 @@ export async function importSessionArchive(ctx: Context, state: TavernState, inp
       }
       if (cardExists && !(await sameFiles(cardRoot, card, await cardFiles(cardRoot), dirCheck))) throw new Error('同 ID 的角色资产不同，不能覆盖')
       if (await present(story)) {
-        if (!retry || !(await sameFiles(story, storyFiles, await new WorkspaceFs(story, null).list('', { rejectLinks: true }), dirCheck))) throw new Error('目标剧情已存在，不能覆盖')
+        const actualStoryPaths = (await new WorkspaceFs(story, null).list('', { rejectLinks: true })).filter(path => !isOsJunkPath(path))
+        if (!retry || !(await sameFiles(story, storyFiles, actualStoryPaths, dirCheck))) throw new Error('目标剧情已存在，不能覆盖')
       }
       const rootFs = new WorkspaceFs(state.paths.root, null), missingGlobals: SessionArchiveFile[] = []
       for (const file of globals) {
+        // 兼容旧版归档中空的全局正则/脚本文件（[]）：等价于无全局条目，不触发共享设置冲突或覆写。
+        if (isEmptyGlobalCollectionFile(file)) continue
         if (await rootFs.exists(file.path)) {
-          if (!(await sameFile(state.paths.root, file, dirCheck))) throw new Error('同名共享资产内容不同，不能覆盖')
+          if (!(await sameFile(state.paths.root, file, dirCheck))) {
+            throw new Error(`同名共享资产内容不同，不能覆盖（${assetCategoryLabel(file.path)}）`)
+          }
         } else missingGlobals.push(file)
       }
-      if (missingGlobals.some(file => file.path === 'regex/rules.json' || file.path === 'library/helper-scripts.json')) {
+      if (missingGlobals.some(file => GLOBAL_COLLECTION_PATHS.has(file.path))) {
         const entries = await readdir(state.paths.sessions).catch((error: NodeJS.ErrnoException) => {
           if (error.code === 'ENOENT') return []
           throw error
@@ -211,7 +279,12 @@ export async function importSessionArchive(ctx: Context, state: TavernState, inp
         await rm(markerPath)
         return { sessionId: binding.sessionId }
       } catch (error) {
-        if (await present(markerPath)) throw new Error('会话导入尚未完成，请使用同一文件和工作区重试', { cause: error })
+        if (await present(markerPath)) {
+          const detail = summarizeImportError(error)
+          throw new Error(detail
+            ? `会话导入尚未完成，请使用同一文件和工作区重试（原因：${detail}）`
+            : '会话导入尚未完成，请使用同一文件和工作区重试', { cause: error })
+        }
         throw error
       } finally {
         if (!cardExists) closeLedger(storyRoot(stage, storyId))

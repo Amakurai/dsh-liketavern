@@ -27,7 +27,7 @@ import { copyTemplateTimers, loadTemplateGenerationIdentity } from '../state/tem
 import { estimateTokens } from '../core/tokenize.js'
 import { rebuildIndex } from '../state/workspace.js'
 import { activeGreetingIndex, cardGreetingVariants, greetingFloorState, isGreetingOnlyBlank, isTavernGreetingEvent, pickGreetingText, sessionHasUserMessage, TAVERN_GREETING_SOURCE, type GreetingFloorState } from '../core/greetingLog.js'
-import { expandMacros } from '../core/macros.js'
+import { expandIdentityMacros, expandMacros } from '../core/macros.js'
 import { CONTINUE_INSTRUCTION_PREFIX, isContinueInstruction, isHostInjectedUserMessage, isSyntheticUserText } from '../core/dshPrompt.js'
 import { DEFAULT_USER_NAME } from '../core/persona.js'
 import { characterPromptName } from '../core/characterData.js'
@@ -1402,6 +1402,74 @@ export async function ensureGreeting({ ctx, state }: FloorDeps, sessionId: strin
 }
 
 /**
+ * 调用方已按 storyRoot → sessions 顺序持锁时的开场白切换实现；
+ * 供 `swipeGreeting` 与已持锁的 `editHelperMessages` 共用，避免放锁重入制造 TOCTOU 竞态窗口。
+ */
+export async function swipeGreetingLocked(
+  { ctx, state }: FloorDeps,
+  source: Session,
+  binding: SessionBinding,
+  index: number,
+  options: {
+    verifySource: () => Promise<void>
+    beforePublish?: (binding: SessionBinding) => void
+    expectedVariantCount?: number
+    expectedGreetingText?: string
+  },
+): Promise<{ childSessionId: string; index: number; title: string }> {
+  requireTavernSession(ctx, source)
+  if (closedTurns(source.snapshotEvents()).openTurn !== null || state.openFloors?.has(source.id)) {
+    throw new FloorError('turn-open', '生成期间不能切换开场白')
+  }
+  await options.verifySource()
+  const resolveCheckedGreeting = async (): Promise<{ variants: string[]; next: number; raw: string }> => {
+    const variants = await greetingVariants(state, binding.cardId)
+    if (variants.length === 0) throw new FloorError('no-greetings', '该角色没有开场白')
+    if (options.expectedVariantCount !== undefined && variants.length !== options.expectedVariantCount) {
+      throw new FloorError('history-changed', '角色开场白已改变，请刷新后再切换')
+    }
+    if (options.expectedVariantCount !== undefined && (!Number.isSafeInteger(index) || index < 0 || index >= variants.length)) {
+      throw new FloorError('history-changed', '开场白序号已越界，请刷新后再切换')
+    }
+    const next = ((index % variants.length) + variants.length) % variants.length
+    if (sessionHasUserMessage(source.snapshotEvents())) {
+      throw new FloorError('has-turns', '对话已开始，不能再 swipe 开场白（请用回退/重新生成）')
+    }
+    const raw = pickGreetingText(variants, next)
+    if (!raw) throw new FloorError('empty-greeting', '当前这条开场白为空')
+    if (options.expectedGreetingText !== undefined) {
+      const [charWs, persona] = await Promise.all([
+        state.loadCharacter(binding.cardId),
+        state.resolvePersona(binding.personaId),
+      ])
+      const charName = charWs ? characterPromptName(charWs.card) : 'Assistant'
+      const userName = persona?.name.trim() || DEFAULT_USER_NAME
+      if (expandIdentityMacros(raw, { char: charName, user: userName }) !== options.expectedGreetingText) {
+        throw new FloorError('history-changed', '角色开场白正文已改变，请刷新后再切换')
+      }
+    }
+    return { variants, next, raw }
+  }
+  const { variants, next, raw } = await resolveCheckedGreeting()
+  const text = await expandGreeting(state, binding, raw)
+  const verifyWithGreeting = async (): Promise<void> => {
+    await options.verifySource()
+    if (options.expectedVariantCount !== undefined || options.expectedGreetingText !== undefined) {
+      await resolveCheckedGreeting()
+    }
+  }
+  await verifyWithGreeting()
+  const childId = await forkAt(ctx, state, source, binding, -1, {
+    seedOverride: greetingTurnEvents(text),
+    greetingIndex: next,
+    rollbackFromTurn: 0,
+    verifySource: verifyWithGreeting,
+    beforePublish: () => { options.beforePublish?.(binding) },
+  })
+  return { childSessionId: childId, index: next, title: await branchTitle(state, binding, `开场白 ${next + 1}/${variants.length}`) }
+}
+
+/**
  * 开场白 swipe：用指定变体编成 seed 后 fork。不要 create 空会话再 enterGreetingConversation——
  * 那会和刚启动的 agent loop 抢 append，打开子会话历史会 Failed to fetch。
  * 会话已有后续楼层时拒绝（swipe 只适用于开场白还是最后一条消息的场景）。
@@ -1426,25 +1494,13 @@ export async function swipeGreeting({ ctx, state }: FloorDeps, sessionId: string
   if (!initial) throw new FloorError('no-binding', '当前会话未绑定 Tavern 角色卡')
   const ws=await state.storyWorkspace(initial.cardId,initial.storyId)
   return withWorkspaceLock(ws.fs.root,()=>withWorkspaceLock(state.paths.sessions,async()=>{
-  assertSource()
-  const binding=await state.loadBindingUnwaited(sessionId,true,'preserve')
-  if(!binding||binding.cardId!==initial.cardId||binding.storyId!==initial.storyId)throw new FloorError('binding-changed','开场白剧情绑定已改变')
-  assertSource()
-  const variants = await greetingVariants(state, binding.cardId)
-  if (variants.length === 0) throw new FloorError('no-greetings', '该角色没有开场白')
-  const next = ((index % variants.length) + variants.length) % variants.length
-  if (sessionHasUserMessage(source.snapshotEvents())) {
-    throw new FloorError('has-turns', '对话已开始，不能再 swipe 开场白（请用回退/重新生成）')
-  }
-  const raw = pickGreetingText(variants, next)
-  if (!raw) throw new FloorError('empty-greeting', '当前这条开场白为空')
-  const text = await expandGreeting(state, binding, raw)
-
-  await verifySource()
-  const childId = await forkAt(ctx, state, source, binding, -1, {
-    seedOverride: greetingTurnEvents(text), greetingIndex: next, rollbackFromTurn: 0, verifySource,beforePublish:()=>{assertSource();beforePublish?.(binding)},
-  })
-  return { childSessionId: childId, index: next, title: await branchTitle(state, binding, `开场白 ${next + 1}/${variants.length}`) }
+    assertSource()
+    const binding=await state.loadBindingUnwaited(sessionId,true,'preserve')
+    if(!binding||binding.cardId!==initial.cardId||binding.storyId!==initial.storyId)throw new FloorError('binding-changed','开场白剧情绑定已改变')
+    return swipeGreetingLocked({ ctx, state }, source, binding, index, {
+      verifySource,
+      beforePublish: (current) => { assertSource(); beforePublish?.(current) },
+    })
   }))
 }
 

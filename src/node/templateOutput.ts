@@ -101,8 +101,7 @@ export async function completeTemplateOutput(state:TavernState,session:Pick<Sess
     const before = normalizedEntries.filter(entry=>entry.enabled && !entry.templateOnlyPreload && /^\[RENDER:BEFORE\]/i.test(entry.comment))
     const after = normalizedEntries.filter(entry=>entry.enabled && !entry.templateOnlyPreload && /^\[RENDER:AFTER\]/i.test(entry.comment))
     const hasPersistedTemplateState = Boolean(
-      context.historyIdentities?.length
-      || context.helperMvu !== undefined
+      context.helperMvu !== undefined
       || Object.keys(stored.variables.global).length
       || Object.keys(stored.variables.local).length
       || Object.keys(stored.variables.message).length
@@ -130,6 +129,19 @@ export async function completeTemplateOutput(state:TavernState,session:Pick<Sess
       // 供同一结束帧重试；运行时兼容性错误与普通 EJS 脚本异常保持原有语义，不降级成无限重试。
       if (error instanceof TemplateRuntimeCompatibilityError) throw error
       if (isTemplateComputeFailure(error)) throw new TemplateOutputCommitError(error)
+      // 无模板组装走快路径时不会预写 prepared；若回复自身触发确定性模板失败，补记 terminated 回执，
+      // 既保持变量/输出零污染，又防止重启后对同一失败回复重复执行。
+      if (!ownGeneration && binding.storyId) {
+        try {
+          const latest = await state.loadStoryBinding(session.id)
+          if (latest?.cardId === binding.cardId && latest.storyId === binding.storyId) {
+            stored.generation = { version: 1, status: 'terminated', sessionId: session.id, cardId: binding.cardId, storyId: binding.storyId, turn, floor }
+            await saveTemplateState(ws.fs.withFloor(floor), stored)
+          }
+        } catch (commitError) {
+          throw new TemplateOutputCommitError(commitError)
+        }
+      }
       throw error
     }
     try {

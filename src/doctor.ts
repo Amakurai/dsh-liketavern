@@ -14,21 +14,24 @@ import { createRequire } from 'node:module'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { dshHomeDisplay, resolveDshHome } from '@deepseek-ai/dsh-home-paths'
+import { EDITOR_DRAFT_MAX_BYTES } from './core/editorDraftLimits.js'
 import { isRecord } from './core/guards.js'
 import { hostVersionSatisfies, manifestHostRange, safeHostRange } from './core/hostVersion.js'
 import { MAX_STORED_CARD_JSON_BYTES } from './state/card.js'
 import { CHAT_WORLDBOOK_TOTAL_BYTES } from './state/chatWorldbooks.js'
 import { TEMPLATE_DOCUMENT_LIMIT } from './state/templateStorage.js'
 import { CHARACTER_ARCHIVE_FILE, isValidCardId } from './state/workspace.js'
-import { storyRoot } from './state/story.js'
-import { rootIdentity } from './state/pathIdentity.js'
+import { legacyStoryId, storyRoot } from './state/story.js'
+import { caseIdentity, rootIdentity } from './state/pathIdentity.js'
 import { WAL_COVERAGE_PATH, WAL_FLOOR_MARKERS } from './state/wal.js'
 import {
   baseFloorDir, checkRollbackProgress, isFloorMetaShape, isRolledBackDir, isValidWalFloorDir, MAX_WAL_COVERAGE_BYTES, parseRecoveryMarker,
   parseWalCoverage, recordLineIssue, sanitizeFloor, type RecordLine,
 } from './state/walFormat.js'
 import { WAL_RECOVERY_PATH } from './state/workspaceFs.js'
-import { tavernPaths } from './node/paths.js'
+import { parseSessionBinding } from './node/bindings.js'
+import { tavernPaths, type TavernPaths } from './node/paths.js'
+import { safeAssetFileId } from './node/state.js'
 
 const REQUIRED_NODE_MAJOR = 24
 const MAX_JSON_BYTES = 16 * 1024 * 1024
@@ -432,18 +435,20 @@ async function inspectWalRecovery(
   issues: IssueCounter,
   budget: ReadBudget,
   inspectedJson: Map<string, ReadJsonResult['status']>,
-): Promise<void> {
+): Promise<boolean> {
   const path = join(dirname(dirname(root)), ...WAL_RECOVERY_PATH.split('/'))
   const read = await readBoundedJson(path, MAX_WAL_COVERAGE_BYTES, budget, inspectedJson)
-  if (read.status === 'missing') return
+  if (read.status === 'missing') return false
   if (read.status === 'budget') {
     stats.uninspected += 1
     issues.add('WAL_VALIDATION_LIMIT_EXCEEDED', 'warning')
-    return
+    return false
   }
   if (read.status !== 'ok' || !parseRecoveryMarker(read.value).valid) {
     issues.add('WAL_INVALID', 'error')
+    return false
   }
+  return true
 }
 
 async function inspectWalRoot(
@@ -460,7 +465,9 @@ async function inspectWalRoot(
   if (status === 'missing') {
     // 日志目录被整体删除时清单仍可能登记着楼层；没有可枚举的身份，全部按缺失报告。
     await inspectWalCoverage(root, new Set(), new Set(), stats, issues, budget, inspectedJson)
-    await inspectWalRecovery(root, stats, issues, budget, inspectedJson)
+    if (await inspectWalRecovery(root, stats, issues, budget, inspectedJson)) {
+      issues.add('WAL_RECOVERY_IN_PROGRESS', 'warning', 1)
+    }
     return
   }
   if (status === 'link') {
@@ -482,6 +489,7 @@ async function inspectWalRoot(
   /** 因限额或链接而没能读到元数据的楼层目录名（净化后）；清单对账不能把它们当成缺失。 */
   const unresolvedFloors = new Set<string>()
   let enumerationComplete = !budget.exhausted && !scanBudget.exhausted
+  let recoveringFloors = 0
   for (const entry of entries) {
     if (budget.exhausted) { enumerationComplete = false; break }
     // 回滚副本按运行时的严格后缀识别：楼层 id 中段含 `.rolled-back-` 的活跃目录不是副本。
@@ -522,6 +530,7 @@ async function inspectWalRoot(
     presentIdentities.add(JSON.stringify([meta.floor, meta.startedAt]))
 
     const validation = await validateWalArtifacts(directory, budget, rolledBack, inspectedJson)
+    if (!rolledBack && validation === 'recovering') recoveringFloors += 1
     if (!rolledBack && (validation === 'recovering' || !meta.committed)) stats.pending += 1
     else if (meta.committed) stats.committed += 1
     if (validation === 'healthy' || validation === 'recovering') stats.healthy += 1
@@ -535,14 +544,59 @@ async function inspectWalRoot(
     }
   }
   // 只在完整枚举后对账：预算耗尽或目录项被截断时不能断言某层日志已丢失。
+  let hasRecoveryMarker = false
   if (enumerationComplete && !budget.exhausted && !scanBudget.exhausted) {
     await inspectWalCoverage(root, presentIdentities, unresolvedFloors, stats, issues, budget, inspectedJson)
-    await inspectWalRecovery(root, stats, issues, budget, inspectedJson)
+    hasRecoveryMarker = await inspectWalRecovery(root, stats, issues, budget, inspectedJson)
+  }
+  if (recoveringFloors > 0 || hasRecoveryMarker) {
+    issues.add('WAL_RECOVERY_IN_PROGRESS', 'warning', Math.max(recoveringFloors, 1))
   }
   if (stats.pending > pendingBefore) issues.add('WAL_UNCOMMITTED', 'warning', stats.pending - pendingBefore)
 }
 
+interface DiscoveredStory {
+  sessionId: string | null
+  bound: boolean
+}
+
+const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+
+/** 只读检查头像 PNG 的 8 字节魔数，避免解码大图或跟随链接；文件缺失不算错误。 */
+async function inspectAvatarPng(path: string, budget: ReadBudget): Promise<'missing' | 'ok' | 'invalid' | 'link' | 'budget'> {
+  let before
+  try { before = await lstat(path) } catch (error) {
+    return errno(error) === 'ENOENT' ? 'missing' : 'invalid'
+  }
+  if (before.isSymbolicLink()) return 'link'
+  if (!before.isFile() || before.size < PNG_MAGIC.length) return 'invalid'
+  if (budget.remaining < PNG_MAGIC.length) {
+    budget.exhausted = true
+    return 'budget'
+  }
+  let handle
+  try {
+    handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
+    const current = await handle.stat()
+    const after = await lstat(path)
+    if (after.isSymbolicLink() || !after.isFile() || current.dev !== before.dev || current.ino !== before.ino
+      || current.dev !== after.dev || current.ino !== after.ino) return 'link'
+    if (current.size < PNG_MAGIC.length) return 'invalid'
+    const header = Buffer.allocUnsafe(PNG_MAGIC.length)
+    const { bytesRead } = await handle.read(header, 0, PNG_MAGIC.length, 0)
+    budget.remaining -= bytesRead
+    return bytesRead === PNG_MAGIC.length && header.equals(PNG_MAGIC) ? 'ok' : 'invalid'
+  } catch (error) {
+    if (errno(error) === 'ENOENT') return 'missing'
+    if (errno(error) === 'ELOOP') return 'link'
+    return 'invalid'
+  } finally {
+    await handle?.close().catch(() => undefined)
+  }
+}
+
 async function inspectStories(
+  cardId: string,
   cardRoot: string,
   stats: DoctorReport['statistics'],
   issues: IssueCounter,
@@ -550,6 +604,7 @@ async function inspectStories(
   scanBudget: ScanBudget,
   inspectedJson: Map<string, ReadJsonResult['status']>,
   verifiedDirs: Set<string>,
+  knownStories: Map<string, DiscoveredStory>,
 ): Promise<void> {
   const draftsBefore = stats.stories.drafts
   const storiesRoot = `${cardRoot}/stories`
@@ -593,19 +648,23 @@ async function inspectStories(
       continue
     }
     verifiedDirs.add(rootIdentity(root))
+    const storyKey = caseIdentity(`${cardId}/${entry.name}`)
     const metadata = await readBoundedJson(`${root}/story.json`, 256 * 1024, budget, inspectedJson)
     if (metadata.status === 'budget') {
       stats.stories.uninspected += 1
       continue
     }
     if (metadata.status !== 'ok') {
+      if (metadata.status !== 'missing') knownStories.set(storyKey, { sessionId: null, bound: false })
       stats.stories.unhealthy += 1
       issues.add(metadata.status === 'oversized' ? 'STORY_METADATA_TOO_LARGE' : 'STORY_METADATA_INVALID', 'error')
       continue
     }
     if (validStoryMetadata(metadata.value, entry.name)) {
       stats.stories.healthy += 1
+      knownStories.set(storyKey, { sessionId: (metadata.value as { sessionId: string }).sessionId, bound: false })
     } else {
+      knownStories.set(storyKey, { sessionId: null, bound: false })
       stats.stories.unhealthy += 1
       issues.add('STORY_METADATA_INVALID', 'error')
       continue
@@ -623,6 +682,8 @@ async function inspectCharacters(
   scanBudget: ScanBudget,
   inspectedJson: Map<string, ReadJsonResult['status']>,
   verifiedDirs: Set<string>,
+  presentCardFiles: Set<string>,
+  knownStories: Map<string, DiscoveredStory>,
 ): Promise<void> {
   const draftsBefore = stats.characters.drafts
   let entries
@@ -661,6 +722,7 @@ async function inspectCharacters(
       stats.characters.uninspected += 1
       continue
     }
+    if (card.status !== 'missing' && card.status !== 'unsafe') presentCardFiles.add(caseIdentity(entry.name))
     let healthy = card.status === 'ok' && isRecord(card.value) && typeof card.value.name === 'string' && card.value.name.length > 0
     if (!healthy) issues.add(card.status === 'oversized' ? 'CHARACTER_METADATA_TOO_LARGE' : 'CHARACTER_METADATA_INVALID', 'error')
 
@@ -681,12 +743,278 @@ async function inspectCharacters(
       issues.add('CHARACTER_ARCHIVE_MARKER_INVALID', 'error')
     }
 
+    if (!budget.exhausted) {
+      const avatar = await inspectAvatarPng(`${cardRoot}/card.png`, budget)
+      if (avatar === 'invalid') issues.add('CHARACTER_AVATAR_INVALID', 'warning')
+    }
+
     if (healthy) stats.characters.healthy += 1
     else stats.characters.unhealthy += 1
     await inspectWalRoot(`${cardRoot}/state/wal`, stats.wal, issues, budget, scanBudget, inspectedJson, verifiedDirs)
-    await inspectStories(cardRoot, stats, issues, budget, scanBudget, inspectedJson, verifiedDirs)
+    await inspectStories(entry.name, cardRoot, stats, issues, budget, scanBudget, inspectedJson, verifiedDirs, knownStories)
   }
   if (stats.characters.drafts > draftsBefore) issues.add('CHARACTER_DRAFT_PRESENT', 'info', stats.characters.drafts - draftsBefore)
+}
+
+type SharedAssetDirectory = 'library/presets' | 'personas' | 'library/lorebooks'
+
+/**
+ * 复用与离线备份一致的会话绑定与引用检查：所有结果仅汇总脱敏问题码与计数，不泄露会话/资产 ID。
+ * 严重结构损坏（绑定损坏/串剧情/缺角色/缺剧情）记为 error；删除共享预设/人设/世界书造成的悬空引用记为 warning，
+ * 避免正常 UI 删除共享资产后永久锁死离线备份。
+ */
+async function inspectSessions(
+  paths: TavernPaths,
+  directories: DoctorReport['storage']['directories'],
+  issues: IssueCounter,
+  budget: ReadBudget,
+  scanBudget: ScanBudget,
+  inspectedJson: Map<string, ReadJsonResult['status']>,
+  presentCardFiles: ReadonlySet<string>,
+  knownStories: Map<string, DiscoveredStory>,
+): Promise<void> {
+  if (budget.exhausted || scanBudget.exhausted) return
+  let corruptBindings = 0
+  let enumerationComplete = true
+  if (directories.sessions === 'directory') {
+    let entries: Dirent[]
+    try { entries = await readDirectoryEntries(paths.sessions, scanBudget) } catch {
+      return
+    }
+    if (scanBudget.exhausted) enumerationComplete = false
+
+    const assetDirPaths: Record<SharedAssetDirectory, { root: string; ok: boolean }> = {
+      'library/presets': { root: paths.presets, ok: directories.presets === 'directory' },
+      personas: { root: paths.personas, ok: directories.personas === 'directory' },
+      'library/lorebooks': { root: paths.lorebooks, ok: directories.lorebooks === 'directory' },
+    }
+    const assetListCache = new Map<SharedAssetDirectory, Array<{ fullPath: string; fileIdKey: string }>>()
+    const assetMapCache = new Map<SharedAssetDirectory, Map<string, string>>()
+    const candidateCache = new Map<string, { primary: string | null; sourceId: string | null; lorebookId: string | null } | null>()
+    const resolvedAssetCache = new Map<string, string | null>()
+    const field = (raw: Record<string, unknown>, key: string): string | null => {
+      const value = raw[key]
+      return typeof value === 'string' && value.trim().length > 0 ? value : null
+    }
+    const loadAssetDir = async (dir: SharedAssetDirectory): Promise<{ list: Array<{ fullPath: string; fileIdKey: string }>; byKey: Map<string, string> }> => {
+      const cachedList = assetListCache.get(dir)
+      const cachedMap = assetMapCache.get(dir)
+      if (cachedList && cachedMap) return { list: cachedList, byKey: cachedMap }
+      const list: Array<{ fullPath: string; fileIdKey: string }> = []
+      const byKey = new Map<string, string>()
+      const info = assetDirPaths[dir]
+      if (info.ok && !scanBudget.exhausted) {
+        try {
+          const dirEntries = await readDirectoryEntries(info.root, scanBudget)
+          for (const item of dirEntries) {
+            if (item.isSymbolicLink() || !item.isFile() || !/\.json$/i.test(item.name)) continue
+            const fileIdKey = caseIdentity(item.name.slice(0, -5))
+            const fullPath = join(info.root, item.name)
+            list.push({ fullPath, fileIdKey })
+            if (!byKey.has(fileIdKey)) byKey.set(fileIdKey, fullPath)
+          }
+        } catch {
+          // 资产目录读取失败交由通用文件树扫描报错
+        }
+      }
+      assetListCache.set(dir, list)
+      assetMapCache.set(dir, byKey)
+      return { list, byKey }
+    }
+    const parseCandidate = async (
+      fullPath: string,
+      dir: SharedAssetDirectory,
+    ): Promise<{ primary: string | null; sourceId: string | null; lorebookId: string | null } | null> => {
+      if (candidateCache.has(fullPath)) return candidateCache.get(fullPath) ?? null
+      const maxBytes = dir === 'personas' ? MAX_JSON_BYTES : MAX_STORED_CARD_JSON_BYTES
+      const read = await readBoundedJson(fullPath, maxBytes, budget, inspectedJson)
+      if (read.status === 'budget') return null
+      const parsed = read.status === 'ok' && isRecord(read.value)
+        ? {
+            primary: field(read.value, 'identifier') ?? field(read.value, 'id') ?? field(read.value, 'name'),
+            sourceId: field(read.value, 'sourceId'),
+            lorebookId: dir === 'personas' ? field(read.value, 'lorebookId') : null,
+          }
+        : null
+      candidateCache.set(fullPath, parsed)
+      return parsed
+    }
+    const resolveAsset = async (dir: SharedAssetDirectory, id: string): Promise<string | null> => {
+      const cacheKey = `${dir}\0${id}`
+      if (resolvedAssetCache.has(cacheKey)) return resolvedAssetCache.get(cacheKey) ?? null
+      const { list, byKey } = await loadAssetDir(dir)
+      if (scanBudget.exhausted) return null
+      const safe = safeAssetFileId(id)
+      const safeKey = caseIdentity(safe)
+      if (safe === id) {
+        const direct = byKey.get(safeKey) ?? null
+        resolvedAssetCache.set(cacheKey, direct)
+        return direct
+      }
+      const prefixKey = `${safeKey}-`
+      let matchedPath: string | null = null
+      let matches = 0
+      let fallbackPath: string | null = null
+      for (const { fullPath, fileIdKey } of list) {
+        if (fileIdKey !== safeKey && (!fileIdKey.startsWith(prefixKey) || !/^\d+$/.test(fileIdKey.slice(prefixKey.length)))) continue
+        const parsed = await parseCandidate(fullPath, dir)
+        if (budget.exhausted) return null
+        if (!parsed) continue
+        const identities = [parsed.sourceId, parsed.primary].filter((v): v is string => v !== null)
+        if (identities.some(v => v === id)) {
+          matches += 1
+          matchedPath = fullPath
+        } else if (fileIdKey === safeKey && identities.length === 0) {
+          fallbackPath = fullPath
+        }
+      }
+      const resolved = matches === 1 ? matchedPath : matches === 0 ? fallbackPath : null
+      resolvedAssetCache.set(cacheKey, resolved)
+      return resolved
+    }
+
+    for (const entry of entries) {
+      if (budget.exhausted || scanBudget.exhausted) { enumerationComplete = false; break }
+      if (!/\.json$/i.test(entry.name)) continue
+      if (entry.isSymbolicLink() || !entry.isFile()) {
+        corruptBindings += 1
+        issues.add('BINDING_INVALID', 'error')
+        continue
+      }
+      const bindingPath = join(paths.sessions, entry.name)
+      const read = await readBoundedJson(bindingPath, 1024 * 1024, budget, inspectedJson)
+      if (read.status === 'budget') { enumerationComplete = false; break }
+      if (read.status !== 'ok') {
+        corruptBindings += 1
+        issues.add('BINDING_INVALID', 'error')
+        continue
+      }
+      let binding: ReturnType<typeof parseSessionBinding>
+      try { binding = parseSessionBinding(read.value) } catch {
+        corruptBindings += 1
+        issues.add('BINDING_INVALID', 'error')
+        continue
+      }
+      const expectedName = `${binding.sessionId.replace(/[^A-Za-z0-9_.-]/g, '_')}.json`
+      if (caseIdentity(expectedName) !== caseIdentity(entry.name)) issues.add('BINDING_IDENTITY_INVALID', 'error')
+      if (!presentCardFiles.has(caseIdentity(binding.cardId))) {
+        issues.add('BINDING_CARD_MISSING', 'error')
+      } else if (binding.storyId) {
+        const story = knownStories.get(caseIdentity(`${binding.cardId}/${binding.storyId}`))
+        if (!story) issues.add('BINDING_STORY_MISSING', 'error')
+        else {
+          story.bound = true
+          if (story.sessionId !== binding.sessionId) issues.add('BINDING_STORY_IDENTITY_INVALID', 'error')
+        }
+      } else {
+        const legacy = knownStories.get(caseIdentity(`${binding.cardId}/${legacyStoryId(binding.sessionId)}`))
+        if (legacy) legacy.bound = true
+      }
+
+      if (binding.presetId) {
+        const found = await resolveAsset('library/presets', binding.presetId)
+        if (budget.exhausted || scanBudget.exhausted) { enumerationComplete = false; break }
+        if (!found) issues.add('BINDING_ASSET_MISSING', 'warning')
+      }
+      let personaLorebookId: string | null = null
+      if (binding.personaId) {
+        const personaPath = await resolveAsset('personas', binding.personaId)
+        if (budget.exhausted || scanBudget.exhausted) { enumerationComplete = false; break }
+        if (!personaPath) {
+          issues.add('BINDING_ASSET_MISSING', 'warning')
+        } else {
+          const parsedPersona = await parseCandidate(personaPath, 'personas')
+          if (budget.exhausted) { enumerationComplete = false; break }
+          personaLorebookId = parsedPersona?.lorebookId ?? null
+        }
+      }
+      const loreIds = new Set([...binding.lorebookIds, ...(binding.characterLorebookIds ?? []), binding.characterLorebookId, personaLorebookId])
+      for (const id of loreIds) {
+        if (!id || id === '@dsh/character') continue
+        const found = await resolveAsset('library/lorebooks', id)
+        if (budget.exhausted || scanBudget.exhausted) { enumerationComplete = false; break }
+        if (!found) issues.add('BINDING_ASSET_MISSING', 'warning')
+      }
+    }
+  }
+  if (enumerationComplete && !budget.exhausted && !scanBudget.exhausted && corruptBindings === 0
+    && (directories.sessions === 'directory' || directories.sessions === 'missing')) {
+    let orphaned = 0
+    for (const story of knownStories.values()) {
+      if (story.sessionId !== null && !story.bound) orphaned += 1
+    }
+    if (orphaned > 0) issues.add('STORY_ORPHANED', 'info', orphaned)
+  }
+}
+
+/** 扫描中断遗留的单会话迁移标记；该标记会阻断对应会话打开与整库离线备份。 */
+async function inspectSessionImports(
+  dataRoot: string,
+  issues: IssueCounter,
+  scanBudget: ScanBudget,
+  verifiedDirs: Set<string>,
+): Promise<void> {
+  if (scanBudget.exhausted) return
+  const importsRoot = join(dataRoot, 'session-imports')
+  const status = await probeDirectory(importsRoot, dataRoot, verifiedDirs)
+  if (status !== 'directory') return
+  let entries: Dirent[]
+  try { entries = await readDirectoryEntries(importsRoot, scanBudget) } catch { return }
+  let pending = 0
+  for (const entry of entries) {
+    if (!entry.isSymbolicLink() && entry.isFile() && /^[a-f0-9]{64}\.json$/i.test(entry.name)) pending += 1
+  }
+  if (pending > 0) issues.add('SESSION_IMPORT_INCOMPLETE', 'error', pending)
+}
+
+/** 扫描编辑器暂存草稿，按运行时 2 MiB 上限与信封格式检查，不重复计费读取预算。 */
+async function inspectEditorDrafts(
+  dataRoot: string,
+  issues: IssueCounter,
+  budget: ReadBudget,
+  scanBudget: ScanBudget,
+  inspectedJson: Map<string, ReadJsonResult['status']>,
+  verifiedDirs: Set<string>,
+): Promise<void> {
+  if (budget.exhausted || scanBudget.exhausted) return
+  const draftsRoot = join(dataRoot, 'editor-drafts')
+  const status = await probeDirectory(draftsRoot, dataRoot, verifiedDirs)
+  if (status !== 'directory') return
+  let owners: Dirent[]
+  try { owners = await readDirectoryEntries(draftsRoot, scanBudget) } catch { return }
+  for (const owner of owners) {
+    if (budget.exhausted || scanBudget.exhausted) break
+    if (owner.isSymbolicLink() || !owner.isDirectory()) continue
+    const ownerDir = join(draftsRoot, owner.name)
+    let files: Dirent[]
+    try { files = await readDirectoryEntries(ownerDir, scanBudget) } catch { continue }
+    for (const file of files) {
+      if (budget.exhausted || scanBudget.exhausted) break
+      if (file.isSymbolicLink() || !file.isFile() || !file.name.toLowerCase().endsWith('.json')) continue
+      const filePath = join(ownerDir, file.name)
+      let statInfo
+      try { statInfo = await lstat(filePath) } catch { continue }
+      if (statInfo.isSymbolicLink() || !statInfo.isFile()) continue
+      if (statInfo.size > EDITOR_DRAFT_MAX_BYTES) {
+        issues.add('EDITOR_DRAFT_TOO_LARGE', 'warning')
+        continue
+      }
+      const read = await readBoundedJson(filePath, EDITOR_DRAFT_MAX_BYTES, budget, inspectedJson)
+      if (read.status === 'budget') break
+      if (read.status === 'oversized') {
+        issues.add('EDITOR_DRAFT_TOO_LARGE', 'warning')
+        continue
+      }
+      if (read.status !== 'ok') {
+        issues.add('EDITOR_DRAFT_INVALID', 'warning')
+        continue
+      }
+      const rec = read.value
+      if (!isRecord(rec) || rec.version !== 1 || !validDate(rec.updatedAt) || !isRecord(rec.value)) {
+        issues.add('EDITOR_DRAFT_INVALID', 'warning')
+      }
+    }
+  }
 }
 
 /** 特定剧情/角色/共享库大文件与运行时各自的持久化上限对齐，避免合法大快照在诊断与离线备份时误报超限。 */
@@ -841,17 +1169,18 @@ function emptyStatistics(): DoctorReport['statistics'] {
 
 /** 执行一次无副作用诊断；即使目录损坏，返回值也只包含固定字段、状态枚举与计数。 */
 export async function runDoctor(options: RunDoctorOptions = {}): Promise<DoctorReport> {
+  const opts: RunDoctorOptions = typeof options === 'string' ? { home: options } : options
   const issues = new IssueCounter()
-  const nodeVersion = safeVersion(options.nodeVersion ?? process.versions.node)
+  const nodeVersion = safeVersion(opts.nodeVersion ?? process.versions.node)
   const nodeMajor = Number.parseInt(nodeVersion.split('.')[0] ?? '', 10)
   const nodeSupported = Number.isFinite(nodeMajor) && nodeMajor >= REQUIRED_NODE_MAJOR
   if (!nodeSupported) issues.add('NODE_VERSION_UNSUPPORTED', 'error')
 
   const packageInfo = await ownPackageInfo()
-  const pluginVersion = safeVersion(options.pluginVersion ?? packageInfo.pluginVersion)
+  const pluginVersion = safeVersion(opts.pluginVersion ?? packageInfo.pluginVersion)
   if (pluginVersion === 'unknown') issues.add('PLUGIN_VERSION_UNKNOWN', 'warning')
-  const dshExpectedVersion = safeHostRange(options.dshExpectedVersion ?? packageInfo.dshExpectedVersion)
-  const dshInstalledVersion = safeVersion(options.dshInstalledVersion ?? await installedDshVersion())
+  const dshExpectedVersion = safeHostRange(opts.dshExpectedVersion ?? packageInfo.dshExpectedVersion)
+  const dshInstalledVersion = safeVersion(opts.dshInstalledVersion ?? await installedDshVersion())
   const dshCompatible = areDshVersionsCompatible(dshInstalledVersion, dshExpectedVersion)
   if (dshExpectedVersion === 'unknown') issues.add('DSH_EXPECTED_VERSION_UNKNOWN', 'warning')
   if (dshInstalledVersion === 'unknown') issues.add('DSH_INSTALLED_VERSION_UNKNOWN', 'warning')
@@ -859,16 +1188,16 @@ export async function runDoctor(options: RunDoctorOptions = {}): Promise<DoctorR
     issues.add('DSH_VERSION_INCOMPATIBLE', 'error')
   }
 
-  const requestedBudget = options.readBudgetBytes
+  const requestedBudget = opts.readBudgetBytes
   const budgetLimit = typeof requestedBudget === 'number' && Number.isSafeInteger(requestedBudget) && requestedBudget > 0
     ? Math.min(requestedBudget, MAX_TOTAL_READ_BYTES) : MAX_TOTAL_READ_BYTES
   const budget: ReadBudget = { remaining: budgetLimit, exhausted: false }
-  const requestedEntries = options.scanEntryLimit
+  const requestedEntries = opts.scanEntryLimit
   const entryLimit = typeof requestedEntries === 'number' && Number.isSafeInteger(requestedEntries) && requestedEntries > 0
     ? Math.min(requestedEntries, MAX_SCANNED_ENTRIES) : MAX_SCANNED_ENTRIES
   const scanBudget: ScanBudget = { remaining: entryLimit, exhausted: false }
 
-  const home = resolveDshHome(options.home, options.env ?? process.env)
+  const home = resolveDshHome(opts.home, opts.env ?? process.env)
   const homeDisplay = dshHomeDisplay(home) as DoctorReport['storage']['home']
   const paths = tavernPaths(home)
   const homeStatus = await probeDirectory(home)
@@ -906,7 +1235,14 @@ export async function runDoctor(options: RunDoctorOptions = {}): Promise<DoctorR
       else if (directories[name] !== 'directory') issues.add('STANDARD_DIRECTORY_INVALID', 'error')
     }
     const inspectedJson = new Map<string, ReadJsonResult['status']>()
-    if (directories.characters === 'directory') await inspectCharacters(paths.characters, statistics, issues, budget, scanBudget, inspectedJson, verifiedDirs)
+    const presentCardFiles = new Set<string>()
+    const knownStories = new Map<string, DiscoveredStory>()
+    if (directories.characters === 'directory') {
+      await inspectCharacters(paths.characters, statistics, issues, budget, scanBudget, inspectedJson, verifiedDirs, presentCardFiles, knownStories)
+    }
+    await inspectSessions(paths, directories, issues, budget, scanBudget, inspectedJson, presentCardFiles, knownStories)
+    await inspectSessionImports(paths.root, issues, scanBudget, verifiedDirs)
+    await inspectEditorDrafts(paths.root, issues, budget, scanBudget, inspectedJson, verifiedDirs)
     await inspectFiles(paths.root, statistics.files, issues, budget, scanBudget, inspectedJson)
   }
   if (scanBudget.exhausted) {
@@ -935,6 +1271,49 @@ export async function runDoctor(options: RunDoctorOptions = {}): Promise<DoctorR
   }
 }
 
+/** 仅包含静态脱敏修复建议；绝不拼接路径、文件名、角色名或对话正文。 */
+const ISSUE_GUIDANCE: Readonly<Record<string, string>> = {
+  NODE_VERSION_UNSUPPORTED: 'Upgrade Node.js to >= 24.0.0 before running dsh-liketavern.',
+  DSH_VERSION_INCOMPATIBLE: 'Check docs/HOST_COMPATIBILITY.md and align dsh / dsh-liketavern versions.',
+  DATA_ROOT_NOT_INITIALIZED: 'Start dsh with dsh-liketavern enabled once to initialize the plugin data directory.',
+  DATA_ROOT_LINK_SKIPPED: 'Replace the symlink/junction at DSH_HOME or dsh-tavern with a real directory.',
+  DATA_ROOT_UNREADABLE: 'Check filesystem permissions on the dsh-tavern data directory.',
+  STANDARD_DIRECTORY_MISSING: 'Restart dsh with dsh-liketavern enabled to recreate missing standard directories.',
+  STANDARD_DIRECTORY_INVALID: 'Remove or replace the non-directory or link occupying a standard dsh-tavern directory.',
+  CHARACTER_ID_INVALID: 'Remove or rename invalid directories under dsh-tavern/characters/.',
+  CHARACTER_METADATA_INVALID: 'Restore the damaged character card.json from a verified offline backup.',
+  CHARACTER_METADATA_TOO_LARGE: 'Character card.json exceeds storage limit; restore a smaller valid card.json.',
+  CHARACTER_ARCHIVE_MARKER_INVALID: 'Restore or remove the corrupt .archive.json marker in the affected character directory.',
+  CHARACTER_AVATAR_INVALID: 'Replace or re-import the corrupt card.png avatar file with a valid PNG image.',
+  CHARACTER_LINK_SKIPPED: 'Remove symlinks/junctions inside dsh-tavern/characters/.',
+  CHARACTER_DRAFT_PRESENT: 'Interrupted character import/prepare draft detected; restart dsh to sweep stale drafts.',
+  STORY_METADATA_INVALID: 'Restore the damaged story.json from a verified offline backup.',
+  STORY_METADATA_TOO_LARGE: 'story.json exceeds size limit; restore from a verified offline backup.',
+  STORY_LINK_SKIPPED: 'Remove symlinks/junctions inside character stories directories.',
+  STORY_DRAFT_PRESENT: 'Interrupted story preparation draft detected; restart dsh to sweep stale drafts.',
+  STORY_ORPHANED: 'Unbound story directories remain (e.g. after deleting host chats); review in character delete plan if reclaiming space.',
+  WAL_INVALID: 'Corrupt WAL floor or recovery marker detected; restore the affected story from an offline backup.',
+  WAL_FLOOR_MISSING: 'WAL coverage references a missing floor directory; restore the complete story WAL from backup.',
+  WAL_COVERAGE_INVALID: 'state/wal-coverage.json is invalid; restore the story from a verified offline backup.',
+  WAL_LINK_SKIPPED: 'Remove symlinks/junctions inside story state/wal directories.',
+  WAL_UNCOMMITTED: 'Uncommitted WAL floor detected; let dsh finish or roll back the interrupted turn.',
+  WAL_RECOVERY_IN_PROGRESS: 'An interrupted WAL rollback is locking story writes; retry rollback or reset the rollback cursor in the Memory panel before creating backups.',
+  BINDING_INVALID: 'A session binding JSON in dsh-tavern/sessions/ is corrupt or malformed; re-bind the session or restore from backup.',
+  BINDING_IDENTITY_INVALID: 'A session binding filename does not match its internal sessionId; restore or remove the mismatched binding.',
+  BINDING_CARD_MISSING: 'A session binding points to a missing character; reopen the session to self-heal or clear the stale binding.',
+  BINDING_STORY_MISSING: 'A session binding points to a missing story directory; restore the story from backup or clear the binding.',
+  BINDING_STORY_IDENTITY_INVALID: 'A session binding points to a story owned by another session; restore from backup before resuming writes.',
+  BINDING_ASSET_MISSING: 'A session references a deleted preset, persona, or lorebook; reselect assets in the session header (backups remain allowed).',
+  SESSION_IMPORT_INCOMPLETE: 'An interrupted single-session import marker exists in dsh-tavern/session-imports/; retry import with the same archive and workspace.',
+  EDITOR_DRAFT_INVALID: 'A saved editor draft in dsh-tavern/editor-drafts/ is malformed; discard or overwrite it from the editor UI.',
+  EDITOR_DRAFT_TOO_LARGE: 'A saved editor draft exceeds the 2 MiB runtime limit; clear the oversized draft from the editor UI or editor-drafts/.',
+  JSON_SYNTAX_INVALID: 'One or more JSON files have invalid syntax; restore affected files from a verified backup.',
+  JSON_VALIDATION_LIMIT_EXCEEDED: 'One or more JSON files exceed the doctor scan size limit; inspect manually.',
+  FILE_LINK_SKIPPED: 'Symlinks inside dsh-tavern were skipped; remove unexpected links before offline backup.',
+  FILE_SCAN_LIMIT_REACHED: 'Directory entry scan limit reached; some entries were not inspected.',
+  READ_BUDGET_EXCEEDED: 'Total read budget reached; some files were not inspected.',
+}
+
 export function formatDoctorText(report: DoctorReport): string {
   const { files, characters, stories, wal } = report.statistics
   const lines = [
@@ -947,7 +1326,11 @@ export function formatDoctorText(report: DoctorReport): string {
     `stories: directories=${stories.directories} healthy=${stories.healthy} unhealthy=${stories.unhealthy} uninspected=${stories.uninspected} drafts=${stories.drafts} unsafe=${stories.unsafeEntries}`,
     `wal: roots=${wal.roots} floors=${wal.floors} active=${wal.active} rolled-back=${wal.rolledBack} healthy=${wal.healthy} unhealthy=${wal.unhealthy} uninspected=${wal.uninspected} committed=${wal.committed} pending=${wal.pending} unsafe=${wal.unsafeEntries}`,
   ]
-  for (const issue of report.issues) lines.push(`issue: severity=${issue.severity} code=${issue.code} count=${issue.count}`)
+  for (const issue of report.issues) {
+    lines.push(`issue: severity=${issue.severity} code=${issue.code} count=${issue.count}`)
+    const hint = ISSUE_GUIDANCE[issue.code]
+    if (hint) lines.push(`  hint: ${hint}`)
+  }
   return lines.join('\n') + '\n'
 }
 
@@ -965,8 +1348,8 @@ export function parseDoctorArguments(args: string[]): CliArguments {
     if (arg === '--json') parsed.json = true
     else if (arg === '--help' || arg === '-h') parsed.help = true
     else if (arg === '--version' || arg === '-v') parsed.version = true
-    else if (arg === '--home') {
-      const value = args[++index]
+    else if (arg === '--home' || arg.startsWith('--home=')) {
+      const value = arg === '--home' ? args[++index] : arg.slice('--home='.length)
       if (!value || value.startsWith('-') || parsed.home !== undefined) throw new Error('invalid arguments')
       parsed.home = value
     } else throw new Error('invalid arguments')
@@ -974,7 +1357,21 @@ export function parseDoctorArguments(args: string[]): CliArguments {
   return parsed
 }
 
-const HELP = `Usage: dsh-tavern-doctor [--json] [--home <path>]\n\nRead-only options:\n  --json         Emit stable JSON instead of text\n  --home <path>  Inspect an explicit DSH home (the path is never printed)\n  --version      Print the plugin version\n  --help         Show this help\n\nThis command never repairs or modifies data.\n`
+const HELP = `Usage: dsh-tavern-doctor [--json] [--home <path>]
+
+Read-only options:
+  --json               Emit stable JSON instead of text
+  --home <path>        Inspect an explicit DSH home (also accepts --home=<path>; never printed)
+  --version | -v       Print the plugin version
+  --help | -h          Show this help
+
+Exit codes:
+  0  Healthy (no error-severity issues; info/warning issues may still be reported)
+  1  One or more error-severity issues found
+  2  Invalid CLI arguments or unexpected diagnosis failure
+
+This command never repairs or modifies data.
+`
 
 /** CLI 只返回 0（健康）、1（发现错误）或 2（参数/运行失败），失败详情不回显私人路径。 */
 export async function doctorMain(
@@ -986,7 +1383,9 @@ export async function doctorMain(
 ): Promise<number> {
   let parsed: CliArguments
   try { parsed = parseDoctorArguments(args) } catch {
-    io.err('dsh-liketavern doctor: invalid arguments; use --help\n')
+    io.err(args.includes('--json')
+      ? JSON.stringify({ schemaVersion: 1, ok: false, code: 'INVALID_ARGUMENTS' }) + '\n'
+      : 'dsh-liketavern doctor: invalid arguments; use --help\n')
     return 2
   }
   if (parsed.help) {
@@ -1002,7 +1401,9 @@ export async function doctorMain(
     io.out(parsed.json ? JSON.stringify(report, null, 2) + '\n' : formatDoctorText(report))
     return report.ok ? 0 : 1
   } catch {
-    io.err('dsh-liketavern doctor: diagnosis failed\n')
+    io.err(parsed.json
+      ? JSON.stringify({ schemaVersion: 1, ok: false, code: 'DIAGNOSIS_FAILED' }) + '\n'
+      : 'dsh-liketavern doctor: diagnosis failed\n')
     return 2
   }
 }

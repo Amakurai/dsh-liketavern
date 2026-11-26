@@ -13,6 +13,7 @@ export declare const zh: {
     readonly 'lorebooks.fromCharacter': "来自角色「{name}」";
     readonly 'lorebooks.fromCharacterWithCount': "来自角色「{name}」 · {count} 条";
     readonly 'lorebooks.libraryFileSub': "独立世界书文件 · JSON";
+    readonly 'lorebooks.libraryFileSubWithCount': "独立世界书文件 · {count} 条";
     readonly 'lorebooks.editEntries': "编辑条目";
     readonly 'lorebooks.exportJson': "导出 JSON";
     readonly 'lorebooks.deleteBook': "删除世界书";

@@ -17,6 +17,14 @@ import { LorebookEditor, type LorebookTarget } from './lorebookEditor.js'
 
 type Opened = { target: LorebookTarget; entries: WorldInfoEntry[]; revision?: string }
 
+/** 按宿主连接缓存已知的独立世界书条目数（来自导入/新建/打开/保存），不额外增加列表加载时的 RPC。 */
+const libraryEntryCounts = new WeakMap<TavernRemote, Map<string, number>>()
+function countsFor(remote: TavernRemote): Map<string, number> {
+  let map = libraryEntryCounts.get(remote)
+  if (!map) { map = new Map(); libraryEntryCounts.set(remote, map) }
+  return map
+}
+
 export function LorebooksSection(props: { remote: TavernRemote }) {
   return <PersistentEditor remote={props.remote} scope="lorebooks"><LorebooksSectionContent {...props} /></PersistentEditor>
 }
@@ -27,6 +35,13 @@ function LorebooksSectionContent(props: { remote: TavernRemote }) {
   const chars = useLoader(() => remote.listCharacters({}), [remote])
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [, setCountTick] = useState(0)
+  const rememberLibraryCount = (name: string, count: number | null) => {
+    const map = countsFor(remote)
+    if (count === null) map.delete(name)
+    else map.set(name, count)
+    setCountTick((n) => n + 1)
+  }
   const pending = useRef(false)
   const alive = useRef(true)
   const [opening, setOpening] = useState<string | null>(null)
@@ -90,10 +105,12 @@ function LorebooksSectionContent(props: { remote: TavernRemote }) {
   const openLibrary = (name: string) => openBook(name, async () => {
     const r = await remote.getLorebook({ name })
     if (!r.ok) throw new Error(r.error.message)
+    const entries = parseLorebook(r.value.json, { source: 'global', sourceRef: name })
+    rememberLibraryCount(name, entries.length)
     return {
       target: { kind: 'library', name },
       revision: r.value.revision,
-      entries: parseLorebook(r.value.json, { source: 'global', sourceRef: name }),
+      entries,
     }
   })
 
@@ -120,6 +137,7 @@ function LorebooksSectionContent(props: { remote: TavernRemote }) {
       const err = errOf(r)
       if (err) setError(err)
       else {
+        rememberLibraryCount(toDelete, null)
         if (opened?.target.kind === 'library' && opened.target.name === toDelete) setOpened(null)
         setToDelete(null)
         reload()
@@ -162,6 +180,7 @@ function LorebooksSectionContent(props: { remote: TavernRemote }) {
       const r = await remote.importLorebook({ name, json })
       if (!r.ok) setError(r.error.message)
       else {
+        rememberLibraryCount(r.value.name, r.value.entryCount)
         toast.show(t('lorebooks.imported', { name: r.value.name, count: r.value.entryCount }))
         reload()
       }
@@ -184,6 +203,7 @@ function LorebooksSectionContent(props: { remote: TavernRemote }) {
           setCreateError(r.error.message)
           return
         }
+        rememberLibraryCount(r.value.name, 0)
         setCreating(false)
         setNewName('')
         reload()
@@ -207,6 +227,7 @@ function LorebooksSectionContent(props: { remote: TavernRemote }) {
           onClose={() => setOpened(null)}
           onSaved={(savedEntries, nextRevision) => {
             if (opened.target.kind === 'character') notifyCharacterChanged(opened.target.cardId)
+            else if (opened.target.kind === 'library') rememberLibraryCount(opened.target.name, savedEntries.length)
             setOpened((prev) => prev ? { ...prev, entries: savedEntries, revision: nextRevision ?? prev.revision } : null)
             toast.show(t('lorebooks.saved', { name: opened.target.name }))
             chars.reload()
@@ -333,7 +354,11 @@ function LorebooksSectionContent(props: { remote: TavernRemote }) {
                       <span className="dsh-tavern-tileName">{name}</span>
                       <Badge>{t('lorebooks.badgeLibrary')}</Badge>
                     </span>
-                    <span className="dsh-tavern-tileSub">{t('lorebooks.libraryFileSub')}</span>
+                    <span className="dsh-tavern-tileSub">
+                      {countsFor(remote).has(name)
+                        ? t('lorebooks.libraryFileSubWithCount', { count: countsFor(remote).get(name)! })
+                        : t('lorebooks.libraryFileSub')}
+                    </span>
                   </span>
                 </button>
                 <div className="dsh-tavern-tileActions">

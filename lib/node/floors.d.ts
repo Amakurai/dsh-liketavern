@@ -172,6 +172,20 @@ export declare function enterGreetingConversation({ ctx, state }: FloorDeps, ses
  */
 export declare function ensureGreeting({ ctx, state }: FloorDeps, sessionId: string): Promise<boolean>;
 /**
+ * 调用方已按 storyRoot → sessions 顺序持锁时的开场白切换实现；
+ * 供 `swipeGreeting` 与已持锁的 `editHelperMessages` 共用，避免放锁重入制造 TOCTOU 竞态窗口。
+ */
+export declare function swipeGreetingLocked({ ctx, state }: FloorDeps, source: Session, binding: SessionBinding, index: number, options: {
+    verifySource: () => Promise<void>;
+    beforePublish?: (binding: SessionBinding) => void;
+    expectedVariantCount?: number;
+    expectedGreetingText?: string;
+}): Promise<{
+    childSessionId: string;
+    index: number;
+    title: string;
+}>;
+/**
  * 开场白 swipe：用指定变体编成 seed 后 fork。不要 create 空会话再 enterGreetingConversation——
  * 那会和刚启动的 agent loop 抢 append，打开子会话历史会 Failed to fetch。
  * 会话已有后续楼层时拒绝（swipe 只适用于开场白还是最后一条消息的场景）。

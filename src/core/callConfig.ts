@@ -36,8 +36,10 @@ export function pickReasoningEffort(
   defaultEffort: string | undefined,
   current: string | undefined,
 ): string | undefined {
+  // 明确公布空档位列表表示模型不支持任何 reasoningEffort，不能沿用请求头里遗留的旧档位。
+  if (efforts !== undefined && efforts.length === 0) return undefined
   const ids = efforts?.map((e) => e.id) ?? []
-  const advertised = (id: string) => ids.length === 0 || ids.includes(id)
+  const advertised = (id: string) => efforts === undefined || ids.includes(id)
 
   if (thinking === 'disabled') {
     return ids.find((id) => isOffEffort(id))
@@ -53,8 +55,8 @@ export function pickReasoningEffort(
 
 /**
  * 三级挑选 reasoningEffort：agent/request 与 impersonate 共用这一处，别再各写一份。
- * ① 模型公布档 → `pickReasoningEffort`；
- * ② 公布档给不出结果、且深度思考关闭的 deepseek-official → `off`（元数据解析失败时也要关得掉）；
+ * ① 模型公布档 → `pickReasoningEffort`；模型已明确公布档位（含空数组或仅含非 off 档位）时，不强发未公布的 off 或陈旧档位；
+ * ② 元数据不可用（`reasoning?.efforts === undefined`）且深度思考关闭的 deepseek-official → `off`（元数据解析失败时仍可关掉思考）；
  * ③ 其余按「无公布信息」自动挑选（关闭则不瞎填）。
  * 放在 core：本函数只做纯挑选、绝不抛错；llm 服务与可能抛错的模型元数据解析留在各自的 node 调用点，
  * 解析失败就传 `undefined` 的 reasoning 进来。
@@ -67,6 +69,7 @@ export function resolveTavernReasoningEffort(
 ): string | undefined {
   const picked = pickReasoningEffort(thinking, reasoning?.efforts, reasoning?.defaultEffort, current)
   if (picked !== undefined) return picked
+  if (reasoning?.efforts !== undefined) return undefined
   if (thinking === 'disabled' && provider !== undefined && DEEPSEEK_OFFICIAL_PROVIDERS.has(provider)) return 'off'
   return pickReasoningEffort(thinking, undefined, undefined, current)
 }

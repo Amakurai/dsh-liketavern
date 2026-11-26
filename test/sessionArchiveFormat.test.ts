@@ -1,8 +1,9 @@
 /** 单会话迁移格式校验：真实宿主事件、剧情归属、跨平台路径与文件摘要的失败边界。 */
 import { Context } from '@deepseek-ai/cordis'
 import { SessionId, SessionStore } from '@deepseek-ai/dsh-session'
+import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { describe, expect, it } from 'vitest'
-import { archiveFile, parseSessionArchive, sealSessionArchive } from '../src/node/sessionArchiveFormat.js'
+import { archiveFile, parseSessionArchive, sealSessionArchive, SESSION_ARCHIVE_MAX_FILES } from '../src/node/sessionArchiveFormat.js'
 
 function fixture() {
   const ctx = new Context()
@@ -51,8 +52,34 @@ describe('单会话迁移文件', () => {
   })
   it('整份清单摘要能发现整条文件记录或元数据被删除', () => {
     const missing = fixture(); missing.files.splice(2, 1)
-    expect(() => parseSessionArchive(missing)).toThrow()
+    expect(() => parseSessionArchive(missing)).toThrow(/会话迁移文件无效或已损坏.*清单整体校验和不匹配/)
     const changed = fixture(); changed.binding.cardName = '另一个角色'
-    expect(() => parseSessionArchive(changed)).toThrow()
+    expect(() => parseSessionArchive(changed)).toThrow(/会话迁移文件无效或已损坏.*清单整体校验和不匹配/)
+  })
+  it('按原因类别清晰区分版本不兼容、校验和、附件缺失与数量超限，且不泄露私密信息', () => {
+    const badVersion = { ...fixture(), version: 2 }
+    expect(() => parseSessionArchive(badVersion)).toThrow(/会话迁移文件无效或已损坏.*版本不兼容/)
+
+    const badFileDigest = fixture()
+    badFileDigest.files[2]!.sha256 = '0'.repeat(64)
+    expect(() => parseSessionArchive(badFileDigest)).toThrow(/会话迁移文件无效或已损坏.*文件校验和不匹配/)
+
+    const tooMany = { ...fixture(), files: Array.from({ length: SESSION_ARCHIVE_MAX_FILES + 1 }, () => ({})) }
+    expect(() => parseSessionArchive(tooMany)).toThrow(/会话迁移文件无效或已损坏.*文件数量超过.*全量备份/)
+
+    const ctx = new Context()
+    new SessionStore(ctx)
+    const session = ctx.sessions.create(SessionId('session-att'))
+    session.append('user/message', createUserMessage({
+      source: { kind: 'user' },
+      content: [{ type: 'file', attachment: { attachmentId: `sha256:${'a'.repeat(64)}`, bytes: 3, name: 'secret.txt' } }],
+    }), { surfaceOp: 'append' })
+    const missingAtt = fixture()
+    missingAtt.binding.sessionId = session.id
+    missingAtt.session = { header: session.header, inheritedEventCount: 0, events: session.snapshotEvents() }
+    missingAtt.files[1] = archiveFile('story', 'story.json', Buffer.from(JSON.stringify({
+      version: 1, id: missingAtt.binding.storyId, sessionId: session.id, createdAt: new Date(0).toISOString(), migrated: false,
+    })))
+    expect(() => parseSessionArchive(missingAtt)).toThrow(/会话迁移文件无效或已损坏.*缺少会话历史引用的附件/)
   })
 })

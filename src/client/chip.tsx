@@ -566,11 +566,17 @@ function HeaderChipSession(props: HeaderChipProps) {
     })
   }
 
+  const [previewLoading, setPreviewLoading] = useState(false)
   const preview = async () => {
-    const r = await remote.previewPrompt({ sessionId })
-    if (!alive.current) return
-    if (!r.ok) return setError(r.error.message)
-    setPreviewData(r.value)
+    setPreviewLoading(true)
+    try {
+      const r = await remote.previewPrompt({ sessionId })
+      if (!alive.current) return
+      if (!r.ok) return setError(r.error.message)
+      setPreviewData(r.value)
+    } finally {
+      if (alive.current) setPreviewLoading(false)
+    }
   }
 
   const openChatLore = async () => {
@@ -853,7 +859,14 @@ function HeaderChipSession(props: HeaderChipProps) {
                   <Btn disabled={locked || !binding || !canSwipeGreeting} onClick={() => run(() => swipeBy(-1))}>{t('chip.greeting.prev')}</Btn>
                   <Btn disabled={locked || !binding || !canSwipeGreeting} onClick={() => run(() => swipeBy(1))}>{t('chip.greeting.next')}</Btn>
                   <Btn disabled={locked} onClick={() => run(showTriggerLog)}>{t('binding.triggerLog')}</Btn>
-                  <Btn disabled={locked} onClick={() => run(preview)}>{t('binding.preview')}</Btn>
+                  <Btn disabled={locked} aria-busy={previewLoading || undefined} onClick={() => run(preview)}>
+                    {previewLoading ? (
+                      <span className="dsh-tavern-btnLoading">
+                        <span className="dsh-tavern-spinner" aria-hidden="true" />
+                        <span>{t('chip.preview.loading')}</span>
+                      </span>
+                    ) : t('binding.preview')}
+                  </Btn>
                 </div>
               </div>
               </div>

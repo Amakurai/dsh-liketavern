@@ -146,6 +146,7 @@ it('无任务时只关闭开关，不提交无关的未完成宿主 WAL', async 
 
 it('真实模板冻结后失去活动宿主楼层的未收口 prepared 阻止放弃', async () => {
   await initialize(); await start(1, true)
+  await state.saveCharacter(cardId, { description: '<% incvar("runs") %>模板测试' })
   await state.saveBinding({ ...(await state.loadBinding(session.id))!, helperMvu: false })
   await runTavernPipeline({ state, sessionId: session.id, agent: null, mode: 'live', historyOverride: [{ role: 'user', content: '工厂输入' }] })
   expect((await loadTemplateState((await ws()).fs)).generation?.status).toBe('prepared')

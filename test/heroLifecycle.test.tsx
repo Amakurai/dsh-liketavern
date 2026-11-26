@@ -72,14 +72,16 @@ async function pick() {
 }
 function start() { return view!.root.findByType(Btn).props.onClick() }
 
-it('开场白预览采用只读展示正文，互动 HTML 显示提示且不在选择页面执行',async()=>{
+it('开场白预览采用只读展示正文，互动 HTML 显示独立块级提示且不在选择页面执行',async()=>{
   const f=fixture()
   f.renderOutputText.mockResolvedValue(ok({text:'处理后的可见开场白',htmls:['<script>throw Error("不能提前运行")</script>']}))
   await mount(f.node('preview'));await pick()
-  expect(JSON.stringify(view!.toJSON())).toContain('处理后的可见开场白')
+  const quote = view!.root.findByProps({ className: 'dsh-tavern-hero-quote' })
+  const hint = view!.root.findByProps({ className: 'dsh-tavern-hero-interactiveHint' })
+  expect(quote.children.join('')).toBe('处理后的可见开场白')
+  expect(hint.children.join('')).toMatch(/互动卡面|interactive card/)
   expect(JSON.stringify(view!.toJSON())).not.toContain('不能提前运行')
   expect(view!.root.findAllByType('iframe')).toHaveLength(0)
-  expect(JSON.stringify(view!.toJSON())).toMatch(/互动卡面|interactive card/)
   expect(f.renderOutputText).toHaveBeenCalledWith({sessionId:'preview',text:'欢迎'})
   expect(f.ensureGreeting).not.toHaveBeenCalled()
 })

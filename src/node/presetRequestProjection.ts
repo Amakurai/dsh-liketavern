@@ -324,34 +324,32 @@ function applySystemPolicy(messages: readonly Message[], projection: PresetProje
     const grouped: Message[] = []
     const isTavernSystem = (message: Message) => message.role === 'system'
       && 'tavernProjection' in message.source && message.source.tavernProjection === true
-    let index = 0
-    if (projection.messagesApi) {
-      // Messages 协议在首条有效 user/assistant/tool 之前仅采用最后一条 system（跳过 developer 与空消息后直接覆盖前值）：
-      // 将前导区全部 system 合并回宿主首条，与线层一致且避免在预算与字节上限中重复计入整份 SDK。
-      const leadingParts = [plainText(first)]
-      const leadingNonSystem: Message[] = []
-      let leadingBytes = Buffer.byteLength(leadingParts[0]!)
-      index = 1
-      while (index < messages.length) {
-        const candidate = messages[index]!
-        if (candidate.role === 'system') {
-          const text = plainText(candidate)
-          leadingBytes += Buffer.byteLength(text) + 2
-          if (leadingBytes > 16 * 1024 * 1024) throw new Error('Tavern 完整系统提示超过 16 MiB')
-          leadingParts.push(text)
-          index++
-          continue
-        }
-        if (candidate.role === 'developer' || !hasMessagesWireContent(candidate)) {
-          leadingNonSystem.push(candidate)
-          index++
-          continue
-        }
-        break
+    // 首条宿主 system 紧邻的前导 system 之间没有聊天消息，统一合并回宿主首条，
+    // 避免无论 Messages 协议还是非 Messages 协议都在开篇重复发送整份 HOST-TOOLS SDK 并在预算中双计。
+    // Messages 协议在首条有效 user/assistant/tool 之前还会跳过 intervening developer 与线层空消息。
+    const leadingParts = [plainText(first)]
+    const leadingNonSystem: Message[] = []
+    let leadingBytes = Buffer.byteLength(leadingParts[0]!)
+    let index = 1
+    while (index < messages.length) {
+      const candidate = messages[index]!
+      if (candidate.role === 'system') {
+        const text = plainText(candidate)
+        leadingBytes += Buffer.byteLength(text) + 2
+        if (leadingBytes > 16 * 1024 * 1024) throw new Error('Tavern 完整系统提示超过 16 MiB')
+        leadingParts.push(text)
+        index++
+        continue
       }
-      grouped.push(leadingParts.length === 1 ? first : freezeMessage({ ...first,
-        content: [{ type: 'text' as const, text: leadingParts.join('\n\n') }] }), ...leadingNonSystem)
+      if (projection.messagesApi && (candidate.role === 'developer' || !hasMessagesWireContent(candidate))) {
+        leadingNonSystem.push(candidate)
+        index++
+        continue
+      }
+      break
     }
+    grouped.push(leadingParts.length === 1 ? first : freezeMessage({ ...first,
+      content: [{ type: 'text' as const, text: leadingParts.join('\n\n') }] }), ...leadingNonSystem)
     for (; index < messages.length;) {
       const message = messages[index++]!
       if (!isTavernSystem(message)) { grouped.push(message); continue }

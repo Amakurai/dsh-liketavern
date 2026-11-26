@@ -258,7 +258,7 @@ npm test                # 运行完整 Vitest 测试套件
 npm run package:check   # 校验 npm 发布文件白名单与文档相对链接
 ```
 
-CI 在 Ubuntu、Windows 上各运行两片完整覆盖的测试，并保留 JSON/JUnit 报告和慢用例摘要。Release 复用同一套检查，直接发布已校验的安装包。分片复现、报告定位与发布恢复见 [CI 与测试说明](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/CI.md)。
+CI 在 Ubuntu、Windows 上各运行四片完整覆盖的测试，并保留 JSON/JUnit 报告和慢用例摘要。Release 复用同一套检查，直接发布已校验的安装包。分片复现、报告定位与发布恢复见 [CI 与测试说明](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/CI.md)。
 
 <details>
 <summary><b>在本地 dsh 环境中挂载源码调试</b></summary>
@@ -278,6 +278,8 @@ ln -s "$(pwd)" ~/.dsh/profiles/node_modules/dsh-liketavern
 ```
 
 挂载后执行 `npm run dev`（即 `dsh web --patch ./cordis.patch.yml`）即可加载本地源码。修改 `src/` 后请运行 `npm run build` 并重启开发实例。
+
+> **注意**：`--patch ./cordis.patch.yml` 会以命令行 overlay 形式覆盖 `dsh-tavern` 插件配置；在 overlay 模式下通过 Web UI 修改并保存插件设置会被宿主写保护拦截，无法持久化写回配置文件。如需验证插件设置的持久化写回，请改为通过 profile 安装或将插件登记到 `$DSH_HOME/profiles/default/cordis.yml` 后直接运行 `dsh web` 启动。
 </details>
 
 欢迎通过 [GitHub Issues](https://github.com/Amakurai/dsh-liketavern/issues) 反馈问题（请附上环境版本、复现步骤与脱敏样本，切勿包含 API Key 或私人对话），或在阅读 [AGENTS.md](https://github.com/Amakurai/dsh-liketavern/blob/main/AGENTS.md) 后提交 PR。

@@ -21,8 +21,8 @@ export interface AdvertisedReasoningInfo {
 export declare function pickReasoningEffort(thinking: SamplingSettings['thinking'], efforts: readonly AdvertisedReasoning[] | undefined, defaultEffort: string | undefined, current: string | undefined): string | undefined;
 /**
  * 三级挑选 reasoningEffort：agent/request 与 impersonate 共用这一处，别再各写一份。
- * ① 模型公布档 → `pickReasoningEffort`；
- * ② 公布档给不出结果、且深度思考关闭的 deepseek-official → `off`（元数据解析失败时也要关得掉）；
+ * ① 模型公布档 → `pickReasoningEffort`；模型已明确公布档位（含空数组或仅含非 off 档位）时，不强发未公布的 off 或陈旧档位；
+ * ② 元数据不可用（`reasoning?.efforts === undefined`）且深度思考关闭的 deepseek-official → `off`（元数据解析失败时仍可关掉思考）；
  * ③ 其余按「无公布信息」自动挑选（关闭则不瞎填）。
  * 放在 core：本函数只做纯挑选、绝不抛错；llm 服务与可能抛错的模型元数据解析留在各自的 node 调用点，
  * 解析失败就传 `undefined` 的 reasoning 进来。

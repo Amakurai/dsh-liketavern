@@ -444,7 +444,7 @@ export function SpeechHtmlFrame(props: {
       : props.compact
         ? { height: 48, minHeight: 0, overflow: 'auto' as const }
       : props.widget
-        ? { height: 280, minHeight: 0, overflow: 'auto' as const }
+        ? { height: 160, minHeight: 0, overflow: 'auto' as const }
         : { overflow: 'auto' as const }
 
   return (
@@ -452,6 +452,7 @@ export function SpeechHtmlFrame(props: {
     <iframe
       ref={iframeRef}
       className={`dsh-tavern-speechHtml${props.widget || props.compact ? ' is-widget' : ''}`}
+      data-loading={frameH == null ? 'true' : undefined}
       sandbox="allow-scripts"
       srcDoc={srcDoc}
       title={props.title}

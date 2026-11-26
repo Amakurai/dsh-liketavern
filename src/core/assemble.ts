@@ -73,6 +73,8 @@ export interface AssembleInput {
   historyMessageIds?: readonly (string | undefined)[]
   /** 宿主根据消息来源指明真实 user/model 正文；工具/插件输入不得挤占聊天深度。 */
   historyChatFlags?: readonly boolean[]
+  /** 历史消息是否允许在组装期执行 EJS；未传时沿用历史模板范围（默认仅用于兼容直调测试）。 */
+  historyTemplateFlags?: readonly boolean[]
   /** 世界书引擎结果（null = 无世界书）。 */
   wi: WIEngineResult | null
   /** 隔离器提供全部候选来源，未命中的条件写入也不能使读取者被跨轮钉死。 */
@@ -136,6 +138,8 @@ export interface TemplateSequenceMessage {
   worldinfo: boolean
   depth: number
   history: boolean
+  /** 跳过历史消息上的 EJS 求值（仍保留 basic/generate 正则与定位钩子），防止旧回复重复执行副作用。 */
+  skipEjs?: boolean
   /** 历史模拟副本保留正文处理结果；GENERATE 位置注入只加入完整 messages 序列。 */
   historyContent?: string
   /** GENERATE 钩子围绕历史正文生成的插件内容；精确布局不复制历史正文。 */
@@ -319,12 +323,14 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
     cache.set(cacheKey, rendered)
     return rendered
   }
-  // 历史 EJS 仅处理允许进入模板序列的模拟副本，显式非聊天条目与宿主合成文本不执行模板改写。
-  if (input.processTemplateSequence) history = history.map((message,index)=> templateHistoryFlags[index]
-    ? ({...message, content:renderTemplate(message.content,`history:${index}`,macroCtx)})
+  // 历史 EJS 仅处理允许进入模板序列且未显式禁用的模拟副本；live 管线中已提交历史回复与用户输入不重复执行 EJS。
+  const historyEjsFlags = history.map((_, index) => templateHistoryFlags[index] === true && (input.historyTemplateFlags?.[index] ?? true))
+  if (input.processTemplateSequence) history = history.map((message, index) => historyEjsFlags[index]
+    ? ({ ...message, content: renderTemplate(message.content, `history:${index}`, macroCtx) })
     : message)
   const originalHistory = new Set(history)
   const templateHistory = new Set(history.filter((_, index) => templateHistoryFlags[index]))
+  const historySkipEjs = new Set(history.filter((_, index) => templateHistoryFlags[index] && !historyEjsFlags[index]))
   const historyDepth = new Map(history.map((message,index)=>[message,historyDepths[index]!]))
   const historyAnchors = new Map(history.map((message,index)=>[message,layoutHistory[index]!]))
   const processedHistory = new Map<ChatMessage,string>()
@@ -745,11 +751,13 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
     // 否则模板序列的 depth 归 0、history 标记落空、historyContent 与 asTurn 判定全部失效。
     originalHistory.clear()
     templateHistory.clear()
+    historySkipEjs.clear()
     historyDepth.clear()
     historyAnchors.clear()
     history.forEach((message,index)=>{
       originalHistory.add(message)
       if (templateHistoryFlags[index]) templateHistory.add(message)
+      if (templateHistoryFlags[index] && !historyEjsFlags[index]) historySkipEjs.add(message)
       historyDepth.set(message,historyDepths[index]!)
       historyAnchors.set(message,layoutHistory[index]!)
     })
@@ -827,6 +835,7 @@ export function assemblePrompt(input: AssembleInput): AssembledPrompt {
       worldinfo:worldInfoPromptMessages.has(message) || depthBindings.get(message)?.worldinfo===true,
       depth:depthBindings.get(message)?.depth ?? historyDepth.get(message) ?? 0,
       history:originalHistory.has(message),
+      ...(historySkipEjs.has(message) ? { skipEjs: true } : {}),
     }))
     const processed=input.processTemplateSequence(items)
     templateTailInsertions=processed.tailInsertions

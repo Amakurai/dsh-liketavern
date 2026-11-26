@@ -117,14 +117,25 @@ export function neutralizeDshMustache(text: string): string {
 export const HARNESS_IDENTITY_TEXT = 'You are an AI agent powered by DeepSeek Harness.'
 
 /**
- * 从请求副本的 system 文本里删掉宿主身份句。
- * 只做精确句匹配，连同宿主段间分隔符 `\n\n` 一起删；其它字节一律不动，宿主改文案时自动变成 no-op。
+ * 宿主部署身份前缀（0.2.2-rc.3 `deployment:persona-prefix`）：
+ * 仅匹配独立整段 `You are a coding agent powered by the <model> model.`，不跨行也不改动角色正文。
+ */
+const CODING_AGENT_LEADING_RE = /^(?:You are a coding agent powered by the [^\r\n]+? model\.\n\n)+/
+const CODING_AGENT_SEGMENT_RE = /(?:^|\n\n)You are a coding agent powered by the [^\r\n]+? model\.(?=\n\n|$)/g
+
+/**
+ * 从请求副本的 system 文本里删掉宿主身份句（含 `harness:identity` 与部署 `coding agent` 前缀）。
+ * 只做精确独立段匹配，连同宿主段间分隔符 `\n\n` 一起删；其它字节一律不动，宿主改文案时自动变成 no-op。
  */
 export function stripHarnessIdentity(text: string): string {
+  let result = text
   for (const candidate of [`${HARNESS_IDENTITY_TEXT}\n\n`, `\n\n${HARNESS_IDENTITY_TEXT}`, HARNESS_IDENTITY_TEXT]) {
-    if (text.includes(candidate)) return text.split(candidate).join('')
+    if (result.includes(candidate)) {
+      result = result.split(candidate).join('')
+      break
+    }
   }
-  return text
+  return result.replace(CODING_AGENT_LEADING_RE, '').replace(CODING_AGENT_SEGMENT_RE, '')
 }
 
 /**

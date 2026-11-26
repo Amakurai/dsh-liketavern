@@ -142,7 +142,7 @@ export function SessionTransfer({remote,sessions,sessionId}:{remote:TavernRemote
         options={[{value:'',label:t('sessionArchive.chooseWorkspace')},...items.map(item=>({value:item.id,label:item.title}))]} onChange={setWorkspaceId}/>
     </SettingsRow>
     <SettingsRow title={t('sessionArchive.chooseFile')} description={archive?.name}>
-      <FileBtn accept="application/json,.json" disabled={busy||confirm} onFile={file=>void choose(file)}>{t('sessionArchive.chooseFile')}</FileBtn>
+      <FileBtn size="sm" accept="application/json,.json" disabled={busy||confirm} onFile={file=>void choose(file)}>{t('sessionArchive.chooseFile')}</FileBtn>
       {archive&&<Btn disabled={busy||confirm} onClick={()=>{if(!pending.current){clearArchive();setError(null)}}}>{t('sessionArchive.clearFile')}</Btn>}
       <Btn primary disabled={busy||!archive||!workspaceId} onClick={()=>setConfirm(true)}>{t('sessionArchive.import')}</Btn>
     </SettingsRow>

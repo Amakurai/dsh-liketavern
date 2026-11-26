@@ -24,12 +24,12 @@ import { resolvePresetSampling } from '../core/presetSampling.js'
 import type { PromptLayout } from '../core/promptLayout.js'
 import { DEFAULT_USER_NAME, type Persona } from '../core/persona.js'
 import { withWorkspaceLock } from '../state/workspaceLock.js'
-import { loadTemplateMetadata, saveTemplateMetadata } from '../state/template.js'
+import { loadTemplateMetadata, loadTemplateOutputs, saveTemplateMetadata, templateTextHash } from '../state/template.js'
 import { loadHelperState } from '../state/helper.js'
 import { latestTemplateHelperMvu, projectTemplateHelperMvu } from '../core/templateHelperMvu.js'
 import { currentHelperMvuTemplateData } from './helperMvuTemplateSnapshot.js'
 import { templateGenerationContext, type PreparedTemplateGeneration } from '../state/templateGeneration.js'
-import { type TemplateContext } from '../core/template.js'
+import { hasEjs, type TemplateContext } from '../core/template.js'
 import { templateCardData } from '../core/templateAssets.js'
 import { characterPromptName } from '../core/characterData.js'
 import { normalizeTemplateLore } from '../core/templateLore.js'
@@ -321,6 +321,11 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
   const standingKey = standingFingerprint(binding, { name: userName, description: persona?.description ?? '' },
     [...state.standingRevTags(binding, { personaLorebookId: persona?.lorebookId ?? null }),
       `snapshot=${snapshotHash}`], input.generationType ?? 'normal')
+  const sessionEvents = input.agent?.session.snapshotEvents?.() ?? []
+  const assistantSeqById = new Map<string, number>()
+  for (const event of sessionEvents) {
+    if (event.type === 'assistant/message') assistantSeqById.set(String(event.data.message.id), event.seq)
+  }
   const hostMessages = input.agent?.session.deriveMessages() ?? []
   const hostHistory = hostMessages.flatMap(message => {
     if (message.role === 'tool' || message.role === 'developer' || isHostSystemPromptMessage(message)
@@ -331,7 +336,24 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
       ? { role: message.role, content: '', name: message.role === 'assistant' ? charName : userName } : undefined)
     return chat ? [{ chat, id: String(message.id), counted: message.source.kind === 'user' || message.source.kind === 'model' }] : []
   }).filter(({ chat }) => !(chat.role === 'user' && isSyntheticUserText(chat.content)))
-  const rawHistory = input.agent ? hostHistory.map(item => item.chat) : (input.historyOverride ?? [])
+  // 已提交历史 assistant 回复若原文含 EJS，优先复用本剧情落盘的求值快照，绝不在后续轮次重复执行副作用。
+  const ejsAssistantSeqs: number[] = []
+  for (const item of hostHistory) {
+    if (item.chat.role === 'assistant' && hasEjs(item.chat.content)) {
+      const seq = assistantSeqById.get(item.id)
+      if (seq !== undefined) ejsAssistantSeqs.push(seq)
+    }
+  }
+  const evaluatedOutputs = ejsAssistantSeqs.length > 0 ? await loadTemplateOutputs(ws.fs, ejsAssistantSeqs) : {}
+  const substituteSavedOutput = (chat: ChatMessage, seq: number | undefined): ChatMessage => {
+    if (chat.role !== 'assistant' || seq === undefined || !hasEjs(chat.content)) return chat
+    const saved = evaluatedOutputs[String(seq)]
+    if (saved && saved.hash === templateTextHash(chat.content)) return { ...chat, content: saved.text }
+    return chat
+  }
+  const rawHistory = input.agent
+    ? hostHistory.map(item => substituteSavedOutput(item.chat, assistantSeqById.get(item.id)))
+    : (input.historyOverride ?? [])
   const history = rawHistory.filter((m) => !(m.role === 'user' && isSyntheticUserText(m.content)))
 
   // 待入日志的本轮输入：去重（已入日志的不再追加）。同轮第 2 步起 history 末条已是
@@ -362,8 +384,10 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
   // 插件来源可保留为显式模板索引，但不能触发角色世界书或冒充最后一句台词。
   const chatMessages = scanMessages.filter((_,index) => chatFlags[index])
   const messageProjection=input.agent ? buildTemplateMessageHistory(input.agent.session.deriveMessages(),
-    state.pendingTemplateInputs.get(sessionId) ?? [],charName,userName,input.agent.session.snapshotEvents?.() ?? []) : undefined
-  const templateHistory=messageProjection?.history ?? scanMessages
+    state.pendingTemplateInputs.get(sessionId) ?? [],charName,userName,sessionEvents) : undefined
+  const templateHistory=messageProjection
+    ? messageProjection.history.map((chat,index)=>substituteSavedOutput(chat,messageProjection.identities[index]?.hostMessageId))
+    : scanMessages
   const historyIdentities:TemplateMessageIdentity[]=messageProjection?.identities ?? templateHistory.map((_,index)=>({
     messageId:`preview:${sessionId}:${state.currentTurns.get(sessionId) ?? -1}:${index}`,swipeId:0,
   }))
@@ -483,6 +507,8 @@ async function runTavernPipelineLocked(input: PipelineInput, expected: { cardId:
       ...pendingFresh.map((_, index) => havePendingIds ? freshIdentified[index]?.id : undefined),
     ],
     historyChatFlags: chatFlags,
+    // 已提交历史 assistant 回复与用户输入不重新执行 EJS：前者复用求值快照，降级失败与用户字面 <% 均不锁死后续轮次。
+    historyTemplateFlags: scanMessages.map(() => false),
     wi:null,
     memories,
     worldDeltas:deltas,

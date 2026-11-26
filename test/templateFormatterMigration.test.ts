@@ -100,7 +100,7 @@ describe('格式化器持久化版本', () => {
   })
 
   it('新轮开始前拒绝旧 prepared，不能先终止旧记录或新建 WAL', async () => {
-    const f = await fixture('CARD'); await f.begin(1); await f.run()
+    const f = await fixture(); await f.begin(1); await f.run()
     const old = await f.raw()
     if (old.generation?.status !== 'prepared') throw Error('fixture has no prepared generation')
     delete old.generation.replay.formatterVersion

@@ -1,4 +1,4 @@
-import { type Stats } from 'node:fs';
+import { type BigIntStats } from 'node:fs';
 export declare const BACKUP_LIMITS: {
     entries: number;
     depth: number;
@@ -7,11 +7,17 @@ export declare const BACKUP_LIMITS: {
     manifestBytes: number;
     pathBytes: number;
 };
+export interface BackupIssueSummary {
+    code: string;
+    severity: 'info' | 'warning' | 'error';
+    count: number;
+}
 export declare class BackupError extends Error {
     readonly code: string;
-    constructor(code: string);
+    readonly issues?: BackupIssueSummary[];
+    constructor(code: string, issues?: readonly BackupIssueSummary[]);
 }
-export declare function fail(code: string): never;
+export declare function fail(code: string, issues?: readonly BackupIssueSummary[]): never;
 export declare function safeRelative(path: unknown): path is string;
 export declare function checkedPath(root: string, path: string): string;
 export interface DirectoryCheckOptions {
@@ -33,18 +39,23 @@ export interface BackupEntry {
     size: number;
     mode: number;
     sha256?: string;
+    hardlinkGroup?: number;
 }
 export interface ScannedEntry extends BackupEntry {
-    stamp: Stats;
+    stamp: BigIntStats;
+    expectedNlink: number;
 }
 /** 与宿主 app-boot 的共享 fallback、profile 私有 pnpm/投影目录保持同一精确布局。 */
 export declare function isDependencyPath(path: string): boolean;
 export declare function inventory(root: string, excludedDependencies?: string[]): Promise<ScannedEntry[]>;
 /** 固定位置分块读取，完整检查前后文件身份；输出文件独占创建且同步后关闭。 */
-export declare function transferFile(root: string, entry: BackupEntry, destination?: string, verifiedAboveRoot?: ReadonlySet<string>): Promise<string>;
+export declare function transferFile(root: string, entry: BackupEntry, destination?: string, verifiedAboveRoot?: ReadonlySet<string>, options?: {
+    expectedNlink?: number;
+    deferChmod?: boolean;
+}): Promise<string>;
 export declare function boundedJson(path: string, maxBytes?: number, options?: ReadonlySet<string> | DirectoryCheckOptions): Promise<unknown>;
 /** 会话迁移读原始字节：限额在读取前后都生效，并复核句柄与目录项仍为同一普通文件。 */
 export declare function boundedBytes(path: string, maxBytes: number, options?: ReadonlySet<string> | DirectoryCheckOptions): Promise<Buffer>;
 export declare function createDirectories(root: string, entries: BackupEntry[]): Promise<void>;
-/** 失败草稿可能已经套用源目录的只读权限；仅在自有、无链接草稿内恢复清理所需权限。 */
+/** 失败草稿可能已经套用源目录的只读权限或内部硬链接；仅在自有、无外链草稿内恢复清理所需权限。 */
 export declare function discardTemporary(root: string): Promise<void>;

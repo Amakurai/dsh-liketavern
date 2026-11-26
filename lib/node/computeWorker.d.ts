@@ -1,12 +1,12 @@
-import { assemblePrompt } from '../core/assemble.js';
-import { evaluateWorldInfo } from '../core/worldbook.js';
 import { applyRegexRules } from '../core/regex.js';
+import type { assemblePrompt } from '../core/assemble.js';
+import type { evaluateWorldInfo } from '../core/worldbook.js';
 import type { MacroContext } from '../core/types.js';
 import type { TemplateContext, TemplateScopes, TemplateRegexDescriptor } from '../core/template.js';
 import type { TemplateReplay } from '../core/templateReplay.js';
 import type { TemplateMessageVariables } from '../core/templateMessageVariables.js';
 import type { TemplateDisplayPart } from '../core/templateDisplay.js';
-import { presentTemplateDisplayResult } from './templateDisplay.js';
+import type { presentTemplateDisplayResult } from './templateDisplay.js';
 import type { TemplateContinuation } from '../core/templateContinuation.js';
 type SerializableMacros = Omit<MacroContext, 'random' | 'onUnknown'>;
 export interface ComputeJobs {

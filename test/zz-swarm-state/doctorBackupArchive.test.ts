@@ -84,12 +84,13 @@ describe('backup 引用检查与 TavernState 身份及平台大小写对齐', ()
     const backupOk = join(scratch, 'backup-ok')
     const report = await createBackup({ home, backup: backupOk, offline: true })
     expect(report.ok).toBe(true)
+    expect(report.issues.map((issue) => issue.code)).not.toContain('BINDING_ASSET_MISSING')
 
-    // 删除实际被引用的 `" foo"` 后，仅存的 `"\tfoo"` 不能替它通过引用校验
+    // 删除实际被引用的 `" foo"` 后，仅存的 `"\tfoo"` 不能替它通过引用校验；悬空共享资产降级为 warning 不锁死备份
     await state.deleteLorebook(' foo')
-    await expect(
-      createBackup({ home, backup: join(scratch, 'backup-missing'), offline: true }),
-    ).rejects.toMatchObject({ code: 'STRUCTURE_INVALID' })
+    const missingReport = await createBackup({ home, backup: join(scratch, 'backup-missing'), offline: true })
+    expect(missingReport.ok).toBe(true)
+    expect(missingReport.issues).toContainEqual({ code: 'BINDING_ASSET_MISSING', severity: 'warning', count: 1 })
   })
 
   it.runIf(process.platform === 'win32')('Windows 下会话绑定引用不同大小写的角色与资产文件时可正常备份', async () => {

@@ -258,7 +258,7 @@ npm test                # Run the full Vitest suite
 npm run package:check   # Verify npm tarball allowlist and relative markdown links
 ```
 
-CI runs the full suite across two shards on each of Ubuntu and Windows, retaining JSON/JUnit reports and slow-test summaries. Releases reuse those checks and publish the verified tarball directly. See the [CI and testing guide (Chinese)](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/CI.md) for shard reproduction, diagnostics, and release recovery.
+CI runs the full suite across four shards on each of Ubuntu and Windows, retaining JSON/JUnit reports and slow-test summaries. Releases reuse those checks and publish the verified tarball directly. See the [CI and testing guide (Chinese)](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/CI.md) for shard reproduction, diagnostics, and release recovery.
 
 <details>
 <summary><b>Link local source checkout into dsh for live development</b></summary>
@@ -278,6 +278,8 @@ ln -s "$(pwd)" ~/.dsh/profiles/node_modules/dsh-liketavern
 ```
 
 Start the local instance via `npm run dev` (`dsh web --patch ./cordis.patch.yml`). After editing `src/`, run `npm run build` and restart the dev instance.
+
+> **Note**: `--patch ./cordis.patch.yml` applies a CLI config overlay for the `dsh-tavern` plugin. Under an overlay, saving plugin settings from the Web UI is blocked by the host's overlay write protection and cannot persist back to disk. To test persistent settings writes, install the plugin into a profile or register it in `$DSH_HOME/profiles/default/cordis.yml` and start with plain `dsh web`.
 </details>
 
 Bug reports and pull requests are welcome via [GitHub Issues](https://github.com/Amakurai/dsh-liketavern/issues) (please include environment versions, reproduction steps, and sanitized samples—never share API keys or private chats). Review [AGENTS.md](https://github.com/Amakurai/dsh-liketavern/blob/main/AGENTS.md) before submitting a PR.

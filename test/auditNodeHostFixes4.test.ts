@@ -463,7 +463,7 @@ describe('Node / Host / Helper / Adapter 第四轮审计修复回归', () => {
     const seen: GenerateOptions[] = []
     const llm = {
       resolveModelInfo: async () => ({
-        reasoning: { supported: true, efforts: ['low', 'medium', 'high'], defaultEffort: 'medium' },
+        reasoning: { supported: true, efforts: [{ id: 'low' }, { id: 'medium' }, { id: 'high' }], defaultEffort: 'medium' },
       }),
       stream: (options: GenerateOptions) => {
         seen.push(options)

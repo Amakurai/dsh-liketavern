@@ -348,9 +348,11 @@ function LorebookEditorContent(props: LorebookEditorProps & { draftKey: string }
           </Btn>
         )}
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div className="dsh-tavern-cardName" style={{ fontSize: 15 }}>
-            {target.name}
-          </div>
+          {!(props.hideCloseButton && target.kind === 'chat') && (
+            <div className="dsh-tavern-cardName" style={{ fontSize: 15 }}>
+              {target.name}
+            </div>
+          )}
           <div className="dsh-tavern-editorMeta">
             <Muted>
               {metaText}
@@ -482,21 +484,23 @@ function LorebookEditorContent(props: LorebookEditorProps & { draftKey: string }
         </div>
       )}
 
-      <div className={`dsh-tavern-stickyBar${dirty ? ' is-sticky' : ''}`}>
-        <Btn size="md" disabled={busy} onClick={addEntry}>
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-            <IconPlusOutlineMedium /> {t('lorebookEditor.newEntry')}
-          </span>
-        </Btn>
-        <Btn primary size="md" disabled={busy || !dirty} onClick={() => void save()}>
-          {t('action.save')}
-        </Btn>
-        {(!props.hideCloseButton || dirty) && (
-          <Btn size="md" disabled={busy} onClick={askClose}>
-            {dirty ? t('lorebookEditor.discardAndBack') : t('lorebookEditor.back')}
+      {(entries.length > 0 || dirty) && (
+        <div className={`dsh-tavern-stickyBar${dirty ? ' is-sticky' : ''}`}>
+          <Btn size="md" disabled={busy} onClick={addEntry}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <IconPlusOutlineMedium /> {t('lorebookEditor.newEntry')}
+            </span>
           </Btn>
-        )}
-      </div>
+          <Btn primary size="md" disabled={busy || !dirty} onClick={() => void save()}>
+            {t('action.save')}
+          </Btn>
+          {(!props.hideCloseButton || dirty) && (
+            <Btn size="md" disabled={busy} onClick={askClose}>
+              {dirty ? t('lorebookEditor.discardAndBack') : t('lorebookEditor.back')}
+            </Btn>
+          )}
+        </div>
+      )}
 
       <ConfirmDialog
         open={toDelete !== null}
@@ -688,15 +692,15 @@ const EntryForm = memo(function EntryForm(props: {
               />
             </label>
             <label className="dsh-tavern-field">
-              <span className="dsh-tavern-fieldLabel">sticky</span>
+              <span className="dsh-tavern-fieldLabel">{t('lorebookEditor.form.sticky')}</span>
               <NullableNumInput value={entry.sticky} onChange={(sticky) => set({ sticky })} />
             </label>
             <label className="dsh-tavern-field">
-              <span className="dsh-tavern-fieldLabel">cooldown</span>
+              <span className="dsh-tavern-fieldLabel">{t('lorebookEditor.form.cooldown')}</span>
               <NullableNumInput value={entry.cooldown} onChange={(cooldown) => set({ cooldown })} />
             </label>
             <label className="dsh-tavern-field">
-              <span className="dsh-tavern-fieldLabel">delay</span>
+              <span className="dsh-tavern-fieldLabel">{t('lorebookEditor.form.delay')}</span>
               <NullableNumInput value={entry.delay} onChange={(delay) => set({ delay })} />
             </label>
           </div>

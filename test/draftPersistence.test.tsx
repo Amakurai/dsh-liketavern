@@ -865,4 +865,44 @@ describe('编辑草稿持久化', () => {
     expect(env.stored()).toBeNull()
     expect(env.remove).toHaveBeenCalledTimes(1)
   })
+
+  it('恢复草稿后父子字段挂载顺序不同，不触发多余暂存且保留已恢复提示直到实际编辑', async () => {
+    const env = environment()
+    // 模拟刷新前先挂载 parent 后挂载 child 保存的键顺序；重开时 React 自底向上先注册 child 再注册 parent。
+    await env.write({
+      owner,
+      key: env.scope,
+      value: { version: 1, fields: { 'z:parent': 'lorebooks', 'a:child': '已编辑正文', 'a:baseline': 'base' } },
+    })
+    env.save.mockClear()
+
+    function Child() {
+      const [text, setText] = useDraftState('a:child', 'base')
+      const [base] = useDraftState('a:baseline', 'base')
+      useDraftGuard(text !== base)
+      return <input aria-label="子字段" value={text} onChange={(e) => setText(e.target.value)} />
+    }
+    function Parent() {
+      useDraftState('z:parent', 'characters')
+      return <Child />
+    }
+
+    let view!: ReactTestRenderer
+    await act(async () => { view = create(<PersistentEditor remote={env.api} scope={env.scope}><Parent /></PersistentEditor>) })
+    mounted.push(view)
+    expect(view.root.findByType('input').props.value).toBe('已编辑正文')
+    expect(JSON.stringify(view.toJSON())).toContain('已恢复上次编辑草稿')
+
+    // 超过 500ms 防抖后仍无新编辑：不得误触发 saveEditorDraft，也不可把 restored 覆写为已暂存。
+    await advance(1200)
+    expect(env.save).not.toHaveBeenCalled()
+    expect(JSON.stringify(view.toJSON())).toContain('已恢复上次编辑草稿')
+    expect(JSON.stringify(view.toJSON())).not.toContain('草稿已暂存')
+
+    // 真正发生新编辑后正常暂存并更新状态为已暂存。
+    await change(view, '恢复后的新编辑')
+    await advance(600)
+    expect(env.save).toHaveBeenCalledTimes(1)
+    expect(JSON.stringify(view.toJSON())).toContain('草稿已暂存')
+  })
 })

@@ -1,6 +1,6 @@
 # 宿主兼容记录
 
-当前源码基线为 dsh 0.2.2-rc.3。以下按版本记录观测结果，升级时重新核对，不是永久架构要求。
+当前源码基线为 dsh 0.2.2-rc.5。以下按版本记录观测结果，升级时重新核对，不是永久架构要求。
 
 `engines.dsh` 与全部 `@deepseek-ai/*` 公开 peer 声明为 `*`：宿主加载器（`evaluatePluginCompatibility`）优先读 `engines.dsh`，没有该字段的旧宿主读 peer，两者都以 `includePrerelease: true` 判断，因此过去与未来的任意宿主版本都不会再因版本号被拒。开发依赖、overrides、安装脚本许可和锁文件继续固定经验证的精确基线，构建与测试只针对该基线；`npm run host:check` 现在同时校验“门槛必须是 `*`”与“开发基线必须一致”，防止有人重新钉住版本号。放开版本号不等于保证接口兼容：真正的兼容由运行时守卫承担（见下节）。
 
@@ -8,11 +8,12 @@
 
 v0.5.11 的关于页分别展示当前包和最新正式发布的版本要求，并提供开发验证基线与本记录入口。版本新旧不再被最新旧包的“不匹配”状态覆盖；宿主身份无法确认时仍能查询发布，但不生成安装命令。旧客户端仅有 `status` 字段时仍可读取结果，新客户端优先读取独立的 `versionStatus` 与 `hostCompatibility`。
 
-v0.5.9 及更早版本的更新检查器将目标 `@deepseek-ai/dsh` peer 作为精确 SemVer 解析，无法读取 `*`；这属于已经安装的旧代码，发布新包不能改写它。首次升级需从发布页使用明确的新标签地址手动安装一次，不应为兼容旧检查器重新钉死新包的宿主 peer。当前宿主 `0.2.2-rc.3` 的原生 `listVersions` 只读取 registry 版本；`updateBundle` 另支持已固定完整 commit 的 Git 安装，目标必须是同仓库、同目录的另一完整 commit 且包版本更新。本项目固定标签仍需手动指定新标签；Git 标签和 tarball 由关于页给出新地址与步骤，实际安装交给宿主管理器。
+v0.5.9 及更早版本的更新检查器将目标 `@deepseek-ai/dsh` peer 作为精确 SemVer 解析，无法读取 `*`；这属于已经安装的旧代码，发布新包不能改写它。首次升级需从发布页使用明确的新标签地址手动安装一次，不应为兼容旧检查器重新钉死新包的宿主 peer。当前宿主 `0.2.2-rc.5` 的原生 `listVersions` 只读取 registry 版本；`updateBundle` 另支持已固定完整 commit 的 Git 安装，目标必须是同仓库、同目录的另一完整 commit 且包版本更新。本项目固定标签仍需手动指定新标签；Git 标签和 tarball 由关于页给出新地址与步骤，实际安装交给宿主管理器。
 
 | 宿主版本 (DSH Runtime) | 插件版本 (Plugin Version) | 兼容状态 | 门槛与加载机制 | 运行时策略与注意事项 |
 |---|---|---|---|---|
-| **0.2.2-rc.3** | **v0.5.12–v0.5.13 / 当前源码** | **开发基线；基础界面与开场白分支已验证** | `engines.dsh: "*"` 原生满足；加载器无需豁免 | 88 项直接宿主开发依赖与覆盖项精确对齐；本次范围见下节 |
+| **0.2.2-rc.5** | **v0.5.13 / 当前源码** | **开发基线；全量回归（387 套件）与实机安装包 Web UI 冒烟已验证** | `engines.dsh: "*"` 原生满足；加载器无需豁免 | 88 项直接宿主开发依赖与 10 项覆盖项精确对齐；适配 `CONTENT_REFUSED`；387 套件全量回归（4629 项通过、12 项平台跳过、0 失败）及独立 `DSH_HOME` 安装真实 `0.5.13` tarball 实机冒烟通过，详情见下节 |
+| **0.2.2-rc.3** | **v0.5.12–v0.5.13 / 历史基线** | **历史验证通过（含实机 Web UI 复验）** | `engines.dsh: "*"` 原生满足；加载器无需豁免 | 该基线的 88 项宿主依赖精确对齐；基础界面、开场白分支与 18/18 Web UI 实机复验记录见下节 |
 | **0.2.2-rc.1** | **v0.5.11 / 历史基线** | **历史验证通过** | `engines.dsh: "*"` 原生满足；加载器无需豁免 | 该基线的 71 项宿主依赖精确对齐；已发布 v0.5.11 的验证范围见安装与更新验证节 |
 | **0.2.2-rc.1** | **旧版 release（如 v0.5.9）** | **需豁免，功能待逐版验证** | 旧清单的 peer 钉死 `0.2.1-rc.3`；需使用宿主版本豁免 | 豁免只放行加载，不能证明旧版所有功能兼容；更改 `cordis.patch.yml` 不能替代版本豁免 |
 | 0.2.1-rc.5 | v0.5.11 / 11 月 7 日源码 | 历史核心流程与关于页已验证 | `engines.dsh: "*"` 自动满足 | 独立安装、启动、角色、Tavern 会话与开场白通过；未穷尽其它功能 |
@@ -20,6 +21,30 @@ v0.5.9 及更早版本的更新检查器将目标 `@deepseek-ai/dsh` peer 作为
 | 0.2.0-rc.1 ~ 0.2.1-rc.2 | 当前源码及历史版本 | 允许安装；部分历史构建曾验证 | 当前源码经开放门槛加载 | 下文列出具体实测版本、构建与边界，不代表整个区间的当前源码均已验证 |
 | < 0.2.0 (如 0.1.x) | 任意版本 | 不兼容 (已废弃) | Session V3 架构与早期 PTC 运行时不兼容 | 宿主底层大幅重构，不建议且不支持跨代运行 |
 | >= 0.2.3 / 0.3.x / 未来版本 | 当前源码 | 允许安装（未验证） | `engines.dsh: "*"` 使宿主加载器不按版本号拦截 | 服务与方法探测只能覆盖已守卫的路径，不能保证静态导入及其它接口兼容；需重新核对并冒烟 |
+
+## 2026-11-26：0.2.2-rc.5 基线升级核对
+
+核对 [官方发布](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.2-rc.5) 与公开 npm：`@deepseek-ai/dsh@0.2.2-rc.5` 同时为 `latest` 与 `next`（另有 `0.2.3-alpha.2` 为 `alpha`）。已核对上游 `dsh-v0.2.2-rc.3...dsh-v0.2.2-rc.5` 全部 13 个提交，并对 `@deepseek-ai/dsh` 传递图与本仓库依赖并集共 332 个 `@deepseek-ai/dsh*` 包完成逐文件 tarball 字节比对：
+
+- **依赖与锁文件对齐**：全部 88 项 `@deepseek-ai/dsh*` `devDependencies`、10 项 `overrides` 与 `allowScripts["@deepseek-ai/dsh-subprocess-local@0.2.2-rc.5"]` 精确升级至 `0.2.2-rc.5`；全量 332 包无新增、删除或改名。`@deepseek-ai/cordis`（`4.1.0`）、`@deepseek-ai/schemastery`（`3.19.0`）及 `@deepseek-ai/cordis-plugin-{group,include,loader}`（`1.1.0`）版本不变；同步清理已随传递链升级至无安装脚本的 `@google/genai@2.21.0` 过期许可条目。公开门槛 `engines.dsh` 与全部 28 项 `@deepseek-ai/*` `peerDependencies` 继续保持 `*`；`npm ci`、`npm ls --all`、`host:check` 与 `audit:check` 均通过（生产依赖与全量开发锁文件均为 0 漏洞）。
+- **DeepSeek 流式内容安全拒答（`CONTENT_REFUSED`，`rc.4` PR #8584）**：`@deepseek-ai/dsh-llm` 新增不可自动重试的 `LLM_FAILURE_CODES.CONTENT_REFUSED`，`@deepseek-ai/dsh-llm-deepseek` 在流式 `stop_reason: "refusal"` 终止时先上报已计费 `usage` 再抛 `CONTENT_REFUSED`（不再归类为 `MALFORMED_RESPONSE`），会话仅写入 `assistant/attempt` 与 `turn/end(reason.kind: "error")`，不落 `assistant/message`。
+  - `PresetAdapter` 原样透传计费 `usage` 与 `CONTENT_REFUSED` 错误码，已补真实 `DeepSeekAdapter` SSE 回放回归。
+  - `src/node/collectText.ts` 按官方升级指南显式识别 `CONTENT_REFUSED`，向 AI 代答用户返回明确中文拒答说明并丢弃残缺前文；空闲记忆压缩/别名生成拒绝归档并保留原记忆；`onTurnEnd` 遇到无 `assistant/message` 的 `CONTENT_REFUSED` 失败轮次时跳过模板提交与 MVU 登记，并将 `prepared` 模板状态安全收口为 `terminated`。
+- **Web 搜索默认提供方路由（`rc.5` PR #8707）**：`dsh-base` 移除硬编码 `searchProvider: deepseek-search-api`，由 `dsh-web` 按模型路由自动择优（`deepseek-official` / `deepseek-account` 优先走 Messages 服务端搜索 `deepseek-official`，其余走 `deepseek-search-api`）。标准 Web 宿主禁用了 host 级 `dsh-tool-web`，且 `presets/tavern/agent.cordis.yml` 未挂载 `dsh-tool-web`，普通 Tavern 会话不受影响；若用户在自定义或 headless overlay 中为 Tavern 会话手动挂载 `dsh-tool-web`，因 Tavern 布局通道记录的路由为 `tavern-deepseek`，自动搜索模式下将回落至 `deepseek-search-api`（可在宿主「网页搜索与获取」设置页显式指定提供方）。
+- **已逐包核对确认无变化的宿主接口（313/332 包 `lib/` 与 `.d.ts` 逐字节一致，其余仅含上述变更或构建版本字面量）**：
+  - **系统提示词与宿主身份句**：`@deepseek-ai/dsh-system-prompt`、`@deepseek-ai/dsh-agent`、`@deepseek-ai/dsh-agent-loop` — `harness:identity`、`deployment:persona-prefix`（`You are a coding agent powered by the <model> model.`）、`SystemPrompt.assemble` / `refreshContext` / `getSectionOrder('TOOLS_SDK')`、`required: true` 上下文过滤及 12 项宿主事件时序均无变化。
+  - **模型适配器与目录接口**：`@deepseek-ai/dsh-llm-deepseek-api-key`、`@deepseek-ai/dsh-deepseek-llm-api-extensions`、`@deepseek-ai/dsh-deepseek-account`、`@deepseek-ai/dsh-credentials`、`@deepseek-ai/dsh-llm-retry`、`@deepseek-ai/dsh-agent-default-model` — `DeepSeekAdapter` 公开签名、`ModelListingCache`、`resolveListedCatalog`、`refuseListedModel`、`reasoningEffort`、`/models` 列表接口与 `LlmError.fromFailure` 均无变化。
+  - **工具、PTC 与上下文压缩**：`@deepseek-ai/dsh-tools`、`@deepseek-ai/dsh-ptc-runtime`、`@deepseek-ai/dsh-ptc-runtime-node`、`@deepseek-ai/dsh-tool-executor-native`、`@deepseek-ai/dsh-agent-tool-presentation`、`@deepseek-ai/dsh-agent-preset`、`@deepseek-ai/dsh-agent-preset-registry`、`@deepseek-ai/dsh-compaction*`、`@deepseek-ai/dsh-command-compact`、`@deepseek-ai/dsh-token-meter` 均无变化。
+  - **会话、分支、附件与存储**：`@deepseek-ai/dsh-session`、`@deepseek-ai/dsh-session-format*`、`@deepseek-ai/dsh-session-persistence*`、`@deepseek-ai/dsh-session-projection`、`@deepseek-ai/dsh-api-session-controller`、`@deepseek-ai/dsh-attachment*`、`@deepseek-ai/dsh-workspace`、`@deepseek-ai/dsh-home-paths` — `sessionController.fork` / `SessionStore.fork` / `parentSession` / `isSeeded` / `validateStoredEvents` 与附件硬链接布局均无变化。
+  - **启动、配置、插件管理与传输**：`@deepseek-ai/dsh-app-boot`（`evaluatePluginCompatibility`）、`@deepseek-ai/dsh-plugin-manager`、`@deepseek-ai/dsh-settings`、`@deepseek-ai/dsh-config-editor`、`@deepseek-ai/dsh-host-webserver`、`@deepseek-ai/dsh-typert-*` 均无变化。
+  - **客户端 UI 与 DOM 契约**：`@deepseek-ai/dsh-web-app`、`@deepseek-ai/dsh-client-store`、`@deepseek-ai/dsh-client-ui-conversation`、`@deepseek-ai/dsh-client-ui-primitives`、`@deepseek-ai/dsh-client-ui-slots`、`@deepseek-ai/dsh-client-ui-chat`、`@deepseek-ai/dsh-client-ui-agent-preset`、`@deepseek-ai/dsh-client-ui-settings` — 5 块 UI slot 契约、`conversation.chat.node`、`SettingsRoot` 四子项顶栏结构、预设 seat chip 与 `uiWorkspace.openSession` 均逐字节无变化。
+- **全量回归与安全门禁**：Windows / Node 24 下，在真实 `0.2.2-rc.5` 依赖环境中完成干净 `npm ci`、`npm run build`、`host:check`、`package:check`、`audit:check`、`doctor:check` 与 `backup:check`；全量 `npm test` 通过 `387 / 387` 个测试套件（`4629` 项通过、`12` 项 Windows 平台条件跳过、`0` 失败、`0` 超时），涵盖新增的 `CONTENT_REFUSED` 真实 `DeepSeekAdapter`/`LlmRuntime` SSE 回放、AI 代答拒答与 `onTurnEnd` 安全收口回归。
+- **独立 `DSH_HOME` 实机安装包与 Web UI 冒烟**：打包生成 `dsh-liketavern-0.5.13.tgz`（587 文件）并在全新独立 `DSH_HOME` 中通过真实 `dsh 0.2.2-rc.5` CLI 执行 `dsh plugin --profile web add` 安装、无 `--patch` 启动 `dsh web`（宿主日志零报错/零降级，`dsh-tavern/` 数据目录完整初始化）。经真实 Chrome 端到端验证：
+  - 「设置 → Tavern → 关于」准确显示插件 `0.5.13`、宿主 `0.2.2-rc.5`、开发基线 `0.2.2-rc.5`、开放门槛与「满足版本要求」徽标；
+  - 设置读写切换与界面语言变更零抖动且刷新持久回读，390×844 移动端顶栏「打开配置文件」与关闭按钮同行并排、零重叠；
+  - 合成 3 开场白 + HTML 交互状态卡 + 内嵌世界书角色卡经兼容预检确认后导入，Tavern 会话内渲染 OOPIF 沙箱交互卡（`sandbox="allow-scripts"`、`window.origin === "null"`、`connect-src 'none'`，1440×900 与 390×844 均无垂直溢出滚动条）；
+  - 卡内触发 `triggerSlash('/swipe right')` 成功创建并自动跳转至 `开场白 2/3` 独立子会话，切回来源会话完整保留 `开场白 1/3` 且刷新后保持隔离；
+  - 主页面与全部 OOPIF 合计 `0` 浏览器控制台报错/警告、`0` 未捕获异常、`0` 失败网络请求（仅使用合成数据，未触碰用户目录或发送真实模型请求，验收后已停止进程并清理临时环境）。
 
 ## 2026-11-17：0.2.2-rc.3 基线与必要剧情上下文
 

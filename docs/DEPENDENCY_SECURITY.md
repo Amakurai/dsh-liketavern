@@ -1,6 +1,6 @@
 # 依赖安全记录
 
-本记录说明依赖告警的处理结果与剩余边界，最近复核日期为 2026-11-24。生产运行依赖审计（`npm audit --omit=dev --package-lock-only`）与全量开发锁文件审计（`npm run audit:check`，即 `scripts/verify-audit.mjs`）当前均保持 **0 项已知漏洞、0 项临时豁免**。审计或测试通过都不能解释为不存在未知漏洞。
+本记录说明依赖告警的处理结果与剩余边界，最近复核日期为 2026-11-26。生产运行依赖审计（`npm audit --omit=dev --package-lock-only`）与全量开发锁文件审计（`npm run audit:check`，即 `scripts/verify-audit.mjs`）当前均保持 **0 项已知漏洞、0 项临时豁免**。审计或测试通过都不能解释为不存在未知漏洞。
 
 ## 2026-11-24 清理已撤回的 picomatch 临时豁免与常规依赖复核
 
@@ -60,7 +60,7 @@ v0.2.6 发布前本地验收：`npm run build`、全量 **140 文件 / 1986 项�
 
 ## 安装脚本与上游弃用提示
 
-npm 11.16 的项目 `allowScripts` 逐版本记录：`@deepseek-ai/dsh-subprocess-local@0.2.2-rc.3`、`@google/genai@2.21.0`、`esbuild@0.25.12`、`esbuild@0.28.2`、`koffi@3.1.1`、`node-pty@1.2.0-beta.15`、`protobufjs@7.6.6`。不使用全局放行或通配符；以后版本变化需要重新审阅。此字段是脚本审批记录，不是脚本权限沙箱，旧 npm 可能不读取它。见 [npm 官方说明](https://docs.npmjs.com/cli/v11/commands/npm-approve-scripts/)。
+npm 11.16 的项目 `allowScripts` 逐版本记录：`@deepseek-ai/dsh-subprocess-local@0.2.2-rc.5`、`esbuild@0.25.12`、`esbuild@0.28.2`、`koffi@3.1.1`、`node-pty@1.2.0-beta.15`、`protobufjs@7.6.6`（`0.2.2-rc.5` 锁文件重解析后，传递依赖 `@google/genai` 升至无安装脚本的 `3.6.1`，已移除旧的 `@google/genai@2.21.0` 条目）。不使用全局放行或通配符；以后版本变化需要重新审阅。此字段是脚本审批记录，不是脚本权限沙箱，旧 npm 可能不读取它。见 [npm 官方说明](https://docs.npmjs.com/cli/v11/commands/npm-approve-scripts/)。
 
 2026-11-06 对照了 esbuild `0.25.12` 与 `0.28.2` 的安装脚本：新版仍准备当前平台二进制，并在需要从 npm 或官方 registry 补取时按包内摘要核对 SHA-256；它只用于 Vite 的开发依赖，产物构建器仍固定为 `0.25.12`。
 

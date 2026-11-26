@@ -9,7 +9,7 @@ import type { CredentialProvider } from '@deepseek-ai/dsh-credentials'
 import { DeepSeekLlmApiExtensionRegistry } from '@deepseek-ai/dsh-deepseek-llm-api-extensions'
 import { createLaunchEnvironmentSnapshot } from '@deepseek-ai/dsh-launch-environment'
 import { createAssistantMessage, createMessage, createSystemMessage, createToolResultMessage, createUserMessage,
-  LlmRuntime, ReasoningEffortId, ToolCallId, type GenerateOptions, type LlmResolvedModelInfo, type StreamChunk } from '@deepseek-ai/dsh-llm'
+  LLM_FAILURE_CODES, LlmRuntime, ReasoningEffortId, RETRY_CODE_CHOICES, ToolCallId, type GenerateOptions, type LlmResolvedModelInfo, type StreamChunk } from '@deepseek-ai/dsh-llm'
 import { Config as DeepSeekConfig } from '@deepseek-ai/dsh-llm-deepseek-api-key'
 import { DeepSeekAdapter } from '@deepseek-ai/dsh-llm-deepseek'
 import { FileSettings } from './hostSettingsFactory.js'
@@ -240,4 +240,37 @@ it('消息投影不能顺便修改已冻结的采样配置', async () => {
     type: 'finish', reason: { kind: 'error', failure: { code: 'INVALID_PRESET_PROJECTION' } },
   })
   expect(fetchMock).not.toHaveBeenCalled()
+})
+
+it('回放 DeepSeek 内容拒答流（stop_reason=refusal）先报计费 usage，再以 CONTENT_REFUSED 终结且不纳入重试码', async () => {
+  const frames = [
+    { type: 'message_start', message: { id: 'refused-message', role: 'assistant', usage: { input_tokens: 80, output_tokens: 0 } } },
+    { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+    { type: 'content_block_stop', index: 0 },
+    { type: 'message_delta', delta: { stop_reason: 'refusal', stop_details: { explanation: 'blocked image' } }, usage: { output_tokens: 5 } },
+    { type: 'message_stop' },
+  ]
+  fetchMock.mockResolvedValueOnce(new Response(
+    frames.map(frame => `event: ${frame.type}\ndata: ${JSON.stringify(frame)}\n\n`).join(''),
+    { status: 200, headers: { 'content-type': 'text/event-stream' } },
+  ))
+  registerPresetAdapter(ctx, options => options).ensureRegistered()
+  const prepared = await llm.prepareCall({ provider: PRESET_ADAPTER_PROVIDER, model: 'factory' })
+  const chunks = await collect(prepared.stream(request(prepared.config)))
+  const usageIndex = chunks.findIndex(chunk => chunk.type === 'usage')
+  expect(usageIndex).toBeGreaterThanOrEqual(0)
+  expect(usageIndex).toBeLessThan(chunks.length - 1)
+  expect(chunks[usageIndex]).toMatchObject({ type: 'usage', usage: { inputTokens: 80, outputTokens: 5 } })
+  expect(chunks.at(-1)).toMatchObject({
+    type: 'finish',
+    reason: {
+      kind: 'error',
+      failure: {
+        code: 'CONTENT_REFUSED',
+        message: expect.stringContaining('blocked image'),
+      },
+    },
+  })
+  expect('CONTENT_REFUSED' in LLM_FAILURE_CODES).toBe(true)
+  expect(RETRY_CODE_CHOICES).not.toContain('CONTENT_REFUSED')
 })

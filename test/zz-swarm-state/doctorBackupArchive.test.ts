@@ -159,8 +159,8 @@ describe('doctor 与 backup 对草稿目录大 JSON 上限的一致性', () => {
     const report = await runDoctor({
       home,
       nodeVersion: '24.0.0',
-      pluginVersion: '0.5.12',
-      dshInstalledVersion: '0.2.2-rc.3',
+      pluginVersion: '0.5.13',
+      dshInstalledVersion: '0.2.2-rc.5',
       dshExpectedVersion: '*',
     })
     expect(report.ok).toBe(true)

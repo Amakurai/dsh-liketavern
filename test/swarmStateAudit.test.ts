@@ -448,8 +448,8 @@ describe('状态层与诊断深度审计回归', () => {
     }
     const doctorVersions = {
       nodeVersion: '24.0.0',
-      pluginVersion: '0.5.12',
-      dshInstalledVersion: '0.2.2-rc.3',
+      pluginVersion: '0.5.13',
+      dshInstalledVersion: '0.2.2-rc.5',
       dshExpectedVersion: '*',
     }
 

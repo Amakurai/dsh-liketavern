@@ -5,7 +5,7 @@
 **基于 DeepSeek Harness 原生 Agent 运行时的 SillyTavern 角色扮演插件**
 
 [![Release](https://img.shields.io/badge/version-v0.5.13-blue.svg)](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.5.13)
-[![dsh](https://img.shields.io/badge/dsh-0.2.1--rc.5%20%7C%200.2.2--rc.3-informational.svg)](https://deepseek-harness.github.io/deepseek-harness/)
+[![dsh](https://img.shields.io/badge/dsh-0.2.1--rc.5%20%7C%200.2.2--rc.5-informational.svg)](https://deepseek-harness.github.io/deepseek-harness/)
 [![Node.js](https://img.shields.io/badge/node-%E2%89%A524-brightgreen.svg)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
@@ -42,7 +42,7 @@
 
 ## 安装与升级
 
-> **前置要求**：Node.js `>= 24.0.0`、DeepSeek Harness、`pnpm`，且已在 `dsh` 中配置好可用的模型。当前开发基线为 `0.2.2-rc.3`；`engines.dsh` 与宿主 peer 声明为 `*`，只表示加载器不会按版本号拒绝，并不保证任意宿主的接口兼容。各版本的验证情况和限制见[宿主兼容记录](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/HOST_COMPATIBILITY.md)。首次使用请先参阅 [DeepSeek Harness 官方文档](https://deepseek-harness.github.io/deepseek-harness/)。仓库已内置预编译的 `lib/` 产物，安装时无需本地构建。
+> **前置要求**：Node.js `>= 24.0.0`、DeepSeek Harness、`pnpm`，且已在 `dsh` 中配置好可用的模型。当前开发基线为 `0.2.2-rc.5`；`engines.dsh` 与宿主 peer 声明为 `*`，只表示加载器不会按版本号拒绝，并不保证任意宿主的接口兼容。各版本的验证情况和限制见[宿主兼容记录](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/HOST_COMPATIBILITY.md)。首次使用请先参阅 [DeepSeek Harness 官方文档](https://deepseek-harness.github.io/deepseek-harness/)。仓库已内置预编译的 `lib/` 产物，安装时无需本地构建。
 
 ### 桌面端安装
 
@@ -82,7 +82,7 @@ dsh web
 - **桌面端升级**：先查阅 [CHANGELOG.md](./CHANGELOG.md) 并备份数据；点击关于页的 **「更新到… → 复制安装地址」**，在桌面端「插件 → 添加插件」中使用新版标签地址安装，完成后**完全退出并重启桌面端**。安装由宿主插件管理器处理。
 - **Web / CLI 升级**：使用新版标签重新执行 `dsh plugin --profile web add` 并重启 `dsh web`。升级会自动沿用既有数据目录。
 
-当前 dsh `0.2.2-rc.3` 的原生版本列表读取 registry 来源；一键更新还支持已固定完整 commit 的 Git 安装，目标须为同仓库、同目录的另一完整 commit，且包版本更新。本项目通过 Git 标签与 Release 分发，固定的旧标签仍需手动指定新标签，因此关于页提供独立的 GitHub 发布检查和明确的新安装地址。**v0.5.9 及更早版本的旧检查器只识别精确宿主 peer，不能解析新版开放范围；首次升级请直接使用上方的 v0.5.13 地址安装一次。** 新版将安装门槛与实际验证范围分别展示；满足版本要求不等于所有功能已在该宿主实测。
+当前 dsh `0.2.2-rc.5` 的原生版本列表读取 registry 来源；一键更新还支持已固定完整 commit 的 Git 安装，目标须为同仓库、同目录的另一完整 commit，且包版本更新。本项目通过 Git 标签与 Release 分发，固定的旧标签仍需手动指定新标签，因此关于页提供独立的 GitHub 发布检查和明确的新安装地址。**v0.5.9 及更早版本的旧检查器只识别精确宿主 peer，不能解析新版开放范围；首次升级请直接使用上方的 v0.5.13 地址安装一次。** 新版将安装门槛与实际验证范围分别展示；满足版本要求不等于所有功能已在该宿主实测。
 
 ---
 

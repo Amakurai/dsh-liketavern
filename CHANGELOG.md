@@ -1,10 +1,15 @@
 # 更新日志
 
-当前开发基线为 dsh `0.2.2-rc.3`；公开门槛（`engines.dsh` 与宿主 peer）为 `*`，宿主不会仅因版本号拒绝加载。接口兼容仍须逐版本验证，各构建的验证情况见 [宿主兼容记录](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/HOST_COMPATIBILITY.md)。升级宿主前请备份并核对对应版本。
+当前开发基线为 dsh `0.2.2-rc.5`；公开门槛（`engines.dsh` 与宿主 peer）为 `*`，宿主不会仅因版本号拒绝加载。接口兼容仍须逐版本验证，各构建的验证情况见 [宿主兼容记录](https://github.com/Amakurai/dsh-liketavern/blob/main/docs/HOST_COMPATIBILITY.md)。升级宿主前请备份并核对对应版本。
 
-## 0.5.13（2026-11-26）展示渲染、模板沙箱加固与全链路体验修复
+## 0.5.13（2026-11-26）适配 dsh 0.2.2-rc.5、展示渲染、模板沙箱加固与全链路体验修复
 
-宿主开发基线保持 dsh `0.2.2-rc.3`（Node.js ≥ 24），公开门槛（`engines.dsh` 与全部 `@deepseek-ai/*` peer）继续保持 `*`，实际接口兼容范围以宿主兼容记录为准。本版汇总 `v0.5.12` 以来针对展示渲染（#28 / #31）、QuickJS 模板沙箱、角色卡全链路、状态事务、备份诊断与实机 Web UI 的多轮审计与深度体验修复，并恢复全量开发锁文件零豁免安全审计。
+宿主开发与验证基线升级至 dsh `0.2.2-rc.5`（Node.js ≥ 24），公开门槛（`engines.dsh` 与全部 `@deepseek-ai/*` peer）继续保持 `*`，实际接口兼容范围以宿主兼容记录为准。本版汇总 `v0.5.12` 以来针对 dsh `0.2.2-rc.5` 基线适配、展示渲染（#28 / #31）、QuickJS 模板沙箱、角色卡全链路、状态事务、备份诊断与实机 Web UI 的多轮审计与深度体验修复，并恢复全量开发锁文件零豁免安全审计。
+
+- **宿主基线升级至 dsh `0.2.2-rc.5` 与 `CONTENT_REFUSED` 拒答适配**：
+  - 将 88 项 `@deepseek-ai/dsh*` 开发依赖、10 项 `overrides` 与安装脚本许可（`@deepseek-ai/dsh-subprocess-local@0.2.2-rc.5`）精确对齐至公开的 `0.2.2-rc.5`，同步清理已不再含安装脚本的 `@google/genai@2.21.0` 过期许可条目；`engines.dsh` 与全部 `@deepseek-ai/*` 公开 peer 继续保持 `*`。
+  - 适配 `0.2.2-rc.4` / `0.2.2-rc.5` 新增的 DeepSeek 流式内容安全拒答错误码 `CONTENT_REFUSED`（不再归类为可重试的 `MALFORMED_RESPONSE`，并在终止前先上报已计费 `usage`）：在 `collectCompleteText` 中按官方升级指南显式识别 `CONTENT_REFUSED` 并返回明确中文拒答说明，保证 AI 代答透传拒答原因、空闲记忆压缩与别名生成拒绝归档或提交残缺正文，且宿主以 `CONTENT_REFUSED` 结束失败轮次（无 `assistant/message`）时自动将 `prepared` 模板状态安全收口为 `terminated`。
+  - 逐包核对 `0.2.2-rc.3 → 0.2.2-rc.5` 全部 332 个 `@deepseek-ai/dsh*` 宿主包：系统提示词与宿主身份句、12 项宿主事件时序、分支/附件/压缩/PTC、5 块客户端 UI 插槽与 `SettingsRoot` 四子项 DOM 契约均无破坏性变更；并在兼容记录中注明自定义 overlay 手动启用 `dsh-tool-web` 时的自动搜索路由边界。
 
 - **消息展示、原生 `<details>` 折叠与交互卡渲染（#28 / #31）**：
   - 修复角色卡与回复中未闭合 `<summary>`、纯 `<details>` 折行切分、伪标签、反引号代码标签、混合嵌套粗斜体、未闭合/孤立展示 HTML、引用块（`>`）内未闭合代码围栏与 GFM 表格内 HTML 误判；兼容 CRLF 排版折叠、HTML5 数值字符引用替换、CommonMark 四列制表位缩进并补全标准 HTML/SVG/MathML 元素表，同时消除千行未闭合围栏的二次复杂度退化。
@@ -16,7 +21,7 @@
   - 回复阶段触发确定性展示片段超限异常时，`onTurnEnd` 正常关闭 `prepared` 生成正文为 `terminated` 并提交 WAL；`computeWorker` 在执行 `templateCondition` 条件求值时保留跨步骤 `TemplateSandbox` 缓存，并优先回收无缓存 worker。
 - **提示词组装、请求投影与核心解析**：
   - 修复空聊天历史（`history: []`）遗漏 `depth > 0` 的预设 `in-chat`、世界书 `@D` 与角色 `depthPrompt` 注入，修正可变 `MacroContext` 与聊天锚点缓存一致性、`stat_data` 引号键与 `::` 路径解析、JS 空字符类 `[]`/`[^]` ReDoS 静态守卫、`{{match}}`/两位数捕获、`{{random}}`/`{{addvar}}` 与 `nested-get` 边界、世界书负 `sticky` 冷却保护与计时器归一化隔离；递增 `STANDING_PIN_VERSION` 防止指纹哈希碰撞，优化 ASCII 分词器与 BM25 `Int32Array` 热路径。
-  - 对齐宿主 `0.2.2-rc.3` 路由与请求投影：修复强制思考模型非法强发 `off` 与 `efforts: []` 泄漏、`in-history + messagesApi: false` 重复发送前导 `TOOLS_SDK`、宿主 `0.2.2-rc.3` coding agent 身份段剔除与非 DeepSeek 模型选择消费；跳过 `probe` 探测请求且不在 `agent/request` 伪造持久 `model/selection` 日志；AI 代答补齐 `reasoningEffort` 透传、换模首轮同步及吞错/缺凭证中文指引；加固 `registerPresetAdapter` 生命周期重载与 `installTavernModelSelectionCompat` 卸载还原。
+  - 对齐宿主 `0.2.2-rc.3+` 路由与请求投影：修复强制思考模型非法强发 `off` 与 `efforts: []` 泄漏、`in-history + messagesApi: false` 重复发送前导 `TOOLS_SDK`、宿主 `0.2.2-rc.3+` coding agent 身份段剔除与非 DeepSeek 模型选择消费；跳过 `probe` 探测请求且不在 `agent/request` 伪造持久 `model/selection` 日志；AI 代答补齐 `reasoningEffort` 透传、换模首轮同步及吞错/缺凭证中文指引；加固 `registerPresetAdapter` 生命周期重载与 `installTavernModelSelectionCompat` 卸载还原。
 - **角色卡全链路、状态存储、WAL 事务与酒馆助手**：
   - 修复角色卡解析、内嵌世界书与 V2 元数据写回、兼容预检、目录规范化、损坏 `card.json`/`story.json` 防护与已收纳角色卡的分支/导入/写操作快速拒绝，补齐 JSON 角色卡 24 MiB 预检与 `depthPrompt` 非负安全整数校验。
   - 统一卡面桥 `openHelperFrame`、脚本库、开场白切页与历史编辑分支为保留原始 `personaId: null` 的剧情绑定读取与规范化租约键，人设损坏不再阻塞已生成楼层的 MVU 收口、脚本包加载与卡面桥操作；原生 MVU 保留 Zod v4 `.refine()` 校验、统一 Turn 0 锚点与世界书初值来源顺序（global → 主/内嵌角色书 → 附加角色书），并隔离纯文本与真实 `<iframe>` 混合渲染批次中的 `helper.json` 损坏影响。
@@ -26,7 +31,7 @@
   - `doctor` 复用引用校验并将悬空可选资产降级为 warning，补齐 `WAL_RECOVERY_IN_PROGRESS`、`SESSION_IMPORT_INCOMPLETE`、头像 PNG 魔数与草稿超限检查及脱敏指引，放行合法超大状态 JSON/模板生成正文、超 64 KiB `WAL meta.json`、大正则文件与 `.importing-*` 临时草稿目录。
   - 完善单会话归档的完整信封体积精确计量、错误路径脱敏、资产分类、空全局文件与大写 `.JSON` 容错、活动 WAL 世系完整校验及 CLI 参数防呆。
 - **客户端 Web UI、弹窗层级、无障碍与面板交互**：
-  - 适配宿主 `0.2.2-rc.3` 四子项设置弹窗顶栏避免按钮重叠；接入宿主 overlay 写保护本地化提示；剥离即时偏好脏态并排序序列化草稿快照，在共享 `PersistentEditor` 清理单子编辑器草稿时保留未挂载兄弟字段；客户端启动遇 `getSettings` 挂起超 5 秒时放行全部常驻 UI slot 挂载。
+  - 适配宿主 `0.2.2-rc.3+` 四子项设置弹窗顶栏避免按钮重叠；接入宿主 overlay 写保护本地化提示；剥离即时偏好脏态并排序序列化草稿快照，在共享 `PersistentEditor` 清理单子编辑器草稿时保留未挂载兄弟字段；客户端启动遇 `getSettings` 挂起超 5 秒时放行全部常驻 UI slot 挂载。
   - 修复 `HeaderChip`、角色、记忆与脚本面板中已收纳角色显示名（不暴露原始 `cardId`），消除列表卡片嵌套交互按钮，修复触发日志弹窗层级、绑定开关无障碍名称、`ConfirmDialog` 标签区分、正则脏态清理与校验、世界书跨页删除/复制页码同步、记忆筛选/归并门槛、导入预检、提示词预览加载态、英雄区提示分离、页签对比度、关于页文案间距及 `prefers-reduced-motion` 细节。
   - 批处理渲染与楼层操作分片前按请求键全局去重并隔离坏项；`openHelperFrame` 超时后迟到成功立即回补关闭租约；`HelperMvuRunner` 同剧情复用宿主租约 `runtimeId`、空闲态零定时器空转且提交失败按租约窗口退避；窗口消息路由升级为 O(1)，并为乱序 `settle-assistant` 队列补充上限与 `closedSeq` 屏障。
 - **依赖安全与工程维护**：

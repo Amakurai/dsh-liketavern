@@ -629,11 +629,11 @@ describe('4. AboutSection 兼容说明与链接间距及 styles.ts 共享契约'
   it.each(['en', 'zh'] as const)('AboutSection 在 %s 下兼容说明与链接之间保留空白分隔，无词句粘连', async (locale) => {
     setTavernLocale(locale)
     const info: PluginAbout = {
-      version: '0.5.12',
-      hostVersion: '0.2.2-rc.3',
+      version: '0.5.13',
+      hostVersion: '0.2.2-rc.5',
       expectedHostVersion: '*',
       hostCompatibility: 'compatible',
-      developmentHostVersion: '0.2.2-rc.3',
+      developmentHostVersion: '0.2.2-rc.5',
       repositoryUrl: 'https://github.com/Amakurai/dsh-liketavern',
       releasesUrl: 'https://github.com/Amakurai/dsh-liketavern/releases',
       sourceCheckout: false,

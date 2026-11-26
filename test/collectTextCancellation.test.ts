@@ -71,3 +71,33 @@ it('未取消的缓冲 stop 流仍返回完整正文并关闭流', async () => {
   expect(fixture.next).toHaveBeenCalledTimes(3)
   expect(fixture.close).toHaveBeenCalledOnce()
 })
+
+it('DeepSeek 内容拒答（CONTENT_REFUSED）进入拒答分支、丢弃前文且不归档记忆摘要', async () => {
+  const refusalStream = (message?: string): AsyncIterable<StreamChunk> => (async function* () {
+    yield { type: 'text-delta', text: '不应被返回的拒答前文' }
+    yield { type: 'usage', usage: { inputTokens: 80, outputTokens: 5 } }
+    yield {
+      type: 'finish',
+      reason: {
+        kind: 'error',
+        failure: {
+          code: 'CONTENT_REFUSED',
+          ...(message === undefined ? {} : { message }),
+        } as never,
+      },
+    }
+  })()
+
+  await expect(
+    collectCompleteText(refusalStream('DeepSeek refused to answer under its content safety review: blocked image'), new AbortController().signal),
+  ).rejects.toThrow('提供方内容安全审阅已拒答：DeepSeek refused to answer under its content safety review: blocked image（CONTENT_REFUSED）')
+
+  await expect(
+    collectCompleteText(refusalStream(''), new AbortController().signal),
+  ).rejects.toThrow('提供方内容安全审阅已拒答（CONTENT_REFUSED）')
+
+  const llm = {
+    stream: () => refusalStream('DeepSeek refused to answer under its content safety review'),
+  } as unknown as LlmRuntime
+  expect(await compressMemoryBatch(llm, 'deepseek-official', 'deepseek-chat', ['工厂记忆 1', '工厂记忆 2'])).toBeNull()
+})

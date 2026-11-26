@@ -95,3 +95,50 @@ it('模板计算失败保留未提交楼层，同一 turn/end 重试成功后才
   expect(stored.generation?.status).toBe('completed')
   expect(stored.outputs['5']?.text).toContain('完成')
 })
+
+it('宿主以 CONTENT_REFUSED 结束失败轮次且无 assistant/message 时不提交模板输出，并将 prepared 生成收口为 terminated', async () => {
+  const live = HostSession.create(SESSION as Session['id'])
+  live.append('agent-preset/selected', { agentPreset: 'tavern' })
+  live.append('turn/start', { turn: 1 })
+  live.append('step/start', { turn: 1, step: 1 })
+  live.append('user/message', createUserMessage({ content: [{ type: 'text', text: '你好' }], source: { kind: 'user' } }), { surfaceOp: 'append' })
+  await onTurnStart(state, SESSION, 1, live)
+  const pipeline = await runTavernPipeline({ state, sessionId: SESSION, agent: null, mode: 'live', historyOverride: [{ role: 'user', content: '你好' }] })
+  expect(pipeline?.templateReplay).toBeDefined()
+  expect((await loadTemplateState(ws.fs)).generation?.status).toBe('prepared')
+
+  const refusedEvents = [
+    ...live.snapshotEvents(),
+    {
+      type: 'assistant/attempt',
+      seq: 5,
+      time: 0,
+      data: {
+        turn: 1,
+        step: 1,
+        usage: { inputTokens: 80, outputTokens: 5 },
+        stream: [{ type: 'chunk', time: 0, chunk: { type: 'finish', reason: { kind: 'error', failure: { code: 'CONTENT_REFUSED', message: 'DeepSeek refused to answer under its content safety review' } } } }],
+      },
+    },
+    {
+      type: 'turn/end',
+      seq: 6,
+      time: 0,
+      data: {
+        turn: 1,
+        reason: { kind: 'error', failure: { code: 'CONTENT_REFUSED', message: 'DeepSeek refused to answer under its content safety review' } },
+      },
+    },
+  ] as unknown as SessionEvent[]
+  const refusedSession: Pick<Session, 'id' | 'snapshotEvents'> = {
+    id: SESSION as Session['id'],
+    snapshotEvents: () => refusedEvents,
+  }
+
+  await expect(onTurnEnd(state, SESSION, refusedSession)).resolves.toBeUndefined()
+  expect(state.openFloors.has(SESSION)).toBe(false)
+  expect((await ws.wal.validateFloor(`${SESSION}#t1`)).committed).toBe(true)
+  const stored = await loadTemplateState(ws.fs)
+  expect(stored.generation?.status).toBe('terminated')
+  expect(stored.outputs).toEqual({})
+})

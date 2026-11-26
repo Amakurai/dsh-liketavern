@@ -117,7 +117,7 @@ export function neutralizeDshMustache(text: string): string {
 export const HARNESS_IDENTITY_TEXT = 'You are an AI agent powered by DeepSeek Harness.'
 
 /**
- * 宿主部署身份前缀（0.2.2-rc.3 `deployment:persona-prefix`）：
+ * 宿主部署身份前缀（0.2.2-rc.3 起 `deployment:persona-prefix`）：
  * 仅匹配独立整段 `You are a coding agent powered by the <model> model.`，不跨行也不改动角色正文。
  */
 const CODING_AGENT_LEADING_RE = /^(?:You are a coding agent powered by the [^\r\n]+? model\.\n\n)+/

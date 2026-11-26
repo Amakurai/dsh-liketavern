@@ -4,7 +4,7 @@
 
 **基于 DeepSeek Harness 原生 Agent 运行时的 SillyTavern 角色扮演插件**
 
-[![Release](https://img.shields.io/badge/version-v0.5.12-blue.svg)](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.5.12)
+[![Release](https://img.shields.io/badge/version-v0.5.13-blue.svg)](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.5.13)
 [![dsh](https://img.shields.io/badge/dsh-0.2.1--rc.5%20%7C%200.2.2--rc.3-informational.svg)](https://deepseek-harness.github.io/deepseek-harness/)
 [![Node.js](https://img.shields.io/badge/node-%E2%89%A524-brightgreen.svg)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
@@ -49,14 +49,14 @@
 打开 `dsh` 桌面端 **「插件 → 添加插件」**，填入以下仓库标签地址并安装，完成后重启桌面端：
 
 ```text
-https://github.com/Amakurai/dsh-liketavern.git#v0.5.12
+https://github.com/Amakurai/dsh-liketavern.git#v0.5.13
 ```
 
 ### Web / CLI 在线安装
 
 ```bash
 # 安装插件到 web profile
-dsh plugin --profile web add github:Amakurai/dsh-liketavern#v0.5.12
+dsh plugin --profile web add github:Amakurai/dsh-liketavern#v0.5.13
 
 # 确认安装状态
 dsh plugin --profile web list --depth 0
@@ -69,10 +69,10 @@ dsh web
 
 ### Release 离线包安装
 
-从 [v0.5.12 Release](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.5.12) 下载 `dsh-liketavern-0.5.12.tgz`（可配合同页的 `SHA256SUMS.txt` 校验完整性），在下载目录执行：
+从 [v0.5.13 Release](https://github.com/Amakurai/dsh-liketavern/releases/tag/v0.5.13) 下载 `dsh-liketavern-0.5.13.tgz`（可配合同页的 `SHA256SUMS.txt` 校验完整性），在下载目录执行：
 
 ```bash
-dsh plugin --profile web add ./dsh-liketavern-0.5.12.tgz
+dsh plugin --profile web add ./dsh-liketavern-0.5.13.tgz
 dsh web
 ```
 
@@ -82,7 +82,7 @@ dsh web
 - **桌面端升级**：先查阅 [CHANGELOG.md](./CHANGELOG.md) 并备份数据；点击关于页的 **「更新到… → 复制安装地址」**，在桌面端「插件 → 添加插件」中使用新版标签地址安装，完成后**完全退出并重启桌面端**。安装由宿主插件管理器处理。
 - **Web / CLI 升级**：使用新版标签重新执行 `dsh plugin --profile web add` 并重启 `dsh web`。升级会自动沿用既有数据目录。
 
-当前 dsh `0.2.2-rc.3` 的原生版本列表读取 registry 来源；一键更新还支持已固定完整 commit 的 Git 安装，目标须为同仓库、同目录的另一完整 commit，且包版本更新。本项目通过 Git 标签与 Release 分发，固定的旧标签仍需手动指定新标签，因此关于页提供独立的 GitHub 发布检查和明确的新安装地址。**v0.5.9 及更早版本的旧检查器只识别精确宿主 peer，不能解析新版开放范围；首次升级请直接使用上方的 v0.5.12 地址安装一次。** 新版将安装门槛与实际验证范围分别展示；满足版本要求不等于所有功能已在该宿主实测。
+当前 dsh `0.2.2-rc.3` 的原生版本列表读取 registry 来源；一键更新还支持已固定完整 commit 的 Git 安装，目标须为同仓库、同目录的另一完整 commit，且包版本更新。本项目通过 Git 标签与 Release 分发，固定的旧标签仍需手动指定新标签，因此关于页提供独立的 GitHub 发布检查和明确的新安装地址。**v0.5.9 及更早版本的旧检查器只识别精确宿主 peer，不能解析新版开放范围；首次升级请直接使用上方的 v0.5.13 地址安装一次。** 新版将安装门槛与实际验证范围分别展示；满足版本要求不等于所有功能已在该宿主实测。
 
 ---
 
